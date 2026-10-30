@@ -866,7 +866,7 @@ def test_database_status_missing_settings_is_not_configured(monkeypatch: MonkeyP
 
 def test_database_status_does_not_short_circuit_local_auth(monkeypatch: MonkeyPatch) -> None:
     """local でもユーザー・ロールは共通 DB にあるため、DB を確かめる（RAG と同じ。#750 / #751）。"""
-    for auth_mode in ("local", "production"):
+    for auth_mode in ("local", "authenticated"):
         settings = Settings(
             _env_file=None, auth_mode=auth_mode, oracle_user="", oracle_dsn="", oracle_password=""
         )
@@ -1642,7 +1642,9 @@ def test_list_tools_lists_control_plane_tools() -> None:
     assert "echo" in tools
     # RAG / NL2SQL / 外部 MCP のツールは MCP 接続から取得する（#757。tool_registry には無い）。
     assert not {name for name in tools if name.startswith("external_")}
-    assert tools["agent_skill_list"]["permission_level"] == "read"
+    assert tools["echo"]["permission_level"] == "read"
+    # Skill の一覧のツールは、ツールの層がスキルに依存しないよう #3240 で削除した。
+    assert "agent_skill_list" not in tools
     # Skill の展開ツールとコマンド実行ツールは #756 で削除した。
     assert "agent_skill_run" not in tools
     assert "sandbox_command_run" not in tools
@@ -2615,7 +2617,7 @@ def test_global_tool_call_audit_uses_oracle_projection(monkeypatch: MonkeyPatch)
     assert data["items"][0]["trace_id"] == "trace-api-audit"
 
 
-def test_agent_profile_crud_and_tool_allowlist() -> None:
+def test_agent_profile_crud() -> None:
     create = client.post(
         "/api/agents",
         json={
@@ -2623,14 +2625,14 @@ def test_agent_profile_crud_and_tool_allowlist() -> None:
             "name": "Echo only Agent",
             "description": "テスト用 Agent",
             "instructions": "echo のみ利用する。",
-            "tool_names": ["echo"],
             "enabled": True,
         },
     )
     assert create.status_code == 200
     agent = create.json()["data"]
     assert agent["id"] == "agent_echo_only"
-    assert agent["tool_names"] == ["echo"]
+    # 業務 Agent はツールの項目を持たない（スキルだけ。#3240。tests/test_skill_tool_boundary.py）。
+    assert "tool_names" not in agent
 
     patch = client.patch(
         "/api/agents/agent_echo_only",
@@ -2638,10 +2640,6 @@ def test_agent_profile_crud_and_tool_allowlist() -> None:
     )
     assert patch.status_code == 200
     assert patch.json()["data"]["description"] == "更新済み"
-
-    unknown_tool = client.patch("/api/agents/agent_echo_only", json={"tool_names": ["missing"]})
-    assert unknown_tool.status_code == 400
-    assert "unknown tool" in unknown_tool.json()["error_messages"][0]
 
     disabled = client.patch("/api/agents/agent_echo_only", json={"enabled": False})
     assert disabled.status_code == 200
@@ -3330,9 +3328,7 @@ def test_skill_runtime_crud_and_builtin_protection() -> None:
             "name": "カスタムX",
             "description": "d",
             "instructions": "手順",
-            "mcp_requirements": [
-                {"server_id": "control-plane", "tool_names": ["agent_skill_list"]}
-            ],
+            "mcp_requirements": [{"server_id": "control-plane", "tool_names": ["echo"]}],
         },
     )
     assert created.status_code == 200
@@ -3340,7 +3336,7 @@ def test_skill_runtime_crud_and_builtin_protection() -> None:
 
     detail = client.get("/api/skills/custom_x")
     assert detail.status_code == 200
-    assert detail.json()["data"]["mcp_requirements"][0]["tool_names"] == ["agent_skill_list"]
+    assert detail.json()["data"]["mcp_requirements"][0]["tool_names"] == ["echo"]
 
     # 重複・builtin 上書きは拒否
     assert client.post("/api/skills", json={"id": "custom_x", "name": "x"}).status_code == 409
@@ -3368,9 +3364,7 @@ def test_skill_reload_endpoint_returns_counts() -> None:
 
 
 def test_delete_agent_and_default_protection() -> None:
-    created = client.post(
-        "/api/agents", json={"id": "tmp_agent", "name": "Tmp", "tool_names": ["echo"]}
-    )
+    created = client.post("/api/agents", json={"id": "tmp_agent", "name": "Tmp"})
     assert created.status_code == 200
     deleted = client.request("DELETE", "/api/agents/tmp_agent")
     assert deleted.status_code == 200

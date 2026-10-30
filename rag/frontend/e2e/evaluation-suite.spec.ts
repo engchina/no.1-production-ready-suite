@@ -1,8 +1,9 @@
-import { expect, type Page, test } from "./fixtures/test";
+import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import { measureShellHiddenOverflow } from "../../../platform/packages/ui/e2e/layout-checks";
 import {
-  chooseEvaluationKnowledgeBase,
+  chooseEvaluationProfile,
+  mockEvaluationProfiles,
   evaluationImportResult,
   mockEvaluationImport,
   mockEvaluationJobs,
@@ -15,6 +16,7 @@ test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await mockKnowledgeBases(page);
+  await mockEvaluationProfiles(page);
   await mockEvaluationSuiteSettings(page, "standard");
 });
 
@@ -23,13 +25,17 @@ for (const viewport of [
   { name: "mobile", width: 375, height: 812 },
 ]) {
   test(
-    `評価ページは評価の基準を表示だけし、ナレッジベースと評価リクエストの Excel を必須にする (${viewport.name})`,
+    `評価ページは評価の基準を表示だけし、プロファイルと評価リクエストの Excel を必須にする (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
 
       await page.goto("/evaluation");
 
       await expect(page.getByRole("heading", { name: "品質評価", level: 1 })).toBeVisible();
+      // 評価の実行と判定の校正（#3578）のタブ。既定は評価の実行。
+      await expect(page.getByRole("tab", { name: "評価の実行" })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("tab", { name: "判定の校正" })).toHaveAttribute("aria-selected", "false");
       // 評価の基準は表示だけ（#2065）。選択欄・ラベルは無く、設定の既定と閾値と設定へのリンクを出す。
       const suite = page.getByTestId("evaluation-suite");
       await expect(suite.getByRole("combobox")).toHaveCount(0);
@@ -50,7 +56,7 @@ for (const viewport of [
       await expect(conditions).toContainText("同じ六指標・閾値で比較します。");
       await expect(conditions).toContainText("所要時間は設定や処理状況によって変わります。");
       await expect(conditions).not.toContainText("約 2 倍");
-      await expect(conditions.getByRole("switch", { name: "検索・回答プロファイルでも評価して比較する" })).toBeVisible();
+      await expect(conditions.getByRole("switch", { name: "別の検索・回答プロファイルでも評価して比較する" })).toBeVisible();
       await conditions.screenshot({ path: testInfo.outputPath("evaluation-guidance.png") });
       // JSON の入力・設定比較・サンプルは無い。
       await expect(page.getByLabel("Golden set JSON")).toHaveCount(0);
@@ -62,12 +68,12 @@ for (const viewport of [
       const run = page.getByRole("button", { name: "評価実行" });
       await expect(run).toBeEnabled();
       await run.click();
-      const knowledgeBase = page.getByTestId("evaluation-knowledge-base");
-      await expect(knowledgeBase.getByRole("alert")).toHaveText("ナレッジベースを 1 つ以上選んでください。");
-      await expect(page.getByRole("combobox", { name: "ナレッジベース" })).toBeFocused();
+      const knowledgeBase = page.getByTestId("evaluation-profile");
+      await expect(knowledgeBase.getByRole("alert")).toHaveText("評価する検索・回答プロファイルを 1 つ選んでください。");
+      await expect(page.locator("#evaluation-profile")).toBeFocused();
 
       // ナレッジベースを選ぶとエラーは消え、次は Excel の欄に出す。
-      await chooseEvaluationKnowledgeBase(page);
+      await chooseEvaluationProfile(page);
       await expect(knowledgeBase.getByRole("alert")).toHaveCount(0);
       await run.click();
       const dropzone = page.getByTestId("evaluation-request-dropzone");
@@ -80,6 +86,7 @@ for (const viewport of [
 
   test(
     `Excel の警告は表で出し、評価は実行できる (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const jobs = await mockEvaluationJobs(page, { autoComplete: true });
@@ -102,7 +109,7 @@ for (const viewport of [
       );
 
       await page.goto("/evaluation");
-      await chooseEvaluationKnowledgeBase(page);
+      await chooseEvaluationProfile(page);
       await uploadEvaluationExcel(page);
 
       const ready = page.getByTestId("evaluation-import-ready");
@@ -122,6 +129,7 @@ for (const viewport of [
 
   test(
     `Excel の誤りは行・列・内容の表で出し、評価を実行しない (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const jobs = await mockEvaluationJobs(page, { autoComplete: true });
@@ -139,7 +147,7 @@ for (const viewport of [
       );
 
       await page.goto("/evaluation");
-      await chooseEvaluationKnowledgeBase(page);
+      await chooseEvaluationProfile(page);
       await uploadEvaluationExcel(page);
 
       const errors = page.getByTestId("evaluation-import-errors");
@@ -220,7 +228,7 @@ test("テンプレートをダウンロードでき、選んだナレッジベ�
   });
 
   await page.goto("/evaluation");
-  await expect(page.getByText(/ナレッジベースを選んでからダウンロードすると、その文書の一覧/)).toBeVisible();
+  await expect(page.getByText(/検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧/)).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
 
@@ -229,17 +237,17 @@ test("テンプレートをダウンロードでき、選んだナレッジベ�
   expect(new URL(urls[0] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual([]);
 
   // ナレッジベースを選ぶと、その文書（ファイル名・文書 ID）を「文書一覧」のシートに入れるよう求める（#2086）。
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
   const second = page.waitForEvent("download");
   await page.getByRole("button", { name: "テンプレートをダウンロード" }).click();
   await second;
-  expect(new URL(urls[1] ?? "").searchParams.getAll("knowledge_base_ids")).toEqual(["kb-1"]);
+  expect(new URL(urls[1] ?? "").searchParams.getAll("search_answer_profile_id")).toEqual(["profile-base"]);
 });
 
 test("Excel の形式でないファイルは検証に送らず欄の直下に出す", async ({ page }) => {
   const imports = await mockEvaluationImport(page);
   await page.goto("/evaluation");
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
 
   await uploadEvaluationExcel(page, "cases.csv");
 
@@ -249,7 +257,7 @@ test("Excel の形式でないファイルは検証に送らず欄の直下に�
   expect(imports.requests).toHaveLength(0);
 });
 
-test("ナレッジベースより先に Excel を選ぶと、選んだ時点で検証し、変えたら検証し直す", async ({ page }) => {
+test("プロファイルより先に Excel を選ぶと、選んだ時点で検証し、変えたら検証し直す", async ({ page }) => {
   const imports = await mockEvaluationImport(page);
   await page.route("**/api/knowledge-bases**", async (route) => {
     await route.fulfill({ json: knowledgeBasesEnvelope(["社内規程", "人事規程"]) });
@@ -257,17 +265,17 @@ test("ナレッジベースより先に Excel を選ぶと、選んだ時点で�
   await page.goto("/evaluation");
 
   await uploadEvaluationExcel(page);
-  await expect(page.getByText("ナレッジベースを選ぶと、Excel を確かめます", { exact: false })).toBeVisible();
+  await expect(page.getByText("検索・回答プロファイルを選ぶと、参照する文書で Excel", { exact: false })).toBeVisible();
   expect(imports.requests).toHaveLength(0);
 
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
   await expect(page.getByTestId("evaluation-import-ready")).toContainText("cases.xlsx: 2 件のケースを評価できます。");
-  expect(imports.requests).toEqual([["kb-1"]]);
+  expect(imports.requests).toEqual([["profile-base"]]);
 
   // 期待する根拠のファイル名は KB で照合するので、KB を変えたら同じファイルで検証し直す。
-  await chooseEvaluationKnowledgeBase(page, /人事規程/);
+  await chooseEvaluationProfile(page, /プロファイル B/);
   await expect.poll(() => imports.requests.length).toBe(2);
-  expect(imports.requests[1]).toEqual(["kb-1", "kb-2"]);
+  expect(imports.requests[1]).toEqual(["profile-1"]);
 });
 
 for (const viewport of [
@@ -276,6 +284,7 @@ for (const viewport of [
 ]) {
   test(
     `検証した Excel は件数とプレビューを出し、評価の job は進捗・今の行・経過時間を出す (${viewport.name})`,
+    { tag: "@responsive" },
     async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       const jobs = await mockEvaluationJobs(page, {
@@ -298,7 +307,7 @@ for (const viewport of [
       await expect.poll(() => jobs.runPayloads.length).toBe(1);
       expect(jobs.runPayloads[0]).toEqual({
         cases: evaluationImportResult().cases,
-        knowledge_base_ids: ["kb-1"],
+        search_answer_profile_id: "profile-base",
       });
 
       // 実行状況（#390）: 状態・件数・今の行・経過時間（placement="job"）と取り消し。
@@ -355,9 +364,9 @@ for (const viewport of [
     const error = page.getByTestId("evaluation-case-error");
     await expect(page.getByTestId("evaluation-case-question").first()).toContainText("2 行目");
     await expect(error).toContainText("エラー");
-    await expect(error).toContainText("工程: 質問の読み取りから回答の作成まで");
+    await expect(error).toContainText("工程: 質問の条件を整理して回答を作る");
     await expect(error).toContainText(
-      "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の読み取りから回答の作成まで）。"
+      "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の理解から回答の作成まで）。"
     );
     await expectNoPageOverflow(page);
   });
@@ -391,7 +400,9 @@ for (const viewport of [
         // 支援技術・ページ内検索と同じく、読み上げ専用の文を見える位置へ移す。外枠は動かない。
         for (const live of Array.from(element.querySelectorAll(".sr-only"))) live.scrollIntoView({ block: "nearest" });
         element.scrollTo({ top: element.scrollHeight });
-        const body = element.querySelector<HTMLElement>("[data-testid=evaluation-result-loading]")!.parentElement!;
+        // 評価の実行のタブ（#3578）の中にあるので、タブの外の PageBody の余白を測る。
+        const panel = element.querySelector<HTMLElement>("[data-testid=evaluation-result-loading]")!.parentElement!;
+        const body = panel.closest<HTMLElement>("[role=tabpanel]")?.parentElement ?? panel;
         const last = body.lastElementChild!.getBoundingClientRect();
         const mainRect = element.getBoundingClientRect();
         return {
@@ -600,7 +611,7 @@ function evaluationMetricsWithTimedOutCase() {
         error_type: "TimeoutError",
         error_stage: "answer",
         error_message:
-          "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の読み取りから回答の作成まで）。trace_id で監査ログを確認してください。",
+          "評価ケースの回答生成が上限の 10 分以内に終わりませんでした（時間切れになった工程: 質問の理解から回答の作成まで）。trace_id で監査ログを確認してください。",
       },
       refusal,
     ],
@@ -640,6 +651,8 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await mockEvaluationJobs(page,{autoComplete:true,runResult:()=>({...base,...values,passed:false,metric_case_counts:counts,threshold_failures:[{metric:"mrr",actual:0.5,threshold:0.6}],failure_reason_counts:{unexpected_handling:1},category_breakdown:{clarification_required:{case_count:1,error_count:0,metrics:values,metric_case_counts:counts}}})});
   await page.goto("/evaluation");await prepareEvaluationRun(page);await page.getByRole("button",{name:"評価実行"}).click();
   const mrr=page.getByTestId("evaluation-metric-mrr");
+  await expect(page.getByTestId("evaluation-threshold-mrr")).toHaveText(" / 60%");
+  await expect(page.getByRole("alert").filter({hasText:"閾値未達"})).toHaveCount(0);
   await expect(mrr).toContainText("50%");await expect(mrr).toContainText("対象 1 件");await expect(mrr.locator("[data-status-variant]")).toHaveText("閾値未達");
   await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("0%");
   await expect(page.getByTestId("evaluation-category-breakdown").getByRole("row",{name:/条件の確認が要る/})).toContainText("50%");
@@ -647,3 +660,63 @@ for (const viewport of [{name:"desktop",width:1280,height:900},{name:"mobile",wi
   await expectNoPageOverflow(page);
  });
 }
+
+
+test("Excel の六列を全幅で表示し、長い 1 行も表の中で縦横スクロールする", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const evidence = Array.from({length:30}, (_, i) => ({id:`e-${i}`,document_id:"doc-a",label:`資料 A.pdf | p.${i+1}`,page_start:i+1}));
+  const standard = "合成の標準回答です。\n".repeat(60) + "標準回答の末尾";
+  const process = "合成の回答手順です。\n".repeat(30) + "回答の過程の末尾";
+  await mockEvaluationImport(page, () => evaluationImportResult({
+    row_count:1,
+    cases:[{id:"row-2",query:"合成の質問",relevant_document_ids:["doc-a"],required_evidence:evidence,standard_answer:standard}],
+    rows:[{row:2,case_id:"row-2",question:"合成の質問",evidence:evidence.map(e=>e.label),standard_answer_preview:"短いプレビュー",has_standard_answer:true,required_answer_points:["合成の要点"],expected_response_decision:"answer",answer_process:process}],
+    document_names:{"doc-a":"資料 A.pdf"},
+  }));
+  const metrics = evaluationMetrics("standard");
+  await mockEvaluationJobs(page, {autoComplete:true,runResult:()=>({...metrics,case_count:1,case_results:[{...metrics.case_results[0],case_id:"row-2"}]})});
+  await page.goto("/evaluation");
+  await chooseEvaluationProfile(page);
+  await uploadEvaluationExcel(page);
+  const preview=page.getByTestId("evaluation-import-preview");
+  await expect(preview).toBeVisible();
+  for(const name of ["質問","期待する根拠","標準回答","必須の回答要点","期待する応答の判断","回答の過程"]) {
+    await expect(preview.getByRole("columnheader",{name,exact:true})).toBeAttached();
+  }
+  await expect(preview).toContainText("標準回答の末尾");
+  await expect(preview).toContainText("回答の過程の末尾");
+  const uploadBox=await page.getByTestId("evaluation-request-upload").boundingBox();
+  const formBox=await page.getByRole("form",{name:"評価の条件"}).boundingBox();
+  expect(Math.abs((uploadBox?.width ?? 0)-(formBox?.width ?? 0))).toBeLessThanOrEqual(1);
+  const checkBounds = async (region: Locator) => {
+    const box=await region.evaluate(node=>({height:node.clientHeight,content:node.scrollHeight,
+      cap:parseFloat(getComputedStyle(document.documentElement).fontSize)*(matchMedia("(min-width: 48rem)").matches?28:17.5)}));
+    expect(Math.abs(box.height-box.cap)).toBeLessThanOrEqual(2);
+    expect(box.content).toBeGreaterThan(box.height);
+    await region.evaluate(node=>node.scrollTo({top:node.scrollHeight,left:node.scrollWidth}));
+    await expect.poll(()=>region.evaluate(node=>node.scrollHeight-node.scrollTop-node.clientHeight)).toBeLessThanOrEqual(1);
+  };
+  await checkBounds(preview);
+  await expectNoPageOverflow(page);
+  await preview.screenshot({path:testInfo.outputPath("excel-six-columns.png")});
+  await page.getByRole("button",{name:"評価実行"}).click();
+  const result=page.getByTestId("evaluation-case-scroll-region");
+  await expect(result).toBeVisible();
+  await checkBounds(result);
+  expect(await result.locator("thead").evaluate(node=>getComputedStyle(node).position)).toBe("sticky");
+  await expectNoPageOverflow(page);
+  const exportRequests: Record<string,unknown>[]=[];
+  await page.route("**/api/evaluation/jobs/*/results.xlsx", async route=>{
+    exportRequests.push(route.request().postDataJSON());
+    await route.fulfill({status:200,headers:{"Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition":'attachment; filename="evaluation_results.xlsx"'},body:"xlsx"});
+  });
+  await mockEvaluationImport(page,()=>evaluationImportResult({file_name:"replacement.xlsx"}));
+  await uploadEvaluationExcel(page,"replacement.xlsx");
+  await expect(page.getByTestId("evaluation-import-ready")).toContainText("replacement.xlsx");
+  const downloaded=page.waitForEvent("download");
+  await page.getByRole("button",{name:"Excel をダウンロード",exact:true}).click();
+  expect((await downloaded).suggestedFilename()).toBe("evaluation_results.xlsx");
+  expect(exportRequests[0]).toMatchObject({cases:[{query:"合成の質問",standard_answer:standard}],
+    rows:[{question:"合成の質問",answer_process:process}],profile_name:"プロファイル A"});
+
+});

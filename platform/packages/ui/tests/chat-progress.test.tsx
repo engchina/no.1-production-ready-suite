@@ -511,7 +511,7 @@ describe("ChatProgress", () => {
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
     const search = q("p-step-search")!;
     expect(search.dataset.level).toBe("1");
-    expect(search.querySelector(".pl-6")).not.toBeNull();
+    expect(search.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
     expect(search.textContent).toContain("1.6 秒");
     expect(q("p-step-understand")!.textContent).toContain("質問の理解（LLM 1 回）");
     expect(q("p-step-understand")!.textContent).toContain("0.1 秒");
@@ -595,7 +595,7 @@ describe("ChatProgress", () => {
     expect(q("p-running")!.textContent).toContain("処理中（4 ステップ完了）");
   });
 
-  it("子が終わって親が今の段階に戻ると、今の行は親の位置（子の上）に出る", () => {
+  it("子が終わって次の子がまだ無い親の工程は回さず、親の 1 段下に「処理を続けています」を回す（#3436）", () => {
     render(
       <ChatProgress
         steps={[
@@ -608,11 +608,26 @@ describe("ChatProgress", () => {
     );
     const rows = [...host.querySelectorAll<HTMLElement>("[data-run-timeline-step], [data-testid='p-current']")];
     expect(rows.map((row) => row.dataset.runTimelineStep ?? `current:${row.dataset.stepId}`)).toEqual([
-      "current:s1",
+      "s1",
       "s2",
+      "current:",
     ]);
-    // 待機中の段階は今の段階の代わりのときだけ出す。
+    // 親の工程は回さない実行中の印（CirclePlay）。回るのは親の下の今の行だけ。
+    const parent = q("p-step-s1")!;
+    expect(parent.dataset.status).toBe("running");
+    expect(parent.querySelector("svg.animate-spin")).toBeNull();
+    expect(parent.querySelector("svg.lucide-circle-play")).not.toBeNull();
+    expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    const current = q("p-current")!;
+    expect(current.querySelector("svg.animate-spin")).not.toBeNull();
+    expect(current.textContent).toContain("処理を続けています");
+    // 親の 1 段下に字下げする。
+    expect(current.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
+    // 待機中の段階は、親の工程が実行中の間は今の段階の代わりにしない。
     expect(q("p-step-s3")).toBeNull();
+    // 閉じたときの見出しは親の工程の名前。
+    act(() => q("p-running")!.click());
+    expect(q("p-running")!.textContent).toContain("文書の検索");
   });
 
   it("active と elapsedMs と labels で上書きできる", () => {

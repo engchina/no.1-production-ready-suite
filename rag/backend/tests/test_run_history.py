@@ -11,19 +11,22 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pr_backend_core.observability.model_usage import run_usage_totals
 from pytest import MonkeyPatch
+from rag_engine.resources.tracing import observe_call
 
 from app.api.routes import history as history_route
-from app.api.routes.search import _search_run_recorder
+from app.api.routes.search import _run_model_id, _search_run_recorder
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, run_history_list_where
-from app.config import Settings, get_settings
+from app.config import EnterpriseAiConfiguredModel, Settings, get_settings
 from app.main import app
 from app.rag import run_history as run_history_module
 from app.rag.guardrails import GuardrailResult
@@ -281,7 +284,7 @@ async def test_pipeline_records_search_answer_and_blocked_runs(monkeypatch: Monk
     assert search_only["question"] == "受注の登録方法は？"
     assert search_only["verification"] is None
     assert search_only["citation_count"] == len(search_only["citations"]) > 0
-    assert {"rag.search", "rag.retrieval"} <= span_names(0)
+    assert {"rag.search", "rag.evidence"} <= span_names(0)
     assert answered["answer_generated"] is True
     assert answered["citations"] is None
     assert answered["verification"] in {"verified", "partial", "unverified"}
@@ -902,7 +905,7 @@ async def test_search_recorder_keeps_the_screen_conditions() -> None:
     # 根拠の検索だけの実行は記録しない。
     assert _search_run_recorder(request.model_copy(update={"retrieval_only": True})) is None
     # 絞り込みの無い実行は件数だけ。
-    assert search_run_conditions(SearchRequest(query="q")) == {"top_k": 20}
+    assert search_run_conditions(SearchRequest(query="q")) == {"top_k": 50}
 
     store = RecordingStore()
     recorder.store = store
@@ -970,3 +973,328 @@ def test_detail_api_returns_the_search_conditions(
     detail = client.get("/api/history/runs/run-conditions", headers=viewer)
     assert detail.status_code == 200, detail.text
     assert detail.json()["data"]["search_conditions"] == expected
+
+
+# ---- モデルの利用量（#3419） ----
+
+
+def _fake_llm_with_usage(model: str, *, fail_on: type | None = None) -> Any:
+    """回答エンジンの LLM の呼び出しを作る。
+
+    本番の adapter と同じ `gen_ai.chat` の span と合成の usage にする。
+    """
+
+    def fake(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+        with observe_call("chat", model) as observation:
+            if fail_on is not None and schema is fail_on:
+                raise TimeoutError("合成の時間切れ")
+            observation.usage(
+                {
+                    "input_tokens": 100,
+                    "output_tokens": 10,
+                    "input_tokens_details": {"cached_tokens": 30},
+                }
+            )
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    return fake
+
+
+def _llm_calls(trace: RecordingTrace) -> int:
+    return len(
+        {
+            update.span_id
+            for update in trace.updates
+            if update.operation_name == "gen_ai.chat" and update.status != "running"
+        }
+    )
+
+
+class _AnswerOracle(FakeOracle):
+    async def save_answer_record(self, record: Any) -> None:
+        return None
+
+    async def purge_answer_records(self, retention_days: int) -> int:
+        return 0
+
+
+async def _record_pipeline_run(
+    request: SearchRequest, *, model_id: str, store: RecordingStore
+) -> RecordingTrace:
+    tracker = RecordingTrace(model_id.encode().hex().ljust(32, "0")[:32])
+    # 回答のモデルは登録モデルから接続を引く（登録に無いモデルは失敗にする。#3240）。
+    settings = Settings(oci_enterprise_ai_models=[EnterpriseAiConfiguredModel(model_id=model_id)])
+    recorder = RunRecorder(
+        surface="chat",
+        settings=settings,
+        store=store,
+        model_id=model_id,
+        trace_source=tracker.record,
+        usage_source=tracker.model_usage,
+    )
+    await RagPipeline(
+        genai=FakeGenAi(),  # type: ignore[arg-type]
+        oracle=_AnswerOracle(),  # type: ignore[arg-type]
+        settings=settings,
+        answer_model_id=model_id,
+        run_recorder=recorder,
+    ).run(request, trace=tracker)
+    return tracker
+
+
+async def test_pipeline_records_the_model_usage_of_each_run(monkeypatch: MonkeyPatch) -> None:
+    """実行の記録に、その実行の LLM の呼び出しの回数・token・モデルを残す。
+
+    工程の span と二重に数えない。
+    """
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm_with_usage("model-a"))
+    store = RecordingStore()
+    tracker = await _record_pipeline_run(
+        SearchRequest(query="合成の質問 A", search_answer_profile_id="bv-1"),
+        model_id="model-a",
+        store=store,
+    )
+
+    usage = store.records[0]["stages"]["usage"]
+    calls = _llm_calls(tracker)
+    assert calls > 0
+    assert usage == {
+        "models": ["model-a"],
+        "requests": calls,
+        "input_tokens": 100 * calls,
+        "output_tokens": 10 * calls,
+        "total_tokens": 110 * calls,
+        "cached_input_tokens": 30 * calls,
+        "reasoning_output_tokens": None,
+        "measurement": "complete",
+        "measured_requests": calls,
+        "unmeasured_sources": [],
+    }
+    assert store.records[0]["model_id"] == "model-a"
+
+
+async def test_compared_columns_keep_their_own_usage(monkeypatch: MonkeyPatch) -> None:
+    """比較の列を同時に実行しても、列ごとの実行の利用量は混ざらない。"""
+    import rag_engine.adapters.oci as engine_oci
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm_with_usage("model-shared"))
+    store = RecordingStore()
+    request = SearchRequest(query="合成の質問 A", search_answer_profile_id="bv-1")
+    first, second = await asyncio.gather(
+        _record_pipeline_run(request, model_id="model-a", store=store),
+        _record_pipeline_run(request, model_id="model-b", store=store),
+    )
+
+    by_model = {record["model_id"]: record["stages"]["usage"] for record in store.records}
+    assert by_model["model-a"]["requests"] == _llm_calls(first) > 0
+    assert by_model["model-b"]["requests"] == _llm_calls(second) > 0
+    assert by_model["model-a"]["total_tokens"] == 110 * _llm_calls(first)
+
+
+async def test_failed_run_keeps_the_calls_it_made_as_partial(monkeypatch: MonkeyPatch) -> None:
+    """失敗した実行は、失敗までの呼び出しを数え、利用量の無い呼び出しがあれば一部計測にする。"""
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+
+    # 生成専用の実送信schemaで失敗させ、監査の保留とは区別する。
+    monkeypatch.setattr(
+        engine_oci,
+        "parse_text_response",
+        _fake_llm_with_usage("model-a", fail_on=generation_draft_wire_model()),
+    )
+    store = RecordingStore()
+    tracker = RecordingTrace("f" * 32)
+    recorder = RunRecorder(
+        surface="search",
+        settings=Settings(),
+        store=store,
+        model_id="model-a",
+        trace_source=tracker.record,
+        usage_source=tracker.model_usage,
+    )
+    with pytest.raises(Exception):  # noqa: B017 - 失敗の種類は回答エンジンの扱いによる。
+        await RagPipeline(
+            genai=FakeGenAi(),  # type: ignore[arg-type]
+            oracle=_AnswerOracle(),  # type: ignore[arg-type]
+            settings=Settings(),
+            run_recorder=recorder,
+        ).run(SearchRequest(query="合成の質問 A", search_answer_profile_id="bv-1"), trace=tracker)
+    # 経路と同じく、pipeline の外で失敗を記録する（`_record_failed_run`）。
+    await recorder.record(
+        run_id="trace-failed",
+        question=recorder.question,
+        search_answer_profile_id="bv-1",
+        answer_generated=True,
+        status="error",
+        elapsed_ms=1.0,
+        error=TimeoutError(),
+    )
+
+    usage = store.records[-1]["stages"]["usage"]
+    assert usage["requests"] == _llm_calls(tracker) > usage["measured_requests"]
+    assert usage["measurement"] == "partial"
+    assert usage["total_tokens"] == 110 * usage["measured_requests"]
+
+
+async def test_recorder_without_a_trace_keeps_no_usage() -> None:
+    """trace の始まる前に止まった実行・利用量の元が無い実行は、利用量を残さない（画面は未計測）。"""
+    store = RecordingStore()
+    trace = RecordingTrace("e" * 32)
+    for usage_source in (None, trace.model_usage):
+        await RunRecorder(
+            surface="search", settings=Settings(), store=store, usage_source=usage_source
+        ).record(
+            run_id="trace-early",
+            question=None,
+            search_answer_profile_id=None,
+            answer_generated=True,
+            status="error",
+            elapsed_ms=1.0,
+            error=RuntimeError(),
+        )
+    assert len(store.records) == 2
+    assert all("usage" not in record["stages"] for record in store.records)
+
+
+def test_search_records_the_concrete_default_model() -> None:
+    """RAG 検索の実行は、未指定でも実行のときの既定のテキストモデルの具体的な ID を残す。"""
+    settings = Settings(oci_enterprise_ai_default_text_model="model-default")
+    assert _run_model_id(None, settings) == "model-default"
+    assert _run_model_id("model-explicit", settings) == "model-explicit"
+
+
+@pytest.mark.parametrize(
+    ("stages", "expected"),
+    [
+        (
+            {
+                "usage": {
+                    "models": ["model-a", "model-b"],
+                    "requests": 3,
+                    "input_tokens": 300,
+                    "output_tokens": 30,
+                    "total_tokens": 330,
+                    "measurement": "partial",
+                    "measured_requests": 2,
+                }
+            },
+            {"models": ["model-a", "model-b"], "requests": 3, "measurement": "partial"},
+        ),
+        # LLM を呼ばなかった実行は実測の 0。
+        (
+            {"usage": {"requests": 0, "measurement": "complete"}},
+            {"requests": 0, "total_tokens": 0, "measurement": "complete"},
+        ),
+        # この機能より前の記録・壊れた記録は未計測（None。0 にしない）。
+        ({"trace": {}}, None),
+        ({"usage": "broken"}, None),
+    ],
+    ids=["saved", "no-llm", "legacy", "broken"],
+)
+def test_detail_api_returns_the_model_usage(
+    monkeypatch: MonkeyPatch,
+    stages: dict[str, object],
+    expected: dict[str, object] | None,
+) -> None:
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    viewer = login(client, "viewer")
+    _capture(
+        monkeypatch,
+        [
+            [
+                {
+                    **_row("run-usage", model_id="model-a"),
+                    "question_full": "合成の質問 A",
+                    "error_type": None,
+                    "stages_json": stages,
+                    "citations_json": None,
+                }
+            ],
+            [],
+        ],
+    )
+    detail = client.get("/api/history/runs/run-usage", headers=viewer)
+    assert detail.status_code == 200, detail.text
+    data = detail.json()["data"]
+    usage = data["usage"]
+    if expected is None:
+        assert usage is None
+        assert (data["total_tokens"], data["usage_measurement"]) == (None, None)
+    else:
+        assert {key: usage[key] for key in expected} == expected
+        # 詳細の一覧の 2 つの値は、読んだ利用量の全体と同じ。
+        assert (data["total_tokens"], data["usage_measurement"]) == (
+            usage["total_tokens"],
+            usage["measurement"],
+        )
+
+
+def test_list_api_returns_the_usage_totals_without_reading_the_stages(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """一覧の行は合計の token と計測の状態を返す（#3466）。
+
+    SQL は `stages_json` の全体を読まず、`JSON_VALUE` で 2 つの値だけを取り出す。記録の無い
+    実行（この機能より前・形の違う記録）は未計測（None。0 にしない）、LLM を呼ばなかった実行は
+    実測の 0、一部の呼び出しの利用量が無い実行は partial。
+    """
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    rows = [
+        _row("run-new", usage_total_tokens=12345, usage_measurement="complete"),
+        _row("run-partial", usage_total_tokens=330, usage_measurement="partial"),
+        _row("run-no-llm", usage_total_tokens=0, usage_measurement="complete"),
+        # 計測の状態だけがあって合計の無い記録は 0（`RunModelUsage` の既定と同じ）。
+        _row("run-no-total", usage_total_tokens=None, usage_measurement="complete"),
+        _row("run-legacy", usage_total_tokens=None, usage_measurement=None),
+        _row("run-broken", usage_total_tokens=5, usage_measurement="unknown"),
+    ]
+    pool = _capture(monkeypatch, [rows, [{"count_value": len(rows)}]])
+
+    response = client.get("/api/history/runs", headers=login(client, "viewer"))
+
+    assert response.status_code == 200, response.text
+    items = response.json()["data"]["items"]
+    assert [
+        (item["run_id"], item["total_tokens"], item["usage_measurement"]) for item in items
+    ] == [
+        ("run-new", 12345, "complete"),
+        ("run-partial", 330, "partial"),
+        ("run-no-llm", 0, "complete"),
+        ("run-no-total", 0, "complete"),
+        ("run-legacy", None, None),
+        ("run-broken", None, None),
+    ]
+    for item in items:
+        assert not {"usage_total_tokens", "usage"} & item.keys()
+    list_sql = pool.connection.calls[0].statement
+    assert "JSON_VALUE(r.stages_json, '$.usage.total_tokens'" in list_sql
+    assert "JSON_VALUE(r.stages_json, '$.usage.measurement'" in list_sql
+    # 処理の段・trace 全体を読まず、利用量2値と照合実行状態だけを取り出す。
+    assert "JSON_VALUE(r.stages_json, '$.validation_execution'" in list_sql
+    assert list_sql.count("stages_json") == 3
+    # ページ（並べ替えと件数の切り出し）は run_id だけで決め、列はページの行だけで読む。
+    assert "WITH run_page AS ( SELECT r.run_id FROM rag_run_history r WHERE" in list_sql
+    assert "JOIN run_page pg ON pg.run_id = r.run_id" in list_sql
+
+
+@pytest.mark.parametrize(
+    ("total", "measurement", "expected"),
+    [
+        (1234, "complete", (1234, "complete")),
+        (1234.0, "partial", (1234, "partial")),
+        (None, "complete", (0, "complete")),
+        (-1, "complete", (0, "complete")),
+        (True, "complete", (0, "complete")),
+        (10, None, (None, None)),
+        (10, "other", (None, None)),
+    ],
+    ids=["int", "float", "no-total", "negative", "bool", "legacy", "unknown"],
+)
+def test_run_usage_totals(
+    total: object, measurement: object, expected: tuple[object, object]
+) -> None:
+    assert run_usage_totals(total, measurement) == expected

@@ -27,6 +27,7 @@ import {
   type BatchUploadResult,
   type KnowledgeBaseSummary,
   type HuggingFaceSettingsUpdate,
+  type DomainKeywordImportMode,
   type DocumentApproveRequest,
   type DocumentChunkPreviewRequest,
   type DocumentReviewEditsRequest,
@@ -34,7 +35,6 @@ import {
   type DocumentSummary,
   type DocumentClassification,
   type AnswerPromptKey,
-  type QueryHistorySettingsData,
   type RunHistoryListParams,
   type AnsweringSettingsUpdate,
   type DocumentKnowledgeBaseReplaceRequest,
@@ -67,7 +67,6 @@ import {
   type ChunkingSettingsData,
   type ChunkingSettingsUpdate,
   type LanguagePackData,
-  type LanguagePackHistoryData,
   type LanguagePackSections,
   type PreprocessSettingsData,
   type PreprocessSettingsUpdate,
@@ -117,6 +116,8 @@ export const queryKeys = {
     queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
+    language_pack_relation?: import("./api").LanguagePackRelation;
+    current_release_id?: string;
     limit?: number;
     offset?: number;
   }) => ["documents", params] as const,
@@ -340,6 +341,8 @@ export function useDocuments(
     queued_phase?: IngestionJobPhase;
     q?: string;
     knowledge_base_id?: string;
+    language_pack_relation?: import("./api").LanguagePackRelation;
+    current_release_id?: string;
     limit?: number;
     offset?: number;
   },
@@ -352,6 +355,8 @@ export function useDocuments(
       queued_phase: params.queued_phase,
       q: params.q,
       knowledge_base_id: params.knowledge_base_id,
+      language_pack_relation: params.language_pack_relation,
+      current_release_id: params.current_release_id,
       limit: params.limit,
       offset: params.offset,
     }),
@@ -503,22 +508,7 @@ export function useResetDocumentSections(id: string) {
   });
 }
 
-/** 保存や cache の変更を行わない章節の候補の確認。 */
-export function usePreviewSectionRules() {
-  return useMutation({
-    mutationFn: ({ documentId, ...body }: { documentId: string; recipe_id: string; mode: SectionRulesMode; rules: SectionRule[] }) => api.previewSectionRules(documentId, body),
-  });
-}
-
 /** 章節の抽出規則の全体の既定（#715）。 */
-export function useProfileGuideSearchDefaults() {
-  return useQuery({
-    queryKey: ["settings", "profile-guide-search-defaults"],
-    queryFn: () => api.getProfileGuideSearchDefaults(),
-    retry: false,
-  });
-}
-
 export function useSectionRulesSettings() {
   return useQuery({
     queryKey: ["settings", "section-rules"] as const,
@@ -1233,6 +1223,29 @@ export function useSearchAnswerProfiles(params: {
   });
 }
 
+/** 単一選択の候補。後続ページも揃えてから、名前・参照 KB・選択中の対象を解決する。 */
+export function useAllSearchAnswerProfiles(params: { status?: SearchAnswerProfileStatus }) {
+  return useQuery({
+    queryKey: ["search-answer-profiles", { ...params, scope: "all-choices" }],
+    queryFn: async () => {
+      const first = await api.listSearchAnswerProfiles({ ...params, limit: 50, offset: 0 });
+      const items = [...first.items];
+      const warnings = [...first.warning_messages];
+      let page = first;
+      while (page.has_next && page.items.length > 0) {
+        page = await api.listSearchAnswerProfiles({
+          ...params,
+          limit: 50,
+          offset: page.offset + page.items.length,
+        });
+        items.push(...page.items);
+        warnings.push(...page.warning_messages);
+      }
+      return { ...first, items, has_next: page.has_next, warning_messages: warnings };
+    },
+  });
+}
+
 /** 検索・回答プロファイル詳細(config・参照 KB を含む)。 */
 export function useSearchAnswerProfile(id: string | null) {
   return useQuery({
@@ -1270,6 +1283,32 @@ export function useInheritedAnswerContact() {
   });
 }
 
+export function useQuestionUnderstanding(id: string) {
+  return useQuery({
+    queryKey: [...queryKeys.searchAnswerProfile(id), "question-understanding"],
+    queryFn: () => api.getQuestionUnderstanding(id),
+    retry: false,
+  });
+}
+
+export function useSaveQuestionUnderstanding(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (overrides: LanguagePackSections) => api.saveQuestionUnderstanding(id, overrides),
+    onSuccess: (data) => {
+      qc.setQueryData([...queryKeys.searchAnswerProfile(id), "question-understanding"], data);
+      void qc.invalidateQueries({ queryKey: queryKeys.searchAnswerProfile(id), exact: true });
+    },
+  });
+}
+
+export function usePreviewQuestionUnderstanding(id: string) {
+  return useMutation({
+    mutationFn: ({ text, overrides }: { text: string; overrides: LanguagePackSections }) =>
+      api.previewQuestionUnderstanding(id, text, overrides),
+  });
+}
+
 /** 検索・回答プロファイルのドメインキーワード。 */
 export function useDomainKeywords(searchAnswerProfileId: string) {
   return useQuery({
@@ -1293,10 +1332,18 @@ export function useSaveDomainKeywords(searchAnswerProfileId: string) {
   });
 }
 
-/** 参照 KB からドメインキーワード候補を生成する(保存しない)。 */
-export function useSuggestDomainKeywords(searchAnswerProfileId: string) {
+/** Excel 取込後の保存値を左の編集欄にも反映する。 */
+export function useImportDomainKeywords(searchAnswerProfileId: string) {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.suggestDomainKeywords(searchAnswerProfileId),
+    mutationFn: (args: { file: File; mode: DomainKeywordImportMode }) =>
+      api.importDomainKeywords(searchAnswerProfileId, args.file, args.mode),
+    onSuccess: (data) => {
+      qc.setQueryData(
+        ["search-answer-profiles", searchAnswerProfileId, "domain-keywords"],
+        data,
+      );
+    },
   });
 }
 
@@ -1322,7 +1369,7 @@ export function useApprovedFaqMutation<TArgs, TData extends ApprovedFaqListData 
   });
 }
 
-/** 検索・回答プロファイルの用語・ルール。 */
+/** 検索・回答プロファイルの用語・同義語と回答ルール。 */
 export function useRuntimeKnowledge(searchAnswerProfileId: string) {
   return useQuery({
     queryKey: ["search-answer-profiles", searchAnswerProfileId, "runtime-knowledge"],
@@ -1330,7 +1377,7 @@ export function useRuntimeKnowledge(searchAnswerProfileId: string) {
   });
 }
 
-/** 用語・ルールの 1 行追加・更新・削除。 */
+/** 用語・同義語と回答ルールの 1 行追加・更新・削除。 */
 export function useEditRuntimeKnowledge(searchAnswerProfileId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -1520,37 +1567,6 @@ export function useAnswerRecord(traceId: string | null) {
     queryKey: ["answer-record", traceId],
     queryFn: () => api.getAnswerRecord(traceId as string),
     enabled: Boolean(traceId),
-  });
-}
-
-/** 質問履歴の設定。 */
-export function useQueryHistorySettings() {
-  return useQuery({ queryKey: ["settings", "query-history"], queryFn: api.getQueryHistorySettings });
-}
-
-export function useUpdateQueryHistorySettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: QueryHistorySettingsData) => api.updateQueryHistorySettings(body),
-    onSuccess: (data) => {
-      qc.setQueryData(["settings", "query-history"], data);
-      qc.invalidateQueries({ queryKey: ["query-suggestions"] });
-    },
-  });
-}
-
-/** 検索・回答プロファイルでよく聞かれる質問(質問履歴が有効なときだけ候補が返る)。 */
-export function useQuerySuggestions(
-  searchAnswerProfileId: string | null,
-  query: string,
-  filters: Record<string, string>
-) {
-  return useQuery({
-    queryKey: ["query-suggestions", searchAnswerProfileId, query, filters],
-    queryFn: () => api.getQuerySuggestions(searchAnswerProfileId as string, query, filters),
-    enabled: Boolean(searchAnswerProfileId),
-    staleTime: 30_000,
-    placeholderData: (previous) => previous,
   });
 }
 
@@ -1946,8 +1962,8 @@ export function useSubmitRunEvaluationJob() {
 /** 評価リクエストの Excel を検証してケースにする（#2065。サーバーには保存しない）。 */
 export function useImportEvaluationCases() {
   return useMutation({
-    mutationFn: ({ file, knowledgeBaseIds }: { file: File; knowledgeBaseIds: string[] }) =>
-      api.importEvaluationCases(file, knowledgeBaseIds),
+    mutationFn: ({ file, searchAnswerProfileId }: { file: File; searchAnswerProfileId: string }) =>
+      api.importEvaluationCases(file, searchAnswerProfileId),
   });
 }
 
@@ -2055,7 +2071,7 @@ export function useExternalParserStatus(
   });
 }
 
-/** 名称・別名の索引を構築する全体の既定。 */
+/** 実体・別名索引を構築する全体の既定。 */
 export function useEntityIndexSettings() {
   return useQuery({
     queryKey: queryKeys.entityIndexSettings,
@@ -2075,7 +2091,7 @@ export function useUpdateEntityIndexSettings() {
   });
 }
 
-/** 関係情報の構築（構築する / しない）の設定。 */
+/** 文書構造索引の構築（構築する / しない）の設定。 */
 export function useGraphSettings() {
   return useQuery<GraphSettingsData>({
     queryKey: queryKeys.graphSettings,
@@ -2084,7 +2100,7 @@ export function useGraphSettings() {
   });
 }
 
-/** 関係情報の構築の設定をランタイム保存。 */
+/** 文書構造索引の構築の設定をランタイム保存。 */
 export function useUpdateGraphSettings() {
   const qc = useQueryClient();
   return useMutation({
@@ -2258,39 +2274,6 @@ export function useLanguagePack() {
     queryKey: queryKeys.languagePack,
     queryFn: api.getLanguagePack,
     retry: false,
-  });
-}
-
-/** 言語資源の全体の上書きを保存する（組み込みと違う項目だけ）。 */
-export function useUpdateLanguagePack() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (overrides: LanguagePackSections) => api.updateLanguagePack(overrides),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.languagePack, data);
-      void qc.invalidateQueries({ queryKey: queryKeys.languagePackHistory });
-    },
-  });
-}
-
-/** 言語資源の保存の版（新しい順）。 */
-export function useLanguagePackHistory() {
-  return useQuery<LanguagePackHistoryData>({
-    queryKey: queryKeys.languagePackHistory,
-    queryFn: api.getLanguagePackHistory,
-    retry: false,
-  });
-}
-
-/** 前の版の言語資源に戻す（戻したことも新しい版として残る）。 */
-export function useRestoreLanguagePack() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (versionId: string) => api.restoreLanguagePack(versionId),
-    onSuccess: (data) => {
-      qc.setQueryData(queryKeys.languagePack, data);
-      void qc.invalidateQueries({ queryKey: queryKeys.languagePackHistory });
-    },
   });
 }
 

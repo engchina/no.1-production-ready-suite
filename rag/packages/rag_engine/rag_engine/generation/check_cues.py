@@ -44,6 +44,8 @@ class CheckCues:
     ignored_quote_chars: frozenset[str]
     trailing_punctuation: str
     step_split: re.Pattern[str]
+    # 行の先頭で ``match`` する手順の番号（①・⑴・(1)・（１）・1.・１．）。小数（1.5）には当たらない。
+    step_line_start: re.Pattern[str]
     ellipsis_split: re.Pattern[str]
     object_kinds: tuple[tuple[str, re.Pattern[str]], ...]
     condition_sentence: re.Pattern[str]
@@ -180,6 +182,10 @@ def _build(pack: LanguagePack) -> CheckCues:
         step_split=re.compile(
             rf"(?={circled})|(?={number_open}[0-9０-９]{{1,2}}{number_close})"
             rf"|(?<=[{sentence}\s])(?=[0-9０-９]{{1,2}}[{chars('step_split_closers')}])"
+        ),
+        step_line_start=re.compile(
+            rf"[ \t\u3000]*(?:{circled}|{markers.circled}|{number_open}[0-9０-９]{{1,2}}{number_close}"
+            rf"|[0-9０-９]{{1,2}}[{chars('step_split_closers')}](?![0-9０-９]))"
         ),
         ellipsis_split=re.compile(
             r"\s*(?:"

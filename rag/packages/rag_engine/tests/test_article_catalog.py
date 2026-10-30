@@ -86,7 +86,7 @@ def test_catalog_articles_are_not_deferred_by_document_selection():
     top = child("m1", 1, "手引き", "架空手引き.pdf", "p1", score=0.9)
     article = _marked(child("art1", 2, "第一条", "架空規程.json", "q1", score=0.2))
 
-    kept, deferred, _trace = answering.select_documents([top, article], settings)
+    kept, deferred, _trace = answering.select_documents([top, article], settings, top_k=1)
 
     assert [r.id for r in kept] == ["m1", "art1"]
     assert deferred == []
@@ -95,7 +95,7 @@ def test_catalog_articles_are_not_deferred_by_document_selection():
 def test_engine_settings_default_and_env():
     defaults = get_settings(environ={}, dotenv_path=None)
     assert defaults.article_catalog_enabled is True
-    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (8, 12)
+    assert (defaults.article_catalog_max_documents, defaults.article_catalog_max_articles) == (16, 8)
     assert defaults.article_catalog_context_records == 6
     assert defaults.article_catalog_original_question_search is True
     environ = {
@@ -184,7 +184,7 @@ def test_catalog_article_children_reads_catalogs_and_chunks_from_injected_depend
     # 候補にあった条は印だけ（検索の根拠として扱う）、加えた条は added。
     assert [r.metadata.get(ARTICLE_CATALOG_KEY, {}).get("added") for r in children] == [None, None, True]
     assert [r.chunk_uid for r in expansion] == ["hit", "new", "new:p"]
-    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], 8)
+    assert calls[0] == ("catalogs", ["doc-m", "doc-a"], settings.article_catalog_max_documents)
     assert calls[1] == ("chunks", ["s2", "s3"])
     assert [c[0] for c in calls].count("catalogs") == 2  # 目録は呼び出し元が回答ごとに持つ
 
@@ -288,16 +288,45 @@ def test_select_documents_keeps_listed_documents_in_order():
     assert select_documents("届出の補正は", [], parse, None, limit=2) == []
 
 
+def _stage_recorder():
+    """開いている処理の経過の段（``observe_call("stage", …)``）の列を数える observer（#3475）。"""
+    from contextlib import contextmanager
+
+    from rag_engine.resources.tracing import _NoObservation
+
+    open_stages = []
+
+    @contextmanager
+    def observer(operation, model):
+        if operation != "stage":
+            yield _NoObservation()
+            return
+        open_stages.append(model)
+        try:
+            yield _NoObservation()
+        finally:
+            open_stages.pop()
+
+    return observer, open_stages
+
+
 def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
-    """候補に出ない文書も、範囲の文書の一覧から LLM が選べば目録を読む（候補の文書の後ろ）。"""
+    """候補に出ない文書も、範囲の文書の一覧から LLM が選べば目録を読む（候補の文書の後ろ）。
+
+    文書の選択の LLM と、選んだ文書の目録の読み込みは「条の選択」の段の中で行う（#3475）。
+    """
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.resources.tracing import bind_trace_observer
     from rag_engine.retrieval.article_catalog import ArticleSelection as Selection
 
     calls = []
     general = replace(CATALOG, document_id="doc-g", file_name="架空手続通則.json", chunk_set_id="cs-g")
+    observer, open_stages = _stage_recorder()
+    stages_at = {}
 
     def article_catalogs(*, document_ids, limit, settings):
         calls.append(("catalogs", list(document_ids), limit))
+        stages_at[f"catalogs:{','.join(document_ids)}"] = list(open_stages)
         return [CATALOG] if "doc-a" in document_ids else [general]
 
     asked = []
@@ -306,6 +335,7 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
         body = json.loads(prompt)
         if "documents" in body:
             asked.append(body["max_lines"])
+            stages_at["select_documents"] = list(open_stages)
             return Selection(lines=[1, 0])
         return _articles([2])
 
@@ -327,11 +357,15 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
     answering._ARTICLE_SELECTION_CACHE.clear()
     answering._ARTICLE_DOCUMENT_CACHE.clear()
 
-    with bind_dependencies(dependencies):
+    with bind_dependencies(dependencies), bind_trace_observer(observer):
         answering._catalog_article_children("届出の補正は", ranked, settings)
 
+    assert stages_at["select_documents"] == ["条の選択"]
+    assert stages_at["catalogs:doc-g"] == ["条の選択"]
+    # 候補の文書の目録の有無は段を開く前に確かめる（条で構成された文書が無ければ段を出さない）。
+    assert stages_at["catalogs:doc-a"] == []
     # 一覧から選んだ doc-g・doc-a のうち、候補の文書（doc-a）に無い doc-g だけを足して読む。
-    assert calls[0] == ("catalogs", ["doc-a"], 8)
+    assert calls[0] == ("catalogs", ["doc-a"], settings.article_catalog_max_documents)
     assert calls[1] == ("catalogs", ["doc-g"], 1)
     # 候補の文書と重なる分（doc-a の 1 つ）だけ多く頼む（既定の 2 + 1）。
     assert asked == [3]
@@ -344,7 +378,7 @@ def test_catalog_articles_do_not_raise_the_top_document_score():
     manual = child("m1", 1, "手引き", "架空手引き.pdf", "p1", score=0.4)
     article = _marked(child("art1", 2, "第一条", "架空規程.json", "q1", score=0.95))
 
-    kept, deferred, trace = answering.select_documents([manual, article], settings)
+    kept, deferred, trace = answering.select_documents([manual, article], settings, top_k=1)
 
     assert [r.id for r in kept] == ["m1", "art1"]
     assert deferred == []
@@ -353,8 +387,8 @@ def test_catalog_articles_do_not_raise_the_top_document_score():
 
 def test_catalog_article_sharing_a_parent_does_not_change_the_hit_parents():
     """選んだ条が検索の根拠と同じ親にあっても、検索の根拠の親の選び方（順位・数）は選んだ条が無いときと同じ。"""
-    shared = replace(_context_record("art1", "child", article=True), parent_chunk_uid="uid:m2-p")
     children = [_context_record(f"m{index}", "child") for index in range(4)]
+    shared = replace(_context_record("art1", "child", article=True), parent_chunk_uid="uid:m2-p", source=children[2].source)
     with_article = [shared, *children]
 
     bundle = _bundle(with_article, top_k=4, max_records=2, catalog_records=2)
@@ -446,11 +480,16 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
     from types import SimpleNamespace
 
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.resources.tracing import bind_trace_observer
 
     calls = []
+    observer, open_stages = _stage_recorder()
+    searched_in = []
 
     def search(**kwargs):
         calls.append(kwargs)
+        # 元の質問の検索は「元の質問の検索」の段の中（処理の経過。#3475）。
+        searched_in.append(list(open_stages))
         return SimpleNamespace(child_chunks=[_stored("o1", "架空政令.json", document_id="order")])
 
     monkeypatch.setattr(answering, "search_adb_hybrid_chunks", search)
@@ -470,9 +509,10 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
             article_question=lambda: original,
         )
 
-    with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
+    with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")), bind_trace_observer(observer):
         found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings)
     assert [record.chunk_uid for record in found] == ["o1"]
+    assert searched_in == [["元の質問の検索"]]
     assert calls[0]["retrieval_queries"] == ["取引先から届いた書類の補正を求めるべきか"]
     assert calls[0]["vector_only_queries"] == ("取引先から届いた書類の補正を求めるべきか",)
     assert "extra_text_queries" not in calls[0]
@@ -494,7 +534,7 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
         assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
 
 
-def _select_with(parse, settings, catalogs, terms=(), leads=None, refined=None, reported=None, refine_failed=None):
+def _select_with(parse, settings, catalogs, terms=(), leads=None, refined=None, reported=None, refine_failed=None, referenced=None):
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 
     def unused(*args, **kwargs):
@@ -510,7 +550,11 @@ def _select_with(parse, settings, catalogs, terms=(), leads=None, refined=None, 
         report_degraded=None if reported is None else lambda kind, exc: reported.append(kind),
     )
     with bind_dependencies(dependencies):
-        selected, failed, added, refine_names = answering._select_catalog_articles("届出の期限は", catalogs, settings, terms=terms)
+        selected, failed, added, refine_names, references = answering._select_catalog_articles(
+            "届出の期限は", catalogs, settings, terms=terms
+        )
+    if referenced is not None:
+        referenced.extend(references)
     if refined is not None:
         refined.append(added)
     if refine_failed is not None:
@@ -578,7 +622,7 @@ def test_article_catalog_call_limits_come_from_the_environment():
         environ={"RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP": "1024", "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": "20"},
         dotenv_path=None,
     )
-    assert (defaults.article_catalog_output_token_cap, defaults.article_catalog_call_timeout_seconds) == (4096, 90.0)
+    assert (defaults.article_catalog_output_token_cap, defaults.article_catalog_call_timeout_seconds) == (8192, 180.0)
     assert (custom.article_catalog_output_token_cap, custom.article_catalog_call_timeout_seconds) == (1024, 20.0)
 
 
@@ -670,10 +714,19 @@ def test_refine_adds_articles_of_the_same_chapter_judged_by_their_leads():
         asked["prompt"] = json.loads(prompt)
         return _articles([6, 4, 0], [5])
 
-    added = refine_articles("重なったときは", NESTED, [("n4", "第三条（特例の対象）")], leads, parse, None, limit=2, candidate_limit=10)
+    result = refine_articles("重なったときは", NESTED, [("n4", "第三条（特例の対象）")], leads, parse, None, limit=2, candidate_limit=10)
 
-    assert added == [("n6", "第五条（請求を行う場合の特例）"), ("n5", "第四条（記録）")]
-    assert asked["sections"] == {"n5": "第四条（記録）", "n6": "第五条（請求を行う場合の特例）"}
+    assert result is not None
+    assert result.added == [("n6", "第五条（請求を行う場合の特例）"), ("n5", "第四条（記録）")]
+    # 書き出しは同じ章の条と、名指しを探す別の章の条の行をまとめて 1 回で読む。名指しの条は無い。
+    assert asked["sections"] == {
+        "n5": "第四条（記録）",
+        "n6": "第五条（請求を行う場合の特例）",
+        "n1": "第一条（目的）",
+        "n2": "第二条（定義）",
+        "n8": "第六条（委任）",
+    }
+    assert result.referencing == ()
     assert asked["prompt"]["selected"] == ["第三条（特例の対象）"]
     assert "[6] 第五条（請求を行う場合の特例）｜前条の請求があつたときは" in asked["prompt"]["candidates"]
     assert "[5] 第四条（記録）" in asked["prompt"]["candidates"]
@@ -968,3 +1021,180 @@ def test_catalog_step_tells_a_selection_failure_apart_from_no_match():
     step, reported = _catalog_step(lambda *args, **kwargs: _articles([]), scope_documents=None)
     assert step["status"] == "該当なし"
     assert reported == []
+
+
+# 本則の章と附則を持つ合成の文書（#3517）。附則の第二条は本則の第五条を書き出しの先頭で名指しし（要件の読替え）、
+# 附則の第四条は書き出しの途中で名指しする。附則の第三条は選んでいない条（第六条の二）を名指しする。
+LAW = ArticleCatalog(
+    document_id="doc-l",
+    file_name="架空法.json",
+    chunk_set_id="cs-l",
+    lines=(
+        "第一章 総則",
+        "  第一条（目的）",
+        "第二章 給付",
+        "  第五条（支給の要件）",
+        "  第六条（支給の額）",
+        "  第六条の二（届出）",
+        "第三章 雑則",
+        "  第九条（委任）",
+        "附則",
+        "  第二条（支給の要件の特例）",
+        "  第三条（経過措置）",
+        "  第四条",
+    ),
+    section_ids=tuple(f"l{i}" for i in range(12)),
+)
+LAW_LEADS = {
+    "l1": "この法律は、架空の給付について定める。",
+    "l4": "給付の額は、別に定める額とする。",
+    "l5": "給付を受けようとする者は、届け出なければならない。",
+    "l7": "この法律に定めるもののほか、必要な事項は別に定める。",
+    "l9": "第五条第一項の規定の適用については、当分の間、同項中「十年」とあるのは「五年」とする。",
+    "l10": "この法律の施行の際現に第六条の二の届出をした者は、届出をしたものとみなす。",
+    "l11": "前条に定めるもののほか、第5条の規定による給付の経過措置は、別に定める。",
+}
+
+
+def _law_leads(sections):
+    return {section_id: LAW_LEADS[section_id] for section_id in sections if section_id in LAW_LEADS}
+
+
+def test_article_references_read_numbers_and_branches_from_the_language_pack():
+    from rag_engine.retrieval.article_catalog import article_number_key, article_reference_keys
+
+    assert article_number_key("第五条（支給の要件）") == (5,)
+    assert article_number_key("  第六条の二（届出）") == (6, 2)
+    assert article_number_key("第二章 給付") is None and article_number_key("附則") is None
+    # 枝番は長く読み、漢数字と算用数字は同じ key。「の一部」の「一」は枝番にしない（言語資源の枝番にしない字）。
+    assert article_reference_keys("第六条の二第一項及び第5条並びに第六条の一部") == [(6, 2), (5,), (6,)]
+
+
+def test_refine_shows_other_chapter_articles_that_name_a_selected_article():
+    """選んだ本則の条を書き出しで名指しする附則の条を、2 段目の候補にして選べる（#3517）。"""
+    from rag_engine.retrieval.article_catalog import ARTICLE_REFINE_SYSTEM_PROMPT, refine_articles
+
+    asked = {"loads": 0}
+
+    def leads(sections):
+        asked["loads"] += 1
+        asked["sections"] = dict(sections)
+        return _law_leads(sections)
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        assert system == ARTICLE_REFINE_SYSTEM_PROMPT
+        asked["prompt"] = json.loads(prompt)
+        return _articles([9])
+
+    result = refine_articles("支給の要件は", LAW, [("l3", "第五条（支給の要件）")], leads, parse, None, limit=2, candidate_limit=10)
+
+    assert result is not None
+    assert result.added == [("l9", "第二条（支給の要件の特例）")]
+    # 書き出しの先頭で名指しする条を先に、途中で名指しする条を後に。別の条（第六条の二）を名指しする条は入れない。
+    assert result.referencing == (("l9", "第二条（支給の要件の特例）"), ("l11", "第四条"))
+    # 書き出しは 1 回で読む（同じ章の条と別の章の条の行）。
+    assert asked["loads"] == 1
+    assert set(asked["sections"]) == {"l4", "l5", "l1", "l7", "l9", "l10", "l11"}
+    lines = asked["prompt"]["candidates"].splitlines()
+    assert [line.split("]", 1)[0] for line in lines] == ["[9", "[11", "[4", "[5"]
+    assert lines[0] == f"[9] 第二条（支給の要件の特例）｜{LAW_LEADS['l9']}"
+
+
+def test_refine_without_references_shows_only_the_same_chapter():
+    """名指しする条が無ければ、候補は今までどおり同じ章の条だけ（目録の順）。"""
+    from rag_engine.retrieval.article_catalog import refine_articles
+
+    asked = {}
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        asked["prompt"] = json.loads(prompt)
+        return _articles([])
+
+    def leads(sections):
+        return {section_id: "別に定める。" for section_id in sections}
+
+    result = refine_articles("支給の要件は", LAW, [("l3", "第五条（支給の要件）")], leads, parse, None, limit=2, candidate_limit=10)
+
+    assert result is not None and result.added == [] and result.referencing == ()
+    assert asked["prompt"]["candidates"] == "[4] 第六条（支給の額）｜別に定める。\n[5] 第六条の二（届出）｜別に定める。"
+
+
+def test_refine_candidates_share_the_limit_between_the_same_chapter_and_references():
+    """候補は合わせて上限まで。同じ章に 3 分の 2、名指しに 3 分の 1 を割り当て、名指しの余りだけを同じ章に回す（#3531）。"""
+    from rag_engine.retrieval.article_catalog import refine_articles, refine_candidates
+
+    same, refs = list(range(100, 170)), list(range(200, 260))
+    shown = refine_candidates(same, refs, limit=60)
+    assert len(shown) == 60 and shown[:20] == refs[:20] and shown[20:] == same[:40]
+    # 同じ章の条が少なくても、名指しの条は 3 分の 1 を超えない（余りは空けたまま）。
+    assert refine_candidates(same[:5], refs, limit=60) == [*refs[:20], *same[:5]]
+    assert refine_candidates([], refs, limit=60) == refs[:20]
+    assert refine_candidates([], refs, limit=30) == refs[:10]
+    # 名指しの条が少なければ、その余りは同じ章の条が使う。
+    assert refine_candidates(same, refs[:3], limit=60) == [*refs[:3], *same[:57]]
+    assert refine_candidates(same, [], limit=60) == same[:60] and refine_candidates(same, refs, limit=0) == []
+    # 上限が 3 未満なら名指しの枠は 0（同じ章の条だけ）。
+    assert refine_candidates(same, refs, limit=2) == same[:2] and refine_candidates([], refs, limit=2) == []
+
+    asked = {}
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        asked["prompt"] = json.loads(prompt)
+        return _articles([])
+
+    result = refine_articles("支給の要件は", LAW, [("l3", "第五条（支給の要件）")], _law_leads, parse, None, limit=2, candidate_limit=3)
+    assert result is not None and result.referencing == (("l9", "第二条（支給の要件の特例）"),)
+    assert [line.split("]", 1)[0] for line in asked["prompt"]["candidates"].splitlines()] == ["[9", "[4", "[5"]
+
+
+def test_catalog_step_records_referencing_candidates_without_extra_llm_calls():
+    """名指しの条を候補にしても LLM の呼び出しは文書ごとに 2 回のまま。工程に候補にした数と足した条を残す（#3517）。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies, llm_call_count
+    from rag_engine.generation.execution_record import _structured_steps
+
+    prompts = []
+    loads = []
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        body = json.loads(prompt)
+        prompts.append("candidates" in body)
+        return _articles([9]) if "candidates" in body else _articles([3])
+
+    def leads(*, document_id, chunk_set_id, sections, settings):
+        loads.append(document_id)
+        return _law_leads(sections)
+
+    def unused(*args, **kwargs):
+        raise AssertionError("呼ばない")
+
+    dependencies = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=parse,
+        article_catalogs=lambda *, document_ids, limit, settings: [LAW],
+        article_chunks=lambda *, articles, settings: [],
+        article_leads=leads,
+    )
+    ranked = [answering._stored_chunk_answer_record(_stored("hit", "架空法.json", document_id="doc-l"))]
+    settings = get_settings(environ={}, dotenv_path=None)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+    steps = []
+    token = _structured_steps.set(steps)
+    calls = llm_call_count.set(0)
+    try:
+        with bind_dependencies(dependencies):
+            answering._catalog_article_children("支給の要件は", ranked, settings)
+            used = llm_call_count.get()
+    finally:
+        llm_call_count.reset(calls)
+        _structured_steps.reset(token)
+    answering._ARTICLE_SELECTION_CACHE.clear()
+
+    assert prompts == [False, True] and used == 2 and loads == ["doc-l"]
+    step = next(step for step in steps if step["name"] == "条の選択")
+    fields = {field["label"]: field["value"] for field in step["details"]["fields"]}
+    assert fields["2 段目で足した条"] == "1 件"
+    assert fields["選んだ条を名指しする別の章の条（候補）"] == "2 件"
+    assert any("架空法.json（2 件。足した条: 第二条（支給の要件の特例））" in line for line in step["details"]["lines"])

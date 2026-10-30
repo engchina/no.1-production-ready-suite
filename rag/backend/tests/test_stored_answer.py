@@ -76,8 +76,8 @@ def test_stored_citation_metadata_keeps_how_the_answer_used_the_evidence() -> No
         "evidence_model_used": False,
         "evidence_answer_use": "reference",
         "evidence_parent_used": True,
-        "answer_citation_lines": [1],
-        "answer_citation_candidate_lines": [2],
+        "answer_citation_lines": [1, 3],
+        "answer_citation_candidate_lines": [2, 4],
         "answer_citation_provenance": "child",
     }
 
@@ -96,7 +96,7 @@ def test_stored_citation_metadata_drops_null_and_unknown_keys() -> None:
             "text_sha256": "x",
             "context_header": "a > b",
         }
-    ) == {"page_start": 3, "rrf_score": 0.01, "chunk_set_id": "cs-1"}
+    ) == {"page_start": 3, "rrf_score": 0.01, "chunk_set_id": "cs-1", "context_header": "a > b"}
 
 
 def _evaluation_input() -> dict[str, Any]:
@@ -275,3 +275,58 @@ def test_restored_chat_message_returns_stored_shape() -> None:
     restored = chat_route._to_chat_message(message)
 
     assert [citation.model_dump(mode="json") for citation in restored.citations] == [case["stored"]]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_stored_header_survives_json_round_trip_without_original_chunk(enabled: bool) -> None:
+    metadata = {"context_header_enabled": enabled, "section_path": "分類 A > 機能 A > 説明"}
+    if enabled:
+        metadata["context_header"] = "文書 A > 分類 A > 機能 A > 説明"
+    stored = stored_citation_metadata(metadata)
+    assert json.loads(json.dumps(stored, ensure_ascii=False)) == metadata
+    assert stored_citation_metadata({}) == {}
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_item_citation_ordinals_and_body_survive_saved_message_round_trip(legacy: bool) -> None:
+    body = "資料により確認できた事項\n\n・合成の説明 A。\n"
+    if not legacy:
+        body += "根拠：document-a.pdf p.1\n"
+    body += "・合成の説明 B。\n根拠：document-a.pdf p.1"
+    chunks = [
+        RetrievedChunk(
+            document_id="document-a",
+            chunk_id=f"chunk-{index}",
+            file_name="document-a.pdf",
+            text=f"合成の原文 {index}。",
+            score=0.8,
+            metadata={
+                "page_start": 1,
+                "answer_citation_lines": [1 if legacy else index + 1],
+                "answer_citation_candidate_lines": [3],
+                "answer_citation_provenance": "child",
+            },
+        )
+        for index in range(2)
+    ]
+    saved = json.loads(json.dumps(stored_citations(chunks)))
+    message = StoredMessage(
+        id="message-a",
+        conversation_id="conversation-a",
+        role="ASSISTANT",
+        content=body,
+        citations=saved,
+        status="COMPLETE",
+        created_at=datetime(2026, 10, 9, tzinfo=UTC),
+    )
+    restored = chat_route._to_chat_message(message)
+    assert restored.content == body
+    assert [chunk.metadata["answer_citation_lines"] for chunk in restored.citations] == (
+        [[1], [1]] if legacy else [[1], [2]]
+    )
+    assert all(
+        chunk.metadata["answer_citation_candidate_lines"] == [3] for chunk in restored.citations
+    )
+    assert all(
+        chunk.metadata["answer_citation_provenance"] == "child" for chunk in restored.citations
+    )

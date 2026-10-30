@@ -1,3 +1,4 @@
+import { jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expect, type Locator, test } from "./fixtures/test";
 import { mockEvaluationJobs, prepareEvaluationRun } from "./_evaluation-jobs";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -134,6 +135,22 @@ test(`評価のケース結果は多くても高さ固定・ヘッダー固定�
     .locator("thead")
     .evaluate((el) => getComputedStyle(el).position);
   expect(headerPosition).toBe("sticky");
+  const pager=page.getByTestId("evaluation-case-pagination");
+  await expect(table.getByRole("row")).toHaveCount(26);
+  await expect(pager).toContainText("1–25 / 40 件");
+  await jumpToPage(pager,2);
+  await expect(table.getByRole("row")).toHaveCount(16);
+  await expect(table).toContainText("case-26");
+  await pager.getByRole("combobox",{name:"表示件数"}).click();
+  await page.getByRole("option",{name:"10 件",exact:true}).click();
+  await expect(table.getByRole("row")).toHaveCount(11);
+  await expect(table).toContainText("case-01");
+  await jumpToPage(pager,3);
+  await expect(table).toContainText("case-21");
+  await page.reload();
+  await expect(page.getByTestId("evaluation-case-scroll-region")).toContainText("case-21");
+  await expect(pager).toContainText("21–30 / 40 件");
+
 
   await expectNoPageOverflow(page);
 });

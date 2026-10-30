@@ -12,6 +12,7 @@ for (const width of [1280, 375]) {
       await route.fulfill({ json: { data: { ...state, oci_configured: true, oci_warning_code: null, config_source: "runtime" }, error_messages: [], warning_messages: [] } });
     });
     await page.goto("/settings/guardrail");
+    await expect(page.getByText(/OCI の検出結果に基づき/)).toBeVisible();
     const input = page.getByRole("checkbox", { name: "入力を検査する", exact: true });
     const output = page.getByRole("checkbox", { name: "出力を検査する", exact: true });
     await expect(input).not.toBeChecked(); await expect(output).not.toBeChecked();

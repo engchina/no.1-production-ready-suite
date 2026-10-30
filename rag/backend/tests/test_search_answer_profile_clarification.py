@@ -88,11 +88,11 @@ def test_clarification_is_saved_on_the_rule_and_suggested_for_matching_questions
         "expense",
     ]
 
-    # 質問で既に答えている(選択肢の名前・検索に足す語が入っている)ときは聞き返さない。
+    # 語の出現だけでは回答済みにしない。意味を認識できない場合は確認を保つ。
     answered = client.post(
         f"{BASE}/clarifications/suggest", json={"query": "出張の申請の期限はいつですか"}
     ).json()["data"]
-    assert answered["suggestion"] is None
+    assert answered["suggestion"] is not None
     # ルールに一致しない質問にも出さない。
     unrelated = client.post(f"{BASE}/clarifications/suggest", json={"query": "日当はいくら"})
     assert unrelated.json()["data"]["suggestion"] is None
@@ -408,3 +408,54 @@ def test_mcp_search_assume_policy_does_not_ask(
     )["structuredContent"]
     assert body["outcome"] != "needs_clarification"
     assert len(mcp_search) == 1
+
+
+def test_disabled_rule_stops_generation_and_clarification_without_losing_settings(
+    fake_oracle: FakeKnowledgeOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        knowledge_route, "get_settings", lambda: Settings(rag_support_guide_enabled=False)
+    )
+    created = client.post(
+        f"{BASE}/runtime-knowledge/edit",
+        json={
+            "kind": "rules",
+            "title": "合成ルール A",
+            "labels": "合成語",
+            "content": "合成の注意点。",
+        },
+    )
+    identity = created.json()["data"]["rules"][-1]["id"]
+    clarification = {
+        "question": "対象を選んでください。",
+        "options": [{"id": "a", "label": "選択肢 A"}, {"id": "b", "label": "選択肢 B"}],
+    }
+    saved = client.put(
+        f"{BASE}/runtime-knowledge/rules/{identity}/clarification",
+        json={"clarification": clarification},
+    )
+    assert saved.status_code == 200
+    stored = saved.json()["data"]["rules"][-1]["clarification"]
+    for enabled in (True, False, True):
+        response = client.post(
+            f"{BASE}/runtime-knowledge/edit",
+            json={
+                "kind": "rules",
+                "selected": identity,
+                "title": "合成ルール A",
+                "labels": "合成語",
+                "content": "合成の注意点。",
+                "enabled": enabled,
+            },
+        )
+        assert response.status_code == 200
+        rule = response.json()["data"]["rules"][-1]
+        assert rule["id"] == identity
+        assert rule["clarification"] == stored
+        preview = client.post(f"{BASE}/runtime-knowledge/preview", json={"question": "合成語"})
+        assert preview.json()["data"]["matched_rules"] == (["合成ルール A"] if enabled else [])
+        suggestion = client.post(f"{BASE}/clarifications/suggest", json={"query": "合成語"})
+        assert suggestion.status_code == 200
+        assert (suggestion.json()["data"]["suggestion"] is not None) is enabled

@@ -130,13 +130,26 @@ def test_evaluation_suite_defaults_to_standard() -> None:
     assert Settings().rag_evaluation_suite == "standard"
 
 
+def test_answer_flow_defaults_to_standard_rag_in_every_layer() -> None:
+    """回答の生成方式の既定は標準 RAG。CRAG は明示して選んだときだけ使う(#3509)。
+
+    backend の全体設定・.env.example・rag_engine の既定(answer_flow を省いた呼び出し)をそろえる。
+    """
+    from rag_engine.generation.answer_models import DEFAULT_ANSWER_FLOW, STANDARD_ANSWER_FLOW
+
+    assert Settings.model_fields["rag_answer_flow"].default == "standard_rag"
+    assert DEFAULT_ANSWER_FLOW == STANDARD_ANSWER_FLOW == "standard_rag"
+    example = (config_module.BACKEND_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "RAG_ANSWER_FLOW=standard_rag" in example.splitlines()
+
+
 def test_unknown_evaluation_suite_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(rag_evaluation_suite="autorag_tuner")
 
 
 def test_graph_profile_defaults_to_off() -> None:
-    """関係情報の構築の既定は off(構築しない)。"""
+    """文書構造索引の構築の既定は off(構築しない)。"""
     assert Settings().rag_graph_profile == "off"
 
 
@@ -220,7 +233,7 @@ def test_relative_model_settings_file_resolves_from_platform_env_dir(
 def test_settings_read_platform_and_rag_env_names_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """共通の設定は PLATFORM_*、RAG 固有の設定は RAG_* で読み、旧名は読まない（#211）。"""
     monkeypatch.setenv("PLATFORM_ORACLE_DSN", "platform-dsn")
-    monkeypatch.setenv("RAG_AUTH_MODE", "production")
+    monkeypatch.setenv("PLATFORM_AUTH_MODE", "authenticated")
     monkeypatch.setenv("RAG_HUGGINGFACE_ENDPOINT", "hf-mirror.com")
     monkeypatch.setenv("RAG_OCI_DOCUMENT_UNDERSTANDING_LANGUAGE", "en")
     monkeypatch.setenv("HF_TOKEN", "legacy-token")
@@ -228,7 +241,7 @@ def test_settings_read_platform_and_rag_env_names_only(monkeypatch: pytest.Monke
     settings = Settings(_env_file=None)
 
     assert settings.oracle_dsn == "platform-dsn"
-    assert settings.auth_mode == "production"
+    assert settings.auth_mode == "authenticated"
     assert settings.huggingface_endpoint == "https://hf-mirror.com"
     assert settings.oci_document_understanding_language == "en"
     assert settings.huggingface_token == ""
@@ -304,7 +317,7 @@ def test_auth_settings_use_platform_and_rag_env_names() -> None:
     assert names["app_auth_idle_timeout_minutes"] == "PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES"
     assert names["app_auth_session_cookie_name"] == "PLATFORM_AUTH_SESSION_COOKIE_NAME"
     assert names["app_auth_csrf_cookie_name"] == "PLATFORM_AUTH_CSRF_COOKIE_NAME"
-    assert names["auth_mode"] == "RAG_AUTH_MODE"
+    assert names["auth_mode"] == "PLATFORM_AUTH_MODE"
     # 単一アカウント方式の設定は廃止した。
     for removed in (
         "auth_username",
@@ -320,7 +333,7 @@ def test_auth_settings_use_platform_and_rag_env_names() -> None:
     assert settings.app_auth_session_cookie_name == "pr_session"
     assert settings.app_auth_csrf_cookie_name == "pr_csrf"
     assert settings.local_debug_enabled is (settings.auth_mode == "local")
-    production = Settings(_env_file=None, auth_mode="production")
+    production = Settings(_env_file=None, auth_mode="authenticated")
     assert production.app_auth_enabled is True
     assert production.local_debug_enabled is False
 
@@ -1073,6 +1086,20 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     assert all(origin.startswith("http://") for origin in settings.cors_origins)
     assert settings.oci_enterprise_ai_models == []
     assert settings.oracle_password in ("", None)
+
+
+def test_history_rewrite_env_example_matches_default_and_precedes_query_strategy() -> None:
+    """履歴の書き換えを雛形でも有効にし、独立した質問拡張より前に案内する。"""
+    from dotenv import dotenv_values
+
+    example = config_module.BACKEND_ROOT / ".env.example"
+    values = dotenv_values(example, interpolate=False)
+    assert values["RAG_HISTORY_REWRITE_ENABLED"] == "true"
+    assert Settings.model_fields["rag_history_rewrite_enabled"].default is True
+    lines = example.read_text(encoding="utf-8").splitlines()
+    assert lines.index("RAG_HISTORY_REWRITE_ENABLED=true") < lines.index(
+        "RAG_QUERY_STRATEGY=simple_retrieval"
+    )
 
 
 def test_settings_today_uses_common_timezone_not_os_clock(monkeypatch: pytest.MonkeyPatch) -> None:

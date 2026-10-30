@@ -9,6 +9,9 @@
 import {
   formatRunDuration,
   chatProgressTimelineStep,
+  runListUsage as sharedRunListUsage,
+  runUsageView as sharedRunUsageView,
+  type RunUsageView,
   type ChatProgressStep,
   type RunExecutorFilter as SharedRunExecutorFilter,
   type RunStatus as SharedRunStatus,
@@ -19,6 +22,7 @@ import {
 } from "@production-ready/ui";
 
 import { outcomeBadge, type AnswerOutcome } from "@/lib/answer-diagnostics";
+import { validationExecutionBadge } from "@/lib/answer-validation";
 import type {
   RunDetail,
   RunExecutorFilter,
@@ -99,7 +103,9 @@ export function runOutcomeView(run: Pick<RunSummary, "answer_generated" | "statu
 }
 
 /** 資料との照合のバッジ。回答を作らなかった・止めた・失敗した実行は null（「—」）。 */
-export function runVerificationView(verification: RunVerification | null): BadgeView | null {
+export function runVerificationView(verification: RunVerification | null, execution?: string | null): BadgeView | null {
+  const explicit = validationExecutionBadge(execution);
+  if (explicit) return explicit;
   switch (verification) {
     case "verified":
       return { variant: "success", label: t("history.verification.verified") };
@@ -150,7 +156,7 @@ export function runConversationOwner(
  */
 /**
  * 実行の詳細の「RAG 検索で開く」の URL（#3309。run-history.md「詳細」）。RAG 検索の実行を、質問・検索・回答
- * プロファイル・回答の生成の有無・記録の条件（件数・絞り込み）を入れて RAG 検索の画面に開く（検索はしない）。
+ * プロファイル・回答の生成の有無・記録の絞り込み条件を入れて RAG 検索の画面に開く（検索はしない）。
  * 出すのは実行した本人で、RAG 検索の画面の権限があるときだけ（system_admin でも他の人の実行には出さない。#3244）。
  * 質問を保存していない実行（安全チェックで止めた実行）は入れる質問が無いので null。
  */
@@ -166,7 +172,6 @@ export function runSearchHref(
     question: run.question,
     searchAnswerProfileId: run.search_answer_profile_id,
     generateAnswer: run.answer_generated,
-    topK: run.search_conditions?.top_k ?? null,
     filters: run.search_conditions?.filters ?? {},
   });
 }
@@ -201,4 +206,34 @@ export function runTimeline(snapshot: {
 /** 所要時間（ミリ秒）の表記（共通の書式。「1.2 秒」「2 分 5 秒」、記録なしは「—」）。 */
 export function formatRunElapsed(elapsedMs: number | null | undefined): string {
   return formatRunDuration(elapsedMs, t("history.notRecorded"));
+}
+
+/** 利用量の文言（RAG の i18n。表示の規則は 3 製品で共通の `runUsageView` / `runListUsage`。#3419・#3543）。 */
+function usageLabels() {
+  return {
+    unmeasured: t("history.detail.usageUnmeasured"),
+    partial: t("history.detail.usagePartial"),
+    modelCalls: (values: { requests: string; input: string; output: string }) =>
+      t("history.detail.modelCallsValue", values),
+    modelCallsPartial: (values: { requests: string; measured: string; input: string; output: string }) =>
+      t("history.detail.modelCallsPartial", values),
+  };
+}
+
+/**
+ * 概要の「モデル」「token」「モデルの呼び出し」（Agent の実行の詳細と同じ形。#3419）。モデルは実行のときに記録した具体的な
+ * ID だけを出し、今の設定から推測しない。規則（未計測・一部計測・実測の 0）は共通の `runUsageView`。
+ */
+export function runUsageView(run: Pick<RunDetail, "model_id" | "usage">): RunUsageView {
+  return sharedRunUsageView(run.usage, { fallbackModel: run.model_id, labels: usageLabels() });
+}
+
+/**
+ * 一覧の「token」の列（#3466）。一覧の API は利用量の全体ではなく合計と計測の状態だけを返す。規則は詳細の概要と同じ
+ * （共通の `runListUsage`）。
+ */
+export function runListUsage(
+  run: Pick<RunSummary, "total_tokens" | "usage_measurement">
+): { tokens: number | null; note: string | null } {
+  return sharedRunListUsage(run.total_tokens, run.usage_measurement, usageLabels());
 }

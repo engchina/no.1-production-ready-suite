@@ -4,7 +4,7 @@
 ここでは RAG の権限 manifest・Cookie 名・local の扱いと、認可後の監査 / 対象範囲の context
 （`AuditRequestContext`）の組み立てを渡す。
 
-- local（`RAG_AUTH_MODE=local`）: 全権限・対象範囲の制限なしのローカル利用者。監査 context は
+- local（`PLATFORM_AUTH_MODE=local`）: 全権限・対象範囲の制限なしのローカル利用者。監査 context は
   従来どおり header（`X-User-ID` / `x-rag-*`）から作る。
 - production: 利用者と対象範囲は認証済みの利用者から決め、client の header の範囲は使わない。
 - MCP（`POST /api/mcp`。#232）: Cookie の代わりにサービストークン（`Authorization: Bearer`）の

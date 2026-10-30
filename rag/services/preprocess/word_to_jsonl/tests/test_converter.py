@@ -39,7 +39,7 @@ from rag_parser_core.structured_records import (
 
 from app import converters
 from app.converters import WordRejected, convert
-from tests.fixtures import SYNTHETIC_DOC, save, synthetic_docx
+from tests.fixtures import SYNTHETIC_DOC, mark_header_row, save, synthetic_docx
 
 
 def _convert(data: bytes, extension: str | None = None) -> Any:
@@ -155,21 +155,67 @@ def test_table_with_lead_in_note_header_and_merged_cells() -> None:
     assert text.endswith("注: 値は再起動の後に有効になります。")
 
 
-def test_vertical_merge_does_not_leak_value_down() -> None:
+def test_vertical_merge_continuation_carries_the_merged_value() -> None:
+    """縦の結合の続きのセルは結合の始まりの値で埋め、行ごとに区分を持つ（#3565）。"""
     document = docx.Document()
     document.add_heading("表の節", 1)
-    table = document.add_table(rows=3, cols=2)
-    table.cell(0, 0).text = "区分"
-    table.cell(0, 1).text = "値"
-    merged = table.cell(1, 0).merge(table.cell(2, 0))
-    merged.text = "区分 A"
-    table.cell(1, 1).text = "1"
-    table.cell(2, 1).text = "2"
+    table = document.add_table(rows=5, cols=4)
+    for r, values in enumerate(
+        [
+            ["分類", "名称", "番号", "設定"],
+            ["", "名称 k1", "101", "有効"],
+            ["", "名称 k2", "102", "無効"],
+            ["分類 L", "名称 l1", "201", "有効"],
+            ["", "名称 l2", "202", "有効"],
+        ]
+    ):
+        for c, value in enumerate(values):
+            table.cell(r, c).text = value
+    mark_header_row(table.rows[0])
+    table.cell(1, 0).merge(table.cell(2, 0)).text = "分類 K"
+    # 2 列 × 2 行の結合（横と縦の両方）も、続きの行の各列に値を写す。
+    table.cell(3, 2).merge(table.cell(4, 3)).text = "共通"
     passage = _passages(_records(save(document)))[0]
     block = passage.blocks[0]
     assert isinstance(block, WordTable)
-    assert block.rows[1] == ["区分 A", "1"]
-    assert block.rows[2] == ["", "2"]
+    assert block.rows[1] == ["分類 K", "名称 k1", "101", "有効"]
+    assert block.rows[2] == ["分類 K", "名称 k2", "102", "無効"]
+    assert block.rows[3] == ["分類 L", "名称 l1", "共通", "共通"]
+    assert block.rows[4] == ["", "名称 l2", "共通", "共通"]
+    text = word_passage_text(passage)
+    assert "| 分類 K | 名称 k2 | 102 | 無効 |" in text
+    # 前処理の版を上げた（既存の文書は取込み直すまで前の版の本文のまま）。
+    assert _records(save(document)).document.converter_version == "v2"
+
+
+def test_vertical_merge_in_nested_table_and_split_table_parts() -> None:
+    """表の中の表と、行で分けた大きい表の続きの部分でも、縦の結合の値を写す。"""
+    document = docx.Document()
+    document.add_heading("表の節", 1)
+    table = document.add_table(rows=81, cols=2)
+    table.cell(0, 0).text = "区分"
+    table.cell(0, 1).text = "説明"
+    mark_header_row(table.rows[0])
+    for row in range(1, 81):
+        table.cell(row, 1).text = f"{row:03d} " + "説明の文。" * 6
+    table.cell(1, 0).merge(table.cell(80, 0)).text = "区分 A"
+    tables = [
+        b for p in _passages(_records(save(document))) for b in p.blocks if isinstance(b, WordTable)
+    ]
+    assert len(tables) > 1
+    # 続きの部分の行も、上の部分で始まった結合の値を持つ。
+    assert all(row[0] == "区分 A" for t in tables for row in t.rows[1:])
+
+    nested_document = docx.Document()
+    nested_document.add_heading("表の節", 1)
+    outer = nested_document.add_table(rows=1, cols=1)
+    inner = outer.cell(0, 0).add_table(rows=2, cols=2)
+    inner.cell(0, 0).merge(inner.cell(1, 0)).text = "区分 B"
+    inner.cell(0, 1).text = "1"
+    inner.cell(1, 1).text = "2"
+    block = _passages(_records(save(nested_document)))[0].blocks[0]
+    assert isinstance(block, WordTable)
+    assert block.rows[0] == ["区分 B | 1 / 区分 B | 2"]
 
 
 def test_heading_only_section_and_content_before_first_heading() -> None:

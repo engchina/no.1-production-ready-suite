@@ -11,7 +11,6 @@ from rag_engine.retrieval.context_builder import (
     ContextBuildRequest,
     build_chunk_context_bundle,
     record_has_image_evidence,
-    should_include_image_evidence,
 )
 
 
@@ -59,7 +58,6 @@ def test_oracle_json_keeps_images_coordinates_and_children(encode):
     assert chunk.metadata["layout"]["display_regions"]
     assert chunk.metadata["table_context"] == meta["table_context"]
     assert record_has_image_evidence(chunk)
-    assert should_include_image_evidence("該当する項目がないので入力したい", records=[chunk])
     chunk.metadata["image_evidence"].clear()
     assert len(meta["image_evidence"]) == 1
 
@@ -91,7 +89,7 @@ def rec(key, level, seq, text, *, parent="", page=1, source="manual.pdf", headin
     )
 
 
-def test_operation_context_crosses_parent_but_not_screen_or_document():
+def test_parent_context_does_not_add_another_parent_by_operation_name():
     anchor = rec("c1", "child", 1, "画面", parent="p1")
     parent = rec("p1", "parent", 1, "画面で編集", headings=["〔納品書〕"])
     support = rec("p2", "parent", 2, "ボタンの操作全文", page=2, headings=["〔納品書〕"])
@@ -111,10 +109,8 @@ def test_operation_context_crosses_parent_but_not_screen_or_document():
         max_chars=3000,
     )
     bundle = build_chunk_context_bundle(request)
-    assert [r.id for r in bundle.records] == ["p1", "p2"]
-    assert "ボタンの操作全文" in bundle.text
-    assert bundle.evidence[1].role == "supporting"
-    assert bundle.evidence_tree[1].children[0].role == "operation_context"
+    assert [r.id for r in bundle.records] == ["p1"]
+    assert "ボタンの操作全文" not in bundle.text
     assert build_chunk_context_bundle(replace(request, neighbor_child_count=0)).records == [parent]
     assert len(build_chunk_context_bundle(replace(request, max_records=1)).records) == 1
 

@@ -10,6 +10,7 @@ import {
   RUN_STATUSES,
   RunDetailLayout,
   RunDetailSection,
+  RunJobProgress,
   RunProcessDetails,
   RunHistoryPeriodEmptyState,
   RunHistoryTable,
@@ -23,15 +24,20 @@ import {
   formatRunDateTime,
   formatRunDuration,
   formatRunTokens,
+  runListUsage,
+  runUsageView,
   isRunActive,
   runPeriodSince,
   runStatusIcon,
   runStatusVariant,
   runTimelineBars,
+  runTimelineHasChildren,
+  runTimelineCurrentStepIndex,
   runStepDetailsJson,
   hasRunStepDetails,
   setDisplayTimeZone,
   type RunHistoryItem,
+  type RunModelUsageRecord,
   type RunTimelineStep,
 } from "../src";
 
@@ -115,6 +121,65 @@ describe("書式と絞り込みの値", () => {
     expect(formatRunTokens(null)).toBe("—");
   });
 
+  it("モデルの利用量: 実測・一部計測・未計測（記録なし・計測できない呼び出しだけ）・実測の 0（#3543）", () => {
+    const usage: RunModelUsageRecord = {
+      models: ["model-a", "model-b"],
+      requests: 3,
+      input_tokens: 12000,
+      output_tokens: 345,
+      total_tokens: 12345,
+      measurement: "complete",
+      measured_requests: 3,
+    };
+    expect(runUsageView(usage, { fallbackModel: "model-x" })).toEqual({
+      model: "model-a、model-b",
+      usage: { tokens: 12345, note: null },
+      modelCalls: "3 回（入力 12,000 / 出力 345 token）",
+      unmeasuredCalls: null,
+    });
+    const mixed = runUsageView(
+      { ...usage, measurement: "partial", measured_requests: 2, unmeasured_sources: ["select_ai"] },
+      { sourceLabel: (source) => `出どころ ${source}` }
+    );
+    expect(mixed.usage).toEqual({ tokens: 12345, note: "一部計測" });
+    expect(mixed.modelCalls).toBe("3 回（うち 2 回を計測。入力 12,000 / 出力 345 token）");
+    expect(mixed.unmeasuredCalls).toBe("出どころ select_ai");
+    // 計測できない呼び出しだけ: 数を作らない。
+    const unmeasured = runUsageView({
+      models: [],
+      requests: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      measurement: "unmeasured",
+      measured_requests: 0,
+      unmeasured_sources: ["select_ai"],
+    });
+    expect(unmeasured).toEqual({
+      model: null,
+      usage: { tokens: null, note: "未計測" },
+      modelCalls: "未計測",
+      unmeasuredCalls: "select_ai",
+    });
+    // 記録の無い実行は未計測（0 にしない）。記録の列のモデルは出す。
+    expect(runUsageView(null, { fallbackModel: "model-x" })).toEqual({
+      model: "model-x",
+      usage: { tokens: null, note: "未計測" },
+      modelCalls: "未計測",
+      unmeasuredCalls: null,
+    });
+    expect(runUsageView(usage, { labels: { modelCalls: ({ requests }) => `calls ${requests}` } }).modelCalls).toBe(
+      "calls 3"
+    );
+
+    expect(runListUsage(12345, "complete")).toEqual({ tokens: 12345, note: null });
+    expect(runListUsage(330, "partial")).toEqual({ tokens: 330, note: "一部計測" });
+    expect(runListUsage(null, "complete")).toEqual({ tokens: 0, note: null });
+    expect(runListUsage(null, "unmeasured")).toEqual({ tokens: null, note: "未計測" });
+    expect(runListUsage(undefined, null)).toEqual({ tokens: null, note: "未計測" });
+    expect(runListUsage(1, "partial", { partial: "partial" }).note).toBe("partial");
+  });
+
   it("期間の開始は now から引いた ISO、すべては null", () => {
     const now = new Date("2026-10-15T12:00:00.000Z");
     expect(runPeriodSince("all", now)).toBeNull();
@@ -173,6 +238,29 @@ describe("RunHistoryTable", () => {
     expect(container.querySelector("[data-run-history-table]")?.className).toContain("@container");
   });
 
+  it("「操作」の見出しは広い置き場所で 1 行、セルは操作が無くてもメニューのボタンの幅を保つ（#3427）", () => {
+    render(
+      <RunHistoryTable
+        rows={ROWS}
+        toItem={toItem}
+        onOpen={() => undefined}
+        // 1 行目だけに操作（終わった実行の行は操作が無い）。
+        actionsFor={(row) => [{ id: "cancel", label: "停止", visible: row.run_id === "r1", onSelect: () => undefined }]}
+        testId="runs"
+      />
+    );
+    const label = container.querySelector("thead th:last-child span")!;
+    expect(label.textContent).toBe("操作");
+    // not-sr-only は white-space: normal に戻すので、nowrap を重ねる。
+    expect(label.className).toContain("@4xl:not-sr-only");
+    expect(label.className).toContain("@4xl:whitespace-nowrap");
+    const cells = container.querySelectorAll("[data-run-history-actions]");
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) expect(cell.className).toContain("min-w-[var(--button-height-sm)]");
+    expect(cells[0].querySelector('[data-testid="runs-row-actions-r1"]')).not.toBeNull();
+    expect(cells[1].childElementCount).toBe(0);
+  });
+
   it("題名は詳細へのリンク（href・aria-current）で、狭い画面の 1 行に状態・日時・所要時間・実行者を持つ", () => {
     render(
       <RunHistoryTable rows={ROWS} toItem={toItem} onOpen={() => undefined} showExecutor selectedRunId="r2" />
@@ -225,6 +313,35 @@ describe("RunHistoryTable", () => {
     const cells = Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.lastElementChild?.textContent);
     expect(cells[0]).toBe("1,500 token$0.01");
     expect(cells[1]).toBe("—");
+  });
+
+  it("利用量の計測の状態の注記: 数があれば数の下に、無ければ注記だけ（0・「—」にしない。#3466）", () => {
+    const usages: RunHistoryItem["usage"][] = [
+      { tokens: 12345, note: "一部計測" },
+      { tokens: null, note: "未計測" },
+      { tokens: 0, note: null },
+    ];
+    const rows: ProductRow[] = usages.map((_, index) => ({
+      run_id: `u${index}`,
+      question: `合成の質問 ${index}`,
+      status: "ok",
+      by: "me",
+    }));
+    render(
+      <RunHistoryTable
+        rows={rows}
+        toItem={(row) => ({ ...toItem(row), usage: usages[Number(row.run_id.slice(1))] })}
+        onOpen={() => undefined}
+        showUsage
+      />
+    );
+    const cells = Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.lastElementChild);
+    expect(cells.map((cell) => cell?.textContent)).toEqual(["12,345 token一部計測", "未計測", "0 token"]);
+    expect(cells[0]?.querySelector("[data-run-usage-note]")?.textContent).toBe("一部計測");
+    expect(cells[1]?.querySelector("[data-run-usage-note]")?.textContent).toBe("未計測");
+    // 右寄せ・等幅数字で、狭い置き場所（56rem 未満）では出さない列。
+    expect(cells[0]?.className).toContain("tnum");
+    expect(cells[0]?.className).toContain("hidden");
   });
 
   it("文言は部分で上書きできる（Agent の「依頼」など）", () => {
@@ -359,6 +476,22 @@ describe("RunSummary", () => {
     expect(container.querySelector("[data-run-summary-heading]")?.textContent).toBe("概要");
     expect(container.textContent).not.toContain("合成の追加バッジ");
   });
+
+  it("token の計測の状態の注記は数の後ろに括弧で、数が無ければ注記だけを出す（#3419）", () => {
+    const tokens = () => container.querySelector("[data-run-fact='tokens'] dd")?.textContent;
+    const summary = (usage: { tokens?: number | null; note?: string | null } | null) => (
+      <RunSummary status="succeeded" question="合成の質問" startedAt="2026-10-15T00:12:05.000Z" usage={usage} runId="run-1" />
+    );
+    render(summary({ tokens: 1200, note: "一部計測" }));
+    expect(tokens()).toBe("1,200 token（一部計測）");
+    render(summary({ tokens: null, note: "未計測" }));
+    expect(tokens()).toBe("未計測");
+    // LLM を呼ばなかった実行の実測の 0 は 0 と出す（注記なし）。
+    render(summary({ tokens: 0 }));
+    expect(tokens()).toBe("0 token");
+    render(summary(null));
+    expect(container.querySelector("[data-run-fact='tokens']")).toBeNull();
+  });
 });
 
 describe("取消の事実（#3348）", () => {
@@ -447,7 +580,7 @@ describe("RunTimeline", () => {
     expect(runTimelineBars([{ id: "x", label: "X", status: "pending" }])).toEqual([null]);
   });
 
-  it("時刻の無い入れ子の段は、親の段の始まりから積む（3 段まで字下げ。#2265）", () => {
+  it("時刻の無い入れ子の段は、親の段の始まりから積む（#2265）", () => {
     const nested: RunTimelineStep[] = [
       { id: "a", label: "A", status: "done", durationMs: 1000 },
       { id: "b", label: "B", status: "done", durationMs: 3000 },
@@ -467,7 +600,7 @@ describe("RunTimeline", () => {
     render(<RunTimeline steps={nested} showSummary={false} size="sm" stepTestIdPrefix="t" testId="timeline" />);
     expect(container.textContent).not.toContain("合計");
     expect(container.querySelector("[data-testid='t-step-b2a']")?.getAttribute("data-level")).toBe("2");
-    expect(container.querySelector("[data-testid='t-step-b2a'] .pl-12")).not.toBeNull();
+    expect(container.querySelector<HTMLElement>("[data-testid='t-step-b2a'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("2rem");
     expect(container.querySelector("[data-testid='t-step-a'] .text-xs")).not.toBeNull();
     render(<RunTimeline steps={nested} showBars={false} testId="timeline" />);
     expect(container.querySelector("[data-run-timeline-bar]")).toBeNull();
@@ -495,14 +628,177 @@ describe("RunTimeline", () => {
     expect(container.querySelector("[data-run-timeline-step='sql']")?.textContent).toContain("失敗 · 0.3 秒");
     expect(container.querySelector("[data-run-timeline-step='plan'] .sr-only")?.textContent).toContain("完了");
     // 入れ子の段は字下げする。時間の線は飾り（aria-hidden）。
-    expect(container.querySelector("[data-run-timeline-step='tool'] .pl-6")).not.toBeNull();
-    expect(container.querySelector("[data-run-timeline-step='plan'] .pl-6")).toBeNull();
+    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='tool'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
+    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='plan'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("0rem");
     expect(container.querySelector("[data-run-timeline-bar]")?.getAttribute("aria-hidden")).toBe("true");
     act(() => buttons[0].click());
     expect(buttons[0].getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("引数と結果");
     const region = document.getElementById(buttons[0].getAttribute("aria-controls") ?? "");
     expect(region?.hidden).toBe(false);
+  });
+});
+
+describe("RunTimeline の実行中の段のアイコン（#3436）", () => {
+  const icon = (id: string) => {
+    const row = container.querySelector(`[data-run-timeline-step='${id}']`);
+    if (row?.querySelector("svg.animate-spin")) return "spinner";
+    const svg = row?.querySelector(".pr-icon-line svg");
+    return svg?.getAttribute("class")?.match(/lucide-([a-z0-9-]+)/g)?.find((name) => name !== "lucide-icon") ?? "none";
+  };
+  const steps: RunTimelineStep[] = [
+    { id: "root", label: "全体", status: "running" },
+    { id: "search", label: "検索", status: "running", level: 1 },
+    { id: "embed", label: "埋め込み", status: "done", durationMs: 100, level: 2 },
+    { id: "vector", label: "ベクトル検索", status: "running", level: 2 },
+    { id: "failed", label: "失敗した工程", status: "failed", durationMs: 10, level: 1 },
+    { id: "skipped", label: "飛ばした工程", status: "skipped", level: 1 },
+    { id: "pending", label: "未実行の工程", status: "pending", level: 1 },
+  ];
+
+  it("子の段を持つかは直後の段の level で決める（字下げの上限に関わらない）", () => {
+    expect(runTimelineHasChildren(steps)).toEqual([true, true, false, false, false, false, false]);
+    expect(runTimelineHasChildren([{ level: 3 }, { level: 5 }, { level: 5 }])).toEqual([true, false, false]);
+    expect(runTimelineHasChildren([])).toEqual([]);
+  });
+
+  it("実行中の親の工程は CirclePlay、実行中の末端の段だけを Spinner で回し、終わった段のアイコンは変えない", () => {
+    render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
+    expect(icon("root")).toBe("lucide-circle-play");
+    expect(icon("search")).toBe("lucide-circle-play");
+    expect(icon("vector")).toBe("spinner");
+    expect(icon("embed")).not.toBe("spinner");
+    expect(icon("failed")).not.toBe("spinner");
+    expect(icon("skipped")).not.toBe("spinner");
+    expect(icon("pending")).not.toBe("spinner");
+    expect(container.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    // 末端の子が終わり、次の子がまだ無い間も親は回さない。
+    render(
+      <RunTimeline
+        steps={steps.map((step) => (step.id === "vector" ? { ...step, status: "done", durationMs: 200 } : step))}
+        showBars={false}
+        testId="timeline"
+      />
+    );
+    expect(icon("search")).toBe("lucide-circle-play");
+    expect(container.querySelectorAll("svg.animate-spin")).toHaveLength(0);
+    // spinRunning={false} は末端の段も回さない。
+    render(<RunTimeline steps={steps} spinRunning={false} showBars={false} testId="timeline" />);
+    expect(icon("vector")).toBe("lucide-circle-play");
+    expect(container.querySelectorAll("svg.animate-spin")).toHaveLength(0);
+  });
+});
+
+describe("入れ子の深さ（#3447）", () => {
+  // 製品を跨ぐ trace（ツール → MCP の呼び出し → RAG の検索 → 工程 → 工程の中の段）と、上限より深い段。
+  const steps: RunTimelineStep[] = [
+    { id: "tool", label: "「根拠の取得」を実行しました", status: "done", durationMs: 900 },
+    { id: "mcp", label: "MCP の呼び出し · rag_retrieve_evidence", status: "done", durationMs: 800, level: 1 },
+    { id: "rag", label: "検索", status: "done", durationMs: 700, level: 2, product: "RAG" },
+    { id: "stage", label: "文書の検索", status: "done", durationMs: 600, level: 3 },
+    { id: "embed", label: "埋め込みの作成", status: "done", durationMs: 100, level: 4 },
+    { id: "d5", label: "深さ 5", status: "done", durationMs: 50, level: 5 },
+    { id: "d6", label: "深さ 6", status: "done", durationMs: 40, level: 6 },
+    { id: "d7", label: "深さ 7", status: "done", durationMs: 30, level: 7 },
+    { id: "d9", label: "深さ 9", status: "done", durationMs: 20, level: 9 },
+  ];
+  const nameCell = (id: string) =>
+    container.querySelector<HTMLElement>(`[data-run-timeline-step='${id}'] [data-run-timeline-label]`)!.closest("div")!;
+
+  it("深さの上限で丸めず、深い一覧だけにキーボード操作できる内部スクロールを設ける", () => {
+    render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
+    const indents = ["tool", "mcp", "rag", "stage", "embed", "d5", "d6", "d7", "d9"].map(
+      id => nameCell(id).style.paddingInlineStart
+    );
+    expect(indents).toEqual(["0rem", "1rem", "2rem", "3rem", "4rem", "5rem", "6rem", "7rem", "9rem"]);
+    const viewport = container.querySelector<HTMLElement>("[data-run-timeline-scroll]")!;
+    expect(viewport.tabIndex).toBe(0);
+    expect(viewport.getAttribute("role")).toBe("region");
+    expect(viewport.firstElementChild?.getAttribute("style")).toContain("min-width: 25rem");
+    expect(container.querySelector("[data-run-timeline-step='d9']")?.getAttribute("data-level")).toBe("9");
+  });
+
+  it("浅い一覧は既存の幅を保ちスクロール用のフォーカスを増やさない", () => {
+    render(<RunTimeline steps={steps.slice(0, 5)} showBars={false} />);
+    expect(container.querySelector("[data-run-timeline-scroll]")).toBeNull();
+    expect(container.querySelector(".overflow-x-auto")).toBeNull();
+    expect(container.querySelector("[tabindex='0']")).toBeNull();
+  });
+
+  it("製品名は名前の後ろのタグにし、名前の左端を兄弟の段とそろえる", () => {
+    render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
+    const row = container.querySelector("[data-run-timeline-step='rag']")!;
+    const label = row.querySelector("[data-run-timeline-label]")!;
+    const product = row.querySelector("[data-run-timeline-product]")!;
+    expect(product.textContent).toBe("RAG");
+    // 名前が先、製品名のタグが後ろ（名前の前に文字を置かない）。
+    expect(label.compareDocumentPosition(product) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(label.previousSibling).toBeNull();
+  });
+});
+
+describe("動くスピナーは 1 つ（#3445）", () => {
+  // 並行して実行中の末端の段（ベクトル検索と全文検索、並行のツールの呼び出し）がある。
+  const steps: RunTimelineStep[] = [
+    { id: "plan", label: "進め方の検討", status: "done", durationMs: 1200 },
+    { id: "search", label: "文書の検索", status: "running", level: 1 },
+    { id: "vector", label: "ベクトル検索", status: "running", level: 2 },
+    { id: "text", label: "全文検索", status: "running", level: 2 },
+  ];
+  // 見えるスピナー（閉じた開閉の中身は数えない。e2e の `svg.animate-spin:visible` と同じ）。
+  const spinners = () =>
+    [...container.querySelectorAll("svg.animate-spin")].filter((svg) => !svg.closest("details:not([open]) > :not(summary)"));
+
+  it("今の段は最後に始まった実行中の末端の段で、一覧はその段だけを回す", () => {
+    expect(runTimelineCurrentStepIndex(steps)).toBe(3);
+    expect(runTimelineCurrentStepIndex(steps.slice(0, 2))).toBe(1);
+    expect(runTimelineCurrentStepIndex([{ status: "done" }])).toBe(-1);
+    render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
+    expect(spinners()).toHaveLength(1);
+    expect(container.querySelector("[data-run-timeline-step='text'] svg.animate-spin")).not.toBeNull();
+    expect(container.querySelector("[data-run-timeline-step='vector'] .lucide-circle-play")).not.toBeNull();
+  });
+
+  it("処理の経過を開いて今の段が回る間は、概要の進行表示を回さない実行中の印にする", () => {
+    const startedAt = new Date(Date.now() - 12_000).toISOString();
+    render(
+      <RunDetailLayout
+        summary={<RunJobProgress active label="「根拠の取得」を実行しています" startedAt={startedAt} testId="progress" />}
+        timeline={<RunTimelineSection title="処理の経過" steps={steps} active startedAt={startedAt} testId="section" />}
+      />
+    );
+    const progress = container.querySelector<HTMLElement>("[data-testid='progress']");
+    // 経過時間は概要の進行表示の 1 か所だけ（処理の経過の見出しに重ねない）。
+    expect(container.querySelectorAll("[role='timer']")).toHaveLength(1);
+    expect(container.querySelector("[data-testid='section-timer']")).toBeNull();
+    // 閉じている間は概要の進行表示だけが回る。
+    expect(progress?.dataset.processingPlacement).toBe("job");
+    expect(progress?.dataset.processingActivityIcon).toBe("spinner");
+    expect(spinners()).toHaveLength(1);
+    act(() => container.querySelector<HTMLElement>("[data-testid='section-summary']")?.click());
+    expect(progress?.dataset.processingActivityIcon).toBe("static");
+    expect(progress?.querySelector("[data-processing-static-icon]")).not.toBeNull();
+    expect(spinners()).toHaveLength(1);
+    expect(container.querySelector("[data-run-timeline-step='text'] svg.animate-spin")).not.toBeNull();
+    // 閉じると進行表示が回る。
+    act(() => container.querySelector<HTMLElement>("[data-testid='section-summary']")?.click());
+    expect(progress?.dataset.processingActivityIcon).toBe("spinner");
+    expect(spinners()).toHaveLength(1);
+  });
+
+  it("実行中の見出しは「処理中（N ステップ完了）」と経過時間で、合計の所要時間を出さない", () => {
+    const startedAt = new Date(Date.now() - 65_000).toISOString();
+    render(<RunTimelineSection title="処理の経過" steps={steps} totalDurationMs={null} active startedAt={startedAt} testId="section" />);
+    const summary = container.querySelector<HTMLElement>("[data-testid='section-summary']");
+    expect(summary?.textContent).toContain("処理中（1 ステップ完了）");
+    expect(summary?.textContent).not.toContain("合計");
+    const timer = container.querySelector<HTMLElement>("[data-testid='section-timer']");
+    expect(timer?.getAttribute("role")).toBe("timer");
+    expect(timer?.getAttribute("aria-label")).toMatch(/^経過時間 01:0[5-6]$/);
+    // 終わった実行は今までどおり「N ステップ・合計 M 秒」。
+    render(<RunTimelineSection title="処理の経過" steps={steps.slice(0, 1)} totalDurationMs={1200} testId="done" />);
+    expect(container.querySelector("[data-testid='done-summary']")?.textContent).toBe("1 ステップ・合計 1.2 秒");
+    expect(container.querySelector("[data-testid='done-timer']")).toBeNull();
   });
 });
 

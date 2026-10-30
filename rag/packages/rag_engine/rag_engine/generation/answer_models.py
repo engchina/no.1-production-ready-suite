@@ -47,6 +47,8 @@ QUERY_UNDERSTANDING_SEPARATOR = "--- 細粒度クエリ理解（Intent Classific
 
 QUESTION_PLAN_SEPARATOR = "--- 質問処理計画 ---"
 
+# 旧形式の質問の表示から元の質問を取り出すための区切り（今の表示には書かない）。旧形式の記録と一致させるため
+# 文字列は変えない（表示の名前は「用語・同義語」「回答ルール」。#3490）。
 RUNTIME_KNOWLEDGE_SEPARATOR = "--- 実行時用語・ルール ---"
 
 INQUIRY_CONDITIONS_SEPARATOR = QUERY_UNDERSTANDING_SEPARATOR
@@ -106,9 +108,10 @@ LEGACY_ANSWER_FLOW_LABELS = (
     (CRAG_ANSWER_FLOW, "Corrective RAG（CRAG：検索結果を評価し、必要なら補正検索 / 最大3回）"),
 )
 
-DEFAULT_ANSWER_FLOW = CRAG_ANSWER_FLOW
+# 既定は標準 RAG。CRAG は根拠の評価の LLM 呼び出しと補正検索が増えるので、明示して選んだときだけ使う（#3509）。
+DEFAULT_ANSWER_FLOW = STANDARD_ANSWER_FLOW
 
-DEFAULT_ANSWER_FLOW_LABEL = CRAG_ANSWER_FLOW_LABEL
+DEFAULT_ANSWER_FLOW_LABEL = STANDARD_ANSWER_FLOW_LABEL
 
 _ANSWER_FLOW_LABEL_BY_ID = dict(ANSWER_FLOWS)
 
@@ -298,7 +301,6 @@ class RetrievalQueryPlan:
     llm_expansion_queries: tuple[str, ...] = ()
     lexical_queries: tuple[str, ...] = ()
     target_text_queries: tuple[str, ...] = ()  # 対象語の部分語の Oracle Text フレーズ検索式 (#730)
-    inquiry_queries: tuple[str, ...] = ()
     crag_rewrites: tuple[str, ...] = ()
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN
     top_k: int = DEFAULT_RETRIEVAL_TOP_K
@@ -318,7 +320,6 @@ class RetrievalQueryPlan:
             "llm_expansion_queries": list(self.llm_expansion_queries),
             "lexical_queries": list(self.lexical_queries),
             "target_text_queries": list(self.target_text_queries),
-            "inquiry_queries": list(self.inquiry_queries),
             "crag_rewrites": list(self.crag_rewrites),
             "retrieval_scope": self.retrieval_scope,
             "top_k": self.top_k,
@@ -340,21 +341,33 @@ class CragRetrievalAttempt:
     rewritten_query: str = ""
     reason: str = ""
     grade_error: str = ""
+    grade_failure: dict[str, Any] = field(default_factory=dict)
     aspect_checks: tuple[dict[str, Any], ...] = ()
     # 候補ごとの関連判定（chunk_uid / relevant / reason）。trace と UI で「なぜ不足か」を候補単位で追える (#983)。
     candidate_verdicts: tuple[dict[str, Any], ...] = ()
     # 評価器が relevant=false と明示した候補（親 uid と、その検索命中子の uid）。生成用 context と回復用 pool から
     # 除外する (#1010)。未評価の候補は含めない（relevant_chunk_ids の補集合ではない）。
     rejected_chunk_ids: tuple[str, ...] = ()
-    # supported / data_confirmation にできなかった必須観点。十分性の門ではなく、文脈拡張と生成側への欠落の申し送り (#983)。
+    # 明示的に missing と判定した必須観点。未検証は unknown_aspects と分け、回復と生成へ申し送る。
     missing_aspects: tuple[str, ...] = ()
     new_evidence_count: int = 0
     stop_reason: str = ""
+    executed_queries: tuple[str, ...] = ()
     recovery_action: str = "rewrite"
     recovery_anchor_ids: tuple[str, ...] = ()
     recovery_trace: dict[str, Any] = field(default_factory=dict)
     # 文書の選択の trace（selected / deferred / restored。#1028）。選択が無効なら enabled=false だけ。
     document_selection: dict[str, Any] = field(default_factory=dict)
+
+    generation_usable: bool | None = None
+    answerable_parts: tuple[dict[str, Any], ...] = ()
+    context_fingerprint: str = ""
+    required_aspect_coverage: str = "unknown"
+    unknown_aspects: tuple[str, ...] = ()
+    grade_execution: str = "not_run"
+    rule_signals: dict[str, Any] = field(default_factory=dict)
+    # 回復を選んだ原因（``crag_recovery_cause`` の値。#3755）。確かめた不足だけに書き換え検索・追加の検索の枠を使う。
+    recovery_cause: str = ""
 
     def to_payload(self) -> dict[str, Any]:
         """UI と trace 保存に使う JSON 互換 payload へ変換します。"""
@@ -362,7 +375,15 @@ class CragRetrievalAttempt:
             "attempt": self.attempt,
             "query": self.query,
             "retrieval_queries": list(self.retrieval_queries),
+            "executed_queries": list(self.executed_queries),
             "sufficient": self.sufficient,
+            "generation_usable": self.sufficient if self.generation_usable is None else self.generation_usable,
+            "answerable_parts": list(self.answerable_parts),
+            "context_fingerprint": self.context_fingerprint,
+            "required_aspect_coverage": self.required_aspect_coverage,
+            "unknown_aspects": list(self.unknown_aspects),
+            "grade_execution": "error" if self.grade_error else self.grade_execution,
+            "rule_signals": self.rule_signals,
             "confidence": self.confidence,
             "relevant_chunk_ids": list(self.relevant_chunk_ids),
             "rewritten_query": self.rewritten_query,
@@ -376,11 +397,43 @@ class CragRetrievalAttempt:
             "recovery_action": self.recovery_action,
             "recovery_anchor_ids": list(self.recovery_anchor_ids),
             "recovery_trace": self.recovery_trace,
+            "recovery_cause": self.recovery_cause,
             "document_selection": self.document_selection,
         }
         if self.grade_error:
             payload["grade_error"] = self.grade_error
+        if self.grade_failure:
+            payload["grade_failure"] = dict(self.grade_failure)
         return payload
+
+
+# CRAG の回復の原因（#3755）。評価の結果の種類で回復を分ける（Corrective RAG の correct / ambiguous / incorrect）。
+CRAG_CAUSE_SUFFICIENT = "sufficient"  # 生成に使え、必須の観点に不足・未確認が無い
+CRAG_CAUSE_VERIFIED_SHORTFALL = "verified_shortfall"  # 評価器が不足と判定した観点がある（missing）
+CRAG_CAUSE_UNVERIFIED = "unverified"  # 不足と確かめていない未確認の観点だけ（写しの照合の失敗・unknown・判定の欠け）
+CRAG_CAUSE_NO_RELEVANT = "no_relevant_evidence"  # 生成に使えず、関係ありと判定した候補が無い
+CRAG_CAUSE_GENERATION_UNUSABLE = "generation_unusable"  # 関係する候補はあるが、生成に使える根拠を確かめられない
+CRAG_CAUSE_GRADE_ERROR = "grade_error"  # 評価の実行に失敗した
+CRAG_CAUSE_GRADE_SKIPPED = "grade_skipped"  # 規則の信号で評価を飛ばした
+CRAG_CAUSE_NO_NEW_EVIDENCE = "no_new_evidence"  # 探し直しで新しい本文が得られなかった
+
+
+def crag_recovery_cause(attempt: CragRetrievalAttempt) -> str:
+    """評価の結果から回復の原因を決める（#3755）。
+
+    ``missing``（確かめた不足）を ``unknown``（未確認）より先に見る。未確認だけを不足に変えない。
+    """
+    if attempt.grade_error or attempt.grade_execution == "error":
+        return CRAG_CAUSE_GRADE_ERROR
+    if attempt.missing_aspects:
+        return CRAG_CAUSE_VERIFIED_SHORTFALL
+    if attempt.sufficient:
+        return CRAG_CAUSE_UNVERIFIED if attempt.unknown_aspects else CRAG_CAUSE_SUFFICIENT
+    if not attempt.relevant_chunk_ids:
+        return CRAG_CAUSE_NO_RELEVANT
+    if attempt.unknown_aspects or attempt.grade_execution == "partial":
+        return CRAG_CAUSE_UNVERIFIED
+    return CRAG_CAUSE_GENERATION_UNUSABLE
 
 
 @dataclass(frozen=True)

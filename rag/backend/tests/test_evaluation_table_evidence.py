@@ -57,3 +57,62 @@ def test_table_match_still_requires_document_and_page(condition: dict[str, objec
     assert not evidence_matches_chunk(
         evidence, _chunk("<table><tr><td>行 A</td><td>10</td></tr></table>")
     )
+
+
+def _row_chunk(metadata: dict[str, object]) -> RetrievedChunk:
+    return RetrievedChunk(
+        document_id="doc-a", chunk_id="chunk-r", text="合成の行", score=1.0, metadata=metadata
+    )
+
+
+PARSED_ROW = {
+    "row_basis": "parsed_table",
+    "table_index": 1,
+    "table_row_start": 3,
+    "table_row_end": 3,
+}
+SHEET_ROW = {"sheet_name": "シート 1", "row_start": 3, "row_end": 3}
+# CSV の記録の番号（table_row_start）と原本の物理行（row_start。引用符の中の改行で 2 行）。
+CSV_ROW = {
+    "row_basis": "csv",
+    "table_row_start": 3,
+    "table_row_end": 3,
+    "row_start": 4,
+    "row_end": 5,
+}
+
+
+@pytest.mark.parametrize(
+    ("condition", "metadata", "expected"),
+    [
+        # 基準を書かない行は原本の行（解析の表の格子の行には一致させない）。
+        ({}, PARSED_ROW, False),
+        ({}, SHEET_ROW, True),
+        # 基準を書けば、その基準の行だけに一致する（#3547）。
+        ({"row_basis": "parsed_table"}, PARSED_ROW, True),
+        ({"row_basis": "parsed_table"}, SHEET_ROW, False),
+        ({"row_basis": "sheet"}, SHEET_ROW, True),
+        # CSV の行は MCP の根拠の場所と同じ記録の番号で照合する（物理行ではない）。
+        ({"row_basis": "csv"}, CSV_ROW, True),
+        ({"row_basis": "csv", "row_start": 4}, CSV_ROW, False),
+    ],
+    ids=[
+        "default-not-parsed",
+        "default-sheet",
+        "parsed",
+        "parsed-not-sheet",
+        "sheet",
+        "csv-record",
+        "csv-not-physical-line",
+    ],
+)
+def test_row_condition_matches_rows_of_the_same_basis(
+    condition: dict[str, object], metadata: dict[str, object], expected: bool
+) -> None:
+    evidence = EvaluationEvidence.model_validate({"id": "e", "row_start": 3, **condition})
+    assert evidence_matches_chunk(evidence, _row_chunk(metadata)) is expected
+
+
+def test_row_basis_needs_a_row() -> None:
+    with pytest.raises(ValueError, match="row_basis"):
+        EvaluationEvidence.model_validate({"id": "e", "text": "合成", "row_basis": "csv"})

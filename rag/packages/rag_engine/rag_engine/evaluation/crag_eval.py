@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict
 
 CRAG_EVAL_VARIANTS = ("standard_rag", "crag", "crag_rerank")
@@ -116,7 +117,9 @@ def llm_crag_judge(settings: Any, *, provider_id: str | None = None) -> CragJudg
         if not answer.strip():
             return "Missing"
         prompt = f"question: {case.question}\nground_truth: {case.ground_truth}\nanswer: {answer}\n"
-        return parse_text_response(CRAG_JUDGE_SYSTEM_PROMPT, prompt, settings, CragJudgeOutput, provider_id=provider_id).judged
+        return call_with_model_purpose(
+            "evaluation.judge", parse_text_response, CRAG_JUDGE_SYSTEM_PROMPT, prompt, settings, CragJudgeOutput, provider_id=provider_id
+        ).judged
 
     return judge
 

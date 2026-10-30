@@ -42,6 +42,7 @@ class _Cues:
     error_phrase: re.Pattern[str]
     error_clause_split: re.Pattern[str]
     request_marker: re.Pattern[str]
+    cause_target: re.Pattern[str]
     parallel_objects: re.Pattern[str]
     chained_operations: re.Pattern[str]
     circled: str
@@ -119,6 +120,13 @@ def _build_cues(pack: LanguagePack) -> _Cues:
             rf"{alt['error_clause_particles']}(?!{char_class(words['error_clause_particle_exceptions'])})|{comma}"
         ),
         request_marker=re.compile(rf"{alt['question_final_particles']}[{unit_chars}\s]*$|{alt['request_cues']}"),
+        # 原因・理由の名詞が質問の的になっている形（#3491）: 名詞の直後（並べた語を挟んでもよい）に問う語尾が続くか、
+        # 疑問の語が名詞の前に付く（目的語の「を」が続く「どんな理由を入力」は項目の名前として除く）。
+        # 「理由は何文字以上」「理由の欄」「理由を入力する手順」のように数量・入力・形式の対象の名前のときは当たらない。
+        cause_target=re.compile(
+            rf"{alt['cause_nouns']}(?:{alt['parallel_connectors']}[^{sentence_chars}\n]{{0,20}}?)?{alt['cause_noun_question_endings']}"
+            rf"|{alt['cause_noun_question_leads']}{alt['cause_nouns']}(?!{alt['object_particles']})"
+        ),
         parallel_objects=re.compile(
             rf"({name}{{1,20}}){alt['parallel_connectors']}({name}{{1,20}}){alt['target_particles']}"
             rf"({alt['split_operation_words']})"
@@ -167,9 +175,8 @@ def generic_target_words() -> frozenset[str]:
 
 
 def _requester_terms_pattern() -> str:
-    from rag_engine.resources.runtime import current_profile
 
-    terms = [*_cues().words["requester_terms"], *current_profile().requester_terms]
+    terms = _cues().words["requester_terms"]
     return "|".join(re.escape(term) for term in dict.fromkeys(term for term in terms if term))
 
 
@@ -242,25 +249,55 @@ def task_contract(question: str) -> dict[str, Any]:
     return copy.deepcopy(_task_contract(question, current_pack().hash))
 
 
-@lru_cache(maxsize=256)
-def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
-    """外部I/Oなしで明示的な目的・形式・条件・仮説を抽出する。
+# 質問に明示された要求の種類（`explicit_requests`）。
+STEPS_REQUEST = "steps"
+LIST_REQUEST = "list"
+COUNT_REQUEST = "count"
 
-    日本語の代表的な目的を認識する補助規則であり、未知表現の意味理解を保証しない。
-    原文も保持し、検出できなかった値を推測で補わない。
+
+def explicit_requests(question: str) -> frozenset[str]:
+    """今回の要求文に手がかりの語がある要求の種類（手順 steps・一覧 list・件数 count）を返す。
+
+    質問を 1 つの目的に分類するのではない。複数が同時に立ち、どれの手がかりも無ければ空（既定値を持たない。#3498）。
     """
+    return _explicit_requests(question, current_pack().hash)
+
+
+@lru_cache(maxsize=256)
+def _explicit_requests(question: str, _pack_hash: str = "") -> frozenset[str]:
     cues = _cues()
     alt = cues.alt
-    current = current_request_text(question)
-    text = _text(current)
-    clauses = [p.strip() for p in cues.sentence_split.split(question) if p.strip()]
-    recipient_list = bool(
+    text = _text(current_request_text(question))
+    listing = cues.has("member_cues", text) or bool(
         re.search(
             rf"{alt['recipient_subject_words']}.*{alt['recipient_action_words']}|{alt['recipient_list_words']}"
             rf"|{alt['list_words']}.{{0,8}}{alt['list_output_words']}",
             text,
         )
     )
+    # 「変更履歴」のような説明要求と、値を変えたい操作要求を区別する。
+    change_request = bool(re.search(rf"{alt['change_verbs']}{alt['change_verb_endings']}|{alt['change_wish_cues']}", text))
+    # 意味を尋ねる項目の名前（「登録」列など）の中の語は、操作の手がかりにしない。
+    outside_items = text
+    for target in definition_targets(question):
+        outside_items = outside_items.replace(_text(target["label"]), "")
+    steps = change_request or cues.has("method_cues", text) or cues.has("procedure_cues", outside_items)
+    kinds = {STEPS_REQUEST: steps, LIST_REQUEST: listing, COUNT_REQUEST: cues.has("count_cues", text)}
+    return frozenset(kind for kind, present in kinds.items() if present)
+
+
+@lru_cache(maxsize=256)
+def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
+    """外部I/Oなしで明示的な要求・形式・条件・仮説を抽出する。
+
+    日本語の代表的な言い回しを認識する補助規則であり、未知表現の意味理解を保証しない。
+    原文も保持し、検出できなかった値を推測で補わない。質問を 1 つの目的に分類しない（#3498）。
+    """
+    cues = _cues()
+    alt = cues.alt
+    current = current_request_text(question)
+    text = _text(current)
+    clauses = [p.strip() for p in cues.sentence_split.split(question) if p.strip()]
     missing_choice = bool(re.search(rf"{alt['choice_words']}.*{alt['absence_words']}", text))
     requester = re.findall(
         rf"(?:{_requester_terms_pattern()}){alt['requester_sides']}?{alt['requester_particles']}.{{0,25}}?"
@@ -270,26 +307,15 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
     wants_count = cues.has("count_cues", text)
     wants_members = cues.has("member_cues", text)
     wants_basis = cues.has("basis_cues", text)
-    recipient_list = recipient_list or wants_members
-    # 「変更履歴」のような説明要求と、値を変えたい操作要求を区別する。
-    change_request = bool(re.search(rf"{alt['change_verbs']}{alt['change_verb_endings']}|{alt['change_wish_cues']}", text))
+    requests = explicit_requests(question)
     definitions = definition_targets(question)
     intent_parts = question_intent_parts(question)
     # 明示目的の操作を先に記録する。経緯中の「登録」だけを要求操作とすると、
     # 追加・削除等の本来の目的が契約から脱落する。原質問の他の要求も保持する。
     action_text = "\n".join([*intent_parts["desired_outcomes"], current])
     enumeration = enumeration_request(question)
-    goal = (
-        "rule"
-        if definitions and not change_request and not cues.has("method_cues", text)
-        else "recipient_list"
-        if recipient_list and not wants_count
-        else "count"
-        if wants_count
-        else "procedure"
-        if change_request or cues.has("method_cues", text) or cues.has("procedure_cues", text)
-        else "rule"
-    )
+    # 手順の観点は、手順か一覧（件数ではない）の要求、選択肢が無いと述べた質問で足す。
+    procedure_aspect = STEPS_REQUEST in requests or requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST} or missing_choice
     return {
         "original_question": question,
         "current_request": current,
@@ -297,7 +323,6 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
         "intent_parts": intent_parts,
         "request_units": request_units(question),
         "definition_targets": definitions,
-        "goal": goal,
         "asks_cause": asks_cause(question),
         "requested_granularity": [
             kind for kind, wanted in [("count", wants_count), ("members", wants_members), ("calculation_basis", wants_basis)] if wanted
@@ -320,15 +345,27 @@ def _task_contract(question: str, _pack_hash: str = "") -> dict[str, Any]:
         # プログラムで数える（`enumeration.enumeration_check`）。
         "enumeration": enumeration.to_payload() if enumeration is not None else None,
         "required_aspects": ["business_object", "requested_result", "applicability"]
-        + (["procedure"] if goal in {"procedure", "recipient_list"} or missing_choice else [])
+        + (["procedure"] if procedure_aspect else [])
         + (["member_details", "population_membership"] if wants_members and cues.has("aggregation_words", text) else [])
         + ([ENUMERATION_ASPECT] if enumeration is not None else []),
     }
 
 
 def asks_cause(question: str) -> bool:
-    """今回の要求文が原因・理由を尋ねているか (#713)。原因の推測を summary で列挙させないための材料。"""
-    return _cues().has("cause_cues", current_request_text(question))
+    """今回の要求文が原因・理由を尋ねているか (#713)。原因の推測を summary で列挙させないための材料。
+
+    「なぜ」のような原因を問う語があるか、原因・理由の名詞が質問の的になっているとき（`cause_noun_targeted`）だけ真。
+    """
+    current = current_request_text(question)
+    return _cues().has("cause_cues", current) or cause_noun_targeted(current)
+
+
+def cause_noun_targeted(text: str) -> bool:
+    """原因・理由の名詞が、問う形（「理由は何ですか」「原因を教えて」「何が原因か」）の的になっているか (#3491)。
+
+    「理由」は入力・記載する項目の名前（「理由は何文字以上」「理由の欄」）にも使うため、語の有無では判定しない。
+    """
+    return bool(_cues().cause_target.search(text))
 
 
 def action_targets(question: str) -> list[str]:
@@ -605,9 +642,15 @@ def query_rejection_reason(question: str, query: str, *, grounded_text: str = ""
     if any(not re.search(r"(?<![a-z0-9_])" + re.escape(identifier) + r"(?![a-z0-9_])", support) for identifier in identifiers):
         return "原質問・明示別名にない業務識別子"
     contract = task_contract(question)
+    requests = explicit_requests(question)
     cues = _cues()
     alt = cues.alt
-    if contract["goal"] == "recipient_list" and cues.has("count_query_words", value) and not cues.has("list_query_words", value):
+    if (
+        LIST_REQUEST in requests
+        and COUNT_REQUEST not in requests
+        and cues.has("count_query_words", value)
+        and not cues.has("list_query_words", value)
+    ):
         return "対象者を確認する目的が人数・件数に変化"
     if (
         contract["missing_choice"]

@@ -23,6 +23,8 @@ function searchStreamBody(chunkId: string, extraMetadata: Record<string, unknown
     file_name: "policy.txt",
     category_name: null,
     metadata: {
+      context_header: "文書 A > 分類 A > 機能 A > 説明",
+      context_header_enabled: true,
       page_start: 2,
       content_kind: "table",
       context_role: "evidence",
@@ -102,25 +104,23 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await page.keyboard.press("Escape");
 
   await page.getByText("詳細条件", { exact: true }).click();
-  const topKSelect = page.getByRole("combobox", { name: "候補取得数" });
-  await expect(topKSelect).toBeVisible();
+  await expect(page.locator("#search-top-k")).toHaveCount(0);
   // 内容種別と見出しの条件は #649 で外した。
   await expect(page.getByRole("combobox", { name: "内容種別" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "見出しで絞り込む" })).toHaveCount(0);
   // 検索の方式と Rerank の件数は回答エンジンが使わないため選ばせない（#595）。
   await expect(page.getByRole("combobox", { name: "Rerank 採用数" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ハイブリッド" })).toHaveCount(0);
-  await topKSelect.click();
-  await page.getByRole("option", { name: "50", exact: true }).click();
+
 
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("交通費の上限");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect.poll(() => searchRequests.length).toBe(1);
-  for (const removed of ["mode", "strategy", "rerank_top_n", "generation_profile"]) {
+  for (const removed of ["mode", "strategy", "rerank_top_n", "generation_profile", "top_k"]) {
     expect(removed in searchRequests[0], removed).toBe(false);
   }
   // 既定は回答を生成しない（検索結果まで。#649）。
-  expect(searchRequests[0]).toMatchObject({ top_k: 50, generate_answer: false });
+  expect(searchRequests[0]).toMatchObject({ generate_answer: false });
   expect("filters" in searchRequests[0]).toBe(false);
 
   // 処理の経過（#2096。チャットと同じ ChatProgress）: 実行中は今の工程と経過時間。
@@ -142,7 +142,7 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   ]);
   expect(resultsBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(processBox?.y ?? Number.POSITIVE_INFINITY);
   // 完了したら工程の一覧を閉じる（チャットと同じ。#2118）。押すと開く。
-  const searchStep = process.locator("li").filter({ hasText: "文書の検索" });
+  const searchStep = process.locator("li").filter({ hasText: "検索文から根拠の候補を集める" });
   await expect(searchStep).toBeHidden();
   await page.getByTestId("search-run-progress-summary").click();
   await expect(searchStep).toBeVisible();
@@ -164,6 +164,8 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await expect(page.getByText("Rerank #1")).toBeVisible();
   // レシピバッジ(recipe_slot_no)が引用カードに表示される。
   await expect(page.getByText("レシピ1")).toBeVisible();
+  await expect(page.getByText("文書 A > 分類 A > 機能 A > 説明", {exact:true})).toBeVisible();
+  await expect(page.getByText("有効", {exact:true})).toBeVisible();
 
   const citationText = page.getByTestId("citation-text");
   const citation = citationText.locator("xpath=ancestor::li[1]");

@@ -151,13 +151,21 @@ async function expectLargeResultTable(page: Page, table: Locator, testId: string
   // が DOM に残っている間は 2 つに当たる（#1519）。
   const sheet = page.getByTestId(`${testId}-sheet`);
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByTestId(`${testId}-all-pagination`)).toBeVisible();
+  const pagination = sheet.getByTestId(`${testId}-all-pagination`);
+  await expect(pagination).toBeVisible();
+  await expect(pagination.getByRole("button", { name: "次へ" })).toBeInViewport();
+  await pagination.getByRole("button", { name: "次へ" }).click();
+  await expect(pagination).toContainText("26–50 / 60 件");
+  await pagination.getByRole("button", { name: "前へ" }).click();
+  await expect(pagination).toContainText("1–25 / 60 件");
+  expect((await pagination.boundingBox())!.y).toBeGreaterThan((await sheet.getByTestId(`${testId}-all-scroll`).boundingBox())!.y);
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   const allScroll = sheet.getByTestId(`${testId}-all-scroll`);
-  expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
-  expect((await allScroll.boundingBox())!.height).toBeGreaterThan(page.viewportSize()!.height * 0.7);
+  expect(await allScroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+  expect((await allScroll.boundingBox())!.height).toBeLessThan(page.viewportSize()!.height * 0.7);
   const body = sheet.locator(":scope > div").last();
-  expect(await body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+  expect(await body.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+  await sheet.focus();
   await page.keyboard.press("Escape");
   // SideSheet は閉じた後も DOM に残る（data-state="closed"・非表示）ので、数ではなく非表示を確かめる。
   await expect(sheet).toBeHidden();
@@ -181,6 +189,14 @@ for (const viewport of VIEWPORTS) {
       const answerTable = answer.getByTestId(`chat-answer-${RUN_ID}-table-1`);
       await expect(answerTable.getByTestId(`chat-answer-${RUN_ID}-table-1-summary`)).toContainText("2 行");
       await expect(answerTable.getByRole("cell", { name: "部門 2" })).toBeVisible();
+      await answerTable.getByRole("button", { name: "すべての行を見る" }).click();
+      const smallSheet = page.getByTestId(`chat-answer-${RUN_ID}-table-1-sheet`);
+      const smallPagination = smallSheet.locator("nav[data-pagination]");
+      await expect(smallPagination).toContainText("1–2 / 2 件");
+      await expect(smallPagination.getByRole("button", { name: "次へ" })).toBeDisabled();
+      await expect(smallPagination.getByRole("button", { name: "次へ" })).toBeInViewport();
+      await page.keyboard.press("Escape");
+      await expect(smallSheet).toBeHidden();
       await expect(turn).not.toContainText("|---|");
 
       // 表の形のツールの結果だけを表で出す（RAG の結果は表にしない）。

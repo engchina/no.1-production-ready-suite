@@ -1,3 +1,4 @@
+import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expect, type Page, test } from "./fixtures/test";
 
 import {
@@ -188,14 +189,17 @@ test.describe("作業状態の保持", () => {
     await selectSearchAnswerProfile(page, /経理ビュー/);
     await page.locator("#search-query").fill("交通費の上限");
     await page.getByText("詳細条件", { exact: true }).click();
-    await page.getByRole("combobox", { name: "候補取得数" }).click();
-    await page.getByRole("option", { name: "50", exact: true }).click();
+    await page.locator('button[aria-controls="search-classification-filters"]').click();
+    await page.locator("#search-as_of").fill("2026-04-01");
     await page.getByRole("switch", { name: "LLM で回答を生成する" }).click();
 
     const expectRestored = async () => {
       await expect(page.locator("#search-query")).toHaveValue("交通費の上限");
       await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
-      await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
+      await expect(page.getByRole("button", { name: /詳細条件/ })).toHaveAttribute("aria-expanded", "true");
+      const classification = page.locator('button[aria-controls="search-classification-filters"]');
+      if (await classification.getAttribute("aria-expanded") === "false") await classification.click();
+      await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
       await expect(page.getByRole("switch", { name: "LLM で回答を生成する" })).toHaveAttribute(
         "aria-checked",
         "true"
@@ -307,15 +311,19 @@ test.describe("作業状態の保持", () => {
 
     await page.goto("/file-list");
     // 状態の絞り込みは選択の欄（11 種の ToggleChip の折り返しをやめた。#578）。
+    await openFileListFilters(page);
     await page.getByRole("combobox", { name: "状態" }).click();
     await page.getByRole("option", { name: "エラー", exact: true }).click();
+    await closeFileListFilters(page);
     const search = page.getByRole("searchbox", { name: "ファイル名で検索" });
     await search.fill("policy");
     await search.press("Enter");
     await page.getByRole("checkbox", { name: "この行を選択" }).check();
 
     const expectRestored = async () => {
+      await openFileListFilters(page);
       await expect(page.getByRole("combobox", { name: "状態" })).toHaveAttribute("data-value", "ERROR");
+      await closeFileListFilters(page);
       await expect(page.getByRole("searchbox", { name: "ファイル名で検索" })).toHaveValue("policy");
       await expect(page.getByRole("checkbox", { name: "この行を選択" })).not.toBeChecked();
       expect(documentRequests.at(-1)).toContain("status=ERROR");

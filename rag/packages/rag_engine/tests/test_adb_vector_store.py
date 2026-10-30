@@ -130,6 +130,66 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(text.call_count, 2)
         self.assertFalse(any("仮説" in call.args[2] for call in text.call_args_list))
 
+    def test_db_searches_are_stage_spans_for_the_progress_timeline(self):
+        # 文書の検索の中の DB の検索（ベクトル検索・全文検索・検索対象の読み込み）は工程の span にする（#3436）。
+        # 処理の経過で、埋め込みの後の時間の大半を占める DB の検索を末端の段として出す。
+        from contextlib import contextmanager
+
+        from rag_engine.resources.tracing import bind_trace_observer
+
+        observed: list[tuple[str, str, str]] = []
+
+        @contextmanager
+        def observer(operation: str, name: str):
+            observed.append(("start", operation, name))
+            yield object()
+            observed.append(("end", operation, name))
+
+        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+        pool = [_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)]
+
+        def search(**kwargs):
+            return search_adb_hybrid_chunks(
+                chunk_run_id="run-1",
+                settings=settings,
+                query_embedder=lambda *_: [0.1] * 1536,
+                candidate_limit=5,
+                **kwargs,
+            )
+
+        with (
+            patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb"),
+            patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=lambda *_: _ConnectionContext(object())),
+            patch("rag_engine.adapters.oracle.store.load_domain_keywords", return_value=[]),
+            patch("rag_engine.adapters.oracle.store._available_embedding_count", return_value=1),
+            patch("rag_engine.adapters.oracle.store._vector_search", return_value=[("uid-1", 0.1)]),
+            patch("rag_engine.adapters.oracle.store._text_search", return_value=[("uid-1", 0.2)]) as text,
+            patch("rag_engine.adapters.oracle.store._load_chunk_run_chunks", return_value=pool) as load,
+            bind_trace_observer(observer),
+        ):
+            search(retrieval_queries=["原質問 出力", "派生 出力"])
+            self.assertEqual(
+                observed,
+                [
+                    ("start", "stage", adb_vector_store.VECTOR_SEARCH_STAGE),
+                    ("end", "stage", adb_vector_store.VECTOR_SEARCH_STAGE),
+                    ("start", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
+                    ("end", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
+                    ("start", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
+                    ("end", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
+                ],
+            )
+            self.assertEqual(text.call_count, 2)
+            self.assertEqual(load.call_count, 1)
+            # 読み込み済み（cache）の検索対象は読み込みの工程を出さない。全文検索に使う検索文が無ければ全文検索の工程も出さない。
+            observed.clear()
+            search(retrieval_queries=["仮説文 出力"], vector_only_queries=["仮説文 出力"])
+            self.assertEqual(
+                [entry[2] for entry in observed if entry[0] == "start"],
+                [adb_vector_store.VECTOR_SEARCH_STAGE],
+            )
+            self.assertEqual(load.call_count, 1)
+
     def test_text_search_limit_counts_only_text_candidates(self):
         # 上限は vector 専用の検索文を除いてから数える (#921)。
         settings = replace(
@@ -550,8 +610,8 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertIn("JSON_VALUE(c.metadata_json, '$.document.classification.middle_category')", sql)
         self.assertIn("JSON_VALUE(c.metadata_json, '$.document.classification.small_category')", sql)
         self.assertNotIn(" IN ", sql)
-        self.assertEqual(binds["classification_large_category"], "20_在庫管理")
-        self.assertEqual(binds["classification_middle_category"], "20_操作説明書")
+        self.assertEqual(binds["classification_large_category"], "在庫管理")
+        self.assertEqual(binds["classification_middle_category"], "操作説明書")
         self.assertEqual(binds["classification_small_category"], "倉庫連携")
 
     def test_filter_sql_always_limits_to_effective_window_as_of(self):
@@ -587,7 +647,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertIn("JOIN rag_documents d ON d.document_id = c.document_id", connection.cursor_obj.sql)
         self.assertIn("d.latest_chunk_run_id = c.chunk_run_id", connection.cursor_obj.sql)
         self.assertNotIn("c.chunk_run_id = :chunk_run_id", connection.cursor_obj.sql)
-        self.assertEqual(connection.cursor_obj.binds["classification_large_category"], "10_販売管理")
+        self.assertEqual(connection.cursor_obj.binds["classification_large_category"], "販売管理")
 
     def test_image_vector_search_filters_by_embedding_modality(self):
         settings = replace(
@@ -702,7 +762,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             classification_filter,
         )
 
-        self.assertEqual([chunk.chunk_uid for chunk in selected], ["uid-match"])
+        self.assertEqual([chunk.chunk_uid for chunk in selected], ["uid-legacy"])
 
     def test_save_chunk_run_embeddings_upserts_chunks_skips_existing_and_batches(self):
         chunk_run = _chunk_run()

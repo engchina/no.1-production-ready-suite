@@ -423,7 +423,7 @@ def test_single_rag_profile_raises_small_top_k_to_the_default(
     monkeypatch: MonkeyPatch, mcp: FakeProductMcp
 ) -> None:
     # プロファイルを固定した業務 Agent では、モデルが残りの任意の引数（top_k）を小さく埋めやすい
-    # （#1403）。既定より小さい top_k は既定（20）に引き上げ、モデルへの結果に残す。
+    # （#1403）。既定より小さい top_k は既定（50）に引き上げ、モデルへの結果に残す。
     _agent(rag=_scope("bv-sales"))
     model = _script(
         monkeypatch,
@@ -443,7 +443,7 @@ def test_single_rag_profile_raises_small_top_k_to_the_default(
     [call] = mcp.calls_of("rag_retrieve_evidence")
     assert _scope_arguments(call) == {
         "query": "システム台帳 販売管理システム 担当部署",
-        "top_k": 20,
+        "top_k": 50,
         "search_answer_profile_id": "bv-sales",
     }
     params = _tools(model)["rag__rag_retrieve_evidence"].params_json_schema

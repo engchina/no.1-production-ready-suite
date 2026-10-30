@@ -176,13 +176,8 @@ def test_recipe_mode_overrides_the_global_default(
     assert not rules_file.exists()
 
 
-def test_section_rules_preview_requires_saved_recipe() -> None:
-    """保存済みレシピの明示が必要で、旧来の本文だけの要求は受け付けない。"""
-    resp = client.post(
-        "/api/documents/doc-1/sections/preview",
-        json={"mode": "custom", "rules": []},
-    )
-    assert resp.status_code == 422
+def test_section_rules_preview_endpoint_is_removed() -> None:
+    assert not any(getattr(route, "path", "").endswith("/sections/preview") for route in app.routes)
 
 
 def test_docling_list_markers_survive_into_numbered_sections() -> None:

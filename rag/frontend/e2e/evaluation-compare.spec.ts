@@ -1,7 +1,8 @@
 import { expect, type Page, test } from "./fixtures/test";
 
 import {
-  chooseEvaluationKnowledgeBase,
+  chooseEvaluationProfile,
+  mockEvaluationProfiles,
   evaluationImportResult,
   mockEvaluationImport,
   mockEvaluationJobs,
@@ -11,11 +12,10 @@ import {
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
-  selectSearchAnswerProfile,
 } from "./_helpers";
 
 /**
- * 品質評価の回答の過程の下書き・案内した画面の指標・ナレッジベースと検索・回答プロファイルの比較（#2402）。
+ * 品質評価の回答の過程の下書き・案内した画面の指標・検索・回答プロファイルの比較（#2402）。
  * 内容は合成の例（架空の画面・資料の名前）。
  */
 
@@ -68,28 +68,7 @@ test.beforeEach(async ({ page }) => {
       }),
     })
   );
-  await page.route("**/api/search-answer-profiles**", (route) =>
-    route.fulfill({
-      json: envelope({
-        items: [
-          {
-            id: "profile-1",
-            name: "プロファイル A",
-            description: "業務ガイドあり",
-            status: "ACTIVE",
-            knowledge_base_count: 1,
-            created_at: "2026-06-15T00:00:00Z",
-            updated_at: "2026-06-15T00:00:00Z",
-            archived_at: null,
-          },
-        ],
-        total: 1,
-        limit: 50,
-        offset: 0,
-        has_next: false,
-      }),
-    })
-  );
+  await mockEvaluationProfiles(page);
 });
 
 const PROCESS = "【回答の手順】\n1. 設定画面Aを開く\n【検索する資料】\n操作手順書A.pdf p.12-14";
@@ -209,7 +188,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 760 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`回答の過程の下書きを確かめて足し、プロファイルと比べた結果と案内した画面を出す (${viewport.name})`, async ({
+  test(`回答の過程の下書きを確かめて足し、プロファイルと比べた結果と案内した画面を出す (${viewport.name})`, { tag: "@responsive" }, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -250,7 +229,7 @@ for (const viewport of [
     });
 
     await page.goto("/evaluation");
-    await chooseEvaluationKnowledgeBase(page);
+    await chooseEvaluationProfile(page);
     await uploadEvaluationExcel(page);
     await expect(page.getByTestId("evaluation-import-ready")).toBeVisible();
     // 案内すべき画面の列をプレビューに出す。
@@ -274,10 +253,12 @@ for (const viewport of [
     await expect(confirm).toHaveAttribute("aria-checked", "true");
 
     // 検索・回答プロファイルでも流して比べる（オンにしてから選ぶ。未選択なら欄の直下に出す）。
-    await page.getByRole("switch", { name: "検索・回答プロファイルでも評価して比較する" }).click();
+    await page.getByRole("switch", { name: "別の検索・回答プロファイルでも評価して比較する" }).click();
     await page.getByRole("button", { name: "評価実行" }).click();
     await expect(page.getByText("比べる検索・回答プロファイルを選んでください。")).toBeVisible();
-    await selectSearchAnswerProfile(page, /プロファイル A/);
+    await page.locator("#evaluation-compare-profile").click();
+    await expect(page.getByRole("listbox").getByRole("option", { name: /プロファイル A/ })).toHaveCount(0);
+    await page.getByRole("listbox").getByRole("option", { name: /プロファイル B/ }).click();
     await page.getByRole("button", { name: "評価実行" }).click();
 
     await expect.poll(() => jobs.runPayloads.length).toBe(1);
@@ -285,7 +266,7 @@ for (const viewport of [
       compare_search_answer_profile_id: string;
       cases: Record<string, unknown>[];
     };
-    expect(payload.compare_search_answer_profile_id).toBe("profile-1");
+    expect(payload).toMatchObject({search_answer_profile_id: "profile-base", compare_search_answer_profile_id: "profile-1"});
     expect(payload.cases[0]).toMatchObject({
       required_answer_points: ["設定画面A", "通知の設定"],
       required_conditions: ["利用者が管理者か"],
@@ -297,7 +278,7 @@ for (const viewport of [
 
     // 比べる表: 差はポイントと文言（色だけに頼らない）。低いほどよい指標は向きを逆にする。
     const table = page.getByTestId("evaluation-compare-table");
-    await expect(page.getByRole("heading", { name: "ナレッジベースと検索・回答プロファイルの比較" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "検索・回答プロファイルの比較" })).toBeVisible();
     const correctnessRow=table.getByRole("row",{name:/回答の正確性/});
     await expect(correctnessRow).toContainText("+100pt");
     await expect(correctnessRow).toContainText("改善");
@@ -309,7 +290,7 @@ for (const viewport of [
     await expect(page.getByTestId("evaluation-perspective-guidance")).toHaveCount(0);
     await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("0%");
     await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toContainText("0%");
-    await page.getByRole("tab",{name:"検索・回答プロファイル: プロファイル A"}).click();
+    await page.getByRole("tab",{name:"検索・回答プロファイル: プロファイル B"}).click();
     await expect(page.getByTestId("evaluation-metric-answer_correctness")).toContainText("100%");
     await expect(page.getByTestId("evaluation-metric-requirement_coverage")).toContainText("100%");
     await expectNoPageOverflow(page);
@@ -325,7 +306,7 @@ test("比べないときは比べる表とタブを出さず、下書きは使�
   });
 
   await page.goto("/evaluation");
-  await chooseEvaluationKnowledgeBase(page);
+  await chooseEvaluationProfile(page);
   await uploadEvaluationExcel(page);
   await page.getByTestId("evaluation-process").getByRole("button", { name: "期待の下書きを作る" }).click();
   await expect(page.getByTestId("evaluation-process-table")).toContainText("通知の設定");
@@ -333,9 +314,13 @@ test("比べないときは比べる表とタブを出さず、下書きは使�
 
   await expect.poll(() => jobs.runPayloads.length).toBe(1);
   const payload = jobs.runPayloads[0] as Record<string, unknown>;
+  expect(payload.search_answer_profile_id).toBe("profile-base");
+  expect(payload).not.toHaveProperty("knowledge_base_ids");
   expect(payload).not.toHaveProperty("compare_search_answer_profile_id");
   expect((payload.cases as Record<string, unknown>[])[0]).not.toHaveProperty("required_conditions");
   await expect(page.getByTestId("evaluation-perspective-retrieval")).toBeVisible();
   await expect(page.getByTestId("evaluation-compare-table")).toHaveCount(0);
-  await expect(page.getByRole("tab")).toHaveCount(0);
+  // ページのタブ（評価の実行 / 判定の校正。#3578）のほかに、比べる結果のタブは出さない。
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("tab", { name: "評価の実行" })).toHaveAttribute("aria-selected", "true");
 });

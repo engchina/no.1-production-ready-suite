@@ -10,7 +10,7 @@
 | 検索 | 正解文書の順位（MRR） (`mrr`) | `relevant_document_ids` と引用の文書列を比較します。文書の重複を除いた最初の正解の順位 r の 1/r、未取得は 0。 |
 | 回答 | 回答の正確性 (`answer_correctness`) | 標準回答または確認済みの必須要点と、質問への結論・数値・適用条件を意味上比較します。取得根拠に支持されるだけでは正解にしません。 |
 | 回答 | 回答の網羅性 (`requirement_coverage`) | 標準回答・`required_answer_points`・`required_conditions` の必須項目への意味上の対応率。説明済み 1・部分的 0.5・不足 0。 |
-| 回答 | 根拠への忠実性 (`claim_support_rate`) | 根拠が支持する主張 / 監査した実質的な主張。標準回答は不要。引用を検証できない・監査しきれない主張があれば未評価。 |
+| 回答 | 根拠への忠実性 (`claim_support_rate`) | 根拠が支持する主張 / 監査した実質的な主張。主張は段落ごとに、その段落が出典に挙げた根拠で判定し、出典の無い段落は支持されない主張に数えます。標準回答は不要。引用を検証できない・監査しきれない主張があれば未評価。 |
 | 応答の判断 | 回答・確認・保留の判断の正しさ (`response_decision_accuracy`) | `expected_response_decision` に `answer` / `clarify` / `hold` を明示します。標準回答は不要。省略時は推定しません。 |
 
 `expected_outcomes` に明示した回答結果も三分類へ集約します。`answered`・`conditional` は回答、`needs_clarification` は確認、それ以外は保留です。複数往復は各往復の明示的な期待に合っているか確認します。
@@ -37,6 +37,46 @@
 - 結果は `six_metrics_v1`、六指標と対象件数、ケース詳細、分類・区分・質問の種類・段数・期待する判断別の内訳を返します。比較も同じ順序です。
 - 正確性・網羅性・忠実性の評価は「品質評価」で実行します。検索・チャットの回答詳細には標準回答による評価操作を置きません。
 - CLI (`app.rag.evaluation_cli`) の出力と、業務 Agent との比較（製品横断の評価 `suite/evaluation` の `suite-evaluation`。#3240）も同じ六指標です。照合・順位・判断の部品は platform の `pr_evaluation_scoring` を共有します。
+
+### 判定のモデル（#3574）
+
+正確性・網羅性・忠実性を採点する LLM の判定は、共通のモデル設定（システム設定 › モデル › 既定のモデル）の「既定の判定モデル」（`default_judge_model_id`。env は `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_JUDGE_MODEL`）で選んだモデルで行います。
+
+| 値 | 判定のモデル |
+|---|---|
+| 空（既定）「既定のテキストモデル」 | 既定のテキストモデル。どの pass・どの回答も同じモデルで判定します。 |
+| `same_as_answer`「回答と同じモデル」 | 回答を作ったモデル（回答の診断の `models.llm.model_id`、無ければ実行で解決した回答のモデル）。検索・回答プロファイルの pass はプロファイルの回答のモデル、ナレッジベースの pass と回答のモデルを持たないプロファイルは既定のテキストモデルです。 |
+| 登録モデルの ID | そのモデル。どの pass・どの回答も同じモデルで判定します。 |
+
+- 自分の回答を判定すると点が高くなりやすいため、モデルを比べる評価では、比べるモデルと別のモデルに固定することを勧めます。
+- 判定の LLM は、判定のモデルの接続・入力の上限・推論の量で呼びます（回答のモデルの切り替えと同じ `build_engine_settings`。解決は platform の `enterprise_ai_judge_model_id` だけ）。
+- 判定に使ったモデルは、ケースの結果の `answer_evaluation.judge_model_id`（判定を完了できなかったケースにも残す）と、判定の診断の `judge_diagnostics.judge_model_id`（回答の記録にも保存）に残ります。
+- 同じ評価の中の比較範囲の記録（#3570）は、判定のモデルを key に含むため、判定のモデルが違えば別に固定します。
+
+### 判定の呼び出しの形（#3576）
+
+回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`。判定の版 `rubric_version` 12）は、小さな判定を分けて呼び、集計と合否はコードが行います（LLM-as-judge の一般的なやり方。1 つの出力に全部の判定をまとめない）。
+
+| 判定 | モデルに渡すもの | 指示 |
+|---|---|---|
+| 比較範囲の固定 | 質問と標準回答（生成回答・根拠は渡さない） | `SCOPE_PROMPT` |
+| 網羅（比較項目ごと） | 1 つの比較項目と、出典の行を除く ID 付きの回答の段落 | `COVERAGE_PROMPT` |
+| 主張の裏付け（段落ごと） | 1 つの段落、同じ出典を共有する前後の段落（文脈）、その段落の出典が指す根拠と質問の文 | `CLAIM_PROMPT` |
+| 正確性 | 質問・標準回答・回答の本文 | `CORRECTNESS_PROMPT` |
+
+- 段落の出典は、段落の後に続く出典の行（「根拠：文書名 p.N」。同じ出典の説明が続くと最後の説明の後に 1 回だけ置く）と、段落に書いた根拠の ID。出典の行は回答の引用の記録（`cited_evidence`）で根拠に結び付け、記録に無ければ文書名と頁で根拠を選びます。取得した根拠の全体は渡さないので、batch 分けと batch をまたぐ摘要は無くなりました（出力の `batch_count` は 1、`batch_audits`・`missing_audit_passage_ids` は空）。
+- モデルを呼ばずにコードが決める段落: 見出し・出典の行・回答の節の見出しと注記・「確認が必要な点」などの注記の節の行は `not_a_claim`、確認の節の項目は `data_confirmation`、当てはめの前提の行で引用がすべて質問の文にあるものは `supported`、出典の無い段落は `unsupported`（`reference_check=uncited`）。
+- 網羅・正確性・主張の呼び出しは、1 件の評価の中で上限のある並行（`JUDGE_MAX_CONCURRENCY`）で行い、判定の期限を過ぎたら新しい呼び出しを始めません。1 段落の判定が失敗したときは、その段落だけを `unassessed` にして評価を続けます（`claim_support_rate` は未評価になる）。網羅・正確性の失敗は評価の失敗です。
+- 判定の診断（`judge_diagnostics`）の `judge_calls`・`claim_calls`・`claim_failures`・`uncited_claims` に、呼び出しの数・段落の判定の失敗・出典の無い段落の数を残します。
+
+### 回答の評価器の校正（#3418・#2577）
+
+正確性・網羅性・忠実性を採点する回答の評価器（`evaluate_answer_payload` と `score_answer_evaluation`）は、人手の判定との一致で校正してから合否に使います。検索の評価器の校正（`rag_engine.evaluation.crag_grader_eval`）とは対象が違うので分けます。
+
+- 人手の判定は、製品横断の評価の校正と同じ形の JSON（LabelSet。`suite-evaluation label-import` が記入用のブックから書く。手順は `suite/evaluation/README.md`「人手の判定による校正の手順」）を使います。RAG は suite を import せず、同じ JSON を自分の型で読みます。
+- 画面では「品質評価」のタブ「判定の校正」（#3578）で、記入の集合の作成・記入（記入者は自分の判定だけを見る）・記入者の間の κ と裁定・校正（品質評価の job。判定のモデル（既定の判定モデル）の ID・評価器の rubric の版・指示の sha256 を記録）・LabelSet の JSON の書き出し / 取り込みを行えます。記入は `menu.evaluation`、全員の判定・裁定・校正・入出力は `rag.evaluation_calibration.manage`。表は `rag_evaluation_label_sets`・`rag_evaluation_label_items`・`rag_evaluation_labels`・`rag_evaluation_calibrations`。品質評価の結果の正確性・網羅・根拠の指標には、今の判定のモデルと指示で合格した校正があれば「校正済み κ=…」、無ければ「未校正」を出します（指標の値は変えません）。
+- `uv run python -m app.rag.answer_judge_calibration <LabelSet の JSON> --output <結果>`（`rag/backend` で）が、項目ごとに評価器を動かし（OCI Enterprise AI を呼ぶ。判定のモデルは `--judge-model <登録モデルの ID>`、省略時は既定の判定モデル。人手の判定の回答は作ったモデルが分からないので、「回答と同じモデル」は既定のテキストモデル）、観点ごとの一致（一致率・Cohen の κ・混同行列・誤合格 / 誤不合格）と holdout の合否を出します。`--evaluations <前の結果>` はモデルを呼ばずに集計だけやり直します。
+- 指標の値が `--pass-at`（既定 1.0。観点ごとに `<観点>=<値>`）以上を pass とし、評価が完了しない・測れない項目は判定できなかった件に数えます。一致の集計と合否の閾値（holdout の件数 50 以上・判定率 0.95 以上・κ 0.6 以上・誤合格の率 0.1 以下）は platform の `pr_evaluation_scoring` を suite と共有します。故意に壊した回答（合成の対照）は合否に入れず、synthetic の区分に別に集計します。
 
 実行時の安全機構、回答生成の監査、引用リンクは評価指標の整理によって削除しません。
 
@@ -90,7 +130,7 @@ RAG 検索ごとに `app.audit` logger へ `rag_search_audit` イベントを出
 
 監査ログには query、回答本文、OCR 原文、tenant/user id の raw 値を出さない。query と原本は SHA-256 hash とメタデータのみ、tenant/user id は hash のみを保存し、契約番号・金額・取引先名などの機密業務データをログへ漏らさない。
 
-production（`RAG_AUTH_MODE=production`）では client の `X-Tenant-ID` と `X-RAG-Allowed-*` header を使わず、tenant なし（単一 tenant）で動かし、対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決める（#214 / #225）。local（`RAG_AUTH_MODE=local`）だけは開発・検証のため、`X-Tenant-ID` がある request で document / chunk の `tenant_id_hash` と照合して一覧、詳細、重複判定、retrieval を同一 tenant に限定する（tenant header がない場合は全体を参照できる）。同じく local で `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、その request の一覧、詳細、chunk count、retrieval も指定 scope に閉じる。scope header が存在するが有効値が 0 件の場合は deny-all とし、未指定の場合だけ制限なしとして扱う。これらの raw scope 値は監査ログへ出さない。
+production（`PLATFORM_AUTH_MODE=authenticated`）では client の `X-Tenant-ID` と `X-RAG-Allowed-*` header を使わず、tenant なし（単一 tenant）で動かし、対象範囲はログイン中の利用者（MCP ではサービストークンの利用者）から決める（#214 / #225）。local（`PLATFORM_AUTH_MODE=local`）だけは開発・検証のため、`X-Tenant-ID` がある request で document / chunk の `tenant_id_hash` と照合して一覧、詳細、重複判定、retrieval を同一 tenant に限定する（tenant header がない場合は全体を参照できる）。同じく local で `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names` を付与した場合は、その request の一覧、詳細、chunk count、retrieval も指定 scope に閉じる。scope header が存在するが有効値が 0 件の場合は deny-all とし、未指定の場合だけ制限なしとして扱う。これらの raw scope 値は監査ログへ出さない。
 
 ## ガードレール
 

@@ -179,6 +179,10 @@ export interface ListDetailLayoutProps {
    * `data-testid`（`list-detail-<id>`・`-list`・`-detail`・`-resizer`・`-toggle`）に使う。
    */
   id: string;
+  /** single は幅に関わらず一覧から全幅の詳細へ切り替える。既定は xl 以上で分割する。 */
+  layout?: "responsive" | "single";
+  /** 1 ペインの主一覧は table。枠・高さ・スクロールは DataTable が持つ（既定 panel）。 */
+  listVariant?: "panel" | "table";
   /** 一覧の列の名前（翻訳済み。例:「テーブル一覧」）。列の読み上げ名と、開閉ボタンの名前・Tooltip に使う。 */
   listLabel: string;
   /** 一覧の列の上（スクロールしない）。検索・絞り込み・件数（`ListToolbar`）。 */
@@ -221,6 +225,8 @@ export interface ListDetailLayoutProps {
  */
 export function ListDetailLayout({
   id,
+  layout = "responsive",
+  listVariant = "panel",
   listLabel,
   listHeader,
   list,
@@ -236,7 +242,8 @@ export function ListDetailLayout({
   className,
 }: ListDetailLayoutProps) {
   const labels = { ...DEFAULT_LIST_DETAIL_LAYOUT_LABELS, ...labelOverrides };
-  const split = useListDetailSplit();
+  const responsiveSplit = useListDetailSplit();
+  const split = layout !== "single" && responsiveSplit;
   const storageKey = listDetailStorageKey(id, storagePrefix);
   const [stored, setStored] = useState<ListDetailStoredState>(() => readStoredState(storageKey));
   const [previousKey, setPreviousKey] = useState(storageKey);
@@ -429,6 +436,7 @@ export function ListDetailLayout({
   }
 
   const showDetail = split || hasSelection;
+  const tableList = !split && listVariant === "table";
   const style = {
     "--list-detail-list-width": `${listWidthRem}rem`,
     ...(split && fit
@@ -458,12 +466,15 @@ export function ListDetailLayout({
         tabIndex={-1}
         className={cn(
           // 一覧の列: 画面の高さの中でスクロールし（sticky）、詳細はページと一緒にスクロールする。
-          "sticky flex min-h-0 min-w-0 flex-col self-start overflow-hidden rounded-lg border border-border bg-surface shadow-sm outline-none",
+          "min-w-0 outline-none",
+          tableList
+            ? "grid gap-3"
+            : "sticky flex min-h-0 flex-col self-start overflow-hidden rounded-lg border border-border bg-surface shadow-sm",
           // 2 ペイン: 測った高さ（見える高さ − 列の上端 − 下の余白）と、貼り付く見出しの下の位置（#2330）。
           // 1 ペイン: 画面の高さ − 2rem（md 未満はナビの上端のバー 3.5rem の分だけ低くする）。
           split
             ? "top-[var(--list-detail-list-top,1rem)] max-h-[var(--list-detail-list-height,calc(100dvh-2rem))]"
-            : "top-4 max-h-[calc(100dvh-5.5rem)] md:max-h-[calc(100dvh-2rem)]",
+            : !tableList && "top-4 max-h-[calc(100dvh-5.5rem)] md:max-h-[calc(100dvh-2rem)]",
           !showList && "hidden"
         )}
         data-testid={`list-detail-${id}-list`}
@@ -473,16 +484,16 @@ export function ListDetailLayout({
         onKeyDown={onListKeyDown}
       >
         {listHeader ? (
-          <div className="shrink-0 border-b border-border p-3" data-list-detail-header="">
+          <div className={tableList ? undefined : "shrink-0 border-b border-border p-3"} data-list-detail-header="">
             {listHeader}
           </div>
         ) : null}
         {/* 溝（scrollbar-gutter）は取らない: 行の表（DataTable）は自分のスクロール領域に溝を持つので、ここでも取ると
             表の右に 2 本分の空白が残る（#2282）。 */}
-        <div className="flex min-h-0 shrink flex-col overflow-y-auto" data-list-detail-body="">{list}</div>
+        <div className={tableList ? "min-w-0" : "flex min-h-0 shrink flex-col overflow-y-auto"} data-list-detail-body="">{list}</div>
         {/* 中身が何も描かない（1 ページの Pagination など）ときは、列の下の帯を出さない（empty:hidden。#2283）。 */}
         {listFooter ? (
-          <div className="shrink-0 border-t border-border px-3 py-2 empty:hidden" data-list-detail-footer="">
+          <div className={tableList ? "empty:hidden" : "shrink-0 border-t border-border px-3 py-2 empty:hidden"} data-list-detail-footer="">
             {listFooter}
           </div>
         ) : null}

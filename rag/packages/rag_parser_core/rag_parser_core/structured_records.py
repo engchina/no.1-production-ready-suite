@@ -11,9 +11,9 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
 - すべての行が ``schema``・``schema_version``・``record_id``（ファイルの中で一意）・
   ``source_type``・``record_type`` を持つ。
 - ``record_type``:
-  - ``document``: 先頭の 1 行だけ。変換器・版・読まなかったシート・表頭の行（CSV）・診断。Word は
-    位置の基準（``location_basis``）と、.doc を .docx にして読んだときの原本と派生物の対応
-    （``conversion``）も持つ。
+  - ``document``: 先頭の 1 行だけ。変換器・版・読まなかったシート・表頭の行と表頭のセルの文字
+    （CSV）・診断。Word は位置の基準（``location_basis``）と、.doc を .docx にして読んだときの
+    原本と派生物の対応（``conversion``）も持つ。
   - ``sheet``: Excel のシートの文脈（表頭の行・推定の信頼度・読み方・版式の判定・列と役割・診断。
     1 シートを複数の表に分けたときは表ごとに 1 行で、``table_index``・``region``・``title``
     を持つ）。
@@ -22,6 +22,8 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
   - ``form_field``: 帳票（方眼紙）の 1 項目（``label``・``value``・ラベルと値のセル。#2516）。
     選択の記号を読んで値を選ばれた選択肢にしたときは、原文を ``value_original`` に持つ（#2526）。
   - ``preamble``: 表頭より上の行（``text``）。
+  - ``note``: 表の下の注記の行（``text``・先頭の注記の印 ``marker``。#3566）。表の行のうち注記の印を
+    セルに含む行は、その注記の文を ``row`` の ``notes`` にも持つ。
   - ``section``: Word の見出し（見出しの階層 ``heading_path``・段落の位置）。``parent_id`` は上位の
     見出し。
   - ``passage``: Word の見出しの下の意味のまとまり（段落・リスト・表と、表の前後の説明）。表示の行
@@ -29,8 +31,8 @@ CSV・Excel・Word の前処理は、原本を 1 行 1 オブジェクトの JSO
     を持つ。位置（``WordLocation``）は本文の順の番号で、原本に無いページ番号は持たない。
   CSV・Excel の記録は ``parent_id`` で文脈の行（Excel は ``sheet``）を指し、``location``
   （元の行番号・セル範囲）と ``section_path`` を持つ。Excel の記録のうち図形・テキストボックスの
-  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の行番号は原本の物理行（引用符の中の
-  改行を含む記録は複数行）。
+  文字を置いたセル範囲は ``shape_cells`` に持つ（#2526）。CSV の ``row_start`` / ``row_end`` は
+  原本の物理行（引用符の中の改行を含む記録は複数行）で、``record`` は記録の番号（RFC 7111 の行）。
 - 読み取り（`parse_structured_records`）は厳格にし、不正な JSON・オブジェクトでない行・空行・BOM・
   未知の schema・未対応の版・record_id の重複・document の行の欠落・存在しない parent_id を、行番号
   つきの診断で拒否する（任意の JSONL を構造化レコードとみなさない）。
@@ -61,20 +63,33 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.sheet_records import (
     _BLOCK_TEXT_MAX_CHARS,
+    ROW_BASIS_CSV,
+    ROW_BASIS_KEY,
+    ROW_BASIS_WORD_TABLE,
     SHEET_RECORD_CONTENT_KIND,
+    SOURCE_LINE_END_KEY,
+    SOURCE_LINE_START_KEY,
+    TABLE_CELLS_KEY,
+    TABLE_INDEX_KEY,
+    TABLE_ROW_END_KEY,
+    TABLE_ROW_KEY,
+    TABLE_ROW_START_KEY,
     HeaderDetection,
     LayoutDetection,
     SheetBlock,
     SheetColumn,
     SheetDiagnostic,
     SheetLayout,
+    SheetNoteRow,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
     SkippedSheet,
     _block_text,
+    column_letters,
     sheet_block_record_id,
     sheet_records_extraction,
+    table_cells_metadata,
 )
 
 STRUCTURED_RECORDS_CONTENT_TYPE = "application/vnd.production-ready.structured-records+jsonl"
@@ -160,6 +175,14 @@ class DocumentLine(_Line):
     header_row: int | None = Field(
         default=None, ge=1, description="CSV の表頭の物理行（1 始まり）。"
     )
+    header: list[str] | None = Field(
+        default=None,
+        description=(
+            "CSV の表頭の行のセルの文字（原本の列の順。空のセルは空文字）。記録の ``fields`` の"
+            "``name`` は空・重複を補った名前で、表頭の文字はこちら。None は記録していない"
+            "（この項目より前の変換器の記録）。"
+        ),
+    )
     location_basis: Literal["original", "derived"] | None = Field(
         default=None,
         description=(
@@ -198,6 +221,15 @@ class RecordLocation(BaseModel):
     row_start: int = Field(ge=1)
     row_end: int = Field(ge=1)
     cell_range: str | None = Field(default=None, description="Excel のセル範囲（例: A5:F5）。")
+    record: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "CSV の記録の番号（RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から"
+            "数える。表計算のソフトで開いたときの行）。None は記録していない（この項目より前の"
+            "変換器の記録）。"
+        ),
+    )
 
 
 class RecordField(BaseModel):
@@ -225,6 +257,13 @@ class _RecordLine(_Line):
 class RowLine(_RecordLine):
     record_type: Literal["row"] = "row"
     fields: list[RecordField] = Field(default_factory=list)
+    notes: list[str] | None = Field(
+        default=None,
+        description=(
+            "Excel の表の行のセルが注記の印（例: ※1）で指す、表の下の注記の文"
+            "（無ければ省く。#3566）。"
+        ),
+    )
 
 
 class ProcedureStepLine(_RecordLine):
@@ -246,6 +285,14 @@ class FormFieldLine(_RecordLine):
 class PreambleLine(_RecordLine):
     record_type: Literal["preamble"] = "preamble"
     text: str
+
+
+class NoteLine(_RecordLine):
+    """Excel の表の下の注記の行（#3566）。``marker`` は先頭の注記の印（印の無い長い文は None）。"""
+
+    record_type: Literal["note"] = "note"
+    text: str
+    marker: str | None = None
 
 
 # ---- Word（形式別の拡張。source_type が doc / docx の行だけが使う）----------------------------
@@ -351,6 +398,7 @@ StructuredRecordLine = Annotated[
     | ProcedureStepLine
     | FormFieldLine
     | PreambleLine
+    | NoteLine
     | SectionLine
     | PassageLine,
     Field(discriminator="record_type"),
@@ -362,10 +410,11 @@ _LINE_ADAPTER: TypeAdapter[
     | ProcedureStepLine
     | FormFieldLine
     | PreambleLine
+    | NoteLine
     | SectionLine
     | PassageLine
 ] = TypeAdapter(StructuredRecordLine)
-ContentLine = RowLine | ProcedureStepLine | FormFieldLine | PreambleLine | PassageLine
+ContentLine = RowLine | ProcedureStepLine | FormFieldLine | PreambleLine | NoteLine | PassageLine
 ContextLine = SheetLine | SectionLine
 
 
@@ -472,7 +521,7 @@ def parse_structured_records(
                 return StructuredRecordsError("unsupported_record_type", number)
             sheet_ids.add(line.record_id)
         else:
-            if isinstance(line, ProcedureStepLine | FormFieldLine) and (
+            if isinstance(line, ProcedureStepLine | FormFieldLine | NoteLine) and (
                 document.source_type not in _SPREADSHEET_SOURCE_TYPES
             ):
                 return StructuredRecordsError("unsupported_record_type", number)
@@ -568,7 +617,7 @@ def sheet_records_to_lines(
     converter: str,
     converter_version: str,
 ) -> list[DocumentLine | SheetLine | ContentLine]:
-    """Excel の行の記録を JSONL の行にする（シートの文脈の行・前書き・記録の順）。
+    """Excel の行の記録を JSONL の行にする（シートの文脈の行・前書き・記録・表の下の注記の順）。
 
     記録の ID は要素の ID（`sheet_records_extraction`）と同じにし、JSONL の行と要素を対応させる。
     """
@@ -677,6 +726,23 @@ def sheet_records_to_lines(
                     section_path=block.section_path,
                     shape_cells=block.shape_cells or None,
                     fields=fields,
+                    notes=block.notes or None,
+                )
+            )
+        for note in sheet.notes:
+            lines.append(
+                NoteLine(
+                    record_id=f"{sheet_id}-r{note.row_number}",
+                    source_type=source_type,
+                    parent_id=sheet_id,
+                    location=RecordLocation(
+                        row_start=note.row_number,
+                        row_end=note.row_number,
+                        cell_range=note.cell_range,
+                    ),
+                    shape_cells=note.shape_cells or None,
+                    text=note.text,
+                    marker=note.marker,
                 )
             )
     return lines
@@ -737,6 +803,16 @@ def structured_records_to_sheet_records(
                     shape_cells=line.shape_cells or [],
                 )
             )
+        elif isinstance(line, NoteLine):
+            sheet.notes.append(
+                SheetNoteRow(
+                    row_number=line.location.row_start,
+                    cell_range=line.location.cell_range or "",
+                    text=line.text,
+                    marker=line.marker,
+                    shape_cells=line.shape_cells or [],
+                )
+            )
         elif isinstance(line, FormFieldLine):
             sheet.blocks.append(_form_field_block(line))
         elif isinstance(line, ProcedureStepLine):
@@ -761,6 +837,7 @@ def structured_records_to_sheet_records(
                     section_path=line.section_path,
                     values={item.name: item.value for item in line.fields},
                     shape_cells=line.shape_cells or [],
+                    notes=line.notes or [],
                 )
             )
     source_format: Literal["xlsx", "xls"] = "xls" if document.source_type == "xls" else "xlsx"
@@ -779,6 +856,41 @@ def structured_records_to_sheet_records(
 def _csv_row_text(line: RowLine, *, max_chars: int | None = _RECORD_TEXT_MAX_CHARS) -> str:
     text = " / ".join(f"{item.name}: {item.value}" for item in line.fields if item.value.strip())
     return text if max_chars is None else text[:max_chars]
+
+
+def _csv_table_metadata(line: RowLine, header: list[str] | None) -> dict[str, str | int]:
+    """CSV の 1 データ行の場所の基準とセルの座標（#3262）。
+
+    行の番号は記録の番号（RFC 7111 の行。表頭の記録を含めて先頭から数え、表計算のソフトで開いた
+    ときの行）で、``table_row`` と ``table_row_start`` / ``table_row_end`` にする（引用符の中の
+    改行を含む記録も 1 行）。原本の物理行の範囲は ``source_line_start`` / ``source_line_end``。
+    記録の番号を記録していない古い記録は行の番号もセルの座標も持たず、表頭のセルの文字を記録して
+    いない古い記録（``header`` が None）からは、補った列名で表頭を作らない。
+    """
+    metadata: dict[str, str | int] = {
+        ROW_BASIS_KEY: ROW_BASIS_CSV,
+        SOURCE_LINE_START_KEY: line.location.row_start,
+        SOURCE_LINE_END_KEY: line.location.row_end,
+    }
+    record = line.location.record
+    if record is None:
+        return metadata
+    metadata[TABLE_ROW_KEY] = record
+    metadata[TABLE_ROW_START_KEY] = record
+    metadata[TABLE_ROW_END_KEY] = record
+    if header is None:
+        return metadata
+    cells = [
+        (
+            column_letters(item.position),
+            [text] if item.position <= len(header) and (text := header[item.position - 1]) else [],
+        )
+        for item in line.fields
+        if item.value.strip()
+    ]
+    if cells:
+        metadata[TABLE_CELLS_KEY] = table_cells_metadata(cells)
+    return metadata
 
 
 def _csv_extraction(
@@ -816,6 +928,7 @@ def _csv_extraction(
                         if document.document.header_row is not None
                         else {}
                     ),
+                    **_csv_table_metadata(line, document.document.header),
                 },
             )
         )
@@ -905,6 +1018,14 @@ def _word_metadata(
         metadata["word_paragraph_end"] = location.paragraph_end
     if location.table_indices:
         metadata["word_table_indices"] = ",".join(str(item) for item in location.table_indices)
+    tables = [block for block in line.blocks if isinstance(block, WordTable)]
+    if len(tables) == 1:
+        # 1 つの表（か、大きい表を分けた部分）だけを含むまとまりは、その表の行の範囲を持つ
+        # （#3262）。複数の表を含むまとまりは、1 つの範囲で示せないので持たない。
+        metadata[ROW_BASIS_KEY] = ROW_BASIS_WORD_TABLE
+        metadata[TABLE_INDEX_KEY] = tables[0].table_index
+        metadata[TABLE_ROW_START_KEY] = tables[0].row_start
+        metadata[TABLE_ROW_END_KEY] = tables[0].row_end
     if line.part is not None:
         metadata["word_part_group"] = line.part.group_id
         metadata["word_part_index"] = line.part.index
@@ -1142,7 +1263,7 @@ def oversized_record_line(document: StructuredRecordsDocument) -> int | None:
             continue
         if isinstance(line, PassageLine):
             text = word_passage_text(line)
-        elif isinstance(line, PreambleLine):
+        elif isinstance(line, PreambleLine | NoteLine):
             text = line.text
         elif document.source_type not in _SPREADSHEET_SOURCE_TYPES:
             text = _csv_row_text(line, max_chars=None) if isinstance(line, RowLine) else ""
@@ -1161,6 +1282,7 @@ def oversized_record_line(document: StructuredRecordsDocument) -> int | None:
                     if isinstance(line, RowLine)
                     else {}
                 ),
+                notes=(line.notes or []) if isinstance(line, RowLine) else [],
             )
             text = _block_text(block, roles_by_sheet.get(str(line.parent_id)), max_chars=None)
         if len(text) > _RECORD_TEXT_MAX_CHARS:
@@ -1203,6 +1325,7 @@ __all__ = [
     "ContentLine",
     "ContextLine",
     "DocumentLine",
+    "NoteLine",
     "PassageLine",
     "PreambleLine",
     "ProcedureStepLine",

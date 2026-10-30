@@ -33,11 +33,20 @@ from pr_evaluation_scoring import (
     threshold_failures,
     unique_in_order,
 )
+from pydantic import ValidationError
+from rag_engine.evaluation.answer_eval import standard_scope_cache
+from rag_engine.resources.shared_cache import bypass_shared_cache
 
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oracle import OracleClient
-from app.config import OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS, Settings, get_settings
-from app.rag.answer_engine import evaluate_answer_record
+from app.config import (
+    OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
+    Settings,
+    enterprise_ai_default_model_id,
+    enterprise_ai_judge_model_id,
+    get_settings,
+)
+from app.rag.answer_engine import answer_model_of, evaluate_answer_record
 from app.rag.answer_failure import describe_answer_failure
 from app.rag.answer_metrics import (
     REFERENCE_ONLY_METRICS,
@@ -76,6 +85,7 @@ from app.schemas.evaluation import (
     EvaluationCaseResult,
     EvaluationCategorySummary,
     EvaluationEvidence,
+    EvaluationJudgeDiagnostics,
     EvaluationMetrics,
     EvaluationRagOverrides,
     EvaluationReasoningSummary,
@@ -131,6 +141,7 @@ class AnswerJudge(Protocol):
 
     戻り値は `evaluate_answer_record` の結果(status / passed / metrics / claim_checks /
     coverage_checks / requirement_coverage など。#680)。時間切れは TimeoutError を送出する。
+    ``judge_model_id`` は判定に使うモデル(#3574。runner が回答を作ったモデルから解決した ID)。
     """
 
     async def __call__(
@@ -141,6 +152,7 @@ class AnswerJudge(Protocol):
         standard_answer: str,
         citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
+        judge_model_id: str,
     ) -> Mapping[str, object]:
         """評価結果を返す。"""
 
@@ -169,8 +181,11 @@ async def judge_answer_with_standard(
     citations: Sequence[RetrievedChunk],
     timeout_seconds: float,
     settings: Settings | None = None,
+    judge_model_id: str | None = None,
 ) -> Mapping[str, object]:
     """回答を標準回答で評価し、結果を回答の記録にも保存する(保存は best-effort)。
+
+    ``judge_model_id`` は判定のモデル(#3574。省略時は `evaluate_answer_record` が解決する)。
 
     時間切れのときは結果を捨てる(#304 と同じ)。評価の thread には同じ期限を渡し、時間切れの後は
     LLM を呼ばない(#1422)。
@@ -184,6 +199,7 @@ async def judge_answer_with_standard(
             standard_answer,
             resolved,
             citations=citations,
+            judge_model_id=judge_model_id,
             timeout_seconds=limit,
         ),
         timeout=limit,
@@ -303,8 +319,39 @@ class EvaluationRunner:
         前と最後のケースの後に進捗を渡す（評価 job。#390）。
 
         `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
-        設定・用語・ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
+        設定・用語・同義語・回答ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
+
+        条の選択の process をまたぐ記録（#3507）は読みも書きもしない（同じ質問の再実行でも
+        実際の費用を測る。process の中の記録は回答と同じに使う）。標準回答の比較範囲は、
+        同じ評価の中（比較の pass を含む）で質問・標準回答・判定のモデルごとに 1 回だけ
+        固定する（#3570）。
         """
+        with bypass_shared_cache(), standard_scope_cache():
+            return await self._run(
+                cases,
+                top_k,
+                filters,
+                knowledge_base_ids,
+                thresholds,
+                rag_overrides,
+                search_answer_profile_id=search_answer_profile_id,
+                time_budget_seconds=time_budget_seconds,
+                progress=progress,
+            )
+
+    async def _run(
+        self,
+        cases: list[EvaluationCase],
+        top_k: int,
+        filters: dict[str, str] | None,
+        knowledge_base_ids: Sequence[str] | None,
+        thresholds: EvaluationThresholds | None,
+        rag_overrides: EvaluationRagOverrides | None,
+        *,
+        search_answer_profile_id: str | None,
+        time_budget_seconds: float | None,
+        progress: EvaluationProgressCallback | None,
+    ) -> EvaluationMetrics:
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
         pipeline = self._pipeline or RagPipeline(settings=effective_settings)
@@ -393,6 +440,8 @@ class EvaluationRunner:
         prior_queries: list[str] = []
         conditions: dict[str, str] = {}
         error_result: EvaluationCaseResult | None = None
+        # 回答に使った設定（プロファイルの pass はプロファイルの回答のモデルを当てた設定。#3574）。
+        answer_settings = effective_settings
         for turn_index, (query, turn_conditions) in enumerate(_case_queries(case)):
             conditions = {**conditions, **turn_conditions}
             request = SearchRequest(
@@ -425,6 +474,7 @@ class EvaluationRunner:
                         prior_queries[-EVALUATION_GUIDE_CONTEXT_TURNS:],
                     )
                     case_pipeline = self._pipeline or RagPipeline(settings=case_settings)
+                    answer_settings = case_settings
                 attempt_trace_ids = [turn_trace_id]
 
                 async def answer_once(
@@ -523,7 +573,13 @@ class EvaluationRunner:
             elapsed_ms(case_started_at) / 1000,
         )
         final_response = turn_runs[-1].response
-        judgement = await self._judge(case, final_response, deadline, caller)
+        judgement = await self._judge(
+            case,
+            final_response,
+            deadline,
+            caller,
+            judge_model_id=_judge_model_id(self._settings, final_response, answer_settings),
+        )
         return _case_result(case, final_response, judgement, turn_runs=turn_runs)
 
     async def _judge(
@@ -532,8 +588,13 @@ class EvaluationRunner:
         response: SearchResponse,
         deadline: float | None,
         caller: BoundedCaller | None = None,
+        *,
+        judge_model_id: str,
     ) -> EvaluationAnswerJudgement | None:
-        """標準回答のあるケースを LLM で評価する。標準回答が無ければ None。"""
+        """標準回答のあるケースを LLM で評価する。標準回答が無ければ None。
+
+        ``judge_model_id`` は判定のモデル(#3574)。判定を完了できなかったケースにも残す。
+        """
         if not (
             case.standard_answer
             or case.required_answer_points
@@ -560,7 +621,11 @@ class EvaluationRunner:
         timeout = ANSWER_JUDGE_TIMEOUT_SECONDS if remaining is None else remaining
         timeout = min(timeout, ANSWER_JUDGE_TIMEOUT_SECONDS)
         if timeout <= 0:
-            return EvaluationAnswerJudgement(status="timeout", message=ANSWER_JUDGE_TIMEOUT_MESSAGE)
+            return EvaluationAnswerJudgement(
+                status="timeout",
+                message=ANSWER_JUDGE_TIMEOUT_MESSAGE,
+                judge_model_id=judge_model_id,
+            )
         judge = self._answer_judge
         standard_answer = "\n".join(
             filter(
@@ -580,6 +645,7 @@ class EvaluationRunner:
                 standard_answer=standard_answer,
                 citations=response.citations,
                 timeout_seconds=timeout,
+                judge_model_id=judge_model_id,
             )
 
         try:
@@ -590,10 +656,20 @@ class EvaluationRunner:
         except BoundedCallAborted:
             raise
         except TimeoutError:
-            return EvaluationAnswerJudgement(status="timeout", message=ANSWER_JUDGE_TIMEOUT_MESSAGE)
+            return EvaluationAnswerJudgement(
+                status="timeout",
+                message=ANSWER_JUDGE_TIMEOUT_MESSAGE,
+                judge_model_id=judge_model_id,
+            )
         except Exception:  # noqa: BLE001 - 評価の失敗はケースの結果に残して続ける。
-            return EvaluationAnswerJudgement(status="error", message=ANSWER_JUDGE_ERROR_MESSAGE)
-        summary = summarize_answer_judgement(evaluation)
+            return EvaluationAnswerJudgement(
+                status="error",
+                message=ANSWER_JUDGE_ERROR_MESSAGE,
+                judge_model_id=judge_model_id,
+            )
+        summary = summarize_answer_judgement(evaluation).model_copy(
+            update={"judge_model_id": judge_model_id}
+        )
         if not standard_answer:
             return summary.model_copy(
                 update={
@@ -603,6 +679,19 @@ class EvaluationRunner:
                 }
             )
         return summary
+
+
+def _judge_model_id(settings: Settings, response: SearchResponse, answer_settings: Settings) -> str:
+    """ケースの回答を判定するモデル(#3574)。
+
+    回答を作ったモデルは回答の診断の ``models.llm.model_id``、無ければ回答に使った設定の既定の
+    テキストモデル(プロファイルの pass はプロファイルの回答のモデル)。共通のモデル設定の既定の
+    判定モデルで、判定のモデルに解決する(既定は既定のテキストモデル)。
+    """
+    answer_model = answer_model_of(response.diagnostics.answer) or enterprise_ai_default_model_id(
+        answer_settings
+    )
+    return enterprise_ai_judge_model_id(settings, answer_model)
 
 
 class _EvaluationStopped(Exception):
@@ -651,6 +740,7 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
         standard_answer: str,
         citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
+        judge_model_id: str,
     ) -> Mapping[str, object]:
         return await judge_answer_with_standard(
             trace_id=trace_id,
@@ -659,18 +749,33 @@ def _settings_judge(settings: Settings) -> AnswerJudge:
             citations=citations,
             timeout_seconds=timeout_seconds,
             settings=settings,
+            judge_model_id=judge_model_id,
         )
 
     return judge
+
+
+def _judge_diagnostics(evaluation: Mapping[str, object]) -> EvaluationJudgeDiagnostics | None:
+    """判定の診断（比較範囲の使い回し・再試行の回数）。記録が無い・形が違えば None。"""
+    value = evaluation.get("judge_diagnostics")
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return EvaluationJudgeDiagnostics.model_validate(value)
+    except ValidationError:
+        return None
 
 
 def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAnswerJudgement:
     """標準回答による評価の結果を、指標に使う要約へ変換する。"""
     status = str(evaluation.get("status") or "error")
     message = evaluation.get("message")
+    diagnostics = _judge_diagnostics(evaluation)
     if status != "completed":
         return EvaluationAnswerJudgement(
-            status=status, message=str(message) if message else ANSWER_JUDGE_ERROR_MESSAGE
+            status=status,
+            message=str(message) if message else ANSWER_JUDGE_ERROR_MESSAGE,
+            judge_diagnostics=diagnostics,
         )
     claims = [
         claim for claim in _mapping_list(evaluation.get("claim_checks")) if claim.get("status")
@@ -689,6 +794,7 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
         ),
         missing_content=any(str(check.get("status")) == "missing" for check in coverage_checks),
         message=str(message) if message else None,
+        judge_diagnostics=diagnostics,
     )
 
 
@@ -748,7 +854,7 @@ def summarize_case_results(
     *,
     thresholds: EvaluationThresholds | None = None,
 ) -> EvaluationMetrics:
-    """ケースの結果を集計して評価の結果にする（評価ランナーと、外部の回答の採点で共通。#1289）。
+    """ケースの結果を集計して評価の結果にする（評価ランナーと `score_case_answers` で共通）。
 
     指標は成功したケースのうち測れたものだけの平均。失敗したケースや、標準回答で評価できなかった
     ケースがあれば合格にしない。
@@ -786,6 +892,7 @@ def summarize_case_results(
             thresholds=_threshold_values(thresholds),
             values=aggregate_values,
         ),
+        applied_thresholds=_threshold_values(thresholds),
         threshold_failures=[
             EvaluationThresholdFailure(
                 metric=item.metric, actual=item.actual, threshold=item.threshold
@@ -804,10 +911,12 @@ def score_case_answers(
     answers: Sequence[tuple[SearchResponse, Mapping[str, str]]],
     judgement: EvaluationAnswerJudgement | None = None,
 ) -> EvaluationCaseResult:
-    """外部で作った回答（Agent の Run など。#1289）を、評価ランナーと同じ採点にかける。
+    """得た RAG の回答を、評価ランナーと同じ採点にかける（ケースの採点の入口）。
 
     `answers` は最初の質問から順の（回答, その発話までに渡した既知の条件）。採点（対応・手順と別解・
     危険な回答・条件・正解の文書・必要な根拠）は `EvaluationRunner.run` のケースと同じ関数で行う。
+    製品横断の評価（業務 Agent の Run の採点）は suite（`suite/evaluation`。#3240）が持ち、ここは
+    RAG の回答（`SearchResponse`）だけを扱う。
     """
     if not answers:
         raise ValueError("採点する回答がありません。")
@@ -826,34 +935,6 @@ def _expected_case_decisions(case: EvaluationCase) -> list[str]:
                 expectation.expected_response_decision, expectation.expected_outcomes
             )
         }
-    )
-
-
-def case_error_result(
-    case: EvaluationCase,
-    *,
-    trace_id: str,
-    elapsed_ms: float,
-    error_type: str,
-    error_message: str,
-    error_stage: str | None = None,
-) -> EvaluationCaseResult:
-    """回答を得られなかったケースの結果（質問の本文は含めない。外部の回答の採点で使う。#1289）。"""
-    return EvaluationCaseResult(
-        case_id=case.id,
-        category=case.category,
-        split=case.split,
-        reasoning_type=case.reasoning_type,
-        hops=case.hops,
-        trace_id=trace_id,
-        status="error",
-        relevant_document_ids=list(case.relevant_document_ids),
-        expected_decisions=_expected_case_decisions(case),
-        failure_reasons=["case_error"],
-        elapsed_ms=elapsed_ms,
-        error_type=error_type,
-        error_stage=error_stage,
-        error_message=error_message,
     )
 
 
@@ -988,13 +1069,18 @@ def evidence_matches_chunk(
     """引用の 1 つの chunk が根拠の条件（文書・ページ・シート・行・章節・本文）をすべて満たすか。
 
     #2065・#2086。`document_id` は chunk の文書の ID の代わりに比べる ID（同じ文書とみなす文書を
-    正解の文書の ID にそろえたもの）。照合は platform の採点の部品（#3240）。
+    正解の文書の ID にそろえたもの）。照合は platform の採点の部品（#3240）。行の条件は MCP の根拠の
+    場所と同じ行の番号の基準と行（`row_basis`・`row_start`・`row_end`）で照合する（#3547。suite の
+    評価と同じ）。
     """
+    # MCP の層は検索・回答の多くを読むので、使うときに読む（循環の import を避ける）。
+    from app.mcp.tools import evidence_row_location
+
     return evidence_matches(
         evidence,
         document_id=document_id if document_id is not None else chunk.document_id,
         text=chunk.text,
-        locator=chunk.metadata,
+        locator={**chunk.metadata, **evidence_row_location(dict(chunk.metadata))},
     )
 
 

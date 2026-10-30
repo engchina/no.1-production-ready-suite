@@ -60,7 +60,13 @@ def _result(steps: list[dict[str, Any]], *, valid: bool = True) -> dict[str, Any
 
 
 def _step(step_id: str, title: str, status: str, *, required: bool = True) -> dict[str, Any]:
-    return {"step_id": step_id, "title": title, "required": required, "status": status}
+    return {
+        "step_id": step_id,
+        "title": title,
+        "required": required,
+        "status": status,
+        "validation": {"body_coverage": {"execution": "completed", "status": "missing"}},
+    }
 
 
 def _combined(*results: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -122,8 +128,9 @@ def test_unexplained_steps_are_listed_with_marked_paragraphs() -> None:
     body, section = published.split(f"\n\n**{REVIEW_HEADING}**\n\n")
     assert body == ANSWER
     assert "- 根拠で確かめられない: 「2. 最後は保存ボタンで画面を閉じます。」" in section
-    assert f": {GAP.replace('内容の確定', '値の登録')}" in section
-    assert [item["code"] for item in content["answer_warnings"]] == ["guide_check"]
+    # 手順の資料未取得は説明不足の確認ではない。主張の未支持の印は独立して保つ。
+    assert GAP.replace("内容の確定", "値の登録") not in section
+    assert content["answer_warnings"] == []
     assert [(item["text"], item["state"]) for item in content["passage_marks"]] == [
         ("2. 最後は保存ボタンで画面を閉じます。", "unverified")
     ]

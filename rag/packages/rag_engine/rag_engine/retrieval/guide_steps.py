@@ -5,9 +5,9 @@
 
 - 検索文は「質問 + 手順の検索の手がかり」（手がかりが無ければ手順の題名）。
 - 手順が資料と頁（`references`。表計算の資料はシートの行。#2663）を持てば、その範囲に絞った検索も行い、当たった根拠は検索の順位に関係なく
-  回答の材料に入れる（`reference_max_chunks` まで）。
-- 回数は追加の検索の枠（`extra_retrieval.ExtraRetrievalBudget`）から取り、手順ごとの検索の上限を超えない。
-  まず各手順に 1 回（参照があれば頁に絞った検索）を割り当て、残りで参照のある手順の絞らない検索をする。
+  回答の材料に入れる（必須対象ごとの最低1件と、`reference_max_chunks` 件の追加候補）。
+- 回数は追加の検索の合計枠から必須対象分を先に確保する。各必須対象に最大1回の取得機会を割り当て、
+  残りで補助検索・任意手順の検索を種類別の上限まで行う。候補の取得は範囲の読了や意味支持を保証しない。
 
 検索と並べ替えは既存の hybrid 検索を使い、モデル（LLM）は呼ばない。足す根拠は既存の根拠を追い出さない
 （呼び出し側が併合する）。
@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from time import monotonic
@@ -22,7 +24,7 @@ from typing import Any, Literal
 
 # 2: 手順ごとの検索をしなかった手順（unsearched_step_ids）と、手順の参照の頁に当たる根拠の数（referenced_count）を
 #    足した（#2706）。
-GUIDE_STEP_TRACE_SCHEMA_VERSION = 2
+GUIDE_STEP_TRACE_SCHEMA_VERSION = 3
 # 1 手順の検索文に足す手がかりの上限。
 MAX_STEP_HINTS = 5
 
@@ -109,6 +111,7 @@ class GuidePlan:
     handoff_conditions: tuple[str, ...] = ()
     approval_required: bool = False
     approval_note: str = ""
+    branch_notes: tuple[str, ...] = ()
 
     @property
     def reference_ranges(self) -> tuple[tuple[str, int | None, int | None], ...]:
@@ -132,6 +135,31 @@ class GuidePlan:
     def step_terms(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
         """手順ごとの検索の手がかり（手順 id, 手がかりの列）。回答の item を手順に対応付ける語に使う（#2649）。"""
         return tuple((step.step_id, step.retrieval_hints[:MAX_STEP_HINTS]) for step in self.steps if step.retrieval_hints)
+
+    @property
+    def task_scope(self) -> tuple[dict[str, Any], ...]:
+        """分岐確定後の回答範囲。根拠の取得・支持状態とは独立に全手順を保持する。"""
+        contracts = {contract["step_id"]: contract for contract in self.step_contracts}
+        return tuple(
+            {
+                "guide_id": self.guide_id,
+                "revision": self.revision,
+                "step_id": step.step_id,
+                "title": step.title,
+                "required": step.required,
+                "depends_on": list(step.depends_on),
+                "purpose": step.purpose,
+                "evidence_requirements": list(step.evidence_requirements),
+                "done_when": step.done_when,
+                "requirements": contracts.get(step.step_id, {}).get(
+                    "requirements",
+                    [{"id": f"{step.step_id}:0", "text": step.done_when or step.title, "kind": "completion"}]
+                    if step.done_when or step.title
+                    else [],
+                ),
+            }
+            for step in self.steps
+        )
 
     @property
     def step_contracts(self) -> tuple[dict[str, Any], ...]:
@@ -212,6 +240,7 @@ class GuidePlan:
             handoff_conditions=tuple(str(item) for item in notices.get("handoff_conditions") or () if str(item).strip()),
             approval_required=notices.get("approval_required") is True,
             approval_note=str(notices.get("approval_note") or ""),
+            branch_notes=tuple(str(item).strip() for item in notices.get("branch_notes") or () if str(item).strip()),
         )
 
 
@@ -227,6 +256,10 @@ class StepSearch:
     expansion_records: tuple[Any, ...] = ()
     elapsed_ms: int = 0
     error: str = ""
+    lane: Literal["required", "optional"] = "optional"
+    target_id: str = ""
+    owner_ids: tuple[str, ...] = ()
+    reused: bool = False
 
 
 def step_queries(question: str, step: GuideStep) -> tuple[str, tuple[str, ...]]:
@@ -375,6 +408,20 @@ def select_step_parents(
         if key not in keys:
             keys.append(key)
 
+    # 必須の最少一候補は先に確保する。任意の追加候補だけを種類別上限で制限する。
+    for result in results:
+        if result.lane != "required":
+            continue
+        for parent in result.parents[:1]:
+            key = _key(parent)
+            if not key:
+                continue
+            for owner in result.owner_ids or (result.step_id,):
+                link(owner, key)
+            if key not in seen:
+                seen.add(key)
+                added.append((result.step_id, result.kind, parent))
+
     per_step = max(0, int(chunks_per_step))
     for result in results:
         if result.kind != "step":
@@ -387,13 +434,14 @@ def select_step_parents(
             if not key:
                 continue
             taken += 1
-            link(result.step_id, key)
+            for owner in result.owner_ids or (result.step_id,):
+                link(owner, key)
             if key not in seen:
                 seen.add(key)
                 added.append((result.step_id, "step", parent))
 
     queues = [list(result.parents) for result in results if result.kind == "reference"]
-    owners = [result.step_id for result in results if result.kind == "reference"]
+    owners = [result.owner_ids or (result.step_id,) for result in results if result.kind == "reference"]
     pinned = 0
     limit = max(0, int(reference_max_chunks))
     while pinned < limit and any(queues):
@@ -403,11 +451,12 @@ def select_step_parents(
                 key = _key(parent)
                 if not key:
                     continue
-                link(owners[index], key)
+                for owner in owners[index]:
+                    link(owner, key)
                 if key in seen:
                     continue
                 seen.add(key)
-                added.append((owners[index], "reference", parent))
+                added.append((owners[index][0], "reference", parent))
                 pinned += 1
                 break
             if pinned >= limit:
@@ -419,6 +468,10 @@ __all__ = [
     "GUIDE_STEP_TRACE_SCHEMA_VERSION",
     "GuidePageRange",
     "GuidePlan",
+    "RequiredGuideTarget",
+    "required_guide_targets",
+    "run_required_guide_searches",
+    "target_records",
     "GuideSheetRange",
     "GuideStep",
     "GuideStepReference",
@@ -431,3 +484,213 @@ __all__ = [
     "step_queries",
     "unsearched_steps",
 ]
+
+
+@dataclass(frozen=True)
+class RequiredGuideTarget:
+    """分岐後の必須の取得対象。参照の和集合ではなく一つの範囲を持つ。"""
+
+    target_id: str
+    steps: tuple[GuideStep, ...]
+    scope_filter: Mapping[str, Any] | None = None
+
+    @property
+    def owner_ids(self) -> tuple[str, ...]:
+        return tuple(step.step_id for step in self.steps)
+
+    @property
+    def kind(self) -> SearchKind:
+        return "reference" if self.scope_filter is not None else "step"
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "target_id": self.target_id,
+            "step_ids": list(self.owner_ids),
+            "kind": self.kind,
+            "filter": dict(self.scope_filter) if self.scope_filter is not None else None,
+            "scope_coverage": "unknown",
+            "semantic_support": "not_run",
+        }
+
+
+def required_guide_targets(plan: GuidePlan) -> tuple[RequiredGuideTarget, ...]:
+    """同じ明示範囲だけ共有し、参照なしの検索目的は手順ごとに保持する。"""
+    groups: dict[str, tuple[dict[str, Any] | None, list[GuideStep]]] = {}
+    for step in plan.steps:
+        if not step.required:
+            continue
+        filters: list[dict[str, Any] | None] = list(step.page_filters()) or [None]
+        for scope in filters:
+            identity = json.dumps(scope, sort_keys=True, ensure_ascii=False) if scope is not None else "step:" + step.step_id
+            if identity not in groups:
+                groups[identity] = (scope, [])
+            if step not in groups[identity][1]:
+                groups[identity][1].append(step)
+    return tuple(
+        RequiredGuideTarget("required:" + hashlib.sha256(key.encode()).hexdigest()[:20], tuple(steps), scope)
+        for key, (scope, steps) in groups.items()
+    )
+
+
+def _original_body(record: Any) -> str:
+    from rag_engine.parsing.structural_text import structural_only
+
+    body = str(getattr(record, "body_text", "") or getattr(record, "text", "") or "").strip()
+    return body if body and not structural_only(body) else ""
+
+
+def target_records(target: RequiredGuideTarget, records: Iterable[Any]) -> tuple[Any, ...]:
+    """対象の文書と位置に当たる原文候補。本文の支持や範囲全体の読了は判定しない。"""
+    found = []
+    for record in records:
+        if not _original_body(record):
+            continue
+        scope = target.scope_filter
+        if scope is None:
+            found.append(record)
+            continue
+        metadata = getattr(record, "metadata", {}) or {}
+        if not isinstance(metadata, Mapping):
+            continue
+        if str(metadata.get("document_id") or "") != str(scope.get("document_id") or ""):
+            continue
+        if scope.get("sheet_name"):
+            location = metadata.get("sheet_location") or {}
+            if not isinstance(location, Mapping):
+                continue
+            if location.get("sheet_name") != scope["sheet_name"]:
+                continue
+            if scope.get("row_start") is not None:
+                start, end = location.get("row_start"), location.get("row_end") or location.get("row_start")
+                if (
+                    type(start) is not int
+                    or type(end) is not int
+                    or start > int(scope.get("row_end") or scope["row_start"])
+                    or end < int(scope["row_start"])
+                ):
+                    continue
+        elif scope.get("page_start") is not None:
+            located = _record_pages(record)
+            if located is None or located[1] > int(scope.get("page_end") or scope["page_start"]) or located[2] < int(scope["page_start"]):
+                continue
+        found.append(record)
+    return tuple(found)
+
+
+def _represented_scope(target: RequiredGuideTarget, records: Sequence[Any]) -> bool:
+    """各位置に原文候補がある場合だけ再取得を省く。文書・シート全体は推定しない。"""
+    scope = target.scope_filter
+    if scope is None or not records:
+        return False
+    row = "sheet_name" in scope
+    lower = scope.get("row_start" if row else "page_start")
+    if type(lower) is not int:
+        return False
+    upper = int(scope.get("row_end" if row else "page_end") or lower)
+    intervals = []
+    for record in records:
+        if row:
+            metadata = getattr(record, "metadata", {}) or {}
+            if not isinstance(metadata, Mapping):
+                continue
+            value = metadata.get("sheet_location") or {}
+            if not isinstance(value, Mapping):
+                continue
+            a, b = value.get("row_start"), value.get("row_end") or value.get("row_start")
+        else:
+            located = _record_pages(record)
+            if located is None:
+                continue
+            _doc, a, b = located
+        if type(a) is int and type(b) is int and a <= b:
+            intervals.append((a, b))
+    cursor = lower
+    for a, b in sorted(intervals):
+        if a > cursor:
+            break
+        cursor = max(cursor, b + 1)
+    return cursor > upper
+
+
+def run_required_guide_searches(
+    question: str,
+    targets: Sequence[RequiredGuideTarget],
+    *,
+    budget: Any,
+    existing_records: Sequence[Any],
+    deadline_seconds: float,
+    retrieve: Callable[[str, tuple[str, ...], list[dict[str, Any]]], Any],
+    clock: Callable[[], float] = monotonic,
+) -> tuple[list[StepSearch], list[dict[str, Any]], str]:
+    """有限の対象へ一回だけ取得機会を割り当てる。失敗も実際の枠を消費する。"""
+    from rag_engine.retrieval.context_builder import ContextParentEvidence
+
+    reusable = {target.target_id: target_records(target, existing_records) for target in targets}
+    reused = {target.target_id for target in targets if _represented_scope(target, reusable[target.target_id])}
+    # 先頭の対象に枠を固定しない。再利用後に残る全対象へ同じ物理枠を回す。
+    budget.reserve_required(len(targets) - len(reused))
+    results: list[StepSearch] = []
+    states: list[dict[str, Any]] = []
+    start = clock()
+    stop = ""
+    for target in targets:
+        state = {
+            **target.to_payload(),
+            "execution": "not_run",
+            "acquisition": "unknown",
+            "candidate_source_ids": [],
+            "retained_source_ids": [],
+            "retained_body_chars": 0,
+        }
+        text, queries = step_queries(question, target.steps[0])
+        parents: tuple[Any, ...] = ()
+        expansion: tuple[Any, ...] = ()
+        error = ""
+        elapsed = 0
+        is_reused = target.target_id in reused
+        if is_reused:
+            parents = tuple(
+                ContextParentEvidence(record=record, role="synthesis_parent", reason="guide_required_reuse")
+                for record in reusable[target.target_id]
+            )
+            state.update(execution="reused", acquisition="candidate_available")
+        elif clock() - start >= deadline_seconds:
+            stop = "deadline"
+            state["reason"] = "deadline"
+        elif not budget.take_required():
+            stop = stop or "required_budget_exhausted"
+            state["reason"] = "required_budget_exhausted"
+        else:
+            began = clock()
+            try:
+                context = retrieve(text, queries, [dict(target.scope_filter)] if target.scope_filter is not None else [])
+                candidates = tuple(getattr(context, "evidence_tree", ()) or ())
+                parents = tuple(parent for parent in candidates if target_records(target, [parent.record]))
+                expansion = tuple(getattr(context, "expansion_records", ()) or ())
+                state.update(execution="completed", acquisition="candidate_available" if parents else "no_candidates")
+            except Exception as exc:  # noqa: BLE001 - 一対象の失敗は他の対象を消さない。
+                error = type(exc).__name__
+                state.update(execution="error", reason=error)
+            elapsed = int((clock() - began) * 1000)
+        if state["execution"] != "not_run":
+            results.append(
+                StepSearch(
+                    target.owner_ids[0],
+                    target.kind,
+                    text,
+                    queries,
+                    parents,
+                    expansion,
+                    elapsed,
+                    error,
+                    "required",
+                    target.target_id,
+                    target.owner_ids,
+                    is_reused,
+                )
+            )
+        state["candidate_source_ids"] = list(dict.fromkeys(_key(parent) for parent in parents if _key(parent)))
+        state["elapsed_ms"] = elapsed
+        states.append(state)
+    budget.reserve_required(0)
+    return results, states, stop

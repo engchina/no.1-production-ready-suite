@@ -21,6 +21,8 @@ from typing import Any
 from uuid import uuid4
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
+from pr_backend_core.observability.model_usage import UNMEASURED_SOURCE_ATTRIBUTE
 from pr_backend_core.observability.tracing import observed_span
 from pr_backend_core.oracle_dsn import dsn_without_tns_retry
 from pr_backend_core.oracle_pool import OraclePoolSize, SharedOraclePool
@@ -31,7 +33,6 @@ from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.settings import Settings
 
 from .models import (
-    SELECT_AI_SEED_DEFAULT,
     CsvImportColumn,
     ExplainPlanData,
     ExplainPlanOperation,
@@ -3907,6 +3908,10 @@ class OracleNl2SqlAdapter:
             attributes={
                 "db.system.name": "oracle.db",
                 "db.operation.name": "SELECT_AI",
+                **model_purpose_attributes(default="sql.generate"),
+                # DB の中でモデルを呼ぶので、アプリは利用量を受け取れない（実行履歴は数を作らず
+                # 未計測にする。#3543）。
+                UNMEASURED_SOURCE_ATTRIBUTE: "select_ai",
             },
         ):
             connection = (
@@ -4227,6 +4232,8 @@ class OracleNl2SqlAdapter:
         作れなければ、RUN_TOOL に切り替えずに失敗を返す（RUN_TOOL は team の agent・task の
         指示を通らず、利用者が選んだ方式と違う結果になるため）。RUN_TEAM の引数は公式の文書の
         ``(team_name, user_prompt, params)`` で、conversation_id は ``params`` の JSON に入れる。
+        team の profile が消えて RUN_TOOL に切り替えるときは、RUN_TEAM の span を失敗で閉じてから
+        RUN_TOOL を呼ぶ（2 つの呼び出しを生成の工程の下の兄弟にする。#3477）。
         """
         with observed_span(
             "oracle.select_ai",
@@ -4234,8 +4241,12 @@ class OracleNl2SqlAdapter:
             attributes={
                 "db.system.name": "oracle.db",
                 "db.operation.name": "SELECT_AI",
+                **model_purpose_attributes(default="sql.generate"),
+                # DB の中でモデルを呼ぶので、アプリは利用量を受け取れない（実行履歴は数を作らず
+                # 未計測にする。#3543）。
+                UNMEASURED_SOURCE_ATTRIBUTE: "select_ai_agent",
             },
-        ):
+        ) as team_trace:
             active_conversation_id = (conversation_id or "").strip()
             if not active_conversation_id:
                 active_conversation_id = self.create_agent_conversation(
@@ -4271,22 +4282,24 @@ class OracleNl2SqlAdapter:
                     message = str(exc)
                     if not self._looks_like_agent_profile_loss(message):
                         raise self._agent_runtime_error(exc) from exc
-            # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
-            # conversation_id は直接実行の名前になり、service が復旧を記録する。
-            fallback_tool = tool_name or self._tool_name_from_team_name(team_name)
-            logger.warning(
-                "Select AI Agent team の profile が見つからないため RUN_TOOL に切り替えます。",
-                extra={
-                    "event": "select_ai_agent_run_tool_fallback",
-                    "team_name": team_name,
-                    "tool_name": fallback_tool,
-                },
-            )
-            return self.run_select_ai_agent_tool(
-                tool_name=fallback_tool,
-                question=question,
-                call_timeout_seconds=call_timeout_seconds,
-            )
+                    team_trace.set_attributes({"error.type": type(exc).__name__})
+                    team_trace.set_status("failed")
+        # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
+        # conversation_id は直接実行の名前になり、service が復旧を記録する。
+        fallback_tool = tool_name or self._tool_name_from_team_name(team_name)
+        logger.warning(
+            "Select AI Agent team の profile が見つからないため RUN_TOOL に切り替えます。",
+            extra={
+                "event": "select_ai_agent_run_tool_fallback",
+                "team_name": team_name,
+                "tool_name": fallback_tool,
+            },
+        )
+        return self.run_select_ai_agent_tool(
+            tool_name=fallback_tool,
+            question=question,
+            call_timeout_seconds=call_timeout_seconds,
+        )
 
     def run_select_ai_agent_tool(
         self,
@@ -4301,6 +4314,10 @@ class OracleNl2SqlAdapter:
             attributes={
                 "db.system.name": "oracle.db",
                 "db.operation.name": "SELECT_AI",
+                **model_purpose_attributes(default="sql.generate"),
+                # DB の中でモデルを呼ぶので、アプリは利用量を受け取れない（実行履歴は数を作らず
+                # 未計測にする。#3543）。
+                UNMEASURED_SOURCE_ATTRIBUTE: "select_ai_agent",
             },
         ):
             payload = json.dumps(
@@ -4366,9 +4383,6 @@ class OracleNl2SqlAdapter:
             "annotations": True,
             "comments": True,
             "constraints": True,
-            # AI profile の seed 属性（#1434）。業務プロファイルから作る profile は
-            # `build_select_ai_profile_attributes` が業務プロファイルの値を入れる。
-            "seed": SELECT_AI_SEED_DEFAULT,
             "object_list": self._object_list(allowed_tables),
         }
         if self.settings.nl2sql_select_ai_credential_name:

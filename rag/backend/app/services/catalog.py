@@ -21,7 +21,7 @@ from typing import Literal
 from app.config import Settings
 
 # 工程の並びはサイドナビ(ファイル準備 → 文書解析)と同じ。画面の工程の並び・名前はフロントの
-# nav-config.ts が正本(#638)。検索インデックス・関係情報の構築・安全チェック・評価の基準の段は
+# nav-config.ts が正本(#638)。検索インデックス・文書構造索引の構築・安全チェック・評価の基準の段は
 # backend の中で動き、サービスを持たない(#3218)。
 ServiceCategory = Literal[
     "preprocess",
@@ -198,13 +198,8 @@ def is_allowed_systemd_unit(unit: str) -> bool:
 
 
 def is_dev_mode(settings: Settings) -> bool:
-    """local 環境が dev か判定する。
-
-    ``RAG_ENVIRONMENT`` を流用し、``prod``/``production`` 以外は dev とみなす
-    (readiness の production 判定と整合)。dev/prod とも systemd の unit で起動/停止する(#286)。
-    dev は起動/停止を自動で有効にする。
-    """
-    return settings.environment.strip().lower() not in {"prod", "production"}
+    """ローカル環境だけでサービス制御を自動的に有効にする。"""
+    return settings.environment == "local"
 
 
 def resolve_service_base_url(settings: Settings, url_field: str) -> str:

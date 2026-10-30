@@ -9,6 +9,8 @@ import {
 } from "@/lib/answer-diagnostics";
 import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
 import { t } from "@/lib/i18n";
+import { validationExecutionBadge } from "@/lib/answer-validation";
+import { CragEvidenceDetails } from "./CragEvidenceDetails";
 import { AnswerGuideConditions } from "./AnswerGuideConditions";
 import { extractionFieldConditionLabel } from "./extraction-field-filters";
 
@@ -23,8 +25,11 @@ export function AnswerDetailsPanel({
   title,
   showAutoFieldFilter = true,
   showNotices = true,
+  validationExecution,
 }: {
   diagnostics: unknown;
+  /** 保存済みの実行状態。診断本文に無い旧記録でも、現在の設定から推定しない。 */
+  validationExecution?: string | null;
   /** 見出し。省略すると見出しを出さない（「処理の経過」の中の「処理の詳細」）。 */
   title?: string;
   /** 質問から読み取った条件（#652）を出すか。RAG 検索は外せるチップで出すので出さない。 */
@@ -35,6 +40,7 @@ export function AnswerDetailsPanel({
   const data = parseAnswerDiagnostics(diagnostics);
   if (!data) return null;
   const outcome = outcomeBadge(data.outcome);
+  const validation = validationExecutionBadge(validationExecution) ?? validationExecutionBadge(data.validation?.execution);
   const models = [
     data.models.llm
       ? {
@@ -44,12 +50,11 @@ export function AnswerDetailsPanel({
           title: data.models.llm.modelId,
         }
       : null,
-    data.models.vision
+    data.models.attachedImages
       ? {
-          key: "vision",
-          label: t("search.answerDetails.model.vision"),
-          value: data.models.vision.label,
-          title: data.models.vision.modelId,
+          key: "attachedImages",
+          label: t("search.answerDetails.model.attachedImages"),
+          value: t("search.answerDetails.model.attachedImagesValue", { count: data.models.attachedImages }),
         }
       : null,
     data.models.embedding
@@ -175,6 +180,15 @@ export function AnswerDetailsPanel({
           {t("search.answerDetails.rewritten", { question: data.rewrittenQuestion })}
         </p>
       ) : null}
+      {validation ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="answer-validation-status">
+          <span className="text-fg-muted">{t("search.answerDetails.validation.title")}</span>
+          <span title={[data.validation?.status, data.validation?.reason].filter(Boolean).join(": ")}>
+            <StatusBadge {...validation} />
+          </span>
+        </div>
+      ) : null}
+      {data.crag ? <CragEvidenceDetails data={data.crag} /> : null}
       {data.insufficientReason ? (
         <p className="text-xs leading-relaxed text-fg-muted">
           {t("search.answerDetails.insufficient", { reason: data.insufficientReason })}

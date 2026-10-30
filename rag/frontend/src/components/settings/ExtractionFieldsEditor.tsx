@@ -1,6 +1,5 @@
 import {
   Button,
-  FormGrid,
   FormSkeleton,
   FormStatus,
   SelectField,
@@ -224,10 +223,9 @@ export function ExtractionFieldsForm({
           {t("settings.extractionFields.none")}
         </p>
       ) : (
-        // 項目の行はフォームの最大幅まで。名前は md・説明は残りの幅・値の型は sm（#1891）。
+        // 表形式の定義の行は全幅。名前は md・型は sm を保ち、説明に残りの幅を使う。
         // 1 行に 1 項目の欄を並べる表の形の編集の行なので、説明の欄（残りの幅）は欄の幅の段の検査
         // （findFieldsOffWidthScale）の対象から外す（表の中の欄と同じ扱い）。
-        <FormGrid columns={1}>
           <ol className="space-y-2" data-field-width-exempt="">
             {rows.map((row, index) => {
               const error = visibleErrors[row.key];
@@ -285,7 +283,6 @@ export function ExtractionFieldsForm({
               );
             })}
           </ol>
-        </FormGrid>
       )}
       <div className="flex flex-wrap items-center gap-2">
         <Button

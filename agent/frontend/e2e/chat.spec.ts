@@ -1,7 +1,6 @@
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
-import { SYNTHETIC_MODEL } from "./fixtures/chat-progress-events";
 
 // #768: 業務利用者のチャット。会話（スレッド）の続き・出典・処理の経過のツールの段・承認待ちを確かめる。
 
@@ -446,9 +445,9 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
   await page.getByRole("dialog", { name: "会話の履歴" }).getByText("契約の更新条件は？").click();
 
   const turn = page.getByTestId("chat-turn-run-chat-seed");
-  // 1 文目は止まった段（失敗した span の名前。モデルの呼び出しは種類が決まる前に失敗したので共通の名前とモデル名。
+  // 1 文目は止まった段。用途のない旧モデル記録は未記録の表示名を使う。
   // #2342・#3226）。本文は失敗のイベントの文。
-  await expect(turn.getByRole("alert")).toContainText(`「モデルの呼び出し · ${SYNTHETIC_MODEL}」で処理が止まりました。`);
+  await expect(turn.getByRole("alert")).toContainText("「モデルを呼び出す（用途の記録なし）」で処理が止まりました。");
   await expect(turn.getByText("モデルの呼び出しに失敗しました（BadRequestError）。")).toBeVisible();
   // 3 製品共通の失敗のカード: 次の操作と、開いた「詳細」（エラーコード・実行 ID。#2342）。
   const failure = turn.getByTestId("chat-failure-run-chat-seed");
@@ -456,6 +455,8 @@ test("実行に失敗した回答は理由を出す", async ({ page, mockApi }) 
   await expect(failure.locator("details")).toHaveAttribute("open", "");
   await expect(failure.locator("details")).toContainText("runtime.model_failed");
   await expect(failure.locator("details")).toContainText("run-chat-seed");
+  // 回答の本文の無い失敗の枠には見出し「回答」を出さない（#3433）。
+  await expect(turn.getByTestId("chat-answer-heading")).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 

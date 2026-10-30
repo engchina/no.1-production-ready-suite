@@ -1,10 +1,11 @@
-import { Disclosure, TextareaField } from "@production-ready/ui";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, Disclosure, TextareaField } from "@production-ready/ui";
 import { Fragment } from "react";
+import { FileText } from "lucide-react";
 
 import type { AnswerPromptStage } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 
-import { AnswerPromptCard } from "./AnswerPromptEditor";
+import { AnswerPromptCard, AnswerPromptPanel } from "./AnswerPromptEditor";
 import { groupStagesByPhase } from "./answer-prompt.logic";
 
 /**
@@ -21,13 +22,15 @@ export function AnswerPromptStages({
   descriptionKey?: I18nKey;
 }) {
   return (
-    <section className="space-y-4" aria-labelledby="answer-prompt-stages-title">
-      <div className="space-y-1">
-        <h2 id="answer-prompt-stages-title" className="text-sm font-semibold text-fg">
+    <Card role="region" aria-labelledby="answer-prompt-stages-title" data-testid="answer-prompt-stages-card">
+      <CardHeader>
+        <CardTitle id="answer-prompt-stages-title" className="flex items-center gap-2">
+          <FileText size={16} className="text-accent-fg" aria-hidden />
           {t(titleKey)}
-        </h2>
-        <p className="text-xs leading-relaxed text-fg-muted">{t(descriptionKey)}</p>
-      </div>
+        </CardTitle>
+        <CardDescription>{t(descriptionKey)}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
       {groupStagesByPhase(stages).map((group, index) => {
         const headingId = `answer-prompt-phase-${index}`;
         return (
@@ -51,7 +54,11 @@ export function AnswerPromptStages({
                     data-testid={`answer-prompt-stage-${stage.id}`}
                   >
                     {stage.prompts.map((part) => (
-                      <TextareaField
+                      part.prompt_key ? <AnswerPromptPanel
+                        key={part.id}
+                        promptKey={part.prompt_key}
+                        fieldLabel={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+                      /> : <TextareaField
                         key={part.id}
                         id={`answer-prompt-${stage.id}-${part.id}`}
                         label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
@@ -69,6 +76,7 @@ export function AnswerPromptStages({
           </section>
         );
       })}
-    </section>
+      </CardContent>
+    </Card>
   );
 }

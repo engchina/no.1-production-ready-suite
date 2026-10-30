@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerPromptError, groupStagesByPhase } from "./answer-prompt.logic";
+import { answerPromptError, groupStagesByPhase, isRetrievalPromptStage } from "./answer-prompt.logic";
 
 // #1010: 編集できるプロンプトは backend の validate_prompt と同じ規則で、送る前に欄の下へ出す。
 describe("編集できるプロンプトの欄の検証", () => {
@@ -52,4 +52,24 @@ describe("各段のプロンプトの区分ごとのまとめ", () => {
   it("空なら空", () => {
     expect(groupStagesByPhase([])).toEqual([]);
   });
+});
+
+
+describe("プロンプトの表示先", () => {
+  it("条件認識だけを回答プロンプトに置き、他の質問解釈は検索方法に残す", () => {
+    expect(isRetrievalPromptStage({ id: "support_guide_conditions", phase: "question" })).toBe(false);
+    for (const id of ["history_rewrite", "field_filter", "routing", "expansion"]) {
+      expect(isRetrievalPromptStage({ id, phase: "question" })).toBe(true);
+    }
+    expect(isRetrievalPromptStage({ id: "audit", phase: "audit" })).toBe(false);
+    expect(isRetrievalPromptStage({ id: "retrieval", phase: "retrieval" })).toBe(true);
+  });
+});
+
+
+it("単一括弧の入力テンプレートの差し込み口も保存前に検査する", () => {
+  expect(answerPromptError("## Step 1: {question}", "指示", [], ["{question}", "{context}"]))
+    .toBe("必須の placeholder がありません: {context}");
+  expect(answerPromptError("## Step 1: {question} {context}", "指示", [], ["{question}", "{context}"]))
+    .toBeNull();
 });

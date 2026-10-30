@@ -54,9 +54,12 @@ PROFILE_GLOBAL_QUERY_FIELDS = frozenset(
         "rerank_enabled",
         "auto_field_filter_enabled",
         "graph_expansion_enabled",
+        "graph_expansion_max_chunks",
         "screen_linking_enabled",
         "request_coverage_retrieval_enabled",
         "guide_step_retrieval_enabled",
+        "guide_step_max_queries",
+        "guide_step_deadline_seconds",
         "entity_expansion_enabled",
         "entity_expansion_max_chunks",
         "section_expansion_enabled",
@@ -202,8 +205,9 @@ def resolve_search_answer_profile_settings(
             update={"oci_enterprise_ai_default_text_model": config.answer_model_id}
         )
         applied = True
-    if config.language_pack:
+    if settings.rag_language_pack_overrides != config.language_pack:
         settings = settings.model_copy(update={"rag_language_pack_overrides": config.language_pack})
+    if config.language_pack:
         applied = True
     if config.contact_override:
         # 回答の注意書きの窓口（#2400）。検索・回答の挙動は変えないので applied にしない。

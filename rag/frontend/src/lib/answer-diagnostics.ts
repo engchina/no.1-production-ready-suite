@@ -1,6 +1,9 @@
 import { hasRunStepDetails, type RunStepDetailField, type RunStepDetails } from "@production-ready/ui";
 
 import type { ExtractionFieldCondition } from "@/components/search/extraction-field-filters";
+import { t } from "@/lib/i18n";
+import { parseCragDiagnostics, type CragDiagnostics } from "@/lib/crag-diagnostics";
+import { parseAnswerValidation } from "@/lib/answer-validation";
 
 /** 回答フローの診断(backend の diagnostics.answer)。 */
 /** 回答の対応（#1235。backend の diagnostics.answer.outcome）。 */
@@ -63,6 +66,8 @@ export type AnswerGuide = {
 };
 
 export type AnswerDiagnostics = {
+  validation: ReturnType<typeof parseAnswerValidation>;
+  crag: CragDiagnostics | null;
   /** 回答の対応（#1235）。古い記録など、無ければ null。 */
   outcome: AnswerOutcome | null;
   /** 回答に使った業務ガイド（#1238）。使っていなければ null。 */
@@ -97,10 +102,11 @@ export type AnswerDiagnostics = {
    */
   graphExpansion: { addedCount: number; status: string; graphAvailable: boolean | null; plannedCount: number; skippedExistingCount: number; entities: { name: string; addedCount: number }[] } | null;
   /**
-   * 使ったモデル（#649）。LLM（既定のテキストモデル）は質問の理解・拡張と回答の生成、vision は根拠の原画像を
-   * 添付して答えたときの既定の Vision モデル（添付しなければ null）、rerank は無効なら空。
+   * 使ったモデル（#649）。LLM（選んだ回答モデル）は質問の理解・拡張・回答の生成・監査のすべてに使う（#3444）。
+   * attachedImages はそのモデルへ添付した根拠の画像の件数（画像を読めないモデル・画像の無い根拠は 0）、rerank は
+   * 無効なら空。
    */
-  models: { llm: ModelRef | null; vision: ModelRef | null; embedding: string; rerank: string };
+  models: { llm: ModelRef | null; attachedImages: number; embedding: string; rerank: string };
   steps: {
     name: string;
     status: string;
@@ -179,6 +185,8 @@ export function parseAnswerDiagnostics(
     outcome: (ANSWER_OUTCOMES as readonly string[]).includes(outcome)
       ? (outcome as AnswerOutcome)
       : null,
+    crag: parseCragDiagnostics(raw.crag_attempts),
+    validation: parseAnswerValidation(raw.answer_validation),
     guide: parseGuide(raw.guide),
     guideLoadFailed: raw.guide_load_failed === true,
     confidence: String(raw.confidence ?? ""),
@@ -340,11 +348,34 @@ function parseModelRef(value: unknown): ModelRef | null {
   return modelId ? { modelId, label: String(raw.label ?? "") || modelId } : null;
 }
 
+function imageCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
+ * 回答モデルへ添付した根拠の画像の件数（#3444）。作成した直後の回答は配信の診断の `models.attached_images`、
+ * 保存した回答は会話のメッセージの `answer_attached_images`（回答の記録の診断の同じ値）から読む。
+ * 画像を添付しなかった回答・記録の無い回答は 0。
+ */
+export function answerAttachedImages(diagnostics: unknown, savedMessage: unknown): number {
+  const live = parseAnswerDiagnostics(diagnostics)?.models.attachedImages ?? 0;
+  return Math.max(live, imageCount(record(savedMessage).answer_attached_images));
+}
+
+/**
+ * 回答の見出し（「回答モデル: {名前}」。根拠の画像を添付した回答は「（画像も参照）」を添える。#3439・#3444）。
+ * チャットの列と RAG 検索の回答で同じ文言にする（#3488）。名前が無ければ null。
+ */
+export function answerModelHeading(label: string | null | undefined, attachedImages: number): string | null {
+  if (!label) return null;
+  return attachedImages > 0 ? t("chat.column.modelWithImages", { name: label }) : t("chat.column.model", { name: label });
+}
+
 function parseModels(value: unknown): AnswerDiagnostics["models"] {
   const raw = record(value);
   return {
     llm: parseModelRef(raw.llm),
-    vision: parseModelRef(raw.vision),
+    attachedImages: imageCount(raw.attached_images),
     embedding: String(raw.embedding ?? ""),
     rerank: String(raw.rerank ?? ""),
   };

@@ -294,7 +294,6 @@ export function ParserAdapterSettingsClient() {
         onSubmit={submit}
       />
       {/* 解析の後の Vision・項目抽出・章節木の全体の既定（#528）。Vision の読み取りの指示もこの中で編集する。 */}
-      <FeaturePromptDisclosure promptKey="external_ocr" />
       <PostParseSettingsCard settings={settings} />
     </PageBody>
   );
@@ -547,9 +546,6 @@ function OverviewCard({
               {t("settings.parserAdapters.legacyBackendNotice")}
             </p>
           ) : null}
-          <p className="text-xs leading-relaxed text-fg-muted">
-            {t("settings.parserAdapters.serviceBackend.note")}
-          </p>
         </div>
         <section className="space-y-3 border-t border-border pt-5">
           <div>
@@ -659,7 +655,7 @@ function ExternalConnectionCard({
   const clearApiKeyId = `external-parser-${backend}-clear-api-key`;
 
   return (
-    <div data-surface-tint="neutral" className="min-w-0 rounded-md border border-border bg-surface-hover p-4">
+    <div data-testid={`external-parser-connection-${backend}`} data-surface-tint="neutral" className="min-w-0 rounded-md border border-border bg-surface-hover p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h4 className="text-sm font-semibold text-fg">{backendLabel(backend)}</h4>
@@ -767,6 +763,7 @@ function ExternalConnectionCard({
           />
         ) : null}
       </div>
+      {backend === "dots_ocr" ? <div className="mt-4"><FeaturePromptDisclosure promptKey="external_ocr" /></div> : null}
     </div>
   );
 }

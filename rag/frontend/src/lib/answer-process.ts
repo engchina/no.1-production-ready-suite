@@ -37,28 +37,44 @@ const PLAIN_STEP_STATUSES = new Set(["", "complete", "completed", "done", "ok", 
  * 回数つきの工程（「文書検索（2回目）」）は回数を除いた名前で引き、「〈名前〉（2 回目）」にする。
  */
 const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
-  質問の理解: "answer.step.understandQuestion",
-  "用語・ルールの確認": "answer.step.glossary",
-  検索の準備確認: "answer.step.checkSearchReady",
-  質問拡張戦略: "answer.step.expandQuestion",
-  検索文と検索語の確定: "answer.step.decideQueries",
-  回答生成フロー: "answer.step.answerFlow",
+  "質問の理解": "answer.step.understandQuestion",
+  "用語・同義語の確認": "answer.step.terms",
+  "回答ルールの確認": "answer.step.rules",
+  "質問拡張戦略": "answer.step.expandQuestion",
+  "検索文と検索語の確定": "answer.step.decideQueries",
+  "回答生成フロー": "answer.step.answerFlow",
+  "根拠検索フロー": "answer.step.evidenceFlow",
   "検索語の再確定（書き換え後）": "answer.step.redecideKeywords",
-  文書検索: "answer.step.searchDocuments",
-  Rerank: "answer.step.rerank",
-  文書の選択: "answer.step.selectDocuments",
-  文書の選択の解除: "answer.step.unselectDocuments",
-  根拠確認: "answer.step.checkEvidence",
-  根拠確認の結論: "answer.step.evidenceConclusion",
-  補正検索の準備: "answer.step.prepareResearch",
-  文脈の追加: "answer.step.addContext",
-  画面の選択: "answer.step.selectScreens",
-  章節の拡張: "answer.step.expandSections",
-  要求ごとの根拠の確認: "answer.step.coverRequests",
-  回答に使う画像の確認: "answer.step.checkImages",
-  回答文の生成と根拠確認: "answer.step.generateAnswer",
-  是正: "answer.step.revise",
-  是正の打ち切り: "answer.step.stopRevising",
+  "文書検索": "answer.step.searchDocuments",
+  "Rerank": "answer.step.rerank",
+  "rerank.request": "answer.step.rerankRequest",
+  "文書の選択": "answer.step.selectDocuments",
+  "文書の選択の解除": "answer.step.unselectDocuments",
+  "根拠確認": "answer.step.checkEvidence",
+  "根拠確認の結論": "answer.step.evidenceConclusion",
+  "補正検索の準備": "answer.step.prepareResearch",
+  "文脈の追加": "answer.step.addContext",
+  "画面の選択": "answer.step.selectScreens",
+  "章節の拡張": "answer.step.expandSections",
+  "要求ごとの根拠の確認": "answer.step.coverRequests",
+  "回答に添付する画像": "answer.step.attachImages",
+  "回答文の生成と根拠確認": "answer.step.generateAnswer",
+  "是正": "answer.step.revise",
+  "是正の打ち切り": "answer.step.stopRevising",
+  "文書ごとの起点の上限": "answer.step.deferDocumentCandidates",
+  "条の選択": "answer.step.selectArticles",
+  "未回答の要求の探し直し": "answer.step.retrieveUnanswered",
+  "ベクトル検索": "answer.step.vectorSearch",
+  "全文検索": "answer.step.textSearch",
+  "検索対象のチャンクの読み込み": "answer.step.loadChunkPool",
+  "要約・抽出値の原文の読み込み": "answer.step.loadDerivedSource",
+  "前後の文脈の読み込み": "answer.step.loadSiblings",
+  "参照先の根拠の追加": "answer.step.expandReferences",
+  "実体・別名による検索拡張": "answer.step.expandEntities",
+  "文書構造による検索拡張": "answer.step.expandStructure",
+  "根拠の図の切り出し": "answer.step.prepareFigures",
+  "文書の分類と背景の読み込み": "answer.step.loadDocumentInfo",
+  "元の質問の検索": "answer.step.searchOriginalQuestion",
 };
 
 const STEP_ATTEMPT = /（(\d+)回目）$/;
@@ -81,12 +97,13 @@ export function answerStepDisplayName(name: string): string {
 
 /**
  * 段の利用者向けの名前（#3219 / #3226）。処理の経過の段の span（属性 `pr.stage`）の名前に使う。
- * パイプラインの段（全体を包む `answer` / `retrieval` を含む）と回答エンジンの工程名を引き、知らない段は undefined
+ * パイプラインの段（全体を包む `answer` / `evidence` / `retrieval` を含む）と回答エンジンの工程名を引き、知らない段は undefined
  * （処理の経過も trace も段の名前をそのまま出す）。
  */
 export function answerStageName(stage: string): string | undefined {
   const value = stage.trim();
   if (value === "answer") return t("search.stage.answer");
+  if (value === "evidence") return t("search.stage.evidence");
   if (value === "retrieval") return t("search.stage.retrieval");
   if (Object.prototype.hasOwnProperty.call(PIPELINE_STEP_LABEL, value)) return t(PIPELINE_STEP_LABEL[value]);
   return knownAnswerStepName(value);

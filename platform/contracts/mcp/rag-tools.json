@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1143,6 +1143,38 @@
                 "description": "表計算のシート名（#1221）。",
                 "title": "Sheet Name"
               },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table",
+                      "parsed_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。",
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。",
+                "title": "Table Index"
+              },
               "row_start": {
                 "anyOf": [
                   {
@@ -1153,7 +1185,7 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの開始の行（1 始まり）。",
+                "description": "開始の行（1 始まり。番号の基準は row_basis）。",
                 "title": "Row Start"
               },
               "row_end": {
@@ -1166,8 +1198,34 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの終了の行。",
+                "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -1216,7 +1274,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1554,6 +1612,38 @@
                 "description": "表計算のシート名（#1221）。",
                 "title": "Sheet Name"
               },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table",
+                      "parsed_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。",
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。",
+                "title": "Table Index"
+              },
               "row_start": {
                 "anyOf": [
                   {
@@ -1564,7 +1654,7 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの開始の行（1 始まり）。",
+                "description": "開始の行（1 始まり。番号の基準は row_basis）。",
                 "title": "Row Start"
               },
               "row_end": {
@@ -1577,8 +1667,34 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの終了の行。",
+                "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -1627,7 +1743,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1929,6 +2045,7 @@
               },
               "path": {
                 "description": "url の path（RAG の公開の起点に付け替えるときに使う）。",
+                "pattern": "^/api/figures/",
                 "title": "Path",
                 "type": "string"
               },
@@ -2002,6 +2119,38 @@
                 "description": "表計算のシート名（#1221）。",
                 "title": "Sheet Name"
               },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table",
+                      "parsed_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。",
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。",
+                "title": "Table Index"
+              },
               "row_start": {
                 "anyOf": [
                   {
@@ -2012,7 +2161,7 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの開始の行（1 始まり）。",
+                "description": "開始の行（1 始まり。番号の基準は row_basis）。",
                 "title": "Row Start"
               },
               "row_end": {
@@ -2025,8 +2174,34 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの終了の行。",
+                "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -2038,7 +2213,7 @@
                   }
                 ],
                 "default": null,
-                "description": "セル範囲（例: A3:F7）。",
+                "description": "表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。",
                 "title": "Cell Range"
               },
               "page_label_start": {
@@ -2119,7 +2294,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。",
+                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録・解析の表の 1 行）のとき、その行の番号（row_basis の番号）。複数のデータの行の根拠・Word の表・行の位置が分からない表は null。",
                 "title": "Table Row"
               },
               "table_cells": {
@@ -2176,6 +2351,7 @@
               "page_path_template": {
                 "anyOf": [
                   {
+                    "pattern": "^/api/source-previews/",
                     "type": "string"
                   },
                   {
@@ -2193,6 +2369,7 @@
               },
               "content_path": {
                 "description": "content_url の path。",
+                "pattern": "^/api/source-previews/",
                 "title": "Content Path",
                 "type": "string"
               },
@@ -2295,7 +2472,7 @@
             "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
             "properties": {
               "table_col": {
-                "description": "原本の列（表計算の列の記号。例: B）。",
+                "description": "列（表計算の列の記号。例: B。CSV・parsed_table は列の位置を同じ記号で示し、結合したセルは左の列）。",
                 "title": "Table Col",
                 "type": "string"
               },
@@ -2306,6 +2483,22 @@
                 },
                 "title": "Header Path",
                 "type": "array"
+              },
+              "bbox": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セルの領域 [x0, y0, x1, y1]（locator の bbox と同じ頁・座標。解析が出したときだけ）。",
+                "title": "Bbox"
               }
             },
             "required": [
@@ -2337,7 +2530,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2586,7 +2779,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2720,7 +2913,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2817,7 +3010,7 @@
                 "type": "null"
               }
             ],
-            "default": null,
+            "default": 50,
             "description": "検索する件数。",
             "title": "Top K"
           },
@@ -2836,8 +3029,8 @@
             "type": "boolean"
           },
           "evidence_limit": {
-            "default": 20,
-            "description": "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。省略時は検索する件数（top_k。省略時 20）と同じで、検索で当たった根拠を全部返す。",
+            "default": 50,
+            "description": "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。省略時は設定の検索する件数（top_k）を基準に、この件数の上限まで返し、検索で当たった根拠を全部返す。",
             "maximum": 50,
             "minimum": 1,
             "title": "Evidence Limit",
@@ -2945,6 +3138,27 @@
               "method"
             ],
             "title": "AutoSelectedProfile",
+            "type": "object"
+          },
+          "DegradedStep": {
+            "description": "失敗して縮退した任意の補助の処理。",
+            "properties": {
+              "kind": {
+                "description": "処理の種類（例: rerank・section_outline・reference_load）。",
+                "title": "Kind",
+                "type": "string"
+              },
+              "count": {
+                "description": "失敗した回数。",
+                "title": "Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "title": "DegradedStep",
             "type": "object"
           },
           "EvidenceImageRef": {
@@ -3068,6 +3282,38 @@
                 "description": "表計算のシート名（#1221）。",
                 "title": "Sheet Name"
               },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table",
+                      "parsed_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。",
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。",
+                "title": "Table Index"
+              },
               "row_start": {
                 "anyOf": [
                   {
@@ -3078,7 +3324,7 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの開始の行（1 始まり）。",
+                "description": "開始の行（1 始まり。番号の基準は row_basis）。",
                 "title": "Row Start"
               },
               "row_end": {
@@ -3091,8 +3337,34 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの終了の行。",
+                "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -3104,7 +3376,7 @@
                   }
                 ],
                 "default": null,
-                "description": "セル範囲（例: A3:F7）。",
+                "description": "表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。",
                 "title": "Cell Range"
               },
               "page_label_start": {
@@ -3185,7 +3457,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。",
+                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録・解析の表の 1 行）のとき、その行の番号（row_basis の番号）。複数のデータの行の根拠・Word の表・行の位置が分からない表は null。",
                 "title": "Table Row"
               },
               "table_cells": {
@@ -3350,7 +3622,7 @@
             "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
             "properties": {
               "table_col": {
-                "description": "原本の列（表計算の列の記号。例: B）。",
+                "description": "列（表計算の列の記号。例: B。CSV・parsed_table は列の位置を同じ記号で示し、結合したセルは左の列）。",
                 "title": "Table Col",
                 "type": "string"
               },
@@ -3361,6 +3633,22 @@
                 },
                 "title": "Header Path",
                 "type": "array"
+              },
+              "bbox": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セルの領域 [x0, y0, x1, y1]（locator の bbox と同じ頁・座標。解析が出したときだけ）。",
+                "title": "Bbox"
               }
             },
             "required": [
@@ -3491,7 +3779,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "照合した用語・ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。",
+                "description": "照合した用語・同義語と回答ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。",
                 "title": "Revision"
               },
               "matched_on": {
@@ -3531,7 +3819,7 @@
               },
               "load_failed": {
                 "default": false,
-                "description": "用語・ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。",
+                "description": "用語・同義語と回答ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。",
                 "title": "Load Failed",
                 "type": "boolean"
               }
@@ -3737,7 +4025,7 @@
                 "$ref": "#/$defs/EvidenceLocator"
               },
               "excerpt": {
-                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 20000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 24000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -3876,6 +4164,23 @@
                 "title": "Origin",
                 "type": "string"
               },
+              "table_binding": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "checkable",
+                      "not_checkable"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答の検査（回答の生成と rag_validate_answer）が、文の値を表の別の行・列の値と取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で確かめる / null=表の無い根拠。",
+                "title": "Table Binding"
+              },
               "superseded": {
                 "default": false,
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
@@ -3941,11 +4246,44 @@
             ],
             "title": "RagEvidence",
             "type": "object"
+          },
+          "ZeroEvidence": {
+            "description": "根拠が 0 件になった段。",
+            "properties": {
+              "stage": {
+                "description": "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と判定 / context=候補はあるが回答に渡す根拠が 0 件。",
+                "enum": [
+                  "retrieval",
+                  "filter",
+                  "evidence_check",
+                  "context"
+                ],
+                "title": "Stage",
+                "type": "string"
+              },
+              "candidate_count": {
+                "description": "検索の候補の件数。",
+                "title": "Candidate Count",
+                "type": "integer"
+              },
+              "rejected_count": {
+                "description": "根拠確認で外した候補の件数。",
+                "title": "Rejected Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stage",
+              "candidate_count",
+              "rejected_count"
+            ],
+            "title": "ZeroEvidence",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -3960,6 +4298,32 @@
             },
             "title": "Guardrail Warnings",
             "type": "array"
+          },
+          "guardrail_degraded": {
+            "default": false,
+            "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
+            "title": "Guardrail Degraded",
+            "type": "boolean"
+          },
+          "degraded_steps": {
+            "description": "失敗して縮退した任意の補助の処理（rerank・章節の目録・参照先の読み込みなど）。その処理を使わずに続けた結果（例: rerank の失敗は検索の順のまま）で、空なら縮退していない。必須の能力（主の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。",
+            "items": {
+              "$ref": "#/$defs/DegradedStep"
+            },
+            "title": "Degraded Steps",
+            "type": "array"
+          },
+          "zero_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ZeroEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
           },
           "evidence": {
             "description": "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった根拠（role=entity_expansion。候補の中の位置の順）を先に、前後の文脈（neighbor_context など）をその後ろに並べる。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。条の目録で選んだ条（role=catalog_article）は evidence_limit に数えず、選んだ順に末尾に足す（件数はサーバーの設定で上限がある）。回答は作らないので used_in_answer は false。",
@@ -4117,7 +4481,7 @@
                 "type": "null"
               }
             ],
-            "default": null,
+            "default": 50,
             "description": "検索する件数。",
             "title": "Top K"
           },
@@ -4302,6 +4666,27 @@
             "title": "AutoSelectedProfile",
             "type": "object"
           },
+          "DegradedStep": {
+            "description": "失敗して縮退した任意の補助の処理。",
+            "properties": {
+              "kind": {
+                "description": "処理の種類（例: rerank・section_outline・reference_load）。",
+                "title": "Kind",
+                "type": "string"
+              },
+              "count": {
+                "description": "失敗した回数。",
+                "title": "Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "title": "DegradedStep",
+            "type": "object"
+          },
           "EvidenceImageRef": {
             "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
             "properties": {
@@ -4423,6 +4808,38 @@
                 "description": "表計算のシート名（#1221）。",
                 "title": "Sheet Name"
               },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table",
+                      "parsed_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算のソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。",
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。",
+                "title": "Table Index"
+              },
               "row_start": {
                 "anyOf": [
                   {
@@ -4433,7 +4850,7 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの開始の行（1 始まり）。",
+                "description": "開始の行（1 始まり。番号の基準は row_basis）。",
                 "title": "Row Start"
               },
               "row_end": {
@@ -4446,8 +4863,34 @@
                   }
                 ],
                 "default": null,
-                "description": "シートの終了の行。",
+                "description": "終了の行。",
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録はsource_line_end と違う）。",
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "原本のテキストの終了の物理行（row_basis=csv だけ）。",
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -4459,7 +4902,7 @@
                   }
                 ],
                 "default": null,
-                "description": "セル範囲（例: A3:F7）。",
+                "description": "表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。",
                 "title": "Cell Range"
               },
               "page_label_start": {
@@ -4540,7 +4983,7 @@
                   }
                 ],
                 "default": null,
-                "description": "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。",
+                "description": "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録・解析の表の 1 行）のとき、その行の番号（row_basis の番号）。複数のデータの行の根拠・Word の表・行の位置が分からない表は null。",
                 "title": "Table Row"
               },
               "table_cells": {
@@ -4705,7 +5148,7 @@
             "description": "表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。",
             "properties": {
               "table_col": {
-                "description": "原本の列（表計算の列の記号。例: B）。",
+                "description": "列（表計算の列の記号。例: B。CSV・parsed_table は列の位置を同じ記号で示し、結合したセルは左の列）。",
                 "title": "Table Col",
                 "type": "string"
               },
@@ -4716,6 +5159,22 @@
                 },
                 "title": "Header Path",
                 "type": "array"
+              },
+              "bbox": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "セルの領域 [x0, y0, x1, y1]（locator の bbox と同じ頁・座標。解析が出したときだけ）。",
+                "title": "Bbox"
               }
             },
             "required": [
@@ -5122,7 +5581,7 @@
                 "$ref": "#/$defs/EvidenceLocator"
               },
               "excerpt": {
-                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 20000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "本文（既定は全文）。応答の根拠の合計の予算（token の見積もり 24000）に順位の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -5261,6 +5720,23 @@
                 "title": "Origin",
                 "type": "string"
               },
+              "table_binding": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "checkable",
+                      "not_checkable"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "回答の検査（回答の生成と rag_validate_answer）が、文の値を表の別の行・列の値と取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で確かめる / null=表の無い根拠。",
+                "title": "Table Binding"
+              },
               "superseded": {
                 "default": false,
                 "description": "新しい版に置き換えた文書（旧版）の根拠か。旧版は既定では検索しない（include_superseded に true を渡すと含める）。",
@@ -5348,11 +5824,44 @@
             ],
             "title": "RemovedPassage",
             "type": "object"
+          },
+          "ZeroEvidence": {
+            "description": "根拠が 0 件になった段。",
+            "properties": {
+              "stage": {
+                "description": "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と判定 / context=候補はあるが回答に渡す根拠が 0 件。",
+                "enum": [
+                  "retrieval",
+                  "filter",
+                  "evidence_check",
+                  "context"
+                ],
+                "title": "Stage",
+                "type": "string"
+              },
+              "candidate_count": {
+                "description": "検索の候補の件数。",
+                "title": "Candidate Count",
+                "type": "integer"
+              },
+              "rejected_count": {
+                "description": "根拠確認で外した候補の件数。",
+                "title": "Rejected Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stage",
+              "candidate_count",
+              "rejected_count"
+            ],
+            "title": "ZeroEvidence",
+            "type": "object"
           }
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5371,6 +5880,12 @@
             },
             "title": "Guardrail Warnings",
             "type": "array"
+          },
+          "guardrail_degraded": {
+            "default": false,
+            "description": "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べていない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味しない。",
+            "title": "Guardrail Degraded",
+            "type": "boolean"
           },
           "outcome": {
             "description": "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / needs_environment_data=利用者に聞いても分からない現場の値・記録の確認が要る / insufficient_evidence=資料から答えられない。needs_clarification / needs_human は利用者への確認・人への引き継ぎ。利用者に聞けば分かる条件（対象・ロール・承認など）だけを確かめる回答は conditional（conditions に載る。#1453）。",
@@ -5479,6 +5994,26 @@
             },
             "title": "Answer Warnings",
             "type": "array"
+          },
+          "degraded_steps": {
+            "description": "失敗して縮退した任意の補助の処理（rerank・章節の目録・参照先の読み込みなど）。その処理を使わずに続けた結果（例: rerank の失敗は検索の順のまま）で、空なら縮退していない。必須の能力（主の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。",
+            "items": {
+              "$ref": "#/$defs/DegradedStep"
+            },
+            "title": "Degraded Steps",
+            "type": "array"
+          },
+          "zero_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ZeroEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
           },
           "evidence": {
             "description": "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、検索で当たった根拠（role=retrieved_anchor と、実体からたどった role=entity_expansion。関連度の順）、前後の文脈（neighbor_context など）の順。実体からたどった根拠（前後の文脈の役割になったものも含む）と、その同じ親の前後の文脈は、evidence_limit の 3 割まで上限の内に入れる。",
@@ -5862,12 +6397,221 @@
             "title": "EvidenceRefInput",
             "type": "object"
           },
+          "ExcerptRange": {
+            "description": "本文の中の範囲（文字の位置。[start, end)）。",
+            "properties": {
+              "start": {
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "ExcerptRange",
+            "type": "object"
+          },
+          "GuideBodyCoverageValidation": {
+            "properties": {
+              "execution": {
+                "enum": [
+                  "completed",
+                  "not_run",
+                  "error",
+                  "timed_out",
+                  "partial",
+                  "unknown"
+                ],
+                "title": "Execution",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "explained",
+                  "missing",
+                  "partial",
+                  "unknown"
+                ],
+                "title": "Status",
+                "type": "string"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Reason"
+              }
+            },
+            "required": [
+              "execution",
+              "status"
+            ],
+            "title": "GuideBodyCoverageValidation",
+            "type": "object"
+          },
+          "GuideSourceAssociationValidation": {
+            "properties": {
+              "execution": {
+                "enum": [
+                  "completed",
+                  "not_run",
+                  "error",
+                  "timed_out",
+                  "partial",
+                  "unknown"
+                ],
+                "title": "Execution",
+                "type": "string"
+              },
+              "linked": {
+                "title": "Linked",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "execution",
+              "linked"
+            ],
+            "title": "GuideSourceAssociationValidation",
+            "type": "object"
+          },
+          "GuideStepValidation": {
+            "properties": {
+              "body_coverage": {
+                "$ref": "#/$defs/GuideBodyCoverageValidation"
+              },
+              "source_association": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GuideSourceAssociationValidation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "body_coverage"
+            ],
+            "title": "GuideStepValidation",
+            "type": "object"
+          },
+          "PremiseConsistencyResult": {
+            "description": "段落が勧める内容と、原質問・確認の答えの条件・制約との両立の比較 1 件の採否。",
+            "properties": {
+              "answer_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExcerptRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した answer の中の段落の位置（段落に結び付かない記録・位置を決められない段落は null）。"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "比較の実行（completed / not_run / failed / timed_out）。",
+                "title": "Status"
+              },
+              "decision": {
+                "description": "採否の理由（conflict_adopted=矛盾として採った / not_conflicting / execution_prohibition_does_not_prohibit_proposal / scope_unverified / constraint_quote_unmatched / passage_quote_unmatched / unknown_passage_id / duplicate_passage_id / missing_passage_id / not_required / deadline_exceeded / check_failed）。",
+                "title": "Decision",
+                "type": "string"
+              },
+              "adopted": {
+                "description": "矛盾として判定（contradicted）に採ったか。",
+                "title": "Adopted",
+                "type": "boolean"
+              },
+              "fit": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "比較の判断（fits / conflicts / unknown）。",
+                "title": "Fit"
+              },
+              "constraint_scope": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "制約の対象（execution_only / proposal / content / unknown）。",
+                "title": "Constraint Scope"
+              },
+              "passage_mode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "段落の様相（proposal / execution / explanation / unknown）。",
+                "title": "Passage Mode"
+              }
+            },
+            "required": [
+              "decision",
+              "adopted"
+            ],
+            "title": "PremiseConsistencyResult",
+            "type": "object"
+          },
           "ValidatedClaim": {
             "properties": {
               "answer_quote": {
                 "description": "回答の段落（原文）。",
                 "title": "Answer Quote",
                 "type": "string"
+              },
+              "answer_range": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ExcerptRange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "渡した answer の中の段落の位置（文字の位置。answer の [start, end) が answer_quote）。段落の分け方は呼び出し側に写さず、この位置で回答の段落を特定する。位置を決められない段落は null。"
               },
               "status": {
                 "description": "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と矛盾 / data_confirmation=実データの確認を促すだけ / citation_error=出典を照合できない / unassessed=監査されなかった / figure_only=図の見た目（配置・矢印・つながり・所属）だけで決まり、図の本文では確かめられない（chunk_id はその図。図の画像を読んで確かめたかは呼び出し側が決める）",
@@ -5981,13 +6725,28 @@
                 "title": "Required",
                 "type": "boolean"
               },
+              "validation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GuideStepValidation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "出典の対応と本文の充足の検査状態。未実行・未完了は不足や誤りの確認を意味しない。古い結果では省略。"
+              },
               "status": {
-                "description": "explained=手順の主の操作を根拠で裏付けた段落で説明した / reference_only=根拠の原文を参考として示しただけ / unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）。",
+                "description": "explained=必須の操作・対象・条件・順序を、根拠で裏付けた説明として確認した / partial=手順の一部だけ説明を確認した / unknown=説明の充足を検証できていない / reference_only=根拠の原文を参考として示しただけ / unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）/ not_searched=上限で検索を打ち切り、充足を検証していない。",
                 "enum": [
                   "explained",
+                  "partial",
+                  "unknown",
                   "reference_only",
                   "unused",
-                  "no_evidence"
+                  "no_evidence",
+                  "not_searched"
                 ],
                 "title": "Status",
                 "type": "string"
@@ -6083,7 +6842,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 34,
+            "default": 38,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -6171,7 +6930,7 @@
             "title": "Guide Revision"
           },
           "guide_steps": {
-            "description": "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは guide_step_unexplained の finding にもなる。",
+            "description": "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を渡さないか、段落の判定が出なければ空）。本文の充足検査が完了し、不足を確認した必須の手順だけを guide_step_unexplained の finding にする。未実行・未確認は validation に残る。",
             "items": {
               "$ref": "#/$defs/ValidatedGuideStep"
             },
@@ -6183,6 +6942,14 @@
             "description": "answer_trace_ids の回答の監査の判定を使い、モデルに渡さなかった段落の数（#1527）。",
             "title": "Reused Claims",
             "type": "integer"
+          },
+          "premise_checks": {
+            "description": "段落が勧める内容と、query・premises の条件・制約との両立の比較の採否。adopted=true の段落は claims で contradicted になる。比較しなかったときは status=not_run の 1 件。",
+            "items": {
+              "$ref": "#/$defs/PremiseConsistencyResult"
+            },
+            "title": "Premise Checks",
+            "type": "array"
           }
         },
         "required": [
@@ -6192,6 +6959,80 @@
         "title": "ValidateAnswerOutput",
         "type": "object"
       }
+    }
+  ],
+  "errors": [
+    {
+      "code": "MCP_TOOL_ARGUMENTS_INVALID",
+      "description": "引数が inputSchema に合わない（details.errors に項目ごとの誤り）。"
+    },
+    {
+      "code": "MCP_TOOL_FORBIDDEN",
+      "description": "呼び出した利用者にツールの権限が無い。"
+    },
+    {
+      "code": "MCP_TOOL_INTERNAL_ERROR",
+      "description": "ツールの処理が想定外の理由で失敗した（理由は返さない）。"
+    },
+    {
+      "code": "PROFILE_SCOPE_FORBIDDEN",
+      "description": "検索・回答プロファイル・ナレッジベース・文書が、呼び出し元のデータの範囲の外にある。"
+    },
+    {
+      "code": "RAG_ANSWER_AI_API_FAILED",
+      "description": "回答の生成の AI の呼び出しが失敗した。"
+    },
+    {
+      "code": "cursor_invalid",
+      "description": "続きの位置（next_cursor）の形が違う（message に直し方）。"
+    },
+    {
+      "code": "image_not_available",
+      "description": "根拠に図の画像が無い（図の根拠でない・領域が分からない）。"
+    },
+    {
+      "code": "image_source_missing",
+      "description": "図の元のファイルが保存先に無い。"
+    },
+    {
+      "code": "image_too_large",
+      "description": "図の画像が 1 回の応答の上限を超える。"
+    },
+    {
+      "code": "image_url_not_allowed",
+      "description": "図を開く URL をこの呼び出しでは作れない（画面の操作だけ）。"
+    },
+    {
+      "code": "image_url_unavailable",
+      "description": "図を開く URL を今は作れない（一時的）。"
+    },
+    {
+      "code": "preview_file_missing",
+      "description": "原文のプレビューのファイルが保存先に無い。"
+    },
+    {
+      "code": "preview_not_allowed",
+      "description": "原文のプレビューをこの呼び出しでは作れない（画面の操作だけ）。"
+    },
+    {
+      "code": "preview_unavailable",
+      "description": "原文のプレビューを今は作れない（一時的）。"
+    },
+    {
+      "code": "search_answer_profile_not_found",
+      "description": "検索・回答プロファイルが無いか使えない（message に使える候補と次の手）。"
+    },
+    {
+      "code": "section_not_found",
+      "description": "章節が無いか、本文が無い。"
+    },
+    {
+      "code": "source_not_found",
+      "description": "根拠・文書・頁・処理レシピが見つからない（定位子の形の誤りを含む）。"
+    },
+    {
+      "code": "source_stale",
+      "description": "文書の版（chunk_set）が作り直され、根拠の id・定位子・続きの位置が古い。"
     }
   ]
 }

@@ -43,6 +43,8 @@ interface SelectFieldProps<T extends string> {
   label: string;
   value: T;
   options: readonly SelectFieldOption<T>[];
+  /** 展開した選択肢の長いラベルを省略せず折り返す。既定は単一行。 */
+  wrapOptions?: boolean;
   onValueChange: (value: T) => void;
   helper?: string;
   error?: string;
@@ -204,6 +206,7 @@ export function SelectField<T extends string>({
   describedBy: externalDescribedBy,
   disabled = false,
   labelHidden = false,
+  wrapOptions = false,
   "data-testid": testId,
   size = "md",
   width,
@@ -516,7 +519,7 @@ export function SelectField<T extends string>({
                   />
                   <span className="min-w-0">
                     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="block truncate">{option.label}</span>
+                      <span className={cn("block", wrapOptions ? "whitespace-normal break-words" : "truncate")}>{option.label}</span>
                       {option.badge ? <StatusBadge variant="neutral" icon={false} label={option.badge} /> : null}
                     </span>
                     {option.description ? (

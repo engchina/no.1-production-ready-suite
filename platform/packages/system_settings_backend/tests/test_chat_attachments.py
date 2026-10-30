@@ -980,3 +980,13 @@ def test_preparation_toolset_checks_ownership_without_binding() -> None:
     with pytest.raises(ChatAttachmentError) as error:
         service.preparation_toolset(ALICE, [first.attachment_id], conversation_id="conversation-b")
     assert error.value.status_code == 409
+
+
+def test_limits_response_defaults_to_disabled() -> None:
+    """保存値を指定しない応答でも、初期配備と同じく添付は無効。"""
+    from pr_system_settings.chat_attachments.models import ChatAttachmentLimitsData
+
+    limits = ChatAttachmentLimitsData(
+        max_bytes=1024, max_files=1, ttl_hours=1, accept=[".txt"], image_enabled=False
+    )
+    assert limits.enabled is False

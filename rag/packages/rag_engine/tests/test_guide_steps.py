@@ -206,7 +206,7 @@ def test_cover_guide_steps_adds_step_b_evidence_and_reference_pages(monkeypatch:
         {
             f"{QUESTION} 画面 A": context(parent("a1")),
             f"{QUESTION} 画面 B 反映": context(parent("b-top")),
-            "reference": context(parent("b-page")),
+            "reference": context(_paged("b-page", "doc-b", 5)),
         },
     )
     ctx = context(parent("a1"), parent("other"))
@@ -215,15 +215,15 @@ def test_cover_guide_steps_adds_step_b_evidence_and_reference_pages(monkeypatch:
 
     assert [q for q, _ in calls] == [f"{QUESTION} 画面 A", f"{QUESTION} 画面 B 反映", f"{QUESTION} 画面 B 反映"]
     # 既存の根拠を先に残し、手順 B の根拠と参照の頁の根拠を後ろに足す。
-    assert [r.chunk_uid for r in merged.records] == ["run:a1", "run:other", "run:b-top", "run:b-page"]
+    assert [r.chunk_uid for r in merged.records] == ["run:a1", "run:other", "run:b-page", "run:b-top"]
     assert {p.reason for p in merged.evidence_tree[2:]} == {"guide_reference", "guide_step"}
-    assert sources == (("s1", "画面 A で設定を変える", ("run:a1",)), ("s2", "画面 B で反映する", ("run:b-top", "run:b-page")))
+    assert sources == (("s1", "画面 A で設定を変える", ("run:a1",)), ("s2", "画面 B で反映する", ("run:b-page", "run:b-top")))
     assert trace["llm_calls"] == 0
     step_b = trace["steps"][1]
     assert step_b["has_references"] is True and step_b["evidence_count"] == 2
     assert step_b["reference_chunk_count"] == 1
     assert [s["kind"] for s in step_b["searches"]] == ["reference", "step"]
-    assert trace["budget"]["used"] == {"guide_steps": 3}
+    assert trace["budget"]["used"] == {"guide_required": 2, "guide_steps": 1}
 
 
 def _paged(uid: str, document_id: str, page: int) -> ContextParentEvidence:
@@ -260,11 +260,12 @@ def test_cover_guide_steps_links_reference_pages_of_steps_cut_by_the_deadline(mo
     # 手順 A の参照の検索 1 回で期限。手順 B は検索していない。
     assert len(calls) == 1
     assert trace["stop_reason"] == "deadline"
-    assert trace["unsearched_step_ids"] == ["s2"]
+    assert trace["unsearched_step_ids"] == []
+    assert trace["required_acquisition"]["targets"][0]["execution"] == "reused"
     # 手順 B の参照の頁（文書 B の 4〜6 頁）に当たる材料の根拠は、手順 A と共有する根拠として手順 B にも紐づく。
     assert sources == (("s1", "画面 A で設定を変える", ("run:shared",)), ("s2", "画面 B で反映する", ("run:shared",)))
     assert [step["referenced_count"] for step in trace["steps"]] == [1, 1]
-    assert a._guide_step_lines(trace)[1] == "s2「画面 B で反映する」: 検索しない（期限で打ち切り）、参照の頁の根拠 1 件"
+    assert trace["required_acquisition"]["targets"][1]["scope_coverage"] == "unknown"
     assert [r.chunk_uid for r in merged.records] == ["run:shared", "run:other"]
 
 
@@ -273,10 +274,11 @@ def test_cover_guide_steps_respects_disabled_and_budget(monkeypatch: pytest.Monk
     ctx = context(parent("a1"))
 
     merged, trace, sources = _cover(ctx, _settings(guide_step_retrieval_enabled=False), plan(STEP_A))
-    assert (merged, trace["skipped"], sources, calls) == (ctx, "disabled", (), [])
+    assert (merged, trace["skipped"], sources, calls) == (ctx, "disabled", (("s1", STEP_A["title"], ()),), [])
 
     merged, trace, _ = _cover(ctx, _settings(extra_retrieval_max_queries=0), plan(STEP_A))
-    assert (merged, trace["skipped"], calls) == (ctx, "no_budget", [])
+    assert (merged, trace["stop_reason"], calls) == (ctx, "required_budget_exhausted", [])
+    assert trace["required_acquisition"]["incomplete_step_ids"] == ["s1"]
 
 
 def test_guide_steps_and_request_coverage_share_one_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,7 +291,7 @@ def test_guide_steps_and_request_coverage_share_one_budget(monkeypatch: pytest.M
 
     # 手順の検索は枠の 3 回まで（手順 B の 2 回目の検索は枠の外）。
     assert trace["stop_reason"] == "max_queries"
-    assert budget.used == {"guide_steps": 3} and budget.remaining == 0
+    assert budget.used == {"guide_required": 3} and budget.remaining == 0
     # 残りの無い枠では、再検索の回数は 0 になる。
     assert budget.allowance(settings.request_coverage_max_queries) == 0
 
@@ -342,7 +344,8 @@ def test_guide_step_instructions_keep_steps_the_user_cannot_perform() -> None:
     """
     from rag_engine.generation.grounded import _GUIDE_STEP_HINT, GENERATE_SYSTEM_PROMPT
 
-    guide_line = next(line for line in GENERATE_SYSTEM_PROMPT.splitlines() if line.startswith("- 業務ガイドがある場合は"))
-    assert "すべて説明し、利用者が自分で行えない手順も省かない" in guide_line
+    guide_line = next(line for line in GENERATE_SYSTEM_PROMPT.splitlines() if line.startswith("- guide_task_scope は"))
+    assert "利用者が自分で行えない必須手順も省かず" in guide_line
+    assert "required=true" in guide_line and "required=false" in guide_line
     assert "外れる操作は混ぜない" not in guide_line
     assert "条件" not in _GUIDE_STEP_HINT

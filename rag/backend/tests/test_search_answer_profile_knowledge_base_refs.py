@@ -137,7 +137,7 @@ def test_knowledge_base_where_filters_by_ids() -> None:
 async def test_update_archived_search_answer_profile_is_rejected() -> None:
     """アーカイブ済みの検索・回答プロファイルは更新しない（画面の読み取り専用と同じ。#961）。"""
     row = _search_answer_profile_row("bv-old", ["kb-1"]) | {"status": "ARCHIVED"}
-    pool = FakeOraclePool(execute_results=[[row]])
+    pool = FakeOraclePool(execute_results=[[], [row]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     with pytest.raises(ValueError, match="アーカイブ済みの検索・回答プロファイルは変更できません"):

@@ -21,9 +21,17 @@ from fastapi import (
     status,
 )
 from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
+from rag_engine.evaluation.answer_eval import standard_scope_cache
 from rag_parser_core.language import current_pack
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
 
+from app.api.routes.search import (
+    SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX,
+    ensure_search_answer_profile_has_knowledge_bases,
+    ensure_search_answer_profile_knowledge_bases_permitted,
+    ensure_search_answer_profile_not_archived,
+    permitted_knowledge_base_ids,
+)
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oracle import OracleClient
@@ -54,6 +62,7 @@ from app.rag.evaluation_jobs import (
     get_evaluation_job_service,
 )
 from app.rag.evaluation_process import guide_process_row, process_draft
+from app.rag.evaluation_results_excel import evaluation_results_xlsx
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_process_import import (
     GuideDraftLlm,
@@ -73,6 +82,7 @@ from app.schemas.evaluation import (
     EvaluationMetrics,
     EvaluationProcessDraftData,
     EvaluationProcessDraftRequest,
+    EvaluationResultExportRequest,
     EvaluationRunRequest,
 )
 from app.schemas.search import normalize_search_id_list
@@ -156,16 +166,38 @@ async def submit_run_evaluation_job(
     return ApiResponse(data=job)
 
 
+async def _evaluation_profile_knowledge_bases(profile_id: str) -> list[str]:
+    """Excel の照合範囲を検索・回答と同じ参照 KB・権限から解決する。"""
+    view = await OracleClient().get_search_answer_profile(profile_id)
+    if view is None:
+        raise HTTPException(
+            status_code=404, detail=f"{SEARCH_ANSWER_PROFILE_NOT_FOUND_PREFIX}{profile_id}"
+        )
+    ensure_search_answer_profile_not_archived(view, profile_id)
+    ids = view.config.normalized_knowledge_base_ids()
+    ensure_search_answer_profile_has_knowledge_bases(ids)
+    ensure_search_answer_profile_knowledge_bases_permitted(ids)
+    permitted = permitted_knowledge_base_ids(ids)
+    return ids if permitted is None else permitted
+
+
 @router.get("/cases/template")
 async def download_evaluation_template(
     knowledge_base_ids: Annotated[list[str] | None, Query()] = None,
+    search_answer_profile_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
 ) -> Response:
     """評価リクエストの Excel のテンプレート（#2065。見出し・記入の説明・記入例・文書一覧）。
 
-    `knowledge_base_ids` を渡すと、そのナレッジベースの文書（ファイル名・文書 ID・形式・ページ数 /
-    シート名・アップロード日）を「文書一覧」のシートに入れる（#2086）。
+    `search_answer_profile_id` があれば参照 KB を解決する。
+    無ければ `knowledge_base_ids` の文書を使う。
+    ファイル名・文書 ID・形式・ページ数 / シート名・アップロード日を
+    「文書一覧」のシートに入れる（#2086）。
     """
-    kb_ids = normalize_search_id_list(knowledge_base_ids or [])
+    kb_ids = (
+        await _evaluation_profile_knowledge_bases(search_answer_profile_id)
+        if search_answer_profile_id
+        else normalize_search_id_list(knowledge_base_ids or [])
+    )
     documents: list[EvaluationDocumentRef] = []
     if kb_ids:
         documents = await _with_document_locations(await _knowledge_base_documents(kb_ids))
@@ -180,15 +212,21 @@ async def download_evaluation_template(
 @router.post("/cases/import", response_model=ApiResponse[EvaluationImportResult])
 async def import_evaluation_cases(
     file: Annotated[UploadFile, File()],
-    knowledge_base_ids: Annotated[list[str], Form()],
+    knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
+    search_answer_profile_id: Annotated[str | None, Form(min_length=1, max_length=128)] = None,
 ) -> ApiResponse[EvaluationImportResult]:
     """評価リクエストの Excel を検証し、評価のケースにする（#2065。保存しない）。
 
-    構造（見出し・必須・長さ・行数・根拠の書き方）を検証し、根拠のファイル名を選んだナレッジベースの
-    文書の ID にする。誤りは行・列・理由で返し（HTTP は 200）、1 つでもあればケースを返さない。
+    構造（見出し・必須・長さ・行数・根拠の書き方）を検証し、根拠のファイル名を選んだプロファイルの
+    参照 KB（プロファイルの指定が無ければ明示の KB）の文書の ID にする。
+    誤りは行・列・理由で返し（HTTP は 200）、1 つでもあればケースを返さない。
     評価の実行は、返したケースで `POST /jobs/run` を呼ぶ。
     """
-    kb_ids = normalize_search_id_list(knowledge_base_ids)
+    kb_ids = (
+        await _evaluation_profile_knowledge_bases(search_answer_profile_id)
+        if search_answer_profile_id
+        else normalize_search_id_list(knowledge_base_ids or [])
+    )
     if not kb_ids:
         raise HTTPException(status_code=422, detail="ナレッジベースを選んでください。")
     file_name = PurePath(file.filename or "").name or "evaluation.xlsx"
@@ -196,6 +234,7 @@ async def import_evaluation_cases(
     result = EvaluationImportResult(
         file_name=file_name,
         row_count=0,
+        search_answer_profile_id=search_answer_profile_id,
         knowledge_base_ids=kb_ids,
         max_rows=EVALUATION_EXCEL_MAX_ROWS,
         max_bytes=EVALUATION_EXCEL_MAX_BYTES,
@@ -395,6 +434,20 @@ async def get_evaluation_job(job_id: str) -> ApiResponse[EvaluationJob]:
     return ApiResponse(data=job)
 
 
+@router.post("/jobs/{job_id}/results.xlsx")
+async def export_evaluation_results(job_id: str, body: EvaluationResultExportRequest) -> Response:
+    """投入した利用者の完了した結果を、画面の実行時の入力と合わせて出力する。"""
+    job = (await get_evaluation_job(job_id)).data
+    if job is None or job.status != "SUCCEEDED" or job.run_result is None:
+        raise HTTPException(status_code=409, detail="完了した品質評価の結果だけを書き出せます。")
+    content = await asyncio.to_thread(evaluation_results_xlsx, job.run_result, body)
+    return Response(
+        content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="evaluation_results.xlsx"'},
+    )
+
+
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[EvaluationJob])
 async def cancel_evaluation_job(job_id: str) -> ApiResponse[EvaluationJob]:
     """投入した利用者の実行中の品質評価の job を取り消す（#390）。"""
@@ -439,45 +492,49 @@ async def _execute_run(
         if request.thresholds is not None
         else resolve_evaluation_suite(suite_name)
     )
-    started = time.monotonic()
-    metrics = await EvaluationRunner().run(
-        cases=request.cases,
-        top_k=request.top_k,
-        filters=request.filters,
-        knowledge_base_ids=request.knowledge_base_ids,
-        thresholds=effective_thresholds,
-        rag_overrides=request.rag_overrides,
-        search_answer_profile_id=request.search_answer_profile_id,
-        time_budget_seconds=time_budget_seconds,
-        progress=_offset_progress(progress, offset=0, final=False)
-        if request.compare_search_answer_profile_id
-        else progress,
-    )
-    metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
-    if request.compare_search_answer_profile_id:
-        # 同じケースを検索・回答プロファイルの範囲（参照 KB・業務ガイド・ルール）でも流す（#2402）。
-        # 範囲はプロファイルが決めるため、ナレッジベースの指定は渡さない。
-        compared = await EvaluationRunner().run(
+    # 標準回答の比較範囲は、job の 2 つの pass で同じものを使う（#3570）。
+    with standard_scope_cache():
+        started = time.monotonic()
+        metrics = await EvaluationRunner().run(
             cases=request.cases,
             top_k=request.top_k,
-            filters={
-                key: value for key, value in request.filters.items() if key != "knowledge_base_id"
-            },
-            knowledge_base_ids=[],
+            filters=request.filters,
+            knowledge_base_ids=request.knowledge_base_ids,
             thresholds=effective_thresholds,
             rag_overrides=request.rag_overrides,
-            search_answer_profile_id=request.compare_search_answer_profile_id,
-            time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
-            progress=_offset_progress(progress, offset=len(request.cases), final=True),
+            search_answer_profile_id=request.search_answer_profile_id,
+            time_budget_seconds=time_budget_seconds,
+            progress=_offset_progress(progress, offset=0, final=False)
+            if request.compare_search_answer_profile_id
+            else progress,
         )
-        metrics = metrics.model_copy(
-            update={
-                "comparison": EvaluationComparison(
-                    search_answer_profile_id=request.compare_search_answer_profile_id,
-                    metrics=compared.model_copy(update={"evaluation_suite": suite_name}),
-                )
-            }
-        )
+        metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
+        if request.compare_search_answer_profile_id:
+            # 同じケースを検索・回答プロファイルの範囲（参照 KB・業務ガイド・ルール）でも流す
+            # （#2402）。範囲はプロファイルが決めるため、ナレッジベースの指定は渡さない。
+            compared = await EvaluationRunner().run(
+                cases=request.cases,
+                top_k=request.top_k,
+                filters={
+                    key: value
+                    for key, value in request.filters.items()
+                    if key != "knowledge_base_id"
+                },
+                knowledge_base_ids=[],
+                thresholds=effective_thresholds,
+                rag_overrides=request.rag_overrides,
+                search_answer_profile_id=request.compare_search_answer_profile_id,
+                time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
+                progress=_offset_progress(progress, offset=len(request.cases), final=True),
+            )
+            metrics = metrics.model_copy(
+                update={
+                    "comparison": EvaluationComparison(
+                        search_answer_profile_id=request.compare_search_answer_profile_id,
+                        metrics=compared.model_copy(update={"evaluation_suite": suite_name}),
+                    )
+                }
+            )
     evaluation_run_id = await _save_evaluation_artifact(
         request_summary=_run_request_summary(request),
         result_summary=metrics.model_dump(mode="json"),

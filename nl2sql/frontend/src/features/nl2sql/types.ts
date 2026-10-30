@@ -1,4 +1,4 @@
-import type { ChatAttachmentApiReference } from "@production-ready/ui";
+import type { ChatAttachmentApiReference, RunModelUsageRecord, RunUsageMeasurement } from "@production-ready/ui";
 
 import type { OntologyGraph } from "./ontology/types";
 
@@ -112,8 +112,6 @@ export interface ProfileSelectAiConfig {
   model: string;
   embedding_model: string;
   max_tokens: number;
-  /** AI profile の seed 属性（#1434。0〜2147483647 の整数、既定 42）。入力中の空欄は NaN。 */
-  seed: number;
   enforce_object_list: boolean;
   comments: boolean;
   annotations: boolean;
@@ -799,6 +797,14 @@ export interface HistoryItem {
   run_status?: "" | "cancelled";
   /** 取り消した人と入口（停止の行だけ。backend の `HistoryCancellation`。#3348）。 */
   cancellation?: HistoryCancellation | null;
+  /**
+   * 実行のモデルの呼び出しの回数と利用量（ジョブの中の LLM の呼び出し。3 製品で共通の形。#3543）。この機能より前の行は
+   * null（「未計測」。0 にしない）。Select AI の DB の中の呼び出しは数を作らず `unmeasured_sources` に出る。
+   */
+  usage?: RunModelUsageRecord | null;
+  /** 一覧の「token」の列: 合計の token と計測の状態（記録の無い行はどちらも null）。 */
+  total_tokens?: number | null;
+  usage_measurement?: RunUsageMeasurement | null;
 }
 
 /** 実行履歴の「取消」（API キーの名前は見ている利用者が見られるキーだけ。見られなければ空。#3348）。 */

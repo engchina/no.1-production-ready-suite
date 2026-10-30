@@ -355,6 +355,10 @@ def test_reduces_once_more_when_quotes_do_not_fit_and_stays_within_token_budget(
     assert outcome.trace["stage_two_parts"] >= 1
     stage_two = [prompt for prompt in stub.prompts if "1 段目で抜き出した原文" in prompt]
     assert len(stage_two) == outcome.trace["stage_two_parts"] and extractor.calls == 4 + len(stage_two)
+    for prompt in stage_two:
+        assert "\n\n## Step 1: 抽出済みの原文を絞る\n" in prompt
+        assert prompt.index("## Step 1:") < prompt.index(extraction.EXTRACTION_CONTEXT_BEGIN)
+        assert "もう一度そのまま抜き出してください" in prompt
     used = sum(sections.estimate_tokens(item.record.text) for item in outcome.tree)
     assert used <= 1500 and outcome.trace["used_tokens"] <= 1500
     # 2 段目も原本と照合した原文だけで、原文の順（続く 2 文は 1 つの原文にまとめる）。

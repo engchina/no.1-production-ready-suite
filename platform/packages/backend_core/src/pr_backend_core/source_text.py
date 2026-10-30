@@ -44,16 +44,19 @@ from .token_estimate import estimate_input_tokens
 # 全文を返す。切るのは、目標を既定より大きくした表・構造の無い大きな表・長い図の説明など、既定より
 # 大きな chunk。
 SOURCE_TEXT_ITEM_MAX_TOKENS = 4000
-# 検索の結果の応答の合計の予算（token の見積もり）。外部の MCP クライアントの出力の上限（Claude Code
-# の既定 25,000 token）に、応答の外枠と JSON の重複の余地を残して収める。既定の件数（rag_search の
-# 12 件・rag_retrieve_evidence の 20 件）の既定の大きさの chunk（合成の測定で平均 約 450〜650）は
-# すべて入り、表の chunk が多い応答だけ順位の低い件の本文を省く。
-SOURCE_TEXT_RESPONSE_BUDGET_TOKENS = 20000
+# 検索の結果の応答の合計の予算（token の見積もり）。本文の外の項目（ID・場所など）も含めた応答の
+# 全体をこの見積もりに収める（呼ぶ側が本文の外の分を引いて fit_source_texts に渡す）。外部の MCP
+# クライアントの出力の上限（Claude Code の既定 25,000 token）より下に置き、見積もりは CJK の 1 字を
+# 1 token にする多めの見積もりなので、上限との差（1,000）を余白にする。rag_retrieve_evidence の既定
+# 50 件（#3512）で返せる本文を増やすため 20000 から広げた（#3521）。rag_search の既定の 12 件の
+# 既定の大きさの chunk（合成の測定で平均 約 450〜650）はすべて入り、表の chunk が多い応答・件数の
+# 多い応答だけ、順位の低い件の本文を省く。
+SOURCE_TEXT_RESPONSE_BUDGET_TOKENS = 24000
 # 観測のページの件数（既定・上限）と、1 ページの本文の合計の予算（token の見積もり）。予算は検索の
 # 結果と同じにし、LLM のクライアントが観測を読んでも出力の上限に収まるようにする。
 SOURCE_TEXT_PAGE_LIMIT_DEFAULT = 20
 SOURCE_TEXT_PAGE_LIMIT_MAX = 100
-SOURCE_TEXT_PAGE_BUDGET_TOKENS = 20000
+SOURCE_TEXT_PAGE_BUDGET_TOKENS = SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 
 SourceTextKind = Literal["text", "table"]
 

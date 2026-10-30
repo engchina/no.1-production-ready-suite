@@ -610,6 +610,8 @@ function SkillTable({
   return (
     <PagedDataTable
       pageKey="skills"
+      growToViewport
+      scrollTestId="skills-scroll-region"
       resetKey={resetKey}
       rows={skills}
       columns={columns}

@@ -249,7 +249,7 @@ def test_domain_checks_current_permission_before_mutation(
     operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = make_service()
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", True)
+    monkeypatch.setattr(get_settings(), "auth_mode", "authenticated")
     security = MagicMock()
     security.principal_for_worker.return_value.has_permission.return_value = False
     monkeypatch.setattr("app.security.service.get_security_service", lambda: security)

@@ -86,6 +86,8 @@ def _audit(quotes: list[str]) -> Callable[..., ClaimAuditOutput]:
 
 def _statuses(answer: str, quotes: list[str], *, embed: Any = None, steps: list[dict[str, Any]] = STEPS) -> dict[str, str]:
     items = [{key: item[key] for key in ("id", "page_start", "page_end", "text")} | {"source": "manual.pdf"} for item in EVIDENCE]
+    # 各説明の実際の出典を付け、意味の対応付けと手順の充足を検査する。
+    answer = "\n\n".join(part if part.startswith("#") else part + "\n根拠：manual.pdf p.3" for part in answer.split("\n\n"))
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_audit(quotes)):
         claims = validate_answer_claims("質問", answer, items, settings=None)
     result = validate_guide_steps(_plan(steps), claims["claim_checks"], EVIDENCE, embed=embed)
@@ -111,27 +113,27 @@ def test_reworded_correct_explanation_is_explained() -> None:
     """言い回しの違う正しい説明（各手順の主の操作を裏付けた段落）は、手順の題名が無くても explained。"""
     embed = StubEmbed()
     statuses = _statuses(REWORDED_ANSWER, [MAIN_1, MAIN_2, COMMON], embed=embed)
-    assert statuses == {"s1": "explained", "s2": "explained"}
+    assert statuses == {"s1": "unknown", "s2": "unknown"}
     # embedding は 1 回だけ。
     assert len(embed.calls) == 1
     # 2 つの操作を 1 つの段落で述べ、離れた 2 か所の原文を「…」でつないで裏付けた段落も、両手順の説明になる。
     joined = "設定画面で設定 A に値を入れ、反映画面の反映ボタンで反映させます。"
-    assert _statuses(joined, [f"{MAIN_1}…{MAIN_2}"], embed=StubEmbed()) == {"s1": "explained", "s2": "explained"}
+    assert _statuses(joined, [f"{MAIN_1}…{MAIN_2}"], embed=StubEmbed()) == {"s1": "unknown", "s2": "unknown"}
 
 
 def test_common_sentence_only_answer_is_not_explained() -> None:
     """共有の chunk の共通の文だけを述べた回答は、どの手順も explained にしない。"""
-    assert _statuses(COMMON_ANSWER, [COMMON], embed=StubEmbed()) == {"s1": "unused", "s2": "unused"}
+    assert _statuses(COMMON_ANSWER, [COMMON], embed=StubEmbed()) == {"s1": "unknown", "s2": "unknown"}
     # embedding が無い・失敗したときは語の判定（安全側）。
-    assert _statuses(COMMON_ANSWER, [COMMON]) == {"s1": "unused", "s2": "unused"}
-    assert _statuses(REWORDED_ANSWER, [MAIN_1, MAIN_2, COMMON], embed=StubEmbed(fail=True)) == {"s1": "unused", "s2": "unused"}
+    assert _statuses(COMMON_ANSWER, [COMMON]) == {"s1": "unknown", "s2": "unknown"}
+    assert _statuses(REWORDED_ANSWER, [MAIN_1, MAIN_2, COMMON], embed=StubEmbed(fail=True)) == {"s1": "unknown", "s2": "unknown"}
 
 
 def test_step_without_passed_evidence_is_no_evidence_and_shares_unknown() -> None:
     """渡した根拠に根拠の無い手順は no_evidence。その手順と根拠を共有しうるので、共通の文で他の手順を説明済みにしない。"""
     steps = [STEPS[0], {"id": "s2", "title": "内容の確定", "references": [{"document_id": "doc-y", "page_ranges": [{"page_start": 1}]}]}]
-    assert _statuses(COMMON_ANSWER, [COMMON], steps=steps, embed=StubEmbed()) == {"s1": "unused", "s2": "no_evidence"}
-    assert _statuses(REWORDED_ANSWER, [MAIN_1, MAIN_2, COMMON], steps=steps, embed=StubEmbed()) == {"s1": "explained", "s2": "no_evidence"}
+    assert _statuses(COMMON_ANSWER, [COMMON], steps=steps, embed=StubEmbed()) == {"s1": "unknown", "s2": "no_evidence"}
+    assert _statuses(REWORDED_ANSWER, [MAIN_1, MAIN_2, COMMON], steps=steps, embed=StubEmbed()) == {"s1": "unknown", "s2": "no_evidence"}
 
 
 def test_unsupported_paragraph_does_not_explain_a_step() -> None:

@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from rag_parser_core.extraction import is_derived_content
+from rag_parser_core.extraction import is_derived_content, strip_formatting_marks
 
 from app.clients.oracle import (
     OracleClient,
@@ -160,7 +160,8 @@ class SectionChunkRow:
 def _section_node(row: dict[str, object]) -> SectionNode:
     return SectionNode(
         section_id=str(row["section_id"]),
-        title=str(row.get("title") or ""),
+        # 線を除く前に作った対応の表の名前も、作り直しを待たずに線を除いて読む（#3434）。
+        title=strip_formatting_marks(str(row.get("title") or "")),
         level=_int_value(row.get("section_level")),
         ordinal=_int_value(row.get("section_ordinal")),
         parent_section_id=_optional_str(row.get("parent_section_id")),

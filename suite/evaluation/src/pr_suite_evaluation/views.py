@@ -37,6 +37,8 @@ class TurnView:
     citations: tuple[Citation, ...] = ()
     # 見る人の今の権限で見られないため、観測から除かれた根拠の数。
     withheld_evidence_count: int = 0
+    # 回答の本文（Target がシステムとして足した節を除いた本文。LLM による判定の入力。#3418）。
+    answer: str = ""
 
 
 @dataclass(frozen=True)

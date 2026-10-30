@@ -36,6 +36,7 @@ from pr_backend_core.observability.mcp_trace import (
     mcp_server_trace,
     operation_trace_parent,
 )
+from pr_backend_core.observability.model_usage import ModelUsageCollector, RunModelUsage
 from pr_backend_core.observability.trace_store import (
     TraceSpanOwner,
     TraceSpanWriter,
@@ -181,6 +182,9 @@ class AnswerTrace:
         self._loop_thread: int | None = None
         # 実行履歴・失敗の「詳細」に出す RAG の実行 id（`new_trace_id`。表の trace id とは別）。
         self.run_id: str | None = None
+        # 実行のモデルの呼び出しの回数と利用量（実行履歴の概要。同じ span の知らせから集める。
+        # #3419）。
+        self._model_usage = ModelUsageCollector()
 
     @property
     def message_id(self) -> str:
@@ -215,6 +219,7 @@ class AnswerTrace:
         def listen(update: SpanUpdate) -> None:
             if writer_listener is not None:
                 writer_listener(update)
+            self._model_usage.observe(update)
             if self._collect(update):
                 self._notify()
             _log_step(update, self)
@@ -231,6 +236,12 @@ class AnswerTrace:
         return TraceRecord(
             trace_id=trace_id, trace_dropped_spans=dropped, span_details=details
         ).model_dump(mode="json")
+
+    def model_usage(
+        self, *, primary_model: str | None = None, truncated: bool = False
+    ) -> RunModelUsage | None:
+        """この実行のモデルの呼び出しの回数と利用量（trace が始まっていなければ None。#3419）。"""
+        return self._model_usage.summary(primary_model=primary_model, truncated=truncated)
 
     def _collect(self, update: SpanUpdate) -> bool:
         changed = False

@@ -6,7 +6,7 @@
 - 組み込みのパック（``packs/<locale>.json``）が既定値。今までのコードの値をそのまま持つ。
 - 上書きは「節 → 項目 → 値」の形で、項目ごとに組み込みの値を置き換える（``resolve``）。
 - 実行のときは ``current_pack()`` で読む。backend が全体の上書きを ``set_default_pack`` で置き、
-  取込の job・回答の要求の間だけ ``bind_pack`` で KB・プロファイルの上書きを束ねる。
+  取込の job・検索と回答の要求の間だけ ``bind_pack`` で、その要求の上書きを束ねる。
 - 項目の種類（``FieldKind``）は語の一覧か決まった型だけ。正規表現は受け付けない。
 
 このモジュールは仕組み（スキーマ・検証・重ね合わせ）だけを持ち、言語の書き方の値は持たない。
@@ -360,7 +360,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     ),
     *_fields("search_terms", _CR, "kanji_chars", "katakana_chars", "hiragana_chars", ingest=False),
     *_fields("search_terms", _WM, "en_irregular_forms", ingest=False),
-    # 質問の理解の手がかりの語（質問の目的・条件・経緯・対象を見分ける。検索・回答のときだけ使う）。
+    # 質問の理解の手がかりの語（求める内容・条件・経緯・対象を見分ける。検索・回答のときだけ使う）。
     *_fields(
         "question_cues",
         _W,
@@ -418,6 +418,9 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "aggregation_words",
         "member_subject_words",
         "cause_cues",
+        "cause_nouns",
+        "cause_noun_question_endings",
+        "cause_noun_question_leads",
         "generic_target_words",
         "object_particles",
         "manner_words",
@@ -536,10 +539,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         _W,
         "aggregate_value_words",
         "detail_words",
-        "visual_context_words",
-        "visual_question_words",
-        "operation_question_words",
-        "image_control_words",
         "link_verbs",
         "link_negations",
         "navigation_words",
@@ -584,10 +583,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "confirmations_section",
         "confirmation_only_summary",
         "neutral_summary",
+        "answer_evidence_budget_limited",
         "citation_prefix",
         "deadline_summary",
         "off_goal_gap",
         "cause_gap",
+        "crag_refusal_summary",
+        "crag_missing_aspect_template",
+        "crag_unknown_aspect_template",
+        "crag_quote_only_note",
+        "crag_definition_aspect_template",
         "operation_steps_heading",
         "confirmation_steps_heading",
         "page_location",
@@ -612,6 +617,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "guide_notes_note_template",
         "guide_handoff_template",
         "guide_approval_template",
+        "guide_acquisition_incomplete_template",
         "passage_note_template",
         "answer_warning_template",
         ingest=False,
@@ -643,6 +649,16 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
             "unsupported",
             "citation_error",
             "quote_unmatched",
+            "citation_id_invalid",
+            "citation_id_namespace",
+            "citation_id_ambiguous",
+            "citation_range_missing",
+            "citation_range_invalid",
+            "citation_range_out_of_bounds",
+            "citation_extraction_failed",
+            "citation_heading_only",
+            "citation_content_unusable",
+            "citation_version_mismatch",
             "unassessed",
             "figure_not_read",
             "target_mismatch",
@@ -936,8 +952,61 @@ def _check(spec: FieldSpec, value: Any) -> tuple[Any, str | None]:
     return words, None
 
 
+# 既存の公開版を読み取る際だけ補える、索引に影響しない追加の表示文言。
+_COMPATIBLE_ANSWER_LABELS = frozenset(
+    {
+        "answer_evidence_budget_limited",
+        "crag_refusal_summary",
+        "crag_missing_aspect_template",
+        "crag_unknown_aspect_template",
+        "crag_quote_only_note",
+        "crag_definition_aspect_template",
+        "guide_acquisition_incomplete_template",
+    }
+)
+
+
+@lru_cache(maxsize=4)
+def _builtin_data(locale: str = DEFAULT_LOCALE) -> dict[str, Any]:
+    text = resources.files(__package__).joinpath("packs", f"{locale}.json").read_text("utf-8")
+    data: dict[str, Any] = json.loads(text)
+    return data
+
+
+def complete_compatible_pack(data: Mapping[str, Any]) -> dict[str, Any]:
+    """追加した表示文言の欠けだけを補い、呼び出し元の保存内容は変更しない。"""
+    result = dict(data)
+    labels = data.get("answer_labels")
+    if isinstance(labels, Mapping):
+        completed = dict(labels)
+        defaults = _builtin_data()["answer_labels"]
+        for key in _COMPATIBLE_ANSWER_LABELS:
+            if key not in completed:
+                completed[key] = defaults[key]
+        result["answer_labels"] = completed
+    return result
+
+
+def stored_pack_hash(data: Mapping[str, Any], pack: LanguagePack) -> str:
+    """保存時の項目集合で照合する。許可した欠け以外の正規化は受け入れない。"""
+    if complete_compatible_pack(data) != pack.to_dict():
+        raise ValueError("言語資源は全項目を含む完全な設定で保存してください。")
+    labels = data.get("answer_labels") or {}
+    specs = tuple(
+        spec
+        for spec in FIELD_SPECS
+        if not (
+            spec.section == "answer_labels"
+            and spec.key in _COMPATIBLE_ANSWER_LABELS
+            and spec.key not in labels
+        )
+    )
+    return _digest(pack.locale, pack.sections, specs)
+
+
 def build_pack(data: Mapping[str, Any]) -> LanguagePack:
-    """節 → 項目 → 値の dict を検証して言語資源にする（項目の欠け・余り・形の誤りは例外）。"""
+    """追加表示文言の欠けだけ補い、それ以外の欠け・余り・形の誤りを拒否する。"""
+    data = complete_compatible_pack(data)
     errors: dict[str, str] = {}
     sections: dict[str, dict[str, Any]] = {section: {} for section in SECTIONS}
     for spec in FIELD_SPECS:
@@ -983,8 +1052,7 @@ def _digest(
 @lru_cache(maxsize=4)
 def builtin_pack(locale: str = DEFAULT_LOCALE) -> LanguagePack:
     """組み込みのパック（パッケージに同梱した既定値）。"""
-    text = resources.files(__package__).joinpath("packs", f"{locale}.json").read_text("utf-8")
-    return build_pack(json.loads(text))
+    return build_pack(_builtin_data(locale))
 
 
 def resolve(base: LanguagePack, *overrides: Mapping[str, Mapping[str, Any]] | None) -> LanguagePack:
@@ -1028,9 +1096,14 @@ def set_default_pack(pack: LanguagePack | None) -> None:
     _default = pack
 
 
+def default_pack() -> LanguagePack:
+    """要求に束ねた値を含まない全体の既定。プロファイル間で上書きを継承しない。"""
+    return _default or builtin_pack()
+
+
 def current_pack() -> LanguagePack:
     """今の言語資源（束ねたもの → 全体の既定 → 組み込みの順）。"""
-    return _bound.get() or _default or builtin_pack()
+    return _bound.get() or default_pack()
 
 
 def per_pack[T](build: Callable[[LanguagePack], T]) -> Callable[[], T]:
@@ -1062,6 +1135,10 @@ def pack_from_payload(payload: Mapping[str, Mapping[str, Any]] | str | None) -> 
         payload = json.loads(payload) if payload.strip() else None
     if not payload:
         return None
+    if "snapshot" in payload:
+        if set(payload) != {"snapshot"} or not isinstance(payload["snapshot"], Mapping):
+            raise LanguagePackError({"snapshot": "完全な言語資源の形式が正しくありません。"})
+        return build_pack(payload["snapshot"])
     return resolve(builtin_pack(), payload)
 
 
@@ -1088,6 +1165,7 @@ __all__ = [
     "build_pack",
     "builtin_pack",
     "current_pack",
+    "default_pack",
     "overrides_from",
     "overrides_payload",
     "pack_from_payload",

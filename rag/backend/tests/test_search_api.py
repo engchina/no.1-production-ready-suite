@@ -38,7 +38,7 @@ def test_search_api_returns_504_when_pipeline_times_out(
     assert body["data"] is None
     # どの工程で時間切れになったか（最後に始まった工程）と、再試行の案内を返す（#375）。
     assert body["error_messages"] == [answer_timeout_message("answer", 0.05)]
-    assert "質問の読み取りから回答の作成まで" in body["error_messages"][0]
+    assert "質問の条件を整理して回答を作る" in body["error_messages"][0]
     assert "もう一度送信してください" in body["error_messages"][0]
 
     audit_record = next(record for record in caplog.records if record.message == "rag_search_audit")
@@ -215,6 +215,15 @@ def test_search_api_accepts_and_ignores_removed_standard_options(
     assert dumped["top_k"] == 3
     for removed in ("rerank_top_n", "mode", "strategy", "generation_profile"):
         assert removed not in dumped
+
+
+def test_search_request_top_k_defaults_to_50_and_caps_at_100() -> None:
+    """検索する件数の既定は 50、上限は 100（省略時は現在の設定で解決。#3679）。"""
+    assert SearchRequest(query="q").top_k == 50
+    assert SearchRequest(query="q", top_k=100).top_k == 100
+    for invalid in (0, 101):
+        with pytest.raises(ValidationError):
+            SearchRequest(query="q", top_k=invalid)
 
 
 def test_stream_unexpected_failure_logs_traceback_and_hides_detail(

@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from pr_backend_core.oracle_session import init_oracle_session
@@ -762,7 +763,9 @@ async def test_oracle_client_persists_documents_through_pool() -> None:
     assert "INSERT INTO rag_document_knowledge_bases" in pool.connection.many_calls[0].statement
 
 
-async def test_oracle_client_get_document_restores_preprocess_artifact() -> None:
+async def test_oracle_client_get_document_restores_preprocess_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """文書詳細は保存済みファイル準備 artifact を欠落させず返す。"""
     row = _oracle_document_row(status="PREPROCESSED")
     row["preprocess_artifact"] = json.dumps(
@@ -783,6 +786,8 @@ async def test_oracle_client_get_document_restores_preprocess_artifact() -> None
         ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    # 公開版の取得は独立に検証し、このテストでは元の文書 SQL の応答だけを供給する。
+    monkeypatch.setattr(client, "document_language_pack_uses", AsyncMock(return_value={}))
 
     detail = await client.get_document("doc-1")
 
@@ -2557,7 +2562,8 @@ async def test_oci_list_document_chunks_accepts_json_element_ids_and_row_group_m
     assert chunk.metadata["table_header_repeated"] is True
 
 
-async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
+@pytest.mark.parametrize("strategy", ["small_to_big", "fixed_length"])
+async def test_oci_context_group_siblings_uses_chunk_group_sql(strategy: str) -> None:
     """OCI mode の同一 group context は、起点をまとめた 1 回の SQL で chunk_group_id から取得する。
 
     起点ごとの条件(文書・chunk_set・group・自分を除く)・並び・件数は起点の表(``a``)の値で
@@ -2603,25 +2609,42 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
             "chunk_group_id": "grp-table",
             "chunk_set_id": "set-a",
             "recipe_id": "recipe-a",
+            "chunk_strategy": strategy,
         },
     )
 
-    siblings = await client.context_group_siblings([anchor], max_chunks_per_group=2)
+    siblings = await client.context_group_siblings(
+        [anchor], max_chunks_per_group=2, neighbor_child_count=3
+    )
 
     assert [chunk.chunk_id for chunk in siblings] == ["doc-1:1", "doc-1:3"]
     assert [chunk.metadata["chunk_index"] for chunk in siblings] == [1, 3]
     assert [chunk.metadata["context_group_distance"] for chunk in siblings] == [-1, 1]
     assert all(chunk.score == 0.91 for chunk in siblings)
-    assert all(chunk.metadata["context_group_expanded"] is True for chunk in siblings)
+    assert all(
+        chunk.metadata["context_group_expanded"] is (strategy != "small_to_big")
+        for chunk in siblings
+    )
+    assert all(
+        chunk.metadata["context_group_purpose"]
+        == ("parent_source_mapping" if strategy == "small_to_big" else "neighbor_context")
+        for chunk in siblings
+    )
     assert len(pool.connection.calls) == 1
     call = pool.connection.calls[0]
-    assert "JSON_VALUE(c.metadata_json, '$.chunk_group_id') = a.chunk_group_id" in call.statement
+    # chunk group の id は起点の文書・chunk_set の chunk ごとに 1 回だけ読み(結合の外の view)、
+    # 起点とはその値で結合する(起点 × chunk の組ごとに CLOB の JSON を解かない。#3461)。
+    assert "SELECT /*+ NO_MERGE */" in call.statement
+    assert "JSON_VALUE(g.metadata_json, '$.chunk_group_id') AS chunk_group_id" in call.statement
+    assert "grp.chunk_group_id = a.chunk_group_id" in call.statement
+    assert "JSON_VALUE(c.metadata_json" not in call.statement
     assert "c.chunk_id <> a.anchor_chunk_id" in call.statement
     assert "PARTITION BY a.anchor_ord" in call.statement
     assert "ABS(c.chunk_index - a.anchor_index) ASC, c.chunk_index ASC, c.chunk_id ASC" in (
         call.statement
     )
-    assert "context_rank <= :max_chunks_per_group" in call.statement
+    assert "context_rank <= context_limit" in call.statement
+    assert "THEN :neighbor_child_count" in call.statement
     # 行は sibling の chunk ごとに 1 行(本文は 1 回だけ読む。#1498)。
     assert "GROUP BY chunk_id" in call.statement
     assert "WITHIN GROUP (ORDER BY anchor_ord, context_rank) AS anchor_positions" in (
@@ -2635,10 +2658,11 @@ async def test_oci_context_group_siblings_uses_chunk_group_sql() -> None:
     assert call.parameters["ca_ord_0"] == 0
     assert call.parameters["ca_doc_0"] == "doc-1"
     assert call.parameters["ca_set_0"] == "set-a"
-    assert call.parameters["ca_group_0"] == "grp-table"
+    assert call.parameters["ca_group_0"] == ("grp-table" if strategy == "small_to_big" else "")
     assert call.parameters["ca_index_0"] == 2
     assert call.parameters["ca_chunk_0"] == "doc-1:2"
     assert call.parameters["max_chunks_per_group"] == 2
+    assert call.parameters["neighbor_child_count"] == 3
     # 足りない起点は空(どの chunk にも一致しない)で埋め、SQL の文を同じにする。
     assert call.parameters["ca_doc_1"] is None
     assert call.parameters["ca_ord_49"] is None

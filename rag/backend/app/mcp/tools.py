@@ -48,6 +48,8 @@ from pr_backend_core.api import OffsetParams
 from pr_backend_core.api.validation import validation_tool_errors
 from pr_backend_core.mcp import (
     TOOL_ARGUMENTS_INVALID_CODE,
+    TOOL_FORBIDDEN_CODE,
+    TOOL_INTERNAL_ERROR_CODE,
     McpServer,
     McpTool,
     McpToolError,
@@ -63,6 +65,7 @@ from pr_backend_core.source_text import (
     read_source_window,
 )
 from pr_backend_core.token_estimate import estimate_input_tokens
+from pr_system_settings.auth.service_token import PROFILE_SCOPE_FORBIDDEN_CODE
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -72,6 +75,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_engine.generation.operation_audit import answer_passage_ranges
+from rag_engine.generation.table_binding import evidence_tables
 from rag_engine.knowledge.runtime_knowledge import (
     MAX_MATCHED_RULES,
     MAX_MATCHED_TERMS,
@@ -80,7 +85,20 @@ from rag_engine.knowledge.runtime_knowledge import (
 )
 from rag_engine.retrieval.entity_expansion import entity_expansion_relevant
 from rag_parser_core.extraction import is_derived_content
-from rag_parser_core.sheet_records import TABLE_CELLS_KEY, TABLE_ROW_KEY
+from rag_parser_core.parsed_table import ROW_BASIS_PARSED_TABLE
+from rag_parser_core.sheet_records import (
+    ROW_BASIS_CSV,
+    ROW_BASIS_KEY,
+    ROW_BASIS_SHEET,
+    ROW_BASIS_WORD_TABLE,
+    SOURCE_LINE_END_KEY,
+    SOURCE_LINE_START_KEY,
+    TABLE_CELLS_KEY,
+    TABLE_INDEX_KEY,
+    TABLE_ROW_END_KEY,
+    TABLE_ROW_KEY,
+    TABLE_ROW_START_KEY,
+)
 from rag_parser_core.xml_tree_json import xml_tree_citation_key
 
 from app.api.errors import DocumentFileMissingError
@@ -97,7 +115,12 @@ from app.mcp.profile_scope import (
     check_search,
     within_profile_scope,
 )
-from app.rag.answer_engine import CATALOG_ARTICLE_ROLE, AnswerScope
+from app.rag.answer_engine import (
+    ANSWER_VALIDATION_STEP,
+    CATALOG_ARTICLE_ROLE,
+    AnswerScope,
+    _answer_step_span,
+)
 from app.rag.answer_failure import ANSWER_API_FAILED_ERROR_CODE, describe_answer_api_failure
 from app.rag.answer_validation import (
     MAX_ANSWER_TRACE_IDS,
@@ -152,7 +175,9 @@ from app.rag.profile_recommendation import (
     ProfileCandidate,
     recommend_search_answer_profiles,
 )
+from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
+from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
@@ -196,6 +221,8 @@ from app.schemas.document import DocumentPreprocessArtifact
 from app.schemas.search import (
     INCLUDE_SUPERSEDED_FILTER_KEY,
     PAGE_RANGES_FILTER_KEY,
+    SEARCH_TOP_K_DEFAULT,
+    SEARCH_TOP_K_MAX,
     RetrievedChunk,
     SearchRequest,
     SearchResponse,
@@ -205,6 +232,7 @@ from app.schemas.search_answer_profile import (
     SearchAnswerProfileSummary,
 )
 from app.schemas.support_guide import SupportGuideReference
+from app.search_defaults import search_top_k_default, search_top_k_schema
 from app.security.permissions import MENU_SEARCH, ROUTE_PERMISSIONS
 
 logger = logging.getLogger(__name__)
@@ -276,7 +304,22 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 34: 読み取りのツール（rag_read_source・rag_read_section・rag_read_document）の本文を、上限の
 #     文字数に入る最後の文・段落（表は行）の境界で切るようにした。表の続きは先頭に見出しの行を
 #     付け、その位置（rag_read_source と読み取りの chunks の header_range）を足した（#3344）。
-MCP_OUTPUT_SCHEMA_VERSION = 34
+# 35: 根拠の場所（locator・読み取りの chunks）に行の番号の基準（row_basis。表計算のシート・CSV の
+#     記録の番号・Word の表の行）と表の番号（table_index）、CSV の原本の物理行の範囲
+#     （source_line_start・source_line_end）を足し、CSV の 1 行の根拠にセルの座標
+#     （table_row・table_cells）、Word の 1 つの表の根拠に表の行の範囲を入れた。根拠に、表の行・
+#     列の対応の検査が読める表か（table_binding）を、rag_search・rag_retrieve_evidence に、失敗して
+#     縮退した任意の補助の処理（degraded_steps）を足した（#3262）。
+# 36: 行の番号の基準に、解析が組み立てた表の格子（parsed_table。PDF・HTML・画像の表。原本の座標では
+#     ない）を足し、その根拠に表の番号・格子の行の範囲、1 つのデータの行の根拠にセルの座標と、
+#     解析が出したときはセルの領域（table_cells の bbox）を入れた（#3429）。
+# 37: rag_validate_answer の claims に、渡した answer の中の段落の位置（answer_range）を足した。
+#     rag_search・rag_retrieve_evidence の top_k の既定（省略時の件数）を契約に出した。契約に
+#     ツールの失敗の code の一覧（errors）を足した（#3240）。
+# 38: rag_search・rag_retrieve_evidence に、安全チェックを完了できず止めたか
+#     （guardrail_degraded）と、根拠 0 件のときに 0 件になった段と件数（zero_evidence）を足した
+#     （#3546。#3262 の残り）。
+MCP_OUTPUT_SCHEMA_VERSION = 38
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -284,9 +327,20 @@ EVIDENCE_TEXT_BUDGET_TOKENS = SOURCE_TEXT_RESPONSE_BUDGET_TOKENS
 EVIDENCE_LIMIT_DEFAULT = 12
 EVIDENCE_LIMIT_MAX = 50
 # rag_retrieve_evidence（回答を作らない根拠の収集）の既定の件数。検索する件数（SearchRequest の
-# top_k の既定 20）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。rag_search は回答に
-# 使った根拠が先に並ぶので 12 のまま。
-RETRIEVE_EVIDENCE_LIMIT_DEFAULT = 20
+# top_k の既定。#3512 で 50）と同じにし、検索で当たった chunk を既定で全部返す（#1365）。
+# rag_search は回答に使った根拠が先に並ぶので 12 のまま。返す本文の合計は
+# EVIDENCE_TEXT_BUDGET_TOKENS で抑える。
+RETRIEVE_EVIDENCE_LIMIT_DEFAULT = min(SEARCH_TOP_K_DEFAULT, EVIDENCE_LIMIT_MAX)
+
+
+def _retrieve_evidence_default() -> int:
+    return min(search_top_k_default(), EVIDENCE_LIMIT_MAX)
+
+
+def _retrieve_evidence_default_schema(schema: dict[str, Any]) -> None:
+    schema["default"] = _retrieve_evidence_default()
+
+
 # rag_retrieve_evidence の planning=caller（呼び出し元が検索文を作る。#2651）で query に足せる
 # 検索文の本数と 1 本の長さの上限（全文検索に使う検索文の本数の上限 6 に、query を合わせて収める）。
 CALLER_QUERIES_MAX = 5
@@ -340,6 +394,35 @@ IMAGE_URL_UNAVAILABLE_CODE = "image_url_unavailable"
 PREVIEW_NOT_ALLOWED_CODE = "preview_not_allowed"
 PREVIEW_UNAVAILABLE_CODE = "preview_unavailable"
 PREVIEW_FILE_MISSING_CODE = "preview_file_missing"
+# ツールの失敗（`isError: true` の結果の `error_code`）の一覧と意味（#3240）。呼び出し側
+# （Agent など）はここに載せた code だけで分岐する。一覧は契約（rag-tools.json の `errors`）に
+# 書き出し、`*_CODE` の定数とツールが raise する code がすべて載ることをテストで確かめる。
+MCP_ERROR_CODES: dict[str, str] = {
+    TOOL_ARGUMENTS_INVALID_CODE: (
+        "引数が inputSchema に合わない（details.errors に項目ごとの誤り）。"
+    ),
+    TOOL_FORBIDDEN_CODE: "呼び出した利用者にツールの権限が無い。",
+    TOOL_INTERNAL_ERROR_CODE: "ツールの処理が想定外の理由で失敗した（理由は返さない）。",
+    PROFILE_SCOPE_FORBIDDEN_CODE: (
+        "検索・回答プロファイル・ナレッジベース・文書が、呼び出し元のデータの範囲の外にある。"
+    ),
+    SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE: (
+        "検索・回答プロファイルが無いか使えない（message に使える候補と次の手）。"
+    ),
+    ANSWER_API_FAILED_ERROR_CODE: "回答の生成の AI の呼び出しが失敗した。",
+    SOURCE_NOT_FOUND_CODE: "根拠・文書・頁・処理レシピが見つからない（定位子の形の誤りを含む）。",
+    SOURCE_STALE_CODE: "文書の版（chunk_set）が作り直され、根拠の id・定位子・続きの位置が古い。",
+    SECTION_NOT_FOUND_CODE: "章節が無いか、本文が無い。",
+    CURSOR_INVALID_CODE: "続きの位置（next_cursor）の形が違う（message に直し方）。",
+    IMAGE_NOT_AVAILABLE_CODE: "根拠に図の画像が無い（図の根拠でない・領域が分からない）。",
+    IMAGE_TOO_LARGE_CODE: "図の画像が 1 回の応答の上限を超える。",
+    IMAGE_SOURCE_MISSING_CODE: "図の元のファイルが保存先に無い。",
+    IMAGE_URL_NOT_ALLOWED_CODE: "図を開く URL をこの呼び出しでは作れない（画面の操作だけ）。",
+    IMAGE_URL_UNAVAILABLE_CODE: "図を開く URL を今は作れない（一時的）。",
+    PREVIEW_NOT_ALLOWED_CODE: "原文のプレビューをこの呼び出しでは作れない（画面の操作だけ）。",
+    PREVIEW_UNAVAILABLE_CODE: "原文のプレビューを今は作れない（一時的）。",
+    PREVIEW_FILE_MISSING_CODE: "原文のプレビューのファイルが保存先に無い。",
+}
 # ブラウザで開く URL（図・原文のプレビュー）を作ってよい呼び出し（Agent の画面の操作）の、
 # サービストークンの
 # claim `purpose` の値。Run の中でモデルが呼んだ token（purpose 無し）では作らない。
@@ -360,17 +443,21 @@ GUIDES_UNAVAILABLE_MESSAGE = "業務ガイドを読み込めませんでした�
 SEARCH_ANSWER_PROFILE_READ_PERMISSIONS = ROUTE_PERMISSIONS[("GET", "/search-answer-profiles")]
 SEARCH_PERMISSIONS = frozenset({MENU_SEARCH})
 
+# 処理順の Step 形式（docs/agents/prompts.md。#3830）。
 INSTRUCTIONS = (
-    "Production Ready RAG の検索・回答のツールです。"
+    "Production Ready RAG の検索・回答のツールです。\n\n"
+    "## Step 1: 検索・回答プロファイルを選ぶ\n"
     "検索・回答プロファイルが決まっていなければ、まず rag_recommend_search_answer_profile に"
     "質問を渡して選び（recommended_profile_id が null で候補が複数なら、候補の名前を示して利用者に"
     "確かめる）、その id を rag_search に渡してください。名前で探すときは"
-    " rag_list_search_answer_profiles を使います。"
+    " rag_list_search_answer_profiles を使います。\n\n"
     # 回答前の確認（業務ガイドの条件・検索・回答プロファイルのルールの確認。#2117）。
     # 引数の組み立ては conditions・skip_clarification の説明にある。
+    "## Step 2: 回答前の確認に答える\n"
     "rag_search が outcome=needs_clarification を返したら、clarifications の問いと選択肢を"
-    "利用者に確かめてから、答えを conditions に入れて呼び直してください。"
+    "利用者に確かめてから、答えを conditions に入れて呼び直してください。\n\n"
     # evidence は回答で引用した箇所だけではない（AI に渡した箇所の全体。#2040）。
+    "## Step 3: 結果の根拠を読む\n"
     "evidence は AI に渡した資料の箇所です。used_in_answer は回答で引用した箇所、"
     "answer_use はその使われ方（confirmed=質問の条件への該当確認済みの記載 / "
     "reference=該当が確認できていない参考の記載）です。"
@@ -485,7 +572,14 @@ class SearchInput(BaseModel):
             "呼び出し元にデータの範囲があるときは、検索・回答プロファイルの参照先の中だけ。"
         ),
     )
-    top_k: int | None = Field(default=None, ge=1, le=100, description="検索する件数。")
+    # 既定を契約に出す（#3240。呼び出し側が説明の文から既定を写さない）。null は省略と同じ。
+    top_k: int | None = Field(
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+        description="検索する件数。",
+    )
     filters: dict[str, str] = Field(
         default_factory=dict,
         description=(
@@ -605,12 +699,14 @@ class RetrieveEvidenceInput(SearchInput):
         ),
     )
     evidence_limit: int = Field(
-        default=RETRIEVE_EVIDENCE_LIMIT_DEFAULT,
+        default_factory=_retrieve_evidence_default,
+        json_schema_extra=_retrieve_evidence_default_schema,
         ge=1,
         le=EVIDENCE_LIMIT_MAX,
         description=(
             "返す根拠の最大件数。検索で当たった根拠（関連度の順）、前後の文脈の順に並べてから切る。"
-            "省略時は検索する件数（top_k。省略時 20）と同じで、検索で当たった根拠を全部返す。"
+            "省略時は設定の検索する件数（top_k）を基準に、この件数の上限まで返し、"
+            "検索で当たった根拠を全部返す。"
         ),
     )
 
@@ -1114,6 +1210,27 @@ class ExcerptRange(BaseModel):
     end: int
 
 
+RowBasis = Literal["sheet", "csv", "word_table", "parsed_table"]
+ROW_BASIS_DESCRIPTION = (
+    "row_start・row_end・table_row の行の番号の基準（sheet=表計算のシートの行 / csv=CSV の"
+    "記録の番号〔RFC 7111 の行。表頭の記録を含め、空の行も 1 記録として先頭から数える。表計算の"
+    "ソフトで開いたときの行〕/ word_table=Word の table_index の表の行。表頭の行も数え、大きい表を"
+    "分けた部分は先頭に繰り返した表頭を数えない / parsed_table=解析が PDF・HTML・画像の表から"
+    "組み立てた table_index の表の格子の行。原本の座標ではなく、解析し直すと変わることがある。"
+    "表頭の行も数え〔表頭が 2 段なら最初のデータの行は 3〕、分けた部分は先頭に繰り返した表頭を"
+    "数えない）。行の位置が分からない根拠（解析が表の格子を出さなかった表など）は null。"
+)
+SOURCE_LINE_START_DESCRIPTION = (
+    "原本のテキストの開始の物理行（1 始まり。row_basis=csv だけ。引用符の中の改行を含む記録は"
+    "source_line_end と違う）。"
+)
+SOURCE_LINE_END_DESCRIPTION = "原本のテキストの終了の物理行（row_basis=csv だけ）。"
+TABLE_INDEX_DESCRIPTION = (
+    "表の番号（1 始まり。row_basis=word_table は本文の表の順、parsed_table は文書の中の表の順、"
+    "sheet は 1 シートを複数の表に分けたときの表の順）。無ければ null。"
+)
+
+
 class ReadDocumentChunk(BaseModel):
     """返した本文に含まれる chunk（根拠として引用するときの場所）。"""
 
@@ -1122,10 +1239,16 @@ class ReadDocumentChunk(BaseModel):
     section_path: list[str] = Field(default_factory=list)
     page_start: int | None = None
     page_end: int | None = None
-    # 表計算の場所（検索の根拠の locator と同じ。#1471）。表計算でない chunk は null。
+    # 表計算・表の場所（検索の根拠の locator と同じ。#1471・#3262）。行の位置の無い chunk は null。
     sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
-    row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
-    row_end: int | None = Field(default=None, description="シートの終了の行。")
+    row_basis: RowBasis | None = Field(default=None, description=ROW_BASIS_DESCRIPTION)
+    table_index: int | None = Field(default=None, description=TABLE_INDEX_DESCRIPTION)
+    row_start: int | None = Field(
+        default=None, description="開始の行（1 始まり。番号の基準は row_basis）。"
+    )
+    row_end: int | None = Field(default=None, description="終了の行。")
+    source_line_start: int | None = Field(default=None, description=SOURCE_LINE_START_DESCRIPTION)
+    source_line_end: int | None = Field(default=None, description=SOURCE_LINE_END_DESCRIPTION)
     cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
     start: int = Field(description="返した本文の中の開始の位置（文字数）。")
     end: int = Field(description="返した本文の中の終了の位置（文字数）。")
@@ -1207,9 +1330,20 @@ class RecommendSearchAnswerProfileOutput(VersionedOutput):
 class EvidenceTableCell(BaseModel):
     """表の 1 行の根拠の、値のあるセル（セルの座標は table_row と table_col）。"""
 
-    table_col: str = Field(description="原本の列（表計算の列の記号。例: B）。")
+    table_col: str = Field(
+        description=(
+            "列（表計算の列の記号。例: B。CSV・parsed_table は列の位置を同じ記号で示し、"
+            "結合したセルは左の列）。"
+        )
+    )
     header_path: list[str] = Field(
         description="列の表頭（複数段の表頭は上の段から。表頭の文字の無い列は空）。"
+    )
+    bbox: list[float] | None = Field(
+        default=None,
+        description=(
+            "セルの領域 [x0, y0, x1, y1]（locator の bbox と同じ頁・座標。解析が出したときだけ）。"
+        ),
     )
 
 
@@ -1220,9 +1354,17 @@ class EvidenceLocator(BaseModel):
     page_start: int | None = Field(default=None, description="開始の頁（PDF の物理頁）。")
     page_end: int | None = Field(default=None, description="終了の頁（PDF の物理頁）。")
     sheet_name: str | None = Field(default=None, description="表計算のシート名（#1221）。")
-    row_start: int | None = Field(default=None, description="シートの開始の行（1 始まり）。")
-    row_end: int | None = Field(default=None, description="シートの終了の行。")
-    cell_range: str | None = Field(default=None, description="セル範囲（例: A3:F7）。")
+    row_basis: RowBasis | None = Field(default=None, description=ROW_BASIS_DESCRIPTION)
+    table_index: int | None = Field(default=None, description=TABLE_INDEX_DESCRIPTION)
+    row_start: int | None = Field(
+        default=None, description="開始の行（1 始まり。番号の基準は row_basis）。"
+    )
+    row_end: int | None = Field(default=None, description="終了の行。")
+    source_line_start: int | None = Field(default=None, description=SOURCE_LINE_START_DESCRIPTION)
+    source_line_end: int | None = Field(default=None, description=SOURCE_LINE_END_DESCRIPTION)
+    cell_range: str | None = Field(
+        default=None, description="表計算のセル範囲（例: A3:F7。row_basis=sheet だけ）。"
+    )
     page_label_start: str | None = Field(
         default=None,
         description="開始の頁の印刷の頁番号（PDF のページラベル。物理頁と違うときだけ。#1244）。",
@@ -1245,8 +1387,9 @@ class EvidenceLocator(BaseModel):
     table_row: int | None = Field(
         default=None,
         description=(
-            "根拠が表計算の表の 1 つのデータの行のとき、そのシートの行番号。複数行の根拠・"
-            "ほかの形式の表（PDF・HTML・画像・CSV・Word）は null。"
+            "根拠が表の 1 つのデータの行（表計算のシートの 1 行・CSV の 1 記録・解析の表の 1 行）の"
+            "とき、その行の番号（row_basis の番号）。複数のデータの行の根拠・Word の表・行の位置が"
+            "分からない表は null。"
         ),
     )
     table_cells: list[EvidenceTableCell] = Field(
@@ -1316,7 +1459,11 @@ class EvidenceImageUrl(BaseModel):
     """
 
     url: str = Field(description="図の画像の URL（MCP の呼び出しを受けた RAG の起点から作る）。")
-    path: str = Field(description="url の path（RAG の公開の起点に付け替えるときに使う）。")
+    # path の始まりを契約に出す（#3240。呼び出し側は付け替えてよい path をこれで確かめる）。
+    path: str = Field(
+        pattern=f"^{FIGURE_URL_PATH_PREFIX}/",
+        description="url の path（RAG の公開の起点に付け替えるときに使う）。",
+    )
     expires_at: str = Field(description="期限（ISO 8601、UTC）。")
     expires_in_seconds: int = Field(description="発行からの有効な秒数。")
 
@@ -1358,6 +1505,7 @@ class EvidencePreview(BaseModel):
     )
     page_path_template: str | None = Field(
         default=None,
+        pattern=f"^{SOURCE_PREVIEW_PATH_PREFIX}/",
         description="page_url_template の path（RAG の公開の起点に付け替えるときに使う）。",
     )
     content_url: str = Field(
@@ -1366,7 +1514,9 @@ class EvidencePreview(BaseModel):
             "disposition=attachment でダウンロード）。"
         )
     )
-    content_path: str = Field(description="content_url の path。")
+    content_path: str = Field(
+        pattern=f"^{SOURCE_PREVIEW_PATH_PREFIX}/", description="content_url の path。"
+    )
     highlight_metadata: dict[str, Any] = Field(
         default_factory=dict,
         description=(
@@ -1390,6 +1540,10 @@ class EvidenceSection(BaseModel):
     parent_section_id: str | None = Field(default=None, description="親の章節の id。")
     parent_title: str | None = Field(default=None, description="親の章節の名前。")
     parent_chars: int | None = Field(default=None, description="親の章節の本文の文字数。")
+
+
+# 根拠の本文を表の行・列の対応の検査（``rag_engine.generation.table_binding``）が読めるか（#3262）。
+TableBinding = Literal["checkable", "not_checkable"]
 
 
 class RagEvidence(BaseModel):
@@ -1489,6 +1643,16 @@ class RagEvidence(BaseModel):
         description=(
             "本文の由来。source=文書の原文（表・図の中の文字を含む）/ derived=取込が原文から作った"
             "要約・抽出した値（引用する前に原文を読んで確かめる）。"
+        ),
+    )
+    table_binding: TableBinding | None = Field(
+        default=None,
+        description=(
+            "回答の検査（回答の生成と rag_validate_answer）が、文の値を表の別の行・列の値と"
+            "取り違えていないかをこの根拠の本文で確かめられるか。checkable=2 行以上の表（HTML・"
+            "Markdown の表・「名前: 値」の行の並び）を読める / not_checkable=表の根拠だが読めない"
+            "（1 行の記録・列の並びが崩れた本文）ので、値の行・列は locator のセルの座標か原文で"
+            "確かめる / null=表の無い根拠。"
         ),
     )
     superseded: bool = Field(
@@ -1677,10 +1841,56 @@ AUTO_SELECTED_PROFILE_DESCRIPTION = (
 )
 
 
+# 回答の診断の degraded_steps（#3259）の公開の形（#3262）。
+class DegradedStep(BaseModel):
+    """失敗して縮退した任意の補助の処理。"""
+
+    kind: str = Field(description="処理の種類（例: rerank・section_outline・reference_load）。")
+    count: int = Field(description="失敗した回数。")
+
+
+DEGRADED_STEPS_DESCRIPTION = (
+    "失敗して縮退した任意の補助の処理（rerank・章節の目録・参照先の読み込みなど）。その処理を"
+    "使わずに続けた結果（例: rerank の失敗は検索の順のまま）で、空なら縮退していない。必須の能力"
+    "（主の検索・回答の生成・有効な安全チェック）の失敗は縮退せずエラーで返る。"
+)
+
+
+# 根拠 0 件の診断（回答の診断の zero_evidence）の公開の形（#3546）。検索の条件の値・検索文・
+# 例外の文は出さない（段と件数だけ）。
+ZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
+
+
+class ZeroEvidence(BaseModel):
+    """根拠が 0 件になった段。"""
+
+    stage: ZeroEvidenceStage = Field(
+        description=(
+            "retrieval=検索の候補が 0 件 / filter=質問から自動で足した検索条件（項目の値・文書名・"
+            "頁）が効いたまま候補が 0 件 / evidence_check=根拠確認が候補をすべて質問と別の話題と"
+            "判定 / context=候補はあるが回答に渡す根拠が 0 件。"
+        )
+    )
+    candidate_count: int = Field(description="検索の候補の件数。")
+    rejected_count: int = Field(description="根拠確認で外した候補の件数。")
+
+
+ZERO_EVIDENCE_DESCRIPTION = (
+    "根拠が 0 件のとき、0 件になった段と件数（根拠があれば null）。degraded_steps が空でなければ、"
+    "補助の処理の失敗で候補を読めなかった可能性があり、資料に記載が無いとは限らない。"
+)
+GUARDRAIL_DEGRADED_DESCRIPTION = (
+    "安全チェック（質問・回答の検査）を完了できず、処理を止めたか。true のとき資料は調べて"
+    "いない（answer は停止の文・evidence は空）か回答を止めており、資料に根拠が無いことを意味"
+    "しない。"
+)
+
+
 class SearchOutput(VersionedOutput):
     answer: str
     trace_id: str
     guardrail_warnings: list[str]
+    guardrail_degraded: bool = Field(default=False, description=GUARDRAIL_DEGRADED_DESCRIPTION)
     outcome: AnswerOutcome = Field(
         description=(
             "回答の対応。answered=資料で答えた / conditional=条件・不足を示して答えた / "
@@ -1729,6 +1939,10 @@ class SearchOutput(VersionedOutput):
         default_factory=list,
         description="回答全体の警告（質問からずれている可能性など）。",
     )
+    degraded_steps: list[DegradedStep] = Field(
+        default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
+    )
+    zero_evidence: ZeroEvidence | None = Field(default=None, description=ZERO_EVIDENCE_DESCRIPTION)
     evidence: list[RagEvidence] = Field(
         description=(
             "AI に渡した資料の箇所。回答で引用した箇所（used_in_answer。回答で引用した順）を先に、"
@@ -1897,7 +2111,8 @@ class ProfileKnowledge(BaseModel):
     search_answer_profile_id: str
     revision: str | None = Field(
         description=(
-            "照合した用語・ルールの登録の版（登録の内容の sha256 の先頭。読めなければ null）。"
+            "照合した用語・同義語と回答ルールの登録の版（登録の内容の sha256 の先頭。"
+            "読めなければ null）。"
         )
     )
     matched_on: Literal["original_question", "query"] = Field(
@@ -1914,7 +2129,8 @@ class ProfileKnowledge(BaseModel):
     load_failed: bool = Field(
         default=False,
         description=(
-            "用語・ルールを読めなかった（rules・terms は空。当たるものが無いとは限らない）。"
+            "用語・同義語と回答ルールを読めなかった（rules・terms は空。"
+            "当たるものが無いとは限らない）。"
         ),
     )
 
@@ -1922,6 +2138,11 @@ class ProfileKnowledge(BaseModel):
 class RetrieveEvidenceOutput(VersionedOutput):
     trace_id: str
     guardrail_warnings: list[str]
+    guardrail_degraded: bool = Field(default=False, description=GUARDRAIL_DEGRADED_DESCRIPTION)
+    degraded_steps: list[DegradedStep] = Field(
+        default_factory=list, description=DEGRADED_STEPS_DESCRIPTION
+    )
+    zero_evidence: ZeroEvidence | None = Field(default=None, description=ZERO_EVIDENCE_DESCRIPTION)
     evidence: list[RagEvidence] = Field(
         description=(
             "検索で当たった根拠（role=retrieved_anchor。関連度＝rerank の順）と、実体からたどった"
@@ -1971,6 +2192,14 @@ class RetrieveEvidenceOutput(VersionedOutput):
 
 class ValidatedClaim(BaseModel):
     answer_quote: str = Field(description="回答の段落（原文）。")
+    answer_range: ExcerptRange | None = Field(
+        default=None,
+        description=(
+            "渡した answer の中の段落の位置（文字の位置。answer の [start, end) が answer_quote）。"
+            "段落の分け方は呼び出し側に写さず、この位置で回答の段落を特定する。位置を決められない"
+            "段落は null。"
+        ),
+    )
     status: str = Field(
         description=(
             "supported=根拠で裏付けられる / unsupported=根拠で確かめられない / contradicted=根拠と"
@@ -2068,6 +2297,22 @@ class ValidationFinding(BaseModel):
     )
 
 
+class GuideBodyCoverageValidation(BaseModel):
+    execution: Literal["completed", "not_run", "error", "timed_out", "partial", "unknown"]
+    status: Literal["explained", "missing", "partial", "unknown"]
+    reason: str | None = None
+
+
+class GuideSourceAssociationValidation(BaseModel):
+    execution: Literal["completed", "not_run", "error", "timed_out", "partial", "unknown"]
+    linked: bool
+
+
+class GuideStepValidation(BaseModel):
+    body_coverage: GuideBodyCoverageValidation
+    source_association: GuideSourceAssociationValidation | None = None
+
+
 class ValidatedGuideStep(BaseModel):
     """業務ガイドの手順 1 つの、回答での説明の充足（#2708）。"""
 
@@ -2076,13 +2321,57 @@ class ValidatedGuideStep(BaseModel):
     required: bool = Field(
         description="回答の充足で必須の手順か（分かっている条件で決まらない分岐の手順は false）。"
     )
-    status: Literal["explained", "reference_only", "unused", "no_evidence"] = Field(
+    validation: GuideStepValidation | None = Field(
+        default=None,
+        description="出典の対応と本文の充足の検査状態。未実行・未完了は不足や誤りの確認を意味しない。古い結果では省略。",
+    )
+    status: Literal[
+        "explained", "partial", "unknown", "reference_only", "unused", "no_evidence", "not_searched"
+    ] = Field(
         description=(
-            "explained=手順の主の操作を根拠で裏付けた段落で説明した / "
+            "explained=必須の操作・対象・条件・順序を、根拠で裏付けた説明として確認した / "
+            "partial=手順の一部だけ説明を確認した / unknown=説明の充足を検証できていない / "
             "reference_only=根拠の原文を参考として示しただけ / "
             "unused=手順の根拠は渡した根拠にあるが、手順を説明した段落が無い / "
-            "no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）。"
+            "no_evidence=手順の根拠が渡した根拠に無い（その手順の根拠を集めていない）/ "
+            "not_searched=上限で検索を打ち切り、充足を検証していない。"
         )
+    )
+
+
+class PremiseConsistencyResult(BaseModel):
+    """段落が勧める内容と、原質問・確認の答えの条件・制約との両立の比較 1 件の採否。"""
+
+    # 値は ID・状態・語彙の code だけ（#3800。モデルが書いた制約・推奨・原文は返さない）。
+    answer_range: ExcerptRange | None = Field(
+        default=None,
+        description=(
+            "渡した answer の中の段落の位置（段落に結び付かない記録・位置を決められない段落は"
+            " null）。"
+        ),
+    )
+    status: str | None = Field(
+        default=None,
+        description="比較の実行（completed / not_run / failed / timed_out）。",
+    )
+    decision: str = Field(
+        description=(
+            "採否の理由（conflict_adopted=矛盾として採った / not_conflicting / "
+            "execution_prohibition_does_not_prohibit_proposal / scope_unverified / "
+            "constraint_quote_unmatched / passage_quote_unmatched / unknown_passage_id / "
+            "duplicate_passage_id / missing_passage_id / not_required / deadline_exceeded / "
+            "check_failed）。"
+        )
+    )
+    adopted: bool = Field(description="矛盾として判定（contradicted）に採ったか。")
+    fit: str | None = Field(default=None, description="比較の判断（fits / conflicts / unknown）。")
+    constraint_scope: str | None = Field(
+        default=None,
+        description="制約の対象（execution_only / proposal / content / unknown）。",
+    )
+    passage_mode: str | None = Field(
+        default=None,
+        description="段落の様相（proposal / execution / explanation / unknown）。",
     )
 
 
@@ -2125,14 +2414,23 @@ class ValidateAnswerOutput(VersionedOutput):
         default_factory=list,
         description=(
             "guide の手順ごとの説明の充足（分かっている条件で外れた分岐の手順は含めない。guide を"
-            "渡さないか、段落の判定が出なければ空）。必須の手順で explained でないものは "
-            "guide_step_unexplained の finding にもなる。"
+            "渡さないか、段落の判定が出なければ空）。本文の充足検査が完了し、不足を確認した必須の"
+            "手順だけを guide_step_unexplained の finding にする。"
+            "未実行・未確認は validation に残る。"
         ),
     )
     reused_claims: int = Field(
         default=0,
         description=(
             "answer_trace_ids の回答の監査の判定を使い、モデルに渡さなかった段落の数（#1527）。"
+        ),
+    )
+    premise_checks: list[PremiseConsistencyResult] = Field(
+        default_factory=list,
+        description=(
+            "段落が勧める内容と、query・premises の条件・制約との両立の比較の採否。"
+            "adopted=true の段落は claims で contradicted になる。比較しなかったときは"
+            " status=not_run の 1 件。"
         ),
     )
 
@@ -2237,15 +2535,81 @@ def _table_cells(metadata: dict[str, Any]) -> list[EvidenceTableCell]:
         return []
     cells: list[EvidenceTableCell] = []
     for item in items if isinstance(items, list) else []:
-        if not isinstance(item, list) or len(item) != 2:
+        # [列, 表頭の段] か、解析の表のセルの領域つきの [列, 表頭の段, bbox]（#3429）。
+        if not isinstance(item, list) or len(item) not in {2, 3}:
             return []
-        column, path = item
+        column, path = item[0], item[1]
         if not isinstance(column, str) or not column or not isinstance(path, list):
             return []
         if not all(isinstance(part, str) for part in path):
             return []
-        cells.append(EvidenceTableCell(table_col=column, header_path=path))
+        bbox = bbox_numbers(item[2]) if len(item) == 3 else None
+        if len(item) == 3 and bbox is None:
+            return []
+        cells.append(EvidenceTableCell(table_col=column, header_path=path, bbox=bbox))
     return cells
+
+
+def _table_rows(
+    metadata: dict[str, Any], sheet_name: str | None
+) -> tuple[RowBasis, int | None, int | None, int | None] | None:
+    """行の番号の基準・表の番号・行の範囲（#3262）。原本の行の位置が無い根拠は None。
+
+    表計算はシート名があれば、CSV は表頭の行（``csv_header_row``）があれば、基準を記録する前の
+    chunk でも基準が決まる。CSV の行は記録の番号（RFC 7111 の行）で、記録の番号を記録する前の
+    chunk は行を返さない（物理行は ``_source_lines``）。Word は 1 つの表だけを含むまとまりで取込が
+    記録したときだけ。解析の表の格子（parsed_table。#3429）も、取込が格子と本文の行を対応させて
+    記録したときだけ（``rag_parser_core.parsed_table``）。
+    """
+    basis = _metadata_str(metadata, ROW_BASIS_KEY)
+    if sheet_name:
+        return (
+            ROW_BASIS_SHEET,
+            _metadata_int(metadata, "sheet_table_index"),
+            _metadata_int(metadata, "row_start"),
+            _metadata_int(metadata, "row_end"),
+        )
+    if basis == ROW_BASIS_CSV or (
+        basis is None and _metadata_int(metadata, "csv_header_row") is not None
+    ):
+        start = _metadata_int(metadata, TABLE_ROW_START_KEY)
+        end = _metadata_int(metadata, TABLE_ROW_END_KEY)
+        if start is None or end is None or end < start:
+            return ROW_BASIS_CSV, None, None, None
+        return ROW_BASIS_CSV, None, start, end
+    if basis in {ROW_BASIS_WORD_TABLE, ROW_BASIS_PARSED_TABLE}:
+        table_index = _metadata_int(metadata, TABLE_INDEX_KEY)
+        start = _metadata_int(metadata, TABLE_ROW_START_KEY)
+        end = _metadata_int(metadata, TABLE_ROW_END_KEY)
+        if table_index is None or start is None or end is None or end < start:
+            return None
+        return cast("RowBasis", basis), table_index, start, end
+    return None
+
+
+def _source_lines(metadata: dict[str, Any]) -> tuple[int | None, int | None]:
+    """CSV の根拠の原本の物理行の範囲（記録する前の chunk は ``row_start`` / ``row_end``）。"""
+    start = _metadata_int(metadata, SOURCE_LINE_START_KEY)
+    end = _metadata_int(metadata, SOURCE_LINE_END_KEY)
+    if start is None:
+        start, end = _metadata_int(metadata, "row_start"), _metadata_int(metadata, "row_end")
+    if start is None or end is None or end < start:
+        return None, None
+    return start, end
+
+
+def evidence_row_location(metadata: dict[str, Any]) -> dict[str, Any]:
+    """根拠の行の番号の基準と行の範囲（``EvidenceLocator`` と同じ名前・値。行が分からなければ空）。
+
+    評価の必要な根拠の行の条件（``row_basis``・``row_start``・``row_end``）を、MCP の根拠の場所と
+    同じ行で照合するために使う（#3547。chunk の metadata の ``row_start`` は CSV では物理行、解析の
+    表の格子の行は ``table_row_start`` にある）。
+    """
+    rows = _table_rows(metadata, _metadata_str(metadata, "sheet_name"))
+    if rows is None or rows[2] is None:
+        return {}
+    basis, _table_index, row_start, row_end = rows
+    return {"row_basis": basis, "row_start": row_start, "row_end": row_end}
 
 
 def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
@@ -2259,16 +2623,27 @@ def _locator(metadata: dict[str, Any]) -> EvidenceLocator:
     page_start = _metadata_int(metadata, "page_start") or _metadata_int(metadata, "page_number")
     page_end = _metadata_int(metadata, "page_end") or page_start
     sheet_name = _metadata_str(metadata, "sheet_name")
-    # セルの座標は表計算の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
-    table_row = _metadata_int(metadata, TABLE_ROW_KEY) if sheet_name else None
+    rows = _table_rows(metadata, sheet_name)
+    basis, table_index, row_start, row_end = rows if rows is not None else (None, None, None, None)
+    source_lines = _source_lines(metadata) if basis == ROW_BASIS_CSV else (None, None)
+    # セルの座標は表計算・CSV の 1 行の記録だけが持つ（取込で記録したときだけ。推測しない）。
+    table_row = (
+        _metadata_int(metadata, TABLE_ROW_KEY)
+        if basis in {ROW_BASIS_SHEET, ROW_BASIS_CSV, ROW_BASIS_PARSED_TABLE}
+        else None
+    )
     return EvidenceLocator(
         section_path=path,
         page_start=page_start,
         page_end=page_end,
         sheet_name=sheet_name,
-        row_start=_metadata_int(metadata, "row_start") if sheet_name else None,
-        row_end=_metadata_int(metadata, "row_end") if sheet_name else None,
-        cell_range=_metadata_str(metadata, "cell_range") if sheet_name else None,
+        row_basis=basis,
+        table_index=table_index,
+        row_start=row_start,
+        row_end=row_end,
+        source_line_start=source_lines[0],
+        source_line_end=source_lines[1],
+        cell_range=_metadata_str(metadata, "cell_range") if basis == ROW_BASIS_SHEET else None,
         page_label_start=_metadata_str(metadata, "page_label_start") if page_start else None,
         page_label_end=_metadata_str(metadata, "page_label_end") if page_start else None,
         bbox=bbox_numbers(metadata.get("bbox")),
@@ -2426,12 +2801,64 @@ def _evidence(
         origin="derived"
         if is_derived_content(metadata.get("content_kind"), metadata)
         else "source",
+        table_binding=_table_binding(chunk.text, metadata),
         superseded=metadata.get("document_superseded") is True,
         references=_references(metadata),
         reference_from=_metadata_str(metadata, REFERENCE_FROM_KEY),
         reference_label=_metadata_str(metadata, REFERENCE_LABEL_KEY),
         section=_evidence_section((sections or {}).get(chunk.chunk_id)),
     )
+
+
+def _is_table_evidence(metadata: dict[str, Any]) -> bool:
+    """表の根拠か（表の chunk・表計算と CSV の表の 1 行の記録）。"""
+    return (
+        _metadata_str(metadata, "content_kind") == "table"
+        or _metadata_str(metadata, "sheet_block_kind") == "row"
+        or _metadata_str(metadata, "record_kind") == "row"
+        or _metadata_int(metadata, TABLE_ROW_KEY) is not None
+    )
+
+
+def _table_binding(text: str, metadata: dict[str, Any]) -> TableBinding | None:
+    """表の行・列の対応の検査がこの根拠の本文を表として読めるか（#3262）。
+
+    検査（``rag_engine.generation.table_binding``）と同じ読み方で、本文から 2 行以上の表を読めれば
+    checkable。表の根拠なのに読めなければ not_checkable（検査が働かないことを呼び出し元に示す）。
+    """
+    if evidence_tables(text):
+        return "checkable"
+    return "not_checkable" if _is_table_evidence(metadata) else None
+
+
+def _answer_range(
+    claim: Mapping[str, Any], passage_ranges: Mapping[str, tuple[int, int]], answer: str
+) -> ExcerptRange | None:
+    """段落の判定の、回答の中の位置（段落の ID の位置。ID が無ければ原文が回答に 1 回だけ
+    現れる位置）。
+
+    位置の原文が段落の原文と違えば null（呼び出し側は原文で探す）。
+    """
+    quote = str(claim.get("answer_quote") or "")
+    if not quote:
+        return None
+    span = passage_ranges.get(str(claim.get("answer_passage_id") or ""))
+    if span is None and answer.count(quote) == 1:
+        start = answer.find(quote)
+        span = (start, start + len(quote))
+    if span is None or answer[span[0] : span[1]] != quote:
+        return None
+    return ExcerptRange(start=span[0], end=span[1])
+
+
+def _passage_range(
+    passage_id: object, passage_ranges: Mapping[str, tuple[int, int]], answer: str
+) -> ExcerptRange | None:
+    """段落の ID の、回答の中の位置（ID が無い・位置が回答の範囲の外なら null）。"""
+    span = passage_ranges.get(str(passage_id or ""))
+    if span is None or not 0 <= span[0] < span[1] <= len(answer):
+        return None
+    return ExcerptRange(start=span[0], end=span[1])
 
 
 def _excerpt_range(value: object) -> ExcerptRange | None:
@@ -2819,7 +3246,11 @@ def retrieve_evidence_limit(arguments: RetrieveEvidenceInput) -> int:
     evidence_limit を省略して top_k を既定より大きくしたときは top_k まで返す（検索で当たった
     chunk を全部返す。上限は EVIDENCE_LIMIT_MAX）。渡した evidence_limit はそのまま使う。
     """
-    if "evidence_limit" in arguments.model_fields_set or arguments.top_k is None:
+    if (
+        "evidence_limit" in arguments.model_fields_set
+        or "top_k" not in arguments.model_fields_set
+        or arguments.top_k is None
+    ):
         return arguments.evidence_limit
     return min(max(arguments.evidence_limit, arguments.top_k), EVIDENCE_LIMIT_MAX)
 
@@ -2843,6 +3274,7 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         "answer": result.answer,
         "trace_id": result.trace_id,
         "guardrail_warnings": list(result.guardrail_warnings),
+        "guardrail_degraded": _guardrail_degraded(result),
         "outcome": outcome,
         "requests": [
             request
@@ -2863,10 +3295,61 @@ def _answer_fields(result: SearchResponse, evidence_limit: int) -> dict[str, Any
         **passage_mark_record(
             answer if any(key in answer for key in PASSAGE_MARK_RECORD_KEYS) else envelope
         ),
+        "degraded_steps": _degraded_steps(answer),
+        "zero_evidence": _zero_evidence(answer, result),
         "evidence": [],
         "evidence_omitted": max(0, len(ordered) - evidence_limit),
         "provenance": _provenance(answer.get("provenance")),
     }
+
+
+def _degraded_steps(answer: Mapping[str, Any]) -> list[DegradedStep]:
+    """回答の診断の degraded_steps（#3259）の処理の種類と回数だけ（例外の型の名前は出さない）。"""
+    counts: dict[str, int] = {}
+    raw = answer.get("degraded_steps")
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        kind, count = item.get("kind"), item.get("count")
+        if (
+            isinstance(kind, str)
+            and kind
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+        ):
+            counts[kind] = counts.get(kind, 0) + max(0, count)
+    return [DegradedStep(kind=kind, count=count) for kind, count in counts.items() if count]
+
+
+def _guardrail_degraded(result: SearchResponse) -> bool:
+    """安全チェック（OCI Guardrails）を完了できず止めたか（検索の診断の guardrail_degraded）。"""
+    diagnostics = result.diagnostics
+    return diagnostics is not None and diagnostics.guardrail_degraded
+
+
+def _zero_evidence(answer: Mapping[str, Any], result: SearchResponse) -> ZeroEvidence | None:
+    """根拠 0 件の診断（#2401）の段と件数だけ（根拠があれば None）。
+
+    検索の条件の項目・値、検索ごとの記録は出さない（質問・文書の内容を含みうる）。縮退した補助の
+    処理は ``degraded_steps`` に別に出す。
+    """
+    if result.citations:
+        return None
+    raw = answer.get("zero_evidence")
+    if not isinstance(raw, Mapping):
+        return None
+    stage = raw.get("stage")
+    if stage not in get_args(ZeroEvidenceStage):
+        return None
+    return ZeroEvidence(
+        stage=cast(ZeroEvidenceStage, stage),
+        candidate_count=_count(raw.get("candidate_count")),
+        rejected_count=_count(raw.get("rejected_count")),
+    )
+
+
+def _count(value: object) -> int:
+    return max(0, value) if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _provenance(value: object) -> dict[str, Any] | None:
@@ -3313,8 +3796,12 @@ async def read_section_tool(arguments: ReadSectionInput) -> ReadSectionOutput:
                     page_start=locator.page_start,
                     page_end=locator.page_end,
                     sheet_name=locator.sheet_name,
+                    row_basis=locator.row_basis,
+                    table_index=locator.table_index,
                     row_start=locator.row_start,
                     row_end=locator.row_end,
+                    source_line_start=locator.source_line_start,
+                    source_line_end=locator.source_line_end,
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,
@@ -3490,8 +3977,12 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
                     page_start=locator.page_start,
                     page_end=locator.page_end,
                     sheet_name=locator.sheet_name,
+                    row_basis=locator.row_basis,
+                    table_index=locator.table_index,
                     row_start=locator.row_start,
                     row_end=locator.row_end,
+                    source_line_start=locator.source_line_start,
+                    source_line_end=locator.source_line_end,
                     cell_range=locator.cell_range,
                     start=start,
                     end=length,
@@ -3759,7 +4250,7 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         payload["filters"] = {**arguments.filters, INCLUDE_SUPERSEDED_FILTER_KEY: "true"}
     if arguments.search_answer_profile_id is not None:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
-    if arguments.top_k is not None:
+    if "top_k" in arguments.model_fields_set and arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
     # ルールの確認の答え（rule:）は業務ガイドの条件ではない（rag_search が前提にする。#2117）。
     conditions = {
@@ -3799,53 +4290,85 @@ async def rule_clarification_step(
         # プロファイルが無いときの 404 は検索が返す。
         return request, None
     search_route.ensure_search_answer_profile_not_archived(view, profile_id)
-    payload = await load_runtime_knowledge_payload(oracle, profile_id)
-    for key, value in arguments.conditions.items():
-        rule_id = key.removeprefix(RULE_CONDITION_PREFIX)
-        if rule_id == key or not rule_matches(payload, arguments.query, rule_id):
-            continue
-        answer = rule_answer(payload, rule_id, value)
-        resolved = (
-            resolve_clarification(
-                payload,
-                answer,
-                await current_section_pages(oracle, clarification_document_ids(payload, answer)),
-            )
-            if answer is not None
-            else None
-        )
-        if resolved is None:
-            continue
-        scope, page_ranges = resolved
-        if page_ranges:
-            request = request.model_copy(
-                update={"filters": {**request.filters, PAGE_RANGES_FILTER_KEY: page_ranges}}
-            )
-        return request, scope
-    if view.config.clarification_policy == "assume":
-        return request, None
-    found = await asyncio.to_thread(suggest_clarification, payload, arguments.query)
-    if found is None:
-        return request, None
-    rule, clarification = found
-    rule_id = str(rule.get("id", ""))
-    return SearchOutput(
-        answer=f"回答の前に確認が必要です: {clarification.question}",
-        trace_id=new_trace_id(),
-        guardrail_warnings=[],
-        outcome="needs_clarification",
-        clarifications=[
-            GuideClarification(
-                condition_id=f"{RULE_CONDITION_PREFIX}{rule_id}",
-                label=str(rule.get("title", "") or rule_id),
-                question=clarification.question,
-                options=[option.label for option in clarification.options],
-                multiple=clarification.multiple,
-            )
-        ],
-        evidence=[],
-        evidence_omitted=0,
+    settings, _ = resolve_search_answer_profile_settings(
+        get_settings(), view.config, apply_answer_model=False
     )
+    with profile_language_scope(settings):
+        payload = await load_runtime_knowledge_payload(oracle, profile_id)
+        for key, value in arguments.conditions.items():
+            rule_id = key.removeprefix(RULE_CONDITION_PREFIX)
+            if rule_id == key or not rule_matches(payload, arguments.query, rule_id):
+                continue
+            answer = rule_answer(payload, rule_id, value)
+            resolved = (
+                resolve_clarification(
+                    payload,
+                    answer,
+                    await current_section_pages(
+                        oracle, clarification_document_ids(payload, answer)
+                    ),
+                )
+                if answer is not None
+                else None
+            )
+            if resolved is None:
+                continue
+            scope, page_ranges = resolved
+            if page_ranges:
+                request = request.model_copy(
+                    update={"filters": {**request.filters, PAGE_RANGES_FILTER_KEY: page_ranges}}
+                )
+            return request, scope
+        if view.config.clarification_policy == "assume":
+            return request, None
+        selection_settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+        selection_usage: dict[str, float] = {}
+        selected_answers = await recognize_rule_selections(
+            payload, arguments.query, selection_settings, usage=selection_usage
+        )
+        request._rule_selection_state["prepared"] = True
+        request._rule_selection_state["elapsed_seconds"] = selection_usage.get(
+            "elapsed_seconds", 0.0
+        )
+        request = apply_rule_selection_scope(
+            request,
+            payload,
+            selected_answers,
+            current_pages=await current_section_pages(
+                oracle,
+                {
+                    doc
+                    for answer in selected_answers
+                    for doc in clarification_document_ids(payload, answer)
+                },
+            )
+            if selected_answers
+            else None,
+        )
+        found = await asyncio.to_thread(
+            suggest_clarification, payload, arguments.query, answers=selected_answers
+        )
+        if found is None:
+            return request, None
+        rule, clarification = found
+        rule_id = str(rule.get("id", ""))
+        return SearchOutput(
+            answer=f"回答の前に確認が必要です: {clarification.question}",
+            trace_id=new_trace_id(),
+            guardrail_warnings=[],
+            outcome="needs_clarification",
+            clarifications=[
+                GuideClarification(
+                    condition_id=f"{RULE_CONDITION_PREFIX}{rule_id}",
+                    label=str(rule.get("title", "") or rule_id),
+                    question=clarification.question,
+                    options=[option.label for option in clarification.options],
+                    multiple=clarification.multiple,
+                )
+            ],
+            evidence=[],
+            evidence_omitted=0,
+        )
 
 
 async def _older_versions(
@@ -3962,11 +4485,12 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
             terms_omitted=0,
             load_failed=True,
         )
-    if not (context.matched_rules or context.matched_terms):
+    generation_rules = context.rules_for_stage("generation")
+    if not (generation_rules or context.matched_terms):
         return None
     remaining = PROFILE_KNOWLEDGE_MAX_CHARS
     rules: list[ProfileKnowledgeRule] = []
-    for rule in context.matched_rules:
+    for rule in generation_rules:
         size = len(rule.title) + len(rule.content) + len(rule.source)
         if len(rules) < PROFILE_KNOWLEDGE_RULES_MAX and size <= remaining:
             rules.append(_knowledge_rule(rule))
@@ -3984,7 +4508,7 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
         matched_on=matched_on,
         rules=rules,
         terms=terms,
-        rules_omitted=len(context.matched_rules) - len(rules),
+        rules_omitted=len(generation_rules) - len(rules),
         terms_omitted=len(context.matched_terms) - len(terms),
     )
 
@@ -4451,42 +4975,45 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             view, arguments.search_answer_profile_id
         )
         settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
-        if not settings.rag_support_guide_enabled:
-            return LookupGuidesOutput(guides=[])
-        guides, failed = await search_route.load_published_guides(oracle, view.id)
-        if failed:
-            # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
-            raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
-        context = await search_route.support_guide_context(
-            oracle, guides, arguments.query, search_route.profile_scope_filters(view)
-        )
-        # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-        query = await build_guide_query(
-            oracle,
-            settings,
-            view.id,
-            guides,
-            arguments.query,
-            await load_runtime_knowledge_payload(oracle, view.id),
-        )
-        matches = rank_guides(
-            guides, query, arguments.conditions, limit=arguments.limit, context=context
-        )
-        if arguments.conditions:
-            # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
-            resolved = await asyncio.gather(
-                *(
-                    resolve_answered_conditions(match, arguments.conditions, settings)
-                    for match in matches
-                )
+        with profile_language_scope(settings):
+            if not settings.rag_support_guide_enabled:
+                return LookupGuidesOutput(guides=[])
+            guides, failed = await search_route.load_published_guides(oracle, view.id)
+            if failed:
+                # 読めなかったことを「当たるガイドが無い」（0 件）と区別する（#1278）。
+                raise HTTPException(status_code=503, detail=GUIDES_UNAVAILABLE_MESSAGE)
+            context = await search_route.support_guide_context(
+                oracle, guides, arguments.query, search_route.profile_scope_filters(view)
             )
-            matches = [item for item in resolved if isinstance(item, GuideMatch)]
-        return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
+            # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
+            query = await build_guide_query(
+                oracle,
+                settings,
+                view.id,
+                guides,
+                arguments.query,
+                await load_runtime_knowledge_payload(oracle, view.id),
+            )
+            matches = rank_guides(
+                guides, query, arguments.conditions, limit=arguments.limit, context=context
+            )
+            if arguments.conditions:
+                # 確認に自由入力で答えた選択式の条件は、答えの文が選んだ選択肢に決める（#2726）。
+                resolved = await asyncio.gather(
+                    *(
+                        resolve_answered_conditions(match, arguments.conditions, settings)
+                        for match in matches
+                    )
+                )
+                matches = [item for item in resolved if isinstance(item, GuideMatch)]
+            return LookupGuidesOutput(guides=[_lookup_item(match) for match in matches])
 
     async def retrieve_evidence(arguments: RetrieveEvidenceInput) -> RetrieveEvidenceOutput:
-        # planning=rag: 検索の画面と同じく質問の理解・拡張・検索・rerank まで行い、回答（CRAG・
-        # 生成）は作らない。planning=caller（#2651）: 呼び出し元の検索文で検索し、質問に応じた
-        # 推論の LLM / VLM も呼ばない（hybrid search・rerank・文脈の取得は同じ）。
+        # planning=rag: 検索の画面・チャットと同じ流れで質問の理解・拡張・文書の検索（rerank
+        # を含む）まで行い、その後の根拠の補い（CRAG・章節の拡張・要求ごとの探し直し）と回答の
+        # 生成はしない（補いは Agent が rag_read_section などで行う。#3506）。planning=caller
+        # （#2651）: 呼び出し元の検索文で検索し、質問に応じた推論の LLM / VLM も呼ばない
+        # （hybrid search・rerank・文脈の取得は同じ）。
         request = _search_request(arguments).model_copy(update={"generate_answer": False})
         enforce_rate_limit("search", http_request)
         echo = {"planning": arguments.planning, "request_id": arguments.request_id}
@@ -4509,9 +5036,14 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     **echo,
                 )
             request, scope = rule
-            result = await _run_search(request, scope=scope, caller_queries=list(arguments.queries))
+            result = await _run_search(
+                request,
+                scope=scope,
+                caller_queries=list(arguments.queries),
+                complete_evidence=False,
+            )
         else:
-            result = await _run_search(request)
+            result = await _run_search(request, complete_evidence=False)
         # 回答を作る呼び出し元へ、元の質問に当たる承認済みのルール・用語の説明を渡す（#2701）。
         knowledge = await _profile_knowledge(arguments)
         logger.info(
@@ -4544,6 +5076,9 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         output = RetrieveEvidenceOutput(
             trace_id=result.trace_id,
             guardrail_warnings=list(result.guardrail_warnings),
+            guardrail_degraded=_guardrail_degraded(result),
+            degraded_steps=_degraded_steps(_answer_diagnostics(result)),
+            zero_evidence=_zero_evidence(_answer_diagnostics(result), result),
             evidence=[],
             evidence_omitted=max(0, len(hits) - limit),
             older_versions=await _older_versions(arguments, request, result.citations),
@@ -4575,34 +5110,41 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         enforce_rate_limit("search", http_request)
         guide = arguments.guide
         try:
-            result = await validate_answer(
-                arguments.query,
-                arguments.answer,
-                [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
-                get_settings(),
-                requests=(
-                    [item.model_dump() for item in arguments.requests]
-                    if arguments.requests is not None
-                    else None
-                ),
-                gaps=arguments.gaps,
-                answer_trace_ids=arguments.answer_trace_ids,
-                premises=[item.model_dump() for item in arguments.premises],
-                data_results=[item.model_dump() for item in arguments.data_results],
-                guide=(
-                    GuideCheckRef(
-                        guide.search_answer_profile_id,
-                        guide.guide_id,
-                        guide.revision,
-                        dict(guide.conditions),
-                    )
-                    if guide is not None
-                    else None
-                ),
-            )
+            # 回答フローの「資料との照合」と同じ工程の span で包む（呼び出し元の Agent の
+            # 処理の経過で、MCP の呼び出しの下に RAG の工程として出る。#3470）。
+            with _answer_step_span(ANSWER_VALIDATION_STEP):
+                result = await validate_answer(
+                    arguments.query,
+                    arguments.answer,
+                    [EvidenceRef(item.document_id, item.chunk_id) for item in arguments.evidence],
+                    get_settings(),
+                    requests=(
+                        [item.model_dump() for item in arguments.requests]
+                        if arguments.requests is not None
+                        else None
+                    ),
+                    gaps=arguments.gaps,
+                    answer_trace_ids=arguments.answer_trace_ids,
+                    premises=[item.model_dump() for item in arguments.premises],
+                    data_results=[item.model_dump() for item in arguments.data_results],
+                    guide=(
+                        GuideCheckRef(
+                            guide.search_answer_profile_id,
+                            guide.guide_id,
+                            guide.revision,
+                            dict(guide.conditions),
+                        )
+                        if guide is not None
+                        else None
+                    ),
+                )
         except GuideProfileNotFoundError as exc:
             assert guide is not None  # 業務ガイドを渡したときだけ起きる
             raise await profile_not_found_error(guide.search_answer_profile_id) from exc
+        passage_ranges = {
+            passage_id: (start, end)
+            for passage_id, start, end in answer_passage_ranges(arguments.answer)
+        }
         return ValidateAnswerOutput(
             valid=result.valid,
             status=result.status,
@@ -4610,6 +5152,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             claims=[
                 ValidatedClaim(
                     answer_quote=str(claim.get("answer_quote") or ""),
+                    # 段落の位置（#3240。呼び出し側が段落の分け方を写さずに段落を特定する）。
+                    answer_range=_answer_range(claim, passage_ranges, arguments.answer),
                     status=str(claim.get("status") or ""),
                     chunk_id=_claim_chunk_id(claim.get("source_id")),
                     reason=str(claim.get("reason") or ""),
@@ -4639,6 +5183,20 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
             guide_revision=result.guide_revision,
             guide_steps=[ValidatedGuideStep.model_validate(step) for step in result.guide_steps],
             reused_claims=result.reused_claims,
+            premise_checks=[
+                PremiseConsistencyResult(
+                    answer_range=_passage_range(
+                        check.get("answer_passage_id"), passage_ranges, arguments.answer
+                    ),
+                    status=check.get("status"),
+                    decision=str(check.get("decision") or ""),
+                    adopted=bool(check.get("adopted")),
+                    fit=check.get("fit"),
+                    constraint_scope=check.get("constraint_scope"),
+                    passage_mode=check.get("passage_mode"),
+                )
+                for check in result.premise_consistency_checks
+            ],
         )
 
     return McpServer(

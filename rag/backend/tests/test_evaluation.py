@@ -107,6 +107,7 @@ class FakeJudge:
         standard_answer: str,
         citations: Sequence[RetrievedChunk],
         timeout_seconds: float,
+        judge_model_id: str,
     ) -> Mapping[str, object]:
         self.calls.append(
             {
@@ -115,6 +116,7 @@ class FakeJudge:
                 "standard_answer": standard_answer,
                 "citations": list(citations),
                 "timeout_seconds": timeout_seconds,
+                "judge_model_id": judge_model_id,
             }
         )
         if isinstance(self.result, Exception):
@@ -874,7 +876,7 @@ async def test_evaluation_case_is_limited_by_answer_timeout() -> None:
     assert slow.error_stage == "answer"
     assert slow.error_message is not None
     assert "上限の 1 秒以内に終わりませんでした" in slow.error_message
-    assert "時間切れになった工程: 質問の読み取りから回答の作成まで" in slow.error_message
+    assert "時間切れになった工程: 質問の条件を整理して回答を作る" in slow.error_message
     assert "遅い" not in slow.error_message
     assert fast.status == "success"
     assert pipeline.queries == ["遅い: 承認条件は？", "承認条件は？"]
@@ -1098,7 +1100,8 @@ def test_evaluation_api_ignores_removed_run_fields(monkeypatch: MonkeyPatch) -> 
 
     assert response.status_code == 200
     assert "mode" not in captured
-    assert captured["top_k"] == 20
+    # 省略時はチャット・RAG 検索と同じ既定（#3512）。
+    assert captured["top_k"] == 50
 
 
 @pytest.mark.parametrize(
@@ -1884,3 +1887,104 @@ def test_trend_includes_split_breakdown_and_evidence_recall() -> None:
     )
     assert trend["required_evidence_recall"] == 0.5
     assert trend["split_breakdown"]["holdout"]["metrics"] == {"mrr": 1.0}
+
+
+async def test_evaluation_runner_does_not_use_the_shared_article_catalog_record() -> None:
+    """品質評価の回答は、条の選択の process をまたぐ記録を使わない（#3507。実際の費用を測る）。"""
+    from rag_engine.resources.shared_cache import shared_cache_bypassed
+
+    seen: list[bool] = []
+
+    class RecordingPipeline(StubPipeline):
+        async def run(
+            self,
+            request: SearchRequest,
+            trace_id: str | None = None,
+            progress_callback: SearchStageProgressCallback | None = None,
+        ) -> SearchResponse:
+            seen.append(shared_cache_bypassed())
+            return await super().run(request, trace_id, progress_callback)
+
+    runner = EvaluationRunner(pipeline=RecordingPipeline())
+    assert shared_cache_bypassed() is False
+
+    await runner.run(
+        cases=[
+            EvaluationCase(id="case-1", query="承認条件"),
+            EvaluationCase(id="case-2", query="申請の期限"),
+        ],
+        top_k=5,
+    )
+
+    assert seen == [True, True]
+    # 評価の外（検索・チャット）では使う。
+    assert shared_cache_bypassed() is False
+
+
+async def test_evaluation_runner_shares_one_standard_scope_record_across_cases() -> None:
+    """1 回の評価のケースは、標準回答の比較範囲の記録を共有する（#3570）。"""
+    from rag_engine.evaluation.answer_eval import StandardScopeCache, standard_scope_cache
+
+    seen: list[StandardScopeCache] = []
+
+    class RecordingPipeline(StubPipeline):
+        async def run(
+            self,
+            request: SearchRequest,
+            trace_id: str | None = None,
+            progress_callback: SearchStageProgressCallback | None = None,
+        ) -> SearchResponse:
+            # 共有の中なら、その記録が返る。
+            with standard_scope_cache() as cache:
+                seen.append(cache)
+            return await super().run(request, trace_id, progress_callback)
+
+    runner = EvaluationRunner(pipeline=RecordingPipeline())
+    cases = [
+        EvaluationCase(id="case-1", query="承認条件"),
+        EvaluationCase(id="case-2", query="申請の期限"),
+    ]
+    await runner.run(cases=cases, top_k=5)
+    await runner.run(cases=cases[:1], top_k=5)
+
+    assert len(seen) == 3
+    assert seen[0] is seen[1]
+    # 別の評価（job）は記録を共有しない。
+    assert seen[2] is not seen[0]
+
+
+def test_summarize_answer_judgement_keeps_judge_diagnostics() -> None:
+    """判定の診断（比較範囲の使い回し・外した項目の数・再試行の回数）は、採点できなかったケースにも残す（#3570）。"""
+    diagnostics: dict[str, object] = {
+        "standard_scope_reused": True,
+        "standard_scope_retries": 0,
+        "standard_scope_dropped": 1,
+        "judge_retries": 1,
+        # 判定に使ったモデル（#3574）。
+        "judge_model_id": "model-judge",
+        "retry_reasons": ["coverage:InvalidStructuredOutput"],
+        # 段落ごとの主張の判定の呼び出しの数・失敗・出典の無い段落の数（#3576）。
+        "judge_calls": 6,
+        "claim_calls": 4,
+        "claim_failures": 1,
+        "uncited_claims": 2,
+    }
+    completed = summarize_answer_judgement(
+        {**_completed_judgement(), "judge_diagnostics": diagnostics}
+    )
+    assert completed.judge_diagnostics is not None
+    assert completed.judge_diagnostics.model_dump() == diagnostics
+
+    failed = summarize_answer_judgement(
+        {
+            "status": "error",
+            "message": "",
+            "judge_diagnostics": {**diagnostics, "standard_scope_retries": 1},
+        }
+    )
+    assert failed.status == "error" and failed.judge_diagnostics is not None
+    assert failed.judge_diagnostics.standard_scope_retries == 1
+
+    assert summarize_answer_judgement({"status": "timeout"}).judge_diagnostics is None
+    broken = summarize_answer_judgement({"status": "error", "judge_diagnostics": "壊れた値"})
+    assert broken.judge_diagnostics is None

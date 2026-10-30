@@ -855,3 +855,37 @@ def test_template_guide_describes_current_metrics_and_unassessed_results() -> No
     assert "約 2 倍" not in text
     assert "閾値 90%" not in text
     assert "正確性・網羅性" in book[CASES_SHEET_TITLE]["C1"].comment.text
+
+
+@pytest.mark.parametrize("endpoint", ["template", "import"])
+def test_excel_scope_comes_from_selected_profile(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    from types import SimpleNamespace
+
+    fake = _FakeOracle()
+
+    async def get_profile(profile_id: str) -> Any:
+        assert profile_id == "profile-a"
+        return SimpleNamespace(
+            status="ACTIVE",
+            config=SimpleNamespace(normalized_knowledge_base_ids=lambda: ["kb-profile"]),
+        )
+
+    monkeypatch.setattr(fake, "get_search_answer_profile", get_profile, raising=False)
+    monkeypatch.setattr(evaluation_route, "OracleClient", lambda: fake)
+    if endpoint == "template":
+        response = client.get(
+            "/api/evaluation/cases/template", params={"search_answer_profile_id": "profile-a"}
+        )
+        assert response.status_code == 200, response.text
+        assert fake.knowledge_base_ids == ["kb-profile"]
+    else:
+        response = client.post(
+            "/api/evaluation/cases/import",
+            files={"file": ("cases.xlsx", b"invalid", "application/octet-stream")},
+            data={"search_answer_profile_id": "profile-a", "knowledge_base_ids": "kb-other"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["knowledge_base_ids"] == ["kb-profile"]
+        assert response.json()["data"]["search_answer_profile_id"] == "profile-a"

@@ -28,6 +28,7 @@ from rag_engine.parsing.vision_prompt_rules import (
     MAX_TABLE_COLUMNS,
     VISION_LIST_FIELD_LIMITS,
 )
+from rag_engine.resources.runtime import resolve_prompt
 
 VISION_CROP_PADDING = 8
 VISION_CONTEXT_MIN_PADDING = 96
@@ -429,6 +430,7 @@ class _SettingsPictureDescriber:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self.system_prompt = resolve_prompt("picture_description.system", VISION_SYSTEM_PROMPT)
         self.api_mode = settings.llm_api_mode
         # 呼び出し（`_openai_parsed`）と同じ上限: 回答の上限と Vision のモデルの出力の上限の小さい方（#1719）。
         self.max_tokens = llm_output_token_limit(settings, get_llm_provider(settings, settings.default_vision_llm))
@@ -451,6 +453,7 @@ class _SettingsPictureDescriber:
             self._settings,
             context_image_paths=list(context_image_paths),
             rendered_prompt=rendered_prompt,
+            system_prompt=self.system_prompt,
             **({"target_kind": "table"} if target_kind == "table" else {}),
         )
 
@@ -663,7 +666,7 @@ def _describe_layout_pictures(
             crop=crop_path,
             context=context_crop.path,
             prompt=prompt,
-            system_prompt=VISION_SYSTEM_PROMPT,
+            system_prompt=getattr(describer, "system_prompt", resolve_prompt("picture_description.system", VISION_SYSTEM_PROMPT)),
             provider=work.provider,
             max_tokens=describer.max_tokens,
             kind=kind,

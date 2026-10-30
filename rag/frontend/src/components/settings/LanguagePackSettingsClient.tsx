@@ -3,6 +3,7 @@
 import {
   Banner,
   Button,
+  ButtonLink,
   Card,
   CardContent,
   CardDescription,
@@ -14,14 +15,17 @@ import {
   PageBody,
   TextareaField,
   TimedLoadingState,
+  useConfirm,
 } from "@production-ready/ui";
 import { FlaskConical, Languages, RotateCcw, Save } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
 import { LanguagePackHistoryCard } from "@/components/settings/LanguagePackHistoryCard";
 import {
+  api,
   ApiError,
   type LanguagePackData,
   type LanguagePackPreviewResult,
@@ -37,19 +41,26 @@ import {
   textsFromSections,
 } from "@/lib/language-pack";
 import { useLeaveGuard } from "@/lib/leave-guard";
-import { useLanguagePack, usePreviewLanguagePack, useUpdateLanguagePack } from "@/lib/queries";
+import { useLanguagePack, usePreviewLanguagePack } from "@/lib/queries";
 import { focusFirstInvalidField } from "@/lib/required-fields";
 import { toast } from "@/lib/toast";
+import { APP_ROUTES } from "@/lib/routes";
 
 /** 言語資源（文書と質問を読むときの言語の書き方。#2181）の全体の設定。 */
 export function LanguagePackSettingsClient() {
   const query = useLanguagePack();
-  const save = useUpdateLanguagePack();
+  const confirm = useConfirm();
+  const draft = useQuery({ queryKey: ["language-pack-draft"], queryFn: api.getLanguagePackDraft, retry: false });
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: (overrides: import("@/lib/api").LanguagePackSections) => api.updateLanguagePackDraft(draft.data!.draft_revision, overrides),
+    onSuccess: (data) => qc.setQueryData(["language-pack-draft"], data),
+  });
   const [texts, setTexts] = useState<LanguagePackTexts | null>(null);
   const [base, setBase] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const panel = useLanguagePackPanelState();
-  const serverTexts = query.data ? textsFromSections(query.data.fields, query.data.effective) : null;
+  const serverTexts = query.data ? textsFromSections(query.data.fields, (draft.data?.draft_effective ?? query.data.effective)) : null;
   const serverKey = serverTexts ? JSON.stringify(serverTexts) : null;
   if (serverTexts && serverKey !== base) {
     setBase(serverKey);
@@ -60,7 +71,7 @@ export function LanguagePackSettingsClient() {
   const reingest = Boolean(dirty && query.data && texts && serverTexts && changesIngestFields(query.data.fields, texts, serverTexts));
   useLeaveGuard(dirty, save.isPending);
 
-  if (query.isPending) {
+  if (query.isPending || draft.isPending) {
     return (
       <PageBody wide>
         <TimedLoadingState
@@ -74,13 +85,13 @@ export function LanguagePackSettingsClient() {
       </PageBody>
     );
   }
-  if (query.isError) {
+  if (query.isError || draft.isError) {
     return (
       <PageBody wide>
         <ApiErrorState
-          error={query.error}
+          error={query.error ?? draft.error}
           fallback={t("settings.language.loadError")}
-          onRetry={() => void query.refetch()}
+          onRetry={() => { void query.refetch(); void draft.refetch(); }}
         />
       </PageBody>
     );
@@ -110,7 +121,7 @@ export function LanguagePackSettingsClient() {
     }
     save.mutate(overridesFromTexts(data.fields, texts, data.builtin), {
       onSuccess: (saved) => {
-        const next = textsFromSections(saved.fields, saved.effective);
+        const next = textsFromSections(data.fields, saved.draft_effective);
         setBase(JSON.stringify(next));
         setTexts(next);
         toast.success(t("settings.language.saved"));
@@ -120,14 +131,16 @@ export function LanguagePackSettingsClient() {
 
   return (
     <PageBody wide>
-      {data.outdated_documents ? (
-        <Banner
-          severity="info"
-          title={t("settings.language.outdated.title", { count: data.outdated_documents })}
-        >
-          {t("settings.language.outdated.description")}
-        </Banner>
-      ) : null}
+      {data.current_release ? <div className="space-y-3">
+        {data.outdated_documents ? <Banner severity="warning" title={t("settings.language.release.differentCount", { count: data.outdated_documents })}>
+          <p>{t("settings.language.release.differentHelp")}</p>
+          <ButtonLink className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=different&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
+        </Banner> : null}
+        {data.unrecorded_documents ? <Banner severity="info" title={t("settings.language.release.unrecordedCount", { count: data.unrecorded_documents })}>
+          <p>{t("settings.language.release.unrecordedHelp")}</p>
+          <ButtonLink className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=unrecorded&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
+        </Banner> : null}
+      </div> : null}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -170,13 +183,20 @@ export function LanguagePackSettingsClient() {
                 onClick: () => {
                   save.reset();
                   setErrors({});
-                  setTexts(textsFromSections(data.fields, data.effective));
+                  setTexts(textsFromSections(data.fields, draft.data?.draft_effective ?? data.effective));
                 },
               },
             ]}
             status={
               save.isError ? (
-                <FormStatus tone="danger" message={saveError} />
+                <ApiErrorState error={save.error} fallback={saveError} onRetry={() => void (async () => {
+                  const ok = await confirm({ title: t("settings.language.release.reloadDraft"), description: t("settings.language.release.reloadDraftHelp"), confirmLabel: t("settings.language.release.reloadDraft"), tone: "warning" });
+                  if (!ok) return;
+                  const latest = await draft.refetch();
+                  if (!latest.data) return;
+                  const next = textsFromSections(data.fields, latest.data.draft_effective);
+                  setTexts(next); setBase(JSON.stringify(next)); save.reset();
+                })()} />
               ) : reingest ? (
                 <FormStatus tone="warning" message={t("settings.language.reingest")} />
               ) : null
@@ -185,7 +205,7 @@ export function LanguagePackSettingsClient() {
         </CardContent>
       </Card>
       <PreviewCard data={data} texts={texts} />
-      <LanguagePackHistoryCard dirty={dirty} />
+      <LanguagePackHistoryCard dirty={dirty} metadata={data} state={draft.data!} />
     </PageBody>
   );
 }

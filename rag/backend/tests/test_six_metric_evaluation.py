@@ -139,15 +139,14 @@ def test_removed_thresholds_are_rejected(name: str) -> None:
 
 
 def test_failed_case_stays_in_expected_decision_breakdown() -> None:
-    from app.rag.evaluation import case_error_result
+    from app.rag.evaluation import _case_error_result
 
     case = EvaluationCase(id="failed", query="合成の質問", expected_response_decision="hold")
-    failed = case_error_result(
-        case,
+    failed = _case_error_result(
+        case=case,
         trace_id="synthetic",
-        elapsed_ms=1,
-        error_type="TimeoutError",
-        error_message="合成の失敗",
+        elapsed=1,
+        error=TimeoutError("合成の失敗"),
     )
     result = summarize_case_results([failed])
     breakdown = result.decision_breakdown["hold"]
@@ -238,3 +237,10 @@ def test_retrieval_scores_preserve_precision_before_aggregation() -> None:
     result = score_case_answers(case, [(answer, {})])
     assert result.mrr == 1 / 3
     assert result.required_evidence_recall == 1 / 3
+
+
+def test_result_preserves_applied_thresholds() -> None:
+    result = summarize_case_results(
+        [], thresholds=EvaluationThresholds(mrr=0.6, answer_correctness=0.9)
+    )
+    assert result.applied_thresholds == {"mrr": 0.6, "answer_correctness": 0.9}

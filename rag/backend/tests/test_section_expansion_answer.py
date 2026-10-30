@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 
 from app.clients.section_map_store import ReadableChunkSet, SectionChunkRow
 from app.config import PROFILE_ONLY_SETTING_FIELDS, Settings
@@ -110,6 +111,21 @@ class SectionMapStub:
         )
 
 
+def _direct_answer_part(question: str, context: Any) -> dict[str, Any]:
+    """生成入力に残る原文を、章補完フローの正例へ明示する。"""
+    from rag_engine.generation.answering import _grounded_spans
+
+    span = _grounded_spans(question, context, (), None)[0]
+    return {
+        "aspect": "procedure",
+        "kind": "operation",
+        "claim": span["text"],
+        "status": "supported",
+        "evidence": [{"source_id": span["source_id"], "quote": span["text"]}],
+        "evidence_validation": "matched",
+    }
+
+
 @pytest.fixture
 def section_map(monkeypatch: pytest.MonkeyPatch) -> SectionMapStub:
     stub = SectionMapStub()
@@ -172,8 +188,34 @@ async def test_answer_reads_the_section_of_the_hit_chunk_and_cites_chunks(
 
 @pytest.mark.usefixtures("stub_llm")
 async def test_max_levels_limit_makes_the_answer_conditional(
-    section_map: SectionMapStub,
+    section_map: SectionMapStub, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import rag_engine.adapters.oci as engine_oci
+    from rag_engine.models.llm import CragRetrievalGradeOutput
+
+    def missing_procedure(
+        system: str, prompt: str, settings: Any, schema: type, **options: Any
+    ) -> Any:
+        if schema is CragRetrievalGradeOutput:
+            # 読み取り段数の上限を試すので、未評価ではなく未充足の操作を明示する。
+            supported = _fake_llm(system, prompt, settings, schema, **options)
+            return supported.model_copy(
+                update={
+                    "sufficient": False,
+                    "reason": "文書全体にある後続操作の説明が不足",
+                    "aspect_checks": [
+                        check.model_copy(
+                            update={"status": "missing", "source_ids": [], "evidence": []}
+                        )
+                        if check.aspect == "procedure"
+                        else check
+                        for check in supported.aspect_checks
+                    ],
+                }
+            )
+        return _fake_llm(system, prompt, settings, schema, **options)
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", missing_procedure)
     outcome = await _engine(rag_section_expansion_max_levels=1).run(
         SearchRequest(query="受注の登録方法は？")
     )
@@ -210,6 +252,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
             query=query,
             retrieval_queries=tuple(queries),
             sufficient=True,
+            answerable_parts=(_direct_answer_part(question, context),),
             relevant_chunk_ids=tuple(
                 child.record.chunk_uid
                 for parent in context.evidence_tree
@@ -218,7 +261,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
         )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             prompts.append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -228,7 +271,7 @@ async def test_initial_sufficient_grade_still_adds_section_text_to_generation(
 
     assert section_map.reads and section_map.reads[0][0] == "s1"
     assert outcome.diagnostics["section_expansion"]["levels_read"] == 1
-    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts)
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts), outcome.diagnostics
 
 
 @pytest.mark.usefixtures("stub_llm")
@@ -480,7 +523,7 @@ def long_section(monkeypatch: pytest.MonkeyPatch) -> LongSectionStub:
     return stub
 
 
-async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
+async def test_long_section_is_extracted_but_fixed_generation_input_exceeds_model_limit(
     monkeypatch: pytest.MonkeyPatch, long_section: LongSectionStub
 ) -> None:
     import re
@@ -512,7 +555,7 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
                 SectionExtractionQuote(chunk_ref="C1", location="", quote="承認は不要です。")
             )
             return SectionExtractionOutput(quotes=quotes)
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             prompts["draft"].append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -546,10 +589,12 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
     # 根拠の入力は、モデルの入力の上限（4096）の 50% の中。
     assert expansion["input_token_limit"] == 2048
     assert expansion["used_tokens"] <= expansion["input_token_limit"]
-    # 回答の生成に渡す原文は、抜き出した原文だけ（関係の無い説明の段落は渡さない）。
-    assert prompts["draft"] and APPROVAL in prompts["draft"][0]
-    assert FILLER not in prompts["draft"][0]
-    assert "登録ボタン" in outcome.answer
+    # 抜き出しが入っても固定の指示・schema・出力予約が入らないモデルには生成を送らない。
+    assert not prompts["draft"]
+    assert outcome.diagnostics["outcome"] == "conditional"
+    budget = outcome.diagnostics["generation_input_budget"]
+    assert budget["reason"] == "required_evidence_or_fixed_input_exceeds_limit"
+    assert not budget["fits"]
 
 
 @pytest.mark.parametrize("flow", ["standard_rag", "crag"])
@@ -576,11 +621,15 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
     ) -> CragRetrievalAttempt:
         grades.append(attempt)
         return CragRetrievalAttempt(
-            attempt=attempt, query=query, retrieval_queries=tuple(queries), sufficient=True
+            attempt=attempt,
+            query=query,
+            retrieval_queries=tuple(queries),
+            sufficient=True,
+            answerable_parts=(_direct_answer_part(question, context),),
         )
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             prompts.append(prompt)
         return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -591,7 +640,7 @@ async def test_section_completion_reaches_generation_in_both_answer_flows(
     )
 
     assert bool(section_map.reads) is enabled
-    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled
+    assert any(SECTION_TAIL[0].text in prompt for prompt in prompts) is enabled, outcome.diagnostics
     if flow == "standard_rag":
         assert grades == []
     if enabled:
@@ -640,6 +689,7 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
 
     import app.rag.answer_engine as backend
 
+    generated_prompts: list[str] = []
     # 検索済みの根拠と追加検索の根拠を異なる章節にする。
     original_outline = section_map_service.section_outline
     original_read = section_map_service.read_section
@@ -741,11 +791,45 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
 
         def cover(question: str, context: Any, *args: Any, **kwargs: Any) -> Any:
             _, trace = original(question, context, *args, **kwargs)
+            trace["re_retrieval"] = {"applied": True, "added_chunk_ids": ["doc-1:c5"]}
             return add_anchor(context), trace
 
         monkeypatch.setattr(answering, "_cover_missing_requests", cover)
+        import rag_engine.adapters.oci as engine_oci
+        from rag_engine.models.llm import GroundedDraft
 
-    outcome = await _engine(rag_answer_flow="standard_rag").run(SearchRequest(query="登録方法は？"))
+        def explicit_gap(
+            system: str, prompt: str, config: Any, schema: type, **options: Any
+        ) -> Any:
+            if schema in (GroundedDraft, generation_draft_wire_model()):
+                generated_prompts.append(prompt)
+            result = _fake_llm(system, prompt, config, schema, **options)
+            if (
+                schema in (GroundedDraft, generation_draft_wire_model())
+                and "変更後に確認を実行します。" not in prompt
+            ):
+                data = result.model_dump(exclude_unset=True)
+                data["items"].append(
+                    {
+                        "kind": "gap",
+                        "text": "確認の根拠がありません。",
+                        "request_id": "Q1",
+                        "citations": [],
+                    }
+                )
+                return GroundedDraft.model_validate(data)
+            return result
+
+        monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
+
+    outcome = await _engine(
+        rag_answer_flow="standard_rag", rag_request_coverage_retrieval_enabled=True
+    ).run(SearchRequest(query="登録方法は？"))
     assert [key for key, _ in section_map.reads] == ["s1", "s2"]
     assert outcome.diagnostics["section_expansion"]["minimum_scope_complete"]
-    assert "doc-1:c6" in {citation.chunk_id for citation in outcome.citations}
+    if stage == "guide":
+        assert "doc-1:c6" in {citation.chunk_id for citation in outcome.citations}
+    else:
+        # 追加原文は再生成へ渡る。新資料を使わない代役の回答は採用を強制しない。
+        assert len(generated_prompts) >= 2
+        assert "設定を変更します。" in generated_prompts[1]

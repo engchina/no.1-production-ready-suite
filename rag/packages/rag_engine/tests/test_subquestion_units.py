@@ -10,16 +10,15 @@ from rag_parser_core.language import bind_pack, builtin_pack, resolve
 
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.request_coverage import (
     CoverageBudget,
     TargetedRetrieval,
-    assess_targets,
     coverage_targets,
-    evidence_texts,
     plan_targeted_retrievals,
     re_retrieval_skip_reason,
+    request_rows,
     run_targeted_retrievals,
     select_new_parents,
     targeted_queries,
@@ -189,32 +188,19 @@ def test_subquestion_targets_judge_body_and_search_with_preamble() -> None:
     assert targeted_queries(targets[0], ()) == (PREAMBLE + " 受注の登録方法は？",)
 
 
-def test_weak_and_missing_subquestions_are_searched_and_supported_is_not() -> None:
+def test_subquestions_require_explicit_gap_before_search() -> None:
     targets = coverage_targets(LINE_QUESTION, split)
-    ctx = context(parent("p1", "システムAの画面Bでは、受注は受注入力画面で登録します。"), parent("p2", "システムAの画面Bの請求書の一覧"))
-    rows = assess_targets(targets, evidence_texts(ctx))
-
-    assert {r["id"]: r["status"] for r in rows} == {"Q2": "supported", "Q3": "weak", "Q4": "missing"}
-    assert all(r["subquestion"] for r in rows)
-    assert re_retrieval_skip_reason(rows, CoverageBudget()) == ""
-    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(chunks_per_subquestion=2))
-    assert [(p.target.id, p.chunk_cap) for p in plan] == [("Q3", 2), ("Q4", 2)]
-    assert stop == ""
-
-
-def test_subquestion_word_overlap_without_the_requested_scope_is_not_supported() -> None:
-    """小問の一般語が一致しても、共通の対象を確認できなければ追加探索を省かない。"""
-    targets = coverage_targets(LINE_QUESTION, split)
-    ctx = context(parent("p1", "受注は受注入力画面で登録します。"), parent("p2", "請求書の一覧"))
-    rows = assess_targets(targets, evidence_texts(ctx))
-    assert all(row["status"] == "missing" for row in rows)
-    plan, _ = plan_targeted_retrievals(rows, targets, CoverageBudget())
-    assert [item.target.id for item in plan] == ["Q2", "Q3", "Q4"]
+    rows = request_rows(targets)
+    assert all(row["status"] == "unassessed" for row in rows)
+    assert plan_targeted_retrievals(rows, targets, CoverageBudget())[0] == []
+    rows[1]["answer_status"] = "missing"
+    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget())
+    assert [item.target.id for item in plan] == ["Q3"] and not stop
 
 
 def test_plan_counts_subquestions_and_missing_requests_in_one_place() -> None:
     targets = coverage_targets(LINE_QUESTION, split)
-    rows = assess_targets(targets, evidence_texts(context()))
+    rows = [{**row, "answer_status": "missing"} for row in request_rows(targets)]
 
     plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(max_subquestions=2))
     assert [p.target.id for p in plan] == ["Q2", "Q3"]
@@ -226,7 +212,7 @@ def test_plan_counts_subquestions_and_missing_requests_in_one_place() -> None:
 
 def test_each_subquestion_keeps_its_own_top_evidence() -> None:
     targets = coverage_targets(LINE_QUESTION, split)
-    rows = assess_targets(targets, evidence_texts(context()))
+    rows = [{**row, "answer_status": "missing"} for row in request_rows(targets)]
     calls: list[str] = []
 
     def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
@@ -265,7 +251,12 @@ def test_select_new_parents_keeps_shared_cap_for_missing_requests() -> None:
 
 def _entry(request_id: str, text: str, page: int) -> grounded.CheckedItem:
     span = {"evidence_id": f"E{page}", "source": "manual.pdf", "page": page, "function": ("doc", "f"), "document_scope": ["doc"]}
-    return grounded.CheckedItem(GroundedItem(kind="rule", text=text, quote=text, request_id=request_id, applies="matched"), span=span)
+    return grounded.CheckedItem(
+        GroundedItem(
+            kind="rule", text=text, citations=[GroundedCitation(evidence_id="", quote=text)], request_id=request_id, applies="matched"
+        ),
+        span=span,
+    )
 
 
 def test_answer_is_split_by_subquestion_heading_and_only_unsupported_is_gap() -> None:

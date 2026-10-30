@@ -171,8 +171,12 @@ def test_retrieval_and_evaluation_permissions_can_read_but_cannot_edit_prompts(
     assert result.status_code == 200
     assert any(stage["phase"] == "retrieval" for stage in result.json()["data"]["stages"])
     path = f"/api/settings/answer-prompts/{key}"
-    assert client.put(path, json={"content": "合成の指示"}, headers=headers).status_code == 403
-    assert client.delete(path, headers=headers).status_code == 403
+    allowed = ANSWER_PROMPT_EDIT_PERMISSIONS[key] == permission
+    content = default_prompt(key)
+    assert client.put(path, json={"content": content}, headers=headers).status_code == (
+        200 if allowed else 403
+    )
+    assert client.delete(path, headers=headers).status_code == (200 if allowed else 403)
     assert fake.saved == {}
 
 
@@ -307,15 +311,25 @@ async def test_answer_prompts_round_trip_on_real_oracle() -> None:
 
 
 def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
-    from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
+    from rag_engine.adapters.oci import _picture_output_contract
 
     content = "## 独自の読み取り指示\n{{image_metadata}}"
     data = settings_routes._answer_prompts_data(
         {IMAGE_RETRIEVAL_PROMPT_KEY: {"content": content, "updated_at": None}}
     )
     stage = next(stage for stage in data.stages if stage.id == "picture_description")
-    assert [part.id for part in stage.prompts] == ["system", "template", "picture", "table"]
-    assert stage.prompts[1].content == refine_image_retrieval_prompt(content).strip()
+    assert [part.id for part in stage.prompts] == [
+        "system",
+        "template",
+        "rules",
+        "picture",
+        "table",
+        "contract",
+    ]
+    assert stage.prompts[1].content == content
+    assert stage.prompts[2].content == default_prompt("picture_description.rules")
+    assert stage.prompts[-1].content == _picture_output_contract()
+    assert stage.prompts[-1].prompt_key is None
     assert (
         next(prompt.content for prompt in data.prompts if prompt.key == IMAGE_RETRIEVAL_PROMPT_KEY)
         == content
@@ -330,7 +344,6 @@ def test_catalog_uses_current_image_template_with_runtime_rules() -> None:
         "field_extraction",
         "navigation_summary",
         "raptor_summary_system",
-        "raptor_summary",
     ],
 )
 def test_feature_prompts_save_and_reset_with_their_screen_permission(
@@ -346,7 +359,7 @@ def test_feature_prompts_save_and_reset_with_their_screen_permission(
     ]:
         auth.user_with_permissions(name, [permission])
     headers = {name: login(client, name) for name in ("parser", "chunking", "answer")}
-    owner = "chunking" if key.startswith("raptor") else "parser"
+    owner = "parser"
     path = f"/api/settings/answer-prompts/{key}"
     for name in headers:
         response = client.put(path, json={"content": "合成の独自指示"}, headers=headers[name])
@@ -378,8 +391,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
         async def answer_prompt_overrides(self) -> dict[str, str]:
             return {
                 "navigation_summary": "独自の章節指示",
-                "raptor_summary": "独自の階層指示",
-                "raptor_summary_system": "独自の共通指示",
+                "raptor_summary_system": "独自の共通指示\n独自の階層指示",
             }
 
     class Model:
@@ -411,7 +423,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
     summaries = await pipeline._augment_with_raptor("trace", chunks, None)
     assert len(summaries) > len(chunks)
     assert calls[0] == ("独自の章節指示", None)
-    assert all(call == ("独自の階層指示", "独自の共通指示") for call in calls[1:])
+    assert all(call == ("", "独自の共通指示\n独自の階層指示") for call in calls[1:])
     unsaved = IngestionPipeline(oracle=cast(Any, object()), settings=Settings())
     assert await unsaved._stage_prompt("navigation_summary", "既定") == "既定"
 

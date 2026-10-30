@@ -44,6 +44,8 @@ export const MODEL_MESSAGES = {
   "settings.model.connection.unsaved": "未保存",
   "settings.model.defaults.description":
     "処理の種類ごとに使うモデルを登録モデルから選びます。",
+  "settings.model.defaults.error.judgeRemoved":
+    "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.noVisionModel":
     "画像入力に対応したモデルがありません。登録モデルの 1 つ以上で「画像入力に対応」をオンにしてください。",
   "settings.model.defaults.error.textRemoved":
@@ -56,6 +58,11 @@ export const MODEL_MESSAGES = {
     "「{model}」は登録モデルにありません。登録モデルから選び直してください。",
   "settings.model.defaults.error.visionRequired":
     "既定の画像対応モデルを選択してください。",
+  "settings.model.defaults.judge": "既定の判定モデル",
+  "settings.model.defaults.judgeDefaultText": "既定のテキストモデル",
+  "settings.model.defaults.judgeHelp":
+    "RAG の品質評価の判定に使います。自分の回答は高く判定されやすいため、モデルの比較では別のモデルに固定してください。",
+  "settings.model.defaults.judgeSameAsAnswer": "回答と同じモデル",
   "settings.model.defaults.placeholder": "モデルを選んでください",
   "settings.model.defaults.text": "既定のテキストモデル",
   "settings.model.defaults.textHelp":
@@ -64,14 +71,6 @@ export const MODEL_MESSAGES = {
   "settings.model.defaults.vision": "既定の画像対応モデル",
   "settings.model.defaults.visionHelp":
     "画像を読み取る処理（文書解析の図・画像の読み取りなど）で使います。画像入力に対応したモデルだけを選べます。",
-  "settings.model.seed.title": "呼び出しの共通の設定",
-  "settings.model.seed.description":
-    "登録したすべてのモデルの呼び出し（LLM・VLM）に使う値です。登録モデルと一緒に保存します。",
-  "settings.model.seed.label": "seed",
-  "settings.model.seed.help":
-    "出力をそろえやすくする乱数の種（0〜2147483647、既定 42）。再現されるかはモデル次第です。NL2SQL の Select AI は業務プロファイルの seed を使います。",
-  "settings.model.seed.invalid":
-    "seed は 0〜2147483647 の整数で入力してください。",
   "settings.model.actions.label": "{section} の操作",
   "settings.model.enterprise.addModel": "追加",
   "settings.model.enterprise.apiKey": "API key",

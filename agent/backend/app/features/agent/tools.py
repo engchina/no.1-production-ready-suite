@@ -2,6 +2,11 @@
 
 Control Plane のツール（`tool_registry`）と、MCP 接続のツール（RAG / NL2SQL / 外部 MCP。#757）を
 同じポリシー・ガードレール・監査で呼ぶ。業務 RAG / NL2SQL はこのプロジェクト内で実装しない。
+
+依存は「業務 Agent → スキル → ツール」の一方向（#3240）。この module（とここから import する
+module）はスキルの定義・ID・一覧を import・参照しない。どのツールを Run に渡すかはスキルの側
+（`builtin_runtime.agent_mcp_requirements` / `agent_tool_names`）が決める
+（`tests/test_skill_tool_boundary.py`）。
 """
 
 from __future__ import annotations
@@ -12,7 +17,9 @@ import logging
 import re
 import secrets
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
@@ -46,10 +53,6 @@ from app.features.agent.config import (
 )
 from app.features.agent.mcp_url import mask_url_credentials, mask_urls_in_text
 from app.features.agent.profile_name_migration import migrate_rag_call
-from app.features.agent.skills import (
-    AgentSkillListOutput,
-    skill_registry,
-)
 from app.features.agent.tool_arguments import (
     INVALID_ARGUMENTS_CODE,
     INVALID_ARGUMENTS_MESSAGE,
@@ -788,12 +791,47 @@ def _with_trace_meta(payload: JsonObject) -> JsonObject:
     return {**payload, "params": {**params, "_meta": merged}}
 
 
+# 実行中のツール（function tool の名前, 表示名〔MCP の `title`〕）。同じツールの `tools/call` の
+# `mcp.request` の span に表示名を付ける（#3468）。
+_TOOL_TITLE: ContextVar[tuple[str, str] | None] = ContextVar("agent_tool_title", default=None)
+# `mcp.request` の span の、呼ぶツールの表示名の属性（画面の行の名前に使う。#3468）。
+MCP_TOOL_TITLE_ATTRIBUTE = "pr.tool.title"
+
+
+@contextmanager
+def tool_title_scope(function_name: str, title: str | None) -> Iterator[None]:
+    """この中の同じツールの `tools/call` の `mcp.request` の span に、表示名を付ける（#3468）。
+
+    表示名はツールの span と同じ（Run の `tool_titles`。MCP の `title`）。無ければ何もしない。
+    """
+    if not title:
+        yield
+        return
+    token = _TOOL_TITLE.set((function_name, title))
+    try:
+        yield
+    finally:
+        _TOOL_TITLE.reset(token)
+
+
+def _current_tool_title(mcp_tool_name: str) -> str | None:
+    """実行中のツールの表示名（呼ぶ MCP のツールが、そのツールのときだけ）。"""
+    current = _TOOL_TITLE.get()
+    if current is None:
+        return None
+    function_name, title = current
+    if mcp_tool_name in (function_name, mcp_base_tool_name(function_name)):
+        return title
+    return None
+
+
 def _mcp_request_attributes(payload: JsonObject) -> dict[str, object]:
     """`mcp.request` の span の属性（OpenTelemetry の MCP の semantic conventions。#3272）。
 
     JSON-RPC の method（`mcp.method.name`）と、`tools/call` なら呼ぶツールの名前
-    （`gen_ai.tool.name`）。画面の処理の経過は `tools/call` だけを行にし、`initialize`・通知・
-    `tools/list` は出さない。引数・結果は入れない。
+    （`gen_ai.tool.name`）と表示名（`pr.tool.title`。実行中のツールの表示名。#3468）。画面の処理の
+    経過は `tools/call` だけを行にし、`initialize`・通知・`tools/list` は出さない。引数・結果は
+    入れない。
     """
     method = payload.get("method")
     if not isinstance(method, str) or not method:
@@ -803,6 +841,8 @@ def _mcp_request_attributes(payload: JsonObject) -> dict[str, object]:
     name = params.get("name") if isinstance(params, dict) else None
     if method == "tools/call" and isinstance(name, str) and name:
         attributes["gen_ai.tool.name"] = name
+        if title := _current_tool_title(name):
+            attributes[MCP_TOOL_TITLE_ATTRIBUTE] = title
     return attributes
 
 
@@ -1182,20 +1222,8 @@ def _oauth_http_error_message(status_code: int) -> str:
     return f"{prefix}。"
 
 
-def _schema(model: type[BaseModel]) -> JsonObject:
-    return model.model_json_schema()
-
-
 def _echo_tool(arguments: JsonObject, _context: ToolInvocationContext) -> JsonObject:
     return {"echo": arguments}
-
-
-def _agent_skill_list(_arguments: JsonObject, _context: ToolInvocationContext) -> JsonObject:
-    skills = skill_registry.list()
-    return AgentSkillListOutput(
-        skills=skills,
-        metadata={"count": len(skills)},
-    ).model_dump()
 
 
 _SENSITIVE_KEY_PATTERN = re.compile(
@@ -1835,20 +1863,23 @@ def _job_wait_budget_seconds() -> float:
     return max(0.0, float(get_settings().agent_nl2sql_job_wait_seconds))
 
 
+# Run がキャンセル・終了したかの判定（ジョブの完了を待つのをやめる）。Run の保存先を持つ上の層
+# （`runtime`）が import のときに差し込む（ツールの層は Run・スキルの module を import しない。
+# #3240。`tests/test_skill_tool_boundary.py`）。差し込まれていなければ終わっていない扱い。
+_run_finished_check: Callable[[str], bool] | None = None
+
+
+def set_run_finished_check(check: Callable[[str], bool] | None) -> None:
+    """Run が終わったかの判定を差し込む（`runtime` が呼ぶ）。"""
+    global _run_finished_check
+    _run_finished_check = check
+
+
 def _run_is_finished(run_id: str | None) -> bool:
     """Run がキャンセル・終了していれば True（ジョブの完了を待つのをやめる）。"""
-    if not run_id:
+    if not run_id or _run_finished_check is None:
         return False
-    from app.features.agent.runtime import RunStatus, runtime_repository
-
-    try:
-        status = runtime_repository.get_run(run_id).status
-    except KeyError:
-        return True
-    except Exception:  # noqa: BLE001 - 保存先の一時的な失敗では待ちを止めない
-        logger.warning("mcp_job_wait_run_status_failed", extra={"run_id": run_id}, exc_info=True)
-        return False
-    return status in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+    return _run_finished_check(run_id)
 
 
 def _job_in_flight(result: JsonObject) -> str | None:
@@ -2014,18 +2045,4 @@ tool_registry.register(
         audit_tags=["debug"],
     ),
     _echo_tool,
-)
-tool_registry.register(
-    ToolDefinition(
-        name="agent_skill_list",
-        description="Agent Runtime に登録された Skill 一覧を返す。",
-        input_schema={"type": "object", "additionalProperties": False},
-        output_schema=_schema(AgentSkillListOutput),
-        permission_level=ToolPermissionLevel.READ,
-        side_effects=False,
-        timeout_seconds=1.0,
-        max_retries=0,
-        audit_tags=["agent", "skill", "discovery"],
-    ),
-    _agent_skill_list,
 )

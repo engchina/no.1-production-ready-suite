@@ -344,6 +344,15 @@ export {
   type AnswerSectionsLabels,
   type AnswerSectionsProps,
 } from "./components/chat/answer-sections";
+// 回答の見出しと、チャットの回答の本文の見出し「回答」（3 製品共通。#3433）
+export {
+  AnswerHeading,
+  ChatAnswerBody,
+  DEFAULT_CHAT_ANSWER_BODY_LABELS,
+  type AnswerHeadingProps,
+  type ChatAnswerBodyLabels,
+  type ChatAnswerBodyProps,
+} from "./components/chat/answer-heading";
 // 回答の段落の印・外した段落・回答全体の注意（RAG・Agent 共通。#2738）
 export {
   ANSWER_PASSAGE_STATE_ICON,
@@ -734,6 +743,9 @@ export {
   formatRunDuration,
   formatRunDateTime,
   formatRunTokens,
+  runUsageView,
+  runListUsage,
+  DEFAULT_RUN_USAGE_LABELS,
   runPeriodSince,
   resolveRunHistoryLabels,
   RUN_PERIODS,
@@ -749,6 +761,10 @@ export {
   type RunStatusFilter,
   type RunHistoryFilter,
   type RunHistoryItem,
+  type RunModelUsageRecord,
+  type RunUsageLabels,
+  type RunUsageMeasurement,
+  type RunUsageView,
   type RunHistoryLabels,
   type RunHistoryLabelsInput,
   type RunHistoryTableProps,
@@ -761,10 +777,14 @@ export {
   RunProcessDetails,
   RunTimeline,
   RunTimelineSection,
+  RunJobProgress,
   RunDetailLayout,
   RunDetailSkeleton,
   RunFactList,
   runTimelineBars,
+  runTimelineHasChildren,
+  runTimelineCurrentStepIndex,
+  RUN_TIMELINE_MAX_VISIBLE_DEPTH,
   resolveRunDetailLabels,
   formatRunCancellation,
   DEFAULT_RUN_DETAIL_LABELS,
@@ -783,6 +803,7 @@ export {
   type RunTimelineBar,
   type RunTimelineProps,
   type RunTimelineSectionProps,
+  type RunJobProgressProps,
   type RunDetailLayoutProps,
 } from "./components/data/run-detail";
 export {
@@ -956,3 +977,5 @@ export {
   type TraceProgressSnapshot,
   type TraceProgressSnapshotOptions,
 } from "./components/feedback/trace-progress-snapshot";
+
+export { ViewportScrollRegion } from "./components/data/viewport-scroll-region";

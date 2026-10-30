@@ -67,6 +67,7 @@ from app.features.nl2sql.sql_requirement import (
     requirement_response_format,
 )
 from app.main import app
+from app.security.dependencies import local_debug_principal
 from app.settings import Settings, get_settings
 
 TODAY = date(2026, 10, 11)
@@ -359,7 +360,10 @@ def _runtime(llm: _ScriptedLlm, *, glossary: dict[str, str] | None = None) -> On
 
 
 def _create(
-    runtime: OntologyApiRuntime, question: str = "出荷済みの受注金額の合計"
+    runtime: OntologyApiRuntime,
+    question: str = "出荷済みの受注金額の合計",
+    *,
+    actor_user_uuid: str = "user-1",
 ) -> QuerySessionData:
     return runtime.create_session(
         QuerySessionApiCreate(
@@ -367,7 +371,7 @@ def _create(
             profile_id="sales",
             clarification_mode=ClarificationMode.GUIDED,
         ),
-        actor_user_uuid="user-1",
+        actor_user_uuid=actor_user_uuid,
     )
 
 
@@ -1964,7 +1968,7 @@ async def test_answer_and_apply_are_idempotent_over_http(monkeypatch: pytest.Mon
     legacy._enterprise_ai_client = llm
     runtime = OntologyApiRuntime(legacy_service=legacy, store=_OracleSizedIdempotencyStore())
     runtime._requirement_today = lambda: TODAY  # type: ignore[method-assign]
-    created = _create(runtime)
+    created = _create(runtime, actor_user_uuid=local_debug_principal().user_uuid)
     item = _state(created).current_item
     assert item is not None
     monkeypatch.setattr(ontology_router_module, "ontology_runtime", runtime)
@@ -2215,7 +2219,7 @@ def mcp_requirement(monkeypatch: pytest.MonkeyPatch) -> Callable[[_ScriptedLlm],
 
     from app.features.mcp import tools as mcp_tools
 
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
     monkeypatch.setattr(mcp_tools, "JOB_POLL_INTERVAL_SECONDS", 0.01)
 
     def install(llm: _ScriptedLlm) -> _McpJobs:

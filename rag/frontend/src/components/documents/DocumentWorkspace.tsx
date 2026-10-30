@@ -17,11 +17,14 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useId, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useId, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
+
+import { chunksOnPage, extractionOnPage } from "@/lib/document-inspector-page";
 
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
+import { LanguagePackDocumentPanel } from "./LanguagePackDocumentPanel";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentVersionEditor } from "./DocumentVersionEditor";
 import { DocumentExtraction, DocumentRawText } from "./DocumentExtraction";
@@ -90,7 +93,6 @@ import {
   SelectField,
   type SelectFieldOption,
   Skeleton,
-  Switch,
   TabPanel,
   Tabs,
   TextField,
@@ -613,6 +615,10 @@ export function DocumentWorkspace({
   const saveReviewErrorText = saveReviewEdits.isError
     ? errorMessage(saveReviewEdits.error, t("flow.review.edit.saveError"))
     : "";
+  const selectedExtraction = useMemo(
+    () => selectedRecipe ? (extractionJsonQuery.data?.payload ?? {}) : {},
+    [selectedRecipe, extractionJsonQuery.data?.payload]
+  );
   const parsedExtraction = useMemo(
     () =>
       parseStructuredExtraction(
@@ -1052,6 +1058,22 @@ export function DocumentWorkspace({
   };
   if (focusSourceChanged) applyRequestedFocus();
 
+  const inspectorScope = `${documentId}:${selectedRecipeId}:${previewVariant}`;
+  const [inspectorPage, setInspectorPage] = useState<{ scope: string; page: number } | null>(null);
+  const currentInspectorPage = inspectorPage?.scope === inspectorScope ? inspectorPage.page : null;
+  const reportInspectorPage = useCallback((page: number) => {
+    setInspectorPage(current => current?.scope === inspectorScope && current.page === page ? current : { scope: inspectorScope, page });
+  }, [inspectorScope]);
+
+  const pageExtraction = useMemo(
+    () => extractionOnPage(selectedExtraction, currentInspectorPage),
+    [selectedExtraction, currentInspectorPage]
+  );
+  const pageChunks = useMemo(
+    () => chunksOnPage(displayedChunks, selectedExtraction, currentInspectorPage),
+    [displayedChunks, selectedExtraction, currentInspectorPage]
+  );
+
   if (query.isPending) {
     return (
       <TimedLoadingState
@@ -1076,7 +1098,7 @@ export function DocumentWorkspace({
   }
 
   const doc = query.data;
-  const selectedExtraction = selectedRecipe ? (extractionJsonQuery.data?.payload ?? {}) : {};
+
   const sourceProfile = doc.source_profile ?? initialSourceProfile;
   const preparedArtifact = selectedRecipe?.preprocess_artifact ?? null;
   const hasPreparedArtifact = Boolean(preparedArtifact?.object_storage_path);
@@ -1402,6 +1424,7 @@ export function DocumentWorkspace({
           // 未保存の抽出確認の修正があるあいだは、レシピの操作からも承認させない（本文側の承認と同じ。#944）。
           approveBlocked={status === "REVIEW" && hasReviewEdits}
         />
+        <LanguagePackDocumentPanel key={selectedRecipeId ?? "default"} documentId={documentId} fileName={doc.file_name} use={doc.language_pack} recipe={selectedRecipe ?? null} />
         {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。
             工程の操作（承認・実行・再試行・再処理）はこの案内の中に置き、押した結果（投入の失敗・開始・承認の失敗）は
             同じ案内の中のボタンの直下に出す（UX 契約 messaging §10.1・§10.2。#2034）。押した後の実行中は、同じ場所の
@@ -1529,6 +1552,8 @@ export function DocumentWorkspace({
                 preparedArtifact={preparedArtifact}
                 showFallbackDownload={false}
                 focusPage={effectiveFocusPage}
+                onPageChange={reportInspectorPage}
+                focusRequestKey={urlFallbackFocus?.key ?? focusRequest?.key ?? null}
                 focusBbox={effectiveFocusBbox}
                 focusBboxMode={effectiveFocusBboxMode}
                 focusBboxUnit={effectiveFocusBboxUnit}
@@ -1559,11 +1584,17 @@ export function DocumentWorkspace({
                 {
                   id: "chunks",
                   label: t("flow.chunks.title"),
-                  count: displayedChunks.length || undefined,
+                  count: pageChunks.length || undefined,
                 },
                 { id: "export", label: t("flow.extractionExport.title") },
               ]}
             />
+
+            {currentInspectorPage !== null && inspectorTab !== "export" ? (
+              <p className="mb-2 text-xs text-fg-muted" data-testid="inspector-current-page">
+                {t("flow.inspector.currentPage", { page: currentInspectorPage })}
+              </p>
+            ) : null}
 
             {inspectorTab === "text" ? (
               <div
@@ -1573,7 +1604,7 @@ export function DocumentWorkspace({
                 tabIndex={0}
                 className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
-                <DocumentRawText extraction={selectedExtraction} />
+                <DocumentRawText extraction={pageExtraction} />
               </div>
             ) : null}
 
@@ -1665,7 +1696,7 @@ export function DocumentWorkspace({
                 ) : null}
                 {status === "REVIEW" && editingReview ? (
                   <ReviewTextEditor
-                    extraction={selectedExtraction}
+                    extraction={pageExtraction}
                     edits={reviewEdits}
                     onChange={(edits) => {
                       saveReviewEdits.reset();
@@ -1674,7 +1705,7 @@ export function DocumentWorkspace({
                   />
                 ) : (
                   <DocumentExtraction
-                    extraction={selectedExtraction}
+                    extraction={pageExtraction}
                     documentId={documentId}
                     selectedElementId={selectedElementId}
                     selectedTableCellKey={selectedTableCellKey}
@@ -1738,7 +1769,7 @@ export function DocumentWorkspace({
                     />
                   ) : null}
                   <DocumentChunksPanel
-                    chunks={displayedChunks}
+                    chunks={pageChunks}
                     // レシピが無い・取得できないときは chunk の取得自体が無効（isPending のまま）なので、
                     // 実際に取得している間（isLoading）だけ読込中にする（#281）。
                     loading={chunkPreview.isPending || (!chunkPreview.data && chunksQuery.isLoading)}
@@ -2720,20 +2751,6 @@ function ChunkPreviewControls({
             });
           }}
         />
-        {/* 隣の選択欄（md）と同じ高さの最小（#613）。 */}
-        <div className="flex min-h-[var(--control-height-md)] items-center justify-between gap-3 rounded-md border border-border bg-surface-sunken px-3 py-2">
-          <span className="text-sm font-medium text-fg">
-            {t("flow.chunkPreview.contextHeader")}
-          </span>
-          <Switch
-            checked={form.chunk_context_header_enabled}
-            disabled={pending}
-            aria-label={t("flow.chunkPreview.contextHeader")}
-            onCheckedChange={(checked) =>
-              onChange({ chunk_context_header_enabled: checked })
-            }
-          />
-        </div>
         {fixedDelimiter ? (
           <TextField
             id="chunk-preview-delimiter"

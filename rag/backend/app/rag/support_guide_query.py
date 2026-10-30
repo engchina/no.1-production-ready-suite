@@ -3,7 +3,7 @@
 検索（``_resolve_query_context``）・チャットの確認の判定（``clarifications/suggest``）・MCP の
 ``rag_lookup_guides`` の 3 か所が、同じ ``build_guide_query`` で質問を作る。
 
-1. 用語の別名の展開（常に行う。モデルは呼ばない）: 検索・回答プロファイルの用語・ルール
+1. 用語の別名の展開（常に行う。モデルは呼ばない）: 検索・回答プロファイルの用語・同義語
    （runtime knowledge）の terms の別名で、質問を展開する（``expand_guide_query``）。
 2. 意味の照合（``RAG_SUPPORT_GUIDE_SEMANTIC_MATCH_ENABLED`` か検索・回答プロファイルで ON のとき
    だけ）: 質問を OCI Generative AI で埋め込み、公開の版ごとに持つ質問の例の埋め込みと比べる。

@@ -1,11 +1,13 @@
 """OCI Generative AI adapter 境界のテスト。"""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_backend_core.observability.model_purpose import model_call_purpose
 
 from app.clients.oci_auth import OciPrivateKeyPassPhraseRequiredError
 from app.clients.oci_genai import (
@@ -515,3 +517,70 @@ def _vector_for_text(text: str) -> list[float]:
 async def _run_inline(operation: Callable[[], Any]) -> Any:
     """テストでは同期 fake を同一 thread で実行する。"""
     return operation()
+
+
+@pytest.mark.parametrize(
+    "input_type,purpose",
+    [
+        ("SEARCH_QUERY", "query.embed"),
+        ("SEARCH_DOCUMENT", "document.embed"),
+        ("CLASSIFICATION", None),
+        ("CLUSTERING", None),
+    ],
+)
+@pytest.mark.parametrize("probe", [False, True])
+async def test_embedding_purpose_uses_declared_input_type_and_preserves_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    input_type: str,
+    purpose: str | None,
+    probe: bool,
+) -> None:
+    from app.clients import oci_genai
+
+    captured: list[dict[str, object]] = []
+
+    @contextmanager
+    def capture(name: str, *, kind: str, attributes: dict[str, object]) -> Iterator[None]:
+        assert name == "gen_ai.embeddings" and kind == "client"
+        captured.append(attributes)
+        yield
+
+    monkeypatch.setattr(oci_genai, "observed_span", capture)
+    sdk = FakeGenAiInferenceClient(
+        embed_response=SimpleNamespace(data=SimpleNamespace(embeddings=[[1.0, 0.0, 0.0]]))
+    )
+    client = OciGenAiClient(
+        settings=_oci_settings(), inference_client=sdk, sdk_call_runner=_run_inline
+    )
+    with model_call_purpose("connection.check" if probe else None):
+        result = await client.embed(["合成の入力"], input_type=input_type)  # type: ignore[arg-type]
+    assert result == [[1.0, 0.0, 0.0]]
+    assert captured[0].get("pr.gen_ai.purpose") == ("connection.check" if probe else purpose)
+    assert captured[0]["gen_ai.request.model"] == "cohere.embed-v4.0"
+    assert sdk.last_embed_request is not None
+    assert sdk.last_embed_request.input_type == input_type
+    assert sdk.embed_calls == 1
+
+
+async def test_rerank_cache_normalizes_only_query_presentation() -> None:
+    """原文送信を保持し、同じ質問の表記差だけをキャッシュで吸収する。"""
+    client = CountingRerankClient()
+    original = "ＡＢＣ  設定"
+    first = await client.rerank(original, ["本文 A", "本文 B"], top_n=2)
+    assert await client.rerank("ABC\t設定", ["本文 A", "本文 B"], top_n=2) == first
+    assert client.calls_args == [(original, ["本文 A", "本文 B"], 2)]
+
+    for query in ["ABC 設定 追加条件", "ABC設定", "abc 設定"]:
+        await client.rerank(query, ["本文 A", "本文 B"], top_n=2)
+    await client.rerank(original, ["本文 B", "本文 A"], top_n=2)
+    await client.rerank(original, ["本文 A", "本文 C"], top_n=2)
+    await client.rerank(original, ["本文 A", "本文 B"], top_n=1)
+    assert client.calls == 7
+
+
+def test_rerank_cache_key_keeps_model_boundary() -> None:
+    from app.clients.oci_genai import _rerank_cache_key
+
+    assert _rerank_cache_key(
+        query="ABC 設定", documents=["本文 A"], top_n=1, model_id="model-a"
+    ) != _rerank_cache_key(query="ABC 設定", documents=["本文 A"], top_n=1, model_id="model-b")

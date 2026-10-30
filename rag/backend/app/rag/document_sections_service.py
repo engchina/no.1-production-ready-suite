@@ -16,8 +16,6 @@ from app.rag.document_sections import (
 )
 from app.rag.section_rules import (
     NAVIGATION_RULES_FINGERPRINT_ARTIFACT,
-    SectionRulesPreviewData,
-    SectionRulesPreviewRequest,
     extraction_sections,
     load_section_rules,
     section_rules_fingerprint,
@@ -155,36 +153,3 @@ async def current_section_pages(
         for section in resolved[0].sections:
             pages[(document_id, section.id)] = (section.page_start, section.page_end)
     return pages
-
-
-async def preview_document_sections(
-    oracle: OracleClient, document_id: str, request: SectionRulesPreviewRequest
-) -> SectionRulesPreviewData | None:
-    """保存済み抽出だけを読み、保存・レシピの作成・再処理を行わず候補を返す。"""
-    if not await oracle.document_exists(document_id):
-        return None
-    row = await oracle.get_document_recipe(document_id, request.recipe_id)
-    if row is None:
-        return None
-    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    extraction_id = row.get("active_extraction_recipe_id")
-    extraction = None
-    if extraction_id:
-        artifact = await oracle.get_document_extraction_artifact(
-            document_id=document_id, extraction_recipe_id=str(extraction_id)
-        )
-        if artifact and artifact.get("extraction_json"):
-            extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
-    stored = await oracle.get_document_sections(document_id)
-    return SectionRulesPreviewData(
-        document_id=document_id,
-        recipe_id=request.recipe_id,
-        extraction_recipe_id=str(extraction_id) if extraction_id else None,
-        mode=request.mode,
-        effective_mode=config.section_rules_mode or request.mode,
-        recipe_overrides_mode=config.section_rules_mode is not None,
-        extraction_available=extraction is not None,
-        manual_edits_present=stored is not None,
-        page_count=(len(extraction.pages) or None) if extraction else None,
-        sections=extraction_sections(extraction, request.mode, request),
-    )

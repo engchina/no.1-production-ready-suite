@@ -1,4 +1,4 @@
-"""用語・ルール管理の検証、競合検出、バックアップ付き保存を扱う。"""
+"""用語・同義語と回答ルールの管理の検証、競合検出、バックアップ付き保存を扱う。"""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from rag_engine.knowledge.rule_application import RULE_INSTRUCTION_KINDS, RULE_PURPOSES
 from rag_engine.knowledge.runtime_knowledge import (
     MAX_ALIASES_PER_TERM,
     MAX_RULES,
@@ -141,6 +142,10 @@ def edit_knowledge(
     labels: str = "",
     content: str = "",
     source: str = "",
+    purpose: str | None = None,
+    instruction_kind: str | None = None,
+    exclusive_group: str | None = None,
+    priority: int | None = None,
     enabled: bool = True,
     delete: bool = False,
     confirmed: bool = False,
@@ -166,6 +171,8 @@ def edit_knowledge(
         rows.pop(index)
     else:
         row = copy.deepcopy(rows[index]) if index is not None else {}
+        if kind == "rules" and not name.strip():
+            name = selected or f"rule_{uuid4().hex}"
         name = _text(name, "用語" if kind == "terms" else "ルール ID", required=True, limit=160)
         if any(_key(other[identity]) == _key(name) for i, other in enumerate(rows) if i != index):
             raise ValueError("同じ用語またはルール ID が登録済みです。編集対象を選択してください。")
@@ -177,7 +184,20 @@ def edit_knowledge(
         else:
             row["title"] = _text(title, "ルール名", required=True, limit=160)
             row["triggers"] = _labels(labels, "照合キーワード", MAX_TRIGGERS_PER_RULE)
-            row["content"] = _text(content, "ルール内容", required=True)
+            if not row["triggers"]:
+                raise ValueError("照合キーワードを入力してください。")
+            rule_purpose = row.get("purpose", "both") if purpose is None else purpose
+            rule_kind = row.get("instruction_kind", "requirement") if instruction_kind is None else instruction_kind
+            rule_priority = row.get("priority", 0) if priority is None else priority
+            if rule_purpose not in RULE_PURPOSES or rule_kind not in RULE_INSTRUCTION_KINDS:
+                raise ValueError("ルールの用途・指示の種類を選び直してください。")
+            if type(rule_priority) is not int or not 0 <= rule_priority <= 100:
+                raise ValueError("適用優先度は 0〜100 の整数で指定してください。")
+            row.update(purpose=rule_purpose, instruction_kind=rule_kind, priority=rule_priority)
+            row["exclusive_group"] = _text(
+                row.get("exclusive_group", "") if exclusive_group is None else exclusive_group, "排他グループ", limit=160
+            )
+            row["content"] = _text(content, "ルール内容", required=rule_purpose != "confirmation")
         # 既存の承認・再確認・下書き状態は、利用可否を変更した場合だけ置き換える。
         if index is None or bool(enabled) != (row.get("status", "") in RUNTIME_KNOWLEDGE_ACTIVE_STATUSES):
             row["status"] = "approved" if enabled else "deprecated"

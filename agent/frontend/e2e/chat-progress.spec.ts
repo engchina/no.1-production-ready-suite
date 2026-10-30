@@ -20,7 +20,7 @@ const VIEWPORTS = [
 
 const THREAD_ID = `thread_${"b".repeat(32)}`;
 const RUN_ID = "run-progress";
-const MODEL_CALL = `モデルの呼び出し · ${SYNTHETIC_MODEL}`;
+const MODEL_CALL = "モデルを呼び出す（用途の記録なし）";
 
 function iso(offsetMs: number): string {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -97,6 +97,31 @@ function toolStep(id: string, name: string, status: string, extra: Record<string
   };
 }
 
+/**
+ * 入れ子の深さごとに字下げが違い（深い段ほど右）、どの行も名前は状態の印から同じ距離で始まる（製品名で名前がずれない。
+ * #3447）。
+ */
+async function expectNestedIndent(list: ReturnType<Page["getByTestId"]>) {
+  const rows = await list.evaluate((node) =>
+    Array.from(node.querySelectorAll("[data-run-timeline-step]"), (row) => {
+      const icon = row.querySelector(".pr-icon-line")!.getBoundingClientRect();
+      const label = row.querySelector("[data-run-timeline-label]")!.getBoundingClientRect();
+      return {level: Number(row.getAttribute("data-level") ?? 0), icon: Math.round(icon.left), gap: Math.round(label.left - icon.left)};
+    })
+  );
+  const byLevel = new Map<number, number>();
+  for (const row of rows) {
+    const known = byLevel.get(row.level);
+    if (known !== undefined) expect(row.icon).toBe(known);
+    byLevel.set(row.level, row.icon);
+  }
+  const levels = [...byLevel.keys()].sort((a, b) => a - b);
+  for (let index = 1; index < levels.length; index += 1) {
+    expect(byLevel.get(levels[index])!).toBeGreaterThan(byLevel.get(levels[index - 1])!);
+  }
+  expect(new Set(rows.map((row) => row.gap)).size).toBe(1);
+}
+
 for (const viewport of VIEWPORTS) {
   test(`終わったツールの段は、段の終わりのイベントの詳細で、後の段の実行中から開ける（#2373） (${viewport.name})`, async ({ page, mockApi }) => {
     const { progress: log } = seedRunningRun(mockApi);
@@ -168,7 +193,7 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByTestId("chat-progress-step-tool:rag__rag_search")).toContainText(
       "「ナレッジベースの検索」を実行しました"
     );
-    await expect(turn.getByTestId("chat-progress-step-chat-1")).toContainText("進め方を決めました");
+    await expect(turn.getByTestId("chat-progress-step-chat-1")).toContainText("質問に応じた次の操作を選びました");
     await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("回答を作りました");
     // 開閉のボタンは既定で閉じる。
     const toggle = turn.getByTestId("chat-progress-step-tool:rag__rag_search-toggle");
@@ -223,13 +248,13 @@ for (const viewport of VIEWPORTS) {
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-plan-${viewport.name}-${theme}.png`) });
 
-      // 2. ツールを呼んでいる（読み直しで span が増える）。終わったモデルの呼び出しは「進め方を決めました」。
+      // 2. ツールを呼んでいる（読み直しで span が増える）。終わったモデルの呼び出しは「質問に応じた次の操作を選びました」。
       run.steps = [toolStep("step-search", "rag__rag_search", "running", { completed_at: null })];
       log
         .step("chat-1", "done", { kind: "plan" })
         .step("tool:rag__rag_search", "running", { params: { tool: "rag__rag_search", run_step: "step-search" } });
       await expect(current).toHaveAttribute("data-step-id", "tool:rag__rag_search");
-      await expect(current).toContainText("処理を実行しています");
+      await expect(current).toContainText("選ばれたツールを呼び出しています");
       await expect(turn.getByTestId("chat-progress-running")).toContainText("処理中（1 ステップ完了）");
       await page.screenshot({ path: testInfo.outputPath(`progress-tool-${viewport.name}-${theme}.png`) });
 
@@ -327,11 +352,11 @@ for (const viewport of VIEWPORTS) {
       await expect(approval).toContainText("承認の判断を受け取りました");
       await expect(approval).toContainText("nl2sql__execute");
       expect((await approval.getAttribute("data-level")) ?? "0").toBe("0");
-      await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("処理を実行しました");
+      await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("選ばれたツールを呼び出しました");
       await expect(turn.getByTestId("chat-progress-step-chat-3")).toHaveAttribute("data-status", "done");
       await expect(turn.getByTestId("chat-progress-step-chat-3")).toContainText("回答を作りました");
-      // ツールを求めたモデルの呼び出しは、進め方の検討として残る。
-      await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("進め方を決めました");
+      // ツールを求めたモデルの呼び出しは、質問に応じた次の操作を選ぶとして残る。
+      await expect(turn.getByTestId("chat-progress-step-chat-2")).toContainText("質問に応じた次の操作を選びました");
       // 終端が届いたら、承認待ちの後も会話を取り直して回答を出す（開き直さない）。
       expect(mockApi.requests.some((request) => request.path === `/api/runs/${RUN_ID}/trace`)).toBe(true);
       await expectNoHorizontalOverflow(page);
@@ -374,6 +399,60 @@ for (const viewport of VIEWPORTS) {
   }
 }
 
+// #3445: 実行中の Run の詳細は、処理の経過を開いても動くスピナーが 1 つ（開いた一覧の今の段）。概要の進行表示は今の段の
+// 名前（ツールは表示名）で、ツールの内部名を出さない。処理の経過の見出しは実行中なら「処理中（N ステップ完了）」と経過時間。
+test("実行中の Run の詳細は処理の経過を開いても動くスピナーが 1 つで、進行表示は今の段の名前を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  const {run} = seedRunningRun(mockApi);
+  const start = iso(-8_000);
+  run.created_at = start;
+  const tool = "tool:rag__rag_retrieve_evidence";
+  const rag = (parent: string, extra: Record<string, unknown> = {}) => ({startedAt: start, parent, product: "rag", ...extra});
+  // ベクトル検索と全文検索は並行に実行中（#3443）。今の段は最後に始まった全文検索。
+  run.progress_events = new ProgressLog(RUN_ID, undefined, start)
+    .step("chat-1", "done", {startedAt: start, finishedAt: iso(-7_000), kind: "plan"})
+    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_retrieve_evidence", title: "根拠の取得"}})
+    .step("mcp-call", "running", {startedAt: start, parent: tool, attributes: {"mcp.method.name": "tools/call", "gen_ai.tool.name": "rag_retrieve_evidence"}})
+    .step("rag-server", "running", rag("mcp-call", {name: "mcp.server", root: true}))
+    .step("rag-search", "running", rag("rag-server", {name: "rag.search", root: true}))
+    .step("rag-retrieval", "running", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
+    .step("rag-stage", "running", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索"}, displayName: "文書の検索", attributes: {"pr.stage": "文書検索"}}))
+    .step("rag-vector", "running", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "ベクトル検索"}, displayName: "ベクトル検索", attributes: {"pr.stage": "ベクトル検索"}}))
+    .step("rag-text", "running", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "全文検索"}, displayName: "全文検索", attributes: {"pr.stage": "全文検索"}})).events;
+  // チャットの実行中の処理の経過も、MCP → RAG の入れ子を深さごとに字下げする（#3447）。
+  await page.goto("/chat");
+  await openThread(page);
+  const live = page.getByTestId("chat-progress");
+  await expect(live.getByTestId("chat-progress-current")).toContainText("全文検索");
+  await expectNestedIndent(live);
+  await expectNoHorizontalOverflow(page);
+  await live.screenshot({path: testInfo.outputPath("chat-progress-nested-running.png")});
+  await page.goto(`/runs?id=${RUN_ID}`);
+  const progress = page.getByTestId("run-progress");
+  await expect(progress.locator("[data-processing-label]")).toHaveText("全文検索");
+  await expect(progress).not.toContainText("rag__");
+  await expect(progress).toHaveAttribute("data-processing-activity-icon", "spinner");
+  const section = page.getByTestId("run-timeline-section");
+  const summary = page.getByTestId("run-timeline-section-summary");
+  await expect(summary).toContainText("処理中（1 ステップ完了）");
+  await expect(summary).not.toContainText("合計");
+  // 経過時間は概要の進行表示の 1 か所だけ（見出しに重ねない。messaging.md §3.7）。
+  await expect(progress.getByRole("timer")).toHaveAccessibleName(/^経過時間 00:\d\d$/);
+  await expect(section.getByTestId("run-timeline-section-timer")).toHaveCount(0);
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+  // 開くと一覧の今の段（全文検索）だけが回り、進行表示は回さない実行中の印にする。
+  await summary.click();
+  await expect(progress).toHaveAttribute("data-processing-activity-icon", "static");
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+  await expect(section.locator("[data-run-timeline-step] svg.animate-spin")).toHaveCount(1);
+  await expect(progress).toContainText("経過時間");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path: testInfo.outputPath("run-detail-running.png"), fullPage: true});
+  // 閉じると進行表示が回る。
+  await summary.click();
+  await expect(progress).toHaveAttribute("data-processing-activity-icon", "spinner");
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
+});
+
 // #3272: MCP で呼んだ RAG の span は、RAG が付けた工程の名前（`display_name`）で出し、製品の境目の行に製品名を添える。
 // MCP の手続き（initialize・通知）の行は出さない。チャットと実行の詳細で同じ。
 test("呼び先の製品の span は書いた製品の工程の名前で出し、製品の境目に製品名を添える", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
@@ -390,15 +469,17 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   const rag = (parent: string, extra: Record<string, unknown> = {}) => ({startedAt: start, finishedAt: end, parent, product: "rag", ...extra});
   run.progress_events = new ProgressLog(RUN_ID, () => end, start)
     .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan"})
-    .step(tool, "running", {startedAt: start})
+    // ツールの表示名（MCP の title）は、ツールの行と MCP の呼び出しの行の両方に出す（#3468）。
+    .step(tool, "running", {startedAt: start, params: {tool: "rag__rag_retrieve_evidence", title: "合成の根拠の取得"}})
     .step("mcp-init", "done", mcp("initialize"))
     .step("mcp-notify", "done", mcp("notifications/initialized"))
-    .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_retrieve_evidence"}))
+    .step("mcp-call", "done", mcp("tools/call", {"gen_ai.tool.name": "rag_retrieve_evidence", "pr.tool.title": "合成の根拠の取得"}))
     .step("rag-server", "done", rag("mcp-call", {name: "mcp.server", root: true}))
     .step("rag-search", "done", rag("rag-server", {name: "rag.search", root: true}))
     .step("rag-retrieval", "done", rag("rag-search", {name: "rag.retrieval", displayName: "検索", attributes: {"pr.stage": "retrieval"}}))
     .step("rag-stage", "done", rag("rag-retrieval", {name: "rag.engine.stage", kind: "answer_step", params: {name: "文書検索"}, displayName: "文書の検索", attributes: {"pr.stage": "文書検索"}}))
     .step("rag-embed", "done", rag("rag-stage", {name: "gen_ai.embeddings", attributes: {"gen_ai.request.model": "synthetic-embed"}}))
+    .step("rag-vector", "done", rag("rag-stage", {name: "rag.engine.stage", kind: "answer_step", params: {name: "ベクトル検索"}, displayName: "ベクトル検索", attributes: {"pr.stage": "ベクトル検索"}}))
     .step(tool, "done", {finishedAt: end})
     .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond"}).terminal("done").events;
   run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
@@ -408,16 +489,19 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   const list = page.getByTestId("chat-progress");
   const live = await timelineSnapshot(list);
   expect(live.map((row) => [row.text.replace(/ 完了( [\d.]+ 秒)?$/, ""), row.level])).toEqual([
-    ["進め方を決めました", 0],
-    ["処理を実行しました", 0],
-    ["MCP の呼び出し · rag_retrieve_evidence", 1],
-    ["RAG · 検索", 2],
+    ["質問に応じた次の操作を選びました", 0],
+    ["「合成の根拠の取得」を実行しました", 0],
+    ["MCP の呼び出し · 合成の根拠の取得", 1],
+    ["検索 RAG", 2],
     ["文書の検索", 3],
-    ["埋め込みの作成 · synthetic-embed", 4],
+    ["テキストの埋め込みを作る · synthetic-embed", 4],
+    ["ベクトル検索", 4],
     ["回答を作りました", 0],
   ]);
   await expect(list.getByTestId("chat-progress-step-mcp-init")).toHaveCount(0);
-  await expect(list.locator("[data-run-timeline-product]")).toHaveText(["RAG · "]);
+  // 製品名は名前の後ろのタグ（名前の前に置かず、名前の左端を兄弟の段とそろえる。#3447）。
+  await expect(list.locator("[data-run-timeline-product]")).toHaveText(["RAG"]);
+  await expectNestedIndent(list);
   await expectNoHorizontalOverflow(page);
   await list.screenshot({path: testInfo.outputPath("chat-process-products.png")});
   await page.goto(`/runs?id=${RUN_ID}`);
@@ -534,7 +618,7 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   run.updated_at = end;
   run.status = "completed";
   // backend の allowlist（`pr_backend_core.observability.tracing`）にある、本文を含まない合成の値だけ（#2583）。
-  const usage = {"gen_ai.operation.name": "chat", "gen_ai.request.model": SYNTHETIC_MODEL, "gen_ai.usage.input_tokens": 1200, "gen_ai.usage.output_tokens": 30};
+  const usage = {"pr.gen_ai.purpose": "agent.choose_action", "gen_ai.operation.name": "chat", "gen_ai.request.model": SYNTHETIC_MODEL, "gen_ai.usage.input_tokens": 1200, "gen_ai.usage.output_tokens": 30};
   const context = {
     "pr.context.instructions.static_fingerprint": "0123456789abcdef",
     "pr.context.instructions.fingerprint": "fedcba9876543210",
@@ -555,7 +639,7 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   };
   run.progress_events = new ProgressLog(RUN_ID, () => end, start)
     // 1 回目はプロバイダがキャッシュの値を返さなかった（不明）、2 回目は 0 を返した。
-    .step("chat-1", "done", {startedAt: start, finishedAt: end, kind: "plan", attributes: {...usage, ...context}})
+    .step("chat-1", "done", {startedAt: start, finishedAt: end, attributes: {...usage, ...context}})
     .step("chat-2", "done", {startedAt: start, finishedAt: end, kind: "respond", attributes: {...usage, "gen_ai.usage.cache_read.input_tokens": 0, "pr.context.estimate.input_tokens": 1500}})
     .terminal("done").events;
   run.events = [{id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: end}];
@@ -573,8 +657,10 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
     const values = await step.locator("dd").allInnerTexts();
     return Object.fromEntries(terms.map((term, index) => [term, values[index]]));
   };
+  await expect(timeline.locator('[data-run-timeline-step="chat-1"]')).toContainText("質問に応じた操作または回答を作る");
   const first = await fieldsOf("chat-1");
   expect(first).toMatchObject({
+    "gen_ai.request.model": SYNTHETIC_MODEL,
     "入力トークン": "1200",
     "出力トークン": "30",
     "キャッシュから読んだ入力": "不明",

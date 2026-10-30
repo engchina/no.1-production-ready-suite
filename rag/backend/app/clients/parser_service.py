@@ -34,6 +34,7 @@ from app.clients.external_parser import (
 )
 from app.clients.http_retry import request_with_retry, retry_config_from_settings
 from app.config import Settings
+from app.rag.language_pack_releases import active_release
 from app.rag.mineru_license import (
     MINERU_LICENSE_REQUIRED_MESSAGE,
     MINERU_LICENSE_UNACKNOWLEDGED_REASON,
@@ -237,7 +238,10 @@ class ParserServiceClient:
                 source_profile.model_dump_json() if source_profile is not None else "null"
             ),
         }
-        if overrides := overrides_payload():
+        if release := active_release():
+            # 公開時の完全な値を送る。サービス側の後日の既定値を重ねない。
+            data["language_pack"] = json.dumps({"snapshot": release.effective}, ensure_ascii=False)
+        elif overrides := overrides_payload():
             # 画面で上書きした言語資源(#2181)をサービスへ渡す(組み込みとの差だけ)。
             data["language_pack"] = json.dumps(overrides, ensure_ascii=False)
         progress_id = _PARSE_PROGRESS_ID.get()

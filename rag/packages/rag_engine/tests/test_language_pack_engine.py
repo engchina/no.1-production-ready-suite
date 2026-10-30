@@ -15,6 +15,16 @@ def _custom(**sections):
 
 
 class LanguagePackEngineTest(unittest.TestCase):
+    def test_acquisition_notice_uses_display_pack_without_changing_ingest(self):
+        from rag_engine.generation.answer_labels import answer_labels
+
+        original = answer_labels().guide_acquisition_incomplete_template
+        custom = _custom(answer_labels={"guide_acquisition_incomplete_template": "合成の未完了: {steps}"})
+        with bind_pack(custom):
+            self.assertEqual(answer_labels().guide_acquisition_incomplete_template.format(steps="s1"), "合成の未完了: s1")
+            self.assertEqual(custom.ingest_hash, builtin_pack().ingest_hash)
+        self.assertEqual(answer_labels().guide_acquisition_incomplete_template, original)
+
     def test_heading_levels_follow_units(self):
         def levels(text):
             return [level for pattern, level in _heading_patterns().levels if pattern.match(text)]

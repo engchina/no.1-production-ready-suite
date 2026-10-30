@@ -599,8 +599,8 @@ export function SystemTablesCard({
 
             {canManage ? (
               <section className="border-t border-border pt-5" aria-labelledby="recreate-system-tables-title">
-                {/* 危険な操作区画は幅を止めず、広い画面では「影響の説明」と「確認語・実行」を左右に分けてカード幅を使う。 */}
-                <div className="grid gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] xl:items-start xl:gap-6">
+                {/* 影響の説明を読み、直下の確認語を入力して実行する。 */}
+                <div className="grid gap-3">
                   <div className="flex items-start gap-2">
                     {/* 見出しの 1 行目の中心にそろえる（見出しと同じ文字の大きさの行の高さの箱。#2371）。 */}
                     <span className="pr-icon-line text-sm text-danger-fg">

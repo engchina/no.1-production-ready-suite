@@ -83,7 +83,7 @@ async function mockApi(page: Page, answer: Record<string, unknown>, citations: u
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/approved-faq/suggest") || path.endsWith("/query-suggestions")) {
+    if (path.endsWith("/approved-faq/suggest")) {
       return route.fulfill({ json: envelope({ suggestions: [] }) });
     }
     return route.fulfill({
@@ -234,5 +234,55 @@ for (const theme of ["light", "dark"] as const) {
     ]);
     await expectNoPageOverflow(page);
     await screenshot(panel, `answer-guide-load-failed-${theme}`, testInfo.project.name);
+  });
+}
+
+test("CRAG は生成利用可否と必須観点の不足・未確認・原文を分けて示す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockApi(page, {
+    crag_attempts: [{
+      generation_usable: true, sufficient: true, grade_execution: "completed", required_aspect_coverage: "partial",
+      missing_aspects: ["procedure"], unknown_aspects: ["applicability"],
+      aspect_checks: [
+        { aspect: "business_object", status: "supported", source_ids: ["e1"], reason: "対象が一致", evidence: [{ source_id: "e1", quote: "対象 A の説明です。" }], evidence_validation: "matched" },
+        { aspect: "procedure", status: "missing", reason: "操作の記述がありません。" },
+        { aspect: "applicability", status: "unknown", reason: "適用条件を未確認。" },
+      ],
+    }],
+  }, []);
+  const panel = (await ask(page)).getByTestId("answer-crag-details");
+  await expect(panel).toContainText("生成に使える材料（候補評価）");
+  await expect(panel).toContainText("実際の生成可否や回答の完成を保証しません");
+  await expect(panel).toContainText("利用可能（部分回答を含む）");
+  await expect(panel).toContainText("一部のみ確認済み");
+  await expect(panel).toContainText("不足が確認された観点: procedure");
+  await expect(panel).toContainText("未確認の観点: applicability");
+  await expect(panel).toContainText("e1: 対象 A の説明です。");
+  await expect(panel).toContainText("原文との照合: 参照元と原文の一致を確認");
+  await expectNoPageOverflow(page);
+  await panel.screenshot({ path: testInfo.outputPath("crag-evidence-details.png") });
+});
+
+test("CRAG の省略・旧十分判定は全観点確認済みと表示しない", { tag: "@responsive" }, async ({ page }) => {
+  await mockApi(page, { crag_attempts: [{ sufficient: true, grade_execution: "not_run", required_aspect_coverage: "complete" }] }, []);
+  const panel = (await ask(page)).getByTestId("answer-crag-details");
+  await expect(panel).toContainText("観点の判定は未実行です");
+  await expect(panel).toContainText("未確認");
+  await expect(panel).not.toContainText("すべて確認済み");
+  await expectNoPageOverflow(page);
+});
+
+
+for (const [status, valid, label] of [
+  ["disabled", false, "設定で無効"], ["not_run", false, "未実行"], ["error", false, "確認処理でエラー"],
+  ["timed_out", false, "確認が時間切れ"], ["completed", true, "確認完了・問題なし"], ["completed", false, "確認完了・問題あり"],
+] as const) {
+  test(`最終回答の資料照合は実行状態と結果を区別する (${status}, ${valid})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockApi(page, { answer_validation: { status, valid } }, []);
+    const panel = (await ask(page)).getByTestId("answer-validation-status");
+    await expect(panel).toContainText("最終回答の資料照合");
+    await expect(panel).toContainText(label);
+    await expect(panel).not.toContainText("未照合");
+    await expectNoPageOverflow(page);
+    if (status === "completed" && !valid) await panel.screenshot({ path: testInfo.outputPath("answer-validation-failed.png") });
   });
 }

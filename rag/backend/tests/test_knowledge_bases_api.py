@@ -448,7 +448,7 @@ def test_knowledge_base_without_description_still_loads(
 
 
 def test_knowledge_base_graph_endpoint(fake_oracle: FakeKnowledgeBaseOracle) -> None:
-    """関係情報グラフ endpoint が空/データ/404 を返す。"""
+    """文書構造グラフ endpoint が空/データ/404 を返す。"""
     detail = client.post(
         "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
     ).json()["data"]

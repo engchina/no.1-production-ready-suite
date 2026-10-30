@@ -1244,7 +1244,7 @@ for (const theme of ["light", "dark"] as const) {
     });
     const progress = [
       { ...step("s0", "s0", 0, 9), name: "rag.answer", parent_id: undefined, root: true },
-      // 会話を踏まえた質問の書き換えの詳細（#2341。パイプラインの工程の詳細）。
+      // 前の会話を踏まえて質問を補うの詳細（#2341。パイプラインの工程の詳細）。
       step("s1", "history_rewrite", 0, 0.4, undefined, {
         fields: [
           { label: "参照した会話", value: "2 件の発言" },
@@ -1287,7 +1287,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(process.locator("details").first()).toHaveAttribute("open", "");
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");
-    await expect(nested).toContainText("文書の検索");
+    await expect(nested).toContainText("検索文から根拠の候補を集める");
     // 計測値（工程の結果・LLM の回数）は名前の後ろの括弧、所要時間は右の列（実行の詳細と同じ RunTimeline。#2265）。
     await expect(nested).toContainText("（該当なし）");
     await expect(nested).toContainText("0.1 秒未満");
@@ -1310,7 +1310,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(nestedDetails).toContainText("検索文: 2 本");
     await nestedToggle.click();
     await expect(nestedDetails).toBeHidden();
-    // パイプラインの工程（会話を踏まえた質問の書き換え）の詳細も同じ形で開ける（#2341）。
+    // パイプラインの工程（前の会話を踏まえて質問を補う）の詳細も同じ形で開ける（#2341）。
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
     await expect(page.getByTestId("chat-answer-progress-step-s1-details")).toContainText("合成の書き換えた質問");
     await page.getByTestId("chat-answer-progress-step-s1-toggle").click();
@@ -1319,7 +1319,7 @@ for (const theme of ["light", "dark"] as const) {
     await expect(bars).toHaveCount(5);
     if ((page.viewportSize()?.width ?? 1280) >= 1280) await expect(bars.first()).toBeVisible();
     else await expect(bars.first()).toBeHidden();
-    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("会話を踏まえた質問の書き換え");
+    await expect(page.getByTestId("chat-answer-progress-step-s1")).toContainText("前の会話を踏まえて質問を補う");
     // 状態は英語の生の値ではなくアイコンと読み上げの文言で示す。「実行記録」の表示は無い。
     await expect(process.getByText(/complete/)).toHaveCount(0);
     await expect(page.getByText(/実行記録/)).toHaveCount(0);
@@ -1481,7 +1481,7 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
     evidence_tree: [],
     models: {
       llm: { model_id: "m1", label: "MODEL 1" },
-      vision: { model_id: "vlm-1", label: "VISION 1" },
+      attached_images: 2,
       embedding: "cohere.embed-v4.0",
       rerank: "cohere.rerank-v4.0-fast",
     },
@@ -1538,11 +1538,13 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(panel.getByTestId("answer-outcome-badge")).toHaveText("現場のデータが必要");
   await expect(panel.getByTestId("answer-guide-badge")).toHaveText("業務ガイド: 経費の上限を確かめる（版 3）");
   // 1 列（既定のモデル）でも、どのモデルの回答か・使ったモデルを出す（#649）。
-  await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1" })).toBeVisible();
+  // 回答モデルへ根拠の画像を添付した回答（診断の models.attached_images）は、見出しにそのことを添える（#3444）。
+  await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1（画像も参照）", exact: true })).toBeVisible();
   const models = panel.getByTestId("answer-models");
   await expect(models).toContainText("使用したモデル");
   await expect(models).toContainText("MODEL 1");
-  await expect(models).toContainText("VISION 1");
+  await expect(models).toContainText("添付した画像");
+  await expect(models).toContainText("2 件（回答モデルが参照）");
   await expect(models).toContainText("cohere.embed-v4.0");
   await expect(models).toContainText("cohere.rerank-v4.0-fast");
   // rag_poc の回答 viewer と同じ情報（判断理由・外部データの確認・問い合わせ型）と本文の構成（#651）。
@@ -1556,6 +1558,29 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(panel.getByRole("status").filter({ hasText: "業務システムで確かめる値" })).toHaveCount(0);
   const answerText = page.getByTestId("answer-text");
   await expect(answerText.getByRole("heading", { name: "資料により確認できた事項" })).toBeVisible();
+  // 処理の経過と回答の本文の間に、節の見出しと同じ書式の見出し「回答」（h3）を出す（#3433）。本文の領域の名前にもなる。
+  const answerBody = page.getByRole("region", { name: "回答", exact: true });
+  const answerHeading = answerBody.getByRole("heading", { level: 3, name: "回答", exact: true });
+  await expect(answerHeading).toBeVisible();
+  await expect(answerBody.getByTestId("answer-text")).toBeVisible();
+  const [processBox, answerHeadingBox, answerTextBox] = await Promise.all([
+    process.boundingBox(),
+    answerHeading.boundingBox(),
+    answerText.boundingBox(),
+  ]);
+  expect(answerHeadingBox!.y).toBeGreaterThan(processBox!.y);
+  expect(answerTextBox!.y).toBeGreaterThan(answerHeadingBox!.y);
+  const headingStyles = await page.evaluate(() => {
+    const style = (selector: string) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const { fontSize, fontWeight, color, lineHeight } = getComputedStyle(element);
+      return { fontSize, fontWeight, color, lineHeight };
+    };
+    return { answer: style('[data-testid="chat-answer-heading"]'), section: style('[data-testid="answer-text"] section h4') };
+  });
+  expect(headingStyles.answer).not.toBeNull();
+  expect(headingStyles.answer).toEqual(headingStyles.section);
   // 節の見出しの前は段落の間（0.75rem）より広い 1.25rem（17.5px）を空け、要約の段落と節を見分けられる（#2325）。
   const headingGap = await answerText.evaluate((element) => {
     const paragraph = element.querySelector(":scope > p");
@@ -1781,7 +1806,7 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`近い承認済み FAQ があれば、類似問か「どれでもない」を選んでから回答する（#684） (${viewport.name})`, async ({
+  test(`近い登録済みQ&Aがあれば、類似問か「どれでもない」を選んでから回答する（#684） (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1809,9 +1834,9 @@ for (const viewport of [
     // 回答を作る前に、最大 3 件の類似問と「どれでもない」を出す。選ぶまで送らない（飛ばす操作は無い）。
     const choice = page.getByTestId("chat-approved-faq-choice");
     await expect(choice).toContainText("経費の上限は？");
-    await expect(choice.getByRole("button", { name: "この類似問で回答する" })).toHaveCount(3);
+    await expect(choice.getByRole("button", { name: "このQ&Aで回答する" })).toHaveCount(3);
     await expect(
-      choice.getByRole("button", { name: "どれでもない（類似問を使わずに回答する）" })
+      choice.getByRole("button", { name: "どれでもない（資料を検索する）" })
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
     expect(suggestQueries).toEqual([{ query: "経費の上限は？", purpose: "chat" }]);
@@ -1821,7 +1846,7 @@ for (const viewport of [
     // 選ぶ前に画面を離れて戻っても（再読込を含む）、同じ質問と候補が残る（作業状態。#702）。
     await page.reload();
     await expect(choice).toContainText("経費の上限は？");
-    await expect(choice.getByRole("button", { name: "この類似問で回答する" })).toHaveCount(3);
+    await expect(choice.getByRole("button", { name: "このQ&Aで回答する" })).toHaveCount(3);
     expect(suggestQueries).toHaveLength(1);
 
     // 選んだ類似問の id を質問と一緒に送る。
@@ -1834,7 +1859,7 @@ for (const viewport of [
     await composer.fill("交通費は？");
     await page.getByRole("button", { name: "送信" }).click();
     await page
-      .getByRole("button", { name: "どれでもない（類似問を使わずに回答する）" })
+      .getByRole("button", { name: "どれでもない（資料を検索する）" })
       .click();
     await expect.poll(() => streamBodies.length).toBe(2);
     expect(streamBodies[1]).toMatchObject({ content: "交通費は？" });
@@ -1843,12 +1868,12 @@ for (const viewport of [
 }
 
 
-// #737: 承認済み FAQ から回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。
+// #737: 登録済みQ&Aから回答したときは、根拠に FAQ の原文（回答した時点）を出典として出す。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`承認済み FAQ の回答では、FAQ の質問と承認済みの回答の原文を出典に出す (${viewport.name})`, async ({
+  test(`登録済みQ&Aの回答では、FAQ の質問と承認済みの回答の原文を出典に出す (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -1856,11 +1881,11 @@ for (const viewport of [
       answer_source: "approved_faq",
       approved_faq_question: "経費精算の上限はいくらですか？",
       approved_faq_answer: "1 回の申請の上限は 10 万円です。\n超える場合は部長の承認が必要です。",
-      models: { llm: { model_id: "m1", label: "MODEL 1" }, vision: null, embedding: "", rerank: "" },
+      models: { llm: { model_id: "m1", label: "MODEL 1" }, attached_images: 0, embedding: "", rerank: "" },
     };
     const streamBody = [
       sseStart,
-      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は 10 万円です。\n\n（出典: 承認済み FAQ「経費精算の上限はいくらですか？」）" })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: "上限は 10 万円です。\n\n（出典: 登録済みQ&A「経費精算の上限はいくらですか？」）" })}\n\n`,
       `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
       `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
     ].join("");
@@ -1873,8 +1898,8 @@ for (const viewport of [
     await page.getByRole("button", { name: "送信" }).click();
 
     const panel = await openAnswerProcessDetails(page, "chat-answer-progress");
-    await expect(panel.getByText("承認済み FAQ から回答")).toBeVisible();
-    const source = panel.getByRole("region", { name: "回答の出典: 承認済み FAQ" });
+    await expect(panel.getByText("登録済みQ&Aから回答")).toBeVisible();
+    const source = panel.getByRole("region", { name: "回答の出典: 登録済みQ&A" });
     await expect(source).toContainText("経費精算の上限はいくらですか？");
     // 原文は言い換えず、改行も保って出す。
     await expect(source.getByText(/1 回の申請の上限は 10 万円です。\s+超える場合は部長の承認が必要です。/)).toBeVisible();
@@ -1936,7 +1961,7 @@ for (const viewport of [
         clarification: { ...clarificationSuggestion.clarification, allow_other: false },
       };
       await route.fulfill({
-        json: { data: { suggestion }, error_messages: [], warning_messages: [] },
+        json: { data: { suggestion, question_context_token: "synthetic-context-token" }, error_messages: [], warning_messages: [] },
       });
     });
     const streamBodies: Record<string, unknown>[] = [];
@@ -1971,7 +1996,7 @@ for (const viewport of [
     await expect(choice.getByRole("button", { name: "確認をやめる" })).toHaveCount(0);
     await expect(choice.getByRole("textbox", { name: "その他（自由入力）" })).toBeVisible();
     await expect(page.getByRole("button", { name: "送信" })).toBeDisabled();
-    expect(clarifyQueries).toEqual([{ query: "申請の期限は？" }]);
+    expect(clarifyQueries).toEqual([{ query: "申請の期限は？", conversation_id: "conv-1" }]);
     expect(streamBodies).toEqual([]);
     await expectNoPageOverflow(page);
     for (const colorScheme of ["light", "dark"] as const) {
@@ -1994,6 +2019,7 @@ for (const viewport of [
     await expect.poll(() => streamBodies.length).toBe(1);
     expect(streamBodies[0]).toMatchObject({
       content: "申請の期限は？",
+      question_context_token: "synthetic-context-token",
       clarification: { rule_id: "R01", option_ids: ["travel"], other_text: "海外出張" },
     });
     await expect(choice).toHaveCount(0);
@@ -2007,7 +2033,8 @@ for (const viewport of [
     await choice.getByRole("button", { name: "確認せずに回答" }).click();
     await expect.poll(() => streamBodies.length).toBe(2);
     // 質問はそのまま送り（入力欄には戻さない）、取り消さない。
-    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "R01" });
+    expect(streamBodies[1]).toMatchObject({ content: "交通費の期限は？", clarification_skipped_rule_id: "R01", question_context_token: "synthetic-context-token" });
+    expect(clarifyQueries[1]).toMatchObject({ conversation_id: "conv-1" });
     expect(streamBodies[1]).not.toHaveProperty("clarification");
     await expect(choice).toHaveCount(0);
     await expect(composer).toHaveValue("");
@@ -2176,6 +2203,8 @@ for (const viewport of [
     const live = page.getByTestId("chat-live-turn");
     await expect(live.locator('[data-status="sending"]')).toHaveText("経費の上限は？");
     await expect(live.getByTestId("chat-answer-progress")).toBeVisible();
+    // 処理の経過だけの間（回答の本文が届く前）は見出し「回答」を出さない（#3433）。
+    await expect(live.getByTestId("chat-answer-heading")).toHaveCount(0);
     await expect(empty).toHaveCount(0);
     await expect(page.getByRole("log", { name: "会話" })).toContainText("経費の上限は？");
     await expect(composer).toHaveValue("");
@@ -2196,6 +2225,8 @@ for (const viewport of [
     // 回答が届いたら同じ場所に流し込み、取り直した会話でも質問を二重に出さない。
     stream.open();
     await expect(page.getByText("経費の上限は 10 万円です。").first()).toBeVisible();
+    // 回答の本文が届いたら、本文の前に見出し「回答」を出す（#3433）。
+    await expect(page.getByTestId("chat-answer-heading")).toHaveText("回答");
     await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
     const messages = page.getByTestId("chat-messages");
     await expect(messages.getByText("経費の上限は？", { exact: true })).toHaveCount(1);
@@ -2437,7 +2468,7 @@ for (const viewport of [
     await composer.press("Enter");
 
     const failure = page.getByTestId("chat-answer-failure");
-    await expect(failure.getByRole("alert")).toContainText("「文書の検索」で処理が止まりました。");
+    await expect(failure.getByRole("alert")).toContainText("「検索文から根拠の候補を集める」で処理が止まりました。");
     await expect(failure).toContainText("検索処理中にエラーが発生しました。");
     await expect(failure).toContainText("もう一度送信してください。");
     // 技術的な詳細は「詳細」（失敗では開いて出す）。取り直した会話の回答にも引き継ぐ。
@@ -2447,6 +2478,8 @@ for (const viewport of [
       await expect(details).toContainText(value);
     }
     await expect(failure.getByRole("button", { name: "もう一度送信" })).toBeVisible();
+    // 失敗だけの枠には見出し「回答」を出さない（#3433）。
+    await expect(page.getByTestId("chat-answer-heading")).toHaveCount(0);
     // 処理の経過は失敗した段を ✗ で残す。
     await expect(page.getByTestId("chat-answer-progress").locator('[data-status="failed"]').first()).toBeVisible();
     await expectNoPageOverflow(page);
@@ -2676,7 +2709,7 @@ test("処理の経過は回答の trace の span の木で、2 つ目の「ト�
   await page.getByTestId("chat-answer-progress-summary").click();
   // 段は処理の経過と同じ名前、技術の span は日本語の名前とモデル名。入れ子は span の親子（root は行にしない）。
   const labels = progressRegion.locator("[data-run-timeline-label]");
-  await expect(labels).toHaveText(["質問の読み取りから回答の作成まで", "根拠の検索と回答の作成", "モデルの呼び出し · synthetic-model"]);
+  await expect(labels).toHaveText(["質問の条件を整理して回答を作る", "根拠を検索して回答を作る", "モデルを呼び出す（用途の記録なし）"]);
   await expect(progressRegion.locator("[data-run-timeline-step]").nth(2)).toHaveAttribute("data-level", "2");
   await expect(labels.filter({ hasText: /rag\.|gen_ai\./ })).toHaveCount(0);
   // 「処理の詳細」には Trace ID とコピーのボタンを出し、「トレースの詳細」の 2 つ目の表示は無い。
@@ -2732,7 +2765,7 @@ test("span の無い古い形式の処理の経過は、空白にせず古い形
     "この実行は古い形式の記録のため、処理の経過を表示できません。"
   );
   await expect(answer.getByTestId("chat-answer-progress-summary")).toHaveCount(0);
-  await expect(answer.getByText(/文書の検索/)).toHaveCount(0);
+  await expect(answer.getByText(/検索文から根拠の候補を集める/)).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -2784,4 +2817,154 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   expect(await traceIdRowsOnOneLine(page)).toBe(true);
   await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
+});
+
+// #3444: 回答は列のモデルだけで作る。そのモデルへ根拠の画像を添付した回答は、見出しに「画像も参照」を添える。作成した直後
+// （配信の診断の models.attached_images）と、会話を開き直したとき（会話のメッセージの answer_attached_images）で同じ見出しにする。
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`画像を添付して答えた回答の見出しに画像も参照と出し、開き直しても同じ (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const imageReply = { ...assistantMessage, answer_attached_images: 2 };
+    const textReply = { ...assistantMessage, message_id: "a2", trace_id: "t2", reply_to_message_id: "u2", answer_attached_images: 0 };
+    const llm = { model_id: "m1", label: "MODEL 1" };
+    const streamBody = [
+      sseStart,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: assistantMessage.content })}\n\n`,
+      `event: metadata\ndata: ${JSON.stringify({
+        model_id: "m1",
+        message_id: "a1",
+        trace_id: "t1",
+        elapsed_ms: 5,
+        guardrail_warnings: [],
+        answer_diagnostics: { models: { llm, attached_images: 1, embedding: "", rerank: "" } },
+      })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+    ].join("");
+    await mockChat(page, "ready", [userMessage, imageReply, { ...userMessage, message_id: "u2" }, textReply], {
+      streamBody,
+      sentMessages: [userMessage, imageReply],
+    });
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+
+    // 会話を開き直したとき: 画像を添付した回答は「画像も参照」、添付しなかった回答は列のモデルだけ。
+    const history = await openChatHistory(page);
+    await history.getByRole("button", { name: /^経費の上限は？ 4件/ }).click();
+    const headings = page.getByTestId("chat-answer-model-heading");
+    // 保存した回答の列のモデルは model_id（モデルの一覧の mock は空）。
+    await expect(headings).toHaveText(["回答モデル: m1（画像も参照）", "回答モデル: m1"]);
+    await expect(headings.first()).toHaveAttribute("title", "回答モデル: m1（画像も参照）");
+    await headings.first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `test-results/chat-answer-images-heading-saved-${viewport.name}.png`, fullPage: false });
+    await expectNoPageOverflow(page);
+
+    // 作成した直後: 配信の診断の添付の件数で見出しに出す（Vision モデルの名前は出さない）。
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill(userMessage.content);
+    await page.getByRole("button", { name: "送信" }).click();
+    const live = page.getByTestId("chat-answer-model-heading");
+    await expect(live).toHaveText(["回答モデル: MODEL 1（画像も参照）"]);
+    expect(await live.first().evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expectNoPageOverflow(page);
+  });
+}
+
+test("同頁の説明ごとに出典を開き、複数の確定箇所と保存後の対応を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const { itemCitationText, itemCitationChunks, expectItemCitationSources } = await import("./_item-citations");
+  const question = { ...userMessage, content: "合成の説明を確認してください。" };
+  const reply = { ...assistantMessage, content: itemCitationText, citations: itemCitationChunks };
+  const streamBody = [
+    `event: start\ndata: ${JSON.stringify({ conversation_id: "conv-1", user_message: question, columns: [{ model_id: "m1", label: "MODEL 1" }] })}\n\n`,
+    `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text: itemCitationText })}\n\n`,
+    `event: citations\ndata: ${JSON.stringify({ model_id: "m1", citations: itemCitationChunks })}\n\n`,
+    `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+  ].join("");
+  await mockChat(page, "ready", [], { streamBody, sentMessages: [question, reply] });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, searchAnswerProfile.name);
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill(question.content);
+  await page.getByRole("button", { name: "送信", exact: true }).click();
+  const answer = page.getByTestId("answer-text");
+  await expectItemCitationSources(page, answer);
+  await page.screenshot({ path: testInfo.outputPath("item-citations-chat.png"), fullPage: true });
+  await page.reload();
+  await expectItemCitationSources(page, answer);
+});
+
+// #3721: 確認用トークンを会話未選択のまま作らない。
+for (const withConfirmation of [false, true]) {
+  test(`初回送信は会話を確定してから質問の文脈を準備する（確認${withConfirmation ? "あり" : "なし"}）`, async ({ page }) => {
+    await mockChat(page);
+    const order: string[] = [];
+    const preparations: Record<string, unknown>[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/chat/conversations" && request.method() === "POST") {
+        order.push("create");
+      }
+    });
+    await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
+      route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
+    );
+    await page.route("**/api/search-answer-profiles/*/clarifications/suggest", async (route) => {
+      order.push("prepare");
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      preparations.push(body);
+      await route.fulfill({ json: {
+        data: {
+          suggestion: withConfirmation ? clarificationSuggestion : null,
+          question_context_token: `context-for-${String(body.conversation_id)}`,
+        }, error_messages: [], warning_messages: [],
+      } });
+    });
+    await page.route("**/api/chat/conversations/*/messages/stream", async (route) => {
+      order.push("send");
+      if (route.request().postDataJSON().question_context_token !== "context-for-conv-1") {
+        await route.fulfill({ status: 409, json: {
+          data: null, error_messages: ["会話または設定が変わりました。"], warning_messages: [],
+        } });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("textbox", { name: "質問", exact: true }).fill("利用条件を教えてください。");
+    await page.getByRole("button", { name: "送信", exact: true }).click();
+    if (withConfirmation) {
+      const choice = page.getByTestId("chat-clarification-choice");
+      await choice.getByRole("checkbox", { name: /出張旅費/ }).check();
+      await choice.getByRole("button", { name: "この内容で回答", exact: true }).click();
+    }
+    await expect(page.getByTestId("chat-answer-body").getByText(assistantMessage.content, { exact: true })).toBeVisible();
+    expect(order).toEqual(["create", "prepare", "send"]);
+    expect(preparations).toEqual([{ query: "利用条件を教えてください。", conversation_id: "conv-1" }]);
+    await expect(page.getByTestId("chat-send-failure")).toHaveCount(0);
+  });
+}
+
+test("初回の会話作成に失敗しても質問を残し、再送信で会話を作れる", async ({ page }) => {
+  await mockChat(page);
+  let creates = 0;
+  await page.route("**/api/chat/conversations", async (route) => {
+    if (route.request().method() === "POST" && ++creates === 1) {
+      await route.fulfill({ status: 503, json: {
+        data: null, error_messages: ["会話を作成できませんでした。"], warning_messages: [],
+      } });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("textbox", { name: "質問", exact: true }).fill("利用条件を教えてください。");
+  await page.getByRole("button", { name: "送信", exact: true }).click();
+  await expect(page.getByTestId("chat-send-failure")).toContainText("会話を作成できませんでした。");
+  await expect(page.getByTestId("chat-live-turn")).toContainText("利用条件を教えてください。");
+  await page.getByRole("button", { name: "再送信", exact: true }).click();
+  await expect(page.getByTestId("chat-answer-body").getByText(assistantMessage.content, { exact: true })).toBeVisible();
+  expect(creates).toBe(2);
 });

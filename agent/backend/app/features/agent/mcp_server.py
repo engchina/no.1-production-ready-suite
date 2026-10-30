@@ -136,8 +136,12 @@ LIST_OUTPUT_SCHEMA_VERSION = 1
 SKILL_EXPORT_SCHEMA_VERSION = 1
 CANCEL_OUTPUT_SCHEMA_VERSION = 1
 # agent_get_run_observation の出力の形の版（#3240。#3262 で根拠の場所に RAG の表のセルの座標の
-# table_row・table_cells を足して 2）。
-OBSERVATION_SCHEMA_VERSION = 2
+# table_row・table_cells を足して 2、行の番号の基準 row_basis・表の番号 table_index・CSV の物理行の
+# 範囲 source_line_start / source_line_end を足して 3、#3429 で行の番号の基準に解析の表の格子の
+# parsed_table を足して 4、#3546 でツールの呼び出しに RAG の縮退（degraded_steps・
+# guardrail_degraded・zero_evidence_stage）を、根拠に表の行・列の対応の検査が読めるか
+# （table_binding）を足して 5）。
+OBSERVATION_SCHEMA_VERSION = 5
 # 根拠の件数の上限。本文は件ごとの全文を応答の予算に入れる（3 製品で共通の規則。値と決め方は
 # pr_backend_core.source_text。#3321）。
 _MAX_SOURCES = 10
@@ -532,8 +536,15 @@ class ObservedLocator(BaseModel):
     page_label_start: str | None = None
     page_label_end: str | None = None
     sheet_name: str | None = None
+    # 行の番号の基準（sheet=表計算のシート / csv=CSV の記録の番号 / word_table=Word の表の行 /
+    # parsed_table=解析が組み立てた表の格子の行。原本の座標ではない）と表の番号。
+    row_basis: Literal["sheet", "csv", "word_table", "parsed_table"] | None = None
+    table_index: int | None = None
     row_start: int | None = None
     row_end: int | None = None
+    # CSV の原本の物理行の範囲（row_start・row_end は記録の番号）。
+    source_line_start: int | None = None
+    source_line_end: int | None = None
     cell_range: str | None = None
     element_locator: str | None = None
     table_row: int | None = None
@@ -547,6 +558,18 @@ class ObservedUsage(BaseModel):
     requests: int = Field(default=0, ge=0, description="モデルの呼び出しの回数。")
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+
+
+# RAG の ZeroEvidence.stage と RagEvidence.table_binding の語彙（契約の一致はテストで確かめる）。
+ObservedZeroEvidenceStage = Literal["retrieval", "filter", "evidence_check", "context"]
+ObservedTableBinding = Literal["checkable", "not_checkable"]
+
+
+class ObservedDegradedStep(BaseModel):
+    """縮退した任意の補助の処理（RAG の DegradedStep と同じ名前）。"""
+
+    kind: str
+    count: int = Field(ge=1)
 
 
 class ObservedToolCall(BaseModel):
@@ -577,6 +600,24 @@ class ObservedToolCall(BaseModel):
     )
     row_count: int | None = Field(default=None, description="NL2SQL の returned_count。")
     rows_truncated: bool | None = Field(default=None, description="NL2SQL の truncated。")
+    degraded_steps: list[ObservedDegradedStep] | None = Field(
+        default=None,
+        description=(
+            "RAG の根拠のツールの degraded_steps（失敗して縮退した任意の補助の処理の種類と回数。"
+            "空なら縮退していない）。ほかのツール・失敗した呼び出しは null。"
+        ),
+    )
+    guardrail_degraded: bool | None = Field(
+        default=None,
+        description=(
+            "RAG の根拠のツールの guardrail_degraded（安全チェックを完了できず止めた）。"
+            "ほかのツール・失敗した呼び出しは null。"
+        ),
+    )
+    zero_evidence_stage: ObservedZeroEvidenceStage | None = Field(
+        default=None,
+        description="RAG の根拠のツールが根拠 0 件のとき、0 件になった段（zero_evidence.stage）。",
+    )
 
 
 class ObservedEvidence(BaseModel):
@@ -609,6 +650,13 @@ class ObservedEvidence(BaseModel):
         description="回答での使われ方（RAG の answer_use と同じ。引用でなければ null）。",
     )
     locator: ObservedLocator = Field(default_factory=ObservedLocator)
+    table_binding: ObservedTableBinding | None = Field(
+        default=None,
+        description=(
+            "RAG の table_binding（表の行・列の対応の検査がこの根拠の本文を読めるか。null は表の"
+            "無い根拠・読み取りのツールの chunk）。"
+        ),
+    )
     text: str = Field(
         default="",
         description=(
@@ -1184,6 +1232,7 @@ def _observed_evidence(
         cited=key in cited,
         answer_use=cast(Literal["confirmed", "reference"], use) if use is not None else None,
         locator=ObservedLocator.model_validate(item.locator),
+        table_binding=cast(ObservedTableBinding | None, item.table_binding),
         text_length=len(item.text),
         truncated=item.truncated,
     )
@@ -1260,6 +1309,16 @@ async def run_observation(
                 job_status=call.job_status,
                 row_count=call.row_count,
                 rows_truncated=call.rows_truncated,
+                degraded_steps=(
+                    [ObservedDegradedStep.model_validate(step) for step in call.degraded_steps]
+                    if call.degraded_steps is not None
+                    else None
+                ),
+                guardrail_degraded=call.guardrail_degraded,
+                zero_evidence_stage=cast(
+                    ObservedZeroEvidenceStage | None,
+                    call.zero_evidence_stage,
+                ),
             )
             for call in data.tool_calls
         ],
@@ -1545,12 +1604,17 @@ def build_agent_mcp_server(request: Request) -> McpServer:
     return McpServer(
         name=MCP_SERVER_NAME,
         version="1",
+        # 処理順の Step 形式（docs/agents/prompts.md。#3830）。
         instructions=(
-            "業務 Agent（社内の資料・業務データを調べて答える専門家）に質問する。"
-            "agent_list で使える業務 Agent を確かめ、agent_chat で質問する。"
+            "業務 Agent（社内の資料・業務データを調べて答える専門家）に質問する。\n\n"
+            "## Step 1: 業務 Agent を選んで質問する\n"
+            "agent_list で使える業務 Agent を確かめ、agent_chat で質問する。\n\n"
+            "## Step 2: 結果に応じて続ける\n"
             "in_progress なら agent_get_run で続きを読む。confirmation が返ったら、"
             "確認事項に agent_answer_confirmation で答える。続きの質問は返った thread_id を"
-            "agent_chat に渡す。回答の根拠は sources にある。"
+            "agent_chat に渡す。\n\n"
+            "## Step 3: 回答の根拠を読む\n"
+            "回答の根拠は sources にある。"
         ),
         tools=[
             McpTool(

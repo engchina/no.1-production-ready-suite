@@ -9,11 +9,28 @@
 """
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
+from rag_engine.generation import step_details
+from rag_engine.generation.answer_records import _stored_chunk_answer_record
+from rag_engine.resources.tracing import bind_trace_observer
+from rag_engine.retrieval.search_stages import (
+    CONTEXT_SIBLINGS_STAGE,
+    DERIVED_SOURCE_STAGE,
+    DOCUMENT_INFO_STAGE,
+    ENTITY_EXPANSION_STAGE,
+    GRAPH_EXPANSION_STAGE,
+    IMAGE_EVIDENCE_STAGE,
+    REFERENCE_EXPANSION_STAGE,
+    TEXT_SEARCH_STAGE,
+    VECTOR_SEARCH_STAGE,
+)
 
+import app.rag.answer_engine as answer_engine_module
 import app.rag.pipeline as pipeline_module
 from app.clients import oracle as oracle_module
 from app.clients.oracle import OracleClient
@@ -263,6 +280,32 @@ async def test_context_group_siblings_batch_keeps_anchor_order(
     assert all(chunk.score == 0.5 for chunk in siblings)
 
 
+async def test_context_group_siblings_batches_are_read_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """起点が 1 回の SQL の上限を超えたときの複数回の SQL は、並行に読む(#3461)。"""
+    size = oracle_module._CONTEXT_ANCHOR_BATCH_SIZE
+    anchors = [_anchor(f"a{index}", index=100, chunk_set_id="set-a") for index in range(size + 1)]
+    client = OracleClient(settings=Settings.model_construct())
+    started: list[str] = []
+    both_started = asyncio.Event()
+
+    async def fake_fetch_all(
+        statement: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        started.append(str((binds or {})["ca_chunk_0"]))
+        if len(started) == 2:
+            both_started.set()
+        # 直列に読むと 2 回目の SQL が始まらず、ここで時間切れになる。
+        await asyncio.wait_for(both_started.wait(), timeout=5)
+        return []
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.context_group_siblings(anchors, max_chunks_per_group=2) == []
+    assert sorted(started) == ["a0", f"a{size}"]
+
+
 def test_anchor_positions_parses_integers_only() -> None:
     assert oracle_module._anchor_positions("0:1,12:3") == [(0, 1), (12, 3)]
     assert oracle_module._anchor_positions(None) == []
@@ -377,7 +420,11 @@ class _SearchOracle:
         return {}
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 
@@ -823,3 +870,271 @@ async def test_vector_only_queries_have_their_own_vote() -> None:
     assert scores["c-0"] == scores["c-3"]
     assert scores["c-1"] == scores["c-2"]
     assert scores["c-1"] < scores["c-0"]
+
+
+class _QueryGenAi:
+    """検索文ごとに決まった埋め込み(代役の DB の vector の候補の key)を返す。"""
+
+    def __init__(self, vectors: Mapping[str, float]) -> None:
+        self._vectors = vectors
+
+    async def embed(
+        self, texts: list[str], *, input_type: str = "SEARCH_DOCUMENT"
+    ) -> list[list[float]]:
+        return [[self._vectors[text]] for text in texts]
+
+
+class _Observation:
+    def usage(self, value: object) -> None:
+        pass
+
+    def display(self, *args: object, **kwargs: object) -> None:
+        pass
+
+
+async def test_injected_search_reports_db_search_stages_and_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答に注入する検索(``AnswerEngine._search`` を回答の thread から ``_run_on_loop`` で呼ぶ)は、
+    実の ``OracleClient.search_many`` の DB の検索を処理の経過の段(ベクトル検索・全文検索)にし、
+    候補に検索の経路(``adb_hybrid.retrieval_channels``)を書く(#3443)。"""
+    monkeypatch.setattr(
+        oracle_module,
+        "resolve_vector_index_adapter",
+        lambda settings: type("Params", (), {"target_accuracy": 95})(),
+    )
+    client = OracleClient(settings=_search_settings())
+    monkeypatch.setattr(client, "_fetch_all", _fake_search_db)
+
+    async def no_classifications(document_ids: list[str]) -> dict[str, Any]:
+        return {}
+
+    async def no_first_pages(chunk_set_ids: list[str]) -> dict[str, Any]:
+        return {}
+
+    async def no_siblings(
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
+    ) -> list[RetrievedChunk]:
+        return []
+
+    monkeypatch.setattr(client, "document_classifications", no_classifications)
+    monkeypatch.setattr(client, "chunk_set_first_page_contexts", no_first_pages)
+    monkeypatch.setattr(client, "context_group_siblings", no_siblings)
+    engine = AnswerEngine(
+        Settings(),
+        oracle=client,
+        genai=_QueryGenAi({"規程": 1.0, "保管": 2.0}),  # type: ignore[arg-type]
+    )
+    observed: list[tuple[str, str, str]] = []
+
+    @contextmanager
+    def observer(operation: str, model: str) -> Iterator[_Observation]:
+        observed.append(("start", operation, model))
+        try:
+            yield _Observation()
+        finally:
+            observed.append(("end", operation, model))
+
+    loop = asyncio.get_running_loop()
+
+    def in_answer_thread() -> Any:
+        # 回答は thread で動き、注入した検索を event loop で実行して待つ(`_answer_sync`)。
+        with bind_trace_observer(observer):
+            return answer_engine_module._run_on_loop(
+                lambda: engine._search(
+                    SearchRequest(query="規程", filters={"knowledge_base_id": "kb-1"}),
+                    _SearchState(),
+                    retrieval_queries=["規程", "保管"],
+                    candidate_limit=6,
+                    expand_references=False,
+                ),
+                loop,
+            )
+
+    result = await asyncio.to_thread(in_answer_thread)
+
+    # vector と keyword の検索は並行に読み、それぞれ 1 つの段になる(段は重なる)。続く前後の文脈・
+    # 文書の分類と背景も段になる(#3464)。参照先・実体・関係情報は広げない検索なので段を出さない。
+    started = [entry[2] for entry in observed if entry[0] == "start"]
+    assert sorted(started[:2]) == sorted([VECTOR_SEARCH_STAGE, TEXT_SEARCH_STAGE])
+    assert started[2:] == [CONTEXT_SIBLINGS_STAGE, DOCUMENT_INFO_STAGE]
+    assert sorted(entry[2] for entry in observed if entry[0] == "end") == sorted(started)
+    assert {entry[1] for entry in observed} == {"stage"}
+
+    channels = {
+        chunk.chunk_uid: chunk.metadata["adb_hybrid"]["retrieval_channels"]
+        for chunk in result.child_chunks
+    }
+    # 「規程」(q1) の vector と keyword の両方と「保管」(q2) の vector、keyword だけ、q2 の両方。
+    assert channels["c-1"] == ["keyword:oracle_text:q1", "vector:q1", "vector:q2"]
+    assert channels["c-7"] == ["keyword:oracle_text:q1"]
+    assert channels["c-4"] == ["keyword:oracle_text:q2", "vector:q2"]
+    # 並べ替えに効く値は書かない(文脈の選択の点数を変えない)。
+    assert all(
+        set(chunk.metadata["adb_hybrid"]) == {"retrieval_channels"} for chunk in result.child_chunks
+    )
+    records = [_stored_chunk_answer_record(chunk) for chunk in result.child_chunks]
+    line = step_details.channel_line(records)
+    assert "そのほか" not in line
+    assert "ベクトルと全文の両方" in line
+    assert "全文だけ" in line
+
+
+async def test_injected_search_reports_stages_after_db_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回答に注入する検索は、DB の検索の後の工程(前後の文脈・参照先・実体・関係情報・図の切り出し・
+    文書の分類と背景)を「文書の検索」の子の段にする(#3464)。各工程の処理は段の中で行う。"""
+    client = _SearchOracle()
+    settings = Settings(
+        rag_reference_expansion_enabled=True,
+        rag_entity_expansion_enabled=True,
+        rag_graph_expansion_enabled=True,
+    )
+    engine = AnswerEngine(settings, oracle=client, genai=_GenAi())  # type: ignore[arg-type]
+    observed: list[tuple[str, str]] = []
+    open_stages: list[str] = []
+    ran: list[tuple[str, tuple[str, ...]]] = []
+
+    @contextmanager
+    def observer(operation: str, model: str) -> Iterator[_Observation]:
+        observed.append(("start", model))
+        open_stages.append(model)
+        try:
+            yield _Observation()
+        finally:
+            open_stages.remove(model)
+            observed.append(("end", model))
+
+    def recording(name: str, value: object) -> Callable[..., Any]:
+        async def run(*args: object, **kwargs: object) -> object:
+            ran.append((name, tuple(open_stages)))
+            return value
+
+        return run
+
+    monkeypatch.setattr(client, "context_group_siblings", recording("siblings", []))
+    monkeypatch.setattr(engine, "_reference_expansion", recording("references", {}))
+    monkeypatch.setattr(engine, "_entity_expansion", recording("entities", []))
+    monkeypatch.setattr(engine, "_graph_expansion", recording("graph", []))
+    monkeypatch.setattr(engine, "_attach_images", True)
+    monkeypatch.setattr(engine, "_materialize_image_evidence", recording("images", None))
+    monkeypatch.setattr(client, "chunk_set_first_page_contexts", recording("first_pages", {}))
+    image_metadata = '{"image_evidence": [{"image_id": "img-1"}]}'
+    original_hybrid_search = client.hybrid_search
+
+    async def hits_with_images(*args: Any, **kwargs: Any) -> list[RetrievedChunk]:
+        hits = await original_hybrid_search(*args, **kwargs)
+        return [
+            hit.model_copy(
+                update={
+                    "metadata": {
+                        **hit.metadata,
+                        "chunk_set_id": "set-a",
+                        "engine_metadata_json": image_metadata,
+                    }
+                }
+            )
+            for hit in hits
+        ]
+
+    monkeypatch.setattr(client, "hybrid_search", hits_with_images)
+    state = _SearchState(work_dir=Path("unused"))
+    loop = asyncio.get_running_loop()
+
+    def in_answer_thread() -> Any:
+        with bind_trace_observer(observer):
+            return answer_engine_module._run_on_loop(
+                lambda: engine._search(
+                    SearchRequest(query="検索文 1", filters={"knowledge_base_id": "kb-1"}),
+                    state,
+                    retrieval_queries=["検索文 1"],
+                    candidate_limit=4,
+                ),
+                loop,
+            )
+
+    await asyncio.to_thread(in_answer_thread)
+
+    expected = [
+        CONTEXT_SIBLINGS_STAGE,
+        REFERENCE_EXPANSION_STAGE,
+        ENTITY_EXPANSION_STAGE,
+        GRAPH_EXPANSION_STAGE,
+        IMAGE_EVIDENCE_STAGE,
+        DOCUMENT_INFO_STAGE,
+    ]
+    # 段は順に開いて閉じる(重ならない)。
+    assert observed == [(event, name) for name in expected for event in ("start", "end")]
+    # 各工程の処理は、その工程の段の中で行う。
+    stage_of = {
+        "siblings": CONTEXT_SIBLINGS_STAGE,
+        "references": REFERENCE_EXPANSION_STAGE,
+        "entities": ENTITY_EXPANSION_STAGE,
+        "graph": GRAPH_EXPANSION_STAGE,
+        "images": IMAGE_EVIDENCE_STAGE,
+        "first_pages": DOCUMENT_INFO_STAGE,
+    }
+    assert {name for name, _stages in ran} == set(stage_of)
+    assert all(stages == (stage_of[name],) for name, stages in ran)
+
+
+async def test_search_stages_are_skipped_when_there_is_nothing_to_do() -> None:
+    """行うことの無い工程(無効・対象が無い・読んだ後)は段を出さない(#3464)。"""
+    observed: list[str] = []
+
+    @contextmanager
+    def observer(operation: str, model: str) -> Iterator[_Observation]:
+        observed.append(model)
+        yield _Observation()
+
+    client = _SearchOracle()
+    settings = Settings(
+        rag_reference_expansion_enabled=False,
+        rag_entity_expansion_enabled=False,
+        rag_graph_expansion_enabled=False,
+    )
+    engine = AnswerEngine(settings, oracle=client, genai=_GenAi())  # type: ignore[arg-type]
+    state = _SearchState()
+    request = SearchRequest(query="検索文 1", filters={"knowledge_base_id": "kb-1"})
+    with bind_trace_observer(observer):
+        await engine._search(request, state, retrieval_queries=["検索文 1"], candidate_limit=4)
+        first = list(observed)
+        observed.clear()
+        # 同じ回答の 2 回目の検索(CRAG の探し直しなど)は、読み終えた文書の背景を読まない。
+        await engine._search(request, state, retrieval_queries=["検索文 1"], candidate_limit=4)
+
+    # 候補の chunk は chunk_set を持たず(文書の背景を読まない)、足した根拠も無い。
+    assert first == [CONTEXT_SIBLINGS_STAGE]
+    assert observed == [CONTEXT_SIBLINGS_STAGE]
+
+
+async def test_original_anchors_stage_only_for_derived_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """派生の chunk の原文を読むときだけ「要約・抽出値の原文の読み込み」の段にする(#3464)。"""
+    observed: list[str] = []
+
+    @contextmanager
+    def observer(operation: str, model: str) -> Iterator[_Observation]:
+        observed.append(model)
+        yield _Observation()
+
+    engine = AnswerEngine(Settings(), oracle=_SearchOracle(), genai=_GenAi())  # type: ignore[arg-type]
+    plain = _hit("c-1", 1.0, mode="hybrid")
+    derived = plain.model_copy(
+        update={"metadata": {**plain.metadata, "content_kind": "section_summary"}}
+    )
+
+    async def resolve(*args: object, **kwargs: object) -> list[RetrievedChunk]:
+        return [plain]
+
+    monkeypatch.setattr(engine, "_resolve_original_anchors", resolve)
+    with bind_trace_observer(observer):
+        assert await engine._original_anchors(_SearchState(), [plain], {}, filters={}) == [plain]
+        assert observed == []
+        assert await engine._original_anchors(_SearchState(), [derived], {}, filters={}) == [plain]
+    assert observed == [DERIVED_SOURCE_STAGE]

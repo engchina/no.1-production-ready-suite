@@ -5882,6 +5882,7 @@ test("実行結果は要約・表の中のスクロールのプレビューと�
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("button", { name: "CSV をダウンロード" })).toBeVisible();
   const pagination = page.getByTestId("query-results-all-pagination");
+  await expect(pagination.getByRole("button", { name: "次へ" })).toBeInViewport();
   await expect(pagination).toContainText("1–25 / 27 件");
   await expect(pagination).toContainText("1 / 2 ページ");
   const allTable = page.getByTestId("query-results-all-table");
@@ -6076,7 +6077,7 @@ test("SQL を生成して実行すると実処理の段階別進捗と結果を�
     await expect(progress).toBeVisible();
     await expect(progress).toHaveAttribute("data-job-status", "running");
     await expect(prepare).toHaveAttribute("data-status", "done");
-    await expect(prepare).toContainText("質問と対象の表を準備しました");
+    await expect(prepare).toContainText("質問と参照できる表を整理しました");
     // 実行中の span の行（#3226）。
     await expect(generate).toHaveAttribute("data-status", "running");
     await expect(generate).toHaveAttribute("aria-current", "step");
@@ -13575,7 +13576,15 @@ test("synthetic completion uses a top toast without a result action or another g
   await expect(notifications).toContainText("APP.INVOICES");
   await expect(page.getByText("合成データの生成が完了しました", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("link", { name: "結果を確認" })).toHaveCount(0);
-  expect((await heading.boundingBox())?.y).toBe(before?.y);
+  if (testInfo.project.name === "mobile-375") {
+    // 複数行の通知が本文を覆わないよう、上端のバーを超える高さを確保する（#3751）。
+    await expect.poll(async () => {
+      const [toastBox, headingBox] = await Promise.all([notifications.boundingBox(), heading.boundingBox()]);
+      return toastBox && headingBox ? headingBox.y - toastBox.y - toastBox.height : -1;
+    }).toBeGreaterThanOrEqual(0);
+  } else {
+    expect((await heading.boundingBox())?.y).toBe(before?.y);
+  }
   // #1728: 通知は決まった 1 か所に出す（desktop は画面の右下、375px は上端のバー）。
   await expectToastPlacement(page);
   await expectNoHorizontalScroll(page);
@@ -13584,6 +13593,7 @@ test("synthetic completion uses a top toast without a result action or another g
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/admin-sql$/);
   await expect(notifications.getByRole("status")).toHaveCount(0);
+  await expect.poll(async () => (await heading.boundingBox())?.y).toBe(before?.y);
   expect(writes).toBe(0);
 });
 
@@ -20393,8 +20403,9 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await expect(page.getByTestId("nl2sql-job-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("nl2sql-job-summary").click();
   const progress = page.getByTestId("nl2sql-job");
-  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルの呼び出し");
-  await expect(progress.locator('[data-level="1"]')).toContainText("synthetic-model");
+  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルを呼び出す（用途の記録なし）");
+  await progress.getByTestId("nl2sql-job-step-generate_sql.1-toggle").click();
+  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1-details")).toContainText("synthetic-model");
   // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細に出す。
   await expect(page.getByText("トレースの詳細")).toHaveCount(0);
   await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);

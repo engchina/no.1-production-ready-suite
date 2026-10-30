@@ -57,6 +57,124 @@ export function formatRunTokens(tokens: number | null | undefined, notRecorded =
 }
 
 // ---------------------------------------------------------------------------
+// 実行のモデルの利用量（RAG・NL2SQL の実行履歴の一覧の「token」と詳細の概要。#3419・#3466・#3543）
+
+/**
+ * 計測の状態。complete: すべての呼び出しを計測した。partial: 一部の呼び出しの利用量が無い。
+ * unmeasured: アプリが利用量を受け取れない呼び出し（DB の中でモデルを呼ぶ Select AI など）だけで、数を持たない。
+ */
+export type RunUsageMeasurement = "complete" | "partial" | "unmeasured";
+
+/** 1 回の実行のモデルの利用量（backend の `pr_backend_core.observability.model_usage.RunModelUsage`）。 */
+export interface RunModelUsageRecord {
+  /** 呼び出したモデルの ID（主のモデルが先頭）。 */
+  models: string[];
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  /** 入力 + 出力（cached は入力、reasoning は出力の内数）。 */
+  total_tokens: number;
+  cached_input_tokens?: number | null;
+  reasoning_output_tokens?: number | null;
+  measurement: RunUsageMeasurement;
+  measured_requests: number;
+  /** 利用量を計測できない呼び出しの出どころ（`select_ai` など。回数は数えない）。古い記録は無い。 */
+  unmeasured_sources?: string[];
+}
+
+/** 利用量の文言（製品の i18n で上書きできる）。 */
+export interface RunUsageLabels {
+  unmeasured: string;
+  partial: string;
+  /** 「モデルの呼び出し」の値（すべて計測）。数は桁区切り済み。 */
+  modelCalls: (values: { requests: string; input: string; output: string }) => string;
+  /** 「モデルの呼び出し」の値（一部計測）。 */
+  modelCallsPartial: (values: { requests: string; measured: string; input: string; output: string }) => string;
+}
+
+export const DEFAULT_RUN_USAGE_LABELS: RunUsageLabels = {
+  unmeasured: "未計測",
+  partial: "一部計測",
+  modelCalls: ({ requests, input, output }) => `${requests} 回（入力 ${input} / 出力 ${output} token）`,
+  modelCallsPartial: ({ requests, measured, input, output }) =>
+    `${requests} 回（うち ${measured} 回を計測。入力 ${input} / 出力 ${output} token）`,
+};
+
+/** 詳細の概要の「モデル」「token」「モデルの呼び出し」と、未計測の呼び出しの出どころ。 */
+export interface RunUsageView {
+  /** 呼び出したモデルの ID（複数は「、」で並べる）。記録が無ければ null（並べない）。 */
+  model: string | null;
+  /** `RunSummary` の `usage`（数があれば数の下に、無ければ注記だけ）。 */
+  usage: { tokens: number | null; note: string | null };
+  modelCalls: string;
+  /** 利用量を計測できない呼び出しの出どころ（表示名を「、」で並べる）。無ければ null。 */
+  unmeasuredCalls: string | null;
+}
+
+/**
+ * 実行のモデルと利用量の表示（3 製品で同じ規則）。モデルは実行のときに記録した ID だけを出し、今の設定から推測しない。
+ *
+ * - 利用量の記録が無い（この機能より前の記録・trace の始まる前に失敗した実行）: token と呼び出しは「未計測」（0 にしない）。
+ * - 計測できない呼び出しだけ（Select AI だけの実行）: token と呼び出しは「未計測」で、出どころを `unmeasuredCalls` に出す。
+ * - 一部の呼び出しの利用量が無い・計測できない呼び出しが混ざる: 計測できた分の数に「一部計測」を添える。
+ * - LLM を呼ばなかった実行: 実測の 0。
+ */
+export function runUsageView(
+  usage: RunModelUsageRecord | null | undefined,
+  options: {
+    /** 利用量の記録に無いときに出すモデル（実行の記録の列）。 */
+    fallbackModel?: string | null;
+    labels?: Partial<RunUsageLabels>;
+    /** 未計測の出どころの表示名（無ければ ID のまま）。 */
+    sourceLabel?: (source: string) => string;
+  } = {}
+): RunUsageView {
+  const labels = { ...DEFAULT_RUN_USAGE_LABELS, ...options.labels };
+  const models = usage?.models.length ? usage.models : options.fallbackModel ? [options.fallbackModel] : [];
+  const model = models.length ? models.join("、") : null;
+  const sources = usage?.unmeasured_sources ?? [];
+  const unmeasuredCalls = sources.length
+    ? sources.map((source) => options.sourceLabel?.(source) ?? source).join("、")
+    : null;
+  if (!usage || usage.measurement === "unmeasured") {
+    return {
+      model,
+      usage: { tokens: null, note: labels.unmeasured },
+      modelCalls: labels.unmeasured,
+      unmeasuredCalls,
+    };
+  }
+  const partial = usage.measurement === "partial";
+  const values = {
+    requests: formatPaginationNumber(usage.requests),
+    measured: formatPaginationNumber(usage.measured_requests),
+    input: formatPaginationNumber(usage.input_tokens),
+    output: formatPaginationNumber(usage.output_tokens),
+  };
+  return {
+    model,
+    usage: { tokens: usage.total_tokens, note: partial ? labels.partial : null },
+    modelCalls: partial ? labels.modelCallsPartial(values) : labels.modelCalls(values),
+    unmeasuredCalls,
+  };
+}
+
+/**
+ * 一覧の「token」の列（`RunHistoryItem.usage`）。一覧の API は利用量の全体ではなく合計と計測の状態だけを返す。詳細の概要
+ * （`runUsageView`）と同じ規則: 記録の無い実行と計測できない呼び出しだけの実行は「未計測」（0 にしない）、一部計測は数に
+ * 「一部計測」を添え、LLM を呼ばなかった実行は実測の 0。
+ */
+export function runListUsage(
+  totalTokens: number | null | undefined,
+  measurement: RunUsageMeasurement | null | undefined,
+  labels: Partial<Pick<RunUsageLabels, "unmeasured" | "partial">> = {}
+): { tokens: number | null; note: string | null } {
+  const resolved = { ...DEFAULT_RUN_USAGE_LABELS, ...labels };
+  if (!measurement || measurement === "unmeasured") return { tokens: null, note: resolved.unmeasured };
+  return { tokens: totalTokens ?? 0, note: measurement === "partial" ? resolved.partial : null };
+}
+
+// ---------------------------------------------------------------------------
 // 絞り込みの値（部品は #1933 の `FilterSelect` を使う。ここは 3 製品で同じ選択肢と既定の文言）
 
 /** 期間の絞り込み。既定は `DEFAULT_RUN_PERIOD`（過去 7 日）。 */
@@ -348,8 +466,12 @@ export interface RunHistoryItem {
   startedAt: string;
   /** 所要時間（ミリ秒）。実行中・記録なしは null。 */
   durationMs?: number | null;
-  /** 利用量（token の数・費用の表記）。記録が無い製品は渡さない。 */
-  usage?: { tokens?: number | null; cost?: string | null } | null;
+  /**
+   * 利用量（token の数・費用の表記）。記録が無い製品は渡さない。`note` は計測の状態の注記（「一部計測」「未計測」など。
+   * 翻訳済み）で、詳細の概要（`RunSummary` の `usage.note`）と同じ規則で出す: 数があれば数の下に、無ければ注記だけ
+   * （不明を 0 と出さない。#3419・#3466）。
+   */
+  usage?: { tokens?: number | null; note?: string | null; cost?: string | null } | null;
 }
 
 /** 一覧の文言。製品の i18n で上書きできる（部分で渡す）。 */
@@ -412,6 +534,8 @@ export type RunHistoryLabelsInput = Partial<Omit<RunHistoryLabels, "columns" | "
 };
 
 export interface RunHistoryTableProps<T> {
+  /** 主一覧で広い画面の下の余白を活用する（DataTable と同じ基準）。 */
+  growToViewport?: boolean;
   rows: readonly T[];
   /** 製品の行を共通の形に写す。 */
   toItem: (row: T) => RunHistoryItem;
@@ -462,6 +586,7 @@ const WIDE_ONLY = "hidden @4xl:table-cell";
  */
 export function RunHistoryTable<T>({
   rows,
+  growToViewport = false,
   toItem,
   onOpen,
   showKind = true,
@@ -581,10 +706,17 @@ export function RunHistoryTable<T>({
       headerClassName: WIDE_ONLY,
       render: (row) => {
         const usage = toItem(row).usage;
-        if (!usage || (usage.tokens == null && !usage.cost)) return labels.notRecorded;
+        if (!usage || (usage.tokens == null && !usage.cost && !usage.note)) return labels.notRecorded;
+        // 数の無い実行（未計測など）は注記だけを 1 行で出す（「—」と注記を重ねない）。
+        if (usage.tokens == null && !usage.cost) return <span data-run-usage-note="">{usage.note}</span>;
         return (
           <span className="grid justify-items-end">
             <span>{formatRunTokens(usage.tokens, labels.notRecorded)}</span>
+            {usage.note ? (
+              <span className="text-xs" data-run-usage-note="">
+                {usage.note}
+              </span>
+            ) : null}
             {usage.cost ? <span className="text-xs">{usage.cost}</span> : null}
           </span>
         );
@@ -601,17 +733,22 @@ export function RunHistoryTable<T>({
   if (actionsFor) {
     columns.push({
       key: "actions",
-      header: <span className="sr-only @4xl:not-sr-only">{labels.columns.actions}</span>,
+      // not-sr-only は white-space: normal に戻すので、広い置き場所でも 1 行に保つ（「操 / 作」にしない。#3427）。
+      header: <span className="sr-only @4xl:not-sr-only @4xl:whitespace-nowrap">{labels.columns.actions}</span>,
       align: "right",
       className: "w-px whitespace-nowrap",
       render: (row) => {
         const item = toItem(row);
+        // 操作の無い行（終わった実行）のセルは空。列はメニューのボタン（iconOnly の sm）の幅を保ち、操作の無い行だけの
+        // ページでも縮めない（ページ・再取得で列の幅を変えない。#3427）。
         return (
-          <RowActionMenu
-            actions={actionsFor(row)}
-            ariaLabel={labels.rowActions(item.title)}
-            testId={testId ? `${testId}-row-actions-${item.id}` : undefined}
-          />
+          <div className="flex min-w-[var(--button-height-sm)] justify-end" data-run-history-actions="">
+            <RowActionMenu
+              actions={actionsFor(row)}
+              ariaLabel={labels.rowActions(item.title)}
+              testId={testId ? `${testId}-row-actions-${item.id}` : undefined}
+            />
+          </div>
         );
       },
     });
@@ -627,11 +764,13 @@ export function RunHistoryTable<T>({
         selectedRowKey={selectedRunId}
         stickyHeader
         visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        growToViewport={growToViewport}
         loading={loading}
         empty={empty}
         ariaLabel={labels.table}
         scrollAriaLabel={labels.table}
         testId={testId}
+        scrollTestId={testId ? `${testId}-scroll-region` : undefined}
         tableClassName="w-full text-sm"
         rowProps={(row) => {
           const item = toItem(row);

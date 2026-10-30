@@ -9,8 +9,6 @@ import {
   CardHeader,
   CardTitle,
   DataTable,
-  FieldError,
-  FormGrid,
   ProcessingIndicator,
   Skeleton,
   StatusBadge,
@@ -27,19 +25,19 @@ import {
   BarChart3,
   CheckCircle2,
   ClipboardCheck,
+  Download,
   Minus,
   Settings2,
   TrendingDown,
   TrendingUp,
   XCircle,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { type FormEvent, type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { listCountProps, useClientListPaging } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { EmptyState } from "@/components/StateViews";
-import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import {
   SearchAnswerProfileSelect,
   SearchAnswerProfileSelectSkeleton,
@@ -81,7 +79,6 @@ import {
   evaluationProcessRows,
   evaluationCaseRowLabel,
   evaluationEvidenceSummary,
-  sameIdSet,
   type EvaluationCaseLabel,
   type EvaluationCaseLabels,
 } from "./evaluation-input";
@@ -111,6 +108,8 @@ import {
   EvaluationJobPanel,
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
+import { JudgeCalibrationBadge } from "./calibration/JudgeCalibrationBadge";
+import { JudgeCalibrationTab } from "./calibration/JudgeCalibrationTab";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
@@ -118,36 +117,56 @@ import {
   evaluationUploadSelectionError,
 } from "./EvaluationRequestUpload";
 
-const KNOWLEDGE_BASE_ERROR_ID = "evaluation-knowledge-base-error";
+const ResultExportContext = createContext<{
+  jobId: string;
+  input: EvaluationImportResult | null;
+  profileName: string | null;
+  compareProfileName: string | null;
+} | null>(null);
+
 const COMPARE_SWITCH_ID = "evaluation-compare-switch";
 const COMPARE_PROFILE_ID = "evaluation-compare-profile";
 /** アップロードの上限（backend の `EVALUATION_EXCEL_MAX_ROWS` / `_BYTES`。検証の前の案内に出す）。 */
 const EVALUATION_EXCEL_MAX_ROWS = 200;
 const EVALUATION_EXCEL_MAX_MEGABYTES = 10;
+const PAGE_TABS_PREFIX = "evaluation-page";
+type PageTab = "run" | "calibration";
 
 /**
- * 品質評価（改善・運用 › 品質評価。#2065）。評価するナレッジベース（必須）と評価リクエストの Excel
+ * 品質評価（改善・運用 › 品質評価。#2065）。評価する検索・回答プロファイル（必須）と評価リクエストの Excel
  * （テンプレートのダウンロード・アップロード・検証）を条件に評価を実行し、評価の基準は設定の既定を
  * 表示だけする。評価は job で動き（#390）、結果は Excel の行（質問・期待する根拠）に合わせて出す。
  */
 export function EvaluationClient() {
+  // 評価の実行と判定の校正（#3578）のタブ。`?tab=calibration` で判定の校正を直接開ける。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const pageTab: PageTab = searchParams.get("tab") === "calibration" ? "calibration" : "run";
+  const changePageTab = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === "calibration") next.set("tab", "calibration");
+    else next.delete("tab");
+    setSearchParams(next, { replace: true });
+  };
   const runMutation = useSubmitRunEvaluationJob();
   const importMutation = useImportEvaluationCases();
   const settingsQuery = useEvaluationSettings();
   // 評価は job で動く（#390）。job id だけを作業状態に残し、画面に戻ったらサーバーの状態
   // （進捗・結果）を確かめる（workspace-state.md）。戻っただけで評価を送り直さない。
   const runJob = useEvaluationJobState();
-  // 評価の条件（KB スコープ・検証した Excel）は、ページを行き来しても再読込しても残す
-  // （workspace-state.md）。選んだファイルそのものはメモリだけに持つ（KB を変えたら検証し直す）。
-  const [knowledgeBaseIds, setKnowledgeBaseIds] = useWorkspaceState<string[]>(
-    "evaluation.knowledgeBaseIds",
-    [],
-    isStringArray
+  // 評価の条件（プロファイル・検証した Excel）は、ページを行き来しても再読込しても残す
+  // （workspace-state.md）。選んだファイルそのものはメモリだけに持つ（プロファイルを変えたら検証し直す）。
+  const [profileId, setProfileId] = useWorkspaceState<string | null>(
+    "evaluation.profileId",
+    null,
+    isNullableString
   );
   const [importResult, setImportResult] = useWorkspaceState<EvaluationImportResult | null>(
     "evaluation.import",
     null,
     isImportResult
+  );
+  const [runInputSnapshot, setRunInputSnapshot] = useWorkspaceState<EvaluationImportResult | null>(
+    "evaluation.runInput", null, isImportResult
   );
   // 実行した評価のケースの見出し（結果の表の質問・期待する根拠）。Excel を差し替えても結果と合う。
   const [runCaseLabels, setRunCaseLabels] = useWorkspaceState<EvaluationCaseLabels>(
@@ -167,6 +186,11 @@ export function EvaluationClient() {
     isNullableString
   );
   // 実行した評価の比べたプロファイルの名前（結果の見出し。条件を変えても結果と合う）。
+  const [runProfileName, setRunProfileName] = useWorkspaceState<string | null>(
+    "evaluation.runProfileName",
+    null,
+    isNullableString
+  );
   const [runCompareName, setRunCompareName] = useWorkspaceState<string | null>(
     "evaluation.runCompareName",
     null,
@@ -184,11 +208,11 @@ export function EvaluationClient() {
   );
   const profilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
   const profiles = profilesQuery.data?.items ?? [];
-  // 選んだファイル（KB を変えたときに検証し直す）。再読込の後は無い（検証の結果だけが残る）。
+  // 選んだファイル（プロファイルを変えたときに検証し直す）。再読込の後は無い（検証の結果だけが残る）。
   const [file, setFile] = useState<File | null>(null);
   const importSequence = useRef(0);
   const [fileName, setFileName] = useState<string | null>(importResult?.file_name ?? null);
-  const [knowledgeBaseError, setKnowledgeBaseError] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [runError, setRunError] = useState("");
   const [templateDownloading, setTemplateDownloading] = useState(false);
@@ -196,28 +220,28 @@ export function EvaluationClient() {
 
   const runActive = runMutation.isPending || isEvaluationJobActive(runJob.job);
   const validating = importMutation.isPending;
-  // KB を変えた後の検証の結果は、期待する根拠のファイル名の照合が変わるため使えない。
+  // プロファイルを変えた後の検証の結果は、期待する根拠のファイル名の照合が変わるため使えない。
   const importStale =
-    importResult !== null && !sameIdSet(importResult.knowledge_base_ids, knowledgeBaseIds);
+    importResult !== null && importResult.search_answer_profile_id !== profileId;
   const shownResult = importStale ? null : importResult;
   const processRows = shownResult ? evaluationProcessRows(shownResult) : [];
   const uploadNotice = validating
     ? null
-    : fileName && knowledgeBaseIds.length === 0
+    : fileName && !profileId
       ? t("evaluation.import.needsKnowledgeBase")
       : importStale && !file
         ? t("evaluation.import.staleKnowledgeBase")
         : null;
 
-  const validate = (target: File, ids: string[]) => {
+  const validate = (target: File, id: string) => {
     importSequence.current += 1;
     const sequence = importSequence.current;
     setUploadError(null);
     setRunError("");
     importMutation.mutate(
-      { file: target, knowledgeBaseIds: ids },
+      { file: target, searchAnswerProfileId: id },
       {
-        // 検証中に別のファイル・KB に変えたときは、前の結果を捨てる。
+        // 検証中に別のファイル・プロファイルに変えたときは、前の結果を捨てる。
         onSuccess: (result) => {
           if (sequence !== importSequence.current) return;
           setImportResult(result);
@@ -246,21 +270,25 @@ export function EvaluationClient() {
     setImportResult(null);
     setProcessDrafts({});
     setUseProcessDrafts(false);
-    if (knowledgeBaseIds.length > 0) validate(selected, knowledgeBaseIds);
+    if (profileId) validate(selected, profileId);
     else setUploadError(null);
   };
 
-  const changeKnowledgeBases = (ids: string[]) => {
-    setKnowledgeBaseIds(ids);
-    setKnowledgeBaseError(null);
-    if (file && ids.length > 0) validate(file, ids);
+  const changeProfile = (id: string) => {
+    importSequence.current += 1;
+    setProfileId(id);
+    setProfileError(null);
+    setProcessDrafts({});
+    setUseProcessDrafts(false);
+    if (compareProfileId === id) setCompareProfileId(null);
+    if (file) validate(file, id);
   };
 
   const downloadTemplate = async () => {
     setTemplateError(null);
     setTemplateDownloading(true);
     try {
-      saveDownloadedFile(await api.downloadEvaluationTemplate(knowledgeBaseIds));
+      saveDownloadedFile(await api.downloadEvaluationTemplate(profileId));
       toast.success(t("evaluation.import.templateDone"));
     } catch (error) {
       setTemplateError(
@@ -275,7 +303,7 @@ export function EvaluationClient() {
     event.preventDefault();
     if (runActive || validating) return;
     // 未選択・未検証・誤りは、押したときに欄の直下へ出し、画面の並び順で最初の欄へ移す（#541）。
-    const nextKnowledgeBaseError = knowledgeBaseIds.length
+    const nextProfileError = profileId
       ? null
       : t("evaluation.knowledgeBaseScope.required");
     const nextUploadError = !fileName
@@ -283,21 +311,21 @@ export function EvaluationClient() {
       : !shownResult
         ? importStale && !file
           ? t("evaluation.import.staleKnowledgeBase")
-          : knowledgeBaseIds.length
+          : profileId
             ? (uploadError ?? t("evaluation.import.required"))
             : null
         : shownResult.error_count > 0
           ? t("evaluation.import.fixErrors")
           : null;
     const nextCompareError =
-      compareEnabled && !compareProfileId ? t("evaluation.compare.profileRequired") : null;
-    setKnowledgeBaseError(nextKnowledgeBaseError);
+      compareEnabled && (!compareProfileId || compareProfileId === profileId)
+        ? t("evaluation.compare.profileRequired")
+        : null;
+    setProfileError(nextProfileError);
     setUploadError(nextUploadError);
     setCompareError(nextCompareError);
-    if (nextKnowledgeBaseError) {
-      document
-        .querySelector<HTMLElement>('[data-testid="evaluation-knowledge-base"] input')
-        ?.focus();
+    if (nextProfileError) {
+      document.getElementById("evaluation-profile")?.focus();
       return;
     }
     if (nextUploadError || !shownResult) {
@@ -308,6 +336,7 @@ export function EvaluationClient() {
       document.getElementById(COMPARE_PROFILE_ID)?.focus();
       return;
     }
+    if (!profileId) return;
     const compareId = compareEnabled ? compareProfileId : null;
     // 確かめた期待の下書きを足したケース（#2402。オンにしたときだけ）。
     const runInput = useProcessDrafts ? applyProcessDrafts(shownResult, processDrafts) : shownResult;
@@ -316,10 +345,12 @@ export function EvaluationClient() {
     try {
       const job = await runMutation.mutateAsync({
         cases: runInput.cases,
-        knowledge_base_ids: knowledgeBaseIds,
+        search_answer_profile_id: profileId,
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
       setRunCaseLabels(buildEvaluationCaseLabels(runInput));
+      setRunInputSnapshot(runInput);
+      setRunProfileName(profiles.find((profile) => profile.id === profileId)?.name ?? profileId);
       setRunCompareName(
         compareId ? (profiles.find((profile) => profile.id === compareId)?.name ?? compareId) : null
       );
@@ -332,8 +363,28 @@ export function EvaluationClient() {
 
   return (
     <div>
-      <PageHeader wide title={t("nav.evaluation")} subtitle={t("evaluation.subtitle")} />
+      <PageHeader
+        wide
+        title={t("nav.evaluation")}
+        subtitle={t("evaluation.subtitle")}
+        tabs={
+          <Tabs
+            idPrefix={PAGE_TABS_PREFIX}
+            ariaLabel={t("evaluation.tabs.label")}
+            value={pageTab}
+            onChange={changePageTab}
+            items={[
+              { id: "run", label: t("evaluation.tabs.run") },
+              { id: "calibration", label: t("evaluation.tabs.calibration") },
+            ]}
+          />
+        }
+      />
       <PageBody wide>
+        <TabPanel id="calibration" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
+          <JudgeCalibrationTab />
+        </TabPanel>
+        <TabPanel id="run" value={pageTab} idPrefix={PAGE_TABS_PREFIX} className="grid min-w-0 gap-6">
         {/* 評価の基準を先に読み、条件を選んで実行する順に、縦に全幅で並べる（#3295。間隔は PageBody の gap）。 */}
         <SuiteSummary query={settingsQuery} />
         <Card className="min-w-0" data-testid="evaluation-conditions">
@@ -351,46 +402,49 @@ export function EvaluationClient() {
               noValidate
               onSubmit={(event) => void runEvaluation(event)}
             >
-              {/* ナレッジベースの選択は FormGrid の外に置く（FormGrid は container の箱で、開いた候補の一覧が
-                  後ろのカードの下に隠れるため）。幅は部品の width（lg）で決まる。 */}
-              <div className="min-w-0" data-testid="evaluation-knowledge-base">
-                <KnowledgeBaseScopePicker
-                  selectedIds={knowledgeBaseIds}
-                  onChange={changeKnowledgeBases}
-                  disabled={runMutation.isPending}
-                  helper={t("evaluation.knowledgeBaseScope.helper")}
-                  emptySelectionText={t("evaluation.knowledgeBaseScope.emptySelection")}
-                  required
-                  errorId={knowledgeBaseError ? KNOWLEDGE_BASE_ERROR_ID : undefined}
-                  // 対象の選択（ナレッジベース）は lg（#1891）。
-                  width="lg"
-                />
-                <FieldError
-                  id={KNOWLEDGE_BASE_ERROR_ID}
-                  message={knowledgeBaseError}
-                  className="mt-1"
-                />
+              <div className="min-w-0" data-testid="evaluation-profile">
+                {profilesQuery.isPending ? (
+                  <TimedLoadingState
+                    label={t("searchAnswerProfiles.loading")}
+                    operationKey="evaluation-profiles-load"
+                    framed={false}
+                  >
+                    <SearchAnswerProfileSelectSkeleton />
+                  </TimedLoadingState>
+                ) : profilesQuery.isError ? (
+                  <Banner severity="warning">{t("evaluation.compare.profilesLoadError")}</Banner>
+                ) : (
+                  <SearchAnswerProfileSelect
+                    id="evaluation-profile"
+                    items={profiles}
+                    value={profileId}
+                    onChange={changeProfile}
+                    disabled={runActive}
+                    error={profileError ?? undefined}
+                  />
+                )}
+                <p className="mt-1 text-xs text-fg-muted">{t("evaluation.knowledgeBaseScope.helper")}</p>
               </div>
-              <FormGrid columns={1}>
-                <EvaluationRequestUpload
-                  fileName={fileName}
-                  result={shownResult}
-                  validating={validating}
-                  disabled={runMutation.isPending}
-                  error={uploadError}
-                  notice={uploadNotice}
-                  maxRows={EVALUATION_EXCEL_MAX_ROWS}
-                  maxMegabytes={EVALUATION_EXCEL_MAX_MEGABYTES}
-                  templateDownloading={templateDownloading}
-                  templateError={templateError}
-                  onFiles={selectFiles}
-                  onDownloadTemplate={() => void downloadTemplate()}
-                />
-              </FormGrid>
+
+              <EvaluationRequestUpload
+                fileName={fileName}
+                result={shownResult}
+                validating={validating}
+                disabled={runMutation.isPending}
+                error={uploadError}
+                notice={uploadNotice}
+                maxRows={EVALUATION_EXCEL_MAX_ROWS}
+                maxMegabytes={EVALUATION_EXCEL_MAX_MEGABYTES}
+                templateDownloading={templateDownloading}
+                templateError={templateError}
+                onFiles={selectFiles}
+                onDownloadTemplate={() => void downloadTemplate()}
+              />
+
               {shownResult && shownResult.error_count === 0 && processRows.length ? (
                 <EvaluationProcessDrafts
                   rows={processRows}
-                  knowledgeBaseIds={knowledgeBaseIds}
+                  knowledgeBaseIds={shownResult.knowledge_base_ids}
                   drafts={processDrafts}
                   onDrafts={setProcessDrafts}
                   confirmed={useProcessDrafts}
@@ -410,6 +464,7 @@ export function EvaluationClient() {
                   setCompareError(null);
                 }}
                 query={profilesQuery}
+                baseProfileId={profileId}
                 error={compareError}
                 disabled={runMutation.isPending}
               />
@@ -448,15 +503,19 @@ export function EvaluationClient() {
             state={runJob}
             renderResult={(job) =>
               job.run_result ? (
-                job.run_result.comparison ? (
+                <ResultExportContext.Provider value={{jobId:job.job_id,input:runInputSnapshot,
+                  profileName:runProfileName,compareProfileName:runCompareName}}>
+                {job.run_result.comparison ? (
                   <EvaluationComparisonResult
                     metrics={job.run_result}
+                    baseName={runProfileName}
                     comparedName={runCompareName}
                     caseLabels={runCaseLabels}
                   />
                 ) : (
                   <EvaluationResult metrics={job.run_result} caseLabels={runCaseLabels} />
-                )
+                )}
+                </ResultExportContext.Provider>
               ) : null
             }
           />
@@ -472,6 +531,7 @@ export function EvaluationClient() {
             </CardContent>
           </Card>
         )}
+        </TabPanel>
       </PageBody>
     </div>
   );
@@ -722,6 +782,7 @@ function CompareOption({
   profileId,
   onProfileChange,
   query,
+  baseProfileId,
   error,
   disabled,
 }: {
@@ -730,6 +791,7 @@ function CompareOption({
   profileId: string | null;
   onProfileChange: (id: string) => void;
   query: ReturnType<typeof useSearchAnswerProfiles>;
+  baseProfileId: string | null;
   error: string | null;
   disabled: boolean;
 }) {
@@ -769,7 +831,7 @@ function CompareOption({
           <SearchAnswerProfileSelect
             id={COMPARE_PROFILE_ID}
             label={t("evaluation.compare.profileLabel")}
-            items={query.data?.items ?? []}
+            items={(query.data?.items ?? []).filter((profile) => profile.id !== baseProfileId)}
             value={profileId}
             onChange={onProfileChange}
             disabled={disabled}
@@ -782,15 +844,17 @@ function CompareOption({
 }
 
 /**
- * ナレッジベースの範囲と検索・回答プロファイルの範囲の結果を並べる（#2402）。指標の表（差はポイントと
+ * 二つの検索・回答プロファイルの結果を並べる（#2402）。指標の表（差はポイントと
  * 改善・悪化の文言とアイコンで示し、色だけに頼らない）と、どちらの結果の詳細を見るかのタブ。
  */
 function EvaluationComparisonResult({
   metrics,
+  baseName,
   comparedName,
   caseLabels,
 }: {
   metrics: EvaluationMetrics;
+  baseName: string | null;
   comparedName: string | null;
   caseLabels: EvaluationCaseLabels;
 }) {
@@ -800,7 +864,7 @@ function EvaluationComparisonResult({
   const name = comparedName ?? metrics.comparison?.search_answer_profile_id ?? "";
   const rows = comparisonRows(metrics, compared);
   const tabs = [
-    { id: "base", label: t("evaluation.compare.tab.base") },
+    { id: "base", label: t("evaluation.compare.tab.base", { name: baseName ?? "" }) },
     { id: "compared", label: t("evaluation.compare.tab.compared", { name }) },
   ];
   return (
@@ -809,7 +873,9 @@ function EvaluationComparisonResult({
         <h2 id="evaluation-compare-title" className="text-base font-semibold text-fg">
           {t("evaluation.compare.title")}
         </h2>
-        <p className="text-xs text-fg-muted">{t("evaluation.compare.description", { name })}</p>
+        <p className="text-xs text-fg-muted">
+          {t("evaluation.compare.description", { name, baseName: baseName ?? "" })}
+        </p>
       </div>
       <div data-testid="evaluation-compare-table">
         <DataTable<EvaluationComparisonRow>
@@ -835,13 +901,13 @@ function EvaluationComparisonResult({
             },
             {
               key: "base",
-              header: t("evaluation.compare.column.base"),
+              header: t("evaluation.compare.column.base", { name: baseName ?? "" }),
               className: "tnum whitespace-nowrap",
               render: (row) => formatMetricValue(row.base),
             },
             {
               key: "compared",
-              header: t("evaluation.compare.column.compared"),
+              header: t("evaluation.compare.column.compared", { name }),
               className: "tnum whitespace-nowrap",
               render: (row) => formatMetricValue(row.compared),
             },
@@ -951,19 +1017,6 @@ function EvaluationResult({
         />
       ))}
 
-      {metrics.threshold_failures.length ? (
-        <Banner severity="warning" title={t("evaluation.thresholdFailures")}>
-          <ul className="space-y-1">
-            {metrics.threshold_failures.map((failure) => (
-              <li key={failure.metric}>
-                {metricLabel(failure.metric)}: {formatMetricValue(failure.actual)} /{" "}
-                {formatMetricValue(failure.threshold)}
-              </li>
-            ))}
-          </ul>
-        </Banner>
-      ) : null}
-
       <CategoryBreakdown metrics={metrics} />
       <DecisionBreakdown metrics={metrics} />
 
@@ -1017,13 +1070,24 @@ function MetricGroup({
         {metricNames.map((metric) => {
           const value = metricValue(metrics, metric);
           const count = metricCaseCount(metrics, metric);
+          const threshold = metrics.applied_thresholds?.[metric]
+            ?? metrics.threshold_failures.find(failure => failure.metric === metric)?.threshold;
           return (
             <Card key={metric} data-testid={`evaluation-metric-${metric}`}>
               <CardContent className="space-y-1.5 pt-5">
                 <p className="text-xs font-medium text-fg-muted" title={metricDescription(metric)}>
                   {metricLabel(metric)}
                 </p>
-                <p className="tnum text-2xl font-semibold text-fg">{formatMetricValue(value)}</p>
+                <p className="tnum text-2xl font-semibold text-fg">
+                  {formatMetricValue(value)}
+                  {threshold != null ? (
+                    <span className="text-sm font-normal text-fg-muted"
+                      aria-label={t("evaluation.metric.threshold", {value:formatMetricValue(threshold)})}
+                      data-testid={`evaluation-threshold-${metric}`}>
+                      {" / "}{formatMetricValue(threshold)}
+                    </span>
+                  ) : null}
+                </p>
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
                   {value === null ? (
                     <span>
@@ -1038,6 +1102,8 @@ function MetricGroup({
                   {failedMetrics.has(metric) ? (
                     <StatusBadge variant="warning" label={t("evaluation.metric.belowThreshold")} />
                   ) : null}
+                  {/* 観点の判定が今の評価器で校正済みか（#3578。指標の値は変えない）。 */}
+                  <JudgeCalibrationBadge metric={metric} />
                 </div>
               </CardContent>
             </Card>
@@ -1055,6 +1121,29 @@ function CaseTable({
   metrics: EvaluationMetrics;
   caseLabels: EvaluationCaseLabels;
 }) {
+  const exportContext = useContext(ResultExportContext);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const download = async () => {
+    if (!exportContext || downloading) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const input = exportContext.input;
+      const fallbackRows = Object.entries(caseLabels).map(([case_id, label]) => ({
+        row: Number(case_id.replace("row-", "")) || 0, case_id,
+        question: label.question, evidence: label.evidence.map(item => item.label),
+        standard_answer_preview: null, has_standard_answer: false,
+      }));
+      saveDownloadedFile(await api.downloadEvaluationResults(exportContext.jobId, {
+        rows: input?.rows ?? fallbackRows, cases: input?.cases ?? [],
+        profile_name: exportContext.profileName, compare_profile_name: exportContext.compareProfileName,
+      }));
+      toast.success(t("evaluation.export.done"));
+    } catch (error) {
+      setDownloadError(error instanceof ApiError ? error.message : t("evaluation.export.error"));
+    } finally { setDownloading(false); }
+  };
   const results = metrics.case_results;
   // 評価の結果ごとに 1 ページ目から。結果は trace の ID（ケースごとに一意）で見分ける（#1891）。
   const paging = useClientListPaging(
@@ -1075,8 +1164,16 @@ function CaseTable({
           className="min-w-0 flex-1"
           testId="evaluation-case-toolbar"
         />
+        {exportContext ? (
+          <Button type="button" size="sm" variant="secondary" icon={Download}
+            loading={downloading} onClick={() => void download()}>
+            {t("evaluation.export.action")}
+          </Button>
+        ) : null}
       </div>
+      {downloadError ? <Banner severity="danger">{downloadError}</Banner> : null}
       <PagedDataTable<EvaluationCaseResult>
+        viewport="bounded"
         paginationLabels={paginationLabels()}
         {...paging}
         pageSizeOptions={PAGE_SIZE_OPTIONS}

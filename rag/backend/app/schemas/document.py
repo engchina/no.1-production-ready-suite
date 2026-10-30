@@ -12,6 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_parser_core.extraction import strip_formatting_marks
 from rag_parser_core.source import SourceModality, SourcePreviewKind, SourceProfile
 
 from app.config import (
@@ -40,6 +41,7 @@ from app.schemas.classification import (
 )
 from app.schemas.common import JsonValue
 from app.schemas.knowledge_base import KnowledgeBaseRef
+from app.schemas.language_pack_release import LanguagePackDocumentUse
 
 __all__ = [
     "SourceModality",
@@ -243,6 +245,7 @@ class IngestionJob(BaseModel):
     document_file_name: str | None = None
     recipe_id: str | None = None
     recipe_revision: int | None = Field(default=None, ge=1)
+    language_pack_release_id: str | None = None
     status: IngestionJobStatus
     phase: IngestionJobPhase = IngestionJobPhase.PREPROCESS
     parser_profile: str
@@ -325,6 +328,7 @@ class DocumentSummary(BaseModel):
 
     id: str
     file_name: str
+    language_pack: LanguagePackDocumentUse | None = None
     status: FileStatus
     category_name: str | None = None
     content_type: str | None = None
@@ -572,7 +576,6 @@ class DocumentChunkPreviewRequest(BaseModel):
     chunk_parent_max_children: int | None = Field(
         default=None, ge=CHUNK_PARENT_MAX_CHILDREN_MIN, le=CHUNK_PARENT_MAX_CHILDREN_MAX
     )
-    chunk_context_header_enabled: bool | None = None
 
     _FIELD_TO_SETTING = {
         "chunking_strategy": "rag_chunking_strategy",
@@ -585,7 +588,6 @@ class DocumentChunkPreviewRequest(BaseModel):
         "chunk_parent_target_chars": "rag_chunk_parent_target_chars",
         "chunk_parent_max_pages": "rag_chunk_parent_max_pages",
         "chunk_parent_max_children": "rag_chunk_parent_max_children",
-        "chunk_context_header_enabled": "rag_chunk_context_header_enabled",
     }
 
     def settings_overrides(self) -> dict[str, object]:
@@ -623,7 +625,16 @@ class DocumentProcessingConfig(KnowledgeBaseIngestionConfig):
     """文書単位の処理レシピ上書き。None は global 既定を継承する。"""
 
     model_config = ConfigDict(extra="forbid")
-    chunk_context_header_enabled: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_global_only_settings(cls, value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                key: item for key, item in value.items() if key != "chunk_context_header_enabled"
+            }
+        return value
+
     # 章節の抽出規則の方式。章節の表示と、取込時に要約する章節に適用する。
     section_rules_mode: SectionRulesMode | None = None
 
@@ -912,7 +923,8 @@ class DocumentSection(BaseModel):
     @field_validator("title")
     @classmethod
     def _require_title(cls, value: str) -> str:
-        cleaned = value.strip()
+        # 抽出の章節の名前と同じく書式の飾りの結合の線を除く（線を除く前の保存値も。#3434）。
+        cleaned = strip_formatting_marks(value).strip()
         if not cleaned:
             raise ValueError("章節の名前を入力してください。")
         return cleaned

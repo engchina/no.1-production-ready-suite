@@ -48,19 +48,20 @@ def test_answer_timeout_env_example_documents_setting() -> None:
 def test_answer_timeout_message_names_stage_and_retry() -> None:
     message = answer_timeout_message("history_rewrite", 300)
     assert "5 分" in message
-    assert "会話を踏まえた質問の書き換え" in message
+    assert "前の会話を踏まえて質問を補う" in message
     assert "もう一度送信してください" in message
     assert "90 秒" in answer_timeout_message("answer", 90)
-    assert "質問の読み取りから回答の作成まで" in answer_timeout_message("answer", 90)
+    assert "質問の条件を整理して回答を作る" in answer_timeout_message("answer", 90)
     # 開始前・未知の工程・工程の中の時間切れ（上限の秒数は出さない）。
     assert "検索の準備" in answer_timeout_message(None, 30)
     assert "（時間切れになった工程: 処理）" in answer_timeout_message("unknown_stage", 30)
     assert "時間内に終わりませんでした" in answer_timeout_message("answer", None)
     # 回答フローの各工程（#593）は利用者向けの名前にする（#2096。画面の処理の経過と同じ名前）。
-    assert "（時間切れになった工程: 文書の検索（1 回目））" in answer_timeout_message(
-        "answer_step:文書検索（1回目）", 30
+    assert (
+        "（時間切れになった工程: 検索文から根拠の候補を集める（1 回目））"
+        in answer_timeout_message("answer_step:文書検索（1回目）", 30)
     )
-    assert "（時間切れになった工程: 質問の言い換え）" in answer_timeout_message(
+    assert "（時間切れになった工程: 資料を探す検索表現を作る）" in answer_timeout_message(
         "answer_step:質問拡張戦略", 30
     )
     # 知らない工程名はそのまま出す。
@@ -71,15 +72,19 @@ def test_answer_timeout_message_names_stage_and_retry() -> None:
 
 
 def test_stage_labels_cover_answer_stages() -> None:
-    """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)と検索だけの工程。
+    """進捗の工程は回答の工程・回答側の安全チェック(#1146)・保存(#2342)・会話の添付からの根拠の
+    選択(#3475)と検索だけの工程。
 
     旧 standard の工程は #595 で削除した。
     """
     assert set(ANSWER_STAGE_LABELS) == {
         "retrieval",
         "history_rewrite",
+        "attachment_evidence",
         "field_filter",
         "answer",
+        # 回答を作らない RAG 検索の全体（#3506）。
+        "evidence",
         "answer_guardrail",
         "answer_record_save",
         "chat_message_save",
@@ -120,7 +125,7 @@ async def test_run_answer_with_timeout_reports_last_stage() -> None:
 
     assert caught.value.stage == "history_rewrite"
     assert caught.value.timeout_seconds == 0.05
-    assert "会話を踏まえた質問の書き換え" in caught.value.user_message
+    assert "前の会話を踏まえて質問を補う" in caught.value.user_message
     assert isinstance(caught.value, TimeoutError)
     assert isinstance(caught.value.original_error, TimeoutError)
 
@@ -165,7 +170,7 @@ async def test_search_reports_started_stages_as_mcp_progress(
     await search_route._report_tool_progress(_progress("answer_guardrail", "started"))
     # 終わった工程は知らせない。名前は時間切れの文言と同じ（answer_stage_label）。
     assert reported == [
-        "質問の読み取りから回答の作成まで",
-        "根拠の確認（1 回目）",
-        "回答の安全チェック",
+        "質問の条件を整理して回答を作る",
+        "要求に答える根拠があるか判定する（1 回目）",
+        "回答に安全上の問題がないか検査する",
     ]

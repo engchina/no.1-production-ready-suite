@@ -16,7 +16,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 
 QUESTION = "添付の作業表の作業費は合計いくらですか？"
@@ -41,8 +41,8 @@ def _draft(labels: dict[str, str], scope: list[dict]) -> dict:
     return {
         "request_coverage": [{"request_id": "Q1", "evidence_ids": [rows, rule], "evidence_scope": scope}],
         "items": [
-            {"kind": "rule", "request_id": "Q1", "text": RULE_ITEM, "quote": RULE, "evidence_id": rule},
-            {"kind": "rule", "request_id": "Q1", "text": ROWS_ITEM, "quote": "作業: A / 件数: 2", "evidence_id": rows},
+            {"kind": "rule", "request_id": "Q1", "text": RULE_ITEM, "citations": [{"quote": RULE, "evidence_id": rule}]},
+            {"kind": "rule", "request_id": "Q1", "text": ROWS_ITEM, "citations": [{"quote": "作業: A / 件数: 2", "evidence_id": rows}]},
         ],
         "summary": "作業費の合計は九百円です。",
         "confidence": "high",
@@ -80,7 +80,7 @@ def test_attachment_spans_are_marked_and_skip_the_target_matching():
     errors = _request_plan_errors(draft, spans)
     assert errors == [f"Q1: {labels[RULE]} の対象の照合は1件必要です。"]
     rows_span = next(span for span in spans if span["text"] == ROWS)
-    rows_item = GroundedItem(kind="rule", request_id="Q1", text=ROWS_ITEM, evidence_id=labels[ROWS])
+    rows_item = GroundedItem(kind="rule", request_id="Q1", text=ROWS_ITEM, citations=[GroundedCitation(evidence_id=labels[ROWS])])
     assert not _outside_request_plan(rows_item, rows_span, draft, spans)
 
 
@@ -125,6 +125,6 @@ def test_a_settled_plan_still_excludes_evidence_outside_it():
     settled["request_coverage"][0]["evidence_ids"] = [labels[ROWS]]
     result, model = _run([settled])
 
-    assert len([schema for schema, _prompt in model.prompts if schema == "GroundedDraft"]) == 1
+    assert len([schema for schema, _prompt in model.prompts if schema == "GroundedDraftWire"]) == 1
     assert ROWS_ITEM in result.answer_text
     assert RULE_ITEM not in result.answer_text

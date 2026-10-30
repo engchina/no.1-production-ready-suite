@@ -107,13 +107,13 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
     assert manifest["statement_count"] == len(oracle_schema.split_sql_statements(sql))
     assert [section["name"] for section in manifest["sections"]] == [
         "system_schema_control",
+        "language_pack_releases",
         "documents",
         "document_recipes",
         "knowledge_bases",
         "search_answer_profiles",
         "answer_records",
         "answer_prompts",
-        "query_history",
         "run_history",
         "document_categories",
         "document_cleanups",
@@ -137,6 +137,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "feedback_details",
         "evaluation_artifacts",
         "evaluation_jobs",
+        "evaluation_calibration",
         "role_access",
     ]
     assert all(section["statement_count"] > 0 for section in manifest["sections"])
@@ -383,7 +384,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "rag_answer_records" not in retire_migration
     assert "rag_graph_" not in retire_migration
     assert "rag_search_audit" not in retire_migration
-    # 関係情報の構築の保存値 full を entities へ書き換える（#621）。値があるときだけ置き換える。
+    # 文書構造索引の構築の保存値 full を entities へ書き換える（#621）。値があるときだけ置き換える。
     profile_migration = sql.split("-- migration: 20260930_006_graph_profile_entities", 1)[1].split(
         "-- migration: ", 1
     )[0]
@@ -409,7 +410,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     for table in ("RAG_GRAPH_CLAIMS", "RAG_GRAPH_COMMUNITY_SUMMARIES"):
         assert f"table_name = '{table}'" in graph_migration
         assert f"'DROP TABLE {table.lower()} CASCADE CONSTRAINTS PURGE'" in graph_migration
-    # 関係情報グラフが読む表は残す。
+    # 文書構造グラフが読む表は残す。
     for table in ("rag_graph_entities", "rag_graph_relationships", "rag_graph_entity_chunks"):
         assert table not in graph_migration
     # 取込 job の抽出の段の進捗の列を足すだけ（#1999）。JSON 型ではなく CLOB で持つ。
@@ -427,7 +428,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "''compare''" not in compare_migration
     assert "column_name = 'CURRENT_EXPERIMENT_ID'" in compare_migration
     # 文書の分類の一覧の表と索引を無いときだけ作る（#2131）。一意の索引も作る。
-    categories_migration = sql.split("-- migration: 20261016_003_document_categories", 1)[1]
+    categories_migration = sql.split("-- migration: 20261016_003_document_categories", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
     assert "CREATE TABLE rag_document_categories" in categories_migration
     assert "CREATE UNIQUE INDEX rag_document_categories_name_ux" in categories_migration
     assert "index_name = 'RAG_DOCUMENT_CATEGORIES_NAME_UX'" in categories_migration
@@ -442,7 +445,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # 評価の結果の行は消さない。
     assert "DELETE FROM rag_evaluation_runs" not in compare_migration
     # 業務ガイドの質問の例の埋め込みの表を無いときだけ作る（#2398）。
-    embeddings_migration = sql.split("-- migration: 20261018_001_support_guide_embeddings", 1)[1]
+    embeddings_migration = sql.split("-- migration: 20261018_001_support_guide_embeddings", 1)[
+        1
+    ].split("-- migration: ", 1)[0]
     assert "CREATE TABLE rag_support_guide_embeddings" in embeddings_migration
     assert "table_name = 'RAG_SUPPORT_GUIDE_EMBEDDINGS'" in embeddings_migration
     assert "DROP" not in embeddings_migration
@@ -461,7 +466,9 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "column_name = 'ATTACHMENTS_JSON'" in attachments_migration
     assert "DROP" not in attachments_migration.split("-- migration:", 1)[0]
     # 業務ガイドの内容の形の版を 2 にする（#2395）。schema_version だけを書き換える。
-    guide_migration = sql.split("-- migration: 20261018_004_support_guide_schema_v2", 1)[1]
+    guide_migration = sql.split("-- migration: 20261018_004_support_guide_schema_v2", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
     assert "JSON_TRANSFORM(draft_json, SET '$.schema_version' = 2)" in guide_migration
     assert "JSON_TRANSFORM(content_json, SET '$.schema_version' = 2)" in guide_migration
     assert "DELETE" not in guide_migration and "DROP" not in guide_migration
@@ -486,7 +493,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     # ファイル準備の改名と、文書レシピの解析エンジン・分割符の移行(#2457)。値の書き換えだけ。
     jsonl_migration = sql.split("-- migration: 20261019_003_structured_records_jsonl_profiles", 1)[
         1
-    ]
+    ].split("-- migration: ", 1)[0]
     assert "''\"csv_to_json\"'', ''\"csv_to_jsonl\"''" in jsonl_migration
     assert "''\"excel_to_json\"'', ''\"excel_to_jsonl\"''" in jsonl_migration
     assert "'RAG_DOCUMENT_RECIPES.PROCESSING_CONFIG'" in jsonl_migration
@@ -496,9 +503,11 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 107
+    assert len(statements) == 124
     assert all(
-        statement.startswith(("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT"))
+        statement.startswith(
+            ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE")
+        )
         for statement in statements
     )
 
@@ -592,6 +601,12 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261021_001_answer_prompt_placeholders",
         "20261021_002_document_delete_fk_indexes",
         "20261022_001_cited_evidence",
+        "20261026_001_evaluation_calibration",
+        "20261026_002_evaluation_job_calibration_kind",
+        "20261027_001_raptor_prompt_consolidation",
+        "20261028_001_language_pack_releases",
+        "20261028_002_language_pack_artifacts",
+        "20261029_001_retire_query_history",
     ]
 
 
@@ -721,3 +736,70 @@ def test_migration_artifact_separates_unterminated_sql_from_plsql() -> None:
     assert len(statements) == 2
     assert statements[0].endswith("UPDATE example SET value = 1")
     assert statements[1].endswith("END;")
+
+
+def test_oracle_schema_migration_sql_adds_evaluation_calibration() -> None:
+    """判定の校正の表と索引は無いときだけ作り、job の kind に calibration を足す（#3578）。"""
+    sql = oracle_schema.oracle_schema_migration_sql()
+    tables = sql.split("-- migration: 20261026_001_evaluation_calibration", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
+    for table in (
+        "RAG_EVALUATION_LABEL_SETS",
+        "RAG_EVALUATION_LABEL_ITEMS",
+        "RAG_EVALUATION_LABELS",
+        "RAG_EVALUATION_CALIBRATIONS",
+    ):
+        assert f"table_name = '{table}'" in tables
+    assert "index_name = 'RAG_EVALUATION_LABELS_ANNOTATOR_IDX'" in tables
+    assert "DROP" not in tables
+    assert "DELETE FROM" not in tables
+    kind = sql.split("-- migration: 20261026_002_evaluation_job_calibration_kind", 1)[1].split(
+        "-- migration: ", 1
+    )[0]
+    assert "constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK'" in kind
+    assert "'CHECK (kind IN (''run'', ''calibration''))'" in kind
+    assert "DELETE" not in kind
+
+
+def test_fresh_base_contains_release_tables_and_all_artifact_provenance_columns() -> None:
+    """新規初期化では migration の再実行なしで公開版と成果物の列を作る。"""
+    from app.rag.system_schema import MANAGED_TABLES
+
+    sql = oracle_schema.oracle_schema_sql().upper()
+    assert sql.index("CREATE TABLE RAG_LANGUAGE_PACK_RELEASES") < sql.index(
+        "CREATE TABLE RAG_INGESTION_JOBS"
+    )
+    assert "CREATE TABLE RAG_LANGUAGE_PACK_STATE" in sql
+    assert {"RAG_LANGUAGE_PACK_RELEASES", "RAG_LANGUAGE_PACK_STATE"} <= set(MANAGED_TABLES)
+    for table in ("RAG_INGESTION_JOBS", "RAG_CHUNK_SETS"):
+        ddl = sql.split(f"CREATE TABLE {table} (", 1)[1].split(";", 1)[0]
+        assert "LANGUAGE_PACK_RELEASE_ID VARCHAR2(64)" in ddl
+        assert "REFERENCES RAG_LANGUAGE_PACK_RELEASES (RELEASE_ID)" in ddl
+        if table == "RAG_CHUNK_SETS":
+            for column in (
+                "LANGUAGE_PACK_INGEST_HASH",
+                "LANGUAGE_PACK_JOB_ID",
+                "LANGUAGE_PACK_BUILT_AT",
+            ):
+                assert column in ddl
+    migrations = {
+        section.name: section for section in oracle_schema.oracle_schema_migration_sections()
+    }
+    assert (
+        "CREATE TABLE rag_language_pack_releases"
+        in migrations["20261028_001_language_pack_releases"].sql
+    )
+    upgrade = migrations["20261028_002_language_pack_artifacts"].sql
+    assert "user_tab_columns" in upgrade and "IF v_count = 0" in upgrade
+    assert "DROP" not in upgrade and "DELETE" not in upgrade
+
+
+def test_checked_in_migration_artifacts_match_the_generator() -> None:
+    artifacts = Path(__file__).resolve().parents[2] / "artifacts"
+    assert (artifacts / "oracle-schema-migration.sql").read_text() == (
+        oracle_schema.oracle_schema_migration_sql()
+    )
+    assert json.loads((artifacts / "oracle-schema-migration.manifest.json").read_text()) == (
+        oracle_schema.oracle_schema_migration_manifest()
+    )

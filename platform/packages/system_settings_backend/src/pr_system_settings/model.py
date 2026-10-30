@@ -9,6 +9,7 @@
   （プライマリ接続）・`PLATFORM_OCI_ENTERPRISE_AI_SECONDARY_API_KEY`（セカンダリ接続）・
   `PLATFORM_OCI_ENTERPRISE_AI_TERTIARY_API_KEY`（ターシャリ接続）だけに保存し、JSON には書かない
 - それ以外は `model-settings.json`（`version: 4`）へ保存し、起動時と mtime の変化時に読み込む
+- 登録に無いモデルは、別の接続へ切り替えずに失敗させる（#3240）
 - 登録モデルごとに推論（思考）の量 `reasoning_effort` を持つ（#1425。既定は low。#3004）。
   3 製品の呼び出しは `enterprise_ai_reasoning`（送る値の解釈はここだけ。none は送らない）で
   モデルから引き、Responses API の `reasoning: {"effort": ...}` を送る
@@ -24,9 +25,6 @@
   未完了（`incomplete` / `max_output_tokens`）の送り直しは `enterprise_ai_retry_output_token_budget`
   でモデルの上限まで広げる。共通の LLM / VLM の出力の上限（#1719 より前の
   `llm_max_output_tokens` / `vlm_max_output_tokens`）は持たない
-- LLM / VLM の呼び出しの seed `seed` を全モデルで共通に 1 つ持つ（#1434。既定 42）。
-  3 製品の呼び出しは `enterprise_ai_seed` / `seed_payload`（解釈はここだけ）で top-level の
-  `seed` を送り、NL2SQL は Select AI の AI profile の `seed` 属性の既定にも使う
 - model-settings.json はモデルの設定だけを持ち、製品固有の設定は置かない（他製品の保存で欠けると
   その製品が読めなくなるため。RAG の文書解析の設定は RAG の parser-settings.json。#1701）
 - モデル単位の接続テスト。実際の呼び出しは製品が `run_model_test` で渡す
@@ -52,17 +50,23 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 from fastapi import APIRouter, HTTPException, params
+from pr_backend_core.llm_request_params import collect_dropped_parameters
 from pr_backend_core.schemas import ApiResponse
 
 # 入力 token の見積もりは backend_core の 1 つ（検索の結果の本文の予算と共有する。#3321）。
 from pr_backend_core.token_estimate import estimate_input_tokens as estimate_input_tokens
-from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
-
-from .enterprise_ai_errors import (
+from pr_enterprise_ai.errors import (
     classify_enterprise_ai_http_failure,
     enterprise_ai_failure_actions,
     enterprise_ai_http_status_from_message,
 )
+from pr_enterprise_ai.urls import (
+    DEFAULT_ENTERPRISE_AI_API_PATH as DEFAULT_ENTERPRISE_AI_API_PATH,
+)
+from pr_enterprise_ai.urls import enterprise_ai_base_url as enterprise_ai_base_url
+from pr_enterprise_ai.urls import enterprise_ai_request_url as enterprise_ai_request_url
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+
 from .env_file import write_env_values
 
 logger = logging.getLogger(__name__)
@@ -82,6 +86,10 @@ ENTERPRISE_AI_CONNECTION_IDS = (
     ENTERPRISE_AI_TERTIARY_CONNECTION_ID,
 )
 MAX_ENTERPRISE_AI_CONNECTIONS = len(ENTERPRISE_AI_CONNECTION_IDS)
+# 既定の判定モデル（`default_judge_model_id`。#3574）の「回答と同じモデル」を表す明示の値。
+# 空（既定）は既定のテキストモデル、それ以外は登録モデルの ID。
+# 解決は `enterprise_ai_judge_model_id` だけで行う。
+ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER: Final = "same_as_answer"
 # 設定してもしなくてもよい接続（プライマリ接続の後ろ）。Endpoint URL があるときだけ有効になる。
 _OPTIONAL_CONNECTION_IDS = ENTERPRISE_AI_CONNECTION_IDS[1:]
 # Project OCID を任意にする接続（#786）。ターシャリ接続は OpenAI / OpenAI 互換 API 向けで、
@@ -133,15 +141,6 @@ ENTERPRISE_AI_REASONING_EFFORTS: Final[tuple[str, ...]] = (
 DEFAULT_ENTERPRISE_AI_REASONING_EFFORT: Final = "low"
 # 「送らない」の値。
 ENTERPRISE_AI_REASONING_EFFORT_OMIT: Final = "none"
-# LLM / VLM の呼び出しの seed（#1434）。全モデルで共通の 1 つで、既定は 42。
-# Responses API には seed の field が無いため、OpenAI SDK の `extra_body={"seed": ...}` と同じ
-# top-level の `seed` で送る。範囲は 32 bit の符号なしの int の半分（Oracle の Select AI の
-# AI profile の `seed` 属性・chat completions の seed のどちらでも受け付ける範囲）にする。
-# 2026-10-11 の実測（Responses API。#1434）:
-# - claude-opus-5（ターシャリ接続）・openai.gpt-oss-120b・xai.grok-4.3 とも `seed=42` を 200 で
-#   受け付ける。型の違う `"abc"` も 200 なので、endpoint は seed を解釈せずに無視していると推測する
-#   （同じ入力の 2 回の出力は temperature 1 では 3 モデルとも一致しない）。拒むモデルが無いので、
-#   モデルごとの「送らない」は持たない
 # モデルの入力の上限（tokens。#1437）。登録モデルごとに持ち、値が無いとき（#1437 より前の設定・
 # env だけで設定したモデル）は既定の 128000（多くのモデルが受け付ける大きさで、上限の大きい
 # モデルでも安全な側）。範囲は 4096〜2000000。入力の予算（回答の根拠・抽出の 1 回分）は
@@ -159,11 +158,6 @@ ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX: Final = 2_000_000
 DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS: Final = 32_768
 ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN: Final = 1
 ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX: Final = 2_000_000
-ENTERPRISE_AI_SEED_MIN: Final = 0
-ENTERPRISE_AI_SEED_MAX: Final = 2_147_483_647
-DEFAULT_ENTERPRISE_AI_SEED: Final = 42
-# Responses API の path（接続の Endpoint URL の後ろに付ける。#1440）。
-DEFAULT_ENTERPRISE_AI_API_PATH: Final = "/responses"
 ModelSettingsTestStatus = Literal["success", "failed"]
 ModelSettingsTestTargetType = Literal["enterprise_text", "enterprise_vision", "embedding", "rerank"]
 ModelTestDetails = dict[str, str | int | float | bool | None]
@@ -318,6 +312,9 @@ class EnterpriseAiModelSettings(BaseModel):
     default_text_model_id: str = Field(default="", max_length=256)
     # 画像を読む処理の既定。モデルを 1 つ以上登録したら必須で、Vision 対応のモデルに限る。
     default_vision_model_id: str = Field(default="", max_length=256)
+    # 品質評価で回答を判定するモデル（#3574）。空 = 既定のテキストモデル、
+    # `ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER` = 回答を作ったモデル、それ以外は登録モデルの ID。
+    default_judge_model_id: str = Field(default="", max_length=256)
     api_path: str = Field(default="/responses", max_length=512)
     vlm_input_mode: EnterpriseAiVlmInputMode = "auto"
     text_payload_template: str = Field(default="", max_length=20000)
@@ -326,18 +323,6 @@ class EnterpriseAiModelSettings(BaseModel):
     vision_response_path: str = Field(default="", max_length=1024)
     timeout_seconds: float = Field(default=600.0, gt=0.0, le=600.0)
     max_retries: int = Field(default=3, ge=0, le=5)
-    # LLM / VLM の呼び出しの seed（#1434）。全モデルで共通で、既定は 42。範囲外は検証エラー。
-    seed: int = Field(
-        default=DEFAULT_ENTERPRISE_AI_SEED,
-        ge=ENTERPRISE_AI_SEED_MIN,
-        le=ENTERPRISE_AI_SEED_MAX,
-    )
-
-    @field_validator("seed", mode="before")
-    @classmethod
-    def normalize_seed(cls, value: object) -> object:
-        """None（値なし）は既定の 42 にする。真偽値は int として受け取らない。"""
-        return _seed_input(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -376,6 +361,7 @@ class EnterpriseAiModelSettings(BaseModel):
     @field_validator(
         "default_text_model_id",
         "default_vision_model_id",
+        "default_judge_model_id",
         "api_path",
         "text_payload_template",
         "vision_payload_template",
@@ -668,30 +654,6 @@ class EnterpriseAiConnection:
         return enterprise_ai_request_url(self.endpoint, api_path)
 
 
-def enterprise_ai_base_url(endpoint: str) -> str:
-    """接続の Endpoint URL から OpenAI 互換 API の base URL を決める（#1440）。
-
-    3 製品の呼び出し・接続テストの URL はすべてこれ（と `enterprise_ai_request_url`）で決める。
-    入力どおり使い、前後の空白と末尾の `/` だけを除く。path は補わない（OCI Enterprise AI も
-    `https://inference.generativeai.<region>.oci.oraclecloud.com/openai/v1` のように利用者が
-    `/openai/v1` まで書く。OpenAI 互換 API は `https://api.openai.com/v1` のように API の
-    base URL まで書く）。以前の RAG は path の無い URL に `/openai/v1` を足していたため、
-    OCI 以外の OpenAI 互換 API（例 `https://api.deepseek.com`）で 404 になっていた。
-    """
-    return endpoint.strip().rstrip("/")
-
-
-def enterprise_ai_request_url(endpoint: str, api_path: str = DEFAULT_ENTERPRISE_AI_API_PATH) -> str:
-    """接続の Endpoint URL と API path から、呼ぶ URL を決める（#1440）。
-
-    `api_path` が空なら `/responses`。`http://` / `https://` で始まる `api_path` はそのまま使う。
-    """
-    path = (api_path or "").strip() or DEFAULT_ENTERPRISE_AI_API_PATH
-    if path.startswith(("http://", "https://")):
-        return path
-    return f"{enterprise_ai_base_url(endpoint)}/{path.lstrip('/')}"
-
-
 def _connection_from_settings(settings: Any, connection_id: str) -> EnterpriseAiConnection:
     fields = _CONNECTION_FIELDS[connection_id]
     return EnterpriseAiConnection(
@@ -729,20 +691,47 @@ def enterprise_ai_connection(settings: Any, connection_id: str) -> EnterpriseAiC
     return connections[0]
 
 
+class EnterpriseAiModelNotRegisteredError(ValueError):
+    """明示したモデルがモデル設定に登録されていない（#3240）。
+
+    別のモデル・接続へ暗黙に切り替えずに、呼び出しの前に失敗させる。文はそのまま利用者に見せてよい
+    （モデル ID だけを含み、secret を含まない）。
+    """
+
+    code: Final = "enterprise_ai_model_not_registered"
+    safe_for_user: Final = True
+
+    def __init__(self, model_id: str) -> None:
+        self.model_id = model_id
+        super().__init__(
+            f"モデル「{model_id}」はシステム設定 > モデル に登録されていません。"
+            "モデルを登録するか、登録済みのモデルを選んでください。"
+        )
+
+
 def enterprise_ai_connection_for_model(settings: Any, model_id: str) -> EnterpriseAiConnection:
     """モデルを呼ぶときに使う接続（#533）。3 製品の呼び出し・接続テストはすべてこれで引く。
 
-    登録モデルにない ID（env だけで設定した場合など）はプライマリ接続を使う。
+    - 空の ID は既定のテキストモデル（`enterprise_ai_default_model_id`）の接続。
+    - 登録モデルの ID はそのモデルの接続。
+    - 既定のテキスト / Vision モデルの ID は、登録モデルに無くてもプライマリ接続（`.env` だけで
+      既定のモデルを設定した環境）。
+    - それ以外（登録していない・登録を消したモデル）は `EnterpriseAiModelNotRegisteredError`。
+      プライマリ接続へ暗黙に切り替えない（#3240 の不変条件 2）。
     """
-    normalized = model_id.strip()
+    normalized = model_id.strip() or enterprise_ai_default_model_id(settings)
+    catalog = enterprise_ai_model_catalog(settings)
     connection_id = next(
-        (
-            model.connection_id
-            for model in enterprise_ai_model_catalog(settings)
-            if model.model_id == normalized
-        ),
-        ENTERPRISE_AI_PRIMARY_CONNECTION_ID,
+        (model.connection_id for model in catalog if model.model_id == normalized), None
     )
+    if connection_id is None:
+        defaults = {
+            _setting_text(settings, "oci_enterprise_ai_default_text_model"),
+            _setting_text(settings, "oci_enterprise_ai_default_vision_model"),
+        }
+        if normalized and normalized not in defaults:
+            raise EnterpriseAiModelNotRegisteredError(normalized)
+        connection_id = ENTERPRISE_AI_PRIMARY_CONNECTION_ID
     return enterprise_ai_connection(settings, connection_id)
 
 
@@ -939,49 +928,6 @@ def enterprise_ai_retry_output_token_budget(
     return widened if widened > int(current) else None
 
 
-def _seed_input(value: object) -> object:
-    """seed の入力の前処理（#1434）。
-
-    None は既定にし、真偽値は検証エラーにする（bool は int の部分型のため）。
-    """
-    if value is None:
-        return DEFAULT_ENTERPRISE_AI_SEED
-    if isinstance(value, bool):
-        raise ValueError("seed は整数で入力してください。")
-    return value
-
-
-def seed_to_send(value: object) -> int:
-    """設定の値を、LLM / VLM の呼び出しに送る seed にする（#1434。解釈はここだけ）。
-
-    整数で範囲（0〜2147483647）の中ならその値、値なし・範囲外・整数でない値は既定の 42。
-    保存・読み込みは `EnterpriseAiModelSettings` が検証するので、ここで既定に戻すのは
-    env の直書きなどの値だけ。
-    """
-    if isinstance(value, bool) or value is None:
-        return DEFAULT_ENTERPRISE_AI_SEED
-    try:
-        number = int(str(value).strip())
-    except (TypeError, ValueError):
-        return DEFAULT_ENTERPRISE_AI_SEED
-    if not ENTERPRISE_AI_SEED_MIN <= number <= ENTERPRISE_AI_SEED_MAX:
-        return DEFAULT_ENTERPRISE_AI_SEED
-    return number
-
-
-def enterprise_ai_seed(settings: Any) -> int:
-    """LLM / VLM の呼び出しに送る seed（#1434。システム設定 › モデル の値、既定 42）。"""
-    return seed_to_send(getattr(settings, "oci_enterprise_ai_seed", None))
-
-
-def seed_payload(settings: Any) -> dict[str, int]:
-    """Responses API の payload に足す top-level の `seed`（`{"seed": 42}`）。
-
-    OpenAI SDK では `extra_body` に渡す（Responses API の引数に seed が無いため）。
-    """
-    return {"seed": enterprise_ai_seed(settings)}
-
-
 # --------------------------------------------------------------------------- catalog
 
 
@@ -1041,6 +987,20 @@ def enterprise_ai_vision_model_id(settings: Any) -> str:
         enterprise_ai_model_catalog(settings),
         _setting_text(settings, "oci_enterprise_ai_default_text_model"),
     )
+
+
+def enterprise_ai_judge_model_id(settings: Any, answer_model_id: str | None = None) -> str:
+    """品質評価で回答を判定するモデル ID（#3574。既定の判定モデルの解決はここだけ）。
+
+    - 既定の判定モデルが空（既定）: 既定のテキストモデル（`enterprise_ai_default_model_id`）
+    - 「回答と同じモデル」（`ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER`）: ``answer_model_id``
+      （回答を作ったモデル）。分からなければ既定のテキストモデル
+    - 登録モデルの ID: そのモデル（すべての回答を同じモデルで判定する）
+    """
+    judge = _setting_text(settings, "oci_enterprise_ai_default_judge_model")
+    if judge == ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER:
+        return (answer_model_id or "").strip() or enterprise_ai_default_model_id(settings)
+    return judge or enterprise_ai_default_model_id(settings)
 
 
 def enterprise_ai_default_model_id(settings: Any) -> str:
@@ -1172,12 +1132,13 @@ def validate_model_ids(enterprise: EnterpriseAiModelSettings) -> list[ModelField
 
 
 def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[ModelFieldError]:
-    """既定のモデル 2 つが登録モデルと矛盾しないかを確かめる（#499）。
+    """既定のモデルが登録モデルと矛盾しないかを確かめる（#499）。
 
     - モデルを 1 つ以上登録したら、既定の Vision モデルは必須で、Vision 対応のモデルに限る
     - 既定のテキストモデルも、モデルを 1 つ以上登録したら必須（#566）。登録したモデルのどれか
       （Vision 対応でもよい）
-    エラーは画面の並び順（テキスト → Vision）で返す。
+    - 既定の判定モデル（#3574）は任意。空・「回答と同じモデル」以外は登録したモデルのどれか
+    エラーは画面の並び順（テキスト → Vision → 判定）で返す。
     """
     models = [model for model in enterprise.models if model.model_id]
     registered = {model.model_id for model in models}
@@ -1225,6 +1186,15 @@ def validate_default_models(enterprise: EnterpriseAiModelSettings) -> list[Model
                 "対応をオンにするか、別のモデルを選んでください。",
             )
         )
+    judge = enterprise.default_judge_model_id
+    if judge and judge != ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER and judge not in registered:
+        errors.append(
+            ModelFieldError(
+                "default_judge_model_id",
+                f"既定の判定モデル「{judge}」は登録モデルにありません。"
+                "登録モデルから選び直してください。",
+            )
+        )
     return errors
 
 
@@ -1252,6 +1222,7 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
             models=models,
             default_text_model_id=_setting_text(settings, "oci_enterprise_ai_default_text_model"),
             default_vision_model_id=enterprise_ai_vision_model_id(settings),
+            default_judge_model_id=_setting_text(settings, "oci_enterprise_ai_default_judge_model"),
             api_path=api_path or "/responses",
             vlm_input_mode=settings.oci_enterprise_ai_vlm_input_mode,
             text_payload_template=settings.oci_enterprise_ai_llm_payload_template,
@@ -1260,7 +1231,6 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
             vision_response_path=settings.oci_enterprise_ai_vlm_response_path,
             timeout_seconds=settings.oci_enterprise_ai_timeout_seconds,
             max_retries=settings.oci_enterprise_ai_max_retries,
-            seed=enterprise_ai_seed(settings),
         ),
         generative_ai=GenerativeAiModelSettings(
             embedding_model=settings.oci_genai_embedding_model,
@@ -1283,6 +1253,7 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     settings.oci_enterprise_ai_models = models
     settings.oci_enterprise_ai_default_text_model = enterprise.default_text_model_id
     settings.oci_enterprise_ai_default_vision_model = enterprise.default_vision_model_id
+    settings.oci_enterprise_ai_default_judge_model = enterprise.default_judge_model_id
     settings.oci_enterprise_ai_llm_path = enterprise.api_path
     settings.oci_enterprise_ai_vlm_path = enterprise.api_path
     settings.oci_enterprise_ai_vlm_input_mode = enterprise.vlm_input_mode
@@ -1292,7 +1263,6 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     settings.oci_enterprise_ai_vlm_response_path = enterprise.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise.max_retries
-    _set_if_field(settings, "oci_enterprise_ai_seed", enterprise.seed)
     settings.oci_genai_embedding_model = generative.embedding_model
     settings.oci_genai_embedding_dim = generative.embedding_dim
     settings.oci_genai_rerank_model = generative.rerank_model
@@ -1393,6 +1363,8 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     default_text_model_id: str | None = None
     default_vision_model_id: str | None = None
+    # 既定の判定モデル（#3574。空 = 既定のテキストモデル）。前の JSON に無ければ空。
+    default_judge_model_id: str = ""
     # #499 より前の JSON の key（既定モデルが 1 つ）。読み込むときに上の 2 つへ移す。
     default_model_id: str | None = None
     api_path: str = "/responses"
@@ -1403,19 +1375,9 @@ class _PersistedEnterpriseAiSettings(BaseModel):
     vision_response_path: str = ""
     timeout_seconds: float = 600.0
     max_retries: int = 3
-    # #1719 より前の `llm_max_output_tokens` / `vlm_max_output_tokens` は、知らない key として
-    # 読み捨てる（出力の上限は登録モデルごとの `max_output_tokens`）。
-    # #1434。値の無い JSON（#1434 より前）は既定の 42。範囲外は読み込みも検証エラー。
-    seed: int = Field(
-        default=DEFAULT_ENTERPRISE_AI_SEED,
-        ge=ENTERPRISE_AI_SEED_MIN,
-        le=ENTERPRISE_AI_SEED_MAX,
-    )
-
-    @field_validator("seed", mode="before")
-    @classmethod
-    def normalize_seed(cls, value: object) -> object:
-        return _seed_input(value)
+    # #1719 より前の `llm_max_output_tokens` / `vlm_max_output_tokens` と、廃止した `seed`
+    # （#3529）は、知らない key として読み捨てる（出力の上限は登録モデルごとの
+    # `max_output_tokens`）。
 
     @field_validator("vlm_input_mode", mode="before")
     @classmethod
@@ -1423,7 +1385,11 @@ class _PersistedEnterpriseAiSettings(BaseModel):
         return str(value).strip().casefold() or "auto"
 
     @field_validator(
-        "default_text_model_id", "default_vision_model_id", "default_model_id", mode="before"
+        "default_text_model_id",
+        "default_vision_model_id",
+        "default_judge_model_id",
+        "default_model_id",
+        mode="before",
     )
     @classmethod
     def strip_model_id(cls, value: object) -> object:
@@ -1738,6 +1704,7 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
             ],
             "default_text_model_id": enterprise.default_text_model_id,
             "default_vision_model_id": enterprise.default_vision_model_id,
+            "default_judge_model_id": enterprise.default_judge_model_id,
             "api_path": enterprise.api_path,
             "vlm_input_mode": enterprise.vlm_input_mode,
             "text_payload_template": enterprise.text_payload_template,
@@ -1746,7 +1713,6 @@ def _model_settings_document(payload: ModelSettingsPayload) -> dict[str, Any]:
             "vision_response_path": enterprise.vision_response_path,
             "timeout_seconds": enterprise.timeout_seconds,
             "max_retries": enterprise.max_retries,
-            "seed": enterprise.seed,
         },
         "generative_ai": generative.model_dump(),
     }
@@ -1933,7 +1899,9 @@ async def run_model_settings_test(
     try:
         if not request.model_id:
             raise ValueError("テストするモデル ID を入力してください。")
-        details = await run_model_test(candidate, request)
+        # モデルが受け付けない引数（#3539）を外して送ったら、結果の詳細と文に出す。
+        with collect_dropped_parameters() as dropped:
+            details = await run_model_test(candidate, request)
     except Exception as exc:  # noqa: BLE001 - 外部 SDK/API の多様な例外を表示用に握る
         raw_error = sanitize_model_test_error(
             str(exc),
@@ -1951,13 +1919,26 @@ async def run_model_settings_test(
             error_type=type(exc).__name__,
             elapsed_ms=_elapsed_ms(started),
         )
+    message = _model_test_success_message(request.target_type, request.model_id)
+    if dropped:
+        names = ", ".join(sorted(dropped))
+        details = {**details, "dropped_parameters": names}
+        message += _dropped_parameters_message(names)
     return ModelSettingsTestResult(
         status="success",
         target_type=request.target_type,
         model_id=request.model_id,
-        message=_model_test_success_message(request.target_type, request.model_id),
+        message=message,
         elapsed_ms=_elapsed_ms(started),
         details=details,
+    )
+
+
+def _dropped_parameters_message(names: str) -> str:
+    """受け付けない引数を外して送ったときに、成功の文に足す文（#3539）。"""
+    return (
+        f"このモデルが受け付けない引数（{names}）は外して送りました"
+        "（backend を再起動するまで、このモデルには送りません）。"
     )
 
 
@@ -2036,6 +2017,7 @@ def _default_models_changed(settings: Any, enterprise: EnterpriseAiModelSettings
             [(model.model_id, model.vision_enabled) for model in value.models if model.model_id],
             value.default_text_model_id,
             value.default_vision_model_id,
+            value.default_judge_model_id,
         )
 
     return key(model_payload(settings).enterprise_ai) != key(enterprise)

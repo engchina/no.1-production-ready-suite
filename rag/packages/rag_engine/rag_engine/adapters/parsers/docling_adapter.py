@@ -10,6 +10,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from rag_parser_core.extraction import ExtractionTableCell
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.markers import marker_patterns
 
@@ -29,7 +30,7 @@ from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.coordinates import clamp_bbox, pdf_bottom_left_to_image_top_left
 from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
 from rag_engine.parsing.progress import ACTIVE_PAGE_PROGRESS, PageProgress
-from rag_engine.parsing.rendering import pdf_text_lines_in_bbox
+from rag_engine.parsing.rendering import pdf_image_object_bounds, pdf_text_lines_in_bbox
 from rag_engine.parsing.table_structure import misplaced_cell_repairs, unassigned_table_lines
 
 DOCLING_ROW_TOLERANCE_RATIO = 0.005
@@ -168,13 +169,17 @@ class DoclingAdapter:
 
         # 画面キャプチャの text layer に由来する短いラベル（「管理者」「55555」）は、Docling が図の子にしなくても
         # 図の bbox 内にあれば図の文字。OCR 集約に入れ、独立した Text record（本文の根拠）にしない (#655)。
-        # 吹き出しの手順（#646）、caption、文末を持つ文は残す。
+        # 吹き出しの手順（#646）、caption、文末を持つ文は残す。図の領域には、その図を描いた PDF の埋め込み画像の
+        # 配置も含める（Docling の図の bbox が画像より狭いと、画像の端のタイトル・目盛りが見出し・本文になる。#3485）。
+        image_regions: dict[str, list[tuple[int, list[float]]]] | None = None
         for source_index, item in text_entries:
             if id(item) in picture_ref_by_text or id(item) in caption_ids or id(item) in instruction_heads or id(item) in merged_lines:
                 continue
             if not _is_short_label(str(item.get("text") or "")):
                 continue
-            picture_ref = _containing_picture_ref(item, pictures_by_ref, page_lookup)
+            if image_regions is None:
+                image_regions = _picture_image_regions(pictures_by_ref, page_lookup, context.pdf_path)
+            picture_ref = _containing_picture_ref(item, pictures_by_ref, page_lookup, image_regions=image_regions)
             if picture_ref:
                 picture_ref_by_text[id(item)] = picture_ref
                 texts_by_picture_ref.setdefault(picture_ref, []).append((source_index, item))
@@ -203,6 +208,9 @@ class DoclingAdapter:
                 repairs = _repair_table_cells(item, table_lines)
                 if repairs:
                     item["table_cell_repairs"] = repairs
+                cell_bboxes = _table_cell_bboxes(item, provenances, page_lookup)
+                if cell_bboxes:
+                    item[TABLE_CELL_BBOXES_KEY] = cell_bboxes
             text = _item_text(item, category, table_html_by_ref or {})
             # ページまたぎ等で prov が複数ある item は、全文を prov ごとに複製すると
             # チャンクと検索結果が重複する。charspan で分割できなければ最初の 1 件だけに持たせる。
@@ -431,8 +439,17 @@ def _is_short_label(text: str) -> bool:
     return bool(compact) and len(compact) <= 24 and not _instruction_end().search(stripped) and not _instruction_start().match(stripped)
 
 
-def _containing_picture_ref(item: dict[str, Any], pictures_by_ref: dict[str, dict[str, Any]], page_lookup: dict[int, Any]) -> str:
-    """item の bbox を完全に含む同じページの Picture の self_ref。無ければ空文字。"""
+def _containing_picture_ref(
+    item: dict[str, Any],
+    pictures_by_ref: dict[str, dict[str, Any]],
+    page_lookup: dict[int, Any],
+    *,
+    image_regions: dict[str, list[tuple[int, list[float]]]] | None = None,
+) -> str:
+    """item の bbox を完全に含む同じページの Picture の self_ref。無ければ空文字。
+
+    先に Docling の図の bbox で探し、無ければ図を描いた埋め込み画像の配置（``_picture_image_regions``）で探す。
+    """
     for provenance in item.get("prov", []) or []:
         if not isinstance(provenance, dict):
             continue
@@ -446,9 +463,75 @@ def _containing_picture_ref(item: dict[str, Any], pictures_by_ref: dict[str, dic
                 if not isinstance(picture_prov, dict) or int(picture_prov.get("page_no") or picture_prov.get("pageNo") or 0) != page_number:
                     continue
                 area = _docling_bbox_to_image(picture_prov.get("bbox") or {}, page)
-                if area and area[0] - 2 <= box[0] and area[1] - 2 <= box[1] and box[2] <= area[2] + 2 and box[3] <= area[3] + 2:
+                if area and _box_contains(area, box):
                     return picture_ref
+        for picture_ref, regions in (image_regions or {}).items():
+            if any(region_page == page_number and _box_contains(region, box) for region_page, region in regions):
+                return picture_ref
     return ""
+
+
+def _box_contains(area: Sequence[float], box: Sequence[float], *, tolerance: float = 2.0) -> bool:
+    return (
+        area[0] - tolerance <= box[0] and area[1] - tolerance <= box[1] and box[2] <= area[2] + tolerance and box[3] <= area[3] + tolerance
+    )
+
+
+# 図の文字を探す領域に足す埋め込み画像の条件。図の bbox の大部分が画像に入り（``_PICTURE_INSIDE_IMAGE``）、図が画像の
+# 大部分を占める（``_PICTURE_SHARE_OF_IMAGE``）ときだけ、その画像を図の画像とみなす。全ページのスキャン画像・背景の
+# 画像・複数の図をまとめた画像で、図の領域を広げない。
+_PICTURE_INSIDE_IMAGE = 0.8
+_PICTURE_SHARE_OF_IMAGE = 0.5
+
+
+def _picture_image_regions(
+    pictures_by_ref: dict[str, dict[str, Any]], page_lookup: dict[int, Any], pdf_path: Any
+) -> dict[str, list[tuple[int, list[float]]]]:
+    """図ごとの、その図を描いた PDF の埋め込み画像の配置（ページ, 画像の座標の bbox）。
+
+    Docling の図の bbox は画像より狭いことがあり、画像の端の文字（グラフのタイトル・軸の目盛り）が図の外になる。
+    画像の中の文字は図の文字なので、図を描いた画像の配置も図の領域にする（#3485）。PDF でない入力・読めない
+    PDF では空（解析は止めない）。
+    """
+    if not pictures_by_ref or not str(pdf_path).lower().endswith(".pdf"):
+        return {}
+    images_by_page: dict[int, list[list[float]]] = {}
+    regions: dict[str, list[tuple[int, list[float]]]] = {}
+    for picture_ref, picture in pictures_by_ref.items():
+        for provenance in picture.get("prov", []) or []:
+            if not isinstance(provenance, dict):
+                continue
+            page_number = int(provenance.get("page_no") or provenance.get("pageNo") or 0)
+            page = page_lookup.get(page_number)
+            area = _docling_bbox_to_image(provenance.get("bbox") or {}, page) if page else None
+            if not area:
+                continue
+            if page_number not in images_by_page:
+                try:
+                    bounds = pdf_image_object_bounds(pdf_path, page_number)
+                except Exception:
+                    bounds = []
+                images_by_page[page_number] = [
+                    list(pdf_bottom_left_to_image_top_left(bound, page.pdf_width, page.pdf_height, page.width, page.height))
+                    for bound in bounds
+                ]
+            regions.setdefault(picture_ref, []).extend(
+                (page_number, image) for image in images_by_page[page_number] if _picture_drawn_by_image(area, image)
+            )
+    return {picture_ref: found for picture_ref, found in regions.items() if found}
+
+
+def _picture_drawn_by_image(picture: Sequence[float], image: Sequence[float]) -> bool:
+    picture_area = _box_area(picture)
+    image_area = _box_area(image)
+    if picture_area <= 0 or image_area <= 0:
+        return False
+    overlap = _box_area([max(picture[0], image[0]), max(picture[1], image[1]), min(picture[2], image[2]), min(picture[3], image[3])])
+    return overlap >= picture_area * _PICTURE_INSIDE_IMAGE and picture_area >= image_area * _PICTURE_SHARE_OF_IMAGE
+
+
+def _box_area(box: Sequence[float]) -> float:
+    return max(0.0, float(box[2]) - float(box[0])) * max(0.0, float(box[3]) - float(box[1]))
 
 
 def _picture_text_aggregate(
@@ -500,6 +583,70 @@ def _table_native_lines(
         except Exception:
             return []
     return []
+
+
+# 表のセルの領域（record の bbox と同じ画像の座標）。{"row", "col", "bbox"}（行・列は Docling の格子の
+# 0 始まりの左上）の並び。根拠の場所の解析の表のセルの領域に使う（#3429）。
+TABLE_CELL_BBOXES_KEY = "table_cell_bboxes"
+
+
+def _table_cell_bboxes(item: dict[str, Any], provenances: Sequence[dict[str, Any]], page_lookup: dict[int, Any]) -> list[dict[str, Any]]:
+    """Docling の表のセルの bbox を、record の bbox と同じ画像の座標にする。
+
+    1 頁だけの表のときだけ作る（頁をまたぐ表のセルは、どの頁の座標か Docling の出力から決まらない）。
+    """
+    pages = {int(entry.get("page_no") or entry.get("pageNo") or 0) for entry in provenances}
+    page = page_lookup.get(next(iter(pages))) if len(pages) == 1 else None
+    if page is None:
+        return []
+    boxes: list[dict[str, Any]] = []
+    for cell in (item.get("data") or {}).get("table_cells") or []:
+        if not isinstance(cell, dict) or not isinstance(cell.get("bbox"), dict):
+            continue
+        row = _nonnegative_int(cell.get("start_row_offset_idx"))
+        col = _nonnegative_int(cell.get("start_col_offset_idx"))
+        bbox = _docling_bbox_to_image(cell["bbox"], page)
+        if row is None or col is None or not bbox or bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+            continue
+        boxes.append({"row": row, "col": col, "bbox": [round(float(value), 2) for value in bbox]})
+    return boxes
+
+
+def docling_table_cells(item: dict[str, Any]) -> list[ExtractionTableCell] | None:
+    """Docling の表の格子（``data.table_cells``）を共通抽出の表のセルにする（#3429）。
+
+    結合セルは左上の 1 つ（行・列は 0 始まり、span は end - start）。列の見出し・行の見出しの印
+    （``column_header`` / ``row_header``）と、1 頁の表のセルの領域（``TABLE_CELL_BBOXES_KEY``。record の
+    bbox と同じ座標）を持つ。位置の無いセル・同じ位置のセルがあれば、格子として読まないので None。
+    """
+    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    boxes = {
+        (entry.get("row"), entry.get("col")): entry.get("bbox")
+        for entry in item.get(TABLE_CELL_BBOXES_KEY) or []
+        if isinstance(entry, dict)
+    }
+    cells: list[ExtractionTableCell] = []
+    starts: set[tuple[int, int]] = set()
+    for cell in data.get("table_cells") or []:
+        if not isinstance(cell, dict):
+            return None
+        row, col = _nonnegative_int(cell.get("start_row_offset_idx")), _nonnegative_int(cell.get("start_col_offset_idx"))
+        if row is None or col is None or (row, col) in starts:
+            return None
+        starts.add((row, col))
+        end_row, end_col = _nonnegative_int(cell.get("end_row_offset_idx")), _nonnegative_int(cell.get("end_col_offset_idx"))
+        cells.append(
+            ExtractionTableCell(
+                row=row,
+                col=col,
+                text=str(cell.get("text") or ""),
+                row_span=max(1, (end_row - row) if end_row is not None else 1),
+                col_span=max(1, (end_col - col) if end_col is not None else 1),
+                bbox=boxes.get((row, col)),
+                metadata={key: True for key in ("column_header", "row_header") if cell.get(key) is True},
+            )
+        )
+    return cells or None
 
 
 def _table_grid_rows(item: dict[str, Any]) -> list[list[tuple[str, bool]]]:

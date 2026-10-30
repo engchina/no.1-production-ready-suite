@@ -1,7 +1,8 @@
 """引用を根拠の行番号で指させ、原文はシステムが取り出す（#2830）。"""
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 # 各行は 1 行で引用の単位になる長さ（2 行を続けると単位の上限を超える）。
 LONG = "\n".join(
@@ -25,11 +26,13 @@ def spans():
 
 
 def item(evidence_id, lines="", quote=""):
-    return GroundedItem(kind="operation", text="対象を選んで実行する", evidence_id=evidence_id, lines=lines, quote=quote)
+    return GroundedItem(
+        kind="operation", text="対象を選んで実行する", citations=[GroundedCitation(evidence_id=evidence_id, lines=lines, quote=quote)]
+    )
 
 
 def test_short_lines_are_merged_and_long_lines_split_at_sentences():
-    units = grounded.citation_units("あ\nい\n\n" + "う。" * 100)
+    units = grounded.citation_units("あ\nい\n\n" + "う。" * 100, contract_version="explicit_units_v4")
     texts = ["あ\nい\n\n" + "う。" * 100][0]
     assert all(end - start <= grounded.CITE_UNIT_MAX_CHARS for start, end in units)
     assert texts[units[0][0] : units[0][1]].startswith("あ\nい")
@@ -57,10 +60,15 @@ def test_short_evidence_without_lines_quotes_the_whole_text():
 
 
 def test_invalid_or_missing_range_on_long_evidence_is_reported():
-    for lines in ("", "0", "2-99", "あ"):
+    for lines in ("0", "2-99", "あ"):
         cited, error = grounded.cited_quote(item("E1", lines), spans())
         assert cited.quote == ""
         assert error
+    # lines が空で、説明が根拠のどの行とも重ならない。
+    unrelated = GroundedItem(kind="rule", text="保管期間は十年とする", citations=[GroundedCitation(evidence_id="E1")])
+    cited, error = grounded.cited_quote(unrelated, spans())
+    assert cited.quote == ""
+    assert error
 
 
 def test_lines_copied_in_the_numbered_display_form_use_the_leading_range():
@@ -96,7 +104,47 @@ def test_verify_publishes_the_item_cited_by_lines():
 
 
 def test_generation_instructions_name_only_the_public_citation_fields():
-    fields = GroundedItem.model_json_schema()["properties"]
-    assert "quote" not in fields
-    assert {"evidence_id", "lines"} <= set(fields)
-    assert "quote は、evidence_id と lines が指す根拠の原文" in grounded.GENERATE_SYSTEM_PROMPT
+    schema = GroundedItem.model_json_schema()
+    assert "citations" in schema["properties"]
+    assert not {"evidence_id", "lines", "quote"} & set(schema["properties"])
+    citation = schema["$defs"]["GroundedCitation"]["properties"]
+    assert "quote" not in citation
+    assert {"evidence_id", "lines"} <= set(citation)
+    wire = generation_draft_wire_model().model_json_schema()
+    wire_citation = wire["$defs"]["GroundedCitationWire"]
+    assert set(wire_citation["properties"]) == {"evidence_id", "line_start", "line_end"}
+    assert set(wire_citation["required"]) == {"evidence_id", "line_start", "line_end"}
+    assert "quote は、citations の各出典（evidence_id と引用する行範囲）が指す根拠の原文" in grounded.GENERATE_SYSTEM_PROMPT
+
+
+def test_lines_holding_the_quote_text_use_the_line_that_contains_it():
+    """モデルが行番号の代わりに引用の書き出しを lines に写しても、指した根拠に 1 か所だけあればその行を引く（#3534）。"""
+    units = grounded.citation_units(LONG)
+    for lines, number in (("抽出条件を入力して抽出", 2), ("入力欄に 値を直接入力", 4), ("実行ボタンを押して登録", 5)):
+        cited, error = grounded.cited_quote(item("E1", lines), spans())
+        assert error == ""
+        assert cited.quote == LONG[units[number - 1][0] : units[number - 1][1]]
+
+
+def test_lines_text_that_is_short_missing_or_ambiguous_is_still_reported():
+    for lines in ("一覧", "別の資料の文です", "説明が続きます。"):
+        cited, error = grounded.cited_quote(item("E1", lines), spans())
+        assert cited.quote == ""
+        assert error
+
+
+def test_lines_written_as_a_list_use_the_first_to_last_line():
+    units = grounded.citation_units(LONG)
+    for lines, (first, last) in (("[1,2,3]", (1, 3)), ("2, 4", (2, 4)), ("[3]", (3, 3))):
+        cited, error = grounded.cited_quote(item("E1", lines), spans())
+        assert error == ""
+        assert cited.quote == LONG[units[first - 1][0] : units[last - 1][1]]
+
+
+def test_missing_lines_on_long_evidence_cite_the_lines_the_claim_overlaps():
+    """行番号の付いた根拠で lines が空なら、説明の文に最もよく重なる行を引く（#3534）。"""
+    units = grounded.citation_units(LONG)
+    claim = GroundedItem(kind="operation", text="抽出条件を入力して抽出ボタンを押す", citations=[GroundedCitation(evidence_id="E1")])
+    cited, error = grounded.cited_quote(claim, spans())
+    assert error == ""
+    assert cited.quote == LONG[units[1][0] : units[1][1]]

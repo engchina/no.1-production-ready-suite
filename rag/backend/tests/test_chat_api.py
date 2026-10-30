@@ -40,7 +40,12 @@ from app.rag.request_context import (
     reset_audit_request_context,
     set_audit_request_context,
 )
-from app.schemas.search import RetrievedChunk, SearchResponse, StorageFailure
+from app.schemas.search import (
+    SEARCH_TOP_K_DEFAULT,
+    RetrievedChunk,
+    SearchResponse,
+    StorageFailure,
+)
 from tests.span_progress_support import answer_step, answer_trace, pipeline_stage
 from tests.support import AsgiTestClient
 from tests.trace_store_support import FakeTraceDb
@@ -622,6 +627,8 @@ class _FakePipeline:
     # 作られた pipeline に渡した確認の条件と、検索の絞り込み(#717)。
     scopes: list[object] = []
     filters: list[dict[str, str]] = []
+    # 作られた pipeline に渡した検索する件数(#3512)。
+    top_ks: list[int] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self._llm = kwargs.get("llm")
@@ -642,6 +649,7 @@ class _FakePipeline:
     ):
         assert token_callback is None
         _FakePipeline.filters.append(dict(request.filters))
+        _FakePipeline.top_ks.append(request.top_k)
         # 本物の pipeline と同じく、実行の全体の span を処理の経過に流す（#3226）。
         with answer_trace(trace, trace_id=trace_id or "trace"):
             return self._response(request, trace_id)
@@ -683,6 +691,8 @@ def _stub_answer_models(
     monkeypatch: MonkeyPatch, models: list[str], *, text: str, vision: list[str]
 ) -> None:
     catalog = [EnterpriseAiConfiguredModel(model_id=m, display_name=m.upper()) for m in models]
+    # 回答のモデルの接続は登録モデルから引く（登録に無いモデルは失敗にする。#3240）。
+    monkeypatch.setattr(get_settings(), "oci_enterprise_ai_models", catalog)
     monkeypatch.setattr(search_route, "enterprise_ai_model_catalog", lambda _s: catalog)
     monkeypatch.setattr(search_route, "enterprise_ai_default_model_id", lambda _s: text)
     monkeypatch.setattr(search_route, "enterprise_ai_vision_model_id", lambda _s: "".join(vision))
@@ -724,6 +734,22 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     # 引用は画面が使う項目だけを保存する（親の本文・索引の内部の項目を持たない。#1371）。
     assert [citation["metadata"] for citation in assistant.citations] == [{"page_start": 1}]
     assert assistant.citations[0]["text"] == "根拠"
+
+
+def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:
+    """チャットの画面は top_k を送らず、RAG 検索と同じ既定(50)で検索する。上限は 100(#3512)。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-k")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(_FakePipeline, "top_ks", [])
+
+    url = "/api/chat/conversations/conv-k/messages/stream"
+    assert client.post(url, json={"content": "質問 A"}).status_code == 200
+    assert client.post(url, json={"content": "質問 B", "top_k": 100}).status_code == 200
+    assert client.post(url, json={"content": "質問 C", "top_k": 101}).status_code == 422
+
+    assert SEARCH_TOP_K_DEFAULT == 50
+    assert _FakePipeline.top_ks == [SEARCH_TOP_K_DEFAULT, 100]
 
 
 def _chat_conversation(fake: FakeChatOracle, conversation_id: str) -> None:
@@ -813,7 +839,7 @@ def test_stream_message_timeout_names_stage_and_saves_error(
     assert (user.role, user.status) == ("USER", "COMPLETE")
     assert (assistant.role, assistant.status) == ("ASSISTANT", "ERROR")
     assert assistant.content == expected
-    assert "質問の読み取りから回答の作成まで" in assistant.content
+    assert "質問の条件を整理して回答を作る" in assistant.content
     assert assistant.reply_to_message_id == user.id
 
 
@@ -1466,3 +1492,49 @@ def test_stream_message_delivers_answer_when_chat_message_save_fails(
     assert assistant.status == "ERROR"
     assert assistant.content == chat_route.CHAT_ANSWER_NOT_SAVED_MESSAGE
     assert assistant.trace_id == metadata["trace_id"]
+
+
+def test_create_conversation_with_legacy_active_language_pack(
+    fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
+) -> None:
+    from rag_parser_core.language import builtin_pack, current_pack
+
+    from app.clients.language_pack_release_store import _release
+    from app.rag import published_language_runtime
+    from app.schemas.language_pack_release import LanguagePackRelease
+    from tests.test_language_pack_release_store import legacy_release_row
+
+    row = legacy_release_row()
+    seen: list[str] = []
+
+    class LegacyStore:
+        async def current(self) -> LanguagePackRelease:
+            return _release(row)
+
+    async def initialized() -> LegacyStore:
+        return LegacyStore()
+
+    monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)
+    original_create = fake_oracle.create_conversation
+
+    async def capture_create(
+        *, search_answer_profile_id: str, title: str | None = None
+    ) -> StoredConversation:
+        seen.append(current_pack().text("answer_labels", "crag_refusal_summary"))
+        seen.append(current_pack().text("answer_labels", "cause_gap"))
+        return await original_create(search_answer_profile_id=search_answer_profile_id, title=title)
+
+    monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)
+    response = client.post(
+        "/api/chat/conversations",
+        json={"search_answer_profile_id": "bv-1", "title": "合成の互換性確認"},
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["messages"] == []
+    assert seen == [
+        builtin_pack().text("answer_labels", "crag_refusal_summary"),
+        "合成の保存済み文言",
+    ]
+    effective = row["effective_json"]
+    assert isinstance(effective, dict)
+    assert effective["answer_labels"].get("crag_refusal_summary") is None

@@ -52,6 +52,7 @@ from pr_backend_core.chat_history_window import (
     within_chat_history,
 )
 from pr_backend_core.chat_progress import CHAT_PROGRESS_SSE_HEADERS
+from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.logging import safe_exception_fields
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
@@ -86,7 +87,6 @@ from pr_system_settings.model import (
     model_payload,
     output_token_budget,
     reasoning_payload,
-    seed_to_send,
 )
 from pr_system_settings.model_test_input import (
     MODEL_TEST_EMBEDDING_INPUT,
@@ -237,6 +237,7 @@ from app.features.agent.runtime import (
     MCP_API_KEY_NAME_KEY,
     AgentNotPublishedError,
     AgentProfile,
+    AgentProfileCreate,
     AgentProfilePatch,
     AgentPublishRequest,
     AgentsData,
@@ -853,11 +854,12 @@ async def _run_model_settings_test(
     """
     payload = model_payload(settings)
     enterprise_ai = payload.enterprise_ai
-    connection = enterprise_ai_connection_for_model(settings, request.model_id)
-    if request.target_type == "enterprise_text":
-        text = await _run_enterprise_text_model_test(enterprise_ai, connection)
-        return {"response_chars": len(text), "surface": "llm"}
-    if request.target_type == "enterprise_vision":
+    if request.target_type in {"enterprise_text", "enterprise_vision"}:
+        # 接続は Enterprise AI のモデルだけで引く（埋め込み・リランクの ID は登録モデルに無い）。
+        connection = enterprise_ai_connection_for_model(settings, request.model_id)
+        if request.target_type == "enterprise_text":
+            text = await _run_enterprise_text_model_test(enterprise_ai, connection)
+            return {"response_chars": len(text), "surface": "llm"}
         text = await _run_enterprise_vision_model_test(enterprise_ai, connection)
         return {"response_chars": len(text), "surface": "vision"}
     if request.target_type == "embedding":
@@ -955,11 +957,9 @@ def _model_output_token_budget(settings: EnterpriseAiModelSettings, model_id: st
 def _with_model_reasoning(
     settings: EnterpriseAiModelSettings, model_id: str, payload: dict[str, object]
 ) -> dict[str, object]:
-    """テストするモデルの推論（思考）の量を `reasoning` に、seed を top-level の `seed` に入れる。
+    """テストするモデルの推論（思考）の量を `reasoning` に入れる（#1425。none は送らない）。
 
-    推論の量は #1425（none は送らない）、seed は #1434（全モデルで共通、既定 42）。
-    画面の保存前の値（`settings.models` / `settings.seed`）で呼ぶので、選んだ値をモデルが
-    受け付けるかを確かめられる。
+    画面の保存前の値（`settings.models`）で呼ぶので、選んだ値をモデルが受け付けるかを確かめられる。
     """
     effort = next(
         (model.reasoning_effort for model in settings.models if model.model_id == model_id),
@@ -968,7 +968,6 @@ def _with_model_reasoning(
     reasoning = reasoning_payload(effort)
     if reasoning is not None:
         payload["reasoning"] = reasoning
-    payload["seed"] = seed_to_send(settings.seed)
     return payload
 
 
@@ -1040,7 +1039,11 @@ async def _post_enterprise_ai(
     if connection.project_ocid:
         headers["OpenAI-Project"] = connection.project_ocid
     async with httpx.AsyncClient(timeout=settings.timeout_seconds) as client:
-        response = await client.post(url, headers=headers, json=dict(payload))
+        # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、
+        # 以後このモデルには送らない（#3539。外した引数は結果の詳細に出る）。
+        response = await asend_dropping_parameters(
+            client.send, client.build_request("POST", url, headers=headers, json=dict(payload))
+        )
     if response.is_error:
         # 受け付けない推論の量（#1425）などの 400 は、応答の本文に理由があるので結果の詳細に出す。
         raise ValueError(f"OCI Enterprise AI HTTP {response.status_code}: {response.text[:500]}")
@@ -1949,14 +1952,6 @@ async def create_run(
             )
         # 旧エンジンの v1 の Run（`X-Agent-API-Version: 1`）は #756 で削除した。
         agent = _control_plane_agent(run_request.agent_id)
-        if agent.migration_required:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "agent_migration_required",
-                    "message": "Skill を選択して Agent の移行を完了してください。",
-                },
-            )
         if not agent.enabled:
             raise HTTPException(
                 status_code=409,
@@ -2873,7 +2868,7 @@ async def create_evaluation(
     item = _evaluation_set_for_actor(request, evaluation.set_id)
     # 評価セットの業務 Agent 以外でも評価できる（同じ評価ケースで Agent をまたいで比べる。#1845）。
     agent = _require_evaluable_agent(request, evaluation.agent_id or item.agent_id)
-    if not agent.enabled or agent.migration_required:
+    if not agent.enabled:
         raise HTTPException(status_code=409, detail="この業務 Agent は実行できない状態です。")
     # 評価する版（#810）。下書きの評価は下書きの実行と同じく、Agent 管理か個人の Agent の持ち主
     # だけ（#2522・#2523）。省略時は、下書きを評価できて公開していない変更があれば下書き、
@@ -3137,8 +3132,15 @@ async def get_run_artifact(
         artifact = await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
-    unreadable = await _unreadable_evidence(request, [run], [artifact])
-    [checked] = withhold_artifacts([artifact], unreadable)
+    artifacts = (
+        await run_in_threadpool(runtime_repository.list_artifacts, run_id)
+        if artifact.kind == "answer"
+        else [artifact]
+    )
+    unreadable = await _unreadable_evidence(request, [run], artifacts)
+    checked = next(
+        item for item in withhold_artifacts(artifacts, unreadable) if item.id == artifact_id
+    )
     return ApiResponse(data=checked)
 
 
@@ -3849,7 +3851,7 @@ async def suggest_agent_draft_from_description(
 
 @router.post("/agents", response_model=ApiResponse[AgentProfile])
 async def create_agent(
-    agent: AgentProfile,
+    agent: AgentProfileCreate,
     request: Request,
     _: None = Depends(require_agent_builder),
 ) -> ApiResponse[AgentProfile]:
@@ -3867,7 +3869,8 @@ async def create_agent(
     # 画面・API で作る Agent は下書きから始める（公開するまで利用者の Run には使えない。#770）。
     # 版の項目は送られても使わない。
     policy = _actor_policy(request)
-    draft = agent.model_copy(
+    # 保存・応答は `AgentProfile`（作成の要求の型はツールの直接の指定を拒むだけ。#3240）。
+    draft = AgentProfile.model_validate(agent.model_dump()).model_copy(
         update={
             "id": agent_id,
             "versioned": True,

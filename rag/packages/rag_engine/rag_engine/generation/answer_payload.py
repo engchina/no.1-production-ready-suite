@@ -21,7 +21,9 @@ from rag_engine.generation.answer_models import (
     query_strategy_label,
     retrieval_scope_label,
 )
+from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.retrieval.context_builder import ContextParentEvidence, record_context_key
+from rag_engine.retrieval.rerank_scores import keeps_original_order
 
 
 def _records_for_prompt_injection_scan(
@@ -199,7 +201,8 @@ def _metadata_image_evidence(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     images: list[dict[str, Any]] = []
     raw_images = metadata.get("image_evidence")
     if isinstance(raw_images, list):
-        images.extend(dict(raw) for raw in raw_images if isinstance(raw, dict) and str(raw.get("raw_type") or "") != "picture_ocr_text")
+        # 図の中の文字（OCR）の entry は持ち主の図にまとめる（同じ図を 2 回数えず、OCR だけの図も数える。#3455）。
+        images.extend(fold_picture_ocr_entries([raw for raw in raw_images if isinstance(raw, dict)]))
 
     table_context = metadata.get("table_context")
     if not isinstance(table_context, list):
@@ -211,11 +214,7 @@ def _metadata_image_evidence(metadata: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(raw_visuals, list):
             continue
         table_id = str(table.get("table_id") or table.get("record_id") or "")
-        for raw in raw_visuals:
-            if not isinstance(raw, dict):
-                continue
-            if str(raw.get("raw_type") or "") == "picture_ocr_text":
-                continue
+        for raw in fold_picture_ocr_entries([raw for raw in raw_visuals if isinstance(raw, dict)]):
             image = dict(raw)
             image.setdefault("image_id", str(raw.get("record_id") or ""))
             image.setdefault("page", table.get("page"))
@@ -394,7 +393,9 @@ def answer_evidence_items(
         item = _answer_record_evidence_item(record, used_ids, usage_order, uses)
         item["children"] = []
         items.append(item)
-    return [item for _, item in sorted(enumerate(items), key=_evidence_item_sort_key)]
+    # 条の目録で選んだ条（rerank 最優先の例外。`keeps_original_order`）を含む一覧は元の規則（rerank を使わない）で並べる。
+    original = any(keeps_original_order(record) for record in records)
+    return [item for _, item in sorted(enumerate(items), key=lambda pair: _evidence_item_sort_key(pair, rerank_first=not original))]
 
 
 def _answer_record_evidence_item(
@@ -585,13 +586,15 @@ def _model_usage_rank(identity_keys: set[str], usage_order: dict[str, int]) -> i
     return min(ranks) if ranks else None
 
 
-def _evidence_item_sort_key(index_and_item: tuple[int, dict[str, Any]]) -> tuple[Any, ...]:
+def _evidence_item_sort_key(index_and_item: tuple[int, dict[str, Any]], *, rerank_first: bool = True) -> tuple[Any, ...]:
     source_index, item = index_and_item
     model_used = bool(item.get("is_model_used")) or _finite_float(item.get("model_usage_rank")) is not None
 
     return (
         0 if model_used else 1,
         _ascending_number_sort_key(item.get("model_usage_rank")) if model_used else (1, 0.0),
+        # rerank の点数を主キーにし、RRF・経路の点数・語の一致は同点の順と rerank の無い根拠の順だけ（#3504）。
+        _descending_number_sort_key(item.get("rerank_score") if rerank_first else None),
         _descending_number_sort_key(item.get("hybrid_score")),
         _descending_number_sort_key(_best_mapping_number(item.get("channel_scores"))),
         _descending_number_sort_key(item.get("profile_score")),
@@ -664,6 +667,7 @@ def _rerank_scores_from_evidence(
                 "candidate_index": metadata.get("candidate_index"),
                 "rank": metadata.get("rank"),
                 "relevance_score": metadata.get("relevance_score"),
+                "question_relevance_score": metadata.get("question_relevance_score"),
                 "min_relevance_score": metadata.get("min_relevance_score"),
                 "filtered": bool(metadata.get("filtered")),
                 "skipped": bool(metadata.get("skipped")),

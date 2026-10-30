@@ -43,7 +43,7 @@ def environment(text):
 
 def rule(eid, text, request_id="Q1"):
     # 原文どおりの説明（言い換えの検査で落ちないよう text = quote にする）。
-    return {"kind": "rule", "text": text, "evidence_id": eid, "quote": text, "request_id": request_id}
+    return {"kind": "rule", "text": text, "citations": [{"evidence_id": eid, "quote": text}], "request_id": request_id}
 
 
 def answer(question, texts, external_data_items, *, external_data_required=True):
@@ -55,7 +55,8 @@ def answer(question, texts, external_data_items, *, external_data_required=True)
         "external_data_items": external_data_items,
     }
     reviews = [(index, "supported", "matched", "") for index in range(len(texts))]
-    return run(FakeModel([steps], [audit(*reviews, requests=[("Q1", "addressed")])]), ctx, question).response
+    requests = [(unit["id"], "addressed") for unit in grounded.task_contract(question)["request_units"]]
+    return run(FakeModel([steps], [audit(*reviews, requests=requests)]), ctx, question).response
 
 
 class UserConditionOutcomeTest(unittest.TestCase):
@@ -85,7 +86,7 @@ class UserConditionOutcomeTest(unittest.TestCase):
             [],
             external_data_required=False,
         )
-        self.assertEqual(plain.envelope["outcome"], "answered")
+        self.assertEqual(plain.envelope["outcome"], "conditional")
 
     def test_delete_account_with_approval_condition_is_conditional(self):
         # cr-delete-account: 部門長の承認を得たかは利用者に確かめる条件。

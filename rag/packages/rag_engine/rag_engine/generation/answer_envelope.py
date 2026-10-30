@@ -52,6 +52,8 @@ GUIDE_STEP_REQUEST_PREFIX = "guide:"
 GUIDE_STEP_REQUEST_ID_CHARS = 64
 _GUIDE_STEP_STATUS: dict[str, RequestStatus] = {
     "explained": "addressed",
+    "unknown": "unknown",
+    "partial": "partial",
     "reference_only": "partial",
     "unused": "missing",
     "no_evidence": "missing",
@@ -219,8 +221,8 @@ def envelope_requests(requests: Sequence[Mapping[str, Any]], reviews: Sequence[M
         if reviews is None:
             status = "unknown"
         elif review is None:
-            # 監査が返さなかった id は、欠落と決めつけない（grounded の unanswered と同じ扱い）。
-            status = "addressed"
+            # 対応する結果がない要求は、充足も材料不足も確定していない。
+            status = "unknown"
         else:
             status = str(review.get("status") or "unknown")
             if status == "context":
@@ -298,6 +300,7 @@ def build_envelope(
     actionable = [item for item in items if item.get("applies") != "quote_only"]
     unsettled = [item for item in actionable if item.get("applies") in {"conditional", "unverified"}]
     unanswered = [entry for entry in request_entries if entry["status"] in {"partial", "missing"}]
+    unverified_requests = reviews is not None and any(entry["status"] == "unknown" for entry in request_entries)
     environment = [line for line in confirmations if not line.startswith(REFERENCE_CONFIRMATION_PREFIX)]
     # 実行できる説明が無く、監査した要求がすべて答えられていない: 資料から答えられない（#1491）。
     no_answer = not actionable and bool(request_entries) and all(entry["status"] == "missing" for entry in request_entries)
@@ -305,6 +308,8 @@ def build_envelope(
     handoff: list[str] = []
     if unanswered:
         handoff.append("unanswered_requests")
+    if unverified_requests:
+        handoff.append("unverified_requests")
     if gaps:
         handoff.append("gaps")
     if external_data_required or environment:
@@ -337,6 +342,7 @@ def build_envelope(
     elif (
         not actionable
         or unanswered
+        or unverified_requests
         or gaps
         or unsettled
         or off_goal

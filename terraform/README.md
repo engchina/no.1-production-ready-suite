@@ -266,7 +266,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
 文書の前処理と解析は、依存が大きく異なるためサービスごとに uv の venv を分け、それぞれを systemd の unit にします。
 詳細と既存環境（Docker Compose で配備した Compute）からの移行は [rag/docs/deployment.md](../rag/docs/deployment.md) を参照してください。
 
-- ログイン: 共通認証（`RAG_AUTH_MODE=production`。#214）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`）でログインし、
+- ログイン: 共通認証（`PLATFORM_AUTH_MODE=authenticated`。#214）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`）でログインし、
   「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・検索・回答プロファイル・ナレッジベースを設定します。
   Cookie を HTTPS 限定にするか（`PLATFORM_AUTH_COOKIE_SECURE`）は `https_enabled` から決まります。`RAG_AUDIT_CONTEXT_HASH_SALT` は instance 上で生成します。
 - 前処理 4 つと CPU の parser を配備します（出力 `rag_services`）。GPU の parser（MinerU / Dots.OCR）は含めず、
@@ -324,7 +324,7 @@ sudo systemctl restart production-ready-rag-backend.service
 
 ### Agent Control Plane（`deploy_agent`）
 
-- ログイン: 共通認証（`AGENT_AUTH_MODE=production`。#215）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）で
+- ログイン: 共通認証（`PLATFORM_AUTH_MODE=authenticated`。#215）。最初は構成管理者 `system_admin`（`app_admin_login_user_password`。RAG / NL2SQL と共通）で
   ログインし、「ユーザーとロール」でユーザーとロールを作り、「セキュリティ設定 > 権限管理」でロールごとのメニュー・実行 / 承認 / 監査 / 管理の権限・
   エージェントを設定します（検索・回答プロファイルは RAG の権限管理）。`init_script.sh` が `python -m app.cli.agent_system_schema --initialize` で認証・権限のテーブルを作ります。
   Nginx の Basic 認証は廃止しました。
@@ -713,9 +713,40 @@ root の [README.md](../README.md)「OCI へのデプロイ」のボタンも `r
 | RAG の `app_login_user` / `app_login_password` / `app_auth_cookie_secure` | 廃止（ログインは構成管理者 `app_admin_login_user_password` と DB ユーザー。#214） / 廃止 / `rag_app_auth_cookie_secure` |
 | RAG の `enable_parser_docling` / `enable_parser_marker` / `enable_oci_cloud_parsers` | 廃止（Docling は常に配備。#286） / 廃止（Marker は削除。#270） / `rag_enable_oci_cloud_parsers` |
 | NL2SQL の `app_admin_login_user_password` / `oracle_deepsec_enabled` / `oracle_deepsec_data_user_password` | `app_admin_login_user_password`（RAG と共通） / `nl2sql_oracle_deepsec_enabled` / `nl2sql_oracle_deepsec_data_user_password` |
-| NL2SQL の `app_environment` / `app_auth_cookie_secure` / `app_admin_login_user_id` | `nl2sql_app_environment` / `nl2sql_app_auth_cookie_secure` / `app_admin_login_user_id`（RAG と共通） |
+| NL2SQL の `app_environment` / `app_auth_cookie_secure` / `app_admin_login_user_id` | `platform_environment` / `https_enabled` / `app_admin_login_user_id`（RAG と共通） |
 | Agent の `app_basic_auth_user` / `app_basic_auth_password` | 廃止（ログインは構成管理者 `app_admin_login_user_password` と DB ユーザー。#215） |
 | 統合 stack の `agent_app_basic_auth_user` / `agent_app_basic_auth_password`（output の `agent_basic_auth_user`） | 廃止（`app_admin_login_user_password` を Agent にも使う。#215）。Cookie を HTTPS 限定にする `agent_app_auth_cookie_secure` を新設 |
 | `instance_display_name` / `instance_flex_shape_ocpus` / `instance_flex_shape_memory` / `instance_boot_volume_size` | `<製品>_instance_display_name` / `<製品>_instance_flex_shape_ocpus` / `<製品>_instance_flex_shape_memory` / `<製品>_instance_boot_volume_size` |
 | `adb_name` の既定 `RAGADB` / `NL2SQLADB` / `AGENTADB` | `SUITEADB` |
 | NL2SQL の `adb_workload` の既定 `LH` | `LH`（#1558。統合の当初は `OLTP` だった） |
+
+## Always Free ADB を手動作成して利用する場合
+
+この stack は Always Free の Compute / ADB を作成しません。
+Compute の新規作成は x86 の E4 / E5 Flex、新規 ADB は有料構成です。
+
+Always Free ADB が必要な場合は、OCI コンソールで事前に手動作成し、フォームで
+「既存の Autonomous AI Database を選択」を指定してください。
+
+1. tenancy のホーム・リージョンで Always Free ADB を作成します。Suite の SQL*Net 接続が使える
+   workload と、必要な製品機能に対応する DB バージョンを選びます。
+   APEX Service は SQL*Net 接続を提供しません。Vector Search を利用する場合は対応する DB バージョンが必要です。
+2. Always Free ADB は private endpoint 非対応です。パブリック・エンドポイントの ACL、
+   Compute からの接続経路（Service Gateway または固定出口 IP）、mTLS 接続の条件を手動で設定します。
+   stack の新規 ADB 用ネットワーク入力は、既存 ADB の設定を変更しません。
+3. `adb_compartment_ocid` にその ADB のコンパートメント、`adb_deployment_mode` に `USE_EXISTING`、
+   `existing_adb_ocid` に手動作成した ADB の OCID を指定します。
+4. 既定のアプリ用 DB ユーザーを使う場合は、`existing_adb_admin_password` と
+   `adb_app_user_name` / `adb_app_user_password` を指定します。使わない場合は、必要な権限を持つ
+   `existing_oracle_user` / `existing_oracle_password` を指定します。
+   `existing_oracle_dsn` は空欄なら選択した ADB の DB 名から `<db_name>_high` を使います。
+
+stack は既存 ADB の Wallet を生成して接続先へ渡します。既存 ADB の無料 / 有料の種別、
+CPU・容量・ネットワークは変更しません。無料枠の残量と制約、実際の接続・初期化・同時接続数・性能は
+利用する環境で確認してください。Compute や AI の利用料が無料になる設定ではありません。
+
+公式資料:
+
+- [Always Free Autonomous AI Database の制約](https://docs.oracle.com/en-us/iaas/autonomous-database-serverless/doc/autonomous-always-free.html)
+- [Autonomous AI Database の作成](https://docs.oracle.com/en/cloud/paas/autonomous-database/serverless/adbsb/autonomous-provision.html)
+- [APEX Service の接続制約](https://docs.oracle.com/en/cloud/paas/apex/gsadd/restrictions-and-limitations.html)

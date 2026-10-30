@@ -18,6 +18,7 @@ import {
   type ApiErrorPresentable,
   type ApiErrorPresentation,
   type ApiTransportRequest,
+  type RunModelUsageRecord,
 } from "@production-ready/ui";
 // Cookie セッションの CSRF と 401 / 403 の通知は3製品共通（platform の共有パッケージ。#220 / #214）。
 import { csrfHeader, notifyAuthResponse, notifyAuthStatus } from "@production-ready/system-settings";
@@ -521,7 +522,47 @@ export interface IngestionJobProgress {
   updated_at: string;
 }
 
+export type LanguagePackRelation = "current" | "equivalent" | "different" | "unrecorded";
+export interface LanguagePackRecipeUse {
+  recipe_id: string | null;
+  chunk_set_id: string | null;
+  release_id: string | null;
+  version: number | null;
+  ingest_hash: string | null;
+  relation: LanguagePackRelation;
+  built_at: string | null;
+  job_id: string | null;
+  target_release_id: string | null;
+}
+export interface LanguagePackReprocessingTarget {
+  document_id: string;
+  file_name: string;
+  recipe_id: string;
+  slot_no: number;
+  config_revision: number;
+  used_release_id: string | null;
+  used_ingest_hash: string | null;
+  relation: LanguagePackRelation;
+}
+export interface LanguagePackReprocessingTargets {
+  current_release: LanguagePackRelease;
+  targets: LanguagePackReprocessingTarget[];
+  unavailable_count: number;
+}
+export interface LanguagePackReprocessingResult {
+  items: { document_id: string; recipe_id: string; job_id: string | null; outcome: "accepted" | "rejected"; reason: string | null }[];
+  accepted_count: number;
+  rejected_count: number;
+}
+
+export interface LanguagePackDocumentUse {
+  current_release_id: string;
+  current_version: number;
+  recipes: LanguagePackRecipeUse[];
+}
+
 export interface DocumentSummary {
+  language_pack?: LanguagePackDocumentUse | null;
   id: string;
   file_name: string;
   status: FileStatus;
@@ -898,7 +939,6 @@ export interface DocumentChunkPreviewRequest {
   chunk_parent_target_chars?: number;
   chunk_parent_max_pages?: number;
   chunk_parent_max_children?: number;
-  chunk_context_header_enabled?: boolean;
 }
 
 export interface DocumentChunkPreviewStats {
@@ -1043,7 +1083,7 @@ export interface KnowledgeBaseIngestionConfig {
   chunk_parent_max_children?: number | null;
   graph_profile: GraphProfileName | null;
   /**
-   * 名称・別名の索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
+   * 実体・別名索引（#1362 / #1388）。索引の保存の後に、表の行・本文の定義の形から実体を作る。null は全体の
    * 既定（無効）に従う。列名は表の行の名前・属性にする列（空は列名で決める）。
    */
   entity_index_enabled?: boolean | null;
@@ -1069,25 +1109,26 @@ export interface KnowledgeBaseQueryConfig {
   screen_linking_enabled?: boolean | null;
   // 根拠の無い要求だけを探し直す(LLM は呼ばない。検索が要求ごとに 1 回増える。#1279)。
   request_coverage_retrieval_enabled?: boolean | null;
-  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。上限は 0〜10。
+  // 業務ガイドの手順ごとに探し、手順の参照の頁の根拠を入れる(LLM は呼ばない。#2395)。ON / OFF と回数・期限の上限は
+  // 全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。
   guide_step_retrieval_enabled?: boolean | null;
   guide_step_max_queries?: number | null;
   guide_step_deadline_seconds?: number | null;
   // 質問から抽出項目の条件を読み取る(LLM の呼び出しが 1 回増える。#652)。
   auto_field_filter_enabled?: boolean | null;
   /**
-   * 実体でつながる根拠を 1 段広げる(#1388。LLM は呼ばない)。null / 未指定は既定(使う。#1402)、false は使わない。
-   * 文書レシピで名称・別名の索引を有効にした文書にだけ効く。
+   * 実体・別名による検索拡張(LLM は呼ばない)。検索方法の全体設定だけで決め、プロファイルでは保存しない。
+   * 文書レシピで実体・別名索引を有効にした文書にだけ効く。
    */
   entity_expansion_enabled?: boolean | null;
   /** 1 回の検索で加える根拠の上限(1〜20)。null は既定(6)。 */
   entity_expansion_max_chunks?: number | null;
   /**
-   * 関係情報(関係情報の構築で作った章節・表の見出しと根拠の対応)で根拠の候補を広げる(#2055。AI は呼ばない)。
+   * 文書構造索引で根拠の候補を広げる(AI は呼ばない)。検索方法の全体設定だけで決める。
    * null / 未指定は全体の既定(検索方法の画面。既定は使わない)。
    */
   graph_expansion_enabled?: boolean | null;
-  /** 1 回の検索で加える根拠の上限(1〜20)。null は全体の既定(6)。 */
+  /** 1 回の検索で加える根拠の上限(1〜20)。全体設定だけで決め、検索・回答プロファイルでは保存しない(#3523)。 */
   graph_expansion_max_chunks?: number | null;
   /**
    * 当たった根拠の章節から親の章節へ段階的に広げる(#1436。段ごとに AI の呼び出しが 1 回増える)。
@@ -1121,7 +1162,7 @@ export interface InheritedAnswerContactData {
   contact: string;
 }
 
-/** 参照するナレッジベースで名称・別名の索引を持つ文書の数(#1388)。 */
+/** 参照するナレッジベースで実体・別名索引を持つ文書の数(#1388)。 */
 export interface EntityIndexCoverageData {
   document_count: number;
 }
@@ -1267,7 +1308,6 @@ export interface DocumentProcessingConfigData {
 }
 
 export interface DocumentProcessingConfig extends KnowledgeBaseIngestionConfig {
-  chunk_context_header_enabled: boolean | null;
   /** 章節の抽出規則の方式（#715）。null は全体の既定に従う。 */
   section_rules_mode?: SectionRulesMode | null;
 }
@@ -1286,19 +1326,6 @@ export interface SectionRulesSettingsData {
   mode: SectionRulesMode;
   rules: SectionRule[];
   presets: Partial<Record<SectionRulesMode, SectionRule[]>>;
-}
-
-export interface SectionRulesPreviewData {
-  document_id: string;
-  recipe_id: string;
-  extraction_recipe_id: string | null;
-  mode: SectionRulesMode;
-  effective_mode: SectionRulesMode;
-  recipe_overrides_mode: boolean;
-  extraction_available: boolean;
-  manual_edits_present: boolean;
-  page_count: number | null;
-  sections: DocumentSection[];
 }
 
 export type DocumentRecipeStepStatus =
@@ -1431,6 +1458,11 @@ export interface ChatMessage {
   passage_marks?: AnswerPassageMarkData[];
   removed_passages?: AnswerRemovedPassageData[];
   answer_warnings?: AnswerPassageReasonData[];
+  /**
+   * 回答モデルへ添付した根拠の画像の件数（ASSISTANT の完了した回答。回答の記録の診断の `models.attached_images`。
+   * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
+   */
+  answer_attached_images?: number;
 }
 
 /** 段落の印・外した段落・回答全体の注意の理由（#2738）。label は利用者に見せる短い文（backend の文をそのまま出す）。 */
@@ -1481,6 +1513,7 @@ export interface ConversationUpdateBody {
 
 export interface ChatMessageRequestBody {
   content: string;
+  question_context_token?: string;
   model_ids?: string[];
   top_k?: number;
   /** 利用者が選んだ類似の承認済み FAQ の id。質問と一緒に LLM へ渡す（#684）。 */
@@ -1679,22 +1712,7 @@ export interface FeedbackDetail extends FeedbackItem {
   execution: FeedbackExecutionInfo;
 }
 
-/** 質問履歴の設定(rag_poc の QUERY_HISTORY_*)。 */
-export interface QueryHistorySettingsData {
-  enabled: boolean;
-  retention_days: number;
-  min_count: number;
-  suggestion_limit: number;
-  blocklist: string[];
-}
-
-export interface QuerySuggestionsData {
-  search_answer_profile_id: string;
-  enabled: boolean;
-  suggestions: { question: string; count: number }[];
-}
-
-export type AnswerPromptKey = "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system" | "raptor_summary";
+export type AnswerPromptKey = `${string}.${string}` | "vlm_answer" | "image_retrieval" | "external_ocr" | "heading_levels" | "field_extraction" | "navigation_summary" | "raptor_summary_system";
 
 /** 機能別の設定画面で編集できるプロンプト。 */
 export interface AnswerPromptView {
@@ -1703,6 +1721,7 @@ export interface AnswerPromptView {
   default_content: string;
   customized: boolean;
   required_placeholders: string[];
+  required_tokens?: string[];
   updated_at: string | null;
 }
 
@@ -1727,7 +1746,7 @@ export type AnswerPromptPhase =
 export interface AnswerPromptStage {
   id: string;
   phase: AnswerPromptPhase;
-  prompts: { id: string; content: string }[];
+  prompts: { id: string; content: string; prompt_key?: AnswerPromptKey | null }[];
 }
 
 export interface FeedbackApprovedFaqPromotion {
@@ -1896,6 +1915,7 @@ export interface EvaluationImportResult {
   error_count: number;
   warnings: EvaluationImportIssue[];
   warning_count: number;
+  search_answer_profile_id?: string | null;
   knowledge_base_ids: string[];
   document_names: Record<string, string>;
   max_rows: number;
@@ -1912,11 +1932,11 @@ export type EvaluationThresholds = Partial<Record<EvaluationMetricName, number |
 
 /**
  * 画面からの評価の request（#2065）。評価の基準は常に設定の既定（suite・thresholds を送らない）、
- * 検索の対象は選んだナレッジベース。ケースは評価リクエストの Excel の検証の結果。
+ * 検索・回答の設定は選んだプロファイル。ケースは評価リクエストの Excel の検証の結果。
  */
 export interface EvaluationRunRequestBody {
   cases: EvaluationCase[];
-  knowledge_base_ids: string[];
+  search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
   compare_search_answer_profile_id?: string | null;
 }
@@ -1996,6 +2016,7 @@ export interface EvaluationThresholdFailure {
 export type EvaluationMetrics = Partial<Record<EvaluationMetricName, number | null>> & {
  metrics_version?:string; case_count:number; error_count:number; evaluation_suite:string;
  metric_case_counts?:Partial<Record<EvaluationMetricName,number>>; passed:boolean|null;
+ applied_thresholds?:Partial<Record<EvaluationMetricName,number>>;
  threshold_failures:EvaluationThresholdFailure[]; failure_reason_counts:Partial<Record<string,number>>;
  category_breakdown?:Partial<Record<string,EvaluationCategorySummary>>;
  split_breakdown?:Partial<Record<string,EvaluationSplitSummary>>;
@@ -2009,7 +2030,8 @@ export interface EvaluationComparison {
   metrics: EvaluationMetrics;
 }
 
-export type EvaluationJobKind = "run";
+// run: 品質評価。calibration: 判定の校正（#3578。結果は判定の校正の API で読む）。
+export type EvaluationJobKind = "run" | "calibration";
 export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 /**
@@ -2031,6 +2053,231 @@ export interface EvaluationJob {
   heartbeat_at: string | null;
   run_result: EvaluationMetrics | null;
 }
+
+// --- 品質評価: 判定の校正（#3578） ---
+
+export type CalibrationAspect = "requirement_coverage" | "answer_correctness" | "claim_support";
+export type CalibrationLabel = "pass" | "fail" | "cannot_judge";
+export type CalibrationRowStatus = "pending" | "agreed" | "disagreed" | "adjudicated";
+export type CalibrationSplit = "dev" | "holdout" | "synthetic";
+
+export interface CalibrationSourceJob {
+  job_id: string;
+  created_at: string;
+  finished_at: string | null;
+  case_count: number;
+  compared: boolean;
+}
+
+export interface CalibrationAspectCriterion {
+  aspect: CalibrationAspect;
+  metric: string;
+  criteria: string;
+  requires_standard_answer: boolean;
+}
+
+export interface CalibrationErrorType {
+  id: string;
+  group: string;
+  title: string;
+  aspects: string;
+  holdout_target: number;
+}
+
+export interface CalibrationAspectProgress {
+  aspect: CalibrationAspect;
+  rows: number;
+  labeled: number;
+  cannot_judge: number;
+  holdout_rows: number;
+  holdout_pass: number;
+  holdout_fail: number;
+}
+
+export interface CalibrationProgress {
+  aspects: CalibrationAspectProgress[];
+  error_types: { id: string; holdout_count: number }[];
+  holdout_target: number;
+  label_target: number;
+}
+
+export interface CalibrationSplitResult {
+  split: CalibrationSplit;
+  total: number;
+  judged: number;
+  coverage: number | null;
+  accuracy: number | null;
+  kappa: number | null;
+  false_pass_rate: number | null;
+  false_fail_rate: number | null;
+}
+
+export interface CalibrationAspectResult {
+  aspect: CalibrationAspect;
+  passed: boolean;
+  failures: string[];
+  splits: CalibrationSplitResult[];
+  variance: { runs: number; items: number; unstable: number; unstable_rate: number | null } | null;
+}
+
+export interface CalibrationSummary {
+  calibration_id: string;
+  label_set_id: string;
+  status: EvaluationJobStatus;
+  created_at: string;
+  finished_at: string | null;
+  repeats: number;
+  judge_model_id: string | null;
+  judge_rubric_version: string | null;
+  prompt_sha256: string | null;
+  labels_sha256: string | null;
+  passed: boolean | null;
+  error_message: string | null;
+  aspects: CalibrationAspectResult[];
+  current: boolean;
+}
+
+export interface LabelSetSummary {
+  label_set_id: string;
+  name: string;
+  origin: "jobs" | "import";
+  created_at: string;
+  human_item_count: number;
+  synthetic_item_count: number;
+  row_count: number;
+  annotator_count: number;
+  my_labeled: number;
+  resolved_rows: number;
+  created_by_me: boolean;
+  latest_calibration: CalibrationSummary | null;
+}
+
+export interface LabelSetListData {
+  items: LabelSetSummary[];
+  can_manage: boolean;
+}
+
+export interface LabelSetDetail {
+  summary: LabelSetSummary;
+  rubric_id: string;
+  rubric_version: string | null;
+  aspects: CalibrationAspectCriterion[];
+  error_types: CalibrationErrorType[];
+  my_code: string | null;
+  my_progress: CalibrationProgress;
+  final_progress: CalibrationProgress | null;
+  can_manage: boolean;
+  skipped: Record<string, number>;
+  holdout_ratio: number | null;
+}
+
+export interface CalibrationEvidence {
+  id: string;
+  text: string;
+}
+
+export interface AnnotationRow {
+  item_id: string;
+  aspect: CalibrationAspect;
+  split: "dev" | "holdout";
+  question: string;
+  answer: string;
+  standard_answer: string | null;
+  evidence: CalibrationEvidence[];
+  label: CalibrationLabel | null;
+  error_type: string | null;
+  note: string | null;
+}
+
+export interface AnnotationRowsData {
+  items: AnnotationRow[];
+  total: number;
+  offset: number;
+  limit: number;
+  unlabeled: number;
+}
+
+export interface CalibrationLabelInput {
+  item_id: string;
+  aspect: CalibrationAspect;
+  label: CalibrationLabel | null;
+  error_type?: string | null;
+  note?: string | null;
+}
+
+export interface AnnotatorLabel {
+  code: string;
+  label: CalibrationLabel;
+  error_type: string | null;
+  note: string | null;
+}
+
+export interface AspectAgreement {
+  aspect: CalibrationAspect;
+  rows: number;
+  agreed: number;
+  disagreed: number;
+  adjudicated: number;
+  pending: number;
+  pairs: { annotators: string[]; compared: number; agreement: number | null; kappa: number | null }[];
+}
+
+export interface AgreementRow {
+  item_id: string;
+  aspect: CalibrationAspect;
+  split: "dev" | "holdout";
+  status: CalibrationRowStatus;
+  question: string;
+  answer: string;
+  standard_answer: string | null;
+  evidence: CalibrationEvidence[];
+  annotations: AnnotatorLabel[];
+  final_label: CalibrationLabel | null;
+  adjudication: AnnotatorLabel | null;
+}
+
+export interface AgreementData {
+  annotators: string[];
+  aspects: AspectAgreement[];
+  rows: AgreementRow[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface SyntheticItem {
+  item_id: string;
+  base_item_id: string;
+  kind: string;
+  description: string;
+  fail_aspects: string[];
+  answer: string;
+  excluded: boolean;
+}
+
+export interface JudgeCalibrationAspectStatus {
+  aspect: CalibrationAspect;
+  metric: string;
+  calibrated: boolean;
+  kappa: number | null;
+  calibration_id: string | null;
+  calibrated_at: string | null;
+  judge_rubric_version: string | null;
+}
+
+export interface JudgeCalibrationStatus {
+  judge_model_id: string | null;
+  prompt_sha256: string;
+  aspects: JudgeCalibrationAspectStatus[];
+}
+
+export interface LabelSetCreateBody {
+  name: string;
+  job_ids: string[];
+  include_synthetic: boolean;
+}
+
+export type AgreementFilter = "all" | "disagreed" | "pending" | "agreed" | "adjudicated";
 
 // --- 設定: モデル ---
 // --- 設定: データベース ---
@@ -2251,6 +2498,9 @@ export interface ParserAdapterSettingsData {
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled: boolean;
   navigation_summary_enabled: boolean;
+  /** 1 文書の取込で要約する章節数の実効上限。読み取り専用。 */
+  navigation_summary_max_nodes?: number;
+  raptor_enabled?: boolean;
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。1〜16。#2002）。 */
   vision_concurrency?: number;
   /** MinerU のライセンスの条件の確認（#3359）。確認するまで MinerU を選べない。 */
@@ -2281,6 +2531,7 @@ export interface ParserAdapterSettingsUpdate {
   heading_level_inference_enabled?: boolean;
   field_extraction_enabled?: boolean;
   navigation_summary_enabled?: boolean;
+  raptor_enabled?: boolean;
   vision_concurrency?: number;
 }
 
@@ -2390,7 +2641,7 @@ export interface ServiceStatusData extends ServiceCatalogItemData {
   status: ServiceRuntimeStatus;
 }
 
-export type DeploymentMode = "dev" | "prod";
+export type DeploymentMode = "local" | "staging" | "production";
 
 export interface ServiceCatalogData {
   control_enabled: boolean;
@@ -2458,6 +2709,14 @@ export interface LanguagePackData {
   hash: string;
   /** 今の言語資源で分割していない文書の数（分割し直しが要る。DB に届かなければ null）。 */
   outdated_documents?: number | null;
+  unrecorded_documents?: number | null;
+  current_release?: LanguagePackRelease;
+}
+
+export interface QuestionUnderstandingPreviewData {
+  original_text: string;
+  saved: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
+  draft: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
 }
 
 export interface LanguagePackPreviewResult {
@@ -2471,22 +2730,43 @@ export interface LanguagePackPreviewData {
   draft: LanguagePackPreviewResult;
 }
 
-/** 言語資源の保存の版（新しい順。#2181）。 */
-export interface LanguagePackHistoryVersion {
+export interface LanguagePackRelease {
   id: string;
-  saved_at: string;
-  saved_by: string | null;
+  version: number;
+  effective: LanguagePackSections;
   hash: string;
-  /** 取込の項目の hash（前の版と違えば、戻すと文書の分割し直しが要る）。 */
-  ingest_hash: string | null;
-  /** 前の版に戻したときの、戻した元の版の id。 */
+  ingest_hash: string;
+  published_at: string;
+  published_by: string | null;
+  previous_id: string | null;
   restored_from: string | null;
-  /** 組み込みと違う項目の数。 */
-  changed_fields: number;
+  change_note: string;
 }
 
-export interface LanguagePackHistoryData {
-  versions: LanguagePackHistoryVersion[];
+export interface LanguagePackReleaseState {
+  draft_revision: number;
+  draft_effective: LanguagePackSections;
+  current: LanguagePackRelease;
+}
+
+export interface LanguagePackReleaseList {
+  releases: LanguagePackRelease[];
+  total: number;
+}
+
+export interface LanguagePackPublishRequest {
+  expected_revision: number;
+  expected_current_id: string;
+  change_note: string;
+}
+
+export interface LanguagePackReleaseComparison {
+  before_id: string;
+  after_id: string;
+  differences: { section: string; key: string; before: LanguagePackValue | null; after: LanguagePackValue | null; ingest: boolean }[];
+  ingest_changed: boolean;
+  impact_requires_review: boolean;
+  affected_stages: string[];
 }
 
 export interface ChunkingSettingsData {
@@ -2512,7 +2792,6 @@ export interface ChunkingSettingsUpdate {
   overlap: number;
   min_chars: number;
   delimiter: string;
-  context_header_enabled: boolean;
   /** 親子階層（small-to-big）の分割パラメータ(子と親の大きさの 5 項目)。 */
   chunk_child_target_chars: number;
   chunk_table_child_target_chars: number;
@@ -2521,8 +2800,10 @@ export interface ChunkingSettingsUpdate {
   chunk_parent_max_children: number;
 }
 
-/** 回答の検索と生成の全体既定(検索・回答プロファイルで上書きできる。#593)。 */
+/** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
+  answer_audit_mode: "none" | "standard" | "detailed";
+  answer_evidence_refinement_mode: "legacy" | "cited_only" | "cited_required";
   query_strategy: QueryStrategyName;
   answer_flow: AnswerFlowName;
   neighbor_child_count: number;
@@ -2648,7 +2929,7 @@ export interface EvaluationSettingsUpdate {
   suite: EvaluationSuiteName;
 }
 
-// --- 設定: 関係情報の構築 ---
+// --- 設定: 文書構造索引の構築 ---
 /** off = 構築しない(既定)、entities = 文書と章・節の見出しのつながりを構築する(#621)。 */
 export type GraphProfileName = "off" | "entities";
 
@@ -3043,10 +3324,10 @@ function requestUpload<T>(
 async function requestFile(
   path: string,
   fallbackName: string,
-  options: { signal?: AbortSignal } = {},
+  options: RequestInit = {},
 ): Promise<DownloadedFile> {
-  const headers = withCsrfHeaders("GET");
-  const res = await fetch(appPath(path), { credentials: "same-origin", headers, signal: options.signal });
+  const headers = withCsrfHeaders(options.method ?? "GET", options.headers);
+  const res = await fetch(appPath(path), { ...options, credentials: "same-origin", headers });
   if (!res.ok) {
     const envelope = await parseEnvelope<null>(res);
     const error = apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
@@ -3076,6 +3357,14 @@ function jsonBody(body: unknown): RequestInit {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   };
+}
+
+function jsonPutBody(body: unknown): RequestInit {
+  return { ...jsonBody(body), method: "PUT" };
+}
+
+function labelSetPath(labelSetId: string): string {
+  return `/api/evaluation/calibration/label-sets/${encodeURIComponent(labelSetId)}`;
 }
 
 function supportGuidesPath(searchAnswerProfileId: string): string {
@@ -3111,6 +3400,8 @@ export const api = {
       queued_phase?: IngestionJobPhase;
       q?: string;
       knowledge_base_id?: string;
+      language_pack_relation?: LanguagePackRelation;
+      current_release_id?: string;
       limit?: number;
       offset?: number;
     } = {},
@@ -3123,11 +3414,19 @@ export const api = {
       search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
+    if (params.language_pack_relation) search.set("language_pack_relation", params.language_pack_relation);
+    if (params.current_release_id) search.set("current_release_id", params.current_release_id);
     const qs = search.toString();
     return requestDegradable<Page<DocumentSummary>>(
       `/api/documents${qs ? `?${qs}` : ""}`,
     );
   },
+  prepareLanguagePackReprocessing: (document_ids: string[], expected_release_id: string) =>
+    request<LanguagePackReprocessingTargets>("/api/documents/language-pack/reprocessing-targets", jsonBody({ document_ids, expected_release_id })),
+  enqueueLanguagePackReprocessing: (expected_release_id: string, targets: { document_id: string; recipe_id: string; phase: IngestionJobPhase; expected_config_revision: number }[]) =>
+    request<LanguagePackReprocessingResult>("/api/documents/language-pack/reprocessing-jobs", jsonBody({ expected_release_id, targets })),
+  getDocumentCitationChunk: (id: string, chunkId: string) =>
+    request<RetrievedChunk>(`/api/documents/${encodeURIComponent(id)}/chunks/${encodeURIComponent(chunkId)}`),
   getDocument: (id: string) =>
     request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`),
   listDocumentChunkSets: (id: string) =>
@@ -3221,6 +3520,8 @@ export const api = {
       queued_phase?: IngestionJobPhase;
       q?: string;
       knowledge_base_id?: string;
+      language_pack_relation?: LanguagePackRelation;
+      current_release_id?: string;
       limit?: number;
     } = {},
   ) => {
@@ -3230,6 +3531,8 @@ export const api = {
     if (params.q) search.set("q", params.q);
     if (params.knowledge_base_id) search.set("knowledge_base_id", params.knowledge_base_id);
     if (params.limit != null) search.set("limit", String(params.limit));
+    if (params.language_pack_relation) search.set("language_pack_relation", params.language_pack_relation);
+    if (params.current_release_id) search.set("current_release_id", params.current_release_id);
     const qs = search.toString();
     return request<DocumentIdList>(`/api/documents/ids${qs ? `?${qs}` : ""}`);
   },
@@ -3268,12 +3571,7 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
-  getProfileGuideSearchDefaults: () => request<{ max_queries: number; deadline_seconds: number }>("/api/settings/profile-guide-search-defaults"),
 
-  previewSectionRules: (documentId: string, body: { recipe_id: string; mode: SectionRulesMode; rules: SectionRule[] }) =>
-    request<SectionRulesPreviewData>(`/api/documents/${encodeURIComponent(documentId)}/sections/preview`, {
-      method: "POST", body: JSON.stringify(body),
-    }),
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
     request<SectionRulesSettingsData>("/api/settings/section-rules", {
@@ -3365,11 +3663,13 @@ export const api = {
     id: string,
     recipeId: string,
     phase: IngestionJobPhase = "PREPROCESS",
+    expectedLanguagePackReleaseId?: string,
+    expectedConfigRevision?: number,
   ) =>
     request<IngestionJob>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
         recipeId,
-      )}/ingestion-jobs?phase=${encodeURIComponent(phase)}`,
+      )}/ingestion-jobs?phase=${encodeURIComponent(phase)}${expectedLanguagePackReleaseId ? `&expected_language_pack_release_id=${encodeURIComponent(expectedLanguagePackReleaseId)}` : ""}${expectedConfigRevision != null ? `&expected_config_revision=${expectedConfigRevision}` : ""}`,
       { method: "POST" },
     ),
   retryFailedDocumentIngestionSegments: (
@@ -3576,7 +3876,7 @@ export const api = {
   /** 継承するシステム設定の窓口（プロファイルの画面の権限で読む。#2683）。 */
   getInheritedAnswerContact: () =>
     request<InheritedAnswerContactData>("/api/search-answer-profiles/inherited-contact"),
-  /** 参照するナレッジベースで名称・別名の索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
+  /** 参照するナレッジベースで実体・別名索引を持つ文書の数(拡張の開閉の案内。#1388)。 */
   entityIndexCoverage: (knowledgeBaseIds: string[]) =>
     request<EntityIndexCoverageData>(
       "/api/search-answer-profiles/entity-index-coverage",
@@ -3600,6 +3900,16 @@ export const api = {
         method: "POST",
       },
     ),
+  getQuestionUnderstanding: (id: string) =>
+    request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`),
+  saveQuestionUnderstanding: (id: string, overrides: LanguagePackSections) =>
+    request<LanguagePackData>(`/api/search-answer-profiles/${id}/question-understanding`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ overrides }),
+    }),
+  previewQuestionUnderstanding: (id: string, text: string, overrides: LanguagePackSections) =>
+    request<QuestionUnderstandingPreviewData>(`/api/search-answer-profiles/${id}/question-understanding/preview`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, overrides }),
+    }),
   getDomainKeywords: (id: string) =>
     request<DomainKeywordsData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords`,
@@ -3613,6 +3923,23 @@ export const api = {
         body: JSON.stringify({ keywords }),
       },
     ),
+  previewDomainKeywordImport: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<DomainKeywordImportPreviewData>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/import/preview`,
+      { method: "POST", body: form },
+    );
+  },
+  importDomainKeywords: (id: string, file: File, mode: DomainKeywordImportMode) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", mode);
+    return request<DomainKeywordImportData>(
+      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/import`,
+      { method: "POST", body: form },
+    );
+  },
   getApprovedFaq: (id: string) =>
     request<ApprovedFaqListData>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq`,
@@ -3658,10 +3985,10 @@ export const api = {
       `/api/search-answer-profiles/${encodeURIComponent(id)}/approved-faq/suggest`,
       { ...jsonBody({ query, purpose }), signal },
     ),
-  suggestClarification: (id: string, query: string) =>
-    request<{ suggestion: ClarificationSuggestionData | null }>(
+  suggestClarification: (id: string, query: string, conversationId?: string | null) =>
+    request<{ suggestion: ClarificationSuggestionData | null; question_context_token?: string | null }>(
       `/api/search-answer-profiles/${encodeURIComponent(id)}/clarifications/suggest`,
-      jsonBody({ query }),
+      jsonBody({ query, ...(conversationId ? { conversation_id: conversationId } : {}) }),
     ),
   saveRuleClarification: (id: string, ruleId: string, clarification: RuleClarification | null) =>
     request<RuntimeKnowledgeData>(
@@ -3818,11 +4145,6 @@ export const api = {
       jsonBody(body),
       { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
     ),
-  suggestDomainKeywords: (id: string) =>
-    request<DomainKeywordSuggestionData>(
-      `/api/search-answer-profiles/${encodeURIComponent(id)}/domain-keywords/suggest`,
-      { method: "POST" },
-    ),
 
   // チャット（会話 / マルチモデル比較）
   listConversations: (
@@ -3914,20 +4236,6 @@ export const api = {
   },
   getFeedbackDetail: (id: string) =>
     request<FeedbackDetail>(`/api/feedback/${encodeURIComponent(id)}`),
-  getQueryHistorySettings: () => request<QueryHistorySettingsData>("/api/settings/query-history"),
-  updateQueryHistorySettings: (body: QueryHistorySettingsData) =>
-    request<QueryHistorySettingsData>("/api/settings/query-history", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  getQuerySuggestions: (searchAnswerProfileId: string, query: string, filters: Record<string, string>) =>
-    request<QuerySuggestionsData>(
-      `/api/search-answer-profiles/${encodeURIComponent(searchAnswerProfileId)}/query-suggestions?${new URLSearchParams({
-        q: query,
-        ...filters,
-      }).toString()}`,
-    ),
   getAnswerPrompts: () => request<AnswerPromptsData>("/api/settings/answer-prompts"),
   saveAnswerPrompt: (key: AnswerPromptKey, content: string) =>
     request<AnswerPromptsData>(`/api/settings/answer-prompts/${key}`, {
@@ -3951,17 +4259,17 @@ export const api = {
   submitRunEvaluationJob: (body: EvaluationRunRequestBody) =>
     request<EvaluationJob>("/api/evaluation/jobs/run", jsonBody(body)),
   // 評価リクエストの Excel（#2065）。テンプレートのダウンロードと、アップロードした Excel の検証。
-  // テンプレートは選んだナレッジベースの文書の一覧（ファイル名・文書 ID）を「文書一覧」に入れる（#2086）。
-  downloadEvaluationTemplate: (knowledgeBaseIds: readonly string[] = []) => {
+  // テンプレートは選んだプロファイルが参照する文書の一覧（ファイル名・文書 ID）を「文書一覧」に入れる（#2086）。
+  downloadEvaluationTemplate: (searchAnswerProfileId: string | null = null) => {
     const query = new URLSearchParams();
-    for (const id of knowledgeBaseIds) query.append("knowledge_base_ids", id);
+    if (searchAnswerProfileId) query.set("search_answer_profile_id", searchAnswerProfileId);
     const suffix = query.size > 0 ? `?${query.toString()}` : "";
     return requestFile(`/api/evaluation/cases/template${suffix}`, "evaluation_request_template.xlsx");
   },
-  importEvaluationCases: (file: File, knowledgeBaseIds: string[]) => {
+  importEvaluationCases: (file: File, searchAnswerProfileId: string) => {
     const body = new FormData();
     body.append("file", file);
-    for (const id of knowledgeBaseIds) body.append("knowledge_base_ids", id);
+    body.append("search_answer_profile_id", searchAnswerProfileId);
     return request<EvaluationImportResult>("/api/evaluation/cases/import", { method: "POST", body });
   },
   /** 回答の過程から評価の期待の下書きを作る（#2402。1 回 10 行まで。保存しない）。 */
@@ -3970,12 +4278,77 @@ export const api = {
       "/api/evaluation/cases/process-drafts",
       jsonBody(body)
     ),
+  downloadEvaluationResults: (jobId: string, body: {
+    rows: EvaluationImportRow[]; cases: EvaluationCase[];
+    profile_name: string | null; compare_profile_name: string | null;
+  }) => requestFile(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/results.xlsx`, "evaluation_results.xlsx", jsonBody(body)),
   getEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}`),
   cancelEvaluationJob: (jobId: string) =>
     request<EvaluationJob>(`/api/evaluation/jobs/${encodeURIComponent(jobId)}/cancel`, {
       method: "POST",
     }),
+  // 品質評価: 判定の校正（#3578）。記入は自分の判定だけ、全員の判定・裁定・校正は管理の権限。
+  getJudgeCalibrationStatus: () =>
+    request<JudgeCalibrationStatus>("/api/evaluation/calibration/status"),
+  listCalibrationSources: () =>
+    request<{ jobs: CalibrationSourceJob[] }>("/api/evaluation/calibration/sources"),
+  listLabelSets: () => request<LabelSetListData>("/api/evaluation/calibration/label-sets"),
+  createLabelSet: (body: LabelSetCreateBody) =>
+    request<LabelSetSummary>("/api/evaluation/calibration/label-sets", jsonBody(body)),
+  importLabelSet: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<{ label_set: LabelSetSummary; imported_items: number; imported_labels: number }>(
+      "/api/evaluation/calibration/label-sets/import",
+      { method: "POST", body }
+    );
+  },
+  deleteLabelSet: (labelSetId: string) =>
+    request<{ deleted: boolean }>(labelSetPath(labelSetId), { method: "DELETE" }),
+  getLabelSet: (labelSetId: string) => request<LabelSetDetail>(labelSetPath(labelSetId)),
+  listAnnotationRows: (
+    labelSetId: string,
+    params: { aspect?: string; status?: "all" | "unlabeled" | "labeled"; offset: number; limit: number }
+  ) => {
+    const query = new URLSearchParams();
+    if (params.aspect) query.set("aspect", params.aspect);
+    if (params.status) query.set("status", params.status);
+    query.set("offset", String(params.offset));
+    query.set("limit", String(params.limit));
+    return request<AnnotationRowsData>(`${labelSetPath(labelSetId)}/rows?${query.toString()}`);
+  },
+  saveCalibrationLabel: (labelSetId: string, body: CalibrationLabelInput) =>
+    request<CalibrationProgress>(`${labelSetPath(labelSetId)}/labels`, jsonPutBody(body)),
+  getCalibrationAgreement: (
+    labelSetId: string,
+    params: { aspect?: string; status: AgreementFilter; offset: number; limit: number }
+  ) => {
+    const query = new URLSearchParams();
+    if (params.aspect) query.set("aspect", params.aspect);
+    query.set("status", params.status);
+    query.set("offset", String(params.offset));
+    query.set("limit", String(params.limit));
+    return request<AgreementData>(`${labelSetPath(labelSetId)}/agreement?${query.toString()}`);
+  },
+  saveCalibrationAdjudication: (labelSetId: string, body: CalibrationLabelInput) =>
+    request<AgreementData>(`${labelSetPath(labelSetId)}/adjudications`, jsonPutBody(body)),
+  listSyntheticItems: (labelSetId: string) =>
+    request<{ items: SyntheticItem[] }>(`${labelSetPath(labelSetId)}/synthetic`),
+  setSyntheticExcluded: (labelSetId: string, itemId: string, excluded: boolean) =>
+    request<SyntheticItem>(
+      `${labelSetPath(labelSetId)}/synthetic/${encodeURIComponent(itemId)}`,
+      jsonPutBody({ excluded })
+    ),
+  listCalibrations: (labelSetId: string) =>
+    request<{ items: CalibrationSummary[] }>(`${labelSetPath(labelSetId)}/calibrations`),
+  startCalibration: (labelSetId: string, repeats: number) =>
+    request<{ job: EvaluationJob; calibration: CalibrationSummary }>(
+      `${labelSetPath(labelSetId)}/calibrations`,
+      jsonBody({ repeats })
+    ),
+  downloadLabelSet: (labelSetId: string) =>
+    requestFile(`${labelSetPath(labelSetId)}/export`, `labels-${labelSetId.slice(0, 8)}.json`),
 
   // 設定: モデル
   getModelSettings: (options: SettingsRequestOptions = {}) =>
@@ -4141,22 +4514,25 @@ export const api = {
   updatePreprocessSettings: (body: PreprocessSettingsUpdate) =>
     request<PreprocessSettingsData>("/api/settings/preprocess", {
       method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
   getLanguagePack: () => request<LanguagePackData>("/api/settings/language-pack"),
-  updateLanguagePack: (overrides: LanguagePackSections) =>
-    request<LanguagePackData>("/api/settings/language-pack", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides }),
-    }),
-  getLanguagePackHistory: () =>
-    request<LanguagePackHistoryData>("/api/settings/language-pack/history"),
-  restoreLanguagePack: (versionId: string) =>
-    request<LanguagePackData>(
-      `/api/settings/language-pack/history/${encodeURIComponent(versionId)}/restore`,
-      { method: "POST" },
-    ),
+  getLanguagePackDraft: () => request<LanguagePackReleaseState>("/api/settings/language-pack/draft"),
+  compareLanguagePackDraft: (expected_revision: number, expected_current_id: string) =>
+    request<LanguagePackReleaseComparison>(`/api/settings/language-pack/draft/comparison?${new URLSearchParams({ expected_revision: String(expected_revision), expected_current_id })}`),
+  updateLanguagePackDraft: (expected_revision: number, overrides: LanguagePackSections) =>
+    request<LanguagePackReleaseState>("/api/settings/language-pack/draft", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision, overrides }) }),
+  getLanguagePackReleases: (offset: number, limit: number) =>
+    request<LanguagePackReleaseList>(`/api/settings/language-pack/releases?offset=${offset}&limit=${limit}`),
+  getLanguagePackRelease: (id: string) =>
+    request<LanguagePackRelease>(`/api/settings/language-pack/releases/${encodeURIComponent(id)}`),
+  compareLanguagePackReleases: (before_id: string, after_id: string) =>
+    request<LanguagePackReleaseComparison>(`/api/settings/language-pack/releases/compare?${new URLSearchParams({ before_id, after_id })}`),
+  publishLanguagePack: (body: LanguagePackPublishRequest) =>
+    request<LanguagePackReleaseState>("/api/settings/language-pack/publish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  restoreLanguagePackRelease: (id: string, body: LanguagePackPublishRequest) =>
+    request<LanguagePackReleaseState>(`/api/settings/language-pack/releases/${encodeURIComponent(id)}/restore`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
   previewLanguagePack: (text: string, overrides: LanguagePackSections) =>
     request<LanguagePackPreviewData>("/api/settings/language-pack/preview", {
       method: "POST",
@@ -4236,10 +4612,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  // 設定: 関係情報の構築
+  // 設定: 文書構造索引の構築
   getEntityIndexSettings: () => request<EntityIndexSettingsData>("/api/settings/entity-index"),
   updateEntityIndexSettings: (body: EntityIndexSettingsData) =>
-    request<EntityIndexSettingsData>("/api/settings/entity-index", { method: "PATCH", body: JSON.stringify(body) }),
+    request<EntityIndexSettingsData>("/api/settings/entity-index", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getGraphSettings: () => request<GraphSettingsData>("/api/settings/graph"),
   updateGraphSettings: (body: GraphSettingsUpdate) =>
     request<GraphSettingsData>("/api/settings/graph", {
@@ -4290,17 +4670,15 @@ export interface DomainKeywordsData {
   keywords: string[];
 }
 
-export interface DomainKeywordCandidateData {
-  keyword: string;
-  score: number;
-  frequency: number;
-  chunk_count: number;
-  document_count: number;
+export type DomainKeywordImportMode = "INSERT" | "REPLACE";
+
+export interface DomainKeywordImportPreviewData {
+  total: number;
+  rows: { row: number; keyword: string }[];
 }
 
-export interface DomainKeywordSuggestionData {
-  candidates: DomainKeywordCandidateData[];
-  processed_chunk_count: number;
+export interface DomainKeywordImportData extends DomainKeywordsData {
+  inserted_count: number;
 }
 
 // --- 検索・回答プロファイルの知識: Approved FAQ(類似問) ---
@@ -4380,7 +4758,7 @@ export interface ApprovedFaqSuggestionsData {
   suggestions: ApprovedFaqSuggestionData[];
 }
 
-// --- 検索・回答プロファイルの知識: 用語・ルール(runtime knowledge) ---
+// --- 検索・回答プロファイルの知識: 用語・同義語と回答ルール(runtime knowledge) ---
 export type RuntimeKnowledgeKind = "terms" | "rules";
 
 export interface RuntimeKnowledgeData {
@@ -4397,6 +4775,10 @@ export interface RuntimeKnowledgeEditRequest {
   labels?: string;
   content?: string;
   source?: string;
+  purpose?: "confirmation" | "generation" | "both";
+  instruction_kind?: "presentation" | "requirement" | "verification";
+  exclusive_group?: string;
+  priority?: number;
   enabled?: boolean;
   delete?: boolean;
 }
@@ -4405,6 +4787,7 @@ export interface RuntimeKnowledgePreviewData {
   expanded_question: string;
   matched_terms: string[];
   matched_rules: string[];
+  conflicting_rules?: string[];
 }
 
 // --- 業務ガイド（SupportGuide。#1237）。型は backend の app/schemas/support_guide.py と同じ ---
@@ -4622,6 +5005,8 @@ export interface SupportGuideAnswerSummary {
 /** 業務ガイドの手順の充足（#2491）。 */
 export type SupportGuideStepStatus =
   | "explained"
+  | "partial"
+  | "unknown"
   | "reference_only"
   | "unused"
   | "no_evidence"
@@ -4771,6 +5156,7 @@ export interface RunSummary {
   status: RunStatus;
   answer_outcome: string | null;
   verification: RunVerification | null;
+  validation_execution?: string | null;
   confidence: string | null;
   needs_human_review: boolean | null;
   citation_count: number;
@@ -4784,6 +5170,12 @@ export interface RunSummary {
   executed_by_me: boolean;
   /** 実行した利用者（実行者）の表示名。見る人を問わず返る（引けない利用者は空文字。#1954）。 */
   executor_display_name: string;
+  /**
+   * モデルの利用量の合計（入力 + 出力の token）と計測の状態（#3466。一覧の「token」の列）。利用量の記録の無い実行は
+   * どちらも null（「未計測」。0 にしない）、LLM を呼ばなかった実行は 0 と complete。古い backend は返さない。
+   */
+  total_tokens?: number | null;
+  usage_measurement?: RunModelUsage["measurement"] | null;
 }
 
 export interface RunFeedback {
@@ -4826,7 +5218,15 @@ export interface RunDetail extends RunSummary {
   feedback: RunFeedback[];
   /** RAG 検索の実行の件数と画面の絞り込み（「RAG 検索で開く」が画面に戻す。#3309）。チャット・古い記録は null。 */
   search_conditions?: RunSearchConditions | null;
+  /**
+   * 実行のモデルの呼び出しの回数と利用量（#3419）。この機能より前の記録・trace の始まる前に失敗した実行は null（未計測）。
+   * LLM を呼ばなかった実行は `requests` が 0 の実測。
+   */
+  usage?: RunModelUsage | null;
 }
+
+/** 1 回の実行のモデルの利用量（#3419）。形は 3 製品で共通（`@production-ready/ui` の `RunModelUsageRecord`）。 */
+export type RunModelUsage = RunModelUsageRecord;
 
 /** RAG 検索の実行の条件（#3309）。`filters` は画面が送れる絞り込み（分類・基準日・抽出項目の値）だけ。 */
 export interface RunSearchConditions {

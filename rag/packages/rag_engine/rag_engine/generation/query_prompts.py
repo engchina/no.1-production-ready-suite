@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
@@ -29,6 +31,7 @@ from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
 from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -38,17 +41,14 @@ MAX_GENERATED_QUERY_COUNT = 5
 def _text_search_query_source(
     runtime_knowledge: RuntimeKnowledgeContext,
     expansion: QueryExpansionResult,
-    inquiry_conditions: InquiryConditionParse | None,
     *,
     crag_rewrites: Sequence[str] = (),
 ) -> str:
     parts = ["原質問"]
     if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
-        parts.append("実行時用語・ルール")
+        parts.extend(runtime_knowledge.expansion_sources)
     if expansion.generated_queries:
         parts.append("拡張検索文")
-    if inquiry_conditions is not None and inquiry_conditions.retrieval_queries:
-        parts.append("クエリ理解検索文")
     if crag_rewrites:
         parts.append("CRAG 再検索文")
     return " + ".join(parts)
@@ -108,7 +108,6 @@ def _query_expansion_details(expansion: QueryExpansionResult, *, original_query_
 # 検索文生成のプロンプトへ渡す契約の項目。原質問の写し（original_question / current_request / request_units /
 # user_assertions）はプロンプトの「原質問」と重複し、intent_parts / required_aspects は回答生成・監査用なので渡さない (#917)。
 _PROMPT_CONTRACT_KEYS = (
-    "goal",
     "asks_cause",
     "requested_actions",
     "action_targets",
@@ -155,7 +154,7 @@ _EXPANSION_INSTRUCTIONS = {
     ),
     HYDE_STRATEGY: (
         "仮説文生成（HyDE）として、文書内に存在しそうな仮想回答文または説明文を1〜3個作ってください。"
-        "ADB hybrid search の検索入力として使える、短い自然文にします。"
+        "ADB hybrid search の検索入力として使える、短い自然文にします。仮想文は検索の補助であり、回答の事実根拠にはしません。"
     ),
 }
 
@@ -199,17 +198,24 @@ _ROUTING_STRATEGIES = [
     },
 ]
 
-# 静的な指示は番号付きの節のテンプレートに置き、実行時の値は {{...}} で差し込む。UI はこの定数を読み取り専用で示す (#934)。
+# 静的な指示は Step 形式のテンプレートに置き、実行時の値は {{...}} で差し込む。UI はこの定数を読み取り専用で示す (#934)。
 QUERY_ROUTING_PROMPT_TEMPLATE = (
-    """## 1. 指示
+    """## Step 1: 原質問と保持する条件を読む
+原質問:
+{{question}}
+
+変更してはいけない目的・条件:
+{{task_contract}}
+
+## Step 2: 戦略を選び検索文を作る
 次の問い合わせに対して、検索前処理として最適な戦略を1つだけ選んでください。strategy には選んだ選択肢の strategy の値（ID）をそのまま返し、label は返さない。
 
-## 2. 選択肢
+選択肢:
 """
     f"{json.dumps(_ROUTING_STRATEGIES, ensure_ascii=False, indent=2)}"
     """
 
-## 3. 判定規則
+## Step 3: 戦略と実データの要否を別々に点検する
 - 戦略は選択肢の use_when で判断し、実データ確認とは独立に決める。エラーコードや完全なメッセージが1つだけなら単純検索、エラー文・対象・論点が2つ以上あれば質問分解。質問が明確・具体的というだけでは単純検索を選ばず、主要な語が文書の正式な用語と一致しているかで判断し、迷ったら RAG フュージョンを選ぶ。
 - routing_data_required は、個案の原因・値・処理分岐の確定に実際の日付・設定・CSV・ログ・履歴などの照合が必要かの暫定判定。必要なら routing_data_items に確認するフィールドと目的を列挙し、値や原因は推測しない。操作方法・出力方法・エラーの意味・規則の説明、関連文書の不足、質問内に全必要値がある場合は false と空配列（検索後に回答生成で再判定する）。
 - 単純検索以外では、その選択肢の generate の指示に従って検索文を queries に返す（単純検索では空配列）。
@@ -219,15 +225,8 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
     + (
         "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
         "\n"
-        "## 4. 入力\n"
-        "問い合わせ:\n"
-        "{{question}}\n"
-        "\n"
-        "変更してはいけない目的・条件:\n"
-        "{{task_contract}}\n"
-        "\n"
-        "## 5. 出力\n"
-        "以下のJSONだけを返してください。\n"
+        "## Step 4: 指定した JSON だけを返す\n"
+        "以下のJSONだけを返してください。JSON の外に Step 番号・説明・分析を書かないでください。\n"
         '{"strategy": "選んだ戦略の ID", "reason"'
         ': "検索戦略を選んだ短い理由", "routing_data_re'
         'quired": true|false, "routing_data'
@@ -240,28 +239,24 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
 
 QUERY_EXPANSION_PROMPT_TEMPLATE = (
     (
-        "## 1. 指示\n"
+        "## Step 1: 原質問と保持する条件を読む\n"
+        "原質問:\n{{question}}\n\n"
+        "変更してはいけない目的・条件:\n{{task_contract}}\n\n"
+        "## Step 2: 指定した戦略で検索文を作る\n"
         "戦略「{{strategy_label}}」の指示に従い、検索に使う"
         "追加質問または検索文を作ってください。一覧にない戦略の場合は、検索に"
         "有効な追加質問を作ってください。\n"
         "\n"
-        "## 2. 戦略ごとの指示\n"
+        "戦略ごとの指示:\n"
     )
     + "".join(f"- {query_strategy_label(strategy)}: {instruction}\n" for strategy, instruction in _EXPANSION_INSTRUCTIONS.items())
-    + ("\n## 3. 制約\n")
+    + ("\n## Step 3: 意図・条件・仮説の扱いを点検する\n")
     + _EXPANSION_CONSTRAINTS
     + (
         "- 利用者の仮説は事実に変えず、問い合わせ元を検索条件にしない。\n"
         "\n"
-        "## 4. 入力\n"
-        "原質問:\n"
-        "{{question}}\n"
-        "\n"
-        "変更してはいけない目的・条件:\n"
-        "{{task_contract}}\n"
-        "\n"
-        "## 5. 出力\n"
-        "以下のJSONだけを返してください。\n"
+        "## Step 4: 指定した JSON だけを返す\n"
+        "以下のJSONだけを返してください。JSON の外に Step 番号・説明・分析を書かないでください。\n"
         '{"queries": ["追加の検索質問または検索文"]}'
     )
 )
@@ -270,7 +265,7 @@ QUERY_EXPANSION_PROMPT_TEMPLATE = (
 def _build_query_routing_prompt(question: str) -> str:
     """検索方法と実データ依存を混同しない二軸のルーティング指示を作成します。"""
     return render_prompt_template(
-        QUERY_ROUTING_PROMPT_TEMPLATE,
+        resolve_prompt("routing.template", QUERY_ROUTING_PROMPT_TEMPLATE),
         {
             "question": question.strip(),
             "task_contract": _prompt_task_contract(question),
@@ -281,7 +276,7 @@ def _build_query_routing_prompt(question: str) -> str:
 def _build_query_expansion_prompt(question: str, strategy: str) -> str:
     """選択済みの戦略で検索文を作る指示を作成します（自動ルーティングが検索文を返さないときの補助呼出にも使う）。"""
     return render_prompt_template(
-        QUERY_EXPANSION_PROMPT_TEMPLATE,
+        resolve_prompt("expansion.template", QUERY_EXPANSION_PROMPT_TEMPLATE),
         {
             "strategy_label": query_strategy_label(strategy),
             "question": question.strip(),
@@ -355,6 +350,30 @@ def _dedupe_generated_queries(
         if limit is not None and len(selected) >= limit:
             break
     return tuple(selected)
+
+
+def _merge_retrieval_queries(*queries: str) -> tuple[str, ...]:
+    """検索文を渡した順に並べ、空と重複を除く。
+
+    各検索文は NFKC・制御文字の除去・空白の正規化をした形にする（元の質問の先読みの検索と文書検索の先頭の検索文を
+    同じ形にし、検索の結果の cache に当てる）。
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        text = _normalized_query_text(query)
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        merged.append(text)
+        seen.add(key)
+    return tuple(merged)
+
+
+def _normalized_query_text(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    normalized = "".join(character for character in normalized if unicodedata.category(character) not in {"Cc", "Cf"})
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _retrieval_queries(question: str, retrieval_queries: Sequence[str] | None) -> tuple[str, ...]:

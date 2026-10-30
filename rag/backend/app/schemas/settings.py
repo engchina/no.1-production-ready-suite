@@ -109,6 +109,7 @@ from app.config import (
     reject_roadmap_parser_adapter_backend,
 )
 from app.schemas.document import DocumentProcessingConfig
+from app.schemas.language_pack_release import LanguagePackRelease
 
 ParserAdapterBackendName = Literal[
     "docling",
@@ -431,6 +432,8 @@ class ParserAdapterSettingsData(BaseModel):
     heading_level_inference_enabled: bool = False
     field_extraction_enabled: bool = False
     navigation_summary_enabled: bool = False
+    raptor_enabled: bool = False
+    navigation_summary_max_nodes: int
     # 図・表の説明（Vision）を同時に呼ぶ数の上限（RAG_VISION_CONCURRENCY。#2002）。
     vision_concurrency: int = 4
     mineru_license: MineruLicenseAcknowledgementData = Field(
@@ -445,6 +448,7 @@ POST_PARSE_SETTING_FIELDS = (
     "heading_level_inference_enabled",
     "field_extraction_enabled",
     "navigation_summary_enabled",
+    "raptor_enabled",
     "vision_concurrency",
 )
 
@@ -472,6 +476,7 @@ class ParserAdapterSettingsUpdate(BaseModel):
     heading_level_inference_enabled: bool | None = None
     field_extraction_enabled: bool | None = None
     navigation_summary_enabled: bool | None = None
+    raptor_enabled: bool | None = None
     vision_concurrency: int | None = Field(default=None, ge=1, le=16)
 
     @field_validator("adapter_backend", mode="before")
@@ -557,6 +562,8 @@ class LanguagePackData(BaseModel):
     hash: str
     # 今の言語資源で分割していない文書の数(分割し直しが要る。DB に届かなければ None)。
     outdated_documents: int | None = None
+    unrecorded_documents: int | None = None
+    current_release: LanguagePackRelease | None = None
 
 
 class LanguagePackUpdate(BaseModel):
@@ -642,7 +649,6 @@ class ChunkingSettingsUpdate(BaseModel):
     overlap: int = Field(default=120, ge=0, le=CHUNK_OVERLAP_MAX_CHARS)
     min_chars: int = Field(default=120, ge=0, le=2000)
     delimiter: str = Field(default=JSONL_RECORD_BOUNDARY, min_length=1, max_length=256)
-    context_header_enabled: bool = False
     chunk_child_target_chars: int = Field(
         default=CHUNK_CHILD_TARGET_CHARS_DEFAULT,
         ge=CHUNK_CHILD_TARGET_CHARS_MIN,
@@ -700,50 +706,26 @@ class AnswerRecordSettingsData(BaseModel):
     config_source: Literal["runtime"] = "runtime"
 
 
-class QueryHistorySettingsData(BaseModel):
-    """質問履歴の設定(rag_poc の QUERY_HISTORY_*)。"""
-
-    enabled: bool
-    retention_days: int = Field(ge=0, le=3650)
-    min_count: int = Field(ge=1, le=1000)
-    suggestion_limit: int = Field(ge=1, le=20)
-    blocklist: list[str] = Field(default_factory=list, max_length=200)
-
-
-class QueryHistorySettingsUpdate(QueryHistorySettingsData):
-    @field_validator("blocklist")
-    @classmethod
-    def _clean_blocklist(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
-
-
 class AnswerPromptView(BaseModel):
     """編集できるプロンプト(回答生成 vlm_answer / 図・画像の読み取り image_retrieval)。"""
 
-    key: Literal[
-        "vlm_answer",
-        "image_retrieval",
-        "external_ocr",
-        "heading_levels",
-        "field_extraction",
-        "navigation_summary",
-        "raptor_summary_system",
-        "raptor_summary",
-    ]
+    key: str
     content: str
     default_content: str
     customized: bool
     required_placeholders: list[str]
+    required_tokens: list[str] = Field(default_factory=list)
     updated_at: datetime | None = None
 
 
 class AnswerPromptPart(BaseModel):
     id: str
     content: str
+    prompt_key: str | None = None
 
 
 class AnswerPromptStage(BaseModel):
-    """取込から評価までの 1 段の読み取り専用プロンプト(コードで管理)。"""
+    """取込から評価までの 1 段の指示と、編集可能な指示の key。"""
 
     id: str
     # 処理の順の区分(answer_prompts.PROMPT_PHASES)。画面はこの順に見出しを付けて並べる。
@@ -763,14 +745,14 @@ class AnswerPromptUpdate(BaseModel):
 class AnsweringSettingsData(BaseModel):
     """回答の検索と生成の全体既定(回答エンジン。#593)。
 
-    検索・回答プロファイルの「検索・回答設定」で上書きできる。値は
-     backend/.env の `RAG_*`(回答の設定)に
-
-    保存する。
+    全体設定だけで決め、検索・回答プロファイルでは上書きしない
+    (``PROFILE_GLOBAL_QUERY_FIELDS``)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
     query_strategy: QueryStrategy
     answer_flow: AnswerFlow
+    answer_audit_mode: Literal["none", "standard", "detailed"]
+    answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"]
     neighbor_child_count: int = Field(ge=0, le=20)
     rerank_enabled: bool
     screen_linking_enabled: bool
@@ -791,6 +773,8 @@ class AnsweringSettingsUpdate(BaseModel):
 
     query_strategy: QueryStrategy | None = None
     answer_flow: AnswerFlow | None = None
+    answer_audit_mode: Literal["none", "standard", "detailed"] | None = None
+    answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"] | None = None
     neighbor_child_count: int | None = Field(default=None, ge=0, le=20)
     rerank_enabled: bool | None = None
     screen_linking_enabled: bool | None = None
@@ -964,14 +948,14 @@ GraphProfileName = GraphProfile
 
 
 class GraphProfileStatusData(BaseModel):
-    """関係情報の構築の 1 プロファイル(off = 構築しない / entities = 構築する)の選択状態。"""
+    """文書構造索引の構築の 1 プロファイル(off = 構築しない / entities = 構築する)の選択状態。"""
 
     name: GraphProfileName
     selected: bool
 
 
 class EntityIndexSettingsData(BaseModel):
-    """名称・別名の索引を構築する全体の既定。"""
+    """実体・別名索引を構築する全体の既定。"""
 
     enabled: bool
 
@@ -1013,10 +997,3 @@ class GuardrailSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input_enabled: bool
     output_enabled: bool
-
-
-class ProfileGuideSearchDefaultsData(BaseModel):
-    """プロファイルの権限で読める、手順検索の現在の全体の既定値。"""
-
-    max_queries: int
-    deadline_seconds: float

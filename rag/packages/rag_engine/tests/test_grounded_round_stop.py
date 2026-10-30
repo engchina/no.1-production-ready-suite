@@ -8,7 +8,7 @@ import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 
-from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record, run
+from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, observed_audit, record, run
 
 from rag_engine.generation import answering, grounded
 from rag_engine.models.llm import GroundedItem
@@ -17,11 +17,16 @@ GOOD = "一覧表を選択し、処理を選択します。"
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 def _gap(request_id):
-    return {"kind": "gap", "text": "資料に抽出条件の記載がありません。", "evidence_id": "", "quote": "", "request_id": request_id}
+    return {
+        "kind": "gap",
+        "text": "資料に抽出条件の記載がありません。",
+        "citations": [{"evidence_id": "", "quote": ""}],
+        "request_id": request_id,
+    }
 
 
 def _adopted(*kinds_and_requests):
@@ -85,27 +90,53 @@ class NoImprovementUnitTest(unittest.TestCase):
 
 
 class SynthesizeRoundStopTest(unittest.TestCase):
-    def test_context_round_that_is_not_adopted_stops_the_correction(self):
-        """取得済みの資料を足した組が採用されなければ、同じ指摘での作り直し（3 組目）を始めない。"""
+    def test_unconfirmed_material_observation_does_not_expand_the_local_pool(self):
+        """未校正の材料不足判定だけでは、取得済みの資料を追加して作り直さない。"""
         shown = replace(record(0, "●集計表出力\n一覧表を選択します。", "売上-(3)年次集計明細作成"), chunk_uid="run:r0")
         hidden = replace(record(1, "抽出条件で店舗を指定します。", "売上-(3)年次集計明細作成", page=21), chunk_uid="run:r1", seq_no=2)
         ctx = replace(context(shown), expansion_records=(shown, hidden))
         eid = ids(ctx)[shown.text]
         first = draft(item(eid, "一覧表を選択します。", "一覧表を選択します。", request_id="Q1"))
-        model = FakeModel([first], [audit((0, "supported", "matched", ""), requests=[("Q1", "partial")])])
+        model = FakeModel(
+            [first],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "抽出条件の材料が不足",
+                            "evidence_status": "missing",
+                            "evidence_ids": [],
+                        }
+                    ],
+                ),
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "抽出条件の説明が省略されている",
+                            "evidence_status": "available",
+                            "evidence_ids": [ids(context(shown, hidden))[hidden.text]],
+                            "missing_content": hidden.text,
+                            "evidence_support": [
+                                {"evidence_id": ids(context(shown, hidden))[hidden.text], "source": hidden.source, "quote": hidden.text}
+                            ],
+                        }
+                    ],
+                ),
+            ],
+        )
         result = run(model, ctx).response
         rounds = result.generation_trace["rounds"]
-        self.assertEqual(len(_drafts(model)), 2)
-        self.assertEqual([r["accepted"] for r in rounds], [True, False])
-        self.assertEqual(rounds[0]["remedy"]["remedy"], "context")
-        self.assertEqual(rounds[1]["improvement_stop"], grounded.NO_IMPROVEMENT_NOT_ACCEPTED)
-        budget = result.generation_trace["round_budget"]
-        self.assertEqual(
-            budget["stop"], {"reason": grounded.NO_IMPROVEMENT_NOT_ACCEPTED, "round": 3, "feedback": ["答えていない要求 1 件"]}
-        )
-        self.assertEqual([note["accepted"] for note in budget["rounds"]], [True, False])
-        # 時間の上限ではないので「回答時間の上限により省略した処理」に作り直しの打ち切りを出さない。
-        self.assertNotIn("作り直しをしていません", result.answer_text)
+        self.assertEqual(len(_drafts(model)), 1)
+        self.assertEqual([r["accepted"] for r in rounds], [True])
+        self.assertNotIn("remedy", rounds[0])
+        self.assertNotIn("stop", result.generation_trace["round_budget"])
+        self.assertEqual(observed_audit(result)["request_reviews"][0]["evidence_status"], "missing")
         self.assertIn("一覧表を選択します。", result.answer_text)
 
     def test_gap_only_feedback_does_not_regenerate_with_the_same_evidence(self):
@@ -115,18 +146,36 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         first = draft(item(eid, GOOD, GOOD, request_id="Q1"), _gap("Q2"))
         model = FakeModel(
             [first],
-            [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed"), ("Q2", "missing")])],
+            [
+                audit(
+                    (0, "supported", "matched", ""),
+                    (1, "supported", "matched", ""),
+                    requests=[
+                        ("Q1", "addressed"),
+                        {
+                            "request_id": "Q2",
+                            "status": "missing",
+                            "reason": "抽出条件の材料が不足",
+                            "evidence_status": "missing",
+                            "evidence_ids": [],
+                        },
+                    ],
+                )
+            ],
         )
-        result = run(model, ctx, question="明細一覧表を出力する手順と、店舗の抽出条件を教えてください").response
+        question = "1. 対象Aの出力手順を教えてください。\n2. 対象Bの抽出条件を教えてください。"
+        self.assertEqual([row["id"] for row in grounded.task_contract(question)["request_units"]], ["Q1", "Q2"])
+        result = run(model, ctx, question=question).response
         self.assertEqual(len(_drafts(model)), 1)
         rounds = result.generation_trace["rounds"]
-        self.assertEqual(rounds[0]["improvement_stop"], grounded.NO_IMPROVEMENT_EVIDENCE_ONLY)
+        self.assertNotIn("improvement_stop", rounds[0])
         self.assertNotIn("remedy", rounds[0])
-        self.assertEqual(result.generation_trace["round_budget"]["stop"]["reason"], grounded.NO_IMPROVEMENT_EVIDENCE_ONLY)
+        self.assertNotIn("stop", result.generation_trace["round_budget"])
+        self.assertEqual(observed_audit(result)["request_reviews"][1]["evidence_status"], "missing")
         self.assertIn(GOOD, result.answer_text)
 
-    def test_correction_still_runs_for_an_unanswered_request_the_draft_tried(self):
-        """草稿が答えようとして不足とされた要求は、従来どおり指摘を渡して作り直す（#621 の型）。"""
+    def test_available_material_observation_does_not_regenerate_the_draft(self):
+        """既存資料があるという観測は保持するが、未校正の不足判定だけで作り直さない。"""
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
         select = item(eid, GOOD, GOOD, request_id="Q1")
@@ -134,14 +183,33 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         model = FakeModel(
             [draft(select), draft(select, execute)],
             [
-                audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "実行操作の説明が省略されている",
+                            "evidence_status": "available",
+                            "evidence_ids": [eid],
+                            "missing_content": "実行ボタンを押して完了します。",
+                            "evidence_support": [
+                                {"evidence_id": eid, "source": "売上集計業務.pdf", "quote": "実行ボタンを押して完了します。"}
+                            ],
+                        }
+                    ],
+                ),
                 audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), requests=[("Q1", "addressed")]),
             ],
         )
         result = run(model, ctx).response
-        self.assertEqual([r["accepted"] for r in result.generation_trace["rounds"]], [True, True])
+        self.assertEqual([r["accepted"] for r in result.generation_trace["rounds"]], [True])
+        self.assertEqual(len(_drafts(model)), 1)
+        raw = observed_audit(result)["request_reviews"][0]
+        self.assertEqual(raw["evidence_status"], "available")
+        self.assertEqual(raw["missing_content"], execute["text"])
         self.assertNotIn("stop", result.generation_trace["round_budget"])
-        self.assertIn("実行ボタンを押して完了します。", result.answer_text)
+        self.assertEqual([row["text"] for row in result.generation_trace["rounds"][0]["draft"]["items"]], [select["text"]])
 
     def test_dropped_quote_still_regenerates(self):
         """写し誤り（原文と一致せず除いた説明）があれば、同じ根拠のまま作り直す。"""

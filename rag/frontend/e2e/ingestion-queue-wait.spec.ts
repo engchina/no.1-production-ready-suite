@@ -1,3 +1,4 @@
+import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expect, type Page, test } from "./fixtures/test";
 import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
@@ -256,6 +257,7 @@ test.describe("取込の順番待ち", { tag: "@responsive" }, () => {
     const toolbar = page.getByTestId("file-list-toolbar");
     await expect(toolbar).toContainText("全 3 件");
 
+    await openFileListFilters(page);
     const status = page.getByRole("combobox", { name: "状態" });
     await status.click();
     await expect(page.getByRole("option")).toHaveText([
@@ -305,5 +307,6 @@ test.describe("取込の順番待ち", { tag: "@responsive" }, () => {
       )
     );
     expect(clipped).toBe(false);
+    await closeFileListFilters(page);
   });
 });

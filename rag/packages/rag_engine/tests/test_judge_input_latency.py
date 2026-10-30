@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from audit_fixtures import legacy_audit_result
 from test_answer_llm_latency import _settings as _engine_settings
 from test_enumeration_sufficiency import BUSINESS_DAY_FIVE, DO_NOT_TOUCH, REPORT, RESERVE, _items
 from test_section_expansion import Grader, SectionStub, _attempt, _expand, _members, _seed_context
@@ -22,6 +23,7 @@ from rag_engine.config import ENTERPRISE_AI_LLM_PROVIDER, LLM_PURPOSE_AUDIT, get
 from rag_engine.generation import crag_support
 from rag_engine.generation import section_expansion as sections
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import CragRetrievalGradeOutput
 from rag_engine.retrieval.context_builder import ContextChildEvidence, ContextParentEvidence
 from rag_engine.retrieval.enumeration import ENUMERATION_ASPECT
@@ -72,20 +74,24 @@ def test_audit_uses_its_own_effort_separately_from_generation():
 
 def test_run_round_calls_the_audit_with_the_audit_settings():
     from rag_engine.generation import grounded
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.llm import GroundedAudit, GroundedDraft
 
+    generation_settings = get_settings(environ={}, dotenv_path=None)
+    audit_settings = replace(generation_settings, audit_reasoning_effort="low")
     calls = []
 
     def parse_text(system, prompt, settings, schema, **options):
-        calls.append((schema, settings))
-        if schema is GroundedDraft:
+        calls.append((schema.canonical_schema if is_audit_wire(schema) else schema, settings))
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             return GroundedDraft(summary="", confidence="low", items=[])
-        return GroundedAudit(
+        result = GroundedAudit(
             reviews=[],
             request_reviews=[{"request_id": "R1", "status": "missing", "reason": "なし"}],
             summary_supported=False,
             goal_alignment="partial",
         )
+        return legacy_audit_result(result, schema) if is_audit_wire(schema) else result
 
     question = "経費精算の申請方法は？"
     context = AnswerContext(
@@ -95,21 +101,24 @@ def test_run_round_calls_the_audit_with_the_audit_settings():
     grounded.run_round(
         question,
         spans,
-        "generation",
+        generation_settings,
         prompt="p",
         image_paths=(),
         provider_id=None,
         parse_text=parse_text,
         parse_images=None,
-        audit_settings="audit",
+        audit_settings=audit_settings,
     )
-    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraft", "generation"), ("GroundedAudit", "audit")]
+    assert [(schema.__name__, settings) for schema, settings in calls] == [
+        ("GroundedDraftWire", generation_settings),
+        ("GroundedAudit", audit_settings),
+    ]
     calls.clear()
     # 渡さなければ監査も生成と同じ設定（従来の動き）。
     grounded.run_round(
-        question, spans, "generation", prompt="p", image_paths=(), provider_id=None, parse_text=parse_text, parse_images=None
+        question, spans, generation_settings, prompt="p", image_paths=(), provider_id=None, parse_text=parse_text, parse_images=None
     )
-    assert [settings for _schema, settings in calls] == ["generation", "generation"]
+    assert [settings for _schema, settings in calls] == [generation_settings, generation_settings]
 
 
 # ---- CRAG の評価の入力の圧縮 ---------------------------------------------------------------------------------
@@ -195,7 +204,16 @@ def test_compact_input_keeps_exclusion_missing_aspects_and_enumerated_items():
             {"chunk_uid": "x1", "relevant": False, "reason": "話題が別"},
         ],
         enumerated_items=_items(("p2", "5 営業日前までに"), ("p2", "3 営業日前までに"), ("p12", "3 営業日以内に")),
-        aspect_checks=[{"aspect": "business_object", "status": "supported", "source_ids": ["p2"], "reason": "関連"}],
+        aspect_checks=[
+            {
+                "aspect": "business_object",
+                "status": "supported",
+                "source_ids": ["p2"],
+                "evidence": [{"source_id": "p2", "quote": RESERVE.text}],
+                "reason": "関連",
+            },
+            {"aspect": ENUMERATION_ASPECT, "status": "missing", "source_ids": [], "reason": "5件のうち3件しか確認できない"},
+        ],
         reason="足りる",
         sufficient=True,
         confidence=0.9,
@@ -251,7 +269,16 @@ def test_short_candidate_ids_map_back_to_chunk_uids_in_the_grade():
             {"chunk_uid": "C3", "relevant": False, "reason": "話題が別"},
         ],
         enumerated_items=_items(("C1", "5 営業日前までに"), ("C1", "3 営業日前までに"), ("C2", "3 営業日以内に")),
-        aspect_checks=[{"aspect": "business_object", "status": "supported", "source_ids": ["C1"], "reason": "関連"}],
+        aspect_checks=[
+            {
+                "aspect": "business_object",
+                "status": "supported",
+                "source_ids": ["C1"],
+                "evidence": [{"source_id": "C1", "quote": RESERVE.text}],
+                "reason": "関連",
+            },
+            {"aspect": ENUMERATION_ASPECT, "status": "missing", "source_ids": [], "reason": "5件のうち3件のみ"},
+        ],
         reason="足りる",
         sufficient=True,
         confidence=0.9,
@@ -299,8 +326,8 @@ def test_strong_signals_with_partly_matched_requests_skip_the_grade():
     # 多段の問は要求の語が 1 つの根拠にそろわない（一部一致 = weak）。根拠の無い要求が無ければ飛ばす。
     context = _scored(_parent("p1", "経費精算の申請は月末までに行います。"), _parent("p2", "承認は部長が行います。", source="承認規程.pdf"))
     check = _check(context)
-    assert check["skip"] is True, check
-    assert any("根拠なし 0 件" in line for line in check["lines"])
+    assert check["skip"] is False, check
+    assert "充足性の判定は行わない" in check["reason"]
 
 
 @pytest.mark.parametrize(

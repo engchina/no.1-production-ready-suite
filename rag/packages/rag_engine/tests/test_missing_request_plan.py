@@ -37,8 +37,8 @@ def _draft(labels: dict[str, str]) -> dict:
     return {
         "request_coverage": [],
         "items": [
-            {"kind": "rule", "request_id": "Q1", "text": INTRO_ITEM, "quote": INTRO, "evidence_id": labels[INTRO]},
-            {"kind": "rule", "request_id": "Q1", "text": OUTLINE_ITEM, "quote": OUTLINE, "evidence_id": labels[OUTLINE]},
+            {"kind": "rule", "request_id": "Q1", "text": INTRO_ITEM, "citations": [{"quote": INTRO, "evidence_id": labels[INTRO]}]},
+            {"kind": "rule", "request_id": "Q1", "text": OUTLINE_ITEM, "citations": [{"quote": OUTLINE, "evidence_id": labels[OUTLINE]}]},
         ],
         "summary": "",
         "confidence": "high",
@@ -81,7 +81,7 @@ def test_missing_plan_is_planned_from_the_cited_evidence_without_regenerating_th
     result, model = _run([_draft(labels)], [_plan((labels[INTRO], "direct"), (labels[OUTLINE], "direct"))])
 
     # 草稿の全体は作り直さず、計画だけを立て直す。計画には説明が引いた根拠を渡す。
-    assert _schemas(model) == ["GroundedDraft", "RequestScopePlan"]
+    assert _schemas(model) == ["GroundedDraftWire", "RequestScopePlan"]
     plan_prompt = model.prompts[1][1]
     assert INTRO in plan_prompt and OUTLINE in plan_prompt
     assert INTRO_ITEM in result.answer_text and OUTLINE_ITEM in result.answer_text

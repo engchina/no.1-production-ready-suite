@@ -38,10 +38,10 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
     let items = steps(log);
     expect(summary(items)).toEqual(["chat-1:running"]);
     expect(items.map((step) => step.id)).not.toContain(EXECUTE_SPAN);
-    expect(items[0]).toMatchObject({ label: `モデルの呼び出し · ${SYNTHETIC_MODEL}`, startedAt: T0 });
+    expect(items[0]).toMatchObject({ label: "モデルを呼び出す（用途の記録なし）", startedAt: T0 });
     log.step("chat-1", "done", { kind: "plan" });
     items = steps(log);
-    expect(items[0].label).toBe("進め方を決めました");
+    expect(items[0].label).toBe("質問に応じた次の操作を選びました");
     // 行を開くと span の技術の値（Span name・モデル）を出す。
     expect(items[0].details?.fields).toEqual(
       expect.arrayContaining([
@@ -49,6 +49,15 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
         { label: "gen_ai.request.model", value: SYNTHETIC_MODEL, mono: true },
       ])
     );
+  });
+
+  test("実測の用途を主表示にしモデル名を詳細に残す", () => {
+    const log = newLog().step("chat-1", "running", { attributes: { "pr.gen_ai.purpose": "agent.choose_action", "gen_ai.request.model": SYNTHETIC_MODEL } });
+    const [item] = steps(log);
+    expect(item.label).toBe("質問に応じた操作または回答を作る");
+    expect(item.details?.fields).toEqual(expect.arrayContaining([
+      { label: "gen_ai.request.model", value: SYNTHETIC_MODEL, mono: true },
+    ]));
   });
 
   test("表示名の無い処理は内部名を出さず、ツールの中の MCP の呼び出しは tools/call だけを入れ子にする", () => {
@@ -67,9 +76,22 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
       .step("chat-2", "running");
     const items = steps(log);
     expect(summary(items)).toEqual(["chat-1:done", "tool:rag__rag_search:done", "mcp-1:done", "chat-2:running"]);
-    expect(items[1].label).toBe("処理を実行しました");
+    expect(items[1].label).toBe("選ばれたツールを呼び出しました");
     expect(items[2]).toMatchObject({ label: "MCP の呼び出し · rag_search", level: 1 });
-    expect(items[3].label).toBe(`モデルの呼び出し · ${SYNTHETIC_MODEL}`);
+    expect(items[3].label).toBe("モデルを呼び出す（用途の記録なし）");
+  });
+
+  test("ツールの中の MCP の呼び出しは、ツールの表示名（MCP の title）で出す（#3468）", () => {
+    const log = newLog()
+      .step("tool:rag__rag_validate_answer", "running", { kind: "tool", params: { tool: "rag__rag_validate_answer", title: "合成の照合" } })
+      .step("mcp-1", "running", {
+        parent: "tool:rag__rag_validate_answer",
+        attributes: { "mcp.method.name": "tools/call", "gen_ai.tool.name": "rag_validate_answer", "pr.tool.title": "合成の照合" },
+      });
+    const items = steps(log);
+    expect(items[0].label).toBe("「合成の照合」を実行しています");
+    expect(items[1]).toMatchObject({ label: "MCP の呼び出し · 合成の照合", level: 1 });
+    expect(items.map((step) => step.label).join(" ")).not.toContain("rag_validate_answer");
   });
 
   test("承認の待ちは、再開の区間で待ったツール名と一緒に出す", () => {
@@ -107,7 +129,7 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
   test("失敗したモデルの呼び出しは共通の名前で失敗を出す", () => {
     const log = newLog().step("chat-1", "done", { kind: "plan" }).step("chat-2", "running");
     log.step("chat-2", "failed").terminal("failed");
-    expect(steps(log)[1]).toMatchObject({ label: `モデルの呼び出し · ${SYNTHETIC_MODEL}`, status: "failed" });
+    expect(steps(log)[1]).toMatchObject({ label: "モデルを呼び出す（用途の記録なし）", status: "failed" });
     expect(chatProgressTerminalOf(parseChatProgressEvents(log.events))).toBe("failed");
   });
 

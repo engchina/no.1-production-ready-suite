@@ -284,7 +284,7 @@
               },
               "excerpt": {
                 "default": "",
-                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 24000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -893,7 +893,7 @@
               },
               "excerpt": {
                 "default": "",
-                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 24000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -1412,7 +1412,7 @@
               },
               "excerpt": {
                 "default": "",
-                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 20000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
+                "description": "根拠の本文（既定は全文）。応答の合計の予算（token の見積もり 24000）に根拠の順で入れ、入らない根拠は空（text_omitted）。1 件で 4000 を超える根拠は、質問に当たる部分を中心に文・段落（表は行）の境界で切った一部（truncated）。",
                 "title": "Excerpt",
                 "type": "string"
               },
@@ -1756,6 +1756,26 @@
       },
       "outputSchema": {
         "$defs": {
+          "ObservedDegradedStep": {
+            "description": "縮退した任意の補助の処理（RAG の DegradedStep と同じ名前）。",
+            "properties": {
+              "kind": {
+                "title": "Kind",
+                "type": "string"
+              },
+              "count": {
+                "minimum": 1,
+                "title": "Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "count"
+            ],
+            "title": "ObservedDegradedStep",
+            "type": "object"
+          },
           "ObservedEvidence": {
             "description": "Run が調べた RAG の根拠（根拠のツールの evidence と、読み取りのツールで読んだ chunk）。",
             "properties": {
@@ -1882,6 +1902,23 @@
               "locator": {
                 "$ref": "#/$defs/ObservedLocator"
               },
+              "table_binding": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "checkable",
+                      "not_checkable"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の table_binding（表の行・列の対応の検査がこの根拠の本文を読めるか。null は表の無い根拠・読み取りのツールの chunk）。",
+                "title": "Table Binding"
+              },
               "text": {
                 "default": "",
                 "description": "生成に渡した本文そのもの（切らない。同じ chunk を別の呼び出しが渡した本文は改行でつなぐ）。text_omitted なら空。",
@@ -1896,7 +1933,7 @@
               },
               "text_omitted": {
                 "default": false,
-                "description": "1 件でページの予算（token の見積もり 20000）を超えるため本文を省いたか（RAG の rag_read_source で読む）。",
+                "description": "1 件でページの予算（token の見積もり 24000）を超えるため本文を省いたか（RAG の rag_read_source で読む）。",
                 "title": "Text Omitted",
                 "type": "boolean"
               },
@@ -1988,6 +2025,36 @@
                 "default": null,
                 "title": "Sheet Name"
               },
+              "row_basis": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "sheet",
+                      "csv",
+                      "word_table",
+                      "parsed_table"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Row Basis"
+              },
+              "table_index": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Table Index"
+              },
               "row_start": {
                 "anyOf": [
                   {
@@ -2011,6 +2078,30 @@
                 ],
                 "default": null,
                 "title": "Row End"
+              },
+              "source_line_start": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Source Line Start"
+              },
+              "source_line_end": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Source Line End"
               },
               "cell_range": {
                 "anyOf": [
@@ -2217,6 +2308,54 @@
                 "default": null,
                 "description": "NL2SQL の truncated。",
                 "title": "Rows Truncated"
+              },
+              "degraded_steps": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/ObservedDegradedStep"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠のツールの degraded_steps（失敗して縮退した任意の補助の処理の種類と回数。空なら縮退していない）。ほかのツール・失敗した呼び出しは null。",
+                "title": "Degraded Steps"
+              },
+              "guardrail_degraded": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠のツールの guardrail_degraded（安全チェックを完了できず止めた）。ほかのツール・失敗した呼び出しは null。",
+                "title": "Guardrail Degraded"
+              },
+              "zero_evidence_stage": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "retrieval",
+                      "filter",
+                      "evidence_check",
+                      "context"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "RAG の根拠のツールが根拠 0 件のとき、0 件になった段（zero_evidence.stage）。",
+                "title": "Zero Evidence Stage"
               }
             },
             "required": [
@@ -2270,7 +2409,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 2,
+            "default": 5,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2412,7 +2551,7 @@
             "type": "integer"
           },
           "evidence": {
-            "description": "cursor からの根拠（rank の順。limit 件と、本文の合計の予算 20000 まで）。",
+            "description": "cursor からの根拠（rank の順。limit 件と、本文の合計の予算 24000 まで）。",
             "items": {
               "$ref": "#/$defs/ObservedEvidence"
             },

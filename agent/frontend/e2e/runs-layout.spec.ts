@@ -67,7 +67,7 @@ function seedRun(
   });
 }
 
-const TOOL_STEP = "処理を実行しました";
+const TOOL_STEP = "選ばれたツールを呼び出しました";
 
 // #1874: 一覧の「種類」（きっかけ）に、外部の MCP クライアントの Run は「MCP（キーの名前）」を出す。
 test("一覧の種類で MCP の Run とキーの名前が分かる", { tag: "@responsive" }, async ({ page, mockApi }) => {
@@ -104,6 +104,42 @@ test("一覧は共通の列の順で、状態は共通の値と Agent の言い�
   // 開始日時は絶対時刻、所要時間は終わった実行だけ（実行中・待ちは「—」）。
   await expect(done.locator("time").last()).toHaveAttribute("datetime", MOCK_NOW);
   await expect(waiting).toContainText("—");
+});
+
+// #3427: 「操作」の列は、行の操作が無い（終わった実行だけの）ページでも見出しを 1 行で出し、操作のある行の
+// メニューのボタンが入る幅を保つ（ページ・再取得で列の幅が変わらない）。操作の無い行のセルは空のまま。
+test("「操作」の見出しは 1 行で、操作の無い実行だけのページでもメニューのボタンの幅を保つ (1440px)", async ({ page, mockApi }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  seedRun(mockApi);
+  seedRun(mockApi, "run-done-2");
+  await page.goto("/runs");
+  const table = page.getByRole("table", { name: "実行履歴" });
+  const header = table.getByRole("columnheader", { name: "操作" });
+  await expect(header).toBeVisible();
+  const lineCount = () =>
+    header.evaluate((element) => {
+      const label = element.querySelector("span") ?? element;
+      const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
+      return Math.round(label.getBoundingClientRect().height / lineHeight);
+    });
+  expect(await lineCount()).toBe(1);
+  await expect(page.getByTestId("run-row-run-layout").locator("td").last()).toBeEmpty();
+  const emptyWidth = (await header.boundingBox())!.width;
+
+  // 操作のある行（承認待ち）が入っても、列の幅は変わらない。
+  seedRun(mockApi, "run-waiting", "waiting_approval");
+  await page.reload();
+  const trigger = page.getByTestId("run-row-actions-run-waiting-trigger");
+  await expect(trigger).toBeVisible();
+  expect(await lineCount()).toBe(1);
+  const withActionsWidth = (await header.boundingBox())!.width;
+  expect(Math.abs(withActionsWidth - emptyWidth)).toBeLessThanOrEqual(1);
+  const triggerBox = (await trigger.boundingBox())!;
+  const headerBox = (await header.boundingBox())!;
+  expect(triggerBox.x).toBeGreaterThanOrEqual(headerBox.x);
+  expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width + 1);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await table.screenshot({ path: testInfo.outputPath("runs-actions-column-1440.png") });
 });
 
 test("狭い画面では題名の下に状態・日時・所要時間をまとめ、横にあふれない", async ({ page, mockApi }) => {
@@ -810,3 +846,23 @@ for (const path of ["/runs", "/runs?id=run-layout", "/runs?id=new"]) {
     await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
   });
 }
+
+
+test("/runs の主一覧は表示領域に合わせて伸び、小画面は標準密度を保つ", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile-375";
+  if (!mobile) await page.setViewportSize({ width: 1440, height: 1300 });
+  for (let index = 0; index < 35; index += 1) seedRun(mockApi, `height-run-${index}`);
+  await page.goto("/runs");
+  const scroll = page.getByTestId("run-scroll-region");
+  await expect(scroll.locator("tbody tr")).toHaveCount(25);
+  const delta = () => scroll.evaluate((node) => {
+    const count = window.matchMedia("(min-width: 768px)").matches ? 8 : 5;
+    return node.getBoundingClientRect().bottom - node.querySelectorAll("tbody tr")[count - 1].getBoundingClientRect().bottom;
+  });
+  if (mobile) await expect.poll(async () => Math.abs(await delta())).toBeLessThanOrEqual(3);
+  else await expect.poll(delta).toBeGreaterThan(100);
+  const metrics = await scroll.evaluate((node) => ({ height: node.clientHeight, content: node.scrollHeight }));
+  expect(metrics.content).toBeGreaterThan(metrics.height);
+  await expect(scroll).toHaveAttribute("role", "region");
+  await page.screenshot({ path: testInfo.outputPath("run-height.png"), fullPage: true });
+});

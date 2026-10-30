@@ -14,7 +14,7 @@
  *   `useToastClearance` で書く）。右下の角に出すことと、ページの内容（PageHeader の操作・スクロール）で動かないことは変えない。
  * - md 未満（`top-bar`）: 上端の全幅。上端のバー（メニューのボタンと製品名）に重ね、メニューのボタン（左の 0.5rem + 44px）の
  *   後ろから右端の 1rem まで。375px では画面の下端が親指の届く範囲で、全幅のページの末尾の操作・チャットの入力欄・
- *   ソフトウェアキーボードが来るため、下端には置かない。上端のバーにはメニューのボタンのほかに操作が無い。
+ *   ソフトウェアキーボードが来るため、下端には置かない。上端のバーにはメニューのボタンのほかに操作が無い。バーを超える通知の高さを AppShell が確保し、本文の操作を覆わない。通知が多い場合は40dvhを上限に通知の中をスクロールする。
  *
  * 幅（#899）: md 以上は内容に合わせて広がり、`--toast-width-min`（22rem）〜`--toast-width-max`（32rem）の間で決まる
  * （画面がそれより狭ければ画面の幅まで）。md 未満は左右の間隔の内側いっぱい。
@@ -74,7 +74,7 @@ export function resolveToastPlacement({ narrow }: ToastPlacementInput): ToastPla
         top: SAFE_NARROW_TOP,
         left: NARROW_LEFT,
         right: SAFE_RIGHT,
-        maxHeight: `calc(100dvh - ${SAFE_NARROW_TOP} - ${EDGE})`,
+        maxHeight: `min(var(--toast-max-height-narrow), calc(100dvh - ${SAFE_NARROW_TOP} - ${EDGE}))`,
         "--toast-enter-y": "-0.5rem",
       },
     };

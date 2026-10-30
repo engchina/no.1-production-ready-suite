@@ -1,5 +1,6 @@
 """背景情報の取得・永続化・実promptへの前置きと本文予算を検証する。"""
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -78,8 +79,8 @@ def test_document_dedup_version_separation_and_budget():
     other = replace(r, id="v2", metadata={**r.metadata, "document": {**r.metadata["document"], "effective_from": "2026-04-01"}})
     spans = evidence_spans("説明", [r, other])
     assert format_evidence_packet(spans).count("FIRST_PAGE_SENTINEL") == 2
-    spans = evidence_spans("説明", [r], budget=80)
-    assert sum(len(s["text"]) + len(s.get("answer_context", "")) for s in spans) <= 80
+    spans = evidence_spans("説明", [r], budget=160)
+    assert sum(len(s["text"]) + len(s.get("answer_context", "")) for s in spans) <= 160
     assert "BODY_SENTINEL" in format_evidence_packet(spans)
     assert "FIRST_PAGE_SENTINEL" not in answer_metadata_context(replace(r, page=1))
 
@@ -143,3 +144,20 @@ def test_first_page_context_excludes_picture_ocr_text():
     first = extract_first_page_context(records, engine="e", analyzed_pages=[1], paginated=True)
     assert first["text"] == "操作の概要です。"
     assert first["record_ids"] == ["r1"]
+
+
+def test_prompt_prefix_leaves_section_and_child_scope_to_source_note():
+    """生成の根拠ブロックでは、章節は出典情報で示すので前置きに繰り返さない（#3831）。背景は残す。"""
+    from rag_engine.retrieval.metadata_context import with_child_contexts
+
+    parent = record()
+    child = replace(parent, id="c2", chunk_level="child", metadata={"section_path": ["CHILD_SCOPE_SENTINEL"]})
+    scoped = with_child_contexts(parent, [child])
+    full = answer_metadata_context(scoped)
+    assert "SECTION_SENTINEL" in full and "CHILD_SCOPE_SENTINEL" in full
+    short = answer_metadata_context(scoped, include_section=False)
+    assert "SECTION_SENTINEL" not in short and "CHILD_SCOPE_SENTINEL" not in short
+    assert "FIRST_PAGE_SENTINEL" in short
+    spans = evidence_spans("説明", [scoped])
+    assert "Section context" not in format_evidence_packet(spans)
+    assert "SECTION_SENTINEL" in json.dumps(spans[0]["source_context"], ensure_ascii=False)

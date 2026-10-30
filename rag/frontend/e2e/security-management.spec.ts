@@ -503,3 +503,23 @@ test("ユーザー・ロールの作成と編集の確定は、フォームの�
   await expectConfirmAtFormEnd("ロールの確定", "ロールコード", "#security-role-description", ["作成", "変更を破棄"]);
   await expectNoPageOverflow(page);
 });
+
+
+test("管理画面の読込表示は対象を短く示して一覧の幅に収まる", { tag: "@responsive" }, async ({ page }) => {
+  await mockSecurityApi(page);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/security/**", async route => { await pending; await route.fallback(); });
+  try {
+    for (const [kind, label] of [["users", "ユーザーを読込中"], ["roles", "ロールを読込中"], ["permissions", "権限を読込中"]]) {
+      await page.goto(`/settings/security/${kind}`);
+      const loading = page.getByTestId(`security-${kind}-loading`);
+      await expect(loading.locator("[data-processing-label]")).toHaveText(label);
+      await expect(loading.locator("[data-processing-label]")).toBeVisible();
+      await expect(loading).toContainText("経過時間");
+      const size = await loading.locator("[data-processing-label]").evaluate(node => ({height: node.getBoundingClientRect().height, line: parseFloat(getComputedStyle(node).lineHeight)}));
+      expect(size.height).toBeLessThanOrEqual(size.line * 2 + 1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+    }
+  } finally { release(); }
+});

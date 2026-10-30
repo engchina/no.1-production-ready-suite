@@ -29,7 +29,7 @@ export function syncWorkspaceOwner(user: CurrentUser | null): void {
 }
 
 /**
- * 認証状態。実体は platform の共通 AuthProvider（#220）。ローカル（`AGENT_AUTH_MODE=local`、`debug_mode: true`）は
+ * 認証状態。実体は platform の共通 AuthProvider（#220）。ローカル（`PLATFORM_AUTH_MODE=local`、`debug_mode: true`）は
  * backend がログインなしで全権限の利用者を返すため、ログイン画面を出さずに全画面を使える。
  */
 export function AuthProvider({ children }: { children: ReactNode }) {

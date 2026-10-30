@@ -14,9 +14,11 @@ from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.sheet_records import (
     SheetBlock,
     SheetColumn,
+    SheetNoteRow,
     SheetPreambleRow,
     SheetRecords,
     SheetRecordsDocument,
+    column_letters,
     sheet_records_extraction,
 )
 from rag_parser_core.structured_records import (
@@ -151,8 +153,67 @@ def test_round_trip_and_csv_extraction() -> None:
     assert first.metadata[STRUCTURED_RECORD_ID_KEY] == "row-000001"
     assert (first.metadata["row_start"], first.metadata["row_end"]) == (2, 3)
     assert first.metadata["csv_header_row"] == 1
+    # 記録の番号（record）を記録していない古い記録は、物理行の範囲だけを持つ（#3262）。
+    assert first.metadata["row_basis"] == "csv"
+    assert (first.metadata["source_line_start"], first.metadata["source_line_end"]) == (2, 3)
+    assert not {"table_row", "table_row_start", "table_cells_json"} & set(first.metadata)
     assert extraction.parser_artifacts[STRUCTURED_RECORDS_ARTIFACT_KEY] == 1
     assert extraction.parser_artifacts["structured_records_converter"] == "csv_to_jsonl"
+
+
+@pytest.mark.parametrize(
+    ("position", "letters"), [(1, "A"), (26, "Z"), (27, "AA"), (702, "ZZ"), (703, "AAA")]
+)
+def test_column_letters(position: int, letters: str) -> None:
+    assert column_letters(position) == letters
+
+
+def test_csv_row_cells_cite_the_original_header_text() -> None:
+    """CSV の記録は、記録の番号・物理行と、値のあるセルの列の記号・表頭のセルの文字を持つ（#3262）。
+
+    空・重複の表頭は記録の列名では補った名前になるが、表頭の段には原本の文字（空は空）を使う。
+    表頭より右の列（列の多い行）は表頭の文字が無い。
+    """
+    lines = [
+        DocumentLine(
+            record_id="document",
+            source_type="csv",
+            converter="csv_to_jsonl",
+            converter_version="v3",
+            header_row=1,
+            header=["項目", "", "項目"],
+        ),
+        RowLine(
+            record_id="row-000001",
+            source_type="csv",
+            # 前に引用符の中の改行を含む記録があり、物理行（4）と記録の番号（3）がずれる。
+            location=RecordLocation(row_start=4, row_end=5, record=3),
+            fields=[
+                RecordField(name="項目", position=1, value="値 A"),
+                RecordField(name="col_2", position=2, value="値 B"),
+                RecordField(name="項目_1", position=3, value=""),
+                RecordField(name="col_4", position=4, value="値 D"),
+            ],
+        ),
+    ]
+    document = parse_structured_records(dump_structured_records(lines))
+    assert isinstance(document, StructuredRecordsDocument)
+    assert document.document.header == ["項目", "", "項目"]
+    (element,) = structured_records_extraction(
+        document, source_parser="s", parser_backend="docling", parser_version="v1"
+    ).elements
+    # 行は記録の番号（RFC 7111 の行）。複数の物理行の記録もセルの座標を持つ。
+    assert (
+        element.metadata["table_row"],
+        element.metadata["table_row_start"],
+        element.metadata["table_row_end"],
+    ) == (3, 3, 3)
+    assert (element.metadata["source_line_start"], element.metadata["source_line_end"]) == (4, 5)
+    assert json.loads(str(element.metadata["table_cells_json"])) == [
+        ["A", ["項目"]],
+        ["B", []],
+        ["D", []],
+    ]
 
 
 def test_excel_round_trip_keeps_sheet_records_and_elements() -> None:
@@ -195,6 +256,63 @@ def test_excel_round_trip_keeps_sheet_records_and_elements() -> None:
     assert extraction.elements[1].text == "名前: 設定 A / 既定値［資料の既定値］: 30"
     assert extraction.parser_artifacts["sheet_records_format_version"] == 1
     assert extraction.parser_artifacts[STRUCTURED_RECORDS_ARTIFACT_KEY] == 1
+
+
+def test_excel_table_notes_round_trip_as_note_records() -> None:
+    """表の下の注記は note の記録になり、注記の印のある行は注記の文を本文に含める（#3566）。"""
+    note = "※1 合成の注記の文。"
+    original = SheetRecordsDocument(
+        source_format="xlsx",
+        sheets=[
+            SheetRecords(
+                name="表",
+                header_row=1,
+                columns=[
+                    SheetColumn(name="名前", column="A", header_path=["名前"]),
+                    SheetColumn(name="値", column="B", header_path=["値"]),
+                ],
+                blocks=[
+                    SheetBlock(
+                        kind="row",
+                        row_start=2,
+                        row_end=2,
+                        cell_range="A2:B2",
+                        values={"名前": "行 A", "値": "10※1"},
+                        notes=[note],
+                    ),
+                    SheetBlock(
+                        kind="row",
+                        row_start=3,
+                        row_end=3,
+                        cell_range="A3:B3",
+                        values={"名前": "行 B", "値": "20"},
+                    ),
+                ],
+                notes=[SheetNoteRow(row_number=5, cell_range="A5:A5", text=note, marker="※1")],
+            )
+        ],
+    )
+    data = dump_structured_records(
+        sheet_records_to_lines(original, converter="excel_to_jsonl", converter_version="v9")
+    )
+    raw = _raw(data)
+    assert [item["record_type"] for item in raw] == ["document", "sheet", "row", "row", "note"]
+    assert raw[2]["notes"] == [note]
+    assert "notes" not in raw[3]
+    assert raw[4]["record_id"] == "sheet-000-r5" and raw[4]["marker"] == "※1"
+    document = parse_structured_records(data)
+    assert isinstance(document, StructuredRecordsDocument)
+    assert structured_records_to_sheet_records(document) == original
+    elements = structured_records_extraction(
+        document, source_parser="s", parser_backend="docling", parser_version="v1"
+    ).elements
+    assert [element.text for element in elements] == [
+        f"名前: 行 A / 値: 10※1\n{note}",
+        "名前: 行 B / 値: 20",
+        note,
+    ]
+    assert elements[2].metadata["sheet_block_kind"] == "note"
+    assert elements[2].metadata[STRUCTURED_RECORD_ID_KEY] == "sheet-000-r5"
 
 
 def _base(**overrides: object) -> dict[str, object]:
@@ -253,6 +371,20 @@ def _row(**overrides: object) -> dict[str, object]:
         (
             _jsonl([_base(source_type="xlsx"), _row(source_type="xlsx")]),
             "parent_missing",
+            2,
+        ),
+        (
+            _jsonl(
+                [
+                    _base(),
+                    {
+                        **{key: value for key, value in _row().items() if key != "fields"},
+                        "record_type": "note",
+                        "text": "※1 注記",
+                    },
+                ]
+            ),
+            "unsupported_record_type",
             2,
         ),
     ],

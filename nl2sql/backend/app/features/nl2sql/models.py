@@ -16,12 +16,12 @@ from uuid import UUID
 from pr_backend_core import CursorPage, Page
 from pr_backend_core.chat_history_window import ChatHistoryPage
 from pr_backend_core.chat_progress import ChatProgressEvent
-from pr_system_settings.chat_attachments import ChatAttachmentReference
-from pr_system_settings.model import (
-    DEFAULT_ENTERPRISE_AI_SEED,
-    ENTERPRISE_AI_SEED_MAX,
-    ENTERPRISE_AI_SEED_MIN,
+from pr_backend_core.observability.model_usage import (
+    RunModelUsage,
+    UsageMeasurement,
+    parse_run_usage,
 )
+from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -284,12 +284,6 @@ class AllowedObjects(BaseModel):
 
 SELECT_AI_MAX_TOKENS_MIN = 4096
 SELECT_AI_MAX_TOKENS_MAX = 32000
-# Select AI の AI profile の `seed` 属性（#1434）。共通のモデル設定の seed と同じ既定（42）・範囲。
-# dev の ADB で `seed: 42` の profile を作れること（USER_CLOUD_AI_PROFILE_ATTRIBUTES に 42）、
-# 整数でない値（"abc"）は CREATE_PROFILE が ORA-06502 で拒むことを 2026-10-11 に確かめた。
-SELECT_AI_SEED_DEFAULT = DEFAULT_ENTERPRISE_AI_SEED
-SELECT_AI_SEED_MIN = ENTERPRISE_AI_SEED_MIN
-SELECT_AI_SEED_MAX = ENTERPRISE_AI_SEED_MAX
 PROFILE_IDENTIFIER_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
@@ -316,25 +310,12 @@ class ProfileSelectAiConfig(BaseModel):
         ge=SELECT_AI_MAX_TOKENS_MIN,
         le=SELECT_AI_MAX_TOKENS_MAX,
     )
-    # AI profile の `seed` 属性（#1434）。Select AI・Select AI Agent（同じ profile を使う）に効く。
-    seed: int = Field(
-        default=SELECT_AI_SEED_DEFAULT,
-        ge=SELECT_AI_SEED_MIN,
-        le=SELECT_AI_SEED_MAX,
-        strict=True,
-    )
     enforce_object_list: bool = True
     comments: bool = True
     annotations: bool = False
     constraints: bool = False
     role: str = ""
     additional_instructions: str = ""
-
-    @field_validator("seed", mode="before")
-    @classmethod
-    def default_seed(cls, value: object) -> object:
-        """値の無い保存済みの profile（#1434 より前）と None は既定の 42 にする。"""
-        return SELECT_AI_SEED_DEFAULT if value is None else value
 
 
 class ProfileSelectAiConfigPatch(BaseModel):
@@ -348,12 +329,6 @@ class ProfileSelectAiConfigPatch(BaseModel):
         default=None,
         ge=SELECT_AI_MAX_TOKENS_MIN,
         le=SELECT_AI_MAX_TOKENS_MAX,
-    )
-    seed: int | None = Field(
-        default=None,
-        ge=SELECT_AI_SEED_MIN,
-        le=SELECT_AI_SEED_MAX,
-        strict=True,
     )
     enforce_object_list: bool | None = None
     comments: bool | None = None
@@ -1653,6 +1628,18 @@ class SqlRequirementSpec(BaseModel):
     items: list[SqlRequirementSpecItem] = Field(default_factory=list)
     unresolved_ja: list[str] = Field(default_factory=list)
     summary_ja: str = ""
+    # 回答前の確認の LLM の呼び出しの利用量（session から写す。生成の prompt には入れない）。
+    # 実行履歴の行でジョブの利用量と合算する（#3552）。確認が LLM を呼ばなかった・この機能より前の
+    # session は None。
+    usage: RunModelUsage | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def drop_unreadable_usage(cls, value: Any) -> RunModelUsage | None:
+        """読めない利用量の記録は無いものとする（保存したジョブの要求そのものは読む）。"""
+        if isinstance(value, RunModelUsage):
+            return value
+        return parse_run_usage(value)
 
     def prompt_block(self) -> str:
         """直接の LLM の prompt に入れる「必ず守る条件」（物理名で書く）。"""
@@ -2177,6 +2164,23 @@ class HistoryItem(BaseModel):
     # きっかけ（`run_source`）と会話の持ち主の有無で決め、応答だけに入れる（#1955・#1986）。
     kind: Literal["chat", "query", "mcp", "evaluation"] | None = None
     ontology_trace_summary: dict[str, Any] = Field(default_factory=dict)
+    # 実行のモデルの呼び出しの回数と利用量（ジョブの trace の `gen_ai.chat` の span から集める。
+    # 3 製品共通の `pr_backend_core.observability.model_usage`。#3543）。Select AI の DB の中の
+    # 呼び出しは数を作らず `unmeasured_sources` に残す。この機能より前の行と、trace の始まる前に
+    # 止まった実行は None（画面は「未計測」）。
+    usage: RunModelUsage | None = None
+    # 一覧の「token」の列（合計の token と計測の状態。`usage` から応答だけに入れる。#3543）。
+    # 利用量の記録の無い行はどちらも None（0 にしない）。
+    total_tokens: int | None = None
+    usage_measurement: UsageMeasurement | None = None
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def drop_unreadable_usage(cls, value: Any) -> RunModelUsage | None:
+        """読めない利用量の記録は未計測にする（行そのものは読む）。"""
+        if isinstance(value, RunModelUsage):
+            return value
+        return parse_run_usage(value)
 
     @model_validator(mode="before")
     @classmethod

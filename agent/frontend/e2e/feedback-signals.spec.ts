@@ -10,6 +10,7 @@ import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
+  { name: "1920px", width: 1920, height: 1080 },
   { name: "mobile-375", width: 375, height: 812 },
 ];
 
@@ -104,18 +105,38 @@ for (const viewport of VIEWPORTS) {
       await expect(page.getByTestId("signals-kind-ungrounded_no_tools")).toContainText("根拠を使わずに答えた");
       await expect(page.getByTestId("signals-kind-ungrounded_no_tools")).toContainText("前の期間から +2");
 
+      const layout = page.getByTestId("list-detail-feedback-signals");
+      const list = page.getByTestId("list-detail-feedback-signals-list");
+      await expect(layout).toHaveAttribute("data-list-detail-layout", "single");
+      await expect(page.getByTestId("list-detail-feedback-signals-detail")).toBeHidden();
+      const [listBox, layoutBox] = await Promise.all([list.boundingBox(), layout.boundingBox()]);
+      expect(listBox!.width).toBeCloseTo(layoutBox!.width, 0);
+      const countToolbar = page.getByTestId("signals-list-toolbar");
+      expect(await countToolbar.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+      // 主一覧は外側のカードを持たず、件数は表の右端、見出しは共通 Section の大きさにする。
+      const appearance = await list.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const heading = element.querySelector("h2")!;
+        return { border: style.borderTopWidth, shadow: style.boxShadow, position: style.position, fontSize: getComputedStyle(heading).fontSize };
+      });
+      expect(appearance).toEqual({ border: "0px", shadow: "none", position: "static", fontSize: "16px" });
+      const [toolbarBox, mainListBox] = await Promise.all([countToolbar.boundingBox(), list.boundingBox()]);
+      expect(toolbarBox!.x + toolbarBox!.width).toBeCloseTo(mainListBox!.x + mainListBox!.width, 0);
       const table = page.getByRole("table", { name: "確かめるべき実行の一覧" });
+      await expect(table.getByRole("columnheader", { name: "シグナル", exact: true })).toHaveCount(viewport.width >= 1024 ? 1 : 0);
       const toolRow = table.getByRole("row", { name: /run-tool/ });
       await expect(toolRow).toContainText("ツールの失敗");
       await expect(toolRow).toContainText("答えられなかった");
-      // 一覧の列（狭い列）の行は質問とシグナル・実行日時だけ。状態・業務 Agent・利用者は詳細で見る（#2283）。
+      // 主一覧は質問とシグナル・実行日時を比較し、業務 Agent と利用者は詳細で見る。
       await expect(toolRow).not.toContainText("山田 太郎");
       await expect(table.getByRole("row", { name: /run-failed/ })).toContainText("実行の失敗・取り消し");
 
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-signals-${viewport.name}-${theme}.png`), fullPage: true });
+      await list.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`feedback-signals-list-${viewport.name}-${theme}.png`) });
 
-      // 行から詳細（シグナルの説明・件数・回答の対応・質問と回答）を一覧 + 詳細の詳細の列で開く（モーダルにしない）。
+      // 行から全幅の詳細へ進み、一覧と集計・条件を隠して内容を読む。
       await toolRow.getByRole("button", { name: /run-tool の質問/ }).click();
       await expect(page).toHaveURL(/signal=run-tool/);
       await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -129,15 +150,33 @@ for (const viewport of VIEWPORTS) {
       await expect(detail.getByTestId("signals-open-run")).toHaveAttribute("href", "/runs?id=run-tool");
       await expect(detail.getByTestId("signals-add-case-toggle")).toBeVisible();
       await expect(detail).toContainText("山田 太郎");
+      await expect(list).toBeHidden();
+      await expect(summary).toBeHidden();
+      await expect(page.getByTestId("signals-filters")).toBeHidden();
       await expect(detail.getByRole("heading", { name: "確かめるべき実行の詳細" })).toBeInViewport();
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`feedback-signals-detail-${viewport.name}-${theme}.png`) });
+      await page.getByTestId("signals-detail-pager-next").click();
+      await expect(page).toHaveURL(/signal=run-failed/);
+      await expect(page.getByTestId("signals-detail-pager-next")).toBeDisabled();
+      await page.getByTestId("feedback-detail-back").click();
+      await expect(list).toBeVisible();
+      await expect(table.getByRole("button", { name: /run-failed の質問/ })).toBeFocused();
+      await expect(summary).toBeVisible();
+      await toolRow.getByRole("button", { name: /run-tool の質問/ }).click();
+      await page.goBack();
+      await expect(list).toBeVisible();
+      await expect(toolRow.getByRole("button", { name: /run-tool の質問/ })).toBeFocused();
+      await page.goForward();
+      await expect(detail).toBeVisible();
+      await page.reload();
+      await expect(page.getByTestId("signals-detail")).toContainText("失敗したツールの呼び出し: 2 件");
     });
   }
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`確かめるべき実行の一覧はサーバー側でページングし、種類で絞り込める (${viewport.name})`, async ({ page, mockApi }) => {
+  test(`確かめるべき実行の一覧はサーバー側でページングし、種類で絞り込める (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     seedSignals(
       mockApi,
@@ -153,6 +192,7 @@ for (const viewport of VIEWPORTS) {
     await expect(table.getByRole("row", { name: /run-00/ })).toBeVisible();
     const pager = page.getByTestId("signals-pagination");
     await expect(pager).toContainText("1–25 / 53 件");
+    await page.screenshot({ path: testInfo.outputPath(`signals-paginated-${viewport.name}.png`), fullPage: true });
     await pager.getByRole("button", { name: "次へ" }).click();
     await expect(table.getByRole("row", { name: /run-25/ })).toBeVisible();
     await expect(pager).toContainText("26–50 / 53 件");
@@ -162,6 +202,12 @@ for (const viewport of VIEWPORTS) {
     // 見方とページは作業状態に残す（再読込しても 2 ページ目）。
     await page.reload();
     await expect(page.getByTestId("signals-pagination")).toContainText("26–50 / 53 件");
+    const selected = table.getByRole("button", { name: /run-25 の質問/ });
+    await selected.click();
+    await expect(page.getByTestId("signals-detail")).toBeVisible();
+    await page.getByTestId("feedback-detail-back").click();
+    await expect(selected).toBeFocused();
+    await expect(pager).toContainText("26–50 / 53 件");
 
     // 種類で絞ると 1 ページ目から読み直す（1 ページなら pager を出さない）。
     await withListFilters(page.getByTestId("signals-filters"), async (filters) => {
@@ -434,4 +480,49 @@ test("シグナルの詳細 URL を開くと保存した評価のタブから切
   await expect(page.getByRole("tab", { name: "確かめるべき実行", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "利用者の評価", exact: true }).click();
   await expect(page).not.toHaveURL(/signal=/);
+  await expect(page.getByRole("tab", { name: "利用者の評価", exact: true })).toHaveAttribute("aria-selected", "true");
 });
+
+test("スクロール後も最初のクリックで評価のタブへ切り替わる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedSignals(mockApi, Array.from({ length: 25 }, (_, index) => signalItem(`run-${index}`, ["tool_failed"])));
+  await page.goto("/feedback");
+  await expect(page.getByTestId("signals-summary")).toBeVisible();
+  const ratings = page.getByRole("tab", { name: "利用者の評価", exact: true });
+  const signals = page.getByRole("tab", { name: "確かめるべき実行", exact: true });
+  const main = page.getByRole("main");
+  await main.evaluate((element) => { element.scrollTop = 500; });
+  // desktop は貼り付いたヘッダー、375px はタブを再び見せた位置から操作する。
+  if (testInfo.project.name !== "desktop") await ratings.scrollIntoViewIfNeeded();
+  if (testInfo.project.name === "desktop") {
+    expect(await main.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  }
+  const box = await ratings.boundingBox();
+  if (!box) throw new Error("評価のタブがありません");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(ratings).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("signals-summary")).not.toBeVisible();
+  await signals.click();
+  await expect(signals).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("signals-summary")).toBeVisible();
+});
+
+for (const signal of ["", "run-tool"]) {
+  test(`シグナル URL から最初のクリックで評価へ切り替わる (${signal || "選択なし"})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+    seedSignals(mockApi);
+    await page.goto(`/feedback?signal=${signal}`);
+    await expect(page.getByTestId(signal ? "signals-detail" : "signals-summary")).toBeVisible();
+    const ratings = page.getByRole("tab", { name: "利用者の評価", exact: true });
+    const signals = page.getByRole("tab", { name: "確かめるべき実行", exact: true });
+    await ratings.click();
+    await expect(ratings).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel", { name: "利用者の評価", exact: true })).toBeVisible();
+    await expect(page).not.toHaveURL(/signal=/);
+    await page.reload();
+    await expect(ratings).toHaveAttribute("aria-selected", "true");
+    await ratings.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(signals).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("End");
+    await expect(ratings).toHaveAttribute("aria-selected", "true");
+  });
+}

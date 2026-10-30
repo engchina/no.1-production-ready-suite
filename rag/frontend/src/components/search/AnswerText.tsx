@@ -11,13 +11,13 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
-import { answerPassageLabels, answerPassages } from "@/lib/answer-passages";
+import { answerPassageLabels, answerPassages, withoutPassageRecordSections } from "@/lib/answer-passages";
 import {
   answerFormat,
   citationLocation,
   parseAnswerText,
   parseCitationLine,
-  resolveCitationLine,
+  resolveCitationLineTargets,
   type AnswerTextBlock,
   type AnswerTextEntry,
   type CitationTarget,
@@ -72,7 +72,9 @@ export function AnswerText({
   const source = useEvidenceSource<CitationTarget>();
   const format = answerFormat(diagnostics);
   const passages = streaming ? null : answerPassages(diagnostics);
-  const blocks = streaming ? null : (parseAnswerText(text, format) ?? (passages ? plainParagraphs(text) : null));
+  // 本文の末尾の「根拠と矛盾し除いた内容」「確認が必要な点」は記録から共有の部品が作るので、本文の節は描かない（#3488）。
+  const body = passages ? withoutPassageRecordSections(text, format) : text;
+  const blocks = streaming ? null : (parseAnswerText(body, format) ?? (passages ? plainParagraphs(body) : null));
   // 回答エンジンの決まった文言（保存した表示形式の値と同じ段落・説明）は画面の言語で描く（回答の言語の lang を付けない。#3349）。
   const fixedTexts = new Set(Object.values(format ?? {}));
   const fixedLang = (value: string) => (fixedTexts.has(value) ? null : undefined);
@@ -116,18 +118,25 @@ export function AnswerText({
     </AnswerSections>
   );
 
-  function toCitation(citation: string, ordinal: number | undefined): AnswerCitationRef {
+  function toCitations(citation: string, ordinal: number | undefined): AnswerCitationRef[] {
     const ref = parseCitationLine(citation, format);
-    const target = resolveCitationLine(ordinal, ref, citations);
-    return target == null
-      ? { key: citation, label: citation }
-      : {
-          key: citation,
-          label: citation,
-          location: citationLocation(citation, ref?.fileName),
-          ariaLabel: t("search.answerText.openCitation", { citation }),
-          onOpen: () => source.open(target),
-        };
+    const targets = resolveCitationLineTargets(ordinal, ref, citations);
+    if (!targets.length) return [{ key: `${ordinal}:${citation}`, label: citation }];
+    return targets.map((target, index) => {
+      const label = targets.length === 1 ? citation : t(
+        target.position.kind === "unresolved"
+          ? "search.answerText.citationCandidates"
+          : "search.answerText.citationPart",
+        { citation, number: index + 1, total: targets.filter((entry) => entry.position.kind === "exact").length },
+      );
+      return {
+        key: `${ordinal}:${citations[target.index].document_id}:${citations[target.index].chunk_id ?? target.index}:${target.position.kind}`,
+        label,
+        location: citationLocation(citation, ref?.fileName),
+        ariaLabel: t("search.answerText.openCitation", { citation: label }),
+        onOpen: () => source.open(target),
+      };
+    });
   }
 
   function renderSectionLink(text: string, title: string) {
@@ -158,7 +167,7 @@ export function AnswerText({
     return {
       key: String(index),
       content: entry.text,
-      citations: entry.citations.map((citation, position) => toCitation(citation, entry.citationLines[position])),
+      citations: entry.citations.flatMap((citation, position) => toCitations(citation, entry.citationLines[position])),
       extra: renderSectionLink(entry.text, title),
     };
   }

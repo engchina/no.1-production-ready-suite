@@ -24,6 +24,10 @@ from pr_backend_core.config import isolate_env_files_for_tests
 # 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
 isolate_env_files_for_tests("RAG_")
 
+os.environ["PLATFORM_ENVIRONMENT"] = "local"
+os.environ["PLATFORM_AUTH_MODE"] = "local"
+
+
 if TYPE_CHECKING:
     from app.config import Settings
     from app.rag.request_context import AuditRequestContext
@@ -178,6 +182,12 @@ def isolated_local_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     from app.clients import external_parser
 
     monkeypatch.setattr(external_parser, "_poll_sleep", lambda _seconds: None)
+    # 条の選択の process をまたぐ記録（#3507）は、テストの間で共有しない
+    # （手元の保存先にも書かない）。
+    # 記録を確かめるテストは置き場所を tmp に差し替え直す。
+    from app.rag import answer_engine
+
+    monkeypatch.setattr(answer_engine, "article_catalog_cache_dir", lambda _settings: None)
 
 
 async def _systemd_unavailable(argv: list[str], timeout: float) -> object:
@@ -383,6 +393,16 @@ def _fresh_database_status_cache() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_dropped_llm_parameters() -> Iterator[None]:
+    """モデルが受け付けない引数の記憶（#3539。プロセスの間の状態）をテストごとに捨てる。"""
+    from pr_backend_core.llm_request_params import reset_dropped_parameters
+
+    reset_dropped_parameters()
+    yield
+    reset_dropped_parameters()
+
+
+@pytest.fixture(autouse=True)
 def _stub_upload_storage_object_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     """アップロード保存先の保存の前の確認（#2101）で、実の OCI を呼ばない（既定は成功）。
 
@@ -419,3 +439,21 @@ def mineru_selectable(monkeypatch: pytest.MonkeyPatch) -> None:
     from app import config as app_config
 
     monkeypatch.delitem(app_config.ROADMAP_PARSER_ADAPTER_BACKENDS, "mineru")
+
+
+@pytest.fixture(autouse=True)
+def published_language_unit_scope(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTTP 単体テストだけに公開版の依存を明示供給する。実 DB テストは除外する。"""
+    if "oracle_db" in request.fixturenames:
+        return
+    from app.rag import published_language_runtime
+    from tests.language_release_api_support import FakeReleaseStore
+
+    store = FakeReleaseStore()
+
+    async def initialized() -> FakeReleaseStore:
+        return store
+
+    monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)

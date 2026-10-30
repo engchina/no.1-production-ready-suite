@@ -84,18 +84,20 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "extra_retrieval_max_queries": resolved_settings.rag_extra_retrieval_max_queries,
         "reference_expansion_enabled": resolved_settings.rag_reference_expansion_enabled,
         "reference_expansion_max_chunks": resolved_settings.rag_reference_expansion_max_chunks,
-        # 実体の 1 段の拡張(#1362)。検索・回答プロファイルで選ぶ(#1388)。
+        # 実体の 1 段の拡張(#1362)。検索方法の全体設定で選ぶ(#1388・#3053)。
         "entity_expansion_enabled": resolved_settings.rag_entity_expansion_enabled,
         "entity_expansion_max_chunks": resolved_settings.rag_entity_expansion_max_chunks,
         # 関係情報で検索の候補を足す(#2055)。
         "graph_expansion_enabled": resolved_settings.rag_graph_expansion_enabled,
         "graph_expansion_max_chunks": resolved_settings.rag_graph_expansion_max_chunks,
-        # 章節の拡張(#1436)。検索・回答プロファイルで選ぶ。
+        # 章節の拡張(#1436)。検索方法の全体設定で選ぶ。
         "section_expansion_enabled": resolved_settings.rag_section_expansion_enabled,
         "section_expansion_max_levels": resolved_settings.rag_section_expansion_max_levels,
         "section_expansion_input_token_percent": (
             resolved_settings.rag_section_expansion_input_token_percent
         ),
+        # 生成に渡す根拠の原文の文字予算(#3776)。
+        "evidence_budget_chars": resolved_settings.rag_evidence_budget_chars,
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。
         "max_anchors_per_document": resolved_settings.rag_max_anchors_per_document,
         "auto_field_filter_enabled": resolved_settings.rag_auto_field_filter_enabled,
@@ -114,6 +116,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "answer_audit_compact_reasons": resolved_settings.rag_answer_audit_compact_reasons,
         "answer_max_correction_rounds": resolved_settings.rag_answer_max_correction_rounds,
         "answer_audit_mode": resolved_settings.rag_answer_audit_mode,
+        "answer_evidence_refinement_mode": resolved_settings.rag_answer_evidence_refinement_mode,
         "section_skip_regrade_at_scope": resolved_settings.rag_section_skip_regrade_at_scope,
         "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
         "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,

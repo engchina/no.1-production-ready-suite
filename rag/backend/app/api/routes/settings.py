@@ -1,7 +1,6 @@
 """設定 API。"""
 
 import asyncio
-import json
 import logging
 import re
 import stat
@@ -14,6 +13,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.chat_attachments import build_chat_attachment_settings_router
@@ -68,6 +68,8 @@ from app.config import (
 from app.rag.answer_prompts import (
     EDITABLE_PROMPT_KEYS,
     readonly_prompt_stages,
+    required_tokens,
+    stage_prompt_permission,
 )
 from app.rag.answer_prompts import default_prompt as default_answer_prompt
 from app.rag.answer_prompts import required_placeholders as answer_prompt_required_placeholders
@@ -173,9 +175,6 @@ from app.schemas.settings import (
     PreprocessProfileStatusData,
     PreprocessSettingsData,
     PreprocessSettingsUpdate,
-    ProfileGuideSearchDefaultsData,
-    QueryHistorySettingsData,
-    QueryHistorySettingsUpdate,
     SystemTablesDeleteOrphansRequest,
     SystemTablesInitializeRequest,
     SystemTablesOperationData,
@@ -490,20 +489,6 @@ async def update_chunking_settings(
     return ApiResponse(data=_chunking_settings_data(settings))
 
 
-@router.get(
-    "/profile-guide-search-defaults", response_model=ApiResponse[ProfileGuideSearchDefaultsData]
-)
-async def get_profile_guide_search_defaults() -> ApiResponse[ProfileGuideSearchDefaultsData]:
-    """接続情報を含めず、継承する手順検索の既定値だけを返す。"""
-    settings = get_settings()
-    return ApiResponse(
-        data=ProfileGuideSearchDefaultsData(
-            max_queries=settings.rag_guide_step_max_queries,
-            deadline_seconds=settings.rag_guide_step_deadline_seconds,
-        )
-    )
-
-
 @router.get("/answering", response_model=ApiResponse[AnsweringSettingsData])
 async def get_answering_settings() -> ApiResponse[AnsweringSettingsData]:
     """回答の検索と生成の全体既定(質問の拡張・回答の生成方式など。#593)を返す。"""
@@ -516,7 +501,7 @@ async def update_answering_settings(
 ) -> ApiResponse[AnsweringSettingsData]:
     """回答の検索と生成の全体既定を backend/.env と現在プロセスへ反映する(#593)。
 
-    送った項目だけを変える。検索・回答プロファイルの上書きはそのまま優先する。
+    送った項目だけを変える。この画面の項目は全体設定だけで決め、検索・回答プロファイルでは上書きしない。
     """
     settings = get_settings()
     updates = {
@@ -524,6 +509,8 @@ async def update_answering_settings(
         for field, value in (
             ("rag_query_strategy", payload.query_strategy),
             ("rag_answer_flow", payload.answer_flow),
+            ("rag_answer_audit_mode", payload.answer_audit_mode),
+            ("rag_answer_evidence_refinement_mode", payload.answer_evidence_refinement_mode),
             ("rag_neighbor_child_count", payload.neighbor_child_count),
             ("rag_rerank_enabled", payload.rerank_enabled),
             ("rag_screen_linking_enabled", payload.screen_linking_enabled),
@@ -562,6 +549,10 @@ async def update_answering_settings(
                 ),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
                 "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
+                "RAG_ANSWER_AUDIT_MODE": candidate.rag_answer_audit_mode,
+                "RAG_ANSWER_EVIDENCE_REFINEMENT_MODE": (
+                    candidate.rag_answer_evidence_refinement_mode
+                ),
                 "RAG_NEIGHBOR_CHILD_COUNT": str(candidate.rag_neighbor_child_count),
                 "RAG_RERANK_ENABLED": _format_env_bool(candidate.rag_rerank_enabled),
                 "RAG_SCREEN_LINKING_ENABLED": _format_env_bool(
@@ -589,6 +580,8 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
     return AnsweringSettingsData(
         query_strategy=settings.rag_query_strategy,
         answer_flow=settings.rag_answer_flow,
+        answer_audit_mode=settings.rag_answer_audit_mode,
+        answer_evidence_refinement_mode=settings.rag_answer_evidence_refinement_mode,
         neighbor_child_count=settings.rag_neighbor_child_count,
         rerank_enabled=settings.rag_rerank_enabled,
         screen_linking_enabled=settings.rag_screen_linking_enabled,
@@ -637,53 +630,6 @@ async def update_answer_record_settings(
     return ApiResponse(data=AnswerRecordSettingsData(retention_days=payload.retention_days))
 
 
-@router.get("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
-async def get_query_history_settings() -> ApiResponse[QueryHistorySettingsData]:
-    """質問履歴の設定を返す。"""
-    return ApiResponse(data=_query_history_settings(get_settings()))
-
-
-@router.patch("/query-history", response_model=ApiResponse[QueryHistorySettingsData])
-async def update_query_history_settings(
-    payload: QueryHistorySettingsUpdate,
-) -> ApiResponse[QueryHistorySettingsData]:
-    """質問履歴の設定を backend/.env と現在プロセスへ反映し、期限切れの履歴を削除する。"""
-    settings = get_settings()
-    _write_env_values(
-        BACKEND_ENV_FILE,
-        {
-            "RAG_QUERY_HISTORY_ENABLED": "true" if payload.enabled else "false",
-            "RAG_QUERY_HISTORY_RETENTION_DAYS": str(payload.retention_days),
-            "RAG_QUERY_HISTORY_MIN_COUNT": str(payload.min_count),
-            "RAG_QUERY_HISTORY_SUGGESTION_LIMIT": str(payload.suggestion_limit),
-            "RAG_QUERY_HISTORY_BLOCKLIST": json.dumps(payload.blocklist, ensure_ascii=False),
-        },
-        section_comment="# 質問履歴",
-        error_detail="質問履歴の設定を backend/.env へ保存できませんでした。",
-    )
-    settings.rag_query_history_enabled = payload.enabled
-    settings.rag_query_history_retention_days = payload.retention_days
-    settings.rag_query_history_min_count = payload.min_count
-    settings.rag_query_history_suggestion_limit = payload.suggestion_limit
-    settings.rag_query_history_blocklist = list(payload.blocklist)
-    if payload.retention_days > 0:
-        try:
-            await OracleClient().purge_query_history(payload.retention_days)
-        except Exception as exc:  # 次の記録時にも削除するため、設定保存は止めない。
-            logger.warning("query history purge failed", extra={**safe_exception_fields(exc)})
-    return ApiResponse(data=_query_history_settings(settings))
-
-
-def _query_history_settings(settings: Settings) -> QueryHistorySettingsData:
-    return QueryHistorySettingsData(
-        enabled=settings.rag_query_history_enabled,
-        retention_days=settings.rag_query_history_retention_days,
-        min_count=settings.rag_query_history_min_count,
-        suggestion_limit=settings.rag_query_history_suggestion_limit,
-        blocklist=list(settings.rag_query_history_blocklist),
-    )
-
-
 @router.get("/answer-prompts", response_model=ApiResponse[AnswerPromptsData])
 async def get_answer_prompts() -> ApiResponse[AnswerPromptsData]:
     """編集できるプロンプト(回答生成・図の読み取り)と、回答フローの各段の読み取り専用プロンプトを返す。"""
@@ -699,12 +645,28 @@ async def put_answer_prompt(
     _require_answer_prompt_permission(request, key)
     try:
         validate_answer_prompt(key, payload.content)
+        if key == "image_retrieval":
+            from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
+
+            validate_answer_prompt(key, split_image_retrieval_prompt(payload.content)[0])
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     oracle = OracleClient()
-    await oracle.save_answer_prompt(key, payload.content)
+    if key == "image_retrieval":
+        from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
+
+        previous = await oracle.list_answer_prompts()
+        body, supplied_rules = split_image_retrieval_prompt(payload.content)
+        legacy = split_image_retrieval_prompt(str(previous.get(key, {}).get("content", "")))[1]
+        if supplied_rules is not None:
+            await oracle.save_answer_prompt("picture_description.rules", supplied_rules)
+        elif legacy is not None and "picture_description.rules" not in previous:
+            await oracle.save_answer_prompt("picture_description.rules", legacy)
+        await oracle.save_answer_prompt(key, body)
+    else:
+        await oracle.save_answer_prompt(key, payload.content)
     return ApiResponse(data=_answer_prompts_data(await oracle.list_answer_prompts()))
 
 
@@ -715,6 +677,18 @@ async def reset_answer_prompt(key: str, request: Request) -> ApiResponse[AnswerP
     if key not in EDITABLE_PROMPT_KEYS:
         raise HTTPException(status_code=404, detail="プロンプトが見つかりません。")
     oracle = OracleClient()
+    if key in {"image_retrieval", "picture_description.rules"}:
+        from rag_engine.parsing.vision_prompt_rules import split_image_retrieval_prompt
+
+        previous = await oracle.list_answer_prompts()
+        image = previous.get("image_retrieval")
+        if image:
+            body, legacy = split_image_retrieval_prompt(str(image["content"]))
+            if legacy is not None:
+                if key == "image_retrieval" and "picture_description.rules" not in previous:
+                    await oracle.save_answer_prompt("picture_description.rules", legacy)
+                if key == "picture_description.rules":
+                    await oracle.save_answer_prompt("image_retrieval", body)
     await oracle.delete_answer_prompt(key)
     return ApiResponse(data=_answer_prompts_data(await oracle.list_answer_prompts()))
 
@@ -725,7 +699,7 @@ def _require_answer_prompt_permission(request: Request, key: str) -> None:
     route の manifest は回答プロンプト・文書解析のどちらかの権限で通すので、ここで key ごとに
     その画面の権限を求める。知らない key はこの後の 404 に任せる。
     """
-    permission = ANSWER_PROMPT_EDIT_PERMISSIONS.get(key)
+    permission = ANSWER_PROMPT_EDIT_PERMISSIONS.get(key) or stage_prompt_permission(key)
     if permission is None:
         return
     principal = getattr(request.state, "principal", None)
@@ -736,6 +710,9 @@ def _require_answer_prompt_permission(request: Request, key: str) -> None:
 
 
 def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsData:
+    from app.rag.answer_prompts import separate_vision_prompt_rows
+
+    saved = separate_vision_prompt_rows(saved)
     prompts = []
     for key in EDITABLE_PROMPT_KEYS:
         row = saved.get(key)
@@ -747,6 +724,7 @@ def _answer_prompts_data(saved: dict[str, dict[str, object]]) -> AnswerPromptsDa
                     "default_content": default_answer_prompt(key),
                     "customized": row is not None,
                     "required_placeholders": list(answer_prompt_required_placeholders(key)),
+                    "required_tokens": list(required_tokens(key)),
                     "updated_at": row["updated_at"] if row else None,
                 }
             )
@@ -935,7 +913,7 @@ async def update_evaluation_settings(
 
 @router.get("/entity-index", response_model=ApiResponse[EntityIndexSettingsData])
 async def get_entity_index_settings() -> ApiResponse[EntityIndexSettingsData]:
-    """名称・別名の索引を構築する全体の既定を返す。"""
+    """実体・別名索引を構築する全体の既定を返す。"""
     return ApiResponse(
         data=EntityIndexSettingsData(enabled=get_settings().rag_entity_index_enabled)
     )
@@ -950,8 +928,8 @@ async def update_entity_index_settings(
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_ENTITY_INDEX_ENABLED": str(payload.enabled).lower()},
-        section_comment="# 名称・別名の索引",
-        error_detail="名称・別名の索引の設定を保存できませんでした。",
+        section_comment="# 実体・別名索引",
+        error_detail="実体・別名索引の設定を保存できませんでした。",
     )
     settings.rag_entity_index_enabled = payload.enabled
     return ApiResponse(data=EntityIndexSettingsData(enabled=payload.enabled))
@@ -959,7 +937,7 @@ async def update_entity_index_settings(
 
 @router.get("/graph", response_model=ApiResponse[GraphSettingsData])
 async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
-    """関係情報の構築の選択(構築する / しない)を返す。"""
+    """文書構造索引の構築の選択(構築する / しない)を返す。"""
     return ApiResponse(data=_graph_settings_data(get_settings()))
 
 
@@ -967,7 +945,7 @@ async def get_graph_settings() -> ApiResponse[GraphSettingsData]:
 async def update_graph_settings(
     payload: GraphSettingsUpdate,
 ) -> ApiResponse[GraphSettingsData]:
-    """関係情報設定を backend/.env と現在プロセスへ反映する。"""
+    """文書構造索引の設定を backend/.env と現在プロセスへ反映する。"""
     settings = get_settings()
     candidate = settings.model_copy(
         update={"rag_graph_profile": normalize_graph_profile(payload.profile)}
@@ -983,13 +961,17 @@ async def _run_model_settings_test(
 ) -> dict[str, str | int | float | bool | None]:
     """対象モデルの実 API 呼び出しを行い、表示用 details を返す（共有 router の hook）。"""
     if request.target_type == "enterprise_text":
-        text = await OciEnterpriseAiClient(settings=settings).generate(
+        text = await async_call_with_model_purpose(
+            "connection.check",
+            OciEnterpriseAiClient(settings=settings).generate,
             MODEL_TEST_TEXT_PROMPT,
             model_test_text_context("Production Ready RAG"),
         )
         return {"response_chars": len(text), "surface": "llm"}
     if request.target_type == "enterprise_vision":
-        text = await OciEnterpriseAiClient(settings=settings).generate_from_image(
+        text = await async_call_with_model_purpose(
+            "connection.check",
+            OciEnterpriseAiClient(settings=settings).generate_from_image,
             MODEL_TEST_IMAGE_BYTES,
             MODEL_TEST_VISION_PROMPT,
             mime_type=MODEL_TEST_IMAGE_MIME_TYPE,
@@ -999,13 +981,17 @@ async def _run_model_settings_test(
             "response_chars": len(text),
         }
     if request.target_type == "embedding":
-        vectors = await OciGenAiClient(settings=settings).embed(
+        vectors = await async_call_with_model_purpose(
+            "connection.check",
+            OciGenAiClient(settings=settings).embed,
             [MODEL_TEST_EMBEDDING_INPUT],
             input_type="SEARCH_QUERY",
         )
         vector = vectors[0] if vectors else []
         return {"vector_dim": len(vector), "input_count": len(vectors)}
-    ranks = await OciGenAiClient(settings=settings).rerank(
+    ranks = await async_call_with_model_purpose(
+        "connection.check",
+        OciGenAiClient(settings=settings).rerank,
         MODEL_TEST_RERANK_QUERY,
         list(MODEL_TEST_RERANK_DOCUMENTS),
         top_n=1,
@@ -1170,6 +1156,8 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         heading_level_inference_enabled=settings.rag_heading_level_inference_enabled,
         field_extraction_enabled=settings.rag_field_extraction_enabled,
         navigation_summary_enabled=settings.rag_navigation_summary_enabled,
+        navigation_summary_max_nodes=settings.rag_navigation_summary_max_nodes,
+        raptor_enabled=settings.rag_raptor_enabled,
         vision_concurrency=settings.rag_vision_concurrency,
         mineru_license=_mineru_license_data(settings),
         config_source="runtime",
@@ -1201,6 +1189,7 @@ def _persist_post_parse_settings(settings: Settings) -> None:
             "RAG_NAVIGATION_SUMMARY_ENABLED": _format_env_bool(
                 settings.rag_navigation_summary_enabled
             ),
+            "RAG_RAPTOR_ENABLED": _format_env_bool(settings.rag_raptor_enabled),
             "RAG_VISION_CONCURRENCY": str(settings.rag_vision_concurrency),
         },
         section_comment="# 文書解析: 解析後の処理",
@@ -1440,7 +1429,7 @@ def _optional_bool(value: bool | None, fallback: bool) -> bool:
 
 
 def _graph_settings_data(settings: Settings) -> GraphSettingsData:
-    """Settings から関係情報設定の表示用データを作る。"""
+    """Settings から文書構造索引の設定の表示用データを作る。"""
     runtime = graph_adapter_runtime_settings(settings)
     return GraphSettingsData(
         profile=runtime.profile,
@@ -1454,12 +1443,12 @@ def _graph_settings_data(settings: Settings) -> GraphSettingsData:
 
 
 def _persist_graph_settings(settings: Settings) -> None:
-    """関係情報設定を backend/.env へ永続化する。"""
+    """文書構造索引の設定を backend/.env へ永続化する。"""
     _write_env_values(
         BACKEND_ENV_FILE,
         {"RAG_GRAPH_PROFILE": settings.rag_graph_profile},
-        section_comment="# 関係情報の構築",
-        error_detail="関係情報設定を backend/.env へ保存できませんでした。",
+        section_comment="# 文書構造索引の構築",
+        error_detail="文書構造索引の設定を backend/.env へ保存できませんでした。",
     )
 
 
@@ -1686,7 +1675,6 @@ def _chunking_settings_candidate(
             "rag_chunk_overlap": payload.overlap,
             "rag_chunk_min_chars": payload.min_chars,
             "rag_chunk_delimiter": payload.delimiter,
-            "rag_chunk_context_header_enabled": payload.context_header_enabled,
             "rag_chunk_child_target_chars": payload.chunk_child_target_chars,
             "rag_chunk_table_child_target_chars": payload.chunk_table_child_target_chars,
             "rag_chunk_parent_target_chars": payload.chunk_parent_target_chars,
@@ -1703,7 +1691,6 @@ def _apply_chunking_settings(target: Settings, source: Settings) -> None:
     target.rag_chunk_overlap = source.rag_chunk_overlap
     target.rag_chunk_min_chars = source.rag_chunk_min_chars
     target.rag_chunk_delimiter = source.rag_chunk_delimiter
-    target.rag_chunk_context_header_enabled = source.rag_chunk_context_header_enabled
     for name in SMALL_TO_BIG_SETTING_FIELDS:
         setattr(target, name, getattr(source, name))
 
@@ -1718,9 +1705,6 @@ def _persist_chunking_settings(settings: Settings) -> None:
             "RAG_CHUNK_OVERLAP": str(settings.rag_chunk_overlap),
             "RAG_CHUNK_MIN_CHARS": str(settings.rag_chunk_min_chars),
             "RAG_CHUNK_DELIMITER": settings.rag_chunk_delimiter,
-            "RAG_CHUNK_CONTEXT_HEADER_ENABLED": _format_env_bool(
-                settings.rag_chunk_context_header_enabled
-            ),
             **{name.upper(): str(getattr(settings, name)) for name in SMALL_TO_BIG_SETTING_FIELDS},
             # 交差参照の解析の語は言語資源へ移した(#2181)。以前に保存した値は消す。
             **{f"RAG_REFERENCE_{spec.key.upper()}": None for spec in FIELD_SPECS},

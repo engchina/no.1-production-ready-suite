@@ -18,7 +18,15 @@ from app.api.routes.search import (
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
 from app.config import get_settings
-from app.rag.query_history import query_history_suggestions
+from app.rag.chat_question_token import with_rule_selection_answers
+from app.rag.domain_keyword_import import (
+    PREVIEW_ROWS,
+    KeywordImportMode,
+    import_keywords,
+    read_keyword_excel,
+)
+from app.rag.question_understanding import profile_language_scope
+from app.rag.rule_selection import recognize_rule_selections
 from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     APPROVED_FAQ_PREVIEW_ROWS,
@@ -63,15 +71,17 @@ from app.schemas.search_answer_profile_knowledge import (
     ApprovedFaqSuggestionData,
     ApprovedFaqSuggestionsData,
     ApprovedFaqSuggestRequest,
+    ClarificationAnswer,
     ClarificationSuggestionData,
     ClarificationSuggestionsData,
     ClarificationSuggestRequest,
     DomainKeywordCandidateData,
+    DomainKeywordImportData,
+    DomainKeywordImportPreviewData,
+    DomainKeywordImportRowData,
     DomainKeywordsData,
     DomainKeywordSuggestionData,
     DomainKeywordsUpdate,
-    QuerySuggestion,
-    QuerySuggestionsData,
     RuleClarificationRequest,
     RuntimeKnowledgeData,
     RuntimeKnowledgeEditRequest,
@@ -129,6 +139,63 @@ async def put_domain_keywords(
     return ApiResponse(
         data=DomainKeywordsData(
             search_answer_profile_id=search_answer_profile_id, keywords=keywords
+        )
+    )
+
+
+async def _keyword_excel_rows(file: UploadFile) -> list[tuple[int, str]]:
+    content = await file.read(MAX_FAQ_EXCEL_BYTES + 1)
+    if len(content) > MAX_FAQ_EXCEL_BYTES:
+        raise HTTPException(status_code=413, detail="Excel ファイルが大きすぎます(上限 10MB)。")
+    try:
+        return await asyncio.to_thread(read_keyword_excel, content, file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{search_answer_profile_id}/domain-keywords/import/preview",
+    response_model=ApiResponse[DomainKeywordImportPreviewData],
+)
+async def preview_domain_keyword_import(
+    search_answer_profile_id: str, file: Annotated[UploadFile, File()]
+) -> ApiResponse[DomainKeywordImportPreviewData]:
+    await _require_search_answer_profile(OracleClient(), search_answer_profile_id)
+    rows = await _keyword_excel_rows(file)
+    return ApiResponse(
+        data=DomainKeywordImportPreviewData(
+            total=len(rows),
+            rows=[
+                DomainKeywordImportRowData(row=number, keyword=word)
+                for number, word in rows[:PREVIEW_ROWS]
+            ],
+        )
+    )
+
+
+@router.post(
+    "/{search_answer_profile_id}/domain-keywords/import",
+    response_model=ApiResponse[DomainKeywordImportData],
+)
+async def import_domain_keyword_excel(
+    search_answer_profile_id: str,
+    file: Annotated[UploadFile, File()],
+    mode: Annotated[KeywordImportMode, Form()] = "INSERT",
+) -> ApiResponse[DomainKeywordImportData]:
+    oracle = OracleClient()
+    await _require_search_answer_profile(oracle, search_answer_profile_id)
+    rows = await _keyword_excel_rows(file)
+    try:
+        keywords, inserted = await import_keywords(
+            oracle, search_answer_profile_id, [word for _, word in rows], mode=mode
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(
+        data=DomainKeywordImportData(
+            search_answer_profile_id=search_answer_profile_id,
+            keywords=keywords,
+            inserted_count=inserted,
         )
     )
 
@@ -368,7 +435,7 @@ async def suggest_search_answer_profile_approved_faq(
     )
 
 
-# --- 用語・ルール(runtime knowledge)-------------------------------------------
+# --- 用語・同義語と回答ルール(runtime knowledge)-------------------------------------------
 
 
 def _runtime_knowledge_data(
@@ -388,7 +455,7 @@ def _runtime_knowledge_data(
     response_model=ApiResponse[RuntimeKnowledgeData],
 )
 async def get_runtime_knowledge(search_answer_profile_id: str) -> ApiResponse[RuntimeKnowledgeData]:
-    """検索・回答プロファイルの用語・ルールを返す。"""
+    """検索・回答プロファイルの用語・同義語と回答ルールを返す。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
@@ -416,6 +483,10 @@ async def post_runtime_knowledge_edit(
             labels=request.labels,
             content=request.content,
             source=request.source,
+            purpose=request.purpose,
+            instruction_kind=request.instruction_kind,
+            exclusive_group=request.exclusive_group,
+            priority=request.priority,
             enabled=request.enabled,
             delete=request.delete,
         )
@@ -431,7 +502,7 @@ async def post_runtime_knowledge_edit(
 async def post_runtime_knowledge_preview(
     search_answer_profile_id: str, request: RuntimeKnowledgePreviewRequest
 ) -> ApiResponse[RuntimeKnowledgePreviewData]:
-    """照合テスト: 質問に一致する用語・ルールと拡張後の検索文を返す(保存しない)。"""
+    """照合テスト: 質問に一致する用語・同義語と回答ルールと拡張後の検索文を返す(保存しない)。"""
     oracle = OracleClient()
     await _require_search_answer_profile(oracle, search_answer_profile_id)
     payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
@@ -441,48 +512,13 @@ async def post_runtime_knowledge_preview(
             expanded_question=context.expanded_question,
             matched_terms=[term.term for term in context.matched_terms],
             matched_rules=[rule.title or rule.rule_id for rule in context.matched_rules],
-        )
-    )
-
-
-@router.get(
-    "/{search_answer_profile_id}/query-suggestions",
-    response_model=ApiResponse[QuerySuggestionsData],
-)
-async def get_query_suggestions(
-    search_answer_profile_id: str,
-    q: str = Query(default="", max_length=500),
-    large_category: str = Query(default="", max_length=200),
-    middle_category: str = Query(default="", max_length=200),
-    small_category: str = Query(default="", max_length=200),
-) -> ApiResponse[QuerySuggestionsData]:
-    """検索・回答プロファイルでよく聞かれる質問を、入力中の質問との類似度順に返す(質問履歴が有効なときだけ)。"""
-    settings = get_settings()
-    oracle = OracleClient()
-    await _require_search_answer_profile(oracle, search_answer_profile_id)
-    classification = {
-        key: value
-        for key, value in {
-            "large_category": large_category,
-            "middle_category": middle_category,
-            "small_category": small_category,
-        }.items()
-        if value.strip()
-    }
-    suggestions = await query_history_suggestions(
-        oracle,
-        settings,
-        search_answer_profile_id=search_answer_profile_id,
-        question=q,
-        classification=classification,
-    )
-    return ApiResponse(
-        data=QuerySuggestionsData(
-            search_answer_profile_id=search_answer_profile_id,
-            enabled=settings.rag_query_history_enabled,
-            suggestions=[
-                QuerySuggestion(question=item.question, count=item.count) for item in suggestions
-            ],
+            conflicting_rules=sorted(
+                {
+                    str(item["title"])
+                    for item in context.rule_applications
+                    if item["reason"] == "unresolved_exclusive_conflict"
+                }
+            ),
         )
     )
 
@@ -516,58 +552,114 @@ async def post_clarification_suggest(
     """質問に出す確認(一致したルールのうち確認を持つ最初の 1 件。#717)。"""
     oracle = OracleClient()
     view = await _require_search_answer_profile(oracle, search_answer_profile_id)
-    # 方針が「前提を示して回答する」なら確認を出さない（#1839）。
-    if view.config.clarification_policy == "assume":
-        return ApiResponse(data=ClarificationSuggestionsData())
-    payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
-    found = await asyncio.to_thread(suggest_clarification, payload, request.query)
-    if found is None:
-        # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
-        # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
-        settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
-        if not settings.rag_support_guide_enabled:
-            return ApiResponse(data=ClarificationSuggestionsData())
-        guides = await _published_guides(oracle, search_answer_profile_id)
-        # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
-        query = await build_guide_query(
-            oracle, settings, search_answer_profile_id, guides, request.query, payload
+    from app.api.routes.chat import _guide_user_context, prepare_chat_question
+
+    settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+    with profile_language_scope(settings):
+        query, context_token = await prepare_chat_question(
+            oracle,
+            request.conversation_id,
+            search_answer_profile_id,
+            request.query,
+            settings,
+            force_token=True,
         )
-        selected = select_guide(
-            guides,
+
+        recognized_answers: tuple[ClarificationAnswer, ...] = ()
+        recognition_usage: dict[str, float] = {}
+
+        def response(
+            data: ClarificationSuggestionsData,
+        ) -> ApiResponse[ClarificationSuggestionsData]:
+            token = context_token
+            if token and (recognized_answers or recognition_usage):
+                token = with_rule_selection_answers(
+                    settings.app_service_token_secret,
+                    token,
+                    [answer.model_dump() for answer in recognized_answers],
+                    elapsed_seconds=recognition_usage.get("elapsed_seconds", 0.0),
+                )
+            data.question_context_token = token
+            return ApiResponse(data=data)
+
+        # 方針が「前提を示して回答する」なら確認を出さない（#1839）。
+        if view.config.clarification_policy == "assume":
+            return response(ClarificationSuggestionsData())
+        payload = await load_runtime_knowledge_payload(oracle, search_answer_profile_id)
+        source_text = "\n".join(
+            [
+                *(
+                    _guide_user_context(await oracle.list_messages(request.conversation_id))
+                    if request.conversation_id
+                    else ()
+                ),
+                request.query,
+            ]
+        )
+        recognized_answers = await recognize_rule_selections(
+            payload, query, settings, source_text=source_text, usage=recognition_usage
+        )
+        found = await asyncio.to_thread(
+            suggest_clarification,
+            payload,
             query,
-            {},
-            context=await support_guide_context(
-                oracle, guides, request.query, profile_scope_filters(view)
-            ),
-            close_margin=(
-                settings.rag_support_guide_close_match_margin
-                if settings.rag_support_guide_close_match_clarification_enabled
-                else None
-            ),
+            answers=recognized_answers if context_token else (),
         )
-        selected = await resolve_text_conditions(selected, request.query, settings)
-        guide: tuple[str, str, Any] | None = None
-        if isinstance(selected, GuideChoice):
-            guide = guide_choice_clarification(selected)
-        elif selected is not None:
-            guide = guide_clarification(selected)
-        if guide is None:
-            return ApiResponse(data=ClarificationSuggestionsData())
-        rule_id, title, guide_question = guide
-        return ApiResponse(
-            data=ClarificationSuggestionsData(
+        if found is None:
+            # 業務ガイドの不明・矛盾の条件（選択肢付き）を、ルールの確認と同じ形で聞く（#1238）。
+            # 適用範囲は検索と同じ手がかりで確かめる（#1278）。
+            settings, _ = resolve_search_answer_profile_settings(get_settings(), view.config)
+            if not settings.rag_support_guide_enabled:
+                return response(ClarificationSuggestionsData())
+            guides = await _published_guides(oracle, search_answer_profile_id)
+            # 文面の補完を OFF にしても、ガイドの既存の利用者履歴の照合は維持する。
+            if request.conversation_id and not settings.rag_history_rewrite_enabled:
+                query = "\n".join(
+                    [
+                        *_guide_user_context(await oracle.list_messages(request.conversation_id)),
+                        query,
+                    ]
+                )
+            # 検索と同じく、用語の別名で展開し、ON なら意味の照合を使う（#2398）。
+            guide_query = await build_guide_query(
+                oracle, settings, search_answer_profile_id, guides, query, payload
+            )
+            selected = select_guide(
+                guides,
+                guide_query,
+                {},
+                context=await support_guide_context(
+                    oracle, guides, query, profile_scope_filters(view)
+                ),
+                close_margin=(
+                    settings.rag_support_guide_close_match_margin
+                    if settings.rag_support_guide_close_match_clarification_enabled
+                    else None
+                ),
+            )
+            selected = await resolve_text_conditions(selected, query, settings)
+            guide: tuple[str, str, Any] | None = None
+            if isinstance(selected, GuideChoice):
+                guide = guide_choice_clarification(selected)
+            elif selected is not None:
+                guide = guide_clarification(selected)
+            if guide is None:
+                return response(ClarificationSuggestionsData())
+            rule_id, title, guide_question = guide
+            return response(
+                ClarificationSuggestionsData(
+                    suggestion=ClarificationSuggestionData(
+                        rule_id=rule_id, rule_title=title, clarification=guide_question
+                    )
+                )
+            )
+        rule, clarification = found
+        return response(
+            ClarificationSuggestionsData(
                 suggestion=ClarificationSuggestionData(
-                    rule_id=rule_id, rule_title=title, clarification=guide_question
+                    rule_id=str(rule.get("id", "")),
+                    rule_title=str(rule.get("title", "") or rule.get("id", "")),
+                    clarification=clarification,
                 )
             )
         )
-    rule, clarification = found
-    return ApiResponse(
-        data=ClarificationSuggestionsData(
-            suggestion=ClarificationSuggestionData(
-                rule_id=str(rule.get("id", "")),
-                rule_title=str(rule.get("title", "") or rule.get("id", "")),
-                clarification=clarification,
-            )
-        )
-    )

@@ -157,7 +157,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-answered-agent-outcome-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_2bcc392a542c1d40310e2ad992adad96",
@@ -187,7 +187,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           },
           {
             "index": 1,
@@ -201,7 +204,10 @@
             "include_superseded": null,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": null,
+            "guardrail_degraded": null,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 2,
@@ -227,13 +233,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "合成の無関係の記載。",
             "text_length": 10,
             "text_omitted": false,
@@ -260,13 +271,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "項目 X の上限は 30 日です。",
             "text_length": 17,
             "text_omitted": false,
@@ -293,13 +309,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "承認者は管理者 B です。",
             "text_length": 13,
             "text_omitted": false,
@@ -429,7 +450,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-approval-skipped-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_83bf7f626d94207e4a1cf75e366a4c7d",
@@ -459,7 +480,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           },
           {
             "index": 1,
@@ -473,7 +497,10 @@
             "include_superseded": null,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": null,
+            "guardrail_degraded": null,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 2,
@@ -499,13 +526,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "項目 R の記録の手順: 画面 3 で値を入れる。",
             "text_length": 25,
             "text_omitted": false,
@@ -565,7 +597,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-cancelled-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_d5b2344f70113ba52cc9d56fedc06955",
@@ -662,7 +694,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-clarification-skips-retrieval-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_3c6fcc7db02aaf5ebb3665728385506d",
@@ -692,7 +724,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 1,
@@ -750,7 +785,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-failed-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_f6203978c7d52d0c1209354e9e59905b",
@@ -830,7 +865,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-failed-second-turn-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_69538a51893803f39c04b43521089184",
@@ -903,7 +938,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-failed-second-turn-1",
         "agent_id": "agent-baseline",
         "thread_id": "thread_69538a51893803f39c04b43521089184",
@@ -976,7 +1011,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-legacy-inferred-abstained-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_4230d9441156be20c8b4e1d2b79b79cb",
@@ -1097,7 +1132,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-legacy-inferred-question-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_dc16e6d5d33bb78719d0dbdfe06bfe2b",
@@ -1127,7 +1162,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 1,
@@ -1153,13 +1191,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "方法 1 と方法 2 がある。",
             "text_length": 15,
             "text_omitted": false,
@@ -1270,7 +1313,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-legacy-rag-search-outcome-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_c614321f6e08aa846369039c13777b4e",
@@ -1300,7 +1343,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 1,
@@ -1326,13 +1372,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "<p>設定の一覧</p><table><tr><td>項目 Z</td><td>既定値 15</td></tr><tr><td>項目 W</td><td>既定値 20</td></tr></table>",
             "text_length": 101,
             "text_omitted": false,
@@ -1418,7 +1469,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-multi-turn-clarify-then-answer-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_94207fc60be625afbb5e518975e8e332",
@@ -1448,7 +1499,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 1,
@@ -1610,7 +1664,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-multi-turn-clarify-then-answer-1",
         "agent_id": "agent-baseline",
         "thread_id": "thread_94207fc60be625afbb5e518975e8e332",
@@ -1640,7 +1694,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           },
           {
             "index": 1,
@@ -1654,7 +1711,10 @@
             "include_superseded": null,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": null,
+            "guardrail_degraded": null,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 2,
@@ -1682,13 +1742,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "区分 P の手順: 画面 1 で値を変える。",
             "text_length": 22,
             "text_omitted": false,
@@ -1717,13 +1782,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "保存して終える。",
             "text_length": 8,
             "text_omitted": false,
@@ -1838,7 +1908,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-no-expectations-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_8c59a57531b93554924d360de5704f64",
@@ -1868,7 +1938,10 @@
             "include_superseded": false,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 1,
@@ -1894,13 +1967,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "合成の記載。",
             "text_length": 6,
             "text_omitted": false,
@@ -1960,7 +2038,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-timeout-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_f0fe8e2b136544171316a3787537bebc",
@@ -2144,7 +2222,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-unknown-outcome-vocabulary-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_3a3e477b6eddca6fb65c5244c490b255",
@@ -2174,7 +2252,10 @@
             "include_superseded": true,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": null,
+            "guardrail_degraded": null,
+            "zero_evidence_stage": null
           },
           {
             "index": 1,
@@ -2188,7 +2269,10 @@
             "include_superseded": true,
             "job_status": null,
             "row_count": null,
-            "rows_truncated": null
+            "rows_truncated": null,
+            "degraded_steps": [],
+            "guardrail_degraded": false,
+            "zero_evidence_stage": null
           }
         ],
         "tool_call_total": 2,
@@ -2214,13 +2298,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "旧版: 5 日。",
             "text_length": 8,
             "text_omitted": false,
@@ -2247,13 +2336,18 @@
               "page_label_start": null,
               "page_label_end": null,
               "sheet_name": null,
+              "row_basis": null,
+              "table_index": null,
               "row_start": null,
               "row_end": null,
+              "source_line_start": null,
+              "source_line_end": null,
               "cell_range": null,
               "element_locator": null,
               "table_row": null,
               "table_cells": []
             },
+            "table_binding": null,
             "text": "今の版: 3 日。",
             "text_length": 9,
             "text_omitted": false,
@@ -2313,7 +2407,7 @@
         "notice": null
       },
       "agent_get_run_observation": {
-        "schema_version": 2,
+        "schema_version": 5,
         "run_id": "run-waiting-approval-run-0",
         "agent_id": "agent-baseline",
         "thread_id": "thread_a8ae0fc16c603e12f9e9be7df489b972",

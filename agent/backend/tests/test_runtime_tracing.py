@@ -50,6 +50,7 @@ async def test_stream_span_lives_until_consumption_and_records_known_usage() -> 
             assert len(summary.spans) == 1
         child = next(span for span in summary.spans if span.operation_name == "gen_ai.chat")
         assert child.parent_span_id == summary.root_span_id
+        assert child.attributes["pr.gen_ai.purpose"] == "agent.choose_action"
         assert child.attributes["gen_ai.usage.input_tokens"] == 12
         assert child.attributes["gen_ai.usage.output_tokens"] == 5
         assert "private-payload" not in summary.model_dump_json()
@@ -80,6 +81,7 @@ async def test_model_call_span_carries_the_turn_kind_for_progress() -> None:
     chats = [update for update in updates if update.operation_name == "gen_ai.chat"]
     # 呼び出しの間は種類が決まっていない（共通の名前「モデルの呼び出し」で出す）。
     assert (chats[0].status, chats[0].display) == ("running", None)
+    assert all(update.attributes["pr.gen_ai.purpose"] == "agent.choose_action" for update in chats)
     finished = [update for update in chats if update.status == "done"]
     assert [update.display.kind if update.display else None for update in finished] == [
         "plan",

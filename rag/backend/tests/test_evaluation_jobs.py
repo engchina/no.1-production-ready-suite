@@ -398,9 +398,7 @@ async def test_job_records_timed_out_case_with_stage_and_continues(
     assert slow.status == "error"
     assert slow.error_type == "TimeoutError"
     assert slow.error_stage == "answer"
-    assert (
-        slow.error_message is not None and "質問の読み取りから回答の作成まで" in slow.error_message
-    )
+    assert slow.error_message is not None and "質問の条件を整理して回答を作る" in slow.error_message
     assert fast.status == "success"
 
 
@@ -679,7 +677,6 @@ async def test_oracle_purges_issue_no_sql_without_retention() -> None:
 
     assert await store.purge(retention_days=0) == 0
     assert await client.purge_answer_records(0) == 0
-    assert await client.purge_query_history(0) == 0
     assert await RunHistoryStore(client).purge_runs(0) == 0
     assert connection.calls == []
 

@@ -1,4 +1,4 @@
-"""関係情報の構築プロファイルの決定論解決(backend の中で使う)。
+"""文書構造索引の構築プロファイルの決定論解決(backend の中で使う)。
 
 profile(off/entities)→ 構築フラグを決定論で解決する。entities は文書と章・節の見出しの
 つながり(entity + relationship)を作る。claims / community summary まで作る full は、読む経路が
@@ -15,7 +15,7 @@ DEFAULT_GRAPH_PROFILE = "off"
 
 @dataclass(frozen=True)
 class GraphResolved:
-    """解決済みの関係情報の構築フラグ。"""
+    """解決済みの文書構造索引の構築フラグ。"""
 
     profile: str
     build_entities: bool
@@ -28,7 +28,7 @@ def normalize_graph_profile(value: object) -> str:
 
 
 def resolve_graph_profile(profile: object) -> GraphResolved:
-    """profile から関係情報の構築フラグを解決する。"""
+    """profile から文書構造索引の構築フラグを解決する。"""
     name = normalize_graph_profile(profile)
     build_entities = name == "entities"
     return GraphResolved(

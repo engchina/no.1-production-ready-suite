@@ -10,13 +10,14 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from rag_parser_core.language import LanguagePack, per_pack
+from rag_parser_core.language import LanguagePack, current_pack, per_pack
 from rag_parser_core.language.markers import marker_patterns
 from rag_parser_core.language.text import alternation, char_class, range_class, text_patterns
 
-from rag_engine.resources.runtime import current_profile
+from rag_engine.retrieval.task_contract import cause_noun_targeted
 
-INQUIRY_CONDITION_SCHEMA_VERSION = 1
+# 2: 補助の検索文（retrieval_queries）を持たない（#3496）。検索文の追加は質問の言い換えの工程が受け持つ。
+INQUIRY_CONDITION_SCHEMA_VERSION = 2
 INQUIRY_PROFILE_SCHEMA_VERSION = 1
 INQUIRY_CHUNK_METADATA_SCHEMA_VERSION = 3
 QUERY_UNDERSTANDING_PROCESS_NAME = "Fine-grained Query Understanding"
@@ -71,8 +72,7 @@ _DECISION_TYPE_DISPLAY_LABELS = {
 class _Cues:
     """言語資源（inquiry_cues。#2181 段 4）から組み立てた問い合わせの条件の語と正規表現。
 
-    業務固有の連携先・資料名・製品名はコードにも言語資源にも置かず、業務 profile の file_data_terms /
-    external_context_terms で足す (#849)。
+    業務固有の連携先・資料名・製品名は含めず、言語資源の汎用の判定語だけを使う。
     """
 
     term: re.Pattern[str]
@@ -195,17 +195,17 @@ _PROFILE_BY_ID = {profile.profile_id: profile for profile in INQUIRY_PROFILES}
 
 
 def _file_data_terms() -> tuple[str, ...]:
-    """ファイル/データ確認とみなす語。汎用語に業務 profile の語を足す。"""
-    return (*_cues().file_data_terms, *current_profile().file_data_terms)
+    """ファイル/データ確認とみなす語。言語資源の汎用語を使う。"""
+    return _cues().file_data_terms
 
 
 def _external_context_terms() -> tuple[str, ...]:
-    """外部連携の確認とみなす語。汎用語に業務 profile の語を足す。"""
-    return (*_cues().external_context_terms, *current_profile().external_context_terms)
+    """外部連携の確認とみなす語。言語資源の汎用語を使う。"""
+    return _cues().external_context_terms
 
 
 def _trigger_terms(profile: InquiryProfileDefinition) -> tuple[str, ...]:
-    """問い合わせ種別の trigger 語（言語資源）。ファイル/データ確認だけは業務 profile の語も含める。"""
+    """問い合わせ種別の trigger 語（言語資源）。"""
     if profile.profile_id == FILE_DATA_PROFILE:
         return _file_data_terms()
     cues = _cues()
@@ -213,15 +213,9 @@ def _trigger_terms(profile: InquiryProfileDefinition) -> tuple[str, ...]:
 
 
 def _document_kind_patterns() -> tuple[tuple[str, str], ...]:
-    """文書種別の判定規則（言語資源）。ファイル/データの種別には業務 profile のファイル/データ確認の語も含める。"""
+    """文書種別の判定規則（言語資源）。"""
     cues = _cues()
-    extra = current_profile().file_data_terms
-    if not extra:
-        return cues.document_kinds
-    alternatives = "|".join(re.escape(term) for term in extra)
-    return tuple(
-        (label, f"{pattern}|{alternatives}" if label == cues.file_data_kind else pattern) for label, pattern in cues.document_kinds
-    )
+    return cues.document_kinds
 
 
 def inquiry_profile_contract_hash() -> str:
@@ -271,6 +265,7 @@ class InquiryConditionParse:
     """質問文から推定した問い合わせ種別、channel、制約を保持します。"""
 
     original_question: str
+    language_pack_hash: str = ""
     business_domains: tuple[str, ...] = ()
     document_kinds: tuple[str, ...] = ()
     screen_terms: tuple[str, ...] = ()
@@ -286,7 +281,6 @@ class InquiryConditionParse:
     requires_visual_evidence: bool = False
     requires_condition_answer: bool = False
     search_terms: tuple[str, ...] = ()
-    retrieval_queries: tuple[str, ...] = ()
     active_profiles: tuple[str, ...] = ()
     metadata_filter: InquiryMetadataFilter = InquiryMetadataFilter()
 
@@ -312,6 +306,7 @@ class InquiryConditionParse:
         """UI と trace 保存に使う JSON 互換 payload へ変換します。"""
         return {
             "schema_version": INQUIRY_CONDITION_SCHEMA_VERSION,
+            "language_pack_hash": self.language_pack_hash,
             "process_name": QUERY_UNDERSTANDING_PROCESS_NAME,
             "nlu_tasks": list(QUERY_UNDERSTANDING_TASKS),
             "original_question": self.original_question,
@@ -330,7 +325,6 @@ class InquiryConditionParse:
             "requires_visual_evidence": self.requires_visual_evidence,
             "requires_condition_answer": self.requires_condition_answer,
             "search_terms": list(self.search_terms),
-            "retrieval_queries": list(self.retrieval_queries),
             "active_profiles": list(self.active_profiles),
             "metadata_filter": self.metadata_filter.to_payload(),
         }
@@ -406,8 +400,6 @@ def _display_profiles(values: Sequence[str]) -> list[str]:
 def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     """質問文から問い合わせ profile、channel、制約語を抽出します。"""
     original = _clean_text(question)
-    if not current_profile().japanese_inquiry_rules:
-        return InquiryConditionParse(original_question=original, business_domains=tuple(_question_business_domains(original)))
     comparable = _comparable(original)
     business_domains = _question_business_domains(original)
     document_kinds = _match_patterns(original, _document_kind_patterns())
@@ -420,6 +412,9 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     parameter_refs = _parameter_refs(original)
     date_terms = _ordered_unique(match.group(0) for match in _date_pattern().finditer(original))
     decision_types = _match_patterns(original, cues.decisions)
+    if "reason" not in decision_types and cause_noun_targeted(original):
+        # 「原因」「理由」の名詞は、問う形の的のときだけ理由の判断にする（「理由は何文字以上」は項目の名前。#3491）。
+        decision_types = [kind for kind in DECISION_TYPES if kind in {*decision_types, "reason"}]
     requires_file_data_confirmation = _contains_any(comparable, _file_data_terms())
     requires_external_context = _contains_any(comparable, _external_context_terms())
     requires_visual_evidence = _contains_any(comparable, cues.visual_terms)
@@ -448,7 +443,6 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
         requires_condition_answer=requires_condition_answer,
         requires_visual_evidence=requires_visual_evidence,
     )
-    retrieval_queries = _retrieval_queries(original, search_terms, active_profiles)
     metadata_filter = InquiryMetadataFilter(
         source_file_terms=tuple(source_file_terms),
         metadata_terms=tuple([*business_domains, *document_kinds]),
@@ -456,6 +450,7 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
     )
     return InquiryConditionParse(
         original_question=original,
+        language_pack_hash=current_pack().hash,
         business_domains=tuple(business_domains),
         document_kinds=tuple(document_kinds),
         screen_terms=tuple(screen_terms),
@@ -471,39 +466,20 @@ def parse_inquiry_conditions(question: Any) -> InquiryConditionParse:
         requires_visual_evidence=requires_visual_evidence,
         requires_condition_answer=requires_condition_answer,
         search_terms=tuple(search_terms),
-        retrieval_queries=tuple(retrieval_queries),
         active_profiles=tuple(active_profiles),
         metadata_filter=metadata_filter,
     )
 
 
 def _question_business_domains(question: str) -> list[str]:
-    """質問が名指しした業務名。
-
-    呼び出し元が業務名の照合（`AnswerDependencies.business_domains`）を注入していればそれだけを使い、
-    domain profile の `business_patterns` は使わない（本製品は検索範囲の文書の大分類の一覧から照合する）。
-    注入が無いとき（SDK・単体の呼び出し）は従来どおり `business_patterns` で推定する。
-    """
+    """呼び出し元が検索範囲の保存済み大分類から照合した業務名だけを使う。"""
     from rag_engine.dependencies import question_business_domains
 
     injected = question_business_domains(question)
     if injected is not None:
         # 値は候補の大分類と完全一致で比べる（`_same_business_records`）ため、表記を変えずに重複だけ除く。
         return list(dict.fromkeys(str(value) for value in injected if str(value).strip()))
-    return _match_patterns(question, current_profile().business_patterns)
-
-
-def inquiry_retrieval_queries(
-    original_question: str,
-    runtime_expanded_question: str,
-    expansion_queries: Sequence[str],
-    conditions: InquiryConditionParse | None,
-) -> tuple[str, ...]:
-    """問い合わせ条件を反映した追加 retrieval query を生成します。"""
-    values = [original_question, runtime_expanded_question, *expansion_queries]
-    if conditions is not None:
-        values.extend(conditions.retrieval_queries)
-    return tuple(_ordered_unique(_clean_text(value) for value in values if _clean_text(value)))
+    return []
 
 
 def build_inquiry_chunk_metadata(
@@ -516,16 +492,11 @@ def build_inquiry_chunk_metadata(
     page_end: int,
 ) -> dict[str, Any]:
     """検索 filter と profile channel に必要な chunk metadata だけを構築します。"""
-    if not current_profile().japanese_inquiry_rules:
-        return {}
     combined = _clean_text("\n".join([source_file_name, retrieval_text, text]))
-    business_domains = _match_patterns(combined, current_profile().business_patterns)
     document_kinds = _match_patterns(combined, _document_kind_patterns())
     active_profiles = _active_chunk_profiles(combined, source_categories)
     # 版は chunk metadata の top（schema_version）と chunks.json の contracts が持つ。ここには入れない (#814)。
     metadata: dict[str, Any] = {}
-    if business_domains:
-        metadata["business_domains"] = business_domains
     if document_kinds:
         metadata["document_kinds"] = document_kinds
     if active_profiles:
@@ -647,7 +618,6 @@ def _search_terms(
     date_terms: Sequence[str],
 ) -> list[str]:
     terms: list[str] = []
-    normalized = _comparable(text)
     for source in (
         _cues().term.findall(text),
         business_domains,
@@ -666,11 +636,6 @@ def _search_terms(
         _append_unique(terms, ref.get("value", ""))
         joined = f"{ref.get('name', '')} {ref.get('value', '')}".strip()
         _append_unique(terms, joined)
-    for trigger, expansions in current_profile().aliases:
-        if _comparable(trigger) in normalized:
-            _append_unique(terms, trigger)
-            for expansion in expansions:
-                _append_unique(terms, expansion)
     return sorted([term for term in terms if len(_comparable(term)) >= 2], key=lambda item: (-len(_comparable(item)), item))
 
 
@@ -689,21 +654,6 @@ def _active_profiles(
     if requires_file_data_confirmation:
         profiles.append(FILE_DATA_PROFILE)
     return _ordered_unique(profiles)
-
-
-def _retrieval_queries(original: str, search_terms: Sequence[str], active_profiles: Sequence[str]) -> list[str]:
-    queries: list[str] = []
-    high_value_terms = [term for term in search_terms if len(_comparable(term)) >= 2][:12]
-    if high_value_terms:
-        queries.append(" ".join(high_value_terms[:8]))
-    for profile_id in active_profiles:
-        profile = _PROFILE_BY_ID.get(profile_id)
-        if profile is None:
-            continue
-        overlap = [term for term in high_value_terms if _comparable(term) in {_comparable(t) for t in _trigger_terms(profile)}]
-        if overlap:
-            queries.append(" ".join(overlap + high_value_terms[:6]))
-    return [query for query in _ordered_unique(queries) if _comparable(query) != _comparable(original)]
 
 
 def _page_numbers(text: str) -> tuple[int, ...]:

@@ -43,6 +43,27 @@ def test_csv_to_jsonl_records_with_header_and_lines() -> None:
     ]
     assert [(row.location.row_start, row.location.row_end) for row in rows] == [(2, 2), (3, 3)]
     assert [item.position for item in rows[0].fields] == [1, 2]
+    # 表頭のセルの文字（根拠のセルの表頭。#3262）。
+    assert document.document.header == ["name", "age"]
+
+
+def test_csv_to_jsonl_numbers_records_like_rfc_7111() -> None:
+    """記録の番号は RFC 7111 の行（表頭の記録が 1、空の行も 1 記録）、物理行は別に持つ（#3262）。"""
+    document = _document(b'h1,h2\n"a\nb",1\n\nc,2\n')
+    rows = _rows(document)
+    assert [
+        (row.location.record, row.location.row_start, row.location.row_end) for row in rows
+    ] == [
+        (2, 2, 3),
+        (4, 5, 5),
+    ]
+
+
+def test_csv_to_jsonl_keeps_the_header_text_before_filling_names() -> None:
+    """空・重複の列名は補うが、表頭のセルの文字は原本のまま残す（#3262）。"""
+    document = _document(b"a,,a\n1,2,3\n")
+    assert [item.name for item in _rows(document)[0].fields] == ["a", "col_2", "a_1"]
+    assert document.document.header == ["a", "", "a"]
 
 
 def test_csv_to_jsonl_is_valid_json_lines() -> None:

@@ -200,7 +200,7 @@ platform の `docs/backend-standard.md`「製品間の連携（MCP とサービ�
   判定する（`tools/list` は利用者が使えるツールだけを返す）。
 - 利用者: ツールは Run の利用者として実行する。DeepSec の actor も同じ認可経路（`enter_actor`）で入り、
   ジョブの `actor_user_uuid` に残るので、SELECT の行はその利用者の Data Grant で絞られる。
-- `NL2SQL_DEBUG=true` かつ `NL2SQL_ENVIRONMENT=local` のローカル実行モードは、token なしで全権限の
+- `PLATFORM_AUTH_MODE=local` かつ `PLATFORM_ENVIRONMENT=local` のローカル実行モードは、token なしで全権限の
   ローカル DEBUG 管理者として通す（他の API と同じ）。
 
 | ツール | 必要な権限 | 画面の route と同じ判定 |
@@ -293,7 +293,7 @@ versioned legacy reference であり、runtime object 名としては使用し�
 本番では少なくとも次を設定する（`NL2SQL_*` は `backend/.env`、`PLATFORM_*` は共通 `.env`。#211）。
 
 ```dotenv
-NL2SQL_APP_AUTH_ENABLED=true
+PLATFORM_AUTH_MODE=authenticated
 PLATFORM_AUTH_COOKIE_SECURE=true
 PLATFORM_AUTH_IDLE_TIMEOUT_MINUTES=60
 PLATFORM_AUTH_ABSOLUTE_TIMEOUT_HOURS=12

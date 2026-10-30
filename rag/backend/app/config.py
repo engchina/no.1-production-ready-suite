@@ -31,6 +31,7 @@ from pr_backend_core.chat_history_window import (
 )
 from pr_backend_core.config import (
     PlatformEnvSourcesMixin,
+    RuntimeSettings,
     TimezoneSettings,
     TracingSettings,
     platform_env_file,
@@ -61,6 +62,9 @@ from pr_system_settings.model import (
     enterprise_ai_default_model_id as enterprise_ai_default_model_id,
 )
 from pr_system_settings.model import (
+    enterprise_ai_judge_model_id as enterprise_ai_judge_model_id,
+)
+from pr_system_settings.model import (
     enterprise_ai_max_input_tokens as enterprise_ai_max_input_tokens,
 )
 from pr_system_settings.model import enterprise_ai_model_catalog as enterprise_ai_model_catalog
@@ -70,7 +74,6 @@ from pr_system_settings.model import (
 from pr_system_settings.model import (
     enterprise_ai_reasoning_effort_to_send as enterprise_ai_reasoning_effort_to_send,
 )
-from pr_system_settings.model import enterprise_ai_seed as enterprise_ai_seed
 from pr_system_settings.model import enterprise_ai_vision_model_id as enterprise_ai_vision_model_id
 from pydantic import (
     BaseModel,
@@ -96,8 +99,8 @@ from rag_pipeline_core.evaluation import LEGACY_EVALUATION_SUITES
 
 from app.parser_settings_store import ParserSettingsStore
 from app.rag.language_pack_store import LANGUAGE_PACK_STORE
+from app.search_defaults import SEARCH_TOP_K_DEFAULT, SEARCH_TOP_K_MAX
 
-AuthMode = Literal["local", "production"]
 UploadStorageBackend = Literal["local", "oci"]
 AuditPersistence = Literal["log", "oracle", "both"]
 ParserAdapterBackend = Literal[
@@ -307,12 +310,12 @@ EvaluationSuite = Literal[
     "standard",
     "strict",
 ]
-# 関係情報の構築(#621)。off = 構築しない、entities = 文書と章・節の見出しのつながりを構築する。
+# 文書構造索引の構築(#621)。off = 構築しない、entities = 文書と章・節の見出しのつながりを構築する。
 GraphProfile = Literal[
     "off",
     "entities",
 ]
-# #621 で削除した関係情報の構築の値。backend/.env に残っていると起動を止めて書き換えを促す。
+# #621 で削除した文書構造索引の構築の値。backend/.env に残っていると起動を止めて書き換えを促す。
 REMOVED_GRAPH_PROFILES = frozenset({"full"})
 EnterpriseAiVlmInputMode = Literal["files_api", "inline_image"]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -330,9 +333,9 @@ DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
 
 # 検索・回答プロファイル（と品質評価の rag_overrides）の値だけで決める Settings の項目（#1388）。
 # プロファイルの値は Settings に重ねて回答の検索へ渡す（``compose_query_settings``）ため Settings の
-# 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定。拡張は on。
-# #1402）。止めるときはプロファイルの開閉を off にする（再起動は要らない）。値の範囲は Settings の
-# 検証で持つ。
+# 項目として持つが、環境変数 / .env からは読まない（既定はコードの Settings の既定）。値の範囲は
+# Settings の検証で持つ。プロファイルで上書きできない項目は ``PROFILE_GLOBAL_QUERY_FIELDS``
+# （``app/rag/search_answer_profile_config.py``）が正本。
 PROFILE_ONLY_SETTING_FIELDS = frozenset(
     {
         # rerank の後、起点に採る同じ文書の chunk の上限（#2167）。既定 5。
@@ -464,7 +467,12 @@ def resolve_ingestion_queue_concurrency(
 
 
 class Settings(
-    PlatformEnvSourcesMixin, ModelSecretStateMixin, TracingSettings, TimezoneSettings, BaseSettings
+    PlatformEnvSourcesMixin,
+    RuntimeSettings,
+    ModelSecretStateMixin,
+    TracingSettings,
+    TimezoneSettings,
+    BaseSettings,
 ):
     """環境変数ベースの設定。旧名（属性名と同じ環境変数名）は読まない（#211）。"""
 
@@ -499,23 +507,14 @@ class Settings(
 
     # --- アプリ ---
     app_name: str = "production-ready-rag"
-    environment: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     app_version: str = Field(default="0.1.0")
-    auth_mode: AuthMode = Field(
-        default="local",
-        description=(
-            "local は全権限・対象範囲の制限なしのローカル利用者として動かす（ログイン不要）。"
-            "production は共通認証（PLATFORM_* のユーザー・ロール）のログインを必須にする。"
-        ),
-    )
     # --- 共通認証（platform の pr_system_settings.auth。#214）---
     # 構成管理者・認証ポリシー・ログインの Cookie 名は共通 `.env` の PLATFORM_ADMIN_* /
     # PLATFORM_AUTH_*（#211）。Cookie は 3 製品で共有し、1 回のログインで全製品を使える（#1565）。
     service_name: str = Field(default="production-ready-rag")
     app_admin_login_user_id: str = Field(default="")
     app_admin_login_user_password: str = Field(default="")
-    app_auth_cookie_secure: bool = Field(default=False)
     app_auth_session_cookie_name: str = Field(default=DEFAULT_SESSION_COOKIE_NAME)
     app_auth_csrf_cookie_name: str = Field(default=DEFAULT_CSRF_COOKIE_NAME)
     app_auth_idle_timeout_minutes: int = Field(default=60)
@@ -595,6 +594,10 @@ class Settings(
     # で解決する。
     oci_enterprise_ai_default_text_model: str = Field(default="")
     oci_enterprise_ai_default_vision_model: str = Field(default="")
+    # 品質評価の判定のモデル（#3574。空 = 既定のテキストモデル、
+    # same_as_answer = 回答と同じモデル）。
+    # 判定に使う ID は enterprise_ai_judge_model_id で解決する。
+    oci_enterprise_ai_default_judge_model: str = Field(default="")
     oci_enterprise_ai_llm_path: str = Field(default="/responses")
     oci_enterprise_ai_vlm_path: str = Field(default="/responses")
     oci_enterprise_ai_vlm_input_mode: EnterpriseAiVlmInputMode = Field(
@@ -638,9 +641,6 @@ class Settings(
     oci_enterprise_ai_max_retries: int = Field(default=3, ge=0, le=5)
     # 出力の上限は登録モデルごとの `max_output_tokens`(#1719。platform の
     # `enterprise_ai_output_token_budget`)。共通の LLM / VLM の出力の上限は持たない。
-    # LLM / VLM の呼び出しの seed（#1434。共通のモデル設定）。
-    # 解釈は pr_system_settings の enterprise_ai_seed。
-    oci_enterprise_ai_seed: int = Field(default=42, ge=0, le=2_147_483_647)
     # チャットで同じ会話の前のターンを LLM に渡す予算（共通の設定。#1818）。
     # 解釈は pr_backend_core.chat_history（新しいターンから詰め、古いターンを落とす）。
     chat_history_max_turns: int = Field(
@@ -1028,7 +1028,7 @@ class Settings(
         ),
     )
     rag_chunk_context_header_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "embedding 入力の先頭へ「文書名 > section_path」の文脈ヘッダを前置する"
             "(Anthropic Contextual Retrieval の決定論版)。保存 chunk 本文・引用表示は変えない。"
@@ -1061,8 +1061,8 @@ class Settings(
             "取込の索引の保存の後に、chunk から実体（表の行の名前・属性の値、本文の定義の形・"
             "言及）と「実体と chunk の関連」を決定的に抜き出し、Oracle の rag_entities / "
             "rag_entity_aliases / rag_entity_chunks に保存する。既定 OFF。全体の設定と文書"
-            "レシピの「名称・別名の索引」で構築を選ぶ。LLM は使わない。回答の検索は、"
-            "この表との SQL の join で関連する chunk を 1 段だけ足す（検索・回答プロファイルの"
+            "レシピの「実体・別名索引」で構築を選ぶ。LLM は使わない。回答の検索は、"
+            "この表との SQL の join で関連する chunk を 1 段だけ足す（検索方法の全体設定の"
             " entity_expansion_enabled。#1388）。"
         ),
     )
@@ -1086,7 +1086,7 @@ class Settings(
         description=(
             "回答の検索で、質問と上位の候補の chunk の実体から、実体の表との SQL の join で"
             "関連する chunk を 1 段だけ足す（#1362）。検索方法の全体設定で選ぶ（既定 OFF）。"
-            "実体は文書レシピで実体の抽出"
+            "実体は文書レシピで実体・別名索引の構築"
             "（rag_entity_index_enabled）を選んだ文書にだけある。LLM の呼び出しは増えない。"
         ),
     )
@@ -1102,11 +1102,11 @@ class Settings(
     rag_graph_expansion_enabled: bool = Field(
         default=False,
         description=(
-            "回答の検索で、関係情報の構築（rag_graph_profile=entities）で作った章節・表 / 図の"
+            "回答の検索で、文書構造索引の構築（rag_graph_profile=entities）で作った章節・表 / 図の"
             "見出しの entity と chunk の対応から候補を足す（#2055。既定 OFF。LLM の呼び出しは"
             "増えない）。検索の上位の chunk と同じ狭い章節・表の chunk と、質問に見出しの語が"
-            "含まれる章節の chunk を足す。検索方法の画面と検索・回答プロファイルの"
-            " graph_expansion_enabled で選ぶ。関係情報の無い文書では何もしない。"
+            "含まれる章節の chunk を足す。検索方法の画面で選ぶ（全体設定だけで決め、"
+            "検索・回答プロファイルでは上書きしない）。文書構造索引の無い文書では何もしない。"
         ),
     )
     rag_graph_expansion_max_chunks: int = Field(
@@ -1114,8 +1114,8 @@ class Settings(
         ge=1,
         le=20,
         description=(
-            "関係情報で 1 回の検索に足す chunk 数の上限（#2055）。検索・回答プロファイルの"
-            " graph_expansion_max_chunks で上書きできる。"
+            "文書構造による検索拡張で 1 回の検索に足す chunk 数の上限（#2055）。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_section_expansion_enabled: bool = Field(
@@ -1241,12 +1241,32 @@ class Settings(
         le=1000,
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
+    rag_retrieval_query_limit: int = Field(
+        default=600,
+        ge=1,
+        le=2000,
+        description="検索文ごとに各検索経路から取得する上限。起点数・多様化の有無とは独立。",
+    )
+    rag_retrieval_candidate_limit: int = Field(
+        default=150,
+        ge=1,
+        le=2000,
+        description="融合順位から選ぶ基本候補の上限。回答起点数 top_k とは独立。",
+    )
+    rag_rerank_candidate_limit: int = Field(
+        default=0,
+        ge=0,
+        le=2000,
+        description="明示参照・多様化・各種拡張を含む精排入力の合計上限。0は有効な各段の既存上限の合計から互換上限を導出。",
+    )
     rag_candidate_diversity_depth: int = Field(
         default=600,
         ge=0,
         le=2000,
         description=(
-            "回答の検索で検索文ごとに読む件数(0 は候補の多様化をしない)。融合の上位(候補の上限)"
+            "多様化を探す融合順位の深さ(0 は無効)。"
+            "DB の取得上限は rag_retrieval_query_limit で独立。"
+            "融合の上位(候補の上限)"
             "は変えず、その外から文書ごとの上位を rerank の候補に足す。1 つの文書が融合の上位を"
             "占めても、別の文書の根拠が rerank の判断を受ける(#2228)。"
         ),
@@ -1300,13 +1320,6 @@ class Settings(
     )
     # 回答は rag_poc の根拠付き回答(質問ルーティング / CRAG / 生成 + 監査ラウンド)だけ
     # にした(#594)。回答エンジンの選択(旧 RAG_ANSWER_ENGINE)は読まない。
-    rag_answer_vision_enabled: bool = Field(
-        default=True,
-        description=(
-            "画像を見て答える必要がある質問では、根拠の図を切り出して既定の Vision モデルへ添付して"
-            "回答する(それ以外は既定のテキストモデル。Vision モデルが未設定なら添付しない。#649)。"
-        ),
-    )
     rag_history_rewrite_enabled: bool = Field(
         default=True,
         description=(
@@ -1314,27 +1327,40 @@ class Settings(
             "単独の質問へ書き換える(履歴がある場合だけ LLM 呼び出しが 1 回増える)。"
         ),
     )
+    rag_search_top_k_default: int = Field(
+        default=SEARCH_TOP_K_DEFAULT,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        description="検索・チャット・MCP で top_k を省略したときの基準件数。",
+    )
     rag_query_strategy: QueryStrategy = Field(
         default="simple_retrieval",
         description="質問の拡張(query rewriting / expa"
-        "nsion)の方式。検索・回答プロファイルで上書きできる。",
+        "nsion)の方式。全体設定だけで決め、検索・回答プロファイルでは上書きしない。",
     )
     rag_answer_flow: AnswerFlow = Field(
         default="standard_rag",
         description=(
-            "回答の生成方式。crag(CRAG)は検索結果を評価して必要なら補正検索し、"
-            "standard_rag(標準 RAG)は補正しない。"
+            "回答の生成方式。standard_rag(標準 RAG。既定)は補正しない。"
+            "crag(CRAG)は検索結果を評価して必要なら補正検索する"
+            "(AI の呼び出しと時間が増えるので明示して選ぶ。#3509)。"
         ),
     )
     rag_neighbor_child_count: int = Field(
         default=3,
         ge=0,
         le=20,
-        description="回答で、根拠の child の前後から context へ足す近傍 child 数。",
+        description=(
+            "回答で、根拠の child の前後から context へ足す近傍 child 数。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
+        ),
     )
     rag_rerank_enabled: bool = Field(
         default=True,
-        description="回答で、検索候補を OCI Generative AI の rerank で並べ替える。",
+        description=(
+            "回答で、検索候補を OCI Generative AI の rerank で並べ替える。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
+        ),
     )
     rag_screen_linking_enabled: bool = Field(
         default=False,
@@ -1342,7 +1368,7 @@ class Settings(
             "回答で、検索範囲の画面目録(文書ごとの番号付きの見出し)から質問を解決する"
             "操作画面を LLM で選び、その画面の根拠を検索候補に加える"
             "(LLM の呼び出しが 1 回増える。#554)。"
-            "検索・回答プロファイルで上書きできる。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_article_catalog_enabled: bool = Field(
@@ -1355,19 +1381,23 @@ class Settings(
         ),
     )
     rag_article_catalog_max_documents: int = Field(
-        default=8,
+        default=16,
         ge=0,
-        le=10,
+        le=32,
         description=(
             "条の目録を読む文書の上限(検索の候補の文書の、候補の順位の逆数の合計の大きい順。"
-            "#2254・#2261)。0 は選ばない。"
+            "#2254・#2261)。0 は選ばない。既定は評価で必要だった文書の順位(最大 8)に"
+            "余裕を持たせた値(#3518)。文書ごとに LLM を 2 回呼ぶ。"
         ),
     )
     rag_article_catalog_max_articles: int = Field(
-        default=12,
+        default=8,
         ge=0,
         le=20,
-        description="条の目録から 1 つの文書で選ぶ条の上限(#2254)。",
+        description=(
+            "条の目録から 1 つの文書で選ぶ条の上限(#2254)。既定は評価で根拠の条が選ばれた"
+            "位置(最大 6)に余裕を持たせた値(#3518)。"
+        ),
     )
     rag_article_catalog_context_records: int = Field(
         default=6,
@@ -1410,8 +1440,18 @@ class Settings(
         ge=0,
         le=20,
         description=(
-            "条の選択の 2 段目で、1 段目で選んだ条と同じ章の条を本文の書き出しつきで見せ、"
-            "文書ごとに足させる条の数の上限。0 は 2 段目を行わない。"
+            "条の選択の 2 段目で、1 段目で選んだ条と同じ章の条と、選んだ条を書き出しで"
+            "名指しする別の章の条を本文の書き出しつきで見せ、文書ごとに足させる条の数の上限。"
+            "0 は 2 段目を行わない。"
+        ),
+    )
+    rag_article_catalog_review_enabled: bool = Field(
+        default=False,
+        description=(
+            "条の目録で選んだ条を回答の生成が引かなかったとき、条ごとに原文が支える説明を"
+            "別の LLM の呼び出しで検討し、その説明の出典に足す(#3526)。"
+            "足した出典も原文照合と条の出典の監査に掛ける。評価で確かめた説明に根拠の無い条の"
+            "出典が付いたので既定は無効。無効なら検討の呼び出しをしない。"
         ),
     )
     rag_article_catalog_refine_candidates: int = Field(
@@ -1419,11 +1459,14 @@ class Settings(
         ge=0,
         le=200,
         description=(
-            "条の選択の 2 段目で見せる同じ章の条の数の上限(書き出しつき)。0 は 2 段目を行わない。"
+            "条の選択の 2 段目で見せる条の数の上限(書き出しつき。同じ章の条と、選んだ条を名指しする"
+            "別の章の条の合計。同じ章の条に 3 分の 2、名指しの条に 3 分の 1 を割り当てる。"
+            "名指しの条は 3 分の 1 を超えず、名指しの条の余りは同じ章の条が使う)。"
+            "0 は 2 段目を行わない。"
         ),
     )
     rag_article_catalog_output_token_cap: int = Field(
-        default=4096,
+        default=8192,
         ge=0,
         le=32768,
         description=(
@@ -1434,13 +1477,41 @@ class Settings(
         ),
     )
     rag_article_catalog_call_timeout_seconds: float = Field(
-        default=90.0,
+        default=180.0,
         ge=0.0,
         le=600.0,
         description=(
             "条の選択の LLM の呼び出し 1 回の時間の上限(秒)。並行の呼び出しをすべて待つので、"
             "1 つの遅い呼び出しで段全体が止まらないようにする。"
             "超えた文書は選ばずに続ける。0 は抑えない。"
+        ),
+    )
+    rag_article_catalog_cache_dir: str = Field(
+        default="",
+        max_length=1024,
+        description=(
+            "条の選択と範囲の文書の選択の結果を、process をまたいで使う記録の置き場所(#3507)。"
+            "空は PLATFORM_LOCAL_STORAGE_DIR の下の cache/rag-article-catalog。"
+            "同じ Compute の backend の worker が同じ場所を読み書きする。"
+        ),
+    )
+    rag_article_catalog_cache_ttl_seconds: int = Field(
+        default=86400,
+        ge=0,
+        le=30 * 86400,
+        description=(
+            "条の選択の記録の有効期間(秒)。key は索引の版(chunk_set)・目録の内容・質問・"
+            "モデル・選択の設定で、同じ入力の LLM の結果だけを使い回す。"
+            "0 は process をまたぐ記録を使わない(process の中の記録だけ)。"
+        ),
+    )
+    rag_article_catalog_cache_max_entries: int = Field(
+        default=4096,
+        ge=0,
+        le=100_000,
+        description=(
+            "条の選択の記録の件数の上限(1 件は文書 1 つの選択か範囲の文書の選択 1 回)。"
+            "超えたら古い記録から消す。0 は process をまたぐ記録を使わない。"
         ),
     )
     rag_answer_validation_max_input_bytes: int = Field(
@@ -1491,7 +1562,7 @@ class Settings(
         description=(
             "回答の生成の前に、質問の要求ごとに根拠があるかを語の一致で確かめ(LLM は呼ばない)、"
             "根拠の無い要求だけを要求の文で 1 回ずつ検索し直して回答の材料に足す(#1279)。"
-            "検索・回答プロファイルで上書きできる。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_request_coverage_max_queries: int = Field(
@@ -1535,7 +1606,7 @@ class Settings(
         description=(
             "1 回の回答で、主の検索の後に足す検索(業務ガイドの手順ごとの検索・小問ごとの検索・"
             "根拠の無い要求の再検索)の回数の合計の上限(#2395)。種類ごとの上限はこの枠の中で数え、"
-            "手順ごとの検索・小問ごとの検索・再検索の順に枠の残りから取る。"
+            "必須のガイド参照の取得分を先に確保し、その他の追加検索は残りから取る。"
         ),
     )
     rag_guide_step_retrieval_enabled: bool = Field(
@@ -1543,7 +1614,7 @@ class Settings(
         description=(
             "照合した業務ガイドの手順(分岐で残った手順)ごとに「質問 + 手順の検索の手がかり」で"
             "検索し、手順が参照する資料の頁の根拠を回答の材料に入れる(#2395)。LLM は呼ばない"
-            "(検索が手順ごとに増える)。検索・回答プロファイルで上書きできる。"
+            "(検索が手順ごとに増える)。全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_guide_step_max_queries: int = Field(
@@ -1551,9 +1622,10 @@ class Settings(
         ge=0,
         le=10,
         description=(
-            "業務ガイドの手順ごとの検索の回数の上限(参照の頁に絞った検索を含む。#2395)。"
+            "必須のガイド参照を取得した後に行う補助検索・任意手順の検索の回数の上限。"
+            "0 でも必須参照の取得は行う(#3795)。"
             "追加の検索の枠(RAG_EXTRA_RETRIEVAL_MAX_QUERIES)の残りも超えない。"
-            "検索・回答プロファイルで上書きできる。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_guide_step_chunks_per_step: int = Field(
@@ -1568,7 +1640,8 @@ class Settings(
         le=12,
         description=(
             "業務ガイドの手順が参照する資料の頁から、検索の順位に関係なく回答の材料に入れる根拠"
-            "(親 chunk)の数の上限(#2395)。"
+            "(親 chunk)の追加数の上限。必須の取得対象ごとの最低1件は別に確保し、"
+            "全体の本文予算は増やさない(#3795)。"
         ),
     )
     rag_guide_step_deadline_seconds: float = Field(
@@ -1578,6 +1651,7 @@ class Settings(
         description=(
             "業務ガイドの手順ごとの検索の期限(秒。既定 60。#2826)。"
             "過ぎたら次の検索を始めない(#2395)。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_strategy_reasoning_effort: ReasoningEffortOverride = Field(
@@ -1658,6 +1732,14 @@ class Settings(
             "0 は作り直さず、1 組目の検査と監査の結果で確定する。"
         ),
     )
+    rag_answer_evidence_refinement_mode: Literal["legacy", "cited_only", "cited_required"] = Field(
+        default="legacy",
+        description=(
+            "生成後の根拠の選別。legacy は既存方式を維持し、cited_only は引用済みの原文だけ、"
+            "cited_required は引用済みの原文と必須の補完根拠へ絞る。明示的に選んだ場合だけ、"
+            "既存の是正回数・時間予算内で最大 1 回再生成する。監査・補検索は自動で有効にしない。"
+        ),
+    )
     rag_answer_audit_mode: Literal["none", "standard", "detailed"] = Field(
         default="none",
         description=(
@@ -1717,6 +1799,8 @@ class Settings(
             "出力が同じ並びの繰り返し・空白だけで続いたら打ち切り、"
             "推論の量を下げて 1 回だけ送り直す。出力が速く続くまま出力の上限"
             "(32,768 tokens)まで書き続け、200 秒かかって未完了になった記録がある。"
+            "streaming しない呼び出しも、出力の上限で未完了の応答に同じ暴走があれば、"
+            "上限を広げずに同じ送り直しにする(#3835)。"
             "正当な長い出力(表・一覧)は行ごとに値が変わるので打ち切らない。"
         ),
     )
@@ -1759,9 +1843,10 @@ class Settings(
         description=(
             "質問に書かれた条件(「2025 年以降」「10 万円以"
             "上」など)を、検索・回答プロファイルの KB で定義した"
-            "抽出項目の条件として LLM で読み取り、検索を絞り込む(self-query。LLM の呼び出しが"
-            " 1 回増える。読み取った条件で 0 件なら条件を外して検索し直す。#652)。"
-            "検索・回答プロファイルで上書きできる。"
+            "抽出項目の条件として LLM で読み取り、検索を絞り込む"
+            "(Metadata Filter Extraction。LLM の呼び出しが 1 回増える。"
+            "読み取った条件で 0 件なら条件を外して検索し直す。#652)。"
+            "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
     rag_filter_relaxation_max_steps: int = Field(
@@ -1785,24 +1870,6 @@ class Settings(
             "正の値にすると、回答保存時と設定変更時に期限切れを削除する。"
         ),
     )
-    rag_query_history_enabled: bool = Field(
-        default=False,
-        description=(
-            "回答に成功した質問を検索・回答プロファイル単位で保存し、よく聞かれる質問を候補に出す"
-            "(rag_poc の QUERY_HISTORY_ENABLED と同じく既定は無効)。"
-        ),
-    )
-    rag_query_history_retention_days: int = Field(
-        default=0,
-        ge=0,
-        le=3650,
-        description=(
-            "質問履歴の保持日数。既定の 0 は無期限で、自動では削除しない(#3235)。"
-            "正の値にすると、記録時と設定変更時に期限切れを削除し、候補にも使わない。"
-        ),
-    )
-    rag_query_history_min_count: int = Field(default=3, ge=1, le=1000)
-    rag_query_history_suggestion_limit: int = Field(default=5, ge=1, le=20)
     rag_support_guide_max_published_revisions: int = Field(
         default=5,
         ge=1,
@@ -1845,24 +1912,11 @@ class Settings(
         le=10,
         description="上位の 2 つの業務ガイドの点の差がこの値以下なら「近い」とみなす（#2398）。",
     )
-    rag_query_history_blocklist: list[str] = Field(
-        default_factory=list,
-        description="質問履歴に記録・提示しない語(部分一致)。env は JSON 配列で指定する。",
-    )
-    rag_answer_profile: Literal["generic", "legacy"] = Field(
-        default="legacy",
-        description=(
-            "回答フローの業務 profile。回答フローは rag_engine の current_profile()"
-            "(runtime なしの既定 = legacy: 日本語問い合わせ規則を有効、業務分類・別名は"
-            " RAG_ENGINE_DOMAIN_PROFILE_FILE の JSON)で動き、rag_poc と同じ挙動になる。"
-            "既定はこの実際の挙動に合わせて legacy(#300)。generic は既存の .env との互換のため"
-            "受け付けるが、回答フローには反映されない。"
-        ),
-    )
+
     rag_runtime_knowledge: dict[str, object] = Field(
         default_factory=dict,
         description=(
-            "リクエスト単位で検索・回答プロファイルから解決する用語・ルール"
+            "リクエスト単位で検索・回答プロファイルから解決する用語・同義語と回答ルール"
             "(rag_poc runtime knowledge payload)。"
             "回答フローだけが使う。"
         ),
@@ -1934,6 +1988,20 @@ class Settings(
         ),
     )
     rag_rerank_cache_max_entries: int = Field(default=1024, ge=0, le=100000)
+    rag_evidence_budget_chars: int = Field(
+        default=80000,
+        ge=1000,
+        le=500000,
+        description=(
+            "回答の生成に渡す根拠の原文の文字予算（文字。#3776）。"
+            "既定 80000 は rag_engine の既定と同じ。"
+            "根拠の本文・前置き・出典情報・描画の書式をこの予算内に収める。"
+            "全体設定だけで決め、検索・回答プロファイル・KB・文書レシピでは上書きしない。"
+            "章節の拡張（rag_section_expansion_input_token_percent）は読む章節を"
+            "入力 token の上限で別に数え、生成時はこの文字上限とモデルの入力予算の両方に収める。"
+            "使った予算と送った根拠の文字数は回答の診断の evidence_budget に残る。"
+        ),
+    )
     rag_answer_timeout_seconds: float = Field(
         default=600.0,
         gt=0.0,
@@ -2134,8 +2202,8 @@ class Settings(
     rag_graph_profile: GraphProfile = Field(
         default="off",
         description=(
-            "関係情報の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
-            "構築する(LLM は使わない)。ナレッジベースの関係情報グラフで見られ、"
+            "文書構造索引の構築。off(既定)は構築しない、entities は文書と章・節の見出しのつながりを"
+            "構築する(LLM は使わない)。ナレッジベースの文書構造グラフで見られ、"
             "rag_graph_expansion_enabled を ON にすると回答の検索の候補を広げるのにも使う(#2055)。"
         ),
     )
@@ -2406,7 +2474,7 @@ class Settings(
         description=(
             "サービス管理画面からの起動/停止(systemd の unit の操作)を有効化する。"
             "OFF(既定)は稼働状態の可視化のみで、制御 API は 409(control_disabled)で拒否する。"
-            "dev(RAG_ENVIRONMENT が prod 以外)は自動で有効。操作は sudoers で許可した "
+            "local(PLATFORM_ENVIRONMENT=local)は自動で有効。操作は sudoers で許可した "
             "allowlist の unit の `systemctl enable --now / disable --now / restart` と "
             "`journalctl -u <unit>` だけを `sudo -n` で実行する(rag/docs/deployment.md)。"
         ),
@@ -2770,16 +2838,6 @@ class Settings(
         return self
 
     @property
-    def local_debug_enabled(self) -> bool:
-        """local mode: 全権限・対象範囲の制限なしのローカル利用者（DB セッションを作らない）。"""
-        return self.auth_mode == "local"
-
-    @property
-    def app_auth_enabled(self) -> bool:
-        """production mode: 共通認証のログインを必須にする。"""
-        return self.auth_mode == "production"
-
-    @property
     def oracle_driver_mode(self) -> str:
         """既定は Thin mode。PLATFORM_ORACLE_CLIENT_LIB_DIR を指定したときだけ Thick mode。
 
@@ -2831,7 +2889,6 @@ def get_settings() -> Settings:
     reload_env_settings_if_changed(settings)
     reload_persisted_model_settings_if_changed(settings)
     PARSER_SETTINGS_STORE.reload_if_changed(settings)
-    LANGUAGE_PACK_STORE.reload_if_changed(resolve_language_pack_file(settings))
     return settings
 
 

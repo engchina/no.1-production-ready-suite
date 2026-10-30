@@ -356,6 +356,8 @@ export interface PaginationProps {
   onPageSizeChange?: (size: number) => void;
   /** 送り方（既定 `advanced`）。 */
   mode?: PaginationMode;
+  /** 1 ページでも範囲とページ番号を出す（結果シートなど）。通常の一覧では省略する。 */
+  showSinglePage?: boolean;
   /** 取得中など、ページを移らせない間（前のページを出したまま）。 */
   disabled?: boolean;
   /** nav の aria-label（任意）。省略時は labels.ariaLabel。 */
@@ -408,6 +410,7 @@ export function Pagination({
   onPageSizeChange,
   mode = "advanced",
   disabled = false,
+  showSinglePage = false,
   ariaLabel,
   testId,
   className,
@@ -415,7 +418,7 @@ export function Pagination({
   const labels = resolveLabels(labelOverrides);
   const pages = Math.max(1, Math.floor(totalPages));
   const current = Math.min(Math.max(1, Math.floor(page)), pages);
-  const showPager = pages > 1;
+  const showPager = pages > 1 || showSinglePage;
   const showPageSize = shouldShowPageSize({
     totalPages: pages,
     total: range?.total,
@@ -693,6 +696,8 @@ export interface OffsetPaginationProps {
   /** 表示件数の選択肢（10 / 25 / 50 / 100。既定 25）。 */
   pageSizeOptions?: readonly number[];
   labels?: Partial<PaginationLabels>;
+  /** 単一ページでもページ番号と移動操作を表示する。 */
+  showSinglePage?: boolean;
   disabled?: boolean;
   ariaLabel?: string;
   testId?: string;
@@ -714,6 +719,7 @@ export function OffsetPagination({
   onPageSizeChange,
   pageSizeOptions,
   labels,
+  showSinglePage,
   disabled,
   ariaLabel,
   testId,
@@ -739,6 +745,7 @@ export function OffsetPagination({
       pageSizeOptions={pageSizeOptions}
       onPageSizeChange={onPageSizeChange}
       labels={labels}
+      showSinglePage={showSinglePage}
       disabled={disabled}
       ariaLabel={ariaLabel}
       testId={testId}

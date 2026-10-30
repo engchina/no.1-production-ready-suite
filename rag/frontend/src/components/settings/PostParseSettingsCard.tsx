@@ -33,7 +33,8 @@ type PostParseField =
   | "vision_enabled"
   | "heading_level_inference_enabled"
   | "field_extraction_enabled"
-  | "navigation_summary_enabled";
+  | "navigation_summary_enabled"
+  | "raptor_enabled";
 type PostParseForm = Record<PostParseField, boolean> & {
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（入力中の文字列。#2002）。 */
   vision_concurrency: string;
@@ -86,6 +87,12 @@ const POST_PARSE_STEPS: readonly {
     hint: "settings.parserAdapters.postParse.navigationSummary.hint",
     anchor: SETTINGS_ANCHORS.navigationSummary,
   },
+  {
+    field: "raptor_enabled",
+    label: "settings.answerPrompts.stage.raptor_summary",
+    hint: "settings.raptor.description",
+    anchor: SETTINGS_ANCHORS.raptorSummary,
+  },
 ];
 
 function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
@@ -94,6 +101,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
     heading_level_inference_enabled: settings.heading_level_inference_enabled ?? false,
     field_extraction_enabled: settings.field_extraction_enabled,
     navigation_summary_enabled: settings.navigation_summary_enabled,
+    raptor_enabled: settings.raptor_enabled ?? false,
     vision_concurrency: String(settings.vision_concurrency ?? VISION_CONCURRENCY_DEFAULT),
   };
 }
@@ -153,6 +161,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
       heading_level_inference_enabled: form.heading_level_inference_enabled,
       field_extraction_enabled: form.field_extraction_enabled,
       navigation_summary_enabled: form.navigation_summary_enabled,
+      raptor_enabled: form.raptor_enabled,
       vision_concurrency: concurrency,
     };
     save.mutate(payload, {
@@ -238,6 +247,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
       </>
     ),
     navigation_summary_enabled: <FeaturePromptDisclosure promptKey="navigation_summary" />,
+    raptor_enabled: <FeaturePromptDisclosure promptKey="raptor_summary_system" />,
   };
 
   return (
@@ -284,12 +294,15 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
                     <div className="min-w-0">
                       <h3 id={labelId} className="text-sm font-semibold text-fg">
                         {t("settings.parserAdapters.postParse.step", {
-                          index: index + (step.field === "navigation_summary_enabled" ? 2 : 1),
+                          index: index + (index >= 3 ? 2 : 1),
                           name,
                         })}
                       </h3>
                       <p id={hintId} className="mt-1 text-xs leading-relaxed text-fg-muted">
                         {t(step.hint)}
+                        {step.field === "navigation_summary_enabled" && settings.navigation_summary_max_nodes != null ? (
+                          <> {t("settings.parserAdapters.postParse.navigationSummary.limit", {count: settings.navigation_summary_max_nodes})}</>
+                        ) : null}
                       </p>
                     </div>
                     <Switch

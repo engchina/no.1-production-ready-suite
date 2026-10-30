@@ -35,6 +35,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 from ..chat_progress import ChatProgressParamValue, ChatProgressStepDetails
 from ..config.tracing import TracingSettings
+from .model_purpose import model_purpose_attributes
 from .request_context import validated_traceparent
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,13 @@ _SAFE_ATTRIBUTES = frozenset(
         "gen_ai.usage.output_tokens",
         "gen_ai.usage.cache_read.input_tokens",
         "gen_ai.usage.reasoning.output_tokens",
+        # アプリが利用量を受け取れないモデルの呼び出しの出どころ（Select AI など。`model_usage`。
+        # #3543）。
+        "pr.gen_ai.unmeasured_source",
+        "pr.gen_ai.purpose",
         "mcp.method.name",
+        # MCP の呼び出しで呼ぶツールの表示名（MCP の `title`。画面の行の名前。#3468）。
+        "pr.tool.title",
         "pr.operation.id",
         "pr.operation.status",
         "pr.attempt",
@@ -285,6 +292,31 @@ class _Capture:
 _CAPTURE: ContextVar[_Capture | None] = ContextVar("trace_capture", default=None)
 # `operation_trace` が root の span を開いている間だけ True（root の span のイベントに印を付ける）。
 _ROOT_PENDING: ContextVar[bool] = ContextVar("trace_root_pending", default=False)
+# `observe_spans` の受け口（実行の記録の有無に関わらず、範囲の中の span の知らせを受ける。#3552）。
+_OBSERVERS: ContextVar[tuple[SpanListener, ...]] = ContextVar("trace_span_observers", default=())
+
+
+def _notify_observers(observers: tuple[SpanListener, ...], update: SpanUpdate) -> None:
+    for observer in observers:
+        try:
+            observer(update)
+        except Exception as exc:
+            logger.warning("trace_span_observer_failed", extra={"error_type": type(exc).__name__})
+
+
+@contextmanager
+def observe_spans(listener: SpanListener) -> Iterator[None]:
+    """範囲の中の span の開始・表示用のデータの変更・終了を `listener` にも知らせる。
+
+    `operation_trace` の記録の中でも外でも使える（実行の記録の外の要求でも、モデルの利用量を
+    集める。#3552）。記録の listener とは別に知らせ、記録の span の上限は掛けない。中で始めた
+    task と、context を写した thread の span も知らせる。listener が失敗しても処理は止めない。
+    """
+    token = _OBSERVERS.set((*_OBSERVERS.get(), listener))
+    try:
+        yield
+    finally:
+        _OBSERVERS.reset(token)
 
 
 def _ui_provider() -> TracerProvider:
@@ -502,12 +534,22 @@ def observed_span(
     span_kind = trace.SpanKind[kind.upper()]
     sdk_span = tracer.start_span(name, kind=span_kind, start_time=start, links=list(links))
     observed = ObservedSpan(sdk_span)
-    observed.set_attributes(attributes or {})
+    observed.set_attributes(
+        {
+            **(
+                model_purpose_attributes()
+                if name in {"gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"}
+                else {}
+            ),
+            **(attributes or {}),
+        }
+    )
     if display is not None:
         observed.display = display
     parent = trace.get_current_span().get_span_context()
     finished = False
     capture = _CAPTURE.get()
+    observers = _OBSERVERS.get()
     root = capture is not None and capture.root is None and _ROOT_PENDING.get()
     if capture is not None:
         with capture.lock:
@@ -515,7 +557,7 @@ def observed_span(
     identity_at_start = sdk_span.get_span_context()
 
     def update(status: SpanUpdateStatus, end: int | None = None) -> SpanUpdate | None:
-        if capture is None or not identity_at_start.is_valid:
+        if (capture is None and not observers) or not identity_at_start.is_valid:
             return None
         return SpanUpdate(
             span_id=f"{identity_at_start.span_id:016x}",
@@ -531,11 +573,16 @@ def observed_span(
             display=observed.display,
         )
 
+    def notify(item: SpanUpdate | None) -> None:
+        if item is None:
+            return
+        if capture is not None:
+            capture.notify(item)
+        _notify_observers(observers, item)
+
     def changed() -> None:
-        if capture is not None and not observed._ended:
-            item = update("running")
-            if item is not None:
-                capture.notify(item)
+        if not observed._ended:
+            notify(update("running"))
 
     observed._changed = changed
 
@@ -564,9 +611,8 @@ def observed_span(
                     display=observed.display,
                 )
             )
-            item = update(observed.status, end)
-            if item is not None:
-                capture.notify(item)
+        if identity.is_valid:
+            notify(update(observed.status, end))
 
     observed._finish = finish
     changed()
@@ -671,40 +717,42 @@ def record_span(
     observed._ended = True
     sdk_span.end(end_time=end)
     capture = _CAPTURE.get()
+    observers = _OBSERVERS.get()
     identity = sdk_span.get_span_context()
-    if capture is None or not identity.is_valid:
+    if (capture is None and not observers) or not identity.is_valid:
         return
-    with capture.lock:
-        capture.active_count += 1
-    capture.append(
-        SpanSummary(
-            span_id=f"{identity.span_id:016x}",
-            parent_span_id=f"{parent.span_id:016x}" if parent.is_valid else None,
-            trace_id=f"{identity.trace_id:032x}",
-            operation_name=name,
-            kind=kind,
-            status=status,
-            started_at=datetime.fromtimestamp(start / 1e9, UTC),
-            finished_at=datetime.fromtimestamp(end / 1e9, UTC),
-            duration_ms=(end - start) / 1e6,
-            attributes=dict(observed.attributes),
-            display=display,
-        )
+    item = SpanUpdate(
+        span_id=f"{identity.span_id:016x}",
+        parent_span_id=f"{parent.span_id:016x}" if parent.is_valid else None,
+        trace_id=f"{identity.trace_id:032x}",
+        operation_name=name,
+        status=status,
+        started_at=datetime.fromtimestamp(start / 1e9, UTC),
+        finished_at=datetime.fromtimestamp(end / 1e9, UTC),
+        span_kind=kind,
+        attributes=dict(observed.attributes),
+        display=display,
     )
-    capture.notify(
-        SpanUpdate(
-            span_id=f"{identity.span_id:016x}",
-            parent_span_id=f"{parent.span_id:016x}" if parent.is_valid else None,
-            trace_id=f"{identity.trace_id:032x}",
-            operation_name=name,
-            status=status,
-            started_at=datetime.fromtimestamp(start / 1e9, UTC),
-            finished_at=datetime.fromtimestamp(end / 1e9, UTC),
-            span_kind=kind,
-            attributes=dict(observed.attributes),
-            display=display,
+    if capture is not None:
+        with capture.lock:
+            capture.active_count += 1
+        capture.append(
+            SpanSummary(
+                span_id=f"{identity.span_id:016x}",
+                parent_span_id=f"{parent.span_id:016x}" if parent.is_valid else None,
+                trace_id=f"{identity.trace_id:032x}",
+                operation_name=name,
+                kind=kind,
+                status=status,
+                started_at=datetime.fromtimestamp(start / 1e9, UTC),
+                finished_at=datetime.fromtimestamp(end / 1e9, UTC),
+                duration_ms=(end - start) / 1e6,
+                attributes=dict(observed.attributes),
+                display=display,
+            )
         )
-    )
+        capture.notify(item)
+    _notify_observers(observers, item)
 
 
 def finish_operation_trace(operation_id: str, *, status: str = "done") -> TraceSummary | None:

@@ -9,6 +9,7 @@ import {
 } from "./_helpers";
 import {
   installTraceRecorder,
+  mockTraceApi,
   ragSpan,
   spanProgressRecorder,
   spanStartMark,
@@ -81,7 +82,7 @@ function searchProgressStream(traceId: string) {
 const slowSearch = searchProgressStream("trace-1");
 
 /**
- * 質問の読み取りから回答の作成まで（answer の段）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
+ * 質問の条件を整理して回答を作る（answer の段）の中を、質問の理解 → 文書検索 と時間をおいて進む検索の SSE。
  * 中の各工程は段の span の子の span として届く（#3226）。
  */
 const slowSearchStream: TimedChunk[] = [
@@ -108,7 +109,18 @@ const slowSearchStream: TimedChunk[] = [
   },
   {
     afterMs: 1500,
-    text: [slowSearch.finish("search"), slowSearch.start("generate", ragSpan.step("回答の生成"))].join(""),
+    text: [
+      slowSearch.finish("search", "done", {
+        details: {
+          code: [{ label: "rerank", language: "json", text: JSON.stringify({
+            phase: "main_search", query_role: "original", question_index: 0,
+            cache_state: "hit", status: "completed", sdk_attempt_count: 0,
+            http_attempt_count: null,
+          }, null, 2) }],
+        },
+      }),
+      slowSearch.start("generate", ragSpan.step("回答の生成")),
+    ].join(""),
   },
   {
     afterMs: 600,
@@ -138,19 +150,90 @@ const slowSearchStream: TimedChunk[] = [
   },
 ];
 
+const knowledgeSearch = searchProgressStream("trace-1");
+
+/** 一致する用語の別名を検索文に加える → 回答ルールの確認 を別の工程（別の span）で進む検索の SSE（#3451）。 */
+const knowledgeStepsSearchStream: TimedChunk[] = [
+  {
+    afterMs: 0,
+    text: [
+      sse("run", { trace_id: "trace-1" }),
+      knowledgeSearch.start("root", ragSpan.root()),
+      knowledgeSearch.start("answer", ragSpan.stage("answer")),
+      knowledgeSearch.start("terms", ragSpan.step("用語・同義語の確認")),
+      knowledgeSearch.finish("terms", "done", {
+        details: {
+          fields: [
+            { label: "目的", value: "登録済みの用語・同義語を質問に当て、別名を検索に使います。" },
+            { label: "結果", value: "一致: 用語 A" },
+            { label: "有効な登録", value: "1 件（登録 1 件）" },
+            { label: "一致した用語", value: "用語 A（別名: 別名 A）" },
+            { label: "影響", value: "一致した用語の別名を補助の検索文に加えます。" },
+          ],
+        },
+      }),
+      knowledgeSearch.start("rules", ragSpan.step("回答ルールの確認")),
+    ].join(""),
+  },
+  {
+    afterMs: 1500,
+    text: [
+      knowledgeSearch.finish("rules", "done", {
+        details: {
+          fields: [
+            { label: "目的", value: "登録済みの回答ルールを質問に当て、回答の参考にします。" },
+            { label: "結果", value: "一致: 回答ルール A" },
+            { label: "有効な登録", value: "1 件（登録 2 件）" },
+            { label: "一致した回答ルール", value: "回答ルール A" },
+            { label: "影響", value: "一致した回答ルールを回答時の参考情報として渡します。" },
+          ],
+        },
+      }),
+      knowledgeSearch.finish("answer"),
+      knowledgeSearch.finish("root"),
+      knowledgeSearch.terminal("done"),
+      sse("metadata", {
+        trace_id: "trace-1",
+        elapsed_ms: 1600,
+        guardrail_warnings: [],
+        diagnostics: {
+          retrieval_strategy: "hybrid",
+          retrieval_strategy_adapter: "grounded",
+          filter_keys: [],
+          knowledge_base_count: 1,
+          config_fingerprint: "fp-1",
+          answer: { confidence: "high", needs_human_review: false },
+        },
+      }),
+      sse("delta", { text: "合成の回答です。" }),
+      sse("citations", [citation]),
+      sse("done", { trace_id: "trace-1" }),
+    ].join(""),
+  },
+];
+
 const retrievalSearch = searchProgressStream("trace-1");
 
-// 回答を作らない検索（検索結果だけ）。処理の経過は検索結果の一覧の上に出す。
+// 回答を作らない検索（検索結果だけ）。処理の経過は検索結果の一覧の上に出す。チャットと同じ流れを回答の生成の手前で
+// 止める（#3506）: 全体は evidence の段、その下に質問の理解などと「根拠検索フロー」、文書検索はその子。
 const retrievalOnlySearchStream: TimedChunk[] = [
   {
     afterMs: 0,
     text: [
       sse("run", { trace_id: "trace-1" }),
       retrievalSearch.start("root", ragSpan.root(false)),
-      retrievalSearch.start("retrieval", ragSpan.stage("retrieval")),
-      retrievalSearch.start("search", ragSpan.step("文書検索", "retrieval")),
+      retrievalSearch.start("evidence", ragSpan.stage("evidence")),
+      retrievalSearch.start("understand", ragSpan.step("質問の理解", "evidence")),
+      retrievalSearch.finish("understand"),
+      retrievalSearch.start("flow", ragSpan.step("根拠検索フロー", "evidence")),
+      retrievalSearch.start("search", ragSpan.step("文書検索", "flow")),
+      retrievalSearch.start("rerank", ragSpan.step("Rerank", "search")),
+      retrievalSearch.finish("rerank"),
       retrievalSearch.finish("search"),
-      retrievalSearch.finish("retrieval"),
+      retrievalSearch.start("coverage", ragSpan.step("要求ごとの根拠の確認", "flow")),
+      retrievalSearch.finish("coverage"),
+      retrievalSearch.finish("flow"),
+      retrievalSearch.finish("evidence"),
       retrievalSearch.finish("root"),
       retrievalSearch.terminal("done"),
       sse("metadata", {
@@ -327,10 +410,10 @@ for (const viewport of [
     const current = page.getByTestId("search-run-progress-current");
     const timer = page.getByTestId("search-run-progress-timer");
     // 処理の経過（#2096。チャットと同じ ChatProgress）: 回答の中の工程（LLM）の間も今の工程と経過時間を出す。
-    await expect(current).toContainText("質問の条件の読み取り");
+    await expect(current).toContainText("質問から対象と条件を読み取る");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(current).toContainText("文書の検索", { timeout: 4_000 });
+    await expect(current).toContainText("検索文から根拠の候補を集める", { timeout: 4_000 });
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     // 終わった工程は一覧に増えていく（既定で開く）。行は span で、実行中の span は実行中の行になる（#3226）。
     await expect(page.getByTestId("search-run-progress-running")).toContainText("処理中（1 ステップ完了）");
@@ -338,12 +421,12 @@ for (const viewport of [
     await expect(understand).toContainText(/1\.[5-9] 秒/);
     // 今の工程は実行中の span（文書検索）。
     await expect(current).toHaveAttribute("data-step-id", spanStepId("search"));
-    // 包む段（質問の読み取りから回答の作成まで）も実行中の行で、中の工程はその子（字下げ）。
+    // 包む段（質問の条件を整理して回答を作る）も実行中の行で、中の工程はその子（字下げ）。
     await expect(page.getByTestId(`search-run-progress-step-${spanStepId("answer")}`)).toContainText(
-      "質問の読み取りから回答の作成まで"
+      "質問の条件を整理して回答を作る"
     );
     // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
-    await expect(current).toContainText("文書の検索");
+    await expect(current).toContainText("検索文から根拠の候補を集める");
     // 送り直しで API への送信が多いときは送信の回数も示す（#2966）。
     await expect(understand).toContainText("LLM 1 回・送信 2 回");
     const liveToggle = page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-toggle`);
@@ -352,7 +435,7 @@ for (const viewport of [
     await expect(page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-details`)).toContainText(
       "答える要求"
     );
-    await expect(current).toContainText("文書の検索");
+    await expect(current).toContainText("検索文から根拠の候補を集める");
     // 検索のボタンは実行中に「停止」になりスピナーを出さないため、動くスピナーは今の工程の 1 つだけ（#413）。
     await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
     await expect(page.getByTestId("search-run-stop")).toHaveAccessibleName("停止");
@@ -363,17 +446,25 @@ for (const viewport of [
     });
 
     const summary = page.getByTestId("search-run-progress-summary");
-    // 包む段（質問の読み取りから回答の作成まで）も span の行になる（実行の全体の span は行にしない。#3226）。
+    // 包む段（質問の条件を整理して回答を作る）も span の行になる（実行の全体の span は行にしない。#3226）。
     await expect(summary).toHaveText(/^処理の経過（4 ステップ・3\.6 秒）$/, { timeout: 4_000 });
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
     // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。
     const process = page.getByRole("region", { name: "処理の経過" });
-    await expect(process.getByText("文書の検索", { exact: true })).toBeHidden();
+    await expect(process.getByText("検索文から根拠の候補を集める", { exact: true })).toBeHidden();
     // 「処理の詳細」は処理の経過の中にあり、閉じているときは一緒に隠れる（回答の本文との間に独立して置かない。#2325）。
     const details = page.getByTestId("search-run-progress-details");
     await expect(details).toBeHidden();
     await summary.click();
-    await expect(process.getByText("文書の検索", { exact: true })).toBeVisible();
+    await expect(process.getByText("検索文から根拠の候補を集める", { exact: true })).toBeVisible();
+    // 論理的なリランク要求と実SDK開始を既存の詳細部品で区別する。
+    await page.getByTestId(`search-run-progress-step-${spanStepId("search")}-toggle`).click();
+    const rerankDetails = page.getByTestId(`search-run-progress-step-${spanStepId("search")}-details`);
+    for (const expected of ['"phase": "main_search"', '"query_role": "original"', '"cache_state": "hit"', '"status": "completed"', '"sdk_attempt_count": 0', '"http_attempt_count": null']) {
+      await expect(rerankDetails).toContainText(expected);
+    }
+    await expectNoPageOverflow(page);
+    await process.screenshot({ path: `test-results/rerank-receipt-${viewport.name}.png` });
     // 開くとタイムラインの後ろ（中の最後の要素）に「処理の詳細」が出る。
     await expect(details).toHaveText("処理の詳細");
     const timelineBox = await page.getByTestId("search-run-progress-timeline").boundingBox();
@@ -401,6 +492,43 @@ for (const viewport of [
     await expectNoPageOverflow(page);
   });
 
+  test(`一致する用語の別名を検索文に加えると回答ルールの確認を別の工程で順に出す (${viewport.name})`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockSearchPage(page, [knowledgeStepsSearchStream]);
+
+    await enableSearchAnswer(page);
+    await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
+    await page.getByRole("button", { name: "検索", exact: true }).click();
+
+    // 実行中: 一致する用語の別名を検索文に加えるが終わり、回答ルールの確認が今の工程（#3451）。
+    const current = page.getByTestId("search-run-progress-current");
+    await expect(current).toContainText("確認と回答に使うルールを選ぶ");
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("rules"));
+    const terms = page.getByTestId(`search-run-progress-step-${spanStepId("terms")}`);
+    await expect(terms).toContainText("一致する用語の別名を検索文に加える");
+    await page.getByTestId(`search-run-progress-step-${spanStepId("terms")}-toggle`).click();
+    const termsDetails = page.getByTestId(`search-run-progress-step-${spanStepId("terms")}-details`);
+    await expect(termsDetails).toContainText("用語 A（別名: 別名 A）");
+    await expect(termsDetails).toContainText("一致した用語の別名を補助の検索文に加えます。");
+
+    // 完了後: 2 つの工程はこの順に別の行で、回答ルールの詳細は回答ルールの工程だけに出す。
+    const summary = page.getByTestId("search-run-progress-summary");
+    await expect(summary).toContainText("処理の経過（3 ステップ", { timeout: 4_000 });
+    await summary.click();
+    const process = page.getByRole("region", { name: "処理の経過" });
+    const termsBox = await terms.boundingBox();
+    const rulesBox = await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}`).boundingBox();
+    expect(termsBox && rulesBox && termsBox.y < rulesBox.y).toBeTruthy();
+    await expect(process.getByText("用語・ルールの確認")).toHaveCount(0);
+    await page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-toggle`).click();
+    const rulesDetails = page.getByTestId(`search-run-progress-step-${spanStepId("rules")}-details`);
+    await expect(rulesDetails).toContainText("一致した回答ルール");
+    await expect(rulesDetails).toContainText("一致した回答ルールを回答時の参考情報として渡します。");
+    await expect(rulesDetails).not.toContainText("一致した用語");
+    await process.screenshot({ path: `test-results/answer-progress-terms-rules-${viewport.name}.png` });
+    await expectNoPageOverflow(page);
+  });
+
   test(`回答を作らない RAG 検索は、処理の経過を検索結果の上に出す (${viewport.name})`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockSearchPage(page, [retrievalOnlySearchStream]);
@@ -414,6 +542,24 @@ for (const viewport of [
     const process = page.getByRole("region", { name: "処理の経過" });
     await expect(process).toHaveCount(1);
     await expect(page.getByTestId("search-run-progress-summary")).toContainText("処理の経過（");
+    // チャットと同じ工程名・入れ子（#3506）。全体は「質問の条件を整理して根拠を探す」、検索文から根拠の候補を集めるは回答に使う根拠を検索するの子。
+    await page.getByTestId("search-run-progress-summary").click();
+    for (const [key, label, level] of [
+      ["evidence", "質問の条件を整理して根拠を探す", null],
+      ["understand", "質問から対象と条件を読み取る", "1"],
+      ["flow", "回答に使う根拠を検索する", "1"],
+      ["search", "検索文から根拠の候補を集める", "2"],
+      ["rerank", "質問との関連度で候補を並べ替える", "3"],
+      ["coverage", "要求ごとに根拠の対応を確認する", "2"],
+    ] as const) {
+      const row = page.getByTestId(`search-run-progress-step-${spanStepId(key)}`);
+      await expect(row).toBeVisible();
+      await expect(row.locator("[data-run-timeline-label]").first()).toHaveText(label);
+      if (level) await expect(row).toHaveAttribute("data-level", level);
+      else await expect(row).not.toHaveAttribute("data-level", /.+/);
+    }
+    await expect(process.getByText("根拠を検索して回答を作る")).toHaveCount(0);
+    await process.screenshot({ path: `test-results/answer-progress-search-evidence-${viewport.name}.png` });
     const processBox = await process.boundingBox();
     const resultsBox = await results.boundingBox();
     expect(processBox && resultsBox && processBox.y + processBox.height <= resultsBox.y).toBeTruthy();
@@ -428,7 +574,7 @@ for (const viewport of [
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("自分の銀行の得点はなんですか");
     await page.getByRole("button", { name: "検索", exact: true }).click();
 
-    await expect(page.getByTestId("search-run-progress")).toContainText("文書の検索");
+    await expect(page.getByTestId("search-run-progress")).toContainText("検索文から根拠の候補を集める");
     const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 文書検索" });
     await expect(error).toBeVisible({ timeout: 4_000 });
     await expect(error).toContainText("もう一度送信してください");
@@ -638,7 +784,7 @@ const okChatStream: TimedChunk[] = [
   },
 ];
 
-async function mockChatPage(page: Page) {
+async function mockChatPage(page: Page, chat: TimedChunk[][] = [timedOutChatStream, okChatStream]) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) =>
@@ -692,7 +838,7 @@ async function mockChatPage(page: Page) {
     }
     await route.fulfill({ json: { data: detail, error_messages: [], warning_messages: [] } });
   });
-  await mockStreams(page, { search: [[]], chat: [timedOutChatStream, okChatStream] });
+  await mockStreams(page, { search: [[]], chat });
 }
 
 for (const viewport of [
@@ -717,10 +863,10 @@ for (const viewport of [
     const progress = page.getByTestId("chat-answer-progress");
     const current = page.getByTestId("chat-answer-progress-current");
     const timer = page.getByTestId("chat-answer-progress-timer");
-    await expect(current).toContainText("会話を踏まえた質問の書き換え");
+    await expect(current).toContainText("前の会話を踏まえて質問を補う");
     await expect(timer).toContainText("経過時間");
     const firstElapsed = await timer.textContent();
-    await expect(current).toContainText("文書の検索", { timeout: 4_000 });
+    await expect(current).toContainText("検索文から根拠の候補を集める", { timeout: 4_000 });
     await expect(page.getByTestId("chat-answer-progress-running")).toContainText("処理中（1 ステップ完了）");
     // 終わった段の詳細は、後の段の実行中から開ける（回答の完了・失敗を待たない。#2373）。
     const rewriteId = spanStepId("rewrite");
@@ -728,7 +874,7 @@ for (const viewport of [
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByTestId(`chat-answer-progress-step-${rewriteId}-details`)).toContainText("答える要求");
-    await expect(current).toContainText("文書の検索");
+    await expect(current).toContainText("検索文から根拠の候補を集める");
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
     await progress.scrollIntoViewIfNeeded();
     await page.screenshot({
@@ -739,7 +885,7 @@ for (const viewport of [
     // 時間切れの文言（工程と再試行の案内）は ERROR の回答として残り、同じ質問を送り直せる。
     const error = page.getByRole("alert").filter({ hasText: "時間切れになった工程: 文書検索" });
     await expect(error).toBeVisible({ timeout: 5_000 });
-    // 質問の整理・文書の検索の段階を通る間、経過時間は減らない（段階ごとに 0 に戻さない。#1176）。
+    // 質問の整理・検索文から根拠の候補を集めるの段階を通る間、経過時間は減らない（段階ごとに 0 に戻さない。#1176）。
     await expectProgressTimerMonotonic(page, 2);
     // 止まった段階を開いて出す（原因は段階ではなく Banner に出す）。
     await expect(progress).toHaveAttribute("data-chat-progress-state", "failed");
@@ -789,3 +935,171 @@ for (const viewport of [
     await expect(page.getByRole("button", { name: "もう一度送信" })).toHaveCount(0);
   });
 }
+
+// --- 処理の経過の実行中の段のアイコン（#3436） ---
+
+const nestedProgress = chatProgressStream("a3");
+
+/**
+ * 回答フローの中の検索文から根拠の候補を集めるで、子の段（埋め込み → ベクトル検索 → 子が途切れた間 → 全文検索）が順に進むチャットの SSE。
+ * 子の段を持つ親の工程（質問の条件を整理して回答を作る・根拠を検索して回答を作る・検索文から根拠の候補を集める）は回さず、実行中の
+ * 末端の段だけが回ることを確かめる。最後の chunk は送らない（確かめる間は作成中のまま）。
+ */
+const nestedChatStream: TimedChunk[] = [
+  {
+    afterMs: 0,
+    text: [
+      sse("start", {
+        conversation_id: "conv-1",
+        user_message: userMessage,
+        columns: [{ model_id: "m1", label: "MODEL 1", message_id: "a3" }],
+      }),
+      nestedProgress.start("root", ragSpan.root()),
+      nestedProgress.start("answer", ragSpan.stage("answer")),
+      nestedProgress.start("flow", ragSpan.step("回答生成フロー")),
+      nestedProgress.start("search", ragSpan.step("文書検索", "flow")),
+      nestedProgress.start(
+        "embed",
+        ragSpan.technical("gen_ai.embeddings", "search", {
+          "gen_ai.operation.name": "embeddings",
+          "gen_ai.request.model": "cohere.embed-v4.0",
+        })
+      ),
+    ].join(""),
+  },
+  {
+    afterMs: 2500,
+    text: [nestedProgress.finish("embed"), nestedProgress.start("vector", ragSpan.step("ベクトル検索", "search"))].join(""),
+  },
+  // ベクトル検索が終わり、次の子がまだ始まっていない間（親の工程の中で子が途切れた間）。
+  { afterMs: 4000, text: nestedProgress.finish("vector") },
+  { afterMs: 4000, text: nestedProgress.start("text", ragSpan.step("全文検索", "search")) },
+  { afterMs: 60_000, text: sse("all_done", { conversation_id: "conv-1" }) },
+];
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`チャットの処理の経過は子の段を持つ親の工程を回さず、実行中の末端の段だけを回す (${viewport.name})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockChatPage(page, [nestedChatStream]);
+
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理ビュー");
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill(userMessage.content);
+    await page.getByRole("button", { name: "送信" }).click();
+
+    const progress = page.getByTestId("chat-answer-progress");
+    const current = page.getByTestId("chat-answer-progress-current");
+    const row = (key: string) => page.getByTestId(`chat-answer-progress-step-${spanStepId(key)}`);
+    const parentsAreStill = async () => {
+      for (const key of ["answer", "flow", "search"]) {
+        await expect(row(key)).toHaveAttribute("data-status", "running");
+        await expect(row(key).locator("svg.animate-spin")).toHaveCount(0);
+        await expect(row(key).locator("svg.lucide-circle-play")).toHaveCount(1);
+      }
+      // 動くスピナーは今の行の 1 つだけ。
+      await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
+      await expect(current.locator("svg.animate-spin")).toHaveCount(1);
+    };
+
+    // 1. 埋め込みが終わり、ベクトル検索が今の段階（検索文から根拠の候補を集めるの子）。
+    await expect(current).toContainText("質問に意味が近い文書の箇所を探す", { timeout: 6_000 });
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("vector"));
+    await expect(row("embed")).toHaveAttribute("data-status", "done");
+    await parentsAreStill();
+    await progress.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `test-results/answer-progress-nested-leaf-${viewport.name}.png`, fullPage: false });
+
+    // 2. ベクトル検索が終わり、次の子がまだ無い間: 検索文から根拠の候補を集めるは回さず、その 1 段下に「処理を続けています」を回す。
+    await expect(current).toContainText("処理を続けています", { timeout: 6_000 });
+    await expect(current).toHaveAttribute("data-step-id", "");
+    await expect(row("vector")).toHaveAttribute("data-status", "done");
+    await parentsAreStill();
+    // 今の行は親（検索文から根拠の候補を集める）の 1 段下に字下げする。
+    const searchIcon = await row("search").locator("svg.lucide-circle-play").boundingBox();
+    const workingIcon = await current.locator("svg.animate-spin").boundingBox();
+    expect(searchIcon && workingIcon && workingIcon.x > searchIcon.x).toBeTruthy();
+    await page.screenshot({ path: `test-results/answer-progress-nested-gap-${viewport.name}.png`, fullPage: false });
+
+    // 3. 次の子（全文検索）が始まると、それが今の段階になる。
+    await expect(current).toContainText("検索語を含む文書の箇所を探す", { timeout: 6_000 });
+    await expect(current).toHaveAttribute("data-step-id", spanStepId("text"));
+    await parentsAreStill();
+    await expectNoPageOverflow(page);
+  });
+}
+
+
+test("リランクの論理要求は新規配信と保存したtraceで同じ名前・階層を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const recorder = spanProgressRecorder("trace-rerank");
+  const begin = [
+    ...recorder.start("root", ragSpan.root()),
+    ...recorder.start("answer", ragSpan.stage("answer")),
+    ...recorder.start("rank-parent", ragSpan.step("Rerank")),
+    ...recorder.start("rank-request", ragSpan.technical("rerank.request", "rank-parent")),
+    ...recorder.start("rank-sdk", ragSpan.technical("gen_ai.rerank", "rank-request", { "gen_ai.request.model": "synthetic-rerank", "pr.attempt": 2 })),
+  ];
+  const finish = [
+    ...recorder.finish("rank-sdk"),
+    ...recorder.finish("rank-request", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "miss", sdk_attempt_count: 1, sdk_attempts: [{ retry_number: 1, status: "completed" }] }, null, 2) }] } }),
+    ...recorder.start("rank-cache", ragSpan.technical("rerank.request", "rank-parent", { "pr.stage": "rerank.request" })),
+    ...recorder.finish("rank-cache", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "hit", sdk_attempt_count: 0 }, null, 2) }] } }),
+    ...recorder.finish("rank-parent"), ...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"),
+  ];
+  const content = "合成の回答です。";
+  const stream: TimedChunk[] = [
+    { afterMs: 0, text: sse("run", { trace_id: "trace-rerank" }) + traceSse(begin) },
+    { afterMs: 1200, text: traceSse(finish) + sse("metadata", { trace_id: "trace-rerank", elapsed_ms: 1200, guardrail_warnings: [], diagnostics: {} }) + sse("delta", { text: content }) + sse("done", { answer: content, citations: [] }) },
+  ];
+  await mockSearchPage(page, [stream]);
+  await enableSearchAnswer(page);
+  await page.getByRole("textbox", { name: "RAG 検索" }).fill("合成の質問");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  await expect(page.getByTestId(`search-run-progress-step-${spanStepId("rank-request")}`)).toContainText("候補の並べ替えを要求する");
+  await expect(page.getByTestId("search-run-progress-summary")).toBeVisible();
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  await page.getByTestId("search-run-progress-summary").click();
+
+  async function checkRows(prefix: string) {
+    const request = page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}`);
+    const sdk = page.getByTestId(`${prefix}-step-${spanStepId("rank-sdk")}`);
+    const cached = page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}`);
+    await expect(request).toContainText("候補の並べ替えを要求する");
+    await expect(cached).toContainText("候補の並べ替えを要求する");
+    await expect(sdk).toContainText("質問との関連度で候補を並べ替える · synthetic-rerank（2 回目）");
+    await expect(request).toHaveAttribute("data-level", "2");
+    await expect(sdk).toHaveAttribute("data-level", "3");
+    await expect(cached).toHaveAttribute("data-level", "2");
+    await page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}-toggle`).click();
+    const details = page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}-details`);
+    await expect(details).toContainText("rerank.request");
+    await expect(details).toContainText('"cache_state": "miss"');
+    await expect(details).toContainText('"retry_number": 1');
+    await page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}-toggle`).click();
+    await expect(page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}-details`)).toContainText('"sdk_attempt_count": 0');
+    await request.scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+  }
+  await checkRows("search-run-progress");
+  await screenshotBothThemes(page, (theme) => testInfo.outputPath(`rerank-live-${theme}.png`));
+
+  // 同じ保存済みイベントを会話のtrace APIから再読込する。記録は書き換えない。
+  await page.route("**/api/chat/models", route => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
+  const base = { conversation_id: "conv-rerank", model: null, citations: [], guardrail_warnings: [], status: "COMPLETE", created_at: new Date().toISOString() };
+  const conversation = { id: "conv-rerank", search_answer_profile_id: "bv-1", title: "合成の質問", status: "ACTIVE", message_count: 2, created_at: base.created_at, updated_at: base.created_at, messages: [
+    { ...base, message_id: "user-rerank", role: "USER", content: "合成の質問", reply_to_message_id: null, trace_id: null },
+    { ...base, message_id: "trace-rerank", role: "ASSISTANT", content, reply_to_message_id: "user-rerank", trace_id: "0123456789abcdef0123456789abcdef" },
+  ] };
+  await page.route("**/api/chat/conversations**", route => route.fulfill({ json: { data: new URL(route.request().url()).pathname.endsWith("/conversations") ? { items: [conversation], total: 1, limit: 50, offset: 0, has_next: false } : conversation, error_messages: [], warning_messages: [] } }));
+  await mockTraceApi(page, { "trace-rerank": [...begin, ...finish] });
+  await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-rerank");
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  await page.getByTestId("chat-answer-progress-summary").click();
+  await checkRows("chat-answer-progress");
+  await screenshotBothThemes(page, (theme) => testInfo.outputPath(`rerank-saved-${theme}.png`));
+});

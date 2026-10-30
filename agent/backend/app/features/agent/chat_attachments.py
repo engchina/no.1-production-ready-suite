@@ -24,6 +24,8 @@ import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from pr_backend_core.observability.genai import record_genai_usage
+from pr_backend_core.observability.tracing import observed_span
 from pr_system_settings.chat_attachments import (
     CHAT_ATTACHMENT_TOOL_SPECS,
     IMAGE_READING_PROMPT,
@@ -37,7 +39,6 @@ from pr_system_settings.model import (
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning,
     enterprise_ai_vision_model_id,
-    seed_payload,
 )
 
 from app.features.agent.tool_media import CONTENT_IMAGES_KEY, ToolImage, ToolOutputWithImages
@@ -93,34 +94,51 @@ def _image_reader(
     async def read(data: bytes, media_type: str) -> str:
         from openai import AsyncOpenAI
 
+        from app.features.agent.builtin_runtime import enterprise_ai_http_client
+
         headers = {"OpenAI-Project": connection.project_ocid} if connection.project_ocid else None
         client = AsyncOpenAI(
             base_url=connection.base_url,
             api_key=connection.api_key,
             default_headers=headers,
             timeout=IMAGE_READ_TIMEOUT_SECONDS,
+            http_client=enterprise_ai_http_client(IMAGE_READ_TIMEOUT_SECONDS),
         )
         image_url = f"data:{media_type};base64,{base64.b64encode(data).decode('ascii')}"
         extra: dict[str, Any] = {}
         reasoning = enterprise_ai_reasoning(settings, model_id)
         if reasoning is not None:
             extra["reasoning"] = reasoning
-        response = await client.responses.create(
-            model=model_id,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": image_url, "detail": "auto"},
-                    ],
-                }
-            ],
-            max_output_tokens=enterprise_ai_output_token_budget(settings, model_id),
-            store=False,
-            extra_body=seed_payload(settings),
-            **extra,
-        )
+        with observed_span(
+            "gen_ai.chat",
+            kind="client",
+            attributes={
+                "pr.gen_ai.purpose": "document.read",
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "oracle",
+                "gen_ai.request.model": model_id,
+            },
+        ) as span:
+            response = await client.responses.create(
+                model=model_id,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": image_url, "detail": "auto"},
+                        ],
+                    }
+                ],
+                max_output_tokens=enterprise_ai_output_token_budget(settings, model_id),
+                store=False,
+                **extra,
+            )
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                record_genai_usage(
+                    span, usage.model_dump() if hasattr(usage, "model_dump") else usage
+                )
         return str(response.output_text or "")
 
     return read

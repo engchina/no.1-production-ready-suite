@@ -3,7 +3,7 @@
  *
  * 権限コードとカタログは backend `app/security/permissions.py` の `PERMISSION_CATALOG` と同じ
  * （`permission-catalog.spec.ts` が backend の定義・frontend の `lib/permissions.ts` と一致することを確かめる）。
- * mock-api.ts の既定の利用者はローカル（`AGENT_AUTH_MODE=local`）の全権限の利用者なので、
+ * mock-api.ts の既定の利用者はローカル（`PLATFORM_AUTH_MODE=local`）の全権限の利用者なので、
  * 認証を扱わない既存の spec はログインなしで全画面を使える。
  */
 
@@ -187,7 +187,7 @@ export interface CurrentUserPayload {
   timezone?: string;
 }
 
-/** ローカル（`AGENT_AUTH_MODE=local`）の利用者。ログインなしで全画面を使える。 */
+/** ローカル（`PLATFORM_AUTH_MODE=local`）の利用者。ログインなしで全画面を使える。 */
 export const LOCAL_CURRENT_USER: CurrentUserPayload = {
   user_uuid: "00000000-0000-0000-0000-000000000000",
   login_user_id: "local",

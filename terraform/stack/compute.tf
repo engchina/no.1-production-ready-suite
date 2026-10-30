@@ -65,8 +65,8 @@ resource "oci_core_instance" "suite" {
       error_message = "http_port / https_port must not be SSH, a well-known service port, or a port the suite uses on the Compute instance (22, 25, 53, 111, 1521, 1522, 3000, 3001, 3002, 3306, 5432, 6379, 9090, 8000, 8010, 8020, 18000-18099)."
     }
     precondition {
-      condition     = !var.deploy_nl2sql || var.nl2sql_app_environment == "local" || var.https_enabled
-      error_message = "https_enabled must be true when nl2sql_app_environment is staging or production (NL2SQL requires Secure cookies)."
+      condition     = var.platform_environment == "local" || var.https_enabled
+      error_message = "https_enabled must be true when platform_environment is staging or production (all products require Secure cookies)."
     }
     precondition {
       condition     = !var.deploy_nl2sql || !var.nl2sql_oracle_deepsec_enabled || trimspace(var.nl2sql_oracle_deepsec_data_user_password) != ""

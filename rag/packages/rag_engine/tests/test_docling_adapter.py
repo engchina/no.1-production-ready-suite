@@ -15,6 +15,7 @@ from rag_engine.adapters.parsers.docling_adapter import (
     _item_text,
     _table_data_to_html,
     _table_html_by_ref,
+    docling_table_cells,
 )
 from rag_engine.config import get_settings
 from rag_engine.models.layout import PageImage
@@ -616,6 +617,72 @@ class DoclingAdapterTests(unittest.TestCase):
         self.assertEqual([record.raw_type for record in records], ["picture", "picture_ocr_text"])
         self.assertIn("図内の箇条書き", records[1].text)
 
+    def test_one_page_table_keeps_cell_regions_and_grid_cells(self):
+        """1 頁の表はセルの領域を record と同じ画像の座標で残し、格子のセル（結合は左上）にできる (#3429)。"""
+
+        def cell(row, col, text, box, **extra):
+            left, top, right, bottom = box
+            return {**_cell(row, col, text, **extra), "bbox": {"l": left, "t": top, "r": right, "b": bottom, "coord_origin": "TOPLEFT"}}
+
+        cells = [
+            cell(0, 0, "Item", [10, 10, 30, 20], column_header=True, row_span=2),
+            cell(0, 1, "H1", [30, 10, 90, 15], column_header=True, col_span=2),
+            cell(1, 1, "Plan", [30, 15, 60, 20], column_header=True),
+            cell(1, 2, "Actual", [60, 15, 90, 20], column_header=True),
+            cell(2, 0, "Alpha", [10, 20, 30, 30], row_header=True),
+            cell(2, 1, "10", [30, 20, 60, 30]),
+            cell(2, 2, "11", [60, 20, 90, 30]),
+        ]
+        table = {
+            **_item("", "table", 1, [10, 10, 90, 30]),
+            "self_ref": "#/tables/0",
+            "data": {"num_rows": 3, "num_cols": 3, "table_cells": cells},
+        }
+        context = AnalysisContext(
+            pdf_path=Path("source.pdf"),
+            run_dir=Path("."),
+            pages=[PageImage(page=1, width=200, height=200, pdf_width=100, pdf_height=100, image_path="page.png")],
+            settings=get_settings(),
+        )
+
+        records = DoclingAdapter(get_settings())._records_from_payload({"tables": [table]}, context)
+
+        boxes = records[0].raw["table_cell_bboxes"]
+        self.assertEqual(boxes[0], {"row": 0, "col": 0, "bbox": [20.0, 20.0, 60.0, 40.0]})
+        self.assertEqual(len(boxes), len(cells))
+        grid = docling_table_cells(records[0].raw)
+        assert grid is not None
+        self.assertEqual(
+            [(c.row, c.col, c.row_span, c.col_span, c.text, c.metadata) for c in grid[:3]],
+            [
+                (0, 0, 2, 1, "Item", {"column_header": True}),
+                (0, 1, 1, 2, "H1", {"column_header": True}),
+                (1, 1, 1, 1, "Plan", {"column_header": True}),
+            ],
+        )
+        self.assertEqual(grid[0].bbox, [20.0, 20.0, 60.0, 40.0])
+        self.assertEqual(grid[4].metadata, {"row_header": True})
+
+    def test_multi_page_table_has_no_cell_regions_and_bad_cells_are_not_a_grid(self):
+        """頁をまたぐ表はセルの領域を作らない。位置の無い・同じ位置のセルは格子にしない (#3429)。"""
+        table = {
+            **_item("", "table", 1, [10, 10, 90, 90]),
+            "self_ref": "#/tables/0",
+            "data": {"table_cells": [{**_cell(0, 0, "A"), "bbox": {"l": 1, "t": 1, "r": 5, "b": 5, "coord_origin": "TOPLEFT"}}]},
+        }
+        table["prov"] = [*table["prov"], {**table["prov"][0], "page_no": 2}]
+        context = replace(
+            _context(),
+            pages=[PageImage(page=page, width=100, height=100, pdf_width=100, pdf_height=100, image_path="page.png") for page in (1, 2)],
+        )
+
+        records = DoclingAdapter(get_settings())._records_from_payload({"tables": [table]}, context)
+
+        self.assertNotIn("table_cell_bboxes", records[0].raw)
+        self.assertEqual(docling_table_cells({"data": {"table_cells": [_cell(0, 0, "A"), _cell(0, 0, "B")]}}), None)
+        self.assertEqual(docling_table_cells({"data": {"table_cells": [{"text": "A"}]}}), None)
+        self.assertEqual(docling_table_cells({"data": {"table_cells": []}}), None)
+
 
 def _item(text: str, label: str, page: int, bbox: list[int]) -> dict:
     left, top, right, bottom = bbox
@@ -754,3 +821,76 @@ class OrderedListTextTests(unittest.TestCase):
     def test_original_disambiguates_a_marker_from_numbered_body_text(self):
         item = {"label": "list_item", "marker": "2.1", "text": "2.1.1 Section A", "orig": "2.1 2.1.1 Section A"}
         self.assertEqual(_item_text(item, "List-item", {}), item["orig"])
+
+
+def _pdf_with_image(path: Path, image_box: tuple[float, float, float, float]) -> Path:
+    """100×100 point の 1 ページに、画像を ``image_box``（左上原点の left, top, right, bottom）に描いた合成の PDF。"""
+    import pypdfium2 as pdfium
+    from PIL import Image
+
+    left, top, right, bottom = image_box
+    document = pdfium.PdfDocument.new()
+    page = document.new_page(100, 100)
+    image = pdfium.PdfImage.new(document)
+    image.set_bitmap(pdfium.PdfBitmap.from_pil(Image.new("RGB", (8, 8), "white")))
+    image.set_matrix(pdfium.PdfMatrix().scale(right - left, bottom - top).translate(left, 100 - bottom))
+    page.insert_obj(image)
+    page.gen_content()
+    document.save(str(path))
+    page.close()
+    document.close()
+    return path
+
+
+def _picture_page_payload(picture_box: list[int], texts: list[tuple[str, str, list[int]]]) -> dict:
+    return {
+        "texts": [
+            {**_item(text, label, 1, bbox), "self_ref": f"#/texts/{index}", "parent": {"$ref": "#/body"}, "children": []}
+            for index, (text, label, bbox) in enumerate(texts)
+        ],
+        "pictures": [_picture("#/pictures/0", picture_box, [])],
+    }
+
+
+def test_pdf_image_object_bounds_reads_the_placement(tmp_path: Path) -> None:
+    from rag_engine.parsing.rendering import pdf_image_object_bounds
+
+    pdf = _pdf_with_image(tmp_path / "source.pdf", (20, 10, 80, 70))
+
+    ((left, bottom, right, top),) = pdf_image_object_bounds(pdf, 1)
+    assert [round(value) for value in (left, bottom, right, top)] == [20, 30, 80, 90]
+
+
+def test_text_inside_the_picture_image_but_outside_the_picture_bbox_is_picture_text(tmp_path: Path) -> None:
+    """Docling の図の bbox が画像より狭くても、画像の中のタイトル・目盛りは図の文字（#3485）。"""
+    settings = replace(get_settings(), docling_keep_picture_child_text=False)
+    context = replace(_context(), pdf_path=_pdf_with_image(tmp_path / "source.pdf", (20, 10, 80, 70)))
+    payload = _picture_page_payload(
+        [22, 20, 78, 72],
+        [
+            ("3.1 章の題", "section_header", [10, 2, 40, 7]),  # 画像の外の見出しは残す
+            ("グラフの題（件）", "section_header", [25, 12, 50, 17]),  # 画像の中・図の bbox の上
+            ("200", "text", [20, 18, 24, 23]),  # 図の bbox の端にまたがる目盛り
+            ("グラフの説明です。", "text", [30, 40, 60, 45]),  # 画像の中でも文は本文に残す（#655）
+            ("図 1 グラフの例", "text", [30, 80, 70, 85]),  # 画像の下（外）の文字は残す
+        ],
+    )
+
+    records = DoclingAdapter(settings)._records_from_payload(payload, context)
+
+    ordinary = [(record.category, record.text) for record in records if record.category != "Picture"]
+    assert ordinary == [("Section-header", "3.1 章の題"), ("Text", "グラフの説明です。"), ("Text", "図 1 グラフの例")]
+    aggregate = next(record for record in records if record.raw_type == "picture_ocr_text")
+    assert "グラフの題（件）" in aggregate.text and "200" in aggregate.text
+
+
+def test_a_full_page_image_does_not_widen_the_picture(tmp_path: Path) -> None:
+    """全ページの画像（スキャン）は図の画像とみなさず、図の外のラベルは今までどおり残す。"""
+    settings = replace(get_settings(), docling_keep_picture_child_text=False)
+    context = replace(_context(), pdf_path=_pdf_with_image(tmp_path / "source.pdf", (0, 0, 100, 100)))
+    payload = _picture_page_payload([20, 20, 60, 60], [("ラベル", "text", [65, 65, 75, 70])])
+
+    records = DoclingAdapter(settings)._records_from_payload(payload, context)
+
+    assert [record.text for record in records if record.category == "Text"] == ["ラベル"]
+    assert not any(record.raw_type == "picture_ocr_text" for record in records)

@@ -28,7 +28,7 @@ import { useLeaveGuard } from "@/lib/leave-guard";
 import { useAnsweringSettings, useUpdateAnsweringSettings } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 
-// 選択肢の名前は検索・回答プロファイルの上書きの欄と同じ文言を使う（backend の QueryStrategy と同じ順）。
+// 選択肢の名前は `searchAnswerProfiles.queryStrategy.*` の文言を使う（backend の QueryStrategy と同じ順）。
 const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
   [
     "auto_routing",
@@ -39,10 +39,17 @@ const QUERY_STRATEGY_OPTIONS: SelectFieldOption<QueryStrategyName>[] = (
     "hyde",
   ] as const
 ).map((value) => ({ value, label: t(`searchAnswerProfiles.queryStrategy.${value}`) }));
+// 既定（標準 RAG）を先頭に置く。CRAG は AI の呼び出しが増えるので、明示して選んだときだけ使う（#3509）。
 const ANSWER_FLOW_OPTIONS: SelectFieldOption<AnswerFlowName>[] = [
-  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
   { value: "standard_rag", label: t("searchAnswerProfiles.answerFlow.standard_rag") },
+  { value: "crag", label: t("searchAnswerProfiles.answerFlow.crag") },
 ];
+const ANSWER_AUDIT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_audit_mode"]>[] = (
+  ["none", "standard", "detailed"] as const
+).map((value) => ({ value, label: t(`settings.answering.auditMode.${value}`) }));
+const EVIDENCE_REFINEMENT_OPTIONS: SelectFieldOption<AnsweringSettingsData["answer_evidence_refinement_mode"]>[] = (
+  ["legacy", "cited_only", "cited_required"] as const
+).map((value) => ({ value, label: t(`settings.answering.evidenceRefinement.${value}`) }));
 // 0〜20（backend の rag_neighbor_child_count と同じ範囲）。SelectField は文字列値を扱う。
 const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 }, (_, n) => ({
   value: String(n),
@@ -55,6 +62,8 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
+    answer_audit_mode: settings.answer_audit_mode,
+    answer_evidence_refinement_mode: settings.answer_evidence_refinement_mode,
     neighbor_child_count: settings.neighbor_child_count,
     rerank_enabled: settings.rerank_enabled,
     screen_linking_enabled: settings.screen_linking_enabled,
@@ -72,7 +81,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
 
 /**
  * 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後の数・rerank・画面目録。#593）。
- * 検索・回答プロファイルの「検索・回答設定」で上書きできる。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
+ * 検索・回答プロファイルでは上書きしない（`PROFILE_GLOBAL_QUERY_FIELDS`）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
 export function AnsweringSettingsCard() {
   const query = useAnsweringSettings();
@@ -233,6 +242,35 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               value={String(form.section_expansion_input_token_percent)} disabled={disabled} options={Array.from({ length: 81 }, (_, n) => { const value = n + 10; return { value: String(value), label: String(value) }; })}
               onValueChange={(value) => update({ section_expansion_input_token_percent: Number(value) })} />
           </FormGrid> : null}
+        </div>
+        <div className="space-y-3 px-3 py-3" data-testid="answering-audit-mode">
+          <h3 className="text-sm font-medium text-fg">{t("settings.answering.auditMode")}</h3>
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditModeHint")}</p>
+          <SelectField
+            id="answering-answer-audit-mode"
+            label={t("settings.answering.auditModeField")}
+            helper={t(`settings.answering.auditModeHint.${form.answer_audit_mode}`)}
+            value={form.answer_audit_mode}
+            options={ANSWER_AUDIT_OPTIONS}
+            width="lg"
+            disabled={disabled}
+            onValueChange={(value) => update({ answer_audit_mode: value })}
+          />
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBasicHint")}</p>
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.auditBudgetHint")}</p>
+        </div>
+        <div className="space-y-3 px-3 py-3" data-testid="answering-evidence-refinement">
+          <SelectField
+            id="answering-evidence-refinement-mode"
+            label={t("settings.answering.evidenceRefinement")}
+            helper={t(`settings.answering.evidenceRefinementHint.${form.answer_evidence_refinement_mode}`)}
+            value={form.answer_evidence_refinement_mode}
+            options={EVIDENCE_REFINEMENT_OPTIONS}
+            width="lg"
+            disabled={disabled}
+            onValueChange={(value) => update({ answer_evidence_refinement_mode: value })}
+          />
+          <p className="text-xs leading-relaxed text-fg-muted">{t("settings.answering.evidenceRefinementBudgetHint")}</p>
         </div>
         <SwitchRow
           id="answering-request-coverage"

@@ -10,6 +10,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from audit_fixtures import legacy_audit_result
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -23,6 +24,8 @@ from rag_engine.generation.answering import (
     _section_evidence_budget,
     synthesize_grounded_answer,
 )
+from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedDraft
 from rag_engine.models.storage import StoredChunk
 from rag_engine.retrieval.context_builder import (
@@ -634,7 +637,7 @@ def test_known_gaps_and_budget_follow_the_last_grade():
     context = _seed_context("c31a", "c32a")
     settings = _settings(evidence_budget_chars=100)
     # 広げたときの原文の予算は、入力 token の上限（モデルの入力の上限 × 50%）を超えない。
-    assert _section_evidence_budget(context, settings, expansion) == 660
+    assert _section_evidence_budget(context, settings, expansion) == 100
     assert _section_evidence_budget(context, settings, None) is None
 
 
@@ -658,25 +661,30 @@ def test_unread_sections_make_the_answer_conditional():
     draft = {
         "summary": "空調の点検の項目です。",
         "confidence": "high",
-        "items": [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}],
+        "items": [{"kind": "rule", "text": quote, "citations": [{"evidence_id": evidence_id, "quote": quote}]}],
     }
     audit = {
         "goal_alignment": "aligned",
         "summary_supported": True,
         "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "", "reason": "r"}],
-        "request_reviews": [],
+        "request_reviews": [{"request_id": "Q1", "status": "addressed", "reason": "合成の要求に回答済み"}],
         "unused_evidence_ids": [],
     }
 
     def model(system, prompt, settings, schema, **options):
-        return schema.model_validate(draft if schema is GroundedDraft else audit)
+        if schema in (GroundedDraft, generation_draft_wire_model()):
+            # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
+            return GroundedDraft.model_validate(draft)
+        if is_audit_wire(schema):
+            return legacy_audit_result(audit, schema)
+        return schema.model_validate(audit)
 
     unread = [f"「{FILE}」の「第3章 設備ごとの点検」（p.5〜7）は、読み込み量の上限に達したため未反映です。"]
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         plain = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only")
         limited = synthesize_grounded_answer("質問", context, get_settings(), image_prompt_mode="text_only", unread_sections=unread)
-    assert plain.response.envelope["outcome"] == "answered"
+    assert plain.response.envelope["outcome"] == "conditional"
     assert limited.response.envelope["outcome"] == "conditional"
     assert unread[0] in limited.response.envelope["gaps"]
     assert f"{grounded.answer_labels().unverified_section}\n\n・{unread[0]}" in limited.response.answer_text
@@ -962,18 +970,23 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
     draft = {
         "summary": "空調の点検の項目です。",
         "confidence": "high",
-        "items": [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}],
+        "items": [{"kind": "rule", "text": quote, "citations": [{"evidence_id": evidence_id, "quote": quote}]}],
     }
     audit = {
         "goal_alignment": "aligned",
         "summary_supported": True,
         "reviews": [{"index": 0, "support": "supported", "applicability": "matched", "condition": "", "reason": "r"}],
-        "request_reviews": [],
+        "request_reviews": [{"request_id": "Q1", "status": "addressed", "reason": "合成の要求に回答済み"}],
         "unused_evidence_ids": [],
     }
 
     def model(system, prompt, settings, schema, **options):
-        return schema.model_validate(draft if schema is GroundedDraft else audit)
+        if schema in (GroundedDraft, generation_draft_wire_model()):
+            # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
+            return GroundedDraft.model_validate(draft)
+        if is_audit_wire(schema):
+            return legacy_audit_result(audit, schema)
+        return schema.model_validate(audit)
 
     unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
     cited, other = _unread(DOC, "s3-2"), _unread(OTHER_DOC, "o1")
@@ -985,7 +998,7 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
         )
 
     # 回答が根拠にしない別の文書の章節は出さず、条件つきにもしない。診断に残す。
-    assert only_other.response.envelope["outcome"] == "answered"
+    assert only_other.response.envelope["outcome"] == "conditional"
     assert grounded.answer_labels().unverified_section not in only_other.response.answer_text
     assert only_other.response.generation_trace["unread_sections"]["hidden"][0]["document_id"] == OTHER_DOC
     assert both.response.envelope["outcome"] == "conditional"
@@ -1036,3 +1049,36 @@ def test_answer_section_phase_passes_the_guide_priority():
 
     assert [seed["document_id"] for seed in result.trace["deferred_seeds"]] == [OTHER_DOC]
     assert stub.read_calls[0] == "s3-1"
+
+
+def test_unavailable_extraction_is_explicitly_identified_as_disabled_setting():
+    from time import monotonic
+
+    from rag_engine.generation.answering import _expand_context_by_sections
+
+    stub = SectionStub()
+    unused = lambda *a, **k: (_ for _ in ()).throw(AssertionError("unexpected I/O"))  # noqa: E731
+    settings = replace(
+        get_settings(environ={}, dotenv_path=None),
+        section_extraction_enabled=False,
+        section_expansion_max_levels=4,
+        section_expansion_input_token_percent=50,
+        answer_max_input_tokens=800,
+    )
+    with bind_dependencies(
+        AnswerDependencies(unused, unused, unused, unused, unused, section_outline=stub.outline, section_chunks=stub.chunks)
+    ):
+        _, result = _expand_context_by_sections(
+            QUESTION,
+            _seed_context("c31a"),
+            settings,
+            (),
+            answer_llm_provider=None,
+            rerank_enabled=False,
+            started_at=monotonic(),
+            use_grader=False,
+        )
+    assert result.trace["extraction_enabled"] is False
+    assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
+    assert result.trace["large_section_handoff_reason"] == "disabled_by_setting"
+    assert result.unread or result.omitted

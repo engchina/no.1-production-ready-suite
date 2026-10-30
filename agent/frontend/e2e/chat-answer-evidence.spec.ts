@@ -193,6 +193,23 @@ for (const viewport of VIEWPORTS) {
     await expect(body.locator("p").first()).toHaveText("合成の質問 A の答えは次のとおりです。");
     const sections = body.getByTestId("answer-section");
     await expect(sections.locator("h4")).toHaveText(["資料により確認できた事項", "資料から確認できなかった事項"]);
+    // 処理の経過と回答の本文の間に、節の見出しと同じ書式の見出し「回答」（h3）を出す（#3433）。
+    const answerHeading = turn.getByRole("heading", { level: 3, name: "回答", exact: true });
+    await expect(answerHeading).toBeVisible();
+    await expect(turn.getByRole("region", { name: "回答", exact: true }).getByTestId(`chat-answer-${RUN_ID}`)).toBeVisible();
+    const [progressBox, answerHeadingBox, bodyBox] = await Promise.all([
+      turn.getByTestId("chat-progress").boundingBox(),
+      answerHeading.boundingBox(),
+      body.boundingBox(),
+    ]);
+    expect(answerHeadingBox!.y).toBeGreaterThan(progressBox!.y);
+    expect(bodyBox!.y).toBeGreaterThan(answerHeadingBox!.y);
+    const headingStyle = (locator: typeof answerHeading) =>
+      locator.evaluate((element) => {
+        const { fontSize, fontWeight, color, lineHeight } = getComputedStyle(element);
+        return { fontSize, fontWeight, color, lineHeight };
+      });
+    expect(await headingStyle(answerHeading)).toEqual(await headingStyle(sections.nth(0).locator("h4")));
     const confirmed = sections.nth(0).getByRole("listitem");
     await expect(confirmed).toHaveCount(2);
     // 根拠の ID の印は文字で出さず、根拠の行（「根拠：文書 p.N」）にする。
@@ -314,6 +331,10 @@ function seedMarkedRun(mockApi: MockApi) {
       notice: undefined,
       withheld: { removed: 1, unverified: 1, warnings: 1, all: false, listed: 3 },
       passage_marks: [
+        // 可視内容がない過去の記録は、項目・件数・移動リンクを作らない。
+        ...["\u200b", "**\u200b**", "[\u200b](https://example.invalid)"].map((text) => ({
+          text, state: "unverified" as const, reasons: [{ code: "unsupported", label: "根拠で確かめられない", detail: "" }],
+        })),
         {
           text: "- 承認は担当の部署が行います。",
           state: "warning",
@@ -387,6 +408,8 @@ async function expectMarkedAnswer(page: Page, body: ReturnType<Page["getByTestId
     "「承認は担当の部署が行います。」要注意：根拠は別の対象についての記載",
     `「${MARKED_UNVERIFIED}」未確認：根拠で確かめられない`,
   ]);
+  await expect(points.getByTestId("answer-marked-passage-link")).toHaveCount(2);
+  await expect(points).not.toContainText("「」");
   // 項目を押すと本文の段落へ移り、フォーカスする。
   await points.getByTestId("answer-marked-passage-link").nth(1).click();
   await expect(marked.nth(1)).toBeFocused();
@@ -416,6 +439,7 @@ for (const viewport of VIEWPORTS) {
     for (const badge of await badges.all()) await expect(badge.locator("svg")).toHaveCount(1);
     await expect(turn).not.toContainText("省略");
     await expectNoHorizontalOverflow(page);
+    await turn.getByTestId("answer-marked-passages").scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath(`answer-marks-chat-${viewport.name}.png`), fullPage: true });
 
     // 実行の詳細は回答の印を保ち、概要見出しのバッジは出さない。
@@ -529,6 +553,40 @@ test("実行の詳細の回答も同じ節で出し、根拠の塊は RAG と同
   await expect(page.getByTestId("run-artifact-artifact-evidence")).toHaveCount(0);
   await expect(page.getByTestId("run-artifacts-section")).toHaveCount(0);
 });
+
+// #3422: 章節の階層（section_path）がとても長い根拠でも、根拠のカードの一覧が横にスクロールしない（チャットと実行の詳細）。
+// 章節のチップはカードの幅で省略（…）し、全文は title で読める。
+const LONG_SECTION_PATH = Array.from({ length: 12 }, (_, index) => `第 ${index + 1} 章 合成の章節の見出し`);
+
+async function expectEvidenceListFits(citations: ReturnType<Page["getByTestId"]>) {
+  await citations.locator("summary").click();
+  const list = citations.locator(".bounded-scroll-area-lg");
+  const chip = list.getByTestId("evidence-chips").locator("dd", { hasText: "第 12 章" });
+  await expect(chip).toHaveAttribute("title", LONG_SECTION_PATH.join(" > "));
+  expect(await list.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+  const [chipBox, cardBox] = await Promise.all([chip.boundingBox(), list.getByTestId("evidence-card").first().boundingBox()]);
+  expect(chipBox!.x + chipBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`章節の階層が長い根拠でも根拠の一覧が横にスクロールしない (${viewport.name})`, { tag: "@responsive" }, async ({ page, mockApi }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    seedRun(mockApi);
+    const run = mockApi.state.runs.find((item) => item.id === RUN_ID)!;
+    const artifacts = run.artifacts as { kind: string; content: { items: Record<string, unknown>[] } }[];
+    const evidence = artifacts.find((item) => item.kind === "answer_evidence")!.content;
+    evidence.items[0].locator = { page_start: 3, page_end: 3, section_path: LONG_SECTION_PATH };
+
+    await page.goto("/chat");
+    await openThread(page);
+    await expectEvidenceListFits(page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citations"));
+    await expectNoHorizontalOverflow(page);
+
+    await page.goto(`/runs?id=${RUN_ID}`);
+    await expectEvidenceListFits(page.getByTestId("run-evidence-section").getByTestId("answer-citations"));
+    await expectNoHorizontalOverflow(page);
+  });
+}
 
 // #3252: 保存した根拠は見る人の今の権限で確かめ直し、見られない根拠は backend が中身を返さず数（`withheld_evidence_count`）
 // だけを返す。画面は RAG と同じ共通の行「権限の無い根拠 N 件」を折りたたみに出し、「AI に渡した N 件」に含める。

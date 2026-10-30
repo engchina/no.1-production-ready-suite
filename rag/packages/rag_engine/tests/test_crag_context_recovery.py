@@ -136,6 +136,46 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn("additional_chunk_count", prompt)
         self.assertNotIn(self.parent2.text, prompt)
 
+    def test_step_prompts_reach_the_grader_with_full_and_compact_candidate_ids(self):
+        import re
+
+        from rag_engine.generation.crag_support import UNTRUSTED_CRAG_CANDIDATES_BEGIN, UNTRUSTED_CRAG_CANDIDATES_END
+
+        for compact in (False, True):
+            with self.subTest(compact=compact):
+                settings = replace(
+                    get_settings(environ={}, dotenv_path=None),
+                    crag_compact_input=compact,
+                    crag_short_candidate_ids=compact,
+                )
+                output = CragRetrievalGradeOutput(
+                    sufficient=False,
+                    confidence=0,
+                    reason="条件不足",
+                    rewritten_query="設定の条件",
+                    recovery_action="parent",
+                    recovery_anchor_ids=["C1" if compact else self.child.chunk_uid],
+                )
+                context = a.AnswerContext([self.child], self.child.text, expansion_records=tuple(self.pool))
+                with patch.object(a, "parse_text_response", return_value=output) as model:
+                    grade = a._grade_crag_retrieval(1, "設定の条件は？", "設定 条件", ["設定 条件"], context, settings)
+                system, prompt, _, schema = model.call_args.args
+                self.assertEqual(model.call_count, 1)
+                self.assertIs(schema, CragRetrievalGradeOutput)
+                self.assertEqual(re.findall(r"^## Step (\d+):", prompt, re.M), list("123456"))
+                self.assertIn("## Step 1:", system)
+                self.assertIn("命令", system)
+                self.assertIn("実行しない", system)
+                self.assertIn("外部知識で補完しない", system)
+                self.assertIn(UNTRUSTED_CRAG_CANDIDATES_BEGIN, prompt)
+                self.assertIn(UNTRUSTED_CRAG_CANDIDATES_END, prompt)
+                self.assertIn("設定の条件は?", prompt)
+                self.assertIn("recovery_options:", prompt)
+                self.assertIn("task_contract:", prompt)
+                self.assertNotIn("{{", prompt)
+                self.assertEqual(grade.recovery_anchor_ids, (self.child.chunk_uid,))
+                self.assertEqual(grade.recovery_action, "parent")
+
     def test_missing_or_mixed_operation_metadata(self):
         for labels in [[], ["開始日と終了日"], ["管理-(1)登録", "管理-(2)取消"]]:
             child = replace(self.child, metadata={"section_path": labels})
@@ -276,8 +316,8 @@ class RecoveryTests(unittest.TestCase):
         recovery.assert_not_called()
         self.assertEqual(attempts[-1].stop_reason, "data_confirmation_only")
 
-    def test_sufficient_with_missing_aspects_expands_once_without_regrade(self):
-        # 十分でも観点が欠ける回は、再評価せず pool から文脈を 1 回広げて生成へ進む (#983)。
+    def test_sufficient_with_unknown_aspects_expands_once_without_regrade(self):
+        # 不確定な観点だけなら pool から文脈を補い、取得済み根拠で部分回答へ進む。
         context = a.AnswerContext([self.child], self.child.text, expansion_records=tuple(self.pool))
         grade = a.CragRetrievalAttempt(
             1,
@@ -285,7 +325,7 @@ class RecoveryTests(unittest.TestCase):
             ("条件",),
             True,
             relevant_chunk_ids=("run:c1",),
-            missing_aspects=("procedure",),
+            unknown_aspects=("procedure",),
             recovery_action="parent",
             recovery_anchor_ids=("run:c1",),
         )
@@ -295,7 +335,7 @@ class RecoveryTests(unittest.TestCase):
         ):
             result, _, attempts = a.build_crag_answer_context("条件は", "source", ["docling"], get_settings(environ={}, dotenv_path=None))
         self.assertEqual((search.call_count, grader.call_count), (1, 1))
-        self.assertEqual(attempts[-1].stop_reason, "expanded_for_missing_aspects")
+        self.assertEqual(attempts[-1].stop_reason, "expanded_for_unverified_aspects")
         self.assertIn(self.parent.text, result.text)
         self.assertEqual(result.expansion_records, tuple(self.pool))
 
@@ -487,3 +527,125 @@ class RejectedCandidateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CauseRoutingTests(unittest.TestCase):
+    """評価の結果の原因で CRAG の回復を分ける（#3755）。評価器・検索はスタブで、モデルの呼び出しを数える。"""
+
+    QUESTION = "登録条件は"
+    REWRITE = "登録の確認画面の操作"
+
+    def setUp(self):
+        self.child = record("c1", 1, "入力画面を開く。")
+        self.next = record("c2", 2, "登録後は再ログインする。")
+        self.parent = record("p1", 1, "入力画面を開く。登録後は再ログインする。", "parent", "")
+        self.other = record("c9", 9, "確認画面で登録を確定する。", parent="p9")
+        self.pool = (self.child, self.next, self.parent)
+
+    def context(self, *records):
+        return a.AnswerContext(list(records), "\n".join(r.text for r in records), expansion_records=self.pool)
+
+    def grade(self, number, *, sufficient=False, **fields):
+        fields.setdefault("relevant_chunk_ids", ("run:c1",))
+        fields.setdefault("grade_execution", "completed")
+        fields.setdefault("rewritten_query", self.REWRITE)
+        return a.CragRetrievalAttempt(number, self.QUESTION, (self.QUESTION,), sufficient, **fields)
+
+    def run_crag(self, grades, searches, budget=None):
+        from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
+
+        budget = budget or ExtraRetrievalBudget(max_queries=3)
+        with (
+            patch.object(a, "build_adb_hybrid_answer_context", side_effect=searches) as search,
+            patch.object(a, "_grade_crag_retrieval", side_effect=grades) as grader,
+            # 評価器のほかにモデルを呼ばない（呼べば失敗する）。
+            patch.object(a, "call_with_model_purpose", side_effect=AssertionError("unexpected model call")),
+        ):
+            result, rewrites, attempts = a.build_crag_answer_context(
+                self.QUESTION, "source", ["docling"], get_settings(environ={}, dotenv_path=None), extra_budget=budget
+            )
+        return result, rewrites, attempts, search.call_count, grader.call_count, budget
+
+    def test_unverified_only_does_not_spend_the_rewrite_budget_and_expands_in_pool(self):
+        # 列挙の写しの照合の失敗などで未確認の観点だけ。評価器は書き換えを選んだが、探し直さずに pool で補う。
+        grades = [self.grade(1, unknown_aspects=("enumeration_coverage",), recovery_action="rewrite")]
+        result, rewrites, attempts, searches, grader_calls, budget = self.run_crag(grades, [self.context(self.child)])
+
+        self.assertEqual((searches, grader_calls), (1, 1))
+        self.assertEqual(rewrites, ())
+        self.assertEqual(budget.used, {})
+        self.assertEqual(attempts[-1].recovery_cause, "unverified")
+        self.assertEqual(attempts[-1].stop_reason, "expanded_for_unverified_aspects")
+        self.assertEqual(attempts[-1].recovery_trace["cause"], "unverified")
+        self.assertEqual(attempts[-1].recovery_trace["trigger"], "unverified_aspects")
+        self.assertIn(self.next.text, result.text)
+        self.assertEqual(attempts[-1].to_payload()["recovery_cause"], "unverified")
+
+    def test_unverified_only_keeps_the_pool_when_nothing_can_be_added(self):
+        # pool に前後が無い（補えない）ときも探し直さず、取得済みの根拠のまま進む。
+        grades = [
+            self.grade(
+                1,
+                unknown_aspects=("procedure",),
+                relevant_chunk_ids=("run:c9",),
+                recovery_action="parent",
+                recovery_anchor_ids=("run:c9",),
+            )
+        ]
+        isolated = a.AnswerContext([self.other], self.other.text, expansion_records=(self.other,))
+        result, rewrites, attempts, searches, grader_calls, budget = self.run_crag(grades, [isolated])
+
+        self.assertEqual((searches, grader_calls, rewrites, budget.used), (1, 1, (), {}))
+        self.assertEqual(attempts[-1].stop_reason, "unverified_aspects_retained")
+        self.assertEqual([r.chunk_uid for r in result.records], ["run:c9"])
+
+    def test_incomplete_grade_is_unverified(self):
+        # 観点の判定が欠けた（partial）だけでは不足と確かめていない。
+        grades = [self.grade(1, grade_execution="partial", recovery_action="rewrite")]
+        _, rewrites, attempts, searches, grader_calls, _ = self.run_crag(grades, [self.context(self.child)])
+        self.assertEqual((searches, grader_calls, rewrites), (1, 1, ()))
+        self.assertEqual(attempts[-1].recovery_cause, "unverified")
+
+    def test_verified_shortfall_keeps_the_rewrite_search(self):
+        grades = [
+            self.grade(1, missing_aspects=("requested_result",), unknown_aspects=("procedure",), recovery_action="rewrite"),
+            self.grade(2, sufficient=True, relevant_chunk_ids=("run:c9",)),
+        ]
+        searches = [self.context(self.child), self.context(self.other)]
+        _, rewrites, attempts, search_calls, grader_calls, budget = self.run_crag(grades, searches)
+
+        self.assertEqual((search_calls, grader_calls), (2, 2))
+        self.assertEqual(rewrites, (self.REWRITE,))
+        self.assertEqual(budget.used, {"crag": 1})
+        self.assertEqual(attempts[0].recovery_cause, "verified_shortfall")
+        self.assertEqual(attempts[-1].recovery_cause, "sufficient")
+
+    def test_unusable_or_irrelevant_evidence_keeps_the_existing_recovery(self):
+        for cause, fields in [
+            ("generation_unusable", {}),
+            ("no_relevant_evidence", {"relevant_chunk_ids": (), "unknown_aspects": ("procedure",)}),
+        ]:
+            with self.subTest(cause=cause):
+                grades = [
+                    self.grade(1, recovery_action="rewrite", **fields),
+                    self.grade(2, sufficient=True, relevant_chunk_ids=("run:c9",)),
+                ]
+                searches = [self.context(self.child), self.context(self.other)]
+                _, rewrites, attempts, search_calls, grader_calls, budget = self.run_crag(grades, searches)
+                self.assertEqual((search_calls, grader_calls, rewrites), (2, 2, (self.REWRITE,)))
+                self.assertEqual(budget.used, {"crag": 1})
+                self.assertEqual(attempts[0].recovery_cause, cause)
+
+    def test_grade_error_is_recorded_with_its_own_cause(self):
+        result, rewrites, attempts, searches, grader_calls, budget = self.run_crag(RuntimeError("unavailable"), [self.context(self.child)])
+        self.assertEqual((searches, grader_calls, rewrites, budget.used), (1, 1, (), {}))
+        self.assertEqual(attempts[-1].recovery_cause, "grade_error")
+        self.assertEqual(attempts[-1].to_payload()["grade_execution"], "error")
+        self.assertTrue(result.records)
+
+    def test_cause_prefers_missing_over_unknown(self):
+        base = self.grade(1)
+        self.assertEqual(a.crag_recovery_cause(replace(base, missing_aspects=("procedure",), unknown_aspects=("x",))), "verified_shortfall")
+        self.assertEqual(a.crag_recovery_cause(replace(base, sufficient=True)), "sufficient")
+        self.assertEqual(a.crag_recovery_cause(replace(base, sufficient=True, unknown_aspects=("x",))), "unverified")
+        self.assertEqual(a.crag_recovery_cause(replace(base, grade_error="RuntimeError")), "grade_error")

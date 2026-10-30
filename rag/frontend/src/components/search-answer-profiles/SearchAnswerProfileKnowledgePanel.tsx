@@ -1,4 +1,4 @@
-import { Plus, Save, Sparkles } from "lucide-react";
+import { Save } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -8,8 +8,6 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  FormStatus,
-  ProcessingIndicator,
   Skeleton,
   Tabs,
   TextareaField,
@@ -26,20 +24,24 @@ import {
   initialLoadError,
   useDomainKeywords,
   useSaveDomainKeywords,
-  useSuggestDomainKeywords,
+  useImportDomainKeywords,
 } from "@/lib/queries";
 
+import { QuestionUnderstandingPanel } from "./QuestionUnderstandingPanel";
+import { DomainKeywordExcelImport } from "./DomainKeywordExcelImport";
 import { ApprovedFaqManager } from "./ApprovedFaqManager";
 import { RuntimeKnowledgeManager, runtimeKindLabel } from "./RuntimeKnowledgeManager";
 import { SupportGuideManager } from "./SupportGuideManager";
 
-type KnowledgeTab = "approvedFaq" | "terms" | "domainKeywords" | "rules" | "supportGuides";
+type KnowledgeTab = "approvedFaq" | "questionUnderstanding" | "terms" | "domainKeywords" | "rules" | "supportGuides";
 
 /** 検索・回答プロファイル単位の知識(ドメインキーワード等)。編集中の検索・回答プロファイルにだけ表示する。 */
 export function SearchAnswerProfileKnowledgePanel({
   searchAnswerProfileId,
+  readOnly = false,
 }: {
   searchAnswerProfileId: string;
+  readOnly?: boolean;
 }) {
   // よく使う Approved FAQ を先頭・既定のタブにする(#636)。
   const [tab, setTab] = useState<KnowledgeTab>("approvedFaq");
@@ -58,21 +60,17 @@ export function SearchAnswerProfileKnowledgePanel({
           value={tab}
           onChange={async (value) => {
             // 業務ガイドは編集中の入力が多いので、タブを離れる前に未保存の変更を確かめる。
-            if (tab === "supportGuides" && !(await confirmPendingLeave())) return;
+            if (!(await confirmPendingLeave())) return;
             setTab(value as KnowledgeTab);
           }}
-          // 回答フローで使う順に並べる（#682）: 類似問の提示 → 用語・同義語で質問を広げる →
-          // ドメインキーワードでキーワード検索の語を切り出す → 回答ルールを回答の生成に渡す →
-          // 業務ガイドで確かめる条件と手順を示す（#1237。回答への適用は別の Issue）。
+          // 最初の主な利用段階の順。分岐や後の再利用で実行する段階は変わる。
           items={[
             { id: "approvedFaq", label: t("searchAnswerProfiles.faq.title") },
+            { id: "questionUnderstanding", label: t("searchAnswerProfiles.questionUnderstanding.title") },
             { id: "terms", label: runtimeKindLabel("terms") },
-            {
-              id: "domainKeywords",
-              label: t("searchAnswerProfiles.domainKeywords.title"),
-            },
             { id: "rules", label: runtimeKindLabel("rules") },
             { id: "supportGuides", label: t("supportGuides.title") },
+            { id: "domainKeywords", label: t("searchAnswerProfiles.domainKeywords.title") },
           ]}
         />
         <div
@@ -80,7 +78,9 @@ export function SearchAnswerProfileKnowledgePanel({
           id={`search-answer-profile-knowledge-panel-${tab}`}
           aria-labelledby={`search-answer-profile-knowledge-tab-${tab}`}
         >
-          {tab === "domainKeywords" ? (
+          {tab === "questionUnderstanding" ? (
+            <QuestionUnderstandingPanel key={searchAnswerProfileId} searchAnswerProfileId={searchAnswerProfileId} readOnly={readOnly} />
+          ) : tab === "domainKeywords" ? (
             <DomainKeywordsEditor searchAnswerProfileId={searchAnswerProfileId} />
           ) : tab === "approvedFaq" ? (
             <ApprovedFaqManager searchAnswerProfileId={searchAnswerProfileId} />
@@ -110,7 +110,7 @@ function parseKeywords(text: string): string[] {
 function DomainKeywordsEditor({ searchAnswerProfileId }: { searchAnswerProfileId: string }) {
   const query = useDomainKeywords(searchAnswerProfileId);
   const save = useSaveDomainKeywords(searchAnswerProfileId);
-  const suggest = useSuggestDomainKeywords(searchAnswerProfileId);
+  const importKeywords = useImportDomainKeywords(searchAnswerProfileId);
   const [text, setText] = useState("");
   const saved = useMemo(
     () => query.data?.keywords ?? [],
@@ -126,9 +126,6 @@ function DomainKeywordsEditor({ searchAnswerProfileId }: { searchAnswerProfileId
   const current = parseKeywords(text);
   const dirty = current.join("\n") !== saved.join("\n");
   useLeaveGuard(dirty);
-  const candidates = (suggest.data?.candidates ?? []).filter(
-    (candidate) => !current.includes(candidate.keyword),
-  );
 
   if (query.isPending) {
     return (
@@ -169,14 +166,14 @@ function DomainKeywordsEditor({ searchAnswerProfileId }: { searchAnswerProfileId
           onChange={(event) => setText(event.target.value)}
           rows={12}
           placeholder={t("searchAnswerProfiles.domainKeywords.placeholder")}
-          disabled={save.isPending}
+          disabled={save.isPending || importKeywords.isPending}
         />
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             icon={Save}
             loading={save.isPending}
-            disabled={!dirty}
+            disabled={!dirty || importKeywords.isPending}
             onClick={() =>
               save.mutate(current, {
                 onSuccess: (data) =>
@@ -201,78 +198,19 @@ function DomainKeywordsEditor({ searchAnswerProfileId }: { searchAnswerProfileId
           </span>
         </div>
       </div>
-      <div className="min-w-0 space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm font-medium text-fg">
-            {t("searchAnswerProfiles.domainKeywords.candidates")}
-          </span>
-          <Button
-            size="sm"
-            variant="secondary"
-            icon={Sparkles}
-            loading={suggest.isPending}
-            onClick={() => suggest.mutate()}
-          >
-            {t("searchAnswerProfiles.domainKeywords.suggest")}
-          </Button>
-        </div>
-        <p className="text-xs leading-relaxed text-fg-muted">
-          {t("searchAnswerProfiles.domainKeywords.suggestHelp")}
-        </p>
-        {suggest.isPending ? (
-          // 参照ナレッジベースの配信中チャンクを走査するため、件数が多いと数秒以上かかる。
-          <ProcessingIndicator
-            active
-            label={t("searchAnswerProfiles.domainKeywords.suggesting")}
-            operationKey="domain-keywords-suggest"
-            placement="action"
-            activityIcon="none"
-            testId="domain-keywords-suggest-processing"
-          />
-        ) : null}
-        {suggest.isError ? (
-          <FormStatus
-            tone="danger"
-            message={
-              suggest.error instanceof ApiError
-                ? suggest.error.message
-                : t("searchAnswerProfiles.domainKeywords.suggestError")
-            }
-          />
-        ) : null}
-        {suggest.data && candidates.length === 0 ? (
-          <p className="text-xs text-fg-muted">
-            {t("searchAnswerProfiles.domainKeywords.noCandidates")}
-          </p>
-        ) : null}
-        {candidates.length > 0 ? (
-          <ul
-            className="flex flex-wrap gap-2"
-            aria-label={t("searchAnswerProfiles.domainKeywords.candidates")}
-          >
-            {candidates.map((candidate) => (
-              <li key={candidate.keyword}>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  icon={Plus}
-                  title={t("searchAnswerProfiles.domainKeywords.candidateStats", {
-                    frequency: candidate.frequency,
-                    documents: candidate.document_count,
-                  })}
-                  onClick={() =>
-                    setText((value) =>
-                      [...parseKeywords(value), candidate.keyword].join("\n"),
-                    )
-                  }
-                >
-                  {candidate.keyword}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
+      <DomainKeywordExcelImport
+        searchAnswerProfileId={searchAnswerProfileId}
+        disabled={dirty || save.isPending}
+        dirty={dirty}
+        pending={importKeywords.isPending}
+        onImport={async (file, mode) => {
+          const data = await importKeywords.mutateAsync({ file, mode });
+          toast.success(t("searchAnswerProfiles.domainKeywords.imported", {
+            count: data.keywords.length,
+            inserted: data.inserted_count,
+          }));
+        }}
+      />
     </div>
   );
 }

@@ -10,6 +10,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pr_backend_core.observability.model_purpose import model_call_purpose
+
 if TYPE_CHECKING:
     from rag_engine.ports import Embedder
 
@@ -46,7 +48,8 @@ class AnswerDependencies:
     文書だけを読む。article_question は利用者の元の質問（呼び出し元が検索文を短く言い換えたとき。無ければ None）を
     返す。条の目録から文書・条を選ぶ段だけが検索文と合わせて使う（#2261）。article_leads は document_id・chunk_set_id・
     sections（{section_id: 章節の名前}）・settings を受け取り、その章節の本文の書き出し（名前を除く。
-    {section_id: 文}）を返す。条の選択の 2 段目（選んだ条と同じ章の条を書き出しつきで見せて足させる）が使う。
+    {section_id: 文}）を返す。条の選択の 2 段目（選んだ条と同じ章の条と、選んだ条を名指しする別の章の条を書き出し
+    つきで見せて足させる）が使う。
     省略時は 2 段目を行わない。
     embedder は業務ガイドの手順の充足で、根拠を共有する手順のどれを item が説明したかを語で決められないときに、
     意味の近さで決める embedding（`ports.Embedder`。索引と同じ OCI Generative AI の Cohere Embed。#2649）。省略時は
@@ -73,6 +76,9 @@ class AnswerDependencies:
     article_leads: Callable[..., Mapping[str, str]] | None = None
     embedder: "Embedder | None" = None
     report_degraded: Callable[[str, BaseException], None] | None = None
+    # 精排・起点選択の後に親/近傍を読む。未指定の SDK は取得済みの原文だけで構築する。
+    context_chunks: Callable[..., Sequence[Any]] | None = None
+    record_retrieval: Callable[[Mapping[str, Any]], None] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -198,15 +204,32 @@ def check_adb_hybrid_search_ready(**kwargs):
 def parse_text_response(*args, **kwargs):
     """指定 schema のテキスト回答を取得する。呼出回数を llm_call_count に数える。"""
     _count_llm_call()
-    return _get().parse_text(*args, **kwargs)
+    with model_call_purpose(kwargs.pop("purpose", None)):
+        return _get().parse_text(*args, **kwargs)
 
 
 def parse_multimodal_response(*args, **kwargs):
     """指定 schema の画像付き回答を取得する。呼出回数を llm_call_count に数える。"""
     _count_llm_call()
-    return _get().parse_images(*args, **kwargs)
+    with model_call_purpose(kwargs.pop("purpose", None)):
+        return _get().parse_images(*args, **kwargs)
 
 
 def rerank_text_with_scores(*args, **kwargs):
     """指定した候補の順位と score を取得する。"""
     return _get().rerank(*args, **kwargs)
+
+
+def injected_context_chunks(**kwargs) -> list[Any] | None:
+    """選択済み起点の原文を現在の検索範囲で遅延取得する。"""
+    current = _active.get()
+    if current is None or current.context_chunks is None:
+        return None
+    return list(current.context_chunks(**kwargs))
+
+
+def record_retrieval_stage(stage: Mapping[str, Any]) -> None:
+    """内容を推定せず、実際の入力・採用・打切りを呼出元へ記録する。"""
+    current = _active.get()
+    if current is not None and current.record_retrieval is not None:
+        current.record_retrieval(stage)

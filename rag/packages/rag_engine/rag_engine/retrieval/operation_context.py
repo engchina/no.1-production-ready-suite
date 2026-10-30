@@ -47,9 +47,8 @@ def operation_section_pattern() -> re.Pattern[str]:
     特定マニュアルの節記法（「B 【操作説明】」）に固定せず、一般語の既定と業務 profile の
     `operation_section_pattern` で判定する (#849)。
     """
-    from rag_engine.resources.runtime import current_profile
 
-    pattern = current_profile().operation_section_pattern or evidence_cues().alt["operation_section_words"]
+    pattern = evidence_cues().alt["operation_section_words"]
     return re.compile(pattern)
 
 

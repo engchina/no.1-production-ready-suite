@@ -2,19 +2,13 @@
 
 from copy import deepcopy
 from dataclasses import asdict
-from pathlib import Path
 
 from rag_engine.chunking import build_small_to_big_chunks
 from rag_engine.models.contracts import ChunkBatch, ChunkRequest
-from rag_engine.profiles import DomainProfile
-from rag_engine.resources.runtime import ResourcePaths, Runtime
 
 
 class ChunkingService:
-    """既存の表・画像・親子構造を維持し、業務設定を明示して分割する。"""
-
-    def __init__(self, profile: DomainProfile | None = None):
-        self.profile = profile or DomainProfile()
+    """既存の表・画像・親子構造と保存済みの文書属性を維持して分割する。"""
 
     def chunk(self, request: ChunkRequest) -> ChunkBatch:
         """入力を変更せず分割する。サイズ設定の不正値は ValueError。"""
@@ -29,14 +23,11 @@ class ChunkingService:
             "classification": deepcopy(dict(document.classification)),
             "document_metadata": deepcopy(dict(document.metadata)),
         }
-        # 純変換では資源を読み書きしない。profile のみを既存アルゴリズムへ渡す。
-        runtime = Runtime(ResourcePaths(Path("."), Path(".")), self.profile)
-        with runtime.activate():
-            chunks = build_small_to_big_chunks(
-                payload,
-                source_run_id=document.source_run_id or document.document_id,
-                selected_engine_ids=engines,
-                config=config,
-                source_page_count=document.page_count,
-            )
+        chunks = build_small_to_big_chunks(
+            payload,
+            source_run_id=document.source_run_id or document.document_id,
+            selected_engine_ids=engines,
+            config=config,
+            source_page_count=document.page_count,
+        )
         return ChunkBatch(document, tuple(chunks), config)

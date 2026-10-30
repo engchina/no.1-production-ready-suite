@@ -14,8 +14,9 @@ const TECHNICAL_SPANS: Readonly<Record<string, { name: Exclude<keyof TraceSpanNa
   "gen_ai.chat": { name: "chat", target: ["gen_ai.request.model"] },
   "gen_ai.embeddings": { name: "embeddings", target: ["gen_ai.request.model"] },
   "gen_ai.rerank": { name: "rerank", target: ["gen_ai.request.model"] },
+  "rerank.request": { name: "rerankRequest" },
   "gen_ai.execute_tool": { name: "executeTool", target: ["gen_ai.tool.name"] },
-  "mcp.request": { name: "mcpRequest", target: ["gen_ai.tool.name", "mcp.method.name"] },
+  "mcp.request": { name: "mcpRequest", target: ["pr.tool.title", "gen_ai.tool.name", "mcp.method.name"] },
   "oracle.select_ai": { name: "selectAi" },
   "http.request": { name: "httpRequest" },
 };
@@ -44,7 +45,9 @@ export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDeta
     const technical = TECHNICAL_SPANS[span.operationName] ?? (span.operationName.startsWith("gen_ai.") ? { name: "genAi" as const, target: ["gen_ai.request.model"] } : undefined);
     if (!technical) return span.operationName;
     const target = technical.target?.map((key) => textAttribute(span.attributes, key)).find(Boolean);
-    name = target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name];
+    const purpose = ["gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"].includes(span.operationName) ? textAttribute(span.attributes, "pr.gen_ai.purpose") : undefined;
+    const purposeName = purpose ? labels.modelPurposes?.[purpose] : undefined;
+    name = purposeName || (span.operationName === "gen_ai.chat" ? names.chat : target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name]);
   }
   const attempt = span.attributes["pr.attempt"];
   return typeof attempt === "number" && Number.isInteger(attempt) && attempt > 1 ? names.attempt(name, attempt) : name;
@@ -133,7 +136,9 @@ export function traceTimeline(value: unknown, labels: TraceDetailsLabels = DEFAU
       attributes,
     }, labels);
     const fields = traceSpanFields(id, operationName, attributes, labels);
+    if (typeof span.parent_span_id === "string") fields.push({ label: "Parent span ID", value: span.parent_span_id, mono: true });
     steps.push({ id, label, level,
+      parentId: typeof span.parent_span_id === "string" ? span.parent_span_id : undefined,
       status: span.status === "cancelled" ? "skipped" : span.status as "done" | "failed" | "skipped",
       detail: span.status === "cancelled" ? labels.cancelled : undefined,
       startedAt: typeof span.started_at === "string" ? span.started_at : null,

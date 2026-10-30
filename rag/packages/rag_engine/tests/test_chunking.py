@@ -125,6 +125,79 @@ class ChunkingTests(unittest.TestCase):
         self.assertIn("回答用本文", children[0].text)
         self.assertIn("OCR抽出テキスト:\n請求先欄 会社名", children[0].text)
 
+    def test_picture_ocr_is_folded_into_its_picture_image_once(self):
+        """図と同じ bbox の OCR は図の画像の ocr_text になり、画像は 1 件だけ（#3455）。"""
+        bbox = [10, 30, 90, 80]
+        children = self._picture_children(
+            [
+                _record(1, 1, "Text", "本文。", bbox=[10, 10, 70, 20]),
+                _record(1, 2, "Picture", "", raw_type="picture", bbox=bbox, raw={"vision_crop": "docling/vision/p.png"}),
+                _record(1, 3, "Picture", "OCR抽出テキスト:\n保存 取消", raw_type="picture_ocr_text", bbox=bbox),
+            ]
+        )
+
+        self.assertEqual(len(children), 1)
+        [image] = children[0].metadata["image_evidence"]
+        self.assertEqual((image["image_id"], image["raw_type"], image["crop_path"]), ("docling-p1-2", "picture", "docling/vision/p.png"))
+        self.assertEqual(image["ocr_text"], "OCR抽出テキスト: 保存 取消")
+        ocr_ref = next(ref for ref in children[0].source_record_refs if ref["raw_type"] == "picture_ocr_text")
+        self.assertEqual(ocr_ref["picture_record_id"], "docling-p1-2")
+
+    def test_picture_ocr_joins_its_picture_across_bbox_rounding_and_by_explicit_link(self):
+        """丸めの境目の bbox の差・明示の結び付き（source_picture_ref）でも、OCR は図と同じ child（#3455）。"""
+        for name, ocr_bbox, ocr_raw in (
+            ("bbox_rounding", [10.06, 30, 90, 80], {}),
+            ("explicit_self_ref", [12, 33, 88, 78], {"source_picture_ref": "#/pictures/0"}),
+        ):
+            with self.subTest(name):
+                children = self._picture_children(
+                    [
+                        _record(1, 1, "Text", "本文。", bbox=[10, 10, 70, 20]),
+                        _record(1, 2, "Picture", "", raw_type="picture", bbox=[10, 30, 90, 80], raw={"self_ref": "#/pictures/0"}),
+                        _record(1, 3, "Picture", "OCR抽出テキスト:\n保存", raw_type="picture_ocr_text", bbox=ocr_bbox, raw=ocr_raw),
+                    ]
+                )
+
+                self.assertEqual(len(children), 1)
+                self.assertEqual([r["record_id"] for r in children[0].source_record_refs], ["docling-p1-2", "docling-p1-3"])
+                self.assertEqual([i["image_id"] for i in children[0].metadata["image_evidence"]], ["docling-p1-2"])
+
+    def test_ocr_only_picture_child_carries_the_picture_image(self):
+        """図の record が無く OCR だけの図も、OCR の page・bbox を図の領域にした画像の根拠を持つ（#3455）。"""
+        children = self._picture_children(
+            [
+                _record(1, 1, "Text", "本文。", bbox=[10, 10, 70, 20]),
+                _record(1, 2, "Picture", "OCR抽出テキスト:\n保存 取消", raw_type="picture_ocr_text", bbox=[10, 30, 90, 80]),
+            ]
+        )
+
+        [image] = children[0].metadata["image_evidence"]
+        self.assertEqual(
+            (image["image_id"], image["raw_type"], image["page"], image["bbox"], image["asset_kind"]),
+            ("docling-p1-2", "picture", 1, [10, 30, 90, 80], "page_region"),
+        )
+        self.assertEqual(image["ocr_text"], "OCR抽出テキスト: 保存 取消")
+
+    def test_ocr_of_inline_icon_is_not_image_evidence(self):
+        """inline icon の図とその OCR は、OCR があっても画像の根拠にしない（#3455）。"""
+        bbox = [72, 40, 80, 48]
+        children = self._picture_children(
+            [
+                _record(1, 1, "Text", "「履歴」ボタンを押すと連携の送信記録を照会します。", bbox=[10, 40, 70, 55]),
+                _record(1, 2, "Picture", "", raw_type="picture", bbox=bbox),
+                _record(1, 3, "Picture", "OCR抽出テキスト:\n履歴", raw_type="picture_ocr_text", bbox=bbox),
+            ]
+        )
+
+        self.assertEqual(len(children), 1)
+        self.assertNotIn("image_evidence", children[0].metadata)
+
+    def _picture_children(self, records):
+        chunks = build_small_to_big_chunks(
+            _viewer_payload(records), source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig()
+        )
+        return [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL and "Picture" in chunk.metadata["source_categories"]]
+
     def test_content_picture_without_text_is_kept_as_image_evidence_chunk(self):
         payload = _viewer_payload(
             [
@@ -2089,7 +2162,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(parent.retrieval_text, parent.text)
         self.assertNotIn("Source file:", child.text)
         self.assertIn("Source file: manual.pdf", child.retrieval_text)
-        self.assertIn("Classification: 20_在庫管理 / 20_操作説明書 / 倉庫連携", child.retrieval_text)
+        self.assertIn("Classification: 在庫管理 / 操作説明書 / 倉庫連携", child.retrieval_text)
         self.assertIn("Section path: Ⅰ. 倉庫マスタ登録", child.retrieval_text)
         self.assertNotIn(parent.chunk_id, child.retrieval_text)
         self.assertIn("Parent summary:", child.retrieval_text)
@@ -2331,8 +2404,8 @@ class ChunkingTests(unittest.TestCase):
         payload = chunk_payload(loadless_result(chunks=chunks, source_run_id="abcdef", source_file_name="manual.pdf"))
         loaded = chunk_result_from_payload(payload)
 
-        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "20_在庫管理")
-        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "20_操作説明書")
+        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "在庫管理")
+        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "操作説明書")
         self.assertEqual(loaded.chunks[0].metadata["document"]["classification"]["small_category"], "倉庫連携")
 
     def test_chunks_use_analysis_payload_classification_by_default(self):
@@ -2352,8 +2425,8 @@ class ChunkingTests(unittest.TestCase):
         )
         child = next(chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL)
 
-        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "20_在庫管理")
-        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "20_操作説明書")
+        self.assertEqual(child.metadata["document"]["classification"]["large_category"], "在庫管理")
+        self.assertEqual(child.metadata["document"]["classification"]["middle_category"], "操作説明書")
         self.assertEqual(child.metadata["document"]["classification"]["small_category"], "倉庫連携")
 
     def test_parent_child_relationships_live_only_in_authoritative_chunk_fields(self):

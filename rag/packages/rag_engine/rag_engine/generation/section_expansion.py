@@ -99,6 +99,8 @@ STOP_PARTIAL = "partial_read"
 STOP_DISABLED = "disabled"
 # 列挙の問の読む範囲（文書全体）まで読み、評価し直しを省いて止めた（#1528。``section_skip_regrade_at_scope``）。
 STOP_SCOPE_READ = "scope_read"
+# 足りると判定したが列挙の観点が未確認（写しの照合の失敗など）のため、評価し直さずに上の章節を 1 段読んで止めた（#3755）。
+STOP_UNVERIFIED_EXPANDED = "unverified_expanded"
 # 抽出してから統合（#1437）で読めなかった範囲の理由（章節の拡張の止めた理由には使わない）。
 STOP_EXTRACTION_CALLS = "extraction_calls"
 STOP_EXTRACTION_ERROR = "extraction_error"
@@ -289,7 +291,7 @@ class SectionRead(list[Any]):
 
 @dataclass(frozen=True)
 class SectionExpansionLimits:
-    """拡張の上限（検索・回答プロファイルで変えられる）。``input_tokens`` は根拠の本文の入力 token の上限。"""
+    """拡張の上限（検索方法の全体設定で決める）。``input_tokens`` は根拠の本文の入力 token の上限。"""
 
     max_levels: int
     input_tokens: int
@@ -410,6 +412,15 @@ def is_enough(attempt: CragRetrievalAttempt | None) -> bool:
     if attempt is None or attempt.grade_error:
         return False
     return bool(attempt.sufficient) and not (set(attempt.missing_aspects) & CONTENT_ASPECTS)
+
+
+def unverified_enumeration(attempt: CragRetrievalAttempt | None) -> bool:
+    """足りると判定したが、列挙の観点が未確認（``unknown``）か（#3755）。
+
+    未確認は不足ではない（足りないと確かめていない）が、足りるとも確かめていない。章節の拡張では、評価器を
+    呼び直さずに上の章節を 1 段だけ読む理由にする（足りるとして止めない）。
+    """
+    return is_enough(attempt) and ENUMERATION_ASPECT in tuple(getattr(attempt, "unknown_aspects", ()) or ())
 
 
 def section_label(outline: SectionOutline, section: SectionInfo) -> str:
@@ -813,6 +824,18 @@ def expand_sections(
 
     replaced = 0  # この段で、抜き出した原文に置き換えた・外した文脈の親の数
     extracting = large_sections is not no_large_section_handler
+    # 足りると判定したが列挙の観点が未確認のとき、上の章節を 1 段読むのを待つ（#3755）。待つ間の段は評価器も抜き出しも
+    # 呼ばない（モデルの呼び出しを増やさない）。
+    unverified_pending = False
+
+    def wait_for_unverified(attempt: CragRetrievalAttempt | None, level: int) -> bool:
+        """未確認の列挙の観点で、評価し直さずに上の章節を読みに行くか。行くなら診断に残して True。"""
+        nonlocal unverified_pending
+        if grade is None or unverified_pending or not unverified_enumeration(attempt):
+            return False
+        unverified_pending = True
+        trace["unverified_expansion"] = {"aspects": [ENUMERATION_ASPECT], "after_level": level}
+        return True
 
     def seconds_left() -> float:
         """抽出に使える残りの秒数（回答全体の期限から、生成と次の判定の分を引く）。"""
@@ -1046,6 +1069,8 @@ def expand_sections(
             return finish(STOP_TIME_LIMIT)
         level_trace: dict[str, Any] = {"level": level, "sections": []}
         trace["levels"].append(level_trace)
+        # 未確認の観点のために読む段では、入らない章節を抜き出さない（抜き出しはモデルを呼ぶ）。
+        extract_now = extracting and not unverified_pending
         added: list[ContextParentEvidence] = []
         replaced = 0
         budget_hit = False
@@ -1078,7 +1103,7 @@ def expand_sections(
             ]
             if not children:
                 # 子の章節が無い章節（大きな leaf・子をすべて読んだ章節）は、抽出してから統合（#1437）に渡す。
-                if extracting:
+                if extract_now:
                     budget_hit = hand_off(chain, section, [(section, entry)], entry, added) or budget_hit
                 else:
                     without_extraction(chain, section, entry, added)
@@ -1114,7 +1139,7 @@ def expand_sections(
                     # 読取に失敗した子の章節は、失敗として出す（予算で読めなかった章節にしない）。
                     budget_hit = True
                     continue
-                if extracting:
+                if extract_now:
                     pending.append((child, child_entry))
                 else:
                     without_extraction(chain, child, child_entry, added, read_above)
@@ -1124,7 +1149,13 @@ def expand_sections(
                 budget_hit = hand_off(chain, section, pending, entry, added, read_above) or budget_hit
         if budget_hit or any(item.get("read") == "extracted" for item in _entries(level_trace)):
             # 全体を読む必要のある章節は、抽出してから統合（#1437）に渡す（差し込み口が無ければ予算で打ち切る）。
-            trace["large_section_handoff"] = "extract_then_integrate" if extracting else "extract_then_integrate_unavailable"
+            trace["large_section_handoff"] = (
+                "extract_then_integrate"
+                if extract_now
+                else "not_used_for_unverified_aspects"
+                if extracting
+                else "extract_then_integrate_unavailable"
+            )
         result.levels = level
         level_trace["labels"] = labels
         if added:
@@ -1132,6 +1163,10 @@ def expand_sections(
             level_trace["added_parents"] = len(added)
         if replaced:
             level_trace["replaced_parents"] = replaced
+        if unverified_pending and (added or replaced):
+            # 未確認の観点のために上の章節を読んだ。評価し直さずに生成へ渡す（#3755）。
+            level_trace["grade_skipped"] = "unverified_aspects"
+            return finish(STOP_TOKEN_BUDGET if budget_hit else STOP_UNVERIFIED_EXPANDED)
         if grade is None and (scope_reached() or budget_hit):
             level_trace["grade_skipped"] = "not_requested"
             return finish(STOP_PARTIAL if result.unread else STOP_SCOPE_READ)
@@ -1141,7 +1176,12 @@ def expand_sections(
             # 判定を飛ばした段で足した根拠がまだ判定・生成に渡っていない（#1526）。評価し直しの省略（#1528）は、
             # 下の判定の前で扱う（足した根拠が判定に渡っていないときだけ）。
             unjudged = current is not result.context or (latest is None and grade is not None)
+            if unverified_pending:
+                # 未確認の観点のために読む段で、足す根拠が無かった。さらに上の章節を読みに行く（段の上限まで）。
+                continue
             if scope_reached() and is_enough(latest) and not unjudged:
+                if wait_for_unverified(latest, level):
+                    continue
                 # 読む範囲の章節はすでに文脈にあった（足す根拠が無い）。最後の判定のまま止める。
                 return finish(STOP_SUFFICIENT)
             if not (unjudged and scope_reached()):
@@ -1173,7 +1213,9 @@ def expand_sections(
         latest = attempt
         level_trace.update(sufficient=attempt.sufficient, missing_aspects=list(attempt.missing_aspects))
         if is_enough(attempt) and scope_reached() and not result.unread:
-            return finish(STOP_SUFFICIENT)
+            if budget_hit or not wait_for_unverified(attempt, level):
+                return finish(STOP_TOKEN_BUDGET if budget_hit and unverified_enumeration(attempt) else STOP_SUFFICIENT)
+            continue
         if budget_hit:
             return finish(STOP_TOKEN_BUDGET)
     remaining_targets = [chain for chain in chains if chain.next_section is not None]
@@ -1251,6 +1293,7 @@ __all__ = [
     "estimate_tokens",
     "expand_sections",
     "is_enough",
+    "unverified_enumeration",
     "no_large_section_handler",
     "model_input_tokens",
     "section_label",

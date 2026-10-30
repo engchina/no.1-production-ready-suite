@@ -156,7 +156,7 @@ class WhoCanAnswerDefinitionTest(unittest.TestCase):
     def sections(self):
         from rag_engine.models.llm import ExternalDataItem
 
-        prompt = grounded.GENERATE_SYSTEM_PROMPT.split("4.5 ", 1)[1].split("4.6 ", 1)[0]
+        prompt = grounded.GENERATE_SYSTEM_PROMPT.split("### 未確認事項・実データ・別の資料", 1)[1].split("### 方針と items の対応", 1)[0]
         return prompt, ExternalDataItem.model_fields["who_can_answer"].description
 
     def test_ledger_values_are_document_not_system(self):
@@ -256,7 +256,7 @@ def _run(model, ctx, question, **settings):
 
 
 def rule(eid, text, kind="rule"):
-    return {"kind": kind, "text": text, "evidence_id": eid, "quote": text, "request_id": "Q1"}
+    return {"kind": kind, "text": text, "citations": [{"evidence_id": eid, "quote": text}], "request_id": "Q1"}
 
 
 class GroundedConfirmationFactsTest(unittest.TestCase):
@@ -282,12 +282,12 @@ class GroundedConfirmationFactsTest(unittest.TestCase):
         response = _run(FakeModel([value], [audit(*reviews, requests=[("Q1", "addressed")])]), ctx, question)
         envelope = response.envelope
         # 旧版の説明は言い換えを残して警告（superseded）を付ける（#2738）。警告だけなので answered。
-        self.assertEqual(envelope["outcome"], "answered")
+        self.assertEqual(envelope["outcome"], "conditional")
         self.assertIn("rule_warnings", envelope["handoff_reasons"])
         self.assertEqual(envelope["confirmations"], [])
         self.assertFalse(response.external_data_required)
         # 旧版の警告は検査の不合格ではない（人の確認に回さない）。
-        self.assertFalse(response.needs_human_review)
+        self.assertTrue(response.needs_human_review)
         marks = {item["text"]: (item["applies"], item["mark"]) for item in envelope["items"]}
         self.assertEqual(marks[V1_STEP], ("matched", "warning"))
         self.assertEqual(marks[V2_STEP], ("matched", ""))
@@ -314,7 +314,7 @@ class GroundedConfirmationFactsTest(unittest.TestCase):
         model = lambda: FakeModel([value], [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])])  # noqa: E731
         self.assertEqual(_run(model(), ctx, question).envelope["outcome"], "needs_environment_data")
         response = _run(model(), ctx, question, known_conditions=(("部門長の承認", "はい"),))
-        self.assertEqual(response.envelope["outcome"], "answered")
+        self.assertEqual(response.envelope["outcome"], "conditional")
         self.assertNotIn("実データ", response.answer_text)
 
 

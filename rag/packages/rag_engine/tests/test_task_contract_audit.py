@@ -4,7 +4,8 @@ import json
 from unittest.mock import patch
 
 import pytest
-from test_evidence_first_answering import evaluation_case
+from judge_stub import judge
+from test_evidence_first_answering import PARSE, evaluation_case
 
 from rag_engine.evaluation.answer_eval import _evidence_fragments, evaluate_answer_payload
 from rag_engine.generation.answering import (
@@ -79,7 +80,7 @@ def test_crag_keeps_support_when_one_candidate_is_selected():
     assert {r.chunk_uid for r in result.records} == {"a", "b"}
 
 
-def test_crag_rejects_high_confidence_without_required_evidence():
+def test_crag_high_confidence_does_not_prove_required_coverage():
     r = record("a")
     grade = CragRetrievalGradeOutput(
         sufficient=True,
@@ -91,7 +92,8 @@ def test_crag_rejects_high_confidence_without_required_evidence():
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[r], text=r.text), object())
-    assert not result.sufficient
+    assert not result.generation_usable and result.required_aspect_coverage == "unknown"
+    assert result.grade_execution == "partial"
 
 
 def test_crag_does_not_resolve_ambiguous_local_ids():
@@ -109,13 +111,24 @@ def test_crag_does_not_resolve_ambiguous_local_ids():
     )
     with patch("rag_engine.generation.answering.parse_text_response", return_value=grade):
         result = _grade_crag_retrieval(1, "登録方法", "登録方法", ["登録方法"], AnswerContext(records=[a, b], text="text"), object())
-    assert result.relevant_chunk_ids == () and not result.sufficient
+    assert result.relevant_chunk_ids == () and not result.generation_usable
+    assert result.required_aspect_coverage == "unknown"
+    assert all(not c["source_ids"] for c in result.aspect_checks)
 
 
 def test_identical_retry_stops_before_another_grade_call():
     a = record("a")
     context = AnswerContext(records=[a], text=a.text)
-    grade = CragRetrievalGradeOutput(sufficient=False, confidence=0.1, reason="不足", rewritten_query="入力の前提")
+    grade = CragRetrievalGradeOutput(
+        sufficient=False,
+        confidence=0.1,
+        reason="不足",
+        rewritten_query="入力の前提",
+        aspect_checks=[
+            dict(aspect=k, status="missing", source_ids=[], reason="必要な操作の説明なし")
+            for k in task_contract("登録方法")["required_aspects"]
+        ],
+    )
     with (
         patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", return_value=context) as search,
         patch("rag_engine.generation.answering.parse_text_response", return_value=grade) as parse,
@@ -125,21 +138,21 @@ def test_identical_retry_stops_before_another_grade_call():
     assert attempts[-1].stop_reason == "no_new_evidence" and result.records
 
 
-def test_missing_audit_is_reported():
+def test_uncited_passage_is_judged_unsupported_without_the_model():
     data, scope, output = evaluation_case("data_confirmation")
-    data["answer_text"] += "主档を変更する。"
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    data["answer_text"] += "\n\n主档を変更する。"
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
-    assert result["status"] == "completed" and result["missing_audit_passage_ids"] == ["A2"]
+    assert result["status"] == "completed" and result["missing_audit_passage_ids"] == []
+    uncited = next(claim for claim in result["claim_checks"] if claim["answer_quote"] == "主档を変更する。")
+    assert (uncited["status"], uncited["reference_check"]) == ("unsupported", "uncited")
 
 
 def test_evaluation_binds_source_text_by_stable_id():
     data, scope, output = evaluation_case("supported")
     span = list(_evidence_fragments(data["evidence_items"]))[0]
     output.claim_checks[0].evidence_id = span["evidence_id"]
-    output.claim_checks[0].source_id = ""
-    output.claim_checks[0].evidence_quote = ""
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["claim_checks"][0]["evidence_quote"] == data["evidence_items"][0]["text"]
     assert result["claim_checks"][0]["status"] == "supported"
@@ -149,12 +162,11 @@ def test_missing_coverage_can_cite_refusal_without_getting_credit():
     from rag_engine.evaluation.answer_eval import CoverageCheck
 
     data, scope, output = evaluation_case("supported")
-    output.coverage_checks = [
-        CoverageCheck(requirement_index=1, status="missing", answer_quote=data["answer_text"], answer_passage_id="A1")
-    ]
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", return_value=output):
+    output.coverage_checks = [CoverageCheck(requirement_index=1, status="missing", answer_quote="", answer_passage_id="A1")]
+    with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed" and result["requirement_coverage"] == 0
+    assert result["coverage_checks"][0]["answer_passage_id"] == "A1"
 
 
 def test_recipient_goal_reserves_list_operations_over_repeated_report_labels():
@@ -172,43 +184,32 @@ def test_recipient_goal_reserves_list_operations_over_repeated_report_labels():
 
 
 def test_extra_coverage_item_is_retried_with_explicit_fixed_ids_and_feedback():
-    from rag_engine.evaluation.answer_eval import CoverageCheck
+    from rag_engine.evaluation.answer_eval import CoverageJudgement, CoverageOutput
 
     data, scope, valid = evaluation_case("supported")
-    invalid = valid.model_copy(
-        update={"coverage_checks": [*valid.coverage_checks, CoverageCheck(requirement_index=2, status="missing", answer_quote="")]}
-    )
+    fake = judge(valid)
     calls = []
 
-    def parse(system, prompt, *args, **kwargs):
+    def parse(system, prompt, settings, schema, **kwargs):
+        if schema is not CoverageOutput:
+            return fake(system, prompt, settings, schema, **kwargs)
         inputs = json.loads(prompt)
         calls.append(inputs)
-        assert inputs["standard_answer_scope"]["requirements"][0]["requirement_index"] == 1
+        assert [item["requirement_index"] for item in inputs["requirements"]] == [1]
         if len(calls) == 1:
-            return invalid
-        assert "1〜1" in inputs["validation_feedback"]
-        assert inputs["evidence_items"] == calls[0]["evidence_items"]
-        return valid
+            extra = CoverageJudgement(requirement_index=2, reason="理由", status="missing")
+            return CoverageOutput(coverage_checks=[*fake(system, prompt, settings, schema).coverage_checks, extra])
+        assert "（1）" in inputs["validation_feedback"]
+        return fake(system, prompt, settings, schema)
 
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+    with patch(PARSE, side_effect=parse):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed" and len(result["coverage_checks"]) == 1
     assert len(calls) == 2 and len(result["standard_answer_scope"]["requirements"]) == 1
 
 
-def test_requester_terms_come_from_generic_defaults_and_the_domain_profile():
-    """問い合わせ元の語は一般語の既定と profile の requester_terms。業種固有の語はコードに置かない (#849)。"""
-    from types import SimpleNamespace
-    from unittest.mock import patch
-
+def test_requester_terms_use_generic_language_resources():
     from rag_engine.retrieval import task_contract as module
 
-    cached = getattr(module, "_task_contract", None)  # 結果は lru_cache されるため profile を変えたら消す
-    assert module.task_contract("顧客から取引先一覧のCSV提供の依頼があった")["requester_mentions"]
-    assert not module.task_contract("本部から取引先一覧のCSV提供の依頼があった")["requester_mentions"]
-    with patch("rag_engine.resources.runtime.current_profile", return_value=SimpleNamespace(requester_terms=("本部",))):
-        if cached is not None:
-            cached.cache_clear()
-        assert module.task_contract("本部から売上一覧のCSV提供の依頼があった")["requester_mentions"]
-    if cached is not None:
-        cached.cache_clear()
+    assert module.task_contract("顧客から一覧のCSV提供の依頼があった")["requester_mentions"]
+    assert not module.task_contract("組織Aから一覧のCSV提供の依頼があった")["requester_mentions"]

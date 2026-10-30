@@ -56,7 +56,13 @@ from agents import (
 from agents.items import ModelResponse
 from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
 from agents.tool_context import ToolContext
-from openai import DEFAULT_MAX_RETRIES, APIStatusError, AsyncOpenAI, BadRequestError
+from openai import (
+    DEFAULT_MAX_RETRIES,
+    APIStatusError,
+    AsyncOpenAI,
+    BadRequestError,
+    DefaultAsyncHttpxClient,
+)
 from openai.types.shared import Reasoning, ReasoningEffort
 from opentelemetry import trace
 from pr_backend_core.chat_history import (
@@ -64,8 +70,10 @@ from pr_backend_core.chat_history import (
     ChatHistoryBudget,
     build_chat_history,
 )
+from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.mcp_trace import traceparent_links
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.request_context import bind_log_context
 from pr_backend_core.observability.tracing import (
     ObservedSpan,
@@ -85,16 +93,15 @@ from pr_system_settings.enterprise_ai_errors import (
 from pr_system_settings.model import (
     DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
     DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
+    EnterpriseAiModelNotRegisteredError,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
     enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort,
-    enterprise_ai_seed,
     lower_reasoning_effort,
     reasoning_effort_to_send,
-    seed_to_send,
 )
 
 from app.features.agent import (
@@ -236,6 +243,7 @@ from app.features.agent.output_fields import (
     record_output_tool,
     without_output_record_sections,
 )
+from app.features.agent.rag_retrieval_state import retrieval_notice
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.section_coverage import (
     COVERAGE_INCOMPLETE,
@@ -326,6 +334,7 @@ from app.features.agent.tools import (
     mcp_tool_handler,
     tool_registry,
     tool_result_images,
+    tool_title_scope,
     with_tool_result_images,
 )
 from app.features.agent.trace_spans import run_trace_owner, trace_spans
@@ -333,6 +342,7 @@ from app.observability import (
     CONTEXT_COMPACTIONS_TOTAL,
     MODEL_INCOMPLETE_RETRIES_TOTAL,
     TOOL_LOOP_STOPS_TOTAL,
+    UNDECLARED_TOOL_CALLS_TOTAL,
 )
 from app.settings import get_settings
 
@@ -380,8 +390,6 @@ class ModelTarget:
     api_key: str
     # 推論（思考）の量（#1425。システム設定 > モデル の登録モデルの値）。none は送らない。
     reasoning_effort: str = ""
-    # LLM の呼び出しの seed（#1434。システム設定 > モデル の共通の値、既定 42）。
-    seed: int = 42
     # 1 回の呼び出しの出力の上限（#1719。システム設定 > モデル の登録モデルの値。既定 32768）。
     max_output_tokens: int = DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS
     # 入力の上限（#2383。prompt と応答の合計。システム設定 > モデル の登録モデルの値。
@@ -415,7 +423,12 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
             "使うモデルが決まっていません。"
             "システム設定 > モデル で既定のテキストモデルを設定してください。",
         )
-    connection = enterprise_ai_connection_for_model(settings, resolved)
+    try:
+        connection = enterprise_ai_connection_for_model(settings, resolved)
+    except EnterpriseAiModelNotRegisteredError as exc:
+        # 業務 Agent が選んだモデルが登録に無い（登録を消したなど）。別のモデル・接続へ暗黙に
+        # 切り替えずに失敗させる（#3240 の不変条件 2）。
+        raise BuiltinRuntimeError("runtime.model_not_registered", str(exc)) from exc
     if not connection.is_configured():
         raise BuiltinRuntimeError(
             "runtime.model_connection_not_configured",
@@ -429,7 +442,6 @@ def resolve_model_target(model_id: str = "") -> ModelTarget:
         project_ocid=connection.project_ocid,
         api_key=connection.api_key,
         reasoning_effort=enterprise_ai_reasoning_effort(settings, resolved),
-        seed=enterprise_ai_seed(settings),
         # モデルの出力の上限と入力の上限の小さい方（#1719。prompt は会話で伸びるので見積もらない）。
         max_output_tokens=enterprise_ai_output_token_budget(settings, resolved),
         max_input_tokens=enterprise_ai_max_input_tokens(settings, resolved),
@@ -447,26 +459,22 @@ def model_accepts_images(settings: Any, model_id: str) -> bool:
 
 
 def model_settings_for(target: ModelTarget) -> ModelSettings:
-    """Run・評価の判定に使う SDK の ModelSettings（#1425 / #1434）。
+    """Run・評価の判定に使う SDK の ModelSettings（#1425）。
 
     - モデルの推論（思考）の量を Responses API の `reasoning: {"effort": ...}` で送る
       （none は送らない。解釈は platform の `reasoning_effort_to_send`）
-    - seed を top-level の `seed` で送る（Responses API に seed の引数が無いため、SDK の
-      `extra_body`。解釈は platform の `seed_to_send`）
     - モデルの出力の上限を `max_output_tokens` で送る（#1719。SDK の `max_tokens`。送らないと
       endpoint の既定の上限になり、推論のあるモデルは推論だけで上限に達することがある）
     """
-    extra_body = {"seed": seed_to_send(target.seed)}
     max_tokens = max(1, int(target.max_output_tokens))
     effort = reasoning_effort_to_send(target.reasoning_effort)
     if not effort:
-        return ModelSettings(store=False, max_tokens=max_tokens, extra_body=extra_body)
+        return ModelSettings(store=False, max_tokens=max_tokens)
     # 値は共通のモデル設定（pr_system_settings）が SDK と同じ候補に絞って保存している。
     return ModelSettings(
         store=False,
         reasoning=Reasoning(effort=cast(ReasoningEffort, effort)),
         max_tokens=max_tokens,
-        extra_body=extra_body,
     )
 
 
@@ -726,6 +734,7 @@ class _ObservedResponseManager:
             kind="client",
             attributes={
                 "gen_ai.operation.name": "chat",
+                **model_purpose_attributes(default="agent.choose_action"),
                 "gen_ai.provider.name": "oracle",
                 "gen_ai.request.model": str(request.get("model") or ""),
                 **_model_input_attributes(request),
@@ -867,6 +876,7 @@ class _OciResponses:
             finish_on_exit=False,
             attributes={
                 "gen_ai.operation.name": "chat",
+                **model_purpose_attributes(default="agent.choose_action"),
                 "gen_ai.provider.name": "oracle",
                 "gen_ai.request.model": str(request.get("model") or ""),
                 "pr.attempt": attempt,
@@ -932,6 +942,25 @@ class OciResponsesModel(OpenAIResponsesModel):
         )
 
 
+class _ParameterDroppingHttpClient(DefaultAsyncHttpxClient):
+    """SDK の既定（timeout・接続の上限・redirect）の client に、受け付けない引数の扱いを足す。
+
+    モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、以後この
+    モデルには送らない（#3539。判定と記憶は platform の部品）。
+    """
+
+    async def send(self, request: Any, *args: Any, **kwargs: Any) -> Any:
+        parent = super().send
+        return await asend_dropping_parameters(lambda item: parent(item, *args, **kwargs), request)
+
+
+def enterprise_ai_http_client(timeout: float | None = None) -> DefaultAsyncHttpxClient:
+    """Enterprise AI を呼ぶ `AsyncOpenAI` の HTTP の client（`timeout` が無ければ SDK の既定）。"""
+    if timeout is None:
+        return _ParameterDroppingHttpClient()
+    return _ParameterDroppingHttpClient(timeout=timeout)
+
+
 def _default_model_factory(target: ModelTarget) -> Model:
     headers = {"OpenAI-Project": target.project_ocid} if target.project_ocid else None
     client = AsyncOpenAI(
@@ -941,6 +970,7 @@ def _default_model_factory(target: ModelTarget) -> Model:
         max_retries=(
             DEFAULT_MAX_RETRIES if target.sdk_max_retries is None else target.sdk_max_retries
         ),
+        http_client=enterprise_ai_http_client(),
     )
     model = OciResponsesModel(model=target.model_id, openai_client=client)
     # 上限つきの並行の実行器を通す呼び出し（SDK の再試行 0）は、送り直しを実行器に任せる（#2023）。
@@ -1459,6 +1489,9 @@ class _ToolRecorder:
         )
         # 同じ応答で確認を出したため、実行しない呼び出しの ID（確認の答えを待つ間は実行しない）。
         self.held_calls: set[str] = set()
+        # スキルが宣言したが、この Run ではモデルに渡さなかったツール（名前 → 理由。#3240）。
+        # 渡していない名前の呼び出しの理由（`classify_undeclared_call`）に使う。
+        self.excluded: dict[str, str] = {}
 
     async def hold_for_confirmation(self, context: Any, output: Sequence[Any]) -> None:
         """モデルの応答に回答前の確認があれば、ツールを実行する前に中断するかを決める（#3352）。
@@ -1806,6 +1839,20 @@ class _ToolRecorder:
                 {"error": message, "error_code": BUDGET_EXCEEDED_CODE, "budget": exceeded},
                 ensure_ascii=False,
             )
+        base = mcp_base_tool_name(name)
+        guide_note: dict[str, Any] | None = None
+
+        async def check_guides(result: ToolResult) -> None:
+            # 根拠の取得の結果に足す業務ガイドの照合（#1322）は、根拠の取得の一部なので、その
+            # ツールの span の中で呼ぶ（処理の経過で根拠の取得の行の子になる。#3471）。
+            nonlocal guide_note
+            if (
+                result.success
+                and base == RAG_RETRIEVE_EVIDENCE
+                and isinstance(result.output or {}, dict)
+            ):
+                guide_note = await self.check_guides(name, call.arguments)
+
         # 4. handler（呼び先へ送る。ツールの span は `execute` が測る）。
         result = await self.execute(
             step_id,
@@ -1815,10 +1862,10 @@ class _ToolRecorder:
             handler=handler,
             scoped=scoped,
             authorization=authorization,
+            follow_up=check_guides,
         )
         if result.success:
             output = result.output or {}
-            base = mcp_base_tool_name(name)
             if base == RAG_SEARCH and isinstance(output, dict):
                 next_step = self._without_asking(rag_next_step(output, self.environment_tools))
                 if next_step is not None:
@@ -1856,9 +1903,8 @@ class _ToolRecorder:
                         "builtin_runtime_profile_knowledge_passed",
                         extra={"run_id": self.run_id, "tool_name": name, **knowledge},
                     )
-                note = await self.check_guides(name, call.arguments)
-                if note is not None:
-                    output = {**output, "guide_check": note}
+                if guide_note is not None:
+                    output = {**output, "guide_check": guide_note}
             if base == RAG_LOOKUP_GUIDES and isinstance(output, dict):
                 # モデルが自分で引いた業務ガイドにも次の手を足す（業務ガイドだけで答えさせない）。
                 note = guide_check_note(
@@ -1870,6 +1916,12 @@ class _ToolRecorder:
                 )
                 if note is not None:
                     output = {**output, "next_step": self._without_asking(note["next_step"])}
+            if base in RAG_BUDGET_TOOLS and isinstance(output, dict):
+                # 根拠 0 件が資料の不在を意味しない（安全チェックの未完了・補助の処理の縮退）とき
+                # の案内（#3546）。
+                notice = retrieval_notice(output)
+                if notice is not None:
+                    output = {**output, "retrieval_notice": notice}
             if isinstance(output, dict):
                 output = self.hop_hints(
                     call, output, step_id=step_id, adjusted_limits=adjusted_limits
@@ -2105,11 +2157,14 @@ class _ToolRecorder:
         scoped: data_scope.ScopeEnforcement | None = None,
         authorization: _Authorization,
         abortable: bool = True,
+        follow_up: Callable[[ToolResult], Awaitable[None]] | None = None,
     ) -> ToolResult:
         """handler を呼び、結果を step に記録する。
 
         `abortable` の呼び出しは、Run の取消・終了で実行中の呼び先への送信を打ち切る（#2691。
         `_invoke_abortable`）。打ち切った呼び出しは失敗ではなく取消として step に残す。
+        `follow_up` は、このツールの結果に続けて Runtime が行う処理（根拠の取得の後の業務ガイドの
+        照合など）で、ツールの span の中で呼ぶ（その中の span はこのツールの子になる。#3471）。
         """
         from app.features.agent.runtime import runtime_repository
 
@@ -2123,18 +2178,18 @@ class _ToolRecorder:
         # ツールの呼び出しの span（処理の経過のツールの行。#3226）。回答前の確認のツールは
         # 利用者の答えを返すだけなので span にしない（待ちの区間の span が表す）。実行中も
         # 呼んだ引数を開いて見られる。
+        titles = runtime_repository.builtin_tool_titles(self.run_id)
         scope: AbstractContextManager[ObservedSpan | None] = (
             nullcontext(None)
             if call.name == CONFIRMATION_TOOL
             else observed_span(
                 EXECUTE_TOOL_SPAN,
                 attributes=tool_attributes(call.name, call.trace_id),
-                display=tool_display(
-                    call, runtime_repository.builtin_tool_titles(self.run_id), run_step=step_id
-                ),
+                display=tool_display(call, titles, run_step=step_id),
             )
         )
-        with scope as tool_span:
+        # ツールの中の MCP の呼び出しの行も、ツールの行と同じ表示名で出す（#3468）。
+        with scope as tool_span, tool_title_scope(call.name, titles.get(call.name)):
             result = await self._execute_handler(
                 step_id,
                 call,
@@ -2157,6 +2212,8 @@ class _ToolRecorder:
                 # 終わったツールの詳細（内部名・エラー・引数と結果）は終わりのイベントで送る
                 # （#2373）。
                 tool_span.set_display(details=tool_details(call, result))
+            if follow_up is not None:
+                await follow_up(result)
         return result
 
     async def _execute_handler(
@@ -2500,13 +2557,18 @@ def build_function_tools(
     conflicts = _conflicting_tool_names(entries)
     _note_tool_name_conflicts(run_id, conflicts)
     for definition, handler in entries:
-        if definition.name in seen or definition.name in conflicts:
+        if definition.name in conflicts:
+            recorder.excluded[definition.name] = UNDECLARED_CALL_NAME_CONFLICT
+            continue
+        if definition.name in seen:
             continue
         seen.add(definition.name)
         if is_declined_tool(definition.name, declined):
+            recorder.excluded[definition.name] = UNDECLARED_CALL_DECLINED
             continue
         decision = policy.decide(definition)
         if decision == ToolPolicyDecision.DENY:
+            recorder.excluded[definition.name] = UNDECLARED_CALL_POLICY_DENIED
             continue
 
         async def on_invoke(
@@ -2748,6 +2810,120 @@ def build_sdk_agent(
 
 # 無いツールの呼び出しの返答で、候補として並べるツールの数の上限（#1303）。
 _TOOL_NOT_FOUND_LIST_MAX = 20
+
+# モデルに渡していない名前のツールの呼び出し（宣言の閉包の外の呼び出し）の理由（#3240）。
+# どの理由でも実行せず（`tool_not_found_message` をモデルへ返す）、検知を理由に渡すツールを
+# 広げない。理由は Run のイベント（`undeclared_tool_call`）・ログ・metric に残す。
+# 渡したツールと同じツールを別の名前（素の名前・別の接頭辞）で呼んだ（モデルの名前違い）。
+UNDECLARED_CALL_NAME_MISMATCH = "name_mismatch"
+# スキルが宣言したが、ツール権限が「拒否」なので渡していない。
+UNDECLARED_CALL_POLICY_DENIED = "policy_denied"
+# スキルが宣言したが、この Run で利用者が確認を取り消した種類なので渡していない（#1441）。
+UNDECLARED_CALL_DECLINED = "declined"
+# スキルが宣言したが、別の出自のツールと名前が重なったので渡していない（#2596）。
+UNDECLARED_CALL_NAME_CONFLICT = "name_conflict"
+# 同じ会話の前の Run で呼んだツールだが、この Run では渡していない（前の文脈の名前）。
+UNDECLARED_CALL_PREVIOUS_CONTEXT = "previous_context"
+# 登録済みの MCP 接続・Control Plane のツールの名前だが、業務 Agent のスキルが宣言していない
+# （スキルの設定の不足か、宣言の外への呼び出しの試み）。
+UNDECLARED_CALL_NOT_DECLARED = "not_declared"
+# どの接続・ツールの名前にも当たらない。
+UNDECLARED_CALL_UNKNOWN = "unknown"
+UNDECLARED_CALL_REASONS: tuple[str, ...] = (
+    UNDECLARED_CALL_NAME_MISMATCH,
+    UNDECLARED_CALL_POLICY_DENIED,
+    UNDECLARED_CALL_DECLINED,
+    UNDECLARED_CALL_NAME_CONFLICT,
+    UNDECLARED_CALL_PREVIOUS_CONTEXT,
+    UNDECLARED_CALL_NOT_DECLARED,
+    UNDECLARED_CALL_UNKNOWN,
+)
+# 記録するツールの名前の長さの上限（モデルが作った名前なので、長い文を残さない）。
+_UNDECLARED_NAME_MAX_CHARS = 128
+
+
+def classify_undeclared_call(
+    called: str,
+    exposed: Collection[str],
+    *,
+    excluded: Mapping[str, str],
+    previous_names: Collection[str],
+    registered_connections: Collection[str],
+    registered_tools: Collection[str],
+) -> str:
+    """モデルに渡していない名前のツールを呼んだ理由（`UNDECLARED_CALL_REASONS` の 1 つ。#3240）。
+
+    先に、この Run で外したツール（スキルが宣言したもの）か、渡したツールの別名かを見る。次に
+    同じ会話の前の Run で呼んだ名前か、登録済みの接続・Control Plane のツールの名前かを見る。
+    """
+    if called in excluded:
+        return excluded[called]
+    base = mcp_base_tool_name(called)
+    if any(name != called and mcp_base_tool_name(name) == base for name in exposed):
+        return UNDECLARED_CALL_NAME_MISMATCH
+    if called in previous_names:
+        return UNDECLARED_CALL_PREVIOUS_CONTEXT
+    prefix = _connection_prefix(called)
+    if called in registered_tools or (prefix is not None and prefix in registered_connections):
+        return UNDECLARED_CALL_NOT_DECLARED
+    return UNDECLARED_CALL_UNKNOWN
+
+
+def _previous_tool_names(run_id: str) -> set[str]:
+    """同じ会話の前の Run で呼んだツールの名前（`previous_context` の判定）。"""
+    from app.features.agent.runtime import runtime_repository
+
+    names: set[str] = set()
+    for run in runtime_repository.thread_previous_runs(run_id):
+        names.update(step.tool_call.name for step in run.steps if step.tool_call is not None)
+    return names
+
+
+def record_undeclared_call(
+    run_id: str,
+    *,
+    called: str,
+    call_id: str,
+    exposed: Collection[str],
+    excluded: Mapping[str, str],
+) -> str:
+    """渡していない名前の呼び出しを理由つきで Run のイベント・ログ・metric に残す（#3240）。
+
+    記録は補助（失敗しても Run は続ける）。呼び出しは実行しない（実行しないことは呼び出し側の
+    SDK の `tool_not_found` の扱い）。理由を返す。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    try:
+        previous = _previous_tool_names(run_id)
+    except Exception:  # noqa: BLE001 - 前の Run が読めなくても理由は決める
+        previous = set()
+    reason = classify_undeclared_call(
+        called,
+        exposed,
+        excluded=excluded,
+        previous_names=previous,
+        registered_connections={
+            config.server_id for config in runtime_config_store.list_mcp_servers()
+        },
+        registered_tools=set(tool_registry.names()),
+    )
+    name = called[:_UNDECLARED_NAME_MAX_CHARS]
+    UNDECLARED_TOOL_CALLS_TOTAL.labels(reason=reason).inc()
+    logger.warning(
+        "builtin_runtime_undeclared_tool_call",
+        extra={"run_id": run_id, "tool_name": name, "call_id": call_id, "reason": reason},
+    )
+    try:
+        runtime_repository.record_undeclared_tool_call(
+            run_id, {"tool_name": name, "call_id": call_id, "reason": reason}
+        )
+    except Exception as exc:  # noqa: BLE001 - 記録は補助。残せなくてもモデルへ案内は返す
+        logger.warning(
+            "builtin_runtime_undeclared_tool_call_record_failed",
+            extra={"run_id": run_id, "exception_type": type(exc).__name__},
+        )
+    return reason
 
 
 def tool_not_found_message(called: str, exposed: Collection[str]) -> str:
@@ -3034,16 +3210,29 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
     モデルが呼んだ名前のまま。同じ名前が複数の接続にあるときに誤った接続を呼ばない）。
     """
     exposed = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+    recorder = next(
+        (
+            found
+            for tool in sdk_agent.tools
+            if isinstance(found := getattr(tool, _RECORDER_ATTR, None), _ToolRecorder)
+        ),
+        None,
+    )
+    excluded = dict(recorder.excluded) if recorder is not None else {}
 
-    def format_error(args: ToolErrorFormatterArgs[Any]) -> str | None:
+    async def format_error(args: ToolErrorFormatterArgs[Any]) -> str | None:
         if args.kind != "tool_not_found":
             return None
-        message = tool_not_found_message(args.tool_name, exposed)
-        logger.warning(
-            "builtin_runtime_tool_not_found",
-            extra={"run_id": run_id, "tool_name": args.tool_name, "call_id": args.call_id},
+        # 渡していない名前の呼び出しは実行せず、理由つきで Run に残す（#3240）。
+        await asyncio.to_thread(
+            record_undeclared_call,
+            run_id,
+            called=args.tool_name,
+            call_id=str(args.call_id or ""),
+            exposed=exposed,
+            excluded=excluded,
         )
-        return message
+        return tool_not_found_message(args.tool_name, exposed)
 
     limits = getattr(sdk_agent, _CONTEXT_LIMITS_ATTR, None)
     static_instructions = getattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, None)

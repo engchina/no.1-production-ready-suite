@@ -60,8 +60,8 @@ class ParseInputRestoreTests(unittest.TestCase):
                 engine_order=["docling"],
             )
 
-            self.assertEqual(restored.inputs[0].classification["large_category"], "20_在庫管理")
-            self.assertEqual(restored.inputs[0].classification["middle_category"], "20_操作説明書")
+            self.assertEqual(restored.inputs[0].classification["large_category"], "在庫管理")
+            self.assertEqual(restored.inputs[0].classification["middle_category"], "操作説明書")
             self.assertEqual(restored.inputs[0].classification["small_category"], "倉庫連携")
 
     def test_restores_saved_docling_vision_option(self):

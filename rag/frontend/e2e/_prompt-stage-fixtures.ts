@@ -1,4 +1,4 @@
-export type StageFixture = { id: string; phase: string; prompts: { id: string; content: string }[] };
+export type StageFixture = { id: string; phase: string; prompts: { id: string; content: string; prompt_key?: "answer_validation.system" }[] };
 
 export const DEFAULT_STAGES: StageFixture[] = [
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },
@@ -21,7 +21,7 @@ export const FLOW_STAGES: StageFixture[] = [
   { id: "field_extraction", phase: "ingestion", prompts: [{ id: "instruction", content: "項目の指示" }] },
   { id: "raptor_summary", phase: "indexing", prompts: [{ id: "system", content: "索引要約の指示" }] },
   { id: "support_guide_draft", phase: "knowledge", prompts: [{ id: "system", content: "下書きの指示" }] },
-  { id: "support_guide_conditions", phase: "question", prompts: [{ id: "system", content: "条件認識の system" }] },
+  { id: "support_guide_conditions", phase: "question", prompts: [{ id: "system", content: "## Step 1: 質問と条件を読む\n合成の条件。\n\n## Step 2: 原文から値を抜き出す\n合成の原文。\n\n## Step 3: 条件の状態を判定する\nknown / unknown / conflicting。\n\n## Step 4: 結果を返す\nJSON のみ。" }] },
   { id: "history_rewrite", phase: "question", prompts: [{ id: "system", content: "書き換えの system" }] },
   { id: "field_filter", phase: "question", prompts: [{ id: "system", content: "条件の指示" }] },
   { id: "routing", phase: "question", prompts: [{ id: "system", content: "ルーティングの system" }] },

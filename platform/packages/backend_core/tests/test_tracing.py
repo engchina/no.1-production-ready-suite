@@ -22,7 +22,11 @@ from pr_backend_core.observability.tracing import (
 
 
 @pytest.fixture(autouse=True)
-def reset_tracing() -> Iterator[None]:
+def reset_tracing(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    from pr_backend_core.observability import tracing
+
+    # 設定（記録の span の上限など）をテストの後に戻す（同じ process の後のテストに残さない）。
+    monkeypatch.setattr(tracing, "_SETTINGS", tracing._SETTINGS)
     yield
     shutdown_tracing()
 
@@ -445,3 +449,43 @@ def test_span_updates_are_bounded_and_listener_failure_does_not_stop_work() -> N
                 pass
     # root と 1 つ目の span だけ（開始と終了）を知らせ、上限を超えた span は知らせない。
     assert seen == ["task", "llm", "llm", "task"]
+
+
+def test_observe_spans_sees_spans_with_or_without_an_operation_trace() -> None:
+    """`observe_spans` は記録の外の要求でも span を知らせ、記録の知らせは変えない（#3552）。"""
+    from datetime import UTC, datetime, timedelta
+
+    from pr_backend_core.observability.tracing import SpanUpdate, observe_spans, record_span
+
+    outside: list[SpanUpdate] = []
+    with observe_spans(outside.append):
+        with observed_span("llm"):
+            pass
+        now = datetime.now(UTC)
+        record_span("wait", started_at=now - timedelta(seconds=1), finished_at=now)
+    with observed_span("after"):
+        pass
+    assert [(update.operation_name, update.status) for update in outside] == [
+        ("llm", "running"),
+        ("llm", "done"),
+        ("wait", "done"),
+    ]
+    assert not any(update.root for update in outside)
+
+    recorded: list[SpanUpdate] = []
+    observed: list[SpanUpdate] = []
+
+    def failing(update: SpanUpdate) -> None:
+        observed.append(update)
+        raise RuntimeError("synthetic")
+
+    with (
+        operation_trace("task", operation_id="operation-a", listener=recorded.append) as summary,
+        observe_spans(failing),
+        observed_span("llm"),
+    ):
+        pass
+    # 記録の listener は root を含めて今どおり受け、observer の失敗は処理を止めない。
+    assert [update.operation_name for update in recorded] == ["task", "llm", "llm", "task"]
+    assert [update.operation_name for update in observed] == ["llm", "llm"]
+    assert {span.operation_name for span in summary.spans} == {"task", "llm"}

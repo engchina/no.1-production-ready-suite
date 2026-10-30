@@ -18,9 +18,10 @@ TOP_ITEMS = 5
 _HEADING_DEPTH = 2
 _LABEL_MAX = 120
 
-# 検索の経路（`adb_hybrid.retrieval_channels`）の表示名。
+# 検索の経路（`adb_hybrid.retrieval_channels`）の種類。経路は `vector:q1` / `image_vector:q1` / `keyword:oracle_text:q2` /
+# `profile:…` の形（検索の実装と backend の検索が書く。#3443）で、種類は `:` の前で決める。
 _VECTOR_CHANNELS = frozenset({"vector", "image_vector"})
-_TEXT_CHANNELS = frozenset({"text"})
+_TEXT_CHANNELS = frozenset({"keyword", "text"})
 
 
 class StepRecorder(Protocol):
@@ -47,10 +48,13 @@ def record_label(record: AnswerRecord) -> str:
 
 
 def _channels(record: AnswerRecord) -> set[str]:
+    """候補の検索の経路の種類（`vector` / `image_vector` / `keyword` / `profile` など）。"""
     metadata = record.metadata if isinstance(record.metadata, dict) else {}
     hybrid = metadata.get("adb_hybrid")
     channels = hybrid.get("retrieval_channels") if isinstance(hybrid, dict) else None
-    return {str(channel) for channel in channels} if isinstance(channels, list | tuple) else set()
+    if not isinstance(channels, list | tuple):
+        return set()
+    return {str(channel).split(":", 1)[0].strip() for channel in channels}
 
 
 def channel_counts(records: Iterable[AnswerRecord]) -> dict[str, int]:

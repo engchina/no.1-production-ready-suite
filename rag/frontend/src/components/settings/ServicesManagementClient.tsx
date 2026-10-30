@@ -340,9 +340,9 @@ export function ServicesManagementClient() {
             <FormStatus
               tone="info"
               message={t(
-                deploymentMode === "dev"
-                  ? "settings.services.mode.dev.hint"
-                  : "settings.services.mode.prod.hint"
+                deploymentMode === "local"
+                  ? "settings.services.mode.local.hint"
+                  : "settings.services.mode.deployed.hint"
               )}
             />
           ) : (
@@ -411,7 +411,7 @@ function ServiceCommandsDisclosure({ mode }: { mode: DeploymentMode }) {
       label: t("settings.services.commands.logs.label"),
       command: "sudo journalctl -u production-ready-rag-parser-docling.service -f",
     },
-    ...(mode === "dev"
+    ...(mode === "local"
       ? [
           {
             label: t("settings.services.commands.install.label"),
@@ -814,19 +814,19 @@ function ServiceLogPanel({
   );
 }
 
-/** 配備モード(dev/prod とも systemd の unit を操作する)を示すバッジ(色だけに頼らずアイコン+ラベル併記)。 */
+/** 配備モード(全環境で systemd の unit を操作する)を示すバッジ(色だけに頼らずアイコン+ラベル併記)。 */
 function ModeBadge({ mode }: { mode: DeploymentMode }) {
-  const Icon = mode === "dev" ? TerminalSquare : Server;
+  const Icon = mode === "local" ? TerminalSquare : Server;
   return (
     <span
-      data-surface-tint={mode === "dev" ? "info" : "accent"}
+      data-surface-tint={mode === "local" ? "info" : "accent"}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium",
-        mode === "dev" ? "bg-info-subtle text-info-fg" : "bg-accent-muted text-accent-fg-strong"
+        mode === "local" ? "bg-info-subtle text-info-fg" : "bg-accent-muted text-accent-fg-strong"
       )}
     >
       <Icon size={14} aria-hidden />
-      {t(mode === "dev" ? "settings.services.mode.dev" : "settings.services.mode.prod")}
+      {t(`settings.services.mode.${mode}`)}
     </span>
   );
 }

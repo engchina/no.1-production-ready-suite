@@ -104,8 +104,34 @@ def test_document_map_shape(tmp_path: Path, document_map: Any, message: str) -> 
         {"cases": [{"id": "a", "query": "q"}], "thresholds": {"unknown_metric": 0.5}},
         {"cases": [{"id": "a", "query": "q", "required_evidence": [{"id": "e"}]}]},
         {"cases": []},
+        # 行の番号の基準は行と一緒にだけ書ける（#3547）。
+        {
+            "cases": [
+                {
+                    "id": "a",
+                    "query": "q",
+                    "required_evidence": [{"id": "e", "text": "t", "row_basis": "parsed_table"}],
+                }
+            ]
+        },
+        {
+            "cases": [
+                {
+                    "id": "a",
+                    "query": "q",
+                    "required_evidence": [{"id": "e", "row_start": 3, "row_basis": "page"}],
+                }
+            ]
+        },
     ],
-    ids=["duplicate-id", "unknown-threshold", "evidence-without-condition", "no-case"],
+    ids=[
+        "duplicate-id",
+        "unknown-threshold",
+        "evidence-without-condition",
+        "no-case",
+        "row-basis-without-row",
+        "unknown-row-basis",
+    ],
 )
 def test_invalid_datasets_are_rejected(tmp_path: Path, raw: dict[str, Any]) -> None:
     with pytest.raises(DatasetError):
@@ -119,3 +145,30 @@ def test_product_evaluation_datasets_are_readable(path: Path) -> None:
     documents = {name: f"doc-{index}" for index, name in enumerate(file_references(raw))}
     loaded = load_dataset(path, documents=documents)
     assert len(loaded.dataset.cases) == len(raw["cases"])
+
+
+def test_row_basis_selects_the_rows_of_the_same_basis(tmp_path: Path) -> None:
+    """必要な根拠の行の番号の基準（#3547）: 書けばその基準の行だけ、省けば原本の行に一致する。"""
+    from pr_evaluation_scoring.evidence import location_matches
+
+    raw = {
+        "cases": [
+            {
+                "id": "a",
+                "query": "q",
+                "required_evidence": [
+                    {"id": "parsed", "row_start": 3, "row_basis": "parsed_table"},
+                    {"id": "original", "row_start": 3},
+                ],
+            }
+        ]
+    }
+    case = load_dataset(_write(tmp_path / "set.json", raw)).dataset.cases[0]
+    parsed, original = case.required_evidence
+    assert parsed.row_basis == "parsed_table" and original.row_basis is None
+    grid_row = {"row_basis": "parsed_table", "table_index": 1, "row_start": 3, "row_end": 3}
+    sheet_row = {"sheet_name": "表", "row_basis": "sheet", "row_start": 3, "row_end": 3}
+    assert location_matches(parsed, document_id="d", locator=grid_row)
+    assert not location_matches(parsed, document_id="d", locator=sheet_row)
+    assert not location_matches(original, document_id="d", locator=grid_row)
+    assert location_matches(original, document_id="d", locator=sheet_row)

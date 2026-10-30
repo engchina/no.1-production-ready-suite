@@ -49,11 +49,19 @@ describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）"
   it("既定は root・段・技術の span を日本語にし、対象と試行の回数を添える", () => {
     const steps = traceTimeline(summary).steps;
     expect(steps.map(s => s.label)).toEqual([
-      "実行の全体（2 回目）", "answer", "工程 A", "モデルの呼び出し · model-x", "ツールの実行 · tool_y", "MCP の呼び出し（3 回目）",
+      "実行の全体（2 回目）", "answer", "工程 A", "モデルを呼び出す（用途の記録なし）", "ツールの実行 · tool_y", "MCP の呼び出し（3 回目）",
       // 技術の trace の一覧は MCP の手続きも残し、呼んだツールか method を添える（#3272）。
       "MCP の呼び出し · tool_y", "MCP の呼び出し · initialize",
-      "埋め込みの作成 · embed-x", "並べ替え（rerank） · rerank-x", "AI の呼び出し · model-x", "Select AI の呼び出し", "custom.operation",
+      "テキストの埋め込みを作る · embed-x", "質問との関連度で候補を並べ替える · rerank-x", "AI の呼び出し · model-x", "Select AI の呼び出し", "custom.operation",
     ]);
+  });
+  it("MCP の呼び出しは呼んだツールの表示名（pr.tool.title）を先に添え、内部名は詳細に残す（#3468）", () => {
+    const steps = traceTimeline({ completeness: "complete", root_span_id: "1".repeat(16), spans: [
+      stage("1", undefined, "op.answer"),
+      stage("2", "1", "mcp.request", { "mcp.method.name": "tools/call", "gen_ai.tool.name": "tool_y", "pr.tool.title": "合成の照合" }),
+    ] }).steps;
+    expect(steps[1].label).toBe("MCP の呼び出し · 合成の照合");
+    expect(steps[1].details?.fields).toContainEqual({ label: "gen_ai.tool.name", value: "tool_y", mono: true });
   });
   it("段は製品の段の名前（処理の経過と同じ関数）を使い、詳細に元の span の名前と段を残す", () => {
     const seen: [string, string][] = [];
@@ -141,4 +149,57 @@ describe("モデルの呼び出しの入力の文脈の記録と利用量（#258
     expect(fields).toContainEqual({ label: "訳:trace.field.budget.remaining", value: "98810", mono: true });
     expect(JSON.stringify(fields)).not.toContain("private-payload");
   });
+});
+
+describe("モデル用途の共通表示", () => {
+  it("製品にかかわらず記録した用途を見出しにし、モデル名を詳細へ残す", () => {
+    for (const product of ["rag", "nl2sql", "agent"]) {
+      const steps = traceTimeline({ spans: [{ ...span("1", "0"), operation_name: "gen_ai.chat", attributes: {
+        "pr.product": product, "pr.gen_ai.purpose": "answer.validate", "gen_ai.request.model": "model-x",
+      } }] }).steps;
+      expect(steps[0].label).toBe("回答の段落を取得した資料と照合する");
+      expect(steps[0].details?.fields).toContainEqual({ label: "gen_ai.request.model", value: "model-x", mono: true });
+    }
+  });
+  it("未知の用途を本文から推測せず、モデル以外の処理に流用しない", () => {
+    const steps = traceTimeline({ spans: [
+      { ...span("1", "0"), operation_name: "gen_ai.chat", attributes: { "pr.gen_ai.purpose": "unknown-purpose", "gen_ai.request.model": "model-x" } },
+      { ...span("2", "0"), operation_name: "http.request", attributes: { "pr.gen_ai.purpose": "answer.validate" } },
+    ] }).steps;
+    expect(steps.map(step => step.label)).toEqual(["モデルを呼び出す（用途の記録なし）", "HTTP の要求"]);
+  });
+  it("Select AI の用途と再試行回数を表示する", () => {
+    const steps = traceTimeline({ spans: [{ ...span("1", "0"), operation_name: "oracle.select_ai", attributes: {
+      "pr.gen_ai.purpose": "sql.generate", "pr.attempt": 2,
+    } }] }).steps;
+    expect(steps[0].label).toBe("質問に答える SQL を作る（2 回目）");
+  });
+});
+
+
+describe("モデル接続確認の用途", () => {
+  it.each(["gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"])("%s は接続確認を明示し、モデル名を詳細に残す", (operation_name) => {
+    const step = traceTimeline({ spans: [{ ...span("1", "0"), operation_name, attributes: { "pr.gen_ai.purpose": "connection.check", "gen_ai.request.model": "model-probe" } }] }).steps[0];
+    expect(step.label).toBe("モデルが応答するか接続を確かめる");
+    expect(step.details?.fields?.some(field => field.value === "model-probe")).toBe(true);
+  });
+  it.each(["gen_ai.embeddings", "gen_ai.rerank"])("%s の用途未記録は元の操作とモデル名を使う", (operation_name) => {
+    const step = traceTimeline({ spans: [{ ...span("1", "0"), operation_name, attributes: { "gen_ai.request.model": "model-normal" } }] }).steps[0];
+    expect(step.label).toContain("model-normal");
+    expect(step.label).not.toContain("接続を確かめる");
+  });
+});
+
+
+it.each(["done", "failed", "cancelled"])("論理的な並べ替え要求は%sでも日本語名にし、SDKと元IDを残す", (status) => {
+  const request = { ...span("3", "2"), operation_name: "rerank.request", status, attributes: { "pr.attempt": 2 } };
+  const tree = traceTimeline({ root_span_id: "1".repeat(16), spans: [span("1"), span("2", "1"), request, { ...span("4", "3"), operation_name: "gen_ai.rerank", attributes: { "gen_ai.request.model": "synthetic-rerank" } }, { ...span("5", "2"), operation_name: "rerank.request" }] });
+  expect(tree.steps.map(step => step.level)).toEqual([0, 1, 2, 3, 2]);
+  expect(tree.steps[2].label).toBe("候補の並べ替えを要求する（2 回目）");
+  expect(tree.steps[3].label).toBe("質問との関連度で候補を並べ替える · synthetic-rerank");
+  expect(tree.steps[3].parentId).toBe("3".repeat(16));
+  expect(tree.steps[3].details?.fields).toContainEqual({ label: "Parent span ID", value: "3".repeat(16), mono: true });
+  expect(tree.steps[4].label).toBe("候補の並べ替えを要求する");
+  expect(tree.steps[2].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true });
+  expect(request.operation_name).toBe("rerank.request");
 });

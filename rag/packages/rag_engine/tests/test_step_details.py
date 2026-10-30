@@ -29,6 +29,7 @@ from rag_engine.generation.answering import (
     CragRetrievalGradeOutput,
     answer_question_result,
 )
+from rag_engine.knowledge.classification import ClassificationFilter
 
 
 def _fields(step: dict) -> dict[str, str]:
@@ -54,12 +55,15 @@ def _hybrid_metadata(channels: list[str], heading: str) -> dict:
 class StandardFlowStepDetailsTest(unittest.TestCase):
     """通常の回答フロー: 検索の実装と並べ替え・回答の生成だけを差し替えて、工程ごとの詳細を確かめる。"""
 
-    def run_flow(self, settings=None):
+    def run_flow(self, settings=None, **options):
         search_result = _hybrid_result(
             _stored_child(
-                "chunk-docling-c000001", 1, "合成の手順 A の本文", metadata=_hybrid_metadata(["text", "vector"], "1.1 申請の手順")
+                "chunk-docling-c000001",
+                1,
+                "合成の手順 A の本文",
+                metadata=_hybrid_metadata(["keyword:oracle_text", "vector:q1"], "1.1 申請の手順"),
             ),
-            _stored_child("chunk-docling-c000002", 2, "合成の手順 B の本文", metadata=_hybrid_metadata(["vector"], "1.2 申請の期限")),
+            _stored_child("chunk-docling-c000002", 2, "合成の手順 B の本文", metadata=_hybrid_metadata(["vector:q1"], "1.2 申請の期限")),
         )
         with (
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
@@ -79,6 +83,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
                 query_strategy=SIMPLE_RETRIEVAL_LABEL,
                 rerank_enabled=True,
                 answer_flow=STANDARD_ANSWER_FLOW_LABEL,
+                **options,
             )
 
     def test_every_step_records_bounded_details(self):
@@ -98,16 +103,23 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         self.assertIn("目的", understanding)
         self.assertEqual(understanding["答える要求"], "1 件")
         self.assertIn("結果", understanding)
-        self.assertIn("結果", _fields(steps["用語・ルールの確認"]))
-        readiness = _fields(steps["検索の準備確認"])
-        self.assertEqual(readiness["チャンクの実行"], "abcdef-1234567890ab")
-        self.assertIn("準備済み", readiness["検索用データ"])
+        self.assertIn("結果", _fields(steps["用語・同義語の確認"]))
+        self.assertIn("結果", _fields(steps["回答ルールの確認"]))
+        # 検索の前提の確認は工程にしない（#3495）。普段どおりの検索範囲・準備の状態は示さない。
+        self.assertNotIn("検索の準備確認", steps)
+        self.assertNotIn("分類フィルタ", _fields(steps["文書検索"]))
         self.assertEqual(_fields(steps["質問拡張戦略"])["設定"], SIMPLE_RETRIEVAL_LABEL)
         queries = steps["検索文と検索語の確定"]
         self.assertRegex(_fields(queries)["結果"], r"^検索文 \d+ 本$")
         self.assertIn("全文検索のキーワード", _fields(queries))
         self.assertTrue(any(line.startswith("1. [原質問]") for line in _lines(queries)))
         self.assertEqual(_fields(steps["回答生成フロー"])["設定"], STANDARD_ANSWER_FLOW_LABEL)
+
+    def test_classification_filter_is_shown_on_search_step_only_when_set(self):
+        """分類フィルタを指定したときだけ、文書検索の工程に示す（#3495）。"""
+        steps = _by_name(self.run_flow(classification_filter=ClassificationFilter(large_category="分類 A")))
+        self.assertNotIn("検索の準備確認", steps)
+        self.assertEqual(_fields(steps["文書検索"])["分類フィルタ"], "大分類=分類 A")
 
     def test_search_and_rerank_steps_show_routes_scores_and_top_documents(self):
         steps = _by_name(self.run_flow())
@@ -127,13 +139,12 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
 
     def test_hidden_steps_still_explain_why_nothing_happened(self):
         steps = _by_name(self.run_flow())
-        coverage = _fields(steps["要求ごとの根拠の確認"])
-        # 探し直しをしたか・しなかった理由を、工程を省いても段に残す（1 要求の一部の根拠は探し直す。#2810）。
-        self.assertRegex(coverage["根拠が足りない要求の探し直し"], r"^(しない（.+）|\d+ 件の要求で実行)$")
-        self.assertIn("回答で見せる画像はありません", _fields(steps["回答に使う画像の確認"])["結果"])
+        # 生成前に語の一致で根拠の充足を判定した工程は表示しない。
+        self.assertNotIn("要求ごとの根拠の確認", steps)
+        self.assertEqual("根拠に画像がありません", _fields(steps["回答に添付する画像"])["結果"])
         # 記録の文（question_display）からは従来どおり省く。
         result = self.run_flow()
-        self.assertNotIn("回答で見せる画像はありません", result.question_display)
+        self.assertNotIn("根拠に画像がありません", result.question_display)
 
     def test_answer_round_records_audit_counts(self):
         steps = _by_name(self.run_flow())
@@ -145,13 +156,17 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         self.assertNotIn("採否", answer)  # 1 組目は比べる相手が無い
 
     def test_answer_round_without_audit_does_not_describe_an_audit(self):
-        """監査の型が none なら、目的・推論の量・要求の充足に、行っていない監査を書かない（#2966）。"""
+        """監査の型が none なら、目的・推論の量・要求の充足に、行っていない監査を書かない（#2966）。
+
+        条を出典にした説明にも監査を実行したとは表示しない。
+        """
         from dataclasses import replace
 
         steps = _by_name(self.run_flow(replace(_rerank_ready_settings(), answer_audit_mode="none")))
         step = steps["回答文の生成と根拠確認（1回目）"]
         answer = _fields(step)
-        self.assertIn("生成の後の LLM の監査はしません", answer["目的"])
+        self.assertIn("生成後の LLM 監査は実行しません", answer["目的"])
+        self.assertNotIn("条を出典にした説明だけに掛けます", answer["目的"])
         self.assertNotIn("別のLLM呼出で適用性を監査", answer["目的"])
         self.assertNotIn("監査した説明", answer)
         self.assertNotIn("要求の充足（監査）", answer)
@@ -165,14 +180,20 @@ class CragFlowStepDetailsTest(unittest.TestCase):
     def test_grade_and_rewrite_steps(self):
         grades = [
             _crag_grade(sufficient=False, confidence=0.1, reason="根拠が話題違い", rewritten_query="合成の探し直しの検索文"),
-            _crag_grade(sufficient=True, confidence=0.92, relevant_chunk_ids=["chunk-good"], reason="根拠が直接答えている"),
+            _crag_grade(
+                sufficient=True,
+                confidence=0.92,
+                relevant_chunk_ids=["chunk-good"],
+                reason="根拠が直接答えている",
+                support_text="設定画面を開いて保存ボタンを押します。",
+            ),
         ]
 
         def model(system, prompt, settings, schema, **options):
             return grades.pop(0) if schema is CragRetrievalGradeOutput else echo_model(system, prompt, settings, schema, **options)
 
         initial = _answer_context([_chunk_record("chunk-bad", "child", 1, "", "合成の別の話題")])
-        corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "合成の正しい根拠")])
+        corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "設定画面を開いて保存ボタンを押します。")])
         with (
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
             patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
@@ -189,7 +210,7 @@ class CragFlowStepDetailsTest(unittest.TestCase):
             )
         steps = _by_name(result)
         first = _fields(steps["根拠確認（1回目）"])
-        self.assertTrue(first["結果"].startswith("不足"))
+        self.assertTrue(first["結果"].startswith("必要な説明が不足"))
         self.assertEqual(first["判定した根拠"], "1 件")
         self.assertEqual(first["関係あり / なし"], "0 件 / 0 件")
         self.assertEqual(first["次の対処"], "検索文を書き換えて探し直す")
@@ -202,7 +223,7 @@ class CragFlowStepDetailsTest(unittest.TestCase):
         self.assertIn("回答に渡す根拠", _fields(second_search)["結果"])
         self.assertTrue(any("今回追加した 1 本" in line for line in _lines(second_search)))
         second = _fields(steps["根拠確認（2回目）"])
-        self.assertTrue(second["結果"].startswith("十分"))
+        self.assertTrue(second["結果"].startswith("生成に利用可能"))
         self.assertEqual(second["関係あり / なし"], "1 件 / 0 件")
         self.assertNotIn("次の対処", second)
         self.assertIn("検索文", _fields(steps["検索語の再確定（書き換え後）"]))
@@ -237,7 +258,13 @@ class StepDetailsHelpersTest(unittest.TestCase):
                 metadata={"adb_hybrid": {"retrieval_channels": channels}},
             )
 
-        records = [rec(["vector", "text"]), rec(["text"]), rec(["image_vector"]), rec([])]
+        # 経路は検索の実装と backend の検索が書く形（`vector:q1` / `keyword:oracle_text:q2` など。#3443）。
+        records = [
+            rec(["keyword:oracle_text:q2", "vector:q1"]),
+            rec(["keyword:oracle_text"]),
+            rec(["image_vector:q1"]),
+            rec(["profile:file_data_confirmation"]),
+        ]
         self.assertEqual(
             step_details.channel_line(records),
             "ベクトルと全文の両方 1・ベクトルだけ 1・全文だけ 1・そのほか（目録・画面などで加えた候補） 1",

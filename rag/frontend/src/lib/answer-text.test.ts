@@ -8,6 +8,7 @@ import {
   parseAnswerText,
   parseCitationLine,
   resolveCitationLine,
+  resolveCitationLineTargets,
 } from "./answer-text";
 
 describe("parseAnswerText", () => {
@@ -284,6 +285,31 @@ describe("resolveCitationLine", () => {
       located("F", { answer_citation_lines: [1], answer_citation_provenance: "child", evidence_model_used: true }),
     ];
     expect(resolveCitationLine(1, ref, citations)).toEqual({ index: 1, position: { kind: "exact" } });
+  });
+
+  it("同頁の全確定片段を返し、候補は独立した未確定の対象として保つ", () => {
+    const first = located("a", { answer_citation_lines: [1, 2], answer_citation_provenance: "child" });
+    const second = located("b", { answer_citation_lines: [2], answer_citation_provenance: "child" });
+    const candidate = located("candidate", { answer_citation_candidate_lines: [2] });
+    const unused = located("unused", {});
+    const citations = [first, second, candidate, unused];
+    expect(resolveCitationLineTargets(1, ref, citations)).toEqual([{ index: 0, position: { kind: "exact" } }]);
+    expect(resolveCitationLineTargets(1, ref, [first, first])).toHaveLength(1);
+    expect(resolveCitationLineTargets(2, ref, citations)).toEqual([
+      { index: 0, position: { kind: "exact" } },
+      { index: 1, position: { kind: "exact" } },
+      { index: 2, position: { kind: "unresolved", reason: "candidates", candidates: [2] } },
+    ]);
+    for (const order of [citations, [...citations].reverse()]) {
+      expect(resolveCitationLineTargets(2, ref, order).filter(target => target.position.kind === "exact")
+        .map(target => order[target.index].chunk_id).sort()).toEqual(["a", "b"]);
+    }
+  });
+
+  it("複数対象の resolver でも既存の未確定候補と旧本文を確定へ昇格しない", () => {
+    const citations = [located("a", { answer_citation_lines: [1] }), located("b", {})];
+    expect(resolveCitationLineTargets(1, ref, citations)).toEqual([resolveCitationLine(1, ref, citations)]);
+    expect(resolveCitationLineTargets(1, null, [])).toEqual([]);
   });
 
   it("候補の番号だけの行は、先頭の候補を開くが位置は未確定にする", () => {

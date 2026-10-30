@@ -113,8 +113,8 @@ side sheet、詳細の差分・「スキルの更新だけを公開」・品質�
 `POST /evaluation-sets/from-template` でテンプレートの評価ケースの評価セットを作れる。フィードバック・Run の詳細の
 「評価ケースに追加」は `GET /runs/{id}/evaluation-case`（質問・管理者のコメント・呼んだツールの下書き）と
 `POST /evaluation-sets/{id}/cases`（同じ質問・50 件の上限は 409。出どころの `source_run_id` を残す）を使う。
-MCP、Tool、Runtime を Agent に埋め込まない。`tool_names` は移行リリースの読取互換だけである
-（`command_allowed_prefixes` は #756 で削除した）。
+MCP、Tool、Runtime を Agent に埋め込まない。業務 Agent はツールの項目を持たず、作成・変更の API はツールの直接の指定
+（`tool_names` など）を 422 で拒む（#3240。保存済みの旧い値は読むときに無視する。`command_allowed_prefixes` は #756 で削除した）。
 
 ### Skill
 
@@ -152,10 +152,11 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   `license`。本プロダクトの拡張は `metadata`（文字列 → 文字列）に置く:
   `production-ready-display-name`（画面の名前）・`production-ready-mcp-tools`（`<接続>:<ツール>` の空白区切り。
   `mcp_requirements` になる）・`production-ready-tags`。`AGENT_SKILLS_DIR` のスキルも同じ読み方をする。
-- 本文は 500 行以内。目的の文（MCP サーバー名と、ツールは素の名前で書くこと。Agent によって前置きが付く）→
-  `## 入力の種類を分ける` → `## 手順` → `## 結果ごとの対応` → `## 回答の書き方` → `## してはいけないこと`。使う見出しだけを
-  置く。`## 入力の種類を分ける`（#1929）は入力をあいさつ・お礼・その他の質問でない入力と質問に分け、質問でなければツールを
-  呼ばずに用件（スキルの対象について何を知りたいか）を聞き、質問（範囲外を含む）とあいさつの混ざる質問は `## 手順` に進める
+- 本文は 500 行以内。目的の文（MCP サーバー名と、ツールは素の名前で書くこと。Agent によって前置きが付く）の後の見出しは
+  すべて処理順の `## Step N: …`（1 から連番。入れ子の Step を置かない。root の `docs/agents/prompts.md`。#3830）で、
+  `入力の種類を分ける` → 手順の Step → `結果ごとの対応` → `回答の書き方` → `してはいけないこと` の順。使う Step だけを
+  置く。`入力の種類を分ける`（#1929）は入力をあいさつ・お礼・その他の質問でない入力と質問に分け、質問でなければツールを
+  呼ばずに用件（スキルの対象について何を知りたいか）を聞き、質問（範囲外を含む）とあいさつの混ざる質問は手順の Step に進める
   （用件を聞く返事は組み込み Runtime の拒答・差し戻しの対象外。`answer_passages.asks_for_request`）。長い参照は
   `references/*.md` に出し、本文から 1 段の深さでリンクする（Agent は索引だけを指示に入れ、`skill_reference_read` で
   読ませる）。毎回の手順で要る短い内容は本文に置く（`business-rag-research` の根拠の読み方（約 1,000 字）は参照文書に
@@ -168,13 +169,14 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
   手順）。配った後にスキルを変えたら `plugin.json` の `version` を上げる。
 - 旧 ID（`business_rag_research` など。#1573 の `rag_then_structured_data` も）の保存済みの業務 Agent は、システム
   テーブルの migration `20261014_013_rename_builtin_skill_ids` が新しい ID にする（読み込みで読み替えるコードは持たない）。
-- 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので `### Step N:` の一直線の手順
+- 手順の形は作業に合わせる: `business-rag-research` は順番が意味を持つ多段の質問なので一直線の手順の Step
   （各 Step に呼ぶツールと「→ Step N」の行き先）、`rag-and-structured-data` は順序を決めない判断のループ（足りないものを
-  判断 → ツールを呼ぶ → 結果を確かめて戻る）、`structured-data-query` は短い番号付きの手順と `status` ごとの対応。
+  判断 → ツールを呼ぶ → 結果を確かめて戻る）の Step、`structured-data-query`・`article-catalog-lookup` は短い番号付きの
+  手順を 1 つの Step に置き、`status` ごとの対応を `結果ごとの対応` の Step に置く。
 - `business-rag-research` は、元の指示の順（根拠を集める段の決まり → 多段の手順 → 検索の前の確認）を保ち、
   `rag_search` を独立の Step の見出しにしない。実モデル（`openai.gpt-oss-120b`）の比較で、`rag_search` の Step を
   分岐の先に置いた並びでは、多段の質問を `rag_search` から始めて 2 段目を引かない回答が増えた（#1795）。
-- ツールの結果の値（`outcome` / `status`）→ すること の対応を `## 結果ごとの対応` の箇条書きに
+- ツールの結果の値（`outcome` / `status`）→ すること の対応を `結果ごとの対応` の Step の箇条書きに
   まとめ、ツール名・フィールド名は `code` にする（組み込み Runtime は `code` の中の素のツール名も
   `<接続>__<ツール>` に書き直す）。
 - 書き方は root の `docs/agents/prompts.md`（プロンプト（LLM への指示・skill・ツールの説明）の書き方）に従う（#2269）。使うツールの
@@ -265,7 +267,7 @@ Agent はプラグインを持たず、スキルだけを持つ（#1798 でマ�
 
 ## 3. ツールとポリシー
 
-Control Plane のツール（`echo` / `agent_skill_list`）は `tool_registry` に登録する。MCP 接続のツールは登録せず、
+Control Plane のツール（`echo`）は `tool_registry` に登録する。MCP 接続のツールは登録せず、
 Run ごとに `tools/list` から作ったツール定義を `tool_registry.invoke` に渡し、ToolPolicy、PII/secret masking、
 audit metadata、成果物の保存を再利用する（#757）。外部 Runtime 向けの Binding MCP（`/api/mcp/{binding_id}`）
 と adapter 契約（`probe_capabilities / sync_binding / submit_run / ...`）は #754 で削除した。
@@ -850,8 +852,8 @@ Agent が編成する根拠の取得（#2651）: RAG を使う標準のスキル
 （`unread_sections`。conditional）にする。
 段の検索の決定的な補助（#1351。#1335 の評価で、Agent が `evidence_limit=5` を選んで答えの chunk が上限で切れ、同じ話題の
 言い換えを繰り返して予算に達した）: (1) モデルが `rag_search`・`rag_retrieve_evidence` の `evidence_limit` を既定（ツールの
-入力 schema の `default`。RAG の契約の `rag_search` は 12、`rag_retrieve_evidence` は検索する件数と同じ 20〔#1365〕）より
-小さくしたら、Control Plane が既定に引き上げて呼ぶ（step には送った値を残す。既定より大きい値は変えない）。検索する件数の `top_k` も同じく（#1403。#1362 の再評価で、データの範囲で検索・回答プロファイルを固定した業務 Agent が `top_k` 5 / 10 を渡し、台帳の行が検索の結果に出ずに段を取りこぼした）、既定（契約の `top_k` の `default` は null で、RAG は省略時に 20 を使うので 20。`RAG_TOP_K_DEFAULT`）より小さい値を既定に引き上げる。上限（入力 schema の `maximum`。`top_k` 100・`evidence_limit` 50）を超える値は上限に丸め、呼び先の入力検証で失敗させない。直したときはモデルへの結果に、直した値（`requested`・`sent`）と次から件数を省略する案内（`adjusted_limits`）を足し、モデルに見せるツールの schema の件数の説明に「多段の質問では省略する」を足す（`search_limit_schema`。実行の定義は契約のまま。`adjusted_search_limits`）。(2) 同じ Run で、同じツール・同じ範囲（検索・回答プロファイル・ナレッジベース・
+入力 schema の `default`。RAG の契約の `rag_search` は 12、`rag_retrieve_evidence` は検索する件数と同じ 50〔#1365・#3512〕）より
+小さくしたら、Control Plane が既定に引き上げて呼ぶ（step には送った値を残す。既定より大きい値は変えない）。検索する件数の `top_k` も同じく（#1403。#1362 の再評価で、データの範囲で検索・回答プロファイルを固定した業務 Agent が `top_k` 5 / 10 を渡し、台帳の行が検索の結果に出ずに段を取りこぼした）、既定（契約の `top_k` の `default` は null で、RAG は省略時に 50 を使うので 50〔#3512〕。`RAG_TOP_K_DEFAULT`）より小さい値を既定に引き上げる。上限（入力 schema の `maximum`。`top_k` 100・`evidence_limit` 50）を超える値は上限に丸め、呼び先の入力検証で失敗させない。直したときはモデルへの結果に、直した値（`requested`・`sent`）と次から件数を省略する案内（`adjusted_limits`）を足し、モデルに見せるツールの schema の件数の説明に「多段の質問では省略する」を足す（`search_limit_schema`。実行の定義は契約のまま。`adjusted_search_limits`）。(2) 同じ Run で、同じツール・同じ範囲（検索・回答プロファイル・ナレッジベース・
 フィルター・条件）の成功した検索と query が同じかほぼ同じ（NFKC・大文字小文字・空白・句読点と記号・助詞を除いて、
 文字の 2-gram の Jaccard 係数が 0.8 以上。`repeated_query_note`）なら、モデルへの結果に繰り返しを止める案内
 （`repeated_query`。回数・似た query・次の手）を足す（記録する step の結果は RAG の結果のまま。呼び出しは止めない）。

@@ -1,3 +1,4 @@
+import { openFileListFilters, closeFileListFilters } from "./_helpers";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 
 import {
@@ -25,15 +26,17 @@ interface KnowledgeBaseRequest {
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  await mockUploadPage(page);
+  await mockSearchAnswerProfiles(page);
 });
 
 test("300 件: 候補はサーバー側で検索し、「さらに表示」で続きを読む（全件を読まない）", async ({ page }) => {
   const requests = await mockKnowledgeBases(page, MANY);
-  await page.goto("/evaluation");
+  await page.goto("/search-answer-profiles?id=new");
 
   // 既定は検索欄だけで、一覧は畳まれている（ページを押し下げない）。
-  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
-  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
+  const combobox = page.getByRole("combobox", { name: "参照するナレッジベース" });
+  const listbox = page.getByRole("listbox", { name: "参照するナレッジベース" });
   await expect(combobox).toBeVisible();
   await expect(listbox).toHaveCount(0);
 
@@ -66,10 +69,10 @@ test("300 件: 候補はサーバー側で検索し、「さらに表示」で�
 
 test("200 件以下は全件を 1 回で読み、検索語をサーバーへ送らずに画面側で絞り込む", async ({ page }) => {
   const requests = await mockKnowledgeBases(page, 120);
-  await page.goto("/evaluation");
+  await page.goto("/search-answer-profiles?id=new");
 
-  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
-  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
+  const combobox = page.getByRole("combobox", { name: "参照するナレッジベース" });
+  const listbox = page.getByRole("listbox", { name: "参照するナレッジベース" });
   await combobox.click();
   await expect(listbox.getByRole("option")).toHaveCount(120);
   await expect(page.getByRole("button", { name: "さらに表示" })).toHaveCount(0);
@@ -88,10 +91,10 @@ test("200 件以下は全件を 1 回で読み、検索語をサーバーへ送�
 
 test("検索で選んだ KB は、検索語を消して候補のページに無くなっても chip に名前が残る", async ({ page }) => {
   await mockKnowledgeBases(page, MANY);
-  await page.goto("/evaluation");
+  await page.goto("/search-answer-profiles?id=new");
 
-  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
-  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
+  const combobox = page.getByRole("combobox", { name: "参照するナレッジベース" });
+  const listbox = page.getByRole("listbox", { name: "参照するナレッジベース" });
   await combobox.click();
   await combobox.fill("-288");
   await listbox.getByRole("option", { name: /ナレッジベース-288/ }).click();
@@ -109,16 +112,16 @@ test("検索で選んだ KB は、検索語を消して候補のページに無�
   await chips.getByLabel("ナレッジベース-007 を選択から外す").click();
   await expect(page.getByText(`${PAGE_SIZE} 件選択中`).first()).toBeVisible();
   await page.getByRole("button", { name: "クリア", exact: true }).click();
-  // 品質評価ではナレッジベースが必須（#2065）なので、未選択は「選んでください」と出す。
-  await expect(page.getByText("未選択です。評価するナレッジベースを選んでください。")).toBeVisible();
+  // プロファイルの参照 KB は必須なので、未選択の案内を出す。
+  await expect(page.getByText("参照するナレッジベースを 1 件以上選んでください。")).toBeVisible();
 });
 
 test("選んでも一覧は開いたままで、「完了」で閉じて検索欄にフォーカスが戻る", async ({ page }) => {
   await mockKnowledgeBases(page, MANY);
-  await page.goto("/evaluation");
+  await page.goto("/search-answer-profiles?id=new");
 
-  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
-  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
+  const combobox = page.getByRole("combobox", { name: "参照するナレッジベース" });
+  const listbox = page.getByRole("listbox", { name: "参照するナレッジベース" });
   await combobox.click();
   await listbox.getByRole("option", { name: /ナレッジベース-002/ }).click();
   await listbox.getByRole("option", { name: /ナレッジベース-003/ }).click();
@@ -143,9 +146,9 @@ test("選んでも一覧は開いたままで、「完了」で閉じて検索�
 
 test("検索欄の右の開閉・消去のボタンは検索欄と同じ高さ（md 36px、タッチ端末 44px）", { tag: "@responsive" }, async ({ page }) => {
   await mockKnowledgeBases(page, MANY);
-  await page.goto("/evaluation");
+  await page.goto("/search-answer-profiles?id=new");
 
-  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
+  const combobox = page.getByRole("combobox", { name: "参照するナレッジベース" });
   const toggle = page.getByRole("button", { name: "ナレッジベースの一覧を開閉" });
   const expected = await expectedControlHeight(page, "md");
   await expect(combobox).toBeVisible();
@@ -168,10 +171,10 @@ test("検索欄の右の開閉・消去のボタンは検索欄と同じ高さ�
 
 test("キーボードだけで選び、Esc で閉じ、Tab で部品の外へ出ると閉じる", async ({ page }) => {
   await mockKnowledgeBases(page, MANY);
-  await page.goto("/evaluation");
+  await page.goto("/search-answer-profiles?id=new");
 
-  const combobox = page.getByRole("combobox", { name: "ナレッジベース" });
-  const listbox = page.getByRole("listbox", { name: "ナレッジベース" });
+  const combobox = page.getByRole("combobox", { name: "参照するナレッジベース" });
+  const listbox = page.getByRole("listbox", { name: "参照するナレッジベース" });
 
   // フォーカスで開き、↓ と Enter で選ぶ。選んでも開いたまま。
   await combobox.focus();
@@ -217,6 +220,7 @@ test("文書インデックスの絞り込み: ボタンから検索して選び
   const documentRequests = await mockDocuments(page);
   await page.goto("/file-list");
 
+  await openFileListFilters(page);
   const trigger = page.getByRole("button", { name: /^ナレッジベース/ });
   await expect(trigger).toHaveAccessibleName("ナレッジベース 利用できるすべてのナレッジベース");
   // キーボードで開く: Enter でボタンを押すと検索欄へフォーカスが移る。
@@ -243,6 +247,7 @@ test("文書インデックスの絞り込み: ボタンから検索して選び
 
   // 作業状態の復元: 候補の先頭ページに無い KB も ID で引いて名前を出す。
   await page.reload();
+  await openFileListFilters(page);
   await expect(page.getByRole("button", { name: /^ナレッジベース/ })).toHaveAccessibleName(
     `ナレッジベース ${LONG_NAME}`
   );
@@ -264,6 +269,7 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（15
   const documentRequests = await mockDocuments(page);
   await page.goto("/file-list");
 
+  await openFileListFilters(page);
   const status = page.getByRole("combobox", { name: "状態" });
   // ボタンの中に「状態: すべて」（FilterSelect。#1933）。値は data-value で確かめる。
   await expect(status).toContainText("状態:すべて");
@@ -274,6 +280,7 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（15
   await page.getByRole("option", { name: "索引済み" }).click();
   await expect.poll(() => documentRequests.at(-1)).toContain("status=INDEXED");
   await expect(page.getByRole("button", { name: "索引済み", exact: true })).toHaveCount(0);
+  await closeFileListFilters(page);
   await expectNoPageOverflow(page);
 });
 
@@ -281,7 +288,6 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（15
 // 1 行に並べる。375px では画面の幅に合わせ、件数の文と操作の組の 2 段まで（操作の組は分けない）。画面からはみ出さない。
 const PANEL_SCREENS = [
   { name: "アップロードの登録先", path: "/upload", label: "所属させるナレッジベース" },
-  { name: "品質評価", path: "/evaluation", label: "ナレッジベース" },
   { name: "検索・回答プロファイルの作成", path: "/search-answer-profiles?id=new", label: "参照するナレッジベース" },
 ] as const;
 
@@ -323,17 +329,9 @@ for (const theme of ["light", "dark"] as const) {
       await page.screenshot({ path: testInfo.outputPath(`${name}-${theme}.png`) });
     };
 
-    // 評価（検索範囲と同じ KnowledgeBaseScopePicker）
-    await page.goto("/evaluation");
-    const evaluationCombo = page.getByRole("combobox", { name: "ナレッジベース" });
-    await evaluationCombo.click();
-    await evaluationCombo.fill("長い名前");
-    await page.getByRole("option", { name: new RegExp(LONG_NAME) }).click();
-    await expect(page.getByRole("list", { name: "選択中のナレッジベース" })).toContainText(LONG_NAME);
-    await shoot("evaluation");
-
     // 文書インデックスの絞り込み（単一選択）
     await page.goto("/file-list");
+    await openFileListFilters(page);
     await page.getByRole("button", { name: /^ナレッジベース/ }).click();
     await expect(page.getByRole("dialog", { name: "ナレッジベース" })).toBeVisible();
     await shoot("file-list");

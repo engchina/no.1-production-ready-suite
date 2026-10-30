@@ -20,7 +20,7 @@ from rag_engine.generation import form_field_kinds
 from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answering import _grounded_prompt
 from rag_engine.models.layout import LayoutRecord, PageImage
-from rag_engine.models.llm import FORM_FIELD_KINDS, FormFieldOutput, PictureDescriptionOutput
+from rag_engine.models.llm import FORM_FIELD_KINDS, FormFieldOutput, GroundedCitation, PictureDescriptionOutput
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.picture_descriptions import _bounded_vision_description, describe_docling_pictures, vision_description_text
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
@@ -71,13 +71,25 @@ class OutputContractTests(unittest.TestCase):
         self.assertIn("name / value / state / kind", rules)
         self.assertIn("unknown にし、項目名や値から推測しない", rules)
 
-    def test_saved_template_json_example_gains_kind(self) -> None:
+    def test_saved_json_is_preserved_and_fixed_contract_defines_kind(self) -> None:
         old = (
             '  "form_fields": [{"name": "項目名", "value": "表示値。空欄なら空文字", "state": '
             '"selected / unselected / enabled / disabled / required / optional / unknown"}],'
         )
-        refined = refine_image_retrieval_prompt("方針\n{\n" + old + "\n}")
-        self.assertIn('"kind": "select / text / checkbox / radio / date / button / unknown"', refined)
+        from rag_engine.adapters.oci import _picture_output_contract, _render_prompt
+
+        saved = "方針\n{\n" + old + "\n}"
+        refined = refine_image_retrieval_prompt(saved)
+        self.assertIn(saved, refined)
+        rendered = _render_prompt({}, template=saved)
+        self.assertIn(saved, rendered)
+        contract = _picture_output_contract()
+        # Step の見出しの無いテンプレートの後では、対象の指示が Step 1、出力契約が Step 2 になる(#3810)。
+        self.assertTrue(rendered.endswith(contract.replace("## Step 7:", "## Step 2:", 1)))
+        schema = json.loads(contract.rsplit("\n", 1)[1])
+        field = schema["$defs"]["FormFieldOutput"]
+        self.assertIn("kind", field["required"])
+        self.assertEqual(tuple(field["properties"]["kind"]["enum"]), FORM_FIELD_KINDS)
 
     def test_language_pack_labels_every_kind_except_unknown(self) -> None:
         self.assertEqual(FORM_FIELD_KIND_CHOICES, tuple(kind for kind in FORM_FIELD_KINDS if kind != "unknown"))
@@ -299,6 +311,25 @@ class ResolvedPlanTests(unittest.TestCase):
         self.assertEqual(knowledge.guide_optional_steps, ())
         self.assertEqual(knowledge.matched_rules[0].content, "RESOLVED-RULE")
 
+    def test_acquisition_scope_and_notice_follow_only_the_resolved_owners(self) -> None:
+        from dataclasses import replace
+
+        knowledge = replace(
+            self._knowledge(),
+            guide_acquisition=(
+                {"target_id": "shared", "step_ids": ["screen", "ask"], "retained_source_ids": [], "reason": "deadline"},
+                {"target_id": "old", "step_ids": ["ask"], "retained_source_ids": []},
+            ),
+            guide_acquisition_notices=("OLD-NOTICE",),
+        )
+        narrowed = form_field_kinds.with_resolved_plan(knowledge, self._resolved(), [self.PLAN])
+        self.assertEqual(len(narrowed.guide_acquisition), 1)
+        self.assertEqual(narrowed.guide_acquisition[0]["step_ids"], ["screen"])
+        self.assertIn("screen", narrowed.guide_acquisition_notices[0])
+        self.assertNotIn("ask", narrowed.guide_acquisition_notices[0])
+        self.assertNotIn("OLD-NOTICE", narrowed.guide_acquisition_notices)
+        self.assertEqual(knowledge.guide_acquisition[0]["step_ids"], ["screen", "ask"])
+
     def test_keeps_knowledge_without_matching_plan(self) -> None:
         base = self._knowledge()
         self.assertIs(form_field_kinds.with_resolved_plan(base, [], [self.PLAN]), base)
@@ -342,7 +373,13 @@ class CitableFieldKindTests(unittest.TestCase):
         draft = GroundedDraft(
             summary="",
             confidence="medium",
-            items=[GroundedItem(kind="rule", text="項目Aは選択項目です。", quote=evidence["text"], evidence_id=evidence["label"])],
+            items=[
+                GroundedItem(
+                    kind="rule",
+                    text="項目Aは選択項目です。",
+                    citations=[GroundedCitation(quote=evidence["text"], evidence_id=evidence["label"])],
+                )
+            ],
         )
         checked, dropped = grounded.verify("項目Aの種類", draft, spans)
         self.assertFalse(dropped)

@@ -3,7 +3,8 @@
  *
  * backend は SSE の `stage` で、会話を踏まえた質問の書き換え（`history_rewrite`）・根拠の検索と
  * 回答の生成（`answer`。中の各工程は `answer_step:` で入れ子に送る）・回答側の安全チェック（`answer_guardrail`）・
- * 検索だけのとき（`retrieval`）を送る。
+ * 回答を作らない RAG 検索の全体（`evidence`。チャットと同じ流れを回答の生成の手前で止める。#3506）・KB の検索テストの
+ * 検索だけ（`retrieval`）を送る。
  * 工程の名前は backend の時間切れの文言（`app/rag/span_display.py` の `ANSWER_STAGE_LABELS`。span に書く工程の名前にも使う）と揃える。
  */
 
@@ -17,7 +18,10 @@ export interface AnswerStageEvent {
 
 export const ANSWER_STAGE_LABEL: Record<string, I18nKey> = {
   retrieval: "search.stage.retrieval",
+  evidence: "search.stage.evidence",
   history_rewrite: "search.stage.historyRewrite",
+  // 会話の添付からの根拠の選択（#3475）
+  attachment_evidence: "search.stage.attachmentEvidence",
   field_filter: "search.stage.fieldFilter",
   answer: "search.stage.answer",
   // 回答側の安全チェック（#1146）

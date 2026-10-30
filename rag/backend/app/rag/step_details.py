@@ -1,7 +1,7 @@
 """処理の経過の段の詳細（回答の記録の工程・パイプラインの工程。#2294 / #2341）。
 
 `rag_engine` の工程の記録（``execution_steps[].details``）と、パイプラインの工程
-（会話を踏まえた質問の書き換え・検索条件の読み取り・回答の安全チェック）の詳細を、
+（会話を踏まえた質問の書き換え・検索条件の抽出・回答の安全チェック）の詳細を、
 3 製品共通の詳細の形（``pr_backend_core.chat_progress`` の ``ChatProgressStepDetails``
 = 画面の ``RunStepDetails``: 見出しと値 ``fields``・行 ``lines``・``truncated``）にそろえる。
 上限で切り、秘密らしい値を伏せる（共通の規則）。旧い記録の行の list（#2294）は行として読む。
@@ -24,6 +24,7 @@ def step_details_model(value: object) -> ChatProgressStepDetails | None:
         data = {
             "fields": value.get("fields"),
             "lines": value.get("lines"),
+            "code": value.get("code"),
             "truncated": value.get("truncated") is True or None,
         }
     else:

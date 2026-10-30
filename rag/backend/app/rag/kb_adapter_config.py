@@ -372,21 +372,23 @@ class KnowledgeBaseQueryConfig(BaseModel):
     # 照合した業務ガイドの手順ごとに検索し、手順の参照の頁の根拠を入れる(#2395)。LLM は呼ばない
     # (検索が手順ごとに増える)。None は全体の既定(on)。
     guide_step_retrieval_enabled: bool | None = None
-    # 手順ごとの検索の回数の上限(参照の頁に絞った検索を含む)。None は全体の既定(4)。
+    # 手順ごとの検索の回数の上限(参照の頁に絞った検索を含む)と期限(秒)。None は全体の既定(4 / 60)。
+    # ON / OFF と同じく、検索・回答プロファイルでは保存・適用しない(PROFILE_GLOBAL_QUERY_FIELDS)。
     guide_step_max_queries: int | None = Field(default=None, ge=0, le=10)
     guide_step_deadline_seconds: float | None = Field(default=None, ge=0, le=60)
     # 質問から抽出項目の条件を読み取る(#652)。LLM の呼び出しが 1 回増える。
     auto_field_filter_enabled: bool | None = None
     # 質問と上位の候補の実体から、実体の表との SQL の join で関連する chunk を 1 段だけ足す
-    # (#1362 / #1388)。LLM は呼ばない。None は既定(on。#1402)、false は使わない。実体は
-    # 文書レシピで実体の抽出を選んだ文書にだけある。全体の環境変数は持たない。
+    # (#1362 / #1388)。LLM は呼ばない。実体・別名索引を作った文書だけが対象。
+    # 検索方法の全体設定(既定 OFF)だけで決め、プロファイルでは保存・適用しない。
     entity_expansion_enabled: bool | None = None
     # 1 回の検索で足す chunk 数の上限。None は既定(6)。
     entity_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
-    # 関係情報(関係情報の構築で作った章節・表の見出しの entity と chunk の対応)で検索の候補を
+    # 関係情報(文書構造索引の構築で作った章節・表の見出しの entity と chunk の対応)で検索の候補を
     # 足す(#2055)。LLM は呼ばない。None は全体の既定(OFF。検索方法の画面)。
     graph_expansion_enabled: bool | None = None
-    # 1 回の検索で足す chunk 数の上限。None は全体の既定(6)。
+    # 1 回の検索で足す chunk 数の上限。None は全体の既定(6)。ON / OFF と同じく、検索・回答
+    # プロファイルでは保存・適用しない(PROFILE_GLOBAL_QUERY_FIELDS)。
     graph_expansion_max_chunks: int | None = Field(default=None, ge=1, le=20)
     # 当たった chunk の章節から親の章節へ段階的に広げる(#1436)。None は既定(on)、false は使わない。
     # 段ごとに CRAG の判定(LLM)が 1 回増える。上限(段・根拠の入力 token の割合・秒)も選べる。

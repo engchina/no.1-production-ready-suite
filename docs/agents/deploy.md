@@ -4,6 +4,7 @@
 > 正本: `terraform/stack/`・`platform/deploy/`・[terraform/README.md](../../terraform/README.md)。
 
 - 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない。Agent も組み込み Runtime で、Docker の Runtime は持たない）。
+- **再配備は、配備済み Compute の repo の直下で `sudo -n ./platform/deploy/suite-update.sh` を実行する。** `origin/main` を取得し、保存済みの設定・Wallet・HTTPS の CA を保って build・サービス再起動・health 確認を行う。`-n` はパスワード入力を待たずに実行する指定。
 - Terraform stack は `terraform/stack/` に 1 つだけ。ADB を 1 つ作り（新規 / 既存）、選んだ製品（`deploy_rag` / `deploy_nl2sql` / `deploy_agent`、最低 1 つ）を 1 台の Compute に入れる。製品固有の入力は `rag_` / `nl2sql_` / `agent_` を付ける。
 - Compute の上では `platform/deploy/suite-init.sh` が各製品の `init_script.sh`（製品は単独では配備しない）を順に呼び、Nginx の site（`/rag/` `/nl2sql/` `/agent/` の prefix・HTTPS・自作の CA・公開の port）を 1 つだけ書く。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。frontend の base は build の `FRONTEND_BASE_PATH`（未指定は `/`。配備は `/<製品>/`）。
 - **3 製品は既定で ADB のアプリ用の DB ユーザー（ADMIN ではない。既定の名前 `ADB_APP_USER`）で接続する**（#1668・#1675）。ユーザーの作成と grant は Compute の `suite-init.sh` が製品の配備の前に ADMIN で行い（`platform/deploy/suite-db-user.py`）、Terraform からは DB に接続しない（ADB は Compute からしか届かない）。DB の新しい機能を使うときは、付ける権限（`PDB_DBA` と Deep Data Security の 3 つ）で足りるかを確かめ、[terraform/README.md](../../terraform/README.md)「アプリ用の DB ユーザー」の表を更新する。

@@ -23,9 +23,8 @@ const RECIPE_DEFAULTS = {
   chunk_size: 800,
   chunk_overlap: 120,
   chunk_min_chars: 120,
-  chunk_context_header_enabled: false,
   graph_profile: "off",
-  // 名称・別名の索引の全体の既定は OFF（#3008）。
+  // 実体・別名索引の全体の既定は OFF（#3008）。
   entity_index_enabled: false,
   entity_name_columns: [],
   entity_attribute_columns: [],
@@ -107,16 +106,16 @@ test("取込・検索・回答設定の概要ハブが工程をフェーズ別�
     "href",
     "/settings/retrieval"
   );
-  // 関係情報の工程は取込時の構築の設定なので「関係情報の構築」の名前でナレッジ構築フェーズに並ぶ(#301)。
+  // 関係情報の工程は取込時の構築の設定なので「文書構造索引」の名前でナレッジ構築フェーズに並ぶ(#301)。
   await expect(
     page
       .getByRole("region", { name: "ナレッジ構築" })
-      .getByRole("link", { name: "関係情報の構築 の設定を開く" })
+      .getByRole("link", { name: "文書構造索引 の設定を開く" })
   ).toHaveAttribute("href", "/settings/graph");
 
   const ingestion = page.getByRole("region", { name: "ナレッジ構築" });
-  await expect(ingestion.getByRole("link", { name: "名称・別名の索引 の設定を開く" })).toContainText("5.");
-  await expect(ingestion.getByRole("link", { name: "関係情報の構築 の設定を開く" })).toContainText("6.");
+  await expect(ingestion.getByRole("link", { name: "実体・別名索引 の設定を開く" })).toContainText("5.");
+  await expect(ingestion.getByRole("link", { name: "文書構造索引 の設定を開く" })).toContainText("6.");
   await expect(page.getByRole("link", { name: "検索方法 の設定を開く" })).toContainText("7.");
   await expect(page.getByRole("link", { name: "評価の基準 の設定を開く" })).toContainText("10.");
 
@@ -158,7 +157,7 @@ test("サイドバーの取込・検索・回答設定の名前と順番は設�
   expect(sidebarNames).toEqual(cardNames);
 });
 
-// #528: レシピ 14 項目を、選択中レシピの設定と同じ処理順で出す（名称・別名の索引は #1388）。
+// #528: レシピ 13 項目を、選択中レシピの設定と同じ処理順で出す（実体・別名索引は #1388）。
 const PROCESSING_ORDER = [
   "preprocess_profile",
   "auto_parse_after_preprocess_enabled",
@@ -170,7 +169,6 @@ const PROCESSING_ORDER = [
   "navigation_summary_enabled",
   "auto_chunk_after_extract_enabled",
   "chunking_strategy",
-  "chunk_context_header_enabled",
   "auto_index_after_chunk_enabled",
   "vector_index",
   "entity_index_enabled",
@@ -178,7 +176,7 @@ const PROCESSING_ORDER = [
 ];
 
 for (const scheme of ["light", "dark"] as const) {
-  test(`取込の流れは検索インデックスと 14 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
+  test(`取込の流れは検索インデックスと 13 項目の全体の既定を処理順に出し、工程の間のスイッチで自動進行を保存する (${scheme})`, async ({
     page,
   }, testInfo) => {
     await page.addInitScript((theme) => {
@@ -226,14 +224,12 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(
       items.getByRole("link", { name: "図・画像を AI で読み取る を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-vision");
-    await expect(
-      items.getByRole("link", { name: "文脈ヘッダを検索対象へ追加 を設定する画面を開く" })
-    ).toHaveAttribute("href", "/settings/chunking");
+    await expect(items.locator('[data-config-field="chunk_context_header_enabled"]')).toHaveCount(0);
     await expect(
       items.getByRole("link", { name: "見出しの階層の推定（AI） を設定する画面を開く" })
     ).toHaveAttribute("href", "/settings/parser-adapters#post-parse-heading-levels");
     await expect(items.locator('[data-config-field="heading_level_inference_enabled"]')).toContainText("無効");
-    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(12);
+    await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(11);
     // 索引構築の全体の既定は OFF。専用の設定画面から変更できる。
     const entityIndex = items.locator('[data-config-field="entity_index_enabled"]');
     await expect(entityIndex).toContainText("無効");
@@ -299,7 +295,7 @@ test("権限のない設定画面へのリンクは出さない", async ({ page 
   await page.goto("/settings/pipeline");
   const items = page.getByTestId("pipeline-recipe-defaults");
   await expect(items.locator("[data-config-field]")).toHaveCount(PROCESSING_ORDER.length);
-  await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(2);
+  await expect(items.getByRole("link", { name: / を設定する画面を開く$/ })).toHaveCount(1);
   await expect(
     items.getByRole("link", { name: "文書分割 を設定する画面を開く" })
   ).toHaveAttribute("href", "/settings/chunking");
@@ -355,7 +351,7 @@ for (const theme of ["light", "dark"] as const) {
     await page.goto("/settings/pipeline");
     const items = page.getByTestId("pipeline-recipe-defaults");
     const links = items.getByRole("link");
-    await expect(links).toHaveCount(12);
+    await expect(links).toHaveCount(11);
     for (const link of await links.all()) {
       expect(await link.evaluate((element) => getComputedStyle(element).textDecorationLine)).toContain("underline");
       const colors = await link.evaluate((element) => ({
@@ -429,10 +425,10 @@ test("サブパス配備でも全工程の設定リンクと hash を保持す�
   test.skip(!basePath, "RAG_E2E_BASE_PATH を指定した配備経路の検証で実行する");
   await page.goto(`${basePath}/settings/pipeline`);
   const links = page.getByTestId("pipeline-recipe-defaults").getByRole("link");
-  await expect(links).toHaveCount(12);
+  await expect(links).toHaveCount(11);
   for (const link of await links.all()) await expect(link).toHaveAttribute("href", new RegExp(`^${basePath}/settings/`));
   const vision = links.filter({ hasText: "設定画面へ" }).filter({ has: page.locator("span") });
-  await expect(vision).toHaveCount(12);
+  await expect(vision).toHaveCount(11);
   const target = page.getByRole("link", { name: "章節の要約 を設定する画面を開く", exact: true });
   await expect(target).toHaveAttribute("href", `${basePath}/settings/parser-adapters#post-parse-navigation-summary`);
   await target.scrollIntoViewIfNeeded();

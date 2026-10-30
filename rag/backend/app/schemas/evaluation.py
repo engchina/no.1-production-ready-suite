@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.config import AnswerFlow, EvaluationSuite, QueryStrategy, ReasoningEffortOverride
 from app.schemas.search import (
+    SEARCH_TOP_K_MAX,
     SearchDiagnostics,
     format_search_id_filter,
     normalize_query_text,
@@ -19,6 +20,7 @@ from app.schemas.support_guide import (
     PROCESS_IMPORT_TEXT_MAX_CHARS,
     SupportGuideProcessReference,
 )
+from app.search_defaults import search_top_k_default, search_top_k_schema
 
 EvaluationSuiteName = EvaluationSuite
 
@@ -216,6 +218,10 @@ EVIDENCE_SECTION_MAX_CHARS = 300
 EVIDENCE_LABEL_MAX_CHARS = 1000
 
 
+# 必要な根拠の行の番号の基準（RAG の根拠の `locator.row_basis` と同じ語彙。#3547）。
+EvidenceRowBasis = Literal["sheet", "csv", "word_table", "parsed_table"]
+
+
 class EvaluationEvidence(BaseModel):
     """回答に必要な根拠（#1284。handoff §14.2 の「各必需证据召回」）。
 
@@ -227,8 +233,12 @@ class EvaluationEvidence(BaseModel):
       範囲と重なる（ページの分からない chunk は一致しない）。`page_end` を省くと 1 ページ。
       PDF にしたスライドはスライドの番号がページの番号になる。
     - `sheet`: chunk のシート名（`sheet_name`）が一致する（表計算の文書。#2086）。
-    - `row_start`〜`row_end`: chunk の行（`row_start`〜`row_end`。シートの元の行番号）が範囲と重なる
-      （行の分からない chunk は一致しない）。`row_end` を省くと 1 行。
+    - `row_start`〜`row_end`: chunk の行（`row_start`〜`row_end`）が範囲と重なる（行の分からない
+      chunk は一致しない）。`row_end` を省くと 1 行。行は `row_basis`（行の番号の基準。RAG の根拠の
+      `locator.row_basis` と同じ語彙: `sheet` / `csv` / `word_table` / `parsed_table`）が同じ chunk
+      だけと照合する。`row_basis` を省くと原本の行（表計算のシート・CSV の記録・Word の表）として
+      照合し、解析が組み立てた表の格子の行（`parsed_table`。原本の座標ではない）には一致させない
+      （#3547）。
     - `section`: chunk の章節の見出しの道筋（`section_path`）が `section` を含む。
     - `text`: chunk の本文が `text` を含む。
 
@@ -249,6 +259,7 @@ class EvaluationEvidence(BaseModel):
     sheet: str | None = Field(default=None, max_length=EVIDENCE_SECTION_MAX_CHARS)
     row_start: int | None = Field(default=None, ge=1)
     row_end: int | None = Field(default=None, ge=1)
+    row_basis: EvidenceRowBasis | None = None
     label: str | None = Field(default=None, max_length=EVIDENCE_LABEL_MAX_CHARS)
 
     @field_validator("id")
@@ -279,6 +290,8 @@ class EvaluationEvidence(BaseModel):
                 raise ValueError(f"根拠の {name}_end は {name}_start と一緒に指定してください。")
             if start is not None and end is not None and end < start:
                 raise ValueError(f"根拠の {name}_end は {name}_start 以上にしてください。")
+        if self.row_basis is not None and self.row_start is None:
+            raise ValueError("根拠の row_basis は row_start と一緒に指定してください。")
         if (
             self.text is None
             and self.page_start is None
@@ -460,6 +473,33 @@ class EvaluationCase(EvaluationHandlingExpectation):
         return ids
 
 
+class EvaluationJudgeDiagnostics(BaseModel):
+    """標準回答による評価の判定の診断（rag_engine の ``judge_diagnostics``）。
+
+    ``standard_scope_reused`` は比較範囲（標準回答の比較項目）を同じ評価の job の記録から
+    使い回したか、``standard_scope_retries`` / ``judge_retries`` は比較範囲の固定 / 照合・
+    監査で出力の誤りを指摘して出し直させた回数、``retry_reasons`` はその段と原因の例外の型
+    （「standard_scope:InvalidStructuredOutput」）。``standard_scope_dropped`` は、指した
+    標準回答の単位の ID がどれも標準回答に無いので比較範囲から外した項目の数。
+    ``judge_calls`` は網羅・正確性・主張の判定の LLM の呼び出しの数（再試行を含む。比較範囲の
+    固定を除く）、``claim_calls`` はそのうち段落ごとの主張の判定の数、``claim_failures`` は判定を
+    完了できず unassessed にした段落の数、``uncited_claims`` は出典が無くモデルを呼ばずに
+    unsupported にした段落の数（#3576）。
+    """
+
+    standard_scope_reused: bool = False
+    standard_scope_retries: int = Field(default=0, ge=0)
+    standard_scope_dropped: int = Field(default=0, ge=0)
+    judge_retries: int = Field(default=0, ge=0)
+    retry_reasons: list[str] = Field(default_factory=list)
+    # 判定に使ったモデルの ID（#3574。共通のモデル設定の既定の判定モデルで解決した ID）。
+    judge_model_id: str | None = None
+    judge_calls: int = Field(default=0, ge=0)
+    claim_calls: int = Field(default=0, ge=0)
+    claim_failures: int = Field(default=0, ge=0)
+    uncited_claims: int = Field(default=0, ge=0)
+
+
 class EvaluationAnswerJudgement(BaseModel):
     """標準回答による評価(評価の基準の指標と閾値による合否・主張の監査・必要な項目の網羅)の要約。
 
@@ -476,6 +516,11 @@ class EvaluationAnswerJudgement(BaseModel):
     # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
     missing_content: bool | None = None
     message: str | None = None
+    # 判定の診断（比較範囲を job の記録から使い回したか・出力の誤りで再試行した回数）。
+    # 評価を完了できなかったケースでも残す。判定が記録を返さなかった（時間切れなど）ときは None。
+    judge_diagnostics: EvaluationJudgeDiagnostics | None = None
+    # 判定のモデルの ID（#3574）。判定を完了できなかった（時間切れ・失敗）ケースにも残す。
+    judge_model_id: str | None = None
 
 
 class EvaluationTurnResult(BaseModel):
@@ -590,6 +635,7 @@ class EvaluationMetrics(BaseModel):
     response_decision_accuracy: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool | None = None
+    applied_thresholds: dict[str, float] = Field(default_factory=dict)
     threshold_failures: list[EvaluationThresholdFailure] = Field(default_factory=list)
     failure_reason_counts: dict[str, int] = Field(default_factory=dict)
     category_breakdown: dict[str, EvaluationCategorySummary] = Field(default_factory=dict)
@@ -687,13 +733,19 @@ def _reject_duplicate_case_ids(cases: list[EvaluationCase]) -> None:
 class EvaluationRunRequest(BaseModel):
     """評価実行リクエスト。
 
-    回答エンジンの全体の既定で評価する(検索・回答プロファイルは受け取らない。#301)。検索の方式(mode)と
+    検索・回答プロファイルを指定すると、その設定で評価する。検索の方式(mode)と
     rerank の件数(rerank_top_n)は回答エンジンが使わないため持たない(#591。以前の golden set の
     指定は無視する)。
     """
 
     cases: list[EvaluationCase] = Field(..., min_length=1)
-    top_k: int = Field(default=20, ge=1, le=100)
+    # 省略時はチャット・RAG 検索と同じ既定(#3512)。
+    top_k: int = Field(
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+    )
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     thresholds: EvaluationThresholds | None = None
@@ -701,9 +753,7 @@ class EvaluationRunRequest(BaseModel):
     rag_overrides: EvaluationRagOverrides | None = None
     # 検索・回答プロファイル（任意。#1249）。指定しなければ全体の既定で評価する（#301）。
     search_answer_profile_id: str | None = Field(default=None, max_length=128)
-    # 比べる検索・回答プロファイル（任意。#2402）。指定すると、同じケースをナレッジベースの範囲
-    # （`knowledge_base_ids`）と、このプロファイルの範囲（参照 KB・業務ガイド・ルール）の 2 回流し、
-    # 結果の `comparison` に後者を入れる。`search_answer_profile_id` とは一緒に指定しない。
+    # 同じケースを別の検索・回答プロファイルでも評価する。
     compare_search_answer_profile_id: str | None = Field(default=None, max_length=128)
 
     @field_validator("filters")
@@ -726,11 +776,13 @@ class EvaluationRunRequest(BaseModel):
             self.compare_search_answer_profile_id = (
                 self.compare_search_answer_profile_id.strip() or None
             )
-        if self.compare_search_answer_profile_id and self.search_answer_profile_id:
-            raise ValueError(
-                "compare_search_answer_profile_id は search_answer_profile_id と"
-                "一緒に指定できません（比べる元はナレッジベースの範囲です）。"
-            )
+        if self.search_answer_profile_id is not None:
+            self.search_answer_profile_id = self.search_answer_profile_id.strip() or None
+        if (
+            self.compare_search_answer_profile_id
+            and self.compare_search_answer_profile_id == self.search_answer_profile_id
+        ):
+            raise ValueError("比べる検索・回答プロファイルは、評価するものと別にしてください。")
         self.filters, self.knowledge_base_ids = _sync_knowledge_base_filter(
             self.filters,
             self.knowledge_base_ids,
@@ -764,7 +816,9 @@ def _sync_knowledge_base_filter(
     )
 
 
-EvaluationJobKind = Literal["run"]
+# run: 品質評価（#390）。calibration: 判定の校正（人手の判定と評価器の一致。#3578。
+# 結果は `rag_evaluation_calibrations` に書き、`run_result` は持たない）。
+EvaluationJobKind = Literal["run", "calibration"]
 EvaluationJobStatus = Literal["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]
 
 
@@ -896,7 +950,17 @@ class EvaluationImportResult(BaseModel):
     # 警告（#2086）。評価は実行できる（形式に合わない位置の条件・同じ名前の文書など）。
     warnings: list[EvaluationImportIssue] = Field(default_factory=list)
     warning_count: int = 0
+    search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     document_names: dict[str, str] = Field(default_factory=dict)
     max_rows: int
     max_bytes: int
+
+
+class EvaluationResultExportRequest(BaseModel):
+    """実行時に画面へ保持した入力。指標は所有者を検証した job から取得する。"""
+
+    rows: list[EvaluationImportRow] = Field(default_factory=list, max_length=200)
+    cases: list[EvaluationCase] = Field(default_factory=list, max_length=200)
+    profile_name: str | None = Field(default=None, max_length=256)
+    compare_profile_name: str | None = Field(default=None, max_length=256)

@@ -35,19 +35,34 @@ import math
 import re
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
+import httpx
+from fastapi import HTTPException
+from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
 from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
-from rag_engine.resources.deadline import check_deadline, current_deadline
+from rag_engine.resources.deadline import DeadlineExceeded, check_deadline, current_deadline
+from rag_engine.resources.runtime import saved_prompt_overrides
+from rag_engine.resources.tracing import observe_call
+from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
+from rag_engine.retrieval.search_stages import (
+    CONTEXT_SIBLINGS_STAGE,
+    DERIVED_SOURCE_STAGE,
+    DOCUMENT_INFO_STAGE,
+    ENTITY_EXPANSION_STAGE,
+    GRAPH_EXPANSION_STAGE,
+    IMAGE_EVIDENCE_STAGE,
+    REFERENCE_EXPANSION_STAGE,
+)
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -59,11 +74,11 @@ from app.config import (
     Settings,
     enterprise_ai_connection_for_model,
     enterprise_ai_default_model_id,
+    enterprise_ai_judge_model_id,
     enterprise_ai_max_input_tokens,
     enterprise_ai_model_catalog,
     enterprise_ai_output_token_budget,
     enterprise_ai_reasoning_effort_to_send,
-    enterprise_ai_seed,
     enterprise_ai_vision_model_id,
     settings_today,
 )
@@ -73,6 +88,8 @@ from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
 from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
+from app.rag.citation_status import citation_support_display
+from app.rag.context_page_scope import CONTEXT_PAGE_SCOPE, contained, positive
 from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
@@ -115,6 +132,7 @@ from app.rag.graph_expansion import (
     graph_expansion_metadata,
     plan_graph_expansion,
 )
+from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_step_params
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
@@ -237,6 +255,11 @@ def answer_step_stage(name: str) -> str:
     return f"{ANSWER_STEP_STAGE_PREFIX}{name}"
 
 
+# 回答の本文を根拠と照合する工程の名前（回答フローの最後の検証と MCP の
+# rag_validate_answer。#3470）。
+ANSWER_VALIDATION_STEP = "資料との照合"
+
+
 def _answer_step_span(name: str) -> AbstractContextManager[ObservedSpan]:
     """回答フローの外で行う回答の工程（資料との照合・承認済み FAQ からの回答）の span（#3226）。
 
@@ -254,8 +277,42 @@ def _validation_details(validation: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "fields": [
             {"label": "照合の結果", "value": "確認済み" if validation.get("valid") else "未確認"},
+            {
+                "label": "照合の実行",
+                "value": {
+                    "completed": "完了",
+                    "partial": "一部未確認",
+                    "timed_out": "時間上限",
+                    "error": "実行失敗",
+                    "not_run": "未実行",
+                    "no_evidence": "根拠なし",
+                    "body_changed": "本文の変更後は未確認",
+                    "input_too_large": "照合の入力上限超過",
+                }.get(str(validation.get("status")), "未確認"),
+            },
             {"label": "判定した段落", "value": str(len(validation.get("claim_checks") or []))},
+            *(
+                [
+                    {
+                        "label": "未照合の確認条件",
+                        "value": str(validation["unassessed_premises_count"]),
+                    }
+                ]
+                if validation.get("unassessed_premises_count")
+                else []
+            ),
         ],
+    }
+
+
+def _diagnostic_validation(validation: dict[str, Any]) -> dict[str, Any]:
+    """実行結果を残し、意味の正否を未検証として区別する。"""
+    return {
+        **validation,
+        "raw_valid": validation.get("valid"),
+        "valid": None,
+        "semantic_status": "unknown",
+        "automatic_actions": False,
     }
 
 
@@ -292,6 +349,12 @@ class _SearchState:
     """
 
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
+    context_reads: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
+    retrieval_stages: list[dict[str, Any]] = field(default_factory=list)
+    # 検索の経路(chunk_id → 当たった経路。rag_engine の検索の実装と同じ形の ``vector:qN`` /
+    # ``keyword:oracle_text:qN`` / ``citation`` / 質問理解の profile の経路。#3443)。根拠の記録
+    # (``adb_hybrid.retrieval_channels``)と、文書の検索の工程の詳細(候補の経路)に出す。
+    retrieval_channels: dict[str, set[str]] = field(default_factory=dict)
     work_dir: Path | None = None
     sources: dict[str, bytes | None] = field(default_factory=dict)
     # 根拠の画像を切り出した chunk の metadata(engine_metadata_json。画像の無い chunk は None)。
@@ -470,9 +533,49 @@ def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
     return {key: value for key, value in filters.items() if value.strip()}
 
 
-def answer_images_enabled(settings: Settings) -> bool:
-    """回答で根拠の原画像を Vision モデルへ添付するか(設定が有効で、既定の Vision モデルがある)。"""
-    return settings.rag_answer_vision_enabled and bool(enterprise_ai_vision_model_id(settings))
+def answer_model_reads_images(settings: Settings, model_id: str) -> bool:
+    """回答のモデルが画像を読めるか(モデル設定の登録モデルの ``vision_enabled``。#3444)。
+
+    読めるモデルで答える回だけ、根拠の chunk の画像を切り出して回答の入力に添付する。回答の途中で
+    別のモデル(既定の Vision モデル)へ切り替えない。
+    """
+    return any(
+        model.model_id == model_id and model.vision_enabled
+        for model in enterprise_ai_model_catalog(settings)
+    )
+
+
+def _attached_image_count(result: object) -> int:
+    """回答のモデルへ添付した根拠の画像の件数(#3444。添付しなかった回は 0)。"""
+    if getattr(result, "image_prompt_mode", "") != "vision_attachments":
+        return 0
+    return sum(
+        1
+        for item in getattr(result, "image_evidence", ()) or ()
+        if isinstance(item, Mapping) and item.get("prompt_path")
+    )
+
+
+# 条の選択の記録(#3507)の既定の置き場所(PLATFORM_LOCAL_STORAGE_DIR の下)。
+# 3 製品で同じ保存先を設定しても、RAG の名前の下に分ける。
+_ARTICLE_CATALOG_CACHE_SUBDIR = Path("cache") / "rag-article-catalog"
+
+
+def resolve_article_catalog_cache_dir(settings: Settings) -> Path | None:
+    """条の選択の記録の置き場所(#3507)。明示の設定、無ければローカルの保存先の下。
+
+    どちらも無ければ None(process をまたぐ記録を使わない)。
+    """
+    explicit = str(getattr(settings, "rag_article_catalog_cache_dir", "") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    root = str(getattr(settings, "local_storage_dir", "") or "").strip()
+    return Path(root).expanduser() / _ARTICLE_CATALOG_CACHE_SUBDIR if root else None
+
+
+def article_catalog_cache_dir(settings: Settings) -> Path | None:
+    """rag_engine に渡す条の選択の記録の置き場所(テストは保存先を分けるため差し替える)。"""
+    return resolve_article_catalog_cache_dir(settings)
 
 
 def _reasoning_effort_override(value: str) -> str:
@@ -486,16 +589,16 @@ def build_engine_settings(
     output_dir: Path,
     runtime_knowledge_path: Path | None = None,
     answer_model_id: str | None = None,
+    scope: AnswerScope | None = None,
 ) -> Any:
     """backend Settings から rag_engine の Settings を作る(env や .env は読まない)。
 
     ``answer_model_id`` を渡すと、回答のモデル(とその接続)をそのモデルにする。チャットの
-    モデル比較で、列ごとのモデルで答えるために使う(#593)。省略時は既定のモデル。Vision の
-    モデルは比較の対象ではないので、常に既定の Vision モデルを使う。
+    モデル比較で、列ごとのモデルで答えるために使う(#593)。省略時は既定のモデル。回答の実行の
+    LLM の呼び出しはすべてこのモデルで行い、根拠の画像はこのモデルが読めるときだけ添付する
+    (#3444)。既定の Vision モデル(``OCI_ENTERPRISE_AI_VLM_*``)は取り込みの処理(図の説明など)
+    だけが使う。
 
-    業務 profile の JSON はここでは決まらない。`rag_engine.profiles` が process の環境変数
-    `RAG_ENGINE_DOMAIN_PROFILE_FILE`(未指定なら作業ディレクトリの `domain_profile.json`)を
-    直接読む(#569)。
     """
     from rag_engine.config import get_settings as engine_get_settings
 
@@ -510,6 +613,10 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_API_KEY": answer.api_key,
         "OCI_ENTERPRISE_AI_PROJECT_OCID": answer.project_ocid,
         "OCI_ENTERPRISE_AI_DEFAULT_MODEL": answer_model,
+        # 回答のモデルが画像を読めるか(#3444)。読めるときだけ根拠の画像を回答の入力に添付する。
+        "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION": (
+            "1" if answer_model_reads_images(settings, answer_model) else "0"
+        ),
         "OCI_ENTERPRISE_AI_VLM_MODEL": vision_model,
         "OCI_ENTERPRISE_AI_VLM_ENDPOINT": vision.base_url,
         "OCI_ENTERPRISE_AI_VLM_API_KEY": vision.api_key,
@@ -521,8 +628,6 @@ def build_engine_settings(
         "OCI_ENTERPRISE_AI_VLM_REASONING_EFFORT": enterprise_ai_reasoning_effort_to_send(
             settings, vision_model
         ),
-        # seed は全モデルで共通(#1434。既定 42)。rag_engine が Responses API の top-level で送る。
-        "OCI_ENTERPRISE_AI_SEED": str(enterprise_ai_seed(settings)),
         # 回答のモデルの入力の上限(tokens。#1437)。章節の拡張の根拠の入力の上限と、抽出してから
         # 統合の 1 回分の大きさを、この値の割合で決める(値の解釈は platform の 1 か所)。
         "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS": str(
@@ -543,14 +648,30 @@ def build_engine_settings(
         # 常に「未実行」になる(#275)。
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
-        "RAG_ENGINE_PROFILE": settings.rag_answer_profile,
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
+        "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
+        "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),
+        "RAG_ENGINE_RETRIEVAL_STAGE_LIMITS": json.dumps(
+            {
+                "fusion": settings.rag_retrieval_candidate_limit,
+                "diversity": settings.rag_candidate_diversity_max_extra
+                if settings.rag_candidate_diversity_depth > 0
+                else 0,
+                "reference": settings.rag_reference_expansion_max_chunks
+                if settings.rag_reference_expansion_enabled
+                else 0,
+                "entity": settings.rag_entity_expansion_max_chunks
+                if settings.rag_entity_expansion_enabled
+                else 0,
+                "structure": settings.rag_graph_expansion_max_chunks
+                if settings.rag_graph_expansion_enabled
+                else 0,
+            }
+        ),
         # 「今日」(基準日の既定)の時間帯(共通の設定 PLATFORM_TIMEZONE。#3249)。
         "PLATFORM_TIMEZONE": configured_timezone_name(settings),
         "LLM_REQUEST_TIMEOUT_SECONDS": str(int(settings.oci_enterprise_ai_timeout_seconds)),
         "LLM_RETRIES": str(int(settings.oci_enterprise_ai_max_retries)),
-        # 原画像を添付する回だけ既定の Vision モデルで答える(ほかは既定のテキストモデル。#649)。
-        "RAG_ENGINE_ANSWER_IMAGES": "1" if answer_images_enabled(settings) else "0",
         # 画面目録で操作画面を探す(#554)。rag_engine は明示した environ だけを読む。
         "RAG_ENGINE_SCREEN_LINKING": "1" if settings.rag_screen_linking_enabled else "0",
         # 条の目録から根拠の条を選ぶ段(#2254)。
@@ -577,6 +698,17 @@ def build_engine_settings(
         ),
         "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS": str(
             settings.rag_article_catalog_call_timeout_seconds
+        ),
+        "RAG_ENGINE_ARTICLE_CATALOG_REVIEW": (
+            "1" if settings.rag_article_catalog_review_enabled else "0"
+        ),
+        # 条の選択の結果を process をまたいで使う記録(#3507)。置き場所が無ければ process の中だけ。
+        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR": str(article_catalog_cache_dir(settings) or ""),
+        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS": str(
+            settings.rag_article_catalog_cache_ttl_seconds
+        ),
+        "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES": str(
+            settings.rag_article_catalog_cache_max_entries
         ),
         # 回答の最終の検証の入力の上限。
         "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES": str(
@@ -611,12 +743,14 @@ def build_engine_settings(
         "RAG_ENGINE_GUIDE_STEP_CHUNKS_PER_STEP": str(settings.rag_guide_step_chunks_per_step),
         "RAG_ENGINE_GUIDE_REFERENCE_MAX_CHUNKS": str(settings.rag_guide_reference_max_chunks),
         "RAG_ENGINE_GUIDE_STEP_DEADLINE_SECONDS": str(settings.rag_guide_step_deadline_seconds),
-        # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索・回答プロファイルで選ぶ)。
+        # 当たった chunk の章節から親の章節へ段階的に広げる(#1436。検索方法の全体設定で選ぶ)。
         "RAG_ENGINE_SECTION_EXPANSION": "1" if settings.rag_section_expansion_enabled else "0",
         "RAG_ENGINE_SECTION_EXPANSION_MAX_LEVELS": str(settings.rag_section_expansion_max_levels),
         "RAG_ENGINE_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
             settings.rag_section_expansion_input_token_percent
         ),
+        # 生成に渡す根拠の原文の文字予算(#3776。全体設定だけで決める)。
+        "RAG_ENGINE_EVIDENCE_BUDGET_CHARS": str(settings.rag_evidence_budget_chars),
         # rerank の後、起点に採る同じ文書の chunk の上限(#2167。検索・回答プロファイルで選ぶ)。
         "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT": str(settings.rag_max_anchors_per_document),
         # 用途ごとの推論の量(#1499。model は空 = モデルの登録値のまま)・CRAG の評価の省略・
@@ -649,6 +783,7 @@ def build_engine_settings(
         "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS": str(settings.rag_answer_max_correction_rounds),
         # 回答の監査の型(#2795)。
         "RAG_ENGINE_ANSWER_AUDIT_MODE": settings.rag_answer_audit_mode,
+        "RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE": settings.rag_answer_evidence_refinement_mode,
         # 停滞した LLM の呼び出しの打ち切りと送り直し(#1926)。
         "RAG_ENGINE_LLM_STALL_DETECTION": "1" if settings.rag_llm_stall_detection_enabled else "0",
         "RAG_ENGINE_LLM_STALL_IDLE_SECONDS": str(settings.rag_llm_stall_idle_seconds),
@@ -670,9 +805,14 @@ def build_engine_settings(
     if runtime_knowledge_path is not None:
         environ["RUNTIME_KNOWLEDGE_PATH"] = str(runtime_knowledge_path)
     engine_settings = engine_get_settings(environ=environ, dotenv_path=None)
+    premises = _confirmed_premise_records(settings, scope)
     return replace(
         engine_settings,
         domain_keywords_override=tuple(settings.rag_domain_keywords),
+        confirmed_premises=tuple((item["question"], item["answer"]) for item in premises),
+        confirmed_premise_sources=tuple(
+            (item["question"], item["answer"], item["source"]) for item in premises
+        ),
         known_conditions=guide_known_conditions(
             settings.rag_support_guide if settings.rag_support_guide_enabled else {}
         ),
@@ -715,6 +855,54 @@ class AnswerScope:
     search_terms: tuple[str, ...] = ()
     # 回答の末尾に出す対象の範囲(例: 「出張旅費規程」の「第6条」(p.2))。
     label: str = ""
+    # 実際に選んだ答え・自由入力だけ。設定された指示や仮定を利用者の事実にしない。
+    confirmed_premises: tuple[tuple[str, str], ...] = ()
+    confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
+
+
+def _confirmed_premise_records(
+    settings: Settings, scope: AnswerScope | None
+) -> list[dict[str, str]]:
+    """利用者の確定した前提の出所を保持する。展示用の自由文から事実を作らない。"""
+    records: dict[tuple[str, str], dict[str, str]] = {}
+    if scope is not None:
+        sources: dict[tuple[str, str], str] = {}
+        for question, answer, source in scope.confirmed_premise_sources:
+            sources.setdefault((question, answer), source)
+        for question, answer in scope.confirmed_premises:
+            # 既存scopeの明示的な組は、確認で実際に答えた値。質問から認識した組は出所を伴う。
+            source = sources.get((question, answer), "user")
+            if source in {"user", "question"} and answer.strip():
+                records.setdefault(
+                    (question, answer), {"question": question, "answer": answer, "source": source}
+                )
+    known = (settings.rag_support_guide or {}).get("known_conditions")
+    if settings.rag_support_guide_enabled and isinstance(known, list):
+        for item in known:
+            if (
+                not isinstance(item, Mapping)
+                or item.get("source") not in {"user", "question"}
+                or item.get("state") != "known"
+            ):
+                continue
+            question = str(item.get("label") or "").strip()
+            answer = str(item.get("value") or "").strip()
+            if question and answer:
+                records.setdefault(
+                    (question, answer),
+                    {"question": question, "answer": answer, "source": str(item["source"])},
+                )
+    return list(records.values())
+
+
+def _confirmed_validation_premises(
+    settings: Settings, scope: AnswerScope | None
+) -> list[dict[str, str]]:
+    """最終照合の既存の質問・回答契約へ、同じ確定前提だけを写す。"""
+    return [
+        {"question": item["question"], "answer": item["answer"]}
+        for item in _confirmed_premise_records(settings, scope)
+    ]
 
 
 class AnswerEngine:
@@ -736,10 +924,16 @@ class AnswerEngine:
         attachment_chunks: Sequence[RetrievedChunk] = (),
         caller_queries: Sequence[str] | None = None,
         degraded: DegradedSteps | None = None,
+        complete_evidence: bool = True,
     ) -> None:
+        # 回答を作らない検索で、根拠の補い（章節の拡張・要求ごとの探し直し・CRAG）までするか
+        # （#3506）。False は主の文書の検索の後で止める（業務 Agent の根拠の取得。補いは Agent が
+        # MCP でする）。
+        # RAG 検索の画面は True（チャットと同じ根拠を集め、回答の生成の手前で止める）。
+        self._complete_evidence = complete_evidence
         # 呼び出し元（業務 Agent）が作った検索文（#2651）。None 以外なら、回答を作らない検索で、
-        # 質問に応じた推論の LLM / VLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携・
-        # 根拠の画像の添付）を設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
+        # 質問に応じた推論の LLM（検索戦略の判定・質問拡張・条の目録の選択・画面目録の連携）と根拠の
+        # 画像の切り出しを設定に関わらず使わない。決定的な工程（規則の質問の理解・用語の別名・
         # hybrid search・rerank・親子と前後の文脈・交差参照・実体の拡張）は通常の検索と同じ。
         self._caller_queries = tuple(caller_queries) if caller_queries is not None else None
         if self._caller_queries is not None:
@@ -748,7 +942,6 @@ class AnswerEngine:
                     "rag_query_strategy": CALLER_QUERY_STRATEGY,
                     "rag_article_catalog_enabled": False,
                     "rag_screen_linking_enabled": False,
-                    "rag_answer_vision_enabled": False,
                 }
             )
         if not settings.rag_support_guide_enabled:
@@ -766,6 +959,11 @@ class AnswerEngine:
         self._runtime_knowledge_payload = runtime_knowledge_payload
         # 回答のモデル(チャットのモデル比較の列のモデル。#593)。None は既定のモデル。
         self._answer_model_id = answer_model_id or None
+        # 回答のモデルが画像を読めるなら、根拠の chunk の画像を切り出して回答の入力に添付する
+        # (#3444)。回答を作らない検索(呼び出し元の検索文)は切り出さない。
+        self._attach_images = self._caller_queries is None and answer_model_reads_images(
+            settings, self._answer_model_id or enterprise_ai_default_model_id(settings)
+        )
         # 質問から読み取った抽出項目の条件(#652)。手の条件の項目には足さない。
         self._auto_field_conditions = list(auto_field_conditions)
         # 利用者が選んだ類似の承認済み FAQ(質問・承認済みの回答)。選んだときは検索せず、質問と FAQ
@@ -801,7 +999,9 @@ class AnswerEngine:
             degraded=self._degraded if self._degraded is not None else DegradedSteps(),
         )
         try:
-            overrides = await self._oracle.answer_prompt_overrides()
+            overrides = saved_prompt_overrides()
+            if overrides is None:
+                overrides = await self._oracle.answer_prompt_overrides()
         except Exception as exc:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
             logger.warning("answer prompt overrides load failed", exc_info=True)
             state.record_degraded("prompt_overrides", exc)
@@ -822,6 +1022,7 @@ class AnswerEngine:
                 output_dir=work_dir,
                 runtime_knowledge_path=runtime_path,
                 answer_model_id=self._answer_model_id,
+                scope=self._scope,
             )
             # 回答の専用の thread で動かし、打ち切り・取り消しを thread に伝える(#1422)。
             result = await run_answer_in_thread(
@@ -842,7 +1043,6 @@ class AnswerEngine:
             for key, value in current_pack().sections["answer_labels"].items()
             if isinstance(value, str)
         }
-        await self._validate_outcome(request, outcome, step_callback=step_callback)
         if self._scope is not None:
             outcome.diagnostics["scope"] = {
                 "label": self._scope.label,
@@ -853,8 +1053,9 @@ class AnswerEngine:
                 outcome = replace(
                     outcome, answer=f"{outcome.answer}\n\n（対象: {self._scope.label}）"
                 )
+        await self._validate_outcome(request, outcome, step_callback=step_callback)
         outcome.diagnostics["models"] = self._models_used(
-            vision=getattr(result, "image_prompt_mode", "") == "vision_attachments",
+            attached_images=_attached_image_count(result),
             rerank_failed=state.degraded.failed("rerank"),
         )
         # 回答を作ったプロンプトの版（編集した内容とコードのプロンプト。#1276）。
@@ -932,46 +1133,95 @@ class AnswerEngine:
     ) -> None:
         """LLM 監査が有効な回答の最終の本文を、MCP と共通の検証で確かめる。"""
         if self._settings.rag_answer_audit_mode == "none" or not outcome.answer.strip():
+            outcome.diagnostics["answer_validation"] = {
+                "status": "not_run",
+                "valid": False,
+                "reason": "audit_disabled"
+                if self._settings.rag_answer_audit_mode == "none"
+                else "empty_answer",
+            }
+            if semantic_audit_is_diagnostic_only(outcome.diagnostics):
+                outcome.diagnostics["answer_validation"] = _diagnostic_validation(
+                    outcome.diagnostics["answer_validation"]
+                )
             return
         # answer_validation は engine の設定変換も使うため、循環 import を避けてここで読む。
-        from app.rag.answer_validation import EvidenceRef, validate_answer
+        from app.rag.answer_validation import (
+            MAX_PREMISES,
+            AnswerValidation,
+            EvidenceRef,
+            validate_answer,
+        )
 
-        name = "資料との照合"
+        name = ANSWER_VALIDATION_STEP
         started = time.monotonic()
         if step_callback is not None:
             await step_callback(name, "started", 0.0, {})
         state = "success"
         llm_usage: dict[str, Any] = {}
+        diagnostic_only = semantic_audit_is_diagnostic_only(outcome.diagnostics)
         # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
         with _answer_step_span(name) as span:
             try:
-                result = await validate_answer(
-                    request.query,
-                    outcome.answer,
-                    [EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations],
-                    self._settings,
-                    oracle=self._oracle,
-                )
+                premises = _confirmed_validation_premises(self._settings, self._scope)
+                if len(premises) > MAX_PREMISES:
+                    # 一部の確定条件を黙って省いて「確認済み」にしない。
+                    result = AnswerValidation(status="input_too_large", valid=False)
+                else:
+                    result = await validate_answer(
+                        request.original_question or request.query,
+                        outcome.answer,
+                        [
+                            EvidenceRef(chunk.document_id, chunk.chunk_id)
+                            for chunk in outcome.citations
+                        ],
+                        self._settings,
+                        oracle=self._oracle,
+                        premises=premises,
+                    )
                 llm_usage = dict(result.llm_usage)
                 validation: dict[str, Any] = {
                     "status": result.status,
                     "valid": result.valid,
+                    "reuse_context": result.reuse_context,
                     "counts": dict(result.counts),
                     "claim_checks": list(result.claim_checks),
+                    # 原質問・確認の答えとの両立の比較の、段落ごとの採否（#3800。ID と code だけ）。
+                    "premise_consistency_checks": list(result.premise_consistency_checks),
                     "missing_evidence_count": len(result.missing_evidence),
                     "stale_evidence_count": len(result.stale_evidence),
+                    "confirmed_premises_count": len(premises),
+                    "unassessed_premises_count": len(premises)
+                    if len(premises) > MAX_PREMISES
+                    else 0,
                 }
-            except Exception:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
+            except Exception as exc:  # noqa: BLE001 - 検証の失敗は未確認として残し、回答の記録を失わない。
+                if isinstance(exc, (DeadlineExceeded, PermissionError)) or (
+                    isinstance(exc, HTTPException) and exc.status_code in {401, 403}
+                ):
+                    raise
                 logger.warning("answer final validation failed", exc_info=True)
-                validation = {"status": "error", "valid": False}
+                validation = {
+                    "status": "timed_out"
+                    if isinstance(exc, (TimeoutError, httpx.TimeoutException, APITimeoutError))
+                    else "error",
+                    "valid": False,
+                }
                 state = "error"
                 span.set_status("failed")
+            if diagnostic_only:
+                validation = _diagnostic_validation(validation)
             span.set_display(
                 params=answer_step_params({"llm_calls": int(llm_usage.get("calls") or 0)}),
                 details=answer_step_details(_validation_details(validation)),
             )
+        if diagnostic_only:
+            outcome.diagnostics["needs_human_review"] = True
         outcome.diagnostics["answer_validation"] = validation
-        if not validation["valid"]:
+        deterministic_failure = bool(
+            validation.get("missing_evidence_count") or validation.get("stale_evidence_count")
+        )
+        if deterministic_failure or (not diagnostic_only and not validation["valid"]):
             outcome.diagnostics["needs_human_review"] = True
             outcome.diagnostics["confidence"] = "low"
             envelope = outcome.diagnostics.get("envelope")
@@ -1068,11 +1318,14 @@ class AnswerEngine:
             context_text=f"類似問: {faq_question}\n承認済みの回答: {faq_answer}",
         )
 
-    def _models_used(self, *, vision: bool = False, rerank_failed: bool = False) -> dict[str, Any]:
+    def _models_used(
+        self, *, attached_images: int = 0, rerank_failed: bool = False
+    ) -> dict[str, Any]:
         """回答フローで使ったモデル(画面に出す。#649)。
 
-        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張と回答の生成に使う。
-        根拠の原画像を添付して答えたときは、その回答を既定の Vision モデルで作る(``vision``)。
+        LLM(既定のテキストモデル。比較の列ではその列のモデル)は質問の理解・拡張・回答の生成・
+        監査のすべてに使う(#3444)。``attached_images`` はそのモデルへ添付した根拠の画像の件数
+        (画像を読めないモデル・画像の無い根拠は 0)。
         rerank は実際に並べたときだけモデル名を出す: 無効・未設定(モデルか compartment が無い。
         rag_engine はこのとき rerank を実行しない)なら空。rerank が失敗して取得の順で続けたとき
         (``rerank_failed``)も空にし、rerank で並べたように見せない(失敗は degraded_steps の
@@ -1089,7 +1342,7 @@ class AnswerEngine:
 
         return {
             "llm": model(self._answer_model_id or enterprise_ai_default_model_id(settings)),
-            "vision": model(enterprise_ai_vision_model_id(settings)) if vision else None,
+            "attached_images": attached_images,
             "embedding": settings.oci_genai_embedding_model,
             "rerank": (
                 settings.oci_genai_rerank_model
@@ -1158,7 +1411,13 @@ class AnswerEngine:
             return _run_on_loop(factory, loop)
 
         dependencies = AnswerDependencies(
-            search=lambda **kwargs: run_async(lambda: self._search(request, state, **kwargs)),
+            search=lambda **kwargs: run_async(
+                lambda: self._search(request, state, defer_context=True, **kwargs)
+            ),
+            context_chunks=lambda **kwargs: run_async(
+                lambda: self._context_chunks(state, **kwargs)
+            ),
+            record_retrieval=lambda stage: state.retrieval_stages.append(dict(stage)),
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
             parse_images=parse_multimodal_response,
@@ -1206,7 +1465,8 @@ class AnswerEngine:
             article_documents=lambda **kwargs: run_async(
                 lambda: self._article_documents(request, state)
             ),
-            # 条の選択の 2 段目で見せる、同じ章の条の本文の書き出し。
+            # 条の選択の 2 段目で見せる、同じ章の条と別の章の条（選んだ条の名指しを探す）の
+            # 本文の書き出し。
             article_leads=lambda *, document_id, chunk_set_id, sections, **kwargs: run_async(
                 lambda: self._article_leads(document_id, chunk_set_id, sections, state=state)
             ),
@@ -1245,8 +1505,10 @@ class AnswerEngine:
                 answer_flow=self._settings.rag_answer_flow,
                 rerank_enabled=self._settings.rag_rerank_enabled,
                 retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
-                # RAG 検索の画面は回答を作らない(CRAG も使わない。#649)。
+                # RAG 検索の画面は回答を作らない(#649)。根拠はチャットと同じ流れで集め、回答の生成の
+                # 手前で止める(#3506)。業務 Agent の根拠の取得は主の文書の検索の後で止める。
                 generate_answer=request.generate_answer,
+                complete_evidence=request.generate_answer or self._complete_evidence,
                 # 絞り込み自体は _search の hybrid_search(request.filters)が行う。
                 # ここでは回答のプロンプトと実行記録に条件を載せるために渡す。
                 classification_filter=classification_filter_from_values(
@@ -1279,6 +1541,7 @@ class AnswerEngine:
         inquiry_conditions: Any = None,
         settings: Any = None,
         expand_references: bool = True,
+        defer_context: bool = False,
         page_ranges: Sequence[Mapping[str, Any]] = (),
         **_: object,
     ) -> Any:
@@ -1339,6 +1602,9 @@ class AnswerEngine:
                 )
                 for rank, hit in enumerate(hits, start=1):
                     state.chunks.setdefault(hit.chunk_id, hit)
+                    state.retrieval_channels.setdefault(hit.chunk_id, set()).update(
+                        _hit_channels(hit, index)
+                    )
                     fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
             # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
             # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
@@ -1372,21 +1638,63 @@ class AnswerEngine:
                 limit=candidate_limit,
                 profile_enabled=bool(getattr(settings, "profile_channel_enabled", True)),
             )
-            for _channel, channel_weight, ranking in channels:
+            for channel, channel_weight, ranking in channels:
                 for rank, (chunk_id, _score) in enumerate(ranking, start=1):
                     fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
+                    state.retrieval_channels.setdefault(chunk_id, set()).add(channel)
         ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
+        unique: list[str] = []
+        source_keys: dict[tuple[Any, ...], str] = {}
+        duplicates: list[dict[str, str]] = []
+        for chunk_id in ordered:
+            chunk = state.chunks[chunk_id]
+            refs = tuple(
+                sorted(
+                    {
+                        str(ref.get("record_id") or "")
+                        for ref in _json_list(chunk.metadata.get("source_record_refs_json"))
+                        if ref.get("record_id")
+                    }
+                )
+            )
+            artifact = str(chunk.metadata.get("chunk_set_id") or "")
+            key = (
+                chunk.document_id,
+                artifact,
+                str(chunk.metadata.get("recipe_id") or ""),
+                refs,
+                chunk.text,
+            )
+            if refs and artifact and key in source_keys:
+                duplicates.append(
+                    {
+                        "id": chunk_id,
+                        "retained_id": source_keys[key],
+                        "reason": "duplicate_original",
+                    }
+                )
+                continue
+            if refs and artifact:
+                source_keys[key] = chunk_id
+            unique.append(chunk_id)
+        ordered = unique
         ranked = ordered[:candidate_limit]
         if self._settings.rag_candidate_diversity_depth > 0:
             ranked += _diverse_candidates(
-                ordered,
+                ordered[: self._settings.rag_candidate_diversity_depth],
                 candidate_limit,
                 lambda chunk_id: state.chunks[chunk_id].document_id,
                 new_document=self._settings.rag_candidate_diversity_new_document,
                 present_document=self._settings.rag_candidate_diversity_present_document,
             )[: self._settings.rag_candidate_diversity_max_extra]
+        selected_fused_ids = set(ranked)
         # 当たった派生の chunk(要約・項目抽出の値)は検索の手がかり。回答の根拠には、その chunk が
         # 指す原文の chunk を同じ位置に置く(原文が読めなければ根拠に渡さない。#2641)。
+        context_scope = (
+            (_with_page_ranges(state.filters, page_ranges) or {}) if page_ranges else state.filters
+        ).get(PAGE_RANGES_FILTER_KEY, "")
+        if context_scope:
+            expand_references = False
         anchors = await self._original_anchors(
             state,
             [state.chunks[chunk_id] for chunk_id in ranked],
@@ -1395,16 +1703,37 @@ class AnswerEngine:
             if page_ranges
             else dict(state.filters),
         )
+        anchors = [
+            chunk
+            for chunk in anchors
+            if contained(chunk.document_id, chunk.metadata, context_scope)
+        ]
         ranked = [chunk.chunk_id for chunk in anchors]
+        fusion_ids = set(ranked[:candidate_limit])
         for rank, chunk_id in enumerate(ranked, start=1):
             known = state.fused_ranks.get(chunk_id)
             if known is None or rank < known[0]:
                 state.fused_ranks[chunk_id] = (rank, fused[chunk_id])
-        siblings = original_chunks(
-            await self._oracle.context_group_siblings(
-                anchors, max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks)
-            )
-        )
+        siblings: list[RetrievedChunk] = []
+        if not defer_context:
+            with _search_stage(CONTEXT_SIBLINGS_STAGE, active=bool(anchors)):
+                siblings = original_chunks(
+                    await self._oracle.context_group_siblings(
+                        [
+                            anchor
+                            for anchor in anchors
+                            if anchor.metadata.get("chunk_strategy") == "small_to_big"
+                            or self._settings.rag_neighbor_child_count > 0
+                        ],
+                        max_chunks_per_group=max(1, self._settings.rag_context_group_max_chunks),
+                        neighbor_child_count=self._settings.rag_neighbor_child_count,
+                    )
+                )
+        siblings = [
+            chunk
+            for chunk in siblings
+            if contained(chunk.document_id, chunk.metadata, context_scope)
+        ]
         for sibling in siblings:
             state.chunks.setdefault(sibling.chunk_id, sibling)
         # 上位の候補が本文で参照する節の chunk(#1280)。起点の候補の直後に置き、rerank に任せる。
@@ -1412,47 +1741,49 @@ class AnswerEngine:
         # 前後の文脈は rerank にかからず、下位の候補は文脈に入らないため)。上位の起点はそのまま。
         # 起点は統合の上位 5 件と、その外で回答の文脈に入りうる上位(top_k)の参照を持つ候補(#1549)。
         source_ids = {chunk.chunk_id for chunk in anchors[:_REFERENCE_SOURCE_ANCHORS]}
-        references = (
-            await self._reference_expansion(
-                request,
-                state,
-                anchors,
-                existing=source_ids,
-                question=(queries[0], embeddings[0]) if embeddings else None,
-                scores=fused,
-            )
-            if expand_references
-            else {}
-        )
+        references: dict[str, list[RetrievedChunk]] = {}
+        if expand_references and self._settings.rag_reference_expansion_enabled:
+            with _search_stage(REFERENCE_EXPANSION_STAGE, active=bool(anchors)):
+                references = await self._reference_expansion(
+                    request,
+                    state,
+                    anchors,
+                    existing=source_ids,
+                    question=(queries[0], embeddings[0]) if embeddings else None,
+                    scores=fused,
+                )
         referenced = [chunk for chunks in references.values() for chunk in chunks]
         promoted = {chunk.chunk_id for chunk in referenced}
         # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
-        entity_chunks = (
-            await self._entity_expansion(request, state, anchors) if expand_references else []
-        )
+        entity_chunks: list[RetrievedChunk] = []
+        if expand_references and self._settings.rag_entity_expansion_enabled:
+            with _search_stage(ENTITY_EXPANSION_STAGE, active=bool(anchors)):
+                entity_chunks = await self._entity_expansion(request, state, anchors)
         entity_ids = {chunk.chunk_id for chunk in entity_chunks}
         # 関係情報(#2055)で、上位の候補と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
         # 章節の chunk を足す。候補・前後の文脈・参照先・実体の拡張にある chunk は足さない。
-        graph_chunks = (
-            await self._graph_expansion(
-                request,
-                state,
-                anchors,
-                exclude={
-                    *ranked,
-                    *(chunk.chunk_id for chunk in siblings),
-                    *promoted,
-                    *entity_ids,
-                },
-            )
-            if expand_references
-            else []
-        )
-        if referenced or entity_chunks or graph_chunks:
-            await self._load_classifications([*referenced, *entity_chunks, *graph_chunks], state)
-        if answer_images_enabled(self._settings):
-            for chunk in [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]:
-                await self._materialize_image_evidence(chunk, state)
+        graph_chunks: list[RetrievedChunk] = []
+        if expand_references and self._settings.rag_graph_expansion_enabled:
+            with _search_stage(GRAPH_EXPANSION_STAGE, active=bool(anchors)):
+                graph_chunks = await self._graph_expansion(
+                    request,
+                    state,
+                    anchors,
+                    exclude={
+                        *ranked,
+                        *(chunk.chunk_id for chunk in siblings),
+                        *promoted,
+                        *entity_ids,
+                    },
+                )
+        if self._attach_images and not defer_context:
+            evidence = [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]
+            with _search_stage(
+                IMAGE_EVIDENCE_STAGE,
+                active=any(_needs_image_materialization(chunk, state) for chunk in evidence),
+            ):
+                for chunk in evidence:
+                    await self._materialize_image_evidence(chunk, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
             references = {
@@ -1461,9 +1792,20 @@ class AnswerEngine:
             }
             entity_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in entity_chunks]
             graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
-        await self._load_first_page_contexts(
-            [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks], state
-        )
+        added = [*referenced, *entity_chunks, *graph_chunks]
+        evidence = [*anchors, *siblings, *added]
+        # 文書の分類(足した根拠の文書)と文書の背景(1 ページ目の本文)は短い読み取りなので 1 つの段に
+        # まとめる。読むものが無ければ段を出さない(#3464)。
+        with _search_stage(
+            DOCUMENT_INFO_STAGE,
+            active=bool(
+                _missing_classifications(added, state)
+                or _missing_first_page_contexts(evidence, state)
+            ),
+        ):
+            if added:
+                await self._load_classifications(added, state)
+            await self._load_first_page_contexts(evidence, state)
         classifications = state.classifications
         children = []
         for chunk in anchors:
@@ -1479,6 +1821,7 @@ class AnswerEngine:
                     rrf_score=fused.get(chunk.chunk_id, 0.0),
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
             )
             children.extend(
@@ -1487,6 +1830,7 @@ class AnswerEngine:
                     rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
                     classification=classifications.get(reference.document_id),
                     first_page_context=_first_page_context(reference, state),
+                    retrieval_channels=state.retrieval_channels.get(reference.chunk_id),
                 )
                 for reference in references.get(chunk.chunk_id, ())
                 if reference.chunk_id not in entity_ids
@@ -1500,6 +1844,7 @@ class AnswerEngine:
                     rrf_score=base_score * _ENTITY_SCORE_DECAY,
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in entity_chunks
             ]
@@ -1512,9 +1857,23 @@ class AnswerEngine:
                     rrf_score=base_score * _GRAPH_SCORE_DECAY,
                     classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
+                    retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in graph_chunks
             ]
+        for child in children:
+            stage = (
+                "reference"
+                if child.chunk_uid in promoted
+                else "entity"
+                if child.chunk_uid in entity_ids
+                else "structure"
+                if child.chunk_uid in {chunk.chunk_id for chunk in graph_chunks}
+                else "fusion"
+                if child.chunk_uid in fusion_ids
+                else "diversity"
+            )
+            child.metadata["retrieval_admission_stage"] = stage
         all_children = {chunk.chunk_uid: chunk for chunk in children}
         for sibling in siblings:
             all_children.setdefault(
@@ -1524,6 +1883,7 @@ class AnswerEngine:
                     rrf_score=0.0,
                     classification=classifications.get(sibling.document_id),
                     first_page_context=_first_page_context(sibling, state),
+                    retrieval_channels=state.retrieval_channels.get(sibling.chunk_id),
                 ),
             )
         if self._attachment_chunks:
@@ -1535,13 +1895,128 @@ class AnswerEngine:
                 if chunk.chunk_id in all_children:
                     continue
                 stored = _stored_child(chunk, rrf_score=base_score * max(chunk.score, 0.1))
+                stored.metadata["retrieval_admission_stage"] = "attachment"
                 all_children[stored.chunk_uid] = stored
                 attached.append(stored)
             children = [*attached, *children]
-        parents = _stored_parents(list(all_children.values()), state)
+        children = [_with_context_scope(child, context_scope) for child in children]
+        all_children = {
+            uid: _with_context_scope(child, context_scope) for uid, child in all_children.items()
+        }
+        parents = [] if defer_context else _stored_parents(list(all_children.values()), state)
+        state.retrieval_stages.append(
+            {
+                "stage": "candidate_fusion",
+                "query_count": len(queries),
+                "query_limit": depth,
+                "fused_count": len(fused),
+                "fused_ids": ordered,
+                "duplicates": duplicates,
+                "excluded": [
+                    {"id": chunk_id, "reason": "fusion_candidate_budget"}
+                    for chunk_id in ordered
+                    if chunk_id not in selected_fused_ids
+                ],
+                "query_results": [
+                    {"query_index": index, "count": len(hits)}
+                    for index, hits in enumerate(all_hits)
+                ],
+                "base_limit": candidate_limit,
+                "selected_ids": [child.chunk_uid for child in children],
+                "context_deferred": defer_context,
+            }
+        )
         return HybridSearchResult(
             child_chunks=children, all_chunks=[*all_children.values(), *parents]
         )
+
+    async def _context_chunks(
+        self,
+        state: _SearchState,
+        *,
+        anchors: Sequence[Any],
+        settings: Any = None,
+    ) -> list[Any]:
+        """精排後の起点だけから、同じ有効成果物の親/近傍を読む。再構築は回答内の既読を使う。"""
+        result: list[Any] = []
+        # 検索ごとの範囲を起点から引き継ぐ。同じ chunk でも異なる範囲の既読を混ぜない。
+        scopes: dict[str, list[Any]] = {}
+        default_scope = (getattr(state, "filters", None) or {}).get(PAGE_RANGES_FILTER_KEY, "")
+        for anchor in anchors:
+            scope = str(anchor.metadata.get(CONTEXT_PAGE_SCOPE, default_scope))
+            scopes.setdefault(scope, []).append(anchor)
+        for scope, scoped_anchors in scopes.items():
+            selected = [
+                state.chunks[item.chunk_uid]
+                for item in scoped_anchors
+                if item.chunk_uid in state.chunks
+            ]
+            selected = [
+                item for item in selected if contained(item.document_id, item.metadata, scope)
+            ]
+
+            def cache_key(item: RetrievedChunk, page_scope: str = scope) -> str:
+                return json.dumps([item.chunk_id, page_scope], ensure_ascii=False)
+
+            pending = [item for item in selected if cache_key(item) not in state.context_reads]
+            if pending:
+                with _search_stage(CONTEXT_SIBLINGS_STAGE):
+                    siblings = original_chunks(
+                        await self._oracle.context_group_siblings(
+                            [
+                                item
+                                for item in pending
+                                if item.metadata.get("chunk_strategy") == "small_to_big"
+                                or self._settings.rag_neighbor_child_count > 0
+                            ],
+                            max_chunks_per_group=max(
+                                1, self._settings.rag_context_group_max_chunks
+                            ),
+                            neighbor_child_count=self._settings.rag_neighbor_child_count,
+                        )
+                    )
+                siblings = [
+                    item for item in siblings if contained(item.document_id, item.metadata, scope)
+                ]
+                for item in pending:
+                    state.context_reads[cache_key(item)] = [
+                        sibling
+                        for sibling in siblings
+                        if sibling.document_id == item.document_id
+                        and sibling.metadata.get("chunk_set_id")
+                        == item.metadata.get("chunk_set_id")
+                        and sibling.metadata.get("recipe_id") == item.metadata.get("recipe_id")
+                    ]
+                for item in siblings:
+                    state.chunks.setdefault(item.chunk_id, item)
+            chunks = {item.chunk_id: item for item in selected}
+            for anchor in selected:
+                chunks.update(
+                    (item.chunk_id, item) for item in state.context_reads.get(cache_key(anchor), ())
+                )
+            originals = list(chunks.values())
+            await self._load_classifications(originals, state)
+            # 範囲外の1ページ目を文書背景としても渡さない。
+            if not scope:
+                await self._load_first_page_contexts(originals, state)
+            if self._attach_images:
+                for item in originals:
+                    await self._materialize_image_evidence(item, state)
+            children = [
+                _with_context_scope(
+                    _stored_child(
+                        state.chunks.get(item.chunk_id, item),
+                        rrf_score=0.0,
+                        classification=state.classifications.get(item.document_id),
+                        first_page_context=_first_page_context(item, state) if not scope else None,
+                        retrieval_channels=state.retrieval_channels.get(item.chunk_id),
+                    ),
+                    scope,
+                )
+                for item in originals
+            ]
+            result.extend([*children, *_stored_parents(children, state)])
+        return result
 
     async def _original_anchors(
         self,
@@ -1560,6 +2035,19 @@ class AnswerEngine:
         """
         if not any(is_derived_chunk(chunk) for chunk in anchors):
             return list(anchors)
+        # 派生の chunk の原文を読む工程(処理の経過の段。#3464)。
+        with _search_stage(DERIVED_SOURCE_STAGE):
+            return await self._resolve_original_anchors(state, anchors, fused, filters=filters)
+
+    async def _resolve_original_anchors(
+        self,
+        state: _SearchState,
+        anchors: Sequence[RetrievedChunk],
+        fused: dict[str, float],
+        *,
+        filters: Mapping[str, str],
+    ) -> list[RetrievedChunk]:
+        """``_original_anchors`` の本体(派生の chunk を原文の chunk に置き換える)。"""
         resolved: dict[str, RetrievedChunk] = {}
         for chunk in anchors:
             if not is_derived_chunk(chunk):
@@ -1580,10 +2068,13 @@ class AnswerEngine:
                     "source_chunk_ids": source_ids,
                 }
             score = fused.pop(chunk.chunk_id, 0.0)
+            channels = state.retrieval_channels.get(chunk.chunk_id, set())
             for source_id in source_ids:
                 if (original := state.chunks.get(source_id)) is None:
                     continue
                 fused[source_id] = max(fused.get(source_id, 0.0), score)
+                # 派生の chunk の位置に置いた原文は、派生の chunk が当たった経路を引き継ぐ(#3443)。
+                state.retrieval_channels.setdefault(source_id, set()).update(channels)
                 resolved.setdefault(source_id, original)
         return list(resolved.values())
 
@@ -1648,8 +2139,8 @@ class AnswerEngine:
         )
 
     def _read_depth(self, candidate_limit: int) -> int:
-        """検索文ごとに読む件数。候補の多様化(#2228)が有効なら、候補の上限より深く読む。"""
-        return max(candidate_limit, self._settings.rag_candidate_diversity_depth)
+        """検索文ごとの取得上限。融合後の候補数・多様化の有無・起点数とは独立。"""
+        return max(1, self._settings.rag_retrieval_query_limit)
 
     async def _query_hits(
         self,
@@ -1706,8 +2197,7 @@ class AnswerEngine:
         schema など)は足さずに回答を続ける。LLM は呼ばない。
         """
         if not self._settings.rag_entity_expansion_enabled:
-            # 既定は on(#1402)。検索・回答プロファイル(と評価の rag_overrides)で off にできる
-            # (#1388)。
+            # 検索方法の全体設定で選ぶ(既定 OFF)。評価では rag_overrides で比較できる。
             return []
         scope = _expansion_scope(request.filters)
         seeds = list(anchors[:ENTITY_SEED_ANCHORS])
@@ -1762,7 +2252,7 @@ class AnswerEngine:
     ) -> list[RetrievedChunk]:
         """関係情報(#2055)で、上位の候補の章節・表と質問の見出しの語から chunk を足す。
 
-        関係情報は文書レシピで「関係情報の構築」を「構築する」にした文書にだけあり、無ければ何も
+        関係情報は文書レシピで「文書構造索引の構築」を「構築する」にした文書にだけあり、無ければ何も
         足さない。足す chunk は主の検索と同じ範囲(利用者が指定した条件と権限。
         ``_expansion_scope``)の中だけで、合計 ``rag_graph_expansion_max_chunks`` 件まで。読めない
         ときは足さずに回答を続ける。LLM は呼ばない。
@@ -2389,7 +2879,7 @@ class AnswerEngine:
         # 分類と 1 ページ目の本文は、読んでいない文書・chunk set の分だけをまとめて 1 回で読む。
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
-        if answer_images_enabled(self._settings):
+        if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
@@ -2507,7 +2997,7 @@ class AnswerEngine:
             return SectionRead(complete=False, reason="partial_read")
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
-        if answer_images_enabled(self._settings):
+        if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
@@ -2695,7 +3185,7 @@ class AnswerEngine:
         chunks = [state.chunks.setdefault(chunk.chunk_id, chunk) for chunk, _ in found]
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
-        if answer_images_enabled(self._settings):
+        if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
@@ -2719,7 +3209,7 @@ class AnswerEngine:
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
     ) -> None:
         """まだ読んでいない文書の分類を、ヒットした document_id でまとめて 1 回で読む(#545)。"""
-        missing = sorted({chunk.document_id for chunk in chunks} - state.loaded_classification_ids)
+        missing = _missing_classifications(chunks, state)
         if not missing:
             return
         state.classifications.update(await self._oracle.document_classifications(missing))
@@ -2729,8 +3219,7 @@ class AnswerEngine:
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
     ) -> None:
         """まだ読んでいない chunk set の 1 ページ目の本文を、まとめて 1 回で読む(#557)。"""
-        chunk_set_ids = {str(chunk.metadata.get("chunk_set_id") or "") for chunk in chunks}
-        missing = sorted(chunk_set_ids - {""} - state.loaded_first_page_chunk_set_ids)
+        missing = _missing_first_page_contexts(chunks, state)
         if not missing:
             return
         state.first_page_contexts.update(await self._oracle.chunk_set_first_page_contexts(missing))
@@ -2902,6 +3391,55 @@ def _json_list(value: object) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _search_stage(name: str, *, active: bool = True) -> AbstractContextManager[object]:
+    """文書の検索の中の工程の段(``observe_call("stage", name)``。#3464)。
+
+    DB の検索の段(``OracleClient`` のベクトル検索・全文検索)と同じ仕組みで、回答の工程の span
+    (「文書の検索」)の子の段になる。行うことの無い工程(``active`` が偽)は段を出さない。
+    """
+    return observe_call("stage", name) if active else nullcontext()
+
+
+def _missing_classifications(chunks: Sequence[RetrievedChunk], state: _SearchState) -> list[str]:
+    """まだ分類を読んでいない文書の id(``_load_classifications`` が読む文書)。"""
+    return sorted({chunk.document_id for chunk in chunks} - state.loaded_classification_ids)
+
+
+def _missing_first_page_contexts(
+    chunks: Sequence[RetrievedChunk], state: _SearchState
+) -> list[str]:
+    """まだ 1 ページ目の本文を読んでいない chunk set の id(``_load_first_page_contexts``)。"""
+    chunk_set_ids = {str(chunk.metadata.get("chunk_set_id") or "") for chunk in chunks}
+    return sorted(chunk_set_ids - {""} - state.loaded_first_page_chunk_set_ids)
+
+
+def _needs_image_materialization(chunk: RetrievedChunk, state: _SearchState) -> bool:
+    """根拠の図を切り出す(まだ切り出していない、図の根拠を持つ)chunk か。"""
+    if chunk.chunk_id in state.materialized_images or state.work_dir is None:
+        return False
+    raw = chunk.metadata.get("engine_metadata_json")
+    return isinstance(raw, str) and "image_evidence" in raw
+
+
+def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
+    """検索文 1 本の当たりの経路(rag_engine の検索の実装と同じ形。#3443)。
+
+    ``vector_rank`` / ``keyword_rank`` / ``citation_rank``(``OracleClient`` の検索の結果の
+    metadata)から決める。順位の無い結果は ``retrieval_mode`` から決める。
+    """
+    metadata = hit.metadata
+    mode = str(metadata.get("retrieval_mode") or "")
+    query = f"q{query_index + 1}"
+    channels: set[str] = set()
+    if "vector_rank" in metadata or mode in {"vector", "hybrid"}:
+        channels.add(f"vector:{query}")
+    if "keyword_rank" in metadata or mode in {"keyword", "hybrid"}:
+        channels.add(f"keyword:oracle_text:{query}")
+    if "citation_rank" in metadata or mode == "citation":
+        channels.add("citation")
+    return channels
+
+
 def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
     raw = chunk.metadata.get("engine_metadata_json")
     if isinstance(raw, str) and raw.strip():
@@ -2910,7 +3448,14 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         except ValueError:
             decoded = None
         if isinstance(decoded, dict):
-            return decoded
+            return {
+                **decoded,
+                **{
+                    key: chunk.metadata[key]
+                    for key in ("context_header", "context_header_enabled")
+                    if key in chunk.metadata
+                },
+            }
     # 親子階層以外の分割方式の chunk も最小の v4 metadata で扱う。
     section = str(chunk.metadata.get("section_path") or "")
     return {
@@ -2922,6 +3467,11 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         "source_categories": ["Text"],
         "section_path": [part for part in section.split(" > ") if part],
         "section_path_sources": [],
+        **{
+            key: chunk.metadata[key]
+            for key in ("context_header", "context_header_enabled")
+            if key in chunk.metadata
+        },
     }
 
 
@@ -3164,6 +3714,7 @@ def _stored_child(
     rrf_score: float,
     classification: Mapping[str, object] | None = None,
     first_page_context: Mapping[str, object] | None = None,
+    retrieval_channels: Collection[str] | None = None,
 ) -> Any:
     """backend の chunk を rag_engine の子 chunk にする。
 
@@ -3174,12 +3725,20 @@ def _stored_child(
     ``metadata["document"]["first_page_context"]`` を回答の「文書の背景」にする(#557)。
     chunk 自身が持つ値(#557 より前に保存した chunk)があれば、そちらを使う。
     分類と 1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    ``retrieval_channels`` は検索で当たった経路(``_hit_channels``)。rag_engine の検索の実装と同じ
+    ``adb_hybrid.retrieval_channels`` に書く(根拠の記録と、文書の検索の工程の候補の経路。#3443)。
+    ``adb_hybrid`` には経路だけを書き、並べ替え・文脈の選択に効く値(``rrf_score`` など)は書かない。
     """
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
     metadata["rrf_score"] = rrf_score
+    if retrieval_channels:
+        metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
     metadata["document_id"] = chunk.document_id
+    # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
+    for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
+        metadata[key] = chunk.metadata.get(key, "")
     if classification:
         document = metadata.get("document")
         metadata["document"] = {
@@ -3198,6 +3757,8 @@ def _stored_child(
         # XML ツリー JSON の段落の根拠(#2024)。回答の本文の出典を引用ラベルにする(ページの
         # 無い原本なので「p.1」にしない)。親(単位)の場所は単位のラベル。
         metadata["location_label"], metadata["parent_location_label"] = xml_tree_location
+        # 条で構成された文書の条の根拠(#3526)。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+        metadata[ARTICLE_UNIT_KEY] = True
     if chunk.metadata.get("document_superseded") is True:
         # 新しい版に置き換えた文書(旧版)の chunk(#1248)。rag_engine は旧版の説明を今の手順として
         # 公開しない(#1492)。
@@ -3228,14 +3789,19 @@ def _stored_child(
         # 起点の上限で数えない(#3100)。backend の印(`chat_attachment_id`)は engine の metadata に
         # 入らないので、engine の印に写す(#3126)。
         metadata[ATTACHMENT_EVIDENCE_KEY] = True
+    chunk_set_id = str(chunk.metadata.get("chunk_set_id") or "")
+    artifact_id = chunk_set_id or str(chunk.metadata.get("recipe_id") or "")
+    parent_uid = ":".join(
+        part for part in (chunk.document_id, artifact_id, _group_id(chunk)) if part
+    )
     page_start = _int(chunk.metadata.get("page_start") or chunk.metadata.get("page_number"), 1)
     return StoredChunk(
         chunk_uid=chunk.chunk_id,
         chunk_id=chunk.chunk_id,
         chunk_level="child",
         chunk_seq=_int(chunk.metadata.get("engine_chunk_seq") or chunk.metadata.get("chunk_index")),
-        parent_chunk_uid=f"{chunk.document_id}:{_group_id(chunk)}",
-        parent_chunk_id=f"{chunk.document_id}:{_group_id(chunk)}",
+        parent_chunk_uid=parent_uid,
+        parent_chunk_id=parent_uid,
         child_chunk_ids=(),
         text=chunk.text,
         retrieval_text=engine_search_text(chunk.metadata) or chunk.text,
@@ -3356,20 +3922,62 @@ def _parent_sheet_location(metadata: Mapping[str, object]) -> dict[str, object] 
     }
 
 
+def _with_context_scope(child: Any, scope: str) -> Any:
+    if not scope or child.metadata.get(CONTEXT_PAGE_SCOPE) == scope:
+        return child
+    metadata = dict(child.metadata)
+    metadata[CONTEXT_PAGE_SCOPE] = scope
+    document = metadata.get("document")
+    if isinstance(document, dict):
+        metadata["document"] = {
+            key: value for key, value in document.items() if key != "first_page_context"
+        }
+    suffix = hashlib.sha256(scope.encode()).hexdigest()[:16]
+    return replace(
+        child,
+        metadata=metadata,
+        parent_chunk_uid=f"{child.parent_chunk_uid}:scope:{suffix}",
+        parent_chunk_id=f"{child.parent_chunk_id}:scope:{suffix}",
+    )
+
+
 def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
     """子の metadata に保持した親本文から親 chunk を復元する。"""
     from rag_engine.models.storage import StoredChunk
 
     by_parent: dict[str, list[Any]] = {}
     for child in children:
-        by_parent.setdefault(child.parent_chunk_uid, []).append(child)
+        if child.metadata.get("chunk_strategy") == "small_to_big":
+            by_parent.setdefault(child.parent_chunk_uid, []).append(child)
     parents = []
     for parent_uid, members in by_parent.items():
         members.sort(key=lambda child: child.chunk_seq)
         source = state.chunks.get(members[0].chunk_uid)
         parent_text = str((source.metadata if source else {}).get("parent_text") or "")
-        text = parent_text or "\n\n".join(child.text for child in members)
+        if not parent_text.strip():
+            continue
+        source_metadata = source.metadata if source else {}
+        scope = str(
+            members[0].metadata.get(
+                CONTEXT_PAGE_SCOPE,
+                (getattr(state, "filters", None) or {}).get(PAGE_RANGES_FILTER_KEY, ""),
+            )
+        )
+        if scope and not contained(
+            str(members[0].metadata.get("document_id", "")), source_metadata, scope, parent=True
+        ):
+            state.retrieval_stages.append(
+                {
+                    "stage": "context_page_scope",
+                    "id": parent_uid,
+                    "reason": "parent_range_unproven_or_outside_scope",
+                }
+            )
+            continue
+        text = parent_text
         metadata = dict(members[0].metadata)
+        _merge_member_metadata(metadata, members)
+        _restore_parent_native_ranges(text, metadata, members, state)
         metadata.pop("rrf_score", None)
         if element_ids := list(
             dict.fromkeys(
@@ -3401,8 +4009,10 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
                 source_file_name=members[0].source_file_name,
                 source_engine_id="docling",
                 source_engine_label="Docling",
-                page_start=min(child.page_start for child in members),
-                page_end=max(child.page_end for child in members),
+                page_start=positive(source_metadata.get("parent_page_start"))
+                or min(child.page_start for child in members),
+                page_end=positive(source_metadata.get("parent_page_end"))
+                or max(child.page_end for child in members),
                 source_seq_ranges=tuple(
                     item for child in members for item in child.source_seq_ranges
                 ),
@@ -3415,6 +4025,147 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
     return parents
 
 
+def _restore_parent_native_ranges(
+    parent_text: str, metadata: dict[str, Any], members: Sequence[Any], state: _SearchState
+) -> None:
+    """子の原文座標を、同じ版の親に一意に置ける場合だけ親の座標へ移す。"""
+    layout = metadata.get("layout")
+    if not isinstance(layout, dict) or "native_text_ranges" not in layout:
+        return
+    layout = dict(layout)
+    layout.pop("native_text_ranges", None)
+    metadata["layout"] = layout
+    sources = [state.chunks.get(child.chunk_uid) for child in members]
+    parent_conflict = any(
+        source is not None and source.metadata.get("parent_text") != parent_text
+        for source in sources
+    )
+    first_source = sources[0]
+    translated: list[dict[str, Any]] = []
+    for child, source in zip(members, sources, strict=True):
+        child_layout = child.metadata.get("layout")
+        if not isinstance(child_layout, dict) or "native_text_ranges" not in child_layout:
+            continue
+        ranges = child_layout["native_text_ranges"]
+        reason = ""
+        offset = -1
+        if parent_conflict:
+            reason = "parent_text_conflict"
+        elif source is None or first_source is None:
+            reason = "source_missing"
+        elif (
+            source.document_id != first_source.document_id
+            or any(
+                source.metadata.get(key, "") != first_source.metadata.get(key, "")
+                for key in ("chunk_set_id", "recipe_id")
+            )
+            or source.text != child.text
+            or source.document_id != child.metadata.get("document_id")
+            or any(
+                source.metadata.get(key, "") != child.metadata.get(key, "")
+                for key in ("chunk_set_id", "recipe_id")
+            )
+        ):
+            reason = "source_version_mismatch"
+        else:
+            offset = parent_text.find(child.text) if child.text else -1
+            if offset < 0:
+                reason = "child_text_missing"
+            elif parent_text.find(child.text, offset + 1) >= 0:
+                reason = "child_text_ambiguous"
+        valid: list[dict[str, Any]] = []
+        invalid = not isinstance(ranges, list)
+        if not reason and isinstance(ranges, list):
+            for entry in ranges:
+                if not isinstance(entry, dict):
+                    invalid = True
+                    continue
+                start, end = entry.get("start"), entry.get("end")
+                if (
+                    type(start) is not int
+                    or type(end) is not int
+                    or not 0 <= start < end <= len(child.text)
+                ):
+                    invalid = True
+                    continue
+                value = {**entry, "start": offset + start, "end": offset + end}
+                if value not in translated:
+                    translated.append(value)
+                valid.append(value)
+        state.retrieval_stages.append(
+            {
+                "stage": "parent_native_range_coordinates",
+                "source_id": child.chunk_uid,
+                "status": "unknown" if reason or invalid else "verified",
+                "reason": reason or ("invalid_child_range" if invalid else "unique_child_offset"),
+                "translated_range_count": len(valid),
+            }
+        )
+    if translated:
+        layout["native_text_ranges"] = translated
+
+
+# 子ごとに持つ一覧の metadata。親は今回の子の全員の値を合わせる(先頭の子だけにしない。#3478)。
+_MEMBER_LIST_METADATA_KEYS = ("image_evidence", "table_context", "source_categories")
+
+
+def _merge_member_metadata(metadata: dict[str, Any], members: Sequence[Any]) -> None:
+    """親の metadata の子ごとの一覧(画像・表・注釈の文脈・要素の種類)を、子の全員から合わせる。
+
+    親の本文は子の全員を含むので、図の子が親の先頭でなくても、その図を親の根拠として扱う(回答に
+    添付する画像は親の ``image_evidence`` から選ぶ)。並びは子の関連度(``rrf_score`` の高い順、同じ
+    なら文書の順)で、関連する子の画像を先に置く。同じ画像・表・文脈は 1 回だけ。図の中の文字(OCR)の
+    entry は読むときに持ち主の図にまとめる(``fold_picture_ocr_entries``)ので、そのまま残す。
+    """
+    if len(members) < 2:
+        return
+    ranked = sorted(
+        members, key=lambda child: -(_finite_float(child.metadata.get("rrf_score")) or 0.0)
+    )
+    for key in _MEMBER_LIST_METADATA_KEYS:
+        merged = _merged_metadata_lists(child.metadata.get(key) for child in ranked)
+        if merged:
+            metadata[key] = merged
+    layouts = [child.metadata.get("layout") for child in ranked]
+    layouts = [layout for layout in layouts if isinstance(layout, dict)]
+    if not layouts:
+        return
+    layout: dict[str, Any] = {}
+    for key in dict.fromkeys(key for item in layouts for key in item):
+        values = [item[key] for item in layouts if key in item]
+        if all(isinstance(value, list) for value in values):
+            layout[key] = _merged_metadata_lists(values)
+        elif all(isinstance(value, dict) for value in values):
+            layout[key] = {k: v for value in reversed(values) for k, v in value.items()}
+        else:
+            layout[key] = values[0]
+    metadata["layout"] = layout
+
+
+def _merged_metadata_lists(groups: Iterable[Any]) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            key = _metadata_item_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    return merged
+
+
+def _metadata_item_key(item: Any) -> str:
+    """一覧の要素の同一性。画像・表は種類と ID、ID の無いものは内容。"""
+    if isinstance(item, dict):
+        item_id = str(item.get("image_id") or item.get("table_id") or item.get("record_id") or "")
+        if item_id.strip():
+            return f"{item.get('raw_type') or ''}:{item_id.strip().lower()}"
+    return json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+
+
 def _answer_use(child: Mapping[str, Any]) -> str | None:
     """回答エンジンの evidence item の使われ方（``answer_use``）。決まった値だけを返す（#2040）。"""
     value = str(child.get("answer_use") or "")
@@ -3423,6 +4174,7 @@ def _answer_use(child: Mapping[str, Any]) -> str | None:
 
 def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
     """rag_poc の AnswerQuestionResult を backend の回答・引用・診断へ写す。"""
+    support_display = citation_support_display(result.generation_trace)
     tree: list[dict[str, Any]] = []
     # (並びの順位, chunk_id, 根拠の子, 検索で当たった子の関連度の順位（無ければ 0）)。
     ordered: list[tuple[int, str, dict[str, Any], int]] = []
@@ -3489,6 +4241,11 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
             **chunk.metadata,
             "evidence_role": evidence["role"],
             "evidence_model_used": evidence["is_model_used"],
+            **(
+                {"evidence_claim_support": dict(support_display)}
+                if support_display is not None
+                else {}
+            ),
         }
         if evidence.get("answer_use"):
             # 回答に使った箇所の使われ方（画面の件数・バッジと MCP の answer_use。#2040）。
@@ -3567,6 +4324,7 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         if isinstance(step, Mapping)
     ]
     diagnostics = {
+        "retrieval_stages": list(state.retrieval_stages),
         "answer_flow": result.answer_flow,
         "strategy": result.effective_strategy,
         "confidence": result.confidence,
@@ -3586,8 +4344,14 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "generated_queries": list(result.generated_queries),
         "text_search_tokens": list(result.text_search_tokens),
         "crag_attempt_count": len(result.crag_attempts or ()),
+        "crag_attempts": [dict(attempt) for attempt in result.crag_attempts or ()],
         # 要求ごとの根拠の覆域と、根拠の無い要求の再検索(#1279)。
         "request_coverage": dict((result.generation_trace or {}).get("request_coverage") or {}),
+        "request_recovery": [
+            dict(row["request_recovery"])
+            for row in (result.generation_trace or {}).get("rounds", ())
+            if isinstance(row, Mapping) and isinstance(row.get("request_recovery"), Mapping)
+        ],
         # 業務ガイドの手順ごとの検索(#2395)。業務ガイドの記録(diagnostics.guide)に移す。
         **(
             {"guide_step_retrieval": dict(trace)}
@@ -3603,13 +4367,40 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 採用した草稿の構造(#1492。確認の項目の事実と規則の分け方・説明の種類と適用)。
         # LLM を呼ばずに対応の決定を replay する材料。
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
+        # 原文と生応答は回答の保存・権限確認に従う。計測やモデル入力へ再注入しない。
+        "generation_citation_traces": [
+            dict(row["generation_citation_trace"])
+            for row in (result.generation_trace or {}).get("rounds", ())
+            if isinstance(row, Mapping)
+            and isinstance(row.get("generation_citation_trace"), Mapping)
+        ],
         # 生成と監査の是正の round の時間の配分(#1516。各組の秒・見積もり・時間で打ち切った理由)。
         "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
+        # 根拠の文字予算の設定値・実際に使った値・送った根拠ブロックの文字数(#3776。数値だけ)。
+        "evidence_budget": dict((result.generation_trace or {}).get("evidence_budget") or {}),
+        "generation_input_budget": dict(
+            (result.generation_trace or {}).get("generation_input_budget") or {}
+        ),
+        "evidence_refinement": dict(
+            (result.generation_trace or {}).get("evidence_refinement") or {}
+        ),
         # 質問に名前が出た根拠の画面の図の項目の種類と、それで決まった業務ガイドの条件(#2404)。
         "form_field_kinds": dict((result.generation_trace or {}).get("form_field_kinds") or {}),
         # 採用した草稿の監査の目的との合い方(#2402。aligned / partial / off_target)。品質評価が
         # 目的外の割合を集計する。
         "goal_alignment": adopted_goal_alignment(result.generation_trace),
+        "generation_review": adopted_review_contract(result.generation_trace),
+        **(
+            {"semantic_audit_policy": dict(policy)}
+            if isinstance(
+                policy := (result.generation_trace or {}).get("semantic_audit_policy"), Mapping
+            )
+            else {}
+        ),
+        "crag_assessment": dict((result.generation_trace or {}).get("crag_assessment") or {}),
+        "crag_generation_gate": dict(
+            (result.generation_trace or {}).get("crag_generation_gate") or {}
+        ),
         "procedure_quotes": dict((result.generation_trace or {}).get("procedure_quotes") or {}),
         "execution_steps": steps,
         "evidence_tree": tree,
@@ -3632,15 +4423,22 @@ _GUIDE_STEP_EMBEDDING_FIELDS = ("calls", "texts", "elapsed_ms", "failed")
 def _guide_step_diagnostics(generation_trace: object) -> dict[str, Any]:
     """回答の記録に残す業務ガイドの手順の充足と embedding の呼び出し(#2686)。
 
-    手順は id・状態・必須かだけ、呼び出しは回数・文の数・時間・失敗かだけにする(手順の題名・
-    根拠の本文・引用は記録に増やさない)。業務ガイドに沿わない回答・呼ばなかった回答では空。
+    手順は id・状態・必須かと、対応の方法・item の index・各段の根拠 ID を残す。手順の題名・
+    根拠の本文・引用は記録に増やさない。業務ガイドに沿わない回答・呼ばなかった回答では空。
     """
     trace = generation_trace if isinstance(generation_trace, Mapping) else {}
     diagnostics: dict[str, Any] = {}
     coverage = trace.get("guide_step_coverage")
     if isinstance(coverage, list) and coverage:
         diagnostics["guide_step_coverage"] = [
-            {key: step.get(key) for key in _GUIDE_STEP_COVERAGE_FIELDS}
+            {
+                **{key: step.get(key) for key in _GUIDE_STEP_COVERAGE_FIELDS},
+                **{
+                    key: step[key]
+                    for key in ("assignment", "evidence_flow")
+                    if isinstance(step.get(key), Mapping)
+                },
+            }
             for step in coverage
             if isinstance(step, Mapping)
         ]
@@ -3652,11 +4450,53 @@ def _guide_step_diagnostics(generation_trace: object) -> dict[str, Any]:
     return diagnostics
 
 
+def adopted_review_contract(generation_trace: object) -> dict[str, Any]:
+    """採用した草稿の引用照合と意味の監査を別々に記録する。"""
+    rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
+    adopted = (
+        next(
+            (row for row in reversed(rounds) if isinstance(row, Mapping) and row.get("accepted")),
+            None,
+        )
+        if isinstance(rounds, list)
+        else None
+    )
+    if adopted is None:
+        return {"execution": "not_run", "items": []}
+    return {
+        "execution": adopted.get("review_execution", "not_run"),
+        **(
+            {"dimensions": dict(adopted["validation_dimensions"])}
+            if isinstance(adopted.get("validation_dimensions"), Mapping)
+            else {}
+        ),
+        "items": [
+            {
+                key: row.get(key)
+                for key in (
+                    "evidence_id",
+                    "quote_match",
+                    "citation_resolution",
+                    "review_assessment",
+                    "removed",
+                    "withdrawn",
+                )
+            }
+            for row in adopted.get("items", [])
+            if isinstance(row, Mapping)
+        ],
+    }
+
+
 def adopted_goal_alignment(generation_trace: object) -> str | None:
     """採用した草稿（最後に採用した round）の監査の目的との合い方（#2402）。
 
     監査の無い round（時間の上限で監査を切った round など）・記録の無い回答は None。
     """
+    if isinstance(generation_trace, Mapping) and semantic_audit_is_diagnostic_only(
+        generation_trace
+    ):
+        return None
     rounds = generation_trace.get("rounds") if isinstance(generation_trace, Mapping) else None
     adopted: Mapping[str, Any] | None = None
     for item in rounds if isinstance(rounds, list) else ():
@@ -3970,23 +4810,41 @@ def _evaluation_input(result: Any) -> dict[str, Any] | None:
     return stored_evaluation_input({key: payload.get(key) for key in EVALUATION_INPUT_KEYS})
 
 
+def answer_model_of(diagnostics: Mapping[str, Any] | None) -> str:
+    """回答の診断(``models.llm.model_id``)から、回答を作ったモデルの ID。無ければ空。"""
+    models = (diagnostics or {}).get("models")
+    llm = models.get("llm") if isinstance(models, Mapping) else None
+    model_id = llm.get("model_id") if isinstance(llm, Mapping) else None
+    return model_id.strip() if isinstance(model_id, str) else ""
+
+
 def evaluate_answer_record(
     evaluation_input: Mapping[str, Any],
     standard_answer: str,
     settings: Settings,
     *,
     citations: Sequence[RetrievedChunk],
+    judge_model_id: str | None = None,
 ) -> dict[str, Any]:
     """保存した回答を標準回答で評価する。
 
     LLM(rag_engine の evaluate_answer_payload)が標準回答の項目の照合と主張の監査を行い、
     評価の基準の指標と閾値で合否を付ける(#680)。``citations`` は回答の引用(決定的な指標に使う)。
     同期関数で、LLM を複数回呼ぶ。呼び出し側は worker thread で動かす。
+
+    ``judge_model_id`` は判定のモデル(#3574。呼び出し側が回答を作ったモデルから
+    `enterprise_ai_judge_model_id` で解決した ID)。省略時は回答のモデルが分からないものとして
+    解決する。
+    判定の LLM はそのモデルの接続・入力の上限・推論の量で呼び(回答のモデルの切り替えと同じ
+    ``build_engine_settings``)、使ったモデルを ``judge_diagnostics.judge_model_id`` に残す。
     """
     from rag_engine.evaluation.answer_eval import evaluate_answer_payload
 
+    judge_model = (judge_model_id or "").strip() or enterprise_ai_judge_model_id(settings)
     with tempfile.TemporaryDirectory(prefix="rag-engine-eval-") as work:
-        engine_settings = build_engine_settings(settings, output_dir=Path(work))
+        engine_settings = build_engine_settings(
+            settings, output_dir=Path(work), answer_model_id=judge_model
+        )
         evaluation = evaluate_answer_payload(
             {
                 **evaluation_input,
@@ -3996,6 +4854,14 @@ def evaluate_answer_record(
             },
             engine_settings,
         )
+    diagnostics = evaluation.get("judge_diagnostics")
+    evaluation = {
+        **evaluation,
+        "judge_diagnostics": {
+            **(diagnostics if isinstance(diagnostics, Mapping) else {}),
+            "judge_model_id": judge_model,
+        },
+    }
     return score_answer_evaluation(
         evaluation,
         answer=str(evaluation_input.get("answer_text") or ""),

@@ -5,7 +5,7 @@ import { ALL_PERMISSION_CODES, dbUser } from "./fixtures/auth";
 import { expect, test } from "./fixtures/mock-api";
 
 // ユーザー管理・ロール管理（3製品共通の画面）と Agent の権限管理（#215）。
-// 権限管理は機能権限に加えて、利用できるエージェントを PUT /api/security/roles/{id}/access で保存する。
+// 権限管理は機能権限に加えて、利用できる業務 Agentを PUT /api/security/roles/{id}/access で保存する。
 // 検索・回答プロファイルの判定は RAG が Run の利用者のサービストークンで行うため、Agent の権限管理には出さない（#750）。
 
 const VIEWPORTS = [
@@ -71,7 +71,7 @@ for (const viewport of VIEWPORTS) {
       await expectNoPageOverflow(page);
     });
 
-    test("権限管理でエージェントを保存し、Agent 管理では全件が対象になる。検索・回答プロファイルは出さない", async ({
+    test("権限管理で業務 Agentを保存し、Agent 管理では全件が対象になる。検索・回答プロファイルは出さない", async ({
       page,
       mockApi,
     }) => {
@@ -80,10 +80,10 @@ for (const viewport of VIEWPORTS) {
       await page.getByTestId("security-permissions-detail-actions").getByRole("button", { name: "権限を編集" }).click();
 
       const agents = page.getByTestId("security-roles-agent-access-list");
-      await expect(agents).toHaveAccessibleName("利用できるエージェント");
+      await expect(agents).toHaveAccessibleName("利用できる業務 Agent");
       await expect(page.getByTestId("security-roles-search-answer-profile-access-list")).toHaveCount(0);
       await expect(page.getByText("利用できる検索・回答プロファイル")).toHaveCount(0);
-      // 無効なエージェントは状態を示す。保存済みの対象は選択済み。
+      // 無効な業務 Agentは状態を示す。保存済みの対象は選択済み。
       await expect(agents.getByText("無効")).toBeVisible();
       await expect(agents.getByRole("option", { name: /資料・データ横断アシスタント/ })).toBeChecked();
 
@@ -106,9 +106,9 @@ for (const viewport of VIEWPORTS) {
       // 共通のロール API には送らない（権限は Agent の保存 API だけが変える）。
       expect(mockApi.requests.some((request) => request.method === "PATCH" && request.path.startsWith("/api/security/roles"))).toBe(false);
 
-      // 保存後も編集を続けられる。Agent 管理を付けるとエージェントは全件が対象になり、空の一覧を送る。
+      // 保存後も編集を続けられる。Agent 管理を付けると業務 Agentは全件が対象になり、空の一覧を送る。
       await page.getByRole("checkbox", { name: /^Agent 管理/ }).check();
-      await expect(page.getByText("Agent 管理の権限により、すべてのエージェントを利用できます。個別選択は不要です。")).toBeVisible();
+      await expect(page.getByText("Agent 管理の権限により、すべての業務 Agentを利用できます。個別選択は不要です。")).toBeVisible();
       await expect(page.getByTestId("security-roles-agent-access-list")).toHaveCount(0);
       await editActions(page).getByRole("button", { name: "保存" }).click();
 
@@ -124,7 +124,7 @@ for (const viewport of VIEWPORTS) {
       expect([...(second.permissions as string[])].sort()).toEqual(["agent.admin", "agent.runs.operate", "menu.agents"]);
     });
 
-    test("エージェントが大量でも全件を読まず、サーバー側で検索して 50 件ずつ読む（#608）", async ({ page, mockApi }) => {
+    test("業務 Agentが大量でも全件を読まず、サーバー側で検索して 50 件ずつ読む（#608）", async ({ page, mockApi }) => {
       mockApi.state.security.accessTargets.agents = Array.from({ length: 180 }, (_, index) => ({
         id: `agent-${String(index + 1).padStart(3, "0")}`,
         name: `業務 Agent ${String(index + 1).padStart(3, "0")}`,
@@ -193,4 +193,24 @@ test("API キーの管理は専用権限で開け、削除を確定できる", {
   mockApi.setCurrentUser(dbUser({ permissions: ["menu.chat", "agent.runs.operate"] }));
   await page.goto("/settings/security/api-keys");
   await expect(page).toHaveURL(/\/forbidden$/);
+});
+
+
+test("管理画面の読込表示は対象を短く示して一覧の幅に収まる", { tag: "@responsive" }, async ({ page, mockApi }) => {
+  mockApi.setCurrentUser(SECURITY_ADMIN);
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/security/**", async route => { await pending; await route.fallback(); });
+  try {
+    for (const [kind, label] of [["users", "ユーザーを読込中"], ["roles", "ロールを読込中"], ["permissions", "権限を読込中"]]) {
+      await page.goto(`/settings/security/${kind}`);
+      const loading = page.getByTestId(`security-${kind}-loading`);
+      await expect(loading.locator("[data-processing-label]")).toHaveText(label);
+      await expect(loading.locator("[data-processing-label]")).toBeVisible();
+      await expect(loading).toContainText("経過時間");
+      const size = await loading.locator("[data-processing-label]").evaluate(node => ({height: node.getBoundingClientRect().height, line: parseFloat(getComputedStyle(node).lineHeight)}));
+      expect(size.height).toBeLessThanOrEqual(size.line * 2 + 1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+    }
+  } finally { release(); }
 });

@@ -2601,8 +2601,6 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       const agent = {
         description: "",
         instructions: "",
-        migration_required: false,
-        tool_names: [],
         source: "runtime",
         created_at: MOCK_NOW,
         updated_at: MOCK_NOW,

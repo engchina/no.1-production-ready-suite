@@ -43,7 +43,7 @@ class _Clock:
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 class RoundBudgetUnitTest(unittest.TestCase):
@@ -211,7 +211,7 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertIn("一覧表を選択し、処理を選択します。", result.answer_text)
         self.assertTrue(result.needs_human_review)
         # 監査は呼ばない（草稿が無い）。
-        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraft"])
+        self.assertEqual([name for name, _ in model.prompts], ["GroundedDraftWire"])
 
     def test_first_generation_capped_by_the_deadline_keeps_the_cut_call_usage(self):
         """1 組目の生成が、期限の残りで抑えた出力の上限に届いて切れた（#1548）。秒・token を round_budget に残す。"""
@@ -269,13 +269,13 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertTrue(rounds[0]["audit_cut"])
         self.assertIsNone(rounds[0]["audit"])
         self.assertTrue(result.generation_trace["round_budget"]["adopted_audit_cut"])
-        # 原文と照合した説明は本文に残して未確認（unassessed）の印を付け、監査が終わらなかったことを示す。summary には
-        # 警告を付ける（#2738）。確かめた段落が 1 つも無いので insufficient_evidence（本文は出す）。
+        # 監査未完了を本文の印や資料不足へ変換せず、草稿と実際の時間切れ診断を残す。
         self.assertIn(GOOD, result.answer_text)
-        self.assertEqual(marks(result)[GOOD], ["unassessed"])
-        self.assertEqual(marks(result)["集計表出力から明細一覧を出力できます。"], ["summary_unaudited"])
+        self.assertNotIn(GOOD, marks(result))
+        self.assertTrue(result.answer_text.startswith(rounds[0]["draft"]["summary"]))
+        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "kept")
         self.assertIn("確認（監査）が終わらなかったため", result.answer_text)
-        self.assertEqual(result.envelope["outcome"], "insufficient_evidence")
+        self.assertNotEqual(result.envelope["outcome"], "insufficient_evidence")
 
     def test_audit_cut_correction_round_does_not_replace_the_audited_round(self):
         """是正の round の監査が切れたら、その round（監査なし）を、監査を通った round より採用しない。"""

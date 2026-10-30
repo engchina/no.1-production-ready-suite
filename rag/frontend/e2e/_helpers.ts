@@ -48,6 +48,7 @@ export const CAPABILITY_PERMISSION_CODES = [
   "rag.knowledge_bases.manage",
   "rag.feedback.manage",
   "rag.system_tables.manage",
+  "rag.evaluation_calibration.manage",
 ] as const;
 
 export const ALL_PERMISSION_CODES: string[] = [
@@ -452,4 +453,17 @@ export async function expandSidebarSections(sidebar: Locator, ...titles: string[
   while ((await collapsed.count()) > 0) {
     await collapsed.first().click();
   }
+}
+
+/** 文書一覧は 375px では 3 つの絞り込みを共有シートへまとめる。 */
+export async function openFileListFilters(page: Page) {
+  const toolbar = page.getByTestId("file-list-toolbar");
+  if ((await toolbar.getAttribute("data-list-toolbar-filters-layout")) === "sheet" && !(await page.getByTestId("file-list-toolbar-filters-sheet").isVisible())) {
+    await toolbar.getByRole("button", { name: /^絞り込み/ }).click();
+  }
+}
+
+export async function closeFileListFilters(page: Page) {
+  const sheet = page.getByTestId("file-list-toolbar-filters-sheet");
+  if (await sheet.isVisible()) await sheet.getByRole("button", { name: "絞り込みを閉じる" }).click();
 }

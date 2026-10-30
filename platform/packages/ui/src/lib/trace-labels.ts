@@ -12,10 +12,53 @@ export const TRACE_DETAILS_JA = {
   "trace.details.unknown": "未計測",
   "trace.details.notReported": "不明",
   "trace.details.legacy": "この実行は古い形式の記録のため、処理の経過を表示できません。",
+  "trace.purpose.guide.draft": "回答の過程からガイドの下書きを作る",
+  "trace.purpose.answer.validate": "回答の段落を取得した資料と照合する",
+  "trace.purpose.answer.recheck": "未確認の段落を根拠と照合し直す",
+  "trace.purpose.answer.premise_consistency": "確認済みの利用者条件と回答を照合する",
+  "trace.purpose.sql.structure": "SQL から表と列の構造を取り出す",
+  "trace.purpose.sql.logical_structure": "SQL の処理を論理構造に整理する",
+  "trace.purpose.answer.generate": "根拠から回答文を作る",
+  "trace.purpose.answer.audit": "回答の主張を根拠と照合する",
+  "trace.purpose.answer.repair": "根拠に合わせて回答を直す",
+  "trace.purpose.answer.scope": "要求と根拠の対応を計画する",
+  "trace.purpose.answer.resolve_conflicts": "表の値の食い違いを照合する",
+  "trace.purpose.evidence.grade": "要求に答える根拠があるか判定する",
+  "trace.purpose.evidence.select_screen": "質問に関係する画面を選ぶ",
+  "trace.purpose.evidence.select_article": "目録から根拠に使う条を選ぶ",
+  "trace.purpose.evidence.select_document": "目録から根拠に使う文書を選ぶ",
+  "trace.purpose.evidence.refine_article": "関連する条を追加で選ぶ",
+  "trace.purpose.evidence.extract": "長い章節から必要な原文を抜き出す",
+  "trace.purpose.query.expand": "検索に使う質問の言い換えを作る",
+  "trace.purpose.query.route": "質問に合う検索方式と検索文を選ぶ",
+  "trace.purpose.query.rewrite": "前の会話を踏まえて質問を書き換える",
+  "trace.purpose.query.conditions": "質問から絞り込み条件を読み取る",
+  "trace.purpose.query.embed": "検索する質問の埋め込みを作る",
+  "trace.purpose.document.embed": "検索に使う文書の埋め込みを作る",
+  "trace.purpose.sql.generate": "質問に答える SQL を作る",
+  "trace.purpose.sql.repair": "エラーになった SQL を直す",
+  "trace.purpose.sql.analyze": "SQL の失敗原因と直し方を示す",
+  "trace.purpose.sql.describe": "SQL が行う処理を説明する",
+  "trace.purpose.sql.reverse": "SQL の処理を表す質問を作る",
+  "trace.purpose.schema.comments": "表と列の説明を作る",
+  "trace.purpose.schema.relations": "SQL から表の関係と条件を取り出す",
+  "trace.purpose.ontology.build": "資料から対象の構造と関係を取り出す",
+  "trace.purpose.ontology.review": "構造と関係の定義を検査する",
+  "trace.purpose.requirement.clarify": "回答前に必要な確認事項を作る",
+  "trace.purpose.evaluation.judge": "回答を評価基準と照合する",
+  "trace.purpose.document.read": "文書の画像から内容を読み取る",
+  "trace.purpose.document.extract": "文書から定義した項目を取り出す",
+  "trace.purpose.document.summarize": "文書の範囲ごとに要点をまとめる",
+  "trace.purpose.document.infer_headings": "見出しの親子関係を推定する",
+  "trace.purpose.context.compact": "次の処理に必要な履歴を要約する",
+  "trace.purpose.agent.choose_action": "質問に応じた操作または回答を作る",
+  "trace.purpose.connection.check": "モデルが応答するか接続を確かめる",
+  "trace.field.modelPurpose": "モデルの呼び出しの用途",
   "trace.span.root": "実行の全体",
-  "trace.span.chat": "モデルの呼び出し",
-  "trace.span.embeddings": "埋め込みの作成",
-  "trace.span.rerank": "並べ替え（rerank）",
+  "trace.span.chat": "モデルを呼び出す（用途の記録なし）",
+  "trace.span.embeddings": "テキストの埋め込みを作る",
+  "trace.span.rerank": "質問との関連度で候補を並べ替える",
+  "trace.span.rerankRequest": "候補の並べ替えを要求する",
   "trace.span.executeTool": "ツールの実行",
   "trace.span.genAi": "AI の呼び出し",
   "trace.span.mcpRequest": "MCP の呼び出し",
@@ -50,6 +93,50 @@ export const TRACE_DETAILS_JA = {
   "trace.product.agent": "Agent",
 } as const;
 
+const MODEL_PURPOSE_LABEL_KEYS = {
+  "guide.draft": "trace.purpose.guide.draft",
+  "answer.validate": "trace.purpose.answer.validate",
+  "answer.recheck": "trace.purpose.answer.recheck",
+  "answer.premise_consistency": "trace.purpose.answer.premise_consistency",
+  "sql.structure": "trace.purpose.sql.structure",
+  "sql.logical_structure": "trace.purpose.sql.logical_structure",
+  "answer.generate": "trace.purpose.answer.generate",
+  "answer.audit": "trace.purpose.answer.audit",
+  "answer.repair": "trace.purpose.answer.repair",
+  "answer.scope": "trace.purpose.answer.scope",
+  "answer.resolve_conflicts": "trace.purpose.answer.resolve_conflicts",
+  "evidence.grade": "trace.purpose.evidence.grade",
+  "evidence.select_screen": "trace.purpose.evidence.select_screen",
+  "evidence.select_article": "trace.purpose.evidence.select_article",
+  "evidence.select_document": "trace.purpose.evidence.select_document",
+  "evidence.refine_article": "trace.purpose.evidence.refine_article",
+  "evidence.extract": "trace.purpose.evidence.extract",
+  "query.expand": "trace.purpose.query.expand",
+  "query.route": "trace.purpose.query.route",
+  "query.rewrite": "trace.purpose.query.rewrite",
+  "query.conditions": "trace.purpose.query.conditions",
+  "query.embed": "trace.purpose.query.embed",
+  "document.embed": "trace.purpose.document.embed",
+  "sql.generate": "trace.purpose.sql.generate",
+  "sql.repair": "trace.purpose.sql.repair",
+  "sql.analyze": "trace.purpose.sql.analyze",
+  "sql.describe": "trace.purpose.sql.describe",
+  "sql.reverse": "trace.purpose.sql.reverse",
+  "schema.comments": "trace.purpose.schema.comments",
+  "schema.relations": "trace.purpose.schema.relations",
+  "ontology.build": "trace.purpose.ontology.build",
+  "ontology.review": "trace.purpose.ontology.review",
+  "requirement.clarify": "trace.purpose.requirement.clarify",
+  "evaluation.judge": "trace.purpose.evaluation.judge",
+  "document.read": "trace.purpose.document.read",
+  "document.extract": "trace.purpose.document.extract",
+  "document.summarize": "trace.purpose.document.summarize",
+  "document.infer_headings": "trace.purpose.document.infer_headings",
+  "context.compact": "trace.purpose.context.compact",
+  "agent.choose_action": "trace.purpose.agent.choose_action",
+  "connection.check": "trace.purpose.connection.check",
+} as const;
+
 export type TraceLabelKey = keyof typeof TRACE_DETAILS_JA;
 export type TraceSpanStatus = "done" | "failed" | "cancelled" | "skipped";
 /**
@@ -59,7 +146,7 @@ export type TraceSpanStatus = "done" | "failed" | "cancelled" | "skipped";
 export type TraceStageName = (stage: string, status: TraceSpanStatus) => string | null | undefined;
 /** 技術の span の名前（root と、`gen_ai.*`・MCP・Select AI・HTTP の呼び出し）。 */
 export interface TraceSpanNames {
-  root: string; chat: string; embeddings: string; rerank: string; executeTool: string; genAi: string;
+  root: string; chat: string; embeddings: string; rerank: string; rerankRequest: string; executeTool: string; genAi: string;
   mcpRequest: string; selectAi: string; httpRequest: string;
   attempt: (name: string, count: number) => string;
 }
@@ -69,6 +156,7 @@ export interface TraceSpanNames {
  * 属性名のまま出す。
  */
 export const TRACE_FIELD_LABEL_KEYS = {
+  "pr.gen_ai.purpose": "trace.field.modelPurpose",
   "gen_ai.usage.input_tokens": "trace.field.usage.input",
   "gen_ai.usage.output_tokens": "trace.field.usage.output",
   "gen_ai.usage.cache_read.input_tokens": "trace.field.usage.cacheRead",
@@ -103,6 +191,7 @@ export interface TraceDetailsLabels {
   fieldNames: Readonly<Record<TraceFieldName, string>>;
   cancelled: string; stopped: string; reconstructed: string;
   spanNames: TraceSpanNames;
+  modelPurposes?: Readonly<Record<string, string>>;
   stageName?: TraceStageName;
   /**
    * 画面の製品（`rag` / `nl2sql` / `agent`。#3272）。別の製品が書いた span は、この製品の工程の定義で訳さずに、書いた製品が
@@ -122,8 +211,9 @@ export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, opti
     notReported: t("trace.details.notReported"),
     fieldNames: Object.fromEntries(Object.entries(TRACE_FIELD_LABEL_KEYS).map(([name, key]) => [name, t(key)])) as Record<TraceFieldName, string>,
     cancelled: t("trace.status.cancelled"), stopped: t("trace.status.stopped"), reconstructed: t("trace.timing.reconstructed"),
+    modelPurposes: Object.fromEntries(Object.entries(MODEL_PURPOSE_LABEL_KEYS).map(([id, key]) => [id, t(key)])),
     spanNames: {
-      root: t("trace.span.root"), chat: t("trace.span.chat"), embeddings: t("trace.span.embeddings"), rerank: t("trace.span.rerank"),
+      root: t("trace.span.root"), chat: t("trace.span.chat"), embeddings: t("trace.span.embeddings"), rerank: t("trace.span.rerank"), rerankRequest: t("trace.span.rerankRequest"),
       executeTool: t("trace.span.executeTool"), genAi: t("trace.span.genAi"), mcpRequest: t("trace.span.mcpRequest"),
       selectAi: t("trace.span.selectAi"), httpRequest: t("trace.span.httpRequest"),
       attempt: (name, count) => t("trace.span.attempt").replace("{name}", name).replace("{count}", String(count)),

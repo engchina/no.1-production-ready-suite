@@ -281,31 +281,37 @@ API は 422 で「既定のテキストモデルを選択してください。�
     「サービス管理」から parser を再起動する）。env・config で渡す値は「送る値」（`none` は空）。
   - NL2SQL: `enterprise_ai_client`（SQL 生成・評価・オントロジーの VLM など、テキストと画像のすべての呼び出しと接続テスト）。
   - Agent: 組み込み Runtime の SDK の `ModelSettings(reasoning=…)`（Run と品質評価の判定）とモデルの接続テスト。
+- NL2SQL の Select AI・Select AI Agent には効かない（AI profile（`DBMS_CLOUD_AI`）に推論の量の属性が無い。画面の推論の量の説明と、
+  業務プロファイルの Select AI 設定に書いている）。
 - `max_output_tokens` は思考の token も含むので、推論の量を減らすと出力上限での未完了（#987）も減る。
 - 推論型のモデルの 1 回の呼び出しが数十秒になるため、RAG の回答の上限 `RAG_ANSWER_TIMEOUT_SECONDS` の既定を 600 秒（上限と同じ）にし、
   Agent の接続 `rag` の待ち時間 `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS` の既定を 630 秒（MCP のタイムアウト秒の上限は 900 秒）にした。
   画面（630 秒）と Nginx（660 秒）は前から回答の上限より長い。
 
-## LLM / VLM の呼び出しの seed（`seed`。#1434）
+## LLM / VLM の呼び出しの seed は送らない（#3529）
 
-「システム設定 › モデル」の登録モデルの節に、全モデルで共通の seed（同じ入力から同じ出力を得やすくするための乱数の種）を 1 つ持つ。
+3 製品の Enterprise AI の呼び出し（Responses API の top-level の `seed`）にも、NL2SQL の Select AI の AI profile（`DBMS_CLOUD_AI`）の
+`seed` 属性にも、seed を入れない。設定・画面の欄も持たない。seed を受け付けないモデル（未知の引数を拒む endpoint）では、すべての
+呼び出しが HTTP 400（`Unknown parameter: 'seed'`）になるため。受け付けるモデルでも出力の再現性はモデル側の対応次第だった。
+保存済みの `model-settings.json` の `enterprise_ai.seed` は読み込みで読み捨てる。
 
-- **既定は 42、範囲は 0〜2147483647 の整数。** `model-settings.json`（`enterprise_ai.seed`）に値が無ければ 42。範囲外・整数でない値は保存（422）でも
-  読み込みでも検証エラー。`.env` の `PLATFORM_OCI_ENTERPRISE_AI_SEED` は画面で保存した値（`model-settings.json`）が無いときの値。
-- **値の解釈は `pr_system_settings.model.seed_to_send` の 1 か所**で、3 製品は `enterprise_ai_seed(settings)`（送る値）か
-  `seed_payload(settings)`（`{"seed": 42}`）を使う。Responses API には seed の field が無いので、OpenAI SDK の `extra_body={"seed": …}` と同じ
-  top-level の `seed` で送る（payload template の構成では template に任せる）。
-- 送る所（Enterprise AI を呼ぶ所すべて）:
-  - RAG: 共有 client（`rag_parser_core.OciEnterpriseAiConfig.seed`。回答・要約・文書解析の VLM・図の読み取り・接続テスト）、回答フローの
-    `responses.parse`（`build_engine_settings` の `OCI_ENTERPRISE_AI_SEED` → `rag_engine` の `settings.llm_seed`）、OCI の parser
-    （`service_runtime_env` の `PLATFORM_OCI_ENTERPRISE_AI_SEED`。値を変えたら「サービス管理」から parser を再起動する）。
-  - NL2SQL: `enterprise_ai_client`（SQL 生成・評価・オントロジーの VLM など、テキストと画像のすべての呼び出しと接続テスト）。
-  - Agent: 組み込み Runtime の SDK の `ModelSettings(extra_body={"seed": …})`（Run と品質評価の判定）とモデルの接続テスト。
-- **NL2SQL の Select AI・Select AI Agent** は、業務プロファイルの Select AI 設定の `seed`（既定 42）を AI profile（`DBMS_CLOUD_AI`）の `seed` 属性に
-  入れる（Select AI Agent は同じ profile を使う）。推論の量（`reasoning_effort`）は AI profile に属性が無いので Select AI・Select AI Agent には効かない
-  （画面の推論の量の説明と、業務プロファイルの Select AI 設定に書いている）。
-- 2026-10-11 の実測（Responses API、top-level の `seed`）: claude-opus-5（ターシャリ接続）・openai.gpt-oss-120b・xai.grok-4.3 とも `seed=42` を
-  200 で受け付ける（型の違う `"abc"` も 200）。同じ入力の 2 回の出力は temperature 1 では 3 モデルとも一致しなかった（gpt-oss の temperature 0 は
-  seed の有無にかかわらず一致）。**seed を受け付けても、出力の再現性はモデル側の対応次第。** エラーにならないので全モデルに送り、モデルごとの
-  「送らない」は持たない（拒むモデルが出たら登録モデルごとの設定で足す）。dev の ADB では `seed: 42` の AI profile を作れ（`USER_CLOUD_AI_PROFILE_ATTRIBUTES` に 42）、
-  `"abc"` は `CREATE_PROFILE` が ORA-06502 で拒んだ。
+## モデルが受け付けない引数は外して送り直す（#3539）
+
+3 製品の Enterprise AI の呼び出しは、受け付けるモデルには今までどおり `temperature`（主に 0。同じ入力から同じ出力を
+得やすくする）を送る。サンプリングの引数を受け付けない推論モデル（OpenAI の推論モデルは推論の量が `none` 以外のとき
+`temperature`・`top_p`・`top_logprobs` などを受け付けない）が HTTP 400 で「受け付けない引数」
+（`Unsupported parameter: 'temperature'` / `Unknown parameter: 'X'`）を返したら、その引数を外して 1 回だけ送り直す
+（業界の型: LiteLLM の `drop_params`）。
+
+- 判定と記憶は `pr_backend_core.llm_request_params`（標準 library だけ）。引数の名前は `error.param`、無ければ message の
+  引用から読む。外すのは許可の一覧（サンプリングと生成の調整: `temperature`・`top_p`・`top_k`・`frequency_penalty`・
+  `presence_penalty`・`logprobs`・`top_logprobs`・`logit_bias`・`seed`。引数そのものを受け付けないときの
+  `reasoning` / `reasoning_effort`）の top-level の引数だけ。`model`・`input`・応答の形式・`tools`・出力の上限などの
+  400 と、推論の量の値を拒む 400（`Unsupported value`。選んだ値の誤り）は今までどおり失敗にする。
+- 外した引数は（接続の URL, モデル ID）ごとに backend のプロセスの間だけ覚え、次の呼び出しから最初に外す（再起動で
+  忘れる）。初めて外したときに WARNING の log を 1 回だけ残す（payload は出さない）。
+- 組み込みは `pr_backend_core.llm_request_params_httpx`（httpx の client の `send` を包む。環境のプロキシの扱いは
+  変えない）: RAG は OpenAI SDK の `http_client`（`ParameterDroppingClient` / `AsyncParameterDroppingClient`）、
+  NL2SQL とモデルの接続テスト（Agent）は `send_dropping_parameters` / `asend_dropping_parameters`、Agent の組み込み
+  Runtime・チャットの添付の画像の読み取りは SDK の既定の client に同じ扱いを足した client。
+- 「システム設定 › モデル」のモデルのテストは、外した引数を結果の詳細（`dropped_parameters`）と成功の文に出す。

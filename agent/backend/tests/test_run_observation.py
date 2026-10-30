@@ -205,6 +205,9 @@ def _full_run(setup: Setup) -> RunState:
     run_id = f"run3240obs-{uuid4().hex[:8]}"
     search = {
         "outcome": "answered",
+        # 縮退した任意の補助の処理（#3546）。形の合わない項目は写さない。
+        "degraded_steps": [{"kind": "rerank", "count": 2}, {"kind": "", "count": 1}],
+        "guardrail_degraded": False,
         "evidence": [
             _evidence("doc-a", "a:1", "文書 A の合成の本文。", retrieval_rank=1),
             # RAG が 1 件の上限で切った根拠（生成には一部だけを渡した）。
@@ -217,9 +220,13 @@ def _full_run(setup: Setup) -> RunState:
                 superseded=True,
                 evidence_type="table",
                 origin="derived",
+                # 表の 1 行の記録は表の対応の検査が読めない（#3546）。
+                table_binding="not_checkable",
                 # 表の 1 行の根拠のセルの座標（RAG の EvidenceLocator の table_row・table_cells）。
                 locator={
                     "sheet_name": "シート 1",
+                    "row_basis": "sheet",
+                    "table_index": 2,
                     "row_start": 5,
                     "row_end": 5,
                     "cell_range": "A5:C5",
@@ -451,6 +458,15 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         False,
     )
     assert calls[0]["started_at"].startswith("2026-10-25T01:00:00")
+    # RAG の根拠のツールの縮退（#3546）。失敗した呼び出し・ほかのツールは null。
+    assert [
+        (call["degraded_steps"], call["guardrail_degraded"], call["zero_evidence_stage"])
+        for call in calls[:3]
+    ] == [
+        ([{"kind": "rerank", "count": 2}], False, None),
+        (None, None, None),
+        (None, None, None),
+    ]
 
     evidence = output["evidence"]
     assert (output["evidence_total"], output["withheld_evidence_count"]) == (4, 0)
@@ -477,6 +493,7 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "cited": True,
         "answer_use": "confirmed",
         "locator": None,
+        "table_binding": None,
         "text": "文書 A の合成の本文。",
         "text_length": len("文書 A の合成の本文。"),
         "text_omitted": False,
@@ -490,13 +507,19 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "page_label_start": None,
         "page_label_end": None,
         "sheet_name": None,
+        "row_basis": None,
+        "table_index": None,
         "row_start": None,
         "row_end": None,
+        "source_line_start": None,
+        "source_line_end": None,
         "cell_range": None,
         "element_locator": "doc:doc-a/el:1",
         "table_row": None,
         "table_cells": [],
     }
+    # 行の番号の基準と表の番号（#3262）。
+    assert (second["locator"]["row_basis"], second["locator"]["table_index"]) == ("sheet", 2)
     assert (second["locator"]["table_row"], second["locator"]["table_cells"]) == (
         5,
         [
@@ -512,6 +535,8 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "table",
         "derived",
     )
+    # 表の行・列の対応の検査が読めるか（RAG の table_binding。読み取りの chunk は null）。
+    assert (second["table_binding"], third["table_binding"]) == ("not_checkable", None)
     assert (third["source"], third["tool_call_index"], third["retrieval_rank"]) == ("read", 2, None)
     assert (third["evidence_type"], third["origin"]) == (None, None)
     assert third["text"] == "シート の 1 行目。"
@@ -522,8 +547,12 @@ def test_observation_returns_the_run_metadata_tool_calls_and_all_evidence(setup:
         "page_label_start": None,
         "page_label_end": None,
         "sheet_name": "シート 1",
+        "row_basis": None,
+        "table_index": None,
         "row_start": 1,
         "row_end": 1,
+        "source_line_start": None,
+        "source_line_end": None,
         "cell_range": "A1:C1",
         "element_locator": None,
         "table_row": None,
@@ -709,3 +738,95 @@ def test_observation_drops_table_cells_of_another_shape(cells: object) -> None:
     """RAG の table_cells の形に合わないセルがあれば、セルを 1 つも写さない（行の番号は写す）。"""
     locator = run_observation._locator({"table_row": 5, "table_cells": cells})
     assert locator == {"table_row": 5}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            {"row_basis": "word_table", "table_index": 3},
+            {"row_basis": "word_table", "table_index": 3},
+        ),
+        (
+            {"row_basis": "csv", "row_start": 4, "source_line_start": 5, "source_line_end": 6},
+            {"row_basis": "csv", "row_start": 4, "source_line_start": 5, "source_line_end": 6},
+        ),
+        # 解析の表の格子の行（#3429）。セルの領域（bbox）は写さない。
+        (
+            {
+                "row_basis": "parsed_table",
+                "table_index": 2,
+                "row_start": 3,
+                "row_end": 3,
+                "table_row": 3,
+                "table_cells": [
+                    {"table_col": "B", "header_path": ["上の段", "下の段"], "bbox": [1, 2, 3, 4]}
+                ],
+            },
+            {
+                "row_basis": "parsed_table",
+                "table_index": 2,
+                "row_start": 3,
+                "row_end": 3,
+                "table_row": 3,
+                "table_cells": [{"table_col": "B", "header_path": ["上の段", "下の段"]}],
+            },
+        ),
+        # 知らない基準・形の合わない番号は写さない。
+        ({"row_basis": "page", "table_index": "3"}, {}),
+    ],
+    ids=["word-table", "csv", "parsed-table", "unknown"],
+)
+def test_observation_copies_the_row_basis_of_rag(
+    value: dict[str, object], expected: object
+) -> None:
+    """行の番号の基準と表の番号（RAG の EvidenceLocator と同じ名前。#3262）を写す。"""
+    assert run_observation._locator(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        # 補助の処理の縮退で根拠 0 件（当たらなかったのか読めなかったのかを分ける）。
+        (
+            {
+                "evidence": [],
+                "degraded_steps": [{"kind": "reference_load", "count": 1}],
+                "zero_evidence": {"stage": "retrieval", "candidate_count": 0, "rejected_count": 0},
+            },
+            ([{"kind": "reference_load", "count": 1}], False, "retrieval"),
+        ),
+        # 安全チェックを完了できず止めた。
+        (
+            {"evidence": [], "guardrail_degraded": True, "zero_evidence": None},
+            ([], True, None),
+        ),
+        # 知らない段・壊れた記録は写さない。
+        (
+            {
+                "evidence": [],
+                "degraded_steps": "rerank",
+                "guardrail_degraded": "yes",
+                "zero_evidence": {"stage": "unknown"},
+            },
+            ([], False, None),
+        ),
+    ],
+    ids=["degraded-zero", "guardrail", "unknown"],
+)
+def test_observation_copies_the_degraded_retrieval_of_rag(
+    output: dict[str, Any], expected: tuple[object, object, object]
+) -> None:
+    """RAG の根拠のツールの縮退・安全チェックの未完了・根拠 0 件の段を写す（#3546）。"""
+    run_id = f"run3546obs-{uuid4().hex[:8]}"
+    run = RunState(
+        id=run_id,
+        goal="合成の質問",
+        agent_id="agent-a",
+        runtime_id="builtin",
+        status=RunStatus.COMPLETED,
+        steps=[_step(run_id, "rag", "rag_retrieve_evidence", output=output)],
+        created_at=T0,
+    )
+    (call,) = run_observation.observe_run(run).tool_calls
+    assert (call.degraded_steps, call.guardrail_degraded, call.zero_evidence_stage) == expected

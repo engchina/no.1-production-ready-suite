@@ -6,17 +6,28 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import range_class
 
 from rag_engine.parsing.content_labels import content_labels
+from rag_engine.parsing.structural_text import structural_only
+from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, ARTICLE_UNIT_KEY, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
+from rag_engine.retrieval.character_forms import find_width_folded
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, definition_windows
 from rag_engine.retrieval.evidence_cues import evidence_cues
-from rag_engine.retrieval.task_contract import current_request_text, goal_retrieval_queries, task_contract
+from rag_engine.retrieval.task_contract import (
+    COUNT_REQUEST,
+    LIST_REQUEST,
+    STEPS_REQUEST,
+    current_request_text,
+    explicit_requests,
+    goal_retrieval_queries,
+    task_contract,
+)
 
 
 def _record_page_end(record: Any) -> int:
@@ -58,14 +69,15 @@ def evidence_relevance(question: str, text: str) -> float:
     # 一致する操作説明を画面のサンプル値より優先する。無関係な操作には加点しない。
     if matches:
         score *= 1 + 0.18 * min(3, len(re.findall(operation_text, text)))
-    if task_contract(question)["goal"] == "procedure" and matches:
+    requests = explicit_requests(question)
+    if STEPS_REQUEST in requests and matches:
         if re.search(rf"(?m)^\s*[{cues.chars('heading_bullet_chars')}]", text):
             score += 80
         if content_labels().index_line.match(text):
             score *= 0.2
     if re.search(alt["default_question_cues"], question, re.I):
         score += 10 * len(set(re.findall(alt["default_text_cues"], text)))
-    if task_contract(question)["goal"] == "recipient_list":
+    if requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST}:
         # 表名一致だけでは集計値の説明が名簿の操作を押し出す。原質問の出力対象で
         # 補正し、検索用ラベルの反復より一覧の選択・抽出・実行を残す。
         list_terms = set(re.findall(alt["list_text_cues"], normalized))
@@ -78,7 +90,13 @@ def evidence_relevance(question: str, text: str) -> float:
 
 
 def evidence_excerpt(
-    question: str, text: str, budget: int, *, required_ranges: Sequence[tuple[int, int]] = (), required_only: bool = False
+    question: str,
+    text: str,
+    budget: int,
+    *,
+    required_ranges: Sequence[tuple[int, int]] = (),
+    priority_ranges: Sequence[tuple[int, int]] = (),
+    required_only: bool = False,
 ) -> str:
     """関連窓と隣接文を原文順に返す。切断箇所は明示し、値や原文は改変しない。
 
@@ -117,7 +135,8 @@ def evidence_excerpt(
     # 長い表全体は必須にせず、実際の操作を含む原文行を保護する。
     steps = []
     step_number = rf"\s*(?:[0-9０-９]+\s*[{cues.chars('step_number_closers')}]|{range_class(cues.words['step_circled_numbers'])})"
-    if task_contract(question)["goal"] in {"procedure", "recipient_list"}:
+    requests = explicit_requests(question)
+    if STEPS_REQUEST in requests or requests & {LIST_REQUEST, COUNT_REQUEST} == {LIST_REQUEST}:
         for match in re.finditer(r"(?m)^[^\n]+", text):
             numbered = re.match(step_number, match.group())
             conditional = cues.has("step_condition_cues", match.group())
@@ -125,7 +144,7 @@ def evidence_excerpt(
                 steps.append(match.span())
     # 短い節名の直後に箇条書きの条件が続く場合、節名と条件を同じ窓にする。
     # 片方の処理区分名だけが落ちると、同ページの別モードへ条件を誤配属する。
-    if task_contract(question)["goal"] == "procedure":
+    if STEPS_REQUEST in requests:
         lines = list(re.finditer(r"(?m)^[^\n]*(?:\n|$)", text))
         for index, line in enumerate(lines[:-1]):
             heading = line.group().strip()
@@ -148,12 +167,15 @@ def evidence_excerpt(
                     break
                 end = following.end()
             steps.append((line.start(), end))
-    protected = sorted(set([*required_ranges, *definition_windows(text, definition_labels(question)), *steps]))
+    priority = list(dict.fromkeys((a, b) for a, b in priority_ranges if 0 <= a < b <= len(text)))
+    protected = sorted(set([*priority, *required_ranges, *definition_windows(text, definition_labels(question)), *steps]))
+    if required_only and priority:
+        protected = priority
     # 定義を一行ごとの点数で分断しない。収まらない完全定義の断片も候補から除く。
     spans = [(a, b) for a, b in spans if not any(a < y and b > x for x, y in protected)]
     if required_only:
         spans = []
-    ranked = [*protected, *sorted(spans, key=lambda span: (-evidence_relevance(question, text[span[0] : span[1]]), span[0]))]
+    ranked = [*priority, *protected, *sorted(spans, key=lambda span: (-evidence_relevance(question, text[span[0] : span[1]]), span[0]))]
     selected: list[tuple[int, int]] = []
     for start, end in ranked:
         merged = sorted([*selected, (start, end)])
@@ -307,9 +329,31 @@ def new_evidence_count(records: Sequence[Any], seen: Sequence[Any]) -> int:
 
 
 # 回答生成に渡す原文の総予算（文字）。親 6,000 字の候補を複数の機能・文書から入れられる大きさ (#665)。
-EVIDENCE_BUDGET_CHARS = 48000
+EVIDENCE_BUDGET_CHARS = 80000
 # 後続候補のために取り置く短い原文範囲の上限（親ごと）。
 NATIVE_RESERVE_CAP = 1200
+
+
+def _union_source_ranges(ranges: Sequence[tuple[str, int, int]]) -> list[tuple[str, int, int]]:
+    """同じ親の重なる物理範囲を、子の別名の数に依存せず一度だけ数える。"""
+    merged: list[tuple[str, int, int]] = []
+    for parent, start, end in sorted(set(ranges)):
+        if merged and merged[-1][0] == parent and start <= merged[-1][2]:
+            previous = merged[-1]
+            merged[-1] = (parent, previous[1], max(previous[2], end))
+        else:
+            merged.append((parent, start, end))
+    return merged
+
+
+def _citation_partition_boundary(text: str, position: int) -> bool:
+    """子・由来の境界だけでは文中を独立した引用候補へ切り分けない。"""
+    if position <= 0 or position >= len(text):
+        return True
+    if text[position - 1] == "\n" or text[position] == "\n":
+        return True
+    preceding = text[:position].rstrip(" \t")
+    return bool(preceding) and preceding[-1] in current_pack().words("question_cues", "unit_split_chars")
 
 
 def evidence_spans(
@@ -321,6 +365,9 @@ def evidence_spans(
     definitions_only: bool = False,
     scope_records: Sequence[Any] = (),
     whole_records: bool = False,
+    priority_source_groups: Sequence[Sequence[str]] = (),
+    verified_quotes: Mapping[str, Sequence[str]] | None = None,
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """原文の文字予算内で安定IDを付け、照合済みanchorsの本文と頁を優先する。
 
@@ -330,10 +377,25 @@ def evidence_spans(
     scope_recordsは取得済みchildの所属照合専用で、全文の予算優先には使わない。
     whole_recordsは、全部の根拠の本文が予算（前置きの分の 1 割を除く）に入るとき、根拠ごとの配分で切らずに
     全文を渡す（章節の拡張で読んだ章節を切らない。#1436）。入らなければ通常の配分にする。
+    verified_quotes は出典の ID（根拠かまとめた別名の ID）ごとの、検索の評価が写しを確かめた原文（#3840）。
+    根拠の本文の中の位置（``find_width_folded``。照合をあいまいにしない）を必須の範囲にして予算の中で保ち、
+    span の分け目を写しの中に置かない。入らなかった写しは diagnostics に理由（``verified_quote``）を残す。
     """
     # 本文が同じ根拠（record_fingerprint）を先にまとめる。
     same_text: dict[str, list[Any]] = {}
     for record in records:
+        if structural_only(record.text):
+            if diagnostics is not None:
+                diagnostics.append(
+                    {
+                        "stage": "excluded",
+                        "reason_code": "structural_only",
+                        "source_id": getattr(record, "chunk_uid", "") or record.id,
+                        "start": 0,
+                        "end": len(record.text),
+                    }
+                )
+            continue
         same_text.setdefault(record_fingerprint(record), []).append(record)
     first_keys = {id(members[0]): key for key, members in same_text.items()}
     # 複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめ、まとめた根拠の ID は別名に残す (#1331)。
@@ -348,8 +410,33 @@ def evidence_spans(
         member_keys[key] = {
             value for item in grouped for value in (getattr(item, "chunk_uid", ""), getattr(item, "chunk_id", ""), item.id) if value
         }
+    # 評価が写しを確かめた原文（#3840）を、まとめた根拠ごとに本文の中の位置へ戻す。
+    quote_order = list(
+        dict.fromkeys((str(source), str(quote)) for source, quotes in (verified_quotes or {}).items() for quote in quotes if quote)
+    )
+    quote_requests: dict[str, list[tuple[str, str]]] = {}
+    quote_ranges: dict[tuple[str, str], tuple[int, int]] = {}
+    for item in quote_order:
+        key = next((key for key, ids in member_keys.items() if item[0] in ids), None)
+        if key is None:
+            continue
+        quote_requests.setdefault(key, []).append(item)
+        located_quote = find_width_folded(unique[key].text, item[1])
+        if located_quote is not None:
+            quote_ranges[item] = located_quote
     labels = definition_labels(question)
     from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key
+
+    # 条の目録で選んだ条の child（#3526）。その child に重なる根拠に印を付ける。
+    catalog_children = {
+        str(getattr(child, "chunk_uid", "") or getattr(child, "id", "")) for child in scope_records if is_catalog_article(child)
+    }
+
+    from rag_engine.retrieval.source_context import prompt_source_context_text, source_context
+
+    def note_cost(context: dict[str, Any], record: Any) -> int:
+        """生成の入力に描く出典情報の字数（#3831）。予算は描いた本文と補助情報を数える。"""
+        return len(prompt_source_context_text(context, document_name=str(getattr(record, "source", "") or "")))
 
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
@@ -358,30 +445,104 @@ def evidence_spans(
     ordered = _same_unit_first(list(unique.items()), question)
     if labels:
         ordered.sort(key=lambda item: -len(definition_ranges(item[1].text, labels)))
+    # 必須手順の直接の根拠を各手順に一つずつ先に割り当てる。件数・文字予算は増やさない。
+    # 同じ機能の説明や任意の章節が、後続の必須手順の原文を予算外へ押し出さないようにする。
+    priority_keys: set[str] = set()
+    # 子のIDだけで親の本文を採用しない。同じ検索のanchorを親子・版・本文位置で照合する。
+    child_locations: dict[str, list[tuple[int, int, Any]]] = {
+        key: [(a, b, child) for child in anchors for a, b, _page in _child_ranges(record, [child], parent_keys=member_keys[key])]
+        for key, record in ordered
+    }
+    child_keys: dict[str, set[str]] = {
+        key: {
+            str(value)
+            for _a, _b, child in locations
+            for value in (getattr(child, "chunk_uid", ""), getattr(child, "chunk_id", ""), getattr(child, "id", ""))
+            if value
+        }
+        for key, locations in child_locations.items()
+    }
+    if priority_source_groups:
+        groups = [set(sources) for sources in priority_source_groups]
+        selected: list[tuple[str, Any]] = []
+        selected_keys: set[str] = set()
+        for sources in groups:
+            match = next(
+                (item for item in ordered if item[0] not in selected_keys and (member_keys[item[0]] | child_keys[item[0]]) & sources), None
+            )
+            if match is not None:
+                selected.append(match)
+                selected_keys.add(match[0])
+                priority_keys.add(match[0])
+        wanted = set().union(*groups)
+        remaining_guided = [
+            item for item in ordered if item[0] not in selected_keys and (member_keys[item[0]] | child_keys[item[0]]) & wanted
+        ]
+        selected.extend(remaining_guided)
+        selected_keys.update(item[0] for item in remaining_guided)
+        ordered = [*selected, *(item for item in ordered if item[0] not in selected_keys)]
 
     # 後続の候補の短い原文範囲（各親 NATIVE_RESERVE_CAP まで）の分は先に取り置き、先頭の候補の生成説明に
     # 予算を使い切らせない (#730)。21 親のうち 17 番目の親の ※ 注記（標準回答の操作）が予算外に落ちていた。
     # 取り置きは最終的な処理順（定義質問の並べ替え後）で数える。並べ替え前に数えると index と後続候補が
     # 対応せず、定義質問で取り置きが過不足になる (#744)。
     def native_need(record: Any) -> int:
-        return min(NATIVE_RESERVE_CAP, sum(b - a for a, b in _native_ranges(record) if b - a <= 600))
+        ranges = [(a, b) for a, b in _native_ranges(record) if b - a <= 600]
+        return (
+            note_cost(source_context(record), record) * (1 + len(ranges))
+            + len(answer_metadata_context(record, max_chars=1200, include_section=False))
+            + min(NATIVE_RESERVE_CAP, sum(b - a for a, b in ranges) + 8 * max(0, len(ranges) - 1))
+        )
+
+    def whole_record_cost(key: str, record: Any) -> int:
+        """本文の分割境界ごとに反復する完全な出典情報も全文の費用に含める。"""
+        text = str(getattr(record, "text", "") or "")
+        located = [(a, b) for a, b, _child in child_locations[key]]
+        scoped = [(a, b) for child in scope_records for a, b, _page in _child_ranges(record, [child], parent_keys=member_keys[key])]
+        provenance = [
+            (a, b, child)
+            for child in scope_records
+            for a, b, _page in _child_ranges(record, [child], parent_keys=member_keys[key], body_text=True)
+        ]
+        cuts = sorted({0, len(text), *(edge for a, b in [*located, *scoped, *_native_ranges(record)] for edge in (a, b))})
+        total = len(text)
+        for start, end in zip(cuts, cuts[1:], strict=False):
+            children = []
+            for a, b, child in provenance:
+                if a < end and start < b:
+                    info = {"source_id": child.chunk_uid or child.id, **source_context(child)}
+                    if info not in children:
+                        children.append(info)
+            info = {**source_context(record), **({"children": children} if children else {})}
+            total += note_cost(info, record)
+        return total
 
     whole = (
         whole_records
         and not definitions_only
-        and (sum(len(str(getattr(record, "text", "") or "")) for _key, record in ordered) <= max(0, budget - budget // 10))
+        and sum(whole_record_cost(key, record) for key, record in ordered) <= max(0, budget - budget // 10)
     )
     reserve_after = [0] * (len(ordered) + 1)
     for position in range(len(ordered) - 1, -1, -1):
         reserve_after[position] = reserve_after[position + 1] + native_need(ordered[position][1])
     for index, (key, record) in enumerate(ordered):
         text = str(getattr(record, "text", "") or "")
+        priority_ranges = [
+            (a, b)
+            for a, b, child in child_locations[key]
+            if not definitions_only
+            and any(
+                (member_keys[key] | {str(getattr(child, attr, "")) for attr in ("chunk_uid", "chunk_id", "id")}) & set(group)
+                for group in priority_source_groups
+            )
+        ]
+        priority_ranges = list(dict.fromkeys(priority_ranges))
+        source_info = source_context(record)
+        source_cost = note_cost(source_info, record)
+        if source_cost >= remaining:
+            continue
+        remaining -= source_cost
         document_key = document_context_key(record)
-        prefix = answer_metadata_context(
-            record, max_chars=min(1200, context_remaining, max(0, remaining // 10)), include_first_page=document_key not in seen_documents
-        )
-        context_remaining -= len(prefix)
-        remaining -= len(prefix)
         required = definition_windows(text, labels)
         # まとめた根拠（#1331）の child も、本文が残す根拠の中に一意に見つかれば位置と頁に使う。
         parent_keys = member_keys[key]
@@ -393,12 +554,47 @@ def evidence_spans(
             for child in scope_records
             for a, b, page in _child_ranges(record, [child], parent_keys=parent_keys, body_text=True)
         ]
+        # 子の本文だけでなく、そこに実際に重なる完全な出典情報も先に取り置く。
+        # 後付けの補助情報で選択済みの本文を取り消すことを避ける。
+        priority_extra_cost = 0
+        affordable_priority_ranges: list[tuple[int, int]] = []
+        priority_cost = 0
+        for start, end in priority_ranges:
+            children = []
+            for a, b, _page, child in provenance:
+                if a < end and start < b:
+                    info = {"source_id": child.chunk_uid or child.id, **source_context(child)}
+                    if info not in children:
+                        children.append(info)
+            info = {**source_info, **({"children": children} if children else {})}
+            identity_cost = note_cost(info, record)
+            cost = end - start + identity_cost + (8 if affordable_priority_ranges else 0)
+            if priority_cost + cost <= remaining + source_cost:
+                affordable_priority_ranges.append((start, end))
+                priority_cost += cost
+                priority_extra_cost += identity_cost
+        if priority_ranges:
+            priority_extra_cost = max(0, priority_extra_cost - source_cost) if affordable_priority_ranges else remaining
+        prefix = answer_metadata_context(
+            record,
+            max_chars=min(
+                1200,
+                context_remaining,
+                max(0, remaining - sum(b - a for a, b in priority_ranges) - priority_extra_cost),
+                max(0, remaining // 10),
+            ),
+            include_first_page=document_key not in seen_documents,
+            include_section=False,
+        )
+        context_remaining -= len(prefix)
+        remaining -= len(prefix)
         image_ranges = _child_ranges(
             record,
             [a for a in anchors if any(ref.get("category") == "Picture" for ref in getattr(a, "source_record_refs", ()))],
             parent_keys=parent_keys,
         )
         native_ranges = _native_ranges(record)
+        verified = sorted({quote_ranges[item] for item in quote_requests.get(key, ()) if item in quote_ranges})
         # CRAGのchild本文を保護し、同じ出典の親本文中の位置と実頁を引き継ぐ。
         pinned = [] if definitions_only else [(a, b) for a, b, _ in located]
         # 原文（解析本文）の短い範囲は質問の種類・画像の有無に関係なく先に確保し、残りの予算で生成説明・OCR を
@@ -407,16 +603,42 @@ def evidence_spans(
         # 全体の予算は既存の remaining で制限する。
         if not definitions_only:
             pinned.extend((a, b) for a, b in native_ranges if b - a <= 600)
-        required = sorted(set([*required, *pinned]))
+        # 評価が写しを確かめた原文も必須の範囲にする（予算の総額は増やさない）。
+        required = sorted(set([*required, *pinned, *verified]))
         needed = sum(b - a for a, b in required) + 8 * max(0, len(required) - 1)
         allowance = min(remaining, max(remaining // max(1, len(ordered) - index), needed))
         if not labels and not anchors:
             allowance = min(remaining, max(1, budget // max(1, len(unique))))
+        if verified:
+            allowance = min(remaining, max(allowance, sum(b - a for a, b in verified) + 8 * (len(verified) - 1)))
         # 取り置き分を超えない。ただし自分の必須範囲（原文・定義・照合済み child）は確保する。
         allowance = min(allowance, max(needed, remaining - reserve_after[index + 1]))
+        if key in priority_keys:
+            # 任意の資料の取り置きより、各必須手順の直接の根拠に残予算を公平に配る。
+            allowance = min(remaining, max(allowance, remaining // max(1, len(priority_keys) - index)))
         if whole:
             allowance = min(remaining, max(allowance, len(text)))
-        excerpt = evidence_excerpt(question, text, allowance, required_ranges=required, required_only=definitions_only)
+        # 予算内に全文が入らない親では、指定された子の本文を先に確保する。
+        # 任意の親見出しを別窓にすると出典情報の反復で後続の子本文が落ちるため、
+        # この親の任意窓は追加しない。子そのものの本文・前提は改変しない。
+        child_only = bool(priority_ranges) and not whole
+        if child_only:
+            allowance = min(allowance, max(0, remaining - priority_extra_cost))
+            # 子の本文だけを切り出すときも、評価が写しを確かめた原文は子の本文の後に入れる。
+            priority_ranges = [*affordable_priority_ranges, *(item for item in verified if item not in affordable_priority_ranges)]
+        if verified and not whole:
+            # 写しを含む抜粋ごとに繰り返す出典の分を残す（抜粋の本文だけで残りの予算を使い切らない）。
+            allowance = min(
+                allowance, max(sum(b - a for a, b in verified) + 8 * (len(verified) - 1), remaining - source_cost * len(verified))
+            )
+        excerpt = evidence_excerpt(
+            question,
+            text,
+            allowance,
+            required_ranges=priority_ranges if child_only else required,
+            priority_ranges=priority_ranges,
+            required_only=definitions_only or child_only,
+        )
         remaining -= len(excerpt)
         cursor = 0
         parts = []
@@ -425,20 +647,47 @@ def evidence_spans(
             if offset < 0:
                 continue
             boundaries = [*((a, b) for a, b, _ in located), *native_ranges, *((a, b) for a, b, _, _ in scoped)]
-            cuts = sorted({0, len(part), *[edge - offset for a, b in boundaries for edge in (a, b) if offset < edge < offset + len(part)]})
-            parts.extend(part[a:b] for a, b in zip(cuts, cuts[1:], strict=False))
+            edges = sorted({edge for a, b in boundaries for edge in (a, b) if offset < edge < offset + len(part)})
+            deferred = [edge for edge in edges if not _citation_partition_boundary(text, edge)]
+            # 評価が写しを確かめた原文の中では切らない（写しが 2 つの span にまたがると、生成の根拠で照合できない）。
+            in_quote = [edge for edge in edges if edge not in deferred and any(a < edge < b for a, b in verified)]
+            for reason_code, positions in (("mid_sentence_boundary", deferred), ("verified_quote_range", in_quote)):
+                if positions and diagnostics is not None:
+                    diagnostics.append(
+                        {
+                            "stage": "boundary_preserved",
+                            "reason_code": reason_code,
+                            "source_id": getattr(record, "chunk_uid", "") or record.id,
+                            "positions": positions,
+                        }
+                    )
+            deferred += in_quote
+            cuts = sorted({0, len(part), *(edge - offset for edge in edges if edge not in deferred)})
+            parts.extend((offset + a, offset + b) for a, b in zip(cuts, cuts[1:], strict=False))
             cursor = offset + len(part)
         cursor = 0
-        for part in parts:
+        # 評価が写しを確かめた原文を含む抜粋。後に続くその抜粋の出典の分を、ほかの抜粋で使い切らない。
+        quote_parts = [any(start <= a and b <= end for a, b in verified) for start, end in parts]
+        for position, (start, end) in enumerate(parts):
+            part = text[start:end]
             if not part:
                 continue
-            start = text.find(part, cursor)
-            if start < 0:
+            if structural_only(part):
+                if diagnostics is not None:
+                    diagnostics.append(
+                        {
+                            "stage": "excluded",
+                            "reason_code": "structural_only",
+                            "source_id": getattr(record, "chunk_uid", "") or record.id,
+                            "start": start,
+                            "end": end,
+                        }
+                    )
                 continue
-            end = start + len(part)
             source_id = getattr(record, "chunk_uid", "") or record.id
             span_id = "E" + hashlib.sha256(f"{source_id}:{start}:{end}:{part}".encode()).hexdigest()[:20]
             pages = {page for a, b, page in located if a <= start and end <= b}
+            child_ranges = _overlapping_child_ranges(provenance, start, end)
             # 親の前置きと連結した窓も、含まれるchildが単一頁の場合だけ頁を確定する。
             if not pages:
                 pages = {
@@ -455,6 +704,7 @@ def evidence_spans(
                         or ""
                     ),
                     "source": getattr(record, "source", ""),
+                    "source_context": source_info,
                     # 関連度順で選んだ根拠も、生成時は見出しと本文を原文順に読めるようにする。
                     "source_order": (getattr(record, "chunk_seq", 0), getattr(record, "seq_no", 0), start),
                     "page": getattr(record, "page", 0),
@@ -462,6 +712,10 @@ def evidence_spans(
                     "superseded": (getattr(record, "metadata", {}) or {}).get("document_superseded") is True,
                     # 会話の添付から選んだ根拠（利用者が明示した入力。#3228）。要求の根拠計画の照合に掛けない。
                     "conversation_attachment": is_attachment_evidence(record),
+                    # 条で構成された文書の条の根拠（#3526）。回答はこの根拠を出典にした説明を事実の監査に掛ける。
+                    ARTICLE_UNIT_KEY: (getattr(record, "metadata", {}) or {}).get(ARTICLE_UNIT_KEY) is True,
+                    # 条の目録で選んだ条の根拠（#3526）。回答は要求の計画で必ず使うか unrelated かを決める。
+                    ARTICLE_CATALOG_KEY: any(entry["id"] in catalog_children for entry in child_ranges),
                     # 頁の無い根拠（Excel の行の記録）の場所。出典の行・根拠の見出しは頁の代わりにこれを出す（#1224）。
                     "location": record_location_label(record),
                     # 本文位置から頁を確定できない span は親の先頭頁を page に持つ。親は複数頁にまたがるため、
@@ -489,7 +743,7 @@ def evidence_spans(
                 result[-1]["page"] = result[-1]["page_end"] = next(iter(pages))
             # 抜粋の範囲に重なる子と、その子の親の本文の中の範囲（#2710）。出典の行を、引用が実際に入る子へ
             # 結ぶのに使う（親の ID だけでは同じ親・同じ頁の兄弟の子を区別できない）。
-            if child_ranges := _overlapping_child_ranges(provenance, start, end):
+            if child_ranges:
                 result[-1]["child_ranges"] = child_ranges
             # parentの章一覧には隣接する別機能が混在し得る。本文位置と文書・版・
             # 親子関係を照合した単一childだけで、引用そのものの所属を確定する。
@@ -504,8 +758,106 @@ def evidence_spans(
                         page_end=page,
                         scope_source_ids=sorted({c.chunk_uid or c.id for _, c in matching}),
                     )
+            # 親の出典と、その抜粋に実際に重なる子の出典を別々に保持する。
+            children = []
+            for a, b, _, child in provenance:
+                if a < end and start < b:
+                    child_info = {"source_id": child.chunk_uid or child.id, **source_context(child)}
+                    if child_info not in children:
+                        children.append(child_info)
+            info = {**source_info, **({"children": children} if children else {})}
+            extra_cost = note_cost(info, record) - source_cost
+            # 複数の抜粋では、出典を繰り返す分も予算に含める。階層を省略しない。
+            if cursor:
+                extra_cost += source_cost
+            later_quotes = 0 if quote_parts[position] else sum(quote_parts[position + 1 :])
+            if extra_cost > remaining - source_cost * later_quotes:
+                result.pop()
+                continue
+            remaining -= extra_cost
+            result[-1]["source_context"] = info
             cursor = end
-    return _merge_adjacent_spans(result)
+    result = _merge_adjacent_spans(result)
+    if diagnostics is not None:
+        diagnostics.extend(_verified_quote_outcomes(quote_order, quote_requests, quote_ranges, unique, result))
+        for group in priority_source_groups:
+            wanted = set(group)
+            ranges: list[tuple[str, int, int, str]] = []
+            parents = []
+            for key, record in ordered:
+                if not (member_keys[key] | child_keys[key]) & wanted:
+                    continue
+                parent_id = str(getattr(record, "chunk_uid", "") or record.id)
+                parents.append(parent_id)
+                for a, b, child in child_locations[key]:
+                    ids = {str(getattr(child, attr, "")) for attr in ("chunk_uid", "chunk_id", "id")}
+                    if (member_keys[key] | ids) & wanted:
+                        ranges.append((parent_id, a, b, str(getattr(child, "chunk_uid", "") or child.id)))
+                if not child_locations[key] and member_keys[key] & wanted:
+                    ranges.append((parent_id, 0, len(record.text), ""))
+            ranges = list(dict.fromkeys(ranges))
+            physical = _union_source_ranges([(parent, a, b) for parent, a, b, _child in ranges])
+            required_chars = sum(b - a for _parent, a, b in physical)
+            covered = _union_source_ranges(
+                [
+                    (parent, max(a, span["start"]), min(b, span["end"]))
+                    for parent, a, b in physical
+                    for span in result
+                    if span["source_id"] == parent and max(a, span["start"]) < min(b, span["end"])
+                ]
+            )
+            selected_chars = sum(b - a for _parent, a, b in covered)
+            diagnostics.append(
+                {
+                    "stage": "selected",
+                    "requested_source_ids": list(group),
+                    "matched_parent_ids": list(dict.fromkeys(parents)),
+                    "located_child_ids": list(dict.fromkeys(child for _parent, _a, _b, child in ranges if child)),
+                    "body_status": "unlocated"
+                    if not ranges
+                    else "complete"
+                    if selected_chars == required_chars
+                    else "partial"
+                    if selected_chars
+                    else "missing",
+                    "selected_chars": selected_chars,
+                    "required_chars": required_chars,
+                }
+            )
+    return result
+
+
+def _verified_quote_outcomes(
+    order: Sequence[tuple[str, str]],
+    requests: Mapping[str, Sequence[tuple[str, str]]],
+    ranges: Mapping[tuple[str, str], tuple[int, int]],
+    records: Mapping[str, Any],
+    spans: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """評価が写しを確かめた原文が、生成の根拠の span に入ったか（入らなければ理由）を写しごとに返す。本文は含めない。"""
+    parent_of = {item: key for key, items in requests.items() for item in items}
+    outcomes = []
+    for item in order:
+        key = parent_of.get(item)
+        entry: dict[str, Any] = {"stage": "verified_quote", "source_id": item[0], "quote_chars": len(item[1])}
+        if key is None:
+            outcomes.append({**entry, "status": "source_not_in_generation_records"})
+            continue
+        parent_id = str(getattr(records[key], "chunk_uid", "") or records[key].id)
+        entry["parent_id"] = parent_id
+        if item not in ranges:
+            outcomes.append({**entry, "status": "quote_not_in_source_text"})
+            continue
+        start, end = ranges[item]
+        own = [span for span in spans if span["source_id"] == parent_id]
+        if any(span["start"] <= start and end <= span["end"] for span in own):
+            status = "included"
+        elif any(span["start"] < end and start < span["end"] for span in own):
+            status = "split_across_spans"
+        else:
+            status = "excluded_by_budget"
+        outcomes.append({**entry, "start": start, "end": end, "status": status})
+    return outcomes
 
 
 def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -518,7 +870,17 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     # page_end も一致条件に入れる。頁を確定できた span（page_end == page）と、親の範囲のままの span を
     # つなぐと、確定していない側まで 1 頁に決まったように見えてしまう。
-    same = ("source_id", "origin", "page", "page_end", "section_path", "excerpt_only", "value_context", "scope_source_ids")
+    same = (
+        "source_context",
+        "source_id",
+        "origin",
+        "page",
+        "page_end",
+        "section_path",
+        "excerpt_only",
+        "value_context",
+        "scope_source_ids",
+    )
 
     def joinable(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return left["end"] == right["start"] and "answer_context" not in right and all(left.get(key) == right.get(key) for key in same)
@@ -545,6 +907,8 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
             text = previous["text"] + span["text"]
             if ranges := _merged_child_ranges(previous.get("child_ranges"), span.get("child_ranges")):
                 previous["child_ranges"] = ranges
+            if span.get(ARTICLE_CATALOG_KEY):
+                previous[ARTICLE_CATALOG_KEY] = True
             previous.update(
                 text=text,
                 end=span["end"],

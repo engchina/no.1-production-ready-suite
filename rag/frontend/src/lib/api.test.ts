@@ -48,6 +48,38 @@ describe("api.request envelope", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/ready/database", expect.anything());
   });
 
+  it("ファイル準備の保存は JSON の Content-Type と変換方式を送る", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ data: { profile: "office_to_pdf" }, error_messages: [], warning_messages: [] })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.updatePreprocessSettings({ profile: "office_to_pdf" });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/settings/preprocess");
+    expect(init.method).toBe("PATCH");
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(init.body as string)).toEqual({ profile: "office_to_pdf" });
+    expect(result.profile).toBe("office_to_pdf");
+  });
+
+  it.each([true, false])("実体・別名索引の保存は JSON の Content-Type と構築の選択 %s を送る", async (enabled) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ data: { enabled }, error_messages: [], warning_messages: [] })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.updateEntityIndexSettings({ enabled });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/settings/entity-index");
+    expect(init.method).toBe("PATCH");
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(init.body as string)).toEqual({ enabled });
+    expect(result.enabled).toBe(enabled);
+  });
+
   it("エラー時は error_messages を持つ ApiError を投げる", async () => {
     vi.stubGlobal(
       "fetch",
@@ -179,21 +211,21 @@ describe("api.request envelope", () => {
   );
 
   // Issue 2065: 評価リクエストの Excel の検証は multipart（ファイルと KB の ID）で送る。
-  it("importEvaluationCases はファイルとナレッジベースを multipart で送る", async () => {
+  it("importEvaluationCases はファイルと検索・回答プロファイルを multipart で送る", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({ data: { file_name: "cases.xlsx", cases: [] }, error_messages: [], warning_messages: [] })
     );
     vi.stubGlobal("fetch", fetchMock);
     const file = new File(["x"], "cases.xlsx");
 
-    await api.importEvaluationCases(file, ["kb-1", "kb-2"]);
+    await api.importEvaluationCases(file, "profile-1");
 
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe("/api/evaluation/cases/import");
     expect(init.method).toBe("POST");
     const body = init.body as FormData;
     expect(body.get("file")).toBeInstanceOf(File);
-    expect(body.getAll("knowledge_base_ids")).toEqual(["kb-1", "kb-2"]);
+    expect(body.getAll("search_answer_profile_id")).toEqual(["profile-1"]);
   });
 
   it("downloadEvaluationTemplate はファイルとファイル名を返し、失敗は ApiError にする", async () => {
@@ -219,7 +251,7 @@ describe("api.request envelope", () => {
     await expect(api.downloadEvaluationTemplate()).rejects.toMatchObject({ status: 403 });
   });
 
-  it("downloadEvaluationTemplate は選んだナレッジベースを query に入れる（Issue 2086）", async () => {
+  it("downloadEvaluationTemplate は選んだ検索・回答プロファイルを query に入れる（Issue 2086）", async () => {
     const fetchMock = vi.fn().mockImplementation(
       async () =>
         new Response("xlsx", {
@@ -229,10 +261,10 @@ describe("api.request envelope", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.downloadEvaluationTemplate(["kb-1", "kb 2"]);
+    await api.downloadEvaluationTemplate("profile 1");
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/evaluation/cases/template?knowledge_base_ids=kb-1&knowledge_base_ids=kb+2"
+      "/api/evaluation/cases/template?search_answer_profile_id=profile+1"
     );
   });
 
@@ -507,7 +539,6 @@ describe("api.request envelope", () => {
     await api.previewDocumentRecipeChunks("doc-1", "recipe-1", {
       chunking_strategy: "recursive_character",
       chunk_size: 640,
-      chunk_context_header_enabled: true,
     });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
@@ -517,7 +548,6 @@ describe("api.request envelope", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       chunking_strategy: "recursive_character",
       chunk_size: 640,
-      chunk_context_header_enabled: true,
     });
   });
 
@@ -1163,7 +1193,7 @@ describe("api.services", () => {
       jsonResponse({
         data: {
           control_enabled: true,
-          deployment_mode: "dev",
+          deployment_mode: "local",
           services: [
             {
               service_id: "parser-docling",
@@ -1183,7 +1213,7 @@ describe("api.services", () => {
 
     const result = await api.getServiceCatalog();
 
-    expect(result.deployment_mode).toBe("dev");
+    expect(result.deployment_mode).toBe("local");
     expect(result.services[0].service_id).toBe("parser-docling");
     expect(fetchMock).toHaveBeenCalledWith("/api/services/catalog", expect.anything());
   });
@@ -1556,4 +1586,15 @@ describe("document delete confirmation", () => {
     await vi.advanceTimersByTimeAsync(14_999);
     expect((await pending).id).toBe("doc-1");
   });
+});
+
+
+it("結果 Excel の取得は job ID と入力を POST し、ファイル名を保持する", async () => {
+  const fetchMock=vi.fn().mockResolvedValue(new Response("xlsx",{status:200,headers:{"Content-Disposition":'attachment; filename="evaluation_results.xlsx"'}}));
+  vi.stubGlobal("fetch",fetchMock);
+  const body={rows:[],cases:[],profile_name:"プロファイル A",compare_profile_name:null};
+  const file=await api.downloadEvaluationResults("job/1",body);
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/evaluation/jobs/job%2F1/results.xlsx");
+  expect(fetchMock.mock.calls[0][1]).toMatchObject({method:"POST",body:JSON.stringify(body),credentials:"same-origin"});
+  expect(file.fileName).toBe("evaluation_results.xlsx");
 });

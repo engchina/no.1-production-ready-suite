@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_parser_core.extraction import StructuredExtraction
+from rag_parser_core.parsed_table import PARSED_TABLE_GRID_KEY, parsed_table_bindings
 
 from app import extraction as extraction_module
 from app.extraction import LAYOUT_ARTIFACT, layout_to_extraction
@@ -66,6 +67,65 @@ def test_layout_records_map_to_elements_tables_assets_and_layout_artifact() -> N
     assert isinstance(layout, dict)
     assert [record["id"] for record in layout["records"]] == [r.id for r in records]
     assert "image_path" not in layout["pages"][0]
+
+
+def _grid_cell(row: int, col: int, text: str, **extra: object) -> dict[str, object]:
+    row_span = int(extra.pop("row_span", 1))  # type: ignore[call-overload]
+    col_span = int(extra.pop("col_span", 1))  # type: ignore[call-overload]
+    return {
+        "start_row_offset_idx": row,
+        "end_row_offset_idx": row + row_span,
+        "start_col_offset_idx": col,
+        "end_col_offset_idx": col + col_span,
+        "text": text,
+        **extra,
+    }
+
+
+def test_table_cells_are_the_docling_grid_and_bind_to_the_table_text() -> None:
+    """表のセルは Docling の格子で、本文の行と対応する(#3429)。
+
+    結合セルは左上の 1 つ、列の見出しの印と、1 頁の表のセルの領域を持つ。
+    """
+    page = PageImage(
+        page=1, width=1000, height=1400, pdf_width=600, pdf_height=840, image_path="/x.png"
+    )
+    html = (
+        '<table><tr><th rowspan="2">Item</th><th colspan="2">H1</th></tr>'
+        "<tr><th>Plan</th><th>Actual</th></tr><tr><td>Alpha</td><td>10</td><td>11</td></tr></table>"
+    )
+    raw = {
+        "data": {
+            "table_cells": [
+                _grid_cell(0, 0, "Item", row_span=2, column_header=True),
+                _grid_cell(0, 1, "H1", col_span=2, column_header=True),
+                _grid_cell(1, 1, "Plan", column_header=True),
+                _grid_cell(1, 2, "Actual", column_header=True),
+                _grid_cell(2, 0, "Alpha", row_header=True),
+                _grid_cell(2, 1, "10"),
+                _grid_cell(2, 2, "11"),
+            ]
+        },
+        "table_cell_bboxes": [{"row": 2, "col": 1, "bbox": [10.0, 20.0, 30.0, 40.0]}],
+    }
+    extraction = layout_to_extraction(
+        [_record("docling-p1-1", "Table", html, **raw), _record("docling-p1-2", "Table", "x")],
+        [page],
+        source_page_count=1,
+    )
+
+    grid, plain = extraction.tables
+    assert grid.metadata[PARSED_TABLE_GRID_KEY] == 1
+    assert [(c.row, c.col, c.row_span, c.col_span) for c in grid.cells[:2]] == [
+        (0, 0, 2, 1),
+        (0, 1, 1, 2),
+    ]
+    assert grid.cells[0].metadata == {"column_header": True}
+    assert grid.cells[5].bbox == [10.0, 20.0, 30.0, 40.0]
+    # 格子の無い表(セルの無い表)は格子の印を付けない。
+    assert PARSED_TABLE_GRID_KEY not in plain.metadata and plain.cells == []
+    binding = parsed_table_bindings(extraction)["docling-p1-1"]
+    assert (binding.table_index, binding.text_rows, binding.grid.header_rows) == (1, (1, 2, 3), 2)
 
 
 def test_element_section_paths_follow_heading_numbers_like_chunks() -> None:

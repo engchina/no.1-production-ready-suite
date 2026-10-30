@@ -604,7 +604,7 @@ def test_legacy_publish_checks_profile_before_recovery(monkeypatch: pytest.Monke
     from app.features.nl2sql.ontology_models import OntologyPublishJob
     from app.settings import get_settings
 
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", True)
+    monkeypatch.setattr(get_settings(), "auth_mode", "authenticated")
     job = OntologyPublishJob(
         id="publish-other", revision_id="revision", requested_etag="etag", profile_id="profile-b"
     )

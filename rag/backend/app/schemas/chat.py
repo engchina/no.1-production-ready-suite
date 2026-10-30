@@ -11,8 +11,9 @@ from typing import Any, Literal
 from pr_system_settings.chat_attachments import ChatAttachmentReference
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.search import RetrievedChunk
+from app.schemas.search import SEARCH_TOP_K_MAX, RetrievedChunk
 from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
+from app.search_defaults import search_top_k_default, search_top_k_schema
 
 
 class ConversationStatus(StrEnum):
@@ -97,6 +98,11 @@ class ChatMessage(BaseModel):
     passage_marks: list[dict[str, Any]] = Field(default_factory=list)
     removed_passages: list[dict[str, Any]] = Field(default_factory=list)
     answer_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    # 回答のモデル（``model``）へ添付した根拠の画像の件数（ASSISTANT の終わった回答だけ。回答の
+    # 記録の診断の ``models.attached_images``。#3444）。1 件以上なら回答の見出しに「画像も参照」を
+    # 出す。
+    # 画像を添付しなかった回答・記録の無い回答は 0。
+    answer_attached_images: int = 0
 
 
 class ChatAnswerCancelResult(BaseModel):
@@ -175,10 +181,17 @@ class ChatMessageRequest(BaseModel):
     """会話へのメッセージ送信リクエスト。"""
 
     content: str = Field(..., min_length=1, max_length=8000)
+    question_context_token: str | None = Field(default=None, min_length=1, max_length=300000)
     # 複数指定でマルチモデル比較(設定済み OCI モデル間)。空なら既定モデル 1 系統。
     model_ids: list[str] = Field(default_factory=list, max_length=5)
     # 旧 standard の検索モード(``mode``)は #595 で削除した。送られても読み捨てる。
-    top_k: int = Field(default=20, ge=1, le=100)
+    # 検索する件数。チャットの画面は送らず、RAG 検索の既定と同じ値を使う(#3512)。
+    top_k: int = Field(
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+    )
     # 利用者が選んだ類似の承認済み FAQ の id(#684)。b
     # ackend が検索・回答プロファイルの FAQ から引き直し、
     #

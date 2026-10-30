@@ -106,8 +106,9 @@ def test_state_prefers_unverified_and_reasons_are_merged_per_passage():
 
 
 def _run_example(step_review: str = "supported"):
+    question = "①設定を変更する手順を教えてください。②区分Ⅱで選ぶ選択肢の値を教えてください。"
     ctx = context(record(0, STEPS, "設定-(1)変更"), record(1, TABLE, "設定-(2)区分", page=21))
-    found = ids(ctx, QUESTION)
+    found = ids(ctx, question)
     steps, table = found[STEPS], found[TABLE]
     value = draft(
         item(steps, "対象の行の終了日を入力します。", "①対象の行の終了日を入力します。", request_id="Q1"),
@@ -123,22 +124,26 @@ def _run_example(step_review: str = "supported"):
         (3, "supported", "matched", ""),
         requests=[("Q1", "addressed"), ("Q2", "addressed")],
     )
-    return run(FakeModel([value], [review]), ctx, QUESTION).response
+    review["summary_basis"] = ["対象の行の終了日を入力します。", "新しい開始日の行を追加します。"]
+    return run(FakeModel([value], [review]), ctx, question).response
 
 
-def test_contradicted_and_table_mismatched_items_are_removed():
-    """監査が矛盾とした説明と、根拠の表の対応を取り違えた説明を外し、表の正しい対応を理由に出す（#2998）。"""
+def test_only_deterministic_table_conflict_is_removed_while_semantic_contradiction_is_observed():
+    """未校正の矛盾は診断へ残し、確定的な表の対応誤りは引き続き外す。"""
     result = _run_example()
     record = {key: result.envelope[key] for key in ("passage_marks", "removed_passages", "answer_warnings")}
     _assert_contract_shape(record)
     labels = answer_labels()
     body = result.answer_text.split(labels.removed_section, 1)[0]
     assert result.answer_text.startswith(SUMMARY)
+    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
     assert "対象の行の終了日を入力します。" in body and "新しい開始日の行を追加します。" in body
-    assert "変更は翌月から反映されます。" not in body
+    assert "変更は翌月から反映されます。" in body
     assert "区分Ⅱの選択肢の値は 01 です。" not in body
-    removed, table = record["removed_passages"]
-    assert removed == {"text": "変更は翌月から反映されます。", "reasons": [{"code": "contradicted", "label": "根拠と矛盾", "detail": "r"}]}
+    [table] = record["removed_passages"]
+    observed = result.generation_trace["semantic_audit_observation"]["audit"]
+    assert observed["reviews"][2]["support"] == "contradicted"
+    assert result.generation_trace["rounds"][0]["validation_dimensions"]["claim_support"]["items"][2]["status"] == "unknown"
     assert table["text"] == "区分Ⅱの選択肢の値は 01 です。"
     assert [reason["code"] for reason in table["reasons"]] == ["contradicted"]
     assert table["reasons"][0]["detail"].startswith("根拠の表では『区分Ⅱ』の値は『02』（『01』は別の行の値）です。")
@@ -147,24 +152,27 @@ def test_contradicted_and_table_mismatched_items_are_removed():
     assert labels.removed_section in result.answer_text and "「区分Ⅱの選択肢の値は 01 です。」" in result.answer_text
     assert result.envelope["outcome"] == "conditional"
     assert result.generation_trace["finalization"]["passage_mark_counts"] == {
-        "removed": 2,
+        "removed": 1,
         "unverified": 0,
         "warning": 0,
         "answer_warnings": 0,
     }
 
 
-def test_unverified_step_stays_in_the_body_with_a_mark():
+def test_unverified_semantic_observation_keeps_body_without_a_new_mark():
     result = _run_example(step_review="unsupported")
     marks = {mark["text"]: mark for mark in result.envelope["passage_marks"]}
-    assert marks["・対象の行の終了日を入力します。"]["state"] == "unverified"
+    assert "・対象の行の終了日を入力します。" not in marks
+    observed = result.generation_trace["semantic_audit_observation"]["audit"]
+    assert observed["reviews"][0]["support"] == "unsupported"
+    assert result.generation_trace["rounds"][0]["validation_dimensions"]["claim_support"]["items"][0]["status"] == "unknown"
     assert "・対象の行の終了日を入力します。" in result.answer_text
     # 印の段落の根拠は、確かめた段落の根拠と同じなので確認済み（表の対応を取り違えた説明は外したので、その根拠は使わない）。
     assert {entry["answer_use"] for entry in result.cited_evidence} == {"confirmed"}
 
 
-def test_off_goal_keeps_the_body_and_warns_the_whole_answer():
-    """契約の例 guide-error-keeps-body と同じ形: 回答全体の警告を出し、本文は定型文に置き換えない。"""
+def test_uncalibrated_off_goal_keeps_body_and_only_records_the_observation():
+    """目的の意味判定だけで本文や警告を変えず、原観察を残す。"""
     ctx = context(record(0, STEPS, "設定-(1)変更"))
     eid = ids(ctx, QUESTION)[STEPS]
     value = draft(
@@ -176,8 +184,11 @@ def test_off_goal_keeps_the_body_and_warns_the_whole_answer():
     result = run(FakeModel([value], [off]), ctx, QUESTION).response
     passages = {key: result.envelope[key] for key in ("passage_marks", "removed_passages", "answer_warnings")}
     _assert_contract_shape(passages)
-    assert [warning["code"] for warning in passages["answer_warnings"]] == ["off_goal"]
-    assert [(mark["text"], mark["state"]) for mark in passages["passage_marks"]] == [("・登録後は自動で通知されます。", "unverified")]
+    assert passages["answer_warnings"] == []
+    assert passages["passage_marks"] == []
+    assert "登録後は自動で通知されます。" in result.answer_text
+    assert result.generation_trace["semantic_audit_observation"]["audit"]["goal_alignment"] == "off_target"
+    assert result.generation_trace["finalization"]["off_goal"] is False
     assert "対象の行の終了日を入力します。" in result.answer_text
     assert result.envelope["outcome"] == "conditional"
 
@@ -221,3 +232,18 @@ def test_validation_verdicts_map_to_contract_codes(status, support_check, expect
     code = claim_mark_code(status, support_check)
     assert code == expected
     assert not code or code in CODES
+
+
+def test_legacy_language_labels_fall_back_for_new_citation_causes():
+    from rag_parser_core.language import bind_pack, build_pack, builtin_pack
+
+    raw = builtin_pack().to_dict()
+    raw["answer_labels"]["passage_reason_labels"] = [
+        value
+        for value in raw["answer_labels"]["passage_reason_labels"]
+        if not value.split("=", 1)[1].startswith("citation_") or value.endswith("=citation_error")
+    ]
+    with bind_pack(build_pack(raw)):
+        result = passage_marks.reason("citation_extraction_failed")
+    assert result["label"] == CODES["citation_extraction_failed"]["label"]
+    assert passage_marks.passage_mark("合成の説明。", [result])["state"] == "unverified"

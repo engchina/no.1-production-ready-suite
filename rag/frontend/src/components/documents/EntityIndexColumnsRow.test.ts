@@ -7,8 +7,8 @@ import {
   entityColumnsSummary,
 } from "./EntityIndexColumnsRow";
 
-// #1388: 文書レシピの「名称・別名の索引の列」。
-describe("名称・別名の索引の列", () => {
+// #1388: 文書レシピの「実体・別名索引の列」。
+describe("実体・別名索引の列", () => {
   it("継承の値を、空欄は「列名で決める」として要約する", () => {
     expect(entityColumnsSummary(null)).toBe("名前の列: 列名で決める · 属性の列: 列名で決める");
     expect(

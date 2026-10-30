@@ -73,6 +73,8 @@ export interface DataTableProps<T> {
    * 2 行セルなどで行高が変わっても N 行ちょうどが見える（固定 rem の計算は行高が変わると行数がずれる）。
    */
   visibleRows?: DataTableVisibleRows;
+  /** desktop ではページ送りの領域を残し、表示行数の高さから画面の余白へ拡張する。 */
+  growToViewport?: boolean;
   /** 縦横のスクロールを親に任せる（全高のシートの本文など）。 */
   scrollWithinParent?: boolean;
   /** visibleRows 未満の行数でも N 行分の高さを確保する（最後の行の高さで補う）。 */
@@ -235,6 +237,7 @@ export function DataTable<T>({
   dense,
   stickyHeader,
   visibleRows,
+  growToViewport = false,
   scrollWithinParent = false,
   fillVisibleRows,
   className,
@@ -274,7 +277,7 @@ export function DataTable<T>({
       rowBottoms.push(row.getBoundingClientRect().bottom);
     }
     const chrome = scroller.offsetHeight - scroller.clientHeight;
-    const next = measureVisibleRowsHeight({
+    let next = measureVisibleRowsHeight({
       tableTop,
       headerBottom: header?.bottom ?? tableTop,
       rowBottoms,
@@ -282,11 +285,24 @@ export function DataTable<T>({
       chrome,
       fill: Boolean(fillVisibleRows),
     });
+    if (growToViewport && isMd && next != null) {
+      // 復元済みのページスクロールを高さの余白と取り違えない。
+      let pageScroll = window.scrollY;
+      for (let parent = scroller.parentElement; parent; parent = parent.parentElement) {
+        if (/auto|scroll/.test(getComputedStyle(parent).overflowY)) {
+          pageScroll += parent.scrollTop;
+        }
+      }
+      const rootRem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
+      // ページ送りと PageBody の下余白に 6rem を確保する。
+      const available = window.innerHeight - scroller.getBoundingClientRect().top - pageScroll - 6 * rootRem;
+      next = Math.max(next, available);
+    }
     setMeasuredHeight((current) => {
       const stable = stabilizeMeasuredHeight(current, next);
       return stable === current ? current : stable;
     });
-  }, [rowLimit, fillVisibleRows]);
+  }, [rowLimit, fillVisibleRows, growToViewport, isMd]);
 
   useLayoutEffect(() => {
     measure();
@@ -299,7 +315,11 @@ export function DataTable<T>({
     });
     if (tableRef.current) observer.observe(tableRef.current);
     if (scroller) observer.observe(scroller);
-    return () => observer.disconnect();
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
   }, [measure, rowLimit, rows, loading]);
 
   function toggleSort(key: string) {

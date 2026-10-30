@@ -257,6 +257,14 @@ def test_parser_makes_one_element_per_passage_with_boundaries() -> None:
     assert first.metadata["word_body_end"] == 4
     assert first.metadata["word_table_indices"] == "1"
     assert first.metadata["word_location_basis"] == "original"
+    # 1 つの表を含むまとまりは、その表の番号と行の範囲を持つ（#3262）。表の無いまとまりは持たない。
+    assert (
+        first.metadata["row_basis"],
+        first.metadata["table_index"],
+        first.metadata["table_row_start"],
+        first.metadata["table_row_end"],
+    ) == ("word_table", 1, 1, 3)
+    assert "row_basis" not in second.metadata and "table_index" not in second.metadata
     assert second.metadata["word_part_group"] == "s0002-content"
     assert (second.metadata["word_part_index"], second.metadata["word_part_count"]) == (1, 2)
     assert (second.metadata["word_part_body_start"], second.metadata["word_part_body_end"]) == (
@@ -283,3 +291,51 @@ def test_parser_rejects_oversized_word_record() -> None:
     result = run_external_adapter(BACKEND, dump_structured_records([*lines, big]), None, "")
     assert result.extraction is None
     assert any("record_too_large" in warning for warning in result.warnings)
+
+
+def _table_passage(record_id: str, tables: list[WordTable]) -> PassageLine:
+    return PassageLine(
+        record_id=record_id,
+        source_type="docx",
+        parent_id="s0001",
+        section_path=["1 概要"],
+        location=WordLocation(
+            body_start=10,
+            body_end=10 + len(tables),
+            table_indices=[table.table_index for table in tables],
+        ),
+        blocks=tables,
+    )
+
+
+def test_word_table_part_and_multiple_tables_rows() -> None:
+    """大きい表を分けた部分は元の表の行の範囲、複数の表のまとまりは行の範囲を持たない（#3262）。"""
+    header = ["列 1", "列 2"]
+    part = WordTable(
+        body_index=10,
+        table_index=3,
+        header_rows=1,
+        rows=[header, ["値 A", "1"], ["値 B", "2"]],
+        row_start=8,
+        row_end=9,
+    )
+    other = WordTable(
+        body_index=11, table_index=4, header_rows=0, rows=[["x", "y"]], row_start=1, row_end=1
+    )
+    lines: list[object] = [
+        *_word_lines()[:2],
+        _table_passage("p0101", [part]),
+        _table_passage("p0102", [part.model_copy(update={"body_index": 12}), other]),
+    ]
+    data = dump_structured_records(lines)  # type: ignore[arg-type]
+    result = run_external_adapter(BACKEND, data, None, "")
+    assert result.extraction is not None
+    single, multiple = result.extraction.elements
+    assert single.content_kind == "table"
+    assert (
+        single.metadata["row_basis"],
+        single.metadata["table_index"],
+        single.metadata["table_row_start"],
+        single.metadata["table_row_end"],
+    ) == ("word_table", 3, 8, 9)
+    assert not {"row_basis", "table_index", "table_row_start"} & set(multiple.metadata)

@@ -25,6 +25,7 @@ import {
   ChatSkeleton,
   useTraceDetailsLabels,
   ChatAnswer,
+  ChatAnswerBody,
   ChatPendingTurn,
   ChatTurn,
   EmptyState,
@@ -1132,20 +1133,25 @@ function RunChatTurn({
           <ClarificationCancelNote kinds={cancelledKinds} testId={`chat-clarification-cancelled-${run.id}`} />
         ) : null}
         {answer ? (
+          // 回答の本文の前に見出し「回答」を出す（本文の中の節の見出しと同じ書式。3 製品共通の ChatAnswerBody。#3433）。
+          // 回答が利用者への問い返しの文でも回答の本文なので同じ見出しにする（回答前の確認のカードは自分の見出しを持つ）。
           // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
           // 同じ共通の結果の表で出す（#1158）。表でない部分は見出し・太字・箇条書きなどを描く（#1808）。
-          // チャットの画面にはページの見出し（h1）の下の見出しが無いため、回答の見出しは h2 から始める。
-          answerBlocks ? (
-            <StructuredAnswer
-              runId={run.id}
-              blocks={answerBlocks}
-              evidence={evidence}
-              passages={passages}
-              testId={`chat-answer-${run.id}`}
-            />
-          ) : (
-            <AnswerBody text={answer} headingLevel={2} testId={`chat-answer-${run.id}`} />
-          )
+          // 見出し「回答」（h3。会話の名前 h2 の下）の下なので、回答の中の見出しは h4 から始める。
+          <ChatAnswerBody testId={`chat-answer-body-${run.id}`}>
+            {answerBlocks ? (
+              <StructuredAnswer
+                runId={run.id}
+                blocks={answerBlocks}
+                evidence={evidence}
+                passages={passages}
+                markdownHeadingLevel={4}
+                testId={`chat-answer-${run.id}`}
+              />
+            ) : (
+              <AnswerBody text={answer} headingLevel={4} testId={`chat-answer-${run.id}`} />
+            )}
+          </ChatAnswerBody>
         ) : null}
         {outputTable ? (
           <OutputResultTable data={outputTable} testId={`chat-output-${run.id}`} />

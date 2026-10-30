@@ -247,7 +247,8 @@ def test_limits_report_the_omitted_rules_and_terms(
         PROFILE: {
             "schema_version": 1,
             "rules": [
-                _rule(f"r{index}", "approved", content=long_content) for index in range(count)
+                _rule(f"r{index}", "approved", content=f"{long_content}{index}")
+                for index in range(count)
             ],
             "terms": [
                 {"term": f"合成手続きアルファ{index}", "description": "説明", "status": "approved"}
@@ -295,3 +296,30 @@ def test_load_failure_is_reported_and_the_evidence_is_still_returned(
     assert body["profile_knowledge"]["load_failed"] is True
     assert body["profile_knowledge"]["rules"] == []
     assert [item["chunk_id"] for item in body["evidence"]] == ["c1"]
+
+
+def test_retrieved_profile_rules_only_include_adopted_generation_instructions(
+    auth: ProductionAuth, searches: list[SearchRequest]
+) -> None:
+    """確認だけの内容と未解決の排他指示を、呼び出し元の生成へ渡さない。"""
+    _KnowledgeOracle.knowledge = {
+        PROFILE: {
+            "schema_version": 1,
+            "rules": [
+                {
+                    **_rule("confirm", "approved"),
+                    "purpose": "confirmation",
+                    "clarification": {"question": "対象は？", "options": []},
+                },
+                {**_rule("a", "approved", content="指示 A"), "exclusive_group": "g"},
+                {**_rule("b", "approved", content="指示 B"), "exclusive_group": "g"},
+                _rule("generation", "approved", content="資料を確認する。"),
+            ],
+            "terms": [],
+        }
+    }
+    knowledge = _retrieve(auth, query="期限", planning="caller", original_question=QUESTION)[
+        "profile_knowledge"
+    ]
+    assert [rule["id"] for rule in knowledge["rules"]] == ["generation"]
+    assert knowledge["rules_omitted"] == 0

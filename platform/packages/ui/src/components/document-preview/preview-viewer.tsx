@@ -103,6 +103,8 @@ export function PreviewViewer({
   pages,
   fileName,
   focusPage = null,
+  onPageChange,
+  focusRequestKey = null,
   highlights = [],
   kind,
   sizing = "fill",
@@ -112,6 +114,10 @@ export function PreviewViewer({
   pages: PreviewViewerPage[];
   fileName: string;
   focusPage?: number | null;
+  /** 同じページへの再移動を識別する任意のキー。 */
+  focusRequestKey?: string | null;
+  /** 表示中の実ページ番号を通知する。初期表示・ページ送り・出典への移動を含む。 */
+  onPageChange?: (page: number) => void;
   highlights?: PreviewHighlight[];
   /** image は画像ファイルそのもの（強調の基準寸法が無いときは画像の実寸 px を使う）。 */
   kind: "image" | "pdf";
@@ -144,8 +150,8 @@ export function PreviewViewer({
   const pageNumbers = useMemo(() => pages.map((page) => page.pageNumber), [pages]);
   const highlightPageNumbers = useMemo(() => highlightPages(highlights), [highlights]);
   const highlightKey = useMemo(
-    () => `${focusPage ?? ""}|${highlights.map((highlight) => highlight.key).join("|")}`,
-    [focusPage, highlights]
+    () => `${focusRequestKey ?? ""}|${focusPage ?? ""}|${highlights.map((highlight) => highlight.key).join("|")}`,
+    [focusRequestKey, focusPage, highlights]
   );
   const initialPage = preferredPage(focusPage, highlightPageNumbers, pageNumbers);
   const [currentPage, setCurrentPage] = useState<number>(initialPage);
@@ -159,6 +165,9 @@ export function PreviewViewer({
   const pageIndex = Math.max(0, pageNumbers.indexOf(currentPage));
   const page = pages[pageIndex] ?? pages[0];
   const pageNumber = page?.pageNumber ?? 1;
+  useEffect(() => {
+    if (pages.length) onPageChange?.(pageNumber);
+  }, [pageNumber, pages.length, onPageChange]);
   const rotation = rotations[pageNumber] ?? 0;
   const natural = naturalSizes[pageNumber] ?? null;
   const points = page?.points ?? null;

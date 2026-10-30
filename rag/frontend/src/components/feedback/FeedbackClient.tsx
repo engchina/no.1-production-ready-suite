@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   PageBody,
   Tabs,
@@ -26,22 +27,26 @@ import {
   TimedLoadingState,
   adjacentListItems,
   useConfirm,
-  useListDetailSplit,
+  ViewportScrollRegion,
+  EvidenceSourceButton,
+  useEvidenceSource,
   useUrlSelection,
   INFORMATION_TABLE_ROW_CLASS,
 } from "@production-ready/ui";
 import {
   BookmarkPlus,
   ClipboardList,
-  ExternalLink,
   FileText,
   MessageSquareText,
+  RefreshCw,
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { CitationSourceSheet } from "@/components/search/CitationSourceSheet";
+import { EVIDENCE_LABELS } from "@/components/search/citation-evidence";
 import { EmptyState, ErrorState } from "@/components/StateViews";
 import { RAG_LIST_DETAIL_STORAGE_PREFIX } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
@@ -50,6 +55,7 @@ import {
   ApiError,
   type CitationFeedbackRating,
   type FeedbackDetail,
+  type FeedbackCitationSnapshot,
   type FeedbackItem,
   type FeedbackSummary,
 } from "@/lib/api";
@@ -98,8 +104,11 @@ export function FeedbackClient() {
   const urlState = useMemo(() => parseFeedbackUrl(searchParams), [searchParams]);
   // B 型の選択は URL の `feedback` が唯一の情報源（共有の useUrlSelection。#2283）。先頭の行を自動で選ばない。
   // 1 ペイン（xl 未満）で一覧から詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
-  const split = useListDetailSplit();
-  const selection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: !split });
+  // URL が先に更新された直後も、古い行の callback でページ条件を巻き戻さない。
+  const setSelectionSearchParams = useCallback((next: (previous: URLSearchParams) => URLSearchParams, options?: { replace?: boolean }) => {
+    setSearchParams(next(new URLSearchParams(window.location.search)), options);
+  }, [setSearchParams]);
+  const selection = useUrlSelection({ param: "feedback", searchParams, setSearchParams: setSelectionSearchParams, singlePane: true });
   const selectedId = selection.selectedId;
   const params = useMemo(() => feedbackListParams(urlState), [urlState]);
   const query = useFeedbackDashboard(params);
@@ -210,9 +219,10 @@ export function FeedbackClient() {
         wide
         title={t("feedback.page.title")}
         subtitle={t("feedback.page.subtitle")}
-        // 1 ペイン（xl 未満）で詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
+        actions={selectedId ? [] : [{ id: "refresh", kind: "utility", label: t("feedback.page.refresh"), icon: RefreshCw, loading: query.isFetching, onClick: () => void query.refetch() }]}
+        // 詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
         back={
-          !split && selectedId
+          selectedId
             ? {
                 label: t("common.backToList"),
                 ariaLabel: t("editor.backToListOf", { list: t("feedback.list.title") }),
@@ -223,6 +233,7 @@ export function FeedbackClient() {
         }
       />
       <PageBody wide>
+        {!selectedId ? <>
         <Banner
           severity="info"
           title={t(seesAllUsers ? "feedback.scope.allTitle" : "feedback.scope.ownTitle")}
@@ -264,9 +275,13 @@ export function FeedbackClient() {
                 value={urlState.searchAnswerProfileId}
                 options={searchAnswerProfileOptions}
                 onValueChange={(value) => setParam("search_answer_profile", value)}
-                // 対象の選択（長い名前）。
-                width="lg"
+                // 一段目の検索・期間と同じ行に収める。全文は共通の選択欄で確認できる。
+                width="md"
               />
+            </>
+          }
+          secondaryFilters={
+            <>
               <FilterSelect
                 id="feedback-target"
                 label={t("feedback.filters.target")}
@@ -310,6 +325,7 @@ export function FeedbackClient() {
           count={listCountProps({ matchedTotal: page?.total, filtered, allTotal: allTotal.data })}
           testId="feedback-filters-toolbar"
         />
+        </> : null}
 
         {query.isLoading ? (
           <TimedLoadingState
@@ -323,16 +339,17 @@ export function FeedbackClient() {
                 <Skeleton key={index} className="h-24" />
               ))}
             </div>
-            <TableSkeleton columns={1} />
+            <TableSkeleton columns={6} />
           </TimedLoadingState>
         ) : query.isError ? (
           <ErrorState message={t("feedback.page.loadError")} onRetry={() => void query.refetch()} />
         ) : data ? (
           <>
-            <SummaryPanel summary={data.summary} previous={data.previous_summary} />
+            {!selectedId ? <SummaryPanel summary={data.summary} previous={data.previous_summary} /> : null}
             {items.length || selectedId ? (
-              // B 型の一覧 + 詳細（共有 ListDetailLayout。#2283）。xl 以上は「狭い一覧 | 広い詳細」、xl 未満は 1 ペイン。
+              // 長い質問と根拠を読むため、すべての幅で一覧から全幅の詳細へ切り替える。
               <ListDetailLayout
+                layout="single"
                 id={LIST_DETAIL_ID}
                 listLabel={t("feedback.list.title")}
                 detailLabel={t("feedback.detail.title")}
@@ -434,8 +451,7 @@ function QuestionMeta({ item }: { item: FeedbackItem }) {
 }
 
 /**
- * 一覧の列（ListDetailLayout の狭い列）の行。問題の概要（2 行まで）と補足 1 行だけにし、列の多い表にしない
- * （page-archetypes.md §1 B「一覧の行」）。行の高さは列の残りの高さで、列の中を縦にスクロールする。
+ * 全幅の比較一覧。desktop は評価の項目を列で比較し、狭い画面は質問の下へ摘要をまとめる。
  */
 function FeedbackList({
   items,
@@ -454,11 +470,18 @@ function FeedbackList({
           header: t("feedback.table.question"),
           rowHeader: true,
           className: "py-2.5 align-top",
+          headerClassName: "lg:w-[28%]",
           render: (item) => (
             <RowTitleButton
               title={questionSummary(item)}
               maxLines={2}
-              subtitle={<QuestionMeta item={item} />}
+              subtitle={<>
+                <span className="hidden lg:block truncate text-xs text-fg-muted">{item.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")}</span>
+                <span className="lg:hidden"><QuestionMeta item={item} />
+                  <span className="mt-1 block text-xs text-fg-muted">{t(`feedback.target.${item.target_type}`)}{item.reason ? ` · ${t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}` : ""}</span>
+                  {item.comment_preview ? <span className="mt-1 line-clamp-2 text-xs text-fg-muted">{item.comment_preview}</span> : null}
+                </span>
+              </>}
               current={item.feedback_id === selectedId}
               aria-label={t("feedback.list.selectNamed", { name: questionSummary(item) })}
               onClick={() => onSelect(item.feedback_id)}
@@ -466,6 +489,11 @@ function FeedbackList({
             />
           ),
         },
+        { key: "target", header: t("feedback.filters.target"), headerClassName: "hidden lg:table-cell lg:w-[8%]", className: "hidden lg:table-cell align-top", render: (item) => t(`feedback.target.${item.target_type}`) },
+        { key: "rating", header: t("feedback.filters.rating"), headerClassName: "hidden lg:table-cell lg:w-[18%]", className: "hidden lg:table-cell align-top", render: (item) => <RatingBadge rating={item.rating} /> },
+        { key: "reason", header: t("feedback.detail.reason"), headerClassName: "hidden lg:table-cell lg:w-[16%]", className: "hidden lg:table-cell align-top", render: (item) => item.reason ? <span className="line-clamp-2" title={t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}>{t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}</span> : "—" },
+        { key: "comment", header: t("feedback.detail.comment"), headerClassName: "hidden lg:table-cell lg:w-[16%]", className: "hidden lg:table-cell align-top", render: (item) => <span className="line-clamp-2" title={item.comment_preview ?? undefined}>{item.comment_preview ?? (item.has_comment ? t("feedback.list.hasComment") : "—")}</span> },
+        { key: "date", header: t("feedback.table.date"), headerClassName: "hidden lg:table-cell lg:w-[14%]", className: "hidden lg:table-cell align-top tabular-nums", render: (item) => formatDateTime(item.created_at) },
       ]}
       rows={items}
       getRowKey={(item) => item.feedback_id}
@@ -537,12 +565,12 @@ function FeedbackDetailPanel({ feedbackId }: { feedbackId: string }) {
 function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previous: FeedbackSummary | null }) {
   return (
     <Card>
-      <CardContent className="grid gap-4 pt-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+      <CardContent className="grid gap-3 py-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
         <section aria-labelledby="feedback-summary-heading">
-          <h2 id="feedback-summary-heading" className="mb-3 text-sm font-semibold text-fg">
+          <h2 id="feedback-summary-heading" className="mb-2 text-sm font-semibold text-fg">
             {t("feedback.summary.title")}
           </h2>
-          <div className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
             <Metric label={t("feedback.summary.total")} value={formatNumber(summary.total)} delta={countDelta(summary.total, previous?.total)} />
             <Metric label={t("feedback.summary.helpfulRate")} value={formatRate(summary.helpful_rate)} delta={rateDelta(summary.helpful_rate, previous?.helpful_rate)} />
             <Metric label={t("feedback.summary.answerRate")} value={formatRate(summary.answer_helpful_rate)} detail={t("feedback.summary.count", { count: summary.answer_total })} delta={rateDelta(summary.answer_helpful_rate, previous?.answer_helpful_rate)} />
@@ -550,7 +578,7 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
           </div>
         </section>
         <section aria-labelledby="feedback-reasons-heading">
-          <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <h2 id="feedback-reasons-heading" className="text-sm font-semibold text-fg">
               {t("feedback.reasons.title")}
             </h2>
@@ -705,13 +733,21 @@ function ContentTab({ detail }: { detail: FeedbackDetail }) {
 }
 
 function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
-  // 文書の詳細を開けない利用者には、引用元（文書の詳細）へのリンクを出さない（#303）。
   const canOpenDetail = canOpenDocumentDetail(useAuth().hasPermission);
+  const source = useEvidenceSource<FeedbackCitationSnapshot>();
+  const selected = source.shown;
+  const selectedIndex = selected ? detail.citations.indexOf(selected) : 0;
+  const chunk = useQuery({
+    queryKey: ["feedback-citation-source", detail.feedback_id, selected?.document_id, selected?.chunk_id],
+    queryFn: () => api.getDocumentCitationChunk(selected!.document_id, selected!.chunk_id),
+    enabled: canOpenDetail && source.selected !== null,
+    retry: false,
+  });
   return (
-    <div id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" className="space-y-3">
+    <>
+    <ViewportScrollRegion id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" data-testid="feedback-evidence-scroll" className="space-y-3">
       {detail.citations.length ? detail.citations.map((citation, index) => {
         const targeted = detail.target_type === "citation" && citation.chunk_id === detail.chunk_id;
-        const link = `${APP_ROUTES.documents}/${encodeURIComponent(citation.document_id)}?chunk_id=${encodeURIComponent(citation.chunk_id)}`;
         return (
           <article key={`${citation.chunk_id}-${index}`} data-surface-tint={targeted ? "accent" : undefined} className={cn("rounded-lg border border-border p-3", targeted && "border-accent-emphasis bg-accent-subtle")}>
             <div className="flex items-start justify-between gap-2">
@@ -722,13 +758,16 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
               {targeted ? <StatusBadge variant="info" icon={false} label={t("feedback.detail.targetCitation")} className="shrink-0" /> : null}
             </div>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fg/90">{citation.content_preview ?? t("feedback.detail.noCitationPreview")}</p>
-            {canOpenDetail ? <Link to={link} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-accent-fg hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"><ExternalLink size={14} aria-hidden />{t("feedback.list.openCitation")}</Link> : null}
+            {canOpenDetail ? <div className="mt-3"><EvidenceSourceButton fileName={citation.file_name ?? citation.document_id} onOpen={() => source.open(citation)} labels={EVIDENCE_LABELS} /></div> : null}
           </article>
         );
       }) : (
         <EmptyState title={t("feedback.detail.noCitations")} hint={t("feedback.detail.noCitationsHint")} />
       )}
-    </div>
+    </ViewportScrollRegion>
+    {canOpenDetail && source.mounted ? <CitationSourceSheet chunk={chunk.isError ? null : chunk.data ?? null} index={selectedIndex} open={source.selected !== null} onClose={source.close} kind={detail.answer ? "answer" : "search"} scores={{ score: null, rerankScore: selected?.rerank_score ?? null }}
+      empty={chunk.isError ? <ErrorState message={chunk.error instanceof ApiError ? chunk.error.message : t("feedback.detail.noCitationsHint")} onRetry={() => void chunk.refetch()} /> : <TimedLoadingState label={t("documents.detail.loading")} operationKey="feedback-citation-source"><Skeleton className="h-40 w-full" /></TimedLoadingState>} /> : null}
+    </>
   );
 }
 

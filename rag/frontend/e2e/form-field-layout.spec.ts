@@ -49,7 +49,7 @@ interface FormScreen {
   screenshotTarget?: string;
 }
 
-// ---- 検索方法（回答の検索と生成・回答の記録の保存期間・質問履歴） ----
+// ---- 検索方法（回答の検索と生成・検索プロンプト） ----
 
 async function mockRetrieval(page: Page) {
   const cards: [string, unknown][] = [
@@ -69,11 +69,6 @@ async function mockRetrieval(page: Page) {
         section_expansion_input_token_percent: 50,
         config_source: "runtime",
       },
-    ],
-    ["**/api/settings/answer-records", { retention_days: 0, config_source: "runtime" }],
-    [
-      "**/api/settings/query-history",
-      { enabled: true, retention_days: 90, min_count: 3, suggestion_limit: 5, blocklist: ["社外秘"] },
     ],
   ];
   for (const [url, data] of cards) {
@@ -282,7 +277,7 @@ const PROFILES = [
 async function mockSearch(page: Page) {
   await page.route("**/api/search-answer-profiles**", (route) => {
     const pathname = new URL(route.request().url()).pathname;
-    if (pathname.endsWith("/approved-faq/suggest") || pathname.endsWith("/query-suggestions")) {
+    if (pathname.endsWith("/approved-faq/suggest")) {
       return route.fulfill({ json: apiEnvelope({ suggestions: [] }) });
     }
     return route.fulfill({
@@ -681,7 +676,7 @@ const SCREENS: FormScreen[] = [
       await expect(page.getByRole("combobox", { name: "広げる段の上限", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "根拠の入力の上限（%）", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true })).toBeVisible();
-      await expect(page.getByRole("textbox", { name: /保存・表示しない語/ })).toBeVisible();
+      await expect(page.getByRole("textbox", { name: /保存・表示しない語/ })).toHaveCount(0);
     },
   },
   {

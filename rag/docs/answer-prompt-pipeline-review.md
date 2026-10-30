@@ -12,13 +12,13 @@
 2. 文書分割・索引: 分割後の RAPTOR 要約。
 3. 業務ガイドの準備: 回答の過程からの下書き。文書の取込とは独立。
 4. 質問の解釈: ガイドの自由入力条件 → 会話の書き換え → 抽出項目の検索条件 → 戦略選択 → 検索文の追加。
-5. 検索: 画面の目録 → 条の目録。条は文書選択 → 条選択 → 同じ章の追加選択。
+5. 検索: 画面の目録 → 条の目録。条は文書選択 → 条選択 → 同じ章と名指しの条の追加選択。
 6. 根拠の判定・補完: CRAG の判定と、長い章節の原文抽出。再検索・拡張に伴う反復がある。
 7. 回答の生成: FAQ の別経路、根拠による生成の system 指示 → 編集可能な入力テンプレート。
 8. 監査: 有効時の生成後の監査 → 補助の規則の当てはめとその監査。
 9. 評価: 範囲の固定 → 網羅性・忠実性 → 正確性。MCP の資料との照合は独立した呼び出し。
 
-[設定の概要](../frontend/src/components/settings/PipelineHubClient.tsx)の取込 → 検索・回答 → 評価に沿い、取込内は同じ[レシピの項目順](../frontend/src/components/documents/DocumentProcessingConfigPanel.logic.ts)を使う。ファイル準備・通常の分割・埋め込み・関係情報の構築・OCI Guardrails は LLM 指示を持たないため、架空のプロンプトを追加しない。図の先読みは解析と並行し得る。FAQ は通常の生成・監査と直列には実行しない。
+[設定の概要](../frontend/src/components/settings/PipelineHubClient.tsx)の取込 → 検索・回答 → 評価に沿い、取込内は同じ[レシピの項目順](../frontend/src/components/documents/DocumentProcessingConfigPanel.logic.ts)を使う。ファイル準備・通常の分割・埋め込み・文書構造索引の構築・OCI Guardrails は LLM 指示を持たないため、架空のプロンプトを追加しない。図の先読みは解析と並行し得る。FAQ は通常の生成・監査と直列には実行しない。
 
 ## 各段の照合結果
 

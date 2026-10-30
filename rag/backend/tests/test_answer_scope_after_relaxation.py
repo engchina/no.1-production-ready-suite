@@ -15,6 +15,7 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import CragRetrievalGradeOutput
 
 import app.rag.answer_engine as answer_engine
@@ -139,7 +140,20 @@ def _crag_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
     """CRAG の評価で「不足」とし、補正検索を 1 回させる(外した後の検索も確かめる)。"""
     if schema is CragRetrievalGradeOutput:
         return CragRetrievalGradeOutput(
-            reason="不足", sufficient=False, confidence=0.2, rewritten_query="登録の手順"
+            reason="後続の手順が不足",
+            sufficient=False,
+            confidence=0.2,
+            rewritten_query="登録の手順",
+            # 補正検索に渡す認可の範囲を試すため、意味評価の代役が明確な不足を返す。
+            # 空の観点は未検証であり、補正検索を要求する入力には使わない。
+            aspect_checks=[
+                {
+                    "aspect": "procedure",
+                    "status": "missing",
+                    "source_ids": [],
+                    "reason": "登録後の確認手順の説明が取得できていない。",
+                }
+            ],
         )
     return _fake_llm(system, prompt, settings, schema, **options)
 
@@ -378,8 +392,27 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
 ) -> None:
     """自動の条件を外した後の、根拠の無い要求だけの再検索も、利用者の条件・基準日・認可で検索する。"""
     import rag_engine.adapters.oci as engine_oci
+    from rag_engine.models.llm import GroundedDraft
 
-    monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
+    def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
+        result = _fake_llm(system, prompt, config, schema, **options)
+        if (
+            schema in (GroundedDraft, generation_draft_wire_model())
+            and "請求書の再発行は、請求一覧" not in prompt
+        ):
+            data = result.model_dump(exclude_unset=True)
+            data["items"].append(
+                {
+                    "kind": "gap",
+                    "text": "追加操作の根拠がありません。",
+                    "request_id": "Q2",
+                    "citations": [],
+                }
+            )
+            return GroundedDraft.model_validate(data)
+        return result
+
+    monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)
     oracle = RelaxedCoverageOracle()
     filters = {
         "knowledge_base_id": "kb-1",
@@ -404,7 +437,10 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
     )
 
     assert outcome.diagnostics["filter_relaxation"]["relaxed"] == ["auto_field"]
-    assert outcome.diagnostics["request_coverage"]["re_retrieval"]["applied"] is True
+    assert (
+        outcome.diagnostics["request_coverage"]["after_generation"][0]["re_retrieval"]["applied"]
+        is True
+    )
     re_searches = [item for item in oracle.searches if item[0] == "請求書の再発行方法は？"]
     assert re_searches
     assert all(scoped == filters for _query, scoped, _context in re_searches)

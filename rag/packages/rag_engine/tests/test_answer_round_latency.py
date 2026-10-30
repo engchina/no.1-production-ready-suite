@@ -8,12 +8,13 @@
 import unittest
 from dataclasses import replace
 
-from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record
+from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, observed_audit, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering, grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
+from rag_engine.models.audit_wire import is_audit_wire
 from rag_engine.models.llm import GroundedAudit
 
 GOOD = "一覧表を選択し、処理を選択します。"
@@ -30,7 +31,7 @@ def _run(model, ctx, **overrides):
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 class SystemCapturingModel(FakeModel):
@@ -41,7 +42,7 @@ class SystemCapturingModel(FakeModel):
         self.systems = []
 
     def __call__(self, system, prompt, settings, schema, **options):
-        self.systems.append((schema.__name__, system))
+        self.systems.append(((schema.canonical_schema if is_audit_wire(schema) else schema).__name__, system))
         return super().__call__(system, prompt, settings, schema, **options)
 
 
@@ -81,8 +82,8 @@ class DowngradedOnlyUnitTest(unittest.TestCase):
 
 
 class DowngradedOnlySynthesizeTest(unittest.TestCase):
-    def test_downgrade_left_after_the_context_round_stops_the_correction(self):
-        """資料を足して作り直した組の後に印の付いた説明だけが残れば、指摘の反映の組（3 組目）を始めない。"""
+    def test_material_observation_does_not_start_context_or_correction_rounds(self):
+        """未校正の材料不足判定だけで文脈追加や作り直しを始めない。"""
         hidden_text = "抽出条件で店舗を指定します。\n抽出結果を保存します。"
         shown = replace(record(0, "●集計表出力\n一覧表を選択します。", "売上-(3)年次集計明細作成"), chunk_uid="run:r0")
         hidden = replace(record(1, hidden_text, "売上-(3)年次集計明細作成", page=21), chunk_uid="run:r1", seq_no=2)
@@ -101,7 +102,18 @@ class DowngradedOnlySynthesizeTest(unittest.TestCase):
         model = FakeModel(
             [first, second, second],
             [
-                audit((0, "supported", "matched", ""), requests=[("Q1", "partial")]),
+                audit(
+                    (0, "supported", "matched", ""),
+                    requests=[
+                        {
+                            "request_id": "Q1",
+                            "status": "partial",
+                            "reason": "抽出条件の原文が未取得",
+                            "evidence_status": "missing",
+                            "evidence_ids": [],
+                        }
+                    ],
+                ),
                 audit(
                     (0, "supported", "matched", ""),
                     (1, "supported", "matched", ""),
@@ -112,18 +124,14 @@ class DowngradedOnlySynthesizeTest(unittest.TestCase):
         )
         result = _run(model, ctx)
         rounds = result.generation_trace["rounds"]
-        self.assertEqual(len(_drafts(model)), 2)
-        self.assertEqual([r["accepted"] for r in rounds], [True, True])
-        self.assertEqual(rounds[0]["remedy"]["remedy"], "context")
-        self.assertEqual(rounds[1]["improvement_stop"], grounded.NO_IMPROVEMENT_DOWNGRADED_ONLY)
-        stop = result.generation_trace["round_budget"]["stop"]
-        self.assertEqual(stop["reason"], grounded.NO_IMPROVEMENT_DOWNGRADED_ONLY)
-        self.assertEqual(stop["feedback"], ["根拠で確かめられず印を付けた説明 1 件"])
-        # 確かめられない説明は印つきで本文に残し（#2738）、時間の上限ではないので「回答時間の上限により省略した処理」には出さない。
-        (mark,) = result.envelope["passage_marks"]
-        self.assertTrue(mark["text"].endswith("抽出結果を CSV で共有フォルダへ保存します。"))
-        self.assertEqual(mark["state"], "unverified")
-        self.assertNotIn("作り直しをしていません", result.answer_text)
+        self.assertEqual(len(_drafts(model)), 1)
+        self.assertEqual([r["accepted"] for r in rounds], [True])
+        self.assertNotIn("remedy", rounds[0])
+        self.assertNotIn("stop", result.generation_trace["round_budget"])
+        self.assertEqual(observed_audit(result)["request_reviews"][0]["evidence_status"], "missing")
+        self.assertFalse(result.envelope["passage_marks"])
+        self.assertIn(first["items"][0]["text"], result.answer_text)
+        self.assertNotIn("抽出結果を CSV で共有フォルダへ保存します。", result.answer_text)
 
 
 class MaxCorrectionRoundsTest(unittest.TestCase):

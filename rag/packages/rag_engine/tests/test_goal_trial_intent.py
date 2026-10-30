@@ -4,7 +4,7 @@ import pytest
 
 from rag_engine.generation.answering import QueryExpansionResult
 from rag_engine.retrieval.evidence_selection import evidence_relevance
-from rag_engine.retrieval.task_contract import goal_retrieval_queries, task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, goal_retrieval_queries, task_contract
 
 
 def test_trial_and_hypothesis_do_not_replace_the_goal_or_delete_question():
@@ -59,9 +59,10 @@ def test_registered_state_does_not_imply_a_user_trial():
 @pytest.mark.parametrize("verb", ["追加", "削除", "延長", "取消"])
 def test_explicit_operation_wish_is_not_classified_as_a_definition(verb):
     contract = task_contract(f"予約を{verb}したい。")
-    assert contract["goal"] == "procedure"
+    assert STEPS_REQUEST in explicit_requests(f"予約を{verb}したい。")
     assert verb in contract["requested_actions"]
-    assert task_contract(f"{verb}料金の意味は？")["goal"] == "rule"
+    assert STEPS_REQUEST not in explicit_requests(f"{verb}料金の意味は？")
+    assert [t["label"] for t in task_contract(f"{verb}料金の意味は？")["definition_targets"]]
 
 
 def test_goal_action_precedes_trial_action_without_losing_other_requests():

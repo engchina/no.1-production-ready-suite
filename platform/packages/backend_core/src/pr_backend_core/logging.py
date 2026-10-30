@@ -424,12 +424,13 @@ def configure_http_logging(app: Any, *, service_name: str) -> None:
     """RAG の独立した service factory 用。DB / 認証 / 製品 backend は初期化しない。"""
     import os
 
+    from .config.runtime import load_runtime_environment
     from .observability.metrics import MetricsMiddleware
 
     configure_logging(
         os.environ.get("RAG_LOG_LEVEL", "INFO"),
         service_name=service_name,
-        environment=os.environ.get("RAG_ENVIRONMENT", "dev"),
+        environment=load_runtime_environment(),
         component="microservice",
     )
     app.add_middleware(MetricsMiddleware, enable_metrics=False)
@@ -439,11 +440,12 @@ def configure_cli_logging(product: str) -> None:
     """offline CLI は settings / DB を初期化せず、診断だけを stderr へ接続する。"""
     import os
 
-    prefix = product.upper()
+    from .config.runtime import load_runtime_environment
+
     configure_logging(
-        os.environ.get(f"{prefix}_LOG_LEVEL", "INFO"),
+        os.environ.get(f"{product.upper()}_LOG_LEVEL", "INFO"),
         service_name=f"production-ready-{product}",
-        environment=os.environ.get(f"{prefix}_ENVIRONMENT", "local"),
+        environment=load_runtime_environment(),
         component="cli",
     )
     # python-oracledb の pool の背景のスレッドの traceback を 1 行の log にまとめる（#1744）。

@@ -65,7 +65,7 @@ async function mockKb(
   );
 }
 
-// 関係情報グラフの開閉の見出し（共有の Disclosure の <summary>。#1135）。
+// 文書構造グラフの開閉の見出し（共有の Disclosure の <summary>。#1135）。
 function disclosureSummary(page: Page, name: string) {
   return page.locator("summary", { hasText: name });
 }
@@ -75,7 +75,7 @@ test.beforeEach(async ({ page }) => {
   await mockLocalAuth(page);
 });
 
-test("関係情報グラフを展開して entity ノードを表示する", async ({ page }) => {
+test("文書構造グラフを展開して entity ノードを表示する", async ({ page }) => {
   await mockKb(page, {
     status: "ok",
     nodes: [
@@ -87,9 +87,9 @@ test("関係情報グラフを展開して entity ノードを表示する", asy
   });
 
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "関係情報グラフを表示").click();
+  await disclosureSummary(page, "文書構造グラフを表示").click();
 
-  const graph = page.getByRole("region", { name: "関係情報グラフ" });
+  const graph = page.getByRole("region", { name: "文書構造グラフ" });
   await expect(graph).toBeVisible();
   await expect(graph.getByText("就業規則")).toBeVisible();
   await expect(graph.getByText("有給休暇")).toBeVisible();
@@ -106,9 +106,9 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
   await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
 
   await page.goto("/knowledge-bases/kb-1");
-  await disclosureSummary(page, "関係情報グラフを表示").click();
+  await disclosureSummary(page, "文書構造グラフを表示").click();
 
-  await expect(page.getByText("関係情報がまだありません。")).toBeVisible();
+  await expect(page.getByText("文書構造索引がまだありません。")).toBeVisible();
   // 画面に無い操作（再取込）ではなく、文書の詳細の処理レシピの「再処理」を案内する。
   const hint = page.locator("#knowledge-base-graph");
   await expect(hint).toContainText("「再処理」");
@@ -116,25 +116,36 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
 });
 
 // 開閉の見出しは共有の Disclosure の高さ（lg 40px・タッチ端末 44px）。以前は手書きの min-h-11 で 38.5px（#1135）。
-test("関係情報グラフの開閉の見出しは Disclosure の高さで、開閉の状態を持つ", { tag: "@responsive" }, async ({ page }) => {
+test("文書構造グラフは抽出項目と検索テストの間にあり、標準の高さとキーボードで開閉する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
   await page.goto("/knowledge-bases/kb-1");
 
   const expected = await expectedControlHeight(page, "lg");
-  const summary = disclosureSummary(page, "関係情報グラフを表示");
+  const summary = disclosureSummary(page, "文書構造グラフを表示");
   await expect(summary).toBeVisible();
+  const fields = page.getByRole("heading", { name: "抽出する項目", exact: true });
+  const search = page.getByRole("heading", { name: "このナレッジで検索テスト", exact: true });
+  await expect(fields).toBeVisible();
+  await expect(search).toBeVisible();
+  const [fieldsBox, graphBox, searchBox] = await Promise.all([
+    fields.boundingBox(), summary.boundingBox(), search.boundingBox(),
+  ]);
+  expect(fieldsBox!.y + fieldsBox!.height).toBeLessThan(graphBox!.y);
+  expect(graphBox!.y + graphBox!.height).toBeLessThan(searchBox!.y);
   expect(Math.round((await summary.boundingBox())?.height ?? 0)).toBe(expected);
 
   // キーボード（Enter）で開閉でき、開くと見出しの文言が「隠す」になる。
-  const graph = disclosureSummary(page, "関係情報グラフを表示");
+  const graph = disclosureSummary(page, "文書構造グラフを表示");
   await graph.focus();
   await page.keyboard.press("Enter");
   await expect(page.locator("details").filter({ has: page.locator("#knowledge-base-graph") })).toHaveAttribute("open", "");
-  await expect(page.getByText("関係情報がまだありません。")).toBeVisible();
-  await expect(disclosureSummary(page, "関係情報グラフを隠す")).toBeFocused();
+  await expect(page.getByText("文書構造索引がまだありません。")).toBeVisible();
+  await expect(disclosureSummary(page, "文書構造グラフを隠す")).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.locator("#knowledge-base-graph")).toHaveCount(0);
-  await expect(disclosureSummary(page, "関係情報グラフを表示")).toBeVisible();
+  await expect(disclosureSummary(page, "文書構造グラフを表示")).toBeVisible();
+  await summary.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("knowledge-base-section-order.png"), fullPage: false });
 });
 
 // DB が止まっていて関係情報を取得できない（backend は空 + warning_messages で縮退する）ときは、
@@ -162,12 +173,12 @@ for (const viewport of [
     );
 
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page, "関係情報グラフを表示").click();
+    await disclosureSummary(page, "文書構造グラフを表示").click();
 
     const section = page.locator("#knowledge-base-graph");
     await expect(section.getByRole("status").filter({ hasText: "データベースに接続できません" })).toBeVisible();
     await expect(section).toContainText("データベースに接続できませんでした。");
-    await expect(section.getByText("関係情報がまだありません。")).toHaveCount(0);
+    await expect(section.getByText("文書構造索引がまだありません。")).toHaveCount(0);
     await expectNoPageOverflow(page);
 
     // 復旧したら再試行で取り直し、本当に空なら空の状態を出す。
@@ -175,7 +186,7 @@ for (const viewport of [
     const before = graphRequests;
     await section.getByRole("button", { name: "再試行" }).click();
     await expect.poll(() => graphRequests).toBeGreaterThan(before);
-    await expect(section.getByText("関係情報がまだありません。")).toBeVisible();
+    await expect(section.getByText("文書構造索引がまだありません。")).toBeVisible();
     await expect(section.getByRole("status").filter({ hasText: "データベースに接続できません" })).toHaveCount(0);
   });
 }
@@ -184,7 +195,7 @@ for (const viewport of [
 // React Flow の既定の配色は colorMode="dark" のときだけダークになり、ダークテーマでも白い地のまま出ていた。
 // platform/packages/ui の integrations/react-flow.css が React Flow の変数をトークンに結び付ける。
 for (const theme of ["light", "dark"] as const) {
-  test(`関係情報グラフの操作・帰属表示はテーマの面の色で描く (${theme})`, async ({
+  test(`文書構造グラフの操作・帰属表示はテーマの面の色で描く (${theme})`, async ({
     page,
   }) => {
     await page.addInitScript((value) => {
@@ -207,9 +218,9 @@ for (const theme of ["light", "dark"] as const) {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.classList.contains("dark")))
       .toBe(theme === "dark");
-    await disclosureSummary(page, "関係情報グラフを表示").click();
+    await disclosureSummary(page, "文書構造グラフを表示").click();
 
-    const region = page.getByRole("region", { name: "関係情報グラフ" });
+    const region = page.getByRole("region", { name: "文書構造グラフ" });
     await expect(region.getByText("就業規則")).toBeVisible();
 
     // トークンの色を同じ場所（図の中）で解決して、React Flow の部品の色と比べる。
@@ -251,7 +262,7 @@ for (const theme of ["light", "dark"] as const) {
     if (colors.edgeLabelBackground !== null) {
       expect(colors.edgeLabelBackground).toBe(colors.tokens.surface);
     }
-    // 関係情報グラフには辺のラベル（relates_to）がある。
+    // 文書構造グラフには辺のラベル（relates_to）がある。
     await expect(region.locator(".react-flow__edge-textbg")).toHaveCount(1);
     await expectNoPageOverflow(page);
   });
@@ -271,8 +282,8 @@ for (const count of [30, 80]) {
       truncated: false,
     });
     await page.goto("/knowledge-bases/kb-1");
-    await disclosureSummary(page, "関係情報グラフを表示").click();
-    const graph = page.getByRole("region", { name: "関係情報グラフ" });
+    await disclosureSummary(page, "文書構造グラフを表示").click();
+    const graph = page.getByRole("region", { name: "文書構造グラフ" });
     await expect(graph.locator(".react-flow__node")).toHaveCount(count);
     const fits = () => graph.evaluate((region) => {
       const bounds = region.getBoundingClientRect();

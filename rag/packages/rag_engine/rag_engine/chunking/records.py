@@ -23,7 +23,7 @@ from rag_engine.chunking.constants import (
 )
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
-from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
+from rag_engine.parsing.picture_text import format_docling_picture_ocr_text, is_picture_ocr_text
 from rag_engine.parsing.table_structure import parse_html_table_structure
 
 
@@ -278,8 +278,13 @@ def _optional_bool_value(value: Any) -> bool | None:
 
 
 def _visual_group_key(record: dict[str, Any]) -> tuple[Any, ...] | None:
-    """同じ engine・page・bbox の Picture と `picture_ocr_text` を 1 つの図として束ねる key を返します。"""
-    bbox = record.get("bbox")
+    """同じ engine・page・bbox の Picture と `picture_ocr_text` を 1 つの図として束ねる key を返します。
+
+    持ち主の図が分かった OCR（``raw.picture_bbox``。``link_picture_ocr_records``）は図の bbox で束ね、
+    丸めの境目で図と OCR を別の図にしない（#3455）。
+    """
+    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    bbox = raw.get("picture_bbox") if is_picture_ocr_text(record) and raw.get("picture_bbox") else record.get("bbox")
     if not isinstance(bbox, list) or len(bbox) != 4:
         return None
     try:

@@ -62,6 +62,9 @@ async def test_generate_posts_responses_via_openai_sdk(monkeypatch: pytest.Monke
     assert request.headers["authorization"] == "Bearer test-key"
     assert request.headers["openai-project"] == "ocid1.project.test"
     assert json.loads(request.content)["model"] == "test-llm"
+    # SDK が付けるヘッダーを重ねて送らない(重複を連結する gateway は 400。#3527)
+    assert request.headers.get_list("content-type") == ["application/json"]
+    assert request.headers.get_list("accept") == ["application/json"]
 
 
 async def test_generate_retries_retryable_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,13 +113,15 @@ async def test_upload_file_sends_multipart(monkeypatch: pytest.MonkeyPatch) -> N
         b"%PDF",
         mime_type="application/pdf",
         purpose="user_data",
-        headers={"Authorization": "Bearer test-key"},
+        headers={"accept": "application/json", "Authorization": "Bearer test-key"},
         timeout=5,
     )
 
     assert response == {"id": "file-1"}
     request = requests[0]
-    assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
+    (content_type,) = request.headers.get_list("content-type")
+    assert content_type.startswith("multipart/form-data; boundary=")
+    assert request.headers.get_list("accept") == ["application/json"]
     assert b'name="purpose"' in request.content
     assert b"user_data" in request.content
     assert b'filename="input.pdf"' in request.content

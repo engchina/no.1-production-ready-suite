@@ -6,23 +6,25 @@ from test_rag_evidence_recovery import rec
 
 from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
 from rag_engine.retrieval.operation_context import alternative_operation_queries, operation_labels
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, task_contract
 
 
 @pytest.mark.parametrize(
-    "question,expected",
+    "question,steps",
     [
-        ("文言で「，」を「、」に変更したい。", "procedure"),
-        ("タイトルを修正したい", "procedure"),
-        ("文言を変えたい", "procedure"),
-        ("変更履歴を知りたい", "rule"),
-        ("変更内容を知りたい", "rule"),
-        ("摘要欄に注記を表示させたい", "procedure"),
+        ("文言で「，」を「、」に変更したい。", True),
+        ("タイトルを修正したい", True),
+        ("文言を変えたい", True),
+        ("変更履歴を知りたい", False),
+        ("変更内容を知りたい", False),
+        ("摘要欄に注記を表示させたい", True),
     ],
 )
-def test_change_intent(question, expected):
-    assert task_contract(question)["goal"] == expected
-    assert ("procedure" in task_contract(question)["required_aspects"]) is (expected == "procedure")
+def test_change_intent(question, steps):
+    # 「変更履歴」のような説明の要求は、値を変える操作の要求（手順の要求）にしない。
+    assert (STEPS_REQUEST in explicit_requests(question)) is steps
+    assert ("procedure" in task_contract(question)["required_aspects"]) is steps
+    assert "goal" not in task_contract(question)
 
 
 def test_numbered_functions_do_not_match_shared_subheadings():
@@ -36,7 +38,7 @@ def test_numbered_functions_do_not_match_shared_subheadings():
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_supplement_budget_keeps_relevant_other_function(reverse):
+def test_parent_context_does_not_expand_by_matching_operation_labels(reverse):
     rows = []
     anchors = []
     for prefix, start, label in [("print", 60, "B管理 － （2）伝票印刷設定"), ("form", 54, "B管理 － （1）帳票設定")]:
@@ -67,8 +69,7 @@ def test_supplement_budget_keeps_relevant_other_function(reverse):
             max_chars=12000,
         )
     )
-    assert "form2" in {r.id for r in bundle.records}
-    assert len(bundle.records) <= 5
+    assert {r.id for r in bundle.records} == {"form0", "print0"}
 
 
 def draft(answer):
@@ -94,7 +95,7 @@ def test_mixed_function_boundary_is_not_a_neighbor():
     assert _operation_parent_neighbors(b, [a]) == []
 
 
-def test_field_heading_recovers_an_independent_function_not_in_primary():
+def test_field_heading_does_not_implicitly_add_another_parent():
     primary = rec("p", "parent", 1, "固定文言を入力する。", page=60, headings=["B管理－（2）伝票印刷設定"])
     child = rec("c", "child", 1, "固定文言を入力する。", parent="p", page=60)
     entry = rec("entry", "parent", 2, "B 【操作説明】\n帳票を選ぶ。", page=54, headings=["B管理－（1）帳票設定"])
@@ -115,9 +116,7 @@ def test_field_heading_recovers_an_independent_function_not_in_primary():
             max_chars=12000,
         )
     )
-    assert {"p", "entry", "editing"} <= {r.id for r in result.records}
-    assert "other" not in {r.id for r in result.records}
-    assert next(p.reason for p in result.evidence_tree if p.record.id == "editing") == "alternative_operation_context"
+    assert [r.id for r in result.records] == ["p"]
 
 
 def test_manual_heading_and_steps_survive_repeated_search_labels():

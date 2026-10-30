@@ -9,6 +9,7 @@ import {
   runConversationOwnerLabel,
   runExecutorLabel,
   runExecutorParam,
+  runListUsage,
   runOutcomeView,
   runProfileLabel,
   runSearchHref,
@@ -16,6 +17,7 @@ import {
   runStatusLabels,
   runStatusParam,
   runTimeline,
+  runUsageView,
   runVerificationView,
   RUN_STATUS_OPTIONS,
   toRunStatus,
@@ -60,6 +62,15 @@ describe("実行履歴の表示の対応表", () => {
     expect(runVerificationView("partial")?.variant).toBe("warning");
     expect(runVerificationView("unverified")?.variant).toBe("neutral");
     expect(runVerificationView(null)).toBeNull();
+  });
+
+  it.each([
+    ["disabled", "設定で無効"], ["not_run", "未実行"], ["error", "確認処理でエラー"],
+    ["timed_out", "確認が時間切れ"], ["passed", "確認完了・問題なし"],
+    ["failed", "確認完了・問題あり"], ["partial", "一部のみ確認"], ["unknown", "確認状態が不明"],
+  ])("照合の実行状態%sは旧集約値より優先する", (execution, label) => {
+    expect(runVerificationView("unverified", execution)?.label).toBe(label);
+    expect(runVerificationView("verified", execution)?.label).toBe(label);
   });
 
   it("所要時間は共通の書式（記録なしは「—」）", () => {
@@ -120,12 +131,12 @@ describe("実行履歴の表示の対応表", () => {
       question: "合成の質問 A",
       search_answer_profile_id: "profile-a",
       answer_generated: false,
-      search_conditions: { top_k: 50, filters: { middle_category: "分類 B" } },
+      search_conditions: { top_k: 100, filters: { middle_category: "分類 B" } },
     };
     const href = runSearchHref(run, { canOpenSearch: true });
     expect(href).toBe(
       "/search?question=%E5%90%88%E6%88%90%E3%81%AE%E8%B3%AA%E5%95%8F+A&search_answer_profile_id=profile-a" +
-        "&generate_answer=false&top_k=50&middle_category=%E5%88%86%E9%A1%9E+B"
+        "&generate_answer=false&middle_category=%E5%88%86%E9%A1%9E+B"
     );
     // 条件の記録の無い古い実行は、質問・プロファイル・回答の生成の有無だけ。
     expect(runSearchHref({ ...run, search_conditions: null }, { canOpenSearch: true })).toBe(
@@ -136,6 +147,74 @@ describe("実行履歴の表示の対応表", () => {
     expect(runSearchHref(run, { canOpenSearch: false })).toBeNull();
     expect(runSearchHref({ ...run, surface: "chat" }, { canOpenSearch: true })).toBeNull();
     expect(runSearchHref({ ...run, question: null }, { canOpenSearch: true })).toBeNull();
+  });
+
+  it("モデル・token・モデルの呼び出しは記録した値で、不明は 0 にせず未計測・一部計測と出す（Issue 3419）", () => {
+    const usage = {
+      models: ["model-a", "model-b"],
+      requests: 4,
+      input_tokens: 1200,
+      output_tokens: 300,
+      total_tokens: 1500,
+      cached_input_tokens: 200,
+      reasoning_output_tokens: null,
+      measurement: "complete" as const,
+      measured_requests: 4,
+    };
+    expect(runUsageView({ model_id: "model-a", usage })).toEqual({
+      model: "model-a、model-b",
+      usage: { tokens: 1500, note: null },
+      modelCalls: "4 回（入力 1,200 / 出力 300 token）",
+      unmeasuredCalls: null,
+    });
+    expect(runUsageView({ model_id: "model-a", usage: { ...usage, measurement: "partial", measured_requests: 3 } })).toEqual({
+      model: "model-a、model-b",
+      usage: { tokens: 1500, note: "一部計測" },
+      modelCalls: "4 回（うち 3 回を計測。入力 1,200 / 出力 300 token）",
+      unmeasuredCalls: null,
+    });
+    // LLM を呼ばなかった実行は実測の 0（モデルは記録した回答のモデルがあればそれ）。
+    const none = { ...usage, models: [], requests: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, measured_requests: 0 };
+    expect(runUsageView({ model_id: null, usage: none })).toEqual({
+      model: null,
+      usage: { tokens: 0, note: null },
+      modelCalls: "0 回（入力 0 / 出力 0 token）",
+      unmeasuredCalls: null,
+    });
+    // この機能より前の記録: モデルは記録した ID だけ（既定のモデルの文言で置き換えない）、利用量は未計測。
+    expect(runUsageView({ model_id: "model-a", usage: null })).toEqual({
+      model: "model-a",
+      usage: { tokens: null, note: "未計測" },
+      modelCalls: "未計測",
+      unmeasuredCalls: null,
+    });
+    expect(runUsageView({ model_id: null, usage: undefined }).model).toBeNull();
+  });
+
+  it("一覧の token は詳細と同じ規則: 未計測・一部計測・実測の 0（Issue 3466）", () => {
+    expect(runListUsage({ total_tokens: 12345, usage_measurement: "complete" })).toEqual({ tokens: 12345, note: null });
+    expect(runListUsage({ total_tokens: 330, usage_measurement: "partial" })).toEqual({ tokens: 330, note: "一部計測" });
+    expect(runListUsage({ total_tokens: 0, usage_measurement: "complete" })).toEqual({ tokens: 0, note: null });
+    // 記録の無い実行と、利用量を返さない古い backend は未計測（0 にしない）。
+    expect(runListUsage({ total_tokens: null, usage_measurement: null })).toEqual({ tokens: null, note: "未計測" });
+    expect(runListUsage({})).toEqual({ tokens: null, note: "未計測" });
+    // 一覧と詳細の注記の文言は同じ。
+    expect(runListUsage({ total_tokens: 1, usage_measurement: "partial" }).note).toBe(
+      runUsageView({
+        model_id: null,
+        usage: {
+          models: [],
+          requests: 1,
+          input_tokens: 1,
+          output_tokens: 0,
+          total_tokens: 1,
+          cached_input_tokens: null,
+          reasoning_output_tokens: null,
+          measurement: "partial",
+          measured_requests: 0,
+        },
+      }).usage.note
+    );
   });
 });
 

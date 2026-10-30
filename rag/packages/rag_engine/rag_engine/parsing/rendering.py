@@ -167,6 +167,31 @@ def pdf_text_lines_in_bbox(pdf_path: str | Path, page_number: int, bbox: dict) -
     return [line for line in bounded if line in page_lines]
 
 
+def pdf_image_object_bounds(pdf_path: str | Path, page_number: int) -> list[tuple[float, float, float, float]]:
+    """PDF のページに描いた画像（image object）の配置（PDF point。左下原点の left, bottom, right, top）。
+
+    ページの内容に直接置いた画像だけを返す（フォーム XObject の中の画像は座標がページの座標とは限らない）。
+    """
+    pdfium = _import_pdfium()
+    import pypdfium2.raw as pdfium_c
+
+    with PDFIUM_LOCK:
+        document = pdfium.PdfDocument(str(pdf_path))
+        try:
+            page = document[page_number - 1]
+            try:
+                return [
+                    (float(left), float(bottom), float(right), float(top))
+                    for left, bottom, right, top in (
+                        image.get_bounds() for image in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE], max_depth=0)
+                    )
+                ]
+            finally:
+                page.close()
+        finally:
+            document.close()
+
+
 def copy_pdf_to_run(pdf_path: str | Path, output_dir: str | Path) -> str:
     """解析実行ディレクトリへ元 PDF をコピーします。"""
     target = Path(output_dir) / "source.pdf"

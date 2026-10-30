@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
+from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT
 from rag_engine.config import get_settings
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.picture_descriptions import (
@@ -216,7 +217,8 @@ class PictureDescriptionTests(unittest.TestCase):
             )
             calls = []
 
-            def describe(image_path, metadata, settings, *, context_image_paths=(), rendered_prompt=None):
+            def describe(image_path, metadata, settings, *, context_image_paths=(), rendered_prompt=None, system_prompt=None):
+                self.assertEqual(system_prompt, VISION_SYSTEM_PROMPT)
                 calls.append(
                     (
                         Path(image_path),
@@ -279,7 +281,8 @@ class PictureDescriptionTests(unittest.TestCase):
                 raw_type="picture_ocr_text",
             )
 
-            def describe(image_path, metadata, settings, *, context_image_paths=(), rendered_prompt=None):
+            def describe(image_path, metadata, settings, *, context_image_paths=(), rendered_prompt=None, system_prompt=None):
+                self.assertEqual(system_prompt, VISION_SYSTEM_PROMPT)
                 self.assertIn("得意先情報", metadata["paired_ocr_text"])
                 self.assertEqual(len(context_image_paths), 1)
                 return {"retrieval_text": "with ocr"}
@@ -340,7 +343,8 @@ class PictureDescriptionTests(unittest.TestCase):
 
             captured_metadata = {}
 
-            def describe(image_path, metadata, settings, *, context_image_paths=(), rendered_prompt=None):
+            def describe(image_path, metadata, settings, *, context_image_paths=(), rendered_prompt=None, system_prompt=None):
+                self.assertEqual(system_prompt, VISION_SYSTEM_PROMPT)
                 captured_metadata.update(metadata)
                 return {"retrieval_text": "table contextual description"}
 

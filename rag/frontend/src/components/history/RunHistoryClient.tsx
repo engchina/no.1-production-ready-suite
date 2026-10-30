@@ -82,6 +82,7 @@ import {
   runConversationOwner,
   runExecutorLabel,
   runExecutorParam,
+  runListUsage,
   runOutcomeView,
   runProfileLabel,
   runSearchHref,
@@ -90,6 +91,7 @@ import {
   runStatusParam,
   runSurfaceLabel,
   runTimeline,
+  runUsageView,
   runVerificationView,
   toRunStatus,
   type RunSurfaceFilter,
@@ -158,6 +160,7 @@ function toItem(run: RunSummary): RunHistoryItem {
     executor: { name: runExecutorLabel(run), isSelf: run.executed_by_me },
     startedAt: runStartedAt(run),
     durationMs: run.elapsed_ms,
+    usage: runListUsage(run),
   };
 }
 
@@ -298,15 +301,22 @@ export function RunHistoryClient() {
         ) : (page?.total ?? 0) > 0 ? (
           <div className="grid gap-2">
             <RunHistoryTable<RunSummary>
+              growToViewport
               rows={items}
               toItem={toItem}
               onOpen={open}
               showExecutor={showExecutor}
+              // 実行ごとのモデルの利用量（合計の token。#3466）。見出しは Agent と同じ「token」。
+              showUsage
               extraColumns={runExtraColumns()}
               selectedRunId={view.selected}
               // 件数が減って保存したページが範囲外になったら OffsetPagination が最後のページへ戻す。
               loading={items.length === 0}
-              labels={{ table: t("history.list.aria"), status: statusLabels }}
+              labels={{
+                table: t("history.list.aria"),
+                columns: { usage: t("history.col.usage") },
+                status: statusLabels,
+              }}
               testId="run-history"
             />
             <OffsetPagination
@@ -372,7 +382,7 @@ function runExtraColumns(): DataTableColumn<RunSummary>[] {
       ),
       className: "whitespace-nowrap",
       render: (run) => {
-        const view = runVerificationView(run.verification);
+        const view = runVerificationView(run.verification, run.validation_execution);
         return view ? <StatusBadge {...view} /> : <span className="text-fg-muted">{t("history.notRecorded")}</span>;
       },
     },
@@ -457,7 +467,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
       : null;
   // 「RAG 検索で開く」（#3309）: 本人の RAG 検索の実行を、質問と条件を入れて RAG 検索の画面に開く（検索はしない）。
   const searchHref = runSearchHref(run, { canOpenSearch: hasPermission(MENU_PERMISSIONS.search) });
-  const verification = runVerificationView(run.verification);
+  const verification = runVerificationView(run.verification, run.validation_execution);
   const statusLabels = runStatusLabels();
   const traceLabels = useTraceDetailsLabels();
   const succeeded = run.status === "success";
@@ -466,7 +476,10 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // 失敗は 3 製品共通の失敗のカード（チャットと同じ 1 文目・次の操作。#2342）。
   const failure = runFailure(run);
 
+  // モデル・token・モデルの呼び出し（実行のときに記録した値。Agent の実行の詳細と同じ形。#3419）。
+  const usageView = runUsageView(run);
   const extraFacts: RunFact[] = [
+    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls },
     { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count) },
   ];
   if (run.status === "error") {
@@ -507,9 +520,9 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
   // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
   const processDetails =
-    run.answer_diagnostics || technicalFacts.length ? (
+    run.answer_diagnostics || run.validation_execution || technicalFacts.length ? (
       <>
-        {run.answer_diagnostics ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics} /> : null}
+        {run.answer_diagnostics || run.validation_execution ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics ?? {}} validationExecution={run.validation_execution} /> : null}
         {technicalFacts.length ? <RunFactList facts={technicalFacts} /> : null}
       </>
     ) : null;
@@ -536,7 +549,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
           executor={{ name: runExecutorLabel(run), isSelf: run.executed_by_me }}
           owner={runConversationOwner(run)}
           target={{ label: t("history.detail.profile"), value: runProfileLabel(run) }}
-          model={run.answer_generated ? run.model_id || t("history.detail.modelDefault") : null}
+          model={usageView.model}
+          usage={usageView.usage}
           runId={run.run_id}
           extraFacts={extraFacts}
           alert={

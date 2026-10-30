@@ -117,7 +117,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    scripts/rag-services.sh uninstall          # unit と sudoers を消す
    ```
 
-   backend を `RAG_ENVIRONMENT=development`（既定）で起動すると、サービス管理画面の起動 / 停止が有効になる。
+   backend を `PLATFORM_ENVIRONMENT=local`（明示指定）で起動すると、サービス管理画面の起動 / 停止が有効になる。
    起動は `systemctl enable --now`、停止は `systemctl disable --now` なので、PC を再起動しても最後に操作した状態に戻る。
    `install` を再実行しても、停止したサービスは停止のまま（コードを更新したときは起動中のものだけ再起動する）。
 
@@ -212,7 +212,7 @@ ln -s "${NEW}" "${OLD}"
 
 移行後に backend を起動し、警告ログが出ないこと、既存文書のプレビュー / 再取込ができることを確認してから退避ディレクトリを削除する。
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
-`RAG_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
+`PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
 ## 既存環境の更新手順（#3343 PDF の処理を PyMuPDF から pypdfium2 に置き換え）
 
@@ -336,16 +336,16 @@ PyMuPDF）を削除した。スキャンの PDF は既定の解析エンジン D
 
 ## 既存環境の更新手順（#3235 実行の記録の既定の保存期間を無期限にする）
 
-回答の記録（`rag_answer_records`）・チャットと RAG 検索の実行履歴（`rag_run_history`）・質問履歴（`rag_query_history`）・品質評価の job（`rag_evaluation_jobs`）は、既定で無期限に保存し、自動では削除しない。
+回答の記録（`rag_answer_records`）・チャットと RAG 検索の実行履歴（`rag_run_history`）・品質評価の job（`rag_evaluation_jobs`）は、既定で無期限に保存し、自動では削除しない。
 
-- **環境変数**: `RAG_ANSWER_RECORD_RETENTION_DAYS`・`RAG_QUERY_HISTORY_RETENTION_DAYS` の既定を `90` から `0`（無期限）にした。`backend/.env` に値を書いてある環境（以前の `.env.example` の `RAG_QUERY_HISTORY_RETENTION_DAYS=90`、設定画面で保存した値）は、その値のまま期限を過ぎた記録を削除する。無期限にするときは `0` にするか行を消す（設定画面の「検索方法」の「回答の記録の保存期間」「質問履歴」で「無期限」を選んでもよい）。
+- **環境変数**: `RAG_ANSWER_RECORD_RETENTION_DAYS` の既定は `0`（無期限）。明示した正の値がある環境はその値で期限切れを削除するため、無期限にするときは `0` にする。画面には保存期間の編集を出さない。
 - **品質評価の job**: 終わった job を 7 日で消す処理をやめた（設定は無い）。
 - **データベース**: DDL・データの移行は要らない。以前に削除した記録は戻らない。
 - **手順**: コードを更新して backend を再起動する（`sudo platform/deploy/suite-update.sh`）。
 
 ## 既存環境の更新手順（#3218 pipeline の段のサービスへの委譲を削除）
 
-検索インデックス・関係情報の構築・安全チェック・評価の基準の段は、backend の中で実行する（`rag_pipeline_core` の決定論の解決）。段のサービス（`services/pipeline/{vector_index,graphrag,guardrail,evaluation}`）と、そこへ HTTP で委譲する仕組み（`app/clients/pipeline_stage.py`）を削除し、サービス管理の一覧からも外した。これらのサービスは配備の対象ではなく（systemd の unit も無い）、委譲の許可の既定が有効だったため、Chunk 作成の job ごとに接続に失敗して WARNING「pipeline stage service unavailable; falling back to in-process」を出していた。
+検索インデックス・文書構造索引の構築・安全チェック・評価の基準の段は、backend の中で実行する（`rag_pipeline_core` の決定論の解決）。段のサービス（`services/pipeline/{vector_index,graphrag,guardrail,evaluation}`）と、そこへ HTTP で委譲する仕組み（`app/clients/pipeline_stage.py`）を削除し、サービス管理の一覧からも外した。これらのサービスは配備の対象ではなく（systemd の unit も無い）、委譲の許可の既定が有効だったため、Chunk 作成の job ごとに接続に失敗して WARNING「pipeline stage service unavailable; falling back to in-process」を出していた。
 
 - **環境変数**: 次は読まない（`backend/.env` に残っていても無視する。消さなくてもよい）。
   - `RAG_VECTOR_INDEX_SERVICE_ENABLED`・`RAG_VECTOR_INDEX_SERVICE_URL`・`RAG_GRAPH_SERVICE_ENABLED`・`RAG_GRAPH_SERVICE_URL`・`RAG_GUARDRAIL_SERVICE_ENABLED`・`RAG_GUARDRAIL_SERVICE_URL`・`RAG_EVALUATION_SERVICE_ENABLED`・`RAG_EVALUATION_SERVICE_URL`・`RAG_PIPELINE_STAGE_TIMEOUT_SECONDS`
@@ -574,7 +574,7 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
 2. 設定（`rag/backend/.env`。どれも任意で既定のままでよい）: `RAG_GUIDE_STEP_RETRIEVAL_ENABLED`（既定 true）・
    `RAG_GUIDE_STEP_MAX_QUERIES`（4）・`RAG_GUIDE_STEP_CHUNKS_PER_STEP`（2）・`RAG_GUIDE_REFERENCE_MAX_CHUNKS`（4）・
    `RAG_GUIDE_STEP_DEADLINE_SECONDS`（60。#2826）と、追加の検索（手順ごとの検索・小問ごとの検索・根拠の無い要求の再検索）の回数の合計の枠
-   `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（8）。手順ごとの検索の ON / OFF と上限は検索・回答プロファイルでも上書きできる。
+   `RAG_EXTRA_RETRIEVAL_MAX_QUERIES`（8）。手順ごとの検索の ON / OFF と回数・時間の上限は全体設定だけで決め、検索・回答プロファイルでは上書きしない（上限は #3523 から）。
 3. backend を再起動する。
 
 ## 既存環境の更新手順（#2847 文書分割を backend 内で実行）
@@ -588,9 +588,9 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
 
 「根拠の無い要求を探し直す」の既定を無効にした。`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` を
 指定していない環境は、更新後の backend・取込 worker の再起動から無効になる。
-既存の環境変数や検索・回答プロファイルに明示した値は維持する。保存済みの有効値も無効にしたい場合は、
-取込・検索・回答設定 › 検索方法の「回答の検索と生成」でこの項目を無効にして保存し、必要に応じて
-検索・回答プロファイルの上書きも変更する。
+既存の環境変数に明示した値は維持する。保存済みの有効値も無効にしたい場合は、
+取込・検索・回答設定 › 検索方法の「回答の検索と生成」でこの項目を無効にして保存する
+（この項目は全体設定だけで決め、検索・回答プロファイルに保存された同名の値は #3053 から適用しない）。
 
 ## 既存環境の更新手順（#2277 見出しの階層の推定（AI））
 
@@ -690,11 +690,11 @@ backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERV
 
 ## 既存環境の更新手順（#2055 関係情報を回答の検索に使う）
 
-#2055 で、関係情報の構築（`RAG_GRAPH_PROFILE=entities`）で作った章節・表 / 図の見出しの entity と chunk の対応を、回答の検索の候補を広げるのにも使えるようにした。既定は OFF で、更新しただけでは回答は変わらない。
+#2055 で、文書構造索引の構築（`RAG_GRAPH_PROFILE=entities`）で作った章節・表 / 図の見出しの entity と chunk の対応を、回答の検索の候補を広げるのにも使えるようにした。既定は OFF で、更新しただけでは回答は変わらない。
 
 - **schema の変更は無い。** 既存の表（`rag_graph_entities`・`rag_graph_entity_chunks`）を読むだけで、migration は要らない。
-- **新しい設定**: `RAG_GRAPH_EXPANSION_ENABLED`（既定 `false`。検索方法の画面の「関係情報で根拠を広げる」が書く）と `RAG_GRAPH_EXPANSION_MAX_CHUNKS`（既定 `6`。1〜20）。検索・回答プロファイルの `graph_expansion_enabled` / `graph_expansion_max_chunks` で上書きできる。
-- **関係情報の無い文書には効かない。** 関係情報の構築を「構築しない」で取り込んだ文書は、文書の詳細の処理レシピで「関係情報の構築」を「構築する」にして「再処理」するまで、何も足さない。
+- **新しい設定**: `RAG_GRAPH_EXPANSION_ENABLED`（既定 `false`。検索方法の画面の「文書構造による検索拡張」が書く）と `RAG_GRAPH_EXPANSION_MAX_CHUNKS`（既定 `6`。1〜20）。どちらも全体設定だけで決め、検索・回答プロファイルでは上書きしない（`RAG_GRAPH_EXPANSION_MAX_CHUNKS` は #3523 から。保存済みのプロファイルの `graph_expansion_max_chunks` は適用せず、次の保存で消える）。
+- **関係情報の無い文書には効かない。** 文書構造索引の構築を「構築しない」で取り込んだ文書は、文書の詳細の処理レシピで「文書構造索引の構築」を「構築する」にして「再処理」するまで、何も足さない。
 
 ## 既存環境の更新手順（#2042 XML ツリー JSON を使用エンジンにする・OCI Vision / ASR の parser とファイル準備の 2 つの変換方式の削除）
 
@@ -793,14 +793,13 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 | `RAG_DOCRAG_SCREEN_LINKING_ENABLED` | `RAG_SCREEN_LINKING_ENABLED` |
 | `RAG_DOCRAG_ANSWER_VISION_ENABLED` | `RAG_ANSWER_VISION_ENABLED` |
 | `RAG_DOCRAG_HISTORY_REWRITE_ENABLED` | `RAG_HISTORY_REWRITE_ENABLED` |
-| `RAG_DOCRAG_PROFILE` | `RAG_ANSWER_PROFILE` |
 | `RAG_DOCRAG_CHILD_TARGET_CHARS` | `RAG_CHUNK_CHILD_TARGET_CHARS` |
 | `RAG_DOCRAG_TABLE_CHILD_TARGET_CHARS` | `RAG_CHUNK_TABLE_CHILD_TARGET_CHARS` |
 | `RAG_DOCRAG_PARENT_TARGET_CHARS` | `RAG_CHUNK_PARENT_TARGET_CHARS` |
 | `RAG_DOCRAG_PARENT_MAX_PAGES` | `RAG_CHUNK_PARENT_MAX_PAGES` |
 | `RAG_DOCRAG_PARENT_MAX_CHILDREN` | `RAG_CHUNK_PARENT_MAX_CHILDREN` |
 
-**process の環境変数**（`rag_engine` の package が読む。`backend/.env` ではなく、systemd の unit の `Environment=` か shell の `export` で渡すもの）: `DOCRAG_*` は `RAG_ENGINE_*` にした（例: `DOCRAG_DOMAIN_PROFILE_FILE` → `RAG_ENGINE_DOMAIN_PROFILE_FILE`、docling サービスの `DOCRAG_RENDER_DPI` → `RAG_ENGINE_RENDER_DPI`・`DOCRAG_OUTPUT_DIR` → `RAG_ENGINE_OUTPUT_DIR`）。
+**process の環境変数**（`rag_engine` の package が読む。`backend/.env` ではなく、systemd の unit の `Environment=` か shell の `export` で渡すもの）: `DOCRAG_*` は `RAG_ENGINE_*` にした（docling サービスの `DOCRAG_RENDER_DPI` → `RAG_ENGINE_RENDER_DPI`・`DOCRAG_OUTPUT_DIR` → `RAG_ENGINE_OUTPUT_DIR`）。
 
 **コード・package**: `rag/packages/docrag_core`（distribution `docrag-core`、import `docrag`）は `rag/packages/rag_engine`（distribution `rag-engine`、import `rag_engine`）。backend の `app/rag/docrag_answer.py` → `answer_engine.py`、`docrag_chunking.py` → `chunking_small_to_big.py`、`docrag_prompts.py` → `answer_prompts.py`、`docrag_verify_cli.py` → `answer_verify_cli.py`（`python -m app.rag.answer_verify_cli`）。CI の job `RAG / DocRAG core` は `RAG / Engine`。
 
@@ -845,7 +844,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
      sudo cp -p "${env_file}" "${env_file}.bak-599"
      sudo sed -i -E \
        -e 's/^RAG_DOCRAG_(CHILD_TARGET_CHARS|TABLE_CHILD_TARGET_CHARS|PARENT_TARGET_CHARS|PARENT_MAX_PAGES|PARENT_MAX_CHILDREN)=/RAG_CHUNK_\1=/' \
-       -e 's/^RAG_DOCRAG_PROFILE=/RAG_ANSWER_PROFILE=/' \
+       -e '/^RAG_DOCRAG_PROFILE=/d' \
        -e 's/^RAG_DOCRAG_(QUERY_STRATEGY|ANSWER_FLOW|NEIGHBOR_CHILD_COUNT|RERANK_ENABLED|SCREEN_LINKING_ENABLED|ANSWER_VISION_ENABLED|HISTORY_REWRITE_ENABLED)=/RAG_\1=/' \
        -e 's/^RAG_CHUNKING_STRATEGY=docrag_small_to_big$/RAG_CHUNKING_STRATEGY=small_to_big/' \
        "${env_file}"
@@ -854,7 +853,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
    ```
 
    ローカルは `rag/backend/.env` だけを同じ `sed` で直す。
-3. process の環境変数 `DOCRAG_*` を `RAG_ENGINE_*` に直す。systemd の unit の drop-in（`systemctl edit production-ready-rag-backend.service` などで足した `Environment=DOCRAG_DOMAIN_PROFILE_FILE=...`）や、起動する shell の `export` を探して改名する。docling サービスの unit の `Environment=RAG_ENGINE_OUTPUT_DIR=...` は `scripts/rag-systemd.sh` が書くので、手順 4 の `init_script.sh` の再実行（ローカルは `scripts/rag-services.sh install`）で作り直す。
+3. process の環境変数 `DOCRAG_*` を `RAG_ENGINE_*` に直す。systemd の unit の drop-in や、起動する shell の `export` を探して改名する。ただし外部 DomainProfile の設定は廃止しているので、後述の #3668 の手順で除く。docling サービスの unit の `Environment=RAG_ENGINE_OUTPUT_DIR=...` は `scripts/rag-systemd.sh` が書くので、手順 4 の `init_script.sh` の再実行（ローカルは `scripts/rag-services.sh install`）で作り直す。
 
    ```bash
    sudo grep -rn 'DOCRAG_' /etc/systemd/system/production-ready-rag-* 2>/dev/null
@@ -893,11 +892,11 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 
    - 取込・検索・回答設定の「検索方法」「文書分割」と検索・回答プロファイルの「検索・回答設定」に、更新の前の値が出る。RAG 検索で回答し、「回答の根拠と実行記録」が出る。
 
-## 既存環境の更新手順（#621 関係情報の構築の選択肢を 2 つにする）
+## 既存環境の更新手順（#621 文書構造索引の構築の選択肢を 2 つにする）
 
-#621 で、設定の「関係情報の構築」の選択肢を「構築しない」（`off`。既定）と「構築する」（`entities`）の 2 つにした。構築するのは、文書全体と章・節の見出し（表・図を含む）の「含む」のつながりで、LLM は使わない。ナレッジベースの「関係情報グラフ」で見るためのもので、回答の検索には使わない（#595）。
+#621 で、設定の「文書構造索引の構築」の選択肢を「構築しない」（`off`。既定）と「構築する」（`entities`）の 2 つにした。構築するのは、文書全体と章・節の見出し（表・図を含む）の「含む」のつながりで、LLM は使わない。ナレッジベースの「文書構造グラフ」で見るためのもので、回答の検索には使わない（#595）。
 
-- **`full` を削除した。** `full` が追加で作っていた claims（`rag_graph_claims`）と community summary（`rag_graph_community_summaries`）は、どの画面・API・検索も読んでいなかった。`full` と `entities` が作る関係情報グラフの中身（`rag_graph_entities`・`rag_graph_relationships`・`rag_graph_entity_chunks`）は同じ。
+- **`full` を削除した。** `full` が追加で作っていた claims（`rag_graph_claims`）と community summary（`rag_graph_community_summaries`）は、どの画面・API・検索も読んでいなかった。`full` と `entities` が作る文書構造グラフの中身（`rag_graph_entities`・`rag_graph_relationships`・`rag_graph_entity_chunks`）は同じ。
 - **legacy の `RAG_GRAPH_ENABLED` を削除した。** 読まない（`true` でも `full` に読み替えない）。設定画面の保存も書かない。
 - **backend/.env の `RAG_GRAPH_PROFILE=full` は起動を止める。** 読み替えず、書き換え先（`entities` か `off`）を示すエラーで止まる。
 - **保存済みの上書きの `full` は、migration `20260930_006_graph_profile_entities` が `entities` に書き換える**（文書・文書レシピの `processing_config`、ナレッジベースの `retrieval_config.ingestion`、取込ジョブの `settings_overrides.processing_config`、chunk_set に刻んだレシピ `recipe_subset`）。データを削除しない migration。
@@ -945,7 +944,7 @@ parser のサービス `parser-xml-tree-json`（`services/parsers/xml_tree_json`
 
 ### 旧 `full` で構築した文書
 
-- ナレッジベースの「関係情報グラフ」は、再取込しなくても今までどおり表示される（残す表の中身は `entities` と同じ）。
+- ナレッジベースの「文書構造グラフ」は、再取込しなくても今までどおり表示される（残す表の中身は `entities` と同じ）。
 - 文書詳細の関係情報の層は、再取込するまで「構築計画に含まれていますが、まだ実体化していません」と出る。層の ID は構築の設定値から作るため、`full` で記録した層と `entities` の層が別の ID になる。気になる文書は再取込する。`off` と `entities` の文書の層・chunk_set・索引は変わらない（層の ID の算法 `KEY_VERSION` は変えていない）。
 
 ## 既存環境の更新手順（#286: Docker Compose からネイティブ配備への移行）
@@ -1055,7 +1054,7 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
 
 - **`rag_answer_records.answer_engine` の列**: 保存済みの回答の記録（履歴）が、どの回答の方式で作られたかを表す。新しい記録には常に同じ値を書く。
 - **監査 `rag_search_audit` の標準の回答フローの内訳の列**（`memory_plan_id`・`agent_memory_*` など）: 既存の監査の行を変えないため残し、今は既定値を書く。
-- **関係情報の構築（`rag_graph_*`）と navigation の要約の取り込み**: ナレッジベースの関係図と文書詳細が使い、関係情報は `RAG_GRAPH_EXPANSION_ENABLED`（既定 OFF。#2055）を ON にしたときに回答の検索も読む（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
+- **文書構造索引の構築（`rag_graph_*`）と navigation の要約の取り込み**: ナレッジベースの関係図と文書詳細が使い、関係情報は `RAG_GRAPH_EXPANSION_ENABLED`（既定 OFF。#2055）を ON にしたときに回答の検索も読む（関係情報のうち、読む経路の無かった claims / community summary の表は #621 で削除した）。
 
 ### 手順
 
@@ -1120,9 +1119,9 @@ sudo ls /u01/data/production-ready-rag /var/lib/production-ready-rag/.oci
   - 「回答エンジン」を継承していた検索・回答プロファイルと、「標準」を明示していた検索・回答プロファイルの RAG 検索・チャット。
   - 検索・回答プロファイルを指定しない呼び出し（MCP の `rag_search` / `/api/search` のナレッジベースだけの指定、品質評価、staging smoke）。
   - ナレッジベースの検索テストとレシピの検索比較は、回答を作らずに検索だけを行う（#593 の検索だけの経路。LLM を呼ばない）。
-- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG のとき、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。既定は質問の拡張 = 単純検索、回答の生成方式 = 標準 RAG（#2747）で、取込・検索・回答設定 › 検索方法の「回答の検索と生成」（検索・回答プロファイルごとは「検索・回答設定」）で変える。
+- **LLM の呼び出しが増える。** 標準の回答は 1 回の回答で回答の生成が 1 回（とオプションのクエリ拡張など）だった。新しい方式は、質問の拡張 = 自動ルーティング、回答の生成方式 = CRAG のとき、質問の振り分け・CRAG の根拠の判定（根拠が足りなければ検索文を書き換えて最大 3 回）・回答の生成・監査の順に、1 回の回答で少なくとも 4 回呼ぶ。チャットで会話履歴があると質問の書き換えが 1 回、「画面目録で操作画面を探す」を有効にすると 1 回増える。回答の時間と OCI Enterprise AI の利用量が増えるので、`RAG_ANSWER_TIMEOUT_SECONDS`（既定 600 秒）と利用の上限を見直す。既定は質問の拡張 = 単純検索、回答の生成方式 = 標準 RAG（#2747）で、取込・検索・回答設定 › 検索方法の「回答の検索と生成」で変える（これらは全体設定だけで決め、検索・回答プロファイルでは上書きしない。#3053）。
 - 回答の記録（`rag_answer_records`）は、すべての回答で保存する（保存期間は `RAG_ANSWER_RECORD_RETENTION_DAYS`）。品質評価の結果も新しい方式の回答になるので、更新の前の結果と比べるときは同じケースで評価し直す。
-- 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、取込・検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。回答の上書きは、検索・回答プロファイルの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行う（検索・回答プロファイルの編集画面で常に表示する）。安全チェックは今までどおり質問と回答の両方に適用する。
+- 検索・回答プロファイルの「検索方法」「検索オプション」「根拠確認」「回答スタイル」「回答プロンプト」と、取込・検索・回答設定の同じ名前の画面の設定は、回答に使われない（#594 では入力を残し、「現在の回答では、この設定は使われません。」と表示していた。欄は #595 で削除した）。当時は回答の上書きを検索・回答プロファイルの「質問の拡張」「回答の生成方式」「根拠の前後から加える数」「回答の検索のオプション」で行ったが、これらは #3053 で全体設定だけになった（検索・回答プロファイルの保存値は適用しない）。安全チェックは今までどおり質問と回答の両方に適用する。
 
 ### 更新の前に確かめる
 
@@ -1234,7 +1233,7 @@ SELECT NVL(JSON_VALUE(profile_config, '$.query.answer_engine'), '(継承)') AS a
 ## 既存環境の更新手順（#214 共通認証と権限管理）
 
 RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` / `RAG_AUTH_PASSWORD` / `RAG_AUTH_SESSION_SECRET`）から、
-3製品共通の認証（構成管理者 `system_admin` と DB ユーザー）に変わった。`RAG_AUTH_MODE=production` の環境は、更新時に次を行う。
+3製品共通の認証（構成管理者 `system_admin` と DB ユーザー）に変わった。`PLATFORM_AUTH_MODE=authenticated` の環境は、更新時に次を行う。
 
 1. 共通 `.env` に構成管理者を設定する（NL2SQL と同じ値を共有する）。
 
@@ -1261,7 +1260,7 @@ RAG のログインは、`.env` の単一アカウント（`RAG_AUTH_USERNAME` /
    - 保存済みの回答（`rag_answer_records`）は #304 から持ち主（`user_id_hash`）で分ける。システムテーブルの初期化（migration `20260928_002_answer_record_owner`）で列を足し、既存の行はチャットの回答・検索の監査から利用者が 1 人に決まるものだけ持ち主を補う。補えなかった行は SYSTEM_ADMIN と `rag.feedback.manage` を持つ利用者だけが一覧・詳細・評価・削除できる（不要なら管理者が削除する。保存期間を設定していれば、その経過でも消える）。
    - 利用者フィードバック（`rag_citation_feedback`）は #408 から送った利用者（`user_id_hash`）で分ける。一覧・件数・集計・詳細（評価ケースの作成・承認済み FAQ への反映を含む）は、SYSTEM_ADMIN（構成管理者・local の利用者を含む）だけがすべての利用者の分を扱い、ほかのロールは自分が送った分だけを扱う（`rag.feedback.manage` を持っていても同じ。NL2SQL の実行履歴と同じ規則）。他人のフィードバックの ID を指定すると 403 になる。列は以前から保存しているので schema の変更はない。送信者の記録がない古い行は SYSTEM_ADMIN だけに見える。
    - Cookie 名が `production_ready_rag_session` から `rag_session` / `rag_csrf` に変わるため、利用者は一度ログインし直す（その後 #1565 で 3 製品共通の `pr_session` / `pr_csrf` になった。[terraform/README.md](../../terraform/README.md)「ログインのセッションの共有（#1565）」）。
-   - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `RAG_AUTH_MODE=production` の API を呼ぶ場合は、ログインしたセッションが必要になる。
+   - 評価・負荷試験の CLI（`app.rag.evaluation_cli` など）が `PLATFORM_AUTH_MODE=authenticated` の API を呼ぶ場合は、ログインしたセッションが必要になる。
 
 ## 既存環境の更新手順（#1701 文書解析の設定を parser-settings.json へ分ける）
 
@@ -1483,6 +1482,8 @@ schema の変更は無い。表示の本文・embedding は変えない。
    再解析した文書は節の見出しの列（`section_path`）が付く。頁のヘッダー・フッター・頁番号は本文に入れない。
 
 ## 既存環境の更新手順（#1402 実体の 1 段の拡張を既定 on にする）
+
+> この節と下の #1388・#1362 は導入当時の更新履歴です。現在の構築は「実体・別名索引」、利用は検索方法の全体設定「実体・別名による検索拡張」で選びます。両方とも既定 OFF で、検索・回答プロファイルでは拡張を上書きしません。現在の設定は [rag-engine.md](./rag-engine.md#設定一覧) を参照してください。
 
 回答の検索の実体の 1 段の拡張（検索・回答プロファイルの「実体でつながる根拠を 1 段広げる」）を既定 on にした
 （#1362 の実サービスの再評価で、多段の根拠の連鎖が上がり、1 段の質問・同じ文書の中の参照・業務支援は下がらな
@@ -1740,7 +1741,7 @@ ADB（Oracle Autonomous AI Database）と Wallet も stack が用意し（NL2SQL
 |---|---|
 | 実行ユーザー | 専用の system user `ragsvc`（home `/var/lib/production-ready-rag`）。リポジトリは `opc` の所有で、`opc` が git pull・uv sync・frontend の build を行う |
 | Python | `uv python install 3.12`（`/opt/uv/python`。`ragsvc` も読める）。各サービスの venv は `uv sync --locked --no-dev --python 3.12` |
-| backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`RAG_ENVIRONMENT=prod`、in-process の取込 worker は無効） |
+| backend | `production-ready-rag-backend.service`（gunicorn + UvicornWorker、`127.0.0.1:8000`、workers 2、`PLATFORM_ENVIRONMENT=production`、in-process の取込 worker は無効） |
 | 取込 worker | `production-ready-rag-ingestion-worker.service`（`python -m app.rag.ingestion_worker`、`KillMode=mixed`、`RAG_INGESTION_QUEUE_SHUTDOWN_GRACE_SECONDS=60`、`TimeoutStopSec=90`。停止は下の「取込 worker の lease と停止」） |
 | 前処理 / parser | `production-ready-rag-<service>.service`（サービスごとの venv の gunicorn、`127.0.0.1:<port>`）。対象は stack の `rag_services`（前処理 4 つ・parser-docling・parser-structured-records-jsonl・parser-xml-tree-json と、選べば parser-unstructured。準備中〔ロードマップ〕の parser-oci-document-understanding は配備しない。#3374）。parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（#2453）。GPU の parser は配備しない |
 | frontend | host の Node.js 24 で `platform` と `rag/frontend` を build し、Nginx が `rag/frontend/dist` を配信して `/api/` を backend へ proxy する |
@@ -1997,7 +1998,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_RATE_LIMIT_ENABLED`: 高コスト API の app 内 limiter。外部 API Gateway / Ingress limiter と併用できる。
 - `RAG_RATE_LIMIT_WINDOW_SECONDS`: fixed-window limiter の窓幅。
 - `RAG_RATE_LIMIT_SEARCH_REQUESTS` / `RAG_RATE_LIMIT_EVALUATION_RUNS` / `RAG_RATE_LIMIT_UPLOADS` / `RAG_RATE_LIMIT_INGEST_REQUESTS`: tenant/user hash 単位の窓内上限。OCI / Oracle / LLM の quota と業務ピークに合わせて調整する。
-- `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names`: `RAG_AUTH_MODE=local` のときだけ使う、認証ゲートウェイまたはアプリケーション権限層が認可済み scope として backend へ付与する request header（`production` ではログインした利用者の権限から範囲を決め、この header は使わない。#214）。backend は raw 値を監査ログへ出さず、document 一覧、詳細、chunk count、retrieval に deny-by-default の scope filter として適用する。外部クライアントから直接信頼しない。
+- `X-RAG-Allowed-Document-Ids` / `X-RAG-Allowed-Category-Names`: `PLATFORM_AUTH_MODE=local` のときだけ使う、認証ゲートウェイまたはアプリケーション権限層が認可済み scope として backend へ付与する request header（`production` ではログインした利用者の権限から範囲を決め、この header は使わない。#214）。backend は raw 値を監査ログへ出さず、document 一覧、詳細、chunk count、retrieval に deny-by-default の scope filter として適用する。外部クライアントから直接信頼しない。
 - `RAG_GUARDRAIL_MASK_SENSITIVE_IDENTIFIERS`: query / answer 内の個人番号、口座番号、電話番号、メールアドレスらしき値を `[機微情報]` にマスクする。外部 DLP と責務分担する場合だけ無効化を検討する。
 
 安全チェックを含むリリースは、コード展開後に `uv run python -m app.rag.chat_history_sanitization --dry-run --format json` を実行し、Oracle バックアップを取得してから `--apply` する。適用後は `rag_guardrail_findings_total` の `guardrail_backend_unavailable` / `prompt_injection` / `low_groundedness` と阻止率を監視する。CLI は冪等で、原文の別バックアップをアプリ DB 内には作成しない。
@@ -2012,7 +2013,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 3. `OracleClient` の python-oracledb pool、vector search、keyword search、document/chunk persistence、同じ chunk group の兄弟 chunk の取得を有効化する。`PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` / `PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に配置した wallet を設定する。`INGESTING` / `ERROR` への状態遷移では該当 document の chunk/index 行と古い抽出結果を削除し、検索対象は `INDEXED` に限定する。staging では `VECTOR_DISTANCE`、`FETCH APPROX ... WITH TARGET ACCURACY`、Oracle Text `CONTAINS`、document 別 chunk count、`chunk_index` window による同一 document 前後 chunk 取得、`INDEXED` 文書が hybrid search の citation に含まれることを確認する。
 4. `OciGenAiClient` の embedding / rerank は OCI Generative AI Inference SDK 実装を使う。staging では `PLATFORM_OCI_CONFIG_FILE` / profile / region / compartment / model id、Cohere Embed v4 の 1536 次元、Cohere Rerank v4 fast の返却件数・候補 index 範囲・index 重複なし・finite score を確認する。
 5. `OciEnterpriseAiClient` は `PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT`、`PLATFORM_OCI_ENTERPRISE_AI_API_KEY`、既定のテキストモデル・既定の Vision モデル（画面の「モデル」、または `PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL`・`PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_VISION_MODEL`。#499）、`PLATFORM_OCI_ENTERPRISE_AI_LLM_PATH`、`PLATFORM_OCI_ENTERPRISE_AI_VLM_PATH` を使って Enterprise AI endpoint を呼び出す。標準 payload で合わない model deployment / gateway は `PLATFORM_OCI_ENTERPRISE_AI_LLM_PAYLOAD_TEMPLATE` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_PAYLOAD_TEMPLATE` で request shape を差し替え、response envelope が独自の場合は `PLATFORM_OCI_ENTERPRISE_AI_LLM_RESPONSE_PATH` / `PLATFORM_OCI_ENTERPRISE_AI_VLM_RESPONSE_PATH` で候補 node を指定する。staging ではまず `uv run python -m app.rag.enterprise_ai_probe --surface both --dry-run` で URL、template 使用有無、response path 使用有無、payload key / shape、JSON byte 数を確認し、その後 `uv run python -m app.rag.enterprise_ai_probe --surface both` で LLM/VLM を直接呼び出す。probe は回答本文や OCR 本文を出さず、text 文字数・element 件数だけを artifact に残す。ここで Bearer 認証、timeout/retry、VLM の MIME type / 構造化抽出 JSON schema、LLM の citation-grounded 生成 payload、response parsing を実 endpoint で確認する。VLM response は `StructuredExtraction` へ検証し、LLM response は空 text を fail fast する。
-6. staging にデプロイし、`/api/ready` の checks がすべて `ok` になることを確認する。production 昇格時は `RAG_ENVIRONMENT=production` にして、追加 checks の `audit_context_salt` も `ok` にする。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加えて `PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に存在する Wallet が必要。
+6. staging にデプロイし、`/api/ready` の checks がすべて `ok` になることを確認する。production 昇格時は `PLATFORM_ENVIRONMENT=production` にして、追加 checks の `audit_context_salt` も `ok` にする。Oracle は `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_DSN` に加えて `PLATFORM_ORACLE_PASSWORD` または `PLATFORM_ORACLE_WALLET_DIR`（Thick mode では `PLATFORM_ORACLE_CLIENT_LIB_DIR/network/admin`）に存在する Wallet が必要。
 7. staging 環境でまず `uv run python -m app.rag.staging_smoke --preflight-only` を実行する。OCI/Oracle 接続設定、Enterprise AI LLM/VLM 設定、Cohere embedding/rerank 設定、`PLATFORM_UPLOAD_STORAGE_BACKEND=oci`、Object Storage namespace/bucket がそろっていることを JSON の `checks` で確認する。preflight 失敗時は外部依存へ接続せず、secret 値も出力しない。
 8. preflight が `ok=true` なら `uv run python -m app.rag.staging_smoke` を実行する。Object Storage put/get、Oracle document 作成、Enterprise AI VLM、chunking、embedding、Oracle indexing、hybrid search、Enterprise AI LLM 生成を 1 回通し、作成した smoke document が citation に含まれることを確認する。既定 query は一意な `SMOKE-...` marker の原文引用を要求し、検索は新規 `document_id` に限定される。既定 query では LLM 回答にも marker が含まれない場合に `stage=rag_answer_marker` で失敗する。JSON 出力の `ok`、`marker`、`query`、`answer_contains_marker`、`trace_id`、`chunk_count`、`citation_count`、`cleanup`、`diagnostics`（`config_fingerprint`、回答フローの実行記録 `diagnostics.answer.execution_steps` など）を保存し、staging gate の artifact にする。既定では evidence として作成物を保持し、`cleanup` は `skipped` になる。DB/Object Storage を汚したくない一時確認では `uv run python -m app.rag.staging_smoke --cleanup` を使い、成功・失敗どちらでも作成済み Oracle document/chunk と Object Storage object の削除 status を確認する。失敗時は preflight の `checks` または本実行の `stage` / `cause_type` を見て、Object Storage、Oracle、取込（VLM・chunking・embedding・索引）、検索と回答（`rag_search`）、回答の確認（`rag_answer_marker`）のどこで止まったかを切り分ける。回答フローの中の工程は `diagnostics.answer.execution_steps` で確かめる。query を変える場合は `--query "確認用キーワード {marker} を要約してください"` のように `{marker}` placeholder を残す。
 9. golden set 評価と負荷試験を通してから production へ昇格する。
@@ -2040,3 +2041,29 @@ placeholder を置き換えます。旧名を実行時に展開する互換処�
 更新時に `python -m app.rag.guardrail_settings_migration --env-file .env` を実行し、
 回答 backend を再読み込みします。旧 OCI 選択は on、Local 選択は off へ移ります。
 設定・障害時の扱いは [安全チェック](evaluation-observability-guardrails.md) を参照してください。
+
+## 外部 DomainProfile の読込の廃止（#3668）
+
+`RAG_ENGINE_DOMAIN_PROFILE_FILE` と作業ディレクトリの `domain_profile.json` を読む機能、および `RAG_ANSWER_PROFILE` / `RAG_ENGINE_PROFILE` の選択を廃止した。これらの変数は別名で受け付けず、残っていても実行には使わない。backend の `.env`、起動 shell、systemd の drop-in に残る定義は運用者が削除する。`DOCRAG_DOMAIN_PROFILE_FILE` の旧定義も新しい名前へ改名しない。
+
+ファイル自体や保存済みデータは自動削除しない。別名や判定に必要な設定は、内容を確認したうえで検索・回答プロファイルのページ管理の「用語・同義語」「ドメインキーワード」「回答ルール」「業務ガイド」へ必要な分だけ登録する。文書分類は保存済み metadata と手入力が正本となり、外部 taxonomy による名前の補正やパスからの大分類・中分類の推定は行わない。既存の chunk の分類と検索範囲は保持する。文書の再取込・DB migration は不要。
+
+一般的な日本語の質問理解は設定に依存せず維持する。SDK から `profile=` を渡していた場合は引数を除き、Prompt 上書きだけが必要なら Runtime の `prompt_overrides` を使う。Prompt の本文や保存済みの Prompt 設定は変更しない。
+
+## 検索する件数の既定（#3679）
+
+`rag/backend/.env` の `RAG_SEARCH_TOP_K_DEFAULT=50` は、検索・チャット・公開 MCP・品質評価・負荷確認で `top_k` を省略したときの基準件数です（1〜100）。明示した `top_k` が優先されます。DB の取得深度、Rerank の候補総数、最終引用数は別の制約です。既定の候補多様化の深さ 600 は変更していません。
+
+検索画面は件数を送信せず、旧 URL と作業状態の件数も使いません。実行履歴から開く場合も、質問・プロファイル・絞り込みを引き継ぎ、件数は現在の backend の設定を使います。Terraform の新規配備と再配備の生成元にも 50 を明示しています。既存環境へ追加する場合は他の設定を保って同変数を追記してください。
+
+公開する API / MCP の省略時の値は現在の設定から生成し、静的な契約ファイルは標準の設定 50 で照合します。別製品や外部クライアントが件数を明示して呼ぶ場合、その値を変更しません。不正な環境値は Settings の検証エラーです。稼働中の `.env` 再読込に失敗したときは、既存の設定更新の規則どおり警告を記録し、最後に成功した設定を保ちます。
+
+
+### 質問履歴と候補の退役（#3762）
+
+質問を候補として集計する設定・保存処理・候補 API は廃止した。会話・メッセージ・回答の記録・実行履歴は継続する。
+新規の schema の正本は `RAG_QUERY_HISTORY` を含まない。過去の migration は変更せず、
+`20261029_001_retire_query_history` が同表の全行と自有索引・制約を削除する。表の不存在は許容し、
+他表の参照などのエラーは握りつぶさない。旧コードが保存しないことを確認してから、現在の schema 管理の
+`initialize --allow-destructive` で明示的に適用する。必要な履歴がある環境は先に同表を export する。
+`RAG_QUERY_HISTORY_*` の設定は新コードでは使用しない。配備時は不要になった行だけを削除する。

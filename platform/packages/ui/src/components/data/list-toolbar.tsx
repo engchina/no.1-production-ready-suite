@@ -46,6 +46,8 @@ export interface ListToolbarProps {
    * `FilterChipGroup`。欄の上にラベルを出す `SelectField` / `ToggleChip` は使わない（高さ・中心がずれる）。
    */
   filters?: ReactNode;
+  /** 広い画面では二段目に置く絞り込み。狭い画面では filters と同じシートへまとめる。 */
+  secondaryFilters?: ReactNode;
   /**
    * 既定と違う値の絞り込みの数（検索語は数えない。#1933）。狭い置き場所の「絞り込み（N）」に出し、
    * 1 以上（か `searchActive`）なら「条件をクリア」を出す。
@@ -124,6 +126,7 @@ function useNarrowContainer(enabled: boolean, thresholdRem: number) {
 export function ListToolbar({
   search,
   filters,
+  secondaryFilters,
   activeFilterCount = 0,
   searchActive = false,
   onClearFilters,
@@ -136,10 +139,11 @@ export function ListToolbar({
   testId,
 }: ListToolbarProps) {
   const labels = { ...DEFAULT_LIST_TOOLBAR_LABELS, ...labelOverrides };
-  const { ref, narrow } = useNarrowContainer(filtersLayout === "sheet" && Boolean(filters), LIST_TOOLBAR_NARROW_REM);
+  const hasFilters = Boolean(filters) || Boolean(secondaryFilters);
+  const { ref, narrow } = useNarrowContainer(filtersLayout === "sheet" && hasFilters, LIST_TOOLBAR_NARROW_REM);
   const [sheetOpen, setSheetOpen] = useState(false);
   const sheetId = useId();
-  const sheetMode = filtersLayout === "sheet" && narrow && Boolean(filters);
+  const sheetMode = filtersLayout === "sheet" && narrow && hasFilters;
 
   // 広くなったら（回転・パネルの幅の変更）シートを閉じる。絞り込みはツールバーの中に戻る。
   useEffect(() => {
@@ -163,7 +167,7 @@ export function ListToolbar({
       </Button>
     ) : null;
 
-  const hasStart = Boolean(search) || Boolean(filters) || Boolean(clearButton);
+  const hasStart = Boolean(search) || hasFilters || Boolean(clearButton);
   const hasEnd = Boolean(count) || Boolean(summary) || Boolean(actions);
   if (!hasStart && !hasEnd) return null;
 
@@ -222,7 +226,12 @@ export function ListToolbar({
               // 狭い分割のペインでも、検索欄（全幅）と絞り込みの欄の幅がそろう。
               <FieldWidthScopeProvider scope="container">
                 {filters}
-                {clearButton}
+                {secondaryFilters ? (
+                  <div className="flex min-w-0 flex-wrap items-center gap-3 basis-full" data-list-toolbar-secondary-filters="">
+                    {secondaryFilters}
+                    {clearButton}
+                  </div>
+                ) : clearButton}
               </FieldWidthScopeProvider>
             )}
           </div>
@@ -250,7 +259,7 @@ export function ListToolbar({
         >
           <div className="flex flex-col gap-3 pb-4" data-list-toolbar-sheet-filters="">
             {/* シートの中は @container の外なので、container の基準の欄は全幅になる。 */}
-            <FieldWidthScopeProvider scope="container">{filters}</FieldWidthScopeProvider>
+            <FieldWidthScopeProvider scope="container">{filters}{secondaryFilters}</FieldWidthScopeProvider>
           </div>
           <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
             <Button type="button" variant="primary" size="md" onClick={() => setSheetOpen(false)}>

@@ -18,8 +18,6 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
     skill_ids: [],
     model_id: "",
     data_scopes: {},
-    migration_required: false,
-    tool_names: [],
     enabled: true,
     source: "runtime",
     versioned: true,
@@ -292,7 +290,7 @@ test("処理の経過のツールの段に、使ったプロファイルと範�
   // 処理の経過の段（#1955）。失敗した段は最初から開き、完了した段は行を開いて中身を見る。
   const timeline = page.getByTestId("run-timeline-section");
   await page.getByTestId("run-timeline-section-summary").click();
-  await timeline.getByRole("button", { name: /処理を実行しました/ }).click();
+  await timeline.getByRole("button", { name: /選ばれたツールを呼び出しました/ }).click();
 
   await expect(timeline.getByText("profile-hr は範囲外のため実行していません", {exact: true})).toBeVisible();
   await expect(timeline.getByText("profile-cost を範囲から補完", {exact: true})).toBeVisible();

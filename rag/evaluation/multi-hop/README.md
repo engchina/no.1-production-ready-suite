@@ -243,9 +243,9 @@ uv run python -m app.rag.evaluation_corpus_cli ../evaluation/multi-hop/multi-hop
 実体の層（文書レシピの「実体の抽出」（既定 on。#1388）と、回答の検索の 1 段の拡張（既定 on。#1402）。
 [../../docs/rag-engine.md](../../docs/rag-engine.md) の `RAG_ENTITY_INDEX_ENABLED`）の効果は、同じ資料を
 **別のナレッジベース**に、レシピの有り / 無しで取り込んで A を流して比べます（同じ文書を両方に入れると、
-実体を持つ文書が両方の検索範囲に入るため）。拡張は既定 on で、検索・回答プロファイルで選び、全体の環境変数は
-持たない（#1388 / #1402）。`--entity-index` で書き出す評価セットには、既定に頼らず `rag_overrides` の
-`entity_expansion_enabled: true` が入ります（`--guides` で作る検索・回答プロファイルでも拡張を明示します）。実体の抽出は全体の既定で on のため、
+実体を持つ文書が両方の検索範囲に入るため）。拡張は検索方法の全体設定（`RAG_ENTITY_EXPANSION_ENABLED`。既定 OFF）で選び、
+検索・回答プロファイルでは上書きしない（#1388 / #3053）。`--entity-index` で書き出す評価セットには、既定に頼らず `rag_overrides` の
+`entity_expansion_enabled: true` が入ります（評価の実行だけの上書きで、全体設定は変わりません）。実体の抽出は全体の既定で on のため、
 無しの側は `--no-entity-index` でレシピの実体の抽出を無効にします。実体を持たないナレッジベースでは何も
 足しません。
 
@@ -288,15 +288,21 @@ Agent の画面で作って公開しておきます（評価の CLI は業務 Ag
 （`suite/evaluation`。#3240）で流し、評価セットの `file:` は `evaluation_corpus_cli --document-map-output` の
 対応表で解決します。
 
+比べるときは A も suite の RAG の Target（公開の MCP の `rag_search`）で流し、同じ採点器で採点します（#3417。上の
+`evaluation_cli` の A は、RAG の設定の調整に使う RAG 自身の評価で、suite の `compare` には渡しません）。
+
 ```bash
 cd suite/evaluation
-export SUITE_EVALUATION_API_KEY=prak_...   # 使える製品に agent を含む API キー
-uv run suite-evaluation run ../../rag/evaluation/multi-hop/multi-hop.json --split dev \
-  --document-map /tmp/multi-hop.document-map.json \
-  --agent-mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \
+export SUITE_EVALUATION_API_KEY=prak_...   # 使える製品に rag と agent を含む API キー
+SET=../../rag/evaluation/multi-hop/multi-hop.json
+uv run suite-evaluation run "$SET" --split dev --document-map /tmp/multi-hop.document-map.json \
+  --target rag-mcp --mcp-url http://127.0.0.1:8000/api/mcp --knowledge-base-id <ナレッジベース> \
+  --output /tmp/multi-hop.suite-a.json
+uv run suite-evaluation run "$SET" --split dev --document-map /tmp/multi-hop.document-map.json \
+  --target agent-mcp --mcp-url http://127.0.0.1:8020/api/mcp --agent-id <公開済みの業務 Agent> \
   --output /tmp/multi-hop.d.json
 # 比べる表（種類別・段の数別・区分ごとの種類別の根拠の連鎖の完全率の行を含む）
-uv run suite-evaluation compare A=/tmp/multi-hop.a.json D=/tmp/multi-hop.d.json
+uv run suite-evaluation compare A=/tmp/multi-hop.suite-a.json D=/tmp/multi-hop.d.json
 ```
 
 - D の引用は、公開の Agent MCP の観測（`agent_get_run_observation` の `evidence[]`）の根拠で、その Run の

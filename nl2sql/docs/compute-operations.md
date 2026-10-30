@@ -111,11 +111,10 @@ database values into `platform/.env`:
 - `PLATFORM_ORACLE_ADB_OCID`
 - `PLATFORM_ORACLE_ADB_REGION`
 
-The Resource Manager form hides the application environment and auth cookie
-security inputs. Direct HTTP deployments keep the internal defaults
-`nl2sql_app_environment=local` (`NL2SQL_ENVIRONMENT`), `NL2SQL_DEBUG=false`, and `nl2sql_app_auth_cookie_secure=false` (`PLATFORM_AUTH_COOKIE_SECURE`).
-If you override these Terraform variables outside the form for HTTPS, use
-`nl2sql_app_environment=production` with `nl2sql_app_auth_cookie_secure=true`.
+Resource Manager の実行環境は3製品共通の `platform_environment`（既定 `staging`）です。
+共通 `.env` に `PLATFORM_ENVIRONMENT` と `PLATFORM_AUTH_MODE=authenticated` を設定します。
+`staging` / `production` は `https_enabled=true` と Secure Cookie を必須にします。
+HTTP を使うローカルの構成では `platform_environment=local` を明示します。
 
 ## Updating an Existing Compute Deployment
 

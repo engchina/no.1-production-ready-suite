@@ -21,7 +21,7 @@
 
 | ディレクトリ | 内容 |
 |---|---|
-| `platform/` | 3 製品の共通基盤: `packages/ui`（`@production-ready/ui`）、`packages/system-settings`（`@production-ready/system-settings`。共通のシステム設定・ユーザー / ロール管理の画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`。共通の設定 API と認証基盤）、`packages/evaluation_scoring`（`pr_evaluation_scoring`。製品と suite の評価が共有する採点の部品）、`docs/design-system/`、`deploy/`（1 台の Compute の配備） |
+| `platform/` | 3 製品の共通基盤: `packages/ui`（`@production-ready/ui`）、`packages/system-settings`（`@production-ready/system-settings`。共通のシステム設定・ユーザー / ロール管理の画面）、`packages/backend_core`（`pr_backend_core`）、`packages/system_settings_backend`（`pr_system_settings`。共通の設定 API と認証基盤）、`packages/evaluation_scoring`（`pr_evaluation_scoring`。製品と suite の評価が共有する採点の部品）、`packages/enterprise_ai`（`pr_enterprise_ai`。OCI Enterprise AI の URL の規則と失敗の分類。標準 library だけ）、`docs/design-system/`、`deploy/`（1 台の Compute の配備） |
 | `rag/` | Production Ready RAG |
 | `nl2sql/` | Production Ready NL2SQL（SQL 専用の自然言語問い合わせ） |
 | `agent/` | Production Control Plane for AI Agents |
@@ -29,7 +29,7 @@
 | `skills/` | 組み込みのスキル（Agent Skills の形式 `skills/<name>/SKILL.md`）。Agent が読み、Claude Code・Codex などの外部の Agent にも配る（`.claude-plugin/` の plugin marketplace。#1816。[設計](./agent/docs/agent-control-plane-design.md)） |
 | `terraform/` | OCI Resource Manager の統合 stack（ADB 1 つ＋選んだ製品をすべて入れる 1 台の Compute。[README](./terraform/README.md)） |
 
-- **依存の向きは `platform/` → 各製品・`suite/` の一方向。** platform は製品・suite を、製品は suite を import しない。suite は platform の公開の package だけに依存し、製品の module・DB・保存ファイルを読まない（`suite/evaluation/tests/test_boundaries.py`）。製品同士はコードで依存せず、HTTP API で連携する。Agent → RAG / NL2SQL は呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は `PLATFORM_SERVICE_TOKEN_SECRET`）で呼び、画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する（[backend-standard.md](./platform/docs/backend-standard.md)「製品間の連携（MCP とサービストークン）」）。
+- **依存の向きは `platform/` → 各製品・`suite/` の一方向。** platform は製品・suite を、製品は suite を import しない。suite は platform の公開の package だけに依存し、製品の module・DB・保存ファイルを読まない（`suite/evaluation/tests/test_boundaries.py`）。製品同士はコードで依存せず、HTTP API で連携する（rag は `rag/backend/tests/test_product_boundaries.py`）。Agent → RAG / NL2SQL は呼び先の `POST /api/mcp` を、Run の利用者を `sub` にした短命のサービストークン（署名鍵は `PLATFORM_SERVICE_TOKEN_SECRET`）で呼び、画面用の Cookie / CSRF の API を機械から呼ばない。呼び先は画面と同じ権限・対象範囲で判定する（[backend-standard.md](./platform/docs/backend-standard.md)「製品間の連携（MCP とサービストークン）」）。
 - **外部の MCP クライアント（Claude Code など）は 3 製品の `POST /api/mcp` を、利用者が自分で発行した API キー（`Authorization: Bearer prak_…`）で呼ぶ**（RAG / NL2SQL は調べるツール、Agent は業務 Agent へのチャットのツール。[手順](./platform/docs/mcp-api-keys.md)。#1805・#1874）。RAG / NL2SQL は Agent を呼ばない（向きは外部のクライアント → Agent → RAG / NL2SQL）。
 - 製品は `platform/` を相対パスで参照する（`file:../../platform/packages/ui`・`path = "../../platform/packages/backend_core"`・`../../platform/docs/design-system/…`）。publish や version pin はしない。
 - 各製品の backend / frontend / uv の venv は独立している。配備は 1 台の Compute にまとめる（[docs/agents/deploy.md](./docs/agents/deploy.md)）。
@@ -89,7 +89,9 @@
 - **ハードコードしない。** 特定の文書・業務・質問・データに合わせた語・規則・閾値・手順をコード（分岐・正規表現・プロンプトの例）に書かない。必要なら skill（`skills/<name>/SKILL.md`）か設定（`.env`・設定画面・検索・回答プロファイル・言語資源）に置き、コードは汎用の仕組みにする。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービスは手動 / ステージングで確かめる。
 - 実装と同時にテストを追加・更新し、該当範囲の lint・型チェック・テストの結果を報告する。ローカルでは変更した範囲だけを検査し、全件は CI に任せる（[docs/agents/ci.md](./docs/agents/ci.md)「ローカルの検証の範囲」）。
-- 文書（.docx / .pptx / .xlsx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。
+- **不具合は局所検証で一つずつ直してからフルフローを確認する。** 毎回全工程を再実行せず、関連回帰の通過後に統合受入を行う。局所成功と全体成功を分け、必須 CI は省略しない（[手順](./docs/agents/ci.md)）。
+- Excel（.xlsx / .xlsm / .csv / .tsv）の作成・編集・分析は Codex の `spreadsheet` skill を使う（[導入と検証](./docs/agents/spreadsheets.md)）。その他の文書（.docx / .pptx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。
+- **全製品・共通基盤で、実際にモデルへ渡す Prompt は `## Step 1: …`、`## Step 2: …` の Step 形式で書く。** 画面の表示だけを Step 形式にせず、実行時の Prompt と一致させる。詳細は [docs/agents/prompts.md](./docs/agents/prompts.md)。
 - **LLM に渡す文（プロンプト・skill・MCP の説明）を書く・変える前に [docs/agents/prompts.md](./docs/agents/prompts.md) を読む。** 1 つの規則は 1 つの層にだけ書き、コードで保証できることはコードに置き、経緯や内部の仕組みを書かない。変えたら同じ PR で関係するテストを直し、最初のターンに渡す字数の前後を PR に書く。
 
 ## 配備
@@ -97,6 +99,7 @@
 詳細は [docs/agents/deploy.md](./docs/agents/deploy.md)。
 
 - 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない）。
+- **再配備は repo の直下で `sudo -n ./platform/deploy/suite-update.sh` を実行する。**
 - Terraform stack は `terraform/stack/` に 1 つだけ。選んだ製品を 1 台の Compute（Oracle Linux 9、ユーザー `opc`）に入れ、`platform/deploy/suite-init.sh` が各製品の `init_script.sh` を呼ぶ（製品は単独では配備しない）。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。
 - 3 製品は既定で ADB のアプリ用の DB ユーザー（ADMIN ではない）で接続する。DB の新しい機能を使うときは付ける権限で足りるかを確かめる。release tag は `suite-v*` だけ。
 
@@ -104,6 +107,8 @@
 
 詳細は [docs/agents/shared-features.md](./docs/agents/shared-features.md) と [docs/agents/naming.md](./docs/agents/naming.md)。
 
+- **Agent の業務 Agent は、スキルが宣言したツールだけを使う**（直接の指定・明示の構成の暗黙の切り替え・未対応の成功扱い・検索の結果を根拠にした承認の省略をしない。五つの不変条件の正本は [agent/docs/agents/runtime.md](./agent/docs/agents/runtime.md)。#3240）。
 - **3 製品で同じ機能は platform に 1 セットだけ置く**（システム設定・ユーザー / ロール管理・API キー・アカウントの画面）。サイドナビの下部の並びと名前、ナビのアイコン、権限管理のメニューの一覧（左のナビが正本）は 3 製品でそろえる。
 - **「AI 活用」の下の機能は、system_admin は全員のデータ、それ以外は自分のデータだけ**を扱う（backend で絞り、他人のデータは 404）。system_admin が他の利用者のデータにできるのは閲覧と運用の操作（停止・削除・承認の判断）だけで、続きの質問・実行・回答・評価は持ち主だけ（#3244）。
+- **`.env.example` は変数を用途別に分類し、工程の設定は使う工程の順にできる限り並べ、説明コメントも対応する変数と一緒に置く**（詳細: [docs/agents/naming.md](./docs/agents/naming.md)）。
 - 共通の設定は `platform/.env`（`PLATFORM_`）、製品だけの設定は製品の `backend/.env`（`RAG_` / `NL2SQL_` / `AGENT_`）。表などの DB object の名前は、共通が `PLATFORM_`、製品固有が `RAG_` / `NL2SQL_` / `AGENT_` で始める。名前を変えるときは旧名との互換を持たない。

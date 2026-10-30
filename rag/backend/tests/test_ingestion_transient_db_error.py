@@ -21,7 +21,14 @@ from app.schemas.document import (
     IngestionJobStatus,
     IngestionSegment,
 )
+from app.schemas.language_pack_release import LanguagePackRelease
+from tests.language_release_support import install_language_release_stub
 from tests.test_document_recipes import _extract_job, _FakeRecipeJobOracle
+
+
+@pytest.fixture(autouse=True)
+def published_release(monkeypatch: pytest.MonkeyPatch) -> LanguagePackRelease:
+    return install_language_release_stub(monkeypatch)
 
 
 def _dead_session_error() -> RuntimeError:
@@ -154,9 +161,23 @@ async def test_recipe_job_transient_error_after_cancel_does_not_requeue(
 class _DocumentJobOracle(_FakeRecipeJobOracle):
     """文書単位の job の fake。文書の status の書き込みを記録する。"""
 
-    def __init__(self) -> None:
+    def __init__(self, release: LanguagePackRelease) -> None:
         super().__init__()
+        self.release = release
         self.document_statuses: list[FileStatus] = []
+
+    async def get_document(self, document_id: str) -> DocumentDetail:
+        detail = await super().get_document(document_id)
+        return detail.model_copy(
+            update={
+                "extraction": {
+                    "parser_artifacts": {
+                        "language_pack_release_id": self.release.id,
+                        "language_pack_ingest_hash": self.release.ingest_hash,
+                    }
+                }
+            }
+        )
 
     async def update_document_status(
         self, document_id: str, status: FileStatus, error_message: str | None = None
@@ -177,9 +198,10 @@ async def test_document_job_transient_db_error_requeues_and_restores_document(
     monkeypatch: pytest.MonkeyPatch,
     phase: IngestionJobPhase,
     expected: FileStatus,
+    published_release: LanguagePackRelease,
 ) -> None:
     """文書単位の job も、一時的な DB エラーなら QUEUED に戻し、文書を工程の前の状態に戻す。"""
-    fake = _DocumentJobOracle()
+    fake = _DocumentJobOracle(published_release)
     fake.jobs["job-doc-1"] = IngestionJob(
         id="job-doc-1",
         document_id="doc-1",

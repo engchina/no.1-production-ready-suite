@@ -36,7 +36,7 @@ from pr_evaluation_scoring import OUTCOMES, normalize_for_match
 from pr_suite_evaluation.dataset import Case
 from pr_suite_evaluation.mcp_client import McpClient, TargetError
 from pr_suite_evaluation.observation import CaseObservation, TurnObservation
-from pr_suite_evaluation.targets.agent_legacy import infer_outcome
+from pr_suite_evaluation.targets.agent_legacy import answer_body, infer_outcome
 from pr_suite_evaluation.views import CaseFailure, CaseView, Citation, TurnView
 
 TARGET_KIND = "agent_mcp"
@@ -55,7 +55,9 @@ OBSERVATION_PAGE_LIMIT = 100
 MAX_OBSERVATION_PAGES = 1000
 # 読める出力の版（契約 agent-tools.json の schema_version。知らない版は読まない）。
 RUN_OUTPUT_SCHEMA_VERSION = 4
-OBSERVATION_SCHEMA_VERSION = 2
+# 5: ツールの呼び出しに RAG の縮退（degraded_steps・guardrail_degraded・zero_evidence_stage）を、
+# 根拠に table_binding を足した（#3546）。
+OBSERVATION_SCHEMA_VERSION = 5
 CANCEL_SCHEMA_VERSION = 1
 # 確認への答えの上限（契約の answers の maxItems）。
 MAX_CONFIRMATION_ANSWERS = 5
@@ -497,6 +499,7 @@ def _completed_view(turn: TurnObservation, *, infer_missing_outcome: bool) -> Tu
         _int(observation.get("withheld_evidence_count")) or 0,
         _int(run.get("withheld_evidence_count")) or 0,
     )
+    text = run.get("answer")
     return TurnView(
         turn=turn.turn,
         trace_id=str(turn.refs.get("run_id") or ""),
@@ -505,6 +508,7 @@ def _completed_view(turn: TurnObservation, *, infer_missing_outcome: bool) -> Tu
         outcome_source=source,
         citations=citations,
         withheld_evidence_count=withheld,
+        answer=answer_body(text) if isinstance(text, str) else "",
     )
 
 

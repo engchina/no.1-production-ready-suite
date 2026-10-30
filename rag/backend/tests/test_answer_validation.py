@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from opentelemetry import trace as otel_trace
 from pytest import MonkeyPatch
 
 from app.clients import support_guide_store
@@ -29,6 +30,7 @@ from app.rag.answer_validation import (
     GuideProfileNotFoundError,
     is_valid,
     validate_answer,
+    validation_reuse_context,
 )
 from app.schemas.search import RetrievedChunk
 from app.schemas.support_guide import SupportGuideContent
@@ -227,6 +229,9 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
         question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
     ) -> AnswerValidation:
         assert [ref.chunk_id for ref in refs] == ["c1"]
+        # MCP の照合は回答フローと同じ「資料との照合」の工程の span の中で動く（#3470）。
+        current = otel_trace.get_current_span()
+        assert getattr(current, "attributes", {}).get("pr.stage") == "資料との照合"
         # 任意の入力が無ければ、決定的な検査はしない（#1276）。
         assert (kwargs["requests"], kwargs["gaps"], kwargs["guide"]) == (None, [], None)
         return AnswerValidation(
@@ -236,6 +241,7 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
             claim_checks=[
                 {
                     "answer_quote": "30 日です。",
+                    "answer_passage_id": "A1",
                     "status": "supported",
                     "source_id": "c1",
                     "reason": "記載",
@@ -314,6 +320,15 @@ def test_mcp_validate_answer(auth: Any, monkeypatch: MonkeyPatch) -> None:  # no
         "contradicted",
         "audit_id_invalid",
     )
+    # 回答の中の段落の位置（#3240）: 段落の ID の位置、ID が無ければ回答に 1 回だけ現れる位置。
+    # 回答に無い原文の段落は null。
+    assert [claim["answer_range"] for claim in body["claims"]] == [
+        {"start": 0, "end": 7},
+        {"start": 7, "end": 16},
+        None,
+        None,
+        None,
+    ]
     chatter = auth.user_with_permissions("chatter", ["menu.chat"])
     denied = _call(
         "rag_validate_answer",
@@ -615,13 +630,12 @@ async def test_validate_answer_runs_deterministic_checks(monkeypatch: MonkeyPatc
         guide=GuideCheckRef("sap-1", "guide-1", 2, {"target": "グループ"}),
     )
     # 手順の題名が回答にあっても、手順の根拠（参照の頁・検索の手がかり）が渡した根拠に無い手順は、
-    # 説明を確かめられない（#2708。warning なので valid は変えない）。条件で外れた分岐の手順
-    # （user）は確かめない。
+    # 本文の充足は未実行として診断に保ち、不足の発見にはしない。条件で外れた分岐は確かめない。
     assert result.valid is True
-    assert [(item.code, item.severity, item.step_id) for item in result.findings] == [
-        ("guide_step_unexplained", "warning", step)
-        for step in ("open", "group", "group_save", "verify")
-    ]
+    assert result.findings == []
+    assert all(
+        step["validation"]["body_coverage"]["execution"] == "not_run" for step in result.guide_steps
+    )
     assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
         ("open", "no_evidence"),
         ("group", "no_evidence"),
@@ -783,7 +797,7 @@ def _stub_embed(monkeypatch: MonkeyPatch) -> list[list[str]]:
 async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """言い回しの違う正しい説明は手順の説明になり、共通の文だけの回答はならない（#2708）。"""
+    """主張の支持と説明候補を保ち、手順全体の未検証を充足に昇格させない。"""
 
     async def published_contents(self: Any, profile_id: str) -> list[Any]:
         return [("guide-1", 2, _shared_guide())]
@@ -807,26 +821,34 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
     )
     result = await validate_answer("q", reworded, refs, get_settings(), oracle=oracle, guide=guide)
     assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
-        ("s1", "explained"),
-        ("s2", "explained"),
+        ("s1", "unknown"),
+        ("s2", "unknown"),
     ]
-    # 題名の文字の一致で結び付けない（unmatched にしない）。順序は説明の段落の位置で確かめる。
+    # 主張の支持・引用は確認済みでも、手順の全必須要件はこの検査では監査していない。
+    assert result.counts["supported"] == 3
+    assert all(
+        check["status"] == "supported" and check["source_id"] == "c2"
+        for check in result.claim_checks
+    )
+    assert result.missing_evidence == []
     assert result.findings == []
+    assert all(
+        step["validation"]["body_coverage"]["status"] == "unknown" for step in result.guide_steps
+    )
     assert result.valid is True
     assert len(calls) == 1
 
     common = "保存ボタンを押して画面を閉じれば完了です。"
     result = await validate_answer("q", common, refs, get_settings(), oracle=oracle, guide=guide)
     assert [(step["step_id"], step["status"]) for step in result.guide_steps] == [
-        ("s1", "unused"),
-        ("s2", "unused"),
+        ("s1", "unknown"),
+        ("s2", "unknown"),
     ]
-    assert [(item.code, item.step_id) for item in result.findings] == [
-        ("guide_step_unexplained", "s1"),
-        ("guide_step_unexplained", "s2"),
-    ]
-    assert result.findings[0].message == (
-        "業務ガイドの手順「値の登録」は、取得した資料で説明を確かめられませんでした。"
+    assert result.counts["supported"] == 1
+    assert result.missing_evidence == []
+    assert result.findings == []
+    assert all(
+        step["validation"]["body_coverage"]["execution"] == "not_run" for step in result.guide_steps
     )
 
     # 説明の段落の順が手順の依存と逆なら、題名が回答に無くても順序の誤りにする。
@@ -835,7 +857,9 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
         "2. 設定画面を開き、設定 A に値を入れてください。"
     )
     result = await validate_answer("q", swapped, refs, get_settings(), oracle=oracle, guide=guide)
-    assert [(item.code, item.severity) for item in result.findings] == [("step_order", "error")]
+    assert [(item.code, item.severity) for item in result.findings] == [
+        ("step_order", "error"),
+    ]
     assert result.valid is False
 
 
@@ -919,7 +943,20 @@ def test_mcp_validate_answer_passes_requests_and_guide(
                     "required": True,
                     "status": "explained",
                 },
-                {"step_id": "user", "title": "利用者を選ぶ", "required": True, "status": "unused"},
+                {
+                    "step_id": "user",
+                    "title": "利用者を選ぶ",
+                    "required": True,
+                    "status": "unknown",
+                    "validation": {
+                        "source_association": {"execution": "completed", "linked": True},
+                        "body_coverage": {
+                            "execution": "not_run",
+                            "status": "unknown",
+                            "reason": "candidate_association_only",
+                        },
+                    },
+                },
             ],
         )
 
@@ -946,8 +983,27 @@ def test_mcp_validate_answer_passes_requests_and_guide(
     assert body["checks"] == ["requests", "guide", "guide_steps", "impact"]
     assert body["guide_revision"] == 3
     assert body["guide_steps"] == [
-        {"step_id": "open", "title": "権限タブを開く", "required": True, "status": "explained"},
-        {"step_id": "user", "title": "利用者を選ぶ", "required": True, "status": "unused"},
+        {
+            "step_id": "open",
+            "title": "権限タブを開く",
+            "required": True,
+            "status": "explained",
+            "validation": None,
+        },
+        {
+            "step_id": "user",
+            "title": "利用者を選ぶ",
+            "required": True,
+            "status": "unknown",
+            "validation": {
+                "source_association": {"execution": "completed", "linked": True},
+                "body_coverage": {
+                    "execution": "not_run",
+                    "status": "unknown",
+                    "reason": "candidate_association_only",
+                },
+            },
+        },
     ]
     assert body["findings"] == [
         {
@@ -1137,9 +1193,16 @@ async def test_ledger_rows_with_written_locations_are_supported(
     monkeypatch.setattr(answer_eval, "parse_text_response", _location_aware_model)
     refs = [EvidenceRef(document_id, chunk_id) for document_id, chunk_id in chunks]
     assert len(refs) == 30
+    # 場所の伝達だけを検査するため、対象の3行を取り出し、各説明に実際の出典を付ける。
+    # 無出典の結論や、別の規程の説明をスタブの supported で通すことはしない。
+    answer = "\n\n".join(
+        line.strip() + "\n根拠：system-ledger.xlsx"
+        for line in _PMS_SEVERITY_ANSWER.splitlines()
+        if line.startswith("  - 行")
+    )
     result = await validate_answer(
         "略称が PMS のシステムは 2 つあります。重要度が高いのはどちらですか？",
-        _PMS_SEVERITY_ANSWER,
+        answer,
         refs,
         get_settings(),
         oracle=cast(Any, oracle),
@@ -1189,8 +1252,8 @@ def test_evidence_location_matches_the_mcp_locator() -> None:
 # #1527: rag_search の回答の監査を通った説明と本文・根拠が同じ段落は、その判定を使い
 # モデルに渡さない。
 _RAG_ANSWER = (
-    "有効期限は最長 30 日です。\n\n資料により確認できた事項\n\n・有効期限は最長 30 日です。\n"
-    "根拠：manual.pdf p.1"
+    "有効期限は最長 30 日です。\n根拠：manual.pdf p.1\n\n"
+    "資料により確認できた事項\n\n・有効期限は最長 30 日です。\n根拠：manual.pdf p.1"
 )
 
 
@@ -1198,24 +1261,71 @@ class _RecordOracle(_Oracle):
     def __init__(self, stored_text: str = "有効期限は最長 30 日です。") -> None:
         super().__init__()
         self.read_trace_ids: list[str] = []
-        self.record = {
+        from app.rag.answer_provenance import answer_prompt_version
+
+        context = validation_reuse_context(
+            "有効期限は？",
+            _RAG_ANSWER,
+            get_settings(),
+            prompt_version=answer_prompt_version({}),
+            evidence=[
+                {
+                    "id": "c1",
+                    "source": "manual.pdf",
+                    "page_start": 1,
+                    "page_end": 1,
+                    "text": stored_text,
+                    "artifact_version": {
+                        key: None
+                        for key in (
+                            "recipe_id",
+                            "chunk_set_id",
+                            "artifact_id",
+                            "source_run_id",
+                            "chunk_strategy",
+                        )
+                    },
+                }
+            ],
+            premises=[],
+            data_results=[],
+            guide=None,
+            requests=None,
+            gaps=[],
+        )
+        self.record: dict[str, Any] = {
             "answer": _RAG_ANSWER,
             "citations_json": [
                 {
                     "chunk_id": "c1",
                     "document_id": "d1",
                     "text": stored_text,
-                    "metadata": {"answer_citation_lines": [1]},
+                    "metadata": {"answer_citation_lines": [1, 2]},
                 }
             ],
             "diagnostics_json": {
+                "answer_validation": {
+                    "status": "completed",
+                    "valid": True,
+                    "reuse_context": context,
+                    "claim_checks": [
+                        {
+                            "status": "supported",
+                            "answer_quote": "有効期限は最長 30 日です。",
+                            "source_id": "c1",
+                        }
+                    ],
+                },
                 "envelope": {
                     "items": [
                         {"kind": "rule", "text": "有効期限は最長 30 日です。", "applies": "matched"}
                     ]
-                }
+                },
             },
         }
+
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        return {}
 
     async def get_answer_record(self, trace_id: str) -> Any:
         # 記録は今の利用者の範囲で読む（範囲の外は None）。
@@ -1234,7 +1344,7 @@ async def test_validate_answer_reuses_the_audited_items_of_the_answer_record(
 
     monkeypatch.setattr(answer_eval, "parse_text_response", _never_called)
     oracle = _RecordOracle()
-    answer = "有効期限は最長 30 日です。\n\n- 有効期限は最長 30 日です。"
+    answer = _RAG_ANSWER
     result = await validate_answer(
         "有効期限は？",
         answer,
@@ -1435,3 +1545,263 @@ def test_engine_settings_pass_the_validation_input_budget(tmp_path: Path) -> Non
 
     assert engine_settings.answer_validation_max_input_bytes == 120_000
     assert Settings().rag_answer_validation_max_input_bytes == 96_000
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "question",
+        "answer",
+        "prompt_version",
+        "evidence",
+        "premises",
+        "data_results",
+        "requests",
+        "gaps",
+        "guide",
+        "model",
+        "profile",
+        "runtime",
+    ],
+)
+def test_review_reuse_invalidates_changed_dependencies(changed: str) -> None:
+    """前提・参照・指示などの変化を、本文の字句類似では省略しない。"""
+    settings = get_settings()
+    arguments: dict[str, Any] = dict(
+        question="質問A",
+        answer="回答A",
+        settings=settings,
+        prompt_version="prompt-a",
+        evidence=[{"id": "c1", "text": "本文A", "artifact_version": "v1"}],
+        premises=[],
+        data_results=[],
+        requests=None,
+        gaps=[],
+        guide=None,
+    )
+    original = validation_reuse_context(**arguments)
+    replacements: dict[str, Any] = {
+        "question": "質問B",
+        "answer": "回答B",
+        "prompt_version": "prompt-b",
+        "evidence": [{"id": "c1", "text": "本文A", "artifact_version": "v2"}],
+        "premises": [{"id": "p1", "text": "前提A"}],
+        "data_results": [{"id": "r1", "text": "結果A"}],
+        "requests": [{"id": "r1", "text": "要求A"}],
+        "gaps": ["不足A"],
+        "guide": GuideCheckRef("profile-a", "guide-a", 2),
+    }
+    if changed in {"profile", "runtime"}:
+        name = (
+            "rag_search_answer_profile_revision"
+            if changed == "profile"
+            else "rag_runtime_knowledge"
+        )
+        arguments["settings"] = settings.model_copy(update={name: {"revision": "b"}})
+    elif changed == "model":
+        arguments["settings"] = settings.model_copy(
+            update={"oci_enterprise_ai_default_text_model": "test-model-b"}
+        )
+    else:
+        arguments[changed] = replacements[changed]
+    assert validation_reuse_context(**arguments) != original
+
+
+@pytest.mark.parametrize("status", ["partial", "timed_out", "error", "not_run", "missing_version"])
+async def test_review_reuse_never_trusts_incomplete_or_legacy_records(status: str) -> None:
+    from app.rag.answer_validation import audited_answer_lines
+
+    oracle = _RecordOracle()
+    validation = oracle.record["diagnostics_json"]["answer_validation"]
+    context = validation["reuse_context"]
+    if status == "missing_version":
+        validation.pop("reuse_context")
+    else:
+        validation["status"] = status
+    assert (
+        await audited_answer_lines(
+            cast(Any, oracle),
+            ["trace-1"],
+            {"c1": {"text": "有効期限は最長 30 日です。"}},
+            reuse_context=context,
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize("source_id,evidence_id", [("c2", "E2"), ("c1", "E1,E2")])
+async def test_reuse_requires_the_final_audits_actual_claim_source_pair(
+    source_id: str, evidence_id: str
+) -> None:
+    from app.rag.answer_validation import audited_answer_lines
+
+    oracle = _RecordOracle()
+    validation = oracle.record["diagnostics_json"]["answer_validation"]
+    validation["claim_checks"][0].update(source_id=source_id, evidence_id=evidence_id)
+    assert (
+        await audited_answer_lines(
+            cast(Any, oracle),
+            ["trace-1"],
+            {"c1": {"text": "有効期限は最長 30 日です。"}},
+            reuse_context=validation["reuse_context"],
+        )
+        == {}
+    )
+
+
+# 原質問・確認の答えとの両立の比較の採否（#3800）。engine の診断のうち ID・状態・code だけを
+# 記録と MCP の出力に渡し、モデルが書いた制約・推奨・原文は残さない。
+_PREMISE_DIAGNOSTICS: list[Any] = [
+    {
+        "answer_passage_id": "A1",
+        "constraints": "合成の制約",
+        "recommendation": "合成の推奨",
+        "fit": "conflicts",
+        "constraint_scope": "execution_only",
+        "passage_mode": "proposal",
+        "constraint_quote": "合成の原文 A",
+        "passage_quote": "合成の原文 B",
+        "status": "completed",
+        "adopted": False,
+        "decision": "execution_prohibition_does_not_prohibit_proposal",
+    },
+    {
+        "answer_passage_id": "A2",
+        "adopted": False,
+        "decision": "missing_passage_id",
+        "fit": "unknown",
+    },
+    "壊れた記録",
+]
+_PREMISE_RECORDS = [
+    {
+        "answer_passage_id": "A1",
+        "status": "completed",
+        "decision": "execution_prohibition_does_not_prohibit_proposal",
+        "adopted": False,
+        "fit": "conflicts",
+        "constraint_scope": "execution_only",
+        "passage_mode": "proposal",
+    },
+    {
+        "answer_passage_id": "A2",
+        "decision": "missing_passage_id",
+        "adopted": False,
+        "fit": "unknown",
+    },
+]
+
+
+async def test_validate_answer_keeps_the_premise_consistency_decisions(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """engine の両立の比較の採否を、技術の項目だけにして結果に残す（#3800）。"""
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **options: Any
+    ) -> dict[str, Any]:
+        return {
+            "status": "completed",
+            "counts": {"supported": 1},
+            "claim_checks": [],
+            "premise_consistency_checks": _PREMISE_DIAGNOSTICS,
+        }
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    result = await validate_answer(
+        "q",
+        "承認は得ていません。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, _RecordOracle()),
+        premises=[{"question": "合成の確認", "answer": "合成の答え"}],
+    )
+    assert result.premise_consistency_checks == _PREMISE_RECORDS
+    assert "合成" not in json.dumps(result.premise_consistency_checks, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [None, "not-a-list", [{"status": "not_run", "decision": "not_required", "adopted": False}]],
+    ids=["missing", "invalid", "not-run"],
+)
+async def test_validate_answer_premise_checks_without_passages(
+    monkeypatch: MonkeyPatch, checks: object
+) -> None:
+    """比較しなかった記録はそのまま残し、無い・壊れた値は空にする（#3800）。"""
+
+    def fake_claims(
+        question: str, answer: str, items: list[dict[str, Any]], settings: Any, **options: Any
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {"status": "completed", "counts": {}, "claim_checks": []}
+        if checks is not None:
+            result["premise_consistency_checks"] = checks
+        return result
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    result = await validate_answer(
+        "q",
+        "承認は得ていません。",
+        [EvidenceRef("d1", "c1")],
+        get_settings(),
+        oracle=cast(Any, _RecordOracle()),
+    )
+    assert result.premise_consistency_checks == (checks if isinstance(checks, list) else [])
+
+
+def test_mcp_validate_answer_returns_the_premise_checks(
+    auth: Any,  # noqa: F811
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """両立の比較の採否を、段落の位置と code で返す（#3800。Agent は結果をそのまま記録する）。"""
+    answer = "合成の案を示します。\n合成の件数は 2 件です。"
+
+    async def fake_validate(
+        question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
+    ) -> AnswerValidation:
+        return AnswerValidation(
+            status="completed",
+            valid=True,
+            counts={"supported": 2},
+            premise_consistency_checks=[
+                *_PREMISE_RECORDS,
+                {"answer_passage_id": "A9", "decision": "unknown_passage_id", "adopted": False},
+                {"status": "failed", "decision": "check_failed", "adopted": False},
+            ],
+        )
+
+    monkeypatch.setattr(mcp_tools, "validate_answer", fake_validate)
+    user = auth.user_with_permissions("searcher", ["menu.search"])
+    body = _call(
+        "rag_validate_answer",
+        {
+            "query": "q",
+            "answer": answer,
+            "evidence": [{"document_id": "d1", "chunk_id": "c1"}],
+            "premises": [{"question": "合成の確認", "answer": "合成の答え"}],
+        },
+        _token(user.user_uuid),
+    )["structuredContent"]
+    checks = body["premise_checks"]
+    first, second = (
+        answer[item["answer_range"]["start"] : item["answer_range"]["end"]] for item in checks[:2]
+    )
+    assert (first, second) == ("合成の案を示します。", "合成の件数は 2 件です。")
+    assert checks[0] == {
+        "answer_range": checks[0]["answer_range"],
+        "status": "completed",
+        "decision": "execution_prohibition_does_not_prohibit_proposal",
+        "adopted": False,
+        "fit": "conflicts",
+        "constraint_scope": "execution_only",
+        "passage_mode": "proposal",
+    }
+    # 回答に無い段落の ID・段落に結び付かない記録は位置を null にして残す。
+    assert [(item["answer_range"], item["decision"], item["status"]) for item in checks[2:]] == [
+        (None, "unknown_passage_id", None),
+        (None, "check_failed", "failed"),
+    ]

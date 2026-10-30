@@ -16,6 +16,7 @@ for (const viewport of [
     await mockEvaluation(page, "standard");
 
     await page.goto("/settings/evaluation");
+    await expect(page.getByText(/ほかの五指標は 100%/)).toBeVisible();
 
     await expect(page.getByRole("heading", { name: "評価の基準", exact: true, level: 1 })).toBeVisible();
     // 基準は標準・厳格の 2 つだけ(#591)。
@@ -207,6 +208,9 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
   await page.goto("/settings/evaluation");
   const stage = page.getByTestId("answer-prompt-stage-evaluation");
   await expect(stage).toContainText("回答の品質評価");
+  await expect(page.getByTestId("answer-prompt-stages-card")).toBeVisible();
+  expect(await page.getByTestId("answer-prompt-stages-card").evaluate(node => parseFloat(getComputedStyle(node).borderTopWidth))).toBeGreaterThan(0);
+
   await expect(page.getByTestId("answer-prompt-stage-answer_validation")).toHaveCount(0);
   await stage.locator("summary").click();
   const fields = stage.getByRole("textbox");
@@ -217,4 +221,20 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
   await stage.getByRole("textbox").first().scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("quality-evaluation-prompt.png") });
   await expectNoPageOverflow(page);
+});
+
+test("評価の基準の指示の編集内容を保存できる", { tag: "@responsive" }, async ({ page }) => {
+  await mockEvaluation(page, "standard");
+  const { mockEditableStage } = await import("./_feature-prompt-helpers");
+  const requests = await mockEditableStage(page, "evaluation", "evaluation", "coverage");
+  await page.goto("/settings/evaluation");
+  const stage = page.getByTestId("answer-prompt-stage-evaluation");
+  await stage.locator("summary").click();
+  await expect(stage.getByRole("group", { name: "編集内容の操作" }).getByRole("button"))
+    .toHaveText(["プロンプトを保存", "変更を破棄", "既定に戻す"]);
+  await stage.getByRole("textbox").fill("## Step 1: 合成の評価指示");
+  await stage.getByRole("button", { name: "プロンプトを保存" }).click();
+  await expect(stage.getByRole("button", { name: "プロンプトを保存" })).toBeDisabled();
+  expect(requests).toEqual([{ key: "evaluation.coverage", method: "PUT", content: "## Step 1: 合成の評価指示" }]);
+  await expectNoHorizontalOverflow(page);
 });

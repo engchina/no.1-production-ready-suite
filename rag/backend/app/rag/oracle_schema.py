@@ -17,6 +17,8 @@ from typing import Any
 from app.clients.document_category_store import oracle_document_category_schema_sql
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
+from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
+from app.clients.language_pack_release_store import language_pack_release_statements
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
@@ -35,7 +37,6 @@ from app.clients.oracle import (
     oracle_knowledge_base_schema_sql,
     oracle_knowledge_graph_schema_sql,
     oracle_message_schema_sql,
-    oracle_query_history_schema_sql,
     oracle_role_access_schema_sql,
     oracle_search_answer_profile_knowledge_schema_sql,
     oracle_search_answer_profile_schema_sql,
@@ -50,6 +51,7 @@ from app.clients.support_guide_store import (
     oracle_support_guide_revision_schema_sql,
     oracle_support_guide_schema_sql,
 )
+from app.rag.ingestion_language import language_pack_artifact_statements
 from app.rag.request_context import with_system_access
 from app.rag.search_answer_profile_migration import rename_sql as search_answer_profile_rename_sql
 from app.rag.vector_index_adapter import default_vector_index_build
@@ -170,6 +172,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_system_schema_control_sql(),
         ),
         OracleSchemaSection(
+            name="language_pack_releases",
+            table_name="rag_language_pack_releases",
+            sql=language_pack_release_statements(),
+        ),
+        OracleSchemaSection(
             name="documents",
             table_name="rag_documents",
             sql=oracle_document_schema_sql(),
@@ -198,11 +205,6 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="answer_prompts",
             table_name="rag_answer_prompts",
             sql=oracle_answer_prompt_schema_sql(),
-        ),
-        OracleSchemaSection(
-            name="query_history",
-            table_name="rag_query_history",
-            sql=oracle_query_history_schema_sql(),
         ),
         # 実行履歴（チャット・RAG 検索の実行。#1890）。
         OracleSchemaSection(
@@ -327,6 +329,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="evaluation_jobs",
             table_name="rag_evaluation_jobs",
             sql=oracle_evaluation_job_schema_sql(),
+        ),
+        # 品質評価の判定の校正（記入の集合・項目・判定・校正の結果。#3578）。
+        OracleSchemaSection(
+            name="evaluation_calibration",
+            table_name="rag_evaluation_label_sets",
+            sql=oracle_evaluation_calibration_schema_sql(),
         ),
         # ロールの RAG 権限と対象範囲（#214）。
         # PLATFORM_ROLES と検索・回答プロファイル・KB を参照する。
@@ -540,7 +548,135 @@ END;
             sql=cited_evidence_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261026_001_evaluation_calibration",
+            table_name="rag_evaluation_label_sets",
+            sql=evaluation_calibration_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261026_002_evaluation_job_calibration_kind",
+            table_name="rag_evaluation_jobs",
+            sql=evaluation_job_calibration_kind_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261027_001_raptor_prompt_consolidation",
+            table_name="rag_answer_prompts",
+            sql=raptor_prompt_consolidation_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261028_001_language_pack_releases",
+            table_name="rag_language_pack_releases",
+            sql=language_pack_release_statements(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261028_002_language_pack_artifacts",
+            table_name="rag_chunk_sets",
+            sql=language_pack_artifact_statements(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261029_001_retire_query_history",
+            table_name="rag_query_history",
+            sql=retire_query_history_sql(),
+            destructive_note=(
+                "廃止する質問候補専用の RAG_QUERY_HISTORY と全行、同表の索引・制約を削除します。"
+                "会話・メッセージ・回答の記録・実行履歴は削除しません。"
+                "必要な履歴は適用前に同表を export してください。削除後は復元できません。"
+            ),
+        )
+    )
     return sections
+
+
+def retire_query_history_sql() -> str:
+    """質問候補専用表だけを削除し、未作成・削除済みの環境でも適用する。"""
+    return """
+BEGIN
+    EXECUTE IMMEDIATE 'DROP TABLE rag_query_history PURGE';
+EXCEPTION
+    WHEN OTHERS THEN
+        IF SQLCODE != -942 THEN
+            RAISE;
+        END IF;
+END;
+/
+""".strip()
+
+
+def raptor_prompt_consolidation_sql() -> str:
+    """保存した両方の指示を結合し、旧指示を監査用に残す。適用は migration ledger で一度だけ。"""
+    return """
+MERGE INTO rag_answer_prompts target
+USING (
+    SELECT 'raptor_summary_system' AS prompt_key,
+        COALESCE(
+            (SELECT content FROM rag_answer_prompts WHERE prompt_key = 'raptor_summary_system'),
+            TO_CLOB('## 目的' || CHR(10) || CHR(10)
+                || 'あなたは文書を階層的に要約するアシスタントです。')
+        ) || CHR(10) || CHR(10) || COALESCE(
+            (SELECT content FROM rag_answer_prompts WHERE prompt_key = 'raptor_summary'),
+            TO_CLOB('## 目的' || CHR(10) || CHR(10)
+                || '次のテキスト群の要点を簡潔な日本語で要約してください。')
+        ) AS content
+    FROM dual
+    WHERE EXISTS (
+        SELECT 1 FROM rag_answer_prompts
+        WHERE prompt_key IN ('raptor_summary_system', 'raptor_summary')
+    )
+) source
+ON (target.prompt_key = source.prompt_key)
+WHEN MATCHED THEN UPDATE SET target.content = source.content, target.updated_at = SYSTIMESTAMP
+WHEN NOT MATCHED THEN INSERT (prompt_key, content) VALUES (source.prompt_key, source.content);
+
+UPDATE rag_answer_prompts
+SET prompt_key = 'raptor_summary_archived'
+WHERE prompt_key = 'raptor_summary';
+""".strip()
+
+
+def evaluation_calibration_migration_sql() -> str:
+    """判定の校正の表（記入の集合・項目・判定・校正の結果）と索引を無ければ作る（#3578）。
+
+    表と索引を足すだけでデータは変えない。DDL は正本
+    （``oracle_evaluation_calibration_schema_sql``）から作る。
+    """
+    return _create_missing_objects_sql(oracle_evaluation_calibration_schema_sql(), "判定の校正")
+
+
+def evaluation_job_calibration_kind_migration_sql() -> str:
+    """品質評価の job の kind に判定の校正（``calibration``）を足す（#3578）。
+
+    CHECK 制約を作り直すだけで行は変えない。表が無ければ何もしない（冪等）。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOBS';
+    IF v_count > 0 THEN
+        SELECT COUNT(*) INTO v_count
+        FROM user_constraints
+        WHERE table_name = 'RAG_EVALUATION_JOBS'
+          AND constraint_name = 'RAG_EVALUATION_JOBS_KIND_CK';
+        IF v_count > 0 THEN
+            EXECUTE IMMEDIATE
+                'ALTER TABLE rag_evaluation_jobs DROP CONSTRAINT rag_evaluation_jobs_kind_ck';
+        END IF;
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_evaluation_jobs ADD CONSTRAINT rag_evaluation_jobs_kind_ck '
+            || 'CHECK (kind IN (''run'', ''calibration''))';
+    END IF;
+END;
+/"""
 
 
 # #2457 で改名したファイル準備の値(旧, 新)。JSON を文字列にして置き換える(値と、抽出の ID の入力の

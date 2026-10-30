@@ -10,8 +10,11 @@ Run が保存した記録（step のツールの呼び出しと結果・成果�
   渡したらまだ無い本文だけを改行でつなぐ（rag の評価の CLI の `evidence_citations` と同じ
   規則）。会話の添付の根拠（`attachment:`）・RAG の接続でないツールの結果は含めない。
 - **ツールの呼び出し**（`ObservedToolCallItem`）: Run の順。状態・失敗の分類（`error_code`）・
-  根拠の数・旧版を含めた検索か・NL2SQL の状態と行の数だけ。引数の本体・エラーの文・SQL・行・列の
-  名前・`profile_id` は持たない（OWASP API3。設計の Q5）。
+  根拠の数・旧版を含めた検索か・NL2SQL の状態と行の数・RAG の根拠のツールの縮退（縮退した任意の
+  補助の処理の種類と回数・安全チェックの未完了・根拠 0 件の段。#3546）だけ。引数の本体・エラーの
+  文・SQL・行・列の名前・`profile_id` は持たない（OWASP API3。設計の Q5）。
+- 根拠の `table_binding`（表の行・列の対応の検査が本文を読めるか。#3546）は、根拠のツールが返した
+  値を写す（読み取りのツールの chunk は null）。
 """
 
 from __future__ import annotations
@@ -30,6 +33,12 @@ from app.features.agent.answer_validation import (
 )
 from app.features.agent.data_scope import NL2SQL_CONNECTION_ID
 from app.features.agent.rag_figures import RAG_CONNECTION_ID
+from app.features.agent.rag_retrieval_state import (
+    degraded_steps,
+    guardrail_degraded,
+    table_binding,
+    zero_evidence_stage,
+)
 from app.features.agent.runtime import (
     AUTOMATION_APPROVAL_SKIPPED_CODE,
     MCP_APPROVAL_SKIPPED_CODE,
@@ -65,13 +74,20 @@ LOCATOR_FIELDS = (
     "page_label_start",
     "page_label_end",
     "sheet_name",
+    "row_basis",
+    "table_index",
     "row_start",
     "row_end",
+    "source_line_start",
+    "source_line_end",
     "cell_range",
     "element_locator",
     "table_row",
     "table_cells",
 )
+# 行の番号の基準（RAG の `EvidenceLocator.row_basis`）。知らない値は写さない。parsed_table は解析が
+# 組み立てた表の格子の行（原本の座標ではない。#3429）。
+ROW_BASES = frozenset({"sheet", "csv", "word_table", "parsed_table"})
 # 失敗の分類として出してよい形（外部の MCP の結果の任意の文を分類として写さない）。
 _ERROR_CODE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _OTHER_ERROR_CODE = "tool_error"
@@ -108,6 +124,10 @@ class ObservedToolCallItem:
     # 根拠のツール・読み取りのツールが返した根拠の文書（呼び出しの中の重複を含む。見られない根拠を
     # 除いた数を `evidence_count` にする）。ほかのツールは None。
     evidence_documents: list[str] | None = None
+    # RAG の根拠のツールの縮退（#3546）。ほかのツール・失敗した呼び出しは None。
+    degraded_steps: list[dict[str, Any]] | None = None
+    guardrail_degraded: bool | None = None
+    zero_evidence_stage: str | None = None
 
 
 @dataclass(slots=True)
@@ -127,6 +147,7 @@ class ObservedEvidenceItem:
     superseded: bool = False
     retrieval_rank: int | None = None
     locator: dict[str, Any] = field(default_factory=dict)
+    table_binding: str | None = None
 
 
 @dataclass(slots=True)
@@ -162,10 +183,21 @@ def _locator(value: Mapping[str, Any]) -> dict[str, Any]:
     sections = value.get("section_path")
     if isinstance(sections, list):
         locator["section_path"] = [item for item in sections if isinstance(item, str)]
-    for key in ("page_start", "page_end", "row_start", "row_end", "table_row"):
+    for key in (
+        "page_start",
+        "page_end",
+        "row_start",
+        "row_end",
+        "source_line_start",
+        "source_line_end",
+        "table_row",
+        "table_index",
+    ):
         number = _int(value.get(key))
         if number is not None:
             locator[key] = number
+    if (basis := _str(value.get("row_basis"))) in ROW_BASES:
+        locator["row_basis"] = basis
     for key in (
         "page_label_start",
         "page_label_end",
@@ -211,6 +243,7 @@ class _Piece:
     superseded: bool = False
     retrieval_rank: int | None = None
     locator: dict[str, Any] = field(default_factory=dict)
+    table_binding: str | None = None
 
 
 def _search_pieces(output: Mapping[str, Any]) -> list[_Piece]:
@@ -235,6 +268,7 @@ def _search_pieces(output: Mapping[str, Any]) -> list[_Piece]:
                 superseded=item.get("superseded") is True,
                 retrieval_rank=_int(item.get("retrieval_rank")),
                 locator=_locator(locator) if isinstance(locator, Mapping) else {},
+                table_binding=table_binding(item),
             )
         )
     return pieces
@@ -334,12 +368,19 @@ def observe_run(run: RunState) -> RunObservationData:
         row_count: int | None = None
         rows_truncated: bool | None = None
         documents: list[str] | None = None
+        degraded: list[dict[str, Any]] | None = None
+        guardrail: bool | None = None
+        zero_stage: str | None = None
         pieces: list[_Piece] = []
         source: EvidenceSource = "search"
         if rag and tool in EVIDENCE_TOOLS:
             include_superseded = call.arguments.get("include_superseded") is True
             pieces = _search_pieces(output) if output is not None else []
             documents = [piece.document_id for piece in pieces]
+            if output is not None:
+                degraded = degraded_steps(output)
+                guardrail = guardrail_degraded(output)
+                zero_stage = zero_evidence_stage(output)
         elif rag and tool in READ_TOOLS:
             pieces = _read_pieces(tool, output) if output is not None else []
             documents = [piece.document_id for piece in pieces]
@@ -365,6 +406,9 @@ def observe_run(run: RunState) -> RunObservationData:
                     row_count=row_count,
                     rows_truncated=rows_truncated,
                     evidence_documents=documents,
+                    degraded_steps=degraded,
+                    guardrail_degraded=guardrail,
+                    zero_evidence_stage=zero_stage,
                 )
             )
         for piece in pieces:
@@ -376,6 +420,8 @@ def observe_run(run: RunState) -> RunObservationData:
                 if piece.text and piece.text not in known.text:
                     known.text = f"{known.text}\n{piece.text}" if known.text else piece.text
                 known.truncated = known.truncated and not piece.complete
+                if known.table_binding is None:
+                    known.table_binding = piece.table_binding
                 continue
             seen[key] = len(evidence)
             evidence.append(
@@ -394,6 +440,7 @@ def observe_run(run: RunState) -> RunObservationData:
                     superseded=piece.superseded,
                     retrieval_rank=piece.retrieval_rank,
                     locator=piece.locator,
+                    table_binding=piece.table_binding,
                 )
             )
     return RunObservationData(tool_calls=calls, tool_call_total=len(tool_steps), evidence=evidence)

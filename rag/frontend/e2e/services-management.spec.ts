@@ -87,13 +87,13 @@ async function mockServices(
   page: Page,
   options: {
     controlEnabled?: boolean;
-    deploymentMode?: "dev" | "prod";
+    deploymentMode?: "local" | "staging" | "production";
     services?: ServiceRow[];
   } = {}
 ) {
   const state = {
     control_enabled: options.controlEnabled ?? false,
-    deployment_mode: options.deploymentMode ?? "prod",
+    deployment_mode: options.deploymentMode ?? "production",
     services: options.services ?? defaultServices(),
   };
   await page.route("**/api/services/catalog", async (route) => {
@@ -203,9 +203,9 @@ for (const viewport of [
     // 工程の見出しはサイドナビ（取込・検索・回答設定）と同じ並び・名前（#638）。
     // ナビのリンクと区別するため heading role で限定する。
     await expect(page.getByTestId("service-row-pipeline-chunking")).toHaveCount(0);
-    // backend の中で動く段（文書分割・検索インデックス・関係情報の構築・安全チェック・評価の基準）は
+    // backend の中で動く段（文書分割・検索インデックス・文書構造索引・安全チェック・評価の基準）は
     // サービスを持たない（#3218）。
-    for (const internal of ["文書分割", "検索インデックス", "関係情報の構築", "安全チェック", "評価の基準"]) {
+    for (const internal of ["文書分割", "検索インデックス", "文書構造索引", "安全チェック", "評価の基準"]) {
       await expect(page.getByRole("heading", { name: internal, exact: true })).toHaveCount(0);
     }
     await expect(page.getByText("backend 内処理", { exact: false })).toHaveCount(0);
@@ -226,7 +226,7 @@ for (const viewport of [
     }
     // 工程の説明は、対応する設定画面の説明と同じ文（複数のグループに分かれる工程は最初のグループにだけ出す）。
     await expect(
-      page.getByText("文書解析の前に原本を一度だけ整えるファイル準備方式を選択します。", { exact: true })
+      page.getByText("文書解析の前にファイルを変換する方式を選択します。", { exact: true })
     ).toBeVisible();
     await expect(
       page.getByText("文書解析に使う方式を選び、必要な解析エンジンの現在状態を確認します。", { exact: true })
@@ -290,7 +290,7 @@ for (const viewport of [
 
 test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: false, deploymentMode: "prod" });
+  await mockServices(page, { controlEnabled: false, deploymentMode: "production" });
 
   await page.goto("/settings/services");
 
@@ -312,7 +312,7 @@ test("制御無効時(prod)は起動/停止ボタンが disabled", async ({ page
 
 test("dev モードは systemd バッジと有効化された制御を表示する", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
   await page.goto("/settings/services");
 
@@ -329,7 +329,7 @@ test("dev モードは systemd バッジと有効化された制御を表示す�
 
 test("稼働中のサービスは操作メニューから確認なしで再起動できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
   await page.goto("/settings/services");
 
@@ -351,7 +351,7 @@ test("unit が未登録・起動失敗のサービスは状態と案内を出す
         ? { ...service, status: "failed" as const }
         : service
   );
-  await mockServices(page, { controlEnabled: true, deploymentMode: "prod", services });
+  await mockServices(page, { controlEnabled: true, deploymentMode: "production", services });
 
   await page.goto("/settings/services");
 
@@ -369,11 +369,11 @@ test("unit が未登録・起動失敗のサービスは状態と案内を出す
   await expect(docling.getByText("/var/lib/production-ready-rag/.cache")).toBeVisible();
 });
 
-test("実行コマンドは既定で折りたたまれ、展開すると systemd のコマンドを表示する", { tag: "@responsive" }, async ({
+for (const mode of ["local", "staging", "production"] as const) {
+test(`実行コマンドはディレクトリと対象範囲を正確に案内する（${mode}）`, { tag: "@responsive" }, async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
-  await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+  await mockServices(page, { controlEnabled: true, deploymentMode: mode });
 
   await page.goto("/settings/services");
 
@@ -394,11 +394,23 @@ test("実行コマンドは既定で折りたたまれ、展開すると systemd
     page.getByText("sudo journalctl -u production-ready-rag-parser-docling.service -f").first()
   ).toBeVisible();
   // dev は unit と sudoers を登録するコマンドも出す。
-  await expect(page.getByText("scripts/rag-services.sh install", { exact: true })).toBeVisible();
+  const panel = page.locator("#service-commands");
+  await expect(panel).toContainText("状態とログの確認は、どの作業ディレクトリでも使えます。");
+  await expect(panel).toContainText("ロード済みの RAG サービスの状態を確認");
+  if (mode === "local") {
+    await expect(panel.getByText("scripts/rag-services.sh install", { exact: true })).toBeVisible();
+    await expect(panel).toContainText("CPU サービス、rag/ で実行");
+  } else {
+    await expect(panel.getByText("scripts/rag-services.sh install", { exact: true })).toHaveCount(0);
+    await expect(panel).not.toContainText("rag/ で実行");
+  }
+  await expectNoPageOverflow(page);
   // GPU のサービスは無い（ASR は削除した。#2042）。
   await expect(page.getByText("scripts/rag-services.sh install --gpu", { exact: true })).toHaveCount(0);
   await expect(page.getByText("docker", { exact: false })).toHaveCount(0);
 });
+
+}
 
 test("制御有効時は確認ダイアログを経て停止できる", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 760 });
@@ -469,7 +481,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
     await page.goto("/settings/services");
     await expect(page.getByRole("heading", { name: "マイクロサービス" })).toBeVisible();
@@ -522,7 +534,7 @@ for (const viewport of [
       const match = request.url().match(/\/api\/services\/([^/]+)\/(status|start|stop|restart)/);
       if (match) statusRequests.push(`${decodeURIComponent(match[1])}:${match[2]}`);
     });
-    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
     await page.goto("/settings/services");
     const row = page.getByTestId("service-row-parser-oci-document-understanding");
@@ -553,7 +565,7 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await mockServices(page, { controlEnabled: true, deploymentMode: "dev" });
+    await mockServices(page, { controlEnabled: true, deploymentMode: "local" });
 
     await page.goto("/settings/services");
     await expect(page.getByTestId("service-row-parser-docling")).toBeVisible();
@@ -717,4 +729,13 @@ test("既定の解析サービスには使用方針と停止の影響を表示�
   await expect(row.getByText("停止中です。このエンジン", { exact: false })).toBeVisible();
   await expect(row).toContainText("取込前に起動してください");
   await expectNoPageOverflow(page);
+});
+
+
+test("検証環境の表示と制御制限が画面幅に依存しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockServices(page, { controlEnabled: false, deploymentMode: "staging" });
+  await page.goto("/settings/services");
+  await expect(page.getByText("検証 (systemd)")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Docling 起動" })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("staging-services.png"), fullPage: true });
 });

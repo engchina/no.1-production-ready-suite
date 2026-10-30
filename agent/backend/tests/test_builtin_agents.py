@@ -130,37 +130,41 @@ BUILTIN_SKILL_IDS = [skill.id for skill in skill_registry.list() if skill.source
 
 
 # 組み込みの Skill で同じ見出しの並び（使う見出しだけを、この順に置く。#1795 / #1816。
-# 「入力の種類を分ける」は #1929）。
+# 「入力の種類を分ける」は #1929）。見出しはすべて処理順の `## Step N:`（docs/agents/prompts.md。
+# #3830）で、手順の Step を前と後の節の間に置く。
 # 「いつ使うか」は SKILL.md の frontmatter の description に書く（Agent Skills の best practices）。
 # 使うツールの一覧は frontmatter の metadata とモデルに渡すツールの定義にあるので、
 # 本文に節を置かない（1 つの規則は 1 層。#2269）。
-SKILL_SECTIONS = [
-    "入力の種類を分ける",
-    "手順",
-    "結果ごとの対応",
-    "回答の書き方",
-    "してはいけないこと",
-]
+SKILL_LEADING_SECTIONS = ["入力の種類を分ける"]
+SKILL_TRAILING_SECTIONS = ["結果ごとの対応", "回答の書き方", "してはいけないこと"]
 
 
 @pytest.mark.parametrize("skill_id", BUILTIN_SKILL_IDS, ids=BUILTIN_SKILL_IDS)
 def test_builtin_skill_instructions_are_flow_markdown(skill_id: str) -> None:
-    """組み込みの Skill の指示は、手順で進める Markdown（#1795 / #1816）。
+    """組み込みの Skill の指示は、手順で進める Step 形式の Markdown（#1795 / #1816 / #3830）。
 
-    本文は目的の文から始まり、見出しは組み込みの Skill で同じ並び。
-    `### Step N:` を使うなら 1 から順に置き、「→ Step N」の行き先はある Step だけにする。
+    本文は目的の文から始まり、見出しはすべて `## Step N:`（1 から順に。入れ子の Step を置かない）。
+    節の並びは組み込みの Skill で同じ。本文の「Step N」（「→ Step N」の行き先など）は
+    ある Step だけを指す。
     """
     skill = skill_registry.get(skill_id)
     assert skill is not None
     instructions = skill.instructions
     assert not instructions.splitlines()[0].startswith("#")
-    sections = re.findall(r"^## (.+)$", instructions, re.M)
-    assert {"手順", "結果ごとの対応"} <= set(sections), sections
-    assert sections == [name for name in SKILL_SECTIONS if name in sections], sections
-    steps = [int(number) for number in re.findall(r"^### Step (\d+): \S", instructions, re.M)]
-    assert steps == list(range(1, len(steps) + 1)), steps
-    targets = {int(number) for number in re.findall(r"→ Step (\d+)", instructions)}
-    assert targets <= set(steps), targets
+    headings = re.findall(r"^#+ .*$", instructions, re.M)
+    steps = re.findall(r"^## Step (\d+): (\S.*)$", instructions, re.M)
+    assert len(steps) == len(headings), headings
+    numbers = [int(number) for number, _ in steps]
+    assert numbers == list(range(1, len(numbers) + 1)), numbers
+    titles = [title for _, title in steps]
+    leading = [name for name in SKILL_LEADING_SECTIONS if name in titles]
+    trailing = [name for name in SKILL_TRAILING_SECTIONS if name in titles]
+    procedure = titles[len(leading) : len(titles) - len(trailing)]
+    assert titles == leading + procedure + trailing, titles
+    assert "結果ごとの対応" in trailing, titles
+    assert procedure and not set(procedure) & {*SKILL_LEADING_SECTIONS, *SKILL_TRAILING_SECTIONS}
+    targets = {int(number) for number in re.findall(r"Step (\d+)", instructions)}
+    assert targets <= set(numbers), targets
     # 1 つの長い段落に戻さない（書き直しの前は 1 行が 4,000 字を超えていた）。
     lines = instructions.splitlines()
     assert all(len(line) <= 300 for line in lines), max(lines, key=len)

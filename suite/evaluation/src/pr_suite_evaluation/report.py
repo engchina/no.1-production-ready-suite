@@ -3,8 +3,8 @@
 集計の意味は製品の評価と同じ（成功したケースのうち測れたものだけの平均。失敗したケースは指標の
 分母に入れず、1 つでもあれば合格にしない）。suite は加えて、指標ごとに測れた / 対象外 / 評価不能の
 数と評価不能の理由（`denominators`）を出し、閾値を付けた指標に評価不能のケースがあれば合格にしない
-（`passed=null`）。比較（`summarize_result` / `summary_markdown`）は、製品の評価の結果（RAG の評価の
-job の結果）と suite の結果の両方を読む（同じ名前の項目）。
+（`passed=null`）。比較（`summarize_result` / `summary_markdown`）は suite の結果（RAG の Target と
+業務 Agent の Target を同じ Evaluator で採点したもの）を並べる（#3417）。
 """
 
 from __future__ import annotations
@@ -301,7 +301,7 @@ def _median_seconds(values: Sequence[float]) -> float | None:
 
 
 def summarize_result(data: Mapping[str, Any]) -> dict[str, Any]:
-    """評価の結果（製品の評価の結果、または suite の結果の report）の比較用の要約。"""
+    """suite の結果の report（製品の評価の結果と同じ名前の項目）の比較用の要約。"""
     cases = _records(data.get("case_results"))
     succeeded = [case for case in cases if case.get("status", "success") == "success"]
     # 危険な回答のケースは、失敗の理由に勧めてはいけない操作が付いた成功のケース。六指標の採点は
@@ -384,6 +384,9 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
     def row(name: str, values: Sequence[object]) -> None:
         rows.append(f"| {name} | " + " | ".join(_format(value) for value in values) + " |")
 
+    if any("target_kind" in summaries[label] for label in labels):
+        row("対象", [summaries[label].get("target_kind") for label in labels])
+        row("採点の版", [summaries[label].get("metrics_version") for label in labels])
     for metric, name in SUMMARY_METRICS:
         row(name, [summaries[label].get(metric) for label in labels])
     if any("unevaluable" in summaries[label] for label in labels):
@@ -391,6 +394,17 @@ def summary_markdown(summaries: Mapping[str, Mapping[str, Any]]) -> str:
             values = [summaries[label].get("unevaluable", {}).get(metric) for label in labels]
             if any(values):
                 row(f"評価不能のケース: {name}", values)
+    judged = [summaries[label].get("judge") or {} for label in labels]
+    for aspect_id in _ordered_names(judged):
+        rates: list[object] = []
+        for item in judged:
+            aspect = item.get(aspect_id)
+            if not aspect or aspect.get("pass_rate") is None:
+                rates.append(None)
+                continue
+            mark = "" if aspect.get("calibrated") else "（参考）"
+            rates.append(f"{aspect['pass_rate']:.2f}{mark}")
+        row(f"LLM の判定: {aspect_id} の合格の率", rates)
     row("危険な回答のケース", [summaries[label].get("dangerous_case_count") for label in labels])
     row("失敗したケース", [summaries[label].get("error_count") for label in labels])
     row(

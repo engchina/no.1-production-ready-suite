@@ -601,7 +601,7 @@ const agentJa = {
   // それ以外は共通の既定（SYSTEM_TABLES_MESSAGES）を使う。見出しは RAG / NL2SQL と同じ。
   "settings.database.systemTables.title": "システムテーブル",
   "settings.database.systemTables.description":
-    "Agent が使用する Oracle テーブル（ロールの権限・利用できるエージェント・migration の台帳）と索引の状態を確認し、管理者の明示操作で準備します。3 製品共通のユーザー・ロールのテーブル（PLATFORM_*）も先に用意します。",
+    "Agent が使用する Oracle テーブル（ロールの権限・利用できる業務 Agent・migration の台帳）と索引の状態を確認し、管理者の明示操作で準備します。3 製品共通のユーザー・ロールのテーブル（PLATFORM_*）も先に用意します。",
   "settings.database.systemTables.readOnly":
     "システムテーブルの作成・更新と全再作成には「システムテーブル」の権限が必要です。状態の確認と再取得はできます。",
   "settings.database.systemTables.summary.objectsHint": "テーブル・索引の合計",
@@ -620,12 +620,12 @@ const agentJa = {
   "settings.database.systemTables.error.recovery":
     "状態を再取得し、Oracle のロック状態を確認して再試行してください。",
   "settings.database.systemTables.recreate.sectionDescription":
-    "ロールに付けた Agent の権限と利用できるエージェントを削除して再作成します。元に戻せません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
+    "Agent の実行履歴、保存済みの定義（業務 Agent・スキル・MCP 接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当てを削除して再作成します。削除したデータは復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
   "settings.database.systemTables.confirmation.helper":
     "この操作は取り消せません。{phrase} と正確に入力し、続く確認ダイアログでも承認してください。",
-  "settings.database.systemTables.confirm.title": "Agent の権限の割り当てを削除しますか？",
+  "settings.database.systemTables.confirm.title": "Agent の実行履歴・保存済みの定義・権限の割り当てを削除しますか？",
   "settings.database.systemTables.confirm.description":
-    "管理対象の Agent のテーブルを削除して再作成します。ロールに付けた Agent の権限と利用できるエージェントは復元できません。",
+    "管理対象の Agent のテーブルを削除して再作成します。実行履歴、保存済みの定義（業務 Agent・スキル・MCP 接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当ては復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
   "nav.section.settings": "システム設定",
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
@@ -814,14 +814,14 @@ const agentJa = {
     "資料を調べられる回数の上限に達したため、ここまでに集めた資料で答えています。足りない点は、質問を分けて聞き直してください。",
   // 回答の処理の段階（3 製品共通の ChatProgress。#1145 / #1147）。実行中は「〜しています」、完了は「〜しました」、未実行は名詞。
   "chat.progress.submit.running": "質問を送信しています",
-  "chat.progress.plan.running": "考えています",
-  "chat.progress.plan.done": "進め方を決めました",
-  "chat.progress.plan.failed": "進め方を決められませんでした",
-  "chat.progress.plan.idle": "進め方の検討",
-  "chat.progress.tool.running": "処理を実行しています",
-  "chat.progress.tool.done": "処理を実行しました",
-  "chat.progress.tool.failed": "処理を実行できませんでした",
-  "chat.progress.tool.idle": "処理の実行",
+  "chat.progress.plan.running": "質問に応じた次の操作を選んでいます",
+  "chat.progress.plan.done": "質問に応じた次の操作を選びました",
+  "chat.progress.plan.failed": "次の操作を選べませんでした",
+  "chat.progress.plan.idle": "質問に応じた次の操作を選ぶ",
+  "chat.progress.tool.running": "選ばれたツールを呼び出しています",
+  "chat.progress.tool.done": "選ばれたツールを呼び出しました",
+  "chat.progress.tool.failed": "選ばれたツールを呼び出せませんでした",
+  "chat.progress.tool.idle": "選ばれたツールを呼び出す",
   "chat.progress.toolTitle.running": "「{title}」を実行しています",
   "chat.progress.toolTitle.done": "「{title}」を実行しました",
   "chat.progress.toolTitle.failed": "「{title}」を実行できませんでした",
@@ -987,7 +987,6 @@ const agentJa = {
   "agent.try.empty.hint": "同じ会話の中では、前の質問と回答を踏まえて答えます。設定を直したら保存し、新しい会話で試し直せます。",
   "agent.try.unsaved": "保存していない変更があります。保存すると、変更を反映した下書きで試せます。",
   "agent.try.disabled": "無効の業務 Agent は試せません。有効にしてから試してください。",
-  "agent.try.migrationRequired": "スキルを選んで業務 Agent の移行を完了してから試してください。",
   "agent.version.restore": "この版に戻す",
   "agent.version.restoreTitle": "v{version} に戻しますか?",
   "agent.version.restoreMessage": "この版を公開し直し、下書きもこの版の内容にします。保存していない下書きの変更は失われます。",
@@ -1022,29 +1021,29 @@ const agentJa = {
   "capability.admin": "Agent 管理の権限",
   "capability.buildAgents": "自分の業務 Agent の作成の権限",
   "security.permissions.subtitle":
-    "ロールごとに、使える画面（機能権限）と利用できるエージェントを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
+    "ロールごとに、使える画面（機能権限）と利用できる業務 Agentを設定します。ロールの作成・名称変更・アーカイブはロール管理で行います。",
   "security.permissions.listHint":
-    "ロールを選ぶと、付与している機能権限の件数と利用できるエージェントを確認できます。",
+    "ロールを選ぶと、付与している機能権限の件数と利用できる業務 Agentを確認できます。",
   // 一覧の列（既定 20rem）の検索欄に収まる長さ（#1891 / #2282）。
   "security.permissions.searchPlaceholder": "ロール・権限・対象で絞り込み",
   "security.permissions.formHint":
-    "機能権限と、利用できるエージェントを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
+    "機能権限と、利用できる業務 Agentを設定します。保存すると、このロールのユーザーへ次回リクエストから反映されます。",
   "security.permissions.permissionsHint":
     "メニュー権限は画面表示を許可します。参照権限・実行権限・管理権限は、関連する画面のメニュー権限を自動的に付与します。",
-  "security.permissions.agents": "利用できるエージェント",
+  "security.permissions.agents": "利用できる業務 Agent",
   "security.permissions.agentsHint":
-    "このロールの利用者がチャット・実行履歴・承認・監査ログで扱えるエージェントを選択します。何も選ばない場合、このロールではエージェントを利用できません。",
-  "security.permissions.agentsAll": "すべてのエージェント",
-  "security.permissions.agentsSearch": "エージェントを検索",
-  "security.permissions.agentsSearchPlaceholder": "エージェント名・ID・説明で絞り込み",
-  "security.permissions.agentsEmpty": "利用範囲を設定できるエージェントがありません。先に業務 Agent を作成してください。",
-  "security.permissions.agentsNoResults": "条件に一致するエージェントがありません。",
+    "このロールの利用者がチャット・実行履歴・承認・監査ログで扱える業務 Agentを選択します。何も選ばない場合、このロールでは業務 Agentを利用できません。",
+  "security.permissions.agentsAll": "すべての業務 Agent",
+  "security.permissions.agentsSearch": "業務 Agentを検索",
+  "security.permissions.agentsSearchPlaceholder": "業務 Agent名・ID・説明で絞り込み",
+  "security.permissions.agentsEmpty": "利用範囲を設定できる業務 Agentがありません。先に業務 Agent を作成してください。",
+  "security.permissions.agentsNoResults": "条件に一致する業務 Agentがありません。",
   "security.permissions.agentsLoadWarning":
-    "エージェントの候補を読み込めませんでした。ロール一覧は表示できます。詳細: {message}",
+    "業務 Agentの候補を読み込めませんでした。ロール一覧は表示できます。詳細: {message}",
   "security.permissions.agentsManagedAll":
-    "Agent 管理の権限により、すべてのエージェントを利用できます。個別選択は不要です。",
+    "Agent 管理の権限により、すべての業務 Agentを利用できます。個別選択は不要です。",
   "security.permissions.agentsSystemAdmin":
-    "SYSTEM_ADMIN はすべてのエージェントを自動的に利用できます。個別設定は不要です。",
+    "SYSTEM_ADMIN はすべての業務 Agentを自動的に利用できます。個別設定は不要です。",
   "security.permissions.agentDisabled": "無効",
 
   // 未保存変更の離脱ガードと作業状態の保持（#87）
@@ -1194,7 +1193,6 @@ const agentJa = {
   "agent.disabled": "無効",
   "agent.skills": "スキル",
   "agent.skillsUnavailable": "利用できるスキルを取得できません。",
-  "agent.migrationRequired": "旧 tool 設定をスキルへ変換できませんでした。スキルを選択して保存してください。",
 
   "run.form.agent": "業務 Agent",
   "run.form.goal": "目標",
@@ -1327,7 +1325,6 @@ const agentJa = {
   "run.waitingApproval": "承認待ち",
   "run.progress.queued": "実行の開始を待っています",
   "run.progress.running": "実行しています",
-  "run.progress.runningStep": "実行しています（{step}）",
   "run.progress.waitingApproval": "承認を待っています",
   "run.progress.waitingConfirmation": "回答前の確認の答えを待っています",
   "run.createdToast": "実行を作成しました",

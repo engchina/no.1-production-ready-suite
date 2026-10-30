@@ -20,7 +20,6 @@ export type WorkspaceField =
   | "search.searchAnswerProfileId"
   | "search.classification"
   | "search.extractionFields"
-  | "search.topK"
   | "search.advancedOpen"
   | "search.generateAnswer"
   | "chat.searchAnswerProfileId"
@@ -39,7 +38,9 @@ export type WorkspaceField =
   // 品質評価（#2065）: 検証した評価リクエストの Excel（ケースとプレビュー。200,000 文字を超えると
   // 保存しない）、KB スコープ、評価の job id と、その評価のケースの見出し（結果の表の質問・根拠）。
   | "evaluation.import"
-  | "evaluation.knowledgeBaseIds"
+  | "evaluation.profileId"
+  | "evaluation.runProfileName"
+  | "evaluation.runInput"
   | "evaluation.runJobId"
   | "evaluation.runCaseLabels"
   | "evaluation.compareEnabled"
@@ -47,8 +48,16 @@ export type WorkspaceField =
   | "evaluation.runCompareName"
   | "evaluation.processDrafts"
   | "evaluation.useProcessDrafts"
+  // 判定の校正（#3578）: 選んだ記入の集合・手順のタブ・記入の観点と状態の絞り込み・校正の job id。
+  | "evaluation.calibration.setsPaging"
+  | "evaluation.calibration.labelSetId"
+  | "evaluation.calibration.step"
+  | "evaluation.calibration.aspect"
+  | "evaluation.calibration.rowFilter"
+  | "evaluation.calibration.jobId"
   | "feedback.search"
   | "history.view"
+  | "language-releases.paging"
   // クライアント側で全件を持つ一覧のページと表示件数（#1891。lib/list-paging.ts の useClientListPaging）
   | "evaluation.casesPaging"
   | "evaluation.previewPaging"
@@ -76,6 +85,7 @@ function storage(): Storage | null {
 
 /** 更新境界にだけ旧名を置き、owner / TTL / scoped ID / 自由入力は変えない。 */
 function migrateWorkspaceNames(store: Storage): void {
+  store.removeItem(`${WORKSPACE_NAMESPACE}search.topK`);
   const migrations: Record<string, string> = {
     "search.businessViewId": "search.searchAnswerProfileId",
     "chat.businessViewId": "chat.searchAnswerProfileId",

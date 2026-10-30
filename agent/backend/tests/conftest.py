@@ -15,12 +15,17 @@ from pr_backend_core.config import isolate_env_files_for_tests
 # 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
 isolate_env_files_for_tests("AGENT_")
 
+os.environ["PLATFORM_ENVIRONMENT"] = "local"
+os.environ["PLATFORM_AUTH_MODE"] = "local"
+
+
 # 保存先の既定は `auto`（#839）。開発機の共通 `.env` に DB の設定があると、Run の repository が
 # Oracle に接続するため、テストは memory に固定する（`auto` を確かめるテストは settings を差し替えて
 # `storage_backend.reset()` する）。`app` を import する前に設定する。
 os.environ["AGENT_RUNTIME_REPOSITORY_BACKEND"] = "memory"
 
 import pytest  # noqa: E402
+from pr_backend_core.llm_request_params import reset_dropped_parameters  # noqa: E402
 from pr_system_settings.database_status import clear_database_status_cache  # noqa: E402
 
 from app.features.agent import (  # noqa: E402
@@ -65,6 +70,14 @@ def _fresh_database_status_cache() -> Iterator[None]:
     clear_database_status_cache()
     yield
     clear_database_status_cache()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_dropped_llm_parameters() -> Iterator[None]:
+    """モデルが受け付けない引数の記憶（#3539。プロセスの間の状態）をテストごとに捨てる。"""
+    reset_dropped_parameters()
+    yield
+    reset_dropped_parameters()
 
 
 @pytest.fixture(autouse=True)

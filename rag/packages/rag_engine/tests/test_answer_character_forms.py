@@ -65,7 +65,7 @@ def test_answer_context_folds_widths_and_keeps_the_original_evidence():
     spans = _grounded_spans(QUESTION, ctx, (), None)
     block = grounded.build_context_block(QUESTION, spans, preface="", feedback=None)
     assert "HRM:第2水曜 22:00〜24:00" in block and "OMS:第3木曜" in block
-    assert "ＨＲＭ" not in block and "ＯＭＳ" not in block
+    assert "原文の文字表記" in block and "ＨＲＭ" in block and "ＯＭＳ" in block
     # 根拠（表示・保存・引用の原文）は資料の表記のまま。
     assert any("ＨＲＭ：第２水曜" in span["text"] for span in spans)
     assert ctx.records[0].text == PLAN
@@ -98,7 +98,11 @@ def test_check_view_folds_span_text_fields_for_checks():
     assert span["text"] == "ＯＫボタンを押します。"
     # 説明の「OKボタン」は根拠の「ＯＫボタン」と同じボタン名として扱う。
     checked_item = grounded._check_item(
-        grounded.GroundedItem(kind="operation", text="OKボタンを押します。", evidence_id="e1", quote="ＯＫボタンを押します。")
+        grounded.GroundedItem(
+            kind="operation",
+            text="OKボタンを押します。",
+            citations=[grounded.GroundedCitation(evidence_id="e1", quote="ＯＫボタンを押します。")],
+        )
     )
     assert grounded._check_button_names("", checked_item, view) == ""
 
@@ -110,8 +114,8 @@ def test_grounded_answer_reads_half_width_and_cites_the_original():
         [draft(item(eid, TEXT, QUOTE, kind="rule"), summary="HRM は第2水曜の保守枠です。")], [audit((0, "supported", "matched", ""))]
     )
     result = run(model, ctx, QUESTION).response
-    generation = next(prompt for name, prompt in model.prompts if name == "GroundedDraft")
-    assert "HRM:第2水曜 22:00〜24:00" in generation and "ＨＲＭ" not in generation
+    generation = next(prompt for name, prompt in model.prompts if name == "GroundedDraftWire")
+    assert "HRM:第2水曜 22:00〜24:00" in generation and "ＨＲＭ" in generation
     audit_prompt = json.loads(next(prompt for name, prompt in model.prompts if name == "GroundedAudit"))
     assert audit_prompt["items"][0]["quote"] == "HRM:第2水曜 22:00〜24:00"
     assert "ＨＲＭ" not in json.dumps(audit_prompt, ensure_ascii=False)
@@ -123,7 +127,7 @@ def test_grounded_answer_reads_half_width_and_cites_the_original():
 
 def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
     evidence = [{"id": "c1", "source": "保守計画.pdf", "page_start": 3, "page_end": 3, "text": PLAN}]
-    answer = "HRM の変更は第2水曜 22:00〜24:00 の保守枠で実施します。"
+    answer = "HRM の変更は第2水曜 22:00〜24:00 の保守枠で実施します。\n根拠：保守計画.pdf p.3"
     seen = {}
 
     def parse(system, inputs, settings, schema, provider_id=None):
@@ -161,3 +165,44 @@ def test_figure_dash_is_folded_only_for_comparison() -> None:
 
     assert fold_text("row‒a") == "row-a"
     assert fold_width("row‒a") == "row‒a"
+
+
+def test_original_forms_are_supplementary_and_bound_to_units():
+    raw = "文字表記\n全角ＡＢＣ、半角ABC、ｶﾞ、全角＂と＼。\n変更のない本文。"
+    spans = _grounded_spans("原文の文字は？", context(record(0, raw, "文字表記")), (), None)
+    block = grounded.evidence_block_text(spans)
+    assert "全角ABC、半角ABC" in block
+    assert "全角ＡＢＣ、半角ABC" in block
+    start = block.index("原文の文字表記: ") + len("原文の文字表記: ")
+    annotations = json.JSONDecoder().raw_decode(block[start:])[0]
+    assert any("ＡＢＣ" in row["原文"] and row["引用単位"] == 2 for row in annotations)
+    assert not any("変更のない本文" in row["原文"] for row in annotations)
+    view = grounded._citation_view(spans[0])
+    assert view.model_rendered in block
+    assert view.text == spans[0]["text"]
+    assert grounded._model_source_note(spans[0], view.units) in grounded.evidence_metadata_text(spans[0])
+
+
+def test_no_extra_metadata_without_character_changes():
+    spans = _grounded_spans("内容は？", context(record(0, "本文Aを確認する。", "本文A")), (), None)
+    block = grounded.evidence_block_text(spans)
+    assert "原文の文字表記" not in block
+    assert block == grounded.neutralize_boundary_markers(fold_width(grounded.format_functions(spans)))
+
+
+def test_answer_can_distinguish_original_full_and_half_width_characters():
+    raw = "文字表記\n全角ＡＢＣ、半角ABC。"
+    question = "全角と半角の英字は、原文にどのように記載されていますか。"
+    ctx = context(record(0, raw, "文字表記"))
+    eid = ids(ctx, question)[raw]
+    answer = "全角は「ＡＢＣ」、半角は「ABC」と記載されています。"
+
+    def generate(prompt):
+        assert "全角ＡＢＣ、半角ABC。" in prompt
+        assert "全角ABC、半角ABC。" in prompt
+        return draft(item(eid, answer, "全角ＡＢＣ、半角ABC。", kind="rule"), summary=answer)
+
+    model = FakeModel([generate], [audit((0, "supported", "matched", ""))])
+    result = run(model, ctx, question).response
+    assert answer in result.answer_text
+    assert result.evidence_facts[0]["quote"] == "全角ＡＢＣ、半角ABC。"

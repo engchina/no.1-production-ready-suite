@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from opentelemetry import trace as otel_trace
@@ -35,6 +35,7 @@ from app.api.routes import history as history_route
 from app.api.routes import mcp as mcp_route
 from app.api.routes import search as search_route
 from app.clients.oracle import StoredMessage
+from app.config import Settings
 from app.main import app
 from app.rag import trace_store
 from app.rag.request_context import (
@@ -481,14 +482,14 @@ async def test_rag_spans_carry_the_rag_step_names_for_other_products(
     }
     assert names == {
         "rag.search": None,
-        "rag.retrieval": "検索",
-        "rag.engine.stage": "文書の検索（2 回目）",
+        "rag.retrieval": "文書から根拠の候補を検索する",
+        "rag.engine.stage": "検索文から根拠の候補を集める（2 回目）",
         "gen_ai.embeddings": None,
     }
     assert {row["product"] for row in rows.values()} == {"rag"}
     # 工程の定義の値（工程名・LLM の回数）はそのまま残す。
     assert json.loads(rows["rag.engine.stage"]["display_params_json"]) == {
-        "display_name": "文書の検索（2 回目）",
+        "display_name": "検索文から根拠の候補を集める（2 回目）",
         "name": "文書検索（2回目）",
         "llm_calls": 1,
     }
@@ -565,3 +566,73 @@ def test_writer_is_started_only_when_the_database_is_configured(monkeypatch: Mon
         assert trace_store.trace_span_writer() is None
     finally:
         trace_store.set_trace_span_writer(previous)
+
+
+async def test_mcp_validate_answer_records_its_steps_and_model_calls(
+    tracing: None, trace_db: FakeTraceDb, actor: None, monkeypatch: MonkeyPatch
+) -> None:
+    """MCP の `rag_validate_answer`（資料との照合）の中の工程とモデルの呼び出しを span にする。
+
+    #3470。検索のツールと同じく Agent の `mcp.request` の下につながり、「資料との照合」→
+    根拠の本文の
+    読み込み・回答の段落の監査 → モデルの呼び出し（監査の thread の中）の木になる。
+    """
+    import rag_engine.evaluation.answer_validation as engine_validation
+    from rag_engine.resources.tracing import observe_call
+
+    from app.rag.answer_engine import ANSWER_VALIDATION_STEP, _answer_step_span
+    from app.rag.answer_validation import (
+        CLAIM_AUDIT_STAGE,
+        EVIDENCE_LOAD_STAGE,
+        EvidenceRef,
+        validate_answer,
+    )
+    from app.schemas.search import RetrievedChunk
+
+    class _Oracle:
+        async def retrievable_chunk(self, document_id: str, chunk_id: str) -> Any:
+            return RetrievedChunk(
+                document_id=document_id, chunk_id=chunk_id, text="合成の本文。", score=0.5
+            )
+
+    def fake_claims(question: str, answer: str, items: Any, settings: Any, **_: Any) -> Any:
+        # 監査の thread の中のモデルの呼び出し（rag_engine の OCI の呼び出しと同じ観測）。
+        with observe_call("chat", "synthetic-model"):
+            pass
+        return {"status": "completed", "counts": {"supported": 1}, "claim_checks": []}
+
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", fake_claims)
+    _agent_trace, _agent_span, traceparent = _agent_traceparent()
+    message = {"params": {"name": "rag_validate_answer", "_meta": {"traceparent": traceparent}}}
+    with (
+        mcp_request_trace(_request(trusted=True), message),
+        _answer_step_span(ANSWER_VALIDATION_STEP),
+    ):
+        await validate_answer(
+            "合成の質問",
+            "合成の回答。",
+            [EvidenceRef("d1", "c1")],
+            Settings(),
+            oracle=cast(Any, _Oracle()),
+        )
+    rows = trace_db.spans()
+    by_id = {row["span_id"]: row for row in rows}
+
+    def name(row: dict[str, Any]) -> str:
+        params = json.loads(row["display_params_json"] or "{}")
+        return str(params.get("display_name") or row["name"])
+
+    def parent(row: dict[str, Any]) -> str:
+        return name(by_id[row["parent_span_id"]])
+
+    server = next(row for row in rows if row["name"] == "mcp.server")
+    step = next(row for row in rows if name(row) == ANSWER_VALIDATION_STEP)
+    assert step["parent_span_id"] == server["span_id"]
+    assert parent(next(row for row in rows if name(row) == EVIDENCE_LOAD_STAGE)) == (
+        ANSWER_VALIDATION_STEP
+    )
+    assert parent(next(row for row in rows if name(row) == CLAIM_AUDIT_STAGE)) == (
+        ANSWER_VALIDATION_STEP
+    )
+    model = next(row for row in rows if row["name"] == "gen_ai.chat")
+    assert parent(model) == CLAIM_AUDIT_STAGE

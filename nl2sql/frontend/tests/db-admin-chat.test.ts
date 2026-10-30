@@ -163,7 +163,7 @@ test("処理の経過は生成のときの span の木（生成 → SQL の確�
     steps.map((step) => [step.label, step.status]),
     [
       ["SQL を生成しました", "done"],
-      ["SQL の安全性を確認しました", "done"],
+      ["SQL の種類と参照範囲を検査しました", "done"],
     ],
   );
   assert.equal(steps[0]?.detail, "Enterprise AI");

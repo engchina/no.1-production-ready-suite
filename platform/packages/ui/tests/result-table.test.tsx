@@ -173,7 +173,7 @@ describe("ResultTable", () => {
     expect(sheet.className).toContain("sm:w-[64rem]");
     expect($('[data-testid="result-all-table"]')!.querySelectorAll("tbody tr")).toHaveLength(25);
     expect($('[data-testid="result-all-pagination"]')?.textContent).toContain("1–25 / 60 件");
-    expect($('[data-testid="result-all-scroll"]')!.className).toContain("overflow-visible");
+    expect($('[data-testid="result-all-scroll"]')!.className).toContain("overflow-auto");
     expect($('[data-testid="result-all-scroll"]')!.style.maxHeight).toBe("");
     // 全行の表は折り返して全文を出す。
     const fullCell = $('[data-testid="result-all-table"]')!.querySelectorAll("tbody tr")[1].querySelectorAll("td")[3];
@@ -190,6 +190,23 @@ describe("ResultTable", () => {
     expect(filename).toBe("out.csv");
     expect((csv as string).trimEnd().split("\r\n")).toHaveLength(61);
     expect(onCsvDownloaded).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([14, 25, 26, 60])("%i 行でもページ送りを表の下に出す", (count) => {
+    act(() => root.render(<ResultTable columns={columns} rows={rows(count)} testId="result" />));
+    act(() => $('[data-testid="result-view-all"]')!.click());
+    const table = $('[data-testid="result-all-table"]')!;
+    const pagination = $('[data-testid="result-all-pagination"]')!;
+    expect(pagination).not.toBeNull();
+    expect(pagination.textContent).toContain(`1–${Math.min(count, 25)} / ${count} 件`);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(Math.min(count, 25));
+    expect(pagination.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    const next = Array.from(pagination.querySelectorAll("button")).find((button) => button.textContent?.includes("次へ"))!;
+    expect(next.disabled).toBe(count <= 25);
+    if (count > 25) {
+      act(() => next.click());
+      expect(pagination.textContent).toContain(`26–${Math.min(count, 50)} / ${count} 件`);
+    }
   });
 
   it("文言は製品から上書きできる", () => {

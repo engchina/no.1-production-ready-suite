@@ -24,7 +24,7 @@ import {
 } from "@/lib/api";
 import { sectionPageLabel } from "@/lib/document-sections";
 import { t } from "@/lib/i18n";
-import { useDocuments, useDocumentSections } from "@/lib/queries";
+import { useDocumentCandidates, useDocumentSections } from "@/lib/queries";
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 8;
@@ -72,10 +72,12 @@ function clarificationErrors(draft: RuleClarification) {
 export function RuleClarificationEditor({
   searchAnswerProfileId,
   ruleId,
+  ruleTitle,
   stored,
 }: {
   searchAnswerProfileId: string;
   ruleId: string;
+  ruleTitle: string;
   stored: RuleClarification | null;
 }) {
   const queryClient = useQueryClient();
@@ -161,7 +163,7 @@ export function RuleClarificationEditor({
     >
       <h4 id="rule-clarification-title" className="flex items-center gap-2 text-sm font-semibold text-fg">
         <MessageCircleQuestion size={16} className="text-accent-fg" aria-hidden />
-        {t("clarification.title", { rule: ruleId })}
+        {t("clarification.title", { rule: ruleTitle })}
       </h4>
       <p className="text-xs leading-relaxed text-fg-muted">{t("clarification.description")}</p>
 
@@ -339,12 +341,21 @@ function OptionSections({
 }) {
   const [documentQuery, setDocumentQuery] = useState("");
   const [documentId, setDocumentId] = useState("");
-  const documents = useDocuments({ q: documentQuery || undefined, limit: 50 });
-  const documentOptions = (documents.data?.items ?? []).map((item) => ({
+  const documents = useDocumentCandidates({ q: documentQuery || undefined });
+  const [selectedDocument, setSelectedDocument] = useState<{ value: string; label: string } | null>(null);
+  // API がページング前に名前の自然順で並べる。追加取得の重複だけを ID で除く。
+  const candidates = [
+    ...new Map(
+      (documents.data?.pages ?? [])
+        .flatMap((page) => page.items)
+        .map((item) => [item.id, item]),
+    ).values(),
+  ];
+  const documentOptions = candidates.map((item) => ({
     value: item.id,
     label: item.file_name,
   }));
-  const document = documentOptions.find((option) => option.value === documentId) ?? null;
+  const document = documentOptions.find((option) => option.value === documentId) ?? selectedDocument;
   const sectionsQuery = useDocumentSections(documentId || null, null);
   const chosen = new Set(sections.map((section) => `${section.document_id}:${section.section_id}`));
 
@@ -392,14 +403,17 @@ function OptionSections({
         value={documentId}
         options={documentOptions}
         selectedOption={document}
-        onValueChange={setDocumentId}
+        onValueChange={(value) => {
+          setDocumentId(value);
+          setSelectedDocument(documentOptions.find((option) => option.value === value) ?? null);
+        }}
         onQueryChange={setDocumentQuery}
         remote={{
-          total: documents.data?.total ?? documentOptions.length,
-          hasMore: false,
-          loadingMore: false,
-          searching: documents.isFetching,
-          onLoadMore: () => undefined,
+          total: documents.data?.pages.at(-1)?.total ?? documentOptions.length,
+          hasMore: documents.hasNextPage,
+          loadingMore: documents.isFetchingNextPage,
+          searching: documents.isFetching && !documents.isFetchingNextPage,
+          onLoadMore: () => void documents.fetchNextPage(),
         }}
         // 文書（対象）の選択（lg。#1891）。
         width="lg"

@@ -1487,6 +1487,8 @@ export function ChatSkeleton({ turns = 2, className, testId }: ChatSkeletonProps
 )}
 ```
 
+`PagedDataTable` の `viewport="bounded"` は、長いセルで 1 行が高くなる表を共通のカード一覧の上限（md 未満 17.5rem、md 以上 28rem）で止めます。表頭固定・ページ送り・縦横スクロールは維持します。既定の `list` は実測の 5 / 8 行、`page` は親でスクロールする全高の表です。
+
 クライアント側で全件を持つ一覧は、上の組み合わせを 1 つにした `PagedDataTable` を使います（#265。RAG・Agent が使う）。
 
 ```tsx
@@ -3176,7 +3178,7 @@ type ChatProgressStep = {
   detail?: string;            // 任意の短い補足（対象の表・ツール名・件数）。SQL 全文・ORA コード等の技術的な詳細は入れない
   durationMs?: number | null; // 所要時間（時刻を持たない記録。渡すと startedAt / finishedAt より優先。#2096）
   meta?: string;              // 短い計測値（例:「LLM 1 回」。#2096）。一覧では名前の後ろの括弧に detail と並べる（#2265）
-  level?: number;             // 入れ子の深さ（0 が最上位。1〜3 段を字下げ。#2096）
+  level?: number;             // 入れ子の深さ（0 が最上位。1 段 1rem。深さを丸めず、深い一覧は内部で横スクロール。#3790）
 };
 ```
 
@@ -3222,13 +3224,13 @@ import { ChatProgress } from "@production-ready/ui";
 | 決めたこと | 理由 |
 |---|---|
 | 実行中は見出しの行に全体の状態（「処理中（N ステップ完了）」と処理全体の経過時間。閉じているときは今の段階の名前も）だけを出し、開いた中身は 1 本のタイムライン（始まった段階を開始順に並べ、今の段階をその位置に出す。既定で開く。#2096 / #2309 / #2840）にする | 何をしたか・どこで時間がかかったかを最初から見せる（ユーザーの指示。Perplexity の検索の過程・GitHub Actions の steps と同じく、終わった工程が順に積み上がる）。閉じれば今の 1 行だけになる |
-| 入れ子の段階は `level` で字下げし、親と子が同時に実行中なら最後に始まった段階を今の段階にする。`meta`（LLM の回数など）は `detail` と並べて名前の後ろの括弧、右の列は失敗とスキップの文字・所要時間（#2096 / #2265） | RAG の回答フローの工程は入れ子（根拠の検索と回答の作成の中の文書の検索など）。計測値の置き場所を実行の詳細（`RunTimeline`）にそろえ、右の列を所要時間の 1 列にして時間の線と並べる |
+| 入れ子の段階は `level` で字下げし、最後に始まった実行中の末端の段階（子の段階を持たない段階）を今の段階にする。子の段階を持つ実行中の段階（親の工程）は回さず、子が途切れた間は親の 1 段下に「処理を続けています」を出す（#3436）。`meta`（LLM の回数など）は `detail` と並べて名前の後ろの括弧、右の列は失敗とスキップの文字・所要時間（#2096 / #2265） | RAG の回答フローの工程は入れ子（根拠の検索と回答の作成の中の文書の検索など）。計測値の置き場所を実行の詳細（`RunTimeline`）にそろえ、右の列を所要時間の 1 列にして時間の線と並べる |
 | 実行中の経過時間は**処理全体**（`startedAt`、省略時は最初の段階の開始）から数え、実行中の見出しの行の右の 1 か所に出し続ける。今の段階の行の右には今の段階の経過時間（秒の単位）を出す。段階が変わっても 0 に戻さない。段階ごとの所要時間は完了した段階の行に出す（#1176） | 段階ごとに 0 から数え直すと、利用者には待った時間がリセットされたように見える（#1176 の指摘）。待った時間は全体の 1 つ、段階の内訳は一覧、と役割を分ける |
 | 遅延の案内は**今の段階**の経過時間（`slowAfterMs`、既定 10 秒）で判断し、実行中の見出し「処理中（N ステップ完了）」の直下（`-running` の中の `-notice`）に「通常より時間がかかっています。」とだけ出す（段階の名前は添えない）。一度出たら処理が終わるまで消さない（`useLatchedSlow`）。取り直している間は同じ場所に「接続を確認しています。」（遅延の案内より優先）。今の段階の行（`-current`）には判断の結果（`data-slow` / `data-reconnecting`）だけを残す（#1176 / #2426） | LLM を使う処理は全体が 10 秒を超えるのが普通で、全体で判断すると毎回出て意味を失う。案内は見出し（全体の状態）に属する情報で、一覧を閉じていても見える見出しの中に置く。段階で判断したまま消すと、段階が変わるたびに出たり消えたりする（#2426 のユーザーの指示）。どの段階かは一覧の最後の行（今の段階と経過時間）で分かる |
 | 終端でない（`active`）のに実行中・待機中の段階が無いときも、今の行（スピナー・「処理を続けています」・全体の経過時間）を出す（#1176） | 「N ステップ完了」だけが出て、止まったのか続いているのか分からない状態を作らない。製品は backend の段階を写し漏らさない（NL2SQL はジョブの全段階を写す）。これは写し漏れの最後の備え |
 | 遅延の案内の行（見出しの直下）は実行中の最初から高さを予約する（`ProcessingIndicator` の #902 と同じ） | 10 秒後に行が足されて見出し・一覧・スピナーの行が動かない |
 | 実行中の段階はタイムラインの最後の行に置き、段階が終わると同じ位置で完了の行に変わる（#2309。今の段階を一覧の外の先頭に置く形をやめた） | 時間の順に上から下へ読める（ChatGPT / Claude の思考とツールの経過・Perplexity の検索の過程・GitHub Actions の steps と同じ形）。先頭に置くと新しい段が上・古い段が下の逆順になり、段が終わるたびに上の行から下の一覧へ跳んでいた |
-| 段階は始まった時点で開始順の位置に出し、その場で状態だけを変える。今の段階（最も内側の実行中の段階）の行はその位置に置き、今の段階を包む実行中の親の工程も開始順の位置に回さない実行中の印（`RunTimeline` の `spinRunning={false}`）で出す（#2840） | 終わった段階と今の段階だけを出すと、入れ子の工程で親の行が出ないまま子だけが出て、親が終わったときに子の上へ差し込まれ、一覧が入れ替わって見えた。一度出た行は消さず、動かさない（GitHub Actions の steps・AG-UI の STEP_STARTED / STEP_FINISHED と同じ）。動くスピナーは今の段階の 1 つだけ（messaging.md §3.7） |
+| 段階は始まった時点で開始順の位置に出し、その場で状態だけを変える。今の段階（最後に始まった実行中の末端の段階）の行はその位置に置き、今の段階を包む実行中の親の工程も開始順の位置に回さない実行中の印（`RunTimeline` の `spinRunning={false}`）で出す（#2840） | 終わった段階と今の段階だけを出すと、入れ子の工程で親の行が出ないまま子だけが出て、親が終わったときに子の上へ差し込まれ、一覧が入れ替わって見えた。一度出た行は消さず、動かさない（GitHub Actions の steps・AG-UI の STEP_STARTED / STEP_FINISHED と同じ）。動くスピナーは今の段階の 1 つだけ（messaging.md §3.7） |
 | 実行中は開き、完了したら「処理の経過（N ステップ・M 秒）」の 1 行に閉じる（会話の履歴から開いた往復も閉じる。#2118 / #2121 / #2265）。製品は開閉を選べない（`collapseWhenDone` / `defaultOpen` は削除） | 実行中は何をしているかを見せ、回答ができた後は回答の本文を主にする（16〜17 行の工程の一覧が回答の上を占めない。ユーザーの指示）。失敗はどこで止まったかを見せるため開いたまま。置き場所は 3 製品とも回答の上（作成中の「N ステップ完了」の場所のまま。#2115）。開閉を prop にすると製品ごとにずれる（NL2SQL だけ開いたままだった） |
 | 一覧は実行の詳細と同じ `RunTimeline`（`chatProgressTimelineStep` で写す）で描く。完了後は時間の線つき（置き場所が 36rem 以上）、実行中の完了した段の一覧は線なし。一覧の中に「N ステップ・合計 M 秒」の行は出さない（#2265） | 同じ工程をチャットと実行の詳細で 1 つの形にする（3 製品で同じ部品）。実行中は全体の長さが伸び続け、線が毎回伸び縮みするので出さない。件数と合計は開閉の見出しが持つ |
 | 段階の詳細（`ChatProgressStep.details`。backend の段のイベントの `details` を `labelChatProgressSteps` がそのまま写す）は、一覧の行を開いて見る。詳細のある段階だけに開閉のボタンを付け、既定で閉じる（一覧の開閉とは別。#2294） | Agent の実行の詳細と同じく段ごとに何をしたか確かめられ、回答を読む妨げにならない。3 製品で 1 つの形（`RunStepDetails`） |
@@ -3681,6 +3683,7 @@ import { ChatAnswer, ChatPendingTurn, ChatTurn } from "@production-ready/ui";
 
 - 単体テストは `packages/ui/tests/chat-turn.test.tsx`。
 - 使う所: RAG `MessageTurn` / `AssistantColumn`、NL2SQL `SqlChatTurn` と送信中の往復、Agent `RunChatTurn` / `PendingTurn`。
+- 回答の本文は `ChatAnswerBody`（#3433）で包み、本文の前に見出し「回答」（既定 h3。`labels.heading`・`headingLevel` で変えられる）を出す。見出しは本文の中の節の見出しと同じ部品 `AnswerHeading`（`text-sm font-semibold text-fg`。`AnswerSections` の節の見出しも同じ）。回答の本文を描くときだけ使い、処理の経過だけの間・失敗・停止だけの枠・回答前の確認のカードには使わない。実行の詳細は `Section` の見出し「回答」を持つので使わない。使う所: RAG `AssistantColumn`、Agent `RunChatTurn`（NL2SQL の回答は SQL・説明・結果で、本文の節の見出しを持たないので使わない）。単体テストは `packages/ui/tests/answer-heading.test.tsx`。
 - 利用者の側が質問の文ではない往復（回答前の確認のカードで答えた往復。#1839）は、`userContent` に `ClarificationRecord`（`variant="bubble"`）を渡す。質問の吹き出しの代わりに出る。
 
 ---
@@ -3858,15 +3861,15 @@ import {
 | 部品 | 主な props | 説明 |
 |---|---|---|
 | `RunStatusBadge` | `status: RunStatus`・`label?`・`labels?` | 7 つの状態（`RUN_STATUSES`）。`data-run-status`。`isRunActive` は待機中・実行中・応答待ち |
-| `RunHistoryTable<T>` | `rows`・`toItem(row) → RunHistoryItem`・`onOpen`・`showKind`（既定 true）・`showExecutor`・`showUsage`・`extraColumns`（2 つまで）・`actionsFor`・`selectedRunId`・`labels`・`loading`・`empty` | `RunHistoryItem` は `id`・`title`・`target?`・`href`・`status`・`statusLabel?`・`kind?`・`executor?`・`startedAt`・`durationMs?`・`usage?` |
+| `RunHistoryTable<T>` | `rows`・`toItem(row) → RunHistoryItem`・`onOpen`・`showKind`（既定 true）・`showExecutor`・`showUsage`・`extraColumns`（2 つまで）・`actionsFor`・`selectedRunId`・`labels`・`loading`・`empty` | `RunHistoryItem` は `id`・`title`・`target?`・`href`・`status`・`statusLabel?`・`kind?`・`executor?`・`startedAt`・`durationMs?`・`usage?`（`tokens`・`note`〔計測の状態の注記。#3466〕・`cost`） |
 | `RunHistoryToolbar` | `search`・`searchActive`・`status`（`options` は製品が写せる状態）・`kind`・`period`・`executor`・`onClearFilters`・`count`・`labels`・`idPrefix` | 無い絞り込みは飛ばす。3 つ以上で 375px はシート |
 | `RunSummary` | `status`・`question`・`startedAt`・`finishedAt?`・`durationMs?`・`kind?`・`executor?`・`owner?`・`target?`・`model?`・`usage?`・`runId`・`extraFacts?`・`badges?`・`actions?`・`alert?` | 概要のカード（`data-run-summary`） |
 | `RunDetailSection` | `title`・`description?`・`meta?`・`actions?`・`collapsible?`・`open?` / `onOpenChange?` | 節のカード。`collapsible` は既定で閉じた `Disclosure`（開いたときだけ中身を読む節は `open` / `onOpenChange` で受控にする。Agent の監査ログ） |
-| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`spinRunning?`（既定 true。false は実行中の段を回さない印 `CirclePlay` で出す。#2840）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`details?`（`RunStepDetails`: `fields`〔見出しと値・`mono`〕・`lines`・`code`〔`label`・`language`（`json` / `sql` / `text`）・`text`〕・`truncated`。`RunStepDetailsView` で描く。#2294）・`children?`（`details` の下に出す自由な中身）・`level?`（0 以上。字下げは 3 段まで）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265）。詳細か `children` のある段だけに開閉のボタン（印の `DisclosureChevron` は行の文字の大きさ: `md` 14px / `sm` 12px〔`RUN_TIMELINE_CHEVRON_SIZE`。#2338〕、`stepTestIdPrefix` があれば `<…>-step-<id>-toggle` と `<…>-step-<id>-details`。属性 `data-run-timeline-toggle`）。コードの箱は高さ 16rem で中をスクロールし、focus を受ける |
+| `RunTimeline` | `steps: RunTimelineStep[]`・`totalDurationMs?`・`defaultExpanded?`・`showSummary?`（既定 true）・`showBars?`（既定 true）・`spinRunning?`（既定 true。false は実行中の段を回さない印 `CirclePlay` で出す。#2840）・`size?`（`sm` / `md`）・`formatDuration?`・`stepTestIdPrefix?` | 段は `id`・`label`・`status`・`startedAt?`・`finishedAt?`・`durationMs?`・`detail?`（名前の後ろの括弧）・`meta?`・`details?`（`RunStepDetails`: `fields`〔見出しと値・`mono`〕・`lines`・`code`〔`label`・`language`（`json` / `sql` / `text`）・`text`〕・`truncated`。`RunStepDetailsView` で描く。#2294）・`children?`（`details` の下に出す自由な中身）・`level?`（0 以上。字下げは 1 段 1rem で実際の深さを保持。6 段より深い木は名前と時間の幅を確保し、一覧内だけで横スクロールする。フォーカス可能な region に一覧名を付け、ページは横にはみ出さない。`parentId?` は記録の親 ID を保持し、親不在でも隣接行から推測しない。#3790）・`product?`（別の製品の境目の行の製品名。名前の後ろの枠つきのタグ。#3272 / #3447）。線の位置は `runTimelineBars`（時刻の無い段は所要時間を積み、入れ子の段は親の段の始まりから積む）。チャットの `ChatProgress` も一覧をこの部品で描く（#2265）。詳細か `children` のある段だけに開閉のボタン（印の `DisclosureChevron` は行の文字の大きさ: `md` 14px / `sm` 12px〔`RUN_TIMELINE_CHEVRON_SIZE`。#2338〕、`stepTestIdPrefix` があれば `<…>-step-<id>-toggle` と `<…>-step-<id>-details`。属性 `data-run-timeline-toggle`）。コードの箱は高さ 16rem で中をスクロールし、focus を受ける |
 | `RunProcessDetails` | `title?`（既定「処理の詳細」）・`description?`・`defaultOpen?`・`testId?`（`<details>`）・`summaryTestId?` | 処理の経過に属する技術的な詳細（回答の記録の詳細・識別子・生成した SQL・イベントの記録）を、処理の経過のタイムラインの後ろに既定で閉じて置く `Disclosure` の plain・sm（`data-run-process-details`。#2325）。実行の詳細の「処理の経過」の節と、チャット・RAG 検索の `ChatProgress` の `footer` で同じ部品・名前・位置にする |
 | `RunDetailLayout` | `summary`・`answer?`・`timeline?`・`evidence?`・`feedback?`・`technical?` | 節の順を固定（`data-run-detail`）。`technical` は処理の経過に属さない技術的な節（Agent の監査ログ）だけ。読み込み中は `RunDetailSkeleton` |
 
-- 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。期間: `RUN_PERIODS`・`DEFAULT_RUN_PERIOD`（既定の過去 7 日。初期値・「条件をクリア」・既定と違う条件の判定に使う。#3386）・`runPeriodSince(period)`。期間だけで絞って 0 件でそれより前の実行があるときは `RunHistoryPeriodEmptyState`（`period`・`onShowAll`・`labels`・`testId`）。実行者: `RUN_EXECUTOR_FILTERS`。
+- 書式: `formatRunDateTime(iso, { seconds })`・`formatRunDuration(ms)`・`formatRunTokens(n)`。モデルの利用量（#3419・#3543）: `runUsageView(usage, { fallbackModel, labels, sourceLabel })` が詳細の概要の `model`・`usage`・「モデルの呼び出し」・「未計測の呼び出し」を、`runListUsage(totalTokens, measurement, labels)` が一覧の `RunHistoryItem.usage` を返す（記録なし・計測できない呼び出しだけは「未計測」、一部は「一部計測」、LLM を呼ばなかった実行は実測の 0。形は `RunModelUsageRecord`、文言は `DEFAULT_RUN_USAGE_LABELS`）。期間: `RUN_PERIODS`・`DEFAULT_RUN_PERIOD`（既定の過去 7 日。初期値・「条件をクリア」・既定と違う条件の判定に使う。#3386）・`runPeriodSince(period)`。期間だけで絞って 0 件でそれより前の実行があるときは `RunHistoryPeriodEmptyState`（`period`・`onShowAll`・`labels`・`testId`）。実行者: `RUN_EXECUTOR_FILTERS`。
 - 単体テストは `packages/ui/tests/run-history.test.tsx`。
 
 ---
@@ -4010,3 +4013,17 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 - 取込などで言語が分かっていれば値を渡す（`zh-CN` → `zh-Hans`、`zh-TW` → `zh-Hant`、`zh-HK` / `zh-Hant-HK` → `zh-HK`、`ja-JP` → `ja`）。今は 3 製品とも取込で言語を持たないので、本文からの判定で付く。
 - `detectContentLang` は決められなければ `undefined`（`lang` を付けない）。`zh-HK` は判定しない。
 - 単体テストは `packages/ui/tests/content-lang.test.tsx`。e2e は `font-checks.ts` の `renderedLangFonts`（3 製品の書体の spec）と、RAG の `chat.spec.ts` の中国語の内容の会話（Chromium が実際に使った書体を CDP で確かめる）。
+
+
+### 文書プレビューの現在ページの通知（#3610）
+
+`DocumentPreview` / `PreviewViewer` は任意の `onPageChange(page: number)` を受けます。同じページへの再移動には `focusRequestKey` を変えて通知します。ページ画像の初期表示・ページ送り・出典への移動で、表示中の実ページ番号を通知します。本文だけの表示や iframe の内部ページは通知しません。呼び出し側は表示の絞り込みに使い、出典の強調の focusPage とは別に保持します。
+
+抽出項目の定義のように複数の欄を横に並べる表形式の編集行は、通常の単一入力フォームの FormGrid の最大幅で止めず全幅を使用します（#3608）。名前・型の幅の段は維持し、説明に残りの幅を割り当てます。
+
+
+`SelectField` の `wrapOptions`（既定 false）は、展開した選択肢のラベルを省略せず折り返します。番号例などが判断に必要な長い選択肢で使います。欄の幅は従来の width の段で指定します（#3613）。
+
+### `ViewportScrollRegion`
+
+カードの主一覧を標準の 5 / 8 行相当の上限で縦スクロールにする。desktop では主一覧の `DataTable.growToViewport` と同様に、スクロール位置を差し引いた表示領域の下余白まで上限を伸ばす。小さな画面では標準密度を維持する。`RunHistoryTable.growToViewport` は同じ指定を内側の `DataTable` に渡す。

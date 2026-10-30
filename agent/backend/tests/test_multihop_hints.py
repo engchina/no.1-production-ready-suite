@@ -336,12 +336,12 @@ def _contract_schema(tool_name: str) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [
-        ({"top_k": 5}, {"top_k": {"requested": 5, "sent": 20}}),
+        ({"top_k": 5}, {"top_k": {"requested": 5, "sent": 50}}),
         (
             {"top_k": 10, "evidence_limit": 5},
             {
-                "top_k": {"requested": 10, "sent": 20},
-                "evidence_limit": {"requested": 5, "sent": 20},
+                "top_k": {"requested": 10, "sent": 50},
+                "evidence_limit": {"requested": 5, "sent": 50},
             },
         ),
         (
@@ -351,8 +351,8 @@ def _contract_schema(tool_name: str) -> dict[str, Any]:
             },
         ),
         ({"top_k": 500}, {"top_k": {"requested": 500, "sent": 100}}),
-        ({"top_k": 0}, {"top_k": {"requested": 0, "sent": 20}}),
-        ({"top_k": 20, "evidence_limit": 30}, {}),
+        ({"top_k": 0}, {"top_k": {"requested": 0, "sent": 50}}),
+        ({"top_k": 50, "evidence_limit": 50}, {}),
         ({"top_k": None}, {}),
         ({"query": "勤怠管理システム 担当部署"}, {}),
     ],
@@ -361,7 +361,7 @@ def _contract_schema(tool_name: str) -> dict[str, Any]:
 def test_search_limits_follow_the_rag_contract(
     arguments: dict[str, Any], expected: dict[str, Any]
 ) -> None:
-    # 既定と上限は RAG の契約から取る（top_k は契約の default が null なので 20。#1403）。
+    # 既定と上限は RAG の契約から取る（#1403・#3240）。
     schema = _contract_schema("rag_retrieve_evidence")
     assert adjusted_search_limits(arguments, schema) == expected
 
@@ -369,17 +369,23 @@ def test_search_limits_follow_the_rag_contract(
 def test_rag_search_evidence_limit_default_stays_at_the_contract_value() -> None:
     schema = _contract_schema("rag_search")
     assert adjusted_search_limits({"top_k": 5, "evidence_limit": 5}, schema) == {
-        "top_k": {"requested": 5, "sent": 20},
+        "top_k": {"requested": 5, "sent": 50},
         "evidence_limit": {"requested": 5, "sent": 12},
     }
 
 
-def test_contract_top_k_default_is_twenty_when_omitted() -> None:
-    # 契約の top_k の default は null で、RAG は省略時に 20 を使う（evidence_limit の説明にある）。
-    # RAG がこの既定を変えたら RAG_TOP_K_DEFAULT も合わせる。
+def test_search_limits_use_the_top_k_default_of_the_contract() -> None:
+    """件数の既定は契約の `default` から取り、RAG の内部の既定を写さない（#3240）。契約の既定が
+    変われば、引き上げる値もそれに従う。"""
     schema = _contract_schema("rag_retrieve_evidence")
-    assert schema["properties"]["top_k"]["default"] is None
-    assert "top_k。省略時 20" in schema["properties"]["evidence_limit"]["description"]
+    default = schema["properties"]["top_k"]["default"]
+    assert isinstance(default, int) and default > 5
+    assert adjusted_search_limits({"top_k": 5}, schema) == {
+        "top_k": {"requested": 5, "sent": default}
+    }
+    changed = json.loads(json.dumps(schema))
+    changed["properties"]["top_k"]["default"] = 30
+    assert adjusted_search_limits({"top_k": 5}, changed) == {"top_k": {"requested": 5, "sent": 30}}
 
 
 def test_search_limit_schema_tells_the_model_to_omit_the_limits() -> None:
@@ -478,7 +484,7 @@ def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
         [
             function_call(
                 "rag__rag_retrieve_evidence",
-                {"query": "勤怠管理システムの担当部署は？", "evidence_limit": 20},
+                {"query": "勤怠管理システムの担当部署は？", "evidence_limit": 50},
                 call_id="call-2",
             )
         ],
@@ -493,19 +499,19 @@ def test_repeated_hop_query_gets_a_stop_hint_and_small_evidence_limit_is_raised(
     )
     run = _run()
 
-    # 既定より小さい evidence_limit は既定（RAG の契約の 20。#1365）に引き上げ、既定以上は変えない。
+    # 既定より小さい evidence_limit は既定（RAG の契約の 50。#1365）に引き上げ、既定以上は変えない。
     sent = [
         call["arguments"].get("evidence_limit") for call in mcp.calls_of("rag_retrieve_evidence")
     ]
-    assert sent == [20, 20, None]
+    assert sent == [50, 50, None]
     # step には送った値を残す。
     recorded = [step.tool_call.arguments for step in run.steps if step.tool_call is not None]
-    assert recorded[0]["evidence_limit"] == 20
+    assert recorded[0]["evidence_limit"] == 50
 
     assert "repeated_query" not in _tool_output(model, 1, "call-1")
     assert _tool_output(model, 1, "call-1")["adjusted_limits"]["evidence_limit"] == {
         "requested": 5,
-        "sent": 20,
+        "sent": 50,
     }
     assert "adjusted_limits" not in _tool_output(model, 2, "call-2")
     assert _tool_output(model, 2, "call-2")["repeated_query"] == {
@@ -550,23 +556,23 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
     )
     run = _run()
 
-    # 既定（20）より小さい top_k は既定に引き上げ、上限（evidence_limit 50）を超える値は上限に
+    # 既定（50）より小さい top_k は既定に引き上げ、上限（evidence_limit 50）を超える値は上限に
     # 丸める。呼び先の入力検証（fake は契約の上限で検証する）で失敗させない（#1403）。
     sent = [call["arguments"] for call in mcp.calls_of("rag_retrieve_evidence")]
     assert [(args.get("top_k"), args.get("evidence_limit")) for args in sent] == [
-        (20, None),
+        (50, None),
         (100, 50),
     ]
     [searched] = mcp.calls_of("rag_search")
-    assert searched["arguments"]["top_k"] == 20
+    assert searched["arguments"]["top_k"] == 50
     assert all(step.tool_result is not None and step.tool_result.success for step in run.steps)
     # step には送った値を残す。
     recorded = [step.tool_call.arguments for step in run.steps if step.tool_call is not None]
-    assert recorded[0]["top_k"] == 20
+    assert recorded[0]["top_k"] == 50
     assert recorded[1]["evidence_limit"] == 50
     # モデルへの結果に、直した値と次から省略する案内を残す（記録する step の結果は RAG のまま）。
     assert _tool_output(model, 1, "call-1")["adjusted_limits"] == {
-        "top_k": {"requested": 5, "sent": 20},
+        "top_k": {"requested": 5, "sent": 50},
         "next_step": ADJUSTED_LIMITS_HINT,
     }
     assert _tool_output(model, 2, "call-2")["adjusted_limits"] == {
@@ -575,7 +581,7 @@ def test_small_top_k_is_raised_and_over_max_limits_are_clamped(
     }
     assert _tool_output(model, 3, "call-3")["adjusted_limits"]["top_k"] == {
         "requested": 10,
-        "sent": 20,
+        "sent": 50,
     }
     outputs = [step.tool_result.output for step in run.steps if step.tool_result is not None]
     assert all("adjusted_limits" not in (output or {}) for output in outputs)
@@ -1224,7 +1230,7 @@ def test_hop_retry_compares_removed_then_unverified_then_warnings() -> None:
 
 
 def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:
-    """fake の既定の件数は RAG の契約と同じ（rag_retrieve_evidence 20・rag_search 12。#1365）。"""
+    """fake の既定の件数は RAG の契約と同じ（rag_retrieve_evidence 50・rag_search 12。#1365）。"""
     contract = json.loads((CONTRACTS / "rag-tools.json").read_text(encoding="utf-8"))
     defaults = {
         tool["name"]: tool["inputSchema"]["properties"]["evidence_limit"]["default"]
@@ -1235,7 +1241,7 @@ def test_fake_rag_evidence_limit_defaults_match_the_contract() -> None:
         "rag_search": RagSearchIn.model_fields["evidence_limit"].default,
         "rag_retrieve_evidence": RagRetrieveEvidenceIn.model_fields["evidence_limit"].default,
     }
-    assert defaults == {"rag_search": 12, "rag_retrieve_evidence": 20}
+    assert defaults == {"rag_search": 12, "rag_retrieve_evidence": 50}
 
 
 def test_fake_rag_search_inputs_match_the_contract() -> None:

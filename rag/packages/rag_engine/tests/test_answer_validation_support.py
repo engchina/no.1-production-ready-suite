@@ -55,6 +55,7 @@ def _audit(verdicts: list[dict[str, Any]]) -> Callable[..., ClaimAuditOutput]:
 
 def _validate(answer: str, evidence: dict[str, str], verdicts: list[dict[str, Any]]) -> dict[str, Any]:
     items = [{"id": chunk, "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": text} for chunk, text in evidence.items()]
+    answer = "\n\n".join(part + "\n根拠：manual.pdf p.1" for part in answer.split("\n\n"))
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_audit(verdicts)):
         return validate_answer_claims("質問", answer, items, settings=None)
 
@@ -135,11 +136,10 @@ def test_report_list_is_not_adopted_as_file_columns_when_the_audit_finds_another
     assert claims["明細ファイルの列 1 は対象の番号です。"]["status"] == "supported"  # 本物の列の定義の案内は残す
 
 
-def test_steps_of_another_process_are_not_supported_and_unknown_targets_are_left_to_the_verdict() -> None:
+def test_steps_of_another_process_are_not_supported_and_unknown_targets_remain_unverified() -> None:
     """別の処理のエラーの修正の手順は、監査が supported と返しても採らない（#2653）。
 
-    対象が同じか決められない（unknown）は採否に使わない（実の LLM で、対象が同じ正しい段落にも付いた）。
-    確かめられない段落は監査の判定（unsupported）で外す。
+    対象が同じか決められない（unknown）は unassessed とし、モデルの supported だけで昇格しない。
     """
     answer = (
         "処理 A の一覧で対象を選び、取消ボタンを押します。\n\n"
@@ -159,7 +159,7 @@ def test_steps_of_another_process_are_not_supported_and_unknown_targets_are_left
     assert statuses == [
         ("supported", ""),  # 質問の処理の手順は残す（部分回答）
         ("unsupported", SUPPORT_TARGET_MISMATCH),
-        ("supported", ""),
+        ("unassessed", "target_unverified"),
     ]
     assert [claim["applicability"] for claim in result["claim_checks"]] == ["matched", "not_applicable", "unknown"]
 
@@ -182,7 +182,7 @@ def test_negative_verdicts_and_reused_claims_are_kept() -> None:
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=no_audit):
         reused = validate_answer_claims(
             "質問",
-            "- 区分Ⅱでは選択肢の値 01 を選びます。\n- 区分Ⅱでは選択肢の値 02 を選びます。",
+            "- 区分Ⅱでは選択肢の値 01 を選びます。\n- 区分Ⅱでは選択肢の値 02 を選びます。\n根拠：manual.pdf p.1",
             items,
             settings=None,
             audited={"区分Ⅱでは選択肢の値 01 を選びます。": ["c1"], "区分Ⅱでは選択肢の値 02 を選びます。": ["c1"]},
@@ -204,6 +204,35 @@ def test_audit_contract_asks_for_the_evidence_and_the_target_before_the_verdict(
     assert not {"audit_status", "reference_check", "classification_check", "support_quote", "support_check"} & set(order)
     assert RELATION_SUPPORT_POLICY in VALIDATION_SYSTEM_PROMPT
     assert "evidence_quote は空文字でよい" not in VALIDATION_SYSTEM_PROMPT
+
+
+def test_value_from_another_row_record_is_not_supported() -> None:
+    """表計算・CSV の 1 行の記録の根拠をまたいで値を結び付けた段落も、同じ表に組み直して見つける（#2594）。"""
+    cells = [["A", ["区分"]], ["B", ["上限値"]]]
+    rows = {"r2": (2, "区分: 区分 A / 上限値: 120"), "r3": (3, "区分: 区分 B / 上限値: 300")}
+
+    def items(with_record: bool) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": chunk,
+                "source": "table.csv",
+                "text": text,
+                **({"table_record": {"group": "doc|set|csv", "row": row, "cells": cells}} if with_record else {}),
+            }
+            for chunk, (row, text) in rows.items()
+        ]
+
+    answer = "区分 A の上限値は 120 です。\n根拠：table.csv\n\n区分 A の上限値は 300 です。\n根拠：table.csv"
+    verdicts = [{"chunk": "r2"}, {"chunk": "r3"}]
+    for with_record, expected in ((False, "supported"), (True, "contradicted")):
+        with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_audit(verdicts)):
+            result = validate_answer_claims("質問", answer, items(with_record), settings=None)
+        claims = _by_quote(result)
+        assert claims["区分 A の上限値は 120 です。"]["status"] == "supported"
+        wrong = claims["区分 A の上限値は 300 です。"]
+        assert wrong["status"] == expected
+    assert wrong["support_check"] == SUPPORT_VALUE_UNBOUND
+    assert wrong["reason"].startswith("根拠の表では『区分 A』の値は『120』（『300』は別の行の値）です。")
 
 
 def test_word_values_and_audit_reasons_stating_another_rows_mapping_are_not_supported() -> None:

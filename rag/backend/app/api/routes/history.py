@@ -13,6 +13,11 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
+from pr_backend_core.observability.model_usage import (
+    parse_run_usage,
+    run_usage_summary_fields,
+    run_usage_totals,
+)
 from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
 from starlette.concurrency import run_in_threadpool
 
@@ -20,6 +25,7 @@ from app.api.routes.search import _stored_citation_rows
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
+from app.rag.run_history import answer_validation_execution
 from app.rag.saved_evidence import withhold_saved_answer
 from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
 from app.schemas.common import ApiResponse, Page
@@ -40,7 +46,13 @@ RUN_NOT_FOUND_MESSAGE = (
 )
 
 
-_INTERNAL_FIELDS = {"user_id_hash", "user_uuid", "conversation_owner_hash"}
+_INTERNAL_FIELDS = {
+    "user_id_hash",
+    "user_uuid",
+    "conversation_owner_hash",
+    "usage_total_tokens",
+    "usage_measurement",
+}
 
 
 def _summary_fields(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
@@ -49,6 +61,7 @@ def _summary_fields(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any
     user_uuid = row.get("user_uuid")
     fields = {key: value for key, value in row.items() if key not in _INTERNAL_FIELDS}
     fields["answer_generated"] = bool(row.get("answer_generated"))
+    fields["validation_execution"] = row.get("validation_execution")
     review = row.get("needs_human_review")
     fields["needs_human_review"] = None if review is None else bool(review)
     fields["executed_by_me"] = (
@@ -57,6 +70,10 @@ def _summary_fields(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any
     # 実行した人（実行者）の表示名は、見る人を問わず返す（#1954。持ち主の会話で system_admin が
     # 実行した行を、持ち主が「〈名前〉が実行」と読む）。引けない利用者は空文字。
     fields["executor_display_name"] = names.get(str(user_uuid), "") if user_uuid else ""
+    # 一覧の「token」の列（#3466）。SQL で取り出した合計と計測の状態だけを使う。
+    fields["total_tokens"], fields["usage_measurement"] = run_usage_totals(
+        row.get("usage_total_tokens"), row.get("usage_measurement")
+    )
     return fields
 
 
@@ -111,6 +128,8 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
     fields.update(await _conversation_owner_fields(row))
     raw_stages = row.get("stages_json")
     stages: dict[str, Any] = raw_stages if isinstance(raw_stages, dict) else {}
+    if fields.get("validation_execution") is None:
+        fields["validation_execution"] = stages.get("validation_execution")
     detail: dict[str, Any] = {
         **{key: value for key, value in fields.items() if not key.endswith("_json")},
         "error_code": _text_or_none(stages.get("error_code")),
@@ -121,7 +140,10 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
         "search_conditions": (
             _search_conditions(stages.get("conditions")) if row.get("surface") == "search" else None
         ),
+        "usage": parse_run_usage(stages.get("usage")),
     }
+    # 詳細は利用量の全体を読むので、一覧の 2 つの値もそこから決める（概要と食い違わせない）。
+    detail["total_tokens"], detail["usage_measurement"] = run_usage_summary_fields(detail["usage"])
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。
         record = await oracle.get_answer_record(run_id)
@@ -132,6 +154,8 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
             detail["citations"] = _citations(_stored_citation_rows(record.get("citations_json")))
             diagnostics = record.get("diagnostics_json")
             detail["answer_diagnostics"] = diagnostics if isinstance(diagnostics, dict) else None
+            if detail.get("validation_execution") is None and isinstance(diagnostics, dict):
+                detail["validation_execution"] = answer_validation_execution(diagnostics)
     # 保存した根拠と診断は、見る人の今の権限で確かめ直す（見られない根拠は数だけ。#3252）。
     (
         detail["citations"],

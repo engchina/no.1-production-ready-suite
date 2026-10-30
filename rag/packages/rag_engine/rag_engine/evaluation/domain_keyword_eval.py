@@ -16,7 +16,6 @@ from rag_engine.config import get_settings
 from rag_engine.evaluation.rag_eval import RagEvalCase, load_rag_eval_dataset
 from rag_engine.generation.answering import (
     AnswerContext,
-    _lexical_retrieval_queries,
     _synthesize_answer_from_context,
     build_adb_hybrid_answer_context,
     build_question_text_search_info,
@@ -135,8 +134,7 @@ def run_keyword_comparison(
                 domain_keywords_override=keywords if condition == "with_keywords" else (),
             )
             expansion_trace: dict[str, Any] = {}
-            lexical = _lexical_retrieval_queries(case.question, case.question, None, keyword_trace=expansion_trace)
-            queries = tuple(dict.fromkeys((case.question, *lexical)))
+            queries = (case.question,)
             info = build_question_text_search_info(case.question, variant, query_variants=queries)
             if info.error:
                 raise ValueError(info.error)

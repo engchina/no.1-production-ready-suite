@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from rag_engine.adapters.oracle.connection import AdbSettings
 
-from rag_engine.knowledge.query_history import (
-    QUERY_HISTORY_DEFAULT_MIN_COUNT,
-    QUERY_HISTORY_DEFAULT_MIN_UNIQUE_RUNS,
-    QUERY_HISTORY_DEFAULT_RETENTION_DAYS,
-    QUERY_HISTORY_DEFAULT_SUGGESTION_LIMIT,
-)
 from rag_engine.retrieval.text_search_tokenizer import (
     DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
     DEFAULT_TEXT_SEARCH_TOKENIZER_SUDACHI_DICT,
@@ -50,7 +45,7 @@ DEFAULT_MAX_ANCHORS_PER_DOCUMENT = 0
 # と同じ値（循環 import を避けて写す。一致は tests/test_retrieval_budget_settings.py で確認する）。
 DEFAULT_RETRIEVAL_TOP_K_SETTING = 20
 DEFAULT_MAX_CONTEXT_RECORDS = 12
-DEFAULT_EVIDENCE_BUDGET_CHARS = 48000
+DEFAULT_EVIDENCE_BUDGET_CHARS = 80000
 DEFAULT_TEXT_SEARCH_QUERY_VARIANT_LIMIT = 6
 DEFAULT_RERANK_MIN_RELEVANCE_SCORE = 0.0
 # Reciprocal Rank Fusion の平滑化定数。ADB の hybrid 検索と回答側の順位融合で同じ値を使う。
@@ -189,10 +184,6 @@ class LlmProviderSettings:
         return self.endpoint.strip().rstrip("/")
 
 
-# LLM / VLM の呼び出しの seed の既定(#1434。platform の DEFAULT_ENTERPRISE_AI_SEED と同じ)。
-DEFAULT_LLM_SEED = 42
-
-
 @dataclass(frozen=True)
 class Settings:
     """アプリ全体の環境変数由来設定を保持します。"""
@@ -201,12 +192,6 @@ class Settings:
     port: int
     output_dir: Path
     runtime_knowledge_path: Path | None
-    query_history_enabled: bool
-    query_history_retention_days: int
-    query_history_min_count: int
-    query_history_min_unique_runs: int
-    query_history_suggestion_limit: int
-    query_history_blocklist_path: Path | None
     render_dpi: int
     max_default_pages: int
     enabled_engines: list[str]
@@ -226,9 +211,6 @@ class Settings:
     # 構造化出力の呼び出し 1 回の出力の上限(tokens。既定 32768。#1719)。送る値はこれと呼ぶモデルの出力の上限
     # (`LlmProviderSettings.max_output_tokens`)の小さい方(`llm_output_token_limit`)。
     answer_max_tokens: int
-    # LLM / VLM の呼び出しの seed(#1434。backend が platform の `enterprise_ai_seed` で決めて
-    # `OCI_ENTERPRISE_AI_SEED` で渡す。既定 42)。Responses API の top-level の `seed` で送る。
-    llm_seed: int
     default_rerank_enabled: bool
     rerank_model: str
     oci_rerank_endpoint: str
@@ -237,10 +219,10 @@ class Settings:
     rerank_retry_initial_wait_seconds: float
     rerank_retry_max_wait_seconds: float
     rerank_min_relevance_score: float
-    # 粗→細の検索: rerank 後の候補を文書ごとに集約し、分数が明らかに低い文書を後回しにする (#1028)。既定 on (#1040)。
+    # 粗→細の検索: rerank 後の候補を文書ごとに集約し、rerank の点数が明らかに低い文書を後回しにする (#1028)。既定 on (#1040)。
+    # 命中の件数は判定に使わない（#3504）。
     document_selection_enabled: bool
     document_selection_score_ratio: float
-    document_selection_min_hits: int
     # 質問から操作すべき画面を画面目録で選び、その画面の根拠を検索候補に加える (#1108)。1 質問につき LLM 呼出が
     # 1 回増える。効果を 83 問で確かめるまで既定 off。
     screen_linking_enabled: bool
@@ -264,11 +246,11 @@ class Settings:
     text_search_tokenizer_latin_stemmer: str
     llm_api_mode: str
     llm_providers: dict[str, LlmProviderSettings]
+    # 画像を読む取り込みの処理（図の説明・解析の VLM）の既定のモデル。回答には使わない（#3444）。
     default_vision_llm: str
+    # 回答のモデル。回答の実行の LLM の呼び出しはすべてこのモデルで行い、根拠の画像を添付するかは
+    # このモデルが画像を読めるか（`supports_vision`）で決める（#3444）。
     default_answer_llm: str
-    # 回答で根拠の原画像を添付するか。添付する回だけ既定の Vision モデル（default_vision_llm）で答え、
-    # それ以外は既定のテキストモデル（default_answer_llm）で答える（#649）。
-    answer_images_enabled: bool = False
 
     # None は保存済み辞書、空 tuple は評価用の辞書無効化を表す。共有ファイルは変更しない。
     domain_keywords_override: tuple[str, ...] | None = None
@@ -279,8 +261,6 @@ class Settings:
     workspace_dir: Path | None = None
     prompt_dir: Path | None = None
     faq_path: Path | None = None
-    # 業務固有の問い合わせ規則(legacy profile)は既定 OFF。RAG_ENGINE_PROFILE=legacy で opt-in する。
-    profile: str = "generic"
     adb_settings: AdbSettings | None = None
     approved_faq_semantic_matching_enabled: bool = True
     approved_faq_semantic_suggestions_enabled: bool = False
@@ -291,6 +271,11 @@ class Settings:
     auth_disabled: bool = False
     # 検索の起点 child 数（UI の既定値。API・SDK は引数で指定）、context に入れる parent 数、生成の原文予算（文字）(#1054)。
     retrieval_top_k: int = DEFAULT_RETRIEVAL_TOP_K_SETTING
+    # 基本候補と、拡張を含む精排入力の合計は回答起点数から独立する。
+    retrieval_candidate_limit: int = 150
+    rerank_candidate_limit: int = 0
+    # 呼出元が解決した、各候補経路の既存の上限。KB/レシピには設定しない。
+    retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
     # 要求ごとの根拠の覆域を判定し、根拠の無い要求だけを 1 回ずつ再検索する (#1279)。LLM は呼ばない
@@ -309,7 +294,7 @@ class Settings:
     # 「回答に未反映の関連章節」に示す(#2800。backend の既定は False)。
     section_extraction_enabled: bool = True
     # 業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に入れる (#2395)。LLM は呼ばない。
-    # 手順ごとの検索の回数の上限・1 手順に確保する根拠の数・参照の頁から入れる根拠の数・期限で抑える。
+    # 必須対象は追加検索の合計枠を先に確保する。回数はその後の補助検索、参照数は最低1件以外の追加候補を制限する。
     guide_step_retrieval_enabled: bool = True
     guide_step_max_queries: int = 4
     guide_step_chunks_per_step: int = 2
@@ -335,8 +320,9 @@ class Settings:
     # 足す（検索の根拠を減らさない）。目録と chunk を注入した呼び出し元（`AnswerDependencies.article_catalogs` /
     # `article_chunks`）でだけ動き、条で構成された文書が候補に無ければ LLM を呼ばない。
     article_catalog_enabled: bool = True
-    article_catalog_max_documents: int = 8
-    article_catalog_max_articles: int = 12
+    # 既定は評価の実測（必要な文書の順位は最大 8・条の 1 段目の位置は最大 6）に余裕を持たせた 2 のべき（#3518）。
+    article_catalog_max_documents: int = 16
+    article_catalog_max_articles: int = 8
     article_catalog_context_records: int = 6
     # 検索の範囲の条で構成された文書の一覧から LLM が選ぶ文書の数（候補の文書の外。手続の一般的な規則の文書など）。
     # 0 は候補の文書だけを読む。一覧を注入した呼び出し元（`AnswerDependencies.article_documents`）でだけ動く。
@@ -347,14 +333,25 @@ class Settings:
     # 条の選択の LLM の呼び出し 1 回の出力の上限（token）と時間の上限（秒）。選ぶ出力は目録の番号の列で、通常は数百
     # token・数秒で終わる。まれにモデルが同じ出力を繰り返して回答の上限まで書き続け、1 回で数分かかって段全体を
     # 待たせるため、役目に合わせて抑え、超えた文書は選ばずに続ける（工程に残す）。0 は抑えない。
-    # 条の選択の 2 段目: 1 段目で選んだ条と同じ章の条（article_catalog_refine_candidates 件まで）を本文の書き出しつきで
-    # 見せ、足りない論点の条を文書ごとに article_catalog_refine_articles 件まで足させる。条の名前が質問の語から遠い条
-    # （重なったときの扱い・特例など）を拾う。書き出しを注入した呼び出し元（`AnswerDependencies.article_leads`）で
-    # だけ動く。0 は 2 段目を行わない。
+    # 条の選択の 2 段目: 1 段目で選んだ条と同じ章の条と、選んだ条の番号を書き出しで名指しする別の章の条（附則の特例・
+    # 読替えなど。#3517）を合わせて article_catalog_refine_candidates 件まで（名指しの条はその 3 分の 1 まで。#3531）
+    # 本文の書き出しつきで見せ、足りない論点の条を文書ごとに article_catalog_refine_articles 件まで足させる。条の名前が
+    # 質問の語から遠い条（重なったときの扱い・特例など）を拾う。書き出しを注入した呼び出し元
+    # （`AnswerDependencies.article_leads`）でだけ動く。0 は 2 段目を行わない。
     article_catalog_refine_articles: int = 6
     article_catalog_refine_candidates: int = 60
-    article_catalog_output_token_cap: int = 4096
-    article_catalog_call_timeout_seconds: float = 90.0
+    article_catalog_output_token_cap: int = 8192
+    article_catalog_call_timeout_seconds: float = 180.0
+    # 目録で選んだ条を生成が引かなかったとき、条ごとに原文が支える説明を別の呼び出しで検討させ、その説明の出典に足す
+    # （#3526。`grounded.CATALOG_REVIEW_SYSTEM_PROMPT`）。評価で確かめた説明に根拠の無い条の出典が付いたので既定は無効。
+    # 無効なら検討の呼び出しをしない。
+    article_catalog_review: bool = False
+    # 条の選択と範囲の文書の選択の結果を、process をまたいで時間を区切って使う記録の置き場所・有効期間（秒）・件数の
+    # 上限（#3507）。key は索引の版（chunk_set）・目録の内容・質問・モデル・選択の設定。ディレクトリが無い・有効期間か
+    # 件数が 0 なら process の中の記録だけを使う。選び方は変えない（同じ入力の LLM の結果を使い回すだけ）。
+    article_catalog_cache_dir: Path | None = None
+    article_catalog_cache_ttl_seconds: float = 86400.0
+    article_catalog_cache_max_entries: int = 4096
     # 回答の最終の検証（rag_validate_answer）でモデルに渡す入力の上限（UTF-8 の bytes。指示・質問・回答・根拠を含む）。
     # 根拠は渡された順に収まるだけ渡し、収まらない根拠は検証に使わない（結果の evidence_truncated）。品質評価の
     # 主張の監査の予算（`MAX_EVALUATION_INPUT_BYTES`）とは別。
@@ -389,6 +386,7 @@ class Settings:
     # standard は未使用の根拠を列挙させず、作り直しは事実の問題の 1 組まで(完全性の不足は本文に
     # 示す)。detailed は未使用の根拠も列挙させ、完全性の不足でも作り直す(従来)。engine の既定は従来どおり detailed、
     # backend の既定は none。
+    answer_evidence_refinement_mode: str = "legacy"
     answer_audit_mode: str = "detailed"
     # 回答の期限のある LLM の呼び出しを streaming で受け、停滞（event が来ない・出力が直近の速さより遅い）を
     # 検出したら打ち切って送り直す(#1926。既定 off。backend が RAG_LLM_STALL_DETECTION_ENABLED で ON にする)。
@@ -401,7 +399,8 @@ class Settings:
     # 停滞で打ち切って送り直す回数の上限（1 回の呼び出しあたり。最後の送信は検出せずに待つ）。
     llm_stall_resends: int = 1
     # streaming で受ける呼び出しで、出力が同じ並びの繰り返し・空白だけで続いたら打ち切って送り直す(#2966。既定 off。
-    # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。
+    # backend が RAG_LLM_RUNAWAY_DETECTION_ENABLED で ON にする)。streaming しない呼び出しは、出力の上限で未完了の
+    # 応答に同じ暴走があれば、上限を広げずに同じ送り直しにする(#3835)。
     llm_runaway_detection: bool = False
     # 章節の拡張で、列挙の問の読む範囲(minimum_scope)まで読んだら CRAG の評価し直しを省いて生成へ進む(#1528)。
     section_skip_regrade_at_scope: bool = False
@@ -410,6 +409,9 @@ class Settings:
     # 分かっている条件（業務ガイドの条件の名前と値。MCP の conditions・質問で決まった条件。#1492）。backend が
     # 業務ガイドの照合の結果から渡す。回答の確認の項目のうち、これを確かめる項目を決定的に除く。
     known_conditions: tuple[tuple[str, str], ...] = ()
+    # backendが利用者の確定した回答・質問から選別した前提。設定保存や環境変数からは読み込まない。
+    confirmed_premises: tuple[tuple[str, str], ...] = ()
+    confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
     # 業務ガイドの照合で分からなかった選択の条件（#2404）。(条件の id, 名前, ((選択肢, (言い換え, ...)), ...))。
     # 選択肢が項目の種類に対応する条件だけを、根拠の画面の図の項目の種類で決める（generation.form_field_kinds）。
     evidence_conditions: tuple[tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]], ...] = ()
@@ -475,6 +477,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
             project_id=project,
             api_key=api_key,
             model=answer_model,
+            # 回答のモデルが画像を読めるか(#3444。backend がモデル設定の登録モデルの vision_enabled で決めて渡す)。
+            supports_vision=_env_bool(env, "OCI_ENTERPRISE_AI_DEFAULT_MODEL_VISION", False),
             endpoint=endpoint,
             reasoning_effort=answer_reasoning,
             max_output_tokens=answer_output_tokens,
@@ -501,7 +505,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ENTERPRISE_AI_LLM_PROVIDER,
     )
     runtime_knowledge_raw = env.get("RUNTIME_KNOWLEDGE_PATH", "").strip()
-    query_history_blocklist_raw = env.get("QUERY_HISTORY_BLOCKLIST_PATH", "").strip()
+    cache_dir_raw = env.get("RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR", "").strip()
     settings = Settings(
         original_query_weighting_enabled=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_WEIGHTING", True),
         original_query_only=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_ONLY", False),
@@ -514,12 +518,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         port=_env_int(env, "RAG_ENGINE_PORT", 8080),
         output_dir=Path(env.get("RAG_ENGINE_OUTPUT_DIR", ".runs")),
         runtime_knowledge_path=Path(runtime_knowledge_raw).expanduser() if runtime_knowledge_raw else None,
-        query_history_enabled=_env_bool(env, "QUERY_HISTORY_ENABLED", False),
-        query_history_retention_days=max(0, _env_int(env, "QUERY_HISTORY_RETENTION_DAYS", QUERY_HISTORY_DEFAULT_RETENTION_DAYS)),
-        query_history_min_count=max(1, _env_int(env, "QUERY_HISTORY_MIN_COUNT", QUERY_HISTORY_DEFAULT_MIN_COUNT)),
-        query_history_min_unique_runs=max(1, _env_int(env, "QUERY_HISTORY_MIN_UNIQUE_RUNS", QUERY_HISTORY_DEFAULT_MIN_UNIQUE_RUNS)),
-        query_history_suggestion_limit=max(1, _env_int(env, "QUERY_HISTORY_SUGGESTION_LIMIT", QUERY_HISTORY_DEFAULT_SUGGESTION_LIMIT)),
-        query_history_blocklist_path=Path(query_history_blocklist_raw).expanduser() if query_history_blocklist_raw else None,
         render_dpi=_env_int(env, "RAG_ENGINE_RENDER_DPI", 300),
         max_default_pages=_env_int(env, "RAG_ENGINE_MAX_DEFAULT_PAGES", 1),
         enabled_engines=enabled_engines,
@@ -541,7 +539,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ),
         llm_retry_max_wait_seconds=_env_float(env, "LLM_RETRY_MAX_WAIT_SECONDS", _env_float(env, "VISION_RETRY_MAX_WAIT_SECONDS", 30.0)),
         answer_max_tokens=_positive_int(env, "ANSWER_MAX_TOKENS", DEFAULT_MODEL_OUTPUT_TOKENS),
-        llm_seed=_env_int(env, "OCI_ENTERPRISE_AI_SEED", DEFAULT_LLM_SEED),
         default_rerank_enabled=_env_bool(env, "RAG_ENGINE_DEFAULT_RERANK_ENABLED", True),
         approved_faq_semantic_matching_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_MATCHING_ENABLED", True),
         approved_faq_semantic_suggestions_enabled=_env_bool(env, "APPROVED_FAQ_SEMANTIC_SUGGESTIONS_ENABLED", False),
@@ -557,7 +554,6 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ),
         document_selection_enabled=_env_bool(env, "RAG_ENGINE_DOCUMENT_SELECTION", True),
         document_selection_score_ratio=max(0.0, min(1.0, _env_float(env, "RAG_ENGINE_DOCUMENT_SELECTION_SCORE_RATIO", 0.5))),
-        document_selection_min_hits=max(1, _env_int(env, "RAG_ENGINE_DOCUMENT_SELECTION_MIN_HITS", 2)),
         screen_linking_enabled=_env_bool(env, "RAG_ENGINE_SCREEN_LINKING", False),
         screen_linking_reserve_rank=max(0, _env_int(env, "RAG_ENGINE_SCREEN_LINKING_RESERVE_RANK", 0)),
         embedding_region=env.get("EMBEDDING_REGION", DEFAULT_EMBEDDING_REGION).strip() or DEFAULT_EMBEDDING_REGION,
@@ -581,6 +577,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         max_anchors_per_parent=max(1, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_PARENT", DEFAULT_MAX_ANCHORS_PER_PARENT)),
         max_anchors_per_document=max(0, _env_int(env, "RAG_ENGINE_MAX_ANCHORS_PER_DOCUMENT", DEFAULT_MAX_ANCHORS_PER_DOCUMENT)),
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
+        retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 150)),
+        rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 0)),
+        retrieval_stage_limits={
+            str(key): max(0, int(value)) for key, value in json.loads(env.get("RAG_ENGINE_RETRIEVAL_STAGE_LIMITS", "{}")).items()
+        },
         max_context_records=max(1, _env_int(env, "RAG_ENGINE_MAX_CONTEXT_RECORDS", DEFAULT_MAX_CONTEXT_RECORDS)),
         evidence_budget_chars=max(1000, _env_int(env, "RAG_ENGINE_EVIDENCE_BUDGET_CHARS", DEFAULT_EVIDENCE_BUDGET_CHARS)),
         request_coverage_retrieval_enabled=_env_bool(env, "RAG_ENGINE_REQUEST_COVERAGE_RETRIEVAL", False),
@@ -605,15 +606,19 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         answer_max_input_tokens=max(1, _env_int(env, "OCI_ENTERPRISE_AI_MAX_INPUT_TOKENS", 128_000)),
         section_extraction_concurrency=max(1, _env_int(env, "RAG_ENGINE_SECTION_EXTRACTION_CONCURRENCY", 4)),
         article_catalog_enabled=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG", True),
-        article_catalog_max_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_DOCUMENTS", 8)),
-        article_catalog_max_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_ARTICLES", 12)),
+        article_catalog_max_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_DOCUMENTS", 16)),
+        article_catalog_max_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_MAX_ARTICLES", 8)),
         article_catalog_context_records=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CONTEXT_RECORDS", 6)),
         article_catalog_scope_documents=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_SCOPE_DOCUMENTS", 2)),
         article_catalog_original_question_search=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_ORIGINAL_QUESTION_SEARCH", True),
         article_catalog_refine_articles=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_ARTICLES", 6)),
         article_catalog_refine_candidates=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_REFINE_CANDIDATES", 60)),
-        article_catalog_output_token_cap=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP", 4096)),
-        article_catalog_call_timeout_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS", 90.0)),
+        article_catalog_output_token_cap=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_OUTPUT_TOKEN_CAP", 8192)),
+        article_catalog_call_timeout_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CALL_TIMEOUT_SECONDS", 180.0)),
+        article_catalog_review=_env_bool(env, "RAG_ENGINE_ARTICLE_CATALOG_REVIEW", False),
+        article_catalog_cache_dir=Path(cache_dir_raw).expanduser() if cache_dir_raw else None,
+        article_catalog_cache_ttl_seconds=max(0.0, _env_float(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_TTL_SECONDS", 86400.0)),
+        article_catalog_cache_max_entries=max(0, _env_int(env, "RAG_ENGINE_ARTICLE_CATALOG_CACHE_MAX_ENTRIES", 4096)),
         answer_validation_max_input_bytes=max(16_000, _env_int(env, "RAG_ENGINE_ANSWER_VALIDATION_MAX_INPUT_BYTES", 96_000)),
         strategy_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_STRATEGY_REASONING_EFFORT")),
         judge_reasoning_effort=normalize_reasoning_effort_override(env.get("RAG_ENGINE_JUDGE_REASONING_EFFORT")),
@@ -623,6 +628,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         crag_short_candidate_ids=_env_bool(env, "RAG_ENGINE_CRAG_SHORT_CANDIDATE_IDS", False),
         answer_audit_compact_reasons=_env_bool(env, "RAG_ENGINE_ANSWER_AUDIT_COMPACT_REASONS", False),
         answer_max_correction_rounds=max(0, min(2, _env_int(env, "RAG_ENGINE_ANSWER_MAX_CORRECTION_ROUNDS", 2))),
+        answer_evidence_refinement_mode=(
+            refinement
+            if (refinement := env.get("RAG_ENGINE_ANSWER_EVIDENCE_REFINEMENT_MODE", "legacy")) in {"legacy", "cited_only", "cited_required"}
+            else "legacy"
+        ),
         answer_audit_mode=(mode if (mode := env.get("RAG_ENGINE_ANSWER_AUDIT_MODE", "")) in {"none", "standard"} else "detailed"),
         llm_stall_detection=_env_bool(env, "RAG_ENGINE_LLM_STALL_DETECTION", False),
         llm_stall_idle_seconds=max(1.0, _env_float(env, "RAG_ENGINE_LLM_STALL_IDLE_SECONDS", 20.0)),
@@ -648,11 +658,9 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         ).strip()
         or DEFAULT_TEXT_SEARCH_TOKENIZER_LATIN_STEMMER,
         llm_api_mode=llm_api_mode,
-        profile=env.get("RAG_ENGINE_PROFILE", "generic").strip() or "generic",
         llm_providers=llm_providers,
         default_vision_llm=default_vision_llm,
         default_answer_llm=default_answer_llm,
-        answer_images_enabled=_env_bool(env, "RAG_ENGINE_ANSWER_IMAGES", False),
         timezone=env.get("PLATFORM_TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
     )
 
@@ -740,6 +748,15 @@ def get_llm_provider(settings: Settings, provider_id: str | None, default: str =
     if provider is None:
         raise RuntimeError(f"Unknown LLM provider: {provider_id}")
     return provider
+
+
+def answer_model_reads_images(settings: Settings, provider_id: str | None = None) -> bool:
+    """回答のモデル(``provider_id``。None は既定の回答のモデル)が画像を読めるか(#3444)。"""
+    try:
+        provider = get_llm_provider(settings, provider_id or settings.default_answer_llm)
+    except RuntimeError:
+        return False
+    return bool(provider.supports_vision and provider.model)
 
 
 def llm_output_token_limit(settings: Settings, provider: Any) -> int:

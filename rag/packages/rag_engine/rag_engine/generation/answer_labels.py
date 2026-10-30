@@ -29,6 +29,11 @@ class AnswerLabels:
     deadline_summary: str
     off_goal_gap: str
     cause_gap: str
+    crag_refusal_summary: str
+    crag_missing_aspect_template: str
+    crag_unknown_aspect_template: str
+    crag_quote_only_note: str
+    crag_definition_aspect_template: str
     operation_steps_heading: str
     confirmation_steps_heading: str
     page_location: str
@@ -58,6 +63,7 @@ class AnswerLabels:
     guide_notes_note_template: str
     guide_handoff_template: str
     guide_approval_template: str
+    guide_acquisition_incomplete_template: str
     # 節の 1 行の型（{text} に段落の短い引用、{reasons} に理由）と、回答全体の警告の行の型。
     passage_note_template: str
     answer_warning_template: str
@@ -159,6 +165,11 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         deadline_summary=text("deadline_summary"),
         off_goal_gap=text("off_goal_gap"),
         cause_gap=text("cause_gap"),
+        crag_refusal_summary=text("crag_refusal_summary"),
+        crag_missing_aspect_template=text("crag_missing_aspect_template"),
+        crag_unknown_aspect_template=text("crag_unknown_aspect_template"),
+        crag_quote_only_note=text("crag_quote_only_note"),
+        crag_definition_aspect_template=text("crag_definition_aspect_template"),
         operation_steps_heading=text("operation_steps_heading"),
         confirmation_steps_heading=text("confirmation_steps_heading"),
         page_location=text("page_location"),
@@ -183,6 +194,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         guide_notes_note_template=text("guide_notes_note_template"),
         guide_handoff_template=text("guide_handoff_template"),
         guide_approval_template=text("guide_approval_template"),
+        guide_acquisition_incomplete_template=text("guide_acquisition_incomplete_template"),
         passage_note_template=text("passage_note_template"),
         answer_warning_template=text("answer_warning_template"),
         predicate_endings=pack.words("answer_labels", "predicate_endings"),

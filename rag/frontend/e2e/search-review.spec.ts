@@ -67,10 +67,6 @@ async function mockSearchPage(
       await route.fulfill(envelope({ suggestions: faqSuggestions }));
       return;
     }
-    if (pathname.endsWith("/query-suggestions")) {
-      await route.fulfill(envelope({ suggestions: [] }));
-      return;
-    }
     await route.fulfill(
       envelope({ items: VIEWS, total: VIEWS.length, limit: 50, offset: 0, has_next: false })
     );
@@ -292,14 +288,14 @@ test("類似 FAQ を使わずに生成した検索の再試行は FAQ を出し�
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "交通費の上限");
-  await page.getByRole("button", { name: "類似問を使用しない" }).click();
+  await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
 
   const alert = page.getByRole("alert").filter({ hasText: "リクエスト数が上限を超えました" });
   await expect(alert).toBeVisible();
   await alert.getByRole("button", { name: "再試行" }).click();
 
   await expect.poll(() => calls).toBe(2);
-  await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
+  await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toHaveCount(0);
 });
 
 test("質問から読み取った条件を「自動」のチップで出し、外して検索し直せる（#652）", async ({ page }) => {
@@ -381,11 +377,10 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
 
   await advanced.click();
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveAccessibleDescription(/文書内の箇所（テキスト断片）の基準件数/);
-  await expect(page.getByText(/文書数や回答の引用数ではなく/)).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("retrieval-candidate-help.png") });
-  await page.getByRole("combobox", { name: "候補取得数" }).click();
-  await page.getByRole("option", { name: "50", exact: true }).click();
+  await expect(page.locator("#search-top-k")).toHaveCount(0);
+  await page.locator('button[aria-controls="search-classification-filters"]').click();
+  await page.locator("#search-as_of").fill("2026-04-01");
+  await page.screenshot({ path: testInfo.outputPath("search-default-conditions.png") });
 
   // 条件があっても閉じられる。閉じている間は「設定中」で条件が効いていることを示す。
   await advanced.click();
@@ -397,7 +392,7 @@ test("詳細条件は条件を設定したままでも閉じられ、閉じる�
   await advanced.focus();
   await page.keyboard.press("Space");
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("combobox", { name: "候補取得数" })).toContainText("50");
+  await expect(page.locator("#search-as_of")).toHaveValue("2026-04-01");
   await expect(advanced).not.toContainText("設定中");
   await page.keyboard.press("Enter");
   await expect(advanced).toHaveAttribute("aria-expanded", "false");
@@ -573,7 +568,7 @@ test.describe("送り直す操作は、表示中の結果を出した検索の�
     });
   });
 
-  test("「類似問を使用しない」は、類似 FAQ を確かめた質問を送る", async ({ page }) => {
+  test("「どれでもない（資料を検索する）」は、類似 FAQ を確かめた質問を送る", async ({ page }) => {
     await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
       route.fulfill(
         envelope({
@@ -599,10 +594,10 @@ test.describe("送り直す操作は、表示中の結果を出した検索の�
     await page.goto("/search");
     await selectSearchAnswerProfile(page, /経理ビュー/);
     await search(page, "交通費の上限");
-    await expect(page.getByText("類似する承認済み FAQ があります")).toBeVisible();
+    await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toBeVisible();
 
     await page.getByRole("textbox", { name: "RAG 検索" }).fill("書きかけ");
-    await page.getByRole("button", { name: "類似問を使用しない" }).click();
+    await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
 
     await expect.poll(() => requests.length).toBe(1);
     expect(requests[0]).toMatchObject({ query: "交通費の上限", search_answer_profile_id: "bv-1" });
@@ -643,7 +638,7 @@ test.describe("類似 FAQ の照会中も、検索を始めたことを示す（
     await expectNoPageOverflow(page);
 
     releaseFaq();
-    await expect(page.getByText("類似する承認済み FAQ があります")).toBeVisible();
+    await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toBeVisible();
     await expect(button).toHaveAccessibleName("検索");
     await expect(page.getByTestId("search-run-progress")).toHaveCount(0);
     expect(streamCalls).toBe(0);
@@ -729,7 +724,7 @@ test("FAQ の提示対象が無いときは質問を止めず検索する", { ta
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await search(page, "合成の設定 A");
   await expect.poll(() => searched).toBe(true);
-  await expect(page.getByText("類似する承認済み FAQ があります")).toHaveCount(0);
+  await expect(page.getByText("質問に近い登録済みQ&Aがあります")).toHaveCount(0);
 });
 
 /**
@@ -749,7 +744,7 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
     [
       { key: "root", spec: ragSpan.root(), at: [0, 2] },
       { key: "filter", spec: ragSpan.stage("field_filter"), at: [0, 2] },
-      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "filter", { "gen_ai.request.model": "synthetic-model" }), at: [0, 2] },
+      { key: "chat", spec: ragSpan.technical("gen_ai.chat", "filter", { "gen_ai.request.model": "synthetic-model", "pr.gen_ai.purpose": "query.conditions" }), at: [0, 2] },
     ],
     { terminal: "done", base: "2026-01-01T00:00:00Z" }
   );
@@ -764,9 +759,12 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
   await page.getByTestId("search-run-progress-summary").click();
   const process = page.getByTestId("search-run-progress");
   // 段の名前と技術の span の日本語の名前・モデル名。入れ子は span の親子（root は行にしない）。
-  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["検索条件の読み取り", "モデルの呼び出し · synthetic-model"]);
+  await expect(process.locator("[data-run-timeline-label]")).toHaveText(["質問から検索の絞り込み条件を読み取る", "質問から絞り込み条件を読み取る"]);
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toContainText("2.0 秒");
+  const modelStep = process.locator("[data-run-timeline-step]").nth(1);
+  await modelStep.locator('button[aria-expanded="false"]').click();
+  await expect(modelStep).toContainText("synthetic-model");
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();
@@ -824,7 +822,7 @@ for (const scenario of [
 }
 
 test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
-  // 工程の span の親子（回答生成フロー > 文書検索 > Rerank）と回答の安全チェック（#3226）。
+  // 工程の span の親子（回答生成フロー > 文書検索 > Rerank）と回答に安全上の問題がないか検査する（#3226）。
   const progress_events = savedSpanProgress(
     "synthetic-parity",
     [
@@ -874,4 +872,32 @@ test("RAG 検索と履歴の工程の内容・階層・状態・時間が一致�
   expect(await timelineTypography(page.getByTestId("run-history-timeline"))).toEqual(liveTypography);
   await expectNoPageOverflow(page);
   await page.getByTestId("run-history-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
+});
+
+
+test("旧取得件数の URL・保存値を無視し、検索・再試行に top_k を送らない", { tag: "@responsive" }, async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("production-ready-rag.workspace.v1:search.topK", JSON.stringify({ value: "100", savedAt: Date.now() }));
+  });
+  const requests: Record<string, unknown>[] = [];
+  await page.route("**/api/search/stream", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await fulfillStream(route, sse([["error", { trace_id: "t1", message: "検索処理がタイムアウトしました。", error_type: "TimeoutError" }]]));
+  });
+  await page.goto("/search?question=sample&search_answer_profile_id=bv-1&top_k=100");
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page.locator("#search-query")).toHaveValue("sample");
+  await page.getByRole("button", { name: /詳細条件/ }).click();
+  await expect(page.locator("#search-top-k")).toHaveCount(0);
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  const alert = page.getByRole("alert").filter({ hasText: "タイムアウトしました" });
+  await expect(alert).toBeVisible();
+  await alert.getByRole("button", { name: "再試行" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  for (const request of requests) {
+    expect(request).not.toHaveProperty("top_k");
+    expect(request).toMatchObject({ query: "sample", search_answer_profile_id: "bv-1" });
+  }
+  expect(await page.evaluate(() => sessionStorage.getItem("production-ready-rag.workspace.v1:search.topK"))).toBeNull();
+  await expectNoPageOverflow(page);
 });

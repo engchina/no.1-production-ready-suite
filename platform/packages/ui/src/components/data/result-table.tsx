@@ -1,5 +1,5 @@
 import { Download, ExternalLink, Maximize2 } from "lucide-react";
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 
 import { INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
@@ -10,7 +10,6 @@ import { ButtonLink, type ButtonLinkComponent } from "../ui/button-link";
 import { SideSheet } from "../ui/side-sheet";
 import { DataTable, type DataTableColumn } from "./data-table";
 import { PagedDataTable } from "./paged-data-table";
-import { PageSizeSelect } from "./page-size-select";
 import { DEFAULT_PAGE_SIZE, DEFAULT_PAGINATION_LABELS, type PaginationRange } from "./pagination";
 
 /**
@@ -101,8 +100,8 @@ export const DEFAULT_RESULT_TABLE_LABELS: ResultTableLabels = {
   downloadCsv: "CSV をダウンロード",
   tableLabel: "実行結果",
   scrollLabel: "実行結果の表。スクロールできます。",
-  pageSize: "1 ページの行数",
-  pageSizeOption: (size) => `${size} 行`,
+  pageSize: "表示件数",
+  pageSizeOption: (size) => `${size} 件`,
   // 件数・ページ・前へ / 次へは一覧の共通の文言と同じ（#1266）。
   pageSummary: DEFAULT_PAGINATION_LABELS.summary,
   pageIndicator: DEFAULT_PAGINATION_LABELS.pageIndicator!,
@@ -344,7 +343,6 @@ export function ResultTable({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pageSize, setPageSize] = useState<number>(pageSizeOptions[0] ?? DEFAULT_PAGE_SIZE);
   const viewAllRef = useRef<HTMLButtonElement>(null);
-  const pageSizeId = useId();
   const indexedRows = useMemo<IndexedRow[]>(() => rows.map((values, index) => ({ index, values })), [rows]);
   const previewColumns = useMemo(
     () => resultColumns(columns, rows, "preview", labels.nullValue),
@@ -486,28 +484,21 @@ export function ResultTable({
             <>
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <p className="text-sm text-fg">{summary}</p>
-                {rowCount > Math.min(...pageSizeOptions) ? (
-                  <PageSizeSelect
-                    id={pageSizeId}
-                    value={pageSize}
-                    options={pageSizeOptions}
-                    labels={{ label: labels.pageSize, option: labels.pageSizeOption }}
-                    size="sm"
-                    width="xs"
-                    onValueChange={setPageSize}
-                  />
-                ) : null}
               </div>
               {/* ページで描く行を絞る（仮想化はしない。読み上げ・ブラウザの検索・印刷がそのまま使える）。 */}
               <PagedDataTable<IndexedRow>
-                viewport="page"
+                viewport="bounded"
                 columns={fullColumns}
                 rows={indexedRows}
                 getRowKey={(row) => row.index}
                 pageSize={pageSize}
+                pageSizeOptions={pageSizeOptions}
+                onPageSizeChange={setPageSize}
                 resetKey={pageSize}
                 paginationLabels={{
                   summary: labels.pageSummary,
+                  pageSize: labels.pageSize,
+                  pageSizeOption: labels.pageSizeOption,
                   pageIndicator: labels.pageIndicator,
                   prev: labels.prev,
                   next: labels.next,
@@ -516,6 +507,8 @@ export function ResultTable({
                 scrollAriaLabel={labels.scrollLabel}
                 scrollTestId={testIdOf("all-scroll")}
                 testId={testIdOf("all-table")}
+                paginationPosition="bottom"
+                showSinglePagePagination
                 paginationTestId={testIdOf("all-pagination")}
               />
               {truncated ? <p className="text-xs text-fg-muted">{notice}</p> : null}

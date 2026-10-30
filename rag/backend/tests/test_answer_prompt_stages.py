@@ -16,7 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from app.rag.answer_prompts import PROMPT_PHASES, PROMPT_STAGES, readonly_prompt_stages
+from app.rag.answer_prompts import (
+    PROMPT_PHASES,
+    PROMPT_STAGES,
+    STAGE_PROMPT_REFS,
+    readonly_prompt_stages,
+)
 
 BACKEND = Path(__file__).resolve().parents[1]
 RAG = BACKEND.parent
@@ -190,7 +195,8 @@ def test_all_runtime_instructions_use_markdown_sections() -> None:
         parts = stage["prompts"]
         assert isinstance(parts, list)
         for part in parts:
-            assert re.search(("^## \\S"), str(part["content"]), re.M), (stage["id"], part["id"])
+            # 監査の理由の規則など、Step に連結する部分は小節のまま表示する。
+            assert re.search(r"^#{2,3} \S", str(part["content"]), re.M), (stage["id"], part["id"])
 
 
 def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
@@ -199,14 +205,24 @@ def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
     assert (
         next(stage for stage in PROMPT_STAGES if stage.id == "answer_validation").phase == "audit"
     )
-    assert {part for part, _ in stages["evaluation"].parts} == {"scope", "correctness", "system"}
+    assert {part for part, _ in stages["evaluation"].parts} == {
+        "scope",
+        "coverage",
+        "claim",
+        "correctness",
+    }
 
 
 def test_catalog_separates_independent_preparation_and_orders_evaluation_calls() -> None:
     stages = {stage.id: stage for stage in PROMPT_STAGES}
     assert stages["raptor_summary"].phase == "indexing"
     assert stages["support_guide_draft"].phase == "knowledge"
-    assert [part for part, _ in stages["evaluation"].parts] == ["scope", "system", "correctness"]
+    assert [part for part, _ in stages["evaluation"].parts] == [
+        "scope",
+        "coverage",
+        "claim",
+        "correctness",
+    ]
     assert [part for part, _ in stages["audit"].parts] == [
         "detailedSystem",
         "factSystem",
@@ -220,3 +236,148 @@ def test_catalog_separates_independent_preparation_and_orders_evaluation_calls()
         "field_extraction",
         "navigation_summary",
     ]
+
+
+def test_crag_readonly_prompts_are_the_executed_step_instructions() -> None:
+    from rag_engine.generation.answering import CRAG_GRADER_SYSTEM_PROMPT
+    from rag_engine.generation.crag_support import CRAG_GRADE_PROMPT_TEMPLATE
+
+    displayed: list[str] = []
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        displayed.extend(part["content"] for part in parts)
+    # 画面用の別文ではなく、実行で参照する定数の本文をそのまま登録する。
+    assert CRAG_GRADER_SYSTEM_PROMPT in displayed
+    assert CRAG_GRADE_PROMPT_TEMPLATE in displayed
+
+
+def test_readonly_generation_validation_and_evaluation_are_executed_step_prompts() -> None:
+    from rag_engine.evaluation.answer_eval import (
+        CLAIM_PROMPT,
+        CORRECTNESS_PROMPT,
+        COVERAGE_PROMPT,
+        SCOPE_PROMPT,
+    )
+    from rag_engine.evaluation.answer_validation import (
+        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
+        VALIDATION_SYSTEM_PROMPT,
+    )
+    from rag_engine.generation.grounded import AUDIT_SYSTEM_PROMPT, GENERATE_SYSTEM_PROMPT
+    from rag_engine.generation.table_revision import REVISION_SYSTEM_PROMPT
+
+    displayed: list[str] = []
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        displayed.extend(part["content"] for part in parts)
+    for executed in (
+        GENERATE_SYSTEM_PROMPT,
+        AUDIT_SYSTEM_PROMPT,
+        VALIDATION_SYSTEM_PROMPT,
+        PREMISE_CONSISTENCY_SYSTEM_PROMPT,
+        REVISION_SYSTEM_PROMPT,
+        SCOPE_PROMPT,
+        COVERAGE_PROMPT,
+        CLAIM_PROMPT,
+        CORRECTNESS_PROMPT,
+    ):
+        assert executed in displayed
+        assert executed.startswith("## Step 1:")
+
+
+def test_query_strategy_display_uses_actual_step_prompts() -> None:
+    from rag_engine.generation.answering import (
+        QUERY_EXPANSION_SYSTEM_PROMPT,
+        QUERY_ROUTING_SYSTEM_PROMPT,
+    )
+    from rag_engine.generation.query_prompts import (
+        QUERY_EXPANSION_PROMPT_TEMPLATE,
+        QUERY_ROUTING_PROMPT_TEMPLATE,
+    )
+
+    displayed: list[object] = []
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        displayed.extend(part["content"] for part in parts)
+    for prompt in (
+        QUERY_ROUTING_SYSTEM_PROMPT,
+        QUERY_EXPANSION_SYSTEM_PROMPT,
+        QUERY_ROUTING_PROMPT_TEMPLATE,
+        QUERY_EXPANSION_PROMPT_TEMPLATE,
+    ):
+        assert prompt in displayed
+        assert prompt.startswith("## Step 1:")
+
+
+def test_every_editable_stage_has_a_runtime_override_lookup() -> None:
+    used = {
+        node.args[0].value
+        for _module, path in _runtime_files()
+        for node in ast.walk(_tree(path))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "resolve_prompt"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    assert set(STAGE_PROMPT_REFS) <= used
+
+
+def test_all_default_stage_instructions_follow_ordered_steps() -> None:
+    """追加部品は組立先の Step を継続し、それ以外は Step 1 から始める。"""
+    continuations = {
+        ("picture_description", "picture"): 6,
+        ("picture_description", "table"): 6,
+        ("picture_description", "contract"): 7,
+        ("generation", "assumptionSystem"): 6,
+    }
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        for part in parts:
+            identity = (str(stage["id"]), str(part["id"]))
+            content = str(part["content"])
+            if identity in {("audit", "compactRule"), ("picture_description", "rules")}:
+                # 判定の理由の書き方は監査の最後の Step 内の追加規則。
+                assert content.lstrip().startswith("### ")
+                assert not re.search(r"^## ", content, re.M)
+                continue
+            steps = [int(n) for n in re.findall(r"^## Step (\d+): \S", content, re.M)]
+            first = continuations.get(identity, 1)
+            assert content.lstrip().startswith(f"## Step {first}:"), identity
+            assert steps and steps == list(range(first, first + len(steps))), identity
+            assert not re.search(r"^## (?!Step \d+:)", content, re.M), identity
+
+
+def test_every_catalog_default_is_the_executed_instruction_constant() -> None:
+    """画面だけの見出し変換を認めず、既定値と実行用の定数を一致させる。"""
+    from app.rag.answer_prompts import prompt_constant
+
+    displayed: dict[tuple[str, str], str] = {}
+    for displayed_stage in readonly_prompt_stages():
+        parts = displayed_stage["prompts"]
+        assert isinstance(parts, list)
+        for part in parts:
+            displayed[str(displayed_stage["id"]), str(part["id"])] = str(part["content"])
+    for stage in PROMPT_STAGES:
+        for part_id, ref in stage.parts:
+            assert displayed[stage.id, part_id] == prompt_constant(ref)
+
+
+def test_default_prompt_steps_have_one_blank_line_between_sections() -> None:
+    """画面とモデルが使う既定指示の Step 境界を読みやすく揃える。"""
+    for stage in readonly_prompt_stages():
+        parts = stage["prompts"]
+        assert isinstance(parts, list)
+        for part in parts:
+            lines = str(part["content"]).splitlines()
+            for index, line in enumerate(lines):
+                if index == 0 or not re.match(r"^## Step \d+:", line):
+                    continue
+                identity = (stage["id"], part["id"], line)
+                assert lines[index - 1] == "", identity
+                if index >= 2:
+                    assert lines[index - 2].strip(), identity

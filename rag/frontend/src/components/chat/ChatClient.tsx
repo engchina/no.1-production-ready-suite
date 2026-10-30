@@ -3,6 +3,7 @@ import {
   ChatComposer,
   ChatReadOnlyNotice,
   ChatAnswer,
+  ChatAnswerBody,
   ChatHistoryList,
   chatHistoryWindowLabels,
   ChatLayout,
@@ -85,13 +86,13 @@ import {
   type ChatStreamHandlers,
 } from "@/lib/chat-stream";
 import { formatDateTime } from "@/lib/format";
-import { unreadSectionLinks } from "@/lib/answer-diagnostics";
+import { answerAttachedImages, answerModelHeading, unreadSectionLinks } from "@/lib/answer-diagnostics";
 import { canOpenDocumentDetail } from "@/lib/route-permissions";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { isNullableString, useWorkspaceState } from "@/lib/workspace-state";
 import {
-  useSearchAnswerProfiles,
+  useAllSearchAnswerProfiles,
   useCompareModels,
   useConversation,
   useConversations,
@@ -192,6 +193,7 @@ type ColumnFailureDetail = Pick<ChatAnswerFailureInfo, "errorType" | "errorCode"
 /** 送信の条件（再送信で同じ条件のまま送り直す）。 */
 interface DeliverRequest {
   content: string;
+  questionContextToken?: string;
   approvedFaqId?: string;
   clarification?: ClarificationAnswer;
   /** 回答前の確認を「確認せずに回答」で飛ばした確認の id（会話に残すだけ。#1839）。 */
@@ -361,17 +363,34 @@ function AssistantColumn({
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
   const storageNotice = storageFailureNotice(storageFailures, traceId);
+  // 回答は列のモデルだけで作る（#3444）。そのモデルへ根拠の画像を添付した回答は、見出しにそのことを添える。
+  const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
+  const heading = answerModelHeading(label, attachedImages);
   const listId = useId();
+  const answerBody = (
+    <AnswerText
+      text={answer}
+      streaming={streaming}
+      citations={citations}
+      unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
+      diagnostics={finished ? (answerDiagnostics ?? passageSource) : null}
+      live
+      cursor={
+        streaming ? <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span> : null
+      }
+    />
+  );
   return (
     // 回答の枠は 3 製品共通の ChatAnswer（#1161）。比較（複数モデル）では列ごとに 1 つの枠にし、列の高さをそろえる。
     <ChatAnswer id={messageId ? `message-${messageId}` : undefined} className={cn("h-full", className)}>
-      {label ? (
+      {heading ? (
         // 1 列（既定のモデル）でも、どのモデルの回答かを出す（#649）。
         <h3
-          className="truncate border-b border-border pb-2 text-sm font-semibold text-fg"
-          title={label}
+          className="min-w-0 break-words border-b border-border pb-2 text-sm font-semibold text-fg [overflow-wrap:anywhere]"
+          title={heading}
+          data-testid="chat-answer-model-heading"
         >
-          {t("chat.column.model", { name: label })}
+          {heading}
         </h3>
       ) : null}
       {progress && !finished ? (
@@ -444,19 +463,11 @@ function AssistantColumn({
               testId="chat-answer-storage-failure"
             />
           ) : null}
-          <AnswerText
-            text={answer}
-            streaming={streaming}
-            citations={citations}
-            unreadSections={canOpenSections ? unreadSectionLinks(answerDiagnostics) : []}
-            diagnostics={finished ? (answerDiagnostics ?? passageSource) : null}
-            live
-            cursor={
-              streaming ? (
-                <span className="ml-0.5 inline-block animate-pulse motion-reduce:animate-none">▍</span>
-              ) : null
-            }
-          />
+          {/*
+            回答の本文が届いたら、本文の前に見出し「回答」を出す（本文の中の節の見出しと同じ書式。3 製品共通の
+            ChatAnswerBody。#3433）。本文の届く前（カーソルだけ）は出さない。
+          */}
+          {answer.trim() ? <ChatAnswerBody testId="chat-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
           {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下に出す（#2096）。 */}
           {finished && (answerDiagnostics || passageSource) ? (
             <AnswerNotices diagnostics={answerDiagnostics} passageSource={passageSource} />
@@ -663,7 +674,7 @@ export function ChatClient() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
-  const searchAnswerProfilesQuery = useSearchAnswerProfiles({ status: "ACTIVE", limit: 50, offset: 0 });
+  const searchAnswerProfilesQuery = useAllSearchAnswerProfiles({ status: "ACTIVE" });
   const searchAnswerProfiles = searchAnswerProfilesQuery.data?.items ?? [];
   // 選択中の検索・回答プロファイル・会話・入力中の下書きは、ページを行き来しても再読込しても残す
   // （workspace-state.md）。URL の deep-link があればそちらを優先する。
@@ -1130,38 +1141,69 @@ export function ChatClient() {
     void clarifyOrDeliver(content, controller, retryContent);
   }
 
+  /** 確認と正式送信が同じ会話を使うよう、文脈の準備より前に会話を確定する。 */
+  async function conversationForSend(controller: AbortController): Promise<string | null> {
+    if (controller.signal.aborted || !searchAnswerProfileId) return null;
+    if (activeIdRef.current) return activeIdRef.current;
+    const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
+    if (controller.signal.aborted) return null;
+    queryClient.setQueryData(queryKeys.conversation(created.id), created);
+    setConversationOffset(0);
+    activeIdRef.current = created.id;
+    setActiveId(created.id);
+    return created.id;
+  }
+
   /**
    * 質問が検索・回答プロファイルのルールの確認に当たれば、回答の前に確認の質問を出す（#717）。1 つの質問で聞き返すのは
    * 1 回だけ。照会に失敗したときは確認を使わずに送る。
    */
   async function clarifyOrDeliver(content: string, controller: AbortController, retryContent?: string) {
     if (!searchAnswerProfileId) return;
-    let suggestion: ClarificationSuggestionData | null = null;
+    let conversationId: string | null;
     try {
-      suggestion = (await api.suggestClarification(searchAnswerProfileId, content)).suggestion ?? null;
+      conversationId = await conversationForSend(controller);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setLiveTurn((current) => current ? {
+          ...current,
+          pending: withOptimisticChatStatus(current.pending, "failed"),
+          failureMessage: error instanceof ApiError ? error.message : t("chat.error.send"),
+        } : current);
+        releaseController(controller);
+      }
+      return;
+    }
+    if (!conversationId || controller.signal.aborted) return;
+    let suggestion: ClarificationSuggestionData | null = null;
+    let questionContextToken: string | undefined;
+    try {
+      const prepared = await api.suggestClarification(searchAnswerProfileId, content, conversationId);
+      suggestion = prepared.suggestion ?? null;
+      questionContextToken = prepared.question_context_token ?? undefined;
     } catch {
       // 確認は補助。照会できなくても回答は作る。
     }
     if (controller.signal.aborted) return;
     if (suggestion) {
       setLiveTurn(null);
-      setClarifyChoice({ content, retryContent, suggestion });
+      setClarifyChoice({ content, retryContent, suggestion, questionContextToken });
       releaseController(controller);
       return;
     }
-    await deliver({ content }, controller);
+    await deliver({ content, questionContextToken }, controller);
   }
 
   /** 確認の答えを確定して送る（`answer` が無ければ「確認せずに回答」。前提を示して回答する。#1839）。 */
   function chooseClarification(answer?: ClarificationAnswer) {
     if (!clarifyChoice) return;
-    const { content, suggestion } = clarifyChoice;
+    const { content, suggestion, questionContextToken } = clarifyChoice;
     setClarifyChoice(null);
     setSending(true);
     void deliver(
       answer
-        ? { content, clarification: answer }
-        : { content, clarificationSkippedRuleId: suggestion.rule_id }
+        ? { content, clarification: answer, questionContextToken }
+        : { content, clarificationSkippedRuleId: suggestion.rule_id, questionContextToken }
     );
   }
 
@@ -1191,7 +1233,7 @@ export function ChatClient() {
 
   async function deliver(request: DeliverRequest, existingController?: AbortController) {
     if (!searchAnswerProfileId) return;
-    const { content, approvedFaqId, clarification, clarificationSkippedRuleId } = request;
+    const { content, approvedFaqId, clarification, clarificationSkippedRuleId, questionContextToken } = request;
     const controller = existingController ?? new AbortController();
     abortRef.current = controller;
     // 質問の id は画面が決める（#1175）。送り直すたびに新しくする（同じ id の二重の保存は 409）。
@@ -1302,24 +1344,15 @@ export function ChatClient() {
         eventsOnConnection += 1;
       },
     };
-    let conversationId = activeId;
     let resumeFailures = 0;
     try {
-      if (!conversationId) {
-        // 会話を選んでいなければ、最初の送信で会話を作る（会話の履歴を開かずに始められる。#664）。
-        // 質問は作成を待たずに出している（#907）。
-        const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
-        conversationId = created.id;
-        // 作った会話の内容（空）を先に入れ、読み込み中の表示で送信中の質問を隠さない。
-        queryClient.setQueryData(queryKeys.conversation(created.id), created);
-        setConversationOffset(0);
-        setActiveId(created.id);
-        if (controller.signal.aborted) return;
-      }
+      const conversationId = await conversationForSend(controller);
+      if (!conversationId || controller.signal.aborted) return;
       const attachmentIds = outgoingAttachmentsRef.current.ids;
       outgoingAttachmentsRef.current = { ids: [], items: [] };
       const body = {
         content,
+        ...(questionContextToken ? { question_context_token: questionContextToken } : {}),
         model_ids: [],
         client_message_id: clientMessageId,
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
@@ -1883,6 +1916,7 @@ function isFaqChoice(value: unknown): value is FaqChoice | null {
 
 interface ClarifyChoice {
   content: string;
+  questionContextToken?: string;
   retryContent?: string;
   suggestion: ClarificationSuggestionData;
 }

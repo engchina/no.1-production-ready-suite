@@ -27,6 +27,7 @@ import { useTrySupportGuideDraft } from "@/lib/queries";
 import {
   SUPPORT_GUIDE_DECISION_VARIANT,
   SUPPORT_GUIDE_STEP_STATUS_VARIANT,
+  supportGuideStepCounts,
   tryConditionOptions,
   tryConditionsPayload,
 } from "@/lib/support-guide-form";
@@ -212,8 +213,7 @@ export function SupportGuideDraftTry({
 function DraftTryResult({ result }: { result: SupportGuideDraftTryData }) {
   const guide = result.guide;
   const steps = result.steps ?? [];
-  // 説明できていない必須の手順の数（回答の不足として envelope の guide:<手順> にも出る）。
-  const missing = steps.filter((step) => step.required && step.status !== "explained").length;
+  const { missing, partial, unknown } = supportGuideStepCounts(steps);
   const seconds = (result.elapsed_ms / 1000).toFixed(1);
   const title = result.guide_used
     ? t("supportGuides.try.used", { revision: result.draft_revision })
@@ -268,6 +268,16 @@ function DraftTryResult({ result }: { result: SupportGuideDraftTryData }) {
                 {missing > 0 ? (
                   <p className="text-fg" data-testid="support-guide-try-steps-missing">
                     {t("supportGuides.try.stepsMissing", { count: missing })}
+                  </p>
+                ) : null}
+                {partial > 0 ? (
+                  <p className="text-fg" data-testid="support-guide-try-steps-partial">
+                    {t("supportGuides.try.stepsPartial", { count: partial })}
+                  </p>
+                ) : null}
+                {unknown > 0 ? (
+                  <p className="text-fg" data-testid="support-guide-try-steps-unknown">
+                    {t("supportGuides.try.stepsUnknown", { count: unknown })}
                   </p>
                 ) : null}
                 {/* 手順ごとの充足（#2686）。状態は色だけでなく文言で示し、375px では折り返す。 */}

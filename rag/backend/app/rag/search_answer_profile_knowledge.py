@@ -9,8 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
-import unicodedata
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -49,6 +48,7 @@ from rag_engine.knowledge.domain_keyword_candidates import (
 from rag_engine.knowledge.domain_keywords import (
     DOMAIN_KEYWORDS_SCHEMA_VERSION,
     MAX_DOMAIN_KEYWORDS,
+    normalize_domain_keyword,
     normalize_domain_keywords,
 )
 from rag_engine.knowledge.runtime_knowledge import (
@@ -110,15 +110,28 @@ async def load_domain_keywords(
     return normalize_domain_keywords(payload.get("keywords"))
 
 
+def validate_domain_keywords(values: list[str]) -> list[str]:
+    """既存の正規化で重複を除き、上限超過は切り捨てず拒否する。"""
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        keyword = normalize_domain_keyword(value)
+        key = keyword.casefold()
+        if keyword and key not in seen:
+            seen.add(key)
+            result.append(keyword)
+            if len(result) > MAX_DOMAIN_KEYWORDS:
+                raise ValueError(f"ドメインキーワードは {MAX_DOMAIN_KEYWORDS} 件までです。")
+    return result
+
+
 async def save_domain_keywords(
     store: SearchAnswerProfileKnowledgeStore,
     search_answer_profile_id: str,
     keywords: list[str],
 ) -> list[str]:
     """正規化(重複・空白・長さ・件数上限)して保存し、保存後の一覧を返す。"""
-    normalized = normalize_domain_keywords(keywords)
-    if len(normalized) > MAX_DOMAIN_KEYWORDS:
-        raise ValueError(f"ドメインキーワードは {MAX_DOMAIN_KEYWORDS} 件までです。")
+    normalized = validate_domain_keywords(keywords)
     await store.save_search_answer_profile_knowledge(
         search_answer_profile_id,
         DOMAIN_KEYWORDS_KIND,
@@ -424,7 +437,7 @@ def _faq_file(payload: Mapping[str, object] | None) -> Iterator[Path]:
         yield path
 
 
-# --- 用語・ルール(runtime knowledge)-------------------------------------------
+# --- 用語・同義語と回答ルール(runtime knowledge)-------------------------------------------
 
 RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
 
@@ -432,7 +445,7 @@ RUNTIME_KNOWLEDGE_KIND = "runtime_knowledge"
 async def load_runtime_knowledge_payload(
     store: SearchAnswerProfileKnowledgeStore, search_answer_profile_id: str
 ) -> dict[str, object]:
-    """検索・回答プロファイルの用語・ルール payload を返す(未登録は空の標準形式)。"""
+    """検索・回答プロファイルの用語・同義語と回答ルールの payload を返す(未登録は空の標準形式)。"""
     payload = await store.get_search_answer_profile_knowledge(
         search_answer_profile_id, RUNTIME_KNOWLEDGE_KIND
     )
@@ -450,6 +463,10 @@ async def edit_runtime_knowledge(
     labels: str = "",
     content: str = "",
     source: str = "",
+    purpose: str | None = None,
+    instruction_kind: str | None = None,
+    exclusive_group: str | None = None,
+    priority: int | None = None,
     enabled: bool = True,
     delete: bool = False,
 ) -> dict[str, object]:
@@ -466,6 +483,10 @@ async def edit_runtime_knowledge(
             labels=labels,
             content=content,
             source=source,
+            purpose=purpose,
+            instruction_kind=instruction_kind,
+            exclusive_group=exclusive_group,
+            priority=priority,
             enabled=enabled,
             delete=delete,
             confirmed=delete,
@@ -479,7 +500,7 @@ async def edit_runtime_knowledge(
 def preview_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に一致する用語・ルールと拡張後の検索文を返す(保存しない)。"""
+    """質問に一致する用語・同義語と回答ルールと拡張後の検索文を返す(保存しない)。"""
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(question, work_dir, path)
 
@@ -487,10 +508,10 @@ def preview_runtime_knowledge(
 def match_runtime_knowledge(
     payload: Mapping[str, object], question: str
 ) -> RuntimeKnowledgeContext:
-    """質問に当たる有効な用語・ルールを、一致の強い順にすべて返す(件数で切らない。保存しない)。
+    """質問に当たる用語と、用途・排他・明示優先度で採用した確認・回答ルールを返す（保存しない）。
 
-    照合と有効の判定(承認済み・見直し待ちだけ)は回答生成と同じ。件数・字数で切って省いた数を
-    示すのは呼び出し元(MCP の根拠の取得。#2701)。
+    照合・有効状態・用途と排他の判定は回答生成と同じ。生成側は rules_for_stage で取り出す。
+    件数・字数で切って省いた数を示すのは呼び出し元(MCP の根拠の取得。#2701)。
     """
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(
@@ -517,6 +538,8 @@ def _rules(payload: Mapping[str, object]) -> list[dict[str, object]]:
 
 def rule_clarification(rule: Mapping[str, object]) -> RuleClarification | None:
     """ルールの確認(無い・壊れているときは None)。"""
+    if rule.get("purpose", "both") not in ("confirmation", "both"):
+        return None
     raw = rule.get("clarification")
     if not isinstance(raw, Mapping):
         return None
@@ -549,37 +572,40 @@ async def save_rule_clarification(
     return updated
 
 
-def _already_answered(question: str, clarification: RuleClarification) -> bool:
-    """質問に選択肢の表示名か検索に足す語が既に入っていれば、聞き返さない。"""
-    normalized = unicodedata.normalize("NFKC", question).casefold()
-    return any(
-        unicodedata.normalize("NFKC", word).casefold() in normalized
-        for option in clarification.options
-        for word in (option.label, *option.search_terms)
-        if word.strip()
+def _already_answered(clarification: RuleClarification, answer: ClarificationAnswer | None) -> bool:
+    """語の出現ではなく、現在の選択肢に対する明示的な選択だけを確定する。"""
+    if answer is None or not answer.option_ids or answer.other_text.strip():
+        return False
+    selected = set(answer.option_ids)
+    return (
+        len(selected) == len(answer.option_ids)
+        and selected <= {option.id for option in clarification.options}
+        and (clarification.multiple or len(selected) == 1)
     )
 
 
 def suggest_clarification(
-    payload: Mapping[str, object], question: str
+    payload: Mapping[str, object], question: str, *, answers: Sequence[ClarificationAnswer] = ()
 ) -> tuple[Mapping[str, object], RuleClarification] | None:
     """質問に一致したルールのうち、確認を持つ最初の 1 件(質問で既に答えているものは除く)。"""
-    found = unanswered_rule_clarifications(payload, question)
+    found = unanswered_rule_clarifications(payload, question, answers=answers)
     return found[0] if found else None
 
 
 def unanswered_rule_clarifications(
-    payload: Mapping[str, object], question: str
+    payload: Mapping[str, object], question: str, *, answers: Sequence[ClarificationAnswer] = ()
 ) -> list[tuple[Mapping[str, object], RuleClarification]]:
     """一致したルールの未回答の確認事項。確認の提示と前提の明示で同じ判定を使う。"""
     found: list[tuple[Mapping[str, object], RuleClarification]] = []
     by_id = {str(rule.get("id", "")): rule for rule in _rules(payload)}
-    for matched in preview_runtime_knowledge(payload, question).matched_rules:
+    for matched in preview_runtime_knowledge(payload, question).rules_for_stage("confirmation"):
         rule = by_id.get(matched.rule_id)
         if rule is None:
             continue
         clarification = rule_clarification(rule)
-        if clarification is not None and not _already_answered(question, clarification):
+        selections = [answer for answer in answers if answer.rule_id == matched.rule_id]
+        answer = selections[0] if len(selections) == 1 else None
+        if clarification is not None and not _already_answered(clarification, answer):
             found.append((rule, clarification))
     return found
 
@@ -725,6 +751,12 @@ def resolve_clarification(
         context="\n".join(lines),
         search_terms=tuple(term for option in options for term in option.search_terms),
         label="、".join(labels),
+        confirmed_premises=(
+            (
+                clarification.question,
+                "、".join([*(option.label for option in options), *([other] if other else [])]),
+            ),
+        ),
     )
     return scope, page_ranges
 

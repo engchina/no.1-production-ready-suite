@@ -13,7 +13,7 @@ variableGroups:
       - application_git_ref
       - existing_oracle_wallet_password
       - adb_is_mtls_connection_required
-      - nl2sql_app_environment
+      - platform_environment
       - app_admin_login_user_id
       - agent_runtime_repository_backend
       - adb_is_elastic_pool_enabled
@@ -807,17 +807,17 @@ variables:
 
 
 
-  nl2sql_app_environment:
+  platform_environment:
     type: enum
     required: true
     visible: false
-    title: "NL2SQL application environment"
-    description: "Use local for HTTP. staging and production require https_enabled (Secure cookies)."
+    title: "共通の実行環境"
+    description: "3製品共通。staging / production は HTTPS とログイン認証が必要。"
     enum:
       - "local"
       - "staging"
       - "production"
-    default: "local"
+    default: "staging"
 
 
   app_admin_login_user_id:

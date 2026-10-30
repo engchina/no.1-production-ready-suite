@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_engine.adapters.parsers.base import AnalysisContext
-from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter, _table_grid_rows
+from rag_engine.adapters.parsers.docling_adapter import DoclingAdapter, docling_table_cells
 from rag_engine.chunking.headings import layout_section_paths
 from rag_engine.config import Settings, get_settings
 from rag_engine.models.layout import LayoutRecord, PageImage
@@ -39,9 +39,9 @@ from rag_parser_core.extraction import (
     ExtractionMetadataValue,
     ExtractionPage,
     ExtractionTable,
-    ExtractionTableCell,
     StructuredExtraction,
 )
+from rag_parser_core.parsed_table import PARSED_TABLE_GRID_KEY, PARSED_TABLE_GRID_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -206,17 +206,20 @@ def _element_metadata(record: LayoutRecord) -> dict[str, ExtractionMetadataValue
 
 
 def _table(record: LayoutRecord) -> ExtractionTable:
-    cells = [
-        ExtractionTableCell(row=row_index, col=col_index, text=text, metadata={"header": is_header})
-        for row_index, row in enumerate(_table_grid_rows(record.raw))
-        for col_index, (text, is_header) in enumerate(row)
-    ]
+    """表の record を、Docling の格子のセル（``docling_table_cells``）を持つ表にする（#3429）。
+
+    セルを格子として読めない表（位置の無い・重なるセル）は、``PARSED_TABLE_GRID_KEY`` を付けない。
+    """
+    cells = docling_table_cells(record.raw)
     return ExtractionTable(
         table_id=f"table-{record.id}",
         element_id=record.id,
         page_number=record.page,
-        cells=cells,
-        metadata={"html": record.text or ""},
+        cells=cells or [],
+        metadata={
+            "html": record.text or "",
+            **({PARSED_TABLE_GRID_KEY: PARSED_TABLE_GRID_VERSION} if cells else {}),
+        },
     )
 
 

@@ -10,7 +10,7 @@
 | 型 | ページ（ルート） | 補足 |
 |---|---|---|
 | A. 一覧 → 全画面エディタ | 文書インデックス（`/file-list`）→ 文書詳細（`/documents/:id`）/ ナレッジベース（`/knowledge-bases`・作成 `?id=new`）→ ナレッジベース詳細（`/knowledge-bases/:id`）/ 検索・回答プロファイル（`/search-answer-profiles`） | 文書は一覧の名前のリンクから全画面の詳細へ移る（対象はパスの `:id`）。検索・回答プロファイルは同じルートの `?id=` を唯一の情報源にする全画面エディタ（§1.1）。ナレッジベースは検索・回答プロファイルと同じ構成のエディタで、詳細の URL だけ既存のパスの `:id` を保つ（§1.2。#555）。 |
-| B. マスタ詳細の閲覧 | フィードバック（`/feedback`）/ 実行履歴（`/history` → `/history/:runId`。#1890） | フィードバックは狭い一覧と広い詳細を共有の `ListDetailLayout` で並べる（§4。#2283）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`。共有の `useUrlSelection`）に持つ。実行履歴は Agent の実行履歴と同じ例外（UX 契約 page-archetypes.md B 型の「一覧 → 全幅の詳細」）で、長い回答・根拠・処理の経過を読むため一覧から全幅の詳細へ移る。詳細はパスの `:runId` を唯一の情報源にし、`一覧へ戻る` は一覧の検索・絞り込み・ページを保つ。一覧と詳細の形は 3 製品で共通（UX 契約 run-history.md。#1955）: 一覧は `RunHistoryToolbar` → `RunHistoryTable` → `OffsetPagination`、詳細はタブを使わず `RunDetailLayout`（概要 → 処理の経過〔タイムラインと処理の詳細。#2325〕→ 回答 → 根拠 → フィードバック）を縦に 1 枚。 |
+| B. マスタ詳細の閲覧 | フィードバック（`/feedback`）/ 実行履歴（`/history` → `/history/:runId`。#1890） | フィードバックは共有の `ListDetailLayout layout="single"` で全幅の一覧から全幅の詳細へ切り替える（§4。#3635）。絞り込み・ページ・選んだ行は URL の検索パラメータ（選んだ行は `feedback`。共有の `useUrlSelection`）に持つ。実行履歴は Agent の実行履歴と同じ例外（UX 契約 page-archetypes.md B 型の「一覧 → 全幅の詳細」）で、長い回答・根拠・処理の経過を読むため一覧から全幅の詳細へ移る。詳細はパスの `:runId` を唯一の情報源にし、`一覧へ戻る` は一覧の検索・絞り込み・ページを保つ。一覧と詳細の形は 3 製品で共通（UX 契約 run-history.md。#1955）: 一覧は `RunHistoryToolbar` → `RunHistoryTable` → `OffsetPagination`、詳細はタブを使わず `RunDetailLayout`（概要 → 処理の経過〔タイムラインと処理の詳細。#2325〕→ 回答 → 根拠 → フィードバック）を縦に 1 枚。 |
 | C. ツール / ワークフロー | 文書アップロード（`/upload`）/ RAG 検索（`/search`）/ チャット（`/chat`）/ 品質評価（`/evaluation`） | 入力 → 実行 → 結果。チャットの会話一覧（会話の履歴）は作業の切替のためのサイドバーで、マスタ詳細の一覧としては扱わない。既定で閉じ、チャットの上端の開閉ボタンで開く（lg 以上はチャットの左のパネル、lg 未満は `SideSheet`。#664）。 |
 | D. ダッシュボード / 状態 | 設定の概要（`/settings/pipeline`）/ 取込・検索・回答設定の各ページ（`/settings/preprocess` `/settings/parser-adapters` `/settings/chunking` `/settings/vector-index` `/settings/retrieval` `/settings/prompts` `/settings/guardrail` `/settings/evaluation` `/settings/graph`）/ 運用設定（`/settings/huggingface` `/settings/services`）/ 文書の分類（`/document-categories`。階層の一覧。`page-archetypes.md` の例外。#2131） | 設定の単一フォームは「状態 + 最小の編集」として D 型に置く。 |
 
@@ -90,11 +90,11 @@
 
 共通のユーザー管理・ロール管理・権限管理（`@production-ready/system-settings` の `UserManagementPage` / `RoleManagementPage` / `RolePermissionsPage`）は共有の `ListDetailLayout` の一覧 + 詳細（#2282）。選択は URL の `?user=` / `?role=`（ロール管理の詳細の「権限管理で設定」は `?role=` を付けて権限管理を開く）、先頭の行を自動で選ばない。作成・編集は今までどおり一覧に代わる 1 枚のフォーム。製品のラッパー（`src/components/security/Security*Page.tsx`）は `listDetailStoragePrefix={RAG_LIST_DETAIL_STORAGE_PREFIX}`（`production-ready-rag.listDetail`。`EntityLayout.tsx`）を渡す。
 
-一覧と詳細を常に並べる画面はフィードバックだけで、共有の `ListDetailLayout`（UX 契約 page-archetypes.md §1 B・§3。#2283）を使う。保存 key の前置きは `RAG_LIST_DETAIL_STORAGE_PREFIX`（`production-ready-rag.listDetail`）、文言は `listDetail.*`。RAG の画面で `FixedSplitPane` を使うものは今は無い（入力と結果・比較の画面を足すときに使う）。
+フィードバックは共有の `ListDetailLayout layout="single"` を使い、すべての画面幅で一覧と全幅の詳細を切り替える（#3635）。保存 key の前置きは `RAG_LIST_DETAIL_STORAGE_PREFIX`（`production-ready-rag.listDetail`）、文言は `listDetail.*`。RAG の画面で `FixedSplitPane` を使うものは今は無い（入力と結果・比較の画面を足すときに使う）。
 
 | 画面 | `id` | 補足 |
 |---|---|---|
-| フィードバック | `feedback` | 範囲の案内・条件のツールバー（`ListToolbar`。集計にも明細にも効く）・集計のパネルは一覧 + 詳細の上の全幅。一覧の列は見出し「フィードバック明細」と並び順（`SelectField` の inline のラベル）→ 問題の概要（2 行まで）と補足 1 行（評価のバッジ・評価の日時・コメントの有無）の 1 列の表 → 列の下の `OffsetPagination`。理由・対象 / 送信元・検索・回答プロファイル・モデルは詳細の「内容」「実行情報」タブで見る。詳細の列は見出し・`ObjectActionBar`（Approved FAQ・品質評価のケース）・内容 / 根拠 / 実行情報のタブで、上端の行に `ListDetailPager`（今のページの前後）。先頭の行を自動で選ばない（未選択は「フィードバックを選んでください」）。`xl` 未満は 1 ペインで、選ぶと詳細だけ・左上の「一覧へ戻る」（`PageHeader` の `back`）で一覧へ戻り選んだ行へフォーカスを戻す。「条件をクリア」は選んだ行を外さない。 |
+| フィードバック | `feedback` | 範囲の案内・条件のツールバー（`ListToolbar`。集計にも明細にも効く）・集計のパネルは一覧で全幅に出し、詳細の表示中は隠す。一覧の列は見出し「フィードバック明細」と並び順（`SelectField` の inline のラベル）→ 問題の概要（2 行まで）と補足 1 行（評価のバッジ・評価の日時・コメントの有無）の 1 列の表 → 列の下の `OffsetPagination`。理由・対象 / 送信元・検索・回答プロファイル・モデルは詳細の「内容」「実行情報」タブで見る。詳細の列は見出し・`ObjectActionBar`（Approved FAQ・品質評価のケース）・内容 / 根拠 / 実行情報のタブで、上端の行に `ListDetailPager`（今のページの前後）。先頭の行を自動で選ばない（未選択は「フィードバックを選んでください」）。すべての幅で 1 ペインを使い、選ぶと詳細だけ・左上の「一覧へ戻る」（`PageHeader` の `back`）で一覧へ戻り選んだ行へフォーカスを戻す。根拠タブは共通リストの最大高さ（base 17.5rem / md 28rem）で内部スクロールする。 |
 
 チャットの会話一覧は作業の切替のサイドバーで、分割ペインとしては扱わない。既定で閉じ（多くの利用者は使わないので、チャットに面積を渡す。ChatGPT・Claude・Gemini・Microsoft Copilot と同じ型）、チャットの上端の行の開閉ボタン（「会話の履歴」）で開く。lg 以上は開くとチャットの左に 280px のパネルを置き（開閉は作業状態に残す）、lg 未満は左からの `SideSheet`（会話を選ぶ・Esc・外側・閉じるボタンで閉じ、開閉ボタンへフォーカスを戻す）。「新しい会話」と今の会話の名前は、履歴を閉じていてもチャットの上端の行に出す。会話を選ばずに送信すると、最初の送信で会話を作る（#664）。
 
@@ -110,4 +110,17 @@ NL2SQL のチャットの SQL の実行結果と Agent のツールの結果は�
 
 ## 6. 検証
 
-- Playwright：`e2e/document-delete.spec.ts`（行のメニューの Enter で開く / Esc で閉じてトリガーへフォーカスを戻す、矢印キー、削除の確認のキャンセルと確定、一括選択中の disabled）、`e2e/knowledge-bases.spec.ts`（「新規作成」→ `?id=new` の作成 → 詳細への `replace`、行のクリック、詳細の `PageHeader`（パンくず・状態・件数・一覧へ戻る・保存する）と 1920 / 1280 / 375px の左端、`?id=<id>` の置き換え・存在しない詳細、作成と詳細の未保存の確認と下書き、空の状態の作成の入口、アーカイブ済みの読み取り専用、行のメニューからのアーカイブ・所属から外す、詳細の `ObjectActionBar` の「その他の操作」とフォーカスの戻り・アーカイブ後の一覧への `replace`、DEFAULT の無効理由）、`e2e/knowledge-base-ops.spec.ts`（名前・説明の編集と同名の理由、DEFAULT・説明が空の KB の保存）、`e2e/search-answer-profiles.spec.ts`（行のクリック / 名前のボタンで `?id=` のエディタを開く、再読込・戻る / 進む、パンくず、未保存の変更の確認と対象ごとの下書き、存在しない `?id=`、作成と アーカイブ の `replace`、DEFAULT の無効理由）、`e2e/feedback.spec.ts`（行のクリック / 名前のボタンでの選択と `aria-current`、分割ペインの divider と保存 key、375px の縦積み・カードの選択・詳細へのフォーカス、URL からの復元）、`e2e/answer-knowledge.spec.ts`（用語・同義語の行の選択と削除の確認）、`e2e/search-answers.spec.ts`（チャットの「処理の詳細」の保存された回答に「その他の操作」を出さない。#2325）、`e2e/services-management.spec.ts`（各行が状態に応じた主操作 1 つ + メニューのトリガー 1 つだけ、起動 / 停止で主操作が切り替わる、メニューからのログ・ビルド・削除の確認、制御無効時の無効、Esc でトリガーへフォーカスが戻る、375px で横スクロールなし）。いずれも desktop / mobile-375 の両 project で動く。
+- Playwright：`e2e/document-delete.spec.ts`（行のメニューの Enter で開く / Esc で閉じてトリガーへフォーカスを戻す、矢印キー、削除の確認のキャンセルと確定、一括選択中の disabled）、`e2e/knowledge-bases.spec.ts`（「新規作成」→ `?id=new` の作成 → 詳細への `replace`、行のクリック、詳細の `PageHeader`（パンくず・状態・件数・一覧へ戻る・保存する）と 1920 / 1280 / 375px の左端、`?id=<id>` の置き換え・存在しない詳細、作成と詳細の未保存の確認と下書き、空の状態の作成の入口、アーカイブ済みの読み取り専用、行のメニューからのアーカイブ・所属から外す、詳細の `ObjectActionBar` の「その他の操作」とフォーカスの戻り・アーカイブ後の一覧への `replace`、DEFAULT の無効理由）、`e2e/knowledge-base-ops.spec.ts`（名前・説明の編集と同名の理由、DEFAULT・説明が空の KB の保存）、`e2e/search-answer-profiles.spec.ts`（行のクリック / 名前のボタンで `?id=` のエディタを開く、再読込・戻る / 進む、パンくず、未保存の変更の確認と対象ごとの下書き、存在しない `?id=`、作成と アーカイブ の `replace`、DEFAULT の無効理由）、`e2e/feedback.spec.ts`（行のクリック / 名前のボタンでの選択と `aria-current`、全幅の一覧と詳細、desktop / 375px の切替・詳細へのフォーカス・根拠の最大高さ、URL からの復元）、`e2e/answer-knowledge.spec.ts`（用語・同義語の行の選択と削除の確認）、`e2e/search-answers.spec.ts`（チャットの「処理の詳細」の保存された回答に「その他の操作」を出さない。#2325）、`e2e/services-management.spec.ts`（各行が状態に応じた主操作 1 つ + メニューのトリガー 1 つだけ、起動 / 停止で主操作が切り替わる、メニューからのログ・ビルド・削除の確認、制御無効時の無効、Esc でトリガーへフォーカスが戻る、375px で横スクロールなし）。いずれも desktop / mobile-375 の両 project で動く。
+
+
+### 文書解析と文書詳細の表示（#3608〜#3614）
+
+- 抽出項目の定義は表形式の編集行として全幅を使い、名前と値の型は共通の幅の段、説明は残りの幅に置く。375px は縦に並べる。通常の単一入力フォームの最大幅の対象外とする。
+- 章節ナビゲーションの表示と編集の一覧は共通の高さ上限で内部スクロールする。説明と操作は一覧の外に置く。
+- ページ画像のプレビューでは、現在ページを本文・構造化要素・Chunk / Citation の表示へ伝える。跨頁 chunk はページ範囲で一致させ、ページ不明の項目を他のページへ割り当てない。ページを持たない原本や iframe にフォールバックした場合は文書全体の表示を保つ。章節の目次と全文の書き出しは文書全体のまま。
+- Dots.OCR の読み取りプロンプトは同エンジンの接続確認とその結果の下に置く。章節規則の専用の候補確認は廃止し、規則の方式と保存、文書詳細の章節表示と編集は維持する。
+- 方式の欄は lg、展開した選択肢は長いときに折り返す。章節の要約は実効の対象数上限を読み取り専用で示し、モデル呼出回数の上限とは区別する。
+
+## プロファイルの知識のページング（#3719）
+
+登録済みQ&A・用語と同義語・確認と回答ルール・業務ガイドの4一覧は、空・単一ページでもページングできる一覧であることを示すため、`PagedDataTable` の `showSinglePagePagination` を指定する。範囲とページ番号を常に表示し、移動先のない前後の操作は無効にする。表示件数の選択と複数ページの操作は共有部品の規則に従う。

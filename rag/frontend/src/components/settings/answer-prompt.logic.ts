@@ -9,12 +9,14 @@ import { requiredTextError } from "@/lib/required-fields";
 export function answerPromptError(
   content: string,
   fieldLabel: string,
-  requiredPlaceholders: readonly string[]
+  requiredPlaceholders: readonly string[],
+  requiredTokens: readonly string[] = []
 ): string | null {
   const empty = requiredTextError(content, t("validation.required", { field: fieldLabel }));
   if (empty) return empty;
   const missing = requiredPlaceholders
     .map((name) => `{{${name}}}`)
+    .concat([...requiredTokens])
     .filter((placeholder) => !content.includes(placeholder));
   return missing.length
     ? t("settings.answerPrompts.missingPlaceholders", { names: missing.join("、") })
@@ -42,6 +44,7 @@ export function groupStagesByPhase<T extends { phase: string }>(stages: readonly
 }
 
 /** 検索方法に配置する、質問の解釈から根拠の判定までの区分。 */
-export function isRetrievalPromptStage(stage: { phase: string }): boolean {
-  return ["question", "retrieval", "grounding"].includes(stage.phase);
+export function isRetrievalPromptStage(stage: { id?: string; phase: string }): boolean {
+  // 条件認識だけは回答前の確認の指示として「回答プロンプト」に置く。
+  return stage.id !== "support_guide_conditions" && ["question", "retrieval", "grounding"].includes(stage.phase);
 }

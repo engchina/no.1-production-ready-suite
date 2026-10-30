@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  answerAttachedImages,
   unreadSectionLinks,
   confidenceVariant,
   outcomeBadge,
@@ -29,7 +30,7 @@ describe("parseAnswerDiagnostics", () => {
       generated_queries: ["受注 登録"],
       models: {
         llm: { model_id: "model-a", label: "Model A" },
-        vision: { model_id: "vlm-a", label: "" },
+        attached_images: 2,
         embedding: "cohere.embed-v4.0",
         rerank: "",
       },
@@ -69,7 +70,7 @@ describe("parseAnswerDiagnostics", () => {
     });
     expect(parsed?.models).toEqual({
       llm: { modelId: "model-a", label: "Model A" },
-      vision: { modelId: "vlm-a", label: "vlm-a" },
+      attachedImages: 2,
       embedding: "cohere.embed-v4.0",
       rerank: "",
     });
@@ -137,7 +138,7 @@ describe("parseAnswerDiagnostics", () => {
     expect(parseAnswerDiagnostics(null)).toBeNull();
     // モデルを持たない古い回答の記録でも壊れない。
     expect(parseAnswerDiagnostics({})?.autoFieldFilter).toBeNull();
-    expect(parseAnswerDiagnostics({})?.models).toEqual({ llm: null, vision: null, embedding: "", rerank: "" });
+    expect(parseAnswerDiagnostics({})?.models).toEqual({ llm: null, attachedImages: 0, embedding: "", rerank: "" });
     expect(parseAnswerDiagnostics({})?.approvedFaq).toBeNull();
     expect(confidenceVariant("high")).toBe("success");
     expect(confidenceVariant("low")).toBe("danger");
@@ -304,5 +305,22 @@ describe("parseRunStepDetails", () => {
       { fields: [{ label: "結果", value: "根拠 2 件" }] },
       undefined,
     ]);
+  });
+});
+
+// #3444
+describe("answerAttachedImages", () => {
+  it("作成した直後は配信の診断、保存した回答は会話のメッセージから、回答モデルへ添付した画像の件数を読む", () => {
+    expect(answerAttachedImages({ models: { llm: { model_id: "m1" }, attached_images: 2 } }, null)).toBe(2);
+    expect(answerAttachedImages(null, { answer_attached_images: 3 })).toBe(3);
+  });
+
+  it("画像を添付しなかった回答・記録の無い回答・形の違う値は 0", () => {
+    expect(answerAttachedImages({ models: { llm: { model_id: "m1" }, attached_images: 0 } }, null)).toBe(0);
+    expect(answerAttachedImages(null, { answer_attached_images: 0 })).toBe(0);
+    expect(answerAttachedImages(null, { answer_attached_images: "2" })).toBe(0);
+    expect(answerAttachedImages(null, { answer_attached_images: -1 })).toBe(0);
+    expect(answerAttachedImages(null, null)).toBe(0);
+    expect(answerAttachedImages(undefined, { content: "回答" })).toBe(0);
   });
 });

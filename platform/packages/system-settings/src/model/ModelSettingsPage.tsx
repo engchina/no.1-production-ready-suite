@@ -84,6 +84,7 @@ import {
   DEFAULT_MODEL_FIELD_IDS,
   DEFAULT_MODEL_FIELD_ORDER,
   followModelChange,
+  judgeModelOptions,
   textModelOptions,
   validateDefaultModels,
   validateModelIds,
@@ -97,15 +98,12 @@ import {
   DEFAULT_ENTERPRISE_AI_REASONING_EFFORT,
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
   DEFAULT_ENTERPRISE_AI_MAX_OUTPUT_TOKENS,
-  DEFAULT_ENTERPRISE_AI_SEED,
   ENTERPRISE_AI_CONNECTION_IDS,
   ENTERPRISE_AI_MAX_INPUT_TOKENS_MAX,
   ENTERPRISE_AI_MAX_INPUT_TOKENS_MIN,
   ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MAX,
   ENTERPRISE_AI_MAX_OUTPUT_TOKENS_MIN,
   ENTERPRISE_AI_REASONING_EFFORTS,
-  ENTERPRISE_AI_SEED_MAX,
-  ENTERPRISE_AI_SEED_MIN,
   MODEL_SETTINGS_QUERY_KEY,
   type EnterpriseAiConfiguredModel,
   type EnterpriseAiConnectionId,
@@ -213,10 +211,9 @@ export function ModelSettingsPage({
   // 既定のモデルのエラーは、関係する操作（選択・Vision 対応の切替・削除・保存）の後から出す。
   // モデル ID の入力中（キー入力ごと）には出さない（messaging.md §3.2）。
   const [showDefaultErrors, setShowDefaultErrors] = useState(false);
-  // seed（#1434）の不正な値のエラーは、保存の操作の後から出す（キー入力ごと・欄を離れたときには出さない。
-  // 欄を離れたときに出すと、保存のボタンを押した瞬間にエラーの行が入ってボタンが動き、押せなくなる）。
-  const [showSeedError, setShowSeedError] = useState(false);
-  // 登録モデルの入力の上限（#1437）の不正な値のエラーも、seed と同じく保存の操作の後から出す。
+  // 登録モデルの入力の上限（#1437）の不正な値のエラーは、保存の操作の後から出す（キー入力ごと・
+  // 欄を離れたときには出さない。欄を離れたときに出すと、保存のボタンを押した瞬間にエラーの行が入って
+  // ボタンが動き、押せなくなる）。
   const [showMaxInputTokensErrors, setShowMaxInputTokensErrors] =
     useState(false);
   const [testingKey, setTestingKey] = useState<ModelTestKey | null>(null);
@@ -286,11 +283,11 @@ export function ModelSettingsPage({
     setCheckData(baselineData);
     setTestResults({});
     const isDefaultModel =
-      key === "default_text_model_id" || key === "default_vision_model_id";
+      key === "default_text_model_id" ||
+      key === "default_vision_model_id" ||
+      key === "default_judge_model_id";
     if (isDefaultModel) setShowDefaultErrors(true);
-    // seed（#1434）は登録モデルの節と一緒に保存する。
-    const inModelsSection = isDefaultModel || key === "seed";
-    clearSaveError(inModelsSection ? "enterprise_models" : "enterprise_connection");
+    clearSaveError(isDefaultModel ? "enterprise_models" : "enterprise_connection");
   };
 
   const updateGenerative = <K extends keyof GenerativeAiModelSettings>(
@@ -591,12 +588,6 @@ export function ModelSettingsPage({
       const firstInvalid = DEFAULT_MODEL_FIELD_ORDER.find(
         (field) => errors[field],
       );
-      const seedInvalid = !isValidSeed(draft.enterprise_ai.seed);
-      if (seedInvalid) setShowSeedError(true);
-      if (invalidRow < 0 && !firstInvalid && seedInvalid) {
-        document.getElementById(SEED_FIELD_ID)?.focus();
-        return;
-      }
       if (invalidRow >= 0 || firstInvalid) {
         setShowModelIdErrors(true);
         setShowModelConnectionErrors(true);
@@ -852,7 +843,7 @@ export function ModelSettingsPage({
         </form>
 
         <form
-          // 入力の上限・seed の範囲外（number の min / max）でブラウザの既定の検証を出さない（#1437）。
+          // 入力の上限の範囲外（number の min / max）でブラウザの既定の検証を出さない（#1437）。
           // 保存の操作で欄の直下にエラーを出し、最初のエラーの欄へフォーカスする（messaging.md §3.2.1）。
           noValidate
           onSubmit={(event) => void handleSubmit(event, "enterprise_models")}
@@ -887,11 +878,6 @@ export function ModelSettingsPage({
                 enterprise={draft.enterprise_ai}
                 errors={showDefaultErrors ? defaultModelErrors : {}}
                 onChange={(field, value) => updateEnterprise(field, value)}
-              />
-              <SeedFields
-                seed={draft.enterprise_ai.seed}
-                showError={showSeedError}
-                onChange={(value) => updateEnterprise("seed", value)}
               />
               <ModelFormActions
                 sectionLabel={t("settings.model.enterprise.models")}
@@ -1660,9 +1646,10 @@ const CATALOG_COLUMNS =
 
 /**
  * 既定のモデル（#499）。登録モデルの一覧の下に置き、登録モデルの節と一緒に保存する。
- * 並びはテキスト → Vision（desktop の 2 列でも 375px の縦積みでも同じ順。#566）。
+ * 並びはテキスト → Vision → 判定（desktop の 2 列でも 375px の縦積みでも同じ順。#566・#3574）。
  * - 既定のテキストモデル: 必須。選択肢は登録モデルすべて
  * - 既定の Vision モデル: 必須。選択肢は画像入力（Vision）に対応した登録モデルだけ
+ * - 既定の判定モデル: 任意。先頭が既定の「既定のテキストモデル」（空）、次が「回答と同じモデル」、続けて登録モデルすべて
  * 一覧から消えた・Vision 対応でなくなったモデルが選ばれたままなら、その ID を出したままエラーにする。
  */
 function DefaultModelFields({
@@ -1713,77 +1700,15 @@ function DefaultModelFields({
           error={errors.default_vision_model_id}
           onValueChange={(value) => onChange("default_vision_model_id", value)}
         />
-      </FormGrid>
-    </section>
-  );
-}
-
-/** seed の欄の id（保存前の検証で不正なときにフォーカスする。#1434）。 */
-const SEED_FIELD_ID = "enterprise-seed";
-
-/** seed が保存できる値か（0〜2147483647 の整数。backend の検証と同じ範囲）。 */
-function isValidSeed(seed: number | undefined): boolean {
-  const value = seed ?? DEFAULT_ENTERPRISE_AI_SEED;
-  return (
-    Number.isInteger(value) &&
-    value >= ENTERPRISE_AI_SEED_MIN &&
-    value <= ENTERPRISE_AI_SEED_MAX
-  );
-}
-
-/**
- * 呼び出しの共通の設定（#1434）。全モデルで共通の seed を 1 つ持つ（既定 42）。
- * 既定のモデルの下に置き、登録モデルの節と一緒に保存する。欄が 1 つでも既定のモデルと同じ
- * 2 列の grid に置き、広い画面で欄が本文の全幅に伸びないようにする。
- * 空欄は NaN で持ち（表示は空）、保存の前に欄のエラーで止める。
- */
-function SeedFields({
-  seed,
-  showError,
-  onChange,
-}: {
-  seed: number | undefined;
-  showError: boolean;
-  onChange: (value: number) => void;
-}) {
-  const headingId = "enterprise-seed-title";
-  const value = seed ?? DEFAULT_ENTERPRISE_AI_SEED;
-  return (
-    <section
-      aria-labelledby={headingId}
-      className="space-y-4 border-t border-border pt-5"
-    >
-      <div className="space-y-1">
-        <h3 id={headingId} className="text-sm font-semibold text-fg">
-          {t("settings.model.seed.title")}
-        </h3>
-        <p className="text-xs leading-relaxed text-fg-muted">
-          {t("settings.model.seed.description")}
-        </p>
-      </div>
-      <FormGrid>
-        <TextField
-          id={SEED_FIELD_ID}
-          label={t("settings.model.seed.label")}
-          required
-          type="number"
-          inputMode="numeric"
-          min={ENTERPRISE_AI_SEED_MIN}
-          max={ENTERPRISE_AI_SEED_MAX}
-          step={1}
-          value={Number.isNaN(value) ? "" : value}
-          // 最大 2147483647（10 桁）が入る sm（xs の 8rem には入らない。#1891）。
-          width="sm"
-          helper={t("settings.model.seed.help")}
-          error={
-            showError && !isValidSeed(seed)
-              ? t("settings.model.seed.invalid")
-              : undefined
-          }
-          onValueChange={(next) =>
-            onChange(next.trim() === "" ? Number.NaN : Number(next))
-          }
-          inputClassName="tnum"
+        <SelectField
+          id={DEFAULT_MODEL_FIELD_IDS.default_judge_model_id}
+          label={t("settings.model.defaults.judge")}
+          value={enterprise.default_judge_model_id ?? ""}
+          options={judgeModelOptions(enterprise.models, enterprise.default_text_model_id)}
+          helper={t("settings.model.defaults.judgeHelp")}
+          width="lg"
+          error={errors.default_judge_model_id}
+          onValueChange={(value) => onChange("default_judge_model_id", value)}
         />
       </FormGrid>
     </section>
@@ -2061,7 +1986,8 @@ export function buildSectionSavePayload(
       draft.enterprise_ai.default_text_model_id;
     payload.enterprise_ai.default_vision_model_id =
       draft.enterprise_ai.default_vision_model_id;
-    payload.enterprise_ai.seed = draft.enterprise_ai.seed;
+    payload.enterprise_ai.default_judge_model_id =
+      draft.enterprise_ai.default_judge_model_id ?? "";
   } else {
     payload.generative_ai = { ...draft.generative_ai };
   }
@@ -2082,7 +2008,7 @@ function mergeSavedSectionIntoDraft(
         models: draft.enterprise_ai.models.map((model) => ({ ...model })),
         default_text_model_id: draft.enterprise_ai.default_text_model_id,
         default_vision_model_id: draft.enterprise_ai.default_vision_model_id,
-        seed: draft.enterprise_ai.seed,
+        default_judge_model_id: draft.enterprise_ai.default_judge_model_id,
       },
       generative_ai: { ...draft.generative_ai },
     };

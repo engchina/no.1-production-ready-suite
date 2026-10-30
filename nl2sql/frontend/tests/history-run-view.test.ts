@@ -17,10 +17,12 @@ import {
   historyExecutor,
   historyKind,
   historyKindDisplay,
+  historyListUsage,
   historyOwner,
   historyRequestUrl,
   historyRunStatus,
   historySqlGenerationHref,
+  historyUsageView,
   isHistoryListNarrowed,
   normalizeHistoryFilters,
 } from "../src/features/nl2sql/historyManagementState.ts";
@@ -242,4 +244,68 @@ test("停止の行は状態「停止」と、取り消した人と入口の「�
   // 停止でない行・記録の無い行は「取消」を出さない。
   assert.equal(view({ ...base, cancellation: { ...recorded, via: "screen" } }), null);
   assert.equal(view(cancelled(null)), null);
+});
+
+test("model usage: Enterprise AI は記録した数、Select AI は数を作らず未計測、記録の無い行は未計測（#3543）", () => {
+  const measured = historyUsageView({
+    usage: {
+      models: ["model-a"],
+      requests: 2,
+      input_tokens: 1200,
+      output_tokens: 80,
+      total_tokens: 1280,
+      measurement: "complete",
+      measured_requests: 2,
+      unmeasured_sources: [],
+    },
+  });
+  assert.deepEqual(measured, {
+    model: "model-a",
+    usage: { tokens: 1280, note: null },
+    modelCalls: "2 回（入力 1,200 / 出力 80 token）",
+    unmeasuredCalls: null,
+  });
+
+  const selectAi = historyUsageView({
+    usage: {
+      models: [],
+      requests: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      measurement: "unmeasured",
+      measured_requests: 0,
+      unmeasured_sources: ["select_ai"],
+    },
+  });
+  assert.deepEqual(selectAi.usage, { tokens: null, note: "未計測" });
+  assert.equal(selectAi.modelCalls, "未計測");
+  assert.equal(selectAi.unmeasuredCalls, "Select AI（データベースの中で呼ぶモデル）");
+
+  const mixed = historyUsageView({
+    usage: {
+      models: ["model-a"],
+      requests: 1,
+      input_tokens: 10,
+      output_tokens: 2,
+      total_tokens: 12,
+      measurement: "partial",
+      measured_requests: 1,
+      unmeasured_sources: ["select_ai_agent"],
+    },
+  });
+  assert.deepEqual(mixed.usage, { tokens: 12, note: "一部計測" });
+  assert.equal(mixed.modelCalls, "1 回（うち 1 回を計測。入力 10 / 出力 2 token）");
+  assert.equal(mixed.unmeasuredCalls, "Select AI Agent（データベースの中で呼ぶモデル）");
+
+  // この機能より前の行: 0 にしない。
+  assert.deepEqual(historyUsageView({ usage: null }).usage, { tokens: null, note: "未計測" });
+  assert.deepEqual(historyUsageView({}).usage, { tokens: null, note: "未計測" });
+
+  // 一覧の「token」の列は詳細と同じ規則。
+  assert.deepEqual(historyListUsage({ total_tokens: 1280, usage_measurement: "complete" }), { tokens: 1280, note: null });
+  assert.deepEqual(historyListUsage({ total_tokens: 12, usage_measurement: "partial" }), { tokens: 12, note: "一部計測" });
+  assert.deepEqual(historyListUsage({ total_tokens: 0, usage_measurement: "complete" }), { tokens: 0, note: null });
+  assert.deepEqual(historyListUsage({ total_tokens: null, usage_measurement: "unmeasured" }), { tokens: null, note: "未計測" });
+  assert.deepEqual(historyListUsage({}), { tokens: null, note: "未計測" });
 });

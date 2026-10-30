@@ -46,6 +46,8 @@ _PAGE_AND_SECTION_KEYS = (
     "page_label_end",
     "section_title",
     "section_path",
+    "context_header",
+    "context_header_enabled",
     "content_kind",
     "chunk_profile",
     "file_name",
@@ -68,6 +70,7 @@ _EVIDENCE_KEYS = (
     # 回答での使われ方（該当確認済み / 参考。#2040）と、親（まとまり）だけを参照した子の
     # 印（#2710）。
     "evidence_answer_use",
+    "evidence_claim_support",
     "evidence_parent_used",
     "evidence_role",
     "context_role",

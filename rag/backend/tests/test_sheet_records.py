@@ -649,9 +649,9 @@ def test_excel_with_a_two_row_header_cites_cells_and_header_rows() -> None:
         "A3:C3",
     )
     assert locator["table_cells"] == [
-        {"table_col": "A", "header_path": ["項目A"]},
-        {"table_col": "B", "header_path": ["区分甲", "値A"]},
-        {"table_col": "C", "header_path": ["区分甲", "値B"]},
+        {"table_col": "A", "header_path": ["項目A"], "bbox": None},
+        {"table_col": "B", "header_path": ["区分甲", "値A"], "bbox": None},
+        {"table_col": "C", "header_path": ["区分甲", "値B"], "bbox": None},
     ]
 
 
@@ -829,6 +829,7 @@ def test_answer_parent_of_sheet_rows_uses_the_table_part_location() -> None:
             "cell_range": "A8:F8",
             "chunk_group_id": "g1",
             "parent_text": "システムID: SYS-104\nシステムID: SYS-105",
+            "chunk_strategy": "small_to_big",
             "parent_row_start": 7,
             "parent_row_end": 8,
             "parent_cell_range": "A7:F8",

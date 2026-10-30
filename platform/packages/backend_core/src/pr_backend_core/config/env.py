@@ -33,6 +33,8 @@ PLATFORM_ENV_PREFIX = "PLATFORM_"
 # 共通 `.env` に置く Settings の属性。製品が持たない属性は無視される。
 PLATFORM_SETTING_FIELDS = frozenset(
     {
+        "environment",
+        "auth_mode",
         # trace（3 製品共通）
         "trace_enabled",
         "trace_sample_rate",
@@ -80,6 +82,7 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oci_enterprise_ai_models",
         "oci_enterprise_ai_default_text_model",
         "oci_enterprise_ai_default_vision_model",
+        "oci_enterprise_ai_default_judge_model",
         "oci_enterprise_ai_llm_path",
         "oci_enterprise_ai_vlm_path",
         "oci_enterprise_ai_vlm_input_mode",
@@ -89,8 +92,6 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oci_enterprise_ai_vlm_response_path",
         "oci_enterprise_ai_timeout_seconds",
         "oci_enterprise_ai_max_retries",
-        # LLM / VLM の呼び出しの seed（#1434。既定 42）
-        "oci_enterprise_ai_seed",
         "oci_genai_endpoint",
         "oci_genai_embedding_model",
         "oci_genai_embedding_dim",
@@ -110,7 +111,7 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oracle_adb_region",
         "oracle_tcp_connect_timeout_seconds",
         "oracle_db_test_timeout_seconds",
-        # 共通認証（構成管理者・認証ポリシー・ログインの Cookie 名。認証の有効 / 無効は製品ごと）。
+        # 共通認証（構成管理者・認証ポリシー・ログインの Cookie 名。環境と認証方式も共通）。
         # Cookie 名を 3 製品で共通にし、1 回のログインで全製品を使えるようにする（#1565）。
         "app_admin_login_user_id",
         "app_admin_login_user_password",

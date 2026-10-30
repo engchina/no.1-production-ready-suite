@@ -63,6 +63,10 @@ class _FakeCursor:
         self.rowcount = 0
         self.database.executed.append(upper)
 
+        if "EXECUTE IMMEDIATE 'DROP TABLE RAG_QUERY_HISTORY PURGE'" in upper:
+            self.database.objects.pop(("RAG_QUERY_HISTORY", "TABLE"), None)
+            self.database.objects.pop(("RAG_QUERY_HISTORY_PROFILE_IDX", "INDEX"), None)
+            return
         if upper.startswith("DECLARE"):
             # 列を無ければ足す migration（`ALTER TABLE <表> ADD (<列> ...)`）を fake で適用する。
             for table, columns in self.database.removed_columns.items():
@@ -544,7 +548,6 @@ def test_update_restores_columns_removed_by_retracted_migration() -> None:
     manager.initialize()
     database.removed_columns = {
         "RAG_DOCUMENTS": {"CLASSIFICATION"},
-        "RAG_QUERY_HISTORY": {"CLASSIFICATION_FILTER"},
     }
     database.migrations.pop(_RESTORE_CLASSIFICATION_MIGRATION)
 
@@ -558,13 +561,13 @@ def test_update_restores_columns_removed_by_retracted_migration() -> None:
 
     assert result["status"] == "ready"
     assert result["missing_columns"] == []
-    assert database.removed_columns == {"RAG_DOCUMENTS": set(), "RAG_QUERY_HISTORY": set()}
+    assert database.removed_columns == {"RAG_DOCUMENTS": set()}
 
 
 def test_managed_columns_cover_every_managed_table() -> None:
     assert set(MANAGED_COLUMNS) == set(MANAGED_TABLES)
     assert "CLASSIFICATION" in MANAGED_COLUMNS["RAG_DOCUMENTS"]
-    assert "CLASSIFICATION_FILTER" in MANAGED_COLUMNS["RAG_QUERY_HISTORY"]
+    assert "RAG_QUERY_HISTORY" not in MANAGED_COLUMNS
     # 表制約の行は列に数えない。
     assert not any(
         column in {"CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK"}
@@ -656,7 +659,7 @@ def test_update_retires_graph_claims_community_tables_with_approval() -> None:
     assert result["status"] == "ready"
     assert _RETIRE_GRAPH_CLAIMS_MIGRATION in database.migrations
     assert not any((name, "TABLE") in database.objects for name in _RETIRED_GRAPH_TABLES)
-    # 関係情報グラフが読む表は残す。
+    # 文書構造グラフが読む表は残す。
     for name in ("RAG_GRAPH_ENTITIES", "RAG_GRAPH_RELATIONSHIPS", "RAG_GRAPH_ENTITY_CHUNKS"):
         assert (name, "TABLE") in database.objects
 
@@ -686,6 +689,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         _RETIRE_GRAPH_CLAIMS_MIGRATION,
         "20261003_001_search_answer_profiles",
         "20261016_001_retire_evaluation_compare",
+        "20261029_001_retire_query_history",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。
@@ -1216,3 +1220,61 @@ def test_status_lists_every_managed_object_with_the_summary_counts() -> None:
         if item["object_type"] != "TABLE"
     )
     assert {item["object_type"] for item in objects} >= {"TABLE", "INDEX", "TEXT_PREFERENCE"}
+
+
+def test_language_release_fresh_schema_and_incremental_upgrade_share_complete_contract() -> None:
+    """新規作成と非破壊の更新の両方で、公開版・成果物の必須列を満たす。"""
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    fresh = manager.initialize()
+    assert fresh["status"] == "ready"
+    assert ("RAG_LANGUAGE_PACK_RELEASES", "TABLE") in database.objects
+    assert ("RAG_LANGUAGE_PACK_STATE", "TABLE") in database.objects
+    assert "LANGUAGE_PACK_RELEASE_ID" in MANAGED_COLUMNS["RAG_INGESTION_JOBS"]
+    assert {
+        "LANGUAGE_PACK_RELEASE_ID",
+        "LANGUAGE_PACK_INGEST_HASH",
+        "LANGUAGE_PACK_JOB_ID",
+        "LANGUAGE_PACK_BUILT_AT",
+    } <= set(MANAGED_COLUMNS["RAG_CHUNK_SETS"])
+    assert manager.initialize()["operation"] == "no_op"
+
+    for name in ("20261028_001_language_pack_releases", "20261028_002_language_pack_artifacts"):
+        database.migrations.pop(name)
+    database.removed_columns["RAG_INGESTION_JOBS"] = {"LANGUAGE_PACK_RELEASE_ID"}
+    database.removed_columns["RAG_CHUNK_SETS"] = {
+        "LANGUAGE_PACK_RELEASE_ID",
+        "LANGUAGE_PACK_INGEST_HASH",
+        "LANGUAGE_PACK_JOB_ID",
+        "LANGUAGE_PACK_BUILT_AT",
+    }
+    before = manager.status()
+    assert before["status"] == "outdated"
+    assert before["pending_destructive_migrations"] == []
+    start = len(database.executed)
+    upgraded = manager.initialize()
+    assert upgraded["status"] == "ready"
+    assert upgraded["missing_columns"] == []
+    assert not any(statement.startswith("DROP") for statement in database.executed[start:])
+
+
+def test_retired_query_history_requires_explicit_migration_and_keeps_chat_records() -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    name = "20261029_001_retire_query_history"
+    database.migrations.pop(name)
+    database.objects[("RAG_QUERY_HISTORY", "TABLE")] = datetime.now(UTC)
+    database.objects[("RAG_QUERY_HISTORY_PROFILE_IDX", "INDEX")] = datetime.now(UTC)
+    before = manager.status()
+    assert [item["name"] for item in before["pending_destructive_migrations"]] == [name]
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == DESTRUCTIVE_MIGRATIONS_CONFIRMATION_REQUIRED
+    assert ("RAG_QUERY_HISTORY", "TABLE") in database.objects
+    manager.initialize(allow_destructive=True)
+    assert ("RAG_QUERY_HISTORY", "TABLE") not in database.objects
+    assert ("RAG_QUERY_HISTORY_PROFILE_IDX", "INDEX") not in database.objects
+    for table in ("RAG_CONVERSATIONS", "RAG_MESSAGES", "RAG_ANSWER_RECORDS", "RAG_RUN_HISTORY"):
+        assert (table, "TABLE") in database.objects
+    assert manager.initialize()["status"] == "ready"

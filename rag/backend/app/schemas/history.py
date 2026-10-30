@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.observability.model_usage import RunModelUsage, UsageMeasurement
 from pydantic import BaseModel, Field
 
 from app.schemas.common import JsonValue
@@ -13,6 +14,9 @@ from app.schemas.search import RetrievedChunk, StorageFailure
 RunSurface = Literal["search", "chat"]
 RunStatus = Literal["success", "blocked", "error"]
 RunVerification = Literal["verified", "partial", "unverified"]
+ValidationExecution = Literal[
+    "disabled", "not_run", "error", "timed_out", "passed", "failed", "partial", "unknown"
+]
 
 
 class RunSummary(BaseModel):
@@ -32,6 +36,7 @@ class RunSummary(BaseModel):
     answer_outcome: str | None = None
     # 回答の検証（回答の監査で要求ごとに根拠で答えられたか）。回答を作らない実行は None。
     verification: RunVerification | None = None
+    validation_execution: ValidationExecution | None = None
     confidence: str | None = None
     needs_human_review: bool | None = None
     citation_count: int = 0
@@ -47,6 +52,11 @@ class RunSummary(BaseModel):
     # 実行した利用者（実行者）の表示名。見る人を問わず返す（#1954）。引けない利用者（削除済み
     # など）は空文字（画面は「削除済みのユーザー」と出す）。
     executor_display_name: str = ""
+    # モデルの利用量の合計（入力 + 出力の token。#3419・#3466）と計測の状態（complete / partial）。
+    # 利用量の記録の無い実行（この機能より前・trace の始まる前に失敗）はどちらも None（画面は
+    # 「未計測」。0 にしない）。LLM を呼ばなかった実行は 0 と complete。
+    total_tokens: int | None = None
+    usage_measurement: UsageMeasurement | None = None
 
 
 class RunFeedback(BaseModel):
@@ -97,3 +107,6 @@ class RunDetail(RunSummary):
     feedback: list[RunFeedback] = Field(default_factory=list)
     # RAG 検索の実行の条件（#3309）。チャットの実行と、この機能より前の記録は None。
     search_conditions: RunSearchConditions | None = None
+    # モデルの呼び出しの回数と利用量（#3419）。この機能より前の記録・trace の始まる前に失敗した
+    # 実行は None（画面は「未計測」）。LLM を呼ばなかった実行は requests=0 の実測。
+    usage: RunModelUsage | None = None

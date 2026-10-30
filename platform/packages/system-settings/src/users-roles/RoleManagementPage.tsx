@@ -665,7 +665,7 @@ export function RoleManagementPage<R extends SecurityRole = SecurityRole>({
               loading ? (
                 <ProcessingIndicator
                   active
-                  label={t("security.common.loading")}
+                  label={t("security.roles.loading")}
                   operationKey="security-roles-load"
                   placement="panel"
                   testId="security-roles-loading"

@@ -8,6 +8,7 @@ import pytest
 from app.api.routes import search_answer_profiles as search_answer_profiles_route
 from app.main import app
 from app.rag.search_answer_profile_config import (
+    PROFILE_GLOBAL_QUERY_FIELDS,
     SearchAnswerProfileConfig,
     parse_search_answer_profile_config,
 )
@@ -222,6 +223,36 @@ def test_create_and_get_search_answer_profile(fake_oracle: FakeSearchAnswerProfi
     get_resp = client.get(f"/api/search-answer-profiles/{data['id']}")
     assert get_resp.status_code == 200
     assert get_resp.json()["data"]["id"] == data["id"]
+
+
+def test_profile_api_does_not_accept_or_return_global_only_query_fields(
+    fake_oracle: FakeSearchAnswerProfileOracle,
+) -> None:
+    """全体設定だけの項目(PROFILE_GLOBAL_QUERY_FIELDS)は送られても保存・応答しない(#3523)。"""
+    resp = client.post(
+        "/api/search-answer-profiles",
+        json={
+            "name": "プロファイル A",
+            "description": "合成の設定の検証用",
+            "config": {
+                "knowledge_base_ids": ["kb-1"],
+                "query": {
+                    "max_anchors_per_document": 3,
+                    "graph_expansion_max_chunks": 3,
+                    "guide_step_max_queries": 7,
+                    "guide_step_deadline_seconds": 37.5,
+                },
+            },
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    get_resp = client.get(f"/api/search-answer-profiles/{data['id']}")
+    assert get_resp.status_code == 200
+    for query in (data["config"]["query"], get_resp.json()["data"]["config"]["query"]):
+        assert query["max_anchors_per_document"] == 3
+        assert not set(PROFILE_GLOBAL_QUERY_FIELDS) & set(query)
 
 
 def test_list_search_answer_profiles(fake_oracle: FakeSearchAnswerProfileOracle) -> None:

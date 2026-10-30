@@ -67,6 +67,7 @@ describe("UserManagementPage", () => {
     const html = render(<UserManagementPage api={userApi} canManage />);
     expect(html).toContain("ユーザー管理");
     expect(html).toContain('data-testid="security-users-loading"');
+    expect(html).toContain("ユーザーを読込中");
     expect(html).toContain("新規作成");
   });
 
@@ -81,6 +82,7 @@ describe("RoleManagementPage", () => {
     const html = render(<RoleManagementPage api={roleApi} canManage />);
     expect(html).toContain("ロール管理");
     expect(html).toContain('data-testid="security-roles-loading"');
+    expect(html).toContain("ロールを読込中");
     expect(html).toContain("権限管理で設定します");
     expect(html).not.toContain("機能権限");
   });

@@ -20,6 +20,20 @@ class DomainKeywordsUpdate(BaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=2000)
 
 
+class DomainKeywordImportRowData(BaseModel):
+    row: int
+    keyword: str
+
+
+class DomainKeywordImportPreviewData(BaseModel):
+    total: int
+    rows: list[DomainKeywordImportRowData]
+
+
+class DomainKeywordImportData(DomainKeywordsData):
+    inserted_count: int
+
+
 class DomainKeywordCandidateData(BaseModel):
     keyword: str
     score: float
@@ -116,7 +130,7 @@ class ApprovedFaqSuggestionsData(BaseModel):
 
 
 class RuntimeKnowledgeData(BaseModel):
-    """検索・回答プロファイルの用語・ルール(rag_poc runtime knowledge の標準形式)。"""
+    """検索・回答プロファイルの用語・同義語と回答ルール(rag_poc runtime knowledge の標準形式)。"""
 
     search_answer_profile_id: str
     terms: list[dict[str, JsonValue]] = Field(default_factory=list)
@@ -128,13 +142,21 @@ class RuntimeKnowledgeEditRequest(BaseModel):
 
     kind: Literal["terms", "rules"]
     selected: str | None = Field(default=None, max_length=160)
-    name: str = Field(default="", max_length=160, description="用語、またはルール ID")
+    name: str = Field(
+        default="",
+        max_length=160,
+        description="用語、またはルール ID（ルール追加時に省略すると自動採番）",
+    )
     title: str = Field(default="", max_length=160, description="ルール名(rules のみ)")
     labels: str = Field(
         default="", max_length=8000, description="別名 / 照合キーワード(改行・読点区切り)"
     )
     content: str = Field(default="", max_length=8000, description="説明 / ルール内容")
     source: str = Field(default="", max_length=800)
+    purpose: Literal["confirmation", "generation", "both"] | None = None
+    instruction_kind: Literal["presentation", "requirement", "verification"] | None = None
+    exclusive_group: str | None = Field(default=None, max_length=160)
+    priority: int | None = Field(default=None, ge=0, le=100, strict=True)
     enabled: bool = True
     delete: bool = False
 
@@ -144,27 +166,12 @@ class RuntimeKnowledgePreviewRequest(BaseModel):
 
 
 class RuntimeKnowledgePreviewData(BaseModel):
-    """照合テスト: 一致した用語・ルールと拡張後の検索文。"""
+    """照合テスト: 一致した用語・同義語と回答ルールと拡張後の検索文。"""
 
     expanded_question: str
     matched_terms: list[str] = Field(default_factory=list)
     matched_rules: list[str] = Field(default_factory=list)
-
-
-class QuerySuggestion(BaseModel):
-    """よく聞かれる質問の候補(rag_poc の QueryHistorySuggestion)。"""
-
-    question: str
-    count: int
-
-
-class QuerySuggestionsData(BaseModel):
-    search_answer_profile_id: str
-    enabled: bool
-    suggestions: list[QuerySuggestion] = Field(default_factory=list)
-
-
-# --- ルールの確認の質問(チャットの確認。#717)-------------------------------------------
+    conflicting_rules: list[str] = Field(default_factory=list)
 
 
 class ClarificationSection(BaseModel):
@@ -244,7 +251,8 @@ class RuleClarificationRequest(BaseModel):
 
 
 class ClarificationSuggestRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=2000)
+    query: str = Field(min_length=1, max_length=8000)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ClarificationSuggestionData(BaseModel):
@@ -257,6 +265,7 @@ class ClarificationSuggestionsData(BaseModel):
     """質問に出す確認(無ければ None)。1 つの質問で聞き返すのは 1 回だけ。"""
 
     suggestion: ClarificationSuggestionData | None = None
+    question_context_token: str | None = None
 
 
 class ClarificationAnswer(BaseModel):

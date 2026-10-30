@@ -20,13 +20,23 @@ def _spans():
     return _grounded_spans(QUESTION, context(record(0, ORIGINAL, "一覧画面", page=4, source="手順書 A.pdf")), (), None)
 
 
-def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evidence_id="E1"):
+def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evidence_id="E1", complete_guide=False):
     spans = _spans()
     generated = draft(item(evidence_id, PARAPHRASE + suffix, "対象を決めて提出してください。"), summary="操作の説明（E1）")
     response = audit((0, support, "matched", ""), requests=[("Q1", "addressed", "")])
     if mode == "standard":
         response.pop("unused_evidence_ids")
     response["reviews"][0]["support_quote"] = quote
+    if complete_guide:
+        response["guide_requirement_reviews"] = [
+            {
+                "requirement_id": "step-a:0",
+                "answer_state": "explained",
+                "item_indexes": [0],
+                "answer_quote": PARAPHRASE,
+                "reason": "本文で操作を説明",
+            }
+        ]
     model = FakeModel([generated], [response])
     result = grounded.run_round(
         QUESTION,
@@ -39,27 +49,38 @@ def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evi
         parse_images=model,
         audit_mode=mode,
         guide_steps=[("step-a", "対象を送信", [spans[0]["source_id"]])],
+        guide_step_contracts=[{"step_id": "step-a", "requirements": [{"id": "step-a:0", "kind": "completion", "text": "対象を送信"}]}]
+        if complete_guide
+        else (),
     )
     return result, model, spans
 
 
 @pytest.mark.parametrize("mode", ["standard", "detailed"])
-def test_audited_original_recovers_paraphrase_and_guide_step(mode):
-    result, model, spans = _run(mode=mode, suffix="（E1）", evidence_id="")
+def test_uncalibrated_original_does_not_replace_the_actual_quote_or_complete_the_guide(mode):
+    result, model, spans = _run(mode=mode, suffix="（E1）", evidence_id="", complete_guide=True)
     entry = next(e for e in result.checked if e.draft_index == 0)
-    assert entry.confirmed and entry.quote_match == "audited_paraphrase"
-    assert entry.item.quote == ORIGINAL
+    assert not entry.confirmed and entry.quote_match != "audited_paraphrase"
+    assert entry.item.quote == "対象を決めて提出してください。"
     assert entry.item.text == PARAPHRASE
-    assert result.guide_steps[0]["status"] == "explained"
-    assert grounded.detach_unsourced(result.checked) == 0
+    # 引用原文の不一致という基本検査は残り、語義の完了判定は未知のまま。
+    assert result.guide_steps[0]["status"] == "reference_only"
+    assert result.guide_steps[0]["requirements"][0]["status"] == "unknown"
+    assert any(mark["code"] == "quote_unmatched" for mark in entry.marks)
+    assert grounded.detach_unsourced(result.checked) == 1
     inputs = json.loads(model.prompts[-1][1])
     assert inputs["items"][0]["quote_unmatched"] is True
-    assert "その item の evidence で text の全主張を照合する" in grounded.audit_system_prompt(detailed=mode == "detailed")
-    assert result.timing["procedure_quotes"]["paraphrase_verified"] == 1
-    assert result.dropped[0]["ignored"] is True
+    assert "当該 item が実際に引用した citations の原文集合と照合する" in grounded.audit_system_prompt(detailed=mode == "detailed")
+    assert result.timing["procedure_quotes"]["paraphrase_verified"] == 0
+    assert not result.dropped[0].get("ignored", False)
+    observed = result.timing["semantic_audit_observation"]["audit"]
+    assert observed["reviews"][0]["support_quote"] == ORIGINAL
+    assert observed["guide_requirement_reviews"][0]["answer_state"] == "explained"
+    assert result.checked[0].review_assessment["effective_support"] == "unknown"
     assert "E1" not in result.summary
     assert len(model.prompts) == 2
-    assert entry.span["evidence_id"] == spans[0]["evidence_id"]
+    assert entry.span is None
+    assert result.dropped[0]["evidence_id"] == spans[0]["label"]
 
 
 @pytest.mark.parametrize(
@@ -119,7 +140,7 @@ def test_mixed_bracketed_codes_keep_real_codes_and_resolve_only_internal_labels(
 
 
 @pytest.mark.parametrize("mode", ["standard", "detailed"])
-def test_recovered_claims_keep_a_later_guide_requirements_reference(mode):
+def test_observed_recovery_keeps_a_later_guide_reference_only_in_diagnostics(mode):
     save = "保存画面で保存ボタンを押します。"
     spans = _grounded_spans(
         QUESTION,
@@ -155,11 +176,15 @@ def test_recovered_claims_keep_a_later_guide_requirements_reference(mode):
         guide_step_contracts=[{"step_id": "save", "requirements": [{"id": "save:0", "text": "保存する", "kind": "completion"}]}],
     )
     assert len(result.checked) == 3
-    assert result.audit.guide_requirement_reviews[0].item_indexes == [2]
-    assert result.guide_steps[0]["status"] == "explained"
+    assert result.audit.guide_requirement_reviews == []
+    raw = result.timing["semantic_audit_observation"]["audit"]
+    assert raw["guide_requirement_reviews"][0]["item_indexes"] == [2]
+    assert raw["guide_requirement_reviews"][0]["answer_quote"] == save
+    assert result.checked[2].item.text == save and result.checked[2].published
+    assert result.guide_steps[0]["status"] == "unknown"
 
 
-def test_a_system_added_cause_gap_does_not_capture_a_notice_reference():
+def test_unverified_cause_does_not_add_a_missing_material_gap_or_reindex_the_notice():
     question = "送信できない原因を教えてください"
     notice = "原因の確認は窓口へお問い合わせください。"
     response = audit((0, "supported", "matched", ""))
@@ -183,12 +208,16 @@ def test_a_system_added_cause_gap_does_not_capture_a_notice_reference():
         ],
         guide_notices=[notice],
     )
-    assert len(result.checked) == 2 and result.checked[1].item.kind == "gap"
-    assert result.audit.guide_requirement_reviews[0].item_indexes == [2]
-    assert result.guide_steps[0]["status"] == "explained"
+    assert len(result.checked) == 1 and result.checked[0].item.kind != "gap"
+    assert result.checked[0].item.text == ORIGINAL
+    assert result.audit.guide_requirement_reviews == []
+    raw = result.timing["semantic_audit_observation"]["audit"]
+    assert raw["guide_requirement_reviews"][0]["item_indexes"] == [1]
+    assert raw["guide_requirement_reviews"][0]["answer_quote"] == notice
+    assert result.guide_steps[0]["status"] == "unknown"
 
 
-def test_recovered_passage_is_rendered_with_a_source_and_no_internal_label():
+def test_observed_recovery_keeps_body_without_promoting_an_invalid_quote_to_a_source():
     _, model, _ = _run(mode="detailed", suffix="（E1）", evidence_id="")
 
     def unused(*args, **kwargs):
@@ -203,10 +232,10 @@ def test_recovered_passage_is_rendered_with_a_source_and_no_internal_label():
         ).response
     assert PARAPHRASE in result.answer_text
     assert "E1" not in result.answer_text
-    assert "手順書 A.pdf" in result.answer_text
-    assert result.generation_trace["citation_lines"]
-    assert result.generation_trace["procedure_quotes"]["paraphrase_verified"] == 1
-    assert result.envelope["passage_marks"] == []
+    assert result.generation_trace["citation_lines"] == []
+    assert result.generation_trace["procedure_quotes"]["paraphrase_verified"] == 0
+    assert any(reason["code"] == "quote_unmatched" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])
+    assert result.generation_trace["semantic_audit_observation"]["audit"]["reviews"][0]["support_quote"] == ORIGINAL
 
 
 def test_recovery_keeps_other_marks_and_rejects_duplicate_reviews():

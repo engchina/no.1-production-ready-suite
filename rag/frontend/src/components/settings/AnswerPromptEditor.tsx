@@ -11,7 +11,6 @@ import {
   Skeleton,
   StatusBadge,
   TextareaField,
-  useConfirm,
   TimedLoadingState,
 } from "@production-ready/ui";
 import { History, RotateCcw, Save } from "lucide-react";
@@ -38,8 +37,8 @@ export function AnswerPromptCard({ promptKey }: { promptKey: AnswerPromptKey }) 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t(`settings.answerPrompts.${promptKey}.title`)}</CardTitle>
-        <CardDescription>{t(`settings.answerPrompts.${promptKey}.description`)}</CardDescription>
+        <CardTitle>{t(`settings.answerPrompts.${promptKey}.title` as I18nKey)}</CardTitle>
+        <CardDescription>{t(`settings.answerPrompts.${promptKey}.description` as I18nKey)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <AnswerPromptPanel promptKey={promptKey} />
@@ -52,7 +51,7 @@ export function AnswerPromptCard({ promptKey }: { promptKey: AnswerPromptKey }) 
  * カードの枠を持たないプロンプトの編集欄。ほかの設定の節の中に置くときに使う
  * （文書解析の「解析後の処理」の Vision の中の読み取りプロンプト。#528）。
  */
-export function AnswerPromptPanel({ promptKey }: { promptKey: AnswerPromptKey }) {
+export function AnswerPromptPanel({ promptKey, fieldLabel }: { promptKey: AnswerPromptKey; fieldLabel?: string }) {
   const query = useAnswerPrompts();
   const prompt = query.data?.prompts.find((item) => item.key === promptKey);
   if (query.isPending) {
@@ -75,14 +74,13 @@ export function AnswerPromptPanel({ promptKey }: { promptKey: AnswerPromptKey })
   }
   return (
     <div className="space-y-4">
-      <AnswerPromptEditor prompt={prompt} />
+      <AnswerPromptEditor prompt={prompt} fieldLabel={fieldLabel} />
     </div>
   );
 }
 
-function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
+function AnswerPromptEditor({ prompt, fieldLabel: suppliedLabel }: { prompt: AnswerPromptView; fieldLabel?: string }) {
   const save = useSaveAnswerPrompt();
-  const confirm = useConfirm();
   const [content, setContent] = useState(prompt.content);
   // 編集欄が基にした保存値。保存値が変わったレンダーで、未編集なら編集欄を保存値へ揃える。
   // 編集中の内容は背景の再取得で上書きしない(UX 契約 workspace-state。#276)。
@@ -91,15 +89,15 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
     setBaseContent(prompt.content);
     if (content === baseContent) setContent(prompt.content);
   }
-  const dirty = content !== prompt.content;
+  const [restoreDefault, setRestoreDefault] = useState(false);
+  const dirty = content !== prompt.content || (restoreDefault && prompt.customized);
   // 保存を押した後だけ欄のエラーを出す（直すと消える）。
   const [showError, setShowError] = useState(false);
-  const fieldLabel = t(`settings.answerPrompts.${prompt.key}.field`);
-  const error = answerPromptError(content, fieldLabel, prompt.required_placeholders);
+  const fieldLabel = suppliedLabel ?? t(`settings.answerPrompts.${prompt.key}.field` as I18nKey);
+  const error = answerPromptError(content, fieldLabel, prompt.required_placeholders, prompt.required_tokens);
   // 保存中は離脱を止める。
   useLeaveGuard(dirty, save.isPending);
   const inputId = `answer-prompt-${prompt.key}`;
-  const resetting = save.isPending && save.variables?.content === null;
 
   function submit() {
     if (save.isPending) return;
@@ -107,9 +105,12 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
     setShowError(true);
     if (focusFirstInvalidField([[inputId, error]])) return;
     save.mutate(
-      { key: prompt.key, content },
+      { key: prompt.key, content: restoreDefault ? null : content },
       // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
-      { onSuccess: () => toast.success(t("settings.answerPrompts.saved")) }
+      { onSuccess: () => {
+          setRestoreDefault(false);
+          toast.success(t("settings.answerPrompts.saved"));
+        } }
     );
   }
 
@@ -117,28 +118,14 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
     save.reset();
     setShowError(false);
     setContent(prompt.content);
+    setRestoreDefault(false);
   }
 
-  async function reset() {
-    const confirmed = await confirm({
-      title: t("settings.answerPrompts.resetTitle"),
-      description: t("settings.answerPrompts.resetDescription"),
-      confirmLabel: t("settings.answerPrompts.reset"),
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    save.mutate(
-      { key: prompt.key, content: null },
-      {
-        // 既定に戻すときは編集中の内容も捨て、既定の内容を編集欄へ入れる。
-        onSuccess: (data) => {
-          const restored = data.prompts.find((item) => item.key === prompt.key);
-          if (restored) setContent(restored.content);
-          setShowError(false);
-          toast.success(t("settings.answerPrompts.resetDone"));
-        },
-      }
-    );
+  function reset() {
+    save.reset();
+    setShowError(false);
+    setContent(prompt.default_content);
+    setRestoreDefault(true);
   }
 
   return (
@@ -151,8 +138,8 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
           width="full"
           label={fieldLabel}
           required
-          helper={prompt.required_placeholders.length ? t("settings.answerPrompts.placeholders", {
-            names: prompt.required_placeholders.map((name) => `{{${name}}}`).join("、"),
+          helper={prompt.required_placeholders.length || prompt.required_tokens?.length ? t("settings.answerPrompts.placeholders", {
+            names: [...prompt.required_placeholders.map((name) => `{{${name}}}`), ...(prompt.required_tokens ?? [])].join("、"),
           }) : t("settings.answerPrompts.noPlaceholders")}
           error={showError ? (error ?? undefined) : undefined}
           value={content}
@@ -164,6 +151,7 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
           onChange={(event) => {
             save.reset();
             setContent(event.target.value);
+            if (event.target.value !== prompt.default_content) setRestoreDefault(false);
           }}
         />
       </FormGrid>
@@ -174,9 +162,8 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
             id: "save",
             label: t("settings.answerPrompts.save"),
             icon: Save,
-            loading: save.isPending && !resetting,
-            // 「既定に戻す」の処理中は押せないだけにする（スピナーは押した側だけ。#819）。
-            disabled: !dirty || resetting,
+            loading: save.isPending,
+            disabled: !dirty || save.isPending,
             onClick: submit,
           },
         ]}
@@ -189,12 +176,11 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
             onClick: discard,
           },
           {
-            id: "reset",
+            id: "restore-default",
             label: t("settings.answerPrompts.reset"),
             icon: History,
-            loading: resetting,
-            disabled: !prompt.customized || (save.isPending && !resetting),
-            onClick: () => void reset(),
+            disabled: save.isPending || (content === prompt.default_content && (!prompt.customized || restoreDefault)),
+            onClick: reset,
           },
         ]}
         status={
@@ -206,19 +192,14 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
               }
             />
           ) : dirty ? (
-            <FormStatus tone="warning" message={t("settings.answerPrompts.unsaved")} />
+            <FormStatus tone="warning" message={t(restoreDefault ? "settings.answerPrompts.resetPending" : "settings.answerPrompts.unsaved")} />
           ) : (
-            // 保存値が既定値か変更済みか（#584）。
-            <StatusBadge
-              variant={prompt.customized ? "info" : "neutral"}
-              label={
-                prompt.customized
-                  ? t("settings.answerPrompts.customized", {
-                      value: prompt.updated_at ? formatDateTime(prompt.updated_at) : "—",
-                    })
-                  : t("settings.answerPrompts.default")
-              }
-            />
+            prompt.customized ? <StatusBadge
+              variant="info"
+              label={t("settings.answerPrompts.customized", {
+                value: prompt.updated_at ? formatDateTime(prompt.updated_at) : "—",
+              })}
+            /> : null
           )
         }
       />
@@ -230,8 +211,8 @@ function AnswerPromptEditor({ prompt }: { prompt: AnswerPromptView }) {
 export function FeaturePromptDisclosure({ promptKey }: { promptKey: AnswerPromptKey }) {
   return (
     <Disclosure
-      summary={t(`settings.answerPrompts.${promptKey}.title`)}
-      description={t(`settings.answerPrompts.${promptKey}.description`)}
+      summary={t(`settings.answerPrompts.${promptKey}.title` as I18nKey)}
+      description={t(`settings.answerPrompts.${promptKey}.description` as I18nKey)}
       surface="sunken"
     >
       <AnswerPromptPanel promptKey={promptKey} />
@@ -241,15 +222,20 @@ export function FeaturePromptDisclosure({ promptKey }: { promptKey: AnswerPrompt
 }
 
 
-/** 画像の読み取りに必ず適用する共通規則は、テンプレートと同じ場所で確認できる。 */
+/** 画像の編集可能な指示と、固定の出力契約を同じ場所で確認する。 */
 function VisionPromptRules() {
   const query = useAnswerPrompts();
   const parts = query.data?.stages.find((stage) => stage.id === "picture_description")?.prompts.filter((part) => part.id !== "template") ?? [];
   if (!parts.length) return null;
   return (
-    <Disclosure summary={t("settings.answerPrompts.fixedRules")} surface="sunken" contentClassName="space-y-3">
+    <Disclosure summary={t("settings.answerPrompts.fixedRules")} surface="sunken" contentClassName="space-y-3" data-testid="vision-prompt-parts">
+      <p className="text-sm text-fg-muted">{t("settings.answerPrompts.visionInstructions.description")}</p>
       {parts.map((part) => (
-        <TextareaField key={part.id} id={`picture-prompt-rule-${part.id}`} label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)} value={part.content} readOnly monospace rows={12} />
+        part.prompt_key ? <AnswerPromptPanel
+          key={part.id}
+          promptKey={part.prompt_key}
+          fieldLabel={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+        /> : <TextareaField key={part.id} id={`picture-prompt-rule-${part.id}`} label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)} value={part.content} readOnly monospace rows={12} />
       ))}
     </Disclosure>
   );

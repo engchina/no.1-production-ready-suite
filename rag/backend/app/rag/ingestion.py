@@ -27,6 +27,7 @@ from pr_backend_core.bounded_calls import (
     BoundedCallFailed,
 )
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.language import LANGUAGE_PACK_HASH_KEY, current_pack
@@ -130,7 +131,6 @@ from app.rag.ingestion_prompts import (
     FIELD_EXTRACTION_PROMPT,
     HEADING_LEVEL_PROMPT,
     NAVIGATION_SUMMARY_PROMPT,
-    RAPTOR_SUMMARY_PROMPT,
     RAPTOR_SUMMARY_SYSTEM_PROMPT,
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
@@ -1204,16 +1204,19 @@ class IngestionPipeline:
 
         return await self._saved_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
 
-    async def _saved_prompt(self, key: str, fallback: str | None = None) -> str | None:
-        """各段の保存済み指示を読む。未編集・読込失敗は既定を使う。"""
+    async def _saved_prompt_snapshot(self) -> dict[str, str]:
+        """保存済み指示を一度に読み、同じ図の処理で新旧の設定を混ぜない。"""
         if not hasattr(self._oracle, "answer_prompt_overrides"):
-            return fallback
+            return {}
         try:
-            overrides = await self._oracle.answer_prompt_overrides()
+            return await self._oracle.answer_prompt_overrides()
         except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で解析を続ける。
             logger.warning("ingestion prompt load failed", exc_info=True)
-            return fallback
-        return overrides.get(key, fallback)
+            return {}
+
+    async def _saved_prompt(self, key: str, fallback: str | None = None) -> str | None:
+        """各段の保存済み指示を読む。未編集・読込失敗は既定を使う。"""
+        return (await self._saved_prompt_snapshot()).get(key, fallback)
 
     async def _stage_prompt(self, key: str, fallback: str) -> str:
         return await self._saved_prompt(key, fallback) or fallback
@@ -2689,7 +2692,9 @@ class IngestionPipeline:
 
         async def once(_: Attempt) -> str:
             with sdk_retries_disabled():
-                return await self._vlm.generate(
+                return await async_call_with_model_purpose(
+                    "document.infer_headings",
+                    self._vlm.generate,
                     prompt,
                     plan.payload,
                     response_schema=HEADING_LEVELS_RESPONSE_SCHEMA,
@@ -2773,7 +2778,9 @@ class IngestionPipeline:
 
             async def once(_: Attempt) -> list[FieldValueCandidate]:
                 with sdk_retries_disabled():
-                    raw = await self._vlm.generate(
+                    raw = await async_call_with_model_purpose(
+                        "document.extract",
+                        self._vlm.generate,
                         prompt,
                         unit.text,
                         response_schema=FIELD_EXTRACTION_RESPONSE_SCHEMA,
@@ -2903,14 +2910,20 @@ class IngestionPipeline:
             return extraction
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
         from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
+        from rag_engine.resources.runtime import bind_prompt_overrides
 
         from app.clients.oci_enterprise_ai import config_from_settings
         from app.rag.answer_prompts import default_prompt
 
+        saved = await self._saved_prompt_snapshot()
+        vision_overrides = {
+            key: value for key, value in saved.items() if key.startswith("picture_description.")
+        }
         job = _VISION_JOB.get()
-        override = await self._image_retrieval_prompt()
+        override = saved.get(IMAGE_RETRIEVAL_PROMPT_KEY)
         template = refine_image_retrieval_prompt(
-            override or default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
+            override or default_prompt(IMAGE_RETRIEVAL_PROMPT_KEY),
+            rules=vision_overrides.get("picture_description.rules"),
         ).strip()
         loop = asyncio.get_running_loop()
         # 図の読み取りは既定の Vision モデルとその接続で行う(#533)。
@@ -2947,7 +2960,7 @@ class IngestionPipeline:
             if job is not None
             else ingestion_ai_calls(self._settings, "vision")
         )
-        with caller_scope as caller:
+        with bind_prompt_overrides(vision_overrides), caller_scope as caller:
             describer = EnterpriseAiPictureDescriber(
                 self._vlm,
                 loop,
@@ -3253,7 +3266,9 @@ class IngestionPipeline:
                     else text[: max(200, len(text) >> attempt.adaptation)]
                 )
                 with sdk_retries_disabled():
-                    return await self._vlm.generate(prompt, source)
+                    return await async_call_with_model_purpose(
+                        "document.summarize", self._vlm.generate, prompt, source
+                    )
 
             try:
                 # 章節の要約は上限つきの並行で呼ぶ(#2002。rag_navigation_summary_concurrency)。
@@ -3674,7 +3689,6 @@ class IngestionPipeline:
             return chunks
         await _raise_if_cancelled(cancel_checker)
 
-        prompt = await self._stage_prompt("raptor_summary", RAPTOR_SUMMARY_PROMPT)
         system_prompt = await self._stage_prompt(
             "raptor_summary_system", RAPTOR_SUMMARY_SYSTEM_PROMPT
         )
@@ -3687,7 +3701,13 @@ class IngestionPipeline:
                 else text[: max(200, len(text) >> attempt.adaptation)]
             )
             with sdk_retries_disabled():
-                return await self._vlm.generate(prompt, source, system_prompt=system_prompt)
+                return await async_call_with_model_purpose(
+                    "document.summarize",
+                    self._vlm.generate,
+                    "",
+                    source,
+                    system_prompt=system_prompt,
+                )
 
         try:
             with ingestion_ai_calls(self._settings, "raptor_summary") as caller:
@@ -3768,8 +3788,8 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "関係情報の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "関係情報の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
+                "文書構造索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "文書構造索引の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
             ) from exc
 
     async def _save_embeddings_for_chunk_set(
@@ -3818,8 +3838,8 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "関係情報の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
-                "関係情報の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
+                "文書構造索引の構築に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "文書構造索引の構築の設定、抽出結果、データベース保存先を確認してから再実行してください。"
             ) from exc
 
     async def _save_entity_index_if_enabled(
@@ -3831,7 +3851,7 @@ class IngestionPipeline:
         *,
         chunk_set_id: str | None,
     ) -> None:
-        """実体の抽出が有効なとき(既定。#1388)、実体と「実体と chunk の関連」を保存する(#1362)。
+        """実体・別名索引の構築が有効なとき、実体と chunk の関連を保存する。
 
         文書レシピで無効にした文書は何もしない(SQL も実行しない)。実体は chunk_set ごとに
         置き換える。
@@ -3853,7 +3873,7 @@ class IngestionPipeline:
                 extra={"document_id": document_id, "error_type": type(exc).__name__},
             )
             raise IngestionUserError(
-                "実体の抽出の保存に失敗しました。別経路には切り替えずに取込を停止しました。"
+                "実体・別名索引の保存に失敗しました。別経路には切り替えずに取込を停止しました。"
                 "システムテーブル(実体の層の表)が作成済みか、データベース保存先を確認してから"
                 "再実行してください。"
             ) from exc
@@ -4380,6 +4400,7 @@ def _chunks_with_context_headers(
     contextualized: list[Chunk] = []
     for chunk in chunks:
         metadata = dict(chunk.metadata)
+        metadata["context_header_enabled"] = enabled
         section_path = str(metadata.get("section_path") or "").strip()
         header = " > ".join(part for part in (document_title.strip(), section_path) if part)
         if enabled and header:
@@ -4999,7 +5020,7 @@ def _entity_index_result_attributes(index: EntityIndex) -> Mapping[str, object]:
 
 
 def _graph_index_result_attributes(graph_index: GraphIndex) -> Mapping[str, object]:
-    """関係情報の構築結果から件数だけを trace attribute にする。"""
+    """文書構造索引の構築結果から件数だけを trace attribute にする。"""
     return {
         "graph_entity_count": len(graph_index.entities),
         "graph_relationship_count": len(graph_index.relationships),

@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.generation.grounded import ASSUMPTION_SYSTEM_PROMPT
 from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_context
 from rag_engine.models.llm import GroundedDraft
 
@@ -14,6 +16,7 @@ from app.rag.answer_assumptions import with_answer_assumptions
 from app.rag.answer_engine import AnswerEngine
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
 from app.schemas.search import SearchRequest
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.schemas.support_guide import SupportGuideContent
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
@@ -87,7 +90,14 @@ def test_answered_conditions_are_not_marked_unknown(
     question: str, conditions: dict[str, str]
 ) -> None:
     result = with_answer_assumptions(
-        PAYLOAD, policy="assume", question=question, conditions=conditions, guide={}
+        PAYLOAD,
+        policy="assume",
+        question=question,
+        conditions=conditions,
+        guide={},
+        confirmed_answers=(ClarificationAnswer(rule_id="r1", option_ids=["a"]),)
+        if not conditions
+        else (),
     )
     assert result["unconfirmed_conditions"] == []
 
@@ -165,9 +175,9 @@ async def test_final_answer_generation_receives_assumptions(
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         output = _fake_llm(system, prompt, settings, schema, **options)
-        if schema is GroundedDraft:
+        if schema in (GroundedDraft, generation_draft_wire_model()):
             prompts.append(system)
-            assert ("## 回答の前提" in system) is (policy == "assume")
+            assert system.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume")
             if policy == "assume":
                 assert str(PENDING["question"]).replace("？", "?") in prompt
                 assert "対象 A" in prompt and "対象 B" in prompt
@@ -183,7 +193,9 @@ async def test_final_answer_generation_receives_assumptions(
     ).run(SearchRequest(query=QUESTION))
     assert prompts
     assert ("前提: 設定の対象は未確定です。" in outcome.answer) is (policy == "assume")
-    assert all(("## 回答の前提" in prompt) is (policy == "assume") for prompt in prompts)
+    assert all(
+        prompt.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume") for prompt in prompts
+    )
 
 
 @pytest.mark.parametrize("answered", [False, True])

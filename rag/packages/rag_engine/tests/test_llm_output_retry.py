@@ -117,6 +117,30 @@ class OutputRetryRecordTest(unittest.TestCase):
             oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
         self.assertEqual(len(client.budgets), 2)
 
+    def test_rejected_corruption_names_the_fields_but_not_the_text(self):
+        # 退けた出力の原文は残らないので、どの欄に置換文字があったかを例外と log に残す（#3849）。本文は残さない。
+        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="合成の説明�"), usage=USAGE)
+        client = _Client([corrupted, corrupted])
+        settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+        with (
+            mock.patch.object(oci, "_openai_client_for_provider", return_value=client),
+            self.assertLogs(oci.__name__, level="WARNING") as logs,
+            self.assertRaises(oci.InvalidStructuredOutput) as raised,
+        ):
+            oci._parse_text_with_retry("system", "prompt", settings, TextOutput, PROVIDER)
+        self.assertIn("欄: text", str(raised.exception))
+        self.assertNotIn("合成の説明", str(raised.exception))
+        rejected = [record for record in logs.records if getattr(record, "event", "") == "llm_output_rejected"]
+        self.assertEqual(len(rejected), 2)
+        self.assertEqual(rejected[0].llm_rejected_paths, ["text"])
+        self.assertEqual(rejected[0].llm_rejected_reason, "replacement_character")
+        self.assertNotIn("合成の説明", rejected[0].getMessage())
+
+    def test_replacement_char_paths_point_into_nested_lists(self):
+        value = {"request_coverage": [{"evidence_scope": [{"target": "a"}, {"target": "b�"}]}], "items": [{"text": "�"}]}
+        self.assertEqual(oci.replacement_char_paths(value), ["request_coverage[0].evidence_scope[1].target", "items[0].text"])
+        self.assertEqual(oci.replacement_char_paths({"xs": ["�"] * 20}, limit=2), ["xs[0]", "xs[1]"])
+
     def test_original_replacement_character_is_preserved(self):
         corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="原文\ufffd"), usage=USAGE)
         client = _Client([corrupted])

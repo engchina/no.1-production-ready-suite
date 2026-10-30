@@ -384,12 +384,12 @@ test("アップロードだけを許可された利用者には、設定とナ�
   await expect(page.getByRole("link", { name: "ナレッジベース管理" })).toHaveCount(0);
 });
 
-test("管理者には保存先設定とナレッジベース管理への導線を出す", async ({ page }) => {
+test("管理者にも保存先設定を出さず、ナレッジベース管理への導線を出す", { tag: "@responsive" }, async ({ page }) => {
   await mockLocalAuth(page);
   await mockUploadPage(page, { knowledgeBaseCount: 0 });
 
   await page.goto("/upload");
-  await expect(page.getByRole("link", { name: "保存先設定" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "保存先設定" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "ナレッジベース管理" })).toBeVisible();
 });
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record
+from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, record
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -19,7 +19,7 @@ from rag_engine.evaluation.answer_validation import (
 )
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.retrieval.context_builder import ContextParentEvidence
-from rag_engine.retrieval.request_coverage import CoverageBudget, assess_targets, coverage_targets, run_targeted_retrievals
+from rag_engine.retrieval.request_coverage import CoverageBudget, coverage_targets, request_rows, run_targeted_retrievals
 
 EXAMPLES = Path(__file__).with_name("fixtures") / "answer_accuracy"
 CASES = json.loads((EXAMPLES / "cases.json").read_text())
@@ -43,6 +43,10 @@ def test_original_question_state_is_checked_without_a_clarification_answer(quest
                             "constraints": "対象は処理 A",
                             "recommendation": "処理 B の確定後の訂正と具体値の設定",
                             "fit": "conflicts",
+                            "constraint_scope": "content",
+                            "passage_mode": "execution",
+                            "constraint_quote": payload["question"],
+                            "passage_quote": passage["text"],
                         }
                     ]
                 }
@@ -88,8 +92,9 @@ def test_context_is_required_before_coverage_can_skip_additional_retrieval():
         return re.findall("対象選択|設定|入力|方法|開いて", text)
 
     targets = coverage_targets(case["question"], tokenize)
-    rows = assess_targets(targets, [("initial", case["initial_evidence"])])
-    assert rows[0]["status"] != "supported"
+    rows = request_rows(targets)
+    assert rows[0]["status"] == "unassessed"
+    rows[0]["answer_status"] = "missing"
     calls = []
 
     def retrieve(text, queries):
@@ -106,17 +111,17 @@ def test_context_is_required_before_coverage_can_skip_additional_retrieval():
         budget=CoverageBudget(),
         retrieve=retrieve,
         tokenize=tokenize,
-        searched_queries=(case["question"],),
+        searched_queries=("初回の検索文",),
     )
     assert calls and results[0].parents
     assert stop == ""
-    after = assess_targets(targets, [("additional", case["additional_evidence"])])
-    assert after[0]["status"] == "supported"
+    after = request_rows(targets)
+    assert after[0]["status"] == "unassessed"
 
 
 @pytest.mark.parametrize("mode", ["none", "detailed"])
 @pytest.mark.parametrize("summary_key", ["wrong_summary", "missing_qualifier", "reversed_target", "correct_summary"])
-def test_summary_preserves_the_deletion_target_from_the_same_file(summary_key, mode):
+def test_summary_observation_does_not_rewrite_the_generated_conclusion(summary_key, mode):
     case = CASES["summary"]
     assert case["evidence"] in (EXAMPLES / "operations.txt").read_text()
     with (EXAMPLES / "rows.csv").open() as stream:
@@ -126,7 +131,7 @@ def test_summary_preserves_the_deletion_target_from_the_same_file(summary_key, m
     evidence_id = ids(ctx, case["question"])[case["evidence"]]
     model = FakeModel(
         [draft(item(evidence_id, case["evidence"], case["evidence"]), summary=case[summary_key])],
-        [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])],
+        [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")], summary_supported=summary_key == "correct_summary")],
     )
 
     def unused(*args, **kwargs):
@@ -139,8 +144,13 @@ def test_summary_preserves_the_deletion_target_from_the_same_file(summary_key, m
             replace(get_settings(), answer_audit_mode=mode),
             image_prompt_mode="text_only",
         ).response
-    if summary_key != "correct_summary":
-        assert not response.answer_text.startswith(case[summary_key])
+    assert response.answer_text.startswith(case[summary_key])
+    assert response.generation_trace["finalization"]["summary"]["status"] == ("unverified" if mode == "none" else "kept")
+    if mode == "none":
+        assert response.generation_trace["rounds"][0]["review_execution"] == "not_run"
+        assert len([name for name, _ in model.prompts if name == "GroundedAudit"]) == 0
     else:
-        assert response.answer_text.startswith(case["correct_summary"])
+        assert observed_audit(response)["summary_supported"] is (summary_key == "correct_summary")
+        assert len([name for name, _ in model.prompts if name == "GroundedAudit"]) == 1
+        assert not response.envelope["removed_passages"]
     assert case["evidence"] in response.answer_text

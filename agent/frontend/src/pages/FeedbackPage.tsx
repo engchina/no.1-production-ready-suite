@@ -102,10 +102,13 @@ function ratingLabel(rating: FeedbackRating): string {
 export function FeedbackPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [savedView, setView] = useWorkspaceState("feedback", "view", "signals" as FeedbackView, isOneOf(VIEWS));
-  const view: FeedbackView = searchParams.has("signal") ? "signals" : searchParams.has("feedback") ? "ratings" : savedView;
+  const selectedView: FeedbackView | null = searchParams.has("signal") ? "signals" : searchParams.has("feedback") ? "ratings" : null;
+  const view = selectedView ?? savedView;
+  // 詳細 URL を開いたときだけ見方を保存する。タブの操作で保存値を変えた途中に、
+  // 遷移前の URL の見方を書き戻すと最初の切り替えが取り消される。
   useEffect(() => {
-    if (savedView !== view) setView(view);
-  }, [savedView, view, setView]);
+    if (selectedView) setView(selectedView);
+  }, [selectedView, setView]);
   const [days, setDays] = useWorkspaceState("feedback", "days", DEFAULT_PERIOD, isPeriod);
   const [agentId, setAgentId] = useWorkspaceState("feedback", "agentId", "", isString);
   const [rating, setRating] = useWorkspaceState("feedback", "rating", "", isRatingFilter);
@@ -117,12 +120,12 @@ export function FeedbackPage() {
   const signalPaging = usePersistedServerPaging("feedbackSignals");
   const setPage = ratingPaging.setPage;
   const setSignalPage = signalPaging.setPage;
-  // 一覧 + 詳細（共有 ListDetailLayout。#2283）の選択は URL が唯一の情報源。利用者の評価は `?feedback=`、
-  // 確かめるべき実行は `?signal=`（どちらも Run の ID）。先頭の行を自動で選ばない。1 ペイン（xl 未満）で一覧から
+  // 一覧 + 詳細の選択は URL が唯一の情報源。利用者の評価は `?feedback=`、
+  // 確かめるべき実行は `?signal=`（どちらも Run の ID）。先頭の行を自動で選ばない。1 ペインで一覧から
   // 詳細へ入るときは履歴に積み、「一覧へ戻る」とブラウザの「戻る」で一覧へ戻る。
   const split = useListDetailSplit();
   const ratingSelection = useUrlSelection({ param: "feedback", searchParams, setSearchParams, singlePane: !split });
-  const signalSelection = useUrlSelection({ param: "signal", searchParams, setSearchParams, singlePane: !split });
+  const signalSelection = useUrlSelection({ param: "signal", searchParams, setSearchParams, singlePane: true });
   const viewSelection = view === "signals" ? signalSelection : ratingSelection;
   const queryClient = useQueryClient();
 
@@ -234,9 +237,9 @@ export function FeedbackPage() {
         wide
         title={t("nav.feedback")}
         subtitle={t("page.feedback.subtitle")}
-        // 1 ペイン（xl 未満）で詳細を開いているときだけ、左上に「一覧へ戻る」（page-archetypes.md §1 B。#2283）。
+        // 確かめるべき実行は全幅の詳細、利用者の評価は xl 未満の詳細で「一覧へ戻る」。
         back={
-          !split && viewSelection.selectedId
+          (view === "signals" || !split) && viewSelection.selectedId
             ? { label: t("common.backToList"), onClick: viewSelection.clear, testId: "feedback-detail-back" }
             : undefined
         }
@@ -299,6 +302,7 @@ export function FeedbackPage() {
             }}
             labels={listToolbarLabels()}
             testId="signals-filters"
+            className={signalSelection.selectedId ? "hidden" : undefined}
           />
           <QueryState
             query={signals}

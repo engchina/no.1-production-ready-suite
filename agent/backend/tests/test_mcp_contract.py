@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -36,6 +37,17 @@ def test_agent_mcp_tools_match_platform_contract() -> None:
         "MCP ツールの定義が契約と違います。"
         "意図した変更なら UPDATE_MCP_CONTRACT=1 で契約を更新してください。"
     )
+
+
+def test_instructions_are_step_format() -> None:
+    """MCP の instructions は、目的の文と処理順の `## Step N:` の見出し（docs/agents/prompts.md。
+    #3830）。見出しはすべて Step で、1 から順に置く。"""
+    text = build_agent_mcp_server(cast(Request, None)).instructions or ""
+    assert not text.startswith("#")
+    headings = re.findall(r"^#+ .*$", text, re.M)
+    steps = [int(number) for number in re.findall(r"^## Step (\d+): \S", text, re.M)]
+    assert steps and len(steps) == len(headings), headings
+    assert steps == list(range(1, len(steps) + 1)), steps
 
 
 RAG_CONTRACT = CONTRACT.with_name("rag-tools.json")
@@ -89,11 +101,13 @@ def test_run_observation_uses_the_names_of_the_rag_contract() -> None:
     for field, schema in locator.items():
         assert schema.get("type") == rag_locator[field].get("type"), field
         assert schema.get("anyOf") == rag_locator[field].get("anyOf"), field
-    # 表のセルの座標（#3262）: RAG の EvidenceTableCell と同じ名前・型で写す。
+    # 表のセルの座標（#3262）: RAG の EvidenceTableCell と同じ名前・型で写す（場所と同じく、セルの
+    # 領域の bbox は写さない。#3429）。
     assert {"table_row", "table_cells"} <= set(locator)
     rag_cell = rag["$defs"]["EvidenceTableCell"]
     cell = observation["$defs"]["ObservedTableCell"]
-    assert set(cell["properties"]) == set(rag_cell["properties"])
+    assert "bbox" in rag_cell["properties"]
+    assert set(cell["properties"]) == set(rag_cell["properties"]) - {"bbox"}
     assert set(cell["required"]) == set(rag_cell["required"])
     for field, schema in cell["properties"].items():
         assert schema.get("type") == rag_cell["properties"][field].get("type"), field
@@ -114,5 +128,16 @@ def test_run_observation_uses_the_names_of_the_rag_contract() -> None:
     }
     assert shared <= set(evidence) and shared <= set(rag_evidence)
     assert _enum(evidence["answer_use"]) == _enum(rag_evidence["answer_use"])
+    # 表の行・列の対応の検査が読めるか・縮退・根拠 0 件の段（#3546）: RAG と同じ名前・語彙。
+    assert _enum(evidence["table_binding"]) == _enum(rag_evidence["table_binding"])
+    call = observation["$defs"]["ObservedToolCall"]["properties"]
+    assert set(observation["$defs"]["ObservedDegradedStep"]["properties"]) == set(
+        rag["$defs"]["DegradedStep"]["properties"]
+    )
+    assert _enum(call["zero_evidence_stage"]) == _enum(
+        rag["$defs"]["ZeroEvidence"]["properties"]["stage"]
+    )
+    for field in ("degraded_steps", "guardrail_degraded"):
+        assert field in call and field in rag["properties"], field
     # スコアは出さない（内部の算法に依存させない）。
     assert not {"score", "rerank_score"} & set(evidence)

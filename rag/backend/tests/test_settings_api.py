@@ -16,8 +16,10 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import dotenv_values
+from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_system_settings import database as shared_database
 from pr_system_settings import oci_connectivity
+from pr_system_settings.model import ModelSettingsTestRequest
 from pr_system_settings.model_test_input import MODEL_TEST_IMAGE_BYTES
 from pytest import MonkeyPatch
 
@@ -82,6 +84,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
 ) -> None:
     """adapter readiness は flag と Python package 有無を非機密に返す。"""
     settings = get_settings()
+    monkeypatch.setattr(settings, "rag_navigation_summary_max_nodes", 37)
     # 旧 runtime 値 auto は利用者向けには返さず、明示値 local へ寄せる。
     monkeypatch.setattr(settings, "rag_parser_adapter_backend", "auto")
     monkeypatch.setattr(settings, "rag_parser_docling_enabled", True)
@@ -105,6 +108,7 @@ def test_parser_adapter_settings_reports_flags_and_package_status(
 
     assert resp.status_code == 200
     body = resp.json()["data"]
+    assert body["navigation_summary_max_nodes"] == 37
     assert body["adapter_backend"] == "local"
     assert body["effective_order"] == []
     by_backend = {adapter["backend"]: adapter for adapter in body["adapters"]}
@@ -754,13 +758,13 @@ def test_update_chunking_settings_persists_env_and_mutates_runtime(
     assert settings.rag_chunk_size == 1000
     assert settings.rag_chunk_min_chars == 40
     assert settings.rag_chunk_delimiter == "---"
-    assert settings.rag_chunk_context_header_enabled is False
+    assert settings.rag_chunk_context_header_enabled is True
     persisted = env_file.read_text(encoding="utf-8")
     assert "RAG_CHUNKING_STRATEGY=recursive_character" in persisted
     assert "RAG_CHUNK_SIZE=1000" in persisted
     assert "RAG_CHUNK_MIN_CHARS=40" in persisted
     assert "RAG_CHUNK_DELIMITER=---" in persisted
-    assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED=false" in persisted
+    assert "RAG_CHUNK_CONTEXT_HEADER_ENABLED" not in persisted
 
 
 def test_update_chunking_settings_saves_small_to_big_params(
@@ -1607,6 +1611,7 @@ def test_model_settings_test_embedding_uses_candidate_model(
             observed_settings.append(settings)
 
         async def embed(self, texts: list[str], *, input_type: str) -> list[list[float]]:
+            assert model_purpose_attributes() == {"pr.gen_ai.purpose": "connection.check"}
             assert texts == ["モデル接続テスト"]
             assert input_type == "SEARCH_QUERY"
             return [[0.0] * 1536]
@@ -3539,7 +3544,9 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_query_strategy", "auto_routing")
+    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
     monkeypatch.setattr(settings, "rag_answer_flow", "crag")
+    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
     monkeypatch.setattr(settings, "rag_neighbor_child_count", 3)
     monkeypatch.setattr(settings, "rag_rerank_enabled", True)
     monkeypatch.setattr(settings, "rag_screen_linking_enabled", False)
@@ -3561,6 +3568,8 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert client.get("/api/settings/answering").json()["data"] == {
         "query_strategy": "auto_routing",
         "answer_flow": "crag",
+        "answer_audit_mode": "none",
+        "answer_evidence_refinement_mode": "legacy",
         "neighbor_child_count": 3,
         "rerank_enabled": True,
         "screen_linking_enabled": False,
@@ -3636,6 +3645,45 @@ def test_answering_settings_rejects_invalid_values() -> None:
     )
     assert (
         client.patch("/api/settings/answering", json={"neighbor_child_count": 21}).status_code
+        == 422
+    )
+
+
+@pytest.mark.parametrize("mode", ["none", "standard", "detailed"])
+def test_answering_audit_mode_round_trip_and_independent_settings(
+    monkeypatch: MonkeyPatch, tmp_path: Path, mode: str
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
+    monkeypatch.setattr(settings, "rag_answer_flow", "standard_rag")
+    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", False)
+    monkeypatch.setattr(settings, "rag_answer_max_correction_rounds", 0)
+    monkeypatch.delenv("RAG_ANSWER_AUDIT_MODE", raising=False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    response = client.patch("/api/settings/answering", json={"answer_audit_mode": mode})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["answer_audit_mode"] == mode
+    assert data["answer_flow"] == "standard_rag"
+    assert data["request_coverage_retrieval_enabled"] is False
+    assert settings.rag_answer_max_correction_rounds == 0
+    assert settings.rag_answer_audit_mode == mode
+    assert f"RAG_ANSWER_AUDIT_MODE={mode}" in env_file.read_text()
+    reloaded = Settings(_env_file=env_file)
+    assert reloaded.rag_answer_audit_mode == mode
+    from app.rag.answer_engine import build_engine_settings
+
+    assert build_engine_settings(settings, output_dir=tmp_path).answer_audit_mode == mode
+    assert build_engine_settings(reloaded, output_dir=tmp_path).answer_audit_mode == mode
+    assert client.get("/api/settings/answering").json()["data"]["answer_audit_mode"] == mode
+    # 別の項目だけの更新では、保存済みの確認範囲を変えない。
+    unchanged = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
+    assert unchanged.json()["data"]["answer_audit_mode"] == mode
+
+
+def test_answering_audit_mode_rejects_unknown_value() -> None:
+    assert (
+        client.patch("/api/settings/answering", json={"answer_audit_mode": "automatic"}).status_code
         == 422
     )
 
@@ -3764,3 +3812,101 @@ def test_entity_index_settings_keep_runtime_on_save_failure(
     response = client.patch("/api/settings/entity-index", json={"enabled": True})
     assert response.status_code == 500
     assert settings.rag_entity_index_enabled is False
+
+
+def test_model_settings_rerank_probe_has_explicit_purpose(monkeypatch: MonkeyPatch) -> None:
+    class FakeGenAiClient:
+        def __init__(self, settings: Settings) -> None:
+            pass
+
+        async def rerank(
+            self, query: str, documents: list[str], *, top_n: int
+        ) -> list[tuple[int, float]]:
+            assert model_purpose_attributes() == {"pr.gen_ai.purpose": "connection.check"}
+            assert query and documents and top_n == 1
+            return [(0, 0.9)]
+
+    monkeypatch.setattr(settings_routes, "OciGenAiClient", FakeGenAiClient)
+    response = asyncio.run(
+        settings_routes._run_model_settings_test(
+            get_settings(),
+            ModelSettingsTestRequest.model_validate(
+                {"target_type": "rerank", "settings": _payload()}
+            ),
+        )
+    )
+    assert response == {"ranked_count": 1, "top_score": 0.9}
+    assert model_purpose_attributes() == {}
+
+
+@pytest.mark.parametrize("mode", ["legacy", "cited_only", "cited_required"])
+def test_answering_evidence_refinement_mode_is_persisted_and_independent(
+    monkeypatch: MonkeyPatch, tmp_path: Path, mode: str
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
+    monkeypatch.setattr(settings, "rag_answer_audit_mode", "none")
+    monkeypatch.setattr(settings, "rag_request_coverage_retrieval_enabled", False)
+    monkeypatch.setattr(settings, "rag_answer_max_correction_rounds", 0)
+    monkeypatch.delenv("RAG_ANSWER_EVIDENCE_REFINEMENT_MODE", raising=False)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    response = client.patch(
+        "/api/settings/answering", json={"answer_evidence_refinement_mode": mode}
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["answer_evidence_refinement_mode"] == mode
+    assert data["answer_audit_mode"] == "none"
+    assert data["request_coverage_retrieval_enabled"] is False
+    assert settings.rag_answer_max_correction_rounds == 0
+    assert f"RAG_ANSWER_EVIDENCE_REFINEMENT_MODE={mode}" in env_file.read_text()
+    reloaded = Settings(_env_file=env_file)
+    assert reloaded.rag_answer_evidence_refinement_mode == mode
+    from app.rag.answer_engine import build_engine_settings
+
+    assert (
+        build_engine_settings(settings, output_dir=tmp_path).answer_evidence_refinement_mode == mode
+    )
+    assert (
+        build_engine_settings(reloaded, output_dir=tmp_path).answer_evidence_refinement_mode == mode
+    )
+    # 別の設定の保存で選別方式を暗黙に戻さない。
+    changed = client.patch("/api/settings/answering", json={"neighbor_child_count": 2})
+    assert changed.json()["data"]["answer_evidence_refinement_mode"] == mode
+    assert (
+        client.get("/api/settings/answering").json()["data"]["answer_evidence_refinement_mode"]
+        == mode
+    )
+
+
+def test_answering_evidence_refinement_rejects_unknown_without_saving(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "cited_required")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_bytes() if env_file.exists() else None
+    response = client.patch(
+        "/api/settings/answering", json={"answer_evidence_refinement_mode": "automatic"}
+    )
+    assert response.status_code == 422
+    assert settings.rag_answer_evidence_refinement_mode == "cited_required"
+    assert (env_file.read_bytes() if env_file.exists() else None) == before
+
+
+def test_answering_evidence_refinement_defaults_to_legacy(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("RAG_ANSWER_EVIDENCE_REFINEMENT_MODE", raising=False)
+    assert Settings(_env_file=None).rag_answer_evidence_refinement_mode == "legacy"
+
+
+def test_answering_evidence_refinement_changes_runtime_fingerprint() -> None:
+    from app.rag.diagnostics import rag_config_fingerprint
+
+    base = Settings(_env_file=None)
+    fingerprints = {
+        rag_config_fingerprint(
+            base.model_copy(update={"rag_answer_evidence_refinement_mode": mode})
+        )
+        for mode in ("legacy", "cited_only", "cited_required")
+    }
+    assert len(fingerprints) == 3

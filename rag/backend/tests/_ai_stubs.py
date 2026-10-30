@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -152,6 +152,8 @@ def patch_ai_clients(monkeypatch: pytest.MonkeyPatch) -> None:
 # 回答の生成の prompt の根拠は「[E1] p.1 origin=…」の行の後に本文が続く
 # （rag_engine.generation.grounded の format_functions）。補助情報の範囲は引用の対象外なので飛ばす。
 _EVIDENCE_HEADER = re.compile(r"^\[(E[0-9]+)\][^\n]*$", re.MULTILINE)
+# 引用単位の番号の付いた本文の行（「3| 本文」）。番号の無い根拠は全文が 1 つの引用になる。
+_NUMBERED_LINE = re.compile(r"^([0-9]+)\| (.*)$")
 
 
 def _first_evidence(prompt: str) -> tuple[str, str] | None:
@@ -177,6 +179,8 @@ def deterministic_parse_text_response(
     system_prompt: str, prompt: str, settings: Any, text_format: type[BaseModel], **_: Any
 ) -> BaseModel:
     """回答の生成の LLM 呼び出しを決定論的に返す（最初の根拠の 1 行を引用する 1 項目の回答）。"""
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+    from rag_engine.models.audit_wire import is_audit_wire
     from rag_engine.models.llm import (
         CragRetrievalGradeOutput,
         GroundedAudit,
@@ -205,9 +209,62 @@ def deterministic_parse_text_response(
         items = []
         if evidence:
             evidence_id, quote = evidence
-            items = [{"kind": "rule", "text": quote, "evidence_id": evidence_id, "quote": quote}]
+            items = [
+                {
+                    "kind": "rule",
+                    "text": quote,
+                    "citations": [{"evidence_id": evidence_id, "quote": quote}],
+                }
+            ]
         return GroundedDraft.model_validate(
             {"summary": "決定論スタブの回答", "items": items, "confidence": "high"}
+        )
+    # 回答の生成は、引用の範囲を整数の行番号で受ける生成専用の schema で呼ぶ（#3685）。
+    if text_format is generation_draft_wire_model():
+        evidence = _first_evidence(prompt)
+        items = []
+        if evidence:
+            evidence_id, line = evidence
+            numbered = _NUMBERED_LINE.match(line)
+            number = int(numbered.group(1)) if numbered else None
+            items = [
+                {
+                    "kind": "rule",
+                    "text": numbered.group(2) if numbered else line,
+                    "citations": [
+                        {"evidence_id": evidence_id, "line_start": number, "line_end": number}
+                    ],
+                }
+            ]
+        return text_format.model_validate(
+            {"summary": "決定論スタブの回答", "items": items, "confidence": "high"}
+        )
+    # 監査は要求・ガイド要件の id を固定のキーにした wire の schema で呼ぶ。
+    # キーはすべて埋め、要求の判定は保留にする。
+    # 監査は項目があるときだけ呼ばれ、上の生成は項目を 1 つだけ返すので、index 0 を支持ありとする。
+    if is_audit_wire(text_format):
+        # 固定キーの id は wire の型の ClassVar にある（BaseModel の型からは見えない）。
+        wire = cast(Any, text_format)
+        reviews = [
+            {
+                "index": 0,
+                "support": "supported",
+                "source_applicability": "matched",
+                "reason": "原文",
+            }
+        ]
+        request = {"status": "unknown", "reason": "決定論スタブ", "evidence_status": "unknown"}
+        requirement = {"answer_state": "not_mentioned", "reason": ""}
+        return text_format.model_validate(
+            {
+                "goal_alignment": "aligned",
+                "summary_supported": True,
+                "reviews": reviews,
+                "request_reviews": dict.fromkeys(wire.expected_request_ids, request),
+                "guide_requirement_reviews": dict.fromkeys(
+                    wire.expected_requirement_ids, requirement
+                ),
+            }
         )
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
     if text_format in (GroundedAudit, GroundedFactAudit):

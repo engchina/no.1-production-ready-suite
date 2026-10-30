@@ -3,7 +3,7 @@
 会話は検索・回答プロファイル(Search Answer Pro
 file)配下に置く。メッセージ送信は既存 RAG パイプラインを
 
-再利用し、会話履歴を生成プロンプトへ前置する(検索は最新メッセージのみで実行)。
+再利用し、会話履歴で省略を補って確認・検索・回答へ渡す。
 ``model_ids`` を複数指定すると設定済み OCI モデルへ fan-out し横並び比較できる。
 """
 
@@ -11,7 +11,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Annotated
@@ -66,10 +66,25 @@ from app.rag.chat_answer_runs import (
     get_chat_answer_run_service,
 )
 from app.rag.chat_attachments import attach_to_conversation, delete_conversation_attachments
+from app.rag.chat_question_token import (
+    context_digest,
+    issue_question_token,
+    read_question_context,
+    read_rule_selection_answers,
+    read_rule_selection_elapsed,
+)
 from app.rag.document_sections_service import current_section_pages
 from app.rag.guardrails import GuardrailPolicy, GuardrailResult
+from app.rag.history_question import HistoryConfirmation
 from app.rag.observability import elapsed_ms, new_trace_id
-from app.rag.pipeline import ChatTurn, RagPipeline, storage_failure
+from app.rag.pipeline import (
+    ChatTurn,
+    RagPipeline,
+    history_confirmation_facts,
+    scope_with_history_confirmations,
+    storage_failure,
+)
+from app.rag.question_understanding import profile_language_scope
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.request_context import (
     caller_owns,
@@ -77,6 +92,7 @@ from app.rag.request_context import (
 )
 from app.rag.run_history import RunRecorder
 from app.rag.saved_evidence import readable_document_ids, visible_citations
+from app.rag.search_answer_profile_config import resolve_search_answer_profile_settings
 from app.rag.search_answer_profile_knowledge import (
     clarification_document_ids,
     clarification_record,
@@ -84,6 +100,7 @@ from app.rag.search_answer_profile_knowledge import (
     load_runtime_knowledge_payload,
     resolve_clarification,
 )
+from app.rag.signed_url import SignedUrlUnavailableError
 from app.rag.stored_answer import passage_mark_record, stored_citation, stored_citations
 from app.rag.support_guide_runtime import (
     GUIDE_CLARIFICATION_PREFIX,
@@ -106,6 +123,7 @@ from app.schemas.chat import (
 )
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
+from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.security.dependencies import current_principal
 from app.security.user_names import display_names_by_user_hash
 
@@ -248,6 +266,10 @@ def _to_chat_message(
             "" if sent_by_owner else (sender_names or {}).get(message.user_id_hash or "", "")
         ),
         attachments=_saved_attachments(message),
+        # 回答のモデルへ添付した根拠の画像の件数（終わった回答だけ。#3444）。
+        answer_attached_images=(
+            message.answer_attached_images if message.status == "COMPLETE" else 0
+        ),
         # 段落の印（終わった回答だけ。#2738）。契約の項目だけを返す。
         **(
             passage_mark_record(message.passage_record)
@@ -593,7 +615,62 @@ async def _build_safe_history(
                 blocked_user_ids.add(message.id)
                 continue
             allowed_user_ids.add(message.id)
-            turns.append(ChatTurn(role="USER", content=result.sanitized_text))
+            # 確認への明示的な回答だけを利用者の履歴へ足す。スキップ・前提は足さない。
+            content = _guide_user_context([message])[0]
+            checked = (
+                await asyncio.to_thread(guardrails.validate_query, content)
+                if content != message.content
+                else result
+            )
+            if checked.allowed:
+                facts: list[HistoryConfirmation] = []
+                resets: list[str] = []
+                record = _saved_clarification(message)
+                owner = current_audit_request_context().user_id_hash
+                if (
+                    record is not None
+                    and record.outcome == "answered"
+                    and message.user_id_hash in (None, owner)
+                ):
+                    for index, entry in enumerate(record.entries):
+                        values = [
+                            *entry.selected,
+                            *([entry.other_text] if entry.other_text else []),
+                        ]
+                        if not values:
+                            continue
+                        prompt_check = await asyncio.to_thread(
+                            guardrails.validate_query, entry.prompt
+                        )
+                        value_check = await asyncio.to_thread(
+                            guardrails.validate_query, "、".join(values)
+                        )
+                        if prompt_check.allowed and value_check.allowed:
+                            facts.append(
+                                HistoryConfirmation(
+                                    id=f"{message.id}:{index}",
+                                    key=context_digest(entry.prompt),
+                                    question=prompt_check.sanitized_text,
+                                    answer=value_check.sanitized_text,
+                                )
+                            )
+                if (
+                    record is not None
+                    and record.outcome == "skipped"
+                    and message.user_id_hash in (None, owner)
+                ):
+                    resets = [context_digest(entry.prompt) for entry in record.entries]
+                turns.append(
+                    ChatTurn(
+                        role="USER",
+                        content=checked.sanitized_text,
+                        confirmed_facts=tuple(facts),
+                        confirmation_resets=tuple(resets),
+                    )
+                )
+            else:
+                allowed_user_ids.discard(message.id)
+                blocked_user_ids.add(message.id)
         elif message.role == "ASSISTANT":
             if message.status != "COMPLETE":
                 continue
@@ -613,6 +690,97 @@ async def _build_safe_history(
     return turns[-HISTORY_PROMPT_LIMIT:]
 
 
+async def prepare_chat_question(
+    oracle: OracleClient,
+    conversation_id: str | None,
+    search_answer_profile_id: str,
+    query: str,
+    settings: Settings,
+    *,
+    token: str | None = None,
+    confirmed_facts: list[HistoryConfirmation] | None = None,
+    force_token: bool = False,
+) -> tuple[str, str | None]:
+    """現在の権限で文脈を読み、確認と検索が使う質問を一度だけ補完する。"""
+    query = query.strip()
+    messages: list[StoredMessage] = []
+    owner: str | None = None
+    if conversation_id:
+        conversation = await oracle.get_conversation(conversation_id)
+        if (
+            conversation is None
+            or conversation.search_answer_profile_id != search_answer_profile_id
+        ):
+            raise HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND_MESSAGE)
+        _ensure_caller_owns(conversation)
+        owner = conversation.user_id_hash
+        messages = await oracle.list_messages(conversation_id)
+    if not messages and not token and not force_token:
+        return query, None
+    view = await oracle.get_search_answer_profile(search_answer_profile_id)
+    if view is not None:
+        settings, _ = resolve_search_answer_profile_settings(settings, view.config)
+    with profile_language_scope(settings) as language_pack:
+        binding = {
+            "conversation": conversation_id,
+            "owner": owner,
+            "profile": search_answer_profile_id,
+            "query": context_digest(query),
+            "revision": context_digest([asdict(message) for message in messages]),
+            "policy": context_digest(
+                [
+                    settings.model_dump(mode="json"),
+                    language_pack.hash,
+                    view.model_dump(mode="json") if view else None,
+                    await load_runtime_knowledge_payload(oracle, search_answer_profile_id),
+                    await _published_guides(oracle, search_answer_profile_id),
+                ]
+            ),
+        }
+        guardrails = GuardrailPolicy(settings)
+        checked = await asyncio.to_thread(guardrails.validate_query, query)
+        if not checked.allowed:
+            return query, None
+        history = await _build_safe_history(messages, guardrails)
+        facts = history_confirmation_facts(history)
+        if token:
+            try:
+                question, selected = read_question_context(
+                    settings.app_service_token_secret, token, binding
+                )
+                if any(identity not in facts for identity in selected):
+                    raise ValueError("確認回答の参照が現在の履歴にありません。")
+            except (ValueError, SignedUrlUnavailableError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="会話または設定が変わりました。質問を送信し直してください。",
+                ) from exc
+            if confirmed_facts is not None:
+                confirmed_facts.extend(facts[identity] for identity in selected)
+            return question, token
+        question = checked.sanitized_text
+        selected_facts: tuple[HistoryConfirmation, ...] = ()
+        if history and settings.rag_history_rewrite_enabled:
+            pipeline = RagPipeline(settings=settings, guardrails=guardrails)
+            question = await pipeline._safe_rewritten_query(question, history) or question
+            selected_facts = pipeline._selected_history_facts
+        if confirmed_facts is not None:
+            confirmed_facts.extend(selected_facts)
+        # 署名鍵が未設定なら補完を共有せず、正式送信側で現在の履歴を読む。
+        if not settings.app_service_token_secret:
+            return question, None
+        try:
+            token = issue_question_token(
+                settings.app_service_token_secret,
+                binding,
+                question,
+                confirmed_fact_ids=tuple(fact.id for fact in selected_facts),
+            )
+        except SignedUrlUnavailableError:
+            return question, None
+        return question, token
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedChatTurn:
     """保存済みのユーザー発話と、回答生成に使う有効 request / Settings / 履歴。"""
@@ -628,6 +796,7 @@ class PreparedChatTurn:
     approved_faq: tuple[str, str] | None = None
     # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
     scope: AnswerScope | None = None
+    history_question_prepared: bool = False
 
 
 async def _prepare_chat_turn(
@@ -735,14 +904,62 @@ async def _prepare_chat_turn(
         clarification_log = clarification_record(
             payload, request.clarification.rule_id, request.clarification
         )
+    inherited_facts: list[HistoryConfirmation] = []
+    prepared_question, _ = (
+        await prepare_chat_question(
+            oracle,
+            conversation_id,
+            search_answer_profile_id,
+            request.content,
+            settings,
+            token=request.question_context_token,
+            confirmed_facts=inherited_facts,
+        )
+        if request.question_context_token
+        else (request.content, None)
+    )
+    if request.question_context_token and request.clarification is not None:
+        # token の準備後に新しく答えた条件を、以前の補完句と古い事実で上書きしない。
+        prepared_question = request.content
+        inherited_facts = []
+    # 同輪の明示回答は履歴より優先する。設定文や展示用 context は読み取らない。
+    if scope is not None and guide_reply and clarification_log is not None:
+        current_confirmation = ChatClarificationRecord.model_validate(clarification_log)
+        scope = replace(
+            scope,
+            confirmed_premises=tuple(
+                (
+                    entry.prompt,
+                    "、".join([*entry.selected, *([entry.other_text] if entry.other_text else [])]),
+                )
+                for entry in current_confirmation.entries
+                if entry.selected or entry.other_text
+            ),
+        )
+    reset_questions: set[str] = set()
+    if clarification_log is not None and clarification_log.get("outcome") == "skipped":
+        reset_questions = {
+            context_digest(entry.prompt)
+            for entry in ChatClarificationRecord.model_validate(clarification_log).entries
+        }
+        inherited_facts = [
+            fact for fact in inherited_facts if (fact.key or fact.question) not in reset_questions
+        ]
+    scope = scope_with_history_confirmations(scope, inherited_facts)
     base_request = SearchRequest(
-        query=request.content,
+        query=prepared_question,
+        original_question=request.content if prepared_question != request.content else None,
         model_id=request.model_ids[0] if request.model_ids else None,
         top_k=request.top_k,
         search_answer_profile_id=search_answer_profile_id,
         filters=filters,
         conditions=conditions,
     )
+    if request.question_context_token:
+        base_request._rule_selection_state["prepared"] = True
+        base_request._rule_selection_state["elapsed_seconds"] = read_rule_selection_elapsed(
+            settings.app_service_token_secret, request.question_context_token
+        )
     # 履歴は今回のユーザー発話を保存する前に読む(自分自身を含めない)。
     prior_messages = await oracle.list_messages(conversation_id)
     (
@@ -754,20 +971,47 @@ async def _prepare_chat_turn(
         base_request,
         settings,
         # 業務ガイドは前の発話も含めて選ぶ（短い返答だけで照合が外れないように。#1238）。
-        guide_context=_guide_user_context(prior_messages),
+        guide_context=()
+        if request.question_context_token and settings.rag_history_rewrite_enabled
+        else _guide_user_context(prior_messages),
         interactive=True,
+        confirmed_rule_answers=tuple(
+            ClarificationAnswer.model_validate(value)
+            for value in read_rule_selection_answers(
+                settings.app_service_token_secret, request.question_context_token
+            )
+        )
+        if request.question_context_token
+        else (),
         answered_rule_ids=(request.clarification.rule_id,)
         if request.clarification is not None
         and not request.clarification.rule_id.startswith(GUIDE_CLARIFICATION_PREFIX)
         else (),
     )
     guardrails = GuardrailPolicy(effective_settings)
-    query_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
+    original_guardrail = await asyncio.to_thread(guardrails.validate_query, request.content)
+    query_guardrail = (
+        await asyncio.to_thread(guardrails.validate_query, prepared_question)
+        if original_guardrail.allowed
+        else original_guardrail
+    )
     if request.client_message_id and any(
         message.id == request.client_message_id for message in prior_messages
     ):
         raise HTTPException(status_code=409, detail=DUPLICATE_MESSAGE_ID_MESSAGE)
     history = await _build_safe_history(prior_messages, guardrails)
+    if reset_questions:
+        history = [
+            replace(
+                turn,
+                confirmed_facts=tuple(
+                    fact
+                    for fact in turn.confirmed_facts
+                    if (fact.key or fact.question) not in reset_questions
+                ),
+            )
+            for turn in history
+        ]
     now = datetime.now(UTC)
     user_message = await oracle.append_message(
         StoredMessage(
@@ -776,7 +1020,9 @@ async def _prepare_chat_turn(
             conversation_id=conversation_id,
             role="USER",
             content=(
-                query_guardrail.sanitized_text
+                original_guardrail.sanitized_text
+                if query_guardrail.allowed and prepared_question != request.content
+                else query_guardrail.sanitized_text
                 if query_guardrail.allowed
                 else BLOCKED_MESSAGE_PLACEHOLDER
             ),
@@ -799,6 +1045,7 @@ async def _prepare_chat_turn(
         query_guardrail=query_guardrail,
         history=history,
         user_message=user_message,
+        history_question_prepared=request.question_context_token is not None,
         approved_faq=approved_faq,
         scope=scope,
     )
@@ -841,9 +1088,11 @@ async def _generate_chat_answer(
         store=RunHistoryStore(oracle),
         conversation_id=turn.conversation_id,
         message_id=message_id,
-        model_id=model_id or None,
-        # 実行履歴の詳細の処理の経過（会話の回答と同じ trace。#3226）。
+        # 列のモデル（未指定は実行のときの既定のテキストモデルの具体的な ID。#3419）。
+        model_id=model_id or enterprise_ai_default_model_id(turn.settings) or None,
+        # 実行履歴の詳細の処理の経過（会話の回答と同じ trace。#3226）とモデルの利用量（#3419）。
         trace_source=trace.record if trace is not None else None,
+        usage_source=trace.model_usage if trace is not None else None,
     )
     started_at = perf_counter()
     try:
@@ -861,6 +1110,7 @@ async def _generate_chat_answer(
             answer_notice=current_answer_notice,
             # 会話の添付（#2517）の節・行を根拠の候補に足す。
             attachment_conversation_id=turn.conversation_id,
+            history_question_prepared=turn.history_question_prepared,
         )
         result = await run_answer_with_timeout(
             lambda progress_tracker: pipeline.run(

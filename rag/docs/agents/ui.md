@@ -8,7 +8,7 @@
 - サイドナビ（折りたたみ可）の主なセクション:
   - **ナレッジ構築**: 文書アップロード、文書インデックス、ナレッジベース、検索・回答プロファイル。
   - **AI 活用**: チャット、RAG 検索、実行履歴（チャット・RAG 検索の実行。#1890）。
-  - **取込・検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、名称・別名の索引、関係情報の構築、検索方法、回答プロンプト、安全チェック、評価の基準。
+  - **取込・検索・回答設定**: ファイル準備、文書解析、文書分割、検索インデックス、実体・別名索引、文書構造索引、検索方法、回答プロンプト、安全チェック、評価の基準。
   - **改善・運用**: 品質評価、フィードバック。
   - **セキュリティ設定**: 権限管理（ロールごとのメニュー権限・検索・回答プロファイル・ナレッジベース）。
   - **ユーザーとロール** / **システム設定**（OCI 認証、アップロード保存先、モデル、データベース、外観と証明書）: 3 製品で共通（platform の共有パッケージ）。
@@ -21,7 +21,7 @@
   - #3244 より前に system_admin が送った質問は消さず、`sent_by_owner=false` と `sender_display_name` を付け、画面は質問の上に「〈名前〉 が送信」を出す。
   - RAG 検索: 検索そのものは保存しない。生成した回答の記録（`/api/search/answers*`）は、本人と、system_admin と `rag.feedback.manage`（運用設定の回答の記録の管理と共用の API。#304）。
   - 実行履歴（#1890）は同じ関数で、system_admin は全員・それ以外は自分の実行だけにする。
-  - 規則の外: 質問の候補（`GET /api/search-answer-profiles/{id}/query-suggestions`）は、検索・回答プロファイルの「よく聞かれる質問」で、管理者が質問の履歴を有効にしたときだけ出す共有の知識として扱う（利用者を持たない）。フィードバック管理・品質評価などの「改善・運用」は、それぞれの権限のまま。
+
 - RAG 固有の画面の差分: [docs/frontend-messaging-spec.md](../../docs/frontend-messaging-spec.md)（文書詳細の失敗表示）、[docs/frontend-workspace-state-spec.md](../../docs/frontend-workspace-state-spec.md)（離脱ガードと作業状態の対象・保存 key）、[docs/frontend-page-archetypes-spec.md](../../docs/frontend-page-archetypes-spec.md)（ページの型 A〜D と、対象の操作の `RowActionMenu` / `ObjectActionBar` への割り当て・例外）。
 - lint は `frontend/eslint.config.mjs` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。
 - `ToggleChip` をタブとして使っている箇所（ビューの切替）は `Tabs` に置き換え、絞り込みの箇所だけ `ToggleChip` に残す。

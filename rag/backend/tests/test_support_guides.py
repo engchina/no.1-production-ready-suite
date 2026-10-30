@@ -626,7 +626,7 @@ def _preview_response(preview: GuidePreview, *, used: bool = True) -> SearchResp
             {"step_id": "register", "status": "explained", "required": True},
             {"step_id": "grant", "status": "reference_only", "required": True},
             {"step_id": "ask", "status": "unused", "required": False},
-            {"step_id": "removed", "status": "unknown", "required": True},
+            {"step_id": "removed", "status": "future_status", "required": True},
         ],
         "step_embedding": {"calls": 1, "texts": 12, "elapsed_ms": 250, "failed": False},
     }
@@ -912,3 +912,23 @@ def test_diff_reports_relative_order_but_not_added_rows_as_reordering() -> None:
     assert [
         (change.kind, change.key, change.fields) for change in diff_contents(before, added)
     ] == [("added", "added", [])]
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["explained", "partial", "unknown", "reference_only", "unused", "no_evidence", "not_searched"],
+)
+def test_preview_and_mcp_preserve_guide_coverage_status(status: str) -> None:
+    from app.mcp.tools import ValidatedGuideStep
+    from app.schemas.support_guide import SUPPORT_GUIDE_STEP_STATUSES
+
+    draft = SupportGuideContent.model_validate(guide())
+    values = route._try_steps(
+        {"step_coverage": [{"step_id": "register", "status": status, "required": True}]}, draft
+    )
+    assert len(values) == 1 and values[0].status == status
+    assert ValidatedGuideStep.model_validate(values[0].model_dump()).status == status
+    assert (
+        tuple(ValidatedGuideStep.model_json_schema()["properties"]["status"]["enum"])
+        == SUPPORT_GUIDE_STEP_STATUSES
+    )

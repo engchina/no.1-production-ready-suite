@@ -7,16 +7,15 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from rag_engine.chunking import CHILD_CHUNK_LEVEL, DEFAULT_RETRIEVAL_TOP_K, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
+from rag_engine.chunking import CHILD_CHUNK_LEVEL, PARENT_CHUNK_LEVEL, ChunkingResult, DocumentChunk
 from rag_engine.config import RRF_K, Settings  # noqa: F401  RRF_K は互換のためここからも参照できる
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord, _dedupe_queries, _normalize_text
 from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim_for_context
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.models.storage import StoredChunk
 from rag_engine.parsing.content_labels import content_labels
-from rag_engine.resources.runtime import current_profile
 from rag_engine.retrieval.context_builder import context_bundle_from_records
 from rag_engine.retrieval.entity_expansion import (  # noqa: F401  is_entity_expansion_record はここからも参照できる
     is_entity_expansion_record,
@@ -36,11 +35,7 @@ MAX_CONTEXT_RECORDS = 12
 
 MAX_RECORD_TEXT_CHARS = 1200
 
-BROAD_RETRIEVAL_MIN_CANDIDATES = 50
-
-BROAD_RETRIEVAL_TOP_K_MULTIPLIER = 8
-
-BROAD_RETRIEVAL_MAX_CANDIDATES = 150
+DEFAULT_RETRIEVAL_CANDIDATE_LIMIT = 150
 
 MAX_RERANK_METADATA_CHARS = 700
 
@@ -165,19 +160,13 @@ def _rerank_configured(settings: Settings) -> bool:
     return bool(str(getattr(settings, "rerank_model", "") or "").strip() and str(getattr(settings, "oci_compartment_id", "") or "").strip())
 
 
-def _retrieval_candidate_limit(top_k: int) -> int:
-    anchor_count = max(1, int(top_k or DEFAULT_RETRIEVAL_TOP_K))
-    return min(
-        BROAD_RETRIEVAL_MAX_CANDIDATES,
-        max(
-            BROAD_RETRIEVAL_MIN_CANDIDATES,
-            anchor_count * BROAD_RETRIEVAL_TOP_K_MULTIPLIER,
-        ),
-    )
+def _retrieval_candidate_limit(top_k: int, settings: Settings | None = None) -> int:
+    """融合後の基本候補数。回答起点数 top_k から召回・精排の幅を推測しない。"""
+    return max(1, int(getattr(settings, "retrieval_candidate_limit", DEFAULT_RETRIEVAL_CANDIDATE_LIMIT)))
 
 
 def _engine_labels(raw_engines: Any) -> dict[str, str]:
-    labels = {}
+    labels: dict[str, str] = {}
     if not isinstance(raw_engines, list):
         return labels
     for raw_engine in raw_engines:
@@ -364,11 +353,6 @@ def _search_terms(question: str) -> list[str]:
     compact = re.sub(r"\s+", "", normalized)
     if 2 <= len(compact) <= 80:
         terms.add(compact)
-    # 文書群に固有の言い換えは業務 profile が持つ。コードには置かない。
-    for trigger, expansions in current_profile().aliases:
-        if _normalize_text(trigger) not in normalized:
-            continue
-        terms.update(_normalize_text(expansion) for expansion in expansions)
     return sorted(terms, key=lambda term: (-len(term), term))
 
 
@@ -431,7 +415,7 @@ def _keep_entity_expansion_positions(
         index = rerank.get("candidate_index") if isinstance(rerank, dict) else None
         if is_reserved_entity_expansion(record) and isinstance(index, int) and index not in kept:
             metadata = dict(record.metadata)
-            metadata["rerank"] = {**rerank, "kept_position": "entity_expansion"}
+            metadata["rerank"] = {**cast(dict[str, Any], rerank), "kept_position": "entity_expansion"}
             kept[index] = replace(record, metadata=metadata)
             continue
         rest.append(record)
@@ -469,6 +453,7 @@ def _retrieval_channels(record: AnswerRecord) -> tuple[str, ...]:
     metadata = record.metadata if isinstance(record.metadata, dict) else {}
     hybrid = metadata.get("adb_hybrid") if isinstance(metadata.get("adb_hybrid"), dict) else {}
     raw_channels = hybrid.get("retrieval_channels") if isinstance(hybrid, dict) else ()
+    values: tuple[Any, ...]
     if isinstance(raw_channels, str):
         values = (raw_channels,)
     elif isinstance(raw_channels, (list, tuple, set)):
@@ -592,6 +577,9 @@ def _records_by_rerank_ranks(
                 candidate_index=_original_candidate_index(index, candidate_indices),
                 rank=rank_position,
                 relevance_score=rank.relevance_score,
+                question_relevance_score=(
+                    question if (question := getattr(rank, "question_relevance_score", None)) is not None else rank.relevance_score
+                ),
                 min_relevance_score=min_score,
             )
         )
@@ -625,12 +613,15 @@ def _record_with_rerank_metadata(
     rank: int,
     relevance_score: float | None,
     min_relevance_score: float,
+    question_relevance_score: float | None = None,
 ) -> AnswerRecord:
     metadata = dict(record.metadata) if isinstance(record.metadata, dict) else {}
     metadata["rerank"] = {
         "candidate_index": candidate_index,
         "rank": rank,
+        # 並べ替えの点数（原質問と検索文ごとの rerank の最高値。#2161）と、原質問だけの点数（#3504）。
         "relevance_score": relevance_score,
+        "question_relevance_score": question_relevance_score,
         "min_relevance_score": min_relevance_score,
         "filtered": False,
     }
@@ -698,7 +689,7 @@ def _same_page_chunk_neighbors(
 def _first_source_seq(ranges: Sequence[dict[str, int]]) -> int | None:
     for item in ranges:
         try:
-            return int(item.get("seq_start"))
+            return int(cast(int, item.get("seq_start")))
         except (TypeError, ValueError):
             continue
     return None

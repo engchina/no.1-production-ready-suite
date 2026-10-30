@@ -1972,27 +1972,24 @@ def test_model_settings_file_resolves_next_to_platform_env(
 
 
 def test_nonlocal_security_boundaries_fail_closed() -> None:
-    with pytest.raises(ValueError, match="NL2SQL_DEBUG=true"):
+    with pytest.raises(ValueError, match="PLATFORM_AUTH_MODE=authenticated"):
         Settings(
             _env_file=None,
             environment="production",
-            debug=True,
-            app_auth_enabled=False,
+            auth_mode="local",
         )
     with pytest.raises(ValueError, match="PLATFORM_AUTH_COOKIE_SECURE=true"):
         Settings(
             _env_file=None,
             environment="production",
-            debug=False,
-            app_auth_enabled=True,
+            auth_mode="authenticated",
             app_auth_cookie_secure=False,
         )
 
     settings = Settings(
         _env_file=None,
         environment="production",
-        debug=False,
-        app_auth_enabled=True,
+        auth_mode="authenticated",
         app_auth_cookie_secure=True,
     )
     assert settings.local_debug_enabled is False

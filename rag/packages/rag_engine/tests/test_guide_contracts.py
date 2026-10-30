@@ -3,13 +3,13 @@
 import pytest
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedAudit, GroundedItem
+from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan
 
 
 def entry():
     return grounded.CheckedItem(
-        GroundedItem(kind="operation", text="対象を選択します", quote="対象を選択します"),
+        GroundedItem(kind="operation", text="対象を選択します", citations=[GroundedCitation(evidence_id="", quote="対象を選択します")]),
         span={"text": "対象を選択します", "evidence_id": "E1"},
     )
 
@@ -43,7 +43,7 @@ def test_all_requirements_required_even_when_primary_operation_is_explained():
     result = grounded.apply_guide_contracts(
         coverage("a"), [entry()], [contract("a", "対象選択", "保存して確定")], audit(review("a:0", [0]), review("a:1", [], "missing"))
     )
-    assert result[0]["status"] == "unused"
+    assert result[0]["status"] == "partial"
     assert result[0]["requirements"][1]["status"] == "missing"
 
 
@@ -71,7 +71,7 @@ def test_dependency_order_is_checked():
     result = grounded.apply_guide_contracts(
         coverage("open", "edit"), [entry(), entry()], contracts, audit(review("open:0", [1]), review("edit:0", [0]))
     )
-    assert result[1]["status"] == "unused"
+    assert result[1]["status"] == "partial"
     assert result[1]["order_errors"] == ["open"]
     result = grounded.apply_guide_contracts(
         coverage("open", "edit"), [entry(), entry()], contracts, audit(review("open:0", [0]), review("edit:0", [1]))
@@ -127,27 +127,37 @@ def test_review_requires_a_quote_that_actually_exists_in_answer(quote):
     assert result[0]["status"] != "explained"
 
 
-def test_review_quote_may_copy_the_cited_items_source_quote():
+def test_source_quote_is_not_a_proof_of_what_the_answer_explained():
     # モデルは引いた item の説明の文ではなく根拠の原文を写すことが多い（#2811）。引いた item に属する文なら受ける。
     paraphrase = grounded.CheckedItem(
-        GroundedItem(kind="operation", text="一覧で対象を選ぶ", quote="一覧から対象を選択します"),
+        GroundedItem(
+            kind="operation", text="一覧で対象を選ぶ", citations=[GroundedCitation(evidence_id="", quote="一覧から対象を選択します")]
+        ),
         span={"text": "一覧から対象を選択します", "evidence_id": "E1"},
     )
     result = grounded.apply_guide_contracts(
         coverage("a"), [paraphrase], [contract("a", "対象選択")], audit({**review("a:0", [0]), "answer_quote": "一覧から対象を選択します"})
     )
-    assert result[0]["status"] == "explained"
+    assert result[0]["status"] == "unknown"
 
 
 @pytest.mark.parametrize("indexes", [[0, 1], [1, 0]])
 def test_requirement_quote_can_combine_excerpts_from_several_items(indexes):
     items = [
         grounded.CheckedItem(
-            GroundedItem(kind="operation", text="一覧で対象を選択します。続けて詳細を開きます。", quote="一覧で対象を選択します。"),
+            GroundedItem(
+                kind="operation",
+                text="一覧で対象を選択します。続けて詳細を開きます。",
+                citations=[GroundedCitation(evidence_id="", quote="一覧で対象を選択します。")],
+            ),
             span={"text": "一覧で対象を選択します。続けて詳細を開きます。", "evidence_id": "E1"},
         ),
         grounded.CheckedItem(
-            GroundedItem(kind="operation", text="内容を確認します。保存ボタンで確定します。", quote="保存ボタンで確定します。"),
+            GroundedItem(
+                kind="operation",
+                text="内容を確認します。保存ボタンで確定します。",
+                citations=[GroundedCitation(evidence_id="", quote="保存ボタンで確定します。")],
+            ),
             span={"text": "内容を確認します。保存ボタンで確定します。", "evidence_id": "E2"},
         ),
     ]
@@ -156,20 +166,28 @@ def test_requirement_quote_can_combine_excerpts_from_several_items(indexes):
     assert result[0]["status"] == "explained"
 
 
-def test_requirement_quote_can_combine_answer_text_and_its_source_quote():
+def test_requirement_quote_requires_each_combined_excerpt_to_be_answer_text():
     items = [
         grounded.CheckedItem(
-            GroundedItem(kind="rule", text="担当者は一覧で対象を選びます。", quote="一覧の対象を担当者が選択します。"),
+            GroundedItem(
+                kind="rule",
+                text="担当者は一覧で対象を選びます。",
+                citations=[GroundedCitation(evidence_id="", quote="一覧の対象を担当者が選択します。")],
+            ),
             span={"text": "一覧の対象を担当者が選択します。", "evidence_id": "E1"},
         ),
         grounded.CheckedItem(
-            GroundedItem(kind="rule", text="承認後、1日以内に設定します。", quote="承認後、一日以内に設定します。"),
+            GroundedItem(
+                kind="rule",
+                text="承認後、1日以内に設定します。",
+                citations=[GroundedCitation(evidence_id="", quote="承認後、一日以内に設定します。")],
+            ),
             span={"text": "承認後、一日以内に設定します。", "evidence_id": "E2"},
         ),
     ]
     observation = {**review("a:0", [0, 1]), "answer_quote": "担当者は一覧で対象を選びます。承認後、一日以内に設定します。"}
     result = grounded.apply_guide_contracts(coverage("a"), items, [contract("a", "担当者と設定までの期間")], audit(observation))
-    assert result[0]["status"] == "explained"
+    assert result[0]["status"] == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -178,7 +196,9 @@ def test_requirement_quote_can_combine_answer_text_and_its_source_quote():
 )
 def test_combined_requirement_quote_rejects_invented_or_uncited_excerpts(quote):
     uncited = grounded.CheckedItem(
-        GroundedItem(kind="operation", text="別の手順を実行します", quote="別の手順を実行します"),
+        GroundedItem(
+            kind="operation", text="別の手順を実行します", citations=[GroundedCitation(evidence_id="", quote="別の手順を実行します")]
+        ),
         span={"text": "別の手順を実行します", "evidence_id": "E2"},
     )
     result = grounded.apply_guide_contracts(
@@ -189,7 +209,11 @@ def test_combined_requirement_quote_rejects_invented_or_uncited_excerpts(quote):
 
 def test_combined_requirement_quote_does_not_accept_a_changed_number():
     item = grounded.CheckedItem(
-        GroundedItem(kind="rule", text="担当者が実行します。2日以内に設定します。", quote="担当者が実行します。2日以内に設定します。"),
+        GroundedItem(
+            kind="rule",
+            text="担当者が実行します。2日以内に設定します。",
+            citations=[GroundedCitation(evidence_id="", quote="担当者が実行します。2日以内に設定します。")],
+        ),
         span={"text": "担当者が実行します。2日以内に設定します。", "evidence_id": "E1"},
     )
     observation = {**review("a:0", [0]), "answer_quote": "担当者が実行します。1日以内に設定します。"}
@@ -200,7 +224,11 @@ def test_combined_requirement_quote_does_not_accept_a_changed_number():
 @pytest.mark.parametrize(("kind", "explained"), [("gap", True), ("operation", False)])
 def test_stated_unavailable_may_omit_the_quote_only_for_gap_lines(kind, explained):
     item = grounded.CheckedItem(
-        GroundedItem(kind=kind, text="列の定義を確認できません。", quote="" if kind == "gap" else "列の定義を確認できません。"),
+        GroundedItem(
+            kind=kind,
+            text="列の定義を確認できません。",
+            citations=[GroundedCitation(evidence_id="", quote="" if kind == "gap" else "列の定義を確認できません。")],
+        ),
         span=None if kind == "gap" else {"text": "列の定義を確認できません。", "evidence_id": "E1"},
     )
     result = grounded.apply_guide_contracts(
@@ -212,14 +240,17 @@ def test_stated_unavailable_may_omit_the_quote_only_for_gap_lines(kind, explaine
     assert (result[0]["status"] == "explained") is explained
 
 
-def test_one_answer_item_cannot_complete_two_distinct_steps():
+def test_one_operation_does_not_complete_a_distinct_missing_step():
     result = grounded.apply_guide_contracts(
-        coverage("a", "b"), [entry()], [contract("a", "対象選択"), contract("b", "保存確定")], audit(review("a:0", [0]), review("b:0", [0]))
+        coverage("a", "b"),
+        [entry()],
+        [contract("a", "対象選択"), contract("b", "保存確定")],
+        audit(review("a:0", [0]), {**review("b:0", [], "missing"), "answer_quote": ""}),
     )
     assert [step["status"] for step in result] == ["explained", "unused"]
 
 
-def test_generation_receives_requirements_and_missing_audit_rows_are_retried():
+def test_generation_receives_requirements_and_missing_audit_rows_remain_unverified():
     from dataclasses import replace
 
     from test_grounded_answer import FakeModel, draft, item
@@ -242,9 +273,10 @@ def test_generation_receives_requirements_and_missing_audit_rows_are_retried():
     model = FakeModel([draft(item(labels[STEP_A], STEP_A, STEP_A), item(labels[STEP_B], STEP_B, STEP_B))], [incomplete, complete])
     result = _run(model, ctx, knowledge).response
     assert "guide_contracts" in _drafts(model)[0]
-    assert _audits(model)[1]["validation_error"]["required_once"] == ["s1:0", "s2:0"]
-    assert all(step["status"] == "explained" for step in result.generation_trace["rounds"][0]["guide_steps"])
-    assert len(_audits(model)) == 2
+    steps = result.generation_trace["rounds"][0]["guide_steps"]
+    assert all(step["status"] != "explained" for step in steps)
+    assert all(requirement["status"] == "unknown" for step in steps for requirement in step["requirements"])
+    assert len(_audits(model)) == 1
 
 
 @pytest.mark.parametrize("supported", [True, False])
@@ -319,7 +351,8 @@ def test_invalid_answer_proof_uses_one_bounded_audit_retry(repair):
     first_round = result.generation_trace["rounds"][0]
     assert first_round["audit_calls"] == 2
     first_step = next(s for s in first_round["guide_steps"] if s["step_id"] == "s1")
-    assert (first_step["status"] == "explained") is repair
+    assert first_step["status"] == "unknown"
+    assert first_round["timing"]["semantic_audit_observation"]["adopted"] is False
 
 
 def test_partly_explained_quote_does_not_retry_the_audit():

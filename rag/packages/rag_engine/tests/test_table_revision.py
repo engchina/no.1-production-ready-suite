@@ -14,7 +14,7 @@ from rag_engine.evaluation.answer_validation import (
 )
 from rag_engine.generation import grounded
 from rag_engine.generation.table_revision import REVISION_SYSTEM_PROMPT, TableRevision, revise_table_passage
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 TABLE = (
     "<table><tr><th>区分</th><th>選択肢の値</th></tr>"
@@ -42,6 +42,8 @@ def test_wrong_value_is_replaced_by_the_value_of_the_table() -> None:
     assert "『区分Ⅱ』の値は『02』" in revised.note
     [(system, inputs, schema)] = seen
     assert system == REVISION_SYSTEM_PROMPT and schema is TableRevision
+    assert system.startswith("## Step 1:")
+    assert "## Step 4:" in system
     # LLM には段落と表の正しい対応だけを渡す。
     assert inputs == {
         "passage": WRONG,
@@ -83,7 +85,7 @@ def test_generated_item_is_corrected_and_kept_with_a_mark() -> None:
     spans = grounded.tag_spans(
         question, [{"evidence_id": "E1", "source_id": "c1", "source": "m.pdf", "page": 1, "text": TABLE, "section_path": []}]
     )
-    item = GroundedItem(kind="rule", text=WRONG, evidence_id="E1", quote="区分Ⅱ 02")
+    item = GroundedItem(kind="rule", text=WRONG, citations=[GroundedCitation(evidence_id="E1", quote="区分Ⅱ 02")])
     entries, _ = grounded.verify(question, GroundedDraft(summary="", confidence="high", items=[item]), spans)
     entry = next(entry for entry in entries if entry.item.text == WRONG)
     assert entry.removed and entry.table_conflict

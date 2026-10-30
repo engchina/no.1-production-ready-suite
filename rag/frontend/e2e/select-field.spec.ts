@@ -105,14 +105,6 @@ async function mockApi(page: Page) {
         auto_field_filter_enabled: false,
         config_source: "runtime",
       },
-      "/api/settings/answer-records": { retention_days: 90, config_source: "runtime" },
-      "/api/settings/query-history": {
-        enabled: false,
-        retention_days: 90,
-        min_count: 3,
-        suggestion_limit: 5,
-        blocklist: [],
-      },
     };
     if (url.pathname in retrievalCards) {
       await route.fulfill({
@@ -161,19 +153,11 @@ test("OCI リージョンの候補を指定順で表示し、選択できる", a
   await expect(page.getByRole("listbox", { name: "リージョン", exact: true })).toBeHidden();
 });
 
-test("検索条件の候補取得数も同じドロップダウン UI で選択できる", async ({ page }) => {
+test("検索条件に候補取得数の入力を表示しない", async ({ page }) => {
   await page.goto("/search");
-
-  // 候補取得数は「詳細条件」ディスクロージャ内にあるため展開してから操作する。
   await page.getByRole("button", { name: "詳細条件" }).click();
-  const topK = page.getByRole("combobox", { name: "候補取得数" });
-  await topK.click();
-
-  const listbox = page.getByRole("listbox", { name: "候補取得数" });
-  await expect(listbox.getByRole("option")).toHaveText(["5", "10", "20", "50"]);
-
-  await listbox.getByRole("option", { name: "50" }).click();
-  await expect(topK).toContainText("50");
+  await expect(page.getByRole("combobox", { name: "候補取得数" })).toHaveCount(0);
+  await expect(page.locator('button[aria-controls="search-classification-filters"]')).toBeVisible();
 });
 
 // ── #352: Portal・反転・typeahead・選択肢のスクロール ──────────────────────────

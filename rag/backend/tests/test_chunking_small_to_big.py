@@ -664,3 +664,10 @@ async def test_parent_child_generated_search_hits_resolve_only_original_evidence
         assert evidence
         assert all(not is_derived_chunk(row) and "原文の合成本文" in row.text for row in evidence)
         assert all(question not in row.text for row in evidence)
+
+
+def test_layout_parent_keeps_its_original_page_span() -> None:
+    chunks = build_parent_child_chunks(_extraction())
+    assert chunks
+    assert all(chunk.metadata["parent_page_start"] == 1 for chunk in chunks)
+    assert all(chunk.metadata["parent_page_end"] == 1 for chunk in chunks)

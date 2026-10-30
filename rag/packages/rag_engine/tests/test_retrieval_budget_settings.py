@@ -57,3 +57,57 @@ class RetrievalBudgetSettingsTest(unittest.TestCase):
             self.assertNotIn("budget", seen)
         finally:
             answering.evidence_spans = original
+
+
+class EvidenceBudgetTraceTest(unittest.TestCase):
+    """生成に渡した根拠の文字予算を診断に残す (#3776)。設定値・実際に使った値・送った文字数を分ける。"""
+
+    def _trace(self, *, evidence_budget_chars=None, **overrides):
+        from dataclasses import replace
+
+        from test_grounded_answer import LIST_TEXT, FakeModel, audit, context, draft, ids, item, record
+
+        from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+        from rag_engine.generation.answering import synthesize_grounded_answer
+
+        def unused(*a, **k):
+            return (_ for _ in ()).throw(AssertionError("unexpected I/O"))
+
+        ctx = context(record(0, LIST_TEXT, "機能A"))
+        eid = ids(ctx)[LIST_TEXT]
+        text = "一覧表を選択し、処理を選択します。"
+        model = FakeModel([draft(item(eid, text, text))], [audit((0, "supported", "matched", ""))])
+        settings = replace(get_settings(environ={}, dotenv_path=None), **overrides)
+        with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+            response = synthesize_grounded_answer(
+                "一覧表の処理は？", ctx, settings, image_prompt_mode="text_only", evidence_budget_chars=evidence_budget_chars
+            ).response
+        return response.generation_trace["evidence_budget"]
+
+    def test_configured_budget_and_sent_chars_are_recorded(self):
+        trace = self._trace()
+        self.assertEqual(trace["configured_chars"], EVIDENCE_BUDGET_CHARS)
+        self.assertEqual(trace["effective_chars"], EVIDENCE_BUDGET_CHARS)
+        self.assertEqual(trace["source"], "configured")
+        self.assertFalse(trace["effective_exceeds_configured"])
+        self.assertGreaterEqual(trace["span_count"], 1)
+        # 根拠ブロックは本文に出典情報・書式を足したもの。token の見積もりは文字数を超えない。
+        self.assertGreater(trace["evidence_text_chars"], 0)
+        self.assertGreater(trace["evidence_block_chars"], trace["evidence_text_chars"])
+        self.assertLessEqual(trace["evidence_block_tokens_estimate"], trace["evidence_block_chars"])
+        # 数値と区分だけを残す（本文・プロンプトを診断に入れない）。
+        self.assertTrue(all(isinstance(value, (int, bool, str)) for value in trace.values()))
+
+    def test_section_expansion_budget_is_distinguished_from_the_setting(self):
+        trace = self._trace(evidence_budget_chars=60000)
+        self.assertEqual((trace["configured_chars"], trace["effective_chars"]), (EVIDENCE_BUDGET_CHARS, 60000))
+        self.assertEqual(trace["source"], "section_expansion")
+        self.assertFalse(trace["effective_exceeds_configured"])
+
+    def test_configured_value_from_settings_is_used(self):
+        from dataclasses import replace
+
+        settings = replace(get_settings(environ={}, dotenv_path=None), evidence_budget_chars=72000)
+        trace = answering._evidence_budget_trace(settings, None, [])
+        self.assertEqual((trace["configured_chars"], trace["effective_chars"], trace["span_count"]), (72000, 72000, 0))
+        self.assertEqual(trace["evidence_block_chars"], 0)

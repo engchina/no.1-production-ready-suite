@@ -26,7 +26,6 @@ import {
   ListChecks,
   RefreshCw,
   RotateCcw,
-  Settings,
   Upload,
 } from "lucide-react";
 import { useId, useState } from "react";
@@ -168,9 +167,7 @@ export function UploadWorkspace() {
       <PageBody wide>
         {!uploaded ? (
           <>
-            <UploadStorageNotice
-              canOpenSettings={hasPermission(MENU_PERMISSIONS.settingsUploadStorage)}
-            />
+            <UploadStorageNotice />
             <UploadKnowledgeBasePicker
               selectedIds={knowledgeBaseIds}
               onChange={handleKnowledgeBaseChange}
@@ -526,7 +523,7 @@ function UploadKnowledgeBasePicker({
   );
 }
 
-function UploadStorageNotice({ canOpenSettings }: { canOpenSettings: boolean }) {
+function UploadStorageNotice() {
   const query = useUploadStorageSettings();
 
   if (query.isPending || query.isError || !query.data) return null;
@@ -550,17 +547,7 @@ function UploadStorageNotice({ canOpenSettings }: { canOpenSettings: boolean }) 
           </p>
         </div>
       </div>
-      {/* 保存先の設定画面を開けない利用者（アップロードだけ許可）には導線を出さない。 */}
-      {canOpenSettings ? (
-        <ButtonLink
-          to={APP_ROUTES.settingsUploadStorage}
-          linkComponent={Link}
-          size="sm"
-          icon={Settings}
-        >
-          {t("upload.storageNotice.settings")}
-        </ButtonLink>
-      ) : null}
+
     </div>
   );
 }

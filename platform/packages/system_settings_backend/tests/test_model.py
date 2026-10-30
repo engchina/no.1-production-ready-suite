@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import stat
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from dotenv import dotenv_values
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pr_backend_core.llm_request_params import note_dropped_parameters
 from pydantic import Field
 
 from pr_system_settings import model as shared_model
@@ -40,6 +42,7 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_models: list[EnterpriseAiConfiguredModel] = Field(default_factory=list)
     oci_enterprise_ai_default_text_model: str = ""
     oci_enterprise_ai_default_vision_model: str = ""
+    oci_enterprise_ai_default_judge_model: str = ""
     oci_enterprise_ai_llm_path: str = "/responses"
     oci_enterprise_ai_vlm_path: str = "/responses"
     oci_enterprise_ai_vlm_input_mode: str = "auto"
@@ -49,7 +52,6 @@ class FakeSettings(ModelSecretStateMixin):
     oci_enterprise_ai_vlm_response_path: str = ""
     oci_enterprise_ai_timeout_seconds: float = 600.0
     oci_enterprise_ai_max_retries: int = 3
-    oci_enterprise_ai_seed: int = 42
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"
@@ -270,6 +272,35 @@ def test_model_test_requires_model_id(tmp_path: Path) -> None:
     assert data["data"]["raw_error"] == "テストするモデル ID を入力してください。"
 
 
+def test_model_test_reports_dropped_parameters(tmp_path: Path) -> None:
+    """受け付けない引数を外して送ったら、詳細と成功の文に出す（#3539。worker thread も）。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    request = {"settings": PAYLOAD, "target_type": "enterprise_text", "model_id": "llm-a"}
+
+    async def dropped(_candidate: Any, _request: ModelSettingsTestRequest) -> dict[str, Any]:
+        await asyncio.to_thread(note_dropped_parameters, ("temperature",))
+        note_dropped_parameters(("top_p",))
+        return {"response_chars": 2, "surface": "llm"}
+
+    data = (
+        make_client(settings, store, run_model_test=dropped)
+        .post("/api/settings/model/test", json=request)
+        .json()["data"]
+    )
+    assert data["status"] == "success"
+    assert data["details"] == {
+        "response_chars": 2,
+        "surface": "llm",
+        "dropped_parameters": "temperature, top_p",
+    }
+    assert "受け付けない引数（temperature, top_p）は外して送りました" in data["message"]
+
+    plain = make_client(settings, store).post("/api/settings/model/test", json=request).json()
+    assert "dropped_parameters" not in plain["data"]["details"]
+    assert "外して送りました" not in plain["data"]["message"]
+
+
 def test_saved_key_overrides_process_environment_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -290,6 +321,38 @@ def test_saved_key_overrides_process_environment_key(
     assert cleared["settings"]["enterprise_ai"]["connections"][0]["has_api_key"] is True
     client.get("/api/settings/model")
     assert settings.oci_enterprise_ai_api_key == "sk-process"
+
+
+def test_seed_is_not_kept(tmp_path: Path) -> None:
+    """seed は持たない（#3529）。保存済みの JSON・送られた payload の `seed` は読み捨てる。"""
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps(
+            {
+                "version": 6,
+                "enterprise_ai": {
+                    "models": [{"model_id": "llm-a", "display_name": "A"}],
+                    "default_text_model_id": "llm-a",
+                    "seed": 42,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+
+    assert (
+        "seed" not in client.get("/api/settings/model").json()["data"]["settings"]["enterprise_ai"]
+    )
+    payload = {**PAYLOAD, "enterprise_ai": {**PAYLOAD["enterprise_ai"], "seed": 7}}
+    saved = client.patch("/api/settings/model", json=payload)
+
+    assert saved.status_code == 200
+    assert "seed" not in saved.json()["data"]["settings"]["enterprise_ai"]
+    document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
+    assert "seed" not in document["enterprise_ai"]
 
 
 def test_broken_json_is_reported(tmp_path: Path) -> None:
@@ -399,6 +462,106 @@ def test_default_model_errors_follow_screen_order() -> None:
         shared_model.EnterpriseAiModelSettings.model_validate(enterprise)
     )
     assert [error.field for error in errors] == ["default_text_model_id", "default_vision_model_id"]
+
+
+# --------------------------------------------------------------------------- #3574 既定の判定モデル
+
+
+@pytest.mark.parametrize(
+    ("judge", "answer_model", "expected"),
+    [
+        ("", "llm-c", "llm-a"),
+        (shared_model.ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER, "llm-c", "llm-c"),
+        (shared_model.ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER, None, "llm-a"),
+        (shared_model.ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER, " ", "llm-a"),
+        ("vlm-b", "llm-c", "vlm-b"),
+    ],
+    ids=["default-text", "same-as-answer", "same-without-answer", "same-blank-answer", "fixed"],
+)
+def test_judge_model_resolution(judge: str, answer_model: str | None, expected: str) -> None:
+    """空（既定）は既定のテキストモデル、「回答と同じモデル」は回答のモデル、ほかはそのモデル。"""
+    settings = FakeSettings(
+        oci_enterprise_ai_models=MODELS,
+        oci_enterprise_ai_default_text_model="llm-a",
+        oci_enterprise_ai_default_vision_model="vlm-b",
+        oci_enterprise_ai_default_judge_model=judge,
+    )
+    assert shared_model.enterprise_ai_judge_model_id(settings, answer_model) == expected
+
+
+@pytest.mark.parametrize(
+    "judge", ["", shared_model.ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER, "llm-a", "vlm-b"]
+)
+def test_judge_model_accepts_default_same_as_answer_and_registered(judge: str) -> None:
+    enterprise = {**PAYLOAD["enterprise_ai"], "default_judge_model_id": judge}
+    assert (
+        shared_model.validate_default_models(
+            shared_model.EnterpriseAiModelSettings.model_validate(enterprise)
+        )
+        == []
+    )
+
+
+def test_unregistered_judge_model_is_rejected_after_other_defaults(tmp_path: Path) -> None:
+    """登録モデルに無い判定モデルはエラー。並びは画面と同じ（テキスト → Vision → 判定）。"""
+    enterprise = {
+        **PAYLOAD["enterprise_ai"],
+        "default_text_model_id": "",
+        "default_judge_model_id": "gone",
+    }
+    errors = shared_model.validate_default_models(
+        shared_model.EnterpriseAiModelSettings.model_validate(enterprise)
+    )
+    assert [error.field for error in errors] == ["default_text_model_id", "default_judge_model_id"]
+
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    response = make_client(settings, store).patch(
+        "/api/settings/model",
+        json={
+            **PAYLOAD,
+            "enterprise_ai": {**PAYLOAD["enterprise_ai"], "default_judge_model_id": "gone"},
+        },
+    )
+    assert response.status_code == 422
+    assert "既定の判定モデル「gone」は登録モデルにありません" in response.json()["detail"]
+
+
+def test_judge_model_is_saved_and_reloaded(tmp_path: Path) -> None:
+    """既定の判定モデルは model-settings.json に保存し、読み直しても同じ値になる。"""
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    same = shared_model.ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER
+
+    response = client.patch(
+        "/api/settings/model",
+        json={
+            **PAYLOAD,
+            "enterprise_ai": {**PAYLOAD["enterprise_ai"], "default_judge_model_id": same},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["settings"]["enterprise_ai"]["default_judge_model_id"] == same
+    document = json.loads((tmp_path / "model-settings.json").read_text(encoding="utf-8"))
+    assert document["enterprise_ai"]["default_judge_model_id"] == same
+    reloaded = FakeSettings()
+    store.load(reloaded)
+    assert reloaded.oci_enterprise_ai_default_judge_model == same
+
+
+def test_document_without_judge_model_defaults_to_default_text_model(tmp_path: Path) -> None:
+    """既定の判定モデルの無い JSON は空（既定のテキストモデルで判定）として読む。"""
+    (tmp_path / "model-settings.json").write_text(
+        json.dumps({"version": 6, "enterprise_ai": PAYLOAD["enterprise_ai"]}), encoding="utf-8"
+    )
+    settings = FakeSettings(oci_enterprise_ai_default_judge_model="llm-a")
+    make_store(tmp_path).load(settings)
+    assert settings.oci_enterprise_ai_default_judge_model == ""
+    assert shared_model.enterprise_ai_judge_model_id(settings, "vlm-b") == "llm-a"
 
 
 def test_patch_accepts_vision_capable_text_model(tmp_path: Path) -> None:

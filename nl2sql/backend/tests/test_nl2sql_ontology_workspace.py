@@ -33,7 +33,7 @@ from app.settings import get_settings
 
 @pytest.fixture(autouse=True)
 def no_auth(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "app_auth_enabled", False)
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
 
 
 def model() -> list[Any]:

@@ -21,10 +21,13 @@ from time import monotonic
 from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
+from pr_backend_core.observability.model_usage import RunModelUsage
 from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
+from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.stored_answer import stored_citations
+from app.schemas.history import ValidationExecution
 from app.schemas.search import (
     EXTRACTION_FIELD_FILTER_KEY,
     SUPPORTED_SEARCH_CLASSIFICATION_FILTERS,
@@ -82,6 +85,36 @@ def search_run_conditions(request: SearchRequest) -> dict[str, object]:
     return {"top_k": request.top_k, **({"filters": filters} if filters else {})}
 
 
+def answer_validation_execution(
+    diagnostics: Mapping[str, Any] | None,
+) -> ValidationExecution | None:
+    """照合の実行状態だけを記録する。実行失敗を合格や内容不支持へ変換しない。"""
+    validation = diagnostics.get("answer_validation") if diagnostics is not None else None
+    if not isinstance(validation, Mapping):
+        return None
+    status = str(validation.get("status") or "").strip().lower()
+    if status == "disabled" or (
+        status == "not_run" and validation.get("reason") == "audit_disabled"
+    ):
+        return "disabled"
+    if status in {"not_run", "no_claims"}:
+        return "not_run"
+    if status == "error":
+        return "error"
+    if status in {"timed_out", "timeout"}:
+        return "timed_out"
+    if status == "partial":
+        return "partial"
+    if semantic_audit_is_diagnostic_only(diagnostics or {}):
+        return "unknown"
+    if status in {"completed", "ok", "validated"}:
+        if validation.get("valid") is True:
+            return "passed"
+        if validation.get("valid") is False:
+            return "failed"
+    return "unknown"
+
+
 def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerification | None:
     """最終の資料との照合を優先し、旧記録は要求ごとの監査から検証状態を読む。
 
@@ -92,6 +125,8 @@ def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerificatio
     """
     if diagnostics is None:
         return None
+    if semantic_audit_is_diagnostic_only(diagnostics):
+        return "unverified"
     validation = diagnostics.get("answer_validation")
     if isinstance(validation, Mapping):
         if validation.get("valid") is True:
@@ -127,8 +162,12 @@ class RunRecorder:
     store: _RunStore | None = None
     conversation_id: str | None = None
     message_id: str | None = None
+    # 実行のときに解決した回答のモデルの ID（既定のモデルも具体的な ID。後の設定の変更で変えない。
+    # #3419）。
     model_id: str | None = None
     trace_source: Callable[[], dict[str, Any]] | None = None
+    # 実行のモデルの呼び出しの回数と利用量（`AnswerTrace.model_usage`。#3419）。
+    usage_source: Callable[..., RunModelUsage | None] | None = None
     # 実行の条件（RAG 検索の件数・絞り込み。`search_run_conditions`。#3309）。チャットは持たない。
     conditions: Mapping[str, object] | None = None
     # 終わった段（止まった段を決める。保存しない）。
@@ -178,7 +217,7 @@ class RunRecorder:
             error_stage = _failed_stage(self.stages)
         error_code = safe_error_code(error) if error is not None else None
         failures = list(storage_failures)
-        finish_operation_trace(
+        trace_summary = finish_operation_trace(
             run_id,
             status=(
                 "cancelled"
@@ -188,6 +227,8 @@ class RunRecorder:
                 else "done"
             ),
         )
+        # 実行を確定した後に集める（記録の上限で span を切った trace は一部計測。#3419）。
+        usage = self._usage_record(truncated=trace_summary is not None and trace_summary.truncated)
         record: dict[str, object] = {
             "run_id": run_id,
             "surface": self.surface,
@@ -211,10 +252,19 @@ class RunRecorder:
             "conversation_id": self.conversation_id,
             "message_id": self.message_id,
             "stages": {
+                **(
+                    {"validation_execution": validation_execution}
+                    if (validation_execution := answer_validation_execution(diagnostics))
+                    is not None
+                    else {}
+                ),
                 # 詳細の処理の経過（共通の span の表の trace id と工程の詳細。#3226）。
                 **({"trace": trace} if (trace := self._trace_record()) is not None else {}),
                 # 実行の条件（詳細の「RAG 検索で開く」が画面に戻す。#3309）。
                 **({"conditions": dict(self.conditions)} if self.conditions else {}),
+                # モデルの呼び出しの回数と利用量（概要の「モデル」「token」「モデルの呼び出し」。
+                # #3419）。
+                **({"usage": usage} if usage is not None else {}),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
                 **({"error_code": str(error_code)} if error_code is not None else {}),
                 **(
@@ -228,6 +278,16 @@ class RunRecorder:
         }
         self._last_record = record
         await self._save(record)
+
+    def _usage_record(self, *, truncated: bool) -> dict[str, object] | None:
+        if self.usage_source is None:
+            return None
+        try:
+            usage = self.usage_source(primary_model=self.model_id, truncated=truncated)
+        except Exception as exc:  # noqa: BLE001 - 利用量は補助。実行の記録は残す（未計測にする）。
+            logger.warning("run history usage record failed", extra=safe_exception_fields(exc))
+            return None
+        return usage.model_dump(mode="json") if usage is not None else None
 
     def _trace_record(self) -> dict[str, Any] | None:
         if self.trace_source is None:

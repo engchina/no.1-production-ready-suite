@@ -76,10 +76,10 @@ describe("ServicesManagementClient service policy helpers", () => {
     ).toBe("journalctl -u production-ready-rag-parser-docling.service / 最新 200 行");
     for (const key of [
       "settings.services.overview.description",
-      "settings.services.mode.dev",
-      "settings.services.mode.prod",
-      "settings.services.mode.dev.hint",
-      "settings.services.mode.prod.hint",
+      "settings.services.mode.local",
+      "settings.services.mode.production",
+      "settings.services.mode.local.hint",
+      "settings.services.mode.deployed.hint",
       "settings.services.modelCache.hint",
     ] as const) {
       expect(t(key)).not.toMatch(/docker|compose|コンテナ/i);

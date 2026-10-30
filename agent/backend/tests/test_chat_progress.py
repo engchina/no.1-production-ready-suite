@@ -52,6 +52,7 @@ from test_health import _FakeOracleConnection, _FakeOracleStore
 from trace_support import run_progress_events
 
 from app.features.agent import builtin_runtime
+from app.features.agent import tools as tools_module
 from app.features.agent.chat_progress import RUN_STEP_PARAM, model_turn_kind, tool_display
 from app.features.agent.runtime import (
     AgentRuntimeOracleCheckpointRepository,
@@ -62,7 +63,12 @@ from app.features.agent.runtime import (
     RunState,
     runtime_repository,
 )
-from app.features.agent.tools import ToolCall, ToolInvocationContext, tool_registry
+from app.features.agent.tools import (
+    ToolCall,
+    ToolInvocationContext,
+    mcp_base_tool_name,
+    tool_registry,
+)
 from app.features.agent.trace_spans import run_trace_owner, trace_spans
 from app.security.service import set_security_service
 
@@ -337,6 +343,47 @@ def test_span_from_a_tool_thread_is_nested_under_the_tool(monkeypatch: MonkeyPat
     [mcp] = [step for step in steps if (step.span or {}).get("name") == "mcp.request"]
     assert mcp.span is not None and mcp.span["parent_id"] == tool.step_id
     assert mcp.status == "done"
+
+
+def test_mcp_request_under_a_tool_carries_the_tool_title(monkeypatch: MonkeyPatch) -> None:
+    """ツールの中の MCP の `tools/call` の span は、ツールの表示名（MCP の `title`）を
+    `pr.tool.title` に持つ（画面の行は「MCP の呼び出し · 〈表示名〉」。#3468）。別のツールの
+    呼び出しには付けない。"""
+
+    def lookup(_arguments: dict[str, Any], _context: ToolInvocationContext) -> dict[str, Any]:
+        for name in (mcp_base_tool_name(LOOKUP), "other_tool"):
+            with observed_span(
+                "mcp.request",
+                kind="client",
+                attributes=tools_module._mcp_request_attributes(
+                    {"method": "tools/call", "params": {"name": name}}
+                ),
+            ):
+                pass
+        return {"rows": 1}
+
+    definition = tool_registry.get(LOOKUP)
+    assert definition is not None
+    tool_registry.register(definition, lookup)
+    _script(
+        monkeypatch,
+        [function_call(LOOKUP, {"query": "x"}, call_id="call-1")],
+        [assistant_message("1 件です。")],
+    )
+    run_id = _create_run()
+    runtime_repository.note_builtin_tool_titles(run_id, {LOOKUP: "合成の照会"})
+
+    anyio.run(builtin_runtime.execute_run, run_id)
+
+    run = runtime_repository.get_run(run_id)
+    steps = fold_chat_progress_events(run_progress_events(run)).step_list()
+    [tool] = [step for step in steps if (step.span or {}).get("name") == TOOL]
+    calls = [step for step in steps if (step.span or {}).get("name") == "mcp.request"]
+    assert all(step.span is not None and step.span["parent_id"] == tool.step_id for step in calls)
+    assert [((step.span or {}).get("attributes") or {}).get("pr.tool.title") for step in calls] == [
+        "合成の照会",
+        None,
+    ]
 
 
 def test_approval_wait_is_recorded_when_the_run_resumes(monkeypatch: MonkeyPatch) -> None:

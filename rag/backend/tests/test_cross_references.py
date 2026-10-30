@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_parser_core.language import FIELD_SPECS, builtin_pack, resolve, set_default_pack
 
 from app.config import Settings
@@ -676,7 +677,11 @@ class ReferenceOracle:
         ][:top_k]
 
     async def context_group_siblings(
-        self, anchors: list[RetrievedChunk], *, max_chunks_per_group: int
+        self,
+        anchors: list[RetrievedChunk],
+        *,
+        max_chunks_per_group: int,
+        neighbor_child_count: int | None = None,
     ) -> list[RetrievedChunk]:
         return []
 
@@ -839,8 +844,8 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
     assert added.metadata[REFERENCE_FROM_KEY] == "doc-1:a"
     assert added.metadata[REFERENCE_LABEL_KEY] == "第3章"
     assert set(state.reference_expansions) == {"doc-1:cs-1:s0", "doc-1:cs-1:s1"}
-    # 親(small-to-big の文脈)も作る。
-    assert any(chunk.chunk_level == "parent" for chunk in result.all_chunks)
+    # 非親子の参照先は子の原文を保持し、連結した親を合成しない。
+    assert all(chunk.chunk_level == "child" for chunk in result.all_chunks)
 
 
 async def test_search_reference_expansion_respects_budget_and_caches_targets() -> None:
@@ -1949,7 +1954,7 @@ def _section_corpus() -> list[RetrievedChunk]:
         ),
         _retrieved(
             "doc-b:cs-9:1",
-            "合成の操作の手順の本文。",
+            "合成の入力画面で確認ボタンを押す。",
             "第3章 手順",
             document_id="doc-b",
             file_name="合成文書B.md",
@@ -2053,7 +2058,7 @@ class SectionScopeMap:
         return SectionText(outline=outline, section=node, chunks=rows, complete=True)
 
 
-_SECTION_ANSWER = "合成の操作の手順の本文。"
+_SECTION_ANSWER = "合成の入力画面で確認ボタンを押す。"
 
 
 def _section_answer_llm(
@@ -2065,19 +2070,53 @@ def _section_answer_llm(
     from tests.test_answer_engine import _fake_llm
 
     if schema is CragRetrievalGradeOutput:
-        return CragRetrievalGradeOutput(
-            reason="不足", sufficient=False, confidence=0.4, rewritten_query=""
+        candidates = json.loads(
+            prompt.split("BEGIN_UNTRUSTED_CRAG_CANDIDATES\n", 1)[1].split(
+                "END_UNTRUSTED_CRAG_CANDIDATES", 1
+            )[0]
         )
-    if schema is GroundedDraft:
-        # 本文の直前の根拠の ID(本文の前の補助情報に括弧があるので、最も近い ID を取る)。
-        ids = re.findall(r"\[(E[0-9]+)\]", prompt.split(_SECTION_ANSWER)[0])
+        candidate = next((row for row in candidates if _SECTION_ANSWER in row["text"]), None)
+        evidence = (
+            [dict(source_id=candidate["chunk_uid"], quote=_SECTION_ANSWER)] if candidate else []
+        )
+        return CragRetrievalGradeOutput(
+            reason="参照先の操作原文を確認" if candidate else "参照先の操作原文が必要",
+            sufficient=bool(candidate),
+            confidence=0.9 if candidate else 0.4,
+            rewritten_query="",
+            candidate_verdicts=[
+                dict(chunk_uid=row["chunk_uid"], relevant=True, reason="参照先の資料")
+                for row in candidates
+            ],
+            aspect_checks=[
+                dict(
+                    aspect=aspect,
+                    status="supported" if candidate else "missing",
+                    source_ids=[candidate["chunk_uid"]] if candidate else [],
+                    evidence=evidence,
+                    reason="操作原文の有無",
+                )
+                for aspect in ["business_object", "requested_result", "applicability", "procedure"]
+            ],
+            answerable_parts=[
+                dict(aspect="procedure", kind="operation", claim=_SECTION_ANSWER, evidence=evidence)
+            ]
+            if candidate
+            else [],
+        )
+    if schema in (GroundedDraft, generation_draft_wire_model()):
+        # CRAGの判定に含まれる引用ではなく、番号付き根拠ブロックから出典を選ぶ。
+        parts = re.split(r"\[(E[0-9]+)\]", prompt)
+        ids = [
+            parts[index] for index in range(1, len(parts), 2) if _SECTION_ANSWER in parts[index + 1]
+        ]
         items = (
             [
                 {
-                    "kind": "rule",
+                    "kind": "operation",
+                    "request_id": "Q1",
                     "text": _SECTION_ANSWER,
-                    "evidence_id": ids[-1],
-                    "quote": _SECTION_ANSWER,
+                    "citations": [{"evidence_id": ids[0], "quote": _SECTION_ANSWER}],
                 }
             ]
             if _SECTION_ANSWER in prompt and ids

@@ -43,11 +43,17 @@ from rag_parser_core.extraction import (
     ExtractionTableCell,
     StructuredExtraction,
 )
+from rag_parser_core.parsed_table import (
+    HEADER_CELL_KEY,
+    PARSED_TABLE_GRID_KEY,
+    PARSED_TABLE_GRID_VERSION,
+)
 from rag_parser_core.result import (
     EXTERNAL_ADAPTER_PACKAGES as EXTERNAL_ADAPTER_PACKAGES,
 )
 from rag_parser_core.result import (
     LOCAL_PARSER_VERSION,
+    UNSTRUCTURED_TEXT_CONTRACT,
     ExternalAdapterRunner,
 )
 from rag_parser_core.result import (
@@ -155,6 +161,8 @@ class _HTMLTableCell:
     text: str
     row_span: int = 1
     col_span: int = 1
+    # th のセル（表頭）か（解析の表の格子の表頭の段。#3429）。
+    header: bool = False
 
 
 @dataclass(frozen=True)
@@ -229,8 +237,9 @@ class _TextHTMLParser(HTMLParser):
         "tr",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, *, retain_single_column_tables: bool = False) -> None:
         super().__init__()
+        self._retain_single_column_tables = retain_single_column_tables
         self._parts: list[str] = []
         self._blocks: list[_HTMLBlock] = []
         self._current_tag: str | None = None
@@ -248,6 +257,7 @@ class _TextHTMLParser(HTMLParser):
         self._table_cell_buffer: list[str] | None = None
         self._table_cell_row_span = 1
         self._table_cell_col_span = 1
+        self._table_cell_header = False
         self._table_caption_buffer: list[str] | None = None
         self._table_caption: str | None = None
 
@@ -284,6 +294,7 @@ class _TextHTMLParser(HTMLParser):
                 self._table_cell_buffer = []
                 self._table_cell_row_span = _html_span_attr(attrs, "rowspan")
                 self._table_cell_col_span = _html_span_attr(attrs, "colspan")
+                self._table_cell_header = normalized == "th"
             return
         if normalized in self.BLOCK_TAGS:
             self._flush_block()
@@ -436,17 +447,21 @@ class _TextHTMLParser(HTMLParser):
         if self._table_cell_buffer is None:
             return
         text = _clean_table_cell(" ".join(self._table_cell_buffer))
-        if text and self._table_row is not None:
+        # 空のセルも列の位置を持つので行に足す（捨てると後ろのセルが左の列にずれる。#3428）。
+        # すべてのセルが空の行は ``_flush_table_row`` が捨てる。
+        if self._table_row is not None:
             self._table_row.append(
                 _HTMLTableCell(
                     text=text,
                     row_span=self._table_cell_row_span,
                     col_span=self._table_cell_col_span,
+                    header=self._table_cell_header,
                 )
             )
         self._table_cell_buffer = None
         self._table_cell_row_span = 1
         self._table_cell_col_span = 1
+        self._table_cell_header = False
 
     def _flush_table_row(self) -> None:
         if self._table_row is None:
@@ -473,7 +488,7 @@ class _TextHTMLParser(HTMLParser):
             caption=self._table_caption,
         )
         column_count = _html_table_shape(html_table)[1]
-        if column_count > 1:
+        if column_count > 1 or self._retain_single_column_tables:
             self._tables.append(html_table)
             self._blocks.append(_HTMLBlock(tag="table", text=_html_table_markdown(html_table)))
         self._table_rows = None
@@ -593,7 +608,10 @@ def _table_cells_from_html_table(table: _HTMLTable) -> list[ExtractionTableCell]
                     text=html_cell.text,
                     row_span=html_cell.row_span,
                     col_span=html_cell.col_span,
-                    metadata={"cell_ref": _a1_cell_ref(row_index, col_index)},
+                    metadata={
+                        "cell_ref": _a1_cell_ref(row_index, col_index),
+                        **({HEADER_CELL_KEY: True} if html_cell.header else {}),
+                    },
                 )
             )
             if html_cell.row_span > 1:
@@ -1199,8 +1217,18 @@ def _unstructured_adapter_result(
         template=template_for_source_profile(source_profile),
         parser_backend="unstructured",
         parser_version=version,
-        extra_artifacts=_unstructured_partition_artifacts(partition_kwargs),
+        extra_artifacts={
+            "unstructured_text_contract": UNSTRUCTURED_TEXT_CONTRACT,
+            **_unstructured_partition_artifacts(partition_kwargs),
+        },
     )
+    if (
+        source_profile is not None and source_profile.modality == "html"
+    ) or _normalized_content_type_for_parser(content_type) in {
+        "text/html",
+        "application/xhtml+xml",
+    }:
+        extraction = _restore_html_table_captions(extraction, source_bytes)
     extraction = _adapter_extraction_with_source_lineage(
         extraction,
         source_profile=source_profile,
@@ -1214,6 +1242,102 @@ def _unstructured_adapter_result(
         parser_backend="unstructured",
         parser_version=version,
         template=template_for_source_profile(source_profile),
+    )
+
+
+def _html_table_cell_signature(
+    cells: Sequence[ExtractionTableCell],
+) -> tuple[tuple[object, ...], ...]:
+    """表題の対応はセルの位置・本文・結合だけで照合し、語の類似や表の順番で推測しない。"""
+    return tuple(
+        sorted(
+            (cell.row, cell.col, _clean_text(cell.text), cell.row_span, cell.col_span)
+            for cell in cells
+        )
+    )
+
+
+def _restore_html_table_captions(
+    extraction: StructuredExtraction, source_bytes: bytes
+) -> StructuredExtraction:
+    """Unstructured が落とす HTML caption を、同じセルの格子を持つ表だけへ戻す。"""
+    parser = _TextHTMLParser(retain_single_column_tables=True)
+    parser.feed(_decode_text_bytes(source_bytes))
+    captions: dict[tuple[tuple[object, ...], ...], set[str]] = {}
+    for source_table in parser.tables():
+        signature = _html_table_cell_signature(_table_cells_from_html_table(source_table))
+        if signature:
+            captions.setdefault(signature, set()).add(source_table.caption or "")
+    captions = {signature: values for signature, values in captions.items() if any(values)}
+    if not captions:
+        return extraction
+    elements = list(extraction.elements)
+    added: list[DocumentElement] = []
+    restored = 0
+    resolved_signatures: set[tuple[tuple[object, ...], ...]] = set()
+    table_elements = {
+        element.element_id: element for element in elements if element.kind == "table"
+    }
+    for table in extraction.tables:
+        signature = _html_table_cell_signature(table.cells)
+        candidates = captions.get(signature, set())
+        if not candidates:
+            continue
+        if table.caption:
+            resolved_signatures.add(signature)
+            continue
+        parent = table_elements.get(table.element_id)
+        if len(candidates) != 1 or parent is None or not parent.element_id:
+            continue
+        caption = next(iter(candidates))
+        added.append(
+            DocumentElement(
+                kind="table_caption",
+                text=caption,
+                order=parent.order,
+                element_id=f"{parent.element_id}-html-caption",
+                parent_id=parent.element_id,
+                content_kind="table",
+                source_parser=parent.source_parser,
+                page_number=parent.page_number,
+                section_path=list(parent.section_path),
+                metadata={"html_tag": "caption", "caption_source": "original_html"},
+            )
+        )
+        restored += 1
+        resolved_signatures.add(signature)
+    unresolved = len(captions.keys() - resolved_signatures)
+    if not added and not unresolved:
+        return extraction
+    # 読み順は表の直後に表題を置き、既存の adapter の表題の結び付けを共用する。
+    by_parent = {element.parent_id: element for element in added}
+    ordered = []
+    for element in elements:
+        ordered.append(element)
+        if element.element_id in by_parent:
+            ordered.append(by_parent[element.element_id])
+    ordered = [element.model_copy(update={"order": order}) for order, element in enumerate(ordered)]
+    ordered, tables = _attach_adapter_table_captions(ordered, extraction.tables)
+    warnings = list(extraction.warnings)
+    if unresolved:
+        warnings.append(
+            "HTML の表題と解析済みの表を一意に対応付けられませんでした。"
+            "原本の表題を確認してください。"
+        )
+    return extraction.model_copy(
+        update={
+            "elements": ordered,
+            "tables": tables,
+            "raw_text": _clean_text(
+                "\n\n".join(element.text for element in ordered if element.text.strip())
+            ),
+            "warnings": warnings,
+            "parser_artifacts": {
+                **extraction.parser_artifacts,
+                "html_captions_restored": restored,
+                "html_captions_unresolved": unresolved,
+            },
+        }
     )
 
 
@@ -1974,7 +2098,8 @@ def _structured_from_html_blocks(
                     page_number=1,
                     caption=table.caption,
                     cells=table_cells,
-                    metadata=metadata,
+                    # セルは HTML の表の格子（span と th の表頭の印つき。#3429）。
+                    metadata={**metadata, PARSED_TABLE_GRID_KEY: PARSED_TABLE_GRID_VERSION},
                 )
             )
             continue
@@ -3655,9 +3780,19 @@ def _adapter_table_from_cells(
                 "row_count": row_count,
                 "column_count": column_count,
                 "table_source": table_source,
+                # 解析が渡したセル・行は解析の表の格子（本文から推したセルは除く。#3429）。
+                **(
+                    {PARSED_TABLE_GRID_KEY: PARSED_TABLE_GRID_VERSION}
+                    if table_source in _PARSED_GRID_TABLE_SOURCES
+                    else {}
+                ),
             },
         )
     ]
+
+
+# 解析が表の格子を渡した表の出どころ（``adapter_text`` は本文から推した行なので含めない）。
+_PARSED_GRID_TABLE_SOURCES = frozenset({"adapter_cells", "adapter_rows"})
 
 
 def _adapter_table_with_page_metadata(

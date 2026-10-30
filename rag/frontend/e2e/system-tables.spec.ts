@@ -693,7 +693,6 @@ for (const theme of ["light", "dark"] as const) {
         pending_versions: [],
         missing_columns: [
           { table_name: "RAG_DOCUMENTS", column_name: "CLASSIFICATION" },
-          { table_name: "RAG_QUERY_HISTORY", column_name: "CLASSIFICATION_FILTER" },
         ],
       },
     });
@@ -704,9 +703,8 @@ for (const theme of ["light", "dark"] as const) {
     const card = page.locator("#system-tables");
     await expect(card.getByText("更新必要", { exact: true }).first()).toBeVisible();
     const missing = card.getByTestId("system-tables-missing-columns");
-    await expect(missing).toContainText("既存のテーブルに必須の列が 2 件ありません");
+    await expect(missing).toContainText("既存のテーブルに必須の列が 1 件ありません");
     await expect(missing).toContainText("RAG_DOCUMENTS.CLASSIFICATION");
-    await expect(missing).toContainText("RAG_QUERY_HISTORY.CLASSIFICATION_FILTER");
 
     const contrast = await minimumTextContrast(page, "#system-tables [role='status']");
     expect(contrast.count).toBeGreaterThan(2);

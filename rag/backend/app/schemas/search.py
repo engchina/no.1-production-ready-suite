@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pr_backend_core.api.validation import validation_error_messages
 from pydantic import (
@@ -22,6 +22,9 @@ from pydantic import (
 from app.rag.figure_region import figure_region
 from app.schemas.classification import normalize_category_value
 from app.schemas.common import JsonValue
+from app.search_defaults import SEARCH_TOP_K_DEFAULT as SEARCH_TOP_K_DEFAULT
+from app.search_defaults import SEARCH_TOP_K_MAX as SEARCH_TOP_K_MAX
+from app.search_defaults import search_top_k_default, search_top_k_schema
 
 # PoweRAG 由来の scalar / 日付 / カテゴリ pre-filter。Oracle AI Database の JSON_VALUE 数値述語・
 # TIMESTAMP 範囲・IN 述語へ再マップし、ベクトル/hybrid 検索の候補集合を事前に絞り込む。
@@ -222,11 +225,20 @@ class SearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # サーバーで原文照合した選択の前提。外部入力・API出力には含めない。
+    _rule_selection_scope: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _rule_selection_state: dict[str, Any] = PrivateAttr(default_factory=dict)
+
     query: str = Field(..., min_length=1)
     # 利用者の元の質問(#2261)。呼び出し元(業務 Agent)が検索文 query を短く言い換えたときに渡す。
     # 条の目録から文書・条を選ぶ段だけが query と合わせて使う(検索そのものは query で行う)。
     original_question: str | None = Field(default=None, max_length=8000)
-    top_k: int = Field(default=20, ge=1, le=100)
+    top_k: int = Field(
+        default_factory=search_top_k_default,
+        ge=1,
+        le=SEARCH_TOP_K_MAX,
+        json_schema_extra=search_top_k_schema,
+    )
     filters: dict[str, str] = Field(default_factory=dict)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=200)
     search_answer_profile_id: str | None = Field(
@@ -241,8 +253,8 @@ class SearchRequest(BaseModel):
     retrieval_only: bool = Field(
         default=False,
         description=(
-            "回答を作らずに検索だけを行う(LLM を呼ばない)。KB の検索テストとレシピの検索比較が"
-            "使う(#593)。"
+            "回答フローを通らずに検索だけを行う(質問拡張・条の選択・回答の生成の LLM を呼ばない)。"
+            "KB の検索テストとレシピの検索比較が使う(#593)。"
         ),
     )
     auto_field_filter_excluded: list[str] = Field(
@@ -264,8 +276,10 @@ class SearchRequest(BaseModel):
     generate_answer: bool = Field(
         default=True,
         description=(
-            "False なら回答を生成しない(RAG 検索の画面。#649)。質問の理解・拡張・検索・rerank"
-            "まではチャットと同じ工程で行い、CRAG と回答の生成(LLM)はしない。"
+            "False なら回答を生成しない(RAG 検索の画面。#649)。根拠を集め終えるまで(質問の理解・"
+            "拡張・文書の検索・回答フロー・章節の拡張・要求ごとの根拠の確認)はチャットと同じ工程で、"
+            "同じ LLM(質問拡張・条の選択・CRAG の根拠確認など)を呼ぶ。回答の生成と検査はしない"
+            "(#3506)。"
         ),
     )
     model_id: str | None = Field(

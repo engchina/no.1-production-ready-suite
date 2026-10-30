@@ -18,7 +18,7 @@ from rag_engine.generation import grounded
 from rag_engine.generation.answer_envelope import GUIDE_STEP_REQUEST_PREFIX, build_envelope, guide_step_requests
 from rag_engine.generation.answering import _grounded_spans, synthesize_grounded_answer
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan
 
 QUESTION = "設定 A を変更する手順を教えてください"
@@ -59,7 +59,7 @@ def _ids(ctx, knowledge, question=QUESTION):
 
 
 def _drafts(model):
-    return [prompt for name, prompt in model.prompts if name == "GroundedDraft"]
+    return [prompt for name, prompt in model.prompts if name == "GroundedDraftWire"]
 
 
 def _audits(model):
@@ -87,7 +87,13 @@ class GuideStepCoverageUnitTest(unittest.TestCase):
 
     def _entry(self, span, *, quote_only=False, applies="matched", kind="operation", quote=None):
         entry = grounded.CheckedItem(
-            GroundedItem(kind=kind, text="t", quote=span["text"] if quote is None else quote, applies=applies), span=span
+            GroundedItem(
+                kind=kind,
+                text="t",
+                citations=[GroundedCitation(evidence_id="", quote=span["text"] if quote is None else quote)],
+                applies=applies,
+            ),
+            span=span,
         )
         entry.quote_only = quote_only
         return entry
@@ -99,7 +105,7 @@ class GuideStepCoverageUnitTest(unittest.TestCase):
         coverage = grounded.guide_step_coverage(steps, checked, spans)
         self.assertEqual(
             [(step["step_id"], step["status"]) for step in coverage],
-            [("s1", "explained"), ("s2", "reference_only"), ("s3", "no_evidence")],
+            [("s1", "unknown"), ("s2", "reference_only"), ("s3", "no_evidence")],
         )
         # 適用未確認（unverified）の説明は「参考情報」の節に出るので、手順の説明に数えない。
         unverified = grounded.guide_step_coverage(steps[1:2], [self._entry(spans[1], applies="unverified")], spans)
@@ -114,7 +120,7 @@ class GuideStepCoverageUnitTest(unittest.TestCase):
         spans = self._spans()
         steps = (("s2", "B", ("run:b",)),)
         other = self._entry(spans[2], quote=STEP_B)
-        self.assertEqual(grounded.guide_step_coverage(steps, [other], spans)[0]["status"], "explained")
+        self.assertEqual(grounded.guide_step_coverage(steps, [other], spans)[0]["status"], "unknown")
         # 短い引用（どの本文にも当たる語句）は数えない。
         short = self._entry(spans[2], quote="反映ボタン")
         self.assertEqual(grounded.guide_step_coverage(steps, [short], spans)[0]["status"], "unused")
@@ -199,13 +205,14 @@ class GuideStepFulfillmentTest(unittest.TestCase):
                 response = _run(model, ctx, knowledge, question).response
                 if included and applicability == "matched":
                     self.assertNotIn(followup, marks(response))
-                    self.assertEqual(_requests(response)["guide:s2"], "addressed")
+                    self.assertEqual(_requests(response)["guide:s2"], "unknown")
                 elif not included:
-                    self.assertIn("item_check", marks(response)[followup])
+                    self.assertIn(followup, response.answer_text)
+                    self.assertNotIn("item_check", marks(response).get(followup, []))
                 else:
-                    self.assertNotEqual(_requests(response)["guide:s2"], "addressed")
+                    self.assertEqual(_requests(response)["guide:s2"], "unknown")
 
-    def test_reference_only_step_is_regenerated_and_explained(self):
+    def test_observed_reference_only_step_does_not_trigger_regeneration(self):
         """B が監査で質問の対象ではないとされても、作り直しの指摘に手順を渡し、説明できれば充足にする。"""
         ctx, knowledge = _ab_context(), _knowledge(GUIDE)
         eids = _ids(ctx, knowledge)
@@ -221,19 +228,18 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         result = _run(model, ctx, knowledge).response
 
         drafts = _drafts(model)
-        self.assertEqual(len(drafts), 2)
-        # 作り直しの指摘に、説明していない手順と手順の根拠の表示 ID が載る。
-        self.assertIn("guide_steps_unexplained", drafts[1])
-        self.assertIn("反映ボタンで確定する", drafts[1])
+        self.assertEqual(len(drafts), 1)
+        # 未校正の意味観察では、本文を作り直したり未確認の条件を付けたりしない。
+        self.assertIn(b["text"], result.answer_text)
         audits = _audits(model)
         self.assertEqual([step["step_id"] for step in audits[0]["guide_steps"]], ["s1", "s2"])
         self.assertTrue(all(step["evidence_ids"] for step in audits[0]["guide_steps"]))
         rounds = result.generation_trace["rounds"]
         self.assertNotIn("improvement_stop", rounds[0])
-        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["explained", "reference_only"])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "addressed"})
-        self.assertEqual(result.envelope["outcome"], "answered")
-        self.assertNotIn("業務ガイドの手順「", result.answer_text)
+        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["unknown", "unknown"])
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
+        self.assertEqual(result.envelope["outcome"], "conditional")
+        self.assertIn(grounded.answer_labels().marked_section, result.answer_text)
 
     def test_step_left_as_reference_is_not_settled_as_answered(self):
         """作り直しても B が参考情報に留まれば、要求 Q1 の判定とは別に B を一部の充足として示す。"""
@@ -247,16 +253,14 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         )
         result = _run(model, ctx, knowledge).response
 
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "partial"})
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertTrue(result.needs_human_review)
-        self.assertIn(
-            "業務ガイドの手順「反映ボタンで確定する」は、資料の記載を参考情報として示したか、根拠で確かめられない説明だけ",
-            result.answer_text,
-        )
-        self.assertIn("反映ボタンで確定する", result.insufficient_reason)
+        self.assertIn(b["text"], result.answer_text)
+        self.assertNotIn("原文に無い条件", result.answer_text)
+        self.assertFalse(result.generation_trace["semantic_audit_observation"]["adopted"])
         coverage = result.generation_trace["guide_step_coverage"]
-        self.assertEqual([step["status"] for step in coverage], ["explained", "reference_only"])
+        self.assertEqual([step["status"] for step in coverage], ["unknown", "unknown"])
         # 適用が未確認の B は「参考情報」の原文で示し、手順を確かめた説明にはしない（対象違いの印は付けない。#2837）。
         self.assertFalse(
             any(reason["code"] == "target_mismatch" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])
@@ -273,7 +277,9 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         self.assertEqual(len(_drafts(model)), 1)
         self.assertEqual(_requests(result)["guide:s2"], "missing")
         self.assertEqual(result.envelope["outcome"], "conditional")
-        self.assertIn("業務ガイドの手順「反映ボタンで確定する」は、取得した資料で説明を確かめられませんでした。", result.answer_text)
+        self.assertIn(
+            "業務ガイドの手順「反映ボタンで確定する」は、今回の回答に渡した資料で必要な根拠を確認できていません。", result.answer_text
+        )
 
     def test_optional_branch_step_is_not_required(self):
         """条件が決まらない分岐の手順は、説明が無くても充足の判定に数えない。"""
@@ -292,7 +298,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
 
         self.assertEqual(len(_drafts(model)), 1)
         self.assertNotIn("guide:s3", _requests(result))
-        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertEqual([step["required"] for step in result.generation_trace["guide_step_coverage"]], [True, True, False])
 
     def test_explicit_requests_and_guide_steps_are_judged_separately(self):
@@ -320,9 +326,9 @@ class GuideStepFulfillmentTest(unittest.TestCase):
 
         requests = _requests(result)
         self.assertEqual(
-            {key: value for key, value in requests.items() if not key.startswith("guide:")}, {"Q1": "addressed", "Q2": "addressed"}
+            {key: value for key, value in requests.items() if not key.startswith("guide:")}, {"Q1": "unknown", "Q2": "unknown"}
         )
-        self.assertEqual(requests["guide:s2"], "partial")
+        self.assertEqual(requests["guide:s2"], "unknown")
         self.assertEqual(result.envelope["outcome"], "conditional")
 
     def test_without_guide_steps_nothing_changes(self):
@@ -334,7 +340,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         result = _run(model, ctx, knowledge).response
 
         self.assertNotIn("guide_steps", _audits(model)[0])
-        self.assertEqual(_requests(result), {"Q1": "addressed"})
+        self.assertEqual(_requests(result), {"Q1": "unknown"})
         self.assertNotIn("guide_step_coverage", result.generation_trace)
 
 
@@ -393,8 +399,8 @@ class GuidePlanAfterEvidenceConditionTest(unittest.TestCase):
         coverage = result.generation_trace["guide_step_coverage"]
         # 外れた「分からない場合」の手順は回答の手順から外れ、決まった選択の分岐の手順が必須になる。
         self.assertEqual([(step["step_id"], step["required"]) for step in coverage], [("screen", True), ("code", True)])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:screen": "addressed", "guide:code": "addressed"})
-        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:screen": "unknown", "guide:code": "unknown"})
+        self.assertEqual(result.envelope["outcome"], "conditional")
         self.assertEqual([step["step_id"] for step in _audits(model)[0]["guide_steps"]], ["screen", "code"])
         trace = result.generation_trace["form_field_kinds"]
         self.assertEqual(trace["guide_plan"], [{"step_id": "screen", "required": True}, {"step_id": "code", "required": True}])
@@ -448,18 +454,20 @@ class GuideStepSharedEvidenceTest(unittest.TestCase):
         return {"source_id": source, "evidence_id": f"e-{source}", "label": label, "text": text}
 
     def _entry(self, span, quote, *, quote_only=False, applies="matched"):
-        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies=applies), span=span)
+        entry = grounded.CheckedItem(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies=applies), span=span
+        )
         entry.quote_only = quote_only
         return entry
 
-    def _statuses(self, steps, checked, spans, optional=(), terms=SHARED_TERMS):
+    def _candidate_statuses(self, steps, checked, spans, optional=(), terms=SHARED_TERMS):
         coverage = grounded.guide_step_coverage(steps, checked, spans, optional, dict(terms))
-        return {step["step_id"]: step["status"] for step in coverage}, coverage
+        return {step["step_id"]: step["assignment"]["candidate_status"] for step in coverage}, coverage
 
     def test_common_sentence_of_a_shared_chunk_explains_no_step(self):
         span = self._span("run:s", SHARED)
-        statuses, coverage = self._statuses(SHARED_GUIDE, [self._entry(span, SHARED_END)], [span])
-        self.assertEqual(statuses, {"s1": "unused", "s2": "unused"})
+        statuses, coverage = self._candidate_statuses(SHARED_GUIDE, [self._entry(span, SHARED_END)], [span])
+        self.assertEqual(statuses, {"s1": "unmatched", "s2": "unmatched"})
         self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s1", "s2"])
 
     def test_main_operation_left_as_reference_is_not_covered_by_the_common_sentence(self):
@@ -470,69 +478,71 @@ class GuideStepSharedEvidenceTest(unittest.TestCase):
             self._entry(span, SHARED_B, quote_only=True),
             self._entry(span, SHARED_END),
         ]
-        statuses, coverage = self._statuses(SHARED_GUIDE, checked, [span])
-        self.assertEqual(statuses, {"s1": "explained", "s2": "reference_only"})
-        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s2"])
+        statuses, coverage = self._candidate_statuses(SHARED_GUIDE, checked, [span])
+        self.assertEqual(statuses, {"s1": "matched", "s2": "reference_only"})
+        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s1", "s2"])
         # 適用未確認（参考情報の節に出る）の主の操作も同じ。
         checked[1] = self._entry(span, SHARED_B, applies="unverified")
-        self.assertEqual(self._statuses(SHARED_GUIDE, checked, [span])[0], {"s1": "explained", "s2": "reference_only"})
+        self.assertEqual(self._candidate_statuses(SHARED_GUIDE, checked, [span])[0], {"s1": "matched", "s2": "reference_only"})
 
     def test_each_step_explained_from_the_same_chunk(self):
         span = self._span("run:s", SHARED)
         checked = [self._entry(span, SHARED_A), self._entry(span, SHARED_B), self._entry(span, SHARED_END)]
-        self.assertEqual(self._statuses(SHARED_GUIDE, checked, [span])[0], {"s1": "explained", "s2": "explained"})
+        self.assertEqual(self._candidate_statuses(SHARED_GUIDE, checked, [span])[0], {"s1": "matched", "s2": "matched"})
         # 手順の順と item の順が逆でも、手順の語で対応付ける。
         reversed_checked = [self._entry(span, SHARED_B), self._entry(span, SHARED_A)]
-        self.assertEqual(self._statuses(SHARED_GUIDE, reversed_checked, [span])[0], {"s1": "explained", "s2": "explained"})
+        self.assertEqual(self._candidate_statuses(SHARED_GUIDE, reversed_checked, [span])[0], {"s1": "matched", "s2": "matched"})
 
-    def test_one_item_is_not_counted_for_two_steps(self):
-        """両手順の主の操作を 1 つの引用にまとめた item は、1 つの手順の説明にだけ数える。"""
+    def test_one_item_can_explain_two_independently_matched_steps(self):
+        """両手順の主の操作を含む item は、段落を分けなくても両手順を説明できる。"""
         span = self._span("run:s", SHARED)
-        statuses, _ = self._statuses(SHARED_GUIDE, [self._entry(span, SHARED_A + SHARED_B)], [span])
-        self.assertEqual(sorted(statuses.values()), ["explained", "unused"])
+        statuses, _ = self._candidate_statuses(SHARED_GUIDE, [self._entry(span, SHARED_A + SHARED_B)], [span])
+        self.assertEqual(sorted(statuses.values()), ["matched", "matched"])
 
     def test_same_text_in_another_chunk(self):
         """別の chunk の同じ原文: 共通の文は手順の説明にならず、手順の主の操作の文はその手順の説明になる。"""
         spans = [self._span("run:a", SHARED_A + SHARED_END), self._span("run:b", SHARED_B + SHARED_END, "E2")]
         steps = (("s1", "設定 A を入力する", ("run:a",)), ("s2", "反映ボタンで反映する", ("run:b",)))
-        common = self._statuses(steps, [self._entry(spans[0], SHARED_END)], spans)[0]
-        self.assertEqual(common, {"s1": "unused", "s2": "unused"})
+        common = self._candidate_statuses(steps, [self._entry(spans[0], SHARED_END)], spans)[0]
+        self.assertEqual(common, {"s1": "unmatched", "s2": "unmatched"})
         both = [self._entry(spans[0], SHARED_A), self._entry(spans[1], SHARED_B), self._entry(spans[0], SHARED_END)]
-        self.assertEqual(self._statuses(steps, both, spans)[0], {"s1": "explained", "s2": "explained"})
+        self.assertEqual(self._candidate_statuses(steps, both, spans)[0], {"s1": "matched", "s2": "matched"})
         # 手順 1 の根拠（全体の概要の chunk）にある手順 2 の主の操作の原文は、手順 2 の説明にだけ数える。
         overview = [self._span("run:o", SHARED_A + SHARED_B), self._span("run:b", SHARED_B, "E2")]
         steps = (("s1", "設定 A を入力する", ("run:o",)), ("s2", "反映ボタンで反映する", ("run:b",)))
-        self.assertEqual(self._statuses(steps, [self._entry(overview[0], SHARED_B)], overview)[0], {"s1": "unused", "s2": "explained"})
+        self.assertEqual(
+            self._candidate_statuses(steps, [self._entry(overview[0], SHARED_B)], overview)[0], {"s1": "unmatched", "s2": "matched"}
+        )
 
     def test_optional_branch_step_does_not_take_the_required_steps_item(self):
-        """不要な分岐（条件が決まらない分岐の手順）は、必須の手順の説明を奪わず、充足の判定にも数えない。"""
+        """任意分岐の説明が同じ段落にあっても、必須の手順の説明を奪わない。"""
         span = self._span("run:s", SHARED)
         steps = (SHARED_GUIDE[1], SHARED_GUIDE[0])
-        statuses, coverage = self._statuses(steps, [self._entry(span, SHARED)], [span], optional=("s2",))
-        self.assertEqual(statuses, {"s1": "explained", "s2": "unused"})
-        self.assertEqual(grounded.unexplained_guide_steps(coverage), [])
+        statuses, coverage = self._candidate_statuses(steps, [self._entry(span, SHARED)], [span], optional=("s2",))
+        self.assertEqual(statuses, {"s1": "matched", "s2": "matched"})
+        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s1"])
 
     def test_missing_evidence_is_kept_apart(self):
         span = self._span("run:s", SHARED)
         steps = (*SHARED_GUIDE, ("s3", "承認を依頼する", ("run:z",)))
         checked = [self._entry(span, SHARED_A), self._entry(span, SHARED_B)]
-        statuses, coverage = self._statuses(steps, checked, [span])
-        self.assertEqual(statuses, {"s1": "explained", "s2": "explained", "s3": "no_evidence"})
-        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s3"])
+        statuses, coverage = self._candidate_statuses(steps, checked, [span])
+        self.assertEqual(statuses, {"s1": "matched", "s2": "matched", "s3": "no_evidence"})
+        self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s1", "s2", "s3"])
 
     def test_steps_without_words_take_no_shared_item_by_words(self):
         """手順の語で照らせない手順は、語の判定だけでは共有の item をどの手順の説明にもしない（#2685。安全側）。"""
         span = self._span("run:s", SHARED)
         steps = (("s1", "A", ("run:s",)), ("s2", "B", ("run:s",)))
-        statuses, _ = self._statuses(steps, [self._entry(span, SHARED_END)], [span], terms=())
-        self.assertEqual(statuses, {"s1": "unused", "s2": "unused"})
+        statuses, _ = self._candidate_statuses(steps, [self._entry(span, SHARED_END)], [span], terms=())
+        self.assertEqual(statuses, {"s1": "unmatched", "s2": "unmatched"})
 
     def test_exclusive_evidence_is_unchanged(self):
         """根拠を共有しない手順は、従来どおり手順の根拠を引いた公開の説明で explained。"""
         spans = [self._span("run:a", SHARED_A + SHARED_END), self._span("run:b", SHARED_B, "E2")]
         steps = (("s1", "設定 A を入力する", ("run:a",)), ("s2", "反映ボタンで反映する", ("run:b",)))
         checked = [self._entry(spans[0], SHARED_A), self._entry(spans[1], SHARED_B)]
-        self.assertEqual(self._statuses(steps, checked, spans)[0], {"s1": "explained", "s2": "explained"})
+        self.assertEqual(self._candidate_statuses(steps, checked, spans)[0], {"s1": "matched", "s2": "matched"})
 
 
 class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
@@ -561,27 +571,24 @@ class GuideStepSharedEvidenceAnswerTest(unittest.TestCase):
     def test_shared_chunk_with_main_operation_as_reference_is_not_answered(self):
         model, result = self._run_shared("conditional")
 
-        # 手順 2 を対象に作り直しを求める（共通の操作だけの公開で充足済みにしない）。
+        # 未校正の観察を充足や再生成に採用せず、既存の操作は残す。
         drafts = _drafts(model)
-        self.assertGreaterEqual(len(drafts), 2)
-        self.assertIn("guide_steps_unexplained", drafts[1])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "partial"})
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
         self.assertEqual(result.envelope["outcome"], "conditional")
-        self.assertIn(
-            "業務ガイドの手順「反映ボタンで反映する」は、資料の記載を参考情報として示したか、根拠で確かめられない説明だけ",
-            result.answer_text,
-        )
-        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["explained", "reference_only"])
+        self.assertFalse(result.generation_trace["semantic_audit_observation"]["adopted"])
+        self.assertNotIn("原文に無い条件", result.answer_text)
+        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "unknown"])
         # 公開できる部分（手順 1 と共通の操作）は部分回答として残す。
         self.assertIn("設定画面で設定 A の値を入力します。", result.answer_text)
         self.assertIn("最後に保存ボタンを押して画面を閉じます。", result.answer_text)
 
-    def test_shared_chunk_explaining_both_steps_is_answered(self):
+    def test_shared_chunk_keeps_steps_unverified_under_diagnostic_policy(self):
         model, result = self._run_shared("matched")
 
         self.assertEqual(len(_drafts(model)), 1)
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "addressed", "guide:s2": "addressed"})
-        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "unknown"})
+        self.assertEqual(result.envelope["outcome"], "conditional")
 
 
 class GuideStepUnsearchedTest(unittest.TestCase):
@@ -595,40 +602,43 @@ class GuideStepUnsearchedTest(unittest.TestCase):
         self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SHARED}
 
     def _entry(self, quote, *, quote_only=False):
-        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+        entry = grounded.CheckedItem(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies="matched"),
+            span=self.span,
+        )
         entry.quote_only = quote_only
         return entry
 
-    def _statuses(self, steps, quotes, *, unsearched=("s2",), semantics=None, terms=SHARED_TERMS):
+    def _candidate_statuses(self, steps, quotes, *, unsearched=("s2",), semantics=None, terms=SHARED_TERMS):
         coverage = grounded.guide_step_coverage(
             steps, [self._entry(quote) for quote in quotes], [self.span], (), dict(terms), semantics, unsearched
         )
-        return {step["step_id"]: step["status"] for step in coverage}, coverage
+        return {step["step_id"]: step["assignment"]["candidate_status"] for step in coverage}, coverage
 
     def test_common_sentence_does_not_explain_the_searched_step(self):
         # 手順 2 の根拠が分からない（参照の頁の根拠も無い）: 手順 1 だけの根拠に見えても、共通の文で説明済みにしない。
         steps = (SHARED_GUIDE[0], ("s2", "反映ボタンで反映する", ()))
-        before, _ = self._statuses(steps, (SHARED_END,), unsearched=())
-        self.assertEqual(before, {"s1": "explained", "s2": "no_evidence"})  # 検索しなかったことを知らない判定
-        statuses, coverage = self._statuses(steps, (SHARED_END,))
-        self.assertEqual(statuses, {"s1": "unused", "s2": "not_searched"})
+        before, _ = self._candidate_statuses(steps, (SHARED_END,), unsearched=())
+        self.assertEqual(before, {"s1": "matched", "s2": "no_evidence"})  # 検索しなかったことを知らない判定
+        statuses, coverage = self._candidate_statuses(steps, (SHARED_END,))
+        self.assertEqual(statuses, {"s1": "unmatched", "s2": "not_searched"})
         self.assertEqual([step["step_id"] for step in grounded.unexplained_guide_steps(coverage)], ["s1", "s2"])
         self.assertIn("手順ごとの検索を時間・回数の上限で打ち切った", grounded.guide_step_gap_line(coverage[1]))
         # 意味の判定でも同じ（共通の文は両手順に同じくらい近い）。
         semantics = grounded.GuideStepSemantics(
             StubEmbedder(SENTENCE_VECTORS + (("設定 A を入力", (1, 0, 0)), ("反映ボタンで", (0, 1, 0)))).embed
         )
-        self.assertEqual(self._statuses(steps, (SHARED_END,), semantics=semantics)[0], {"s1": "unused", "s2": "not_searched"})
+        self.assertEqual(self._candidate_statuses(steps, (SHARED_END,), semantics=semantics)[0], {"s1": "unmatched", "s2": "not_searched"})
 
     def test_main_operation_still_explains_the_searched_step(self):
         steps = (SHARED_GUIDE[0], ("s2", "反映ボタンで反映する", ()))
-        self.assertEqual(self._statuses(steps, (SHARED_A, SHARED_END))[0], {"s1": "explained", "s2": "not_searched"})
+        self.assertEqual(self._candidate_statuses(steps, (SHARED_A, SHARED_END))[0], {"s1": "matched", "s2": "not_searched"})
 
     def test_reference_pages_make_the_shared_chunk_visible(self):
         # 手順 2 の参照の頁の根拠（同じ chunk）を手順 2 の根拠に足すと、手順 2 は no_evidence ではなく unused。
-        statuses, _ = self._statuses(SHARED_GUIDE, (SHARED_END,))
-        self.assertEqual(statuses, {"s1": "unused", "s2": "unused"})
-        self.assertEqual(self._statuses(SHARED_GUIDE, (SHARED_A, SHARED_B))[0], {"s1": "explained", "s2": "explained"})
+        statuses, _ = self._candidate_statuses(SHARED_GUIDE, (SHARED_END,))
+        self.assertEqual(statuses, {"s1": "unmatched", "s2": "unmatched"})
+        self.assertEqual(self._candidate_statuses(SHARED_GUIDE, (SHARED_A, SHARED_B))[0], {"s1": "matched", "s2": "matched"})
 
     def test_unsearched_required_step_is_missing_in_the_envelope(self):
         requests = guide_step_requests([{"step_id": "s2", "title": "B", "required": True, "status": "not_searched"}])
@@ -647,8 +657,8 @@ class GuideStepUnsearchedAnswerTest(unittest.TestCase):
         model = FakeModel([draft(end)] * 3, [audit((0, "supported", "matched", ""), requests=[("Q1", "addressed")])] * 3)
         result = _run(model, ctx, knowledge).response
 
-        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unused", "not_searched"])
-        self.assertEqual(_requests(result), {"Q1": "addressed", "guide:s1": "missing", "guide:s2": "missing"})
+        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "not_searched"])
+        self.assertEqual(_requests(result), {"Q1": "unknown", "guide:s1": "unknown", "guide:s2": "missing"})
         self.assertNotEqual(result.envelope["outcome"], "answered")
         self.assertIn("業務ガイドの手順「反映ボタンで反映する」は、手順ごとの検索を時間・回数の上限で打ち切った", result.answer_text)
 
@@ -692,52 +702,59 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SHARED}
 
     def _entry(self, quote, *, quote_only=False):
-        entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+        entry = grounded.CheckedItem(
+            GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies="matched"),
+            span=self.span,
+        )
         entry.quote_only = quote_only
         return entry
 
-    def _statuses(self, steps, quotes, embedder=None, terms=(), semantics=None):
+    def _candidate_statuses(self, steps, quotes, embedder=None, terms=(), semantics=None):
         if semantics is None and embedder is not None:
             semantics = grounded.GuideStepSemantics(embedder.embed)
         checked = [self._entry(quote) for quote in quotes]
         coverage = grounded.guide_step_coverage(steps, checked, [self.span], (), dict(terms), semantics)
-        return {step["step_id"]: step["status"] for step in coverage}
+        return {step["step_id"]: step["assignment"]["candidate_status"] for step in coverage}
 
     def test_reworded_steps_are_explained_by_meaning(self):
         """手順の語が根拠に無くても、各手順の主の操作を説明した item で両手順を explained にする。"""
         embedder = StubEmbedder(REWORDED_VECTORS)
         for quotes in ((SHARED_A, SHARED_B, SHARED_END), (SHARED_END, SHARED_B, SHARED_A), (SHARED_A, SHARED_B)):
-            self.assertEqual(self._statuses(REWORDED_GUIDE, quotes, embedder), {"s1": "explained", "s2": "explained"})
+            self.assertEqual(self._candidate_statuses(REWORDED_GUIDE, quotes, embedder), {"s1": "matched", "s2": "matched"})
         # 手がかりが共通の文にだけ当たる（語の判定では主の操作の文が共通の文になる）手順も、意味で主の操作の文を決める。
         # 語の判定だけでは、語で決まらない共有の item をどの手順の説明にもしない（#2685。安全側）。
         terms = (("s2", ("保存ボタン",)),)
-        self.assertEqual(self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), terms=terms), {"s1": "unused", "s2": "unused"})
         self.assertEqual(
-            self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), StubEmbedder(REWORDED_VECTORS), terms),
-            {"s1": "explained", "s2": "explained"},
+            self._candidate_statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), terms=terms), {"s1": "unmatched", "s2": "unmatched"}
+        )
+        self.assertEqual(
+            self._candidate_statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), StubEmbedder(REWORDED_VECTORS), terms),
+            {"s1": "matched", "s2": "matched"},
         )
 
     def test_common_sentence_alone_explains_no_reworded_step(self):
         """言い回しの違う手順でも、両手順に同じくらい近い共通の文だけの公開では説明済みにしない。"""
-        self.assertEqual(self._statuses(REWORDED_GUIDE, (SHARED_END,), StubEmbedder(REWORDED_VECTORS)), {"s1": "unused", "s2": "unused"})
+        self.assertEqual(
+            self._candidate_statuses(REWORDED_GUIDE, (SHARED_END,), StubEmbedder(REWORDED_VECTORS)), {"s1": "unmatched", "s2": "unmatched"}
+        )
         # 一部分を引いた共通の文も同じ。
         self.assertEqual(
-            self._statuses(REWORDED_GUIDE, ("保存ボタンを押して画面を閉じます。",), StubEmbedder(REWORDED_VECTORS)),
-            {"s1": "unused", "s2": "unused"},
+            self._candidate_statuses(REWORDED_GUIDE, ("保存ボタンを押して画面を閉じます。",), StubEmbedder(REWORDED_VECTORS)),
+            {"s1": "unmatched", "s2": "unmatched"},
         )
         # 主の操作が参考原文だけなら reference_only（共通の文の公開で補わない）。
         checked = [self._entry(SHARED_A), self._entry(SHARED_B, quote_only=True), self._entry(SHARED_END)]
         semantics = grounded.GuideStepSemantics(StubEmbedder(REWORDED_VECTORS).embed)
         coverage = grounded.guide_step_coverage(REWORDED_GUIDE, checked, [self.span], (), {}, semantics)
-        self.assertEqual([step["status"] for step in coverage], ["explained", "reference_only"])
+        self.assertEqual([step["assignment"]["candidate_status"] for step in coverage], ["matched", "reference_only"])
 
     def test_common_sentence_with_as_many_step_words_is_not_counted(self):
         """共通の文が主の操作の文と同じ数の手順の語を含んでも、共通の文を手順の説明に数えない。"""
         # 語の判定だけでも、主の操作の文が語で 1 つに決まらない手順 2 には共通の文を数えない（#2685）。
-        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_END)), {"s1": "explained", "s2": "unused"})
+        self.assertEqual(self._candidate_statuses(TIED_GUIDE, (SHARED_A, SHARED_END)), {"s1": "matched", "s2": "unmatched"})
         embedder = StubEmbedder(TIED_VECTORS)
-        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_END), embedder), {"s1": "explained", "s2": "unused"})
-        self.assertEqual(self._statuses(TIED_GUIDE, (SHARED_A, SHARED_B), embedder), {"s1": "explained", "s2": "explained"})
+        self.assertEqual(self._candidate_statuses(TIED_GUIDE, (SHARED_A, SHARED_END), embedder), {"s1": "matched", "s2": "unmatched"})
+        self.assertEqual(self._candidate_statuses(TIED_GUIDE, (SHARED_A, SHARED_B), embedder), {"s1": "matched", "s2": "matched"})
 
     def test_without_or_failing_embedder_falls_back_to_words(self):
         """Embedder が無い・失敗したら、語の判定（直前の判定）と同じ結果に戻り、その回答では呼び直さない。"""
@@ -750,22 +767,22 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         failing = StubEmbedder(REWORDED_VECTORS, fail=True)
         semantics = grounded.GuideStepSemantics(failing.embed)
         for steps, quotes, terms in cases:
-            expected = self._statuses(steps, quotes, terms=terms)
-            self.assertEqual(self._statuses(steps, quotes, terms=terms, semantics=grounded.GuideStepSemantics()), expected)
-            self.assertEqual(self._statuses(steps, quotes, terms=terms, semantics=semantics), expected)
+            expected = self._candidate_statuses(steps, quotes, terms=terms)
+            self.assertEqual(self._candidate_statuses(steps, quotes, terms=terms, semantics=grounded.GuideStepSemantics()), expected)
+            self.assertEqual(self._candidate_statuses(steps, quotes, terms=terms, semantics=semantics), expected)
         self.assertEqual(len(failing.calls), 1)
         self.assertTrue(semantics.failed)
         self.assertEqual(semantics.trace()["calls"], 1)
         # 記述（題名・手がかり）の無い手順は意味で照らせないので、呼ばずに語の判定に戻る。
         untitled = (("s1", "", ("run:s",)), REWORDED_GUIDE[1])
         working = StubEmbedder(REWORDED_VECTORS)
-        self.assertEqual(self._statuses(untitled, (SHARED_END,), working), self._statuses(untitled, (SHARED_END,)))
+        self.assertEqual(self._candidate_statuses(untitled, (SHARED_END,), working), self._candidate_statuses(untitled, (SHARED_END,)))
         self.assertEqual(working.calls, [])
         # 数の合わない応答・零の vector も失敗として語の判定に戻る。
         for broken in (lambda texts: [], lambda texts: [[0.0, 0.0, 0.0] for _ in texts]):
             self.assertEqual(
-                self._statuses(REWORDED_GUIDE, (SHARED_END,), semantics=grounded.GuideStepSemantics(broken)),
-                self._statuses(REWORDED_GUIDE, (SHARED_END,)),
+                self._candidate_statuses(REWORDED_GUIDE, (SHARED_END,), semantics=grounded.GuideStepSemantics(broken)),
+                self._candidate_statuses(REWORDED_GUIDE, (SHARED_END,)),
             )
 
     def test_embedding_only_for_undecided_shared_items_and_reused(self):
@@ -779,18 +796,25 @@ class GuideStepSemanticMatchTest(unittest.TestCase):
         ]
         steps = (("s1", "値の登録", ("run:a",)), ("s2", "内容の確定", ("run:b",)))
         checked = [
-            grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=span["text"], applies="matched"), span=span)
+            grounded.CheckedItem(
+                GroundedItem(
+                    kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=span["text"])], applies="matched"
+                ),
+                span=span,
+            )
             for span in spans
         ]
         coverage = grounded.guide_step_coverage(steps, checked, spans, (), {}, semantics)
-        self.assertEqual([step["status"] for step in coverage], ["explained", "explained"])
+        self.assertEqual([step["assignment"]["candidate_status"] for step in coverage], ["matched", "matched"])
         # 根拠を共有しても、手順の語で決まる item。
-        self.assertEqual(self._statuses(SHARED_GUIDE, (SHARED_A, SHARED_B), terms=SHARED_TERMS, semantics=semantics)["s2"], "explained")
+        self.assertEqual(
+            self._candidate_statuses(SHARED_GUIDE, (SHARED_A, SHARED_B), terms=SHARED_TERMS, semantics=semantics)["s2"], "matched"
+        )
         self.assertEqual(embedder.calls, [])
         # 語で決まらない共有の item は 1 回で embedding にし、同じ文は再利用する（新しい引用だけを足す）。
-        self._statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), semantics=semantics)
-        self._statuses(REWORDED_GUIDE, (SHARED_B, SHARED_A, SHARED_END), semantics=semantics)
-        self._statuses(REWORDED_GUIDE, ("保存ボタンを押して画面を閉じます。",), semantics=semantics)
+        self._candidate_statuses(REWORDED_GUIDE, (SHARED_A, SHARED_B), semantics=semantics)
+        self._candidate_statuses(REWORDED_GUIDE, (SHARED_B, SHARED_A, SHARED_END), semantics=semantics)
+        self._candidate_statuses(REWORDED_GUIDE, ("保存ボタンを押して画面を閉じます。",), semantics=semantics)
         self.assertEqual(len(embedder.calls), 2)
         self.assertEqual(embedder.calls[1], ["保存ボタンを押して画面を閉じます。"])
         self.assertEqual(semantics.trace()["calls"], 2)
@@ -815,11 +839,11 @@ SECTION_SENTENCES = (
 SECTION_VECTORS = (*SECTION_DESCRIPTIONS, *SECTION_SENTENCES)
 # 公開した item（引用と原文のみ提示か）と、正しい手順の状態（Issue #2685 の表の 4 行と、末尾の共通の操作だけ）。
 SECTION_ROWS = (
-    ("共通の文だけ", ((SECTION_COMMON, False),), {"s1": "unused", "s2": "unused"}),
-    ("手順 1 の主の操作と共通の文", ((SHARED_A, False), (SECTION_COMMON, False)), {"s1": "explained", "s2": "unused"}),
-    ("手順 1・2 の主の操作", ((SHARED_A, False), (SHARED_B, False)), {"s1": "explained", "s2": "explained"}),
-    ("手順 2 の主の操作の原文のみ提示と共通の文", ((SHARED_B, True), (SECTION_COMMON, False)), {"s1": "unused", "s2": "reference_only"}),
-    ("末尾の共通の操作だけ", ((SHARED_END, False),), {"s1": "unused", "s2": "unused"}),
+    ("共通の文だけ", ((SECTION_COMMON, False),), {"s1": "unmatched", "s2": "unmatched"}),
+    ("手順 1 の主の操作と共通の文", ((SHARED_A, False), (SECTION_COMMON, False)), {"s1": "matched", "s2": "unmatched"}),
+    ("手順 1・2 の主の操作", ((SHARED_A, False), (SHARED_B, False)), {"s1": "matched", "s2": "matched"}),
+    ("手順 2 の主の操作の原文のみ提示と共通の文", ((SHARED_B, True), (SECTION_COMMON, False)), {"s1": "unmatched", "s2": "reference_only"}),
+    ("末尾の共通の操作だけ", ((SHARED_END, False),), {"s1": "unmatched", "s2": "unmatched"}),
 )
 
 
@@ -829,14 +853,17 @@ class GuideStepSpecificOwnerTest(unittest.TestCase):
     def setUp(self):
         self.span = {"source_id": "run:s", "evidence_id": "e-s", "label": "E1", "text": SECTION}
 
-    def _statuses(self, items, semantics):
+    def _candidate_statuses(self, items, semantics):
         checked = []
         for quote, quote_only in items:
-            entry = grounded.CheckedItem(GroundedItem(kind="operation", text="t", quote=quote, applies="matched"), span=self.span)
+            entry = grounded.CheckedItem(
+                GroundedItem(kind="operation", text="t", citations=[GroundedCitation(evidence_id="", quote=quote)], applies="matched"),
+                span=self.span,
+            )
             entry.quote_only = quote_only
             checked.append(entry)
         coverage = grounded.guide_step_coverage(REWORDED_GUIDE, checked, [self.span], (), dict(SECTION_TERMS), semantics)
-        return {step["step_id"]: step["status"] for step in coverage}
+        return {step["step_id"]: step["assignment"]["candidate_status"] for step in coverage}
 
     def test_common_sentence_is_nearer_than_the_main_operation(self):
         """前提: 共通の文は手順 2 の記述に主の操作の文より近く、手順 1 との差も閾値以上（絶対の近さでは共通の文を選ぶ）。"""
@@ -853,29 +880,31 @@ class GuideStepSpecificOwnerTest(unittest.TestCase):
     def test_main_operation_is_chosen_by_specificity(self):
         for name, items, expected in SECTION_ROWS:
             with self.subTest(name):
-                self.assertEqual(self._statuses(items, grounded.GuideStepSemantics(StubEmbedder(SECTION_VECTORS).embed)), expected)
+                self.assertEqual(
+                    self._candidate_statuses(items, grounded.GuideStepSemantics(StubEmbedder(SECTION_VECTORS).embed)), expected
+                )
 
     def test_word_fallback_does_not_map_a_one_word_match(self):
         """語の判定だけ（Embedder が無い・失敗）では、手順の語が 1 語だけ当たる共通の文の item を手順の説明にしない。"""
         for name, items, _expected in SECTION_ROWS:
             with self.subTest(name):
-                self.assertEqual(self._statuses(items, None), {"s1": "unused", "s2": "unused"})
+                self.assertEqual(self._candidate_statuses(items, None), {"s1": "unmatched", "s2": "unmatched"})
                 failing = grounded.GuideStepSemantics(StubEmbedder(SECTION_VECTORS, fail=True).embed)
-                self.assertEqual(self._statuses(items, failing), {"s1": "unused", "s2": "unused"})
+                self.assertEqual(self._candidate_statuses(items, failing), {"s1": "unmatched", "s2": "unmatched"})
 
     def test_undetermined_main_operation_falls_to_the_safe_side(self):
         """手順に固有な度合いが同じくらいの文が 2 つあり主の操作の文が決まらない手順は、どの item の説明にもしない。"""
         tied = tuple((key, SECTION_SENTENCES[1][1] if key == "全体で必要な項目" else vector) for key, vector in SECTION_VECTORS)
         for name, items, expected in SECTION_ROWS:
             with self.subTest(name):
-                safe = {**expected, "s2": "unused"}
-                self.assertEqual(self._statuses(items, grounded.GuideStepSemantics(StubEmbedder(tied).embed)), safe)
+                safe = {**expected, "s2": "unmatched"}
+                self.assertEqual(self._candidate_statuses(items, grounded.GuideStepSemantics(StubEmbedder(tied).embed)), safe)
 
 
 class GuideStepSemanticAnswerTest(unittest.TestCase):
     """回答の round と確定で embedding を再利用し、trace に呼び出しを残す（#2649）。"""
 
-    def test_embedding_is_reused_across_rounds(self):
+    def test_embedding_is_reused_without_semantic_regeneration(self):
         ctx = _context(_record(0, SHARED, "設定画面", "run:s"))
         knowledge = _knowledge(REWORDED_GUIDE)
         (eid,) = _ids(ctx, knowledge).values()
@@ -910,11 +939,11 @@ class GuideStepSemanticAnswerTest(unittest.TestCase):
             ).response
 
         rounds = result.generation_trace["rounds"]
-        self.assertEqual(len(_drafts(model)), 2)
-        # 1 回目は手順 2 の主の操作が参考原文だけ（共通の文の公開で説明済みにしない）、2 回目に説明した。
-        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["explained", "reference_only"])
-        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["explained", "explained"])
-        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual(len(_drafts(model)), 1)
+        # 観察による追加生成はしない。対応候補のembeddingは確定処理でも再利用する。
+        self.assertEqual([step["status"] for step in rounds[0]["guide_steps"]], ["unknown", "unknown"])
+        self.assertEqual([step["status"] for step in result.generation_trace["guide_step_coverage"]], ["unknown", "unknown"])
+        self.assertEqual(result.envelope["outcome"], "conditional")
         # 同じ文の embedding は round と回答の確定で再利用する。
         self.assertEqual(len(embedder.calls), 1)
         self.assertEqual(result.generation_trace["guide_step_embedding"]["calls"], 1)
@@ -940,7 +969,7 @@ class GuideStepSemanticAnswerTest(unittest.TestCase):
 
         self.assertEqual(embedder.calls, [])
         self.assertNotIn("guide_step_embedding", result.generation_trace)
-        self.assertEqual(result.envelope["outcome"], "answered")
+        self.assertEqual(result.envelope["outcome"], "conditional")
 
 
 class GuidePlanRequiredTest(unittest.TestCase):

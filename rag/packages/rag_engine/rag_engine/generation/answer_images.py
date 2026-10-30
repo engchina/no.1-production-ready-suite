@@ -7,14 +7,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from rag_engine.config import Settings, get_llm_provider
+from rag_engine.config import Settings, answer_model_reads_images
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_payload import _evidence_id_key, _int_value, _metadata_image_evidence, _records_for_prompt_injection_scan
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.retrieval.context_builder import ContextParentEvidence
 from rag_engine.retrieval.evidence_selection import evidence_excerpt, evidence_relevance
-from rag_engine.retrieval.task_contract import goal_retrieval_queries, task_contract
+from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests, goal_retrieval_queries
 
 MAX_ANSWER_IMAGE_ATTACHMENTS = 4
 
@@ -94,9 +94,11 @@ def _visual_evidence_anchors(
             body = record.text.split("Child text:\n", 1)[-1].strip()
             if not body or len(body) > 4000:
                 continue
+            # 図の中の文字（OCR）の ref は持ち主の図の id（picture_record_id）でも照合する（#3455）。
             if any(
-                (record.source_run_id, record.source, parent.record.chunk_id, ref.get("record_id")) in selected
+                (record.source_run_id, record.source, parent.record.chunk_id, ref_id) in selected
                 for ref in record.source_record_refs
+                for ref_id in {ref.get("record_id"), ref.get("picture_record_id")} - {None, ""}
             ):
                 anchors.append(record)
     return anchors[:4]
@@ -115,15 +117,14 @@ def answer_image_evidence(
     selected: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     root = Path(output_dir)
-    procedure = bool(question and task_contract(question)["goal"] == "procedure")
+    procedure = bool(question and STEPS_REQUEST in explicit_requests(question))
     focus = " ".join(goal_retrieval_queries(question)) or question
     for record in records:
         metadata = record.metadata if isinstance(record.metadata, dict) else {}
         raw_images = _metadata_image_evidence(metadata)
         for raw in raw_images:
+            # 図の中の文字（OCR）の entry は _metadata_image_evidence が持ち主の図にまとめている（#3455）。
             if not isinstance(raw, dict):
-                continue
-            if str(raw.get("raw_type") or "") == "picture_ocr_text":
                 continue
             if visual_role_from_ref(raw) in {DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE}:
                 continue
@@ -269,20 +270,19 @@ def _resolve_image_prompt_path(
     return output_dir, "missing", False
 
 
-def _image_prompt_mode(image_evidence: Sequence[dict[str, Any]], settings: Settings) -> str:
-    """根拠の画像を原画像のまま添付するか。添付する回は既定の Vision モデルで答える（#649）。"""
+def _image_prompt_mode(image_evidence: Sequence[dict[str, Any]], settings: Settings, provider_id: str | None = None) -> str:
+    """根拠の画像を回答のモデル（``provider_id``。None は既定の回答のモデル）へ添付するか（#3444）。
+
+    添付するのは回答のモデルが画像を読めるときだけで、別のモデルへは切り替えない。読めないモデルは根拠の本文
+    （取り込み時に作った図の説明を含む）だけで答える。
+    """
     if not image_evidence:
         return "text_only"
-    image_paths = [str(item.get("prompt_path") or "") for item in image_evidence if item.get("prompt_path")]
-    if not image_paths:
+    if not answer_model_reads_images(settings, provider_id):
+        return "text_answer_model"
+    if not any(item.get("prompt_path") for item in image_evidence):
         return "text_fallback_missing_assets"
-    if not getattr(settings, "answer_images_enabled", False):
-        return "text_fallback_images_disabled"
-    try:
-        provider = get_llm_provider(settings, settings.default_vision_llm)
-    except Exception:
-        return "text_fallback_unknown_provider"
-    return "vision_attachments" if provider.supports_vision and provider.model else "text_fallback_llm_without_vision"
+    return "vision_attachments"
 
 
 def _trim_generated_text(value: Any, max_length: int) -> str:

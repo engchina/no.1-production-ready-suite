@@ -29,11 +29,13 @@ for (const viewport of [
     await expect(page.getByRole("radio", { name: /文字コード→UTF-8/ })).toHaveCount(0);
     await expect(page.getByRole("radio", { name: /Word・PowerPoint の文書.*PDF にしてから解析/ })).toBeVisible();
     // CSV→JSONL・Excel→JSONL の順で、使う解析エンジンも説明に出す（#2457）。
-    await expect(page.getByRole("radio", { name: /CSV→JSONL.*CSV の 1 行を/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /CSV→JSONL.*表頭を除くデータの 1 記録/ })).toBeVisible();
     await expect(
       page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx・マクロ付きの \.xlsm\)/ })
     ).toBeVisible();
     await expect(page.getByRole("radio", { name: /CSV→JSONL.*構造化レコード JSONL/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /^Excel→JSONL/ })).toHaveAccessibleName(/保存済みの計算結果/);
+    await expect(page.getByRole("radio", { name: /^Word→JSONL/ })).toHaveAccessibleName(/ページ番号は付けません/);
     // Word→JSONL は Excel→JSONL の直後（#2457）。
     await expect(
       page.getByRole("radio", { name: /Word→JSONL.*見出しの下の段落・リスト・表のまとまり/ })
@@ -42,7 +44,7 @@ for (const viewport of [
       .getByRole("radio")
       .evaluateAll((items) => items.map((item) => (item as HTMLInputElement).value));
     expect(values.indexOf("word_to_jsonl")).toBe(values.indexOf("excel_to_jsonl") + 1);
-    await page.getByRole("radio", { name: /Word→JSONL/ }).scrollIntoViewIfNeeded();
+    await page.getByRole("radio", { name: /^Word→JSONL/ }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("preprocess-word-to-jsonl.png") });
     // 名前と説明で、どの文書に使うかが分かる(#563)。実装の言葉(ラスタライズ・canonical な中間物 等)は出さない(保存先の値 artifacts/canonical は除く)。
     // スキャン画像の補正と URL→Markdown（#2042）、PDF を画像として読み直す（#3347）、PIIマスク（#3358）は削除した。
@@ -80,11 +82,12 @@ test("前処理設定取得に失敗したら再試行できる", async ({ page 
 });
 
 test("前処理設定はファイル準備方式を保存できる", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 760 });
+  let savedContentType: string | undefined;
   let savedPayload: unknown = null;
   await page.route("**/api/settings/preprocess", async (route) => {
     if (route.request().method() === "PATCH") {
       savedPayload = route.request().postDataJSON();
+      savedContentType = route.request().headers()["content-type"];
       await route.fulfill({ json: preprocessEnvelope({ profile: "office_to_pdf" }) });
       return;
     }
@@ -103,6 +106,7 @@ test("前処理設定はファイル準備方式を保存できる", async ({ pa
   await expect(page.getByText("ファイル準備の設定を保存しました。")).toBeVisible();
   await expect(page.getByText("未保存の変更があります。")).toHaveCount(0);
   expect(savedPayload).toEqual({ profile: "office_to_pdf" });
+  expect(savedContentType).toBe("application/json");
   await expectNoHorizontalOverflow(page);
 });
 

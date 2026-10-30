@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from rag_engine.generation.grounded import CheckedItem, carry_over, verify, without_redundant_quotes
-from rag_engine.models.llm import GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 EXAMPLES = Path(__file__).with_name("fixtures") / "answer_accuracy"
 CASES = json.loads((EXAMPLES / "cases.json").read_text())
@@ -14,7 +14,13 @@ CASES = json.loads((EXAMPLES / "cases.json").read_text())
 
 def checked(text, quote, *, request="Q1", evidence="E1", kind="operation", condition=""):
     return CheckedItem(
-        GroundedItem(kind=kind, text=text, quote=quote, evidence_id=evidence, request_id=request, condition=condition),
+        GroundedItem(
+            kind=kind,
+            text=text,
+            citations=[GroundedCitation(quote=quote, evidence_id=evidence)],
+            request_id=request,
+            condition=condition,
+        ),
         {"evidence_id": evidence, "text": quote},
     )
 
@@ -64,8 +70,8 @@ def test_unplanned_operations_are_excluded_even_when_their_quotes_are_real():
         {
             "request_coverage": [{"request_id": "Q1", "evidence_ids": ["E1"]}],
             "items": [
-                {"kind": "operation", "request_id": "Q1", "text": correct, "quote": correct, "evidence_id": "E1"},
-                {"kind": "operation", "request_id": "Q1", "text": other, "quote": other, "evidence_id": "E2"},
+                {"kind": "operation", "request_id": "Q1", "text": correct, "citations": [{"quote": correct, "evidence_id": "E1"}]},
+                {"kind": "operation", "request_id": "Q1", "text": other, "citations": [{"quote": other, "evidence_id": "E2"}]},
             ],
             "summary": "CSV を更新します。",
             "confidence": "high",
@@ -87,7 +93,7 @@ def test_request_plan_keeps_related_steps_without_question_word_overlap():
     draft = GroundedDraft.model_validate(
         {
             "request_coverage": [{"request_id": "Q1", "evidence_ids": ["E2"]}],
-            "items": [{"kind": "operation", "request_id": "Q1.R1", "text": source, "quote": source, "evidence_id": "E2"}],
+            "items": [{"kind": "operation", "request_id": "Q1.R1", "text": source, "citations": [{"quote": source, "evidence_id": "E2"}]}],
             "summary": "確定します。",
             "confidence": "high",
         }
@@ -113,9 +119,18 @@ def test_excluded_operation_is_not_reintroduced_by_the_summary_without_an_audit(
     model = FakeModel(
         [
             {
-                "request_coverage": [{"request_id": "Q1", "evidence_ids": [labels[correct]]}],
+                "request_coverage": [
+                    {
+                        "request_id": "Q1",
+                        "evidence_ids": [labels[correct]],
+                        "evidence_scope": [
+                            {"evidence_id": labels[correct], "target": "更新", "relation": "direct", "link_quote": ""},
+                            {"evidence_id": labels[other], "target": "独立した設定", "relation": "unrelated", "link_quote": ""},
+                        ],
+                    }
+                ],
                 "items": [
-                    {"kind": "operation", "request_id": "Q1", "text": text, "quote": text, "evidence_id": labels[text]}
+                    {"kind": "operation", "request_id": "Q1", "text": text, "citations": [{"quote": text, "evidence_id": labels[text]}]}
                     for text in (correct, other)
                 ],
                 "summary": other,
@@ -143,7 +158,7 @@ def test_an_independent_operation_is_excluded_even_if_listed_in_evidence_ids():
 
     quote = CASES["coverage"]["additional_evidence"]
     span = {"evidence_id": "actual-id", "label": "E2", "text": quote}
-    item = GroundedItem(kind="operation", request_id="Q1", text=quote, evidence_id="E2")
+    item = GroundedItem(kind="operation", request_id="Q1", text=quote, citations=[GroundedCitation(evidence_id="E2")])
     draft = GroundedDraft.model_validate(
         {
             "request_coverage": [
@@ -167,7 +182,7 @@ def test_a_dependency_needs_an_actual_source_quote_but_not_question_word_overlap
     text = "確定ボタンを押して完了します。"
     span = {"evidence_id": "actual-id", "label": "E2", "text": text}
     link = {"evidence_id": "link-id", "text": "設定の登録後、確定ボタンを押して完了します。"}
-    item = GroundedItem(kind="operation", request_id="Q1", text=text, evidence_id="E2")
+    item = GroundedItem(kind="operation", request_id="Q1", text=text, citations=[GroundedCitation(evidence_id="E2")])
 
     def plan(quote):
         return GroundedDraft.model_validate(
@@ -204,7 +219,8 @@ def test_inconsistent_scope_plan_is_repaired_once_and_the_call_is_counted():
     ctx = context(record(0, correct, "CSV の更新"), record(1, other, "対象選択の設定"))
     labels = ids(ctx, question)
     entries = [
-        {"kind": "operation", "request_id": "Q1", "text": text, "quote": text, "evidence_id": labels[text]} for text in (correct, other)
+        {"kind": "operation", "request_id": "Q1", "text": text, "citations": [{"quote": text, "evidence_id": labels[text]}]}
+        for text in (correct, other)
     ]
     first = {
         "request_coverage": [{"request_id": "Q1", "evidence_ids": list(labels.values()), "evidence_scope": []}],
@@ -246,7 +262,7 @@ def test_an_explicitly_empty_scope_does_not_authorize_an_operation():
 
     text = CASES["coverage"]["additional_evidence"]
     span = {"evidence_id": "E2", "text": text}
-    item = GroundedItem(kind="operation", request_id="Q1", text=text, evidence_id="E2")
+    item = GroundedItem(kind="operation", request_id="Q1", text=text, citations=[GroundedCitation(evidence_id="E2")])
     draft = GroundedDraft.model_validate(
         {
             "request_coverage": [{"request_id": "Q1", "evidence_ids": ["E2"], "evidence_scope": []}],
@@ -255,7 +271,7 @@ def test_an_explicitly_empty_scope_does_not_authorize_an_operation():
             "confidence": "high",
         }
     )
-    assert _request_plan_errors(draft)
+    assert _request_plan_errors(draft, [span])
     assert _outside_request_plan(item, span, draft, [span])
 
 
@@ -283,7 +299,7 @@ def test_same_evidence_used_for_two_claims_can_repeat_a_consistent_scope_decisio
 
     text = (EXAMPLES / "rows.csv").read_text()
     span = {"evidence_id": "E1", "text": text}
-    item = GroundedItem(kind="rule", request_id="Q1", text="残す行は row-a と row-c です。", evidence_id="E1")
+    item = GroundedItem(kind="rule", request_id="Q1", text="残す行は row-a と row-c です。", citations=[GroundedCitation(evidence_id="E1")])
     draft = GroundedDraft.model_validate(
         {
             "request_coverage": [
@@ -301,7 +317,7 @@ def test_same_evidence_used_for_two_claims_can_repeat_a_consistent_scope_decisio
             "confidence": "high",
         }
     )
-    assert not _request_plan_errors(draft)
+    assert not _request_plan_errors(draft, [span])
     assert not _outside_request_plan(item, span, draft, [span])
 
 
@@ -309,7 +325,7 @@ def test_conflicting_scope_decisions_for_the_same_evidence_are_not_merged():
     from rag_engine.generation.grounded import _outside_request_plan, _request_plan_errors
 
     span = {"evidence_id": "E1", "text": "対象を選択します。"}
-    item = GroundedItem(kind="operation", request_id="Q1", text=span["text"], evidence_id="E1")
+    item = GroundedItem(kind="operation", request_id="Q1", text=span["text"], citations=[GroundedCitation(evidence_id="E1")])
     draft = GroundedDraft.model_validate(
         {
             "request_coverage": [
@@ -327,7 +343,7 @@ def test_conflicting_scope_decisions_for_the_same_evidence_are_not_merged():
             "confidence": "high",
         }
     )
-    assert _request_plan_errors(draft)
+    assert _request_plan_errors(draft, [span])
     assert _outside_request_plan(item, span, draft, [span])
 
 
@@ -374,14 +390,17 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
     plan = {
         "request_id": "Q1",
         "evidence_ids": [labels[correct]],
-        "evidence_scope": [{"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct", "link_quote": ""}],
+        "evidence_scope": [
+            {"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct", "link_quote": ""},
+            {"evidence_id": labels[other], "target": "独立した設定", "relation": "unrelated", "link_quote": ""},
+        ],
     }
     model = FakeModel(
         [
             {
                 "request_coverage": [{"request_id": "Q1", "evidence_ids": list(labels.values())}],
                 "items": [
-                    {"kind": "operation", "request_id": "Q1", "text": text, "quote": text, "evidence_id": labels[text]}
+                    {"kind": "operation", "request_id": "Q1", "text": text, "citations": [{"quote": text, "evidence_id": labels[text]}]}
                     for text in (correct, other)
                 ],
                 "summary": other,
@@ -407,12 +426,14 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
             CASES["summary"]["question"], ctx, replace(get_settings(), answer_audit_mode="none"), image_prompt_mode="text_only"
         ).response
     assert correct in result.answer_text and other not in result.answer_text
-    assert calls == [RequestScopePlan, GroundedDraft]
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+
+    assert calls == [RequestScopePlan, generation_draft_wire_model()]
     assert result.generation_trace["llm_calls"] == 2
 
 
 @pytest.mark.parametrize("correction_rounds, repair", [(1, True), (1, False), (0, False)])
-def test_csv_current_value_warning_is_rephrased_in_none_mode(correction_rounds, repair):
+def test_none_mode_does_not_rephrase_csv_values_from_word_presence(correction_rounds, repair):
     from dataclasses import replace
 
     from test_grounded_answer import FakeModel, context, ids, marks, record
@@ -431,7 +452,7 @@ def test_csv_current_value_warning_is_rephrased_in_none_mode(correction_rounds, 
     def draft(text):
         return {
             "summary": "",
-            "items": [{"kind": "rule", "request_id": "Q1", "evidence_id": eid, "quote": quote, "text": text}],
+            "items": [{"kind": "rule", "request_id": "Q1", "citations": [{"evidence_id": eid, "quote": quote}], "text": text}],
             "confidence": "high",
         }
 
@@ -447,16 +468,10 @@ def test_csv_current_value_warning_is_rephrased_in_none_mode(correction_rounds, 
             replace(get_settings(), answer_audit_mode="none", answer_max_correction_rounds=correction_rounds),
             image_prompt_mode="text_only",
         ).response
-    if not repair:
-        assert wrong in result.answer_text
-        assert "item_check" in marks(result)[wrong]
-        assert len(model.prompts) == 1 + correction_rounds
-        return
-    assert corrected in result.answer_text
-    assert wrong not in result.answer_text
-    assert not marks(result)
-    assert [name for name, _ in model.prompts] == ["GroundedDraft", "GroundedDraft"]
-    assert wrong in model.prompts[1][1]
+    # 「現在」の語だけでは実測値かどうかを決めず、監査なしでは自動修正もしない。
+    assert wrong in result.answer_text
+    assert "item_check" not in marks(result).get(wrong, [])
+    assert len(model.prompts) == 1
 
 
 @pytest.mark.parametrize("plan_kind", ["absent", "legacy", "scoped"])
@@ -471,8 +486,13 @@ def test_planned_table_evidence_does_not_need_question_words(plan_kind):
     ]
     payload = {
         "items": [
-            {"kind": "operation", "request_id": "Q1", "text": operation, "quote": operation, "evidence_id": "E1"},
-            {"kind": "confirmation", "request_id": "Q1", "text": "row-a の値は 10 です。", "quote": rows, "evidence_id": "E2"},
+            {"kind": "operation", "request_id": "Q1", "text": operation, "citations": [{"quote": operation, "evidence_id": "E1"}]},
+            {
+                "kind": "confirmation",
+                "request_id": "Q1",
+                "text": "row-a の値は 10 です。",
+                "citations": [{"quote": rows, "evidence_id": "E2"}],
+            },
         ],
         "summary": operation,
         "confidence": "high",
@@ -491,4 +511,4 @@ def test_planned_table_evidence_does_not_need_question_words(plan_kind):
         payload["request_coverage"][0].pop("evidence_scope")
     result, _ = verify("入力ファイルの更新方法を教えてください。", GroundedDraft.model_validate(payload), spans)
     entry = next(e for e in result if e.item.evidence_id == "rows")
-    assert any(OTHER_DOCUMENT_CHECK in str(mark) for mark in entry.marks) is (plan_kind != "scoped")
+    assert not any(OTHER_DOCUMENT_CHECK in str(mark) for mark in entry.marks)
