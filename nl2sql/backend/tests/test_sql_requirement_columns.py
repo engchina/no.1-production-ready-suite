@@ -6,6 +6,10 @@ from datetime import date
 from typing import Any
 
 import pytest
+from test_mcp import _call, _FakeNl2SqlService, _run, _structured, _token, _Users
+from test_mcp import fake_service as fake_service
+from test_mcp import users as users
+from test_nl2sql_guided_clarification import _item, _LegacyService, _output, _ScriptedLlm
 
 from app.features.nl2sql import ontology_router
 from app.features.nl2sql.models import (
@@ -30,10 +34,6 @@ from app.features.nl2sql.sql_requirement import (
     build_requirement_context,
 )
 from app.settings import get_settings
-from tests.test_mcp import _call, _FakeNl2SqlService, _run, _structured, _token, _Users
-from tests.test_mcp import fake_service as fake_service
-from tests.test_mcp import users as users
-from tests.test_nl2sql_guided_clarification import _item, _LegacyService, _output, _ScriptedLlm
 
 QUESTION = "APP.TABLE_A の VALUE_A を CATEGORY ごとに合計し、CATEGORY の昇順で表示する"
 
