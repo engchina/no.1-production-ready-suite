@@ -420,6 +420,7 @@ jobs:
               - "platform/packages/system_settings_backend/src/pr_system_settings/system_schema.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/migrations.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/store.py"
+              - "platform/packages/system_settings_backend/src/pr_system_settings/trace_recording.py"
             rag_oracle:
               - "rag/artifacts/oracle-schema-migration.*"
               - "rag/packages/rag_engine/rag_engine/retrieval/text_search_tokenizer.py"
