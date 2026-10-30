@@ -1,3 +1,4 @@
+import { confirmTraceExplorer } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticCallDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
 // 実行履歴（#1955。UX 契約 run-history.md §7）: 共通の一覧（RunHistoryToolbar → RunHistoryTable → OffsetPagination）と
 // `?id=<run_id>` の全幅の詳細。状態は `[data-run-status]` の値で確かめる（文言・色に頼らない）。
@@ -993,4 +994,5 @@ test("呼び出しの詳細で入力・結果・Schema・計時を確認でき�
     }, theme);
     await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
   }
+  await confirmTraceExplorer(page, testInfo, expect);
 });

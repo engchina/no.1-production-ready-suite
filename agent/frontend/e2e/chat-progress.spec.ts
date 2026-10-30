@@ -1,3 +1,4 @@
+import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticCallDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import type { Page } from "@playwright/test";
@@ -716,4 +717,5 @@ test("呼び出しの詳細で入力・結果・Schema・計時を確認でき�
     }, theme);
     await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
   }
+  await confirmTraceExplorer(page, testInfo, expect);
 });

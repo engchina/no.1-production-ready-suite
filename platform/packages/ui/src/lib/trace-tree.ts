@@ -137,7 +137,7 @@ export function traceTimeline(value: unknown, labels: TraceDetailsLabels = DEFAU
     }, labels);
     const fields = traceSpanFields(id, operationName, attributes, labels);
     if (typeof span.parent_span_id === "string") fields.push({ label: "Parent span ID", value: span.parent_span_id, mono: true });
-    steps.push({ id, label, level,
+    steps.push({ id, label, level, operationName,
       parentId: typeof span.parent_span_id === "string" ? span.parent_span_id : undefined,
       status: span.status === "cancelled" ? "skipped" : span.status as "done" | "failed" | "skipped",
       detail: span.status === "cancelled" ? labels.cancelled : undefined,

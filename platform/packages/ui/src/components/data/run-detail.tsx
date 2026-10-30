@@ -1,6 +1,8 @@
-import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, XCircle, type LucideIcon } from "lucide-react";
+import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, Waypoints, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode, type CSSProperties } from "react";
 
+import { DEFAULT_TRACE_EXPLORER_LABELS, TraceExplorer, type TraceExplorerLabels } from "./trace-explorer";
+import { Button } from "../ui/button";
 import { CopyButton } from "../ui/copy-button";
 import type { TraceDetailsLabels } from "../../lib/trace-labels";
 import { useTraceDetailsLabels } from "./trace-labels-provider";
@@ -518,6 +520,8 @@ export function RunTimelineProduct({ product }: { product: string }) {
 }
 
 export interface RunTimelineStep {
+  /** 記録された operation 名。軌跡の分類と検索に使う。 */
+  operationName?: string;
   id: string;
   /** 段の名前（翻訳済み。例「SQL を生成」「ツール: search_documents」）。 */
   label: string;
@@ -722,6 +726,7 @@ export function runTimelineDuration(steps: readonly RunTimelineStep[]): number |
 }
 
 export interface RunTimelineProps {
+  explorerLabels?: Partial<TraceExplorerLabels>;
   steps: readonly RunTimelineStep[];
   /** 処理全体の所要時間（ミリ秒）。要約の行に出す（無ければ段の合計の範囲）。 */
   totalDurationMs?: number | null;
@@ -770,6 +775,7 @@ export interface RunTimelineProps {
  */
 export function RunTimeline({
   steps,
+  explorerLabels,
   totalDurationMs,
   defaultExpanded = false,
   showSummary = true,
@@ -782,6 +788,7 @@ export function RunTimeline({
   testId,
 }: RunTimelineProps) {
   const traceLabels = useTraceDetailsLabels();
+  const [exploring, setExploring] = useState(false);
   const labels = resolveRunDetailLabels(labelsInput);
   const bars = runTimelineBars(steps);
   // 回すのは今の段（最後に始まった実行中の末端の段）1 つだけ（#3445）。
@@ -797,6 +804,8 @@ export function RunTimeline({
   const total = totalDurationMs ?? runTimelineDuration(steps);
   const nameText = size === "sm" ? "text-xs" : "text-sm";
 
+  if (exploring) return <TraceExplorer steps={steps} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} />;
+
   return (
     <div
       className="@container grid min-w-0 gap-2"
@@ -804,6 +813,7 @@ export function RunTimeline({
       data-run-timeline-bars={showBars ? "true" : "false"}
       data-testid={testId}
     >
+      {steps.length ? <div className="flex justify-end"><Button id={`${idPrefix}-explore`} variant="secondary" size="sm" icon={Waypoints} onClick={() => setExploring(true)}>{explorerLabels?.open ?? DEFAULT_TRACE_EXPLORER_LABELS.open}</Button></div> : null}
       {showBars && steps.some(step => stepDurationMs(step) != null && (!step.startedAt || !step.finishedAt)) ? (
         <p className="text-xs text-fg-muted">{traceLabels.reconstructed}</p>
       ) : null}
