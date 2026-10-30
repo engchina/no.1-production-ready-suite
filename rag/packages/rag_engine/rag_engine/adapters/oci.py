@@ -832,6 +832,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         try:
             with observe_call("chat", provider.model) as observation:
                 snapshot = _response_wire_request(request)
+                if streamed:
+                    snapshot["stream"] = True
                 observation.request(snapshot, schema=snapshot["text"]["format"])
                 wire_request = _audit_wire_request(request)
                 if streamed:
