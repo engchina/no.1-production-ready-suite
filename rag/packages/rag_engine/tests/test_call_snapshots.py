@@ -70,3 +70,28 @@ def test_sdk_boundary_records_private_request_schema_and_response(monkeypatch, s
     assert sent[0]["text_format"] is TextOutput
     if not failed:
         assert recorded[1][1] is response
+
+
+def test_stream_failure_keeps_received_prefix():
+    from pr_backend_core.observability.call_stream import CallStreamCapture
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def __iter__(self):
+            yield SimpleNamespace(type="response.reasoning_text.delta", delta="合成の思考", output_index=0)
+            yield SimpleNamespace(type="response.output_text.delta", delta="合成の途中の回答", output_index=1)
+            raise RuntimeError("synthetic failure")
+
+    client = SimpleNamespace(responses=SimpleNamespace(stream=lambda **_: Stream()))
+    client.with_options = lambda **_: client
+    snapshots = []
+    with pytest.raises(RuntimeError, match="synthetic failure"):
+        oci._stream_parsed(client, {}, get_settings(environ={}, dotenv_path=None), None, capture=CallStreamCapture(snapshots.append))
+    assert snapshots[-1]["status"] == "interrupted"
+    assert snapshots[-1]["output"][0]["content"][0]["text"] == "合成の思考"
+    assert snapshots[-1]["output"][1]["content"][0]["text"] == "合成の途中の回答"

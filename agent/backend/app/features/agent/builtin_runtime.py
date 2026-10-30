@@ -72,6 +72,7 @@ from pr_backend_core.chat_history import (
 )
 from pr_backend_core.chat_progress import ChatProgressStepDetails
 from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
+from pr_backend_core.observability.call_stream import CallStreamCapture
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.mcp_trace import traceparent_links
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
@@ -632,6 +633,7 @@ class _ObservedStream:
     def __init__(self, inner: Any, span: Any) -> None:
         self._inner, self._span = inner, span
         self._exhausted = False
+        self._capture = CallStreamCapture(span.set_call_output)
 
     def __aiter__(self) -> Any:
         return self
@@ -642,12 +644,12 @@ class _ObservedStream:
                 self._span.span, record_exception=False, set_status_on_exception=False
             ):
                 event = await self._inner.__anext__()
+            self._capture.feed(event)
             kind = getattr(event, "type", "")
             if kind == "response.completed":
                 # 応答がツールを求めたか・最終の回答かで、処理の経過の工程の種類を決める（#3226）。
                 _set_turn_kind(self._span, getattr(event, "response", None))
             if kind in {"response.completed", "response.incomplete", "response.failed"}:
-                self._span.set_call_output(getattr(event, "response", None))
                 self._exhausted = True
                 if kind != "response.completed":
                     self._span.set_status("failed")
@@ -667,11 +669,14 @@ class _ObservedStream:
                 )
             return event
         except StopAsyncIteration:
+            self._capture.flush(interrupted=not self._exhausted)
             self._exhausted = True
             self._span.finish()
             raise
         except BaseException as exc:
-            self._span.set_call_output({"error_type": type(exc).__name__})
+            self._capture.flush(interrupted=True)
+            if not self._capture.has_content:
+                self._span.set_call_output({"error_type": type(exc).__name__})
             self._span.set_attributes({"error.type": type(exc).__name__})
             self._span.set_status(
                 "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
@@ -681,6 +686,7 @@ class _ObservedStream:
 
     async def close(self) -> None:
         if not self._exhausted:
+            self._capture.flush(interrupted=True)
             self._span.set_status("cancelled")
         try:
             await self._inner.close()

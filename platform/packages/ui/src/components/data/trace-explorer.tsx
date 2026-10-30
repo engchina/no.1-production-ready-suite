@@ -52,7 +52,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
   const [category, setCategory] = useState<TraceCategory | "all">("all");
   const [status, setStatus] = useState("all");
   const [order, setOrder] = useState<TraceOrder>("hierarchy");
-  const [selectedId, setSelectedId] = useState<string | null>(() => steps.find(step => step.status === "failed")?.id ?? steps.find(step => step.details?.call)?.id ?? steps[0]?.id ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => steps.find(step => step.status === "failed")?.id ?? steps.find(step => step.details?.call && traceCategory(step) === "model")?.id ?? steps.find(step => step.details?.call)?.id ?? steps[0]?.id ?? null);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [limit, setLimit] = useState(50);
   const listRef = useRef<HTMLOListElement>(null);

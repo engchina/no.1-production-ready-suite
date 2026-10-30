@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ..chat_progress import CallContent, CallDetails
+from ..chat_progress import CALL_CONTENT_MAX, CallContent, CallDetails
 
 _SECRET = re.compile(
     r"password|passwd|secret|token$|api[_-]?key|authorization|cookie|credential", re.I
@@ -52,12 +52,48 @@ def _safe(value: Any, depth: int = 0) -> Any:
     return "[unsupported value]"
 
 
+def _shorten(value: Any, string_limit: int, array_limit: int) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= string_limit else value[:string_limit] + "…"
+    if isinstance(value, dict):
+        return {key: _shorten(item, string_limit, array_limit) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_shorten(item, string_limit, array_limit) for item in value[:array_limit]] + (
+            ["[remaining items omitted]"] if len(value) > array_limit else []
+        )
+    return value
+
+
 def call_content(value: Any) -> CallContent:
     """送った値をコピーし、secret の除去を長さの制限より先に行う。"""
     try:
         safe = _safe(value)
-        text = safe if isinstance(safe, str) else json.dumps(safe, ensure_ascii=False, indent=2)
-        return CallContent.model_validate({"status": "recorded", "text": text})
+        if isinstance(safe, str):
+            if safe.lstrip().startswith(("{", "[")):
+                try:
+                    safe = json.loads(safe)
+                except ValueError:
+                    return CallContent.model_validate({"status": "recorded", "text": safe})
+            else:
+                return CallContent.model_validate({"status": "recorded", "text": safe})
+        text = json.dumps(safe, ensure_ascii=False, indent=2)
+        cut = "[remaining items omitted]" in text or bool(
+            isinstance(safe, dict) and safe.get("capture_truncated")
+        )
+        if len(text) > CALL_CONTENT_MAX:
+            cut = True
+            # JSON の途中で切らず、値を縮めてから serialize する。
+            string_limit, array_limit = CALL_CONTENT_MAX // 2, 1000
+            while len(text) > CALL_CONTENT_MAX and string_limit >= 16:
+                safe = _shorten(safe, string_limit, array_limit)
+                text = json.dumps(safe, ensure_ascii=False, indent=2)
+                string_limit //= 2
+                array_limit = max(1, array_limit // 2)
+            if len(text) > CALL_CONTENT_MAX:
+                text = json.dumps(
+                    {"preview": text[: CALL_CONTENT_MAX // 2], "omitted": True}, ensure_ascii=False
+                )
+        return CallContent(status="truncated" if cut else "recorded", text=text)
     except Exception:
         return CallContent()
 

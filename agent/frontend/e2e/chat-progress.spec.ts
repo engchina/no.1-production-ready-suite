@@ -692,7 +692,7 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   await page.screenshot({path: testInfo.outputPath("history-model-call-context.png"), fullPage: true});
 });
 
-test("呼び出しの詳細で入力・結果・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
   const { progress: log } = seedRunningRun(mockApi);
   log.step("chat-1", "done", { kind: "plan", details: { call: syntheticCallDetails } }).step("chat-2", "running");
   await page.goto("/chat");
@@ -703,6 +703,12 @@ test("呼び出しの詳細で入力・結果・Schema・計時を確認でき�
   await expect(pane).toContainText("synthetic-call-input");
   await pane.getByRole("tab", { name: "結果", exact: true }).click();
   await expect(pane).toContainText("synthetic-call-output");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-output");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
+  await pane.getByRole("tab", { name: "思考", exact: true }).click();
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
+  await expect(pane.locator("[data-call-readable]")).not.toContainText("synthetic-call-output");
   await pane.getByRole("tab", { name: "Schema", exact: true }).click();
   await expect(pane).toContainText("synthetic-call-schema");
   await pane.getByRole("tab", { name: "Schema", exact: true }).focus();

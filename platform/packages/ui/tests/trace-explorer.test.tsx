@@ -26,7 +26,7 @@ describe("記録した値だけを使う軌跡", () => {
   it("記録の operation で分類し、時刻順では安定して並ぶ", () => {
     expect(steps.map(traceCategory)).toEqual(["stage", "model", "tool"]);
     expect(traceOrderedSteps(steps, "time").map(step => step.id)).toEqual(["root", "tool-a", "model-a"]);
-    expect(traceOrderedSteps(steps, "hierarchy")).toEqual(steps);
+    expect(traceOrderedSteps(steps, "hierarchy").map(step => step.id)).toEqual(["root", "tool-a", "model-a"]);
     expect(traceSearchText(steps[1])).toContain("synthetic-input");
     expect(traceSearchText(steps[1])).not.toContain("private-hidden");
   });
@@ -41,9 +41,9 @@ describe("記録した値だけを使う軌跡", () => {
       act(() => inputTab.click());
       expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("synthetic-input");
       expect(host.textContent).not.toContain("private-hidden");
-      click('button[aria-label="次の呼び出し"]');
-      expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("synthetic-error");
       click('button[aria-label="前の呼び出し"]');
+      expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("synthetic-error");
+      click('button[aria-label="次の呼び出し"]');
       expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("synthetic-input");
     } finally { act(() => root.unmount()); host.remove(); }
   });
@@ -75,4 +75,15 @@ it("snapshot のない工程でも記録された開始・終了時刻を確認�
     expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain(steps[0].startedAt);
     expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain(steps[0].finishedAt);
   } finally { act(() => root.unmount()); host.remove(); }
+});
+
+it("親を子より先に置き、同時刻・欠けた親・循環でも段を失わない", () => {
+  const data: RunTimelineStep[] = [
+    {...steps[1],id:"child",parentId:"parent"}, {...steps[0],id:"parent",startedAt:"2026-01-01T00:00:03Z"},
+    {...steps[0],id:"orphan",parentId:"missing"}, {...steps[0],id:"cycle-a",parentId:"cycle-b"}, {...steps[0],id:"cycle-b",parentId:"cycle-a"},
+  ];
+  const ids = traceOrderedSteps(data,"hierarchy").map(step => step.id);
+  expect(ids.indexOf("parent")).toBeLessThan(ids.indexOf("child"));
+  expect(new Set(ids).size).toBe(data.length);
+  expect(traceOrderedSteps(data,"hierarchy").map(step => step.id)).toEqual(ids);
 });

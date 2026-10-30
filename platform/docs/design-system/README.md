@@ -1663,3 +1663,14 @@ ChatProgress・RunTimeline・RunTimelineSection の段名と開閉要約は sm�
 ### 軌跡の調査（#3891）
 
 `TraceExplorer` は既存の処理の経過から開く調査の作業領域。概観 → 絞り込み → 並び方 → 一覧と詳細の順で、共有の `ListToolbar` / `SearchField` / `FilterSelect` / `Tabs` と既存の詳細表示を使う。置き場所が 56rem 以上なら 2 列、未満なら一覧/詳細を切り替える。状態はアイコンと文字で表し、種類の色と区別する。時刻不明の記録や現在の権限で伏せた内容を補完しない。
+
+
+### 呼び出しの本文と返却された思考（#3898）
+
+`RunStepDetailsView` は入力を初期表示し、記録済みのメッセージを role ごとに開く。system / developer は折りたたみ、それ以外は開いておく。結果と返却された思考は別のタブに本文として表示し、本文をコピーできる。思考の要約は全文と区別する。未記録の思考は補完しない。長文は折り返し、本文一覧全体で縦にスクロールする。原始 JSON は Disclosure で開き、切り詰め・権限不足・未記録を明示する。概要は記録にあるモデル・token 使用量・要求オプションを表示する。軌跡の初期選択は失敗を優先し、次にモデルの呼び出しを優先する。
+
+span の階層表示は親を先に置き、兄弟は開始時刻（同時刻・時刻不明は元の順）で並べる。時刻順の表示は全 span の開始時刻で並べる。入力の message と結果の並びは呼び出し時点のまま保持し、詳細のタブは入力・思考・結果の順にする。
+
+embedding は入力の batch を分け、結果では記録されたベクトル数と次元数を先に示す。各ベクトルの数値は折りたたみ、展開とコピーで調べる。配列の一部だけが記録された場合は「一部のみ記録」と示し、記録済みの次元数をモデルの実際の次元数とは呼ばない。rerank は返された順に順位・元の index・関連度・対応する文書を DataTable に示す。関連度を正規化せず、別の呼び出しの分数と同じ尺度とは扱わない。
+
+参考: [DeepSeek Harness の trajectory](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-trajectory/README.md)、[LangSmith の run の形式](https://docs.langchain.com/langsmith/run-data-format)、[LLM の記録の形式](https://docs.langchain.com/langsmith/log-llm-trace)。型ごとの表示と記録の事実を保つ原則を適用しており、これらの製品の全機能との互換を意味しない。

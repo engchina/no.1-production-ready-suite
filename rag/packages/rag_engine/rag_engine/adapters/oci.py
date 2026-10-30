@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
+from pr_backend_core.observability.call_stream import CallStreamCapture
 from pr_backend_core.observability.model_purpose import (
     call_with_model_purpose,
     model_call_purpose,
@@ -838,7 +839,12 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 wire_request = _audit_wire_request(request)
                 if streamed:
                     response, timing = _stream_parsed(
-                        _openai_client_for_provider(provider, settings), wire_request, settings, limits, runaway=runaway
+                        _openai_client_for_provider(provider, settings),
+                        wire_request,
+                        settings,
+                        limits,
+                        runaway=runaway,
+                        capture=CallStreamCapture(observation.response),
                     )
                 else:
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
@@ -1242,7 +1248,13 @@ def _note_stream_timing(provider: LlmProviderSettings, timing: _StreamTiming) ->
 
 
 def _stream_parsed(
-    client: Any, request: dict[str, Any], settings: Settings, limits: _StallLimits | None, *, runaway: bool = False
+    client: Any,
+    request: dict[str, Any],
+    settings: Settings,
+    limits: _StallLimits | None,
+    *,
+    runaway: bool = False,
+    capture: CallStreamCapture | None = None,
 ) -> tuple[Any, _StreamTiming]:
     """Responses API を streaming で呼び、完了（または未完了）の応答と時刻を返す（#1926）。
 
@@ -1273,6 +1285,8 @@ def _stream_parsed(
     try:
         with client.with_options(timeout=httpx.Timeout(total, read=read_timeout), max_retries=0).responses.stream(**request) as stream:
             for event in stream:
+                if capture is not None:
+                    capture.feed(event)
                 now = time.monotonic()
                 elapsed = now - started
                 timing.max_gap_seconds = max(timing.max_gap_seconds, now - last)
@@ -1324,6 +1338,9 @@ def _stream_parsed(
         with suppress(AttributeError):
             exc.timing = timing  # type: ignore[attr-defined]
         raise
+    finally:
+        if capture is not None:
+            capture.flush(interrupted=final is None)
     if final is None:
         raise LlmStreamFailed("LLM の応答の stream が完了の event なしに終わりました。", timing)
     return final, timing
