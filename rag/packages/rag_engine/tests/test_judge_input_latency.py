@@ -77,6 +77,8 @@ def test_run_round_calls_the_audit_with_the_audit_settings():
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.llm import GroundedAudit, GroundedDraft
 
+    generation_settings = get_settings(environ={}, dotenv_path=None)
+    audit_settings = replace(generation_settings, audit_reasoning_effort="low")
     calls = []
 
     def parse_text(system, prompt, settings, schema, **options):
@@ -99,21 +101,24 @@ def test_run_round_calls_the_audit_with_the_audit_settings():
     grounded.run_round(
         question,
         spans,
-        "generation",
+        generation_settings,
         prompt="p",
         image_paths=(),
         provider_id=None,
         parse_text=parse_text,
         parse_images=None,
-        audit_settings="audit",
+        audit_settings=audit_settings,
     )
-    assert [(schema.__name__, settings) for schema, settings in calls] == [("GroundedDraftWire", "generation"), ("GroundedAudit", "audit")]
+    assert [(schema.__name__, settings) for schema, settings in calls] == [
+        ("GroundedDraftWire", generation_settings),
+        ("GroundedAudit", audit_settings),
+    ]
     calls.clear()
     # 渡さなければ監査も生成と同じ設定（従来の動き）。
     grounded.run_round(
-        question, spans, "generation", prompt="p", image_paths=(), provider_id=None, parse_text=parse_text, parse_images=None
+        question, spans, generation_settings, prompt="p", image_paths=(), provider_id=None, parse_text=parse_text, parse_images=None
     )
-    assert [settings for _schema, settings in calls] == ["generation", "generation"]
+    assert [settings for _schema, settings in calls] == [generation_settings, generation_settings]
 
 
 # ---- CRAG の評価の入力の圧縮 ---------------------------------------------------------------------------------
