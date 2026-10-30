@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_models import (
     ANSWER_USES,
     AnswerQuestionResult,
@@ -92,10 +93,7 @@ def _normalize_answer_response(response: AnswerResponse) -> AnswerResponse:
     fallback = ""
     reason = ""
     if bare_answer in {"わかりません", "分かりません", "判りません", "不明です"}:
-        fallback = (
-            "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。"
-            "対象業務の操作説明書で操作方法と適用条件を確認し、質問の対象・条件や検索範囲を見直してください。"
-        )
+        fallback = answer_labels().insufficient_evidence_summary + answer_labels().abstention_guidance
         reason = "検索された資料では、質問への回答を裏付ける根拠が不足しています。"
     elif bare_answer in {"i don't know", "i don’t know", "i do not know"}:
         fallback = (

@@ -1,5 +1,6 @@
 """根拠を明示して呼び出す回答生成サービス。"""
 
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.models.contracts import AnswerResult, GenerationRequest
 from rag_engine.ports import Generator
 
@@ -16,7 +17,7 @@ class GenerationService:
             raise ValueError("question must not be empty")
         if not request.evidence:
             return AnswerResult(
-                text="検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
+                text=answer_labels().insufficient_evidence_summary,
                 confidence="low",
                 insufficient_reason="retrieval returned no evidence",
                 needs_human_review=True,

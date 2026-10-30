@@ -409,3 +409,29 @@ def test_invalid_snapshot_returns_field_error_instead_of_internal_exception(
     with pytest.raises(LanguagePackError, match="snapshot") as caught:
         pack_from_payload(json.dumps({"snapshot": snapshot}))
     assert set(caught.value.errors) == {"snapshot"}
+
+
+@pytest.mark.parametrize(
+    "key", ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance"]
+)
+def test_legacy_pack_fills_abstention_labels_without_changing_ingest(key: str) -> None:
+    raw = builtin_pack().to_dict()
+    del raw["answer_labels"][key]
+    raw["answer_labels"]["cause_gap"] = "合成の保存済み表示"
+    original = json.dumps(raw, ensure_ascii=False)
+    pack = build_pack(raw)
+    assert pack.text("answer_labels", key) == builtin_pack().text("answer_labels", key)
+    assert pack.text("answer_labels", "cause_gap") == "合成の保存済み表示"
+    assert json.dumps(raw, ensure_ascii=False) == original
+    assert pack.ingest_hash == builtin_pack().ingest_hash
+
+
+@pytest.mark.parametrize(
+    "key", ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance"]
+)
+@pytest.mark.parametrize("value", [None, ""])
+def test_invalid_abstention_labels_are_not_defaulted(key: str, value: object) -> None:
+    raw = builtin_pack().to_dict()
+    raw["answer_labels"][key] = value
+    with pytest.raises(LanguagePackError):
+        build_pack(raw)

@@ -67,6 +67,7 @@ from rag_engine.generation.answer_images import (
     answer_image_evidence,
     prompt_injection_warnings_for_records,
 )
+from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_models import (
     ANSWER_FLOW_DISPLAY_SEPARATOR,
     ANSWER_FLOWS,
@@ -3439,7 +3440,7 @@ def synthesize_grounded_answer(
             # 生成の出力が契約を満たさなかった（#3849）。時間の上限の文は使わず、資料の記載を示す定型の文にする。
             else grounded.answer_labels().neutral_summary
             if no_draft
-            else "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。",
+            else answer_labels().insufficient_evidence_summary,
             [*related, *gap_items, *removed_entries],
             confirmations=confirmation_section,
             unverified=unread_lines,
@@ -5892,10 +5893,7 @@ def answer_question_result(
                 return evidence_result(context, trace={"zero_evidence": zero_evidence, "query_overflow": overflow_trace})
             # 空検索では LLM に推測させず、表示本文と保存 payload の不足情報を揃える。
             response = AnswerResponse(
-                answer_text=(
-                    "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。"
-                    "質問の対象・条件や検索範囲を見直し、対象業務の操作説明書で操作方法と適用条件を確認してください。"
-                ),
+                answer_text=(answer_labels().insufficient_evidence_summary + answer_labels().empty_search_guidance),
                 confidence="low",
                 insufficient_reason="現在の検索範囲では、回答に使える文書の根拠が取得できませんでした。",
                 needs_human_review=True,
