@@ -1279,6 +1279,7 @@ def _unstructured_adapter_result(
         "application/xhtml+xml",
     }:
         extraction = _restore_html_table_captions(extraction, source_bytes)
+        extraction = _restore_html_region_roles(extraction, source_bytes)
     extraction = _adapter_extraction_with_source_lineage(
         extraction,
         source_profile=source_profile,
@@ -1305,6 +1306,77 @@ def _html_table_cell_signature(
             for cell in cells
         )
     )
+
+
+def _restore_html_region_roles(
+    extraction: StructuredExtraction, source_bytes: bytes
+) -> StructuredExtraction:
+    """原本の header / footer / caption に一意に含まれる要素の役割を保持する。"""
+
+    class Regions(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.stack: list[str] = []
+            self.visible: list[str] = []
+            self.regions: list[tuple[str, list[str]]] = []
+            self.active: list[tuple[int, list[str]]] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag in {
+                "area",
+                "base",
+                "br",
+                "col",
+                "embed",
+                "hr",
+                "img",
+                "input",
+                "link",
+                "meta",
+                "param",
+                "source",
+                "track",
+                "wbr",
+            }:
+                return
+            self.stack.append(tag)
+            if tag in {"header", "footer", "caption"}:
+                pieces: list[str] = []
+                self.regions.append((tag, pieces))
+                self.active.append((len(self.stack), pieces))
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag not in self.stack:
+                return
+            depth = len(self.stack) - self.stack[::-1].index(tag)
+            self.stack = self.stack[: depth - 1]
+            self.active = [(level, pieces) for level, pieces in self.active if level < depth]
+
+        def handle_data(self, data: str) -> None:
+            if any(tag in {"script", "style", "nav"} for tag in self.stack):
+                return
+            self.visible.append(data)
+            for _level, pieces in self.active:
+                pieces.append(data)
+
+    parser = Regions()
+    parser.feed(_decode_text_bytes(source_bytes))
+
+    def compact(text: str) -> str:
+        return "".join(text.split())
+
+    visible = compact("".join(parser.visible))
+    regions = [(role, compact("".join(pieces))) for role, pieces in parser.regions]
+    elements = []
+    for element in extraction.elements:
+        text = compact(element.text)
+        roles = {role for role, region in regions if text and text in region}
+        if len(roles) == 1 and visible.count(text) == 1:
+            element = element.model_copy(
+                update={"metadata": {**element.metadata, "html_region_role": next(iter(roles))}}
+            )
+        elements.append(element)
+    return extraction.model_copy(update={"elements": elements})
 
 
 def _restore_html_table_captions(

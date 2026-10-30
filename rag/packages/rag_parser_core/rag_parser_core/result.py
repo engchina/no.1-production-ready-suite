@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 LOCAL_PARSER_VERSION = "local_partition_v1"
 
 # Unstructured の本文変換と、保存済み抽出の再利用が共有する契約の版。
-UNSTRUCTURED_TEXT_CONTRACT = "html_full_document_v2"
+UNSTRUCTURED_TEXT_CONTRACT = "html_structural_roles_v3"
 
 # 外部 Python package を持つ adapter とその配布 package 名(registry の package 検出に使う)。
 EXTERNAL_ADAPTER_PACKAGES = {
