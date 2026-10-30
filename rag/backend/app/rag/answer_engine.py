@@ -3452,7 +3452,12 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
                 **decoded,
                 **{
                     key: chunk.metadata[key]
-                    for key in ("context_header", "context_header_enabled")
+                    for key in (
+                        "context_header",
+                        "context_header_enabled",
+                        "html_region_role",
+                        "table_caption",
+                    )
                     if key in chunk.metadata
                 },
             }
@@ -3469,7 +3474,12 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         "section_path_sources": [],
         **{
             key: chunk.metadata[key]
-            for key in ("context_header", "context_header_enabled")
+            for key in (
+                "context_header",
+                "context_header_enabled",
+                "html_region_role",
+                "table_caption",
+            )
             if key in chunk.metadata
         },
     }
