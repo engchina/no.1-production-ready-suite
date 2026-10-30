@@ -399,7 +399,8 @@ test("根拠不足の定型文はラベルと説明で編集でき、草稿に�
   const { saved } = await mockLanguagePack(page, { ...BUILTIN, answer_labels: values }, [...FIELDS, ...fields]);
   await page.goto("/settings/language-pack");
   await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "回答を確かめて表す" }).click();
-  for (const [key, value] of Object.entries(values)) {
+  for (const key of Object.keys(values) as (keyof typeof values)[]) {
+    const value = values[key];
     const field = page.getByLabel(t(`settings.language.field.${key}`), { exact: true });
     await expect(field).toHaveValue(value);
     await expect(field).toHaveAccessibleDescription(t(`settings.language.field.${key}.help`));
