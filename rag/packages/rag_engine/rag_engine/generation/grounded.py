@@ -4651,10 +4651,26 @@ def _line_citation_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict
     return direct if direct else _named_spans(item, spans)
 
 
+# 範囲だけを直す修復（`range_only` の round）の対象。整数範囲そのものの誤りと、有効な範囲が節の見出しの行だけを
+# 指す引用（説明は印を付けて残っている。同じ根拠の中で本文の行を選び直せば確かめられる）。
+CITATION_RANGE_ERROR_CODES = frozenset({"citation_range_missing", "citation_range_invalid", "citation_range_out_of_bounds"})
+CITATION_HEADING_ONLY = "citation_heading_only"
+
+
+def _heading_only_marked(entry: CheckedItem) -> bool:
+    """整数範囲で指した引用が見出しだけで、印が付いて残った説明の出典か。
+
+    ほかの出典で確かめた説明の、外した出典は数えない（説明は確かめてある）。整数範囲でない旧形式の引用は範囲だけを
+    直せないので数えない（草稿の作り直しの指摘に残る）。
+    """
+    proof = entry.citation_resolution
+    return not entry.removed and proof.get("reason_code") == CITATION_HEADING_ONLY and proof.get("range_contract") == "integer_pair"
+
+
 def citation_range_targets(
     draft: GroundedDraft, spans: Sequence[dict], previous: Sequence[CheckedItem], dropped: Sequence[Mapping[str, Any]] = ()
 ) -> list[dict[str, Any]]:
-    """今回の一意な根拠に結べる、不正な整数範囲だけを修復対象にする。"""
+    """今回の一意な根拠に結べる、不正な整数範囲と見出しだけを指す範囲を修復対象にする。"""
     targets = []
     for item_index, item in enumerate(draft.items):
         for citation_index, citation in enumerate(item.citations):
@@ -4664,32 +4680,39 @@ def citation_range_targets(
             if len(named) != 1:
                 continue
             view = _citation_view(named[0])
+            # (検査の記録, 見出しだけの引用で印が付いて残った説明の出典か)
             proofs = [
-                own.citation_resolution
+                (own.citation_resolution, _heading_only_marked(own))
                 for entry in previous
                 if entry.draft_index == item_index
                 for own in item_citations(entry)
                 if own.citation_resolution.get("requested_evidence_id") == citation.evidence_id
             ]
             proofs.extend(
-                entry["citation_resolution"]
+                (entry["citation_resolution"], False)
                 for entry in dropped
                 if entry.get("index") == item_index
                 and isinstance(entry.get("citation_resolution"), dict)
                 and entry["citation_resolution"].get("requested_evidence_id") == citation.evidence_id
             )
-            if not any(
-                proof.get("resolved_evidence_id") == view.evidence_id
+            bound = [
+                (proof, heading_only)
+                for proof, heading_only in proofs
+                if proof.get("resolved_evidence_id") == view.evidence_id
                 and proof.get("source_id") == view.source_id
                 and bool(proof.get("view_sha256"))
                 and proof["view_sha256"] == view.view_sha256
-                for proof in proofs
-            ):
+            ]
+            if not bound:
                 continue
             numbered = view.numbered
             binding = bind_wire_range(*citation._wire_range, unit_count=len(view.units), numbered=numbered)
-            if binding.reason_code not in {"citation_range_missing", "citation_range_invalid", "citation_range_out_of_bounds"}:
-                continue
+            reason_code: str = binding.reason_code or ""
+            if reason_code not in CITATION_RANGE_ERROR_CODES:
+                # 有効な範囲は、今の範囲で見出しだけと判定した記録があるときだけ対象にする（別の範囲の古い記録は使わない）。
+                if reason_code or not any(heading_only and proof.get("requested_lines") == binding.lines for proof, heading_only in bound):
+                    continue
+                reason_code = CITATION_HEADING_ONLY
             targets.append(
                 {
                     "item_index": item_index,
@@ -4697,24 +4720,27 @@ def citation_range_targets(
                     "evidence_id": citation.evidence_id,
                     "unit_count": len(view.units),
                     "numbered": numbered,
-                    "reason_code": binding.reason_code,
+                    "reason_code": reason_code,
+                    **({"hint": HEADING_ONLY_REASON} if reason_code == CITATION_HEADING_ONLY else {}),
                 }
             )
     return targets
 
 
 def citation_range_issues(checked: Sequence[CheckedItem], dropped: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
-    """意味支持と分け、今回の根拠の範囲指定に失敗した引用だけを報告する。"""
+    """意味支持と分け、今回の根拠の範囲指定に失敗した引用と、見出しだけを指して印が付いた引用を報告する。"""
     observations = [
         (entry.draft_index if entry.draft_index is not None and entry.draft_index >= 0 else index, own.citation_resolution)
         for index, entry in enumerate(checked)
         for own in item_citations(entry)
-    ] + [(entry.get("index", -1), entry["citation_resolution"]) for entry in dropped if isinstance(entry.get("citation_resolution"), dict)]
-    unique = {
-        (index, proof.get("requested_evidence_id", ""), proof["reason_code"])
-        for index, proof in observations
-        if proof.get("reason_code") in {"citation_range_missing", "citation_range_invalid", "citation_range_out_of_bounds"}
-    }
+        if own.citation_resolution.get("reason_code") in CITATION_RANGE_ERROR_CODES or _heading_only_marked(own)
+    ] + [
+        (entry.get("index", -1), entry["citation_resolution"])
+        for entry in dropped
+        if isinstance(entry.get("citation_resolution"), dict)
+        and entry["citation_resolution"].get("reason_code") in CITATION_RANGE_ERROR_CODES
+    ]
+    unique = {(index, proof.get("requested_evidence_id", ""), proof["reason_code"]) for index, proof in observations}
     return [{"item_index": index, "evidence_id": evidence_id, "reason_code": reason} for index, evidence_id, reason in sorted(unique)]
 
 
@@ -8030,8 +8056,11 @@ class RoundBudget:
 def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
     """是正の指摘（`Round.feedback`）のうち、直していない不足の短い説明（#1516）。"""
     labels: list[str] = []
-    if count := len(feedback.get("citation_range_issues") or ()):
+    ranges = feedback.get("citation_range_issues") or ()
+    if count := sum(row.get("reason_code") != CITATION_HEADING_ONLY for row in ranges):
         labels.append(f"範囲を確認できない引用 {count} 件")
+    if count := sum(row.get("reason_code") == CITATION_HEADING_ONLY for row in ranges):
+        labels.append(f"節の見出しだけを指す引用 {count} 件")
     if count := len(feedback.get("unanswered_requests") or ()):
         labels.append(f"答えていない要求 {count} 件")
     if count := len(feedback.get("dropped_items") or ()):
