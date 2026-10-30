@@ -111,13 +111,13 @@ def safe_error_code(error: BaseException) -> str | int | None:
     return None
 
 
-def safe_exception_fields(error: BaseException) -> dict[str, object]:
-    """型・コード・stack の位置だけを残す。例外本文・locals・ソース行は残さない。"""
+def _exception_details(error: BaseException, *, max_frames: int) -> dict[str, object]:
+    """例外1件の安全な分類と位置。メッセージ・locals・ソース行は含めない。"""
     fields: dict[str, object] = {"exception_type": type(error).__name__[:128]}
     code = safe_error_code(error)
     if code is not None:
         fields["error_code"] = code
-    frames = deque(traceback.walk_tb(error.__traceback__), maxlen=16)
+    frames = deque(traceback.walk_tb(error.__traceback__), maxlen=max_frames)
     if frames:
         fields["exception_frames"] = [
             {
@@ -127,15 +127,24 @@ def safe_exception_fields(error: BaseException) -> dict[str, object]:
             }
             for frame, line in frames
         ]
+    return fields
+
+
+def safe_exception_fields(error: BaseException) -> dict[str, object]:
+    """型・コード・stack の位置を cause まで残す。例外本文・locals・ソース行は残さない。"""
+    fields = _exception_details(error, max_frames=16)
     causes: list[str] = []
+    details: list[dict[str, object]] = []
     seen = {id(error)}
     cause = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
     while cause is not None and id(cause) not in seen and len(causes) < 5:
         seen.add(id(cause))
         causes.append(type(cause).__name__[:128])
+        details.append(_exception_details(cause, max_frames=8))
         cause = cause.__cause__ or (None if cause.__suppress_context__ else cause.__context__)
     if causes:
         fields["exception_causes"] = causes
+        fields["exception_cause_details"] = details
     return fields
 
 
