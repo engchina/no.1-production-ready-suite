@@ -427,8 +427,11 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   （`terraform/stack/bastion.tf`）。3 製品は入れません。private subnet の Compute の画面や、プライベート・エンドポイントの ADB に、
   GUI のブラウザ・SQL の道具で届くための踏み台です。
 - 既定は **2 OCPU / 16 GB / boot volume 100 GB / 10 VPUs/GB**（`bastion_flex_shape_ocpus` / `bastion_flex_shape_memory` /
-  `bastion_boot_volume_size` / `bastion_boot_volume_vpus`）。shape（`instance_shape`）・image（Oracle Linux 9 の `instance_image_source_id`）・
-  SSH キーは Suite の Compute と同じです。subnet（`bastion_subnet_id`）を空にすると Suite の Compute と同じ subnet に置きます。
+  `bastion_boot_volume_size` / `bastion_boot_volume_vpus`）。shape（`bastion_shape`）・image（Oracle Linux 9 の `bastion_image_source_id`）・
+  SSH キー（`bastion_ssh_authorized_keys`）は任意に独立指定できます。空欄・空白だけの場合は、それぞれ主 Compute の
+  `instance_shape` / `instance_image_source_id` / `ssh_authorized_keys` を使います。既存の入力のままなら従来どおり共用します。
+  shape は E4 / E5 Flex、image は配備先リージョンの x86 Oracle Linux 9 を選びます。これらの入力は bastion を有効にすると表示されます。
+  独立指定した SSH キーは、bastion で継承していたキーの代わりに設定します。主 Compute のキーには追加・置換しません。subnet（`bastion_subnet_id`）を空にすると Suite の Compute と同じ subnet に置きます。
   公開 IP は subnet から自動で決めます（public subnet なら付ける）。
 - 最初の起動で cloud-init（`terraform/stack/cloud_init/bastion.sh`）が、root の filesystem を広げ、GNOME（「Server with GUI」）・TigerVNC
   （display `:1` = TCP `5901`、ユーザー `opc`）・Google Chrome（Google の dnf repository。署名を確かめて入れる）・日本語の font を入れ、

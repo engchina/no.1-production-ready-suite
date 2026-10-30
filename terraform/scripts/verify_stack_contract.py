@@ -1538,7 +1538,7 @@ def verify(package_path: Path) -> None:
 
 
 def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, script: str) -> None:
-    """任意の bastion の Compute（#2670）。既定は作らず、作るときは Suite と同じ shape・image・SSH キーを使う。"""
+    """任意の bastion の Compute（#2670）。既定は作らず、未指定の shape・image・SSH キーは Suite から継承する。"""
     groups = _schema_groups(schema)
     if groups.get("Bastion") != ("true", ["bastion_enabled"]):
         raise AssertionError(f"the Bastion group must hold only bastion_enabled: {groups.get('Bastion')}")
@@ -1554,6 +1554,25 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         _terraform_variable(variables, "bastion_enabled"),
         ["type        = bool", "default     = false"],
         context="bastion_enabled Terraform default",
+    )
+    for name in ("bastion_shape", "bastion_image_source_id", "bastion_ssh_authorized_keys"):
+        if name not in members:
+            raise AssertionError(f"Bastion Compute group is missing {name}")
+        _require_all(
+            _schema_variable(schema, name),
+            ["required: false", "visible: bastion_enabled", 'default: ""'],
+            context=f"{name} optional schema",
+        )
+        _require_all(_terraform_variable(variables, name), ['default     = ""'], context=f"{name} inheritance default")
+    _require_all(
+        _schema_variable(schema, "bastion_shape"),
+        ['- ""', '- "VM.Standard.E4.Flex"', '- "VM.Standard.E5.Flex"'],
+        context="bastion shape options",
+    )
+    _require_all(
+        _schema_variable(schema, "bastion_ssh_authorized_keys"),
+        ["type: oci:core:ssh:publickey"],
+        context="bastion SSH public key schema",
     )
     for name, default in BASTION_DEFAULTS.items():
         _require_all(_schema_variable(schema, name), [f"default: {default}"], context=f"{name} schema default")
@@ -1576,9 +1595,9 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         [
             'resource "oci_core_instance" "bastion" {',
             "count = var.bastion_enabled ? 1 : 0",
-            "shape = var.instance_shape",
-            "source_id = var.instance_image_source_id",
-            '"ssh_authorized_keys" = var.ssh_authorized_keys',
+            "shape = local.bastion_shape",
+            "source_id = local.bastion_image_source_id",
+            '"ssh_authorized_keys" = local.bastion_ssh_authorized_keys',
             'base64encode(file("${path.module}/cloud_init/bastion.sh"))',
             '"bastion_vnc_password_b64" = base64encode(var.bastion_vnc_password)',
             "memory_in_gbs = var.bastion_flex_shape_memory",
@@ -1679,6 +1698,12 @@ def _verify_oracle_linux(
     enum = re.findall(r'(?m)^      - "(ocid1\.image\.[^"]+)"$', image_schema)
     if sorted(enum) != sorted(ORACLE_LINUX_IMAGES.values()):
         raise AssertionError(f"the Compute image must be the pinned Oracle Linux 9 images: {enum}")
+    bastion_image = _schema_variable(schema, "bastion_image_source_id")
+    bastion_enum = re.findall(r'(?m)^      - "(ocid1\.image\.[^"]+)"$', bastion_image)
+    if sorted(bastion_enum) != sorted(ORACLE_LINUX_IMAGES.values()):
+        raise AssertionError("Bastion image options must match the pinned Oracle Linux 9 images")
+    if '      - ""' not in bastion_image:
+        raise AssertionError("Bastion image must allow inheriting the main Compute image")
     default_image = ORACLE_LINUX_IMAGES[DEFAULT_IMAGE_REGION]
     if f'default: "{default_image}"' not in image_schema or f'default     = "{default_image}"' not in variables:
         raise AssertionError("the default Compute image must be the Oracle Linux 9 image of ap-osaka-1")

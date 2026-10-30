@@ -148,11 +148,14 @@ variableGroups:
     visible: bastion_enabled
     variables:
       - bastion_display_name
+      - bastion_shape
+      - bastion_image_source_id
       - bastion_flex_shape_ocpus
       - bastion_flex_shape_memory
       - bastion_boot_volume_size
       - bastion_boot_volume_vpus
       - bastion_subnet_id
+      - bastion_ssh_authorized_keys
       - bastion_vnc_password
 
 variables:
@@ -704,7 +707,7 @@ variables:
     required: true
     visible: true
     title: "Bastion Compute"
-    description: "オンにすると、Suite の Compute とは別に bastion の Compute を 1 台作ります。GNOME のデスクトップ・TigerVNC（:1 = TCP 5901。firewalld で開けます）・Google Chrome を入れます。shape・image（Oracle Linux 9）・SSH キーは Suite の Compute と同じです。bastion から ADB（1522）と Suite の Compute（公開の port・22）に届くよう、それぞれの subnet の security list で bastion の subnet の CIDR を許可してください。"
+    description: "オンにすると、Suite の Compute とは別に bastion の Compute を 1 台作ります。GNOME のデスクトップ・TigerVNC（:1 = TCP 5901。firewalld で開けます）・Google Chrome を入れます。shape・image（Oracle Linux 9）・SSH キーは個別に指定でき、未指定なら Suite の Compute の値を使います。bastion から ADB（1522）と Suite の Compute（公開の port・22）に届くよう、それぞれの subnet の security list で bastion の subnet の CIDR を許可してください。"
     default: false
 
   bastion_display_name:
@@ -713,6 +716,39 @@ variables:
     visible: bastion_enabled
     title: "Bastion instance name"
     default: "PRODUCTION_READY_BASTION"
+
+  bastion_shape:
+    type: enum
+    required: false
+    visible: bastion_enabled
+    title: "Bastion shape"
+    description: "未指定なら主 Compute の shape を使います。"
+    enum:
+      - ""
+      - "VM.Standard.E4.Flex"
+      - "VM.Standard.E5.Flex"
+    default: ""
+
+  bastion_image_source_id:
+    type: enum
+    required: false
+    visible: bastion_enabled
+    title: "Bastion image"
+    description: "Oracle Linux 9 の image。未指定なら主 Compute の image を使います。指定する場合は配備先リージョンの image を選びます。"
+    enum:
+      - ""
+      - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa"
+      - "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
+      - "ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a"
+    default: ""
+
+  bastion_ssh_authorized_keys:
+    type: oci:core:ssh:publickey
+    required: false
+    visible: bastion_enabled
+    title: "Bastion SSHキーの追加"
+    description: "bastion の opc ユーザーに使う公開キーを指定します。未指定なら主 Compute の SSH キーを使います。"
+    default: ""
 
   bastion_flex_shape_ocpus:
     type: number

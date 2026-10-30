@@ -522,6 +522,29 @@ variable "bastion_display_name" {
   default     = "PRODUCTION_READY_BASTION"
 }
 
+variable "bastion_shape" {
+  description = "Bastion Compute shape. When empty, instance_shape is used."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "VM.Standard.E4.Flex", "VM.Standard.E5.Flex"], trimspace(var.bastion_shape))
+    error_message = "bastion_shape は空欄、VM.Standard.E4.Flex、VM.Standard.E5.Flex のいずれかにしてください。"
+  }
+}
+
+variable "bastion_image_source_id" {
+  description = "Oracle Linux 9 x86 image OCID of the bastion Compute instance. When empty, instance_image_source_id is used."
+  type        = string
+  default     = ""
+}
+
+variable "bastion_ssh_authorized_keys" {
+  description = "SSH public keys authorized for the bastion opc user. When empty, ssh_authorized_keys is used."
+  type        = string
+  default     = ""
+}
+
 variable "bastion_flex_shape_ocpus" {
   description = "OCPUs of the bastion Compute instance."
   type        = number
