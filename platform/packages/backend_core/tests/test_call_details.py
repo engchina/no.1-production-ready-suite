@@ -102,3 +102,11 @@ def test_restricted_snapshots_are_withheld_without_mutating_saved_record() -> No
     assert hidden["span"]["call"]["input"]["status"] == "withheld"
     assert withhold_call_details(saved, allow_restricted=True) == saved
     assert "private-synthetic-content" in json.dumps(saved)
+
+
+def test_media_is_removed_from_mcp_blocks_and_serialized_tool_results() -> None:
+    block = {"content": [{"type": "image", "data": "synthetic-base64", "mimeType": "image/png"}]}
+    snapshot = call_content({"result": block, "output": json.dumps(block)})
+    assert "synthetic-base64" not in snapshot.text
+    assert "image/png" in snapshot.text
+    assert "[media omitted]" in snapshot.text

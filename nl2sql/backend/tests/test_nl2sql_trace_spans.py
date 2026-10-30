@@ -90,7 +90,9 @@ def test_service_token_call_is_a_child_of_the_agent_span(
         "probe",
     )
     [work] = [row for row in rows if row["name"] == "nl2sql.tool_work"]
-    assert work["parent_span_id"] == root["span_id"]
+    [tool] = [row for row in rows if row["name"] == "gen_ai.execute_tool"]
+    assert tool["parent_span_id"] == root["span_id"]
+    assert work["parent_span_id"] == tool["span_id"]
     assert seen["context"]["traceparent"].split("-")[1] == _AGENT_TRACE
 
 
@@ -153,7 +155,9 @@ def test_job_from_the_mcp_call_runs_under_the_server_span(
     rows = trace_table.db.spans(trace_id=_AGENT_TRACE)
     [server_span] = [row for row in rows if row["name"] == "mcp.server"]
     [job_root] = [row for row in rows if row["operation_id"] == job_id and row["is_root"]]
-    assert job_root["parent_span_id"] == server_span["span_id"]
+    [tool] = [row for row in rows if row["name"] == "gen_ai.execute_tool"]
+    assert tool["parent_span_id"] == server_span["span_id"]
+    assert job_root["parent_span_id"] == tool["span_id"]
     # ジョブの処理の経過はジョブの span だけ（同じ trace の server の span は入れない）。
     progress = service.get_job_trace(job_id, actor_user_uuid="user-1")
     assert progress is not None

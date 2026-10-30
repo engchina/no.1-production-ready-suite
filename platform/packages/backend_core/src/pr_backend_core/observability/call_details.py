@@ -29,7 +29,7 @@ def _safe(value: Any, depth: int = 0) -> Any:
             str(k): "***"
             if _SECRET.search(str(k)) and str(k) not in {"max_output_tokens", "max_tokens"}
             else "[media omitted]"
-            if str(k) in _MEDIA
+            if str(k) in _MEDIA or (str(k) == "data" and value.get("type") in {"image", "audio"})
             else _safe(v, depth + 1)
             for k, v in value.items()
         }
@@ -38,7 +38,15 @@ def _safe(value: Any, depth: int = 0) -> Any:
             ["[remaining items omitted]"] if len(value) > 1000 else []
         )
     if isinstance(value, str):
-        return "[media omitted]" if value.startswith("data:") else value
+        if value.startswith("data:"):
+            return "[media omitted]"
+        # SDK はツールの結果を JSON の文字列としても渡す。
+        if value.lstrip().startswith(("{", "[")):
+            try:
+                return json.dumps(_safe(json.loads(value), depth + 1), ensure_ascii=False)
+            except (ValueError, TypeError):
+                pass
+        return value
     if value is None or isinstance(value, (int, float, bool)):
         return value
     return "[unsupported value]"
