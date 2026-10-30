@@ -109,7 +109,7 @@ class StackInputTests(unittest.TestCase):
         regions = set(re.findall(r"ocid1\.image\.oc1\.([a-z0-9-]+)\.", block))
         self.assertEqual(regions, {"ap-tokyo-1", "ap-osaka-1", "us-chicago-1"})
 
-    def test_bastion_configuration_and_shared_ssh_key(self) -> None:
+    def test_bastion_configuration_and_resolved_inputs(self) -> None:
         schema = (ROOT / "terraform/stack/schema.yaml").read_text()
         visibility, members = _schema_groups(schema)["Bastion Compute"]
         self.assertEqual(visibility, "bastion_enabled")
@@ -130,9 +130,11 @@ class StackInputTests(unittest.TestCase):
             _schema_variable(schema, "ssh_authorized_keys"),
         )
         bastion = (ROOT / "terraform/stack/bastion.tf").read_text()
-        self.assertRegex(bastion, r'"ssh_authorized_keys"\s*= var\.ssh_authorized_keys')
-        self.assertRegex(bastion, r"shape\s*= var\.instance_shape")
-        self.assertRegex(bastion, r"source_id\s*= var\.instance_image_source_id")
+        self.assertRegex(
+            bastion, r'"ssh_authorized_keys"\s*= local\.bastion_ssh_authorized_keys'
+        )
+        self.assertRegex(bastion, r"shape\s*= local\.bastion_shape")
+        self.assertRegex(bastion, r"source_id\s*= local\.bastion_image_source_id")
 
 
 if __name__ == "__main__":
