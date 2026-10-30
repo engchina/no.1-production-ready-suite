@@ -1760,7 +1760,6 @@ def describe_picture(
             prompt,
             image_paths,
             settings,
-            GroundedDraft,
             PictureDescriptionOutput,
             provider_id=settings.default_vision_llm,
             purpose="document.read",
@@ -1773,7 +1772,6 @@ def describe_picture(
             prompt,
             image_path,
             settings,
-            GroundedDraft,
             PictureDescriptionOutput,
             provider_id=settings.default_vision_llm,
         )
