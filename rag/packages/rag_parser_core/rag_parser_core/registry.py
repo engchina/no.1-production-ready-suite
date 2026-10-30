@@ -1176,6 +1176,45 @@ def _xml_tree_json_adapter_result(source_bytes: bytes) -> ParserRegistryResult:
     )
 
 
+def _html_full_document_input(source_bytes: bytes) -> tuple[bytes, bool]:
+    """main の特別な解析範囲指定だけを外し、元の順序・属性・本文を保持する。"""
+    text = _decode_text_bytes(source_bytes)
+    starts = [0]
+    starts.extend(match.end() for match in re.finditer("\n", text))
+    replacements: list[tuple[int, int]] = []
+
+    class MainTags(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=False)
+
+        def record(self, tag: str, *, closing: bool = False) -> None:
+            if tag != "main":
+                return
+            line, column = self.getpos()
+            start = starts[line - 1] + column
+            pattern = r"</\s*(main)" if closing else r"<(main)"
+            if match := re.match(pattern, text[start:], re.IGNORECASE):
+                replacements.append((start + match.start(1), start + match.end(1)))
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            self.record(tag)
+
+        def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            self.record(tag)
+
+        def handle_endtag(self, tag: str) -> None:
+            self.record(tag, closing=True)
+
+    parser = MainTags()
+    parser.feed(text)
+    parser.close()
+    if not replacements:
+        return source_bytes, False
+    for start, end in reversed(replacements):
+        text = text[:start] + "div" + text[end:]
+    return text.encode("utf-8"), True
+
+
 def _unstructured_adapter_result(
     source_bytes: bytes,
     *,
@@ -1197,7 +1236,17 @@ def _unstructured_adapter_result(
         # プレーンテキストとして渡す(#3351)。
         content_type, suffix = "text/plain", ".txt"
     partition_kwargs = _unstructured_partition_kwargs(source_profile, content_type)
-    with _temporary_source_file(source_bytes, source_profile, content_type, suffix=suffix) as path:
+    is_html = bool(
+        source_profile is not None and source_profile.modality == "html"
+    ) or _normalized_content_type_for_parser(content_type) in {"text/html", "application/xhtml+xml"}
+    partition_bytes, main_expanded = (
+        _html_full_document_input(source_bytes) if is_html else (source_bytes, False)
+    )
+    if main_expanded:
+        partition_kwargs.update(encoding="utf-8", skip_headers_and_footers=False)
+    with _temporary_source_file(
+        partition_bytes, source_profile, content_type, suffix=suffix
+    ) as path:
         partitioned = _call_with_supported_kwargs(
             partition,
             {
@@ -1219,6 +1268,7 @@ def _unstructured_adapter_result(
         parser_version=version,
         extra_artifacts={
             "unstructured_text_contract": UNSTRUCTURED_TEXT_CONTRACT,
+            **({"html_main_scope": "full_document"} if main_expanded else {}),
             **_unstructured_partition_artifacts(partition_kwargs),
         },
     )
