@@ -63,3 +63,91 @@ def test_streaming_retries_only_when_existing_guard_is_enabled(enabled):
     assert not result.items
     assert len(client.streams) == (2 if enabled else 1)
     assert all(stream.closed for stream in client.streams)
+
+
+@pytest.mark.parametrize("recovered", [True, False])
+def test_repetition_resend_receives_feedback_and_preserves_original_question(recovered):
+    from copy import deepcopy
+
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+
+    clock = _Clock()
+    repeated = ['{"request_coverage":['] + [json.dumps(row, ensure_ascii=False) + "," for row in entries()]
+    schema = generation_draft_wire_model()
+    valid = SimpleNamespace(
+        type="response.completed",
+        response=SimpleNamespace(status="completed", output_parsed=schema(items=[], summary="", confidence="low"), usage=USAGE),
+    )
+
+    class RespondsToFeedback(_RecordingClient):
+        def __init__(self):
+            super().__init__(clock, [])
+            self.inputs = []
+
+        def _stream(self, **kwargs):
+            self.inputs.append(deepcopy(kwargs["input"]))
+            has_feedback = recovered and len(kwargs["input"]) > 1
+            self.scripts.append(_text_script(['{"items":[]}'] if has_feedback else repeated, final=valid))
+            return super()._stream(**kwargs)
+
+    client = RespondsToFeedback()
+    messages = [{"role": "user", "content": [{"type": "input_text", "text": "合成資料の2つの値を比較してください。"}]}]
+    original = deepcopy(messages)
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_runaway_detection=True, llm_stall_detection=True)
+    with (
+        patch.object(oci.time, "monotonic", clock),
+        patch.object(oci, "_openai_client_for_provider", return_value=client),
+        bind_deadline(Deadline(600)),
+    ):
+        if recovered:
+            result = oci._openai_parsed(messages, settings, schema, PROVIDER)
+            assert not result.items
+        else:
+            with pytest.raises(oci.LlmRunawayOutput):
+                oci._openai_parsed(messages, settings, schema, PROVIDER)
+    assert messages == original and client.inputs[0] == original
+    assert client.inputs[1][:-1] == original
+    feedback = client.inputs[1][-1]["content"][0]["text"]
+    assert feedback.startswith("## Step 1:") and "## Step 2:" in feedback
+    assert "同じ項目を同じ配列に繰り返さず" in feedback
+    assert len(client.streams) == 2
+
+
+@pytest.mark.parametrize("reason", ["runaway_repetition", "runaway_whitespace"])
+def test_feedback_is_confined_to_draft_resends_and_contains_no_rejected_output(reason):
+    from rag_engine.models.llm import TextOutput
+
+    messages = [{"role": "user", "content": "元の質問"}]
+    assert oci._runaway_retry_messages(messages, TextOutput, reason) is messages
+    retried = oci._runaway_retry_messages(messages, GroundedDraft, reason)
+    assert retried[:-1] == messages and len(messages) == 1
+    assert ("空白だけの出力" if reason.endswith("whitespace") else "同じ内容の反復") in retried[-1]["content"][0]["text"]
+
+
+def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback():
+    from test_llm_runaway_output import _NO_STREAM_USAGE, _runaway_incomplete
+
+    class Client:
+        def __init__(self):
+            self.inputs = []
+            self.responses = SimpleNamespace(parse=self.parse)
+
+        def with_options(self, **kwargs):
+            return self
+
+        def parse(self, **kwargs):
+            self.inputs.append(kwargs["input"])
+            if len(kwargs["input"]) == 1:
+                return _runaway_incomplete('{"summary":"' + "、同じ説明" * 2000)
+            return SimpleNamespace(
+                status="completed", output_parsed=GroundedDraft(items=[], summary="", confidence="low"), usage=_NO_STREAM_USAGE
+            )
+
+    client = Client()
+    messages = [{"role": "user", "content": "合成の質問"}]
+    settings = replace(get_settings(environ={}, dotenv_path=None), llm_runaway_detection=True, llm_stall_detection=False)
+    with patch.object(oci, "_openai_client_for_provider", return_value=client):
+        result = oci._openai_parsed(messages, settings, GroundedDraft, PROVIDER)
+    assert not result.items and len(client.inputs) == 2
+    assert client.inputs[1][:-1] == messages
+    assert "同じ内容の反復" in client.inputs[1][-1]["content"][0]["text"]
