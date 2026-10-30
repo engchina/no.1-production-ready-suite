@@ -236,8 +236,9 @@ class _TextHTMLParser(HTMLParser):
         "tr",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, *, retain_single_column_tables: bool = False) -> None:
         super().__init__()
+        self._retain_single_column_tables = retain_single_column_tables
         self._parts: list[str] = []
         self._blocks: list[_HTMLBlock] = []
         self._current_tag: str | None = None
@@ -486,7 +487,7 @@ class _TextHTMLParser(HTMLParser):
             caption=self._table_caption,
         )
         column_count = _html_table_shape(html_table)[1]
-        if column_count > 1:
+        if column_count > 1 or self._retain_single_column_tables:
             self._tables.append(html_table)
             self._blocks.append(_HTMLBlock(tag="table", text=_html_table_markdown(html_table)))
         self._table_rows = None
@@ -1217,6 +1218,13 @@ def _unstructured_adapter_result(
         parser_version=version,
         extra_artifacts=_unstructured_partition_artifacts(partition_kwargs),
     )
+    if (
+        source_profile is not None and source_profile.modality == "html"
+    ) or _normalized_content_type_for_parser(content_type) in {
+        "text/html",
+        "application/xhtml+xml",
+    }:
+        extraction = _restore_html_table_captions(extraction, source_bytes)
     extraction = _adapter_extraction_with_source_lineage(
         extraction,
         source_profile=source_profile,
@@ -1230,6 +1238,102 @@ def _unstructured_adapter_result(
         parser_backend="unstructured",
         parser_version=version,
         template=template_for_source_profile(source_profile),
+    )
+
+
+def _html_table_cell_signature(
+    cells: Sequence[ExtractionTableCell],
+) -> tuple[tuple[object, ...], ...]:
+    """表題の対応はセルの位置・本文・結合だけで照合し、語の類似や表の順番で推測しない。"""
+    return tuple(
+        sorted(
+            (cell.row, cell.col, _clean_text(cell.text), cell.row_span, cell.col_span)
+            for cell in cells
+        )
+    )
+
+
+def _restore_html_table_captions(
+    extraction: StructuredExtraction, source_bytes: bytes
+) -> StructuredExtraction:
+    """Unstructured が落とす HTML caption を、同じセルの格子を持つ表だけへ戻す。"""
+    parser = _TextHTMLParser(retain_single_column_tables=True)
+    parser.feed(_decode_text_bytes(source_bytes))
+    captions: dict[tuple[tuple[object, ...], ...], set[str]] = {}
+    for source_table in parser.tables():
+        signature = _html_table_cell_signature(_table_cells_from_html_table(source_table))
+        if signature:
+            captions.setdefault(signature, set()).add(source_table.caption or "")
+    captions = {signature: values for signature, values in captions.items() if any(values)}
+    if not captions:
+        return extraction
+    elements = list(extraction.elements)
+    added: list[DocumentElement] = []
+    restored = 0
+    resolved_signatures: set[tuple[tuple[object, ...], ...]] = set()
+    table_elements = {
+        element.element_id: element for element in elements if element.kind == "table"
+    }
+    for table in extraction.tables:
+        signature = _html_table_cell_signature(table.cells)
+        candidates = captions.get(signature, set())
+        if not candidates:
+            continue
+        if table.caption:
+            resolved_signatures.add(signature)
+            continue
+        parent = table_elements.get(table.element_id)
+        if len(candidates) != 1 or parent is None or not parent.element_id:
+            continue
+        caption = next(iter(candidates))
+        added.append(
+            DocumentElement(
+                kind="table_caption",
+                text=caption,
+                order=parent.order,
+                element_id=f"{parent.element_id}-html-caption",
+                parent_id=parent.element_id,
+                content_kind="table",
+                source_parser=parent.source_parser,
+                page_number=parent.page_number,
+                section_path=list(parent.section_path),
+                metadata={"html_tag": "caption", "caption_source": "original_html"},
+            )
+        )
+        restored += 1
+        resolved_signatures.add(signature)
+    unresolved = len(captions.keys() - resolved_signatures)
+    if not added and not unresolved:
+        return extraction
+    # 読み順は表の直後に表題を置き、既存の adapter の表題の結び付けを共用する。
+    by_parent = {element.parent_id: element for element in added}
+    ordered = []
+    for element in elements:
+        ordered.append(element)
+        if element.element_id in by_parent:
+            ordered.append(by_parent[element.element_id])
+    ordered = [element.model_copy(update={"order": order}) for order, element in enumerate(ordered)]
+    ordered, tables = _attach_adapter_table_captions(ordered, extraction.tables)
+    warnings = list(extraction.warnings)
+    if unresolved:
+        warnings.append(
+            "HTML の表題と解析済みの表を一意に対応付けられませんでした。"
+            "原本の表題を確認してください。"
+        )
+    return extraction.model_copy(
+        update={
+            "elements": ordered,
+            "tables": tables,
+            "raw_text": _clean_text(
+                "\n\n".join(element.text for element in ordered if element.text.strip())
+            ),
+            "warnings": warnings,
+            "parser_artifacts": {
+                **extraction.parser_artifacts,
+                "html_captions_restored": restored,
+                "html_captions_unresolved": unresolved,
+            },
+        }
     )
 
 
