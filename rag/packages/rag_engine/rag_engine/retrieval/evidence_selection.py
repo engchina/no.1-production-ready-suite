@@ -329,7 +329,7 @@ def new_evidence_count(records: Sequence[Any], seen: Sequence[Any]) -> int:
 
 
 # 回答生成に渡す原文の総予算（文字）。親 6,000 字の候補を複数の機能・文書から入れられる大きさ (#665)。
-EVIDENCE_BUDGET_CHARS = 48000
+EVIDENCE_BUDGET_CHARS = 80000
 # 後続候補のために取り置く短い原文範囲の上限（親ごと）。
 NATIVE_RESERVE_CAP = 1200
 

@@ -102,7 +102,7 @@ class EvidenceBudgetTraceTest(unittest.TestCase):
         trace = self._trace(evidence_budget_chars=60000)
         self.assertEqual((trace["configured_chars"], trace["effective_chars"]), (EVIDENCE_BUDGET_CHARS, 60000))
         self.assertEqual(trace["source"], "section_expansion")
-        self.assertTrue(trace["effective_exceeds_configured"])
+        self.assertFalse(trace["effective_exceeds_configured"])
 
     def test_configured_value_from_settings_is_used(self):
         from dataclasses import replace

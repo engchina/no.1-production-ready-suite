@@ -2383,6 +2383,7 @@
     ]
   },
   "answer_labels": {
+    "answer_evidence_budget_limited": "回答への入力の上限により、取得した根拠のうち {count} 件を回答の材料から省略しました。",
     "rules_section": "資料により確認できた事項",
     "quote_only_section": "参考情報",
     "quote_only_note": "以下は資料の原文です。本質問の条件への該当は確認できていません。",

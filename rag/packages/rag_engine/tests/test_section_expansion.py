@@ -637,7 +637,7 @@ def test_known_gaps_and_budget_follow_the_last_grade():
     context = _seed_context("c31a", "c32a")
     settings = _settings(evidence_budget_chars=100)
     # 広げたときの原文の予算は、入力 token の上限（モデルの入力の上限 × 50%）を超えない。
-    assert _section_evidence_budget(context, settings, expansion) == 660
+    assert _section_evidence_budget(context, settings, expansion) == 100
     assert _section_evidence_budget(context, settings, None) is None
 
 

@@ -6700,6 +6700,15 @@ def run_round(
     image_fallback = ""
     presentation = _retrieved_heading_context(spans)
     scope_plan = None
+    from rag_engine.generation.input_budget import ensure_model_input
+
+    raw_parse_text = parse_text
+
+    def bounded_parse_text(system: str, user: str, call_settings: Any, schema: Any, **options: Any) -> Any:
+        ensure_model_input(call_settings, system, user, schema.model_json_schema(), provider_id=options.get("provider_id"))
+        return raw_parse_text(system, user, call_settings, schema, **options)
+
+    parse_text = bounded_parse_text
     range_only = previous_draft is not None and bool(citation_range_issues(previous, previous_dropped))
     range_repair: dict[str, Any] = {}
 
