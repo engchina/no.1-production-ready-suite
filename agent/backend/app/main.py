@@ -24,6 +24,7 @@ from app.observability import (
     stop_trace_export_retry_worker,
 )
 from app.readiness import readiness_checks
+from app.security.service import get_security_service
 from app.settings import get_settings
 
 settings = get_settings()
@@ -40,7 +41,11 @@ logger = logging.getLogger(__name__)
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # Run の repository・定義・履歴は DB を待たずにバックグラウンドで読み込む（DB に接続できない
     # あいだも起動する。RAG / NL2SQL と同じ。#1212）。
-    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+    with tracing_lifecycle(
+        get_settings(),
+        service_name=get_settings().service_name,
+        capture_content=lambda: get_security_service().trace_recording.enabled(),
+    ):
         storage_bootstrap.start_background_load()
         await start_trace_export_retry_worker()
         # 処理の経過の span の書き手（共通の span の表。#3226 の案 A。in_process の実行が書く）。

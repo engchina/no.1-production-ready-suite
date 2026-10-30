@@ -52,7 +52,7 @@ from app.features.nl2sql.trace_spans import start_trace_span_store, stop_trace_s
 from app.features.settings.errors import DatabaseWalletOperationError
 from app.readiness import readiness_checks
 from app.security.permissions import UNCLASSIFIED_PERMISSION, permission_for_route
-from app.security.service import SecurityApiError
+from app.security.service import SecurityApiError, get_security_service
 from app.security.store import SecurityMigrationRequired
 from app.settings import get_settings
 
@@ -87,7 +87,11 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     # Startup is intentionally DB-free. A fresh Compute can boot before the
     # database, wallet, or any application table is ready; those failures belong
     # to readiness probes or the first operation that actually needs them.
-    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+    with tracing_lifecycle(
+        get_settings(),
+        service_name=get_settings().service_name,
+        capture_content=lambda: get_security_service().trace_recording.enabled(),
+    ):
         application.state.services = ServiceContainer(
             nl2sql=nl2sql_service,
             ontology=ontology_runtime,

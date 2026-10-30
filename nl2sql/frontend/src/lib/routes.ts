@@ -3,6 +3,7 @@ import {
   ANSWER_NOTICE_PATH,
   API_KEY_PATHS,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  TRACE_RECORDING_SETTINGS_PATH,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_PATHS,
 } from "@production-ready/system-settings";
@@ -47,6 +48,7 @@ export const APP_ROUTES = {
   settingsAnswerNotice: ANSWER_NOTICE_PATH,
   // チャットの添付（設定は製品ごと。#2517）
   settingsChatAttachments: CHAT_ATTACHMENT_SETTINGS_PATH,
+  settingsTraceRecording: TRACE_RECORDING_SETTINGS_PATH,
   // ユーザー管理・ロール管理は3製品共通（platform の共有パッケージ。#206）。
   securityUsers: USER_ROLE_PATHS.users,
   securityRoles: USER_ROLE_PATHS.roles,

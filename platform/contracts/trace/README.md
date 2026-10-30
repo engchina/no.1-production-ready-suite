@@ -11,3 +11,5 @@
 - 古い進捗・所要時間しかない履歴を、この実測 DTO として再建しない。UI の時間の線は再構成と明記する。
 
 外部の trace は標準 OTLP/HTTP で collector へ送る。この DTO はブラウザ用の安全な投影であり、OTLP の代替ではない。
+
+呼び出しの `display.details.call.capture_enabled=false` は、開始時の運用設定で本文の記録を止めたことを表す。input / output / schema は未記録の空の値にし、通常の未記録と画面で区別する。値が無い旧記録は記録制限の追加前の契約として読む。

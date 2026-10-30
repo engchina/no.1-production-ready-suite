@@ -533,3 +533,28 @@ def test_history_trace_reads_the_same_spans_as_the_job(
     assert detail["span_details"] == {} and detail["trace_id"] == job.trace_id
     viewer.user_uuid = "other"
     assert client.get(f"/api/nl2sql/history/{history['id']}/trace").status_code == 404
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_existing_detail_tests() -> Any:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield
+
+
+def test_body_off_preserves_business_result_and_progress_metadata(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811 - fixture
+) -> None:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    service, repository = jobs
+    with call_content_policy(lambda: False):
+        job = run(service, start(service))
+    assert job.status == JobStatus.DONE and job.result and job.result.generated_sql
+    trace_table.flush()
+    events = events_of(service, trace_table, job.job_id)
+    assert stages(events)
+    assert all(not step.details or not step.details.code for step in stages(events).values())
+    assert repository.get_document("jobs", job.job_id) is not None

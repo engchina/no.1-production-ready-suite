@@ -357,3 +357,11 @@ def test_sdk_call_snapshot_records_input_and_response() -> None:
     assert span.display and span.display.details and span.display.details.call
     assert "synthetic-input" in span.display.details.call.input.text
     assert "synthetic-result" in span.display.details.call.output.text
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_snapshot_tests() -> Any:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

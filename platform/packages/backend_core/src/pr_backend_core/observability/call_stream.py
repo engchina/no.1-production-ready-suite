@@ -16,7 +16,8 @@ def _value(event: Any, key: str, default: Any = None) -> Any:
 class CallStreamCapture:
     """受信順を保つ上限付きの prefix。途中更新を抑え、終了時には必ず反映する。"""
 
-    def __init__(self, publish: Callable[[Any], None]) -> None:
+    def __init__(self, publish: Callable[[Any], None], *, enabled: bool = True) -> None:
+        self._enabled = enabled
         self._publish = publish
         self._parts: dict[tuple[int, int, str], str] = {}
         self._size = 0
@@ -33,6 +34,8 @@ class CallStreamCapture:
         return bool(self._parts)
 
     def feed(self, event: Any) -> None:
+        if not self._enabled:
+            return
         kind = str(_value(event, "type", ""))
         response = _value(event, "response")
         if (

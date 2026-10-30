@@ -633,6 +633,8 @@ const agentJa = {
     "AI の回答の末尾に毎回出す注意書き（誤りの可能性・確かめ方・連絡先）を設定します。Agent の回答だけに使い、RAG・NL2SQL はそれぞれの画面で設定します。",
   "settings.answerNotice.description":
     "業務 Agent のチャットの回答の末尾に、毎回同じ文を出します。確認の質問・エラー・停止には出しません。",
+  "nav.settingsTraceRecording": "軌跡の記録",
+  "settings.traceRecording.subtitle": "軌跡に入力・結果の本文を残すかを3製品で共通に設定します。",
   "nav.settingsChatAttachments": "チャットの添付",
   "settings.chatAttachments.subtitle":
     "チャットで利用者がファイルを添付して質問できるかを設定します。Agent のチャットだけに使い、RAG・NL2SQL はそれぞれの画面で設定します。",

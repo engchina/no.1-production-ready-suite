@@ -1,3 +1,4 @@
+import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
 import {
   confirmDatabaseUnavailable,
   isDatabaseReadinessRequest,
@@ -995,6 +996,14 @@ export const api = {
       method: "DELETE",
     }),
   // 運用設定: チャットの添付（設定は製品ごと。#2517）
+  getTraceRecordingSettings: (options: ApiRequestOptions = {}) =>
+    settingsRequest<TraceRecordingSettingsData>("/api/settings/trace-recording", { signal: options.signal }),
+  updateTraceRecordingSettings: (body: { enabled: boolean }) =>
+    settingsRequest<TraceRecordingSettingsData>("/api/settings/trace-recording", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getChatAttachmentSettings: (options: ApiRequestOptions = {}) =>
     settingsRequest<ChatAttachmentSettingsData>("/api/settings/chat-attachments", { signal: options.signal }),
   updateChatAttachmentSettings: (body: ChatAttachmentSettingsUpdate) =>

@@ -114,3 +114,11 @@ def test_media_is_removed_from_mcp_blocks_and_serialized_tool_results() -> None:
     assert "synthetic-base64" not in snapshot.text
     assert "image/png" in snapshot.text
     assert "[media omitted]" in snapshot.text
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_snapshot_tests():
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

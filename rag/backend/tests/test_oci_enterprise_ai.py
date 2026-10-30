@@ -1426,3 +1426,11 @@ async def test_model_call_snapshot_is_attached_to_product_trace() -> None:
     assert "synthetic-result" in captured.output.text
     assert captured.schema_.status == "recorded"
     assert captured.visibility == "system_admin"
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_snapshot_tests() -> Any:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

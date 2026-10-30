@@ -162,7 +162,7 @@ export function parseChatProgressStepDetails(value: unknown): RunStepDetails | u
       ? { status, text: typeof item?.text === "string" ? item.text : "" }
       : { status: status === "withheld" ? "withheld" : "not_recorded", text: "" };
   };
-  const call: CallDetails | undefined = rawCall ? { input: readContent(rawCall.input), output: readContent(rawCall.output), schema: readContent(rawCall.schema) } : undefined;
+  const call: CallDetails | undefined = rawCall ? { ...(rawCall.capture_enabled === false ? {capture_enabled: false} : {}), input: readContent(rawCall.input), output: readContent(rawCall.output), schema: readContent(rawCall.schema) } : undefined;
   if (!fields.length && !lines.length && !code.length && !call) return undefined;
   const details: RunStepDetails = {};
   if (call) details.call = call;

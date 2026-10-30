@@ -316,6 +316,8 @@ const nl2sqlJa = {
   "nav.settingsDatabase": "データベース",
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
+  "nav.settingsTraceRecording": "軌跡の記録",
+  "settings.traceRecording.subtitle": "軌跡に入力・結果の本文を残すかを3製品で共通に設定します。",
   "nav.settingsChatAttachments": "チャットの添付",
   "settings.chatAttachments.subtitle":
     "チャットで利用者がファイルを添付して質問できるかを設定します。NL2SQL のチャットだけに使い、RAG・Agent はそれぞれの画面で設定します。",

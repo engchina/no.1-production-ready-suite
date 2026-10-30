@@ -3,6 +3,7 @@ import {
   ANSWER_NOTICE_PATH,
   API_KEY_PATHS,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  TRACE_RECORDING_SETTINGS_PATH,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_PATHS,
 } from "@production-ready/system-settings";
@@ -14,6 +15,7 @@ export const APP_ROUTES = {
   settingsAnswerNotice: ANSWER_NOTICE_PATH,
   // チャットの添付（設定は製品ごと。#2517）
   settingsChatAttachments: CHAT_ATTACHMENT_SETTINGS_PATH,
+  settingsTraceRecording: TRACE_RECORDING_SETTINGS_PATH,
   // 認証画面（NL2SQL と同じ URL。#214）
   login: "/login",
   passwordChange: "/password/change",

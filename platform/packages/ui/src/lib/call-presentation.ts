@@ -26,8 +26,8 @@ function block(value: unknown, fallbackRole: string): CallTextBlock | null {
   return null;
 }
 export function callPresentation(call: CallDetails) {
-  const request = record(parse(call.input));
-  const response = record(parse(call.output));
+  const request = call.capture_enabled === false ? {} : record(parse(call.input));
+  const response = call.capture_enabled === false ? {} : record(parse(call.output));
   const input: CallTextBlock[] = [];
   const instructions = request.instructions ?? request.system;
   const system = contentText(instructions);

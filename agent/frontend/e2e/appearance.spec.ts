@@ -163,17 +163,19 @@ for (const viewport of [
     const settings = sidebar.locator("#nav-section-nav-section-settings");
     await expect(security.getByRole("link")).toHaveCount(1);
     await expect(security.locator('a[href="/settings/security/permissions"]')).toHaveCount(1);
-    await expect(operations.getByRole("link")).toHaveCount(5);
+    await expect(operations.getByRole("link")).toHaveCount(6);
     // 運用設定の先頭はシステムテーブル、その下にチャットの添付（#2517・#2546）と回答の注意書き（RAG / NL2SQL と同じ。#2449）。
     await expect(operations.getByRole("link").first()).toHaveAttribute("href", "/settings/system-tables");
-    await expect(operations.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/chat-attachments");
-    await expect(operations.getByRole("link").nth(2)).toHaveAttribute("href", "/settings/answer-notice");
+    await expect(operations.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/trace-recording");
+    await expect(operations.getByRole("link").nth(2)).toHaveAttribute("href", "/settings/chat-attachments");
+    await expect(operations.getByRole("link").nth(3)).toHaveAttribute("href", "/settings/answer-notice");
     await expect(userRoles.getByRole("link")).toHaveCount(3);
     await expect(userRoles.getByRole("link").last()).toHaveAttribute("href", "/settings/security/api-keys");
     // システム設定は 3 製品で共通の 5 項目（回答の注意書きは運用設定。#2449）。
     await expect(settings.getByRole("link")).toHaveCount(5);
     for (const href of [
       "/settings/system-tables",
+      "/settings/trace-recording",
       "/settings/answer-notice",
       "/settings/chat-attachments",
       "/runtimes",

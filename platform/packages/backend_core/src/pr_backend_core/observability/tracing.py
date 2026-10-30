@@ -35,6 +35,7 @@ from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 from ..chat_progress import ChatProgressParamValue, ChatProgressStepDetails
 from ..config.tracing import TracingSettings
+from .call_policy import call_content_policy, capture_call_content
 from .model_purpose import model_purpose_attributes
 from .request_context import validated_traceparent
 
@@ -386,10 +387,16 @@ def configure_tracing(
 
 
 @contextmanager
-def tracing_lifecycle(settings: TracingSettings, *, service_name: str) -> Iterator[None]:
+def tracing_lifecycle(
+    settings: TracingSettings,
+    *,
+    service_name: str,
+    capture_content: Callable[[], bool] = lambda: False,
+) -> Iterator[None]:
     configure_tracing(settings, service_name=service_name)
     try:
-        yield
+        with call_content_policy(capture_content):
+            yield
     finally:
         shutdown_tracing()
 
@@ -463,6 +470,7 @@ def current_span_fields() -> dict[str, str]:
 @dataclass
 class ObservedSpan:
     span: trace.Span
+    call_content_enabled: bool = field(default_factory=capture_call_content, kw_only=True)
     attributes: dict[str, SafeValue] = field(default_factory=dict)
     status: Literal["done", "failed", "cancelled", "skipped"] = "done"
     display: SpanDisplay | None = None
@@ -483,6 +491,14 @@ class ObservedSpan:
         """
         if self._ended:
             return
+        if not self.call_content_enabled and details is not None:
+            from ..chat_progress import CallDetails
+
+            details = (
+                ChatProgressStepDetails(call=CallDetails(capture_enabled=False))
+                if details.call
+                else None
+            )
         self.display = (self.display or SpanDisplay()).merged(
             kind=kind, params=params, details=details
         )
@@ -491,8 +507,16 @@ class ObservedSpan:
 
     def set_call_input(self, value: Any, *, schema: Any = None, restricted: bool = False) -> None:
         """呼び出しの入力を製品の詳細にだけ保存する。"""
+        from ..chat_progress import CallDetails
         from .call_details import call_input
 
+        if not self.call_content_enabled:
+            self.set_display(
+                details=ChatProgressStepDetails(call=CallDetails(capture_enabled=False))
+            )
+            return
+        if callable(value):
+            value = value()
         data = (
             self.display.details.model_dump(by_alias=True)
             if self.display and self.display.details
@@ -513,8 +537,15 @@ class ObservedSpan:
         """入力と既存の工程の詳細を保ち、返った結果を保存する。"""
         from .call_details import call_content
 
-        if not self.display or not self.display.details or not self.display.details.call:
+        if (
+            not self.call_content_enabled
+            or not self.display
+            or not self.display.details
+            or not self.display.details.call
+        ):
             return
+        if callable(value):
+            value = value()
         data = self.display.details.model_dump(by_alias=True)
         data["call"]["output"] = call_content(value).model_dump()
         self.set_display(details=ChatProgressStepDetails.model_validate(data))
@@ -575,7 +606,7 @@ def observed_span(
         }
     )
     if display is not None:
-        observed.display = display
+        observed.set_display(kind=display.kind, params=display.params, details=display.details)
     parent = trace.get_current_span().get_span_context()
     finished = False
     capture = _CAPTURE.get()
@@ -747,7 +778,9 @@ def record_span(
     provider, _ = _active_provider()
     tracer = provider.get_tracer("production-ready-suite")
     sdk_span = tracer.start_span(name, kind=trace.SpanKind[kind.upper()], start_time=start)
-    observed = ObservedSpan(sdk_span, display=display)
+    observed = ObservedSpan(sdk_span)
+    if display is not None:
+        observed.set_display(kind=display.kind, params=display.params, details=display.details)
     observed.set_attributes(attributes or {})
     observed.set_status(status)
     parent = trace.get_current_span().get_span_context()
@@ -768,7 +801,7 @@ def record_span(
         finished_at=datetime.fromtimestamp(end / 1e9, UTC),
         span_kind=kind,
         attributes=dict(observed.attributes),
-        display=display,
+        display=observed.display,
     )
     if capture is not None:
         with capture.lock:
@@ -785,7 +818,7 @@ def record_span(
                 finished_at=datetime.fromtimestamp(end / 1e9, UTC),
                 duration_ms=(end - start) / 1e6,
                 attributes=dict(observed.attributes),
-                display=display,
+                display=observed.display,
             )
         )
         capture.notify(item)

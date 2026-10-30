@@ -52,6 +52,9 @@ const OciSettingsClient = lazy(() =>
 const AnswerNoticeSettingsClient = lazy(() =>
   import("@/components/settings/AnswerNoticeSettingsClient").then((module) => ({ default: module.AnswerNoticeSettingsClient }))
 );
+const TraceRecordingSettingsClient = lazy(() =>
+  import("@/components/settings/TraceRecordingSettingsClient").then((module) => ({default: module.TraceRecordingSettingsClient})),
+);
 const ChatAttachmentSettingsClient = lazy(() =>
   import("@/components/settings/ChatAttachmentSettingsClient").then((module) => ({
     default: module.ChatAttachmentSettingsClient,
@@ -183,6 +186,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsToolPolicy} element={<ToolPolicySettingsPage />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
+        <Route path={APP_ROUTES.settingsTraceRecording} element={<SettingsTraceRecordingRoute />} />
         <Route path={APP_ROUTES.settingsChatAttachments} element={<SettingsChatAttachmentsRoute />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
@@ -299,6 +303,15 @@ function SettingsAnswerNoticeRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsAnswerNotice")} subtitle={t("settings.answerNotice.subtitle")} />
       <AnswerNoticeSettingsClient />
+    </div>
+  );
+}
+
+function SettingsTraceRecordingRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsTraceRecording")} subtitle={t("settings.traceRecording.subtitle")} />
+      <TraceRecordingSettingsClient />
     </div>
   );
 }

@@ -633,7 +633,7 @@ class _ObservedStream:
     def __init__(self, inner: Any, span: Any) -> None:
         self._inner, self._span = inner, span
         self._exhausted = False
-        self._capture = CallStreamCapture(span.set_call_output)
+        self._capture = CallStreamCapture(span.set_call_output, enabled=span.call_content_enabled)
 
     def __aiter__(self) -> Any:
         return self

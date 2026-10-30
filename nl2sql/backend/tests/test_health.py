@@ -4968,6 +4968,7 @@ async def test_schema_refresh_sync_route_was_removed_from_runtime_and_openapi() 
     assert "/api/schema/refresh-jobs" in app.openapi()["paths"]
 
 
+@pytest.mark.usefixtures("trace_body_enabled")
 def test_select_ai_call_snapshot_records_database_boundary_only() -> None:
     from pr_backend_core.observability.tracing import operation_trace
 
@@ -4979,3 +4980,11 @@ def test_select_ai_call_snapshot_records_database_boundary_only() -> None:
     assert "synthetic-input" in span.display.details.call.input.text
     assert span.display.details.call.output.status == "recorded"
     assert span.display.details.call.schema_.status == "not_recorded"
+
+
+@pytest.fixture
+def trace_body_enabled() -> Iterator[None]:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

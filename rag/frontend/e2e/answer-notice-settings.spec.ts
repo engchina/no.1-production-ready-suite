@@ -107,16 +107,17 @@ test("無効にすると表示の確認に注意書きを出さず、無効を�
   await expect.poll(() => saved.at(-1)).toEqual({ enabled: false, text: null, contact: null });
 });
 
-// 運用設定は「システムテーブル → チャットの添付 → 回答の注意書き」（#2449・#2517・#2546）。
+// 運用設定は「システムテーブル → 軌跡の本文記録 → チャットの添付 → 回答の注意書き」（#2449・#2517・#2546）。
 test("サイドナビの運用設定のチャットの添付の下に回答の注意書きがある", { tag: "@responsive" }, async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await mockAnswerNotice(page);
   await page.goto("/settings/answer-notice");
   const sidebar = page.getByRole("complementary", { name: "サイドナビゲーション" });
   const operations = sidebar.locator("#nav-section-nav-section-operations");
-  await expect(operations.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/chat-attachments");
-  await expect(operations.getByRole("link").nth(2)).toHaveAttribute("href", "/settings/answer-notice");
-  await expect(operations.getByRole("link").nth(2)).toHaveAccessibleName("回答の注意書き");
+  await expect(operations.getByRole("link").nth(1)).toHaveAttribute("href", "/settings/trace-recording");
+  await expect(operations.getByRole("link").nth(2)).toHaveAttribute("href", "/settings/chat-attachments");
+  await expect(operations.getByRole("link").nth(3)).toHaveAttribute("href", "/settings/answer-notice");
+  await expect(operations.getByRole("link").nth(3)).toHaveAccessibleName("回答の注意書き");
   await expect(
     sidebar.locator("#nav-section-nav-section-settings").locator('a[href="/settings/answer-notice"]')
   ).toHaveCount(0);

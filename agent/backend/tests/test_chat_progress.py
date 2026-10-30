@@ -1147,3 +1147,27 @@ def test_created_run_has_no_trace_yet(monkeypatch: MonkeyPatch) -> None:
     assert (data["trace_store"], data["trace_id"]) == (True, None)
     trace = client.get(f"/api/runs/{data['id']}/trace").json()["data"]
     assert (trace["trace_id"], trace["events"]) == (None, [])
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_existing_detail_tests() -> Iterator[None]:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield
+
+
+def test_body_off_keeps_the_normal_run_and_its_timing(monkeypatch: MonkeyPatch) -> None:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    _script(monkeypatch, [assistant_message("合成の回答")])
+    with call_content_policy(lambda: False):
+        run_id = _create_run("合成の質問")
+        anyio.run(builtin_runtime.execute_run, run_id)
+    run = runtime_repository.get_run(run_id)
+    assert _terminal(run) == "done"
+    assert _rows(run) == [(CHAT, "respond", "done", None)]
+    fold = fold_chat_progress_events(run_progress_events(run))
+    [chat] = [step for step in fold.step_list() if (step.span or {}).get("name") == CHAT]
+    assert chat.started_at is not None and chat.finished_at is not None
+    assert not chat.details or not chat.details.code

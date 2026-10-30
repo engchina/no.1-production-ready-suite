@@ -29,6 +29,11 @@
       "additionalProperties": false,
       "description": "入力・結果・Schema の snapshot。外部の telemetry には送らない。",
       "properties": {
+        "capture_enabled": {
+          "default": true,
+          "title": "Capture Enabled",
+          "type": "boolean"
+        },
         "visibility": {
           "default": "owner",
           "enum": [

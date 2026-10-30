@@ -101,6 +101,7 @@ from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci_auth import (
     load_oci_config_without_prompt as _load_oci_config_without_prompt,
 )
+from pr_system_settings.trace_recording import build_trace_recording_router
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
@@ -730,6 +731,13 @@ router.include_router(
     build_answer_notice_router(
         load=lambda: get_security_service().load_answer_notice(),
         save=lambda record: get_security_service().save_answer_notice(record),
+        write_dependencies=[Depends(require_system_settings_write)],
+    ),
+    prefix="/settings",
+)
+router.include_router(
+    build_trace_recording_router(
+        provider=lambda: get_security_service().trace_recording,
         write_dependencies=[Depends(require_system_settings_write)],
     ),
     prefix="/settings",

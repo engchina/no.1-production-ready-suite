@@ -527,7 +527,12 @@ def test_record_span_turns_trace_into_progress_events() -> None:
     from pr_backend_core.observability.tracing import observed_span, operation_trace
 
     recorder = ChatProgressRecorder("target-a")
-    with operation_trace("task", operation_id="target-a", listener=recorder.record_span) as summary:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with (
+        call_content_policy(lambda: True),
+        operation_trace("task", operation_id="target-a", listener=recorder.record_span) as summary,
+    ):
         with observed_span("stage") as stage:
             stage.set_display(
                 kind="first", params={"count": 1}, details=chat_progress_details(lines=["行"])

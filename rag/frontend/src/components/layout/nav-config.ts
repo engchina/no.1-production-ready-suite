@@ -30,6 +30,7 @@ import {
 
 import {
   ANSWER_NOTICE_NAV_ITEM,
+  TRACE_RECORDING_SETTINGS_NAV_ITEM,
   CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   SYSTEM_SETTINGS_NAV_ITEMS,
   API_KEY_ADMIN_NAV_ITEM,
@@ -283,6 +284,12 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: MENU_PERMISSIONS.settingsSystemTables,
       },
       // チャットの添付（設定は製品ごと。3 製品で同じ位置。回答の注意書きの上。#2517・#2546）。
+      {
+        href: TRACE_RECORDING_SETTINGS_NAV_ITEM.href,
+        labelKey: "nav.settingsTraceRecording",
+        icon: TRACE_RECORDING_SETTINGS_NAV_ITEM.icon as LucideIcon,
+        permission: MENU_PERMISSIONS.settingsTraceRecording,
+      },
       {
         href: CHAT_ATTACHMENT_SETTINGS_NAV_ITEM.href,
         labelKey: "nav.settingsChatAttachments",

@@ -47,6 +47,7 @@ export interface CallContent {
 }
 
 export interface CallDetails {
+  capture_enabled?: boolean;
   input: CallContent;
   output: CallContent;
   schema: CallContent;
@@ -105,6 +106,7 @@ export function runStepDetailsJson(
 export interface RunStepDetailsLabels {
   /** 長さを切ったときの印。 */
   truncated: string;
+  disabled: string;
   partial: string;
   requestedDimensions: string;
   inputType: string;
@@ -145,6 +147,7 @@ export interface RunStepDetailsLabels {
 }
 
 export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
+  disabled: "本文の記録は設定で無効です。この呼び出しの入力・結果・思考・Schema は保存していません。",
   partial: "完了前に記録された応答です。受信済みの内容を表示しています。", requestedDimensions: "要求した次元数", inputType: "入力の用途", topN: "要求した上位件数",
   vectors: "記録されたベクトル", dimensions: "記録された次元数", partialVector: "一部のみ記録", rank: "順位", score: "関連度", document: "文書", sourceIndex: "元の index",
   reasoning: "思考", reasoningSummary: "思考の要約",
@@ -263,6 +266,7 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
           { label: labels.duration, value: props.timing?.durationMs == null ? labels.notRecorded : String(props.timing.durationMs) },
         ] }} labels={labels} /> :
         content.status === "withheld" ? <p className="text-xs text-fg-muted">{labels.withheld}</p> :
+        call.capture_enabled === false ? <p className="text-xs text-fg-muted">{labels.disabled}</p> :
         content.status === "not_recorded" ? <p className="text-xs text-fg-muted">{labels.notRecorded}</p> :
         <div className="grid min-w-0 gap-3">
           {(tab === "output" || tab === "reasoning") && presentation?.partial ? <p className="text-xs text-fg-muted">{labels.partial}</p> : null}

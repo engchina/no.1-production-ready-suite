@@ -30,6 +30,7 @@ from app.features.agent import builtin_runtime, run_claim
 from app.features.agent.runtime import builtin_resume_pending, runtime_repository
 from app.features.agent.trace_spans import trace_spans
 from app.observability import start_trace_export_retry_worker, stop_trace_export_retry_worker
+from app.security.service import get_security_service
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,11 @@ async def _run_with_event_delivery() -> None:
 
 
 def main() -> None:
-    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+    with tracing_lifecycle(
+        get_settings(),
+        service_name=get_settings().service_name,
+        capture_content=lambda: get_security_service().trace_recording.enabled(),
+    ):
         settings = get_settings()
         configure_logging(
             settings.log_level,

@@ -12,6 +12,7 @@ from pr_backend_core.observability.tracing import tracing_lifecycle
 
 from app.features.nl2sql.service import nl2sql_service
 from app.features.nl2sql.trace_spans import start_trace_span_store, stop_trace_span_store
+from app.security.service import get_security_service
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,11 @@ def _stop(_signum: int, _frame: object) -> None:
 
 
 def main() -> None:
-    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+    with tracing_lifecycle(
+        get_settings(),
+        service_name=get_settings().service_name,
+        capture_content=lambda: get_security_service().trace_recording.enabled(),
+    ):
         settings = get_settings()
         configure_logging(
             settings.log_level,

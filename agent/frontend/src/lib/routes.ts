@@ -3,6 +3,7 @@ import {
   API_KEY_PATHS,
   ANSWER_NOTICE_PATH,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  TRACE_RECORDING_SETTINGS_PATH,
   SYSTEM_SETTINGS_PATHS,
   USER_ROLE_PATHS,
 } from "@production-ready/system-settings";
@@ -18,6 +19,7 @@ export const APP_ROUTES = {
   settingsAnswerNotice: ANSWER_NOTICE_PATH,
   // チャットの添付（設定は製品ごと。#2517）
   settingsChatAttachments: CHAT_ATTACHMENT_SETTINGS_PATH,
+  settingsTraceRecording: TRACE_RECORDING_SETTINGS_PATH,
   // `/` は画面を持たない入口（ナビの並び順で最初に開ける画面へ移す。ダッシュボードは廃止。#262）。
   home: "/",
   // 業務利用者のチャット（#768）。

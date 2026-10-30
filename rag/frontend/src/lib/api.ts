@@ -1,3 +1,4 @@
+import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
 /**
  * バックエンド API クライアント。
  *
@@ -4442,6 +4443,14 @@ export const api = {
       method: "DELETE",
     }),
   // 設定: チャットの添付（設定は製品ごと。#2517）
+  getTraceRecordingSettings: (options: SettingsRequestOptions = {}) =>
+    request<TraceRecordingSettingsData>("/api/settings/trace-recording", { signal: options.signal }),
+  updateTraceRecordingSettings: (body: { enabled: boolean }) =>
+    request<TraceRecordingSettingsData>("/api/settings/trace-recording", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   getChatAttachmentSettings: (options: SettingsRequestOptions = {}) =>
     request<ChatAttachmentSettingsData>("/api/settings/chat-attachments", { signal: options.signal }),
   updateChatAttachmentSettings: (body: ChatAttachmentSettingsUpdate) =>

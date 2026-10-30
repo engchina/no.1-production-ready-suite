@@ -75,6 +75,7 @@ describe("権限コードの対応表", () => {
     const operations = NAV_SECTIONS.find((section) => section.titleKey === "nav.section.operations");
     expect(operations?.items.map((item) => [item.href, item.permission])).toEqual([
       [APP_ROUTES.settingsSystemTables, MENU_PERMISSIONS.settingsSystemTables],
+      [APP_ROUTES.settingsTraceRecording, MENU_PERMISSIONS.settingsTraceRecording],
       [APP_ROUTES.settingsChatAttachments, MENU_PERMISSIONS.settingsChatAttachments],
       [APP_ROUTES.settingsAnswerNotice, MENU_PERMISSIONS.settingsAnswerNotice],
       [APP_ROUTES.settingsHuggingface, MENU_PERMISSIONS.settingsHuggingface],

@@ -489,3 +489,11 @@ def test_observe_spans_sees_spans_with_or_without_an_operation_trace() -> None:
     assert [update.operation_name for update in recorded] == ["task", "llm", "llm", "task"]
     assert [update.operation_name for update in observed] == ["llm", "llm"]
     assert {span.operation_name for span in summary.spans} == {"task", "llm"}
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_snapshot_tests():
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield
