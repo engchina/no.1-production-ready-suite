@@ -2,11 +2,22 @@
 
 保存した実応答と同じ形を匿名の文で作る: direct の行の原文が指した根拠に無く別の根拠にある・見出しだけの根拠を
 本文の原文で照合する。原文の一致は説明の支持の証明ではないので、検査は計画の行の自己矛盾だけを見る。
+作り直しても残った取り違えは、原文がある根拠が 1 つに決まるときだけ、その根拠へ付け替えて通常の照合に掛ける。
 """
 
 from dataclasses import replace
 
-from rag_engine.generation.grounded import _misattributed_scopes, _request_plan_errors, verify
+import pytest
+
+from rag_engine.generation.grounded import (
+    _CITATION_VIEWS,
+    REANCHOR_REASON,
+    _citation_view,
+    _misattributed_scopes,
+    _request_plan_errors,
+    reanchor_misattributed_citations,
+    verify,
+)
 from rag_engine.models.llm import GroundedDraft
 
 OPEN = "メニューから設定を選び、設定タブの登録画面を開きます。"
@@ -103,7 +114,7 @@ def test_a_misattributed_citation_keeps_its_text_and_id_with_an_unassessed_mark(
     draft = plan_draft(SHIFTED, SHIFTED_ITEMS)
     checked, _ = verify("設定の手順は？", draft, SPANS)
     by_text = {entry.item.text: entry for entry in checked if not entry.added}
-    # 本文は外さず、別の ID へも付け替えない。
+    # 照合（verify）自身は本文を外さず、別の ID へも付け替えない（付け替えは reanchor_misattributed_citations だけ）。
     assert set(by_text) == {item["text"] for item in SHIFTED_ITEMS}
     first = by_text["設定タブの登録画面を開く。"]
     assert first.span["evidence_id"] == "id-steps"
@@ -119,14 +130,21 @@ def test_a_consistent_plan_adds_no_misattribution_mark():
         assert not any("写した原文" in str(mark) for mark in entry.marks), entry.marks
 
 
-def _answer(drafts):
-    from test_grounded_answer import FakeModel, context, record
+def _context(*extra):
+    from test_grounded_answer import context, record
+
+    return context(
+        record(0, STEPS, "割当"), record(1, OPEN, "登録"), *(record(2 + index, text, f"別{index}") for index, text in enumerate(extra))
+    )
+
+
+def _answer(drafts, *extra):
+    from test_grounded_answer import FakeModel
 
     from rag_engine.config import get_settings
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation.answering import synthesize_grounded_answer
 
-    ctx = context(record(0, STEPS, "割当"), record(1, OPEN, "登録"))
     model = FakeModel(drafts, [])
 
     def unused(*args, **kwargs):
@@ -134,18 +152,16 @@ def _answer(drafts):
 
     with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
         result = synthesize_grounded_answer(
-            "設定の手順は？", ctx, replace(get_settings(), answer_audit_mode="none"), image_prompt_mode="text_only"
+            "設定の手順は？", _context(*extra), replace(get_settings(), answer_audit_mode="none"), image_prompt_mode="text_only"
         ).response
     return result, model
 
 
-def _labels():
+def _labels(*extra):
     """モデルに見せる表示 ID（[E1] 形式）。"""
-    from test_grounded_answer import context, record
-
     from rag_engine.generation.answering import _grounded_spans
 
-    spans = _grounded_spans("設定の手順は？", context(record(0, STEPS, "割当"), record(1, OPEN, "登録")), (), None)
+    spans = _grounded_spans("設定の手順は？", _context(*extra), (), None)
     labels = {span["text"]: span["label"] for span in spans}
     return labels[STEPS], labels[OPEN]
 
@@ -181,16 +197,136 @@ def test_a_misattributed_plan_is_repaired_once_with_the_location_of_each_quote()
     assert f"{steps_label} の照合に写した原文は {steps_label} に無く、{open_label} にあります" in repair
     assert OPEN in result.answer_text and STEPS in result.answer_text
     assert not any("写した原文" in str(mark) for mark in result.envelope["passage_marks"])
+    # 作り直しで直れば付け替えない。
+    assert "citation_reanchored" not in result.generation_trace["rounds"][0]["timing"]
 
 
-def test_a_misattribution_left_after_the_one_repair_keeps_the_text_marked_without_another_call():
+def test_a_misattribution_left_after_the_one_repair_is_reanchored_to_the_only_evidence_with_the_quote():
     steps_label, open_label = _labels()
     swapped = _payload(steps_label, open_label, swapped=True)
     result, model = _answer([swapped, swapped])
-    # 作り直しは一度だけ。残った矛盾は本文から外さず、支持を確かめていない印を付ける。
+    # 作り直しは一度だけ。残った取り違えは、原文がある根拠が 1 つなのでその根拠へ付け替え、通常の照合で確かめる。
     assert result.generation_trace["llm_calls"] == 2
-    assert result.generation_trace["rounds"][0]["timing"]["request_plan_unsettled"]
+    timing = result.generation_trace["rounds"][0]["timing"]
+    assert "request_plan_unsettled" not in timing
+    moved = {(row["from_label"], row["to_label"]): row for row in timing["citation_reanchored"]}
+    assert set(moved) == {(steps_label, open_label), (open_label, steps_label)}
+    assert all(row["reason"] == REANCHOR_REASON and row["item_indexes"] for row in moved.values())
+    assert OPEN in result.answer_text and STEPS in result.answer_text
+    assert not any("写した原文" in str(mark) for mark in result.envelope["passage_marks"])
+
+
+def test_a_misattribution_with_two_evidence_holding_the_quote_stays_marked():
+    # 別の機能の根拠にも同じ原文がある。付け替え先が 1 つに決まらないので、従来どおり印を付けて残す。
+    extra = OPEN + "続けて保存します。"
+    steps_label, open_label = _labels(extra)
+    swapped = _payload(steps_label, open_label, swapped=True)
+    result, model = _answer([swapped, swapped], extra)
+    assert result.generation_trace["llm_calls"] == 2
+    timing = result.generation_trace["rounds"][0]["timing"]
+    assert timing["request_plan_unsettled"]
+    assert all(row["from_label"] != steps_label for row in timing.get("citation_reanchored", []))
     assert "写した原文" in str(result.envelope["passage_marks"])
+
+
+# 付け替えの単体の検査。行番号を付けた根拠では、原文を含む行だけを引用にする。
+NUMBERED = "1. 準備の説明です。\n" + OPEN + "\n3. 後片付けの説明です。"
+NUMBERED_SPANS = [
+    {"evidence_id": "id-steps", "label": "E1", "text": STEPS},
+    {"evidence_id": "id-numbered", "label": "E4", "text": NUMBERED},
+    {"evidence_id": "id-colors", "label": "E5", "text": COLORS},
+]
+
+
+@pytest.fixture
+def sent_views():
+    """モデルへ送った版（行番号つきの引用単位）を、送信時と同じく記録する。"""
+    token = _CITATION_VIEWS.set({id(span): (span, _citation_view(span, explicit_units=True)) for span in NUMBERED_SPANS})
+    yield
+    _CITATION_VIEWS.reset(token)
+
+
+def test_a_single_evidence_with_the_quote_receives_the_citation_and_is_verified(sent_views):
+    draft = plan_draft([scope("E5", OPEN)], [operation("設定タブの登録画面を開く。", "E5")])
+    moved, records = reanchor_misattributed_citations(draft, NUMBERED_SPANS)
+    assert records == [
+        {
+            "reason": REANCHOR_REASON,
+            "request_id": "Q1",
+            "from_label": "E5",
+            "from_evidence_id": "id-colors",
+            "to_label": "E4",
+            "to_evidence_id": "id-numbered",
+            "lines": "2",
+            "item_indexes": [0],
+        }
+    ]
+    plan = moved.request_coverage[0]
+    assert plan.evidence_ids == ["E4"] and [row.evidence_id for row in plan.evidence_scope] == ["E4"]
+    assert [(c.evidence_id, c.lines, c.quote) for c in moved.items[0].citations] == [("E4", "2", "")]
+    assert moved.items[0].text == draft.items[0].text
+    assert not _request_plan_errors(moved, NUMBERED_SPANS)
+    # 付け替えた出典は通常の照合に掛かり、原文を含む行だけを引用にした、印の無い説明になる。
+    checked, _ = verify("設定の手順は？", moved, NUMBERED_SPANS)
+    entry = next(entry for entry in checked if not entry.added)
+    assert entry.span["evidence_id"] == "id-numbered"
+    assert entry.item.quote == OPEN
+    assert not entry.marks and entry.confirmed
+
+
+def test_a_quote_repeated_in_the_target_cites_its_first_line():
+    repeated = "1. 準備の説明です。\n" + OPEN + "\n" + OPEN
+    spans = [*NUMBERED_SPANS[:1], {"evidence_id": "id-numbered", "label": "E4", "text": repeated}, NUMBERED_SPANS[2]]
+    token = _CITATION_VIEWS.set({id(span): (span, _citation_view(span, explicit_units=True)) for span in spans})
+    try:
+        draft = plan_draft([scope("E5", OPEN)], [operation("設定タブの登録画面を開く。", "E5")])
+        moved, records = reanchor_misattributed_citations(draft, spans)
+    finally:
+        _CITATION_VIEWS.reset(token)
+    # 同じ根拠の中の位置は、原文照合と同じく最初の位置にする（根拠は 1 つに決まっている）。
+    assert [row["lines"] for row in records] == ["2"]
+    assert moved.items[0].citations[0].lines == "2"
+
+
+def test_rows_that_swap_ids_are_reanchored_at_once_without_chaining():
+    draft = plan_draft(SHIFTED, SHIFTED_ITEMS)
+    moved, records = reanchor_misattributed_citations(draft, SPANS)
+    assert {(row["from_label"], row["to_label"]) for row in records} == {("E1", "E6"), ("E7", "E8"), ("E2", "E1")}
+    # E1 → E6 と E2 → E1 を元の草稿から一度に決める（E2 の出典を E1 から E6 へ続けて動かさない）。
+    assert [[c.evidence_id for c in item.citations] for item in moved.items] == [["E6"], ["E8", "E8"], ["E1"]]
+    assert not _request_plan_errors(moved, SPANS)
+    checked, _ = verify("設定の手順は？", moved, SPANS)
+    for entry in checked:
+        assert not any("写した原文" in str(mark) for mark in entry.marks), entry.marks
+    assert {entry.item.text for entry in checked if not entry.added} == {item["text"] for item in SHIFTED_ITEMS}
+
+
+@pytest.mark.parametrize(
+    ("spans", "scopes"),
+    [
+        # 原文がある根拠が 2 つ（付け替え先が決まらない）
+        ([*SPANS, {"evidence_id": "id-copy", "label": "E9", "text": OPEN}], [scope("E1", OPEN)]),
+        # 原文があるのは会話の添付だけ（添付へは付け替えない）
+        ([{**span, "conversation_attachment": True} if span["label"] == "E6" else span for span in SPANS], [scope("E1", OPEN)]),
+        # 添付と別の根拠の両方にある（添付も候補に数え、1 つに決まらない）
+        (
+            [*SPANS, {"evidence_id": "id-attached", "label": "E9", "text": OPEN, "conversation_attachment": True}],
+            [scope("E1", OPEN)],
+        ),
+        # 指した根拠にも原文がある（取り違えではない）
+        ([*SPANS, {"evidence_id": "id-steps-2", "label": "E1", "text": OPEN}], [scope("E1", OPEN)]),
+        # 付け替え先に unrelated の判断が残る（計画が矛盾する）
+        (SPANS, [scope("E1", OPEN), scope("E6", "", relation="unrelated")]),
+        # 計画に同じ label の行が複数ある
+        (SPANS, [scope("E1", OPEN), scope("E1", "設定画面を開く手順。")]),
+    ],
+    ids=["two-candidates", "attachment-only", "attachment-and-evidence", "quote-in-named", "target-unrelated", "duplicate-rows"],
+)
+def test_reanchoring_is_skipped_when_the_target_is_not_unique(spans, scopes):
+    draft = plan_draft(scopes, [operation("設定タブの登録画面を開く。", "E1")], evidence_ids=["E1"])
+    moved, records = reanchor_misattributed_citations(draft, spans)
+    assert records == []
+    assert moved is draft
 
 
 def test_duplicate_plans_for_the_same_request_do_not_repeat_an_error():
