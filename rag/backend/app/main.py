@@ -42,6 +42,7 @@ from app.rag.request_context import (
 from app.rag.trace_store import start_trace_span_writer, stop_trace_span_writer
 from app.rag.vector_index_adapter import resolve_vector_index_adapter
 from app.readiness import pending_legacy_local_storage_dir
+from app.security.service import get_security_service
 
 logger = logging.getLogger(__name__)
 UNHANDLED_ERROR_MESSAGE = "サーバー内部でエラーが発生しました。時間をおいて再度お試しください。"
@@ -83,7 +84,11 @@ async def _warm_search(settings: Settings) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """起動・終了時の初期化/後始末。"""
-    with tracing_lifecycle(get_settings(), service_name=get_settings().service_name):
+    with tracing_lifecycle(
+        get_settings(),
+        service_name=get_settings().service_name,
+        capture_content=lambda: get_security_service().trace_recording.enabled(),
+    ):
         settings = get_settings()
         configure_logging(settings.log_level)
         configure_trace_exporter(settings)

@@ -6,6 +6,8 @@ export {
   ANSWER_NOTICE_PATH,
   CHAT_ATTACHMENT_SETTINGS_NAV_ITEM,
   CHAT_ATTACHMENT_SETTINGS_PATH,
+  TRACE_RECORDING_SETTINGS_PATH,
+  TRACE_RECORDING_SETTINGS_NAV_ITEM,
   API_KEY_ADMIN_NAV_ITEM,
   API_KEY_PATHS,
   accountTabPath,
@@ -466,3 +468,7 @@ export {
   type MyApiKeysApi,
   type MyApiKeysList,
 } from "./api-keys/types";
+
+export { TraceRecordingSettingsPage, type TraceRecordingSettingsPageProps } from "./trace-recording/TraceRecordingSettingsPage";
+export { TRACE_RECORDING_SETTINGS_MESSAGES } from "./trace-recording/messages";
+export { TRACE_RECORDING_SETTINGS_QUERY_KEY, type TraceRecordingSettingsData, type TraceRecordingSettingsApi } from "./trace-recording/types";

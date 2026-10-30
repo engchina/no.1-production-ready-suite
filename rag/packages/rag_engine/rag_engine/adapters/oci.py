@@ -832,12 +832,17 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         started = time.monotonic()
         try:
             with observe_call("chat", provider.model) as observation:
-                snapshot = _response_wire_request(request)
-                if streamed:
-                    snapshot["stream"] = True
-                observation.request(snapshot, schema=snapshot["text"]["format"])
+                if getattr(observation, "capture_enabled", True):
+                    snapshot = _response_wire_request(request)
+                    if streamed:
+                        snapshot["stream"] = True
+                    observation.request(snapshot, schema=snapshot["text"]["format"])
+                else:
+                    observation.request(None)
                 wire_request = _audit_wire_request(request)
-                capture = CallStreamCapture(observation.response) if streamed else None
+                capture = (
+                    CallStreamCapture(observation.response, enabled=getattr(observation, "capture_enabled", True)) if streamed else None
+                )
                 if streamed:
                     response, timing = _stream_parsed(
                         _openai_client_for_provider(provider, settings),

@@ -76,14 +76,15 @@ test("サイドバーのセクション再編とラベルを確認", { tag: "@re
     await expect(userRolesSection.getByText(label, { exact: true })).toBeVisible();
   }
 
-  // 運用設定は NL2SQL と同じくシステムテーブルが先頭で、その下にチャットの添付（設定は製品ごと。3 製品で同じ位置。
+  // 運用設定は NL2SQL と同じくシステムテーブルが先頭で、その下に軌跡の記録とチャットの添付（設定は製品ごと。3 製品で同じ位置。
   // #2517・#2546）と回答の注意書き（#658・#2449）。
   const operationsSection = sidebar.locator("#nav-section-nav-section-operations");
   await expect(sidebar.getByText("運用設定", { exact: true })).toBeVisible();
-  await expect(operationsSection.getByRole("link")).toHaveCount(5);
+  await expect(operationsSection.getByRole("link")).toHaveCount(6);
   await expect(operationsSection.getByRole("link").first()).toHaveAccessibleName(/システムテーブル/);
-  await expect(operationsSection.getByRole("link").nth(1)).toHaveAccessibleName("チャットの添付");
-  await expect(operationsSection.getByRole("link").nth(2)).toHaveAccessibleName("回答の注意書き");
+  await expect(operationsSection.getByRole("link").nth(1)).toHaveAccessibleName("軌跡の記録");
+  await expect(operationsSection.getByRole("link").nth(2)).toHaveAccessibleName("チャットの添付");
+  await expect(operationsSection.getByRole("link").nth(3)).toHaveAccessibleName("回答の注意書き");
   await expect(operationsSection.getByRole("link", { name: /HuggingFace/ })).toBeVisible();
   await expect(operationsSection.getByRole("link", { name: /サービス管理/ })).toBeVisible();
 

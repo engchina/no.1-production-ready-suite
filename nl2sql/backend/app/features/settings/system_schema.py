@@ -232,6 +232,7 @@ DOMAIN_TABLES = frozenset(MANAGED_TABLES) - {CONTROL_TABLE, MIGRATION_TABLE}
 # PLATFORM_* は 3 製品で共有する認証テーブル（#212）。NL2SQL のシステムテーブル再作成で消さない。
 PRESERVED_TABLES = frozenset(
     {
+        "PLATFORM_TRACE_RECORDING_SETTINGS",
         "PLATFORM_USERS",
         "PLATFORM_ROLES",
         "PLATFORM_USER_ROLES",

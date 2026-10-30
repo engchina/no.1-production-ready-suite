@@ -261,7 +261,7 @@ class _EngineStageObservation:
             params=answer_step_params(self._values),
             details=(
                 answer_step_details(details, failed=failed)
-                if details is not None or failed
+                if self._span.call_content_enabled and (details is not None or failed)
                 else None
             ),
         )
@@ -291,11 +291,15 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
     ) as span:
 
         class Observation:
+            capture_enabled = span.call_content_enabled
+
             def request(self, value: object, *, schema: object = None) -> None:
-                span.set_call_input(oci_call_snapshot(value), schema=schema, restricted=True)
+                span.set_call_input(
+                    lambda: oci_call_snapshot(value), schema=schema, restricted=True
+                )
 
             def response(self, value: object) -> None:
-                span.set_call_output(oci_call_snapshot(value))
+                span.set_call_output(lambda: oci_call_snapshot(value))
 
             def usage(self, value: object) -> None:
                 record_genai_usage(span, value)
@@ -307,7 +311,11 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
                 details: Mapping[str, object] | None = None,
             ) -> None:
                 if operation == "rerank":
-                    display_details = answer_step_details(details) if details is not None else None
+                    display_details = (
+                        answer_step_details(details)
+                        if details is not None and span.call_content_enabled
+                        else None
+                    )
                     if (
                         display_details
                         and span.display

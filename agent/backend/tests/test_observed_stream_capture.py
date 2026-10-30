@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from pr_backend_core.observability.call_policy import call_content_policy
 from pr_backend_core.observability.tracing import observed_span, operation_trace
 
 from app.features.agent.builtin_runtime import _ObservedStream
@@ -27,6 +28,7 @@ async def test_cancelled_stream_preserves_received_reasoning_and_input() -> None
             pass
 
     with (
+        call_content_policy(lambda: True),
         operation_trace("run", operation_id="synthetic") as result,
         observed_span("gen_ai.chat") as span,
     ):

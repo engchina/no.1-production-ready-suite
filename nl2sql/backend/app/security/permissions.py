@@ -257,6 +257,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
         ),
     ),
     # チャットの添付を使うか（設定は製品ごと。運用設定のシステムテーブルの下。#2517・#2546）。
+    _menu_permission("menu.settings_trace_recording", "運用設定", "軌跡の記録"),
     _menu_permission("menu.settings_chat_attachments", "運用設定", "チャットの添付"),
     # 回答の注意書き（設定は製品ごと。運用設定のチャットの添付の下。#2405・#2449・#2546）。
     _menu_permission("menu.settings_answer_notice", "運用設定", "回答の注意書き"),
@@ -786,6 +787,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
     ("PUT", "/settings/answer-notice"): _allowed("menu.settings_answer_notice"),
     # ---- 運用設定: チャットの添付（設定は製品ごと。#2517） ----
+    ("GET", "/settings/trace-recording"): _allowed("menu.settings_trace_recording"),
+    ("PUT", "/settings/trace-recording"): _allowed("menu.settings_trace_recording"),
     ("GET", "/settings/chat-attachments"): _allowed("menu.settings_chat_attachments"),
     ("PUT", "/settings/chat-attachments"): _allowed("menu.settings_chat_attachments"),
     ("POST", "/settings/database/password/reveal"): _SETTINGS_DATABASE,

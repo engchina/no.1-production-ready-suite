@@ -1,3 +1,4 @@
+import { TraceRecordingSettingsClient } from "@/components/settings/TraceRecordingSettingsClient";
 import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import {
   Navigate,
@@ -155,6 +156,7 @@ export function App() {
         <Route path={APP_ROUTES.settingsServices} element={<SettingsServicesRoute />} />
         <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
         <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
+        <Route path={APP_ROUTES.settingsTraceRecording} element={<SettingsTraceRecordingRoute />} />
         <Route path={APP_ROUTES.settingsChatAttachments} element={<SettingsChatAttachmentsRoute />} />
         <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
         <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
@@ -392,6 +394,15 @@ function SettingsAnswerNoticeRoute() {
     <div>
       <PageHeader wide title={t("nav.settingsAnswerNotice")} subtitle={t("settings.answerNotice.subtitle")} />
       <AnswerNoticeSettingsClient />
+    </div>
+  );
+}
+
+function SettingsTraceRecordingRoute() {
+  return (
+    <div>
+      <PageHeader wide title={t("nav.settingsTraceRecording")} subtitle={t("settings.traceRecording.subtitle")} />
+      <TraceRecordingSettingsClient />
     </div>
   );
 }

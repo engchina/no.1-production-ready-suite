@@ -22,6 +22,7 @@ from ..chat_attachments.settings import (
     chat_attachment_setting_key,
 )
 from ..chat_attachments.store import OracleChatAttachmentStore
+from ..trace_recording import OracleTraceRecordingStore
 from .api_keys import API_KEYS_TABLE, OracleApiKeyStore
 from .domain import (
     SYSTEM_ADMIN_ROLE_CODE,
@@ -530,6 +531,9 @@ class OracleAuthStore:
     def api_key_store(self) -> OracleApiKeyStore:
         """API キー（`PLATFORM_API_KEYS`。3 製品で共有。#1805）。"""
         return OracleApiKeyStore(self._connection_factory)
+
+    def trace_recording_store(self) -> OracleTraceRecordingStore:
+        return OracleTraceRecordingStore(self._connection_factory)
 
     def chat_attachment_store(self) -> OracleChatAttachmentStore:
         """会話の添付（`PLATFORM_CHAT_ATTACHMENTS`。3 製品で共有。#2517）。"""

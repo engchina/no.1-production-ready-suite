@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from app.features.nl2sql.enterprise_ai_client import _build_payload
@@ -234,6 +236,7 @@ def test_direct_call_uses_system_default_text_model_and_its_connection(
     assert project == "ocid1.generativeaiproject.oc1.us-chicago-1.synthetic"
 
 
+@pytest.mark.usefixtures("trace_body_enabled")
 def test_model_call_snapshot_includes_schema_and_returned_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -253,3 +256,11 @@ def test_model_call_snapshot_includes_schema_and_returned_output(
     assert span.display and span.display.details and span.display.details.call
     assert "synthetic-input" in span.display.details.call.input.text
     assert "synthetic-result" in span.display.details.call.output.text
+
+
+@pytest.fixture
+def trace_body_enabled() -> Iterator[None]:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

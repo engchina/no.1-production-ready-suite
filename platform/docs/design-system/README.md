@@ -1674,3 +1674,5 @@ span の階層表示は親を先に置き、兄弟は開始時刻（同時刻・
 embedding は入力の batch を分け、結果では記録されたベクトル数と次元数を先に示す。各ベクトルの数値は折りたたみ、展開とコピーで調べる。配列の一部だけが記録された場合は「一部のみ記録」と示し、記録済みの次元数をモデルの実際の次元数とは呼ばない。rerank は返された順に順位・元の index・関連度・対応する文書を DataTable に示す。関連度を正規化せず、別の呼び出しの分数と同じ尺度とは扱わない。
 
 参考: [DeepSeek Harness の trajectory](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-trajectory/README.md)、[LangSmith の run の形式](https://docs.langchain.com/langsmith/run-data-format)、[LLM の記録の形式](https://docs.langchain.com/langsmith/log-llm-trace)。型ごとの表示と記録の事実を保つ原則を適用しており、これらの製品の全機能との互換を意味しない。
+
+運用設定のシステムテーブルの直下に「軌跡の記録」を置く（3製品で共通）。既存の設定と同じ Switch・保存・未保存の離脱確認・読み込みと失敗の表示を使う。主開閉のほかに、対象の本文と常に残るメタデータ、既存の記録や業務の履歴を削除しないことを説明する。既定は無効。無効時の呼び出しは「本文の記録は設定で無効」と示し、未記録や権限不足と区別する。

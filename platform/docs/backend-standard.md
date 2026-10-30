@@ -370,3 +370,7 @@ Agent の既存の終了イベントは実行 span とは別の log として扱
 Terraform の環境入力は3製品共通の `platform_environment`（既定 `staging`）を使う。staging / production で HTTPS を無効にした構成は配備前に拒否する。
 
 チャット添付の初期配備は 3 製品とも無効です。製品ごとに設定 API で有効化した保存値は再配備でも維持します。`.env` に有効化の既定値は置きません。
+
+### 軌跡の本文を記録するか（#3901）
+
+運用設定「軌跡の記録」は3製品で1つの値を共有する。`PLATFORM_TRACE_RECORDING_SETTINGS` の単一の行を使い、未設定・読み出し失敗は無効。短い cache で読み、新しい span の開始時に判断を固定する。入力・出力・返却された思考・Schema と本文の診断詳細を対象とし、無効時はコピー・機密除去・serialize の前に止める。構造・時刻・状態・モデル・usage・内容を含まないエラー種別は記録する。通常の業務記録と既存の trace は削除しない。API / worker の tracing lifecycle に共通の provider を注入し、backend_core は system_settings_backend を import しない。

@@ -416,6 +416,7 @@ async def test_execution_steps_carry_structured_details(monkeypatch: pytest.Monk
     assert {"目的", "検索の候補", "結果"} <= labels
 
 
+@pytest.mark.usefixtures("trace_body_enabled")
 async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     import rag_engine.adapters.oci as engine_oci
 

@@ -853,6 +853,7 @@ def _progress_steps(data: Any, table: TraceTable, *, turn_id: str) -> dict[str, 
     return {step.kind: step for step in fold.step_list() if not (step.span or {}).get("root")}
 
 
+@pytest.mark.usefixtures("trace_body_enabled")
 def test_generate_records_the_generation_and_check_as_span_tree(
     trace_table: TraceTable,  # noqa: F811
 ) -> None:
@@ -1110,3 +1111,11 @@ def test_analyze_invalid_structure_uses_complete_fallback(payload: dict[str, str
     assert "ORA-00942" in data.cause
     assert data.fix and data.conclusion and data.warnings
     assert data.corrected_plan is None
+
+
+@pytest.fixture
+def trace_body_enabled() -> Iterator[None]:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

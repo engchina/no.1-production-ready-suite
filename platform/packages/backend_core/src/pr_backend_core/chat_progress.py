@@ -259,6 +259,7 @@ class CallDetails(_DetailsBase):
 
     model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
 
+    capture_enabled: bool = True
     visibility: Literal["owner", "system_admin"] = "owner"
     input: CallContent = Field(default_factory=CallContent)
     output: CallContent = Field(default_factory=CallContent)

@@ -1,4 +1,5 @@
 import {
+  Waypoints,
   BrainCog,
   Cloud,
   Database,
@@ -157,4 +158,10 @@ export const API_KEY_ADMIN_NAV_ITEM = {
   href: API_KEY_PATHS.admin,
   labelKey: "nav.securityApiKeys",
   icon: KeySquare,
+} as const;
+
+/** 運用設定のシステムテーブル直下。3製品で1つの設定を共有する。 */
+export const TRACE_RECORDING_SETTINGS_PATH = "/settings/trace-recording";
+export const TRACE_RECORDING_SETTINGS_NAV_ITEM = {
+  key: "traceRecording", href: TRACE_RECORDING_SETTINGS_PATH, labelKey: "nav.settingsTraceRecording", icon: Waypoints,
 } as const;

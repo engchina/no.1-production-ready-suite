@@ -173,6 +173,9 @@ const SelectAiCredentialCard = lazy(() =>
     default: module.SelectAiCredentialCard,
   }))
 );
+const TraceRecordingSettingsClient = lazy(() =>
+  import("@/components/settings/TraceRecordingSettingsClient").then((module) => ({default: module.TraceRecordingSettingsClient})),
+);
 const ChatAttachmentSettingsClient = lazy(() =>
   import("@/components/settings/ChatAttachmentSettingsClient").then((module) => ({
     default: module.ChatAttachmentSettingsClient,
@@ -355,6 +358,7 @@ function AuthorizedApplication() {
             />
             <Route path={APP_ROUTES.settingsAppearance} element={<AppearanceSettings />} />
             <Route path={APP_ROUTES.settingsAnswerNotice} element={<SettingsAnswerNoticeRoute />} />
+            <Route path={APP_ROUTES.settingsTraceRecording} element={<SettingsTraceRecordingRoute />} />
             <Route path={APP_ROUTES.settingsChatAttachments} element={<SettingsChatAttachmentsRoute />} />
             <Route path={APP_ROUTES.securityUsers} element={<SecurityUsersPage />} />
             <Route path={APP_ROUTES.securityRoles} element={<SecurityRolesPage />} />
@@ -516,6 +520,15 @@ function SettingsOciRoute() {
     <>
       <PageHeader wide title={t("nav.settingsOci")} subtitle={t("settings.oci.subtitle")} />
       <OciSettingsClient />
+    </>
+  );
+}
+
+function SettingsTraceRecordingRoute() {
+  return (
+    <>
+      <PageHeader wide title={t("nav.settingsTraceRecording")} subtitle={t("settings.traceRecording.subtitle")} />
+      <TraceRecordingSettingsClient />
     </>
   );
 }

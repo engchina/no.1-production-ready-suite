@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+from typing import Any
 
 import pytest
 from pr_backend_core.config.tracing import TracingSettings
@@ -146,3 +147,11 @@ async def test_backend_sdk_boundary_keeps_request_response_and_failure(
         assert "合成の入力" not in str(span.attributes)
     finally:
         shutdown_tracing()
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_snapshot_tests() -> Any:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

@@ -19,6 +19,8 @@ from app.rag.pipeline import SearchStageProgress, _observe_stage, guardrail_stag
 from app.rag.step_details import answer_guardrail_details
 from tests.span_progress_support import RecordingTrace
 
+pytestmark = pytest.mark.usefixtures("trace_body_enabled")
+
 
 @pytest.mark.parametrize(
     "enabled,inspection,expected_outcome,expected_status,expected_verdict",

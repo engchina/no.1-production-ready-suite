@@ -78,6 +78,7 @@ MENU_SETTINGS_MODEL = "menu.settings_model"
 MENU_SETTINGS_DATABASE = "menu.settings_database"
 MENU_SETTINGS_APPEARANCE = "menu.settings_appearance"
 # チャットの添付を使うか（設定は製品ごと。運用設定のシステムテーブルの下。#2517・#2546）。
+MENU_SETTINGS_TRACE_RECORDING = "menu.settings_trace_recording"
 MENU_SETTINGS_CHAT_ATTACHMENTS = "menu.settings_chat_attachments"
 # 回答の注意書き（設定は製品ごと。運用設定のチャットの添付の下。#2405・#2449・#2546）。
 MENU_SETTINGS_ANSWER_NOTICE = "menu.settings_answer_notice"
@@ -139,6 +140,7 @@ _ADMIN_MENUS = (
     MENU_AUDIT,
     MENU_SECURITY_API_KEYS,
     MENU_SETTINGS_SYSTEM_TABLES,
+    MENU_SETTINGS_TRACE_RECORDING,
     MENU_SETTINGS_CHAT_ATTACHMENTS,
     MENU_SETTINGS_ANSWER_NOTICE,
     MENU_RUNTIMES,
@@ -175,6 +177,7 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SECURITY_API_KEYS, _GROUP_USERS_ROLES, "API キー"),
     # 運用設定の先頭はシステムテーブル（RAG / NL2SQL と同じ。#658 / #751）。
     _menu_permission(MENU_SETTINGS_SYSTEM_TABLES, _GROUP_OPERATIONS, "システムテーブル"),
+    _menu_permission(MENU_SETTINGS_TRACE_RECORDING, _GROUP_OPERATIONS, "軌跡の記録"),
     _menu_permission(MENU_SETTINGS_CHAT_ATTACHMENTS, _GROUP_OPERATIONS, "チャットの添付"),
     _menu_permission(MENU_SETTINGS_ANSWER_NOTICE, _GROUP_OPERATIONS, "回答の注意書き"),
     # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
@@ -548,6 +551,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     ("PUT", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     # チャットの添付を使うか（設定は製品ごと。#2517）。
+    ("GET", "/settings/trace-recording"): _any(MENU_SETTINGS_TRACE_RECORDING),
+    ("PUT", "/settings/trace-recording"): _any(MENU_SETTINGS_TRACE_RECORDING),
     ("GET", "/settings/chat-attachments"): _any(MENU_SETTINGS_CHAT_ATTACHMENTS),
     ("PUT", "/settings/chat-attachments"): _any(MENU_SETTINGS_CHAT_ATTACHMENTS),
     # ---- ユーザーとロール（platform の共通 router。RAG / NL2SQL と同じ割り当て）----

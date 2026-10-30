@@ -214,3 +214,11 @@ def test_event_delivery_queue_is_bounded(monkeypatch: pytest.MonkeyPatch) -> Non
             assert obs.TRACE_EXPORT_RETRY_QUEUE[0].event.run_id == "synthetic-2"
     finally:
         obs.clear_trace_export_retry_queue()
+
+
+@pytest.fixture(autouse=True)
+def enable_trace_content_for_existing_detail_tests() -> Any:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

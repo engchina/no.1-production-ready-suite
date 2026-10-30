@@ -325,9 +325,9 @@ class OciGenAiClient:
                 ),
             },
         ) as span:
-            span.set_call_input(oci_call_snapshot(details), restricted=True)
+            span.set_call_input(lambda: oci_call_snapshot(details), restricted=True)
             response = await self._sdk_call_runner(lambda: self._client().embed_text(details))
-            span.set_call_output(oci_call_snapshot(response.data))
+            span.set_call_output(lambda: oci_call_snapshot(response.data))
         embeddings = getattr(response.data, "embeddings", None)
         if not isinstance(embeddings, list):
             raise ValueError("OCI embedding response に embeddings がありません。")
@@ -380,10 +380,10 @@ class OciGenAiClient:
                 **model_purpose_attributes(),
             },
         ) as span:
-            span.set_call_input(oci_call_snapshot(details), restricted=True)
+            span.set_call_input(lambda: oci_call_snapshot(details), restricted=True)
             try:
                 response = await self._sdk_call_runner(invoke_sdk)
-                span.set_call_output(oci_call_snapshot(response.data))
+                span.set_call_output(lambda: oci_call_snapshot(response.data))
             finally:
                 if receipt is not None:
                     span.set_attributes(receipt.attributes())

@@ -126,6 +126,8 @@ export const ja = {
   // 「外観と証明書」は配色テーマと HTTPS の証明書を扱う（#1316）。副題・カードの文言は platform の既定を使う。
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
+  "nav.settingsTraceRecording": "軌跡の記録",
+  "settings.traceRecording.subtitle": "軌跡に入力・結果の本文を残すかを3製品で共通に設定します。",
   "nav.settingsChatAttachments": "チャットの添付",
   "appearance.theme.label": "配色テーマ",
   "appearance.theme.hint": "画面全体の配色を切り替えます。「自動」は OS の設定に追従します。",

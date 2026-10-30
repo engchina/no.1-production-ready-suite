@@ -236,7 +236,11 @@ def test_engine_sdk_observation_exposes_safe_receipt_in_existing_details(
 
     @contextmanager
     def observe(*args: Any, **kwargs: Any) -> Iterator[Any]:
-        yield SimpleNamespace(display=None, set_display=lambda **values: displayed.update(values))
+        yield SimpleNamespace(
+            call_content_enabled=True,
+            display=None,
+            set_display=lambda **values: displayed.update(values),
+        )
 
     monkeypatch.setattr(pipeline, "observed_span", observe)
     with pipeline._observe_engine_call("rerank", "synthetic-model") as observation:

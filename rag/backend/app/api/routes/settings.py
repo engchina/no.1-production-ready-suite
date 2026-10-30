@@ -32,6 +32,7 @@ from pr_system_settings.model_test_input import (
 from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci import test_oci_config as _test_oci_config
 from pr_system_settings.system_schema import system_tables_status_error
+from pr_system_settings.trace_recording import build_trace_recording_router
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
 )
@@ -236,6 +237,9 @@ router.include_router(
         load=lambda: get_security_service().load_answer_notice(),
         save=lambda record: get_security_service().save_answer_notice(record),
     )
+)
+router.include_router(
+    build_trace_recording_router(provider=lambda: get_security_service().trace_recording),
 )
 # チャットの添付を使うか（運用設定 › チャットの添付。設定は製品ごと。既定は無効。#2517）。
 router.include_router(

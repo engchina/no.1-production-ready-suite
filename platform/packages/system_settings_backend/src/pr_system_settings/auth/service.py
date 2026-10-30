@@ -33,6 +33,7 @@ from ..chat_attachments.settings import (
 )
 from ..chat_attachments.store import ChatAttachmentStore, InMemoryChatAttachmentStore
 from ..env_file import write_env_values
+from ..trace_recording import InMemoryTraceRecordingStore, TraceRecordingProvider
 from ..users_roles import PasswordPolicyError, generate_temporary_password, validate_password
 from .api_keys import (
     API_KEY_MAX_PER_USER,
@@ -229,6 +230,11 @@ class AuthService:
             store.chat_attachment_store()
             if isinstance(store, OracleAuthStore)
             else InMemoryChatAttachmentStore()
+        )
+        self.trace_recording = TraceRecordingProvider(
+            store.trace_recording_store()
+            if isinstance(store, OracleAuthStore)
+            else InMemoryTraceRecordingStore()
         )
         # チャットの添付を使うか（製品ごと。既定は無効。#2517）。
         self.chat_attachment_settings = ChatAttachmentSettingsProvider(

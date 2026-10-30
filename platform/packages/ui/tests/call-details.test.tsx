@@ -55,3 +55,14 @@ it("ベクトルの数値を初期表示で折りたたみ、記録済みの次�
     expect(host.querySelector('[data-call-semantic] [data-language]')).toBeNull();
   } finally {act(()=>root.unmount());host.remove();}
 });
+
+it("設定で止めた本文を未記録と区別する", () => {
+  const host=document.createElement("div"); const root=createRoot(host);
+  const empty={status:"recorded" as const,text:"private-synthetic-disabled"};
+  try {
+    act(()=>root.render(<RunStepDetailsView details={{call:{capture_enabled:false,input:empty,output:empty,schema:empty}}} />));
+    expect(host.textContent).toContain("本文の記録は設定で無効");
+    expect(host.querySelector('[data-call-readable]')).toBeNull();
+    expect(host.textContent).not.toContain("private-synthetic-disabled");
+  } finally {act(()=>root.unmount());}
+});
