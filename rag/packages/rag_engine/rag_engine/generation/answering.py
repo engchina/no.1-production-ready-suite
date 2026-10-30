@@ -6313,24 +6313,10 @@ def _known_gaps(attempts: Sequence[CragRetrievalAttempt], expansion: Any) -> tup
 
 
 def _section_evidence_budget(context: AnswerContext, settings: Settings, expansion: Any) -> int | None:
-    """章節を広げたときの原文の予算（文字）。広げた根拠を切らずに渡せるよう、入力の上限の範囲で広げる (#1436)。
-
-    根拠全体の見積もりが token の上限内なら、文字予算を全原文の長さまで確保する。
-    超える場合は文字予算も上限内に絞る。補完をしていなければ None（既定の `evidence_budget_chars`）。
-    """
+    """章節の補完後も設定の文字上限を使う。最終の描画・モデル入力の予算は送信前に検査する。"""
     if expansion is None or not (expansion.applied or expansion.trace.get("minimum_scope_complete")):
         return None
-    from rag_engine.generation.section_expansion import SectionExpansionLimits
-
-    base = int(getattr(settings, "evidence_budget_chars", 0) or 0)
-    total = sum(len(str(getattr(record, "text", "") or "")) for record in context.records)
-    limit = SectionExpansionLimits.from_settings(settings).input_tokens
-    from rag_engine.generation.section_expansion import context_tokens
-
-    if context_tokens(context) > limit:
-        return max(1, min(base or limit, limit))
-    # ASCII の原文も、token と文字数を混同して切らない。全量が token 予算内なら全文を渡す。
-    return min(base or EVIDENCE_BUDGET_CHARS, total + total // 10)
+    return int(getattr(settings, "evidence_budget_chars", 0) or EVIDENCE_BUDGET_CHARS)
 
 
 def load_answer_chunks(output_dir: str | Path, run_id: Any, preferred_engines: Iterable[str]) -> list[AnswerRecord]:

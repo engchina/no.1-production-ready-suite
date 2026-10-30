@@ -31,7 +31,7 @@ function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
 }
 
-async function mockLanguagePack(page: Page, builtin: Record<string, Record<string, unknown>> = BUILTIN) {
+async function mockLanguagePack(page: Page, builtin: Record<string, Record<string, unknown>> = BUILTIN, fields = FIELDS) {
   const saved: { overrides: Record<string, Record<string, unknown>> | null } = { overrides: null };
   const previews: Record<string, unknown>[] = [];
   const restored: string[] = [];
@@ -93,7 +93,7 @@ async function mockLanguagePack(page: Page, builtin: Record<string, Record<strin
   });
   await page.route("**/api/settings/language-pack", async route => {
     expect(route.request().method()).toBe("GET");
-    await route.fulfill({ json: envelope({ fields: FIELDS, builtin, overrides: {}, effective: current.effective, hash: current.hash, current_release: current, outdated_documents: 3, unrecorded_documents: 2 }) });
+    await route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: current.effective, hash: current.hash, current_release: current, outdated_documents: 3, unrecorded_documents: 2 }) });
   });
   return { saved, previews, restored, publications, readState: state };
 }
@@ -371,4 +371,19 @@ test("索引が参照する過去版は現在の履歴ページに無くても I
   await expect(details.getByLabel("公開時の完全な設定", { exact: true })).toHaveAttribute("readonly");
   await expect(details.getByLabel("条の単位", { exact: true })).toHaveValue("条\n款");
   await expectNoPageOverflow(page);
+});
+
+
+test("入力上限で省略した根拠の案内を名前と説明で編集できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const key = "answer_evidence_budget_limited";
+  const text = "入力の上限により {count} 件の根拠を省略しました。";
+  await mockLanguagePack(page, { ...BUILTIN, answer_labels: { [key]: text } }, [
+    ...FIELDS, { section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 1000 },
+  ]);
+  await page.goto("/settings/language-pack");
+  await page.getByRole("searchbox", { name: "項目を探す" }).fill("入力の上限で省略した根拠の案内");
+  await expect(page.getByLabel("入力の上限で省略した根拠の案内", { exact: true })).toHaveValue(text);
+  await expect(page.getByText("回答への入力の上限で根拠を省いたときの案内です。{count} を省略した件数に置き換えます。", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: `/u01/aipoc/no.1-production-ready-suite/tmp/html-unstructured-20261030/budget-language-${testInfo.project.name}.png`, fullPage: true });
 });

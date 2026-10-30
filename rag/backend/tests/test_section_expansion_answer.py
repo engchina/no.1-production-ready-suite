@@ -523,7 +523,7 @@ def long_section(monkeypatch: pytest.MonkeyPatch) -> LongSectionStub:
     return stub
 
 
-async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
+async def test_long_section_is_extracted_but_fixed_generation_input_exceeds_model_limit(
     monkeypatch: pytest.MonkeyPatch, long_section: LongSectionStub
 ) -> None:
     import re
@@ -589,10 +589,12 @@ async def test_long_section_is_extracted_then_answered_with_verbatim_quotes(
     # 根拠の入力は、モデルの入力の上限（4096）の 50% の中。
     assert expansion["input_token_limit"] == 2048
     assert expansion["used_tokens"] <= expansion["input_token_limit"]
-    # 回答の生成に渡す原文は、抜き出した原文だけ（関係の無い説明の段落は渡さない）。
-    assert prompts["draft"] and APPROVAL in prompts["draft"][0]
-    assert FILLER not in prompts["draft"][0]
-    assert "登録ボタン" in outcome.answer
+    # 抜き出しが入っても固定の指示・schema・出力予約が入らないモデルには生成を送らない。
+    assert not prompts["draft"]
+    assert outcome.diagnostics["outcome"] == "conditional"
+    budget = outcome.diagnostics["generation_input_budget"]
+    assert budget["reason"] == "required_evidence_or_fixed_input_exceeds_limit"
+    assert not budget["fits"]
 
 
 @pytest.mark.parametrize("flow", ["standard_rag", "crag"])
