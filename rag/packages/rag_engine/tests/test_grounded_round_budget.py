@@ -183,7 +183,8 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
 
         # 残りが十分なら従来どおり是正する（同じ指摘だけの是正は 1 回で打ち切る）。時間の打ち切りは無い。
         self.assertEqual(len(_drafts(model)), 2)
-        self.assertNotIn("stop", result.generation_trace["round_budget"])
+        self.assertEqual(result.generation_trace["round_budget"]["stop"]["reason"], "max_correction_rounds")
+        self.assertEqual(result.generation_trace["round_budget"]["stop"]["scope"], "content_correction")
         self.assertNotIn("作り直しをしていません", result.answer_text)
 
     def test_first_generation_cut_returns_related_quotes_instead_of_error(self):
