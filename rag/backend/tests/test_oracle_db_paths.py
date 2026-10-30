@@ -9,11 +9,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -620,3 +621,103 @@ async def test_deadlock_retry_is_bounded() -> None:
             retry_deadlocks=True,
         )
     assert len(pool.acquired) == 2
+
+
+def _text_commit_error() -> RuntimeError:
+    return RuntimeError(
+        SimpleNamespace(
+            code=30600,
+            full_code="ORA-30600",
+            message=(
+                "ORA-30600: private-detail\nDRG-50857: private-detail\nORA-20000: private-detail"
+            ),
+            is_session_dead=False,
+            isrecoverable=False,
+        )
+    )
+
+
+@pytest.mark.parametrize("phase", ["operation", "commit"])
+async def test_transaction_failure_logs_phase_and_lower_codes_without_details(
+    caplog: pytest.LogCaptureFixture,
+    phase: str,
+) -> None:
+    """失敗段階と下位コードを記録し、原文を出さず、commit 失敗は再送しない。"""
+    error = _text_commit_error()
+    first = _Connection(commit_error=error if phase == "commit" else None)
+    pool = _Pool([first, _Connection()])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    with pytest.raises(RuntimeError) as caught:
+        await client._run_transaction(_failing_operation([error] if phase == "operation" else []))
+    assert caught.value is error
+    assert len(pool.acquired) == 1
+    assert first.rollbacks == first.closes == 1
+    record = next(r for r in caplog.records if r.message == "oracle_transaction_failed")
+    assert record.__dict__["transaction_phase"] == phase
+    assert record.__dict__["transaction_attempt"] == 1
+    assert record.__dict__["oracle_error_codes"] == ["ORA-30600", "DRG-50857", "ORA-20000"]
+    assert record.__dict__["full_code"] == "ORA-30600"
+    assert record.exc_info is None
+    assert "private-detail" not in caplog.text
+    assert "private-detail" not in json.dumps(
+        {key: value for key, value in record.__dict__.items() if key not in {"created", "msecs"}},
+        default=str,
+    )
+
+
+def test_invalid_full_code_does_not_leak_error_details() -> None:
+    error = RuntimeError(SimpleNamespace(full_code="ORA-30600 private-detail"))
+    fields = oracle_error_log_fields(error)
+    assert fields["full_code"] is None
+    assert fields["oracle_error_codes"] == ["ORA-30600"]
+    assert "private-detail" not in json.dumps(fields)
+
+
+async def test_embedding_save_commit_failure_keeps_original_and_does_not_return_success(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """保存件数が一致しても commit 失敗なら保存成功を返さず、派生索引へ進まない。"""
+    from app.rag.chunking import Chunk
+    from app.rag.ingestion import IngestionPipeline
+    from app.schemas.extraction import StructuredExtraction
+
+    pool = FakeOraclePool(execute_results=[[{"cnt": 1}]])
+    error = _text_commit_error()
+
+    def fail_commit() -> None:
+        raise error
+
+    monkeypatch.setattr(pool.connection, "commit", fail_commit)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    entity_save = AsyncMock()
+    pipeline = IngestionPipeline(
+        vlm=cast(Any, object()),
+        genai=cast(Any, object()),
+        oracle=client,
+        object_storage=cast(Any, object()),
+        settings=_oci_settings(),
+    )
+    monkeypatch.setattr(pipeline, "_save_entity_index_if_enabled", entity_save)
+    chunk = Chunk(
+        text="合成の本文",
+        index=0,
+        start_offset=0,
+        end_offset=5,
+        metadata={"document_id": "doc-a", "chunk_id": "chunk-a"},
+    )
+    with pytest.raises(RuntimeError) as caught:
+        await pipeline._save_embeddings_for_chunk_set(
+            "trace-a",
+            "doc-a",
+            StructuredExtraction(raw_text="合成の本文"),
+            [chunk],
+            [[0.1, 0.2, 0.3]],
+            chunk_set_id="set-a",
+        )
+    assert caught.value is error
+    assert pool.acquire_calls == 1
+    assert pool.connection.rollbacks == pool.connection.closes == 1
+    entity_save.assert_not_awaited()
+    assert pool.connection.calls[-1].statement.startswith("SELECT COUNT(*)")
+    assert "oracle_transaction_failed" in caplog.text

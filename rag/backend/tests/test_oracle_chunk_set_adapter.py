@@ -309,3 +309,67 @@ async def test_document_extraction_artifact_round_trip_and_gc() -> None:
         )
         is not None
     )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_saved_embedding_commit_updates_search_text_and_preserves_original_in_oracle() -> (
+    None
+):
+    """保存済み Chunk の向量・検索本文・metadata を commit し、再保存も索引へ反映する。"""
+    client = OracleClient()
+    document_id = await _new_document(client)
+    chunk_set_id = _unique_id("cs_embed_commit")
+    await client.upsert_chunk_set(chunk_set_id=chunk_set_id, document_id=document_id)
+    original = "合成の本文を引用します。"
+    await client.save_chunk_preview(
+        document_id,
+        StructuredExtraction(raw_text=original),
+        [
+            Chunk(
+                index=0,
+                text=original,
+                start_offset=0,
+                end_offset=len(original),
+                metadata={"context_header": "oldkeyword"},
+            )
+        ],
+        chunk_set_id=chunk_set_id,
+    )
+    [view] = await client.list_chunk_set_chunks(chunk_set_id)
+    for header in ("newkeyword", "newkeyword"):
+        chunk = Chunk(
+            index=0,
+            text=original,
+            start_offset=0,
+            end_offset=len(original),
+            metadata={
+                "document_id": document_id,
+                "chunk_id": view.chunk_id,
+                "context_header": header,
+            },
+        )
+        await client.update_chunk_set_embeddings(
+            chunk_set_id=chunk_set_id,
+            chunks=[chunk],
+            embeddings=[_EMBEDDING],
+        )
+        # 別 transaction で読むため、commit 前の COUNT だけを成功の証拠にしない。
+        counts = await client._fetch_one(
+            """
+            SELECT COUNT(*) AS vector_count FROM rag_chunks
+            WHERE chunk_set_id = :chunk_set_id AND embedding IS NOT NULL
+            """,
+            {"chunk_set_id": chunk_set_id},
+        )
+        assert counts is not None and int(str(counts["vector_count"])) == 1
+        matches = await client._fetch_one(
+            """
+            SELECT COUNT(*) AS match_count FROM rag_chunks
+            WHERE chunk_set_id = :chunk_set_id AND CONTAINS(search_text, 'newkeyword') > 0
+            """,
+            {"chunk_set_id": chunk_set_id},
+        )
+        assert matches is not None and int(str(matches["match_count"])) == 1
+    [saved] = await client.list_chunk_set_chunks(chunk_set_id)
+    assert saved.text == original
+    assert saved.metadata["context_header"] == "newkeyword"

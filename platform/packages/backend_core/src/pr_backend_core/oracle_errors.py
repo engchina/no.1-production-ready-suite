@@ -1,9 +1,9 @@
 """Oracle のエラーの分類（3 製品共通。#820）。
 
-python-oracledb に依存しない（例外の文字列と型名・`args[0]` の `full_code` だけを見る）。
+python-oracledb に依存せず、例外の文字列と型名・`args[0]` の `full_code` / `message` を読む。
 
 - `oracle_error_codes(exc)`：例外（`__cause__` / `__context__` の連鎖を含む）が持つ
-  ORA / DPY / DPI のコード
+  ORA / DRG / DPY / DPI のコード
 - `is_oracle_pool_wait_timeout(exc)`：pool の待ちの timeout（`DPY-4005`）
 - `is_oracle_connection_error(exc)`：DB に接続できない・接続が切れた（停止中・起動中・ネットワーク・
   資格情報）。DB ゲートはこれを「接続できない」（`unreachable`）に分類し、「初期化が必要」と区別する
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
+ORACLE_ERROR_CODE_RE = re.compile(r"\b(?:ORA|DRG|DPY|DPI)-\d{4,5}\b", re.IGNORECASE)
 
 # pool が接続を返さないまま待ちの上限に達した（python-oracledb の Thin / Thick 共通）。
 POOL_WAIT_TIMEOUT_CODE = "DPY-4005"
@@ -64,13 +64,17 @@ def _exception_chain(exc: BaseException) -> list[BaseException]:
 
 
 def oracle_error_codes(exc: BaseException) -> list[str]:
-    """例外（原因の連鎖を含む）が持つ ORA / DPY / DPI のコード（大文字・重複なし・出現順）。"""
+    """原因の連鎖も含む ORA / DRG / DPY / DPI のコード（大文字・重複なし・出現順）。"""
     codes: list[str] = []
     for item in _exception_chain(exc):
         error = item.args[0] if item.args else None
         full_code = getattr(error, "full_code", None)
         if isinstance(full_code, str) and ORACLE_ERROR_CODE_RE.fullmatch(full_code):
             codes.append(full_code.upper())
+        # driver のエラーオブジェクトは、文字列表現とは別に message に下位コードを持つ。
+        message = getattr(error, "message", None)
+        if isinstance(message, str):
+            codes.extend(code.upper() for code in ORACLE_ERROR_CODE_RE.findall(message))
         codes.extend(code.upper() for code in ORACLE_ERROR_CODE_RE.findall(str(item)))
     return list(dict.fromkeys(codes))
 
