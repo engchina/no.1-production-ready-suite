@@ -53,6 +53,7 @@ from rag_parser_core.result import (
 )
 from rag_parser_core.result import (
     LOCAL_PARSER_VERSION,
+    UNSTRUCTURED_TEXT_CONTRACT,
     ExternalAdapterRunner,
 )
 from rag_parser_core.result import (
@@ -1216,7 +1217,10 @@ def _unstructured_adapter_result(
         template=template_for_source_profile(source_profile),
         parser_backend="unstructured",
         parser_version=version,
-        extra_artifacts=_unstructured_partition_artifacts(partition_kwargs),
+        extra_artifacts={
+            "unstructured_text_contract": UNSTRUCTURED_TEXT_CONTRACT,
+            **_unstructured_partition_artifacts(partition_kwargs),
+        },
     )
     if (
         source_profile is not None and source_profile.modality == "html"

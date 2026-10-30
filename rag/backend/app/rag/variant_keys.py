@@ -22,6 +22,7 @@ import hashlib
 import json
 
 from rag_parser_core.language import current_pack
+from rag_parser_core.result import UNSTRUCTURED_TEXT_CONTRACT
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 
 from app.config import (
@@ -159,6 +160,8 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
     # ID は変えない。
     if backend == "docling":
         subset["docling_text_contract"] = "ordered_list_marker_v1"
+    if backend == "unstructured":
+        subset["unstructured_text_contract"] = UNSTRUCTURED_TEXT_CONTRACT
     if getattr(settings, "rag_heading_level_inference_enabled", False) is True:
         subset["rag_heading_level_inference_enabled"] = True
     profile = getattr(settings, "rag_preprocess_profile", None)
