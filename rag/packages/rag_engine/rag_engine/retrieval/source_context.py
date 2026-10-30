@@ -24,7 +24,7 @@ def source_context(record: Any) -> dict[str, Any]:
     if isinstance(caption, str) and caption.strip():
         context["table_caption"] = caption
     role = metadata.get("html_region_role")
-    if role in {"header", "footer", "caption"}:
+    if isinstance(role, str) and role in {"header", "footer", "caption"}:
         context["html_region"] = {"role": role, "text": str(getattr(record, "text", "") or "")}
     return context
 
