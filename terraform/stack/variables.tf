@@ -5,8 +5,8 @@ variable "region" {
 
   # Compute の image（schema.yaml の instance_image_source_id）を用意しているリージョンだけを許す（#660）。
   validation {
-    condition     = contains(["ap-tokyo-1", "ap-osaka-1"], var.region)
-    error_message = "region must be ap-tokyo-1 or ap-osaka-1. Create the stack in one of these regions."
+    condition     = contains(["ap-tokyo-1", "ap-osaka-1", "us-chicago-1"], var.region)
+    error_message = "region は ap-tokyo-1、ap-osaka-1、us-chicago-1 のいずれかにしてください。"
   }
 }
 
@@ -176,8 +176,8 @@ variable "adb_workload" {
   default     = "LH"
 
   validation {
-    condition     = contains(["OLTP", "AJD", "APEX", "LH"], var.adb_workload)
-    error_message = "adb_workload must be one of OLTP, AJD, APEX, or LH."
+    condition     = contains(["OLTP", "AJD", "LH"], var.adb_workload)
+    error_message = "adb_workload は OLTP、AJD、LH のいずれかにしてください。APEX Service は Suite が必要とする SQL*Net 接続を提供しません。"
   }
 }
 
@@ -472,7 +472,7 @@ variable "instance_boot_volume_vpus" {
   }
 }
 
-# Compute の OS は Oracle Linux 9（platform image の Oracle-Linux-9.8-2026.09.18-0）。OCID は東京・大阪で固定する（#1611）。
+# Compute の OS は Oracle Linux 9（platform image の Oracle-Linux-9.8-2026.09.18-0）。OCID は東京・大阪・Chicago で固定する（#1611）。
 # 配備のスクリプト（platform/deploy・各製品の init_script.sh）は Oracle Linux 9 の dnf・firewalld・SELinux を前提にする。
 variable "instance_image_source_id" {
   description = "Oracle Linux 9 image OCID of the Compute instance."

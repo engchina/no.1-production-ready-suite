@@ -31,12 +31,13 @@
 
 ## 対応リージョン
 
-- **stack は `ap-tokyo-1`（東京）と `ap-osaka-1`（大阪）だけをサポートします（#660）。** Compute の image（`instance_image_source_id`）は、この 2 つのリージョンの Oracle Linux 9 の platform image（`Oracle-Linux-9.8-2026.09.18-0`）の OCID に固定しています（#1611）。
+- **stack は `ap-tokyo-1`（東京）、`ap-osaka-1`（大阪）、`us-chicago-1`（Chicago）をサポートします。** Compute の image（`instance_image_source_id`）は、この 3 つのリージョンの Oracle Linux 9 の platform image（`Oracle-Linux-9.8-2026.09.18-0`）の OCID に固定しています（#1611）。
   - `ap-tokyo-1`: `ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa`
   - `ap-osaka-1`（既定）: `ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha`
+  - `us-chicago-1`: `ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a`
   - image を新しくするときは、`schema.yaml`・`variables.tf`・`terraform/scripts/verify_stack_contract.py`（`ORACLE_LINUX_IMAGES`）を同じ PR でそろえます。
-  `us-chicago-1` など他のリージョンで stack を作ると、`region` の validation で plan が失敗します。
-- 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢も同じ 2 つです。
+  これら以外のリージョンで stack を作ると、`region` の validation で plan が失敗します。
+- 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢は東京・大阪のみです。Chicago の保存値には非対応の案内が残ります（#3904）。これは画面の案内の制限で、管理 API の失敗を確認したものではありません。
 
 ## 配備する製品
 
@@ -59,8 +60,9 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   リポジトリの文書・画面・コメントでは製品名にバージョンを入れず（#564）、対応バージョンはここだけに書きます。
 - `adb_deployment_mode` で「新規 Autonomous AI Database の作成」か「既存の Autonomous AI Database を選択」を選びます。
   - 新規: 既定の DB 名は `SUITEADB`、workload は `LH`（Lakehouse。#1558）、ECPU は `2`。
+    選べる workload は `OLTP` / `AJD` / `LH` です。APEX Service は SQL*Net 接続を提供しないため、フォームと Terraform CLI では選べません。
     3製品を載せる場合は、負荷に合わせて ECPU 数とストレージを上げてください。
-  - 既存: ADB の OCID を選びます。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_high` です。
+  - 既存: SQL*Net 接続が使える ADB の OCID を選びます（APEX Service は利用できません）。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_high` です。
     stack は既存 ADB から Wallet を生成するだけで、ネットワーク・アクセス・mTLS・ACL は変更しません。
     アプリ用の DB ユーザーを使う（既定）ときは ADMIN のパスワード（`existing_adb_admin_password`）を、使わないときは
     全製品の `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` に書く値（`existing_oracle_user` / `existing_oracle_password`）を入力します。
