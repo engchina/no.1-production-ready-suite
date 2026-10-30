@@ -49,7 +49,7 @@ from .models import (
     SqlRequirementSpec,
     SqlRequirementSpecItem,
 )
-from .object_identity import catalog_match_key, object_match_key
+from .object_identity import catalog_match_key, object_match_key, split_match_key
 from .ontology_catalog import SchemaOntology
 from .ontology_models import (
     ColumnQueryPolicy,
@@ -619,8 +619,10 @@ class RequirementContext:
         table_key = self.column_lookup.get(normalized, "")
         if not table_key:
             return ""
-        table = self.tables[table_key]
-        column_name = normalized.rsplit(".", 1)[-1]
+        table = self.tables.get(table_key)
+        if table is None:
+            return ""
+        column_name = split_match_key(normalized)[-1]
         for column in table.columns.values():
             if catalog_match_key(column.name) == column_name:
                 return column.key
@@ -763,6 +765,7 @@ def build_requirement_context(
 
     table_lookup: dict[str, str] = {}
     column_lookup: dict[str, str] = {}
+    unqualified_columns: dict[str, list[str]] = {}
     for key, info in tables.items():
         table_lookup[key] = key
         short = catalog_match_key(info.name)
@@ -770,8 +773,14 @@ def build_requirement_context(
             table_lookup[short] = key
         for column_info in info.columns.values():
             column_lookup[column_info.key] = key
+            unqualified_columns.setdefault(catalog_match_key(column_info.name), []).append(key)
             if len(short_names.get(short, [])) == 1:
                 column_lookup[catalog_match_key(info.name, column_info.name)] = key
+
+    # 関連度で表を絞る前の許可範囲全体で、一意な未修飾の列名だけを登録する。
+    for column_name, table_keys in unqualified_columns.items():
+        if len(table_keys) == 1:
+            column_lookup[column_name] = table_keys[0]
 
     relationships = _approved_relationships(catalog_tables, tables, ontology, view)
     profile_context = {
