@@ -225,6 +225,86 @@ def test_attachment_evidence_survives_document_selection_through_engine_records(
     assert cap_anchors_per_document([rule, attached], settings, top_k=2) == [rule, attached]
 
 
+def test_attachment_below_rerank_threshold_reaches_final_evidence(
+    service: ChatAttachmentService,
+) -> None:
+    """実際の添付の変換から rerank・context・モデルへ渡す根拠までを通す（#3211）。"""
+    from dataclasses import replace
+
+    from rag_engine.config import get_settings as engine_settings
+    from rag_engine.generation import answering as a
+    from rag_engine.generation.answer_models import AnswerContext
+    from rag_engine.generation.answer_records import (
+        _records_by_rerank_ranks,
+        _stored_chunk_answer_record,
+    )
+    from rag_engine.models.llm import RerankTextRank
+
+    from app.rag.answer_engine import _stored_child
+
+    _upload(service, "attachment-a.txt", "項目 A の値は17です。", "conv-3211")
+    toolset = service.toolset("conv-3211")
+    units = attachment_units(toolset.records, toolset.parsed)
+    selected = asyncio.run(select_attachment_units("項目 A の値", units, rerank=None))
+    assert len(selected) == 1
+    source = RetrievedChunk(
+        document_id="doc-a",
+        chunk_id="chunk-a",
+        text="項目の値は添付の入力を使います。",
+        score=0.9,
+        file_name="source-a.txt",
+        metadata={},
+    )
+    chunks = [source, attachment_chunk(*selected[0])]
+    records = [_stored_chunk_answer_record(_stored_child(chunk, rrf_score=1.0)) for chunk in chunks]
+    settings = replace(
+        engine_settings(environ={}, dotenv_path=None), rerank_min_relevance_score=0.1
+    )
+    ranked = _records_by_rerank_ranks(
+        records, [RerankTextRank(0, 0.9), RerankTextRank(1, 0.01)], settings
+    )
+    kept, _, _ = a.select_documents(ranked, settings, top_k=1)
+    anchors = a.cap_anchors_per_document(kept, settings, top_k=1)
+    bundle = a._bundle_context(
+        "項目 A の値は何ですか",
+        anchors,
+        records,
+        settings,
+        top_k=1,
+        neighbor_child_count=0,
+        max_records=1,
+        max_chars=1000,
+    )
+    assert len(bundle.records) == 2
+    context = AnswerContext(
+        records=list(bundle.records),
+        text=bundle.text,
+        evidence=bundle.evidence,
+        evidence_tree=bundle.evidence_tree,
+    )
+    spans = a._grounded_spans("項目 A の値は何ですか", context, (), None)
+    assert any(
+        span.get("conversation_attachment") is True and "17" in span["text"] for span in spans
+    )
+    assert any(
+        not span.get("conversation_attachment") and "添付の入力" in span["text"] for span in spans
+    )
+
+
+def test_attachment_candidate_selection_keeps_its_existing_six_unit_limit(
+    service: ChatAttachmentService,
+) -> None:
+    """rerank の下限を免除しても、前段で渡す添付候補を増やさない。"""
+    from dataclasses import replace
+
+    _upload(service, "attachment-b.txt", "項目 A の値", "conv-3211-limit")
+    toolset = service.toolset("conv-3211-limit")
+    unit = attachment_units(toolset.records, toolset.parsed)[0]
+    units = [replace(unit, unit_id=str(index), text=f"項目 {index} の値") for index in range(10)]
+    selected = asyncio.run(select_attachment_units("項目の値", units, rerank=None))
+    assert len(selected) == chat_attachments.MAX_ATTACHMENT_EVIDENCE == 6
+
+
 # ---- チャットの送信 ----
 
 

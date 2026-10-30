@@ -16,6 +16,7 @@ from rag_engine.generation.answer_payload import _bbox_values, _int_value, _trim
 from rag_engine.models.llm import RerankTextRank
 from rag_engine.models.storage import StoredChunk
 from rag_engine.parsing.content_labels import content_labels
+from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.context_builder import context_bundle_from_records
 from rag_engine.retrieval.entity_expansion import (  # noqa: F401  is_entity_expansion_record はここからも参照できる
     is_entity_expansion_record,
@@ -568,7 +569,13 @@ def _records_by_rerank_ranks(
         index = rank.index
         if index in seen or index < 0 or index >= len(records):
             continue
-        if min_score > 0 and rank.relevance_score is not None and rank.relevance_score < min_score:
+        # 添付は前段で選んだ利用者の明示入力なので、資料候補の最低関連度では除外しない。
+        if (
+            min_score > 0
+            and rank.relevance_score is not None
+            and rank.relevance_score < min_score
+            and not is_attachment_evidence(records[index])
+        ):
             seen.add(index)
             continue
         selected.append(
@@ -625,6 +632,8 @@ def _record_with_rerank_metadata(
         "min_relevance_score": min_relevance_score,
         "filtered": False,
     }
+    if is_attachment_evidence(record) and relevance_score is not None and relevance_score < min_relevance_score:
+        metadata["rerank"]["attachment_preserved_below_min_score"] = True
     return replace(record, metadata=metadata)
 
 
