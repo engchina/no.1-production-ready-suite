@@ -1401,3 +1401,28 @@ def test_stream_delta_drops_reasoning_events(event: dict[str, Any], expected: st
     from rag_parser_core.oci_enterprise_ai import _extract_stream_text_delta
 
     assert _extract_stream_text_delta(event) == expected
+
+
+async def test_model_call_snapshot_is_attached_to_product_trace() -> None:
+    from pr_backend_core.observability.tracing import operation_trace
+
+    client = OciEnterpriseAiClient(
+        settings=_oci_settings(),
+        http_transport=FakeEnterpriseAiTransport({"output_text": "synthetic-result"}),
+    )
+    with operation_trace("synthetic", operation_id="a") as trace:
+        await client._post_enterprise_ai(
+            "/responses",
+            {
+                "model": "enterprise-llm",
+                "input": "synthetic-input",
+                "text": {"format": {"type": "json_schema"}},
+            },
+        )
+    call = next(s for s in trace.spans if s.operation_name == "gen_ai.chat")
+    assert call.display and call.display.details and call.display.details.call
+    captured = call.display.details.call
+    assert "synthetic-input" in captured.input.text
+    assert "synthetic-result" in captured.output.text
+    assert captured.schema_.status == "recorded"
+    assert captured.visibility == "system_admin"

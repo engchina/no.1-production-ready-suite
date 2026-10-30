@@ -18,7 +18,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
+from pr_backend_core.observability.call_details import withhold_call_details
+
 from app.rag.chat_attachments import ATTACHMENT_DOCUMENT_PREFIX
+from app.rag.request_context import current_audit_request_context
 from app.schemas.search import RetrievedChunk
 
 
@@ -145,4 +148,11 @@ async def withhold_saved_answer(
     } | referenced_document_ids(diagnostics)
     readable = await oracle.accessible_document_ids(sorted(document_ids)) if document_ids else set()
     kept, withheld = visible_citations(citations, readable)
-    return kept, withheld, prune_unreadable(diagnostics, readable)
+    return (
+        kept,
+        withheld,
+        withhold_call_details(
+            prune_unreadable(diagnostics, readable),
+            allow_restricted=current_audit_request_context().all_users_visible,
+        ),
+    )

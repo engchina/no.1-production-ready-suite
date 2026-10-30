@@ -4966,3 +4966,16 @@ async def test_schema_refresh_sync_route_was_removed_from_runtime_and_openapi() 
     assert resp.status_code == 404
     assert "/api/schema/refresh" not in app.openapi()["paths"]
     assert "/api/schema/refresh-jobs" in app.openapi()["paths"]
+
+
+def test_select_ai_call_snapshot_records_database_boundary_only() -> None:
+    from pr_backend_core.observability.tracing import operation_trace
+
+    adapter = _FakeRuntimeOracleAdapter(_FakeOracleDb())
+    with operation_trace("synthetic", operation_id="a") as trace:
+        adapter.run_select_ai_agent_team(team_name="SYNTHETIC_TEAM", question="synthetic-input")
+    span = next(s for s in trace.spans if s.operation_name == "oracle.select_ai")
+    assert span.display and span.display.details and span.display.details.call
+    assert "synthetic-input" in span.display.details.call.input.text
+    assert span.display.details.call.output.status == "recorded"
+    assert span.display.details.call.schema_.status == "not_recorded"

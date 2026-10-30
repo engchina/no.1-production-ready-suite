@@ -232,3 +232,24 @@ def test_direct_call_uses_system_default_text_model_and_its_connection(
     )
     assert payload["model"] == "openai.gpt-oss-120b"
     assert project == "ocid1.generativeaiproject.oc1.us-chicago-1.synthetic"
+
+
+def test_model_call_snapshot_includes_schema_and_returned_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from pr_backend_core.observability.tracing import operation_trace
+
+    from app.features.nl2sql import enterprise_ai_client as module
+
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(200, json={"output_text": '{"text":"synthetic-result"}'}),
+    )
+    client = module.OciEnterpriseAiDirectClient(_direct_settings())
+    with operation_trace("synthetic", operation_id="a") as trace:
+        client.generate(prompt="synthetic-input", context="", system_prompt="synthetic-system")
+    span = next(s for s in trace.spans if s.operation_name == "gen_ai.chat")
+    assert span.display and span.display.details and span.display.details.call
+    assert "synthetic-input" in span.display.details.call.input.text
+    assert "synthetic-result" in span.display.details.call.output.text

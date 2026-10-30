@@ -3913,7 +3913,15 @@ class OracleNl2SqlAdapter:
                 # 未計測にする。#3543）。
                 UNMEASURED_SOURCE_ATTRIBUTE: "select_ai",
             },
-        ):
+        ) as call_trace:
+            call_trace.set_call_input(
+                {
+                    "prompt": question,
+                    "profile_name": profile_name,
+                    "action": action,
+                    **({"attributes": attributes} if attributes else {}),
+                }
+            )
             connection = (
                 self.runtime_connection(call_timeout_seconds=call_timeout_seconds)
                 if call_timeout_seconds is not None
@@ -3955,6 +3963,7 @@ class OracleNl2SqlAdapter:
                     )
                 row = cursor.fetchone()
                 text = _coerce_text(row[0] if row else "")
+            call_trace.set_call_output(text)
             return text
 
     def generate_select_ai_sql(
@@ -4257,6 +4266,9 @@ class OracleNl2SqlAdapter:
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
+            team_trace.set_call_input(
+                {"team_name": team_name, "user_prompt": question, "params": params}
+            )
             connection = (
                 self.connection(call_timeout_seconds=call_timeout_seconds)
                 if call_timeout_seconds is not None
@@ -4277,11 +4289,13 @@ class OracleNl2SqlAdapter:
                     )
                     row = cursor.fetchone()
                     text = _coerce_text(row[0] if row else "")
+                    team_trace.set_call_output(text)
                     return _extract_select_statement(text), active_conversation_id
                 except Exception as exc:
                     message = str(exc)
                     if not self._looks_like_agent_profile_loss(message):
                         raise self._agent_runtime_error(exc) from exc
+                    team_trace.set_call_output({"error_type": type(exc).__name__})
                     team_trace.set_attributes({"error.type": type(exc).__name__})
                     team_trace.set_status("failed")
         # team が参照する profile（AGENT$<team>）が消えたときだけ、tool を直接呼んで復旧する。
@@ -4319,11 +4333,12 @@ class OracleNl2SqlAdapter:
                 # 未計測にする。#3543）。
                 UNMEASURED_SOURCE_ATTRIBUTE: "select_ai_agent",
             },
-        ):
+        ) as call_trace:
             payload = json.dumps(
                 {"TOOL_NAME": tool_name, "QUERY": question, "ACTION": "SHOWSQL"},
                 ensure_ascii=False,
             )
+            call_trace.set_call_input({"tool_name": tool_name, "input": payload})
             connection = (
                 self.connection(call_timeout_seconds=call_timeout_seconds)
                 if call_timeout_seconds is not None
@@ -4345,6 +4360,7 @@ class OracleNl2SqlAdapter:
                     raise self._agent_runtime_error(exc) from exc
                 row = cursor.fetchone()
                 text = _coerce_text(row[0] if row else "")
+            call_trace.set_call_output(text)
             return _extract_select_statement(text), f"run_tool:{tool_name}"
 
     def create_agent_conversation(self, *, call_timeout_seconds: float | None = None) -> str:

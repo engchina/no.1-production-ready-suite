@@ -232,6 +232,39 @@ class ChatProgressDetailCode(_DetailsBase):
     text: str = Field(min_length=1, max_length=DETAILS_CODE_MAX + 1)
 
 
+CALL_CONTENT_MAX = 64000
+
+
+class CallContent(_DetailsBase):
+    """呼び出し時点の内容。未記録と空の応答を区別する。"""
+
+    status: Literal["recorded", "truncated", "not_recorded", "withheld"] = "not_recorded"
+    text: str = Field(default="", max_length=CALL_CONTENT_MAX + 1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _safe(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        text, cut = _clip(data.get("text", ""), CALL_CONTENT_MAX)
+        return {
+            **data,
+            "text": text,
+            "status": "truncated" if cut else data.get("status", "not_recorded"),
+        }
+
+
+class CallDetails(_DetailsBase):
+    """入力・結果・Schema の snapshot。外部の telemetry には送らない。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, serialize_by_alias=True)
+
+    visibility: Literal["owner", "system_admin"] = "owner"
+    input: CallContent = Field(default_factory=CallContent)
+    output: CallContent = Field(default_factory=CallContent)
+    schema_: CallContent = Field(default_factory=CallContent, alias="schema")
+
+
 class ChatProgressStepDetails(_DetailsBase):
     """段を開いて見る詳細（3 製品共通。画面の `RunStepDetails` と同じ形。#2294）。
 
@@ -246,6 +279,7 @@ class ChatProgressStepDetails(_DetailsBase):
     code: list[ChatProgressDetailCode] = Field(
         default_factory=list, max_length=DETAILS_MAX_CODE_BLOCKS
     )
+    call: CallDetails | None = None
     truncated: bool | None = Field(default=None, description="送る側で長さを切った。")
 
     @model_validator(mode="before")
@@ -294,6 +328,7 @@ class ChatProgressStepDetails(_DetailsBase):
         ):
             truncated = True
         return {
+            **({"call": data["call"]} if data.get("call") is not None else {}),
             "fields": fields[:DETAILS_MAX_FIELDS],
             "lines": lines[:DETAILS_MAX_LINES],
             "code": code[:DETAILS_MAX_CODE_BLOCKS],
@@ -301,7 +336,7 @@ class ChatProgressStepDetails(_DetailsBase):
         }
 
     def is_empty(self) -> bool:
-        return not (self.fields or self.lines or self.code)
+        return not (self.fields or self.lines or self.code or self.call)
 
 
 def _as_items(value: object) -> list[Any]:

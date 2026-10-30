@@ -31,6 +31,7 @@ from uuid import uuid4
 
 from fastapi import Request
 from pr_backend_core.observability import request_id_var
+from pr_backend_core.observability.call_details import withhold_call_details
 from pr_backend_core.observability.mcp_trace import (
     incoming_mcp_traceparent,
     mcp_server_trace,
@@ -402,7 +403,9 @@ def _read_snapshot(
             spans,
             target_id=target_id,
             terminal=terminal,
-            details=record.span_details if record is not None else None,
+            details=withhold_call_details(record.span_details, allow_restricted=viewer is None)
+            if record is not None
+            else None,
         ),
         dropped_spans=dropped or None,
     )

@@ -36,6 +36,7 @@ from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from .api.validation import validation_tool_errors
+from .observability.tracing import observed_span
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +268,12 @@ class McpServer:
                 ),
             )
         try:
-            output = await _invoke(tool.handler, validated)
+            with observed_span(
+                "gen_ai.execute_tool", attributes={"gen_ai.tool.name": tool.name}
+            ) as span:
+                span.set_call_input(arguments, schema=tool.input_model.model_json_schema())
+                output = await _invoke(tool.handler, validated)
+                span.set_call_output(output)
         except McpToolError as exc:
             return _result(
                 request_id,

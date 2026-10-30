@@ -128,6 +128,8 @@ class OciEnterpriseAiClient(_SharedOciEnterpriseAiClient):
                 "gen_ai.request.model": str(payload.get("model") or ""),
             },
         ) as span:
+            span.set_call_input(payload, restricted=True)
             response = await super()._post_enterprise_ai(path, payload, vision=vision)
+            span.set_call_output(response)
             record_genai_usage(span, response.get("usage"))
             return response

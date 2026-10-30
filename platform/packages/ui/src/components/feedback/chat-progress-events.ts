@@ -1,4 +1,4 @@
-import type { RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
+import type { CallContent, CallDetails, RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
 import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
 import { isMcpProtocolSpan, traceSpanDisplayName, traceSpanFields } from "../../lib/trace-tree";
 import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
@@ -154,8 +154,18 @@ export function parseChatProgressStepDetails(value: unknown): RunStepDetails | u
     if (language) result.language = language;
     return [result];
   });
-  if (!fields.length && !lines.length && !code.length) return undefined;
+  const rawCall = record(source.call);
+  const readContent = (value: unknown): CallContent => {
+    const item = record(value);
+    const status = item?.status;
+    return status === "recorded" || status === "truncated"
+      ? { status, text: typeof item?.text === "string" ? item.text : "" }
+      : { status: status === "withheld" ? "withheld" : "not_recorded", text: "" };
+  };
+  const call: CallDetails | undefined = rawCall ? { input: readContent(rawCall.input), output: readContent(rawCall.output), schema: readContent(rawCall.schema) } : undefined;
+  if (!fields.length && !lines.length && !code.length && !call) return undefined;
   const details: RunStepDetails = {};
+  if (call) details.call = call;
   if (fields.length) details.fields = fields;
   if (lines.length) details.lines = lines;
   if (code.length) details.code = code;

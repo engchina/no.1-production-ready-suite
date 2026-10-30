@@ -922,7 +922,7 @@ export function RunTimeline({
                   {open ? (
                     <>
                       {details ? (
-                        <RunStepDetailsView details={details} labels={{ truncated: labels.stepDetailsTruncated }} />
+                        <RunStepDetailsView details={details} labels={{ truncated: labels.stepDetailsTruncated }} timing={{ startedAt: step.startedAt, finishedAt: step.finishedAt, durationMs: duration }} />
                       ) : null}
                       {step.children}
                     </>

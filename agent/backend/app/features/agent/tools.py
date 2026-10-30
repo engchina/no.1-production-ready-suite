@@ -903,12 +903,13 @@ def _post_mcp_attempts(
                         "http.request.method": "POST",
                         **_mcp_request_attributes(payload),
                     },
-                ),
+                ) as call_span,
                 httpx.Client(timeout=timeout, **http_client_options(url)) as client,
             ):
                 # traceparent は HTTP header と JSON-RPC の `params._meta`（OpenTelemetry の MCP の
                 # 置き場所）の両方に入れる（#3226）。呼び先（RAG / NL2SQL）はサービストークンの要求
                 # だけ親にし、呼び先の span がこの `mcp.request` の下につながる。
+                call_span.set_call_input(payload)
                 response = client.post(
                     url,
                     json=_with_trace_meta(payload),
@@ -918,6 +919,7 @@ def _post_mcp_attempts(
                 response.raise_for_status()
                 response_headers = response.headers
                 if response.status_code == 202 or not response.content:
+                    call_span.set_call_output(None)
                     return None, response_headers
                 data = _response_json_object(
                     response,
@@ -925,6 +927,7 @@ def _post_mcp_attempts(
                     service_label=service_label,
                     attempt=attempt,
                 )
+                call_span.set_call_output(data)
             return data, response_headers
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
             # 呼び先に届いていない（サービスが起動していない・URL が違う・ネットワーク）。

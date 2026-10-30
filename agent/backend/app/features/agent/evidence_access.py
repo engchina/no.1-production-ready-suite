@@ -21,6 +21,9 @@ import logging
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
+from pr_backend_core.chat_progress import ChatProgressStepDetails
+from pr_backend_core.observability.call_details import withhold_call_details
+
 from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ATTACHMENT_DOCUMENT_PREFIX,
@@ -258,6 +261,14 @@ def withhold_run(run: RunState, unreadable: frozenset[str]) -> RunState:
         return run.model_copy(update={"artifacts": project_validation_artifacts(run.artifacts)})
     return run.model_copy(
         update={
+            "span_details": {
+                key: ChatProgressStepDetails.model_validate(
+                    withhold_call_details(
+                        value.model_dump(by_alias=True), allow_restricted=False, all_calls=True
+                    )
+                )
+                for key, value in run.span_details.items()
+            },
             "steps": [_withhold_step(step, unreadable) for step in run.steps],
             "events": [_withhold_event(event, unreadable) for event in run.events],
             "artifacts": project_validation_artifacts(

@@ -22,7 +22,7 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import time_ns
-from typing import Literal
+from typing import Any, Literal
 
 from opentelemetry import context, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -489,6 +489,36 @@ class ObservedSpan:
         if self._changed is not None:
             self._changed()
 
+    def set_call_input(self, value: Any, *, schema: Any = None, restricted: bool = False) -> None:
+        """呼び出しの入力を製品の詳細にだけ保存する。"""
+        from .call_details import call_input
+
+        data = (
+            self.display.details.model_dump(by_alias=True)
+            if self.display and self.display.details
+            else {}
+        )
+        self.set_display(
+            details=ChatProgressStepDetails.model_validate(
+                {
+                    **data,
+                    "call": call_input(value, schema).model_copy(
+                        update={"visibility": "system_admin" if restricted else "owner"}
+                    ),
+                }
+            )
+        )
+
+    def set_call_output(self, value: Any) -> None:
+        """入力と既存の工程の詳細を保ち、返った結果を保存する。"""
+        from .call_details import call_content
+
+        if not self.display or not self.display.details or not self.display.details.call:
+            return
+        data = self.display.details.model_dump(by_alias=True)
+        data["call"]["output"] = call_content(value).model_dump()
+        self.set_display(details=ChatProgressStepDetails.model_validate(data))
+
     def finish(self) -> None:
         if self._finish is not None:
             self._finish()
@@ -622,6 +652,13 @@ def observed_span(
         ):
             yield observed
     except BaseException as exc:
+        if (
+            not observed.display
+            or not observed.display.details
+            or not observed.display.details.call
+            or observed.display.details.call.output.status == "not_recorded"
+        ):
+            observed.set_call_output({"error_type": type(exc).__name__})
         observed.set_attributes({"error.type": type(exc).__name__})
         cancelled = isinstance(exc, asyncio.CancelledError) or bool(
             cancellation_check and cancellation_check()

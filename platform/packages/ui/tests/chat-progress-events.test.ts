@@ -121,7 +121,7 @@ describe("契約（platform/contracts/chat-progress）", () => {
     ];
     expect(Object.keys(defs.ChatProgressStepEvent.properties).sort()).toEqual([...stepFields].sort());
     // 段の詳細（#2294）の形は共有 UI の `RunStepDetails` と同じ。
-    expect(Object.keys(defs.ChatProgressStepDetails.properties).sort()).toEqual(["code", "fields", "lines", "truncated"]);
+    expect(Object.keys(defs.ChatProgressStepDetails.properties).sort()).toEqual(["call", "code", "fields", "lines", "truncated"]);
     expect(Object.keys(defs.ChatProgressDetailField.properties).sort()).toEqual(["label", "mono", "value"]);
     expect(Object.keys(defs.ChatProgressDetailCode.properties).sort()).toEqual(["label", "language", "text"]);
     const terminalFields: (keyof ChatProgressTerminalEvent)[] = [
@@ -441,4 +441,14 @@ describe("深い木の実際の親 ID（#3790）", () => {
     expect(rows.find(row => row.id === "no-parent")?.level ?? 0).toBe(0);
     expect(rows).toHaveLength(13);
   });
+});
+
+it("呼び出しの入力・結果・Schema と閲覧制限を保持する", () => {
+  const content = { status: "recorded", text: "synthetic-input" };
+  const call = { input: content, output: { status: "withheld", text: "must-not-show" }, schema: { status: "truncated", text: "{}" } };
+  const parsed = parseChatProgressStepDetails({ call });
+  expect(parsed?.call?.input).toEqual(content);
+  expect(parsed?.call?.output).toEqual({ status: "withheld", text: "" });
+  expect(parsed?.call?.schema.status).toBe("truncated");
+  expect(parseChatProgressStepDetails({ fields: [{ label: "旧記録", value: "値" }] })?.call).toBeUndefined();
 });

@@ -3414,6 +3414,7 @@ async def get_run_trace(
     （`useTraceProgressSnapshot`）。
     """
     run = await run_in_threadpool(_readable_run, request, run_id)
+    run, _withheld = await _evidence_checked_run(request, run)
     spans: list[Any] = []
     if run.trace_id is not None:
         try:
