@@ -833,7 +833,7 @@ def test_table_vision_text_on_non_table_element_is_ignored() -> None:
     assert "説明" not in chunks[0].text
 
 
-def test_footer_role_survives_chunking_without_marking_neighboring_body():
+def test_footer_role_survives_chunking_without_marking_neighboring_body() -> None:
     from rag_parser_core.extraction import DocumentElement, StructuredExtraction
     from rag_pipeline_core.chunking import chunk_extraction_with_strategy
 
