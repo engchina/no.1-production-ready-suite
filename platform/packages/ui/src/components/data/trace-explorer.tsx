@@ -13,7 +13,7 @@ import { ListToolbar } from "./list-toolbar";
 import { LoadMoreFooter } from "./load-more-footer";
 import { formatRunDuration } from "./run-history";
 import { resolveRunDetailLabels, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
-import { RunStepDetailsView } from "./run-step-details";
+import { DEFAULT_RUN_STEP_DETAILS_LABELS, RunStepDetailsView } from "./run-step-details";
 
 const CATEGORY_ICON = { model: Bot, tool: Wrench, stage: Layers };
 const CATEGORY_BAR = { model: "bg-accent-emphasis", tool: "bg-warning-emphasis", stage: "bg-fg-subtle" };
@@ -97,7 +97,9 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
     if (!step) break;
     selectedParents.unshift(step); parent = step.parentId;
   }
-  const list = filtered.slice(0, limit);
+  // 選択した行を含む単位まで表示し、詳細から一覧へフォーカスを戻せるようにする。
+  const visibleLimit = Math.max(limit, Math.ceil((selectedIndex + 1) / 50) * 50);
+  const list = filtered.slice(0, visibleLimit);
   return <section className="@container grid min-w-0 gap-3" aria-label={labels.title} data-trace-explorer="">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 ref={headingRef} tabIndex={-1} className="text-sm font-semibold text-fg">{labels.title}</h3>
@@ -157,7 +159,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
                 </ol>
               </RunTimelineViewport>
             </div>
-            {list.length < filtered.length ? <LoadMoreFooter summary={labels.loaded(list.length, filtered.length)} hasMore onLoadMore={() => setLimit(value => value + 50)} loadMoreLabel={labels.more} retryLabel={labels.retry} /> : null}
+            {list.length < filtered.length ? <LoadMoreFooter summary={labels.loaded(list.length, filtered.length)} hasMore onLoadMore={() => setLimit(visibleLimit + 50)} loadMoreLabel={labels.more} retryLabel={labels.retry} /> : null}
           </div>
           <section className={cn("min-w-0 rounded-md border border-border bg-surface p-3 @4xl:sticky @4xl:top-3", mobileDetail ? "block" : "hidden @4xl:block")} aria-labelledby={`${id}-selected`} data-trace-inspector="">
             <div className="mb-3 flex flex-wrap justify-between gap-2">
@@ -170,6 +172,10 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
               <div className="my-2 flex flex-wrap items-center gap-2"><code className="min-w-0 break-all text-xs text-fg-muted">{selected.id}</code><CopyButton text={selected.id} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /></div>
               <p className="mb-3 text-xs text-fg-muted">{labels[traceCategory(selected)]} · {runLabels.stepStatus[selected.status]} · {formatRunDuration(durationOf(selected), runLabels.notRecorded)}</p>
               <RunStepDetailsView details={selected.details ?? {lines: [selected.detail ?? labels.noDetails]}} timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: durationOf(selected)}} />
+              {!selected.details?.call ? <RunStepDetailsView details={{ fields: [
+                { label: DEFAULT_RUN_STEP_DETAILS_LABELS.startedAt, value: selected.startedAt ?? runLabels.notRecorded },
+                { label: DEFAULT_RUN_STEP_DETAILS_LABELS.finishedAt, value: selected.finishedAt ?? runLabels.notRecorded },
+              ] }} /> : null}
               {selected.children}
             </> : null}
           </section>

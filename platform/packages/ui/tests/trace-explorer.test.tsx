@@ -59,3 +59,20 @@ describe("記録した値だけを使う軌跡", () => {
     } finally { act(() => root.unmount()); host.remove(); }
   });
 });
+
+it("先頭の表示範囲より後ろの失敗を選んでも一覧に選択行を残す", () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  try {
+    const longSteps = Array.from({length: 120}, (_, index) => ({...steps[1], id: `late-${index}`, status: index === 110 ? "failed" as const : "done" as const}));
+    act(() => root.render(<TraceExplorer steps={longSteps} onClose={() => {}} />));
+    expect(host.querySelector('[data-trace-record="late-110"] button[aria-pressed="true"]')).not.toBeNull();
+  } finally { act(() => root.unmount()); host.remove(); }
+});
+it("snapshot のない工程でも記録された開始・終了時刻を確認できる", () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  try {
+    act(() => root.render(<TraceExplorer steps={[steps[0]]} onClose={() => {}} />));
+    expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain(steps[0].startedAt);
+    expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain(steps[0].finishedAt);
+  } finally { act(() => root.unmount()); host.remove(); }
+});
