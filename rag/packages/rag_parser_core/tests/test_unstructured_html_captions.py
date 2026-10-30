@@ -117,6 +117,9 @@ def test_unstructured_html_adapter_restores_caption_from_original(monkeypatch):
     )
     result = _unstructured_adapter_result(data, source_profile=None, content_type="text/html")
     assert result.parser_backend == "unstructured"
+    assert (
+        result.extraction.parser_artifacts["unstructured_text_contract"] == "html_caption_grid_v1"
+    )
     assert result.extraction.tables[0].caption == "合成の表題Ａ"
     assert "合成の表題Ａ" in result.extraction.raw_text
 

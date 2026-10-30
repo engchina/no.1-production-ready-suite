@@ -334,3 +334,29 @@ def test_ingest_language_changes_invalidate_extraction_and_search_only_changes_d
         assert compute_extraction_recipe_id(SRC, settings) == original
     with bind_pack(resolve(builtin_pack(), {"labels": {"default_document_type": "合成資料"}})):
         assert compute_extraction_recipe_id(SRC, settings) != original
+
+
+def test_unstructured_text_contract_invalidates_old_cached_extraction() -> None:
+    from rag_parser_core.result import UNSTRUCTURED_TEXT_CONTRACT
+
+    from app.rag.variant_keys import KEY_VERSION, _digest, extraction_recipe_subset
+
+    settings = Settings(_env_file=None, rag_parser_adapter_backend="unstructured")
+    legacy = extraction_recipe_subset(settings)
+    assert legacy.pop("unstructured_text_contract") == UNSTRUCTURED_TEXT_CONTRACT
+    old_id = _digest(
+        "er",
+        {
+            "v": KEY_VERSION,
+            "src": SRC,
+            "language_pack_ingest_hash": current_pack().ingest_hash,
+            **legacy,
+            "rag_parser_asr_enabled": True,
+        },
+    )
+    current_id = compute_extraction_recipe_id(SRC, settings)
+    assert current_id != old_id
+    assert current_id == compute_extraction_recipe_id(SRC, settings)
+    assert "unstructured_text_contract" not in extraction_recipe_subset(
+        settings.model_copy(update={"rag_parser_adapter_backend": "docling"})
+    )
