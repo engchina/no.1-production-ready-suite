@@ -469,6 +469,7 @@ class IngestionQueueWorker:
         shutdown_grace_seconds: float | None = None,
         clock: Clock | None = None,
         sweep_document_cleanups: DocumentCleanupSweeper | None = None,
+        monotonic_clock: MonotonicClock | None = None,
     ) -> None:
         self._settings = settings
         self.worker_id = worker_id or new_worker_id()
@@ -482,6 +483,10 @@ class IngestionQueueWorker:
         self._sweep_document_cleanups = sweep_document_cleanups or _default_sweep_document_cleanups
         self._schema_ready = schema_ready or _default_schema_ready
         self._clock = clock or _utc_now
+        self._monotonic = monotonic_clock or (lambda: asyncio.get_running_loop().time())
+        self._startup_retry_at: dict[str, float] = {}
+        self._startup_failure_streak = 0
+        self._startup_resume_at = 0.0
         # 全体の枠と重い段(ファイル準備・抽出)の上限。auto は vCPU から決める(#2027)。
         self._concurrency_plan = settings.ingestion_queue_concurrency()
         self._concurrency = max(1, concurrency or self._concurrency_plan.total)
@@ -600,7 +605,7 @@ class IngestionQueueWorker:
         # free 枠を埋め、後ろの job が流れない(#357)。枠が埋まった段も同じ理由で除く。
         return await OracleClient().list_dispatchable_ingestion_jobs(
             limit=limit,
-            exclude_job_ids=sorted(self._inflight),
+            exclude_job_ids=sorted(self._inflight | self._cooling_job_ids()),
             exclude_phases=exclude_phases,
         )
 
@@ -706,6 +711,8 @@ class IngestionQueueWorker:
         重い段の job は、解析の区間が終わると重い段の枠を返し(``release_heavy_ingestion_slot``)、
         その後の LLM の応答待ちは全体の枠だけで数える(#2702)。
         """
+        if self._monotonic() < self._startup_resume_at:
+            return 0
         free = self._concurrency - len(self._inflight)
         if free <= 0:
             return 0
@@ -723,7 +730,7 @@ class IngestionQueueWorker:
             return 0
         dispatched = 0
         for job in jobs:
-            if job.id in self._inflight:
+            if job.id in self._inflight or job.id in self._cooling_job_ids():
                 continue
             if job.phase in INGESTION_HEAVY_PHASES:
                 if len(self._inflight_heavy) >= self._heavy_phase_concurrency:
@@ -731,7 +738,11 @@ class IngestionQueueWorker:
                 self._inflight_heavy.add(job.id)
             self._inflight.add(job.id)
             task = asyncio.create_task(
-                self._run_job(job.id, heavy=job.phase in INGESTION_HEAVY_PHASES)
+                self._run_job(
+                    job.id,
+                    heavy=job.phase in INGESTION_HEAVY_PHASES,
+                    expected_attempt_count=job.attempt_count,
+                )
             )
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
@@ -757,7 +768,47 @@ class IngestionQueueWorker:
         # 重い段の枠が空いたので次の重い段の job を取る。
         _WAKEUP.set()
 
-    async def _run_job(self, job_id: str, *, heavy: bool = False) -> None:
+    def _cooling_job_ids(self) -> set[str]:
+        now = self._monotonic()
+        self._startup_retry_at = {
+            job_id: due for job_id, due in self._startup_retry_at.items() if due > now
+        }
+        return set(self._startup_retry_at)
+
+    def _delay_startup_failure(self, job_id: str, attempt_count: int) -> None:
+        """起動失敗は job ごとに待ち、連続する全体障害では dispatch も休止する。"""
+        self._startup_failure_streak += 1
+        now = self._monotonic()
+        cap = max(self._poll_interval, self._recovery_interval)
+        delay = min(cap, self._poll_interval * 2 ** min(attempt_count, 20))
+        self._startup_retry_at[job_id] = now + delay
+        logger.warning(
+            "ingestion_worker_job_startup_failed",
+            extra={
+                "job_id": job_id,
+                "attempt_count": attempt_count + 1,
+                "retry_after_seconds": delay,
+            },
+        )
+        threshold = self._settings.ingestion_job_max_attempts
+        if self._startup_failure_streak >= threshold:
+            pause = min(
+                cap,
+                self._poll_interval * 2 ** min(self._startup_failure_streak - threshold, 20),
+            )
+            self._startup_resume_at = now + pause
+            # 失敗ごとの stack を繰り返さず、休止の単位で集約する。
+            logger.warning(
+                "ingestion_worker_startup_paused",
+                extra={
+                    "consecutive_failures": self._startup_failure_streak,
+                    "retry_after_seconds": pause,
+                },
+            )
+
+    async def _run_job(
+        self, job_id: str, *, heavy: bool = False, expected_attempt_count: int = 0
+    ) -> None:
         with bind_log_context(job_id=job_id, worker_id=self.worker_id):
             releaser = (
                 heavy_slot_releaser(lambda: self._release_heavy_slot(job_id))
@@ -767,6 +818,9 @@ class IngestionQueueWorker:
             try:
                 with releaser:
                     await self._job_runner(job_id)
+                self._startup_failure_streak = 0
+                self._startup_resume_at = 0.0
+                self._startup_retry_at.pop(job_id, None)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -779,7 +833,15 @@ class IngestionQueueWorker:
                     )
                     self._interrupted_on_stop = True
                     return
-                await _mark_running_job_failed(job_id, error=exc, lease_owner=self.worker_id)
+                startup_failure = await _mark_running_job_failed(
+                    job_id,
+                    error=exc,
+                    lease_owner=self.worker_id,
+                    expected_attempt_count=expected_attempt_count,
+                )
+                if startup_failure:
+                    self._delay_startup_failure(job_id, expected_attempt_count)
+                    return
                 logger.exception(
                     "ingestion_worker_job_failed",
                     extra={"job_id": job_id, **oracle_error_log_fields(exc)},
@@ -868,9 +930,16 @@ class IngestionQueueWorker:
 
 
 async def _mark_running_job_failed(
-    job_id: str, *, error: Exception, lease_owner: str | None = None
-) -> None:
+    job_id: str,
+    *,
+    error: Exception,
+    lease_owner: str | None = None,
+    expected_attempt_count: int = 0,
+) -> bool:
     """subprocess が落ちた時に RUNNING のまま放置しない。
+
+    起動失敗または記録不能なら True を返し、呼び出した worker が再起動を遅らせる。
+    QUEUED の job は取得時の試行回数に一致する場合だけ起動失敗を数える。
 
     - RUNNING の job は FAILED にする(RUNNING のときだけ書く。#305)。レシピの job は
       レシピ行だけを ERROR にし、文書(全レシピの集約)の status は変えない。文書単位の job は
@@ -880,27 +949,37 @@ async def _mark_running_job_failed(
       途絶えて別の worker が claim し直した job は、FAILED にも取り消しの後始末にもしない(#359)。
     """
     try:
-        # 循環 import を避けるため遅延 import する。
-        from app.api.routes.documents import _fail_ingestion_job, _restore_statuses_after_cancel
-
         oracle = OracleClient()
         job = await oracle.get_ingestion_job(job_id)
         if job is None:
-            return
+            return False
+        if job.status == IngestionJobStatus.QUEUED:
+            # 子と同じ route を import せずに、claim 前の失敗を永続化する。
+            await oracle.record_ingestion_startup_failure(
+                job,
+                expected_attempt_count=expected_attempt_count,
+            )
+            return True
+        # claim 済みの失敗・取消は既存の lease の判定と後始末に従う。
+        from app.api.routes.documents import _fail_ingestion_job, _restore_statuses_after_cancel
+
         if job.status == IngestionJobStatus.CANCELLED:
             await _restore_statuses_after_cancel(oracle, job, lease_owner=lease_owner)
-            return
+            return False
         if job.status != IngestionJobStatus.RUNNING:
-            return
+            return False
         message = str(error)[:500] or "取込ジョブ実行プロセスが異常終了しました。"
         failed = await _fail_ingestion_job(oracle, job, message, lease_owner=lease_owner)
         if failed and job.recipe_id is None:
             await oracle.update_document_status(job.document_id, FileStatus.ERROR, message)
-    except Exception:
-        logger.exception(
+        return False
+    except Exception as exc:
+        # 記録先が利用不能でも即時の再起動を避ける。例外の本文は公開しない。
+        logger.warning(
             "ingestion_worker_job_failure_mark_failed_failed",
-            extra={"job_id": job_id},
+            extra={"job_id": job_id, **oracle_error_log_fields(exc)},
         )
+        return True
 
 
 async def run_worker_process() -> None:
