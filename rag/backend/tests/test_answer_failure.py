@@ -24,6 +24,7 @@ from app.main import app
 from app.rag.answer_failure import (
     ANSWER_INCOMPLETE_ERROR_CODE,
     ANSWER_INCOMPLETE_ERROR_TYPE,
+    answer_error_identity,
     describe_answer_api_failure,
     describe_answer_failure,
 )
@@ -381,3 +382,21 @@ async def test_mcp_search_turns_the_classified_failure_into_a_tool_error(
         "error_type": "APIError",
         "stage": "回答の作成",
     }
+
+
+def test_wrapped_failure_identity_keeps_the_cause_without_its_message() -> None:
+    class SyntheticFailure(RuntimeError):
+        code = "SYNTHETIC_FAILURE"
+
+    cause = SyntheticFailure("秘密の本文を記録しない")
+    cause.code = "SYNTHETIC_FAILURE"
+    wrapped = AnswerExecutionError("秘密の本文を記録しない", "非公開の質問")
+    wrapped.__cause__ = cause
+    failure = describe_answer_failure(wrapped, "定型文")
+    assert failure.error_type == "SyntheticFailure"
+    assert failure.error_code == "SYNTHETIC_FAILURE"
+    assert failure.message == "定型文"
+    assert "秘密" not in json.dumps(failure.event_fields(), ensure_ascii=False)
+    # 原因の参照が循環しても、例外の本文を使わずに終える。
+    cause.__cause__ = wrapped
+    assert answer_error_identity(wrapped) == ("SyntheticFailure", "SYNTHETIC_FAILURE")
