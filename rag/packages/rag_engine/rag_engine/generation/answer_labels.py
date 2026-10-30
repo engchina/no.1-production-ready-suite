@@ -25,6 +25,9 @@ class AnswerLabels:
     confirmations_section: str
     confirmation_only_summary: str
     neutral_summary: str
+    insufficient_evidence_summary: str
+    empty_search_guidance: str
+    abstention_guidance: str
     citation_prefix: str
     deadline_summary: str
     off_goal_gap: str
@@ -161,6 +164,9 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         confirmations_section=text("confirmations_section"),
         confirmation_only_summary=text("confirmation_only_summary"),
         neutral_summary=text("neutral_summary"),
+        insufficient_evidence_summary=text("insufficient_evidence_summary"),
+        empty_search_guidance=text("empty_search_guidance"),
+        abstention_guidance=text("abstention_guidance"),
         citation_prefix=text("citation_prefix"),
         deadline_summary=text("deadline_summary"),
         off_goal_gap=text("off_goal_gap"),

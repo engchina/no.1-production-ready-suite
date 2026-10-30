@@ -387,3 +387,28 @@ test("入力上限で省略した根拠の案内を名前と説明で編集で�
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath(`budget-language-${testInfo.project.name}.png`), fullPage: true });
 });
+
+
+test("根拠不足の定型文はラベルと説明で編集でき、草稿に保存される", { tag: "@responsive" }, async ({ page }) => {
+  const values = {
+    insufficient_evidence_summary: "合成の根拠不足の案内です。",
+    empty_search_guidance: "合成の検索範囲の確認案内です。",
+    abstention_guidance: "合成の質問条件の確認案内です。",
+  };
+  const fields = Object.keys(values).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 1000 }));
+  const { saved } = await mockLanguagePack(page, { ...BUILTIN, answer_labels: values }, [...FIELDS, ...fields]);
+  await page.goto("/settings/language-pack");
+  await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "回答を確かめて表す" }).click();
+  for (const key of Object.keys(values) as (keyof typeof values)[]) {
+    const value = values[key];
+    const field = page.getByLabel(t(`settings.language.field.${key}`), { exact: true });
+    await expect(field).toHaveValue(value);
+    await expect(field).toHaveAccessibleDescription(t(`settings.language.field.${key}.help`));
+  }
+  const summary = page.getByLabel(t("settings.language.field.insufficient_evidence_summary"), { exact: true });
+  await summary.fill("合成の変更した案内です。");
+  await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
+  await expect.poll(() => saved.overrides).toEqual({ answer_labels: { insufficient_evidence_summary: "合成の変更した案内です。" } });
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("abstention-labels.png"), fullPage: true });
+});

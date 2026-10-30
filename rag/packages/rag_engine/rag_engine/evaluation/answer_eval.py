@@ -1086,7 +1086,8 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
 # 判定の指示・入力の形を変えたら上げる（判定が変わりうる版。記録の比較に使う）。
 # 11: 引用の接地と比較範囲の再利用（#3570・#3572）。
 # 12: 主張を段落ごとにその段落の出典の根拠だけで判定し、網羅を別の呼び出しにし、指示を判定の基準だけにした（#3576）。
-RUBRIC_VERSION = 12
+# 13: 根拠不足の定型の説明・確認案内を言語資源と照合し、事実の主張に数えない（#3131）。
+RUBRIC_VERSION = 13
 # 1 件の評価で同時に行う判定の呼び出しの数（網羅・正確性・段落ごとの主張）。
 JUDGE_MAX_CONCURRENCY = 4
 # 網羅を比較項目ごとに 1 回ずつ判定するか（偽は全項目を 1 回で判定する）。実モデルで同じ比較範囲を 2 回ずつ判定すると、
@@ -1271,6 +1272,9 @@ _NOTE_LABELS = (
     "marked_rules_section_note",
     "confirmation_only_summary",
     "deadline_summary",
+    "insufficient_evidence_summary",
+    "empty_search_guidance",
+    "abstention_guidance",
 )
 CONFIRMATION_ITEM_REASON = "回答を確定するための確認の項目（実データ・資料の確認の依頼）で、資料の内容の主張ではない。"
 
