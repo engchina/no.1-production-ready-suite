@@ -842,6 +842,7 @@ function createState() {
     answerNotice: { enabled: true, text: null } as { enabled: boolean; text: string | null },
     // チャットの添付を使うか（#2517。既定は無効）。
     chatAttachmentsEnabled: false,
+    traceRecordingEnabled: false,
     ociSettings: d.ociSettings as Json,
     // システムテーブルの状態（#751）。既定は旧版の DB（検索・回答プロファイルの表の削除を承認する前）。
     systemTables: clone(SYSTEM_TABLES_LEGACY) as Json,
@@ -3023,6 +3024,10 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         max_chars: 500,
         updated_at: null,
       };
+    }
+    if (at("settings", "trace-recording")) {
+      if (method === "PUT") state.traceRecordingEnabled = Boolean(body.enabled);
+      return { enabled: state.traceRecordingEnabled, updated_at: null };
     }
     if (at("settings", "chat-attachments")) {
       if (method === "PUT") state.chatAttachmentsEnabled = Boolean(body.enabled);
