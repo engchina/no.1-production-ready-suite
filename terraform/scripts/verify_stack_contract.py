@@ -20,8 +20,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTS = ("rag", "nl2sql", "agent")
-# Compute と ADB をサポートするリージョン（#660。us-chicago-1 はサポートしない）。
-SUPPORTED_REGIONS = ("ap-tokyo-1", "ap-osaka-1")
 PRIVATE_ACCESS = "プライベート・エンドポイント・アクセスのみ"
 ALLOWED_ACCESS = "許可されたIPおよびVCN限定のセキュア・アクセス"
 EVERYWHERE_ACCESS = "すべての場所からのセキュア・アクセス"
@@ -109,12 +107,13 @@ SUITE_DEPLOY_DIR = REPO_ROOT / "platform" / "deploy"
 # 製品を選ばないとフォームから消えるため、Resource Manager では任意入力にして Terraform の precondition で必須にする。
 ADMIN_PASSWORD_VARIABLE = "app_admin_login_user_password"
 ADMIN_PASSWORD_PRODUCTS = ("rag", "nl2sql", "agent")
-# Compute と ADB をサポートするリージョン（#660。us-chicago-1 はサポートしない）。
-SUPPORTED_REGIONS = ("ap-tokyo-1", "ap-osaka-1")
+# Compute と ADB の配備を許可するリージョン。
+SUPPORTED_REGIONS = ("ap-tokyo-1", "ap-osaka-1", "us-chicago-1")
 # Compute の OS は Oracle Linux 9（platform image の Oracle-Linux-9.8-2026.09.18-0。#1611）。OCID は固定する。
 ORACLE_LINUX_IMAGES = {
     "ap-tokyo-1": "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa",
     "ap-osaka-1": "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha",
+    "us-chicago-1": "ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a",
 }
 DEFAULT_IMAGE_REGION = "ap-osaka-1"
 # Oracle Linux のログインのユーザー。3 製品のプロセスもこのユーザーで動かす。
@@ -623,11 +622,11 @@ def _verify_schema(schema: str, variables: str) -> None:
     workload = _schema_variable(schema, "adb_workload")
     _require_all(
         workload,
-        ['- "OLTP"', '- "AJD"', '- "APEX"', '- "LH"', 'default: "LH"'],
+        ['- "OLTP"', '- "AJD"', '- "LH"', 'default: "LH"'],
         context="adb_workload schema",
     )
-    if '- "DW"' in workload:
-        raise AssertionError("Resource Manager workload options must not include DW")
+    if any(f'- "{value}"' in workload for value in ("DW", "APEX")):
+        raise AssertionError("Resource Manager workload options must not include DW or APEX")
     _require_all(
         _schema_variable(schema, "adb_is_mtls_connection_required"),
         ["type: boolean", "visible: false", "default: true"],
@@ -638,7 +637,7 @@ def _verify_schema(schema: str, variables: str) -> None:
         ["type: oci:core:ssh:publickey", "required: true", "visible: true", 'title: "SSHキーの追加"'],
         context="SSH public key schema",
     )
-    # Compute は ap-tokyo-1 / ap-osaka-1 だけをサポートする（#660）。image の選択肢もこの 2 つのリージョンだけにする。
+    # 対応する各リージョンの Compute image を選べるようにする。
     image_regions = set(
         re.findall(r"ocid1\.image\.oc1\.([a-z0-9-]+)\.", _schema_variable(schema, "instance_image_source_id"))
     )
@@ -705,7 +704,7 @@ def _verify_schema(schema: str, variables: str) -> None:
 def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str, outputs: str) -> None:
     _require_all(
         _terraform_variable(variables, "adb_workload"),
-        ['default     = "LH"', 'contains(["OLTP", "AJD", "APEX", "LH"], var.adb_workload)'],
+        ['default     = "LH"', 'contains(["OLTP", "AJD", "LH"], var.adb_workload)'],
         context="adb_workload",
     )
     _require_all(_terraform_variable(variables, "adb_db_version"), ['default     = "26ai"'], context="adb_db_version")

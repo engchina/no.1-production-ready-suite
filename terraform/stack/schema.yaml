@@ -334,7 +334,6 @@ variables:
     enum:
       - "OLTP"
       - "AJD"
-      - "APEX"
       - "LH"
     default: "LH"
 
@@ -618,6 +617,7 @@ variables:
     enum:
       - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa"
       - "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
+      - "ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a"
     default: "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
 
   instance_display_name:
