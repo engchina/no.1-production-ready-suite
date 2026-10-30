@@ -478,6 +478,46 @@ def test_range_repair_preserves_content_correction_within_configured_rounds(limi
         assert calls == ["GroundedDraftWire", "CitationRangeRepair"][: limit + 1]
 
 
+def test_unchanged_claim_recovers_previous_range_without_another_model_call() -> None:
+    spans = evidence()
+    old = run_first(spans, proposal(3, 3))
+    assert old.checked[0].confirmed
+    draft, restored = grounded.restore_previous_citation_ranges(QUESTION, proposal(0, 0), spans, old.checked, old.draft)
+    assert restored == [{"item_index": 0, "citation_index": 0}]
+    assert draft.items[0].citations[0]._wire_range == (3, 3)
+    assert draft.items[0].text == CLAIM
+
+
+@pytest.mark.parametrize("change", ["identity", "text", "claim", "condition", "source"])
+def test_previous_range_is_not_reused_after_claim_or_source_changes(change: str) -> None:
+    spans = evidence()
+    old = run_first(spans, proposal(3, 3))
+    candidate = proposal(0, 0)
+    if change == "identity":
+        spans = evidence(identity="other")
+    elif change == "source":
+        spans = evidence(source="other")
+    elif change == "text":
+        spans = evidence(text=LONG + "変更。")
+    else:
+        setattr(candidate.items[0], "text" if change == "claim" else "condition", "変更")
+    draft, restored = grounded.restore_previous_citation_ranges(QUESTION, candidate, spans, old.checked, old.draft)
+    assert not restored and draft.items[0].citations[0]._wire_range == (0, 0)
+
+
+def test_unchanged_claim_restores_heading_only_regression() -> None:
+    spans = evidence("1. 合成操作\n" + LONG)
+    spans[0]["section_path"] = ["1. 合成操作"]
+    spans[0]["section_path_sources"] = ["section_header"]
+    grounded.format_functions(spans)
+    old = run_first(spans, proposal(4, 4))
+    bad = proposal(1, 1)
+    checked, dropped = grounded.verify(QUESTION, bad, spans)
+    assert grounded.citation_range_issues(checked, dropped)[0]["reason_code"] == "citation_heading_only"
+    fixed, restored = grounded.restore_previous_citation_ranges(QUESTION, bad, spans, old.checked, old.draft)
+    assert restored and fixed.items[0].citations[0]._wire_range == (4, 4)
+
+
 def test_button_fallback_preserves_supported_steps_and_original_references() -> None:
     spans = evidence()
     draft = proposal(3, 3)
