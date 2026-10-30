@@ -758,3 +758,20 @@ def test_history_given_to_the_model_stays_in_the_thread(people: People) -> None:
     text = repr(history)
     assert "自分の会話の質問" in text
     assert "他の利用者の会話の質問" not in text and "自分の別の会話の質問" not in text
+
+
+def test_unreadable_source_also_withholds_call_snapshots() -> None:
+    from pr_backend_core.chat_progress import ChatProgressStepDetails
+    from pr_backend_core.observability.call_details import call_input
+
+    from app.features.agent.evidence_access import withhold_run
+
+    run = RunState(
+        id="synthetic-run", agent_id="synthetic", goal="synthetic", status=RunStatus.COMPLETED
+    )
+    run.span_details["a"] = ChatProgressStepDetails(
+        call=call_input({"input": "private-synthetic-input"})
+    )
+    view = withhold_run(run, frozenset({"doc-hidden"}))
+    assert "private-synthetic-input" not in str(view.span_details)
+    assert "private-synthetic-input" in str(run.span_details)

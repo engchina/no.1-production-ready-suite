@@ -53,7 +53,9 @@ async def test_stream_span_lives_until_consumption_and_records_known_usage() -> 
         assert child.attributes["pr.gen_ai.purpose"] == "agent.choose_action"
         assert child.attributes["gen_ai.usage.input_tokens"] == 12
         assert child.attributes["gen_ai.usage.output_tokens"] == 5
-        assert "private-payload" not in summary.model_dump_json()
+        assert "private-payload" not in str(child.attributes)
+        assert child.display and child.display.details and child.display.details.call
+        assert "private-payload" in child.display.details.call.input.text
     finally:
         shutdown_tracing()
 

@@ -70,6 +70,7 @@ from pr_backend_core.chat_history import (
     ChatHistoryBudget,
     build_chat_history,
 )
+from pr_backend_core.chat_progress import ChatProgressStepDetails
 from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.observability.genai import record_genai_usage
 from pr_backend_core.observability.mcp_trace import traceparent_links
@@ -646,6 +647,7 @@ class _ObservedStream:
                 # 応答がツールを求めたか・最終の回答かで、処理の経過の工程の種類を決める（#3226）。
                 _set_turn_kind(self._span, getattr(event, "response", None))
             if kind in {"response.completed", "response.incomplete", "response.failed"}:
+                self._span.set_call_output(getattr(event, "response", None))
                 self._exhausted = True
                 if kind != "response.completed":
                     self._span.set_status("failed")
@@ -669,6 +671,7 @@ class _ObservedStream:
             self._span.finish()
             raise
         except BaseException as exc:
+            self._span.set_call_output({"error_type": type(exc).__name__})
             self._span.set_attributes({"error.type": type(exc).__name__})
             self._span.set_status(
                 "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
@@ -729,6 +732,7 @@ def _model_input_attributes(request: Mapping[str, Any]) -> dict[str, int | str]:
 class _ObservedResponseManager:
     def __init__(self, inner: Any, request: Mapping[str, Any]) -> None:
         self._inner = inner
+        self._request = request
         self._scope = observed_span(
             "gen_ai.chat",
             kind="client",
@@ -742,7 +746,8 @@ class _ObservedResponseManager:
         )
 
     async def __aenter__(self) -> Any:
-        self._scope.__enter__()
+        span = self._scope.__enter__()
+        span.set_call_input(self._request)
         try:
             return await self._inner.__aenter__()
         except BaseException:
@@ -883,9 +888,11 @@ class _OciResponses:
                 **_model_input_attributes(request),
             },
         ) as span:
+            span.set_call_input(request)
             response = await self._inner.create(**request)
             if request.get("stream"):
                 return _ObservedStream(response, span)
+            span.set_call_output(response)
             span.set_attributes({"gen_ai.response.model": getattr(response, "model", None)})
             usage = getattr(response, "usage", None)
             if usage is not None:
@@ -2190,6 +2197,10 @@ class _ToolRecorder:
         )
         # ツールの中の MCP の呼び出しの行も、ツールの行と同じ表示名で出す（#3468）。
         with scope as tool_span, tool_title_scope(call.name, titles.get(call.name)):
+            if tool_span is not None:
+                tool_span.set_call_input(
+                    call.arguments, schema=definition.input_schema if definition else None
+                )
             result = await self._execute_handler(
                 step_id,
                 call,
@@ -2211,7 +2222,21 @@ class _ToolRecorder:
                     )
                 # 終わったツールの詳細（内部名・エラー・引数と結果）は終わりのイベントで送る
                 # （#2373）。
-                tool_span.set_display(details=tool_details(call, result))
+                captured = (
+                    tool_span.display.details.call
+                    if tool_span.display and tool_span.display.details
+                    else None
+                )
+                details = tool_details(call, result)
+                if captured is not None:
+                    tool_span.set_display(
+                        details=(details or ChatProgressStepDetails()).model_copy(
+                            update={"call": captured}
+                        )
+                    )
+                    tool_span.set_call_output(result)
+                else:
+                    tool_span.set_display(details=details)
             if follow_up is not None:
                 await follow_up(result)
         return result

@@ -509,6 +509,7 @@ class OciEnterpriseAiDirectClient:
                             },
                         )
                     )
+                    call_span.set_call_input(payload)
                     try:
                         # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ
                         # 送り直し、以後このモデルには送らない（#3539。platform の部品）。
@@ -517,6 +518,7 @@ class OciEnterpriseAiDirectClient:
                             client.build_request("POST", url, headers=headers, json=dict(payload)),
                         )
                     except httpx.TimeoutException as exc:
+                        call_span.set_call_output({"error_type": type(exc).__name__})
                         call_span.set_attributes({"error.type": type(exc).__name__})
                         call_span.set_status("failed")
                         attempt_scope.close()
@@ -534,6 +536,7 @@ class OciEnterpriseAiDirectClient:
                             timeout_seconds=timeout,
                         ) from exc
                     except httpx.HTTPError as exc:
+                        call_span.set_call_output({"error_type": type(exc).__name__})
                         call_span.set_attributes({"error.type": type(exc).__name__})
                         call_span.set_status("failed")
                         attempt_scope.close()
@@ -552,6 +555,9 @@ class OciEnterpriseAiDirectClient:
                             timeout_seconds=timeout,
                         ) from exc
                     if response.status_code >= 400:
+                        call_span.set_call_output(
+                            {"status_code": response.status_code, "body": response.text}
+                        )
                         call_span.set_attributes({"error.type": str(response.status_code)})
                         call_span.set_status("failed")
                     if response.status_code in retryable and attempt < retry_count:
@@ -595,6 +601,7 @@ class OciEnterpriseAiDirectClient:
                             upstream_request_id=_upstream_request_id(response),
                             attempts=attempt + 1,
                         )
+                    call_span.set_call_output(parsed)
                     record_genai_usage(call_span, parsed.get("usage"))
                     # 応答の検査の失敗の「詳細」に request id を出す（#1715）。
                     return _ResponseBody(parsed, upstream_request_id=_upstream_request_id(response))

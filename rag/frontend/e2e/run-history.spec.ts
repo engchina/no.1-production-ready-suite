@@ -1,3 +1,4 @@
+import { syntheticCallDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { mockTraceApi, ragSpan, savedSpanProgress, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
@@ -1397,4 +1398,37 @@ test("資料照合の実行状態は未照合にまとめず、一覧と詳細�
   }
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
+});
+
+test("呼び出しの詳細で入力・結果・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1);
+  await mockRuns(page, [row]);
+  await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
+    { key: "root", spec: ragSpan.root(), at: [0, 2] },
+    { key: "model", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [0, 1], details: { call: syntheticCallDetails } },
+  ]) });
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  await page.locator("[data-run-timeline-toggle]").first().click();
+  const pane = page.locator("[data-call-details]");
+  await pane.getByRole("tab", { name: "入力", exact: true }).click();
+  await expect(pane).toContainText("synthetic-call-input");
+  await pane.getByRole("tab", { name: "結果", exact: true }).click();
+  await expect(pane).toContainText("synthetic-call-output");
+  await pane.getByRole("tab", { name: "Schema", exact: true }).click();
+  await expect(pane).toContainText("synthetic-call-schema");
+  await expect(pane).toContainText("先頭だけ");
+  await pane.getByRole("tab", { name: "Schema", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(pane.getByRole("tab", { name: "計時", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(pane).toContainText("1000");
+  await expectNoPageOverflow(page);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => {
+      document.documentElement.classList.remove("light", "dark");
+      document.documentElement.dataset.theme = value;
+    }, theme);
+    await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
+  }
 });

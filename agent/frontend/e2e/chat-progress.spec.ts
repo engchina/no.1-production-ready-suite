@@ -1,3 +1,4 @@
+import { syntheticCallDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import type { Page } from "@playwright/test";
 
@@ -688,4 +689,31 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   expect(Object.keys(second).some((term) => term.startsWith("文脈の予算") || term.startsWith("圧縮") || term.includes("指紋"))).toBe(false);
   await expectNoHorizontalOverflow(page);
   await page.screenshot({path: testInfo.outputPath("history-model-call-context.png"), fullPage: true});
+});
+
+test("呼び出しの詳細で入力・結果・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const { progress: log } = seedRunningRun(mockApi);
+  log.step("chat-1", "done", { kind: "plan", details: { call: syntheticCallDetails } }).step("chat-2", "running");
+  await page.goto("/chat");
+  await openThread(page);
+  await page.getByTestId("chat-progress-step-chat-1-toggle").click();
+  const pane = page.locator("[data-call-details]");
+  await pane.getByRole("tab", { name: "入力", exact: true }).click();
+  await expect(pane).toContainText("synthetic-call-input");
+  await pane.getByRole("tab", { name: "結果", exact: true }).click();
+  await expect(pane).toContainText("synthetic-call-output");
+  await pane.getByRole("tab", { name: "Schema", exact: true }).click();
+  await expect(pane).toContainText("synthetic-call-schema");
+  await pane.getByRole("tab", { name: "Schema", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(pane.getByRole("tab", { name: "計時", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(pane).toContainText("開始時刻");
+  await expectNoHorizontalOverflow(page);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => {
+      document.documentElement.classList.remove("light", "dark");
+      document.documentElement.dataset.theme = value;
+    }, theme);
+    await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
+  }
 });

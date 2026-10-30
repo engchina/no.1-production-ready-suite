@@ -1,3 +1,6 @@
+import { useId, useState } from "react";
+import { Tabs, TabPanel } from "../ui/tabs";
+
 import { Info } from "lucide-react";
 
 import { cn } from "../../lib/utils";
@@ -33,7 +36,19 @@ export interface RunStepDetailCode {
   text: string;
 }
 
+export interface CallContent {
+  status: "recorded" | "truncated" | "not_recorded" | "withheld";
+  text: string;
+}
+
+export interface CallDetails {
+  input: CallContent;
+  output: CallContent;
+  schema: CallContent;
+}
+
 export interface RunStepDetails {
+  call?: CallDetails;
   fields?: readonly RunStepDetailField[];
   lines?: readonly string[];
   code?: readonly RunStepDetailCode[];
@@ -45,7 +60,7 @@ export interface RunStepDetails {
 export function hasRunStepDetails(details: RunStepDetails | null | undefined): details is RunStepDetails {
   if (!details) return false;
   return Boolean(
-    details.fields?.some((field) => field.label && field.value) ||
+    details.call || details.fields?.some((field) => field.label && field.value) ||
       details.lines?.some((line) => line) ||
       details.code?.some((block) => block.text)
   );
@@ -85,10 +100,34 @@ export function runStepDetailsJson(
 export interface RunStepDetailsLabels {
   /** 長さを切ったときの印。 */
   truncated: string;
+  overview: string;
+  input: string;
+  output: string;
+  schema: string;
+  notRecorded: string;
+  callDetails: string;
+  withheld: string;
+  snapshotNotice: string;
+  timing: string;
+  startedAt: string;
+  finishedAt: string;
+  duration: string;
 }
 
 export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
   truncated: "長い内容は先頭だけを表示しています。",
+  timing: "計時",
+  startedAt: "開始時刻",
+  finishedAt: "終了時刻",
+  duration: "所要時間（ms）",
+  overview: "概要",
+  input: "入力",
+  output: "結果",
+  schema: "Schema",
+  notRecorded: "この内容は記録されていません。",
+  callDetails: "呼び出しの詳細",
+  withheld: "現在の権限では、この内容を表示できません。",
+  snapshotNotice: "呼び出し時点の記録です。秘密の値・画像の実体は省略しています。",
 };
 
 export interface RunStepDetailsViewProps {
@@ -96,13 +135,14 @@ export interface RunStepDetailsViewProps {
   labels?: Partial<RunStepDetailsLabels>;
   className?: string;
   testId?: string;
+  timing?: { startedAt?: string | null; finishedAt?: string | null; durationMs?: number | null };
 }
 
 /**
  * 段の詳細を描く（`RunTimeline` の行を開いた中身）。見出しと値 → 行 → コードの箱 → 省略の印の順。
  * コードの箱は高さを止めて中でスクロールし、キーボードでもスクロールできるよう focus を受ける。
  */
-export function RunStepDetailsView({ details, labels: labelsInput, className, testId }: RunStepDetailsViewProps) {
+function RunStepDetailsBody({ details, labels: labelsInput, className, testId }: RunStepDetailsViewProps) {
   const labels = { ...DEFAULT_RUN_STEP_DETAILS_LABELS, ...labelsInput };
   const fields = (details.fields ?? []).filter((field) => field.label && field.value);
   const lines = (details.lines ?? []).filter(Boolean);
@@ -159,4 +199,33 @@ export function RunStepDetailsView({ details, labels: labelsInput, className, te
       ) : null}
     </div>
   );
+}
+
+/** 呼び出しの内容は選んだタブだけ描画し、大きい JSON を同時に展開しない。 */
+export function RunStepDetailsView(props: RunStepDetailsViewProps) {
+  const [tab, setTab] = useState("overview");
+  const id = useId();
+  const labels = { ...DEFAULT_RUN_STEP_DETAILS_LABELS, ...props.labels };
+  const call = props.details.call;
+  if (!call) return <RunStepDetailsBody {...props} />;
+  const content = tab === "input" ? call.input : tab === "output" ? call.output : call.schema;
+  return <div className="grid min-w-0 gap-2" data-call-details="" data-testid={props.testId}>
+    <Tabs idPrefix={id} ariaLabel={labels.callDetails} value={tab} onChange={setTab} items={[
+      { id: "overview", label: labels.overview }, { id: "input", label: labels.input },
+      { id: "output", label: labels.output }, { id: "schema", label: labels.schema },
+      { id: "timing", label: labels.timing },
+    ]} />
+    <TabPanel idPrefix={id} id={tab} value={tab}>
+      {tab === "overview" ? <RunStepDetailsBody {...props} testId={undefined} /> :
+        tab === "timing" ? <RunStepDetailsBody details={{ fields: [
+          { label: labels.startedAt, value: props.timing?.startedAt ?? labels.notRecorded },
+          { label: labels.finishedAt, value: props.timing?.finishedAt ?? labels.notRecorded },
+          { label: labels.duration, value: props.timing?.durationMs == null ? labels.notRecorded : String(props.timing.durationMs) },
+        ] }} labels={labels} /> :
+        content.status === "withheld" ? <p className="text-xs text-fg-muted">{labels.withheld}</p> :
+        content.status === "not_recorded" ? <p className="text-xs text-fg-muted">{labels.notRecorded}</p> :
+        <RunStepDetailsBody details={{ code: [{ text: content.text === "" ? '""' : content.text, language: "json", label: labels[tab as "input" | "output" | "schema"] }], truncated: content.status === "truncated" }} labels={labels} />}
+    </TabPanel>
+    <p className="text-xs text-fg-muted">{labels.snapshotNotice}</p>
+  </div>;
 }

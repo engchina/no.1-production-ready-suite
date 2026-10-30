@@ -1,5 +1,56 @@
 {
   "$defs": {
+    "CallContent": {
+      "additionalProperties": false,
+      "description": "呼び出し時点の内容。未記録と空の応答を区別する。",
+      "properties": {
+        "status": {
+          "default": "not_recorded",
+          "enum": [
+            "recorded",
+            "truncated",
+            "not_recorded",
+            "withheld"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 64001,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "title": "CallContent",
+      "type": "object"
+    },
+    "CallDetails": {
+      "additionalProperties": false,
+      "description": "入力・結果・Schema の snapshot。外部の telemetry には送らない。",
+      "properties": {
+        "visibility": {
+          "default": "owner",
+          "enum": [
+            "owner",
+            "system_admin"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/CallContent"
+        },
+        "output": {
+          "$ref": "#/$defs/CallContent"
+        },
+        "schema": {
+          "$ref": "#/$defs/CallContent"
+        }
+      },
+      "title": "CallDetails",
+      "type": "object"
+    },
     "ChatProgressDetailCode": {
       "additionalProperties": false,
       "description": "詳細の長い値（SQL・ツールの引数と結果の JSON）。画面は箱の中でスクロールして出す。",
@@ -127,6 +178,17 @@
           "maxItems": 3,
           "title": "Code",
           "type": "array"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallDetails"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "truncated": {
           "anyOf": [

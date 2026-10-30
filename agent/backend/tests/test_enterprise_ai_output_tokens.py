@@ -339,3 +339,21 @@ def test_tiny_incomplete_is_not_resent_when_disabled(
     with pytest.raises(BuiltinRuntimeError):
         anyio.run(call)
     assert len(inner.requests) == 1
+
+
+def test_sdk_call_snapshot_records_input_and_response() -> None:
+    from pr_backend_core.observability.tracing import operation_trace
+
+    responses = builtin_runtime._OciResponses(
+        _Inner(_Response({"status": "completed", "output_text": "synthetic-result"}))
+    )
+
+    async def call() -> Any:
+        return await responses.create(model="m", input="synthetic-input", max_output_tokens=32768)
+
+    with operation_trace("synthetic", operation_id="a") as trace:
+        anyio.run(call)
+    span = next(s for s in trace.spans if s.operation_name == "gen_ai.chat")
+    assert span.display and span.display.details and span.display.details.call
+    assert "synthetic-input" in span.display.details.call.input.text
+    assert "synthetic-result" in span.display.details.call.output.text

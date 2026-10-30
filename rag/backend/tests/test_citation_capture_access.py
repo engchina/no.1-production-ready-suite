@@ -112,3 +112,20 @@ async def test_single_acl_query_unions_capture_citations_and_other_diagnostics()
     assert count == 1
     assert result == {"other": value["other"]}
     assert value == original
+
+
+@pytest.mark.asyncio
+async def test_unscoped_call_snapshot_is_not_exposed_to_regular_viewer() -> None:
+    from pr_backend_core.chat_progress import ChatProgressStepDetails
+    from pr_backend_core.observability.call_details import call_input
+
+    call = call_input({"input": "private-synthetic-input"}).model_copy(
+        update={"visibility": "system_admin"}
+    )
+    diagnostics = {
+        "trace": {"span_details": {"a": ChatProgressStepDetails(call=call).model_dump()}}
+    }
+    _, _, visible = await withhold_saved_answer(ReadableDocuments(set()), [], diagnostics)
+    assert "private-synthetic-input" not in str(visible)
+    assert "withheld" in str(visible)
+    assert "private-synthetic-input" in str(diagnostics)

@@ -8,7 +8,7 @@
 - Select AI Agent の team が使えず tool の直接の実行に切り替えたとき、2 つの呼び出し
   （`oracle.select_ai`）は生成の工程の下の兄弟で、切り替える前の呼び出しは失敗。
 - MCP の `nl2sql_query`: 回答前の確認の LLM の呼び出しは確認の工程（`nl2sql.requirement`）の子、
-  ジョブは確認の工程の外（受けた server の span の子）で作る。
+  ジョブは確認の工程の外（ツールの span の子）で作る。
 
 LLM は OCI Enterprise AI の実の client を httpx の mock で、DB は fake の接続で動かす。
 """
@@ -210,7 +210,9 @@ def test_mcp_query_confirms_the_requirement_in_its_own_stage(
     [server] = [row for row in rows if row["name"] == "mcp.server"]
     # Agent の `tools/call` の mcp.request の下につながる。
     assert server["parent_span_id"] == "5" * 16
-    [requirement] = _children(rows, server)
+    [tool] = _children(rows, server)
+    assert tool["name"] == "gen_ai.execute_tool"
+    [requirement] = _children(rows, tool)
     assert requirement["name"] == "nl2sql.requirement"
     assert requirement["display_kind"] == REQUIREMENT_STAGE
     assert requirement["status"] == "done"
@@ -220,8 +222,8 @@ def test_mcp_query_confirms_the_requirement_in_its_own_stage(
     # 確認の LLM の呼び出しは確認の工程の子。
     [chat] = [row for row in rows if row["name"] == "gen_ai.chat"]
     assert chat["parent_span_id"] == requirement["span_id"]
-    # ジョブは確認の工程の外で作る（ジョブの root は server の span の子。確認の工程の兄弟）。
-    assert job_parent == server["span_id"]
+    # ジョブは確認の工程の外で作る（ジョブの root はツールの span の子。確認の工程の兄弟）。
+    assert job_parent == tool["span_id"]
 
 
 def test_mcp_query_without_the_requirement_ai_skips_the_stage(
@@ -234,6 +236,8 @@ def test_mcp_query_without_the_requirement_ai_skips_the_stage(
     rows, job_parent = _query_from_agent(users, fake_service, trace_table, monkeypatch)
 
     [server] = [row for row in rows if row["name"] == "mcp.server"]
-    [requirement] = _children(rows, server)
+    [tool] = _children(rows, server)
+    assert tool["name"] == "gen_ai.execute_tool"
+    [requirement] = _children(rows, tool)
     assert (requirement["name"], requirement["status"]) == ("nl2sql.requirement", "skipped")
-    assert job_parent == server["span_id"]
+    assert job_parent == tool["span_id"]
