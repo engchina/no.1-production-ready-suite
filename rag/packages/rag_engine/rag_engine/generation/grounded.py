@@ -4554,8 +4554,9 @@ class CitationView:
     contract_version: str
     provenance_json: str
     rendered: str
-    model_rendered: str
     view_sha256: str
+    # 描画から導く送信用の文字列。原文・引用単位・hashで版を比較し、派生値は比較しない。
+    model_rendered: str = field(default="", compare=False)
     present_in_prompt: bool | None = field(default=None, compare=False)
 
 
@@ -4594,8 +4595,8 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
             sort_keys=True,
         ),
         rendered,
-        displayed,
         hashlib.sha256(displayed.encode()).hexdigest(),
+        displayed,
     )
 
 
@@ -6811,7 +6812,7 @@ def run_round(
     ]
 
     def snapshot_row(view: CitationView) -> dict[str, Any]:
-        canonical_block = view.model_rendered
+        canonical_block = view.model_rendered or neutralize_boundary_markers(fold_width(view.rendered))
         prompt_block = next((block for block in (view.rendered, canonical_block) if block in prompt), None)
         return {
             "display_id": view.label,
