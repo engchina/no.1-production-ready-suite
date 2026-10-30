@@ -837,6 +837,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     snapshot["stream"] = True
                 observation.request(snapshot, schema=snapshot["text"]["format"])
                 wire_request = _audit_wire_request(request)
+                capture = CallStreamCapture(observation.response) if streamed else None
                 if streamed:
                     response, timing = _stream_parsed(
                         _openai_client_for_provider(provider, settings),
@@ -844,12 +845,13 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                         settings,
                         limits,
                         runaway=runaway,
-                        capture=CallStreamCapture(observation.response),
+                        capture=capture,
                     )
                 else:
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
                     response = client.responses.create(**wire_request) if is_audit_wire(text_format) else client.responses.parse(**request)
-                observation.response(response)
+                if capture is None or not capture.has_terminal:
+                    observation.response(response)
                 usage = _value(response, "usage")
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
                 if detect_runaway and not streamed and (cutoff := _runaway_response_reason(response)):

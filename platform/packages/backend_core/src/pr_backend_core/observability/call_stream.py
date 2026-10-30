@@ -25,6 +25,10 @@ class CallStreamCapture:
         self._terminal = False
 
     @property
+    def has_terminal(self) -> bool:
+        return self._terminal
+
+    @property
     def has_content(self) -> bool:
         return bool(self._parts)
 
