@@ -6,10 +6,13 @@
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -172,19 +175,43 @@ def find_uploaded_file(output_dir: str | Path, key: str) -> UploadedFile | None:
     return next((item for item in list_uploaded_files(output_dir, limit=None) if item.key == str(key or "")), None)
 
 
-def materialize_uploaded_file(output_dir: str | Path, uploaded: UploadedFile) -> Path:
-    """保存済みの source.pdf を元のファイル名で一時領域へ複製し、そのパスを返します。
+def _materialized_directory(output_dir: str | Path, uploaded: UploadedFile) -> Path:
+    workspace = hashlib.sha256(str(Path(output_dir).resolve()).encode()).hexdigest()
+    identity = hashlib.sha256(uploaded.key.encode()).hexdigest()
+    return Path(tempfile.gettempdir()) / "rag_engine_uploaded_files" / workspace / identity
 
-    run 内の名前は `source.pdf` に固定されている。そのまま入力欄へ渡すと別名のファイルとして扱われ、
-    保存済みの解析結果・チャンクの復元（ファイル名も照合する）が働かない。
-    """
-    source = Path(output_dir) / uploaded.run_ids[0] / SOURCE_FILE_NAME
-    target_dir = Path(tempfile.gettempdir()) / "rag_engine_uploaded_files" / uploaded.sha256[:16]
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / Path(uploaded.file_name).name
-    if not target.is_file() or target.stat().st_size != source.stat().st_size:
-        shutil.copyfile(source, target)
-    return target
+
+@contextmanager
+def _uploaded_file_lock(output_dir: str | Path, uploaded: UploadedFile) -> Iterator[Path]:
+    target = _materialized_directory(output_dir, uploaded)
+    # 複製先を消しても lock の inode を残し、待機中の複製・削除が別の lock を取らないようにする。
+    lock_dir = target.parent / ".locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    with (lock_dir / (target.name + ".lock")).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield target
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def materialize_uploaded_file(output_dir: str | Path, uploaded: UploadedFile) -> Path:
+    """保存済みの原本を元の名前で複製する。作業領域・内容・ファイル名ごとに複製と削除を直列化する。"""
+    with _uploaded_file_lock(output_dir, uploaded) as target_dir:
+        source = Path(output_dir) / uploaded.run_ids[0] / SOURCE_FILE_NAME
+        size = source.stat().st_size
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / Path(uploaded.file_name).name
+        if not target.is_file() or target.stat().st_size != size:
+            # 書きかけのファイルを既存の読取側へ公開しない。
+            with tempfile.NamedTemporaryFile(dir=target_dir, delete=False) as temporary:
+                staging = Path(temporary.name)
+            try:
+                shutil.copyfile(source, staging)
+                staging.replace(target)
+            finally:
+                staging.unlink(missing_ok=True)
+        return target
 
 
 def delete_uploaded_file(
@@ -199,33 +226,34 @@ def delete_uploaded_file(
     ADB を先に消す。失敗したら例外を伝播し、ローカルには触れない（消し残しを同じ操作で再実行できる）。
     ADB が未設定（settings.adb_settings が None）の場合はローカルだけを削除する。
     """
-    root = Path(output_dir).resolve()
-    run_dirs = [root / run_id for run_id in uploaded.run_ids]
-    # 一覧由来の run ID だけを対象にするが、削除の直前にも output_dir の直下であることを確認する。
-    if any(not RUN_ID_PATTERN.fullmatch(path.name) or path.resolve().parent != root for path in run_dirs):
-        raise ValueError("削除対象の run が出力ディレクトリの外を指しています。")
+    with _uploaded_file_lock(output_dir, uploaded) as target_dir:
+        root = Path(output_dir).resolve()
+        run_dirs = [root / run_id for run_id in uploaded.run_ids]
+        # 一覧由来の run ID だけを対象にするが、削除の直前にも output_dir の直下であることを確認する。
+        if any(not RUN_ID_PATTERN.fullmatch(path.name) or path.resolve().parent != root for path in run_dirs):
+            raise ValueError("削除対象の run が出力ディレクトリの外を指しています。")
 
-    database_deleted: int | None = None
-    if getattr(settings, "adb_settings", None) is not None:
-        if delete_documents is None:
-            from rag_engine.adapters.oracle.store import delete_source_documents as delete_documents
-        database_deleted = delete_documents(
-            settings,
-            source_file_sha256=uploaded.sha256,
-            source_file_name=uploaded.file_name,
-            document_ids=_document_ids(root, uploaded),
-        )
+        database_deleted: int | None = None
+        if getattr(settings, "adb_settings", None) is not None:
+            if delete_documents is None:
+                from rag_engine.adapters.oracle.store import delete_source_documents as delete_documents
+            database_deleted = delete_documents(
+                settings,
+                source_file_sha256=uploaded.sha256,
+                source_file_name=uploaded.file_name,
+                document_ids=_document_ids(root, uploaded),
+            )
 
-    # 一覧取得後に別セッションで消えた run や、前回の削除が途中で失敗した後の再実行では、run が既に無いことがある。
-    # 無いものは飛ばし、残りを消す（同じ操作で再実行できる契約を守る。#827）。
-    removed = 0
-    for run_dir in run_dirs:
-        if run_dir.is_dir():
-            shutil.rmtree(run_dir, ignore_errors=False)
-            removed += 1
-    shutil.rmtree(root / PARSE_INPUT_DIRECTORY / filename_key(uploaded.file_name), ignore_errors=True)
-    shutil.rmtree(Path(tempfile.gettempdir()) / "rag_engine_uploaded_files" / uploaded.sha256[:16], ignore_errors=True)
-    return UploadedFileDeletion(uploaded.file_name, removed, database_deleted)
+        # 一覧取得後に別セッションで消えた run や、前回の削除が途中で失敗した後の再実行では、run が既に無いことがある。
+        # 無いものは飛ばし、残りを消す（同じ操作で再実行できる契約を守る。#827）。
+        removed = 0
+        for run_dir in run_dirs:
+            if run_dir.is_dir():
+                shutil.rmtree(run_dir, ignore_errors=False)
+                removed += 1
+        shutil.rmtree(root / PARSE_INPUT_DIRECTORY / filename_key(uploaded.file_name), ignore_errors=True)
+        shutil.rmtree(target_dir, ignore_errors=True)
+        return UploadedFileDeletion(uploaded.file_name, removed, database_deleted)
 
 
 def _document_ids(output_dir: Path, uploaded: UploadedFile) -> list[str]:
