@@ -65,7 +65,7 @@ def test_query_keeps_explicit_single_character_items_without_wildcard(sudachi):
 
 def selected_spans():
     records = [replace(PARENT, id=f"noise{i}", chunk_uid=f"noise:{i}", text="検索画面の項目の検索語。" * 200) for i in range(14)]
-    return evidence_spans(QUESTION, [*records, PARENT], anchors=[CHILD])
+    return evidence_spans(QUESTION, [*records, PARENT], anchors=[CHILD], budget=48000)
 
 
 def test_saved_retrieval_keeps_both_definitions_and_child_page_in_budget():

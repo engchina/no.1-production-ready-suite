@@ -4378,6 +4378,9 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         "round_budget": dict((result.generation_trace or {}).get("round_budget") or {}),
         # 根拠の文字予算の設定値・実際に使った値・送った根拠ブロックの文字数(#3776。数値だけ)。
         "evidence_budget": dict((result.generation_trace or {}).get("evidence_budget") or {}),
+        "generation_input_budget": dict(
+            (result.generation_trace or {}).get("generation_input_budget") or {}
+        ),
         "evidence_refinement": dict(
             (result.generation_trace or {}).get("evidence_refinement") or {}
         ),

@@ -1053,6 +1053,8 @@ export const ja = {
   "settings.language.field.confirmations_section.help": "回答を確定するために確認することの節の見出しです。",
   "settings.language.field.confirmation_only_summary": "確認だけの前置き",
   "settings.language.field.confirmation_only_summary.help": "資料だけでは回答を確定できないときの前置きです。",
+  "settings.language.field.answer_evidence_budget_limited": "入力の上限で省略した根拠の案内",
+  "settings.language.field.answer_evidence_budget_limited.help": "回答への入力の上限で根拠を省いたときの案内です。{count} を省略した件数に置き換えます。",
   "settings.language.field.neutral_summary": "断定しない前置き",
   "settings.language.field.neutral_summary.help": "結論を確かめられないときに使う、断定しない前置きです。",
   "settings.language.field.citation_prefix": "出典の前置き",

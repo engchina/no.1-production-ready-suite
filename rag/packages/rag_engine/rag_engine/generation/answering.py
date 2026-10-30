@@ -2573,8 +2573,12 @@ def synthesize_grounded_answer(
     生成した根拠計画の構造が不正な場合だけ、1回修正する。
     """
     from rag_engine.generation import grounded
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, fit_generation_evidence
     from rag_engine.models.llm import GroundedItem
 
+    best_input_budget: dict[str, Any] = {}
+    input_diagnostic: dict[str, Any] = {}
     if crag_assessment is not None:
         gate_spans = _grounded_spans(
             question,
@@ -2718,22 +2722,29 @@ def synthesize_grounded_answer(
         crag_view = crag_generation.generation_view(
             crag_assessment, spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
         )
-        prompt = _grounded_prompt(
-            question,
-            spans,
-            context,
-            images,
-            feedback,
-            question_plan,
-            runtime_knowledge,
-            inquiry_conditions,
-            query_expansion,
-            template=template,
-            known_gaps=known_gaps,
-            field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, spans),
-            crag_assessment=crag_view,
-            confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
-        )
+
+        round_inputs = (context, images, feedback, runtime_knowledge, field_kinds, resolved_conditions, crag_view)
+
+        def render_generation(selected: Sequence[dict[str, Any]], frozen: tuple[Any, ...] = round_inputs) -> str:
+            context, images, feedback, runtime_knowledge, field_kinds, resolved_conditions, crag_view = frozen
+            return _grounded_prompt(
+                question,
+                selected,
+                context,
+                images,
+                feedback,
+                question_plan,
+                runtime_knowledge,
+                inquiry_conditions,
+                query_expansion,
+                template=template,
+                known_gaps=known_gaps,
+                field_kind_note=form_field_kinds.prompt_note(field_kinds, resolved_conditions, selected),
+                crag_assessment=crag_view,
+                confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
+            )
+
+        prompt = render_generation(spans)
         with (
             budget.round(),
             _execution_step(
@@ -2751,6 +2762,35 @@ def synthesize_grounded_answer(
             try:
                 # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
                 # 呼び出しにだけ使う)。
+                generation_system = grounded.resolve_prompt("generation.system", grounded.GENERATE_SYSTEM_PROMPT)
+                if runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed:
+                    generation_system += grounded.continue_prompt_steps(
+                        generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
+                    )
+                previous_ids = {
+                    citation.evidence_id for item in (best[0].draft.items if best is not None else ()) for citation in item.citations
+                }
+                # 保存された草稿は表示IDを使う場合もあるため、実体IDへ解決して保護する。
+                required_sources = {
+                    source for step_id, _title, sources in guide_steps if step_id not in guide_optional_steps for source in sources
+                }
+                protected_ids = {
+                    span["evidence_id"]
+                    for span in spans
+                    if span["label"] in previous_ids
+                    or span["evidence_id"] in previous_ids
+                    or required_sources.intersection({span.get("source_id"), *(span.get("source_aliases") or ())})
+                }
+                spans, prompt, input_diagnostic = fit_generation_evidence(
+                    spans,
+                    generation_settings,
+                    render=render_generation,
+                    evidence_text=grounded.evidence_block_text,
+                    system=generation_system,
+                    schema=generation_draft_wire_model().model_json_schema(),
+                    provider_id=provider,
+                    protected_ids=protected_ids,
+                )
                 current = generate_round(
                     spans, prompt, previous_round=best[0] if best is not None else None, round_knowledge=runtime_knowledge
                 )
@@ -2768,7 +2808,10 @@ def synthesize_grounded_answer(
                 cut = budget.cut_round(number, has_draft=best is not None)
                 # 1 組目の生成の出力が再実行の後も契約を満たさなかった（#3849）。根拠は回答に渡すと決めた後なので、
                 # 回答全体を失敗にせず、草稿の無い round で関係する資料の記載を示す。
-                invalid_draft = best is None and not cut and isinstance(exc, grounded.DraftGenerationInvalid)
+                input_limited = isinstance(exc, GenerationInputBudgetExceeded)
+                if input_limited:
+                    input_diagnostic = exc.diagnostic
+                invalid_draft = best is None and not cut and (isinstance(exc, grounded.DraftGenerationInvalid) or input_limited)
                 if best is None and not cut and not invalid_draft:
                     raise
                 # 生成の出力の不合格は、包む前の例外の型名（InvalidStructuredOutput・ValidationError）で残す。
@@ -2780,20 +2823,29 @@ def synthesize_grounded_answer(
                         "error": error_name,  # 例外の型の名前だけ（本文は残さない。#3259）
                         "accepted": False,
                         "audit_calls": 0,
+                        **({"timing": {"generation_calls": 0}} if input_limited else {}),
                         **({"deadline_cut": True} if cut else {}),
                     }
                 )
                 if invalid_draft:
                     generation_failure = error_name
                     best = (
-                        grounded.timed_out_round(question, reason="生成の出力が構造化出力の契約を満たさなかった"),
+                        grounded.timed_out_round(
+                            question,
+                            reason="モデルの入力予算に必須の根拠または指示が入らない"
+                            if input_limited
+                            else "生成の出力が構造化出力の契約を満たさなかった",
+                        ),
                         context,
                         spans,
                         images,
                         mode,
                     )
                     step.result(
-                        f"回答文の生成の出力が形式の検査を通らなかったため、質問に関係する資料の記載だけを示します（{generation_failure}）"
+                        "モデルの入力予算に必須の根拠または指示が入らないため、生成を送信せず資料の記載を示します"
+                        if input_limited
+                        else "回答文の生成の出力が形式の検査を通らなかったため、"
+                        f"質問に関係する資料の記載だけを示します（{generation_failure}）"
                     )
                 elif best is None:
                     best = (grounded.timed_out_round(question), context, spans, images, mode)
@@ -2824,6 +2876,7 @@ def synthesize_grounded_answer(
         if accepted:
             best = (current, context, spans, images, mode)
             best_number = number
+            best_input_budget = dict(input_diagnostic)
             best_unread_sections = tuple(unread_sections)
         assert best is not None
         if not grounded.diagnostic_only(current.timing) and current.audit is not None and not current.audit.summary_supported:
@@ -3183,6 +3236,8 @@ def synthesize_grounded_answer(
 
     unread_view = answer_unread_view(unread_sections, {_span_document_id(entry.span) for entry in published}, unread_documents)
     unread_lines = list(unread_view.lines)
+    if excluded_count := (best_input_budget or input_diagnostic).get("excluded_span_count", 0):
+        unread_lines.append(current_pack().text("answer_labels", "answer_evidence_budget_limited").format(count=excluded_count))
     deadline_lines = [line for line in dict.fromkeys(budget.gap_lines(current, feedback)) if line and line not in unread_lines]
     unread = [*unread_lines, *deadline_lines]
     # 監査が missing と判定した要求は本文にも出す。partial の reason は「Q1.F1 は回答済みで…」のような
@@ -3385,6 +3440,7 @@ def synthesize_grounded_answer(
         "selected_evidence": [_public_span(s) for s in spans],
         # 根拠の文字予算: 設定値・実際に使った値・送った根拠ブロックの文字数と見積もり token（#3776）。
         "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
+        "generation_input_budget": best_input_budget or input_diagnostic,
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),
@@ -6257,24 +6313,16 @@ def _known_gaps(attempts: Sequence[CragRetrievalAttempt], expansion: Any) -> tup
 
 
 def _section_evidence_budget(context: AnswerContext, settings: Settings, expansion: Any) -> int | None:
-    """章節を広げたときの原文の予算（文字）。広げた根拠を切らずに渡せるよう、入力の上限の範囲で広げる (#1436)。
-
-    根拠全体の見積もりが token の上限内なら、文字予算を全原文の長さまで確保する。
-    超える場合は文字予算も上限内に絞る。補完をしていなければ None（既定の `evidence_budget_chars`）。
-    """
+    """章節の補完後も設定の文字上限を使う。最終の描画・モデル入力の予算は送信前に検査する。"""
     if expansion is None or not (expansion.applied or expansion.trace.get("minimum_scope_complete")):
         return None
-    from rag_engine.generation.section_expansion import SectionExpansionLimits
+    from rag_engine.generation.section_expansion import SectionExpansionLimits, context_tokens
 
-    base = int(getattr(settings, "evidence_budget_chars", 0) or 0)
-    total = sum(len(str(getattr(record, "text", "") or "")) for record in context.records)
+    base = int(getattr(settings, "evidence_budget_chars", 0) or EVIDENCE_BUDGET_CHARS)
     limit = SectionExpansionLimits.from_settings(settings).input_tokens
-    from rag_engine.generation.section_expansion import context_tokens
-
     if context_tokens(context) > limit:
-        return max(1, min(base or limit, limit))
-    # ASCII の原文も、token と文字数を混同して切らない。全量が token 予算内なら全文を渡す。
-    return max(base, total + total // 10)
+        return max(1, min(base, limit))
+    return base
 
 
 def load_answer_chunks(output_dir: str | Path, run_id: Any, preferred_engines: Iterable[str]) -> list[AnswerRecord]:

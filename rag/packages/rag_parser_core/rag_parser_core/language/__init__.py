@@ -583,6 +583,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "confirmations_section",
         "confirmation_only_summary",
         "neutral_summary",
+        "answer_evidence_budget_limited",
         "citation_prefix",
         "deadline_summary",
         "off_goal_gap",
@@ -954,6 +955,7 @@ def _check(spec: FieldSpec, value: Any) -> tuple[Any, str | None]:
 # 既存の公開版を読み取る際だけ補える、索引に影響しない追加の表示文言。
 _COMPATIBLE_ANSWER_LABELS = frozenset(
     {
+        "answer_evidence_budget_limited",
         "crag_refusal_summary",
         "crag_missing_aspect_template",
         "crag_unknown_aspect_template",
