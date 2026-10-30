@@ -470,7 +470,8 @@ def test_range_repair_preserves_content_correction_within_configured_rounds(limi
             assert incorrect not in result.response.answer_text
             assert CLAIM in result.response.answer_text
         else:
-            assert incorrect in result.response.answer_text
+            assert incorrect not in result.response.answer_text
+            assert result.response.generation_trace["button_operation_fallback"]["item_indexes"] == [0]
             assert "確認が必要な点" in result.response.answer_text
             assert result.response.generation_trace["round_budget"]["stop"]["reason"] == "max_correction_rounds"
     else:
@@ -515,3 +516,19 @@ def test_unchanged_claim_restores_heading_only_regression() -> None:
     assert grounded.citation_range_issues(checked, dropped)[0]["reason_code"] == "citation_heading_only"
     fixed, restored = grounded.restore_previous_citation_ranges(QUESTION, bad, spans, old.checked, old.draft)
     assert restored and fixed.items[0].citations[0]._wire_range == (4, 4)
+
+
+def test_button_fallback_preserves_supported_steps_and_original_references() -> None:
+    spans = evidence()
+    draft = proposal(3, 3)
+    good, _ = grounded.verify(QUESTION, draft, spans)
+    unsafe = deepcopy(good[0])
+    unsafe.draft_index = 1
+    unsafe.item.text = "原文にない保存ボタンを押します。"
+    unsafe.button_name_issues = ["保存"]
+    original = unsafe.item.quote
+    assert grounded.withhold_unconfirmed_button_operations([good[0], unsafe]) == [1]
+    assert not good[0].quote_only and good[0].published
+    assert unsafe.quote_only and not unsafe.published
+    assert unsafe.item.quote == original
+    assert grounded.withhold_unconfirmed_button_operations([good[0], unsafe]) == []

@@ -2376,6 +2376,17 @@ def revise_table_conflicts(checked: Sequence[CheckedItem], parse: ParseText) -> 
     return revised
 
 
+def withhold_unconfirmed_button_operations(checked: Sequence[CheckedItem]) -> list[int]:
+    """原文にないボタン操作を実行手順から外し、引用原文だけを参考情報へ残す。"""
+    withheld = []
+    for entry in checked:
+        if entry.button_name_issues and entry.span and not entry.removed and not entry.quote_only:
+            entry.quote_only = True
+            if entry.draft_index is not None:
+                withheld.append(entry.draft_index)
+    return withheld
+
+
 def _cited_button_gaps(question: str, entry: CheckedItem) -> list[str]:
     """手順の説明が案内したボタン名のうち、説明が引いたすべての根拠（本文と見出し）に名前が無いもの（#3822）。
 
