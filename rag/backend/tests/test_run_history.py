@@ -228,6 +228,7 @@ async def test_recorder_failure_does_not_raise(caplog: pytest.LogCaptureFixture)
     assert "run history record failed" in caplog.text
 
 
+@pytest.mark.usefixtures("trace_body_enabled")
 async def test_pipeline_records_search_answer_and_blocked_runs(monkeypatch: MonkeyPatch) -> None:
     """RAG 検索（回答なし・回答あり）と、安全チェックで止めた質問を記録する。"""
     import rag_engine.adapters.oci as engine_oci

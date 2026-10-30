@@ -30,6 +30,8 @@ from tests.span_progress_support import (
     span_steps,
 )
 
+pytestmark = pytest.mark.usefixtures("trace_body_enabled")
+
 MESSAGE_ID = "a" * 32
 
 

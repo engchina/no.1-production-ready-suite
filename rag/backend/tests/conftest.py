@@ -457,3 +457,12 @@ def published_language_unit_scope(
         return store
 
     monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)
+
+
+@pytest.fixture
+def trace_body_enabled() -> Iterator[None]:
+    """本文の表示を検証するテストだけ明示的に記録を有効にする。"""
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    with call_content_policy(lambda: True):
+        yield

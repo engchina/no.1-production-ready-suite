@@ -1422,6 +1422,7 @@ class _RecordSaveFailedPipeline(_FakePipeline):
         return result.model_copy(update={"storage_failures": [failure]})
 
 
+@pytest.mark.usefixtures("trace_body_enabled")
 def test_stream_message_marks_failed_record_save_step_and_still_answers(
     monkeypatch: MonkeyPatch, trace_db: FakeTraceDb
 ) -> None:
