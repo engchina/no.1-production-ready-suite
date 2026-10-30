@@ -40,8 +40,12 @@ def test_snapshot_is_copied_bounded_and_redacted_before_clipping() -> None:
     assert "synthetic-input" in snapshot.input.text
     assert snapshot.output.status == "not_recorded"
     long = call_content({"input": "x" * 100000, "password": "private-password"})
-    assert long.status == "truncated" and len(long.text) == 64001
+    assert long.status == "truncated" and len(long.text) <= 64000
+    assert json.loads(long.text)["input"].startswith("xxx")
     assert "private-password" not in long.text
+    serialized = call_content(json.dumps({"output": "x" * 100000}))
+    assert serialized.status == "truncated"
+    assert json.loads(serialized.text)["output"].startswith("xxx")
     value = ChatProgressStepDetails(call=snapshot).model_dump()
     assert ChatProgressStepDetails.model_validate(value).model_dump() == value
 

@@ -1401,7 +1401,7 @@ test("資料照合の実行状態は未照合にまとめず、一覧と詳細�
   await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
 });
 
-test("呼び出しの詳細で入力・結果・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockLocalAuth(page);
   const row = run(1);
   await mockRuns(page, [row]);
@@ -1421,6 +1421,12 @@ test("呼び出しの詳細で入力・結果・Schema・計時を確認でき�
   await expect(pane).toContainText("synthetic-call-input");
   await pane.getByRole("tab", { name: "結果", exact: true }).click();
   await expect(pane).toContainText("synthetic-call-output");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-output");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
+  await pane.getByRole("tab", { name: "思考", exact: true }).click();
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
+  await expect(pane.locator("[data-call-readable]")).not.toContainText("synthetic-call-output");
   await pane.getByRole("tab", { name: "Schema", exact: true }).click();
   await expect(pane).toContainText("synthetic-call-schema");
   await expect(pane).toContainText("先頭だけ");

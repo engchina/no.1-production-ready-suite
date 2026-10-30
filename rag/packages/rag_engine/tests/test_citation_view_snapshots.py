@@ -221,7 +221,12 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
         client.close()
     assert len(sent) == 1
     assert private_requests == [(sent[0], sent[0]["text"]["format"])]
-    assert len(private_responses) == 1 and private_responses[0].output_text == raw
+    assert private_responses[-1].output_text == raw
+    if streamed:
+        assert private_responses[:-1]
+        assert all(value["status"] == "in_progress" for value in private_responses[:-1])
+    else:
+        assert len(private_responses) == 1
     assert sent[0]["text"]["format"]["strict"] is True
     assert sent[0]["input"][0]["content"] == result.citation_trace["input"]["system_prompt"]
     assert sent[0]["input"][1]["content"] == result.citation_trace["input"]["prompt"]

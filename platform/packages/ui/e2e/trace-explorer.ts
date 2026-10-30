@@ -65,6 +65,13 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await check(inspector).toContainText("synthetic-call-input");
   await inspector.getByRole("tab", {name: "結果", exact: true}).click();
   await check(inspector).toContainText("synthetic-call-output");
+  await inspector.getByRole("tab", {name: "思考", exact: true}).click();
+  await check(inspector.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
+  await check(inspector.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => { document.documentElement.classList.remove("light", "dark"); document.documentElement.dataset.theme = value; }, theme);
+    await inspector.screenshot({path: testInfo.outputPath(`trace-thinking-${theme}.png`)});
+  }
   await inspector.getByRole("tab", {name: "Schema", exact: true}).click();
   await check(inspector).toContainText("synthetic-call-schema");
   await inspector.getByRole("tab", {name: "計時", exact: true}).click();

@@ -75,3 +75,9 @@ production-ready-backend-core = { path = "../../platform/packages/backend_core",
 ```
 
 > path source を変更したら **`uv lock` の再生成**が必要。安定後は GitHub Release / index 配布へ切替可能。
+
+### 呼び出し本文の streaming の記録（#3899）
+
+`CallStreamCapture` は Responses API の本文・返却された思考・tool arguments の delta を上限付きでメモリに合成する。途中の checkpoint は最大 5 秒ごとに最新の snapshot を渡し、完了の応答を優先する。取消・失敗・完了イベントの欠落では受信済み prefix を保持する。delta ごとの DB 行・履歴は作らず、製品の既存の最新状態の保存と非同期の書き手を使う。記録できる本文の上限は 64,000 文字、配列は 1,000 件で、省略を明示する。JSON の値を縮めてから serialize し、途中で切れた JSON を新規に作らない。
+
+共通の span 表には本文を複製しない。画面の本文・embedding の要約は製品の snapshot から投影し、別の要約を DB に保存しない。`PLATFORM_TRACE_RETENTION_DAYS` は span 表の期限であり、製品の本文を削除する設定ではない。

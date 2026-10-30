@@ -966,7 +966,7 @@ for (const [id, text] of [
   });
 }
 
-test("呼び出しの詳細で入力・結果・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const id = "synthetic-call";
   const row = { ...historyItems[0], id, progress_events: jobProgressEvents(id, { at: "2026-01-01T00:00:01Z", terminal: "done", steps: {
     generate_sql: { status: "done", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", details: { call: syntheticCallDetails } },
@@ -980,6 +980,12 @@ test("呼び出しの詳細で入力・結果・Schema・計時を確認でき�
   await expect(pane).toContainText("synthetic-call-input");
   await pane.getByRole("tab", { name: "結果", exact: true }).click();
   await expect(pane).toContainText("synthetic-call-output");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-output");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
+  await pane.getByRole("tab", { name: "思考", exact: true }).click();
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
+  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
+  await expect(pane.locator("[data-call-readable]")).not.toContainText("synthetic-call-output");
   await pane.getByRole("tab", { name: "Schema", exact: true }).click();
   await expect(pane).toContainText("synthetic-call-schema");
   await pane.getByRole("tab", { name: "Schema", exact: true }).focus();

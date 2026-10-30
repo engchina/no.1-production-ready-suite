@@ -1,5 +1,10 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Tabs, TabPanel } from "../ui/tabs";
+import { DataTable } from "./data-table";
+import { Disclosure } from "../ui/disclosure";
+import { CopyButton } from "../ui/copy-button";
+import { MarkdownText } from "../ui/markdown-text";
+import { callPresentation, type CallTextBlock } from "../../lib/call-presentation";
 
 import { Info } from "lucide-react";
 
@@ -100,6 +105,31 @@ export function runStepDetailsJson(
 export interface RunStepDetailsLabels {
   /** 長さを切ったときの印。 */
   truncated: string;
+  partial: string;
+  requestedDimensions: string;
+  inputType: string;
+  topN: string;
+  vectors: string;
+  dimensions: string;
+  partialVector: string;
+  rank: string;
+  score: string;
+  document: string;
+  sourceIndex: string;
+  reasoning: string;
+  reasoningSummary: string;
+  noReasoning: string;
+  raw: string;
+  copy: string;
+  copied: string;
+  copyFailed: string;
+  model: string;
+  inputTokens: string;
+  outputTokens: string;
+  reasoningTokens: string;
+  maxOutput: string;
+  temperature: string;
+  effort: string;
   overview: string;
   input: string;
   output: string;
@@ -115,6 +145,13 @@ export interface RunStepDetailsLabels {
 }
 
 export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
+  partial: "完了前に記録された応答です。受信済みの内容を表示しています。", requestedDimensions: "要求した次元数", inputType: "入力の用途", topN: "要求した上位件数",
+  vectors: "記録されたベクトル", dimensions: "記録された次元数", partialVector: "一部のみ記録", rank: "順位", score: "関連度", document: "文書", sourceIndex: "元の index",
+  reasoning: "思考", reasoningSummary: "思考の要約",
+  noReasoning: "表示できる思考テキストがこの記録にはありません。",
+  raw: "原始 JSON", copy: "本文をコピー", copied: "本文をコピーしました", copyFailed: "本文をコピーできませんでした。",
+  model: "モデル", inputTokens: "入力 token", outputTokens: "出力 token", reasoningTokens: "思考 token",
+  maxOutput: "最大出力 token", temperature: "温度", effort: "推論の量",
   truncated: "長い内容は先頭だけを表示しています。",
   timing: "計時",
   startedAt: "開始時刻",
@@ -203,20 +240,23 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
 
 /** 呼び出しの内容は選んだタブだけ描画し、大きい JSON を同時に展開しない。 */
 export function RunStepDetailsView(props: RunStepDetailsViewProps) {
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState("input");
   const id = useId();
   const labels = { ...DEFAULT_RUN_STEP_DETAILS_LABELS, ...props.labels };
   const call = props.details.call;
+  const presentation = useMemo(() => call ? callPresentation(call) : null, [call]);
   if (!call) return <RunStepDetailsBody {...props} />;
-  const content = tab === "input" ? call.input : tab === "output" ? call.output : call.schema;
+  const content = tab === "input" ? call.input : tab === "output" || tab === "reasoning" ? call.output : call.schema;
+  const blocks = tab === "input" ? presentation?.input : tab === "output" ? presentation?.output : tab === "reasoning" ? presentation?.reasoning : [];
+  const semanticOutput = tab === "output" && Boolean(presentation?.embeddings.length || presentation?.ranks.length);
   return <div className="grid min-w-0 gap-2" data-call-details="" data-testid={props.testId}>
     <Tabs idPrefix={id} ariaLabel={labels.callDetails} value={tab} onChange={setTab} items={[
       { id: "overview", label: labels.overview }, { id: "input", label: labels.input },
-      { id: "output", label: labels.output }, { id: "schema", label: labels.schema },
+      { id: "reasoning", label: labels.reasoning }, { id: "output", label: labels.output }, { id: "schema", label: labels.schema },
       { id: "timing", label: labels.timing },
     ]} />
     <TabPanel idPrefix={id} id={tab} value={tab}>
-      {tab === "overview" ? <RunStepDetailsBody {...props} testId={undefined} /> :
+      {tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
         tab === "timing" ? <RunStepDetailsBody details={{ fields: [
           { label: labels.startedAt, value: props.timing?.startedAt ?? labels.notRecorded },
           { label: labels.finishedAt, value: props.timing?.finishedAt ?? labels.notRecorded },
@@ -224,8 +264,45 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
         ] }} labels={labels} /> :
         content.status === "withheld" ? <p className="text-xs text-fg-muted">{labels.withheld}</p> :
         content.status === "not_recorded" ? <p className="text-xs text-fg-muted">{labels.notRecorded}</p> :
-        <RunStepDetailsBody details={{ code: [{ text: content.text === "" ? '""' : content.text, language: "json", label: labels[tab as "input" | "output" | "schema"] }], truncated: content.status === "truncated" }} labels={labels} />}
+        <div className="grid min-w-0 gap-3">
+          {(tab === "output" || tab === "reasoning") && presentation?.partial ? <p className="text-xs text-fg-muted">{labels.partial}</p> : null}
+          {semanticOutput && presentation ? <div className="grid min-w-0 gap-3" data-call-semantic="">
+            {presentation.embeddings.length ? <>
+              <p className="text-xs text-fg-muted">{labels.vectors}: {presentation.embeddings.length}</p>
+              <CallTextBlocks blocks={presentation.embeddings.map(vector => ({ role: `#${vector.index} · ${labels.dimensions}: ${vector.dimensions}${vector.partial ? ` · ${labels.partialVector}` : ""}`, text: vector.values, collapsed: true }))} labels={labels} />
+            </> : null}
+            {presentation.ranks.length ? <DataTable rows={presentation.ranks} getRowKey={row => row.rank} dense visibleRows={5} scrollAriaLabel={labels.output} columns={[
+              { key: "rank", header: labels.rank }, { key: "index", header: labels.sourceIndex }, { key: "score", header: labels.score },
+              { key: "text", header: labels.document, render: row => <Disclosure size="sm" variant="plain" summary={<span className="line-clamp-2 break-words [overflow-wrap:anywhere]">{row.text || labels.notRecorded}</span>}><div className="grid min-w-0 gap-2"><CopyButton text={row.text} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" variant="ghost" /><CallBody text={row.text} /></div></Disclosure> },
+            ]} /> : null}
+          </div> : blocks?.length ? <CallTextBlocks key={tab} blocks={blocks} labels={labels} /> : tab === "reasoning" ? <p className="text-xs text-fg-muted">{labels.noReasoning}</p> :
+            <RunStepDetailsBody details={{ code: [{ text: content.text === "" ? '""' : content.text, language: "json", label: labels[tab as "input" | "output" | "schema"] }] }} labels={labels} />}
+          {content.status === "truncated" ? <p className="text-xs text-fg-muted">{labels.truncated}</p> : null}
+          {semanticOutput || blocks?.length || tab === "reasoning" ? <Disclosure summary={labels.raw} size="sm" variant="plain"><RunStepDetailsBody details={{ code: [{ text: content.text, language: "json", label: labels.raw }] }} /></Disclosure> : null}
+        </div>}
     </TabPanel>
     <p className="text-xs text-fg-muted">{labels.snapshotNotice}</p>
   </div>;
+}
+
+
+function CallTextBlocks({ blocks, labels }: { blocks: readonly CallTextBlock[]; labels: RunStepDetailsLabels }) {
+  return <div className="grid max-h-[36rem] min-w-0 gap-3 overflow-y-auto" tabIndex={0} aria-label={labels.callDetails} data-call-readable="">
+    {blocks.map((block, index) => <Disclosure key={index} summary={block.role === "reasoning" ? labels.reasoning : block.role === "summary" ? labels.reasoningSummary : block.role} defaultOpen={!block.collapsed && block.role !== "system" && block.role !== "developer"} size="sm">
+      <div className="grid min-w-0 gap-2">
+        <CopyButton text={block.text} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" variant="ghost" />
+        <div data-call-body="" className="min-w-0"><CallBody text={block.text} /></div>
+      </div>
+    </Disclosure>)}
+  </div>;
+}
+
+
+function CallBody({ text }: { text: string }) {
+  let json: string | null = null;
+  if (/^\s*[\[{]/.test(text)) {
+    try { json = JSON.stringify(JSON.parse(text), null, 2); } catch { /* 不完全な記録は本文のまま表示する。 */ }
+  }
+  return json ? <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-fg [overflow-wrap:anywhere]">{json}</pre> :
+    <MarkdownText text={text} className="text-xs leading-5 [&_h3]:text-xs [&_h4]:text-xs [&_h5]:text-xs [&_h6]:text-xs" />;
 }
