@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from rag_engine.parsing.parse_inputs import PARSE_INPUT_DIRECTORY, filename_key
 from rag_engine.workflows.uploaded_files import (
@@ -40,6 +41,10 @@ class UploadedFileTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "runs"
         self.root.mkdir()
+        # 同じ合成内容の複製と削除が、別 worker・別テストの一時領域へ波及しないようにする。
+        temp_root = patch("rag_engine.workflows.uploaded_files.tempfile.gettempdir", return_value=self.tmp.name)
+        temp_root.start()
+        self.addCleanup(temp_root.stop)
 
     def test_lists_runs_grouped_by_content_and_name_newest_first_with_limit(self):
         _run(self.root, "aaaaaa01", "manual.pdf", b"manual", mtime=100)
@@ -95,6 +100,7 @@ class UploadedFileTests(unittest.TestCase):
         self.assertEqual(path.name, "手順書 v2.pdf")
         self.assertEqual(path.read_bytes(), b"manual")
         self.assertNotIn(str(self.root), str(path))
+        self.assertTrue(path.is_relative_to(Path(self.tmp.name)))
 
     def test_delete_removes_database_rows_first_then_every_run_and_parse_input(self):
         _run(self.root, "aaaaaa01", "manual.pdf", b"manual", mtime=100)
