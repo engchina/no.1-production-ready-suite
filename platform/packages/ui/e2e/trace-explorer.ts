@@ -13,6 +13,7 @@ interface ExplorerLocator {
   isVisible(): Promise<boolean>;
 }
 interface ExplorerPage extends Pick<ExplorerLocator, "getByRole" | "locator"> {
+  screenshot(options: {path: string; fullPage: boolean}): Promise<unknown>;
   viewportSize(): {width: number; height: number} | null;
   setViewportSize(size: {width: number; height: number}): Promise<void>;
   emulateMedia(options: {reducedMotion: "reduce" | "no-preference"}): Promise<void>;
@@ -73,6 +74,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   for (const theme of ["light", "dark"]) {
     await page.evaluate(value => { document.documentElement.classList.remove("light", "dark"); document.documentElement.dataset.theme = value; }, theme);
     await explorer.screenshot({path: testInfo.outputPath(`trace-explorer-detail-${theme}.png`)});
+    await page.screenshot({path: testInfo.outputPath(`trace-explorer-page-${theme}.png`), fullPage: true});
   }
   if (probeLayout) {
     const original = page.viewportSize();

@@ -139,7 +139,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
                     const Icon = CATEGORY_ICON[traceCategory(step)]; const StatusIcon = STATUS_ICON[step.status];
                     const index = steps.indexOf(step); const bar = timing.bars[index];
                     return <li key={step.id} data-trace-record={step.id} data-trace-category={traceCategory(step)} style={order === "hierarchy" ? runTimelineStepIndentStyle(step.level) : undefined}>
-                      <button type="button" aria-pressed={selected?.id === step.id} onClick={() => select(step)}
+                      <button type="button" data-surface-tint={selected?.id === step.id ? "accent" : undefined} aria-pressed={selected?.id === step.id} onClick={() => select(step)}
                         className={cn("relative grid min-h-[var(--control-height-touch)] w-full min-w-0 cursor-pointer gap-1 border-l-2 p-2 text-left hover:bg-surface-hover", selected?.id === step.id ? "border-l-accent-fg bg-accent-muted" : "border-l-transparent")}
                         onKeyDown={event => {
                           const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
