@@ -193,6 +193,7 @@ BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
 # 引用の根拠は ``rag_parser_core.extraction.is_derived_content`` で派生を除く）。
 ELEMENT_PROVENANCE_METADATA_KEYS: tuple[str, ...] = (
     NAV_SUMMARY_KEY,
+    "html_region_role",
     "section_id",
     "parent_section_id",
     "nav_depth",

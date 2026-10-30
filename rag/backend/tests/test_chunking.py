@@ -831,3 +831,27 @@ def test_table_vision_text_on_non_table_element_is_ignored() -> None:
     chunks = chunk_extraction(StructuredExtraction(raw_text="図", elements=[figure]))
 
     assert "説明" not in chunks[0].text
+
+
+def test_footer_role_survives_chunking_without_marking_neighboring_body():
+    from rag_parser_core.extraction import DocumentElement, StructuredExtraction
+    from rag_pipeline_core.chunking import chunk_extraction_with_strategy
+
+    extraction = StructuredExtraction(
+        raw_text="本文\n末尾",
+        elements=[
+            DocumentElement(kind="text", text="本文", element_id="body", section_path=["節"]),
+            DocumentElement(
+                kind="text",
+                text="末尾",
+                element_id="footer",
+                section_path=["節"],
+                metadata={"html_region_role": "footer"},
+            ),
+        ],
+    )
+    chunks = chunk_extraction_with_strategy(
+        extraction, strategy="small_to_big", chunk_size=1000, overlap=0
+    )
+    footer = [chunk for chunk in chunks if chunk.metadata.get("html_region_role") == "footer"]
+    assert footer and all("本文" not in chunk.text for chunk in footer)

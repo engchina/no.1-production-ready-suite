@@ -58,3 +58,28 @@ def test_adapter_passes_complete_document_to_same_backend(monkeypatch):
         == UNSTRUCTURED_TEXT_CONTRACT
     )
     assert result.extraction.parser_artifacts["html_main_scope"] == "full_document"
+
+
+def test_region_roles_are_original_and_ambiguous_repeated_text_is_not_assigned():
+    from rag_parser_core.extraction import DocumentElement, StructuredExtraction
+    from rag_parser_core.registry import _restore_html_region_roles
+
+    html = (
+        "<header><h1>資料の題名</h1></header><main><p>共通の注意</p></main>"
+        "<footer>共通の注意<br>末尾の版情報</footer>"
+    )
+    extraction = StructuredExtraction(
+        raw_text="",
+        elements=[
+            DocumentElement(kind="title", text="資料の題名"),
+            DocumentElement(kind="text", text="共通の注意"),
+            DocumentElement(kind="text", text="末尾の版情報"),
+        ],
+    )
+    result = _restore_html_region_roles(extraction, html.encode())
+    assert [e.metadata.get("html_region_role") for e in result.elements] == [
+        "header",
+        None,
+        "footer",
+    ]
+    assert [e.text for e in result.elements] == [e.text for e in extraction.elements]

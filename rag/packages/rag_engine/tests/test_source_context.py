@@ -157,3 +157,18 @@ def test_budget_trace_separates_body_metadata_and_format():
     assert trace["budget_counts"] == "body_and_metadata"
     assert trace["evidence_metadata_chars"] > 0 and trace["evidence_format_chars"] > 0
     assert trace["evidence_text_chars"] + trace["evidence_metadata_chars"] + trace["evidence_format_chars"] == trace["evidence_block_chars"]
+
+
+def test_html_roles_and_table_captions_reach_prompt_without_changing_citation_body():
+    from rag_engine.retrieval.source_context import source_context
+
+    footer = replace(make_record(1, ["最後の節"]), text="原文の末尾です。", metadata={"html_region_role": "footer"})
+    table = replace(make_record(2, ["上位の節"]), metadata={"table_caption": "原文の表題"})
+    assert source_context(footer)["html_region"] == {"role": "footer", "text": footer.text}
+    assert source_context(table)["table_caption"] == "原文の表題"
+    spans = evidence_spans("末尾と表題", [footer, table], budget=3000)
+    for index, span in enumerate(spans, 1):
+        span.update(label=f"E{index}", function=("synthetic.html", "節"), tags=[])
+    assert "footer" in grounded.evidence_block_text(spans)
+    assert "原文の表題" in grounded.evidence_block_text(spans)
+    assert {span["text"] for span in spans} == {footer.text, table.text}
