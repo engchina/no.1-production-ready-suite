@@ -7,6 +7,7 @@ from rag_parser_core.extraction import (
     StructuredExtraction,
 )
 from rag_parser_core.registry import _restore_html_table_captions
+from rag_parser_core.result import UNSTRUCTURED_TEXT_CONTRACT
 
 
 def extraction(*, caption=None, cells=None):
@@ -118,7 +119,8 @@ def test_unstructured_html_adapter_restores_caption_from_original(monkeypatch):
     result = _unstructured_adapter_result(data, source_profile=None, content_type="text/html")
     assert result.parser_backend == "unstructured"
     assert (
-        result.extraction.parser_artifacts["unstructured_text_contract"] == "html_caption_grid_v1"
+        result.extraction.parser_artifacts["unstructured_text_contract"]
+        == UNSTRUCTURED_TEXT_CONTRACT
     )
     assert result.extraction.tables[0].caption == "合成の表題Ａ"
     assert "合成の表題Ａ" in result.extraction.raw_text
