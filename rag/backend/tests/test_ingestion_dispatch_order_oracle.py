@@ -282,6 +282,7 @@ async def test_recipe_startup_failure_only_marks_its_recipe_in_oracle() -> None:
             id=f"job_startup_{uuid4().hex[:16]}",
             document_id=document_id,
             recipe_id=recipe_id,
+            recipe_revision=int(str(recipe["config_revision"])),
             status=IngestionJobStatus.QUEUED,
             phase=IngestionJobPhase.PREPROCESS,
             parser_profile="local_text_structure",
