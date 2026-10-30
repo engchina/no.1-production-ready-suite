@@ -27,7 +27,7 @@ from uuid import uuid4
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
 from pr_backend_core.oracle_dsn import apply_cli_connect_mode, dsn_without_tns_retry
-from pr_backend_core.oracle_errors import oracle_error_codes
+from pr_backend_core.oracle_errors import ORACLE_ERROR_CODE_RE, oracle_error_codes
 from pr_backend_core.oracle_pool import (
     DEFAULT_WAIT_TIMEOUT_MS,
     PoolCloser,
@@ -10610,6 +10610,15 @@ class OracleClient:
                 connection.commit()
                 return result
             except Exception as exc:
+                # rollback / close の例外で、元の失敗段階と下位コードを失わないよう先に記録する。
+                logger.warning(
+                    "oracle_transaction_failed",
+                    extra={
+                        **oracle_error_log_fields(exc),
+                        "transaction_phase": "commit" if committing else "operation",
+                        "transaction_attempt": attempt,
+                    },
+                )
                 rolled_back = _rollback_quietly(connection, exc)
                 retryable = is_transient_oracle_error(exc) or (
                     retry_deadlocks and rolled_back and "ORA-00060" in oracle_error_codes(exc)
@@ -10756,6 +10765,7 @@ def oracle_error_log_fields(exc: BaseException) -> dict[str, object]:
 
     ``oracle_error_code`` は Oracle のエラー番号(``ORA-00600`` なら 600、driver の ``DPY-*`` は 0)、
     ``full_code`` は ``ORA-00600`` / ``DPY-4011`` のような接頭辞付きのコード。
+    ``oracle_error_codes`` は原因の連鎖と下位の Oracle Text のコードも含む。本文は返さない。
     """
     error = _oracle_error_object(exc)
     code = getattr(error, "code", None)
@@ -10763,7 +10773,12 @@ def oracle_error_log_fields(exc: BaseException) -> dict[str, object]:
     return {
         "error_type": type(exc).__name__,
         "oracle_error_code": code if isinstance(code, int) else None,
-        "full_code": full_code if isinstance(full_code, str) and full_code else None,
+        "full_code": (
+            full_code.upper()
+            if isinstance(full_code, str) and ORACLE_ERROR_CODE_RE.fullmatch(full_code)
+            else None
+        ),
+        "oracle_error_codes": oracle_error_codes(exc),
         "is_session_dead": bool(getattr(error, "is_session_dead", False)),
         "isrecoverable": bool(getattr(error, "isrecoverable", False)),
     }
