@@ -4555,6 +4555,8 @@ class CitationView:
     provenance_json: str
     rendered: str
     view_sha256: str
+    # 描画から導く送信用の文字列。原文・引用単位・hashで版を比較し、派生値は比較しない。
+    model_rendered: str = field(default="", compare=False)
     present_in_prompt: bool | None = field(default=None, compare=False)
 
 
@@ -4577,7 +4579,7 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
     )
     numbered = bool(units) if explicit_units else _numbered(text, units)
     rendered = _rendered_evidence_span(span, units=units, numbered=numbered)
-    displayed = neutralize_boundary_markers(fold_width(rendered))
+    displayed = _model_evidence_span(span, rendered, units)
     return CitationView(
         str(span.get("evidence_id", "")),
         str(span.get("label", "")),
@@ -4594,6 +4596,7 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
         ),
         rendered,
         hashlib.sha256(displayed.encode()).hexdigest(),
+        displayed,
     )
 
 
@@ -4949,7 +4952,41 @@ def _rendered_evidence_span(
     )
 
 
-def format_functions(spans: Sequence[dict]) -> str:
+def _original_character_forms(span: Mapping[str, Any], units: Sequence[tuple[int, int]]) -> str:
+    """照合用の幅正規化で変わる引用単位は、原文の文字表記も補助情報として渡す。"""
+    text = str(span.get("text") or "")
+    originals = [
+        {"引用単位": index, "原文": text[start:end]}
+        for index, (start, end) in enumerate(units, 1)
+        if text[start:end] != fold_width(text[start:end])
+    ]
+    return "原文の文字表記: " + json.dumps(originals, ensure_ascii=False) if originals else ""
+
+
+def _model_source_note(span: Mapping[str, Any], units: Sequence[tuple[int, int]]) -> str:
+    note = fold_width(_source_note(dict(span)))
+    originals = _original_character_forms(span, units)
+    if not originals:
+        return note
+    ending = fold_width(CONTEXT_NOTE_END)
+    if note:
+        return note.removesuffix(ending) + originals + "\n" + ending
+    return f"\n{fold_width(CONTEXT_NOTE_BEGIN)}\n{originals}\n{ending}"
+
+
+def _model_evidence_span(span: Mapping[str, Any], rendered: str, units: Sequence[tuple[int, int]]) -> str:
+    displayed = fold_width(rendered)
+    original_note = fold_width(_source_note(dict(span)))
+    model_note = _model_source_note(span, units)
+    if original_note:
+        displayed = displayed.replace(original_note, model_note, 1)
+    elif model_note:
+        header, separator, body = displayed.partition("\n")
+        displayed = header + model_note + separator + body
+    return neutralize_boundary_markers(displayed)
+
+
+def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
     """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
     originals = spans
     snapshots = {id(span): (span, _citation_view(span, explicit_units=True)) for span in originals}
@@ -4972,8 +5009,10 @@ def format_functions(spans: Sequence[dict]) -> str:
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
-        body = "\n\n".join(displayed_views[id(span)].rendered for span in members)
-        blocks.append(header + "\n" + body)
+        body = "\n\n".join(
+            displayed_views[id(span)].model_rendered if model_view else displayed_views[id(span)].rendered for span in members
+        )
+        blocks.append((fold_width(header) if model_view else header) + "\n" + body)
     return "\n\n".join(blocks)
 
 
@@ -6370,12 +6409,12 @@ def guide_notice_lines(
 
 def evidence_block_text(spans: Sequence[dict]) -> str:
     """生成の入力の根拠ブロック（``build_context_block`` の境界の内側）の本文。文字予算の診断も同じ本文で数える (#3776)。"""
-    return neutralize_boundary_markers(fold_width(format_functions(spans)))
+    return neutralize_boundary_markers(format_functions(spans, model_view=True))
 
 
 def evidence_metadata_text(span: Mapping[str, Any]) -> str:
     """根拠ブロックのうち補助情報（``<補助情報>`` の囲みを含む）の部分。文字予算の診断の内訳に使う (#3831)。"""
-    return neutralize_boundary_markers(fold_width(_source_note(dict(span))))
+    return neutralize_boundary_markers(_model_source_note(span, _citation_view(span).units))
 
 
 def build_context_block(
@@ -6394,7 +6433,7 @@ def build_context_block(
     その観点の gap を書かせる。推測で埋めさせないための申し送りで、拒答の指示ではない。
 
     根拠の本文と補助情報・前回の検査結果は ``fold_width``（全角・半角の違いだけを NFKC の形にする）でそろえて
-    渡す。資料の全角の英数字（``ＨＲＭ``）と質問・別の根拠の半角（``HRM``）をモデルが同じ語と読めるように
+    渡す。表記が変わる引用単位の原文は補助情報にも渡し、文字の表記自体を問う質問で区別を失わない。資料の全角の英数字（``ＨＲＭ``）と質問・別の根拠の半角（``HRM``）をモデルが同じ語と読めるように
     するため (#1350)。spans の本文（表示・引用の原文・保存する根拠）は変えず、引用の照合は ``fold_text`` の形で比べる
     （``_canonical``）。境界の表記の無害化はそろえた後に行う（全角の ``ＢＥＧＩＮ_…`` もそろえると境界の表記になる）。
 
@@ -6763,8 +6802,8 @@ def run_round(
             )
         ]
         prompt = prompt.replace(
-            neutralize_boundary_markers(fold_width(format_functions(spans))),
-            neutralize_boundary_markers(fold_width(format_functions(selected))),
+            evidence_block_text(spans),
+            evidence_block_text(selected),
         )
         prompt += "\n要求ごとの根拠計画:\n" + scope_plan.model_dump_json()
     generation_system = resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT)
@@ -6782,7 +6821,7 @@ def run_round(
     ]
 
     def snapshot_row(view: CitationView) -> dict[str, Any]:
-        canonical_block = neutralize_boundary_markers(fold_width(view.rendered))
+        canonical_block = view.model_rendered or neutralize_boundary_markers(fold_width(view.rendered))
         prompt_block = next((block for block in (view.rendered, canonical_block) if block in prompt), None)
         return {
             "display_id": view.label,
