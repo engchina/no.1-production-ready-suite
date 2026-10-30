@@ -385,5 +385,5 @@ test("入力上限で省略した根拠の案内を名前と説明で編集で�
   await expect(page.getByLabel("入力の上限で省略した根拠の案内", { exact: true })).toHaveValue(text);
   await expect(page.getByText("回答への入力の上限で根拠を省いたときの案内です。{count} を省略した件数に置き換えます。", { exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
-  await page.screenshot({ path: `/u01/aipoc/no.1-production-ready-suite/tmp/html-unstructured-20261030/budget-language-${testInfo.project.name}.png`, fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath(`budget-language-${testInfo.project.name}.png`), fullPage: true });
 });

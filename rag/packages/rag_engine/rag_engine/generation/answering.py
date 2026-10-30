@@ -6316,7 +6316,13 @@ def _section_evidence_budget(context: AnswerContext, settings: Settings, expansi
     """章節の補完後も設定の文字上限を使う。最終の描画・モデル入力の予算は送信前に検査する。"""
     if expansion is None or not (expansion.applied or expansion.trace.get("minimum_scope_complete")):
         return None
-    return int(getattr(settings, "evidence_budget_chars", 0) or EVIDENCE_BUDGET_CHARS)
+    from rag_engine.generation.section_expansion import SectionExpansionLimits, context_tokens
+
+    base = int(getattr(settings, "evidence_budget_chars", 0) or EVIDENCE_BUDGET_CHARS)
+    limit = SectionExpansionLimits.from_settings(settings).input_tokens
+    if context_tokens(context) > limit:
+        return max(1, min(base, limit))
+    return base
 
 
 def load_answer_chunks(output_dir: str | Path, run_id: Any, preferred_engines: Iterable[str]) -> list[AnswerRecord]:
