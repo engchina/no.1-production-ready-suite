@@ -238,6 +238,12 @@ class _EngineStageObservation:
         self._span = span
         self._values: dict[str, object] = {}
 
+    def request(self, value: object, *, schema: object = None) -> None:
+        pass
+
+    def response(self, value: object) -> None:
+        pass
+
     def usage(self, value: object) -> None:
         pass
 
@@ -284,6 +290,12 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
     ) as span:
 
         class Observation:
+            def request(self, value: object, *, schema: object = None) -> None:
+                span.set_call_input(value, schema=schema, restricted=True)
+
+            def response(self, value: object) -> None:
+                span.set_call_output(value)
+
             def usage(self, value: object) -> None:
                 record_genai_usage(span, value)
 

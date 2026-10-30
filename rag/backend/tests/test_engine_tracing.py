@@ -19,6 +19,11 @@ from app.rag.pipeline import _observe_engine_call
 async def test_engine_stage_and_client_keep_parent_across_thread() -> None:
     def run_engine() -> None:
         with _execution_step("合成の工程"), observe_call("chat", "model-a") as observation:
+            observation.request(
+                {"input": "合成の入力", "authorization": "synthetic-secret"},
+                schema={"type": "object"},
+            )
+            observation.response({"output": "合成の結果"})
             observation.usage({"input_tokens": 10, "output_tokens": 0})
 
     configure_tracing(TracingSettings(), service_name="synthetic")
@@ -30,6 +35,14 @@ async def test_engine_stage_and_client_keep_parent_across_thread() -> None:
             await asyncio.to_thread(run_engine)
         stage = next(span for span in summary.spans if span.operation_name == "rag.engine.stage")
         llm = next(span for span in summary.spans if span.operation_name == "gen_ai.chat")
+        assert llm.display and llm.display.details and llm.display.details.call
+        call = llm.display.details.call
+        assert call.visibility == "system_admin"
+        assert "合成の入力" in call.input.text
+        assert "synthetic-secret" not in call.input.text
+        assert "合成の結果" in call.output.text
+        assert call.schema_.status == "recorded"
+        assert "合成の入力" not in str(llm.attributes)
         assert stage.parent_span_id == summary.root_span_id
         assert llm.parent_span_id == stage.span_id
         assert llm.attributes["gen_ai.usage.output_tokens"] == 0

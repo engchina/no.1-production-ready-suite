@@ -1,4 +1,4 @@
-"""実行環境が任意に注入する観測。本文や認証情報は observer に渡さない。
+"""実行環境が任意に注入する観測。要求・応答は制限付きの保存先へ渡し、telemetry の属性へ入れない。
 
 工程の観測（``observe_call("stage", 工程名)``）は、工程の表示用のデータ（``display``: 種類・名前の値・開いて見る
 詳細）も受け取る。実行環境は工程の span に付けて画面の処理の経過にする（#3226）。詳細には工程の記録の見出しと値・行
@@ -12,6 +12,10 @@ from typing import Protocol
 
 
 class CallObservation(Protocol):
+    def request(self, value: object, *, schema: object = None) -> None: ...
+
+    def response(self, value: object) -> None: ...
+
     def usage(self, value: object) -> None: ...
 
     def display(
@@ -25,6 +29,12 @@ class CallObservation(Protocol):
 
 
 class _NoObservation:
+    def request(self, value: object, *, schema: object = None) -> None:
+        pass
+
+    def response(self, value: object) -> None:
+        pass
+
     def usage(self, value: object) -> None:
         pass
 

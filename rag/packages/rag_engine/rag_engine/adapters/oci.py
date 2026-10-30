@@ -518,6 +518,11 @@ def _audit_wire_request(request: dict[str, Any]) -> dict[str, Any]:
     """固定キー監査だけはraw JSONをcodecで検査する。同じstrict schemaをSDKで送る。"""
     if not is_audit_wire(request.get("text_format")):
         return request
+    return _response_wire_request(request)
+
+
+def _response_wire_request(request: dict[str, Any]) -> dict[str, Any]:
+    """SDK が送る structured output の schema を JSON にそろえる。"""
     from openai.lib._parsing._responses import type_to_text_format_param
 
     return {
@@ -826,6 +831,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         started = time.monotonic()
         try:
             with observe_call("chat", provider.model) as observation:
+                snapshot = _response_wire_request(request)
+                if streamed:
+                    snapshot["stream"] = True
+                observation.request(snapshot, schema=snapshot["text"]["format"])
                 wire_request = _audit_wire_request(request)
                 if streamed:
                     response, timing = _stream_parsed(
@@ -834,6 +843,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 else:
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
                     response = client.responses.create(**wire_request) if is_audit_wire(text_format) else client.responses.parse(**request)
+                observation.response(response)
                 usage = _value(response, "usage")
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
                 if detect_runaway and not streamed and (cutoff := _runaway_response_reason(response)):

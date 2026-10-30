@@ -885,6 +885,12 @@ class _QueryGenAi:
 
 
 class _Observation:
+    def request(self, value: object, *, schema: object = None) -> None:
+        pass
+
+    def response(self, value: object) -> None:
+        pass
+
     def usage(self, value: object) -> None:
         pass
 
