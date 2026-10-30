@@ -41,6 +41,8 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         data = {"name": name, **kwargs}
         spans.append(data)
         yield SimpleNamespace(
+            set_call_input=lambda *args, **kwargs: None,
+            set_call_output=lambda *args, **kwargs: None,
             set_attributes=lambda values: data["attributes"].update(values),
             set_status=lambda value: data.update(status=value),
             set_display=lambda **values: data.update(values),
@@ -234,7 +236,7 @@ def test_engine_sdk_observation_exposes_safe_receipt_in_existing_details(
 
     @contextmanager
     def observe(*args: Any, **kwargs: Any) -> Iterator[Any]:
-        yield SimpleNamespace(set_display=lambda **values: displayed.update(values))
+        yield SimpleNamespace(display=None, set_display=lambda **values: displayed.update(values))
 
     monkeypatch.setattr(pipeline, "observed_span", observe)
     with pipeline._observe_engine_call("rerank", "synthetic-model") as observation:
