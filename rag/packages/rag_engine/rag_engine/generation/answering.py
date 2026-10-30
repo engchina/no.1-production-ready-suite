@@ -388,7 +388,20 @@ def rerank_records(
             extra_queries=extra_queries,
             rerank_phase=rerank_phase,
         )
-        record_retrieval_stage({"stage": "rerank_output", "selected_ids": [retrieval_record_id(record) for record in ranked]})
+        record_retrieval_stage(
+            {
+                "stage": "rerank_output",
+                "selected_ids": [retrieval_record_id(record) for record in ranked],
+                "attachment_candidate_count": sum(is_attachment_evidence(record) for record in records),
+                "attachment_selected_count": sum(is_attachment_evidence(record) for record in ranked),
+                "attachment_preserved_below_min_score_count": sum(
+                    is_attachment_evidence(record)
+                    and isinstance(record.metadata.get("rerank"), dict)
+                    and record.metadata["rerank"].get("attachment_preserved_below_min_score") is True
+                    for record in ranked
+                ),
+            }
+        )
         conditions = parse_inquiry_conditions(question) if business_domains is None or screen_terms is None else None
         domains = cast(InquiryConditionParse, conditions).business_domains if business_domains is None else business_domains
         screens = getattr(conditions, "screen_terms", ()) if screen_terms is None else screen_terms
@@ -951,6 +964,10 @@ def _bundle_context(
     record_retrieval_stage(
         {
             "stage": "answer_context",
+            "attachment_anchor_count": sum(is_attachment_evidence(record) for record in selected),
+            "attachment_context_count": sum(
+                any(is_attachment_evidence(child.record) for child in parent.children) for parent in bundle.evidence_tree
+            ),
             "anchor_limit": top_k,
             "record_limit": max_records,
             "character_limit": max_chars,
