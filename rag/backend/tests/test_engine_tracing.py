@@ -1,6 +1,7 @@
 """engine へ注入した observer が backend に依存せず親子関係を保つ。"""
 
 import asyncio
+import importlib
 
 import pytest
 from pr_backend_core.config.tracing import TracingSettings
@@ -47,5 +48,44 @@ async def test_engine_stage_and_client_keep_parent_across_thread() -> None:
         assert llm.parent_span_id == stage.span_id
         assert llm.attributes["gen_ai.usage.output_tokens"] == 0
         assert "gen_ai.usage.cache_read.input_tokens" not in llm.attributes
+    finally:
+        shutdown_tracing()
+
+
+def test_sdk_snapshot_keeps_rerank_diagnostics_and_omits_image() -> None:
+    models = importlib.import_module("oci.generative_ai_inference.models")
+
+    request = models.EmbedTextDetails(
+        inputs=["合成の入力"],
+        serving_mode=models.OnDemandServingMode(model_id="synthetic-model"),
+        embed_contents=[
+            models.EmbedImageContent(
+                image_url=models.ImageUrl(url="data:image/png;base64,synthetic-image")
+            )
+        ],
+    )
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            operation_trace("rag.search", operation_id="synthetic") as summary,
+            _observe_engine_call("rerank", "synthetic-model") as observation,
+        ):
+            observation.request(request)
+            observation.response({"document_ranks": [{"index": 0, "relevance_score": 0.9}]})
+            observation.display(
+                details={"code": [{"label": "rerank", "text": "{}", "language": "json"}]}
+            )
+        call_span = next(span for span in summary.spans if span.operation_name == "gen_ai.rerank")
+        assert call_span.display and call_span.display.details and call_span.display.details.call
+        details = call_span.display.details
+        assert details.call and details.call.visibility == "system_admin"
+        assert (
+            "合成の入力" in details.call.input.text and "synthetic-model" in details.call.input.text
+        )
+        assert "synthetic-image" not in details.call.input.text
+        assert "media omitted" in details.call.input.text
+        assert '"relevance_score": 0.9' in details.call.output.text
+        assert details.call.schema_.status == "not_recorded"
+        assert details.code and details.code[0].label == "rerank"
     finally:
         shutdown_tracing()

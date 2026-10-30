@@ -1959,12 +1959,14 @@ def _embed_text_batch_once(
                 }.get(input_type_value)
             ).get("pr.gen_ai.purpose")
         ),
-        observe_call("embeddings", settings.embedding_model),
+        observe_call("embeddings", settings.embedding_model) as observation,
     ):
+        observation.request(request)
         response = runtime.client.embed_text(
             embed_text_details=request,
             retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
         )
+        observation.response(response.data)
     embeddings = _embedding_vectors(response.data, expected_count=len(texts), expected_dimensions=dimensions)
     return embeddings
 
@@ -2033,12 +2035,14 @@ def _embed_image_once(
                 }.get(input_type_value)
             ).get("pr.gen_ai.purpose")
         ),
-        observe_call("embeddings", settings.embedding_model),
+        observe_call("embeddings", settings.embedding_model) as observation,
     ):
+        observation.request(request)
         response = runtime.client.embed_text(
             embed_text_details=request,
             retry_strategy=runtime.oci.retry.NoneRetryStrategy(),
         )
+        observation.response(response.data)
     embeddings = _embedding_vectors(response.data, expected_count=1, expected_dimensions=dimensions)
     return embeddings[0]
 
@@ -2143,10 +2147,12 @@ def _rerank_text_once(
     )
     receipt = current_rerank_receipt()
     with observe_call("rerank", settings.rerank_model) as observation:
+        observation.request(request)
         strategy = runtime.oci.retry.NoneRetryStrategy()
         attempt = receipt.begin_sdk(current_rerank_attempt()) if receipt is not None else None
         try:
             response = runtime.client.rerank_text(request, retry_strategy=strategy)
+            observation.response(response.data)
         except BaseException as exc:
             if receipt is not None and attempt is not None:
                 receipt.finish_sdk(attempt, "cancelled" if type(exc).__name__ == "CancelledError" else "error", exc)

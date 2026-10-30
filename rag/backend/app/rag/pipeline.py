@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import importlib
 import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -266,6 +267,12 @@ class _EngineStageObservation:
         )
 
 
+def _engine_call_snapshot(value: object) -> object:
+    if hasattr(value, "swagger_types"):
+        return importlib.import_module("oci.util").to_dict(value)
+    return value
+
+
 @contextmanager
 def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation]:
     if operation == "stage":
@@ -291,10 +298,10 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
 
         class Observation:
             def request(self, value: object, *, schema: object = None) -> None:
-                span.set_call_input(value, schema=schema, restricted=True)
+                span.set_call_input(_engine_call_snapshot(value), schema=schema, restricted=True)
 
             def response(self, value: object) -> None:
-                span.set_call_output(value)
+                span.set_call_output(_engine_call_snapshot(value))
 
             def usage(self, value: object) -> None:
                 record_genai_usage(span, value)
@@ -306,11 +313,17 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
                 details: Mapping[str, object] | None = None,
             ) -> None:
                 if operation == "rerank":
-                    span.set_display(
-                        kind=kind,
-                        params=params,
-                        details=answer_step_details(details) if details is not None else None,
-                    )
+                    display_details = answer_step_details(details) if details is not None else None
+                    if (
+                        display_details
+                        and span.display
+                        and span.display.details
+                        and span.display.details.call
+                    ):
+                        display_details = display_details.model_copy(
+                            update={"call": span.display.details.call}
+                        )
+                    span.set_display(kind=kind, params=params, details=display_details)
 
         yield Observation()
 

@@ -12,7 +12,7 @@ from rag_engine.resources.tracing import bind_trace_observer
 
 
 def test_direct_sdk_retry_keeps_request_and_actual_attempts(monkeypatch):
-    requests, recorded = [], []
+    requests, recorded, private_requests, private_responses = [], [], [], []
 
     def rerank_text(request, **kwargs):
         requests.append(request)
@@ -44,13 +44,19 @@ def test_direct_sdk_retry_keeps_request_and_actual_attempts(monkeypatch):
 
     @contextmanager
     def observer(operation, model):
-        yield SimpleNamespace(display=lambda **kwargs: recorded.append(kwargs))
+        yield SimpleNamespace(
+            display=lambda **kwargs: recorded.append(kwargs),
+            request=lambda value, **kwargs: private_requests.append(value),
+            response=lambda value: private_responses.append(value),
+        )
 
     with (
         bind_trace_observer(observer),
         bind_rerank_context(phase="crag_recovery", batch_id="batch-a", query_index=1, query_role="supplement") as receipt,
     ):
         ranks = oci._rerank_text_with_retry("Ａ  B", ["private document"], settings, top_n=1)
+    assert private_requests == requests
+    assert len(private_responses) == 1 and private_responses[0].document_ranks[0].index == 0
     assert ranks[0].index == 0
     data = receipt.to_dict()
     assert data["candidate_count"] == 1 and data["phase"] == "crag_recovery"

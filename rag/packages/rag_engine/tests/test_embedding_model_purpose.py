@@ -31,6 +31,7 @@ def test_sdk_embedding_records_declared_purpose_without_changing_request(
 
     requests = []
     recorded = []
+    snapshots = []
 
     def embed_text(*, embed_text_details, retry_strategy):
         requests.append(embed_text_details)
@@ -40,7 +41,10 @@ def test_sdk_embedding_records_declared_purpose_without_changing_request(
     def observer(operation, model):
         assert operation == "embeddings" and model == "model-a"
         recorded.append(model_purpose_attributes())
-        yield SimpleNamespace()
+        yield SimpleNamespace(
+            request=lambda value, **kwargs: snapshots.append(("request", value)),
+            response=lambda value: snapshots.append(("response", value)),
+        )
 
     runtime = SimpleNamespace(
         models=SimpleNamespace(
@@ -74,6 +78,8 @@ def test_sdk_embedding_records_declared_purpose_without_changing_request(
             assert result == [[1.0, 0.0, 0.0]]
     purpose = "connection.check" if probe else expected
     assert recorded == ([{"pr.gen_ai.purpose": purpose}] if purpose else [{}])
+    assert [item[0] for item in snapshots] == ["request", "response"]
+    assert snapshots[0][1] is requests[0]
     assert len(requests) == 1
     assert requests[0].input_type == ("SEARCH_QUERY" if input_type == "QUERY" else input_type)
     assert model_purpose_attributes() == {}
