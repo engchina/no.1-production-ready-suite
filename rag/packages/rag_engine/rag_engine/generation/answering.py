@@ -3002,6 +3002,12 @@ def synthesize_grounded_answer(
                 remedy = {"remedy": "images", "image_ids": [i["image_id"] for i in candidates]}
         if remedy is None:
             if corrected:
+                budget.stop = {
+                    "reason": MAX_CORRECTION_ROUNDS_STOP,
+                    "scope": "content_correction",
+                    "round": number + 2,
+                    "feedback": grounded.pending_feedback_labels(feedback),
+                }
                 break
             remedy = {"remedy": "correction"}
         # 次の組を始める前に、改善が見込めるかを確かめる（#1527）。作り直した組が採用されない・指摘が前の組と
@@ -3227,6 +3233,10 @@ def synthesize_grounded_answer(
     # 分かっている条件で選んだ分岐の補足（担当者への依頼など）があれば、案内の節を要約の直後に置く（#3769）。
     # 生成が本文に書いたかどうかに依らず、業務ガイドの設定と確定した条件から決める。
     guide_notes_first = bool(guide_notes and runtime_knowledge is not None and runtime_knowledge.guide_condition_notices)
+    withheld_buttons = grounded.withhold_unconfirmed_button_operations(current.checked) if audit_mode == grounded.AUDIT_MODE_NONE else []
+    if withheld_buttons:
+        # 検査で残った操作を要約からも案内しない。草稿の原文は診断に残す。
+        current = replace(current, summary=grounded.answer_labels().neutral_summary, summary_warning="")
     # 本文に出す根拠のある item（システムが補った原文を含む。根拠と矛盾して外した item は除く）と、本文に言い換えを
     # 出す item（引用元の決まらない印つきの説明を含む）。
     published = [entry for entry in current.checked if entry.span and not entry.removed]
@@ -3446,6 +3456,11 @@ def synthesize_grounded_answer(
         # 根拠の文字予算: 設定値・実際に使った値・送った根拠ブロックの文字数と見積もり token（#3776）。
         "evidence_budget": _evidence_budget_trace(settings, evidence_budget_chars, spans),
         "generation_input_budget": best_input_budget or input_diagnostic,
+        **(
+            {"button_operation_fallback": {"item_indexes": withheld_buttons, "reason": "button_name_absent_from_cited_text"}}
+            if withheld_buttons
+            else {}
+        ),
         "same_unit_fill": unit_fill,
         "rounds": rounds,
         "round_budget": budget.trace(current),
