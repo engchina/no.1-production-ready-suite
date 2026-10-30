@@ -4886,6 +4886,92 @@ class OracleClient:
             job_id, started_at=started_at, lease_owner=lease_owner
         )
 
+    async def record_ingestion_startup_failure(
+        self, job: IngestionJob, *, expected_attempt_count: int
+    ) -> bool:
+        """claim 前の失敗を数え、上限では job と対象を同じ transaction で失敗にする。
+
+        claim と同じ親文書の lock を先に取り、別 worker の claim・取消・完了後の書き込みと
+        重ねない。取得時から試行回数が変わった job と lease のある job は更新しない。
+        """
+        message = "取込処理を開始できませんでした。実行環境を確認して再実行してください。"
+        attempts = expected_attempt_count + 1
+        terminal = attempts >= job.max_attempts
+        status = IngestionJobStatus.FAILED if terminal else IngestionJobStatus.QUEUED
+
+        def operation(connection: OracleConnectionProtocol) -> bool:
+            parent = _fetch_one(
+                connection,
+                _render_sql(
+                    """
+                    SELECT document_id FROM rag_documents
+                    WHERE document_id = :document_id AND {access_predicate}
+                    FOR UPDATE
+                    """,
+                    access_predicate=_oracle_access_predicate_sql(),
+                ),
+                _with_tenant_bind({"document_id": job.document_id}),
+            )
+            if parent is None:
+                return False
+            changed = _execute_count(
+                connection,
+                """
+                UPDATE rag_ingestion_jobs
+                SET attempt_count = :attempt_count, status = :status,
+                    error_message = :error_message,
+                    finished_at = CASE WHEN :status = 'FAILED' THEN SYSTIMESTAMP ELSE NULL END
+                WHERE job_id = :job_id AND document_id = :document_id
+                  AND status = 'QUEUED' AND lease_owner IS NULL
+                  AND attempt_count = :expected_attempt_count
+                  AND NOT EXISTS (
+                      SELECT 1 FROM rag_ingestion_jobs active_job
+                      WHERE active_job.document_id = :document_id
+                        AND active_job.status = 'RUNNING'
+                  )
+                """,
+                {
+                    "job_id": job.id,
+                    "document_id": job.document_id,
+                    "attempt_count": attempts,
+                    "expected_attempt_count": expected_attempt_count,
+                    "status": status.value,
+                    "error_message": message,
+                },
+            )
+            if not changed:
+                return False
+            if terminal:
+                if job.recipe_id is not None:
+                    _execute(
+                        connection,
+                        """
+                        UPDATE rag_document_recipes
+                        SET status = 'ERROR', failed_phase = :phase,
+                            error_message = :error_message, finished_at = SYSTIMESTAMP,
+                            updated_at = SYSTIMESTAMP
+                        WHERE recipe_id = :recipe_id AND document_id = :document_id
+                        """,
+                        {
+                            "recipe_id": job.recipe_id,
+                            "document_id": job.document_id,
+                            "phase": job.phase.value,
+                            "error_message": message,
+                        },
+                    )
+                else:
+                    _execute(
+                        connection,
+                        """
+                        UPDATE rag_documents SET status = 'ERROR', error_message = :error_message
+                        WHERE document_id = :document_id
+                        """,
+                        {"document_id": job.document_id, "error_message": message},
+                    )
+            return True
+
+        return await self._run_transaction(operation)
+
     async def heartbeat_ingestion_jobs(self, *, lease_owner: str) -> int:
         """``lease_owner`` の lease の RUNNING job の heartbeat を更新し、更新件数を返す(#357)。
 

@@ -225,7 +225,11 @@ async def test_failed_job_is_marked_failed_and_frees_slots(
     failed: list[tuple[str, str, str | None]] = []
 
     async def fake_mark_failed(
-        job_id: str, *, error: Exception, lease_owner: str | None = None
+        job_id: str,
+        *,
+        error: Exception,
+        lease_owner: str | None = None,
+        expected_attempt_count: int = 0,
     ) -> None:
         failed.append((job_id, str(error), lease_owner))
 

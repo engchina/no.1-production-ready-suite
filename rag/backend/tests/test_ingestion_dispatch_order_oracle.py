@@ -204,3 +204,100 @@ async def test_continuation_does_not_overtake_jobs_waiting_longer_than_window_in
     ours = [waiting_start, recent_start, started_chunk]
 
     assert await _dispatch_order(client, ours) == [waiting_start, started_chunk, recent_start]
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_preclaim_failures_reach_terminal_state_in_oracle() -> None:
+    """claim 前の失敗も永続の試行回数へ数え、上限で文書と job を失敗にする。"""
+    from app.schemas.document import FileStatus
+
+    client = OracleClient()
+    document_id = await _document(client)
+    job_id = await _job(client, document_id, IngestionJobPhase.PREPROCESS, queued_after_seconds=0)
+    job = await client.get_ingestion_job(job_id)
+    assert job is not None
+    for attempt in range(job.max_attempts):
+        assert await client.record_ingestion_startup_failure(job, expected_attempt_count=attempt)
+        current = await client.get_ingestion_job(job_id)
+        assert current is not None
+        assert current.attempt_count == attempt + 1
+        assert current.status == (
+            IngestionJobStatus.FAILED
+            if attempt + 1 == job.max_attempts
+            else IngestionJobStatus.QUEUED
+        )
+        # 同じ失敗を重ねて書いても試行回数を二重に加算しない。
+        assert not await client.record_ingestion_startup_failure(
+            job, expected_attempt_count=attempt
+        )
+    detail = await client.get_document(document_id)
+    assert detail is not None and detail.status == FileStatus.ERROR
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("new_status", ["RUNNING", "CANCELLED", "SUCCEEDED"])
+async def test_preclaim_failure_does_not_overwrite_new_state_in_oracle(new_status: str) -> None:
+    """別 worker の claim・取消・完了後に届いた起動失敗を捨てる。"""
+    client = OracleClient()
+    document_id = await _document(client)
+    job_id = await _job(client, document_id, IngestionJobPhase.PREPROCESS, queued_after_seconds=0)
+    job = await client.get_ingestion_job(job_id)
+    assert job is not None
+    if new_status == "RUNNING":
+        changed = await client.claim_ingestion_job(
+            job_id, started_at=_BASE, lease_owner="worker-other"
+        )
+    else:
+        changed = await client.transition_ingestion_job(
+            job_id,
+            from_statuses=(IngestionJobStatus.QUEUED,),
+            to_status=IngestionJobStatus(new_status),
+        )
+    assert changed is not None
+    assert not await client.record_ingestion_startup_failure(job, expected_attempt_count=0)
+    current = await client.get_ingestion_job(job_id)
+    assert current is not None
+    assert current.status == IngestionJobStatus(new_status)
+    assert current.attempt_count == (1 if new_status == "RUNNING" else 0)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_recipe_startup_failure_only_marks_its_recipe_in_oracle() -> None:
+    """レシピの起動失敗は対象レシピだけを ERROR にし、他レシピと active の参照を保つ。"""
+    from app.schemas.document import FileStatus
+
+    client = OracleClient()
+    document_id = await _document(client)
+    recipe = await client.ensure_default_document_recipe(document_id)
+    other = await client.create_document_recipe(document_id)
+    recipe_id = str(recipe["recipe_id"])
+    other_id = str(other["recipe_id"])
+    before = await client._fetch_one(
+        "SELECT status FROM rag_documents WHERE document_id = :document_id",
+        {"document_id": document_id},
+    )
+    other_before = await client.get_document_recipe(document_id, other_id)
+    job = await client.create_ingestion_job(
+        IngestionJob(
+            id=f"job_startup_{uuid4().hex[:16]}",
+            document_id=document_id,
+            recipe_id=recipe_id,
+            status=IngestionJobStatus.QUEUED,
+            phase=IngestionJobPhase.PREPROCESS,
+            parser_profile="local_text_structure",
+            queued_at=_BASE,
+            attempt_count=2,
+            max_attempts=3,
+        )
+    )
+    assert await client.record_ingestion_startup_failure(job, expected_attempt_count=2)
+    failed_recipe = await client.get_document_recipe(document_id, recipe_id)
+    assert failed_recipe is not None and failed_recipe["status"] == FileStatus.ERROR.value
+    assert failed_recipe["failed_phase"] == IngestionJobPhase.PREPROCESS.value
+    assert failed_recipe["active_chunk_set_id"] == recipe["active_chunk_set_id"]
+    assert await client.get_document_recipe(document_id, other_id) == other_before
+    after = await client._fetch_one(
+        "SELECT status FROM rag_documents WHERE document_id = :document_id",
+        {"document_id": document_id},
+    )
+    assert before is not None and after == before
