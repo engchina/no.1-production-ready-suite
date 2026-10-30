@@ -11,7 +11,8 @@ from typing import Any
 import pytest
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
-from rag_engine.generation.answering import AnswerContext, AnswerRecord, _grounded_spans
+from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.generation.answering import _grounded_spans
 
 from tests._ai_stubs import deterministic_parse_text_response
 

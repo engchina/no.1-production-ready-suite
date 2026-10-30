@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -243,6 +243,8 @@ def deterministic_parse_text_response(
     # キーはすべて埋め、要求の判定は保留にする。
     # 監査は項目があるときだけ呼ばれ、上の生成は項目を 1 つだけ返すので、index 0 を支持ありとする。
     if is_audit_wire(text_format):
+        # 固定キーの id は wire の型の ClassVar にある（BaseModel の型からは見えない）。
+        wire = cast(Any, text_format)
         reviews = [
             {
                 "index": 0,
@@ -258,9 +260,9 @@ def deterministic_parse_text_response(
                 "goal_alignment": "aligned",
                 "summary_supported": True,
                 "reviews": reviews,
-                "request_reviews": dict.fromkeys(text_format.expected_request_ids, request),
+                "request_reviews": dict.fromkeys(wire.expected_request_ids, request),
                 "guide_requirement_reviews": dict.fromkeys(
-                    text_format.expected_requirement_ids, requirement
+                    wire.expected_requirement_ids, requirement
                 ),
             }
         )
