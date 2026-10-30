@@ -384,7 +384,7 @@ async def test_mcp_search_turns_the_classified_failure_into_a_tool_error(
     }
 
 
-def test_wrapped_failure_identity_keeps_the_cause_without_its_message():
+def test_wrapped_failure_identity_keeps_the_cause_without_its_message() -> None:
     class SyntheticFailure(RuntimeError):
         code = "SYNTHETIC_FAILURE"
 

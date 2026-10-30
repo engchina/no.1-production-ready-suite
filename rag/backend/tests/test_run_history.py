@@ -1301,11 +1301,11 @@ def test_run_usage_totals(
     assert run_usage_totals(total, measurement) == expected
 
 
-async def test_wrapped_answer_failure_records_safe_cause_and_keeps_wrapper_identity():
+async def test_wrapped_answer_failure_records_safe_cause_and_keeps_wrapper_identity() -> None:
     from rag_engine.generation.execution_record import AnswerExecutionError
 
     class SyntheticFailure(RuntimeError):
-        pass
+        code: str
 
     cause = SyntheticFailure("秘密の本文")
     cause.code = "SYNTHETIC_FAILURE"
