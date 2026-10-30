@@ -26,6 +26,7 @@ from typing import Any
 from pr_backend_core.bounded_calls import KIND_LABELS, ErrorKind, classify_error
 from pr_backend_core.logging import safe_error_code
 from rag_engine.adapters.oci import IncompleteResponse
+from rag_engine.generation.execution_record import AnswerExecutionError
 
 # 未完了の応答の error_type（画面・SSE・MCP の error code）。3 製品の共通の error code と同じ値。
 ANSWER_INCOMPLETE_ERROR_TYPE = "IncompleteResponse"
@@ -69,7 +70,17 @@ def _causes(exc: BaseException) -> Iterator[BaseException]:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         yield current
-        current = current.__cause__ or current.__context__
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+
+
+def answer_error_identity(exc: BaseException) -> tuple[str, str | int | None]:
+    """実行記録のラッパーの内側の型と安全なコードだけを返し、本文は保存しない。"""
+    chain = tuple(_causes(exc))
+    source = chain[-1] if isinstance(exc, AnswerExecutionError) else exc
+    code = next((code for item in chain if (code := safe_error_code(item)) is not None), None)
+    return type(source).__name__, code
 
 
 def find_incomplete_response(exc: BaseException) -> IncompleteResponse | None:
@@ -116,10 +127,10 @@ def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
             detail=incomplete.detail or None,
             stage=stage,
         )
-    code = safe_error_code(exc)
+    error_type, code = answer_error_identity(exc)
     return AnswerFailure(
         message=fallback,
-        error_type=type(exc).__name__,
+        error_type=error_type,
         stage=stage,
         error_code=str(code) if code is not None else None,
     )

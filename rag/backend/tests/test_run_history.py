@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -1298,3 +1299,31 @@ def test_run_usage_totals(
     total: object, measurement: object, expected: tuple[object, object]
 ) -> None:
     assert run_usage_totals(total, measurement) == expected
+
+
+async def test_wrapped_answer_failure_records_safe_cause_and_keeps_wrapper_identity():
+    from rag_engine.generation.execution_record import AnswerExecutionError
+
+    class SyntheticFailure(RuntimeError):
+        pass
+
+    cause = SyntheticFailure("秘密の本文")
+    cause.code = "SYNTHETIC_FAILURE"
+    wrapped = AnswerExecutionError("秘密の本文", "非公開の質問")
+    wrapped.__cause__ = cause
+    store = RecordingStore()
+    recorder = RunRecorder(surface="search", settings=Settings(), store=store)
+    await recorder.record(
+        run_id="trace-error",
+        question=None,
+        search_answer_profile_id=None,
+        answer_generated=False,
+        status="error",
+        elapsed_ms=1,
+        error=wrapped,
+    )
+    record = store.records[0]
+    assert record["error_type"] == "SyntheticFailure"
+    assert record["stages"]["error_code"] == "SYNTHETIC_FAILURE"
+    assert record["stages"]["error_wrapper_type"] == "AnswerExecutionError"
+    assert "秘密" not in json.dumps(record, ensure_ascii=False)

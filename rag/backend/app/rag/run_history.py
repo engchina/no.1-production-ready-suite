@@ -20,11 +20,12 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, Literal, Protocol, cast
 
-from pr_backend_core.logging import safe_error_code, safe_exception_fields
+from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.model_usage import RunModelUsage
 from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
+from app.rag.answer_failure import answer_error_identity
 from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.stored_answer import stored_citations
 from app.schemas.history import ValidationExecution
@@ -215,7 +216,7 @@ class RunRecorder:
         diagnostics = answer_diagnostics if answer_generated else None
         if error is not None and error_stage is None:
             error_stage = _failed_stage(self.stages)
-        error_code = safe_error_code(error) if error is not None else None
+        error_type, error_code = answer_error_identity(error) if error is not None else (None, None)
         failures = list(storage_failures)
         trace_summary = finish_operation_trace(
             run_id,
@@ -247,7 +248,7 @@ class RunRecorder:
             "citation_count": len(cited),
             "elapsed_ms": elapsed_ms,
             "error_stage": error_stage,
-            "error_type": type(error).__name__ if error is not None else None,
+            "error_type": error_type,
             "model_id": self.model_id,
             "conversation_id": self.conversation_id,
             "message_id": self.message_id,
@@ -265,6 +266,11 @@ class RunRecorder:
                 # モデルの呼び出しの回数と利用量（概要の「モデル」「token」「モデルの呼び出し」。
                 # #3419）。
                 **({"usage": usage} if usage is not None else {}),
+                **(
+                    {"error_wrapper_type": type(error).__name__}
+                    if error is not None and error_type != type(error).__name__
+                    else {}
+                ),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
                 **({"error_code": str(error_code)} if error_code is not None else {}),
                 **(
