@@ -4748,6 +4748,78 @@ def citation_range_targets(
     return targets
 
 
+def repair_ranges_from_plan_quotes(
+    draft: GroundedDraft, spans: Sequence[dict], targets: Sequence[Mapping[str, Any]], diagnostic: Mapping[str, Any]
+) -> tuple[GroundedDraft, dict[str, Any]]:
+    """範囲修復で残った不正を、同じ要求・出典の一意な逐語原文からだけ結び直す。
+
+    原文との一致は説明の意味支持を認定しない。復元した引用も通常の検査と監査へ戻す。
+    """
+    from rag_engine.generation.citation_range_repair import CitationRangeRepair, apply_range_repair
+
+    failed = {
+        (row["item_index"], row["citation_index"])
+        for row in diagnostic.get("rejected", ())
+        if row.get("reason_code") in CITATION_RANGE_ERROR_CODES
+    }
+    proposals, selected = [], []
+    for target in targets:
+        index, citation_index = target["item_index"], target["citation_index"]
+        if (index, citation_index) not in failed:
+            continue
+        item = draft.items[index]
+        if item.kind == "gap" or not item.request_id.strip():
+            continue
+        citation = item.citations[citation_index]
+        rows = [
+            scope
+            for plan in _item_request_plans(item, draft)
+            if "evidence_scope" in plan.model_fields_set
+            for scope in plan.evidence_scope
+            if scope.evidence_id == citation.evidence_id
+        ]
+        named = _label_spans(citation.evidence_id, spans)
+        if len(rows) != 1 or rows[0].relation != "direct" or len(named) != 1:
+            continue
+        quote = rows[0].link_quote.strip()
+        needle, _ = _canonical(quote)
+        haystack, _ = _canonical(_citation_view(named[0]).text)
+        start = haystack.find(needle) if needle else -1
+        if start < 0 or haystack.find(needle, start + 1) >= 0 or heading_only_quote(quote, named[0]):
+            continue
+        lines = _quote_lines(quote, named[0])
+        if lines is None:
+            continue
+        first: int | None = None
+        last: int | None = None
+        if lines:
+            parts = lines.split("-", 1)
+            first, last = int(parts[0]), int(parts[-1])
+        proposals.append(
+            {
+                "item_index": index,
+                "citation_index": citation_index,
+                "evidence_id": citation.evidence_id,
+                "line_start": first,
+                "line_end": last,
+            }
+        )
+        selected.append(target)
+    if not proposals:
+        return draft, dict(diagnostic)
+    repaired, local = apply_range_repair(draft, CitationRangeRepair.model_validate({"ranges": proposals}), selected)
+    if not local["adopted"]:
+        return draft, dict(diagnostic)
+    restored = {(row["item_index"], row["citation_index"]) for row in local["adopted"]}
+    result = dict(diagnostic)
+    result["model_rejected"] = list(diagnostic.get("rejected", ()))
+    result["plan_quote_fallback"] = local["adopted"]
+    result["adopted"] = [*diagnostic.get("adopted", ()), *local["adopted"]]
+    result["rejected"] = [row for row in diagnostic.get("rejected", ()) if (row["item_index"], row["citation_index"]) not in restored]
+    result["status"] = "completed" if len(result["adopted"]) == len(targets) and not result["rejected"] else "partial"
+    return repaired, result
+
+
 def restore_previous_citation_ranges(
     question: str, draft: GroundedDraft, spans: Sequence[dict], previous: Sequence[CheckedItem], previous_draft: GroundedDraft | None
 ) -> tuple[GroundedDraft, list[dict[str, int]]]:
@@ -7024,6 +7096,7 @@ def run_round(
                 provider_id=provider_id,
             )
             draft, range_repair = apply_range_repair(previous_draft, response, targets)
+            draft, range_repair = repair_ranges_from_plan_quotes(draft, spans, targets, range_repair)
             generation_outputs.append(
                 {
                     "purpose": "answer.repair",
