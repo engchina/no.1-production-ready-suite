@@ -424,3 +424,54 @@ def test_range_feedback_keeps_original_draft_index_after_items_were_filtered() -
     entry.draft_index = 2
     feedback = grounded.citation_range_issues([entry])
     assert feedback and {row["item_index"] for row in feedback} == {2}
+
+
+@pytest.mark.parametrize("limit", [0, 1, 2])
+@pytest.mark.parametrize("fix_content", [True, False])
+def test_range_repair_preserves_content_correction_within_configured_rounds(limit: int, fix_content: bool) -> None:
+    record = AnswerRecord(
+        id="p",
+        engine="docling",
+        engine_label="Docling",
+        page=1,
+        seq_no=1,
+        category="Chunk",
+        text=LONG,
+        source="synthetic.pdf",
+        chunk_id="p",
+        chunk_uid="run:p",
+        source_run_id="run",
+        chunk_level="parent",
+        metadata={"section_path": ["合成操作"]},
+    )
+    context = AnswerContext(records=[record], text=LONG)
+    incorrect = "一覧から対象を選択し、保存ボタンを押します。"
+    calls = []
+
+    def unused(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("外部I/Oは不要")
+
+    def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        calls.append(schema.__name__)
+        if schema is CitationRangeRepair:
+            return response(3, 3)
+        assert schema is generation_draft_wire_model()
+        draft = proposal(0, 0) if len(calls) == 1 else proposal(3, 3)
+        draft.items[0].text = incorrect if len(calls) == 1 or not fix_content else CLAIM
+        return draft
+
+    config = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=limit)
+    with bind_dependencies(AnswerDependencies(unused, unused, parser, unused, unused)):
+        result = answering.synthesize_grounded_answer(QUESTION, context, config, image_prompt_mode="text_only")
+    assert len(calls) == limit + 1
+    if limit == 2:
+        assert calls == ["GroundedDraftWire", "CitationRangeRepair", "GroundedDraftWire"]
+        if fix_content:
+            assert incorrect not in result.response.answer_text
+            assert CLAIM in result.response.answer_text
+        else:
+            assert incorrect in result.response.answer_text
+            assert "確認が必要な点" in result.response.answer_text
+            assert result.response.generation_trace["round_budget"]["stop"]["reason"] == "max_correction_rounds"
+    else:
+        assert calls == ["GroundedDraftWire", "CitationRangeRepair"][: limit + 1]

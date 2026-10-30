@@ -2605,7 +2605,7 @@ def synthesize_grounded_answer(
     rounds: list[dict[str, Any]] = []
     best: tuple[Any, AnswerContext, list[dict[str, Any]], tuple, str] | None = None
     feedback: dict[str, Any] | None = None
-    expanded = corrected = False
+    expanded = corrected = range_repair_attempted = False
     retrieval_attempted = False
     # 監査が summary を不支持とした round の (番号, その round に公開しなかった草稿の主張があったか, 草稿の summary)。
     summary_flags: list[tuple[int, bool, str]] = []
@@ -2634,10 +2634,8 @@ def synthesize_grounded_answer(
         audit_mode = grounded.AUDIT_MODE_DETAILED
     if audit_mode == grounded.AUDIT_MODE_STANDARD:
         max_rounds = min(max_rounds, grounded.STANDARD_MAX_ROUNDS)
-    elif audit_mode == grounded.AUDIT_MODE_NONE:
-        # 決定的検査の実値の断定と、前提付き回答の過剰な拒答だけを 1 回是正する。
-        # 対象外の指摘は correction_feedback が返さないので、通常は 1 回の生成で終える。
-        max_rounds = min(max_rounds, 2)
+    # 監査なしでも引用範囲の修復と説明の是正を区別し、設定済みの回数・時間内で説明の是正を1回残す。
+    # 対象外の指摘は correction_feedback が返さないので、通常は1回の生成で終える。
     compact_audit_reasons = bool(getattr(settings, "answer_audit_compact_reasons", False))
     # 作り直しの組の LLM の呼び出しが失敗し、前の組を公開したときの例外の型（#2729）。
     correction_failure = ""
@@ -2684,6 +2682,7 @@ def synthesize_grounded_answer(
             previous=previous_round.checked if previous_round is not None else (),
             previous_draft=previous_round.draft if previous_round is not None else None,
             previous_dropped=previous_round.dropped if previous_round is not None else (),
+            repair_citation_ranges=not range_repair_attempted,
             known_gaps=known_gaps,
             compact_audit_reasons=compact_audit_reasons,
             guide_steps=round_steps,
@@ -2881,6 +2880,10 @@ def synthesize_grounded_answer(
         assert best is not None
         if not grounded.diagnostic_only(current.timing) and current.audit is not None and not current.audit.summary_supported:
             summary_flags.append((number, current.unpublished_claims, str(current.draft.summary)))
+        if current.timing.get("citation_range_repair"):
+            range_repair_attempted = True
+            # 原文の範囲だけを変える処理は、説明内容の是正を済ませたことにしない。
+            corrected = False
         rounds.append({**current.trace(), "accepted": accepted})
         # 採用しなかった草稿の指摘ではなく、公開候補に残る不足を次の是正へ渡す。
         previous_feedback, feedback = (
@@ -2967,7 +2970,7 @@ def synthesize_grounded_answer(
                 decision["stop_reason"] = "unverified"
         budget.note(current, feedback, accepted=accepted)
         if not feedback or number == max_rounds - 1:
-            if feedback and max_rounds < grounded.MAX_ROUNDS:
+            if feedback:
                 # 設定の上限で是正を止めた（#1912）。時間の上限ではないので本文の「回答時間の上限により省略した処理」には出さない。
                 budget.stop = {
                     "reason": MAX_CORRECTION_ROUNDS_STOP,
@@ -3004,7 +3007,9 @@ def synthesize_grounded_answer(
         # 次の組を始める前に、改善が見込めるかを確かめる（#1527）。作り直した組が採用されない・指摘が前の組と
         # 同じなら、次の組も良くならない。同じ根拠のまま作り直す（指摘の反映）のは、残った指摘が根拠の不足
         # （草稿が「資料に記載が無い」と答えた要求）だけのときはしない。
-        stop_reason = grounded.no_improvement_reason(number, accepted=accepted, feedback=feedback, previous=previous_feedback)
+        # 範囲だけの修復で判明した内容の不一致には、まだ説明の是正を試していない。
+        comparison_round = 0 if accepted and current.timing.get("citation_range_repair") else number
+        stop_reason = grounded.no_improvement_reason(comparison_round, accepted=accepted, feedback=feedback, previous=previous_feedback)
         if (
             not stop_reason
             and remedy["remedy"] == "correction"
