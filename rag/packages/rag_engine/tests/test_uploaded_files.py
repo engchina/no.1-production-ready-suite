@@ -4,8 +4,10 @@ import json
 import os
 import shutil
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -101,6 +103,57 @@ class UploadedFileTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), b"manual")
         self.assertNotIn(str(self.root), str(path))
         self.assertTrue(path.is_relative_to(Path(self.tmp.name)))
+
+    def test_delete_isolated_by_workspace_and_filename(self):
+        for separate_workspace, other_name in [(True, "manual.pdf"), (True, "other.pdf"), (False, "other.pdf")]:
+            with self.subTest(separate_workspace=separate_workspace, other_name=other_name):
+                root_a = Path(self.tmp.name) / f"a-{separate_workspace}-{other_name}"
+                root_b = Path(self.tmp.name) / f"b-{other_name}" if separate_workspace else root_a
+                _run(root_a, "aaaaaa01", "manual.pdf", b"same", mtime=100)
+                _run(root_b, "bbbbbb01", other_name, b"same", mtime=200)
+                target_a = next(x for x in list_uploaded_files(root_a) if x.file_name == "manual.pdf")
+                target_b = next(x for x in list_uploaded_files(root_b) if x.file_name == other_name)
+                path_a = materialize_uploaded_file(root_a, target_a)
+                path_b = materialize_uploaded_file(root_b, target_b)
+                self.assertNotEqual(path_a.parent, path_b.parent)
+                delete_uploaded_file(root_a, target_a, SimpleNamespace(adb_settings=None))
+                self.assertFalse(path_a.exists())
+                self.assertEqual(path_b.read_bytes(), b"same")
+                self.assertTrue((root_b / "bbbbbb01" / "source.pdf").is_file())
+
+    def test_copy_and_delete_of_one_file_are_serialized(self):
+        _run(self.root, "aaaaaa01", "manual.pdf", b"same", mtime=100)
+        uploaded = list_uploaded_files(self.root)[0]
+        copying, release, deleting = Event(), Event(), Event()
+        original_copy = shutil.copyfile
+
+        def copy(source, target):
+            copying.set()
+            if not release.wait(5):
+                raise TimeoutError("複製の再開待ち")
+            return original_copy(source, target)
+
+        def delete_database(*args, **kwargs):
+            deleting.set()
+            return 1
+
+        with ThreadPoolExecutor(max_workers=2) as pool, patch("rag_engine.workflows.uploaded_files.shutil.copyfile", side_effect=copy):
+            copied = pool.submit(materialize_uploaded_file, self.root, uploaded)
+            self.assertTrue(copying.wait(5))
+            removed = pool.submit(
+                delete_uploaded_file, self.root, uploaded, SimpleNamespace(adb_settings=object()), delete_documents=delete_database
+            )
+            try:
+                self.assertFalse(deleting.wait(0.1))
+            finally:
+                release.set()
+            path = copied.result(timeout=5)
+            removed.result(timeout=5)
+        self.assertTrue(deleting.is_set())
+        self.assertFalse(path.exists())
+        # 削除済みの原本から複製を復活させない。
+        with self.assertRaises(FileNotFoundError):
+            materialize_uploaded_file(self.root, uploaded)
 
     def test_delete_removes_database_rows_first_then_every_run_and_parse_input(self):
         _run(self.root, "aaaaaa01", "manual.pdf", b"manual", mtime=100)
