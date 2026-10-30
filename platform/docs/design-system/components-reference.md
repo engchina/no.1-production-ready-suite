@@ -4027,3 +4027,7 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 ### `ViewportScrollRegion`
 
 カードの主一覧を標準の 5 / 8 行相当の上限で縦スクロールにする。desktop では主一覧の `DataTable.growToViewport` と同様に、スクロール位置を差し引いた表示領域の下余白まで上限を伸ばす。小さな画面では標準密度を維持する。`RunHistoryTable.growToViewport` は同じ指定を内側の `DataTable` に渡す。
+
+### TraceExplorer
+
+`RunTimeline` の「軌跡を調べる」から開く、3 製品共通の呼び出し調査。時間の概観・検索・種類/状態・階層/開始時刻順・選択連動の詳細を提供する。広い置き場所は 2 列、狭い場所は一覧/詳細を切り替える。`RunTimelineStep.operationName` に記録された操作名を渡す。文言は `explorerLabels`（`DEFAULT_TRACE_EXPLORER_LABELS`）で上書きできる。振る舞いの正本は [run-history.md](../ux-contracts/run-history.md) の「軌跡の調査」。

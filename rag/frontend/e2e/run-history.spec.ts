@@ -1,3 +1,4 @@
+import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticCallDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
@@ -1405,8 +1406,12 @@ test("呼び出しの詳細で入力・結果・Schema・計時を確認でき�
   const row = run(1);
   await mockRuns(page, [row]);
   await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
-    { key: "root", spec: ragSpan.root(), at: [0, 2] },
+    { key: "root", spec: ragSpan.root(), at: [0, 8] },
     { key: "model", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [0, 1], details: { call: syntheticCallDetails } },
+    { key: "tool", spec: ragSpan.technical("gen_ai.execute_tool", "root", { "gen_ai.tool.name": "synthetic-tool" }), at: [1, 3], details: { call: syntheticCallDetails } },
+    { key: "model-2", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [3, 4], details: { call: syntheticCallDetails } },
+    { key: "tool-2", spec: ragSpan.technical("gen_ai.execute_tool", "root", { "gen_ai.tool.name": "synthetic-tool-2" }), at: [4, 7], details: { call: syntheticCallDetails } },
+    { key: "model-3", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [7, 8], details: { call: syntheticCallDetails } },
   ]) });
   await page.goto(`/history/${row.run_id}`);
   await page.getByTestId("run-history-timeline-summary").click();
@@ -1431,4 +1436,5 @@ test("呼び出しの詳細で入力・結果・Schema・計時を確認でき�
     }, theme);
     await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
   }
+  await confirmTraceExplorer(page, testInfo, expect, true);
 });

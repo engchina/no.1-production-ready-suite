@@ -33,6 +33,7 @@ export type ChatProgressStepStatus = "pending" | "running" | "done" | "failed" |
  * backend は製品の既存の配信（polling / SSE / WebSocket）で、この形の一覧を画面へ渡す。
  */
 export interface ChatProgressStep {
+  operationName?: string;
   children?: ReactNode;
   /** 段階の識別子（例: "classify" / "schema" / "generate_sql" / "execute" / "summarize" / "tool:<name>"）。 */
   id: string;
@@ -283,6 +284,7 @@ function SummaryText({ icon: Icon, children }: { icon: LucideIcon; children: Rea
 export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineStep {
   const detail = [step.detail, step.meta].filter(Boolean).join("・");
   const result: RunTimelineStep = { id: step.id, label: step.label, status: step.status };
+  if (step.operationName) result.operationName = step.operationName;
   if (step.startedAt) result.startedAt = step.startedAt;
   if (step.finishedAt) result.finishedAt = step.finishedAt;
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);

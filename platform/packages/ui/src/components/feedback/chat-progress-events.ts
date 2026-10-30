@@ -520,6 +520,7 @@ export function labelChatProgressSteps(
       label: definition ? definition.label(step.status, values) : (span?.displayName ?? spanName ?? step.id),
       status: step.status,
     };
+    if (span) result.operationName = span.name;
     if (product) result.product = traceLabels.productName(product);
     // 状態で変わらない名詞の名前（「SQL の生成」）。失敗のカードの止まった段に使う（#2342）。
     const name = definition ? definition.label("pending", values) : undefined;
