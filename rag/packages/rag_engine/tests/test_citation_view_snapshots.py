@@ -168,6 +168,8 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
     raw = json.dumps(schema.model_validate(wire_value()).model_dump(), ensure_ascii=False, indent=2) + "\n"
     sent: list[dict[str, Any]] = []
     telemetry: list[Any] = []
+    private_requests: list[Any] = []
+    private_responses: list[Any] = []
 
     def transport(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
@@ -175,6 +177,12 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
         return httpx.Response(200, content=body, headers=headers)
 
     class Observation:
+        def request(self, value: object, *, schema: object = None) -> None:
+            private_requests.append((value, schema))
+
+        def response(self, value: object) -> None:
+            private_responses.append(value)
+
         def usage(self, value: Any) -> None:
             telemetry.append(value)
 
@@ -212,6 +220,8 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
     finally:
         client.close()
     assert len(sent) == 1
+    assert private_requests == [(sent[0], sent[0]["text"]["format"])]
+    assert len(private_responses) == 1 and private_responses[0].output_text == raw
     assert sent[0]["text"]["format"]["strict"] is True
     assert sent[0]["input"][0]["content"] == result.citation_trace["input"]["system_prompt"]
     assert sent[0]["input"][1]["content"] == result.citation_trace["input"]["prompt"]

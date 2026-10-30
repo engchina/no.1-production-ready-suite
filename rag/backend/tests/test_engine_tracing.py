@@ -35,6 +35,7 @@ async def test_engine_stage_and_client_keep_parent_across_thread() -> None:
             await asyncio.to_thread(run_engine)
         stage = next(span for span in summary.spans if span.operation_name == "rag.engine.stage")
         llm = next(span for span in summary.spans if span.operation_name == "gen_ai.chat")
+        assert llm.display and llm.display.details and llm.display.details.call
         call = llm.display.details.call
         assert call.visibility == "system_admin"
         assert "合成の入力" in call.input.text
