@@ -42,6 +42,7 @@ from rag_engine.knowledge.prompt_files import (
 )
 from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
 from rag_engine.models.llm import (
+    GroundedDraft,
     PictureDescriptionOutput,
     RerankTextRank,
     TextOutput,
@@ -1086,10 +1087,55 @@ def _runaway_response_reason(response: Any) -> str | None:
     return "runaway_repetition" if repeating_tail(text) else None
 
 
+class _DraftArrayRepetition:
+    """草稿で重複集約する配列の、完了した同一objectの連続だけを検出する。"""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.cursor = 0
+        self.in_array = False
+        self.previous = ""
+        self.count = self.repeated_chars = 0
+        self.decoder = json.JSONDecoder()
+
+    def feed(self, text: str) -> bool:
+        self.buffer += text
+        while self.cursor < len(self.buffer):
+            if not self.in_array:
+                match = re.search(r'(?<!\\)"(?:request_coverage|guide_coverage|items)"\s*:\s*\[', self.buffer[self.cursor :])
+                if match is None:
+                    return False
+                self.cursor += match.end()
+                self.in_array = True
+                self.previous = ""
+                self.count = self.repeated_chars = 0
+            while self.cursor < len(self.buffer) and self.buffer[self.cursor] in " \t\r\n,":
+                self.cursor += 1
+            if self.cursor == len(self.buffer):
+                return False
+            if self.buffer[self.cursor] == "]":
+                self.cursor += 1
+                self.in_array = False
+                continue
+            try:
+                value, end = self.decoder.raw_decode(self.buffer, self.cursor)
+            except json.JSONDecodeError:
+                return False
+            self.cursor = end
+            canonical = json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, dict) else ""
+            self.count = self.count + 1 if canonical and canonical == self.previous else 1
+            self.repeated_chars = self.repeated_chars + len(canonical) if canonical == self.previous else len(canonical)
+            self.previous = canonical
+            if self.count >= RUNAWAY_WINDOW_CHARS // RUNAWAY_MAX_PERIOD_CHARS and self.repeated_chars >= RUNAWAY_WINDOW_CHARS:
+                return True
+        return False
+
+
 class _RunawayMonitor:
     """streaming の出力の文の末尾から、出力の暴走（同じ並びの繰り返し・空白の連続）を見分ける（#2966）。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, draft_arrays: bool = False) -> None:
+        self.draft_arrays = _DraftArrayRepetition() if draft_arrays else None
         self.tail = ""
         self.whitespace_run = 0
         self.unchecked = 0
@@ -1098,6 +1144,8 @@ class _RunawayMonitor:
         """出力の続き ``text`` を足し、暴走なら理由（`runaway_repetition` / `runaway_whitespace`）を返す。"""
         if not text:
             return None
+        if self.draft_arrays is not None and self.draft_arrays.feed(text):
+            return "runaway_repetition"
         stripped = text.rstrip()
         self.whitespace_run = self.whitespace_run + len(text) if not stripped else len(text) - len(stripped)
         if self.whitespace_run >= RUNAWAY_WHITESPACE_CHARS:
@@ -1182,7 +1230,9 @@ def _stream_parsed(
     read_timeout = min(limits.idle_seconds, total) if limits is not None else total
     idle_bound = limits is not None and limits.idle_seconds < total
     timing = _StreamTiming()
-    monitor = _RunawayMonitor() if runaway else None
+    schema = request.get("text_format")
+    draft_arrays = isinstance(schema, type) and issubclass(schema, GroundedDraft)
+    monitor = _RunawayMonitor(draft_arrays=draft_arrays) if runaway else None
     window: deque[float] = deque()
     final: Any = None
     last = started
@@ -1710,6 +1760,7 @@ def describe_picture(
             prompt,
             image_paths,
             settings,
+            GroundedDraft,
             PictureDescriptionOutput,
             provider_id=settings.default_vision_llm,
             purpose="document.read",
@@ -1722,6 +1773,7 @@ def describe_picture(
             prompt,
             image_path,
             settings,
+            GroundedDraft,
             PictureDescriptionOutput,
             provider_id=settings.default_vision_llm,
         )
