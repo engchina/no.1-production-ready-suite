@@ -13,6 +13,8 @@ from pr_backend_core.observability.tracing import (
 from rag_engine.generation.execution_record import _execution_step
 from rag_engine.resources.tracing import bind_trace_observer, observe_call
 
+from app.clients.oci_genai import OciGenAiClient
+from app.config import Settings
 from app.rag.pipeline import _observe_engine_call
 
 
@@ -87,5 +89,60 @@ def test_sdk_snapshot_keeps_rerank_diagnostics_and_omits_image() -> None:
         assert '"relevance_score": 0.9' in details.call.output.text
         assert details.call.schema_.status == "not_recorded"
         assert details.code and details.code[0].label == "rerank"
+    finally:
+        shutdown_tracing()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["embeddings", "rerank"])
+@pytest.mark.parametrize("failed", [False, True])
+async def test_backend_sdk_boundary_keeps_request_response_and_failure(
+    operation: str, failed: bool
+) -> None:
+    from types import SimpleNamespace
+
+    models = importlib.import_module("oci.generative_ai_inference.models")
+    sent: list[object] = []
+
+    def invoke(request: object) -> object:
+        sent.append(request)
+        if failed:
+            raise RuntimeError("合成の接続失敗")
+        data = (
+            models.EmbedTextResult(embeddings=[[1.0, 0.0, 0.0]])
+            if operation == "embeddings"
+            else models.RerankTextResult(
+                document_ranks=[models.DocumentRank(index=0, relevance_score=0.9)]
+            )
+        )
+        return SimpleNamespace(data=data)
+
+    client = OciGenAiClient(
+        settings=Settings(oci_compartment_id="synthetic-compartment"),
+        inference_client=SimpleNamespace(embed_text=invoke, rerank_text=invoke),
+    )
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with operation_trace("rag.search", operation_id="synthetic") as summary:
+            call = (
+                client._embed_with_oci(["合成の入力"], input_type="SEARCH_QUERY")
+                if operation == "embeddings"
+                else client._rerank_with_oci("合成の入力", ["合成の資料"], 1)
+            )
+            if failed:
+                with pytest.raises(RuntimeError, match="合成の接続失敗"):
+                    await call
+            else:
+                await call
+        span = next(span for span in summary.spans if span.operation_name == f"gen_ai.{operation}")
+        assert span.display and span.display.details and span.display.details.call
+        details = span.display.details.call
+        assert details.visibility == "system_admin" and "合成の入力" in details.input.text
+        assert (
+            details.output.status == "recorded"
+            and ("RuntimeError" in details.output.text) == failed
+        )
+        assert len(sent) == 1
+        assert "合成の入力" not in str(span.attributes)
     finally:
         shutdown_tracing()

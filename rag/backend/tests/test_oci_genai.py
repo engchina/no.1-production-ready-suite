@@ -540,10 +540,15 @@ async def test_embedding_purpose_uses_declared_input_type_and_preserves_probe(
     captured: list[dict[str, object]] = []
 
     @contextmanager
-    def capture(name: str, *, kind: str, attributes: dict[str, object]) -> Iterator[None]:
+    def capture(
+        name: str, *, kind: str, attributes: dict[str, object]
+    ) -> Iterator[SimpleNamespace]:
         assert name == "gen_ai.embeddings" and kind == "client"
         captured.append(attributes)
-        yield
+        yield SimpleNamespace(
+            set_call_input=lambda *args, **kwargs: None,
+            set_call_output=lambda *args, **kwargs: None,
+        )
 
     monkeypatch.setattr(oci_genai, "observed_span", capture)
     sdk = FakeGenAiInferenceClient(
