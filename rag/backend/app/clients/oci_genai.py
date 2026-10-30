@@ -31,6 +31,7 @@ from rag_engine.retrieval.query_identity import normalized_query_key
 
 from app.clients.ai_calls import embedding_rejection_reason, ingestion_ai_calls
 from app.clients.oci_auth import load_oci_config_without_prompt
+from app.clients.oci_snapshot import oci_call_snapshot
 from app.config import Settings, get_settings
 
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[ぁ-んァ-ン一-龯々ー]+", re.IGNORECASE)
@@ -323,8 +324,10 @@ class OciGenAiClient:
                     }.get(input_type)
                 ),
             },
-        ):
+        ) as span:
+            span.set_call_input(oci_call_snapshot(details), restricted=True)
             response = await self._sdk_call_runner(lambda: self._client().embed_text(details))
+            span.set_call_output(oci_call_snapshot(response.data))
         embeddings = getattr(response.data, "embeddings", None)
         if not isinstance(embeddings, list):
             raise ValueError("OCI embedding response に embeddings がありません。")
@@ -377,8 +380,10 @@ class OciGenAiClient:
                 **model_purpose_attributes(),
             },
         ) as span:
+            span.set_call_input(oci_call_snapshot(details), restricted=True)
             try:
                 response = await self._sdk_call_runner(invoke_sdk)
+                span.set_call_output(oci_call_snapshot(response.data))
             finally:
                 if receipt is not None:
                     span.set_attributes(receipt.attributes())

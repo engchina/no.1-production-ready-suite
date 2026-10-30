@@ -36,6 +36,7 @@ from rag_engine.resources.tracing import CallObservation, bind_trace_observer
 
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
+from app.clients.oci_snapshot import oci_call_snapshot
 from app.clients.oracle import OracleClient
 from app.clients.oracle_read_stats import track_db_calls
 from app.config import Settings, get_settings
@@ -291,10 +292,10 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
 
         class Observation:
             def request(self, value: object, *, schema: object = None) -> None:
-                span.set_call_input(value, schema=schema, restricted=True)
+                span.set_call_input(oci_call_snapshot(value), schema=schema, restricted=True)
 
             def response(self, value: object) -> None:
-                span.set_call_output(value)
+                span.set_call_output(oci_call_snapshot(value))
 
             def usage(self, value: object) -> None:
                 record_genai_usage(span, value)
@@ -306,11 +307,17 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
                 details: Mapping[str, object] | None = None,
             ) -> None:
                 if operation == "rerank":
-                    span.set_display(
-                        kind=kind,
-                        params=params,
-                        details=answer_step_details(details) if details is not None else None,
-                    )
+                    display_details = answer_step_details(details) if details is not None else None
+                    if (
+                        display_details
+                        and span.display
+                        and span.display.details
+                        and span.display.details.call
+                    ):
+                        display_details = display_details.model_copy(
+                            update={"call": span.display.details.call}
+                        )
+                    span.set_display(kind=kind, params=params, details=display_details)
 
         yield Observation()
 
