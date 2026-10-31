@@ -84,10 +84,14 @@ describe("answerStepDisplayName", () => {
 });
 
 describe("answerStepMeta", () => {
-  it("結果の説明（complete・中断以外）と LLM の回数を「 · 」でつなぐ", () => {
+  it("状態名を除いた結果の説明と LLM の回数を「 · 」でつなぐ", () => {
     expect(answerStepMeta({ llmCalls: 0, note: "complete" })).toBeUndefined();
     expect(answerStepMeta({ llmCalls: 3, note: "省略" })).toBe("省略 · LLM 3 回");
     expect(answerStepMeta({ note: "エラーで中断" })).toBeUndefined();
+    // 旧記録の内部状態は状態アイコンに任せ、説明と計測値は残す。
+    expect(answerStepMeta({ note: " skipped " })).toBeUndefined();
+    expect(answerStepMeta({ note: "skipped", llmCalls: 1 })).toBe("LLM 1 回");
+    expect(answerStepMeta({ note: "skipped は合成の入力値です" })).toBe("skipped は合成の入力値です");
   });
 });
 

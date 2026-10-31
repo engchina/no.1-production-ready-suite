@@ -677,9 +677,11 @@ async function screenshotBothThemes(page: Page, path: (theme: string) => string)
   for (const theme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: theme });
     await page.evaluate((value) => {
+      document.documentElement.classList.remove("light", "dark");
+      document.documentElement.classList.add(value);
       document.documentElement.dataset.theme = value;
     }, theme);
-    await page.screenshot({ path: path(theme), fullPage: false });
+    await page.screenshot({ path: path(theme), fullPage: false, animations: "disabled" });
   }
 }
 
@@ -1031,7 +1033,7 @@ for (const viewport of [
 }
 
 
-test("リランクの論理要求は新規配信と保存したtraceで同じ名前・階層を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("新規配信と保存したtraceでリランクの階層とスキップ理由の表示を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const recorder = spanProgressRecorder("trace-rerank");
   const begin = [
     ...recorder.start("root", ragSpan.root()),
@@ -1045,7 +1047,13 @@ test("リランクの論理要求は新規配信と保存したtraceで同じ名
     ...recorder.finish("rank-request", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "miss", sdk_attempt_count: 1, sdk_attempts: [{ retry_number: 1, status: "completed" }] }, null, 2) }] } }),
     ...recorder.start("rank-cache", ragSpan.technical("rerank.request", "rank-parent", { "pr.stage": "rerank.request" })),
     ...recorder.finish("rank-cache", "done", { details: { code: [{ label: "rerank", language: "json", text: JSON.stringify({ cache_state: "hit", sdk_attempt_count: 0 }, null, 2) }] } }),
-    ...recorder.finish("rank-parent"), ...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"),
+    ...recorder.finish("rank-parent"),
+    // 旧記録の note と新記録の省略形を、同じ表示経路で再現する。
+    ...recorder.start("legacy-skip", ragSpan.step("登録ルールによる確認の使用")),
+    ...recorder.finish("legacy-skip", "skipped", { params: { note: "skipped" }, details: { fields: [{ label: "結果", value: "設定がオフのため、登録ルールによる確認の使用をスキップしました。" }] } }),
+    ...recorder.start("new-skip", ragSpan.step("用語・同義語による検索文の追加")),
+    ...recorder.finish("new-skip", "skipped", { details: { fields: [{ label: "結果", value: "設定がオフのため、検索文の追加をスキップしました。" }] } }),
+    ...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"),
   ];
   const content = "合成の回答です。";
   const stream: TimedChunk[] = [
@@ -1062,6 +1070,21 @@ test("リランクの論理要求は新規配信と保存したtraceで同じ名
   await page.getByTestId("search-run-progress-summary").click();
 
   async function checkRows(prefix: string) {
+    const reason = "設定がオフのため、登録ルールによる確認の使用をスキップしました。";
+    const skipped = page.getByTestId(`${prefix}-step-${spanStepId("legacy-skip")}`);
+    await expect(skipped).toHaveAttribute("data-status", "skipped");
+    await expect(skipped.locator("[data-run-step-status-duration]")).toContainText("スキップ");
+    await expect(skipped.locator("[data-run-result-summary]")).toHaveText(reason);
+    await expect(page.getByTestId(prefix)).not.toContainText("skipped");
+    await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveText("設定がオフのため、検索文の追加をスキップしました。");
+    await skipped.scrollIntoViewIfNeeded();
+    await screenshotBothThemes(page, theme => testInfo.outputPath(`${prefix}-skip-${theme}.png`));
+    await inspectTraceStep(page, page.getByTestId(prefix), spanStepId("legacy-skip"));
+    await expect(page.locator(`[data-trace-record="${spanStepId("legacy-skip")}"] [data-trace-result-summary]`)).toHaveText(reason);
+    await expect(page.locator("[data-trace-inspector]")).toContainText(reason);
+    await expectNoPageOverflow(page);
+    await screenshotBothThemes(page, theme => testInfo.outputPath(`${prefix}-skip-trace-${theme}.png`));
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
     const request = page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}`);
     const sdk = page.getByTestId(`${prefix}-step-${spanStepId("rank-sdk")}`);
     const cached = page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}`);

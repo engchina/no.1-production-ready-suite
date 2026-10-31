@@ -15,6 +15,7 @@ from app.rag.span_display import (
     ANSWER_STEP_DISPLAY_NAMES,
     ANSWER_STEP_KIND,
     answer_step_display_name,
+    answer_step_params,
     span_display_name,
 )
 
@@ -54,3 +55,15 @@ def test_search_readiness_step_is_not_known() -> None:
     """検索の前提の確認は工程にしない（#3495）。古い記録に残った工程名はそのまま出す。"""
     assert "検索の準備確認" not in ANSWER_STEP_DISPLAY_NAMES
     assert answer_step_display_name("検索の準備確認") == "検索の準備確認"
+
+
+@pytest.mark.parametrize("status", ["complete", "skipped", "エラーで中断"])
+def test_plain_status_is_not_a_result_note(status: str) -> None:
+    assert answer_step_params({"name": "合成の工程", "status": status, "llm_calls": 1}) == {
+        "name": "合成の工程",
+        "llm_calls": 1,
+    }
+
+
+def test_meaningful_result_note_is_preserved() -> None:
+    assert answer_step_params({"status": "該当なし"}) == {"note": "該当なし"}
