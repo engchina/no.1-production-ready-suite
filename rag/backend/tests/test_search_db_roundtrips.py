@@ -1353,3 +1353,21 @@ def test_independent_reference_hybrid_lookup_does_not_use_main_rrf_ratios() -> N
     assert first._fuse_hybrid_hits(vector, keyword, 3) == second._fuse_hybrid_hits(
         vector, keyword, 3
     )
+
+
+async def test_keyword_list_without_a_search_expression_is_not_executed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients.oracle import SearchHits
+
+    monkeypatch.setattr(oracle_module, "_oracle_text_query", lambda *args, **kwargs: None)
+    client = OracleClient(settings=_search_settings())
+
+    async def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("検索式がないため SQL を実行しない")
+
+    monkeypatch.setattr(client, "_read_keyword_branch", forbidden)
+    (hits,) = await client.search_many([("?", [1.0], SearchMode.KEYWORD)], 5)
+    assert isinstance(hits, SearchHits)
+    assert hits.status == "not_executed"
+    assert not hits

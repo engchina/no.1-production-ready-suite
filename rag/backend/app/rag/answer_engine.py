@@ -1565,6 +1565,8 @@ class AnswerEngine:
             raw_lists = []
             for (query, _embedding, mode), hits in zip(searches, all_hits, strict=True):
                 index = queries.index(query)
+                if getattr(hits, "status", "") == "not_executed":
+                    continue
                 if getattr(hits, "status", "") == "failed":
                     state.record_degraded(
                         "retrieval",

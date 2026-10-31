@@ -728,7 +728,12 @@ class OracleClient:
             if mode == SearchMode.VECTOR:
                 results.append(vector_hits)
             elif mode == SearchMode.KEYWORD:
-                results.append(keyword_hits)
+                if keyword_branch is None:
+                    skipped = SearchHits()
+                    skipped.status = "not_executed"
+                    results.append(skipped)
+                else:
+                    results.append(keyword_hits)
             else:
                 results.append(
                     _with_citation_hits(
