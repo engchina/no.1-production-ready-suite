@@ -347,7 +347,7 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertEqual([record.id for record in bundle.records], ["parent-1"])
         self.assertGreater(len(bundle.text), len(body))
 
-    def test_oversized_parent_context_is_skipped_when_other_parent_fits(self):
+    def test_oversized_parent_context_is_kept_for_batched_generation(self):
         records = [
             _chunk_record("child-big", "child", 1, "parent-big", "big needle"),
             _chunk_record("parent-big", "parent", 1, "", "big parent " + ("X" * 1000), child_ids=["child-big"]),
@@ -368,13 +368,10 @@ class ContextBuilderTests(unittest.TestCase):
         )
 
         self.assertTrue(bundle.ready)
-        self.assertEqual([record.id for record in bundle.records], ["parent-small"])
+        self.assertEqual([record.id for record in bundle.records], ["parent-big", "parent-small"])
         self.assertIn("small parent synthesis", bundle.text)
-        self.assertNotIn("parent-big", bundle.text)
-        self.assertEqual(
-            bundle.trace_payload()["excluded_evidence"],
-            [{"id": "parent-big", "reason": "context_character_budget", "context_reason": "parent_of_retrieved_child"}],
-        )
+        self.assertIn("X" * 1000, bundle.text)
+        self.assertEqual(bundle.trace_payload()["excluded_evidence"], [])
 
     def test_context_budget_keeps_citation_for_first_record(self):
         record = _chunk_record("target", "child", 1, "", "needle " * 100)

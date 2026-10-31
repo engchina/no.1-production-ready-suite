@@ -893,7 +893,7 @@ def _bundle_context(
             ),
             "anchor_limit": top_k,
             "record_limit": max_records,
-            "character_limit": max_chars,
+            "full_parent_text": True,
             "anchor_ids": [retrieval_record_id(record) for record in selected],
             "loaded_ids": [str(chunk.chunk_uid) for chunk in loaded] if loaded is not None else [],
             "selected_ids": [retrieval_record_id(record) for record in bundle.records],
@@ -2040,17 +2040,21 @@ def _grounded_spans(
     *,
     budget: int | None = None,
     whole_records: bool = False,
+    preserve_records: bool = False,
     crag_assessment: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """全出典へ本文予算を配分して原文を選び、機能キー・タグ・必須根拠を付ける。
 
     budget は原文の総予算（文字。`RAG_ENGINE_EVIDENCE_BUDGET_CHARS`）。None なら `evidence_spans` の既定値 (#1054)。
     whole_records は全部の根拠が予算に入るとき切らずに渡す（章節の拡張。#1436）。
+    preserve_records は選択済みの全文を保持する。呼出側が各モデル入力の容量内で分割読取する。
     crag_assessment は CRAG の評価。評価が写しを確かめた原文を、予算の中で必須の範囲にする（#3840）。
     """
     budget_option: dict[str, Any] = {"budget": int(budget)} if budget else {}
     if whole_records:
         budget_option["whole_records"] = True
+    if preserve_records:
+        budget_option["preserve_records"] = True
     quotes = crag_generation.verified_quotes(crag_assessment)
     if quotes:
         budget_option["verified_quotes"] = quotes
@@ -2527,8 +2531,9 @@ def synthesize_grounded_answer(
         ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
 
     from rag_engine.generation import grounded
+    from rag_engine.generation.batched_evidence import prepare_batched_evidence
     from rag_engine.generation.citation_wire import generation_draft_wire_model
-    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, fit_generation_evidence
+    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
     from rag_engine.models.llm import GroundedItem
 
     best_input_budget: dict[str, Any] = {}
@@ -2669,7 +2674,7 @@ def synthesize_grounded_answer(
             images,
             runtime_knowledge,
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
-            whole_records=evidence_budget_chars is not None,
+            preserve_records=True,
             crag_assessment=crag_assessment,
         )
         crag_view = crag_generation.generation_view(
@@ -2719,33 +2724,26 @@ def synthesize_grounded_answer(
                     generation_system += grounded.continue_prompt_steps(
                         generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
                     )
-                previous_ids = {
-                    citation.evidence_id for item in (best[0].draft.items if best is not None else ()) for citation in item.citations
-                }
-                # 保存された草稿は表示IDを使う場合もあるため、実体IDへ解決して保護する。
-                required_sources = {
-                    source for step_id, _title, sources in guide_steps if step_id not in guide_optional_steps for source in sources
-                }
-                protected_ids = {
-                    span["evidence_id"]
-                    for span in spans
-                    if span["label"] in previous_ids
-                    or span["evidence_id"] in previous_ids
-                    or required_sources.intersection({span.get("source_id"), *(span.get("source_aliases") or ())})
-                }
-                spans, prompt, input_diagnostic = fit_generation_evidence(
+                spans, prompt, input_diagnostic = prepare_batched_evidence(
                     spans,
                     generation_settings,
+                    question=question,
+                    read=lambda system, user, schema: grounded.call_with_model_purpose(
+                        "answer.generate", parse_text_response, system, user, generation_settings, schema, provider_id=provider
+                    ),
+                    tag=lambda values: grounded.tag_spans(question, values),
                     render=render_generation,
                     evidence_text=grounded.evidence_block_text,
                     system=generation_system,
                     schema=grounded.generation_output_model(question).model_json_schema(),
                     provider_id=provider,
-                    protected_ids=protected_ids,
                 )
                 current = generate_round(
                     spans, prompt, previous_round=best[0] if best is not None else None, round_knowledge=runtime_knowledge
                 )
+                if batch_calls := input_diagnostic.get("batch_count", 0):
+                    current.timing["batch_reading_calls"] = batch_calls
+                    current.timing["generation_calls"] = current.timing.get("generation_calls", 0) + batch_calls
                 if number == 0:
                     # 監査の推論の量は、監査をする型のときだけ書く（#2966）。
                     purposes = (
@@ -2775,7 +2773,7 @@ def synthesize_grounded_answer(
                         "error": error_name,  # 例外の型の名前だけ（本文は残さない。#3259）
                         "accepted": False,
                         "audit_calls": 0,
-                        **({"timing": {"generation_calls": 0}} if input_limited else {}),
+                        **({"timing": {"generation_calls": input_diagnostic.get("batch_count", 0)}} if input_limited else {}),
                         **({"deadline_cut": True} if cut else {}),
                     }
                 )
