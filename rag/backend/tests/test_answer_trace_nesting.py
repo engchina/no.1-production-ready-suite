@@ -103,12 +103,12 @@ async def test_spans_are_nested_under_the_step_that_did_the_work(
     # 全体の工程（質問の読み取りから回答の作成まで）の直下に出さない。
     db_parents = parents("synthetic.db_search")
     assert db_parents
-    assert set(db_parents) <= {"質問拡張戦略", "文書検索", "前後の文脈の読み込み"}
-    assert "質問拡張戦略" in db_parents
-    assert set(parents("gen_ai.embeddings")) <= {"質問拡張戦略", "文書検索"}
+    assert set(db_parents) <= {"質問の言い換え・分解", "文書検索", "前後の文脈の読み込み"}
+    assert "質問の言い換え・分解" in db_parents
+    assert set(parents("gen_ai.embeddings")) <= {"質問の言い換え・分解", "文書検索"}
     # モデルの呼び出しは、呼び出した工程の子（言い換えの判定・回答の作成と確認の回）。
     chat_parents = parents("gen_ai.chat")
-    assert "質問拡張戦略" in chat_parents
+    assert "質問の言い換え・分解" in chat_parents
     assert any(parent.startswith("回答文の生成と根拠確認") for parent in chat_parents)
     assert "rag.answer" not in {*db_parents, *chat_parents}
 

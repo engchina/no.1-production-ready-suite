@@ -25,5 +25,3 @@ class RetrievalMetadataFilter:
             "page_numbers": list(self.page_numbers),
             "active": self.active,
         }
-
-

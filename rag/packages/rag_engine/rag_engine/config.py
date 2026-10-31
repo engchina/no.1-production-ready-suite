@@ -692,7 +692,7 @@ _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_AUDIT: "audit_reasoning_effort",
 }
 _PURPOSE_LABELS = {
-    LLM_PURPOSE_STRATEGY: "質問拡張戦略の判定・検索文の生成",
+    LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",
     LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答文の生成",
     LLM_PURPOSE_AUDIT: "回答の監査",

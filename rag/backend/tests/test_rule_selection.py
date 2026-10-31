@@ -18,7 +18,7 @@ from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 
 
 @pytest.fixture(autouse=True)
-def enable_registered_confirmations(monkeypatch):
+def enable_registered_confirmations(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
 
 
@@ -376,7 +376,9 @@ async def test_guardrail_blocks_recognition_before_model_and_masks_allowed_sourc
     assert calls == ["設定は [MASK]"]
 
 
-async def test_disabled_registered_confirmation_does_not_reuse_cached_answers_or_scope(monkeypatch):
+async def test_disabled_registered_confirmation_does_not_reuse_cached_answers_or_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", False)
     request = SearchRequest(
         query="設定", filters={"document_id": "synthetic-a", "page_number_min": "2"}

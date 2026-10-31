@@ -54,7 +54,6 @@ def _text_search_query_source(
 
 
 def _retrieval_metadata_filter(
-
     classification_filter: ClassificationFilter,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}

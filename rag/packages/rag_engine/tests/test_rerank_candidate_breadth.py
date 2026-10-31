@@ -61,9 +61,7 @@ def test_an_explicit_candidate_limit_still_caps_the_reranked_range(monkeypatch):
     _stub_rerank(monkeypatch, seen)
     records = [_child(i) for i in range(150)]
 
-    ranked = rerank_records(
-        "抽出条件の指定方法", records, _settings(), enabled=True, candidate_limit=50
-    )
+    ranked = rerank_records("抽出条件の指定方法", records, _settings(), enabled=True, candidate_limit=50)
 
     assert seen == [50]
     assert ranked[0].id == "c49"

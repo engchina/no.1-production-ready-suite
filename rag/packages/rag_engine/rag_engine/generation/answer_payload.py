@@ -298,8 +298,6 @@ def answer_result_payload(
         "routing_data_items": list(result.routing_data_items),
         "question_plan": result.question_plan.to_payload() if result.question_plan is not None else {},
         "runtime_knowledge": result.runtime_knowledge.to_payload() if result.runtime_knowledge is not None else {},
-
-
         "text_search_tokenizer": result.text_search_tokenizer,
         "text_search_tokenizer_label": result.text_search_tokenizer_label,
         "text_search_tokenizer_fingerprint": result.text_search_tokenizer_fingerprint,

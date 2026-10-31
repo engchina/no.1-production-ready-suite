@@ -35,7 +35,7 @@ function AnswerTermForm({ saved, field }: { saved: boolean; field: UsageField })
   useLeaveGuard(dirty, save.isPending);
   return <div className="space-y-4">
     <Switch id={field} aria-label={t(`settings.answering.${label}`)} checked={enabled} disabled={save.isPending} onCheckedChange={(value) => { save.reset(); setEnabled(value); }} />
-    <FormActionBar ariaLabel={t("settings.answering.actions.label")}
+    <FormActionBar ariaLabel={t(`settings.answering.${label}`)}
       primaryActions={[{ id: "save-answer-terms", label: t(`settings.answering.${label}Save`), icon: Save, loading: save.isPending, disabled: !dirty, onClick: () => save.mutate({ [field]: enabled }, { onSuccess: () => toast.success(t("settings.answering.saved")) }) }]}
       secondaryActions={[{ id: "reset-answer-terms", label: t(`settings.answering.${label}Reset`), icon: RotateCcw, disabled: !dirty || save.isPending, onClick: () => { setEnabled(saved); save.reset(); } }]}
       status={save.isError ? <FormStatus tone="danger" message={save.error.message} /> : null} />

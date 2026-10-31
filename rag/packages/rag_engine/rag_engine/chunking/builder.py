@@ -576,7 +576,6 @@ def _child_chunk(
         atomic=atomic,
         text=text,
         retrieval_text=text,
-
         source_run_id=source_run_id,
         source_file_name=source_file_name,
         classification=classification,
@@ -883,7 +882,6 @@ def _config_hash(config: ChunkingConfig, selected_engine_ids: Sequence[str]) -> 
         "schema_version": CHUNK_SCHEMA_VERSION,
         "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "search_text_schema_version": SEARCH_TEXT_SCHEMA_VERSION,
-
         "strategy": CHUNK_STRATEGY,
         "selected_engine_ids": list(selected_engine_ids),
         "config": config.to_dict(),

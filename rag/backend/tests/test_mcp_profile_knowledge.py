@@ -346,6 +346,7 @@ def test_profile_knowledge_respects_independent_answer_switches(
     if not (terms or rules):
         assert knowledge is None
     else:
+        assert isinstance(knowledge, dict)
         assert bool(knowledge["terms"]) is terms
         assert bool(knowledge["rules"]) is rules
     assert searches and searches[-1].query == "期限"

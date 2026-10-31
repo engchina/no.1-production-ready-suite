@@ -12,8 +12,8 @@ export async function startProgressTimerSampler(page: Page, testIdPrefix: string
     w.__progressTimerSampler = window.setInterval(() => {
       const timer = document.querySelector(`[data-testid="${prefix}-timer"]`);
       const current = document.querySelector(`[data-testid="${prefix}-current"]`);
-      if (timer && current)
-        w.__progressTimerSamples.push(`${current.getAttribute("data-step-id") ?? ""}|${timer.getAttribute("aria-label") ?? ""}`);
+      if (timer)
+        w.__progressTimerSamples.push(`${current?.getAttribute("data-step-id") ?? ""}|${timer.getAttribute("aria-label") ?? ""}`);
     }, 100);
   }, testIdPrefix);
 }

@@ -462,18 +462,29 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     )
     engine_steps = [step for step in steps if step.kind == "answer_step"]
     assert engine_steps
-    assert all(step.status == "done" for step in engine_steps)
+    assert all(step.status in {"done", "skipped"} for step in engine_steps)
     assert not any((s.params or {}).get("name") == "質問の理解" for s in engine_steps)
-    # 用語・同義語と回答ルールは別の工程の span で、回答の段の子としてこの順に並ぶ（#3451）。
+    # 登録知識の用途別の工程は既定でスキップし、全ての工程で実際の結果を示す。
     engine_names = [str((s.params or {}).get("name")) for s in engine_steps]
-    terms_index = engine_names.index("用語・同義語の確認")
-    assert engine_names[terms_index + 1] == "回答ルールの確認"
-    assert "用語・ルールの確認" not in engine_names
-    # 検索の前提の確認は工程にしない（#3495。backend は確認を注入しない）。
-    assert "検索の準備確認" not in engine_names
-    for step in engine_steps[terms_index : terms_index + 2]:
-        assert (step.span or {}).get("parent_id") == answer_span.step_id
-        assert step.details is not None and "結果" in {field.label for field in step.details.fields}
+    policy_names = {
+        "登録ルールによる確認の使用",
+        "回答生成での登録ルールの使用",
+        "用語・同義語による検索文の追加",
+    }
+    assert policy_names <= set(engine_names)
+    assert not {
+        "用語・同義語の確認",
+        "回答ルールの確認",
+        "用語・ルールの確認",
+        "検索の準備確認",
+    } & set(engine_names)
+    for step in engine_steps:
+        if (step.params or {}).get("name") in policy_names:
+            assert step.status == "skipped"
+            assert (step.span or {}).get("parent_id") == answer_span.step_id
+            assert step.details is not None and "結果" in {
+                field.label for field in step.details.fields
+            }
     # 工程の詳細（目的・結果など）は終わった工程の span に付く。
     search = next(
         s for s in engine_steps if str((s.params or {}).get("name")).startswith("文書検索")

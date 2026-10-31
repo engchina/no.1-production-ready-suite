@@ -287,8 +287,7 @@ for (const viewport of VIEWPORTS) {
       await expect(turn.getByRole("button", { name: "承認して実行" })).toBeVisible();
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-approval-${viewport.name}-${theme}.png`) });
-      // 考えている・ツール・承認待ちを通る間、経過時間は減らない（段階ごとに 0 に戻さない）。承認待ちの今の行は
-      // span ではない（id が空）。記録（100ms ごと）が承認待ちを 1 回は拾うまで待ってから確かめる。
+      // 承認待ちで実行中の末端の行が無くても、ヘッダーの通算時間を記録して単調増加を確かめる。
       await expect
         .poll(() =>
           page.evaluate(() =>
@@ -402,7 +401,7 @@ for (const viewport of VIEWPORTS) {
 
 // #3445: 実行中の Run の詳細は、処理の経過を開いても動くスピナーが 1 つ（開いた一覧の今の段）。概要の進行表示は今の段の
 // 名前（ツールは表示名）で、ツールの内部名を出さない。処理の経過の見出しは実行中なら「処理中（N ステップ完了）」と経過時間。
-test("実行中の Run の詳細は処理の経過を開いても動くスピナーが 1 つで、進行表示は今の段の名前を出す", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+test("並行する末端の段はそれぞれ実行中を示し、架空の処理行を追加しない", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
   const {run} = seedRunningRun(mockApi);
   const start = iso(-8_000);
   run.created_at = start;
@@ -424,6 +423,8 @@ test("実行中の Run の詳細は処理の経過を開いても動くスピナ
   await openThread(page);
   const live = page.getByTestId("chat-progress");
   await expect(live.getByTestId("chat-progress-current")).toContainText("全文検索");
+  await expect(live.locator("svg.animate-spin:visible")).toHaveCount(2);
+  await expect(live).not.toContainText("処理を続けています");
   await expectNestedIndent(live);
   await expectNoHorizontalOverflow(page);
   await live.screenshot({path: testInfo.outputPath("chat-progress-nested-running.png")});
@@ -440,11 +441,11 @@ test("実行中の Run の詳細は処理の経過を開いても動くスピナ
   await expect(progress.getByRole("timer")).toHaveAccessibleName(/^経過時間 00:\d\d$/);
   await expect(section.getByTestId("run-timeline-section-timer")).toHaveCount(0);
   await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
-  // 開くと一覧の今の段（全文検索）だけが回り、進行表示は回さない実行中の印にする。
+  // 開くと並行中のベクトルと全文の末端の段がそれぞれ回り、概要は静的な印にする。
   await summary.click();
   await expect(progress).toHaveAttribute("data-processing-activity-icon", "static");
-  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(1);
-  await expect(section.locator("[data-run-timeline-step] svg.animate-spin")).toHaveCount(1);
+  await expect(page.locator("svg.animate-spin:visible")).toHaveCount(2);
+  await expect(section.locator("[data-run-timeline-step] svg.animate-spin")).toHaveCount(2);
   await expect(progress).toContainText("経過時間");
   await expectNoHorizontalOverflow(page);
   await page.screenshot({path: testInfo.outputPath("run-detail-running.png"), fullPage: true});
