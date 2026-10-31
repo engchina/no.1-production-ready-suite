@@ -49,6 +49,7 @@ No.1 Production Ready Suite（`platform/`・`rag/`・`nl2sql/`・`agent/`）が�
 |---|---|---|---|---|
 | `lightningcss`・`lightningcss-*` | npm | MPL-2.0 | 3 製品の `frontend/`・`platform/`（Vite・Tailwind の CSS の build） | build の道具。成果物には含まれない |
 | `axe-core`・`@axe-core/playwright` | npm | MPL-2.0 | 3 製品の `frontend/`（e2e のアクセシビリティの検査） | test だけ |
+| `happy-dom`・`vite`・`vitest`・`zod`・`minimatch`・`@isaacs/nonrecursive-glob-match` | npm | MIT（`minimatch` と `@isaacs/nonrecursive-glob-match` は BlueOak-1.0.0） | `platform/`・3 製品の `frontend/`（package ごとの解決は lockfile を参照） | DOM テスト・build・lint の依存。回答の生成や DB の実行には使わない |
 | `pathspec` | PyPI | MPL-2.0 | backend の dev の依存（`mypy`） | 型検査だけ |
 
 Playwright（Apache-2.0。NOTICE あり）も e2e だけで使い、成果物に含みません。
