@@ -1261,6 +1261,8 @@ async def test_weighted_rrf_uses_raw_lists_once_and_records_actual_contributions
 async def test_raw_search_list_failure_keeps_other_list_weight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.clients.oracle import SearchHits
+
     client = OracleClient(settings=_search_settings())
 
     async def fail(*args: Any, **kwargs: Any) -> None:
@@ -1274,6 +1276,7 @@ async def test_raw_search_list_failure_keeps_other_list_weight(
     vector, keyword = await client.search_many(
         [("合成", [1.0], SearchMode.VECTOR), ("合成", [1.0], SearchMode.KEYWORD)], 5
     )
+    assert isinstance(vector, SearchHits) and isinstance(keyword, SearchHits)
     assert vector.status == "failed"
     assert vector.error == "TimeoutError"
     assert keyword.status == "empty"
@@ -1319,8 +1322,8 @@ async def test_all_failed_rankings_record_failure_and_are_not_cached() -> None:
     recorded: list[Any] = []
 
     class Observation(_Observation):
-        def display(self, kind: Any = None, params: Any = None, details: Any = None) -> None:
-            if details:
+        def display(self, *args: object, **kwargs: object) -> None:
+            if details := kwargs.get("details"):
                 recorded.append(details)
 
     @contextmanager

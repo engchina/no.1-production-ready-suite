@@ -1135,7 +1135,14 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
       await expectNoPageOverflow(page);
       for (const theme of ["light", "dark"]) {
         await page.evaluate(value => {document.documentElement.dataset.theme = value;}, theme);
-        await inspector.screenshot({path: testInfo.outputPath(`search-${key}-${theme}.png`)});
+        if (key === "rrf") {
+          await page.screenshot({path: testInfo.outputPath(`search-${key}-${theme}.png`)});
+          await inspector.getByText("RRF の計算記録", {exact: true}).scrollIntoViewIfNeeded();
+          await expect(inspector.getByText("RRF の計算記録", {exact: true})).toBeVisible();
+          await page.screenshot({path: testInfo.outputPath(`search-${key}-calculation-${theme}.png`)});
+        } else {
+          await inspector.screenshot({path: testInfo.outputPath(`search-${key}-${theme}.png`)});
+        }
       }
       await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
     }
