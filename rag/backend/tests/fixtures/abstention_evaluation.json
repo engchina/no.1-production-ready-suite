@@ -26,13 +26,15 @@
   {
     "id": "abstention-with-fabricated-step",
     "answer": "検索された資料に回答を裏付ける十分な根拠がないため、回答できません。設定画面で項目 A を削除してください。",
-    "support": 0.0,
-    "unsupported": true
+    "support": null,
+    "unsupported": false,
+    "unassessed": true
   },
   {
     "id": "modified-refusal-is-not-boilerplate",
     "answer": "検索された資料に回答を裏付ける十分な根拠がないため、項目 A を削除してください。",
-    "support": 0.0,
-    "unsupported": true
+    "support": null,
+    "unsupported": false,
+    "unassessed": true
   }
 ]

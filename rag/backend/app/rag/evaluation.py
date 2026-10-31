@@ -1011,6 +1011,8 @@ def _case_result(
             failure_reasons.append("missing_content")
         if judgement.claim_support_rate is not None and judgement.claim_support_rate < 1:
             failure_reasons.append("unsupported_claim")
+        if judgement.claims_supported is None and judgement.status == "completed":
+            failure_reasons.append("claim_unassessed")
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,

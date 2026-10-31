@@ -52,7 +52,11 @@ def test_abstention_claims_and_case_failure_reasons(
     )
     judgement = summarize_answer_judgement(scored)
     assert judgement.claim_support_rate == case["support"]
-    assert judgement.claims_supported is not case["unsupported"]
+    if case.get("unassessed"):
+        assert judgement.claims_supported is None
+        assert judgement.passed is None
+    else:
+        assert judgement.claims_supported is not case["unsupported"]
     response = SearchResponse(
         answer=case["answer"],
         citations=citations,
@@ -69,6 +73,7 @@ def test_abstention_claims_and_case_failure_reasons(
     )
     assert result.response_decision_accuracy == 1.0
     assert ("unsupported_claim" in result.failure_reasons) is case["unsupported"]
+    assert ("claim_unassessed" in result.failure_reasons) is bool(case.get("unassessed"))
 
 
 @pytest.mark.parametrize("raw", ["わかりません", "分かりません", "不明です"])

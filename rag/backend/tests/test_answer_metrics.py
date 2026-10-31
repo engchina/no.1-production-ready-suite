@@ -172,3 +172,13 @@ def test_grounding_text_of_rag_answer_sections_matches_the_baseline(case: dict[s
     from app.rag.answer_metrics import grounding_text
 
     assert grounding_text(_with_labels(case["answer"])) == _with_labels(case["grounding"])
+
+
+@pytest.mark.parametrize("status", ["unassessed", "citation_error"])
+def test_unassessed_claims_cannot_pass_with_other_perfect_metrics(status: str) -> None:
+    from app.rag.answer_metrics import claims_supported
+
+    evaluated = _judged(coverage=1.0, claim=status)
+    assert _score(evaluated)["passed"] is None
+    assert claims_supported([{"status": status}]) is None
+    assert claims_supported([{"status": "unsupported"}, {"status": status}]) is False
