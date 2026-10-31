@@ -117,6 +117,7 @@ def _run_example(step_review: str = "supported"):
         item(table, "区分Ⅱの選択肢の値は 01 です。", "区分Ⅱ 02", kind="rule", request_id="Q1"),
         summary=SUMMARY,
     )
+    value["summary_item_indexes"] = [0, 1]
     review = audit(
         (0, step_review, "matched", ""),
         (1, "supported", "matched", ""),
