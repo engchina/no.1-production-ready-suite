@@ -9,6 +9,7 @@ from types import GenericAlias
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, StrictInt, create_model
+from pydantic.json_schema import SkipJsonSchema
 
 LINE_START_DESCRIPTION = (
     "根拠内でコードが付けた「1|」から始まる引用単位の開始番号。PDFの頁・物理行ではない。"
@@ -70,6 +71,18 @@ def generation_draft_wire_model() -> type[BaseModel]:
     item = create_model("GroundedItemWire", __base__=GroundedItem, **item_fields)
     draft_fields: dict[str, Any] = {"items": (GenericAlias(list, item), deepcopy(GroundedDraft.model_fields["items"]))}
     return create_model("GroundedDraftWire", __base__=GroundedDraft, **draft_fields)
+
+
+@lru_cache(maxsize=1)
+def planned_generation_wire_model() -> type[BaseModel]:
+    """根拠計画を入力で受け取る生成では、その計画を出力 schema から除く。"""
+    from rag_engine.models.llm import RequestCoverage
+
+    return create_model(
+        "PlannedGroundedDraftWire",
+        __base__=generation_draft_wire_model(),
+        request_coverage=(SkipJsonSchema[list[RequestCoverage]], Field(default_factory=list, exclude=True)),
+    )
 
 
 def canonical_generation_draft(value: BaseModel) -> GroundedDraft:

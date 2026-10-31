@@ -1119,18 +1119,17 @@ class GroundedAnswerTest(unittest.TestCase):
         } | {t.__name__.removeprefix("_tag_") for t in grounded.SPAN_TAGGERS}
         self.assertEqual(named - known - values, set())
 
-    def test_prompts_state_the_size_limits_the_schema_enforces(self):
-        from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedItem
+    def test_generation_limits_are_advertised_by_the_response_schema(self):
+        from rag_engine.models.llm import GroundedItem
 
-        def limit(model, name):
-            return next(m.max_length for m in model.model_fields[name].metadata if hasattr(m, "max_length"))
-
-        # 上限を超えた出力は検証エラーで全体が失われる。prompt の数値をスキーマと一致させる。
-        self.assertIn(
-            f"items は最大{limit(GroundedDraft, 'items')}件、text は{limit(GroundedItem, 'text')}字以内", grounded.GENERATE_SYSTEM_PROMPT
-        )
-        self.assertIn(f"{limit(GroundedCitation, 'quote')}字以内", grounded.GENERATE_SYSTEM_PROMPT)
-        self.assertIn(f"最大{limit(GroundedAudit, 'unused_evidence_ids')}件", grounded.AUDIT_SYSTEM_PROMPT)
+        schema = generation_draft_wire_model().model_json_schema()
+        item_schema = schema["$defs"]["GroundedItemWire"]
+        item_limit = next(m.max_length for m in GroundedDraft.model_fields["items"].metadata if hasattr(m, "max_length"))
+        text_limit = next(m.max_length for m in GroundedItem.model_fields["text"].metadata if hasattr(m, "max_length"))
+        self.assertEqual(schema["properties"]["items"]["maxItems"], item_limit)
+        self.assertEqual(item_schema["properties"]["text"]["maxLength"], text_limit)
+        self.assertNotIn("items は最大", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertNotIn("全体が破棄される", grounded.GENERATE_SYSTEM_PROMPT)
 
     def test_generation_prompt_explains_every_tag_shown_with_the_evidence(self):
         # 凡例は「tags は原文の性質を示す。」の下の字下げ箇条書き（次の top-level 箇条書きまで）。

@@ -80,7 +80,7 @@ from .structured_outputs import response_format
 logger = logging.getLogger(__name__)
 
 REQUIREMENT_SCHEMA_VERSION = "sql_requirement_v2"
-REQUIREMENT_PROMPT_VERSION = "sql_requirement_v6_attachments"
+REQUIREMENT_PROMPT_VERSION = "sql_requirement_v7_steps"
 
 # LLM に渡す Schema の上限（Schema が大きいときは質問との関連で絞る。
 # 絞り込みはあいまいさを作らない）。
@@ -473,18 +473,20 @@ def requirement_response_format() -> dict[str, Any]:
 
 # LLM への指示の文。SQL を組み立てる文字列ではない（bandit B608 の誤検知）。
 SYSTEM_PROMPT = (  # nosec B608
+    "## Step 1: 質問と入力の範囲を確認する\n"
     "あなたは Oracle AI Database の NL2SQL の要件確認器です。利用者の質問と、入力の schema・"  # nosec B608
     "relationships・profile・ontology だけを使い、1 本の SQL を作るための最低限の要件を、"
     "指定の JSON Schema の JSON オブジェクトだけで返してください（説明文や Markdown を付けない）。"
     "\n"
-    "方針: SQL を 1 つに決められる最低限だけを確かめ、細部まで確認させません。"
+    "## Step 2: SQL を決めるために必要な要件を絞る\n"
+    "SQL を 1 つに決められる最低限だけを確かめ、細部まで確認させません。"
     "missing / ambiguous にするのは、それが無いと SQL を 1 つに決められないものだけです"
     "（例: 対象の表が特定できない、質問の主な指標・列が複数の列の候補で決まらない、"
     "期間の基準の日付の列が決まらない、質問に書かれた条件の列・値が決まらない）。"
     "質問に書かれていない絞り込み・期間・集計・並び順・件数の上限・結合・サブクエリ・そのほかは"
     "「指定なし（使わない）」として扱い、項目にも質問にもしないでください"
     "（件数の上限は画面の既定の上限で足ります）。\n"
-    "規則:\n"
+    "\n## Step 3: 根拠のある要件と確認事項を組み立てる\n"
     "1. select（表示する列・式・集計）と from（使う表）の項目は必ず出してください。"
     "「一覧」「全件」などで列の指定が無ければ select は全列（sql_hint は `*`）の inferred に"
     "してください。ほかの欄（join・where・period・group_by・order_by・limit・subquery・other）は、"
@@ -502,7 +504,7 @@ SYSTEM_PROMPT = (  # nosec B608
     "5. 質問の相対的な期間の表現（「今月」「先月」「今年度」「直近 3 か月」など）は"
     " section=period の項目にし、period.relative_kind に次のどれかを入れてください: "
     + ", ".join(RELATIVE_PERIOD_KINDS)
-    + "（当てはまらなければ other）。period.count は件数（無ければ 0）、period.date_column は"
+    + "（当てはまらなければ other）。period.count は件数（無ければ 0）、period.date_column は"  # nosec B608
     "絞る日付の列（決められなければ空）、period.fiscal_year_start_month は年度の開始月が "
     "profile・用語集・ontology に書かれているときだけ 1〜12（無ければ 0）。日付の計算は"
     "しないでください（プログラムが計算します）。\n"
@@ -511,7 +513,8 @@ SYSTEM_PROMPT = (  # nosec B608
     "7. clarified_question_ja は、項目を反映した自然な日本語の 1 つの質問の文にしてください"
     "（表・列は物理名）。業務プロファイルと添付の表で答えられないときだけ answerable=false と"
     "unanswerable_reason_ja に理由、答えられるなら true と空にしてください。\n"
-    "8. mode=review のときは、answered_items（利用者が答えた項目。同じ key の項目は出力しない）を"
+    "\n## Step 4: 確認済みの条件と会話を引き継ぐ\n"
+    "mode=review のときは、answered_items（利用者が答えた項目。同じ key の項目は出力しない）を"
     "変えずに見直し、SQL を 1 つに決められないものが残っているときだけ missing / ambiguous に"
     "してください。settled_ja のある項目は確定済みです（年度の開始月・基準日・期間の境界を"
     "聞き直さない）。section=other の answered_items は利用者の直しの指示で、前の推測より"
@@ -525,11 +528,11 @@ SYSTEM_PROMPT = (  # nosec B608
     "（例: `select * from employee` は from=EMPLOYEE・select=`*` の confirmed で、質問は 0 件）。\n"
     "11. 表を推測で 1 つに決めないでください。質問の語（例: 「employee」）が複数の表に"
     "当てはまりうるときは from を ambiguous にし、その表を candidates に入れてください。\n"
-    # 件数は MAX_OPEN_QUESTIONS と同じ（f-string にすると bandit の B608 の nosec が外れる）。
-    "12. missing / ambiguous は多くても 3 件にし、答えが大きく変わるもの"
+    f"12. missing / ambiguous は多くても {MAX_OPEN_QUESTIONS} 件にし、答えが大きく変わるもの"
     "（表 → 指標・列 → 結合 → 期間 → 条件 → 集計 → 並び順）から選び、ほかは inferred に"
     "してください。\n"
-    "13. 利用者が読む文字列（label_ja・value_ja・question_ja）は日本語にし、this_month などの"
+    "\n## Step 5: 指定した構造と言語で返す\n"
+    "利用者が読む文字列（label_ja・value_ja・question_ja）は日本語にし、this_month などの"
     "値は period・sql_hint に入れてください。"
 )
 

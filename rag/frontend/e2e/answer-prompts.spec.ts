@@ -224,6 +224,8 @@ for (const viewport of [
     await generation.locator("summary").click();
     await expect(generation).toContainText("「前提を示して回答する」のときに追加する システムプロンプト");
     await expect(generation).toContainText("未確定の条件を明示する。");
+    await expect(generation).toContainText("小問の根拠計画を使う回答生成のシステムプロンプト");
+    await expect(generation).toContainText("計画を作り直さず原文から回答する。");
     await expect(generation).toContainText("システムプロンプト");
     await expect(generation).not.toContainText("system プロンプト");
     await generation.screenshot({ path: testInfo.outputPath("assumption-system-instructions.png") });
