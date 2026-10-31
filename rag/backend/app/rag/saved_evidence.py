@@ -24,7 +24,6 @@ from app.rag.chat_attachments import ATTACHMENT_DOCUMENT_PREFIX
 from app.rag.request_context import current_audit_request_context
 from app.schemas.search import RetrievedChunk
 
-
 _DOCUMENT_CAPTURE_SCOPES = ("generation_citation_trace", "summary_citation_links")
 
 
