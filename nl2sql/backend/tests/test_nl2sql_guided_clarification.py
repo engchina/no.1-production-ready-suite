@@ -2700,7 +2700,7 @@ def test_prompt_asks_target_table_when_several_tables_fit() -> None:
     """表が複数当てはまる短い入力（「employee」）は、推測で 1 つに決めず対象を選ぶ質問にする。"""
     from app.features.nl2sql.sql_requirement import REQUIREMENT_PROMPT_VERSION, SYSTEM_PROMPT
 
-    assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v6_attachments"
+    assert REQUIREMENT_PROMPT_VERSION == "sql_requirement_v7_steps"
     assert "表を推測で 1 つに決めないでください" in SYSTEM_PROMPT
     assert "「employee」" in SYSTEM_PROMPT
     # 最低限の要件の方針（細部まで聞かない）は保つ。

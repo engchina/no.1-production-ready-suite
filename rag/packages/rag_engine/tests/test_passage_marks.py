@@ -125,7 +125,17 @@ def _run_example(step_review: str = "supported"):
         requests=[("Q1", "addressed"), ("Q2", "addressed")],
     )
     review["summary_basis"] = ["対象の行の終了日を入力します。", "新しい開始日の行を追加します。"]
-    return run(FakeModel([value], [review]), ctx, question).response
+    scope_plan = {
+        "request_coverage": [
+            {
+                "request_id": request,
+                "evidence_ids": [evidence],
+                "evidence_scope": [{"evidence_id": evidence, "target": target, "relation": "direct"}],
+            }
+            for request, evidence, target in [("Q1", steps, "設定の変更"), ("Q2", table, "区分の選択肢")]
+        ]
+    }
+    return run(FakeModel([value], [review], scope_plan=scope_plan), ctx, question).response
 
 
 def test_only_deterministic_table_conflict_is_removed_while_semantic_contradiction_is_observed():

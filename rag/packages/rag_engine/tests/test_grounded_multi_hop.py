@@ -280,7 +280,7 @@ def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     assert "各出典が text 全体を単独で支える必要はない" in citations
     assert "実際に指定していない原文で不足を補わない" in citations
     assert "重複する item をまとめ" not in generate
-    assert "同じ根拠の同じ内容の item をまとめ" in generate
+    assert "同じ根拠の同じ説明をまとめ" in generate
     relation = RequestEvidenceScope.model_json_schema()["properties"]["relation"]["description"]
     plan_ids = RequestCoverage.model_json_schema()["properties"]["evidence_ids"]["description"]
     assert "直接答える" not in relation + plan_ids

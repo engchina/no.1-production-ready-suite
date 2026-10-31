@@ -23,7 +23,7 @@ from rag_engine.generation.answering import (
 )
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.audit_wire import is_audit_wire
-from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
+from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, RequestScopePlan
 
 LIST_TEXT = "●集計表出力\n一覧表を選択し、処理を選択します。\n実行ボタンを押して完了します。"
 LIMIT_TEXT = "帳票印刷\nファイル出力は顧客名簿にのみ適用されます。"
@@ -54,15 +54,19 @@ def context(*records):
 class FakeModel:
     """schema ごとに用意した応答を順に返し、受け取った入力を記録する。"""
 
-    def __init__(self, drafts, audits):
+    def __init__(self, drafts, audits, *, scope_plan=None):
         self.drafts, self.audits, self.prompts = list(drafts), list(audits), []
         self.captured_system_prompts = []
+        self.scope_plan = scope_plan
 
     def __call__(self, system, prompt, settings, schema, **options):
         observed = schema.canonical_schema if is_audit_wire(schema) else schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
-        is_generation = schema in (GroundedDraft, generation_draft_wire_model())
+        if schema is RequestScopePlan:
+            assert self.scope_plan is not None, "根拠計画の合成応答を明示する"
+            return schema.model_validate(self.scope_plan)
+        is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft
         source = self.drafts if is_generation else self.audits
         value = source.pop(0) if len(source) > 1 else source[0]
         # 既存のquote/lines fixtureをcanonicalの履歴として再生する。wire型を検証したとは扱わない。
