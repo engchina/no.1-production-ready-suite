@@ -11,7 +11,6 @@ from typing import Any
 from rag_engine.chunking import DEFAULT_RETRIEVAL_TOP_K
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.context_builder import ContextEvidence, ContextParentEvidence
-from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
 from rag_engine.retrieval.question_planning import QuestionPlan
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN, RETRIEVAL_SCOPE_KNOWLEDGE_BASE, normalize_retrieval_scope
 from rag_engine.retrieval.task_contract import goal_retrieval_queries
@@ -480,7 +479,7 @@ class AnswerQuestionResult:
     execution_steps: tuple[dict[str, Any], ...] = ()
     question_plan: QuestionPlan | None = None
     runtime_knowledge: RuntimeKnowledgeContext | None = None
-    inquiry_conditions: InquiryConditionParse | None = None
+
     routing_data_required: bool | None = None
     routing_data_items: tuple[str, ...] = ()
     evidence_facts: tuple[dict[str, str], ...] = ()

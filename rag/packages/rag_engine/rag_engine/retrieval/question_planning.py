@@ -12,15 +12,12 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
-from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse, parse_inquiry_conditions
-
 
 @dataclass(frozen=True)
 class QuestionPlan:
     """質問理解を保持します。"""
 
     original_question: str
-    inquiry_conditions: InquiryConditionParse | None = None
 
     def to_payload(self) -> dict[str, Any]:
         """UI と trace 保存に使う JSON 互換 payload へ変換します。"""
@@ -30,4 +27,4 @@ class QuestionPlan:
 def plan_question(question: str) -> QuestionPlan:
     """質問文を解析します。"""
     text = unicodedata.normalize("NFKC", str(question or "")).strip()
-    return QuestionPlan(text, inquiry_conditions=parse_inquiry_conditions(text))
+    return QuestionPlan(text)

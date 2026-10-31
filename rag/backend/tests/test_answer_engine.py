@@ -463,8 +463,7 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     engine_steps = [step for step in steps if step.kind == "answer_step"]
     assert engine_steps
     assert all(step.status == "done" for step in engine_steps)
-    understand = next(s for s in engine_steps if (s.params or {}).get("name") == "質問の理解")
-    assert (understand.span or {}).get("parent_id") == answer_span.step_id
+    assert not any((s.params or {}).get("name") == "質問の理解" for s in engine_steps)
     # 用語・同義語と回答ルールは別の工程の span で、回答の段の子としてこの順に並ぶ（#3451）。
     engine_names = [str((s.params or {}).get("name")) for s in engine_steps]
     terms_index = engine_names.index("用語・同義語の確認")
@@ -503,8 +502,8 @@ async def test_pipeline_delegates_to_answer_engine(monkeypatch: pytest.MonkeyPat
     inner = observed[1:-3]
     assert inner
     assert all(stage.startswith("answer_step:") for stage, _ in inner)
-    assert ("answer_step:質問の理解", "started") in inner
-    assert ("answer_step:質問の理解", "success") in inner
+    assert ("answer_step:質問の理解", "started") not in inner
+    assert ("answer_step:質問の理解", "success") not in inner
     started = [stage for stage, outcome in inner if outcome == "started"]
     finished = [stage for stage, outcome in inner if outcome != "started"]
     assert sorted(started) == sorted(finished)
@@ -1613,12 +1612,12 @@ async def test_answer_engine_keeps_only_candidates_of_named_business(
         monkeypatch, oracle, question, filters={"knowledge_base_id": "kb-1"}
     )
 
-    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a"}
+    assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
     # 分類はヒットした document_id でまとめて 1 回だけ読む(N+1 にしない)。
     assert oracle.classification_calls == [["doc-a", "doc-b"]]
     # 大分類の語の一覧は、検索と同じ範囲(回答の初めに決めた基準日を含む。#2602)で 1 回の回答に
     # 1 回だけ読む(#553)。
-    assert oracle.large_category_calls == [{"knowledge_base_id": "kb-1", "as_of": "2026-04-01"}]
+    assert oracle.large_category_calls == []
 
 
 @pytest.mark.parametrize(
@@ -1695,41 +1694,6 @@ async def test_answer_engine_answers_without_business_names_when_load_fails(
     outcome = await _answer_two_documents(monkeypatch, oracle, "業務Aの受注の登録方法は？")
 
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
-
-
-@pytest.mark.parametrize(
-    ("question", "large_categories", "expected"),
-    [
-        ("業務Aの登録は？", ["10_業務A", "20_業務B"], ["10_業務A"]),
-        ("ｇｙｏｍｕ-Xの登録は？", ["gyomu-x"], ["gyomu-x"]),
-        ("業務Aと業務Bの違いは？", ["業務A", "業務B"], ["業務A", "業務B"]),
-        # 長い名前から照合し、「業務A」の中の「業務」は拾わない。
-        ("業務Aの登録は？", ["業務", "業務A"], ["業務A"]),
-        ("業務の登録は？", ["業務", "業務A"], ["業務"]),
-        # 同じ名前の保存値(番号の接頭辞の有無)はどちらも返す。
-        ("業務Aの登録は？", ["10_業務A", "業務A"], ["10_業務A", "業務A"]),
-        # 1 文字の名前は質問の別の語に偶然含まれるため照合しない。
-        ("Aの登録は？", ["A"], []),
-        ("登録は？", ["業務A"], []),
-    ],
-    ids=[
-        "code-prefix",
-        "width-and-case",
-        "two-businesses",
-        "longest-first",
-        "short-name-alone",
-        "same-label-values",
-        "single-char",
-        "no-name",
-    ],
-)
-def test_question_business_domains_matches_scope_vocabulary(
-    question: str, large_categories: list[str], expected: list[str]
-) -> None:
-    """質問の業務名は、検索範囲の大分類を #547 の正規化で照合して保存どおりの値で返す(#553)。"""
-    from app.rag.answer_engine import question_business_domains
-
-    assert question_business_domains(question, large_categories) == expected
 
 
 async def test_answer_engine_search_puts_document_classification_on_child_and_parent() -> None:
@@ -1906,28 +1870,6 @@ async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
     assert chunk_set_binds == ["cs-a", "cs-b"]
 
 
-def _inquiry(question: str, business_names: tuple[str, ...] = ()) -> Any:
-    """回答フローと同じく、業務名の照合(検索範囲の大分類。#553)を注入して質問を理解する。"""
-    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
-    from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
-
-    from app.rag.answer_engine import question_business_domains
-
-    def unused(*args: object, **kwargs: object) -> Any:
-        raise AssertionError("質問の理解では I/O を呼ばない")
-
-    dependencies = AnswerDependencies(
-        search=unused,
-        check_ready=unused,
-        parse_text=unused,
-        parse_images=unused,
-        rerank=unused,
-        business_domains=lambda text: question_business_domains(text, business_names),
-    )
-    with bind_dependencies(dependencies):
-        return parse_inquiry_conditions(question)
-
-
 async def _search_filters(
     request_filters: dict[str, str], question: str, *, searches: int = 1
 ) -> FakeOracle:
@@ -1941,36 +1883,8 @@ async def _search_filters(
             SearchRequest(query=question, filters=request_filters),
             state,
             retrieval_queries=[question],
-            inquiry_conditions=_inquiry(question),
         )
     return oracle
-
-
-async def test_question_file_name_and_pages_become_search_filters() -> None:
-    """質問が名指しした文書名・ページを hybrid_search の filters に足す(#546)。"""
-    oracle = await _search_filters(
-        {"knowledge_base_id": "kb-1"}, "manual.pdf の12ページと13ページの登録手順は？", searches=2
-    )
-
-    assert oracle.filters[0] == {
-        "knowledge_base_id": "kb-1",
-        "file_name": "manual.pdf",
-        "page_number_min": "12",
-        "page_number_max": "13",
-    }
-    # 2 回目(CRAG の各回)は同じ検索文・同じ条件の結果を使い回す(#1490)。結果の cache の key は
-    # 条件を含むため、条件が 1 回目と違えば検索し直す(ここでは 1 回だけ)。
-    assert len(oracle.filters) == 1
-    # 存在の確認は CRAG の各回で繰り返さない。
-    assert oracle.probes == [{"knowledge_base_id": "kb-1", "file_name": "manual.pdf"}]
-
-
-async def test_question_file_name_missing_from_knowledge_base_is_dropped() -> None:
-    """ナレッジベースに無い文書名は外し、ページも一緒に外す(0 件にしない。#546)。"""
-    oracle = await _search_filters({"knowledge_base_id": "kb-1"}, "other.pdf の12ページの手順は？")
-
-    assert oracle.filters[0] == {"knowledge_base_id": "kb-1"}
-    assert oracle.probes == [{"knowledge_base_id": "kb-1", "file_name": "other.pdf"}]
 
 
 @pytest.mark.parametrize(
@@ -1978,7 +1892,7 @@ async def test_question_file_name_missing_from_knowledge_base_is_dropped() -> No
     [
         ({"file_name": "guide.pdf"}, {"file_name": "guide.pdf"}, False),
         ({"document_id": "doc-9"}, {"document_id": "doc-9"}, False),
-        ({"page_number_min": "3"}, {"page_number_min": "3", "file_name": "manual.pdf"}, True),
+        ({"page_number_min": "3"}, {"page_number_min": "3"}, False),
     ],
     ids=["screen-file-name", "screen-document", "screen-page"],
 )
@@ -1994,65 +1908,6 @@ async def test_screen_filters_take_precedence_over_question(
 
 def _order(result: Any) -> list[str]:
     return [chunk.chunk_uid for chunk in result.child_chunks]
-
-
-async def test_business_match_channel_raises_candidate_of_named_business() -> None:
-    """質問の業務に合う文書の候補が business_match のチャネルで上がる(#546 / #553)。"""
-    from app.rag.answer_engine import _SearchState
-
-    oracle = TwoDocumentOracle()
-    oracle.classifications = {"doc-a": {"large_category": "業務A"}}
-    engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
-    question = "業務Aの受注の登録方法は？"
-
-    baseline = await engine._search(
-        SearchRequest(query=question), _SearchState(), retrieval_queries=[question]
-    )
-    boosted = await engine._search(
-        SearchRequest(query=question),
-        _SearchState(),
-        retrieval_queries=[question],
-        inquiry_conditions=_inquiry(question, ("業務A", "業務B")),
-    )
-
-    assert _order(baseline) == ["doc-b:c1", "doc-a:c1"]
-    assert _order(boosted) == ["doc-a:c1", "doc-b:c1"]
-
-
-@pytest.mark.parametrize(
-    ("profile_channel_enabled", "expected"),
-    [(True, ["doc-a:c1", "doc-b:c1"]), (False, ["doc-b:c1", "doc-a:c1"])],
-    ids=["enabled", "disabled"],
-)
-async def test_profile_channel_raises_candidate_of_question_profile(
-    profile_channel_enabled: bool, expected: list[str]
-) -> None:
-    """質問の問い合わせ種別に合う chunk が profile のチャネルで上がる。設定で無効にできる(#546)。"""
-    from types import SimpleNamespace
-
-    from app.rag.answer_engine import _SearchState
-
-    oracle = TwoDocumentOracle()
-    oracle.chunks = [
-        _doc_chunk("doc-b", "受注一覧に表示されます。"),
-        _doc_chunk(
-            "doc-a",
-            "登録できない場合の条件は次のとおりです。",
-            retrieval_profile={"active_profiles": ["conditions_and_exceptions"]},
-        ),
-    ]
-    engine = AnswerEngine(Settings(), oracle=oracle, genai=FakeGenAi())  # type: ignore[arg-type]
-    question = "登録できない場合の条件は？"
-
-    result = await engine._search(
-        SearchRequest(query=question),
-        _SearchState(),
-        retrieval_queries=[question],
-        inquiry_conditions=_inquiry(question),
-        settings=SimpleNamespace(profile_channel_enabled=profile_channel_enabled),
-    )
-
-    assert _order(result) == expected
 
 
 async def test_oracle_document_classifications_reads_hit_documents_once(
@@ -2538,7 +2393,6 @@ async def test_prefetch_warms_search_cache_without_changing_results() -> None:
                 state,
                 query=question,
                 candidate_limit=24,
-                inquiry_conditions=_inquiry(question),
             )
         prefetched = list(oracle.queries)
         result = await engine._search(
@@ -2546,7 +2400,6 @@ async def test_prefetch_warms_search_cache_without_changing_results() -> None:
             state,
             retrieval_queries=queries,
             candidate_limit=24,
-            inquiry_conditions=_inquiry(question),
         )
         return result, oracle, prefetched
 
@@ -2993,118 +2846,16 @@ async def _search_once(
         SearchRequest(query=question, filters={"knowledge_base_id": "kb-1"}),
         state,
         retrieval_queries=[question],
-        inquiry_conditions=_inquiry(question),
     )
     return state
-
-
-@pytest.mark.parametrize(
-    ("blocked", "relaxed", "last_filters"),
-    [
-        (
-            ("page_number_min",),
-            ["question_page"],
-            {"knowledge_base_id": "kb-1", "file_name": "manual.pdf"},
-        ),
-        (
-            ("page_number_min", "file_name"),
-            ["question_page", "question_file"],
-            {"knowledge_base_id": "kb-1"},
-        ),
-    ],
-    ids=["page", "page-and-file"],
-)
-async def test_question_filters_are_relaxed_in_order_without_hits(
-    blocked: tuple[str, ...], relaxed: list[str], last_filters: dict[str, str]
-) -> None:
-    """質問が名指ししたページ・文書名で 0 件なら、ページ → 文書名の順に外して検索し直す(#2401)。
-
-    利用者が指定した範囲(knowledge_base_id)は外さない。
-    """
-    oracle = EmptyWithKeysOracle(*blocked)
-
-    state = await _search_once(oracle, "manual.pdf の12ページの登録手順は？")
-
-    assert oracle.filters[0]["page_number_min"] == "12"
-    assert oracle.filters[-1] == last_filters
-    assert state.relaxed == relaxed
-    # 外さずに残った自動の条件(ページだけで 0 件なら、文書名は効いたまま)。
-    active = ["question_file"] if relaxed == ["question_page"] else []
-    assert state.active_relaxations() == active
-    assert state.search_log == [
-        {"queries": 1, "candidates": 1, "automatic_filters": active, "relaxed": relaxed}
-    ]
-
-
-async def test_filter_relaxation_order_starts_from_auto_field_conditions() -> None:
-    """抽出項目の条件 → ページ → 文書名の順に外す(#2401)。"""
-    from app.schemas.search import ExtractionFieldCondition
-
-    oracle = EmptyWithKeysOracle("extraction_fields", "page_number_min", "file_name")
-    state = await _search_once(
-        oracle,
-        "manual.pdf の12ページの登録手順は？",
-        conditions=[
-            ExtractionFieldCondition(name="金額", value_type="number", op="gte", value="1")
-        ],
-    )
-
-    assert state.relaxed == ["auto_field", "question_page", "question_file"]
-    assert [sorted(item) for item in oracle.filters] == [
-        [
-            "extraction_fields",
-            "file_name",
-            "knowledge_base_id",
-            "page_number_max",
-            "page_number_min",
-        ],
-        ["file_name", "knowledge_base_id", "page_number_max", "page_number_min"],
-        ["file_name", "knowledge_base_id"],
-        ["knowledge_base_id"],
-    ]
-
-
-async def test_filter_relaxation_respects_max_steps() -> None:
-    """外す段の数は設定の上限まで。0 なら外さずに 0 件のまま(#2401)。"""
-    oracle = EmptyWithKeysOracle("page_number_min", "file_name")
-
-    limited = await _search_once(
-        oracle,
-        "manual.pdf の12ページの登録手順は？",
-        settings=Settings(rag_filter_relaxation_max_steps=1),
-    )
-    assert limited.relaxed == ["question_page"]
-    assert limited.search_log[0]["candidates"] == 0
-    assert limited.active_relaxations() == ["question_file"]
-
-    oracle = EmptyWithKeysOracle("page_number_min")
-    disabled = await _search_once(
-        oracle,
-        "manual.pdf の12ページの登録手順は？",
-        settings=Settings(rag_filter_relaxation_max_steps=0),
-    )
-    assert disabled.relaxed == []
-    assert len(oracle.filters) == 1
-    assert disabled.search_log[0] == {
-        "queries": 1,
-        "candidates": 0,
-        "automatic_filters": ["question_page", "question_file"],
-        "relaxed": [],
-    }
 
 
 @pytest.mark.parametrize(
     ("oracle", "settings", "stage", "automatic_filters"),
     [
         (EmptyWithKeysOracle("knowledge_base_id"), Settings(), "retrieval", []),
-        (
-            EmptyWithKeysOracle("page_number_min"),
-            Settings(rag_filter_relaxation_max_steps=0),
-            "filter",
-            ["question_page", "question_file"],
-        ),
     ],
-    ids=["no-candidates-in-scope", "automatic-filter-kept"],
+    ids=["no-candidates-in-scope"],
 )
 async def test_zero_evidence_diagnostics_record_the_stage(
     monkeypatch: pytest.MonkeyPatch,
@@ -3436,8 +3187,8 @@ async def _answer_with_coverage(
             data["items"].append(
                 {
                     "kind": "gap",
-                    "text": "追加操作の根拠がありません。",
-                    "request_id": "Q2",
+                    "text": "請求書の再発行方法は？",
+                    "request_id": "Q1",
                     "citations": [],
                 }
             )
@@ -3471,11 +3222,11 @@ async def test_request_coverage_re_retrieves_only_missing_request(
 
     coverage = outcome.diagnostics["request_coverage"]
     statuses = {row["id"]: row["status"] for row in coverage["requests"]}
-    assert statuses == {"Q1": "unassessed", "Q2": "unassessed"}
+    assert statuses == {"Q1": "unassessed"}
     after_trace = coverage["after_generation"][0]
     re_retrieval = after_trace["re_retrieval"]
     assert re_retrieval["applied"] is True
-    assert [query["request_id"] for query in re_retrieval["queries"]] == ["Q2"]
+    assert [query["request_id"] for query in re_retrieval["queries"]] == ["Q1"]
     assert re_retrieval["queries"][0]["queries"][0] == "請求書の再発行方法は？"
     assert after_trace["llm_calls"] == 0
     assert all(row["status"] == "unassessed" for row in after_trace["requests"])
@@ -3565,8 +3316,6 @@ async def test_original_question_keeps_numbered_requests_through_coverage(
     coverage = outcome.diagnostics["request_coverage"]
     assert {row["id"]: (row["kind"], row["status"]) for row in coverage["requests"]} == {
         "Q1": ("request", "unassessed"),
-        "Q2": ("request", "unassessed"),
-        "Q3": ("request", "unassessed"),
     }
     # 1 要求として探し直しを省かず、根拠の無い要求ごとに要求の文で探し直す。
     assert coverage["re_retrieval"]["skipped"] == "no_explicit_gap"
@@ -3581,9 +3330,7 @@ async def test_original_question_keeps_numbered_requests_through_coverage(
     # 回答の要求(rag_search の requests。回答の検査の入力)も元の質問の 3 要求(充足は監査が決める)。
     requests = outcome.diagnostics["envelope"]["requests"]
     assert [(item["id"], item["text"]) for item in requests] == [
-        ("Q1", "1. 受注の登録方法は？"),
-        ("Q2", "2. 請求書の再発行方法は？"),
-        ("Q3", "3. 承認の担当は？"),
+        ("Q1", " ".join(_NUMBERED_ORIGINAL.split())),
     ]
 
 

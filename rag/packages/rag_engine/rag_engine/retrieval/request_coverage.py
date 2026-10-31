@@ -10,7 +10,7 @@ from time import monotonic
 from typing import Any
 
 from rag_engine.dependencies import report_degraded
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.answer_requirements import answer_requirements
 
 COVERAGE_SCHEMA_VERSION = 2
 # 1 要求の再検索に足す手がかり（用語の別名・業務ガイドの検索の手がかり）の上限。
@@ -134,14 +134,13 @@ def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) ->
     """質問契約の要求を ID ごとに保持する。語の集合では要求を統合しない。"""
     targets: list[RequestTarget] = []
     seen: set[str] = set()
-    contract = task_contract(question)
-    contexts = [str(unit["text"]) for unit in task_contract(contract["current_request"])["request_units"] if unit.get("kind") == "context"]
+    contexts: list[str] = []
     context_text = " ".join(contexts)
     try:
         context_terms = _content_terms(tokenize(context_text)) if context_text else ()
     except Exception:  # noqa: BLE001 - 分かち書きの失敗で質問を失敗にしない。
         context_terms = ()
-    for unit in contract["request_units"]:
+    for unit in answer_requirements(question):
         focus = _focus_text(unit)
         if not focus:
             continue

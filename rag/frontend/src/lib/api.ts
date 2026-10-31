@@ -2716,8 +2716,8 @@ export interface LanguagePackData {
 
 export interface QuestionUnderstandingPreviewData {
   original_text: string;
-  saved: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
-  draft: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
+  saved: { task_contract: Record<string, unknown>; hash: string };
+  draft: { task_contract: Record<string, unknown>; hash: string };
 }
 
 export interface LanguagePackPreviewResult {

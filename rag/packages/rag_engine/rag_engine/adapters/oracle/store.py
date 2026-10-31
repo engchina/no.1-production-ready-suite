@@ -56,11 +56,7 @@ from rag_engine.parsing.decorative_pictures import (
 )
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.resources.tracing import observe_call
-from rag_engine.retrieval.inquiry_conditions import (
-    InquiryConditionParse,
-    InquiryMetadataFilter,
-    profile_channel_rankings,
-)
+from rag_engine.retrieval.metadata_filters import RetrievalMetadataFilter
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
@@ -813,7 +809,7 @@ def search_adb_hybrid_chunks(
     preferred_engine_ids: Iterable[str] = (),
     candidate_limit: int = 24,
     query_embedder: QueryEmbeddingFunction = embed_query,
-    inquiry_conditions: InquiryConditionParse | None = None,
+    metadata_filter: RetrievalMetadataFilter | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     extra_text_queries: Sequence[str] = (),
@@ -867,13 +863,6 @@ def search_adb_hybrid_chunks(
                     "No ADB embeddings were found for the selected retrieval scope. Run Embedding/ADB save first."
                 )
 
-            # 知識ベースに無い資料名で候補が 0 件になるのを避ける (#1082)。以降は解決済みの filter を使う。
-            metadata_filter = _resolved_metadata_filter(
-                connection,
-                chunk_run_id,
-                inquiry_conditions.metadata_filter if inquiry_conditions else None,
-                retrieval_scope=scope,
-            )
             rankings: list[list[tuple[str, float | None]]] = []
             image_rankings: list[list[tuple[str, float | None]]] = []
             limit = max(1, int(candidate_limit or 1))
@@ -980,33 +969,10 @@ def search_adb_hybrid_chunks(
                 if len(_pool_cache) >= 8:
                     _pool_cache.clear()
                 _pool_cache[pool_key] = (time.monotonic(), all_chunks)
-            profile_source_chunks = _chunks_matching_metadata_filter(
-                all_chunks,
-                metadata_filter,
-                category_filter,
-            )
-            # 比較実験用。質問理解の profile に合う chunk を第4のチャネルとして融合するかどうか。
-            profile_rankings = (
-                profile_channel_rankings(
-                    profile_source_chunks,
-                    inquiry_conditions,
-                    limit=limit,
-                )
-                if getattr(settings, "profile_channel_enabled", True)
-                else []
-            )
-            # 業務語の一致は SQL の除外条件ではなく、融合後の加点にする (#848)。
-            business_rankings = _business_match_ranking(
-                profile_source_chunks,
-                metadata_filter,
-                rankings,
-                text_rankings,
-                limit=limit,
-            )
             scores = _combine_hybrid_scores(
                 rankings,
                 text_rankings,
-                [*profile_rankings, *business_rankings],
+                [],
                 image_vector_rankings=image_rankings,
                 image_vector_weight=_image_embedding_rrf_weight(settings),
                 query_weights=query_weights,
@@ -1907,7 +1873,7 @@ def _vector_search(
     settings: Settings,
     preferred_engine_ids: Iterable[str],
     limit: int,
-    metadata_filter: InquiryMetadataFilter | None = None,
+    metadata_filter: RetrievalMetadataFilter | None = None,
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
@@ -1971,7 +1937,7 @@ def _text_search(
     settings: Settings,
     preferred_engine_ids: Iterable[str],
     limit: int,
-    metadata_filter: InquiryMetadataFilter | None = None,
+    metadata_filter: RetrievalMetadataFilter | None = None,
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
@@ -2430,51 +2396,9 @@ def _business_metadata_values(metadata: dict[str, Any]) -> set[str]:
     return values
 
 
-def _resolved_metadata_filter(
-    connection: Any,
-    chunk_run_id: str,
-    metadata_filter: InquiryMetadataFilter | None,
-    *,
-    retrieval_scope: str,
-) -> InquiryMetadataFilter | None:
-    """検索範囲に一致する文書が無いファイル名条件を落とした filter を返す。
-
-    ファイル名は SQL の WHERE になるため（#601）、質問が挙げた資料が知識ベースに無いと候補が 0 件になり、
-    根拠なしとして拒否される。利用者は自分の手元の資料名を書くことがあり、質問文からの抽出が節をまたいで
-    崩れることもある。どの文書にも一致しない条件は絞り込みの役に立たないので、無条件検索に戻す。
-    ページ番号はファイル名と組でだけ使う条件なので一緒に落とす (#1082)。
-    """
-    terms = _dedupe_filter_terms(metadata_filter.source_file_terms if metadata_filter else ())[:8]
-    if not terms:
-        return metadata_filter
-    scope = normalize_retrieval_scope(retrieval_scope)
-    scope_join_sql, scope_where_sql, binds = _scope_sql("c", scope, chunk_run_id)
-    clauses = []
-    for index, term in enumerate(terms):
-        name = f"resolve_source_file_{index}"
-        clauses.append(f"LOWER(c.source_file_name) LIKE :{name} ESCAPE '\\'")
-        binds[name] = _like_pattern(term)
-    cursor = connection.cursor()
-    try:
-        cursor.execute(
-            f"""
-            SELECT 1 FROM rag_chunks c
-            {scope_join_sql}
-            WHERE c.active = 'Y'
-              {scope_where_sql}
-              AND ({" OR ".join(clauses)})
-              AND ROWNUM = 1
-            """,
-            binds,
-        )
-        if cursor.fetchone():
-            return metadata_filter
-    finally:
-        cursor.close()
-    return replace(metadata_filter, source_file_terms=(), page_numbers=())
 
 
-def _metadata_filter_sql(alias: str, metadata_filter: InquiryMetadataFilter | None) -> tuple[str, dict[str, str]]:
+def _metadata_filter_sql(alias: str, metadata_filter: RetrievalMetadataFilter | None) -> tuple[str, dict[str, str]]:
     """質問が明示した条件（ファイル名・ページ）だけを SQL の WHERE にし、候補数制限より前に適用する。
 
     業務語（`metadata_terms`）は WHERE に入れない。照合先の `retrieval_profile.business_domains / document_kinds` は
@@ -2514,36 +2438,11 @@ def _metadata_filter_sql(alias: str, metadata_filter: InquiryMetadataFilter | No
 BUSINESS_MATCH_CHANNEL = "business_match"
 
 
-def _business_match_ranking(
-    matched_chunks: Sequence[StoredChunk],
-    metadata_filter: InquiryMetadataFilter | None,
-    rankings: Sequence[Sequence[tuple[str, float | None]]],
-    text_rankings: Sequence[Sequence[tuple[str, float | None]]],
-    *,
-    limit: int,
-) -> list[tuple[str, float, list[tuple[str, float | None]]]]:
-    """質問の業務語に一致する候補を、融合に加える 1 channel の順位として返す (#848)。
-
-    一致する chunk（`_chunks_matching_metadata_filter` の結果）のうち vector / 全文検索の候補に入ったものを、
-    各 channel での最良順位の順に並べる。RRF ではこの channel の分だけ加点され、一致しない chunk も候補に残る。
-    業務語が無いか一致が無ければ空。
-    """
-    if metadata_filter is None or not metadata_filter.metadata_terms or not matched_chunks:
-        return []
-    best_rank: dict[str, int] = {}
-    for ranking in (*rankings, *text_rankings):
-        for rank, (chunk_uid, _) in enumerate(ranking, start=1):
-            best_rank[chunk_uid] = min(best_rank.get(chunk_uid, rank), rank)
-    matched = [chunk.chunk_uid for chunk in matched_chunks if chunk.chunk_uid in best_rank]
-    if not matched:
-        return []
-    ordered = sorted(dict.fromkeys(matched), key=lambda uid: (best_rank[uid], uid))[: max(1, int(limit or 1))]
-    return [(BUSINESS_MATCH_CHANNEL, 1.0, [(uid, None) for uid in ordered])]
 
 
 def _chunks_matching_metadata_filter(
     chunks: Sequence[StoredChunk],
-    metadata_filter: InquiryMetadataFilter | None,
+    metadata_filter: RetrievalMetadataFilter | None,
     classification_filter: ClassificationFilter | None = None,
 ) -> list[StoredChunk]:
     current_chunks = [

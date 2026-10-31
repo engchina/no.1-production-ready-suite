@@ -88,11 +88,6 @@ from rag_engine.parsing.decorative_pictures import (
     mark_picture_record_role,
 )
 from rag_engine.parsing.picture_text import link_picture_ocr_records, picture_ocr_text_label
-from rag_engine.retrieval.inquiry_conditions import (
-    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-    build_inquiry_chunk_metadata,
-    inquiry_profile_contract_hash,
-)
 
 
 def build_small_to_big_chunks(
@@ -581,7 +576,7 @@ def _child_chunk(
         atomic=atomic,
         text=text,
         retrieval_text=text,
-        compute_retrieval_profile=False,  # 検索文確定後に _apply_contextual_child_search_text が計算する (#867)
+
         source_run_id=source_run_id,
         source_file_name=source_file_name,
         classification=classification,
@@ -695,18 +690,6 @@ def _apply_contextual_child_search_text(
     for child in children:
         search_text, _components = _child_search_text(child, parent=parent, config=config, body=child.retrieval_text)
         child.retrieval_text = search_text
-        inquiry = build_inquiry_chunk_metadata(
-            text=child.text,
-            retrieval_text=search_text,
-            source_file_name=child.source_file_name,
-            source_categories=child.metadata.get("source_categories") or [],
-            page_start=child.page_start,
-            page_end=child.page_end,
-        )
-        if inquiry:
-            child.metadata["retrieval_profile"] = inquiry
-        else:
-            child.metadata.pop("retrieval_profile", None)
 
 
 def _records_by_engine(
@@ -900,8 +883,7 @@ def _config_hash(config: ChunkingConfig, selected_engine_ids: Sequence[str]) -> 
         "schema_version": CHUNK_SCHEMA_VERSION,
         "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "search_text_schema_version": SEARCH_TEXT_SCHEMA_VERSION,
-        "inquiry_chunk_metadata_schema_version": INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-        "inquiry_profile_contract_hash": inquiry_profile_contract_hash(),
+
         "strategy": CHUNK_STRATEGY,
         "selected_engine_ids": list(selected_engine_ids),
         "config": config.to_dict(),

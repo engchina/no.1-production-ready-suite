@@ -33,7 +33,6 @@ def cover(ctx, config, *, usage=None, unanswered=None, extra=None, question=QUES
         top_k=8,
         neighbor_child_count=0,
         rerank_enabled=False,
-        inquiry_conditions=None,
         retrieval_scope="knowledge_base",
         classification_filter=None,
         runtime_knowledge=None,

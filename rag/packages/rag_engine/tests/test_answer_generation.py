@@ -1825,8 +1825,6 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertNotIn("NLUタスク", result.question_display)
         ordered_sections = [
             QUESTION_DISPLAY_METADATA_SEPARATOR,
-            heading("質問の理解"),
-            "結果: 答える要求は ",
             heading("質問拡張戦略"),
             "本の検索文を追加）",
             heading("検索文と検索語の確定"),
@@ -1860,7 +1858,7 @@ class AnswerGenerationTests(unittest.TestCase):
             )
 
         retrieval_queries = search.call_args.kwargs["retrieval_queries"]
-        inquiry_conditions = search.call_args.kwargs["inquiry_conditions"]
+        self.assertNotIn("inquiry_conditions", search.call_args.kwargs)
         final_prompt = parse.call_args.args[1]
         payload = answer_result_payload(
             result,
@@ -1869,13 +1867,11 @@ class AnswerGenerationTests(unittest.TestCase):
             standard_answer=standard_answer,
         )
 
-        self.assertIsNotNone(inquiry_conditions)
         self.assertNotIn("拠点倉庫名", " ".join(retrieval_queries))
-        self.assertIn("operation_steps", inquiry_conditions.active_profiles)
-        self.assertIn("[Fine-grained Query Understanding]", final_prompt)
-        self.assertIn("nlu_tasks: Intent Classification, Slot Filling", final_prompt)
+        self.assertNotIn("[Fine-grained Query Understanding]", final_prompt)
+        self.assertNotIn("nlu_tasks:", final_prompt)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
-        self.assertIn("結果: 答える要求は 1 件", result.question_display)
+        self.assertNotIn("答える要求", result.question_display)
         self.assertNotIn("質問の目的", result.question_display)
         self.assertNotIn("補助の検索文", result.question_display)
         self.assertNotIn("[質問理解]", result.question_display)
@@ -1883,9 +1879,8 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertNotIn("NLUタスク", result.question_display)
         self.assertNotIn("operation_steps", result.question_display)
         self.assertEqual(payload["standard_answer"], standard_answer)
-        self.assertEqual(payload["query_understanding"]["process_name"], "Fine-grained Query Understanding")
-        self.assertEqual(payload["query_understanding"]["nlu_tasks"], ["Intent Classification", "Slot Filling"])
-        self.assertIn("inquiry_conditions", payload)
+        self.assertNotIn("query_understanding", payload)
+        self.assertNotIn("inquiry_conditions", payload)
         self.assertNotIn(standard_answer, final_prompt)
         self.assertFalse(any(standard_answer in query for query in retrieval_queries))
 
@@ -2511,7 +2506,6 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn("corrective rewrite", result.question_display)
         ordered_sections = [
             QUESTION_DISPLAY_METADATA_SEPARATOR,
-            heading("質問の理解"),
             heading("質問拡張戦略"),
             "本の検索文を追加）",
             heading("検索文と検索語の確定"),

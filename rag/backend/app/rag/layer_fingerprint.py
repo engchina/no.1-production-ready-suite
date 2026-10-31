@@ -78,17 +78,13 @@ def chunk_metadata_contract_hash() -> str:
         CHUNK_METADATA_SCHEMA_VERSION,
         SEARCH_TEXT_SCHEMA_VERSION,
     )
-    from rag_engine.retrieval.inquiry_conditions import (
-        INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-        inquiry_profile_contract_hash,
-    )
 
     return _sha256_json(
         {
             "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
             "search_text_schema_version": SEARCH_TEXT_SCHEMA_VERSION,
-            "inquiry_chunk_metadata_schema_version": INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-            "inquiry_profile_contract_hash": inquiry_profile_contract_hash(),
+
+
         }
     )
 

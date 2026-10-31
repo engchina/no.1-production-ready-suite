@@ -83,7 +83,6 @@ def _approved_faq_direct_answer_payload(
         "question_plan": {},
         "runtime_knowledge": {},
         "query_understanding": {},
-        "inquiry_conditions": {},
         "text_search_tokenizer": "",
         "text_search_tokenizer_label": "",
         "text_search_tokenizer_fingerprint": "",

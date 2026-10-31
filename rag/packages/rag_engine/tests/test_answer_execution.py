@@ -267,21 +267,12 @@ class AnswerExecutionTests(unittest.TestCase):
             self.assertEqual(display.count(generation._display_query(query)), 1)
         self.assertIn("1. [原質問] ", display)
 
-    def test_understanding_shows_only_what_changes_later_steps(self):
-        lines = []
-        token = generation._execution_lines.set(lines)
-        try:
-            question = "名称を変更する方法と、過去の記録への影響を教えてください。"
-            plan = generation.plan_question(question)
-            with generation._execution_step("質問の理解") as step:
-                generation._record_question_understanding(step, question, plan, plan.inquiry_conditions)
-        finally:
-            generation._execution_lines.reset(token)
-        display = "\n".join(lines)
-        self.assertNotIn("質問の目的", display)
-        self.assertIn("結果: 答える要求は", display)
-        self.assertIn("影響: 回答後、要求ごとに答えたかを確認します", display)
-        self.assertNotIn("NLU", display)
+    def test_understanding_stage_is_not_executed(self):
+        question = "名称を変更する方法と、過去の記録への影響を教えてください。"
+        result = self.run_answer(question)
+        self.assertNotIn("質問の理解", result.question_display)
+        self.assertNotIn("答える要求", result.question_display)
+        self.assertIn(question, result.question_display)
 
     def test_definition_targets_are_shown_as_labels_and_do_not_stop_the_answer(self):
         """定義項目は構造化データなので、表示境界でラベルへ変換しないと記録が中断する (#1001)。"""
@@ -291,10 +282,12 @@ class AnswerExecutionTests(unittest.TestCase):
         ):
             with self.subTest(question=question):
                 display = self.run_answer(question).question_display
-                self.assertIn("意味を尋ねている項目: " + " / ".join(labels), display)
+                self.assertNotIn("意味を尋ねている項目:", display)
+                self.assertIn(question, display)
                 self.assertNotIn("request_id", display)
                 # 「質問の理解」で中断せず、外部呼出を伴う後続工程まで進む。
-                self.assert_order(display, "質問の理解", "文書検索")
+                self.assertNotIn("質問の理解", display)
+                self.assertIn("文書検索", display)
 
     def test_keyword_display_includes_later_queries_and_more_than_ten_terms(self):
         info = generation.QuestionTextSearchInfo(

@@ -49,7 +49,6 @@ def stub_generation(testcase, target: str = "rag_engine.generation.answering.syn
             None,
             options.get("question_plan"),
             options.get("runtime_knowledge"),
-            options.get("inquiry_conditions"),
             options.get("query_expansion"),
         )
         if mode == "vision_attachments":

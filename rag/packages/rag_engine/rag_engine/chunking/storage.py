@@ -36,7 +36,6 @@ from rag_engine.chunking import (
 )
 from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
-from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, inquiry_profile_contract_hash
 
 
 def create_chunk_run(
@@ -387,8 +386,7 @@ def _chunk_contracts() -> dict[str, Any]:
     contracts = {
         "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "search_text_schema_version": SEARCH_TEXT_SCHEMA_VERSION,
-        "inquiry_chunk_metadata_schema_version": INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-        "inquiry_profile_contract_hash": inquiry_profile_contract_hash(),
+
     }
     contracts["fingerprint"] = hashlib.sha256(
         json.dumps(contracts, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

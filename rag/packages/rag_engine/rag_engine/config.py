@@ -257,7 +257,7 @@ class Settings:
     # 検索の比較実験用。重み付けを切ると全検索文が同じ票、original_query_only は原質問だけで検索する。
     original_query_weighting_enabled: bool = True
     original_query_only: bool = False
-    profile_channel_enabled: bool = True
+
     workspace_dir: Path | None = None
     prompt_dir: Path | None = None
     faq_path: Path | None = None
@@ -509,7 +509,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     settings = Settings(
         original_query_weighting_enabled=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_WEIGHTING", True),
         original_query_only=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_ONLY", False),
-        profile_channel_enabled=_env_bool(env, "RETRIEVAL_PROFILE_CHANNEL", True),
+
         auth_user=env.get("RAG_ENGINE_AUTH_USER", "").strip() or "admin",
         # password は前後の空白も値の一部になり得るため strip しない。
         auth_password=env.get("RAG_ENGINE_AUTH_PASSWORD", ""),
