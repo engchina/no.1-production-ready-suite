@@ -64,8 +64,6 @@ def test_invalid_ratios(kwargs):
 def test_trace_details_use_the_same_calculation_and_safe_shared_format():
     import json
 
-    from pr_backend_core.chat_progress import ChatProgressStepDetails
-
     from rag_engine.retrieval.weighted_rrf import fusion_details
 
     w = RrfWeights()
@@ -80,9 +78,8 @@ def test_trace_details_use_the_same_calculation_and_safe_shared_format():
         k=60,
     )
     details = fusion_details(r, w, s, 60)
-    parsed = ChatProgressStepDetails.model_validate(details)
-    assert parsed.code
-    actual = json.loads(parsed.code[0].text)
+    assert details["code"]
+    actual = json.loads(details["code"][0]["text"])
     assert actual["lists"][1]["status"] == "failed"
     assert actual["lists"][1]["weight"] == pytest.approx(0.1)
     assert actual["contributions"][0]["contribution"] == r.scores["x"]

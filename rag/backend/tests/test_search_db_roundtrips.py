@@ -1277,3 +1277,25 @@ async def test_raw_search_list_failure_keeps_other_list_weight(
     assert vector.status == "failed"
     assert vector.error == "TimeoutError"
     assert keyword.status == "empty"
+
+
+def test_rrf_detail_record_uses_shared_safe_display_contract() -> None:
+    import json
+
+    from pr_backend_core.chat_progress import ChatProgressStepDetails
+    from rag_engine.retrieval.weighted_rrf import (
+        RankedList,
+        RrfWeights,
+        fuse_rankings,
+        fusion_details,
+        source_weights,
+    )
+
+    weights = RrfWeights()
+    sources = source_weights(["q"], weights)
+    result = fuse_rankings([RankedList("q", "vector", ("synthetic-id",))], sources, weights, k=60)
+    model = ChatProgressStepDetails.model_validate(fusion_details(result, weights, sources, 60))
+    assert (
+        json.loads(model.code[0].text)["contributions"][0]["fused_score"]
+        == result.scores["synthetic-id"]
+    )
