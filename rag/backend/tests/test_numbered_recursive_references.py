@@ -69,3 +69,20 @@ def test_recursive_hierarchy_keeps_parent_and_markdown_without_inventing_numbers
         == "第2章 合成機能 > 2.2 確認"
     )
     assert chunks[-1].metadata["section_path"] == "番号のない見出し"
+
+
+@pytest.mark.parametrize("strategy", ["recursive_character", "structure_aware"])
+def test_markdown_numbered_references_match_structural_strategy(strategy: str) -> None:
+    text = "# 合成資料\n## 第1章 概要\n詳細は第5章を参照。\n## 第5章 準備\n合成の準備を行います。\n"
+    chunks = chunk_extraction_with_strategy(
+        StructuredExtraction(raw_text=text),
+        strategy=strategy,
+        chunk_size=240,
+        overlap=0,
+    )
+    target = next(c for c in chunks if "合成の準備" in c.text)
+    assert target.metadata["section_path"] == "合成資料 > 第5章 準備"
+    annotate_cross_references(chunks)
+    source = next(c for c in chunks if "詳細は" in c.text)
+    (resolved,) = reference_targets(source.metadata)
+    assert resolved.section_path == target.metadata["section_path"]
