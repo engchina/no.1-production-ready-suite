@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 import { t } from "../src/lib/i18n";
@@ -423,8 +422,7 @@ test("根拠不足の定型文はラベルと説明で編集でき、草稿に�
 
 test("旧草稿の追加表示文言は補完して試せるが公開版を書き換えない（#3932）", { tag: "@responsive" }, async ({ page }) => {
   const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "crag_refusal_summary", "crag_missing_aspect_template", "crag_unknown_aspect_template", "crag_quote_only_note", "crag_definition_aspect_template", "guide_acquisition_incomplete_template"];
-  const pack = JSON.parse(readFileSync("../packages/rag_parser_core/rag_parser_core/language/packs/ja.json", "utf8"));
-  const labels = Object.fromEntries(keys.map(key => [key, pack.answer_labels[key]]));
+  const labels = Object.fromEntries(keys.map(key => [key, "合成の表示文言"]));
   const builtin = { ...BUILTIN, answer_labels: { ...labels, cause_gap: "合成の保存済み文言" } };
   const published = { ...BUILTIN, answer_labels: { cause_gap: "合成の保存済み文言" } };
   const fields = [...FIELDS, ...[...keys, "cause_gap"].map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 }))];
