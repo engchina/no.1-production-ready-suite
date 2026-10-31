@@ -1396,6 +1396,26 @@ class AnswerGenerationTests(unittest.TestCase):
                 self.assertIn("原質問そのものは返さない", prompt)
                 self.assertIn("JSON の外に Step 番号・説明・分析を書かない", prompt)
 
+    def test_comparison_queries_keep_all_targets_and_their_scopes_in_model_instructions(self):
+        question = "A.pdf の2ページと B.pdf の3ページの処理コードを比較してください。"
+        queries = ["A.pdf 2ページと B.pdf 3ページの処理コードの共通点と相違点"]
+        for strategy, response in (
+            (QUERY_DECOMPOSITION_LABEL, QueryExpansionOutput(queries=queries)),
+            (AUTO_ROUTING_LABEL, QueryRoutingOutput(strategy=QUERY_DECOMPOSITION_STRATEGY, reason="比較", queries=queries)),
+        ):
+            with (
+                self.subTest(strategy=strategy),
+                patch("rag_engine.generation.answering.parse_text_response", return_value=response) as parse,
+            ):
+                result = build_query_expansion(question, strategy, get_settings())
+                parse.assert_called_once()
+                prompt = parse.call_args.args[1]
+                # 両方の入口が同じ比較の契約を一度だけモデルへ渡す。意味の遵守は実モデル対照で確かめる。
+                self.assertEqual(prompt.count("比較するすべての対象"), 1)
+                self.assertIn("それぞれの範囲", prompt)
+                self.assertIn(question, prompt)
+                self.assertEqual(result.retrieval_queries, (question, *queries))
+
     def test_query_prompts_pass_only_retrieval_relevant_contract_fields(self):
         # 契約の原質問の写しと監査用項目はプロンプトに入れない (#917)。
         from rag_engine.generation.query_prompts import _build_query_expansion_prompt, _build_query_routing_prompt
