@@ -111,6 +111,27 @@ def test_a_simple_question_keeps_one_generation_call() -> None:
     assert calls == [generation_draft_wire_model()]
 
 
+@pytest.mark.parametrize("question", ["項目Aの意味は？", QUESTION], ids=["single-call", "separate-plan"])
+def test_generation_keeps_source_coverage_after_planning(question: str) -> None:
+    """本文に出典を付ける契約は、計画を別に作る経路でも実際の生成入力に残す。"""
+    generation_calls = 0
+
+    def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
+        nonlocal generation_calls
+        if schema is RequestScopePlan:
+            return RequestScopePlan.model_validate(plan())
+        generation_calls += 1
+        assert system.count("### 出典の網羅") == 1
+        citation_phase = system.split("### 出典の網羅", 1)[1].split("###", 1)[0]
+        assert "request_coverage" in citation_phase
+        assert "文書ごと" in citation_phase
+        assert "支えない原文" in citation_phase
+        return schema.model_validate({"summary": "", "confidence": "low", "items": []})
+
+    run(question, parse)
+    assert generation_calls == 1
+
+
 @pytest.mark.parametrize(
     "bad_plan",
     [
