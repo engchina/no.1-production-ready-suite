@@ -65,7 +65,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await page.goto("/chat");
     await applyColorScheme(page, colorScheme);
 
-    // 上のカードは文言と経過時間（同じ取得の経過時間はここだけ）。
+    // ツールバーの対象の欄に文言と経過時間を出す（同じ取得の経過時間はここだけ）。
     const profilesLoading = page.getByTestId("sql-chat-profiles-loading");
     await expect(profilesLoading).toContainText(
       "業務プロファイルを読み込んでいます",
@@ -77,7 +77,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(
       page.getByText("質問を入力して会話を始めます", { exact: true }),
     ).toHaveCount(0);
-    await expect(panel.getByRole("timer")).toHaveCount(0);
+    await expect(panel.getByRole("log").getByRole("timer")).toHaveCount(0);
     await expect(page.getByRole("timer")).toHaveCount(1);
     // 入力欄・生成方法・送信・新しい会話・履歴の開閉は無効。
     await expect(
@@ -96,6 +96,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     // 読み込み後: 空の状態と、使える入力欄。
     release();
     await expect(page.getByTestId("sql-chat-profiles-loading")).toHaveCount(0);
+    await expect(page.locator("[data-chat-toolbar] #sql-chat-profile")).toBeVisible();
     await expect(page.getByTestId("sql-chat-conversation-skeleton")).toHaveCount(0);
     await expect(
       page.getByText("質問を入力して会話を始めます", { exact: true }),
