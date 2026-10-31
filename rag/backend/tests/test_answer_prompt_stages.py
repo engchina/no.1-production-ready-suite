@@ -393,7 +393,7 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
     from dataclasses import replace
 
     from rag_engine.config import get_settings
-    from rag_engine.generation.batched_evidence import prepare_batched_evidence
+    from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
 
     from app.rag.answer_prompts import prompt_overrides
 
@@ -410,7 +410,7 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
     ]
     calls = []
 
-    def read(system, prompt, schema):
+    def read(system: str, prompt: str, schema: type[BatchReading]) -> BatchReading:
         assert system == custom
         values = json.loads(prompt)["evidence"]
         calls.extend(values)
