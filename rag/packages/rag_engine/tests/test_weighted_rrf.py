@@ -94,3 +94,14 @@ def test_normalized_duplicates_and_large_finite_ratios():
     )
     assert len(r.lists) == 2
     assert r.scores == pytest.approx({"x": 0.25 / 61, "y": 0.25 / 61})
+
+
+def test_zero_weight_distinguishes_deduplication_from_candidate_admission():
+    weights = RrfWeights(vector=0, keyword=1)
+    sources = source_weights(["q"], weights)
+    result = fuse_rankings([RankedList("q", "vector", ("a",)), RankedList("q", "keyword", ("b",))], sources, weights, k=60)
+    record = result.diagnostics(weights, sources, 60)
+    assert record["raw_count"] == 2
+    assert record["unique_count"] == 2
+    assert record["candidate_count"] == 1
+    assert result.scores == pytest.approx({"b": 1 / 61})

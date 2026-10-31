@@ -90,6 +90,7 @@ class FusionResult:
     lists: tuple[ExecutedList, ...]
     contributions: tuple[Contribution, ...]
     raw_count: int
+    unique_count: int
 
     def diagnostics(self, weights: RrfWeights, sources: Mapping[str, float], k: float) -> dict[str, object]:
         return {
@@ -122,7 +123,8 @@ class FusionResult:
                 for c in self.contributions
             ],
             "raw_count": self.raw_count,
-            "unique_count": len(self.scores),
+            "unique_count": self.unique_count,
+            "candidate_count": len(self.scores),
         }
 
 
@@ -135,6 +137,7 @@ def fuse_rankings(rankings: Sequence[RankedList], sources: Mapping[str, float], 
     seen_lists: set[tuple[str, str, str]] = set()
     budgets = {query_key(q): w for q, w in sources.items()}
     raw_count = 0
+    identifiers: set[str] = set()
     for ranking in rankings:
         key = (query_key(ranking.query), ranking.channel, ranking.variant)
         if key in seen_lists:
@@ -147,13 +150,14 @@ def fuse_rankings(rankings: Sequence[RankedList], sources: Mapping[str, float], 
         if status == "failed":
             continue
         raw_count += len(ranking.chunk_ids)
+        identifiers.update(ranking.chunk_ids)
         for rank, chunk_id in enumerate(dict.fromkeys(ranking.chunk_ids), start=1):
             value = weight / (k + rank)
             if weight == 0:
                 continue
             scores[chunk_id] = scores.get(chunk_id, 0.0) + value
             contributions.append(Contribution(chunk_id, list_index, rank, value))
-    return FusionResult(scores, tuple(executed), tuple(contributions), raw_count)
+    return FusionResult(scores, tuple(executed), tuple(contributions), raw_count, len(identifiers))
 
 
 def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[str, float], k: float) -> dict[str, object]:
@@ -175,7 +179,11 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
     return {
         "fields": [
             {"label": "目的", "value": "各ランキングの順位と設定した比重を使い、一度の RRF で検索結果を統合します。"},
-            {"label": "結果", "value": f"重複除去前 {result.raw_count} 件 / 重複除去後 {len(result.scores)} 件"},
+            {
+                "label": "結果",
+                "value": f"重複除去前 {result.raw_count} 件 / 重複除去後 {result.unique_count} 件 / "
+                f"正の寄与がある候補 {len(result.scores)} 件",
+            },
             {"label": "ベクトル検索と全文検索の比重", "value": f"{weights.vector:g}：{weights.keyword:g}"},
             {"label": "原質問と追加検索文の比重", "value": f"{weights.original:g}：{weights.additional:g}"},
             {"label": "検索文", "value": f"原質問 {min(1, len(sources))} 本 / 追加 {max(0, len(sources) - 1)} 本"},

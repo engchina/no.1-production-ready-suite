@@ -225,6 +225,8 @@ for (const viewport of [
       await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
       expect(saved).toEqual([
         {
+          rrf_method_ratio: [2, 1],
+          rrf_source_ratio: [7, 3],
           query_strategy: "rag_fusion",
           runtime_terms_search_enabled: false,
           answer_flow: "crag",
