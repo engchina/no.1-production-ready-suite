@@ -221,30 +221,35 @@ class Rebuilder:
         while pending:
             for name, row in list(pending.items()):
                 current = self.rag.call("GET", f"/documents/{row['id']}/recipes")[0]
-                if (
-                    current["status"] == "INDEXED"
-                    and current["searchable"]
-                    and not current["needs_reprocessing"]
-                ):
-                    chunks, vectors = current["chunk_count"], current["vector_count"]
-                    if chunks > 0 and chunks == vectors and current["active_chunk_set_id"]:
-                        self.state["documents"][name].update(
-                            chunk_count=chunks, vector_count=vectors, indexed=True
+                # 文書の job 一覧は queued_at・id の降順。現行レシピの現行 revision
+                # だけを見ることで、過去の失敗や別レシピの処理を今回の結果と混同しない。
+                jobs = [
+                    job
+                    for job in self.rag.call("GET", f"/documents/{row['id']}/ingestion-jobs")
+                    if job.get("recipe_id") == current["recipe_id"]
+                    and job.get("recipe_revision") == current["config_revision"]
+                ]
+                active = any(job["status"] in {"QUEUED", "RUNNING"} for job in jobs)
+                if not active:
+                    if jobs and jobs[0]["status"] in {"FAILED", "CANCELLED"}:
+                        raise RebuildError(
+                            "取込 job が失敗または取消済みです。工程を確認してください。"
                         )
-                        del pending[name]
-                        self.save()
-                        continue
-                if current["status"] in {"ERROR", "FAILED"}:
-                    raise RebuildError("取込が失敗しました。文書の工程を確認してください。")
-                jobs = self.rag.call("GET", f"/documents/{row['id']}/ingestion-jobs")
-                if (
-                    jobs
-                    and not any(job["status"] in {"QUEUED", "RUNNING"} for job in jobs)
-                    and any(job["status"] in {"FAILED", "CANCELLED"} for job in jobs)
-                ):
-                    raise RebuildError(
-                        "取込 job が失敗または取消済みです。工程を確認してください。"
-                    )
+                    if current["status"] in {"ERROR", "FAILED"}:
+                        raise RebuildError("取込が失敗しました。文書の工程を確認してください。")
+                    if (
+                        current["status"] == "INDEXED"
+                        and current["searchable"]
+                        and not current["needs_reprocessing"]
+                    ):
+                        chunks, vectors = current["chunk_count"], current["vector_count"]
+                        if chunks > 0 and chunks == vectors and current["active_chunk_set_id"]:
+                            self.state["documents"][name].update(
+                                chunk_count=chunks, vector_count=vectors, indexed=True
+                            )
+                            del pending[name]
+                            self.save()
+                            continue
                 if self.clock() >= deadline:
                     raise RebuildError(
                         "索引の完了を待つ上限に達しました。確認待ちを含む文書の工程を確認してください。"

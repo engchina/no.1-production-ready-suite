@@ -115,6 +115,7 @@ class Service:
             table[item_id] = result
             self.recipes[item_id] = {
                 "recipe_id": "recipe-" + item_id,
+                "config_revision": 1,
                 "effective_processing_config": {},
                 "status": "UPLOADED",
                 "searchable": False,
@@ -130,7 +131,12 @@ class Service:
                 recipe["effective_processing_config"] = payload
                 result = recipe
             elif request.method == "POST":
-                result = {"id": "job-" + parts[1], "status": "RUNNING"}
+                result = {
+                    "id": "job-" + parts[1],
+                    "status": "RUNNING",
+                    "recipe_id": recipe["recipe_id"],
+                    "recipe_revision": recipe["config_revision"],
+                }
                 self.jobs[parts[1]].append(result)
                 if self.ready:
                     result["status"] = "SUCCEEDED"
@@ -235,6 +241,8 @@ def test_wait_timeout_then_resume_does_not_enqueue_twice(corpus: Path) -> None:
             vector_count=1,
             active_chunk_set_id="set",
         )
+    for jobs in service.jobs.values():
+        jobs[0]["status"] = "SUCCEEDED"
     assert rebuilder(service, corpus).run()["complete"]
     assert all(len(jobs) == 1 for jobs in service.jobs.values())
 
@@ -332,3 +340,89 @@ def test_namespace_creates_separate_resources_and_does_not_change_existing(corpu
     service.requests.clear()
     assert rebuilder(service, corpus, namespace="isolated").run()["complete"]
     assert all(method == "GET" for method, _ in service.requests)
+
+
+@pytest.mark.parametrize("old_status", ["FAILED", "CANCELLED"])
+def test_retry_handoff_ignores_older_failed_jobs(corpus: Path, old_status: str) -> None:
+    service = Service(corpus)
+    rebuilder(service, corpus).run()
+    for document_id, recipe in service.recipes.items():
+        recipe.update(status="REVIEW", searchable=False)
+        # API は投入時刻の降順。次工程の投入前には新しい成功と古い失敗が共存する。
+        service.jobs[document_id].append(
+            {**service.jobs[document_id][0], "id": "old", "status": old_status}
+        )
+    service.requests.clear()
+
+    def finish(_: float) -> None:
+        for recipe in service.recipes.values():
+            recipe.update(status="INDEXED", searchable=True)
+
+    assert rebuilder(service, corpus, sleep=finish).run()["complete"]
+    assert all(method == "GET" for method, _ in service.requests)
+    assert all(len(jobs) == 2 for jobs in service.jobs.values())
+
+
+def test_active_retry_overrides_previous_recipe_error(corpus: Path) -> None:
+    service = Service(corpus)
+    rebuilder(service, corpus).run()
+    for document_id, recipe in service.recipes.items():
+        recipe.update(status="ERROR", searchable=False)
+        service.jobs[document_id][0]["status"] = "QUEUED"
+        service.jobs[document_id].append(
+            {**service.jobs[document_id][0], "id": "old", "status": "FAILED"}
+        )
+
+    def finish(_: float) -> None:
+        for document_id, recipe in service.recipes.items():
+            recipe.update(status="INDEXED", searchable=True)
+            service.jobs[document_id][0]["status"] = "SUCCEEDED"
+
+    assert rebuilder(service, corpus, sleep=finish).run()["complete"]
+
+
+@pytest.mark.parametrize("foreign", ["recipe", "revision"])
+@pytest.mark.parametrize("status", ["FAILED", "RUNNING"])
+def test_wait_uses_current_recipe_revision(corpus: Path, foreign: str, status: str) -> None:
+    service = Service(corpus)
+    rebuilder(service, corpus).run()
+    for document_id, recipe in service.recipes.items():
+        recipe.update(status="CHUNKED", searchable=False)
+        if foreign == "revision":
+            recipe["config_revision"] = 2
+            service.jobs[document_id][0]["recipe_revision"] = 2
+        other = {**service.jobs[document_id][0], "id": "other", "status": status}
+        other["recipe_id" if foreign == "recipe" else "recipe_revision"] = (
+            "other" if foreign == "recipe" else 1
+        )
+        service.jobs[document_id].insert(0, other)
+
+    def finish(_: float) -> None:
+        for recipe in service.recipes.values():
+            recipe.update(status="INDEXED", searchable=True)
+
+    assert rebuilder(service, corpus, sleep=finish).run()["complete"]
+
+
+@pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "QUEUED", "RUNNING"])
+def test_old_searchable_output_does_not_hide_current_job(corpus: Path, status: str) -> None:
+    service = Service(corpus)
+    rebuilder(service, corpus).run()
+    next(iter(service.jobs.values()))[0]["status"] = status
+    ticks = iter([0, 2])
+    with pytest.raises(
+        RebuildError, match="失敗または取消" if status in {"FAILED", "CANCELLED"} else "上限"
+    ):
+        rebuilder(service, corpus, timeout=1, clock=lambda: next(ticks)).run()
+
+
+def test_current_recipe_error_without_jobs_is_failure(corpus: Path) -> None:
+    service = Service(corpus)
+    rebuilder(service, corpus).run()
+    next(iter(service.recipes.values())).update(status="ERROR", searchable=False)
+    for jobs in service.jobs.values():
+        jobs.clear()
+    builder = rebuilder(service, corpus)
+    builder.state = json.loads((corpus / "state.json").read_text())
+    with pytest.raises(RebuildError, match="取込が失敗"):
+        builder.wait_documents()
