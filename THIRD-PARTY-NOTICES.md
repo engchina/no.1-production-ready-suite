@@ -6,6 +6,8 @@ No.1 Production Ready Suite（`platform/`・`rag/`・`nl2sql/`・`agent/`）が�
 
 3 製品は 1 台の Compute にまとめて配備し、platform の共通基盤と多くの依存を共有するため、通知は製品ごとに分けずにこの 1 つのファイルに置き、表の「場所」の列で製品・lockfile を示します。
 
+Unstructured parser のセキュリティ更新（#3957）では、`pyasn1` 0.6.5（BSD-2-Clause）と `pypdf` 6.21.4（BSD-3-Clause）を PyPI の配布 metadata で確認しました。新たな copyleft の部品は追加していません。これらも再配布する場合は、配布物のライセンス原文を保持してください。
+
 ## 入手の経路と再配布
 
 この repo と、その release（`suite-v*` の Terraform stack の zip）は、自前のソースと配備のスクリプトだけを含み、下の表の第三者の binary を含みません。配備のスクリプトは、配備先の Compute で次のとおり第三者の部品を取得します。

@@ -95,6 +95,9 @@ async function mockFallbackApi(page: Page) {
 /** 主要な画面の取得を数件ずつ返す（読み込んだ後の画面を確かめる）。 */
 async function mockMainScreens(page: Page) {
   await mockDatabaseGateReady(page);
+  await page.route("**/api/settings/trace-recording", (route) =>
+    route.fulfill({ json: { data: { enabled: false, updated_at: null }, error_messages: [], warning_messages: [] } }),
+  );
   await mockChatRequirement(page);
   await page.route("**/api/nl2sql/profiles/search**", (route) =>
     route.fulfill({ json: { data: { items: [PROFILE], total: 1, next_cursor: null } } }),
@@ -174,7 +177,7 @@ const SCREENS: Screen[] = [
   { path: "/settings/security/roles" },
   { path: "/settings/security/api-keys" },
   { path: "/settings/system-tables" },
-  // 運用設定のシステムテーブルの下（#2449・#2517。3 製品の共通のサイドナビの順）。
+  { path: "/settings/trace-recording" },
   { path: "/settings/chat-attachments" },
   { path: "/settings/answer-notice" },
   { path: "/settings/select-ai-credential" },
