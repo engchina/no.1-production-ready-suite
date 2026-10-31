@@ -226,6 +226,7 @@ from rag_engine.knowledge.prompt_files import (
     render_prompt_template,
 )
 from rag_engine.knowledge.runtime_knowledge import (
+    TERMS_ONLY_SOURCE_LABEL,
     RuntimeKnowledgeContext,
     build_runtime_knowledge_context,
     runtime_rules_status,
@@ -497,6 +498,20 @@ def _best_rerank_ranks(
     return merged
 
 
+def _ranking_extra_queries(queries: Sequence[str], settings: Settings | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """質問を含まない用語表現を分離する。独立した質問の出所も持つ表現は残す。"""
+    sources = getattr(settings, "retrieval_query_sources", {})
+    source_keys = {normalized_query_key(query): labels for query, labels in sources.items()}
+    search_only_sources = {TERMS_ONLY_SOURCE_LABEL}
+    ranking: list[str] = []
+    search_only: list[str] = []
+    for query in queries:
+        labels = source_keys.get(normalized_query_key(query), ())
+        target = search_only if labels and set(labels) <= search_only_sources else ranking
+        target.append(query)
+    return tuple(ranking), tuple(search_only)
+
+
 def _rerank_skip_reason(records: Sequence[AnswerRecord], settings: Settings | None, *, enabled: bool) -> str:
     """rerank を実行しない理由。実行するなら空文字。"""
     if not enabled:
@@ -543,10 +558,20 @@ def _rerank_records(
         return [protected_candidates[index] for index in sorted(protected_candidates)] + remainder
     step.field("並べ替える候補", f"{len(rerankable_candidates)} 件" + (f"（ほか {len(remainder)} 件は取得順のまま）" if remainder else ""))
     documents = [_rerank_document(record) for record in rerankable_candidates]
+    ranking_queries, search_only_queries = _ranking_extra_queries(extra_queries, settings)
+    record_retrieval_stage(
+        {
+            "stage": "rerank_query_selection",
+            "phase": rerank_phase,
+            "ranking_queries": [question, *ranking_queries],
+            "retrieval_only_queries": list(search_only_queries),
+            "reason": "registered_term_only_search_expression",
+        }
+    )
     try:
         reranked = _best_rerank_ranks(
             question,
-            extra_queries,
+            ranking_queries,
             documents,
             settings,
             step,
@@ -5567,7 +5592,7 @@ def answer_question_result(
         for query in expansion.generated_queries:
             sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問の言い換え・分解")
         if term_query:
-            sources.setdefault(_dedupe_query_key(term_query), "用語・同義語だけ")
+            sources.setdefault(_dedupe_query_key(term_query), TERMS_ONLY_SOURCE_LABEL)
         # 規定の書き方の検索文は質問拡張の LLM が作り、希望する結果の検索文は経緯と希望が混ざった質問から希望の部分を取り出す。
         for query in expansion.provision_queries:
             sources.setdefault(_dedupe_query_key(query), "質問拡張")
@@ -5585,7 +5610,7 @@ def answer_question_result(
             ):
                 labels.append(runtime_knowledge.query_source)
             if term_query and _dedupe_query_key(term_query) == key:
-                labels.append("用語・同義語だけ")
+                labels.append(TERMS_ONLY_SOURCE_LABEL)
             query_sources[query] = tuple(dict.fromkeys(labels))
         settings = replace(settings, retrieval_query_sources=query_sources)
         step.result(

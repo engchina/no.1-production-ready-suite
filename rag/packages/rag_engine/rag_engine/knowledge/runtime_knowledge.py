@@ -32,6 +32,7 @@ MAX_TEXT_CHARS = 800
 # 原質問に語を足した出どころの表示名（検索文の出どころ・検索語の元に出す）。設定の「プロファイルの知識」のタブと
 # 処理の経過の段の名前にそろえる（#3451・#3490）。
 TERMS_SOURCE_LABEL = "用語・同義語"
+TERMS_ONLY_SOURCE_LABEL = "用語・同義語だけ"
 RULES_SOURCE_LABEL = "確認・回答ルール"
 GUIDE_SOURCE_LABEL = "業務ガイド"
 SCOPE_SOURCE_LABEL = "確認で選んだ条件"
