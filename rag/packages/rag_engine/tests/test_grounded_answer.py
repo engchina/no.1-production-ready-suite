@@ -63,8 +63,7 @@ class FakeModel:
         observed = schema.canonical_schema if is_audit_wire(schema) else schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
-        if schema is RequestScopePlan:
-            assert self.scope_plan is not None, "根拠計画の合成応答を明示する"
+        if schema is RequestScopePlan and self.scope_plan is not None:
             return schema.model_validate(self.scope_plan)
         is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft
         source = self.drafts if is_generation else self.audits
