@@ -317,6 +317,8 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
     }
     assert [item["kind"] for item in draft["items"]]
     assert diagnostics["summary_evidence"]["citations"]["status"] == "linked"
+    assert diagnostics["summary_evidence"]["citations"]["document_scope_status"] == "complete"
+    assert diagnostics["summary_evidence"]["citations"]["document_ids"] == ["doc-1"]
     assert diagnostics["summary_evidence"]["semantic_validation"]["adopted"] is False
     assert diagnostics["execution_steps"]
     assert diagnostics["evidence_tree"]

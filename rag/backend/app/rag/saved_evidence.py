@@ -25,6 +25,9 @@ from app.rag.request_context import current_audit_request_context
 from app.schemas.search import RetrievedChunk
 
 
+_DOCUMENT_CAPTURE_SCOPES = ("generation_citation_trace", "summary_citation_links")
+
+
 class _ReadableDocuments(Protocol):
     async def accessible_document_ids(self, document_ids: Sequence[str]) -> set[str]: ...
 
@@ -86,7 +89,7 @@ def referenced_document_ids(value: object) -> set[str]:
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
-            if node.get("capture_scope") == "generation_citation_trace":
+            if node.get("capture_scope") in _DOCUMENT_CAPTURE_SCOPES:
                 found.update(_capture_document_ids(node))
             document_id = _document_id(node)
             if document_id is not None:
@@ -116,7 +119,7 @@ def prune_unreadable(value: object, readable: set[str]) -> object:
     """
 
     def unreadable(node: object) -> bool:
-        if isinstance(node, dict) and node.get("capture_scope") == "generation_citation_trace":
+        if isinstance(node, dict) and node.get("capture_scope") in _DOCUMENT_CAPTURE_SCOPES:
             return (
                 node.get("document_scope_status") != "complete"
                 or not _capture_document_ids(node) <= readable
@@ -125,8 +128,8 @@ def prune_unreadable(value: object, readable: set[str]) -> object:
         return document_id is not None and document_id not in readable
 
     if isinstance(value, dict):
-        if value.get("capture_scope") == "generation_citation_trace" and unreadable(value):
-            return {"capture_scope": "generation_citation_trace", "status": "withheld"}
+        if value.get("capture_scope") in _DOCUMENT_CAPTURE_SCOPES and unreadable(value):
+            return {"capture_scope": value["capture_scope"], "status": "withheld"}
         return {
             key: prune_unreadable(item, readable)
             for key, item in value.items()

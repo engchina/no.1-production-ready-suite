@@ -6793,6 +6793,7 @@ def link_summary_evidence(current: Round, *, published_summary: bool = True) -> 
                 [
                     {
                         "evidence_id": cited.span["evidence_id"],
+                        "document_id": str((cited.span.get("document_scope") or [""])[-1] or ""),
                         "source_id": cited.span.get("source_id"),
                         "page": cited.span.get("page"),
                         "quote": cited.item.quote,
@@ -6819,12 +6820,21 @@ def link_summary_evidence(current: Round, *, published_summary: bool = True) -> 
         warning = "要約と最終本文の引用の対応を確認できません。"
     if applicable and (current.timing.get("audit_error_type") or current.audit_cut) and not warning:
         warning = "要約を含む回答の意味検査が完了していません。"
+    citations_record: dict[str, Any] = {"status": status, "links": links, "unresolved_item_indexes": missing}
+    sources = [citation for link in links for citation in link["citations"]]
+    if sources:
+        # 原文を含む対応は、保存回答を読む時点の権限で参照全体を再認可する。
+        citations_record.update(
+            capture_scope="summary_citation_links",
+            document_ids=list(dict.fromkeys(citation["document_id"] for citation in sources if citation["document_id"])),
+            document_scope_status="complete" if all(citation["document_id"] for citation in sources) else "unknown",
+        )
     return replace(
         current,
         summary_warning=warning,
         timing={
             **current.timing,
-            "summary_citations": {"status": status, "links": links, "unresolved_item_indexes": missing},
+            "summary_citations": citations_record,
         },
     )
 
