@@ -1279,6 +1279,7 @@ async def test_raw_search_list_failure_keeps_other_list_weight(
     assert isinstance(vector, SearchHits) and isinstance(keyword, SearchHits)
     assert vector.status == "failed"
     assert vector.error == "TimeoutError"
+    assert isinstance(vector.failure, TimeoutError)
     assert keyword.status == "empty"
 
 

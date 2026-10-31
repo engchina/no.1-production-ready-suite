@@ -446,6 +446,7 @@ class SearchHits(list[RetrievedChunk]):
 
     status: str = "completed"
     error: str = ""
+    failure: Exception | None = None
 
 
 class OracleClient:
@@ -705,6 +706,7 @@ class OracleClient:
             if index in branch_errors:
                 result.status = "failed"
                 result.error = type(branch_errors[index]).__name__
+                result.failure = branch_errors[index]
             elif not hits:
                 result.status = "empty"
             branch_hits[index] = result

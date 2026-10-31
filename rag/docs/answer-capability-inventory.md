@@ -143,6 +143,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | kind | 処理 | 記録する箇所 |
 |---|---|---|
+| `retrieval` | ランキング一覧の取得に失敗。成功した一覧だけを元の重みで使い、全失敗なら検索の失敗を返す | `rag/backend/app/rag/answer_engine.py::_search`・`rag/packages/rag_engine/rag_engine/adapters/oracle/store.py::search_adb_hybrid_chunks` |
 | `query_expansion` | 言い換え・分解に失敗し原質問で続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_degraded_query_expansion` |
 | `runtime_terms` | 登録用語の照合に失敗し、その追加検索文なしで続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |

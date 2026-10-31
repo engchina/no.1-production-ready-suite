@@ -1567,7 +1567,9 @@ class AnswerEngine:
                 index = queries.index(query)
                 if getattr(hits, "status", "") == "failed":
                     state.record_degraded(
-                        "retrieval", RuntimeError(getattr(hits, "error", "検索に失敗"))
+                        "retrieval",
+                        getattr(hits, "failure", None)
+                        or RuntimeError(getattr(hits, "error", "検索に失敗")),
                     )
                 rankings.append([hit.chunk_id for hit in hits])
                 raw_lists.append(

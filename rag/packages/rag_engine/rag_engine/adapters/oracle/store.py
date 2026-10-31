@@ -884,7 +884,7 @@ def search_adb_hybrid_chunks(
                 except Exception as exc:
                     variant = "画像" if kwargs.get("embedding_modality") == EMBEDDING_MODALITY_IMAGE else ""
                     failures[(channel, query, variant)] = type(exc).__name__
-                    report_degraded("retrieval", RuntimeError(type(exc).__name__))
+                    report_degraded("retrieval", exc)
                     return []
 
             rankings: list[list[tuple[str, float | None]]] = []

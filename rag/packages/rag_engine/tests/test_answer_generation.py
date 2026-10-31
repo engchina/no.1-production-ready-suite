@@ -2077,7 +2077,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(payload["retrieval_query_plan"]["vector_queries"], ["拠点名を変えたい"])
         self.assertIn("原質問だけで検索します", result.question_display)
         self.assertNotIn("原質問の検索結果を優先します", result.question_display)
-        self.assertIn("全検索文を同じ重みで扱います", result.question_display)
+        self.assertIn("「検索結果の統合（RRF）」の設定で決まります", result.question_display)
 
     def test_crag_generates_from_retained_context_when_grader_fails(self):
         settings = get_settings()
