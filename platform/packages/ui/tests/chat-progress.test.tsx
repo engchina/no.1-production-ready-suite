@@ -701,3 +701,15 @@ it("並行した枝の開始順が交差しても親子を重ねて回さない"
   for (const id of ["a-child", "b-child"]) expect(q(`nested-parallel-step-${id}`)?.querySelector(".pr-spinner")).not.toBeNull();
   expect(host.querySelectorAll(".pr-spinner")).toHaveLength(2);
 });
+
+it("技術の中間行を省いた親も、表示された子と重ねて回さない", () => {
+  render(<ChatProgress active testId="compressed" steps={[
+    {id: "tool", label: "ツール", status: "running", level: 0},
+    {id: "search", parentId: "hidden-technical", label: "検索", status: "running", level: 1},
+    {id: "vector", parentId: "search", label: "意味検索", status: "running", level: 2},
+    {id: "text", parentId: "search", label: "全文検索", status: "running", level: 2},
+  ]} />);
+  expect(q("compressed-step-tool")?.querySelector(".pr-spinner")).toBeNull();
+  expect(q("compressed-step-search")?.querySelector(".pr-spinner")).toBeNull();
+  expect(host.querySelectorAll(".pr-spinner")).toHaveLength(2);
+});

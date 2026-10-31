@@ -619,12 +619,13 @@ export function RunTimelineViewport({ depth, label, children }: { depth: number;
  */
 export function runTimelineHasChildren(steps: readonly { id?: string; parentId?: string; level?: number | null }[]): boolean[] {
   const explicitParents = new Set(steps.map(step => step.parentId).filter(Boolean));
+  const visibleIds = new Set(steps.map(step => step.id).filter(Boolean));
   return steps.map((step, index) => {
     if (step.id && explicitParents.has(step.id)) return true;
     const next = steps[index + 1];
     // 並行した枝の開始順では子が隣に並ばないため、親 ID を優先する。
-    // 親 ID の無い旧記録だけは従来の階層の深さで判定する。
-    return Boolean(next && (!next.parentId || !step.id)
+    // 親 ID の無い旧記録や、技術の中間行を省いた経路は表示上の深さでも判定する。
+    return Boolean(next && (!next.parentId || !visibleIds.has(next.parentId) || !step.id)
       && stepLevel(next.level ?? undefined) > stepLevel(step.level ?? undefined));
   });
 }
