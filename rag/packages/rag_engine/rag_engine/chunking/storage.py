@@ -394,7 +394,7 @@ def _chunk_contracts() -> dict[str, Any]:
 
 
 def _validate_chunk_contracts(value: Any) -> None:
-    """新規 run の契約を厳密に検証し、欠損や旧版を拒否します。"""
+    """現在の契約を検証し、廃止した推定情報だけが余分な旧契約も署名と現行の版を確認して読みます。"""
     current = _chunk_contracts()
     if value == current:
         return

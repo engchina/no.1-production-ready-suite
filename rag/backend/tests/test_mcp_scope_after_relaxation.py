@@ -279,13 +279,12 @@ def test_mcp_relaxation_keeps_caller_conditions_as_of_and_token_scope(
     }
     assert oracle.filters
     first = oracle.filters[0]
-    # 最初の検索は、呼び出し元が指定していなければ質問の文書名・ページを足す。呼び出し元が検索文を
-    # 作った検索(caller)は項目の条件を読み取らないので、手の条件だけ。読み取った条件は手の条件を
-    # 上書きしない。
+    # 質問の文書名・ページは DB 条件にしない。呼び出し元の明示条件を維持する。
+    # caller が検索文を作った場合は独立した LLM 項目条件も足さない。
     if "file_name" in caller_filters:
         assert (first.get("file_name"), first.get("page_number_min")) == ("manual", "1")
     else:
-        assert (first.get("file_name"), first.get("page_number_min")) == ("sample.pdf", "12")
+        assert (first.get("file_name"), first.get("page_number_min")) == (None, None)
     manual = (MANUAL_FIELD.name, MANUAL_FIELD.value)
     if extra.get("planning") == "caller":
         assert _field_values(first) == [manual]
@@ -421,10 +420,10 @@ def test_mcp_section_expansion_reads_with_caller_conditions_and_as_of(
     )
 
     expected = {**filters, "knowledge_base_id": "kb-1,kb-2", "as_of": as_of}
-    # 自動の条件(項目・質問のページ・質問の文書名)をすべて外し終えた検索がある。
+    # 質問から文書名・ページを足さず、独立した項目条件だけを外す。
     assert (oracle.filters[0].get("file_name"), oracle.filters[0].get("page_number_min")) == (
-        "sample.pdf",
-        "12",
+        None,
+        None,
     )
     assert expected in oracle.filters
     # 章節の本文は、自動の条件を外した後の検索と同じ条件(呼び出し元の条件・KB・基準日)で読む。

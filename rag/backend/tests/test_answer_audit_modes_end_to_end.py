@@ -245,18 +245,18 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
                     "confidence": "high",
                     "request_coverage": [
                         {
-                            "request_id": f"Q{index + 1}",
+                            "request_id": "Q1",
                             "evidence_ids": [key],
                             "evidence_scope": [
                                 {"evidence_id": key, "target": "操作", "relation": "direct"}
                             ],
                         }
-                        for index in range(3)
+                        for index in range(1)
                     ],
                     "items": [
                         {
                             "kind": "operation",
-                            "request_id": f"Q{index + 1}",
+                            "request_id": "Q1",
                             "text": operation,
                             "citations": [
                                 {
@@ -273,28 +273,27 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
             audits += 1
             data = json.loads(prompt)
             key = next(iter(data["evidence"]))
-            requests = []
-            for index, operation in enumerate(operations):
-                addressed = index < generations
-                requests.append(
-                    {
-                        "request_id": f"Q{index + 1}",
-                        "status": "addressed" if addressed else "partial",
-                        "reason": "説明済み" if addressed else "原文はあるが操作の説明がない",
-                        "evidence_status": "unknown" if addressed else "available",
-                        "missing_content": "" if addressed else operation,
-                        "evidence_ids": [] if addressed else [key],
-                        "evidence_support": []
-                        if addressed
-                        else [
-                            {
-                                "evidence_id": key,
-                                "quote": operation,
-                                "source": data["evidence_sources"][key],
-                            }
-                        ],
-                    }
-                )
+            missing = operations[generations:]
+            requests = [
+                {
+                    "request_id": "Q1",
+                    "status": "partial" if missing else "addressed",
+                    "reason": "原質問の残りの操作は原文にあるが説明していない"
+                    if missing
+                    else "説明済み",
+                    "evidence_status": "available" if missing else "unknown",
+                    "missing_content": " / ".join(missing),
+                    "evidence_ids": [key] if missing else [],
+                    "evidence_support": [
+                        {
+                            "evidence_id": key,
+                            "quote": operation,
+                            "source": data["evidence_sources"][key],
+                        }
+                        for operation in missing
+                    ],
+                }
+            ]
             return legacy_audit_result(
                 schema,
                 {
@@ -346,12 +345,12 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
     observed = result.diagnostics["round_budget"]["rounds"][0]["semantic_audit_observation"][
         "audit"
     ]
-    assert [row["request_id"] for row in observed["request_reviews"]] == ["Q1", "Q2", "Q3"]
-    assert [row["missing_content"] for row in observed["request_reviews"][1:]] == operations[1:]
-    assert all(row["evidence_status"] == "available" for row in observed["request_reviews"][1:])
-    assert [
-        row["evidence_support"][0]["quote"] for row in observed["request_reviews"][1:]
-    ] == operations[1:]
+    assert [row["request_id"] for row in observed["request_reviews"]] == ["Q1"]
+    review = observed["request_reviews"][0]
+    assert review["status"] == "partial"
+    assert all(operation in review["missing_content"] for operation in operations[1:])
+    assert review["evidence_status"] == "available"
+    assert [proof["quote"] for proof in review["evidence_support"]] == operations[1:]
     assert operations[0] in result.answer
 
 

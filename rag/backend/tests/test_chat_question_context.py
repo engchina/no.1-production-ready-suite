@@ -406,6 +406,10 @@ async def test_confirmation_api_keeps_unknown_and_shares_positive_choice(
     from tests.test_rule_selection import PAYLOAD
 
     oracle, settings, _calls = context_setup
+    settings.rag_runtime_rules_confirmation_enabled = True
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
     settings.rag_support_guide_enabled = False
     settings.rag_history_rewrite_enabled = False
     oracle.view.config.query.support_guide_enabled = False

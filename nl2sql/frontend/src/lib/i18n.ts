@@ -70,7 +70,6 @@ const nl2sqlJa = {
   "chat.progress.format_results.done": "SQL の実行結果を表示用に整えました",
   "chat.progress.format_results.failed": "SQL の実行結果を表示用に整えられませんでした",
   "chat.progress.format_results.idle": "SQL の実行結果を表示用に整える",
-  "chat.progress.working": "処理を続けています",
   "chat.progress.rows": "{count} 行",
   "chat.loading": "会話を読み込んでいます",
   "chat.historyLoading": "会話の履歴を読み込んでいます",

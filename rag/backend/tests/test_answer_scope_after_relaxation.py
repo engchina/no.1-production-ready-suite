@@ -191,17 +191,16 @@ def _engine(oracle: FakeOracle, **settings: Any) -> AnswerEngine:
             ["auto_field"],
         ),
         (
-            # 利用者は文書名を指定しない。質問の文書名・ページと項目を、項目 → ページ → 文書名の
-            # 順に外す。
+            # 質問から文書名・ページを条件にしない。独立した LLM 項目条件だけを緩和する。
             "sample.pdf の12ページの登録手順は？",
             {"knowledge_base_id": "kb-1", "middle_category": "分類B"},
-            ["auto_field", "question_page", "question_file"],
+            ["auto_field"],
         ),
         (
-            # 利用者がページを指定したので、質問のページは足さない(質問の文書名と項目を外す)。
+            # 利用者の明示ページを保持し、質問の文書名を条件にしない。
             "sample.pdf の12ページの登録手順は？",
             {"knowledge_base_id": "kb-1", "page_number_min": "1", "page_number_max": "3"},
-            ["auto_field", "question_file"],
+            ["auto_field"],
         ),
     ],
     ids=["user-file-name", "question-file-name", "user-page"],
@@ -404,8 +403,8 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
             data["items"].append(
                 {
                     "kind": "gap",
-                    "text": "追加操作の根拠がありません。",
-                    "request_id": "Q2",
+                    "text": "請求書の再発行方法は？",
+                    "request_id": "Q1",
                     "citations": [],
                 }
             )

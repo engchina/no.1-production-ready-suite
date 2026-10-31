@@ -525,6 +525,9 @@ def test_scope_with_only_archived_profiles_denies_knowledge_bases(
 def test_public_mcp_resolves_profile_question_language_before_rule_preparation(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
     from rag_parser_core.language import current_pack
 
     from app.api.routes import search as search_route

@@ -687,3 +687,17 @@ it("並行の実工程を同時に回し、子が終わっても架空の処理�
   expect(host.textContent).not.toContain("処理を続けています");
   expect(host.querySelector('[data-step-id=""]')).toBeNull();
 });
+
+it("並行した枝の開始順が交差しても親子を重ねて回さない", () => {
+  const steps: ChatProgressStep[] = [
+    {id: "root", label: "親工程", status: "running", startedAt: at(0)},
+    {id: "a", parentId: "root", level: 1, label: "枝 A", status: "running", startedAt: at(1)},
+    {id: "b", parentId: "root", level: 1, label: "枝 B", status: "running", startedAt: at(1)},
+    {id: "a-child", parentId: "a", level: 2, label: "A の実処理", status: "running", startedAt: at(2)},
+    {id: "b-child", parentId: "b", level: 2, label: "B の実処理", status: "running", startedAt: at(2)},
+  ];
+  render(<ChatProgress steps={steps} active testId="nested-parallel" />);
+  for (const id of ["root", "a", "b"]) expect(q(`nested-parallel-step-${id}`)?.querySelector(".pr-spinner")).toBeNull();
+  for (const id of ["a-child", "b-child"]) expect(q(`nested-parallel-step-${id}`)?.querySelector(".pr-spinner")).not.toBeNull();
+  expect(host.querySelectorAll(".pr-spinner")).toHaveLength(2);
+});

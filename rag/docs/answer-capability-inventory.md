@@ -42,7 +42,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 抽出項目の条件の読み取り（Metadata Filter Extraction。#652） | 任意（設定 `RAG_AUTO_FIELD_FILTER_ENABLED`） | 定義の読み込み・LLM の失敗 → 条件なしで検索する。LLM の出力が JSON として読めない → 条件なし | 読み込み・LLM の失敗: `DS`（`field_filter`）。工程の詳細は条件が無いときと同じ「なし」。読めない出力は記録しない（例外ではない） | 見せない（絞らない） | `rag/backend/app/rag/pipeline.py::_read_field_conditions`・`rag/backend/app/rag/field_filter_reader.py::read_field_conditions` |
 | 会話の添付の根拠（#2517） | 任意 | 添付を読めない → 根拠に入れない。rerank の失敗 → 語の一致で選ぶ | `DS`（`chat_attachments`・`chat_attachment_rerank`）。添付が無いときは記録しない | 見せない | `rag/backend/app/rag/chat_attachments.py::attachment_evidence`・`attachment_units`・`select_attachment_units` |
 | 編集した回答のプロンプト（#1276） | 任意 | 読めない → コードの既定のプロンプトで続ける | `DS`（`prompt_overrides`）。`provenance.prompt_version` は既定のプロンプトの版になる | 見せない（版は実際に使った既定のもの） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
-| 業務の名前（業務の絞り込み） | 任意 | 読めない → 業務で絞らずに続ける | `DS`（`business_names`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._business_names` |
 
 ### 主の検索（`answer_engine.py::AnswerEngine._search`）
 
@@ -98,11 +97,11 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 条の根拠の chunk | 任意 | 読めない → その文書の条を足さない | `DS`（`article_chunks`） | 見せない | `rag/backend/app/rag/answer_engine.py::AnswerEngine._article_chunks` |
 | 条の目録の元の質問の検索（#2261） | 任意 | 失敗 → 元の質問の候補を足さない | `DS`（`article_original_question`） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::_original_question_children` |
 
-### 質問の理解・拡張・根拠確認（rag_engine）
+### 入力の正規化・検索文の作成・根拠確認（rag_engine）
 
 | 能力 | (a) | (b) 使えない・失敗のとき | (c) 記録 | (d) 精密に見せるか | コード |
 |---|---|---|---|---|---|
-| 質問の理解（規則。LLM なし） | 必須 | 例外は送出 → **エラー**（try が無い） | `SP` | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/question_planning.py::plan_question` |
+| 入力の正規化（LLM なし。独立した推定工程は廃止） | 必須 | 例外は送出 → **エラー**（try が無い） | `SP` | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/question_planning.py::plan_question` |
 | 用語・同義語と回答ルール（runtime knowledge） | 任意 | 読めない → 補助情報なしで続ける | `DS`（`runtime_knowledge`）・`ST`（status「補助情報なしで続行」と詳細の「読込エラー: 例外の型の名前」。例外の文はログだけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/knowledge/runtime_knowledge.py::load_runtime_knowledge`・`_load_failure` |
 | 質問の言い換え・分解（`RAG_QUERY_STRATEGY`） | 任意 | 戦略の判定・検索文の生成の LLM の失敗 → 原質問のみ（言い換え・分解なし）で続ける | `DX`（`strategy` が実際に使った戦略）・`ST`（理由の文。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_query_expansion`・`_degraded_query_expansion` |
 | CRAG の補正検索 | 任意（設定・追加検索予算） | 追加検索の失敗 → 取得済みの根拠を維持して生成へ進む。初回検索の失敗は従来どおりエラー | `DS`（`crag_retrieval`）・`ST`（追加検索のエラー）・`RT`（`stop_reason=retrieval_error`・例外の型） | 取得済み資料だけを使い、未確認の不足を確定しない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
@@ -144,9 +143,10 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 | kind | 処理 | 記録する箇所 |
 |---|---|---|
+| `query_expansion` | 言い換え・分解に失敗し原質問で続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_degraded_query_expansion` |
+| `runtime_terms` | 登録用語の照合に失敗し、その追加検索文なしで続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |
 | `prompt_overrides` | 編集した回答のプロンプトの読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
-| `business_names` | 業務の名前の読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._business_names` |
 | `entity_expansion` | 実体の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
 | `graph_expansion` | 関係情報の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._graph_expansion` |
 | `reference_resolve` | 参照先の解決 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |
@@ -181,7 +181,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 
 ## 一覧から分かったこと
 
-- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、質問の embedding、vector 検索、全文検索の SQL、引用ラベルの検索、前後の文脈・分類・1 頁目の読み込み、派生の chunk の原文の読み込み、質問の理解（規則）、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）、承認済み FAQ からの回答。主の検索の失敗は 0 件にせずエラーにする（#3259 のテスト）。
+- **必須の能力**（失敗すると回答がエラー・拒否になる）: 有効なときの安全チェック（入力・出力。fail-closed）、質問の embedding、vector 検索、全文検索の SQL、引用ラベルの検索、前後の文脈・分類・1 頁目の読み込み、派生の chunk の原文の読み込み、入力の正規化、回答の生成の 1 組目、生成の監査（期限の打ち切りを除く）、承認済み FAQ からの回答。主の検索の失敗は 0 件にせずエラーにする（#3259 のテスト）。
 - **任意の能力**は、上の表のとおり縮退して回答を続ける。縮退した結果を「確かめた」「精密な位置」として見せる経路は、静的確認の範囲では見当たらない。`models.rerank` は rerank が失敗したとき空にした（#3286）。
 - **記録が足りない縮退**: #3286 の表の処理（rerank・追加の検索文の rerank・CRAG の判定・会話の書き換え・抽出項目の条件の読み取り・会話の添付・Sudachi・章節の子の並べ替え・条の目録の元の質問の検索）は `DS` に入れた。条の目録の範囲の文書の選択と 2 段目の失敗は `DS` に数え、cache しない（#3285。#3278 と同じ種類）。例外ではない縮退（書き換えの安全チェックの拒否・抽出項目の条件の読めない出力・呼び出し元の検索文の拒否）は `DS` に入れない。
 - **診断に例外の文が残る経路**: 要求ごとの根拠の探し直しと、用語・同義語と回答ルールの読み込みは、例外の型の名前だけにした（#3284）。
