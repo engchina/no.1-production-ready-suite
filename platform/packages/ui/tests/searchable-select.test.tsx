@@ -502,3 +502,16 @@ function listHeights({ scrollHeight, clientHeight }: { scrollHeight: number; cli
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(scrollHeight);
   vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(clientHeight);
 }
+
+describe("チャットの対象のコンパクトな選択", () => {
+  it("選択名は一行に収め、読み上げ名に欄名と必須を保持する", () => {
+    act(() => root.render(<SearchableSelectField id="synthetic-target" label="対象" required labelPlacement="compact" size="sm" value="kb-1" options={OPTIONS} onValueChange={() => {}} />));
+    const button = host.querySelector<HTMLButtonElement>("#synthetic-target")!;
+    const ids = button.getAttribute("aria-labelledby")!.split(" ");
+    expect(ids.map(id => document.getElementById(id)?.textContent).join(" ")).toContain("対象必須");
+    expect(host.querySelector("[data-filter-select-label]")).toBeNull();
+    expect(document.getElementById(ids[1])?.getAttribute("title")).toBe(OPTIONS[0].label);
+    act(() => button.click());
+    expect(document.querySelector("[role=dialog]")?.getAttribute("aria-label")).toBe("対象");
+  });
+});

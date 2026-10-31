@@ -90,7 +90,8 @@ export interface SearchableSelectFieldProps {
    * （一覧のツールバーの絞り込みで、数百件から選ぶ対象。`SelectField` の `labelPlacement` と同じ）。`inline` では
    * 選択中の名前を 1 行で切り（全文は `title`）、ツールバーの行の高さを欄にそろえる。
    */
-  labelPlacement?: "top" | "inline";
+  /** compact はチャットのツールバー用。選択値だけを 1 行で表示し、ラベルは読み上げ名に残す。 */
+  labelPlacement?: "top" | "inline" | "compact";
   /** 絞り込みが掛かっている（`inline` のときだけ効く。値を太字・アクセント、枠をアクセントにする。`SelectField` の `active` と同じ）。 */
   active?: boolean;
 }
@@ -131,7 +132,8 @@ export function SearchableSelectField({
   active: filterActive = false,
 }: SearchableSelectFieldProps) {
   const widthScope = useFieldWidthScope();
-  const inlineLabel = labelPlacement === "inline";
+  const compactLabel = labelPlacement === "compact";
+  const inlineLabel = labelPlacement !== "top";
   const labels = { ...DEFAULT_SEARCHABLE_SELECT_LABELS, ...labelOverrides };
   const reactId = useId();
   const labelId = `${id}-${reactId}-label`;
@@ -459,6 +461,7 @@ export function SearchableSelectField({
           "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
           error ? "border-danger-fg" : inlineLabel && filterActive ? "border-accent-fg" : "border-border-control",
           widthClasses.control,
+          compactLabel && "py-0",
           buttonClassName
         )}
       >
@@ -471,7 +474,7 @@ export function SearchableSelectField({
               className={cn("shrink-0", disabled ? "text-fg-disabled" : "text-fg-muted")}
             />
           ) : null}
-          {inlineLabel ? (
+          {inlineLabel && !compactLabel ? (
             // 読み上げ名はラベル（aria-labelledby）で読むので、ボタンの中のラベルは見た目だけにする（SelectField と同じ）。
             <span aria-hidden className="shrink-0 whitespace-nowrap text-fg-muted" data-filter-select-label="">
               {label}:
@@ -491,6 +494,7 @@ export function SearchableSelectField({
             {current?.label ?? (value || placeholder)}
           </span>
         </span>
+        {compactLabel && !value && required && requiredLabel ? <span aria-hidden className="shrink-0"><RequiredBadge label={requiredLabel} /></span> : null}
         <ChevronDown
           size={16}
           aria-hidden

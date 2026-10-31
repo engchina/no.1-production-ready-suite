@@ -513,7 +513,8 @@ describe("ChatProgress", () => {
     expect(search.dataset.level).toBe("1");
     expect(search.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
     expect(search.textContent).toContain("1.6 秒");
-    expect(q("p-step-understand")!.textContent).toContain("質問の理解（LLM 1 回）");
+    expect(q("p-step-understand")!.textContent).toContain("質問の理解");
+    expect(q("p-step-understand")!.querySelector("[data-run-result-summary]")?.textContent).toBe("LLM 1 回");
     expect(q("p-step-understand")!.textContent).toContain("0.1 秒");
     expect(q("p-step-understand")!.dataset.level).toBeUndefined();
     // 時刻の無い記録の全体の所要時間は、最上位の段階の和。

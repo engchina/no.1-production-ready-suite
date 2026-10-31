@@ -226,12 +226,10 @@ test.describe("AI Agent Control Plane", () => {
     // 実行環境とイベントの記録は処理の経過の中の「処理の詳細」に畳む（#1955 / #2325）。
     const technical = page.getByTestId("run-technical-section");
     await page.getByTestId("run-process-details").click();
-    await expect(technical.locator('[data-run-fact="runtime"] dd')).toHaveText("組み込みの実行環境");
-    // イベントは 1 行 = 1 イベント（要約と状態のバッジ）。種類のコードは行を開いた詳細に出す（#2386）。
-    const event = technical.getByTestId("run-event-log-event-event-1");
-    await expect(event).toContainText("実行を開始しました。");
-    await event.getByTestId("run-event-log-event-event-1-toggle").click();
-    await expect(event.getByTestId("run-event-log-event-event-1-details")).toContainText("run.status_changed");
+    await expect(technical.locator("[data-process-identifier]")).toHaveCount(3);
+    await expect(technical.locator("[data-run-used-models]")).toBeVisible();
+    await expect(technical.locator('[data-run-fact="runtime"]')).toHaveCount(0);
+    await expect(technical.getByTestId("run-event-log")).toHaveCount(0);
     // 実行中の Run は、サーバーの開始時刻からの経過時間を出す（#376）。
     const progress = page.getByTestId("run-progress");
     await expect(progress).toContainText("実行しています");

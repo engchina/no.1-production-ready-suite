@@ -81,6 +81,11 @@ for (const theme of ["light", "dark"] as const) {
     // 読み込み後: 空の状態と、使える入力欄。
     release();
     await expect(page.getByTestId("chat-agents-loading")).toHaveCount(0);
+
+    const toolbarTarget = page.locator("[data-chat-toolbar] #chat-agent");
+    await expect(toolbarTarget).toBeVisible();
+    expect(await toolbarTarget.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);
+
     await expect(page.getByTestId("chat-conversation-skeleton")).toHaveCount(0);
     await expect(page.getByText("質問を入力して会話を始めます")).toBeVisible();
     await expect(composer).toBeEnabled();

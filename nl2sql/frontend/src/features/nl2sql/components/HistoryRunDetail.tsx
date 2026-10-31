@@ -15,6 +15,7 @@ import {
   PageBody,
   PageHeader,
   RunDetailLayout,
+  RunUsedModels,
   RunDetailSection,
   RunDetailSkeleton,
   RunFactList,
@@ -124,39 +125,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   }
 
   const hasFeedback = Boolean(item.feedback_rating || item.feedback_comment.trim());
-  const showGeneratedSql = Boolean(item.generated_sql.trim()) && item.generated_sql.trim() !== sql.trim();
-  const engineErrors = (item.engine_timings ?? []).filter((timing) => timing.error?.trim());
-  // MCP の呼び出し元（API キーの名前・Agent の Run の ID。#1986）は技術的な詳細に置く。
-  const callerFacts: RunFact[] = [];
-  if (item.api_key_name?.trim()) {
-    callerFacts.push({ id: "api-key", label: t("history.detail.apiKey"), value: item.api_key_name });
-  }
-  if (item.agent_run_id?.trim()) {
-    callerFacts.push({ id: "agent-run", label: t("history.detail.agentRunId"), value: item.agent_run_id, mono: true });
-  }
-
-  // 処理の詳細（#2325）: 呼び出し元・生成した SQL・エンジンの試行を、処理の経過のタイムラインの後ろに既定で閉じて置く
-  // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置）。
-  const processDetails =
-    showGeneratedSql || engineErrors.length > 0 || callerFacts.length > 0 ? (
-      <>
-        {callerFacts.length > 0 ? <RunFactList facts={callerFacts} testId="history-detail-caller" /> : null}
-        {showGeneratedSql ? (
-          <div className="grid min-w-0 gap-1">
-            <p className="text-xs text-fg-muted">{t("history.detail.generatedSql")}</p>
-            <SqlBlock sql={item.generated_sql} label={t("history.detail.generatedSql")} testId="history-detail-generated-sql" />
-          </div>
-        ) : null}
-        {engineErrors.length > 0 ? (
-          <div className="grid min-w-0 gap-1">
-            <p className="text-xs text-fg-muted">{t("history.detail.engineAttempts")}</p>
-            <pre data-surface="code" className="overflow-auto rounded-md border border-border bg-surface p-3 font-mono text-xs leading-5 text-fg">
-              {JSON.stringify(item.engine_timings, null, 2)}
-            </pre>
-          </div>
-        ) : null}
-      </>
-    ) : null;
+  const processDetails = <RunUsedModels models={(item.usage?.models ?? []).map(value => ({ label: "LLM", value }))} events={progress.events} />;
 
   return (
     <>
@@ -229,7 +198,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
               partial={progress.partial}
               labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
-              processDetailsProps={{ title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}
+              processDetailsProps={{ metadata: { conversationId: item.kind === "chat" ? item.session_id ?? null : null, messageId: item.id }, title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}
               processDetails={processDetails}
               testId="history-detail-timeline"
             />

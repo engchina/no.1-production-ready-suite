@@ -60,6 +60,8 @@ export interface ChatLayoutProps {
   label: string;
   /** 今の会話の名前。会話を選んでいない・まだ分からないときは `null` / `undefined`。 */
   conversationTitle?: string | null;
+  /** 必須の対象の選択。既存のツールバーに置き、会話の上に独立したカードを作らない。 */
+  targetSelector?: ReactNode;
   /** 会話の名前を読み込んでいる（名前の位置に `Skeleton` を出す）。 */
   conversationTitleLoading?: boolean;
   /** 上端の行の右端の「新しい会話」。 */
@@ -104,6 +106,7 @@ export function ChatLayout({
   historyContent,
   label,
   conversationTitle,
+  targetSelector,
   conversationTitleLoading = false,
   newConversation,
   historyToggleDisabled = false,
@@ -192,7 +195,7 @@ export function ChatLayout({
         )}
       >
         {/* 上端の行: 履歴の開閉（左端）・今の会話の名前・新しい会話（右端）。履歴を閉じていても使える。 */}
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+        <div className="@container/chat-toolbar flex shrink-0 items-center gap-2 border-b border-border px-3 py-2" data-chat-toolbar="">
           <Button
             ref={history.toggleRef}
             type="button"
@@ -207,14 +210,15 @@ export function ChatLayout({
             disabled={historyToggleDisabled}
             onClick={history.toggle}
           />
-          <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-1 flex-col gap-1 @2xl/chat-toolbar:flex-row @2xl/chat-toolbar:items-center @2xl/chat-toolbar:gap-3">
             {conversationTitle ? (
-              <h2 className="truncate text-sm font-medium text-fg" title={conversationTitle} data-testid={ids.title}>
+              <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-fg" title={conversationTitle} data-testid={ids.title}>
                 {conversationTitle}
               </h2>
             ) : conversationTitleLoading ? (
               <Skeleton className="h-4 w-40" />
             ) : null}
+            {targetSelector ? <div className="min-w-0 flex-1 @2xl/chat-toolbar:max-w-[28rem]" data-chat-target-selector="">{targetSelector}</div> : null}
           </div>
           <Button
             type="button"

@@ -485,8 +485,6 @@ export function SearchClient() {
       traceId={running ? undefined : processTraceId}
       partial={trace.partial}
       diagnostics={running ? undefined : meta?.diagnostics?.answer}
-      showNotices={!answerMode}
-      showAutoFieldFilter={false}
       testId="search-run-progress"
     />
   ) : null;

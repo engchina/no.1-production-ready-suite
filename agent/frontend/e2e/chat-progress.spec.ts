@@ -1,5 +1,5 @@
 import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
-import { syntheticCallDetails } from "../../../platform/packages/ui/e2e/call-fixture";
+import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import type { Page } from "@playwright/test";
 
@@ -153,8 +153,8 @@ for (const viewport of VIEWPORTS) {
     const details = turn.getByTestId("chat-progress-step-tool:rag__rag_search-details");
     await expect(details.locator("dd").first()).toHaveText("rag__rag_search");
     await expect(details.getByLabel("引数")).toContainText("合成の語");
-    // 製品の詳細の後ろに span の技術の値（Span name）が付く。
-    await expect(details).toContainText("gen_ai.execute_tool");
+    // 経過は処理の説明だけにする。元の識別子は軌跡へ残す。
+    await expect(details).not.toContainText("Span name");
     // 後の段は実行中のまま。
     await expect(current).toHaveAttribute("data-step-id", "chat-2");
     await expectNoHorizontalOverflow(page);
@@ -490,7 +490,7 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   await page.getByTestId("chat-progress-summary").click();
   const list = page.getByTestId("chat-progress");
   const live = await timelineSnapshot(list);
-  expect(live.map((row) => [row.text.replace(/ 完了( [\d.]+ 秒)?$/, ""), row.level])).toEqual([
+  expect(live.map((row) => [row.name + (row.product ? ` ${row.product}` : ""), row.level])).toEqual([
     ["質問に応じた次の操作を選びました", 0],
     ["「合成の根拠の取得」を実行しました", 0],
     ["MCP の呼び出し · 合成の根拠の取得", 1],
@@ -649,17 +649,18 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   await expect(page.getByTestId("run-summary")).toBeVisible();
   await page.getByTestId("run-timeline-section-summary").click();
   const timeline = page.getByTestId("run-timeline-section");
+  await expect(timeline).not.toContainText("Span name");
+  await timeline.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
   const fieldsOf = async (stepId: string) => {
-    const step = timeline.locator(`[data-run-timeline-step="${stepId}"]`);
-    // 技術の値は行を開いたときだけ出す（既定で閉じる）。
-    await expect(step.getByText("入力トークン", {exact: true})).toHaveCount(0);
-    await step.locator('> div:first-child button[aria-expanded="false"]').click();
-    await expect(step.getByText("入力トークン", {exact: true})).toBeVisible();
-    const terms = await step.locator("dt").allInnerTexts();
-    const values = await step.locator("dd").allInnerTexts();
+    const back = page.locator("[data-trace-inspector]").getByRole("button", {name: "一覧に戻る", exact: true});
+    if (await back.isVisible()) await back.click();
+    await page.locator(`[data-trace-record="${stepId}"] button`).click();
+    const inspector = page.locator("[data-trace-inspector]");
+    await expect(inspector.locator("[data-trace-technical]")).toContainText("入力トークン");
+    const terms = await inspector.locator("[data-trace-technical] dt").allInnerTexts();
+    const values = await inspector.locator("[data-trace-technical] dd").allInnerTexts();
     return Object.fromEntries(terms.map((term, index) => [term, values[index]]));
   };
-  await expect(timeline.locator('[data-run-timeline-step="chat-1"]')).toContainText("質問に応じた操作または回答を作る");
   const first = await fieldsOf("chat-1");
   expect(first).toMatchObject({
     "gen_ai.request.model": SYNTHETIC_MODEL,
@@ -693,35 +694,15 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
 });
 
 test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
-  const { progress: log } = seedRunningRun(mockApi);
+  const { run, progress: log } = seedRunningRun(mockApi);
   log.step("chat-1", "done", { kind: "plan", details: { call: syntheticCallDetails } }).step("chat-2", "running");
-  await page.goto("/chat");
-  await openThread(page);
-  await page.getByTestId("chat-progress-step-chat-1-toggle").click();
-  const pane = page.locator("[data-call-details]");
-  await pane.getByRole("tab", { name: "入力", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-input");
-  await pane.getByRole("tab", { name: "結果", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await pane.getByRole("tab", { name: "思考", exact: true }).click();
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await expect(pane.locator("[data-call-readable]")).not.toContainText("synthetic-call-output");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-schema");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(pane.getByRole("tab", { name: "計時", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(pane).toContainText("開始時刻");
-  await expectNoHorizontalOverflow(page);
-  for (const theme of ["light", "dark"]) {
-    await page.evaluate(value => {
-      document.documentElement.classList.remove("light", "dark");
-      document.documentElement.dataset.theme = value;
-    }, theme);
-    await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
-  }
+  log.step("synthetic-stage", "done", { name: "agent.prepare", parent: "chat-1", details: syntheticStageDetails });
+  log.step("attachment-off", "skipped", {name: "agent.attachment_evidence", parent: "chat-1"});
+  run.status = "completed";
+  log.terminal("done");
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await page.getByTestId("run-timeline-section-summary").click();
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await confirmTraceExplorer(page, testInfo, expect);
 });

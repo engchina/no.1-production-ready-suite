@@ -14,12 +14,12 @@ import {
   ChatReadOnlyNotice,
   Banner,
   Button,
-  Card,
-  CardContent,
   ChatAnswer,
   ChatComposerOption,
   AnswerNotice,
   ChatProgress,
+  RunUsedModels,
+  RunProcessDetails,
   ChatSkeleton,
   ChatSqlBlock,
   ChatTurn,
@@ -644,14 +644,8 @@ export function SqlChatPage() {
       testIdPrefix="sql-chat"
     />
   );
-  return (
-    // 見出しと本文の高さの渡し方は DB 管理チャットと共通の Nl2SqlChatPage（#2332）。
-    <Nl2SqlChatPage title={t("nav.chat")} subtitle={t("chat.subtitle")}>
-      {/* 対象の業務プロファイル（#891）。RAG の検索・回答プロファイル・Agent の業務 Agent と同じく、
-          ページ上部のカードに全幅の SearchableSelectField を 1 つだけ置く（#635）。
-          カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、3 製品のチャットと同じ（#1778）。 */}
-      <Card className="shrink-0">
-        <CardContent className="pt-5">
+  const targetSelector = (<>
+
           {profilesLoading ? (
             <TimedLoadingState
               label={t("chat.profile.loading")}
@@ -691,6 +685,8 @@ export function SqlChatPage() {
           ) : (
             <SearchableSelectField
               id="sql-chat-profile"
+              labelPlacement="compact"
+              size="sm"
               label={t("chat.profile")}
               required
               value={selectedProfileId}
@@ -744,12 +740,18 @@ export function SqlChatPage() {
               }
             />
           )}
-        </CardContent>
-      </Card>
+
+  </>);
+  return (
+    // 見出しと本文の高さの渡し方は DB 管理チャットと共通の Nl2SqlChatPage（#2332）。
+    <Nl2SqlChatPage title={t("nav.chat")} subtitle={t("chat.subtitle")}>
+
+      {noProfiles || profilesFailed ? targetSelector : null}
       {noProfiles || profilesFailed ? null : (
         // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
         // NL2SQL の文言は DB 管理チャットと共通の Nl2SqlChatLayout が付ける（#2264）。
         <Nl2SqlChatLayout
+          targetSelector={targetSelector}
           history={{
             panel: historyPanel,
             content: historyContent,
@@ -1067,11 +1069,15 @@ function SqlChatTurn({
           {/* 処理の経過（#1145・#3226）は span の木。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の
               1 行（押すと開く。3 製品で同じ。#2265）。span の無い古い形式の記録は案内の文を出す。 */}
           {legacyProgress ? (
-            <ProgressLegacyNotice testId="sql-chat-progress-legacy" />
+            <><ProgressLegacyNotice testId="sql-chat-progress-legacy" />
+              <RunProcessDetails metadata={{ conversationId: turn.conversation_id ?? null, messageId: turn.job_id }}><RunUsedModels models={[]} /></RunProcessDetails>
+            </>
           ) : (
             <ChatProgress
               cancelled={turn.error_code === "JOB_CANCELLED"}
               traceId={progress.traceId}
+              processDetailsProps={{ metadata: { conversationId: turn.conversation_id ?? null, messageId: turn.job_id } }}
+              footer={<RunUsedModels models={[]} events={progress.events} />}
               {...tracker.progressProps}
               reconnecting={tracker.reconnecting || (running && progress.failed)}
               steps={progressSteps}

@@ -1,3 +1,4 @@
+import { inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { FONT_MONO_FAMILY } from "../../../../platform/packages/ui/e2e/font-checks";
 import {jobProgressEvents, jobProgressTraceId, withJobProgress, withRecordedTrace, type JobProgressStep} from "./_helpers/job-progress";
@@ -20296,7 +20297,7 @@ test("Select AI の SQL は安全性の確認の工程を「省略」と出す�
   const safetyStep = page.getByTestId("nl2sql-job-step-safety_check");
   await expect(safetyStep).toHaveAttribute("data-status", "skipped");
   // 状態は色だけでなく文字で示し、省略の理由を添える（チャットと同じ工程の定義）。
-  await expect(safetyStep).toContainText("未実行");
+  await expect(safetyStep).toContainText("スキップ");
   await expect(safetyStep).toContainText("Select AI が生成した SELECT 文のため省略しました");
   await safetyStep.getByRole("button").first().click();
   await expect(safetyStep).toContainText("INVOICES");
@@ -20404,8 +20405,9 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await page.getByTestId("nl2sql-job-summary").click();
   const progress = page.getByTestId("nl2sql-job");
   await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルを呼び出す（用途の記録なし）");
-  await progress.getByTestId("nl2sql-job-step-generate_sql.1-toggle").click();
-  await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1-details")).toContainText("synthetic-model");
+  await inspectTraceStep(page, progress, "generate_sql.1");
+  await expect(page.locator("[data-trace-technical]")).toContainText("synthetic-model");
+  await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
   // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細に出す。
   await expect(page.getByText("トレースの詳細")).toHaveCount(0);
   await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);

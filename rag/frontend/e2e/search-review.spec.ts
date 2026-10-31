@@ -1,3 +1,4 @@
+import { inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, type Page, type Route, test } from "./fixtures/test";
 import {
@@ -763,8 +764,9 @@ test("RAG 検索の処理の経過は span の木で、2 つ目の「トレー�
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
   await expect(process.locator("[data-run-timeline-step]").nth(1)).toContainText("2.0 秒");
   const modelStep = process.locator("[data-run-timeline-step]").nth(1);
-  await modelStep.locator('button[aria-expanded="false"]').click();
-  await expect(modelStep).toContainText("synthetic-model");
+  await inspectTraceStep(page, process, (await modelStep.getAttribute("data-run-timeline-step"))!);
+  await expect(page.locator("[data-trace-technical]")).toContainText("synthetic-model");
+  await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
   const details = page.locator("[data-run-process-details]");
   await expect(details).not.toHaveAttribute("open", "");
   await details.locator(":scope > summary").click();

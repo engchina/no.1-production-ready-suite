@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import type { RunTimelineStep } from "../src/components/data/run-detail";
+import { RunTimeline } from "../src/components/data/run-detail";
 import { TraceExplorer } from "../src/components/data/trace-explorer";
 import { traceCategory, traceMeasuredTiming, traceOrderedSteps, traceSearchText } from "../src/lib/trace-explorer";
 
@@ -72,8 +73,8 @@ it("snapshot のない工程でも記録された開始・終了時刻を確認�
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
   try {
     act(() => root.render(<TraceExplorer steps={[steps[0]]} onClose={() => {}} />));
-    expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain(steps[0].startedAt);
-    expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain(steps[0].finishedAt);
+    expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("2026/01/01 00:00:00 (UTC)");
+    expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("2026/01/01 00:00:10 (UTC)");
   } finally { act(() => root.unmount()); host.remove(); }
 });
 
@@ -86,4 +87,42 @@ it("親を子より先に置き、同時刻・欠けた親・循環でも段を�
   expect(ids.indexOf("parent")).toBeLessThan(ids.indexOf("child"));
   expect(new Set(ids).size).toBe(data.length);
   expect(traceOrderedSteps(data,"hierarchy").map(step => step.id)).toEqual(ids);
+});
+
+// 時刻は本文の種類によらず同じ詳細ブロックの間隔で区切る。
+it.each([
+  {fields: [{label: "目的", value: "合成の説明"}]},
+  {lines: ["合成の項目 A", "合成の項目 B"]},
+  {code: [{text: "synthetic-code"}]},
+])("工程の詳細と開始・終了時刻を共通の間隔で並べる: %j", details => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  try {
+    act(() => root.render(<TraceExplorer steps={[{...steps[0], details}]} onClose={() => {}} />));
+    const content = host.querySelector("[data-trace-inspector-content]");
+    expect(content).not.toBeNull();
+    expect(content?.classList.contains("gap-2")).toBe(true);
+    expect(content?.querySelector(":scope > [data-trace-timing]")).not.toBeNull();
+    expect(content?.querySelector("[data-trace-timing]")?.textContent).toContain("開始時刻");
+  } finally { act(() => root.unmount()); host.remove(); }
+});
+
+it("経過は処理内容だけを描き、軌跡は同じ内容の後に時刻と技術属性を残す", () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const details = {fields: [{label: "目的", value: "合成の目的"}, {label: "結果", value: "合成の結果"},
+    {label: "Span name", value: "synthetic.stage", mono: true, technical: true},
+    {label: "Parent span ID", value: "synthetic-parent", mono: true, technical: true}], lines: ["合成の引用資料"]};
+  try {
+    act(() => root.render(<RunTimeline steps={[{...steps[0], details}]} defaultExpanded />));
+    expect(host.textContent).toContain("合成の目的");
+    expect(host.textContent).toContain("合成の結果");
+    expect(host.textContent).not.toContain("Span name");
+    const explore = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent?.includes("軌跡を調べる"))!;
+    act(() => explore.click());
+    const content = host.querySelector("[data-trace-inspector-content]")!;
+    expect(Array.from(content.children).map(node => node.hasAttribute("data-trace-processing-content") ? "content" : node.hasAttribute("data-trace-timing") ? "time" : "technical")).toEqual(["content", "time", "technical"]);
+    expect(content.querySelector("[data-trace-processing-content]")?.textContent).toContain("合成の引用資料");
+    expect(content.querySelector("[data-trace-technical]")?.textContent).toContain("Span name");
+    expect(content.querySelector("time")?.getAttribute("datetime")).toBe(steps[0].startedAt);
+    expect(host.querySelector('button[aria-label="開始時刻: 元の ISO 時刻をコピー"]')).not.toBeNull();
+  } finally { act(() => root.unmount()); host.remove(); }
 });

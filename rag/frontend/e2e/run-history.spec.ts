@@ -1,5 +1,5 @@
-import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
-import { syntheticCallDetails } from "../../../platform/packages/ui/e2e/call-fixture";
+import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
+import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { mockTraceApi, ragSpan, savedSpanProgress, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
@@ -645,14 +645,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件を整理して回答を作る");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問から対象と条件を読み取る（LLM 1 回・送信 2 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1).locator("[data-run-result-summary]")).toContainText("LLM 1 回・送信 2 回");
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答に安全上の問題がないか検査する");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
     const steps = timeline.locator("[data-run-timeline-step]");
-    await steps.nth(1).locator("[data-run-timeline-toggle]").click();
-    await expect(steps.nth(1).locator("[data-run-timeline-details]")).toContainText("rag.engine.stage");
-    await steps.nth(1).locator("[data-run-timeline-toggle]").click();
+    await inspectTraceStep(page, timeline, (await steps.nth(1).getAttribute("data-run-timeline-step"))!);
+    await expect(page.locator("[data-trace-technical]")).toContainText("rag.engine.stage");
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
     const searchToggle = steps.nth(2).locator("[data-run-timeline-toggle]");
     await expect(searchToggle).toHaveAttribute("aria-expanded", "false");
     await searchToggle.click();
@@ -685,10 +685,19 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(technical.getByText("conv-21")).toBeHidden();
     await processDetailsSummary.click();
     await expect(technical.getByText("conv-21")).toBeVisible();
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { document.documentElement.dataset.copiedId = value; } } }));
+    for (const [label, value] of [["Trace ID", SPAN_TRACE_ID], ["会話 ID", "conv-21"], ["回答メッセージ ID", "msg-21"]]) {
+      await technical.getByRole("button", { name: `${label} をコピー`, exact: true }).click();
+      await expect.poll(() => page.evaluate(() => document.documentElement.dataset.copiedId)).toBe(value);
+    }
     // 「処理の詳細」の先頭に Trace ID（「トレースの詳細」の 2 つ目の表示は無い。#3226）。
-    await expect(technical.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
+    await expect(technical.locator("[data-trace-id-row]")).toContainText(SPAN_TRACE_ID);
     await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
-    await expect(technical.getByText("信頼度: high")).toBeVisible();
+    await expect(technical.getByText("信頼度: high")).toHaveCount(0);
+    await expect(technical.locator("[data-process-identifier]")).toHaveCount(3);
+    await expect(technical.getByRole("button", { name: "会話 ID をコピー", exact: true })).toBeVisible();
+    await expect(technical.getByRole("button", { name: "回答メッセージ ID をコピー", exact: true })).toBeVisible();
+    await expect(technical.locator("[data-run-used-models]")).toBeVisible();
     // 信頼度は回答の記録の詳細のバッジだけに出し、識別子の一覧に重ねない。旧「回答の詳細」「技術的な詳細」は出さない。
     await expect(technical.getByText("回答の確からしさ", { exact: true })).toHaveCount(0);
     await expect(page.getByText("回答の詳細", { exact: true })).toHaveCount(0);
@@ -739,7 +748,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 技術的な詳細（処理の経過の中の処理の詳細に畳む）にも同じ名前でエラーコードを出す。
     await page.getByTestId("run-history-timeline-summary").click();
     await page.getByTestId("run-history-process-details").click();
-    await expect(page.locator('[data-run-fact="failure-errorCode"]')).toContainText("ORA-03146");
+    await expect(page.getByTestId("run-history-technical").locator('[data-run-fact="failure-errorCode"]')).toHaveCount(0);
     await expect(page.getByTestId("run-history-timeline").locator('[data-status="failed"]')).toContainText("失敗");
     await expect(page.getByTestId("run-history-evidence")).toHaveCount(0);
 
@@ -1389,13 +1398,11 @@ test("資料照合の実行状態は未照合にまとめず、一覧と詳細�
       await expect(page.getByTestId(`run-history-row-run-${index + 1}`)).toContainText(label);
     }
   }
-  for (const [index, [, label]] of states.entries()) {
+  for (const [index] of states.entries()) {
     await page.goto(`/history/run-${index + 1}`);
     await page.getByTestId("run-history-timeline-summary").click();
     await page.getByTestId("run-history-process-details").click();
-    const validation = page.getByTestId("answer-validation-status");
-    await expect(validation).toContainText(label);
-    await expect(validation).not.toContainText("未照合");
+    await expect(page.getByTestId("answer-validation-status")).toHaveCount(0);
   }
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
@@ -1407,6 +1414,8 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await mockRuns(page, [row]);
   await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
     { key: "root", spec: ragSpan.root(), at: [0, 8] },
+    { key: "attachment-off", spec: ragSpan.technical("rag.attachment_evidence", "root"), status: "skipped", at: [0, 0.001] },
+    { key: "stage", spec: ragSpan.technical("synthetic.stage", "root"), at: [7, 8], details: syntheticStageDetails },
     { key: "model", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [0, 1], details: { call: syntheticCallDetails } },
     { key: "tool", spec: ragSpan.technical("gen_ai.execute_tool", "root", { "gen_ai.tool.name": "synthetic-tool" }), at: [1, 3], details: { call: syntheticCallDetails } },
     { key: "model-2", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [3, 4], details: { call: syntheticCallDetails } },
@@ -1415,32 +1424,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   ]) });
   await page.goto(`/history/${row.run_id}`);
   await page.getByTestId("run-history-timeline-summary").click();
-  await page.locator("[data-run-timeline-toggle]").first().click();
-  const pane = page.locator("[data-call-details]");
-  await pane.getByRole("tab", { name: "入力", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-input");
-  await pane.getByRole("tab", { name: "結果", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await pane.getByRole("tab", { name: "思考", exact: true }).click();
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await expect(pane.locator("[data-call-readable]")).not.toContainText("synthetic-call-output");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-schema");
-  await expect(pane).toContainText("先頭だけ");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(pane.getByRole("tab", { name: "計時", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(pane).toContainText("1000");
-  await expectNoPageOverflow(page);
-  for (const theme of ["light", "dark"]) {
-    await page.evaluate(value => {
-      document.documentElement.classList.remove("light", "dark");
-      document.documentElement.dataset.theme = value;
-    }, theme);
-    await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
-  }
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await confirmTraceExplorer(page, testInfo, expect, true);
 });
