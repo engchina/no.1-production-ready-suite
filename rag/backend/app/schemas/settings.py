@@ -751,6 +751,8 @@ class AnsweringSettingsData(BaseModel):
 
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
+    rrf_method_ratio: tuple[float, float] = (2.0, 1.0)
+    rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
     query_strategy: QueryStrategy
@@ -777,6 +779,18 @@ class AnsweringSettingsUpdate(BaseModel):
 
     runtime_rules_confirmation_enabled: bool | None = None
     runtime_rules_answer_enabled: bool | None = None
+    rrf_method_ratio: tuple[float, float] | None = None
+    rrf_source_ratio: tuple[float, float] | None = None
+
+    @field_validator("rrf_method_ratio", "rrf_source_ratio")
+    @classmethod
+    def _rrf_ratio(cls, value: tuple[float, float] | None) -> tuple[float, float] | None:
+        if value is not None:
+            from rag_engine.retrieval.weighted_rrf import RrfWeights
+
+            RrfWeights(vector=value[0], keyword=value[1])
+        return value
+
     runtime_terms_search_enabled: bool | None = None
     runtime_terms_answer_enabled: bool | None = None
     query_strategy: QueryStrategy | None = None

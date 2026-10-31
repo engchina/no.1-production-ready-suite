@@ -1,6 +1,7 @@
 """設定 API。"""
 
 import asyncio
+import json
 import logging
 import re
 import stat
@@ -513,6 +514,8 @@ async def update_answering_settings(
         for field, value in (
             ("rag_runtime_rules_confirmation_enabled", payload.runtime_rules_confirmation_enabled),
             ("rag_runtime_rules_answer_enabled", payload.runtime_rules_answer_enabled),
+            ("rag_rrf_method_ratio", payload.rrf_method_ratio),
+            ("rag_rrf_source_ratio", payload.rrf_source_ratio),
             ("rag_runtime_terms_search_enabled", payload.runtime_terms_search_enabled),
             ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
             ("rag_query_strategy", payload.query_strategy),
@@ -567,6 +570,8 @@ async def update_answering_settings(
                 "RAG_RUNTIME_TERMS_ANSWER_ENABLED": _format_env_bool(
                     candidate.rag_runtime_terms_answer_enabled
                 ),
+                "RAG_RRF_METHOD_RATIO": json.dumps(candidate.rag_rrf_method_ratio),
+                "RAG_RRF_SOURCE_RATIO": json.dumps(candidate.rag_rrf_source_ratio),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
                 "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
                 "RAG_ANSWER_AUDIT_MODE": candidate.rag_answer_audit_mode,
@@ -602,6 +607,8 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         runtime_rules_answer_enabled=settings.rag_runtime_rules_answer_enabled,
         runtime_terms_search_enabled=settings.rag_runtime_terms_search_enabled,
         runtime_terms_answer_enabled=settings.rag_runtime_terms_answer_enabled,
+        rrf_method_ratio=settings.rag_rrf_method_ratio,
+        rrf_source_ratio=settings.rag_rrf_source_ratio,
         query_strategy=settings.rag_query_strategy,
         answer_flow=settings.rag_answer_flow,
         answer_audit_mode=settings.rag_answer_audit_mode,

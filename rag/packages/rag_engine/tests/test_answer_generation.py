@@ -2049,7 +2049,7 @@ class AnswerGenerationTests(unittest.TestCase):
 
     def test_original_query_only_is_recorded_as_the_single_query_that_is_searched(self):
         """比較実験用スイッチの実行記録が、実際に検索へ渡した検索文と一致する (#541)。"""
-        settings = replace(get_settings(), original_query_only=True, original_query_weighting_enabled=False)
+        settings = replace(get_settings(), original_query_only=True)
         context = _answer_context([_record("r1", "docling", 1, 1, "original only evidence")])
         with (
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),

@@ -51,20 +51,12 @@ class AdbVectorStoreTests(unittest.TestCase):
         store._pool_cache.clear()
         self.addCleanup(store._pool_cache.clear)
 
-    def test_original_question_keeps_its_vote_against_many_derived_queries(self):
-        """派生検索文が何本あっても合計の票は原質問と同じ。無関係な拡張の多数決で別機能へ寄らない。"""
-        from rag_engine.adapters.oracle.store import derived_query_weights
+    def test_additional_queries_share_the_source_budget(self):
+        from rag_engine.retrieval.weighted_rrf import RrfWeights, source_weights
 
-        original = [("uid-target", 0.1), ("uid-other", 0.3)]
-        derived = [("uid-other", 0.1), ("uid-target", 0.4)]
-        rankings = [original, derived, derived, derived, [("uid-third", 0.2)]]
-        unweighted = _combine_hybrid_scores(rankings, [])
-        weighted = _combine_hybrid_scores(rankings, [], query_weights=derived_query_weights(len(rankings)))
-        self.assertEqual(unweighted[0].chunk_uid, "uid-other")
-        self.assertEqual(weighted[0].chunk_uid, "uid-target")
-        self.assertEqual(derived_query_weights(5), [1.0, 0.25, 0.25, 0.25, 0.25])
-        self.assertEqual(derived_query_weights(3, enabled=False), [1.0, 1.0, 1.0])
-        self.assertEqual(derived_query_weights(1), [1.0])
+        weights = source_weights(["原質問", "追加 A", "追加 B", "追加 C", "追加 D"], RrfWeights())
+        self.assertAlmostEqual(weights["原質問"], 0.7)
+        self.assertAlmostEqual(sum(list(weights.values())[1:]), 0.3)
 
     def test_each_query_keeps_its_top_candidates_after_fusion(self):
         """1 つの派生質問にしか一致しない節が RRF 融合で候補上限から落ちても、その質問の上位として残す (#669)。"""
@@ -145,7 +137,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         @contextmanager
         def observer(operation: str, name: str):
             observed.append(("start", operation, name))
-            yield SimpleNamespace(display=lambda **kwargs: None)
+            yield SimpleNamespace(response=lambda _: None, display=lambda **kwargs: None)
             observed.append(("end", operation, name))
 
         settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
@@ -180,6 +172,8 @@ class AdbVectorStoreTests(unittest.TestCase):
                     ("end", "stage", adb_vector_store.VECTOR_SEARCH_STAGE),
                     ("start", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
                     ("end", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
+                    ("start", "stage", "検索結果の統合（RRF）"),
+                    ("end", "stage", "検索結果の統合（RRF）"),
                 ],
             )
             self.assertEqual(text.call_count, 2)
@@ -189,7 +183,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             search(retrieval_queries=["仮説文 出力"], vector_only_queries=["仮説文 出力"])
             self.assertEqual(
                 [entry[2] for entry in observed if entry[0] == "start"],
-                [adb_vector_store.VECTOR_SEARCH_STAGE],
+                [adb_vector_store.VECTOR_SEARCH_STAGE, "検索結果の統合（RRF）"],
             )
             self.assertEqual(load.call_count, 1)
 

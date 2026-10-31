@@ -1,3 +1,4 @@
+import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
@@ -1097,13 +1098,14 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
         {label: "Oracle Text 検索式 1", value: "{合成項目} ACCUM {ABC}"},
         {label: "候補数の上限", value: "各検索文 24 件"}, {label: "指標", value: "Oracle Text SCORE（大きい順）"},
       ], lines: ["検索 1: 取得件数（重複除去前） 0 件 / 重複除去後 0 件（該当なし）"]}},
+      {key: "rrf", spec: ragSpan.step("検索結果の統合（RRF）", "search"), at: [1.8,1.9], details: weightedRrfDetails},
       {key: "legacy", spec: ragSpan.step("全文検索", "search"), at: [.2, 1.8]},
     ]);
     await mockTraceApi(page, {[row.run_id]: events});
     await page.goto(`/history/${row.run_id}`);
     const timeline = page.getByTestId("run-history-timeline");
     await page.getByTestId("run-history-timeline-summary").click();
-    for (const key of ["merge", "vector", "text", "legacy"]) {
+    for (const key of ["merge", "vector", "text", "rrf", "legacy"]) {
       await inspectTraceStep(page, timeline, spanStepId(key));
       const inspector = page.locator("[data-trace-inspector]");
       await expect(inspector).toContainText("処理内の位置:");
@@ -1121,6 +1123,13 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
         await expect(path).not.toHaveAttribute("open", "");
         await path.locator("summary").click();
         await expect(path).toContainText("質問の条件を整理して回答を作る");
+      }
+      if (key === "rrf") {
+        await expect(inspector).toContainText("2：1");
+        await expect(inspector).toContainText("7：3");
+        await expect(inspector).toContainText("重み 0.466666667");
+        await expect(inspector).toContainText("順位 1 / 寄与");
+        await expect(inspector).toContainText("確率や回答の信頼度ではありません");
       }
       if (key === "legacy") await expect(inspector).not.toContainText("取得件数（重複除去前）");
       await expectNoPageOverflow(page);

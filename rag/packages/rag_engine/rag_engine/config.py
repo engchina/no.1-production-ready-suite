@@ -255,7 +255,9 @@ class Settings:
     # None は保存済み辞書、空 tuple は評価用の辞書無効化を表す。共有ファイルは変更しない。
     domain_keywords_override: tuple[str, ...] | None = None
     # 検索の比較実験用。重み付けを切ると全検索文が同じ票、original_query_only は原質問だけで検索する。
-    original_query_weighting_enabled: bool = True
+    retrieval_query_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    rrf_method_ratio: tuple[float, float] = (2.0, 1.0)
+    rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
     runtime_terms_search_enabled: bool = False
@@ -511,7 +513,8 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     runtime_knowledge_raw = env.get("RUNTIME_KNOWLEDGE_PATH", "").strip()
     cache_dir_raw = env.get("RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR", "").strip()
     settings = Settings(
-        original_query_weighting_enabled=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_WEIGHTING", True),
+        rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[2,1]")),
+        rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
         runtime_rules_confirmation_enabled=_env_bool(env, "RUNTIME_RULES_CONFIRMATION_ENABLED", False),
         runtime_rules_answer_enabled=_env_bool(env, "RUNTIME_RULES_ANSWER_ENABLED", False),
         runtime_terms_search_enabled=_env_bool(env, "RUNTIME_TERMS_SEARCH_ENABLED", False),
@@ -774,3 +777,14 @@ def llm_output_token_limit(settings: Settings, provider: Any) -> int:
     """
     model_limit = int(getattr(provider, "max_output_tokens", DEFAULT_MODEL_OUTPUT_TOKENS) or DEFAULT_MODEL_OUTPUT_TOKENS)
     return max(1, min(int(settings.answer_max_tokens), model_limit))
+
+
+def _rrf_ratio(raw: str) -> tuple[float, float]:
+    from rag_engine.retrieval.weighted_rrf import RrfWeights
+
+    parsed = json.loads(raw)
+    if not isinstance(parsed, list) or len(parsed) != 2:
+        raise ValueError("RRF の比重は 2 要素で指定してください。")
+    left, right = float(parsed[0]), float(parsed[1])
+    RrfWeights(vector=left, keyword=right)
+    return left, right

@@ -8,7 +8,7 @@ import json
 import re
 import time
 import unicodedata
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -33,6 +33,7 @@ from rag_engine.chunking import (
     load_latest_or_source_chunk_run,
 )
 from rag_engine.config import DEFAULT_TIMEZONE, RRF_K, Settings
+from rag_engine.dependencies import report_degraded
 from rag_engine.knowledge.classification import (
     DEFAULT_CATEGORY_VALUE,
     ClassificationFilter,
@@ -71,11 +72,8 @@ from rag_engine.retrieval.text_search_tokenizer import (
     TextSearchTokenizerConfig,
     oracle_text_query_for_question,
 )
+from rag_engine.retrieval.weighted_rrf import RankedList, RrfWeights, fuse_rankings, fusion_details, source_weights
 
-# 原質問以外の検索文（用語補助・LLM拡張・語彙・CRAGの書き換え）全体の票の合計。
-# 各検索文を 1.0 で足すと、検索文が10本前後のとき原質問の票が1割になり、無関係な
-# 拡張語が1本入るだけで多数決が別機能へ寄る。原質問を主軸に保ち、派生は補助に留める。
-DERIVED_QUERY_TOTAL_WEIGHT = 1.0
 # ponytail: プロセス内の単純な TTL キャッシュ。CRAG の各回（最大3回）が同じ検索範囲の
 # 全 chunk を読み直すのを避ける。複数プロセス構成や即時反映が必要になれば、保存側の
 # 版番号をキーに含める形へ置き換える。
@@ -876,17 +874,34 @@ def search_adb_hybrid_chunks(
                 if len(_pool_cache) >= 8:
                     _pool_cache.clear()
                 _pool_cache[pool_key] = (time.monotonic(), all_chunks)
+            failures: dict[tuple[str, str, str], str] = {}
+
+            def read_ranking(
+                channel: str, query: str, operation: Callable[..., Any], *args: Any, **kwargs: Any
+            ) -> list[tuple[str, float | None]]:
+                try:
+                    return operation(*args, **kwargs)
+                except Exception as exc:
+                    variant = "画像" if kwargs.get("embedding_modality") == EMBEDDING_MODALITY_IMAGE else ""
+                    failures[(channel, query, variant)] = type(exc).__name__
+                    report_degraded("retrieval", RuntimeError(type(exc).__name__))
+                    return []
+
             rankings: list[list[tuple[str, float | None]]] = []
             image_rankings: list[list[tuple[str, float | None]]] = []
             limit = max(1, int(candidate_limit or 1))
-            query_weights = derived_query_weights(len(queries), enabled=getattr(settings, "original_query_weighting_enabled", True))
+            weights = RrfWeights(*settings.rrf_method_ratio, *settings.rrf_source_ratio)
+            budgets = source_weights([*queries, *extra_text_queries], weights)
             # 埋め込み（`gen_ai.embeddings` の span）の後の DB の検索は、それぞれ工程の span にする（処理の経過で、文書の
             # 検索の中の今の作業を末端の段として出す。#3436）。
             query_vectors = _query_vectors(queries, settings, query_embedder)
             with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
                 for query_vector in query_vectors:
                     rankings.append(
-                        _vector_search(
+                        read_ranking(
+                            "vector",
+                            queries[len(rankings)],
+                            _vector_search,
                             connection,
                             chunk_run_id,
                             query_vector,
@@ -900,7 +915,10 @@ def search_adb_hybrid_chunks(
                     )
                     if _image_embedding_enabled(settings):
                         image_rankings.append(
-                            _vector_search(
+                            read_ranking(
+                                "vector",
+                                queries[len(image_rankings)],
+                                _vector_search,
                                 connection,
                                 chunk_run_id,
                                 query_vector,
@@ -926,9 +944,7 @@ def search_adb_hybrid_chunks(
                     )
                 )
             text_rankings: list[list[tuple[str, float | None]]] = []
-            text_query_weights: list[float] = []
             seen_text_queries: set[str] = set()
-            derived_weight = query_weights[1] if len(query_weights) > 1 else 1.0
             domain_keywords = (
                 settings.domain_keywords_override
                 if settings.domain_keywords_override is not None
@@ -943,7 +959,7 @@ def search_adb_hybrid_chunks(
             text_inputs: list[str] = []
             text_expressions: list[str] = []
             with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext() as text_observation:
-                for query_index, query in text_variants:
+                for _query_index, query in text_variants:
                     text_query = oracle_text_query(
                         query,
                         domain_keywords=domain_keywords,
@@ -954,9 +970,11 @@ def search_adb_hybrid_chunks(
                     seen_text_queries.add(text_query)
                     text_inputs.append(query)
                     text_expressions.append(text_query)
-                    text_query_weights.append(query_weights[query_index])
                     text_rankings.append(
-                        _text_search(
+                        read_ranking(
+                            "keyword",
+                            text_inputs[-1],
+                            _text_search,
                             connection,
                             chunk_run_id,
                             text_query,
@@ -972,11 +990,13 @@ def search_adb_hybrid_chunks(
                     if not text_query or text_query in seen_text_queries:
                         continue
                     seen_text_queries.add(text_query)
-                    text_inputs.append("追加の全文検索式")
+                    text_inputs.append(text_query)
                     text_expressions.append(text_query)
-                    text_query_weights.append(derived_weight)
                     text_rankings.append(
-                        _text_search(
+                        read_ranking(
+                            "keyword",
+                            text_inputs[-1],
+                            _text_search,
                             connection,
                             chunk_run_id,
                             text_query,
@@ -1002,15 +1022,58 @@ def search_adb_hybrid_chunks(
                             expressions=text_expressions,
                         )
                     )
-            scores = _combine_hybrid_scores(
-                rankings,
-                text_rankings,
-                [],
-                image_vector_rankings=image_rankings,
-                image_vector_weight=_image_embedding_rrf_weight(settings),
-                query_weights=query_weights,
-                text_query_weights=text_query_weights,
-            )
+            raw_lists = [
+                RankedList(
+                    q,
+                    "vector",
+                    tuple(uid for uid, _ in ranking),
+                    sources=settings.retrieval_query_sources.get(q, ("原質問",) if i == 0 else ("追加検索文",)),
+                )
+                for i, (q, ranking) in enumerate(zip(queries, rankings, strict=True))
+            ]
+            raw_lists += [
+                RankedList(
+                    q,
+                    "keyword",
+                    tuple(uid for uid, _ in ranking),
+                    sources=settings.retrieval_query_sources.get(q, ("原質問",) if q == queries[0] else ("追加検索文",)),
+                )
+                for q, ranking in zip(text_inputs, text_rankings, strict=True)
+            ]
+            image_weight = _image_embedding_rrf_weight(settings) if image_rankings else 0.0
+            if image_rankings:
+                raw_lists = [replace(r, factor=1 / (1 + image_weight)) if r.channel == "vector" else r for r in raw_lists]
+                raw_lists += [
+                    RankedList(
+                        q,
+                        "vector",
+                        tuple(uid for uid, _ in ranking),
+                        sources=settings.retrieval_query_sources.get(q, ("原質問",) if i == 0 else ("追加検索文",)),
+                        variant="画像",
+                        factor=image_weight / (1 + image_weight),
+                    )
+                    for i, (q, ranking) in enumerate(zip(queries, image_rankings, strict=True))
+                ]
+            raw_lists = [
+                replace(r, status="failed", error=failures[(r.channel, r.query, r.variant)])
+                if (r.channel, r.query, r.variant) in failures
+                else r
+                for r in raw_lists
+            ]
+            with observe_call("stage", "検索結果の統合（RRF）") as fusion_observation:
+                fusion = fuse_rankings(raw_lists, budgets, weights, k=RRF_K)
+                scores = _combine_hybrid_scores(
+                    rankings,
+                    text_rankings,
+                    [],
+                    image_vector_rankings=image_rankings,
+                    fusion_scores=fusion.scores,
+                )
+                fusion_observation.display(details=fusion_details(fusion, weights, budgets, RRF_K))
+                fusion_observation.response(fusion.diagnostics(weights, budgets, RRF_K))
+                if raw_lists and all(r.status == "failed" for r in raw_lists):
+                    fusion_observation.display(params={"status": "failed"})
+                    raise RuntimeError("すべての検索一覧の取得に失敗しました。")
     except AdbHybridSearchUnavailable:
         raise
     except Exception as exc:
@@ -1048,13 +1111,6 @@ def _query_vectors(queries: Sequence[str], settings: Settings, query_embedder: Q
             raise RuntimeError("OCI embedding query response count did not match the query count.")
         return vectors
     return [query_embedder(query, settings) for query in queries]
-
-
-def derived_query_weights(count: int, *, enabled: bool = True) -> list[float]:
-    """先頭（原質問）は 1.0、派生検索文は合計が DERIVED_QUERY_TOTAL_WEIGHT になるよう等分する。"""
-    if not enabled or count <= 1:
-        return [1.0] * count
-    return [1.0] + [DERIVED_QUERY_TOTAL_WEIGHT / (count - 1)] * (count - 1)
 
 
 def oracle_text_query(
@@ -2126,6 +2182,7 @@ def _combine_hybrid_scores(
     image_vector_weight: float = 1.0,
     query_weights: Sequence[float] | None = None,
     text_query_weights: Sequence[float] | None = None,
+    fusion_scores: Mapping[str, float] | None = None,
 ) -> list[_HybridScore]:
     """各チャネルの順位を RRF で融合する。
 
@@ -2162,7 +2219,8 @@ def _combine_hybrid_scores(
         channel = f"vector:q{query_index + 1}"
         for rank, (chunk_uid, distance) in enumerate(ranking, start=1):
             score = ensure(chunk_uid, query_index)
-            score.rrf_score += weight(query_weights, query_index) / (RRF_K + rank)
+            if fusion_scores is None:
+                score.rrf_score += weight(query_weights, query_index) / (RRF_K + rank)
             score.vector_rank = rank if score.vector_rank is None else min(score.vector_rank, rank)
             if distance is not None:
                 score.vector_distance = distance if score.vector_distance is None else min(score.vector_distance, distance)
@@ -2178,7 +2236,8 @@ def _combine_hybrid_scores(
         channel = f"image_vector:q{query_index + 1}"
         for rank, (chunk_uid, distance) in enumerate(ranking, start=1):
             score = ensure(chunk_uid, query_index)
-            score.rrf_score += image_weight * weight(query_weights, query_index) / (RRF_K + rank)
+            if fusion_scores is None:
+                score.rrf_score += image_weight * weight(query_weights, query_index) / (RRF_K + rank)
             if distance is not None:
                 score.vector_distance = distance if score.vector_distance is None else min(score.vector_distance, distance)
             add_channel(
@@ -2192,7 +2251,8 @@ def _combine_hybrid_scores(
         channel = "keyword:oracle_text" if len(text_rankings) == 1 else f"keyword:oracle_text:q{query_index + 1}"
         for rank, (chunk_uid, text_score) in enumerate(ranking, start=1):
             score = ensure(chunk_uid, query_index)
-            score.rrf_score += weight(text_query_weights, query_index) / (RRF_K + rank)
+            if fusion_scores is None:
+                score.rrf_score += weight(text_query_weights, query_index) / (RRF_K + rank)
             score.text_rank = rank if score.text_rank is None else min(score.text_rank, rank)
             if text_score is not None:
                 score.text_score = text_score if score.text_score is None else max(score.text_score, text_score)
@@ -2203,14 +2263,18 @@ def _combine_hybrid_scores(
         channel_weight = max(0.0, float(weight or 0.0))
         for rank, (chunk_uid, profile_score) in enumerate(ranking, start=1):
             score = ensure(chunk_uid, 1_000 + channel_index)
-            score.rrf_score += channel_weight / (RRF_K + rank)
+            if fusion_scores is None:
+                score.rrf_score += channel_weight / (RRF_K + rank)
             score.profile_rank = rank if score.profile_rank is None else min(score.profile_rank, rank)
             if profile_score is not None:
                 score.profile_score = profile_score if score.profile_score is None else max(score.profile_score, profile_score)
             add_channel(score, channel=channel_name, rank=rank, channel_score=profile_score)
 
+    if fusion_scores is not None:
+        for uid, score in scores.items():
+            score.rrf_score = fusion_scores.get(uid, 0.0)
     return sorted(
-        scores.values(),
+        (score for uid, score in scores.items() if fusion_scores is None or uid in fusion_scores),
         key=lambda score: (
             -score.rrf_score,
             -(score.text_score or 0.0),

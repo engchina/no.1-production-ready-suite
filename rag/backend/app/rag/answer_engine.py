@@ -623,6 +623,8 @@ def build_engine_settings(
         if settings.rag_runtime_rules_confirmation_enabled
         else "0",
         "RUNTIME_RULES_ANSWER_ENABLED": "1" if settings.rag_runtime_rules_answer_enabled else "0",
+        "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
+        "RAG_RRF_SOURCE_RATIO": json.dumps(settings.rag_rrf_source_ratio),
         "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",
         "RUNTIME_TERMS_ANSWER_ENABLED": "1" if settings.rag_runtime_terms_answer_enabled else "0",
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
@@ -1511,8 +1513,9 @@ class AnswerEngine:
         検索の範囲がすでに頁に絞られていれば、その範囲と重なる頁だけを検索する(範囲を広げない)。
         """
         from rag_engine.models.storage import HybridSearchResult
+        from rag_engine.retrieval.weighted_rrf import unique_queries
 
-        queries = [query for query in dict.fromkeys(q.strip() for q in retrieval_queries) if query]
+        queries = unique_queries(retrieval_queries)
         if not queries:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
         await self._ensure_search_filters(request, state)
@@ -1525,47 +1528,70 @@ class AnswerEngine:
         depth = self._read_depth(candidate_limit)
         embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
         k = float(self._settings.rag_rrf_k)
-        vector_only_count = sum(1 for query in queries[1:] if query in vector_only)
-        derived_weight = 1.0 / max(1, len(queries) - 1 - vector_only_count)
-        vector_only_weight = 1.0 / max(1, vector_only_count)
+        from rag_engine.retrieval.weighted_rrf import (
+            RankedList,
+            RrfWeights,
+            fuse_rankings,
+            fusion_details,
+            source_weights,
+        )
+
+        weights = RrfWeights(
+            *self._settings.rag_rrf_method_ratio, *self._settings.rag_rrf_source_ratio
+        )
+        budgets = source_weights(queries, weights)
+        query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
+        searches = [
+            (query, embedding, mode)
+            for query, embedding in zip(queries, embeddings, strict=True)
+            for mode in (
+                (SearchMode.VECTOR,)
+                if query in vector_only
+                else (SearchMode.VECTOR, SearchMode.KEYWORD)
+            )
+        ]
         relaxed_before = len(state.relaxed)
         while True:
             fused: dict[str, float] = {}
             rankings: list[list[str]] = []
-            # 検索文ごとの検索は 1 回の SQL で読み(#1498)、融合は検索文の順に行う。
             all_hits = await self._query_hits(
                 state,
-                [
-                    (
-                        query,
-                        embedding,
-                        SearchMode.VECTOR if query in vector_only else SearchMode.HYBRID,
-                    )
-                    for query, embedding in zip(queries, embeddings, strict=False)
-                ],
+                searches,
                 candidate_limit=depth,
-                filters=_with_page_ranges(state.filters, page_ranges) or {}
+                filters=(_with_page_ranges(state.filters, page_ranges) or {})
                 if page_ranges
                 else dict(state.filters),
             )
-            for index, hits in enumerate(all_hits):
+            raw_lists = []
+            for (query, _embedding, mode), hits in zip(searches, all_hits, strict=True):
+                index = queries.index(query)
+                if getattr(hits, "status", "") == "failed":
+                    state.record_degraded(
+                        "retrieval", RuntimeError(getattr(hits, "error", "検索に失敗"))
+                    )
                 rankings.append([hit.chunk_id for hit in hits])
-                # 原質問を主軸にし、派生検索文は合計で原質問 1 本分の票に抑える(rag_poc #975)。
-                # vector だけの検索文(仮説文・規定の書き方の検索文)は文書の書き方に合わせた
-                # 別の経路なので、他の派生検索文と票を分け合わず、合計で 1 本分の票にする(#2159)。
-                weight = (
-                    1.0
-                    if index == 0
-                    else vector_only_weight
-                    if queries[index] in vector_only
-                    else derived_weight
+                raw_lists.append(
+                    RankedList(
+                        query,
+                        "vector" if mode == SearchMode.VECTOR else "keyword",
+                        tuple(hit.chunk_id for hit in hits),
+                        status=getattr(hits, "status", "completed"),
+                        error=getattr(hits, "error", ""),
+                        sources=tuple(
+                            query_sources.get(query, ("原質問",) if index == 0 else ("追加検索文",))
+                        ),
+                    )
                 )
-                for rank, hit in enumerate(hits, start=1):
+                for hit in hits:
                     state.chunks.setdefault(hit.chunk_id, hit)
                     state.retrieval_channels.setdefault(hit.chunk_id, set()).update(
                         _hit_channels(hit, index)
                     )
-                    fused[hit.chunk_id] = fused.get(hit.chunk_id, 0.0) + weight / (k + rank)
+            with observe_call("stage", "検索結果の統合（RRF）") as observation:
+                fusion = fuse_rankings(raw_lists, budgets, weights, k=k)
+                fused = fusion.scores
+                observation.display(details=fusion_details(fusion, weights, budgets, k))
+                observation.response(fusion.diagnostics(weights, budgets, k))
             # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
             # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
             # 補正検索など)も外したまま)。
@@ -1582,7 +1608,25 @@ class AnswerEngine:
                 }
             )
         await self._load_classifications([state.chunks[chunk_id] for chunk_id in fused], state)
-        ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
+        citation_ids: list[str] = []
+        citation_search = getattr(self._oracle, "citation_label_search", None)
+        if citation_search is not None:
+            for query in queries:
+                if query in vector_only:
+                    continue
+                hits = await citation_search(
+                    query,
+                    filters=(_with_page_ranges(state.filters, page_ranges) or {})
+                    if page_ranges
+                    else dict(state.filters),
+                )
+                for hit in hits:
+                    state.chunks.setdefault(hit.chunk_id, hit)
+                    fused.setdefault(hit.chunk_id, 0.0)
+                    citation_ids.append(hit.chunk_id)
+        ordered = list(
+            dict.fromkeys([*citation_ids, *sorted(fused, key=lambda chunk_id: -fused[chunk_id])])
+        )
         unique: list[str] = []
         source_keys: dict[tuple[Any, ...], str] = {}
         duplicates: list[dict[str, str]] = []
@@ -1847,6 +1891,7 @@ class AnswerEngine:
         state.retrieval_stages.append(
             {
                 "stage": "candidate_fusion",
+                "rrf": fusion.diagnostics(weights, budgets, k),
                 "query_count": len(queries),
                 "query_limit": depth,
                 "fused_count": len(fused),
@@ -2070,7 +2115,7 @@ class AnswerEngine:
             return
         await self._query_hits(
             state,
-            [(text, embeddings[0], SearchMode.HYBRID)],
+            [(text, embeddings[0], SearchMode.VECTOR), (text, embeddings[0], SearchMode.KEYWORD)],
             candidate_limit=self._read_depth(candidate_limit),
             filters=dict(state.filters),
         )

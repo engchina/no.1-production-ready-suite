@@ -12,6 +12,7 @@ import {
   Skeleton,
   Switch,
   TimedLoadingState,
+  TextField,
 } from "@production-ready/ui";
 import { MessageSquareText, RotateCcw, Save } from "lucide-react";
 import { useState } from "react";
@@ -60,6 +61,8 @@ type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_ter
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
+    rrf_method_ratio: settings.rrf_method_ratio ?? [2, 1],
+    rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
@@ -128,6 +131,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   // 保存中は離脱を止め、欄も変えられなくする（保存に成功すると保存値で作り直すため、保存中の変更が消える。#1002）。
   useLeaveGuard(dirty, save.isPending);
   const disabled = save.isPending;
+  const invalidRatio = [form.rrf_method_ratio, form.rrf_source_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
 
   function update(patch: Partial<AnsweringDraft>) {
     save.reset();
@@ -140,7 +144,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   }
 
   function submit() {
-    if (save.isPending) return;
+    if (save.isPending || invalidRatio) return;
     // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
     save.mutate(form, { onSuccess: () => toast.success(t("settings.answering.saved")) });
   }
@@ -172,6 +176,28 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           onChange={(checked) => update({ runtime_terms_search_enabled: checked })}
         />
       </FormGrid>
+      </section>
+      <section aria-labelledby="rrf-title" className="space-y-4">
+        <h3 id="rrf-title" className="text-sm font-medium text-fg">{t("settings.answering.rrfTitle")}</h3>
+        <p className="text-sm text-fg-muted">{t("settings.answering.rrfHint")}</p>
+        {(["rrf_method_ratio", "rrf_source_ratio"] as const).map((key) => (
+          <fieldset key={key} className="space-y-2">
+            <legend className="text-sm font-medium text-fg">{t(`settings.answering.${key}`)}</legend>
+            <FormGrid>
+              {([0, 1] as const).map((index) => <TextField
+                key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step="any"
+                label={t(`settings.answering.${key}.${index}`)}
+                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [2,1] : [7,3])[index])}
+                disabled={disabled} onChange={(event) => {
+                  const ratio: [number, number] = [...(form[key] ?? [0,0])];
+                  ratio[index] = Number(event.target.value);
+                  update({ [key]: ratio });
+                }}
+              />)}
+            </FormGrid>
+          </fieldset>
+        ))}
+        {invalidRatio ? <p role="alert" className="text-sm text-danger-fg">{t("settings.answering.rrfInvalid")}</p> : null}
       </section>
       <FormGrid>
         <SelectField
@@ -303,7 +329,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             label: t("settings.answering.save"),
             icon: Save,
             loading: save.isPending,
-            disabled: !dirty,
+            disabled: !dirty || invalidRatio,
             onClick: submit,
           },
         ]}

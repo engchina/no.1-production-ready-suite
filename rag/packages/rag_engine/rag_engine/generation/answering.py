@@ -5512,11 +5512,7 @@ def answer_question_result(
                     step.result(expansion.routing_reason)
                 if prefetch_note:
                     step.add(prefetch_note)
-                step.add(
-                    *_query_expansion_details(
-                        expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True))
-                    )
-                )
+                step.add(*_query_expansion_details(expansion))
                 # 言い換えた検索文そのもの（処理の経過の段を開いて見る。#2341）。最終の一覧は次の工程が示す。
                 if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
                     step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
@@ -5574,6 +5570,21 @@ def answer_question_result(
             sources.setdefault(_dedupe_query_key(query), "質問拡張")
         for query in goal_retrieval_queries(expansion.original_question):
             sources.setdefault(_dedupe_query_key(query), "希望する結果")
+        query_sources: dict[str, tuple[str, ...]] = {}
+        for query in retrieval_queries:
+            key = _dedupe_query_key(query)
+            labels = [sources.get(key, "追加検索文")]
+            if any(_dedupe_query_key(item) == key for item in expansion.generated_queries):
+                labels.append("呼び出し元" if caller_planned else "質問の言い換え・分解")
+            if (
+                runtime_knowledge.expanded_question != runtime_knowledge.original_question
+                and _dedupe_query_key(runtime_knowledge.expanded_question) == key
+            ):
+                labels.append(runtime_knowledge.query_source)
+            if term_query and _dedupe_query_key(term_query) == key:
+                labels.append("用語・同義語だけ")
+            query_sources[query] = tuple(dict.fromkeys(labels))
+        settings = replace(settings, retrieval_query_sources=query_sources)
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(

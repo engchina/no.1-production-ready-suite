@@ -491,7 +491,7 @@ async def test_search_reads_all_queries_in_one_batch() -> None:
     batch_oracle = _ManySearchOracle()
     batched, _ = await _search(batch_oracle, queries)
 
-    assert batch_oracle.batches == [queries]
+    assert batch_oracle.batches == [[q for q in queries for _ in range(2)]]
     assert _dump(batched) == _dump(one_by_one)
     assert _dump(batched)[0]
 
@@ -507,7 +507,7 @@ async def test_search_reuses_query_results_within_one_answer() -> None:
     reused, _ = await _search(oracle, second_queries, state)
     fresh, _ = await _search(_SearchOracle(), second_queries)
 
-    assert oracle.batches == [["検索文 5"]]
+    assert oracle.batches == [["検索文 5", "検索文 5"]]
     assert _dump(reused) == _dump(fresh)
 
 
@@ -858,8 +858,8 @@ class _OneHitPerQueryOracle(_SearchOracle):
         return [_hit(self.hits[query], 1.0, mode=mode.value)]
 
 
-async def test_vector_only_queries_have_their_own_vote() -> None:
-    """vector だけの検索文(規定の書き方・仮説文)は、他の派生検索文と票を分け合わない(#2159)。"""
+async def test_vector_only_queries_share_the_additional_budget() -> None:
+    """vector 専用も追加検索文の予算を分け合い、全文の重みを再配分しない。"""
     oracle = _OneHitPerQueryOracle({"原": "c-0", "派生 1": "c-1", "派生 2": "c-2", "規定": "c-3"})
     engine = AnswerEngine(Settings(), oracle=oracle, genai=_GenAi())  # type: ignore[arg-type]
     result = await engine._search(
@@ -871,8 +871,8 @@ async def test_vector_only_queries_have_their_own_vote() -> None:
         expand_references=False,
     )
     scores = {chunk.chunk_id: chunk.metadata.get("rrf_score") for chunk in result.child_chunks}
-    # 原質問と vector だけの検索文はそれぞれ 1 本分、派生の 2 本は合計で 1 本分(各 0.5)。
-    assert scores["c-0"] == scores["c-3"]
+    assert scores["c-0"] == pytest.approx(0.7 / 61)
+    assert scores["c-3"] == pytest.approx(0.1 * (2 / 3) / 61)
     assert scores["c-1"] == scores["c-2"]
     assert scores["c-1"] < scores["c-0"]
 
@@ -971,7 +971,7 @@ async def test_injected_search_reports_db_search_stages_and_channels(
     # 文書の分類と背景も段になる(#3464)。参照先・実体・関係情報は広げない検索なので段を出さない。
     started = [entry[2] for entry in observed if entry[0] == "start"]
     assert sorted(started[:2]) == sorted([VECTOR_SEARCH_STAGE, TEXT_SEARCH_STAGE])
-    assert started[2:] == [CONTEXT_SIBLINGS_STAGE, DOCUMENT_INFO_STAGE]
+    assert started[2:] == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE, DOCUMENT_INFO_STAGE]
     assert sorted(entry[2] for entry in observed if entry[0] == "end") == sorted(started)
     assert {entry[1] for entry in observed} == {"stage"}
 
@@ -1071,6 +1071,7 @@ async def test_injected_search_reports_stages_after_db_search(
     await asyncio.to_thread(in_answer_thread)
 
     expected = [
+        "検索結果の統合（RRF）",
         CONTEXT_SIBLINGS_STAGE,
         REFERENCE_EXPANSION_STAGE,
         ENTITY_EXPANSION_STAGE,
@@ -1119,8 +1120,8 @@ async def test_search_stages_are_skipped_when_there_is_nothing_to_do() -> None:
         await engine._search(request, state, retrieval_queries=["検索文 1"], candidate_limit=4)
 
     # 候補の chunk は chunk_set を持たず(文書の背景を読まない)、足した根拠も無い。
-    assert first == [CONTEXT_SIBLINGS_STAGE]
-    assert observed == [CONTEXT_SIBLINGS_STAGE]
+    assert first == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE]
+    assert observed == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE]
 
 
 async def test_original_anchors_stage_only_for_derived_candidates(
@@ -1231,3 +1232,48 @@ async def test_search_trace_records_empty_results(monkeypatch: pytest.MonkeyPatc
         "取得件数（重複除去前） 0 件" in str(detail) and "該当なし" in str(detail)
         for detail in details
     )
+
+
+async def test_weighted_rrf_uses_raw_lists_once_and_records_actual_contributions() -> None:
+    oracle = _OneHitPerQueryOracle({"q": "c-0", "a": "c-1", "b": "c-2"})
+    engine = AnswerEngine(Settings(), oracle=oracle, genai=_GenAi())  # type: ignore[arg-type]
+    state = _SearchState()
+    result = await engine._search(
+        SearchRequest(query="q", filters={"knowledge_base_id": "kb-1"}),
+        state,
+        retrieval_queries=["q", "a", "b", "a", "q"],
+        vector_only_queries=["b"],
+        expand_references=False,
+    )
+    record = next(s for s in state.retrieval_stages if s["stage"] == "candidate_fusion")["rrf"]
+    assert len(record["lists"]) == 5
+    assert [r["weight"] for r in record["lists"]] == pytest.approx([7 / 15, 7 / 30, 0.1, 0.05, 0.1])
+    assert record["unique_count"] == 3
+    assert record["raw_count"] == 5
+    scores = {c.chunk_id: c.metadata["rrf_score"] for c in result.child_chunks}
+    assert scores == pytest.approx({"c-0": 0.7 / 61, "c-1": 0.15 / 61, "c-2": 0.1 / 61})
+    for chunk_id, score in scores.items():
+        assert sum(
+            c["contribution"] for c in record["contributions"] if c["chunk_id"] == chunk_id
+        ) == pytest.approx(score)
+
+
+async def test_raw_search_list_failure_keeps_other_list_weight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = OracleClient(settings=_search_settings())
+
+    async def fail(*args: Any, **kwargs: Any) -> None:
+        raise TimeoutError("synthetic")
+
+    async def empty(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(client, "_read_vector_branch", fail)
+    monkeypatch.setattr(client, "_read_keyword_branch", empty)
+    vector, keyword = await client.search_many(
+        [("合成", [1.0], SearchMode.VECTOR), ("合成", [1.0], SearchMode.KEYWORD)], 5
+    )
+    assert vector.status == "failed"
+    assert vector.error == "TimeoutError"
+    assert keyword.status == "empty"
