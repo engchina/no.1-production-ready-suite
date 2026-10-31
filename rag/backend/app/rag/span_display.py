@@ -46,7 +46,7 @@ _STEP_FAILURE_SUMMARY: Mapping[str, str] = {
 _STEP_FAILURE_DEFAULT = "この工程でエラーが発生しました。"
 
 # 回答の記録の工程の状態のうち、結果の説明ではないもの（完了・例外で中断）。
-_PLAIN_STEP_STATUSES: frozenset[str] = frozenset({"", "complete", "エラーで中断"})
+_PLAIN_STEP_STATUSES: frozenset[str] = frozenset({"", "complete", "skipped", "エラーで中断"})
 # 例外で止まった工程の状態（`rag_engine` の `_execution_step`）。
 ANSWER_STEP_FAILED_STATUS = "エラーで中断"
 
@@ -154,7 +154,7 @@ def answer_step_params(values: Mapping[str, object]) -> DisplayParams:
     """回答フローの工程の記録の値（工程名・LLM の回数・送信の回数・状態）を表示の値にする。
 
     LLM の回数は 1 回以上のときだけ、送信の回数は呼び出しより多いときだけ（#2966）、
-    結果の説明は完了・中断以外のときだけ入れる。
+    結果の説明は完了・スキップ・中断の状態名以外のときだけ入れる。
     """
     params: DisplayParams = {}
     name = values.get("name")

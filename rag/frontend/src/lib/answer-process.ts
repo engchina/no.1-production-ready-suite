@@ -29,7 +29,7 @@ export const PIPELINE_STEP_LABEL: Readonly<Record<string, I18nKey>> = {
 export const ANSWER_STEP_KIND = "answer_step";
 
 /** 回答の記録の工程の状態のうち、結果の説明ではないもの（完了・例外で中断・中止。失敗は状態で示す）。 */
-const PLAIN_STEP_STATUSES = new Set(["", "complete", "completed", "done", "ok", "エラーで中断", "中止"]);
+const PLAIN_STEP_STATUSES = new Set(["", "complete", "completed", "done", "ok", "skipped", "エラーで中断", "中止"]);
 
 /**
  * backend の工程名（`rag_engine.generation.answering` の `_execution_step`）→ 利用者向けの名前（i18n）。
