@@ -276,7 +276,7 @@ class AnswerExecutionTests(unittest.TestCase):
 
     def test_definition_targets_are_shown_as_labels_and_do_not_stop_the_answer(self):
         """定義項目は構造化データなので、表示境界でラベルへ変換しないと記録が中断する (#1001)。"""
-        for question, labels in (
+        for question, _labels in (
             ("一覧画面の「区分甲」はどのような意味ですか。", ["区分甲"]),
             ("一覧画面の「区分甲」「区分乙」はそれぞれどのような意味ですか。", ["区分甲", "区分乙"]),
         ):

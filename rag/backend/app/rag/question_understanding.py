@@ -10,7 +10,7 @@ from app.rag.language_pack_releases import active_release, pack_from_release
 
 # 取込で使う項目・回答の表示や検査の項目は、この編集面から変更しない。
 QUESTION_UNDERSTANDING_SECTIONS = frozenset(
-    {"question_cues", "inquiry_cues", "enumeration_cues", "definition_cues"}
+    {"question_cues", "enumeration_cues", "definition_cues"}
 )
 QUESTION_UNDERSTANDING_FIELDS = tuple(
     spec

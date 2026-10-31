@@ -323,7 +323,7 @@ def test_rerank_failure_is_reported_and_keeps_the_retrieval_order(monkeypatch: p
     records = [_child(i) for i in range(3)]
 
     with _recording() as reported:
-        ranked = rerank_records("抽出条件の指定方法", records, _rerank_settings(), enabled=True, business_domains=(), screen_terms=())
+        ranked = rerank_records("抽出条件の指定方法", records, _rerank_settings(), enabled=True)
 
     assert [record.id for record in ranked] == ["c0", "c1", "c2"]
     assert reported == ([("rerank", "Boom")] if fail else [])
@@ -349,8 +349,6 @@ def test_extra_query_rerank_failure_is_reported(monkeypatch: pytest.MonkeyPatch,
             records,
             _rerank_settings(),
             enabled=True,
-            business_domains=(),
-            screen_terms=(),
             extra_queries=("実行ボタン",),
         )
 

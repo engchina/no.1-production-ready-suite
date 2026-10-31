@@ -1,7 +1,8 @@
 """業務名に一致しない候補も正常な検索結果として残す。"""
 
-from rag_engine.generation import answering
 from test_named_screen_first import record
+
+from rag_engine.generation import answering
 
 
 def test_other_business_is_not_excluded(monkeypatch):

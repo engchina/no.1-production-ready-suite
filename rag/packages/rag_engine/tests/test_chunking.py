@@ -26,10 +26,6 @@ from rag_engine.chunking import (
     load_latest_chunk_run_for_source,
     load_latest_or_source_chunk_run,
 )
-from rag_engine.retrieval.inquiry_conditions import (
-    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-    inquiry_profile_contract_hash,
-)
 
 
 class ChunkingTests(unittest.TestCase):

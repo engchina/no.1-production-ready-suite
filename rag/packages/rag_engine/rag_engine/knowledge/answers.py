@@ -82,7 +82,6 @@ def _approved_faq_direct_answer_payload(
         "routing_reason": "Approved FAQ候補で高閾値一致したため、RAG生成を行わず承認済み回答を返しました。",
         "question_plan": {},
         "runtime_knowledge": {},
-        "query_understanding": {},
         "text_search_tokenizer": "",
         "text_search_tokenizer_label": "",
         "text_search_tokenizer_fingerprint": "",

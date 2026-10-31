@@ -63,7 +63,6 @@ class AnswerDependencies:
     parse_text: Callable[..., Any]
     parse_images: Callable[..., Any]
     rerank: Callable[..., Any]
-    business_domains: Callable[[str], Sequence[str]] | None = None
     screen_catalog: Callable[..., dict[str, list[str]]] | None = None
     screen_chunks: Callable[..., Sequence[Any]] | None = None
     section_outline: Callable[..., Any] | None = None
@@ -109,14 +108,6 @@ def _get() -> AnswerDependencies:
     from rag_engine.composition import oracle_answer_dependencies
 
     return oracle_answer_dependencies()
-
-
-def question_business_domains(question: str) -> list[str] | None:
-    """注入された業務名の照合で、質問が名指しした業務名を返す。注入が無ければ None（profile で推定する）。"""
-    current = _active.get()
-    if current is None or current.business_domains is None:
-        return None
-    return list(current.business_domains(question))
 
 
 def injected_screen_catalog(**kwargs) -> dict[str, list[str]] | None:

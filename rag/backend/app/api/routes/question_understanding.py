@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 from rag_engine.retrieval.task_contract import task_contract
 from rag_parser_core.language import bind_pack, builtin_pack, overrides_from, resolve
 

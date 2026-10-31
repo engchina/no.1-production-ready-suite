@@ -1430,7 +1430,7 @@ test("質問の理解は段階順の独立 Tab で差分を保存し、認識結
   await page.route("**/api/search-answer-profiles/bv-default/question-understanding/preview", async (route) => {
     expect(route.request().headers()["content-type"]).toBe("application/json");
     previewBody = route.request().postDataJSON();
-    const result = { inquiry: { request_kind: "cause" }, task_contract: { requests: ["合成の要求"] }, hash: "synthetic-preview" };
+    const result = { task_contract: { requests: ["合成の要求"] }, hash: "synthetic-preview" };
     await route.fulfill({ json: { data: { original_text: (previewBody as { text: string }).text, saved: result, draft: result }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/search-answer-profiles?id=bv-default");
@@ -1451,6 +1451,7 @@ test("質問の理解は段階順の独立 Tab で差分を保存し、認識結
   await panel.getByRole("textbox", { name: "テストする質問" }).fill("対象 A が失敗した原因は何ですか。対処方法も教えてください。");
   await panel.getByRole("button", { name: "試す", exact: true }).click();
   await expect(panel.getByTestId("question-understanding-result")).toBeVisible();
+  await expect(panel.getByRole("textbox", { name: "認識結果の詳細" })).not.toHaveValue(/"inquiry"/);
   expect(previewBody).toEqual({ text: "対象 A が失敗した原因は何ですか。対処方法も教えてください。", overrides: { question_cues: { cause_cues: ["なぜ", "原因", "どうして"] } } });
   expect(saves).toBe(0);
   await page.screenshot({ path: test.info().outputPath("question-understanding-preview.png"), fullPage: true });

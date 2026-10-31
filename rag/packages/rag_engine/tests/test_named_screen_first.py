@@ -1,6 +1,7 @@
 """画面名がモデルの順位を上書きしない。"""
 
 import pytest
+
 from rag_engine.generation import answering
 from rag_engine.generation.answer_models import AnswerRecord
 

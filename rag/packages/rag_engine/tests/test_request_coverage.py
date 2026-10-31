@@ -315,9 +315,9 @@ def test_before_generation_does_not_search_even_without_candidates(monkeypatch: 
 def test_word_overlap_does_not_trigger_search(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch_search(monkeypatch, {})
     ctx = context(parent("p", "取得済みの説明"))
-    merged, trace = _cover(ctx, _settings(), gaps=False, "設定を変更する方法は？")
+    merged, trace = _cover(ctx, _settings(), "設定を変更する方法は？", gaps=False)
     assert merged is ctx and calls == []
-    assert trace["re_retrieval"]["skipped"] == "unmapped_requests"
+    assert trace["re_retrieval"]["skipped"] == "no_explicit_gap"
 
 
 def test_cover_missing_requests_respects_disabled_setting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -420,7 +420,7 @@ def test_cover_missing_requests_counts_in_the_shared_extra_retrieval_budget(monk
             classification_filter=None,
             runtime_knowledge=None,
             extra_budget=budget,
-            unanswered_requests=[{"request_id": "Q1", "status": "partial", "search_text": "請求書の再発行方法は？"}] if gaps else None,
+            unanswered_requests=[{"request_id": "Q1", "status": "partial", "search_text": "請求書の再発行方法は？"}],
         )[1]
 
     used = ExtraRetrievalBudget(max_queries=2, used={"guide_steps": 2})

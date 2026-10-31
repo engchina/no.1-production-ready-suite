@@ -84,7 +84,7 @@ def test_llm_context_has_no_goal_and_keeps_requests():
     """生成・監査・検索文の生成へ渡す質問の情報に goal を入れず、要求単位は保つ。"""
     view = grounded._contract_view(PLAIN_QUESTION)
     assert "goal" not in view
-    assert [unit["id"] for unit in view["request_units"]] == ["Q1", "Q2"]
+    assert [unit["id"] for unit in view["request_units"]] == ["Q1"]
     assert '"goal"' not in _prompt_task_contract("帳票Aを出力する方法を教えてください。")
     assert "goal" not in json.dumps(task_contract("対象は何件ありますか。"), ensure_ascii=False)
     for prompt in (grounded.GENERATE_SYSTEM_PROMPT, grounded.AUDIT_SYSTEM_PROMPT):
@@ -94,7 +94,7 @@ def test_llm_context_has_no_goal_and_keeps_requests():
 
 def test_per_request_coverage_targets_do_not_depend_on_a_category():
     targets = coverage_targets(PLAIN_QUESTION, lambda text: text.replace("。", " ").split())
-    assert [target.id for target in targets] == ["Q1", "Q2"]
+    assert [target.id for target in targets] == ["Q1"]
 
 
 class GoalFreeAnswerFlowTests(unittest.TestCase):
@@ -128,17 +128,7 @@ class GoalFreeAnswerFlowTests(unittest.TestCase):
         result, search = self._run(PLAIN_QUESTION)
         # 検索は止めず、独立して読み取った条件（文書の種類の絞り込み）を渡す。
         search.assert_called()
-        conditions = search.call_args.kwargs["inquiry_conditions"]
-        self.assertTrue(conditions.metadata_filter.active)
-        self.assertTrue(conditions.document_kinds)
-        self.assertTrue(result.answer.startswith("帳票Aは画面Bから出力します。"))
-        self.assertNotIn("goal", result.task_contract)
-        display = result.question_display
-        self.assertIn("結果: 答える要求は 2 件", display)
-        self.assertIn("回答後、要求ごとに答えたかを確認します", display)
-        self.assertIn("絞り込みに合う文書だけを検索します", display)
-        self.assertNotIn("質問の目的", display)
-        self.assertNotIn("規則・定義・可否", display)
+        self.assertNotIn("inquiry_conditions", search.call_args.kwargs)
 
     def test_desired_outcome_query_is_labeled_without_purpose_wording(self):
         """経緯と希望が混ざった質問の希望の部分の検索文は残し、出どころを「希望する結果」と示す。"""

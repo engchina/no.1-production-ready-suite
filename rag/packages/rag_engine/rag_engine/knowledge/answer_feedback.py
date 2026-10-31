@@ -124,7 +124,6 @@ def load_answer_trace_summary(output_dir: str | Path, run_id: str, answer_id: st
         "evidence_item_ids": evidence_ids,
         "retrieval_query_plan": _dict_or_empty(payload.get("retrieval_query_plan")),
         "runtime_knowledge": _dict_or_empty(payload.get("runtime_knowledge")),
-        "query_understanding": _dict_or_empty(payload.get("query_understanding")),
         "generated_queries": _list_of_strings(payload.get("generated_queries")),
         "text_search_queries": _list_of_strings(payload.get("text_search_queries")),
     }

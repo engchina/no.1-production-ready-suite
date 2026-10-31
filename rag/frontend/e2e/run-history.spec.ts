@@ -140,7 +140,7 @@ function detail(row: RunRow) {
     answer_available: row.answer_generated,
     citations: row.citations ?? [CITATION],
     withheld_evidence_count: row.withheld_evidence_count ?? 0,
-    answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [] } : null,
+    answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [], query_understanding: { original_question: "合成の質問", active_profiles: ["operation_steps"] }, inquiry_conditions: { metadata_filter: { source_file_terms: ["A.pdf"], page_numbers: [2] } } } : null,
     // 処理の経過は実行の trace の API が返す span の段（共通の span の表。#3226。実行の詳細の応答には入れない）。
     // 回答を作った実行は回答の段の中に工程の span、回答を作らない検索は検索の段。
     // 対象は実行（trace の API は実行の id を対象にする）。

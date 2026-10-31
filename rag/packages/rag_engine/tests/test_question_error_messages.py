@@ -39,7 +39,6 @@ def test_asks_cause_detects_why_questions():
 
 def test_asks_cause_needs_the_cause_noun_to_be_the_target_of_the_question():
     """「原因」「理由」の名詞は、問う形の的のときだけ原因の質問にする。項目の名前の「理由」では付かない (#3491)。"""
-    from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
     from rag_engine.retrieval.task_contract import asks_cause
 
     asked = [
@@ -58,8 +57,6 @@ def test_asks_cause_needs_the_cause_noun_to_be_the_target_of_the_question():
     ]
     for question in asked:
         assert asks_cause(question), question
-        assert "reason" in parse_inquiry_conditions(question).decision_types, question
     for question in named:
         assert not asks_cause(question), question
         assert task_contract(question)["asks_cause"] is False, question
-        assert "reason" not in parse_inquiry_conditions(question).decision_types, question

@@ -1,6 +1,7 @@
 """明示した資料・ページを緩和せず、自然言語からは SQL 条件を作らない。"""
 
 import inspect
+
 from rag_engine.adapters.oracle.store import _metadata_filter_sql, search_adb_hybrid_chunks
 from rag_engine.retrieval.metadata_filters import RetrievalMetadataFilter
 

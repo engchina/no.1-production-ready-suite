@@ -41,7 +41,7 @@ export function LanguagePackOverridesFieldset({
   const valueKey = JSON.stringify(value);
   const [draft, setDraft] = useState<{ key: string; texts: LanguagePackTexts }>({ key: valueKey, texts: {} });
   const data = query.data;
-  const fields = data ? data.fields.filter((field) => !field.ingest && !["question_cues", "inquiry_cues", "enumeration_cues", "definition_cues"].includes(field.section)) : [];
+  const fields = data ? data.fields.filter((field) => !field.ingest && !["question_cues", "enumeration_cues", "definition_cues"].includes(field.section)) : [];
   // 継承値は最新の全体値から描画し、入力途中の文字だけを保持する。保存・破棄では入力も同期する。
   if (draft.key !== valueKey) setDraft({ key: valueKey, texts: {} });
   const baseline = data ? textsFromSections(fields, overlay(data.effective, value)) : {};
