@@ -1904,7 +1904,7 @@ for (const viewport of [
     await expect(panel.getByText("登録済みQ&Aから回答")).toHaveCount(0);
     await expect(panel.getByRole("region", { name: "回答の出典: 登録済みQ&A" })).toHaveCount(0);
     await expect(panel.locator("[data-process-identifier]")).toHaveCount(3);
-    await expect(page.getByTestId("answer-text")).toContainText("出典: 登録済みQ&A");
+    await expect(page.getByRole("region", {name: "回答", exact: true})).toContainText("出典: 登録済みQ&A");
     // 文書を検索していないので、空の「根拠の構成」は出さない。
     await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
     await expectNoPageOverflow(page);
