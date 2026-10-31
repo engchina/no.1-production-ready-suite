@@ -386,3 +386,48 @@ def test_default_prompt_steps_have_one_blank_line_between_sections() -> None:
                 assert lines[index - 1] == "", identity
                 if index >= 2:
                     assert lines[index - 2].strip(), identity
+
+
+def test_batch_reading_uses_saved_stage_instruction() -> None:
+    import json
+    from dataclasses import replace
+
+    from rag_engine.config import get_settings
+    from rag_engine.generation.batched_evidence import prepare_batched_evidence
+
+    from app.rag.answer_prompts import prompt_overrides
+
+    config = replace(get_settings(environ={}, dotenv_path=None), evidence_budget_chars=500)
+    custom = "## Step 1: 合成の保存済み読取指示\n完全な原質問と全文を読む。"
+    inputs = [
+        {
+            "evidence_id": "E1",
+            "source_id": "p1",
+            "start": 0,
+            "end": 2000,
+            "text": "合成の原文。" * 400,
+        }
+    ]
+    calls = []
+
+    def read(system, prompt, schema):
+        assert system == custom
+        values = json.loads(prompt)["evidence"]
+        calls.extend(values)
+        return schema(
+            read_ids=[value["evidence_id"] for value in values], findings=[], unanswered=[]
+        )
+
+    with prompt_overrides({"generation.batchReading": custom}):
+        _, _, diagnostic = prepare_batched_evidence(
+            inputs,
+            config,
+            question="合成の質問",
+            render=lambda spans: "".join(s["text"] for s in spans),
+            evidence_text=lambda spans: "".join(s["text"] for s in spans),
+            system="指示",
+            schema={},
+            read=read,
+        )
+    assert diagnostic["batch_count"] > 1
+    assert "".join(value["text"] for value in calls) == inputs[0]["text"]

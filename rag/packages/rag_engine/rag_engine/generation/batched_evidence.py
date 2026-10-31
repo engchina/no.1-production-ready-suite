@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from rag_engine.config import Settings
 from rag_engine.dependencies import record_retrieval_stage
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
+from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import find_width_folded
 
 BATCH_READING_PROMPT = """## Step 1: 質問と根拠を読む
@@ -67,6 +68,7 @@ def prepare_batched_evidence(
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。"""
+    reading_system = resolve_prompt("generation.batchReading", BATCH_READING_PROMPT)
     selected = list(spans)
     batches: list[dict[str, Any]] = []
     read_sources: set[str] = set()
@@ -119,7 +121,7 @@ def prepare_batched_evidence(
         return (
             len(evidence_text(values)) <= settings.evidence_budget_chars
             and model_input_measurement(
-                settings, BATCH_READING_PROMPT, read_prompt(values), BatchReading.model_json_schema(), provider_id=provider_id
+                settings, reading_system, read_prompt(values), BatchReading.model_json_schema(), provider_id=provider_id
             )["fits"]
         )
 
@@ -187,7 +189,7 @@ def prepare_batched_evidence(
                 }
                 batches.append(receipt)
                 try:
-                    reading = read(BATCH_READING_PROMPT, payload, BatchReading)
+                    reading = read(reading_system, payload, BatchReading)
                     by_id = {value["evidence_id"]: value for value in batch}
                     if len(reading.read_ids) != len(by_id) or set(reading.read_ids) != set(by_id):
                         raise ValueError("batch_read_coverage_incomplete")

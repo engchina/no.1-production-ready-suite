@@ -4049,6 +4049,7 @@ export const ja = {
     "利用者の確認の答えの条件・制約との両立の判定（確認の答えがあるときだけ）",
   "settings.answerPrompts.part.documentSystem": "文書を選ぶ システムプロンプト",
   "settings.answerPrompts.part.refineSystem": "同じ章の条を足す システムプロンプト",
+  "settings.answerPrompts.part.batchReading": "根拠を分割して読み、引用付きの回答候補を作る指示（単回の容量を超える場合）",
   "settings.answerPrompts.part.catalogReview": "条の目録で選んだ条が支える説明を検討する指示（生成後の回答確認が標準・詳細で、この設定が有効かつ生成が条を引かなかったときだけ）",
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
