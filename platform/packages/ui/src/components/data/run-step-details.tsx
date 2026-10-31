@@ -1,5 +1,6 @@
 import { useId, useMemo, useState } from "react";
 import { Tabs, TabPanel } from "../ui/tabs";
+import { formatRunDateTime, formatRunDuration } from "./run-history";
 import { DataTable } from "./data-table";
 import { Disclosure } from "../ui/disclosure";
 import { CopyButton } from "../ui/copy-button";
@@ -31,6 +32,31 @@ export interface RunStepDetailField {
   value: string;
   /** 識別子・SQL の断片などを等幅で出す。 */
   mono?: boolean;
+  /** 共通の span 投影が付ける技術属性。経過では省略し、軌跡に残す。 */
+  technical?: boolean;
+  copyValue?: string;
+}
+
+/** 表示順を変えず、経過と軌跡が同じ内容を使う。 */
+export function runStepContent(details: RunStepDetails | null | undefined): RunStepDetails {
+  const fields = details?.fields?.filter(field => !field.technical);
+  return { fields: fields ? [...fields.filter(field => field.label !== DEFAULT_RUN_STEP_DETAILS_LABELS.result), ...fields.filter(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)] : undefined, lines: details?.lines, code: details?.code, truncated: details?.truncated };
+}
+export function runStepResultSummary(details: RunStepDetails | null | undefined, fallback?: string): string | undefined {
+  return runStepContent(details).fields?.find(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)?.value ?? fallback;
+}
+
+export function runStepTechnicalFields(details: RunStepDetails | null | undefined): readonly RunStepDetailField[] {
+  const fields = [...(details?.fields?.filter(field => field.technical) ?? [])];
+  if (details?.call) {
+    const labels = DEFAULT_RUN_STEP_DETAILS_LABELS;
+    for (const [key, value] of Object.entries(callPresentation(details.call).stats)) {
+      if ((typeof value !== "string" && typeof value !== "number") || (key === "model" && fields.some(field => field.label === "gen_ai.request.model"))) continue;
+      const label = labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"];
+      if (label && !fields.some(field => field.label === label && field.value === String(value))) fields.push({label, value: String(value), technical: true});
+    }
+  }
+  return fields;
 }
 
 export interface RunStepDetailCode {
@@ -144,6 +170,9 @@ export interface RunStepDetailsLabels {
   startedAt: string;
   finishedAt: string;
   duration: string;
+  result: string;
+  copyOriginalTime: string;
+  copiedTime: string;
 }
 
 export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
@@ -159,7 +188,10 @@ export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
   timing: "計時",
   startedAt: "開始時刻",
   finishedAt: "終了時刻",
-  duration: "所要時間（ms）",
+  duration: "所要時間",
+  result: "結果",
+  copyOriginalTime: "元の ISO 時刻をコピー",
+  copiedTime: "元の ISO 時刻をコピーしました",
   overview: "概要",
   input: "入力",
   output: "結果",
@@ -175,6 +207,8 @@ export interface RunStepDetailsViewProps {
   labels?: Partial<RunStepDetailsLabels>;
   className?: string;
   testId?: string;
+  showTiming?: boolean;
+  showStatistics?: boolean;
   timing?: { startedAt?: string | null; finishedAt?: string | null; durationMs?: number | null };
 }
 
@@ -193,14 +227,16 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
         <dl className="grid min-w-0 gap-x-3 gap-y-1 @md:grid-cols-[max-content_minmax(0,1fr)]">
           {fields.map((field, index) => (
             <div key={`${field.label}-${index}`} className="contents">
-              <dt className="min-w-0 break-words text-fg-muted [overflow-wrap:anywhere]">{field.label}</dt>
+              <dt className={cn("min-w-0 break-words text-fg-muted [overflow-wrap:anywhere]", field.copyValue && "flex items-center")}>{field.label}</dt>
               <dd
                 className={cn(
                   "min-w-0 whitespace-pre-wrap break-words text-fg [overflow-wrap:anywhere]",
-                  field.mono && "font-mono"
+                  field.mono && "font-mono",
+                  field.copyValue && "flex flex-wrap items-center gap-2"
                 )}
               >
-                {field.value}
+                {field.copyValue ? <time dateTime={field.copyValue} title={field.copyValue}>{field.value}</time> : <span>{field.value}</span>}
+                {field.copyValue ? <CopyButton text={field.copyValue} label={`${field.label}: ${labels.copyOriginalTime}`} copiedMessage={labels.copiedTime} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /> : null}
               </dd>
             </div>
           ))}
@@ -241,6 +277,15 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
   );
 }
 
+/** システムの表示時刻と元の精密な時刻を同じフィールドで扱う。 */
+export function RunStepTiming({startedAt, finishedAt, labels: input}: {startedAt?: string | null; finishedAt?: string | null; labels?: Partial<RunStepDetailsLabels>}) {
+  const labels = {...DEFAULT_RUN_STEP_DETAILS_LABELS, ...input};
+  return <RunStepDetailsBody details={{fields: [
+    {label: labels.startedAt, value: startedAt ? formatRunDateTime(startedAt, {seconds: true, timeZone: true}) : labels.notRecorded, copyValue: startedAt ?? undefined},
+    {label: labels.finishedAt, value: finishedAt ? formatRunDateTime(finishedAt, {seconds: true, timeZone: true}) : labels.notRecorded, copyValue: finishedAt ?? undefined},
+  ]}} labels={labels} />;
+}
+
 /** 呼び出しの内容は選んだタブだけ描画し、大きい JSON を同時に展開しない。 */
 export function RunStepDetailsView(props: RunStepDetailsViewProps) {
   const [tab, setTab] = useState("input");
@@ -256,14 +301,14 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
     <Tabs idPrefix={id} ariaLabel={labels.callDetails} value={tab} onChange={setTab} items={[
       { id: "overview", label: labels.overview }, { id: "input", label: labels.input },
       { id: "reasoning", label: labels.reasoning }, { id: "output", label: labels.output }, { id: "schema", label: labels.schema },
-      { id: "timing", label: labels.timing },
+      ...(props.showTiming === false ? [] : [{ id: "timing", label: labels.timing }]),
     ]} />
     <TabPanel idPrefix={id} id={tab} value={tab}>
-      {tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
+      {tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
         tab === "timing" ? <RunStepDetailsBody details={{ fields: [
-          { label: labels.startedAt, value: props.timing?.startedAt ?? labels.notRecorded },
-          { label: labels.finishedAt, value: props.timing?.finishedAt ?? labels.notRecorded },
-          { label: labels.duration, value: props.timing?.durationMs == null ? labels.notRecorded : String(props.timing.durationMs) },
+          { label: labels.startedAt, value: props.timing?.startedAt ? formatRunDateTime(props.timing.startedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
+          { label: labels.finishedAt, value: props.timing?.finishedAt ? formatRunDateTime(props.timing.finishedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
+          { label: labels.duration, value: formatRunDuration(props.timing?.durationMs, labels.notRecorded) },
         ] }} labels={labels} /> :
         content.status === "withheld" ? <p className="text-xs text-fg-muted">{labels.withheld}</p> :
         call.capture_enabled === false ? <p className="text-xs text-fg-muted">{labels.disabled}</p> :

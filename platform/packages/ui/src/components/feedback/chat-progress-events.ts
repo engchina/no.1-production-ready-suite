@@ -538,8 +538,8 @@ export function labelChatProgressSteps(
     const details = span
       ? mergeDetails(productDetails, [
           ...traceSpanFields(undefined, span.name, span.attributes ?? EMPTY_PARAMS, traceLabels),
-          ...(span.parentId ? [{ label: "Parent span ID", value: span.parentId, mono: true }] : []),
-          ...(span.product ? [{ label: "Product", value: span.product, mono: true }] : []),
+          ...(span.parentId ? [{ label: "Parent span ID", value: span.parentId, mono: true, technical: true }] : []),
+          ...(span.product ? [{ label: "Product", value: span.product, mono: true, technical: true }] : []),
         ])
       : productDetails;
     if (details) result.details = details;

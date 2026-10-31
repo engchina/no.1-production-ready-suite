@@ -223,9 +223,11 @@ test("深いリランク要求とSDKの親子を一覧内でたどれ、保存�
     if (testInfo.project.name === "mobile-375") await expect.poll(() => viewport.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
     const x = async (locator: typeof request) => locator.locator("[data-run-timeline-label]").evaluate(el => el.getBoundingClientRect().x);
     expect(await x(sdk)).toBeGreaterThan(await x(request));
-    await turn.getByTestId("chat-progress-step-rank-a-sdk-toggle").click();
-    await expect(turn.getByTestId("chat-progress-step-rank-a-sdk-details")).toContainText("Parent span ID");
-    await expect(turn.getByTestId("chat-progress-step-rank-a-sdk-details")).toContainText("rank-a");
+    await turn.getByRole("button", {name: "軌跡を調べる", exact: true}).first().click();
+    await turn.locator('[data-trace-record="rank-a-sdk"] button').click();
+    await expect(turn.locator("[data-trace-technical]")).toContainText("Parent span ID");
+    await expect(turn.locator("[data-trace-technical]")).toContainText("rank-a");
+    await turn.getByRole("button", {name: "経過に戻る", exact: true}).click();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await sdk.scrollIntoViewIfNeeded();
   }

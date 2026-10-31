@@ -108,6 +108,7 @@ describe("書式と絞り込みの値", () => {
       setDisplayTimeZone("Asia/Tokyo");
       expect(formatRunDateTime(iso)).toBe("2026/10/15 01:12");
       expect(formatRunDateTime(iso, { seconds: true })).toBe("2026/10/15 01:12:05");
+      expect(formatRunDateTime(iso, { seconds: true, timeZone: true })).toBe("2026/10/15 01:12:05 (Asia/Tokyo)");
       setDisplayTimeZone("UTC");
       expect(formatRunDateTime(iso)).toBe("2026/10/14 16:12");
     } finally {
@@ -625,9 +626,9 @@ describe("RunTimeline", () => {
     expect(buttons[1].getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("ORA-00942");
     expect(container.textContent).not.toContain("引数と結果");
-    // 失敗は文字でも出す（色だけにしない）。完了は読み上げの文言。
+    // 状態は完了も文字で出す（色だけにしない）。
     expect(container.querySelector("[data-run-timeline-step='sql']")?.textContent).toContain("失敗 · 0.3 秒");
-    expect(container.querySelector("[data-run-timeline-step='plan'] .sr-only")?.textContent).toContain("完了");
+    expect(container.querySelector("[data-run-timeline-step='plan'] [data-run-step-status-duration]")?.textContent).toContain("完了");
     // 入れ子の段は字下げする。時間の線は飾り（aria-hidden）。
     expect(container.querySelector<HTMLElement>("[data-run-timeline-step='tool'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
     expect(container.querySelector<HTMLElement>("[data-run-timeline-step='plan'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("0rem");

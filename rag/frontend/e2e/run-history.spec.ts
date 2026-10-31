@@ -1,5 +1,5 @@
 import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
-import { syntheticCallDetails } from "../../../platform/packages/ui/e2e/call-fixture";
+import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { mockTraceApi, ragSpan, savedSpanProgress, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
@@ -1414,6 +1414,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await mockRuns(page, [row]);
   await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
     { key: "root", spec: ragSpan.root(), at: [0, 8] },
+    { key: "stage", spec: ragSpan.technical("synthetic.stage", "root"), at: [7, 8], details: syntheticStageDetails },
     { key: "model", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [0, 1], details: { call: syntheticCallDetails } },
     { key: "tool", spec: ragSpan.technical("gen_ai.execute_tool", "root", { "gen_ai.tool.name": "synthetic-tool" }), at: [1, 3], details: { call: syntheticCallDetails } },
     { key: "model-2", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [3, 4], details: { call: syntheticCallDetails } },
@@ -1422,32 +1423,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   ]) });
   await page.goto(`/history/${row.run_id}`);
   await page.getByTestId("run-history-timeline-summary").click();
-  await page.locator("[data-run-timeline-toggle]").first().click();
-  const pane = page.locator("[data-call-details]");
-  await pane.getByRole("tab", { name: "入力", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-input");
-  await pane.getByRole("tab", { name: "結果", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await pane.getByRole("tab", { name: "思考", exact: true }).click();
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await expect(pane.locator("[data-call-readable]")).not.toContainText("synthetic-call-output");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-schema");
-  await expect(pane).toContainText("先頭だけ");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(pane.getByRole("tab", { name: "計時", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(pane).toContainText("1000");
-  await expectNoPageOverflow(page);
-  for (const theme of ["light", "dark"]) {
-    await page.evaluate(value => {
-      document.documentElement.classList.remove("light", "dark");
-      document.documentElement.dataset.theme = value;
-    }, theme);
-    await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
-  }
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await confirmTraceExplorer(page, testInfo, expect, true);
 });

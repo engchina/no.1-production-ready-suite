@@ -1,3 +1,4 @@
+import { traceOrderedSteps } from "../../lib/trace-explorer";
 import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
 import { DEFAULT_TRACE_DETAILS_LABELS } from "../../lib/trace-labels";
 import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, Waypoints, XCircle, type LucideIcon } from "lucide-react";
@@ -20,7 +21,7 @@ import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { formatRunDateTime, formatRunDuration, formatRunTokens } from "./run-history";
-import { hasRunStepDetails, RunStepDetailsView, type RunStepDetails } from "./run-step-details";
+import { hasRunStepDetails, RunStepDetailsView, runStepContent, runStepResultSummary, type RunStepDetails } from "./run-step-details";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
 
 /*
@@ -644,7 +645,7 @@ export function runTimelineCurrentStepIndex(
 const RUNNING_STATIC_ICON = { icon: CirclePlay, className: "text-accent-fg" } as const;
 
 /** 段の状態のアイコン。大きさは行の文字の大きさ（`sm` 12px / `md` 14px。#2371）。 */
-function StepIcon({
+export function RunStepStatusIcon({
   status,
   size = TEXT_ICON_SIZE.sm,
   spin = true,
@@ -706,7 +707,7 @@ export function runTimelineBars(steps: readonly RunTimelineStep[]): (RunTimeline
   });
 }
 
-function stepDurationMs(step: RunTimelineStep): number | null {
+export function stepDurationMs(step: RunTimelineStep): number | null {
   if (step.durationMs != null) return step.durationMs;
   const start = operationTimestampMs(step.startedAt ?? undefined);
   const end = operationTimestampMs(step.finishedAt ?? undefined);
@@ -784,7 +785,7 @@ export interface RunTimelineProps {
  * - 状態はアイコンの形と読み上げの文言で伝え、失敗・スキップ・応答待ちは画面にも文字で出す（色だけにしない）。
  */
 export function RunTimeline({
-  steps,
+  steps: inputSteps,
   explorerLabels,
   totalDurationMs,
   defaultExpanded = false,
@@ -797,6 +798,7 @@ export function RunTimeline({
   labels: labelsInput,
   testId,
 }: RunTimelineProps) {
+  const steps = traceOrderedSteps(inputSteps, "hierarchy");
   const traceLabels = useTraceDetailsLabels();
   const [exploring, setExploring] = useState(false);
   const labels = resolveRunDetailLabels(labelsInput);
@@ -837,14 +839,14 @@ export function RunTimeline({
         {steps.map((step, index) => {
           const duration = stepDurationMs(step);
           const bar = showBars ? bars[index] : null;
-          const details = hasRunStepDetails(step.details) ? step.details : undefined;
+          const content = runStepContent(step.details);
+          const details = hasRunStepDetails(content) ? content : undefined;
           const hasDetails = step.children != null || details !== undefined;
           const stepTestId = stepTestIdPrefix ? `${stepTestIdPrefix}-step-${step.id}` : undefined;
           const open = hasDetails && Boolean(expanded[step.id]);
           const regionId = `${idPrefix}-step-${index}`;
           // 失敗・スキップ・応答待ち・未実行（失敗の後に実行しなかった段。#2342）は状態を文字でも出す。
-          const visibleStatus =
-            step.status === "failed" || step.status === "skipped" || step.status === "waiting" || step.status === "pending";
+          const visibleStatus = true;
           const level = stepLevel(step.level);
           const name = (
             <span className={cn("min-w-0 break-words [overflow-wrap:anywhere]", !hasDetails && "flex-1")}>
@@ -857,7 +859,7 @@ export function RunTimeline({
                 {step.label}
               </span>
               {step.product ? <RunTimelineProduct product={step.product} /> : null}
-              {step.detail ? <span className="text-fg-muted">{`（${step.detail}）`}</span> : null}
+
               {visibleStatus ? null : <span className="sr-only">{` ${labels.stepStatus[step.status]}`}</span>}
             </span>
           );
@@ -880,7 +882,7 @@ export function RunTimeline({
               >
                 <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText)} style={runTimelineStepIndentStyle(level)}>
                   <span className="pr-icon-line">
-                    <StepIcon
+                    <RunStepStatusIcon
                       status={step.status}
                       size={RUN_TIMELINE_CHEVRON_SIZE[size]}
                       // 回すのは今の段だけ。親の工程（#3436）と並行して実行中のほかの段（#3445）は回さない。
@@ -925,12 +927,13 @@ export function RunTimeline({
                     ) : null}
                   </div>
                 ) : null}
-                <span className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tnum">
+                <span data-run-step-status-duration="" className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tnum">
                   {visibleStatus ? labels.stepStatus[step.status] : null}
                   {visibleStatus && duration !== null ? " · " : null}
                   {duration !== null ? formatDuration(duration) : visibleStatus ? null : labels.notRecorded}
                 </span>
               </div>
+              {runStepResultSummary(step.details, step.detail) ? <p data-run-result-summary="" className="mt-1 ml-6 text-xs leading-5 text-fg-muted">{runStepResultSummary(step.details, step.detail)}</p> : null}
               {hasDetails ? (
                 <div
                   id={regionId}

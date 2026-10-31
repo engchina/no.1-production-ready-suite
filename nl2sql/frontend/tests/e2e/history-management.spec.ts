@@ -1,5 +1,5 @@
 import { confirmTraceExplorer } from "../../../../platform/packages/ui/e2e/trace-explorer";
-import { syntheticCallDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
+import { syntheticCallDetails, syntheticStageDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
 // 実行履歴（#1955。UX 契約 run-history.md §7）: 共通の一覧（RunHistoryToolbar → RunHistoryTable → OffsetPagination）と
 // `?id=<run_id>` の全幅の詳細。状態は `[data-run-status]` の値で確かめる（文言・色に頼らない）。
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
@@ -977,36 +977,13 @@ for (const [id, text] of [
 test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const id = "synthetic-call";
   const row = { ...historyItems[0], id, progress_events: jobProgressEvents(id, { at: "2026-01-01T00:00:01Z", terminal: "done", steps: {
+    prepare_context: { status: "done", startedAt: "2026-01-01T00:00:02Z", finishedAt: "2026-01-01T00:00:03Z", details: syntheticStageDetails },
     generate_sql: { status: "done", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", details: { call: syntheticCallDetails } },
   } }) };
   await mockHistory(page, { items: [row] });
   await page.goto(`/history?id=${id}`);
   await page.getByTestId("history-detail-timeline-summary").click();
-  await page.locator("[data-run-timeline-toggle]").first().click();
-  const pane = page.locator("[data-call-details]");
-  await pane.getByRole("tab", { name: "入力", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-input");
-  await pane.getByRole("tab", { name: "結果", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-output");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await pane.getByRole("tab", { name: "思考", exact: true }).click();
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toContainText("synthetic-call-thinking");
-  await expect(pane.locator("[data-call-readable] details[open] [data-markdown-text]")).toBeVisible();
-  await expect(pane.locator("[data-call-readable]")).not.toContainText("synthetic-call-output");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).click();
-  await expect(pane).toContainText("synthetic-call-schema");
-  await pane.getByRole("tab", { name: "Schema", exact: true }).focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(pane.getByRole("tab", { name: "計時", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(pane).toContainText("1000");
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  for (const theme of ["light", "dark"]) {
-    await page.evaluate(value => {
-      document.documentElement.classList.remove("light", "dark");
-      document.documentElement.dataset.theme = value;
-    }, theme);
-    await page.screenshot({ path: testInfo.outputPath(`call-details-${theme}.png`), fullPage: true });
-  }
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await confirmTraceExplorer(page, testInfo, expect);
 });

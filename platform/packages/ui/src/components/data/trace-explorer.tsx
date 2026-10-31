@@ -1,5 +1,5 @@
 import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
-import { ArrowLeft, ArrowDown, ArrowUp, Bot, CheckCircle2, Circle, CirclePause, Clock3, Layers, MinusCircle, Wrench, XCircle } from "lucide-react";
+import { ArrowLeft, ArrowDown, ArrowUp, Bot, Layers, Wrench } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
@@ -13,12 +13,11 @@ import { FilterSelect } from "./list-filters";
 import { ListToolbar } from "./list-toolbar";
 import { LoadMoreFooter } from "./load-more-footer";
 import { formatRunDuration } from "./run-history";
-import { resolveRunDetailLabels, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
-import { DEFAULT_RUN_STEP_DETAILS_LABELS, RunStepDetailsView } from "./run-step-details";
+import { RUN_TIMELINE_CHEVRON_SIZE, resolveRunDetailLabels, RunStepStatusIcon, stepDurationMs, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
+import { RunStepDetailsView, RunStepTiming, runStepContent, runStepTechnicalFields, runStepResultSummary } from "./run-step-details";
+
 
 const CATEGORY_ICON = { model: Bot, tool: Wrench, stage: Layers };
-const STATUS_ICON = { done: CheckCircle2, failed: XCircle, running: Clock3, pending: Circle, waiting: CirclePause, skipped: MinusCircle };
-const STATUS_COLOR = { done: "text-success-fg", failed: "text-danger-fg", running: "text-info-fg", pending: "text-fg-subtle", waiting: "text-warning-fg", skipped: "text-fg-muted" };
 
 /** 共有 UI の既定の日本語。製品は翻訳済みの文言で上書きできる。 */
 export const DEFAULT_TRACE_EXPLORER_LABELS = {
@@ -33,11 +32,7 @@ export const DEFAULT_TRACE_EXPLORER_LABELS = {
 };
 export type TraceExplorerLabels = typeof DEFAULT_TRACE_EXPLORER_LABELS;
 
-function durationOf(step: RunTimelineStep): number | null {
-  if (step.durationMs != null && Number.isFinite(step.durationMs) && step.durationMs >= 0) return step.durationMs;
-  const start = operationTimestampMs(step.startedAt); const end = operationTimestampMs(step.finishedAt);
-  return start != null && end != null && end >= start ? end - start : null;
-}
+
 
 export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLabels, size = "md" }: {
   size?: "sm" | "md";
@@ -139,9 +134,8 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
               <RunTimelineViewport depth={order === "hierarchy" ? Math.max(0, ...list.map(step => step.level ?? 0)) : 0} label={labels.list}>
                 <ol ref={listRef} aria-label={labels.list} className="grid min-w-0 divide-y divide-border">
                   {list.map(step => {
-                    const Icon = CATEGORY_ICON[traceCategory(step)]; const StatusIcon = STATUS_ICON[step.status];
                     const index = steps.indexOf(step); const bar = timing.bars[index];
-                    return <li key={step.id} data-trace-record={step.id} data-trace-category={traceCategory(step)} style={order === "hierarchy" ? runTimelineStepIndentStyle(step.level) : undefined}>
+                    return <li key={step.id} data-trace-record={step.id} data-trace-category={traceCategory(step)} data-level={step.level ?? 0} data-parent-id={step.parentId} data-status={step.status} style={order === "hierarchy" ? runTimelineStepIndentStyle(step.level) : undefined}>
                       <button type="button" data-surface-tint={selected?.id === step.id ? "accent" : undefined} aria-pressed={selected?.id === step.id} onClick={() => select(step)}
                         className={cn("relative grid min-h-[var(--control-height-touch)] w-full min-w-0 cursor-pointer gap-1 border-l-2 p-2 text-left hover:bg-surface-hover", selected?.id === step.id ? "border-l-accent-fg bg-accent-muted" : "border-l-transparent")}
                         onKeyDown={event => {
@@ -151,8 +145,9 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
                           const next = buttons?.[list.indexOf(step) + offset];
                           if (next) { event.preventDefault(); next.focus(); }
                         }}>
-                        <span className={cn("flex min-w-0 items-start gap-2", runTimelineNameClass(size))}><Icon className="mt-0.5 shrink-0 text-fg-muted" size={14} aria-hidden="true" /><span data-trace-record-label="" className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.product ? `${step.product} · ` : ""}{step.label}</span><StatusIcon className={cn("mt-0.5 shrink-0", STATUS_COLOR[step.status])} size={14} aria-hidden="true" /></span>
-                        <span className="flex items-center justify-between gap-2 text-xs text-fg-muted"><span>{labels[traceCategory(step)]} · {runLabels.stepStatus[step.status]}</span><span className="tnum">{formatRunDuration(durationOf(step), runLabels.notRecorded)}</span></span>
+                        <span className={cn("flex min-w-0 items-start gap-2 leading-5", runTimelineNameClass(size))}><span className="pr-icon-line"><RunStepStatusIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={false} /></span><span data-trace-record-label="" className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.label}</span></span>
+                        <span className="flex items-center justify-between gap-2 text-xs text-fg-muted"><span data-trace-step-status-duration="">{runLabels.stepStatus[step.status]}{stepDurationMs(step) !== null ? ` · ${formatRunDuration(stepDurationMs(step), runLabels.notRecorded)}` : ""}</span></span>
+                        {runStepResultSummary(step.details, step.detail) ? <span data-trace-result-summary="" className="text-xs leading-5 text-fg-muted">{runStepResultSummary(step.details, step.detail)}</span> : null}
                         {bar ? <span className={cn(RUN_TIME_TRACK, "overflow-hidden")} data-trace-time-bar="" aria-hidden="true"><span className={cn(RUN_TIME_FILL, RUN_TIME_COLOR[step.status])} style={{left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%`}} /></span> : null}
                       </button>
                     </li>;
@@ -167,17 +162,20 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
               <Button variant="ghost" size="sm" className="@4xl:hidden" icon={ArrowLeft} onClick={() => { setMobileDetail(false); requestAnimationFrame(() => listRef.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus()); }}>{labels.backToList}</Button>
               <div className="flex gap-1"><Button variant="ghost" size="sm" icon={ArrowUp} iconOnly aria-label={labels.previous} disabled={selectedIndex <= 0} onClick={() => move(-1)} /><Button variant="ghost" size="sm" icon={ArrowDown} iconOnly aria-label={labels.next} disabled={selectedIndex < 0 || selectedIndex >= filtered.length - 1} onClick={() => move(1)} /></div>
             </div>
-            <h4 id={`${id}-selected`} ref={titleRef} tabIndex={-1} className="break-words text-sm font-semibold text-fg [overflow-wrap:anywhere]">{selected?.label ?? labels.choose}</h4>
+            <h4 id={`${id}-selected`} ref={titleRef} tabIndex={-1} className={cn("break-words font-normal leading-5 text-fg [overflow-wrap:anywhere]", runTimelineNameClass(size))}>{selected?.label ?? labels.choose}</h4>
             {selected ? <>
               {selectedParents.length ? <p className="mt-1 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">{selectedParents.map(step => step.label).join(" / ")}</p> : null}
-              <div className="my-2 flex flex-wrap items-center gap-2"><code className="min-w-0 break-all text-xs text-fg-muted">{selected.id}</code><CopyButton text={selected.id} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /></div>
-              <p className="mb-3 text-xs text-fg-muted">{labels[traceCategory(selected)]} · {runLabels.stepStatus[selected.status]} · {formatRunDuration(durationOf(selected), runLabels.notRecorded)}</p>
-              <RunStepDetailsView details={selected.details ?? {lines: [selected.detail ?? labels.noDetails]}} timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: durationOf(selected)}} />
-              {!selected.details?.call ? <RunStepDetailsView details={{ fields: [
-                { label: DEFAULT_RUN_STEP_DETAILS_LABELS.startedAt, value: selected.startedAt ?? runLabels.notRecorded },
-                { label: DEFAULT_RUN_STEP_DETAILS_LABELS.finishedAt, value: selected.finishedAt ?? runLabels.notRecorded },
-              ] }} /> : null}
-              {selected.children}
+              <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={false} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs"><span>Span ID:</span><code className="min-w-0 break-all font-mono text-xs text-fg-muted">{selected.id}</code><CopyButton text={selected.id} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /></div>
+              <div className="grid min-w-0 gap-2" data-trace-inspector-content="">
+                <div data-trace-processing-content="" className="grid min-w-0 gap-2">
+                  {selected.detail ? <p className="text-xs leading-5 text-fg-muted">{selected.detail}</p> : null}
+                  <RunStepDetailsView showStatistics={false} showTiming={false} details={{...runStepContent(selected.details), call: selected.details?.call}} timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: stepDurationMs(selected)}} />
+                  {selected.children}
+                </div>
+                <div data-trace-timing=""><RunStepTiming startedAt={selected.startedAt} finishedAt={selected.finishedAt} /></div>
+                <div data-trace-technical=""><RunStepDetailsView details={{fields: runStepTechnicalFields(selected.details)}} /></div>
+              </div>
             </> : null}
           </section>
         </div>}

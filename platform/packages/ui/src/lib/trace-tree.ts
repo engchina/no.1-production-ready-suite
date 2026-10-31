@@ -40,10 +40,10 @@ export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDeta
   if (span.root) {
     name = names.root;
   } else if (stage) {
-    name = (labels.stageName?.(stage, span.status)?.trim() || stage).slice(0, 128);
+    name = (labels.stageName?.(stage, span.status)?.trim() || names.other).slice(0, 128);
   } else {
     const technical = TECHNICAL_SPANS[span.operationName] ?? (span.operationName.startsWith("gen_ai.") ? { name: "genAi" as const, target: ["gen_ai.request.model"] } : undefined);
-    if (!technical) return span.operationName;
+    if (!technical) return names.other;
     const target = technical.target?.map((key) => textAttribute(span.attributes, key)).find(Boolean);
     const purpose = ["gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"].includes(span.operationName) ? textAttribute(span.attributes, "pr.gen_ai.purpose") : undefined;
     const purposeName = purpose ? labels.modelPurposes?.[purpose] : undefined;
@@ -85,8 +85,8 @@ export function traceSpanFields(
   operationName: string,
   attributes: Readonly<Record<string, unknown>>,
   labels: TraceDetailsLabels = DEFAULT_TRACE_DETAILS_LABELS
-): { label: string; value: string; mono: boolean }[] {
-  const fields: { label: string; value: string; mono: boolean }[] = [];
+): { label: string; value: string; mono: boolean; technical?: boolean }[] {
+  const fields: { label: string; value: string; mono: boolean; technical?: boolean }[] = [];
   if (spanId) fields.push({ label: "Span ID", value: spanId, mono: true });
   fields.push({ label: "Span name", value: operationName, mono: true });
   const chat = operationName === "gen_ai.chat";
@@ -98,7 +98,7 @@ export function traceSpanFields(
     // 利用量そのものが無い呼び出しは「未計測」にそろえ、利用量はあるのにキャッシュの値が無いときだけ「不明」。
     else if (chat && v == null && key === CACHE_READ_FIELD) fields.push({ label, value: attributes["gen_ai.usage.input_tokens"] == null ? labels.unknown : labels.notReported, mono: false });
   }
-  return fields;
+  return fields.map(field => ({...field, technical: true}));
 }
 
 /** 外部の summary を検証し、親子関係を有限回で並べる。本文や任意の属性は描画しない。 */
@@ -136,7 +136,7 @@ export function traceTimeline(value: unknown, labels: TraceDetailsLabels = DEFAU
       attributes,
     }, labels);
     const fields = traceSpanFields(id, operationName, attributes, labels);
-    if (typeof span.parent_span_id === "string") fields.push({ label: "Parent span ID", value: span.parent_span_id, mono: true });
+    if (typeof span.parent_span_id === "string") fields.push({ label: "Parent span ID", value: span.parent_span_id, mono: true, technical: true });
     steps.push({ id, label, level, operationName,
       parentId: typeof span.parent_span_id === "string" ? span.parent_span_id : undefined,
       status: span.status === "cancelled" ? "skipped" : span.status as "done" | "failed" | "skipped",

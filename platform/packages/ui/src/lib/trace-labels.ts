@@ -69,6 +69,7 @@ export const TRACE_DETAILS_JA = {
   "trace.span.genAi": "AI の呼び出し",
   "trace.span.mcpRequest": "MCP の呼び出し",
   "trace.span.selectAi": "Select AI の呼び出し",
+  "trace.span.other": "処理を実行する",
   "trace.span.httpRequest": "HTTP の要求",
   "trace.span.attempt": "{name}（{count} 回目）",
   "trace.field.usage.input": "入力トークン",
@@ -152,7 +153,7 @@ export type TraceSpanStatus = "done" | "failed" | "cancelled" | "skipped";
 export type TraceStageName = (stage: string, status: TraceSpanStatus) => string | null | undefined;
 /** 技術の span の名前（root と、`gen_ai.*`・MCP・Select AI・HTTP の呼び出し）。 */
 export interface TraceSpanNames {
-  root: string; chat: string; embeddings: string; rerank: string; rerankRequest: string; executeTool: string; genAi: string;
+  other: string; root: string; chat: string; embeddings: string; rerank: string; rerankRequest: string; executeTool: string; genAi: string;
   mcpRequest: string; selectAi: string; httpRequest: string;
   attempt: (name: string, count: number) => string;
 }
@@ -221,7 +222,7 @@ export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, opti
     cancelled: t("trace.status.cancelled"), stopped: t("trace.status.stopped"), reconstructed: t("trace.timing.reconstructed"),
     modelPurposes: Object.fromEntries(Object.entries(MODEL_PURPOSE_LABEL_KEYS).map(([id, key]) => [id, t(key)])),
     spanNames: {
-      root: t("trace.span.root"), chat: t("trace.span.chat"), embeddings: t("trace.span.embeddings"), rerank: t("trace.span.rerank"), rerankRequest: t("trace.span.rerankRequest"),
+      other: t("trace.span.other"), root: t("trace.span.root"), chat: t("trace.span.chat"), embeddings: t("trace.span.embeddings"), rerank: t("trace.span.rerank"), rerankRequest: t("trace.span.rerankRequest"),
       executeTool: t("trace.span.executeTool"), genAi: t("trace.span.genAi"), mcpRequest: t("trace.span.mcpRequest"),
       selectAi: t("trace.span.selectAi"), httpRequest: t("trace.span.httpRequest"),
       attempt: (name, count) => t("trace.span.attempt").replace("{name}", name).replace("{count}", String(count)),

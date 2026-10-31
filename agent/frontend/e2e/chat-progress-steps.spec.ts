@@ -45,8 +45,8 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
     // 行を開くと span の技術の値（Span name・モデル）を出す。
     expect(items[0].details?.fields).toEqual(
       expect.arrayContaining([
-        { label: "Span name", value: "gen_ai.chat", mono: true },
-        { label: "gen_ai.request.model", value: SYNTHETIC_MODEL, mono: true },
+        { label: "Span name", value: "gen_ai.chat", mono: true, technical: true },
+        { label: "gen_ai.request.model", value: SYNTHETIC_MODEL, mono: true, technical: true },
       ])
     );
   });
@@ -56,7 +56,7 @@ test.describe("Agent の処理の経過の定義（desktop）", () => {
     const [item] = steps(log);
     expect(item.label).toBe("質問に応じた操作または回答を作る");
     expect(item.details?.fields).toEqual(expect.arrayContaining([
-      { label: "gen_ai.request.model", value: SYNTHETIC_MODEL, mono: true },
+      { label: "gen_ai.request.model", value: SYNTHETIC_MODEL, mono: true, technical: true },
     ]));
   });
 
