@@ -3010,3 +3010,117 @@ for (const legacy of [false, true]) {
     await page.screenshot({ path: testInfo.outputPath(`summary-evidence-${legacy ? "legacy" : "linked"}.png`), fullPage: true });
   });
 }
+
+// #3949: 会話の作成中は草稿を保ち、送信と作成完了の後始末を競合させない。
+for (const outcome of ["success", "failure"] as const) {
+  test(`新しい会話の作成中は入力を保ち送信しない (${outcome})`, async ({ page }, testInfo) => {
+    await mockChat(page);
+    const create = gate();
+    let createCalls = 0;
+    const deliveries: string[] = [];
+    await page.route("**/api/chat/conversations", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      createCalls += 1;
+      await create.opened;
+      if (outcome === "failure" && createCalls === 1) {
+        await route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の作成失敗"], warning_messages: [] } });
+      } else await route.fallback();
+    });
+    page.on("request", (request) => {
+      if (request.url().endsWith("/messages/stream")) deliveries.push(new URL(request.url()).pathname);
+    });
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, "経理アシスタント");
+    await page.getByRole("button", { name: "新しい会話", exact: true }).click();
+    await expect.poll(() => createCalls).toBe(1);
+    const composer = chatComposer(page);
+    const send = page.getByTestId("chat-run-stop");
+    await composer.fill("合成の質問 A");
+    await expect(send).toBeDisabled();
+    await composer.press("Enter");
+    await expect(composer).toHaveValue("合成の質問 A");
+    await expect(page.getByTestId("chat-live-turn")).toHaveCount(0);
+    expect(deliveries).toHaveLength(0);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("creation-pending.png"), animations: "disabled" });
+    create.open();
+    if (outcome === "failure") {
+      await expect(page.getByRole("alert")).toBeVisible();
+      await expect(composer).toHaveValue("合成の質問 A");
+      await expect(send).toBeEnabled();
+      await page.screenshot({ path: testInfo.outputPath("creation-failed.png"), animations: "disabled" });
+      await page.getByRole("button", { name: "新しい会話", exact: true }).click();
+      await expect.poll(() => createCalls).toBe(2);
+    }
+    await expect(send).toBeEnabled();
+    await expect(composer).toHaveValue("合成の質問 A");
+    // 連続した Enter でも、新しく作った会話へ一度だけ送る。
+    await composer.press("Enter");
+    await composer.press("Enter");
+    await expect(page.getByTestId("chat-run-stop")).toHaveAccessibleName("送信");
+    await expect(page.getByText(assistantMessage.content).first()).toBeVisible();
+    expect(deliveries).toEqual(["/api/chat/conversations/conv-1/messages/stream"]);
+    expect(createCalls).toBe(outcome === "failure" ? 2 : 1);
+    await page.screenshot({ path: testInfo.outputPath("creation-sent.png"), animations: "disabled" });
+  });
+}
+
+test("新しい会話の作成中に選んだ履歴を遅い作成応答で上書きしない", async ({ page }) => {
+  await mockChat(page, "ready", [userMessage, assistantMessage]);
+  const create = gate();
+  let creating = false;
+  await page.route("**/api/chat/conversations", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    creating = true;
+    await create.opened;
+    await route.fulfill({ json: { data: { ...conversationDetail([]), id: "conv-2" }, error_messages: [], warning_messages: [] } });
+  });
+  await page.route("**/api/chat/conversations/conv-2", (route) => route.fulfill({
+    json: { data: { ...conversationDetail([]), id: "conv-2" }, error_messages: [], warning_messages: [] },
+  }));
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理アシスタント");
+  await page.getByRole("button", { name: "新しい会話", exact: true }).click();
+  await expect.poll(() => creating).toBe(true);
+  const history = await openChatHistory(page);
+  await history.getByRole("list", { name: "会話の履歴" }).getByRole("button").filter({ hasText: "件・" }).click();
+  await expect(page.getByText(assistantMessage.content).first()).toBeVisible();
+  const response = page.waitForResponse((res) => res.request().method() === "POST" && new URL(res.url()).pathname === "/api/chat/conversations");
+  create.open();
+  await response;
+  await expect(page.getByRole("button", { name: "新しい会話", exact: true })).toBeEnabled();
+  await expect(page.getByText(assistantMessage.content).first()).toBeVisible();
+  await expect(page.getByTestId("chat-conversation-title")).toHaveText(userMessage.content);
+});
+
+for (const outcome of ["success", "failure"] as const) {
+  test(`会話の作成中に切り替えたプロファイルを遅い応答で変更しない (${outcome})`, async ({ page }) => {
+    await mockChat(page);
+    const other = { ...searchAnswerProfile, id: "bv-2", name: "合成プロファイル B" };
+    await page.route("**/api/search-answer-profiles**", (route) => route.fulfill({ json: pageEnvelope([searchAnswerProfile, other]) }));
+    const create = gate();
+    let creating = false;
+    await page.route("**/api/chat/conversations", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      creating = true;
+      await create.opened;
+      if (outcome === "failure") {
+        await route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の作成失敗"], warning_messages: [] } });
+      } else await route.fallback();
+    });
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, searchAnswerProfile.name);
+    await page.getByRole("button", { name: "新しい会話", exact: true }).click();
+    await expect.poll(() => creating).toBe(true);
+    await chatComposer(page).fill("合成の質問 B");
+    await selectSearchAnswerProfile(page, other.name);
+    const response = page.waitForResponse((res) => res.request().method() === "POST" && new URL(res.url()).pathname === "/api/chat/conversations");
+    create.open();
+    await response;
+    await expect(page.getByRole("button", { name: "新しい会話", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText(other.name);
+    await expect(page.getByTestId("chat-conversation-title")).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(chatComposer(page)).toHaveValue("合成の質問 B");
+  });
+}

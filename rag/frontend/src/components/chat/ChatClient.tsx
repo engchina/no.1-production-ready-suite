@@ -771,6 +771,7 @@ export function ChatClient() {
     // 開いている会話を消すときは、送信・生成を止めて選択を外す（消した会話を開いたままにしない）。
     onBeforeDelete: (item) => {
       if (item.id !== activeId) return;
+      conversationSelectionVersionRef.current += 1;
       cancelSending();
       setLiveTurn(null);
       setErrorText("");
@@ -822,12 +823,14 @@ export function ChatClient() {
   const [errorText, setErrorText] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const previousSearchAnswerProfileIdRef = useRef(searchAnswerProfileId);
+  const conversationSelectionVersionRef = useRef(0);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   // 検索・回答プロファイルを切り替えたら会話選択と進行中ストリームをリセットする。
   useEffect(() => {
     if (previousSearchAnswerProfileIdRef.current === searchAnswerProfileId) return;
     previousSearchAnswerProfileIdRef.current = searchAnswerProfileId;
+    conversationSelectionVersionRef.current += 1;
     // 送信・生成を打ち切り、送信中の状態も解く（cancelSending と同じ。照会の応答を待たない）。
     abortRef.current?.abort();
     abortRef.current = null;
@@ -865,7 +868,10 @@ export function ChatClient() {
     return () => window.cancelAnimationFrame(animationFrame);
   }, [location.hash, persistedMessages.length, autoScroll.logElementRef]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => {
+    conversationSelectionVersionRef.current += 1;
+    abortRef.current?.abort();
+  }, []);
 
   const liveTurnRef = useRef<LiveTurn | null>(liveTurn);
   const activeIdRef = useRef(activeId);
@@ -966,6 +972,7 @@ export function ChatClient() {
   function selectConversation(id: string) {
     // lg 未満のシートは、会話を選んだら閉じる（開閉ボタンへフォーカスを戻す）。
     history.closeSheet();
+    conversationSelectionVersionRef.current += 1;
     if (id === activeId) return;
     cancelSending();
     setLiveTurn(null);
@@ -978,7 +985,8 @@ export function ChatClient() {
   }
 
   async function startNewConversation() {
-    if (!searchAnswerProfileId) return;
+    if (!searchAnswerProfileId || createConversation.isPending) return;
+    const selectionVersion = ++conversationSelectionVersionRef.current;
     setErrorText("");
     // 送れなかった・止めた質問は、新しい会話に持ち越さない（#907）。
     if (liveTurn && liveTurn.pending.status !== "sending") setLiveTurn(null);
@@ -997,20 +1005,23 @@ export function ChatClient() {
       focusComposer();
       return;
     }
+    // 作成開始時に前の送信を止め、作成完了時に新しい送信を取り消さない。
+    cancelSending();
+    setLiveTurn(null);
     try {
       const created = await createConversation.mutateAsync({ search_answer_profile_id: searchAnswerProfileId });
+      // 待つ間に会話・プロファイルを選び直した場合は、その選択を優先する。
+      if (selectionVersion !== conversationSelectionVersionRef.current) return;
       // 作った会話の内容（空）を先に入れる。読み込み中の間だけ入力欄が無効になり、その間に書いた文字が
       // 入らない（#413 の e2e の不安定の原因）ことを防ぐ（最初の送信で会話を作るときと同じ。#664）。
       queryClient.setQueryData(queryKeys.conversation(created.id), created);
       // 新しい会話は一覧の先頭（更新日時の新しい順）に入るので、1 ページ目に戻して見せる。
       setConversationOffset(0);
-      // 前の会話への送信・生成は、別の会話を選んだときと同じく止める（新しい会話を送信中のままにしない）。
-      cancelSending();
+      activeIdRef.current = created.id;
       setActiveId(created.id);
-      setLiveTurn(null);
       focusComposer();
     } catch {
-      setErrorText(t("chat.error.send"));
+      if (selectionVersion === conversationSelectionVersionRef.current) setErrorText(t("chat.error.send"));
     }
   }
 
@@ -1088,6 +1099,7 @@ export function ChatClient() {
       !content ||
       !searchAnswerProfileId ||
       answerInProgress ||
+      createConversation.isPending ||
       pendingChoice ||
       searchAnswerProfileWithoutKnowledgeBases ||
       prerequisitesLoading ||
@@ -1699,6 +1711,7 @@ export function ChatClient() {
                     !searchAnswerProfileId ||
                     searchAnswerProfileWithoutKnowledgeBases ||
                     pendingChoice ||
+                    createConversation.isPending ||
                     conversationLoading ||
                     conversationFailed
                   }
