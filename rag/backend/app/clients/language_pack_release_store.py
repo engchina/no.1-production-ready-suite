@@ -119,9 +119,11 @@ def _state(connection: OracleConnectionProtocol, *, lock: bool = False) -> Langu
     if current is None:
         raise LookupError("言語資源の現在の公開版が見つかりません。")
     draft = _json_loads(row["draft_effective_json"])
-    _validated(draft, allow_legacy=True)
+    compatible_draft = _validated(draft, allow_legacy=True).to_dict()
     return LanguagePackReleaseState(
-        draft_revision=int(str(row["draft_revision"])), draft_effective=draft, current=current
+        draft_revision=int(str(row["draft_revision"])),
+        draft_effective=compatible_draft,
+        current=current,
     )
 
 

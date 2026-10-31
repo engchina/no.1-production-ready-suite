@@ -221,3 +221,52 @@ def test_numeric_mapping_metadata_exposes_minimum() -> None:
     minimums = {f["key"]: f["min_value"] for f in fields if f["section"] == "numbers"}
     assert minimums["kanji_digits"] == 0
     assert minimums["roman_digits"] == minimums["kanji_multipliers"] == 1
+
+
+def test_old_draft_api_returns_complete_editable_copy_without_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from copy import deepcopy
+
+    from app.clients.language_pack_release_store import LanguagePackReleaseStore, _validated
+    from tests.test_language_pack_release_store import legacy_release_row
+    from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
+
+    row = legacy_release_row()
+    draft = deepcopy(row["effective_json"])
+    assert isinstance(draft, dict)
+    for key in (
+        "insufficient_evidence_summary",
+        "empty_search_guidance",
+        "abstention_guidance",
+        "answer_evidence_budget_limited",
+    ):
+        del draft["answer_labels"][key]
+    before = deepcopy(draft)
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "draft_revision": 7,
+                    "draft_effective_json": draft,
+                    "current_release_id": "release-a",
+                }
+            ],
+            [row],
+        ]
+    )
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+
+    async def initialized() -> LanguagePackReleaseStore:
+        return LanguagePackReleaseStore(oracle)
+
+    monkeypatch.setattr(language_pack, "release_store", initialized)
+    response = client.get("/api/settings/language-pack/draft")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["draft_revision"] == 7
+    assert data["draft_effective"] == _validated(draft, allow_legacy=True).to_dict()
+    assert data["current"]["effective"] == row["effective_json"]
+    assert data["current"]["hash"] == row["content_hash"]
+    assert draft == before
+    assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)

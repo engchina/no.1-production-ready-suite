@@ -31,13 +31,13 @@ function envelope(data: unknown) {
   return { data, error_messages: [], warning_messages: [] };
 }
 
-async function mockLanguagePack(page: Page, builtin: Record<string, Record<string, unknown>> = BUILTIN, fields = FIELDS) {
+async function mockLanguagePack(page: Page, builtin: Record<string, Record<string, unknown>> = BUILTIN, fields = FIELDS, published = builtin) {
   const saved: { overrides: Record<string, Record<string, unknown>> | null } = { overrides: null };
   const previews: Record<string, unknown>[] = [];
   const restored: string[] = [];
   const publications: Record<string, unknown>[] = [];
   const release = (version: number, effective = structuredClone(builtin)) => ({ id: `v${version}`, version, effective, hash: `hash${version}`, ingest_hash: `ingest${version}`, published_at: "2026-10-17T09:00:00Z", published_by: "管理者", previous_id: null, restored_from: null, change_note: "合成の設定変更" });
-  let current = release(2);
+  let current = release(2, structuredClone(published));
   let draftEffective = structuredClone(builtin);
   let revision = 1;
   const state = () => ({ current, draft_revision: revision, draft_effective: draftEffective });
@@ -87,13 +87,19 @@ async function mockLanguagePack(page: Page, builtin: Record<string, Record<strin
     await route.fulfill({ json: envelope(state()) });
   });
   await page.route("**/api/settings/language-pack/preview", async route => {
-    previews.push(route.request().postDataJSON());
+    const payload = route.request().postDataJSON();
+    previews.push(payload);
+    if (payload.text === "第5章を参照。") {
+      const result = { references: [{ label: "第5章", kind: "chapter", key: "5", document_title: null }], title_keys: ["第5章を参照"], heading_keys: [] };
+      await route.fulfill({ json: envelope({ saved: result, draft: result }) });
+      return;
+    }
     const result = (headingKeys: string[]) => ({ references: [{ label: "第二款", kind: "article", key: "2", document_title: null }], title_keys: ["第二款届出"], heading_keys: headingKeys });
     await route.fulfill({ json: envelope({ saved: result([]), draft: result(["article:2"]) }) });
   });
   await page.route("**/api/settings/language-pack", async route => {
     expect(route.request().method()).toBe("GET");
-    await route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: current.effective, hash: current.hash, current_release: current, outdated_documents: 3, unrecorded_documents: 2 }) });
+    await route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: Object.fromEntries(Object.entries(builtin).map(([section, values]) => [section, { ...values, ...current.effective[section] }])), hash: current.hash, current_release: current, outdated_documents: 3, unrecorded_documents: 2 }) });
   });
   return { saved, previews, restored, publications, readState: state };
 }
@@ -411,4 +417,30 @@ test("根拠不足の定型文はラベルと説明で編集でき、草稿に�
   await expect.poll(() => saved.overrides).toEqual({ answer_labels: { insufficient_evidence_summary: "合成の変更した案内です。" } });
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("abstention-labels.png"), fullPage: true });
+});
+
+
+test("旧草稿の追加表示文言は補完して試せるが公開版を書き換えない（#3932）", { tag: "@responsive" }, async ({ page }) => {
+  const keys = ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance", "answer_evidence_budget_limited", "crag_refusal_summary", "crag_missing_aspect_template", "crag_unknown_aspect_template", "crag_quote_only_note", "crag_definition_aspect_template", "guide_acquisition_incomplete_template"];
+  const labels = Object.fromEntries(keys.map(key => [key, "合成の表示文言"]));
+  const builtin = { ...BUILTIN, answer_labels: { ...labels, cause_gap: "合成の保存済み文言" } };
+  const published = { ...BUILTIN, answer_labels: { cause_gap: "合成の保存済み文言" } };
+  const fields = [...FIELDS, ...[...keys, "cause_gap"].map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 2000 }))];
+  // 草稿は API が補完した編集用副本。公開履歴は保存時の未補完のまま。
+  const mock = await mockLanguagePack(page, builtin, fields, published);
+  await page.goto("/settings/language-pack");
+  await page.getByLabel("例の文", { exact: true }).fill("第5章を参照。");
+  await expect(page.getByRole("button", { name: "試す", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "試す", exact: true }).click();
+  await expect(page.getByTestId("language-preview-result")).toBeVisible();
+  expect(mock.previews).toEqual([{ text: "第5章を参照。", overrides: {} }]);
+  expect(mock.saved.overrides).toBeNull();
+  expect(mock.publications).toEqual([]);
+  expect(mock.readState().current.effective).toEqual(published);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await expectNoPageOverflow(page);
+    await page.getByRole("button", { name: "試す", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: test.info().outputPath(`legacy-draft-preview-${theme}.png`) });
+  }
 });
