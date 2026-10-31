@@ -2483,7 +2483,8 @@ def _parse_heading(line: str) -> tuple[int, str] | None:
         return len(match.group("marks")), _clean_heading_title(match.group("title"))
     if match := numbered_heading().match(line):
         prefix = match.group("prefix")
-        title = _clean_heading_title(match.group("title"))
+        # 参照索引が章・節の番号を照合できるよう、見出しの番号と区切りも保持する。
+        title = _clean_heading_title(line)
         return heading_level_from_prefix(prefix), title
     return None
 

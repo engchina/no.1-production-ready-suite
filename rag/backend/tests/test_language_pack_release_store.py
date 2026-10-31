@@ -197,16 +197,29 @@ def test_legacy_release_does_not_weaken_integrity(mutation: str) -> None:
         pack_from_release(broken)
 
 
-def test_legacy_draft_read_is_compatible_but_save_validation_is_strict() -> None:
+@pytest.mark.parametrize("missing_extra", [False, True])
+def test_legacy_draft_read_is_compatible_but_save_validation_is_strict(missing_extra: bool) -> None:
     from app.clients.language_pack_release_store import _state
 
     row = legacy_release_row()
+    unchanged = deepcopy(row)
+    draft = deepcopy(row["effective_json"])
+    assert isinstance(draft, dict)
+    if missing_extra:
+        for key in (
+            "insufficient_evidence_summary",
+            "empty_search_guidance",
+            "abstention_guidance",
+            "answer_evidence_budget_limited",
+        ):
+            del draft["answer_labels"][key]
+    original_draft = deepcopy(draft)
     pool = FakeOraclePool(
         execute_results=[
             [
                 {
                     "draft_revision": 1,
-                    "draft_effective_json": row["effective_json"],
+                    "draft_effective_json": draft,
                     "current_release_id": "release-a",
                 }
             ],
@@ -214,10 +227,16 @@ def test_legacy_draft_read_is_compatible_but_save_validation_is_strict() -> None
         ]
     )
     state = _state(pool.connection)
-    assert state.draft_effective == row["effective_json"]
     assert state.current.hash == row["content_hash"]
+    assert state.current.effective == row["effective_json"]
+    assert state.draft_revision == 1
+    assert state.draft_effective == _validated(draft, allow_legacy=True).to_dict()
+    assert _validated(state.draft_effective).ingest_hash == state.current.ingest_hash
+    assert state.draft_effective["answer_labels"]["cause_gap"] == "合成の保存済み文言"
+    assert draft == original_draft and row == unchanged
+    assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
     with pytest.raises(ValueError):
-        _validated(state.draft_effective)
+        _validated(draft)
 
 
 async def test_explicit_publish_enriches_new_release_without_rewriting_old(
