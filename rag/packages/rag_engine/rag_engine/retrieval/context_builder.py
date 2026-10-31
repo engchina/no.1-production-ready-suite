@@ -698,10 +698,8 @@ def _context_bundle_from_parent_evidence(
 ) -> ContextBundle:
     """parent evidence を records・evidence・trace text にまとめる。
 
-    max_chars は親本文（`record.text`）1 件あたりの上限で、trace の前置きや child 一覧の分は数えない。
-    回答 prompt は `evidence_spans` が自前の予算で親本文から抜粋するため、ここでは prompt の分割や
-    予算配分はしない。親本文が上限を超える候補は chunking の parent size を見直す合図として除外し、
-    全候補が超えていれば insufficient にする。
+    max_chars は表示補助情報の容量であり、選択済みの親を除外する上限ではない。
+    全文は保持し、1 回に入らない根拠は生成側で原文位置を保って分割する。
     """
     if max_chars <= 0:
         return ContextBundle(
@@ -712,25 +710,7 @@ def _context_bundle_from_parent_evidence(
             status="insufficient",
             insufficient_reason="context character budget is zero",
         )
-    excluded = tuple(
-        {"id": _record_id(item.record), "reason": "context_character_budget", "context_reason": item.reason}
-        for item in evidence_tree
-        if len(str(getattr(item.record, "text", "") or "")) > max_chars
-    )
-    kept = tuple(item for item in evidence_tree if len(str(getattr(item.record, "text", "") or "")) <= max_chars)
-    if evidence_tree and not kept:
-        return ContextBundle(
-            records=[],
-            text="",
-            evidence=(),
-            evidence_tree=(),
-            status="insufficient",
-            insufficient_reason=(
-                f"parent chunk exceeds synthesis budget; re-run chunking with a smaller parent size: {_record_id(evidence_tree[0].record)}"
-            ),
-            excluded_evidence=excluded,
-        )
-    evidence_tree = kept
+    excluded: tuple[dict[str, Any], ...] = ()
     sections = []
     seen_documents = set()
     for item in evidence_tree:

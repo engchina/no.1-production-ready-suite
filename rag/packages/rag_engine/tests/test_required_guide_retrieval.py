@@ -214,7 +214,7 @@ def test_empty_search_is_not_evidence_that_reference_has_no_answer(monkeypatch):
     assert trace["required_acquisition"]["incomplete_step_ids"] == ["s0"]
 
 
-def test_required_body_that_cannot_fit_existing_budget_does_not_displace_old_body(monkeypatch):
+def test_large_required_body_is_kept_alongside_old_body_for_batched_generation(monkeypatch):
     from dataclasses import replace
 
     from test_guide_steps import _paged
@@ -227,11 +227,12 @@ def test_required_body_that_cannot_fit_existing_budget_does_not_displace_old_bod
     _patch_search(monkeypatch, {"reference": context(ContextParentEvidence(record=huge, role="synthesis_parent", reason="top"))})
     original = context(parent("base", "既存の有効な本文。"))
     merged, trace, _ = _cover(original, _settings(guide_step_max_queries=0), _refs(1))
-    assert [r.chunk_uid for r in merged.records] == ["run:base"]
+    assert [r.chunk_uid for r in merged.records] == ["run:base", "run:large"]
     row = trace["required_acquisition"]["targets"][0]
     assert row["candidate_source_ids"] == ["run:large"]
-    assert row["retained_body_chars"] == 0 and row["reason"] == "body_not_retained"
-    assert trace["required_acquisition"]["incomplete_step_ids"] == ["s0"]
+    assert row["retained_body_chars"] == len(huge.text)
+    assert row["retained_source_ids"] == ["run:large"]
+    assert trace["required_acquisition"]["incomplete_step_ids"] == []
 
 
 def test_prompt_acquisition_size_follows_step_count_not_reference_count():

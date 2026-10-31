@@ -72,7 +72,7 @@ def test_attachment_keeps_its_real_score_and_original_candidate_index():
     assert sum(r.id == "attachment" for r in ranked) == 1
 
 
-def test_attachment_still_obeys_the_context_character_limit():
+def test_long_attachment_is_kept_for_batched_generation():
     settings = replace(get_settings(environ={}, dotenv_path=None), rerank_min_relevance_score=0.1)
     records, parents = _candidates()
     parents[-1] = replace(parents[-1], text="添付の長い本文" * 100)
@@ -80,11 +80,12 @@ def test_attachment_still_obeys_the_context_character_limit():
     bundle = a._bundle_context(
         "添付", ranked, [*records, *parents], settings, top_k=2, neighbor_child_count=0, max_records=2, max_chars=100
     )
-    assert [r.id for r in bundle.records] == ["pa", "pb"]
-    assert {"id": "pc", "reason": "context_character_budget", "context_reason": "conversation_attachment"} in bundle.excluded_evidence
+    assert [r.id for r in bundle.records] == ["pa", "pb", "pc"]
+    assert bundle.records[-1].text == parents[-1].text
+    assert not bundle.excluded_evidence
 
 
-def test_retrieval_trace_records_attachment_retention_and_character_exclusion(monkeypatch):
+def test_retrieval_trace_records_long_attachment_retention(monkeypatch):
     settings = replace(get_settings(environ={}, dotenv_path=None), rerank_min_relevance_score=0.1)
     records, parents = _candidates()
     ranked = _records_by_rerank_ranks(records, [RerankTextRank(0, 0.9), RerankTextRank(1, 0.8), RerankTextRank(2, 0.01)], settings)
@@ -99,5 +100,5 @@ def test_retrieval_trace_records_attachment_retention_and_character_exclusion(mo
     a._bundle_context("添付", ranked, [*records, *parents], settings, top_k=2, neighbor_child_count=0, max_records=2, max_chars=100)
     context = next(stage for stage in stages if stage["stage"] == "answer_context")
     assert context["attachment_anchor_count"] == 1
-    assert context["attachment_context_count"] == 0
-    assert any(item["reason"] == "context_character_budget" for item in context["excluded"])
+    assert context["attachment_context_count"] == 1
+    assert not context["excluded"]

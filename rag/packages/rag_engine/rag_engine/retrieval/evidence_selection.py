@@ -365,6 +365,7 @@ def evidence_spans(
     definitions_only: bool = False,
     scope_records: Sequence[Any] = (),
     whole_records: bool = False,
+    preserve_records: bool = False,
     priority_source_groups: Sequence[Sequence[str]] = (),
     verified_quotes: Mapping[str, Sequence[str]] | None = None,
     diagnostics: list[dict[str, Any]] | None = None,
@@ -438,6 +439,9 @@ def evidence_spans(
         """生成の入力に描く出典情報の字数（#3831）。予算は描いた本文と補助情報を数える。"""
         return len(prompt_source_context_text(context, document_name=str(getattr(record, "source", "") or "")))
 
+    # 選択済みの全文を分割生成へ渡す経路では、ここで文字上限による抜粋・除外をしない。
+    if preserve_records:
+        budget = 2**63 - 1
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
     seen_documents = set()
@@ -517,7 +521,7 @@ def evidence_spans(
             total += note_cost(info, record)
         return total
 
-    whole = (
+    whole = preserve_records or (
         whole_records
         and not definitions_only
         and sum(whole_record_cost(key, record) for key, record in ordered) <= max(0, budget - budget // 10)

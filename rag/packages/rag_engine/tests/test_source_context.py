@@ -154,7 +154,7 @@ def test_budget_trace_separates_body_metadata_and_format():
     from rag_engine.generation.answering import _evidence_budget_trace
 
     trace = _evidence_budget_trace(get_settings(environ={}, dotenv_path=None), None, spans)
-    assert trace["budget_counts"] == "body_and_metadata"
+    assert trace["budget_counts"] == "body_metadata_and_format"
     assert trace["evidence_metadata_chars"] > 0 and trace["evidence_format_chars"] > 0
     assert trace["evidence_text_chars"] + trace["evidence_metadata_chars"] + trace["evidence_format_chars"] == trace["evidence_block_chars"]
 

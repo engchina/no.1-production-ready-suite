@@ -389,6 +389,7 @@ async def test_answer_diagnostics_keep_the_evidence_budget(
         "effective_chars",
         "source",
         "effective_exceeds_configured",
+        "section_read_budget_chars",
         "span_count",
         "budget_counts",
         "evidence_text_chars",

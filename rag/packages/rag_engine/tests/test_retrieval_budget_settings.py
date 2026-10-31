@@ -100,8 +100,9 @@ class EvidenceBudgetTraceTest(unittest.TestCase):
 
     def test_section_expansion_budget_is_distinguished_from_the_setting(self):
         trace = self._trace(evidence_budget_chars=60000)
-        self.assertEqual((trace["configured_chars"], trace["effective_chars"]), (EVIDENCE_BUDGET_CHARS, 60000))
-        self.assertEqual(trace["source"], "section_expansion")
+        self.assertEqual((trace["configured_chars"], trace["effective_chars"]), (EVIDENCE_BUDGET_CHARS, EVIDENCE_BUDGET_CHARS))
+        self.assertEqual(trace["source"], "configured")
+        self.assertEqual(trace["section_read_budget_chars"], 60000)
         self.assertFalse(trace["effective_exceeds_configured"])
 
     def test_configured_value_from_settings_is_used(self):
