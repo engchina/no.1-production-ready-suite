@@ -689,8 +689,9 @@ class RagPipeline:
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
         if self._attachment_conversation_id and self._approved_faq is None:
-            from app.rag.chat_attachments import attachment_evidence
+            from app.rag.chat_attachments import attachment_evidence, chat_attachment_service
 
+            attachment_status = chat_attachment_service().reading_status()
             # 添付の読み込みと rerank を 1 つの工程の span にする(処理の経過の段。#3475)。
             attachment_chunks = await _observe_stage(
                 trace_id,
@@ -702,6 +703,13 @@ class RagPipeline:
                     report_degraded=degraded.record_degraded,
                 ),
                 progress_callback=stage_callback,
+                result_outcome=lambda _result: (
+                    "success"
+                    if attachment_status == "done"
+                    else "skipped"
+                    if attachment_status == "skipped"
+                    else "error"
+                ),
             )
         effective_scope = scope_with_history_confirmations(
             self._scope, self._selected_history_facts

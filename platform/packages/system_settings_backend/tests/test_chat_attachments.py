@@ -990,3 +990,39 @@ def test_limits_response_defaults_to_disabled() -> None:
         max_bytes=1024, max_files=1, ttl_hours=1, accept=[".txt"], image_enabled=False
     )
     assert limits.enabled is False
+
+
+@pytest.mark.parametrize("product", ["rag", "agent", "nl2sql"])
+@pytest.mark.parametrize("enabled, expected", [(False, "skipped"), (True, "done")])
+def test_attachment_read_records_disabled_as_skipped(
+    product: str, enabled: bool, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from pr_backend_core.observability.tracing import (
+        TracingSettings,
+        configure_tracing,
+        operation_trace,
+        shutdown_tracing,
+    )
+
+    configure_tracing(TracingSettings(), service_name="synthetic", exporter=InMemorySpanExporter())
+    try:
+        store = InMemoryChatAttachmentStore()
+        service = ChatAttachmentService(
+            store, product=product, settings=lambda: SimpleNamespace(), enabled=lambda: enabled
+        )
+        from unittest.mock import Mock
+
+        read = Mock(wraps=service.conversation_records)
+        monkeypatch.setattr(service, "conversation_records", read)
+        with operation_trace("synthetic.run", operation_id="synthetic-run") as summary:
+            assert not service.toolset("synthetic-conversation")
+        step = next(
+            span
+            for span in summary.spans
+            if span.operation_name == f"{product}.attachment_evidence"
+        )
+        assert step.status == expected
+        assert read.call_count == (1 if enabled else 0)
+    finally:
+        shutdown_tracing()
