@@ -945,9 +945,66 @@ def _builtin_data(locale: str = DEFAULT_LOCALE) -> dict[str, Any]:
     return data
 
 
+# 旧公開版の内容照合だけに使う。現行の項目一覧・実行・新規保存へは戻さない。
+_RETIRED_INQUIRY_SPECS = (
+    FieldSpec("inquiry_cues", "document_kind_words", FieldKind.WORD_MAP),
+    FieldSpec("inquiry_cues", "file_data_kind", FieldKind.TEXT),
+    *_fields(
+        "inquiry_cues",
+        _W,
+        "operation_trigger_terms",
+        "condition_trigger_terms",
+        "condition_terms",
+        "file_data_terms",
+    ),
+    FieldSpec(
+        "inquiry_cues",
+        "decision_words",
+        FieldKind.ENUM_MAP,
+        choices=("procedure", "necessity", "permission", "reason", "count", "output_impact"),
+        ingest=False,
+    ),
+    *_fields(
+        "inquiry_cues",
+        _W,
+        "visual_terms",
+        "external_context_terms",
+        "screen_suffixes",
+        "screen_name_bracket_chars",
+        "route_arrow_chars",
+        "interrogative_words",
+        "term_joiner_chars",
+        "page_ordinal_suffixes",
+        "column_words",
+        ingest=False,
+    ),
+)
+
+
+def _retired_inquiry(data: Mapping[str, Any]) -> dict[str, Any]:
+    fields = data.get("inquiry_cues", {})
+    if not isinstance(fields, Mapping):
+        raise LanguagePackError({"inquiry_cues": "旧項目の形式が正しくありません。"})
+    known = {spec.key: spec for spec in _RETIRED_INQUIRY_SPECS}
+    result = {}
+    for key, value in fields.items():
+        spec = known.get(key)
+        if spec is None:
+            raise LanguagePackError({f"inquiry_cues.{key}": "知らない項目です。"})
+        parsed, error = _check(spec, value)
+        canonical = list(parsed) if isinstance(parsed, tuple) else parsed
+        if error or canonical != value:
+            raise LanguagePackError(
+                {f"inquiry_cues.{key}": error or "保存形式が正しくありません。"}
+            )
+        result[key] = parsed
+    return result
+
+
 def complete_compatible_pack(data: Mapping[str, Any]) -> dict[str, Any]:
-    """追加した表示文言の欠けだけを補い、呼び出し元の保存内容は変更しない。"""
-    result = dict(data)
+    """表示文言の欠けと廃止済み項目を実行用に整え、保存内容は変更しない。"""
+    _retired_inquiry(data)
+    result = {key: value for key, value in data.items() if key != "inquiry_cues"}
     labels = data.get("answer_labels")
     if isinstance(labels, Mapping):
         completed = dict(labels)
@@ -973,7 +1030,20 @@ def stored_pack_hash(data: Mapping[str, Any], pack: LanguagePack) -> str:
             and spec.key not in labels
         )
     )
-    return _digest(pack.locale, pack.sections, specs)
+    retired = _retired_inquiry(data)
+    sections = {**pack.sections, "inquiry_cues": retired}
+    specs += tuple(spec for spec in _RETIRED_INQUIRY_SPECS if spec.key in retired)
+    return _digest(pack.locale, sections, specs)
+
+
+def stored_pack_ingest_hash(data: Mapping[str, Any], pack: LanguagePack) -> str:
+    """旧公開版の取込 hash も、保存時の項目集合で検証する。"""
+    if complete_compatible_pack(data) != pack.to_dict():
+        raise ValueError("言語資源は全項目を含む完全な設定で保存してください。")
+    retired = _retired_inquiry(data)
+    specs = tuple(spec for spec in FIELD_SPECS if spec.ingest)
+    specs += tuple(spec for spec in _RETIRED_INQUIRY_SPECS if spec.ingest and spec.key in retired)
+    return _digest(pack.locale, {**pack.sections, "inquiry_cues": retired}, specs)
 
 
 def build_pack(data: Mapping[str, Any]) -> LanguagePack:

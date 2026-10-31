@@ -3568,6 +3568,8 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert client.get("/api/settings/answering").json()["data"] == {
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
+        "rrf_method_ratio": [2.0, 1.0],
+        "rrf_source_ratio": [7.0, 3.0],
         "runtime_terms_search_enabled": False,
         "runtime_terms_answer_enabled": False,
         "query_strategy": "auto_routing",
@@ -3968,3 +3970,33 @@ def test_rule_usage_settings_are_independent(
     assert reloaded.rag_runtime_rules_confirmation_enabled is confirmation
     assert reloaded.rag_runtime_rules_answer_enabled is answer
     assert data["runtime_terms_search_enabled"] is True
+
+
+def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_rrf_method_ratio", (2.0, 1.0))
+    monkeypatch.setattr(settings, "rag_rrf_source_ratio", (7.0, 3.0))
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    initial = client.get("/api/settings/answering").json()["data"]
+    assert initial["rrf_method_ratio"] == [2, 1]
+    assert initial["rrf_source_ratio"] == [7, 3]
+    response = client.patch(
+        "/api/settings/answering", json={"rrf_method_ratio": [1, 3], "rrf_source_ratio": [4, 1]}
+    )
+    assert response.status_code == 200
+    reloaded = Settings(_env_file=env_file)
+    assert reloaded.rag_rrf_method_ratio == (1, 3)
+    assert reloaded.rag_rrf_source_ratio == (4, 1)
+    assert response.json()["data"]["query_strategy"] == initial["query_strategy"]
+    assert response.json()["data"]["rerank_enabled"] == initial["rerank_enabled"]
+
+
+@pytest.mark.parametrize("field", ["rrf_method_ratio", "rrf_source_ratio"])
+@pytest.mark.parametrize("ratio", [[-1, 1], [0, 0], [1], [1, 2, 3]])
+def test_rrf_ratios_reject_invalid_without_saving(
+    field: str, ratio: list[int], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_text() if env_file.exists() else ""
+    assert client.patch("/api/settings/answering", json={field: ratio}).status_code == 422
+    assert (env_file.read_text() if env_file.exists() else "") == before

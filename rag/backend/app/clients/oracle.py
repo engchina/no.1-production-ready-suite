@@ -441,6 +441,14 @@ class KnowledgeBaseNameConflictError(ValueError):
         super().__init__(KNOWLEDGE_BASE_NAME_CONFLICT_MESSAGE)
 
 
+class SearchHits(list[RetrievedChunk]):
+    """空結果と失敗を分け、部分成功の順位を保持する。"""
+
+    status: str = "completed"
+    error: str = ""
+    failure: Exception | None = None
+
+
 class OracleClient:
     """Oracle AI Database 接続・ベクトル検索クライアント。"""
 
@@ -604,6 +612,15 @@ class OracleClient:
                     binds[f"query_{keyword_branch}"] = text_query
             plan.append((vector_branch, keyword_branch, mode))
         branch_rows: list[list[tuple[int, dict[str, object]]]] = [[] for _ in branch_kinds]
+        branch_errors: dict[int, Exception] = {}
+
+        async def read_branch(index: int, operation: Awaitable[None]) -> None:
+            try:
+                await operation
+            except Exception as exc:
+                branch_errors[index] = exc
+                branch_rows[index].clear()
+
         # 検索文ごとの vector / keyword の検索は 1 本ずつの SQL で並行に読む(#2800)。まとめた SQL
         # (branch ごとの CTE。#1498)は、optimizer が文書の集合の副問い合わせを行ごとの FILTER にし、
         # chunk の全件を走査する計画を選んでいた(検証環境で vector 2 本 20 秒・keyword 4 本 6.5 秒 →
@@ -611,15 +628,21 @@ class OracleClient:
         # vector の検索と keyword の検索は、それぞれ処理の経過の段(文書の検索の中の DB の検索)にする
         # (rag_engine の検索の実装と同じ名前。#3436・#3443)。2 つの段は並行に読むので重なる。
         vector_reads: list[Awaitable[None]] = [
-            self._read_vector_branch(
-                binds[f"embedding_{n}"], top_k=top_k, filters=filters, into=branch_rows[n]
+            read_branch(
+                n,
+                self._read_vector_branch(
+                    binds[f"embedding_{n}"], top_k=top_k, filters=filters, into=branch_rows[n]
+                ),
             )
             for n, kind in enumerate(branch_kinds)
             if kind == "vector"
         ]
         keyword_reads: list[Awaitable[None]] = [
-            self._read_keyword_branch(
-                str(binds[f"query_{n}"]), top_k=top_k, filters=filters, into=branch_rows[n]
+            read_branch(
+                n,
+                self._read_keyword_branch(
+                    str(binds[f"query_{n}"]), top_k=top_k, filters=filters, into=branch_rows[n]
+                ),
             )
             for n, kind in enumerate(branch_kinds)
             if kind == "keyword"
@@ -637,6 +660,7 @@ class OracleClient:
                     binds,
                     top_k,
                     filters,
+                    errors=branch_errors,
                 ),
             ),
             _observed_reads(
@@ -651,6 +675,7 @@ class OracleClient:
                     binds,
                     top_k,
                     filters,
+                    errors=branch_errors,
                 ),
             ),
         )
@@ -670,6 +695,21 @@ class OracleClient:
                     for rank, (chunk, row) in enumerate(_distinct_text_hits(ordered), start=1)
                 ]
             )
+        if (
+            branch_kinds
+            and len(branch_errors) == len(branch_kinds)
+            and any(mode == SearchMode.HYBRID for _, _, mode in searches)
+        ):
+            raise next(iter(branch_errors.values()))
+        for index, hits in enumerate(branch_hits):
+            result = SearchHits(hits)
+            if index in branch_errors:
+                result.status = "failed"
+                result.error = type(branch_errors[index]).__name__
+                result.failure = branch_errors[index]
+            elif not hits:
+                result.status = "empty"
+            branch_hits[index] = result
         # 質問の中の引用ラベルに一致する段落(#2024。ラベルの無い検索文は SQL を実行しない)。
         citation_hits = await asyncio.gather(
             *(
@@ -688,7 +728,12 @@ class OracleClient:
             if mode == SearchMode.VECTOR:
                 results.append(vector_hits)
             elif mode == SearchMode.KEYWORD:
-                results.append(keyword_hits)
+                if keyword_branch is None:
+                    skipped = SearchHits()
+                    skipped.status = "not_executed"
+                    results.append(skipped)
+                else:
+                    results.append(keyword_hits)
             else:
                 results.append(
                     _with_citation_hits(
@@ -6757,6 +6802,8 @@ class OracleClient:
         binds: Mapping[str, object],
         top_k: int,
         filters: dict[str, str],
+        *,
+        errors: Mapping[int, Exception] | None = None,
     ) -> dict[str, Any]:
         branches = []
         for index, branch_kind in enumerate(kinds):
@@ -6767,6 +6814,7 @@ class OracleClient:
             branches.append(
                 {
                     "query": queries[index],
+                    "error": type(errors[index]).__name__ if errors and index in errors else "",
                     "expression": binds.get(f"query_{index}"),
                     "raw_count": len(rows),
                     "results": [

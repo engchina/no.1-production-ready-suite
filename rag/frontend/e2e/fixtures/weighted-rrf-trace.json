@@ -1,0 +1,53 @@
+{
+  "fields": [
+    {
+      "label": "目的",
+      "value": "各ランキングの順位と設定した比重を使い、一度の RRF で検索結果を統合します。"
+    },
+    {
+      "label": "結果",
+      "value": "重複除去前 8 件 / 重複除去後 2 件 / 正の寄与がある候補 2 件"
+    },
+    {
+      "label": "ベクトル検索と全文検索の比重",
+      "value": "2：1"
+    },
+    {
+      "label": "原質問と追加検索文の比重",
+      "value": "7：3"
+    },
+    {
+      "label": "検索文",
+      "value": "原質問 1 本 / 追加 1 本"
+    },
+    {
+      "label": "順位定数",
+      "value": "60"
+    },
+    {
+      "label": "指標",
+      "value": "RRF の融合スコア（大きい順）。確率や回答の信頼度ではありません。"
+    }
+  ],
+  "lines": [
+    "一覧 1: 原質問 / ベクトル検索  / 出所: 原質問 / 重み 0.466666667 / 2 件 / 完了",
+    "一覧 2: 原質問 / 全文検索  / 出所: 原質問 / 重み 0.233333333 / 2 件 / 完了",
+    "一覧 3: 追加検索文 / ベクトル検索  / 出所: 質問の言い換え・分解・用語・同義語 / 重み 0.2 / 2 件 / 完了",
+    "一覧 4: 追加検索文 / 全文検索  / 出所: 質問の言い換え・分解・用語・同義語 / 重み 0.1 / 2 件 / 完了",
+    "synthetic-chunk-a: 一覧 1・順位 1 / 寄与 0.00765027322404 / 融合スコア 0.016393442623",
+    "synthetic-chunk-b: 一覧 1・順位 2 / 寄与 0.00752688172043 / 融合スコア 0.0161290322581",
+    "synthetic-chunk-a: 一覧 2・順位 1 / 寄与 0.00382513661202 / 融合スコア 0.016393442623",
+    "synthetic-chunk-b: 一覧 2・順位 2 / 寄与 0.00376344086022 / 融合スコア 0.0161290322581",
+    "synthetic-chunk-a: 一覧 3・順位 1 / 寄与 0.00327868852459 / 融合スコア 0.016393442623",
+    "synthetic-chunk-b: 一覧 3・順位 2 / 寄与 0.00322580645161 / 融合スコア 0.0161290322581",
+    "synthetic-chunk-a: 一覧 4・順位 1 / 寄与 0.0016393442623 / 融合スコア 0.016393442623",
+    "synthetic-chunk-b: 一覧 4・順位 2 / 寄与 0.00161290322581 / 融合スコア 0.0161290322581"
+  ],
+  "code": [
+    {
+      "label": "RRF の計算記録",
+      "language": "json",
+      "text": "{\n  \"method_ratio\": [\n    2,\n    1\n  ],\n  \"source_ratio\": [\n    7,\n    3\n  ],\n  \"rank_constant\": 60,\n  \"expressions\": [\n    {\n      \"query\": \"原質問\",\n      \"weight\": 0.7,\n      \"original\": true\n    },\n    {\n      \"query\": \"追加検索文\",\n      \"weight\": 0.3,\n      \"original\": false\n    }\n  ],\n  \"lists\": [\n    {\n      \"query\": \"原質問\",\n      \"channel\": \"vector\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"weight\": 0.4666666666666666,\n      \"count\": 2,\n      \"raw_count\": 2,\n      \"status\": \"completed\",\n      \"error\": \"\"\n    },\n    {\n      \"query\": \"原質問\",\n      \"channel\": \"keyword\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"weight\": 0.2333333333333333,\n      \"count\": 2,\n      \"raw_count\": 2,\n      \"status\": \"completed\",\n      \"error\": \"\"\n    },\n    {\n      \"query\": \"追加検索文\",\n      \"channel\": \"vector\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"質問の言い換え・分解\",\n        \"用語・同義語\"\n      ],\n      \"weight\": 0.19999999999999998,\n      \"count\": 2,\n      \"raw_count\": 2,\n      \"status\": \"completed\",\n      \"error\": \"\"\n    },\n    {\n      \"query\": \"追加検索文\",\n      \"channel\": \"keyword\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"質問の言い換え・分解\",\n        \"用語・同義語\"\n      ],\n      \"weight\": 0.09999999999999999,\n      \"count\": 2,\n      \"raw_count\": 2,\n      \"status\": \"completed\",\n      \"error\": \"\"\n    }\n  ],\n  \"contributions\": [\n    {\n      \"chunk_id\": \"synthetic-chunk-a\",\n      \"list_index\": 0,\n      \"rank\": 1,\n      \"contribution\": 0.007650273224043715,\n      \"fused_score\": 0.016393442622950817\n    },\n    {\n      \"chunk_id\": \"synthetic-chunk-b\",\n      \"list_index\": 0,\n      \"rank\": 2,\n      \"contribution\": 0.007526881720430107,\n      \"fused_score\": 0.016129032258064516\n    },\n    {\n      \"chunk_id\": \"synthetic-chunk-a\",\n      \"list_index\": 1,\n      \"rank\": 1,\n      \"contribution\": 0.0038251366120218575,\n      \"fused_score\": 0.016393442622950817\n    },\n    {\n      \"chunk_id\": \"synthetic-chunk-b\",\n      \"list_index\": 1,\n      \"rank\": 2,\n      \"contribution\": 0.0037634408602150535,\n      \"fused_score\": 0.016129032258064516\n    },\n    {\n      \"chunk_id\": \"synthetic-chunk-a\",\n      \"list_index\": 2,\n      \"rank\": 1,\n      \"contribution\": 0.0032786885245901635,\n      \"fused_score\": 0.016393442622950817\n    },\n    {\n      \"chunk_id\": \"synthetic-chunk-b\",\n      \"list_index\": 2,\n      \"rank\": 2,\n      \"contribution\": 0.003225806451612903,\n      \"fused_score\": 0.016129032258064516\n    },\n    {\n      \"chunk_id\": \"synthetic-chunk-a\",\n      \"list_index\": 3,\n      \"rank\": 1,\n      \"contribution\": 0.0016393442622950817,\n      \"fused_score\": 0.016393442622950817\n    },\n    {\n      \"chunk_id\": \"synthetic-chunk-b\",\n      \"list_index\": 3,\n      \"rank\": 2,\n      \"contribution\": 0.0016129032258064514,\n      \"fused_score\": 0.016129032258064516\n    }\n  ],\n  \"raw_count\": 8,\n  \"unique_count\": 2,\n  \"candidate_count\": 2\n}"
+    }
+  ]
+}

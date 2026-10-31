@@ -74,7 +74,7 @@ def _limited_text_search_query_variants(
     return tuple(variants[:limit])
 
 
-def _query_expansion_details(expansion: QueryExpansionResult, *, original_query_weighting: bool = True) -> list[str]:
+def _query_expansion_details(expansion: QueryExpansionResult) -> list[str]:
     """使った戦略と理由を示す。検索文そのものは、最終の一覧を示す次の工程に任せる。"""
     details = [
         f"結果: {query_strategy_label(expansion.effective_strategy)}"
@@ -86,14 +86,7 @@ def _query_expansion_details(expansion: QueryExpansionResult, *, original_query_
         details.append("      実データの確認が必要になりそうな点（暫定。回答時に根拠を見て判断し直します）:")
         details.extend(f"      ・{item}" for item in expansion.routing_data_items)
     if expansion.generated_queries:
-        details.append(
-            "影響: 追加した検索文は補助として使います。"
-            + (
-                "順位の融合では原質問の検索結果を優先します。"
-                if original_query_weighting
-                else "順位の融合では全検索文を同じ重みで扱います（RETRIEVAL_ORIGINAL_QUERY_WEIGHTING=false）。"
-            )
-        )
+        details.append("影響: 追加検索文の順位の寄与は「検索結果の統合（RRF）」の設定で決まります。")
     if expansion.vector_only_queries:
         details.append("      仮説文は創作した語を含むため、意味検索（vector）だけに使い、全文検索（Oracle Text）には使いません。")
     return details

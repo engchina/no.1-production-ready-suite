@@ -98,6 +98,8 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 
 
 const ANSWERING_SETTINGS = {
+  rrf_method_ratio: [2, 1],
+  rrf_source_ratio: [7, 3],
   runtime_terms_search_enabled: false,
   runtime_terms_answer_enabled: false,
   runtime_rules_confirmation_enabled: false,
@@ -223,6 +225,8 @@ for (const viewport of [
       await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
       expect(saved).toEqual([
         {
+          rrf_method_ratio: [2, 1],
+          rrf_source_ratio: [7, 3],
           query_strategy: "rag_fusion",
           runtime_terms_search_enabled: false,
           answer_flow: "crag",
@@ -598,4 +602,31 @@ for (const width of [1280, 375]) {
       await expect(confirm).toBeChecked();
     });
   }
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`RRF の比重を検証して保存・再表示できる (${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
+    await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({state: {theme, sidebarCollapsed: true},version: 0})), theme);
+    await mockRetrievalCards(page);
+    const saved: unknown[] = [];
+    await mockAnsweringSettings(page, saved);
+    await page.goto("/settings/retrieval");
+    const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
+    for (const [name,value] of [["ベクトル検索の比重","2"],["全文検索の比重","1"],["原質問の比重","7"],["追加検索文全体の比重","3"]]) {
+      await expect(section.getByRole("spinbutton", {name,exact:true})).toHaveValue(value);
+    }
+    await section.getByRole("spinbutton", {name:"ベクトル検索の比重",exact:true}).fill("0");
+    await section.getByRole("spinbutton", {name:"全文検索の比重",exact:true}).fill("0");
+    await expect(section.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("button", {name:"回答の設定を保存",exact:true})).toBeDisabled();
+    await section.getByRole("spinbutton", {name:"全文検索の比重",exact:true}).fill("3");
+    await section.getByRole("spinbutton", {name:"原質問の比重",exact:true}).fill("4");
+    await section.screenshot({path:testInfo.outputPath(`rrf-ratios-${theme}.png`)});
+    await page.getByRole("button", {name:"回答の設定を保存",exact:true}).click();
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({rrf_method_ratio:[0,3],rrf_source_ratio:[4,3]});
+    await page.reload();
+    await expect(page.getByRole("spinbutton", {name:"原質問の比重",exact:true})).toHaveValue("4");
+    await expectNoPageOverflow(page);
+  });
 }

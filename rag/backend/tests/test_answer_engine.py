@@ -2417,9 +2417,9 @@ async def test_prefetch_warms_search_cache_without_changing_results() -> None:
     plain, plain_oracle, _ = await search(False)
     warmed, warmed_oracle, prefetched = await search(True)
 
-    assert prefetched == [question]
+    assert prefetched == [question, question]
     # 続く検索は元の質問を読み直さず、残りの検索文だけを読む。
-    assert warmed_oracle.queries == plain_oracle.queries == queries
+    assert warmed_oracle.queries == plain_oracle.queries == [q for q in queries for _ in range(2)]
     assert warmed_oracle.filters == plain_oracle.filters
     assert warmed == plain
 
@@ -2661,7 +2661,16 @@ async def test_search_without_answer_runs_the_chat_evidence_flow(
         ("answer_step:根拠検索フロー", "success"),
         ("evidence", "success"),
     ]
-    assert search_steps == expected
+    parallel = {
+        "answer_step:質問の言い換え・分解",
+        "answer_step:用語・同義語による検索文の追加",
+    }
+    assert [e for e in search_steps if e[0] not in parallel] == [
+        e for e in expected if e[0] not in parallel
+    ]
+    assert sorted(e for e in search_steps if e[0] in parallel) == sorted(
+        e for e in expected if e[0] in parallel
+    )
     assert ("answer_step:文書検索", "started") in search_steps or (
         "answer_step:文書検索（1回目）",
         "started",
