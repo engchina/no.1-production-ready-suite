@@ -191,9 +191,10 @@ def test_uncalibrated_support_quote_does_not_recover_a_miscopied_citation():
 
     assert result.answer_text.startswith(CONCLUSION)
     assert "研究本部" not in result.answer_text
-    (mark,) = result.envelope["passage_marks"]
+    mark = next(mark for mark in result.envelope["passage_marks"] if mark["text"] != CONCLUSION)
     assert [reason["code"] for reason in mark["reasons"]] == ["quote_unmatched"]
-    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
+    assert result.generation_trace["finalization"]["summary"]["status"] == "unverified"
+    assert result.generation_trace["finalization"]["summary"]["citations"]["status"] == "unresolved"
     assert result.generation_trace["rounds"][0]["items"][1]["quote_match"] != "audited_paraphrase"
     assert observed_audit(result)["reviews"][1]["support_quote"] == "略号「労」: 労務部。"
     assert result.generation_trace["rounds"][0]["items"][1]["review_assessment"]["effective_support"] == "unknown"
@@ -221,12 +222,13 @@ def test_miscopied_trailing_sentence_without_audit_support_quote_keeps_the_claim
     model = FakeModel([draft(*hops, summary=CONCLUSION)], [_supported(4)])
     result = run(model, ctx, QUESTION).response
     assert result.answer_text.startswith(CONCLUSION)
-    assert result.generation_trace["finalization"]["summary"]["status"] == "kept"
+    assert result.generation_trace["finalization"]["summary"]["status"] == "unverified"
+    assert result.generation_trace["finalization"]["summary"]["citations"]["status"] == "unresolved"
     assert observed_supports(result) == ["supported"] * 4
     assert not observed_audit(result)["reviews"][1]["support_quote"]
     for hop in hops:
         assert hop["text"] in result.answer_text
-    (mark,) = result.envelope["passage_marks"]
+    mark = next(mark for mark in result.envelope["passage_marks"] if mark["text"] != CONCLUSION)
     assert mark["state"] == "unverified"
     assert [reason["code"] for reason in mark["reasons"]] == ["quote_unmatched"]
     assert not result.envelope["removed_passages"]

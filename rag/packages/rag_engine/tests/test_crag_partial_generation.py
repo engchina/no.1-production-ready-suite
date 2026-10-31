@@ -85,7 +85,7 @@ def test_same_business_overview_cannot_reach_operation_generation():
 
 def test_unaudited_partial_answer_keeps_the_claim_and_summary_and_shows_the_missing_aspect():
     # 監査なしでは説明を外さない（#3843・#2738）。確かめた部分の写しを引く説明は印なしで残し、確かめていない観点は
-    # 不足の行で、監査していない要約は警告で示す。
+    # 不足の行で示す。要約の引用対応と意味監査の実施状態は別に記録する。
     def generation(context):
         eid = ids(context, QUESTION)[OPEN]
         return draft(
@@ -116,7 +116,9 @@ def test_unaudited_partial_answer_keeps_the_claim_and_summary_and_shows_the_miss
     assert (projection["bound_claims"], projection["marked_claims"]) == (1, 0)
     marks = {mark["text"]: {reason["code"] for reason in mark["reasons"]} for mark in result.envelope["passage_marks"]}
     assert "unassessed" not in marks.get("設定を保存して処理を完了します。", set())
-    assert "summary_unaudited" in marks["設定の保存まで完了できます。"]
+    assert "summary_unaudited" not in marks.get("設定の保存まで完了できます。", set())
+    assert trace["finalization"]["summary"]["citations"]["status"] == "linked"
+    assert trace["finalization"]["summary"]["semantic_validation"]["execution"] == "not_run"
     assert result.needs_human_review
 
 

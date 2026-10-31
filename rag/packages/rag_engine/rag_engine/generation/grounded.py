@@ -5243,7 +5243,7 @@ class Round:
     # 断定したときだけ置き換える（#1013・#2738）。trace 用。
     summary_reason: str = ""
     # summary を確かめきれなかった理由（監査なし・不支持・保証の過剰・原因の推測など）。summary は残し、段落に
-    # 警告（summary_unaudited）を付ける（#2738）。空なら確かめた summary。
+    # 警告（summary_unaudited）を付ける（#2738）。空でも意味監査の成功とは限らず、実施状態は別に記録する。
     summary_warning: str = ""
     # 監査が回答の時間の上限（確定の分を残した期限）までに終わらず、監査なしの round にした (#1516)。
     audit_cut: bool = False
@@ -6756,6 +6756,87 @@ def summary_basis_snapshot(checked: Sequence[CheckedItem]) -> tuple[tuple[Checke
 def application_summary_snapshot(applications: Sequence[CheckedApplication]) -> tuple[tuple[CheckedApplication, str], ...]:
     """監査済み当てはめの結果・公開状態も最終時点と対応付ける。"""
     return tuple((application, json.dumps(application.to_payload(), ensure_ascii=False, sort_keys=True)) for application in applications)
+
+
+def link_summary_evidence(current: Round, *, published_summary: bool = True) -> Round:
+    """摘要が指す最終本文の引用を結ぶ。参照の整合性で意味の支持を判定しない。"""
+    summary = str(current.summary or "").strip()
+    indexes = list(dict.fromkeys(current.draft.summary_item_indexes))
+    links: list[dict[str, Any]] = []
+    missing: list[int] = []
+    applicable = published_summary and bool(summary) and summary != answer_labels().neutral_summary
+    if applicable and summary == current.draft.summary.strip():
+        for index in indexes:
+            original = current.draft.items[index] if 0 <= index < len(current.draft.items) else None
+            entry = next(
+                (
+                    entry
+                    for entry in current.checked
+                    if original is not None
+                    and (
+                        entry.draft_index == index
+                        or all(
+                            getattr(entry.item, name) == getattr(original, name)
+                            for name in ("text", "kind", "request_id", "applies", "condition")
+                        )
+                    )
+                    and not entry.carried
+                    and not entry.withdrawn
+                    and not entry.unmatched
+                    and entry.confirmed
+                    and original is not None
+                    and entry.item.text == original.text
+                ),
+                None,
+            )
+            citations = (
+                [
+                    {
+                        "evidence_id": cited.span["evidence_id"],
+                        "document_id": str((cited.span.get("document_scope") or [""])[-1] or ""),
+                        "source_id": cited.span.get("source_id"),
+                        "page": cited.span.get("page"),
+                        "quote": cited.item.quote,
+                    }
+                    for cited in item_citations(entry)
+                    if cited.span and cited.item.quote and not cited.removed and not cited.unmatched
+                ]
+                if entry is not None
+                else []
+            )
+            if entry is not None and citations:
+                links.append({"item_index": index, "text": entry.item.text, "citations": citations})
+            else:
+                missing.append(index)
+    status = "not_applicable" if not applicable else "linked" if links and not missing and len(links) == len(indexes) else "unresolved"
+    warning = current.summary_warning
+    if status == "not_applicable":
+        warning = ""
+    elif status == "linked":
+        # 監査を無効にしたことだけでは、引用に対応した摘要を不支持としない。
+        if warning == "監査なし" and current.review_execution == "not_run":
+            warning = ""
+    elif not warning or warning == "監査なし":
+        warning = "要約と最終本文の引用の対応を確認できません。"
+    if applicable and (current.timing.get("audit_error_type") or current.audit_cut) and not warning:
+        warning = "要約を含む回答の意味検査が完了していません。"
+    citations_record: dict[str, Any] = {"status": status, "links": links, "unresolved_item_indexes": missing}
+    sources = [citation for link in links for citation in link["citations"]]
+    if sources:
+        # 原文を含む対応は、保存回答を読む時点の権限で参照全体を再認可する。
+        citations_record.update(
+            capture_scope="summary_citation_links",
+            document_ids=list(dict.fromkeys(citation["document_id"] for citation in sources if citation["document_id"])),
+            document_scope_status="complete" if all(citation["document_id"] for citation in sources) else "unknown",
+        )
+    return replace(
+        current,
+        summary_warning=warning,
+        timing={
+            **current.timing,
+            "summary_citations": citations_record,
+        },
+    )
 
 
 def finalize_summary(

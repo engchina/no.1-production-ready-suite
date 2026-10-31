@@ -2967,3 +2967,46 @@ test("初回の会話作成に失敗しても質問を残し、再送信で会�
   await expect(page.getByTestId("chat-answer-body").getByText(assistantMessage.content, { exact: true })).toBeVisible();
   expect(creates).toBe(2);
 });
+
+for (const legacy of [false, true]) {
+  test(`摘要の引用対応と旧記録の警告を区別する (${legacy ? "legacy" : "linked"})`, async ({ page }, testInfo) => {
+    const summary = "項目 A は記録を識別します。";
+    const text = `${summary}\n\n資料により確認できた事項\n\n・項目 A は記録の識別子です。\n根拠：synthetic-a.txt p.1`;
+    const answerDiagnostics = {
+      execution_steps: [],
+      evidence_tree: [],
+      passage_marks: legacy ? [{
+        text: summary,
+        state: "warning",
+        reasons: [{ code: "summary_unaudited", label: "要約を根拠で確かめていない", detail: "旧記録には摘要の引用対応がありません。" }],
+      }] : [],
+      ...(legacy ? {} : { summary_evidence: {
+        citations: { status: "linked", links: [{ item_index: 0, text: "項目 A は記録の識別子です。", citations: [{ evidence_id: "E1", quote: "項目 A は記録の識別子です。" }] }] },
+        semantic_validation: { execution: "not_run", adopted: false },
+      } }),
+    };
+    const streamBody = [
+      sseStart,
+      `event: delta\ndata: ${JSON.stringify({ model_id: "m1", text })}\n\n`,
+      `event: metadata\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1", trace_id: "t1", elapsed_ms: 5, guardrail_warnings: [], answer_diagnostics: answerDiagnostics })}\n\n`,
+      `event: done\ndata: ${JSON.stringify({ model_id: "m1", message_id: "a1" })}\n\n`,
+    ].join("");
+    await mockChat(page, "ready", [], { streamBody });
+    await page.goto("/chat");
+    await selectSearchAnswerProfile(page, searchAnswerProfile.name);
+    await page.getByRole("button", { name: "新しい会話" }).click();
+    await page.getByRole("textbox").fill("項目 A の意味を教えてください。");
+    await page.getByRole("button", { name: "送信" }).click();
+    const answer = page.getByTestId("answer-text");
+    await expect(answer).toContainText(summary);
+    await expect(page.getByRole("button", { name: "送信", exact: true })).toBeVisible();
+    await expect(answer.getByTestId("answer-passage-mark")).toHaveCount(legacy ? 1 : 0);
+    if (legacy) {
+      await expect(answer.getByTestId("answer-marked-passages")).toContainText("要約を根拠で確かめていない");
+    } else {
+      await expect(answer.getByTestId("answer-marked-passages")).toHaveCount(0);
+    }
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`summary-evidence-${legacy ? "legacy" : "linked"}.png`), fullPage: true });
+  });
+}

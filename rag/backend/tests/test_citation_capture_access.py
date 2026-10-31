@@ -129,3 +129,38 @@ async def test_unscoped_call_snapshot_is_not_exposed_to_regular_viewer() -> None
     assert "private-synthetic-input" not in str(visible)
     assert "withheld" in str(visible)
     assert "private-synthetic-input" in str(diagnostics)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "readable,scope,visible",
+    [
+        ({"doc-a", "doc-b"}, "complete", True),
+        ({"doc-a"}, "complete", False),
+        ({"doc-a", "doc-b"}, "unknown", False),
+    ],
+)
+async def test_summary_links_use_current_acl_for_the_whole_source_chain(
+    readable: set[str], scope: str, visible: bool
+) -> None:
+    links = {
+        "capture_scope": "summary_citation_links",
+        "document_scope_status": scope,
+        "document_ids": ["doc-a", "doc-b"],
+        "status": "linked",
+        "links": [{"item_index": 0, "citations": [{"quote": "匿名の原文引用"}]}],
+    }
+    semantic = {"execution": "not_run", "adopted": False}
+    value = {"summary_evidence": {"citations": links, "semantic_validation": semantic}}
+    original = deepcopy(value)
+    oracle = ReadableDocuments(readable)
+    _, _, result = await withhold_saved_answer(oracle, [], value)
+    assert oracle.calls == [["doc-a", "doc-b"]]
+    assert result == {
+        "summary_evidence": {
+            **({"citations": links} if visible else {}),
+            "semantic_validation": semantic,
+        }
+    }
+    assert ("匿名の原文引用" in str(result)) is visible
+    assert value == original

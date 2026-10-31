@@ -4269,6 +4269,10 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         # 採用した草稿の構造(#1492。確認の項目の事実と規則の分け方・説明の種類と適用)。
         # LLM を呼ばずに対応の決定を replay する材料。
         "grounded_draft": dict((result.generation_trace or {}).get("grounded_draft") or {}),
+        # 摘要の引用対応と意味検査の実施は分けて保存する。旧記録は空のまま扱う。
+        "summary_evidence": dict(
+            ((result.generation_trace or {}).get("finalization") or {}).get("summary") or {}
+        ),
         # 原文と生応答は回答の保存・権限確認に従う。計測やモデル入力へ再注入しない。
         "generation_citation_traces": [
             dict(row["generation_citation_trace"])
