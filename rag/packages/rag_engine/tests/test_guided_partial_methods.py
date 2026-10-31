@@ -14,7 +14,7 @@ from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.generation.request_recovery import request_recovery_plan
 from rag_engine.models.audit_wire import decode_audit_wire, is_audit_wire
-from rag_engine.models.llm import ExternalDataItem, GroundedCitation, GroundedDraft, GroundedItem
+from rag_engine.models.llm import ExternalDataItem, GroundedCitation, GroundedDraft, GroundedItem, RequestScopePlan
 
 QUESTION = "①画面Aの項目Xの現在値と変更登録方法は？②一覧の文字列Yの現在値と変更登録方法は？③対象Tの記号を非表示にできるか？"
 METHOD_A = "画面Aで対象を選択し、項目Xを変更して登録します。"
@@ -83,7 +83,20 @@ def run(*, omit_methods: bool = False, unconditional: bool = False, unknown_c: b
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema is generation_draft_wire_model():
+        if schema is RequestScopePlan:
+            return schema.model_validate(
+                {
+                    "request_coverage": [
+                        {
+                            "request_id": f"Q{index}",
+                            "evidence_ids": [f"E{index}"],
+                            "evidence_scope": [{"evidence_id": f"E{index}", "target": text, "relation": "direct"}],
+                        }
+                        for index, text in enumerate(TEXTS, 1)
+                    ]
+                }
+            )
+        if issubclass(schema, generation_draft_wire_model()):
             return draft
         assert is_audit_wire(schema)
         inputs = json.loads(prompt)
@@ -151,7 +164,7 @@ def run(*, omit_methods: bool = False, unconditional: bool = False, unknown_c: b
         guide_steps=[(key, TEXTS[i], [f"source-{key}"]) for i, key in enumerate(("a", "b", "c"))],
         guide_step_contracts=CONTRACTS,
     )
-    assert len(calls) == 2 and len(audit_inputs) == 1 and result.audit_calls == 1
+    assert len(calls) == 3 and calls[0] == "RequestScopePlan" and len(audit_inputs) == 1 and result.audit_calls == 1
     return result, audit_inputs
 
 

@@ -426,10 +426,9 @@ def test_system_prompt_asks_only_for_the_minimum() -> None:
     assert "指定なし（使わない）" in SYSTEM_PROMPT
     # 細部まで確かめさせる旧い指示（欄の例に限らずすべて項目にする）を持たない。
     assert "すべて項目にしてください" not in SYSTEM_PROMPT
-    # 長さの上限（#1715 で 2,269 文字に短くした）。#1761 で対象の表を推測で決めない規則 11 と、
-    # 「その他（自由入力）」の直しの指示の扱い（規則 8）を足したため 2,800 にした。
-    # #1917 で確認事項の上限と優先度（規則 12）・画面の名前（規則 13）を足したため 2,900 にした。
-    assert len(SYSTEM_PROMPT) < 2900
+    import re
+
+    assert re.findall(r"(?m)^## Step (\d+):", SYSTEM_PROMPT) == ["1", "2", "3", "4", "5"]
     # 規則 12 の件数は、プログラムの上限（MAX_OPEN_QUESTIONS）と同じ。
     from app.features.nl2sql.sql_requirement import MAX_OPEN_QUESTIONS
 

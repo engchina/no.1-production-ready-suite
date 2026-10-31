@@ -2779,7 +2779,7 @@ def synthesize_grounded_answer(
             try:
                 # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
                 # 呼び出しにだけ使う)。
-                generation_system = grounded.resolve_prompt("generation.system", grounded.GENERATE_SYSTEM_PROMPT)
+                generation_system = grounded.generation_system_prompt(question)
                 if runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed:
                     generation_system += grounded.continue_prompt_steps(
                         generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
@@ -2804,7 +2804,7 @@ def synthesize_grounded_answer(
                     render=render_generation,
                     evidence_text=grounded.evidence_block_text,
                     system=generation_system,
-                    schema=generation_draft_wire_model().model_json_schema(),
+                    schema=grounded.generation_output_model(question).model_json_schema(),
                     provider_id=provider,
                     protected_ids=protected_ids,
                 )

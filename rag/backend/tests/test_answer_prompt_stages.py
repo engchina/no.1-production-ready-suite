@@ -263,7 +263,11 @@ def test_readonly_generation_validation_and_evaluation_are_executed_step_prompts
         PREMISE_CONSISTENCY_SYSTEM_PROMPT,
         VALIDATION_SYSTEM_PROMPT,
     )
-    from rag_engine.generation.grounded import AUDIT_SYSTEM_PROMPT, GENERATE_SYSTEM_PROMPT
+    from rag_engine.generation.grounded import (
+        AUDIT_SYSTEM_PROMPT,
+        GENERATE_SYSTEM_PROMPT,
+        PLANNED_GENERATE_SYSTEM_PROMPT,
+    )
     from rag_engine.generation.table_revision import REVISION_SYSTEM_PROMPT
 
     displayed: list[str] = []
@@ -273,6 +277,7 @@ def test_readonly_generation_validation_and_evaluation_are_executed_step_prompts
         displayed.extend(part["content"] for part in parts)
     for executed in (
         GENERATE_SYSTEM_PROMPT,
+        PLANNED_GENERATE_SYSTEM_PROMPT,
         AUDIT_SYSTEM_PROMPT,
         VALIDATION_SYSTEM_PROMPT,
         PREMISE_CONSISTENCY_SYSTEM_PROMPT,

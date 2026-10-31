@@ -4028,6 +4028,7 @@ export const ja = {
   "settings.answerPrompts.stage.answer_validation.condition":
     "生成後の LLM 監査を有効にしたとき、検索した根拠から生成した最終回答の検証、または MCP の資料との照合（rag_validate_answer）を呼んだとき",
   "settings.answerPrompts.part.assumptionSystem": "「前提を示して回答する」のときに追加する システムプロンプト",
+  "settings.answerPrompts.part.plannedSystem": "小問の根拠計画を使う回答生成のシステムプロンプト",
   "settings.answerPrompts.part.system": "システムプロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",
