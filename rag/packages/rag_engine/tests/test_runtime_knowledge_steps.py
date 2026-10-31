@@ -22,8 +22,9 @@ from rag_engine.generation import answering
 from rag_engine.generation.answering import SIMPLE_RETRIEVAL_LABEL, STANDARD_ANSWER_FLOW_LABEL, answer_question_result
 from rag_engine.resources.tracing import bind_trace_observer
 
-TERMS_STEP = "用語・同義語の確認"
-RULES_STEP = "回答ルールの確認"
+TERMS_STEP = answering.TERM_SEARCH_STEP
+ANSWER_TERMS_STEP = answering.TERM_ANSWER_STEP
+RULES_STEP = answering.RULE_ANSWER_STEP
 
 _TERM = {"term": "合成用語A", "aliases": ["合成別名A"], "description": "合成の説明"}
 _INACTIVE_TERM = {"term": "合成用語Z", "status": "deprecated"}
@@ -60,8 +61,21 @@ def _write(path: Path, *, terms: list[dict] | None = None, rules: list[dict] | N
     return path
 
 
-def _run(knowledge_path: Path, question: str = "合成用語Aの合成の期限は？", observer: _SpanRecorder | None = None):
-    settings = replace(_rerank_ready_settings(), runtime_knowledge_path=knowledge_path)
+def _run(
+    knowledge_path: Path,
+    question: str = "合成用語Aの合成の期限は？",
+    observer: _SpanRecorder | None = None,
+    *,
+    search: bool = False,
+    answer: bool = False,
+):
+    settings = replace(
+        _rerank_ready_settings(),
+        runtime_knowledge_path=knowledge_path,
+        runtime_terms_search_enabled=search,
+        runtime_terms_answer_enabled=answer,
+        runtime_rules_answer_enabled=True,
+    )
     search_result = _hybrid_result(_stored_child("chunk-docling-c000001", 1, "合成の本文"))
     with (
         patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
@@ -98,109 +112,46 @@ def _fields(step: dict) -> dict[str, str]:
     return {field["label"]: field["value"] for field in step.get("details", {}).get("fields", [])}
 
 
-def test_terms_and_rules_are_separate_steps_in_order(tmp_path: Path) -> None:
-    """2 つの工程は別の記録・別の span で、同じ親の子として用語・同義語 → 回答ルールの順に並ぶ。"""
+@pytest.mark.parametrize("search,answer", [(False, False), (True, False), (False, True), (True, True)])
+def test_independent_steps_and_rules(tmp_path: Path, search: bool, answer: bool) -> None:
+    """実行経路でも用途を分け、回答ルールはどちらの設定にも依存しない。"""
     recorder = _SpanRecorder()
-    result = _run(_write(tmp_path / "rk.json", terms=[_TERM], rules=[_RULE]), observer=recorder)
-
-    names = [step["name"] for step in result.execution_steps]
-    assert "用語・ルールの確認" not in names
-    index = names.index(TERMS_STEP)
-    assert names[index + 1] == RULES_STEP
-    steps = result.execution_steps
-    assert steps[index]["depth"] == steps[index + 1]["depth"]
-    for step in (steps[index], steps[index + 1]):
-        assert step["status"] == "complete"
-        assert step["elapsed_seconds"] >= 0
-
-    spans = [(name, parent) for name, parent in recorder.spans if name in {f"stage:{TERMS_STEP}", f"stage:{RULES_STEP}"}]
-    assert [name for name, _ in spans] == [f"stage:{TERMS_STEP}", f"stage:{RULES_STEP}"]
-    # 同じ親の子（片方がもう片方の中に入れ子にならない）。
-    assert spans[0][1] == spans[1][1]
-
-
-def test_matched_terms_and_rules_show_their_own_counts_matches_and_impacts(tmp_path: Path) -> None:
-    path = _write(
-        tmp_path / "rk.json",
-        terms=[_TERM, _INACTIVE_TERM],
-        rules=[_RULE, _RULE | {"id": "rule-b", "title": "合成回答ルールB", "triggers": ["合成の別条件"]}, _INACTIVE_RULE],
-    )
-    steps = _steps(_run(path))
-
-    terms = _fields(steps[TERMS_STEP])
-    assert terms["目的"] == "登録済みの用語・同義語を質問に当て、別名を検索に使います。"
-    assert terms["結果"] == "一致: 合成用語A"
-    assert terms["有効な登録"] == "1 件（登録 2 件）"
-    assert terms["一致した用語"] == "合成用語A（別名: 合成別名A）"
-    assert terms["影響"] == "一致した用語の別名を補助の検索文に加えます。"
-    assert "採用した確認・回答ルール" not in terms
-
-    rules = _fields(steps[RULES_STEP])
-    assert rules["目的"] == "確認・回答ルールの用途・優先度・排他設定から、確認と回答の指示を選びます。"
-    assert rules["結果"] == "一致: 合成回答ルールA"
-    assert rules["有効な登録"] == "2 件（登録 3 件）"
-    assert rules["採用した確認・回答ルール"] == "合成回答ルールA"
-    assert rules["影響"] == "回答生成に使う指示 1 件を渡します。"
-    assert "一致した用語" not in rules and "一致したルール" not in rules
-
-
-def test_no_registration_guides_to_each_tab(tmp_path: Path) -> None:
-    """登録が無い（ファイルが無い）ときは、それぞれの登録先のタブへ案内し、件数と影響は出さない。"""
-    steps = _steps(_run(tmp_path / "missing.json"))
-
-    terms = _fields(steps[TERMS_STEP])
-    rules = _fields(steps[RULES_STEP])
-    assert terms["結果"] == "未登録：検索・回答プロファイルの「プロファイルの知識」の「用語・同義語」で登録できます"
-    assert rules["結果"] == "未登録：検索・回答プロファイルの「プロファイルの知識」の「回答ルール」で登録できます"
-    for fields in (terms, rules):
-        assert "有効な登録" not in fields and "影響" not in fields
-
-
-def test_only_one_kind_registered_is_distinguished(tmp_path: Path) -> None:
-    """用語・同義語だけを登録したとき、回答ルールの工程は未登録として示す（件数も種類ごと）。"""
-    steps = _steps(_run(_write(tmp_path / "rk.json", terms=[_TERM])))
-
-    assert _fields(steps[TERMS_STEP])["有効な登録"] == "1 件（登録 1 件）"
-    rules = _fields(steps[RULES_STEP])
-    assert rules["結果"].startswith("未登録：")
-    assert rules["有効な登録"] == "0 件（登録 0 件）"
-    assert "影響" not in rules
-
-
-def test_no_match_shows_result_without_impact(tmp_path: Path) -> None:
-    path = _write(tmp_path / "rk.json", terms=[_TERM], rules=[_RULE])
-    steps = _steps(_run(path, question="合成の別の質問は？"))
-
-    terms = _fields(steps[TERMS_STEP])
-    rules = _fields(steps[RULES_STEP])
-    assert terms["結果"] == "一致なし：登録済みの有効な用語・同義語に一致しませんでした"
-    assert rules["結果"] == "一致なし：登録済みの有効な回答ルールに一致しませんでした"
-    assert terms["有効な登録"] == "1 件（登録 1 件）" and rules["有効な登録"] == "1 件（登録 1 件）"
-    for fields in (terms, rules):
-        assert "影響" not in fields
-    assert "一致した用語" not in terms and "採用した確認・回答ルール" not in rules
-
-
-def test_only_inactive_registrations_guide_to_the_use_setting(tmp_path: Path) -> None:
-    steps = _steps(_run(_write(tmp_path / "rk.json", terms=[_INACTIVE_TERM], rules=[_INACTIVE_RULE])))
-
-    for name, tab in ((TERMS_STEP, "用語・同義語"), (RULES_STEP, "回答ルール")):
+    result = _run(_write(tmp_path / "rk.json", terms=[_TERM], rules=[_RULE]), observer=recorder, search=search, answer=answer)
+    steps = _steps(result)
+    for name, enabled in ((TERMS_STEP, search), (ANSWER_TERMS_STEP, answer)):
+        assert steps[name]["status"] == ("complete" if enabled else "skipped")
         fields = _fields(steps[name])
-        assert fields["結果"].startswith(f"有効な登録なし：検索・回答プロファイルの「プロファイルの知識」の「{tab}」")
-        assert fields["有効な登録"] == "0 件（登録 1 件）"
+        if enabled:
+            assert fields["用語"] == _TERM["term"]
+            assert fields["別名"] == _TERM["aliases"][0]
+            assert ("説明" in fields) is (name == ANSWER_TERMS_STEP)
+        else:
+            assert "設定がオフ" in fields["結果"]
+            assert "用語" not in fields
+    assert any(_RULE["title"] in line for line in steps[RULES_STEP]["details"]["lines"])
+    assert "用語・同義語の確認" not in steps
+    for name in (TERMS_STEP, ANSWER_TERMS_STEP):
+        assert any(span == f"stage:{name}" for span, _ in recorder.spans)
+    if search:
+        assert any("合成別名A" in line for line in steps[TERMS_STEP]["details"].get("lines", []))
 
 
-def test_load_error_continues_in_both_steps_and_is_reported_once(tmp_path: Path) -> None:
+@pytest.mark.parametrize("terms", [[], [_INACTIVE_TERM], [_TERM]])
+def test_enabled_without_match_explains_no_usage(tmp_path: Path, terms: list[dict]) -> None:
+    steps = _steps(_run(_write(tmp_path / "rk.json", terms=terms), question="合成の別の質問は？", search=True, answer=True))
+    for name in (TERMS_STEP, ANSWER_TERMS_STEP):
+        assert steps[name]["status"] == "complete"
+        assert "一致しなかった" in _fields(steps[name])["結果"]
+        assert "用語" not in _fields(steps[name])
+
+
+def test_load_error_is_reported_once(tmp_path: Path) -> None:
     path = tmp_path / "rk.json"
     path.write_text("{broken", encoding="utf-8")
     reported: list[str] = []
     with patch.object(answering, "report_degraded", side_effect=lambda kind, exc: reported.append(kind)):
-        steps = _steps(_run(path))
-
+        _run(path)
     assert reported.count("runtime_knowledge") == 1
-    for name in (TERMS_STEP, RULES_STEP):
-        assert steps[name]["status"] == "補助情報なしで続行"
-        assert "読込エラー: JSONDecodeError" in steps[name]["details"]["lines"]
 
 
 @pytest.mark.parametrize("scope", [("合成の条件 A", ())], ids=["scope"])
@@ -227,16 +178,86 @@ def test_chosen_conditions_are_shown_in_the_rules_step(tmp_path: Path, scope: tu
             scope=scope,
         )
     steps = _steps(result)
-    assert "確認で選んだ条件: 合成の条件 A" in steps[RULES_STEP]["details"]["lines"]
+    assert result.runtime_knowledge.scope_context == "合成の条件 A"
     assert not any("確認で選んだ条件" in line for line in steps[TERMS_STEP].get("details", {}).get("lines", []))
 
 
-def test_confirmation_only_rules_describe_confirmation_without_generation_impact(tmp_path: Path) -> None:
+def test_confirmation_only_rules_do_not_inject_generation_instructions(tmp_path: Path) -> None:
     path = _write(
         tmp_path / "rk.json",
         rules=[_RULE | {"purpose": "confirmation", "content": "", "clarification": {"question": "対象は？", "options": []}}],
     )
-    rules = _fields(_steps(_run(path))[RULES_STEP])
-    assert rules["採用した確認・回答ルール"] == "合成回答ルールA"
-    assert rules["影響"] == "回答前の確認に使う設定 1 件を採用しました。"
-    assert "回答生成に使う" not in str(rules)
+    result = _run(path)
+    assert result.runtime_knowledge.rules_for_stage("generation") == ()
+    assert _steps(result)[answering.RULE_CONFIRMATION_STEP]["status"] == "skipped"
+
+
+def test_term_matching_and_rewrite_overlap_and_remain_original_only(tmp_path: Path, monkeypatch) -> None:
+    from threading import Barrier
+    from dataclasses import replace
+    from rag_engine.knowledge import runtime_knowledge as rk
+
+    barrier = Barrier(2, timeout=3)
+    original_match = rk._matched_terms
+    seen = []
+
+    def match(question, terms, limit):
+        seen.append(question)
+        barrier.wait()
+        return original_match(question, terms, limit)
+
+    def expand(question, strategy, settings, **kwargs):
+        barrier.wait()
+        return replace(answering._base_query_expansion(question, strategy), generated_queries=("合成用語Z の設定",))
+
+    monkeypatch.setattr(rk, "_matched_terms", match)
+    monkeypatch.setattr(answering, "build_query_expansion", expand)
+    path = _write(tmp_path / "rk.json", terms=[_TERM, {"term": "合成用語Z", "aliases": ["再帰追加しない別名"]}])
+    result = _run(path, search=True)
+    assert seen == ["合成用語Aの合成の期限は?"]
+    assert [term.term for term in result.runtime_knowledge.matched_terms] == [_TERM["term"]]
+    assert "再帰追加しない別名" not in result.runtime_knowledge.expanded_question
+    steps = _steps(result)
+    assert steps[TERMS_STEP]["depth"] == steps["質問の言い換え・分解"]["depth"]
+    names = list(steps)
+    assert names.index("質問の言い換え・分解") < names.index(TERMS_STEP) < names.index("検索文をまとめ、検索語を作る")
+
+
+def test_term_failure_does_not_stop_independent_rewrite(tmp_path: Path, monkeypatch) -> None:
+    from rag_engine.knowledge import runtime_knowledge as rk
+    from dataclasses import replace
+
+    calls = []
+
+    def fail(*args):
+        raise ValueError("synthetic")
+
+    def expand(question, strategy, settings, **kwargs):
+        calls.append(question)
+        return replace(answering._base_query_expansion(question, strategy), generated_queries=("合成の期限の説明",))
+
+    monkeypatch.setattr(rk, "_matched_terms", fail)
+    monkeypatch.setattr(answering, "build_query_expansion", expand)
+    path = _write(tmp_path / "rk.json", terms=[_TERM])
+    result = _run(path, search=True)
+    assert calls and result.answer
+    assert _steps(result)[TERMS_STEP]["status"] == "補助情報なしで続行"
+    assert not result.runtime_knowledge.retrieval_terms
+
+
+@pytest.mark.parametrize("search,answer", [(False, False), (True, False), (False, True), (True, True)])
+def test_model_receives_only_enabled_terms_and_independent_rules(tmp_path: Path, search: bool, answer: bool) -> None:
+    path = _write(tmp_path / "rk.json", terms=[_TERM], rules=[_RULE])
+    prompts = []
+    original_model = echo_model
+
+    def model(*args, **kwargs):
+        prompts.append(" ".join(str(arg) for arg in args[:2]))
+        return original_model(*args, **kwargs)
+
+    with patch.dict(_run.__globals__, {"echo_model": model}):
+        result = _run(path, search=search, answer=answer)
+    joined = "\n".join(prompts)
+    assert ("合成の説明" in joined) is answer
+    assert "合成のルールの本文" in joined
+    assert result.runtime_knowledge.original_question in joined

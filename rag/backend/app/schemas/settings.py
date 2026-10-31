@@ -749,6 +749,10 @@ class AnsweringSettingsData(BaseModel):
     (``PROFILE_GLOBAL_QUERY_FIELDS``)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
+    runtime_rules_confirmation_enabled: bool = False
+    runtime_rules_answer_enabled: bool = False
+    runtime_terms_search_enabled: bool = False
+    runtime_terms_answer_enabled: bool = False
     query_strategy: QueryStrategy
     answer_flow: AnswerFlow
     answer_audit_mode: Literal["none", "standard", "detailed"]
@@ -771,6 +775,10 @@ class AnsweringSettingsData(BaseModel):
 class AnsweringSettingsUpdate(BaseModel):
     """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
 
+    runtime_rules_confirmation_enabled: bool | None = None
+    runtime_rules_answer_enabled: bool | None = None
+    runtime_terms_search_enabled: bool | None = None
+    runtime_terms_answer_enabled: bool | None = None
     query_strategy: QueryStrategy | None = None
     answer_flow: AnswerFlow | None = None
     answer_audit_mode: Literal["none", "standard", "detailed"] | None = None

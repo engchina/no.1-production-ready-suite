@@ -83,8 +83,6 @@ def chunk_metadata_contract_hash() -> str:
         {
             "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
             "search_text_schema_version": SEARCH_TEXT_SCHEMA_VERSION,
-
-
         }
     )
 

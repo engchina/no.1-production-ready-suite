@@ -4281,7 +4281,11 @@ async def rule_clarification_step(
     質問に一致したルールが確認を持てば、検索・回答をせずに needs_clarification を返す。
     """
     profile_id = arguments.search_answer_profile_id
-    if profile_id is None or arguments.skip_clarification:
+    if (
+        profile_id is None
+        or arguments.skip_clarification
+        or not get_settings().rag_runtime_rules_confirmation_enabled
+    ):
         return request, None
     # 利用者の範囲外のプロファイルは、検索と同じく無いもの（None）になる。
     oracle = OracleClient()
@@ -4485,8 +4489,14 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
             terms_omitted=0,
             load_failed=True,
         )
+    context = context.with_term_usage(
+        search=False, answer=get_settings().rag_runtime_terms_answer_enabled
+    )
+    context = context.with_rule_usage(
+        confirmation=False, answer=get_settings().rag_runtime_rules_answer_enabled
+    )
     generation_rules = context.rules_for_stage("generation")
-    if not (generation_rules or context.matched_terms):
+    if not (generation_rules or context.answer_terms):
         return None
     remaining = PROFILE_KNOWLEDGE_MAX_CHARS
     rules: list[ProfileKnowledgeRule] = []
@@ -4496,7 +4506,7 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
             rules.append(_knowledge_rule(rule))
             remaining -= size
     terms: list[ProfileKnowledgeTerm] = []
-    for term in context.matched_terms:
+    for term in context.answer_terms:
         size = len(term.term) + sum(map(len, term.aliases)) + len(term.description)
         size += len(term.source)
         if len(terms) < PROFILE_KNOWLEDGE_TERMS_MAX and size <= remaining:
@@ -4509,7 +4519,7 @@ async def _profile_knowledge(arguments: RetrieveEvidenceInput) -> ProfileKnowled
         rules=rules,
         terms=terms,
         rules_omitted=len(generation_rules) - len(rules),
-        terms_omitted=len(context.matched_terms) - len(terms),
+        terms_omitted=len(context.answer_terms) - len(terms),
     )
 
 

@@ -187,7 +187,7 @@ def test_runtime_knowledge_failure_is_reported_and_the_step_shows_only_the_type(
     # 補助情報なしで回答を続ける。
     assert "answer" in result.answer
     assert ("runtime_knowledge", "JSONDecodeError") in reported
-    assert "読込エラー: JSONDecodeError" in result.question_display
+    assert result.runtime_knowledge.error == "JSONDecodeError"
     assert SECRET not in result.question_display and "secret-dir" not in result.question_display
 
 
@@ -398,7 +398,7 @@ def test_article_original_question_search_failure_is_reported(monkeypatch: pytes
     options = {"chunk_run_id": "", "retrieval_queries": ["書類 表記"], "settings": settings}
 
     with _recording(article_question=lambda: "取引先から届いた書類の補正を求めるべきか") as reported:
-        found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings)
+        found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), settings)
 
     assert found == []
     assert reported == ([("article_original_question", "Boom")] if fail else [])

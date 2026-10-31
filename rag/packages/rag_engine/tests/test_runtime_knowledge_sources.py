@@ -27,15 +27,23 @@ _RULE = {"id": "rule-a", "title": "条件Bの規則", "triggers": ["条件B"], "
 def _context(tmp_path: Path, question: str, *, terms: list[Any], rules: list[Any]) -> RuntimeKnowledgeContext:
     path = tmp_path / RUNTIME_KNOWLEDGE_FILE_NAME
     path.write_text(json.dumps({"schema_version": 1, "terms": terms, "rules": rules}, ensure_ascii=False), encoding="utf-8")
-    return build_runtime_knowledge_context(question, tmp_path, path)
+    return build_runtime_knowledge_context(
+        question,
+        tmp_path,
+        path,
+        rules_confirmation_enabled=True,
+        rules_answer_enabled=True,
+        terms_search_enabled=True,
+        terms_answer_enabled=True,
+    )
 
 
 @pytest.mark.parametrize(
     ("question", "terms", "rules", "expected"),
     [
         ("略称A の期限は？", [_TERM], [], ("用語・同義語",)),
-        ("条件B の期限は？", [], [_RULE], ("確認・回答ルール",)),
-        ("略称A で条件B の期限は？", [_TERM], [_RULE], ("用語・同義語", "確認・回答ルール")),
+        ("条件B の期限は？", [], [_RULE], ()),
+        ("略称A で条件B の期限は？", [_TERM], [_RULE], ("用語・同義語",)),
         (
             "期限は？",
             [],
@@ -51,9 +59,9 @@ def test_query_source_names_what_added_words(
 ) -> None:
     context = _context(tmp_path, question, terms=terms, rules=rules)
 
-    assert context.expanded_question != context.original_question
+    assert (context.expanded_question != context.original_question) is bool(expected)
     assert context.expansion_sources == expected
-    assert context.query_source == " + ".join(("原質問", *expected))
+    assert context.query_source == (" + ".join(("原質問", *expected)) if expected else "原質問のみ")
     assert context.to_payload()["query_source"] == context.query_source
 
 

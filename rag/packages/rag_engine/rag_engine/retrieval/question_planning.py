@@ -1,10 +1,4 @@
-"""質問文から、後続処理が実際に使う情報だけを読み取る。
-
-以前は回答方針（executor）・タスク・質問タイプも判定して表示していたが、検索戦略にも
-回答フローにも分岐がなく、表示のためだけのラベルになっていた。後続が使うのは、
-質問理解（検索の絞り込み・候補の加点・回答に渡す条件）だけである。根拠の画像を回答に添付するかは、質問ではなく
-回答のモデルが画像を読めるかで決める（#3444）。
-"""
+"""入力の正規化と原質問の保存。検索条件や種類を推定しない。"""
 
 from __future__ import annotations
 
@@ -15,7 +9,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class QuestionPlan:
-    """質問理解を保持します。"""
+    """正規化した原質問を保持します。"""
 
     original_question: str
 
@@ -25,6 +19,6 @@ class QuestionPlan:
 
 
 def plan_question(question: str) -> QuestionPlan:
-    """質問文を解析します。"""
+    """質問文の文字幅と外側の空白を正規化します。"""
     text = unicodedata.normalize("NFKC", str(question or "")).strip()
     return QuestionPlan(text)

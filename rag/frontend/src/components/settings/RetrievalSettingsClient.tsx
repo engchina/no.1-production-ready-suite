@@ -3,6 +3,7 @@
 import { FormSkeleton, PageBody, TimedLoadingState } from "@production-ready/ui";
 
 import { ErrorState } from "@/components/StateViews";
+import { AnswerTermSettingsCard } from "@/components/settings/AnswerTermSettingsCard";
 import { AnsweringSettingsCard } from "@/components/settings/AnsweringSettingsCard";
 import { t } from "@/lib/i18n";
 import {
@@ -33,6 +34,7 @@ export function RetrievalSettingsClient() {
           testId="settings-retrieval-loading"
         />
       ) : null}
+      <AnswerTermSettingsCard field="runtime_rules_confirmation_enabled" />
       <AnsweringSettingsCard />
       {prompts.isPending ? <FormSkeleton /> : prompts.isError || !prompts.data ? (
         <ErrorState message={t("settings.answerPrompts.loadError")} onRetry={() => void prompts.refetch()} />

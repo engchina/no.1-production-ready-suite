@@ -420,6 +420,7 @@ function ProgressNotice({
  */
 function CurrentStepRow({
   activityIndicator,
+  primary = true,
   step,
   level,
   slow,
@@ -428,6 +429,7 @@ function CurrentStepRow({
   testId,
 }: {
   activityIndicator: boolean;
+  primary?: boolean;
   /** 今の段階。終端でないのに実行中・待機中の段階が無いときは null（「処理を続けています」を出す）。 */
   step: ChatProgressStep | null;
   /**
@@ -449,7 +451,7 @@ function CurrentStepRow({
   return (
     <div
       className="grid min-w-0"
-      data-testid={testId ? `${testId}-current` : undefined}
+      data-testid={testId ? primary ? `${testId}-current` : `${testId}-running-${step?.id}` : undefined}
       data-status="running"
       data-step-id={step?.id ?? ""}
       data-slow={slow ? "true" : "false"}
@@ -474,7 +476,7 @@ function CurrentStepRow({
         </div>
         <span
           className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tabular-nums"
-          data-testid={testId ? `${testId}-current-elapsed` : undefined}
+          data-testid={testId ? primary ? `${testId}-current-elapsed` : `${testId}-elapsed-${step?.id}` : undefined}
         >
           {labels.formatDuration(Math.floor(current.elapsedMs / 1000) * 1000)}
         </span>
@@ -556,8 +558,7 @@ export function ChatProgress({
   const state: ProgressState = active ? "running" : cancelled ? "cancelled" : failed ? "failed" : "done";
   // 今の段階は、最後に始まった実行中の末端の段（子の段を持たない段）。子の段を持つ実行中の段（親の工程）は今の段階に
   // せず、開始順の位置に回さない実行中の印で出す（#2840 / #3436）。親の子が終わって次の子がまだ始まっていない間は、
-  // 親の 1 段下に「処理を続けています」を出す（親の行を回さない）。実行中の段階が無い（段階の間・開始前）ときは、次に
-  // 進む段階を今の段階として出す。
+  // 親の子が途切れても、追跡データにない継続処理の行は足さない。
   const hasChildren = runTimelineHasChildren(steps);
   const runningLeaf = active ? lastRunningStep(steps, hasChildren) : undefined;
   const runningParent = active && !runningLeaf ? lastRunningStep(steps) : undefined;
@@ -569,9 +570,6 @@ export function ChatProgress({
   // その位置に置く。今の段階を包む実行中の親の工程も開始順の位置に出す（親の行が出ないまま子だけが出て、親が
   // 終わったときに子の上へ差し込まれて一覧が入れ替わらない）。待機中の段階は出さない（今の段階の代わりのときは末尾）。
   const started = steps.filter((step) => step.status !== "pending");
-  const currentIndex = current ? started.indexOf(current) : -1;
-  const beforeCurrent = currentIndex >= 0 ? started.slice(0, currentIndex) : started;
-  const afterCurrent = currentIndex >= 0 ? started.slice(currentIndex + 1) : [];
   // 一覧の開閉（3 製品で同じ。製品は選ばない。#2265）。実行中は開き（何をしているかを見せる。#2096）、完了したら
   // 閉じる（回答の本文を主にする。#2118）。完了した状態で出したとき（会話の履歴から開いた往復）も閉じる。失敗は
   // どこで止まったかを見せるため開いたまま。利用者が開閉したら同じ表示の間はその状態を保ち、実行中と終端が
@@ -587,7 +585,7 @@ export function ChatProgress({
   const overallStartedAt = operationTimestampMs(startedAt) ?? firstStartedAtMs(steps);
   // 段階の切り替わりと、取り直しの開始を読み上げる。
   // 子が途切れた親の工程の中では、閉じたときの見出しと読み上げに親の工程の名前を出す。
-  const currentLabel = active ? (current?.label ?? runningParent?.label ?? labels.working) : "";
+  const currentLabel = active ? (current?.label ?? runningParent?.label ?? labels.status.running) : "";
   // 遅延は今の段階の経過時間で判断し（#1176）、一度出たら処理が終わるまで消さない（#2426。段階が変わって今の段階の
   // 経過時間が 0 に戻っても出直さない）。有限でない閾値（承認待ちなど）の間は出さず、出ていた案内も忘れる。
   const slowEnabled = active && Number.isFinite(slowAfterMs);
@@ -631,22 +629,19 @@ export function ChatProgress({
         >
           {/* 1 本のタイムライン: 始まった段階を開始順に並べ、今の段階の行をその位置に出す（#2309 / #2840）。 */}
           <div className="grid min-w-0 gap-1.5">
-            {beforeCurrent.length > 0 ? (
-              <StepList steps={beforeCurrent} bars={false} labels={labels} testId={testId} />
-            ) : null}
-            {/* 終端になるまで今の行を必ず出す（段階の外で処理が続くときは「処理を続けています」。#1176）。 */}
-            <CurrentStepRow
-              activityIndicator={activityIndicator}
-              step={current ?? null}
-              level={runningParent ? (runningParent.level ?? 0) + 1 : undefined}
-              slow={slow}
-              reconnecting={reconnecting}
-              labels={labels}
-              testId={testId}
-            />
-            {afterCurrent.length > 0 ? (
-              <StepList steps={afterCurrent} bars={false} labels={labels} testId={testId} />
-            ) : null}
+            {started.map((step) => step.status === "running" && !hasChildren[steps.indexOf(step)] ? (
+              <CurrentStepRow key={step.id}
+                activityIndicator={activityIndicator}
+                primary={step === current}
+                step={step}
+                slow={slow}
+                reconnecting={reconnecting}
+                labels={labels}
+                testId={testId}
+              />
+            ) : (
+              <StepList key={step.id} steps={[step]} bars={false} labels={labels} testId={testId} />
+            ))}
             {footer}
           </div>
         </Disclosure>

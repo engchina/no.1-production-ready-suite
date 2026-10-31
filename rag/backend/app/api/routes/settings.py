@@ -511,6 +511,10 @@ async def update_answering_settings(
     updates = {
         field: value
         for field, value in (
+            ("rag_runtime_rules_confirmation_enabled", payload.runtime_rules_confirmation_enabled),
+            ("rag_runtime_rules_answer_enabled", payload.runtime_rules_answer_enabled),
+            ("rag_runtime_terms_search_enabled", payload.runtime_terms_search_enabled),
+            ("rag_runtime_terms_answer_enabled", payload.runtime_terms_answer_enabled),
             ("rag_query_strategy", payload.query_strategy),
             ("rag_answer_flow", payload.answer_flow),
             ("rag_answer_audit_mode", payload.answer_audit_mode),
@@ -551,6 +555,18 @@ async def update_answering_settings(
                 "RAG_SECTION_EXPANSION_INPUT_TOKEN_PERCENT": str(
                     candidate.rag_section_expansion_input_token_percent
                 ),
+                "RAG_RUNTIME_RULES_CONFIRMATION_ENABLED": _format_env_bool(
+                    candidate.rag_runtime_rules_confirmation_enabled
+                ),
+                "RAG_RUNTIME_RULES_ANSWER_ENABLED": _format_env_bool(
+                    candidate.rag_runtime_rules_answer_enabled
+                ),
+                "RAG_RUNTIME_TERMS_SEARCH_ENABLED": _format_env_bool(
+                    candidate.rag_runtime_terms_search_enabled
+                ),
+                "RAG_RUNTIME_TERMS_ANSWER_ENABLED": _format_env_bool(
+                    candidate.rag_runtime_terms_answer_enabled
+                ),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
                 "RAG_ANSWER_FLOW": candidate.rag_answer_flow,
                 "RAG_ANSWER_AUDIT_MODE": candidate.rag_answer_audit_mode,
@@ -582,6 +598,10 @@ async def update_answering_settings(
 
 def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
     return AnsweringSettingsData(
+        runtime_rules_confirmation_enabled=settings.rag_runtime_rules_confirmation_enabled,
+        runtime_rules_answer_enabled=settings.rag_runtime_rules_answer_enabled,
+        runtime_terms_search_enabled=settings.rag_runtime_terms_search_enabled,
+        runtime_terms_answer_enabled=settings.rag_runtime_terms_answer_enabled,
         query_strategy=settings.rag_query_strategy,
         answer_flow=settings.rag_answer_flow,
         answer_audit_mode=settings.rag_answer_audit_mode,

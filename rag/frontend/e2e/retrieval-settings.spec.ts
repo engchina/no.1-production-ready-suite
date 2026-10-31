@@ -98,6 +98,10 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 
 
 const ANSWERING_SETTINGS = {
+  runtime_terms_search_enabled: false,
+  runtime_terms_answer_enabled: false,
+  runtime_rules_confirmation_enabled: false,
+  runtime_rules_answer_enabled: false,
   query_strategy: "auto_routing",
   answer_flow: "standard_rag",
   answer_audit_mode: "none",
@@ -540,3 +544,57 @@ test("生成後の根拠選別を独立して保存・破棄し再読込でき�
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("evidence-refinement-settings.png") });
 });
+
+
+for (const width of [1280, 375]) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`登録知識の全体スイッチは独立して保存できる (${width}px, ${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript((state) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })), { theme, sidebarCollapsed: width === 375 });
+      await mockRetrievalCards(page);
+      const saved: Record<string, unknown>[] = [];
+      await mockAnsweringSettings(page, saved);
+      await page.goto("/settings/retrieval");
+      const search = page.getByRole("switch", { name: "用語・同義語による検索文の追加", exact: true });
+      const confirm = page.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true });
+      await expect(search).not.toBeChecked();
+      await expect(confirm).not.toBeChecked();
+      const area = page.getByRole("region", { name: "検索文の作成" });
+      await expect(area.getByRole("combobox", { name: "質問の言い換え・分解", exact: true })).toContainText("自動");
+      await expect(search).toHaveAccessibleDescription(/原質問.*生成した検索文には.*行いません/);
+      await search.click();
+      await page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+      await expect(search).toBeChecked();
+      expect(saved.at(-1)).toMatchObject({ runtime_terms_search_enabled: true, query_strategy: "auto_routing" });
+      expect(saved.at(-1)).not.toHaveProperty("runtime_terms_answer_enabled");
+      const confirmCard = page.getByTestId("runtime_rules_confirmation_enabled");
+      await confirm.click();
+      await confirmCard.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+      await expect(confirmCard.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeDisabled();
+      expect(saved.at(-1)).toEqual({ runtime_rules_confirmation_enabled: true });
+      await area.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`search-expressions-${width}-${theme}.png`) });
+      await expectNoPageOverflow(page);
+      await page.goto("/settings/prompts");
+      for (const [testId, label, field] of [
+        ["answer-term-settings-card", "回答生成での用語・同義語の使用", "runtime_terms_answer_enabled"],
+        ["runtime_rules_answer_enabled", "回答生成での登録ルールの使用", "runtime_rules_answer_enabled"],
+      ]) {
+        const card = page.getByTestId(testId);
+        const toggle = card.getByRole("switch", { name: label, exact: true });
+        await expect(toggle).not.toBeChecked();
+        await toggle.click();
+        const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+        await save.click();
+        await expect(save).toBeDisabled();
+        expect(saved.at(-1)).toEqual({ [field]: true });
+      }
+      await page.getByTestId("answer-term-settings-card").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`answer-knowledge-${width}-${theme}.png`) });
+      await expectNoPageOverflow(page);
+      await page.goto("/settings/retrieval");
+      await expect(search).toBeChecked();
+      await expect(confirm).toBeChecked();
+    });
+  }
+}

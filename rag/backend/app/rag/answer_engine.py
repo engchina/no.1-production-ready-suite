@@ -8,13 +8,9 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
 
   複数の検索文は原質問主軸の重み付き RRF で融合し、同じ親の兄弟 chunk と
   親本文(``parent_text``)で親子を復元する。
-  質問の理解(``inquiry_conditions``)が名指しした文書名・ページは検索条件に足し、
-  profile / business_match のチャネルを RRF に加える(#546)。文書の分類は chunk の
-  metadata(``document.classification``)に載せ、業務の候補の絞り込みに使う(#545)。
-  文書の 1 ページ目の本文(chunk set ごとに 1 つ)も ``document.first_page_context`` に載せ、
-  回答の「文書の背景」に使う(#557)。
-  質問が名指しした業務(``business_domains``)は、検索範囲の文書の大分類の語の一覧から
-  照合して rag_engine へ注入する(domain profile の ``business_patterns`` は使わない。#553)。
+  質問の語から検索条件・候補の除外・加点は推定しない。利用者の明示した範囲と認可を保つ。
+  文書の分類は metadata（document.classification）、
+  1 ページ目の本文は document.first_page_context に載せる。
 - 画面目録の連携(``RAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
   ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
   読んで rag_engine へ注入する(検索結果に出なかった画面も候補に加える)。
@@ -623,6 +619,12 @@ def build_engine_settings(
         # 常に「未実行」になる(#275)。
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
+        "RUNTIME_RULES_CONFIRMATION_ENABLED": "1"
+        if settings.rag_runtime_rules_confirmation_enabled
+        else "0",
+        "RUNTIME_RULES_ANSWER_ENABLED": "1" if settings.rag_runtime_rules_answer_enabled else "0",
+        "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",
+        "RUNTIME_TERMS_ANSWER_ENABLED": "1" if settings.rag_runtime_terms_answer_enabled else "0",
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
         "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
         "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),

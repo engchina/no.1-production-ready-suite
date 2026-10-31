@@ -41,14 +41,21 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             _write_runtime_knowledge(output_dir)
 
             knowledge = load_runtime_knowledge(output_dir)
-            context = build_runtime_knowledge_context("出荷業務で再発行できない条件は？", output_dir)
+            context = build_runtime_knowledge_context(
+                "出荷業務で再発行できない条件は？",
+                output_dir,
+                rules_confirmation_enabled=True,
+                rules_answer_enabled=True,
+                terms_search_enabled=True,
+                terms_answer_enabled=True,
+            )
 
         self.assertTrue(knowledge.loaded)
         self.assertEqual([term.term for term in knowledge.terms], ["納品書"])
         self.assertEqual([rule.rule_id for rule in knowledge.rules], ["reissue"])
         self.assertIn("納品書", context.expanded_question)
         self.assertIn("出荷業務", context.expanded_question)
-        self.assertIn("再発行条件", context.expanded_question)
+        self.assertNotIn("再発行条件", context.expanded_question)
         self.assertTrue(context.has_matches)
         self.assertIn("[Runtime Glossary / Rules]", context.prompt_context())
 
@@ -62,7 +69,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             output_dir = Path(tmp)
             _write_runtime_knowledge(output_dir)
 
-            context = build_runtime_knowledge_context("概要を教えてください。", output_dir)
+            context = build_runtime_knowledge_context(
+                "概要を教えてください。",
+                output_dir,
+                rules_confirmation_enabled=True,
+                rules_answer_enabled=True,
+                terms_search_enabled=True,
+                terms_answer_enabled=True,
+            )
 
         self.assertFalse(context.has_matches)
         self.assertFalse(context.is_active)
@@ -74,7 +88,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
             (output_dir / RUNTIME_KNOWLEDGE_FILE_NAME).write_text("{bad json", encoding="utf-8")
 
             knowledge = load_runtime_knowledge(output_dir)
-            context = build_runtime_knowledge_context("再発行", output_dir)
+            context = build_runtime_knowledge_context(
+                "再発行",
+                output_dir,
+                rules_confirmation_enabled=True,
+                rules_answer_enabled=True,
+                terms_search_enabled=True,
+                terms_answer_enabled=True,
+            )
 
         self.assertFalse(knowledge.loaded)
         self.assertTrue(knowledge.error)
@@ -114,7 +135,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            context = build_runtime_knowledge_context("承認済みと古い用語、再確認、下書きについて", output_dir)
+            context = build_runtime_knowledge_context(
+                "承認済みと古い用語、再確認、下書きについて",
+                output_dir,
+                rules_confirmation_enabled=True,
+                rules_answer_enabled=True,
+                terms_search_enabled=True,
+                terms_answer_enabled=True,
+            )
             trace = context.to_payload()
 
         self.assertEqual([term.term for term in context.matched_terms], ["承認済み"])
@@ -125,7 +153,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
     def test_status_guides_to_the_profile_knowledge_screen(self):
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
-            missing = build_runtime_knowledge_context("概要は？", output_dir)
+            missing = build_runtime_knowledge_context(
+                "概要は？",
+                output_dir,
+                rules_confirmation_enabled=True,
+                rules_answer_enabled=True,
+                terms_search_enabled=True,
+                terms_answer_enabled=True,
+            )
             (output_dir / RUNTIME_KNOWLEDGE_FILE_NAME).write_text(
                 json.dumps(
                     {
@@ -136,7 +171,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            inactive = build_runtime_knowledge_context("古い用語は？", output_dir)
+            inactive = build_runtime_knowledge_context(
+                "古い用語は？",
+                output_dir,
+                rules_confirmation_enabled=True,
+                rules_answer_enabled=True,
+                terms_search_enabled=True,
+                terms_answer_enabled=True,
+            )
 
         # 案内の行き先は、今の画面にある検索・回答プロファイルの「プロファイルの知識」の各タブ（#3071 / #3451）。
         for status_of, tab in ((runtime_terms_status, "用語・同義語"), (runtime_rules_status, "回答ルール")):
@@ -163,7 +205,14 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             _write_runtime_knowledge(output_dir)
-            settings = replace(get_settings(dotenv_path=None), output_dir=output_dir, runtime_knowledge_path=None)
+            settings = replace(
+                get_settings(dotenv_path=None),
+                output_dir=output_dir,
+                runtime_terms_search_enabled=True,
+                runtime_terms_answer_enabled=True,
+                runtime_rules_answer_enabled=True,
+                runtime_knowledge_path=None,
+            )
             records = [
                 AnswerRecord(
                     id="chunk-docling-c000001",
@@ -229,22 +278,15 @@ class RuntimeKnowledgeTests(unittest.TestCase):
 
         self.assertTrue(any("納品書" in question for question in tokenized_questions))
         self.assertIn("納品書", retrieval_queries[1])
-        self.assertIn("再発行条件", retrieval_queries[1])
+        self.assertNotIn("再発行条件", retrieval_queries[1])
         self.assertIn("[Runtime Glossary / Rules]", prompt)
         self.assertIn("再発行条件", prompt)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
-        self.assertIn("用語・同義語の確認", result.question_display)
-        self.assertIn("結果: 一致: 納品書", result.question_display)
-        self.assertIn("影響: 一致した用語の別名を補助の検索文に加えます。", result.question_display)
-        self.assertIn("回答ルールの確認", result.question_display)
-        self.assertIn("結果: 一致: 再発行条件", result.question_display)
-        self.assertIn("影響: 回答生成に使う指示 1 件を渡します。", result.question_display)
-        # 検索文の出どころは、原質問に語を足したもの（用語・同義語と回答ルール）と、用語と別名だけの検索文を分ける（#3490）。
-        self.assertIn("[原質問 + 用語・同義語 + 確認・回答ルール] ", result.question_display)
-        self.assertIn("[用語・同義語だけ] 納品書 出荷業務 nouhinsho", result.question_display)
-        self.assertNotIn("用語・ルール", result.question_display)
-        self.assertEqual(payload["runtime_knowledge"]["query_source"], "原質問 + 用語・同義語 + 確認・回答ルール")
-        self.assertTrue(payload["text_search_query_source"].startswith("原質問 + 用語・同義語 + 確認・回答ルール"))
+        self.assertIn("用語・同義語による検索文の追加", result.question_display)
+        self.assertIn("回答生成での登録ルールの使用", result.question_display)
+        self.assertIn("[原質問 + 用語・同義語] ", result.question_display)
+        self.assertNotIn("[原質問 + 用語・同義語 + 確認・回答ルール]", result.question_display)
+        self.assertEqual(payload["runtime_knowledge"]["query_source"], "原質問 + 用語・同義語")
         self.assertNotIn(RUNTIME_KNOWLEDGE_SEPARATOR, result.question_display)
         self.assertNotIn("パス:", result.question_display)
         self.assertIn("text_search_queries", payload)

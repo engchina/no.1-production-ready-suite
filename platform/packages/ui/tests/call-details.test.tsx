@@ -35,6 +35,11 @@ it("思考と回答を JSON に隠さず本文として別に描く", () => {
     } }} />));
     const click = (label: string) => act(() => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(el => el.textContent === label)!.click());
     expect(host.querySelector('[data-call-readable]')?.textContent).toContain("合成の質問");
+    const copy = host.querySelector<HTMLButtonElement>('button[aria-label="本文をコピー"]')!;
+    expect(copy).not.toBeNull();
+    expect(copy.textContent).not.toContain("本文をコピー");
+    expect(host.querySelector("[data-call-body]")!.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
     click("思考"); expect(host.querySelector('[data-call-readable]')?.textContent).toContain("合成の思考");
     expect(host.querySelector('[data-call-readable]')?.textContent).not.toContain("合成の回答");
     expect(host.querySelector('[data-call-readable] pre')).toBeNull();

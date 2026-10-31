@@ -1451,7 +1451,9 @@ test("質問の理解は段階順の独立 Tab で差分を保存し、認識結
   await panel.getByRole("textbox", { name: "テストする質問" }).fill("対象 A が失敗した原因は何ですか。対処方法も教えてください。");
   await panel.getByRole("button", { name: "試す", exact: true }).click();
   await expect(panel.getByTestId("question-understanding-result")).toBeVisible();
-  await expect(panel.getByRole("textbox", { name: "認識結果の詳細" })).not.toHaveValue(/"inquiry"/);
+  for (const kind of ["saved", "draft"]) {
+    await expect(panel.locator(`#question-understanding-${kind}-result`)).not.toHaveValue(/"inquiry"/);
+  }
   expect(previewBody).toEqual({ text: "対象 A が失敗した原因は何ですか。対処方法も教えてください。", overrides: { question_cues: { cause_cues: ["なぜ", "原因", "どうして"] } } });
   expect(saves).toBe(0);
   await page.screenshot({ path: test.info().outputPath("question-understanding-preview.png"), fullPage: true });

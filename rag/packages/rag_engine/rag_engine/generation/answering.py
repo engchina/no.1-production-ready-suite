@@ -984,8 +984,23 @@ def build_adb_hybrid_answer_context(
         raise AdbHybridSearchUnavailable("No chunk run was found. Run chunking, then create and save embeddings to ADB.")
 
     # SDK・評価からの直接呼出では未指定。回答入口と CRAG の各回は読込済みの結果を渡す。
-    runtime = runtime_knowledge or build_runtime_knowledge_context(question, settings.output_dir, settings.runtime_knowledge_path)
-    grounded = " ".join(label for term in runtime.matched_terms for label in term.labels())
+    runtime = (
+        (
+            runtime_knowledge
+            or build_runtime_knowledge_context(
+                question,
+                settings.output_dir,
+                settings.runtime_knowledge_path,
+                rules_confirmation_enabled=settings.runtime_rules_confirmation_enabled,
+                rules_answer_enabled=settings.runtime_rules_answer_enabled,
+                terms_search_enabled=settings.runtime_terms_search_enabled,
+                terms_answer_enabled=settings.runtime_terms_answer_enabled,
+            )
+        )
+        .with_rule_usage(confirmation=settings.runtime_rules_confirmation_enabled, answer=settings.runtime_rules_answer_enabled)
+        .with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
+    )
+    grounded = " ".join(label for term in runtime.retrieval_terms for label in term.labels())
     candidate_queries = _retrieval_queries(question, retrieval_queries)
     queries, rejected = filter_queries(question, candidate_queries, grounded_text=grounded)
     if trusted_queries:
@@ -2126,6 +2141,8 @@ def _grounded_prompt(
     """
     from rag_engine.generation.grounded import build_context_block
 
+    _record_term_usage(runtime_knowledge, answer=True)
+
     preface = "\n\n".join(
         section
         for section in (
@@ -2461,7 +2478,7 @@ def _audit_glossary(runtime_knowledge: RuntimeKnowledgeContext | None) -> list[d
     """質問に当たった用語のうち別名のあるものの、名前と別名（監査の入力。#2823）。"""
     if runtime_knowledge is None:
         return []
-    return [{"term": term.term, "aliases": list(term.aliases)} for term in runtime_knowledge.matched_terms if term.aliases]
+    return [{"term": term.term, "aliases": list(term.aliases)} for term in runtime_knowledge.answer_terms if term.aliases]
 
 
 def _invalid_structured_output(exc: Exception) -> bool:
@@ -2504,6 +2521,11 @@ def synthesize_grounded_answer(
     recover_requests があれば、未回答の要求を共有予算内で1回だけ探し直す。通常は各回で生成と監査を1回ずつ行う。
     生成した根拠計画の構造が不正な場合だけ、1回修正する。
     """
+    if runtime_knowledge is not None:
+        runtime_knowledge = runtime_knowledge.with_rule_usage(
+            confirmation=settings.runtime_rules_confirmation_enabled, answer=settings.runtime_rules_answer_enabled
+        ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
+
     from rag_engine.generation import grounded
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, fit_generation_evidence
@@ -4101,11 +4123,134 @@ def _format_classification_filter(classification_filter: ClassificationFilter) -
     return " / ".join(parts)
 
 
+RULE_CONFIRMATION_STEP = "登録ルールによる確認の使用"
+RULE_ANSWER_STEP = "回答生成での登録ルールの使用"
+
+
+def _record_rule_usage(runtime: RuntimeKnowledgeContext, *, confirmation: bool) -> None:
+    name = RULE_CONFIRMATION_STEP if confirmation else RULE_ANSWER_STEP
+    stage = "confirmation" if confirmation else "generation"
+    enabled = runtime.rules_confirmation_enabled if confirmation else runtime.rules_answer_enabled
+    with _execution_step(name) as step:
+        if not enabled:
+            step.skip(f"設定がオフのため、{name}をスキップしました。")
+            return
+        if runtime.error:
+            _record_runtime_knowledge_load(step, runtime)
+            return
+        rules = tuple(rule for rule in runtime.rules_for_stage(stage) if "pinned" not in rule.tags)
+        if not rules:
+            step.result("適用する登録ルールはありません。")
+        else:
+            step.result(f"登録ルール {len(rules)} 件を選択しました。確認・回答の実行結果とは別です。")
+            for rule in rules:
+                step.add(f"採用: {rule.title or rule.rule_id}（用途: {'確認' if confirmation else '回答'}、優先度: {rule.priority}）")
+        reasons = {
+            "selected": "採用",
+            "lower_priority": "上位の優先度のルールを採用",
+            "unresolved_exclusive_conflict": "同順位の排他指示が競合",
+            "duplicate_instruction": "指示が重複",
+            "application_budget": "採用件数の上限",
+            "other_purpose": "別の用途",
+            "no_confirmation": "確認設定なし",
+            "no_generation_instruction": "回答指示なし",
+            "invalid_instruction_kind": "未対応の指示の種類",
+        }
+        for item in runtime.rule_applications:
+            if item["stage"] == stage:
+                step.add(f"{item['title'] or item['id']}: {reasons.get(item['reason'], item['reason'])}")
+
+
+TERM_SEARCH_STEP = "用語・同義語による検索文の追加"
+TERM_ANSWER_STEP = "回答生成での用語・同義語の使用"
+
+
+def _describe_term_usage(
+    step: _ExecutionStep, runtime: RuntimeKnowledgeContext | None, *, answer: bool, queries: Sequence[str] = ()
+) -> None:
+    name = TERM_ANSWER_STEP if answer else TERM_SEARCH_STEP
+    enabled = runtime is not None and (runtime.terms_answer_enabled if answer else runtime.terms_search_enabled)
+    if not enabled:
+        step.skip(f"設定がオフのため、{name}をスキップしました。")
+        return
+    assert runtime is not None
+    if not runtime.matched_terms:
+        step.result(
+            "登録した用語・同義語に一致しなかったため、回答補助には使用していません。"
+            if answer
+            else "登録した用語・同義語に一致しなかったため、検索文の追加はありません。"
+        )
+        return
+    step.field("用途", "回答の補助情報（資料の根拠とは別）" if answer else "全文検索・ベクトル検索への検索文の追加")
+    for term in runtime.matched_terms:
+        step.field("用語", term.term)
+        step.field("別名", " / ".join(term.aliases))
+        if answer:
+            step.field("説明", term.description)
+    if answer:
+        step.result("一致した用語・別名・説明を回答生成の補助情報として提供します。")
+    elif queries:
+        step.result(f"検索文 {len(queries)} 本を追加します。")
+        step.add(*queries)
+    else:
+        step.result("一致した用語はありますが、追加する検索文はありません。")
+
+
+def _record_term_usage(runtime: RuntimeKnowledgeContext | None, *, answer: bool, queries: Sequence[str] = ()) -> None:
+    with _execution_step(TERM_ANSWER_STEP if answer else TERM_SEARCH_STEP) as step:
+        _describe_term_usage(step, runtime, answer=answer, queries=queries)
+
+
+def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) -> RuntimeKnowledgeContext:
+    """独立した兄弟工程。完全な原質問だけを照合し、モデルの言い換えを再入力しない。"""
+    with _execution_step(TERM_SEARCH_STEP) as step:
+        if not (settings.runtime_terms_search_enabled or settings.runtime_terms_answer_enabled):
+            _describe_term_usage(step, runtime, answer=False)
+            return runtime
+        try:
+            terms = build_runtime_knowledge_context(
+                runtime.original_question,
+                settings.output_dir,
+                settings.runtime_knowledge_path,
+                terms_search_enabled=settings.runtime_terms_search_enabled,
+                terms_answer_enabled=settings.runtime_terms_answer_enabled,
+                match_terms=settings.runtime_terms_search_enabled or settings.runtime_terms_answer_enabled,
+            )
+            if terms.error:
+                if terms.failure is not None:
+                    report_degraded("runtime_terms", terms.failure)
+                step.status = "補助情報なしで続行"
+                step.add(f"読込エラー: {terms.error}")
+                step.result(f"用語の照合に失敗したため、用語の追加なしで続行します（{terms.error}）。")
+                return runtime
+            result = replace(runtime, matched_terms=terms.matched_terms).with_term_usage(
+                search=settings.runtime_terms_search_enabled,
+                answer=settings.runtime_terms_answer_enabled,
+            )
+            query = matched_term_query(result)
+            additions = _dedupe_queries(
+                tuple(
+                    value
+                    for value in (result.expanded_question, query)
+                    if value and _dedupe_query_key(value) != _dedupe_query_key(result.original_question)
+                )
+            )
+            if settings.original_query_only:
+                additions = ()
+            _describe_term_usage(step, result, answer=False, queries=additions)
+            return result
+        except Exception as exc:
+            report_degraded("runtime_terms", exc)
+            step.status = "補助情報なしで続行"
+            step.result(f"用語の照合に失敗したため、用語の追加なしで続行します（{type(exc).__name__}）。")
+            return runtime
+
+
 def matched_term_query(runtime_knowledge: RuntimeKnowledgeContext | None) -> str:
     """質問に一致した用語・同義語の、用語と別名だけを並べた検索文（#2163）。一致が無ければ空。"""
     if runtime_knowledge is None:
         return ""
-    labels = _dedupe_queries(tuple(label for term in runtime_knowledge.matched_terms for label in term.labels()))
+    labels = _dedupe_queries(tuple(label for term in runtime_knowledge.retrieval_terms for label in term.labels()))
     return " ".join(labels)
 
 
@@ -4645,8 +4790,16 @@ def _catalog_terms(question: str, settings: Settings) -> tuple[Any, ...]:
     """
     from rag_engine.retrieval.article_catalog import CatalogTerm
 
-    runtime = build_runtime_knowledge_context(question, settings.output_dir, settings.runtime_knowledge_path)
-    return tuple(CatalogTerm(term=term.term, aliases=tuple(term.aliases), description=term.description) for term in runtime.matched_terms)
+    runtime = build_runtime_knowledge_context(
+        question,
+        settings.output_dir,
+        settings.runtime_knowledge_path,
+        rules_confirmation_enabled=settings.runtime_rules_confirmation_enabled,
+        rules_answer_enabled=settings.runtime_rules_answer_enabled,
+        terms_search_enabled=settings.runtime_terms_search_enabled,
+        terms_answer_enabled=settings.runtime_terms_answer_enabled,
+    )
+    return tuple(CatalogTerm(term=term.term, aliases=tuple(term.aliases), description=term.description) for term in runtime.retrieval_terms)
 
 
 @dataclass(frozen=True)
@@ -5224,49 +5377,23 @@ def answer_question_result(
     question_plan = plan_question(normalized_question)
     # 検索・回答プロファイルの知識の「用語・同義語」と「回答ルール」は使い道が違うので、別の工程（別の span）で示す
     # （#3451）。登録は 1 回だけ読み、最初の工程で読み込みと照合をして、次の工程は同じ結果の回答ルールを示す。
-    with _execution_step("用語・同義語の確認", "登録済みの用語・同義語を質問に当て、別名を検索に使います。") as step:
-        runtime_knowledge = build_runtime_knowledge_context(
-            normalized_question,
-            settings.output_dir,
-            settings.runtime_knowledge_path,
-        )
-        if runtime_knowledge.error and runtime_knowledge.failure is not None:
-            report_degraded("runtime_knowledge", runtime_knowledge.failure)
-        if _record_runtime_knowledge_load(step, runtime_knowledge):
-            step.result(runtime_terms_status(runtime_knowledge))
-            if runtime_knowledge.loaded:
-                step.field(
-                    "有効な登録",
-                    f"{runtime_knowledge.active_term_count} 件（登録 {runtime_knowledge.registered_term_count} 件）",
-                )
-            step.field(
-                "一致した用語",
-                join_values(
-                    term.term + (f"（別名: {'・'.join(term.aliases)}）" if term.aliases else "") for term in runtime_knowledge.matched_terms
-                ),
-            )
-            if runtime_knowledge.matched_terms:
-                step.impact("一致した用語の別名を補助の検索文に加えます。")
+    runtime_knowledge = build_runtime_knowledge_context(
+        normalized_question,
+        settings.output_dir,
+        settings.runtime_knowledge_path,
+        rules_confirmation_enabled=settings.runtime_rules_confirmation_enabled,
+        rules_answer_enabled=settings.runtime_rules_answer_enabled,
+        match_terms=False,
+        terms_search_enabled=settings.runtime_terms_search_enabled,
+        terms_answer_enabled=settings.runtime_terms_answer_enabled,
+    )
+    if runtime_knowledge.error and runtime_knowledge.failure is not None:
+        report_degraded("runtime_knowledge", runtime_knowledge.failure)
 
-    with _execution_step("回答ルールの確認", "確認・回答ルールの用途・優先度・排他設定から、確認と回答の指示を選びます。") as step:
-        if _record_runtime_knowledge_load(step, runtime_knowledge):
-            step.result(runtime_rules_status(runtime_knowledge))
-            if runtime_knowledge.loaded:
-                step.field(
-                    "有効な登録",
-                    f"{runtime_knowledge.active_rule_count} 件（登録 {runtime_knowledge.registered_rule_count} 件）",
-                )
-            step.field("採用した確認・回答ルール", join_values(rule.title or rule.rule_id for rule in runtime_knowledge.matched_rules))
-            generation_rules = runtime_knowledge.rules_for_stage("generation")
-            confirmation_rules = runtime_knowledge.rules_for_stage("confirmation")
-            if generation_rules:
-                step.impact(f"回答生成に使う指示 {len(generation_rules)} 件を渡します。")
-            if confirmation_rules:
-                step.impact(f"回答前の確認に使う設定 {len(confirmation_rules)} 件を採用しました。")
-        if scope is not None:
-            runtime_knowledge = runtime_knowledge.with_scope(*scope)
-            step.add(f"確認で選んだ条件: {runtime_knowledge.scope_context}")
-            step.impact("選んだ条件を回答時の前提として渡し、対象範囲の資料だけを根拠にします。")
+    _record_rule_usage(runtime_knowledge, confirmation=True)
+    _record_rule_usage(runtime_knowledge, confirmation=False)
+    if scope is not None:
+        runtime_knowledge = runtime_knowledge.with_scope(*scope)
 
     base_expansion = _base_query_expansion(normalized_question, query_strategy_value)
     # 検索語は質問拡張後に確定する。準備不足で中止した場合は検索していないため記録しない。
@@ -5324,50 +5451,60 @@ def answer_question_result(
     # 戻り値を返さない差し替え実装でも動くよう、型を確認してから使う。
     legacy_notice = _legacy_schema_notice(readiness.legacy_document_count if isinstance(readiness, AdbSearchReadiness) else 0)
 
-    with _execution_step("質問拡張戦略", "原質問の言い回しでは届きにくい資料の表現を補う検索文を作ります。") as step:
-        # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
-        # 先読みの thread はこの工程の中で文脈を写す（先読みの埋め込み・DB の検索の span をこの工程の子にする。#3475）。
-        prefetch = _start_original_query_prefetch(
-            normalized_question,
-            query_strategy_value,
-            settings,
-            top_k=chunk_top_k,
-        )
-        if caller_planned:
-            # 呼び出し元が検索文を作った（#2651）。LLM で言い換えを足さない（先読みも始めていない）。
-            expansion = replace(base_expansion, generated_queries=trusted_queries)
-            step.field("設定", CALLER_QUERIES_LABEL)
-            if trusted_queries:
-                step.add("呼び出し元の検索文:", *numbered([_display_query(query) for query in trusted_queries], limit=8))
-        else:
-            step.field("設定", query_strategy_label(query_strategy_id(query_strategy_value)))
-            try:
-                expansion = build_query_expansion(
-                    normalized_question,
-                    query_strategy_value,
-                    settings,
-                    answer_llm_provider=answer_llm_provider,
-                )
-            finally:
-                prefetch_note = _wait_original_query_prefetch(prefetch)
-            if prefetch_note:
-                step.add(prefetch_note)
-            step.add(
-                *_query_expansion_details(
-                    expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True))
-                )
+    term_context = contextvars.copy_context()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-search-terms") as search_pool:
+        with _execution_step("質問の言い換え・分解", "質問を言い換えたり分解したりして、資料を探す検索文を作ります。") as step:
+            terms_future = search_pool.submit(term_context.run, _prepare_term_context, runtime_knowledge, settings)
+            if query_strategy_id(query_strategy_value) == SIMPLE_RETRIEVAL_STRATEGY and not caller_planned:
+                step.skip("原質問のみ（言い換え・分解なし）が選択されているため、言い換え・分解をスキップしました。")
+            # 戦略の LLM の応答を待つ間に、元の質問の検索を先に読む (#1499)。検索の結果は並行にしないときと同じ。
+            # 先読みの thread はこの工程の中で文脈を写す（先読みの埋め込み・DB の検索の span をこの工程の子にする。#3475）。
+            prefetch = _start_original_query_prefetch(
+                normalized_question,
+                query_strategy_value,
+                settings,
+                top_k=chunk_top_k,
             )
-            # 言い換えた検索文そのもの（処理の経過の段を開いて見る。#2341）。最終の一覧は次の工程が示す。
-            if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
-                step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
-            if expansion.rejected_queries:
-                step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（原質問から外れる）")
-            if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
-                note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
-            ):
-                step.add(note)
+            if caller_planned:
+                # 呼び出し元が検索文を作った（#2651）。LLM で言い換えを足さない（先読みも始めていない）。
+                expansion = replace(base_expansion, generated_queries=trusted_queries)
+                step.field("設定", CALLER_QUERIES_LABEL)
+                if trusted_queries:
+                    step.add("呼び出し元の検索文:", *numbered([_display_query(query) for query in trusted_queries], limit=8))
+            else:
+                step.field("設定", query_strategy_label(query_strategy_id(query_strategy_value)))
+                try:
+                    expansion = build_query_expansion(
+                        normalized_question,
+                        query_strategy_value,
+                        settings,
+                        answer_llm_provider=answer_llm_provider,
+                    )
+                finally:
+                    prefetch_note = _wait_original_query_prefetch(prefetch)
+                if prefetch_note:
+                    step.add(prefetch_note)
+                step.add(
+                    *_query_expansion_details(
+                        expansion, original_query_weighting=bool(getattr(settings, "original_query_weighting_enabled", True))
+                    )
+                )
+                # 言い換えた検索文そのもの（処理の経過の段を開いて見る。#2341）。最終の一覧は次の工程が示す。
+                if added_queries := [*expansion.generated_queries, *expansion.provision_queries]:
+                    step.add("言い換えた検索文:", *numbered([_display_query(query) for query in added_queries], limit=8))
+                if expansion.rejected_queries:
+                    step.field("使わなかった検索文", f"{len(expansion.rejected_queries)} 本（原質問から外れる）")
+                if query_strategy_id(query_strategy_value) != SIMPLE_RETRIEVAL_STRATEGY and (
+                    note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
+                ):
+                    step.add(note)
 
-    with _execution_step("検索文と検索語の確定", "意味の近さで探す検索文と、全文検索に使うキーワードを確定します。") as step:
+        runtime_knowledge = terms_future.result()
+
+    with _execution_step(
+        "検索文をまとめ、検索語を作る",
+        "原質問と言い換え・分解、用語・同義語による追加検索文をまとめ、重複を除き、全文検索に使う検索語を作ります。",
+    ) as step:
         keyword_trace: dict[str, Any] = {}
         # 用語・同義語に一致したら、一致した用語と別名だけの検索文を足す（#2163）。原質問の後ろに語を足しただけの
         # 検索文（expanded_question）は長い質問に別名が埋もれ、規定の用語で書かれた根拠に当たりにくい。
@@ -5377,7 +5514,7 @@ def answer_question_result(
             runtime_knowledge.expanded_question,
             *_dedupe_queries((*expansion.retrieval_queries, *((term_query,) if term_query else ()))),
         )
-        grounded = " ".join(label for term in runtime_knowledge.matched_terms for label in term.labels())
+        grounded = " ".join(label for term in runtime_knowledge.retrieval_terms for label in term.labels())
         retrieval_queries, rejected = filter_queries(normalized_question, candidate_queries, grounded_text=grounded)
         if trusted_queries:
             retrieval_queries, rejected = _keep_trusted_queries(candidate_queries, retrieval_queries, rejected, trusted_queries)
@@ -5401,7 +5538,7 @@ def answer_question_result(
             # 出どころは実際に語を足したもの（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件。#3490）。
             sources.setdefault(_dedupe_query_key(runtime_knowledge.expanded_question), runtime_knowledge.query_source)
         for query in expansion.generated_queries:
-            sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問拡張")
+            sources.setdefault(_dedupe_query_key(query), "呼び出し元" if caller_planned else "質問の言い換え・分解")
         if term_query:
             sources.setdefault(_dedupe_query_key(term_query), "用語・同義語だけ")
         # 規定の書き方の検索文は質問拡張の LLM が作り、希望する結果の検索文は経緯と希望が混ざった質問から希望の部分を取り出す。

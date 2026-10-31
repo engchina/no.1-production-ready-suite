@@ -103,6 +103,11 @@ class _ExecutionStep:
         for value in values[1:]:
             self._keep(value)
 
+    def skip(self, reason: str) -> None:
+        """実行しなかった工程を、完了と区別して記録する。"""
+        self.status = "skipped"
+        self.result(reason)
+
     def impact(self, text: str) -> None:
         """この結果が後続の処理をどう変えるか。変えない場合は書かない。"""
         if not text:
@@ -289,7 +294,7 @@ def _execution_step(name: str, purpose: str = ""):
         # 終わった工程の詳細・LLM の回数・結果の説明を、終わったときの通知で渡す（回答の完了を待たない。#2373）。
         _notify_step(
             name,
-            "error" if failed else "success",
+            "error" if failed else "skipped" if step.status == "skipped" else "success",
             elapsed,
             {"details": step.structured_details(), "llm_calls": llm_calls, **sends, "status": step.status or "complete"},
         )
