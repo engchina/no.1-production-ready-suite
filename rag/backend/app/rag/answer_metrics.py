@@ -99,9 +99,13 @@ def is_abstained_answer(
     )
 
 
-def claims_supported(claims: Sequence[Mapping[str, Any]]) -> bool:
+def claims_supported(claims: Sequence[Mapping[str, Any]]) -> bool | None:
     """根拠のない主張・根拠と矛盾する主張が無いか。"""
-    return not any(str(claim.get("status")) in UNSUPPORTED_CLAIM_STATUSES for claim in claims)
+    if any(str(claim.get("status")) in UNSUPPORTED_CLAIM_STATUSES for claim in claims):
+        return False
+    if any(claim.get("status") in {"unassessed", "citation_error"} for claim in claims):
+        return None
+    return True
 
 
 def score_answer_evaluation(
@@ -152,11 +156,19 @@ def score_answer_evaluation(
             }
         )
     judged = [metric for metric in metrics if metric["passed"] is not None]
+    incomplete = any(claim.get("status") in {"unassessed", "citation_error"} for claim in assessed)
+    passed = (
+        False
+        if any(metric["passed"] is False for metric in judged)
+        else None
+        if incomplete or not judged
+        else True
+    )
     return {
         **evaluation,
         "metrics_version": "six_metrics_v1",
         "claim_support_rate": support,
         "suite": params.suite,
         "metrics": metrics,
-        "passed": (all(metric["passed"] for metric in judged) if judged else None),
+        "passed": passed,
     }

@@ -4646,6 +4646,7 @@ export const ja = {
   "evaluation.failureReason.unexpected_refusal": "答えるべき質問に答えなかった",
   "evaluation.failureReason.answer_keyword_miss": "期待する語が無い",
   "evaluation.failureReason.low_groundedness": "根拠に無い語が多い",
+  "evaluation.failureReason.claim_unassessed": "主張の支持を確認できていない",
   "evaluation.failureReason.unsupported_claim": "根拠のない主張がある",
   "evaluation.failureReason.missing_content": "標準回答の必要な項目が抜けている",
   "evaluation.failureReason.answer_failed": "標準回答での評価が不合格",

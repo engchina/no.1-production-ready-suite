@@ -41,3 +41,9 @@ it("対象件数は未指定と零件を区別する",()=>{
 it("零と小数を正しく百分率表示し、欠損値は未評価にする",()=>{
  expect(formatMetricValue(0.125)).toBe("12.5%");expect(formatMetricValue(1)).toBe("100%");expect(formatMetricValue(undefined)).toBe("未評価");expect(formatMetricValue(NaN)).toBe("未評価");
 });
+
+it("支持の未評価を意味の不支持と別の理由で表示する", async () => {
+ const {failureReasonLabel}=await import("./evaluation-metrics");
+ expect(failureReasonLabel("claim_unassessed")).toBe("主張の支持を確認できていない");
+ expect(failureReasonLabel("unsupported_claim")).not.toBe(failureReasonLabel("claim_unassessed"));
+});

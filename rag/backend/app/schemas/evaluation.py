@@ -109,6 +109,7 @@ EvaluationFailureReason = Literal[
     "answer_keyword_miss",
     "low_groundedness",
     "unsupported_claim",
+    "claim_unassessed",
     "missing_content",
     "answer_failed",
     "answer_evaluation_error",
