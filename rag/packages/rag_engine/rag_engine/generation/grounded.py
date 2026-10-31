@@ -104,7 +104,7 @@ from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import structured_failure_details
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
-from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges
+from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, label_mentioned
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.evidence_scope import evidence_scope_error, unsupported_heading_navigation
 from rag_engine.retrieval.evidence_selection import evidence_relevance
@@ -7831,12 +7831,23 @@ def deterministic_request_audit(request_units: Sequence[Mapping[str, Any]], chec
     units = [unit for unit in request_units if unit.get("kind") != "context"]
     entries = [entry for entry in checked if entry.published and not entry.added and entry.item.kind != "gap"]
 
-    def owns(unit_id: str, request_id: str) -> bool:
-        return not request_id or request_id == unit_id or request_id.startswith(f"{unit_id}.")
+    def owns(unit: Mapping[str, Any], entry: CheckedItem) -> bool:
+        unit_id, request_id = str(unit["id"]), entry.item.request_id
+        if request_id == unit_id or request_id.startswith(f"{unit_id}."):
+            return True
+        if unit.get("kind") == "definition":
+            marker = str(unit.get("marker") or "")
+            return (
+                request_id == unit.get("request_id")
+                and bool(unit.get("label"))
+                and label_mentioned(entry.item.text, str(unit["label"]))
+                and (not marker or marker in unicodedata.normalize("NFKC", entry.item.text))
+            )
+        return not request_id
 
     reviews = []
     for unit in units:
-        own = [entry for entry in entries if owns(str(unit["id"]), entry.item.request_id)]
+        own = [entry for entry in entries if owns(unit, entry)]
         status = "addressed" if any(entry.confirmed for entry in own) else "partial" if own else "missing"
         reviews.append({"request_id": unit["id"], "status": status, "reason": "説明の有無で判定（監査なし）"})
     return GroundedAudit.model_validate(

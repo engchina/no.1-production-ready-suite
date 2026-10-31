@@ -516,7 +516,7 @@ def definition_targets(question: str) -> list[dict[str, str]]:
         )
         for unit in _base_units(question)
         if unit.get("kind") != "context"
-        for n, label in enumerate(definition_labels(unit["text"]), 1)
+        for n, label in enumerate(definition_labels(unit["text"].removeprefix(unit.get("subquestion", "")).lstrip()), 1)
     ]
 
 
@@ -621,7 +621,15 @@ def request_units(question: str) -> list[dict[str, str]]:
         + goal_units
         + facets
         + [
-            dict(id=t["id"], text=f"原要求 {t['request_id']} の項目「{t['label']}」{t['marker']}の意味と全表示条件")
+            dict(
+                id=t["id"],
+                kind="definition",
+                request_id=t["request_id"],
+                label=t["label"],
+                marker=t["marker"],
+                text=f"項目「{t['label']}」{t['marker']}への回答",
+                original_question=next(unit["text"] for unit in units if unit["id"] == t["request_id"]),
+            )
             for t in definition_targets(question)
         ]
     )
