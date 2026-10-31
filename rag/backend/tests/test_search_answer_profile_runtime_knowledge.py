@@ -270,10 +270,13 @@ def test_preview_reports_exclusive_conflict_without_passing_opposed_rules(
     ("purpose", "expected"), [("confirmation", True), ("generation", False), ("both", True)]
 )
 def test_rule_purpose_controls_confirmation_and_keeps_known_conditions(
-    purpose: str, expected: bool
+    purpose: str, expected: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.rag.search_answer_profile_knowledge import unanswered_rule_clarifications
 
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
     data = {
         "rules": [
             {

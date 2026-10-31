@@ -305,6 +305,7 @@ def _published_store(guides: list[Any]) -> type:
 
 @pytest.mark.usefixtures("system_access")
 async def test_search_expands_aliases_and_records_the_breakdown(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "rag_runtime_terms_search_enabled", True)
     monkeypatch.setattr(search_route, "OracleClient", lambda: _ProfileOracle())
     monkeypatch.setattr(search_route, "SupportGuideStore", _published_store(GUIDES))
     request = SearchRequest(query="NA画面が出ない", search_answer_profile_id="bv-1")
@@ -382,6 +383,7 @@ def test_mcp_lookup_guides_expands_aliases(auth: Any, monkeypatch: MonkeyPatch) 
     async def published(_oracle: object, _profile: str) -> tuple[list[Any], bool]:
         return GUIDES, False
 
+    monkeypatch.setattr(get_settings(), "rag_runtime_terms_search_enabled", True)
     monkeypatch.setattr(mcp_tools, "OracleClient", _ProfileOracle)
     monkeypatch.setattr(search_route, "load_published_guides", published)
     user = auth.user_with_permissions("searcher", ["menu.search"])
@@ -480,7 +482,11 @@ async def test_semantic_failure_falls_back_to_term_matching(monkeypatch: MonkeyP
             raise RuntimeError("embedding unavailable")
 
     settings = get_settings().model_copy(
-        update={"rag_support_guide_enabled": True, "rag_support_guide_semantic_match_enabled": True}
+        update={
+            "rag_support_guide_enabled": True,
+            "rag_support_guide_semantic_match_enabled": True,
+            "rag_runtime_terms_search_enabled": True,
+        }
     )
     monkeypatch.setattr(
         support_guide_query, "SupportGuideStore", lambda _oracle: _EmbeddingStore({})
