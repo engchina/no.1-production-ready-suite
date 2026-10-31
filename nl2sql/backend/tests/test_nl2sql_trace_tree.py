@@ -47,6 +47,7 @@ from app.settings import get_settings
 
 _STAGES = [
     "nl2sql.queue",
+    "nl2sql.attachment_evidence",
     "nl2sql.prepare_context",
     "nl2sql.generate_sql",
     "nl2sql.safety_check",

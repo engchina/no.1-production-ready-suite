@@ -168,10 +168,10 @@ async def test_disabled_attachment_step_is_skipped(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(engine_oci, "parse_text_response", _traced_llm)
     pipeline = RagPipeline(
         settings=Settings(),
-        oracle=_TracedOracle(),
-        genai=_TracedGenAi(),
+        oracle=_TracedOracle(),  # type: ignore[arg-type]
+        genai=_TracedGenAi(),  # type: ignore[arg-type]
         attachment_conversation_id="synthetic-conversation",
-    )  # type: ignore[arg-type]
+    )
     tracker = RecordingTrace()
     await pipeline.run(SearchRequest(query="合成の設定方法を確認する"), trace=tracker)
     steps = fold_chat_progress_events(tracker.events).step_list()

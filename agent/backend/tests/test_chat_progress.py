@@ -115,7 +115,7 @@ def _rows(run: RunState) -> list[Row]:
     rows: list[Row] = []
     for step in fold_chat_progress_events(run_progress_events(run)).step_list():
         span = step.span or {}
-        if span.get("root"):
+        if span.get("root") or span.get("name") == "agent.attachment_evidence":
             continue
         params = {key: value for key, value in (step.params or {}).items() if key != RUN_STEP_PARAM}
         kind = step.kind if step.kind != step.step_id else None
@@ -201,6 +201,12 @@ def test_answer_without_tools_records_one_model_call(monkeypatch: MonkeyPatch) -
     [root] = _roots(run)
     assert root.span is not None and root.span["name"] == "agent.execute"
     fold = fold_chat_progress_events(run_progress_events(run))
+    [attachment] = [
+        step
+        for step in fold.step_list()
+        if (step.span or {}).get("name") == "agent.attachment_evidence"
+    ]
+    assert attachment.status == "skipped"
     [chat] = [step for step in fold.step_list() if (step.span or {}).get("name") == CHAT]
     assert chat.span is not None
     assert chat.span["parent_id"] == root.step_id
