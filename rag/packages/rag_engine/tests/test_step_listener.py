@@ -48,12 +48,12 @@ class StepListenerTests(unittest.TestCase):
         events = []
         with (
             bind_step_listener(lambda name, outcome, elapsed, record: events.append((name, outcome, record))),
-            _execution_step("質問拡張戦略", "目的の文") as step,
+            _execution_step("質問の言い換え・分解", "目的の文") as step,
         ):
             step.field("設定", "単純検索")
             step.status = "省略"
         started, finished = events
-        self.assertEqual(started, ("質問拡張戦略", "started", {}))
+        self.assertEqual(started, ("質問の言い換え・分解", "started", {}))
         self.assertEqual(finished[1], "success")
         self.assertEqual(
             finished[2],

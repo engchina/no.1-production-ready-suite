@@ -52,7 +52,7 @@ function spanEvents(
 describe("answerStepDisplayName", () => {
   it("backend の工程名を利用者向けの名前にし、回数つきの工程は回数を添える。知らない工程名はそのまま", async () => {
     const { answerStepDisplayName } = await import("./answer-process");
-    expect(answerStepDisplayName("質問拡張戦略")).toBe("資料を探す検索表現を作る");
+    expect(answerStepDisplayName("質問拡張戦略")).toBe("質問の言い換え・分解");
     expect(answerStepDisplayName("Rerank")).toBe("質問との関連度で候補を並べ替える");
     expect(answerStepDisplayName("rerank.request")).toBe("候補の並べ替えを要求する");
     expect(answerStageName("rerank.request")).toBe("候補の並べ替えを要求する");

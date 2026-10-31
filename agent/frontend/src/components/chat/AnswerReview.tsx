@@ -1,9 +1,8 @@
 import { useId, type ReactNode } from "react";
 import { Info, ShieldCheck } from "lucide-react";
-import { AnswerPassageBadges, Disclosure, StatusBadge, TEXT_ICON_SIZE, type StatusVariant } from "@production-ready/ui";
+import { Disclosure, StatusBadge, TEXT_ICON_SIZE, type StatusVariant } from "@production-ready/ui";
 
 import type { AnswerReview, ConditionSource, ReviewOutcome, ReviewValidation } from "@/lib/answer-review";
-import { answerPassageLabels } from "@/lib/answer-structure";
 import { t, type I18nKey } from "@/lib/i18n";
 
 /**
@@ -194,12 +193,11 @@ export function OutcomeBadge({ outcome, testId }: { outcome: ReviewOutcome; test
 }
 
 /**
- * 照合の結果のバッジ（状態の対応表。色だけに頼らず StatusBadge のアイコンを付ける）。段落の印の記録のある Run（#2738）は
- * 「未確認 N 件」「要注意 N 件」「矛盾で除外 N 件」（0 件は出さない。RAG と同じ共有の部品）。
+ * 旧記録の照合状態。段落ごとの印がある回答では詳細の注意事項だけを表示する。
  */
 function ValidationBadge({ validation }: { validation: ReviewValidation }) {
   if (validation.state === "marked") {
-    return <AnswerPassageBadges records={validation.passages} labels={answerPassageLabels()} testId="answer-review-passages" />;
+    return null;
   }
   const { variant, label } = validationBadge(validation);
   return <StatusBadge variant={variant} label={label} />;

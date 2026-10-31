@@ -63,6 +63,7 @@ from rag_engine.retrieval.scope import (
     AdbSearchReadiness,
     normalize_retrieval_scope,
 )
+from rag_engine.retrieval.search_diagnostics import search_diagnostics
 from rag_engine.retrieval.search_stages import CHUNK_POOL_LOAD_STAGE, TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_ORACLE_TEXT_QUERY_CHARS,
@@ -863,6 +864,18 @@ def search_adb_hybrid_chunks(
                     "No ADB embeddings were found for the selected retrieval scope. Run Embedding/ADB save first."
                 )
 
+            if all_chunks is None:
+                with observe_call("stage", CHUNK_POOL_LOAD_STAGE):
+                    all_chunks = _load_chunk_run_chunks(
+                        connection,
+                        chunk_run_id,
+                        preferred_engine_ids,
+                        retrieval_scope=scope,
+                        classification_filter=category_filter,
+                    )
+                if len(_pool_cache) >= 8:
+                    _pool_cache.clear()
+                _pool_cache[pool_key] = (time.monotonic(), all_chunks)
             rankings: list[list[tuple[str, float | None]]] = []
             image_rankings: list[list[tuple[str, float | None]]] = []
             limit = max(1, int(candidate_limit or 1))
@@ -870,7 +883,7 @@ def search_adb_hybrid_chunks(
             # 埋め込み（`gen_ai.embeddings` の span）の後の DB の検索は、それぞれ工程の span にする（処理の経過で、文書の
             # 検索の中の今の作業を末端の段として出す。#3436）。
             query_vectors = _query_vectors(queries, settings, query_embedder)
-            with observe_call("stage", VECTOR_SEARCH_STAGE):
+            with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
                 for query_vector in query_vectors:
                     rankings.append(
                         _vector_search(
@@ -900,6 +913,18 @@ def search_adb_hybrid_chunks(
                                 embedding_modality=EMBEDDING_MODALITY_IMAGE,
                             )
                         )
+                vector_observation.display(
+                    details=_search_ranking_details(
+                        VECTOR_SEARCH_STAGE,
+                        queries,
+                        rankings,
+                        all_chunks,
+                        limit,
+                        scope,
+                        metadata_filter,
+                        category_filter,
+                    )
+                )
             text_rankings: list[list[tuple[str, float | None]]] = []
             text_query_weights: list[float] = []
             seen_text_queries: set[str] = set()
@@ -915,7 +940,9 @@ def search_adb_hybrid_chunks(
             # 質問文の変種の全文検索と、組み立て済みの検索式（extra_text_queries）の全文検索を 1 つの工程にする
             # （融合の順と重みは変えない）。検索するものが無ければ工程を出さない。
             text_variants = text_candidates[: _text_search_query_variant_limit(settings)]
-            with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext():
+            text_inputs: list[str] = []
+            text_expressions: list[str] = []
+            with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext() as text_observation:
                 for query_index, query in text_variants:
                     text_query = oracle_text_query(
                         query,
@@ -925,6 +952,8 @@ def search_adb_hybrid_chunks(
                     if not text_query or text_query in seen_text_queries:
                         continue
                     seen_text_queries.add(text_query)
+                    text_inputs.append(query)
+                    text_expressions.append(text_query)
                     text_query_weights.append(query_weights[query_index])
                     text_rankings.append(
                         _text_search(
@@ -943,6 +972,8 @@ def search_adb_hybrid_chunks(
                     if not text_query or text_query in seen_text_queries:
                         continue
                     seen_text_queries.add(text_query)
+                    text_inputs.append("追加の全文検索式")
+                    text_expressions.append(text_query)
                     text_query_weights.append(derived_weight)
                     text_rankings.append(
                         _text_search(
@@ -957,18 +988,20 @@ def search_adb_hybrid_chunks(
                             classification_filter=category_filter,
                         )
                     )
-            if all_chunks is None:
-                with observe_call("stage", CHUNK_POOL_LOAD_STAGE):
-                    all_chunks = _load_chunk_run_chunks(
-                        connection,
-                        chunk_run_id,
-                        preferred_engine_ids,
-                        retrieval_scope=scope,
-                        classification_filter=category_filter,
+                if text_observation is not None:
+                    text_observation.display(
+                        details=_search_ranking_details(
+                            TEXT_SEARCH_STAGE,
+                            text_inputs,
+                            text_rankings,
+                            all_chunks,
+                            limit,
+                            scope,
+                            metadata_filter,
+                            category_filter,
+                            expressions=text_expressions,
+                        )
                     )
-                if len(_pool_cache) >= 8:
-                    _pool_cache.clear()
-                _pool_cache[pool_key] = (time.monotonic(), all_chunks)
             scores = _combine_hybrid_scores(
                 rankings,
                 text_rankings,
@@ -1036,6 +1069,48 @@ def oracle_text_query(
         config=tokenizer_config,
         max_tokens=MAX_ORACLE_TEXT_TERMS,
         max_chars=MAX_ORACLE_TEXT_QUERY_CHARS,
+    )
+
+
+def _search_ranking_details(
+    stage: str,
+    queries: Sequence[str],
+    rankings: Sequence[Sequence[tuple[str, float | None]]],
+    chunks: Sequence[StoredChunk],
+    limit: int,
+    scope: str,
+    metadata_filter: RetrievalMetadataFilter | None,
+    classification_filter: ClassificationFilter,
+    *,
+    expressions: Sequence[str] = (),
+) -> dict[str, Any]:
+    by_uid = {chunk.chunk_uid: chunk for chunk in chunks}
+    branches = []
+    for index, ranking in enumerate(rankings):
+        results = []
+        for uid, score in ranking:
+            chunk = by_uid.get(uid)
+            results.append(
+                {"id": uid, "score": score, "file": chunk.source_file_name if chunk else None, "page": chunk.page_start if chunk else None}
+            )
+        branches.append(
+            {
+                "query": queries[index],
+                "raw_count": len(ranking),
+                "results": results,
+                "expression": expressions[index] if index < len(expressions) else None,
+            }
+        )
+    return search_diagnostics(
+        stage,
+        branches=branches,
+        limit=limit,
+        scope={
+            "retrieval_scope": scope,
+            "metadata_filter": str(metadata_filter or "なし"),
+            "classification": str(classification_filter.to_metadata()),
+        },
+        metric="COSINE 距離（小さい順）" if stage == VECTOR_SEARCH_STAGE else "Oracle Text SCORE（大きい順）",
     )
 
 
@@ -2396,8 +2471,6 @@ def _business_metadata_values(metadata: dict[str, Any]) -> set[str]:
     return values
 
 
-
-
 def _metadata_filter_sql(alias: str, metadata_filter: RetrievalMetadataFilter | None) -> tuple[str, dict[str, str]]:
     """質問が明示した条件（ファイル名・ページ）だけを SQL の WHERE にし、候補数制限より前に適用する。
 
@@ -2436,8 +2509,6 @@ def _metadata_filter_sql(alias: str, metadata_filter: RetrievalMetadataFilter | 
 
 
 BUSINESS_MATCH_CHANNEL = "business_match"
-
-
 
 
 def _chunks_matching_metadata_filter(

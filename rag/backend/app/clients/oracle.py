@@ -36,7 +36,8 @@ from pr_backend_core.oracle_pool import (
 )
 from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import ValidationError
-from rag_engine.resources.tracing import observe_call
+from rag_engine.resources.tracing import CallObservation, observe_call
+from rag_engine.retrieval.search_diagnostics import search_diagnostics
 from rag_engine.retrieval.search_stages import TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_parser_core.xml_tree_json import query_citation_keys
 
@@ -458,6 +459,8 @@ class OracleClient:
         embedding: list[float],
         top_k: int,
         filters: dict[str, str] | None = None,
+        *,
+        query: str = "",
     ) -> list[RetrievedChunk]:
         """AI Vector Search で近傍チャンクを取得する。
 
@@ -465,8 +468,10 @@ class OracleClient:
         """
         self._validate_embedding_width(embedding, "query embedding")
         # 処理の経過の段(文書の検索の中の DB の検索。#3436・#3443)。
-        with observe_call("stage", VECTOR_SEARCH_STAGE):
-            return await self._vector_search_with_oracle(embedding, top_k, filters or {})
+        with observe_call("stage", VECTOR_SEARCH_STAGE) as observation:
+            return await self._vector_search_with_oracle(
+                embedding, top_k, filters or {}, observation=observation, query=query
+            )
 
     async def keyword_search(
         self,
@@ -475,8 +480,10 @@ class OracleClient:
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
         """Oracle Text 相当のキーワード検索を行う。"""
-        with observe_call("stage", TEXT_SEARCH_STAGE):
-            return await self._keyword_search_with_oracle(query, top_k, filters or {})
+        with observe_call("stage", TEXT_SEARCH_STAGE) as observation:
+            return await self._keyword_search_with_oracle(
+                query, top_k, filters or {}, observation=observation
+            )
 
     async def hybrid_search(
         self,
@@ -488,13 +495,13 @@ class OracleClient:
     ) -> list[RetrievedChunk]:
         """ベクトル検索とキーワード検索を Reciprocal Rank Fusion で統合する。"""
         if mode == SearchMode.VECTOR:
-            return await self.vector_search(embedding, top_k, filters)
+            return await self.vector_search(embedding, top_k, filters, query=query)
         if mode == SearchMode.KEYWORD:
             return await self.keyword_search(query, top_k, filters)
 
         # vector と keyword は独立しているので並行に読む(#1490)。融合は順位だけで決まる。
         vector_hits, keyword_hits, citation_hits = await asyncio.gather(
-            self.vector_search(embedding, top_k, filters),
+            self.vector_search(embedding, top_k, filters, query=query),
             self.keyword_search(query, top_k, filters),
             self.citation_label_search(query, filters),
         )
@@ -575,6 +582,7 @@ class OracleClient:
         if not searches:
             return []
         filters = filters or {}
+        branch_queries: list[str] = []
         branch_kinds: list[str] = []
         binds: dict[str, object] = {}
         plan: list[tuple[int | None, int | None, SearchMode]] = []
@@ -585,12 +593,14 @@ class OracleClient:
                 self._validate_embedding_width(embedding, "query embedding")
                 vector_branch = len(branch_kinds)
                 branch_kinds.append("vector")
+                branch_queries.append(query)
                 binds[f"embedding_{vector_branch}"] = _to_vector_bind(embedding)
             if mode in {SearchMode.KEYWORD, SearchMode.HYBRID}:
                 text_query = _oracle_text_query(query, settings=self._settings)
                 if text_query is not None:
                     keyword_branch = len(branch_kinds)
                     branch_kinds.append("keyword")
+                    branch_queries.append(query)
                     binds[f"query_{keyword_branch}"] = text_query
             plan.append((vector_branch, keyword_branch, mode))
         branch_rows: list[list[tuple[int, dict[str, object]]]] = [[] for _ in branch_kinds]
@@ -615,8 +625,34 @@ class OracleClient:
             if kind == "keyword"
         ]
         await asyncio.gather(
-            _observed_reads(VECTOR_SEARCH_STAGE, vector_reads),
-            _observed_reads(TEXT_SEARCH_STAGE, keyword_reads),
+            _observed_reads(
+                VECTOR_SEARCH_STAGE,
+                vector_reads,
+                details=lambda: self._branch_diagnostics(
+                    VECTOR_SEARCH_STAGE,
+                    "vector",
+                    branch_kinds,
+                    branch_queries,
+                    branch_rows,
+                    binds,
+                    top_k,
+                    filters,
+                ),
+            ),
+            _observed_reads(
+                TEXT_SEARCH_STAGE,
+                keyword_reads,
+                details=lambda: self._branch_diagnostics(
+                    TEXT_SEARCH_STAGE,
+                    "keyword",
+                    branch_kinds,
+                    branch_queries,
+                    branch_rows,
+                    binds,
+                    top_k,
+                    filters,
+                ),
+            ),
         )
         branch_hits: list[list[RetrievedChunk]] = []
         for kind, rows in zip(branch_kinds, branch_rows, strict=True):
@@ -6711,6 +6747,50 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    def _branch_diagnostics(
+        self,
+        stage: str,
+        kind: str,
+        kinds: Sequence[str],
+        queries: Sequence[str],
+        branch_rows: Sequence[Sequence[tuple[int, dict[str, object]]]],
+        binds: Mapping[str, object],
+        top_k: int,
+        filters: dict[str, str],
+    ) -> dict[str, Any]:
+        branches = []
+        for index, branch_kind in enumerate(kinds):
+            if branch_kind != kind:
+                continue
+            rows = [row for _, row in sorted(branch_rows[index], key=lambda item: item[0])]
+            hits = _distinct_text_hits(rows)
+            branches.append(
+                {
+                    "query": queries[index],
+                    "expression": binds.get(f"query_{index}"),
+                    "raw_count": len(rows),
+                    "results": [
+                        {
+                            "id": hit.chunk_id,
+                            "file": hit.file_name,
+                            "page": hit.metadata.get("page_number")
+                            or hit.metadata.get("page_start"),
+                            "score": row.get("score"),
+                        }
+                        for hit, row in hits
+                    ],
+                }
+            )
+        return search_diagnostics(
+            stage,
+            branches=branches,
+            scope=filters,
+            limit=top_k,
+            metric="コサイン類似度（1 − COSINE 距離・大きい順）"
+            if kind == "vector"
+            else "Oracle Text SCORE（大きい順）",
+        )
+
     async def _read_vector_branch(
         self,
         embedding_bind: object,
@@ -6765,10 +6845,29 @@ class OracleClient:
             )
 
     async def _vector_search_with_oracle(
-        self, embedding: list[float], top_k: int, filters: dict[str, str]
+        self,
+        embedding: list[float],
+        top_k: int,
+        filters: dict[str, str],
+        *,
+        observation: CallObservation | None = None,
+        query: str = "",
     ) -> list[RetrievedChunk]:
         """Oracle AI Vector Search で近傍 chunk を取得する。"""
         rows = await self._vector_rows(_to_vector_bind(embedding), top_k=top_k, filters=filters)
+        if observation is not None:
+            observation.display(
+                details=self._branch_diagnostics(
+                    VECTOR_SEARCH_STAGE,
+                    "vector",
+                    ["vector"],
+                    [query],
+                    [list(enumerate(rows, 1))],
+                    {},
+                    top_k,
+                    filters,
+                )
+            )
         return [
             _with_retrieval_metadata(
                 chunk,
@@ -6811,13 +6910,33 @@ class OracleClient:
             )
 
     async def _keyword_search_with_oracle(
-        self, query: str, top_k: int, filters: dict[str, str]
+        self,
+        query: str,
+        top_k: int,
+        filters: dict[str, str],
+        *,
+        observation: CallObservation | None = None,
     ) -> list[RetrievedChunk]:
         """Oracle Text で keyword chunk を取得する。"""
         text_query = _oracle_text_query(query, settings=self._settings)
-        if text_query is None:
-            return []
-        rows = await self._keyword_rows(text_query, top_k=top_k, filters=filters)
+        rows = (
+            await self._keyword_rows(text_query, top_k=top_k, filters=filters)
+            if text_query is not None
+            else []
+        )
+        if observation is not None:
+            observation.display(
+                details=self._branch_diagnostics(
+                    TEXT_SEARCH_STAGE,
+                    "keyword",
+                    ["keyword"],
+                    [query],
+                    [list(enumerate(rows, 1))],
+                    {"query_0": text_query},
+                    top_k,
+                    filters,
+                )
+            )
         return [
             _with_retrieval_metadata(
                 chunk,
@@ -16608,15 +16727,22 @@ async def _no_citation_hits() -> list[RetrievedChunk]:
     return []
 
 
-async def _observed_reads(stage: str, reads: Sequence[Awaitable[None]]) -> None:
+async def _observed_reads(
+    stage: str,
+    reads: Sequence[Awaitable[None]],
+    *,
+    details: Callable[[], Mapping[str, object]] | None = None,
+) -> None:
     """読み取りを並行に読み、全体を 1 つの処理の経過の段(``observe_call("stage", stage)``)にする。
 
     読むものが無ければ段を出さない(#3443)。
     """
     if not reads:
         return
-    with observe_call("stage", stage):
+    with observe_call("stage", stage) as observation:
         await asyncio.gather(*reads)
+        if details is not None:
+            observation.display(details=details())
 
 
 def _with_citation_hits(

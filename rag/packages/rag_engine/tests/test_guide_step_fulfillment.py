@@ -325,9 +325,7 @@ class GuideStepFulfillmentTest(unittest.TestCase):
         result = _run(model, ctx, knowledge, question).response
 
         requests = _requests(result)
-        self.assertEqual(
-            {key: value for key, value in requests.items() if not key.startswith("guide:")}, {"Q1": "unknown", "Q2": "unknown"}
-        )
+        self.assertEqual({key: value for key, value in requests.items() if not key.startswith("guide:")}, {"Q1": "unknown"})
         self.assertEqual(requests["guide:s2"], "unknown")
         self.assertEqual(result.envelope["outcome"], "conditional")
 

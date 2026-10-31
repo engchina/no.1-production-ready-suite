@@ -95,6 +95,7 @@ def run(parser: Parser, *, mode: str = "cited_only", knowledge: RuntimeKnowledge
         get_settings(environ={}, dotenv_path=None),
         **{
             "answer_audit_mode": "none",
+            "runtime_rules_answer_enabled": True,
             "answer_evidence_refinement_mode": mode,
             "answer_max_correction_rounds": 1,
             "confirmed_premises": (("操作権限", "権限あり"),),
@@ -152,6 +153,7 @@ def test_required_uncited_original_guide_rules_and_confirmed_condition_reach_sec
         original_question=QUESTION,
         expanded_question=QUESTION,
         path=Path("unused.json"),
+        rules_answer_enabled=True,
         matched_rules=(RuntimeRule(rule_id="rule-a", title="合成回答ルール", content=RULE, purpose="generation"),),
         guide_steps=(("open", "画面を開く", ("run:open",)), ("save", "変更を保存する", ("run:save",))),
         guide_task_scope=(
@@ -321,7 +323,7 @@ def test_removing_unresolved_gap_alone_is_not_a_verified_improvement() -> None:
     assert "保存方法はまだ確かめられません。" in result.response.answer_text
     trace = result.response.generation_trace["evidence_refinement"]
     assert trace["adopted"] is False
-    assert trace["adoption"] == "previous_gap_resolution_unverified"
+    assert "previous_gap_resolution_unverified" in trace["adoption_reasons"]
     assert "no_deterministic_improvement" in trace["adoption_reasons"]
 
 
@@ -335,14 +337,15 @@ def test_legacy_and_opt_in_send_identical_initial_system_schema_and_context() ->
 
 def test_one_resolved_request_does_not_hide_another_unresolved_request(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(__import__(__name__), "QUESTION", "対象Aを開く方法は？対象Cを閉じる方法は？")
-    parser = Parser()
+    draft = payload()
+    draft["items"].append({"kind": "gap", "text": "対象Cを閉じる方法は未確認です。", "request_id": "Q1", "citations": []})
+    parser = Parser([draft])
     result = run(parser, mode="cited_required")
-    assert len(parser.calls) == 1
     trace = result.response.generation_trace["evidence_refinement"]
+    assert len(parser.calls) == 1
     assert trace["stop_reason"] == "unresolved_preservation_scope"
-    assert trace["selection"]["unresolved_requirement_ids"] == ["Q2"]
-    assert all(text in parser.calls[0]["prompt"] for text in (OPEN, SAVE, NOISE))
-    assert OPEN in result.response.answer_text
+    assert trace["selection"]["unresolved_requirement_ids"] == ["Q1"]
+    assert "対象Cを閉じる方法" in parser.calls[0]["prompt"]
 
 
 def test_refinement_permission_error_propagates_instead_of_publishing_fallback() -> None:

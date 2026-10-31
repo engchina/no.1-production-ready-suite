@@ -25,7 +25,9 @@ def test_shared_word_does_not_import_other_business(tmp_path, question, title, i
         ),
         encoding="utf-8",
     )
-    result = build_runtime_knowledge_context(question, tmp_path)
+    result = build_runtime_knowledge_context(
+        question, tmp_path, terms_search_enabled=True, terms_answer_enabled=True, rules_answer_enabled=True
+    )
     assert result.expanded_question == question
     assert not result.prompt_context()
     assert len(result.expansion_decisions) == 2
@@ -41,7 +43,7 @@ def test_matching_rule_trigger_does_not_imply_other_trigger_alias(tmp_path):
         ),
         encoding="utf-8",
     )
-    result = build_runtime_knowledge_context("入庫したい", tmp_path)
+    result = build_runtime_knowledge_context("入庫したい", tmp_path, rules_answer_enabled=True)
     assert "PAY900" not in result.expanded_question
     assert result.expansion_decisions[0]["matched_labels"] == ["入庫"]
 
@@ -55,7 +57,7 @@ def test_explicit_glossary_alias_remains_supported(tmp_path):
         ),
         encoding="utf-8",
     )
-    result = build_runtime_knowledge_context("在庫検索の方法", tmp_path)
+    result = build_runtime_knowledge_context("在庫検索の方法", tmp_path, terms_search_enabled=True)
     assert "STK100" in result.expanded_question
     accepted, rejected = filter_queries(
         result.original_question, [result.expanded_question], grounded_text=" ".join(result.matched_terms[0].labels())

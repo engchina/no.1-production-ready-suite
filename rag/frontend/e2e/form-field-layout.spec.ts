@@ -672,7 +672,7 @@ const SCREENS: FormScreen[] = [
     path: "/settings/retrieval",
     mock: mockRetrieval,
     open: async (page) => {
-      await expect(page.getByRole("combobox", { name: "質問の拡張", exact: true })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "広げる段の上限", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "根拠の入力の上限（%）", exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "1 回の検索で加える根拠の上限", exact: true })).toBeVisible();

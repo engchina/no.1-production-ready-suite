@@ -283,7 +283,7 @@ PLANNED_GENERATE_SYSTEM_PROMPT = (
 
 def uses_separate_scope_plan(question: str) -> bool:
     """明示的な小問のある質問では、原文を保持した根拠計画を生成の前に作る。"""
-    return any(unit.get("subquestion") for unit in answer_requirements(question))
+    return any(unit.get("subquestion") for unit in task_contract(question)["request_units"])
 
 
 def generation_system_prompt(question: str) -> str:
@@ -1616,7 +1616,7 @@ def _check_item(item: GroundedItem) -> GroundedItem:
 
 def item_question(question: str, request_id: str) -> str:
     """小問に対応する説明は、その小問と共通の前置きで検査する。未対応の id は全体を保つ。"""
-    units = [unit for unit in answer_requirements(question) if unit.get("subquestion")]
+    units = [unit for unit in task_contract(question)["request_units"] if unit.get("subquestion")]
     if len(units) < 2:
         return question
     unit = next((unit for unit in units if request_id == unit["id"] or request_id.startswith(str(unit["id"]) + ".")), None)
@@ -6993,7 +6993,7 @@ def run_round(
         if separate_scope:
             units = _contract_view(question).get("request_units", ())
             known_requests = {unit["id"] for unit in units if unit.get("kind") != "context"}
-            required_requests = {unit["id"] for unit in units if unit.get("subquestion")}
+            required_requests = known_requests
             own_requests = [entry.request_id for entry in scope_plan.request_coverage]
             invalid = (
                 not required_requests.issubset(own_requests)
@@ -7838,8 +7838,11 @@ def deterministic_request_audit(request_units: Sequence[Mapping[str, Any]], chec
     reviews = []
     for unit in units:
         own = [entry for entry in entries if owns(unit, entry)]
-        status = "addressed" if any(entry.confirmed for entry in own) else "partial" if own else "missing"
-        reviews.append({"request_id": unit["id"], "status": status, "reason": "説明の有無で判定（監査なし）"})
+        # 原質問全体に説明があるだけでは、全ての小問に答えたとは判定できない。
+        confirmed = any(entry.confirmed for entry in own)
+        status = "addressed" if confirmed else "partial" if own else "missing"
+        reason = "説明の有無で判定（監査なし）" if unit.get("kind") != "request" else "説明の有無のみを確認（原質問全体の充足は未検証）"
+        reviews.append({"request_id": unit["id"], "status": status, "reason": reason})
     return GroundedAudit.model_validate(
         {"reviews": [], "request_reviews": reviews, "summary_supported": False, "goal_alignment": "aligned"}
     )

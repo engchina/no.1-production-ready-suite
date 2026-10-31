@@ -6,6 +6,7 @@ import { operationTimestampMs } from "../../lib/operation-timing";
 import { traceCategory, traceMeasuredTiming, traceOrderedSteps, traceSearchText, type TraceCategory, type TraceOrder } from "../../lib/trace-explorer";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { Disclosure } from "../ui/disclosure";
 import { CopyButton } from "../ui/copy-button";
 import { SearchField } from "../ui/search-field";
 import { Tabs, TabPanel } from "../ui/tabs";
@@ -13,7 +14,7 @@ import { FilterSelect } from "./list-filters";
 import { ListToolbar } from "./list-toolbar";
 import { LoadMoreFooter } from "./load-more-footer";
 import { formatRunDuration } from "./run-history";
-import { RUN_TIMELINE_CHEVRON_SIZE, resolveRunDetailLabels, RunStepStatusIcon, stepDurationMs, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
+import { RUN_TIMELINE_CHEVRON_SIZE, runTimelineHasChildren, resolveRunDetailLabels, RunStepStatusIcon, stepDurationMs, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
 import { RunStepDetailsView, RunStepTiming, runStepContent, runStepTechnicalFields, runStepResultSummary } from "./run-step-details";
 
 
@@ -27,6 +28,7 @@ export const DEFAULT_TRACE_EXPLORER_LABELS = {
   unknown: "時刻が記録されていない呼び出しは、時間の概観に表示していません。", inflight: "終了時刻のない呼び出しは開始位置だけを表示します。",
   empty: "条件に一致する呼び出しがありません。", reset: "条件をクリア", choose: "呼び出しを選ぶと詳細が表示されます。",
   list: "呼び出しの一覧", backToList: "一覧に戻る", previous: "前の呼び出し", next: "次の呼び出し", noDetails: "呼び出しの内容は記録されていません。",
+  location: "処理内の位置", fullPath: "完全な処理経路",
   copy: "ID をコピー", copied: "ID をコピーしました", copyFailed: "ID をコピーできませんでした。", more: "さらに表示", retry: "再試行",
   loaded: (shown: number, total: number) => `${shown} / ${total} 件を表示`,
 };
@@ -42,6 +44,9 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
   explorerLabels?: Partial<TraceExplorerLabels>;
 }) {
   const labels = { ...DEFAULT_TRACE_EXPLORER_LABELS, ...explorerLabels };
+  const hierarchicalSteps = traceOrderedSteps(steps, "hierarchy");
+  const childFlags = runTimelineHasChildren(hierarchicalSteps);
+  const isLeaf = (step: RunTimelineStep) => !childFlags[hierarchicalSteps.findIndex(item => item.id === step.id)];
   const runLabels = resolveRunDetailLabels(detailLabels);
   const id = useId();
   const [query, setQuery] = useState("");
@@ -145,7 +150,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
                           const next = buttons?.[list.indexOf(step) + offset];
                           if (next) { event.preventDefault(); next.focus(); }
                         }}>
-                        <span className={cn("flex min-w-0 items-start gap-2 leading-5", runTimelineNameClass(size))}><span className="pr-icon-line"><RunStepStatusIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={false} /></span><span data-trace-record-label="" className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.label}</span></span>
+                        <span className={cn("flex min-w-0 items-start gap-2 leading-5", runTimelineNameClass(size))}><span className="pr-icon-line"><RunStepStatusIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={isLeaf(step)} /></span><span data-trace-record-label="" className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.label}</span></span>
                         <span className="flex items-center justify-between gap-2 text-xs text-fg-muted"><span data-trace-step-status-duration="">{runLabels.stepStatus[step.status]}{stepDurationMs(step) !== null ? ` · ${formatRunDuration(stepDurationMs(step), runLabels.notRecorded)}` : ""}</span></span>
                         {runStepResultSummary(step.details, step.detail) ? <span data-trace-result-summary="" className="text-xs leading-5 text-fg-muted">{runStepResultSummary(step.details, step.detail)}</span> : null}
                         {bar ? <span className={cn(RUN_TIME_TRACK, "overflow-hidden")} data-trace-time-bar="" aria-hidden="true"><span className={cn(RUN_TIME_FILL, RUN_TIME_COLOR[step.status])} style={{left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%`}} /></span> : null}
@@ -164,11 +169,12 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
             </div>
             <h4 id={`${id}-selected`} ref={titleRef} tabIndex={-1} className={cn("break-words font-normal leading-5 text-fg [overflow-wrap:anywhere]", runTimelineNameClass(size))}>{selected?.label ?? labels.choose}</h4>
             {selected ? <>
-              {selectedParents.length ? <p className="mt-1 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">{selectedParents.map(step => step.label).join(" / ")}</p> : null}
-              <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={false} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
+              {selectedParents.length ? <p className="mt-1 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">{labels.location}: {selectedParents.at(-1)?.label}</p> : null}
+              <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs"><span>Span ID:</span><code className="min-w-0 break-all font-mono text-xs text-fg-muted">{selected.id}</code><CopyButton text={selected.id} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /></div>
               <div className="grid min-w-0 gap-2" data-trace-inspector-content="">
                 <div data-trace-processing-content="" className="grid min-w-0 gap-2">
+                {selectedParents.length > 1 ? <Disclosure summary={labels.fullPath} variant="plain" size="sm"><ol aria-label={labels.fullPath} className="grid gap-1 text-xs text-fg-muted">{selectedParents.map(step => <li key={step.id}>{step.label}</li>)}</ol></Disclosure> : null}
                   {selected.detail ? <p className="text-xs leading-5 text-fg-muted">{selected.detail}</p> : null}
                   <RunStepDetailsView showStatistics={false} showTiming={false} details={{...runStepContent(selected.details), call: selected.details?.call}} timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: stepDurationMs(selected)}} />
                   {selected.children}

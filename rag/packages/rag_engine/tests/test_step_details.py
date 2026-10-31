@@ -99,17 +99,14 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
 
     def test_question_and_preparation_steps(self):
         steps = _by_name(self.run_flow())
-        understanding = _fields(steps["質問の理解"])
-        self.assertIn("目的", understanding)
-        self.assertEqual(understanding["答える要求"], "1 件")
-        self.assertIn("結果", understanding)
-        self.assertIn("結果", _fields(steps["用語・同義語の確認"]))
-        self.assertIn("結果", _fields(steps["回答ルールの確認"]))
+        self.assertNotIn("質問の理解", steps)
+        self.assertIn("結果", _fields(steps["用語・同義語による検索文の追加"]))
+        self.assertIn("結果", _fields(steps["回答生成での登録ルールの使用"]))
         # 検索の前提の確認は工程にしない（#3495）。普段どおりの検索範囲・準備の状態は示さない。
         self.assertNotIn("検索の準備確認", steps)
         self.assertNotIn("分類フィルタ", _fields(steps["文書検索"]))
-        self.assertEqual(_fields(steps["質問拡張戦略"])["設定"], SIMPLE_RETRIEVAL_LABEL)
-        queries = steps["検索文と検索語の確定"]
+        self.assertEqual(_fields(steps["質問の言い換え・分解"])["設定"], SIMPLE_RETRIEVAL_LABEL)
+        queries = steps["検索文をまとめ、検索語を作る"]
         self.assertRegex(_fields(queries)["結果"], r"^検索文 \d+ 本$")
         self.assertIn("全文検索のキーワード", _fields(queries))
         self.assertTrue(any(line.startswith("1. [原質問]") for line in _lines(queries)))
@@ -125,7 +122,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         steps = _by_name(self.run_flow())
         search = _fields(steps["文書検索"])
         # 検索に使った検索文の数は、確定した検索文の数と同じ。
-        self.assertEqual(f"検索文 {search['検索文']}", _fields(steps["検索文と検索語の確定"])["結果"])
+        self.assertEqual(f"検索文 {search['検索文']}", _fields(steps["検索文をまとめ、検索語を作る"])["結果"])
         self.assertEqual(search["検索の候補"], "2 件（1 文書）")
         self.assertEqual(search["候補の経路"], "ベクトルと全文の両方 1・ベクトルだけ 1")
         self.assertTrue(search["結果"].startswith("回答に渡す根拠 "))

@@ -218,7 +218,8 @@ def test_hints_come_from_aliases_and_guide_triggers_sharing_request_terms() -> N
         expanded_question=QUESTION,
         path=None,  # type: ignore[arg-type]
         matched_terms=(RuntimeTerm(term="請求書", aliases=("インボイス",)), RuntimeTerm(term="受注", aliases=("オーダー",))),
-        matched_rules=(RuntimeRule(rule_id="g", title="t", triggers=("再発行 承認", "受注 取消")),),
+        matched_rules=(RuntimeRule(rule_id="g", title="t", triggers=("再発行 承認", "受注 取消"), tags=("pinned",)),),
+        terms_search_enabled=True,
     )
 
     hints = request_hints(target, knowledge, split)
@@ -520,4 +521,4 @@ def test_confirmation_only_rules_do_not_supply_generation_retrieval_hints() -> N
             RuntimeRule(rule_id="generate", title="生成", triggers=("設定 生成専用",), purpose="generation"),
         ),
     )
-    assert request_hints(target, knowledge, lambda text: text.split()) == ["設定 生成専用"]
+    assert request_hints(target, knowledge, lambda text: text.split()) == []

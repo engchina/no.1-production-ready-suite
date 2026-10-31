@@ -751,14 +751,14 @@ describe("動くスピナーは 1 つ（#3445）", () => {
   const spinners = () =>
     [...container.querySelectorAll("svg.animate-spin")].filter((svg) => !svg.closest("details:not([open]) > :not(summary)"));
 
-  it("今の段は最後に始まった実行中の末端の段で、一覧はその段だけを回す", () => {
+  it("並行する実行中の末端はそれぞれ回り、親は回さない", () => {
     expect(runTimelineCurrentStepIndex(steps)).toBe(3);
     expect(runTimelineCurrentStepIndex(steps.slice(0, 2))).toBe(1);
     expect(runTimelineCurrentStepIndex([{ status: "done" }])).toBe(-1);
     render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
-    expect(spinners()).toHaveLength(1);
+    expect(spinners()).toHaveLength(2);
     expect(container.querySelector("[data-run-timeline-step='text'] svg.animate-spin")).not.toBeNull();
-    expect(container.querySelector("[data-run-timeline-step='vector'] .lucide-circle-play")).not.toBeNull();
+    expect(container.querySelector("[data-run-timeline-step='vector'] svg.animate-spin")).not.toBeNull();
   });
 
   it("処理の経過を開いて今の段が回る間は、概要の進行表示を回さない実行中の印にする", () => {
@@ -780,7 +780,7 @@ describe("動くスピナーは 1 つ（#3445）", () => {
     act(() => container.querySelector<HTMLElement>("[data-testid='section-summary']")?.click());
     expect(progress?.dataset.processingActivityIcon).toBe("static");
     expect(progress?.querySelector("[data-processing-static-icon]")).not.toBeNull();
-    expect(spinners()).toHaveLength(1);
+    expect(spinners()).toHaveLength(2);
     expect(container.querySelector("[data-run-timeline-step='text'] svg.animate-spin")).not.toBeNull();
     // 閉じると進行表示が回る。
     act(() => container.querySelector<HTMLElement>("[data-testid='section-summary']")?.click());

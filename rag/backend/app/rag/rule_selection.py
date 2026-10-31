@@ -15,7 +15,7 @@ from pr_backend_core.observability.tracing import observed_span
 from pydantic import BaseModel, ConfigDict, Field
 from rag_engine.resources.runtime import resolve_prompt
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.rag.guardrails import GuardrailPolicy
 from app.rag.search_answer_profile_knowledge import (
     SectionPages,
@@ -73,6 +73,8 @@ async def recognize_rule_selections(
     usage: dict[str, float] | None = None,
 ) -> tuple[ClarificationAnswer, ...]:
     """一致した未回答の選択式条件だけを一括認識する。失敗した条件は未回答に残す。"""
+    if not settings.rag_runtime_rules_confirmation_enabled:
+        return ()
     pending = unanswered_rule_clarifications(payload, question, answers=answers)
     found = list(answers)
     text = source_text if source_text is not None else question
@@ -183,6 +185,11 @@ def apply_rule_selection_scope(
     from app.rag.answer_engine import _with_page_ranges
     from app.rag.search_answer_profile_knowledge import resolve_clarification
     from app.schemas.search import parse_page_ranges
+
+    if not get_settings().rag_runtime_rules_confirmation_enabled:
+        updated = request.model_copy()
+        updated._rule_selection_scope = {}
+        return updated
 
     scopes = []
     ranges: list[dict[str, object]] = []

@@ -118,7 +118,7 @@ class InquiryQueryRemovalTests(unittest.TestCase):
         self.assertEqual(result.retrieval_query_plan["llm_expansion_queries"], [GENERATED_QUERY])
         # 言い換えた検索文でも関連度を測る（追加の rerank は検索に使った検索文だけ）。
         self.assertEqual(rerank_calls, [QUESTION, GENERATED_QUERY])
-        self.assertIn(f"2. [質問拡張] {GENERATED_QUERY}", result.question_display)
+        self.assertIn(f"2. [質問の言い換え・分解] {GENERATED_QUERY}", result.question_display)
         self.assertNotIn("[質問理解]", result.question_display)
 
 

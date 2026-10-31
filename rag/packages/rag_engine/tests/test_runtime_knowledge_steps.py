@@ -68,6 +68,7 @@ def _run(
     *,
     search: bool = False,
     answer: bool = False,
+    strategy: str = SIMPLE_RETRIEVAL_LABEL,
 ):
     settings = replace(
         _rerank_ready_settings(),
@@ -90,7 +91,7 @@ def _run(
                 "abcdef",
                 ["docling"],
                 settings,
-                query_strategy=SIMPLE_RETRIEVAL_LABEL,
+                query_strategy=strategy,
                 answer_flow=STANDARD_ANSWER_FLOW_LABEL,
             )
         with bind_trace_observer(observer.observe):
@@ -99,7 +100,7 @@ def _run(
                 "abcdef",
                 ["docling"],
                 settings,
-                query_strategy=SIMPLE_RETRIEVAL_LABEL,
+                query_strategy=strategy,
                 answer_flow=STANDARD_ANSWER_FLOW_LABEL,
             )
 
@@ -193,8 +194,9 @@ def test_confirmation_only_rules_do_not_inject_generation_instructions(tmp_path:
 
 
 def test_term_matching_and_rewrite_overlap_and_remain_original_only(tmp_path: Path, monkeypatch) -> None:
-    from threading import Barrier
     from dataclasses import replace
+    from threading import Barrier
+
     from rag_engine.knowledge import runtime_knowledge as rk
 
     barrier = Barrier(2, timeout=3)
@@ -224,8 +226,9 @@ def test_term_matching_and_rewrite_overlap_and_remain_original_only(tmp_path: Pa
 
 
 def test_term_failure_does_not_stop_independent_rewrite(tmp_path: Path, monkeypatch) -> None:
-    from rag_engine.knowledge import runtime_knowledge as rk
     from dataclasses import replace
+
+    from rag_engine.knowledge import runtime_knowledge as rk
 
     calls = []
 
@@ -261,3 +264,13 @@ def test_model_receives_only_enabled_terms_and_independent_rules(tmp_path: Path,
     assert ("合成の説明" in joined) is answer
     assert "合成のルールの本文" in joined
     assert result.runtime_knowledge.original_question in joined
+
+
+def test_rewrite_failure_does_not_stop_term_search(tmp_path: Path) -> None:
+    path = _write(tmp_path / "rk.json", terms=[_TERM])
+    with patch.object(answering, "_route_query_strategy", side_effect=ValueError("synthetic")):
+        result = _run(path, search=True, strategy="auto_routing")
+    assert result.answer
+    assert result.runtime_knowledge.retrieval_terms
+    assert _steps(result)["質問の言い換え・分解"]["status"] == "補助情報なしで続行"
+    assert _steps(result)[TERMS_STEP]["status"] == "complete"

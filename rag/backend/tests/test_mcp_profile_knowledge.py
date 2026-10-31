@@ -105,6 +105,8 @@ class _NoGenerationClient:
 
 @pytest.fixture
 def auth(monkeypatch: MonkeyPatch) -> ProductionAuth:
+    monkeypatch.setattr(get_settings(), "rag_runtime_terms_answer_enabled", True)
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_answer_enabled", True)
     production = enable_production_auth(monkeypatch)
     monkeypatch.setattr(get_settings(), "app_service_token_secret", SECRET)
     return production
@@ -323,3 +325,27 @@ def test_retrieved_profile_rules_only_include_adopted_generation_instructions(
     ]
     assert [rule["id"] for rule in knowledge["rules"]] == ["generation"]
     assert knowledge["rules_omitted"] == 0
+
+
+@pytest.mark.parametrize(
+    "terms,rules", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_profile_knowledge_respects_independent_answer_switches(
+    auth: ProductionAuth,
+    searches: list[SearchRequest],
+    monkeypatch: MonkeyPatch,
+    terms: bool,
+    rules: bool,
+) -> None:
+    monkeypatch.setattr(get_settings(), "rag_runtime_terms_answer_enabled", terms)
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_answer_enabled", rules)
+    body = _retrieve(
+        auth, query="期限", planning="caller", queries=["受付 期限"], original_question=QUESTION
+    )
+    knowledge = body.get("profile_knowledge")
+    if not (terms or rules):
+        assert knowledge is None
+    else:
+        assert bool(knowledge["terms"]) is terms
+        assert bool(knowledge["rules"]) is rules
+    assert searches and searches[-1].query == "期限"

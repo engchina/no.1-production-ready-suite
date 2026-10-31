@@ -283,8 +283,7 @@ for (const viewport of VIEWPORTS) {
         .step("chat-2", "running")
         .step("chat-2", "done", { kind: "plan" })
         .pause();
-      await expect(current).toHaveAttribute("data-step-id", "");
-      await expect(current).toContainText("承認を待っています");
+      await expect(current).toHaveCount(0);
       await expect(turn.getByRole("button", { name: "承認して実行" })).toBeVisible();
       await expectNoHorizontalOverflow(page);
       await page.screenshot({ path: testInfo.outputPath(`progress-approval-${viewport.name}-${theme}.png`) });

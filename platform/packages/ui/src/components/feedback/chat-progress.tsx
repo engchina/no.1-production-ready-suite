@@ -11,7 +11,6 @@ import {
   RunTimelineProduct,
   runTimelineHasChildren,
   runTimelineStepIndentStyle,
-  RunTimelineViewport,
   type RunTimelineStep,
 } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
@@ -305,11 +304,13 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
 function StepList({
   steps,
   bars,
+  renderRunningStep,
   labels,
   testId,
 }: {
   steps: ChatProgressStep[];
   bars: boolean;
+  renderRunningStep?: (step: RunTimelineStep) => ReactNode;
   labels: ChatProgressLabels;
   testId?: string;
 }) {
@@ -320,6 +321,7 @@ function StepList({
       showBars={bars}
       // 実行中の一覧の中の実行中の段は、今の段階を包む親の工程（今の段階の行だけを回す。#2840）。
       spinRunning={false}
+      renderRunningStep={renderRunningStep}
       size="sm"
       formatDuration={labels.formatDuration}
       stepTestIdPrefix={testId}
@@ -457,7 +459,6 @@ function CurrentStepRow({
       data-slow={slow ? "true" : "false"}
       data-reconnecting={reconnecting ? "true" : "false"}
     >
-      <RunTimelineViewport depth={step?.level ?? level ?? 0} label={labels.steps}>
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3"
         data-testid={testId && step ? `${testId}-step-${step.id}` : undefined}
         data-status="running" aria-current="step"
@@ -481,7 +482,6 @@ function CurrentStepRow({
           {labels.formatDuration(Math.floor(current.elapsedMs / 1000) * 1000)}
         </span>
       </div>
-      </RunTimelineViewport>
     </div>
   );
 }
@@ -511,10 +511,7 @@ function CurrentStepRow({
  *
  * SQL 生成の画面のような詳細な工程の表示（NL2SQL の WorkflowProgressStrip）より情報を絞る。
  */
-function startingSteps(label: string, startedAt: string | number | null | undefined): ChatProgressStep[] {
-  const started = operationTimestampMs(startedAt);
-  return [{ id: "chat-progress-starting", label, status: "running", ...(started !== null ? { startedAt: new Date(started).toISOString() } : {}) }];
-}
+
 
 export function ChatProgress({
   steps: incomingSteps,
@@ -553,7 +550,7 @@ export function ChatProgress({
   const trackedSteps = useChatProgressSteps({ key: progressKey, steps: incomingSteps, active });
   // 処理の経過は trace の投影なので、受け付けの直後は最初の span が届くまで行が無い。その間は「処理を開始しています」の
   // 行を出し、空白にしない（#3226）。この行は一覧の保持（`useChatProgressSteps`）に入れず、span が届いたら消える。
-  const steps = trackedSteps.length === 0 && activeProp === true ? startingSteps(labels.starting, startedAt) : trackedSteps;
+  const steps = trackedSteps;
   const failed = !cancelled && steps.some((step) => step.status === "failed");
   const state: ProgressState = active ? "running" : cancelled ? "cancelled" : failed ? "failed" : "done";
   // 今の段階は、最後に始まった実行中の末端の段（子の段を持たない段）。子の段を持つ実行中の段（親の工程）は今の段階に
@@ -562,9 +559,7 @@ export function ChatProgress({
   const hasChildren = runTimelineHasChildren(steps);
   const runningLeaf = active ? lastRunningStep(steps, hasChildren) : undefined;
   const runningParent = active && !runningLeaf ? lastRunningStep(steps) : undefined;
-  const current = active
-    ? runningLeaf ?? (runningParent ? undefined : steps.find((step) => step.status === "pending"))
-    : undefined;
+  const current = runningLeaf;
   const finished = steps.filter((step) => step.status === "done" || step.status === "failed" || step.status === "skipped");
   // 実行中の一覧（#2840）: 始まった段階（実行中・終わった段階）を一覧の順（開始順）に 1 本で並べ、今の段階の行は
   // その位置に置く。今の段階を包む実行中の親の工程も開始順の位置に出す（親の行が出ないまま子だけが出て、親が
@@ -598,7 +593,7 @@ export function ChatProgress({
   const slow = useLatchedSlow(currentTiming.slow, { active: slowEnabled, resetKey: progressKey });
   const announcement = currentLabel && reconnecting ? `${currentLabel} ${labels.reconnecting}` : currentLabel;
 
-  if (steps.length === 0) return null;
+  if (steps.length === 0 && !active) return null;
 
   return (
     <div
@@ -629,19 +624,12 @@ export function ChatProgress({
         >
           {/* 1 本のタイムライン: 始まった段階を開始順に並べ、今の段階の行をその位置に出す（#2309 / #2840）。 */}
           <div className="grid min-w-0 gap-1.5">
-            {started.map((step) => step.status === "running" && !hasChildren[steps.indexOf(step)] ? (
-              <CurrentStepRow key={step.id}
-                activityIndicator={activityIndicator}
-                primary={step === current}
-                step={step}
-                slow={slow}
-                reconnecting={reconnecting}
-                labels={labels}
-                testId={testId}
-              />
-            ) : (
-              <StepList key={step.id} steps={[step]} bars={false} labels={labels} testId={testId} />
-            ))}
+            <StepList steps={started} bars={false} labels={labels} testId={testId}
+              renderRunningStep={(timelineStep) => {
+                const step = started.find((item) => item.id === timelineStep.id)!;
+                return <CurrentStepRow activityIndicator={activityIndicator} primary={step === current} step={step}
+                  slow={slow} reconnecting={reconnecting} labels={labels} testId={testId} />;
+              }} />
             {footer}
           </div>
         </Disclosure>

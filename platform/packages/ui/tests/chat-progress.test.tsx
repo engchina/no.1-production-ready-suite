@@ -71,7 +71,8 @@ describe("ChatProgress", () => {
 
   it("実行中で段（span）がまだ無いときは「処理を開始しています」の行を出し、段が届いたら消す（#3226）", () => {
     render(<ChatProgress steps={[]} active startedAt={T0} testId="p" />);
-    expect(host.textContent).toContain("処理を開始しています");
+    expect(host.textContent).not.toContain("処理を開始しています");
+    expect(host.querySelector("[data-step-id]")).toBeNull();
     render(<ChatProgress steps={[{ id: "s", label: "段 A", status: "running", startedAt: at(1) }]} active startedAt={T0} testId="p" />);
     expect(host.textContent).not.toContain("処理を開始しています");
     expect(host.textContent).toContain("段 A");

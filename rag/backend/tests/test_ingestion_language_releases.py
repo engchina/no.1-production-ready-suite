@@ -224,7 +224,7 @@ async def test_recipe_enqueue_forwards_expected_release(monkeypatch: pytest.Monk
     "section,key,phase,allowed",
     [
         ("entity_cues", "alias_column_words", "INDEX", True),
-        ("inquiry_cues", "operation_trigger_terms", "INDEX", False),
+        ("inquiry_cues", "operation_trigger_terms", "INDEX", True),
         ("inquiry_cues", "operation_trigger_terms", "CHUNK", True),
         ("markers", "bullet_chars", "CHUNK", False),
     ],

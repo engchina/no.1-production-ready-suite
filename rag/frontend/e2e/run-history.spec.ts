@@ -2,7 +2,7 @@ import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packag
 import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
-import { mockTraceApi, ragSpan, savedSpanProgress, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
+import { mockTraceApi, ragSpan, savedSpanProgress, spanStepId, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
 import {
   apiEnvelope,
   expectedControlHeight,
@@ -1071,6 +1071,66 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 });
 
 test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {
+  test("検索の実入出力と分割方法を経路と区別して確認できる", async ({page}, testInfo) => {
+    await mockLocalAuth(page);
+    const row = run(1, {question: "合成の質問", search_answer_profile_name: "プロファイル A", answer: "合成の回答"});
+    await mockRuns(page, [row]);
+    const purpose = "作成した検索語と検索式を使い、Oracle Text で文書の箇所を探します。";
+    const events = savedSpanProgress(row.run_id, [
+      {key: "root", spec: ragSpan.root(), at: [0, 2]},
+      {key: "answer", spec: ragSpan.stage("answer"), at: [0, 2]},
+      {key: "merge", spec: ragSpan.step("検索文をまとめ、検索語を作る"), at: [0, .2], details: {fields: [
+        {label: "結果", value: "検索文 2 本"}, {label: "検索文 1 の分割方法", value: "Sudachi＋文字種による補完"},
+        {label: "検索文 2 の分割方法", value: "文字種による分割（縮退: RuntimeError。Sudachi の代わりに文字種で分割）"},
+        {label: "Oracle Text 検索式 1", value: "{合成項目} ACCUM {ABC}"},
+      ], lines: ["1. [原質問] 合成項目 ABC", "2. [質問の言い換え・分解] 合成項目 DEF", "主な検索語: 合成項目 / ABC"]}},
+      {key: "search", spec: ragSpan.step("文書検索"), at: [.2, 2]},
+      {key: "vector", spec: ragSpan.step("ベクトル検索", "search"), at: [.2, 1.5], details: {fields: [
+        {label: "目的", value: "検索文の埋め込みを使い、意味の近い文書の箇所を探します。"},
+        {label: "結果", value: "取得件数（重複除去前） 2 件 / チャンク ID の重複除去後 1 件"},
+        {label: "検索 1 の入力", value: "合成項目 ABC"}, {label: "検索 2 の入力", value: "合成項目 DEF"},
+        {label: "指標", value: "コサイン類似度（1 − COSINE 距離・大きい順）。回答の正確さを表す指標ではありません。"},
+      ], lines: ["検索 1・順位 1: A.pdf / ページ 2 / コサイン類似度: 0.85", "検索 2・順位 1: A.pdf / ページ 2 / コサイン類似度: 0.81"]}},
+      {key: "text", spec: ragSpan.step("全文検索", "search"), at: [.2, 1.8], details: {fields: [
+        {label: "目的", value: purpose}, {label: "結果", value: "取得件数（重複除去前） 0 件 / チャンク ID の重複除去後 0 件"},
+        {label: "検索 1 の入力", value: "合成項目 ABC / 検索語: 合成項目 / ABC"},
+        {label: "Oracle Text 検索式 1", value: "{合成項目} ACCUM {ABC}"},
+        {label: "候補数の上限", value: "各検索文 24 件"}, {label: "指標", value: "Oracle Text SCORE（大きい順）"},
+      ], lines: ["検索 1: 取得件数（重複除去前） 0 件 / 重複除去後 0 件（該当なし）"]}},
+      {key: "legacy", spec: ragSpan.step("全文検索", "search"), at: [.2, 1.8]},
+    ]);
+    await mockTraceApi(page, {[row.run_id]: events});
+    await page.goto(`/history/${row.run_id}`);
+    const timeline = page.getByTestId("run-history-timeline");
+    await page.getByTestId("run-history-timeline-summary").click();
+    for (const key of ["merge", "vector", "text", "legacy"]) {
+      await inspectTraceStep(page, timeline, spanStepId(key));
+      const inspector = page.locator("[data-trace-inspector]");
+      await expect(inspector).toContainText("処理内の位置:");
+      if (key === "merge") await expect(inspector).toContainText("縮退: RuntimeError");
+      if (key === "vector") {
+        await expect(inspector).toContainText("A.pdf / ページ 2");
+        await expect(inspector).toContainText("コサイン類似度");
+        await expect(inspector).not.toContainText("Sudachi");
+      }
+      if (key === "text") {
+        await expect(inspector).toContainText(purpose);
+        await expect(inspector).toContainText("該当なし");
+        await expect(inspector.getByText("処理内の位置: 検索文から根拠の候補を集める", {exact: true})).toBeVisible();
+        const path = inspector.locator("details").filter({has: page.locator("summary", {hasText: "完全な処理経路"})});
+        await expect(path).not.toHaveAttribute("open", "");
+        await path.locator("summary").click();
+        await expect(path).toContainText("質問の条件を整理して回答を作る");
+      }
+      if (key === "legacy") await expect(inspector).not.toContainText("取得件数（重複除去前）");
+      await expectNoPageOverflow(page);
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(value => {document.documentElement.dataset.theme = value;}, theme);
+        await inspector.screenshot({path: testInfo.outputPath(`search-${key}-${theme}.png`)});
+      }
+      await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+    }
+  });
   test("書けなかった span がある実行は「一部の処理だけを記録しています。」、古い形式の記録は古い形式の案内を出す", async ({
     page,
   }) => {
@@ -1239,7 +1299,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
       await page.goto(`/history/${row.run_id}`);
       await page.getByTestId("run-history-timeline-summary").click();
       const steps = page.getByTestId("run-history-timeline").locator("[data-run-timeline-step]");
-      // 包む段 → 質問の理解 → 検索文と全文検索の語を決める。
+      // 包む段 → 質問の理解 → 検索文をまとめ、検索語を作る。
       await expect(steps).toHaveCount(3);
 
       await steps.nth(1).locator("[data-run-timeline-toggle]").click();

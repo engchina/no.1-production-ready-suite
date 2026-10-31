@@ -17,7 +17,6 @@ from rag_engine.retrieval.request_coverage import (
     TargetedRetrieval,
     coverage_targets,
     plan_targeted_retrievals,
-    re_retrieval_skip_reason,
     request_rows,
     run_targeted_retrievals,
     select_new_parents,
@@ -180,12 +179,10 @@ def context(*parents: ContextParentEvidence) -> AnswerContext:
 def test_subquestion_targets_judge_body_and_search_with_preamble() -> None:
     targets = coverage_targets(LINE_QUESTION, split)
 
-    assert [t.id for t in targets] == ["Q2", "Q3", "Q4"]
-    # 判定は小問の語だけ（前置きの語で割合が上がらない）、検索は前置き＋小問の文。
-    assert targets[0].terms == ("受注", "登録")
-    assert targets[0].subquestion == "①"
-    assert targets[0].query == PREAMBLE + " 受注の登録方法は？"
-    assert targeted_queries(targets[0], ()) == (PREAMBLE + " 受注の登録方法は？",)
+    assert [t.id for t in targets] == ["Q1"]
+    assert targets[0].text == LINE_QUESTION
+    assert not targets[0].subquestion
+    assert targeted_queries(targets[0], ()) == (LINE_QUESTION,)
 
 
 def test_subquestions_require_explicit_gap_before_search() -> None:
@@ -193,9 +190,9 @@ def test_subquestions_require_explicit_gap_before_search() -> None:
     rows = request_rows(targets)
     assert all(row["status"] == "unassessed" for row in rows)
     assert plan_targeted_retrievals(rows, targets, CoverageBudget())[0] == []
-    rows[1]["answer_status"] = "missing"
+    rows[0]["answer_status"] = "missing"
     plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget())
-    assert [item.target.id for item in plan] == ["Q3"] and not stop
+    assert [item.target.id for item in plan] == ["Q1"] and not stop
 
 
 def test_plan_counts_subquestions_and_missing_requests_in_one_place() -> None:
@@ -203,11 +200,10 @@ def test_plan_counts_subquestions_and_missing_requests_in_one_place() -> None:
     rows = [{**row, "answer_status": "missing"} for row in request_rows(targets)]
 
     plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(max_subquestions=2))
-    assert [p.target.id for p in plan] == ["Q2", "Q3"]
-    assert stop == "max_subquestions"
-    plan, _ = plan_targeted_retrievals(rows, targets, CoverageBudget(chunks_per_subquestion=0))
-    assert plan == []
-    assert re_retrieval_skip_reason(rows, CoverageBudget(chunks_per_subquestion=0)) == "no_budget"
+    assert [p.target.id for p in plan] == ["Q1"]
+    assert not stop
+    plan, stop = plan_targeted_retrievals(rows, targets, CoverageBudget(max_queries=0))
+    assert plan == [] and stop == "max_queries"
 
 
 def test_each_subquestion_keeps_its_own_top_evidence() -> None:
@@ -222,19 +218,11 @@ def test_each_subquestion_keeps_its_own_top_evidence() -> None:
 
     results, stop = run_targeted_retrievals(rows, targets, budget=CoverageBudget(), retrieve=retrieve, tokenize=split)
 
-    # 小問ごとに前置き＋小問の文で 1 回ずつ検索する（欠けた要求の max_queries=2 に数えない）。
-    assert calls == [PREAMBLE + " 受注の登録方法は？", PREAMBLE + " 請求書の再発行方法は？", PREAMBLE + " 承認の担当は誰ですか？"]
-    assert stop == ""
-    selected = select_new_parents(results, set(), max_chunks=0)
-    by_request: dict[str, list[str]] = {}
-    for request_id, chosen in selected:
-        by_request.setdefault(request_id, []).append(chosen.record.chunk_uid)
-    # 小問ごとに上位の 2 件を確保する（ほかの小問の結果に押し出されない）。
-    assert by_request == {
-        "Q2": ["run:q1-0", "run:q1-1"],
-        "Q3": ["run:q2-0", "run:q2-1"],
-        "Q4": ["run:q3-0", "run:q3-1"],
-    }
+    assert calls == [LINE_QUESTION]
+    assert not stop
+    selected = select_new_parents(results, set(), max_chunks=2)
+    assert len(selected) == 2
+    assert all(request_id == "Q1" for request_id, _ in selected)
 
 
 def test_select_new_parents_keeps_shared_cap_for_missing_requests() -> None:

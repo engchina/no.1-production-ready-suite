@@ -76,7 +76,7 @@ HYDE_STRATEGY = "hyde"
 
 AUTO_ROUTING_LABEL = "自動ルーティング（自動選択）"
 
-SIMPLE_RETRIEVAL_LABEL = "単純検索（拡張なし）"
+SIMPLE_RETRIEVAL_LABEL = "原質問のみ（言い換え・分解なし）"
 
 RAG_FUSION_LABEL = "RAGフュージョン（複数検索質問 + 相互順位融合）"
 
@@ -244,6 +244,7 @@ class QueryExpansionResult:
     effective_strategy: str
     generated_queries: tuple[str, ...] = ()
     routing_reason: str = ""
+    degraded_error: str = ""
     routing_data_required: bool | None = None
     routing_data_items: tuple[str, ...] = ()
     rejected_queries: tuple[dict[str, str], ...] = ()
@@ -602,6 +603,7 @@ def query_strategy_id(value: Any) -> str:
         "auto": AUTO_ROUTING_STRATEGY,
         "auto routing": AUTO_ROUTING_STRATEGY,
         "simple": SIMPLE_RETRIEVAL_STRATEGY,
+        "単純検索": SIMPLE_RETRIEVAL_STRATEGY,
         "simple retrieval": SIMPLE_RETRIEVAL_STRATEGY,
         "rag fusion": RAG_FUSION_STRATEGY,
         "rag-fusion": RAG_FUSION_STRATEGY,

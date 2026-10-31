@@ -4174,6 +4174,10 @@ def _describe_term_usage(
         step.skip(f"設定がオフのため、{name}をスキップしました。")
         return
     assert runtime is not None
+    if runtime.error:
+        step.status = "補助情報なしで続行"
+        step.result(f"用語の照合に失敗したため、用語なしで続行します（{runtime.error}）。")
+        return
     if not runtime.matched_terms:
         step.result(
             "登録した用語・同義語に一致しなかったため、回答補助には使用していません。"
@@ -4205,6 +4209,9 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
     """独立した兄弟工程。完全な原質問だけを照合し、モデルの言い換えを再入力しない。"""
     with _execution_step(TERM_SEARCH_STEP) as step:
         if not (settings.runtime_terms_search_enabled or settings.runtime_terms_answer_enabled):
+            _describe_term_usage(step, runtime, answer=False)
+            return runtime
+        if runtime.error:
             _describe_term_usage(step, runtime, answer=False)
             return runtime
         try:
@@ -4241,9 +4248,9 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
             return result
         except Exception as exc:
             report_degraded("runtime_terms", exc)
-            step.status = "補助情報なしで続行"
-            step.result(f"用語の照合に失敗したため、用語の追加なしで続行します（{type(exc).__name__}）。")
-            return runtime
+            failed_runtime = replace(runtime, error=type(exc).__name__, failure=exc)
+            _describe_term_usage(step, failed_runtime, answer=False)
+            return failed_runtime
 
 
 def matched_term_query(runtime_knowledge: RuntimeKnowledgeContext | None) -> str:
@@ -4442,11 +4449,13 @@ def _degraded_query_expansion(
     表示する (#905)。利用者が選んだ selected_strategy は保つ。
     """
     error = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
+    report_degraded("query_expansion", exc)
     return QueryExpansionResult(
         original_question=original_question,
         selected_strategy=selected_strategy,
         effective_strategy=SIMPLE_RETRIEVAL_STRATEGY,
-        routing_reason=f"{stage}の LLM 呼び出しに失敗したため、単純検索（拡張なし）で続行します（{error}）",
+        degraded_error=error,
+        routing_reason=f"{stage}の LLM 呼び出しに失敗したため、原質問のみで続行します（{error}）",
         routing_data_required=routing_data_required,
         routing_data_items=routing_data_items,
         provision_queries=provision_queries,
@@ -4500,6 +4509,8 @@ def build_question_text_search_info(
                     "query": variant,
                     "tokens": list(terms),
                     "weights": list(tokenization.weights),
+                    "tokenizer": tokenization.tokenizer,
+                    "fallback_reason": tokenization.fallback_reason,
                     "matched_domain_keywords": list(tokenization.matched_domain_keywords),
                     "selected_domain_keywords": list(tokenization.selected_domain_keywords),
                     "truncated_domain_keywords": list(tokenization.truncated_domain_keywords),
@@ -4516,6 +4527,9 @@ def build_question_text_search_info(
                     "oracle_text_query_chars": len(oracle_query),
                 }
             )
+        if tokenization_traces and all(trace["tokenizer"] == "script" for trace in tokenization_traces):
+            tokenizer_name = "script"
+            tokenizer_label = _text_search_tokenizer_label(config, tokenizer_name)
         terms = query_terms[0] if query_terms else ()
         oracle_query = oracle_queries[0] if oracle_queries else ""
         return QuestionTextSearchInfo(
@@ -4563,6 +4577,17 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
     label, _, value = details[0].partition(": ")
     step.field(label, value)
     step.add(*details[1:])
+    for index, trace in enumerate(info.tokenization_traces, 1):
+        mode = trace.get("tokenizer", info.tokenizer)
+        method = "Sudachi＋文字種による補完" if mode == "sudachi+script" else "文字種による分割"
+        if reason := trace.get("fallback_reason"):
+            method += f"（縮退: {reason}。Sudachi の代わりに文字種で分割）"
+        step.field(f"検索文 {index} の分割方法", method)
+        tokens, weights = trace.get("tokens", []), trace.get("weights", [])
+        main = " / ".join(str(token) for token, weight in zip(tokens, weights, strict=False) if weight >= 1) or "なし"
+        extra = " / ".join(str(token) for token, weight in zip(tokens, weights, strict=False) if weight < 1) or "なし"
+        step.add(f"検索文 {index}: {trace.get('query', '')}", f"主な検索語: {main}", f"補う検索語: {extra}")
+        step.field(f"Oracle Text 検索式 {index}", trace.get("oracle_text_query") or "なし（全文検索は実行しません）")
     return True
 
 
@@ -5482,6 +5507,9 @@ def answer_question_result(
                     )
                 finally:
                     prefetch_note = _wait_original_query_prefetch(prefetch)
+                if expansion.degraded_error:
+                    step.status = "補助情報なしで続行"
+                    step.result(expansion.routing_reason)
                 if prefetch_note:
                     step.add(prefetch_note)
                 step.add(
@@ -5565,6 +5593,8 @@ def answer_question_result(
         _add_text_search_details(step, text_search_info)
         if text_search_info.error:
             step.status = "検索語の抽出に失敗"
+        elif any(trace.get("fallback_reason") for trace in text_search_info.tokenization_traces):
+            step.status = "文字種による分割で続行"
 
     # 根拠を集める流れは回答を作るか否かで分けない（RAG 検索とチャットで同じ工程・入れ子・LLM の呼び出し。#3506）。
     # 回答を作らないときは同じ流れの、回答に添付する画像と回答の生成の手前（業務 Agent の根拠の取得は主の文書の検索の

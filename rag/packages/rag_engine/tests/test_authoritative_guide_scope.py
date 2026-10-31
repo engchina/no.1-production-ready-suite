@@ -57,9 +57,7 @@ def test_scope_reaches_generation_without_any_material_association() -> None:
         original_question=QUESTION, expanded_question=QUESTION, path=Path("synthetic.json"), guide_task_scope=plan().task_scope
     )
     assert not runtime.has_matches
-    prompt = answering._grounded_prompt(
-        QUESTION, [], context(), (), None, None, runtime, None, None, template="{{question}}\n{{answer_context}}"
-    )
+    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, None, runtime, None, template="{{question}}\n{{answer_context}}")
     assert '"guide_id": "synthetic-guide"' in prompt
     assert '"step_id": "conditional"' in prompt
     assert '"required": false' in prompt
@@ -77,9 +75,9 @@ def test_condition_notices_reach_generation_after_task_scope() -> None:
         guide_condition_notices=(note,),
     )
     template = "{{question}}\n{{answer_context}}"
-    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, None, runtime, None, None, template=template)
+    prompt = answering._grounded_prompt(QUESTION, [], context(), (), None, None, runtime, None, template=template)
     without = answering._grounded_prompt(
-        QUESTION, [], context(), (), None, None, replace(runtime, guide_condition_notices=()), None, None, template=template
+        QUESTION, [], context(), (), None, None, replace(runtime, guide_condition_notices=()), None, template=template
     )
     assert prompt.count(note) == 1
     assert prompt.index("guide_task_scope:\n") < prompt.index("guide_condition_notices:\n") < prompt.index(note)
@@ -107,7 +105,7 @@ def test_formal_answer_keeps_scope_when_guide_search_has_no_material(monkeypatch
         confirmed_premise_sources=(("操作条件", "条件A", "question"),),
     )
     runtime = RuntimeKnowledgeContext(original_question=QUESTION, expanded_question=QUESTION, path=tmp_path / "synthetic.json")
-    monkeypatch.setattr(answering, "build_runtime_knowledge_context", lambda *args: runtime)
+    monkeypatch.setattr(answering, "build_runtime_knowledge_context", lambda *args, **kwargs: runtime)
     monkeypatch.setattr(answering, "check_adb_hybrid_search_ready", lambda *args, **kwargs: None)
     monkeypatch.setattr(answering, "build_adb_hybrid_answer_context", lambda *args, **kwargs: ctx)
     monkeypatch.setattr(answering, "_start_original_query_prefetch", lambda *args, **kwargs: None)

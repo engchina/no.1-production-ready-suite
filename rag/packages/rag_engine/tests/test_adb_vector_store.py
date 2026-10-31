@@ -145,7 +145,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         @contextmanager
         def observer(operation: str, name: str):
             observed.append(("start", operation, name))
-            yield object()
+            yield SimpleNamespace(display=lambda **kwargs: None)
             observed.append(("end", operation, name))
 
         settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
@@ -174,12 +174,12 @@ class AdbVectorStoreTests(unittest.TestCase):
             self.assertEqual(
                 observed,
                 [
+                    ("start", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
+                    ("end", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
                     ("start", "stage", adb_vector_store.VECTOR_SEARCH_STAGE),
                     ("end", "stage", adb_vector_store.VECTOR_SEARCH_STAGE),
                     ("start", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
                     ("end", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
-                    ("start", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
-                    ("end", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
                 ],
             )
             self.assertEqual(text.call_count, 2)

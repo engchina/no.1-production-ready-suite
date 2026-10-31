@@ -323,7 +323,7 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
             </> : null}
             {presentation.ranks.length ? <DataTable rows={presentation.ranks} getRowKey={row => row.rank} dense visibleRows={5} scrollAriaLabel={labels.output} columns={[
               { key: "rank", header: labels.rank }, { key: "index", header: labels.sourceIndex }, { key: "score", header: labels.score },
-              { key: "text", header: labels.document, render: row => <Disclosure size="sm" variant="plain" summary={<span className="line-clamp-2 break-words [overflow-wrap:anywhere]">{row.text || labels.notRecorded}</span>}><div className="grid min-w-0 gap-2"><CallBody text={row.text} /><div className="flex justify-end"><CopyButton text={row.text} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /></div></div></Disclosure> },
+              { key: "text", header: labels.document, render: row => <Disclosure size="sm" variant="plain" summary={<span className="line-clamp-2 break-words [overflow-wrap:anywhere]">{row.text || labels.notRecorded}</span>}><div className="grid min-w-0 gap-2"><CopyButton text={row.text} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" variant="ghost" /><CallBody text={row.text} /></div></Disclosure> },
             ]} /> : null}
           </div> : blocks?.length ? <CallTextBlocks key={tab} blocks={blocks} labels={labels} /> : tab === "reasoning" ? <p className="text-xs text-fg-muted">{labels.noReasoning}</p> :
             <RunStepDetailsBody details={{ code: [{ text: content.text === "" ? '""' : content.text, language: "json", label: labels[tab as "input" | "output" | "schema"] }] }} labels={labels} />}
@@ -340,8 +340,8 @@ function CallTextBlocks({ blocks, labels }: { blocks: readonly CallTextBlock[]; 
   return <div className="grid max-h-[36rem] min-w-0 gap-3 overflow-y-auto" tabIndex={0} aria-label={labels.callDetails} data-call-readable="">
     {blocks.map((block, index) => <Disclosure key={index} summary={block.role === "reasoning" ? labels.reasoning : block.role === "summary" ? labels.reasoningSummary : block.role} defaultOpen={!block.collapsed && block.role !== "system" && block.role !== "developer"} size="sm">
       <div className="grid min-w-0 gap-2">
+        <CopyButton text={block.text} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" variant="ghost" />
         <div data-call-body="" className="min-w-0"><CallBody text={block.text} /></div>
-        <div className="flex justify-end"><CopyButton text={block.text} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /></div>
       </div>
     </Disclosure>)}
   </div>;

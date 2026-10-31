@@ -103,7 +103,7 @@ def _engine_settings() -> Any:
 def _answer_flow(llm: _SlowLlm, finished: threading.Event, steps: int = 4) -> str:
     """回答フローの代わり。LLM を何度か呼び、失敗は握りつぶして次の工程へ進む。
 
-    rag_engine の補助の工程（質問の拡張など）も、失敗を握りつぶして回答を続ける。
+    rag_engine の補助の工程（質問の言い換え・分解など）も、失敗を握りつぶして回答を続ける。
     """
     settings = _engine_settings()
     try:

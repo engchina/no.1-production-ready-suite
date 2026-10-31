@@ -358,7 +358,12 @@ class _DelayedBranches(OracleClient):
         self._keyword_delay = keyword_delay
 
     async def vector_search(
-        self, embedding: list[float], top_k: int, filters: dict[str, str] | None = None
+        self,
+        embedding: list[float],
+        top_k: int,
+        filters: dict[str, str] | None = None,
+        *,
+        query: str = "",
     ) -> list[RetrievedChunk]:
         await asyncio.sleep(self._vector_delay)
         return [_hit(f"c-{i}", 1.0 - i / 10, mode="vector") for i in (1, 2, 3)]
@@ -1144,3 +1149,85 @@ async def test_original_anchors_stage_only_for_derived_candidates(
         assert observed == []
         assert await engine._original_anchors(_SearchState(), [derived], {}, filters={}) == [plain]
     assert observed == [DERIVED_SOURCE_STAGE]
+
+
+async def test_search_trace_uses_actual_sql_inputs_and_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """検索文ごとの SQL bind と返却結果を記録し、埋め込みや本文は表示しない。"""
+    monkeypatch.setattr(
+        oracle_module,
+        "resolve_vector_index_adapter",
+        lambda settings: type("Params", (), {"target_accuracy": 95})(),
+    )
+    client = OracleClient(settings=_search_settings())
+    executed: list[Mapping[str, object]] = []
+    displays: dict[str, Any] = {}
+
+    async def fetch(statement: str, binds: Mapping[str, object] | None = None) -> Any:
+        executed.append(binds or {})
+        return await _fake_search_db(statement, binds)
+
+    class Observation(_Observation):
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def display(self, *args: object, **kwargs: Any) -> None:
+            displays[self.name] = kwargs["details"]
+
+    @contextmanager
+    def observer(operation: str, name: str) -> Iterator[Observation]:
+        yield Observation(name)
+
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    with bind_trace_observer(observer):
+        result = await client.search_many(
+            [
+                ("規程", [1.0], SearchMode.HYBRID),
+                ("保管", [2.0], SearchMode.HYBRID),
+            ],
+            3,
+            {"knowledge_base_id": "kb-1"},
+        )
+    assert len(result) == 2
+    text = str(displays[TEXT_SEARCH_STAGE])
+    for binds in executed:
+        if "query" in binds:
+            assert str(binds["query"]) in text
+    assert "規程" in text and "保管" in text
+    assert "Oracle Text SCORE（大きい順）" in text
+    vector = str(displays[VECTOR_SEARCH_STAGE])
+    assert "コサイン類似度（1 − COSINE 距離・大きい順）" in vector
+    assert "埋め込みを直接指定" not in vector
+    assert "取得件数（重複除去前）" in text and "重複除去後" in text
+    assert "embedding" not in vector
+
+
+async def test_search_trace_records_empty_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        oracle_module,
+        "resolve_vector_index_adapter",
+        lambda settings: type("Params", (), {"target_accuracy": 95})(),
+    )
+    client = OracleClient(settings=_search_settings())
+    details: list[object] = []
+
+    async def fetch(*args: object, **kwargs: object) -> list[dict[str, object]]:
+        return []
+
+    class Observation(_Observation):
+        def display(self, *args: object, **kwargs: Any) -> None:
+            details.append(kwargs["details"])
+
+    @contextmanager
+    def observer(*args: object) -> Iterator[Observation]:
+        yield Observation()
+
+    monkeypatch.setattr(client, "_fetch_all", fetch)
+    with bind_trace_observer(observer):
+        assert await client.search_many([("合成の空結果", [1.0], SearchMode.HYBRID)], 3) == [[]]
+    assert len(details) == 2
+    assert all(
+        "取得件数（重複除去前） 0 件" in str(detail) and "該当なし" in str(detail)
+        for detail in details
+    )

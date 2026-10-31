@@ -1069,7 +1069,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn(f"結果: {SIMPLE_RETRIEVAL_LABEL}（検索文の追加なし）", result.question_display)
         self.assertIn("全文検索のキーワード:", result.question_display)
         self.assertNotIn(QUESTION_TEXT_SEARCH_SEPARATOR, result.question_display)
-        self.assertNotIn("Oracle Text", result.question_display)
+        self.assertIn("Oracle Text 検索式 1:", result.question_display)
         self.assertEqual(result.selected_strategy, SIMPLE_RETRIEVAL_STRATEGY)
         self.assertEqual(result.effective_strategy, SIMPLE_RETRIEVAL_STRATEGY)
         self.assertEqual(result.generated_queries, ())
@@ -1481,7 +1481,7 @@ class AnswerGenerationTests(unittest.TestCase):
             # 例外の型の名前だけを残し、本文は残さない（#3259）。
             self.assertIn("（RuntimeError）", result.routing_reason)
             self.assertNotIn("read timeout", result.routing_reason)
-            self.assertIn("単純検索", result.routing_reason)
+            self.assertIn("原質問のみ", result.routing_reason)
             self.assertEqual(result.retrieval_queries, ("E1234",))
 
     def test_single_answer_rechecks_preliminary_data_requirements(self):
@@ -1794,12 +1794,12 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn(generated_query, tokenized_values)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
         self.assertIn("1. [原質問] ", result.question_display)
-        self.assertIn("[質問拡張] ", result.question_display)
+        self.assertIn("[質問の言い換え・分解] ", result.question_display)
         self.assertNotIn("[語彙の補助] ", result.question_display)
         self.assertNotIn("[質問理解]", result.question_display)
         self.assertIn("全文検索のキーワード: 拠点名 / 拠点 / 変更", result.question_display)
         self.assertNotIn(QUESTION_TEXT_SEARCH_SEPARATOR, result.question_display)
-        self.assertNotIn("Oracle Text 検索式", result.question_display)
+        self.assertIn("Oracle Text 検索式 1:", result.question_display)
         self.assertNotIn("Oracle Text 検索式候補", result.question_display)
         self.assertNotIn("Tokenizer:", result.question_display)
         self.assertNotIn("Keyword query source:", result.question_display)
@@ -1825,9 +1825,9 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertNotIn("NLUタスク", result.question_display)
         ordered_sections = [
             QUESTION_DISPLAY_METADATA_SEPARATOR,
-            heading("質問拡張戦略"),
+            heading("質問の言い換え・分解"),
             "本の検索文を追加）",
-            heading("検索文と検索語の確定"),
+            heading("検索文をまとめ、検索語を作る"),
             "1. [原質問] ",
             heading("回答生成フロー"),
         ]
@@ -1956,7 +1956,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn(f"設定: {CRAG_ANSWER_FLOW_LABEL}", result.question_display)
         self.assertRegex(result.question_display, heading("補正検索の準備"))
         self.assertNotIn("CRAG 再検索文", result.question_display)
-        self.assertNotIn("Oracle Text", result.question_display)
+        self.assertIn("Oracle Text 検索式 1:", result.question_display)
         self.assertIn("better query", result.question_display)
         self.assertNotIn("関連チャンク", result.question_display)
         # 補正検索で得た根拠の本文が生成へ届く。レコード一覧は ID の取り違えを招くため渡さない。
@@ -2506,9 +2506,9 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertIn("corrective rewrite", result.question_display)
         ordered_sections = [
             QUESTION_DISPLAY_METADATA_SEPARATOR,
-            heading("質問拡張戦略"),
+            heading("質問の言い換え・分解"),
             "本の検索文を追加）",
-            heading("検索文と検索語の確定"),
+            heading("検索文をまとめ、検索語を作る"),
             heading("回答生成フロー"),
             heading("根拠確認（1回目）"),
             heading("文書検索（2回目）"),
@@ -2610,8 +2610,8 @@ class AnswerGenerationTests(unittest.TestCase):
 
         term = SimpleNamespace(labels=lambda: ("延滞", "遅延", "返却の遅れ"))
         other = SimpleNamespace(labels=lambda: ("料金", "遅延"))
-        self.assertEqual(matched_term_query(SimpleNamespace(matched_terms=(term, other))), "延滞 遅延 返却の遅れ 料金")
-        self.assertEqual(matched_term_query(SimpleNamespace(matched_terms=())), "")
+        self.assertEqual(matched_term_query(SimpleNamespace(retrieval_terms=(term, other))), "延滞 遅延 返却の遅れ 料金")
+        self.assertEqual(matched_term_query(SimpleNamespace(retrieval_terms=())), "")
         self.assertEqual(matched_term_query(None), "")
 
     def test_rerank_retains_queries_with_additional_conditions(self):
@@ -2706,12 +2706,12 @@ class AnswerGenerationTests(unittest.TestCase):
                 "原質問",
                 "",
                 QUESTION_DISPLAY_METADATA_SEPARATOR,
-                "1. 質問拡張戦略を決定: 手動選択「原質問をそのまま検索」",
+                "1. 質問の言い換え・分解を決定: 手動選択「原質問をそのまま検索」",
             ]
         )
 
         self.assertEqual(extract_original_question(friendly_display), "原質問")
-        self.assertEqual(len(heading("質問拡張戦略").findall(result.question_display)), 1)
+        self.assertEqual(len(heading("質問の言い換え・分解").findall(result.question_display)), 1)
         self.assertIn("fresh_token generated query", result.question_display)
         self.assertNotIn("old_token", result.question_display)
         self.assertNotIn("old_token", parse.call_args_list[-1].args[1])

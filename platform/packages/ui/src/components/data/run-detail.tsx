@@ -760,6 +760,8 @@ export interface RunTimelineProps {
    * 親の工程は、この一覧の中で開始順の位置に回さずに出す（同じ処理のスピナーは 1 つ。messaging.md §3.7。#2840）。
    */
   spinRunning?: boolean;
+  /** 同じ一覧・階層の中で、実行中の末端の内容だけを描く。 */
+  renderRunningStep?: (step: RunTimelineStep) => ReactNode;
   /** 文字の大きさ。`sm`（既定。全製品の操作画面・履歴で共通）/ `md`（大きな表示）。 */
   size?: "sm" | "md";
   /** 段の所要時間の表記。既定は `formatRunDuration`（「0.4 秒」「1 分 5 秒」）。 */
@@ -792,6 +794,7 @@ export function RunTimeline({
   showSummary = true,
   showBars = true,
   spinRunning = true,
+  renderRunningStep,
   size = "sm",
   formatDuration = formatRunDuration,
   stepTestIdPrefix,
@@ -804,7 +807,7 @@ export function RunTimeline({
   const labels = resolveRunDetailLabels(labelsInput);
   const bars = runTimelineBars(steps);
   // 回すのは今の段（最後に始まった実行中の末端の段）1 つだけ（#3445）。
-  const spinIndex = spinRunning ? runTimelineCurrentStepIndex(steps) : -1;
+  const hasChildren = runTimelineHasChildren(steps);
   const idPrefix = useId();
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
@@ -837,6 +840,7 @@ export function RunTimeline({
       <RunTimelineViewport depth={Math.max(0, ...steps.map(step => stepLevel(step.level)))} label={labels.timeline}>
       <ol className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
         {steps.map((step, index) => {
+          if (renderRunningStep && step.status === "running" && !hasChildren[index]) return <li key={step.id} className="min-w-0">{renderRunningStep(step)}</li>;
           const duration = stepDurationMs(step);
           const bar = showBars ? bars[index] : null;
           const content = runStepContent(step.details);
@@ -886,7 +890,7 @@ export function RunTimeline({
                       status={step.status}
                       size={RUN_TIMELINE_CHEVRON_SIZE[size]}
                       // 回すのは今の段だけ。親の工程（#3436）と並行して実行中のほかの段（#3445）は回さない。
-                      spin={index === spinIndex}
+                      spin={spinRunning && !hasChildren[index]}
                     />
                   </span>
                   {hasDetails ? (

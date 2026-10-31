@@ -29,7 +29,7 @@ describe("answerPassages", () => {
   it("文言は Agent と同じ（未確認・要注意・件数のバッジ）", () => {
     const labels = answerPassageLabels();
     expect(labels.state).toEqual({ unverified: "未確認", warning: "要注意" });
-    expect(labels.badge.removed(2)).toBe("矛盾で除外 2 件");
+    expect(labels).not.toHaveProperty("badge");
     expect(labels.jumpLabel("「合成」")).toBe("「合成」（本文の段落へ移動）");
   });
 });

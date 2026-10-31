@@ -263,7 +263,6 @@ class AnswerEvidenceTests(unittest.TestCase):
             None,
             None,
             None,
-            None,
             template="{{question}}\n{{answer_context}}",
             field_kind_note="NOTE-LINE",
         )
@@ -297,7 +296,7 @@ class ResolvedPlanTests(unittest.TestCase):
         self.assertEqual(knowledge.guide_optional_steps, ())
         self.assertEqual(knowledge.guide_step_terms, (("code", ("コード",)),))
         self.assertEqual([rule.content for rule in knowledge.matched_rules], ["RESOLVED-RULE", "OTHER"])
-        self.assertIn("RESOLVED-RULE", knowledge.prompt_context())
+        self.assertIn("RESOLVED-RULE", knowledge.with_rule_usage(confirmation=False, answer=True).prompt_context())
 
     def test_named_field_resolution_selects_the_required_branch(self) -> None:
         observed = [

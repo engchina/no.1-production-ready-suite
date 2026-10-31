@@ -112,8 +112,9 @@ def test_original_request_and_shared_preamble_are_used_without_model():
         coverage_budget=CoverageBudget(),
         usage=CoverageUsage(),
     )
-    assert len(results) == 2
-    assert len({result.request_id for result in results}) == 2
+    assert len(results) == 1
+    assert [result.request_id for result in results] == ["Q1"]
+    assert queries == [question]
     assert all("ID-123" in query and "v2.3" in query for query in queries)
     assert trace["llm_calls"] == 0
 
@@ -160,7 +161,7 @@ def test_answer_flow_keeps_scope_existing_evidence_and_overflow_trace(monkeypatc
     assert calls[1][1][2].document_selection_enabled is False
     assert calls[1][1][2].article_catalog_enabled is False
     trace = result.generation_trace["query_overflow"]
-    assert [row["status"] for row in trace["requests"]] == ["candidate_found", "unsearched_budget"]
+    assert [row["status"] for row in trace["requests"]] == ["candidate_found"]
     assert trace["added_chunk_ids"] == ["run:new"]
     assert {item["chunk_uid"] for item in result.evidence_items} >= {"run:old", "run:new"}
 

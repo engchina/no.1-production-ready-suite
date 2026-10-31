@@ -166,7 +166,7 @@ for (const viewport of [
       await expect(card.getByRole("switch")).toHaveCount(7);
       expect(await card.getByRole("switch").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
         .toEqual(["質問から項目の条件を読み取る", "実体・別名による検索拡張", "文書構造による検索拡張", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
-      const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
+      const strategy = page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true });
       await expect(strategy).toContainText("自動ルーティング");
       // 回答の生成方式の既定は標準 RAG。先頭に「（既定）」付きで並べ、CRAG は任意で AI の呼び出しが増えると説明する（#3509）。
       const answerFlow = page.getByRole("combobox", { name: "回答の生成方式", exact: true });
@@ -361,7 +361,7 @@ test("回答の検索と生成の保存に失敗しても入力を残して操�
 
   await page.goto("/settings/retrieval");
   const actions = page.getByRole("group", { name: "回答の検索と生成の設定の操作" });
-  const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
+  const strategy = page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true });
   await strategy.click();
   await page.getByRole("option", { name: /RAG フュージョン/ }).click();
   await actions.getByRole("button", { name: "回答の設定を保存" }).click();
@@ -569,8 +569,8 @@ for (const width of [1280, 375]) {
       expect(saved.at(-1)).not.toHaveProperty("runtime_terms_answer_enabled");
       const confirmCard = page.getByTestId("runtime_rules_confirmation_enabled");
       await confirm.click();
-      await confirmCard.getByRole("button", { name: "回答の設定を保存", exact: true }).click();
-      await expect(confirmCard.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeDisabled();
+      await confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true }).click();
+      await expect(confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).toBeDisabled();
       expect(saved.at(-1)).toEqual({ runtime_rules_confirmation_enabled: true });
       await area.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`search-expressions-${width}-${theme}.png`) });
@@ -584,7 +584,7 @@ for (const width of [1280, 375]) {
         const toggle = card.getByRole("switch", { name: label, exact: true });
         await expect(toggle).not.toBeChecked();
         await toggle.click();
-        const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+        const save = card.getByRole("button", { name: field === "runtime_terms_answer_enabled" ? "用語・同義語の使用を保存" : "登録ルールの回答設定を保存", exact: true });
         await save.click();
         await expect(save).toBeDisabled();
         expect(saved.at(-1)).toEqual({ [field]: true });

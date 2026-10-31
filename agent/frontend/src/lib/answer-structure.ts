@@ -168,7 +168,7 @@ export function answerStructureTitles(): AnswerStructureTitles {
   };
 }
 
-/** 段落の印の文言（共有の `AnswerSections`・`AnswerPassageBadges`。チャットと実行の詳細で同じ。#2738）。 */
+/** 段落の印の文言（共有の `AnswerSections`。チャットと実行の詳細で同じ。#2738）。 */
 export function answerPassageLabels(): AnswerPassageLabels {
   return {
     state: { unverified: t("chat.answer.passage.unverified"), warning: t("chat.answer.passage.warning") },
@@ -183,11 +183,6 @@ export function answerPassageLabels(): AnswerPassageLabels {
     marksNote: t("chat.answer.passage.marksNote"),
     jumpLabel: (quote) => t("chat.answer.passage.jump", { quote }),
     warningsTitle: t("chat.answer.passage.warningsTitle"),
-    badge: {
-      unverified: (count) => t("chat.answer.passage.badgeUnverified", { count }),
-      warning: (count) => t("chat.answer.passage.badgeWarning", { count }),
-      removed: (count) => t("chat.answer.passage.badgeRemoved", { count }),
-    },
   };
 }
 

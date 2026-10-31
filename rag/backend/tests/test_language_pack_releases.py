@@ -107,7 +107,7 @@ def test_missing_version_is_not_retroactively_assigned_from_equal_hash() -> None
     ("section", "key", "stages", "reuse_chunk", "reuse_index"),
     [
         ("markers", "bullet_chars", ["EXTRACT", "CHUNK", "INDEX"], False, False),
-        ("inquiry_cues", "operation_trigger_terms", ["CHUNK", "INDEX"], True, False),
+        ("inquiry_cues", "operation_trigger_terms", [], True, True),
         ("entity_cues", "alias_column_words", ["INDEX"], True, True),
     ],
 )

@@ -71,6 +71,8 @@ def protected_sources(
             required.append(sources)
         else:
             unresolved.append(request["id"])
+    # 同じ原質問 ID に引用済みの説明と未解決の小問が共存しても、未解決を上書きしない。
+    unresolved.extend(item.request_id for item in current.draft.items if item.kind == "gap" and item.request_id)
     if known_gaps:
         unresolved.extend(str(gap) for gap in known_gaps)
     return required, uncertain, unresolved
