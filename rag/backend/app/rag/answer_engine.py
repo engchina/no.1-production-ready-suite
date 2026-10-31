@@ -1593,7 +1593,12 @@ class AnswerEngine:
                     )
             with observe_call("stage", "検索結果の統合（RRF）") as observation:
                 fusion = fuse_rankings(raw_lists, budgets, weights, k=k)
-                fused = fusion.scores
+                fused = dict(fusion.scores)
+                for chunk_id, score in fused.items():
+                    chunk = state.chunks[chunk_id]
+                    state.chunks[chunk_id] = chunk.model_copy(
+                        update={"metadata": {**chunk.metadata, "rrf_score": score, "rrf_k": k}}
+                    )
                 observation.display(details=fusion_details(fusion, weights, budgets, k))
                 observation.response(fusion.diagnostics(weights, budgets, k))
                 if raw_lists and all(r.status == "failed" for r in raw_lists):

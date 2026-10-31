@@ -12,6 +12,7 @@ from rag_parser_core.language import (
     build_pack,
     complete_compatible_pack,
     stored_pack_hash,
+    stored_pack_ingest_hash,
 )
 
 from app.schemas.language_pack_release import (
@@ -93,7 +94,10 @@ def _release(row: dict[str, object]) -> LanguagePackRelease:
         }
     )
     pack = _validated(release.effective, allow_legacy=True)
-    if (stored_pack_hash(release.effective, pack), pack.ingest_hash) != (
+    if (
+        stored_pack_hash(release.effective, pack),
+        stored_pack_ingest_hash(release.effective, pack),
+    ) != (
         release.hash,
         release.ingest_hash,
     ):

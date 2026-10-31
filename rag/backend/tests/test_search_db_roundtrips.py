@@ -1253,6 +1253,8 @@ async def test_weighted_rrf_uses_raw_lists_once_and_records_actual_contributions
     scores = {c.chunk_id: c.metadata["rrf_score"] for c in result.child_chunks}
     assert scores == pytest.approx({"c-0": 0.7 / 61, "c-1": 0.15 / 61, "c-2": 0.1 / 61})
     for chunk_id, score in scores.items():
+        assert state.chunks[chunk_id].metadata["rrf_score"] == pytest.approx(score)
+        assert state.chunks[chunk_id].metadata["rrf_k"] == 60
         assert sum(
             c["contribution"] for c in record["contributions"] if c["chunk_id"] == chunk_id
         ) == pytest.approx(score)

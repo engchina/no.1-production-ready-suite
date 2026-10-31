@@ -252,3 +252,89 @@ async def test_explicit_publish_enriches_new_release_without_rewriting_old(
     assert row == unchanged
     assert old.effective == row["effective_json"]
     assert old.hash == row["content_hash"]
+
+
+def retired_inquiry_release_row() -> dict[str, object]:
+    from rag_parser_core.language import FIELD_SPECS
+
+    row = release_row()
+    data = deepcopy(row["effective_json"])
+    assert isinstance(data, dict)
+    data["inquiry_cues"] = {
+        "document_kind_words": ["合成=synthetic"],
+        "file_data_kind": "synthetic",
+        "decision_words": ["合成=procedure"],
+        **{
+            key: ["合成"]
+            for key in [
+                "operation_trigger_terms",
+                "condition_trigger_terms",
+                "condition_terms",
+                "file_data_terms",
+                "visual_terms",
+                "external_context_terms",
+                "screen_suffixes",
+                "screen_name_bracket_chars",
+                "route_arrow_chars",
+                "interrogative_words",
+                "term_joiner_chars",
+                "page_ordinal_suffixes",
+                "column_words",
+            ]
+        },
+    }
+
+    def digest(ingest: bool) -> str:
+        fields = {(spec.section, spec.key) for spec in FIELD_SPECS if not ingest or spec.ingest}
+        retired = (
+            [
+                "document_kind_words",
+                "file_data_kind",
+                "operation_trigger_terms",
+                "condition_trigger_terms",
+                "condition_terms",
+                "file_data_terms",
+            ]
+            if ingest
+            else list(data["inquiry_cues"])
+        )
+        fields.update(("inquiry_cues", key) for key in retired)
+        payload = [[section, key, data[section][key]] for section, key in sorted(fields)]
+        return hashlib.sha256(
+            (data["locale"] + "\n" + json.dumps(payload, ensure_ascii=False)).encode()
+        ).hexdigest()[:16]
+
+    row["effective_json"] = data
+    row["content_hash"] = digest(False)
+    row["ingest_hash"] = digest(True)
+    return row
+
+
+def test_retired_inquiry_release_preserves_history_and_cleans_runtime() -> None:
+    from app.rag.language_pack_releases import pack_from_release
+
+    row = retired_inquiry_release_row()
+    untouched = deepcopy(row)
+    release = _release(row)
+    assert "inquiry_cues" in release.effective
+    assert "inquiry_cues" not in pack_from_release(release).to_dict()
+    assert row == untouched
+    with pytest.raises(ValueError):
+        _validated(release.effective)
+
+
+@pytest.mark.parametrize("mutation", ["unknown", "value", "hash", "ingest"])
+def test_retired_inquiry_release_keeps_integrity_checks(mutation: str) -> None:
+    row = retired_inquiry_release_row()
+    effective = row["effective_json"]
+    assert isinstance(effective, dict)
+    if mutation == "unknown":
+        effective["inquiry_cues"]["unknown"] = ["合成"]
+    elif mutation == "value":
+        effective["inquiry_cues"]["condition_terms"] = ["変更"]
+    elif mutation == "hash":
+        row["content_hash"] = "invalid"
+    else:
+        row["ingest_hash"] = "invalid"
+    with pytest.raises(ValueError):
+        _release(row)

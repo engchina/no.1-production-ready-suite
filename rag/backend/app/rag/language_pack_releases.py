@@ -10,6 +10,7 @@ from rag_parser_core.language import (
     bind_pack,
     build_pack,
     stored_pack_hash,
+    stored_pack_ingest_hash,
 )
 
 from app.schemas.language_pack_release import (
@@ -52,7 +53,7 @@ def pack_from_release(release: LanguagePackRelease) -> LanguagePack:
     pack = build_pack(release.effective)
     if (
         stored_pack_hash(release.effective, pack) != release.hash
-        or pack.ingest_hash != release.ingest_hash
+        or stored_pack_ingest_hash(release.effective, pack) != release.ingest_hash
     ):
         raise ValueError("言語資源の公開版と保存した内容の照合に失敗しました。")
     return pack
