@@ -2441,29 +2441,26 @@ def _public_span(span: dict[str, Any]) -> dict[str, Any]:
 def _evidence_budget_trace(settings: Settings, evidence_budget_chars: int | None, spans: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """生成に渡した根拠の文字予算の診断（#3776）。技術の数値だけを残し、本文・プロンプトは残さない。
 
-    configured_chars は設定の文字予算（``evidence_budget_chars``。backend の ``RAG_EVIDENCE_BUDGET_CHARS``）、
-    effective_chars は根拠の選択に実際に使った予算（章節を広げたときは ``_section_evidence_budget`` の値）。
-    evidence_block_chars は生成の入力の根拠ブロックの文字数（本文・補助情報・書式の合計）で、内訳は
-    evidence_text_chars（根拠の本文）・evidence_metadata_chars（補助情報。出典情報・文書の背景などを描いた形）・
-    evidence_format_chars（残り。見出し行・行番号・終わりの印・機能の見出し）。token は ``estimate_tokens`` の見積もり。
-    budget_counts は根拠の選択で予算が数える対象（#3831）: 本文と、描いた補助情報（``body_and_metadata``）。
-    書式は選択の時点では数えず、evidence_format_chars で別に示す。
+    effective_chars は単回の実効上限。章節取得の予算は section_read_budget_chars で分ける。
+    本文・出典情報・行番号等の書式を含む描画済みブロックを数える。全文読取の被覆は
+    generation_input_budget のバッチ範囲・状態で確認し、最終生成へ渡す抜粋とは区別する。
     """
     from rag_engine.generation.grounded import evidence_block_text, evidence_metadata_text
     from rag_engine.generation.section_expansion import estimate_tokens
 
     configured = int(getattr(settings, "evidence_budget_chars", 0) or 0) or EVIDENCE_BUDGET_CHARS
-    effective = int(evidence_budget_chars or configured)
+    effective = configured
     block = evidence_block_text(spans)
     text_chars = sum(len(str(span.get("text") or "")) for span in spans)
     metadata_chars = sum(len(evidence_metadata_text(span)) for span in spans)
     return {
         "configured_chars": configured,
         "effective_chars": effective,
-        "source": "section_expansion" if evidence_budget_chars is not None else "configured",
+        "source": "configured",
+        "section_read_budget_chars": int(evidence_budget_chars or 0),
         "effective_exceeds_configured": effective > configured,
         "span_count": len(spans),
-        "budget_counts": "body_and_metadata",
+        "budget_counts": "body_metadata_and_format",
         "evidence_text_chars": text_chars,
         "evidence_metadata_chars": metadata_chars,
         "evidence_format_chars": max(0, len(block) - text_chars - metadata_chars),
@@ -2546,6 +2543,7 @@ def synthesize_grounded_answer(
             runtime_knowledge,
             budget=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None),
             crag_assessment=crag_assessment,
+            preserve_records=True,
         )
         gate_view = crag_generation.generation_view(
             crag_assessment, gate_spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)

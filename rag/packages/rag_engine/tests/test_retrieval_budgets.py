@@ -91,7 +91,8 @@ def test_context_is_read_after_the_ranked_anchor_choice():
     assert calls == [["last"]]
     assert [record.id for record in result.records] == ["last"]
     assert stages[-1]["anchor_limit"] == 1
-    assert stages[-1]["character_limit"] == 1000
+    assert stages[-1]["full_parent_text"] is True
+    assert "character_limit" not in stages[-1]
 
 
 def test_default_total_budget_is_derived_from_existing_enabled_stages():

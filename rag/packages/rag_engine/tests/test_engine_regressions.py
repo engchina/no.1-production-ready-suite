@@ -85,18 +85,23 @@ class GeneratorEvidenceTests(TestCase):
                 # 長い根拠は行番号を付けて示す（#2830）。番号の付いた全文が 1 回の prompt に入る。
                 self.assertIn(numbered_text(item.text), prompts[0], item.id)
 
-    def test_oversized_evidence_returns_explicit_insufficiency_without_model_call(self):
-        # 上限判定は親本文の長さそのもの。ちょうど上限の本文は通り、1 文字でも超えれば拒否する。
+    def test_parent_larger_than_old_gate_reaches_generation(self):
+        from grounded_stub import echo_model
+
+        from rag_engine.generation.citation_wire import generation_draft_wire_model
+        from rag_engine.generation.grounded import numbered_text
+
         for evidence in (
             (Evidence("big", "A" * (MAX_CONTEXT_CHARS + 1)),),
             (Evidence("small", "valid text"), Evidence("big", "A" * (MAX_CONTEXT_CHARS + 1))),
         ):
             with self.subTest(count=len(evidence)), TemporaryDirectory() as directory, create_oracle_application(directory) as app:
-                with patch("rag_engine.generation.answering.parse_text_response") as parse:
-                    result = app.generator.generate(GenerationRequest("question", evidence))
-                parse.assert_not_called()
-                self.assertTrue(result.insufficient_reason)
-                self.assertTrue(result.needs_human_review)
+                with patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model) as parse:
+                    app.generator.generate(GenerationRequest("question", evidence))
+                prompts = [call.args[1] for call in parse.call_args_list if call.args[3] is generation_draft_wire_model()]
+                self.assertEqual(len(prompts), 1)
+                for item in evidence:
+                    self.assertIn(numbered_text(item.text), prompts[0])
 
     def test_citation_is_the_evidence_whose_text_was_quoted(self):
         """引用元はモデルの自己申告ではなく、原文照合できた引用の出典から決まる。"""
