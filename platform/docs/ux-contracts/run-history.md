@@ -204,3 +204,5 @@ RAG のモデル入力は未引用の資料や目録も含む。参照全体の�
 - 設計の参照: [DeepSeek Harness trajectory](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-trajectory/README.md) の概観・ledger・inspector、[Langfuse trace view](https://langfuse.com/changelog/2025-03-19-new-trace-view) の階層/時刻順と検索。共通の情報設計を採用し、他製品の runtime の内部状態を推測しない。
 
 軌跡の調査の時間条と呼び出し一覧は、処理の経過と同じ文字の大きさ・時間条の高さ・丸み・状態色を共有する。時間の概観の区分（工程 / モデル / ツール）と選択操作は保持する。選択した区間は上方の時間の概観で輪郭を出し、重なった区間より前面に表示する。
+
+チャットの対象（RAG の検索・回答プロファイル、NL2SQL の業務プロファイル、Agent の業務 Agent）は `ChatLayout.targetSelector` を通じて、履歴の開閉・会話名・新しい会話と同じツールバーに置く。独立した選択カードは出さない。`SearchableSelectField` の compact 表示は選択値を 1 行で省略し、全文は title、欄の意味と必須は読み上げ名に残す。未選択時は必須の印を出し送信を抑止する。候補の検索・キーボード操作・切り替え時の会話の範囲・読込と失敗の扱いは通常の欄と同じとする。狭い幅では同じツールバー内で会話名と選択を縦に並べる。

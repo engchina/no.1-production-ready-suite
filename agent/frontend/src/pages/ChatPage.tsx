@@ -14,8 +14,6 @@ import {
   Banner,
   ProcessFailureNotice,
   Button,
-  Card,
-  CardContent,
   ChatComposer,
   ChatReadOnlyNotice,
   ChatHistoryList,
@@ -683,11 +681,73 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
   // 送信と停止は同じボタン。送信の要求中・回答の作成中・承認待ちは同じ位置で「停止」になる（buttons.md §3.1、#805）。
   const stoppable = send.isPending || Boolean(stoppableRun);
 
+  const targetSelector = (<>
+
+            {agents.isLoading ? (
+              <TimedLoadingState label={t("chat.agent.loading")} framed={false} testId="chat-agents-loading">
+                {/* ラベルと欄の寸法を予約する（RAG・NL2SQL の対象の欄と同じ形。#1153）。 */}
+                <div className="space-y-1.5" aria-hidden="true">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-[var(--button-height-md)] w-full" />
+                </div>
+              </TimedLoadingState>
+            ) : agents.isError ? (
+              // 読めなかったときは会話の欄を出さず（空の状態を出さない）、ここに失敗と再試行を出す（#1153）。
+              <ApiErrorBanner
+                error={agents.error}
+                fallback={t("common.error.load")}
+                testId="chat-agents-error"
+                action={
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    icon={RefreshCw}
+                    loading={agents.isFetching}
+                    onClick={() => void agents.refetch()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                }
+              />
+            ) : usableAgents.length === 0 ? (
+              <EmptyState title={t("chat.agent.empty")} />
+            ) : (
+              // 画面の対象を決める主な選択欄（RAG の検索・回答プロファイルと同じく full）。
+              <SearchableSelectField
+                id="chat-agent"
+                labelPlacement="compact"
+                size="sm"
+                required
+                label={t("chat.agent.label")}
+                value={selectedAgentId}
+                // 開いている会話の業務 Agent が使えず、選んでいないとき（#3356）に出す。
+                placeholder={t("chat.agent.placeholder")}
+                options={usableAgents.map((agent) => ({
+                  value: agent.id,
+                  label: agent.name,
+                  description: agent.description || undefined,
+                }))}
+                onValueChange={(value) => {
+                  viewGenerationRef.current += 1;
+                  setAgentId(value);
+                  setThreadId(null);
+                  setPending(null);
+                  send.reset();
+                  decideConfirmation.reset();
+                }}
+                width="full"
+              />
+            )}
+
+  </>);
+
   // 業務 Agent の読み込み中も会話の領域を描く（寸法を予約し、読み込み後に現れて押し下げない。#1153）。
   const chatLayout =
     agentsLoading || selectedAgentId || conversationAgentUnavailable ? (
       // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
       <ChatLayout
+        targetSelector={tryTarget ? undefined : targetSelector}
         embedded={Boolean(tryTarget)}
         history={history}
         historyTitle={t("chat.threads.title")}
@@ -873,66 +933,9 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
     <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
       <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
       <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
-        {/* カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、3 製品のチャットと同じ（#1778）。 */}
-        <Card className="shrink-0">
-          <CardContent className="pt-5">
-            {agents.isLoading ? (
-              <TimedLoadingState label={t("chat.agent.loading")} framed={false} testId="chat-agents-loading">
-                {/* ラベルと欄の寸法を予約する（RAG・NL2SQL の対象の欄と同じ形。#1153）。 */}
-                <div className="space-y-1.5" aria-hidden="true">
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-[var(--button-height-md)] w-full" />
-                </div>
-              </TimedLoadingState>
-            ) : agents.isError ? (
-              // 読めなかったときは会話の欄を出さず（空の状態を出さない）、ここに失敗と再試行を出す（#1153）。
-              <ApiErrorBanner
-                error={agents.error}
-                fallback={t("common.error.load")}
-                testId="chat-agents-error"
-                action={
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    icon={RefreshCw}
-                    loading={agents.isFetching}
-                    onClick={() => void agents.refetch()}
-                  >
-                    {t("common.retry")}
-                  </Button>
-                }
-              />
-            ) : usableAgents.length === 0 ? (
-              <EmptyState title={t("chat.agent.empty")} />
-            ) : (
-              // 画面の対象を決める主な選択欄（RAG の検索・回答プロファイルと同じく full）。
-              <SearchableSelectField
-                id="chat-agent"
-                label={t("chat.agent.label")}
-                value={selectedAgentId}
-                // 開いている会話の業務 Agent が使えず、選んでいないとき（#3356）に出す。
-                placeholder={t("chat.agent.placeholder")}
-                options={usableAgents.map((agent) => ({
-                  value: agent.id,
-                  label: agent.name,
-                  description: agent.description || undefined,
-                }))}
-                onValueChange={(value) => {
-                  viewGenerationRef.current += 1;
-                  setAgentId(value);
-                  setThreadId(null);
-                  setPending(null);
-                  send.reset();
-                  decideConfirmation.reset();
-                }}
-                width="full"
-              />
-            )}
-          </CardContent>
-        </Card>
 
-        {chatLayout}
+
+        {chatLayout ?? targetSelector}
       </PageBody>
     </div>
   );

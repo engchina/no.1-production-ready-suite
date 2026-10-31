@@ -838,6 +838,9 @@ test("検索・回答プロファイル未選択ではチャットを促す空�
   await expect(
     page.getByText("検索・回答プロファイルを選択するとチャットを始められます。")
   ).toBeVisible();
+  await expect(page.locator("[data-chat-toolbar] #chat-search-answer-profile")).toBeVisible();
+  await page.getByRole("textbox", {name: "質問"}).fill("合成の質問");
+  await expect(page.getByRole("button", {name: "送信", exact: true})).toBeDisabled();
   await expectNoPageOverflow(page);
 });
 
@@ -1898,11 +1901,10 @@ for (const viewport of [
     await page.getByRole("button", { name: "送信" }).click();
 
     const panel = await openAnswerProcessDetails(page, "chat-answer-progress");
-    await expect(panel.getByText("登録済みQ&Aから回答")).toBeVisible();
-    const source = panel.getByRole("region", { name: "回答の出典: 登録済みQ&A" });
-    await expect(source).toContainText("経費精算の上限はいくらですか？");
-    // 原文は言い換えず、改行も保って出す。
-    await expect(source.getByText(/1 回の申請の上限は 10 万円です。\s+超える場合は部長の承認が必要です。/)).toBeVisible();
+    await expect(panel.getByText("登録済みQ&Aから回答")).toHaveCount(0);
+    await expect(panel.getByRole("region", { name: "回答の出典: 登録済みQ&A" })).toHaveCount(0);
+    await expect(panel.locator("[data-process-identifier]")).toHaveCount(3);
+    await expect(page.getByTestId("answer-text")).toContainText("出典: 登録済みQ&A");
     // 文書を検索していないので、空の「根拠の構成」は出さない。
     await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
     await expectNoPageOverflow(page);

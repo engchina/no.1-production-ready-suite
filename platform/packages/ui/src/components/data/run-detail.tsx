@@ -1255,7 +1255,7 @@ export function RunDetailSkeleton({ testId }: { testId?: string }) {
 function ProcessIdentifierRow({ label, value, trace = false }: { label: string; value: string | null; trace?: boolean }) {
   const labels = useTraceDetailsLabels().processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!;
   return <div className="flex min-w-0 items-center gap-2 text-xs" data-process-identifier={label} data-trace-id-row={trace ? "" : undefined}>
-    <span className="shrink-0 text-fg-muted">{label}:</span>
+    <span className="shrink-0 text-fg-muted">{label}:{" "}</span>
     <span className="min-w-0 break-all font-mono text-fg">{value || "—"}</span>
     {value ? <CopyButton type="button" variant="ghost" size="sm" iconOnly className="shrink-0" text={value}
       label={labels.copy.replace("{label}", label)} copiedMessage={labels.copied.replace("{label}", label)} failedMessage={labels.copyFailed.replace("{label}", label)} /> : null}

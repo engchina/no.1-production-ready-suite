@@ -590,17 +590,13 @@ test("業務プロファイルの欄は RAG の検索・回答プロファイル
   await expect(field).toBeVisible();
   await expect(field).toContainText("売上分析");
   // 必須の表示・カードの幅いっぱい（#635 / #891）。閉じたボタンに虫眼鏡は無く、値と開閉の印だけ（#1771）。
-  await expect(page.getByText("必須", { exact: true }).first()).toBeVisible();
+  await expect(field).toHaveAccessibleName(/必須/);
   await expect(field.locator("svg.lucide-search")).toHaveCount(0);
   await expect(field.locator("svg.lucide-chevron-down")).toBeVisible();
-  const card = (await page
-    .locator(".rounded-lg")
-    .filter({ has: field })
-    .first()
-    .boundingBox())!;
+  const toolbar = page.locator("[data-chat-toolbar]");
+  await expect(toolbar.locator("#sql-chat-profile")).toBeVisible();
   const fieldBox = (await field.boundingBox())!;
-  expect(card.width - fieldBox.width).toBeLessThan(64);
-  expect(fieldBox.height).toBe(await expectedControlHeight(page, "md"));
+  expect(fieldBox.height).toBe(await expectedControlHeight(page, "sm"));
   await field.click();
   await expect(page.getByRole("option", { name: /売上分析/ })).toContainText(
     "表・ビュー 1 件",

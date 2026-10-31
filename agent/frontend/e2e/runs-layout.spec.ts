@@ -456,8 +456,8 @@ test("処理の詳細は識別子のコピーと使用モデルだけを順に�
   await page.getByTestId("run-process-details").click();
   const details = page.getByTestId("run-technical-section");
   await expect(details.locator("[data-process-identifier]")).toHaveCount(3);
-  await expect(details.locator("[data-process-identifier]").nth(1)).toContainText(run.thread_id);
-  await expect(details.locator("[data-process-identifier]").nth(2)).toContainText(run.id);
+  await expect(details.locator("[data-process-identifier]").nth(1)).toContainText(String(run.thread_id));
+  await expect(details.locator("[data-process-identifier]").nth(2)).toContainText(String(run.id));
   await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { document.documentElement.dataset.copiedId = value; } } }));
   for (const [label, value] of [["会話 ID", run.thread_id], ["回答メッセージ ID", run.id]]) {
     await details.getByRole("button", { name: `${label} をコピー`, exact: true }).click();

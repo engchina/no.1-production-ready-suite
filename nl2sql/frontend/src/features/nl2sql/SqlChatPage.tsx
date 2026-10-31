@@ -14,8 +14,6 @@ import {
   ChatReadOnlyNotice,
   Banner,
   Button,
-  Card,
-  CardContent,
   ChatAnswer,
   ChatComposerOption,
   AnswerNotice,
@@ -646,14 +644,8 @@ export function SqlChatPage() {
       testIdPrefix="sql-chat"
     />
   );
-  return (
-    // 見出しと本文の高さの渡し方は DB 管理チャットと共通の Nl2SqlChatPage（#2332）。
-    <Nl2SqlChatPage title={t("nav.chat")} subtitle={t("chat.subtitle")}>
-      {/* 対象の業務プロファイル（#891）。RAG の検索・回答プロファイル・Agent の業務 Agent と同じく、
-          ページ上部のカードに全幅の SearchableSelectField を 1 つだけ置く（#635）。
-          カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、3 製品のチャットと同じ（#1778）。 */}
-      <Card className="shrink-0">
-        <CardContent className="pt-5">
+  const targetSelector = (<>
+
           {profilesLoading ? (
             <TimedLoadingState
               label={t("chat.profile.loading")}
@@ -693,6 +685,8 @@ export function SqlChatPage() {
           ) : (
             <SearchableSelectField
               id="sql-chat-profile"
+              labelPlacement="compact"
+              size="sm"
               label={t("chat.profile")}
               required
               value={selectedProfileId}
@@ -746,12 +740,18 @@ export function SqlChatPage() {
               }
             />
           )}
-        </CardContent>
-      </Card>
+
+  </>);
+  return (
+    // 見出しと本文の高さの渡し方は DB 管理チャットと共通の Nl2SqlChatPage（#2332）。
+    <Nl2SqlChatPage title={t("nav.chat")} subtitle={t("chat.subtitle")}>
+
+      {noProfiles || profilesFailed ? targetSelector : null}
       {noProfiles || profilesFailed ? null : (
         // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
         // NL2SQL の文言は DB 管理チャットと共通の Nl2SqlChatLayout が付ける（#2264）。
         <Nl2SqlChatLayout
+          targetSelector={targetSelector}
           history={{
             panel: historyPanel,
             content: historyContent,

@@ -14,9 +14,7 @@ import {
   PageHeader,
   Button,
   Banner,
-  Card,
   ProcessFailureNotice,
-  CardContent,
   TimedLoadingState,
   DEFAULT_PAGE_SIZE,
   useChatHistoryActions,
@@ -1566,15 +1564,8 @@ export function ChatClient() {
   // 評価は持ち主だけなので、入力欄の代わりに閲覧だけの案内を出し、続きの操作を出さない。
   const readOnly = Boolean(activeId) && activeConversation?.owned === false;
 
-  return (
-    <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
-      <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
+  const targetSelector = (<>
 
-      <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
-        {/* 検索・回答プロファイル scope。カードの余白は CardContent の既定（見出しの無いカードは上も同じ pt-5）で、
-            RAG 検索のカードと 375px でも内側の幅をそろえる（#1778）。 */}
-        <Card className="shrink-0">
-          <CardContent className="pt-5">
             {searchAnswerProfileLoading ? (
               <TimedLoadingState
                 label={t("chat.searchAnswerProfile.loading")}
@@ -1604,6 +1595,7 @@ export function ChatClient() {
                 {/* RAG 検索と同じ部品・文言・幅（#635）。 */}
                 <SearchAnswerProfileSelect
                   id="chat-search-answer-profile"
+                  compact
                   items={searchAnswerProfiles}
                   value={searchAnswerProfileId}
                   onChange={setSearchAnswerProfileId}
@@ -1632,21 +1624,23 @@ export function ChatClient() {
                 ) : null}
               </div>
             )}
-          </CardContent>
-        </Card>
+
+  </>);
+
+  return (
+    <div className="flex min-h-full shrink-0 flex-col lg:h-full lg:min-h-0">
+      <PageHeader wide title={t("chat.title")} subtitle={t("chat.subtitle")} />
+
+      <PageBody wide className="flex min-h-0 flex-1 flex-col gap-4">
+
 
         {/* 検索・回答プロファイルの読み込み中も会話の領域を描き（寸法を予約し、読み込み後に現れて押し下げない）、
             空の状態の代わりに会話の形の Skeleton を出す（messaging.md §11.7、#1153）。 */}
-        {searchAnswerProfilesFailed || noSearchAnswerProfiles ? null : !searchAnswerProfileLoading &&
-          !searchAnswerProfileId ? (
-          <Card className="min-h-0 flex-1">
-            <CardContent className="pt-5">
-              <EmptyState title={t("chat.searchAnswerProfile.required")} />
-            </CardContent>
-          </Card>
-        ) : (
+        {searchAnswerProfilesFailed || noSearchAnswerProfiles ? targetSelector : null}
+        {searchAnswerProfilesFailed || noSearchAnswerProfiles ? null : (
           // 骨格（履歴のパネル・シート、会話の領域の上端の行・会話の欄・入力欄の領域）は 3 製品共通の ChatLayout（#1161）。
           <ChatLayout
+            targetSelector={targetSelector}
             history={history}
             historyTitle={t("chat.sessions.title")}
             historyCloseLabel={t("chat.sessions.close")}
@@ -1660,7 +1654,7 @@ export function ChatClient() {
             newConversation={{
               label: t("chat.sessions.new"),
               onClick: () => void startNewConversation(),
-              disabled: createConversation.isPending || searchAnswerProfileLoading,
+              disabled: createConversation.isPending || searchAnswerProfileLoading || !searchAnswerProfileId,
             }}
             logLabel={t("chat.messages.label")}
             logRef={autoScroll.logRef}
@@ -1702,6 +1696,7 @@ export function ChatClient() {
                   // 保存済みの作成中の回答（再読込の後など）がある間も「停止」（取消の API）にする（#1175）。
                   running={answerInProgress}
                   submitBlocked={
+                    !searchAnswerProfileId ||
                     searchAnswerProfileWithoutKnowledgeBases ||
                     pendingChoice ||
                     conversationLoading ||
@@ -1745,6 +1740,8 @@ export function ChatClient() {
                 message={t("chat.messages.error")}
                 onRetry={() => void conversationQuery.refetch()}
               />
+            ) : !searchAnswerProfileId ? (
+              <EmptyState title={t("chat.searchAnswerProfile.required")} />
             ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
               <EmptyState title={t("chat.messages.empty")} hint={t("chat.messages.emptyHint")} />
             ) : (

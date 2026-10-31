@@ -36,6 +36,7 @@ function Harness({
   testIdPrefix,
   caption,
   embedded,
+  target,
 }: {
   onNew?: () => void;
   title?: string | null;
@@ -43,6 +44,7 @@ function Harness({
   testIdPrefix?: string;
   caption?: string | null;
   embedded?: boolean;
+  target?: string;
 }) {
   const [inlineOpen, setInlineOpen] = useState(false);
   const history = useChatHistoryPanel({ inlineOpen, onInlineOpenChange: setInlineOpen });
@@ -59,6 +61,7 @@ function Harness({
       }
       label="チャット"
       conversationTitle={title}
+      targetSelector={target ? <button data-testid="target">{target}</button> : undefined}
       conversationTitleLoading={titleLoading}
       newConversation={{ label: "新しい会話", onClick: onNew }}
       logLabel="会話"
@@ -238,4 +241,14 @@ describe("ChatLayout", () => {
     click(buttons[0]);
     expect(onNew).toHaveBeenCalledTimes(1);
   });
+});
+
+it("対象の選択は会話名と新しい会話と同じツールバーに置く", () => {
+  act(() => root.render(<Harness title="会話 A" target="対象 A" />));
+  const target = container.querySelector('[data-testid="target"]')!;
+  const toolbar = target.closest("[data-chat-toolbar]")!;
+  expect(toolbar.textContent).toContain("会話 A");
+  expect(toolbar.textContent).toContain("新しい会話");
+  expect(target.closest("[data-chat-target-selector]")).not.toBeNull();
+  expect(target.closest('[role="log"]')).toBeNull();
 });

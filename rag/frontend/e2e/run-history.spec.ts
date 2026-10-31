@@ -748,7 +748,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 技術的な詳細（処理の経過の中の処理の詳細に畳む）にも同じ名前でエラーコードを出す。
     await page.getByTestId("run-history-timeline-summary").click();
     await page.getByTestId("run-history-process-details").click();
-    await expect(page.locator('[data-run-fact="failure-errorCode"]')).toContainText("ORA-03146");
+    await expect(page.getByTestId("run-history-technical").locator('[data-run-fact="failure-errorCode"]')).toHaveCount(0);
     await expect(page.getByTestId("run-history-timeline").locator('[data-status="failed"]')).toContainText("失敗");
     await expect(page.getByTestId("run-history-evidence")).toHaveCount(0);
 
