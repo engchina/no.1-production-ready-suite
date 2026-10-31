@@ -108,11 +108,11 @@ SUITE_DEPLOY_DIR = REPO_ROOT / "platform" / "deploy"
 ADMIN_PASSWORD_VARIABLE = "app_admin_login_user_password"
 ADMIN_PASSWORD_PRODUCTS = ("rag", "nl2sql", "agent")
 # Compute と ADB の配備を許可するリージョン。
-SUPPORTED_REGIONS = ("ap-tokyo-1", "ap-osaka-1", "us-chicago-1")
+SUPPORTED_REGIONS = ("ap-osaka-1", "ap-tokyo-1", "us-chicago-1")
 # Compute の OS は Oracle Linux 9（platform image の Oracle-Linux-9.8-2026.09.18-0。#1611）。OCID は固定する。
 ORACLE_LINUX_IMAGES = {
-    "ap-tokyo-1": "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa",
     "ap-osaka-1": "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha",
+    "ap-tokyo-1": "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa",
     "us-chicago-1": "ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a",
 }
 DEFAULT_IMAGE_REGION = "ap-osaka-1"
@@ -551,32 +551,23 @@ def _verify_schema(schema: str, variables: str) -> None:
         ["type        = bool", "default     = false"],
         context="nl2sql_oracle_deepsec_enabled Terraform default",
     )
-    compute_visible, compute = groups.get("Compute", ("", []))
+    compute_visible, compute = groups.get("主 Compute の構成", ("", []))
     if compute_visible != "true" or any(name.startswith(PRODUCTS) for name in compute):
         raise AssertionError(f"shared Compute group must hold only shared inputs: {compute}")
 
-    _require_in_order(
-        schema,
-        [
-            "- title: \"配備する製品\"",
-            "- title: Autonomous AI Database",
-            "- adb_compartment_ocid",
-            "- adb_deployment_mode",
-            "- title: Existing Autonomous AI Database",
-            '- title: "ネットワーク・アクセス"',
-            "- title: RAG",
-            '- title: "アプリケーション管理者"',
-            '- title: "NL2SQL Deep Data Security"',
-            "- title: Compute",
-            "- instance_display_name",
-            "- instance_flex_shape_ocpus",
-            "- instance_flex_shape_memory",
-            "- instance_boot_volume_size",
-            "- subnet_ai_subnet_id",
-            "- ssh_authorized_keys",
-        ],
-        context="Resource Manager variable group order",
-    )
+    expected_groups = [
+        "配備先", "Autonomous AI Database", "Existing Autonomous AI Database",
+        "New Autonomous AI Database", "ADB のネットワーク", "アプリ用の DB ユーザー",
+        "主 Compute の構成", "主 Compute のネットワークと SSH", "HTTPS", "Bastion", "bastion の構成",
+        "bastion のネットワークと接続", "アプリケーション管理者", "RAG",
+        "NL2SQL Deep Data Security", "配備する製品", "Hidden",
+    ]
+    if list(groups) != expected_groups:
+        raise AssertionError(f"Resource Manager groups must follow the deployment flow: {list(groups)}")
+    if groups["主 Compute のネットワークと SSH"] != (
+        "true", ["availability_domain", "vcn_ai_vcn_id", "subnet_ai_subnet_id", "ssh_authorized_keys"]
+    ):
+        raise AssertionError("Main Compute network and SSH inputs must be grouped in dependency order")
     _require_all(
         _schema_variable(schema, "adb_compartment_ocid"),
         ["required: true", 'title: "ADBのコンパートメント"', "default: compartment_ocid"],
@@ -1004,7 +995,7 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
         context="adb_app_user_password",
     )
     # フォームの並び（#1675）: 使うかどうかは ADB の利用方法の直後、名前とパスワードは新規 / 既存の ADB の入力
-    # （ADMIN のパスワード）とネットワーク・アクセスの後の「アプリ用の DB ユーザー」の group。
+    # （ADMIN のパスワード）とADB のネットワークの後の「アプリ用の DB ユーザー」の group。
     groups = _schema_groups(schema)
     _, adb_members = groups.get("Autonomous AI Database", ("", []))
     if adb_members[-2:] != ["adb_deployment_mode", "adb_app_user_enabled"]:
@@ -1013,7 +1004,7 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
     if visible != "adb_app_user_enabled" or members != ["adb_app_user_name", "adb_app_user_password"]:
         raise AssertionError(f"the application database user group must show the name and password when enabled: {members}")
     titles = list(groups)
-    order = ["Autonomous AI Database", "Existing Autonomous AI Database", "New Autonomous AI Database", "ネットワーク・アクセス", "アプリ用の DB ユーザー"]
+    order = ["Autonomous AI Database", "Existing Autonomous AI Database", "New Autonomous AI Database", "ADB のネットワーク", "アプリ用の DB ユーザー"]
     if [title for title in titles if title in order] != order:
         raise AssertionError(f"ADB groups must be ordered as {order}: {titles}")
     _, existing = groups.get("Existing Autonomous AI Database", ("", []))
@@ -1538,13 +1529,14 @@ def verify(package_path: Path) -> None:
 
 
 def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, script: str) -> None:
-    """任意の bastion の Compute（#2670）。既定は作らず、未指定の shape・image・SSH キーは Suite から継承する。"""
+    """任意の bastion の Compute（#2670）。既定は作らず、配置先・shape・image・SSH キーを主 Compute と独立に設定する。"""
     groups = _schema_groups(schema)
     if groups.get("Bastion") != ("true", ["bastion_enabled"]):
         raise AssertionError(f"the Bastion group must hold only bastion_enabled: {groups.get('Bastion')}")
-    visible, members = groups.get("Bastion Compute", ("", []))
-    if visible != "bastion_enabled" or any(not name.startswith("bastion_") for name in members):
-        raise AssertionError(f"the Bastion Compute group must hold bastion_* inputs shown only when bastion_enabled: {members}")
+    for title in ("bastion の構成", "bastion のネットワークと接続"):
+        visible, members = groups.get(title, ("", []))
+        if visible != "bastion_enabled" or not members or any(not name.startswith("bastion_") for name in members):
+            raise AssertionError(f"{title} must contain bastion inputs shown only when enabled")
     _require_all(
         _schema_variable(schema, "bastion_enabled"),
         ["type: boolean", "required: true", "visible: true", "default: false"],
@@ -1555,25 +1547,16 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         ["type        = bool", "default     = false"],
         context="bastion_enabled Terraform default",
     )
-    for name in ("bastion_shape", "bastion_image_source_id", "bastion_ssh_authorized_keys"):
-        if name not in members:
-            raise AssertionError(f"Bastion Compute group is missing {name}")
+    for name in ("bastion_shape", "bastion_image_source_id", "bastion_ssh_authorized_keys", "bastion_compartment_ocid", "bastion_availability_domain", "bastion_vcn_id", "bastion_subnet_id"):
         _require_all(
-            _schema_variable(schema, name),
-            ["required: false", "visible: bastion_enabled", 'default: ""'],
-            context=f"{name} optional schema",
+            _schema_variable(schema, name), ["required: true", "visible: bastion_enabled"],
+            context=f"{name} dedicated schema",
         )
-        _require_all(_terraform_variable(variables, name), ['default     = ""'], context=f"{name} inheritance default")
-    _require_all(
-        _schema_variable(schema, "bastion_shape"),
-        ['- ""', '- "VM.Standard.E4.Flex"', '- "VM.Standard.E5.Flex"'],
-        context="bastion shape options",
-    )
-    _require_all(
-        _schema_variable(schema, "bastion_ssh_authorized_keys"),
-        ["type: oci:core:ssh:publickey"],
-        context="bastion SSH public key schema",
-    )
+    for name, default in {"bastion_shape": "VM.Standard.E5.Flex", "bastion_image_source_id": ORACLE_LINUX_IMAGES[DEFAULT_IMAGE_REGION]}.items():
+        _require_all(_schema_variable(schema, name), [f'default: "{default}"'], context=f"{name} schema default")
+        _require_all(_terraform_variable(variables, name), [f'default     = "{default}"'], context=f"{name} Terraform default")
+    _require_all(_schema_variable(schema, "bastion_ssh_authorized_keys"), ["type: oci:core:ssh:publickey"], context="bastion SSH control")
+    _require_all(_schema_variable(schema, "bastion_subnet_id"), ["compartmentId: ${bastion_compartment_ocid}", "vcnId: ${bastion_vcn_id}"], context="bastion subnet dependencies")
     for name, default in BASTION_DEFAULTS.items():
         _require_all(_schema_variable(schema, name), [f"default: {default}"], context=f"{name} schema default")
         _require_all(
@@ -1595,9 +1578,9 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         [
             'resource "oci_core_instance" "bastion" {',
             "count = var.bastion_enabled ? 1 : 0",
-            "shape = local.bastion_shape",
-            "source_id = local.bastion_image_source_id",
-            '"ssh_authorized_keys" = local.bastion_ssh_authorized_keys',
+            "shape = var.bastion_shape",
+            "source_id = var.bastion_image_source_id",
+            '"ssh_authorized_keys" = var.bastion_ssh_authorized_keys',
             'base64encode(file("${path.module}/cloud_init/bastion.sh"))',
             '"bastion_vnc_password_b64" = base64encode(var.bastion_vnc_password)',
             "memory_in_gbs = var.bastion_flex_shape_memory",
@@ -1608,6 +1591,10 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         ],
         context="bastion.tf",
     )
+    for reference in ("var.instance_", "var.ssh_authorized_keys", "var.subnet_ai_subnet_id", "var.availability_domain", "var.compartment_ocid", "var.vcn_ai_vcn_id"):
+        if reference in bastion:
+            raise AssertionError(f"bastion must not inherit main Compute input: {reference}")
+    _require_all(re.sub(r"[ \t]+", " ", bastion), ["availability_domain = var.bastion_availability_domain", "compartment_id = var.bastion_compartment_ocid", "subnet_id = var.bastion_subnet_id"], context="bastion placement")
     # bastion に 3 製品の配備・ADB の情報を渡さない（Suite の Compute の cloud-init とは別）。
     for leaked in ("cloud_init_user_data", "wallet", "platform_env", "backend_envs", "adb_password"):
         if leaked in bastion:
@@ -1632,7 +1619,7 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         ],
         context="cloud_init/bastion.sh",
     )
-    if f'VNC_PORT="$((5900 + VNC_DISPLAY))"' not in script or 'VNC_DISPLAY="1"' not in script:
+    if 'VNC_PORT="$((5900 + VNC_DISPLAY))"' not in script or 'VNC_DISPLAY="1"' not in script:
         raise AssertionError(f"the bastion VNC must listen on TCP {BASTION_VNC_PORT} (display :1)")
     # VNC のパスワードはスクリプトに書かない（metadata から読む）。
     if re.search(r'(?m)^\s*VNC_PASS(?:WORD)?="[^$]', script):
@@ -1696,14 +1683,12 @@ def _verify_oracle_linux(
     """Compute の OS（Oracle Linux 9）・ユーザー（opc）と、配備のスクリプトの OS の前提（#1611）。"""
     image_schema = _schema_variable(schema, "instance_image_source_id")
     enum = re.findall(r'(?m)^      - "(ocid1\.image\.[^"]+)"$', image_schema)
-    if sorted(enum) != sorted(ORACLE_LINUX_IMAGES.values()):
+    if enum != list(ORACLE_LINUX_IMAGES.values()):
         raise AssertionError(f"the Compute image must be the pinned Oracle Linux 9 images: {enum}")
     bastion_image = _schema_variable(schema, "bastion_image_source_id")
     bastion_enum = re.findall(r'(?m)^      - "(ocid1\.image\.[^"]+)"$', bastion_image)
-    if sorted(bastion_enum) != sorted(ORACLE_LINUX_IMAGES.values()):
+    if bastion_enum != list(ORACLE_LINUX_IMAGES.values()):
         raise AssertionError("Bastion image options must match the pinned Oracle Linux 9 images")
-    if '      - ""' not in bastion_image:
-        raise AssertionError("Bastion image must allow inheriting the main Compute image")
     default_image = ORACLE_LINUX_IMAGES[DEFAULT_IMAGE_REGION]
     if f'default: "{default_image}"' not in image_schema or f'default     = "{default_image}"' not in variables:
         raise AssertionError("the default Compute image must be the Oracle Linux 9 image of ap-osaka-1")

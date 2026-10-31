@@ -5,8 +5,8 @@ variable "region" {
 
   # Compute の image（schema.yaml の instance_image_source_id）を用意しているリージョンだけを許す（#660）。
   validation {
-    condition     = contains(["ap-tokyo-1", "ap-osaka-1", "us-chicago-1"], var.region)
-    error_message = "region は ap-tokyo-1、ap-osaka-1、us-chicago-1 のいずれかにしてください。"
+    condition     = contains(["ap-osaka-1", "ap-tokyo-1", "us-chicago-1"], var.region)
+    error_message = "region は ap-osaka-1、ap-tokyo-1、us-chicago-1 のいずれかにしてください。"
   }
 }
 
@@ -522,25 +522,43 @@ variable "bastion_display_name" {
   default     = "PRODUCTION_READY_BASTION"
 }
 
-variable "bastion_shape" {
-  description = "Bastion Compute shape. When empty, instance_shape is used."
+variable "bastion_compartment_ocid" {
+  description = "Compartment OCID of the independent bastion Compute instance."
   type        = string
   default     = ""
+}
+
+variable "bastion_availability_domain" {
+  description = "Availability domain of the independent bastion Compute instance."
+  type        = string
+  default     = ""
+}
+
+variable "bastion_vcn_id" {
+  description = "VCN OCID used to filter the bastion subnet in Resource Manager."
+  type        = string
+  default     = ""
+}
+
+variable "bastion_shape" {
+  description = "Shape of the independent bastion Compute instance."
+  type        = string
+  default     = "VM.Standard.E5.Flex"
 
   validation {
-    condition     = contains(["", "VM.Standard.E4.Flex", "VM.Standard.E5.Flex"], trimspace(var.bastion_shape))
-    error_message = "bastion_shape は空欄、VM.Standard.E4.Flex、VM.Standard.E5.Flex のいずれかにしてください。"
+    condition     = contains(["VM.Standard.E4.Flex", "VM.Standard.E5.Flex"], var.bastion_shape)
+    error_message = "bastion_shape はVM.Standard.E4.Flex、VM.Standard.E5.Flex のいずれかにしてください。"
   }
 }
 
 variable "bastion_image_source_id" {
-  description = "Oracle Linux 9 x86 image OCID of the bastion Compute instance. When empty, instance_image_source_id is used."
+  description = "Oracle Linux 9 x86 image OCID of the independent bastion Compute instance."
   type        = string
-  default     = ""
+  default     = "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
 }
 
 variable "bastion_ssh_authorized_keys" {
-  description = "SSH public keys authorized for the bastion opc user. When empty, ssh_authorized_keys is used."
+  description = "SSH public keys authorized only for the bastion opc user. Required when bastion_enabled is true."
   type        = string
   default     = ""
 }
@@ -590,7 +608,7 @@ variable "bastion_boot_volume_vpus" {
 }
 
 variable "bastion_subnet_id" {
-  description = "Subnet OCID of the bastion Compute instance. When empty, the subnet of the Suite Compute instance is used."
+  description = "Subnet OCID used only by the bastion Compute instance. Required when bastion_enabled is true."
   type        = string
   default     = ""
 }

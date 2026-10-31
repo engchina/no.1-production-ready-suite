@@ -31,13 +31,26 @@
 
 ## 対応リージョン
 
-- **stack は `ap-tokyo-1`（東京）、`ap-osaka-1`（大阪）、`us-chicago-1`（Chicago）をサポートします。** Compute の image（`instance_image_source_id`）は、この 3 つのリージョンの Oracle Linux 9 の platform image（`Oracle-Linux-9.8-2026.09.18-0`）の OCID に固定しています（#1611）。
-  - `ap-tokyo-1`: `ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa`
+- **stack は `ap-osaka-1`（大阪）、`ap-tokyo-1`（東京）、`us-chicago-1`（Chicago）をサポートします。** Compute の image（`instance_image_source_id`）は、この 3 つのリージョンの Oracle Linux 9 の platform image（`Oracle-Linux-9.8-2026.09.18-0`）の OCID に固定しています（#1611）。
   - `ap-osaka-1`（既定）: `ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha`
+  - `ap-tokyo-1`: `ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa`
   - `us-chicago-1`: `ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a`
   - image を新しくするときは、`schema.yaml`・`variables.tf`・`terraform/scripts/verify_stack_contract.py`（`ORACLE_LINUX_IMAGES`）を同じ PR でそろえます。
   これら以外のリージョンで stack を作ると、`region` の validation で plan が失敗します。
 - 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢は東京・大阪のみです。Chicago の保存値には非対応の案内が残ります（#3904）。これは画面の案内の制限で、管理 API の失敗を確認したものではありません。
+
+## フォームの入力順
+
+設定は用途別に、次の順に表示します。新規 / 既存 ADB と bastion の設定は選択に応じて表示します。
+
+1. 配備先のコンパートメント
+2. ADB の利用方法、新規 / 既存 ADB、ADB のネットワーク、アプリ用の DB ユーザー
+3. 主 Compute の構成、ネットワークと SSH、HTTPS
+4. bastion の作成、専用の構成、ネットワークと接続
+5. アプリケーション管理者、RAG の追加 parser、NL2SQL Deep Data Security
+
+非表示の内部設定と製品の選択は表示しません。主 Compute と bastion の image 候補は大阪・東京・Chicago の順で、既定はどちらも大阪です。
+配備後の output は、アプリケーションの入口、接続、ADB 情報の順に表示します。
 
 ## 配備する製品
 
@@ -428,10 +441,11 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   GUI のブラウザ・SQL の道具で届くための踏み台です。
 - 既定は **2 OCPU / 16 GB / boot volume 100 GB / 10 VPUs/GB**（`bastion_flex_shape_ocpus` / `bastion_flex_shape_memory` /
   `bastion_boot_volume_size` / `bastion_boot_volume_vpus`）。shape（`bastion_shape`）・image（Oracle Linux 9 の `bastion_image_source_id`）・
-  SSH キー（`bastion_ssh_authorized_keys`）は任意に独立指定できます。空欄・空白だけの場合は、それぞれ主 Compute の
-  `instance_shape` / `instance_image_source_id` / `ssh_authorized_keys` を使います。既存の入力のままなら従来どおり共用します。
-  shape は E4 / E5 Flex、image は配備先リージョンの x86 Oracle Linux 9 を選びます。これらの入力は bastion を有効にすると表示されます。
-  独立指定した SSH キーは、bastion で継承していたキーの代わりに設定します。主 Compute のキーには追加・置換しません。subnet（`bastion_subnet_id`）を空にすると Suite の Compute と同じ subnet に置きます。
+  SSH キー（`bastion_ssh_authorized_keys`）は bastion 専用に設定します。主 Compute からの継承はしません。
+  shape は独立した既定の E5 Flex、image は大阪の x86 Oracle Linux 9 です。image の候補は大阪・東京・Chicago の順です。
+  `bastion_compartment_ocid` / `bastion_availability_domain` / `bastion_vcn_id` / `bastion_subnet_id` で配置先を指定します。
+  bastion を有効にした場合は配置先・subnet と SSH 公開キーを入力してください。未指定のままでは plan が失敗します。
+  以前の入力で主 Compute の値を継承していた stack も、次の更新前に bastion 専用の値を明示してください。
   公開 IP は subnet から自動で決めます（public subnet なら付ける）。
 - 最初の起動で cloud-init（`terraform/stack/cloud_init/bastion.sh`）が、root の filesystem を広げ、GNOME（「Server with GUI」）・TigerVNC
   （display `:1` = TCP `5901`、ユーザー `opc`）・Google Chrome（Google の dnf repository。署名を確かめて入れる）・日本語の font を入れ、

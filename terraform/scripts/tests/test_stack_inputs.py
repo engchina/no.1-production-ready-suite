@@ -72,6 +72,7 @@ class StackInputTests(unittest.TestCase):
         result = self.plan()
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn('workload = "LH"', result.stdout)
+        self.assertRegex(result.stdout, r'region\s*= "ap-osaka-1"')
 
     def test_supported_workloads(self) -> None:
         for workload in ("OLTP", "AJD", "LH"):
@@ -92,7 +93,7 @@ class StackInputTests(unittest.TestCase):
         self.assertIn("Invalid value for variable", result.stdout)
 
     def test_supported_regions(self) -> None:
-        for region in ("ap-tokyo-1", "ap-osaka-1", "us-chicago-1"):
+        for region in ("ap-osaka-1", "ap-tokyo-1", "us-chicago-1"):
             with self.subTest(region=region):
                 result = self.plan(region=region)
                 self.assertEqual(result.returncode, 0, result.stdout)
@@ -105,36 +106,43 @@ class StackInputTests(unittest.TestCase):
 
     def test_form_has_an_image_for_each_supported_region(self) -> None:
         schema = (ROOT / "terraform/stack/schema.yaml").read_text()
-        block = _schema_variable(schema, "instance_image_source_id")
-        regions = set(re.findall(r"ocid1\.image\.oc1\.([a-z0-9-]+)\.", block))
-        self.assertEqual(regions, {"ap-tokyo-1", "ap-osaka-1", "us-chicago-1"})
-
-    def test_bastion_configuration_and_resolved_inputs(self) -> None:
-        schema = (ROOT / "terraform/stack/schema.yaml").read_text()
-        visibility, members = _schema_groups(schema)["Bastion Compute"]
-        self.assertEqual(visibility, "bastion_enabled")
-        for name in (
-            "bastion_flex_shape_ocpus",
-            "bastion_flex_shape_memory",
-            "bastion_boot_volume_size",
-            "bastion_boot_volume_vpus",
-            "bastion_subnet_id",
-        ):
+        for name in ("instance_image_source_id", "bastion_image_source_id"):
             with self.subTest(field=name):
-                self.assertIn(name, members)
-                self.assertIn(
-                    "visible: bastion_enabled", _schema_variable(schema, name)
+                block = _schema_variable(schema, name)
+                regions = re.findall(
+                    r'^      - "ocid1\.image\.oc1\.([a-z0-9-]+)\.', block, re.MULTILINE
                 )
-        self.assertIn(
-            "type: oci:core:ssh:publickey",
-            _schema_variable(schema, "ssh_authorized_keys"),
+                self.assertEqual(regions, ["ap-osaka-1", "ap-tokyo-1", "us-chicago-1"])
+
+    def test_compute_and_bastion_networks_are_separate(self) -> None:
+        schema = (ROOT / "terraform/stack/schema.yaml").read_text()
+        groups = _schema_groups(schema)
+        self.assertEqual(
+            groups["主 Compute のネットワークと SSH"],
+            (
+                "true",
+                [
+                    "availability_domain",
+                    "vcn_ai_vcn_id",
+                    "subnet_ai_subnet_id",
+                    "ssh_authorized_keys",
+                ],
+            ),
         )
-        bastion = (ROOT / "terraform/stack/bastion.tf").read_text()
-        self.assertRegex(
-            bastion, r'"ssh_authorized_keys"\s*= local\.bastion_ssh_authorized_keys'
+        self.assertEqual(
+            groups["bastion のネットワークと接続"],
+            (
+                "bastion_enabled",
+                [
+                    "bastion_compartment_ocid",
+                    "bastion_availability_domain",
+                    "bastion_vcn_id",
+                    "bastion_subnet_id",
+                    "bastion_ssh_authorized_keys",
+                    "bastion_vnc_password",
+                ],
+            ),
         )
-        self.assertRegex(bastion, r"shape\s*= local\.bastion_shape")
-        self.assertRegex(bastion, r"source_id\s*= local\.bastion_image_source_id")
 
 
 if __name__ == "__main__":
