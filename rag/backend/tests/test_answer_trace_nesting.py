@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -125,6 +126,11 @@ async def test_attachment_evidence_is_its_own_pipeline_step(
             return []
 
     monkeypatch.setattr(chat_attachments, "attachment_evidence", attachment_evidence)
+    monkeypatch.setattr(
+        chat_attachments,
+        "chat_attachment_service",
+        lambda: SimpleNamespace(reading_status=lambda: "done"),
+    )
     monkeypatch.setattr(engine_oci, "parse_text_response", _traced_llm)
     pipeline = RagPipeline(
         settings=Settings(),
@@ -141,3 +147,36 @@ async def test_attachment_evidence_is_its_own_pipeline_step(
     rerank = next(step for step in steps if (step.span or {}).get("name") == "gen_ai.rerank")
     parent = by_id[str((rerank.span or {}).get("parent_id"))]
     assert (parent.span or {}).get("name") == "rag.attachment_evidence"
+
+
+async def test_disabled_attachment_step_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    import rag_engine.adapters.oci as engine_oci
+    from pr_system_settings.chat_attachments import (
+        ChatAttachmentService,
+        InMemoryChatAttachmentStore,
+    )
+
+    from app.rag import chat_attachments
+
+    service = ChatAttachmentService(
+        InMemoryChatAttachmentStore(),
+        product="rag",
+        settings=lambda: SimpleNamespace(),
+        enabled=lambda: False,
+    )
+    monkeypatch.setattr(chat_attachments, "chat_attachment_service", lambda: service)
+    monkeypatch.setattr(engine_oci, "parse_text_response", _traced_llm)
+    pipeline = RagPipeline(
+        settings=Settings(),
+        oracle=_TracedOracle(),  # type: ignore[arg-type]
+        genai=_TracedGenAi(),  # type: ignore[arg-type]
+        attachment_conversation_id="synthetic-conversation",
+    )
+    tracker = RecordingTrace()
+    await pipeline.run(SearchRequest(query="合成の設定方法を確認する"), trace=tracker)
+    steps = fold_chat_progress_events(tracker.events).step_list()
+    attachment = [
+        step for step in steps if (step.span or {}).get("name") == "rag.attachment_evidence"
+    ]
+    assert len(attachment) == 1
+    assert attachment[0].status == "skipped"

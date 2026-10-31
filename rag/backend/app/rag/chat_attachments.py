@@ -127,7 +127,7 @@ def conversation_toolset(
     読めなかったときは ``report_degraded`` に残す（添付が無いときは残さない。#3286）。
     """
     try:
-        toolset = chat_attachment_service().toolset(conversation_id)
+        toolset = chat_attachment_service().toolset(conversation_id, observe=False)
     except Exception as exc:  # noqa: BLE001 - 添付を読めなくても回答は続ける
         logger.warning(
             "rag_chat_attachments_unavailable",

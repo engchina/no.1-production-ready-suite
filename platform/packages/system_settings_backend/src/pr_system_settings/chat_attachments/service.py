@@ -28,10 +28,12 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 
 from anyio import to_thread
+from pr_backend_core.observability.tracing import observed_span
 
 from ..auth.visibility import can_access_user_data
 from .errors import ChatAttachmentError, attachment_not_found
@@ -423,16 +425,24 @@ class ChatAttachmentService:
         """会話に送信した期限内の添付（会話の権限は製品が確かめる。解析はしない）。"""
         return self.store.list_for_conversation(self.product, conversation_id, now=self._clock())
 
-    def toolset(self, conversation_id: str) -> ChatAttachmentToolset:
-        """会話の添付を読むツール（添付が無い・無効にした製品は空。`bool(toolset)` が False）。
+    def reading_status(self) -> Literal["done", "skipped", "failed"]:
+        """添付の読み取りの可否。設定を読めない状態を管理者による無効と区別する。"""
+        if self.enabled():
+            return "done"
+        return "failed" if self._settings_failure() is not None else "skipped"
 
-        ツールが添付を初めて読むときに解析する（`ensure_parsed`）。
-        """
-        if not self.enabled():
-            return ChatAttachmentToolset([], self.ensure_parsed)
-        return ChatAttachmentToolset(
-            self.conversation_records(conversation_id), self.ensure_parsed, self.content
-        )
+    def toolset(self, conversation_id: str, *, observe: bool = True) -> ChatAttachmentToolset:
+        """会話の添付を読むツール。既存の工程で計測する呼び出しは span を重ねない。"""
+        context = observed_span(f"{self.product}.attachment_evidence") if observe else nullcontext()
+        with context as span:
+            status = self.reading_status()
+            if span is not None:
+                span.set_status(status)
+            if status != "done":
+                return ChatAttachmentToolset([], self.ensure_parsed)
+            return ChatAttachmentToolset(
+                self.conversation_records(conversation_id), self.ensure_parsed, self.content
+            )
 
     def preparation_toolset(
         self,
