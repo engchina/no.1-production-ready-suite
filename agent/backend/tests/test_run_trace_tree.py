@@ -225,6 +225,7 @@ def test_tool_call_with_mcp_to_rag_nests_each_step_under_its_owner(
         if span.name != MCP
     ]
     assert top == [
+        ("agent.attachment_evidence", None, None),
         (CHAT, "plan", None),
         (TOOL, "tool", "rag__rag_retrieve_evidence"),
         (CHAT, "respond", None),
