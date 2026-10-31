@@ -328,12 +328,12 @@ describe("span の段（#3226）", () => {
       ["工程 検索", 0],
       ["テキストの埋め込みを作る · embed-x", 1],
       ["MCP の呼び出し", 1],
-      ["history_rewrite", 0],
+      ["処理を実行する", 0],
     ]);
     expect(steps[0].meta).toBe("LLM 1 回");
     expect(steps[2].detail).toBe("停止");
     // 開いた詳細に元の span の名前と技術の値を残す。
-    expect(steps[1].details?.fields).toContainEqual({ label: "Span name", value: "gen_ai.embeddings", mono: true });
+    expect(steps[1].details?.fields).toContainEqual({ label: "Span name", value: "gen_ai.embeddings", mono: true, technical: true });
     expect(chatProgressTraceIdOf(events)).toBe(trace);
     expect(chatProgressHasSpans(events)).toBe(true);
   });
@@ -360,7 +360,7 @@ describe("span の段（#3226）", () => {
       ["モデルを呼び出す（用途の記録なし）", 2],
       ["MCP の呼び出し", 1],
     ]);
-    expect(steps[1].details?.fields).toContainEqual({ label: "mcp.method.name", value: "tools/call", mono: true });
+    expect(steps[1].details?.fields).toContainEqual({ label: "mcp.method.name", value: "tools/call", mono: true, technical: true });
   });
 
   // #3272: 別の製品が書いた span は、画面の製品の工程の定義で訳さずに、書いた製品が付けた名前を出し、製品の境目に製品名を添える。
@@ -391,7 +391,7 @@ describe("span の段（#3226）", () => {
       ["表示の段 B", 2, "RAG"],
     ]);
     expect(steps[2].meta).toBeUndefined();
-    expect(steps[2].details?.fields).toContainEqual({ label: "Product", value: "rag", mono: true });
+    expect(steps[2].details?.fields).toContainEqual({ label: "Product", value: "rag", mono: true, technical: true });
     // 画面の製品の span は製品の定義で名前を付け、製品名を添えない。
     const ragLabels = createTraceDetailsLabels((key) => TRACE_DETAILS_JA[key], { product: "rag" });
     const inRag = chatProgressStepsFromEvents(events.slice(3), own, "t", { traceLabels: ragLabels });

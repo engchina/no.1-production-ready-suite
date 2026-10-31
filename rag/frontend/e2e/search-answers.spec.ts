@@ -349,13 +349,13 @@ test("チャットは会話の回答の trace_id で保存済みの回答を引�
   await expect(page.getByText("この回答を削除")).toHaveCount(0);
 });
 
-// #635: RAG 検索とチャットの「対象の検索・回答プロファイル」は同じ部品・同じ文言・同じ幅（カードの幅いっぱい）。
+// 検索はフォームの幅、チャットはツールバーの幅で同じ対象選択を使う（#3918）。
 for (const viewport of [
   { name: "1280", width: 1280, height: 800 },
   { name: "1920", width: 1920, height: 1000 },
   { name: "375", width: 375, height: 812 },
 ]) {
-  test(`RAG 検索とチャットの検索・回答プロファイルの欄は同じ見た目 (${viewport.name})`, async ({ page }) => {
+  test(`検索の対象はフォームに、チャットの対象はコンパクトなツールバーに置く (${viewport.name})`, {tag: "@responsive"}, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockAnswerHistory(page, 0);
     await mockChat(page, "bv-1");
@@ -383,10 +383,11 @@ for (const viewport of [
     await page.goto("/chat");
     const chat = await measure();
     for (const box of [search, chat]) expect(Math.abs(box.width - box.inner)).toBeLessThanOrEqual(1);
-    // 2 画面のカードは同じ余白（CardContent の既定）で、375px でも内側の幅と欄の高さが同じ（#1778）。
-    // 以前はチャットのカードだけ 375px の余白が狭く（p-4）、幅が 7px 違って placeholder の折り返しが変わった。
-    expect(Math.abs(search.width - chat.width)).toBeLessThanOrEqual(1);
-    expect(Math.abs(search.height - chat.height)).toBeLessThanOrEqual(0.5);
+    expect(chat.width).toBeLessThan(search.width);
+    const target = page.getByRole("button", {name: /検索・回答プロファイル/});
+    expect(await target.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);
+    const toolbarHeight = await page.getByRole("button", {name: "新しい会話", exact: true}).evaluate(node => node.getBoundingClientRect().height);
+    expect(Math.abs(chat.height - toolbarHeight)).toBeLessThanOrEqual(0.5);
 
     await selectSearchAnswerProfile(page, "経理ビュー");
     await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");

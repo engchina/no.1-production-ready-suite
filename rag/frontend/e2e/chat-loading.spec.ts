@@ -141,6 +141,11 @@ for (const colorScheme of ["light", "dark"] as const) {
     // 読み込み後: 空の状態と、使える入力欄。
     release();
     await expect(page.getByTestId("chat-search-answer-profiles-loading")).toHaveCount(0);
+
+    const toolbarTarget = page.locator("[data-chat-toolbar] #chat-search-answer-profile");
+    await expect(toolbarTarget).toBeVisible();
+    expect(await toolbarTarget.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);
+
     await expect(page.getByTestId("chat-messages-skeleton")).toHaveCount(0);
     await expect(page.getByText(EMPTY_TEXT, { exact: true })).toBeVisible();
     await expect(composer).toBeEnabled();

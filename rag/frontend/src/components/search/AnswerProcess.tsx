@@ -36,11 +36,13 @@ export function AnswerProcess({
   legacy = false,
   partial = false,
   savedRecord,
-  showNotices = false,
-  showAutoFieldFilter,
+  conversationId = null,
+  messageId = null,
   testId,
   className,
 }: {
+  conversationId?: string | null;
+  messageId?: string | null;
   steps: ChatProgressStep[];
   /** 処理中か。省略時は段階から決める。 */
   active?: boolean;
@@ -60,10 +62,6 @@ export function AnswerProcess({
   partial?: boolean;
   /** 診断の無い保存済みの回答（会話を開き直したとき）。回答の記録を読み直して「処理の詳細」に出す。 */
   savedRecord?: { traceId: string; searchAnswerProfileId: string } | null;
-  /** 回答を読むときに要る案内を「処理の詳細」に出すか。回答の本文の下に出すときは false（既定）。 */
-  showNotices?: boolean;
-  /** 質問から読み取った条件を「処理の詳細」に出すか。RAG 検索は外せるチップで出すので出さない。 */
-  showAutoFieldFilter?: boolean;
   /** `ChatProgress` の testId（`-summary` / `-current` / `-step-<id>` など）。囲みは `-process`、「処理の詳細」は `-details`。 */
   testId?: string;
   className?: string;
@@ -72,8 +70,6 @@ export function AnswerProcess({
   const details = diagnostics ? (
     <AnswerDetailsPanel
       diagnostics={diagnostics}
-      showNotices={showNotices}
-      showAutoFieldFilter={showAutoFieldFilter}
     />
   ) : savedRecord ? (
     <SavedAnswerRecord
@@ -90,6 +86,7 @@ export function AnswerProcess({
   const detailsDisclosure = details || traceId ? (
     <RunProcessDetails
       traceId={traceId}
+      metadata={{ conversationId, messageId }}
       title={t("answer.process.details")}
       summaryTestId={testId ? `${testId}-details` : undefined}
     >

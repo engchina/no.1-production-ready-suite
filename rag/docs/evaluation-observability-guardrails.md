@@ -10,7 +10,7 @@
 | 検索 | 正解文書の順位（MRR） (`mrr`) | `relevant_document_ids` と引用の文書列を比較します。文書の重複を除いた最初の正解の順位 r の 1/r、未取得は 0。 |
 | 回答 | 回答の正確性 (`answer_correctness`) | 標準回答または確認済みの必須要点と、質問への結論・数値・適用条件を意味上比較します。取得根拠に支持されるだけでは正解にしません。 |
 | 回答 | 回答の網羅性 (`requirement_coverage`) | 標準回答・`required_answer_points`・`required_conditions` の必須項目への意味上の対応率。説明済み 1・部分的 0.5・不足 0。 |
-| 回答 | 根拠への忠実性 (`claim_support_rate`) | 根拠が支持する主張 / 監査した実質的な主張。主張は段落ごとに、その段落が出典に挙げた根拠で判定し、出典の無い段落は支持されない主張に数えます。標準回答は不要。引用を検証できない・監査しきれない主張があれば未評価。 |
+| 回答 | 根拠への忠実性 (`claim_support_rate`) | 根拠が支持する主張 / 監査した実質的な主張。主張は段落ごとに、その段落が出典に挙げた根拠で判定し、冒頭要約は本文が引用した原文の候補で判定します。対応する出典の無い段落は参照不足として内容を未評価にします。標準回答は不要。引用を検証できない・監査しきれない主張があれば未評価。 |
 | 応答の判断 | 回答・確認・保留の判断の正しさ (`response_decision_accuracy`) | `expected_response_decision` に `answer` / `clarify` / `hold` を明示します。標準回答は不要。省略時は推定しません。 |
 
 `expected_outcomes` に明示した回答結果も三分類へ集約します。`answered`・`conditional` は回答、`needs_clarification` は確認、それ以外は保留です。複数往復は各往復の明示的な期待に合っているか確認します。
@@ -55,7 +55,7 @@
 
 ### 判定の呼び出しの形（#3576）
 
-回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`。判定の版 `rubric_version` 12）は、小さな判定を分けて呼び、集計と合否はコードが行います（LLM-as-judge の一般的なやり方。1 つの出力に全部の判定をまとめない）。
+回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`。判定の版 `rubric_version` 14）は、小さな判定を分けて呼び、集計と合否はコードが行います（LLM-as-judge の一般的なやり方。1 つの出力に全部の判定をまとめない）。
 
 | 判定 | モデルに渡すもの | 指示 |
 |---|---|---|
@@ -65,7 +65,7 @@
 | 正確性 | 質問・標準回答・回答の本文 | `CORRECTNESS_PROMPT` |
 
 - 段落の出典は、段落の後に続く出典の行（「根拠：文書名 p.N」。同じ出典の説明が続くと最後の説明の後に 1 回だけ置く）と、段落に書いた根拠の ID。出典の行は回答の引用の記録（`cited_evidence`）で根拠に結び付け、記録に無ければ文書名と頁で根拠を選びます。取得した根拠の全体は渡さないので、batch 分けと batch をまたぐ摘要は無くなりました（出力の `batch_count` は 1、`batch_audits`・`missing_audit_passage_ids` は空）。
-- モデルを呼ばずにコードが決める段落: 見出し・出典の行・回答の節の見出しと注記・「確認が必要な点」などの注記の節の行は `not_a_claim`、確認の節の項目は `data_confirmation`、当てはめの前提の行で引用がすべて質問の文にあるものは `supported`、出典の無い段落は `unsupported`（`reference_check=uncited`）。
+- モデルを呼ばずにコードが決める段落: 見出し・出典の行・回答の節の見出しと注記・「確認が必要な点」などの注記の節の行は `not_a_claim`、確認の節の項目は `data_confirmation`、当てはめの前提の行で引用がすべて質問の文にあるものは `supported`、出典の無い段落は `unassessed`（`reference_check=uncited`。意味の不支持を確定しない）。
 - 網羅・正確性・主張の呼び出しは、1 件の評価の中で上限のある並行（`JUDGE_MAX_CONCURRENCY`）で行い、判定の期限を過ぎたら新しい呼び出しを始めません。1 段落の判定が失敗したときは、その段落だけを `unassessed` にして評価を続けます（`claim_support_rate` は未評価になる）。網羅・正確性の失敗は評価の失敗です。
 - 判定の診断（`judge_diagnostics`）の `judge_calls`・`claim_calls`・`claim_failures`・`uncited_claims` に、呼び出しの数・段落の判定の失敗・出典の無い段落の数を残します。
 
@@ -164,3 +164,5 @@ uv run python -m app.rag.guardrail_settings_migration --env-file .env
 その値を保持します。旧方針・ローカル検査の環境変数は削除し、実行時に互換読み込みしません。
 保存済みプロファイルの旧 `guardrail_policy` は読み捨て、次に保存すると除外します。
 独立した旧ステージのサービス基盤は残しますが、RAG の安全チェックからは呼びません。
+
+冒頭要約は、回答が使う既知の本文見出しより前の段落を対象にします。出典のある本文の段落 ID と、その原文の ID を `judge_diagnostics.summary_citation_candidates` に残します。これは支持の確定ではなく意味判定へ渡す候補です。要約の主張そのものを原文で判断し、本文を事実の出典にしません。通常の本文の無引用段落や、警告・除外の節へこの対応を広げません。候補が入力予算に収まらないときは要約を未評価にし、合格にしません。

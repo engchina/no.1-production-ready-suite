@@ -1,7 +1,7 @@
 import { CalendarRange } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { displayDateTimeParts } from "../../lib/date-time";
+import { displayDateTimeParts, displayTimeZone } from "../../lib/date-time";
 import { INFORMATION_TABLE_VISIBLE_ROWS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { formatChatProgressDuration } from "../feedback/chat-progress-format";
@@ -41,13 +41,13 @@ function pad2(value: number) {
  * 一覧・詳細で相対時刻（「3 分前」）を使わない（時刻を見比べ、監査の記録と照らすため。run-history.md）。
  * 読めない値はそのまま返す。
  */
-export function formatRunDateTime(iso: string | null | undefined, options: { seconds?: boolean } = {}): string {
+export function formatRunDateTime(iso: string | null | undefined, options: { seconds?: boolean; timeZone?: boolean } = {}): string {
   if (!iso) return "—";
   const parts = displayDateTimeParts(iso);
   if (!parts) return iso;
   const day = `${parts.year}/${pad2(parts.month)}/${pad2(parts.day)}`;
   const time = `${pad2(parts.hour)}:${pad2(parts.minute)}${options.seconds ? `:${pad2(parts.second)}` : ""}`;
-  return `${day} ${time}`;
+  return `${day} ${time}${options.timeZone ? ` (${displayTimeZone()})` : ""}`;
 }
 
 /** token の数の表記（「1,234 token」）。 */

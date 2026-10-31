@@ -216,6 +216,7 @@ export function Nl2SqlChatLayout({
   history,
   label,
   conversationTitle,
+  targetSelector,
   conversationTitleLoading,
   onNewConversation,
   newConversationDisabled,
@@ -228,6 +229,7 @@ export function Nl2SqlChatLayout({
   /** 会話の領域の名前（翻訳済み）。 */
   label: string;
   conversationTitle?: string | null;
+  targetSelector?: ReactNode;
   conversationTitleLoading?: boolean;
   onNewConversation: () => void;
   newConversationDisabled?: boolean;
@@ -246,6 +248,7 @@ export function Nl2SqlChatLayout({
       historyToggleDisabled={history.toggleDisabled}
       label={label}
       conversationTitle={conversationTitle}
+      targetSelector={targetSelector}
       conversationTitleLoading={conversationTitleLoading}
       newConversation={{
         label: t("chat.new"),

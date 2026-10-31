@@ -31,6 +31,7 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   unexpected_refusal: "evaluation.failureReason.unexpected_refusal",
   answer_keyword_miss: "evaluation.failureReason.answer_keyword_miss",
   low_groundedness: "evaluation.failureReason.low_groundedness",
+  claim_unassessed: "evaluation.failureReason.claim_unassessed",
   unsupported_claim: "evaluation.failureReason.unsupported_claim",
   missing_content: "evaluation.failureReason.missing_content",
   answer_failed: "evaluation.failureReason.answer_failed",

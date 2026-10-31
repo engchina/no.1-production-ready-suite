@@ -49,10 +49,10 @@ describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）"
   it("既定は root・段・技術の span を日本語にし、対象と試行の回数を添える", () => {
     const steps = traceTimeline(summary).steps;
     expect(steps.map(s => s.label)).toEqual([
-      "実行の全体（2 回目）", "answer", "工程 A", "モデルを呼び出す（用途の記録なし）", "ツールの実行 · tool_y", "MCP の呼び出し（3 回目）",
+      "実行の全体（2 回目）", "処理を実行する", "処理を実行する", "モデルを呼び出す（用途の記録なし）", "ツールの実行 · tool_y", "MCP の呼び出し（3 回目）",
       // 技術の trace の一覧は MCP の手続きも残し、呼んだツールか method を添える（#3272）。
       "MCP の呼び出し · tool_y", "MCP の呼び出し · initialize",
-      "テキストの埋め込みを作る · embed-x", "質問との関連度で候補を並べ替える · rerank-x", "AI の呼び出し · model-x", "Select AI の呼び出し", "custom.operation",
+      "テキストの埋め込みを作る · embed-x", "質問との関連度で候補を並べ替える · rerank-x", "AI の呼び出し · model-x", "Select AI の呼び出し", "処理を実行する",
     ]);
   });
   it("MCP の呼び出しは呼んだツールの表示名（pr.tool.title）を先に添え、内部名は詳細に残す（#3468）", () => {
@@ -61,7 +61,7 @@ describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）"
       stage("2", "1", "mcp.request", { "mcp.method.name": "tools/call", "gen_ai.tool.name": "tool_y", "pr.tool.title": "合成の照合" }),
     ] }).steps;
     expect(steps[1].label).toBe("MCP の呼び出し · 合成の照合");
-    expect(steps[1].details?.fields).toContainEqual({ label: "gen_ai.tool.name", value: "tool_y", mono: true });
+    expect(steps[1].details?.fields).toContainEqual({ label: "gen_ai.tool.name", value: "tool_y", mono: true, technical: true });
   });
   it("段は製品の段の名前（処理の経過と同じ関数）を使い、詳細に元の span の名前と段を残す", () => {
     const seen: [string, string][] = [];
@@ -72,8 +72,8 @@ describe("span の表示名（#3219。3 製品の 9 画面で共通の規則）"
     expect(steps.map(s => s.label).slice(0, 3)).toEqual(["実行の全体（2 回目）", "回答の段", "表示 工程 A"]);
     expect(seen).toEqual([["answer", "done"], ["工程 A", "done"]]);
     const fields = steps[2].details?.fields ?? [];
-    expect(fields).toContainEqual({ label: "Span name", value: "op.engine.stage", mono: true });
-    expect(fields).toContainEqual({ label: "pr.stage", value: "工程 A", mono: true });
+    expect(fields).toContainEqual({ label: "Span name", value: "op.engine.stage", mono: true, technical: true });
+    expect(fields).toContainEqual({ label: "pr.stage", value: "工程 A", mono: true, technical: true });
   });
 });
 describe("モデルの呼び出しの入力の文脈の記録と利用量（#2583）", () => {
@@ -102,37 +102,37 @@ describe("モデルの呼び出しの入力の文脈の記録と利用量（#258
   };
   it("利用量と文脈の値を日本語の見出しで、識別子 → 利用量 → 見積もり → 予算 → 圧縮 → 指紋の順に出す", () => {
     expect(traceSpanFields(undefined, "gen_ai.chat", context)).toEqual([
-      { label: "Span name", value: "gen_ai.chat", mono: true },
-      { label: "gen_ai.request.model", value: "model-x", mono: true },
-      { label: "入力トークン", value: "1200", mono: true },
-      { label: "出力トークン", value: "30", mono: true },
-      { label: "キャッシュから読んだ入力", value: "0", mono: true },
-      { label: "入力の見積もり（指示・固定）", value: "300", mono: true },
-      { label: "入力の見積もり（動的な状態）", value: "40", mono: true },
-      { label: "入力の見積もり（ツールの定義）", value: "500", mono: true },
-      { label: "入力の見積もり（履歴）", value: "200", mono: true },
-      { label: "入力の見積もり（ツールの結果）", value: "150", mono: true },
-      { label: "入力の見積もり（合計）", value: "1190", mono: true },
-      { label: "入力の項目数", value: "7", mono: true },
-      { label: "文脈の予算", value: "100000", mono: true },
-      { label: "文脈の予算の残り", value: "98810", mono: true },
-      { label: "圧縮の前", value: "5000", mono: true },
-      { label: "圧縮の後", value: "1190", mono: true },
-      { label: "圧縮したツールの結果の数", value: "2", mono: true },
-      { label: "指示の指紋（固定）", value: "0123456789abcdef", mono: true },
-      { label: "指示の指紋（全体）", value: "fedcba9876543210", mono: true },
-      { label: "ツール定義の指紋", value: "00112233aabbccdd", mono: true },
-      { label: "ツール定義の数", value: "4", mono: true },
+      { label: "Span name", value: "gen_ai.chat", mono: true, technical: true },
+      { label: "gen_ai.request.model", value: "model-x", mono: true, technical: true },
+      { label: "入力トークン", value: "1200", mono: true, technical: true },
+      { label: "出力トークン", value: "30", mono: true, technical: true },
+      { label: "キャッシュから読んだ入力", value: "0", mono: true, technical: true },
+      { label: "入力の見積もり（指示・固定）", value: "300", mono: true, technical: true },
+      { label: "入力の見積もり（動的な状態）", value: "40", mono: true, technical: true },
+      { label: "入力の見積もり（ツールの定義）", value: "500", mono: true, technical: true },
+      { label: "入力の見積もり（履歴）", value: "200", mono: true, technical: true },
+      { label: "入力の見積もり（ツールの結果）", value: "150", mono: true, technical: true },
+      { label: "入力の見積もり（合計）", value: "1190", mono: true, technical: true },
+      { label: "入力の項目数", value: "7", mono: true, technical: true },
+      { label: "文脈の予算", value: "100000", mono: true, technical: true },
+      { label: "文脈の予算の残り", value: "98810", mono: true, technical: true },
+      { label: "圧縮の前", value: "5000", mono: true, technical: true },
+      { label: "圧縮の後", value: "1190", mono: true, technical: true },
+      { label: "圧縮したツールの結果の数", value: "2", mono: true, technical: true },
+      { label: "指示の指紋（固定）", value: "0123456789abcdef", mono: true, technical: true },
+      { label: "指示の指紋（全体）", value: "fedcba9876543210", mono: true, technical: true },
+      { label: "ツール定義の指紋", value: "00112233aabbccdd", mono: true, technical: true },
+      { label: "ツール定義の数", value: "4", mono: true, technical: true },
     ]);
   });
   it("キャッシュの値が無いときは 0 と区別して「不明」、利用量そのものが無いときは「未計測」にする", () => {
     const { "gen_ai.usage.cache_read.input_tokens": _cache, ...withoutCache } = context;
-    expect(traceSpanFields(undefined, "gen_ai.chat", withoutCache)).toContainEqual({ label: "キャッシュから読んだ入力", value: "不明", mono: false });
-    expect(traceSpanFields(undefined, "gen_ai.chat", context)).toContainEqual({ label: "キャッシュから読んだ入力", value: "0", mono: true });
+    expect(traceSpanFields(undefined, "gen_ai.chat", withoutCache)).toContainEqual({ label: "キャッシュから読んだ入力", value: "不明", mono: false, technical: true });
+    expect(traceSpanFields(undefined, "gen_ai.chat", context)).toContainEqual({ label: "キャッシュから読んだ入力", value: "0", mono: true, technical: true });
     expect(traceSpanFields(undefined, "gen_ai.chat", {}).filter(field => !field.mono)).toEqual([
-      { label: "入力トークン", value: "未計測", mono: false },
-      { label: "出力トークン", value: "未計測", mono: false },
-      { label: "キャッシュから読んだ入力", value: "未計測", mono: false },
+      { label: "入力トークン", value: "未計測", mono: false, technical: true },
+      { label: "出力トークン", value: "未計測", mono: false, technical: true },
+      { label: "キャッシュから読んだ入力", value: "未計測", mono: false, technical: true },
     ]);
   });
   it("文脈の記録の無い span（RAG / NL2SQL・モデル以外の呼び出し）には文脈の行を足さない", () => {
@@ -146,7 +146,7 @@ describe("モデルの呼び出しの入力の文脈の記録と利用量（#258
   it("見出しは製品の辞書（createTraceDetailsLabels の t）から付ける", () => {
     const labels = createTraceDetailsLabels(key => (key.startsWith("trace.field.") ? `訳:${key}` : TRACE_DETAILS_JA[key]));
     const fields = traceTimeline({ completeness: "complete", spans: [{ ...span("1"), operation_name: "gen_ai.chat", attributes: context }] }, labels).steps[0].details?.fields ?? [];
-    expect(fields).toContainEqual({ label: "訳:trace.field.budget.remaining", value: "98810", mono: true });
+    expect(fields).toContainEqual({ label: "訳:trace.field.budget.remaining", value: "98810", mono: true, technical: true });
     expect(JSON.stringify(fields)).not.toContain("private-payload");
   });
 });
@@ -158,7 +158,7 @@ describe("モデル用途の共通表示", () => {
         "pr.product": product, "pr.gen_ai.purpose": "answer.validate", "gen_ai.request.model": "model-x",
       } }] }).steps;
       expect(steps[0].label).toBe("回答の段落を取得した資料と照合する");
-      expect(steps[0].details?.fields).toContainEqual({ label: "gen_ai.request.model", value: "model-x", mono: true });
+      expect(steps[0].details?.fields).toContainEqual({ label: "gen_ai.request.model", value: "model-x", mono: true, technical: true });
     }
   });
   it("未知の用途を本文から推測せず、モデル以外の処理に流用しない", () => {
@@ -198,8 +198,14 @@ it.each(["done", "failed", "cancelled"])("論理的な並べ替え要求は%sで
   expect(tree.steps[2].label).toBe("候補の並べ替えを要求する（2 回目）");
   expect(tree.steps[3].label).toBe("質問との関連度で候補を並べ替える · synthetic-rerank");
   expect(tree.steps[3].parentId).toBe("3".repeat(16));
-  expect(tree.steps[3].details?.fields).toContainEqual({ label: "Parent span ID", value: "3".repeat(16), mono: true });
+  expect(tree.steps[3].details?.fields).toContainEqual({ label: "Parent span ID", value: "3".repeat(16), mono: true, technical: true });
   expect(tree.steps[4].label).toBe("候補の並べ替えを要求する");
-  expect(tree.steps[2].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true });
+  expect(tree.steps[2].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true, technical: true });
   expect(request.operation_name).toBe("rerank.request");
+});
+
+it.each(["rag", "agent", "nl2sql"])("%s の無効な添付は同じ名前とスキップの状態で表示する", product => {
+  const result = traceTimeline({spans: [{...span("1", "0"), operation_name: `${product}.attachment_evidence`, status: "skipped"}]}).steps[0];
+  expect(result.label).toBe("会話の添付から根拠を選ぶ");
+  expect(result.status).toBe("skipped");
 });

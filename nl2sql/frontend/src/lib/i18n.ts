@@ -1614,7 +1614,7 @@ const nl2sqlJa = {
   "nl2sql.progress.step.running": "処理中",
   "nl2sql.progress.step.done": "完了",
   "nl2sql.progress.step.error": "エラー",
-  "nl2sql.progress.step.skipped": "未実行",
+  "nl2sql.progress.step.skipped": "スキップ",
   "nl2sql.progress.step.safetyCheckSkipped": "省略",
   "nl2sql.sql.copy": "コピー",
   "nl2sql.sql.copied": "コピーしました",

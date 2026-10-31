@@ -17,7 +17,6 @@ import {
   AnswerNotice,
   Banner,
   ProcessFailureNotice,
-  processFailureFacts,
   ButtonLink,
   OpenConversationAction,
   OpenRunInputAction,
@@ -35,7 +34,6 @@ import {
   RunDetailSection,
   RunDetailSkeleton,
   Skeleton,
-  RunFactList,
   type RunExecutorFilter,
   type RunFact,
   type RunHistoryItem,
@@ -490,24 +488,6 @@ function RunDetailView({ run }: { run: RunDetail }) {
     });
   }
 
-  const technicalFacts: RunFact[] = ([
-    run.conversation_id ? { id: "conversation", label: t("history.detail.conversationId"), value: run.conversation_id, mono: true } : null,
-    run.message_id ? { id: "message", label: t("history.detail.messageId"), value: run.message_id, mono: true } : null,
-    // 信頼度・人手確認は、回答の記録の詳細（AnswerDetailsPanel）のバッジと重ねない（記録の詳細が無いときだけ出す。#2325）。
-    run.confidence && !run.answer_diagnostics
-      ? { id: "confidence", label: t("history.detail.confidence"), value: run.confidence }
-      : null,
-    run.needs_human_review != null && !run.answer_diagnostics
-      ? {
-          id: "review",
-          label: t("history.detail.needsReview"),
-          value: run.needs_human_review ? t("history.detail.needsReview.yes") : t("history.detail.needsReview.no"),
-        }
-      : null,
-    // 失敗のエラーの種類・コードは、チャットの失敗のカードの「詳細」と同じ項目・名前（#2342。止まった段は概要）。
-  ] as (RunFact | null)[]).filter((fact): fact is RunFact => fact !== null);
-
-  if (failure) technicalFacts.push(...processFailureFacts({ ...failure, failedStep: null }, processFailureLabels()));
   const storageNotice = storageFailureNotice(run.storage_failures, run.run_id);
 
   // 処理の経過は共通の span の表の snapshot（実行の trace の API。#3226）。終わった実行なので 1 回だけ読む。
@@ -519,13 +499,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
   const timeline = runTimeline(trace);
   // 処理の詳細（#2325）: 回答の記録の詳細と技術的な識別子を、処理の経過のタイムラインの後ろに 1 か所で畳む。
   // チャット・RAG 検索の処理の経過の「処理の詳細」と同じ名前・同じ部品（`RunProcessDetails`）・同じ位置。
-  const processDetails =
-    run.answer_diagnostics || run.validation_execution || technicalFacts.length ? (
-      <>
-        {run.answer_diagnostics || run.validation_execution ? <AnswerDetailsPanel diagnostics={run.answer_diagnostics ?? {}} validationExecution={run.validation_execution} /> : null}
-        {technicalFacts.length ? <RunFactList facts={technicalFacts} /> : null}
-      </>
-    ) : null;
+  const processDetails = <AnswerDetailsPanel diagnostics={run.answer_diagnostics} recordedModels={run.usage?.models ?? (run.model_id ? [run.model_id] : [])} />;
 
   return (
     <RunDetailLayout
@@ -624,7 +598,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
               <Skeleton className="h-5 w-full" data-testid="run-history-timeline-loading" />
             )
           }
-          processDetailsProps={{ title: t("answer.process.details"), testId: "run-history-technical", summaryTestId: "run-history-process-details" }}
+          processDetailsProps={{ metadata: { conversationId: run.conversation_id ?? null, messageId: run.message_id ?? null }, title: t("answer.process.details"), testId: "run-history-technical", summaryTestId: "run-history-process-details" }}
           processDetails={processDetails}
           // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
           partial={trace.partial}

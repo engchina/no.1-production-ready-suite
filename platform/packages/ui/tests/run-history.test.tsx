@@ -12,6 +12,7 @@ import {
   RunDetailSection,
   RunJobProgress,
   RunProcessDetails,
+  RunUsedModels,
   RunHistoryPeriodEmptyState,
   RunHistoryTable,
   RunHistoryToolbar,
@@ -107,6 +108,7 @@ describe("書式と絞り込みの値", () => {
       setDisplayTimeZone("Asia/Tokyo");
       expect(formatRunDateTime(iso)).toBe("2026/10/15 01:12");
       expect(formatRunDateTime(iso, { seconds: true })).toBe("2026/10/15 01:12:05");
+      expect(formatRunDateTime(iso, { seconds: true, timeZone: true })).toBe("2026/10/15 01:12:05 (Asia/Tokyo)");
       setDisplayTimeZone("UTC");
       expect(formatRunDateTime(iso)).toBe("2026/10/14 16:12");
     } finally {
@@ -624,9 +626,9 @@ describe("RunTimeline", () => {
     expect(buttons[1].getAttribute("aria-expanded")).toBe("true");
     expect(container.textContent).toContain("ORA-00942");
     expect(container.textContent).not.toContain("引数と結果");
-    // 失敗は文字でも出す（色だけにしない）。完了は読み上げの文言。
+    // 状態は完了も文字で出す（色だけにしない）。
     expect(container.querySelector("[data-run-timeline-step='sql']")?.textContent).toContain("失敗 · 0.3 秒");
-    expect(container.querySelector("[data-run-timeline-step='plan'] .sr-only")?.textContent).toContain("完了");
+    expect(container.querySelector("[data-run-timeline-step='plan'] [data-run-step-status-duration]")?.textContent).toContain("完了");
     // 入れ子の段は字下げする。時間の線は飾り（aria-hidden）。
     expect(container.querySelector<HTMLElement>("[data-run-timeline-step='tool'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
     expect(container.querySelector<HTMLElement>("[data-run-timeline-step='plan'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("0rem");
@@ -1036,6 +1038,27 @@ describe("RunDetailLayout / RunDetailSection", () => {
     expect(container.querySelector("[data-testid='timeline']")?.contains(details!)).toBe(true);
     expect(container.querySelector("[data-testid='details-summary']")?.textContent).toContain("処理の詳細");
     expect(details?.textContent).toContain("補足");
+  });
+
+  it("処理の識別子は記録順に表示し、欠けた値にコピー操作を作らない", () => {
+    render(<RunProcessDetails traceId="0123456789abcdef0123456789abcdef" metadata={{ conversationId: null, messageId: "synthetic-answer" }}>
+      <RunUsedModels models={[]} />
+    </RunProcessDetails>);
+    const rows = Array.from(container.querySelectorAll("[data-process-identifier]"));
+    expect(rows.map(row => row.getAttribute("data-process-identifier"))).toEqual(["Trace ID", "会話 ID", "回答メッセージ ID"]);
+    expect(rows[0].querySelector("button")?.getAttribute("aria-label")).toBe("Trace ID をコピー");
+    expect(rows[1].textContent).toContain("—");
+    expect(rows[1].querySelector("button")).toBeNull();
+    expect(rows[2].querySelector("button")?.getAttribute("aria-label")).toBe("回答メッセージ ID をコピー");
+    expect(container.querySelector("[data-run-used-models]")?.textContent).toContain("使用したモデル—");
+  });
+
+  it("使用モデルは記録した呼び出しから補い、同じモデルを重複表示しない", () => {
+    render(<RunUsedModels models={[{label: "LLM", value: "synthetic-model"}]} events={[
+      {type: "step", attributes: {"gen_ai.request.model": "synthetic-model"}},
+      {type: "step", attributes: {"gen_ai.request.model": "synthetic-embed", "gen_ai.operation.name": "embeddings"}},
+    ]} />);
+    expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["synthetic-model", "synthetic-embed"]);
   });
 
   it("開閉できる節は既定で閉じた Disclosure、通常の節はカード", () => {

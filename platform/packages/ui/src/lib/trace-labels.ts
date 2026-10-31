@@ -1,5 +1,11 @@
 /** trace の共通文言の正本。製品の i18n へ同じ辞書を取り込む。 */
 export const TRACE_DETAILS_JA = {
+  "trace.details.conversationId": "会話 ID",
+  "trace.details.messageId": "回答メッセージ ID",
+  "trace.details.models": "使用したモデル",
+  "trace.details.copyIdentifier": "{label} をコピー",
+  "trace.details.identifierCopied": "{label} をコピーしました。",
+  "trace.details.identifierCopyFailed": "{label} をコピーできませんでした。",
   "trace.details.segment": "実行区間 {index}/{total}",
   "trace.details.title": "トレースの詳細",
   "trace.details.empty": "実測の記録はありません。",
@@ -63,6 +69,8 @@ export const TRACE_DETAILS_JA = {
   "trace.span.genAi": "AI の呼び出し",
   "trace.span.mcpRequest": "MCP の呼び出し",
   "trace.span.selectAi": "Select AI の呼び出し",
+  "trace.span.attachments": "会話の添付から根拠を選ぶ",
+  "trace.span.other": "処理を実行する",
   "trace.span.httpRequest": "HTTP の要求",
   "trace.span.attempt": "{name}（{count} 回目）",
   "trace.field.usage.input": "入力トークン",
@@ -146,7 +154,7 @@ export type TraceSpanStatus = "done" | "failed" | "cancelled" | "skipped";
 export type TraceStageName = (stage: string, status: TraceSpanStatus) => string | null | undefined;
 /** 技術の span の名前（root と、`gen_ai.*`・MCP・Select AI・HTTP の呼び出し）。 */
 export interface TraceSpanNames {
-  root: string; chat: string; embeddings: string; rerank: string; rerankRequest: string; executeTool: string; genAi: string;
+  attachments: string; other: string; root: string; chat: string; embeddings: string; rerank: string; rerankRequest: string; executeTool: string; genAi: string;
   mcpRequest: string; selectAi: string; httpRequest: string;
   attempt: (name: string, count: number) => string;
 }
@@ -181,6 +189,7 @@ export const TRACE_FIELD_LABEL_KEYS = {
 export type TraceFieldName = keyof typeof TRACE_FIELD_LABEL_KEYS;
 
 export interface TraceDetailsLabels {
+  processMetadata?: { conversationId: string; messageId: string; models: string; copy: string; copied: string; copyFailed: string };
   segment: (index: number, total: number) => string;
   title: string; empty: string; partial: string; measured: string;
   notSampled: string; legacy: string;
@@ -204,6 +213,7 @@ export interface TraceDetailsLabels {
 const PRODUCT_KEYS: Readonly<Record<string, TraceLabelKey>> = { rag: "trace.product.rag", nl2sql: "trace.product.nl2sql", agent: "trace.product.agent" };
 export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, options: { stageName?: TraceStageName; product?: string } = {}): TraceDetailsLabels {
   return {
+    processMetadata: { conversationId: t("trace.details.conversationId"), messageId: t("trace.details.messageId"), models: t("trace.details.models"), copy: t("trace.details.copyIdentifier"), copied: t("trace.details.identifierCopied"), copyFailed: t("trace.details.identifierCopyFailed") },
     segment: (index, total) => t("trace.details.segment").replace("{index}", String(index)).replace("{total}", String(total)),
     notSampled: t("trace.details.notSampled"), legacy: t("trace.details.legacy"),
     title: t("trace.details.title"), empty: t("trace.details.empty"), partial: t("trace.details.partial"), measured: t("trace.details.measured"),
@@ -213,7 +223,7 @@ export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, opti
     cancelled: t("trace.status.cancelled"), stopped: t("trace.status.stopped"), reconstructed: t("trace.timing.reconstructed"),
     modelPurposes: Object.fromEntries(Object.entries(MODEL_PURPOSE_LABEL_KEYS).map(([id, key]) => [id, t(key)])),
     spanNames: {
-      root: t("trace.span.root"), chat: t("trace.span.chat"), embeddings: t("trace.span.embeddings"), rerank: t("trace.span.rerank"), rerankRequest: t("trace.span.rerankRequest"),
+      attachments: t("trace.span.attachments"), other: t("trace.span.other"), root: t("trace.span.root"), chat: t("trace.span.chat"), embeddings: t("trace.span.embeddings"), rerank: t("trace.span.rerank"), rerankRequest: t("trace.span.rerankRequest"),
       executeTool: t("trace.span.executeTool"), genAi: t("trace.span.genAi"), mcpRequest: t("trace.span.mcpRequest"),
       selectAi: t("trace.span.selectAi"), httpRequest: t("trace.span.httpRequest"),
       attempt: (name, count) => t("trace.span.attempt").replace("{name}", name).replace("{count}", String(count)),

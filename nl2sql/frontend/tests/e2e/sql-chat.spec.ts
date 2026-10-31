@@ -1,3 +1,4 @@
+import { inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import {timelineSnapshot, timelineTypography} from "../../../../platform/packages/ui/e2e/timeline-snapshot";
 import { expect, test, type Locator, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
@@ -590,17 +591,13 @@ test("業務プロファイルの欄は RAG の検索・回答プロファイル
   await expect(field).toBeVisible();
   await expect(field).toContainText("売上分析");
   // 必須の表示・カードの幅いっぱい（#635 / #891）。閉じたボタンに虫眼鏡は無く、値と開閉の印だけ（#1771）。
-  await expect(page.getByText("必須", { exact: true }).first()).toBeVisible();
+  await expect(field).toHaveAccessibleName(/必須/);
   await expect(field.locator("svg.lucide-search")).toHaveCount(0);
   await expect(field.locator("svg.lucide-chevron-down")).toBeVisible();
-  const card = (await page
-    .locator(".rounded-lg")
-    .filter({ has: field })
-    .first()
-    .boundingBox())!;
+  const toolbar = page.locator("[data-chat-toolbar]");
+  await expect(toolbar.locator("#sql-chat-profile")).toBeVisible();
   const fieldBox = (await field.boundingBox())!;
-  expect(card.width - fieldBox.width).toBeLessThan(64);
-  expect(fieldBox.height).toBe(await expectedControlHeight(page, "md"));
+  expect(fieldBox.height).toBe(await expectedControlHeight(page, "sm"));
   await field.click();
   await expect(page.getByRole("option", { name: /売上分析/ })).toContainText(
     "表・ビュー 1 件",
@@ -1203,7 +1200,7 @@ for (const width of [1280, 375]) {
     await summary.click();
     await expect(progress.locator("details").first()).toHaveAttribute("open", "");
     await expect(progress.getByTestId("sql-chat-progress-step-safety_check")).toContainText(
-      "SQL の種類と参照範囲を検査しました（APP.EMPLOYEE）",
+      "SQL の種類と参照範囲を検査しました",
     );
     const bars = progress.locator("[data-run-timeline-bar]");
     await expect(bars).toHaveCount(6);
@@ -1434,7 +1431,7 @@ for (const width of [1280, 375]) {
     // 詳細のある段だけに開閉のボタンが付き、既定で閉じる（#2294）。
     await progress.getByTestId("sql-chat-progress-summary").click();
     // span の行は開くと span の名前（技術の値）も見られる（#3226）。既定で閉じる。
-    await expect(progress.getByTestId("sql-chat-progress-step-queue-toggle")).toHaveAttribute("aria-expanded", "false");
+    await expect(progress.getByTestId("sql-chat-progress-step-queue-toggle")).toHaveCount(0);
     // 実行中に開いた段（生成）は、完了した一覧でも利用者の開閉のまま（処理の詳細が続く一覧は同じ行を保つ）。
     const toggle = progress.getByTestId("sql-chat-progress-step-generate_sql-toggle");
     if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
@@ -2331,8 +2328,9 @@ test("処理の経過は span の木で、段の中のモデルの呼び出し�
   const model = progress.getByTestId("sql-chat-progress-step-generate_sql.1");
   await expect(model).toContainText("質問に答える SQL を作る");
   await expect(model).not.toContainText("用途の記録なし");
-  await progress.getByTestId("sql-chat-progress-step-generate_sql.1-toggle").click();
-  await expect(progress.getByTestId("sql-chat-progress-step-generate_sql.1-details")).toContainText("synthetic-model");
+  await inspectTraceStep(page, progress, "generate_sql.1");
+  await expect(page.locator("[data-trace-technical]")).toContainText("synthetic-model");
+  await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
   await expect(progress.locator('[data-level="1"]')).toContainText("質問に答える SQL を作る");
   // 「トレースの詳細」の 2 つ目の表示は無い。Trace ID は処理の詳細にコピーのボタンと出す。
   await expect(page.getByText("トレースの詳細")).toHaveCount(0);

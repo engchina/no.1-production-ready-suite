@@ -223,8 +223,8 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   await expect(process).toBeVisible();
   const panel = await openAnswerProcessDetails(page, "search-run-progress");
   await expect(panel).toBeVisible();
-  await expect(panel.getByText("信頼度: high")).toBeVisible();
-  await expect(panel.getByText("人手確認が必要")).toBeVisible();
+  await expect(panel.getByText("信頼度: high")).toHaveCount(0);
+  await expect(panel.getByText("人手確認が必要")).toHaveCount(0);
   // 回答の根拠は、チャット・Agent と同じ折りたたみ（既定は閉じる）。まとまりの表示・見方の切り替えは持たない（#2388）。
   const citations = page.getByTestId("answer-citations");
   const citationSummary = citations
@@ -238,9 +238,7 @@ test("類似問を使わない場合は回答と根拠パネルを表示する",
   const card = citations.getByTestId("evidence-card");
   await expect(card.getByText("回答で引用", { exact: true })).toBeVisible();
   await expect(panel.getByText(/^根拠の構成/)).toHaveCount(0);
-  await expect(panel.getByTestId("answer-graph-expansion")).toHaveText(
-    "文書構造による検索拡張で加えた根拠 2 件: manual.pdf > 第 3 章 取消の手順（2 件）"
-  );
+  await expect(panel.getByTestId("answer-graph-expansion")).toHaveCount(0);
   // 「詳細」はチャットと同じ回答の記録の詳細だけ（開始・トレース ID・旧「処理時間: …」の行は出さない。#2118）。
   await expect(process.getByText("トレース ID")).toHaveCount(0);
   await expect(page.getByText(/^処理時間:/)).toHaveCount(0);
@@ -277,7 +275,7 @@ for (const viewport of [
     });
     await selectSearchAnswerProfileAndAsk(page, "合成の質問");
     await openAnswerProcessDetails(page, "search-run-progress");
-    await expect(page.getByTestId("answer-graph-expansion")).toBeVisible();
+    await expect(page.getByTestId("answer-graph-expansion")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "標準回答による評価" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "標準回答で評価" })).toHaveCount(0);
     await expect(page.getByLabel("標準回答", { exact: true })).toHaveCount(0);
@@ -537,8 +535,8 @@ for (const graph of [
     await page.getByRole("button", { name: "どれでもない（資料を検索する）" }).click();
     const panel = await openAnswerProcessDetails(page, "search-run-progress");
     const diagnostic = panel.getByTestId("answer-graph-expansion");
-    await expect(diagnostic).toContainText("0 件");
-    await expect(diagnostic).toContainText(graph.graph_available ? "既に候補・文脈に含まれています" : "利用できる文書構造索引がありません");
+    await expect(diagnostic).toHaveCount(0);
+    await expect(panel.locator("[data-run-used-models]")).toBeVisible();
     await page.screenshot({ path: test.info().outputPath("graph-zero-diagnostic.png") });
   });
 }

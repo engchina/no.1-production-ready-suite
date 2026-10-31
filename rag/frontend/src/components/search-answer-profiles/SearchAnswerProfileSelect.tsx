@@ -18,7 +18,7 @@ import { t } from "@/lib/i18n";
  * 全件を画面側で名前と説明で絞り込む。候補の右端に参照 KB の件数を出し、参照 KB が 0 件の検索・回答プロファイルは
  * 後ろに並べる（選んだときの理由の表示と送信の抑止は画面側）。
  *
- * 幅は全幅にする。RAG 検索では直下の質問欄（全幅）と左右の端をそろえ、チャットでも同じ見た目にする。
+ * 幅は全幅にする。RAG 検索では直下の質問欄（全幅）と左右の端をそろえる。チャットは compact でツールバーの中に置く。
  * 欄の下に説明文（helper）は出さない（毎回読む情報ではなく、縦の面積を取るため。#664）。
  */
 export function SearchAnswerProfileSelect({
@@ -29,7 +29,9 @@ export function SearchAnswerProfileSelect({
   disabled = false,
   error,
   label,
+  compact = false,
 }: {
+  compact?: boolean;
   id: string;
   items: SearchAnswerProfileSummary[];
   value: string | null;
@@ -54,6 +56,8 @@ export function SearchAnswerProfileSelect({
   return (
     <SearchableSelectField
       id={id}
+      labelPlacement={compact ? "compact" : "top"}
+      size={compact ? "sm" : "md"}
       label={label ?? t("searchAnswerProfiles.scope.label")}
       required
       value={value ?? ""}

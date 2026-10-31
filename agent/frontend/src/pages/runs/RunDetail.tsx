@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Check, FileText, GitBranch, PlayCircle, RefreshCw, Server, ShieldAlert } from "lucide-react";
+import { FileText, PlayCircle, RefreshCw } from "lucide-react";
 import {
   AnswerPassageBadges,
   AnswerNotice,
@@ -16,29 +16,25 @@ import {
   OpenConversationAction,
   ProcessFailureNotice,
   RunDetailLayout,
+  RunUsedModels,
   RunDetailSection,
   RunEventLog,
-  RunFactList,
   RunJobProgress,
   RunSummary,
   RunTimelineSection,
   SqlSafetyBadge,
   StatusBadge,
-  formatRunCancellation,
-  formatRunDateTime,
   runStepDetailsJson,
   runTimelineCurrentStepIndex,
   useTraceDetailsLabels,
   type EntityAction,
   type RunEventLogItem,
   type RunTimelineStep,
-  type StatusVariant,
 } from "@production-ready/ui";
 import {
   agentApi,
   type Artifact,
   type RunAuditData,
-  type RunEvent,
   type RunState,
   type RunSummary as RunSummaryData,
   type ToolAuditRecord,
@@ -52,11 +48,10 @@ import { AnswerBody, ResultTable } from "@/components/chat/ResultTables";
 import { AddToEvaluationCase, useCanEditEvaluationSets } from "@/components/evaluation/AddToEvaluationCase";
 import { ANSWER_KIND, ANSWER_VALIDATION_KIND, answerOutcome, runAnswerPassages } from "@/lib/answer-review";
 import { formatNumber } from "@/lib/format";
-import { t, type I18nKey } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
-import { CONFIRMATION_TOOL } from "@/lib/confirmation";
 import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
 import { answerPassageLabels, answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
@@ -76,13 +71,12 @@ import { artifactTable, runToolResultTables, stepResultTable, type ToolResultTab
 import {
   approvalStatusView,
   artifactKindView,
-  eventTypeView,
   permissionView,
   policyDecisionView,
   runStatusView,
   stepStatusView,
 } from "@/lib/status-labels";
-import { type RunEventSourceState, type SseStreamStatus } from "@/pages/runs/run-event-stream";
+import { type RunEventSourceState } from "@/pages/runs/run-event-stream";
 import { JsonPreview, MetricPill, formatDate } from "@/pages/shared/page-helpers";
 
 /** Run の取消・再開の可否。一覧の行メニューと詳細の ObjectActionBar で同じ判定を使う。 */
@@ -109,10 +103,10 @@ export function runSummaryCapabilities(run: RunSummaryData): { canCancel: boolea
 }
 
 export function RunDetail({
+  sseState,
   run,
   agentName,
   actions,
-  sseState,
   capabilities,
 }: {
   run: RunState;
@@ -171,11 +165,7 @@ export function RunDetail({
   const legacyProgress = progress.legacy;
   const failure = runFailure(run, timelineSteps, "detail");
   const usage = run.usage;
-  // 取り消した人と入口（#3348）。概要の「取消」と、イベントの記録の取消の行に同じ文を出す。
   const cancellation = runCancellation(run);
-  const cancellationText = cancellation
-    ? formatRunCancellation(cancellation, { ...labels.cancellation, self: labels.self })
-    : null;
 
   return (
     <section className="min-w-0" aria-label={t("run.detail")}>
@@ -244,6 +234,9 @@ export function RunDetail({
             alert={
               <>
                 <RunProgressIndicator run={run} steps={timelineSteps} />
+                {sseState.status === "failed" && CANCELLABLE_RUN_STATUSES.includes(run.status) ? <Banner severity="warning" title={t("run.stream.stoppedTitle")} action={<Button variant="secondary" size="sm" icon={RefreshCw} onClick={sseState.reconnect}>{t("run.stream.reconnect")}</Button>}>
+                  <span data-testid="run-stream-stopped">{t("run.stream.sseFailed")}</span>
+                </Banner> : null}
                 {waitingForExecutor ? (
                   // 操作のボタンは出さず、待っている相手を出す（messaging.md §10。info の Banner。#1954）。
                   <div data-testid="run-waiting-for-executor">
@@ -307,7 +300,7 @@ export function RunDetail({
         timeline={
           <>
             <RunTimelineSection
-              // 「処理の詳細」には Trace ID だけを出す（処理の経過と同じ記録を 2 回出さない。#3226）。
+              // 処理の経過と同じ記録を詳細で繰り返さない。
               traceId={progress.traceId}
               key={run.id}
               title={t("run.section.timeline")}
@@ -332,31 +325,8 @@ export function RunDetail({
               testId="run-timeline-section"
               // 処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
               // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
-              processDetailsProps={{ title: t("run.section.processDetails"), description: t("run.section.processDetailsDescription"), testId: "run-technical-section", summaryTestId: "run-process-details" }}
-              processDetails={
-                <>
-                  <RunFactList
-                    facts={[
-                      { id: "agentId", label: t("run.fact.agent"), value: run.agent_id, mono: true },
-                      ...(run.thread_id
-                        ? [{ id: "threadId", label: t("run.fact.thread"), value: run.thread_id, mono: true }]
-                        : []),
-                      {
-                        id: "runtime",
-                        label: t("run.runtime"),
-                        value: run.runtime_id === "builtin" ? t("runtime.builtin.title") : run.runtime_id,
-                      },
-                      { id: "updatedAt", label: t("common.updatedAt"), value: formatDate(run.updated_at) },
-                    ]}
-                  />
-                  <div className="grid min-w-0 gap-2">
-                    <h3 className="text-sm font-medium text-fg">{t("run.timeline")}</h3>
-                    <p className="text-xs text-fg-muted">{t("run.timelineDescription")}</p>
-                    <EventLog events={run.events} cancellationText={cancellationText} />
-                  </div>
-                  <RunStreamControls sseState={sseState} />
-                </>
-              }
+              processDetailsProps={{ title: t("run.section.processDetails"), metadata: { conversationId: run.thread_id ?? null, messageId: run.id }, testId: "run-technical-section", summaryTestId: "run-process-details" }}
+              processDetails={<RunUsedModels models={usage?.model ? [{ label: "LLM", value: usage.model }] : []} events={progress.events} />}
             />
           </>
         }
@@ -481,205 +451,9 @@ function RunProgressIndicator({ run, steps }: { run: RunState; steps: readonly R
   );
 }
 
-/** イベントの記録（技術的な詳細。モデルが呼んだツールと承認の判断を時系列で。共通の `RunEventLog`。#2386）。 */
-function EventLog({ events, cancellationText }: { events: RunEvent[]; cancellationText: string | null }) {
-  return (
-    <RunEventLog
-      items={events.map((event) => runEventItem(event, cancellationText))}
-      labels={{
-        title: t("run.timeline"),
-        filter: t("run.events.filter"),
-        all: t("common.all"),
-        first: t("run.events.first"),
-        latest: t("run.events.latest"),
-        empty: t("run.timeline.empty"),
-        count: listCountLabels(),
-        detailsTruncated: t("run.events.truncated"),
-      }}
-      testId="run-event-log"
-    />
-  );
-}
-
-/** 種類の絞り込みのまとまり（実行環境のイベントは「実行」にまとめ、チップを 4 つまでにする）。 */
-function eventCategory(type: string): { id: string; label: string } {
-  const prefix = type.split(".")[0] ?? "";
-  // ツールの呼び出しの開始（`step.started`）もツールにまとめる（#3352）。
-  if (prefix === "tool" || prefix === "step") return { id: "tool", label: t("status.eventCategory.tool") };
-  if (prefix === "approval") return { id: "approval", label: t("status.eventCategory.approval") };
-  if (prefix === "artifact") return { id: "artifact", label: t("status.eventCategory.artifact") };
-  return { id: "run", label: t("status.eventCategory.run") };
-}
-
-/**
- * Run のイベントを 1 行の形に写す。行は要約（ツール名・イベントの文）と状態のバッジ・処理時間だけにし、
- * イベントの種類のコード・時刻・ステップ・承認・成果物の ID・payload は行を開いた詳細に置く。
- */
-function runEventItem(event: RunEvent, cancellationText: string | null = null): RunEventLogItem {
-  const view = eventTypeView(event.type);
-  const payload = event.payload ?? {};
-  const base = {
-    id: event.id,
-    at: event.created_at,
-    category: eventCategory(event.type),
-    status: { variant: view.variant, label: view.label },
-  };
-  const fields = (items: Array<[string, string | null]>) => [
-    { label: t("run.timeline.eventType"), value: event.type, mono: true },
-    { label: t("run.timeline.time"), value: formatRunDateTime(event.created_at, { seconds: true }) },
-    ...compactTimelineDetails(items).map((item) => ({ ...item, mono: true })),
-  ];
-  const withWarnings = (warnings: string[]) =>
-    warnings.length ? (
-      // 警告は手書きのチップにせず、アイコン付きの FormStatus で出す（色だけに頼らない）。
-      <div className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
-        {warnings.map((warning) => (
-          <FormStatus key={warning} tone="warning" message={warning} />
-        ))}
-      </div>
-    ) : undefined;
-  const payloadCode = (show: boolean) => {
-    if (!show) return { code: undefined, truncated: false };
-    const json = runStepDetailsJson(payload);
-    return { code: [{ label: t("run.events.payload"), language: "json" as const, text: json.text }], truncated: json.truncated };
-  };
-  const failed = event.type.includes("failed") || event.type.endsWith("error");
-
-  if (event.type.startsWith("runtime.")) {
-    const extra = payloadCode(event.type === "runtime.failed");
-    return {
-      ...base,
-      title: t("run.runtime"),
-      summary: event.message,
-      icon: Server,
-      details: {
-        fields: fields([
-          [t("run.timeline.runtime"), payloadString(payload, "runtime_id")],
-          [t("run.timeline.externalRun"), payloadString(payload, "external_run_id")],
-        ]),
-        code: extra.code,
-        truncated: extra.truncated,
-      },
-      defaultOpen: failed,
-    };
-  }
-  if (event.type === "tool.guardrail_warning") {
-    const warnings = payloadStringArray(payload, "warnings");
-    const extra = payloadCode(true);
-    return {
-      ...base,
-      title: t("run.guardrailWarning"),
-      summary: event.message,
-      icon: ShieldAlert,
-      details: { fields: fields([]), code: extra.code, truncated: extra.truncated },
-      children: withWarnings(warnings),
-      defaultOpen: warnings.length > 0,
-    };
-  }
-  if (event.type.startsWith("tool.") || event.type.startsWith("step.")) {
-    const warnings = payloadStringArray(payload, "guardrail_warnings");
-    const duration = payload.duration_ms;
-    const toolName = payloadString(payload, "tool_name");
-    return {
-      ...base,
-      // 回答前の確認のツールは、内部の名前ではなく「回答前の確認」と出す（#3352）。
-      title: toolName === CONFIRMATION_TOOL ? t("agent.clarification.title") : (toolName ?? t("common.tool")),
-      summary: event.message,
-      icon: PlayCircle,
-      durationMs: typeof duration === "number" && Number.isFinite(duration) ? duration : null,
-      details: { fields: fields([[t("run.timeline.step"), payloadString(payload, "step_id")]]) },
-      children: withWarnings(warnings),
-      defaultOpen: failed || warnings.length > 0,
-    };
-  }
-  if (event.type.startsWith("approval.")) {
-    return {
-      ...base,
-      title: t("run.auditApproval"),
-      summary: event.message,
-      icon: Check,
-      details: {
-        fields: fields([
-          [t("run.timeline.approval"), payloadString(payload, "approval_id")],
-          [t("run.timeline.step"), payloadString(payload, "step_id")],
-        ]),
-      },
-    };
-  }
-  if (event.type === "artifact.created") {
-    return {
-      ...base,
-      title: payloadString(payload, "name") ?? t("run.artifacts"),
-      summary: event.message,
-      icon: FileText,
-      details: { fields: fields([[t("run.auditArtifacts"), payloadString(payload, "artifact_id")]]) },
-    };
-  }
-  return {
-    ...base,
-    title: event.message,
-    // 取消の行は、取り消した人と入口を添える（概要の「取消」と同じ文。#3348）。
-    summary:
-      event.type === "run.cancelled" && cancellationText
-        ? t("run.events.cancelledBy", { value: cancellationText })
-        : undefined,
-    icon: GitBranch,
-    details: { fields: fields([]) },
-    defaultOpen: failed,
-  };
-}
-
 function compactTimelineDetails(items: Array<[string, string | null]>): Array<{ label: string; value: string }> {
   return items.filter((item): item is [string, string] => Boolean(item[1])).map(([label, value]) => ({ label, value }));
 }
-
-function payloadString(payload: Record<string, unknown> | null, key: string): string | null {
-  if (!payload) {
-    return null;
-  }
-  const value = payload[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function payloadStringArray(payload: Record<string, unknown>, key: string): string[] {
-  const value = payload[key];
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-/** イベントの購読（SSE）の状態。push は SSE、操作は REST だけ（#2260）。 */
-function RunStreamControls({ sseState }: { sseState: RunEventSourceState }) {
-  const status = SSE_STATUS_VIEW[sseState.status];
-  return (
-    <div className="grid min-w-0 gap-3" data-testid="run-stream">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h3 className="text-sm font-medium text-fg">{t("run.stream")}</h3>
-          <p className="mt-1 text-xs text-fg-muted">{t("run.streamDescription")}</p>
-        </div>
-        <StatusBadge variant={status.variant} label={t(status.labelKey)} icon />
-      </div>
-      {sseState.status === "failed" ? (
-        <Banner
-          severity="warning"
-          title={t("run.stream.stoppedTitle")}
-          action={
-            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={sseState.reconnect}>
-              {t("run.stream.reconnect")}
-            </Button>
-          }
-        >
-          <span data-testid="run-stream-stopped">{t("run.stream.sseFailed")}</span>
-        </Banner>
-      ) : null}
-    </div>
-  );
-}
-
-const SSE_STATUS_VIEW: Record<SseStreamStatus, { variant: StatusVariant; labelKey: I18nKey }> = {
-  idle: { variant: "neutral", labelKey: "run.stream.idle" },
-  open: { variant: "info", labelKey: "run.stream.open" },
-  failed: { variant: "warning", labelKey: "run.stream.failed" },
-};
 
 /**
  * 実行の詳細の監査ログ（#2403）。ツールの呼び出しの記録（判断・権限・承認・処理時間・エラー）と、実行が残した内部の
