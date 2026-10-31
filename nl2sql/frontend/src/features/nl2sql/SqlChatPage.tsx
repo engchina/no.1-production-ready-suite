@@ -20,6 +20,8 @@ import {
   ChatComposerOption,
   AnswerNotice,
   ChatProgress,
+  RunUsedModels,
+  RunProcessDetails,
   ChatSkeleton,
   ChatSqlBlock,
   ChatTurn,
@@ -1067,11 +1069,15 @@ function SqlChatTurn({
           {/* 処理の経過（#1145・#3226）は span の木。実行中は今の段階と開いた一覧、完了後は回答の上に「処理の経過」の
               1 行（押すと開く。3 製品で同じ。#2265）。span の無い古い形式の記録は案内の文を出す。 */}
           {legacyProgress ? (
-            <ProgressLegacyNotice testId="sql-chat-progress-legacy" />
+            <><ProgressLegacyNotice testId="sql-chat-progress-legacy" />
+              <RunProcessDetails metadata={{ conversationId: turn.conversation_id ?? null, messageId: turn.job_id }}><RunUsedModels models={[]} /></RunProcessDetails>
+            </>
           ) : (
             <ChatProgress
               cancelled={turn.error_code === "JOB_CANCELLED"}
               traceId={progress.traceId}
+              processDetailsProps={{ metadata: { conversationId: turn.conversation_id ?? null, messageId: turn.job_id } }}
+              footer={<RunUsedModels models={[]} events={progress.events} />}
               {...tracker.progressProps}
               reconnecting={tracker.reconnecting || (running && progress.failed)}
               steps={progressSteps}

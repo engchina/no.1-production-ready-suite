@@ -1533,25 +1533,25 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   ]);
   expect(citationBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(panelBox?.y ?? Number.POSITIVE_INFINITY);
   expect(feedbackBox?.y ?? Number.NEGATIVE_INFINITY).toBeGreaterThan(citationBox?.y ?? Number.POSITIVE_INFINITY);
-  await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toBeVisible();
-  await expect(panel.getByText("信頼度: high")).toBeVisible();
-  await expect(panel.getByTestId("answer-outcome-badge")).toHaveText("現場のデータが必要");
-  await expect(panel.getByTestId("answer-guide-badge")).toHaveText("業務ガイド: 経費の上限を確かめる（版 3）");
+  await expect(panel.getByText("会話の流れから補った質問: 経費精算の上限額は？")).toHaveCount(0);
+  await expect(panel.getByText("信頼度: high")).toHaveCount(0);
+  await expect(panel.getByTestId("answer-outcome-badge")).toHaveCount(0);
+  await expect(panel.getByTestId("answer-guide-badge")).toHaveCount(0);
   // 1 列（既定のモデル）でも、どのモデルの回答か・使ったモデルを出す（#649）。
   // 回答モデルへ根拠の画像を添付した回答（診断の models.attached_images）は、見出しにそのことを添える（#3444）。
   await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1（画像も参照）", exact: true })).toBeVisible();
   const models = panel.getByTestId("answer-models");
   await expect(models).toContainText("使用したモデル");
   await expect(models).toContainText("MODEL 1");
-  await expect(models).toContainText("添付した画像");
-  await expect(models).toContainText("2 件（回答モデルが参照）");
+  await expect(models).not.toContainText("添付した画像");
+  await expect(panel.locator("[data-process-identifier]")).toHaveCount(3);
   await expect(models).toContainText("cohere.embed-v4.0");
   await expect(models).toContainText("cohere.rerank-v4.0-fast");
   // rag_poc の回答 viewer と同じ情報（判断理由・外部データの確認・問い合わせ型）と本文の構成（#651）。
-  await expect(panel.getByText("問い合わせ型: 規則")).toBeVisible();
+  await expect(panel.getByText("問い合わせ型: 規則")).toHaveCount(0);
   // 質問から読み取った条件（#652）も記録として出す。
-  await expect(panel.getByTestId("auto-field-filter")).toContainText("金額 ≥ 100000");
-  await expect(panel.getByText(/^判断理由: 引用照合済みの説明 1 件/)).toBeVisible();
+  await expect(panel.getByTestId("auto-field-filter")).toHaveCount(0);
+  await expect(panel.getByText(/^判断理由: 引用照合済みの説明 1 件/)).toHaveCount(0);
   // 資料では決まらない値の案内は「詳細」に畳まず、回答の本文の直下に出す（#2096）。
   const externalData = page.getByRole("status").filter({ hasText: "業務システムで確かめる値" });
   await expect(externalData).toContainText("申請者の役職");
@@ -2649,7 +2649,7 @@ for (const compare of [false, true]) {
     for (const reply of replies) {
       const answer = page.locator(`[id="message-${reply.message_id}"]`);
       await answer.getByTestId("chat-answer-progress-details").click();
-      await expect(answer.getByRole("region", { name: "処理の詳細" }).getByText(/合成の診断です/)).toBeVisible();
+      await expect(answer.getByRole("region", { name: "処理の詳細" }).getByText(/合成の診断です/)).toHaveCount(0);
     }
     await log.hover();
     await page.mouse.wheel(0, 20_000);
@@ -2741,7 +2741,7 @@ test("保存した回答を開き直しても処理の経過は span の木 1 �
   await expect(answer.getByTestId("chat-answer-progress-summary")).toContainText("16 ステップ");
   await answer.getByTestId("chat-answer-progress-summary").click();
   await answer.getByTestId("chat-answer-progress-details").click();
-  await expect(answer.getByRole("region", { name: "処理の詳細" }).getByText("信頼度: high")).toBeVisible();
+  await expect(answer.getByRole("region", { name: "処理の詳細" }).getByText("信頼度: high")).toHaveCount(0);
   await expect(answer.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
   await expect(answer.getByTestId("trace-details-toggle")).toHaveCount(0);
   await expectNoPageOverflow(page);

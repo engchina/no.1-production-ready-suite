@@ -1,3 +1,4 @@
+import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
 import { ArrowLeft, ArrowDown, ArrowUp, Bot, CheckCircle2, Circle, CirclePause, Clock3, Layers, MinusCircle, Wrench, XCircle } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -16,7 +17,6 @@ import { resolveRunDetailLabels, RunTimelineViewport, runTimelineStepIndentStyle
 import { DEFAULT_RUN_STEP_DETAILS_LABELS, RunStepDetailsView } from "./run-step-details";
 
 const CATEGORY_ICON = { model: Bot, tool: Wrench, stage: Layers };
-const CATEGORY_BAR = { model: "bg-accent-emphasis", tool: "bg-warning-emphasis", stage: "bg-fg-subtle" };
 const STATUS_ICON = { done: CheckCircle2, failed: XCircle, running: Clock3, pending: Circle, waiting: CirclePause, skipped: MinusCircle };
 const STATUS_COLOR = { done: "text-success-fg", failed: "text-danger-fg", running: "text-info-fg", pending: "text-fg-subtle", waiting: "text-warning-fg", skipped: "text-fg-muted" };
 
@@ -39,7 +39,8 @@ function durationOf(step: RunTimelineStep): number | null {
   return start != null && end != null && end >= start ? end - start : null;
 }
 
-export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLabels }: {
+export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLabels, size = "md" }: {
+  size?: "sm" | "md";
   steps: readonly RunTimelineStep[];
   onClose: () => void;
   labels?: RunDetailLabelsInput;
@@ -111,12 +112,12 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
       {(["stage", "model", "tool"] as const).map(type => {
         const Icon = CATEGORY_ICON[type];
         return <div key={type} className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-2">
-          <span className="flex items-center gap-1.5 text-xs text-fg-muted"><Icon size={14} aria-hidden="true" />{labels[type]}</span>
-          <div className="relative h-4 min-w-0 rounded-sm bg-surface-sunken" aria-hidden="true">
+          <span className={cn("flex items-center gap-1.5 text-fg-muted", runTimelineNameClass(size))}><Icon size={14} aria-hidden="true" />{labels[type]}</span>
+          <div className={RUN_TIME_TRACK} data-trace-time-bar="" aria-hidden="true">
             {steps.map((step, index) => {
               const bar = timing.bars[index];
               if (traceCategory(step) !== type || !bar) return null;
-              return <span key={step.id} data-trace-overview-span={step.id} className={cn("absolute inset-y-0 min-w-px rounded-sm", step.status === "failed" ? "bg-danger-emphasis" : CATEGORY_BAR[type], step.id === selected?.id && "outline-2 outline-offset-2 outline-focus-ring")} style={{ left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%` }} />;
+              return <span key={step.id} data-trace-overview-span={step.id} data-trace-overview-selected={step.id === selected?.id ? "true" : undefined} className={cn(RUN_TIME_FILL, RUN_TIME_COLOR[step.status], step.id === selected?.id && "z-10 outline-2 outline-offset-2 outline-focus-ring")} style={{ left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%` }} />;
             })}
           </div>
         </div>;
@@ -150,9 +151,9 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
                           const next = buttons?.[list.indexOf(step) + offset];
                           if (next) { event.preventDefault(); next.focus(); }
                         }}>
-                        <span className="flex min-w-0 items-start gap-2 text-xs"><Icon className="mt-0.5 shrink-0 text-fg-muted" size={14} aria-hidden="true" /><span className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.product ? `${step.product} · ` : ""}{step.label}</span><StatusIcon className={cn("mt-0.5 shrink-0", STATUS_COLOR[step.status])} size={14} aria-hidden="true" /></span>
+                        <span className={cn("flex min-w-0 items-start gap-2", runTimelineNameClass(size))}><Icon className="mt-0.5 shrink-0 text-fg-muted" size={14} aria-hidden="true" /><span data-trace-record-label="" className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.product ? `${step.product} · ` : ""}{step.label}</span><StatusIcon className={cn("mt-0.5 shrink-0", STATUS_COLOR[step.status])} size={14} aria-hidden="true" /></span>
                         <span className="flex items-center justify-between gap-2 text-xs text-fg-muted"><span>{labels[traceCategory(step)]} · {runLabels.stepStatus[step.status]}</span><span className="tnum">{formatRunDuration(durationOf(step), runLabels.notRecorded)}</span></span>
-                        {bar ? <span className="relative h-1 min-w-0 overflow-hidden rounded-full bg-surface-sunken" aria-hidden="true"><span className={cn("absolute inset-y-0 min-w-px rounded-full", step.status === "failed" ? "bg-danger-emphasis" : CATEGORY_BAR[traceCategory(step)])} style={{left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%`}} /></span> : null}
+                        {bar ? <span className={cn(RUN_TIME_TRACK, "overflow-hidden")} data-trace-time-bar="" aria-hidden="true"><span className={cn(RUN_TIME_FILL, RUN_TIME_COLOR[step.status])} style={{left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%`}} /></span> : null}
                       </button>
                     </li>;
                   })}

@@ -417,6 +417,8 @@ function AssistantColumn({
           steps={progress?.steps ?? []}
           testId="chat-answer-progress"
           traceId={progress?.traceId}
+          conversationId={progressSource?.conversationId ?? null}
+          messageId={messageId}
           legacy={progress?.legacy ?? Boolean(savedAnswer && traceId)}
           partial={progress?.partial}
           diagnostics={answerDiagnostics}

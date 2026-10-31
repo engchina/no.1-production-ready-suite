@@ -355,7 +355,7 @@ test("詳細は節を縦に並べ、処理の経過は Enter で開き、監査�
   await expect.poll(() => mockApi.lastRequest("GET", "/api/runs/run-layout/audit")).toBeTruthy();
   await page.getByTestId("run-process-details").click();
   // 終わった実行はイベントを購読しない（SSE だけ。#2260）。
-  await expect(page.getByTestId("run-stream").getByText("受信していません", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("run-stream")).toHaveCount(0);
 });
 
 // #2403: 実行の詳細の監査ログは、ツールの記録と内部の記録（支援タスクの状態など）を 1 行 = 1 記録で並べる
@@ -447,115 +447,27 @@ test("監査ログはツールの記録と内部の記録を 1 行ずつ並べ�
 });
 
 // #2386: イベントの記録は 1 行 = 1 イベント。件数が多いときは一定の高さで内側だけをスクロールし、ページを伸ばさない。
-test("イベントの記録は 1 行ずつ並び、多いときは内側だけをスクロールし、種類で絞れる", { tag: "@responsive" }, async ({
-  page,
-  mockApi,
-}, testInfo) => {
+test("処理の詳細は識別子のコピーと使用モデルだけを順に表示する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
   seedRun(mockApi);
-  const run = mockApi.state.runs[mockApi.state.runs.length - 1] as unknown as { events: unknown[] };
-  run.events = Array.from({ length: 40 }, (_, index) => {
-    const tool = index % 2 === 0;
-    return {
-      id: `event-${index}`,
-      type: tool ? "tool.completed" : "run.status_changed",
-      message: tool ? `ツールの呼び出し ${index} を完了しました。` : `状態が変わりました ${index}`,
-      created_at: MOCK_NOW,
-      payload: tool ? { tool_name: "nl2sql__nl2sql_query", step_id: `step-${index}`, duration_ms: 1200 } : {},
-    };
-  });
+  const run = mockApi.state.runs[0];
+  run.thread_id = "synthetic-conversation-0123456789abcdef0123456789abcdef";
   await page.goto("/runs?id=run-layout");
   await page.getByTestId("run-timeline-section-summary").click();
   await page.getByTestId("run-process-details").click();
-  const log = page.getByTestId("run-event-log");
-  await expect(log.locator("[data-run-event]")).toHaveCount(40);
-  await expect(page.getByTestId("run-event-log-count")).toHaveText("全 40 件");
-
-  // 一覧は表ではない行リストの高さ（md 未満 17.5rem・md 以上 28rem）で止まり、中だけがスクロールする。
-  const scroll = page.getByTestId("run-event-log-scroll");
-  await expect(scroll).toHaveAttribute("data-overflowing", "true");
-  await expect(scroll).toHaveAttribute("role", "region");
-  await expect(scroll).toHaveAttribute("tabindex", "0");
-  const box = await scroll.evaluate((node) => ({
-    height: node.clientHeight,
-    scrollHeight: node.scrollHeight,
-    rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
-    wide: window.innerWidth >= 768,
-  }));
-  expect(box.scrollHeight).toBeGreaterThan(box.height);
-  expect(box.height).toBeLessThanOrEqual((box.wide ? 28 : 17.5) * box.rem + 2);
-  await log.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("run-event-log.png") });
-
-  // 1 行 = 1 イベント（要約・状態のバッジ・処理時間）。種類のコードとステップは行を開いた詳細に出す。
-  const first = page.getByTestId("run-event-log-event-event-0");
-  await expect(first).toContainText("nl2sql__nl2sql_query");
-  await expect(first).toContainText("完了");
-  await expect(first).toContainText("1.2 秒");
-  const toggle = page.getByTestId("run-event-log-event-event-0-toggle");
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await toggle.focus();
-  await page.keyboard.press("Enter");
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByTestId("run-event-log-event-event-0-details")).toContainText("tool.completed");
-  await expect(page.getByTestId("run-event-log-event-event-0-details")).toContainText("step-0");
-  await log.screenshot({ path: testInfo.outputPath("run-event-log-expanded.png") });
-  await page.keyboard.press("Space");
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-
-  // 最新へ / 最初へは、スクロール領域の中だけを動かす（ページは動かさない）。
-  const pageScroll = () => page.evaluate(() => document.querySelector("main")!.scrollTop);
-  const beforePage = await pageScroll();
-  await page.getByTestId("run-event-log-latest").click();
-  await expect(page.getByTestId("run-event-log-event-event-39")).toBeInViewport();
-  await expect(page.getByTestId("run-event-log-latest")).toBeDisabled();
-  expect(Math.abs((await pageScroll()) - beforePage)).toBeLessThanOrEqual(1);
-  await page.getByTestId("run-event-log-first").click();
-  await expect(page.getByTestId("run-event-log-first")).toBeDisabled();
-  await expect.poll(() => scroll.evaluate((node) => node.scrollTop)).toBe(0);
-
-  // 種類で絞ると行と件数が変わる。
-  await page.getByTestId("run-event-log-filter").getByRole("button", { name: /^ツール/ }).click();
-  await expect(log.locator("[data-run-event]")).toHaveCount(20);
-  await expect(page.getByTestId("run-event-log-count")).toHaveText("20 件（全 40 件）");
+  const details = page.getByTestId("run-technical-section");
+  await expect(details.locator("[data-process-identifier]")).toHaveCount(3);
+  await expect(details.locator("[data-process-identifier]").nth(1)).toContainText(run.thread_id);
+  await expect(details.locator("[data-process-identifier]").nth(2)).toContainText(run.id);
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { document.documentElement.dataset.copiedId = value; } } }));
+  for (const [label, value] of [["会話 ID", run.thread_id], ["回答メッセージ ID", run.id]]) {
+    await details.getByRole("button", { name: `${label} をコピー`, exact: true }).click();
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.copiedId)).toBe(value);
+  }
+  await expect(details.locator("[data-run-used-models]")).toBeVisible();
+  await expect(details.getByTestId("run-event-log")).toHaveCount(0);
+  await expect(details.getByTestId("run-stream")).toHaveCount(0);
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
-});
-
-test("ツールの開始のイベントはツールに分け、回答前の確認のツールは「回答前の確認」と出す", { tag: "@responsive" }, async ({
-  page,
-  mockApi,
-}) => {
-  // #3352: `step.started` は「不明」ではなく「開始」、回答前の確認のツールは内部の名前を出さない。
-  seedRun(mockApi);
-  const run = mockApi.state.runs[mockApi.state.runs.length - 1] as unknown as { events: unknown[] };
-  run.events = [
-    {
-      id: "event-ask-start",
-      type: "step.started",
-      message: "ツール ask_user_confirmation を開始しました。",
-      created_at: MOCK_NOW,
-      payload: { step_id: "step-ask", tool_name: "ask_user_confirmation" },
-    },
-    {
-      id: "event-rag-start",
-      type: "step.started",
-      message: "ツール rag__rag_search を開始しました。",
-      created_at: MOCK_NOW,
-      payload: { step_id: "step-rag", tool_name: "rag__rag_search" },
-    },
-    { id: "event-status", type: "run.status_changed", message: "状態が変わりました", created_at: MOCK_NOW, payload: {} },
-  ];
-  await page.goto("/runs?id=run-layout");
-  await page.getByTestId("run-timeline-section-summary").click();
-  await page.getByTestId("run-process-details").click();
-  const log = page.getByTestId("run-event-log");
-  const ask = page.getByTestId("run-event-log-event-event-ask-start");
-  await expect(ask).toContainText("回答前の確認");
-  await expect(ask).toContainText("開始");
-  await expect(page.getByTestId("run-event-log-event-event-rag-start")).toContainText("rag__rag_search");
-  await expect(log).not.toContainText("不明");
-  await page.getByTestId("run-event-log-filter").getByRole("button", { name: /^ツール/ }).click();
-  await expect(log.locator("[data-run-event]")).toHaveCount(2);
-  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("process-identifiers.png"), fullPage: true });
 });
 
 test("作成は独立画面で入力を確認し、成功した実行の詳細へ移る", { tag: "@responsive" }, async ({ page, mockApi }) => {

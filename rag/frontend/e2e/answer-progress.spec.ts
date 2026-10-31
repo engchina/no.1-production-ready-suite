@@ -471,7 +471,7 @@ for (const viewport of [
     const detailsBox = await details.boundingBox();
     expect(timelineBox && detailsBox && detailsBox.y >= timelineBox.y + timelineBox.height).toBeTruthy();
     await details.click();
-    await expect(process.getByRole("region", { name: "処理の詳細" }).getByText("信頼度: high")).toBeVisible();
+    await expect(process.getByRole("region", { name: "処理の詳細" }).getByText("信頼度: high")).toHaveCount(0);
     // 回答を読む場には回答の記録の削除（「その他の操作」）を出さない（#2325）。
     await expect(process.getByRole("button", { name: "その他の操作" })).toHaveCount(0);
     await process.screenshot({ path: `test-results/answer-progress-search-details-${viewport.name}.png` });

@@ -1,7 +1,7 @@
 import { CircleStop, Database } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { ChatProgress, Button, Banner, FormStatus } from "@production-ready/ui";
+import { RunUsedModels, ChatProgress, Button, Banner, FormStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { CHAT_PROGRESS_LABELS, chatQueueProgressSteps, jobTracePath } from "../chatProgress";
@@ -93,6 +93,8 @@ export function OperationStatusStrip({
         cancelled={cancelled}
         reconnecting={active && progress.failed}
         traceId={progress.traceId}
+        processDetailsProps={{ metadata: { conversationId: null, messageId: job.job_id } }}
+        footer={<RunUsedModels models={[]} events={progress.events} />}
         testId="nl2sql-job"
         labels={CHAT_PROGRESS_LABELS}
         partial={progress.partial}

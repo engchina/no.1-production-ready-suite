@@ -22,6 +22,8 @@ import {
   chatHistoryWindowLabels,
   ChatLayout,
   ChatProgress,
+  RunUsedModels,
+  RunProcessDetails,
   ChatSkeleton,
   useTraceDetailsLabels,
   ChatAnswer,
@@ -1100,17 +1102,22 @@ function RunChatTurn({
         {/* 承認・回答前の確認の答えは人の操作を待つので、遅延の案内を出さない（実行の詳細と同じ。#1839）。 */}
         {legacyProgress ? (
           // span の無い古い形式の記録は、処理の経過を出せないことを同じ位置に示す（空白にしない。#3226）。
-          <p className="text-xs text-fg-muted" data-testid="chat-progress-legacy">
-            {traceLabels.legacy}
-          </p>
+          <>
+            <p className="text-xs text-fg-muted" data-testid="chat-progress-legacy">{traceLabels.legacy}</p>
+            <RunProcessDetails traceId={progress.traceId} metadata={{ conversationId: run.thread_id ?? null, messageId: run.id }}>
+              <RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model }] : []} />
+            </RunProcessDetails>
+          </>
         ) : (
           <ChatProgress
             progressKey={run.id}
             active={stoppable && progressTerminal === null}
             reconnecting={stoppable && progress.failed}
             cancelled={run.status === "cancelled"}
-            // 処理の経過は trace の投影なので、「処理の詳細」には Trace ID だけを出す（2 つ目の表示を置かない。#3226）。
+            // 処理の経過と同じ記録を詳細で繰り返さない。
             traceId={progress.traceId}
+            processDetailsProps={{ metadata: { conversationId: run.thread_id ?? null, messageId: run.id } }}
+            footer={<RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model }] : []} events={progress.events} />}
             steps={stepsWithDetails}
             startedAt={run.created_at}
             slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}

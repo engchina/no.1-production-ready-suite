@@ -9,6 +9,8 @@ import {
   Button,
   ChatAnswer,
   ChatProgress,
+  RunUsedModels,
+  RunProcessDetails,
   ChatSkeleton,
   ChatSqlBlock,
   ChatTurn,
@@ -672,12 +674,16 @@ function DbAdminChatTurn({
     >
       <ChatAnswer>
         {progress.legacy ? (
-          <ProgressLegacyNotice testId={`${TEST_ID}-progress-legacy`} />
+          <><ProgressLegacyNotice testId={`${TEST_ID}-progress-legacy`} />
+            <RunProcessDetails metadata={{ conversationId, messageId: turn.turn_id }}><RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model }] : []} /></RunProcessDetails>
+          </>
         ) : (
           <ChatProgress
             // 生成したときの span の木（実行は経過に足さない。実行の表示は文の区画。#3226）。
             steps={progress.steps}
             traceId={progress.traceId}
+            processDetailsProps={{ metadata: { conversationId, messageId: turn.turn_id } }}
+            footer={<RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model }] : []} />}
             labels={CHAT_PROGRESS_LABELS}
             partial={progress.partial}
             testId={`${TEST_ID}-progress`}

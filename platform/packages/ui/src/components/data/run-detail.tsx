@@ -1,3 +1,5 @@
+import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
+import { DEFAULT_TRACE_DETAILS_LABELS } from "../../lib/trace-labels";
 import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, Waypoints, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode, type CSSProperties } from "react";
 
@@ -432,7 +434,15 @@ export function RunDetailSection({
 // ---------------------------------------------------------------------------
 // 処理の詳細
 
+export interface RunProcessMetadataProps {
+  /** 保存された会話の ID。会話のない実行は null。 */
+  conversationId: string | null;
+  /** 1 往復を識別するメッセージ・Run・Job の ID。未取得は null。 */
+  messageId: string | null;
+}
+
 export interface RunProcessDetailsProps {
+  metadata?: RunProcessMetadataProps;
   /** 実測の trace（「トレースの詳細」）。文言は製品の root の `TraceDetailsLabelsProvider` から取る。 */
   traceSummary?: unknown;
   /**
@@ -463,6 +473,7 @@ export interface RunProcessDetailsProps {
  * 入れ子の `Disclosure` に畳む。
  */
 export function RunProcessDetails({
+  metadata,
   traceSummary,
   traceId,
   title = DEFAULT_RUN_DETAIL_LABELS.processDetails,
@@ -487,10 +498,16 @@ export function RunProcessDetails({
       data-run-process-details=""
       data-testid={testId}
     >
+      <section aria-label={typeof title === "string" ? title : DEFAULT_RUN_DETAIL_LABELS.processDetails} className="grid min-w-0 gap-3">
       {description ? <p className="text-xs text-fg-muted">{description}</p> : null}
-      {traceId ? <TraceIdRow traceId={traceId} labels={traceLabels} /> : null}
+      {metadata ? <>
+        <ProcessIdentifierRow label="Trace ID" value={traceId ?? null} trace />
+        <ProcessIdentifierRow label={(traceLabels.processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!).conversationId} value={metadata.conversationId} />
+        <ProcessIdentifierRow label={(traceLabels.processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!).messageId} value={metadata.messageId} />
+      </> : traceId ? <TraceIdRow traceId={traceId} labels={traceLabels} /> : null}
       <TraceDetails summary={traceSummary} />
       {children}
+      </section>
     </Disclosure>
   );
 }
@@ -564,14 +581,7 @@ const STEP_ICON: Record<Exclude<RunTimelineStepStatus, "running">, { icon: Lucid
   waiting: { icon: CirclePause, className: "text-warning-fg" },
 };
 
-const STEP_BAR: Record<RunTimelineStepStatus, string> = {
-  done: "bg-accent-emphasis",
-  running: "bg-info-emphasis",
-  waiting: "bg-warning-emphasis",
-  failed: "bg-danger-emphasis",
-  skipped: "bg-fg-subtle",
-  pending: "bg-fg-subtle",
-};
+
 
 /** 深い木で一覧内のスクロールに切り替える深さ。深さそのものは制限しない。 */
 export const RUN_TIMELINE_SCROLL_DEPTH = 6;
@@ -802,9 +812,9 @@ export function RunTimeline({
     )
   );
   const total = totalDurationMs ?? runTimelineDuration(steps);
-  const nameText = size === "sm" ? "text-xs" : "text-sm";
+  const nameText = runTimelineNameClass(size);
 
-  if (exploring) return <TraceExplorer steps={steps} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} />;
+  if (exploring) return <TraceExplorer steps={steps} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
 
   return (
     <div
@@ -900,15 +910,15 @@ export function RunTimeline({
                 {/* 時間の線（飾り）。広い置き場所だけ。 */}
                 {showBars ? (
                   <div
-                    className="relative hidden h-2 min-w-0 overflow-hidden rounded-full bg-surface-sunken @xl:block"
+                    className={cn(RUN_TIME_TRACK, "hidden overflow-hidden @xl:block")}
                     aria-hidden="true"
                     data-run-timeline-bar=""
                   >
                     {bar ? (
                       <span
                         className={cn(
-                          "absolute inset-y-0 rounded-full forced-colors:bg-[CanvasText]",
-                          STEP_BAR[step.status]
+                          RUN_TIME_FILL,
+                          RUN_TIME_COLOR[step.status]
                         )}
                         style={{ left: `${bar.offset}%`, width: `${bar.width}%` }}
                       />
@@ -1239,6 +1249,38 @@ export function RunDetailSkeleton({ testId }: { testId?: string }) {
       ))}
     </div>
   );
+}
+
+/** 識別子は全文を表示し、コピーの対象はラベルを含まない ID だけにする。 */
+function ProcessIdentifierRow({ label, value, trace = false }: { label: string; value: string | null; trace?: boolean }) {
+  const labels = useTraceDetailsLabels().processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!;
+  return <div className="flex min-w-0 items-center gap-2 text-xs" data-process-identifier={label} data-trace-id-row={trace ? "" : undefined}>
+    <span className="shrink-0 text-fg-muted">{label}:</span>
+    <span className="min-w-0 break-all font-mono text-fg">{value || "—"}</span>
+    {value ? <CopyButton type="button" variant="ghost" size="sm" iconOnly className="shrink-0" text={value}
+      label={labels.copy.replace("{label}", label)} copiedMessage={labels.copied.replace("{label}", label)} failedMessage={labels.copyFailed.replace("{label}", label)} /> : null}
+  </div>;
+}
+
+/** 使用したモデルの記録。識別子の後ろに置く共通の表示。 */
+export function RunUsedModels({ models, events = [] }: { models: readonly { label: string; value: string; title?: string }[]; events?: readonly { type: string; attributes?: Record<string, unknown> }[] }) {
+  const recorded = events.flatMap(event => {
+    if (event.type !== "step") return [];
+    const value = event.attributes?.["gen_ai.request.model"];
+    if (typeof value !== "string" || !value.trim()) return [];
+    const operation = event.attributes?.["gen_ai.operation.name"];
+    return [{ label: operation === "embeddings" ? "Embedding" : operation === "rerank" ? "Rerank" : "LLM", value }];
+  });
+  const used: readonly { label: string; value: string; title?: string }[] = [...models, ...recorded].filter((model, index, all) => all.findIndex(other => other.value === model.value) === index);
+  const labels = useTraceDetailsLabels().processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!;
+  return <div className="grid min-w-0 gap-2 text-xs" data-testid="answer-models" data-run-used-models="">
+    <span className="font-medium text-fg-muted">{labels.models}</span>
+    {used.length ? <dl className="flex min-w-0 flex-wrap gap-x-4 gap-y-2">{used.map((model, index) =>
+      <div key={`${model.label}-${index}`} className="flex min-w-0 flex-wrap items-baseline gap-1.5">
+        {model.label ? <dt className="text-fg-muted">{model.label}</dt> : null}
+        <dd className="min-w-0 break-all font-medium text-fg" title={"title" in model ? model.title : undefined}>{model.value}</dd>
+      </div>)}</dl> : <span className="text-fg-muted">—</span>}
+  </div>;
 }
 
 /** Trace ID とコピーのボタン。ID の文字列だけを折り返し、ボタンを同じ行に保つ（375px。#3219）。 */

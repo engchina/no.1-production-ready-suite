@@ -18,7 +18,6 @@ export function SavedAnswerRecord({
   searchAnswerProfileId,
   showAnswer = true,
   showCitations = true,
-  detailsTitle,
 }: {
   traceId: string;
   searchAnswerProfileId: string;
@@ -55,6 +54,7 @@ export function SavedAnswerRecord({
     );
   }
   const record = detail.data;
+  if (!showAnswer && !showCitations) return <AnswerDetailsPanel diagnostics={record.answer_diagnostics} />;
   return (
     <div className="space-y-3 rounded-md border border-border bg-surface-sunken p-3">
       <p className="break-words text-xs text-fg-muted">
@@ -96,7 +96,6 @@ export function SavedAnswerRecord({
       */}
       <AnswerDetailsPanel
         diagnostics={record.answer_diagnostics}
-        title={detailsTitle}
       />
     </div>
   );

@@ -83,7 +83,7 @@ for (const [index, item] of CASES.entries()) {
     // イベントの記録の取消の行にも同じ文を添える（終わった実行の処理の経過は閉じているので開く）。
     await page.getByTestId("run-timeline-section-summary").click();
     await page.getByTestId("run-process-details").click();
-    await expect(page.getByTestId(`run-event-log-event-${id}-cancelled`)).toContainText(`取消: ${item.text}`);
+    await expect(page.getByTestId("run-technical-section").getByTestId(`run-event-log-event-${id}-cancelled`)).toHaveCount(0);
   });
 }
 

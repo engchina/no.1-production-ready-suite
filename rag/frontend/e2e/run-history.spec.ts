@@ -685,10 +685,19 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(technical.getByText("conv-21")).toBeHidden();
     await processDetailsSummary.click();
     await expect(technical.getByText("conv-21")).toBeVisible();
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { document.documentElement.dataset.copiedId = value; } } }));
+    for (const [label, value] of [["Trace ID", SPAN_TRACE_ID], ["会話 ID", "conv-21"], ["回答メッセージ ID", "msg-21"]]) {
+      await technical.getByRole("button", { name: `${label} をコピー`, exact: true }).click();
+      await expect.poll(() => page.evaluate(() => document.documentElement.dataset.copiedId)).toBe(value);
+    }
     // 「処理の詳細」の先頭に Trace ID（「トレースの詳細」の 2 つ目の表示は無い。#3226）。
-    await expect(technical.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${SPAN_TRACE_ID}`);
+    await expect(technical.locator("[data-trace-id-row]")).toContainText(SPAN_TRACE_ID);
     await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
-    await expect(technical.getByText("信頼度: high")).toBeVisible();
+    await expect(technical.getByText("信頼度: high")).toHaveCount(0);
+    await expect(technical.locator("[data-process-identifier]")).toHaveCount(3);
+    await expect(technical.getByRole("button", { name: "会話 ID をコピー", exact: true })).toBeVisible();
+    await expect(technical.getByRole("button", { name: "回答メッセージ ID をコピー", exact: true })).toBeVisible();
+    await expect(technical.locator("[data-run-used-models]")).toBeVisible();
     // 信頼度は回答の記録の詳細のバッジだけに出し、識別子の一覧に重ねない。旧「回答の詳細」「技術的な詳細」は出さない。
     await expect(technical.getByText("回答の確からしさ", { exact: true })).toHaveCount(0);
     await expect(page.getByText("回答の詳細", { exact: true })).toHaveCount(0);
@@ -1389,13 +1398,11 @@ test("資料照合の実行状態は未照合にまとめず、一覧と詳細�
       await expect(page.getByTestId(`run-history-row-run-${index + 1}`)).toContainText(label);
     }
   }
-  for (const [index, [, label]] of states.entries()) {
+  for (const [index] of states.entries()) {
     await page.goto(`/history/run-${index + 1}`);
     await page.getByTestId("run-history-timeline-summary").click();
     await page.getByTestId("run-history-process-details").click();
-    const validation = page.getByTestId("answer-validation-status");
-    await expect(validation).toContainText(label);
-    await expect(validation).not.toContainText("未照合");
+    await expect(page.getByTestId("answer-validation-status")).toHaveCount(0);
   }
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });

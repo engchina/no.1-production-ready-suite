@@ -31,9 +31,19 @@ interface ExplorerAssertions {
 
 export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {outputPath(...paths: string[]): string}, expect: (value: unknown) => unknown, probeLayout = false) {
   const check = (value: unknown) => expect(value) as ExplorerAssertions;
+  const normalStyle = await page.evaluate(() => {
+    const label = document.querySelector("[data-run-timeline-label]");
+    const bar = document.querySelector("[data-run-timeline-bar]");
+    return { font: label ? getComputedStyle(label).fontSize : null, height: bar ? getComputedStyle(bar).height : null, radius: bar ? getComputedStyle(bar).borderRadius : null };
+  }, undefined);
   await page.getByRole("button", {name: "軌跡を調べる", exact: true}).first().click();
   const explorer = page.locator("[data-trace-explorer]");
   await check(explorer).toBeVisible();
+  check(await page.evaluate(expected => {
+    const labels = Array.from(document.querySelectorAll("[data-trace-record-label]"));
+    const bars = Array.from(document.querySelectorAll("[data-trace-time-bar]"));
+    return labels.length > 0 && bars.length > 0 && labels.every(label => !expected.font || getComputedStyle(label).fontSize === expected.font) && bars.every(bar => (!expected.height || getComputedStyle(bar).height === expected.height) && (!expected.radius || getComputedStyle(bar).borderRadius === expected.radius));
+  }, normalStyle)).toBe(true);
   await check(explorer.getByRole("heading", {name: "軌跡の調査"})).toBeFocused();
   const search = explorer.getByRole("searchbox", {name: "呼び出しを検索"});
   await explorer.getByRole("combobox", {name: "種類"}).click();
@@ -59,6 +69,11 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await search.fill("synthetic-call-input");
   await check(explorer.locator("[data-trace-record]").first()).toBeVisible();
   await explorer.locator("[data-trace-record] button").first().click();
+  check(await page.evaluate(() => {
+    const selected = document.querySelector("[data-trace-record] button[aria-pressed=true]")?.closest("[data-trace-record]");
+    const marker = document.querySelector("[data-trace-overview-selected=true]");
+    return Boolean(selected && marker && selected.getAttribute("data-trace-record") === marker.getAttribute("data-trace-overview-span") && getComputedStyle(marker).outlineStyle !== "none" && parseFloat(getComputedStyle(marker).outlineWidth) > 0);
+  }, undefined)).toBe(true);
   const inspector = explorer.locator("[data-trace-inspector]");
   await check(inspector).toBeVisible();
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();

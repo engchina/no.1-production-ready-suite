@@ -139,7 +139,7 @@
   - **動くスピナーは 1 つ**（#3445。messaging.md §3.7）: 概要の進行表示（durable job の `RunJobProgress`。`ProcessingIndicator placement="job"`）は、処理の経過を開いて一覧が今の段を回している間は回さない実行中の印（`activityIcon="static"`）にし、文言・経過時間・遅延の案内だけを出す。閉じているとき・今の段が無いときは進行表示が回す（NL2SQL の進行の帯の「実行中の工程、無ければ見出し」と同じ）。調停は `RunDetailLayout` が持ち、製品は進行表示に `RunJobProgress` を使って `RunDetailLayout` の中に置くだけにする。進行表示の文言は処理の経過の今の段の名前（ツールは表示名）にし、ツールの内部名・段の種類のコードを出さない。
 - **根拠 / SQL / 検証**（製品の `RunDetailSection`）: RAG は根拠（AI に渡した箇所の一覧と、まとまりごとの見方。#2097）、NL2SQL は SQL（コードブロック + `ContentActionBar` のコピー）と結果の要約（行数・列。行は保存しない）、Agent は回答の根拠（RAG と同じ「AI に渡した N 件 ／ 回答で引用 M 件」の Section。#2707）・承認・確認の記録・成果物（利用者が使う出力〔表の結果など〕だけ。`ResultTable`。内部の記録〔支援タスクの状態・資料との照合など〕は監査ログ。#2403）。
 - **フィードバック**: その実行への評価の一覧（RAG・NL2SQL）。無ければ節を出さない。
-- **処理の詳細**（処理の経過の節の中のタイムラインの後ろ。`RunProcessDetails`、既定で閉じる。#2325）: 回答の記録の詳細（RAG の対応・信頼度・使ったモデル・判断理由など）、実行 ID 以外の識別子（trace・会話・API キーの名前）、モデルの設定、生成した SQL、イベントの記録（`RunEventLog`。1 イベント = 1 行で、件数が多いときは一定の高さで内側をスクロールする。#2386）、エラーの全文。生の JSON は `<pre data-surface="code">`。チャット・RAG 検索の処理の経過の「処理の詳細」（`ChatProgress` の `footer`）と同じ名前・部品・位置にし、ページの末尾や根拠の後ろに別の節（旧「技術的な詳細」「回答の詳細」）として置かない（回答の補足と読み違える）。
+- **処理の詳細**（処理の経過の節の中のタイムラインの後ろ。`RunProcessDetails`、既定で閉じる）: Trace ID → 会話 ID → 回答メッセージ ID を各 1 行に表示し、値の横に ID のみをコピーするボタンを置く。会話や記録がない値は「—」とし、コピー操作を出さない。Agent は Run、NL2SQL のチャットは Job / DB 管理の turn を 1 往復の識別子とする。末尾は共通の `RunUsedModels` で「使用したモデル」を表示する。信頼度・照合の結果・判断理由・イベント・接続状態など、その他の情報はこの領域に出さない。チャット・検索・実行詳細で同じ部品・順序を使う。
 - **監査ログ**（Agent。`RunDetailSection collapsible`、既定で閉じ、開いたときに取得する。`RunDetailLayout` の `technical`）: 処理の経過に属さない記録。
 - **読み込み中**: `TimedLoadingState` + `RunDetailSkeleton`。
 
@@ -202,3 +202,5 @@ RAG のモデル入力は未引用の資料や目録も含む。参照全体の�
 - 置き場所が広いと一覧と詳細を 2 列にし、詳細を追従させる。狭い場所では一覧/詳細を切り替え、詳細の表示中は概観と絞り込みを畳む。「一覧に戻る」で選択した行へフォーカスを返す。キーボードの上下で一覧の行へ移動し、Enter / Space で選択する。深い木は共有 viewport の中で横に移動する。
 - 長い一覧は 50 件ずつ追加表示し、全記録を検索できる。本文は既存の上限とスクロール領域を使う。探索画面を開いても runtime、モデルへの指示、保存の契約、権限は変えない。
 - 設計の参照: [DeepSeek Harness trajectory](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/client/ui-trajectory/README.md) の概観・ledger・inspector、[Langfuse trace view](https://langfuse.com/changelog/2025-03-19-new-trace-view) の階層/時刻順と検索。共通の情報設計を採用し、他製品の runtime の内部状態を推測しない。
+
+軌跡の調査の時間条と呼び出し一覧は、処理の経過と同じ文字の大きさ・時間条の高さ・丸み・状態色を共有する。時間の概観の区分（工程 / モデル / ツール）と選択操作は保持する。選択した区間は上方の時間の概観で輪郭を出し、重なった区間より前面に表示する。

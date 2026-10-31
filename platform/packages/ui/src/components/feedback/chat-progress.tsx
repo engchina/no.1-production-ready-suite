@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { operationTimestampMs } from "../../lib/operation-timing";
 import { cn } from "../../lib/utils";
-import { RunProcessDetails } from "../data/run-detail";
+import { RunProcessDetails, type RunProcessDetailsProps } from "../data/run-detail";
 import { useTraceDetailsLabels } from "../data/trace-labels-provider";
 import {
   RunTimeline,
@@ -133,6 +133,7 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
 };
 
 export interface ChatProgressProps {
+  processDetailsProps?: Omit<RunProcessDetailsProps, "traceSummary" | "traceId" | "children">;
   traceSummary?: unknown;
   /** 処理の経過が trace の投影のときの trace id（「処理の詳細」に出す。#3226）。 */
   traceId?: string;
@@ -526,6 +527,7 @@ export function ChatProgress({
   partial = false,
   traceSummary,
   traceId,
+  processDetailsProps,
   activityIndicator = true,
   cancelled = false,
   className,
@@ -533,7 +535,7 @@ export function ChatProgress({
 }: ChatProgressProps) {
   const traceLabels = useTraceDetailsLabels();
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
-  const details = traceSummary != null || traceId ? <RunProcessDetails traceSummary={traceSummary} traceId={traceId} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
+  const details = traceSummary != null || traceId || processDetailsProps ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
   const footer = partial ? (
     <>
       <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>

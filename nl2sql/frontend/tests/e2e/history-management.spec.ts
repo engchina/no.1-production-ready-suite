@@ -571,7 +571,8 @@ test("品質評価の実行は既定で隠し、種類で品質評価・すべ�
     "この実行は古い形式の記録のため、処理の経過を表示できません。",
   );
   await page.getByTestId("history-detail-process-details").click();
-  await expect(page.getByTestId("history-detail-caller")).toContainText("run-eval-1");
+  await expect(page.getByTestId("history-detail-caller")).toHaveCount(0);
+  await expect(page.getByTestId("history-detail-technical").locator("[data-process-identifier]")).toHaveCount(3);
   await page.getByRole("button", { name: "実行履歴の一覧へ戻る" }).click();
 
   await page.getByRole("button", { name: "条件をクリア", exact: true }).first().click();
@@ -756,7 +757,14 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   expect(lastStepBox && detailsBox && detailsBox.y > lastStepBox.y).toBeTruthy();
   await expect(technical.getByTestId("history-detail-generated-sql")).toBeHidden();
   await processDetails.click();
-  await expect(technical.getByTestId("history-detail-generated-sql")).toContainText("PAID_AT IS NULL");
+  await expect(technical.getByTestId("history-detail-generated-sql")).toHaveCount(0);
+  await expect(technical.locator("[data-process-identifier]")).toHaveCount(3);
+  await expect(technical.locator("[data-run-used-models]")).toBeVisible();
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value: string) => { document.documentElement.dataset.copiedId = value; } } }));
+  const messageRow = technical.locator('[data-process-identifier="回答メッセージ ID"]');
+  const messageId = await messageRow.locator("span.font-mono").textContent();
+  await messageRow.getByRole("button", { name: "回答メッセージ ID をコピー", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.copiedId)).toBe(messageId);
   expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("history-detail.png"), fullPage: true });
 });

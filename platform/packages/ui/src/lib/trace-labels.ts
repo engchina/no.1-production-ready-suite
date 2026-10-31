@@ -1,5 +1,11 @@
 /** trace の共通文言の正本。製品の i18n へ同じ辞書を取り込む。 */
 export const TRACE_DETAILS_JA = {
+  "trace.details.conversationId": "会話 ID",
+  "trace.details.messageId": "回答メッセージ ID",
+  "trace.details.models": "使用したモデル",
+  "trace.details.copyIdentifier": "{label} をコピー",
+  "trace.details.identifierCopied": "{label} をコピーしました。",
+  "trace.details.identifierCopyFailed": "{label} をコピーできませんでした。",
   "trace.details.segment": "実行区間 {index}/{total}",
   "trace.details.title": "トレースの詳細",
   "trace.details.empty": "実測の記録はありません。",
@@ -181,6 +187,7 @@ export const TRACE_FIELD_LABEL_KEYS = {
 export type TraceFieldName = keyof typeof TRACE_FIELD_LABEL_KEYS;
 
 export interface TraceDetailsLabels {
+  processMetadata?: { conversationId: string; messageId: string; models: string; copy: string; copied: string; copyFailed: string };
   segment: (index: number, total: number) => string;
   title: string; empty: string; partial: string; measured: string;
   notSampled: string; legacy: string;
@@ -204,6 +211,7 @@ export interface TraceDetailsLabels {
 const PRODUCT_KEYS: Readonly<Record<string, TraceLabelKey>> = { rag: "trace.product.rag", nl2sql: "trace.product.nl2sql", agent: "trace.product.agent" };
 export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, options: { stageName?: TraceStageName; product?: string } = {}): TraceDetailsLabels {
   return {
+    processMetadata: { conversationId: t("trace.details.conversationId"), messageId: t("trace.details.messageId"), models: t("trace.details.models"), copy: t("trace.details.copyIdentifier"), copied: t("trace.details.identifierCopied"), copyFailed: t("trace.details.identifierCopyFailed") },
     segment: (index, total) => t("trace.details.segment").replace("{index}", String(index)).replace("{total}", String(total)),
     notSampled: t("trace.details.notSampled"), legacy: t("trace.details.legacy"),
     title: t("trace.details.title"), empty: t("trace.details.empty"), partial: t("trace.details.partial"), measured: t("trace.details.measured"),

@@ -12,6 +12,7 @@ import {
   RunDetailSection,
   RunJobProgress,
   RunProcessDetails,
+  RunUsedModels,
   RunHistoryPeriodEmptyState,
   RunHistoryTable,
   RunHistoryToolbar,
@@ -1036,6 +1037,27 @@ describe("RunDetailLayout / RunDetailSection", () => {
     expect(container.querySelector("[data-testid='timeline']")?.contains(details!)).toBe(true);
     expect(container.querySelector("[data-testid='details-summary']")?.textContent).toContain("処理の詳細");
     expect(details?.textContent).toContain("補足");
+  });
+
+  it("処理の識別子は記録順に表示し、欠けた値にコピー操作を作らない", () => {
+    render(<RunProcessDetails traceId="0123456789abcdef0123456789abcdef" metadata={{ conversationId: null, messageId: "synthetic-answer" }}>
+      <RunUsedModels models={[]} />
+    </RunProcessDetails>);
+    const rows = Array.from(container.querySelectorAll("[data-process-identifier]"));
+    expect(rows.map(row => row.getAttribute("data-process-identifier"))).toEqual(["Trace ID", "会話 ID", "回答メッセージ ID"]);
+    expect(rows[0].querySelector("button")?.getAttribute("aria-label")).toBe("Trace ID をコピー");
+    expect(rows[1].textContent).toContain("—");
+    expect(rows[1].querySelector("button")).toBeNull();
+    expect(rows[2].querySelector("button")?.getAttribute("aria-label")).toBe("回答メッセージ ID をコピー");
+    expect(container.querySelector("[data-run-used-models]")?.textContent).toContain("使用したモデル—");
+  });
+
+  it("使用モデルは記録した呼び出しから補い、同じモデルを重複表示しない", () => {
+    render(<RunUsedModels models={[{label: "LLM", value: "synthetic-model"}]} events={[
+      {type: "step", attributes: {"gen_ai.request.model": "synthetic-model"}},
+      {type: "step", attributes: {"gen_ai.request.model": "synthetic-embed", "gen_ai.operation.name": "embeddings"}},
+    ]} />);
+    expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["synthetic-model", "synthetic-embed"]);
   });
 
   it("開閉できる節は既定で閉じた Disclosure、通常の節はカード", () => {

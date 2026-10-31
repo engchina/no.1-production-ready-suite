@@ -30,17 +30,6 @@ function seedRunningRun(mockApi: MockApi) {
   });
 }
 
-/** ストリームの状態（処理の経過の中の「処理の詳細」。#1955 / #2325）。 */
-function streamCard(page: Page) {
-  return page.getByTestId("run-stream");
-}
-
-async function openStreamControls(page: Page) {
-  await page.getByTestId("run-timeline-section-summary").click();
-  await page.getByTestId("run-process-details").click();
-  await expect(streamCard(page)).toBeVisible();
-}
-
 async function expectNoPageOverflow(page: Page) {
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
@@ -84,13 +73,12 @@ for (const viewport of VIEWPORTS) {
       await page.goto("/runs?id=run-stream");
       await expect(page.getByText("購読を確認する").first()).toBeVisible();
 
-      await openStreamControls(page);
       // 購読は SSE だけで、方式の切り替えは出さない（#2260）。
-      await expect(streamCard(page).getByRole("button", { name: "WebSocket" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "WebSocket" })).toHaveCount(0);
       await expect(page.getByRole("group", { name: "ストリーム方式" })).toHaveCount(0);
       // e2e の SSE は空の stream を返して閉じる（fixture）。状態は色だけでなく文字でも示す。
       await expect(page.getByTestId("run-stream-stopped")).toContainText("SSE の接続が切れたため");
-      await expect(streamCard(page).getByText("停止", { exact: true })).toBeVisible();
+      await expect(page.getByTestId("run-summary").getByTestId("run-stream-stopped")).toBeVisible();
       const eventRequests = () =>
         mockApi.requests.filter((request) => request.path === "/api/runs/run-stream/events").length;
       const before = eventRequests();
