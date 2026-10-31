@@ -25,7 +25,7 @@ import re
 import threading
 import unicodedata
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from rag_parser_core.language import current_pack
@@ -203,6 +203,7 @@ class TextSearchTokenizationResult:
     omitted_protected_tokens: tuple[str, ...] = ()
     character_limit_tokens: tuple[str, ...] = ()
     oracle_text_query: str = ""
+    fallback_reason: str = ""
 
     @property
     def truncated(self) -> bool:
@@ -318,6 +319,7 @@ def tokenize_text_search_query_with_trace(
     config: TextSearchTokenizerConfig | None = None,
     max_tokens: int = MAX_TEXT_SEARCH_TOKENS,
     max_query_chars: int = MAX_ORACLE_TEXT_QUERY_CHARS,
+    _script_only: bool = False,
 ) -> TextSearchTokenizationResult:
     """token 化結果に加えて、語の重みと採用・除外理由の trace を返します。"""
     cfg = normalize_text_search_tokenizer_config(config)
@@ -325,7 +327,8 @@ def tokenize_text_search_query_with_trace(
     candidates: dict[str, _TokenCandidate] = {}
     normalized_domain_keywords = tuple(domain_keywords or ())
     order = 0
-    use_sudachi = _sudachi_available(cfg)
+    use_sudachi = not _script_only and _sudachi_available(cfg)
+    failures: list[str] = []
 
     def add(term: Any, tier: int) -> None:
         nonlocal order
@@ -361,15 +364,28 @@ def tokenize_text_search_query_with_trace(
     )
     for keyword in matched_keywords:
         add(keyword, _TIER_KEYWORD)
-        for token, tier in _content_terms(keyword, cfg, use_sudachi):
+        for token, tier in _content_terms(keyword, cfg, use_sudachi, failures):
             add(token, _TIER_KEYWORD_PART if tier == _TIER_PRIMARY else tier)
 
     # 品詞判定が接頭辞とする一文字でも、質問で明示された列名は失わない。
     labels = definition_labels(query)
     for label in labels:
         add(label, _TIER_KEYWORD)
-    for token, tier in _content_terms(query, cfg, use_sudachi):
+    for token, tier in _content_terms(query, cfg, use_sudachi, failures):
         add(token, tier)
+    if failures:
+        # 入力ごとの失敗時は全体を文字種で作り直し、実際の方式と記録を一致させる。
+        return replace(
+            tokenize_text_search_query_with_trace(
+                query,
+                domain_keywords=domain_keywords,
+                config=cfg,
+                max_tokens=max_tokens,
+                max_query_chars=max_query_chars,
+                _script_only=True,
+            ),
+            fallback_reason=failures[0],
+        )
     # 優先配分だけを変え、既存の重みと語順は維持する。意味の充足は判定しない。
     protected = tuple(dict.fromkeys((*_protected_query_terms(query), *(_normalize_term(label) for label in labels))))
     for token in protected:
@@ -404,6 +420,7 @@ def tokenize_text_search_query_with_trace(
         truncated_count=max(0, len(ordered_candidates) - len(selected)),
         max_tokens=limit,
         tokenizer=TEXT_SEARCH_TOKENIZER_HYBRID if use_sudachi else TEXT_SEARCH_TOKENIZER_SCRIPT_ONLY,
+        fallback_reason=(type(failure).__name__ if not use_sudachi and not _script_only and (failure := sudachi_unavailable(cfg)) else ""),
         protected_tokens=tuple(protected),
         omitted_protected_tokens=tuple(token for token in protected if token not in selected_keys),
         character_limit_tokens=character_plan.omitted_tokens,
@@ -621,6 +638,7 @@ def _content_terms(
     text: str,
     config: TextSearchTokenizerConfig,
     use_sudachi: bool,
+    failures: list[str] | None = None,
 ) -> list[tuple[str, int]]:
     """本文の語と出どころ（主 / 補う語）を返す。"""
     if use_sudachi:
@@ -628,7 +646,9 @@ def _content_terms(
             stopwords = _sudachi_stopwords(config.sudachi_dict_type, config.sudachi_config_path, _vocabulary().stopwords)
             primary = _sudachi_tokens(text, config)
         except Exception as exc:  # noqa: BLE001 - 解析できない入力は文字種の区切りで続ける
-            logger.warning("Sudachi の分割に失敗したため、文字種の区切りで続けます", exc_info=True)
+            if failures is not None:
+                failures.append(type(exc).__name__)
+            logger.warning("Sudachi の分割に失敗したため、文字種の区切りで続けます (%s)", type(exc).__name__)
             # 回答の中で分割したときは、呼び出し元の診断に残す（#3286）。
             report_degraded("text_search_tokenizer", exc)
         else:

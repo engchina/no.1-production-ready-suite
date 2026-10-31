@@ -38,7 +38,7 @@ def test_stored_html_structure_reaches_generation_input(
     context = AnswerContext(records=[record], text=text)
     question = "原文の領域と表題を教えてください。"
     spans = _grounded_spans(question, context, (), None)
-    prompt = _grounded_prompt(question, spans, context, (), None, None, None, None, None)
+    prompt = _grounded_prompt(question, spans, context, (), None, None, None, None)
     assert f'"role": "{region}"' in prompt
     assert '"table_caption": "合成の表題"' in prompt
     assert spans[0]["text"] == text

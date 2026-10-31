@@ -56,15 +56,11 @@ def open_file(path, *args, **kwargs):
 Path.read_text = read
 builtins.open = open_file
 from rag_engine.knowledge import classification as classification
-from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
+from rag_engine.retrieval.question_planning import plan_question
 from rag_engine.composition import create_oracle_application
 from rag_engine.config import get_settings
 
-parsed = parse_inquiry_conditions("sample.pdf の2ページの E1234 の確認手順は？")
-assert parsed.has_signals
-assert parsed.business_domains == ()
-assert "E1234" in parsed.codes_and_errors
-assert "FILE_ONLY_ALIAS" not in parsed.search_terms
+assert plan_question("sample.pdf の2ページの E1234 の確認手順は？").original_question
 saved = classification.classification_from_metadata(
     {"large_category": "10_分類A", "middle_category": "分類B"}
 )
@@ -75,7 +71,7 @@ settings = get_settings(environ={}, dotenv_path=None)
 assert not hasattr(settings, "profile")
 with create_oracle_application(Path.cwd(), settings=settings) as application:
     with application.runtime.activate():
-        assert parse_inquiry_conditions("設定を変更する手順は？").has_signals
+        assert plan_question("設定を変更する手順は？").original_question
         assert not hasattr(application.runtime, "profile")
 print(json.dumps({"ok": True}))
 """

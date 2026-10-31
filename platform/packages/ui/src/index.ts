@@ -356,7 +356,6 @@ export {
 // 回答の段落の印・外した段落・回答全体の注意（RAG・Agent 共通。#2738）
 export {
   ANSWER_PASSAGE_STATE_ICON,
-  AnswerPassageBadges,
   AnswerPassageMarked,
   AnswerPassageWarnings,
   DEFAULT_ANSWER_PASSAGE_LABELS,

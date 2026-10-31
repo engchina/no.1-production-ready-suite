@@ -764,9 +764,6 @@ const agentJa = {
   "chat.answer.passage.marksNote": "次の段落は根拠で確かめられていないか、注意が必要です。押すと本文の段落へ移ります。",
   "chat.answer.passage.jump": "{quote}（本文の段落へ移動）",
   "chat.answer.passage.warningsTitle": "回答全体に注意が必要です",
-  "chat.answer.passage.badgeUnverified": "未確認 {count} 件",
-  "chat.answer.passage.badgeWarning": "要注意 {count} 件",
-  "chat.answer.passage.badgeRemoved": "矛盾で除外 {count} 件",
   // 根拠の一覧のカードから、本文の根拠の行と同じ右のサイドパネルを開く（#2360）。
   "evidence.row": "{row} 行",
   "evidence.rowRange": "{start}–{end} 行",

@@ -11,7 +11,6 @@ from typing import Any
 from rag_engine.chunking import DEFAULT_RETRIEVAL_TOP_K
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.retrieval.context_builder import ContextEvidence, ContextParentEvidence
-from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
 from rag_engine.retrieval.question_planning import QuestionPlan
 from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN, RETRIEVAL_SCOPE_KNOWLEDGE_BASE, normalize_retrieval_scope
 from rag_engine.retrieval.task_contract import goal_retrieval_queries
@@ -77,7 +76,7 @@ HYDE_STRATEGY = "hyde"
 
 AUTO_ROUTING_LABEL = "自動ルーティング（自動選択）"
 
-SIMPLE_RETRIEVAL_LABEL = "単純検索（拡張なし）"
+SIMPLE_RETRIEVAL_LABEL = "原質問のみ（言い換え・分解なし）"
 
 RAG_FUSION_LABEL = "RAGフュージョン（複数検索質問 + 相互順位融合）"
 
@@ -245,6 +244,7 @@ class QueryExpansionResult:
     effective_strategy: str
     generated_queries: tuple[str, ...] = ()
     routing_reason: str = ""
+    degraded_error: str = ""
     routing_data_required: bool | None = None
     routing_data_items: tuple[str, ...] = ()
     rejected_queries: tuple[dict[str, str], ...] = ()
@@ -480,7 +480,7 @@ class AnswerQuestionResult:
     execution_steps: tuple[dict[str, Any], ...] = ()
     question_plan: QuestionPlan | None = None
     runtime_knowledge: RuntimeKnowledgeContext | None = None
-    inquiry_conditions: InquiryConditionParse | None = None
+
     routing_data_required: bool | None = None
     routing_data_items: tuple[str, ...] = ()
     evidence_facts: tuple[dict[str, str], ...] = ()
@@ -603,6 +603,7 @@ def query_strategy_id(value: Any) -> str:
         "auto": AUTO_ROUTING_STRATEGY,
         "auto routing": AUTO_ROUTING_STRATEGY,
         "simple": SIMPLE_RETRIEVAL_STRATEGY,
+        "単純検索": SIMPLE_RETRIEVAL_STRATEGY,
         "simple retrieval": SIMPLE_RETRIEVAL_STRATEGY,
         "rag fusion": RAG_FUSION_STRATEGY,
         "rag-fusion": RAG_FUSION_STRATEGY,

@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
 from rag_engine.retrieval.task_contract import task_contract
 from rag_parser_core.language import bind_pack, builtin_pack, overrides_from, resolve
 
@@ -119,7 +118,6 @@ async def preview_question_understanding(
         pack = resolve(base, values)
         with bind_pack(pack):
             results[name] = {
-                "inquiry": parse_inquiry_conditions(request.text).to_payload(),
                 "task_contract": task_contract(request.text),
                 "hash": pack.hash,
             }

@@ -10,14 +10,11 @@ from time import monotonic
 from typing import Any
 
 from rag_engine.dependencies import report_degraded
-from rag_engine.retrieval.task_contract import task_contract
+from rag_engine.retrieval.answer_requirements import answer_requirements
 
 COVERAGE_SCHEMA_VERSION = 2
 # 1 要求の再検索に足す手がかり（用語の別名・業務ガイドの検索の手がかり）の上限。
 MAX_HINTS = 3
-# 要求単位の文の中の「原文: …」以降は判定に使わない（親の要求の原文の写し）。
-_FACET_TARGET = re.compile(r"対象「(.+?)」の(.+?)を個別に回答する")
-_DEFINITION_TARGET = re.compile(r"項目「(.+?)」")
 # 別名・手がかりの照合では、一般的な問い方の語を除く。
 _QUESTION_FORM_TERMS = frozenset(
     {
@@ -99,26 +96,6 @@ def _normalize(text: Any) -> str:
     return unicodedata.normalize("NFKC", str(text or "")).casefold()
 
 
-def _focus_text(unit: Mapping[str, Any]) -> str:
-    """要求単位から、判定と再検索に使う文を返す。対象にしない単位は空。"""
-    kind = str(unit.get("kind") or "")
-    text = " ".join(str(unit.get("text") or "").split())
-    unit_id = str(unit.get("id") or "")
-    if kind == "context":
-        return ""
-    if kind in {"request", "desired_outcome"}:
-        return text
-    if kind == "explicit_facet" and ".R" in unit_id:
-        # 「AとBを追加」の対象ごとの子要求。親の文の判定では一方だけで足りてしまうので、対象ごとに追跡する。
-        match = _FACET_TARGET.search(text)
-        return f"{match.group(1)}の{match.group(2)}" if match else ""
-    if not kind and ".D" in unit_id:
-        match = _DEFINITION_TARGET.search(text)
-        return f"{match.group(1)}の意味" if match else ""
-    # 「操作方法」「影響」などの論点の子要求は親の文と同じ語で判定が変わらないので、親の判定に任せる。
-    return ""
-
-
 def _content_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
     """検索の手がかりに使う語。2 文字以上で、問い方の語を除き、部分の語が揃う複合語（「登録方法」）は部分に任せる。
 
@@ -131,43 +108,14 @@ def _content_terms(raw_terms: Iterable[str]) -> tuple[str, ...]:
 
 
 def coverage_targets(question: str, tokenize: Callable[[str], Sequence[str]]) -> list[RequestTarget]:
-    """質問契約の要求を ID ごとに保持する。語の集合では要求を統合しない。"""
-    targets: list[RequestTarget] = []
-    seen: set[str] = set()
-    contract = task_contract(question)
-    contexts = [str(unit["text"]) for unit in task_contract(contract["current_request"])["request_units"] if unit.get("kind") == "context"]
-    context_text = " ".join(contexts)
-    try:
-        context_terms = _content_terms(tokenize(context_text)) if context_text else ()
-    except Exception:  # noqa: BLE001 - 分かち書きの失敗で質問を失敗にしない。
-        context_terms = ()
-    for unit in contract["request_units"]:
-        focus = _focus_text(unit)
-        if not focus:
-            continue
-        # 小問は印を除いた文で判定し、前置き（対象・状況）を付けた文で検索する（#2399）。
-        label = str(unit.get("subquestion") or "")
-        body = focus.removeprefix(label).strip() if label else focus
+    """完全な原質問の追跡行。語は検索の手がかりにだけ使用し、充足性を決めない。"""
+    targets = []
+    for unit in answer_requirements(question):
         try:
-            raw_terms = tokenize(body)
-        except Exception:  # noqa: BLE001 - 分かち書きの失敗は判定しない（unassessed）にする。
-            raw_terms = ()
-        terms = _content_terms(raw_terms)
-        key = str(unit.get("id") or "")
-        if key in seen:
-            continue
-        seen.add(key)
-        targets.append(
-            RequestTarget(
-                id=str(unit.get("id") or ""),
-                kind=str(unit.get("kind") or "definition"),
-                text=focus,
-                terms=terms,
-                subquestion=label,
-                query=" ".join(part for part in (str(unit.get("preamble") or context_text), body) if part) if label or context_text else "",
-                context_terms=context_terms,
-            )
-        )
+            terms = _content_terms(tokenize(unit["text"]))
+        except Exception:  # noqa: BLE001 - 語の取得が失敗しても原質問は失わない。
+            terms = ()
+        targets.append(RequestTarget(id=unit["id"], kind=unit["kind"], text=unit["text"], terms=terms))
     return targets
 
 
@@ -236,13 +184,15 @@ def request_hints(target: RequestTarget, runtime_knowledge: Any, tokenize: Calla
     focus = _normalize(target.text)
     terms = set(target.terms)
     hints: list[str] = []
-    for term in getattr(runtime_knowledge, "matched_terms", ()) or ():
+    for term in getattr(runtime_knowledge, "retrieval_terms", ()) or ():
         labels = [str(label) for label in term.labels() if str(label).strip()]
         if any(_normalize(label) in focus for label in labels):
             hints.extend(label for label in labels if _normalize(label) not in focus)
     stage_rules = getattr(runtime_knowledge, "rules_for_stage", None)
     rules = stage_rules("generation") if callable(stage_rules) else getattr(runtime_knowledge, "matched_rules", ()) or ()
     for rule in rules:
+        if "pinned" not in getattr(rule, "tags", ()):
+            continue
         for trigger in getattr(rule, "triggers", ()) or ():
             trigger = str(trigger).strip()
             if not trigger or _normalize(trigger) in focus:

@@ -56,10 +56,11 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 },
   label: String(n),
 }));
 
-type AnsweringDraft = Omit<AnsweringSettingsData, "config_source">;
+type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_confirmation_enabled" | "runtime_rules_answer_enabled">;
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
+    runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
     answer_audit_mode: settings.answer_audit_mode,
@@ -148,6 +149,8 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
     <div className="space-y-4">
       {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。
           選択肢の名前が長い（20 字ほど）質問の拡張・回答の生成方式は lg、数は xs（#1891）。 */}
+      <section aria-labelledby="search-expression-title" className="space-y-4">
+        <h3 id="search-expression-title" className="text-sm font-medium text-fg">{t("settings.answering.searchExpressionTitle")}</h3>
       <FormGrid>
         <SelectField
           id="answering-query-strategy"
@@ -160,6 +163,17 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           width="lg"
           onValueChange={(value) => update({ query_strategy: value })}
         />
+        <SwitchRow
+          id="answering-runtime-terms-search"
+          label={t("settings.answering.runtimeTermsSearch")}
+          description={t("settings.answering.runtimeTermsSearchHint")}
+          checked={form.runtime_terms_search_enabled ?? false}
+          disabled={disabled}
+          onChange={(checked) => update({ runtime_terms_search_enabled: checked })}
+        />
+      </FormGrid>
+      </section>
+      <FormGrid>
         <SelectField
           id="answering-answer-flow"
           className="min-w-0"

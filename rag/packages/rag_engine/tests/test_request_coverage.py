@@ -70,7 +70,8 @@ def rows_for(question: str, ctx: AnswerContext) -> tuple[list[RequestTarget], li
 
 def test_request_registration_does_not_assess_evidence() -> None:
     targets, rows = rows_for(QUESTION, context(parent("p1", QUESTION)))
-    assert [t.id for t in targets] == ["Q1", "Q2"]
+    assert [t.id for t in targets] == ["Q1"]
+    assert targets[0].text == QUESTION
     assert all(row["status"] == "unassessed" and row["assessment"] == "not_performed" for row in rows)
     assert all(not row["evidence_ids"] for row in rows)
 
@@ -85,7 +86,7 @@ def test_parallel_targets_are_assessed_separately() -> None:
     # 「AとBを追加」は対象ごとに判定する（親の文は一方だけで足りてしまう）。
     targets = coverage_targets("業務と種別を追加したい。", split)
 
-    assert {t.text for t in targets} >= {"業務の追加", "種別の追加"}
+    assert [t.text for t in targets] == ["業務と種別を追加したい。"]
 
 
 def test_only_explicit_answer_status_enables_search() -> None:
@@ -217,7 +218,8 @@ def test_hints_come_from_aliases_and_guide_triggers_sharing_request_terms() -> N
         expanded_question=QUESTION,
         path=None,  # type: ignore[arg-type]
         matched_terms=(RuntimeTerm(term="請求書", aliases=("インボイス",)), RuntimeTerm(term="受注", aliases=("オーダー",))),
-        matched_rules=(RuntimeRule(rule_id="g", title="t", triggers=("再発行 承認", "受注 取消")),),
+        matched_rules=(RuntimeRule(rule_id="g", title="t", triggers=("再発行 承認", "受注 取消"), tags=("pinned",)),),
+        terms_search_enabled=True,
     )
 
     hints = request_hints(target, knowledge, split)
@@ -249,7 +251,7 @@ def _patch_search(monkeypatch: pytest.MonkeyPatch, results: dict[str, AnswerCont
 
 
 def _cover(
-    ctx: AnswerContext, settings: Any, question: str = QUESTION, searched: tuple[str, ...] = ()
+    ctx: AnswerContext, settings: Any, question: str = QUESTION, searched: tuple[str, ...] = (), gaps: bool = True
 ) -> tuple[AnswerContext, dict[str, Any]]:
     return a._cover_missing_requests(
         question,
@@ -260,12 +262,11 @@ def _cover(
         top_k=8,
         neighbor_child_count=0,
         rerank_enabled=False,
-        inquiry_conditions=None,
         retrieval_scope="knowledge_base",
         classification_filter=None,
         runtime_knowledge=None,
         searched_queries=searched,
-        unanswered_requests=[{"request_id": "Q2", "status": "missing"}],
+        unanswered_requests=[{"request_id": "Q1", "status": "partial", "search_text": "請求書の再発行方法は？"}] if gaps else None,
     )
 
 
@@ -282,13 +283,13 @@ def test_cover_missing_requests_adds_evidence_and_records_diagnostics(monkeypatc
     assert [r.chunk_uid for r in merged.records] == ["run:p1", "run:inv"]
     assert merged.evidence_tree[-1].reason == "request_coverage"
     assert trace["llm_calls"] == 0
-    assert trace["counts"] == {"unassessed": 2}
+    assert trace["counts"] == {"unassessed": 1}
     retrieval = trace["re_retrieval"]
     assert retrieval["applied"] is True
     assert retrieval["added_chunk_ids"] == ["run:inv"]
-    assert retrieval["queries"][0]["request_id"] == "Q2"
+    assert retrieval["queries"][0]["request_id"] == "Q1"
     assert retrieval["queries"][0]["added_chunk_ids"] == ["run:inv"]
-    q2 = next(row for row in trace["requests"] if row["id"] == "Q2")
+    q2 = next(row for row in trace["requests"] if row["id"] == "Q1")
     assert q2["status"] == "unassessed" and q2["retrieval_status"] == "candidates_found"
 
 
@@ -304,7 +305,6 @@ def test_before_generation_does_not_search_even_without_candidates(monkeypatch: 
         top_k=8,
         neighbor_child_count=0,
         rerank_enabled=False,
-        inquiry_conditions=None,
         retrieval_scope="knowledge_base",
         classification_filter=None,
         runtime_knowledge=None,
@@ -316,9 +316,9 @@ def test_before_generation_does_not_search_even_without_candidates(monkeypatch: 
 def test_word_overlap_does_not_trigger_search(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _patch_search(monkeypatch, {})
     ctx = context(parent("p", "取得済みの説明"))
-    merged, trace = _cover(ctx, _settings(), "設定を変更する方法は？")
+    merged, trace = _cover(ctx, _settings(), "設定を変更する方法は？", gaps=False)
     assert merged is ctx and calls == []
-    assert trace["re_retrieval"]["skipped"] == "unmapped_requests"
+    assert trace["re_retrieval"]["skipped"] == "no_explicit_gap"
 
 
 def test_cover_missing_requests_respects_disabled_setting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,7 +330,7 @@ def test_cover_missing_requests_respects_disabled_setting(monkeypatch: pytest.Mo
     assert calls == []
     assert merged is ctx
     assert trace["re_retrieval"]["skipped"] == "disabled"
-    assert {row["id"]: row["status"] for row in trace["requests"]} == {"Q1": "unassessed", "Q2": "unassessed"}
+    assert {row["id"]: row["status"] for row in trace["requests"]} == {"Q1": "unassessed"}
 
 
 def test_cover_missing_requests_caps_added_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,12 +367,11 @@ def test_subquestion_registration_does_not_trigger_search(monkeypatch: pytest.Mo
         top_k=8,
         neighbor_child_count=0,
         rerank_enabled=False,
-        inquiry_conditions=None,
         retrieval_scope="knowledge_base",
         classification_filter=None,
         runtime_knowledge=None,
     )
-    assert calls == [] and len(trace["requests"]) == 2
+    assert calls == [] and len(trace["requests"]) == 1
 
 
 def test_engine_settings_default_and_env() -> None:
@@ -418,12 +417,11 @@ def test_cover_missing_requests_counts_in_the_shared_extra_retrieval_budget(monk
             top_k=8,
             neighbor_child_count=0,
             rerank_enabled=False,
-            inquiry_conditions=None,
             retrieval_scope="knowledge_base",
             classification_filter=None,
             runtime_knowledge=None,
             extra_budget=budget,
-            unanswered_requests=[{"request_id": "Q2", "status": "missing"}],
+            unanswered_requests=[{"request_id": "Q1", "status": "partial", "search_text": "請求書の再発行方法は？"}],
         )[1]
 
     used = ExtraRetrievalBudget(max_queries=2, used={"guide_steps": 2})
@@ -486,7 +484,7 @@ def test_requests_come_from_the_original_question_and_search_uses_the_query(
 
     coverage = result.generation_trace["request_coverage"]
     statuses = {row["id"]: (row["kind"], row["status"]) for row in coverage["requests"]}
-    assert statuses == {"Q1": ("request", "unassessed"), "Q2": ("request", "unassessed"), "Q3": ("request", "unassessed")}
+    assert statuses == {"Q1": ("request", "unassessed")}
     # 根拠の無い要求ごとに、元の質問の要求の文で探し直す（1 要求として省かない）。
     retrieval = coverage["re_retrieval"]
     assert retrieval["skipped"] == "no_explicit_gap"
@@ -503,7 +501,7 @@ def test_without_request_question_requests_come_from_the_query(monkeypatch: pyte
     """元の質問を渡さなければ、今までどおり検索文から要求を作り、検索文で回答する（#2665）。"""
     result, searched, generated = _answer_with_request_question(monkeypatch, tmp_path, NUMBERED_ORIGINAL, None)
 
-    assert [row["id"] for row in result.generation_trace["request_coverage"]["requests"]] == ["Q1", "Q2", "Q3"]
+    assert [row["id"] for row in result.generation_trace["request_coverage"]["requests"]] == ["Q1"]
     assert searched[0] == NUMBERED_ORIGINAL and generated == [NUMBERED_ORIGINAL]
 
     short = SHORTENED_QUERIES[1]
@@ -523,4 +521,4 @@ def test_confirmation_only_rules_do_not_supply_generation_retrieval_hints() -> N
             RuntimeRule(rule_id="generate", title="生成", triggers=("設定 生成専用",), purpose="generation"),
         ),
     )
-    assert request_hints(target, knowledge, lambda text: text.split()) == ["設定 生成専用"]
+    assert request_hints(target, knowledge, lambda text: text.split()) == []

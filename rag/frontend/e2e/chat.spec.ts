@@ -1201,11 +1201,7 @@ for (const viewport of [
     await points.getByTestId("answer-marked-passage-link").nth(1).click();
     await expect(marked.nth(1)).toBeFocused();
 
-    // 印の数のバッジは本文の下（Agent の「資料との照合」と同じ部品・文言）。
-    const badges = page.getByTestId("answer-passage-badges").locator("[data-status-variant]");
-    await expect(badges).toHaveText(["未確認 1 件", "要注意 1 件", "矛盾で除外 1 件"]);
-    await expect(badges.nth(0)).toHaveAttribute("data-status-variant", "warning");
-    await expect(badges.nth(2)).toHaveAttribute("data-status-variant", "danger");
+    await expect(page.getByTestId("answer-passage-badges")).toHaveCount(0);
     await expectNoPageOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-marks-rag-chat-${viewport.name}.png`), fullPage: true });
   });

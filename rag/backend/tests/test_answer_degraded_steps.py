@@ -98,19 +98,6 @@ class _ScopeOracle(FakeOracle):
 
 
 @pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
-async def test_business_names_failure_is_recorded(fail: bool) -> None:
-    state = _SearchState()
-
-    names = await _engine(_ScopeOracle(fail=fail))._business_names(SearchRequest(query="q"), state)
-
-    assert names == []
-    if fail:
-        _assert_degraded(state, "business_names")
-    else:
-        assert state.degraded_steps() == []
-
-
-@pytest.mark.parametrize("fail", [True, False], ids=["error", "empty"])
 async def test_screen_catalog_failure_is_recorded(
     monkeypatch: pytest.MonkeyPatch, fail: bool
 ) -> None:

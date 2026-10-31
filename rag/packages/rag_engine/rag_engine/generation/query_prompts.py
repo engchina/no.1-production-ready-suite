@@ -32,7 +32,6 @@ from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
 from rag_engine.resources.runtime import resolve_prompt
-from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
 from rag_engine.retrieval.task_contract import task_contract
 
 MAX_GENERATED_QUERY_COUNT = 5
@@ -55,17 +54,12 @@ def _text_search_query_source(
 
 
 def _retrieval_metadata_filter(
-    inquiry_conditions: InquiryConditionParse | None,
     classification_filter: ClassificationFilter,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     classification_payload = classification_filter.to_metadata()
     if classification_payload:
         payload["classification"] = classification_payload
-    if inquiry_conditions is not None:
-        inquiry_filter = inquiry_conditions.metadata_filter.to_payload()
-        if inquiry_filter.get("active"):
-            payload["inquiry"] = inquiry_filter
     return payload
 
 

@@ -91,7 +91,7 @@ def test_retrieval_trace_records_attachment_retention_and_character_exclusion(mo
     stages = []
     monkeypatch.setattr(a, "record_retrieval_stage", stages.append)
     monkeypatch.setattr(a, "_rerank_records", lambda *args, **kwargs: ranked)
-    a.rerank_records("添付", records, settings, enabled=True, business_domains=(), screen_terms=())
+    a.rerank_records("添付", records, settings, enabled=True)
     output = next(stage for stage in stages if stage["stage"] == "rerank_output")
     assert output["attachment_candidate_count"] == output["attachment_selected_count"] == 1
     assert output["attachment_preserved_below_min_score_count"] == 1

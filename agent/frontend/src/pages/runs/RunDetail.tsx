@@ -3,7 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { FileText, PlayCircle, RefreshCw } from "lucide-react";
 import {
-  AnswerPassageBadges,
   AnswerNotice,
   Banner,
   Button,
@@ -53,7 +52,7 @@ import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
-import { answerPassageLabels, answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
+import { answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import {
   agentRunDetailLabels,
@@ -182,7 +181,6 @@ export function RunDetail({
                     <OutcomeBadge outcome={outcome} testId={`run-answer-outcome-${latestAnswer.id}`} />
                   ) : null}
                   {/* 印の数のバッジ（チャットの「資料との照合」・RAG と同じ共有の部品。0 件は出さない。#2738）。 */}
-                  <AnswerPassageBadges records={passages} labels={answerPassageLabels()} testId="run-answer-passages" />
                 </>
               ) : null
             }

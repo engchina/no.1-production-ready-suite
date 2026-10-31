@@ -300,7 +300,7 @@ test("検索方法の全体設定の項目は表示せず、古い個別設定�
     guide_step_retrieval_enabled: false, guide_step_max_queries: 0, guide_step_deadline_seconds: 10,
   });
   await page.goto("/search-answer-profiles?id=bv-default");
-  for (const name of ["質問の拡張", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
+  for (const name of ["質問の言い換え・分解", "回答の生成方式", "根拠の前後から加える数", "回答の検索のオプション", "手順ごとの検索の上限", "手順ごとの検索の時間上限（秒）"]) {
     await expect(page.getByRole("heading", { name, exact: true })).toHaveCount(0);
   }
   for (const name of ["Rerank で検索候補を並べ替える", "質問から項目の条件を読み取る", "文書構造による検索拡張", "画面目録で操作画面を探す", "根拠の無い要求を探し直す", "業務ガイドの手順ごとに探す"]) {
@@ -1137,7 +1137,7 @@ test("アーカイブ済みの検索・回答プロファイルは上書き中�
   await page.goto("/search-answer-profiles?id=bv-old");
   await expect(page.getByText("アーカイブ済みの検索・回答プロファイルは編集・保存できません。")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "安全チェック" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "質問の拡張" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "質問の言い換え・分解" })).toHaveCount(0);
   await page.getByRole("tab", { name: "質問の理解", exact: true }).click();
   const understanding = page.getByTestId("question-understanding-panel");
   await expect(understanding.getByRole("textbox", { name: "原因を尋ねる語", exact: true })).toBeDisabled();
@@ -1430,7 +1430,7 @@ test("質問の理解は段階順の独立 Tab で差分を保存し、認識結
   await page.route("**/api/search-answer-profiles/bv-default/question-understanding/preview", async (route) => {
     expect(route.request().headers()["content-type"]).toBe("application/json");
     previewBody = route.request().postDataJSON();
-    const result = { inquiry: { request_kind: "cause" }, task_contract: { requests: ["合成の要求"] }, hash: "synthetic-preview" };
+    const result = { task_contract: { requests: ["合成の要求"] }, hash: "synthetic-preview" };
     await route.fulfill({ json: { data: { original_text: (previewBody as { text: string }).text, saved: result, draft: result }, error_messages: [], warning_messages: [] } });
   });
   await page.goto("/search-answer-profiles?id=bv-default");
@@ -1451,6 +1451,9 @@ test("質問の理解は段階順の独立 Tab で差分を保存し、認識結
   await panel.getByRole("textbox", { name: "テストする質問" }).fill("対象 A が失敗した原因は何ですか。対処方法も教えてください。");
   await panel.getByRole("button", { name: "試す", exact: true }).click();
   await expect(panel.getByTestId("question-understanding-result")).toBeVisible();
+  for (const kind of ["saved", "draft"]) {
+    await expect(panel.locator(`#question-understanding-${kind}-result`)).not.toHaveValue(/"inquiry"/);
+  }
   expect(previewBody).toEqual({ text: "対象 A が失敗した原因は何ですか。対処方法も教えてください。", overrides: { question_cues: { cause_cues: ["なぜ", "原因", "どうして"] } } });
   expect(saves).toBe(0);
   await page.screenshot({ path: test.info().outputPath("question-understanding-preview.png"), fullPage: true });

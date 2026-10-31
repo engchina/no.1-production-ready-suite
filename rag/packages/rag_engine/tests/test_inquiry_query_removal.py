@@ -25,7 +25,6 @@ from rag_engine.generation.answering import (
     answer_question_result,
 )
 from rag_engine.models.llm import QueryExpansionOutput, RerankTextRank
-from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
 
 # 業務の内容を含まない合成の質問。ファイル名・ページ・エラーコード・列・2 つの要求を含む。
 QUESTION = "sample_guide.pdf の 2ページ目にある E1234 のとき、AB列は確認が必要ですか。また再実行の手順も教えてください。"
@@ -68,20 +67,10 @@ class InquiryQueryRemovalTests(unittest.TestCase):
             )
         return result, search, rerank_calls
 
-    def test_conditions_are_read_but_no_auxiliary_query_is_generated(self):
-        parsed = parse_inquiry_conditions(QUESTION)
-        # 前提: 条件は読み取れている（以前はこの語から補助の検索文を作っていた）。
-        self.assertTrue(parsed.has_signals)
-        self.assertTrue(parsed.search_terms)
-        self.assertIn("E1234", parsed.codes_and_errors)
-        self.assertIn("AB列", parsed.column_terms)
-        self.assertEqual(parsed.metadata_filter.source_file_terms, ("sample_guide.pdf",))
-        self.assertEqual(parsed.metadata_filter.page_numbers, (2,))
-        self.assertFalse(hasattr(parsed, "retrieval_queries"))
-        payload = parsed.to_payload()
-        self.assertNotIn("retrieval_queries", payload)
-        self.assertEqual(payload["schema_version"], 2)
-        self.assertIn("search_terms", payload)
+    def test_question_is_kept_without_inference(self):
+        from rag_engine.retrieval.question_planning import plan_question
+
+        self.assertEqual(set(plan_question(QUESTION).to_payload()), {"original_question"})
 
     def test_without_other_expansions_only_the_original_question_is_searched_and_reranked(self):
         result, search, rerank_calls = self.run_answer(
@@ -101,23 +90,19 @@ class InquiryQueryRemovalTests(unittest.TestCase):
         # 追加の rerank は無く、原質問だけで並べ替える。
         self.assertEqual(rerank_calls, [QUESTION])
 
-        # 条件・絞り込み・要求の分割は残る。
-        conditions = kwargs["inquiry_conditions"]
-        self.assertIn("E1234", conditions.codes_and_errors)
-        self.assertIn("AB列", conditions.column_terms)
-        self.assertEqual(plan["metadata_filter"]["inquiry"]["source_file_terms"], ["sample_guide.pdf"])
-        self.assertEqual(plan["metadata_filter"]["inquiry"]["page_numbers"], [2])
+        # 完全な原質問は残し、規則の推定と暗黙条件は渡さない。
+        self.assertNotIn("inquiry_conditions", kwargs)
+        self.assertNotIn("inquiry", plan["metadata_filter"])
         display = result.question_display
-        self.assertIn("答える要求は 2 件", display)
-        self.assertIn("読み取ったコード・エラー: E1234", display)
+        self.assertNotIn("答える要求", display)
+        self.assertNotIn("読み取ったコード・エラー:", display)
         self.assertIn("1. [原質問] ", display)
         self.assertNotIn("補助の検索文", display)
         self.assertNotIn("[質問理解]", display)
 
         payload = answer_result_payload(result, answer_id="a1", run_id="abcdef")
         self.assertEqual(payload["text_search_query_source"], "原質問")
-        self.assertNotIn("retrieval_queries", payload["inquiry_conditions"])
-        self.assertIn("E1234", payload["inquiry_conditions"]["codes_and_errors"])
+        self.assertNotIn("inquiry_conditions", payload)
 
     def test_rewritten_queries_still_reach_search_and_rerank(self):
         result, search, rerank_calls = self.run_answer(
@@ -133,7 +118,7 @@ class InquiryQueryRemovalTests(unittest.TestCase):
         self.assertEqual(result.retrieval_query_plan["llm_expansion_queries"], [GENERATED_QUERY])
         # 言い換えた検索文でも関連度を測る（追加の rerank は検索に使った検索文だけ）。
         self.assertEqual(rerank_calls, [QUESTION, GENERATED_QUERY])
-        self.assertIn(f"2. [質問拡張] {GENERATED_QUERY}", result.question_display)
+        self.assertIn(f"2. [質問の言い換え・分解] {GENERATED_QUERY}", result.question_display)
         self.assertNotIn("[質問理解]", result.question_display)
 
 

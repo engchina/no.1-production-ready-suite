@@ -84,12 +84,12 @@ class AnswerExecutionTests(unittest.TestCase):
         display = generation.format_question_display(
             "質問",
             [
-                "質問拡張戦略 開始",
+                "質問の言い換え・分解 開始",
                 "  検索文: 手続き 開始",
-                "質問拡張戦略 終了（エラーで中断）",
+                "質問の言い換え・分解 終了（エラーで中断）",
             ],
         )
-        self.assertRegex(display, heading("質問拡張戦略"))
+        self.assertRegex(display, heading("質問の言い換え・分解"))
         self.assertIn("\n   状態: エラーで中断", display)
         self.assertIn("検索文: 手続き 開始", display)  # 詳細文は工程として解釈しない
         self.assertNotIn("1.1 ", display)
@@ -248,7 +248,10 @@ class AnswerExecutionTests(unittest.TestCase):
                 self.assertIn(f"結果: {effective}", result.question_display)
                 self.assertIn(f"設定: {flow_label}", result.question_display)
                 self.assert_order(
-                    result.question_display, heading("質問拡張戦略"), heading("回答生成フロー"), heading("回答文の生成と根拠確認（1回目）")
+                    result.question_display,
+                    heading("質問の言い換え・分解"),
+                    heading("回答生成フロー"),
+                    heading("回答文の生成と根拠確認（1回目）"),
                 )
                 self.assertEqual(
                     generation.answer_result_payload(result, answer_id="a1", run_id="abcdef")["question_display"], result.question_display
@@ -267,34 +270,27 @@ class AnswerExecutionTests(unittest.TestCase):
             self.assertEqual(display.count(generation._display_query(query)), 1)
         self.assertIn("1. [原質問] ", display)
 
-    def test_understanding_shows_only_what_changes_later_steps(self):
-        lines = []
-        token = generation._execution_lines.set(lines)
-        try:
-            question = "名称を変更する方法と、過去の記録への影響を教えてください。"
-            plan = generation.plan_question(question)
-            with generation._execution_step("質問の理解") as step:
-                generation._record_question_understanding(step, question, plan, plan.inquiry_conditions)
-        finally:
-            generation._execution_lines.reset(token)
-        display = "\n".join(lines)
-        self.assertNotIn("質問の目的", display)
-        self.assertIn("結果: 答える要求は", display)
-        self.assertIn("影響: 回答後、要求ごとに答えたかを確認します", display)
-        self.assertNotIn("NLU", display)
+    def test_understanding_stage_is_not_executed(self):
+        question = "名称を変更する方法と、過去の記録への影響を教えてください。"
+        result = self.run_answer(question)
+        self.assertNotIn("質問の理解", result.question_display)
+        self.assertNotIn("答える要求", result.question_display)
+        self.assertIn(question, result.question_display)
 
     def test_definition_targets_are_shown_as_labels_and_do_not_stop_the_answer(self):
         """定義項目は構造化データなので、表示境界でラベルへ変換しないと記録が中断する (#1001)。"""
-        for question, labels in (
+        for question, _labels in (
             ("一覧画面の「区分甲」はどのような意味ですか。", ["区分甲"]),
             ("一覧画面の「区分甲」「区分乙」はそれぞれどのような意味ですか。", ["区分甲", "区分乙"]),
         ):
             with self.subTest(question=question):
                 display = self.run_answer(question).question_display
-                self.assertIn("意味を尋ねている項目: " + " / ".join(labels), display)
+                self.assertNotIn("意味を尋ねている項目:", display)
+                self.assertIn(question, display)
                 self.assertNotIn("request_id", display)
                 # 「質問の理解」で中断せず、外部呼出を伴う後続工程まで進む。
-                self.assert_order(display, "質問の理解", "文書検索")
+                self.assertNotIn("質問の理解", display)
+                self.assertIn("文書検索", display)
 
     def test_keyword_display_includes_later_queries_and_more_than_ten_terms(self):
         info = generation.QuestionTextSearchInfo(
@@ -324,7 +320,7 @@ class AnswerExecutionTests(unittest.TestCase):
     def test_steps_are_recorded_when_external_calls_execute(self):
         def search(*args, **kwargs):
             lines = "\n".join(generation._execution_lines.get())
-            self.assertIn("質問拡張戦略 終了", lines)
+            self.assertIn("質問の言い換え・分解 終了", lines)
             self.assertIn("文書検索 開始", lines)
             self.assertNotIn("文書検索 終了", lines)
             self.assertNotIn("回答文の生成", lines)
@@ -349,7 +345,7 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assert_order(result.question_display, heading("文書検索"), "状態: 中止")
         self.assertIn("検索対象のチャンクがありません。", result.question_display)
         self.assertIn("chunk run がありません", result.answer_text)
-        self.assertNotRegex(result.question_display, heading("質問拡張戦略"))
+        self.assertNotRegex(result.question_display, heading("質問の言い換え・分解"))
         self.assertNotRegex(result.question_display, heading("回答生成フロー"))
         self.search.assert_not_called()
         self.parse.assert_not_called()
@@ -462,7 +458,7 @@ class AnswerExecutionTests(unittest.TestCase):
         self.assertNotRegex(result.question_display, heading("検索の準備確認"))
         self.assert_order(result.question_display, heading("文書検索"), "状態: 中止")
         self.assertIn("not ready", result.answer_text)
-        self.assertNotRegex(result.question_display, heading("質問拡張戦略"))
+        self.assertNotRegex(result.question_display, heading("質問の言い換え・分解"))
         self.parse.assert_not_called()
         self.search.assert_not_called()
 

@@ -461,40 +461,6 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     *_fields("question_cues", _CR, "subquestion_circled_numbers", ingest=False),
     *_fields("question_cues", _NP, "subquestion_number_patterns", ingest=False),
     *_fields("question_cues", _W, "subquestion_reference_followers", ingest=False),
-    # 問い合わせの条件（文書の種類・判断の種類・問い合わせの種別の手がかり）。文書の種類・
-    # 種別の手がかり・条件とファイルの語は、取込で chunk の metadata にも使う
-    # （変えたら分割し直しが要る）。
-    FieldSpec("inquiry_cues", "document_kind_words", FieldKind.WORD_MAP),
-    FieldSpec("inquiry_cues", "file_data_kind", FieldKind.TEXT),
-    *_fields(
-        "inquiry_cues",
-        _W,
-        "operation_trigger_terms",
-        "condition_trigger_terms",
-        "condition_terms",
-        "file_data_terms",
-    ),
-    FieldSpec(
-        "inquiry_cues",
-        "decision_words",
-        FieldKind.ENUM_MAP,
-        choices=("procedure", "necessity", "permission", "reason", "count", "output_impact"),
-        ingest=False,
-    ),
-    *_fields(
-        "inquiry_cues",
-        _W,
-        "visual_terms",
-        "external_context_terms",
-        "screen_suffixes",
-        "screen_name_bracket_chars",
-        "route_arrow_chars",
-        "interrogative_words",
-        "term_joiner_chars",
-        "page_ordinal_suffixes",
-        "column_words",
-        ingest=False,
-    ),
     # 列挙・網羅を求める質問の手がかり（件数・章の範囲・読む範囲。#1503）。
     *_fields(
         "enumeration_cues",
@@ -1070,6 +1036,9 @@ def resolve(base: LanguagePack, *overrides: Mapping[str, Mapping[str, Any]] | No
     unknown: dict[str, str] = {}
     for override in overrides:
         for section, fields in (override or {}).items():
+            # 保存済みの廃止した段階の上書きは読み飛ばす。他の未知項目の検証は維持する。
+            if section == "inquiry_cues":
+                continue
             for key, value in (fields or {}).items():
                 if (section, key) not in _SPECS:
                     unknown[f"{section}.{key}"] = "知らない項目です。"

@@ -348,3 +348,21 @@ class _FakeSudachiTokenizer:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_input_tokenization_failure_records_actual_script_fallback(monkeypatch):
+    import rag_engine.retrieval.text_search_tokenizer as module
+
+    monkeypatch.setattr(module, "_sudachi_available", lambda config: True)
+    monkeypatch.setattr(module, "_sudachi_stopwords", lambda *args: frozenset())
+
+    def fail(*args):
+        raise RuntimeError("synthetic-private-content")
+
+    monkeypatch.setattr(module, "_sudachi_tokens", fail)
+    result = module.tokenize_text_search_query_with_trace("合成の項目 ABC")
+    assert result.tokenizer == module.TEXT_SEARCH_TOKENIZER_SCRIPT_ONLY
+    assert result.fallback_reason == "RuntimeError"
+    assert result.tokens
+    assert result.oracle_text_query
+    assert "synthetic-private-content" not in str(result)

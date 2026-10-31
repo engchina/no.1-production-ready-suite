@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from rag_engine.adapters.oracle.connection import connect_adb_thin, load_adb_settings
 from rag_engine.adapters.oracle.store import _chunks_matching_metadata_filter, _metadata_filter_sql
-from rag_engine.retrieval.inquiry_conditions import InquiryMetadataFilter
+from rag_engine.retrieval.metadata_filters import RetrievalMetadataFilter as InquiryMetadataFilter
 
 
 @unittest.skipUnless(os.environ.get("RAG_TEST_ADB_ENV"), "RAG_TEST_ADB_ENV 未指定: ADB 統合テストは opt-in")

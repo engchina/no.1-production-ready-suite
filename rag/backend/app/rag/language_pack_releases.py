@@ -42,7 +42,6 @@ _STAGE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         ),
         ("EXTRACT", "CHUNK", "INDEX"),
     ),
-    "inquiry_cues": ("CHUNK", "INDEX"),
     "entity_cues": ("INDEX",),
 }
 _STAGE_ORDER = ("PREPROCESS", "EXTRACT", "CHUNK", "INDEX")

@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
 from rag_engine.retrieval.task_contract import task_contract
 from rag_parser_core.language import bind_pack, builtin_pack, current_pack, resolve
 
@@ -147,8 +146,6 @@ def test_scope_isolated_across_concurrent_requests_nested_profiles_and_failures(
         with profile_language_scope(settings) as pack:
             await asyncio.sleep(0)
             assert task_contract("対象 A の理屈を教えてください。")["asks_cause"] is expected
-            parsed = parse_inquiry_conditions("対象 A の理屈を教えてください。")
-            assert parsed.to_payload()["language_pack_hash"] == pack.hash
             assert current_pack().hash == pack.hash
 
     async def run() -> None:

@@ -2717,8 +2717,8 @@ export interface LanguagePackData {
 
 export interface QuestionUnderstandingPreviewData {
   original_text: string;
-  saved: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
-  draft: { inquiry: Record<string, unknown>; task_contract: Record<string, unknown>; hash: string };
+  saved: { task_contract: Record<string, unknown>; hash: string };
+  draft: { task_contract: Record<string, unknown>; hash: string };
 }
 
 export interface LanguagePackPreviewResult {
@@ -2804,6 +2804,10 @@ export interface ChunkingSettingsUpdate {
 
 /** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
+  runtime_rules_confirmation_enabled?: boolean;
+  runtime_rules_answer_enabled?: boolean;
+  runtime_terms_search_enabled?: boolean;
+  runtime_terms_answer_enabled?: boolean;
   answer_audit_mode: "none" | "standard" | "detailed";
   answer_evidence_refinement_mode: "legacy" | "cited_only" | "cited_required";
   query_strategy: QueryStrategyName;

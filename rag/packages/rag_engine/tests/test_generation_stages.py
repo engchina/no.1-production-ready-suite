@@ -50,15 +50,13 @@ def run(question: str, parse: Any) -> grounded.Round:
 
 
 def plan(question: str = QUESTION) -> dict[str, Any]:
-    units = [unit for unit in grounded.task_contract(question)["request_units"] if unit.get("subquestion")]
     return {
         "request_coverage": [
             {
-                "request_id": unit["id"],
-                "evidence_ids": [f"E{index}"],
-                "evidence_scope": [{"evidence_id": f"E{index}", "target": "項目", "relation": "direct"}],
+                "request_id": "Q1",
+                "evidence_ids": ["E1", "E2"],
+                "evidence_scope": [{"evidence_id": eid, "target": "項目", "relation": "direct"} for eid in ("E1", "E2")],
             }
-            for index, unit in enumerate(units, 1)
         ]
     }
 
@@ -93,7 +91,7 @@ def test_subquestions_are_planned_before_generation_with_original_context() -> N
         assert calls[0] is RequestScopePlan
         assert "request_coverage" not in schema.model_json_schema()["properties"]
         assert QUESTION in prompt and all(text in prompt for text in TEXTS)
-        return schema.model_validate(draft([row["request_id"] for row in planned["request_coverage"]]))
+        return schema.model_validate(draft(["Q1", "Q1"]))
 
     result = run(QUESTION, parse)
     assert len(calls) == 2 and result.audit_calls == 0

@@ -617,16 +617,23 @@ export function RunTimelineViewport({ depth, label, children }: { depth: number;
  * 実行中でも回さない実行中の印（`CirclePlay`）で出す。回すのは実行中の末端の段（子を持たない段）だけ。
  * 親子の判定は `level` の値そのもので行う。
  */
-export function runTimelineHasChildren(steps: readonly { level?: number | null }[]): boolean[] {
-  return steps.map(
-    (step, index) => index + 1 < steps.length && stepLevel(steps[index + 1].level ?? undefined) > stepLevel(step.level ?? undefined)
-  );
+export function runTimelineHasChildren(steps: readonly { id?: string; parentId?: string; level?: number | null }[]): boolean[] {
+  const explicitParents = new Set(steps.map(step => step.parentId).filter(Boolean));
+  const visibleIds = new Set(steps.map(step => step.id).filter(Boolean));
+  return steps.map((step, index) => {
+    if (step.id && explicitParents.has(step.id)) return true;
+    const next = steps[index + 1];
+    // 並行した枝の開始順では子が隣に並ばないため、親 ID を優先する。
+    // 親 ID の無い旧記録や、技術の中間行を省いた経路は表示上の深さでも判定する。
+    return Boolean(next && (!next.parentId || !visibleIds.has(next.parentId) || !step.id)
+      && stepLevel(next.level ?? undefined) > stepLevel(step.level ?? undefined));
+  });
 }
 
 /**
  * 今の段（最後に始まった実行中の末端の段。子の段を持たない段）の位置。無ければ -1（#3445）。一覧は開始順に並ぶので、
- * 後ろから探す。チャットの処理の経過（`ChatProgress`）の今の段階と同じ規則で、実行の詳細の一覧が回す段と、概要の
- * 進行表示の文言に使う段はこれ 1 つ（並行して実行中の末端の段がほかにあっても、回すのはこの段だけ）。
+ * 後ろから探す。概要で代表として示す工程名に使う。各行は実際に実行中の末端だけを回し、親子を重ねて回さない。
+ * 並行する別の枝に実行中の末端がある場合は、それぞれの行が回る。
  */
 export function runTimelineCurrentStepIndex(
   steps: readonly { status: string; level?: number | null }[]
@@ -753,13 +760,12 @@ export interface RunTimelineProps {
    */
   showBars?: boolean;
   /**
-   * 今の段（最後に始まった実行中の末端の段。`runTimelineCurrentStepIndex`）を `Spinner` で回すか。既定 true。false は
-   * 回さない実行中の印（`CirclePlay`）で出す。子の段を持つ実行中の段（親の工程）と、今の段より前に始まって並行して
-   * 実行中の末端の段は、この値にかかわらず回さない（動くスピナーは 1 つ。#3436 / #3445）。チャットの処理の経過
-   * （`ChatProgress`）は、今の段階（最後に始まった実行中の末端の段）の行を自分で描き、その行だけを回す。今の段階を包む実行中の
-   * 親の工程は、この一覧の中で開始順の位置に回さずに出す（同じ処理のスピナーは 1 つ。messaging.md §3.7。#2840）。
+   * 実行中の末端を回すか。既定 true。親子の親は静的な印とし、並行する枝だけ複数の末端を回す。
+   * false は一覧を静的な印にする。概要の進行表示は一覧と重ねて回さない。
    */
   spinRunning?: boolean;
+  /** 同じ一覧・階層の中で、実行中の末端の内容だけを描く。 */
+  renderRunningStep?: (step: RunTimelineStep) => ReactNode;
   /** 文字の大きさ。`sm`（既定。全製品の操作画面・履歴で共通）/ `md`（大きな表示）。 */
   size?: "sm" | "md";
   /** 段の所要時間の表記。既定は `formatRunDuration`（「0.4 秒」「1 分 5 秒」）。 */
@@ -792,6 +798,7 @@ export function RunTimeline({
   showSummary = true,
   showBars = true,
   spinRunning = true,
+  renderRunningStep,
   size = "sm",
   formatDuration = formatRunDuration,
   stepTestIdPrefix,
@@ -803,8 +810,8 @@ export function RunTimeline({
   const [exploring, setExploring] = useState(false);
   const labels = resolveRunDetailLabels(labelsInput);
   const bars = runTimelineBars(steps);
-  // 回すのは今の段（最後に始まった実行中の末端の段）1 つだけ（#3445）。
-  const spinIndex = spinRunning ? runTimelineCurrentStepIndex(steps) : -1;
+  // 親を回さず、実行中の各枝の末端だけを回す。
+  const hasChildren = runTimelineHasChildren(steps);
   const idPrefix = useId();
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
@@ -837,6 +844,7 @@ export function RunTimeline({
       <RunTimelineViewport depth={Math.max(0, ...steps.map(step => stepLevel(step.level)))} label={labels.timeline}>
       <ol className={cn("grid min-w-0", size === "sm" ? "gap-1.5" : "gap-1")} aria-label={labels.timeline}>
         {steps.map((step, index) => {
+          if (renderRunningStep && step.status === "running" && !hasChildren[index]) return <li key={step.id} className="min-w-0">{renderRunningStep(step)}</li>;
           const duration = stepDurationMs(step);
           const bar = showBars ? bars[index] : null;
           const content = runStepContent(step.details);
@@ -885,8 +893,8 @@ export function RunTimeline({
                     <RunStepStatusIcon
                       status={step.status}
                       size={RUN_TIMELINE_CHEVRON_SIZE[size]}
-                      // 回すのは今の段だけ。親の工程（#3436）と並行して実行中のほかの段（#3445）は回さない。
-                      spin={index === spinIndex}
+                      // 子の実処理がある親は静的にし、並行する末端だけをそれぞれ回す。
+                      spin={spinRunning && !hasChildren[index]}
                     />
                   </span>
                   {hasDetails ? (
@@ -1159,7 +1167,7 @@ export type RunJobProgressProps = Omit<ProcessingIndicatorProps, "placement" | "
 /**
  * 実行の詳細の概要の進行表示（durable job。`ProcessingIndicator placement="job"`。#3445）。処理の経過を開いて一覧が今の
  * 段を回している間は、回さない実行中の印（`activityIcon="static"`）にし、文言・経過時間・遅延の案内だけを出す（動く
- * スピナーは今の段の 1 つ。閉じている・回す段が無いときは、この表示が回す）。3 製品の実行の詳細の進行表示はこの部品
+ * スピナーは実行中の末端だけ。閉じている・回す段が無いときは、この表示が回す）。3 製品の実行の詳細の進行表示はこの部品
  * を使い、`RunDetailLayout` の中に置く。文言は処理の経過の今の段の名前（`runTimelineCurrentStepIndex`）にし、内部名・
  * 種類のコードを出さない。
  */

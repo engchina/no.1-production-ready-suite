@@ -53,6 +53,9 @@ CLARIFICATION: dict[str, Any] = {
 
 @pytest.fixture
 def fake_oracle(monkeypatch: pytest.MonkeyPatch) -> FakeKnowledgeOracle:
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
     fake = FakeKnowledgeOracle()
     monkeypatch.setattr(knowledge_route, "OracleClient", lambda: fake)
     client.post(
@@ -416,7 +419,11 @@ def test_disabled_rule_stops_generation_and_clarification_without_losing_setting
     from app.config import Settings
 
     monkeypatch.setattr(
-        knowledge_route, "get_settings", lambda: Settings(rag_support_guide_enabled=False)
+        knowledge_route,
+        "get_settings",
+        lambda: Settings(
+            rag_support_guide_enabled=False, rag_runtime_rules_confirmation_enabled=True
+        ),
     )
     created = client.post(
         f"{BASE}/runtime-knowledge/edit",

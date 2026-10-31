@@ -256,8 +256,12 @@ class Settings:
     domain_keywords_override: tuple[str, ...] | None = None
     # 検索の比較実験用。重み付けを切ると全検索文が同じ票、original_query_only は原質問だけで検索する。
     original_query_weighting_enabled: bool = True
+    runtime_rules_confirmation_enabled: bool = False
+    runtime_rules_answer_enabled: bool = False
+    runtime_terms_search_enabled: bool = False
+    runtime_terms_answer_enabled: bool = False
     original_query_only: bool = False
-    profile_channel_enabled: bool = True
+
     workspace_dir: Path | None = None
     prompt_dir: Path | None = None
     faq_path: Path | None = None
@@ -508,8 +512,11 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     cache_dir_raw = env.get("RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR", "").strip()
     settings = Settings(
         original_query_weighting_enabled=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_WEIGHTING", True),
+        runtime_rules_confirmation_enabled=_env_bool(env, "RUNTIME_RULES_CONFIRMATION_ENABLED", False),
+        runtime_rules_answer_enabled=_env_bool(env, "RUNTIME_RULES_ANSWER_ENABLED", False),
+        runtime_terms_search_enabled=_env_bool(env, "RUNTIME_TERMS_SEARCH_ENABLED", False),
+        runtime_terms_answer_enabled=_env_bool(env, "RUNTIME_TERMS_ANSWER_ENABLED", False),
         original_query_only=_env_bool(env, "RETRIEVAL_ORIGINAL_QUERY_ONLY", False),
-        profile_channel_enabled=_env_bool(env, "RETRIEVAL_PROFILE_CHANNEL", True),
         auth_user=env.get("RAG_ENGINE_AUTH_USER", "").strip() or "admin",
         # password は前後の空白も値の一部になり得るため strip しない。
         auth_password=env.get("RAG_ENGINE_AUTH_PASSWORD", ""),
@@ -685,7 +692,7 @@ _PURPOSE_EFFORT_FIELDS = {
     LLM_PURPOSE_AUDIT: "audit_reasoning_effort",
 }
 _PURPOSE_LABELS = {
-    LLM_PURPOSE_STRATEGY: "質問拡張戦略の判定・検索文の生成",
+    LLM_PURPOSE_STRATEGY: "質問の言い換え・分解の判定・検索文の生成",
     LLM_PURPOSE_JUDGE: "根拠の評価",
     LLM_PURPOSE_GENERATION: "回答文の生成",
     LLM_PURPOSE_AUDIT: "回答の監査",

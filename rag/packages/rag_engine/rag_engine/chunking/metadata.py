@@ -31,7 +31,6 @@ from rag_engine.chunking.evidence import (
 from rag_engine.chunking.tables import _table_context
 from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_first_page_context
-from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
 
 
 def _chunk_metadata(
@@ -49,7 +48,6 @@ def _chunk_metadata(
     logical_page_labels: dict[str, int | str] | None = None,
     classification: DocumentClassification | None = None,
     section_path_sources: Sequence[str] = (),
-    compute_retrieval_profile: bool = True,
 ) -> dict[str, Any]:
     """chunk の metadata（schema v4）を組み立てる。
 
@@ -90,19 +88,7 @@ def _chunk_metadata(
     padded_sources = list(section_path_sources) + [SECTION_HEADER_HEADING_SOURCE] * (len(section_path) - len(section_path_sources))
     clean_section_path = [item for item in section_path if item]
     clean_sources = [source for item, source in zip(section_path, padded_sources, strict=False) if item]
-    retrieval_source = retrieval_text or text
-    inquiry_metadata = (
-        build_inquiry_chunk_metadata(
-            text=text,
-            retrieval_text=retrieval_source,
-            source_file_name=source_file_name,
-            source_categories=source_categories,
-            page_start=page_start,
-            page_end=page_end,
-        )
-        if compute_retrieval_profile
-        else {}
-    )
+
     metadata = {
         "schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "active": True,
@@ -125,7 +111,6 @@ def _chunk_metadata(
     optional = {
         "image_evidence": image_evidence,
         "table_context": table_context,
-        "retrieval_profile": inquiry_metadata,
     }
     metadata.update({key: _rounded_coordinates(value) for key, value in optional.items() if value})
     layout = {key: _rounded_coordinates(value) for key, value in layout.items() if value}

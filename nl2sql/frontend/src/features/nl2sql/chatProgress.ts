@@ -76,7 +76,6 @@ const ENGINE_LABELS: Record<Nl2SqlEngine, string> = {
 
 /** 共通の部品の文言のうち、NL2SQL の語にそろえるもの（スキップは SQL 生成の画面と同じ「未実行」）。 */
 export const CHAT_PROGRESS_LABELS: Partial<ChatProgressLabels> = {
-  working: t("chat.progress.working"),
   summary: (count, duration) => t("chat.progress.summary", { count, duration }),
   steps: t("chat.progress.steps"),
   status: {

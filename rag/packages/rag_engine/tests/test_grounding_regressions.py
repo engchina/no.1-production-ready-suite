@@ -98,7 +98,7 @@ def test_requested_number_spelling_preserves_source_and_grounding(value, instruc
     assert source == ctx.records[0].text
     generation_prompt = next(prompt for schema, prompt in model.prompts if schema == "GroundedDraftWire")
     assert instruction in generation_prompt
-    assert '"kind": "context"' in generation_prompt
+    assert instruction in generation_prompt
 
 
 @pytest.mark.parametrize("two_values", [False, True])

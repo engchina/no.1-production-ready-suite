@@ -1069,14 +1069,6 @@ function RunChatTurn({
     () => runProgressSteps(run, progressEvents, progressSteps, toolProgressTable),
     [progressEvents, progressSteps, run]
   );
-  // 承認・回答前の確認の答えを待っている間は、実行中の span が無い。待っていることを今の行の名前で示す（待ちの
-  // 区間は、待ちが終わったときに span として記録する。#3226）。
-  const waitingLabel =
-    run.status === "waiting_approval"
-      ? t("chat.progress.approval.running")
-      : run.status === "waiting_confirmation"
-        ? t("chat.progress.confirmation.running")
-        : undefined;
 
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
@@ -1124,7 +1116,6 @@ function RunChatTurn({
             steps={stepsWithDetails}
             startedAt={run.created_at}
             slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
-            labels={waitingLabel ? { working: waitingLabel } : undefined}
             // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
             partial={progress.partial}
             testId="chat-progress"

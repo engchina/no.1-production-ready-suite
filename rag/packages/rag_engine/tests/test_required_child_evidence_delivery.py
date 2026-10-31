@@ -103,9 +103,7 @@ def capture_generation(
     context: AnswerContext, knowledge: RuntimeKnowledgeContext, images: list[dict[str, Any]], budget: int
 ) -> tuple[str, list[dict[str, Any]]]:
     spans = _grounded_spans(QUESTION, context, images, knowledge, budget=budget)
-    prompt = _grounded_prompt(
-        QUESTION, spans, context, images, None, None, knowledge, None, None, template="{{question}}\n{{answer_context}}"
-    )
+    prompt = _grounded_prompt(QUESTION, spans, context, images, None, None, knowledge, None, template="{{question}}\n{{answer_context}}")
     captured: list[str] = []
 
     def parse(system: str, actual_prompt: str, settings: Any, schema: Any, **kwargs: Any) -> GroundedDraft:
@@ -218,9 +216,7 @@ def test_sdk_sends_required_child_bodies_in_quotable_context(
 
     monkeypatch.setattr(answering, "evidence_spans", observe_selection)
     spans = _grounded_spans(QUESTION, context, images, knowledge, budget=budget, whole_records=whole_path)
-    prompt = _grounded_prompt(
-        QUESTION, spans, context, images, None, None, knowledge, None, None, template="{{question}}\n{{answer_context}}"
-    )
+    prompt = _grounded_prompt(QUESTION, spans, context, images, None, None, knowledge, None, template="{{question}}\n{{answer_context}}")
     sent: list[dict[str, Any]] = []
     schema = generation_draft_wire_model()
     raw = json.dumps(schema.model_validate({"items": [], "summary": "", "confidence": "low"}).model_dump())

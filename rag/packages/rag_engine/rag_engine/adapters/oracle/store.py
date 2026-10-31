@@ -56,17 +56,14 @@ from rag_engine.parsing.decorative_pictures import (
 )
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
 from rag_engine.resources.tracing import observe_call
-from rag_engine.retrieval.inquiry_conditions import (
-    InquiryConditionParse,
-    InquiryMetadataFilter,
-    profile_channel_rankings,
-)
+from rag_engine.retrieval.metadata_filters import RetrievalMetadataFilter
 from rag_engine.retrieval.scope import (
     RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     RETRIEVAL_SCOPE_KNOWLEDGE_BASE,
     AdbSearchReadiness,
     normalize_retrieval_scope,
 )
+from rag_engine.retrieval.search_diagnostics import search_diagnostics
 from rag_engine.retrieval.search_stages import CHUNK_POOL_LOAD_STAGE, TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 from rag_engine.retrieval.text_search_tokenizer import (
     MAX_ORACLE_TEXT_QUERY_CHARS,
@@ -813,7 +810,7 @@ def search_adb_hybrid_chunks(
     preferred_engine_ids: Iterable[str] = (),
     candidate_limit: int = 24,
     query_embedder: QueryEmbeddingFunction = embed_query,
-    inquiry_conditions: InquiryConditionParse | None = None,
+    metadata_filter: RetrievalMetadataFilter | None = None,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
     extra_text_queries: Sequence[str] = (),
@@ -867,13 +864,18 @@ def search_adb_hybrid_chunks(
                     "No ADB embeddings were found for the selected retrieval scope. Run Embedding/ADB save first."
                 )
 
-            # 知識ベースに無い資料名で候補が 0 件になるのを避ける (#1082)。以降は解決済みの filter を使う。
-            metadata_filter = _resolved_metadata_filter(
-                connection,
-                chunk_run_id,
-                inquiry_conditions.metadata_filter if inquiry_conditions else None,
-                retrieval_scope=scope,
-            )
+            if all_chunks is None:
+                with observe_call("stage", CHUNK_POOL_LOAD_STAGE):
+                    all_chunks = _load_chunk_run_chunks(
+                        connection,
+                        chunk_run_id,
+                        preferred_engine_ids,
+                        retrieval_scope=scope,
+                        classification_filter=category_filter,
+                    )
+                if len(_pool_cache) >= 8:
+                    _pool_cache.clear()
+                _pool_cache[pool_key] = (time.monotonic(), all_chunks)
             rankings: list[list[tuple[str, float | None]]] = []
             image_rankings: list[list[tuple[str, float | None]]] = []
             limit = max(1, int(candidate_limit or 1))
@@ -881,7 +883,7 @@ def search_adb_hybrid_chunks(
             # 埋め込み（`gen_ai.embeddings` の span）の後の DB の検索は、それぞれ工程の span にする（処理の経過で、文書の
             # 検索の中の今の作業を末端の段として出す。#3436）。
             query_vectors = _query_vectors(queries, settings, query_embedder)
-            with observe_call("stage", VECTOR_SEARCH_STAGE):
+            with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
                 for query_vector in query_vectors:
                     rankings.append(
                         _vector_search(
@@ -911,6 +913,18 @@ def search_adb_hybrid_chunks(
                                 embedding_modality=EMBEDDING_MODALITY_IMAGE,
                             )
                         )
+                vector_observation.display(
+                    details=_search_ranking_details(
+                        VECTOR_SEARCH_STAGE,
+                        queries,
+                        rankings,
+                        all_chunks,
+                        limit,
+                        scope,
+                        metadata_filter,
+                        category_filter,
+                    )
+                )
             text_rankings: list[list[tuple[str, float | None]]] = []
             text_query_weights: list[float] = []
             seen_text_queries: set[str] = set()
@@ -926,7 +940,9 @@ def search_adb_hybrid_chunks(
             # 質問文の変種の全文検索と、組み立て済みの検索式（extra_text_queries）の全文検索を 1 つの工程にする
             # （融合の順と重みは変えない）。検索するものが無ければ工程を出さない。
             text_variants = text_candidates[: _text_search_query_variant_limit(settings)]
-            with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext():
+            text_inputs: list[str] = []
+            text_expressions: list[str] = []
+            with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext() as text_observation:
                 for query_index, query in text_variants:
                     text_query = oracle_text_query(
                         query,
@@ -936,6 +952,8 @@ def search_adb_hybrid_chunks(
                     if not text_query or text_query in seen_text_queries:
                         continue
                     seen_text_queries.add(text_query)
+                    text_inputs.append(query)
+                    text_expressions.append(text_query)
                     text_query_weights.append(query_weights[query_index])
                     text_rankings.append(
                         _text_search(
@@ -954,6 +972,8 @@ def search_adb_hybrid_chunks(
                     if not text_query or text_query in seen_text_queries:
                         continue
                     seen_text_queries.add(text_query)
+                    text_inputs.append("追加の全文検索式")
+                    text_expressions.append(text_query)
                     text_query_weights.append(derived_weight)
                     text_rankings.append(
                         _text_search(
@@ -968,45 +988,24 @@ def search_adb_hybrid_chunks(
                             classification_filter=category_filter,
                         )
                     )
-            if all_chunks is None:
-                with observe_call("stage", CHUNK_POOL_LOAD_STAGE):
-                    all_chunks = _load_chunk_run_chunks(
-                        connection,
-                        chunk_run_id,
-                        preferred_engine_ids,
-                        retrieval_scope=scope,
-                        classification_filter=category_filter,
+                if text_observation is not None:
+                    text_observation.display(
+                        details=_search_ranking_details(
+                            TEXT_SEARCH_STAGE,
+                            text_inputs,
+                            text_rankings,
+                            all_chunks,
+                            limit,
+                            scope,
+                            metadata_filter,
+                            category_filter,
+                            expressions=text_expressions,
+                        )
                     )
-                if len(_pool_cache) >= 8:
-                    _pool_cache.clear()
-                _pool_cache[pool_key] = (time.monotonic(), all_chunks)
-            profile_source_chunks = _chunks_matching_metadata_filter(
-                all_chunks,
-                metadata_filter,
-                category_filter,
-            )
-            # 比較実験用。質問理解の profile に合う chunk を第4のチャネルとして融合するかどうか。
-            profile_rankings = (
-                profile_channel_rankings(
-                    profile_source_chunks,
-                    inquiry_conditions,
-                    limit=limit,
-                )
-                if getattr(settings, "profile_channel_enabled", True)
-                else []
-            )
-            # 業務語の一致は SQL の除外条件ではなく、融合後の加点にする (#848)。
-            business_rankings = _business_match_ranking(
-                profile_source_chunks,
-                metadata_filter,
-                rankings,
-                text_rankings,
-                limit=limit,
-            )
             scores = _combine_hybrid_scores(
                 rankings,
                 text_rankings,
-                [*profile_rankings, *business_rankings],
+                [],
                 image_vector_rankings=image_rankings,
                 image_vector_weight=_image_embedding_rrf_weight(settings),
                 query_weights=query_weights,
@@ -1070,6 +1069,48 @@ def oracle_text_query(
         config=tokenizer_config,
         max_tokens=MAX_ORACLE_TEXT_TERMS,
         max_chars=MAX_ORACLE_TEXT_QUERY_CHARS,
+    )
+
+
+def _search_ranking_details(
+    stage: str,
+    queries: Sequence[str],
+    rankings: Sequence[Sequence[tuple[str, float | None]]],
+    chunks: Sequence[StoredChunk],
+    limit: int,
+    scope: str,
+    metadata_filter: RetrievalMetadataFilter | None,
+    classification_filter: ClassificationFilter,
+    *,
+    expressions: Sequence[str] = (),
+) -> dict[str, Any]:
+    by_uid = {chunk.chunk_uid: chunk for chunk in chunks}
+    branches = []
+    for index, ranking in enumerate(rankings):
+        results = []
+        for uid, score in ranking:
+            chunk = by_uid.get(uid)
+            results.append(
+                {"id": uid, "score": score, "file": chunk.source_file_name if chunk else None, "page": chunk.page_start if chunk else None}
+            )
+        branches.append(
+            {
+                "query": queries[index],
+                "raw_count": len(ranking),
+                "results": results,
+                "expression": expressions[index] if index < len(expressions) else None,
+            }
+        )
+    return search_diagnostics(
+        stage,
+        branches=branches,
+        limit=limit,
+        scope={
+            "retrieval_scope": scope,
+            "metadata_filter": str(metadata_filter or "なし"),
+            "classification": str(classification_filter.to_metadata()),
+        },
+        metric="COSINE 距離（小さい順）" if stage == VECTOR_SEARCH_STAGE else "Oracle Text SCORE（大きい順）",
     )
 
 
@@ -1907,7 +1948,7 @@ def _vector_search(
     settings: Settings,
     preferred_engine_ids: Iterable[str],
     limit: int,
-    metadata_filter: InquiryMetadataFilter | None = None,
+    metadata_filter: RetrievalMetadataFilter | None = None,
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
@@ -1971,7 +2012,7 @@ def _text_search(
     settings: Settings,
     preferred_engine_ids: Iterable[str],
     limit: int,
-    metadata_filter: InquiryMetadataFilter | None = None,
+    metadata_filter: RetrievalMetadataFilter | None = None,
     *,
     retrieval_scope: str = RETRIEVAL_SCOPE_CURRENT_CHUNK_RUN,
     classification_filter: ClassificationFilter | None = None,
@@ -2430,51 +2471,7 @@ def _business_metadata_values(metadata: dict[str, Any]) -> set[str]:
     return values
 
 
-def _resolved_metadata_filter(
-    connection: Any,
-    chunk_run_id: str,
-    metadata_filter: InquiryMetadataFilter | None,
-    *,
-    retrieval_scope: str,
-) -> InquiryMetadataFilter | None:
-    """検索範囲に一致する文書が無いファイル名条件を落とした filter を返す。
-
-    ファイル名は SQL の WHERE になるため（#601）、質問が挙げた資料が知識ベースに無いと候補が 0 件になり、
-    根拠なしとして拒否される。利用者は自分の手元の資料名を書くことがあり、質問文からの抽出が節をまたいで
-    崩れることもある。どの文書にも一致しない条件は絞り込みの役に立たないので、無条件検索に戻す。
-    ページ番号はファイル名と組でだけ使う条件なので一緒に落とす (#1082)。
-    """
-    terms = _dedupe_filter_terms(metadata_filter.source_file_terms if metadata_filter else ())[:8]
-    if not terms:
-        return metadata_filter
-    scope = normalize_retrieval_scope(retrieval_scope)
-    scope_join_sql, scope_where_sql, binds = _scope_sql("c", scope, chunk_run_id)
-    clauses = []
-    for index, term in enumerate(terms):
-        name = f"resolve_source_file_{index}"
-        clauses.append(f"LOWER(c.source_file_name) LIKE :{name} ESCAPE '\\'")
-        binds[name] = _like_pattern(term)
-    cursor = connection.cursor()
-    try:
-        cursor.execute(
-            f"""
-            SELECT 1 FROM rag_chunks c
-            {scope_join_sql}
-            WHERE c.active = 'Y'
-              {scope_where_sql}
-              AND ({" OR ".join(clauses)})
-              AND ROWNUM = 1
-            """,
-            binds,
-        )
-        if cursor.fetchone():
-            return metadata_filter
-    finally:
-        cursor.close()
-    return replace(metadata_filter, source_file_terms=(), page_numbers=())
-
-
-def _metadata_filter_sql(alias: str, metadata_filter: InquiryMetadataFilter | None) -> tuple[str, dict[str, str]]:
+def _metadata_filter_sql(alias: str, metadata_filter: RetrievalMetadataFilter | None) -> tuple[str, dict[str, str]]:
     """質問が明示した条件（ファイル名・ページ）だけを SQL の WHERE にし、候補数制限より前に適用する。
 
     業務語（`metadata_terms`）は WHERE に入れない。照合先の `retrieval_profile.business_domains / document_kinds` は
@@ -2514,36 +2511,9 @@ def _metadata_filter_sql(alias: str, metadata_filter: InquiryMetadataFilter | No
 BUSINESS_MATCH_CHANNEL = "business_match"
 
 
-def _business_match_ranking(
-    matched_chunks: Sequence[StoredChunk],
-    metadata_filter: InquiryMetadataFilter | None,
-    rankings: Sequence[Sequence[tuple[str, float | None]]],
-    text_rankings: Sequence[Sequence[tuple[str, float | None]]],
-    *,
-    limit: int,
-) -> list[tuple[str, float, list[tuple[str, float | None]]]]:
-    """質問の業務語に一致する候補を、融合に加える 1 channel の順位として返す (#848)。
-
-    一致する chunk（`_chunks_matching_metadata_filter` の結果）のうち vector / 全文検索の候補に入ったものを、
-    各 channel での最良順位の順に並べる。RRF ではこの channel の分だけ加点され、一致しない chunk も候補に残る。
-    業務語が無いか一致が無ければ空。
-    """
-    if metadata_filter is None or not metadata_filter.metadata_terms or not matched_chunks:
-        return []
-    best_rank: dict[str, int] = {}
-    for ranking in (*rankings, *text_rankings):
-        for rank, (chunk_uid, _) in enumerate(ranking, start=1):
-            best_rank[chunk_uid] = min(best_rank.get(chunk_uid, rank), rank)
-    matched = [chunk.chunk_uid for chunk in matched_chunks if chunk.chunk_uid in best_rank]
-    if not matched:
-        return []
-    ordered = sorted(dict.fromkeys(matched), key=lambda uid: (best_rank[uid], uid))[: max(1, int(limit or 1))]
-    return [(BUSINESS_MATCH_CHANNEL, 1.0, [(uid, None) for uid in ordered])]
-
-
 def _chunks_matching_metadata_filter(
     chunks: Sequence[StoredChunk],
-    metadata_filter: InquiryMetadataFilter | None,
+    metadata_filter: RetrievalMetadataFilter | None,
     classification_filter: ClassificationFilter | None = None,
 ) -> list[StoredChunk]:
     current_chunks = [

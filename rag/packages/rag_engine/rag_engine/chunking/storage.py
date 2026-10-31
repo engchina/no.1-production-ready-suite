@@ -36,7 +36,6 @@ from rag_engine.chunking import (
 )
 from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
-from rag_engine.retrieval.inquiry_conditions import INQUIRY_CHUNK_METADATA_SCHEMA_VERSION, inquiry_profile_contract_hash
 
 
 def create_chunk_run(
@@ -387,8 +386,6 @@ def _chunk_contracts() -> dict[str, Any]:
     contracts = {
         "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "search_text_schema_version": SEARCH_TEXT_SCHEMA_VERSION,
-        "inquiry_chunk_metadata_schema_version": INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-        "inquiry_profile_contract_hash": inquiry_profile_contract_hash(),
     }
     contracts["fingerprint"] = hashlib.sha256(
         json.dumps(contracts, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -397,8 +394,19 @@ def _chunk_contracts() -> dict[str, Any]:
 
 
 def _validate_chunk_contracts(value: Any) -> None:
-    """新規 run の契約を厳密に検証し、欠損や旧版を拒否します。"""
-    if value != _chunk_contracts():
+    """現在の契約を検証し、廃止した推定情報だけが余分な旧契約も署名と現行の版を確認して読みます。"""
+    current = _chunk_contracts()
+    if value == current:
+        return
+    retired = {"inquiry_chunk_metadata_schema_version", "inquiry_profile_contract_hash"}
+    if isinstance(value, dict) and set(value) == set(current) | retired:
+        contents = {key: item for key, item in value.items() if key != "fingerprint"}
+        fingerprint = hashlib.sha256(
+            json.dumps(contents, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if value.get("fingerprint") == fingerprint and all(value.get(key) == current[key] for key in current if key != "fingerprint"):
+            return
+    if value != current:
         raise ValueError("対応していない chunk contracts です。再チャンキングしてください。")
 
 

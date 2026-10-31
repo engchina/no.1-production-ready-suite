@@ -7,7 +7,6 @@ from rag_parser_core.language import bind_pack, builtin_pack, resolve
 from rag_engine.chunking.headings import _heading_patterns
 from rag_engine.generation.value_grounding import _date
 from rag_engine.retrieval.enumeration import enumeration_request
-from rag_engine.retrieval.inquiry_conditions import _date_pattern
 
 
 def _custom(**sections):
@@ -49,9 +48,7 @@ class LanguagePackEngineTest(unittest.TestCase):
             self.assertEqual(enumeration_request(question).chapters, (2, 3, 4))
 
     def test_dates_use_era_words_not_single_characters(self):
-        self.assertEqual([m.group(0) for m in _date_pattern().finditer("令和6年4月の申請")], ["令和6年4月"])
         # 以前は元号を字の集合で書いていて、元号の 1 字だけでも日付にしていた。
-        self.assertEqual([m.group(0) for m in _date_pattern().finditer("和6年4月の申請")], [])
         self.assertEqual(_date().sub("", "R6年度の上限は100"), "の上限は100")
         with bind_pack(_custom(numbers={"era_letters": ["K=令和"]})):
             self.assertEqual(_date().sub("", "K6年度の上限は100"), "の上限は100")
@@ -127,7 +124,6 @@ class LanguagePackEngineTest(unittest.TestCase):
     def test_inquiry_enumeration_and_definition_cues_follow_the_pack(self):
         """問い合わせ・列挙・定義の手がかりは言語資源から作る(#2181 段 4)。"""
         from rag_engine.retrieval.definition_evidence import definition_labels
-        from rag_engine.retrieval.inquiry_conditions import parse_inquiry_conditions
 
         self.assertIsNotNone(enumeration_request("該当する条件をすべて挙げてください"))
         self.assertIsNone(enumeration_request("該当する条件を残さず挙げてください"))
@@ -137,12 +133,10 @@ class LanguagePackEngineTest(unittest.TestCase):
             _custom(
                 enumeration_cues={"exhaustive_words": ["残さず"]},
                 definition_cues={"definition_label_brackets": ["〈〉"]},
-                inquiry_cues={"column_words": ["カラム"]},
             )
         ):
             self.assertIsNotNone(enumeration_request("該当する条件を残さず挙げてください"))
             self.assertEqual(definition_labels("〈区分〉の意味は"), ["区分"])
-            self.assertEqual(parse_inquiry_conditions("B カラムの値は").column_terms, ("Bカラム",))
 
     def test_evidence_cues_follow_the_pack(self):
         """根拠の選び方の手がかり（集計値・機能をつなぐ語・機能番号の線）は言語資源から作る(#2181 段 4)。"""

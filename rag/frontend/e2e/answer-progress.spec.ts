@@ -997,15 +997,15 @@ for (const viewport of [
     const progress = page.getByTestId("chat-answer-progress");
     const current = page.getByTestId("chat-answer-progress-current");
     const row = (key: string) => page.getByTestId(`chat-answer-progress-step-${spanStepId(key)}`);
-    const parentsAreStill = async () => {
+    const parentsAreStill = async (running = true) => {
       for (const key of ["answer", "flow", "search"]) {
         await expect(row(key)).toHaveAttribute("data-status", "running");
         await expect(row(key).locator("svg.animate-spin")).toHaveCount(0);
         await expect(row(key).locator("svg.lucide-circle-play")).toHaveCount(1);
       }
       // 動くスピナーは今の行の 1 つだけ。
-      await expect(progress.locator("svg.animate-spin")).toHaveCount(1);
-      await expect(current.locator("svg.animate-spin")).toHaveCount(1);
+      await expect(progress.locator("svg.animate-spin")).toHaveCount(running ? 1 : 0);
+      if (running) await expect(current.locator("svg.animate-spin")).toHaveCount(1);
     };
 
     // 1. 埋め込みが終わり、ベクトル検索が今の段階（検索文から根拠の候補を集めるの子）。
@@ -1016,15 +1016,10 @@ for (const viewport of [
     await progress.scrollIntoViewIfNeeded();
     await page.screenshot({ path: `test-results/answer-progress-nested-leaf-${viewport.name}.png`, fullPage: false });
 
-    // 2. ベクトル検索が終わり、次の子がまだ無い間: 検索文から根拠の候補を集めるは回さず、その 1 段下に「処理を続けています」を回す。
-    await expect(current).toContainText("処理を続けています", { timeout: 6_000 });
-    await expect(current).toHaveAttribute("data-step-id", "");
-    await expect(row("vector")).toHaveAttribute("data-status", "done");
-    await parentsAreStill();
-    // 今の行は親（検索文から根拠の候補を集める）の 1 段下に字下げする。
-    const searchIcon = await row("search").locator("svg.lucide-circle-play").boundingBox();
-    const workingIcon = await current.locator("svg.animate-spin").boundingBox();
-    expect(searchIcon && workingIcon && workingIcon.x > searchIcon.x).toBeTruthy();
+    // 子の間には実在しない処理行を足さない。
+    await expect(row("vector")).toHaveAttribute("data-status", "done", { timeout: 6_000 });
+    await expect(current).toHaveCount(0);
+    await parentsAreStill(false);
     await page.screenshot({ path: `test-results/answer-progress-nested-gap-${viewport.name}.png`, fullPage: false });
 
     // 3. 次の子（全文検索）が始まると、それが今の段階になる。

@@ -39,7 +39,7 @@ def test_final_prompt_keeps_each_complete_path_separate_from_quote(enabled):
     ctx = AnswerContext(records=records, text="\n".join(r.text for r in records))
     spans = _grounded_spans("各項目の説明", ctx, (), None)
     # 最終回答の組立関数を通し、グループ名だけでなく各 Evidence 内を検査する。
-    prompt = _grounded_prompt("各項目の説明", spans, ctx, (), None, None, None, None, None)
+    prompt = _grounded_prompt("各項目の説明", spans, ctx, (), None, None, None, None)
     for record in records:
         path_json = json.dumps(record.metadata["section_path"], ensure_ascii=False)
         assert path_json in prompt

@@ -16,6 +16,21 @@ const steps: RunTimelineStep[] = [
   { id: "tool-a", parentId: "root", level: 1, label: "合成のツール", status: "failed", operationName: "gen_ai.execute_tool", startedAt: "2026-01-01T00:00:01Z", finishedAt: "2026-01-01T00:00:04Z", details: {lines: ["synthetic-error"]} },
 ];
 describe("記録した値だけを使う軌跡", () => {
+  it("直接の親と完全な経路を区別し、旧記録の欠損値を推定しない", () => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    try {
+      const nested: RunTimelineStep[] = [steps[0], {...steps[1], id: "parent", label: "直接の親"},
+        {id: "leaf", parentId: "parent", level: 2, label: "合成の検索", status: "failed"}];
+      act(() => root.render(<TraceExplorer steps={nested} onClose={() => {}} />));
+      const inspector = host.querySelector('[data-trace-inspector]')!;
+      expect(inspector.textContent).toContain("処理内の位置: 直接の親");
+      const fullPath = Array.from(inspector.querySelectorAll("details")).find(item => item.textContent?.includes("完全な処理経路"))!;
+      expect(fullPath.open).toBe(false);
+      expect(fullPath.textContent).toContain("合成の実行");
+      expect(inspector.textContent).not.toContain(" / ");
+      expect(inspector.textContent).not.toContain("Sudachi");
+    } finally { act(() => root.unmount()); host.remove(); }
+  });
   it("並列の時間を足さず、時刻不明を推定しない", () => {
     const timing = traceMeasuredTiming([...steps, {id: "old", label: "旧記録", status: "done", durationMs: 30000}]);
     expect(timing.duration).toBe(10000);

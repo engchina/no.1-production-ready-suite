@@ -7,7 +7,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  AnswerPassageBadges,
   AnswerSections,
   answerPassageCounts,
   answerPassageQuote,
@@ -242,31 +241,6 @@ describe("answerPassageQuote", () => {
   });
 });
 
-describe("AnswerPassageBadges", () => {
-  it("未確認・要注意・矛盾で除外の件数のバッジを出し、0 件は出さない", () => {
-    act(() =>
-      root.render(
-        <AnswerPassageBadges
-          records={{
-            marks: [
-              { text: "a", state: "unverified", reasons: [] },
-              { text: "b", state: "unverified", reasons: [] },
-            ],
-            removed: [{ text: "c", reasons: [] }],
-            warnings: [],
-          }}
-        />
-      )
-    );
-    expect(host.querySelector('[data-testid="answer-passage-badges-unverified"]')?.textContent).toBe("未確認 2 件");
-    expect(host.querySelector('[data-testid="answer-passage-badges-warning"]')).toBeNull();
-    expect(host.querySelector('[data-testid="answer-passage-badges-removed"]')?.textContent).toBe("矛盾で除外 1 件");
-    act(() => root.render(<AnswerPassageBadges records={{ marks: [], removed: [], warnings: [] }} />));
-    expect(host.querySelector('[data-testid="answer-passage-badges"]')).toBeNull();
-  });
-});
-
-
 describe("可視内容のない段落の記録", () => {
   const empty = ["\u200b", "\u200c\u200d\u2060\ufeff", "**\u200b**", "- \u200b", "```\n\u200b\n```", "[\u200b](https://example.invalid)", "---"];
   const valid = ["保存", "0", "-1", "A", "中", "👍", "👩‍💻", "**保存**", "[保存](https://example.invalid)", "A#1", "2*3", "_"];
@@ -284,7 +258,7 @@ describe("可視内容のない段落の記録", () => {
     const records = { marks: empty.map((text) => ({ text, state: "unverified" as const, reasons: [] })), removed: empty.map((text) => ({ text, reasons: [] })), warnings: [] };
     expect(answerPassageCounts(records)).toEqual({ unverified: 0, warning: 0, removed: 0 });
     expect(hasAnswerPassageRecords(records)).toBe(false);
-    act(() => root.render(<><AnswerSections blocks={paragraphs("本文は保存します。")} passages={records} /><AnswerPassageBadges records={records} /></>));
+    act(() => root.render(<><AnswerSections blocks={paragraphs("本文は保存します。")} passages={records} /></>));
     expect(host.textContent).toContain("本文は保存します。");
     expect(host.querySelector('[data-testid="answer-marked-passages"]')).toBeNull();
     expect(host.querySelector('[data-testid="answer-removed-passages"]')).toBeNull();

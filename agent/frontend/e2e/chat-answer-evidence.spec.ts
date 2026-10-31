@@ -429,14 +429,7 @@ for (const viewport of VIEWPORTS) {
     await expect(turn.getByTestId(`chat-answer-${RUN_ID}`).getByTestId("answer-citation-link").first()).toHaveText(
       "根拠：文書 0.pdf p.3"
     );
-    // 「資料との照合」は印の数のバッジ（0 件は出さない）。「一部を確かめられず省略」は出さない。
-    const review = turn.getByTestId(`chat-review-${RUN_ID}`);
-    const badges = review.locator("[data-status-variant]");
-    await expect(badges).toHaveText(["未確認 1 件", "要注意 1 件", "矛盾で除外 1 件"]);
-    await expect(badges.nth(0)).toHaveAttribute("data-status-variant", "warning");
-    await expect(badges.nth(1)).toHaveAttribute("data-status-variant", "neutral");
-    await expect(badges.nth(2)).toHaveAttribute("data-status-variant", "danger");
-    for (const badge of await badges.all()) await expect(badge.locator("svg")).toHaveCount(1);
+    await expect(turn.getByTestId("answer-review-passages")).toHaveCount(0);
     await expect(turn).not.toContainText("省略");
     await expectNoHorizontalOverflow(page);
     await turn.getByTestId("answer-marked-passages").scrollIntoViewIfNeeded();

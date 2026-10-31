@@ -102,6 +102,7 @@ from rag_engine.resources.deadline import (
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import structured_failure_details
+from rag_engine.retrieval.answer_requirements import answer_requirements
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
 from rag_engine.retrieval.definition_evidence import definition_labels, definition_ranges, label_mentioned
@@ -282,7 +283,7 @@ PLANNED_GENERATE_SYSTEM_PROMPT = (
 
 def uses_separate_scope_plan(question: str) -> bool:
     """明示的な小問のある質問では、原文を保持した根拠計画を生成の前に作る。"""
-    return any(unit.get("subquestion") for unit in task_contract(question).get("request_units", ()))
+    return any(unit.get("subquestion") for unit in task_contract(question)["request_units"])
 
 
 def generation_system_prompt(question: str) -> str:
@@ -496,6 +497,7 @@ AUDIT_SYSTEM_PROMPT = (
         "- application_reviews: 各 applicati"
         "on の index、valid、reason。\n"
         "- request_reviews: task_contract.request_units の各 id をそのまま1回ずつ返し、新規・改変・重複した id を作らない。"
+        "原質問のすべての小問・条件・否定・例外を確認する。一部だけの回答は partial とし、要求 ID の数や説明の有無だけで完了としない。"
         "各要求について、items（valid な applicatio"
         "ns を含む）が答えていれば addressed（複数の item "
         "をつないで答えていても addressed）、一部なら partia"
@@ -2726,7 +2728,7 @@ def _claims_about_absent_object(missing: Sequence[str], item: GroundedItem) -> l
 
 def _context_request_ids(question: str) -> set[str]:
     """経緯・背景の要求単位の id。答えたり未回答にしたりしない (#650)。"""
-    return {unit["id"] for unit in task_contract(question)["request_units"] if unit.get("kind") == "context"}
+    return {unit["id"] for unit in answer_requirements(question) if unit.get("kind") == "context"}
 
 
 def _generated_values_absent_from_document_text(question: str, entry: CheckedItem, spans: Sequence[dict]) -> list[str]:
@@ -5211,20 +5213,8 @@ def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
 
 
 def _contract_view(question: str) -> dict:
-    contract = task_contract(question)
-    return {
-        key: contract[key]
-        for key in (
-            "current_request",
-            "request_units",
-            "definition_targets",
-            "requested_granularity",
-            "changed_fields",
-            "explicit_conditions",
-            "hypotheses",
-        )
-        if contract.get(key)
-    }
+    """完全な原質問を渡す。規則の分解結果を要求の正本にしない。"""
+    return {"original_question": question, "current_request": question, "request_units": answer_requirements(question)}
 
 
 @dataclass
@@ -7003,7 +6993,7 @@ def run_round(
         if separate_scope:
             units = _contract_view(question).get("request_units", ())
             known_requests = {unit["id"] for unit in units if unit.get("kind") != "context"}
-            required_requests = {unit["id"] for unit in units if unit.get("subquestion")}
+            required_requests = known_requests
             own_requests = [entry.request_id for entry in scope_plan.request_coverage]
             invalid = (
                 not required_requests.issubset(own_requests)
@@ -7782,7 +7772,7 @@ def run_round(
         dropped,
         audit,
         unused,
-        list(task_contract(question)["request_units"]),
+        list(answer_requirements(question)),
         audit_calls=audit_calls,
         audited_items=len(auditable),
         carried=carried,
@@ -7823,7 +7813,7 @@ def deterministic_audit(question: str, checked: Sequence[CheckedItem]) -> Ground
     partial）、無ければ missing。要求の id の付いていない説明は、どの要求の説明か決められないので全要求の説明とする。
     主張ごとの判定（reviews）は返さない（決定的な検査の印だけ）。
     """
-    return deterministic_request_audit(task_contract(question)["request_units"], checked)
+    return deterministic_request_audit(answer_requirements(question), checked)
 
 
 def deterministic_request_audit(request_units: Sequence[Mapping[str, Any]], checked: Sequence[CheckedItem]) -> GroundedAudit:
@@ -7848,8 +7838,11 @@ def deterministic_request_audit(request_units: Sequence[Mapping[str, Any]], chec
     reviews = []
     for unit in units:
         own = [entry for entry in entries if owns(unit, entry)]
-        status = "addressed" if any(entry.confirmed for entry in own) else "partial" if own else "missing"
-        reviews.append({"request_id": unit["id"], "status": status, "reason": "説明の有無で判定（監査なし）"})
+        # 原質問全体に説明があるだけでは、全ての小問に答えたとは判定できない。
+        confirmed = any(entry.confirmed for entry in own)
+        status = "addressed" if confirmed else "partial" if own else "missing"
+        reason = "説明の有無で判定（監査なし）" if unit.get("kind") != "request" else "説明の有無のみを確認（原質問全体の充足は未検証）"
+        reviews.append({"request_id": unit["id"], "status": status, "reason": reason})
     return GroundedAudit.model_validate(
         {"reviews": [], "request_reviews": reviews, "summary_supported": False, "goal_alignment": "aligned"}
     )
@@ -8371,7 +8364,7 @@ def timed_out_round(question: str, *, reason: str = "時間の上限までに生
         [],
         [],
         None,
-        requests=list(task_contract(question)["request_units"]),
+        requests=list(answer_requirements(question)),
         summary_reason=reason,
     )
 

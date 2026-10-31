@@ -23,8 +23,6 @@ class AnswerDependencies:
     search/check_ready は chunk_run_id・settings・検索条件を keyword で受け取る。
     parse_text/parse_images は既存 schema 型を受け取り、その型の結果を返す。
     rerank は質問・候補・settings と top_n を受け取り RerankTextRank を返す。
-    business_domains は質問文を受け取り、質問が名指しした業務名（文書の大分類の値）を返す。省略時は
-    domain profile の `business_patterns` で推定する。呼び出し元が検索範囲の業務名の一覧を持つときに渡す。
     screen_catalog / screen_chunks は画面目録の連携（#1108）の入力。検索結果が検索範囲の全 chunk を含まない
     呼び出し元が、目録と選んだ画面の chunk を検索範囲から読むときに渡す。省略時は検索結果の chunk から作る。
     screen_catalog は settings を受け取り {文書名: 番号付きの見出し} を返す。screen_chunks は links（選んだ
@@ -36,7 +34,7 @@ class AnswerDependencies:
     章節の chunk（child と親の StoredChunk。child は章節の中の順）を返す。部分取得や失敗は
     `SectionRead(complete=False)` で区別する。省略時は章節で広げない。
     prefetch_search は、質問拡張の LLM と並行に元の質問の検索を先に読む入力（#1499）。query・candidate_limit・
-    inquiry_conditions・settings を keyword で受け取り、続く search が同じ検索文の結果を読めるよう呼び出し元の
+    metadata_filter・settings を keyword で受け取り、続く search が同じ検索文の結果を読めるよう呼び出し元の
     cache に入れる（戻り値は使わない）。結果を変えない（search の結果は並行にしないときと同じ）実装だけを渡す。
     省略時は先に読まない。
     article_catalogs / article_chunks は条の目録から条を選ぶ段（#2254）の入力。章節と chunk の対応を持つ呼び出し元が
@@ -63,7 +61,6 @@ class AnswerDependencies:
     parse_text: Callable[..., Any]
     parse_images: Callable[..., Any]
     rerank: Callable[..., Any]
-    business_domains: Callable[[str], Sequence[str]] | None = None
     screen_catalog: Callable[..., dict[str, list[str]]] | None = None
     screen_chunks: Callable[..., Sequence[Any]] | None = None
     section_outline: Callable[..., Any] | None = None
@@ -109,14 +106,6 @@ def _get() -> AnswerDependencies:
     from rag_engine.composition import oracle_answer_dependencies
 
     return oracle_answer_dependencies()
-
-
-def question_business_domains(question: str) -> list[str] | None:
-    """注入された業務名の照合で、質問が名指しした業務名を返す。注入が無ければ None（profile で推定する）。"""
-    current = _active.get()
-    if current is None or current.business_domains is None:
-        return None
-    return list(current.business_domains(question))
 
 
 def injected_screen_catalog(**kwargs) -> dict[str, list[str]] | None:

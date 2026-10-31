@@ -14,7 +14,7 @@ from typing import Any
 from rag_engine.matching.analysis import normalize_text
 
 from .rule_application import rule_version, select_rule_applications
-from .rule_matching import rank_rules
+from .rule_matching import RuleMatches, rank_rules
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +171,10 @@ class RuntimeKnowledgeContext:
     expanded_question: str
     path: Path
     matched_terms: tuple[RuntimeTerm, ...] = ()
+    rules_confirmation_enabled: bool = False
+    rules_answer_enabled: bool = False
+    terms_search_enabled: bool = False
+    terms_answer_enabled: bool = False
     matched_rules: tuple[RuntimeRule, ...] = ()
     loaded: bool = False
     # 読み込みの失敗の例外の型の名前（#3284）。
@@ -209,6 +213,27 @@ class RuntimeKnowledgeContext:
     guide_condition_notices: tuple[str, ...] = ()
     # 確認の質問で利用者が選んだ条件のうち、検索文に足した語(with_scope)。出どころの表示に使う。
     scope_search_terms: tuple[str, ...] = ()
+
+    @property
+    def retrieval_terms(self) -> tuple[RuntimeTerm, ...]:
+        """検索に明示的に許可された登録用語。"""
+        return self.matched_terms if self.terms_search_enabled else ()
+
+    @property
+    def answer_terms(self) -> tuple[RuntimeTerm, ...]:
+        """回答補助に明示的に許可された登録用語。"""
+        return self.matched_terms if self.terms_answer_enabled else ()
+
+    def with_rule_usage(self, *, confirmation: bool, answer: bool) -> RuntimeKnowledgeContext:
+        """登録ルールの使用を入口の設定に合わせる。呼出元の明示指定は独立する。"""
+        return replace(self, rules_confirmation_enabled=confirmation, rules_answer_enabled=answer)
+
+    def with_term_usage(self, *, search: bool, answer: bool) -> RuntimeKnowledgeContext:
+        """入口の設定を適用する。注入済みの文脈でも暗黙の用語追加を持ち越さない。"""
+        expanded = _expanded_question(self.original_question, self.matched_terms if search else (), self.rules_for_stage("generation"))
+        if self.scope_search_terms:
+            expanded += "\n" + " ".join(self.scope_search_terms)
+        return replace(self, terms_search_enabled=search, terms_answer_enabled=answer, expanded_question=expanded)
 
     def with_scope(self, context: str, search_terms: Sequence[str] = ()) -> RuntimeKnowledgeContext:
         """利用者が選んだ条件を足す。検索に足す語は補助の検索文に加える。"""
@@ -251,7 +276,7 @@ class RuntimeKnowledgeContext:
         実際に語を足したものだけを、足した順に返す。足していなければ空。
         """
         sources = _ordered_unique(
-            source for _, source in _expansion_additions(self.original_question, self.matched_terms, self.rules_for_stage("generation"))
+            source for _, source in _expansion_additions(self.original_question, self.retrieval_terms, self.rules_for_stage("generation"))
         )
         if self.scope_search_terms:
             sources.append(SCOPE_SOURCE_LABEL)
@@ -266,20 +291,22 @@ class RuntimeKnowledgeContext:
 
     def rules_for_stage(self, stage: str) -> tuple[RuntimeRule, ...]:
         """段階ごとの採用結果。古い呼出元が組み立てた文脈では用途だけで区分する。"""
+        enabled = self.rules_confirmation_enabled if stage == "confirmation" else self.rules_answer_enabled
+        allowed = tuple(rule for rule in self.matched_rules if enabled or PINNED_RULE_TAG in rule.tags)
         if not self.rule_applications:
-            return tuple(rule for rule in self.matched_rules if rule.purpose in (stage, "both"))
+            return tuple(rule for rule in allowed if rule.purpose in (stage, "both"))
         accepted = {item["id"] for item in self.rule_applications if item["stage"] == stage and item["accepted"]}
-        return tuple(rule for rule in self.matched_rules if rule.rule_id in accepted)
+        return tuple(rule for rule in allowed if rule.rule_id in accepted)
 
     def prompt_context(self) -> str:
         """LLM prompt に追加する補助 context 文字列を返します。"""
         if not self.has_matches:
             return ""
         generation_rules = [rule for rule in self.rules_for_stage("generation") if rule.content]
-        lines = [] if not (self.matched_terms or generation_rules) else ["[Runtime Glossary / Rules]"]
-        if self.matched_terms:
+        lines = [] if not (self.answer_terms or generation_rules) else ["[Runtime Glossary / Rules]"]
+        if self.answer_terms:
             lines.append("Glossary:")
-            for term in self.matched_terms:
+            for term in self.answer_terms:
                 label = term.term
                 if term.aliases:
                     label += f" (aliases: {', '.join(term.aliases)})"
@@ -320,6 +347,10 @@ class RuntimeKnowledgeContext:
             "query_source": self.query_source,
             "expanded_question": self.expanded_question,
             "matched_terms": [term.to_payload() for term in self.matched_terms],
+            "rules_confirmation_enabled": self.rules_confirmation_enabled,
+            "rules_answer_enabled": self.rules_answer_enabled,
+            "terms_search_enabled": self.terms_search_enabled,
+            "terms_answer_enabled": self.terms_answer_enabled,
             "matched_rules": [rule.to_payload() for rule in self.matched_rules],
             "registered_count": self.registered_count,
             "active_count": self.active_count,
@@ -394,6 +425,11 @@ def build_runtime_knowledge_context(
     output_dir: str | Path,
     configured_path: str | Path | None = None,
     *,
+    rules_confirmation_enabled: bool = False,
+    rules_answer_enabled: bool = False,
+    match_terms: bool = True,
+    terms_search_enabled: bool = False,
+    terms_answer_enabled: bool = False,
     term_limit: int = MAX_MATCHED_TERMS,
     rule_limit: int = MAX_MATCHED_RULES,
 ) -> RuntimeKnowledgeContext:
@@ -406,17 +442,24 @@ def build_runtime_knowledge_context(
             expanded_question=original_question,
             path=knowledge.path,
             loaded=knowledge.loaded,
+            rules_confirmation_enabled=rules_confirmation_enabled,
+            rules_answer_enabled=rules_answer_enabled,
+            terms_search_enabled=terms_search_enabled,
+            terms_answer_enabled=terms_answer_enabled,
             error=knowledge.error,
             failure=knowledge.failure,
         )
 
-    matched_terms = _matched_terms(original_question, knowledge.terms, term_limit)
-    rule_matches = rank_rules(question, knowledge.rules, MAX_RULES, tokens=_tokens)
+    matched_terms = _matched_terms(original_question, knowledge.terms, term_limit) if match_terms else []
+    rule_candidates = tuple(
+        rule for rule in knowledge.rules if rules_confirmation_enabled or rules_answer_enabled or PINNED_RULE_TAG in rule.tags
+    )
+    rule_matches = rank_rules(question, rule_candidates, MAX_RULES, tokens=_tokens) if rule_candidates else RuleMatches((), ())
     applications = select_rule_applications(rule_matches.selected, rule_limit)
     matched_rules = applications.selected
     generation_ids = {item["id"] for item in applications.decisions if item["stage"] == "generation" and item["accepted"]}
     expanded_question = _expanded_question(
-        original_question, matched_terms, [rule for rule in matched_rules if rule.rule_id in generation_ids]
+        original_question, matched_terms if terms_search_enabled else (), [rule for rule in matched_rules if rule.rule_id in generation_ids]
     )
     decisions = []
     for kind, items, selected in (("term", knowledge.terms, matched_terms),):
@@ -457,6 +500,10 @@ def build_runtime_knowledge_context(
         expanded_question=expanded_question,
         path=knowledge.path,
         matched_terms=tuple(matched_terms),
+        rules_confirmation_enabled=rules_confirmation_enabled,
+        rules_answer_enabled=rules_answer_enabled,
+        terms_search_enabled=terms_search_enabled,
+        terms_answer_enabled=terms_answer_enabled,
         matched_rules=tuple(matched_rules),
         loaded=knowledge.loaded,
         registered_term_count=len(knowledge.terms),
@@ -681,12 +728,6 @@ def _expansion_additions(
             source = GUIDE_SOURCE_LABEL if SUPPORT_GUIDE_RULE_TAG in rule.tags else RULES_SOURCE_LABEL
             additions.extend((trigger, source) for trigger in rule.triggers)
             continue
-        # trigger は別名ではない。ある条件の一致だけで他条件や業務IDを検索へ流さない。
-        additions.extend((label, RULES_SOURCE_LABEL) for label in rule.labels() if _matches(question, label))
-        if any(_matches(rule.title, label) for label in rule.labels() if _matches(question, label)) and not re.search(
-            r"[A-Za-z]{2,}[\w-]*\d", rule.title
-        ):
-            additions.append((rule.title, RULES_SOURCE_LABEL))
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     for word, source in additions:

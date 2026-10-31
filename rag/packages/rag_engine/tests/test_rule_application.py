@@ -12,7 +12,9 @@ def rule(identity, content="資料を確認する。", **fields):
 
 def context(tmp_path, *rules, limit=6):
     (tmp_path / "runtime_knowledge.json").write_text(json.dumps({"rules": list(rules)}, ensure_ascii=False))
-    return build_runtime_knowledge_context("設定の手順", tmp_path, rule_limit=limit)
+    return build_runtime_knowledge_context(
+        "設定の手順", tmp_path, rule_limit=limit, rules_confirmation_enabled=True, rules_answer_enabled=True
+    )
 
 
 def generation_ids(ctx):

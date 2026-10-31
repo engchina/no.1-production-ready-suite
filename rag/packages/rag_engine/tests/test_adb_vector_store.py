@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import rag_engine.adapters.oracle.store as adb_vector_store
@@ -37,8 +38,10 @@ from rag_engine.chunking import (
 )
 from rag_engine.config import DEFAULT_TIMEZONE, get_settings
 from rag_engine.knowledge.classification import business_today, classification_filter_from_values
-from rag_engine.retrieval.inquiry_conditions import FILE_DATA_PROFILE, InquiryMetadataFilter, parse_inquiry_conditions
+from rag_engine.retrieval.metadata_filters import RetrievalMetadataFilter as InquiryMetadataFilter
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
+
+FILE_DATA_PROFILE = "auxiliary"
 
 
 class AdbVectorStoreTests(unittest.TestCase):
@@ -142,7 +145,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         @contextmanager
         def observer(operation: str, name: str):
             observed.append(("start", operation, name))
-            yield object()
+            yield SimpleNamespace(display=lambda **kwargs: None)
             observed.append(("end", operation, name))
 
         settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
@@ -171,12 +174,12 @@ class AdbVectorStoreTests(unittest.TestCase):
             self.assertEqual(
                 observed,
                 [
+                    ("start", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
+                    ("end", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
                     ("start", "stage", adb_vector_store.VECTOR_SEARCH_STAGE),
                     ("end", "stage", adb_vector_store.VECTOR_SEARCH_STAGE),
                     ("start", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
                     ("end", "stage", adb_vector_store.TEXT_SEARCH_STAGE),
-                    ("start", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
-                    ("end", "stage", adb_vector_store.CHUNK_POOL_LOAD_STAGE),
                 ],
             )
             self.assertEqual(text.call_count, 2)
@@ -452,7 +455,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             get_settings(),
             embedding_output_dimensions=1536,
         )
-        conditions = parse_inquiry_conditions("販売管理操作説明書.pdf の拠点名を変更する方法を教えてください。")
+        conditions = SimpleNamespace(metadata_filter=InquiryMetadataFilter(source_file_terms=("A.pdf",)))
         connection = _CaptureConnection()
 
         sql, binds = _metadata_filter_sql("c", conditions.metadata_filter)
@@ -534,17 +537,11 @@ class AdbVectorStoreTests(unittest.TestCase):
 
     def test_business_term_match_boosts_ranking_without_excluding_other_chunks(self):
         """業務語に一致する chunk は channel の加点で上位に寄り、一致しない chunk も候補に残る (#848)。"""
-        from rag_engine.retrieval.inquiry_conditions import InquiryConditionParse
 
         settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
         plain = _stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)
         matched = _stored_chunk(
             "uid-2", "chunk-2", page_start=2, chunk_seq=2, metadata={"retrieval_profile": {"business_domains": ["販売管理"]}}
-        )
-        conditions = InquiryConditionParse(
-            original_question="販売管理の伝票登録手順は？",
-            business_domains=("販売管理",),
-            metadata_filter=InquiryMetadataFilter(metadata_terms=("販売管理",)),
         )
         with (
             patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb"),
@@ -560,12 +557,11 @@ class AdbVectorStoreTests(unittest.TestCase):
                 retrieval_queries=["質問"],
                 settings=settings,
                 query_embedder=lambda *_: [0.1] * 1536,
-                inquiry_conditions=conditions,
             )
-        self.assertEqual([c.chunk_id for c in result.child_chunks], ["chunk-2", "chunk-1"])
-        self.assertIn("business_match", result.child_chunks[0].metadata["adb_hybrid"]["channel_ranks"])
+        self.assertEqual([c.chunk_id for c in result.child_chunks], ["chunk-1", "chunk-2"])
+        self.assertNotIn("business_match", result.child_chunks[0].metadata["adb_hybrid"]["channel_ranks"])
         self.assertNotIn("business_match", result.child_chunks[1].metadata["adb_hybrid"]["channel_ranks"])
-        self.assertIs(vector.call_args.args[6], conditions.metadata_filter)  # ファイル名・ページ条件は従来どおり渡す
+        self.assertIsNone(vector.call_args.args[6])  # ファイル名・ページ条件は従来どおり渡す
 
     def test_embedding_hash_uses_actual_input_despite_stale_metadata(self):
         chunk = _chunk_run().chunks[0]
@@ -1968,7 +1964,7 @@ def test_profile_channel_can_be_switched_off_for_ablation():
     from rag_engine.adapters.oracle import store
 
     store._pool_cache.clear()
-    settings = _replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False, profile_channel_enabled=False)
+    settings = _replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
     with (
         patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb-profile"),
         patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=lambda *_: _ConnectionContext(object())),
@@ -1980,12 +1976,11 @@ def test_profile_channel_can_be_switched_off_for_ablation():
             "rag_engine.adapters.oracle.store._load_chunk_run_chunks",
             return_value=[_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)],
         ),
-        patch("rag_engine.adapters.oracle.store.profile_channel_rankings") as profile,
     ):
         result = search_adb_hybrid_chunks(
             chunk_run_id="run-p", retrieval_queries=["質問"], settings=settings, query_embedder=lambda *_: [0.1] * 1536
         )
-    profile.assert_not_called()
+    assert not hasattr(settings, "profile_channel_enabled")
     assert [c.chunk_id for c in result.child_chunks] == ["chunk-1"]
     store._pool_cache.clear()
 

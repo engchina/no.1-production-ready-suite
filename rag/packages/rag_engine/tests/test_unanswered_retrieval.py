@@ -33,7 +33,6 @@ def cover(ctx, config, *, usage=None, unanswered=None, extra=None, question=QUES
         top_k=8,
         neighbor_child_count=0,
         rerank_enabled=False,
-        inquiry_conditions=None,
         retrieval_scope="knowledge_base",
         classification_filter=None,
         runtime_knowledge=None,
@@ -77,7 +76,7 @@ def test_pre_and_post_generation_share_all_limits(monkeypatch):
         usage=usage,
         extra=extra,
         question=two_requests,
-        unanswered=[{"request_id": "Q2", "status": "missing"}],
+        unanswered=[{"request_id": "Q1", "status": "missing", "search_text": "請求書の再発行方法は？"}],
     )
     assert usage.queries == 1
     second, trace = cover(
@@ -86,7 +85,7 @@ def test_pre_and_post_generation_share_all_limits(monkeypatch):
         usage=usage,
         extra=extra,
         question=two_requests,
-        unanswered=[{"request_id": "Q2", "status": "missing"}],
+        unanswered=[{"request_id": "Q1", "status": "missing", "search_text": "請求書の再発行方法は？"}],
     )
     assert trace["re_retrieval"]["skipped"] == "no_budget"
     assert second is first and len(calls) == 1
@@ -138,7 +137,7 @@ def test_generated_gap_can_retrieve_and_regenerate_without_enabling_audit(monkey
         return context(parent("old", OLD_TEXT), parent("new", NEW_TEXT)), {"applied": True}
 
     result, model = _synthesize(monkeypatch, gap(), recover)
-    assert calls == [[{"request_id": "Q1", "status": "missing"}]]
+    assert calls == [[{"request_id": "Q1", "status": "missing", "search_text": "操作の根拠がありません。"}]]
     assert NEW_TEXT in result.response.answer_text
     assert NEW_TEXT in model.prompts[1][1]
     assert len(model.prompts) == 2
@@ -212,7 +211,7 @@ def test_main_answer_flow_wires_recovery_and_respects_disabled_setting(monkeypat
     assert len(calls) == (2 if enabled else 1)
     assert len(model.prompts) == (2 if enabled else 1)
     if enabled:
-        assert calls[1][1] == (QUESTION,)
+        assert calls[1][1] == ("操作の根拠がありません。",)
         trace = result.generation_trace["request_coverage"]["after_generation"][0]
         assert trace["re_retrieval"]["applied"] is True
         assert NEW_TEXT in result.answer
@@ -320,7 +319,8 @@ def test_equal_token_sets_preserve_distinct_original_request_ids(monkeypatch):
     from rag_engine.retrieval.request_coverage import coverage_targets
 
     targets = coverage_targets("設定を作成する方法は？設定を削除する方法は？", lambda text: ["設定"])
-    assert [target.id for target in targets] == ["Q1", "Q2"]
+    assert [target.id for target in targets] == ["Q1"]
+    assert "作成" in targets[0].text and "削除" in targets[0].text
 
 
 @pytest.mark.parametrize("audit_mode", ["none", "standard", "detailed"])

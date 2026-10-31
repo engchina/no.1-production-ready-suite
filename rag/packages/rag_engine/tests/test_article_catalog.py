@@ -510,7 +510,7 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
         )
 
     with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")), bind_trace_observer(observer):
-        found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings)
+        found = answering._original_question_children("書類 表記", ["書類 表記"], dict(options), settings)
     assert [record.chunk_uid for record in found] == ["o1"]
     assert searched_in == [["元の質問の検索"]]
     assert calls[0]["retrieval_queries"] == ["取引先から届いた書類の補正を求めるべきか"]
@@ -518,12 +518,12 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
     assert "extra_text_queries" not in calls[0]
 
     with bind_dependencies(deps(None)):
-        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), settings) == []
     with bind_dependencies(deps("書類 表記")):
-        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), settings) == []
     off = replace(settings, article_catalog_original_question_search=False)
     with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
-        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, off) == []
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), off) == []
     assert len(calls) == 1
 
     def broken(**kwargs):
@@ -531,7 +531,7 @@ def test_original_question_search_runs_once_vector_only_and_only_when_injected(m
 
     monkeypatch.setattr(answering, "search_adb_hybrid_chunks", broken)
     with bind_dependencies(deps("取引先から届いた書類の補正を求めるべきか")):
-        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), None, settings) == []
+        assert answering._original_question_children("書類 表記", ["書類 表記"], dict(options), settings) == []
 
 
 def _select_with(parse, settings, catalogs, terms=(), leads=None, refined=None, reported=None, refine_failed=None, referenced=None):
@@ -661,7 +661,12 @@ def test_catalog_selection_passes_matched_registered_terms(tmp_path):
         seen.append(json.loads(prompt).get("terms"))
         return _articles([2])
 
-    settings = replace(get_settings(environ={}, dotenv_path=None), runtime_knowledge_path=str(knowledge), output_dir=str(tmp_path))
+    settings = replace(
+        get_settings(environ={}, dotenv_path=None),
+        runtime_terms_search_enabled=True,
+        runtime_knowledge_path=str(knowledge),
+        output_dir=str(tmp_path),
+    )
     answering._ARTICLE_SELECTION_CACHE.clear()
 
     selected, failed = _select_with(parse, settings, [CATALOG], terms=answering._catalog_terms("架空の通称の届出は", settings))

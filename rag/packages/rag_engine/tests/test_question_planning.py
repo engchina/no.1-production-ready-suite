@@ -25,7 +25,7 @@ class QuestionPlanningTests(unittest.TestCase):
     def test_plan_keeps_only_what_later_steps_use(self):
         """後続が使うのは質問理解だけ。画像の添付は質問ではなく回答のモデルで決める（#3444）。"""
         plain = plan_question("再発行できない条件を教えてください。")
-        self.assertIsNotNone(plain.inquiry_conditions)
+        self.assertFalse(hasattr(plain, "inquiry_conditions"))
         self.assertEqual(set(plain.to_payload()), {"original_question"})
 
     def test_answer_result_includes_question_plan_in_display_prompt_and_payload(self):
@@ -84,9 +84,9 @@ class QuestionPlanningTests(unittest.TestCase):
         display = result.question_display
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, display)
         # 工程ごとに、目的・結果と、後続を変える場合だけ影響を示す。表示専用だった方針ラベルは出さない。
-        self.assertIn("\n1. 質問の理解\n", display)
-        self.assertIn("目的: 質問の文から、文書名・画面名・エラーコード・日付などの条件を規則で読み取ります（LLM は使いません）", display)
-        self.assertIn("結果: 答える要求は ", display)
+        self.assertNotIn("質問の理解", display)
+        self.assertNotIn("条件を規則で読み取ります", display)
+        self.assertNotIn("答える要求", display)
         self.assertNotIn("質問の目的", display)
         for removed in ("回答方針を決定", "判定方法", "方針の用途", "rule_lookup", " 開始", " 終了"):
             self.assertNotIn(removed, display)

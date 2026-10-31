@@ -3,6 +3,7 @@
 import { FormSkeleton, PageBody, TimedLoadingState } from "@production-ready/ui";
 
 import { ErrorState } from "@/components/StateViews";
+import { AnswerTermSettingsCard } from "@/components/settings/AnswerTermSettingsCard";
 import { useAnswerPrompts } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 
@@ -52,6 +53,8 @@ export function AnswerPromptSettingsClient() {
   }
   return (
     <PageBody wide>
+      <AnswerTermSettingsCard />
+      <AnswerTermSettingsCard field="runtime_rules_answer_enabled" />
       <AnswerPromptStages stages={withGeneration} />
     </PageBody>
   );

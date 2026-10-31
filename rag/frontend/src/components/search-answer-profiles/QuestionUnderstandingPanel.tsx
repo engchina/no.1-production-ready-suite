@@ -84,7 +84,7 @@ function RecognitionResult({ kind, result }: { kind: "saved" | "draft"; result: 
     <div className="min-w-0 space-y-2 p-3">
       <p className="break-all text-xs text-fg-muted">{t("searchAnswerProfiles.questionUnderstanding.version")}: {result.hash}</p>
       <TextareaField id={`question-understanding-${kind}-result`} label={t("searchAnswerProfiles.questionUnderstanding.details")} width="full" rows={8} readOnly
-        value={JSON.stringify({ inquiry: result.inquiry, task_contract: result.task_contract }, null, 2)} />
+        value={JSON.stringify({ task_contract: result.task_contract }, null, 2)} />
     </div>
   </Disclosure>;
 }

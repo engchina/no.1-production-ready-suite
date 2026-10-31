@@ -49,7 +49,7 @@ def proposal(*, omit_methods: bool, unconditional: bool) -> GroundedDraft:
         []
         if omit_methods
         else [
-            GroundedItem(kind="operation", text=text, request_id=f"Q{i}", citations=[GroundedCitation(evidence_id=f"E{i}", lines="1")])
+            GroundedItem(kind="operation", text=text, request_id="Q1", citations=[GroundedCitation(evidence_id=f"E{i}", lines="1")])
             for i, text in enumerate(TEXTS[:2], 1)
         ]
     )
@@ -57,7 +57,7 @@ def proposal(*, omit_methods: bool, unconditional: bool) -> GroundedDraft:
         GroundedItem(
             kind="rule",
             text=UNCONDITIONAL_C if unconditional else CONDITION_C,
-            request_id="Q3",
+            request_id="Q1",
             applies="matched" if unconditional else "conditional",
             condition="" if unconditional else "機能Zを備える対象に限る",
             citations=[GroundedCitation(evidence_id="E3", lines="1")],
@@ -88,11 +88,12 @@ def run(*, omit_methods: bool = False, unconditional: bool = False, unknown_c: b
                 {
                     "request_coverage": [
                         {
-                            "request_id": f"Q{index}",
-                            "evidence_ids": [f"E{index}"],
-                            "evidence_scope": [{"evidence_id": f"E{index}", "target": text, "relation": "direct"}],
+                            "request_id": "Q1",
+                            "evidence_ids": ["E1", "E2", "E3"],
+                            "evidence_scope": [
+                                {"evidence_id": f"E{index}", "target": text, "relation": "direct"} for index, text in enumerate(TEXTS, 1)
+                            ],
                         }
-                        for index, text in enumerate(TEXTS, 1)
                     ]
                 }
             )
@@ -101,23 +102,24 @@ def run(*, omit_methods: bool = False, unconditional: bool = False, unknown_c: b
         assert is_audit_wire(schema)
         inputs = json.loads(prompt)
         audit_inputs.append(inputs)
-        assert schema.expected_request_ids == ("Q1", "Q2", "Q3")
-        requests = []
-        for index, key in enumerate(("a", "b", "c")):
-            missing_method = omit_methods and index < 2
-            row: dict[str, Any] = {
-                "request_id": f"Q{index + 1}",
+        assert schema.expected_request_ids == ("Q1",)
+        requests = [
+            {
+                "request_id": "Q1",
                 "status": "partial",
-                "reason": "現状または適用条件は未確認",
-                "evidence_status": "available" if missing_method else "unknown",
+                "reason": "原質問に残る未確認の条件",
+                "evidence_status": "available" if omit_methods else "unknown",
             }
-            if missing_method:
-                row.update(
-                    missing_content=TEXTS[index],
-                    evidence_ids=[f"stable-{key}"],
-                    evidence_support=[{"evidence_id": f"stable-{key}", "source": f"document_{key}.pdf", "quote": TEXTS[index]}],
-                )
-            requests.append(row)
+        ]
+        if omit_methods:
+            requests[0].update(
+                missing_content=" / ".join(TEXTS[:2]),
+                evidence_ids=["stable-a", "stable-b"],
+                evidence_support=[
+                    {"evidence_id": f"stable-{key}", "source": f"document_{key}.pdf", "quote": text}
+                    for text, key in zip(TEXTS[:2], ("a", "b"), strict=True)
+                ],
+            )
         observations = []
         for i, key in enumerate(("a", "b", "c")):
             indexes = [] if omit_methods and i < 2 else [0 if omit_methods else i]
@@ -133,9 +135,9 @@ def run(*, omit_methods: bool = False, unconditional: bool = False, unknown_c: b
         reviews = [
             {
                 "index": i,
-                "support": ("unknown" if unknown_c else "unsupported") if unconditional and item.request_id == "Q3" else "supported",
-                "applicability": "conditional" if item.request_id == "Q3" else "matched",
-                "condition": "機能Zを備える対象に限る" if item.request_id == "Q3" else "",
+                "support": ("unknown" if unknown_c else "unsupported") if unconditional and item.kind == "rule" else "supported",
+                "applicability": "conditional" if item.kind == "rule" else "matched",
+                "condition": "機能Zを備える対象に限る" if item.kind == "rule" else "",
                 "reason": "合成の局所観察",
             }
             for i, item in enumerate(draft.items)
@@ -190,22 +192,18 @@ def test_unknown_current_values_do_not_discard_supported_general_methods() -> No
     assert not result.unused
     assert inputs[0]["guide_contracts"]
     plan = request_recovery_plan(result.unanswered, (), {"stable-a", "stable-b", "stable-c"})
-    assert len(plan) == 3 and all(row["action"] == "retain" for row in plan)
+    assert len(plan) == 1 and all(row["action"] == "retain" for row in plan)
     assert all(row["evidence_status"] == "unknown" for row in result.unanswered)
 
 
 def test_available_omitted_methods_keep_direct_quotes_as_diagnostics_without_correction() -> None:
     result, _inputs = run(omit_methods=True)
     plan = request_recovery_plan(result.unanswered, (), {"stable-a", "stable-b", "stable-c"})
-    assert [(row["request_id"], row["action"], row["evidence_ids"]) for row in plan] == [
-        ("Q1", "retain", []),
-        ("Q2", "retain", []),
-        ("Q3", "retain", []),
-    ]
+    assert [(row["request_id"], row["action"], row["evidence_ids"]) for row in plan] == [("Q1", "retain", [])]
     raw = result.timing["semantic_audit_observation"]["audit"]["request_reviews"]
-    for row, text, key in zip(raw[:2], TEXTS[:2], ("a", "b"), strict=True):
-        assert row["missing_content"] == text
-        assert row["evidence_support"] == [{"evidence_id": f"stable-{key}", "source": f"document_{key}.pdf", "quote": text}]
+    assert len(raw) == 1
+    assert all(text in raw[0]["missing_content"] for text in TEXTS[:2])
+    assert len(raw[0]["evidence_support"]) == 2
     assert not result.feedback().get("unanswered_requests")
     assert not any(row["action"] == "retrieval" for row in plan)
 

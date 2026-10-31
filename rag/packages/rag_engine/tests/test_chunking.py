@@ -26,10 +26,6 @@ from rag_engine.chunking import (
     load_latest_chunk_run_for_source,
     load_latest_or_source_chunk_run,
 )
-from rag_engine.retrieval.inquiry_conditions import (
-    INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-    inquiry_profile_contract_hash,
-)
 
 
 class ChunkingTests(unittest.TestCase):
@@ -1912,30 +1908,11 @@ class ChunkingTests(unittest.TestCase):
         self.assertTrue(any("保存ボタン" in text for text in texts))
         self.assertTrue(any("以上" in text for text in texts))
 
-    def test_retrieval_profile_is_computed_once_per_chunk(self):
-        # child は検索文確定後の 1 回、親は生成時の 1 回だけ問い合わせ profile を推定する (#867)。
-        from unittest.mock import patch
-
-        from rag_engine.retrieval.inquiry_conditions import build_inquiry_chunk_metadata
-
-        payload = _viewer_payload(
-            [
-                _record(1, 1, "Section-header", "（１）登録"),
-                _record(1, 2, "Text", "①伝票を選びます。②保存ボタンを押します。"),
-                _record(1, 3, "Text", "③確認ボタンを押します。"),
-            ]
-        )
-        # child は builder（検索文確定後）、親は metadata（生成時）が呼ぶ (#891)。
-        with (
-            patch("rag_engine.chunking.builder.build_inquiry_chunk_metadata", wraps=build_inquiry_chunk_metadata) as build_children,
-            patch("rag_engine.chunking.metadata.build_inquiry_chunk_metadata", wraps=build_inquiry_chunk_metadata) as build_parents,
-        ):
-            chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
-        children = [c for c in chunks if c.chunk_level == CHILD_CHUNK_LEVEL]
-        parents = [c for c in chunks if c.chunk_level == PARENT_CHUNK_LEVEL]
-        self.assertEqual(build_children.call_count, len(children))
-        self.assertEqual(build_parents.call_count, len(parents))
-        self.assertTrue(all("retrieval_profile" in c.metadata for c in children))
+    def test_new_chunks_do_not_generate_inquiry_profiles(self):
+        payload = _viewer_payload([_record(1, 1, "Text", "合成の設定方法です。")])
+        chunks = build_small_to_big_chunks(payload, source_run_id="abcdef", selected_engine_ids=["docling"], config=ChunkingConfig())
+        self.assertTrue(chunks)
+        self.assertTrue(all("retrieval_profile" not in c.metadata for c in chunks))
 
     def test_create_chunk_run_writes_json_jsonl_and_latest_pointer(self):
         with TemporaryDirectory() as tmp:
@@ -1967,11 +1944,8 @@ class ChunkingTests(unittest.TestCase):
                 CHUNK_METADATA_SCHEMA_VERSION,
             )
             self.assertEqual(payload["contracts"]["search_text_schema_version"], SEARCH_TEXT_SCHEMA_VERSION)
-            self.assertEqual(
-                payload["contracts"]["inquiry_chunk_metadata_schema_version"],
-                INQUIRY_CHUNK_METADATA_SCHEMA_VERSION,
-            )
-            self.assertEqual(payload["contracts"]["inquiry_profile_contract_hash"], inquiry_profile_contract_hash())
+            self.assertNotIn("inquiry_chunk_metadata_schema_version", payload["contracts"])
+            self.assertNotIn("inquiry_profile_contract_hash", payload["contracts"])
             self.assertRegex(payload["contracts"]["fingerprint"], r"^[0-9a-f]{64}$")
             self.assertEqual(
                 payload["summary"]["retrieval_text_audit"],
@@ -2075,8 +2049,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(child.metadata["layout"]["display_regions"][0]["boxes"][0]["bbox"], [0.0, 40.0, 10.0, 50.0])
         self.assertEqual(child.metadata["document"]["classification"]["large_category"], "")
         self.assertEqual(set(child.metadata["document"]["classification"]), {"large_category", "middle_category", "small_category"})
-        self.assertNotIn("schema_version", child.metadata["retrieval_profile"])
-        self.assertIn("operation_steps", child.metadata["retrieval_profile"]["active_profiles"])
+        self.assertNotIn("retrieval_profile", child.metadata)
         self.assertRegex(child.metadata["content_hash"], r"^[0-9a-f]{64}$")
         self.assertTrue(child.source_record_refs)
         self.assertEqual(child.metadata["schema_version"], 4)
@@ -2093,7 +2066,6 @@ class ChunkingTests(unittest.TestCase):
                 "section_path_sources",
                 "source_categories",
                 "layout",
-                "retrieval_profile",
             },
         )
         self.assertEqual(set(child.metadata["layout"]), {"display_regions", "native_text_ranges"})

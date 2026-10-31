@@ -3566,6 +3566,10 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     env_file = _settings_env_file(monkeypatch, tmp_path)
 
     assert client.get("/api/settings/answering").json()["data"] == {
+        "runtime_rules_confirmation_enabled": False,
+        "runtime_rules_answer_enabled": False,
+        "runtime_terms_search_enabled": False,
+        "runtime_terms_answer_enabled": False,
         "query_strategy": "auto_routing",
         "answer_flow": "crag",
         "answer_audit_mode": "none",
@@ -3910,3 +3914,57 @@ def test_answering_evidence_refinement_changes_runtime_fingerprint() -> None:
         for mode in ("legacy", "cited_only", "cited_required")
     }
     assert len(fingerprints) == 3
+
+
+@pytest.mark.parametrize(
+    "search,answer", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_term_usage_settings_are_independent(
+    monkeypatch: MonkeyPatch, tmp_path: Path, search: bool, answer: bool
+) -> None:
+    """個別 PATCH と再読込で四つの組合せを保持し、独立した質問拡張を変えない。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", False)
+    monkeypatch.setattr(settings, "rag_runtime_terms_answer_enabled", False)
+    monkeypatch.setattr(settings, "rag_query_strategy", "rag_fusion")
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    for key, value in (
+        ("runtime_terms_search_enabled", search),
+        ("runtime_terms_answer_enabled", answer),
+    ):
+        response = client.patch("/api/settings/answering", json={key: value})
+        assert response.status_code == 200
+    data = client.get("/api/settings/answering").json()["data"]
+    reloaded = Settings(_env_file=env_file)
+    for key, value in (
+        ("runtime_terms_search_enabled", search),
+        ("runtime_terms_answer_enabled", answer),
+    ):
+        assert data[key] is value
+        assert getattr(reloaded, "rag_" + key) is value
+    assert data["query_strategy"] == "rag_fusion"
+
+
+@pytest.mark.parametrize(
+    "confirmation,answer", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_rule_usage_settings_are_independent(
+    monkeypatch: MonkeyPatch, tmp_path: Path, confirmation: bool, answer: bool
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_runtime_rules_confirmation_enabled", False)
+    monkeypatch.setattr(settings, "rag_runtime_rules_answer_enabled", False)
+    monkeypatch.setattr(settings, "rag_runtime_terms_search_enabled", True)
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    for key, value in (
+        ("runtime_rules_confirmation_enabled", confirmation),
+        ("runtime_rules_answer_enabled", answer),
+    ):
+        assert client.patch("/api/settings/answering", json={key: value}).status_code == 200
+    data = client.get("/api/settings/answering").json()["data"]
+    reloaded = Settings(_env_file=env_file)
+    assert data["runtime_rules_confirmation_enabled"] is confirmation
+    assert data["runtime_rules_answer_enabled"] is answer
+    assert reloaded.rag_runtime_rules_confirmation_enabled is confirmation
+    assert reloaded.rag_runtime_rules_answer_enabled is answer
+    assert data["runtime_terms_search_enabled"] is True

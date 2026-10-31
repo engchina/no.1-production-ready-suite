@@ -8,13 +8,9 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
 
   複数の検索文は原質問主軸の重み付き RRF で融合し、同じ親の兄弟 chunk と
   親本文(``parent_text``)で親子を復元する。
-  質問の理解(``inquiry_conditions``)が名指しした文書名・ページは検索条件に足し、
-  profile / business_match のチャネルを RRF に加える(#546)。文書の分類は chunk の
-  metadata(``document.classification``)に載せ、業務の候補の絞り込みに使う(#545)。
-  文書の 1 ページ目の本文(chunk set ごとに 1 つ)も ``document.first_page_context`` に載せ、
-  回答の「文書の背景」に使う(#557)。
-  質問が名指しした業務(``business_domains``)は、検索範囲の文書の大分類の語の一覧から
-  照合して rag_engine へ注入する(domain profile の ``business_patterns`` は使わない。#553)。
+  質問の語から検索条件・候補の除外・加点は推定しない。利用者の明示した範囲と認可を保つ。
+  文書の分類は metadata（document.classification）、
+  1 ページ目の本文は document.first_page_context に載せる。
 - 画面目録の連携(``RAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
   ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
   読んで rag_engine へ注入する(検索結果に出なかった画面も候補に加える)。
@@ -137,7 +133,6 @@ from app.rag.span_display import ANSWER_STEP_KIND, answer_step_details, answer_s
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import passage_mark_record, stored_evaluation_input
 from app.rag.support_guide_evidence import guide_evidence_conditions, guide_evidence_plans
-from app.schemas.classification import category_label, normalize_category_value
 from app.schemas.search import (
     MAX_PAGE_RANGES,
     PAGE_RANGES_FILTER_KEY,
@@ -161,7 +156,6 @@ CALLER_QUERY_STRATEGY = "simple_retrieval"
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
 _IO_TIMEOUT_SECONDS = 600.0
 # 質問が挙げた文書名のうち、ナレッジベースにあるか確かめる数の上限(1 語ごとに SQL 1 回)。
-_MAX_QUESTION_FILE_TERMS = 3
 # 質問の業務名として照合する大分類の名前の最短の文字数(1 文字の名前は質問の別の語に偶然含まれる)。
 _MIN_BUSINESS_NAME_CHARS = 2
 # 画面目録の cache((検索条件, 索引の状態) → 目録)。索引の状態は文書の追加・再索引で変わる(#554)。
@@ -462,37 +456,14 @@ class _SearchState:
 
 # 自動で足した検索条件の段(#2401)。外す順(質問から推測した度合いの強い順)に並ぶ。
 RELAX_AUTO_FIELD = "auto_field"
-RELAX_QUESTION_PAGE = "question_page"
-RELAX_QUESTION_FILE = "question_file"
-_QUESTION_PAGE_KEYS = ("page_number_min", "page_number_max")
-# 根拠 0 件の診断に残す検索の記録の上限(CRAG の各回・要求ごとの再検索で増える)。
 _ZERO_EVIDENCE_SEARCH_LOG_LIMIT = 12
 
 
 def _relaxation_steps(
-    base: Mapping[str, str], question: Mapping[str, str], full: Mapping[str, str]
+    base: Mapping[str, str], full: Mapping[str, str]
 ) -> list[tuple[str, dict[str, str]]]:
-    """自動で足した検索条件を外す段を、外す順に返す(#2401)。
-
-    ``base`` は利用者が指定した条件(画面・検索・回答プロファイル)、``question`` は質問が名指しした
-    文書名・ページを足した条件、``full`` はさらに質問から読み取った抽出項目の条件を足した条件。
-    各段の検索条件は、その段までの自動の条件を外したもの。``base`` の条件は外さない。
-    """
-    steps: list[tuple[str, dict[str, str]]] = []
-    if dict(full) != dict(question):
-        steps.append((RELAX_AUTO_FIELD, dict(question)))
-    # 質問が足した条件(``_question_filters`` は利用者が指定した項目には足さない)。
-    added = {key for key, value in question.items() if base.get(key) != value}
-    if pages := added & set(_QUESTION_PAGE_KEYS):
-        steps.append(
-            (
-                RELAX_QUESTION_PAGE,
-                {key: value for key, value in question.items() if key not in pages},
-            )
-        )
-    if "file_name" in added:
-        steps.append((RELAX_QUESTION_FILE, dict(base)))
-    return steps
+    """独立した LLM 項目条件だけを緩和する。明示的な条件は維持する。"""
+    return [(RELAX_AUTO_FIELD, dict(base))] if dict(full) != dict(base) else []
 
 
 def _reference_scope(filters: Mapping[str, str]) -> dict[str, str]:
@@ -648,6 +619,12 @@ def build_engine_settings(
         # 常に「未実行」になる(#275)。
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
+        "RUNTIME_RULES_CONFIRMATION_ENABLED": "1"
+        if settings.rag_runtime_rules_confirmation_enabled
+        else "0",
+        "RUNTIME_RULES_ANSWER_ENABLED": "1" if settings.rag_runtime_rules_answer_enabled else "0",
+        "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",
+        "RUNTIME_TERMS_ANSWER_ENABLED": "1" if settings.rag_runtime_terms_answer_enabled else "0",
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
         "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
         "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),
@@ -1006,7 +983,6 @@ class AnswerEngine:
             logger.warning("answer prompt overrides load failed", exc_info=True)
             state.record_degraded("prompt_overrides", exc)
             overrides = {}
-        business_names = await self._business_names(request, state)
         with tempfile.TemporaryDirectory(prefix="rag-engine-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir
@@ -1032,7 +1008,6 @@ class AnswerEngine:
                 loop,
                 state,
                 overrides,
-                business_names,
                 step_callback,
             )
         outcome = _outcome_from_result(result, state)
@@ -1378,18 +1353,6 @@ class AnswerEngine:
             if child.chunk_uid in state.chunks
         ]
 
-    async def _business_names(self, request: SearchRequest, state: _SearchState) -> list[str]:
-        """検索範囲(``request.filters``)の文書の大分類の語の一覧を、1 回の回答で 1 回読む(#553)。
-
-        読めないときは空(業務の絞り込みをせずに回答を続ける)。
-        """
-        try:
-            return await self._oracle.retrieval_large_categories(dict(request.filters))
-        except Exception as exc:  # noqa: BLE001 - 業務の絞り込みは補助。絞らずに回答を続ける。
-            logger.warning("business names load failed", exc_info=True)
-            state.record_degraded("business_names", exc)
-            return []
-
     def _answer_sync(
         self,
         request: SearchRequest,
@@ -1397,7 +1360,6 @@ class AnswerEngine:
         loop: asyncio.AbstractEventLoop,
         state: _SearchState,
         overrides: Mapping[str, str] | None = None,
-        business_names: Sequence[str] = (),
         step_callback: StepCallback | None = None,
     ) -> Any:
         from rag_engine.adapters.oci import parse_multimodal_response, parse_text_response
@@ -1424,7 +1386,6 @@ class AnswerEngine:
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),
-            business_domains=lambda question: question_business_domains(question, business_names),
             # 画面目録の連携(#554)。rag_engine は設定が有効なときだけ呼ぶ。
             screen_catalog=lambda **kwargs: run_async(lambda: self._screen_catalog(request, state)),
             screen_chunks=lambda *, links, existing, **kwargs: run_async(
@@ -1538,7 +1499,6 @@ class AnswerEngine:
         retrieval_queries: Sequence[str],
         candidate_limit: int = 24,
         vector_only_queries: Sequence[str] = (),
-        inquiry_conditions: Any = None,
         settings: Any = None,
         expand_references: bool = True,
         defer_context: bool = False,
@@ -1555,7 +1515,7 @@ class AnswerEngine:
         queries = [query for query in dict.fromkeys(q.strip() for q in retrieval_queries) if query]
         if not queries:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
-        await self._ensure_search_filters(request, state, inquiry_conditions)
+        await self._ensure_search_filters(request, state)
         assert state.filters is not None
         if page_ranges:
             expand_references = False
@@ -1622,26 +1582,6 @@ class AnswerEngine:
                 }
             )
         await self._load_classifications([state.chunks[chunk_id] for chunk_id in fused], state)
-        if inquiry_conditions is not None:
-            pool = [
-                _stored_child(
-                    state.chunks[chunk_id],
-                    rrf_score=0.0,
-                    classification=state.classifications.get(state.chunks[chunk_id].document_id),
-                )
-                for chunk_id in fused
-            ]
-            channels = _inquiry_channel_rankings(
-                pool,
-                inquiry_conditions,
-                rankings,
-                limit=candidate_limit,
-                profile_enabled=bool(getattr(settings, "profile_channel_enabled", True)),
-            )
-            for channel, channel_weight, ranking in channels:
-                for rank, (chunk_id, _score) in enumerate(ranking, start=1):
-                    fused[chunk_id] = fused.get(chunk_id, 0.0) + channel_weight / (k + rank)
-                    state.retrieval_channels.setdefault(chunk_id, set()).add(channel)
         ordered = sorted(fused, key=lambda chunk_id: -fused[chunk_id])
         unique: list[str] = []
         source_keys: dict[tuple[Any, ...], str] = {}
@@ -2078,9 +2018,7 @@ class AnswerEngine:
                 resolved.setdefault(source_id, original)
         return list(resolved.values())
 
-    async def _ensure_search_filters(
-        self, request: SearchRequest, state: _SearchState, inquiry_conditions: Any
-    ) -> None:
+    async def _ensure_search_filters(self, request: SearchRequest, state: _SearchState) -> None:
         """1 回の回答の検索条件(質問の文書名・ページと自動の条件)を、最初の検索の前に決める。
 
         決めた条件は ``state.filters`` に入れる(先読みと ``_search`` で同じ条件を使う。#1499)。
@@ -2088,11 +2026,11 @@ class AnswerEngine:
         if state.filters is not None:
             return
         base = dict(request.filters)
-        filters = await self._question_filters(dict(base), inquiry_conditions)
+        filters = dict(base)
         state.filters, state.auto_field_conditions = merge_field_conditions(
             filters, self._auto_field_conditions
         )
-        state.relaxations = _relaxation_steps(base, filters, state.filters)
+        state.relaxations = _relaxation_steps(base, state.filters)
 
     def _relax_filters(self, state: _SearchState) -> bool:
         """候補 0 件のとき、自動で足した検索条件の次の段を外す(#2401)。外せなければ False。
@@ -2114,7 +2052,6 @@ class AnswerEngine:
         *,
         query: str,
         candidate_limit: int = 24,
-        inquiry_conditions: Any = None,
         **_: object,
     ) -> None:
         """元の質問の検索を、質問拡張の LLM と並行に先に読む(#1499)。
@@ -2126,7 +2063,7 @@ class AnswerEngine:
         text = query.strip()
         if not text:
             return
-        await self._ensure_search_filters(request, state, inquiry_conditions)
+        await self._ensure_search_filters(request, state)
         assert state.filters is not None
         embeddings = await self._genai.embed([text], input_type="SEARCH_QUERY")
         if not embeddings:
@@ -2756,48 +2693,6 @@ class AnswerEngine:
         order.extend(index for index in range(len(rows)) if index not in order)
         return [rows[index] for index in order]
 
-    async def _question_filters(
-        self, filters: dict[str, str], inquiry_conditions: Any
-    ) -> dict[str, str]:
-        """質問が名指しした文書名・ページを検索条件(``hybrid_search`` の filters)へ足す(#546)。
-
-        - 画面で文書(``file_name`` / ``document_id``)を指定したときは、そちらを優先して足さない。
-          ページも同じく、画面で指定したときは足さない。
-        - ナレッジベースに無い文書名は足さない(0 件にしない。rag_poc の
-          ``_resolved_metadata_filter``)。
-          ページは文書名と組でだけ使う条件なので、文書名を足さないときは一緒に外す。
-        - filters の ``file_name`` は 1 語なので、質問が複数の文書名を挙げたときは、
-          最初に見つかったものを使う。
-        """
-        metadata_filter = getattr(inquiry_conditions, "metadata_filter", None)
-        terms = [
-            term.strip()
-            for term in getattr(metadata_filter, "source_file_terms", ())
-            if isinstance(term, str) and term.strip()
-        ]
-        # 確認で章節の範囲(page_ranges)を選んだときも、そちらを優先して足さない(#717)。
-        if not terms or any(
-            filters.get(key, "").strip() for key in ("file_name", "document_id", "page_ranges")
-        ):
-            return filters
-        for term in terms[:_MAX_QUESTION_FILE_TERMS]:
-            candidate = {**filters, "file_name": term}
-            if await self._oracle.has_retrieval_chunks(candidate):
-                break
-        else:
-            return filters
-        pages = [
-            page
-            for page in getattr(metadata_filter, "page_numbers", ())
-            if isinstance(page, int) and page > 0
-        ]
-        if pages and not any(
-            filters.get(key, "").strip() for key in ("page_number_min", "page_number_max")
-        ):
-            candidate["page_number_min"] = str(min(pages))
-            candidate["page_number_max"] = str(max(pages))
-        return candidate
-
     async def _screen_catalog(
         self, request: SearchRequest, state: _SearchState
     ) -> dict[str, list[str]]:
@@ -3357,30 +3252,6 @@ async def _call[R](factory: Callable[[], Awaitable[R]]) -> R:
     return await factory()
 
 
-def question_business_domains(question: str, large_categories: Sequence[str]) -> list[str]:
-    """質問が名指しした大分類を、検索範囲の大分類の語の一覧(保存どおりの値)から返す(#553)。
-
-    - 比べるときは #547 の正規化(NFKC・空白・``category_label`` で番号の接頭辞を外す)と
-      大文字・小文字の違いを無視する。返す値は保存どおり(rag_engine の ``_same_business_records`` は
-      候補の大分類と番号の接頭辞を外して完全一致で比べる)。
-    - 長い名前から照合し、照合した箇所は短い名前の照合に使わない
-      (「業務A」の中の「業務」を拾わない)。
-    - 名指しが無ければ空(絞り込まない)。
-    """
-    text = (normalize_category_value(question) or "").casefold()
-    values_by_label: dict[str, list[str]] = {}
-    for value in large_categories:
-        label = category_label(value).casefold()
-        if len(label) >= _MIN_BUSINESS_NAME_CHARS:
-            values_by_label.setdefault(label, []).append(value)
-    matched: list[str] = []
-    for label in sorted(values_by_label, key=lambda item: (-len(item), item)):
-        if label in text:
-            text = text.replace(label, "\0")
-            matched.extend(values_by_label[label])
-    return list(dict.fromkeys(matched))
-
-
 def _json_list(value: object) -> list[Any]:
     if isinstance(value, str) and value.strip():
         try:
@@ -3614,46 +3485,6 @@ def _diverse_candidates(
             taken[document] = taken.get(document, 0) + 1
             extra.append(chunk_id)
     return extra
-
-
-def _inquiry_channel_rankings(
-    pool: Sequence[Any],
-    inquiry_conditions: Any,
-    rankings: Sequence[Sequence[str]],
-    *,
-    limit: int,
-    profile_enabled: bool,
-) -> list[tuple[str, float, Sequence[tuple[str, float | None]]]]:
-    """質問の理解に合う候補を、RRF に足すチャネル(profile / business_match)の順位で返す(#546)。
-
-    rag_poc の検索(``adapters/oracle/store.py``)と同じ rag_engine の関数で計算する。
-    対象は今回の検索で
-    見つかった候補だけで、ナレッジベースの全 chunk は読まない。文書名・ページは検索条件
-    (``_question_filters``)で適用済みか、ナレッジベースに無いため外したので、ここでは使わない。
-    """
-    from rag_engine.adapters.oracle.store import (
-        _business_match_ranking,
-        _chunks_matching_metadata_filter,
-    )
-    from rag_engine.retrieval.inquiry_conditions import profile_channel_rankings
-
-    metadata_filter = getattr(inquiry_conditions, "metadata_filter", None)
-    if metadata_filter is not None:
-        metadata_filter = replace(metadata_filter, source_file_terms=(), page_numbers=())
-    matched = _chunks_matching_metadata_filter(pool, metadata_filter)
-    channels: list[tuple[str, float, Sequence[tuple[str, float | None]]]] = []
-    if profile_enabled:
-        channels.extend(profile_channel_rankings(matched, inquiry_conditions, limit=limit))
-    channels.extend(
-        _business_match_ranking(
-            matched,
-            metadata_filter,
-            [[(chunk_id, None) for chunk_id in ranking] for ranking in rankings],
-            [],
-            limit=limit,
-        )
-    )
-    return channels
 
 
 def _first_page_context(chunk: RetrievedChunk, state: _SearchState) -> Mapping[str, object] | None:

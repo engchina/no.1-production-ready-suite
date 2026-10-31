@@ -33,7 +33,14 @@ def test_pinned_rule_is_always_matched_first_and_adds_its_triggers() -> None:
     with TemporaryDirectory() as work:
         output_dir = Path(work)
         (output_dir / RUNTIME_KNOWLEDGE_FILE_NAME).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        context = build_runtime_knowledge_context("取消したい", output_dir)
+        context = build_runtime_knowledge_context(
+            "取消したい",
+            output_dir,
+            rules_confirmation_enabled=True,
+            rules_answer_enabled=True,
+            terms_search_enabled=True,
+            terms_answer_enabled=True,
+        )
     assert [rule.rule_id for rule in context.matched_rules] == ["guide-g1", "r1"]
     assert "権限タブ" in context.expanded_question
     # pinned の題名は質問に無いので検索文に足さない（手がかりだけ）。
@@ -66,7 +73,14 @@ def test_support_guide_rule_is_not_cut_at_the_user_rule_limit() -> None:
     with TemporaryDirectory() as work:
         output_dir = Path(work)
         (output_dir / RUNTIME_KNOWLEDGE_FILE_NAME).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        context = build_runtime_knowledge_context("合成の質問", output_dir)
+        context = build_runtime_knowledge_context(
+            "合成の質問",
+            output_dir,
+            rules_confirmation_enabled=True,
+            rules_answer_enabled=True,
+            terms_search_enabled=True,
+            terms_answer_enabled=True,
+        )
     rules = {rule.rule_id: rule for rule in context.matched_rules}
     # 改行は空白に畳み、NFKC で正規化する（他のルールと同じ）。文は落とさない。
     assert rules["guide-g1"].content == unicodedata.normalize("NFKC", " ".join([*lines, last]))

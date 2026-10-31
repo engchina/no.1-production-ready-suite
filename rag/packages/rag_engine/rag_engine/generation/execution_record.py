@@ -103,6 +103,11 @@ class _ExecutionStep:
         for value in values[1:]:
             self._keep(value)
 
+    def skip(self, reason: str) -> None:
+        """実行しなかった工程を、完了と区別して記録する。"""
+        self.status = "skipped"
+        self.result(reason)
+
     def impact(self, text: str) -> None:
         """この結果が後続の処理をどう変えるか。変えない場合は書かない。"""
         if not text:
@@ -289,7 +294,7 @@ def _execution_step(name: str, purpose: str = ""):
         # 終わった工程の詳細・LLM の回数・結果の説明を、終わったときの通知で渡す（回答の完了を待たない。#2373）。
         _notify_step(
             name,
-            "error" if failed else "success",
+            "error" if failed else "skipped" if step.status == "skipped" else "success",
             elapsed,
             {"details": step.structured_details(), "llm_calls": llm_calls, **sends, "status": step.status or "complete"},
         )
@@ -303,6 +308,8 @@ def _execution_step(name: str, purpose: str = ""):
                 **sends,
                 **_step_metrics_delta(metrics_before),
             }
+            if step.hidden and not step.status:
+                steps[index]["hidden"] = True
             # LLM の token の数（入力・出力・推論）と呼び出しの秒の和。遅い工程の理由を確かめる（#1516）。
             if usage:
                 steps[index]["llm_usage"] = usage
@@ -404,6 +411,34 @@ def _format_execution_boundaries(execution_lines: Sequence[str]) -> list[str]:
     return rendered
 
 
+def _structured_execution_lines(steps: Sequence[Mapping[str, Any]]) -> list[str]:
+    """並行の終了順から親子を推定せず、記録した階層を文章へ写す。"""
+    lines: list[str] = []
+    stack: list[Mapping[str, Any]] = []
+
+    def finish() -> None:
+        step = stack.pop()
+        state = str(step.get("status", "complete"))
+        suffix = "" if state == "complete" else f"（{state}）"
+        lines.append(f"{step['name']} 終了{suffix} @{float(step.get('elapsed_seconds', 0)):.1f}s/{int(step.get('llm_calls', 0))}")
+
+    for step in steps:
+        if step.get("hidden"):
+            continue
+        depth = int(step.get("depth", 0))
+        while len(stack) > depth:
+            finish()
+        lines.append(f"{step['name']} 開始")
+        details = step.get("details") or {}
+        for detail_field in details.get("fields", ()):
+            lines.append(f"  {detail_field['label']}: {detail_field['value']}")
+        lines.extend(f"  {line}" for line in details.get("lines", ()))
+        stack.append(step)
+    while stack:
+        finish()
+    return lines
+
+
 def _record_answer_execution(function):
     """結果に実行順の記録を付け、例外でも記録を保持して呼び出し元へ伝える。"""
 
@@ -417,11 +452,15 @@ def _record_answer_execution(function):
         usage_token = _llm_usage.set(LlmUsage())
         try:
             result = function(question, *args, **kwargs)
-            return replace(result, question_display=format_question_display(result.original_question, lines), execution_steps=tuple(steps))
+            return replace(
+                result,
+                question_display=format_question_display(result.original_question, _structured_execution_lines(steps)),
+                execution_steps=tuple(steps),
+            )
         except Exception as exc:
             if not lines:
                 raise
-            display = format_question_display(extract_original_question(question), lines)
+            display = format_question_display(extract_original_question(question), _structured_execution_lines(steps) if steps else lines)
             error = AnswerExecutionError(str(exc), display)
             error.execution_steps = tuple(steps)
             raise error from exc

@@ -98,6 +98,10 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 
 
 const ANSWERING_SETTINGS = {
+  runtime_terms_search_enabled: false,
+  runtime_terms_answer_enabled: false,
+  runtime_rules_confirmation_enabled: false,
+  runtime_rules_answer_enabled: false,
   query_strategy: "auto_routing",
   answer_flow: "standard_rag",
   answer_audit_mode: "none",
@@ -159,10 +163,10 @@ for (const viewport of [
       // 画面の文言に移植元の呼び名（DocRAG）を出さない（#593）。
       const card = page.getByTestId("answering-settings-card");
       await expect(card).not.toContainText("DocRAG");
-      await expect(card.getByRole("switch")).toHaveCount(7);
+      await expect(card.getByRole("switch")).toHaveCount(8);
       expect(await card.getByRole("switch").evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))))
-        .toEqual(["質問から項目の条件を読み取る", "実体・別名による検索拡張", "文書構造による検索拡張", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
-      const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
+        .toEqual(["用語・同義語による検索文の追加", "質問から項目の条件を読み取る", "実体・別名による検索拡張", "文書構造による検索拡張", "画面目録で操作画面を探す", "Rerank で検索候補を並べ替える", "章節で広げる根拠", "根拠の無い要求を探し直す"]);
+      const strategy = page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true });
       await expect(strategy).toContainText("自動ルーティング");
       // 回答の生成方式の既定は標準 RAG。先頭に「（既定）」付きで並べ、CRAG は任意で AI の呼び出しが増えると説明する（#3509）。
       const answerFlow = page.getByRole("combobox", { name: "回答の生成方式", exact: true });
@@ -220,6 +224,7 @@ for (const viewport of [
       expect(saved).toEqual([
         {
           query_strategy: "rag_fusion",
+          runtime_terms_search_enabled: false,
           answer_flow: "crag",
           answer_audit_mode: "detailed",
           answer_evidence_refinement_mode: "legacy",
@@ -357,7 +362,7 @@ test("回答の検索と生成の保存に失敗しても入力を残して操�
 
   await page.goto("/settings/retrieval");
   const actions = page.getByRole("group", { name: "回答の検索と生成の設定の操作" });
-  const strategy = page.getByRole("combobox", { name: "質問の拡張", exact: true });
+  const strategy = page.getByRole("combobox", { name: "質問の言い換え・分解", exact: true });
   await strategy.click();
   await page.getByRole("option", { name: /RAG フュージョン/ }).click();
   await actions.getByRole("button", { name: "回答の設定を保存" }).click();
@@ -540,3 +545,57 @@ test("生成後の根拠選別を独立して保存・破棄し再読込でき�
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("evidence-refinement-settings.png") });
 });
+
+
+for (const width of [1280, 375]) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`登録知識の全体スイッチは独立して保存できる (${width}px, ${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript((state) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })), { theme, sidebarCollapsed: width === 375 });
+      await mockRetrievalCards(page);
+      const saved: Record<string, unknown>[] = [];
+      await mockAnsweringSettings(page, saved);
+      await page.goto("/settings/retrieval");
+      const search = page.getByRole("switch", { name: "用語・同義語による検索文の追加", exact: true });
+      const confirm = page.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true });
+      await expect(search).not.toBeChecked();
+      await expect(confirm).not.toBeChecked();
+      const area = page.getByRole("region", { name: "検索文の作成" });
+      await expect(area.getByRole("combobox", { name: "質問の言い換え・分解", exact: true })).toContainText("自動");
+      await expect(search).toHaveAccessibleDescription(/原質問.*生成した検索文には.*行いません/);
+      await search.click();
+      await page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+      await expect(search).toBeChecked();
+      expect(saved.at(-1)).toMatchObject({ runtime_terms_search_enabled: true, query_strategy: "auto_routing" });
+      expect(saved.at(-1)).not.toHaveProperty("runtime_terms_answer_enabled");
+      const confirmCard = page.getByTestId("runtime_rules_confirmation_enabled");
+      await confirm.click();
+      await confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true }).click();
+      await expect(confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).toBeDisabled();
+      expect(saved.at(-1)).toEqual({ runtime_rules_confirmation_enabled: true });
+      await area.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`search-expressions-${width}-${theme}.png`) });
+      await expectNoPageOverflow(page);
+      await page.goto("/settings/prompts");
+      for (const [testId, label, field] of [
+        ["answer-term-settings-card", "回答生成での用語・同義語の使用", "runtime_terms_answer_enabled"],
+        ["runtime_rules_answer_enabled", "回答生成での登録ルールの使用", "runtime_rules_answer_enabled"],
+      ]) {
+        const card = page.getByTestId(testId);
+        const toggle = card.getByRole("switch", { name: label, exact: true });
+        await expect(toggle).not.toBeChecked();
+        await toggle.click();
+        const save = card.getByRole("button", { name: field === "runtime_terms_answer_enabled" ? "用語・同義語の使用を保存" : "登録ルールの回答設定を保存", exact: true });
+        await save.click();
+        await expect(save).toBeDisabled();
+        expect(saved.at(-1)).toEqual({ [field]: true });
+      }
+      await page.getByTestId("answer-term-settings-card").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`answer-knowledge-${width}-${theme}.png`) });
+      await expectNoPageOverflow(page);
+      await page.goto("/settings/retrieval");
+      await expect(search).toBeChecked();
+      await expect(confirm).toBeChecked();
+    });
+  }
+}

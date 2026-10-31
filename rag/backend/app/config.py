@@ -1333,6 +1333,19 @@ class Settings(
         le=SEARCH_TOP_K_MAX,
         description="検索・チャット・MCP で top_k を省略したときの基準件数。",
     )
+    rag_runtime_rules_confirmation_enabled: bool = Field(
+        default=False, description="登録ルールによる確認の使用。必要な確認・安全・権限とは独立。"
+    )
+    rag_runtime_rules_answer_enabled: bool = Field(
+        default=False, description="回答生成での登録ルールの使用。独立した回答処理とは別。"
+    )
+    rag_runtime_terms_search_enabled: bool = Field(
+        default=False, description="登録した用語・同義語による検索文の追加。全体設定だけで決める。"
+    )
+    rag_runtime_terms_answer_enabled: bool = Field(
+        default=False,
+        description="登録した用語・同義語と説明を回答生成の補助情報に使用する。全体設定だけで決める。",
+    )
     rag_query_strategy: QueryStrategy = Field(
         default="simple_retrieval",
         description="質問の拡張(query rewriting / expa"

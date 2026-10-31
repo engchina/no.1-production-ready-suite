@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.rag import rule_selection
 from app.rag.rule_selection import apply_rule_selection_scope, recognize_rule_selections
 from app.rag.search_answer_profile_knowledge import (
@@ -15,6 +15,12 @@ from app.rag.search_answer_profile_knowledge import (
 )
 from app.schemas.search import SearchRequest
 from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
+
+
+@pytest.fixture(autouse=True)
+def enable_registered_confirmations(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
+
 
 PAYLOAD: dict[str, Any] = {
     "rules": [
@@ -99,7 +105,9 @@ async def test_positive_paraphrase_recognized_once_and_applied_to_same_request(
             )
 
     monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
-    answers = await recognize_rule_selections(PAYLOAD, text, Settings())
+    answers = await recognize_rule_selections(
+        PAYLOAD, text, Settings(rag_runtime_rules_confirmation_enabled=True)
+    )
     assert len(calls) == 1 and calls[0]["conditions"][0]["multiple"] is False
     assert suggest_clarification(PAYLOAD, text, answers=answers) is None
     applied = apply_rule_selection_scope(SearchRequest(query=text), PAYLOAD, answers)
@@ -113,7 +121,12 @@ async def test_positive_paraphrase_recognized_once_and_applied_to_same_request(
     )
     assert "対象はモードA" in applied._rule_selection_scope["context"]
     assert "_rule_selection_scope" not in applied.model_dump()
-    assert await recognize_rule_selections(PAYLOAD, text, Settings(), answers=answers) == answers
+    assert (
+        await recognize_rule_selections(
+            PAYLOAD, text, Settings(rag_runtime_rules_confirmation_enabled=True), answers=answers
+        )
+        == answers
+    )
     assert len(calls) == 1
 
 
@@ -148,7 +161,11 @@ async def test_unknown_or_unproven_values_keep_confirmation(
             )
 
     monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
-    answers = await recognize_rule_selections(PAYLOAD, "モードAではない。設定は未定", Settings())
+    answers = await recognize_rule_selections(
+        PAYLOAD,
+        "モードAではない。設定は未定",
+        Settings(rag_runtime_rules_confirmation_enabled=True),
+    )
     assert not answers
     assert suggest_clarification(PAYLOAD, "設定", answers=answers) is not None
 
@@ -179,7 +196,9 @@ async def test_batch_limit_and_failure_do_not_guess(monkeypatch: pytest.MonkeyPa
             raise TimeoutError()
 
     monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
-    assert not await recognize_rule_selections(payload, "設定", Settings())
+    assert not await recognize_rule_selections(
+        payload, "設定", Settings(rag_runtime_rules_confirmation_enabled=True)
+    )
     assert len(calls) == 1
     assert len(calls[0]["conditions"]) == rule_selection.MAX_RULE_SELECTIONS
 
@@ -189,7 +208,9 @@ async def test_no_matching_conditions_does_not_call_model(monkeypatch: pytest.Mo
         raise AssertionError("モデルを呼ばない")
 
     monkeypatch.setattr(rule_selection, "condition_client", unavailable)
-    assert not await recognize_rule_selections(PAYLOAD, "無関係", Settings())
+    assert not await recognize_rule_selections(
+        PAYLOAD, "無関係", Settings(rag_runtime_rules_confirmation_enabled=True)
+    )
 
 
 async def test_scope_uses_current_section_pages_and_never_widens_explicit_filter() -> None:
@@ -254,7 +275,7 @@ async def test_shared_resolution_reuses_recognition_and_deducts_elapsed_once(
     request = SearchRequest(query="設定はモードBです", search_answer_profile_id="bv-1")
     effective, settings, *_ = await route._resolve_query_context(
         request,
-        Settings(rag_answer_timeout_seconds=30),
+        Settings(rag_answer_timeout_seconds=30, rag_runtime_rules_confirmation_enabled=True),
         interactive=True,
     )
     assert settings.rag_answer_timeout_seconds == 26
@@ -295,7 +316,9 @@ async def test_explicit_multiple_choices_respect_condition_cardinality(
             )
 
     monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
-    answers = await recognize_rule_selections(payload, source, Settings())
+    answers = await recognize_rule_selections(
+        payload, source, Settings(rag_runtime_rules_confirmation_enabled=True)
+    )
     assert bool(answers) is expected
 
 
@@ -311,7 +334,9 @@ async def test_single_complete_label_does_not_call_semantic_model(
         raise AssertionError("完全な選択は追加の意味認識を要しない")
 
     monkeypatch.setattr(rule_selection, "condition_client", unavailable)
-    result = await recognize_rule_selections(payload, "モードA", Settings())
+    result = await recognize_rule_selections(
+        payload, "モードA", Settings(rag_runtime_rules_confirmation_enabled=True)
+    )
     assert len(result) == 1 and result[0].option_ids == ["a"]
 
 
@@ -340,8 +365,33 @@ async def test_guardrail_blocks_recognition_before_model_and_masks_allowed_sourc
 
     monkeypatch.setattr(rule_selection, "GuardrailPolicy", Policy)
     monkeypatch.setattr(rule_selection, "condition_client", lambda settings: Client())
-    assert not await recognize_rule_selections(PAYLOAD, "設定は非公開の値", Settings())
+    assert not await recognize_rule_selections(
+        PAYLOAD, "設定は非公開の値", Settings(rag_runtime_rules_confirmation_enabled=True)
+    )
     assert not calls
     Policy.allowed = True
-    assert not await recognize_rule_selections(PAYLOAD, "設定は非公開の値", Settings())
+    assert not await recognize_rule_selections(
+        PAYLOAD, "設定は非公開の値", Settings(rag_runtime_rules_confirmation_enabled=True)
+    )
     assert calls == ["設定は [MASK]"]
+
+
+async def test_disabled_registered_confirmation_does_not_reuse_cached_answers_or_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", False)
+    request = SearchRequest(
+        query="設定", filters={"document_id": "synthetic-a", "page_number_min": "2"}
+    )
+    request._rule_selection_scope = {"context": "以前のルール由来の前提"}
+    answers = [ClarificationAnswer(rule_id="rule-1", option_ids=["a"])]
+    assert (
+        await recognize_rule_selections(
+            PAYLOAD, "設定", Settings(rag_runtime_rules_confirmation_enabled=False), answers=answers
+        )
+        == ()
+    )
+    assert not unanswered_rule_clarifications(PAYLOAD, "設定", answers=answers)
+    updated = apply_rule_selection_scope(request, PAYLOAD, answers)
+    assert updated.filters == request.filters
+    assert not updated._rule_selection_scope

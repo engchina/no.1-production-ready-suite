@@ -114,7 +114,7 @@ def _run_example(step_review: str = "supported"):
         item(steps, "対象の行の終了日を入力します。", "①対象の行の終了日を入力します。", request_id="Q1"),
         item(steps, "新しい開始日の行を追加します。", "②新しい開始日の行を追加します。", request_id="Q1"),
         item(steps, "変更は翌月から反映されます。", "変更は当月から反映されます。", kind="rule", request_id="Q1"),
-        item(table, "区分Ⅱの選択肢の値は 01 です。", "区分Ⅱ 02", kind="rule", request_id="Q2"),
+        item(table, "区分Ⅱの選択肢の値は 01 です。", "区分Ⅱ 02", kind="rule", request_id="Q1"),
         summary=SUMMARY,
     )
     review = audit(
@@ -122,17 +122,19 @@ def _run_example(step_review: str = "supported"):
         (1, "supported", "matched", ""),
         (2, "contradicted", "matched", ""),
         (3, "supported", "matched", ""),
-        requests=[("Q1", "addressed"), ("Q2", "addressed")],
+        requests=[("Q1", "addressed")],
     )
     review["summary_basis"] = ["対象の行の終了日を入力します。", "新しい開始日の行を追加します。"]
     scope_plan = {
         "request_coverage": [
             {
-                "request_id": request,
-                "evidence_ids": [evidence],
-                "evidence_scope": [{"evidence_id": evidence, "target": target, "relation": "direct"}],
+                "request_id": "Q1",
+                "evidence_ids": [steps, table],
+                "evidence_scope": [
+                    {"evidence_id": steps, "target": "設定の変更", "relation": "direct"},
+                    {"evidence_id": table, "target": "区分の選択肢", "relation": "direct"},
+                ],
             }
-            for request, evidence, target in [("Q1", steps, "設定の変更"), ("Q2", table, "区分の選択肢")]
         ]
     }
     return run(FakeModel([value], [review], scope_plan=scope_plan), ctx, question).response

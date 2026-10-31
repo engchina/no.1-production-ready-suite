@@ -1,6 +1,6 @@
 """回答の LLM の時間の短縮 (#1499) の検証。
 
-用途ごとの推論の量（質問拡張戦略 / 根拠の評価 / 生成・監査）、規則の信号が強いときの CRAG の評価の省略、質問拡張の検索文の上限、
+用途ごとの推論の量（質問の言い換え・分解 / 根拠の評価 / 生成・監査）、規則の信号が強いときの CRAG の評価の省略、質問拡張の検索文の上限、
 質問拡張の LLM と元の質問の検索の並行を、外部の I/O を置き換えて確かめる。
 """
 
@@ -98,7 +98,7 @@ class PurposeReasoningEffortTests(unittest.TestCase):
         self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY), "推論の量: medium（モデルの登録値）")
         self.assertEqual(
             llm_reasoning_effort_note(replace(settings, strategy_reasoning_effort="high"), LLM_PURPOSE_STRATEGY),
-            "推論の量: high（質問拡張戦略の判定・検索文の生成の設定。モデルの登録値は medium）",
+            "推論の量: high（質問の言い換え・分解の判定・検索文の生成の設定。モデルの登録値は medium）",
         )
         self.assertEqual(llm_reasoning_effort_note(settings, LLM_PURPOSE_GENERATION), "推論の量: medium（モデルの登録値）")
         self.assertEqual(

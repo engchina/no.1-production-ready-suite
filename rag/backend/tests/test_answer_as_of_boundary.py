@@ -268,7 +268,7 @@ async def test_answer_run_searches_with_the_resolved_as_of_and_keeps_the_request
     with pytest.raises(RuntimeError, match="stop"):
         await _engine(oracle).run(request)
 
-    assert [_bound_as_of(filters) for filters in oracle.category_calls] == ["2026-04-01"]
+    assert oracle.category_calls == []
     assert captured["classification_filter"].as_of == ""
     assert request.filters == {"knowledge_base_id": "kb-a"}
 

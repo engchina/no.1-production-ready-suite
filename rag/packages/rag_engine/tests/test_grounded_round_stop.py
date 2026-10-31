@@ -143,7 +143,7 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         """草稿が「資料に記載が無い」と答えた要求だけが残れば、指摘の反映の組を始めない。"""
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
-        first = draft(item(eid, GOOD, GOOD, request_id="Q1"), _gap("Q2"))
+        first = draft(item(eid, GOOD, GOOD, request_id="Q1"), _gap("Q1"))
         model = FakeModel(
             [first],
             [
@@ -151,9 +151,8 @@ class SynthesizeRoundStopTest(unittest.TestCase):
                     (0, "supported", "matched", ""),
                     (1, "supported", "matched", ""),
                     requests=[
-                        ("Q1", "addressed"),
                         {
-                            "request_id": "Q2",
+                            "request_id": "Q1",
                             "status": "missing",
                             "reason": "抽出条件の材料が不足",
                             "evidence_status": "missing",
@@ -171,7 +170,7 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         self.assertNotIn("improvement_stop", rounds[0])
         self.assertNotIn("remedy", rounds[0])
         self.assertNotIn("stop", result.generation_trace["round_budget"])
-        self.assertEqual(observed_audit(result)["request_reviews"][1]["evidence_status"], "missing")
+        self.assertEqual(observed_audit(result)["request_reviews"][0]["evidence_status"], "missing")
         self.assertIn(GOOD, result.answer_text)
 
     def test_available_material_observation_does_not_regenerate_the_draft(self):

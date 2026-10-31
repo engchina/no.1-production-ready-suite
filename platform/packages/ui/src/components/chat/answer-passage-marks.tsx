@@ -1,17 +1,14 @@
-import { CircleHelp, CircleMinus, TriangleAlert, type LucideIcon } from "lucide-react";
+import { CircleHelp, TriangleAlert, type LucideIcon } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
-import { StatusBadge } from "../data/status-badge";
 import { Banner } from "../ui/banner";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import {
-  answerPassageCounts,
   answerPassageDisplayText,
   type AnswerPassageMarkGroup,
   type AnswerPassageMarkState,
   type AnswerPassageReason,
-  type AnswerPassageRecords,
   type AnswerWarning,
 } from "./answer-passage-records";
 
@@ -22,7 +19,6 @@ import {
  *   （`CircleHelp`「未確認」/ `TriangleAlert`「要注意」）。印を押すと理由（backend の `label` と `detail`）を開く。
  * - 節「根拠と矛盾し除いた内容」「確認が必要な点」は `AnswerSections` が本文の後ろに組み立てる。
  * - 回答全体の注意（`answer_warnings`）は本文の上の warning の `Banner`。
- * - バッジ（「未確認 N 件」「要注意 N 件」「矛盾で除外 N 件」。0 件は出さない）は `AnswerPassageBadges`。
  *
  * 状態は色だけで表さない（アイコンと文字を必ず添える）。文言は製品が i18n で渡す（既定は日本語）。
  */
@@ -44,12 +40,7 @@ export interface AnswerPassageLabels {
   jumpLabel: (quote: string) => string;
   /** 回答全体の注意が複数あるときの見出し。 */
   warningsTitle: string;
-  /** バッジ。 */
-  badge: {
-    unverified: (count: number) => string;
-    warning: (count: number) => string;
-    removed: (count: number) => string;
-  };
+
 }
 
 export const DEFAULT_ANSWER_PASSAGE_LABELS: AnswerPassageLabels = {
@@ -65,11 +56,6 @@ export const DEFAULT_ANSWER_PASSAGE_LABELS: AnswerPassageLabels = {
   marksNote: "次の段落は根拠で確かめられていないか、注意が必要です。押すと本文の段落へ移ります。",
   jumpLabel: (quote) => `${quote}（本文の段落へ移動）`,
   warningsTitle: "回答全体に注意が必要です",
-  badge: {
-    unverified: (count) => `未確認 ${count} 件`,
-    warning: (count) => `要注意 ${count} 件`,
-    removed: (count) => `矛盾で除外 ${count} 件`,
-  },
 };
 
 /** 印の状態のアイコン。 */
@@ -224,52 +210,5 @@ export function AnswerPassageWarnings({
         </Banner>
       )}
     </div>
-  );
-}
-
-/**
- * 印の数のバッジ（「未確認 N 件」「要注意 N 件」「矛盾で除外 N 件」）。0 件のバッジは出さず、どれも 0 件なら null。
- * 回答の対応のバッジと同じ行に置く（Agent の「資料との照合」・実行の詳細、RAG の回答の案内）。
- */
-export function AnswerPassageBadges({
-  records,
-  labels = DEFAULT_ANSWER_PASSAGE_LABELS,
-  className,
-  testId = "answer-passage-badges",
-}: {
-  records: AnswerPassageRecords | null | undefined;
-  labels?: AnswerPassageLabels;
-  className?: string;
-  testId?: string;
-}) {
-  const counts = answerPassageCounts(records);
-  const badges: { key: keyof typeof counts; node: ReactNode }[] = [];
-  if (counts.unverified > 0) {
-    badges.push({
-      key: "unverified",
-      node: <StatusBadge variant="warning" icon={CircleHelp} label={labels.badge.unverified(counts.unverified)} />,
-    });
-  }
-  if (counts.warning > 0) {
-    badges.push({
-      key: "warning",
-      node: <StatusBadge variant="neutral" icon={TriangleAlert} label={labels.badge.warning(counts.warning)} />,
-    });
-  }
-  if (counts.removed > 0) {
-    badges.push({
-      key: "removed",
-      node: <StatusBadge variant="danger" icon={CircleMinus} label={labels.badge.removed(counts.removed)} />,
-    });
-  }
-  if (!badges.length) return null;
-  return (
-    <span className={cn("inline-flex flex-wrap items-center gap-1.5", className)} data-testid={testId}>
-      {badges.map((badge) => (
-        <span key={badge.key} className="inline-flex" data-testid={`${testId}-${badge.key}`}>
-          {badge.node}
-        </span>
-      ))}
-    </span>
   );
 }

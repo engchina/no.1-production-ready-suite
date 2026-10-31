@@ -11,7 +11,7 @@ from rag_engine.knowledge.runtime_knowledge import build_runtime_knowledge_conte
 from rag_engine.models.llm import GroundedDraft
 
 from app.api.routes import search as search_route
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.rag.answer_assumptions import with_answer_assumptions
 from app.rag.answer_engine import AnswerEngine
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
@@ -20,6 +20,12 @@ from app.schemas.search_answer_profile_knowledge import ClarificationAnswer
 from app.schemas.support_guide import SupportGuideContent
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
+
+
+@pytest.fixture(autouse=True)
+def registered_confirmations_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "rag_runtime_rules_confirmation_enabled", True)
+
 
 QUESTION = "設定の変更方法を教えてください"
 PENDING = {
@@ -151,7 +157,10 @@ async def test_search_chat_mcp_shared_context_forwards_rule_and_guide_questions(
     monkeypatch.setattr(search_route, "support_guide_context", context)
     _, settings, _, profile = await search_route._resolve_query_context(
         SearchRequest(query=QUESTION, search_answer_profile_id="bv-1"),
-        Settings(rag_support_guide_semantic_match_enabled=False),
+        Settings(
+            rag_support_guide_semantic_match_enabled=False,
+            rag_runtime_rules_confirmation_enabled=True,
+        ),
         interactive=True,
     )
     assert profile == "bv-1"
@@ -186,7 +195,7 @@ async def test_final_answer_generation_receives_assumptions(
 
     monkeypatch.setattr(engine_oci, "parse_text_response", llm)
     outcome = await AnswerEngine(
-        Settings(rag_answer_flow="standard_rag"),
+        Settings(rag_answer_flow="standard_rag", rag_runtime_rules_confirmation_enabled=True),
         oracle=FakeOracle(),  # type: ignore[arg-type]
         genai=FakeGenAi(),  # type: ignore[arg-type]
         runtime_knowledge_payload=prepared(policy),

@@ -255,6 +255,8 @@ class _EngineStageObservation:
         details: Mapping[str, object] | None = None,
     ) -> None:
         self._values.update(params or {})
+        if self._values.get("status") == "skipped":
+            self._span.set_status("skipped")
         failed = self._values.get("status") == ANSWER_STEP_FAILED_STATUS
         self._span.set_display(
             kind=kind,

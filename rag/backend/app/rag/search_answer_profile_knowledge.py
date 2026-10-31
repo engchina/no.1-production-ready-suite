@@ -63,6 +63,7 @@ from rag_engine.knowledge.runtime_knowledge_management import (
 )
 from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
+from app.config import get_settings
 from app.rag.answer_engine import AnswerScope
 from app.schemas.search import PageRange, format_page_ranges
 from app.schemas.search_answer_profile_knowledge import (
@@ -502,7 +503,15 @@ def preview_runtime_knowledge(
 ) -> RuntimeKnowledgeContext:
     """質問に一致する用語・同義語と回答ルールと拡張後の検索文を返す(保存しない)。"""
     with _runtime_knowledge_dir(payload) as (work_dir, path):
-        return build_runtime_knowledge_context(question, work_dir, path)
+        return build_runtime_knowledge_context(
+            question,
+            work_dir,
+            path,
+            rules_confirmation_enabled=True,
+            rules_answer_enabled=True,
+            terms_search_enabled=True,
+            terms_answer_enabled=True,
+        )
 
 
 def match_runtime_knowledge(
@@ -515,7 +524,13 @@ def match_runtime_knowledge(
     """
     with _runtime_knowledge_dir(payload) as (work_dir, path):
         return build_runtime_knowledge_context(
-            question, work_dir, path, term_limit=MAX_TERMS, rule_limit=MAX_RULES
+            question,
+            work_dir,
+            path,
+            term_limit=MAX_TERMS,
+            rule_limit=MAX_RULES,
+            rules_confirmation_enabled=get_settings().rag_runtime_rules_confirmation_enabled,
+            rules_answer_enabled=get_settings().rag_runtime_rules_answer_enabled,
         )
 
 
@@ -596,6 +611,8 @@ def unanswered_rule_clarifications(
     payload: Mapping[str, object], question: str, *, answers: Sequence[ClarificationAnswer] = ()
 ) -> list[tuple[Mapping[str, object], RuleClarification]]:
     """一致したルールの未回答の確認事項。確認の提示と前提の明示で同じ判定を使う。"""
+    if not get_settings().rag_runtime_rules_confirmation_enabled:
+        return []
     found: list[tuple[Mapping[str, object], RuleClarification]] = []
     by_id = {str(rule.get("id", "")): rule for rule in _rules(payload)}
     for matched in preview_runtime_knowledge(payload, question).rules_for_stage("confirmation"):
@@ -612,6 +629,8 @@ def unanswered_rule_clarifications(
 
 def rule_matches(payload: Mapping[str, object], question: str, rule_id: str) -> bool:
     """質問がそのルールに一致するか（MCP の答えを、一致する質問にだけ当てる。#2117）。"""
+    if not get_settings().rag_runtime_rules_confirmation_enabled:
+        return False
     return any(
         matched.rule_id == rule_id
         for matched in preview_runtime_knowledge(payload, question).matched_rules

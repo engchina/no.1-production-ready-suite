@@ -71,7 +71,8 @@ describe("ChatProgress", () => {
 
   it("実行中で段（span）がまだ無いときは「処理を開始しています」の行を出し、段が届いたら消す（#3226）", () => {
     render(<ChatProgress steps={[]} active startedAt={T0} testId="p" />);
-    expect(host.textContent).toContain("処理を開始しています");
+    expect(host.textContent).not.toContain("処理を開始しています");
+    expect(host.querySelector("[data-step-id]")).toBeNull();
     render(<ChatProgress steps={[{ id: "s", label: "段 A", status: "running", startedAt: at(1) }]} active startedAt={T0} testId="p" />);
     expect(host.textContent).not.toContain("処理を開始しています");
     expect(host.textContent).toContain("段 A");
@@ -274,7 +275,7 @@ describe("ChatProgress", () => {
     expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 01:06");
   });
 
-  it("終端でないのに今の段階が無い（すべて完了）ときも、今の行（スピナー・「処理を続けています」・経過時間）を出す", () => {
+  it("実行の間は全体の経過時間だけを示し、架空の実行中の行を足さない", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(30)));
     render(
@@ -287,13 +288,11 @@ describe("ChatProgress", () => {
         testId="p"
       />
     );
-    const current = q("p-current")!;
-    expect(current.dataset.stepId).toBe("");
-    expect(current.textContent).toContain("処理を続けています");
-    expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    expect(q("p-current")).toBeNull();
+    expect(host.textContent).not.toContain("処理を続けています");
+    expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(0);
     expect(q("p-timer")!.getAttribute("aria-label")).toBe("経過時間 00:30");
-    expect(q("p-running")!.textContent).toContain("処理中（2 ステップ完了）");
-    expect(host.querySelector('[role="status"]')!.textContent).toBe("処理を続けています");
+
   });
 
   it("遅延の案内は今の段階の経過時間で決める（全体が長くても、始まったばかりの段階には付けない）", () => {
@@ -329,7 +328,7 @@ describe("ChatProgress", () => {
       />
     );
     expect(q("p")!.dataset.chatProgressState).toBe("running");
-    expect(q("p-current")!.dataset.stepId).toBe("queue");
+    expect(q("p-current")).toBeNull();
     // 完了した段階が無いうちは、見出しは「処理中」だけ（件数を出さない）。
     expect(q("p-running")!.textContent).toContain("処理中");
     expect(q("p-running")!.textContent).not.toContain("ステップ完了");
@@ -607,23 +606,13 @@ describe("ChatProgress", () => {
         testId="p"
       />
     );
-    const rows = [...host.querySelectorAll<HTMLElement>("[data-run-timeline-step], [data-testid='p-current']")];
-    expect(rows.map((row) => row.dataset.runTimelineStep ?? `current:${row.dataset.stepId}`)).toEqual([
-      "s1",
-      "s2",
-      "current:",
-    ]);
-    // 親の工程は回さない実行中の印（CirclePlay）。回るのは親の下の今の行だけ。
     const parent = q("p-step-s1")!;
     expect(parent.dataset.status).toBe("running");
     expect(parent.querySelector("svg.animate-spin")).toBeNull();
     expect(parent.querySelector("svg.lucide-circle-play")).not.toBeNull();
-    expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
-    const current = q("p-current")!;
-    expect(current.querySelector("svg.animate-spin")).not.toBeNull();
-    expect(current.textContent).toContain("処理を続けています");
-    // 親の 1 段下に字下げする。
-    expect(current.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
+    expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(0);
+    expect(q("p-current")).toBeNull();
+    expect(host.textContent).not.toContain("処理を続けています");
     // 待機中の段階は、親の工程が実行中の間は今の段階の代わりにしない。
     expect(q("p-step-s3")).toBeNull();
     // 閉じたときの見出しは親の工程の名前。
@@ -662,7 +651,7 @@ describe("ChatProgress の段階の一覧の安定（#1358）", () => {
     // 段階が実行中に戻る（RAG の検索 → 並べ替え → 根拠確認）・古い snapshot が届いた。
     render(<ChatProgress steps={snapshot({ step1: "done", step2: "running", step3: "done", step4: "pending" })} testId="p" />);
     expect(completedIds()).toEqual(["step1", "step2", "step3"]);
-    expect(q("p-current")!.dataset.stepId).toBe("step4");
+    expect(q("p-current")).toBeNull();
     render(<ChatProgress steps={snapshot({ step1: "done", step2: "done", step3: "done", step4: "running" })} testId="p" />);
     expect(completedIds()).toEqual(["step1", "step2", "step3"]);
     expect(q("p-current")!.dataset.stepId).toBe("step4");
@@ -682,4 +671,45 @@ describe("ChatProgress の段階の一覧の安定（#1358）", () => {
     expect(q("p")!.dataset.chatProgressState).toBe("done");
     expect(q("p-summary")!.textContent).toContain("2 ステップ");
   });
+});
+
+
+it("並行の実工程を同時に回し、子が終わっても架空の処理行を足さない", () => {
+  const steps: ChatProgressStep[] = [
+    { id: "parent", label: "合成の親工程", status: "running", startedAt: at(0) },
+    { id: "one", label: "合成の工程 A", status: "running", startedAt: at(1), level: 1, parentId: "parent" },
+    { id: "two", label: "合成の工程 B", status: "running", startedAt: at(1), level: 1, parentId: "parent" },
+  ];
+  render(<ChatProgress steps={steps} active testId="parallel" />);
+  expect(q("parallel-step-one")?.querySelector(".pr-spinner")).not.toBeNull();
+  expect(q("parallel-step-two")?.querySelector(".pr-spinner")).not.toBeNull();
+  render(<ChatProgress steps={steps.map((step) => step.level ? { ...step, status: "done", finishedAt: at(3) } : step)} active testId="parallel" />);
+  expect(host.textContent).not.toContain("処理を続けています");
+  expect(host.querySelector('[data-step-id=""]')).toBeNull();
+});
+
+it("並行した枝の開始順が交差しても親子を重ねて回さない", () => {
+  const steps: ChatProgressStep[] = [
+    {id: "root", label: "親工程", status: "running", startedAt: at(0)},
+    {id: "a", parentId: "root", level: 1, label: "枝 A", status: "running", startedAt: at(1)},
+    {id: "b", parentId: "root", level: 1, label: "枝 B", status: "running", startedAt: at(1)},
+    {id: "a-child", parentId: "a", level: 2, label: "A の実処理", status: "running", startedAt: at(2)},
+    {id: "b-child", parentId: "b", level: 2, label: "B の実処理", status: "running", startedAt: at(2)},
+  ];
+  render(<ChatProgress steps={steps} active testId="nested-parallel" />);
+  for (const id of ["root", "a", "b"]) expect(q(`nested-parallel-step-${id}`)?.querySelector(".pr-spinner")).toBeNull();
+  for (const id of ["a-child", "b-child"]) expect(q(`nested-parallel-step-${id}`)?.querySelector(".pr-spinner")).not.toBeNull();
+  expect(host.querySelectorAll(".pr-spinner")).toHaveLength(2);
+});
+
+it("技術の中間行を省いた親も、表示された子と重ねて回さない", () => {
+  render(<ChatProgress active testId="compressed" steps={[
+    {id: "tool", label: "ツール", status: "running", level: 0},
+    {id: "search", parentId: "hidden-technical", label: "検索", status: "running", level: 1},
+    {id: "vector", parentId: "search", label: "意味検索", status: "running", level: 2},
+    {id: "text", parentId: "search", label: "全文検索", status: "running", level: 2},
+  ]} />);
+  expect(q("compressed-step-tool")?.querySelector(".pr-spinner")).toBeNull();
+  expect(q("compressed-step-search")?.querySelector(".pr-spinner")).toBeNull();
+  expect(host.querySelectorAll(".pr-spinner")).toHaveLength(2);
 });

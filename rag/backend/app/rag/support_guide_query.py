@@ -159,7 +159,9 @@ async def build_guide_query(
     """
     if not settings.rag_support_guide_enabled:
         return GuideQuery(text=text)
-    query = expand_guide_query(text, runtime_knowledge)
+    query = expand_guide_query(
+        text, runtime_knowledge if settings.rag_runtime_terms_search_enabled else None
+    )
     if not settings.rag_support_guide_semantic_match_enabled or not any(
         content.goal.intent_examples for _, _, content in guides
     ):
