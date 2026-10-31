@@ -138,14 +138,14 @@ def test_identical_retry_stops_before_another_grade_call():
     assert attempts[-1].stop_reason == "no_new_evidence" and result.records
 
 
-def test_uncited_passage_is_judged_unsupported_without_the_model():
+def test_uncited_passage_is_unassessed_without_the_model():
     data, scope, output = evaluation_case("data_confirmation")
     data["answer_text"] += "\n\n主档を変更する。"
     with patch(PARSE, side_effect=judge(output)):
         result = evaluate_answer_payload(data, object(), standard_scope=scope)
     assert result["status"] == "completed" and result["missing_audit_passage_ids"] == []
     uncited = next(claim for claim in result["claim_checks"] if claim["answer_quote"] == "主档を変更する。")
-    assert (uncited["status"], uncited["reference_check"]) == ("unsupported", "uncited")
+    assert (uncited["status"], uncited["reference_check"]) == ("unassessed", "uncited")
 
 
 def test_evaluation_binds_source_text_by_stable_id():

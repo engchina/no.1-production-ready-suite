@@ -253,18 +253,18 @@ def test_shared_citation_line_applies_to_the_preceding_passages():
     with patch(PARSE, side_effect=judge(calls=calls)):
         result = evaluate_answer_payload(data, object())
     claims = {claim["answer_quote"]: claim for claim in result["claim_checks"]}
-    # 出典の無い結論の段落はモデルを呼ばずに unsupported（出典の無い主張）。
+    # 要約は本文の原文候補を使ってモデルで判定する。
     assert claims["結論です。"]["status"] == "unsupported"
-    assert claims["結論です。"]["reference_check"] == REFERENCE_UNCITED
+    assert claims["結論です。"]["reference_check"] != REFERENCE_UNCITED
     judged = {inputs["passage"]["text"]: inputs for inputs in calls_of(calls, ClaimJudgement)}
-    assert set(judged) == {"・申請は受付から30日以内に処理する。", "・処理の結果は書面で通知する。", "・窓口は平日だけ開く。"}
+    assert set(judged) == {"結論です。", "・申請は受付から30日以内に処理する。", "・処理の結果は書面で通知する。", "・窓口は平日だけ開く。"}
     # 1 つの出典の行を前の 2 つの段落が共有し、互いを文脈として受け取る。引用の記録が無ければ頁で根拠を選ぶ。
     first = judged["・申請は受付から30日以内に処理する。"]
     assert [item["id"] for item in first["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p3"]
     assert first["context"] == ["・処理の結果は書面で通知する。"]
     last = judged["・窓口は平日だけ開く。"]
     assert [item["id"] for item in last["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p9"] and last["context"] == []
-    assert result["judge_diagnostics"]["uncited_claims"] == 1
+    assert result["judge_diagnostics"]["uncited_claims"] == 0
 
 
 def test_chunk_id_written_in_the_passage_is_its_citation():
@@ -284,7 +284,7 @@ def test_uncited_and_heading_passages_are_decided_without_the_model():
         result = evaluate_answer_payload(cited_payload() | dict(answer_text=answer, cited_evidence=[]), object())
     assert calls_of(calls, ClaimJudgement) == []
     statuses = [(claim["answer_quote"], claim["status"]) for claim in result["claim_checks"]]
-    assert statuses == [("回答の結論です。", "unsupported"), ("【手順】", "not_a_claim"), ("根拠：manual.pdf 第4条", "not_a_claim")]
+    assert statuses == [("回答の結論です。", "unassessed"), ("【手順】", "not_a_claim"), ("根拠：manual.pdf 第4条", "not_a_claim")]
     assert result["judge_diagnostics"]["claim_calls"] == 0
 
 
@@ -858,9 +858,14 @@ def test_rendered_headings_and_citations_are_not_judged_as_claims(fixed_scope):
     assert [claim["answer_quote"] for claim in result["claim_checks"]] == claims
     assert result["missing_audit_passage_ids"] == []
     assert "unassessed" not in {claim["status"] for claim in result["claim_checks"]}
-    # 出典の行のある 3 つの説明はその頁の根拠で、出典の無い結論と「資料から確認できなかった事項」の行はモデルを呼ばずに決める。
+    # 出典のある本文と要約を原文で判定し、不足の案内は意味判定の対象にしない。
     judged = {inputs["passage"]["text"]: inputs["evidence_items"][1]["id"] for inputs in calls_of(calls, ClaimJudgement)}
-    assert judged == {"・対象は登録済みの利用者です。": "m3", "・利用者情報画面を開きます。": "m4", "・帳票の出力結果を確認します。": "m9"}
+    assert judged == {
+        "結論です。": "m3",
+        "・対象は登録済みの利用者です。": "m3",
+        "・利用者情報画面を開きます。": "m4",
+        "・帳票の出力結果を確認します。": "m9",
+    }
 
 
 def test_misnamed_evidence_id_is_bound_by_the_chunk_id_or_kept_as_citation_error(fixed_scope):
@@ -1249,3 +1254,92 @@ def test_long_verbatim_quote_fragments_are_not_judged_as_claims():
     quote = "・「" + "条文の本文です。" * 100 + "」"
     answer = "結論です。\n\n" + labels.quote_only_section + "\n" + labels.quote_only_note + "\n" + quote + "\n根拠：law.json 第1条"
     assert [passage["text"] for passage in _judged_passages(answer)] == ["結論です。", "根拠：law.json 第1条"]
+
+
+@pytest.mark.parametrize(
+    "summary,status",
+    [
+        ("記録を識別するキーで、状態値には用いません。", "supported"),
+        ("記録のキーは処理状態も示します。", "contradicted"),
+        ("記録のキーは必ず自動採番されます。", "unsupported"),
+    ],
+)
+def test_lead_summary_is_judged_against_originals_cited_by_body(summary, status):
+    data = cited_payload() | dict(
+        answer_text=summary
+        + "\n\n"
+        + answer_labels().rules_section
+        + "\n\n"
+        + "・識別キーは入力レコードの識別に使う。処理の状態は表さない。\n根拠：manual.pdf p.3",
+        evidence_items=[
+            dict(
+                id="doc:p3",
+                source="manual.pdf",
+                page_start=3,
+                page_end=3,
+                text="識別キーは入力レコードの識別に使う。処理の状態は表さない。",
+            ),
+            dict(id="other:p1", source="other.pdf", page_start=1, page_end=1, text="識別キーは自動採番する。"),
+        ],
+    )
+    calls = []
+    evaluated = AnswerEvaluationOutput(
+        coverage_checks=output().coverage_checks,
+        claim_checks=[ClaimCheck(answer_quote=summary, status=status, source_id="", evidence_quote="", reason="合成の意味判定")],
+    )
+    with patch(PARSE, side_effect=judge(evaluated, calls=calls)):
+        result = evaluate_answer_payload(data, object())
+    claim = next(item for item in result["claim_checks"] if item["answer_quote"] == summary)
+    assert claim["status"] == status
+    assert claim["reference_check"] != REFERENCE_UNCITED
+    inputs = next(item for item in calls_of(calls, ClaimJudgement) if item["passage"]["text"] == summary)
+    assert [node["id"] for node in inputs["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p3"]
+    links = result["judge_diagnostics"]["summary_citation_candidates"]
+    assert links[0]["summary_passage_id"] == claim["answer_passage_id"]
+    assert links[0]["body_passage_ids"] and links[0]["evidence_ids"] == ["doc:p3"]
+
+
+def test_missing_citation_is_not_a_semantic_unsupported_verdict():
+    calls = []
+    with patch(PARSE, side_effect=judge(calls=calls)):
+        result = evaluate_answer_payload(payload() | dict(answer_text="合成の未引用の事実。"), object())
+    claim = result["claim_checks"][0]
+    assert (claim["status"], claim["reference_check"], claim["audit_status"]) == ("unassessed", REFERENCE_UNCITED, "")
+    assert not calls_of(calls, ClaimJudgement)
+
+
+def test_summary_candidates_do_not_flow_to_uncited_body_or_warning_sections():
+    summary = "合成の要約。"
+    data = cited_payload() | dict(
+        answer_text=summary
+        + "\n\n"
+        + answer_labels().rules_section
+        + "\n\n"
+        + "・合成の本文。\n根拠：manual.pdf p.3\n\n・別の未引用の本文。\n\n"
+        + answer_labels().marked_section
+        + "\n\n・参考の説明。\n根拠：manual.pdf p.9"
+    )
+    calls = []
+    with patch(PARSE, side_effect=judge(calls=calls)):
+        result = evaluate_answer_payload(data, object())
+    inputs = next(item for item in calls_of(calls, ClaimJudgement) if item["passage"]["text"] == summary)
+    assert [node["id"] for node in inputs["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p3"]
+    uncited = next(item for item in result["claim_checks"] if item["answer_quote"] == "・別の未引用の本文。")
+    assert (uncited["status"], uncited["reference_check"]) == ("unassessed", REFERENCE_UNCITED)
+
+
+def test_summary_candidates_include_each_cited_body_original_without_word_matching():
+    summary = "複数の根拠を組み合わせた合成の要約。"
+    data = cited_payload() | dict(
+        answer_text=summary
+        + "\n\n"
+        + answer_labels().rules_section
+        + "\n\n"
+        + "・合成の本文 A。\n根拠：manual.pdf p.3\n・合成の本文 B。\n根拠：manual.pdf p.9"
+    )
+    calls = []
+    with patch(PARSE, side_effect=judge(calls=calls)):
+        result = evaluate_answer_payload(data, object())
+    inputs = next(item for item in calls_of(calls, ClaimJudgement) if item["passage"]["text"] == summary)
+    assert [node["id"] for node in inputs["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p3", "doc:p9"]
+    assert len(result["judge_diagnostics"]["summary_citation_candidates"][0]["body_passage_ids"]) == 2
