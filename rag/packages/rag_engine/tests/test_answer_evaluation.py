@@ -123,7 +123,7 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
     for call in parse.call_args_list:
         assert call.args[0] == expected_systems[call.args[3]]
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 13
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 14
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
     assert not {"scores", "total_score", "passed", "max_score", "pass_threshold"} & set(result)

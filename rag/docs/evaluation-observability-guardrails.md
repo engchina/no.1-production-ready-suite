@@ -55,7 +55,7 @@
 
 ### 判定の呼び出しの形（#3576）
 
-回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`。判定の版 `rubric_version` 12）は、小さな判定を分けて呼び、集計と合否はコードが行います（LLM-as-judge の一般的なやり方。1 つの出力に全部の判定をまとめない）。
+回答の評価器（`rag_engine.evaluation.answer_eval.evaluate_answer_payload`。判定の版 `rubric_version` 14）は、小さな判定を分けて呼び、集計と合否はコードが行います（LLM-as-judge の一般的なやり方。1 つの出力に全部の判定をまとめない）。
 
 | 判定 | モデルに渡すもの | 指示 |
 |---|---|---|
