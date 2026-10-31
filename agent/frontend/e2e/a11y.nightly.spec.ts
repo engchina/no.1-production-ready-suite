@@ -50,7 +50,7 @@ const SCREENS: Screen[] = [
   { path: "/settings/security/roles" },
   { path: "/settings/security/api-keys", setup: seedApiKeys },
   { path: "/settings/system-tables" },
-  // 運用設定のシステムテーブルの下（#2449・#2517。3 製品の共通のサイドナビの順）。
+  { path: "/settings/trace-recording" },
   { path: "/settings/chat-attachments" },
   { path: "/settings/answer-notice" },
   { path: "/runtimes" },
