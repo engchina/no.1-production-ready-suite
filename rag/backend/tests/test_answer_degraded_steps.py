@@ -753,7 +753,10 @@ async def test_chat_attachments_failure_reaches_answer_diagnostics(
     from tests.test_answer_engine import QueryRecordingOracle, RewriteLlm
 
     class Service:
-        def toolset(self, conversation_id: str) -> Any:
+        def reading_status(self) -> str:
+            return "done"
+
+        def toolset(self, conversation_id: str, *, observe: bool = True) -> Any:
             if fail:
                 raise Boom(SECRET)
             return None
