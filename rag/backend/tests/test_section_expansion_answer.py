@@ -593,7 +593,7 @@ async def test_long_section_is_extracted_but_fixed_generation_input_exceeds_mode
     assert not prompts["draft"]
     assert outcome.diagnostics["outcome"] == "conditional"
     budget = outcome.diagnostics["generation_input_budget"]
-    assert budget["reason"] == "required_evidence_or_fixed_input_exceeds_limit"
+    assert budget["reason"] == "batch_fixed_input_or_source_metadata_exceeds_limit"
     assert not budget["fits"]
 
 
