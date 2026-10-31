@@ -11,6 +11,9 @@ function textAttribute(attributes: Readonly<Record<string, unknown>>, key: strin
  * ツール以外の要求（`initialize` など）は JSON-RPC の method（OpenTelemetry の MCP の semantic conventions。#3272）。
  */
 const TECHNICAL_SPANS: Readonly<Record<string, { name: Exclude<keyof TraceSpanNames, "attempt" | "root">; target?: readonly string[] }>> = {
+  "agent.attachment_evidence": { name: "attachments" },
+  "nl2sql.attachment_evidence": { name: "attachments" },
+  "rag.attachment_evidence": { name: "attachments" },
   "gen_ai.chat": { name: "chat", target: ["gen_ai.request.model"] },
   "gen_ai.embeddings": { name: "embeddings", target: ["gen_ai.request.model"] },
   "gen_ai.rerank": { name: "rerank", target: ["gen_ai.request.model"] },

@@ -1,3 +1,4 @@
+import { inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import { findIconTextMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 import { renderedFontsForSelector, waitForCjkFallbackFaces } from "../../../platform/packages/ui/e2e/font-checks";
@@ -1292,15 +1293,15 @@ for (const theme of ["light", "dark"] as const) {
     await expect(nested).toHaveAttribute("data-level", "1");
     await expect(nested).toContainText("検索文から根拠の候補を集める");
     // 計測値（工程の結果・LLM の回数）は名前の後ろの括弧、所要時間は右の列（実行の詳細と同じ RunTimeline。#2265）。
-    await expect(nested).toContainText("（該当なし）");
+    await expect(nested).toContainText("該当なし");
     await expect(nested).toContainText("0.1 秒未満");
     const understood = page.getByTestId("chat-answer-progress-step-s2");
-    await expect(understood).toContainText("（LLM 1 回）");
+    await expect(understood).toContainText("LLM 1 回");
     await expect(understood).toContainText("0.8 秒");
     // 工程の行は span なので、開くと工程の詳細の後ろに技術の値（span の名前）が付く（既定で閉じる。#2294 / #3226）。
-    await page.getByTestId("chat-answer-progress-step-s2-toggle").click();
-    await expect(page.getByTestId("chat-answer-progress-step-s2-details")).toContainText("rag.engine.stage");
-    await page.getByTestId("chat-answer-progress-step-s2-toggle").click();
+    await inspectTraceStep(page, process, "s2");
+    await expect(page.locator("[data-trace-technical]")).toContainText("rag.engine.stage");
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
     const nestedToggle = page.getByTestId("chat-answer-progress-step-s4-toggle");
     await expect(nestedToggle).toHaveAttribute("aria-expanded", "false");
     await nestedToggle.click();

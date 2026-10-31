@@ -20,7 +20,7 @@ it("選択した内容だけ表示し、未記録と制限・切り詰めを区�
     click("入力"); expect(host.textContent).toContain("synthetic-input");
     click("結果"); expect(host.textContent).toContain("現在の権限"); expect(host.textContent).not.toContain("private-output");
     click("Schema"); expect(host.textContent).toContain("synthetic-schema"); expect(host.textContent).toContain("先頭だけ");
-    click("計時"); expect(host.textContent).toContain("42"); expect(host.textContent).toContain("記録されていません");
+    click("計時"); expect(host.textContent).toContain("0.1 秒未満"); expect(host.textContent).toContain("記録されていません");
   } finally { act(() => root.unmount()); host.remove(); }
 });
 

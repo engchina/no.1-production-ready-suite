@@ -204,6 +204,6 @@ it("リランクの論理要求とSDK試行をstageの有無に関わらず同�
     ["質問との関連度で候補を並べ替える · synthetic-rerank（2 回目）", 2],
     ["候補の並べ替えを要求する", 1],
   ]);
-  expect(steps[1].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true });
+  expect(steps[1].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true, technical: true });
   expect(traceTimeline({ spans: events.filter(event => event.type === "step").map(event => ({ span_id: event.step_id, trace_id: event.trace_id, parent_span_id: event.parent_id, operation_name: event.name, status: event.status, started_at: event.started_at, finished_at: event.finished_at, attributes: event.attributes })), root_span_id: "1".repeat(16) }, RAG_TRACE_DETAILS_LABELS).steps[2].label).toBe("候補の並べ替えを要求する");
 });

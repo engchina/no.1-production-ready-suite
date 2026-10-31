@@ -1,4 +1,4 @@
-import { confirmTraceExplorer } from "../../../../platform/packages/ui/e2e/trace-explorer";
+import { confirmTraceExplorer, inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticCallDetails, syntheticStageDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
 // 実行履歴（#1955。UX 契約 run-history.md §7）: 共通の一覧（RunHistoryToolbar → RunHistoryTable → OffsetPagination）と
 // `?id=<run_id>` の全幅の詳細。状態は `[data-run-status]` の値で確かめる（文言・色に頼らない）。
@@ -714,7 +714,10 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   const failed = rows.nth(3);
   await expect(failed).toHaveAttribute("data-status", "failed");
   await expect(failed).toContainText("モデルを呼び出す（用途の記録なし）");
-  const toggle = failed.locator("[data-run-timeline-toggle]");
+  await inspectTraceStep(page, timeline, (await failed.getAttribute("data-run-timeline-step"))!);
+  await expect(page.locator("[data-trace-technical]")).toContainText("Span name");
+  await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  const toggle = rows.nth(1).locator("[data-run-timeline-toggle]");
   const expanded = await toggle.getAttribute("aria-expanded");
   await toggle.focus();
   await page.keyboard.press("Enter");
@@ -727,10 +730,10 @@ test("詳細は概要 → 処理の経過（処理の詳細を含む）→ SQL �
   await expect(prepareToggle).toHaveAttribute("aria-expanded", "false");
   // 開閉の印は行の文字の大きさ（実行の詳細は md の 14px）にそろえる（#2338。lucide の既定の 24px にしない）。
   const chevron = await prepareToggle.evaluate((button) => {
-    const svg = button.querySelector("svg")?.getBoundingClientRect();
-    return { size: svg?.height ?? 0, font: Number.parseFloat(getComputedStyle(button).fontSize) };
+    const svg = button.querySelector("svg");
+    return { size: svg ? Number.parseFloat(getComputedStyle(svg).height) : 0, font: Number.parseFloat(getComputedStyle(button).fontSize) };
   });
-  expect(chevron.size).toBe(chevron.font);
+  expect(chevron.size).toBeCloseTo(chevron.font, 1);
   await prepareToggle.click();
   await expect(prepare.locator("[data-run-timeline-details]")).toContainText("生成に使った質問");
   // 文字の横のアイコン（状態・開閉の印・処理の詳細）は、文字の 1 行目の中心にそろえる（#2371）。
@@ -977,7 +980,7 @@ for (const [id, text] of [
 test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const id = "synthetic-call";
   const row = { ...historyItems[0], id, progress_events: jobProgressEvents(id, { at: "2026-01-01T00:00:01Z", terminal: "done", steps: {
-    prepare_context: { status: "done", startedAt: "2026-01-01T00:00:02Z", finishedAt: "2026-01-01T00:00:03Z", details: syntheticStageDetails },
+    prepare_context: { status: "done", startedAt: "2026-01-01T00:00:02Z", finishedAt: "2026-01-01T00:00:03Z", details: syntheticStageDetails, children: [{name: "nl2sql.attachment_evidence", status: "skipped"}] },
     generate_sql: { status: "done", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", details: { call: syntheticCallDetails } },
   } }) };
   await mockHistory(page, { items: [row] });

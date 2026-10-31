@@ -43,7 +43,8 @@ export function runStepContent(details: RunStepDetails | null | undefined): RunS
   return { fields: fields ? [...fields.filter(field => field.label !== DEFAULT_RUN_STEP_DETAILS_LABELS.result), ...fields.filter(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)] : undefined, lines: details?.lines, code: details?.code, truncated: details?.truncated };
 }
 export function runStepResultSummary(details: RunStepDetails | null | undefined, fallback?: string): string | undefined {
-  return runStepContent(details).fields?.find(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)?.value ?? fallback;
+  const result = runStepContent(details).fields?.find(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)?.value;
+  return [...new Set([fallback, result].filter(Boolean))].join(" · ") || undefined;
 }
 
 export function runStepTechnicalFields(details: RunStepDetails | null | undefined): readonly RunStepDetailField[] {

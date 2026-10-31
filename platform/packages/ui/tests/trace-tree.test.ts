@@ -203,3 +203,9 @@ it.each(["done", "failed", "cancelled"])("論理的な並べ替え要求は%sで
   expect(tree.steps[2].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true, technical: true });
   expect(request.operation_name).toBe("rerank.request");
 });
+
+it.each(["rag", "agent", "nl2sql"])("%s の無効な添付は同じ名前とスキップの状態で表示する", product => {
+  const result = traceTimeline({spans: [{...span("1", "0"), operation_name: `${product}.attachment_evidence`, status: "skipped"}]}).steps[0];
+  expect(result.label).toBe("会話の添付から根拠を選ぶ");
+  expect(result.status).toBe("skipped");
+});

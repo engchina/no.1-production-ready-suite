@@ -1,4 +1,4 @@
-import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
+import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
@@ -645,14 +645,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件を整理して回答を作る");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("質問から対象と条件を読み取る（LLM 1 回・送信 2 回）");
+    await expect(timeline.locator("[data-run-timeline-step]").nth(1).locator("[data-run-result-summary]")).toContainText("LLM 1 回・送信 2 回");
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答に安全上の問題がないか検査する");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
     const steps = timeline.locator("[data-run-timeline-step]");
-    await steps.nth(1).locator("[data-run-timeline-toggle]").click();
-    await expect(steps.nth(1).locator("[data-run-timeline-details]")).toContainText("rag.engine.stage");
-    await steps.nth(1).locator("[data-run-timeline-toggle]").click();
+    await inspectTraceStep(page, timeline, (await steps.nth(1).getAttribute("data-run-timeline-step"))!);
+    await expect(page.locator("[data-trace-technical]")).toContainText("rag.engine.stage");
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
     const searchToggle = steps.nth(2).locator("[data-run-timeline-toggle]");
     await expect(searchToggle).toHaveAttribute("aria-expanded", "false");
     await searchToggle.click();
@@ -1414,6 +1414,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await mockRuns(page, [row]);
   await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
     { key: "root", spec: ragSpan.root(), at: [0, 8] },
+    { key: "attachment-off", spec: ragSpan.technical("rag.attachment_evidence", "root"), status: "skipped", at: [0, 0.001] },
     { key: "stage", spec: ragSpan.technical("synthetic.stage", "root"), at: [7, 8], details: syntheticStageDetails },
     { key: "model", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [0, 1], details: { call: syntheticCallDetails } },
     { key: "tool", spec: ragSpan.technical("gen_ai.execute_tool", "root", { "gen_ai.tool.name": "synthetic-tool" }), at: [1, 3], details: { call: syntheticCallDetails } },

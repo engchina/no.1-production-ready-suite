@@ -37,6 +37,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
     level: row.getAttribute("data-level") ?? "0", parent: row.getAttribute("data-parent-id"),
     status: row.getAttribute("data-status"), duration: row.querySelector("[data-run-step-status-duration]")?.textContent, summary: row.querySelector("[data-run-result-summary]")?.textContent ?? "",
   })), undefined);
+  check(normalRows.some(row => row.status === "skipped" && row.name === "会話の添付から根拠を選ぶ" && row.duration?.includes("スキップ"))).toBe(true);
   const normalStyle = await page.evaluate(() => {
     const label = document.querySelector("[data-run-timeline-label]");
     const bar = document.querySelector("[data-run-timeline-bar]");
@@ -166,4 +167,12 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   }
   await explorer.getByRole("button", {name: "経過に戻る", exact: true}).click();
   await check(page.getByRole("button", {name: "軌跡を調べる", exact: true}).first()).toBeFocused();
+}
+
+/** 経過の技術属性を調べる受入も、利用者と同じ軌跡の導線を通す。 */
+export async function inspectTraceStep(page: ExplorerPage, timeline: ExplorerLocator, stepId: string) {
+  await timeline.getByRole("button", {name: "軌跡を調べる", exact: true}).first().click();
+  const explorer = page.locator("[data-trace-explorer]");
+  await explorer.getByRole("searchbox", {name: "呼び出しを検索"}).fill(stepId);
+  await explorer.locator("[data-trace-record] button").first().click();
 }

@@ -490,7 +490,7 @@ test("呼び先の製品の span は書いた製品の工程の名前で出し�
   await page.getByTestId("chat-progress-summary").click();
   const list = page.getByTestId("chat-progress");
   const live = await timelineSnapshot(list);
-  expect(live.map((row) => [row.text.replace(/ 完了( [\d.]+ 秒)?$/, ""), row.level])).toEqual([
+  expect(live.map((row) => [row.name + (row.product ? ` ${row.product}` : ""), row.level])).toEqual([
     ["質問に応じた次の操作を選びました", 0],
     ["「合成の根拠の取得」を実行しました", 0],
     ["MCP の呼び出し · 合成の根拠の取得", 1],
@@ -697,6 +697,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   const { run, progress: log } = seedRunningRun(mockApi);
   log.step("chat-1", "done", { kind: "plan", details: { call: syntheticCallDetails } }).step("chat-2", "running");
   log.step("synthetic-stage", "done", { name: "agent.prepare", parent: "chat-1", details: syntheticStageDetails });
+  log.step("attachment-off", "skipped", {name: "agent.attachment_evidence", parent: "chat-1"});
   run.status = "completed";
   log.terminal("done");
   await page.goto(`/runs?id=${RUN_ID}`);

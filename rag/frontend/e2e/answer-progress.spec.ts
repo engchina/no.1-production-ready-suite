@@ -1,3 +1,4 @@
+import { inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { expect, type Page, test } from "./fixtures/test";
 
 import {
@@ -1077,7 +1078,10 @@ test("リランクの論理要求は新規配信と保存したtraceで同じ名
     await expect(cached).toHaveAttribute("data-level", "2");
     await page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}-toggle`).click();
     const details = page.getByTestId(`${prefix}-step-${spanStepId("rank-request")}-details`);
-    await expect(details).toContainText("rerank.request");
+    await expect(details).not.toContainText("Span name");
+    await inspectTraceStep(page, page.getByTestId(prefix), spanStepId("rank-request"));
+    await expect(page.locator("[data-trace-technical]")).toContainText("rerank.request");
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
     await expect(details).toContainText('"cache_state": "miss"');
     await expect(details).toContainText('"retry_number": 1');
     await page.getByTestId(`${prefix}-step-${spanStepId("rank-cache")}-toggle`).click();
