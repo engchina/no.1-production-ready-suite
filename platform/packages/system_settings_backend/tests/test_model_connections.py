@@ -449,11 +449,8 @@ def test_removing_secondary_clears_its_settings_and_key(tmp_path: Path) -> None:
     assert [c.connection_id for c in enterprise_ai_connections(settings)] == ["primary"]
 
 
-def test_blank_secondary_key_keeps_current_and_clear_is_rejected(tmp_path: Path) -> None:
-    """空欄は保存済みの key を保持する。key だけの削除は、必須の欄を空にするので止める（#542）。
-
-    セカンダリ接続の key を消すときは、セカンダリ接続ごと削除する。
-    """
+def test_blank_secondary_key_keeps_current_and_explicit_clear_deletes_it(tmp_path: Path) -> None:
+    """空欄は保持し、明示した削除だけを保存する。他接続の key を変えない。"""
     settings = FakeSettings()
     store = make_store(tmp_path)
     store.load(settings)
@@ -466,10 +463,9 @@ def test_blank_secondary_key_keeps_current_and_clear_is_rejected(tmp_path: Path)
     response = client.patch(
         "/api/settings/model", json=two_connection_payload(api_key="", clear_api_key=True)
     )
-    assert response.status_code == 422
-    assert "セカンダリ接続の API key を入力してください。" in response.json()["detail"]
-    assert settings.oci_enterprise_ai_secondary_api_key == "sk-secondary"
-    assert dotenv_values(tmp_path / ".env")[ENTERPRISE_AI_SECONDARY_API_KEY_ENV] == "sk-secondary"
+    assert response.status_code == 200
+    assert settings.oci_enterprise_ai_secondary_api_key == ""
+    assert ENTERPRISE_AI_SECONDARY_API_KEY_ENV not in dotenv_values(tmp_path / ".env")
     # プライマリ接続の key は変わらない
     assert settings.oci_enterprise_ai_api_key == "sk-primary"
 
@@ -545,6 +541,47 @@ def three_connection_payload(**tertiary: Any) -> dict[str, Any]:
         {"model_id": "gpt-c", "display_name": "C", "connection_id": "tertiary"}
     )
     return payload
+
+
+@pytest.mark.parametrize("connection_id", ["primary", "secondary", "tertiary"])
+def test_each_connection_key_can_be_cleared_reloaded_and_replaced(
+    tmp_path: Path, connection_id: str
+) -> None:
+    settings = FakeSettings()
+    store = make_store(tmp_path)
+    store.load(settings)
+    client = make_client(settings, store)
+    assert client.patch("/api/settings/model", json=three_connection_payload()).status_code == 200
+
+    loaded = client.get("/api/settings/model").json()["data"]["settings"]
+    for connection in loaded["enterprise_ai"]["connections"]:
+        assert connection["api_key"] == ""
+        connection["clear_api_key"] = connection["connection_id"] == connection_id
+    response = client.patch("/api/settings/model", json=loaded)
+    assert response.status_code == 200, response.text
+    keys = {
+        connection.connection_id: connection.api_key
+        for connection in enterprise_ai_connections(settings)
+    }
+    assert keys[connection_id] == ""
+    assert all(value == f"sk-{key}" for key, value in keys.items() if key != connection_id)
+
+    reopened = FakeSettings()
+    make_store(tmp_path).load(reopened)
+    assert {c.connection_id: c.api_key for c in enterprise_ai_connections(reopened)} == keys
+    saved = client.get("/api/settings/model").json()["data"]["settings"]
+    cleared = next(
+        c for c in saved["enterprise_ai"]["connections"] if c["connection_id"] == connection_id
+    )
+    assert cleared["has_api_key"] is False
+    assert cleared["clear_api_key"] is False
+    assert client.patch("/api/settings/model", json=saved).status_code == 200
+
+    cleared["api_key"] = "sk-replacement"
+    assert client.patch("/api/settings/model", json=saved).status_code == 200
+    restored = {c.connection_id: c.api_key for c in enterprise_ai_connections(settings)}
+    assert restored == {**keys, connection_id: "sk-replacement"}
+    assert "sk-replacement" not in client.get("/api/settings/model").text
 
 
 def test_tertiary_connection_does_not_require_project_ocid() -> None:

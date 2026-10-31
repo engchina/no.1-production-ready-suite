@@ -547,7 +547,10 @@ export function ModelSettingsPage({
     // 送信を止めるときは、最初の不正な欄へフォーカスする（messaging.md §3.2）。
     if (section === "enterprise_connection") {
       const first = firstConnectionError(
-        validateConnections(draft.enterprise_ai.connections),
+        validateConnections(
+          draft.enterprise_ai.connections,
+          normalizeModelSettings(baselineData.settings).enterprise_ai.connections,
+        ),
       );
       if (first) {
         setShowConnectionErrors(true);
@@ -684,7 +687,10 @@ export function ModelSettingsPage({
     : {};
   const connectionErrors: ConnectionErrors =
     draft && showConnectionErrors
-      ? validateConnections(draft.enterprise_ai.connections)
+      ? validateConnections(
+          draft.enterprise_ai.connections,
+          baselineData ? normalizeModelSettings(baselineData.settings).enterprise_ai.connections : [],
+        )
       : {};
   const unsavedConnections =
     draft && baselineData
@@ -1027,8 +1033,7 @@ const OPTIONAL_CONNECTION_MESSAGES = {
  * - プライマリ接続: 入力欄。OCI で運用するときだけ必須なので、3 つの欄とも「OCI 運用時必須」（保存は止めない）
  * - セカンダリ接続・ターシャリ接続（未設定）: 空の状態と「◯◯接続を設定」
  * - セカンダリ接続（設定済み）: 入力欄（3 つとも「必須」）と「セカンダリ接続を削除」。削除は説明の行の右端に置く
- *   （主操作の保存と隣に並べない。README「カード内の操作行」）。API key だけを消す指定は出さない
- *   （必須の欄を空にするため。消すときは接続ごと削除する）
+ *   （主操作の保存と隣に並べない。README「カード内の操作行」）。保存済み API key の削除は3接続で共通
  * - ターシャリ接続（設定済み）: OpenAI / OpenAI 互換 API 向け。Endpoint URL と API key は「必須」、
  *   Project OCID は任意（OCI Enterprise AI を使うときだけ入れる）。Endpoint URL の例は OpenAI の base URL
  */
@@ -1178,15 +1183,11 @@ function ConnectionTabContent({
           placeholder={t("settings.model.placeholder.apiKey")}
           helper={t("settings.model.enterprise.apiKeyHelp")}
           error={errors?.api_key}
-          clearOption={
-            primary
-              ? {
-                  label: t("settings.model.enterprise.clearApiKey"),
-                  checked: connection.clear_api_key,
-                  onCheckedChange: (clear) => onChange({ clear_api_key: clear }),
-                }
-              : undefined
-          }
+          clearOption={{
+            label: t("settings.model.enterprise.clearApiKey"),
+            checked: connection.clear_api_key,
+            onCheckedChange: (clear) => onChange({ clear_api_key: clear }),
+          }}
           width="lg"
         />
       </FormGrid>

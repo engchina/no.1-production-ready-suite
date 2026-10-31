@@ -361,3 +361,55 @@ describe("ModelSettingsPage の接続のタブ（#542）", () => {
     ]);
   });
 });
+
+it.each([
+  ["primary", "プライマリ接続", "enterprise-api-key"],
+  ["secondary", "セカンダリ接続", "enterprise-secondary-api-key"],
+  ["tertiary", "ターシャリ接続", "enterprise-tertiary-api-key"],
+] as const)("%s の key を削除して再保存でき、他接続を保持する", async (connectionId, name, id) => {
+  let saved = data(true);
+  saved.settings.enterprise_ai.connections.push({
+    ...saved.settings.enterprise_ai.connections[1]!,
+    connection_id: "tertiary",
+    endpoint: "https://tertiary.example",
+    project_ocid: "",
+  });
+  const updateModelSettings = vi.fn<ModelSettingsApi["updateModelSettings"]>(async (payload) => {
+    saved = {
+      ...saved,
+      settings: {
+        ...saved.settings,
+        enterprise_ai: {
+          ...saved.settings.enterprise_ai,
+          connections: saved.settings.enterprise_ai.connections.map((connection) => {
+            const update = payload.enterprise_ai.connections.find((entry) => entry.connection_id === connection.connection_id)!;
+            return {
+              ...connection,
+              api_key: "",
+              has_api_key: !update.clear_api_key && Boolean(update.api_key || connection.has_api_key),
+              clear_api_key: false,
+            };
+          }),
+        },
+      },
+    };
+    return saved;
+  });
+  await renderPage({ getModelSettings: async () => saved, updateModelSettings, testModelSettings: pending });
+  await click(tab(name));
+  const clear = host.querySelector<HTMLInputElement>(`#${id}-clear`);
+  expect(clear).not.toBeNull();
+  await click(clear!);
+  expect(host.querySelector<HTMLInputElement>(`#${id}`)?.disabled).toBe(true);
+  await submitConnections();
+  expect(updateModelSettings).toHaveBeenCalledTimes(1);
+  expect(updateModelSettings.mock.calls[0]![0].enterprise_ai.connections.find((c) => c.connection_id === connectionId)?.clear_api_key).toBe(true);
+  expect(saved.settings.enterprise_ai.connections.find((c) => c.connection_id === connectionId)?.has_api_key).toBe(false);
+  expect(saved.settings.enterprise_ai.connections.filter((c) => c.connection_id !== connectionId).every((c) => c.has_api_key)).toBe(true);
+  expect(host.querySelector(`#${id}-clear`)).toBeNull();
+  await submitConnections();
+  expect(updateModelSettings).toHaveBeenCalledTimes(2);
+  await setInputValue(id, "synthetic-replacement");
+  await submitConnections();
+  expect(saved.settings.enterprise_ai.connections.find((c) => c.connection_id === connectionId)?.has_api_key).toBe(true);
+});

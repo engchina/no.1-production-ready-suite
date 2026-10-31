@@ -206,12 +206,13 @@ export function connectionHasApiKey(connection: EnterpriseAiConnectionSettings):
 
 /**
  * 接続の入力のエラー（#542 / #786）。
- * - セカンダリ接続を設定したら、Endpoint URL・Project OCID・API key はすべて必須
- * - ターシャリ接続を設定したら、Endpoint URL・API key は必須（Project OCID は任意）
+ * - 新しく設定するセカンダリ接続は Endpoint URL・Project OCID・API key が必須
+ * - ターシャリ接続は Project OCID が任意。保存済み API key の明示削除と削除後の再保存を許可する
  * - プライマリ接続は OCI で運用するときだけ必須（「OCI 運用時必須」の表示だけで、保存は止めない）
  */
 export function validateConnections(
   connections: readonly EnterpriseAiConnectionSettings[],
+  savedConnections: readonly EnterpriseAiConnectionSettings[] = [],
 ): ConnectionErrors {
   const errors: ConnectionErrors = {};
   for (const connection of connections) {
@@ -221,7 +222,12 @@ export function validateConnections(
       project_ocid:
         isProjectOcidOptional(connection.connection_id) ||
         Boolean(connection.project_ocid.trim()),
-      api_key: connectionHasApiKey(connection),
+      api_key:
+        connectionHasApiKey(connection) ||
+        connection.clear_api_key ||
+        savedConnections.some(
+          (saved) => saved.connection_id === connection.connection_id && !saved.has_api_key,
+        ),
     };
     const fieldErrors: Partial<Record<ConnectionField, string>> = {};
     for (const field of CONNECTION_FIELD_ORDER) {

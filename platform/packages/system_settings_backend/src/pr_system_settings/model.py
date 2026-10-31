@@ -40,7 +40,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -1062,6 +1062,8 @@ def connection_label(connection_id: str) -> str:
 def validate_enterprise_ai_connections(
     enterprise: EnterpriseAiModelSettings,
     api_keys: Mapping[str, str] | None = None,
+    *,
+    allow_missing_api_keys: Collection[str] = (),
 ) -> list[ModelFieldError]:
     """接続と、登録モデルが指す接続を確かめる（#533 / #542）。
 
@@ -1069,7 +1071,7 @@ def validate_enterprise_ai_connections(
       ターシャリ接続（OpenAI / OpenAI 互換 API 向け。#786）は Endpoint URL・API key が必須で、
       Project OCID は任意（OCI Enterprise AI に使うときだけ入れる）。
       API key は保存後の値（`resolve_api_keys` の結果。空欄は保存済みの値を保持）で確かめるので、
-      `api_keys` を渡したときだけ確かめる
+      `api_keys` を渡したときだけ確かめる。明示削除と、削除済みの保存状態は許可する。
     - プライマリ接続は OCI で運用するときだけ必須（画面は「OCI 運用時必須」）なので、
       ここでは確かめない
     - 登録モデルは、存在する接続を指す
@@ -1082,7 +1084,11 @@ def validate_enterprise_ai_connections(
         required = [("endpoint", "Endpoint URL", bool(connection.endpoint))]
         if connection.connection_id not in ENTERPRISE_AI_PROJECT_OCID_OPTIONAL_CONNECTION_IDS:
             required.append(("project_ocid", "Project OCID", bool(connection.project_ocid)))
-        if api_keys is not None:
+        if (
+            api_keys is not None
+            and not connection.clear_api_key
+            and connection.connection_id not in allow_missing_api_keys
+        ):
             required.append(
                 ("api_key", "API key", bool(api_keys.get(connection.connection_id, "")))
             )
@@ -1978,7 +1984,13 @@ def save_model_settings(
     # セカンダリ接続・ターシャリ接続の API key は、保存後の値（空欄は保存済みの値を保持）で
     # 確かめる（#542）。
     errors = validate_enterprise_ai_connections(
-        payload.enterprise_ai, api_keys=resolve_api_keys(settings, payload)
+        payload.enterprise_ai,
+        api_keys=resolve_api_keys(settings, payload),
+        allow_missing_api_keys={
+            connection.connection_id
+            for connection in enterprise_ai_connections(settings)
+            if not connection.api_key
+        },
     )
     if _default_models_changed(settings, payload.enterprise_ai):
         # 登録モデルを変える保存だけで確かめる（#1035）。既存の不正な状態で、
