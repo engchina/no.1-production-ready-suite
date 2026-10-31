@@ -388,9 +388,12 @@ def test_wait_uses_current_recipe_revision(corpus: Path, foreign: str, status: s
     rebuilder(service, corpus).run()
     for document_id, recipe in service.recipes.items():
         recipe.update(status="CHUNKED", searchable=False)
+        if foreign == "revision":
+            recipe["config_revision"] = 2
+            service.jobs[document_id][0]["recipe_revision"] = 2
         other = {**service.jobs[document_id][0], "id": "other", "status": status}
         other["recipe_id" if foreign == "recipe" else "recipe_revision"] = (
-            "other" if foreign == "recipe" else 0
+            "other" if foreign == "recipe" else 1
         )
         service.jobs[document_id].insert(0, other)
 
