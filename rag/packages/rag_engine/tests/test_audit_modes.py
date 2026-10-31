@@ -365,4 +365,5 @@ def test_no_audit_keeps_summary_but_records_validation_as_not_run():
     assert round_note["acceptance_scope"] == "draft_selection"
     assert round_note["summary_validation"] == "not_run"
     assert "summary_supported" not in round_note
-    assert any(mark["text"] == summary and "summary_unaudited" in str(mark["reasons"]) for mark in result.envelope["passage_marks"])
+    assert not any(mark["text"] == summary and "summary_unaudited" in str(mark["reasons"]) for mark in result.envelope["passage_marks"])
+    assert result.generation_trace["finalization"]["summary"]["citations"]["status"] == "linked"

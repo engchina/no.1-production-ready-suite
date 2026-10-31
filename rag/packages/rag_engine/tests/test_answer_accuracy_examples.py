@@ -145,7 +145,9 @@ def test_summary_observation_does_not_rewrite_the_generated_conclusion(summary_k
             image_prompt_mode="text_only",
         ).response
     assert response.answer_text.startswith(case[summary_key])
-    assert response.generation_trace["finalization"]["summary"]["status"] == ("unverified" if mode == "none" else "kept")
+    assert response.generation_trace["finalization"]["summary"]["status"] == "kept"
+    assert response.generation_trace["finalization"]["summary"]["citations"]["status"] == "linked"
+    assert response.generation_trace["finalization"]["summary"]["semantic_validation"]["adopted"] is False
     if mode == "none":
         assert response.generation_trace["rounds"][0]["review_execution"] == "not_run"
         assert len([name for name, _ in model.prompts if name == "GroundedAudit"]) == 0

@@ -219,7 +219,12 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             else []
         )
         return GroundedDraft.model_validate(
-            {"summary": "手順", "items": items, "confidence": "high"}
+            {
+                "summary": "手順",
+                "summary_item_indexes": list(range(len(items))),
+                "items": items,
+                "confidence": "high",
+            }
         )
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
     if is_audit_schema(schema):
@@ -311,6 +316,10 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
         "excluded": [],
     }
     assert [item["kind"] for item in draft["items"]]
+    assert diagnostics["summary_evidence"]["citations"]["status"] == "linked"
+    assert diagnostics["summary_evidence"]["citations"]["document_scope_status"] == "complete"
+    assert diagnostics["summary_evidence"]["citations"]["document_ids"] == ["doc-1"]
+    assert diagnostics["summary_evidence"]["semantic_validation"]["adopted"] is False
     assert diagnostics["execution_steps"]
     assert diagnostics["evidence_tree"]
     assert diagnostics["evidence_tree"][0]["children"]

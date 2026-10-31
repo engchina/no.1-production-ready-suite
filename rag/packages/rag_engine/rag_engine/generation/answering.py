@@ -3287,6 +3287,7 @@ def synthesize_grounded_answer(
     external_data_required = requires_environment_data(
         settled, items=current.draft.confirmation_items(), external_data_required=current.draft.external_data_required
     )
+    current = grounded.link_summary_evidence(current, published_summary=bool(actionable or (published and not needed)))
     # summary を確かめきれなかった理由（#2738）。モデルの summary を出す分岐でだけ、summary の段落に警告を付ける。
     summary_reasons = [passage_marks.reason("summary_unaudited", current.summary_warning)] if current.summary_warning else []
     # 回答の構造に載せる説明（#1235）。拒答の分岐の「資料の記載」は答えではないので載せない。
@@ -3451,6 +3452,11 @@ def synthesize_grounded_answer(
             "summary": {
                 "status": "withheld" if current.summary_reason else "unverified" if current.summary_warning else "kept",
                 "reason": current.summary_reason or current.summary_warning,
+                "citations": current.timing["summary_citations"],
+                "semantic_validation": {
+                    "execution": current.review_execution,
+                    "adopted": False if grounded.diagnostic_only(current.timing) else current.review_execution == "completed",
+                },
             },
             "filtered": bool(problems),
             "citations_synchronized": True,
@@ -3561,6 +3567,7 @@ def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set
         "external_data_required": bool(draft.external_data_required),
         "reference_materials": _string_list(draft.reference_materials),
         "request_coverage": [plan.model_dump(mode="json") for plan in draft.request_coverage],
+        "summary_item_indexes": list(draft.summary_item_indexes),
         "items": [
             {
                 "kind": item.kind,

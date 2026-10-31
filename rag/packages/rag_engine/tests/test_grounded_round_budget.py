@@ -274,7 +274,8 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         self.assertIn(GOOD, result.answer_text)
         self.assertNotIn(GOOD, marks(result))
         self.assertTrue(result.answer_text.startswith(rounds[0]["draft"]["summary"]))
-        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "kept")
+        self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "unverified")
+        self.assertEqual(result.generation_trace["finalization"]["summary"]["semantic_validation"]["execution"], "timed_out")
         self.assertIn("確認（監査）が終わらなかったため", result.answer_text)
         self.assertNotEqual(result.envelope["outcome"], "insufficient_evidence")
 
