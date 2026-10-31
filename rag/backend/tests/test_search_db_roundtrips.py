@@ -1299,3 +1299,53 @@ def test_rrf_detail_record_uses_shared_safe_display_contract() -> None:
         json.loads(model.code[0].text)["contributions"][0]["fused_score"]
         == result.scores["synthetic-id"]
     )
+
+
+async def test_all_failed_rankings_record_failure_and_are_not_cached() -> None:
+    from app.clients.oracle import SearchHits
+
+    class FailedOracle(_SearchOracle):
+        async def search_many(self, searches: Any, top_k: int, filters: Any = None) -> Any:
+            result = []
+            for _ in searches:
+                hits = SearchHits()
+                hits.status = "failed"
+                hits.error = "TimeoutError"
+                result.append(hits)
+            return result
+
+    state = _SearchState()
+    engine = AnswerEngine(Settings(), oracle=FailedOracle(), genai=_GenAi())  # type: ignore[arg-type]
+    recorded: list[Any] = []
+
+    class Observation(_Observation):
+        def display(self, kind: Any = None, params: Any = None, details: Any = None) -> None:
+            if details:
+                recorded.append(details)
+
+    @contextmanager
+    def observer(operation: str, name: str) -> Any:
+        yield Observation()
+
+    with bind_trace_observer(observer), pytest.raises(RuntimeError, match="すべての検索一覧"):
+        await engine._search(
+            SearchRequest(query="合成"), state, retrieval_queries=["合成"], expand_references=False
+        )
+    assert not state.search_hits
+    assert len(recorded) == 1
+    assert [r["status"] for r in recorded[0]["rrf"]["lists"]] == ["failed", "failed"]
+    assert recorded[0]["rrf"]["unique_count"] == 0
+
+
+def test_independent_reference_hybrid_lookup_does_not_use_main_rrf_ratios() -> None:
+    vector = [_hit("c-1", 0.9, mode="vector"), _hit("c-2", 0.8, mode="vector")]
+    keyword = [_hit("c-2", 9.0, mode="keyword"), _hit("c-3", 8.0, mode="keyword")]
+    first = OracleClient(
+        settings=Settings(rag_rrf_method_ratio=(9, 1), rag_rrf_source_ratio=(1, 9))
+    )
+    second = OracleClient(
+        settings=Settings(rag_rrf_method_ratio=(1, 9), rag_rrf_source_ratio=(9, 1))
+    )
+    assert first._fuse_hybrid_hits(vector, keyword, 3) == second._fuse_hybrid_hits(
+        vector, keyword, 3
+    )

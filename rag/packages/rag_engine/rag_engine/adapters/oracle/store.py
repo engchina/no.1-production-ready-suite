@@ -941,6 +941,7 @@ def search_adb_hybrid_chunks(
                         scope,
                         metadata_filter,
                         category_filter,
+                        errors=[failures.get(("vector", q, ""), "") for q in queries],
                     )
                 )
             text_rankings: list[list[tuple[str, float | None]]] = []
@@ -1020,6 +1021,7 @@ def search_adb_hybrid_chunks(
                             metadata_filter,
                             category_filter,
                             expressions=text_expressions,
+                            errors=[failures.get(("keyword", q, ""), "") for q in text_inputs],
                         )
                     )
             raw_lists = [
@@ -1139,6 +1141,7 @@ def _search_ranking_details(
     classification_filter: ClassificationFilter,
     *,
     expressions: Sequence[str] = (),
+    errors: Sequence[str] = (),
 ) -> dict[str, Any]:
     by_uid = {chunk.chunk_uid: chunk for chunk in chunks}
     branches = []
@@ -1152,6 +1155,7 @@ def _search_ranking_details(
         branches.append(
             {
                 "query": queries[index],
+                "error": errors[index] if index < len(errors) else "",
                 "raw_count": len(ranking),
                 "results": results,
                 "expression": expressions[index] if index < len(expressions) else None,

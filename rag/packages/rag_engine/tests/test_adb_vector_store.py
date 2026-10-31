@@ -2010,3 +2010,44 @@ class LegacySchemaDocumentCountTests(unittest.TestCase):
         ):
             readiness = adb_vector_store.check_adb_hybrid_search_ready(settings=settings, retrieval_scope=RETRIEVAL_SCOPE_KNOWLEDGE_BASE)
         self.assertEqual(readiness, adb_vector_store.AdbSearchReadiness(legacy_document_count=2))
+
+
+def test_weighted_rrf_keeps_failed_vector_distinct_from_empty_and_uses_text_budget():
+    from contextlib import contextmanager
+
+    import pytest
+
+    from rag_engine.resources.tracing import bind_trace_observer
+
+    settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+    captured = []
+
+    @contextmanager
+    def observer(operation, name):
+        yield SimpleNamespace(
+            response=lambda _: None,
+            display=lambda **kwargs: (
+                captured.append(kwargs.get("details")) if name == "検索結果の統合（RRF）" and kwargs.get("details") else None
+            ),
+        )
+
+    adb_vector_store._pool_cache.clear()
+    with (
+        patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="rrf-failure"),
+        patch("rag_engine.adapters.oracle.store.connect_adb_thin", return_value=_ConnectionContext(object())),
+        patch("rag_engine.adapters.oracle.store.load_domain_keywords", return_value=[]),
+        patch("rag_engine.adapters.oracle.store._available_embedding_count", return_value=1),
+        patch(
+            "rag_engine.adapters.oracle.store._load_chunk_run_chunks",
+            return_value=[_stored_chunk("uid-rrf", "chunk-rrf", page_start=1, chunk_seq=1)],
+        ),
+        patch("rag_engine.adapters.oracle.store._vector_search", side_effect=TimeoutError("synthetic")),
+        patch("rag_engine.adapters.oracle.store._text_search", return_value=[("uid-rrf", 3.0)]),
+        bind_trace_observer(observer),
+    ):
+        result = search_adb_hybrid_chunks(
+            chunk_run_id="rrf-failure", retrieval_queries=["合成"], settings=settings, query_embedder=lambda *_: [0.1] * 1536
+        )
+    assert [r["status"] for r in captured[0]["rrf"]["lists"]] == ["failed", "completed"]
+    assert result.child_chunks[0].metadata["adb_hybrid"]["rrf_score"] == pytest.approx((1 / 3) / 61)
+    adb_vector_store._pool_cache.clear()

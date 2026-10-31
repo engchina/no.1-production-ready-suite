@@ -659,6 +659,7 @@ class OracleClient:
                     binds,
                     top_k,
                     filters,
+                    errors=branch_errors,
                 ),
             ),
             _observed_reads(
@@ -673,6 +674,7 @@ class OracleClient:
                     binds,
                     top_k,
                     filters,
+                    errors=branch_errors,
                 ),
             ),
         )
@@ -692,7 +694,11 @@ class OracleClient:
                     for rank, (chunk, row) in enumerate(_distinct_text_hits(ordered), start=1)
                 ]
             )
-        if branch_kinds and len(branch_errors) == len(branch_kinds):
+        if (
+            branch_kinds
+            and len(branch_errors) == len(branch_kinds)
+            and any(mode == SearchMode.HYBRID for _, _, mode in searches)
+        ):
             raise next(iter(branch_errors.values()))
         for index, hits in enumerate(branch_hits):
             result = SearchHits(hits)
@@ -743,25 +749,22 @@ class OracleClient:
         fused: dict[str, RetrievedChunk] = {}
         scores: dict[str, float] = {}
         retrieval_metadata: dict[str, dict[str, MetadataValue]] = {}
-        from rag_engine.retrieval.weighted_rrf import RrfWeights
-
-        weights = RrfWeights(*self._settings.rag_rrf_method_ratio)
         for rank, hit in enumerate(vector_hits, start=1):
             fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + weights.channel("vector") * _rrf(
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
                 rank, self._settings.rag_rrf_k
             )
             retrieval_metadata.setdefault(hit.chunk_id, {})["vector_rank"] = rank
             retrieval_metadata[hit.chunk_id]["vector_score"] = hit.score
         for rank, hit in enumerate(keyword_hits, start=1):
             fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + weights.channel(
-                "keyword"
-            ) * _rrf(rank, self._settings.rag_rrf_k)
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
+                rank, self._settings.rag_rrf_k
+            )
             retrieval_metadata.setdefault(hit.chunk_id, {})["keyword_rank"] = rank
             retrieval_metadata[hit.chunk_id]["keyword_score"] = hit.score
         ranked_ids = sorted(
-            (chunk_id for chunk_id in scores if scores[chunk_id] > 0),
+            scores,
             key=lambda chunk_id: _retrieved_chunk_score_sort_key(
                 fused[chunk_id],
                 scores[chunk_id],
@@ -6792,6 +6795,8 @@ class OracleClient:
         binds: Mapping[str, object],
         top_k: int,
         filters: dict[str, str],
+        *,
+        errors: Mapping[int, Exception] | None = None,
     ) -> dict[str, Any]:
         branches = []
         for index, branch_kind in enumerate(kinds):
@@ -6802,6 +6807,7 @@ class OracleClient:
             branches.append(
                 {
                     "query": queries[index],
+                    "error": type(errors[index]).__name__ if errors and index in errors else "",
                     "expression": binds.get(f"query_{index}"),
                     "raw_count": len(rows),
                     "results": [

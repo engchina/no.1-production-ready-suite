@@ -51,7 +51,7 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
             )
         )
     profile = await oracle.create_search_answer_profile(
-        name=f"合成 RRF profile {token}",
+        name=f"合成 RRF プロファイル {token}",
         config=SearchAnswerProfileConfig(knowledge_base_ids=[kb.id]),
     )
     settings = Settings(
@@ -73,7 +73,7 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
         vector_only_queries=["合成項目", "追加検索文"],
         expand_references=False,
     )
-    assert {chunk.document_id for chunk in result.child_chunks} == set(doc_ids[:2])
+    assert {chunk.metadata["document_id"] for chunk in result.child_chunks} == set(doc_ids[:2])
     rrf = state.retrieval_stages[-1]["rrf"]
     assert [item["weight"] for item in rrf["lists"]] == pytest.approx([7 / 15, 0.2])
     restricted = set_audit_request_context(
@@ -102,6 +102,6 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
             vector_only_queries=["合成項目"],
             expand_references=False,
         )
-        assert {chunk.document_id for chunk in result.child_chunks} == {doc_ids[0]}
+        assert {chunk.metadata["document_id"] for chunk in result.child_chunks} == {doc_ids[0]}
     finally:
         reset_audit_request_context(restricted)

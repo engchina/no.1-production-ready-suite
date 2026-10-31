@@ -74,7 +74,9 @@ def search_diagnostics(
         fields.append({"label": f"検索 {index} の入力", "value": input_value})
         if not vector:
             fields.append({"label": f"Oracle Text 検索式 {index}", "value": str(branch.get("expression") or "なし（未実行）")})
-        lines.append(f"検索 {index}: 取得件数（重複除去前） {raw} 件 / 重複除去後 {len(rows)} 件" + ("（該当なし）" if not rows else ""))
+        error = str(branch.get("error") or "")
+        suffix = f"（失敗: {error}）" if error else "（該当なし）" if not rows else ""
+        lines.append(f"検索 {index}: 取得件数（重複除去前） {raw} 件 / 重複除去後 {len(rows)} 件" + suffix)
         branch_lines: list[str] = []
         for rank, row in enumerate(rows, 1):
             identifiers.add(str(row["id"]))

@@ -1592,6 +1592,9 @@ class AnswerEngine:
                 fused = fusion.scores
                 observation.display(details=fusion_details(fusion, weights, budgets, k))
                 observation.response(fusion.diagnostics(weights, budgets, k))
+                if raw_lists and all(r.status == "failed" for r in raw_lists):
+                    observation.display(params={"status": "failed"})
+                    raise RuntimeError("すべての検索一覧の取得に失敗しました。")
             # 自動で足した条件(質問から読み取った抽出項目の条件 #652・質問が名指しした文書のページと
             # 文書名 #546)で 0 件なら、その条件を段ごとに外して検索し直す(#2401。以降の検索(CRAG の
             # 補正検索など)も外したまま)。
@@ -2162,7 +2165,11 @@ class AnswerEngine:
                     for query, embedding, mode in missing.values()
                 ]
             state.search_hits.update(zip(missing, found, strict=True))
-        return [state.search_hits[key] for key in keys]
+        results = [state.search_hits[key] for key in keys]
+        for key, hits in zip(keys, results, strict=True):
+            if getattr(hits, "status", "") == "failed":
+                state.search_hits.pop(key, None)
+        return results
 
     async def _entity_expansion(
         self,
