@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ModelWrapValidatorHandler, PrivateAttr, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
@@ -559,6 +559,11 @@ class GroundedDraft(_StrictModel):
     summary: str = Field(
         description="items で裏付けた結論だけを1〜2文で。引用できる根拠が無ければ空文字。見出し・番号・出典・Markdown は書かない。"
     )
+    summary_item_indexes: list[Annotated[int, Field(strict=True, ge=0, le=39)]] = Field(
+        default_factory=list,
+        max_length=40,
+        description="summary の全事実を支える items の 0 始まりの index。条件・否定・例外を保ち、本文にない事実を加えない。summary が空なら空配列。",
+    )
     confidence: Literal["high", "medium", "low"] = Field(
         description="high=主要な説明と適用条件に直接の根拠がある。medium=一部に不確実性がある。low=案内自体に根拠が乏しい。"
     )
@@ -585,7 +590,11 @@ class GroundedDraft(_StrictModel):
             if removed:
                 data["items"] = kept
                 collapsed["items"] = removed
-                data["applications"] = _reindex_applications(data.get("applications"), index)
+                if "applications" in data:
+                    data["applications"] = _reindex_applications(data["applications"], index)
+                indexes = data.get("summary_item_indexes")
+                if isinstance(indexes, list) and all(type(value) is int for value in indexes):
+                    data["summary_item_indexes"] = list(dict.fromkeys(index.get(value, value) for value in indexes))
         draft = handler(data)
         if collapsed:
             draft._collapsed_duplicates = collapsed

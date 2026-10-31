@@ -93,7 +93,12 @@ def item(evidence_id, text, quote, **extra):
 
 
 def draft(*items, summary="集計表出力から明細一覧を出力できます。", confidence="high"):
-    return {"summary": summary, "items": list(items), "confidence": confidence}
+    return {
+        "summary": summary,
+        "summary_item_indexes": [index for index, entry in enumerate(items) if entry.get("kind") != "gap"] if summary else [],
+        "items": list(items),
+        "confidence": confidence,
+    }
 
 
 def marks(result):
