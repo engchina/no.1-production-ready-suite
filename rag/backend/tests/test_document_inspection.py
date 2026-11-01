@@ -135,3 +135,12 @@ def test_table_cells_are_read_in_global_bounded_windows() -> None:
     assert first["cell_total"] == 1000
     assert len(first["payload"]["tables"][0]["cells"]) == 25
     assert later["payload"]["tables"][0]["cells"][-1]["row"] == 999
+
+
+def test_inspection_index_requires_stable_element_ids() -> None:
+    from app.services.document_inspection import with_inspection_index
+
+    legacy = {"elements": [{"text": "合成の本文"}]}
+    assert with_inspection_index(legacy) == legacy
+    indexed = with_inspection_index({"elements": [{"element_id": "e1", "text": "合成の本文"}]})
+    assert indexed["parser_artifacts"]["inspection_index"]["elements"] == {"e1": 0}

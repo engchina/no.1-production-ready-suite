@@ -152,13 +152,13 @@ def extraction_window(
 
 
 def with_inspection_index(payload: Mapping[str, Any]) -> dict[str, Any]:
-    artifacts = dict(payload.get("parser_artifacts") or {})
-    artifacts["inspection_index"] = {
-        "version": 1,
-        "elements": {
-            str(row["element_id"]): i
-            for i, row in enumerate(payload.get("elements") or [])
-            if row.get("element_id")
-        },
+    positions = {
+        str(row["element_id"]): i
+        for i, row in enumerate(payload.get("elements") or [])
+        if row.get("element_id")
     }
+    if not positions:
+        return dict(payload)
+    artifacts = dict(payload.get("parser_artifacts") or {})
+    artifacts["inspection_index"] = {"version": 1, "elements": positions}
     return {**payload, "parser_artifacts": artifacts}
