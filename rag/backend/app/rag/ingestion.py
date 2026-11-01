@@ -175,6 +175,7 @@ from app.rag.pdf_segment_merge import (
 )
 from app.rag.pdf_segments import PdfPageSegment, split_pdf_page_segments
 from app.rag.preprocess_strategy import preprocess_options, resolve_preprocess_profile
+from app.rag.structure_index import structure_index_targets
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
@@ -3764,7 +3765,10 @@ class IngestionPipeline:
         await self._save_entity_index_if_enabled(
             trace_id, document_id, extraction, chunks, chunk_set_id=chunk_set_id
         )
-        if not resolve_graph_adapter(self._settings).enabled:
+        graph_targets = await structure_index_targets(
+            self._oracle, document_id, default=resolve_graph_adapter(self._settings).enabled
+        )
+        if graph_targets == []:
             return
         try:
             await _observe_ingestion_stage(
@@ -3775,6 +3779,7 @@ class IngestionPipeline:
                     extraction,
                     chunks,
                     chunk_set_id=chunk_set_id,
+                    **({"knowledge_base_ids": graph_targets} if graph_targets is not None else {}),
                 ),
                 attributes={
                     "chunk_count": len(chunks),
@@ -3814,7 +3819,10 @@ class IngestionPipeline:
         await self._save_entity_index_if_enabled(
             trace_id, document_id, extraction, chunks, chunk_set_id=chunk_set_id
         )
-        if not resolve_graph_adapter(self._settings).enabled:
+        graph_targets = await structure_index_targets(
+            self._oracle, document_id, default=resolve_graph_adapter(self._settings).enabled
+        )
+        if graph_targets == []:
             return
         try:
             await _observe_ingestion_stage(
@@ -3825,6 +3833,7 @@ class IngestionPipeline:
                     extraction,
                     chunks,
                     chunk_set_id=chunk_set_id,
+                    **({"knowledge_base_ids": graph_targets} if graph_targets is not None else {}),
                 ),
                 attributes={
                     "chunk_count": len(chunks),
@@ -3913,6 +3922,7 @@ class IngestionPipeline:
         chunks: list[Chunk],
         *,
         chunk_set_id: str | None = None,
+        knowledge_base_ids: list[str] | None = None,
     ) -> GraphIndex:
         """構造化抽出から関係情報(文書と章・節の見出しのつながり)を作り Oracle へ保存する。"""
         knowledge_bases = await self._oracle.list_document_knowledge_bases(document_id)
@@ -3920,7 +3930,9 @@ class IngestionPipeline:
         graph_index = await asyncio.to_thread(
             build_graph_index,
             document_id=document_id,
-            knowledge_base_ids=[knowledge_base.id for knowledge_base in knowledge_bases],
+            knowledge_base_ids=knowledge_base_ids
+            if knowledge_base_ids is not None
+            else [knowledge_base.id for knowledge_base in knowledge_bases],
             extraction=extraction,
             chunks=chunks,
             chunk_set_id=chunk_set_id,
@@ -3930,6 +3942,9 @@ class IngestionPipeline:
             document_id,
             graph_index,
             chunk_set_id=chunk_set_id,
+            **(
+                {"knowledge_base_ids": knowledge_base_ids} if knowledge_base_ids is not None else {}
+            ),
         )
         return graph_index
 

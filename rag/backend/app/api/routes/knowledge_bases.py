@@ -22,6 +22,8 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseGraphEdge,
     KnowledgeBaseGraphNode,
     KnowledgeBaseStatus,
+    KnowledgeBaseStructureIndexData,
+    KnowledgeBaseStructureIndexUpdate,
     KnowledgeBaseSummary,
     KnowledgeBaseUpdateRequest,
 )
@@ -317,3 +319,42 @@ async def remove_document_from_knowledge_base(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await _refreshed_detail_response(oracle, detail)
+
+
+@router.get(
+    "/{knowledge_base_id}/structure-index",
+    response_model=ApiResponse[KnowledgeBaseStructureIndexData],
+)
+async def get_structure_index_settings(
+    knowledge_base_id: str,
+) -> ApiResponse[KnowledgeBaseStructureIndexData]:
+    from app.rag.structure_index import PREFERENCE_KEY
+
+    oracle = OracleClient()
+    kb = await oracle.get_knowledge_base(knowledge_base_id)
+    if kb is None:
+        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
+    value = kb.retrieval_config.get(PREFERENCE_KEY)
+    return ApiResponse(
+        data=KnowledgeBaseStructureIndexData(
+            enabled=value if isinstance(value, bool) else None,
+            global_enabled=get_settings().rag_graph_profile == "entities",
+        )
+    )
+
+
+@router.put(
+    "/{knowledge_base_id}/structure-index",
+    response_model=ApiResponse[KnowledgeBaseStructureIndexData],
+)
+async def update_structure_index_settings(
+    knowledge_base_id: str, request: KnowledgeBaseStructureIndexUpdate
+) -> ApiResponse[KnowledgeBaseStructureIndexData]:
+    oracle = OracleClient()
+    try:
+        await oracle.set_knowledge_base_structure_index(knowledge_base_id, request.enabled)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await get_structure_index_settings(knowledge_base_id)

@@ -1191,6 +1191,8 @@ export interface KnowledgeBaseAdapterConfig {
 }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
+  structure_index_enabled?: boolean | null;
+  structure_index_global_enabled?: boolean;
   retrieval_config: Record<string, unknown>;
   adapter_config: KnowledgeBaseAdapterConfig;
   /** 既存 retrieval_config に legacy query 設定が残っており、現在は無視されている。 */
@@ -3821,6 +3823,11 @@ export const api = {
       `/api/knowledge-bases/${encodeURIComponent(id)}`,
     ),
   // DB が止まっていると backend は空の図と warning_messages で縮退するため、warning も返す（空と区別する）。
+  updateKnowledgeBaseStructureIndex: (id: string, enabled: boolean | null) =>
+    request<{ enabled: boolean | null; global_enabled: boolean }>(
+      `/api/knowledge-bases/${encodeURIComponent(id)}/structure-index`,
+      {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled})},
+    ),
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
     requestDegradable<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,

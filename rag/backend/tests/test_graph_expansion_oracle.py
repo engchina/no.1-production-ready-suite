@@ -184,3 +184,57 @@ async def test_subgraph_hides_pending_graph_until_activation() -> None:
         assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in edges)
     finally:
         await client.delete_document(document_id)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_kb_structure_override_and_rebuild_preserve_shared_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import get_settings
+    from app.rag.structure_index import rebuild_document_structure_index, structure_index_targets
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_graph_profile", "off")
+    client = OracleClient(settings)
+    token = uuid4().hex[:8]
+    a = await client.create_knowledge_base(name=f"合成構造A {token}")
+    b = await client.create_knowledge_base(name=f"合成構造B {token}")
+    text = "合成章節の本文"
+    doc, cs = await _indexed_document(
+        client,
+        knowledge_base_id=a.id,
+        file_name=f"synthetic-structure-{token}.txt",
+        chunks=[
+            Chunk(
+                text=text,
+                index=0,
+                start_offset=0,
+                end_offset=len(text),
+                metadata={"section_title": "合成節", "section_path": ["合成章", "合成節"]},
+            )
+        ],
+    )
+    await client.assign_documents_to_knowledge_base(b.id, [doc])
+    await client.set_knowledge_base_structure_index(a.id, False)
+    await client.set_knowledge_base_structure_index(b.id, True)
+    assert await structure_index_targets(client, doc, default=False) == [b.id]
+    before_a = await client.fetch_knowledge_base_subgraph(a.id, limit=100)
+    before = await client._fetch_all(
+        "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
+    )
+    one = await rebuild_document_structure_index(client, b.id, doc)
+    two = await rebuild_document_structure_index(client, b.id, doc)
+    assert one == two and one["entities"] > 1
+    assert await client.fetch_knowledge_base_subgraph(a.id, limit=100) == before_a
+    assert (await client.fetch_knowledge_base_subgraph(b.id, limit=100))[0]
+    after = await client._fetch_all(
+        "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
+    )
+    assert before == after
+    state = await client.get_chunk_set(cs)
+    assert state is not None and state["is_active"] == 1
+    await client.set_knowledge_base_structure_index(b.id, False)
+    with pytest.raises(ValueError, match="無効"):
+        await rebuild_document_structure_index(client, b.id, doc)
+    await client.set_knowledge_base_structure_index(b.id, None)
+    assert await structure_index_targets(client, doc, default=False) == []

@@ -2001,6 +2001,59 @@ class OracleClient:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
 
+    async def document_structure_index_preferences(
+        self, document_id: str
+    ) -> dict[str, bool | None]:
+        """現在の所属と利用者の範囲内にあるKBの構築指定だけを読む。"""
+        from app.rag.structure_index import PREFERENCE_KEY
+
+        rows = await self._fetch_all(
+            f"""SELECT kb.knowledge_base_id, kb.retrieval_config
+            FROM rag_document_knowledge_bases member
+            JOIN rag_knowledge_bases kb ON kb.knowledge_base_id=member.knowledge_base_id
+            JOIN rag_documents d ON d.document_id=member.document_id
+            WHERE member.document_id=:document_id AND kb.status='ACTIVE'
+              AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}
+              AND {_oracle_access_predicate_sql(alias="d")}""",
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        result: dict[str, bool | None] = {}
+        for row in rows:
+            config = _json_loads(row.get("retrieval_config"))
+            value = config.get(PREFERENCE_KEY) if isinstance(config, dict) else None
+            result[str(row["knowledge_base_id"])] = value if isinstance(value, bool) else None
+        return result
+
+    async def set_knowledge_base_structure_index(
+        self, knowledge_base_id: str, enabled: bool | None
+    ) -> None:
+        """構築設定の1項目だけを行lock内で更新する。既存graphは削除しない。"""
+        from app.rag.structure_index import PREFERENCE_KEY
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _fetch_all(
+                connection,
+                f"""SELECT knowledge_base_id FROM rag_knowledge_bases
+                WHERE knowledge_base_id=:id
+                  AND {_oracle_knowledge_base_access_predicate_sql()} FOR UPDATE""",
+                _with_tenant_bind({"id": knowledge_base_id}),
+            )
+            kb = _require_active_knowledge_base(connection, knowledge_base_id)
+            config = dict(kb.retrieval_config)
+            if enabled is None:
+                config.pop(PREFERENCE_KEY, None)
+            else:
+                config[PREFERENCE_KEY] = enabled
+            _execute(
+                connection,
+                f"""UPDATE rag_knowledge_bases SET retrieval_config=:config, updated_at=SYSTIMESTAMP
+                WHERE knowledge_base_id=:id AND {_oracle_knowledge_base_access_predicate_sql()}""",
+                _with_tenant_bind({"id": knowledge_base_id, "config": _json_bind(config)}),
+                input_sizes=_json_input_sizes("config"),
+            )
+
+        await self._run_transaction(operation)
+
     async def get_knowledge_base_extraction_fields(
         self, knowledge_base_id: str
     ) -> list[FieldDefinition] | None:
@@ -5898,12 +5951,14 @@ class OracleClient:
         graph_index: GraphIndex,
         *,
         chunk_set_id: str | None = None,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> None:
         """指定 chunk_set（legacy は document）の GraphRAG-lite index を置換する。"""
         await self._replace_document_graph_index_with_oracle(
             document_id,
             graph_index,
             chunk_set_id=chunk_set_id,
+            knowledge_base_ids=knowledge_base_ids,
         )
 
     async def save_search_audit_event(self, event: Mapping[str, object]) -> None:
@@ -10876,13 +10931,41 @@ class OracleClient:
         graph_index: GraphIndex,
         *,
         chunk_set_id: str | None = None,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> None:
         """関係情報の表の chunk_set scope を置換する。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
             if _select_document_state(connection, document_id) is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
-            if chunk_set_id is not None:
+            if knowledge_base_ids is not None:
+                scopes = list(dict.fromkeys(knowledge_base_ids))
+                if not scopes or any(
+                    entity.knowledge_base_id not in scopes for entity in graph_index.entities
+                ):
+                    raise ValueError("文書構造索引の対象範囲が不正です。")
+                for kb_id in scopes:
+                    _require_active_knowledge_base(connection, kb_id)
+                    if not _fetch_all(
+                        connection,
+                        """SELECT document_id FROM rag_document_knowledge_bases
+                        WHERE document_id=:doc AND knowledge_base_id=:kb""",
+                        {"doc": document_id, "kb": kb_id},
+                    ):
+                        raise ValueError("文書の所属が変更されました。もう一度確認してください。")
+                scope_sql, scope_binds = _oracle_in_predicate(
+                    "knowledge_base_id", "graph_kb", scopes
+                )
+                rows = _fetch_all(
+                    connection,
+                    f"""SELECT entity_id FROM rag_graph_entities
+                    WHERE {scope_sql} AND (chunk_set_id=:chunk_set_id OR
+                    (:chunk_set_id IS NULL AND JSON_EXISTS(source_document_ids,
+                        '$[*]?(@ == $doc)' PASSING :document_id AS "doc")))""",
+                    {**scope_binds, "chunk_set_id": chunk_set_id, "document_id": document_id},
+                )
+                _delete_scoped_graph_entities(connection, [str(row["entity_id"]) for row in rows])
+            elif chunk_set_id is not None:
                 rows = _fetch_all(
                     connection,
                     "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
@@ -11679,6 +11762,25 @@ def _select_graph_entity_ids_for_document(
         _with_tenant_bind({"document_id": document_id}),
     )
     return [str(row["entity_id"]) for row in rows if row.get("entity_id")]
+
+
+def _delete_scoped_graph_entities(
+    connection: OracleConnectionProtocol, identifiers: Sequence[str]
+) -> None:
+    """KB別のentityに結び付く行だけをFK順で置き換える。"""
+    if not identifiers:
+        return
+    for table, column in (
+        ("rag_graph_relationships", "source_entity_id"),
+        ("rag_graph_entity_chunks", "entity_id"),
+        ("rag_graph_entities", "entity_id"),
+    ):
+        predicate, binds = _oracle_in_predicate(column, "structure_id", identifiers)
+        _execute(
+            connection,
+            f"DELETE FROM {table} WHERE {predicate} AND {_oracle_tenant_predicate()}",
+            _with_tenant_bind(binds),
+        )
 
 
 def _delete_graph_rows_for_chunk_set(
@@ -17283,10 +17385,15 @@ def _to_knowledge_base_detail(
     knowledge_base: StoredKnowledgeBase,
 ) -> KnowledgeBaseDetail:
     adapter_config = parse_adapter_config(knowledge_base.retrieval_config)
+    structure_override = knowledge_base.retrieval_config.get("structure_index_enabled")
     return KnowledgeBaseDetail(
         **_to_knowledge_base_summary(knowledge_base).model_dump(),
         retrieval_config=knowledge_base.retrieval_config,
         adapter_config=adapter_config,
+        structure_index_enabled=structure_override
+        if isinstance(structure_override, bool)
+        else None,
+        structure_index_global_enabled=get_settings().rag_graph_profile == "entities",
         legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
     )
 
