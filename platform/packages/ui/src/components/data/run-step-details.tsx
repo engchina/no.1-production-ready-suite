@@ -40,9 +40,9 @@ export interface RunStepDetailField {
 }
 
 /** 表示順を変えず、経過と軌跡が同じ内容を使う。 */
-export function runStepContent(details: RunStepDetails | null | undefined): RunStepDetails {
+export function runStepContent(details: RunStepDetails | null | undefined, fallback?: string): RunStepDetails {
   const fields = details?.fields?.filter(field => !field.technical);
-  return { fields: fields ? [...fields.filter(field => field.label !== DEFAULT_RUN_STEP_DETAILS_LABELS.result), ...fields.filter(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)] : undefined, lines: details?.lines, code: details?.code, truncated: details?.truncated };
+  return { fields: fields ? [...fields.filter(field => field.label !== DEFAULT_RUN_STEP_DETAILS_LABELS.result), ...fields.filter(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)] : undefined, lines: fallback && !fields?.some(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result) ? [...(details?.lines ?? []), ...(details?.lines?.includes(fallback) ? [] : [fallback])] : details?.lines, code: details?.code, truncated: details?.truncated };
 }
 export function runStepResultSummary(details: RunStepDetails | null | undefined, fallback?: string): string | undefined {
   const result = runStepContent(details).fields?.find(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)?.value;

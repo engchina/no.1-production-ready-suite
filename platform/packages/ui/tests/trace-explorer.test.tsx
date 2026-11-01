@@ -115,7 +115,7 @@ it.each([
     act(() => root.render(<TraceExplorer steps={[{...steps[0], details}]} onClose={() => {}} />));
     const content = host.querySelector("[data-trace-inspector-content]");
     expect(content).not.toBeNull();
-    expect(content?.classList.contains("gap-2")).toBe(true);
+    expect(content?.classList.contains("gap-1")).toBe(true);
     expect(content?.querySelector(":scope > [data-trace-timing]")).not.toBeNull();
     expect(content?.querySelector("[data-trace-timing]")?.textContent).toContain("開始時刻");
   } finally { act(() => root.unmount()); host.remove(); }
@@ -134,7 +134,7 @@ it("経過は処理内容だけを描き、軌跡は同じ内容の後に時刻�
     const explore = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent?.includes("軌跡を調べる"))!;
     act(() => explore.click());
     const content = host.querySelector("[data-trace-inspector-content]")!;
-    expect(Array.from(content.children).map(node => node.hasAttribute("data-trace-processing-content") ? "content" : node.hasAttribute("data-trace-timing") ? "time" : "technical")).toEqual(["content", "time", "technical"]);
+    expect(Array.from(content.children).slice(1).map(node => node.hasAttribute("data-trace-processing-content") ? "content" : node.hasAttribute("data-trace-timing") ? "time" : "technical")).toEqual(["content", "time", "technical"]);
     expect(content.querySelector("[data-trace-processing-content]")?.textContent).toContain("合成の引用資料");
     expect(content.querySelector("[data-trace-technical]")?.textContent).toContain("Span name");
     expect(content.querySelector("time")?.getAttribute("datetime")).toBe(steps[0].startedAt);

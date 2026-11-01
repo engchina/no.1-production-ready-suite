@@ -1074,9 +1074,9 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     const skipped = page.getByTestId(`${prefix}-step-${spanStepId("legacy-skip")}`);
     await expect(skipped).toHaveAttribute("data-status", "skipped");
     await expect(skipped.locator("[data-run-step-status-duration]")).toContainText("スキップ");
-    await expect(skipped.locator("[data-run-result-summary]")).toHaveText(reason);
+    await expect(skipped.locator("[data-run-result-summary]")).toHaveCount(0);
     await expect(page.getByTestId(prefix)).not.toContainText("skipped");
-    await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveText("設定がオフのため、検索文の追加をスキップしました。");
+    await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveCount(0);
     await skipped.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, theme => testInfo.outputPath(`${prefix}-skip-${theme}.png`));
     await inspectTraceStep(page, page.getByTestId(prefix), spanStepId("legacy-skip"));

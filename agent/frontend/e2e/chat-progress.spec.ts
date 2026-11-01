@@ -350,6 +350,7 @@ for (const viewport of VIEWPORTS) {
       // 承認の待ちは、待ったツールの名前と一緒に、承認の後のツールの前に出る（入れ子にしない）。
       const approval = turn.getByTestId("chat-progress-step-approval_wait");
       await expect(approval).toContainText("承認の判断を受け取りました");
+      await approval.locator("button[aria-expanded]").click();
       await expect(approval).toContainText("nl2sql__execute");
       expect((await approval.getAttribute("data-level")) ?? "0").toBe("0");
       await expect(turn.getByTestId("chat-progress-step-tool:nl2sql__execute")).toContainText("選ばれたツールを呼び出しました");

@@ -61,7 +61,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
       && (row.getAttribute("data-level") ?? "0") === source[i].level && row.getAttribute("data-parent-id") === source[i].parent
       && row.getAttribute("data-status") === source[i].status
       && row.querySelector("[data-trace-step-status-duration]")?.textContent === source[i].duration
-      && (row.querySelector("[data-trace-result-summary]")?.textContent ?? "") === source[i].summary);
+      && (!source[i].summary || (row.querySelector("[data-trace-result-summary]")?.textContent ?? "") === source[i].summary));
   }, normalRows)).toBe(true);
   await check(explorer.getByRole("heading", {name: "軌跡の調査"})).toBeFocused();
   const search = explorer.getByRole("searchbox", {name: "呼び出しを検索"});

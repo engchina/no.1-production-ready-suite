@@ -816,7 +816,7 @@ export function RunTimeline({
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
       steps
-        .filter((step) => step.children != null || hasRunStepDetails(step.details))
+        .filter((step) => step.children != null || hasRunStepDetails(step.details) || Boolean(step.detail))
         .map((step) => [step.id, defaultExpanded || step.status === "failed"])
     )
   );
@@ -847,7 +847,7 @@ export function RunTimeline({
           if (renderRunningStep && step.status === "running" && !hasChildren[index]) return <li key={step.id} className="min-w-0">{renderRunningStep(step)}</li>;
           const duration = stepDurationMs(step);
           const bar = showBars ? bars[index] : null;
-          const content = runStepContent(step.details);
+          const content = runStepContent(step.details, step.detail);
           const details = hasRunStepDetails(content) ? content : undefined;
           const hasDetails = step.children != null || details !== undefined;
           const stepTestId = stepTestIdPrefix ? `${stepTestIdPrefix}-step-${step.id}` : undefined;

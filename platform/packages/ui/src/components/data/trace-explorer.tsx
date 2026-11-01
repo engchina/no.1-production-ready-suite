@@ -171,7 +171,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
               {selectedParents.length ? <p className="mt-1 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">{labels.location}: {selectedParents.at(-1)?.label}</p> : null}
               <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
               <div className="grid min-w-0 gap-1" data-trace-inspector-content="">
-                <RunStepDetailsView details={{fields: [{label: "Span ID", value: selected.id, mono: true, copyValue: selected.id, copyLabel: labels.copy}]}} />
+                <RunStepDetailsView labels={{copied: labels.copied, copyFailed: labels.copyFailed}} details={{fields: [{label: "Span ID", value: selected.id, mono: true, copyValue: selected.id, copyLabel: labels.copy}]}} />
                 {(selectedParents.length > 1 || selected.detail || hasRunStepDetails(runStepContent(selected.details)) || selected.details?.call || selected.children) ? <div data-trace-processing-content="" className="my-2 grid min-w-0 gap-2">
                 {selectedParents.length > 1 ? <Disclosure summary={labels.fullPath} variant="plain" size="sm"><ol aria-label={labels.fullPath} className="grid gap-1 text-xs text-fg-muted">{selectedParents.map(step => <li key={step.id}>{step.label}</li>)}</ol></Disclosure> : null}
                   {selected.detail ? <p className="text-xs leading-5 text-fg-muted">{selected.detail}</p> : null}
