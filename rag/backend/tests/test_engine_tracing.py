@@ -155,3 +155,19 @@ def enable_trace_content_for_snapshot_tests() -> Any:
 
     with call_content_policy(lambda: True):
         yield
+
+
+@pytest.mark.parametrize("status", ["failed", "エラーで中断"])
+def test_handled_engine_failure_is_not_marked_done(status: str) -> None:
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            operation_trace("rag.search", operation_id="synthetic") as summary,
+            _observe_engine_call("stage", "合成の検索") as observation,
+        ):
+            observation.display(params={"status": status})
+            observation.display(details={"fields": [{"label": "結果", "value": "合成の失敗"}]})
+        stage = next(span for span in summary.spans if span.operation_name == "rag.engine.stage")
+        assert stage.status == "failed"
+    finally:
+        shutdown_tracing()

@@ -145,6 +145,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_INGESTION_SEGMENTS",
     "RAG_CHUNKS",
     "RAG_CHUNK_SETS",
+    "RAG_NATIVE_SEARCH_SCOPES",
     "RAG_DOCUMENT_EXTRACTIONS",
     "RAG_ARTIFACT_LAYERS",
     "RAG_SEARCH_AUDIT",
@@ -186,6 +187,7 @@ PRESERVED_TABLES: tuple[str, ...] = (
 )
 
 MANAGED_INDEXES: tuple[str, ...] = (
+    "RAG_CHUNKS_NATIVE_SCOPE_IDX",
     NATIVE_HYBRID_INDEX,
     "RAG_LANG_RELEASE_PREVIOUS_IDX",
     "RAG_LANG_RELEASE_RESTORE_IDX",
@@ -288,6 +290,7 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "INDEX") for name in MANAGED_INDEXES),
     *MANAGED_TEXT_OBJECTS,
     (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+    ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
     (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
 )
 
@@ -340,6 +343,7 @@ def managed_manifest_from_schema(
         objects.update(
             {
                 (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+                ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
                 (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
             }
         )

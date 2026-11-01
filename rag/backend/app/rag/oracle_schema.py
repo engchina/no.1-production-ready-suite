@@ -23,6 +23,8 @@ from app.clients.native_hybrid_schema import (
     native_hybrid_ivf_migration_sql,
     native_hybrid_migration_sql,
     native_hybrid_objects_sql,
+    native_hybrid_scope_migration_sql,
+    native_hybrid_scope_objects_sql,
 )
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
@@ -294,6 +296,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="chunk_sets",
             table_name="rag_chunk_sets",
             sql=oracle_chunk_set_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="native_search_scopes",
+            table_name="rag_native_search_scopes",
+            sql=native_hybrid_scope_objects_sql(),
         ),
         OracleSchemaSection(
             name="search_audit",
@@ -621,6 +628,13 @@ END;
             name="20261101_002_native_hybrid_ivf",
             table_name="rag_chunks",
             sql=native_hybrid_ivf_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261101_003_native_hybrid_scope",
+            table_name="rag_chunks",
+            sql=native_hybrid_scope_migration_sql(),
         )
     )
     return sections

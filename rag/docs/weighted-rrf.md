@@ -36,3 +36,9 @@ backend の「検索文ごとの hybrid 融合 → 検索文間の二度目の R
 参考: [Azure のベクトルの重み](https://learn.microsoft.com/en-us/azure/search/vector-search-how-to-query#vector-weighting)、[RRF](https://learn.microsoft.com/en-us/azure/search/hybrid-search-ranking)。順位寄与への乗算を参考にするが、本実装は出所ごとの総予算と方式の正規化を持ち、Azure と同一の仕様とは位置付けない。
 
 Oracle公式: [SEARCH](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/search.html)、[WRRFの計算と尺度](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/understand-hybrid-search.html)。比率は品質向上の保証ではない。
+
+### 原生検索の範囲指定
+
+許可された chunk 集合を検索前に確定し、全件が許可された chunk set は `RAG_NATIVE_SEARCH_SCOPES` の安定した数値キーで指定する。ページなどで限定された集合は、許可外の行を含まない chunk index の区間か個別 ID で指定する。検索後にも従来の権限・明示範囲を照合する。長い ID の全列挙による Oracle 内部バッファ超過を避けるための表現変更であり、検索範囲や比率は変更しない。
+
+`20261101_003_native_hybrid_scope` は対応表・補助列・索引・同期 trigger を追加する。本文・embedding は書き換えず、外部モデルも呼ばない。原質問のベクトル／全文検索は1回の `DBMS_HYBRID_VECTOR.SEARCH` で実行し、許可集合の取得用 SQL はその前に実行する。
