@@ -756,8 +756,8 @@ test("使用版未記録は状態列と同じ形式のラベルを1つだけ表�
   await page.goto("/file-list");
   for (const document of documents) {
     const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: document.file_name, exact: true }) });
-    const cell = row.getByRole("cell", { name: "版未記録・判定不可", exact: true });
-    await expect(cell).toHaveText("版未記録・判定不可");
+    const cell = row.getByRole("cell", { name: "版未記録", exact: true });
+    await expect(cell).toHaveText("版未記録");
     await expect(cell.locator("[data-status-variant]")).toHaveCount(1);
     await expect(cell.locator("a, button")).toHaveCount(0);
   }
@@ -767,7 +767,7 @@ test("使用版未記録は状態列と同じ形式のラベルを1つだけ表�
 });
 
 
-test("ページをまたぐ選択から実在のレシピを確認し、固定版と設定版で一括再処理して部分失敗を残す", { tag: "@responsive" }, async ({ page }) => {
+test("ページをまたぐ選択から実在のレシピを確認し、固定版と設定版で一括再処理して部分失敗を残す", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const documents = Array.from({ length: 30 }, (_, index) => ({ ...documentSummary(`batch-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null, language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } }));
   await mockFileListApi(page, documents);
   const submissions: Record<string, unknown>[] = [];
@@ -797,7 +797,10 @@ test("ページをまたぐ選択から実在のレシピを確認し、固定�
   await page.getByRole("checkbox", { name: "すべて選択", exact: true }).check();
   await page.getByRole("button", { name: "条件に一致する 30 件をすべて選択", exact: true }).click();
   const panel = page.getByTestId("language-pack-bulk-reprocess");
-  await panel.getByRole("button", { name: "選択文書の再処理を確認する" }).click();
+  await page.getByRole("button", { name: "一括再処理", exact: true }).click();
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute("role", "dialog");
+  await panel.screenshot({path: testInfo.outputPath("bulk-reprocess-sheet.png")});
   await expect(panel.getByText("対象を確認できない文書 28 件")).toBeVisible();
   expect(idsQueries.at(-1)?.searchParams.get("language_pack_relation")).toBe("different");
   expect(idsQueries.at(-1)?.searchParams.get("current_release_id")).toBe("release-current");
@@ -820,5 +823,10 @@ test("ページをまたぐ選択から実在のレシピを確認し、固定�
   ] }]);
   await expect(panel.getByText("受付 1 レシピ・受付不可 1 レシピ。処理結果は各文書の状態で確認してください。", { exact: true })).toBeVisible();
   await expect(panel.getByText("sample-29.txt: レシピの設定版が更新されました。", { exact: true })).toBeVisible();
+  await panel.screenshot({path: testInfo.outputPath("bulk-reprocess-result.png")});
+  await panel.getByRole("button", {name:"閉じる", exact:true}).click();
+  await expect(panel).not.toBeVisible();
+  await expect(page.getByRole("button", {name:"一括再処理", exact:true})).toBeFocused();
+  await page.screenshot({path:testInfo.outputPath("bulk-reprocess-toolbar.png")});
   await expectNoPageOverflow(page);
 });

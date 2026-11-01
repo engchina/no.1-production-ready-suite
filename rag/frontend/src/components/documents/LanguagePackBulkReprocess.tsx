@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { RefreshCw } from "lucide-react";
-import { Banner, Button, Card, CardContent, CardHeader, CardTitle, DataTable, DEFAULT_PAGE_SIZE, FormStatus, INFORMATION_TABLE_VISIBLE_ROWS, ListToolbar, Pagination, SelectField, Skeleton, TimedLoadingState, useConfirm, usePagination } from "@production-ready/ui";
+import { ListRestart, RefreshCw } from "lucide-react";
+import { Banner, Button, Card, CardContent, CardHeader, CardTitle, DataTable, DEFAULT_PAGE_SIZE, FormStatus, INFORMATION_TABLE_VISIBLE_ROWS, SideSheet, ListToolbar, Pagination, SelectField, Skeleton, TimedLoadingState, useConfirm, usePagination } from "@production-ready/ui";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { api, type IngestionJobPhase } from "@/lib/api";
@@ -15,6 +15,7 @@ export function LanguagePackBulkReprocess({ disabled, expectedReleaseId, loadDoc
   const qc = useQueryClient();
   const confirm = useConfirm();
   const selection = useSelection<string>();
+  const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<IngestionJobPhase | "">("");
   const [reviewedKey, setReviewedKey] = useState<string | null>(null);
   const [size, setSize] = useState<number>(DEFAULT_PAGE_SIZE);
@@ -41,8 +42,11 @@ export function LanguagePackBulkReprocess({ disabled, expectedReleaseId, loadDoc
     const ok = await confirm({ title: t("settings.language.release.reprocessTitle"), description: t("settings.language.release.bulkConfirm", { documents: new Set(targets.map(row => row.document_id)).size, recipes: targets.length, version: prepare.data.current_release.version, phase: t(phaseLabelKey(phase)) }), confirmLabel: t("flow.reprocess.confirm"), tone: "warning" });
     if (ok) execute.mutate();
   };
-  return <div className="space-y-4" data-testid="language-pack-bulk-reprocess">
-    <Button variant="secondary" size="sm" icon={RefreshCw} disabled={disabled || !expectedReleaseId || execute.isPending} loading={prepare.isPending} onClick={() => { execute.reset(); prepare.mutate(); }}>{t("settings.language.release.prepareTargets")}</Button>
+  return <>
+    <Button variant="secondary" size="sm" icon={ListRestart} disabled={disabled || !expectedReleaseId || execute.isPending} aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(true); if (!prepare.data) { execute.reset(); prepare.mutate(); } }}>{t("settings.language.release.prepareTargets")}</Button>
+    <SideSheet open={open} onClose={() => setOpen(false)} side="right" size="wide" initialFocus="dialog" title={t("settings.language.release.prepareTargets")} closeLabel={t("common.dismiss")} bodyClassName="flex min-h-0 flex-col overflow-hidden" data-testid="language-pack-bulk-reprocess">
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+    {prepare.isPending ? <TimedLoadingState label={t("settings.language.release.loadingTargets")} operationKey="language-reprocessing-targets"><Skeleton className="h-32 w-full" /></TimedLoadingState> : null}
     {prepare.isError ? <ApiErrorState error={prepare.error} fallback={t("settings.language.saveError")} onRetry={() => prepare.mutate()} /> : null}
     {prepare.data ? <Card>
       <CardHeader><CardTitle>{t("settings.language.release.selectRecipes")}</CardTitle></CardHeader>
@@ -66,10 +70,13 @@ export function LanguagePackBulkReprocess({ disabled, expectedReleaseId, loadDoc
         </section>)}</> : null}
         <SelectField id="language-bulk-start-phase" label={t("settings.language.release.startPhase")} value={phase} required options={[{ value: "", label: t("settings.language.release.selectPhase") }, ...(["PREPROCESS","EXTRACT","CHUNK","INDEX"] as const).map(value => ({ value, label: t(phaseLabelKey(value)) }))]} onValueChange={value => setPhase(value as IngestionJobPhase)} disabled={execute.isPending} />
         <p className="text-xs text-fg-muted">{t("settings.language.release.processingHelp")}</p>
-        <Button icon={RefreshCw} variant="secondary" loading={execute.isPending} disabled={!phase || selection.count === 0 || !reviewed} onClick={() => void submit()}>{t("flow.reprocess.confirm")} ({selection.count})</Button>
-        {execute.isError ? <ApiErrorState error={execute.error} fallback={t("settings.language.saveError")} /> : null}
-        {execute.data ? <><FormStatus tone={execute.data.rejected_count ? "warning" : "success"} message={t("settings.language.release.bulkResult", { accepted: execute.data.accepted_count, rejected: execute.data.rejected_count })} />{execute.data.items.filter(item => item.outcome === "rejected").map(item => <p key={`${item.document_id}:${item.recipe_id}`} className="text-sm text-fg-muted">{rows.find(row => row.document_id === item.document_id && row.recipe_id === item.recipe_id)?.file_name ?? item.document_id}: {item.reason}</p>)}</> : null}
       </CardContent>
     </Card> : null}
-  </div>;
+    </div>
+    {prepare.data ? <div className="shrink-0 space-y-3 border-t border-border pt-4">        <Button icon={RefreshCw} variant="secondary" loading={execute.isPending} disabled={!phase || selection.count === 0 || !reviewed} onClick={() => void submit()}>{t("flow.reprocess.confirm")} ({selection.count})</Button>
+        {execute.isError ? <ApiErrorState error={execute.error} fallback={t("settings.language.saveError")} /> : null}
+        {execute.data ? <><FormStatus tone={execute.data.rejected_count ? "warning" : "success"} message={t("settings.language.release.bulkResult", { accepted: execute.data.accepted_count, rejected: execute.data.rejected_count })} />{execute.data.items.filter(item => item.outcome === "rejected").map(item => <p key={`${item.document_id}:${item.recipe_id}`} className="text-sm text-fg-muted">{rows.find(row => row.document_id === item.document_id && row.recipe_id === item.recipe_id)?.file_name ?? item.document_id}: {item.reason}</p>)}</> : null}
+</div> : null}
+    </SideSheet>
+  </>;
 }
