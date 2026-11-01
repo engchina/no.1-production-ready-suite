@@ -25,6 +25,7 @@ from app.clients.native_hybrid_schema import (
     native_hybrid_objects_sql,
     native_hybrid_scope_migration_sql,
     native_hybrid_scope_objects_sql,
+    native_hybrid_sync_columns_migration_sql,
 )
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
@@ -628,6 +629,14 @@ END;
             name="20261101_002_native_hybrid_ivf",
             table_name="rag_chunks",
             sql=native_hybrid_ivf_migration_sql(),
+        )
+    )
+    # 既存の移行SQLのchecksumを保ち、範囲列の補完より先に同期を限定する。
+    sections.append(
+        OracleSchemaSection(
+            name="20261101_004_native_hybrid_sync_columns",
+            table_name="rag_chunks",
+            sql=native_hybrid_sync_columns_migration_sql(),
         )
     )
     sections.append(
