@@ -4077,3 +4077,21 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261102_002_native_missing_scopes
+INSERT INTO rag_native_search_scopes (chunk_set_id)
+SELECT cs.chunk_set_id FROM rag_chunk_sets cs
+WHERE EXISTS (
+    SELECT 1 FROM rag_chunks c
+    WHERE c.chunk_set_id = cs.chunk_set_id AND c.native_scope_id IS NULL
+) AND NOT EXISTS (
+    SELECT 1 FROM rag_native_search_scopes s WHERE s.chunk_set_id = cs.chunk_set_id
+);
+
+UPDATE rag_chunks c SET native_scope_id = (
+    SELECT s.native_scope_id FROM rag_native_search_scopes s WHERE s.chunk_set_id = c.chunk_set_id
+) WHERE c.native_scope_id IS NULL AND EXISTS (
+    SELECT 1 FROM rag_native_search_scopes s
+    JOIN rag_chunk_sets cs ON cs.chunk_set_id = s.chunk_set_id
+    WHERE s.chunk_set_id = c.chunk_set_id
+);
