@@ -158,3 +158,74 @@ async def test_native_hybrid_score_keeps_oracle_scale_and_zero_missing_rank() ->
     assert hit.metadata["native_rrf_contribution"] == pytest.approx(1 / 61)
     hit.metadata["keyword_rank"] = 0
     assert _hit_channels(hit, 0) == {"vector:q1"}
+
+
+def test_numeric_scope_filter_keeps_large_scope_small() -> None:
+    spec = native_search_request(
+        query="合成",
+        vector=[1],
+        channel="hybrid",
+        allowed_ids=[],
+        allowed_scopes=list(range(1, 141)),
+    )
+    assert spec["filter_by"]["col"] == "NATIVE_SCOPE_ID"
+    assert spec["filter_by"]["type"] == "number"
+    assert len(json.dumps(spec["filter_by"]).encode()) < 1000
+    assert spec["filter_by"]["args"] == list(range(1, 141))
+
+
+class ScopedNativeOracle(NativeOracle):
+    async def _fetch_all(
+        self, sql: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if "COUNT(*) AS chunk_count" in sql:
+            return [
+                {"native_scope_id": 1, "chunk_count": 400},
+                {"native_scope_id": 2, "chunk_count": 2},
+            ]
+        if "SELECT c.native_scope_id, c.chunk_index, c.chunk_id" in sql:
+            return [
+                {"native_scope_id": 2, "chunk_index": 0, "chunk_id": "partial-a"},
+                {"native_scope_id": 2, "chunk_index": 1, "chunk_id": "outside-b"},
+            ]
+        if "SELECT c.chunk_id, c.native_scope_id" in sql:
+            return [{"chunk_id": f"{index:0100}", "native_scope_id": 1} for index in range(400)] + [
+                {"chunk_id": "partial-a", "native_scope_id": 2}
+            ]
+        if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+            self.calls.append((sql, dict(binds or {})))
+            spec = json.loads(str((binds or {})["native_spec"]))
+            assert spec["filter_by"] == {
+                "op": "OR",
+                "args": [
+                    {"op": "IN", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [1]},
+                    {
+                        "op": "AND",
+                        "args": [
+                            {"op": "=", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [2]},
+                            {
+                                "op": "BETWEEN",
+                                "col": "CHUNK_INDEX",
+                                "type": "number",
+                                "args": [0, 0],
+                            },
+                        ],
+                    },
+                ],
+            }
+            assert "is_active = 1" in sql and "d.status = 'INDEXED'" in sql
+            return []
+        return await super()._fetch_all(sql, binds)
+
+
+@pytest.mark.asyncio
+async def test_only_complete_authorized_sets_are_compressed() -> None:
+    client = ScopedNativeOracle()
+    await client._native_rows(
+        "hybrid",
+        "合成の検索",
+        [1.0] * 1536,
+        top_k=10,
+        filters={"page_number_min": "1", "page_number_max": "1"},
+    )
+    assert len([sql for sql, _ in client.calls if "DBMS_HYBRID_VECTOR.SEARCH" in sql]) == 1

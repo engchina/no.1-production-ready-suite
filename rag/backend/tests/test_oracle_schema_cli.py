@@ -129,6 +129,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "chunks",
         "native_hybrid",
         "chunk_sets",
+        "native_search_scopes",
         "search_audit",
         "ingestion_audit",
         "knowledge_graph",
@@ -504,10 +505,10 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 129
+    assert len(statements) == 135
     assert all(
         statement.startswith(
-            ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE")
+            ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
         )
         for statement in statements
     )
@@ -610,6 +611,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261029_001_retire_query_history",
         "20261101_001_native_hybrid",
         "20261101_002_native_hybrid_ivf",
+        "20261101_003_native_hybrid_scope",
     ]
 
 

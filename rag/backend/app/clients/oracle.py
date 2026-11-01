@@ -7121,14 +7121,71 @@ class OracleClient:
                 + _vector_score_sql("embedding")
                 + " >= :min_similarity"
             )
-        ids = await self._fetch_all(f"SELECT c.chunk_id {joins} WHERE {where}", binds)
+        ids = await self._fetch_all(
+            f"SELECT c.chunk_id, c.native_scope_id {joins} WHERE {where}", binds
+        )
         if not ids:
             return []
+        # 全行が許可された chunk set だけを安定した数値キーに縮約する。
+        # ページ・行単位の制限がある集合は chunk ID のまま残す。
+        scope_members: dict[int, set[str]] = {}
+        for row in ids:
+            if row.get("native_scope_id") is not None:
+                scope_members.setdefault(int(str(row["native_scope_id"])), set()).add(
+                    str(row["chunk_id"])
+                )
+        complete_scopes: list[int] = []
+        if scope_members:
+            totals = await self._fetch_all(
+                """SELECT c.native_scope_id, COUNT(*) AS chunk_count FROM rag_chunks c
+                JOIN JSON_TABLE(:scope_ids, '$[*]' COLUMNS (scope_id NUMBER PATH '$')) s
+                  ON c.native_scope_id = s.scope_id GROUP BY c.native_scope_id""",
+                {"scope_ids": json.dumps(list(scope_members))},
+            )
+            complete_scopes = [
+                int(str(row["native_scope_id"]))
+                for row in totals
+                if len(scope_members.get(int(str(row["native_scope_id"])), set()))
+                == int(str(row["chunk_count"]))
+            ]
+        compressed_ids = {
+            identifier for scope in complete_scopes for identifier in scope_members[scope]
+        }
+        scope_ranges: list[tuple[int, int, int]] = []
+        partial_scopes = sorted(set(scope_members) - set(complete_scopes))
+        if partial_scopes:
+            members = await self._fetch_all(
+                """SELECT c.native_scope_id, c.chunk_index, c.chunk_id FROM rag_chunks c
+                JOIN JSON_TABLE(:scope_ids, '$[*]' COLUMNS (scope_id NUMBER PATH '$')) s
+                  ON c.native_scope_id = s.scope_id ORDER BY c.native_scope_id, c.chunk_index""",
+                {"scope_ids": json.dumps(partial_scopes)},
+            )
+            by_index: dict[tuple[int, int], set[str]] = {}
+            for row in members:
+                key = (int(str(row["native_scope_id"])), int(str(row["chunk_index"])))
+                by_index.setdefault(key, set()).add(str(row["chunk_id"]))
+            # 同じ index に許可外の行があれば、その index は区間にせず個別IDで残す。
+            for (scope, index), member_ids in sorted(by_index.items()):
+                if not member_ids <= scope_members[scope]:
+                    continue
+                compressed_ids.update(member_ids)
+                if (
+                    scope_ranges
+                    and scope_ranges[-1][0] == scope
+                    and scope_ranges[-1][2] + 1 == index
+                ):
+                    scope_ranges[-1] = (scope, scope_ranges[-1][1], index)
+                else:
+                    scope_ranges.append((scope, index, index))
         spec = request_json(
             query=query,
             vector=vector,
             channel=channel,
-            allowed_ids=[str(row["chunk_id"]) for row in ids],
+            allowed_ids=[
+                str(row["chunk_id"]) for row in ids if str(row["chunk_id"]) not in compressed_ids
+            ],
+            allowed_scopes=complete_scopes,
+            allowed_scope_ranges=scope_ranges,
             limit=top_k,
             rank_constant=self._settings.rag_rrf_k,
             accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
@@ -16453,6 +16510,7 @@ CREATE TABLE {table_name} (
     embedding       VECTOR(1536, FLOAT32),
     hybrid_payload  JSON,
     chunk_set_id    VARCHAR2(64),
+    native_scope_id NUMBER,
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
