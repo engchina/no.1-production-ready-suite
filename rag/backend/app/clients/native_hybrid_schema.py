@@ -8,8 +8,16 @@ from rag_engine.adapters.oracle.native_hybrid import (
 NATIVE_HYBRID_TRIGGER = "RAG_CHUNKS_HYBRID_SYNC"
 
 
-def _native_hybrid_setup_sql(vector_type: str = "ivf") -> str:
-    """DDL管理からだけ呼ぶ。索引作成時の再embeddingは行わない。"""
+def _native_hybrid_setup_sql(
+    vector_type: str = "ivf", *, sync_changed_columns: bool = False
+) -> str:
+    """DDL管理からだけ呼ぶ。既存migrationのchecksumを保つため旧SQLを既定にする。"""
+    guard = (
+        "    IF INSERTING OR UPDATING('SEARCH_TEXT') OR UPDATING('EMBEDDING') THEN\n"
+        if sync_changed_columns
+        else ""
+    )
+    end_guard = "    END IF;\n" if sync_changed_columns else ""
     return f"""
 DECLARE
     v_count NUMBER;
@@ -28,12 +36,12 @@ BEGIN
         EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER {NATIVE_HYBRID_TRIGGER}
 BEFORE INSERT OR UPDATE ON rag_chunks FOR EACH ROW
 BEGIN
-    SELECT JSON_OBJECT(
+{guard}    SELECT JSON_OBJECT(
         'text' VALUE :NEW.search_text,
         'embedding' VALUE JSON(VECTOR_SERIALIZE(:NEW.embedding RETURNING CLOB))
         ABSENT ON NULL RETURNING JSON
     ) INTO :NEW.hybrid_payload FROM dual;
-END;~';
+{end_guard}END;~';
     END IF;
 END;
 /
@@ -43,7 +51,7 @@ END;
 def native_hybrid_objects_sql() -> str:
     """管理対象のpreference・同期trigger・原生索引を作る。"""
     return f"""
-{_native_hybrid_setup_sql()}
+{_native_hybrid_setup_sql(sync_changed_columns=True)}
 
 CREATE HYBRID VECTOR INDEX {NATIVE_HYBRID_INDEX}
     ON rag_chunks (hybrid_payload)
@@ -203,3 +211,8 @@ END;
 
 {_NATIVE_SCOPE_TRIGGER_SQL}
 """.strip()
+
+
+def native_hybrid_sync_columns_migration_sql() -> str:
+    """保存済みvectorを扱うため、UPDATE OF句ではなく更新述語で入力列を判定する。"""
+    return _native_hybrid_setup_sql(sync_changed_columns=True)

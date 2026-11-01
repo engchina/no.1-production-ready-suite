@@ -3954,6 +3954,36 @@ END;~';
 END;
 /
 
+-- migration: 20261101_004_native_hybrid_sync_columns
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM ctx_user_preferences
+    WHERE pre_name = 'RAG_CHUNKS_HYBRID_PREF';
+    IF v_count = 0 THEN
+        DBMS_VECTOR_CHAIN.CREATE_PREFERENCE(
+            'RAG_CHUNKS_HYBRID_PREF', DBMS_VECTOR_CHAIN.VECTORIZER,
+            JSON('{"vector_idxtype":"ivf","distance":"COSINE","paths":[{"type":"VECTOR","path_list":["$.embedding"]}]}')
+        );
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'HYBRID_PAYLOAD';
+    IF v_count = 1 THEN
+        EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC
+BEFORE INSERT OR UPDATE ON rag_chunks FOR EACH ROW
+BEGIN
+    IF INSERTING OR UPDATING('SEARCH_TEXT') OR UPDATING('EMBEDDING') THEN
+    SELECT JSON_OBJECT(
+        'text' VALUE :NEW.search_text,
+        'embedding' VALUE JSON(VECTOR_SERIALIZE(:NEW.embedding RETURNING CLOB))
+        ABSENT ON NULL RETURNING JSON
+    ) INTO :NEW.hybrid_payload FROM dual;
+    END IF;
+END;~';
+    END IF;
+END;
+/
+
 -- migration: 20261101_003_native_hybrid_scope
 DECLARE
     v_count NUMBER;

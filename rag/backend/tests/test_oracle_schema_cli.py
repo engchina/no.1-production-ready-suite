@@ -506,7 +506,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 135
+    assert len(statements) == 136
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
@@ -612,6 +612,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261029_001_retire_query_history",
         "20261101_001_native_hybrid",
         "20261101_002_native_hybrid_ivf",
+        "20261101_004_native_hybrid_sync_columns",
         "20261101_003_native_hybrid_scope",
     ]
 
@@ -822,3 +823,17 @@ def test_ivf_migration_rebuilds_only_the_derived_index() -> None:
     assert "DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE" in current
     assert "DROP TABLE" not in current
     assert "RAG_CHUNKS_EMBEDDING_HNSW_IDX" not in current
+
+
+def test_native_scope_backfill_limits_payload_sync_before_updating_chunks() -> None:
+    sections = oracle_schema.oracle_schema_migration_sections()
+    names = [section.name for section in sections]
+    assert names.index("20261101_004_native_hybrid_sync_columns") < names.index(
+        "20261101_003_native_hybrid_scope"
+    )
+    guarded = next(
+        section.sql
+        for section in sections
+        if section.name == "20261101_004_native_hybrid_sync_columns"
+    )
+    assert "UPDATING('SEARCH_TEXT')" in guarded and "UPDATING('EMBEDDING')" in guarded
