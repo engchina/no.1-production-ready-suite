@@ -152,8 +152,8 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     outcome = await AnswerEngine(settings, oracle=cast(Any, oracle), genai=cast(Any, genai)).run(
         request
     )
-    # 1つの論理取得は2検索文×2検索方式へ展開される。論理枠は増やさない。
-    assert len(oracle.required_filters) == 4
+    # 1つの論理取得は原質問hybridと意味の追加検索へ展開される。論理枠は増やさない。
+    assert len(oracle.required_filters) == 2
     assert oracle.required_filters[0]["knowledge_base_id"] == "synthetic-kb"
     acquisition = outcome.diagnostics["guide_step_retrieval"]["required_acquisition"]
     assert acquisition["planned_targets"] == 2 and acquisition["logical_attempts"] == 1
