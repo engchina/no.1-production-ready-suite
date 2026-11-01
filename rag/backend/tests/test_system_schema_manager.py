@@ -134,6 +134,13 @@ class _FakeCursor:
                 if name in names and object_type in {"TABLE", "INDEX", "TRIGGER"}
             ]
             return
+        if upper.startswith("SELECT I.STATUS, NVL(I.DOMIDX_STATUS"):
+            self.rows = (
+                [self.database.native_health]
+                if ("RAG_CHUNKS_HYBRID_IDX", "INDEX") in self.database.objects
+                else []
+            )
+            return
         if upper.startswith("SELECT PRE_NAME FROM CTX_USER_PREFERENCES"):
             name = str(params.get("preference_name", "RAG_TEXT_WORLD_LEXER"))
             kind = (
@@ -267,6 +274,26 @@ class _FakeCursor:
             if (name, "INDEX") in self.database.objects:
                 raise RuntimeError("ORA-00955: name is already used by an existing object")
             self.database.objects[(name, "INDEX")] = datetime.now(UTC)
+            if name == "RAG_CHUNKS_HYBRID_IDX":
+                self.database.native_health = (
+                    "VALID",
+                    "VALID",
+                    "FAILED" if self.database.fail_native_creation else "VALID",
+                    "VALID",
+                    "ENABLED",
+                )
+            return
+        if "EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE'" in upper:
+            self.database.objects.pop(("RAG_CHUNKS_HYBRID_IDX", "INDEX"), None)
+        if upper.startswith("ALTER TRIGGER RAG_CHUNKS_HYBRID_SYNC COMPILE"):
+            self.database.native_health = (
+                *self.database.native_health[:3],
+                "VALID",
+                self.database.native_health[4],
+            )
+            return
+        if upper.startswith("ALTER TRIGGER RAG_CHUNKS_HYBRID_SYNC ENABLE"):
+            self.database.native_health = (*self.database.native_health[:4], "ENABLED")
             return
         if "DBMS_VECTOR_CHAIN.CREATE_PREFERENCE" in upper:
             self.database.objects[("RAG_CHUNKS_HYBRID_PREF", "VECTORIZER_PREFERENCE")] = None
@@ -424,6 +451,8 @@ class _FakeDatabase:
         self.objects: dict[tuple[str, str], datetime | None] = {}
         self.migrations: dict[str, str] = {}
         self.operation: dict[str, Any] | None = None
+        self.native_health: tuple[str, ...] = ("VALID", "VALID", "VALID", "VALID", "ENABLED")
+        self.fail_native_creation = False
         self.active_jobs = 0
         self.fail_drop_or_create_with_lock = False
         # 制約名 → (定義, 既存の行を検査済みか)。CREATE TABLE と ALTER TABLE で増える。
@@ -1290,4 +1319,62 @@ def test_retired_query_history_requires_explicit_migration_and_keeps_chat_record
     assert ("RAG_QUERY_HISTORY_PROFILE_IDX", "INDEX") not in database.objects
     for table in ("RAG_CONVERSATIONS", "RAG_MESSAGES", "RAG_ANSWER_RECORDS", "RAG_RUN_HISTORY"):
         assert (table, "TABLE") in database.objects
+    assert manager.initialize()["status"] == "ready"
+
+
+@pytest.mark.parametrize(
+    "health",
+    [
+        ("VALID", "VALID", "FAILED", "VALID", "ENABLED"),
+        ("INPROGRS", "VALID", "VALID", "VALID", "ENABLED"),
+        ("VALID", "VALID", "VALID", "INVALID", "ENABLED"),
+        ("VALID", "VALID", "VALID", "VALID", "DISABLED"),
+    ],
+)
+def test_native_index_and_trigger_health_are_required_for_ready(health: tuple[str, ...]) -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    database.native_health = health
+    status = manager.status()
+    assert status["status"] == "outdated"
+    assert status["invalid_objects"]
+
+
+def test_failed_native_index_is_repaired_without_dropping_source_tables() -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    tables = {key for key in database.objects if key[1] == "TABLE"}
+    database.native_health = ("VALID", "VALID", "FAILED", "VALID", "ENABLED")
+    database.executed.clear()
+    assert manager.initialize()["status"] == "ready"
+    assert "DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE" in database.executed
+    assert not any(sql.startswith("DROP TABLE") for sql in database.executed)
+    assert {key for key in database.objects if key[1] == "TABLE"} == tables
+
+
+def test_native_index_being_built_is_not_dropped_or_recreated() -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    database.native_health = ("INPROGRS", "VALID", "VALID", "VALID", "ENABLED")
+    database.executed.clear()
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == "NATIVE_INDEX_BUILD_IN_PROGRESS"
+    assert not any(sql.startswith("DROP INDEX") for sql in database.executed)
+
+
+def test_native_creation_failure_never_passes_postcondition_or_retry() -> None:
+    database = _FakeDatabase()
+    database.fail_native_creation = True
+    manager = SystemSchemaManager(database.connection)
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == "SCHEMA_POSTCONDITION_FAILED"
+    assert manager.status()["status"] == "outdated"
+    with pytest.raises(SystemSchemaError):
+        manager.initialize()
+    database.fail_native_creation = False
     assert manager.initialize()["status"] == "ready"

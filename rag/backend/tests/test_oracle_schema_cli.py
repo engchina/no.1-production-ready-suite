@@ -504,7 +504,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 127
+    assert len(statements) == 129
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE")
@@ -609,6 +609,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261028_002_language_pack_artifacts",
         "20261029_001_retire_query_history",
         "20261101_001_native_hybrid",
+        "20261101_002_native_hybrid_ivf",
     ]
 
 
@@ -805,3 +806,16 @@ def test_checked_in_migration_artifacts_match_the_generator() -> None:
     assert json.loads((artifacts / "oracle-schema-migration.manifest.json").read_text()) == (
         oracle_schema.oracle_schema_migration_manifest()
     )
+
+
+def test_ivf_migration_rebuilds_only_the_derived_index() -> None:
+    sections = {
+        section.name: section.sql for section in oracle_schema.oracle_schema_migration_sections()
+    }
+    legacy = sections["20261101_001_native_hybrid"]
+    current = sections["20261101_002_native_hybrid_ivf"]
+    assert '"vector_idxtype":"hnsw"' in legacy
+    assert '"vector_idxtype":"ivf"' in current
+    assert "DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE" in current
+    assert "DROP TABLE" not in current
+    assert "RAG_CHUNKS_EMBEDDING_HNSW_IDX" not in current

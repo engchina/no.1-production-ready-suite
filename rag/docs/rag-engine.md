@@ -673,3 +673,19 @@ Oracle内のWRRFと完全に同じ正規化・実装を使うという意味で�
 追加分を重複除去後に均等分配する規則、空・失敗リストの重みを再配分しない規則、
 ランキング定数60、権限・明示範囲と独立根拠補充、rerankの処理は変えない。
 保存済みの明示比率は維持し、未設定時だけ新しい既定を使用する。
+
+
+### 原生索引の初期作成と状態確認
+
+原生のvectorizerはOracle公式の既定IVFを使う。既存のHNSWを維持したまま
+追加HNSWを作ると、SGAのvector memory自動拡張上限でORA-51995になり得るため。
+[Oracleのvectorizer設定](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/create_preference.html)
+と[索引作成の制約](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/guidelines-and-restrictions-hybrid-vector-indexes.html)
+を参照。IVFへの移行は派生hybrid索引とvectorizer設定だけを再作成し、元の本文・vectorと従来の索引を保持する。
+IVFも学習用の作業領域と一時領域が必要で、初回の大きい索引作成には時間を要する。
+データ別の検索品質・性能は別途測定し、HNSWより高精度とは主張しない。
+
+schemaのreadyは索引の存在だけでは決めない。index/domain/operationの状態と
+同期triggerのVALID・ENABLEDを確認する。失敗した派生索引は作成・更新で修復し、
+構築中の索引は削除せず409で待機を案内する。CLIの再試行でも失敗状態をreadyにしない。
+移行中に従来方式を使う場合は管理者が明示的に設定する。コードの自動fallbackはない。

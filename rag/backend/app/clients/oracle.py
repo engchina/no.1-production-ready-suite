@@ -6982,7 +6982,7 @@ class OracleClient:
         rows = await self._fetch_all(
             """
             SELECT i.index_name FROM user_indexes i
-            WHERE i.index_name = :native_index
+            WHERE i.index_name = :native_index AND i.index_type = 'DOMAIN'
               AND i.status = 'VALID'
               AND NVL(i.domidx_status, 'VALID') = 'VALID'
               AND NVL(i.domidx_opstatus, 'VALID') = 'VALID'
