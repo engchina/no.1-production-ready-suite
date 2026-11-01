@@ -39,7 +39,9 @@ PreviewVariant = Literal["original", "prepared"]
 
 # 拡張子 → プレビューの種類（frontend の DocumentPreview の kindOf と同じ）。
 _IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "webp", "bmp"})
-_TEXT_EXTENSIONS = frozenset({"txt", "csv", "md", "json", "log", "html", "htm", "eml"})
+_TEXT_EXTENSIONS = frozenset(
+    {"txt", "csv", "tsv", "md", "json", "xml", "log", "html", "htm", "eml"}
+)
 _OFFICE_EXTENSIONS = frozenset({"doc", "docx", "ppt", "pptx", "xls", "xlsx"})
 
 

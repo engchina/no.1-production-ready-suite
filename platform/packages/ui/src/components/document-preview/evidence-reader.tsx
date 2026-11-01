@@ -1,0 +1,112 @@
+import { ArrowLeft, ArrowRight, Download, LocateFixed } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ApiErrorState } from "../feedback/api-error-banner";
+import { TimedLoadingState } from "../feedback/processing-state";
+import { Button, buttonVariants } from "../ui/button";
+import { Disclosure } from "../ui/disclosure";
+import { Skeleton } from "../ui/skeleton";
+
+export interface EvidenceReadingInput {
+  cursor?: string;
+  direction?: "before" | "after";
+  scope?: "paragraph" | "section" | "parent";
+  section_id?: string;
+}
+export interface EvidenceReadingWindow {
+  revision: string;
+  anchor_status: "exact" | "element" | "unresolved";
+  section_path: string[];
+  blocks: { id: string; text: string; offset: number; highlights: [number, number][]; cited: boolean; kind?: string; heading?: string[] }[];
+  previous_cursor: string | null;
+  next_cursor: string | null;
+  outline: { id: string; title: string; parent_id: string | null; has_children: boolean }[];
+  scope: string;
+}
+
+/** 製品で複製しない共通の日本語リソース。 */
+const labels = {
+  loading: "引用の前後を読み込んでいます", before: "前文を読む", after: "後文を読む",
+  anchor: "引用位置に戻る", section: "本節を読む", parent: "親章節を読む", outline: "目次",
+  cited: "引用の元となる段落", context: "追加の参考文脈（回答時の参照範囲外）",
+  unresolved: "引用位置を確定できないため、保存された引用のみ表示します。",
+  approximate: "原要素の位置を表示しています。文字単位の引用位置は未確定です。",
+  retry: "再試行", download: "原本をダウンロード", empty: "表示できる本文がありません。",
+};
+
+export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true }: {
+  readingKey: string;
+  loadWindow: (input: EvidenceReadingInput, signal: AbortSignal) => Promise<EvidenceReadingWindow>;
+  enabled?: boolean;
+  downloadUrl?: string;
+  highlight?: boolean;
+}) {
+  const [request, setRequest] = useState<{ input: EvidenceReadingInput; serial: number }>({ input: {}, serial: 0 });
+  const [state, setState] = useState<{ key: string; windows: EvidenceReadingWindow[]; pending: boolean; error?: unknown }>({ key: readingKey, windows: [], pending: true });
+  const viewport = useRef<HTMLDivElement>(null);
+  const scroll = useRef<{ top: number; anchor: string } | null>(null);
+  const active = state.key === readingKey ? state.windows : [];
+  const first = active[0]; const last = active.at(-1);
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    setState(old => ({ key: readingKey, windows: old.key === readingKey ? old.windows : [], pending: true }));
+    void loadWindow(request.input, controller.signal).then(result => {
+      if (controller.signal.aborted) return;
+      setState(old => {
+        const previous = old.key === readingKey && old.windows[0]?.revision === result.revision ? old.windows : [];
+        const windows = request.input.cursor ? request.input.direction === "before" ? [result, ...previous].slice(0, 3) : [...previous, result].slice(-3) : [result];
+        return { key: readingKey, windows, pending: false };
+      });
+    }).catch(error => { if (!controller.signal.aborted) setState(old => ({ ...old, pending: false, error })); });
+    return () => controller.abort();
+  }, [readingKey, loadWindow, enabled, request]);
+  useLayoutEffect(() => {
+    const node = viewport.current;
+    if (node && scroll.current && !state.pending) {
+      const block = Array.from(node.querySelectorAll<HTMLElement>("[data-reader-block]")).find(element => element.dataset.readerBlock === scroll.current!.anchor);
+      if (block) node.scrollTop += block.getBoundingClientRect().top - scroll.current.top;
+      scroll.current = null;
+    }
+  }, [state]);
+  const read = (input: EvidenceReadingInput = {}) => {
+    const node = viewport.current;
+    const anchor = node?.querySelector<HTMLElement>("[data-reader-block]");
+    scroll.current = anchor && input.direction === "before" ? { top: anchor.getBoundingClientRect().top, anchor: anchor.dataset.readerBlock! } : null;
+    if (node && !input.cursor) node.scrollTop = 0;
+    setRequest(old => ({ input, serial: old.serial + 1 }));
+  };
+  // 再利用時に前の根拠の cursor を送らない。
+  const previousKey = useRef(readingKey);
+  useEffect(() => { if (previousKey.current !== readingKey) { previousKey.current = readingKey; setRequest(old => ({ input: {}, serial: old.serial + 1 })); } }, [readingKey]);
+  const blocks = active.flatMap(window => window.blocks).filter((block, index, all) => all.findIndex(other => other.id === block.id && other.offset === block.offset) === index);
+  return <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="evidence-reader">
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="secondary" onClick={() => read()} disabled={state.pending}><LocateFixed size={14} aria-hidden />{labels.anchor}</Button>
+      <Button size="sm" variant="secondary" onClick={() => read({ scope: "section" })} disabled={state.pending || !first?.section_path.length}>{labels.section}</Button>
+      <Button size="sm" variant="secondary" onClick={() => read({ scope: "parent" })} disabled={state.pending || !first?.section_path.length}>{labels.parent}</Button>
+      {downloadUrl ? <a className={buttonVariants({ variant: "ghost", size: "sm" })} href={downloadUrl} download referrerPolicy="no-referrer"><Download size={14} aria-hidden />{labels.download}</a> : null}
+    </div>
+    {first?.section_path.length ? <p className="text-xs text-fg-muted">{first.section_path.join(" › ")}</p> : null}
+    {first && (first.anchor_status !== "exact" || !highlight) ? <p className="text-sm text-fg-muted" role="status">{first.anchor_status === "unresolved" || !highlight ? labels.unresolved : labels.approximate}</p> : null}
+    {first?.outline.length ? <Disclosure summary={labels.outline} contentClassName="space-y-2">
+      {first.outline.map(item => <Button key={item.id} variant="ghost" size="sm" disabled={state.pending} onClick={() => read({ scope: "section", section_id: item.id })}>{item.title}</Button>)}
+    </Disclosure> : null}
+    {state.error ? <ApiErrorState error={state.error} fallback="引用の前後を読み込めませんでした。" onRetry={() => setRequest(old => ({ ...old, serial: old.serial + 1 }))} retryLabel={labels.retry} /> : null}
+    {state.pending ? <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} testId="evidence-reader-loading" framed={false}><Skeleton className="h-16 w-full" /></TimedLoadingState> : null}
+    <Button variant="secondary" size="sm" disabled={!first?.previous_cursor || state.pending} onClick={() => read({ cursor: first!.previous_cursor!, direction: "before" })}><ArrowLeft size={14} aria-hidden />{labels.before}</Button>
+    <div ref={viewport} className="min-h-0 max-h-96 space-y-4 overflow-y-auto" data-testid="evidence-reader-content">
+      {blocks.map(block => <section key={`${block.id}:${block.offset}`} data-reader-block={`${block.id}:${block.offset}`} className="space-y-1">
+        <p className="text-xs text-fg-muted">{block.cited ? labels.cited : labels.context}</p>
+        {block.heading?.length ? <p className="text-sm font-semibold">{block.heading.join(" › ")}</p> : null}
+        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? highlighted(block.text, block.highlights) : block.text}</p>
+      </section>)}
+      {!blocks.length && !state.pending && !state.error ? <p className="text-sm text-fg-muted">{labels.empty}</p> : null}
+    </div>
+    <Button variant="secondary" size="sm" disabled={!last?.next_cursor || state.pending} onClick={() => read({ cursor: last!.next_cursor!, direction: "after" })}>{labels.after}<ArrowRight size={14} aria-hidden /></Button>
+  </div>;
+}
+function highlighted(text: string, ranges: [number, number][]) {
+  const parts = []; let offset = 0;
+  for (const [start, end] of ranges) { parts.push(text.slice(offset, start), <mark key={start} data-surface-tint="accent" className="rounded-sm bg-accent-muted text-fg underline decoration-accent-emphasis decoration-2 underline-offset-2 box-decoration-clone">{text.slice(start, end)}</mark>); offset = end; }
+  parts.push(text.slice(offset)); return parts;
+}

@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
+from pathlib import Path as FilePath
 from pathlib import PurePath
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
@@ -167,6 +168,7 @@ from app.schemas.document import (
     DocumentSummary,
     DocumentSupersededByRequest,
     DocumentTableCellTextEdit,
+    DocumentTextWindowRequest,
     DuplicateDocumentRef,
     FileStatus,
     IngestionJob,
@@ -197,6 +199,8 @@ from app.schemas.knowledge_base import (
 )
 from app.schemas.language_pack_release import LanguagePackIndexRelation
 from app.schemas.search import RetrievedChunk, normalize_search_id_list
+from app.services.document_inspection import extraction_window, text_window
+from app.services.document_preview_cache import DocumentPreviewCache
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1481,6 +1485,121 @@ async def list_document_recipe_chunks(
     )
 
 
+@router.get("/{document_id}/recipes/{recipe_id}/chunk-window")
+async def document_recipe_chunk_window(
+    document_id: str,
+    recipe_id: str,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    page: Annotated[int | None, Query(ge=1)] = None,
+    chunk_id: str | None = None,
+) -> ApiResponse[dict[str, Any]]:
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    chunk_set = row.get("active_chunk_set_id")
+    items, total = (
+        await oracle.list_chunk_set_chunk_window(
+            str(chunk_set),
+            offset=offset,
+            limit=limit,
+            page=page,
+            chunk_id=chunk_id,
+            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+        )
+        if chunk_set
+        else ([], 0)
+    )
+    return ApiResponse(
+        data={
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "revision": chunk_set,
+        }
+    )
+
+
+@router.get("/{document_id}/reader")
+async def document_source_reader(
+    document_id: str,
+    chunk_id: Annotated[str, Query(min_length=1, max_length=256)],
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    direction: Literal["before", "after"] = "after",
+    scope: Literal["paragraph", "section", "parent"] = "paragraph",
+    section_id: Annotated[str | None, Query(max_length=64)] = None,
+) -> ApiResponse[dict[str, Any]]:
+    from app.services.source_reader import read_source_context
+
+    return ApiResponse(
+        data=await read_source_context(
+            OracleClient(),
+            document_id,
+            chunk_id,
+            cursor=cursor,
+            direction=direction,
+            scope=scope,
+            section_id=section_id,
+        )
+    )
+
+
+@router.get("/{document_id}/recipes/{recipe_id}/extraction-view")
+async def document_recipe_extraction_view(
+    document_id: str,
+    recipe_id: str,
+    mode: Literal["text", "structure", "summary"] = "text",
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    page: Annotated[int | None, Query(ge=1)] = None,
+    element_id: str | None = None,
+    text_offset: Annotated[int, Query(ge=0)] = 0,
+    cell_offset: Annotated[int, Query(ge=0)] = 0,
+) -> ApiResponse[dict[str, Any]]:
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    revision = row.get("active_extraction_recipe_id")
+    artifact = (
+        await oracle.get_document_extraction_artifact(
+            document_id=document_id, extraction_recipe_id=str(revision)
+        )
+        if revision
+        else None
+    )
+    if not artifact or not artifact.get("extraction_json"):
+        raise HTTPException(status_code=404, detail="抽出結果が見つかりません。")
+
+    def build() -> dict[str, Any]:
+        extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
+        view = extraction_window(
+            extraction.to_document_payload(),
+            mode=mode,
+            offset=offset,
+            limit=limit,
+            page=page,
+            element_id=element_id,
+            text_offset=text_offset,
+            cell_offset=cell_offset,
+        )
+        return {
+            **view,
+            "revision": revision,
+            "parser_backend": _extraction_parser_backend(extraction),
+            "parser_profile": _extraction_parser_profile(extraction),
+            "element_count": len(extraction.elements),
+            "page_count": len(extraction.pages),
+            "table_count": len(extraction.tables),
+            "content": "",
+            "chunks": [],
+        }
+
+    return ApiResponse(data=await asyncio.to_thread(build))
+
+
 @router.post(
     "/{document_id}/recipes/{recipe_id}/chunk-preview",
     response_model=ApiResponse[DocumentChunkPreviewResponse],
@@ -1849,16 +1968,8 @@ async def export_document_recipe_extraction(
             format=format,
             content_type=_document_extraction_export_content_type(format),
             content=content,
-            payload=(
-                payload
-                if format
-                not in {
-                    DocumentExtractionExportFormat.MARKDOWN,
-                    DocumentExtractionExportFormat.HTML,
-                }
-                else {}
-            ),
-            chunks=chunks,
+            payload={},
+            chunks=[],
             parser_backend=_extraction_parser_backend(extraction),
             parser_profile=_extraction_parser_profile(extraction),
             page_count=len(extraction.pages),
@@ -3058,6 +3169,27 @@ def _reviewed_extraction_with_edits(
     読み込んだときの文(``base_text``)と今の文が違い、修正後の文とも違う要素・表セルは、
     ほかの保存が先に変えていたため ``DocumentReviewEditConflictError`` にする(#2616)。
     """
+    # 部分閲覧の修正も、現在版と範囲を照合してから全文へ差分適用する。
+    normalized_edits = []
+    current_elements = {e.element_id: e.text for e in extraction.elements}
+    for edit in edits.element_edits:
+        if edit.base_offset is not None:
+            current = current_elements.get(edit.element_id)
+            start = edit.base_offset
+            if (
+                current is None
+                or edit.base_sha256 != hashlib.sha256(current.encode()).hexdigest()
+                or current[start : start + len(edit.base_text)] != edit.base_text
+            ):
+                raise DocumentReviewEditConflictError(_REVIEW_EDIT_CONFLICT_MESSAGE)
+            edit = edit.model_copy(
+                update={
+                    "text": current[:start] + edit.text + current[start + len(edit.base_text) :],
+                    "base_text": current,
+                }
+            )
+        normalized_edits.append(edit)
+    edits = edits.model_copy(update={"element_edits": normalized_edits})
     text_by_element_id = {edit.element_id: edit.text for edit in edits.element_edits}
     current_text_by_element_id = {
         element.element_id: element.text for element in extraction.elements if element.element_id
@@ -5873,12 +6005,61 @@ async def document_preview_page_image(
     )
 
 
+@router.post("/{document_id}/text-window")
+@router.post("/{document_id}/recipes/{recipe_id}/text-window")
+async def document_recipe_text_window(
+    document_id: str, request: DocumentTextWindowRequest, recipe_id: str | None = None
+) -> ApiResponse[dict[str, Any]]:
+    if recipe_id:
+        detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    else:
+        found_detail = await OracleClient().get_document(document_id)
+        if found_detail is None:
+            raise HTTPException(status_code=404, detail="文書が見つかりません。")
+        detail = found_detail
+        artifact = detail.preprocess_artifact
+    variant, offset, limit, focus = request.variant, request.offset, request.limit, request.focus
+    data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
+
+    def build() -> dict[str, Any]:
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            decoded = from_bytes(data).best()
+            text = str(decoded) if decoded is not None else data.decode("utf-8", errors="replace")
+        return {
+            **text_window(text, offset, limit, focus),
+            "revision": hashlib.sha256(data).hexdigest(),
+        }
+
+    return ApiResponse(data=await asyncio.to_thread(build))
+
+
+def _preview_cache(
+    detail: DocumentDetail, variant: str, artifact: DocumentPreprocessArtifact | None, suffix: str
+) -> tuple[DocumentPreviewCache, str]:
+    identity = (
+        f"{detail.id}:{detail.content_sha256}:{detail.object_storage_path}:{variant}:"
+        f"{artifact.model_dump_json() if artifact else ''}:{suffix}"
+    )
+    return DocumentPreviewCache(
+        FilePath(get_settings().local_storage_dir) / "cache" / "document-preview"
+    ), identity
+
+
 async def _document_preview_pages_response(
     detail: DocumentDetail,
     *,
     variant: Literal["original", "prepared"],
     preprocess_artifact: DocumentPreprocessArtifact | None,
 ) -> ApiResponse[DocumentPreviewPages]:
+    cache, identity = _preview_cache(detail, variant, preprocess_artifact, "manifest")
+    cached = await asyncio.to_thread(cache.get, identity)
+    if cached is not None:
+        try:
+            return ApiResponse(data=DocumentPreviewPages.model_validate_json(cached))
+        except ValueError:
+            pass
     data, _file_name, _content_type = await load_document_content(
         detail, variant=variant, preprocess_artifact=preprocess_artifact
     )
@@ -5886,15 +6067,15 @@ async def _document_preview_pages_response(
         sizes = await asyncio.to_thread(page_sizes, data)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return ApiResponse(
-        data=DocumentPreviewPages(
-            page_count=len(sizes),
-            pages=[
-                DocumentPreviewPage(page_number=index + 1, width=width, height=height)
-                for index, (width, height) in enumerate(sizes)
-            ],
-        )
+    result = DocumentPreviewPages(
+        page_count=len(sizes),
+        pages=[
+            DocumentPreviewPage(page_number=index + 1, width=width, height=height)
+            for index, (width, height) in enumerate(sizes)
+        ],
     )
+    await asyncio.to_thread(cache.put, identity, result.model_dump_json().encode())
+    return ApiResponse(data=result)
 
 
 async def _document_preview_page_image_response(
@@ -5905,13 +6086,19 @@ async def _document_preview_page_image_response(
     dpi: int,
     preprocess_artifact: DocumentPreprocessArtifact | None,
 ) -> Response:
-    data, _file_name, _content_type = await load_document_content(
-        detail, variant=variant, preprocess_artifact=preprocess_artifact
+    cache, identity = _preview_cache(
+        detail, variant, preprocess_artifact, f"page:{page_number}:dpi:{dpi}"
     )
-    try:
-        png = await asyncio.to_thread(render_page_png, data, page_number, dpi)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    png = await asyncio.to_thread(cache.get, identity)
+    if png is None:
+        data, _file_name, _content_type = await load_document_content(
+            detail, variant=variant, preprocess_artifact=preprocess_artifact
+        )
+        try:
+            png = await asyncio.to_thread(render_page_png, data, page_number, dpi)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await asyncio.to_thread(cache.put, identity, png)
     return Response(
         content=png,
         media_type="image/png",

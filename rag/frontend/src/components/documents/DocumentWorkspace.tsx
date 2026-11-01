@@ -20,7 +20,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useId, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { chunksOnPage, extractionOnPage } from "@/lib/document-inspector-page";
+import { useQuery } from "@tanstack/react-query";
+import { paginationLabels } from "@/lib/pagination-labels";
 
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
@@ -75,6 +76,8 @@ import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
+  ApiErrorState,
+  Pagination,
   Banner,
   Button,
   buttonVariants,
@@ -139,8 +142,6 @@ import {
   initialLoadError,
   useDocument,
   useDocumentChunkSets,
-  useDocumentRecipeChunks,
-  useDocumentRecipeExtractionExport,
   useDocumentRecipes,
   useDocumentIngestionJobs,
   useDocumentIngestionSegments,
@@ -353,7 +354,6 @@ export function DocumentWorkspace({
     retryFailedSegments.reset();
     saveReviewEdits.reset();
   };
-  const chunksQuery = useDocumentRecipeChunks(documentId, selectedRecipeId);
   const chunkPreview = usePreviewDocumentRecipeChunks();
   const [chunkPreviewSettings, setChunkPreviewSettings] = useState<ChunkPreviewForm>(() =>
     chunkPreviewForm(selectedRecipe)
@@ -372,13 +372,6 @@ export function DocumentWorkspace({
   // embedding は global 単一固定。診断の付帯情報のため、取得失敗時はチップを出さないだけにする。
   const modelSettingsQuery = useModelSettings();
   const embeddingSettings = modelSettingsQuery.data?.settings.generative_ai ?? null;
-  // 抽出結果は JSON で 1 回だけ取得し、構造化要素・parser の表示・抽出エクスポートの状態に使う。
-  // Markdown / HTML は、抽出エクスポートでコピー・ダウンロードするときだけ取得する（#561）。
-  const extractionJsonQuery = useDocumentRecipeExtractionExport(
-    documentId,
-    hasSelectedRecipeExtraction ? selectedRecipeId : null,
-    "json"
-  );
   const enqueueIngestion = useEnqueueDocumentRecipeJob();
   const approveDocument = useApproveDocumentRecipe();
   const saveReviewEdits = useSaveDocumentRecipeReviewEdits();
@@ -393,11 +386,12 @@ export function DocumentWorkspace({
     useState<DocumentReviewEditsRequest>(emptyReviewEdits);
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null);
+  const [showChunkDetails, setShowChunkDetails] = useState(false);
   const [selectedTableCellKey, setSelectedTableCellKey] = useState<string | null>(null);
   const [previewVariant, setPreviewVariant] = useState<"original" | "prepared">("original");
   const [previewFocusSource, setPreviewFocusSource] =
     // page は章節ナビゲーションから開いたページ（#713）。強調の枠は出さない。
-    useState<"chunk" | "element" | "table_cell" | "page">("chunk");
+    useState<"chunk" | "element" | "table_cell" | "page">("page");
   const [focusRequest, setFocusRequest] = useState<WorkspaceFocusRequest | null>(null);
   const [urlFallbackFocus, setUrlFallbackFocus] = useState<UrlFallbackFocus | null>(null);
   const pageFocusSerialRef = useRef(0);
@@ -435,6 +429,61 @@ export function DocumentWorkspace({
     if (requestedElementId || requestedTableId || requestedCellRef) return "extraction";
     return requestedChunkId ? "chunks" : "text";
   });
+  const inspectorScope = `${documentId}:${selectedRecipeId}:${previewVariant}`;
+  const [inspectorPage, setInspectorPage] = useState<{ scope: string; page: number } | null>(null);
+  const currentInspectorPage = inspectorPage?.scope === inspectorScope ? inspectorPage.page : null;
+  const reportInspectorPage = useCallback((page: number) => {
+    setInspectorPage(current => current?.scope === inspectorScope && current.page === page ? current : { scope: inspectorScope, page });
+  }, [inspectorScope]);
+
+  const [viewOffset, setViewOffset] = useState(0);
+  const [elementTextOffset, setElementTextOffset] = useState(0);
+  const [cellOffset, setCellOffset] = useState(0);
+  const [chunkOffset, setChunkOffset] = useState(0);
+  const windowChanged = useValuesChanged([documentId, selectedRecipeId, inspectorTab, currentInspectorPage]);
+  if (windowChanged) { setViewOffset(0); setChunkOffset(0); setElementTextOffset(0); setCellOffset(0); setShowChunkDetails(false); }
+  const extractionJsonQuery = useQuery({
+    queryKey: ["documents", documentId, "recipes", selectedRecipeId, "extraction-view", inspectorTab,
+      currentInspectorPage, viewOffset, requestedElementId, elementTextOffset, cellOffset, selectedRecipe?.active_extraction_recipe_id],
+    queryFn: ({signal}) => api.documentExtractionView(documentId, selectedRecipeId!, {
+      mode: inspectorTab === "extraction" ? "structure" : inspectorTab === "text" ? "text" : "summary",
+      offset: viewOffset, limit: 25, text_offset: elementTextOffset, cell_offset: cellOffset, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
+      ...(requestedElementId && viewOffset === 0 ? {element_id: requestedElementId} : {}),
+    }, signal),
+    enabled: Boolean(selectedRecipeId && hasSelectedRecipeExtraction) && inspectorTab !== "chunks",
+    retry: 1,
+  });
+  const chunkWindowQuery = useQuery({
+    queryKey: ["documents", documentId, "recipes", selectedRecipeId, "chunk-window", chunkOffset,
+      currentInspectorPage, selectedRecipe?.active_chunk_set_id],
+    queryFn: ({signal}) => api.documentChunkWindow(documentId, selectedRecipeId!, {
+      offset: chunkOffset, limit: 25, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
+    }, signal),
+    enabled: Boolean(selectedRecipeId) && inspectorTab === "chunks",
+    retry: 1,
+  });
+  const focusedChunkQuery = useQuery({
+    queryKey: ["documents", documentId, "recipes", selectedRecipeId, "chunk-window", "focus", requestedChunkId ?? selectedChunkId,
+      selectedRecipe?.active_chunk_set_id],
+    queryFn: ({signal}) => api.documentChunkWindow(documentId, selectedRecipeId!, {chunk_id: (requestedChunkId ?? selectedChunkId)!, limit: 1}, signal),
+    enabled: Boolean(selectedRecipeId && (requestedChunkId || showChunkDetails && inspectorTab === "chunks" && selectedChunkId)), retry: 1,
+  });
+  const chunksQuery = { ...chunkWindowQuery, data: useMemo(() => {
+    const chunks = chunkWindowQuery.data?.items;
+    const focus = focusedChunkQuery.data?.items[0];
+    return focus ? (chunks?.some(c => c.chunk_id === focus.chunk_id) ? chunks.map(c => c.chunk_id === focus.chunk_id ? focus : c) : requestedChunkId ? [focus, ...(chunks ?? [])] : chunks) : chunks;
+  }, [chunkWindowQuery.data, focusedChunkQuery.data]) };
+  const extractionPending = hasSelectedRecipeExtraction && extractionJsonQuery.isPending;
+  const extractionError = extractionJsonQuery.isError && !extractionJsonQuery.data;
+  const extractionState = (content: ReactNode) => extractionPending ? (
+    <TimedLoadingState label={t("flow.extractionExport.loading")} operationKey="document-extraction-load" framed={false} testId="document-extraction-loading"><ListSkeleton rows={3} /></TimedLoadingState>
+  ) : extractionError ? <ApiErrorState fallback={t("flow.extractionExport.loadError")} error={extractionJsonQuery.error} onRetry={() => void extractionJsonQuery.refetch()} /> : content;
+  const extractionPaging = extractionJsonQuery.data && extractionJsonQuery.data.total > extractionJsonQuery.data.limit ? (
+    <Pagination page={Math.floor(extractionJsonQuery.data.offset / extractionJsonQuery.data.limit) + 1}
+      disabled={hasReviewEdits}
+      totalPages={Math.ceil(extractionJsonQuery.data.total / extractionJsonQuery.data.limit)}
+      onPageChange={page => setViewOffset((page - 1) * extractionJsonQuery.data!.limit)} labels={paginationLabels()} />
+  ) : null;
   const requestedUrlFocus = useMemo<UrlFallbackFocus | null>(() => {
     const page = integerSearchParam(searchParams.get("page"));
     const bbox = bboxSearchParam(searchParams.get("bbox"));
@@ -690,8 +739,8 @@ export function DocumentWorkspace({
     [chunkPreview.data?.chunks, chunksQuery.data]
   );
   const selectedChunk = useMemo(
-    () => displayedChunks.find((chunk) => chunk.chunk_id === selectedChunkId) ?? null,
-    [displayedChunks, selectedChunkId]
+    () => displayedChunks.find((chunk) => chunk.chunk_id === selectedChunkId) ?? focusedChunkQuery.data?.items.find(chunk => chunk.chunk_id === selectedChunkId) ?? null,
+    [displayedChunks, selectedChunkId, focusedChunkQuery.data]
   );
   const selectedElement = useMemo(
     () =>
@@ -1058,19 +1107,13 @@ export function DocumentWorkspace({
   };
   if (focusSourceChanged) applyRequestedFocus();
 
-  const inspectorScope = `${documentId}:${selectedRecipeId}:${previewVariant}`;
-  const [inspectorPage, setInspectorPage] = useState<{ scope: string; page: number } | null>(null);
-  const currentInspectorPage = inspectorPage?.scope === inspectorScope ? inspectorPage.page : null;
-  const reportInspectorPage = useCallback((page: number) => {
-    setInspectorPage(current => current?.scope === inspectorScope && current.page === page ? current : { scope: inspectorScope, page });
-  }, [inspectorScope]);
 
   const pageExtraction = useMemo(
-    () => extractionOnPage(selectedExtraction, currentInspectorPage),
+    () => selectedExtraction,
     [selectedExtraction, currentInspectorPage]
   );
   const pageChunks = useMemo(
-    () => chunksOnPage(displayedChunks, selectedExtraction, currentInspectorPage),
+    () => displayedChunks,
     [displayedChunks, selectedExtraction, currentInspectorPage]
   );
 
@@ -1584,7 +1627,7 @@ export function DocumentWorkspace({
                 {
                   id: "chunks",
                   label: t("flow.chunks.title"),
-                  count: pageChunks.length || undefined,
+                  count: chunkWindowQuery.data?.total || undefined,
                 },
                 { id: "export", label: t("flow.extractionExport.title") },
               ]}
@@ -1604,7 +1647,8 @@ export function DocumentWorkspace({
                 tabIndex={0}
                 className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
-                <DocumentRawText extraction={pageExtraction} />
+                {extractionState(<DocumentRawText extraction={pageExtraction} />)}
+                {extractionPaging}
               </div>
             ) : null}
 
@@ -1694,7 +1738,7 @@ export function DocumentWorkspace({
                     ) : null}
                   </div>
                 ) : null}
-                {status === "REVIEW" && editingReview ? (
+                {extractionState(status === "REVIEW" && editingReview ? (
                   <ReviewTextEditor
                     extraction={pageExtraction}
                     edits={reviewEdits}
@@ -1718,7 +1762,16 @@ export function DocumentWorkspace({
                     onPageSelect={selectPage}
                     omitWarning={omitDocumentLevelWarning}
                   />
-                )}
+                ))}
+                {extractionPaging}
+                {extractionJsonQuery.data?.text_total && extractionJsonQuery.data.text_total > 8192 ? <section aria-label={t("flow.inspector.longElement")}>
+                  <p className="text-xs text-fg-muted">{t("flow.inspector.longElement")}</p>
+                  <Pagination page={Math.floor(elementTextOffset / 8192) + 1} totalPages={Math.ceil(extractionJsonQuery.data.text_total / 8192)} disabled={hasReviewEdits} onPageChange={page => setElementTextOffset((page - 1) * 8192)} labels={paginationLabels()} />
+                </section> : null}
+                {extractionJsonQuery.data?.cell_total && extractionJsonQuery.data.cell_total > 25 ? <section aria-label={t("flow.extraction.tableCells")}>
+                  <p className="text-xs text-fg-muted">{t("flow.extraction.tableCells")}</p>
+                  <Pagination page={Math.floor(cellOffset / 25) + 1} totalPages={Math.ceil(extractionJsonQuery.data.cell_total / 25)} disabled={hasReviewEdits} onPageChange={page => setCellOffset((page - 1) * 25)} labels={paginationLabels()} />
+                </section> : null}
               </div>
             ) : null}
 
@@ -1768,6 +1821,9 @@ export function DocumentWorkspace({
                       result={chunkPreview.data ?? null}
                     />
                   ) : null}
+                  {chunkWindowQuery.data && chunkWindowQuery.data.total > 25 ? <Pagination
+                    page={Math.floor(chunkOffset / 25) + 1} totalPages={Math.ceil(chunkWindowQuery.data.total / 25)}
+                    onPageChange={page => setChunkOffset((page - 1) * 25)} labels={paginationLabels()} /> : null}
                   <DocumentChunksPanel
                     chunks={pageChunks}
                     // レシピが無い・取得できないときは chunk の取得自体が無効（isPending のまま）なので、
@@ -1780,6 +1836,7 @@ export function DocumentWorkspace({
                     selectedChunkId={selectedChunkId}
                     focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
                     onSelect={(chunk) => {
+                      setShowChunkDetails(true);
                       setUrlFallbackFocus(null);
                       setSelectedChunkId(chunk.chunk_id);
                       setSelectedElementId(chunk.element_ids[0] ?? null);

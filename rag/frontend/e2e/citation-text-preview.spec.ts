@@ -72,6 +72,7 @@ async function search(page: Page) {
   await page.route("**/api/documents/doc-a/content**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json; charset=utf-8", body: DOCUMENT_TEXT })
   );
+  await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill({ json: { data: readerWindow(EXCERPT, new URL(route.request().url()).searchParams.has("cursor")) } }));
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /プロファイル A/);
   await page.keyboard.press("Escape");
@@ -99,17 +100,13 @@ test("抜粋の長い根拠を開いてもプレビューは画面に残り、�
   const previewBox = (await preview.boundingBox())!;
   expect(previewBox.y + previewBox.height / 2).toBeLessThanOrEqual(viewport.height);
   expect(viewport.height - previewBox.y).toBeGreaterThanOrEqual(viewport.height * 0.35);
-  // テキストの原本は、引用した箇所（抜粋の 50 行目から）へ移って強調する。
-  const text = preview.getByRole("region", { name: "文書 A.json のプレビュー" });
-  const quote = text.getByTestId("preview-text-quote");
-  await expect(quote).toContainText(LINES[49]);
-  await expect(quote).not.toContainText(LINES[79]);
-  await expect(preview.getByTestId("preview-text-highlight")).toContainText("引用した箇所を強調しています");
-  await expect.poll(() => text.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  const textBox = (await text.boundingBox())!;
-  const quoteBox = (await quote.boundingBox())!;
-  expect(quoteBox.y).toBeGreaterThanOrEqual(textBox.y - 1);
-  expect(quoteBox.y).toBeLessThan(textBox.y + textBox.height);
+  const reader = preview.getByTestId("evidence-reader");
+  await expect(reader.locator("mark")).toContainText(LINES[49]);
+  await expect(reader).toContainText("追加の参考文脈");
+  await reader.getByRole("button", { name: "後文を読む", exact: true }).click();
+  await expect(reader).toContainText("合成の続き");
+  await reader.getByRole("button", { name: "引用位置に戻る", exact: true }).click();
+  await expect(reader.locator("mark")).toContainText(LINES[49]);
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath(`rag-long-excerpt-${testInfo.project.name}.png`) });
   // 抜粋の領域は Tab で届き、キーボードで最後まで読める（読み終えるとフェードを消す）。
@@ -120,3 +117,9 @@ test("抜粋の長い根拠を開いてもプレビューは画面に残り、�
   await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await expect(scroll.getByTestId("evidence-excerpt-fade")).toHaveCSS("opacity", "0");
 });
+
+function readerWindow(quote: string, continuation: boolean) {
+  return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: "paragraph",
+    blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : quote, offset: 0, highlights: continuation ? [] : [[0, quote.length]], cited: !continuation }, { id: "context", text: "合成の前後文", offset: 0, highlights: [], cited: false }],
+    previous_cursor: "before", next_cursor: continuation ? null : "after", outline: [{ id: "section-a", title: "節 A", parent_id: null, has_children: false }] };
+}

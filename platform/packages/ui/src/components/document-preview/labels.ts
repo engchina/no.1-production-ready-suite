@@ -31,6 +31,7 @@ export interface DocumentPreviewLabels {
   pageLoading: string;
   pageError: string;
   textLoading: string;
+  textRange: (start: number, end: number, total: number) => string;
   /** テキストのプレビューで、引用した箇所を見つけて強調したときの案内（#2512）。 */
   textHighlightStatus: string;
   fetchError: string;
@@ -72,6 +73,7 @@ export function documentPreviewLabels(overrides: Partial<DocumentPreviewLabels> 
     pageLoading: "ページを読み込んでいます",
     pageError: "このページの画像を表示できませんでした。",
     textLoading: "テキストを読み込んでいます",
+    textRange: (start, end, total) => `${start.toLocaleString()}–${end.toLocaleString()} / ${total.toLocaleString()} 文字`,
     textHighlightStatus: "引用した箇所を強調しています",
     fetchError: "プレビューを取得できませんでした。",
     retry: "再試行",

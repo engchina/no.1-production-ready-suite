@@ -775,6 +775,8 @@ class DocumentElementTextEdit(BaseModel):
     text: str = Field(default="", max_length=200000)
     # 読み込んだときの文。保存のときに今の文と違えば、ほかの保存が先に変えていたため 409(#2616)。
     base_text: str = Field(..., max_length=200000)
+    base_offset: int | None = Field(default=None, ge=0)
+    base_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class DocumentTableCellTextEdit(BaseModel):
@@ -955,3 +957,12 @@ class DocumentSectionsSaveRequest(BaseModel):
     base_revision: int | None = None
     # ページの上限の確認に使う抽出結果のレシピ(省略は既定のレシピ)。
     recipe_id: str | None = Field(default=None, max_length=128)
+
+
+class DocumentTextWindowRequest(BaseModel):
+    """原文の有限範囲。完全ダウンロードとは独立する。"""
+
+    offset: int = Field(default=0, ge=0, strict=True)
+    limit: int = Field(default=8192, ge=1, le=8192, strict=True)
+    variant: Literal["original", "prepared"] = "original"
+    focus: str | None = Field(default=None, max_length=8192)

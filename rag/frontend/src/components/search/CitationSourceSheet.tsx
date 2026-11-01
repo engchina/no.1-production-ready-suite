@@ -1,9 +1,9 @@
-import type { ReactNode } from "react";
-import { EvidenceSourceSheet, evidencePreviewFocus } from "@production-ready/ui";
+import { useCallback, type ReactNode } from "react";
+import { EvidenceSourceSheet, EvidenceReader, evidencePreviewFocus, type EvidenceReadingInput } from "@production-ready/ui";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import type { CitationPosition } from "@/lib/answer-text";
-import type { RetrievedChunk } from "@/lib/api";
+import { api, type RetrievedChunk } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { useDocument, useDocumentRecipes } from "@/lib/queries";
 import { firstMetadataToken } from "@/lib/table-cell-focus";
@@ -85,6 +85,7 @@ function CitationSourcePreview({
   /** 箇所を強調するか。位置の決まらない根拠の行から開いたときは頁へ移るだけにする（#2710）。 */
   highlight: boolean;
 }) {
+  const loadWindow = useCallback((input: EvidenceReadingInput, signal: AbortSignal) => api.documentReader(chunk.document_id, chunk.chunk_id, input, signal), [chunk.document_id, chunk.chunk_id]);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
   // パネルを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
@@ -92,6 +93,9 @@ function CitationSourcePreview({
   const previewRecipes = useDocumentRecipes(open ? chunk.document_id : null);
   const previewRecipe = previewRecipes.data?.find((recipe) => recipe.recipe_id === recipeId);
   const focus = evidencePreviewFocus(chunk.metadata);
+  if (/\.(?:txt|csv|tsv|md|json|jsonl|xml|html?|eml|log)$/i.test(previewFileName)) {
+    return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} enabled={open} highlight={highlight} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
+  }
   return (
     <DocumentPreview
       documentId={chunk.document_id}

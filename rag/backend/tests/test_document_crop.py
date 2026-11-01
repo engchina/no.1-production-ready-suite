@@ -1,5 +1,6 @@
 """解析結果プレビュー用の crop API(PDF / 画像の bbox 切り出し)。"""
 
+import hashlib
 import io
 from types import SimpleNamespace
 from typing import Any, cast
@@ -16,6 +17,17 @@ from tests.support import AsgiTestClient
 client = AsgiTestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def isolated_preview_cache(tmp_path, monkeypatch):
+    from app.services.document_preview_cache import DocumentPreviewCache
+
+    monkeypatch.setattr(
+        documents_route,
+        "DocumentPreviewCache",
+        lambda _root: DocumentPreviewCache(tmp_path / "preview-cache"),
+    )
+
+
 def _pdf_bytes() -> bytes:
     document = SyntheticPdf()
     document.page(600, 800).rect((100, 100, 300, 200), fill=(1, 0, 0))
@@ -27,7 +39,12 @@ def _png_bytes() -> bytes:
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
-    detail = SimpleNamespace(object_storage_path="docs/doc-1/source", preprocess_artifact=None)
+    detail = SimpleNamespace(
+        id="doc-1",
+        content_sha256=hashlib.sha256(data).hexdigest(),
+        object_storage_path="docs/doc-1/source",
+        preprocess_artifact=None,
+    )
 
     class FakeOracle:
         async def get_document(self, document_id: str) -> object | None:
@@ -130,6 +147,8 @@ def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch)
 def _install_preview(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
     """プレビューのページ画像 API 用(原本の読み出しは documents route の ObjectStorageClient)。"""
     detail = SimpleNamespace(
+        id="doc-1",
+        content_sha256=hashlib.sha256(data).hexdigest(),
         object_storage_path="docs/doc-1/source",
         preprocess_artifact=None,
         file_name="source.pdf",
@@ -236,6 +255,8 @@ def test_recipe_preview_pages_use_recipe_prepared_artifact(
 ) -> None:
     """レシピのプレビューは、そのレシピのファイル準備後 artifact(変換済み PDF)を描く。"""
     detail = SimpleNamespace(
+        id="doc-1",
+        content_sha256="synthetic-docx-source",
         object_storage_path="docs/doc-1/source.docx",
         preprocess_artifact=None,
         file_name="source.docx",
@@ -327,7 +348,12 @@ async def test_load_parsed_source_uses_recipe_prepared_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """図の bbox はレシピが解析したファイルの座標なので、そのレシピの artifact を読む。"""
-    detail = SimpleNamespace(object_storage_path="docs/doc-1/source.docx", preprocess_artifact=None)
+    detail = SimpleNamespace(
+        id="doc-1",
+        content_sha256="synthetic-source",
+        object_storage_path="docs/doc-1/source.docx",
+        preprocess_artifact=None,
+    )
     read: list[str] = []
 
     class FakeOracle:

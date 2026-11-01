@@ -1,3 +1,4 @@
+import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, type Route, test } from "./fixtures/test";
 
 import {
@@ -72,7 +73,7 @@ async function mockRetrieval(page: Page) {
     ],
   ];
   for (const [url, data] of cards) {
-    await page.route(url, (route) => route.fulfill({ json: apiEnvelope(data) }));
+    await page.route(url, (route) => fulfillDocumentInspection(route, { json: apiEnvelope(data) }));
   }
 }
 
@@ -113,7 +114,7 @@ function chunkingSettings(strategy: string) {
 function mockChunking(strategy: string) {
   return async (page: Page) => {
     await page.route("**/api/settings/chunking", (route) =>
-      route.fulfill({ json: apiEnvelope(chunkingSettings(strategy)) })
+      fulfillDocumentInspection(route, { json: apiEnvelope(chunkingSettings(strategy)) })
     );
   };
 }
@@ -139,7 +140,7 @@ function parserAdapter(backend: string, selected: boolean) {
 
 async function mockParserAdapters(page: Page) {
   await page.route("**/api/settings/parser-adapters", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         adapter_backend: "docling",
         effective_order: ["docling"],
@@ -185,7 +186,7 @@ async function mockParserAdapters(page: Page) {
     })
   );
   await page.route("**/api/settings/extraction-fields", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         fields: [
           { name: "契約番号", description: "契約書の右上の番号", value_type: "string" },
@@ -196,7 +197,7 @@ async function mockParserAdapters(page: Page) {
     })
   );
   await page.route("**/api/settings/section-rules", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         mode: "custom",
         rules: [
@@ -208,7 +209,7 @@ async function mockParserAdapters(page: Page) {
     })
   );
   await page.route("**/api/documents?**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         items: [{ id: "doc-1", file_name: "経費規程.pdf" }],
         total: 1,
@@ -233,7 +234,7 @@ async function openParserAdapters(page: Page) {
 
 async function mockHuggingFace(page: Page) {
   await page.route("**/api/settings/huggingface", (route) =>
-    route.fulfill({ json: apiEnvelope({ endpoint: "", token_configured: true, config_source: "runtime" }) })
+    fulfillDocumentInspection(route, { json: apiEnvelope({ endpoint: "", token_configured: true, config_source: "runtime" }) })
   );
 }
 
@@ -241,7 +242,7 @@ async function mockHuggingFace(page: Page) {
 
 async function mockAnswerPrompts(page: Page) {
   await page.route("**/api/settings/answer-prompts", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         prompts: [
           {
@@ -278,21 +279,21 @@ async function mockSearch(page: Page) {
   await page.route("**/api/search-answer-profiles**", (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith("/approved-faq/suggest")) {
-      return route.fulfill({ json: apiEnvelope({ suggestions: [] }) });
+      return fulfillDocumentInspection(route, { json: apiEnvelope({ suggestions: [] }) });
     }
-    return route.fulfill({
+    return fulfillDocumentInspection(route, {
       json: apiEnvelope({ items: PROFILES, total: 1, limit: 50, offset: 0, has_next: false }),
     });
   });
   await page.route("**/api/search/answers**", (route) =>
-    route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }) })
+    fulfillDocumentInspection(route, { json: apiEnvelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }) })
   );
   await page.route("**/api/settings/answer-records", (route) =>
-    route.fulfill({ json: apiEnvelope({ retention_days: 30 }) })
+    fulfillDocumentInspection(route, { json: apiEnvelope({ retention_days: 30 }) })
   );
-  await page.route("**/api/feedback/current**", (route) => route.fulfill({ json: apiEnvelope([]) }));
+  await page.route("**/api/feedback/current**", (route) => fulfillDocumentInspection(route, { json: apiEnvelope([]) }));
   await page.route("**/api/search/extraction-fields**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         fields: [
           { name: "契約番号", description: "", value_type: "string" },
@@ -346,16 +347,16 @@ const KNOWLEDGE_BASE = {
 
 async function mockKnowledgeBase(page: Page) {
   await page.route("**/api/documents**", (route) =>
-    route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }) })
+    fulfillDocumentInspection(route, { json: apiEnvelope({ items: [], total: 0, limit: 10, offset: 0, has_next: false }) })
   );
   await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({ items: [KNOWLEDGE_BASE], total: 1, limit: 20, offset: 0, has_next: false }),
     })
   );
-  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: apiEnvelope(KNOWLEDGE_BASE) }));
+  await page.route("**/api/knowledge-bases/kb-1", (route) => fulfillDocumentInspection(route, { json: apiEnvelope(KNOWLEDGE_BASE) }));
   await page.route("**/api/knowledge-bases/kb-1/extraction-fields", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         inherits_default: false,
         fields: [{ name: "契約番号", description: "契約書の右上の番号", value_type: "string" }],
@@ -444,19 +445,19 @@ async function mockDocumentWith(page: Page, status: "REVIEW" | "INDEXED") {
   });
   const ok = (data: unknown) => ({ json: apiEnvelope(data) });
   await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill(ok({ items: [{ id: "kb-1", name: "社内規程" }], total: 1, limit: 100, offset: 0, has_next: false }))
+    fulfillDocumentInspection(route, ok({ items: [{ id: "kb-1", name: "社内規程" }], total: 1, limit: 100, offset: 0, has_next: false }))
   );
   await page.route("**/api/document-categories", (route) =>
-    route.fulfill(
+    fulfillDocumentInspection(route,
       ok([{ id: "c1", name: "業務A", level: 1, parent_id: null, document_count: 0, children: [] }])
     )
   );
-  await page.route("**/api/documents/doc-1/recipes", (route) => route.fulfill(ok([recipe(1), recipe(2)])));
-  await page.route("**/api/documents/doc-1/recipes/recipe-*", (route) => route.fulfill(ok(recipe(1))));
-  await page.route("**/api/documents/doc-1/recipes/recipe-*/ingestion-jobs**", (route) => route.fulfill(ok([])));
-  await page.route("**/api/documents/doc-1/recipes/recipe-*/chunks", (route) => route.fulfill(ok([])));
-  await page.route("**/api/documents/doc-1/recipes/recipe-*/extraction-export**", (route) =>
-    route.fulfill(
+  await page.route("**/api/documents/doc-1/recipes", (route) => fulfillDocumentInspection(route, ok([recipe(1), recipe(2)])));
+  await page.route("**/api/documents/doc-1/recipes/recipe-*", (route) => fulfillDocumentInspection(route, ok(recipe(1))));
+  await page.route("**/api/documents/doc-1/recipes/recipe-*/ingestion-jobs**", (route) => fulfillDocumentInspection(route, ok([])));
+  await page.route("**/api/documents/doc-1/recipes/recipe-*/{chunks,chunk-window}**", (route) => fulfillDocumentInspection(route, ok([])));
+  await page.route("**/api/documents/doc-1/recipes/recipe-*/{extraction-export,extraction-view}**", (route) =>
+    fulfillDocumentInspection(route,
       ok({
         document_id: "doc-1",
         file_name: "policy.xlsx",
@@ -474,18 +475,18 @@ async function mockDocumentWith(page: Page, status: "REVIEW" | "INDEXED") {
       })
     )
   );
-  await page.route("**/api/documents/doc-1/ingestion-jobs**", (route) => route.fulfill(ok([])));
-  await page.route("**/api/documents/doc-1/chunk-sets", (route) => route.fulfill(ok([])));
-  await page.route("**/api/documents/doc-1/ingestion-segments", (route) => route.fulfill(ok([])));
+  await page.route("**/api/documents/doc-1/ingestion-jobs**", (route) => fulfillDocumentInspection(route, ok([])));
+  await page.route("**/api/documents/doc-1/chunk-sets", (route) => fulfillDocumentInspection(route, ok([])));
+  await page.route("**/api/documents/doc-1/ingestion-segments", (route) => fulfillDocumentInspection(route, ok([])));
   await page.route("**/api/documents/doc-1/knowledge-bases", (route) =>
-    route.fulfill(ok([{ id: "kb-1", name: "社内規程" }]))
+    fulfillDocumentInspection(route, ok([{ id: "kb-1", name: "社内規程" }]))
   );
-  await page.route("**/api/documents/doc-1/content**", (route) => route.fulfill({ status: 204, body: "" }));
+  await page.route("**/api/documents/doc-1/content**", (route) => fulfillDocumentInspection(route, { status: 204, body: "" }));
   await page.route("**/api/documents/doc-1/recipes/recipe-*/content**", (route) =>
-    route.fulfill({ status: 204, body: "" })
+    fulfillDocumentInspection(route, { status: 204, body: "" })
   );
   await page.route("**/api/documents/doc-1", (route) =>
-    route.fulfill(
+    fulfillDocumentInspection(route,
       ok({
         id: "doc-1",
         file_name: "policy.xlsx",
@@ -600,18 +601,18 @@ async function mockSupportGuides(page: Page) {
   };
   const { draft: _draft, published: _published, revisions: _revisions, issues: _issues, ...summary } = detail;
   await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
+    fulfillDocumentInspection(route, { json: apiEnvelope({ items: [], total: 0, limit: 50, offset: 0, has_next: false }) })
   );
   await page.route("**/api/search-answer-profiles**", (route: Route) => {
     const path = new URL(route.request().url()).pathname;
     const base = "/api/search-answer-profiles/bv-1/support-guides";
-    if (path === base) return route.fulfill({ json: apiEnvelope([summary]) });
-    if (path === `${base}/guide-1`) return route.fulfill({ json: apiEnvelope(detail) });
+    if (path === base) return fulfillDocumentInspection(route, { json: apiEnvelope([summary]) });
+    if (path === `${base}/guide-1`) return fulfillDocumentInspection(route, { json: apiEnvelope(detail) });
     if (path.endsWith("/approved-faq")) {
-      return route.fulfill({ json: apiEnvelope({ search_answer_profile_id: "bv-1", enabled: true, records: [] }) });
+      return fulfillDocumentInspection(route, { json: apiEnvelope({ search_answer_profile_id: "bv-1", enabled: true, records: [] }) });
     }
     if (path.endsWith("/bv-1")) {
-      return route.fulfill({
+      return fulfillDocumentInspection(route, {
         json: apiEnvelope({
           ...profile,
           config: { version: 1, knowledge_base_ids: ["kb-1"], query: { guardrail_policy: null } },
@@ -619,7 +620,7 @@ async function mockSupportGuides(page: Page) {
         }),
       });
     }
-    return route.fulfill({
+    return fulfillDocumentInspection(route, {
       json: apiEnvelope({ items: [profile], total: 1, limit: 50, offset: 0, has_next: false }),
     });
   });
@@ -637,7 +638,7 @@ async function openSupportGuideEditor(page: Page) {
 
 async function mockUpload(page: Page) {
   await page.route("**/api/settings/upload-storage", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         backend: "local",
         local_storage_dir: "/var/rag-uploads",
@@ -651,7 +652,7 @@ async function mockUpload(page: Page) {
     })
   );
   await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: apiEnvelope({
         items: [{ ...KNOWLEDGE_BASE, name: "社内規程" }],
         total: 1,
@@ -662,7 +663,7 @@ async function mockUpload(page: Page) {
     })
   );
   await page.route("**/api/documents/ingestion-jobs**", (route) =>
-    route.fulfill({ json: apiEnvelope({ items: [], total: 0, limit: 5, offset: 0, has_next: false }) })
+    fulfillDocumentInspection(route, { json: apiEnvelope({ items: [], total: 0, limit: 5, offset: 0, has_next: false }) })
   );
 }
 

@@ -2,6 +2,9 @@ import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   DocumentPreview,
+  EvidenceReader,
+  type EvidenceReadingInput,
+  type EvidenceReadingWindow,
   documentPreviewLabels,
   evidencePreviewFocus,
   type DocumentPreviewPagesState,
@@ -30,7 +33,6 @@ export function RagSourcePreview({
   documentId,
   chunkId,
   fileName,
-  quote = null,
   open,
 }: {
   runId: string;
@@ -62,7 +64,7 @@ export function RagSourcePreview({
   const focus = useMemo(() => evidencePreviewFocus(data?.highlight_metadata ?? null), [data?.highlight_metadata]);
   const pages = usePreviewPages(data);
   const contentUrl = data?.content_url ?? null;
-  const loadText = useCallback((signal: AbortSignal) => loadPreviewText(contentUrl ?? "", signal), [contentUrl]);
+  const loadWindow = useCallback((input: EvidenceReadingInput, signal: AbortSignal) => loadPreviewWindow(contentUrl ?? "", input, signal), [contentUrl]);
 
   if (preview.isError) {
     return (
@@ -86,6 +88,7 @@ export function RagSourcePreview({
       />
     );
   }
+  if (data.kind === "text") return <EvidenceReader key={`${documentId}:${chunkId}`} readingKey={`${documentId}:${chunkId}`} loadWindow={loadWindow} enabled={open} downloadUrl={`${data.content_url}?disposition=attachment`} />;
   return (
     <DocumentPreview
       kind={data.kind}
@@ -94,10 +97,8 @@ export function RagSourcePreview({
       pages={pages}
       // ページの画像を描けない PDF は、原文の URL をブラウザの PDF 表示で開く。
       iframeUrl={data.content_url}
-      loadText={loadText}
       // 期限の前に取り直しても、本文は読み直さない（同じ根拠の同じ本文）。
       textKey={`${documentId}:${chunkId}`}
-      focusText={quote}
       unsupportedMessage={t("evidence.previewUnsupported")}
       downloadUrl={`${data.content_url}?disposition=attachment`}
       focusPage={focus.focusPage}
@@ -128,8 +129,11 @@ function usePreviewPages(data: RunSourcePreview | undefined): DocumentPreviewPag
 }
 
 /** 原文の本文を読む（RAG の署名つきの URL。Cookie と Referer を送らない）。 */
-async function loadPreviewText(url: string, signal: AbortSignal): Promise<string> {
-  const response = await fetch(url, { signal, credentials: "omit", referrerPolicy: "no-referrer" });
+async function loadPreviewWindow(url: string, input: EvidenceReadingInput, signal: AbortSignal): Promise<EvidenceReadingWindow> {
+  const target = new URL(url);
+  target.searchParams.set("view", "reader");
+  for (const [key, value] of Object.entries(input)) if (value) target.searchParams.set(key, value);
+  const response = await fetch(target.toString(), { signal, credentials: "omit", referrerPolicy: "no-referrer" });
   if (!response.ok) {
     const envelope: unknown = await response.json().catch(() => null);
     const messages =
@@ -139,11 +143,6 @@ async function loadPreviewText(url: string, signal: AbortSignal): Promise<string
     const message = Array.isArray(messages) && typeof messages[0] === "string" ? messages[0] : null;
     throw new Error(message ?? t("evidence.previewTextFailed"));
   }
-  const charset = /charset=([^;]+)/i.exec(response.headers.get("Content-Type") ?? "")?.[1]?.trim() || "utf-8";
-  const buffer = await response.arrayBuffer();
-  try {
-    return new TextDecoder(charset).decode(buffer);
-  } catch {
-    return new TextDecoder("utf-8").decode(buffer);
-  }
+  const envelope = await response.json() as { data: EvidenceReadingWindow };
+  return envelope.data;
 }

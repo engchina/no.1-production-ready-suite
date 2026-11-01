@@ -451,6 +451,7 @@ def test_urls_are_bound_to_user_and_recheck_permission_and_version(
     token, _ = _issue(subject=outsider.user_uuid)
     assert client.get(f"/api/source-previews/{token}/pages/1").status_code == 404
     assert client.get(f"/api/source-previews/{token}/content").status_code == 404
+    assert client.get(f"/api/source-previews/{token}/content?view=reader").status_code == 404
 
     # 版が変わった → 409。古い版になった → 409。見えなくなった → 404。
     current = previews.visible[("d1", "c1")]
@@ -460,6 +461,7 @@ def test_urls_are_bound_to_user_and_recheck_permission_and_version(
         )
     }
     assert client.get(path).status_code == 409
+    assert client.get(f"{preview['content_path']}?view=reader").status_code == 409
     previews.visible = {}
     previews.stale = {("d1", "c1")}
     assert client.get(path).status_code == 409
@@ -473,6 +475,7 @@ def test_urls_are_bound_to_user_and_recheck_permission_and_version(
     assert isinstance(stored, RoleRecord)
     stored.permissions = {"menu.upload"}
     assert client.get(path).status_code == 403
+    assert client.get(f"{preview['content_path']}?view=reader").status_code == 403
     stored.permissions = {"menu.search"}
     stored.knowledge_base_ids = {"kb-2"}
     assert client.get(path).status_code == 404
@@ -509,3 +512,19 @@ def test_access_log_masks_preview_token() -> None:
     assert record.getMessage() == (
         '127.0.0.1:1 - "GET /api/source-previews/{token}/pages/2?dpi=144 HTTP/1.1" 200'
     )
+
+
+def test_signed_reader_is_bounded_and_does_not_fetch_file(
+    auth: ProductionAuth, previews: type[_PreviewOracle]
+) -> None:
+    del previews
+    user = auth.user_with_permissions("reader", ["menu.search"], knowledge_base_ids=["kb-1"])
+    path = _preview(user.user_uuid, "d3", "c3")["content_path"]
+    _Storage.reads.clear()
+    response = client.get(f"{path}?view=reader")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert response.json()["data"]["anchor_status"] == "unresolved"
+    assert not _Storage.reads
+    assert client.get(f"{path}?view=reader&scope=invalid").status_code == 422

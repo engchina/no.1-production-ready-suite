@@ -1,3 +1,4 @@
+import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
 import { mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
@@ -41,12 +42,12 @@ async function mockWorkspace(
     documentDetail.preprocess_artifact
 ): Promise<void> {
   await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok({ items: [{ id: "kb-1", name: "社内規程" }], total: 1, limit: 100, offset: 0, has_next: false }),
     })
   );
   await page.route("**/api/documents/doc-1/recipes", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok([
         {
           recipe_id: "recipe-1",
@@ -80,19 +81,19 @@ async function mockWorkspace(
       ]),
     })
   );
-  await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", (route) =>
-    route.fulfill({ json: ok([]) })
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/{chunks,chunk-window}**", (route) =>
+    fulfillDocumentInspection(route, { json: ok([]) })
   );
-  await page.route("**/api/documents/doc-1/ingestion-jobs**", (route) => route.fulfill({ json: ok([]) }));
-  await page.route("**/api/documents/doc-1/chunk-sets", (route) => route.fulfill({ json: ok([]) }));
+  await page.route("**/api/documents/doc-1/ingestion-jobs**", (route) => fulfillDocumentInspection(route, { json: ok([]) }));
+  await page.route("**/api/documents/doc-1/chunk-sets", (route) => fulfillDocumentInspection(route, { json: ok([]) }));
   await page.route("**/api/documents/doc-1/ingestion-segments", (route) =>
-    route.fulfill({ json: ok([]) })
+    fulfillDocumentInspection(route, { json: ok([]) })
   );
   await page.route("**/api/documents/doc-1/knowledge-bases", (route) =>
-    route.fulfill({ json: ok([{ id: "kb-1", name: "社内規程" }]) })
+    fulfillDocumentInspection(route, { json: ok([{ id: "kb-1", name: "社内規程" }]) })
   );
-  await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", (route) =>
-    route.fulfill({
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/{extraction-export,extraction-view}**", (route) =>
+    fulfillDocumentInspection(route, {
       json: ok({
         document_id: "doc-1",
         file_name: "report.docx",
@@ -111,13 +112,13 @@ async function mockWorkspace(
     })
   );
   await page.route("**/api/documents/doc-1/content**", (route) =>
-    route.fulfill({ status: 204, body: "" })
+    fulfillDocumentInspection(route, { status: 204, body: "" })
   );
   await page.route("**/api/documents/doc-1/recipes/recipe-1/content**", (route) =>
-    route.fulfill({ status: 204, body: "" })
+    fulfillDocumentInspection(route, { status: 204, body: "" })
   );
   await page.route("**/api/documents/doc-1", (route) =>
-    route.fulfill({ json: ok(documentDetail) })
+    fulfillDocumentInspection(route, { json: ok(documentDetail) })
   );
 }
 

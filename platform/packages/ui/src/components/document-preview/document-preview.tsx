@@ -1,4 +1,4 @@
-import { Download, FileQuestion, LocateFixed } from "lucide-react";
+import { ArrowLeft, ArrowRight, Download, FileQuestion, LocateFixed } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
@@ -67,6 +67,7 @@ export interface DocumentPreviewProps extends DocumentPreviewFocus {
    * `text`: 本文を読む。失敗は throw する（`ApiErrorState` が理由と対処を出す）。`textKey` が変わると読み直す。
    */
   loadText?: (signal: AbortSignal) => Promise<string>;
+  loadTextRange?: (offset: number, signal: AbortSignal) => Promise<{ text: string; offset: number; total: number; limit: number }>;
   textKey?: string;
   /**
    * `text`: 引用した箇所（根拠の抜粋の本文）。本文の中で見つかれば、そこへスクロールして強調する（PDF の bbox の強調と
@@ -106,6 +107,7 @@ export function DocumentPreview({
   pages = { status: "fallback" },
   iframeUrl = null,
   loadText,
+  loadTextRange,
   textKey,
   focusText = null,
   textLang,
@@ -197,12 +199,13 @@ export function DocumentPreview({
     return <UnsupportedPreview fileName={fileName} url={downloadUrl} message={labels.fetchError} labels={labels} />;
   }
 
-  if (kind === "text" && loadText) {
+  if (kind === "text" && (loadText || loadTextRange)) {
     return (
       <PreviewFrame className={className} sizing={sizing} labels={labels} {...focus}>
         <TextPreview
           key={textKey}
           loadText={loadText}
+          loadTextRange={loadTextRange}
           fileName={fileName}
           focusText={focusText}
           textLang={textLang}
@@ -351,62 +354,40 @@ function BboxLocator({
  * 本文の表示（読み込み・失敗と再試行・中でスクロール）。読み方は製品の `loadText`。`focusText`（引用した箇所）が
  * 本文の中で見つかれば強調し、本文の領域の中だけをその位置へスクロールする（パネル全体は動かさない。#2512）。
  */
-function TextPreview({
-  loadText,
-  fileName,
-  focusText,
-  textLang,
-  labels,
-}: {
-  loadText: (signal: AbortSignal) => Promise<string>;
+function TextPreview({ loadText, loadTextRange, fileName, focusText, textLang, labels }: {
+  loadText: DocumentPreviewProps["loadText"];
+  loadTextRange: DocumentPreviewProps["loadTextRange"];
   fileName: string;
   focusText: string | null;
   textLang: string | null | undefined;
   labels: DocumentPreviewLabels;
 }) {
-  // 取得結果は試行ごとに持つ（再試行の直後は前の結果を使わず、読込中として扱う）。
   const [attempt, setAttempt] = useState(0);
-  const [result, setResult] = useState<{ attempt: number; text: string | null; error: unknown } | null>(null);
-  const current = result?.attempt === attempt ? result : null;
-
+  const [offset, setOffset] = useState(0);
+  const [result, setResult] = useState<{ key: string; text: string; offset: number; total: number; limit: number; error?: unknown } | null>(null);
+  const key = `${attempt}:${offset}:${focusText ?? ""}`;
+  const current = result?.key === key ? result : null;
   useEffect(() => {
     const controller = new AbortController();
-    loadText(controller.signal)
-      .then((text) => setResult({ attempt, text, error: null }))
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setResult({ attempt, text: null, error });
-        }
-      });
+    const read = async () => {
+      if (loadTextRange) return loadTextRange(offset, controller.signal);
+      const text = await loadText!(controller.signal);
+      return { text: text.slice(offset, offset + 8192), offset, total: text.length, limit: 8192 };
+    };
+    read().then(value => { if (!controller.signal.aborted) setResult({key, ...value}); })
+      .catch((error: unknown) => { if (!controller.signal.aborted) setResult({ key, text: "", offset, total: 0, limit: 8192, error }); });
     return () => controller.abort();
-    // loadText は描画ごとに作り直されることがあるので、読み直しは textKey（key）と再試行だけで決める。
-  }, [attempt]);
-
-  if (current?.error != null) {
-    return (
-      <ApiErrorState
-        error={current.error}
-        fallback={labels.fetchError}
-        onRetry={() => setAttempt((value) => value + 1)}
-        retryLabel={labels.retry}
-      />
-    );
-  }
-  if (current?.text == null) {
-    return (
-      <TimedLoadingState
-        label={labels.textLoading}
-        operationKey="preview-text-load"
-        framed={false}
-        testId="preview-text-loading"
-      >
-        <Skeleton className="h-40 w-full" />
-      </TimedLoadingState>
-    );
-  }
-  return (
-    <TextPreviewBody text={current.text} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} />
-  );
+  }, [key]);
+  if (current?.error != null) return <ApiErrorState error={current.error} fallback={labels.fetchError} onRetry={() => setAttempt(v => v + 1)} retryLabel={labels.retry} />;
+  if (!current) return <TimedLoadingState label={labels.textLoading} operationKey="preview-text-load" framed={false} testId="preview-text-loading"><Skeleton className="h-40 w-full" /></TimedLoadingState>;
+  return <div className="flex h-full min-h-0 flex-col gap-2">
+    {current.total > current.limit ? <div className="flex flex-wrap items-center justify-between gap-2" aria-label={labels.toolbar}>
+      <Button size="sm" variant="secondary" icon={ArrowLeft} disabled={current.offset === 0} onClick={() => setOffset(Math.max(0, current.offset - current.limit))}>{labels.previousPage}</Button>
+      <span className="text-xs text-fg-muted">{labels.textRange(current.offset + 1, Math.min(current.total, current.offset + current.text.length), current.total)}</span>
+      <Button size="sm" variant="secondary" icon={ArrowRight} disabled={current.offset + current.limit >= current.total} onClick={() => setOffset(current.offset + current.limit)}>{labels.nextPage}</Button>
+    </div> : null}
+    <div className="min-h-0 flex-1"><TextPreviewBody text={current.text} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} /></div>
+  </div>;
 }
 
 function TextPreviewBody({

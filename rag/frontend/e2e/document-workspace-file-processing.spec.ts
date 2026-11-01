@@ -1,3 +1,4 @@
+import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
@@ -5,7 +6,7 @@ test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           items: [{ id: "kb-1", name: "社内規程", document_count: 1 }],
@@ -231,6 +232,8 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
 
   for (const tabName of ["構造化要素", "抽出エクスポート"]) {
     await page.getByRole("tab", { name: tabName, exact: false }).click();
+    await expect(page.getByTestId("document-extraction-loading")).toHaveCount(0);
+    await expect(page.getByTestId("document-extraction-export-loading")).toHaveCount(0);
     // 右ペインのタブの名前でパネルを引く。
     const tabPanelMetrics = await page
       .getByTestId("document-inspector-pane")
@@ -304,7 +307,7 @@ test("原本情報の未対応理由は警告の行と重ねず 1 回だけ出�
   await mockDocumentWorkspace(page, {});
   const detail = documentDetail();
   await page.route("**/api/documents/doc-1", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           ...detail,
@@ -598,7 +601,7 @@ test("抽出エクスポートは Markdown / HTML / JSON をダウンロード�
 
   // 取得に失敗したら、操作した行の直下に残す。
   await page.route(/\/extraction-export\?format=html$/, (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       status: 404,
       json: { data: null, error_messages: ["抽出結果が見つかりません。"], warning_messages: [] },
     })
@@ -626,9 +629,9 @@ test("抽出エクスポートは抽出結果の読み込み中・取得失敗�
     releaseExport = resolve;
   });
   let failExport = false;
-  await page.route(/\/extraction-export\?format=json$/, async (route) => {
+  await page.route(/\/(?:extraction-export\?format=json|extraction-view\?.*)$/, async (route) => {
     if (failExport) {
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         status: 404,
         json: { data: null, error_messages: ["抽出結果が見つかりません。"], warning_messages: [] },
       });
@@ -838,7 +841,7 @@ test("章節ナビゲーションの章節を押すと、プレビューをそ�
     const section = (id: string, title: string, start: number, end: number) => ({
       id, title, level: 1, page_start: start, page_end: end, origin: "extraction", source_section_id: id, edited: false,
     });
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           document_id: "doc-1",
@@ -1330,7 +1333,7 @@ test(
     await page.route("**/api/documents/doc-1/ingestion-segments/retry**", async (route) => {
       retryCalls += 1;
       if (retryCalls === 1) {
-        await route.fulfill({
+        await fulfillDocumentInspection(route, {
           status: 400,
           json: { data: null, error_messages: ["再試行できる段がありません。"], warning_messages: [] },
         });
@@ -1388,7 +1391,7 @@ test(
     await page.route(
       "**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**",
       async (route) => {
-        await route.fulfill({
+        await fulfillDocumentInspection(route, {
           status: 400,
           json: { data: null, error_messages: ["この工程は開始できません。"], warning_messages: [] },
         });
@@ -1985,7 +1988,7 @@ test("Docling で解析できない形式は、取込を始めずに理由と対
     "この文書の「処理レシピ」で「文書解析」を Unstructured に変えてから「処理を開始」してください。" +
     "Unstructured の解析サービス（parser-unstructured）は停止しています。「運用設定 › サービス管理」で Unstructured を起動してください。";
   await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       status: 409,
       json: { data: null, error_messages: [detail], warning_messages: [] },
     })
@@ -2109,7 +2112,7 @@ test("再処理の job が順番待ちの間は前回の失敗を出さず、ま
               : step
           )
         : failedSteps;
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [
           {
@@ -2145,7 +2148,7 @@ test("再処理の job が順番待ちの間は前回の失敗を出さず、ま
     });
   });
   await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data:
           scenario === "failed"
@@ -2158,12 +2161,12 @@ test("再処理の job が順番待ちの間は前回の失敗を出さず、ま
   });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", async (route) => {
     scenario = "queued";
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: reprocessJob("QUEUED"), error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/documents/ingestion-jobs/job-reprocess", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: reprocessJob(scenario === "refailed" ? "FAILED" : "QUEUED"),
         error_messages: [],
@@ -2378,7 +2381,7 @@ async function mockDocumentWorkspace(
   const segmentFailureMessage =
     "OCI Enterprise AI VLM response が StructuredExtraction schema と一致しません。失敗項目: confidence: less_than_equal。";
   await page.route("**/api/documents/doc-1", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: documentDetail({
           imagePreview: options.imagePreview,
@@ -2408,7 +2411,7 @@ async function mockDocumentWorkspace(
     });
     const hasExtraction = ["REVIEW", "CHUNKED", "INDEXED"].includes(status) ||
       (status === "ERROR" && ["CHUNK", "INDEX"].includes(options.latestJobPhase ?? ""));
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [
           {
@@ -2458,7 +2461,7 @@ async function mockDocumentWorkspace(
       phase: url.searchParams.get("phase"),
     };
     state.enqueued = true;
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: ingestionJob("QUEUED", {
           phase: (url.searchParams.get("phase") as "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX" | null) ?? "PREPROCESS",
@@ -2471,7 +2474,7 @@ async function mockDocumentWorkspace(
   await page.route("**/api/documents/doc-1/recipes/recipe-1/approve", async (route) => {
     const status = currentDocumentStatus(options, state);
     const phase = status === "PREPROCESSED" ? "EXTRACT" : status === "CHUNKED" ? "INDEX" : "CHUNK";
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: ingestionJob("QUEUED", { phase }),
         error_messages: [],
@@ -2486,7 +2489,7 @@ async function mockDocumentWorkspace(
       path: url.pathname,
       recipeId: url.searchParams.get("recipe_id"),
     };
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: retrySegmentsJob(),
         error_messages: [],
@@ -2504,7 +2507,7 @@ async function mockDocumentWorkspace(
         phase: url.searchParams.get("phase"),
       };
       state.enqueued = true;
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         json: {
           data: ingestionJob("QUEUED", {
             phase:
@@ -2521,7 +2524,7 @@ async function mockDocumentWorkspace(
       });
       return;
     }
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: options.jobsForAllPhases
           ? (["INDEX", "CHUNK", "EXTRACT", "PREPROCESS"] as const).map((phase) =>
@@ -2549,7 +2552,7 @@ async function mockDocumentWorkspace(
   });
   await page.route("**/api/documents/doc-1/chunk-sets", async (route) => {
     const status = currentDocumentStatus(options, state);
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data:
           status === "INDEXED"
@@ -2579,7 +2582,7 @@ async function mockDocumentWorkspace(
     });
   });
   await page.route("**/api/settings/model", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           settings: {
@@ -2604,7 +2607,7 @@ async function mockDocumentWorkspace(
       state.backgroundFailed = state.backgroundJobPolls > 0;
       state.backgroundJobPolls += 1;
     }
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: ingestionJob(
           options.backgroundFailureAfterEnqueue && state.backgroundFailed ? "FAILED" : "QUEUED",
@@ -2624,7 +2627,7 @@ async function mockDocumentWorkspace(
     });
   });
   await page.route("**/api/documents/doc-1/knowledge-bases", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [{ id: "kb-1", name: "社内規程" }],
         error_messages: [],
@@ -2632,12 +2635,17 @@ async function mockDocumentWorkspace(
       },
     });
   });
+  await page.route("**/api/documents/doc-1/**/text-window", route => {
+    const request = route.request().postDataJSON();
+    const text = request.variant === "prepared" ? "準備後ファイル\n交通費は1000円です。" : "合成原文\n交通費は1000円です。";
+    return route.fulfill({json: {data: {text: text.slice(request.offset,request.offset+request.limit), offset: request.offset, total: text.length, limit: request.limit}, error_messages: [], warning_messages: []}});
+  });
   await page.route(
     /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/content/,
     async (route) => {
     const variant = new URL(route.request().url()).searchParams.get("variant");
     if (variant === "prepared") {
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         status: 200,
         headers: { "content-type": "text/plain; charset=utf-8" },
         body: "準備後ファイル\n交通費は1000円です。",
@@ -2645,7 +2653,7 @@ async function mockDocumentWorkspace(
       return;
     }
     if (options.imagePreview) {
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         status: 200,
         headers: { "content-type": "image/svg+xml" },
         body: '<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/><text x="24" y="80">TOTAL 1000 JPY</text></svg>',
@@ -2653,7 +2661,7 @@ async function mockDocumentWorkspace(
       return;
     }
     if (options.pdfPreview) {
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         status: 200,
         headers: { "content-type": "application/pdf" },
         body: [
@@ -2667,7 +2675,7 @@ async function mockDocumentWorkspace(
       });
       return;
     }
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       status: 200,
       headers: { "content-type": "text/plain; charset=utf-8" },
       body: "経費申請\n交通費は1000円です。",
@@ -2678,7 +2686,7 @@ async function mockDocumentWorkspace(
     await page.route(
       /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/preview-pages(?:\?|$)/,
       async (route) => {
-        await route.fulfill({
+        await fulfillDocumentInspection(route, {
           json: {
             data: {
               page_count: 2,
@@ -2698,7 +2706,7 @@ async function mockDocumentWorkspace(
       async (route) => {
         const pageNumber = Number(new URL(route.request().url()).pathname.split("/").pop());
         const [width, height] = pageNumber === 2 ? [792, 612] : [612, 792];
-        await route.fulfill({
+        await fulfillDocumentInspection(route, {
           status: 200,
           headers: { "content-type": "image/svg+xml" },
           body: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="white"/><rect x="61.2" y="79.2" width="244.8" height="79.2" fill="none" stroke="black"/><text x="24" y="40">PAGE ${pageNumber}</text></svg>`,
@@ -2707,10 +2715,10 @@ async function mockDocumentWorkspace(
     );
   }
   await page.route(
-    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/chunks(?:\?|$)/,
+    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/(?:chunks|chunk-window)(?:\?|$)/,
     async (route) => {
     if (options.chunksError) {
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         status: 500,
         json: {
           data: null,
@@ -2721,7 +2729,7 @@ async function mockDocumentWorkspace(
       return;
     }
     if (options.chunksEmpty || (options.autoRefreshAfterEnqueue && !state.enqueued)) {
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         json: {
           data: [],
           error_messages: [],
@@ -2730,7 +2738,7 @@ async function mockDocumentWorkspace(
       });
       return;
     }
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [
           {
@@ -2823,11 +2831,11 @@ async function mockDocumentWorkspace(
     }
   );
   await page.route(
-    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/extraction-export/,
+    /\/api\/documents\/doc-1(?:\/recipes\/recipe-1)?\/(?:extraction-export|extraction-view)/,
     async (route) => {
     state.extractionExportRequests += 1;
     const url = new URL(route.request().url());
-    const format = url.searchParams.get("format") ?? "markdown";
+    const format = url.searchParams.get("format") ?? (url.pathname.endsWith("/extraction-view") ? "json" : "markdown");
     const exportData =
       options.autoRefreshAfterEnqueue && !state.enqueued
         ? {
@@ -2841,7 +2849,7 @@ async function mockDocumentWorkspace(
             asset_count: 0,
           }
         : extractionExport(format);
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: exportData,
         error_messages: [],
@@ -2879,7 +2887,7 @@ async function mockDocumentWorkspace(
       error_message:
         "前の段の解析が失敗・取消になったため、この段は解析していません。再試行すると、この段から解析します。",
     };
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: options.segmentError
           ? [failedSegment, notStartedSegment]
@@ -3409,9 +3417,9 @@ for (const width of [1280, 375]) {
     await page.setViewportSize({ width, height: 900 });
     await mockDocumentWorkspace(page);
     const display = "id: row-a\nvalue: 10\nid: row-b\nvalue: 20";
-    await page.route("**/api/documents/doc-1/recipes/*/extraction-export?format=json", route => {
+    await page.route("**/api/documents/doc-1/recipes/*/{extraction-export?format=json,extraction-view?*}", route => {
       const view = extractionExport("json");
-      return route.fulfill({ json: { data: { ...view, payload: { ...view.payload, raw_text: "id: row-a\n<<<JSONL_RECORD_BOUNDARY>>>\nid: row-b", display_text: display } }, error_messages: [], warning_messages: [] } });
+      return fulfillDocumentInspection(route, { json: { data: { ...view, payload: { ...view.payload, raw_text: "id: row-a\n<<<JSONL_RECORD_BOUNDARY>>>\nid: row-b", display_text: display } }, error_messages: [], warning_messages: [] } });
     });
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => { (window as unknown as { copiedText: string }).copiedText = text; } } });
@@ -3426,3 +3434,69 @@ for (const width of [1280, 375]) {
     await page.screenshot({ path: testInfo.outputPath("jsonl-display-text.png"), fullPage: true });
   });
 }
+
+for (const tab of ["本文テキスト", "構造化要素"]) {
+  test(`抽出閲覧は取得中と失敗を空結果と区別する: ${tab}`, {tag: "@responsive"}, async ({page}, testInfo) => {
+    await mockDocumentWorkspace(page);
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    let fails = false;
+    await page.route("**/recipes/recipe-1/extraction-view?**", async route => {
+      await wait;
+      if (fails) return route.fulfill({status:503,json:{data:null,error_messages:["合成の取得失敗"],warning_messages:[]}});
+      return route.fulfill({json:{data:{payload:{raw_text:"",elements:[]},total:0,offset:0,limit:25},error_messages:[],warning_messages:[]}});
+    });
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab",{name:tab,exact:true}).click();
+    const loading=page.getByTestId("document-extraction-loading");
+    await expect(loading).toBeVisible();
+    await expect(page.getByText("本文テキストはまだありません。",{exact:true})).toHaveCount(0);
+    await expect(loading).toContainText("00:01",{timeout:4000});
+    await page.screenshot({path:testInfo.outputPath(`inspection-loading-${tab}.png`),fullPage:true});
+    release();
+    await expect(loading).toHaveCount(0);
+    const panel=page.getByTestId("document-inspector-pane").getByRole("tabpanel");
+    await expect(panel).toContainText(tab==="本文テキスト" ? "本文テキストはまだありません。" : "抽出結果");
+    fails=true;
+    await page.getByRole("tab",{name:tab==="本文テキスト"?"構造化要素":"本文テキスト",exact:true}).click();
+    await expect(panel.getByRole("button",{name:"再試行",exact:true})).toBeVisible();
+    fails=false;
+    await panel.getByRole("button",{name:"再試行",exact:true}).click();
+    await expect(panel.getByRole("button",{name:"再試行",exact:true})).toHaveCount(0);
+  });
+}
+
+test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧できる", {tag:"@responsive"}, async({page},testInfo)=>{
+  await mockDocumentWorkspace(page);
+  const text=JSON.stringify({nodes:Array.from({length:2000},(_,i)=>({id:i,text:"合成テキスト".repeat(100)}))});
+  let originalReads=0,chunkReads=0;
+  await page.route("**/recipes/recipe-1/content**",route=>{originalReads++;return route.fulfill({body:text,contentType:"application/json"});});
+  await page.route("**/recipes/recipe-1/text-window",route=>{
+    const {offset,limit}=route.request().postDataJSON();
+    return route.fulfill({json:{data:{text:text.slice(offset,offset+limit),offset,total:text.length,limit},error_messages:[],warning_messages:[]}});
+  });
+  await page.route("**/recipes/recipe-1/extraction-view?**",route=>{
+    const q=new URL(route.request().url()).searchParams,offset=Number(q.get("offset")??0),structure=q.get("mode")==="structure";
+    return route.fulfill({json:{data:{payload:{raw_text:structure?"":text.slice(offset,offset+8192),elements:structure?Array.from({length:Math.min(25,1332-offset)},(_,i)=>({element_id:`node-${offset+i}`,kind:"text",text:`合成要素${offset+i}`,order:offset+i,metadata:{}})):[]},offset,total:structure?1332:text.length,limit:structure?25:8192},error_messages:[],warning_messages:[]}});
+  });
+  await page.route("**/recipes/recipe-1/chunk-window?**",route=>{
+    chunkReads++;
+    const q=new URL(route.request().url()).searchParams,offset=Number(q.get("offset")??0);
+    return route.fulfill({json:{data:{items:Array.from({length:25},(_,i)=>({document_id:"doc-1",chunk_id:`chunk-${offset+i}`,chunk_index:offset+i,text:`合成Chunk${offset+i}`,metadata:{},element_ids:[]})),total:1366,offset,limit:25},error_messages:[],warning_messages:[]}});
+  });
+  await page.goto("/documents/doc-1");
+  await expect(page.getByTestId("preview-text")).toBeVisible();
+  expect(originalReads).toBe(0);expect(chunkReads).toBe(0);
+  expect(await page.getByTestId("preview-text").textContent()).toHaveLength(8192);
+  await page.getByTestId("document-inspector-pane").getByRole("tab",{name:"構造化要素",exact:true}).click();
+  const panel=page.getByTestId("document-inspector-pane").getByRole("tabpanel");
+  await expect(panel.getByRole("button",{name:/合成要素/})).toHaveCount(25);
+  await panel.getByRole("button",{name:"次へ",exact:true}).click();
+  await expect(panel).toContainText("合成要素25");
+  await page.getByRole("tab",{name:/Chunk \/ Citation/}).click();
+  await expect(page.getByTestId("document-chunk-list").locator("li")).toHaveCount(25);
+  await panel.getByRole("button",{name:"次へ",exact:true}).click();
+  await expect(panel).toContainText("合成Chunk25");
+  await page.screenshot({path:testInfo.outputPath("large-document-ready.png"),fullPage:true});
+  await expectNoPageOverflow(page);
+});

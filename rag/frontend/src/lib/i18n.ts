@@ -3,6 +3,7 @@ import { TRACE_DETAILS_JA } from "@production-ready/ui";
  * 日本語文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
+  "flow.inspector.longElement": "長い要素の本文を分割して表示しています。前後の内容はページ送りで確認できます。",
   ...TRACE_DETAILS_JA,
   "app.title": "Production Ready RAG",
   "app.sidebarTitle.line1": "Production Ready",

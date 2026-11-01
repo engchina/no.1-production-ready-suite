@@ -134,6 +134,7 @@ from app.schemas.search_answer_profile import (
     SearchAnswerProfileSummary,
     SearchAnswerProfileTarget,
 )
+from app.services.document_inspection import with_inspection_index
 
 logger = logging.getLogger(__name__)
 
@@ -2875,6 +2876,8 @@ class OracleClient:
             artifacts["language_pack_release_id"] = release.id
             artifacts["language_pack_ingest_hash"] = release.ingest_hash
             extraction = {**extraction, "parser_artifacts": artifacts}
+        if extraction is not None:
+            extraction = with_inspection_index(extraction)
         tenant = current_audit_request_context().tenant_id_hash
         binds = {
             "document_id": document_id,
@@ -2995,7 +2998,7 @@ class OracleClient:
                     "source_sha256": write.source_sha256,
                     "tenant_id_hash": tenant,
                     "recipe_subset": _json_bind(write.recipe_subset),
-                    "extraction_json": _json_bind(write.extraction),
+                    "extraction_json": _json_bind(with_inspection_index(write.extraction)),
                     "status": write.status,
                     "reason": None,
                     "metrics_json": _json_bind(None),
@@ -5756,6 +5759,89 @@ class OracleClient:
             [None] * len(chunks),
             chunk_set_id=chunk_set_id,
         )
+
+    async def list_chunk_set_chunk_window(
+        self,
+        chunk_set_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 25,
+        page: int | None = None,
+        chunk_id: str | None = None,
+        extraction_recipe_id: str | None = None,
+    ) -> tuple[list[DocumentChunkView], int]:
+        """権限と版を保って、必要な範囲の chunk だけを読む。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+            WITH page_elements AS (
+                SELECT ep.element_id FROM rag_document_extractions e,
+                    JSON_TABLE(e.extraction_json, '$.elements[*]' COLUMNS (
+                        element_id VARCHAR2(512) PATH '$.element_id',
+                        page_number NUMBER PATH '$.page_number' NULL ON ERROR)) ep
+                WHERE e.extraction_recipe_id = :extraction_recipe_id AND ep.page_number = :page
+                  AND e.document_id = (SELECT document_id FROM rag_chunk_sets
+                                       WHERE chunk_set_id = :chunk_set_id)
+                UNION ALL
+                SELECT ep.element_id FROM rag_document_extractions e,
+                    JSON_TABLE(e.extraction_json, '$.pages[*]' COLUMNS (
+                        page_number NUMBER PATH '$.page_number',
+                        NESTED PATH '$.element_ids[*]' COLUMNS (
+                            element_id VARCHAR2(512) PATH '$'))) ep
+                WHERE e.extraction_recipe_id = :extraction_recipe_id AND ep.page_number = :page
+                  AND e.document_id = (SELECT document_id FROM rag_chunk_sets
+                                       WHERE chunk_set_id = :chunk_set_id)
+            )
+            SELECT c.document_id, c.chunk_id, c.chunk_index,
+                   c.chunk_text, c.metadata_json, COUNT(*) OVER () AS window_total
+            FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE c.chunk_set_id = :chunk_set_id AND {access_predicate}
+              AND (:chunk_id IS NULL OR c.chunk_id = :chunk_id)
+              AND (:page IS NULL OR
+                   COALESCE(JSON_VALUE(c.metadata_json, '$.page_start'
+                                       RETURNING NUMBER NULL ON ERROR),
+                            JSON_VALUE(c.metadata_json, '$.page_end'
+                                       RETURNING NUMBER NULL ON ERROR),
+                            JSON_VALUE(c.metadata_json, '$.page_number'
+                                       RETURNING NUMBER NULL ON ERROR)) <= :page
+                   AND COALESCE(JSON_VALUE(c.metadata_json, '$.page_end'
+                                       RETURNING NUMBER NULL ON ERROR),
+                                JSON_VALUE(c.metadata_json, '$.page_start'
+                                       RETURNING NUMBER NULL ON ERROR),
+                                JSON_VALUE(c.metadata_json, '$.page_number'
+                                       RETURNING NUMBER NULL ON ERROR)) >= :page
+                   OR (JSON_VALUE(c.metadata_json, '$.page_start'
+                                       RETURNING NUMBER NULL ON ERROR) IS NULL
+                       AND EXISTS (SELECT 1 FROM page_elements pe
+                           WHERE JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
+                               PASSING pe.element_id AS "eid"))))
+            ORDER BY c.chunk_index, c.chunk_id
+            OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+            """,
+                access_predicate=_oracle_access_predicate_sql(alias="d"),
+            ),
+            _with_tenant_bind(
+                {
+                    "chunk_set_id": chunk_set_id,
+                    "offset": offset,
+                    "limit": limit,
+                    "page": page,
+                    "chunk_id": chunk_id,
+                    "extraction_recipe_id": extraction_recipe_id,
+                }
+            ),
+        )
+        chunks = [_document_chunk_view_from_row(row) for row in rows]
+        if chunk_id is None:
+            # 一覧に親本文などの重複を含めない。完全な値は選択時に1件だけ読む。
+            for chunk in chunks:
+                chunk.text = chunk.text[:1024]
+                chunk.metadata = {
+                    key: value
+                    for key, value in chunk.metadata.items()
+                    if key not in {"parent_text", "engine_search_text", "context_header"}
+                }
+        return chunks, int(str(rows[0]["window_total"])) if rows else 0
 
     async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
         """指定 chunk_set の chunk/citation metadata を返す。"""

@@ -72,7 +72,12 @@ export function ReviewTextEditor({
     const base_text =
       current.find((edit) => edit.element_id === id)?.base_text ?? originalElementText.get(id) ?? "";
     const element_edits = current.filter((edit) => edit.element_id !== id);
-    if (value !== base_text) element_edits.push({ element_id: id, text: value, base_text });
+    if (value !== base_text) {
+      const metadata = editableElements.find(e=>e.element_id===id)?.metadata;
+      element_edits.push({ element_id: id, text: value, base_text,
+        ...(typeof metadata?.preview_text_offset === "number" && typeof metadata.preview_text_sha256 === "string" ? {base_offset:metadata.preview_text_offset,base_sha256:metadata.preview_text_sha256} : {}),
+      });
+    }
     onChange({ ...edits, element_edits });
   }
 
