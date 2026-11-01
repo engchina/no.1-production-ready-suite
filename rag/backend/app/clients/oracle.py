@@ -7211,8 +7211,8 @@ class OracleClient:
                         metadata.update(
                             native_wrrf_score=row.get("native_wrrf_score"),
                             native_rrf_contribution=row.get("native_rrf_contribution"),
-                            vector_rank=row.get("native_effective_vector_rank"),
-                            keyword_rank=row.get("native_effective_text_rank"),
+                            vector_rank=row.get("native_effective_vector_rank") or None,
+                            keyword_rank=row.get("native_effective_text_rank") or None,
                             native_original_vector_rank=row.get("native_vector_rank"),
                             native_original_text_rank=row.get("native_text_rank"),
                             vector_contribution=row.get("native_vector_contribution"),

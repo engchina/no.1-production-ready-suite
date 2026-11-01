@@ -392,3 +392,25 @@ def test_backend_threshold_defaults_and_explicit_saved_values(
     saved = Settings(_env_file=None)
     assert saved.rag_min_similarity == 0.18
     assert saved.rag_rerank_min_relevance_score == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("present", ["vector", "keyword"])
+async def test_native_metadata_omits_unmatched_channel_rank(present: str) -> None:
+    class OneChannelOracle(NativeOracle):
+        async def _fetch_all(
+            self, sql: str, binds: Mapping[str, object] | None = None
+        ) -> list[dict[str, object]]:
+            rows = await super()._fetch_all(sql, binds)
+            if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+                rows[0]["native_vector_score"] = 100 if present == "vector" else 0
+                rows[0]["native_text_score"] = 80 if present == "keyword" else 0
+            return rows
+
+    client = OneChannelOracle()
+    hits = await client.hybrid_search("合成の質問", [1.0] * 1536, 4)
+    assert len(hits) == 1
+    absent = "keyword" if present == "vector" else "vector"
+    assert f"{absent}_rank" not in hits[0].metadata
+    assert hits[0].metadata[f"{absent}_contribution"] == 0
+    assert hits[0].metadata[f"{present}_rank"] == 1

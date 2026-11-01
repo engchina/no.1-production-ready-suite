@@ -52,8 +52,6 @@ PROFILE_GLOBAL_QUERY_FIELDS = frozenset(
         "answer_flow",
         "neighbor_child_count",
         "rerank_enabled",
-        "min_similarity",
-        "rerank_min_relevance_score",
         "auto_field_filter_enabled",
         "graph_expansion_enabled",
         "graph_expansion_max_chunks",
