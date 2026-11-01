@@ -143,10 +143,13 @@ def test_native_text_input_does_not_tokenize_or_read_registered_dictionary():
 
 def test_native_mode_never_falls_through_to_independent_legacy_schema():
     import pytest
+
     from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable
     from rag_engine.adapters.oracle.store import search_adb_hybrid_chunks
 
     settings = replace(get_settings(), hybrid_search_backend="oracle_native")
-    with patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=AssertionError("旧schemaへの接続禁止")):
-        with pytest.raises(NativeHybridUnavailable):
-            search_adb_hybrid_chunks(retrieval_queries=["合成の原質問"], settings=settings)
+    with (
+        patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=AssertionError("旧schemaへの接続禁止")),
+        pytest.raises(NativeHybridUnavailable),
+    ):
+        search_adb_hybrid_chunks(retrieval_queries=["合成の原質問"], settings=settings)
