@@ -719,7 +719,7 @@ test("主一覧は高い画面の余白へ拡張し、ページ送りを維持�
 });
 
 
-test("言語資源の対象条件・版の内訳を一覧とページ送りで維持する", { tag: "@responsive" }, async ({ page }) => {
+test("言語資源の対象条件を維持し、使用版の判定を単一ラベルで表示する", { tag: "@responsive" }, async ({ page }) => {
   const documents = Array.from({ length: 30 }, (_, index) => ({
     ...documentSummary(`release-doc-${index}`, `sample-${index}.txt`, "INDEXED"), category_name: null,
     language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
@@ -731,12 +731,39 @@ test("言語資源の対象条件・版の内訳を一覧とページ送りで�
   await mockFileListApi(page, documents, {}, url => requests.push(url));
   await page.goto("/file-list?language_pack_relation=different&current_release_id=release-current");
   await expect.poll(() => requests.some(url => url.searchParams.get("language_pack_relation") === "different" && url.searchParams.get("current_release_id") === "release-current")).toBe(true);
-  await expect(page.getByText("複数の版").first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "使用版と差分" }).first()).toHaveAttribute("href", "/documents/release-doc-0?language_pack=1");
+  const firstRow = page.getByRole("row").filter({ has: page.getByRole("link", { name: "sample-0.txt", exact: true }) });
+  const relationCell = firstRow.getByRole("cell").filter({ hasText: "取込設定に差分あり" });
+  await expect(relationCell).toHaveText("取込設定に差分あり");
+  await expect(relationCell.locator("[data-status-variant]")).toHaveCount(1);
+  await expect(page.getByText("複数の版", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "使用版と差分" })).toHaveCount(0);
   await page.getByTestId("file-list-pagination").getByRole("button", { name: "次へ", exact: true }).click();
   await expect.poll(() => requests.filter(url => url.searchParams.get("language_pack_relation") === "different").at(-1)?.searchParams.get("offset")).toBe("25");
   await expectNoPageOverflow(page);
   await page.screenshot({ path: test.info().outputPath("document-language-versions.png"), fullPage: true });
+});
+
+test("使用版未記録は状態列と同じ形式のラベルを1つだけ表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const documents = [
+    { ...documentSummary("unrecorded-no-use", "sample-a.txt", "UPLOADED"), language_pack: null },
+    { ...documentSummary("unrecorded-empty", "sample-b.txt", "UPLOADED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [] } },
+    { ...documentSummary("unrecorded-active", "sample-c.txt", "INDEXED"), language_pack: { current_release_id: "release-current", current_version: 3, recipes: [
+      { recipe_id: "recipe-1", chunk_set_id: "chunks-1", release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null },
+      { recipe_id: "recipe-2", chunk_set_id: "chunks-2", release_id: "release-current", version: 3, ingest_hash: "current", relation: "current", built_at: null, job_id: null, target_release_id: null },
+    ] } },
+  ];
+  await mockFileListApi(page, documents);
+  await page.goto("/file-list");
+  for (const document of documents) {
+    const row = page.getByRole("row").filter({ has: page.getByRole("link", { name: document.file_name, exact: true }) });
+    const cell = row.getByRole("cell", { name: "版未記録・判定不可", exact: true });
+    await expect(cell).toHaveText("版未記録・判定不可");
+    await expect(cell.locator("[data-status-variant]")).toHaveCount(1);
+    await expect(cell.locator("a, button")).toHaveCount(0);
+  }
+  await expect(page.getByRole("link", { name: "使用版と差分" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("document-language-single-label.png"), fullPage: true });
 });
 
 
