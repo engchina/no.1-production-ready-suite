@@ -1,3 +1,4 @@
+import { expectChatTargetNextToNewConversation } from "../../../platform/packages/ui/e2e/chat-toolbar-layout";
 import type { Page } from "@playwright/test";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
@@ -51,7 +52,7 @@ function seedThread(mockApi: MockApi) {
 }
 
 for (const theme of ["light", "dark"] as const) {
-  test(`業務 Agent の読み込み中は会話の欄に空の状態を出さず、Skeleton と無効の入力を出す (${theme})`, async ({
+  test(`業務 Agent の読み込み中は会話の欄に空の状態を出さず、Skeleton と無効の入力を出す (${theme})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await useTheme(page, theme);
@@ -84,6 +85,8 @@ for (const theme of ["light", "dark"] as const) {
 
     const toolbarTarget = page.locator("[data-chat-toolbar] #chat-agent");
     await expect(toolbarTarget).toBeVisible();
+    await expectChatTargetNextToNewConversation(page, expect);
+    await page.screenshot({ path: testInfo.outputPath(`chat-target-ready-${theme}.png`) });
     expect(await toolbarTarget.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);
 
     await expect(page.getByTestId("chat-conversation-skeleton")).toHaveCount(0);

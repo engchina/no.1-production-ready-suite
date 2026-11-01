@@ -1,3 +1,4 @@
+import { exerciseModelKeyDeletion } from "../../../../platform/packages/system-settings/e2e/model-key-deletion";
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { expectedControlHeight } from "./_helpers/control-height";
@@ -3467,5 +3468,11 @@ for (const theme of ["ライト", "ダーク"] as const) {
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
     expect(overflow).toBeLessThanOrEqual(0);
+  });
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`3接続の保存済み key を個別に削除して再保存できる（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await exerciseModelKeyDeletion(page, testInfo, expect, theme);
   });
 }

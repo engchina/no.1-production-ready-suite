@@ -1,3 +1,4 @@
+import { expectChatTargetNextToNewConversation } from "../../../platform/packages/ui/e2e/chat-toolbar-layout";
 import { expect, type Page, test } from "./fixtures/test";
 
 import { mockLocalAuth, selectSearchAnswerProfile } from "./_helpers";
@@ -105,7 +106,7 @@ async function applyColorScheme(page: Page, colorScheme: "light" | "dark") {
 }
 
 for (const colorScheme of ["light", "dark"] as const) {
-  test(`検索・回答プロファイルの読み込み中は空の状態を出さず、Skeleton と無効の入力を出す (${colorScheme})`, async ({
+  test(`検索・回答プロファイルの読み込み中は空の状態を出さず、Skeleton と無効の入力を出す (${colorScheme})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await setup(page);
@@ -144,6 +145,8 @@ for (const colorScheme of ["light", "dark"] as const) {
 
     const toolbarTarget = page.locator("[data-chat-toolbar] #chat-search-answer-profile");
     await expect(toolbarTarget).toBeVisible();
+    await expectChatTargetNextToNewConversation(page, expect);
+    await page.screenshot({ path: testInfo.outputPath(`chat-target-ready-${colorScheme}.png`) });
     expect(await toolbarTarget.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);
 
     await expect(page.getByTestId("chat-messages-skeleton")).toHaveCount(0);

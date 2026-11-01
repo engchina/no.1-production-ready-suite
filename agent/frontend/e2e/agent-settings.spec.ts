@@ -1,3 +1,4 @@
+import { exerciseModelKeyDeletion } from "../../../platform/packages/system-settings/e2e/model-key-deletion";
 import type { Locator, Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/mock-api";
@@ -959,3 +960,9 @@ test.describe("Agent Runtime settings", () => {
     await expectNoHorizontalOverflow(page);
   });
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`3接続の保存済み key を個別に削除して再保存できる（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await exerciseModelKeyDeletion(page, testInfo, expect, theme);
+  });
+}

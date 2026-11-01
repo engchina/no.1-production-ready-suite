@@ -130,9 +130,11 @@ describe("接続（#533 / #542）", () => {
       api_key: "API key を入力してください。",
     });
     expect(validateConnections([primary, { ...noSaved, api_key: "sk-new" }])).toEqual({});
-    expect(
-      validateConnections([primary, { ...secondary, clear_api_key: true }]).secondary?.api_key,
-    ).toBe("API key を入力してください。");
+    expect(validateConnections([primary, { ...secondary, clear_api_key: true }])).toEqual({});
+    expect(validateConnections([primary, noSaved], [primary, noSaved])).toEqual({});
+    expect(validateConnections([primary, noSaved], [primary, secondary]).secondary?.api_key).toBe(
+      "API key を入力してください。",
+    );
   });
 
   it("保存済みから変えた接続（設定・削除・入力）を「未保存」にする", () => {

@@ -1,3 +1,4 @@
+import { exerciseModelKeyDeletion } from "../../../platform/packages/system-settings/e2e/model-key-deletion";
 import { expect, test, type Locator, type Page } from "./fixtures/test";
 import { expectMainScrollEndsAtContent, expectNoPageOverflow, mockLocalAuth } from "./_helpers";
 
@@ -1064,3 +1065,9 @@ test("モデルの説明は初期状態で閉じ、クリックとキーボー�
   await page.screenshot({ path: testInfo.outputPath("model-parameter-help.png") });
   await expectNoPageOverflow(page);
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`3接続の保存済み key を個別に削除して再保存できる（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await exerciseModelKeyDeletion(page, testInfo, expect, theme);
+  });
+}
