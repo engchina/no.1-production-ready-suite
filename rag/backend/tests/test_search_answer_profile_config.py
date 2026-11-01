@@ -275,3 +275,20 @@ def test_global_search_options_ignore_legacy_profile_values_and_drop_them_on_sav
     assert not set(old) & set(query)
     assert query["support_guide_enabled"] is True
     assert query["max_anchors_per_document"] == 2
+
+
+def test_retrieval_thresholds_are_not_profile_override_fields() -> None:
+    settings = get_settings().model_copy(
+        update={"rag_min_similarity": 0.18, "rag_rerank_min_relevance_score": 0.27}
+    )
+    config = parse_search_answer_profile_config(
+        {"query": {"min_similarity": 0.9, "rerank_min_relevance_score": 0.9}}
+    )
+    resolved, _ = resolve_search_answer_profile_settings(settings, config)
+    assert resolved.rag_min_similarity == 0.18
+    assert resolved.rag_rerank_min_relevance_score == 0.27
+    serialized = dump_search_answer_profile_config(config)
+    query = serialized["query"]
+    assert isinstance(query, dict)
+    assert "min_similarity" not in query
+    assert "rerank_min_relevance_score" not in query

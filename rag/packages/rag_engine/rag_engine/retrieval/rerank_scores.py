@@ -37,7 +37,10 @@ def rerank_score(record: Any) -> float | None:
 def question_rerank_score(record: Any) -> float | None:
     """原質問だけとの rerank の点数。記録が無ければ並べ替えの点数（検索文が無いときは同じ値）。"""
     score = _score(record, "question_relevance_score")
-    return score if score is not None else rerank_score(record)
+    metadata = getattr(record, "metadata", None)
+    rerank = metadata.get("rerank") if isinstance(metadata, dict) else None
+    explicit = isinstance(rerank, dict) and rerank.get("question_score_explicit") is True
+    return score if score is not None or explicit else rerank_score(record)
 
 
 def best_rerank_score(records: Iterable[Any]) -> float | None:

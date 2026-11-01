@@ -2814,6 +2814,8 @@ export interface ChunkingSettingsUpdate {
 
 /** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
+  min_similarity?: number;
+  rerank_min_relevance_score?: number;
   hybrid_search_backend?: "oracle_native" | "sudachi";
   rrf_method_ratio?: [number, number];
   rrf_source_ratio?: [number, number];

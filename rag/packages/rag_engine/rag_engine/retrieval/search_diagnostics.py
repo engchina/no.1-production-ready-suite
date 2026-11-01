@@ -74,6 +74,17 @@ def search_diagnostics(
         if not vector and not branch.get("native"):
             input_value += " / 検索語: " + (" / ".join(oracle_expression_terms(str(branch.get("expression") or ""))) or "なし")
         fields.append({"label": f"検索 {index} の入力", "value": input_value})
+        threshold = branch.get("vector_threshold")
+        if isinstance(threshold, Mapping) and threshold:
+            fields.append({"label": "コサイン類似度の下限", "value": str(threshold["min_similarity"])})
+            fields.append(
+                {
+                    "label": "類似度による選別",
+                    "value": f"判定前 {threshold['raw_count']} 件 / 採用 {threshold['retained_count']} 件 / "
+                    f"候補除外 {threshold['excluded_count']} 件 / ベクトル不採用 {threshold['rejected_vector_count']} 件 / "
+                    f"全文命中で保持 {threshold['preserved_text_count']} 件 / 類似度未取得 {threshold['missing_similarity_count']} 件",
+                }
+            )
         if not vector and branch.get("native"):
             fields.append(
                 {"label": f"全文検索入力 {index}", "value": "Oracle原生hybridのsearch_text。内部の検索語・検索式はAPIから返されません。"}
@@ -96,6 +107,14 @@ def search_diagnostics(
                     f"チャンク ID: {row['id']} / ベクトル順位: {row.get('vector_rank') or '該当なし'} / "
                     f"全文順位: {row.get('text_rank') or '該当なし'}"
                 )
+                if row.get("native_wrrf_score") is not None:
+                    branch_lines.append(
+                        f"Oracle 原始 WRRF: {row['native_wrrf_score']} / "
+                        f"有効ベクトル寄与: {row.get('vector_contribution', 0)} / "
+                        f"有効全文寄与: {row.get('keyword_contribution', 0)}"
+                    )
+            if "cosine_similarity" in row:
+                branch_lines.append(f"コサイン類似度: {row['cosine_similarity'] if row['cosine_similarity'] is not None else '未取得'}")
         result_lines.append(branch_lines)
     # 詳細の表示上限でも各検索文の件数と先頭結果を先に確認できるようにする。
     for rank in range(max((len(rows) for rows in result_lines), default=0)):

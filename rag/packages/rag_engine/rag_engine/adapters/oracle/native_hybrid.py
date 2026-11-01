@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from rag_engine.models.storage import AdbHybridSearchUnavailable
@@ -16,6 +17,58 @@ NATIVE_HYBRID_PREFERENCE = "RAG_CHUNKS_HYBRID_PREF"
 
 class NativeHybridUnavailable(AdbHybridSearchUnavailable):
     """原生索引を選んだが使用できない。別方式へ暗黙に戻さない。"""
+
+
+@dataclass(frozen=True)
+class NativeRankTerms:
+    vector_rank: int
+    text_rank: int
+    vector: float
+    text: float
+
+    @property
+    def total(self) -> float:
+        return self.vector + self.text
+
+
+def native_rank_terms(
+    *,
+    vector_rank: object,
+    text_rank: object,
+    vector_score: float,
+    text_score: float,
+    similarity: float | None,
+    min_similarity: float,
+    method_ratio: tuple[float, float],
+    k: int,
+) -> NativeRankTerms:
+    """未命中の既定順位を除き、元の経路順位の寄与を一度だけ計算する。"""
+    from rag_engine.retrieval.weighted_rrf import RrfWeights
+
+    weights = RrfWeights(vector=method_ratio[0], keyword=method_ratio[1])
+    if k < 1 or not math.isfinite(min_similarity) or not 0 <= min_similarity <= 1:
+        raise ValueError("順位定数・類似度の下限が不正です。")
+    if any(not math.isfinite(s) or s < 0 for s in (vector_score, text_score)):
+        raise ValueError("Oracle の経路スコアが不正です。")
+
+    def rank(value: object, present: bool) -> int:
+        if not present:
+            return 0
+        numeric = float(str(value))
+        if not math.isfinite(numeric) or numeric < 1 or not numeric.is_integer():
+            raise ValueError("Oracle の経路順位が不正です。")
+        return int(numeric)
+
+    vr = rank(vector_rank, vector_score > 0)
+    tr = rank(text_rank, text_score > 0)
+    if similarity is None or not math.isfinite(similarity) or similarity < min_similarity:
+        vr = 0
+    return NativeRankTerms(
+        vector_rank=vr,
+        text_rank=tr,
+        vector=weights.channel("vector") / (k + vr) if vr else 0.0,
+        text=weights.channel("keyword") / (k + tr) if tr else 0.0,
+    )
 
 
 def native_search_request(

@@ -17,6 +17,7 @@ from rag_engine.models.llm import RerankTextRank
 from rag_engine.models.storage import StoredChunk
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
+from rag_engine.retrieval.candidate_budget import record_id as retrieval_record_id
 from rag_engine.retrieval.context_builder import context_bundle_from_records
 from rag_engine.retrieval.entity_expansion import (  # noqa: F401  is_entity_expansion_record はここからも参照できる
     is_entity_expansion_record,
@@ -561,6 +562,7 @@ def _records_by_rerank_ranks(
     settings: Settings,
     *,
     candidate_indices: Sequence[int] | None = None,
+    decisions: list[dict[str, object]] | None = None,
 ) -> list[AnswerRecord]:
     selected: list[AnswerRecord] = []
     seen: set[int] = set()
@@ -569,13 +571,31 @@ def _records_by_rerank_ranks(
         index = rank.index
         if index in seen or index < 0 or index >= len(records):
             continue
+        question_score = getattr(rank, "question_relevance_score", None)
+        if question_score is None and not getattr(rank, "question_score_explicit", False):
+            question_score = rank.relevance_score
+        attachment = is_attachment_evidence(records[index])
+        excluded = min_score > 0 and rank.relevance_score is not None and rank.relevance_score < min_score and not attachment
+        if decisions is not None:
+            decisions.append(
+                {
+                    "candidate_id": retrieval_record_id(records[index]),
+                    "source": records[index].source,
+                    "candidate_index": _original_candidate_index(index, candidate_indices),
+                    "question_score": question_score,
+                    "adopted_score": rank.relevance_score,
+                    "minimum": min_score,
+                    "status": "excluded"
+                    if excluded
+                    else "kept_unscored"
+                    if rank.relevance_score is None
+                    else "kept_attachment"
+                    if attachment and rank.relevance_score < min_score
+                    else "kept",
+                }
+            )
         # 添付は前段で選んだ利用者の明示入力なので、資料候補の最低関連度では除外しない。
-        if (
-            min_score > 0
-            and rank.relevance_score is not None
-            and rank.relevance_score < min_score
-            and not is_attachment_evidence(records[index])
-        ):
+        if excluded:
             seen.add(index)
             continue
         selected.append(
@@ -584,14 +604,26 @@ def _records_by_rerank_ranks(
                 candidate_index=_original_candidate_index(index, candidate_indices),
                 rank=rank_position,
                 relevance_score=rank.relevance_score,
-                question_relevance_score=(
-                    question if (question := getattr(rank, "question_relevance_score", None)) is not None else rank.relevance_score
-                ),
+                question_relevance_score=question_score,
                 min_relevance_score=min_score,
             )
         )
         seen.add(index)
-    selected.extend(record for index, record in enumerate(records) if index not in seen)
+    for index, record in enumerate(records):
+        if index not in seen:
+            selected.append(record)
+            if decisions is not None:
+                decisions.append(
+                    {
+                        "candidate_id": retrieval_record_id(record),
+                        "source": record.source,
+                        "candidate_index": _original_candidate_index(index, candidate_indices),
+                        "question_score": None,
+                        "adopted_score": None,
+                        "minimum": min_score,
+                        "status": "kept_unscored",
+                    }
+                )
     return selected
 
 
@@ -629,6 +661,7 @@ def _record_with_rerank_metadata(
         # 並べ替えの点数（原質問と検索文ごとの rerank の最高値。#2161）と、原質問だけの点数（#3504）。
         "relevance_score": relevance_score,
         "question_relevance_score": question_relevance_score,
+        "question_score_explicit": True,
         "min_relevance_score": min_relevance_score,
         "filtered": False,
     }

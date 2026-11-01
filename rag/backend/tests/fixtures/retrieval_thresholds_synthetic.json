@@ -1,0 +1,224 @@
+{
+  "documents": [
+    {
+      "id": "A1",
+      "text": "合成機能Aで受け付ける入力ファイルの上限は8MBです。"
+    },
+    {
+      "id": "A2",
+      "text": "合成機能Aのアーカイブ形式に対する上限は2MBです。一般形式の8MBとは異なります。"
+    },
+    {
+      "id": "Ax",
+      "text": "合成機能Aの画面の配色は青色です。ヘルプは画面右上から開きます。"
+    },
+    {
+      "id": "B1",
+      "text": "合成機能Bの実行状態は待機・実行中・完了・失敗の4種類です。"
+    },
+    {
+      "id": "B2",
+      "text": "合成機能Bの再実行は失敗状態の場合に限られ、管理者の権限が必要です。"
+    },
+    {
+      "id": "Bx",
+      "text": "合成機能Bの画面の配色は青色です。ヘルプは画面右上から開きます。"
+    },
+    {
+      "id": "C1",
+      "text": "合成機能Cの通常データは30日間保持します。"
+    },
+    {
+      "id": "C2",
+      "text": "合成機能Cの操作記録は通常データと別に90日間保持します。"
+    },
+    {
+      "id": "Cx",
+      "text": "合成機能Cの画面の配色は青色です。ヘルプは画面右上から開きます。"
+    },
+    {
+      "id": "D1",
+      "text": "合成機能Dの定期処理は日本時間の午前8時に開始します。"
+    },
+    {
+      "id": "D2",
+      "text": "合成機能Dは土曜日と日曜日に定期処理を実行しません。平日は午前8時に開始します。"
+    },
+    {
+      "id": "Dx",
+      "text": "合成機能Dの画面の配色は青色です。ヘルプは画面右上から開きます。"
+    },
+    {
+      "id": "E1",
+      "text": "合成機能EのCSV出力の文字コードはUTF-8です。"
+    },
+    {
+      "id": "E2",
+      "text": "合成機能EのPDF出力には編集可能なフォームを含めません。CSV出力とは別の制約です。"
+    },
+    {
+      "id": "Ex",
+      "text": "合成機能Eの画面の配色は青色です。ヘルプは画面右上から開きます。"
+    },
+    {
+      "id": "F1",
+      "text": "合成機能Fの閲覧には閲覧者以上の権限が必要です。"
+    },
+    {
+      "id": "F2",
+      "text": "合成機能Fの削除には管理者権限と削除理由の入力が必要です。閲覧者は削除できません。"
+    },
+    {
+      "id": "Fx",
+      "text": "合成機能Fの画面の配色は青色です。ヘルプは画面右上から開きます。"
+    }
+  ],
+  "cases": [
+    {
+      "id": "A-q1",
+      "query": "合成機能Aのファイル上限とアーカイブの例外を教えてください。",
+      "required_ids": [
+        "A1",
+        "A2"
+      ],
+      "split": "tuning",
+      "kind": "multi_question"
+    },
+    {
+      "id": "A-q2",
+      "query": "合成機能Aで5MBのファイルを受け付けられますか。一般形式とアーカイブ形式の両方を説明してください。",
+      "required_ids": [
+        "A1",
+        "A2"
+      ],
+      "split": "tuning",
+      "kind": "multi_question"
+    },
+    {
+      "id": "B-q1",
+      "query": "合成機能Bの状態の種類と、再実行できる条件・権限を教えてください。",
+      "required_ids": [
+        "B1",
+        "B2"
+      ],
+      "split": "tuning",
+      "kind": "multi_question"
+    },
+    {
+      "id": "B-q2",
+      "query": "合成機能Bで失敗した処理をやり直すには誰が操作できますか。状態の一覧も示してください。",
+      "required_ids": [
+        "B1",
+        "B2"
+      ],
+      "split": "tuning",
+      "kind": "multi_question"
+    },
+    {
+      "id": "C-q1",
+      "query": "合成機能Cの通常データと操作記録の保持期間をそれぞれ教えてください。",
+      "required_ids": [
+        "C1",
+        "C2"
+      ],
+      "split": "tuning",
+      "kind": "multi_question"
+    },
+    {
+      "id": "C-q2",
+      "query": "合成機能Cでは通常データとログを同じ日数保持しますか。両方の日数を説明してください。",
+      "required_ids": [
+        "C1",
+        "C2"
+      ],
+      "split": "tuning",
+      "kind": "multi_question"
+    },
+    {
+      "id": "D-q1",
+      "query": "合成機能Dの定期処理の開始時刻と実行しない曜日を教えてください。",
+      "required_ids": [
+        "D1",
+        "D2"
+      ],
+      "split": "validation",
+      "kind": "multi_question"
+    },
+    {
+      "id": "D-q2",
+      "query": "合成機能Dは日本時間で何時に開始し、週末はどうなりますか。",
+      "required_ids": [
+        "D1",
+        "D2"
+      ],
+      "split": "validation",
+      "kind": "multi_question"
+    },
+    {
+      "id": "E-q1",
+      "query": "合成機能EのCSVの文字コードと、PDFの編集フォームの制約を教えてください。",
+      "required_ids": [
+        "E1",
+        "E2"
+      ],
+      "split": "validation",
+      "kind": "multi_question"
+    },
+    {
+      "id": "E-q2",
+      "query": "合成機能EではCSVはどの文字コードですか。PDFに編集フォームは付きますか。",
+      "required_ids": [
+        "E1",
+        "E2"
+      ],
+      "split": "validation",
+      "kind": "multi_question"
+    },
+    {
+      "id": "F-q1",
+      "query": "合成機能Fの閲覧と削除に必要な権限と入力をそれぞれ教えてください。",
+      "required_ids": [
+        "F1",
+        "F2"
+      ],
+      "split": "validation",
+      "kind": "multi_question"
+    },
+    {
+      "id": "F-q2",
+      "query": "合成機能Fを閲覧者が削除できますか。削除と閲覧の条件を分けて示してください。",
+      "required_ids": [
+        "F1",
+        "F2"
+      ],
+      "split": "validation",
+      "kind": "multi_question"
+    },
+    {
+      "id": "A-none",
+      "query": "合成機能Aの月額料金はいくらですか。",
+      "required_ids": [],
+      "split": "tuning",
+      "kind": "no_answer"
+    },
+    {
+      "id": "D-none",
+      "query": "合成機能Dのサービス提供終了日はいつですか。",
+      "required_ids": [],
+      "split": "validation",
+      "kind": "no_answer"
+    },
+    {
+      "id": "EF-comparison",
+      "query": "合成機能Eの出力形式ごとの制約と、合成機能Fの閲覧・削除の条件を比較してください。",
+      "required_ids": [
+        "E1",
+        "E2",
+        "F1",
+        "F2"
+      ],
+      "split": "validation",
+      "kind": "cross_document"
+    }
+  ]
+}
