@@ -19,6 +19,10 @@ from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sq
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
 from app.clients.language_pack_release_store import language_pack_release_statements
+from app.clients.native_hybrid_schema import (
+    native_hybrid_migration_sql,
+    native_hybrid_objects_sql,
+)
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
@@ -275,6 +279,9 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="chunks",
             table_name="rag_chunks",
             sql=oracle_vector_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="native_hybrid", table_name="rag_chunks", sql=native_hybrid_objects_sql()
         ),
         OracleSchemaSection(
             name="chunk_sets",
@@ -593,6 +600,13 @@ END;
                 "会話・メッセージ・回答の記録・実行履歴は削除しません。"
                 "必要な履歴は適用前に同表を export してください。削除後は復元できません。"
             ),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261101_001_native_hybrid",
+            table_name="rag_chunks",
+            sql=native_hybrid_migration_sql(),
         )
     )
     return sections

@@ -4509,6 +4509,17 @@ def build_question_text_search_info(
     query_variants: Sequence[str] | None = None,
 ) -> QuestionTextSearchInfo:
     """Oracle Text 検索用の token と query trace を作成します。"""
+    if settings.hybrid_search_backend == "oracle_native":
+        variants = _limited_text_search_query_variants(question, query_variants, settings)
+        return QuestionTextSearchInfo(
+            tokenizer="oracle_native",
+            tokenizer_label="Oracle Text（原生hybrid索引）",
+            query_source=query_source,
+            query_variants=tuple(variants),
+            tokenization_traces=tuple(
+                {"query": q, "tokenizer": "oracle_native", "tokens": [], "weights": [], "native_search_text": q} for q in variants
+            ),
+        )
     config = _question_text_search_tokenizer_config(settings)
     config = normalize_text_search_tokenizer_config(config)
     tokenizer_name = text_search_tokenizer_name(config)
@@ -4598,6 +4609,8 @@ def _text_search_details(info: QuestionTextSearchInfo) -> list[str]:
     """全検索文の採用語を表示し、検索時の候補切り詰めと表示上の省略を区別する。"""
     if info.error:
         return [f"全文検索のキーワード: 抽出に失敗（{info.error}）"]
+    if info.tokenizer == "oracle_native":
+        return ["全文検索の入力: Oracle原生hybrid索引に検索文を渡します（内部の検索語・検索式はAPIから返されません）"]
     tokens = dict.fromkeys(info.tokens)
     for trace in info.tokenization_traces:
         tokens.update(dict.fromkeys(trace.get("tokens", ())))
@@ -4618,6 +4631,11 @@ def _add_text_search_details(step: _ExecutionStep, info: QuestionTextSearchInfo)
     step.add(*details[1:])
     for index, trace in enumerate(info.tokenization_traces, 1):
         mode = trace.get("tokenizer", info.tokenizer)
+        if mode == "oracle_native":
+            step.field(f"検索文 {index} の全文検索入力", trace.get("native_search_text", ""))
+            step.field(f"検索文 {index} の分割方法", "Oracle Text（原生hybrid索引の設定）")
+            step.add("内部の検索語・検索式はAPIから返されないため表示できません。Sudachiは使用していません。")
+            continue
         method = "Sudachi＋文字種による補完" if mode == "sudachi+script" else "文字種による分割"
         if reason := trace.get("fallback_reason"):
             method += f"（縮退: {reason}。Sudachi の代わりに文字種で分割）"

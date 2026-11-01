@@ -98,6 +98,7 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 
 
 const ANSWERING_SETTINGS = {
+  hybrid_search_backend: "oracle_native",
   rrf_method_ratio: [1, 1],
   rrf_source_ratio: [7, 3],
   runtime_terms_search_enabled: false,
@@ -203,6 +204,12 @@ for (const viewport of [
       const save = page.getByRole("button", { name: "回答の設定を保存", exact: true });
       await expect(save).toBeDisabled();
 
+      const backend = page.getByRole("combobox", { name: "検索の実行方式", exact: true });
+      await expect(backend).toContainText("Oracle原生混合索引（既定）");
+      await backend.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath(`hybrid-backend-${viewport.name}-${theme}.png`) });
+      await backend.click();
+      await page.getByRole("option", { name: "Sudachi＋ベクトル・全文検索", exact: true }).click();
       await strategy.click();
       await page.getByRole("option", { name: /RAG フュージョン/ }).click();
       await answerFlow.click();
@@ -225,6 +232,7 @@ for (const viewport of [
       await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
       expect(saved).toEqual([
         {
+          hybrid_search_backend: "sudachi",
           rrf_method_ratio: [1, 1],
           rrf_source_ratio: [7, 3],
           query_strategy: "rag_fusion",

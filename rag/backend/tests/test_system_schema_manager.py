@@ -131,12 +131,16 @@ class _FakeCursor:
             self.rows = [
                 (name, object_type, created_at)
                 for (name, object_type), created_at in sorted(self.database.objects.items())
-                if name in names and object_type in {"TABLE", "INDEX"}
+                if name in names and object_type in {"TABLE", "INDEX", "TRIGGER"}
             ]
             return
         if upper.startswith("SELECT PRE_NAME FROM CTX_USER_PREFERENCES"):
-            if ("RAG_TEXT_WORLD_LEXER", "TEXT_PREFERENCE") in self.database.objects:
-                self.rows = [("RAG_TEXT_WORLD_LEXER",)]
+            name = str(params.get("preference_name", "RAG_TEXT_WORLD_LEXER"))
+            kind = (
+                "VECTORIZER_PREFERENCE" if name == "RAG_CHUNKS_HYBRID_PREF" else "TEXT_PREFERENCE"
+            )
+            if (name, kind) in self.database.objects:
+                self.rows = [(name,)]
             return
         if upper.startswith("SELECT SPL_NAME FROM CTX_USER_STOPLISTS"):
             if ("RAG_TEXT_STOPLIST", "TEXT_STOPLIST") in self.database.objects:
@@ -252,7 +256,7 @@ class _FakeCursor:
                 self.database.foreign_keys[foreign_key.name] = (foreign_key, True)
             return
         index_match = re.match(
-            r"CREATE (?:UNIQUE |VECTOR )?INDEX ([A-Z][A-Z0-9_$#]*)",
+            r"CREATE (?:UNIQUE |(?:HYBRID )?VECTOR )?INDEX ([A-Z][A-Z0-9_$#]*)",
             upper,
         )
         if index_match is not None:
@@ -263,6 +267,13 @@ class _FakeCursor:
             if (name, "INDEX") in self.database.objects:
                 raise RuntimeError("ORA-00955: name is already used by an existing object")
             self.database.objects[(name, "INDEX")] = datetime.now(UTC)
+            return
+        if "DBMS_VECTOR_CHAIN.CREATE_PREFERENCE" in upper:
+            self.database.objects[("RAG_CHUNKS_HYBRID_PREF", "VECTORIZER_PREFERENCE")] = None
+        if "CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC" in upper:
+            self.database.objects[("RAG_CHUNKS_HYBRID_SYNC", "TRIGGER")] = None
+        if "DBMS_VECTOR_CHAIN.DROP_PREFERENCE" in upper:
+            self.database.objects.pop(("RAG_CHUNKS_HYBRID_PREF", "VECTORIZER_PREFERENCE"), None)
             return
         if "CTX_DDL.CREATE_PREFERENCE" in upper:
             self.database.objects[("RAG_TEXT_WORLD_LEXER", "TEXT_PREFERENCE")] = None
@@ -281,6 +292,8 @@ class _FakeCursor:
         if upper.startswith("DROP TABLE"):
             name = upper.split()[2]
             self.database.objects.pop((name, "TABLE"), None)
+            if name == "RAG_CHUNKS":
+                self.database.objects.pop(("RAG_CHUNKS_HYBRID_SYNC", "TRIGGER"), None)
             self.database.foreign_keys = {
                 key: value
                 for key, value in self.database.foreign_keys.items()

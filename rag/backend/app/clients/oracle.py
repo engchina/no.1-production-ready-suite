@@ -476,6 +476,7 @@ class OracleClient:
         例: SELECT ... ORDER BY VECTOR_DISTANCE(embedding, :v, COSINE) FETCH FIRST :k ROWS ONLY
         """
         self._validate_embedding_width(embedding, "query embedding")
+        await self._ensure_native_hybrid_ready()
         # 処理の経過の段(文書の検索の中の DB の検索。#3436・#3443)。
         with observe_call("stage", VECTOR_SEARCH_STAGE) as observation:
             return await self._vector_search_with_oracle(
@@ -489,6 +490,7 @@ class OracleClient:
         filters: dict[str, str] | None = None,
     ) -> list[RetrievedChunk]:
         """Oracle Text 相当のキーワード検索を行う。"""
+        await self._ensure_native_hybrid_ready()
         with observe_call("stage", TEXT_SEARCH_STAGE) as observation:
             return await self._keyword_search_with_oracle(
                 query, top_k, filters or {}, observation=observation
@@ -590,6 +592,7 @@ class OracleClient:
         """
         if not searches:
             return []
+        await self._ensure_native_hybrid_ready()
         filters = filters or {}
         branch_queries: list[str] = []
         branch_kinds: list[str] = []
@@ -605,7 +608,11 @@ class OracleClient:
                 branch_queries.append(query)
                 binds[f"embedding_{vector_branch}"] = _to_vector_bind(embedding)
             if mode in {SearchMode.KEYWORD, SearchMode.HYBRID}:
-                text_query = _oracle_text_query(query, settings=self._settings)
+                text_query = (
+                    query.strip()
+                    if self._settings.rag_hybrid_search_backend == "oracle_native"
+                    else _oracle_text_query(query, settings=self._settings)
+                )
                 if text_query is not None:
                     keyword_branch = len(branch_kinds)
                     branch_kinds.append("keyword")
@@ -752,6 +759,7 @@ class OracleClient:
         top_k: int,
     ) -> list[RetrievedChunk]:
         """vector と keyword の候補を Reciprocal Rank Fusion で統合する(順位だけで決まる)。"""
+        # 独立した根拠補充も使う融合。全検索文の重み付けは AnswerEngine で一度だけ行う。
         vector_ids = {hit.chunk_id for hit in vector_hits}
         keyword_ids = {hit.chunk_id for hit in keyword_hits}
         fused: dict[str, RetrievedChunk] = {}
@@ -6904,6 +6912,7 @@ class OracleClient:
                     "query": queries[index],
                     "error": type(errors[index]).__name__ if errors and index in errors else "",
                     "expression": binds.get(f"query_{index}"),
+                    "native": self._settings.rag_hybrid_search_backend == "oracle_native",
                     "raw_count": len(rows),
                     "results": [
                         {
@@ -6922,7 +6931,13 @@ class OracleClient:
             branches=branches,
             scope=filters,
             limit=top_k,
-            metric="コサイン類似度（1 − COSINE 距離・大きい順）"
+            metric=(
+                "Oracle原生 vector_score（大きい順・確率ではありません）"
+                if kind == "vector"
+                else "Oracle原生 text_score（大きい順）"
+            )
+            if self._settings.rag_hybrid_search_backend == "oracle_native"
+            else "コサイン類似度（1 − COSINE 距離・大きい順）"
             if kind == "vector"
             else "Oracle Text SCORE（大きい順）",
         )
@@ -6955,10 +6970,94 @@ class OracleClient:
         ):
             into.append((rank, row))
 
+    async def _ensure_native_hybrid_ready(self) -> None:
+        """原生方式を選択した場合は、準備不足を空結果として扱わない。"""
+        if self._settings.rag_hybrid_search_backend != "oracle_native":
+            return
+        from rag_engine.adapters.oracle.native_hybrid import (
+            NATIVE_HYBRID_INDEX,
+            NativeHybridUnavailable,
+        )
+
+        rows = await self._fetch_all(
+            """
+            SELECT i.index_name FROM user_indexes i
+            WHERE i.index_name = :native_index
+              AND i.status = 'VALID'
+              AND NVL(i.domidx_status, 'VALID') = 'VALID'
+              AND NVL(i.domidx_opstatus, 'VALID') = 'VALID'
+              AND EXISTS (SELECT 1 FROM user_objects t
+                          WHERE t.object_name = 'RAG_CHUNKS_HYBRID_SYNC'
+                            AND t.object_type = 'TRIGGER' AND t.status = 'VALID')
+              AND EXISTS (SELECT 1 FROM user_triggers t
+                          WHERE t.trigger_name = 'RAG_CHUNKS_HYBRID_SYNC'
+                            AND t.status = 'ENABLED')
+            """,
+            {"native_index": NATIVE_HYBRID_INDEX},
+        )
+        if not rows:
+            raise NativeHybridUnavailable(
+                "Oracle原生hybrid索引が未準備です。システムテーブルの更新と索引の同期を確認してください。"
+            )
+
+    async def _native_rows(
+        self, channel: str, query: str, embedding: object, *, top_k: int, filters: dict[str, str]
+    ) -> list[dict[str, object]]:
+        from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, request_json
+
+        where, binds = _oracle_retrieval_where(filters)
+        joins = """FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id"""
+        vector = [float(v) for v in cast(Sequence[float], embedding)]
+        if channel == "vector":
+            binds.update(embedding=embedding, min_similarity=self._settings.rag_min_similarity)
+            where += (
+                " AND c.embedding IS NOT NULL AND "
+                + _vector_score_sql("embedding")
+                + " >= :min_similarity"
+            )
+        ids = await self._fetch_all(f"SELECT c.chunk_id {joins} WHERE {where}", binds)
+        if not ids:
+            return []
+        spec = request_json(
+            query=query,
+            vector=vector,
+            channel=channel,
+            allowed_ids=[str(row["chunk_id"]) for row in ids],
+            limit=top_k,
+            rank_constant=self._settings.rag_rrf_k,
+            accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
+        )
+        score = "n.vector_score" if channel == "vector" else "n.text_score"
+        try:
+            return await self._fetch_all(
+                f"""
+                SELECT {_SEARCH_HIT_COLUMNS}, {score} AS score
+                {joins}
+                JOIN JSON_TABLE(DBMS_HYBRID_VECTOR.SEARCH(JSON(:native_spec)), '$[*]'
+                    COLUMNS (position FOR ORDINALITY, source_rowid VARCHAR2(128) PATH '$.rowid',
+                        vector_score NUMBER PATH '$.vector_score',
+                        text_score NUMBER PATH '$.text_score')) n
+                    ON c.ROWID = CHARTOROWID(n.source_rowid)
+                WHERE {where}
+                ORDER BY n.position
+            """,
+                {**binds, "native_spec": spec},
+            )
+        except Exception as exc:
+            raise NativeHybridUnavailable(
+                "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
+            ) from exc
+
     async def _vector_rows(
         self, embedding_bind: object, *, top_k: int, filters: dict[str, str]
     ) -> list[dict[str, object]]:
         """vector の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。近い順)。"""
+        if self._settings.rag_hybrid_search_backend == "oracle_native":
+            return await self._native_rows(
+                "vector", "", embedding_bind, top_k=top_k, filters=filters
+            )
         document_sql, chunk_sql, binds = _oracle_retrieval_where_split(filters)
         binds.update(
             {"embedding": embedding_bind, "min_similarity": self._settings.rag_min_similarity}
@@ -7018,6 +7117,8 @@ class OracleClient:
         self, text_query: str, *, top_k: int, filters: dict[str, str]
     ) -> list[dict[str, object]]:
         """keyword の検索 1 本の行(``_SEARCH_HIT_COLUMNS`` と ``score``。score の高い順)。"""
+        if self._settings.rag_hybrid_search_backend == "oracle_native":
+            return await self._native_rows("keyword", text_query, (), top_k=top_k, filters=filters)
         where_sql, binds = _oracle_retrieval_where(filters)
         binds.update({"query": text_query, "top_k": top_k})
         # 上位の行を命中の列だけで決め、本文・metadata はその行だけ読む(#2137)。
@@ -7054,7 +7155,11 @@ class OracleClient:
         observation: CallObservation | None = None,
     ) -> list[RetrievedChunk]:
         """Oracle Text で keyword chunk を取得する。"""
-        text_query = _oracle_text_query(query, settings=self._settings)
+        text_query = (
+            query.strip()
+            if self._settings.rag_hybrid_search_backend == "oracle_native"
+            else _oracle_text_query(query, settings=self._settings)
+        )
         rows = (
             await self._keyword_rows(text_query, top_k=top_k, filters=filters)
             if text_query is not None
@@ -11077,9 +11182,12 @@ def _fetch_all(
             cursor.prefetchrows = fetch_rows  # type: ignore[attr-defined]
             cursor.arraysize = fetch_rows  # type: ignore[attr-defined]
         normalized = _normalize_sql(statement)
+        sql_binds = _binds_for_sql(normalized, binds)
+        if sizes := _large_text_input_sizes(sql_binds):
+            cursor.setinputsizes(**sizes)
         cursor.execute(
             normalized,
-            _binds_for_sql(normalized, binds),
+            sql_binds,
             **_lob_value_execute_options(cursor),
         )
         rows = cursor.fetchall()
@@ -16232,6 +16340,7 @@ CREATE TABLE {table_name} (
     search_text     CLOB NOT NULL,
     metadata_json   JSON,
     embedding       VECTOR(1536, FLOAT32),
+    hybrid_payload  JSON,
     chunk_set_id    VARCHAR2(64),
     created_at      TIMESTAMP DEFAULT SYSTIMESTAMP
 );

@@ -276,7 +276,8 @@ class RuntimeKnowledgeTests(unittest.TestCase):
         prompt = parse.call_args.args[1]
         payload = answer_result_payload(result, answer_id="answer123", run_id="abcdef")
 
-        self.assertTrue(any("納品書" in question for question in tokenized_questions))
+        # 登録語の追加検索文は原生方式へ直接渡す。独立した完全性確認の原質問分割は保つ。
+        self.assertNotIn(retrieval_queries[1], tokenized_questions)
         self.assertIn("納品書", retrieval_queries[1])
         self.assertNotIn("再発行条件", retrieval_queries[1])
         self.assertIn("[Runtime Glossary / Rules]", prompt)

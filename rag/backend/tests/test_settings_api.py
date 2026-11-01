@@ -3543,6 +3543,7 @@ def test_update_answer_record_settings_persists_retention_and_purges(
 def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
     settings = get_settings()
+    monkeypatch.setattr(settings, "rag_hybrid_search_backend", "oracle_native")
     monkeypatch.setattr(settings, "rag_query_strategy", "auto_routing")
     monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
     monkeypatch.setattr(settings, "rag_answer_flow", "crag")
@@ -3568,6 +3569,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert client.get("/api/settings/answering").json()["data"] == {
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
+        "hybrid_search_backend": "oracle_native",
         "rrf_method_ratio": [1.0, 1.0],
         "rrf_source_ratio": [7.0, 3.0],
         "runtime_terms_search_enabled": False,
@@ -4000,3 +4002,23 @@ def test_rrf_ratios_reject_invalid_without_saving(
     before = env_file.read_text() if env_file.exists() else ""
     assert client.patch("/api/settings/answering", json={field: ratio}).status_code == 422
     assert (env_file.read_text() if env_file.exists() else "") == before
+
+
+def test_native_hybrid_default_and_settings_round_trip() -> None:
+    settings = get_settings()
+    assert settings.rag_hybrid_search_backend == "oracle_native"
+    assert (
+        client.get("/api/settings/answering").json()["data"]["hybrid_search_backend"]
+        == "oracle_native"
+    )
+    for selected in ("sudachi", "oracle_native"):
+        response = client.patch("/api/settings/answering", json={"hybrid_search_backend": selected})
+        assert response.status_code == 200
+        assert response.json()["data"]["hybrid_search_backend"] == selected
+        assert _saved_env_value(settings, "RAG_HYBRID_SEARCH_BACKEND") == selected
+    assert (
+        client.patch(
+            "/api/settings/answering", json={"hybrid_search_backend": "unknown"}
+        ).status_code
+        == 422
+    )

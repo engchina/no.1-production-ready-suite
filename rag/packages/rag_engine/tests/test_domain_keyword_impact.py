@@ -22,7 +22,7 @@ from rag_engine.retrieval.text_search_tokenizer import TextSearchTokenizerConfig
 
 class DomainKeywordImpactTests(unittest.TestCase):
     def settings(self, **kwargs):
-        return replace(get_settings(), **kwargs)
+        return replace(get_settings(), hybrid_search_backend="sudachi", **kwargs)
 
     def test_registered_keywords_are_never_added_by_partial_match(self):
         # 質問の語と部分的に重なるだけの登録キーワードは検索文に加えない。この機能と設定は廃止した (#557)。
@@ -127,3 +127,29 @@ class DomainKeywordImpactTests(unittest.TestCase):
         ):
             build_adb_hybrid_answer_context("q", "source", ("docling",), self.settings(), pinned_chunk_run_id="abcdef")
         direct.assert_called_once()
+
+
+def test_native_text_input_does_not_tokenize_or_read_registered_dictionary():
+    settings = replace(get_settings(), hybrid_search_backend="oracle_native")
+    with (
+        patch("rag_engine.generation.answering.tokenizer_fingerprint", side_effect=AssertionError("Sudachi呼出し禁止")),
+        patch("rag_engine.generation.answering.load_domain_keywords", side_effect=AssertionError("辞書読出し禁止")),
+    ):
+        info = build_question_text_search_info("合成の原質問", settings, query_variants=["合成の原質問", "合成の追加文"])
+    assert info.tokenizer == "oracle_native"
+    assert not info.tokens and not info.oracle_text_query
+    assert [row["native_search_text"] for row in info.tokenization_traces] == ["合成の原質問", "合成の追加文"]
+
+
+def test_native_mode_never_falls_through_to_independent_legacy_schema():
+    import pytest
+
+    from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable
+    from rag_engine.adapters.oracle.store import search_adb_hybrid_chunks
+
+    settings = replace(get_settings(), hybrid_search_backend="oracle_native")
+    with (
+        patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=AssertionError("旧schemaへの接続禁止")),
+        pytest.raises(NativeHybridUnavailable),
+    ):
+        search_adb_hybrid_chunks(retrieval_queries=["合成の原質問"], settings=settings)

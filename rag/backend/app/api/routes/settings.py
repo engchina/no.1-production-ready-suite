@@ -514,6 +514,7 @@ async def update_answering_settings(
         for field, value in (
             ("rag_runtime_rules_confirmation_enabled", payload.runtime_rules_confirmation_enabled),
             ("rag_runtime_rules_answer_enabled", payload.runtime_rules_answer_enabled),
+            ("rag_hybrid_search_backend", payload.hybrid_search_backend),
             ("rag_rrf_method_ratio", payload.rrf_method_ratio),
             ("rag_rrf_source_ratio", payload.rrf_source_ratio),
             ("rag_runtime_terms_search_enabled", payload.runtime_terms_search_enabled),
@@ -570,6 +571,7 @@ async def update_answering_settings(
                 "RAG_RUNTIME_TERMS_ANSWER_ENABLED": _format_env_bool(
                     candidate.rag_runtime_terms_answer_enabled
                 ),
+                "RAG_HYBRID_SEARCH_BACKEND": candidate.rag_hybrid_search_backend,
                 "RAG_RRF_METHOD_RATIO": json.dumps(candidate.rag_rrf_method_ratio),
                 "RAG_RRF_SOURCE_RATIO": json.dumps(candidate.rag_rrf_source_ratio),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
@@ -607,6 +609,7 @@ def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
         runtime_rules_answer_enabled=settings.rag_runtime_rules_answer_enabled,
         runtime_terms_search_enabled=settings.rag_runtime_terms_search_enabled,
         runtime_terms_answer_enabled=settings.rag_runtime_terms_answer_enabled,
+        hybrid_search_backend=settings.rag_hybrid_search_backend,
         rrf_method_ratio=settings.rag_rrf_method_ratio,
         rrf_source_ratio=settings.rag_rrf_source_ratio,
         query_strategy=settings.rag_query_strategy,

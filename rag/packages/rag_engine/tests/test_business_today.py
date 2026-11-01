@@ -93,6 +93,7 @@ def test_search_decides_as_of_once_for_every_downstream_query(timezone: str, req
     settings = replace(
         get_settings(environ={}, dotenv_path=None),
         timezone=timezone,
+        hybrid_search_backend="sudachi",
         embedding_output_dimensions=1536,
         image_embedding_enabled=False,
     )

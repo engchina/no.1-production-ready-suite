@@ -751,6 +751,7 @@ class AnsweringSettingsData(BaseModel):
 
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
+    hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
     rrf_method_ratio: tuple[float, float] = (1.0, 1.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     runtime_terms_search_enabled: bool = False
@@ -779,6 +780,7 @@ class AnsweringSettingsUpdate(BaseModel):
 
     runtime_rules_confirmation_enabled: bool | None = None
     runtime_rules_answer_enabled: bool | None = None
+    hybrid_search_backend: Literal["oracle_native", "sudachi"] | None = None
     rrf_method_ratio: tuple[float, float] | None = None
     rrf_source_ratio: tuple[float, float] | None = None
 

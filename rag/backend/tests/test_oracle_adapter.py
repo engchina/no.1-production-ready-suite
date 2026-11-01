@@ -3489,6 +3489,7 @@ class FakeOracleCursor:
 def _oci_settings() -> Settings:
     return Settings.model_construct(
         oci_genai_embedding_dim=3,
+        rag_hybrid_search_backend="sudachi",
         rag_min_similarity=0.05,
         oracle_vector_target_accuracy=90,
         # 設定の target accuracy をそのまま使う balanced に固定する（既定は高精度。#272）。
@@ -3594,3 +3595,17 @@ def _oracle_ingestion_segment_row(
 async def _run_inline(operation: Callable[[], Any]) -> Any:
     """テストでは同期 fake を同一 thread で実行する。"""
     return operation()
+
+
+async def test_large_read_json_is_bound_as_clob_without_long_conversion() -> None:
+    """高次元vectorを含む検索仕様が32KBを超えてもLONGへ暗黙変換しない。"""
+    pool = FakeOraclePool(execute_results=[[]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    payload = json.dumps({"vector": [-0.10000000149011612] * 1536})
+    assert len(payload) > 32767
+    await client._fetch_all("SELECT JSON(:native_spec) FROM dual", {"native_spec": payload})
+    assert (
+        pool.connection.calls[-1].input_sizes["native_spec"]
+        == oracle_module._json_input_sizes("native_spec")["native_spec"]
+    )
+    assert pool.connection.calls[-1].parameters["native_spec"] == payload

@@ -575,10 +575,17 @@
       "sha256": "d3e80d6a5f85c9622b8c55e317876d5260d5bfbb893160b1252dadfedf62980b",
       "statement_count": 1,
       "table_name": "rag_query_history"
+    },
+    {
+      "destructive": false,
+      "name": "20261101_001_native_hybrid",
+      "sha256": "e47bf32858c63d02b57e59e1f4c506eefc98281793f2aaa4ed644dd6a847fa82",
+      "statement_count": 3,
+      "table_name": "rag_chunks"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "c3f68e2d5f01d88d5b5d83922db0c7874e329c3f356671c58ae7a538fdf6362e",
-  "statement_count": 124
+  "sha256": "a67893e48abbac39aee58f9d63bb7b45e5970302fdab609a790560ef6ca13b81",
+  "statement_count": 127
 }
