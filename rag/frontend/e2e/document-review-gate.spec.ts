@@ -721,3 +721,26 @@ test("分類の有効期間の終了日が開始日より後でなければ、�
   await page.getByRole("button", { name: "分類を保存" }).click();
   await expect.poll(() => saves).toBe(1);
 });
+
+
+test("部分本文の下書きはタブ切替後も編集開始時の位置を保持する", {tag:"@responsive"}, async ({page}) => {
+  const calls = await mockReviewWorkspace(page);
+  let offset = 8192;
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/extraction-view?**`, route => {
+    const extraction = reviewDocumentDetail("REVIEW").extraction;
+    return fulfillDocumentInspection(route, { json: { data: { payload: { ...extraction, elements: [{ element_id: "el-0000", kind: "text", text: "合成の部分本文", metadata: { preview_text_offset: offset, preview_text_sha256: "1".repeat(64) } }] } } } });
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+  await page.getByRole("tab",{name:"構造化要素",exact:true}).click();
+  await page.getByRole("button",{name:"構造化要素を修正",exact:true}).click();
+  await page.locator("#review-edit-el-0000").fill("合成の編集 A");
+  await page.getByRole("button",{name:"編集を閉じる",exact:true}).click();
+  await page.getByRole("tab",{name:"本文テキスト",exact:true}).click();
+  offset = 0;
+  await page.getByRole("tab",{name:"構造化要素",exact:true}).click();
+  await page.getByRole("button",{name:"構造化要素を修正",exact:true}).click();
+  await page.locator("#review-edit-el-0000").fill("合成の編集 B");
+  await page.getByRole("button",{name:"変更を保存",exact:true}).click();
+  await expect(page.getByText("変更を保存しました。",{exact:true})).toBeVisible();
+  expect((calls.saveBody as {element_edits:unknown[]}).element_edits).toContainEqual({element_id:"el-0000",text:"合成の編集 B",base_text:"合成の部分本文",base_offset:8192,base_sha256:"1".repeat(64)});
+});
