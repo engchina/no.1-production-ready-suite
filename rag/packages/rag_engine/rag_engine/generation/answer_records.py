@@ -572,7 +572,7 @@ def _records_by_rerank_ranks(
         if index in seen or index < 0 or index >= len(records):
             continue
         question_score = getattr(rank, "question_relevance_score", None)
-        if question_score is None and not rank.question_score_explicit:
+        if question_score is None and not getattr(rank, "question_score_explicit", False):
             question_score = rank.relevance_score
         attachment = is_attachment_evidence(records[index])
         excluded = min_score > 0 and rank.relevance_score is not None and rank.relevance_score < min_score and not attachment

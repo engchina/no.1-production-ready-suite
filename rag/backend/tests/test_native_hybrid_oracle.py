@@ -461,3 +461,87 @@ async def test_save_index_allocates_native_scope_without_precreated_chunk_set() 
     assert len(rows) == 1
     assert rows[0]["native_scope_id"] == rows[0]["mapped_scope"]
     assert int(str(rows[0]["native_scope_id"])) > 0
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_native_cosine_threshold_preserves_independent_text_and_actual_rrf() -> None:
+    """実SEARCHの既定順位とCOSINEを分け、片経路の寄与と除外を検証する。"""
+    from array import array
+
+    from app.clients.oracle import OracleConnectionProtocol, _execute
+
+    class RecordingOracle(OracleClient):
+        search_calls = 0
+
+        async def _fetch_all(
+            self, sql: str, binds: Mapping[str, object] | None = None
+        ) -> list[dict[str, object]]:
+            if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+                self.search_calls += 1
+            return await super()._fetch_all(sql, binds)
+
+    settings = get_settings().model_copy(
+        update={
+            "rag_hybrid_search_backend": "oracle_native",
+            "rag_min_similarity": 0.3,
+            "rag_rrf_method_ratio": (10.0, 1.0),
+            "rag_rrf_k": 60,
+            "rag_vector_index_profile": "balanced",
+            "oracle_vector_target_accuracy": 100,
+        }
+    )
+    oracle = RecordingOracle(settings)
+    token = f"syntheticthreshold{uuid4().hex}"
+    texts = ["syntheticvectoronly", f"{token} text", f"{token} null", "syntheticexcluded"]
+    document_id = await _indexed_document(
+        oracle,
+        file_name=f"synthetic-threshold-{uuid4().hex}.txt",
+        chunks=[
+            Chunk(text=text, index=i, start_offset=0, end_offset=len(text))
+            for i, text in enumerate(texts)
+        ],
+    )
+    query_vector = [1.0] + [0.0] * 1535
+    vectors = [query_vector, [0.0, 1.0] + [0.0] * 1534, None, [-1.0] + [0.0] * 1535]
+
+    def update_vectors(connection: OracleConnectionProtocol) -> None:
+        for index, vector in enumerate(vectors):
+            _execute(
+                connection,
+                "UPDATE rag_chunks SET embedding=:embedding "
+                "WHERE document_id=:document_id AND chunk_index=:chunk_index",
+                {
+                    "embedding": array("f", vector) if vector is not None else None,
+                    "document_id": document_id,
+                    "chunk_index": index,
+                },
+            )
+
+    await oracle._run_transaction(update_vectors)
+    rankings = await oracle.search_many(
+        [(token, query_vector, SearchMode.HYBRID)], 10, {"document_id": document_id}
+    )
+    assert oracle.search_calls == 1
+    hits = rankings[0]
+    assert getattr(hits, "status", "completed") == "completed"
+    assert {hit.text for hit in hits} == set(texts[:3])
+    for hit in hits:
+        metadata = hit.metadata
+        vector_part = float(str(metadata["vector_contribution"]))
+        text_part = float(str(metadata["keyword_contribution"]))
+        assert metadata["native_rrf_contribution"] == pytest.approx(vector_part + text_part)
+        if hit.text == texts[0]:
+            assert metadata["cosine_similarity"] == pytest.approx(1.0)
+            assert vector_part == pytest.approx(
+                10 / 11 / (60 + int(str(metadata["native_original_vector_rank"])))
+            )
+            assert text_part == 0
+            assert "keyword_rank" not in metadata
+        else:
+            assert vector_part == 0
+            assert "vector_rank" not in metadata
+            assert text_part == pytest.approx(
+                1 / 11 / (60 + int(str(metadata["native_original_text_rank"])))
+            )
+    null_hit = next(hit for hit in hits if hit.text == texts[2])
+    assert null_hit.metadata["cosine_similarity"] is None
