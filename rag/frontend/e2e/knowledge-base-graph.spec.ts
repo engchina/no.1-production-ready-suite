@@ -465,7 +465,13 @@ for (const width of [1280, 1920, 375]) {
       await sectionLegend.click();
       await expect(sectionNode).toBeVisible();
       await expectNoPageOverflow(page);
-      await page.screenshot({ path: testInfo.outputPath(`shared-structure-graph-${width}-${theme}.png`), fullPage: true });
+      // 固定headerと長い親領域を避け、表示中の画布を確認してから撮る。
+      const canvas = graph.getByRole("region", { name: "文書構造グラフ", exact: true });
+      await page.setViewportSize({ width, height: 1200 });
+      await canvas.evaluate(element => element.scrollIntoView({ block: "center" }));
+      await expect(canvas.locator(".react-flow__node").first()).toBeVisible();
+      await canvas.getByRole("button", { name: "全体表示", exact: true }).click();
+      await canvas.screenshot({ path: testInfo.outputPath(`shared-structure-graph-${width}-${theme}.png`) });
     });
   }
 }

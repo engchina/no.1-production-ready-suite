@@ -685,7 +685,15 @@ test("グラフ操作部は旧版の外観でモード・凡例・ズーム・�
   await search.press("Escape");
   await expect(nav).toHaveCount(0);
   await expectNoHorizontalScroll(page);
-  await playground.screenshot({ path: testInfo.outputPath("ontology-controls-restored.png") });
+  // 長い親領域を撮ると、画布が画面外になり遅延描画の空画像になる。
+  const canvas = playground.getByTestId("ontology-graph-canvas");
+  const screenshotWidth = page.viewportSize()!.width;
+  await page.setViewportSize({ width: screenshotWidth, height: 1200 });
+  await canvas.evaluate(element => element.scrollIntoView({ block: "center" }));
+  await expect(canvas.locator(".react-flow__node").first()).toBeVisible();
+  await playground.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
+  await expectEntireGraphInCanvas(playground);
+  await canvas.screenshot({ path: testInfo.outputPath("ontology-controls-restored.png") });
 });
 
 test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができる", { tag: "@responsive" }, async ({ page }, testInfo) => {
