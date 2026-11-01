@@ -10909,6 +10909,7 @@ class OracleClient:
             if chunk_set_id is not None
             else None
         )
+        release = active_release()
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
             document = _select_document_state(connection, document_id)
@@ -10959,13 +10960,19 @@ class OracleClient:
                     USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
                     ON (t.chunk_set_id = s.chunk_set_id)
                     WHEN NOT MATCHED THEN INSERT
-                        (chunk_set_id, document_id, tenant_id_hash)
-                        VALUES (:chunk_set_id, :document_id, :tenant_id_hash)
+                        (chunk_set_id, document_id, tenant_id_hash,
+                         language_pack_release_id, language_pack_ingest_hash, language_pack_job_id)
+                        VALUES (:chunk_set_id, :document_id, :tenant_id_hash,
+                                :language_pack_release_id, :language_pack_ingest_hash,
+                                :language_pack_job_id)
                     """,
                     {
                         "chunk_set_id": chunk_set_id,
                         "document_id": document_id,
                         "tenant_id_hash": document.tenant_id_hash,
+                        "language_pack_release_id": release.id if release else None,
+                        "language_pack_ingest_hash": release.ingest_hash if release else None,
+                        "language_pack_job_id": ingestion_release_job_id(),
                     },
                 )
             rows = self._chunk_insert_rows(

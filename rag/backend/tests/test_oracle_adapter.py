@@ -2455,6 +2455,12 @@ async def test_save_index_new_chunk_set_exists_before_chunk_insert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """親集合の事前作成なしでも trigger が数値範囲を割り当てられる。"""
+    monkeypatch.setattr(
+        oracle_module,
+        "active_release",
+        lambda: SimpleNamespace(id="release-synthetic", ingest_hash="hash-synthetic"),
+    )
+    monkeypatch.setattr(oracle_module, "ingestion_release_job_id", lambda: "job-synthetic")
     pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     insert_many = FakeOracleCursor.executemany
@@ -2469,6 +2475,9 @@ async def test_save_index_new_chunk_set_exists_before_chunk_insert(
         ]
         assert len(parents) == 1
         assert parents[0].parameters["chunk_set_id"] == "cs-new"
+        assert parents[0].parameters["language_pack_release_id"] == "release-synthetic"
+        assert parents[0].parameters["language_pack_ingest_hash"] == "hash-synthetic"
+        assert parents[0].parameters["language_pack_job_id"] == "job-synthetic"
         assert "WHEN MATCHED" not in parents[0].statement
         insert_many(cursor, statement, parameters)
 
