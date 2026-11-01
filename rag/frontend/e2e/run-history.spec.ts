@@ -361,7 +361,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       await expect(page.getByTestId("run-history-row-run-1")).toContainText("自分");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("利用者 2");
       await expect(page.getByTestId("run-history-row-run-3")).toContainText("（削除済みのユーザー）");
-      await expect(page.getByTestId("run-history-row-run-1")).toContainText("照合済み");
+      await expect(page.getByTestId("run-history-row-run-1")).toContainText("確認状態が不明");
       await expect(page.getByTestId("run-history-row-run-2")).toContainText("回答なし（検索のみ）");
     }
     await expectScrollsInsideTable(page, page.getByRole("region", { name: "実行履歴" }));
@@ -1587,4 +1587,29 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await confirmTraceExplorer(page, testInfo, expect, true);
+});
+
+
+test("旧集約だけの履歴は照合済みと表示せず、実行結果を優先する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockLocalAuth(page);
+  const legacy = run(1, { answer_generated: true, verification: "verified", validation_execution: null });
+  const checked = run(2, { answer_generated: true, verification: "verified", validation_execution: "passed" });
+  await mockRuns(page, [legacy, checked]);
+  await page.goto("/history");
+  await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
+  if (testInfo.project.name === "desktop") {
+    await expect(page.getByTestId("run-history-row-run-1")).toContainText("確認状態が不明");
+    await expect(page.getByTestId("run-history-row-run-1")).not.toContainText("照合済み");
+    await expect(page.getByTestId("run-history-row-run-2")).toContainText("確認完了・問題なし");
+  } else {
+    await expect(page.getByRole("columnheader", { name: "資料との照合" })).toBeHidden();
+  }
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("history-verification-evidence.png") });
+  await page.goto("/history/run-1");
+  await expect(page.getByRole("heading", { name: "実行の詳細", exact: true })).toBeVisible();
+  await expect(page.getByRole("main")).not.toContainText("照合済み");
+  await page.goto("/history/run-2");
+  await expect(page.getByRole("main")).not.toContainText("照合済み");
+  await expectNoPageOverflow(page);
 });

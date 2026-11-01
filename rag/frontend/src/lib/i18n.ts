@@ -5254,11 +5254,8 @@ export const ja = {
   "history.outcome.answered": "回答",
   "history.outcome.searchOnly": "回答なし（検索のみ）",
   "history.outcome.none": "回答なし",
-  "history.verification.verified": "照合済み",
-  "history.verification.partial": "一部未確認",
-  "history.verification.unverified": "未照合",
   "history.verification.help":
-    "最終回答の資料照合について、設定で無効・未実行・エラー・時間切れ・確認完了の結果を区別します。古い記録の「一部未確認」は答えられていない・確かめられなかった要求があり、「未照合」は照合の記録がない状態です。未実行や失敗を、確認済みとは扱いません。",
+    "資料照合の実行記録に基づいて、設定で無効・未実行・エラー・時間切れ・確認結果を区別します。実行記録のない古い履歴は「確認状態が不明」と表示します。要求に回答したことだけでは、資料で照合したとは判断しません。",
   "history.verification.helpLabel": "資料との照合の説明",
   "history.notRecorded": "—",
   "history.empty.title": "実行はまだありません",

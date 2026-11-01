@@ -106,16 +106,7 @@ export function runOutcomeView(run: Pick<RunSummary, "answer_generated" | "statu
 export function runVerificationView(verification: RunVerification | null, execution?: string | null): BadgeView | null {
   const explicit = validationExecutionBadge(execution);
   if (explicit) return explicit;
-  switch (verification) {
-    case "verified":
-      return { variant: "success", label: t("history.verification.verified") };
-    case "partial":
-      return { variant: "warning", label: t("history.verification.partial") };
-    case "unverified":
-      return { variant: "neutral", label: t("history.verification.unverified") };
-    default:
-      return null;
-  }
+  return verification == null ? null : validationExecutionBadge("unknown");
 }
 
 /** 検索・回答プロファイルの表示名（ID は出さない）。 */

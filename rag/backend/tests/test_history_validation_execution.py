@@ -1,4 +1,4 @@
-"""照合の実行状態だけを履歴へ保存し、旧verificationと権限境界を維持する。"""
+"""照合の実行状態と権限境界を維持し、旧集約だけでは完了と扱わない。"""
 
 from typing import Any
 
@@ -74,7 +74,7 @@ async def test_recorder_persists_scalar_inside_existing_stages(status: str) -> N
     "execution",
     ["disabled", "not_run", "error", "timed_out", "passed", "failed", "partial", "unknown", None],
 )
-def test_list_returns_validation_execution_without_changing_legacy_bucket(
+def test_list_returns_explicit_execution_and_does_not_trust_legacy_bucket_alone(
     monkeypatch: MonkeyPatch, execution: str | None
 ) -> None:
     auth = enable_production_auth(monkeypatch)
@@ -98,7 +98,7 @@ def test_list_returns_validation_execution_without_changing_legacy_bucket(
     assert response.status_code == 200, response.text
     row = response.json()["data"]["items"][0]
     assert row["validation_execution"] == execution
-    assert row["verification"] == "verified"
+    assert row["verification"] == ("unverified" if execution is None else "verified")
     sql = pool.connection.calls[0].statement
     assert "JSON_VALUE(r.stages_json, '$.validation_execution'" in sql
     assert OWNER_PREDICATE in sql and OWNER_CONVERSATION_PREDICATE in sql
