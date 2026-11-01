@@ -205,8 +205,16 @@ async def _empty_native_scope_diagnostics(
         [("syntheticneedle", [0.1] * 1536, SearchMode.VECTOR)], 10, filters
     )
     failure = getattr(exact[0], "failure", None)
+    index_counts = await oracle._fetch_all(
+        """SELECT
+            (SELECT COUNT(*) FROM DR$RAG_CHUNKS_HYBRID_IDX$VR) AS stored_vectors,
+            (SELECT COUNT(*) FROM RAG_CHUNKS_HYBRID_IDX$VECTORS) AS visible_vectors,
+            (SELECT COUNT(*) FROM rag_chunks WHERE embedding IS NOT NULL) AS source_vectors
+        FROM dual"""
+    )
     return {
         "visibility": visibility,
+        "index_counts": index_counts,
         "requested_accuracy": resolve_vector_index_adapter(oracle._settings).target_accuracy,
         "accuracy_100_status": getattr(exact[0], "status", "completed"),
         "accuracy_100_count": len(exact[0]),
