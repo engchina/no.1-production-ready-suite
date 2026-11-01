@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "./fixtures/test";
+import { expectToastPlacement } from "./_toast-placement";
 import { expectedControlHeight, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 function ok(json: unknown) {
@@ -344,6 +345,7 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   await expect(settings.getByText("未構築 1 件・更新が必要 0 件・構築済み 1 件・準備不足 1 件")).toBeVisible();
   await settings.getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
+  await expect(page.getByText("構築を開始しました。ページを離れても処理は続きます。", { exact: true })).toBeVisible();
   await expect(settings.getByRole("button", { name: "停止", exact: true })).toBeVisible();
   await settings.getByRole("button", { name: "停止", exact: true }).click();
   await expect(settings.getByText("停止済み", { exact: true })).toBeVisible();
@@ -363,4 +365,52 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   await expect(dialog.getByRole("button", { name: "再構築", exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
   expect(starts).toBe(2);
+});
+
+test("構造索引の保存失敗を保持し、操作の再試行で要求を再送する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
+  let saveAttempts = 0;
+  let jobAttempts = 0;
+  let job: Record<string, unknown> | null = null;
+  const item = { document_id: "doc-a", name: "synthetic-a.txt", status: "MISSING", reason: null };
+  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: null, structure_index_global_enabled: false }) }));
+  await page.route("**/api/knowledge-bases/kb-1/structure-index", async (route) => {
+    saveAttempts++;
+    await route.fulfill(saveAttempts === 1 ? { status: 503, json: { detail: "一時的に保存できません。" } } : { json: ok({ enabled: true, global_enabled: false }) });
+  });
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items: [item], counts: { MISSING: 1 }, total: 1, offset: 0, limit: 25 }) }));
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", async (route) => {
+    if (route.request().method() === "POST") {
+      jobAttempts++;
+      if (jobAttempts === 1) { await route.fulfill({ status: 503, json: { detail: "一時的に開始できません。" } }); return; }
+      job = { job_id: "job-retry", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z", items: [{ ...item, status: "FAILED", reason: "processing_error" }], counts: { FAILED: 1 }, total: 1, offset: 0, limit: 25 };
+    }
+    await route.fulfill({ json: ok(job) });
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const settings = page.getByTestId("knowledge-base-structure-settings");
+  await settings.getByRole("combobox").click();
+  await page.getByRole("option", { name: "構築する", exact: true }).click();
+  await settings.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(settings.getByRole("alert")).toBeVisible();
+  await expect(settings.getByRole("combobox")).toContainText("構築する");
+  await settings.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("01-save-error.png") });
+  await settings.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByText("文書構造索引の構築設定を保存しました。", { exact: true })).toBeVisible();
+  await expect(settings.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("region", { name: "通知", exact: true }).evaluate(async (element) => { await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => undefined))); });
+  await expectToastPlacement(page);
+  await page.screenshot({ path: testInfo.outputPath("02-save-toast.png") });
+  await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
+  await settings.getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
+  await expect(settings.getByRole("button", { name: "再試行", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("03-start-error.png") });
+  await settings.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect.poll(() => jobAttempts).toBe(2);
+  await expect(settings.getByRole("cell", { name: "失敗", exact: true })).toBeVisible();
+  await expect(settings.getByRole("button", { name: "失敗分を再試行", exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("04-partial-failure.png") });
 });

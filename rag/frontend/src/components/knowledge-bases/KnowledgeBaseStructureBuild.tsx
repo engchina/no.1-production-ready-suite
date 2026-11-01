@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Construction, RefreshCw, Square, Play } from "lucide-react";
-import { Button, DataTable, ListToolbar, OffsetPagination, TableSkeleton, TimedLoadingState, INFORMATION_TABLE_VISIBLE_ROWS, FormActionBar, type DataTableColumn } from "@production-ready/ui";
+import { Button, DataTable, ListToolbar, OffsetPagination, TableSkeleton, TimedLoadingState, INFORMATION_TABLE_VISIBLE_ROWS, FormActionBar, FormStatus, ApiErrorBanner, type DataTableColumn } from "@production-ready/ui";
 import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { queryKeys } from "@/lib/queries";
 import { api, type StructureBuildItem, type StructureBuildMode } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
+import { toast } from "@/lib/toast";
 import { listCountLabels, listToolbarLabels, paginationLabels } from "@/lib/pagination-labels";
 
 const statusLabels: Record<string, I18nKey> = {
@@ -58,7 +59,7 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable }: { kbId:
       void qc.invalidateQueries({ queryKey: ["structure-build-plan", kbId] });
     }
   }, [job.data?.status, active, kbId, qc]);
-  const action = useMutation({ mutationFn: (mode: StructureBuildMode | "stop") => mode === "stop" ? api.stopStructureBuild(kbId) : api.startStructureBuild(kbId, mode), onSuccess: () => { setPreview(false); setOffset(0); void qc.invalidateQueries({ queryKey: ["structure-build-job", kbId] }); } });
+  const action = useMutation({ mutationFn: (mode: StructureBuildMode | "stop") => mode === "stop" ? api.stopStructureBuild(kbId) : api.startStructureBuild(kbId, mode), onSuccess: (result, mode) => { if (mode !== "stop" && result?.status === "RUNNING") toast.info(t("knowledgeBases.structure.build.accepted")); setPreview(false); setOffset(0); void qc.invalidateQueries({ queryKey: ["structure-build-job", kbId] }); } });
   const start = async (mode: StructureBuildMode) => {
     const labels: Record<StructureBuildMode, I18nKey> = { missing: "knowledgeBases.structure.build.start", rebuild: "knowledgeBases.structure.build.rebuild", retry: "knowledgeBases.structure.build.retry", continue: "knowledgeBases.structure.build.continue" };
     const ok = await confirm({ title: t(mode === "rebuild" ? "knowledgeBases.structure.build.rebuildConfirmTitle" : "knowledgeBases.structure.build.confirmTitle"), description: t(mode === "rebuild" ? "knowledgeBases.structure.build.rebuildConfirmBody" : "knowledgeBases.structure.build.confirmBody"), confirmLabel: t(labels[mode]), tone: "warning" });
@@ -79,12 +80,12 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable }: { kbId:
       {editable && !active && (job.data?.counts?.FAILED ?? 0) > 0 ? <Button icon={RefreshCw} variant="secondary" disabled={!enabled || action.isPending} onClick={() => void start("retry")}>{t("knowledgeBases.structure.build.retry")}</Button> : null}
     </div>
     {job.data?.partial_visibility ? <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.build.visibleOnly")}</p> : null}
-    {action.isError ? <ApiErrorState error={action.error} fallback={t("knowledgeBases.structure.build.error")} onRetry={() => action.reset()} /> : null}
+    {action.isError ? <ApiErrorBanner error={action.error} fallback={t("knowledgeBases.structure.build.error")} summary={t("knowledgeBases.structure.build.error")} nextAction={t("knowledgeBases.structure.build.errorNext")} action={<Button icon={RefreshCw} variant="secondary" loading={action.isPending} onClick={() => { if (action.variables) action.mutate(action.variables); }}>{t("common.retry")}</Button>} /> : null}
     {job.isError ? <ApiErrorState error={job.error} fallback={t("knowledgeBases.structure.build.loadError")} onRetry={() => void job.refetch()} /> : null}
     {preview && plan.isError ? <ApiErrorState error={plan.error} fallback={t("knowledgeBases.structure.build.loadError")} onRetry={() => void plan.refetch()} /> : null}
     {(preview ? plan.isPending : job.isPending) ? <TimedLoadingState label={t("knowledgeBases.structure.build.loading")} operationKey={`structure-build-${kbId}`}><TableSkeleton columns={3} /></TimedLoadingState> : view ? <>
       {!preview && active && job.data ? <TimedLoadingState label={t(jobLabels[job.data.status] ?? "knowledgeBases.structure.build.job.RUNNING")} operationKey={job.data.job_id} startedAt={job.data.started_at} /> : null}
-      {!preview && !active && job.data ? <p className="text-sm" role="status">{t(jobLabels[job.data.status] ?? "knowledgeBases.structure.build.job.INTERRUPTED")}</p> : null}
+      {!preview && !active && job.data ? <FormStatus tone={(job.data.counts?.FAILED ?? 0) > 0 ? "danger" : job.data.status === "INTERRUPTED" || (job.data.counts?.PARTIAL ?? 0) + (job.data.counts?.UNAVAILABLE ?? 0) > 0 ? "warning" : job.data.status === "COMPLETED" ? "success" : "info"} message={t(jobLabels[job.data.status] ?? "knowledgeBases.structure.build.job.INTERRUPTED")} /> : null}
       <p className="text-sm" aria-live="polite">{preview && plan.data ? t("knowledgeBases.structure.build.planCounts", { missing: plan.data.counts.MISSING ?? 0, stale: plan.data.counts.STALE ?? 0, current: plan.data.counts.CURRENT ?? 0, unavailable: plan.data.counts.UNAVAILABLE ?? 0 }) : t("knowledgeBases.structure.build.jobCounts", { succeeded: job.data?.counts?.SUCCEEDED ?? 0, partial: job.data?.counts?.PARTIAL ?? 0, failed: job.data?.counts?.FAILED ?? 0, skipped: job.data?.counts?.SKIPPED ?? 0, unavailable: job.data?.counts?.UNAVAILABLE ?? 0, pending: (job.data?.counts?.QUEUED ?? 0) + (job.data?.counts?.RUNNING ?? 0) })}</p>
       <ListToolbar count={{ total: view.total, labels: listCountLabels() }} labels={listToolbarLabels()} />
       <DataTable columns={columns} rows={view.items} getRowKey={(item) => item.document_id} stickyHeader visibleRows={INFORMATION_TABLE_VISIBLE_ROWS} tableClassName="min-w-[42rem]" />

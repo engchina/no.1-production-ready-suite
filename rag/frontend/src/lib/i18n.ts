@@ -2651,6 +2651,8 @@ export const ja = {
   "knowledgeBases.structure.build.document": "文書",
   "knowledgeBases.structure.build.status": "状態",
   "knowledgeBases.structure.build.reason": "詳細",
+  "knowledgeBases.structure.build.accepted": "構築を開始しました。ページを離れても処理は続きます。",
+  "knowledgeBases.structure.build.errorNext": "選択した内容は保持しています。「再試行」で同じ操作をやり直してください。",
   "knowledgeBases.structure.build.error": "文書構造索引の操作に失敗しました。",
   "knowledgeBases.structure.build.loadError": "構築の記録を取得できませんでした。",
   "knowledgeBases.structure.build.loading": "構築対象と進捗を読み込んでいます",
