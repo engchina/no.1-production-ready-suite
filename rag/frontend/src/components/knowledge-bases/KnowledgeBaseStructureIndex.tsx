@@ -26,7 +26,7 @@ function StructureSettings({ kb, editable }: { kb: KnowledgeBaseDetail; editable
     await qc.invalidateQueries({ queryKey: queryKeys.knowledgeBase(kb.id) });
     toast.success(t("knowledgeBases.structure.saved"));
   } });
-  return <div className="grid gap-3">
+  return <div className="grid min-w-0 grid-cols-1 gap-3">
     <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.help")}</p>
     <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.global", { value: t(kb.structure_index_global_enabled ? "knowledgeBases.structure.on" : "knowledgeBases.structure.off") })}</p>
     <SelectField id="knowledge-base-structure-enabled" label={t("knowledgeBases.structure.title")} value={value} width="md" onValueChange={setValue}
