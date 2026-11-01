@@ -4316,10 +4316,17 @@ def _retrieval_query_plan_payload(
 ) -> dict[str, Any]:
     runtime_question = runtime_knowledge.expanded_question if runtime_knowledge is not None else expansion.original_question
     queries = _dedupe_queries(vector_queries or text_search_info.query_variants or expansion.retrieval_queries)
+    from rag_engine.retrieval.query_channels import expression_channels
+
+    vector_inputs = tuple(
+        q
+        for q in queries
+        if expression_channels(q, expansion.original_question, getattr(settings, "retrieval_query_sources", {}) or {}) != ("keyword",)
+    )
     plan = RetrievalQueryPlan(
         original_question=expansion.original_question,
         runtime_expanded_question=runtime_question,
-        vector_queries=queries,
+        vector_queries=vector_inputs,
         text_query_variants=tuple(text_search_info.query_variants),
         oracle_text_queries=tuple(text_search_info.oracle_text_queries),
         text_search_tokens=tuple(text_search_info.tokens),
@@ -4451,10 +4458,19 @@ def _query_expansion_max_queries(settings: Settings) -> int:
         return MAX_GENERATED_QUERY_COUNT
 
 
-def _text_search_variants(queries: Sequence[str], expansion: QueryExpansionResult) -> tuple[str, ...]:
+def _text_search_variants(
+    queries: Sequence[str], expansion: QueryExpansionResult, sources: Mapping[str, Sequence[str]] | None = None
+) -> tuple[str, ...]:
     """全文検索の検索語 trace に使う検索文。vector だけに使う仮説文は除く (#911)。"""
     excluded = {_dedupe_query_key(query) for query in expansion.vector_only_queries}
-    return tuple(query for query in queries if _dedupe_query_key(query) not in excluded)
+    from rag_engine.retrieval.query_channels import expression_channels
+
+    return tuple(
+        query
+        for query in queries
+        if _dedupe_query_key(query) not in excluded
+        and any(channel in {"hybrid", "keyword"} for channel in expression_channels(query, expansion.original_question, sources or {}))
+    )
 
 
 def _text_search_limit_note(text_variants: Sequence[str], settings: Settings) -> str:
@@ -5604,16 +5620,6 @@ def answer_question_result(
             # 比較実験用。検索直前にも同じ絞り込みがあるが、ここで適用しないと記録が実際の検索と食い違う。
             retrieval_queries = (normalized_question,)
             step.add("      設定 RETRIEVAL_ORIGINAL_QUERY_ONLY=true のため、原質問だけで検索します。")
-        text_search_info = build_question_text_search_info(
-            normalized_question,
-            settings,
-            query_source=_text_search_query_source(runtime_knowledge, expansion),
-            query_variants=_text_search_variants(retrieval_queries, expansion),
-        )
-        text_search_info = replace(text_search_info, domain_keyword_expansion=keyword_trace)
-        if (tokenizer_failure := sudachi_unavailable(_question_text_search_tokenizer_config(settings))) is not None:
-            # 全文検索の語を文字種の区切りだけで作ったことを、回答ごとに 1 回だけ診断に残す（#3286）。
-            report_degraded("text_search_tokenizer", tokenizer_failure)
         sources = {_dedupe_query_key(normalized_question): "原質問"}
         if runtime_knowledge.expanded_question != runtime_knowledge.original_question:
             # 出どころは実際に語を足したもの（用語・同義語 / 回答ルール / 業務ガイド / 確認で選んだ条件。#3490）。
@@ -5642,6 +5648,16 @@ def answer_question_result(
                 labels.append(TERMS_ONLY_SOURCE_LABEL)
             query_sources[query] = tuple(dict.fromkeys(labels))
         settings = replace(settings, retrieval_query_sources=query_sources)
+        text_search_info = build_question_text_search_info(
+            normalized_question,
+            settings,
+            query_source=_text_search_query_source(runtime_knowledge, expansion),
+            query_variants=_text_search_variants(retrieval_queries, expansion, query_sources),
+        )
+        text_search_info = replace(text_search_info, domain_keyword_expansion=keyword_trace)
+        if (tokenizer_failure := sudachi_unavailable(_question_text_search_tokenizer_config(settings))) is not None:
+            # 全文検索の語を文字種の区切りだけで作ったことを、回答ごとに 1 回だけ診断に残す（#3286）。
+            report_degraded("text_search_tokenizer", tokenizer_failure)
         step.result(
             f"検索文 {len(retrieval_queries)} 本",
             *(

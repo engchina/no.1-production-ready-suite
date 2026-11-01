@@ -6,6 +6,7 @@
 """
 
 # DB の検索（検索文ごとの vector / keyword の検索）。
+HYBRID_SEARCH_STAGE = "原質問をベクトル検索と全文検索で探す"
 VECTOR_SEARCH_STAGE = "ベクトル検索"
 TEXT_SEARCH_STAGE = "全文検索"
 CHUNK_POOL_LOAD_STAGE = "検索対象のチャンクの読み込み"

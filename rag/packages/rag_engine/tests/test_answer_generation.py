@@ -1442,7 +1442,7 @@ class AnswerGenerationTests(unittest.TestCase):
     def test_execution_record_shows_text_search_query_limit(self):
         # 全文検索の上限で切れた本数を実行記録に示す。上限内では出さない (#921)。
         for limit, expected in (
-            (2, "全文検索に使う検索文: 先頭 2 本（TEXT_SEARCH_QUERY_VARIANT_LIMIT）。残り 4 本は意味検索だけに使います。"),
+            (2, None),
             (10, None),
         ):
             with self.subTest(limit=limit):
@@ -1738,7 +1738,7 @@ class AnswerGenerationTests(unittest.TestCase):
                 self.assertIn("全文検索（Oracle Text）には使いません", result.question_display)
             else:
                 self.assertNotIn("vector_only_queries", search.call_args.kwargs)
-                self.assertIn(generated_query, result.retrieval_query_plan["text_query_variants"])
+                self.assertNotIn(generated_query, result.retrieval_query_plan["text_query_variants"])
             if strategy == HYDE_STRATEGY:
                 self.assertNotIn("hypothetical passage", final_prompt)
 
@@ -1815,7 +1815,7 @@ class AnswerGenerationTests(unittest.TestCase):
 
         tokenized_values = [call.args[0] for call in tokenize.call_args_list]
         self.assertIn(original_question, tokenized_values)
-        self.assertIn(generated_query, tokenized_values)
+        self.assertNotIn(generated_query, tokenized_values)
         self.assertIn(QUESTION_DISPLAY_METADATA_SEPARATOR, result.question_display)
         self.assertIn("1. [原質問] ", result.question_display)
         self.assertIn("[質問の言い換え・分解] ", result.question_display)
@@ -1830,7 +1830,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertNotIn("Tokenizer fingerprint:", result.question_display)
         self.assertEqual(result.text_search_tokens, ("拠点名", "拠点", "変更"))
         self.assertEqual(result.text_search_query, "{拠点名} OR {拠点} OR {変更}")
-        self.assertIn("{拠点倉庫名} OR {倉庫マスタ登録} OR {F5実行}", result.text_search_queries)
+        self.assertNotIn("{拠点倉庫名} OR {倉庫マスタ登録} OR {F5実行}", result.text_search_queries)
         retrieval_queries = search.call_args.kwargs["retrieval_queries"]
         self.assertEqual(retrieval_queries[:2], (original_question, generated_query))
         self.assertEqual(retrieval_queries, (original_question, generated_query))
@@ -1840,7 +1840,7 @@ class AnswerGenerationTests(unittest.TestCase):
         self.assertEqual(plan["llm_expansion_queries"], [generated_query])
         self.assertEqual(plan["lexical_queries"], [])
         self.assertNotIn("inquiry_queries", plan)
-        self.assertIn("{拠点倉庫名} OR {倉庫マスタ登録} OR {F5実行}", plan["oracle_text_queries"])
+        self.assertNotIn("{拠点倉庫名} OR {倉庫マスタ登録} OR {F5実行}", plan["oracle_text_queries"])
         self.assertEqual(plan["text_search_tokens"], ["拠点名", "拠点", "変更"])
         self.assertTrue(plan["text_search_tokenization_traces"][0]["truncated"])
         self.assertEqual(plan["text_search_tokenization_traces"][0]["truncated_tokens"], ["方法"])

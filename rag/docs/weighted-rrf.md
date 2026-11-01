@@ -2,20 +2,22 @@
 
 全体の「検索方法」→「検索文の作成」の後に、ランキングの寄与を指定する二組の比重を置く。
 
-- ベクトル検索 : 全文検索 = **1 : 1**（`RAG_RRF_METHOD_RATIO=[1,1]`）。
+- ベクトル検索 : 全文検索 = **10 : 1**（`RAG_RRF_METHOD_RATIO=[10,1]`）。
 - 原質問 : 全追加検索文 = **7 : 3**（`RAG_RRF_SOURCE_RATIO=[7,3]`）。
 
 未保存の環境にも新しい既定値を使う。非負の有限値で指定し、組内の全ゼロを拒否する。候補の件数と rerank は独立で、結果の件数や回答内容の比率を約束する設定ではない。rerank に渡る候補は変わり得る。KB は対象範囲、文書レシピは取込の責務を維持し、比重を保存しない。
 
 ## 計算
 
-原質問・追加検索文のベクトル／全文の**原始ランキングを一度だけ**融合する。
+原質問は1回の `DBMS_HYBRID_VECTOR.SEARCH` に vector と text を渡し、`search_fusion=UNION` / `search_scorer=WRRF` で検索・融合する。`vector.score_weight` と `text.score_weight` に設定比率（既定10と1）、両方の `rank_penalty` に既存定数（既定60）を渡す。各経路の候補上限を維持し、返却上限は両経路の和にする。
 
-`score(d) = Σ (検索文の出所の重み × 検索方式の重み) / (k + rank(d))`
+意味の言い換え・分解・HyDE の追加検索文は向量のみ。登録用語・同義語からの追加検索文は全文のみで、embedding API にも送らない。判定は検索文の出所に基づき、質問本文の語から推測しない。同一表現が両方の出所を持つ場合は予算を重複させず必要な両経路を使う。原質問と同じ表現は原質問として扱う。
 
-順位は 1 から始まる。同じ一覧にない片段の寄与は 0。追加文は、文字の正規化と重複除去後の集合で追加予算を等分する。原質問と同じ文は追加予算を得ない。追加がなければ原質問の出所の重みを 1 にする。空結果・失敗の重みを別一覧へ配分しない。HyDE などのベクトル専用文に全文の一覧を追加しない。
+`score(d) = source_weight(original) × native_WRRF(d) / (100 × (k + 1)) + Σ source_weight(additional) × channel_weight / (k + rank(d))`
 
-一条の追加文なら、原質問の vector / text は `0.35 / 0.35`、追加文は `0.15 / 0.15`。既存の順位定数を維持する（backend は `RAG_RRF_K`、engine の直接経路は `RRF_K`。どちらも既定 60）。
+Oracle WRRF は理論上の最大値を100とするため、原始の正規化した順位寄与へ尺度を戻してから、原質問の出所予算を掛ける。融合済み結果の順位に再度RRFを掛けない。追加検索の順位は1から始まり、出現しない候補は寄与0。追加文は正規化・重複除去後の集合で追加予算30%を等分する。追加がなければ原質問の出所予算は1。空結果・失敗・未使用経路の予算を再配分しない。
+
+Sudachi方式は原質問のvector/text原始順位をアプリで融合し、追加文の経路は同じ出所規則で制限する。独立 engine の旧schema経路では原生方式へ暗黙に切り替えず、backend入口を使う。順位定数はbackendの `RAG_RRF_K`、旧schemaの `RRF_K` を維持する。
 
 画像のベクトル索引が有効な engine の直接経路では、既存の画像対テキスト埋め込みの比重を使い、**ベクトル方式の予算の中**を二つの埋め込み一覧に配分する。画像一覧の増設でベクトル方式の総予算を増やさない。
 
@@ -32,3 +34,5 @@ backend の「検索文ごとの hybrid 融合 → 検索文間の二度目の R
 合成順位の厳密計算、設定の保存、実 Oracle の KB／プロファイルと権限範囲を回帰テストする。検索の召回と回答の品質は別に比較する。既定の比重の変更だけを理由に精度向上とは扱わない。
 
 参考: [Azure のベクトルの重み](https://learn.microsoft.com/en-us/azure/search/vector-search-how-to-query#vector-weighting)、[RRF](https://learn.microsoft.com/en-us/azure/search/hybrid-search-ranking)。順位寄与への乗算を参考にするが、本実装は出所ごとの総予算と方式の正規化を持ち、Azure と同一の仕様とは位置付けない。
+
+Oracle公式: [SEARCH](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/search.html)、[WRRFの計算と尺度](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/understand-hybrid-search.html)。比率は品質向上の保証ではない。

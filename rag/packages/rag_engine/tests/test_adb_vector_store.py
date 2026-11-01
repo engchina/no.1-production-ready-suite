@@ -126,7 +126,7 @@ class AdbVectorStoreTests(unittest.TestCase):
                 candidate_limit=5,
             )
         self.assertEqual(vector.call_count, 3)
-        self.assertEqual(text.call_count, 2)
+        self.assertEqual(text.call_count, 1)
         self.assertFalse(any("仮説" in call.args[2] for call in text.call_args_list))
 
     def test_db_searches_are_stage_spans_for_the_progress_timeline(self):
@@ -180,7 +180,7 @@ class AdbVectorStoreTests(unittest.TestCase):
                     ("end", "stage", "検索結果の統合（RRF）"),
                 ],
             )
-            self.assertEqual(text.call_count, 2)
+            self.assertEqual(text.call_count, 1)
             self.assertEqual(load.call_count, 1)
             # 読み込み済み（cache）の検索対象は読み込みの工程を出さない。全文検索に使う検索文が無ければ全文検索の工程も出さない。
             observed.clear()
@@ -214,8 +214,8 @@ class AdbVectorStoreTests(unittest.TestCase):
                 query_embedder=lambda *_: [0.1] * 1536,
                 candidate_limit=5,
             )
-        self.assertEqual(text.call_count, 2)
-        self.assertTrue(any("派生" in call.args[2] for call in text.call_args_list))
+        self.assertEqual(text.call_count, 1)
+        self.assertFalse(any("派生" in call.args[2] for call in text.call_args_list))
 
     def test_repeated_search_in_same_scope_loads_chunks_and_checks_embeddings_once(self):
         settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
@@ -356,9 +356,61 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertEqual(embedded_queries, ["original question", "expanded synonym"])
         self.assertEqual(vector_search.call_count, 2)
         load_keywords.assert_called_once_with(settings.output_dir)
+        self.assertEqual(text_search.call_count, 1)
+        self.assertEqual(text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
+        self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
+        self.assertNotIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
+
+    def test_registered_terms_use_text_only_and_are_not_embedded(self):
+        settings = replace(
+            get_settings(),
+            embedding_output_dimensions=1536,
+            image_embedding_enabled=False,
+            text_search_tokenizer_latin_stemmer="none",
+            text_search_query_variant_limit=2,
+            retrieval_query_sources={"expanded synonym": ("用語・同義語だけ",)},
+        )
+        connection = object()
+        embedded_queries = []
+
+        def query_embedder(query, settings_value):
+            embedded_queries.append(query)
+            return [0.1] * 1536
+
+        with (
+            patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value=object()),
+            patch("rag_engine.adapters.oracle.store.connect_adb_thin", return_value=_ConnectionContext(connection)),
+            patch("rag_engine.adapters.oracle.store.load_domain_keywords", return_value=["question"]) as load_keywords,
+            patch("rag_engine.adapters.oracle.store._available_embedding_count", return_value=2),
+            patch(
+                "rag_engine.adapters.oracle.store._vector_search",
+                side_effect=[[("uid-original", 0.1)], [("uid-expanded", 0.2)]],
+            ) as vector_search,
+            patch(
+                "rag_engine.adapters.oracle.store._text_search",
+                side_effect=[[("uid-original", 12.0)], [("uid-expanded", 8.0)]],
+            ) as text_search,
+            patch(
+                "rag_engine.adapters.oracle.store._load_chunk_run_chunks",
+                return_value=[
+                    _stored_chunk("uid-original", "chunk-original", page_start=1, chunk_seq=1),
+                    _stored_chunk("uid-expanded", "chunk-expanded", page_start=1, chunk_seq=2),
+                ],
+            ),
+        ):
+            result = search_adb_hybrid_chunks(
+                chunk_run_id="abcdef-1234567890ab",
+                retrieval_queries=["original question", "expanded synonym"],
+                settings=settings,
+                candidate_limit=5,
+                query_embedder=query_embedder,
+            )
+
+        self.assertEqual(embedded_queries, ["original question"])
+        self.assertEqual(vector_search.call_count, 1)
+        load_keywords.assert_called_once_with(settings.output_dir)
         self.assertEqual(text_search.call_count, 2)
         self.assertEqual(text_search.call_args_list[0].args[2], "{question}*2 ACCUM {クエスチョン} ACCUM {オリジナル} ACCUM {original}")
-        self.assertEqual(text_search.call_args_list[1].args[2], "{エキスパンデッド} ACCUM {expanded} ACCUM {シノニム} ACCUM {synonym}")
         self.assertEqual([chunk.chunk_id for chunk in result.child_chunks], ["chunk-original", "chunk-expanded"])
         self.assertIn("keyword:oracle_text:q2", result.child_chunks[1].metadata["adb_hybrid"]["retrieval_channels"])
 
@@ -397,7 +449,7 @@ class AdbVectorStoreTests(unittest.TestCase):
                 extra_text_queries=("{基準月}", "{基準月}"),
             )
 
-        self.assertEqual(text_search.call_count, 2)  # 重複した式は 1 回だけ
+        self.assertEqual(text_search.call_count, 2)  # 原質問と重複除去した追加式
         self.assertEqual(text_search.call_args_list[1].args[2], "{基準月}")
         self.assertIn("chunk-note", [chunk.chunk_id for chunk in result.child_chunks])  # フレーズだけに一致した chunk が候補に入る
 

@@ -24,6 +24,8 @@ class RrfWeights:
             raise ValueError("RRF の比重は組ごとに少なくとも一方を 0 より大きくしてください。")
 
     def channel(self, name: str) -> float:
+        if name == "hybrid":
+            return 1.0
         if name not in {"vector", "keyword"}:
             raise ValueError("未知の検索方式です。")
         return _ratio(self.vector, self.keyword)[0 if name == "vector" else 1]
@@ -67,6 +69,7 @@ class RankedList:
     sources: tuple[str, ...] = ()
     variant: str = ""
     factor: float = 1.0
+    native_scores: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,8 @@ class FusionResult:
                     "raw_count": len(e.ranking.chunk_ids),
                     "status": e.status,
                     "error": e.ranking.error,
+                    "score_source": "oracle_wrrf" if e.ranking.native_scores else "rank",
+                    "native_scores": list(e.ranking.native_scores),
                 }
                 for e in self.lists
             ],
@@ -152,7 +157,15 @@ def fuse_rankings(rankings: Sequence[RankedList], sources: Mapping[str, float], 
         raw_count += len(ranking.chunk_ids)
         identifiers.update(ranking.chunk_ids)
         for rank, chunk_id in enumerate(dict.fromkeys(ranking.chunk_ids), start=1):
-            value = weight / (k + rank)
+            if ranking.native_scores:
+                if len(ranking.native_scores) != len(ranking.chunk_ids):
+                    raise ValueError("Oracle WRRF の件数が一致しません。")
+                native_score = ranking.native_scores[ranking.chunk_ids.index(chunk_id)]
+                if not math.isfinite(native_score) or native_score < 0:
+                    raise ValueError("Oracle WRRF の寄与が不正です。")
+                value = weight * native_score
+            else:
+                value = weight / (k + rank)
             if weight == 0:
                 continue
             scores[chunk_id] = scores.get(chunk_id, 0.0) + value
@@ -167,8 +180,9 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
     for i, entry in enumerate(result.lists, 1):
         r = entry.ranking
         state = {"failed": "失敗", "empty": "該当なし", "completed": "完了"}[entry.status]
+        channel_label = {"vector": "ベクトル検索", "keyword": "全文検索", "hybrid": "Oracle hybrid（WRRF）"}[r.channel]
         lines.append(
-            f"一覧 {i}: {r.query} / {'ベクトル検索' if r.channel == 'vector' else '全文検索'} {r.variant} / "
+            f"一覧 {i}: {r.query} / {channel_label} {r.variant} / "
             f"出所: {'・'.join(r.sources) or '追加検索文'} / 重み {entry.weight:.9g} / "
             f"{len(dict.fromkeys(r.chunk_ids))} 件 / {state}" + (f"（{r.error}）" if r.error else "")
         )
@@ -178,7 +192,12 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
     ]
     return {
         "fields": [
-            {"label": "目的", "value": "各ランキングの順位と設定した比重を使い、一度の RRF で検索結果を統合します。"},
+            {
+                "label": "目的",
+                "value": "原質問の Oracle WRRF と追加検索の順位寄与を出所の比重で合算します。融合済み順位への再 RRF は行いません。"
+                if any(r.ranking.channel == "hybrid" for r in result.lists)
+                else "各ランキングの順位と設定した比重を使い、一度の RRF で検索結果を統合します。",
+            },
             {
                 "label": "結果",
                 "value": f"重複除去前 {result.raw_count} 件 / 重複除去後 {result.unique_count} 件 / "
