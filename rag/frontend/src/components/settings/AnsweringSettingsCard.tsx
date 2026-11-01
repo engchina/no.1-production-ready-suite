@@ -61,8 +61,8 @@ type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_ter
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
-    rrf_method_ratio: settings.rrf_method_ratio ?? [2, 1],
-    rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
+    rrf_method_ratio: settings.rrf_method_ratio ?? [1, 1],
+    rrf_source_ratio: settings.rrf_source_ratio ?? [8, 2],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
@@ -187,7 +187,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               {([0, 1] as const).map((index) => <TextField
                 key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step="any"
                 label={t(`settings.answering.${key}.${index}`)}
-                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [2,1] : [7,3])[index])}
+                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [1,1] : [8,2])[index])}
                 disabled={disabled} onChange={(event) => {
                   const ratio: [number, number] = [...(form[key] ?? [0,0])];
                   ratio[index] = Number(event.target.value);

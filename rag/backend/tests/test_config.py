@@ -884,6 +884,23 @@ def test_oracle_vector_target_accuracy_is_bounded() -> None:
         Settings(oracle_vector_target_accuracy=101)
 
 
+def test_rrf_ratio_defaults_match_api_and_direct_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """未設定の全体設定と直接engine経路で、比重の異なる候補を作らない。"""
+    from rag_engine.config import get_settings as get_engine_settings
+
+    from app.api.routes.settings import _answering_settings_data
+
+    monkeypatch.delenv("RAG_RRF_METHOD_RATIO", raising=False)
+    monkeypatch.delenv("RAG_RRF_SOURCE_RATIO", raising=False)
+    backend = Settings(_env_file=None)
+    engine = get_engine_settings(environ={}, dotenv_path=None)
+    response = _answering_settings_data(backend)
+    expected = ((1.0, 1.0), (8.0, 2.0))
+    assert (backend.rag_rrf_method_ratio, backend.rag_rrf_source_ratio) == expected
+    assert (engine.rrf_method_ratio, engine.rrf_source_ratio) == expected
+    assert (response.rrf_method_ratio, response.rrf_source_ratio) == expected
+
+
 def test_rag_rrf_k_is_bounded() -> None:
     """Hybrid retrieval の RRF 定数は正の安全な範囲に制限する。"""
     assert Settings().rag_rrf_k == 60

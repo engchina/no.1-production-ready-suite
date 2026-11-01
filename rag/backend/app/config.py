@@ -1235,8 +1235,8 @@ class Settings(
         ),
     )
     rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0)
-    rag_rrf_method_ratio: tuple[float, float] = (2.0, 1.0)
-    rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
+    rag_rrf_method_ratio: tuple[float, float] = (1.0, 1.0)
+    rag_rrf_source_ratio: tuple[float, float] = (8.0, 2.0)
 
     @field_validator("rag_rrf_method_ratio", "rag_rrf_source_ratio")
     @classmethod

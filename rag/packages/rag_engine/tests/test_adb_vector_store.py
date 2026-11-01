@@ -55,8 +55,8 @@ class AdbVectorStoreTests(unittest.TestCase):
         from rag_engine.retrieval.weighted_rrf import RrfWeights, source_weights
 
         weights = source_weights(["原質問", "追加 A", "追加 B", "追加 C", "追加 D"], RrfWeights())
-        self.assertAlmostEqual(weights["原質問"], 0.7)
-        self.assertAlmostEqual(sum(list(weights.values())[1:]), 0.3)
+        self.assertAlmostEqual(weights["原質問"], 0.8)
+        self.assertAlmostEqual(sum(list(weights.values())[1:]), 0.2)
 
     def test_each_query_keeps_its_top_candidates_after_fusion(self):
         """1 つの派生質問にしか一致しない節が RRF 融合で候補上限から落ちても、その質問の上位として残す (#669)。"""
@@ -2049,5 +2049,5 @@ def test_weighted_rrf_keeps_failed_vector_distinct_from_empty_and_uses_text_budg
             chunk_run_id="rrf-failure", retrieval_queries=["合成"], settings=settings, query_embedder=lambda *_: [0.1] * 1536
         )
     assert [r["status"] for r in captured[0]["rrf"]["lists"]] == ["failed", "completed"]
-    assert result.child_chunks[0].metadata["adb_hybrid"]["rrf_score"] == pytest.approx((1 / 3) / 61)
+    assert result.child_chunks[0].metadata["adb_hybrid"]["rrf_score"] == pytest.approx(0.5 / 61)
     adb_vector_store._pool_cache.clear()

@@ -98,8 +98,8 @@ test("検索方法の権限が無い利用者は、削除した画面の URL か
 
 
 const ANSWERING_SETTINGS = {
-  rrf_method_ratio: [2, 1],
-  rrf_source_ratio: [7, 3],
+  rrf_method_ratio: [1, 1],
+  rrf_source_ratio: [8, 2],
   runtime_terms_search_enabled: false,
   runtime_terms_answer_enabled: false,
   runtime_rules_confirmation_enabled: false,
@@ -225,8 +225,8 @@ for (const viewport of [
       await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
       expect(saved).toEqual([
         {
-          rrf_method_ratio: [2, 1],
-          rrf_source_ratio: [7, 3],
+          rrf_method_ratio: [1, 1],
+          rrf_source_ratio: [8, 2],
           query_strategy: "rag_fusion",
           runtime_terms_search_enabled: false,
           answer_flow: "crag",
@@ -612,7 +612,7 @@ for (const theme of ["light", "dark"] as const) {
     await mockAnsweringSettings(page, saved);
     await page.goto("/settings/retrieval");
     const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
-    for (const [name,value] of [["ベクトル検索の比重","2"],["全文検索の比重","1"],["原質問の比重","7"],["追加検索文全体の比重","3"]]) {
+    for (const [name,value] of [["ベクトル検索の比重","1"],["全文検索の比重","1"],["原質問の比重","8"],["追加検索文全体の比重","2"]]) {
       await expect(section.getByRole("spinbutton", {name,exact:true})).toHaveValue(value);
     }
     await section.getByRole("spinbutton", {name:"ベクトル検索の比重",exact:true}).fill("0");
@@ -624,9 +624,23 @@ for (const theme of ["light", "dark"] as const) {
     await section.screenshot({path:testInfo.outputPath(`rrf-ratios-${theme}.png`)});
     await page.getByRole("button", {name:"回答の設定を保存",exact:true}).click();
     await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({rrf_method_ratio:[0,3],rrf_source_ratio:[4,3]});
+    expect(saved[0]).toMatchObject({rrf_method_ratio:[0,3],rrf_source_ratio:[4,2]});
     await page.reload();
     await expect(page.getByRole("spinbutton", {name:"原質問の比重",exact:true})).toHaveValue("4");
     await expectNoPageOverflow(page);
   });
 }
+
+
+test("RRF の比重が未指定の場合も新しい既定値で表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await page.addInitScript(() => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({state: {sidebarCollapsed: true},version: 0})));
+  await mockRetrievalCards(page);
+  await mockAnsweringSettings(page, [], {rrf_method_ratio: undefined, rrf_source_ratio: undefined});
+  await page.goto("/settings/retrieval");
+  const section = page.locator("section", {has: page.getByRole("heading", {name: "検索結果の統合（RRF）",exact:true})});
+  for (const [name,value] of [["ベクトル検索の比重","1"],["全文検索の比重","1"],["原質問の比重","8"],["追加検索文全体の比重","2"]]) {
+    await expect(section.getByRole("spinbutton", {name,exact:true})).toHaveValue(value);
+  }
+  await section.screenshot({path:testInfo.outputPath("rrf-ratio-defaults.png")});
+  await expectNoPageOverflow(page);
+});
