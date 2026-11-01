@@ -18,6 +18,7 @@ class CleanupConnection:
         self.fail = fail
         self.rowcount = 0
         self.calls: list[str] = []
+        self.optimized = False
 
     def cursor(self) -> "CleanupConnection":
         return self
@@ -25,13 +26,15 @@ class CleanupConnection:
     def execute(self, sql: str, binds: Mapping[str, object] | None = None) -> None:
         self.calls.append(sql)
         self.rowcount = self.deleted if sql.startswith("DELETE FROM rag_chunks WHERE") else 0
-        if "OPTIMIZE_INDEX" in sql and self.fail:
-            raise RuntimeError("合成の整理失敗")
+        if "OPTIMIZE_INDEX" in sql:
+            if self.fail:
+                raise RuntimeError("合成の整理失敗")
+            self.optimized = True
 
     def fetchone(self) -> tuple[int, ...]:
         if "FROM user_indexes" in self.calls[-1]:
             return (int(self.present),)
-        return (self.stored, self.visible)
+        return (self.visible if self.optimized else self.stored, self.visible)
 
     def commit(self) -> None:
         self.calls.append("commit")
@@ -72,4 +75,19 @@ def test_cleanup_does_not_hide_index_purge_failure(monkeypatch: pytest.MonkeyPat
     with pytest.raises(RuntimeError, match="合成の整理失敗"):
         _oracle_test_db.cleanup_to_baseline()
     assert "commit" in connection.calls
+    assert connection.calls[-1] == "close"
+
+
+def test_cleanup_rejects_unpurged_vectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = CleanupConnection(0, True, 4, 2)
+    original_execute = connection.execute
+
+    def ineffective(sql: str, binds: Mapping[str, object] | None = None) -> None:
+        original_execute(sql, binds)
+        connection.optimized = False
+
+    monkeypatch.setattr(connection, "execute", ineffective)
+    monkeypatch.setattr(_oracle_test_db, "_connect", lambda: connection)
+    with pytest.raises(RuntimeError, match="before=4/2, after=4/2"):
+        _oracle_test_db.cleanup_to_baseline()
     assert connection.calls[-1] == "close"
