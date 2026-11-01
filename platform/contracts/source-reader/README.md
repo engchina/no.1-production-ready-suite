@@ -29,5 +29,32 @@ JSON の `data` は共有 UI の `EvidenceReadingWindow` に対応する:
 文書に章節がない場合は章節操作を無効にする。旧記録に要素 ID がない場合は引用だけ表示し、
 全文検索で似た文字を別の位置へ結び直さない。
 
-この位置は**抽出本文の文字位置**で、原 JSON のバイト位置ではない。原本のノードへの
-直接ジャンプを保証しない。完全な原本は別操作で取得できる。
+`reader` の位置は**抽出本文の Unicode codepoint**で、原 JSON のバイト位置や JS の UTF-16 index ではない。
+完全な原本は別操作で取得できる。
+
+## XML ツリー JSON の原本ノード
+
+`GET <content_url>?view=source-map&element_id=<blocks.id>&source_index=0` は、同じ署名・権限・
+chunk set の版を確認した上で、その解析成果が保存した原本対応を読む。Agent はこの公開の署名 URL を
+使用し、RAG の内部 API を呼ばない。未展開では取得しない。
+
+- RAG の引用は `GET /api/documents/{id}/source-map?chunk_id=...&element_id=...&expected_revision=<reader.revision>`。
+- 文書の構造化要素は `GET /api/documents/{id}/recipes/{recipe_id}/source-map?element_id=...&expected_revision=<active_extraction_recipe_id>`。
+- `expected_revision` は引用では chunk set、文書レシピでは解析成果の ID。署名 URL は claims の chunk set を正本とする。
+- JSON の `data.status` は `exact` / `unrecorded` / `unresolved` / `version_mismatch`。
+  版違い・旧記録・壊れた対応を全文検索で似た位置へ付け替えない。ファイル欠落は404、版の競合は409。
+- `revision` は解析成果、`chunk_revision` は引用の chunk set。`variant` は `original` / `prepared`。
+  保存した SHA256 と一致するファイルだけを使い、どちらを読んだかを表示する。
+- `pointer` は RFC6901 JSON Pointer。`source_index` / `source_count` は同一要素が参照する文字列ノードの順序と総数。
+  段落の複数ノードや結合セルの一対多の対応を保持する。引用本文が当該要素内で一意なら、対応をその引用範囲に絞る。
+  一意でなければ `anchor_status=element` とし、引用の文字範囲が未確定であることを示す。
+- `text` は原 JSON の文字列値の有界な断片（escape は原本のまま）。`offset` / `previous_offset` / `next_offset` と
+  `highlights` は、BOM を除く原 JSON または表示文字列内の Unicode codepoint。UTF-8 bytes や UTF-16 index と混同しない。
+  続きを読むときは同じ `source_index` と返却された `offset` を渡す。
+- 一応答は本文8192文字、pointer4096文字まで。原本をブラウザへ全量転送・整形しない。
+  サーバーの保存ファイル取得と JSON の構造走査は現時点では全体を読む（上限128 MiB）。ストリーム索引ではない。
+
+`xml_tree_json_v2` は parser artifacts の `json_source_map` に raw bytes の SHA256、座標単位、
+原ノード内と抽出要素内の半開範囲を保存する。本文の複写は保存せず、chunk metadata に大きな範囲配列を転記しない。
+生成見出し・Markdown 記号・置換した空白は原文の一致として扱わない。要素 ID と解析成果を固定し、
+hash・ノード・範囲内の実際の文字が一致した箇所だけを強調する。旧成果には自動で補完せず、対応する解析方式での再解析が必要。

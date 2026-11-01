@@ -1,4 +1,4 @@
-import type { EvidenceReadingInput, EvidenceReadingWindow } from "@production-ready/ui";
+import type { EvidenceReadingInput, EvidenceReadingWindow, OriginalSourceInput, OriginalSourceWindow } from "@production-ready/ui";
 import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
 /**
  * バックエンド API クライアント。
@@ -3471,6 +3471,16 @@ export const api = {
   documentReader: (id: string, chunkId: string, input: EvidenceReadingInput, signal: AbortSignal) => {
     const search = new URLSearchParams({ chunk_id: chunkId, ...input });
     return request<EvidenceReadingWindow>(`/api/documents/${encodeURIComponent(id)}/reader?${search}`, { signal });
+  },
+  documentSourceMap: (id: string, chunkId: string, input: OriginalSourceInput, signal: AbortSignal) => {
+    const search = new URLSearchParams({ chunk_id: chunkId });
+    for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
+    return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/source-map?${search}`, { signal });
+  },
+  documentRecipeSourceMap: (id: string, recipeId: string, input: OriginalSourceInput, signal: AbortSignal) => {
+    const search = new URLSearchParams();
+    for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
+    return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/source-map?${search}`, { signal });
   },
   documentTextWindow: (id: string, recipeId: string | null, body: { offset: number; limit: number; variant: string; focus?: string | null }, signal: AbortSignal) =>
     request<{ text: string; offset: number; total: number; limit: number }>(`/api/documents/${encodeURIComponent(id)}${recipeId ? `/recipes/${encodeURIComponent(recipeId)}` : ""}/text-window`, { ...jsonBody(body), signal }),

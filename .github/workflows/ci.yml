@@ -430,6 +430,8 @@ jobs:
               - "rag/backend/app/rag/*_migration.py"
               - "rag/backend/app/clients/oracle*.py"
               - "rag/backend/app/clients/native_hybrid_schema.py"
+              - "rag/backend/app/services/json_source_window.py"
+              - "rag/packages/rag_parser_core/rag_parser_core/json_source_map.py"
               - "rag/packages/rag_engine/rag_engine/adapters/oracle/native_hybrid.py"
               - "rag/backend/app/clients/document_category_store.py"
               - "rag/backend/app/clients/document_cleanup_store.py"

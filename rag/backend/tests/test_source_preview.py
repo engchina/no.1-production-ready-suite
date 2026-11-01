@@ -528,3 +528,39 @@ def test_signed_reader_is_bounded_and_does_not_fetch_file(
     assert response.json()["data"]["anchor_status"] == "unresolved"
     assert not _Storage.reads
     assert client.get(f"{path}?view=reader&scope=invalid").status_code == 422
+
+
+def test_signed_original_node_rechecks_acl_and_version(
+    auth: ProductionAuth, previews: type[_PreviewOracle], monkeypatch: MonkeyPatch
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from tests.test_json_source_window import fixture
+
+    raw, payload = fixture()
+    monkeypatch.setattr(
+        previews, "chunk_set_extraction_recipe_ids", AsyncMock(return_value={"cs-1": "ex-1"})
+    )
+    monkeypatch.setattr(
+        previews,
+        "get_document_extraction_artifact",
+        AsyncMock(return_value={"extraction_json": payload}),
+        raising=False,
+    )
+    previews.visible[("d3", "c3")].metadata["element_ids"] = "e1"
+    _Storage.files[_TEXT_PATH] = raw
+    user = auth.user_with_permissions(
+        "source-map-reader", ["menu.search"], knowledge_base_ids=["kb-1"]
+    )
+    path = _preview(user.user_uuid, "d3", "c3")["content_path"]
+    response = client.get(f"{path}?view=source-map&element_id=e1")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    result = response.json()["data"]
+    assert result["status"] == "exact" and result["pointer"] == "/a~0~1b/1"
+    assert result["revision"] == "ex-1" and result["chunk_revision"] == "cs-1"
+    assert client.get(f"{path}?view=source-map&source_index=-1").status_code == 422
+    previews.visible[("d3", "c3")].metadata["chunk_set_id"] = "cs-2"
+    assert client.get(f"{path}?view=source-map").status_code == 409
+    previews.visible.pop(("d3", "c3"))
+    assert client.get(f"{path}?view=source-map").status_code == 404

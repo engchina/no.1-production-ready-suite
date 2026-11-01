@@ -6,14 +6,15 @@ import asyncio
 import base64
 import hashlib
 import json
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, Literal
 
 from fastapi import HTTPException
 from pr_backend_core.source_text import read_source_window
 
 from app.clients.oracle import OracleClient
 from app.rag.element_locator import chunk_element_ids
+from app.schemas.search import RetrievedChunk
 
 MAX_READER_CHARS = 8192
 MAX_READER_BLOCKS = 9
@@ -268,6 +269,31 @@ async def read_source_context(
     section_id: str | None = None,
     expected_revision: str | None = None,
 ) -> dict[str, Any]:
+    chunk, revision, _, payload = await resolve_source_context(
+        oracle, document_id, chunk_id, expected_revision=expected_revision
+    )
+    ids = chunk_element_ids(chunk.metadata)
+    return await asyncio.to_thread(
+        reading_window,
+        payload if isinstance(payload, Mapping) else {},
+        revision=revision,
+        anchor_ids=ids,
+        quote=chunk.text,
+        cursor=cursor,
+        direction=direction,
+        scope=scope,
+        section_id=section_id,
+    )
+
+
+async def resolve_source_context(
+    oracle: OracleClient,
+    document_id: str,
+    chunk_id: str,
+    *,
+    expected_revision: str | None = None,
+) -> tuple[RetrievedChunk, str, str, Mapping[str, Any]]:
+    """現在の権限と chunk の版から、同一解析版の保存済み成果を解決する。"""
     chunk = await oracle.retrievable_chunk(document_id, chunk_id)
     if chunk is None:
         stale = await oracle.accessible_chunk_exists(document_id, chunk_id)
@@ -286,15 +312,40 @@ async def read_source_context(
         else None
     )
     payload = artifact.get("extraction_json") if artifact else {}
-    ids = chunk_element_ids(chunk.metadata)
-    return await asyncio.to_thread(
-        reading_window,
+    return (
+        chunk,
+        revision,
+        sources.get(revision, ""),
         payload if isinstance(payload, Mapping) else {},
-        revision=revision,
-        anchor_ids=ids,
-        quote=chunk.text,
-        cursor=cursor,
-        direction=direction,
-        scope=scope,
-        section_id=section_id,
     )
+
+
+async def read_original_context(
+    oracle: OracleClient,
+    document_id: str,
+    chunk_id: str,
+    *,
+    load: Callable[[Literal["original", "prepared"]], Awaitable[bytes]],
+    element_id: str | None = None,
+    source_index: int = 0,
+    offset: int | None = None,
+    expected_revision: str | None = None,
+) -> dict[str, Any]:
+    """引用の解析版から原 JSON の窓を読む。原本 bytes の取得は認可した呼出元へ委ねる。"""
+    from app.services.json_source_window import load_source_map_window
+
+    chunk, revision, extraction_id, payload = await resolve_source_context(
+        oracle, document_id, chunk_id, expected_revision=expected_revision
+    )
+    ids = chunk_element_ids(chunk.metadata)
+    target = element_id or next(iter(ids), "")
+    result = await load_source_map_window(
+        payload,
+        element_id=target,
+        revision=extraction_id,
+        quote=chunk.text if target in ids else "",
+        load=load,
+        source_index=source_index,
+        offset=offset,
+    )
+    return {**result, "chunk_revision": revision}

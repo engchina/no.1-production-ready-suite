@@ -394,6 +394,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/extraction-view"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_R}/source-map"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/chunk-window"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/text-window"): _DOCUMENT_VIEW,
     ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,
@@ -417,6 +418,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/figures"): _DOCUMENT_VIEW,
     ("POST", f"{_D}/text-window"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/reader"): _DOCUMENT_VIEW,
+    ("GET", f"{_D}/source-map"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     # ---- ナレッジ構築: ナレッジベース ----

@@ -8,9 +8,10 @@ import {
   Table2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useRef, type ReactNode, type Ref } from "react";
 
-import { Banner, CopyButton, Disclosure, excerptHasTable, excerptPlainText, INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS, cn } from "@production-ready/ui";
+import { OriginalSourcePanel, type OriginalSourceInput, Banner, CopyButton, Disclosure, excerptHasTable, excerptPlainText, INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS, cn } from "@production-ready/ui";
+import { api } from "@/lib/api";
 import type {
   DocumentElement,
   DocumentNavigationNode,
@@ -92,6 +93,7 @@ export function DocumentExtraction({
   onTableCellSelect,
   documentId = null,
   recipeId = null,
+  extractionRevision = null,
   onPageSelect,
   omitWarning,
 }: {
@@ -103,6 +105,7 @@ export function DocumentExtraction({
   omitWarning?: (warning: string) => boolean;
   /** 章節ナビゲーションの元にする処理レシピ（#713）。 */
   recipeId?: string | null;
+  extractionRevision?: string | null;
   /** 章節を押したとき、プレビューをそのページへ移す（#713）。 */
   onPageSelect?: (page: number) => void;
   /** 指定時は図・表の Vision 詳細に切り出し画像(crop API)を表示する。 */
@@ -115,6 +118,7 @@ export function DocumentExtraction({
   onElementSelect?: (elementId: string) => void;
   onTableCellSelect?: (table: ExtractionTable, cell: ExtractionTableCell) => void;
 }) {
+  const loadOriginal = useCallback((input: OriginalSourceInput, signal: AbortSignal) => api.documentRecipeSourceMap(documentId ?? "", recipeId ?? "", input, signal), [documentId, recipeId]);
   const parsed = parseStructuredExtraction(extraction);
   const stats = summarizeDocumentElements(parsed.elements);
   const selectedElementRef = useRef<HTMLButtonElement | null>(null);
@@ -248,6 +252,8 @@ export function DocumentExtraction({
                 onSelect={onElementSelect}
                 visionDetails={layoutVisionDetails(extraction, elementKey(element))}
                 cropUrl={documentId ? elementCropUrl(documentId, element) : null}
+                originalSource={(element.source_parser === "xml_tree_json" || typeof element.metadata?.xml_tree_unit_kind === "string") && documentId && recipeId && extractionRevision && elementKey(element) === selectedElementId
+                  ? <OriginalSourcePanel key={`${recipeId}:${extractionRevision}:${elementKey(element)}`} readingKey={`${documentId}:${recipeId}`} elementId={elementKey(element)} revision={extractionRevision} loadWindow={loadOriginal} /> : null}
               />
             ))}
           </ol>
@@ -436,6 +442,7 @@ function ElementItem({
   onSelect,
   visionDetails = null,
   cropUrl = null,
+  originalSource,
 }: {
   element: DocumentElement;
   selected: boolean;
@@ -443,6 +450,7 @@ function ElementItem({
   onSelect?: (elementId: string) => void;
   visionDetails?: ReturnType<typeof layoutVisionDetails>;
   cropUrl?: string | null;
+  originalSource?: ReactNode;
 }) {
   const id = elementKey(element);
   const lowConfidence = typeof element.confidence === "number" && element.confidence < 0.65;
@@ -514,6 +522,7 @@ function ElementItem({
           />
         </div>
       </button>
+      {originalSource}
       {visionDetails ? <VisionDetails details={visionDetails} cropUrl={cropUrl} /> : null}
     </li>
   );
