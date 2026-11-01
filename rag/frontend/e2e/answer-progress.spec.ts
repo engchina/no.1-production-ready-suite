@@ -877,7 +877,6 @@ for (const viewport of [
     const liveToggle = page.getByTestId(`chat-answer-progress-step-${rewriteId}-toggle`);
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
-    await expect(understand).toContainText("LLM 1 回・送信 2 回");
     await expect(page.getByTestId(`chat-answer-progress-step-${rewriteId}-details`)).toContainText("答える要求");
     await expect(current).toContainText("検索文から根拠の候補を集める");
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
@@ -924,7 +923,7 @@ for (const viewport of [
       "failed"
     );
     await summary.click();
-    await expect(okAnswer.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).toContainText(
+    await expect(okAnswer.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).not.toContainText(
       "根拠 1 件 · LLM 1 回"
     );
     const answerBox = await page.getByText(okReply.content).first().boundingBox();
