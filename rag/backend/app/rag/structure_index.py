@@ -105,6 +105,7 @@ async def rebuild_document_structure_index(
     document_id: str,
     *,
     expected_source: list[str] | None = None,
+    expected_job_id: str | None = None,
 ) -> dict[str, Any]:
     """保存済みactive成果からKBの構造索引だけを補建する。本文/embeddingは読み書きしない。"""
     import asyncio
@@ -226,5 +227,6 @@ async def rebuild_document_structure_index(
         graphs,
         counts["quality"],
         counts,
+        **({"expected_job_id": expected_job_id} if expected_job_id is not None else {}),
     )
     return counts

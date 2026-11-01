@@ -179,6 +179,8 @@ class StructureIndexStore:
         graphs: dict[str, Any],
         quality: str,
         result: dict[str, Any],
+        *,
+        expected_job_id: str | None = None,
     ) -> None:
         from app.clients.oracle import (
             _fetch_all,
@@ -189,6 +191,23 @@ class StructureIndexStore:
 
         def operation(connection: Any) -> None:
             # 所属の変更も同じ親行lockを使う。版確認と全レシピの置換を一つのcommitにする。
+            _require_active_knowledge_base(connection, kb_id)
+            _fetch_one(
+                connection,
+                """SELECT knowledge_base_id FROM rag_knowledge_bases
+                WHERE knowledge_base_id=:kb FOR UPDATE""",
+                {"kb": kb_id},
+            )
+            if expected_job_id is not None:
+                job = _fetch_one(
+                    connection,
+                    """SELECT job_id,status FROM rag_structure_index_jobs
+                    WHERE knowledge_base_id=:kb
+                    AND heartbeat_at >= SYSTIMESTAMP - INTERVAL '120' SECOND FOR UPDATE""",
+                    {"kb": kb_id},
+                )
+                if not job or job["job_id"] != expected_job_id or job["status"] not in ACTIVE:
+                    raise ValueError("interrupted")
             _require_active_knowledge_base(connection, kb_id)
             if _select_document_for_update(connection, document_id) is None:
                 raise KeyError("文書が見つかりません。")

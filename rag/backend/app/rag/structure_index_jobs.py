@@ -21,6 +21,7 @@ REASONS = {
     "membership_changed",
     "invalid_chunk_id",
     "authorization_changed",
+    "interrupted",
 }
 
 
@@ -189,7 +190,11 @@ class StructureIndexJobs:
                     token = set_audit_request_context(actor)
                     try:
                         result = await rebuild_document_structure_index(
-                            oracle, kb_id, did, expected_source=item["chunk_sets"]
+                            oracle,
+                            kb_id,
+                            did,
+                            expected_source=item["chunk_sets"],
+                            expected_job_id=job_id,
                         )
                     finally:
                         reset_audit_request_context(token)

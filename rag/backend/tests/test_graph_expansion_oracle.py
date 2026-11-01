@@ -238,12 +238,21 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
             b.id, doc, source_fingerprint(["old"]), ["old"], {}, "COMPLETE", {}
         )
     assert await client.fetch_knowledge_base_subgraph(b.id, limit=100) == unchanged_graph
+    from app.rag.request_context import current_audit_request_context
+    async def synthetic_actor() -> object:
+        return current_audit_request_context()
+    # DB結合テストの実行者を固定し、認証サービス自体は既存のsecurity回帰で確認する。
+    monkeypatch.setattr("app.rag.structure_index_jobs.refresh_actor",synthetic_actor)
     service = StructureIndexJobs()
     await service.start(client, b.id, "missing")
     await __import__("asyncio").gather(*service.tasks)
     persisted = await StructureIndexStore(client).get(b.id)
     assert persisted and persisted["status"] == "COMPLETED"
     assert persisted["items"][0]["status"] == "SKIPPED"
+    await service.start(client, b.id, "rebuild")
+    await __import__("asyncio").gather(*service.tasks)
+    published = await StructureIndexStore(client).get(b.id)
+    assert published and published["items"][0]["status"] == "SUCCEEDED"
     assert await client.fetch_knowledge_base_subgraph(a.id, limit=100) == before_a
     assert (await client.fetch_knowledge_base_subgraph(b.id, limit=100))[0]
     after = await client._fetch_all(

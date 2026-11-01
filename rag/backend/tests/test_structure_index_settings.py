@@ -212,6 +212,9 @@ async def test_publish_checks_source_under_lock_before_any_graph_write(
     from app.clients import structure_index_store
 
     monkeypatch.setattr(structure_index_store, "_require_active_knowledge_base", lambda *args: None)
+    monkeypatch.setattr(
+        structure_index_store, "_fetch_one", lambda *args: {"knowledge_base_id": "kb"}
+    )
     monkeypatch.setattr(db, "_select_document_for_update", lambda *args: {"document_id": "doc"})
 
     def fetch(connection: Any, sql: str, binds: Any) -> Any:
@@ -252,3 +255,33 @@ async def test_saved_job_does_not_expose_removed_or_inaccessible_documents() -> 
         {"document_id": "visible", "name": "current.txt", "status": "SUCCEEDED"}
     ]
     assert len(state["items"]) == 2
+
+
+async def test_old_job_cannot_publish_after_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.clients import structure_index_store as module
+    from app.rag.structure_index import source_fingerprint
+
+    class Oracle:
+        async def _run_transaction(self, operation: Any) -> Any:
+            return operation("connection")
+
+    monkeypatch.setattr(module, "_require_active_knowledge_base", lambda *args: None)
+
+    def fetch(connection: Any, sql: str, binds: Any) -> Any:
+        if "rag_structure_index_jobs" in sql:
+            return {"job_id": "new", "status": "RUNNING"}
+        return {"knowledge_base_id": "kb"}
+
+    monkeypatch.setattr(module, "_fetch_one", fetch)
+    store: Any = module.StructureIndexStore(Oracle())  # type: ignore[arg-type]  # 合成のtransaction adapter。
+    with pytest.raises(ValueError, match="interrupted"):
+        await store.publish(
+            "kb",
+            "doc",
+            source_fingerprint(["cs"]),
+            ["cs"],
+            {},
+            "COMPLETE",
+            {},
+            expected_job_id="old",
+        )
