@@ -68,7 +68,13 @@ async def structure_index_plan(oracle: Any, knowledge_base_id: str) -> list[dict
     for row in rows:
         did = str(row["document_id"])
         item = documents.setdefault(
-            did, {"document_id": did, "name": str(row["file_name"]), "chunk_sets": []}
+            did,
+            {
+                "document_id": did,
+                "name": str(row["file_name"]),
+                "chunk_sets": [],
+                "build_chunk_sets": [],
+            },
         )
         if row.get("chunk_set_id"):
             item["chunk_sets"].append(str(row["chunk_set_id"]))
@@ -77,13 +83,13 @@ async def structure_index_plan(oracle: Any, knowledge_base_id: str) -> list[dict
                 recipe_profile == "entities" if recipe_profile in {"off", "entities"} else default
             )
             if structure_index_enabled(override, recipe_default):
-                item["eligible"] = True
+                item["build_chunk_sets"].append(str(row["chunk_set_id"]))
             if not row.get("chunks"):
                 item["unavailable"] = "no_chunks"
             elif not row.get("headings"):
                 item["unavailable"] = "no_structure"
     for item in documents.values():
-        if item["chunk_sets"] and not item.pop("eligible", False):
+        if item["chunk_sets"] and not item["build_chunk_sets"]:
             item["unavailable"] = "disabled"
         item["fingerprint"] = source_fingerprint(item["chunk_sets"])
         built = builds.get(item["document_id"])
@@ -108,6 +114,7 @@ async def rebuild_document_structure_index(
     *,
     expected_source: list[str] | None = None,
     expected_job_id: str | None = None,
+    build_chunk_sets: list[str] | None = None,
 ) -> dict[str, Any]:
     """保存済みactive成果からKBの構造索引だけを補建する。本文/embeddingは読み書きしない。"""
     import asyncio
@@ -131,7 +138,8 @@ async def rebuild_document_structure_index(
         raise ValueError("membership_changed")
     from app.config import get_settings
 
-    if preferences[knowledge_base_id] is False:
+    fixed_target = expected_job_id is not None and build_chunk_sets is not None
+    if not fixed_target and preferences[knowledge_base_id] is False:
         raise ValueError("disabled")
     where, binds = _oracle_retrieval_where(
         {"knowledge_base_id": knowledge_base_id, "document_id": document_id}
@@ -174,7 +182,12 @@ async def rebuild_document_structure_index(
             if recipe_profile in {"off", "entities"}
             else get_settings().rag_graph_profile == "entities"
         )
-        if not structure_index_enabled(preferences[knowledge_base_id], recipe_default):
+        enabled = (
+            chunk_set_id in (build_chunk_sets or [])
+            if fixed_target
+            else structure_index_enabled(preferences[knowledge_base_id], recipe_default)
+        )
+        if not enabled:
             counts["quality"] = "PARTIAL"
             continue
         chunks = []

@@ -306,3 +306,30 @@ async def test_empty_authorized_kb_scope_does_not_fall_back_to_global() -> None:
             return {}
 
     assert await structure_index_targets(Oracle(), "doc", default=True) == []
+
+
+async def test_setting_off_does_not_change_already_confirmed_job_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients.structure_index_store import StructureIndexStore
+
+    published: list[Any] = []
+
+    async def publish(*args: Any, **kwargs: Any) -> None:
+        assert kwargs["expected_job_id"] == "confirmed-job"
+        published.append(args)
+
+    monkeypatch.setattr(StructureIndexStore, "publish", publish)
+    oracle = SavedOracle()
+    oracle.enabled = False
+    result = await rebuild_document_structure_index(
+        oracle,
+        "a",
+        "doc",
+        expected_source=["cs"],
+        expected_job_id="confirmed-job",
+        build_chunk_sets=["cs"],
+    )
+    assert result["entities"] > 1 and len(published) == 1
+    with pytest.raises(ValueError, match="disabled"):
+        await rebuild_document_structure_index(oracle, "a", "doc")

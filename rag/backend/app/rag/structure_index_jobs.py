@@ -84,7 +84,11 @@ def public_state(
         offset=offset,
         limit=limit,
         items=[
-            {k: v for k, v in item.items() if k not in {"chunk_sets", "fingerprint"}}
+            {
+                k: v
+                for k, v in item.items()
+                if k not in {"chunk_sets", "build_chunk_sets", "fingerprint"}
+            }
             for item in items[offset : offset + limit]
         ],
     )
@@ -195,6 +199,7 @@ class StructureIndexJobs:
                             did,
                             expected_source=item["chunk_sets"],
                             expected_job_id=job_id,
+                            build_chunk_sets=item.get("build_chunk_sets"),
                         )
                     finally:
                         reset_audit_request_context(token)
