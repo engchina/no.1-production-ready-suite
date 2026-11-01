@@ -36,7 +36,7 @@ from contextvars import Token
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pr_backend_core.mcp import McpToolError
 
 from app.api.routes.documents import document_content_response
@@ -141,12 +141,37 @@ async def read_source_preview_content(
     token: str,
     request: Request,
     disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
+    view: Literal["file", "reader"] = "file",
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    direction: Literal["before", "after"] = "after",
+    scope: Literal["paragraph", "section", "parent"] = "paragraph",
+    section_id: Annotated[str | None, Query(max_length=64)] = None,
 ) -> Response:
     """署名つきのトークンの文書の原文のファイルを返す。読むたびに今の権限・版を確かめる。"""
     claims = _claims(token)
     context_token = await _enter(request, claims)
     try:
         detail, artifact = await _readable_target(claims)
+        if view == "reader":
+            from app.services.source_reader import read_source_context
+
+            try:
+                data = await read_source_context(
+                    OracleClient(),
+                    claims.document_id,
+                    claims.chunk_id,
+                    expected_revision=claims.chunk_set_id,
+                    cursor=cursor,
+                    direction=direction,
+                    scope=scope,
+                    section_id=section_id,
+                )
+            except HTTPException as exc:
+                raise signed_error(exc.status_code, str(exc.detail)) from None
+            return JSONResponse(
+                {"data": data, "error_messages": [], "warning_messages": []},
+                headers={**SIGNED_RESPONSE_HEADERS, "Access-Control-Allow-Origin": "*"},
+            )
         try:
             response = await document_content_response(
                 detail,

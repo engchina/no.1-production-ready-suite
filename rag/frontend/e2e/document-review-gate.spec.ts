@@ -1,3 +1,4 @@
+import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
 import { expandSidebarSections, mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
 
@@ -171,7 +172,7 @@ async function mockReviewWorkspace(page: Page, options: { extractionWarnings?: s
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: {
         data: { items: [{ id: "kb-1", name: "社内規程", document_count: 1 }], total: 1, limit: 100, offset: 0, has_next: false },
         error_messages: [],
@@ -180,13 +181,13 @@ async function mockReviewWorkspace(page: Page, options: { extractionWarnings?: s
     })
   );
   await page.route(`**/api/documents/${DOC_ID}/recipes`, (route) =>
-    route.fulfill({ json: { data: [recipeView()], error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: [recipeView()], error_messages: [], warning_messages: [] } })
   );
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/approve`, async (route) => {
     calls.approve += 1;
     const post = route.request().postData();
     calls.approveBody = post ? JSON.parse(post) : null;
-    await route.fulfill({ json: { data: chunkJob(), error_messages: [], warning_messages: [] } });
+    await fulfillDocumentInspection(route, { json: { data: chunkJob(), error_messages: [], warning_messages: [] } });
   });
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/review-edits`, async (route) => {
     calls.save += 1;
@@ -205,33 +206,33 @@ async function mockReviewWorkspace(page: Page, options: { extractionWarnings?: s
       if (cell) cell.text = edit.text;
     }
     extraction.raw_text = extraction.elements.map((item) => item.text).join("\n");
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: recipeView(), error_messages: [], warning_messages: [] },
     });
   });
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/ingestion-jobs**`, (route) =>
-    route.fulfill({ json: { data: chunkJob(), error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: chunkJob(), error_messages: [], warning_messages: [] } })
   );
-  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/chunks`, (route) =>
-    route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } })
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/{chunks,chunk-window}**`, (route) =>
+    fulfillDocumentInspection(route, { json: { data: [], error_messages: [], warning_messages: [] } })
   );
   await page.route(`**/api/documents/${DOC_ID}/chunk-sets`, (route) =>
-    route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: [], error_messages: [], warning_messages: [] } })
   );
   await page.route(`**/api/documents/${DOC_ID}/ingestion-segments`, (route) =>
-    route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: [], error_messages: [], warning_messages: [] } })
   );
   await page.route(`**/api/documents/${DOC_ID}/ingestion-jobs**`, (route) =>
-    route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: [], error_messages: [], warning_messages: [] } })
   );
   await page.route(`**/api/documents/ingestion-jobs/job-chunk-1`, (route) =>
-    route.fulfill({ json: { data: chunkJob(), error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: chunkJob(), error_messages: [], warning_messages: [] } })
   );
   await page.route(`**/api/documents/${DOC_ID}/knowledge-bases`, (route) =>
-    route.fulfill({ json: { data: [{ id: "kb-1", name: "社内規程" }], error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: [{ id: "kb-1", name: "社内規程" }], error_messages: [], warning_messages: [] } })
   );
-  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/extraction-export**`, (route) =>
-    route.fulfill({
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/{extraction-export,extraction-view}**`, (route) =>
+    fulfillDocumentInspection(route, {
       json: {
         data: {
           document_id: DOC_ID,
@@ -255,14 +256,14 @@ async function mockReviewWorkspace(page: Page, options: { extractionWarnings?: s
     })
   );
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/content**`, (route) =>
-    route.fulfill({ status: 200, contentType: "text/plain", body: "経費申請\n交通費は1000円です。" })
+    fulfillDocumentInspection(route, { status: 200, contentType: "text/plain", body: "経費申請\n交通費は1000円です。" })
   );
   await page.route(`**/api/documents/${DOC_ID}/content**`, (route) =>
-    route.fulfill({ status: 200, contentType: "text/plain", body: "経費申請\n交通費は1000円です。" })
+    fulfillDocumentInspection(route, { status: 200, contentType: "text/plain", body: "経費申請\n交通費は1000円です。" })
   );
   // 詳細はテストごとに上書きできるよう最後に登録。
   await page.route(`**/api/documents/${DOC_ID}`, (route) =>
-    route.fulfill({ json: { data: reviewDocumentDetail("REVIEW"), error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: reviewDocumentDetail("REVIEW"), error_messages: [], warning_messages: [] } })
   );
   return calls;
 }
@@ -449,7 +450,7 @@ test("表セルの修正を下書き保存すると table_cell_edits を送信�
 test("下書き保存に失敗しても入力と未保存状態を保持する", async ({ page }) => {
   await mockReviewWorkspace(page);
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/review-edits`, (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       status: 500,
       json: {
         data: null,
@@ -475,7 +476,7 @@ test("ほかの保存と競合した 409 では理由を出し、入力を保持
   await mockReviewWorkspace(page);
   const conflict = "読み込んだ後に、ほかの操作で同じ箇所が保存されました。変更を破棄して読み込み直してから直してください。";
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/review-edits`, (route) =>
-    route.fulfill({ status: 409, json: { data: null, error_messages: [conflict], warning_messages: [] } })
+    fulfillDocumentInspection(route, { status: 409, json: { data: null, error_messages: [conflict], warning_messages: [] } })
   );
   await page.goto(`/documents/${DOC_ID}`);
 
@@ -484,7 +485,7 @@ test("ほかの保存と競合した 409 では理由を出し、入力を保持
   const elementField = page.locator("#review-edit-el-0000");
   await elementField.fill("競合する修正");
   const refetch = page.waitForRequest((request) =>
-    request.url().includes(`/api/documents/${DOC_ID}/recipes/recipe-1/extraction-export`)
+    request.url().includes(`/api/documents/${DOC_ID}/recipes/recipe-1/extraction-view`)
   );
   await page.getByRole("button", { name: "変更を保存" }).click();
 
@@ -572,7 +573,7 @@ test("レシピを切り替えるときは未保存の修正の破棄を確認�
     active_extraction_recipe_id: "er-recipe-2-r1",
   };
   await page.route(`**/api/documents/${DOC_ID}/recipes`, (route) =>
-    route.fulfill({ json: { data: [recipeView(), recipe2], error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: [recipeView(), recipe2], error_messages: [], warning_messages: [] } })
   );
   let recipe2Saves = 0;
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-2/**`, async (route) => {
@@ -580,10 +581,10 @@ test("レシピを切り替えるときは未保存の修正の破棄を確認�
     const extraction = reviewDocumentDetail("REVIEW").extraction;
     if (path.endsWith("/review-edits")) {
       recipe2Saves += 1;
-      await route.fulfill({ json: { data: recipe2, error_messages: [], warning_messages: [] } });
-    } else if (path.endsWith("/extraction-export")) {
+      await fulfillDocumentInspection(route, { json: { data: recipe2, error_messages: [], warning_messages: [] } });
+    } else if ((path.endsWith("/extraction-export") || path.endsWith("/extraction-view"))) {
       // 抽出結果はレシピ1と同じ（保存済みの内容）。
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         json: {
           data: {
             document_id: DOC_ID,
@@ -605,9 +606,9 @@ test("レシピを切り替えるときは未保存の修正の破棄を確認�
         },
       });
     } else if (path.endsWith("/content")) {
-      await route.fulfill({ status: 200, contentType: "text/plain", body: extraction.raw_text });
+      await fulfillDocumentInspection(route, { status: 200, contentType: "text/plain", body: extraction.raw_text });
     } else {
-      await route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } });
+      await fulfillDocumentInspection(route, { json: { data: [], error_messages: [], warning_messages: [] } });
     }
   });
   await page.goto(`/documents/${DOC_ID}`);
@@ -655,11 +656,11 @@ test("処理レシピの操作の失敗は、そのレシピを選んでいる�
   await mockReviewWorkspace(page);
   const recipe2 = { ...recipeView(), recipe_id: "recipe-2", slot_no: 2 };
   await page.route(`**/api/documents/${DOC_ID}/recipes`, (route) =>
-    route.fulfill({ json: { data: [recipeView(), recipe2], error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: [recipeView(), recipe2], error_messages: [], warning_messages: [] } })
   );
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1`, (route) =>
     route.request().method() === "DELETE"
-      ? route.fulfill({
+      ? fulfillDocumentInspection(route, {
           status: 409,
           json: { data: null, error_messages: ["処理中のレシピは削除できません。"], warning_messages: [] },
         })
@@ -696,7 +697,7 @@ test("分類の有効期間の終了日が開始日より後でなければ、�
   let saves = 0;
   await page.route(`**/api/documents/${DOC_ID}/classification`, async (route) => {
     saves += 1;
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: reviewDocumentDetail("REVIEW"), error_messages: [], warning_messages: [] },
     });
   });
@@ -719,4 +720,27 @@ test("分類の有効期間の終了日が開始日より後でなければ、�
   await expect(page.getByText("終了日は開始日より後の日付にしてください。")).toHaveCount(0);
   await page.getByRole("button", { name: "分類を保存" }).click();
   await expect.poll(() => saves).toBe(1);
+});
+
+
+test("部分本文の下書きはタブ切替後も編集開始時の位置を保持する", {tag:"@responsive"}, async ({page}) => {
+  const calls = await mockReviewWorkspace(page);
+  let offset = 8192;
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/extraction-view?**`, route => {
+    const extraction = reviewDocumentDetail("REVIEW").extraction;
+    return fulfillDocumentInspection(route, { json: { data: { payload: { ...extraction, elements: [{ element_id: "el-0000", kind: "text", text: "合成の部分本文", metadata: { preview_text_offset: offset, preview_text_sha256: "1".repeat(64) } }] } } } });
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+  await page.getByRole("tab",{name:"構造化要素",exact:true}).click();
+  await page.getByRole("button",{name:"構造化要素を修正",exact:true}).click();
+  await page.locator("#review-edit-el-0000").fill("合成の編集 A");
+  await page.getByRole("button",{name:"編集を閉じる",exact:true}).click();
+  await page.getByRole("tab",{name:"本文テキスト",exact:true}).click();
+  offset = 0;
+  await page.getByRole("tab",{name:"構造化要素",exact:true}).click();
+  await page.getByRole("button",{name:"構造化要素を修正",exact:true}).click();
+  await page.locator("#review-edit-el-0000").fill("合成の編集 B");
+  await page.getByRole("button",{name:"変更を保存",exact:true}).click();
+  await expect(page.getByText("変更を保存しました。",{exact:true})).toBeVisible();
+  expect((calls.saveBody as {element_edits:unknown[]}).element_edits).toContainEqual({element_id:"el-0000",text:"合成の編集 B",base_text:"合成の部分本文",base_offset:8192,base_sha256:"1".repeat(64)});
 });

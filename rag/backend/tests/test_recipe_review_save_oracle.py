@@ -237,7 +237,13 @@ async def test_concurrent_review_saves_keep_both_element_edits() -> None:
         document_id=detail.id, extraction_recipe_id=base_id
     )
     assert base is not None
-    assert base["extraction_json"] == original
+    base_json = base["extraction_json"]
+    assert isinstance(base_json, dict)
+    base_content = dict(base_json)
+    assert base_content.pop("parser_artifacts") == {
+        "inspection_index": {"version": 1, "elements": {"a": 0, "b": 1}}
+    }
+    assert base_content == original
     row = await client.get_document_recipe(detail.id, recipe_id)
     assert row is not None
     assert row["active_extraction_recipe_id"] == reviewed_id

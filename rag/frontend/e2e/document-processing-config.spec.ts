@@ -1,3 +1,4 @@
+import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
 
 import type { DocumentProcessingConfig, DocumentRecipeStep } from "../src/lib/api";
@@ -153,7 +154,7 @@ async function mockWorkspace(
   // 処理設定パネルは文書解析の設定から対応形式と MinerU のライセンスの確認を読む（#3359）。
   const mineruLicenseAcknowledged = options.mineruLicenseAcknowledged ?? true;
   await page.route("**/api/settings/parser-adapters", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok({
         capabilities: [],
         mineru_license: mineruLicenseAcknowledged
@@ -167,7 +168,7 @@ async function mockWorkspace(
     })
   );
   await page.route("**/api/knowledge-bases**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok({
         items: [{ id: "kb-1", name: "社内規程" }],
         total: 1,
@@ -179,7 +180,7 @@ async function mockWorkspace(
   );
   await page.route("**/api/documents/doc-1/recipes", (route) => {
     if (route.request().method() === "GET") {
-      return route.fulfill({
+      return fulfillDocumentInspection(route, {
         json: ok(
           Array.from({ length: options.recipeCount ?? 1 }, (_, index) =>
             recipeResponse(index + 1)
@@ -187,12 +188,12 @@ async function mockWorkspace(
         ),
       });
     }
-    return route.fulfill({ status: 404, json: { data: null, error_messages: [], warning_messages: [] } });
+    return fulfillDocumentInspection(route, { status: 404, json: { data: null, error_messages: [], warning_messages: [] } });
   });
   await page.route("**/api/documents/doc-1/recipes/recipe-1", (route) => {
     if (route.request().method() === "PUT") {
       if (options.putFails) {
-        return route.fulfill({
+        return fulfillDocumentInspection(route, {
           status: 409,
           json: {
             data: null,
@@ -205,13 +206,13 @@ async function mockWorkspace(
       processing = saved;
       configRevision += 1;
     }
-    return route.fulfill({ json: ok(recipeResponse()) });
+    return fulfillDocumentInspection(route, { json: ok(recipeResponse()) });
   });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/ingestion-jobs**", (route) => {
     if (route.request().method() === "POST") {
       ingestionPosts += 1;
       if (options.enqueueConflictUntilSaved && configRevision === 1) {
-        return route.fulfill({
+        return fulfillDocumentInspection(route, {
           status: 409,
           json: {
             data: null,
@@ -221,10 +222,10 @@ async function mockWorkspace(
         });
       }
     }
-    return route.fulfill({ json: ok([]) });
+    return fulfillDocumentInspection(route, { json: ok([]) });
   });
-  await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", (route) =>
-    route.fulfill({
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/{chunks,chunk-window}**", (route) =>
+    fulfillDocumentInspection(route, {
       json: ok(
         options.storedChunkMetadata
           ? [
@@ -252,7 +253,7 @@ async function mockWorkspace(
     previewPosts += 1;
     previewPayload = route.request().postDataJSON();
     if (options.previewFails) {
-      return route.fulfill({
+      return fulfillDocumentInspection(route, {
         status: 503,
         json: {
           data: null,
@@ -261,7 +262,7 @@ async function mockWorkspace(
         },
       });
     }
-    return route.fulfill({
+    return fulfillDocumentInspection(route, {
       json: ok({
         chunks: [
           {
@@ -295,8 +296,8 @@ async function mockWorkspace(
       }),
     });
   });
-  await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", (route) =>
-    route.fulfill({
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/{extraction-export,extraction-view}**", (route) =>
+    fulfillDocumentInspection(route, {
       json: ok({
         document_id: "doc-1",
         file_name: "policy.pdf",
@@ -316,23 +317,23 @@ async function mockWorkspace(
     })
   );
   await page.route("**/api/documents/doc-1/ingestion-jobs**", (route) =>
-    route.fulfill({ json: ok([]) })
+    fulfillDocumentInspection(route, { json: ok([]) })
   );
-  await page.route("**/api/documents/doc-1/chunk-sets", (route) => route.fulfill({ json: ok([]) }));
+  await page.route("**/api/documents/doc-1/chunk-sets", (route) => fulfillDocumentInspection(route, { json: ok([]) }));
   await page.route("**/api/documents/doc-1/ingestion-segments", (route) =>
-    route.fulfill({ json: ok([]) })
+    fulfillDocumentInspection(route, { json: ok([]) })
   );
   await page.route("**/api/documents/doc-1/knowledge-bases", (route) =>
-    route.fulfill({ json: ok([{ id: "kb-1", name: "社内規程" }]) })
+    fulfillDocumentInspection(route, { json: ok([{ id: "kb-1", name: "社内規程" }]) })
   );
   await page.route("**/api/documents/doc-1/content**", (route) =>
-    route.fulfill({ status: 204, body: "" })
+    fulfillDocumentInspection(route, { status: 204, body: "" })
   );
   await page.route("**/api/documents/doc-1/recipes/recipe-1/content**", (route) =>
-    route.fulfill({ status: 204, body: "" })
+    fulfillDocumentInspection(route, { status: 204, body: "" })
   );
   await page.route("**/api/documents/doc-1", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok({ ...documentDetail, status }),
     })
   );
@@ -647,7 +648,7 @@ test("要約と上書きの一覧は、同じ項目を取込の処理順に並�
 test("グローバル設定に従う行に、全体の既定を変える画面へのリンクを出す", async ({ page }) => {
   await mockWorkspace(page);
   await page.route("**/api/settings/pipeline", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok({
         auto_parse_after_preprocess_enabled: true,
         auto_chunk_after_extract_enabled: true,
@@ -723,7 +724,7 @@ test("レシピ比較で空の引用を理由付きの状態として表示す�
   const searchRequests: Array<Record<string, unknown>> = [];
   await page.route("**/api/search", (route) => {
     searchRequests.push(route.request().postDataJSON() as Record<string, unknown>);
-    return route.fulfill({
+    return fulfillDocumentInspection(route, {
       json: ok({
         answer: "取得候補の関連度が十分でないため、回答に使える根拠がありませんでした。",
         citations: [],
@@ -761,7 +762,7 @@ test("レシピ比較の引用も共有 score layout で表示する", async ({ 
       filters?: { chunk_set_id?: string };
     };
     const chunkSetId = request.filters?.chunk_set_id ?? "chunk-set";
-    return route.fulfill({
+    return fulfillDocumentInspection(route, {
       json: ok({
         answer: "承認条件の比較結果です。",
         citations: [
@@ -895,7 +896,7 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
   await mockWorkspace(page);
   // 後着 route が優先される。派生 layer 状態と抽出 payload を上書きする。
   await page.route("**/api/documents/doc-1/chunk-sets", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok([
         {
           chunk_set_id: "chunk-set-recipe-1",
@@ -931,8 +932,8 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
       ]),
     })
   );
-  await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", (route) =>
-    route.fulfill({
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/{extraction-export,extraction-view}**", (route) =>
+    fulfillDocumentInspection(route, {
       json: ok({
         document_id: "doc-1",
         file_name: "policy.pdf",
@@ -965,7 +966,7 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
   );
   // 全体の既定を 0 件で保存した環境（未保存なら標準の項目を使う。#556）。
   await page.route("**/api/settings/extraction-fields", (route) =>
-    route.fulfill({ json: ok({ fields: [], uses_standard: false }) })
+    fulfillDocumentInspection(route, { json: ok({ fields: [], uses_standard: false }) })
   );
 
   await page.goto("/documents/doc-1");
@@ -979,7 +980,7 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
   // 構造化要素タブに章節ナビ・図表要約・抽出項目の折りたたみセクション。章節は章節の API から
   // 読み、抽出の章節の要約を添える（#713）。
   await page.route("**/api/documents/doc-1/sections**", (route) =>
-    route.fulfill({
+    fulfillDocumentInspection(route, {
       json: ok({
         document_id: "doc-1",
         source: "extraction",
@@ -1038,7 +1039,7 @@ for (const theme of ["light", "dark"] as const) {
     await setTheme(page, theme);
     await mockWorkspace(page);
     await page.route("**/api/settings/extraction-fields", (route) =>
-      route.fulfill({
+      fulfillDocumentInspection(route, {
         json: ok({
           fields: [
             { name: "文書の種類", description: "", value_type: "string" },
@@ -1092,7 +1093,7 @@ for (const theme of ["light", "dark"] as const) {
     await mockWorkspace(page);
     // 後着 route が優先される。項目抽出だけが作り直しが必要（#550）。
     await page.route("**/api/documents/doc-1/chunk-sets", (route) =>
-      route.fulfill({
+      fulfillDocumentInspection(route, {
         json: ok([
           {
             chunk_set_id: "chunk-set-recipe-1",

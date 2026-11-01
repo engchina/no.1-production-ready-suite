@@ -1,3 +1,4 @@
+import { fulfillDocumentInspection } from "./document-inspection-mocks";
 import { expect, type Page, test } from "./fixtures/test";
 import {
   expectMainScrollEndsAtContent,
@@ -223,11 +224,11 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
   let searchBody = null as Record<string, unknown> | null;
   await mockDocumentDetail(page);
   await page.route("**/api/search-answer-profiles/*/approved-faq/suggest", (route) =>
-    route.fulfill({ json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
+    fulfillDocumentInspection(route, { json: { data: { suggestions: [] }, error_messages: [], warning_messages: [] } })
   );
   await page.route("**/api/search/stream", async (route) => {
     searchBody = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       status: 200,
       headers: { "content-type": "text/event-stream" },
       body: searchStreamBody(),
@@ -256,20 +257,20 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   let feedbackPayload = null as Record<string, unknown> | null;
   await mockDocumentDetail(page);
   await page.route("**/api/search/stream", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       status: 200,
       headers: { "content-type": "text/event-stream" },
       body: searchStreamBody(),
     });
   });
   await page.route("**/api/feedback/current?*", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: [], error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/feedback", async (route) => {
     feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           feedback_id: "feedback-1",
@@ -407,7 +408,7 @@ async function mockDocumentSections(page: Page) {
       state.sections = extractedSections();
       state.revision = null;
     }
-    await route.fulfill({ json: envelope() });
+    await fulfillDocumentInspection(route, { json: envelope() });
   });
   return state;
 }
@@ -579,7 +580,7 @@ for (const viewport of [
 test("文書詳細の版の保存の失敗は、操作の行に理由を出す", async ({ page }) => {
   await mockDocumentDetail(page);
   await page.route("**/api/documents/doc-1/superseded-by", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       status: 422,
       json: {
         data: null,
@@ -657,7 +658,7 @@ async function mockDocumentDetail(
   ];
 
   await page.route("**/api/knowledge-bases**", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           items: catalog,
@@ -673,7 +674,7 @@ async function mockDocumentDetail(
   });
   await page.route("**/api/search-answer-profiles**", async (route) => {
     // 検索ページは検索・回答プロファイル選択が前提のため、最低 1 件を返す。
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           items: [
@@ -710,7 +711,7 @@ async function mockDocumentDetail(
         .map(({ id, name }) => ({ id, name }));
     }
 
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: membership,
         error_messages: [],
@@ -859,7 +860,7 @@ async function mockDocumentDetail(
           ...item,
           is_superseded: item.superseded_by_document_id !== null,
         }));
-      await route.fulfill({
+      await fulfillDocumentInspection(route, {
         json: {
           data: { items, total: items.length, limit: 50, offset: 0, has_next: false },
           error_messages: [],
@@ -872,29 +873,29 @@ async function mockDocumentDetail(
     const payload = route.request().postDataJSON() as Record<string, unknown>;
     state.supersededPayloads.push(payload);
     state.supersededBy = (payload.superseded_by_document_id as string | null) ?? null;
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: documentData(), error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/document-categories", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: CATEGORY_TREE, error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/documents/doc-1/classification", async (route) => {
     state.lastClassificationPayload = route.request().postDataJSON() as Record<string, unknown>;
     state.classification = state.lastClassificationPayload;
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: documentData(), error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/documents/doc-1", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: { data: documentData(), error_messages: [], warning_messages: [] },
     });
   });
   await page.route("**/api/documents/doc-1/recipes", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [
           {
@@ -932,8 +933,8 @@ async function mockDocumentDetail(
       },
     });
   });
-  await page.route("**/api/documents/doc-1/recipes/recipe-1/extraction-export**", async (route) => {
-    await route.fulfill({
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/{extraction-export,extraction-view}**", async (route) => {
+    await fulfillDocumentInspection(route, {
       json: {
         data: {
           document_id: "doc-1",
@@ -955,8 +956,8 @@ async function mockDocumentDetail(
       },
     });
   });
-  await page.route("**/api/documents/doc-1/recipes/recipe-1/chunks", async (route) => {
-    await route.fulfill({
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/{chunks,chunk-window}**", async (route) => {
+    await fulfillDocumentInspection(route, {
       json: {
         data: overrides?.chunks ?? [
           {
@@ -1004,21 +1005,21 @@ async function mockDocumentDetail(
     });
   });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/content**", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       status: 200,
       headers: { "content-type": "text/plain" },
       body: "# 経費申請\n| 項目 | 金額 |",
     });
   });
   await page.route("**/api/documents/doc-1/content**", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       status: 200,
       headers: { "content-type": "text/plain" },
       body: "# 経費申請\n| 項目 | 金額 |",
     });
   });
   await page.route("**/api/documents/doc-1/chunks", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: overrides?.chunks ?? [
           {
@@ -1066,7 +1067,7 @@ async function mockDocumentDetail(
     });
   });
   await page.route("**/api/documents/doc-1/chunk-sets", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [],
         error_messages: [],
@@ -1075,7 +1076,7 @@ async function mockDocumentDetail(
     });
   });
   await page.route("**/api/documents/doc-1/ingestion-jobs**", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [],
         error_messages: [],
@@ -1084,7 +1085,7 @@ async function mockDocumentDetail(
     });
   });
   await page.route("**/api/documents/doc-1/ingestion-segments", async (route) => {
-    await route.fulfill({
+    await fulfillDocumentInspection(route, {
       json: {
         data: [],
         error_messages: [],
@@ -1210,7 +1211,7 @@ for (const { summarized, ruleSummary, staleRules } of [{ summarized: false, rule
     await page.route("**/api/documents/doc-1/sections**", async (route) => {
       const parser = mode === "parser";
       const id = parser ? "nav-a" : "rule-a";
-      await route.fulfill({ json: {
+      await fulfillDocumentInspection(route, { json: {
         data: { document_id: "doc-1", source: "extraction", rules_mode: mode, summary_rules_match: staleRules ? false : null,
           sections: [{ id, title: parser ? "解析見出し A" : "1. 節 A", level: 1, page_start: 1, page_end: 1, origin: "extraction", source_section_id: id, edited: false }],
           extraction_section_count: 1, page_count: 1, revision: null, updated_at: null },
@@ -1287,8 +1288,8 @@ test("本文・構造化要素・Chunk はプレビューの現在ページだ�
   await mockDocumentSections(page);
   await page.route("**/preview-pages**", route => {
     const url = new URL(route.request().url());
-    if (/preview-pages\/\d+$/.test(url.pathname)) return route.fulfill({contentType: "image/png", body: Buffer.from(PNG_PIXEL.split(",")[1], "base64")});
-    return route.fulfill({json: {data: {pages: [1,2,3].map(n => ({page_number: n, width: 600, height: 800})), page_count: 3}, error_messages: [], warning_messages: []}});
+    if (/preview-pages\/\d+$/.test(url.pathname)) return fulfillDocumentInspection(route, {contentType: "image/png", body: Buffer.from(PNG_PIXEL.split(",")[1], "base64")});
+    return fulfillDocumentInspection(route, {json: {data: {pages: [1,2,3].map(n => ({page_number: n, width: 600, height: 800})), page_count: 3}, error_messages: [], warning_messages: []}});
   });
   await page.goto("/documents/doc-1");
   await expect(page.getByTestId("inspector-current-page")).toHaveText("表示中のページ: p.1");
@@ -1329,6 +1330,8 @@ test("構造化要素は共通の最大高さで内部スクロールする", { 
   expect(dimensions.content).toBeGreaterThan(dimensions.height);
   await list.focus(); await list.press("End");
   await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await page.getByTestId("document-inspector-pane").getByRole("button", { name: "次へ", exact: true }).click();
+  await expect(list.getByText("合成要素 40", {exact: true})).toBeAttached();
   await list.getByText("合成要素 40", {exact: true}).scrollIntoViewIfNeeded();
   await expect(list.getByText("合成要素 40", {exact: true})).toBeInViewport();
   await list.screenshot({path: test.info().outputPath("structured-elements-scroll.png")});

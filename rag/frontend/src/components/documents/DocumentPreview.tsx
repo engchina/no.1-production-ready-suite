@@ -5,17 +5,12 @@ import { useCallback, useMemo } from "react";
 import {
   api,
   ApiError,
-  apiErrorFromEnvelope,
-  apiErrorFromFetchFailure,
-  notifyResponseAuthStatus,
   type DocumentPreprocessArtifact,
   type SourcePreviewKind,
   type SourceProfile,
 } from "@/lib/api";
-import { appPath } from "@/lib/base-path";
 import { t } from "@/lib/i18n";
 import { useDocumentPreviewPages } from "@/lib/queries";
-import { charsetFromContentType, decodeText } from "@/lib/text-decode";
 import {
   DocumentPreview as SharedDocumentPreview,
   documentPreviewLabels,
@@ -40,7 +35,7 @@ function kindOf(fileName: string, sourceProfile?: SourceProfile | null): Kind {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
   if (["png", "jpg", "jpeg", "gif", "webp", "bmp"].includes(ext)) return "image";
   if (ext === "pdf") return "pdf";
-  if (["txt", "csv", "md", "json", "log", "html", "htm", "eml"].includes(ext)) return "text";
+  if (["txt", "csv", "tsv", "md", "json", "xml", "log", "html", "htm", "eml"].includes(ext)) return "text";
   if (["doc", "docx", "ppt", "pptx", "xls", "xlsx"].includes(ext)) return "office";
   return "unsupported";
 }
@@ -142,7 +137,9 @@ export function DocumentPreview({
           ? "text"
           : "unsupported";
   const pages = useDocumentPdfPages(documentId, recipeId, pdfVariant, sharedKind === "pdf");
-  const loadText = useCallback((signal: AbortSignal) => loadDocumentText(url, signal), [url]);
+  const loadTextRange = useCallback((offset: number, signal: AbortSignal) =>
+    api.documentTextWindow(documentId, recipeId, { offset, limit: 8192, variant,
+      focus: offset === 0 ? focusText : null }, signal), [documentId, recipeId, variant, focusText]);
 
   return (
     <SharedDocumentPreview
@@ -153,7 +150,7 @@ export function DocumentPreview({
       imageUrl={url}
       pages={pages}
       iframeUrl={pdfPreviewUrl(pdfUrl, focusPage)}
-      loadText={loadText}
+      loadTextRange={loadTextRange}
       textKey={url}
       focusText={focusText}
       // 表示できない形式（Office の原本・処理後の JSONL など）は、形式によらず共通の案内の 1 文にする（#2679）。
@@ -199,27 +196,6 @@ function useDocumentPdfPages(
   // ほかの失敗（描けないファイル・古い backend）は iframe の表示に戻す。
   if (pagesQuery.isError) return { status: "fallback" };
   return { status: "ready", pages };
-}
-
-/** 本文を読む（文字コードを判定して復号する。失敗は backend の理由と対処を持つ ApiError）。 */
-async function loadDocumentText(url: string, signal: AbortSignal): Promise<string> {
-  const request = { method: "GET", path: url.split("?")[0] };
-  try {
-    // url は api の URL を作る関数が base を付けて返す。送る所でも通す（何度通しても 1 回だけ付く。#1316）。
-    const res = await fetch(appPath(url), { signal, credentials: "same-origin" });
-    if (!res.ok) {
-      // セッション切れはログインへ。経路の権限拒否以外の 403 はプレビュー内の失敗表示にとどめる（#224）。
-      notifyResponseAuthStatus(res);
-      // 原本が保存先に無いなど、backend が返した理由と対処を出す（#1210）。
-      const envelope: unknown = await res.json().catch(() => null);
-      throw apiErrorFromEnvelope(res.status, envelope, res.headers.get("X-Request-ID"));
-    }
-    const charset = charsetFromContentType(res.headers.get("Content-Type"));
-    return decodeText(await res.arrayBuffer(), charset);
-  } catch (error) {
-    if (error instanceof ApiError || (error instanceof DOMException && error.name === "AbortError")) throw error;
-    throw apiErrorFromFetchFailure(error, request) ?? error;
-  }
 }
 
 /** 文書のファイルが保存先に無い（backend の `error_code`。#1210）。 */

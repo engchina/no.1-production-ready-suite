@@ -393,6 +393,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/preview-pages"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_R}/extraction-view"): _DOCUMENT_WORKSPACE,
+    ("GET", f"{_R}/chunk-window"): _DOCUMENT_WORKSPACE,
+    ("POST", f"{_R}/text-window"): _DOCUMENT_VIEW,
     ("POST", f"{_R}/approve"): _DOCUMENT_WORKSPACE,
     ("PATCH", f"{_R}/review-edits"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/chunk-sets"): _DOCUMENT_WORKSPACE,
@@ -412,6 +415,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
     # 根拠の図の画像（RAG の根拠のカード・サイドパネルの「図を開く」。#2428）。
     ("GET", "/figures"): _DOCUMENT_VIEW,
+    ("POST", f"{_D}/text-window"): _DOCUMENT_VIEW,
+    ("GET", f"{_D}/reader"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages"): _DOCUMENT_VIEW,
     ("GET", f"{_D}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     # ---- ナレッジ構築: ナレッジベース ----

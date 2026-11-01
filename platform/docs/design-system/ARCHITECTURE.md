@@ -302,3 +302,15 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 デザインシステム側（Claude Design）で決定が変わったときは、`docs/design-system/` の
 該当ファイルを差分で更新する PR を出してください。**git の履歴が、誰がいつ何を
 変えたかの唯一の記録になります。**
+
+
+### 大きな本文と引用の閲覧
+
+文書の画面は概要・部分閲覧・完全ダウンロードを分ける。`DocumentPreview.loadTextRange` は
+8192文字以下の窓だけを描画し、抽出要素と Chunk は server-side の範囲指定と共通 Pagination を使う。
+取得前を空の結果と扱わず、`TimedLoadingState` と Skeleton、失敗時の再試行を表示する。
+
+RAG と Agent のテキストの根拠は共通 `EvidenceReader` を使い、引用を含む原要素から
+前後・章節へ広げる。直近3窓を上限とし、前文を足すときは既表示の要素の位置を保つ。
+追加の参考文脈と引用の元の段落を区別する。完全な原本は明示した別操作で取得する。
+公開の応答と版・権限の条件は [引用読み取り契約](../../contracts/source-reader/README.md) を正本とする。

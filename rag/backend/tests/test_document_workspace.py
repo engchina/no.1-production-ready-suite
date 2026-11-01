@@ -1,6 +1,7 @@
 """文書プレビュー（原本配信）と抽出本文表示用 API のテスト。"""
 
 import hashlib
+import json
 from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -3930,8 +3931,8 @@ def test_document_extraction_export_returns_json_payload(
     data = resp.json()["data"]
     assert data["format"] == "json"
     assert data["content_type"].startswith("application/json")
-    assert data["payload"]["document_type"] == "社内規程"
-    assert data["payload"]["elements"][0]["element_id"] == "el-1"
+    assert json.loads(data["content"])["document_type"] == "社内規程"
+    assert json.loads(data["content"])["elements"][0]["element_id"] == "el-1"
     assert '"document_type": "社内規程"' in data["content"]
 
 
@@ -3971,8 +3972,8 @@ def test_document_extraction_export_returns_chunk_view_without_embeddings(
     data = resp.json()["data"]
     assert data["format"] == "chunks"
     assert data["content_type"].startswith("application/json")
-    assert data["chunks"][0]["chunk_id"] == f"{document_id}:0"
-    assert data["chunks"][0]["element_ids"] == ["el-1"]
+    assert json.loads(data["content"])["chunks"][0]["chunk_id"] == f"{document_id}:0"
+    assert json.loads(data["content"])["chunks"][0]["element_ids"] == ["el-1"]
     assert "embedding" not in data["content"].casefold()
 
 
@@ -4185,3 +4186,33 @@ def test_record_boundaries_are_hidden_in_review_and_exports() -> None:
     assert JSONL_RECORD_BOUNDARY not in documents_route._extraction_html(extraction)
     literal = StructuredExtraction(raw_text=f"原文の記号: {JSONL_RECORD_BOUNDARY}")
     assert JSONL_RECORD_BOUNDARY in str(literal.to_document_payload()["display_text"])
+
+
+def test_partial_element_review_preserves_unseen_text() -> None:
+    import hashlib
+
+    from app.api.routes.documents import _reviewed_extraction_with_edits
+    from app.schemas.document import DocumentReviewEditsRequest
+
+    extraction = StructuredExtraction.model_validate(_review_extraction_payload())
+    current = extraction.elements[0].text
+    edits = DocumentReviewEditsRequest(
+        element_edits=[
+            {
+                "element_id": "el-0000",
+                "text": "合成",
+                "base_text": current[1:3],
+                "base_offset": 1,
+                "base_sha256": hashlib.sha256(current.encode()).hexdigest(),
+            }
+        ]
+    )
+    updated = _reviewed_extraction_with_edits(extraction, edits)
+    assert updated.elements[0].text == current[:1] + "合成" + current[3:]
+    stale = edits.model_copy(
+        update={
+            "element_edits": [edits.element_edits[0].model_copy(update={"base_sha256": "0" * 64})]
+        }
+    )
+    with pytest.raises(DocumentReviewEditConflictError):
+        _reviewed_extraction_with_edits(extraction, stale)

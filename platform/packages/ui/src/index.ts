@@ -982,3 +982,4 @@ export {
 export { ViewportScrollRegion } from "./components/data/viewport-scroll-region";
 
 export { TraceExplorer, DEFAULT_TRACE_EXPLORER_LABELS, type TraceExplorerLabels } from "./components/data/trace-explorer";
+export { EvidenceReader, type EvidenceReadingInput, type EvidenceReadingWindow } from "./components/document-preview/evidence-reader";

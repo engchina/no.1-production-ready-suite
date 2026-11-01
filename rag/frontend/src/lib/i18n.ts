@@ -3,6 +3,7 @@ import { TRACE_DETAILS_JA } from "@production-ready/ui";
  * 日本語文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
+  "flow.inspector.longElement": "長い要素の本文を分割して表示しています。前後の内容はページ送りで確認できます。",
   ...TRACE_DETAILS_JA,
   "app.title": "Production Ready RAG",
   "app.sidebarTitle.line1": "Production Ready",
@@ -3003,7 +3004,7 @@ export const ja = {
   "flow.extraction.empty": "まだ抽出結果がありません。取込を実行してください。",
   "flow.extraction.documentType": "文書種別",
   "flow.extraction.confidence": "信頼度",
-  "flow.extraction.structureStats": "構造化抽出統計",
+  "flow.extraction.structureStats": "表示範囲の構造化抽出統計",
   "flow.extraction.warning.generic": "抽出の処理で確認が必要な点があります。",
   "flow.extraction.warning.codes": "警告コード: {codes}",
   "flow.extraction.stats.elements": "要素",

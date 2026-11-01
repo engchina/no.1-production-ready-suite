@@ -364,45 +364,30 @@ for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
 ]) {
-  test(`原本が無いテキストの引用プレビューは理由と対処を出し、再試行できる (${viewport.name})`, async ({
-    page,
-  }) => {
+  test(`引用本文の取得失敗は理由と対処を出し、再試行できる (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockKbPage(page, 1);
-    let originalRestored = false;
-    await page.route(/\/api\/documents\/doc-1\/content(?:\?|$)/, (route) =>
-      originalRestored
-        ? route.fulfill({
-            status: 200,
-            headers: { "content-type": "text/markdown; charset=utf-8" },
-            body: "# 経費精算マニュアル",
-          })
-        : route.fulfill(missingOriginal)
-    );
-    await page.route("**/api/search/stream", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "text/event-stream",
-        body: searchStreamBody("経費精算マニュアル.md"),
-      })
-    );
-
+    let restored = false;
+    let originalRequests = 0;
+    const message = "根拠を閲覧できません。";
+    await page.route(/\/api\/documents\/doc-1\/content(?:\?|$)/, route => { originalRequests++; return route.fulfill(missingOriginal); });
+    await page.route(/\/api\/documents\/doc-1\/reader(?:\?|$)/, route => restored
+      ? route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"e1",text:"合成の引用本文",offset:0,highlights:[],cited:true}],previous_cursor:null,next_cursor:null,outline:[]}}})
+      : route.fulfill({status:404,json:{data:null,error_messages:[message],warning_messages:[]}}));
+    await page.route("**/api/search/stream", route => route.fulfill({status:200,contentType:"text/event-stream",body:searchStreamBody("文書 A.md")}));
     await page.goto("/knowledge-bases/kb-1");
-    await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("経費の上限は？");
+    await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("合成の質問");
     await page.getByRole("button", { name: "検索テスト" }).click();
     await page.getByRole("button", { name: /の根拠を表示$/ }).click();
-
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText(MISSING_ORIGINAL)).toBeVisible();
-    // 固定の文言だけにしない。状態コードなどは「詳細」に畳む。
-    await expect(dialog.getByText("プレビューを取得できませんでした。")).toHaveCount(0);
+    await expect(dialog.getByText(message,{exact:true})).toBeVisible();
     await expect(dialog.getByText("詳細", { exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
-
-    originalRestored = true;
-    await dialog.getByRole("button", { name: "再試行" }).click();
-    await expect(dialog.getByText("# 経費精算マニュアル")).toBeVisible();
-    await expect(dialog.getByText(MISSING_ORIGINAL)).toHaveCount(0);
+    restored = true;
+    await dialog.getByRole("button", { name: "再試行",exact:true }).click();
+    await expect(dialog.getByTestId("evidence-reader-content")).toContainText("合成の引用本文");
+    await expect(dialog.getByText(message,{exact:true})).toHaveCount(0);
+    expect(originalRequests).toBe(0);
   });
 }
 

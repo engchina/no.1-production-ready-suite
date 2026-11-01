@@ -1,3 +1,4 @@
+import type { EvidenceReadingInput, EvidenceReadingWindow } from "@production-ready/ui";
 import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
 /**
  * バックエンド API クライアント。
@@ -378,6 +379,8 @@ export interface IngestionQueueWait {
 }
 
 export interface DocumentElementTextEdit {
+  base_offset?: number;
+  base_sha256?: string;
   element_id: string;
   text: string;
   /** 編集を始めたときの文。今の文と違えば、ほかの保存が先に変えていたため 409（#2616）。 */
@@ -3464,6 +3467,16 @@ export const api = {
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}`,
       { method: "DELETE" },
     ),
+  documentReader: (id: string, chunkId: string, input: EvidenceReadingInput, signal: AbortSignal) => {
+    const search = new URLSearchParams({ chunk_id: chunkId, ...input });
+    return request<EvidenceReadingWindow>(`/api/documents/${encodeURIComponent(id)}/reader?${search}`, { signal });
+  },
+  documentTextWindow: (id: string, recipeId: string | null, body: { offset: number; limit: number; variant: string; focus?: string | null }, signal: AbortSignal) =>
+    request<{ text: string; offset: number; total: number; limit: number }>(`/api/documents/${encodeURIComponent(id)}${recipeId ? `/recipes/${encodeURIComponent(recipeId)}` : ""}/text-window`, { ...jsonBody(body), signal }),
+  documentExtractionView: (id: string, recipeId: string, options: Record<string, string | number>, signal?: AbortSignal) =>
+    request<DocumentExtractionExport & { offset: number; total: number; limit: number; text_offset?: number; text_total?: number; cell_offset?: number; cell_total?: number }>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/extraction-view?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),
+  documentChunkWindow: (id: string, recipeId: string, options: Record<string, string | number>, signal?: AbortSignal) =>
+    request<{items: DocumentChunkView[]; total: number; offset: number; limit: number}>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunk-window?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),
   listDocumentRecipeChunks: (id: string, recipeId: string) =>
     request<DocumentChunkView[]>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunks`,

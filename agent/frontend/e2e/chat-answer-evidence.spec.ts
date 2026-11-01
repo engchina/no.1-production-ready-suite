@@ -54,7 +54,7 @@ async function serveSourcePreviews(page: Page, text = "") {
         status: 200,
         contentType: "application/json; charset=utf-8",
         headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "private, no-store" },
-        body: text,
+        body: new URL(url).searchParams.get("view") === "reader" ? JSON.stringify({ data: readerWindow(text.includes(LONG_LINES[49]) ? LONG_EXCERPT : text, new URL(url).searchParams.has("cursor")) }) : text,
       });
       return;
     }
@@ -1000,7 +1000,7 @@ test("原文を出せない根拠は理由と再試行を出し、本文の資�
   await expect(sheet).toBeHidden();
   // 本文の資料（JSON など）は本文をそのまま出す。
   await links.nth(1).click();
-  await expect(preview.locator("pre")).toHaveText('{"合成": "本文"}');
+  await expect(preview.getByTestId("evidence-reader-content")).toContainText('{"合成": "本文"}');
 });
 
 // #2512: 抜粋の長い根拠で「抜粋と頁・章節」を開いても、原文のプレビューを画面の外へ押し出さない。抜粋は要約の中の
@@ -1047,18 +1047,16 @@ for (const viewport of VIEWPORTS) {
     const previewBox = (await preview.boundingBox())!;
     expect(previewBox.y + previewBox.height / 2).toBeLessThanOrEqual(viewport.height);
     expect(viewport.height - previewBox.y).toBeGreaterThanOrEqual(viewport.height * 0.35);
-    // テキストの原文は、引用した箇所（抜粋の 50 行目から）へ移って強調する。
-    const text = preview.getByRole("region", { name: "合成の文書.json のプレビュー" });
-    const quote = text.getByTestId("preview-text-quote");
-    await expect(quote).toContainText(LONG_LINES[49]);
-    await expect(quote).toContainText(LONG_LINES[78].replace("。", ""));
-    await expect(quote).not.toContainText(LONG_LINES[79]);
-    await expect(preview.getByTestId("preview-text-highlight")).toContainText("引用した箇所を強調しています");
-    await expect.poll(() => text.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-    const textBox = (await text.boundingBox())!;
-    const quoteBox = (await quote.boundingBox())!;
-    expect(quoteBox.y).toBeGreaterThanOrEqual(textBox.y - 1);
-    expect(quoteBox.y).toBeLessThan(textBox.y + textBox.height);
+    const text = preview.getByTestId("evidence-reader-content");
+    await expect(text.locator("mark")).toContainText(LONG_LINES[49]);
+    await expect(text.locator("mark")).toBeInViewport();
+    await expect(preview).toContainText("追加の参考文脈");
+    await expect(preview.getByRole("table", {name:"引用元の表"}).getByRole("columnheader").first()).toContainText("項目");
+    await preview.getByRole("button", { name: "後文を読む", exact: true }).click();
+    await expect(text).toContainText("合成の続き");
+    await preview.getByRole("button", { name: "引用位置に戻る", exact: true }).click();
+    await expect(text.locator("mark")).toContainText(LONG_LINES[49]);
+    await expect(text.locator("mark")).toBeInViewport();
     await page.screenshot({ path: testInfo.outputPath(`agent-long-excerpt-${viewport.name}.png`) });
     // 抜粋の領域は Tab で届き、キーボードで最後まで読める（読み終えるとフェードを消す）。
     await toggle.focus();
@@ -1067,12 +1065,6 @@ for (const viewport of VIEWPORTS) {
     await page.keyboard.press("End");
     await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     await expect(scroll.getByTestId("evidence-excerpt-fade")).toHaveCSS("opacity", "0");
-    // 本文の外へ移したあとも、「強調した位置へ移動」で引用の箇所へ戻れる。
-    await text.evaluate((element) => {
-      element.scrollTop = 0;
-    });
-    await preview.getByRole("button", { name: "強調した位置へ移動" }).click();
-    await expect.poll(() => text.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     await expectNoHorizontalOverflow(page);
   });
 }
@@ -1272,4 +1264,10 @@ for (const viewport of VIEWPORTS) {
     await expectNoHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath(`answer-evidence-attachment-${viewport.name}.png`), fullPage: true });
   });
+}
+
+function readerWindow(quote: string, continuation: boolean) {
+  return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: "paragraph",
+    blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : "前文。".repeat(400) + quote, offset: 0, highlights: continuation ? [] : [[1200, 1200 + quote.length]], cited: !continuation }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],
+    previous_cursor: "before", next_cursor: continuation ? null : "after", outline: [{ id: "section-a", title: "節 A", parent_id: null, has_children: false }] };
 }
