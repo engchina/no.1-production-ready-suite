@@ -144,13 +144,17 @@ test("長い目次は本文を押し出さず、五つの読み取り操作で�
   await expect(body.locator("mark")).toBeInViewport();
   await reader.getByRole("button", {name:"前文を読む",exact:true}).click();
   await expect(body).toContainText("合成の前文");
+  await expect(body.locator('[data-reader-current="true"]').locator("p").first()).toBeInViewport();
+  await expect(reader.getByTestId("evidence-reader-location")).toHaveText("前文へ移動しました。");
   await reader.getByRole("button", {name:"本節を読む",exact:true}).click();
   await expect(body).toContainText("本節の冒頭");
+  await expect(body.locator('[data-reader-current="true"]').locator("p").first()).toBeInViewport();
   await expect(body).toBeFocused();
   await expect.poll(() => body.evaluate(node => node.scrollTop)).toBe(0);
   await expect(reader.getByRole("button", {name:"前文を読む",exact:true})).toBeDisabled();
   await reader.getByRole("button", {name:"親章節を読む",exact:true}).click();
   await expect(body).toContainText("親章節の冒頭");
+  await expect(body.locator('[data-reader-current="true"]').locator("p").first()).toBeInViewport();
   await reader.getByTestId("evidence-reader-outline-toggle").click();
   await expect(outline).toHaveAttribute("open", "");
   const nav = outline.getByRole("navigation", {name:"目次"});
@@ -158,20 +162,25 @@ test("長い目次は本文を押し出さず、五つの読み取り操作で�
   await expect(body).toBeInViewport();
   expect((await body.boundingBox())!.height).toBeGreaterThanOrEqual(page.viewportSize()!.height * .2);
   await page.screenshot({path:testInfo.outputPath(`reader-outline-${testInfo.project.name}.png`)});
-  await nav.getByRole("button").last().click();
+  await nav.getByRole("button").last().focus();
+  await page.keyboard.press("Enter");
   await expect(outline).not.toHaveAttribute("open", "");
   await expect(body).toContainText("目次で選んだ節の冒頭");
+  await expect(body.locator('[data-reader-current="true"]').locator("p").first()).toBeInViewport();
+  await page.screenshot({path:testInfo.outputPath(`reader-section-selected-${testInfo.project.name}.png`),animations:"disabled"});
   await expect(body).toBeFocused();
   await reader.getByRole("button", {name:"引用位置に戻る",exact:true}).click();
   await expect(body.locator("mark")).toBeInViewport();
   await reader.getByRole("button", {name:"後文を読む",exact:true}).click();
   await expect(body).toContainText("合成の続き");
+  await expect(body.locator('[data-reader-current="true"]').locator("p").first()).toBeInViewport();
+  await page.screenshot({path:testInfo.outputPath(`reader-after-selected-${testInfo.project.name}.png`),animations:"disabled"});
   await expect(reader.getByRole("button", {name:"後文を読む",exact:true})).toBeDisabled();
   await expectNoPageOverflow(page);
 });
 
 
-test("四窓目で古い窓を破棄しても表示位置を保ち、前後の取得が重複しない", {tag:"@responsive"}, async ({page}) => {
+test("前後文の明示移動は新しい本文を表示し、四窓目でも取得が重複しない", {tag:"@responsive"}, async ({page}) => {
   await search(page);
   await page.route("**/api/documents/doc-a/reader?**", route => {
     const params = new URL(route.request().url()).searchParams;
@@ -186,17 +195,18 @@ test("四窓目で古い窓を破棄しても表示位置を保ち、前後の�
   for(let i=1;i<=2;i++) {
     await reader.getByRole("button",{name:"後文を読む",exact:true}).click();
     await expect(body.locator(`[data-reader-block="window-${i}:0"]`)).toHaveCount(1);
+    await expect(body.locator(`[data-reader-block="window-${i}:0"]`).locator("p").first()).toBeInViewport();
   }
   const retained = body.locator('[data-reader-block="window-1:0"]');
   await retained.evaluate(node => node.scrollIntoView({block:"start"}));
-  const top = (await retained.boundingBox())!.y;
+  await expect(retained.locator("p").first()).toBeInViewport();
   await reader.getByRole("button",{name:"後文を読む",exact:true}).click();
   await expect(body.locator('[data-reader-block="window-3:0"]')).toHaveCount(1);
   await expect(body.locator("[data-reader-block]")).toHaveCount(3);
   await expect(body.locator('[data-reader-block="window-0:0"]')).toHaveCount(0);
-  expect(Math.abs((await retained.boundingBox())!.y-top)).toBeLessThan(2);
+  await expect(body.locator('[data-reader-block="window-3:0"]').locator("p").first()).toBeInViewport();
   await reader.getByRole("button",{name:"前文を読む",exact:true}).click();
   await expect(body.locator('[data-reader-block="window-0:0"]')).toHaveCount(1);
   await expect(body.locator("[data-reader-block]")).toHaveCount(3);
-  expect(Math.abs((await retained.boundingBox())!.y-top)).toBeLessThan(2);
+  await expect(body.locator('[data-reader-block="window-0:0"]').locator("p").first()).toBeInViewport();
 });

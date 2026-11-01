@@ -1054,6 +1054,8 @@ for (const viewport of VIEWPORTS) {
     await expect(preview.getByRole("table", {name:"引用元の表"}).getByRole("columnheader").first()).toContainText("項目");
     await preview.getByRole("button", { name: "後文を読む", exact: true }).click();
     await expect(text).toContainText("合成の続き");
+    await expect(text.locator('[data-reader-current="true"]').locator("p").first()).toBeInViewport();
+    await expect(preview.getByTestId("evidence-reader-location")).toHaveText("後文へ移動しました。");
     await preview.getByRole("button", { name: "引用位置に戻る", exact: true }).click();
     await expect(text.locator("mark")).toContainText(LONG_LINES[49]);
     await expect(text.locator("mark")).toBeInViewport();
@@ -1063,6 +1065,7 @@ for (const viewport of VIEWPORTS) {
     await preview.getByRole("navigation", {name:"目次"}).getByRole("button").last().click();
     await expect(preview.getByTestId("evidence-reader-outline")).not.toHaveAttribute("open", "");
     await expect(text).toBeFocused();
+    await expect(text.locator('[data-reader-current="true"]').locator("p").first()).toBeInViewport();
     await page.screenshot({ path: testInfo.outputPath(`agent-long-excerpt-${viewport.name}.png`) });
     // 抜粋の領域は Tab で届き、キーボードで最後まで読める（読み終えるとフェードを消す）。
     await toggle.focus();
