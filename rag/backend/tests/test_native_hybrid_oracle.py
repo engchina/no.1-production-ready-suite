@@ -1,5 +1,6 @@
 """合成KB・profileで原生／従来方式の範囲と一回のRRFを確認する。"""
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 from uuid import uuid4
@@ -26,6 +27,61 @@ class _Embedding:
         return [[0.1] * 1536 for _ in texts]
 
 
+class _FirstNativeReadOracle(OracleClient):
+    """初回の範囲件数と実行行数だけを保持し、合成 CI の空結果を切り分ける。"""
+
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.read_tag = "native_first_read_" + uuid4().hex[:12]
+        self.first_reads: list[dict[str, object]] = []
+
+    async def _fetch_all(
+        self, sql: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        native = "DBMS_HYBRID_VECTOR.SEARCH" in sql
+        if native:
+            sql = sql.replace(
+                "SELECT ", f"SELECT /*+ gather_plan_statistics */ /* {self.read_tag} */ ", 1
+            )
+        rows = await super()._fetch_all(sql, binds)
+        if native:
+            spec = json.loads(str((binds or {})["native_spec"]))
+            self.first_reads.append(
+                {
+                    "read": "native",
+                    "fusion": spec["search_fusion"],
+                    "rows": len(rows),
+                    "accuracy": spec.get("vector", {}).get("accuracy"),
+                    "filter_type": spec.get("vector", {}).get("filter_type"),
+                }
+            )
+        elif sql.lstrip().startswith("SELECT c.chunk_id, c.native_scope_id"):
+            self.first_reads.append(
+                {
+                    "read": "allowed",
+                    "rows": len(rows),
+                    "scopes": len({r.get("native_scope_id") for r in rows}),
+                    "with_similarity": "VECTOR_DISTANCE" in sql,
+                }
+            )
+        return rows
+
+    async def first_read_diagnostics(self) -> dict[str, object]:
+        try:
+            plan = await super()._fetch_all(
+                """SELECT p.id, p.parent_id, p.operation, p.options,
+                    p.last_starts, p.last_output_rows, p.last_cr_buffer_gets
+                FROM v$sql q JOIN v$sql_plan_statistics_all p
+                    ON p.sql_id=q.sql_id AND p.child_number=q.child_number
+                WHERE q.sql_text LIKE :tag
+                ORDER BY q.sql_id, p.id FETCH FIRST 160 ROWS ONLY""",
+                {"tag": f"SELECT /*+ gather_plan_statistics */ /* {self.read_tag} */%"},
+            )
+        except Exception as exc:
+            return {"reads": self.first_reads, "plan_error": type(exc).__name__}
+        return {"reads": self.first_reads, "plan": plan}
+
+
 @pytest.mark.usefixtures("oracle_db")
 async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
     from app.rag.vector_index_adapter import resolve_vector_index_adapter
@@ -38,7 +94,7 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
         }
     )
     assert resolve_vector_index_adapter(settings).target_accuracy == 100
-    oracle = OracleClient(settings)
+    oracle = _FirstNativeReadOracle(settings)
     ranges = await oracle._fetch_all(
         "SELECT ixv_value FROM ctx_user_index_values "
         "WHERE ixv_index_name='RAG_CHUNKS_HYBRID_IDX' "
@@ -76,7 +132,10 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
             diagnostics = await _empty_native_scope_diagnostics(
                 oracle, document_id, {"document_id": document_id}
             )
-            pytest.fail(f"{mode.value}: status={status}, diagnostics={diagnostics}")
+            pytest.fail(
+                f"{mode.value}: status={status}, diagnostics={diagnostics}, "
+                f"first={await oracle.first_read_diagnostics()}"
+            )
     assert len(rankings[0]) == 1
     assert rankings[0][0].metadata["page_number"] == 1
     assert len(rankings[1]) == 2
@@ -94,7 +153,7 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
 ) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_hybrid_search_backend", backend)
-    oracle = OracleClient(settings)
+    oracle = _FirstNativeReadOracle(settings)
     token = uuid4().hex[:10]
     kb = await oracle.create_knowledge_base(name=f"合成検索KB {token}")
     outside = await oracle.create_knowledge_base(name=f"合成範囲外KB {token}")
@@ -172,7 +231,8 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
                 else None
             )
             assert status == "completed", (
-                f"{backend}/{mode.value}: status={status}, diagnostics={diagnostics}"
+                f"{backend}/{mode.value}: status={status}, diagnostics={diagnostics}, "
+                f"first={await oracle.first_read_diagnostics() if status != 'completed' else None}"
             )
             assert len(ranking) == 1, f"{backend}/{mode.value}: count={len(ranking)}"
             assert ranking[0].document_id == ids[0]
