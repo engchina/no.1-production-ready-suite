@@ -1378,3 +1378,27 @@ def test_native_creation_failure_never_passes_postcondition_or_retry() -> None:
         manager.initialize()
     database.fail_native_creation = False
     assert manager.initialize()["status"] == "ready"
+
+
+def test_unknown_native_index_type_is_not_dropped_even_during_migration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _FakeDatabase()
+    manager = SystemSchemaManager(database.connection)
+    manager.initialize()
+    database.executed.clear()
+    monkeypatch.setattr(
+        manager,
+        "_native_invalid_objects",
+        lambda *_: [
+            {
+                "name": "RAG_CHUNKS_HYBRID_IDX",
+                "object_type": "INDEX",
+                "reason": "MISSING_OR_INVALID_TYPE",
+            }
+        ],
+    )
+    with pytest.raises(SystemSchemaError) as error:
+        manager.initialize()
+    assert error.value.code == "NATIVE_INDEX_METADATA_INVALID"
+    assert not any("DROP INDEX" in sql for sql in database.executed)

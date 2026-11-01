@@ -535,6 +535,14 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 "Oracle原生索引を構築中です。完了を待ってから再実行してください。",
                 status_code=409,
             )
+        if any(
+            row["reason"] == "MISSING_OR_INVALID_TYPE" for row in before.get("invalid_objects", [])
+        ):
+            raise SystemSchemaError(
+                "NATIVE_INDEX_METADATA_INVALID",
+                "Oracle原生索引の種類・状態を確認できません。管理者が索引を確認してください。",
+                status_code=409,
+            )
         if before["status"] == "ready" and not recreate:
             return self._no_op_result(connection, owner)
 
