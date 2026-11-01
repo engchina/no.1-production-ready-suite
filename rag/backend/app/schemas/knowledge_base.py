@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from app.rag.kb_adapter_config import KnowledgeBaseAdapterConfig
 from app.schemas.search import SearchMode
@@ -50,6 +50,8 @@ class KnowledgeBaseDetail(KnowledgeBaseSummary):
     """詳細表示用のナレッジベース情報。"""
 
     retrieval_config: dict[str, object] = Field(default_factory=dict)
+    structure_index_enabled: bool | None = None
+    structure_index_global_enabled: bool = False
     adapter_config: KnowledgeBaseAdapterConfig = Field(
         default_factory=KnowledgeBaseAdapterConfig,
         description=(
@@ -204,3 +206,19 @@ class KnowledgeBaseGraphData(BaseModel):
     nodes: list[KnowledgeBaseGraphNode] = Field(default_factory=list)
     edges: list[KnowledgeBaseGraphEdge] = Field(default_factory=list)
     truncated: bool = False
+
+
+class KnowledgeBaseStructureIndexUpdate(BaseModel):
+    """Noneはレシピ/globalの構築設定を継承する。"""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool | None
+
+
+class KnowledgeBaseStructureIndexData(KnowledgeBaseStructureIndexUpdate):
+    global_enabled: bool
+
+
+class StructureIndexStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["missing", "rebuild", "retry", "continue"] = "missing"

@@ -23,6 +23,9 @@ from app.clients.native_hybrid_schema import (
     native_hybrid_ivf_migration_sql,
     native_hybrid_migration_sql,
     native_hybrid_objects_sql,
+    native_hybrid_scope_migration_sql,
+    native_hybrid_scope_objects_sql,
+    native_hybrid_sync_columns_migration_sql,
 )
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
@@ -51,6 +54,7 @@ from app.clients.oracle import (
 )
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
+from app.clients.structure_index_store import structure_index_schema_sql
 from app.clients.support_guide_store import (
     oracle_support_guide_embedding_schema_sql,
     oracle_support_guide_revision_schema_sql,
@@ -197,6 +201,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_knowledge_base_schema_sql(),
         ),
         OracleSchemaSection(
+            name="structure_index_jobs",
+            table_name="rag_structure_index_jobs",
+            sql=structure_index_schema_sql(),
+        ),
+        OracleSchemaSection(
             name="search_answer_profiles",
             table_name="rag_search_answer_profiles",
             sql=oracle_search_answer_profile_schema_sql(),
@@ -288,6 +297,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="chunk_sets",
             table_name="rag_chunk_sets",
             sql=oracle_chunk_set_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="native_search_scopes",
+            table_name="rag_native_search_scopes",
+            sql=native_hybrid_scope_objects_sql(),
         ),
         OracleSchemaSection(
             name="search_audit",
@@ -615,6 +629,21 @@ END;
             name="20261101_002_native_hybrid_ivf",
             table_name="rag_chunks",
             sql=native_hybrid_ivf_migration_sql(),
+        )
+    )
+    # 既存の移行SQLのchecksumを保ち、範囲列の補完より先に同期を限定する。
+    sections.append(
+        OracleSchemaSection(
+            name="20261101_004_native_hybrid_sync_columns",
+            table_name="rag_chunks",
+            sql=native_hybrid_sync_columns_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261101_003_native_hybrid_scope",
+            table_name="rag_chunks",
+            sql=native_hybrid_scope_migration_sql(),
         )
     )
     return sections

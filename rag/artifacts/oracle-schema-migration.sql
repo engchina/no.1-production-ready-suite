@@ -3953,3 +3953,111 @@ END;~';
     END IF;
 END;
 /
+
+-- migration: 20261101_004_native_hybrid_sync_columns
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM ctx_user_preferences
+    WHERE pre_name = 'RAG_CHUNKS_HYBRID_PREF';
+    IF v_count = 0 THEN
+        DBMS_VECTOR_CHAIN.CREATE_PREFERENCE(
+            'RAG_CHUNKS_HYBRID_PREF', DBMS_VECTOR_CHAIN.VECTORIZER,
+            JSON('{"vector_idxtype":"ivf","distance":"COSINE","paths":[{"type":"VECTOR","path_list":["$.embedding"]}]}')
+        );
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'HYBRID_PAYLOAD';
+    IF v_count = 1 THEN
+        EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC
+BEFORE INSERT OR UPDATE ON rag_chunks FOR EACH ROW
+BEGIN
+    IF INSERTING OR UPDATING('SEARCH_TEXT') OR UPDATING('EMBEDDING') THEN
+    SELECT JSON_OBJECT(
+        'text' VALUE :NEW.search_text,
+        'embedding' VALUE JSON(VECTOR_SERIALIZE(:NEW.embedding RETURNING CLOB))
+        ABSENT ON NULL RETURNING JSON
+    ) INTO :NEW.hybrid_payload FROM dual;
+    END IF;
+END;~';
+    END IF;
+END;
+/
+
+-- migration: 20261101_003_native_hybrid_scope
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_NATIVE_SEARCH_SCOPES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE q'~CREATE TABLE rag_native_search_scopes (
+    chunk_set_id VARCHAR2(64) PRIMARY KEY,
+    native_scope_id NUMBER GENERATED ALWAYS AS IDENTITY UNIQUE,
+    CONSTRAINT RAG_NATIVE_SCOPE_CHUNK_SET_FK FOREIGN KEY (chunk_set_id)
+        REFERENCES rag_chunk_sets(chunk_set_id) ON DELETE CASCADE
+)~';
+    END IF;
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'NATIVE_SCOPE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks ADD (native_scope_id NUMBER)';
+    END IF;
+END;
+/
+
+INSERT INTO rag_native_search_scopes (chunk_set_id)
+SELECT cs.chunk_set_id FROM rag_chunk_sets cs WHERE NOT EXISTS (
+    SELECT 1 FROM rag_native_search_scopes s WHERE s.chunk_set_id = cs.chunk_set_id
+);
+
+UPDATE rag_chunks c SET native_scope_id = (
+    SELECT s.native_scope_id FROM rag_native_search_scopes s WHERE s.chunk_set_id = c.chunk_set_id
+) WHERE c.chunk_set_id IS NOT NULL AND c.native_scope_id IS NULL;
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_CHUNKS_NATIVE_SCOPE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX ON rag_chunks(native_scope_id)';
+    END IF;
+END;
+/
+
+BEGIN
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_NATIVE_SCOPE_SYNC
+BEFORE INSERT OR UPDATE OF chunk_set_id, native_scope_id ON rag_chunks FOR EACH ROW
+DECLARE
+    v_known_set NUMBER;
+BEGIN
+    IF :NEW.chunk_set_id IS NULL THEN
+        :NEW.native_scope_id := NULL;
+    ELSE
+        SELECT COUNT(*) INTO v_known_set FROM rag_chunk_sets
+        WHERE chunk_set_id = :NEW.chunk_set_id;
+        IF v_known_set = 0 THEN
+            :NEW.native_scope_id := NULL;
+            RETURN;
+        END IF;
+        BEGIN
+            SELECT native_scope_id INTO :NEW.native_scope_id FROM rag_native_search_scopes
+            WHERE chunk_set_id = :NEW.chunk_set_id;
+        EXCEPTION WHEN NO_DATA_FOUND THEN
+            BEGIN
+                INSERT INTO rag_native_search_scopes (chunk_set_id) VALUES (:NEW.chunk_set_id)
+                RETURNING native_scope_id INTO :NEW.native_scope_id;
+            EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
+                SELECT native_scope_id INTO :NEW.native_scope_id FROM rag_native_search_scopes
+                WHERE chunk_set_id = :NEW.chunk_set_id;
+            END;
+        END;
+    END IF;
+END;~';
+END;
+/

@@ -190,3 +190,123 @@ async def test_native_combined_original_and_provenance_channels(
             assert chunk.metadata["native_rrf_contribution"] == pytest.approx(
                 float(str(chunk.metadata["native_wrrf_score"])) / 6100
             )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_large_native_scope_is_compressed_without_losing_page_or_acl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_hybrid_search_backend", "oracle_native")
+    oracle = OracleClient(settings)
+    token = uuid4().hex[:10]
+    kb = await oracle.create_knowledge_base(name=f"合成大規模KB {token}")
+    profile = await oracle.create_search_answer_profile(
+        name=f"合成大規模profile {token}",
+        config=SearchAnswerProfileConfig(knowledge_base_ids=[kb.id]),
+    )
+    chunks = [
+        Chunk(
+            text=f"syntheticneedle {token} item {i}",
+            index=i,
+            start_offset=0,
+            end_offset=20,
+            metadata={"page_number": 1 if i < 4 else 2},
+        )
+        for i in range(400)
+    ]
+    doc = await _indexed_document(
+        oracle, file_name=f"synthetic-{token}.txt", chunks=chunks, knowledge_base_ids=[kb.id]
+    )
+    request, effective, _, _ = await _resolve_query_context(
+        SearchRequest(query="syntheticneedle", search_answer_profile_id=profile.id), settings
+    )
+    filters = {"knowledge_base_id": kb.id, "document_id": doc}
+    full = await oracle.search_many(
+        [("syntheticneedle", [0.1] * 1536, SearchMode.HYBRID)], 10, filters
+    )
+    assert full[0] and getattr(full[0], "status", "") == "completed"
+    assert all(hit.metadata["document_id"] == doc for hit in full[0])
+    page = await oracle.search_many(
+        [("syntheticneedle", [0.1] * 1536, SearchMode.HYBRID)],
+        10,
+        {**filters, "page_number_min": "1", "page_number_max": "1"},
+    )
+    assert len(page[0]) == 4 and all(hit.metadata["page_number"] == 1 for hit in page[0])
+    long_page = await oracle.search_many(
+        [("syntheticneedle", [0.1] * 1536, SearchMode.HYBRID)],
+        10,
+        {**filters, "page_number_min": "2", "page_number_max": "2"},
+    )
+    assert long_page[0] and all(hit.metadata["page_number"] == 2 for hit in long_page[0])
+    engine = AnswerEngine(effective, oracle=oracle, genai=_Embedding())  # type: ignore[arg-type]
+    result = await engine._search(
+        request, _SearchState(), retrieval_queries=["syntheticneedle"], expand_references=False
+    )
+    assert result.child_chunks and all(
+        hit.metadata["document_id"] == doc for hit in result.child_chunks
+    )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_hybrid_payload_ignores_scope_updates_but_tracks_text_and_embedding() -> None:
+    """専用の合成表で同期対象の列と、既存triggerの更新を確認する。"""
+    import json
+
+    from app.clients.native_hybrid_schema import native_hybrid_sync_columns_migration_sql
+
+    client = OracleClient()
+
+    async def execute(sql: str, binds: dict[str, Any]) -> None:
+        def operation(connection: Any) -> None:
+            with connection.cursor() as cursor:
+                cursor.execute(sql, binds)
+
+        await client._run_transaction(operation)
+
+    table = f"RAG_TEST_SYNC_{uuid4().hex[:10].upper()}"
+    trigger = f"{table}_TRG"
+    setup = (
+        native_hybrid_sync_columns_migration_sql()
+        .replace("RAG_CHUNKS_HYBRID_SYNC", trigger)
+        .replace("table_name = 'RAG_CHUNKS'", f"table_name = '{table}'")
+        .replace("rag_chunks", table)
+        .rstrip("/\n ")
+    )
+    await execute(
+        f"CREATE TABLE {table} (id NUMBER, search_text CLOB, embedding VECTOR(3, FLOAT32), "
+        "native_scope_id NUMBER, hybrid_payload JSON)",
+        {},
+    )
+    try:
+        await execute(setup, {})
+        await execute(setup, {})
+        await execute(
+            f"INSERT INTO {table} (id,search_text,embedding) "
+            "VALUES (1,'synthetic-before',TO_VECTOR('[1,0,0]'))",
+            {},
+        )
+
+        async def payload() -> dict[str, Any]:
+            rows = await client._fetch_all(
+                f"SELECT JSON_SERIALIZE(hybrid_payload RETURNING VARCHAR2(4000)) AS payload "
+                f"FROM {table} WHERE id=1",
+                {},
+            )
+            return cast(dict[str, Any], json.loads(str(rows[0]["payload"])))
+
+        assert (await payload())["text"] == "synthetic-before"
+        # 派生JSONの再代入を検知するため、独立した合成表だけへ印を置く。
+        await execute(f"ALTER TRIGGER {trigger} DISABLE", {})
+        await execute(
+            f"UPDATE {table} SET hybrid_payload=JSON('{{\"sentinel\":true}}') WHERE id=1", {}
+        )
+        await execute(f"ALTER TRIGGER {trigger} ENABLE", {})
+        await execute(f"UPDATE {table} SET native_scope_id=7 WHERE id=1", {})
+        assert await payload() == {"sentinel": True}
+        await execute(f"UPDATE {table} SET search_text='synthetic-after' WHERE id=1", {})
+        assert (await payload())["text"] == "synthetic-after"
+        await execute(f"UPDATE {table} SET embedding=TO_VECTOR('[0,1,0]') WHERE id=1", {})
+        assert (await payload())["embedding"] == [0, 1, 0]
+    finally:
+        await execute(f"DROP TABLE {table} PURGE", {})

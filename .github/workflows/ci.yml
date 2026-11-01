@@ -435,6 +435,8 @@ jobs:
               - "rag/packages/rag_engine/rag_engine/adapters/oracle/native_hybrid.py"
               - "rag/backend/app/clients/document_category_store.py"
               - "rag/backend/app/clients/document_cleanup_store.py"
+              - "rag/backend/app/clients/structure_index_store.py"
+              - "rag/backend/app/rag/structure_index*.py"
               - "rag/backend/tests/conftest.py"
               - "rag/backend/tests/_oracle_test_db.py"
               - "rag/backend/tests/_ai_stubs.py"

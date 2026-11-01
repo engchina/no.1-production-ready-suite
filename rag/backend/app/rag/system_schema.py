@@ -120,6 +120,8 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_DOCUMENTS",
     "RAG_DOCUMENT_RECIPES",
     "RAG_KNOWLEDGE_BASES",
+    "RAG_STRUCTURE_INDEX_JOBS",
+    "RAG_STRUCTURE_INDEX_BUILDS",
     "RAG_DOCUMENT_KNOWLEDGE_BASES",
     "RAG_SEARCH_ANSWER_PROFILES",
     "RAG_ANSWER_RECORDS",
@@ -143,6 +145,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_INGESTION_SEGMENTS",
     "RAG_CHUNKS",
     "RAG_CHUNK_SETS",
+    "RAG_NATIVE_SEARCH_SCOPES",
     "RAG_DOCUMENT_EXTRACTIONS",
     "RAG_ARTIFACT_LAYERS",
     "RAG_SEARCH_AUDIT",
@@ -184,6 +187,7 @@ PRESERVED_TABLES: tuple[str, ...] = (
 )
 
 MANAGED_INDEXES: tuple[str, ...] = (
+    "RAG_CHUNKS_NATIVE_SCOPE_IDX",
     NATIVE_HYBRID_INDEX,
     "RAG_LANG_RELEASE_PREVIOUS_IDX",
     "RAG_LANG_RELEASE_RESTORE_IDX",
@@ -286,6 +290,7 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "INDEX") for name in MANAGED_INDEXES),
     *MANAGED_TEXT_OBJECTS,
     (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+    ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
     (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
 )
 
@@ -338,6 +343,7 @@ def managed_manifest_from_schema(
         objects.update(
             {
                 (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+                ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
                 (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
             }
         )
@@ -927,6 +933,14 @@ class SystemSchemaManager(SystemSchemaManagerBase):
 
     def _assert_no_active_jobs(self, connection: Any) -> None:
         objects = self._load_objects(connection)
+        if ("RAG_STRUCTURE_INDEX_JOBS", "TABLE") in objects:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT COUNT(*) FROM RAG_STRUCTURE_INDEX_JOBS
+                    WHERE STATUS IN ('RUNNING','STOPPING')
+                    AND heartbeat_at >= SYSTIMESTAMP - INTERVAL '120' SECOND""")
+                structure_row = cursor.fetchone()
+            if structure_row and int(structure_row[0] or 0) > 0:
+                raise SystemSchemaActiveJobsError()
         if ("RAG_INGESTION_JOBS", "TABLE") not in objects:
             return
         placeholders, binds = bind_list("job_status_", _ACTIVE_JOB_STATES)

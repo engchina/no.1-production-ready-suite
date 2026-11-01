@@ -149,6 +149,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # このプロセスで実行中の品質評価の job を打ち切り、失敗にする（#390。別のプロセスは
             # 引き継がない）。
             await get_evaluation_job_service().shutdown()
+            from app.rag.structure_index_jobs import structure_index_jobs
+
+            await structure_index_jobs.shutdown()
             # このプロセスで作成中のチャットの回答を打ち切り、中断として保存する（#1175）。
             await get_chat_answer_run_service().shutdown()
             if worker_task is not None:
