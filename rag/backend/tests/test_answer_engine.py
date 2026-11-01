@@ -2427,9 +2427,9 @@ async def test_prefetch_warms_search_cache_without_changing_results() -> None:
     plain, plain_oracle, _ = await search(False)
     warmed, warmed_oracle, prefetched = await search(True)
 
-    assert prefetched == [question, question]
+    assert prefetched == [question]
     # 続く検索は元の質問を読み直さず、残りの検索文だけを読む。
-    assert warmed_oracle.queries == plain_oracle.queries == [q for q in queries for _ in range(2)]
+    assert warmed_oracle.queries == plain_oracle.queries == queries
     assert warmed_oracle.filters == plain_oracle.filters
     assert warmed == plain
 

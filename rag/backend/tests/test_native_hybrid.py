@@ -71,7 +71,9 @@ class NativeOracle(OracleClient):
                 "chunk_text": "合成の本文",
                 "metadata_json": {},
                 "chunk_index": 0,
-                "score": 0.8,
+                "score": 100 if spec["search_fusion"] == "UNION" else 0.8,
+                "native_vector_rank": 1,
+                "native_text_rank": 1,
                 "file_name": "文書 A.txt",
             }
         ]
@@ -91,7 +93,7 @@ async def test_both_entry_points_execute_native_and_never_sudachi() -> None:
         )
     assert [v.chunk_id for v in one] == ["a"]
     assert [[v.chunk_id for v in group] for group in many] == [["a"], ["a"]]
-    assert len([sql for sql, _ in client.calls if "DBMS_HYBRID_VECTOR.SEARCH" in sql]) == 4
+    assert len([sql for sql, _ in client.calls if "DBMS_HYBRID_VECTOR.SEARCH" in sql]) == 3
 
 
 @pytest.mark.asyncio
@@ -117,3 +119,42 @@ async def test_missing_index_fails_before_search_and_never_returns_empty_success
             await client.keyword_search("合成", 4)
         with pytest.raises(NativeHybridUnavailable):
             await client.vector_search([1.0] * 1536, 4)
+
+
+def test_original_request_runs_both_channels_and_native_wrrf_once() -> None:
+    spec = native_search_request(
+        query="合成の質問", vector=[1, 0, 0], channel="hybrid", allowed_ids=["a"], limit=4
+    )
+    assert spec["search_fusion"] == "UNION"
+    assert spec["search_scorer"] == "WRRF"
+    assert spec["vector"]["search_vector"] == [1, 0, 0]
+    assert spec["text"]["search_text"] == "合成の質問"
+    assert spec["vector"]["score_weight"] == 10
+    assert spec["text"]["score_weight"] == 1
+    assert "score" in spec["return"]["values"]
+
+
+@pytest.mark.asyncio
+async def test_native_hybrid_many_is_one_combined_call_per_original() -> None:
+    client = NativeOracle()
+    await client.search_many([("合成の質問", [1.0] * 1536, SearchMode.HYBRID)], 4)
+    specs = [
+        json.loads(str(binds["native_spec"]))
+        for sql, binds in client.calls
+        if "DBMS_HYBRID_VECTOR.SEARCH" in sql
+    ]
+    assert len(specs) == 1
+    assert specs[0]["search_fusion"] == "UNION"
+
+
+@pytest.mark.asyncio
+async def test_native_hybrid_score_keeps_oracle_scale_and_zero_missing_rank() -> None:
+    from app.rag.answer_engine import _hit_channels
+
+    client = NativeOracle()
+    rows = await client.search_many([("合成", [1.0] * 1536, SearchMode.HYBRID)], 4)
+    hit = rows[0][0]
+    assert hit.metadata["native_wrrf_score"] == 100
+    assert hit.metadata["native_rrf_contribution"] == pytest.approx(1 / 61)
+    hit.metadata["keyword_rank"] = 0
+    assert _hit_channels(hit, 0) == {"vector:q1"}

@@ -342,6 +342,7 @@ class _SearchState:
     work_dir は rag_engine の output_dir。根拠画像を ``<work_dir>/<run>/crops/`` へ切り出す。
     """
 
+    original_retrieval_query: str = ""
     chunks: dict[str, RetrievedChunk] = field(default_factory=dict)
     context_reads: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
     retrieval_stages: list[dict[str, Any]] = field(default_factory=list)
@@ -1527,7 +1528,31 @@ class AnswerEngine:
                 return HybridSearchResult(child_chunks=[], all_chunks=[])
         vector_only = {query.strip() for query in vector_only_queries}
         depth = self._read_depth(candidate_limit)
-        embeddings = await self._genai.embed(queries, input_type="SEARCH_QUERY")
+        from rag_engine.retrieval.query_channels import expression_channels
+        from rag_engine.retrieval.weighted_rrf import query_key
+
+        query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
+        if not state.original_retrieval_query:
+            state.original_retrieval_query = next(
+                (q for q, labels in query_sources.items() if "原質問" in labels), queries[0]
+            )
+        original_query = state.original_retrieval_query
+        channels = {
+            query: expression_channels(
+                query,
+                original_query,
+                query_sources,
+                vector_only=query_key(query) in {query_key(q) for q in vector_only},
+            )
+            for query in queries
+        }
+        vector_queries = [q for q in queries if channels[q] != ("keyword",)]
+        embedded = (
+            await self._genai.embed(vector_queries, input_type="SEARCH_QUERY")
+            if vector_queries
+            else []
+        )
+        embeddings = dict(zip(vector_queries, embedded, strict=True))
         k = float(self._settings.rag_rrf_k)
         from rag_engine.retrieval.weighted_rrf import (
             RankedList,
@@ -1540,17 +1565,26 @@ class AnswerEngine:
         weights = RrfWeights(
             *self._settings.rag_rrf_method_ratio, *self._settings.rag_rrf_source_ratio
         )
-        budgets = source_weights(queries, weights)
+        budgets = source_weights([original_query, *queries], weights)
         query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
-        searches = [
-            (query, embedding, mode)
-            for query, embedding in zip(queries, embeddings, strict=True)
-            for mode in (
-                (SearchMode.VECTOR,)
-                if query in vector_only
-                else (SearchMode.VECTOR, SearchMode.KEYWORD)
-            )
-        ]
+        searches: list[tuple[str, list[float], SearchMode]] = []
+        for query in queries:
+            for channel in channels[query]:
+                if (
+                    channel == "hybrid"
+                    and self._settings.rag_hybrid_search_backend != "oracle_native"
+                ):
+                    searches.extend(
+                        (query, embeddings[query], mode)
+                        for mode in (SearchMode.VECTOR, SearchMode.KEYWORD)
+                    )
+                else:
+                    mode = {
+                        "hybrid": SearchMode.HYBRID,
+                        "vector": SearchMode.VECTOR,
+                        "keyword": SearchMode.KEYWORD,
+                    }[channel]
+                    searches.append((query, embeddings.get(query, []), mode))
         relaxed_before = len(state.relaxed)
         while True:
             fused: dict[str, float] = {}
@@ -1578,12 +1612,27 @@ class AnswerEngine:
                 raw_lists.append(
                     RankedList(
                         query,
-                        "vector" if mode == SearchMode.VECTOR else "keyword",
+                        mode.value
+                        if mode == SearchMode.HYBRID
+                        else "vector"
+                        if mode == SearchMode.VECTOR
+                        else "keyword",
                         tuple(hit.chunk_id for hit in hits),
+                        native_scores=tuple(
+                            float(str(hit.metadata["native_rrf_contribution"])) for hit in hits
+                        )
+                        if mode == SearchMode.HYBRID
+                        and all("native_rrf_contribution" in h.metadata for h in hits)
+                        else (),
                         status=getattr(hits, "status", "completed"),
                         error=getattr(hits, "error", ""),
                         sources=tuple(
-                            query_sources.get(query, ("原質問",) if index == 0 else ("追加検索文",))
+                            query_sources.get(
+                                query,
+                                ("原質問",)
+                                if query_key(query) == query_key(original_query)
+                                else ("追加検索文",),
+                            )
                         ),
                     )
                 )
@@ -1746,7 +1795,9 @@ class AnswerEngine:
                     state,
                     anchors,
                     existing=source_ids,
-                    question=(queries[0], embeddings[0]) if embeddings else None,
+                    question=(queries[0], embeddings[queries[0]])
+                    if queries[0] in embeddings
+                    else None,
                     scores=fused,
                 )
         referenced = [chunk for chunks in references.values() for chunk in chunks]
@@ -2128,7 +2179,12 @@ class AnswerEngine:
             return
         await self._query_hits(
             state,
-            [(text, embeddings[0], SearchMode.VECTOR), (text, embeddings[0], SearchMode.KEYWORD)],
+            [(text, embeddings[0], SearchMode.HYBRID)]
+            if self._settings.rag_hybrid_search_backend == "oracle_native"
+            else [
+                (text, embeddings[0], SearchMode.VECTOR),
+                (text, embeddings[0], SearchMode.KEYWORD),
+            ],
             candidate_limit=self._read_depth(candidate_limit),
             filters=dict(state.filters),
         )
@@ -3364,6 +3420,12 @@ def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
     mode = str(metadata.get("retrieval_mode") or "")
     query = f"q{query_index + 1}"
     channels: set[str] = set()
+    if "native_wrrf_score" in metadata:
+        if float(str(metadata.get("vector_rank") or 0)) > 0:
+            channels.add(f"vector:{query}")
+        if float(str(metadata.get("keyword_rank") or 0)) > 0:
+            channels.add(f"keyword:oracle_text:{query}")
+        return channels
     if "vector_rank" in metadata or mode in {"vector", "hybrid"}:
         channels.add(f"vector:{query}")
     if "keyword_rank" in metadata or mode in {"keyword", "hybrid"}:

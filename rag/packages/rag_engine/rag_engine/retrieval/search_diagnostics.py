@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from rag_engine.retrieval.search_stages import VECTOR_SEARCH_STAGE
+from rag_engine.retrieval.search_stages import HYBRID_SEARCH_STAGE, VECTOR_SEARCH_STAGE
 
 
 def oracle_expression_terms(expression: str) -> list[str]:
@@ -48,7 +48,9 @@ def search_diagnostics(
     fields = [
         {
             "label": "目的",
-            "value": "検索文の埋め込みを使い、意味の近い文書の箇所を探します。"
+            "value": "原質問の埋め込みと本文を使い、Oracle の1回の呼び出しでベクトル・全文検索と WRRF の融合を行います。"
+            if stage == HYBRID_SEARCH_STAGE
+            else "検索文の埋め込みを使い、意味の近い文書の箇所を探します。"
             if vector
             else "作成した検索語と検索式を使い、Oracle Text で文書の箇所を探します。",
         },
@@ -89,6 +91,11 @@ def search_diagnostics(
                 f"検索 {index}・順位 {rank}: {row.get('file') or '文書名の記録なし'} / ページ {row.get('page') or '記録なし'} / "
                 f"{metric}: {score if score is not None else '記録なし'} / チャンク ID: {row['id']}"
             )
+            if stage == HYBRID_SEARCH_STAGE:
+                branch_lines.append(
+                    f"チャンク ID: {row['id']} / ベクトル順位: {row.get('vector_rank') or '該当なし'} / "
+                    f"全文順位: {row.get('text_rank') or '該当なし'}"
+                )
         result_lines.append(branch_lines)
     # 詳細の表示上限でも各検索文の件数と先頭結果を先に確認できるようにする。
     for rank in range(max((len(rows) for rows in result_lines), default=0)):

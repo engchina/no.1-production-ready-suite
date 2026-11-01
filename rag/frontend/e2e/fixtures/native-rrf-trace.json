@@ -1,0 +1,159 @@
+{
+  "fields": [
+    {
+      "label": "目的",
+      "value": "原質問の Oracle WRRF と追加検索の順位寄与を出所の比重で合算します。融合済み順位への再 RRF は行いません。"
+    },
+    {
+      "label": "結果",
+      "value": "重複除去前 4 件 / 重複除去後 2 件 / 正の寄与がある候補 2 件"
+    },
+    {
+      "label": "ベクトル検索と全文検索の比重",
+      "value": "10：1"
+    },
+    {
+      "label": "原質問と追加検索文の比重",
+      "value": "7：3"
+    },
+    {
+      "label": "検索文",
+      "value": "原質問 1 本 / 追加 2 本"
+    },
+    {
+      "label": "順位定数",
+      "value": "60"
+    },
+    {
+      "label": "指標",
+      "value": "RRF の融合スコア（大きい順）。確率や回答の信頼度ではありません。"
+    }
+  ],
+  "lines": [
+    "一覧 1: 原質問 / Oracle hybrid（WRRF）  / 出所: 原質問 / 重み 0.7 / 2 件 / 完了",
+    "一覧 2: 意味の追加 / ベクトル検索  / 出所: 質問の言い換え・分解 / 重み 0.136363636 / 1 件 / 完了",
+    "一覧 3: 用語の追加 / 全文検索  / 出所: 用語・同義語だけ / 重み 0.0136363636 / 1 件 / 完了",
+    "synthetic-a: 一覧 1・順位 1 / 寄与 0.0114754098361 / 融合スコア 0.0116989567809",
+    "synthetic-b: 一覧 1・順位 2 / 寄与 0.0112903225806 / 融合スコア 0.0135257920292",
+    "synthetic-b: 一覧 2・順位 1 / 寄与 0.00223546944858 / 融合スコア 0.0135257920292",
+    "synthetic-a: 一覧 3・順位 1 / 寄与 0.000223546944858 / 融合スコア 0.0116989567809"
+  ],
+  "code": [
+    {
+      "label": "RRF の計算記録",
+      "language": "json",
+      "text": "{\n  \"method_ratio\": [\n    10,\n    1\n  ],\n  \"source_ratio\": [\n    7,\n    3\n  ],\n  \"rank_constant\": 60,\n  \"expressions\": [\n    {\n      \"query\": \"原質問\",\n      \"weight\": 0.7,\n      \"original\": true\n    },\n    {\n      \"query\": \"意味の追加\",\n      \"weight\": 0.15,\n      \"original\": false\n    },\n    {\n      \"query\": \"用語の追加\",\n      \"weight\": 0.15,\n      \"original\": false\n    }\n  ],\n  \"lists\": [\n    {\n      \"query\": \"原質問\",\n      \"channel\": \"hybrid\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"weight\": 0.7,\n      \"count\": 2,\n      \"raw_count\": 2,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"oracle_wrrf\",\n      \"native_scores\": [\n        0.01639344262295082,\n        0.016129032258064516\n      ]\n    },\n    {\n      \"query\": \"意味の追加\",\n      \"channel\": \"vector\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"質問の言い換え・分解\"\n      ],\n      \"weight\": 0.13636363636363635,\n      \"count\": 1,\n      \"raw_count\": 1,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"rank\",\n      \"native_scores\": []\n    },\n    {\n      \"query\": \"用語の追加\",\n      \"channel\": \"keyword\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"用語・同義語だけ\"\n      ],\n      \"weight\": 0.013636363636363636,\n      \"count\": 1,\n      \"raw_count\": 1,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"rank\",\n      \"native_scores\": []\n    }\n  ],\n  \"contributions\": [\n    {\n      \"chunk_id\": \"synthetic-a\",\n      \"list_index\": 0,\n      \"rank\": 1,\n      \"contribution\": 0.011475409836065573,\n      \"fused_score\": 0.011698956780923994\n    },\n    {\n      \"chunk_id\": \"synthetic-b\",\n      \"list_index\": 0,\n      \"rank\": 2,\n      \"contribution\": 0.01129032258064516,\n      \"fused_score\": 0.013525792029229364\n    },\n    {\n      \"chunk_id\": \"synthetic-b\",\n      \"list_index\": 1,\n      \"rank\": 1,\n      \"contribution\": 0.0022354694485842027,\n      \"fused_score\": 0.013525792029229364\n    },\n    {\n      \"chunk_id\": \"synthetic-a\",\n      \"list_index\": 2,\n      \"rank\": 1,\n      \"contribution\": 0.00022354694485842027,\n      \"fused_score\": 0.011698956780923994\n    }\n  ],\n  \"raw_count\": 4,\n  \"unique_count\": 2,\n  \"candidate_count\": 2\n}"
+    }
+  ],
+  "rrf": {
+    "method_ratio": [
+      10,
+      1
+    ],
+    "source_ratio": [
+      7,
+      3
+    ],
+    "rank_constant": 60,
+    "expressions": [
+      {
+        "query": "原質問",
+        "weight": 0.7,
+        "original": true
+      },
+      {
+        "query": "意味の追加",
+        "weight": 0.15,
+        "original": false
+      },
+      {
+        "query": "用語の追加",
+        "weight": 0.15,
+        "original": false
+      }
+    ],
+    "lists": [
+      {
+        "query": "原質問",
+        "channel": "hybrid",
+        "variant": "",
+        "sources": [
+          "原質問"
+        ],
+        "weight": 0.7,
+        "count": 2,
+        "raw_count": 2,
+        "status": "completed",
+        "error": "",
+        "score_source": "oracle_wrrf",
+        "native_scores": [
+          0.01639344262295082,
+          0.016129032258064516
+        ]
+      },
+      {
+        "query": "意味の追加",
+        "channel": "vector",
+        "variant": "",
+        "sources": [
+          "質問の言い換え・分解"
+        ],
+        "weight": 0.13636363636363635,
+        "count": 1,
+        "raw_count": 1,
+        "status": "completed",
+        "error": "",
+        "score_source": "rank",
+        "native_scores": []
+      },
+      {
+        "query": "用語の追加",
+        "channel": "keyword",
+        "variant": "",
+        "sources": [
+          "用語・同義語だけ"
+        ],
+        "weight": 0.013636363636363636,
+        "count": 1,
+        "raw_count": 1,
+        "status": "completed",
+        "error": "",
+        "score_source": "rank",
+        "native_scores": []
+      }
+    ],
+    "contributions": [
+      {
+        "chunk_id": "synthetic-a",
+        "list_index": 0,
+        "rank": 1,
+        "contribution": 0.011475409836065573,
+        "fused_score": 0.011698956780923994
+      },
+      {
+        "chunk_id": "synthetic-b",
+        "list_index": 0,
+        "rank": 2,
+        "contribution": 0.01129032258064516,
+        "fused_score": 0.013525792029229364
+      },
+      {
+        "chunk_id": "synthetic-b",
+        "list_index": 1,
+        "rank": 1,
+        "contribution": 0.0022354694485842027,
+        "fused_score": 0.013525792029229364
+      },
+      {
+        "chunk_id": "synthetic-a",
+        "list_index": 2,
+        "rank": 1,
+        "contribution": 0.00022354694485842027,
+        "fused_score": 0.011698956780923994
+      }
+    ],
+    "raw_count": 4,
+    "unique_count": 2,
+    "candidate_count": 2
+  }
+}

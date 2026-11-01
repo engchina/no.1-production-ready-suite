@@ -281,4 +281,4 @@ async def test_retrieve_searches_with_the_resolved_as_of(
 
     await _engine(oracle).retrieve(SearchRequest(query="q", filters={"knowledge_base_id": "kb-a"}))
 
-    assert [call["as_of"] for call in oracle.main_calls] == ["2026-04-01"] * 2
+    assert [call["as_of"] for call in oracle.main_calls] == ["2026-04-01"]

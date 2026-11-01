@@ -900,9 +900,22 @@ def search_adb_hybrid_chunks(
             budgets = source_weights([*queries, *extra_text_queries], weights)
             # 埋め込み（`gen_ai.embeddings` の span）の後の DB の検索は、それぞれ工程の span にする（処理の経過で、文書の
             # 検索の中の今の作業を末端の段として出す。#3436）。
-            query_vectors = _query_vectors(queries, settings, query_embedder)
+            from rag_engine.retrieval.query_channels import expression_channels
+
+            channels = {
+                q: expression_channels(q, queries[0], settings.retrieval_query_sources, vector_only=_query_key(q) in vector_only_keys)
+                for q in queries
+            }
+            vector_inputs = [q for q in queries if channels[q] != ("keyword",)]
+            vectors = dict(zip(vector_inputs, _query_vectors(vector_inputs, settings, query_embedder), strict=True))
             with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
-                for query_vector in query_vectors:
+                for query in queries:
+                    if query not in vectors:
+                        rankings.append([])
+                        if _image_embedding_enabled(settings):
+                            image_rankings.append([])
+                        continue
+                    query_vector = vectors[query]
                     rankings.append(
                         read_ranking(
                             "vector",
@@ -959,7 +972,9 @@ def search_adb_hybrid_chunks(
             )
             tokenizer_config = _text_search_tokenizer_config(settings)
             # 全文検索の上限は vector 専用の検索文（HyDE の仮説文）を除いてから数える (#921)。重みは元の位置で決める。
-            text_candidates = [(index, query) for index, query in enumerate(queries) if _query_key(query) not in vector_only_keys]
+            text_candidates = [
+                (index, query) for index, query in enumerate(queries) if any(c in {"hybrid", "keyword"} for c in channels[query])
+            ]
             # 質問文の変種の全文検索と、組み立て済みの検索式（extra_text_queries）の全文検索を 1 つの工程にする
             # （融合の順と重みは変えない）。検索するものが無ければ工程を出さない。
             text_variants = text_candidates[: _text_search_query_variant_limit(settings)]
@@ -1038,6 +1053,7 @@ def search_adb_hybrid_chunks(
                     sources=settings.retrieval_query_sources.get(q, ("原質問",) if i == 0 else ("追加検索文",)),
                 )
                 for i, (q, ranking) in enumerate(zip(queries, rankings, strict=True))
+                if q in vectors
             ]
             raw_lists += [
                 RankedList(
@@ -1061,6 +1077,7 @@ def search_adb_hybrid_chunks(
                         factor=image_weight / (1 + image_weight),
                     )
                     for i, (q, ranking) in enumerate(zip(queries, image_rankings, strict=True))
+                    if q in vectors
                 ]
             raw_lists = [
                 replace(r, status="failed", error=failures[(r.channel, r.query, r.variant)])

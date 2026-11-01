@@ -1,3 +1,4 @@
+import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
 import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
@@ -1072,6 +1073,41 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 });
 
 test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {
+  test("Oracle hybrid と追加検索の経路、WRRF の寄与を確認できる", async ({page}, testInfo) => {
+    await mockLocalAuth(page);
+    const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+    await mockRuns(page, [row]);
+    const events = savedSpanProgress(row.run_id, [
+      {key: "root", spec: ragSpan.root(), at: [0, 2]},
+      {key: "search", spec: ragSpan.step("文書検索"), at: [0, 2]},
+      {key: "native", spec: ragSpan.step("原質問をベクトル検索と全文検索で探す", "search"), at: [.1,1], details: {fields: [
+        {label: "目的", value: "原質問の埋め込みと本文を使い、Oracle の1回の呼び出しでベクトル・全文検索と WRRF の融合を行います。"},
+        {label: "検索 1 の入力", value: "合成の質問"},
+        {label: "指標", value: "Oracle WRRF（大きい順・確率ではありません）"},
+      ], lines: ["ベクトル順位: 1 / 全文順位: 2"]}},
+      {key: "rrf", spec: ragSpan.step("検索結果の統合（RRF）", "search"), at: [1.5,1.6], details: nativeRrfDetails},
+    ]);
+    await mockTraceApi(page, {[row.run_id]: events});
+    await page.goto(`/history/${row.run_id}`);
+    const timeline = page.getByTestId("run-history-timeline");
+    await page.getByTestId("run-history-timeline-summary").click();
+    for (const key of ["native", "rrf"]) {
+      await inspectTraceStep(page, timeline, spanStepId(key));
+      const inspector = page.locator("[data-trace-inspector]");
+      if (key === "native") {
+        await expect(inspector).toContainText("Oracle の1回の呼び出し");
+        await expect(inspector).toContainText("ベクトル順位: 1 / 全文順位: 2");
+      } else {
+        await expect(inspector).toContainText("10：1");
+        await expect(inspector).toContainText("融合済み順位への再 RRF は行いません");
+        await expect(inspector).toContainText("意味の追加 / ベクトル検索");
+        await expect(inspector).toContainText("用語の追加 / 全文検索");
+      }
+      await expectNoPageOverflow(page);
+      await inspector.screenshot({path: testInfo.outputPath(`native-${key}.png`)});
+      await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+    }
+  });
   test("検索の実入出力と分割方法を経路と区別して確認できる", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", search_answer_profile_name: "プロファイル A", answer: "合成の回答"});

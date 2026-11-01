@@ -353,7 +353,9 @@ class _DelayedBranches(OracleClient):
     """vector と keyword の終わる順を変えられる OracleClient。"""
 
     def __init__(self, *, vector_delay: float, keyword_delay: float) -> None:
-        super().__init__(settings=Settings.model_construct(rag_rrf_k=60))
+        super().__init__(
+            settings=Settings.model_construct(rag_rrf_k=60, rag_hybrid_search_backend="sudachi")
+        )
         self._vector_delay = vector_delay
         self._keyword_delay = keyword_delay
 
@@ -491,7 +493,7 @@ async def test_search_reads_all_queries_in_one_batch() -> None:
     batch_oracle = _ManySearchOracle()
     batched, _ = await _search(batch_oracle, queries)
 
-    assert batch_oracle.batches == [[q for q in queries for _ in range(2)]]
+    assert batch_oracle.batches == [queries]
     assert _dump(batched) == _dump(one_by_one)
     assert _dump(batched)[0]
 
@@ -507,7 +509,7 @@ async def test_search_reuses_query_results_within_one_answer() -> None:
     reused, _ = await _search(oracle, second_queries, state)
     fresh, _ = await _search(_SearchOracle(), second_queries)
 
-    assert oracle.batches == [["検索文 5", "検索文 5"]]
+    assert oracle.batches == [["検索文 5"]]
     assert _dump(reused) == _dump(fresh)
 
 
@@ -938,7 +940,7 @@ async def test_injected_search_reports_db_search_stages_and_channels(
     monkeypatch.setattr(client, "chunk_set_first_page_contexts", no_first_pages)
     monkeypatch.setattr(client, "context_group_siblings", no_siblings)
     engine = AnswerEngine(
-        Settings(),
+        _search_settings(),
         oracle=client,
         genai=_QueryGenAi({"規程": 1.0, "保管": 2.0}),  # type: ignore[arg-type]
     )
@@ -985,7 +987,7 @@ async def test_injected_search_reports_db_search_stages_and_channels(
     # 「規程」(q1) の vector と keyword の両方と「保管」(q2) の vector、keyword だけ、q2 の両方。
     assert channels["c-1"] == ["keyword:oracle_text:q1", "vector:q1", "vector:q2"]
     assert channels["c-7"] == ["keyword:oracle_text:q1"]
-    assert channels["c-4"] == ["keyword:oracle_text:q2", "vector:q2"]
+    assert channels["c-4"] == ["vector:q2"]
     # 並べ替えに効く値は書かない(文脈の選択の点数を変えない)。
     assert all(
         set(chunk.metadata["adb_hybrid"]) == {"retrieval_channels"} for chunk in result.child_chunks
@@ -1249,14 +1251,14 @@ async def test_weighted_rrf_uses_raw_lists_once_and_records_actual_contributions
         expand_references=False,
     )
     record = next(s for s in state.retrieval_stages if s["stage"] == "candidate_fusion")["rrf"]
-    assert len(record["lists"]) == 5
-    assert [r["weight"] for r in record["lists"]] == pytest.approx(
-        [7 / 11, 0.7 / 11, 1.5 / 11, 0.15 / 11, 1.5 / 11]
-    )
+    assert len(record["lists"]) == 3
+    assert [r["weight"] for r in record["lists"]] == pytest.approx([0.7, 1.5 / 11, 1.5 / 11])
     assert record["unique_count"] == 3
-    assert record["raw_count"] == 5
+    assert record["raw_count"] == 3
     scores = {c.chunk_id: c.metadata["rrf_score"] for c in result.child_chunks}
-    assert scores == pytest.approx({"c-0": 0.7 / 61, "c-1": 0.15 / 61, "c-2": 0.15 * 10 / 11 / 61})
+    assert scores == pytest.approx(
+        {"c-0": 0.7 / 61, "c-1": 0.15 * 10 / 11 / 61, "c-2": 0.15 * 10 / 11 / 61}
+    )
     for chunk_id, score in scores.items():
         assert state.chunks[chunk_id].metadata["rrf_score"] == pytest.approx(score)
         assert state.chunks[chunk_id].metadata["rrf_k"] == 60
@@ -1344,7 +1346,7 @@ async def test_all_failed_rankings_record_failure_and_are_not_cached() -> None:
         )
     assert not state.search_hits
     assert len(recorded) == 1
-    assert [r["status"] for r in recorded[0]["rrf"]["lists"]] == ["failed", "failed"]
+    assert [r["status"] for r in recorded[0]["rrf"]["lists"]] == ["failed"]
     assert recorded[0]["rrf"]["unique_count"] == 0
 
 

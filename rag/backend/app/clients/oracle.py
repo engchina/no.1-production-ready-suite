@@ -38,7 +38,11 @@ from pr_backend_core.oracle_session import init_oracle_session
 from pydantic import ValidationError
 from rag_engine.resources.tracing import CallObservation, observe_call
 from rag_engine.retrieval.search_diagnostics import search_diagnostics
-from rag_engine.retrieval.search_stages import TEXT_SEARCH_STAGE, VECTOR_SEARCH_STAGE
+from rag_engine.retrieval.search_stages import (
+    HYBRID_SEARCH_STAGE,
+    TEXT_SEARCH_STAGE,
+    VECTOR_SEARCH_STAGE,
+)
 from rag_parser_core.xml_tree_json import query_citation_keys
 
 from app.clients.language_pack_release_store import LanguagePackReleaseStore
@@ -510,6 +514,11 @@ class OracleClient:
         if mode == SearchMode.KEYWORD:
             return await self.keyword_search(query, top_k, filters)
 
+        if self._settings.rag_hybrid_search_backend == "oracle_native":
+            await self._ensure_native_hybrid_ready()
+            self._validate_embedding_width(embedding, "query embedding")
+            return await self._native_search_hits(query, embedding, top_k, filters or {}, mode)
+
         # vector と keyword は独立しているので並行に読む(#1490)。融合は順位だけで決まる。
         vector_hits, keyword_hits, citation_hits = await asyncio.gather(
             self.vector_search(embedding, top_k, filters, query=query),
@@ -594,6 +603,18 @@ class OracleClient:
             return []
         await self._ensure_native_hybrid_ready()
         filters = filters or {}
+        if self._settings.rag_hybrid_search_backend == "oracle_native":
+            for _, embedding, mode in searches:
+                if mode != SearchMode.KEYWORD:
+                    self._validate_embedding_width(embedding, "query embedding")
+            return list(
+                await asyncio.gather(
+                    *(
+                        self._native_search_hits(query, embedding, top_k, filters, mode)
+                        for query, embedding, mode in searches
+                    )
+                )
+            )
         branch_queries: list[str] = []
         branch_kinds: list[str] = []
         binds: dict[str, object] = {}
@@ -608,11 +629,7 @@ class OracleClient:
                 branch_queries.append(query)
                 binds[f"embedding_{vector_branch}"] = _to_vector_bind(embedding)
             if mode in {SearchMode.KEYWORD, SearchMode.HYBRID}:
-                text_query = (
-                    query.strip()
-                    if self._settings.rag_hybrid_search_backend == "oracle_native"
-                    else _oracle_text_query(query, settings=self._settings)
-                )
+                text_query = _oracle_text_query(query, settings=self._settings)
                 if text_query is not None:
                     keyword_branch = len(branch_kinds)
                     branch_kinds.append("keyword")
@@ -7000,6 +7017,93 @@ class OracleClient:
                 "Oracle原生hybrid索引が未準備です。システムテーブルの更新と索引の同期を確認してください。"
             )
 
+    async def _native_search_hits(
+        self,
+        query: str,
+        embedding: list[float],
+        top_k: int,
+        filters: dict[str, str],
+        mode: SearchMode,
+    ) -> SearchHits:
+        channel = {
+            SearchMode.HYBRID: "hybrid",
+            SearchMode.VECTOR: "vector",
+            SearchMode.KEYWORD: "keyword",
+        }[mode]
+        title = {
+            "hybrid": HYBRID_SEARCH_STAGE,
+            "vector": VECTOR_SEARCH_STAGE,
+            "keyword": TEXT_SEARCH_STAGE,
+        }[channel]
+        result = SearchHits()
+        rows: list[dict[str, object]] = []
+        with observe_call("stage", title) as observation:
+            try:
+                rows = await self._native_rows(
+                    channel,
+                    query,
+                    _to_vector_bind(embedding) if mode == SearchMode.VECTOR else embedding,
+                    top_k=top_k,
+                    filters=filters,
+                )
+                for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), 1):
+                    metadata: dict[str, Any] = {"retrieval_mode": channel}
+                    if channel == "hybrid":
+                        score = _float_value(row.get("score", 0))
+                        metadata.update(
+                            native_wrrf_score=score,
+                            native_rrf_contribution=score / (100 * (self._settings.rag_rrf_k + 1)),
+                            vector_rank=row.get("native_vector_rank"),
+                            keyword_rank=row.get("native_text_rank"),
+                            vector_score=row.get("native_vector_score"),
+                            keyword_score=row.get("native_text_score"),
+                        )
+                    else:
+                        metadata.update(
+                            {f"{channel}_rank": rank, f"{channel}_score": row.get("score")}
+                        )
+                    metadata = {key: value for key, value in metadata.items() if value is not None}
+                    result.append(_with_retrieval_metadata(chunk, **metadata))
+                if not result:
+                    result.status = "empty"
+            except Exception as exc:
+                result.status = "failed"
+                result.error = type(exc).__name__
+                result.failure = exc
+                observation.display(params={"status": "failed"})
+            observation.display(
+                details=search_diagnostics(
+                    title,
+                    branches=[
+                        {
+                            "query": query,
+                            "native": True,
+                            "raw_count": len(rows),
+                            "error": result.error,
+                            "results": [
+                                {
+                                    "id": h.chunk_id,
+                                    "file": h.file_name,
+                                    "page": h.metadata.get("page_number"),
+                                    "score": h.score,
+                                    "vector_rank": h.metadata.get("vector_rank"),
+                                    "text_rank": h.metadata.get("keyword_rank"),
+                                }
+                                for h in result
+                            ],
+                        }
+                    ],
+                    scope=filters,
+                    limit=top_k,
+                    metric="Oracle WRRF（大きい順・確率ではありません）"
+                    if channel == "hybrid"
+                    else "Oracle vector_score（大きい順）"
+                    if channel == "vector"
+                    else "Oracle text_score（大きい順）",
+                )
+            )
+        return result
+
     async def _native_rows(
         self, channel: str, query: str, embedding: object, *, top_k: int, filters: dict[str, str]
     ) -> list[dict[str, object]]:
@@ -7028,17 +7132,24 @@ class OracleClient:
             limit=top_k,
             rank_constant=self._settings.rag_rrf_k,
             accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
+            method_ratio=self._settings.rag_rrf_method_ratio,
         )
-        score = "n.vector_score" if channel == "vector" else "n.text_score"
+        score = {"vector": "n.vector_score", "keyword": "n.text_score", "hybrid": "n.score"}[
+            channel
+        ]
         try:
             return await self._fetch_all(
                 f"""
-                SELECT {_SEARCH_HIT_COLUMNS}, {score} AS score
+                SELECT {_SEARCH_HIT_COLUMNS}, {score} AS score,
+                    n.vector_rank AS native_vector_rank, n.text_rank AS native_text_rank,
+                    n.vector_score AS native_vector_score, n.text_score AS native_text_score
                 {joins}
                 JOIN JSON_TABLE(DBMS_HYBRID_VECTOR.SEARCH(JSON(:native_spec)), '$[*]'
                     COLUMNS (position FOR ORDINALITY, source_rowid VARCHAR2(128) PATH '$.rowid',
                         vector_score NUMBER PATH '$.vector_score',
-                        text_score NUMBER PATH '$.text_score')) n
+                        text_score NUMBER PATH '$.text_score', score NUMBER PATH '$.score',
+                        vector_rank NUMBER PATH '$.vector_rank',
+                        text_rank NUMBER PATH '$.text_rank')) n
                     ON c.ROWID = CHARTOROWID(n.source_rowid)
                 WHERE {where}
                 ORDER BY n.position

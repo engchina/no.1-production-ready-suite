@@ -1,6 +1,7 @@
 """合成KB・profileで原生／従来方式の範囲と一回のRRFを確認する。"""
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -76,7 +77,7 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     assert {c.metadata["document_id"] for c in result.child_chunks} == set(ids[:2])
     fusion = state.retrieval_stages[-1]["rrf"]
     assert [row["weight"] for row in fusion["lists"]] == pytest.approx(
-        [7 / 11, 0.7 / 11, 3 / 11, 0.3 / 11]
+        [0.7, 3 / 11] if backend == "oracle_native" else [7 / 11, 0.7 / 11, 3 / 11]
     )
     assert all(row["status"] == "completed" for row in fusion["lists"])
     assert state.filters is not None
@@ -112,3 +113,80 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
         )
     finally:
         reset_audit_request_context(restricted)
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("ratio", [(10, 1), (2, 3)])
+async def test_native_combined_original_and_provenance_channels(
+    ratio: tuple[float, float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    from types import SimpleNamespace
+
+    settings = get_settings().model_copy(
+        update={"rag_hybrid_search_backend": "oracle_native", "rag_rrf_method_ratio": ratio}
+    )
+    oracle = OracleClient(settings)
+    kb = await oracle.create_knowledge_base(name=f"合成経路KB {uuid4().hex[:8]}")
+    text = "syntheticoriginal syntheticsemantic syntheticterm"
+    await _indexed_document(
+        oracle,
+        file_name="synthetic-routing.txt",
+        chunks=[
+            Chunk(
+                text=text,
+                index=0,
+                start_offset=0,
+                end_offset=len(text),
+                metadata={"page_number": 1},
+            )
+        ],
+        knowledge_base_ids=[kb.id],
+    )
+    calls = []
+    fetch = oracle._fetch_all
+
+    async def record(
+        statement: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if "DBMS_HYBRID_VECTOR.SEARCH" in statement:
+            calls.append(json.loads(str((binds or {})["native_spec"])))
+        return await fetch(statement, binds)
+
+    monkeypatch.setattr(oracle, "_fetch_all", record)
+    embedded = []
+
+    class Embedding:
+        async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
+            embedded.extend(texts)
+            return [[0.1] * 1536 for _ in texts]
+
+    state = _SearchState()
+    engine = AnswerEngine(settings, oracle=oracle, genai=cast(Any, Embedding()))
+    result = await engine._search(
+        SearchRequest(query="syntheticoriginal", filters={"knowledge_base_id": kb.id}),
+        state,
+        retrieval_queries=["syntheticoriginal", "syntheticsemantic", "syntheticterm"],
+        expand_references=False,
+        settings=SimpleNamespace(
+            retrieval_query_sources={
+                "syntheticsemantic": ("質問の言い換え・分解",),
+                "syntheticterm": ("用語・同義語だけ",),
+            }
+        ),
+    )
+    assert result.child_chunks
+    assert embedded == ["syntheticoriginal", "syntheticsemantic"]
+    assert sorted(c["search_fusion"] for c in calls) == ["TEXT_ONLY", "UNION", "VECTOR_ONLY"]
+    original = next(c for c in calls if c["search_fusion"] == "UNION")
+    assert original["search_scorer"] == "WRRF"
+    assert original["vector"]["score_weight"] == ratio[0]
+    assert original["text"]["score_weight"] == ratio[1]
+    fusion = state.retrieval_stages[-1]["rrf"]
+    assert [r["status"] for r in fusion["lists"]] == ["completed"] * 3
+    assert fusion["lists"][0]["score_source"] == "oracle_wrrf"
+    for chunk in state.chunks.values():
+        if "native_wrrf_score" in chunk.metadata:
+            assert chunk.metadata["native_rrf_contribution"] == pytest.approx(
+                float(str(chunk.metadata["native_wrrf_score"])) / 6100
+            )
