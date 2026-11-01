@@ -77,6 +77,7 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable }: { kbId:
       {editable && ["STOPPED", "INTERRUPTED"].includes(job.data?.status ?? "") ? <Button icon={Play} variant="secondary" disabled={!enabled || action.isPending} onClick={() => void start("continue")}>{t("knowledgeBases.structure.build.continue")}</Button> : null}
       {editable && !active && (job.data?.counts?.FAILED ?? 0) > 0 ? <Button icon={RefreshCw} variant="secondary" disabled={!enabled || action.isPending} onClick={() => void start("retry")}>{t("knowledgeBases.structure.build.retry")}</Button> : null}
     </div>
+    {job.data?.partial_visibility ? <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.build.visibleOnly")}</p> : null}
     {action.isError ? <ApiErrorState error={action.error} fallback={t("knowledgeBases.structure.build.error")} onRetry={() => action.reset()} /> : null}
     {job.isError ? <ApiErrorState error={job.error} fallback={t("knowledgeBases.structure.build.loadError")} onRetry={() => void job.refetch()} /> : null}
     {preview && plan.isError ? <ApiErrorState error={plan.error} fallback={t("knowledgeBases.structure.build.loadError")} onRetry={() => void plan.refetch()} /> : null}

@@ -228,3 +228,27 @@ async def test_publish_checks_source_under_lock_before_any_graph_write(
             "kb", "doc", source_fingerprint(["old"]), ["old"], {"old": object()}, "COMPLETE", {}
         )
     assert writes == []
+
+
+async def test_saved_job_does_not_expose_removed_or_inaccessible_documents() -> None:
+    from app.clients.structure_index_store import StructureIndexStore
+
+    class Oracle:
+        async def _fetch_all(self, sql: str, binds: Any) -> Any:
+            assert "rag_document_knowledge_bases" in sql and "knowledge_base_id=:kb" in sql
+            return [{"document_id": "visible", "file_name": "current.txt"}]
+
+    store: Any = StructureIndexStore(Oracle())  # type: ignore[arg-type]  # 合成のDB adapter。
+    state = {
+        "status": "COMPLETED",
+        "items": [
+            {"document_id": "visible", "name": "old.txt", "status": "SUCCEEDED"},
+            {"document_id": "removed", "name": "hidden.txt", "status": "FAILED"},
+        ],
+    }
+    filtered = await store.visible_state("kb", state)
+    assert filtered["partial_visibility"] is True
+    assert filtered["items"] == [
+        {"document_id": "visible", "name": "current.txt", "status": "SUCCEEDED"}
+    ]
+    assert len(state["items"]) == 2

@@ -399,7 +399,9 @@ async def get_structure_index_job(
         raise HTTPException(404, "ナレッジベースが見つかりません。")
     store = StructureIndexStore(oracle)
     state = await store.get(knowledge_base_id)
-    return ApiResponse(data=public_state(state, offset, limit))
+    return ApiResponse(
+        data=public_state(await store.visible_state(knowledge_base_id, state), offset, limit)
+    )
 
 
 @router.post("/{knowledge_base_id}/structure-index/job")
@@ -415,7 +417,12 @@ async def start_structure_index_job(
         raise HTTPException(404, "ナレッジベースが見つかりません。") from exc
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    return ApiResponse(data=public_state(state) or {})
+    from app.clients.structure_index_store import StructureIndexStore
+
+    return ApiResponse(
+        data=public_state(await StructureIndexStore(oracle).visible_state(knowledge_base_id, state))
+        or {}
+    )
 
 
 @router.post("/{knowledge_base_id}/structure-index/job/stop")
@@ -429,4 +436,9 @@ async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[s
         state = await structure_index_jobs.stop(oracle, knowledge_base_id)
     except KeyError as exc:
         raise HTTPException(404, "構築の記録が見つかりません。") from exc
-    return ApiResponse(data=public_state(state) or {})
+    from app.clients.structure_index_store import StructureIndexStore
+
+    return ApiResponse(
+        data=public_state(await StructureIndexStore(oracle).visible_state(knowledge_base_id, state))
+        or {}
+    )

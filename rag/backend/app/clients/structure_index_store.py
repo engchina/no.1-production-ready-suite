@@ -73,6 +73,28 @@ class StructureIndexStore:
                     item.update(status="FAILED", reason="interrupted")
         return state
 
+    async def visible_state(
+        self, kb_id: str, state: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """過去の投入時の範囲を信用せず、現在見える所属文書だけを返す。"""
+        from app.clients.oracle import _oracle_access_predicate_sql, _with_tenant_bind
+
+        if state is None:
+            return None
+        rows = await self.oracle._fetch_all(
+            f"""SELECT d.document_id,d.file_name FROM rag_document_knowledge_bases m
+            JOIN rag_documents d ON d.document_id=m.document_id
+            WHERE m.knowledge_base_id=:kb AND {_oracle_access_predicate_sql(alias="d")}""",
+            _with_tenant_bind({"kb": kb_id}),
+        )
+        names = {str(row["document_id"]): str(row["file_name"]) for row in rows}
+        items = [
+            dict(item, name=names[item["document_id"]])
+            for item in state["items"]
+            if item["document_id"] in names
+        ]
+        return dict(state, items=items, partial_visibility=len(items) != len(state["items"]))
+
     async def mutate(
         self,
         kb_id: str,

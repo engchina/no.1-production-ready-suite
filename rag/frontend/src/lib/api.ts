@@ -1193,7 +1193,7 @@ export interface KnowledgeBaseAdapterConfig {
 export type StructureBuildMode = "missing" | "rebuild" | "retry" | "continue";
 export interface StructureBuildItem { document_id: string; name: string; status: string; reason?: string | null; quality?: string | null; result?: { quality: string } | null }
 export interface StructureBuildPlan { items: StructureBuildItem[]; total: number; offset: number; limit: number; counts: Record<string, number> }
-export interface StructureBuildJob extends StructureBuildPlan { job_id: string; status: string; started_at: string; finished_at: string | null }
+export interface StructureBuildJob extends StructureBuildPlan { job_id: string; status: string; partial_visibility?: boolean; started_at: string; finished_at: string | null }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   structure_index_enabled?: boolean | null;

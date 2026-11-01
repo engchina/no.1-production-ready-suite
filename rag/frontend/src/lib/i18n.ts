@@ -2636,6 +2636,7 @@ export const ja = {
     "先に文書を追加し、索引が完了するとここで検索を試せます。",
   "knowledgeBases.searchTest.error": "検索に失敗しました。再試行してください。",
   "knowledgeBases.searchTest.resultMeta": "{count} 件 / {ms} ms",
+  "knowledgeBases.structure.build.visibleOnly": "現在の権限で閲覧でき、このKBに所属している文書だけを表示しています。",
   "knowledgeBases.structure.build.help": "保存済みのチャンクの見出し・階層情報から構築します。解析・埋め込み・検索索引の再作成や、検索時の構造拡張の有効化は行いません。",
   "knowledgeBases.structure.build.preview": "既存文書に構築",
   "knowledgeBases.structure.build.start": "不足・更新分を構築",
