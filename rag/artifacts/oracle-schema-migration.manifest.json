@@ -593,13 +593,13 @@
     {
       "destructive": false,
       "name": "20261101_003_native_hybrid_scope",
-      "sha256": "e3ce20a95b1fcb7f24ad63f1f5e5e840db55f66b5dc44a76742324ad8c654585",
+      "sha256": "771c931b6639f671a7d986d9dea98009d166365261d1f9f7597642eea0622198",
       "statement_count": 6,
       "table_name": "rag_chunks"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "744c133fac841d6945cdb1d2de8a2a94dd520f6d4f402a4096653e3a2fd92444",
+  "sha256": "b3fdde16ae9a4f1e50522338ce2ae5f14bfdf04acfa117d56b9cc64c17b988e7",
   "statement_count": 135
 }

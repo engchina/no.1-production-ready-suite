@@ -4003,10 +4003,18 @@ END;
 BEGIN
     EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_NATIVE_SCOPE_SYNC
 BEFORE INSERT OR UPDATE OF chunk_set_id, native_scope_id ON rag_chunks FOR EACH ROW
+DECLARE
+    v_known_set NUMBER;
 BEGIN
     IF :NEW.chunk_set_id IS NULL THEN
         :NEW.native_scope_id := NULL;
     ELSE
+        SELECT COUNT(*) INTO v_known_set FROM rag_chunk_sets
+        WHERE chunk_set_id = :NEW.chunk_set_id;
+        IF v_known_set = 0 THEN
+            :NEW.native_scope_id := NULL;
+            RETURN;
+        END IF;
         BEGIN
             SELECT native_scope_id INTO :NEW.native_scope_id FROM rag_native_search_scopes
             WHERE chunk_set_id = :NEW.chunk_set_id;
