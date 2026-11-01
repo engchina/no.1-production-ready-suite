@@ -1,31 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { Button, ButtonLink, Card, CardContent, CardHeader, CardTitle, Banner, FormStatus, SelectField, Skeleton, TextareaField, TimedLoadingState, useConfirm, StatusBadge } from "@production-ready/ui";
+import { Button, Card, CardContent, CardHeader, CardTitle, Banner, FormStatus, SelectField, Skeleton, TextareaField, TimedLoadingState, useConfirm, StatusBadge } from "@production-ready/ui";
 
 import { api, type IngestionJobPhase, type LanguagePackDocumentUse, type LanguagePackRelation } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { ApiErrorState } from "@/components/StateViews";
 import { LanguagePackComparison } from "@/components/settings/LanguagePackHistoryCard";
 import { formatDateTime } from "@/lib/format";
-import { APP_ROUTES } from "@/lib/routes";
 import { phaseLabelKey } from "./DocumentWorkspace.logic";
 
 export function LanguagePackRelationBadge({ relation }: { relation: LanguagePackRelation }) {
   return <StatusBadge variant={relation === "different" ? "warning" : relation === "unrecorded" ? "neutral" : "success"} label={t(`settings.language.release.relation.${relation}`)} icon={false} />;
 }
 
-/** 版番号だけから再処理の必要性を推測せず、各有効レシピの実際の使用版を示す。 */
-export function LanguagePackUseSummary({ use, documentId }: { use?: LanguagePackDocumentUse | null; documentId: string }) {
-  if (!use || use.recipes.length === 0) return <span className="text-xs text-fg-muted">{t("settings.language.release.relation.unrecorded")}</span>;
-  const active = use.recipes.filter((recipe) => recipe.chunk_set_id !== null);
-  const versions = [...new Set(active.map((recipe) => recipe.version).filter((version): version is number => version != null))];
-  const relations = [...new Set(active.map((recipe) => recipe.relation))];
-  return <div className="space-y-2">
-    <span className="block text-sm">{versions.length > 1 ? t("settings.language.release.multiple") : versions.length ? `v${versions[0]}` : t("settings.language.release.relation.unrecorded")}</span>
-    {relations.map((relation) => <LanguagePackRelationBadge key={relation} relation={relation} />)}
-    <ButtonLink size="sm" variant="secondary" to={`${APP_ROUTES.documents}/${encodeURIComponent(documentId)}?language_pack=1`}>{t("settings.language.release.breakdown")}</ButtonLink>
-  </div>;
+/** 有効レシピの差分・未記録を見落とさず、一覧では判定を1つにまとめる。 */
+export function LanguagePackUseSummary({ use }: { use?: LanguagePackDocumentUse | null }) {
+  const relations = new Set(use?.recipes.filter((recipe) => recipe.chunk_set_id !== null).map((recipe) => recipe.relation));
+  const relation: LanguagePackRelation = relations.has("different") ? "different"
+    : relations.size === 0 || relations.has("unrecorded") ? "unrecorded"
+      : relations.has("equivalent") ? "equivalent" : "current";
+  return <StatusBadge variant={relation === "different" ? "warning" : relation === "unrecorded" ? "neutral" : "success"} label={t(`settings.language.release.relation.${relation}`)} />;
 }
 
 export function LanguagePackDocumentPanel(props: { documentId: string; fileName: string; use?: LanguagePackDocumentUse | null; recipe: import("@/lib/api").DocumentRecipeView | null }) {

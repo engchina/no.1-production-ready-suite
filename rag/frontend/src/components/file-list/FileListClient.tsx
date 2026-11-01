@@ -1069,7 +1069,7 @@ function documentColumns({
         </div>
       ),
     },
-    { key: "language_pack", header: t("settings.language.release.usedVersion"), render: (doc) => <LanguagePackUseSummary use={doc.language_pack} documentId={doc.id} /> },
+    { key: "language_pack", header: t("settings.language.release.usedVersion"), render: (doc) => <LanguagePackUseSummary use={doc.language_pack} /> },
     {
       key: "size",
       header: t("fileList.col.size"),
