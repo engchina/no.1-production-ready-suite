@@ -22,6 +22,7 @@ from app.clients.language_pack_release_store import language_pack_release_statem
 from app.clients.native_hybrid_schema import (
     native_hybrid_ivf_migration_sql,
     native_hybrid_migration_sql,
+    native_hybrid_missing_scope_migration_sql,
     native_hybrid_objects_sql,
     native_hybrid_scope_migration_sql,
     native_hybrid_scope_objects_sql,
@@ -653,6 +654,13 @@ END;
             name="20261102_001_graph_name_characters",
             table_name="rag_graph_entities",
             sql=oracle_graph_name_character_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_002_native_missing_scopes",
+            table_name="rag_chunks",
+            sql=native_hybrid_missing_scope_migration_sql(),
         )
     )
     sections.append(

@@ -67,7 +67,11 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
 
 
 @pytest.mark.usefixtures("oracle_db")
-@pytest.mark.parametrize("backend", ["oracle_native", "sudachi"])
+@pytest.mark.parametrize(
+    "backend",
+    [pytest.param("oracle_native", id=f"native-scope-{i}") for i in range(4)]
+    + [pytest.param("sudachi", id="legacy")],
+)
 async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     backend: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -145,7 +149,14 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
             if failure is not None:
                 raise AssertionError(f"{backend}/{mode.value}: 検索が失敗しました") from failure
             status = getattr(ranking, "status", "completed")
-            assert status == "completed", f"{backend}/{mode.value}: status={status}"
+            diagnostics = (
+                await _empty_native_scope_diagnostics(oracle, ids[0], scoped)
+                if status == "empty" and backend == "oracle_native"
+                else None
+            )
+            assert status == "completed", (
+                f"{backend}/{mode.value}: status={status}, diagnostics={diagnostics}"
+            )
             assert len(ranking) == 1, f"{backend}/{mode.value}: count={len(ranking)}"
             assert ranking[0].document_id == ids[0]
             assert ranking[0].metadata["page_number"] == 1
@@ -155,6 +166,35 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
         )
     finally:
         reset_audit_request_context(restricted)
+
+
+async def _empty_native_scope_diagnostics(
+    oracle: OracleClient, document_id: str, filters: dict[str, str]
+) -> dict[str, object]:
+    """空結果の断言を維持し、可視性と近似探索を分ける。本文・接続情報は出さない。"""
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    visibility = await oracle._fetch_all(
+        """SELECT COUNT(*) AS chunks, COUNT(v.doc_rowid) AS indexed_vectors
+        FROM rag_chunks c LEFT JOIN RAG_CHUNKS_HYBRID_IDX$VECTORS v ON v.doc_rowid=c.ROWID
+        WHERE c.document_id=:id
+          AND JSON_VALUE(c.metadata_json, '$.page_number' RETURNING NUMBER)=1""",
+        {"id": document_id},
+    )
+    settings = oracle._settings.model_copy(
+        update={"rag_vector_index_profile": "balanced", "oracle_vector_target_accuracy": 100}
+    )
+    exact = await OracleClient(settings).search_many(
+        [("syntheticneedle", [0.1] * 1536, SearchMode.VECTOR)], 10, filters
+    )
+    failure = getattr(exact[0], "failure", None)
+    return {
+        "visibility": visibility,
+        "requested_accuracy": resolve_vector_index_adapter(oracle._settings).target_accuracy,
+        "accuracy_100_status": getattr(exact[0], "status", "completed"),
+        "accuracy_100_count": len(exact[0]),
+        "accuracy_100_failure": type(failure).__name__ if failure else None,
+    }
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -352,3 +392,33 @@ async def test_hybrid_payload_ignores_scope_updates_but_tracks_text_and_embeddin
         assert (await payload())["embedding"] == [0, 1, 0]
     finally:
         await execute(f"DROP TABLE {table} PURGE", {})
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_save_index_allocates_native_scope_without_precreated_chunk_set() -> None:
+    """取込と同じ保存順で、新しい親集合と数値範囲を原子的に作る。"""
+    from app.schemas.extraction import StructuredExtraction
+
+    oracle = OracleClient()
+    doc = await oracle.create_document(
+        file_name="synthetic-new-scope.txt",
+        object_storage_path="local://synthetic-new-scope.txt",
+        content_type="text/plain",
+    )
+    scope = f"cs_new_{uuid4().hex[:16]}"
+    await oracle.save_index(
+        doc.id,
+        StructuredExtraction(raw_text="syntheticneedle", confidence=1),
+        [Chunk(index=0, text="syntheticneedle", start_offset=0, end_offset=15)],
+        [[0.1] * 1536],
+        chunk_set_id=scope,
+    )
+    rows = await oracle._fetch_all(
+        "SELECT c.native_scope_id, s.native_scope_id AS mapped_scope FROM rag_chunks c "
+        "JOIN rag_native_search_scopes s ON s.chunk_set_id=c.chunk_set_id "
+        "WHERE c.chunk_set_id=:id",
+        {"id": scope},
+    )
+    assert len(rows) == 1
+    assert rows[0]["native_scope_id"] == rows[0]["mapped_scope"]
+    assert int(str(rows[0]["native_scope_id"])) > 0
