@@ -169,7 +169,7 @@ async def read_source_preview_content(
             except HTTPException as exc:
                 raise signed_error(exc.status_code, str(exc.detail)) from None
             return JSONResponse(
-                {"data": data},
+                {"data": data, "error_messages": [], "warning_messages": []},
                 headers={**SIGNED_RESPONSE_HEADERS, "Access-Control-Allow-Origin": "*"},
             )
         try:
