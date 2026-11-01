@@ -28,13 +28,16 @@ class _Embedding:
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
     settings = get_settings().model_copy(
         update={
             "rag_hybrid_search_backend": "oracle_native",
             "rag_vector_index_profile": "balanced",
-            "rag_oracle_vector_target_accuracy": 100,
+            "oracle_vector_target_accuracy": 100,
         }
     )
+    assert resolve_vector_index_adapter(settings).target_accuracy == 100
     oracle = OracleClient(settings)
     ranges = await oracle._fetch_all(
         "SELECT ixv_value FROM ctx_user_index_values "
@@ -60,6 +63,18 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
         5,
         {"document_id": document_id},
     )
+    for (_, _, mode), ranking in zip(
+        [("24", [], SearchMode.KEYWORD), ("24", [0.1] * 1536, SearchMode.VECTOR)],
+        rankings,
+        strict=True,
+    ):
+        failure = getattr(ranking, "failure", None)
+        if failure is not None:
+            raise AssertionError(f"{mode.value}: 検索に失敗しました") from failure
+        assert getattr(ranking, "status", "completed") == "completed", (
+            f"{mode.value}: status={getattr(ranking, 'status', None)}, "
+            f"diagnostics={await _empty_native_scope_diagnostics(oracle, document_id, {'document_id': document_id})}"
+        )
     assert len(rankings[0]) == 1
     assert rankings[0][0].metadata["page_number"] == 1
     assert len(rankings[1]) == 2
