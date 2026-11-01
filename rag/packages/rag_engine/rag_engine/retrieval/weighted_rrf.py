@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RrfWeights:
-    vector: float = 2
+    vector: float = 1
     keyword: float = 1
     original: float = 7
     additional: float = 3

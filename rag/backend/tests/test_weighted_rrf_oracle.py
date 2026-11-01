@@ -75,7 +75,7 @@ async def test_weighted_raw_lists_keep_profile_and_explicit_permission_scope() -
     )
     assert {chunk.metadata["document_id"] for chunk in result.child_chunks} == set(doc_ids[:2])
     rrf = state.retrieval_stages[-1]["rrf"]
-    assert [item["weight"] for item in rrf["lists"]] == pytest.approx([7 / 15, 0.2])
+    assert [item["weight"] for item in rrf["lists"]] == pytest.approx([0.35, 0.15])
     restricted = set_audit_request_context(
         AuditRequestContext(
             allowed_document_ids=frozenset([doc_ids[0]]),

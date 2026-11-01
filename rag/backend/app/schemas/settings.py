@@ -751,7 +751,7 @@ class AnsweringSettingsData(BaseModel):
 
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
-    rrf_method_ratio: tuple[float, float] = (2.0, 1.0)
+    rrf_method_ratio: tuple[float, float] = (1.0, 1.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     runtime_terms_search_enabled: bool = False
     runtime_terms_answer_enabled: bool = False
