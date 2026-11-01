@@ -3543,6 +3543,7 @@ def test_update_answer_record_settings_persists_retention_and_purges(
 def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     """回答の検索と生成の全体既定を .env と現在プロセスへ保存する(送った項目だけを変える。#593)。"""
     settings = get_settings()
+    monkeypatch.setattr(settings, "rag_hybrid_search_backend", "oracle_native")
     monkeypatch.setattr(settings, "rag_query_strategy", "auto_routing")
     monkeypatch.setattr(settings, "rag_answer_evidence_refinement_mode", "legacy")
     monkeypatch.setattr(settings, "rag_answer_flow", "crag")
@@ -3568,6 +3569,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
     assert client.get("/api/settings/answering").json()["data"] == {
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
+        "hybrid_search_backend": "oracle_native",
         "rrf_method_ratio": [1.0, 1.0],
         "rrf_source_ratio": [7.0, 3.0],
         "runtime_terms_search_enabled": False,

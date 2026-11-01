@@ -759,9 +759,7 @@ class OracleClient:
         top_k: int,
     ) -> list[RetrievedChunk]:
         """vector と keyword の候補を Reciprocal Rank Fusion で統合する(順位だけで決まる)。"""
-        vector_ratio, keyword_ratio = self._settings.rag_rrf_method_ratio
-        total_ratio = vector_ratio + keyword_ratio
-        vector_weight, keyword_weight = vector_ratio / total_ratio, keyword_ratio / total_ratio
+        # 独立した根拠補充も使う融合。全検索文の重み付けは AnswerEngine で一度だけ行う。
         vector_ids = {hit.chunk_id for hit in vector_hits}
         keyword_ids = {hit.chunk_id for hit in keyword_hits}
         fused: dict[str, RetrievedChunk] = {}
@@ -769,14 +767,14 @@ class OracleClient:
         retrieval_metadata: dict[str, dict[str, MetadataValue]] = {}
         for rank, hit in enumerate(vector_hits, start=1):
             fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + vector_weight * _rrf(
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
                 rank, self._settings.rag_rrf_k
             )
             retrieval_metadata.setdefault(hit.chunk_id, {})["vector_rank"] = rank
             retrieval_metadata[hit.chunk_id]["vector_score"] = hit.score
         for rank, hit in enumerate(keyword_hits, start=1):
             fused[hit.chunk_id] = hit
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + keyword_weight * _rrf(
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + _rrf(
                 rank, self._settings.rag_rrf_k
             )
             retrieval_metadata.setdefault(hit.chunk_id, {})["keyword_rank"] = rank

@@ -24,7 +24,8 @@ permissions:
 
 env:
   # Oracle AI Database Free の image（版を固定する。Oracle の公式の registry で、login は要らない）。
-  ORACLE_FREE_IMAGE: container-registry.oracle.com/database/free:23.26.3.0-lite
+  # RAG の hybrid JSON 索引は Text のフィルタ実行ファイルを使うため標準版が必要。
+  ORACLE_FREE_IMAGE: ${{ inputs.product == 'rag' && 'container-registry.oracle.com/database/free:23.26.3.0' || 'container-registry.oracle.com/database/free:23.26.3.0-lite' }}
 
 jobs:
   oracle:

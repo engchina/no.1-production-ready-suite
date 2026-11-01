@@ -571,7 +571,10 @@ def _db_row(number: int) -> dict[str, object]:
 
 def _search_settings() -> Settings:
     return Settings.model_construct(
-        oci_genai_embedding_dim=1, rag_min_similarity=0.05, rag_rrf_k=60
+        oci_genai_embedding_dim=1,
+        rag_min_similarity=0.05,
+        rag_rrf_k=60,
+        rag_hybrid_search_backend="sudachi",
     )
 
 
