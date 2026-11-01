@@ -141,3 +141,16 @@ it("経過は処理内容だけを描き、軌跡は同じ内容の後に時刻�
     expect(host.querySelector('button[aria-label="開始時刻: 元の ISO 時刻をコピー"]')).not.toBeNull();
   } finally { act(() => root.unmount()); host.remove(); }
 });
+
+it.each(["確認を省略", "設定がオフのため省略しました"])("収縮行に補足を出さず、展開先で理由を一度だけ保持する: %s", result => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const reason = "設定がオフのため省略しました";
+  try {
+    act(() => root.render(<RunTimeline steps={[{...steps[0], status: "skipped", detail: reason, details: {fields: [{label: "結果", value: result}]}}]} />));
+    expect(host.textContent).not.toContain(reason);
+    expect(host.querySelector("[data-run-result-summary]")).toBeNull();
+    act(() => host.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+    expect(host.textContent?.split(reason).length).toBe(2);
+    expect(host.querySelector("[data-run-timeline-details]")?.textContent).toContain(result);
+  } finally { act(() => root.unmount()); host.remove(); }
+});

@@ -1288,11 +1288,12 @@ for (const theme of ["light", "dark"] as const) {
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");
     await expect(nested).toContainText("検索文から根拠の候補を集める");
-    // 計測値（工程の結果・LLM の回数）は名前の後ろの括弧、所要時間は右の列（実行の詳細と同じ RunTimeline。#2265）。
-    await expect(nested).toContainText("該当なし");
+    // 収縮行は名前・状態・所要時間だけ。結果の補足は展開先に保持する。
+    await expect(nested).not.toContainText("該当なし");
+    await expect(process.locator("[data-run-result-summary]")).toHaveCount(0);
     await expect(nested).toContainText("0.1 秒未満");
     const understood = page.getByTestId("chat-answer-progress-step-s2");
-    await expect(understood).toContainText("LLM 1 回");
+    await expect(understood).not.toContainText("LLM 1 回");
     await expect(understood).toContainText("0.8 秒");
     // 工程の行は span なので、開くと工程の詳細の後ろに技術の値（span の名前）が付く（既定で閉じる。#2294 / #3226）。
     await inspectTraceStep(page, process, "s2");
