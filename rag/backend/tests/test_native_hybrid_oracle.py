@@ -71,10 +71,12 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
         failure = getattr(ranking, "failure", None)
         if failure is not None:
             raise AssertionError(f"{mode.value}: 検索に失敗しました") from failure
-        assert getattr(ranking, "status", "completed") == "completed", (
-            f"{mode.value}: status={getattr(ranking, 'status', None)}, "
-            f"diagnostics={await _empty_native_scope_diagnostics(oracle, document_id, {'document_id': document_id})}"
-        )
+        status = getattr(ranking, "status", "completed")
+        if status != "completed":
+            diagnostics = await _empty_native_scope_diagnostics(
+                oracle, document_id, {"document_id": document_id}
+            )
+            pytest.fail(f"{mode.value}: status={status}, diagnostics={diagnostics}")
     assert len(rankings[0]) == 1
     assert rankings[0][0].metadata["page_number"] == 1
     assert len(rankings[1]) == 2
