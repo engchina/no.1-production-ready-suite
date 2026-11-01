@@ -1057,6 +1057,12 @@ for (const viewport of VIEWPORTS) {
     await preview.getByRole("button", { name: "引用位置に戻る", exact: true }).click();
     await expect(text.locator("mark")).toContainText(LONG_LINES[49]);
     await expect(text.locator("mark")).toBeInViewport();
+    await preview.getByTestId("evidence-reader-outline-toggle").click();
+    await expect(preview.getByRole("region", {name:"引用元の本文"})).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`agent-long-outline-${viewport.name}.png`) });
+    await preview.getByRole("navigation", {name:"目次"}).getByRole("button").last().click();
+    await expect(preview.getByTestId("evidence-reader-outline")).not.toHaveAttribute("open", "");
+    await expect(text).toBeFocused();
     await page.screenshot({ path: testInfo.outputPath(`agent-long-excerpt-${viewport.name}.png`) });
     // 抜粋の領域は Tab で届き、キーボードで最後まで読める（読み終えるとフェードを消す）。
     await toggle.focus();
@@ -1269,5 +1275,5 @@ for (const viewport of VIEWPORTS) {
 function readerWindow(quote: string, continuation: boolean) {
   return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: "paragraph",
     blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : "前文。".repeat(400) + quote, offset: 0, highlights: continuation ? [] : [[1200, 1200 + quote.length]], cited: !continuation }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],
-    previous_cursor: "before", next_cursor: continuation ? null : "after", outline: [{ id: "section-a", title: "節 A", parent_id: null, has_children: false }] };
+    previous_cursor: "before", next_cursor: continuation ? null : "after", outline: Array.from({length:25}, (_,i) => ({id:`section-${i}`,title:`節 ${i+1}：合成の長い章節見出し`,parent_id:null,has_children:false})) };
 }

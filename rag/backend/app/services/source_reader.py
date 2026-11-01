@@ -103,12 +103,25 @@ def reading_window(
         if not selected_path and section_id != _section_id(()):
             raise HTTPException(422, "章節の位置が不正です。")
     index, offset = anchor, 0
+    if section_id or scope in {"section", "parent"}:
+        index = sections[selected_path]
     source = str(elements[anchor].get("text") or "")
     quote_position = source.find(quote) if quote else -1
     unique_quote = quote_position >= 0 and source.find(quote, quote_position + 1) < 0
-    if quote_position >= 0 and quote_position + len(quote) > max_chars:
+    if (
+        not section_id
+        and scope == "paragraph"
+        and quote_position >= 0
+        and quote_position + len(quote) > max_chars
+    ):
         offset = max(0, quote_position - max_chars // 4)
-    elif anchor > 0 and len(source) < max_chars // 2 and not selected_path:
+    elif (
+        not section_id
+        and scope == "paragraph"
+        and anchor > 0
+        and len(source) < max_chars // 2
+        and not selected_path
+    ):
         index = anchor - 1
         offset = max(0, len(str(elements[index].get("text") or "")) - min(512, max_chars // 4))
     if cursor:

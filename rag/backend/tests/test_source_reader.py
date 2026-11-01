@@ -55,12 +55,19 @@ def test_long_paragraph_centers_quote_and_both_directions_have_no_gap() -> None:
 def test_sections_parent_and_outline() -> None:
     payload = fixture()
     result = read(payload, scope="section")
+    assert result["blocks"][0]["id"] == "e20"
+    assert result["previous_cursor"] is None
     assert all(int(b["id"][1:]) >= 20 for b in result["blocks"])
     assert result["section_path"] == ["章A", "節B"]
     sibling = next(row for row in result["outline"] if row["title"] == "節A")
     result = read(payload, scope="section", section_id=sibling["id"])
     assert all(int(b["id"][1:]) < 20 for b in result["blocks"])
-    assert read(payload, scope="parent")["outline"]
+    parent = read(payload, scope="parent")
+    assert parent["blocks"][0]["id"] == "e0"
+    assert parent["previous_cursor"] is None
+    root = next(row for row in parent["outline"] if row["parent_id"] is None)
+    assert read(payload, section_id=root["id"])["blocks"][0]["id"] == "e0"
+    assert read(payload)["blocks"][0]["id"] == "e34"
 
 
 def test_legacy_missing_locator_does_not_search_full_text() -> None:
@@ -143,3 +150,23 @@ def test_table_continuation_repeats_column_header() -> None:
     )
     assert "<th>項目</th>" in following["blocks"][0]["text"]
     assert sum(len(block["text"]) for block in following["blocks"]) <= 200
+
+
+def test_section_start_does_not_apply_anchor_offset_or_escape_scope() -> None:
+    payload = fixture()
+    payload["elements"][35]["text"] = "前" * 12000 + "段落35:"
+    first = read(payload, scope="section", max_chars=1000)
+    assert first["blocks"][0]["id"] == "e20"
+    assert first["blocks"][0]["offset"] == 0
+    assert first["previous_cursor"] is None
+    seen: list[tuple[str, int]] = []
+    current = first
+    for _ in range(30):
+        seen.extend((b["id"], b["offset"]) for b in current["blocks"])
+        assert all(int(b["id"][1:]) >= 20 for b in current["blocks"])
+        if not current["next_cursor"]:
+            break
+        current = read(payload, cursor=current["next_cursor"], max_chars=1000)
+    assert current["next_cursor"] is None
+    assert len(seen) == len(set(seen))
+    assert seen[-1][0] == "e39"
