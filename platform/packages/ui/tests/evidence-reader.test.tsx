@@ -30,12 +30,20 @@ describe("EvidenceReader", () => {
       .mockResolvedValueOnce({ ...windowData, next_cursor: null, blocks: [{ id: "e2", text: "追加の本文", offset: 0, highlights: [], cited: false }] });
     await act(async () => { root.render(<EvidenceReader readingKey="d1:c1" loadWindow={load} />); await settle(); });
     expect(host.querySelector("mark")?.textContent).toBe("合成の引用");
+    const body = host.querySelector<HTMLElement>('[data-testid="evidence-reader-content"]')!;
+    const move = vi.spyOn(body, "scrollIntoView");
+    body.scrollTop = 60;
     const button = (text: string) => Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes(text))!;
     await act(async () => { button("後文を読む").click(); await settle(); });
     expect(host.textContent).toContain("合成の引用"); expect(host.textContent).toContain("取得失敗");
+    expect(body.scrollTop).toBe(60); expect(move).not.toHaveBeenCalled();
     await act(async () => { button("再試行").click(); await settle(); });
     expect(host.textContent).toContain("合成の引用"); expect(host.textContent).toContain("追加の本文");
     expect(host.textContent).toContain("この引用には含まれません");
+    expect(move).toHaveBeenCalledWith({block:"nearest",inline:"nearest"});
+    expect(document.activeElement).toBe(body);
+    expect(host.querySelector('[data-reader-current="true"]')?.textContent).toContain("追加の本文");
+    expect(host.querySelector('[data-testid="evidence-reader-location"]')?.textContent).toBe("後文へ移動しました。");
     await act(async () => root.unmount()); host.remove();
   });
 });
@@ -81,5 +89,55 @@ it("目次は選択後に閉じ、章節の冒頭へ移って本文にフォー�
   expect(load.mock.calls.at(-1)?.[0]).toEqual({scope:"parent"});
   await act(async () => { button("引用位置に戻る").click(); await settle(); });
   expect(load.mock.calls.at(-1)?.[0]).toEqual({});
+  await act(async () => root.unmount()); host.remove();
+});
+
+
+it("前文へ移動すると取得した窓を現在地にし、章節の位置も更新する", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const load = vi.fn().mockResolvedValueOnce({...windowData, previous_cursor:"previous"})
+    .mockResolvedValueOnce({...windowData, section_path:["前の章"], blocks:[{id:"previous",offset:0,text:"合成の前文",highlights:[],cited:false}]});
+  await act(async () => { root.render(<EvidenceReader readingKey="a" loadWindow={load} />); await settle(); });
+  const body = host.querySelector<HTMLElement>('[data-testid="evidence-reader-content"]')!;
+  const move = vi.spyOn(body, "scrollIntoView");
+  const before = Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes("前文を読む"))!;
+  await act(async () => { before.click(); await settle(); });
+  expect(move).toHaveBeenCalledTimes(1);
+  expect(document.activeElement).toBe(body);
+  expect(host.querySelector('[data-reader-current="true"]')?.textContent).toContain("合成の前文");
+  expect(host.textContent).toContain("前の章");
+  expect(host.querySelector('[data-testid="evidence-reader-location"]')?.textContent).toBe("前文へ移動しました。");
+  await act(async () => root.unmount()); host.remove();
+});
+
+
+it("同じ引用の受動的な再取得では、読みかけのscrollとfocusを移さない", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const first = vi.fn().mockResolvedValue(windowData);
+  await act(async () => { root.render(<EvidenceReader readingKey="a" loadWindow={first} />); await settle(); });
+  const body = host.querySelector<HTMLElement>('[data-testid="evidence-reader-content"]')!;
+  body.scrollTop = 60;
+  const move = vi.spyOn(body, "scrollIntoView");
+  const refresh = vi.fn().mockResolvedValue({...windowData});
+  await act(async () => { root.render(<EvidenceReader readingKey="a" loadWindow={refresh} />); await settle(); });
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(body.scrollTop).toBe(60);
+  expect(move).not.toHaveBeenCalled();
+  expect(document.activeElement).not.toBe(body);
+  await act(async () => root.unmount()); host.remove();
+});
+
+
+it("引用位置への戻りは先頭の参考文脈ではなく引用した段落を現在地にする", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const load = vi.fn().mockResolvedValue({...windowData, blocks:[
+    {id:"context",offset:0,text:"合成の前文",highlights:[],cited:false},
+    ...windowData.blocks,
+  ]});
+  await act(async () => { root.render(<EvidenceReader readingKey="a" loadWindow={load} />); await settle(); });
+  const anchor = Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes("引用位置に戻る"))!;
+  await act(async () => { anchor.click(); await settle(); });
+  expect(host.querySelector('[data-reader-current="true"]')?.textContent).toContain("合成の引用");
+  expect(host.querySelector('[data-testid="evidence-reader-location"]')?.textContent).toBe("引用位置へ戻りました。");
   await act(async () => root.unmount()); host.remove();
 });
