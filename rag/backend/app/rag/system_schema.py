@@ -529,6 +529,20 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         # RAG_ROLE_* は PLATFORM_ROLES を参照するため、共通認証の表を先に作る（冪等）。
         self._apply_platform_auth_schema(connection)
         before = self._status_on(connection)
+        if any("INPROGRS" in row["reason"] for row in before.get("invalid_objects", [])):
+            raise SystemSchemaError(
+                "NATIVE_INDEX_BUILD_IN_PROGRESS",
+                "Oracle原生索引を構築中です。完了を待ってから再実行してください。",
+                status_code=409,
+            )
+        if any(
+            row["reason"] == "MISSING_OR_INVALID_TYPE" for row in before.get("invalid_objects", [])
+        ):
+            raise SystemSchemaError(
+                "NATIVE_INDEX_METADATA_INVALID",
+                "Oracle原生索引の種類・状態を確認できません。管理者が索引を確認してください。",
+                status_code=409,
+            )
         if before["status"] == "ready" and not recreate:
             return self._no_op_result(connection, owner)
 
@@ -599,6 +613,13 @@ class SystemSchemaManager(SystemSchemaManagerBase):
                 applied_names.append(migration.name)
 
         dropped_count += self._drop_retired_objects(connection)
+        self._execute_statements(
+            connection,
+            [
+                "ALTER TRIGGER RAG_CHUNKS_HYBRID_SYNC COMPILE",
+                "ALTER TRIGGER RAG_CHUNKS_HYBRID_SYNC ENABLE",
+            ],
+        )
         self._apply_missing_indexes(connection)
         # 古い版で作った表に、後から正本に足した FK を補い（#505）、削除規則が違う FK を作り直し、
         # 無効化された FK を有効にする（#511）。孤立した行は消さない。
@@ -669,7 +690,11 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             foreign_keys_current=foreign_keys.current,
             columns_current=not absent_columns,
         )
+        invalid_objects = self._native_invalid_objects(connection, objects)
+        if status == "ready" and invalid_objects:
+            status = "outdated"
         return {
+            "invalid_objects": invalid_objects,
             "status": status,
             "schema_version": SCHEMA_VERSION,
             "schema_head": MIGRATIONS[-1].name if MIGRATIONS else SCHEMA_VERSION,
@@ -794,8 +819,72 @@ class SystemSchemaManager(SystemSchemaManagerBase):
         ]
         self._execute_statements(connection, statements)
 
+    def _native_invalid_objects(
+        self, connection: Any, objects: dict[tuple[str, str], Any]
+    ) -> list[dict[str, str]]:
+        if (NATIVE_HYBRID_INDEX, "INDEX") not in objects:
+            return []
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT i.status, NVL(i.domidx_status, 'VALID'),
+                    NVL(i.domidx_opstatus, 'VALID'),
+                    NVL((SELECT o.status FROM user_objects o
+                         WHERE o.object_name = 'RAG_CHUNKS_HYBRID_SYNC'
+                           AND o.object_type = 'TRIGGER'), 'MISSING'),
+                    NVL((SELECT t.status FROM user_triggers t
+                         WHERE t.trigger_name = 'RAG_CHUNKS_HYBRID_SYNC'), 'MISSING')
+                FROM user_indexes i
+                WHERE i.index_name = :native_index AND i.index_type = 'DOMAIN'""",
+                {"native_index": NATIVE_HYBRID_INDEX},
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return [
+                {
+                    "name": NATIVE_HYBRID_INDEX,
+                    "object_type": "INDEX",
+                    "reason": "MISSING_OR_INVALID_TYPE",
+                }
+            ]
+        invalid = []
+        if tuple(row[:3]) != ("VALID", "VALID", "VALID"):
+            invalid.append(
+                {
+                    "name": NATIVE_HYBRID_INDEX,
+                    "object_type": "INDEX",
+                    "reason": "/".join(str(v) for v in row[:3]),
+                }
+            )
+        if tuple(row[3:]) != ("VALID", "ENABLED"):
+            invalid.append(
+                {
+                    "name": "RAG_CHUNKS_HYBRID_SYNC",
+                    "object_type": "TRIGGER",
+                    "reason": "/".join(str(v) for v in row[3:]),
+                }
+            )
+        return invalid
+
     def _apply_missing_indexes(self, connection: Any) -> None:
         objects = self._load_objects(connection)
+        for invalid in self._native_invalid_objects(connection, objects):
+            if invalid["object_type"] != "INDEX":
+                continue
+            if invalid["reason"] == "MISSING_OR_INVALID_TYPE":
+                raise SystemSchemaError(
+                    "NATIVE_INDEX_METADATA_INVALID",
+                    "Oracle原生索引の種類・状態を確認できません。管理者が索引を確認してください。",
+                    status_code=409,
+                )
+            if "INPROGRS" in invalid["reason"]:
+                raise SystemSchemaError(
+                    "NATIVE_INDEX_BUILD_IN_PROGRESS",
+                    "Oracle原生索引を構築中です。",
+                    status_code=409,
+                )
+            # 元の本文・vector・従来索引には触らず、失敗した派生索引だけを再作成する。
+            self._execute_statements(connection, [f"DROP INDEX {NATIVE_HYBRID_INDEX} FORCE"])
+            objects.pop((NATIVE_HYBRID_INDEX, "INDEX"), None)
         missing = {name for name in MANAGED_INDEXES if (name, "INDEX") not in objects}
         statements = [
             statement

@@ -195,6 +195,7 @@ class SystemTablesStatusData(BaseModel):
     existing_table_count: int
     missing_objects: list[SystemTableObjectData]
     retired_objects: list[SystemTableObjectData]
+    invalid_objects: list[dict[str, str]] = Field(default_factory=list)
     # 既存の表に無い正本の列（台帳が適用済みでも欠けた列。状態は outdated。#2450）。
     missing_columns: list[SystemTableColumnData] = Field(default_factory=list)
     # 既存の表に無い正本の外部キー（更新で足す）と、既存の行を検査していない外部キーに残る

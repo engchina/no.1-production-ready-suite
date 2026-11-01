@@ -3909,3 +3909,47 @@ END;~';
     END IF;
 END;
 /
+
+-- migration: 20261101_002_native_hybrid_ivf
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes
+    WHERE index_name = 'RAG_CHUNKS_HYBRID_IDX';
+    IF v_count = 1 THEN
+        EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM ctx_user_preferences
+    WHERE pre_name = 'RAG_CHUNKS_HYBRID_PREF';
+    IF v_count = 1 THEN
+        DBMS_VECTOR_CHAIN.DROP_PREFERENCE('RAG_CHUNKS_HYBRID_PREF');
+    END IF;
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM ctx_user_preferences
+    WHERE pre_name = 'RAG_CHUNKS_HYBRID_PREF';
+    IF v_count = 0 THEN
+        DBMS_VECTOR_CHAIN.CREATE_PREFERENCE(
+            'RAG_CHUNKS_HYBRID_PREF', DBMS_VECTOR_CHAIN.VECTORIZER,
+            JSON('{"vector_idxtype":"ivf","distance":"COSINE","paths":[{"type":"VECTOR","path_list":["$.embedding"]}]}')
+        );
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'HYBRID_PAYLOAD';
+    IF v_count = 1 THEN
+        EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC
+BEFORE INSERT OR UPDATE ON rag_chunks FOR EACH ROW
+BEGIN
+    SELECT JSON_OBJECT(
+        'text' VALUE :NEW.search_text,
+        'embedding' VALUE JSON(VECTOR_SERIALIZE(:NEW.embedding RETURNING CLOB))
+        ABSENT ON NULL RETURNING JSON
+    ) INTO :NEW.hybrid_payload FROM dual;
+END;~';
+    END IF;
+END;
+/
