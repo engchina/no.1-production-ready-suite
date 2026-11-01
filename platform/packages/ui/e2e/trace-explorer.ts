@@ -61,7 +61,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
       && (row.getAttribute("data-level") ?? "0") === source[i].level && row.getAttribute("data-parent-id") === source[i].parent
       && row.getAttribute("data-status") === source[i].status
       && row.querySelector("[data-trace-step-status-duration]")?.textContent === source[i].duration
-      && (row.querySelector("[data-trace-result-summary]")?.textContent ?? "") === source[i].summary);
+      && (!source[i].summary || (row.querySelector("[data-trace-result-summary]")?.textContent ?? "") === source[i].summary));
   }, normalRows)).toBe(true);
   await check(explorer.getByRole("heading", {name: "軌跡の調査"})).toBeFocused();
   const search = explorer.getByRole("searchbox", {name: "呼び出しを検索"});
@@ -117,8 +117,10 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-inspector-content]");
     const text = content?.querySelector("[data-trace-timing] time")?.textContent ?? "";
-    return text.includes("(") && !text.includes("T00:") && content?.children[0]?.hasAttribute("data-trace-processing-content") === true
-      && content?.children[1]?.hasAttribute("data-trace-timing") === true && content?.children[2]?.hasAttribute("data-trace-technical") === true;
+    const groups = Array.from(content?.children ?? []).filter(element => ["data-trace-processing-content", "data-trace-timing", "data-trace-technical"].some(attribute => element.hasAttribute(attribute)));
+    return text.includes("(") && !text.includes("T00:") && content?.firstElementChild?.textContent?.includes("Span ID") === true
+      && groups[0]?.hasAttribute("data-trace-processing-content") === true
+      && groups[1]?.hasAttribute("data-trace-timing") === true && groups[2]?.hasAttribute("data-trace-technical") === true;
   }, undefined)).toBe(true);
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();
   check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth, undefined)).toBe(true);

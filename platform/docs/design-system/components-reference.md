@@ -4031,3 +4031,9 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 ### TraceExplorer
 
 `RunTimeline` の「軌跡を調べる」から開く、3 製品共通の呼び出し調査。時間の概観・検索・種類/状態・階層/開始時刻順・選択連動の詳細を提供する。広い置き場所は 2 列、狭い場所は一覧/詳細を切り替える。`RunTimelineStep.operationName` に記録された操作名を渡す。文言は `explorerLabels`（`DEFAULT_TRACE_EXPLORER_LABELS`）で上書きできる。振る舞いの正本は [run-history.md](../ux-contracts/run-history.md) の「軌跡の調査」。
+
+### 実行の詳細のフィールド間隔
+
+`RunStepDetailsView` は識別子・時刻・技術属性を同じ列幅と行間で表示する。行の最小高さは共有の `--control-height-sm` に揃え、コピーの有無で縦のリズムを変えない。処理内容がないグループは余白も作らない。
+
+「処理の経過」の収縮行は名前・状態・所要時間に限定し、結果・スキップ理由を行の直下に重複表示しない。必要な説明は展開した詳細と軌跡に保持する。

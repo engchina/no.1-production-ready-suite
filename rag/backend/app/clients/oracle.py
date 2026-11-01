@@ -16882,6 +16882,25 @@ CREATE INDEX {table_name}_source_sha256_idx
 """.strip()
 
 
+def oracle_graph_name_character_migration_sql() -> str:
+    """既存の構造見出しを保持し、列長の単位を文字に統一する。"""
+    return """
+DECLARE
+    v_char_used VARCHAR2(1);
+    v_char_length NUMBER;
+BEGIN
+    SELECT char_used, char_length INTO v_char_used, v_char_length
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_GRAPH_ENTITIES' AND column_name = 'CANONICAL_NAME';
+    IF v_char_used <> 'C' OR v_char_length < 512 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_graph_entities MODIFY (canonical_name VARCHAR2(512 CHAR))';
+    END IF;
+END;
+/
+"""
+
+
 def oracle_knowledge_graph_schema_sql() -> str:
     """関係情報(文書と章・節の見出しのつながり)の table DDL を返す。"""
     return """
@@ -16890,7 +16909,7 @@ CREATE TABLE rag_graph_entities (
     chunk_set_id       VARCHAR2(64),
     tenant_id_hash     CHAR(64),
     knowledge_base_id  VARCHAR2(64),
-    canonical_name     VARCHAR2(512) NOT NULL,
+    canonical_name     VARCHAR2(512 CHAR) NOT NULL,
     entity_type        VARCHAR2(128),
     description        CLOB,
     confidence         NUMBER(6, 5),

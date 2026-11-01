@@ -35,12 +35,14 @@ export interface RunStepDetailField {
   /** 共通の span 投影が付ける技術属性。経過では省略し、軌跡に残す。 */
   technical?: boolean;
   copyValue?: string;
+  /** 識別子のコピーは時刻として描画しない。未指定は既存の時刻コピー。 */
+  copyLabel?: string;
 }
 
 /** 表示順を変えず、経過と軌跡が同じ内容を使う。 */
-export function runStepContent(details: RunStepDetails | null | undefined): RunStepDetails {
+export function runStepContent(details: RunStepDetails | null | undefined, fallback?: string): RunStepDetails {
   const fields = details?.fields?.filter(field => !field.technical);
-  return { fields: fields ? [...fields.filter(field => field.label !== DEFAULT_RUN_STEP_DETAILS_LABELS.result), ...fields.filter(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)] : undefined, lines: details?.lines, code: details?.code, truncated: details?.truncated };
+  return { fields: fields ? [...fields.filter(field => field.label !== DEFAULT_RUN_STEP_DETAILS_LABELS.result), ...fields.filter(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)] : undefined, lines: fallback && !fields?.some(field => field.value === fallback) ? [...(details?.lines ?? []), ...(details?.lines?.includes(fallback) ? [] : [fallback])] : details?.lines, code: details?.code, truncated: details?.truncated };
 }
 export function runStepResultSummary(details: RunStepDetails | null | undefined, fallback?: string): string | undefined {
   const result = runStepContent(details).fields?.find(field => field.label === DEFAULT_RUN_STEP_DETAILS_LABELS.result)?.value;
@@ -225,19 +227,19 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
   return (
     <div className={cn("grid min-w-0 gap-2 text-xs leading-5", className)} data-run-step-details="" data-testid={testId}>
       {fields.length ? (
-        <dl className="grid min-w-0 gap-x-3 gap-y-1 @md:grid-cols-[max-content_minmax(0,1fr)]">
+        <dl className="grid min-w-0 items-center gap-x-3 gap-y-1 @md:grid-cols-[10rem_minmax(0,1fr)]">
           {fields.map((field, index) => (
             <div key={`${field.label}-${index}`} className="contents">
-              <dt className={cn("min-w-0 break-words text-fg-muted [overflow-wrap:anywhere]", field.copyValue && "flex items-center")}>{field.label}</dt>
+              <dt className={cn("min-w-0 break-words text-fg-muted [overflow-wrap:anywhere]", "flex items-center")}>{field.label}</dt>
               <dd
                 className={cn(
-                  "min-w-0 whitespace-pre-wrap break-words text-fg [overflow-wrap:anywhere]",
+                  "flex min-h-[var(--control-height-sm)] min-w-0 flex-wrap items-center gap-2 whitespace-pre-wrap break-words text-fg [overflow-wrap:anywhere]",
                   field.mono && "font-mono",
                   field.copyValue && "flex flex-wrap items-center gap-2"
                 )}
               >
-                {field.copyValue ? <time dateTime={field.copyValue} title={field.copyValue}>{field.value}</time> : <span>{field.value}</span>}
-                {field.copyValue ? <CopyButton text={field.copyValue} label={`${field.label}: ${labels.copyOriginalTime}`} copiedMessage={labels.copiedTime} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /> : null}
+                {field.copyValue && !field.copyLabel ? <time dateTime={field.copyValue} title={field.copyValue}>{field.value}</time> : <span>{field.value}</span>}
+                {field.copyValue ? <CopyButton text={field.copyValue} label={field.copyLabel ?? `${field.label}: ${labels.copyOriginalTime}`} copiedMessage={field.copyLabel ? labels.copied : labels.copiedTime} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /> : null}
               </dd>
             </div>
           ))}

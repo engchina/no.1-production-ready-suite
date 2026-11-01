@@ -24,6 +24,24 @@ from app.schemas.search import RetrievedChunk
 _EMBEDDING = [0.1] * 1536
 
 
+@pytest.mark.usefixtures("oracle_db")
+async def test_multibyte_structure_heading_is_saved_without_byte_truncation() -> None:
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"合成文字数KB {uuid4().hex[:8]}")
+    heading = ("合成の長い見出し" * 100)[:512]
+    _, chunk_set_id = await _indexed_document(
+        client,
+        file_name="synthetic-multibyte.pdf",
+        chunks=_chunks([(heading, 1)]),
+        knowledge_base_id=kb.id,
+    )
+    rows = await client._fetch_all(
+        "SELECT canonical_name FROM rag_graph_entities WHERE chunk_set_id=:id",
+        {"id": chunk_set_id},
+    )
+    assert heading in [row["canonical_name"] for row in rows]
+
+
 def _chunks(sections: list[tuple[str, int]]) -> list[Chunk]:
     chunks: list[Chunk] = []
     for path, count in sections:

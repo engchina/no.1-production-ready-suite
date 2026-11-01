@@ -21,7 +21,7 @@ import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { formatRunDateTime, formatRunDuration, formatRunTokens } from "./run-history";
-import { hasRunStepDetails, RunStepDetailsView, runStepContent, runStepResultSummary, type RunStepDetails } from "./run-step-details";
+import { hasRunStepDetails, RunStepDetailsView, runStepContent, type RunStepDetails } from "./run-step-details";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
 
 /*
@@ -816,7 +816,7 @@ export function RunTimeline({
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
       steps
-        .filter((step) => step.children != null || hasRunStepDetails(step.details))
+        .filter((step) => step.children != null || hasRunStepDetails(step.details) || Boolean(step.detail))
         .map((step) => [step.id, defaultExpanded || step.status === "failed"])
     )
   );
@@ -847,7 +847,7 @@ export function RunTimeline({
           if (renderRunningStep && step.status === "running" && !hasChildren[index]) return <li key={step.id} className="min-w-0">{renderRunningStep(step)}</li>;
           const duration = stepDurationMs(step);
           const bar = showBars ? bars[index] : null;
-          const content = runStepContent(step.details);
+          const content = runStepContent(step.details, step.detail);
           const details = hasRunStepDetails(content) ? content : undefined;
           const hasDetails = step.children != null || details !== undefined;
           const stepTestId = stepTestIdPrefix ? `${stepTestIdPrefix}-step-${step.id}` : undefined;
@@ -941,7 +941,6 @@ export function RunTimeline({
                   {duration !== null ? formatDuration(duration) : visibleStatus ? null : labels.notRecorded}
                 </span>
               </div>
-              {runStepResultSummary(step.details, step.detail) ? <p data-run-result-summary="" className="mt-1 ml-6 text-xs leading-5 text-fg-muted">{runStepResultSummary(step.details, step.detail)}</p> : null}
               {hasDetails ? (
                 <div
                   id={regionId}

@@ -182,7 +182,7 @@ def _document_entity(
     # 文書の種類だけでは同じ種類の文書が同じ名前になり、グラフで区別できない(#2051)。
     # 文書全体の名前は言語資源(#2181)。
     whole = pack.text("labels", "whole_document")
-    canonical_name = f"{whole}: {_clean_label(document_name or '') or document_type}"
+    canonical_name = _clean_label(f"{whole}: {_clean_label(document_name or '') or document_type}")
     return GraphEntity(
         entity_id=_graph_id("entity", identity_scope, knowledge_base_id, canonical_name),
         knowledge_base_id=knowledge_base_id,
