@@ -603,10 +603,17 @@
       "sha256": "771c931b6639f671a7d986d9dea98009d166365261d1f9f7597642eea0622198",
       "statement_count": 6,
       "table_name": "rag_chunks"
+    },
+    {
+      "destructive": false,
+      "name": "20261102_001_graph_name_characters",
+      "sha256": "6fcca0cecb341f224706da2f3bdcaf79ab5e25e99aa9ac7a5cfed33793f88bc3",
+      "statement_count": 1,
+      "table_name": "rag_graph_entities"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "a4401833acb78f3ac6cca410b5afb4a095e592369fe655c297cec1df932d0f92",
-  "statement_count": 136
+  "sha256": "493418971861a92922d9ec98303fb457475b7b088425e514c699e857c591e2b1",
+  "statement_count": 137
 }
