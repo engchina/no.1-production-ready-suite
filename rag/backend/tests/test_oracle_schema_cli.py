@@ -111,6 +111,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "documents",
         "document_recipes",
         "knowledge_bases",
+        "structure_index_jobs",
         "search_answer_profiles",
         "answer_records",
         "answer_prompts",

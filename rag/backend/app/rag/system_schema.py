@@ -120,6 +120,8 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_DOCUMENTS",
     "RAG_DOCUMENT_RECIPES",
     "RAG_KNOWLEDGE_BASES",
+    "RAG_STRUCTURE_INDEX_JOBS",
+    "RAG_STRUCTURE_INDEX_BUILDS",
     "RAG_DOCUMENT_KNOWLEDGE_BASES",
     "RAG_SEARCH_ANSWER_PROFILES",
     "RAG_ANSWER_RECORDS",
@@ -931,6 +933,14 @@ class SystemSchemaManager(SystemSchemaManagerBase):
 
     def _assert_no_active_jobs(self, connection: Any) -> None:
         objects = self._load_objects(connection)
+        if ("RAG_STRUCTURE_INDEX_JOBS", "TABLE") in objects:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT COUNT(*) FROM RAG_STRUCTURE_INDEX_JOBS
+                    WHERE STATUS IN ('RUNNING','STOPPING')
+                    AND heartbeat_at >= SYSTIMESTAMP - INTERVAL '120' SECOND""")
+                structure_row = cursor.fetchone()
+            if structure_row and int(structure_row[0] or 0) > 0:
+                raise SystemSchemaActiveJobsError()
         if ("RAG_INGESTION_JOBS", "TABLE") not in objects:
             return
         placeholders, binds = bind_list("job_status_", _ACTIVE_JOB_STATES)

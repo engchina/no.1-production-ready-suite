@@ -823,7 +823,7 @@ for (const viewport of [
   { name: "1280", width: 1280, height: 800 },
   { name: "375", width: 375, height: 812 },
 ]) {
-  test(`詳細の PageHeader のタイトルと本文のカードの左端がそろう (${viewport.name})`, async ({ page }) => {
+  test(`詳細の PageHeader のタイトルと本文のカードの左端がそろう (${viewport.name})`, { tag: "@responsive" }, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockKnowledgeBaseApi(page, createKnowledgeBaseState());
     await page.goto("/knowledge-bases/kb-1");

@@ -427,6 +427,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", _KB): _KNOWLEDGE_BASE_READ,
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/structure-index"): _any(MENU_KNOWLEDGE_BASES),
+    ("PUT", f"{_KB}/structure-index"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/structure-index/plan"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/structure-index/job"): _any(MENU_KNOWLEDGE_BASES),
+    ("POST", f"{_KB}/structure-index/job"): _any(MENU_KNOWLEDGE_BASES),
+    ("POST", f"{_KB}/structure-index/job/stop"): _any(MENU_KNOWLEDGE_BASES),
     # KB ごとの項目抽出の定義（#548）。
     ("GET", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),
     ("PUT", f"{_KB}/extraction-fields"): _any(MENU_KNOWLEDGE_BASES),

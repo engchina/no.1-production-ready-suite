@@ -831,8 +831,8 @@ class OracleClient:
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         """KG の entity(node)/relationship(edge) を KB scope で可視化用に取得する。
 
-        confidence 降順で node/edge を上限件数まで取り、端点が node 集合に含まれる
-        edge のみ返す(部分グラフの整合)。グラフ未構築なら空を返す。
+        文書/有効集合ごとに親を先に取り、選ばれた両端の関係へ絞ってから上限を適用する。
+        グラフ未構築なら空を返す。
         """
         # entity / relationship の knowledge_base_id は取込時の所属のスナップショットなので、
         # KB から外した文書の要素を出さないよう、今も所属している文書の行だけに絞る(#274)。
@@ -849,7 +849,9 @@ class OracleClient:
                 WHERE e.knowledge_base_id = :kb
                   AND {membership_sql}
                   AND {active_sql}
-                ORDER BY NVL(e.confidence, 1) DESC, e.canonical_name ASC, e.entity_id ASC
+                ORDER BY COALESCE(e.chunk_set_id, JSON_VALUE(e.source_document_ids, '$[0]')),
+                    CASE WHEN e.entity_type = 'document' THEN 0 ELSE 1 END,
+                    e.canonical_name ASC, e.entity_id ASC
             ) WHERE ROWNUM <= :limit
             """,
                 membership_sql=_graph_current_membership_predicate("e"),
@@ -869,6 +871,12 @@ class OracleClient:
         node_ids = {node["id"] for node in nodes if node["id"]}
         if not node_ids:
             return nodes, []
+        source_sql, source_binds = _oracle_in_predicate(
+            "r.source_entity_id", "graph_source", sorted(str(node) for node in node_ids)
+        )
+        target_sql, target_binds = _oracle_in_predicate(
+            "r.target_entity_id", "graph_target", sorted(str(node) for node in node_ids)
+        )
         edge_rows = await self._fetch_all(
             _render_sql(
                 """
@@ -881,6 +889,7 @@ class OracleClient:
                     NVL(r.confidence, 1) AS confidence
                 FROM rag_graph_relationships r
                 WHERE r.knowledge_base_id = :kb
+                  AND {source_sql} AND {target_sql}
                   AND {membership_sql}
                   AND {active_sql}
                 ORDER BY NVL(r.confidence, 1) DESC, r.relationship_id ASC
@@ -888,8 +897,10 @@ class OracleClient:
             """,
                 membership_sql=_graph_current_membership_predicate("r"),
                 active_sql=_graph_active_chunk_set_predicate("r"),
+                source_sql=source_sql,
+                target_sql=target_sql,
             ),
-            {"kb": knowledge_base_id, "limit": limit},
+            {"kb": knowledge_base_id, "limit": limit, **source_binds, **target_binds},
         )
         edges: list[dict[str, object]] = [
             {
@@ -2000,6 +2011,69 @@ class OracleClient:
     async def list_document_knowledge_bases(self, document_id: str) -> list[KnowledgeBaseRef]:
         """文書の所属ナレッジベース一覧を返す。"""
         return await self._list_document_knowledge_bases_with_oracle(document_id)
+
+    async def document_structure_index_preferences(
+        self, document_id: str
+    ) -> dict[str, bool | None] | None:
+        """現在の所属と利用者の範囲内にあるKBの構築指定だけを読む。"""
+        from app.rag.structure_index import PREFERENCE_KEY
+
+        rows = await self._fetch_all(
+            f"""SELECT kb.knowledge_base_id, kb.retrieval_config
+            FROM rag_document_knowledge_bases member
+            JOIN rag_knowledge_bases kb ON kb.knowledge_base_id=member.knowledge_base_id
+            JOIN rag_documents d ON d.document_id=member.document_id
+            WHERE member.document_id=:document_id AND kb.status='ACTIVE'
+              AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}
+              AND {_oracle_access_predicate_sql(alias="d")}""",
+            _with_tenant_bind({"document_id": document_id}),
+        )
+        if not rows:
+            unassigned = await self._fetch_one(
+                f"""SELECT d.document_id FROM rag_documents d
+                WHERE d.document_id=:document_id
+                AND {_oracle_access_predicate_sql(alias="d")}
+                AND NOT EXISTS (SELECT 1 FROM rag_document_knowledge_bases m
+                    WHERE m.document_id=d.document_id)""",
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            return None if unassigned else {}
+        result: dict[str, bool | None] = {}
+        for row in rows:
+            config = _json_loads(row.get("retrieval_config"))
+            value = config.get(PREFERENCE_KEY) if isinstance(config, dict) else None
+            result[str(row["knowledge_base_id"])] = value if isinstance(value, bool) else None
+        return result
+
+    async def set_knowledge_base_structure_index(
+        self, knowledge_base_id: str, enabled: bool | None
+    ) -> None:
+        """構築設定の1項目だけを行lock内で更新する。既存graphは削除しない。"""
+        from app.rag.structure_index import PREFERENCE_KEY
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _fetch_all(
+                connection,
+                f"""SELECT knowledge_base_id FROM rag_knowledge_bases
+                WHERE knowledge_base_id=:id
+                  AND {_oracle_knowledge_base_access_predicate_sql()} FOR UPDATE""",
+                _with_tenant_bind({"id": knowledge_base_id}),
+            )
+            kb = _require_active_knowledge_base(connection, knowledge_base_id)
+            config = dict(kb.retrieval_config)
+            if enabled is None:
+                config.pop(PREFERENCE_KEY, None)
+            else:
+                config[PREFERENCE_KEY] = enabled
+            _execute(
+                connection,
+                f"""UPDATE rag_knowledge_bases SET retrieval_config=:config, updated_at=SYSTIMESTAMP
+                WHERE knowledge_base_id=:id AND {_oracle_knowledge_base_access_predicate_sql()}""",
+                _with_tenant_bind({"id": knowledge_base_id, "config": _json_bind(config)}),
+                input_sizes=_json_input_sizes("config"),
+            )
+
+        await self._run_transaction(operation)
 
     async def get_knowledge_base_extraction_fields(
         self, knowledge_base_id: str
@@ -5898,12 +5972,14 @@ class OracleClient:
         graph_index: GraphIndex,
         *,
         chunk_set_id: str | None = None,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> None:
         """指定 chunk_set（legacy は document）の GraphRAG-lite index を置換する。"""
         await self._replace_document_graph_index_with_oracle(
             document_id,
             graph_index,
             chunk_set_id=chunk_set_id,
+            knowledge_base_ids=knowledge_base_ids,
         )
 
     async def save_search_audit_event(self, event: Mapping[str, object]) -> None:
@@ -7824,6 +7900,13 @@ class OracleClient:
 
         def operation(connection: OracleConnectionProtocol) -> KnowledgeBaseDetail:
             # アーカイブ済みの KB は名前・説明も変えない（画面の読み取り専用と同じ。#961）。
+            _fetch_one(
+                connection,
+                f"""SELECT knowledge_base_id FROM rag_knowledge_bases
+                WHERE knowledge_base_id=:id
+                AND {_oracle_knowledge_base_access_predicate_sql()} FOR UPDATE""",
+                _with_tenant_bind({"id": knowledge_base_id}),
+            )
             existing = _require_active_knowledge_base(connection, knowledge_base_id)
             if (
                 "name" in fields
@@ -10933,130 +11016,18 @@ class OracleClient:
         graph_index: GraphIndex,
         *,
         chunk_set_id: str | None = None,
+        knowledge_base_ids: Sequence[str] | None = None,
     ) -> None:
         """関係情報の表の chunk_set scope を置換する。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
-            if _select_document_state(connection, document_id) is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            if chunk_set_id is not None:
-                rows = _fetch_all(
-                    connection,
-                    "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
-                    {"chunk_set_id": chunk_set_id},
-                )
-                existing_entity_ids = [
-                    str(row["entity_id"]) for row in rows if row.get("entity_id")
-                ]
-                _delete_graph_rows_for_chunk_set(
-                    connection,
-                    chunk_set_id=chunk_set_id,
-                    entity_ids=existing_entity_ids,
-                )
-            else:
-                existing_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
-                _delete_graph_rows_for_document(
-                    connection,
-                    document_id=document_id,
-                    entity_ids=existing_entity_ids,
-                )
-            if graph_index.entities:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_graph_entities (
-                        entity_id,
-                        chunk_set_id,
-                        tenant_id_hash,
-                        knowledge_base_id,
-                        canonical_name,
-                        entity_type,
-                        description,
-                        confidence,
-                        source_document_ids
-                    ) VALUES (
-                        :entity_id,
-                        :chunk_set_id,
-                        :tenant_id_hash,
-                        :knowledge_base_id,
-                        :canonical_name,
-                        :entity_type,
-                        :description,
-                        :confidence,
-                        :source_document_ids
-                    )
-                    """,
-                    [
-                        {**_graph_entity_binds(entity), "chunk_set_id": chunk_set_id}
-                        for entity in graph_index.entities
-                    ],
-                    input_sizes=_json_input_sizes("source_document_ids"),
-                )
-            if graph_index.relationships:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_graph_relationships (
-                        relationship_id,
-                        chunk_set_id,
-                        tenant_id_hash,
-                        knowledge_base_id,
-                        source_entity_id,
-                        target_entity_id,
-                        relationship_type,
-                        description,
-                        confidence,
-                        source_document_ids
-                    ) VALUES (
-                        :relationship_id,
-                        :chunk_set_id,
-                        :tenant_id_hash,
-                        :knowledge_base_id,
-                        :source_entity_id,
-                        :target_entity_id,
-                        :relationship_type,
-                        :description,
-                        :confidence,
-                        :source_document_ids
-                    )
-                    """,
-                    [
-                        {
-                            **_graph_relationship_binds(relationship),
-                            "chunk_set_id": chunk_set_id,
-                        }
-                        for relationship in graph_index.relationships
-                    ],
-                    input_sizes=_json_input_sizes("source_document_ids"),
-                )
-            if graph_index.entity_chunk_links:
-                _executemany(
-                    connection,
-                    """
-                    INSERT INTO rag_graph_entity_chunks (
-                        entity_id,
-                        chunk_id,
-                        chunk_set_id,
-                        document_id,
-                        tenant_id_hash,
-                        relevance_score
-                    ) VALUES (
-                        :entity_id,
-                        :chunk_id,
-                        :chunk_set_id,
-                        :document_id,
-                        :tenant_id_hash,
-                        :relevance_score
-                    )
-                    """,
-                    [
-                        {
-                            **_graph_entity_chunk_link_binds(link),
-                            "chunk_set_id": chunk_set_id,
-                        }
-                        for link in graph_index.entity_chunk_links
-                    ],
-                )
+            _write_document_graph_index(
+                connection,
+                document_id,
+                graph_index,
+                chunk_set_id=chunk_set_id,
+                knowledge_base_ids=knowledge_base_ids,
+            )
 
         await self._run_transaction(operation)
 
@@ -11736,6 +11707,25 @@ def _select_graph_entity_ids_for_document(
         _with_tenant_bind({"document_id": document_id}),
     )
     return [str(row["entity_id"]) for row in rows if row.get("entity_id")]
+
+
+def _delete_scoped_graph_entities(
+    connection: OracleConnectionProtocol, identifiers: Sequence[str]
+) -> None:
+    """KB別のentityに結び付く行だけをFK順で置き換える。"""
+    if not identifiers:
+        return
+    for table, column in (
+        ("rag_graph_relationships", "source_entity_id"),
+        ("rag_graph_entity_chunks", "entity_id"),
+        ("rag_graph_entities", "entity_id"),
+    ):
+        predicate, binds = _oracle_in_predicate(column, "structure_id", identifiers)
+        _execute(
+            connection,
+            f"DELETE FROM {table} WHERE {predicate} AND {_oracle_tenant_predicate()}",
+            _with_tenant_bind(binds),
+        )
 
 
 def _delete_graph_rows_for_chunk_set(
@@ -17341,10 +17331,15 @@ def _to_knowledge_base_detail(
     knowledge_base: StoredKnowledgeBase,
 ) -> KnowledgeBaseDetail:
     adapter_config = parse_adapter_config(knowledge_base.retrieval_config)
+    structure_override = knowledge_base.retrieval_config.get("structure_index_enabled")
     return KnowledgeBaseDetail(
         **_to_knowledge_base_summary(knowledge_base).model_dump(),
         retrieval_config=knowledge_base.retrieval_config,
         adapter_config=adapter_config,
+        structure_index_enabled=structure_override
+        if isinstance(structure_override, bool)
+        else None,
+        structure_index_global_enabled=get_settings().rag_graph_profile == "entities",
         legacy_query_config_ignored=adapter_config.query != KnowledgeBaseQueryConfig(),
     )
 
@@ -17423,3 +17418,157 @@ def _text_search_domain_keywords(settings: Settings | None) -> list[str]:
 
 def _rrf(rank: int, constant: int = 60) -> float:
     return 1.0 / (constant + rank)
+
+
+def _write_document_graph_index(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+    graph_index: GraphIndex,
+    *,
+    chunk_set_id: str | None = None,
+    knowledge_base_ids: Sequence[str] | None = None,
+) -> None:
+    """呼出元のtransaction内で範囲を確認し、構造索引を置換する。"""
+    if _select_document_state(connection, document_id) is None:
+        raise KeyError(f"document_id={document_id} は存在しません。")
+    if knowledge_base_ids is not None:
+        scopes = list(dict.fromkeys(knowledge_base_ids))
+        if not scopes or any(
+            entity.knowledge_base_id not in scopes for entity in graph_index.entities
+        ):
+            raise ValueError("文書構造索引の対象範囲が不正です。")
+        for kb_id in scopes:
+            _require_active_knowledge_base(connection, kb_id)
+            if not _fetch_all(
+                connection,
+                """SELECT document_id FROM rag_document_knowledge_bases
+                WHERE document_id=:doc AND knowledge_base_id=:kb""",
+                {"doc": document_id, "kb": kb_id},
+            ):
+                raise ValueError("文書の所属が変更されました。もう一度確認してください。")
+        scope_sql, scope_binds = _oracle_in_predicate("knowledge_base_id", "graph_kb", scopes)
+        rows = _fetch_all(
+            connection,
+            f"""SELECT entity_id FROM rag_graph_entities
+            WHERE {scope_sql} AND (chunk_set_id=:chunk_set_id OR
+            (:chunk_set_id IS NULL AND JSON_EXISTS(source_document_ids,
+                '$[*]?(@ == $doc)' PASSING :document_id AS "doc")))""",
+            {**scope_binds, "chunk_set_id": chunk_set_id, "document_id": document_id},
+        )
+        _delete_scoped_graph_entities(connection, [str(row["entity_id"]) for row in rows])
+    elif chunk_set_id is not None:
+        rows = _fetch_all(
+            connection,
+            "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
+            {"chunk_set_id": chunk_set_id},
+        )
+        existing_entity_ids = [str(row["entity_id"]) for row in rows if row.get("entity_id")]
+        _delete_graph_rows_for_chunk_set(
+            connection,
+            chunk_set_id=chunk_set_id,
+            entity_ids=existing_entity_ids,
+        )
+    else:
+        existing_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
+        _delete_graph_rows_for_document(
+            connection,
+            document_id=document_id,
+            entity_ids=existing_entity_ids,
+        )
+    if graph_index.entities:
+        _executemany(
+            connection,
+            """
+            INSERT INTO rag_graph_entities (
+                entity_id,
+                chunk_set_id,
+                tenant_id_hash,
+                knowledge_base_id,
+                canonical_name,
+                entity_type,
+                description,
+                confidence,
+                source_document_ids
+            ) VALUES (
+                :entity_id,
+                :chunk_set_id,
+                :tenant_id_hash,
+                :knowledge_base_id,
+                :canonical_name,
+                :entity_type,
+                :description,
+                :confidence,
+                :source_document_ids
+            )
+            """,
+            [
+                {**_graph_entity_binds(entity), "chunk_set_id": chunk_set_id}
+                for entity in graph_index.entities
+            ],
+            input_sizes=_json_input_sizes("source_document_ids"),
+        )
+    if graph_index.relationships:
+        _executemany(
+            connection,
+            """
+            INSERT INTO rag_graph_relationships (
+                relationship_id,
+                chunk_set_id,
+                tenant_id_hash,
+                knowledge_base_id,
+                source_entity_id,
+                target_entity_id,
+                relationship_type,
+                description,
+                confidence,
+                source_document_ids
+            ) VALUES (
+                :relationship_id,
+                :chunk_set_id,
+                :tenant_id_hash,
+                :knowledge_base_id,
+                :source_entity_id,
+                :target_entity_id,
+                :relationship_type,
+                :description,
+                :confidence,
+                :source_document_ids
+            )
+            """,
+            [
+                {
+                    **_graph_relationship_binds(relationship),
+                    "chunk_set_id": chunk_set_id,
+                }
+                for relationship in graph_index.relationships
+            ],
+            input_sizes=_json_input_sizes("source_document_ids"),
+        )
+    if graph_index.entity_chunk_links:
+        _executemany(
+            connection,
+            """
+            INSERT INTO rag_graph_entity_chunks (
+                entity_id,
+                chunk_id,
+                chunk_set_id,
+                document_id,
+                tenant_id_hash,
+                relevance_score
+            ) VALUES (
+                :entity_id,
+                :chunk_id,
+                :chunk_set_id,
+                :document_id,
+                :tenant_id_hash,
+                :relevance_score
+            )
+            """,
+            [
+                {
+                    **_graph_entity_chunk_link_binds(link),
+                    "chunk_set_id": chunk_set_id,
+                }
+                for link in graph_index.entity_chunk_links
+            ],
+        )

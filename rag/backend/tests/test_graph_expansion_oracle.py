@@ -184,3 +184,131 @@ async def test_subgraph_hides_pending_graph_until_activation() -> None:
         assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in edges)
     finally:
         await client.delete_document(document_id)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_kb_structure_override_and_rebuild_preserve_shared_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import get_settings
+    from app.rag.structure_index import rebuild_document_structure_index, structure_index_targets
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "rag_graph_profile", "off")
+    client = OracleClient(settings)
+    token = uuid4().hex[:8]
+    a = await client.create_knowledge_base(name=f"合成構造A {token}")
+    b = await client.create_knowledge_base(name=f"合成構造B {token}")
+    text = "合成章節の本文"
+    doc, cs = await _indexed_document(
+        client,
+        knowledge_base_id=a.id,
+        file_name=f"synthetic-structure-{token}.txt",
+        chunks=[
+            Chunk(
+                text=text,
+                index=0,
+                start_offset=0,
+                end_offset=len(text),
+                metadata={"section_title": "合成節", "section_path": "合成章 / 合成節"},
+            )
+        ],
+    )
+    await client.assign_documents_to_knowledge_base(b.id, [doc])
+    await client.set_knowledge_base_structure_index(a.id, False)
+    await client.set_knowledge_base_structure_index(b.id, True)
+    assert await structure_index_targets(client, doc, default=False) == [b.id]
+    before_a = await client.fetch_knowledge_base_subgraph(a.id, limit=100)
+    before = await client._fetch_all(
+        "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
+    )
+    one = await rebuild_document_structure_index(client, b.id, doc)
+    two = await rebuild_document_structure_index(client, b.id, doc)
+    assert one == two and one["entities"] > 1
+    from app.clients.structure_index_store import StructureIndexStore
+    from app.rag.structure_index import source_fingerprint, structure_index_plan
+    from app.rag.structure_index_jobs import StructureIndexJobs
+
+    plan = await structure_index_plan(client, b.id)
+    assert len(plan) == 1 and plan[0]["status"] == "CURRENT"
+    assert plan[0]["quality"] == "COMPLETE"
+    unchanged_graph = await client.fetch_knowledge_base_subgraph(b.id, limit=100)
+    with pytest.raises(ValueError, match="source_changed"):
+        await StructureIndexStore(client).publish(
+            b.id, doc, source_fingerprint(["old"]), ["old"], {}, "COMPLETE", {}
+        )
+    assert await client.fetch_knowledge_base_subgraph(b.id, limit=100) == unchanged_graph
+    from app.rag.request_context import current_audit_request_context
+
+    async def synthetic_actor() -> object:
+        return current_audit_request_context()
+
+    # DB結合テストの実行者を固定し、認証サービス自体は既存のsecurity回帰で確認する。
+    monkeypatch.setattr("app.rag.structure_index_jobs.refresh_actor", synthetic_actor)
+    service = StructureIndexJobs()
+    await service.start(client, b.id, "missing")
+    await __import__("asyncio").gather(*service.tasks)
+    persisted = await StructureIndexStore(client).get(b.id)
+    assert persisted and persisted["status"] == "COMPLETED"
+    assert persisted["items"][0]["status"] == "SKIPPED"
+    await service.start(client, b.id, "rebuild")
+    await __import__("asyncio").gather(*service.tasks)
+    published = await StructureIndexStore(client).get(b.id)
+    assert published and published["items"][0]["status"] == "SUCCEEDED"
+    assert await client.fetch_knowledge_base_subgraph(a.id, limit=100) == before_a
+    assert (await client.fetch_knowledge_base_subgraph(b.id, limit=100))[0]
+    after = await client._fetch_all(
+        "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
+    )
+    assert before == after
+    state = await client.get_chunk_set(cs)
+    assert state is not None and state["is_active"] == 1
+    await client.set_knowledge_base_structure_index(b.id, False)
+    with pytest.raises(ValueError, match="disabled"):
+        await rebuild_document_structure_index(client, b.id, doc)
+    await client.set_knowledge_base_structure_index(b.id, None)
+    assert await structure_index_targets(client, doc, default=False) == []
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_bounded_structure_graph_keeps_document_parents_and_connections() -> None:
+    client = OracleClient()
+    token = uuid4().hex[:8]
+    kb = await client.create_knowledge_base(name=f"合成表示範囲 {token}")
+    documents = []
+    try:
+        for number in range(2):
+            doc = await client.create_document(
+                file_name=f"synthetic-graph-{token}-{number}.txt",
+                object_storage_path=f"local://synthetic-{token}-{number}.txt",
+                content_type="text/plain",
+                knowledge_base_ids=[kb.id],
+            )
+            documents.append(doc.id)
+            chunks = [
+                Chunk(
+                    text="",
+                    index=index,
+                    start_offset=0,
+                    end_offset=0,
+                    metadata={"section_title": f"合成節 {number}-{index:03}"},
+                )
+                for index in range(60)
+            ]
+            graph = build_graph_index(
+                document_id=doc.id,
+                knowledge_base_ids=[kb.id],
+                extraction=StructuredExtraction(),
+                chunks=chunks,
+            )
+            await client.replace_document_graph_index(
+                doc.id, GraphIndex(entities=graph.entities, relationships=graph.relationships)
+            )
+        nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=80)
+        assert len(nodes) == 80 and edges
+        assert any(node["type"] == "document" for node in nodes)
+        ids = {node["id"] for node in nodes}
+        assert all(edge["source"] in ids and edge["target"] in ids for edge in edges)
+    finally:
+        for document_id in documents:
+            await client.delete_document(document_id)
