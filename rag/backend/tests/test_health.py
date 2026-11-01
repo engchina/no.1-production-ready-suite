@@ -708,3 +708,24 @@ def test_startup_warns_pending_legacy_local_storage_dir_without_moving_files(
     assert record.__dict__["legacy_local_storage_dir"] == str(tmp_path / "production-ready-rag")
     assert record.__dict__["local_storage_dir"] == DEFAULT_LOCAL_STORAGE_DIR
     assert legacy_file.read_bytes() == b"legacy"
+
+
+def test_database_status_distinguishes_running_schema_update(
+    monkeypatch: MonkeyPatch, wallet_dir: Path
+) -> None:
+    """接続済みの更新中は、不足や接続不通とは別の理由を返す。"""
+    _configure_oracle_only(monkeypatch, wallet_dir=wallet_dir)
+
+    async def probe_ok(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(health_route, "test_oracle_connection", probe_ok)
+    monkeypatch.setattr(
+        system_schema_manager,
+        "status",
+        lambda: {"status": "ready", "operation_state": {"status": "running"}},
+    )
+    data = client.get("/api/ready/database").json()["data"]
+    assert data["status"] == "setup_required"
+    assert data["schema_status"] == "ready"
+    assert data["check"] == "schema_update_running"

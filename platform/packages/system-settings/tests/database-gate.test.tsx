@@ -374,3 +374,16 @@ describe("DatabaseUnavailableNotice（banner）", () => {
     expect(html).not.toContain("<a");
   });
 });
+
+
+describe("実行中のシステムテーブル更新", () => {
+  it.each([true, false])("更新中を不足と区別し、権限に応じて状況だけ案内する (%s)", (canManage) => {
+    const html = renderToStaticMarkup(<MemoryRouter><DatabaseUnavailableNotice routes={routes} status="setup_required" reasonCode="schema_update_running" canManageDatabase={canManage} canManageSystemTables={canManage} onRetry={() => undefined} /></MemoryRouter>);
+    expect(html).toContain(DATABASE_GATE_MESSAGES["dbGate.schemaUpdating.title"]);
+    expect(html).toContain(DATABASE_GATE_MESSAGES["dbGate.schemaUpdating.message"]);
+    expect(html).toContain(DATABASE_GATE_MESSAGES["dbGate.schemaUpdating.refresh"]);
+    expect(html).not.toContain(DATABASE_GATE_MESSAGES["dbGate.setupRequired.title"]);
+    expect(html).not.toContain("schema_update_running");
+    expect(html.includes(DATABASE_GATE_MESSAGES["dbGate.schemaUpdating.openStatus"])).toBe(canManage);
+  });
+});

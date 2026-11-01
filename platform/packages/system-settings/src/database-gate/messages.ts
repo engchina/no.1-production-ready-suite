@@ -36,6 +36,11 @@ export const DATABASE_GATE_MESSAGES = {
   "dbGate.adbAvailable.contactAdmin":
     "Autonomous Database は起動していますが、接続できません。システム管理者に連絡して、接続情報とネットワークの確認を依頼してください。",
   "dbGate.adbState": "Autonomous Database: {state}",
+  "dbGate.schemaUpdating.title": "システムテーブルを更新中です",
+  "dbGate.schemaUpdating.message": "データベースには接続できています。更新が終わるまでお待ちください。更新を重ねて実行する必要はありません。",
+  "dbGate.schemaUpdating.footer": "状態は自動で確認します。更新が完了すると、元の画面に戻ります。",
+  "dbGate.schemaUpdating.openStatus": "更新状況を確認",
+  "dbGate.schemaUpdating.refresh": "状態を確認",
   // 初期化が必要（setup_required）
   "dbGate.setupRequired.title": "システムテーブルの作成・更新が必要です",
   "dbGate.setupRequired.message":

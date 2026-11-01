@@ -52,7 +52,11 @@ async def _system_schema_probe(_settings: object) -> DatabaseSchemaProbeResult:
     """RAG の system schema の状態（例外は共通部品が setup_required へ正規化する）。"""
     schema = await asyncio.to_thread(system_schema_manager.status)
     schema_status = schema["status"]
-    if schema_status != "ready" or schema["operation_state"]["status"] == "running":
+    if schema["operation_state"]["status"] == "running":
+        return DatabaseSchemaProbeResult(
+            status="setup_required", check="schema_update_running", schema_status=schema_status
+        )
+    if schema_status != "ready":
         return DatabaseSchemaProbeResult(status="setup_required", schema_status=schema_status)
     return DatabaseSchemaProbeResult(status="ok", schema_status="ready")
 

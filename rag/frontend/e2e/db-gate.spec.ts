@@ -357,3 +357,32 @@ test("設定を開けない利用者には導線を出さず、システム管�
   await expect(card.getByText(/システム管理者に連絡して、システムテーブルの作成・更新を依頼してください。$/)).toBeVisible();
   await expect(card.getByRole("link")).toHaveCount(0);
 });
+
+for (const canManage of [true, false]) {
+  test(`システムテーブル更新中は再実行を促さず、完了後に自動復帰する (${canManage ? "管理者" : "利用者"})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    if (canManage) await routeAuth(page);
+    else await mockAuthUser(page, { permissions: ["menu.file_list"] });
+    let running = true;
+    let businessCalls = 0;
+    await page.route("**/api/ready/database", (route) => route.fulfill({ json: dbStatus(running ? "setup_required" : "ok", running ? "schema_update_running" : "ok") }));
+    await page.route("**/api/documents**", (route) => { businessCalls++; return route.fulfill({ json: { data: { items: [], total: 0, offset: 0, limit: 25 }, error_messages: [], warning_messages: [] } }); });
+    await page.route("**/api/knowledge-bases**", (route) => route.fulfill({ json: { data: { items: [], total: 0 }, error_messages: [], warning_messages: [] } }));
+    await page.goto("/file-list");
+    const notice = page.getByTestId("database-unavailable-notice");
+    await expect(notice).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("schema-updating.png") });
+    await expect(notice.getByRole("heading", { name: "システムテーブルを更新中です" })).toBeVisible();
+    await expect(notice).toContainText("更新を重ねて実行する必要はありません。");
+    await expect(notice.getByRole("button", { name: "状態を確認", exact: true })).toBeVisible();
+    await expect(notice.getByRole("link", { name: "更新状況を確認", exact: true })).toHaveCount(canManage ? 1 : 0);
+    await expect(notice).not.toContainText("診断コード:");
+    expect(businessCalls).toBe(0);
+    await expectNoPageOverflow(page);
+    running = false;
+    await expect(notice).toHaveCount(0, { timeout: 15000 });
+    await expect(page.getByRole("heading", { name: "文書インデックス", exact: true })).toBeVisible();
+    await expect.poll(() => businessCalls).toBeGreaterThan(0);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("schema-ready.png") });
+  });
+}
