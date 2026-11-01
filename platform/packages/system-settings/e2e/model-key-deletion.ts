@@ -1,10 +1,38 @@
 /** 3製品共通のモデル設定画面で、合成の保存状態だけを使って key の削除を確認する。 */
-import type { Page, TestInfo, expect as playwrightExpect } from "@playwright/test";
+// platform に Playwright の依存を持たせず、製品から受け取る操作の形だけを宣言する。
+interface Locator {
+  click(): Promise<void>;
+  check(): Promise<void>;
+  fill(value: string): Promise<void>;
+  isDisabled(): Promise<boolean>;
+  isEnabled(): Promise<boolean>;
+  count(): Promise<number>;
+  getByRole(role: "tab" | "checkbox" | "button", options: { name: string | RegExp; exact?: boolean }): Locator;
+}
+interface Page {
+  route(url: string, handler: (route: {
+    request(): { method(): string; postDataJSON(): unknown };
+    fulfill(options: { json: unknown }): Promise<void>;
+  }) => Promise<void>): Promise<unknown>;
+  goto(url: string): Promise<unknown>;
+  reload(): Promise<unknown>;
+  evaluate<R, A>(fn: (arg: A) => R, arg: A): Promise<R>;
+  locator(selector: string): Locator;
+  getByRole(role: "tab" | "checkbox" | "button", options: { name: string | RegExp; exact?: boolean }): Locator;
+  screenshot(options: { path: string; fullPage: boolean }): Promise<unknown>;
+}
+interface Assertions {
+  (value: unknown): {
+    toBe(value: unknown): unknown;
+    toEqual(value: unknown): unknown;
+  };
+  poll(callback: () => unknown | Promise<unknown>): { toBe(value: unknown): Promise<void> };
+}
 
 export async function exerciseModelKeyDeletion(
   page: Page,
-  testInfo: TestInfo,
-  expect: typeof playwrightExpect,
+  testInfo: { outputPath(name: string): string },
+  expect: Assertions,
   theme: "light" | "dark",
 ) {
   const connections = [
@@ -56,7 +84,7 @@ export async function exerciseModelKeyDeletion(
   await page.route("**/api/settings/model", async (route) => {
     if (route.request().method() === "PATCH") {
       saves += 1;
-      const payload = route.request().postDataJSON();
+      const payload = route.request().postDataJSON() as { enterprise_ai: { connections: typeof savedConnections } };
       savedConnections = payload.enterprise_ai.connections.map((connection: (typeof savedConnections)[number]) => {
         if (connection.clear_api_key) keys.set(connection.connection_id, false);
         else if (connection.api_key) keys.set(connection.connection_id, true);
@@ -73,26 +101,26 @@ export async function exerciseModelKeyDeletion(
   for (const [index, connection] of connections.entries()) {
     await page.getByRole("tab", { name: new RegExp(`^${connection.name}`) }).click();
     const field = page.locator(`#${connection.field}`);
-    const form = page.locator("form").filter({ has: field });
+    const form = page.locator(`form:has(#${connection.field})`);
     const clear = form.getByRole("checkbox", { name: "保存済み API key を削除する" });
     await clear.check();
-    await expect(field).toBeDisabled();
+    await expect.poll(() => field.isDisabled()).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`key-delete-${connection.connection_id}-${theme}.png`), fullPage: true });
     const before = new Map(keys);
     await form.getByRole("button", { name: "OCI Enterprise AI: 保存", exact: true }).click();
     await expect.poll(() => saves).toBe(index + 1);
-    await expect(clear).toHaveCount(0);
-    await expect(field).toBeEnabled();
+    await expect.poll(() => clear.count()).toBe(0);
+    await expect.poll(() => field.isEnabled()).toBe(true);
     expect(keys.get(connection.connection_id)).toBe(false);
     for (const [id, present] of before) if (id !== connection.connection_id) expect(keys.get(id)).toBe(present);
   }
   await page.reload();
   await page.getByRole("tab", { name: /^プライマリ接続/ }).click();
   const endpoint = page.locator("#enterprise-endpoint");
-  const form = page.locator("form").filter({ has: endpoint });
+  const form = page.locator("form:has(#enterprise-endpoint)");
   await endpoint.fill("https://primary.example/v2");
   await form.getByRole("button", { name: "OCI Enterprise AI: 保存", exact: true }).click();
   await expect.poll(() => saves).toBe(4);
   expect([...keys.values()]).toEqual([false, false, false]);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth, undefined)).toBe(true);
 }
