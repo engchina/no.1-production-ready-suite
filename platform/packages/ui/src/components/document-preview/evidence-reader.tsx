@@ -1,5 +1,6 @@
 import { ArrowLeft, ArrowRight, Download, LocateFixed } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ExcerptContent } from "../data/excerpt-content";
 import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
 import { Button, buttonVariants } from "../ui/button";
@@ -27,10 +28,10 @@ export interface EvidenceReadingWindow {
 const labels = {
   loading: "引用の前後を読み込んでいます", before: "前文を読む", after: "後文を読む",
   anchor: "引用位置に戻る", section: "本節を読む", parent: "親章節を読む", outline: "目次",
-  cited: "引用の元となる段落", context: "追加の参考文脈（回答時の参照範囲外）",
+  cited: "引用の元となる段落", context: "追加の参考文脈（この引用には含まれません）",
   unresolved: "引用位置を確定できないため、保存された引用のみ表示します。",
   approximate: "原要素の位置を表示しています。文字単位の引用位置は未確定です。",
-  retry: "再試行", download: "原本をダウンロード", empty: "表示できる本文がありません。",
+  table: "引用元の表", retry: "再試行", download: "原本をダウンロード", empty: "表示できる本文がありません。",
 };
 
 export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true }: {
@@ -66,8 +67,11 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
       const block = Array.from(node.querySelectorAll<HTMLElement>("[data-reader-block]")).find(element => element.dataset.readerBlock === scroll.current!.anchor);
       if (block) node.scrollTop += block.getBoundingClientRect().top - scroll.current.top;
       scroll.current = null;
+    } else if (node && !state.pending && !request.input.cursor) {
+      const target = node.querySelector<HTMLElement>("mark") ?? node.querySelector<HTMLElement>("[data-reader-cited='true']");
+      if (target) node.scrollTop += target.getBoundingClientRect().top - node.getBoundingClientRect().top - node.clientHeight / 4;
     }
-  }, [state]);
+  }, [state, request.input]);
   const read = (input: EvidenceReadingInput = {}) => {
     const node = viewport.current;
     const anchor = node?.querySelector<HTMLElement>("[data-reader-block]");
@@ -95,10 +99,10 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
     {state.pending ? <TimedLoadingState label={labels.loading} operationKey={`${readingKey}:${request.serial}`} testId="evidence-reader-loading" framed={false}><Skeleton className="h-16 w-full" /></TimedLoadingState> : null}
     <Button variant="secondary" size="sm" disabled={!first?.previous_cursor || state.pending} onClick={() => read({ cursor: first!.previous_cursor!, direction: "before" })}><ArrowLeft size={14} aria-hidden />{labels.before}</Button>
     <div ref={viewport} className="min-h-0 max-h-96 space-y-4 overflow-y-auto" data-testid="evidence-reader-content">
-      {blocks.map(block => <section key={`${block.id}:${block.offset}`} data-reader-block={`${block.id}:${block.offset}`} className="space-y-1">
+      {blocks.map(block => <section key={`${block.id}:${block.offset}`} data-reader-block={`${block.id}:${block.offset}`} data-reader-cited={block.cited} className="space-y-1">
         <p className="text-xs text-fg-muted">{block.cited ? labels.cited : labels.context}</p>
         {block.heading?.length ? <p className="text-sm font-semibold">{block.heading.join(" › ")}</p> : null}
-        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? highlighted(block.text, block.highlights) : block.text}</p>
+        {block.kind === "table" ? <ExcerptContent text={block.text} tableLabel={labels.table} className="text-sm leading-relaxed" /> : <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? highlighted(block.text, block.highlights) : block.text}</p>}
       </section>)}
       {!blocks.length && !state.pending && !state.error ? <p className="text-sm text-fg-muted">{labels.empty}</p> : null}
     </div>

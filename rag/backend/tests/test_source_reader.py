@@ -123,3 +123,23 @@ def test_saved_string_element_ids_and_version_pin() -> None:
             read_source_context(cast(OracleClient, oracle), "d1", "c1", expected_revision="v0")
         )
     assert exc.value.status_code == 409
+
+
+def test_table_continuation_repeats_column_header() -> None:
+    text = (
+        "<table><tr><th>項目</th><th>値</th></tr>"
+        + "".join(f"<tr><td>{i}</td><td>合成</td></tr>" for i in range(100))
+        + "</table>"
+    )
+    payload = {"elements": [{"element_id": "e35", "kind": "table", "text": text}]}
+    first = reading_window(payload, revision="v1", anchor_ids=["e35"], quote="", max_chars=200)
+    following = reading_window(
+        payload,
+        revision="v1",
+        anchor_ids=["e35"],
+        quote="",
+        max_chars=200,
+        cursor=first["next_cursor"],
+    )
+    assert "<th>項目</th>" in following["blocks"][0]["text"]
+    assert sum(len(block["text"]) for block in following["blocks"]) <= 200

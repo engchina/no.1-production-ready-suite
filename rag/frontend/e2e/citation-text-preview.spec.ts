@@ -102,11 +102,14 @@ test("抜粋の長い根拠を開いてもプレビューは画面に残り、�
   expect(viewport.height - previewBox.y).toBeGreaterThanOrEqual(viewport.height * 0.35);
   const reader = preview.getByTestId("evidence-reader");
   await expect(reader.locator("mark")).toContainText(LINES[49]);
+  await expect(reader.locator("mark")).toBeInViewport();
   await expect(reader).toContainText("追加の参考文脈");
+  await expect(reader.getByRole("table", {name:"引用元の表"}).getByRole("columnheader").first()).toContainText("項目");
   await reader.getByRole("button", { name: "後文を読む", exact: true }).click();
   await expect(reader).toContainText("合成の続き");
   await reader.getByRole("button", { name: "引用位置に戻る", exact: true }).click();
   await expect(reader.locator("mark")).toContainText(LINES[49]);
+  await expect(reader.locator("mark")).toBeInViewport();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath(`rag-long-excerpt-${testInfo.project.name}.png`) });
   // 抜粋の領域は Tab で届き、キーボードで最後まで読める（読み終えるとフェードを消す）。
@@ -120,6 +123,6 @@ test("抜粋の長い根拠を開いてもプレビューは画面に残り、�
 
 function readerWindow(quote: string, continuation: boolean) {
   return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: "paragraph",
-    blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : quote, offset: 0, highlights: continuation ? [] : [[0, quote.length]], cited: !continuation }, { id: "context", text: "合成の前後文", offset: 0, highlights: [], cited: false }],
+    blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : "前文。".repeat(400) + quote, offset: 0, highlights: continuation ? [] : [[1200, 1200 + quote.length]], cited: !continuation }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],
     previous_cursor: "before", next_cursor: continuation ? null : "after", outline: [{ id: "section-a", title: "節 A", parent_id: null, has_children: false }] };
 }

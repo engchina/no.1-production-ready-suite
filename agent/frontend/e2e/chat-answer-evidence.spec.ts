@@ -1049,11 +1049,14 @@ for (const viewport of VIEWPORTS) {
     expect(viewport.height - previewBox.y).toBeGreaterThanOrEqual(viewport.height * 0.35);
     const text = preview.getByTestId("evidence-reader-content");
     await expect(text.locator("mark")).toContainText(LONG_LINES[49]);
+    await expect(text.locator("mark")).toBeInViewport();
     await expect(preview).toContainText("追加の参考文脈");
+    await expect(preview.getByRole("table", {name:"引用元の表"}).getByRole("columnheader").first()).toContainText("項目");
     await preview.getByRole("button", { name: "後文を読む", exact: true }).click();
     await expect(text).toContainText("合成の続き");
     await preview.getByRole("button", { name: "引用位置に戻る", exact: true }).click();
     await expect(text.locator("mark")).toContainText(LONG_LINES[49]);
+    await expect(text.locator("mark")).toBeInViewport();
     await page.screenshot({ path: testInfo.outputPath(`agent-long-excerpt-${viewport.name}.png`) });
     // 抜粋の領域は Tab で届き、キーボードで最後まで読める（読み終えるとフェードを消す）。
     await toggle.focus();
@@ -1265,6 +1268,6 @@ for (const viewport of VIEWPORTS) {
 
 function readerWindow(quote: string, continuation: boolean) {
   return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: "paragraph",
-    blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : quote, offset: 0, highlights: continuation ? [] : [[0, quote.length]], cited: !continuation }, { id: "context", text: "合成の前後文", offset: 0, highlights: [], cited: false }],
+    blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : "前文。".repeat(400) + quote, offset: 0, highlights: continuation ? [] : [[1200, 1200 + quote.length]], cited: !continuation }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],
     previous_cursor: "before", next_cursor: continuation ? null : "after", outline: [{ id: "section-a", title: "節 A", parent_id: null, has_children: false }] };
 }

@@ -35,7 +35,17 @@ describe("EvidenceReader", () => {
     expect(host.textContent).toContain("合成の引用"); expect(host.textContent).toContain("取得失敗");
     await act(async () => { button("再試行").click(); await settle(); });
     expect(host.textContent).toContain("合成の引用"); expect(host.textContent).toContain("追加の本文");
-    expect(host.textContent).toContain("回答時の参照範囲外");
+    expect(host.textContent).toContain("この引用には含まれません");
     await act(async () => root.unmount()); host.remove();
   });
+});
+
+
+it("引用元の表は HTML を文字列として並べず、共通の表で列見出しを保持する", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const load = vi.fn().mockResolvedValue({ ...windowData, blocks: [{ id: "t1", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: true }] });
+  await act(async () => { root.render(<EvidenceReader readingKey="d1:t1" loadWindow={load} />); await settle(); });
+  expect(host.querySelector("th")?.textContent).toContain("項目");
+  expect(host.querySelector("td")?.textContent).toContain("A");
+  await act(async () => root.unmount()); host.remove();
 });
