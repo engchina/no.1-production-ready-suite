@@ -4077,3 +4077,17 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261102_003_native_text_search_only
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM ctx_user_index_values
+    WHERE ixv_index_name = 'RAG_CHUNKS_HYBRID_IDX'
+      AND ixv_class = 'SECTION_GROUP' AND ixv_attribute = 'RANGE_SEARCH_ENABLE'
+      AND ixv_value IS NOT NULL;
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE';
+    END IF;
+END;
+/

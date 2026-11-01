@@ -27,6 +27,46 @@ class _Embedding:
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
+    settings = get_settings().model_copy(
+        update={
+            "rag_hybrid_search_backend": "oracle_native",
+            "rag_vector_index_profile": "balanced",
+            "rag_oracle_vector_target_accuracy": 100,
+        }
+    )
+    oracle = OracleClient(settings)
+    ranges = await oracle._fetch_all(
+        "SELECT ixv_value FROM ctx_user_index_values "
+        "WHERE ixv_index_name='RAG_CHUNKS_HYBRID_IDX' "
+        "AND ixv_attribute='RANGE_SEARCH_ENABLE' AND ixv_value IS NOT NULL"
+    )
+    assert ranges == []
+    chunks = [
+        Chunk(
+            text=f"syntheticquantity {quantity}",
+            index=index,
+            start_offset=0,
+            end_offset=len(f"syntheticquantity {quantity}"),
+            metadata={"page_number": index + 1},
+        )
+        for index, quantity in enumerate((24, 99))
+    ]
+    document_id = await _indexed_document(
+        oracle, file_name=f"synthetic-numeric-{uuid4().hex}.txt", chunks=chunks
+    )
+    rankings = await oracle.search_many(
+        [("24", [], SearchMode.KEYWORD), ("24", [0.1] * 1536, SearchMode.VECTOR)],
+        5,
+        {"document_id": document_id},
+    )
+    assert len(rankings[0]) == 1
+    assert rankings[0][0].metadata["page_number"] == 1
+    assert len(rankings[1]) == 2
+    assert all(item.document_id == document_id for ranking in rankings for item in ranking)
+
+
+@pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize("backend", ["oracle_native", "sudachi"])
 async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
     backend: str, monkeypatch: pytest.MonkeyPatch
