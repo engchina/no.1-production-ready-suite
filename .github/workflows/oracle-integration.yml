@@ -54,6 +54,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 標準版の image と DB の初期作成に必要な空きを確保する（#4014）。
+      # 使い捨ての hosted runner の未使用 SDK だけを対象にし、Python・uv・Docker は保持する。
+      - name: Free disk space
+        working-directory: .
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       # DB の起動を待つ間に依存を入れる。password は run ごとに作り、log に出さない。
       - name: Start Oracle AI Database Free
         working-directory: .
