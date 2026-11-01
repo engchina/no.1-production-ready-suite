@@ -2739,6 +2739,7 @@ def synthesize_grounded_answer(
                 else "",
             ) as step,
         ):
+            preparing_evidence = False
             try:
                 # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
                 # 呼び出しにだけ使う)。
@@ -2747,6 +2748,7 @@ def synthesize_grounded_answer(
                     generation_system += grounded.continue_prompt_steps(
                         generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
                     )
+                preparing_evidence = True
                 spans, prompt, input_diagnostic = prepare_batched_evidence(
                     spans,
                     generation_settings,
@@ -2761,6 +2763,7 @@ def synthesize_grounded_answer(
                     schema=grounded.generation_output_model(question).model_json_schema(),
                     provider_id=provider,
                 )
+                preparing_evidence = False
                 current = generate_round(
                     spans, prompt, previous_round=best[0] if best is not None else None, round_knowledge=runtime_knowledge
                 )
@@ -2784,7 +2787,15 @@ def synthesize_grounded_answer(
                 input_limited = isinstance(exc, GenerationInputBudgetExceeded)
                 if input_limited:
                     input_diagnostic = exc.diagnostic
-                invalid_draft = best is None and not cut and (isinstance(exc, grounded.DraftGenerationInvalid) or input_limited)
+                invalid_draft = (
+                    best is None
+                    and not cut
+                    and (
+                        isinstance(exc, grounded.DraftGenerationInvalid)
+                        or (preparing_evidence and _invalid_structured_output(exc))
+                        or input_limited
+                    )
+                )
                 if best is None and not cut and not invalid_draft:
                     raise
                 # 生成の出力の不合格は、包む前の例外の型名（InvalidStructuredOutput・ValidationError）で残す。
