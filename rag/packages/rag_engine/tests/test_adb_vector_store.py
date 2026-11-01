@@ -2053,5 +2053,5 @@ def test_weighted_rrf_keeps_failed_vector_distinct_from_empty_and_uses_text_budg
             chunk_run_id="rrf-failure", retrieval_queries=["合成"], settings=settings, query_embedder=lambda *_: [0.1] * 1536
         )
     assert [r["status"] for r in captured[0]["rrf"]["lists"]] == ["failed", "completed"]
-    assert result.child_chunks[0].metadata["adb_hybrid"]["rrf_score"] == pytest.approx(0.5 / 61)
+    assert result.child_chunks[0].metadata["adb_hybrid"]["rrf_score"] == pytest.approx(1 / 11 / 61)
     adb_vector_store._pool_cache.clear()

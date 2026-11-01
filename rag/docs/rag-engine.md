@@ -657,3 +657,19 @@ Traceは実際に渡した検索文と方式、範囲、候補・RRFを記録す
 Oracle内部で生成した語・検索式はAPIが返さないため表示できない旨を示す。
 原生のvector scoreはコサイン距離と同一視せず、確率や回答の正確さとして表示しない。
 原生方式による順位変化はrerankの入力を変え得るが、品質向上の証明ではない。
+
+
+### RRFの既定比率
+
+検索方式の既定はベクトル:全文=10:1。Oracleの
+[SEARCH API](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/search.html)
+が定義する `vector.score_weight=10` と `text.score_weight=1` を参考にする。
+[WRRFの説明](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/understand-hybrid-search.html)
+でも同じweightフィールドを使うが、5:1は計算例であり、すべての資料に最適な推奨値ではない。
+アプリでは原生の生順位とSudachiの生順位を同じ一回のRRFへ渡す。
+Oracle内のWRRFと完全に同じ正規化・実装を使うという意味ではない。
+
+原質問:全追加検索文=7:3は独自の予算で、Oracle公式の既定・推奨ではない。
+追加分を重複除去後に均等分配する規則、空・失敗リストの重みを再配分しない規則、
+ランキング定数60、権限・明示範囲と独立根拠補充、rerankの処理は変えない。
+保存済みの明示比率は維持し、未設定時だけ新しい既定を使用する。

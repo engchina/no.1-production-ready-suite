@@ -895,7 +895,7 @@ def test_rrf_ratio_defaults_match_api_and_direct_engine(monkeypatch: pytest.Monk
     backend = Settings(_env_file=None)
     engine = get_engine_settings(environ={}, dotenv_path=None)
     response = _answering_settings_data(backend)
-    expected = ((1.0, 1.0), (7.0, 3.0))
+    expected = ((10.0, 1.0), (7.0, 3.0))
     assert (backend.rag_rrf_method_ratio, backend.rag_rrf_source_ratio) == expected
     assert (engine.rrf_method_ratio, engine.rrf_source_ratio) == expected
     assert (response.rrf_method_ratio, response.rrf_source_ratio) == expected
