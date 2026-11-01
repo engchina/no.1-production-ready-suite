@@ -1765,6 +1765,7 @@ export function DocumentWorkspace({
                     onElementSelect={selectElement}
                     onTableCellSelect={selectTableCell}
                     recipeId={selectedRecipeId}
+                    extractionRevision={selectedRecipe?.active_extraction_recipe_id ?? null}
                     onPageSelect={selectPage}
                     omitWarning={omitDocumentLevelWarning}
                   />

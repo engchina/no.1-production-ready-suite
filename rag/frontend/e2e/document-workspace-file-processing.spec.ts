@@ -3500,3 +3500,24 @@ test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧で�
   await page.screenshot({path:testInfo.outputPath("large-document-ready.png"),fullPage:true});
   await expectNoPageOverflow(page);
 });
+
+test("構造化要素から解析版を固定して原本ノードを開く", {tag:"@responsive"}, async ({page},testInfo) => {
+  await mockDocumentWorkspace(page);
+  await page.route("**/recipes/recipe-1/extraction-view?**",route => route.fulfill({json:{data:{payload:{raw_text:"合成の本文",elements:[{element_id:"xt-00000",kind:"text",text:"合成の構造化段落",order:0,source_parser:"xml_tree_json",metadata:{xml_tree_unit_kind:"paragraph"}}]},offset:0,total:1,limit:25}}}));
+  const inputs:URLSearchParams[]=[];
+  await page.route("**/recipes/recipe-1/source-map?**",route => {
+    const query=new URL(route.request().url()).searchParams; inputs.push(query);
+    return route.fulfill({json:{data:{status:"exact",revision:"er-recipe-1-r1",element_id:"xt-00000",variant:"original",pointer:"/nodes/0",source_index:0,source_count:1,text:"合成の原本段落",highlights:[[0,7]],coordinate_unit:"unicode_codepoint"}}});
+  });
+  await page.goto("/documents/doc-1");
+  await page.getByTestId("document-inspector-pane").getByRole("tab",{name:"構造化要素",exact:true}).click();
+  await page.getByRole("button",{name:/合成の構造化段落/}).click();
+  const panel=page.getByTestId("original-source-panel");
+  await expect(panel).toBeVisible(); expect(inputs).toHaveLength(0);
+  await panel.locator("summary").click();
+  await expect(panel.locator("pre")).toHaveText("合成の原本段落");
+  expect(inputs[0].get("expected_revision")).toBe("er-recipe-1-r1");
+  expect(inputs[0].get("element_id")).toBe("xt-00000");
+  await page.screenshot({path:testInfo.outputPath(`element-original-${testInfo.project.name}.png`),animations:"disabled"});
+  await expectNoPageOverflow(page);
+});

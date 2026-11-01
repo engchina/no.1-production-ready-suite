@@ -1280,3 +1280,26 @@ function readerWindow(quote: string, continuation: boolean) {
     blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : "前文。".repeat(400) + quote, offset: 0, highlights: continuation ? [] : [[1200, 1200 + quote.length]], cited: !continuation }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],
     previous_cursor: "before", next_cursor: continuation ? null : "after", outline: Array.from({length:25}, (_,i) => ({id:`section-${i}`,title:`節 ${i+1}：合成の長い章節見出し`,parent_id:null,has_children:false})) };
 }
+
+test("署名URLから原本ノードを部分取得し、CookieとRefererを送らない", {tag:"@responsive"}, async ({page,mockApi},testInfo) => {
+  seedRun(mockApi);
+  await serveSourcePreviews(page,"合成の引用本文");
+  mockApi.state.sourcePreviews[CHUNK_A]={kind:"text",file_name:"合成文書.json",pages:[],page_url_template:null,highlight_metadata:{}};
+  const requests: {query:URLSearchParams; headers:Record<string,string>}[]=[];
+  await page.route("http://rag.e2e.test/**",route => {
+    const query=new URL(route.request().url()).searchParams;
+    if(query.get("view")!=="source-map") return route.fallback();
+    requests.push({query,headers:route.request().headers()});
+    return route.fulfill({contentType:"application/json",headers:{"Access-Control-Allow-Origin":"*","Cache-Control":"private, no-store"},json:{data:{status:"exact",revision:"ex1",element_id:query.get("element_id"),variant:"original",pointer:"/nodes/1",source_index:0,source_count:1,text:"😀引用した合成本文",highlights:[[1,3]],coordinate_unit:"unicode_codepoint"}}});
+  });
+  await page.goto("/chat"); await openThread(page);
+  await page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citation-link").first().click();
+  const panel=page.getByTestId("original-source-panel").first();
+  await expect(panel).toBeVisible(); expect(requests).toHaveLength(0);
+  await panel.locator("summary").click();
+  await expect(panel.locator("mark")).toHaveText("引用");
+  expect(requests[0].headers.referer).toBeUndefined(); expect(requests[0].headers.cookie).toBeUndefined();
+  await expect(panel.getByTestId("original-source-content")).toBeInViewport();
+  await page.screenshot({path:testInfo.outputPath(`agent-original-node-${testInfo.project.name}.png`),animations:"disabled"});
+  await expectNoHorizontalOverflow(page);
+});

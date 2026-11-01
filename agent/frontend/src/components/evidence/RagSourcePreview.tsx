@@ -5,6 +5,8 @@ import {
   EvidenceReader,
   type EvidenceReadingInput,
   type EvidenceReadingWindow,
+  type OriginalSourceInput,
+  type OriginalSourceWindow,
   documentPreviewLabels,
   evidencePreviewFocus,
   type DocumentPreviewPagesState,
@@ -64,7 +66,9 @@ export function RagSourcePreview({
   const focus = useMemo(() => evidencePreviewFocus(data?.highlight_metadata ?? null), [data?.highlight_metadata]);
   const pages = usePreviewPages(data);
   const contentUrl = data?.content_url ?? null;
-  const loadWindow = useCallback((input: EvidenceReadingInput, signal: AbortSignal) => loadPreviewWindow(contentUrl ?? "", input, signal), [contentUrl]);
+  const loadWindow = useCallback((input: EvidenceReadingInput, signal: AbortSignal) => loadPreviewWindow<EvidenceReadingWindow>(contentUrl ?? "", input, signal, "reader"), [contentUrl]);
+
+  const loadOriginal = useCallback((input: OriginalSourceInput, signal: AbortSignal) => loadPreviewWindow<OriginalSourceWindow>(contentUrl ?? "", input, signal, "source-map"), [contentUrl]);
 
   if (preview.isError) {
     return (
@@ -88,7 +92,7 @@ export function RagSourcePreview({
       />
     );
   }
-  if (data.kind === "text") return <EvidenceReader key={`${documentId}:${chunkId}`} readingKey={`${documentId}:${chunkId}`} loadWindow={loadWindow} enabled={open} downloadUrl={`${data.content_url}?disposition=attachment`} />;
+  if (data.kind === "text") return <EvidenceReader key={`${documentId}:${chunkId}`} readingKey={`${documentId}:${chunkId}`} loadWindow={loadWindow} loadOriginal={/\.json$/i.test(data.file_name || fileName) ? loadOriginal : undefined} enabled={open} downloadUrl={`${data.content_url}?disposition=attachment`} />;
   return (
     <DocumentPreview
       kind={data.kind}
@@ -129,10 +133,10 @@ function usePreviewPages(data: RunSourcePreview | undefined): DocumentPreviewPag
 }
 
 /** 原文の本文を読む（RAG の署名つきの URL。Cookie と Referer を送らない）。 */
-async function loadPreviewWindow(url: string, input: EvidenceReadingInput, signal: AbortSignal): Promise<EvidenceReadingWindow> {
+async function loadPreviewWindow<T>(url: string, input: object, signal: AbortSignal, view: "reader" | "source-map"): Promise<T> {
   const target = new URL(url);
-  target.searchParams.set("view", "reader");
-  for (const [key, value] of Object.entries(input)) if (value) target.searchParams.set(key, value);
+  target.searchParams.set("view", view);
+  for (const [key, value] of Object.entries(input)) if (value !== undefined) target.searchParams.set(key, String(value));
   const response = await fetch(target.toString(), { signal, credentials: "omit", referrerPolicy: "no-referrer" });
   if (!response.ok) {
     const envelope: unknown = await response.json().catch(() => null);
@@ -143,6 +147,6 @@ async function loadPreviewWindow(url: string, input: EvidenceReadingInput, signa
     const message = Array.isArray(messages) && typeof messages[0] === "string" ? messages[0] : null;
     throw new Error(message ?? t("evidence.previewTextFailed"));
   }
-  const envelope = await response.json() as { data: EvidenceReadingWindow };
+  const envelope = await response.json() as { data: T };
   return envelope.data;
 }

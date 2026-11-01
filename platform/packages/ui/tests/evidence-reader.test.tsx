@@ -141,3 +141,11 @@ it("引用位置への戻りは先頭の参考文脈ではなく引用した段�
   expect(host.querySelector('[data-testid="evidence-reader-location"]')?.textContent).toBe("引用位置へ戻りました。");
   await act(async () => root.unmount()); host.remove();
 });
+
+it("Pythonのcodepoint範囲はemojiの後でも正しい文字を強調する", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const load = vi.fn().mockResolvedValue({...windowData, blocks:[{id:"e1", text:"😀引用本文", offset:0, highlights:[[1,3]], cited:true}]});
+  await act(async () => {root.render(<EvidenceReader readingKey="emoji" loadWindow={load} />); await settle();});
+  expect(host.querySelector("mark")?.textContent).toBe("引用");
+  await act(async () => root.unmount()); host.remove();
+});

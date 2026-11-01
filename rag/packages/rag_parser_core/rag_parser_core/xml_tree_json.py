@@ -32,6 +32,7 @@ XML の要素の木を ``{"tag", "attr", "children"}`` の JSON にした文書�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
@@ -40,10 +41,20 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from rag_parser_core.extraction import (
+    FORMATTING_COMBINING_MARKS,
     DocumentElement,
     DocumentNavigationNode,
     ExtractionField,
     StructuredExtraction,
+)
+from rag_parser_core.json_source_map import (
+    MappedText,
+    mapped_clean,
+    mapped_join,
+    mapped_payload,
+    mapped_replace,
+    mapped_slice,
+    mapped_strip,
 )
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import (
@@ -57,7 +68,7 @@ from rag_parser_core.language.text import (
 
 XML_TREE_JSON_BACKEND = "xml_tree_json"
 XML_TREE_JSON_SOURCE_FORMAT = "xml_tree_json"
-XML_TREE_JSON_PARSER_VERSION = "xml_tree_json_v1"
+XML_TREE_JSON_PARSER_VERSION = "xml_tree_json_v2"
 # registry の adapter の版（``_adapter_version``）が読む。
 __version__ = XML_TREE_JSON_PARSER_VERSION
 XML_TREE_JSON_FORMAT_VERSION = 1
@@ -244,7 +255,8 @@ def _load_json(data: bytes) -> object | None:
     if len(data) > _DETECTION_MAX_BYTES:
         return None
     try:
-        return json.loads(data.decode("utf-8-sig"))
+        payload: object = json.loads(data.decode("utf-8-sig"))
+        return payload
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None
 
@@ -376,23 +388,27 @@ def _node_text(node: object) -> str:
     if _tag(node) in _SKIPPED_TAGS:
         return ""
     if _tag(node) == "Line":
-        return "―" + "".join(_node_text(child) for child in _children(node)) + "―"
-    return "".join(_node_text(child) for child in _children(node))
+        return mapped_join(
+            "", ["―", mapped_join("", (_node_text(child) for child in _children(node))), "―"]
+        )
+    return mapped_join("", (_node_text(child) for child in _children(node)))
 
 
 def _clean(text: str) -> str:
-    return re.sub(r"[ \t\r\n]+", " ", text).strip()
+    return mapped_clean(text)
 
 
 def _sentence_block_text(node: object) -> str:
     """``ParagraphSentence`` など: 文はつなぎ、列（``Column``）は全角空白で分ける。"""
     columns = _children_by_tag(node, "Column")
     if columns:
-        return "　".join(
-            _clean(_node_text(column)) for column in columns if _node_text(column).strip()
+        return mapped_join(
+            "　", (_clean(_node_text(column)) for column in columns if _node_text(column).strip())
         )
     return _clean(
-        "".join(_node_text(child) for child in _children(node) if _tag(child) != "TableStruct")
+        mapped_join(
+            "", (_node_text(child) for child in _children(node) if _tag(child) != "TableStruct")
+        )
     )
 
 
@@ -400,22 +416,27 @@ def _sentence_block_text(node: object) -> str:
 
 
 def _cell_text(node: object) -> str:
-    text = " ".join(
-        _clean(_block_text(child)) if isinstance(child, Mapping) else _clean(str(child))
-        for child in _children(node)
+    text = mapped_join(
+        " ",
+        (
+            _clean(_block_text(child))
+            if isinstance(child, Mapping)
+            else _clean(child if isinstance(child, str) else str(child))
+            for child in _children(node)
+        ),
     )
     # Markdown の表の区切り（|）と紛れない字に替える（書式の規則。言語の書き方ではない）。
-    return _clean(text).replace("|", "｜")
+    return mapped_replace(_clean(text), "|", "｜")
 
 
 def _block_text(node: object) -> str:
     """表のセルの中など、構造を問わず文字を読む（細目は 1 行ずつ）。"""
     tag = _tag(node)
     if tag in _ITEM_TAGS:
-        return "\n".join(_item_lines(node, depth=0))
+        return mapped_join("\n", _item_lines(node, depth=0))
     if tag in {"Sentence", "Column"} or not isinstance(node, Mapping):
         return _node_text(node)
-    return " ".join(_block_text(child) for child in _children(node))
+    return mapped_join(" ", (_block_text(child) for child in _children(node)))
 
 
 def _table_lines(table_struct: object) -> list[str]:
@@ -456,9 +477,9 @@ def _table_lines(table_struct: object) -> list[str]:
         width = max((len(row) for row in grid), default=0)
         if not width:
             continue
-        for row_index, row in enumerate(grid):
-            padded = row + [""] * (width - len(row))
-            lines.append("| " + " | ".join(padded) + " |")
+        for row_index, grid_row in enumerate(grid):
+            padded = grid_row + [""] * (width - len(grid_row))
+            lines.append(mapped_join("", ["| ", mapped_join(" | ", padded), " |"]))
             if row_index == 0:
                 lines.append("|" + "|".join(" --- " for _ in range(width)) + "|")
     for remarks in _children_by_tag(table_struct, "Remarks"):
@@ -497,8 +518,10 @@ def _item_lines(item: object, *, depth: int) -> list[str]:
     title = _clean(_node_text(_child(item, f"{tag}Title")))
     sentence = _sentence_block_text(sentence_node)
     indent = "　" * depth
-    head = f"{indent}{title}　{sentence}" if title and sentence else f"{indent}{title or sentence}"
-    lines = [head.rstrip()] if head.strip() else []
+    head = mapped_join(
+        "", [indent, title, "　", sentence] if title and sentence else [indent, title or sentence]
+    )
+    lines: list[str] = [mapped_slice(head, 0, len(head.rstrip()))] if head.strip() else []
     for table in _children_by_tag(sentence_node, "TableStruct") + _children_by_tag(
         item, "TableStruct"
     ):
@@ -507,7 +530,10 @@ def _item_lines(item: object, *, depth: int) -> list[str]:
         if _tag(child) in _ITEM_TAGS:
             lines.extend(_item_lines(child, depth=depth + 1))
         elif _tag(child) == "List":
-            lines.extend(f"{indent}　{_clean(_node_text(entry))}" for entry in _children(child))
+            lines.extend(
+                mapped_join("", [indent, "　", _clean(_node_text(entry))])
+                for entry in _children(child)
+            )
     return lines
 
 
@@ -653,10 +679,13 @@ class _Builder:
         deleted = _attr(node, "Delete") == "true"
         if not paragraphs:
             body = _clean(
-                "".join(
-                    _node_text(child)
-                    for child in _children(node)
-                    if _tag(child) not in {"ArticleTitle", "ArticleCaption"}
+                mapped_join(
+                    "",
+                    (
+                        _node_text(child)
+                        for child in _children(node)
+                        if _tag(child) not in {"ArticleTitle", "ArticleCaption"}
+                    ),
                 )
             )
             self.units.append(
@@ -940,9 +969,11 @@ def xml_tree_json_extraction_from_payload(
     *,
     parser_backend: str = XML_TREE_JSON_BACKEND,
     parser_version: str = XML_TREE_JSON_PARSER_VERSION,
+    source_sha256: str | None = None,
 ) -> StructuredExtraction:
     """XML ツリー JSON（dict）を、段落を 1 要素にした抽出にする。"""
-    metadata, units = _read_units(payload)
+    metadata, units = _read_units(mapped_payload(payload) if source_sha256 else payload)
+    source_maps: dict[str, Any] = {}
     title = metadata.title
     elements: list[DocumentElement] = []
     raw_lines: list[str] = [f"# {title}"] if title else []
@@ -953,9 +984,14 @@ def xml_tree_json_extraction_from_payload(
         if not body_lines:
             continue
         heading = f"{title} {unit.citation}{unit.parent_caption}".strip()
-        text = "\n".join([heading, *body_lines])[:_ELEMENT_TEXT_MAX_CHARS]
+        text = mapped_slice(mapped_join("\n", [heading, *body_lines]), 0, _ELEMENT_TEXT_MAX_CHARS)
+        for mark in FORMATTING_COMBINING_MARKS:
+            text = mapped_replace(text, mark, "")
+        text = mapped_strip(text)
         content_kind = "table" if unit.unit_kind == "appendix" and unit.has_table else "text"
         order = len(elements)
+        if source_sha256 and isinstance(text, MappedText):
+            source_maps[f"xt-{order:05d}"] = [span.to_dict() for span in text.spans]
         elements.append(
             DocumentElement(
                 kind="text",
@@ -1011,6 +1047,18 @@ def xml_tree_json_extraction_from_payload(
         navigation=_navigation(elements),
         fields=fields,
         parser_artifacts={
+            **(
+                {
+                    "json_source_map": {
+                        "version": 1,
+                        "coordinate_unit": "unicode_codepoint",
+                        "sha256": source_sha256,
+                        "elements": source_maps,
+                    }
+                }
+                if source_sha256
+                else {}
+            ),
             "source_parser": parser_backend,
             "parser_backend": parser_backend,
             "parser_version": parser_version,
@@ -1070,7 +1118,10 @@ def xml_tree_json_extraction(
     if payload is None:
         return None
     return xml_tree_json_extraction_from_payload(
-        payload, parser_backend=parser_backend, parser_version=parser_version
+        payload,
+        parser_backend=parser_backend,
+        parser_version=parser_version,
+        source_sha256=hashlib.sha256(data).hexdigest(),
     )
 
 
@@ -1130,9 +1181,9 @@ def xml_tree_citation_key(text: str) -> str:
         number = parse_kanji_number(match.group(2))
         return f"{match.group(1)}{number}" if number is not None else match.group(0)
 
-    text = text_patterns()
+    patterns = text_patterns()
     connectors = alternation(current_pack().words("numbers", "branch_connectors"))
-    return re.sub(rf"({text.prefix}|{connectors})({text.kanji}+)", replace, normalized)
+    return re.sub(rf"({patterns.prefix}|{connectors})({patterns.kanji}+)", replace, normalized)
 
 
 _query_citations: dict[str, re.Pattern[str]] = {}
@@ -1156,7 +1207,7 @@ def _query_citation() -> re.Pattern[str]:
     qualifier = (
         "|".join(
             rf"{re.escape(open_)}[^{re.escape(close)}]{{1,40}}{re.escape(close)}"
-            for open_, close in brackets
+            for open_, close in ((pair[0], pair[1]) for pair in brackets)
         )
         or NEVER
     )
@@ -1194,7 +1245,7 @@ def _supplement_tail() -> re.Pattern[str]:
     qualifier = (
         "|".join(
             rf"{re.escape(open_)}[^{re.escape(close)}]*{re.escape(close)}"
-            for open_, close in brackets
+            for open_, close in ((pair[0], pair[1]) for pair in brackets)
         )
         or NEVER
     )

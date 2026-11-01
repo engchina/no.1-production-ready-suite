@@ -373,3 +373,57 @@ async def test_saved_embedding_commit_updates_search_text_and_preserves_original
     [saved] = await client.list_chunk_set_chunks(chunk_set_id)
     assert saved.text == original
     assert saved.metadata["context_header"] == "newkeyword"
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_json_source_mapping_survives_oracle_and_extraction_validation() -> None:
+    """原本対応の多段JSONがOracle保存・索引用の型検証で失われない。"""
+    import hashlib
+
+    from app.services.json_source_window import source_map_window
+
+    raw = b'["same","same"]'
+    extraction = StructuredExtraction.model_validate(
+        {
+            "elements": [{"element_id": "e1", "kind": "text", "text": "same"}],
+            "parser_artifacts": {
+                "json_source_map": {
+                    "version": 1,
+                    "coordinate_unit": "unicode_codepoint",
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "elements": {
+                        "e1": [
+                            {
+                                "start": 0,
+                                "end": 4,
+                                "pointer": "/1",
+                                "source_start": 0,
+                                "source_end": 4,
+                            }
+                        ]
+                    },
+                }
+            },
+        }
+    )
+    client = OracleClient()
+    document_id = await _new_document(client)
+    extraction_id = _unique_id("source_map")
+    await client.upsert_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=extraction_id,
+        source_sha256=hashlib.sha256(raw).hexdigest(),
+        extraction=extraction.to_document_payload(),
+        status="materialized",
+    )
+    saved = await client.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=extraction_id
+    )
+    assert saved is not None
+    coerced = _coerce_extraction_payload(saved["extraction_json"])
+    assert coerced is not None
+    restored = _validate_structured_extraction_payload(coerced)
+    window = source_map_window(restored.to_document_payload(), raw, element_id="e1")
+    assert window["status"] == "exact" and window["pointer"] == "/1"
+    assert window["offset"] == 9
+    assert window["text"] == "same"

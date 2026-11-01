@@ -210,3 +210,42 @@ test("前後文の明示移動は新しい本文を表示し、四窓目でも�
   await expect(body.locator("[data-reader-block]")).toHaveCount(3);
   await expect(body.locator('[data-reader-block="window-0:0"]').locator("p").first()).toBeInViewport();
 });
+
+test("原本ノードは展開時だけ取得し、版と対応範囲を保持する", {tag:"@responsive"}, async ({page},testInfo) => {
+  await search(page);
+  const inputs: URLSearchParams[] = [];
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => {release = resolve;});
+  let failNext = false;
+  await page.route("**/api/documents/doc-a/source-map?**",async route => {
+    const params = new URL(route.request().url()).searchParams; inputs.push(params);
+    const index = Number(params.get("source_index") ?? 0);
+    await wait;
+    if (failNext) return route.fulfill({status:503,json:{data:null,error_messages:["合成の原本取得失敗"],warning_messages:[]}});
+    return route.fulfill({json:{data:{status:"exact",revision:"ex1",chunk_revision:"v1",element_id:"anchor",variant:"original",pointer:`/nodes/${index}`,source_index:index,source_count:2,text:"😀引用した合成本文",highlights:[[1,3]],coordinate_unit:"unicode_codepoint",next_offset:null,previous_offset:null}}});
+  });
+  await page.getByTestId("evidence-card").getByRole("button",{name:"文書 A.json の根拠を表示"}).click();
+  const reader=page.getByTestId("evidence-reader");
+  const panel=reader.getByTestId("original-source-panel").first();
+  await expect(panel).toBeVisible(); expect(inputs).toHaveLength(0);
+  await panel.locator("summary").click();
+  await expect(panel.locator("[data-processing-label]")).toBeVisible();
+  await expect(panel).toContainText("00:01",{timeout:4000});
+  release();
+  const content=panel.getByTestId("original-source-content");
+  await expect(content.locator("mark")).toHaveText("引用");
+  expect(inputs[0].get("expected_revision")).toBe("v1");
+  expect(inputs[0].get("element_id")).toBe("anchor");
+  await expect(content).toBeInViewport();
+  await expect(content).toBeFocused();
+  await page.screenshot({path:testInfo.outputPath(`original-node-${testInfo.project.name}.png`),animations:"disabled"});
+  failNext = true;
+  await panel.getByRole("button",{name:"次の原本ノード",exact:true}).click();
+  await expect(panel).toContainText("合成の原本取得失敗");
+  await expect(content).toContainText("/nodes/0");
+  failNext = false;
+  await panel.getByRole("button",{name:"再試行",exact:true}).click();
+  await expect(content).toContainText("/nodes/1");
+  expect(inputs.at(-1)?.get("source_index")).toBe("1");
+  await expectNoPageOverflow(page);
+});

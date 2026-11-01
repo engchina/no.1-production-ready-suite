@@ -6,6 +6,9 @@ import { TimedLoadingState } from "../feedback/processing-state";
 import { Button, buttonVariants } from "../ui/button";
 import { Disclosure } from "../ui/disclosure";
 import { Skeleton } from "../ui/skeleton";
+import { CodepointHighlight } from "./codepoint-highlight";
+import { OriginalSourcePanel, type OriginalSourceLoader } from "./original-source-panel";
+import { resolveContentLang } from "../../lib/content-lang";
 
 export interface EvidenceReadingInput {
   cursor?: string;
@@ -39,12 +42,13 @@ const labels = {
 };
 const EMPTY_INPUT: EvidenceReadingInput = {};
 
-export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true }: {
+export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloadUrl, highlight = true, loadOriginal }: {
   readingKey: string;
   loadWindow: (input: EvidenceReadingInput, signal: AbortSignal) => Promise<EvidenceReadingWindow>;
   enabled?: boolean;
   downloadUrl?: string;
   highlight?: boolean;
+  loadOriginal?: OriginalSourceLoader;
 }) {
   const [request, setRequest] = useState<{ key: string; input: EvidenceReadingInput; serial: number }>({ key: readingKey, input: {}, serial: 0 });
   const input = request.key === readingKey ? request.input : EMPTY_INPUT;
@@ -132,15 +136,11 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
       {blocks.map(block => <section key={`${block.id}:${block.offset}`} data-reader-block={`${block.id}:${block.offset}`} data-reader-cited={block.cited} data-reader-current={Boolean(state.notice && state.target === `${block.id}:${block.offset}`)} className="space-y-1">
         <p className="text-xs text-fg-muted">{state.notice && state.target === `${block.id}:${block.offset}` ? `${labels.current} · ` : ""}{block.cited ? labels.cited : labels.context}</p>
         {block.heading?.length ? <p className="text-sm font-semibold">{block.heading.join(" › ")}</p> : null}
-        {block.kind === "table" ? <ExcerptContent text={block.text} tableLabel={labels.table} className="text-sm leading-relaxed" /> : <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? highlighted(block.text, block.highlights) : block.text}</p>}
+        {block.kind === "table" ? <ExcerptContent text={block.text} tableLabel={labels.table} className="text-sm leading-relaxed" /> : <p lang={resolveContentLang(undefined, block.text)} className="whitespace-pre-wrap break-words text-sm leading-relaxed">{highlight && block.highlights.length ? <CodepointHighlight text={block.text} ranges={block.highlights} /> : block.text}</p>}
+        {loadOriginal && current ? <OriginalSourcePanel key={`${block.id}:${current.revision}`} readingKey={readingKey} elementId={block.id} revision={current.revision} loadWindow={loadOriginal} enabled={enabled} /> : null}
       </section>)}
       {!blocks.length && !state.pending && !state.error ? <p className="text-sm text-fg-muted">{labels.empty}</p> : null}
     </div>
     <Button variant="secondary" size="sm" disabled={!last?.next_cursor || state.pending} onClick={() => read({ cursor: last!.next_cursor!, direction: "after" })}>{labels.after}<ArrowRight size={14} aria-hidden /></Button>
   </div>;
-}
-function highlighted(text: string, ranges: [number, number][]) {
-  const parts = []; let offset = 0;
-  for (const [start, end] of ranges) { parts.push(text.slice(offset, start), <mark key={start} data-surface-tint="accent" className="rounded-sm bg-accent-muted text-fg underline decoration-accent-emphasis decoration-2 underline-offset-2 box-decoration-clone">{text.slice(start, end)}</mark>); offset = end; }
-  parts.push(text.slice(offset)); return parts;
 }

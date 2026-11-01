@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { EvidenceSourceSheet, EvidenceReader, evidencePreviewFocus, type EvidenceReadingInput } from "@production-ready/ui";
+import { EvidenceSourceSheet, EvidenceReader, evidencePreviewFocus, type OriginalSourceInput, type EvidenceReadingInput } from "@production-ready/ui";
 
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import type { CitationPosition } from "@/lib/answer-text";
@@ -86,6 +86,7 @@ function CitationSourcePreview({
   highlight: boolean;
 }) {
   const loadWindow = useCallback((input: EvidenceReadingInput, signal: AbortSignal) => api.documentReader(chunk.document_id, chunk.chunk_id, input, signal), [chunk.document_id, chunk.chunk_id]);
+  const loadOriginal = useCallback((input: OriginalSourceInput, signal: AbortSignal) => api.documentSourceMap(chunk.document_id, chunk.chunk_id, input, signal), [chunk.document_id, chunk.chunk_id]);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
   // パネルを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
@@ -94,7 +95,7 @@ function CitationSourcePreview({
   const previewRecipe = previewRecipes.data?.find((recipe) => recipe.recipe_id === recipeId);
   const focus = evidencePreviewFocus(chunk.metadata);
   if (/\.(?:txt|csv|tsv|md|json|jsonl|xml|html?|eml|log)$/i.test(previewFileName)) {
-    return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} enabled={open} highlight={highlight} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
+    return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} loadOriginal={/\.json$/i.test(previewFileName) ? loadOriginal : undefined} enabled={open} highlight={highlight} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
   }
   return (
     <DocumentPreview

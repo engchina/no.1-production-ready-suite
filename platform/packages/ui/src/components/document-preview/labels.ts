@@ -87,3 +87,19 @@ export function documentPreviewLabels(overrides: Partial<DocumentPreviewLabels> 
 }
 
 export const DEFAULT_DOCUMENT_PREVIEW_LABELS: DocumentPreviewLabels = documentPreviewLabels();
+
+/** 原本対応の表示文言。RAGとAgentが同じリソースを使用する。 */
+export function originalSourceLabels() {
+  return {
+    title: "原本の対応箇所", loading: "原本の対応箇所を読み込んでいます",
+    retry: "再試行", failed: "原本の対応箇所を取得できませんでした。",
+    unrecorded: "原本のノード位置は記録されていません。対応する解析方式で再解析すると保存できます。",
+    unresolved: "原本との対応を確認できません。似た本文への移動は行いません。",
+    versionMismatch: "保存した解析版と原本が一致しません。新しい版へ自動で移動しません。",
+    original: "原本のJSON", prepared: "処理後ファイルのJSON",
+    citationElement: "原本と抽出要素の対応です。引用の文字範囲は未確定です。",
+    note: "強調部分が抽出本文に対応します。整形で追加した見出しや記号は含みません。",
+    previousNode: "前の原本ノード", nextNode: "次の原本ノード",
+    previous: "前の部分を読む", next: "後の部分を読む", body: "原本の対応本文",
+  };
+}

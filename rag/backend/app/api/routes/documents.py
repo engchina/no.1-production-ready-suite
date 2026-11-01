@@ -1546,6 +1546,89 @@ async def document_source_reader(
     )
 
 
+@router.get("/{document_id}/source-map")
+async def document_source_map(
+    document_id: str,
+    chunk_id: Annotated[str, Query(min_length=1, max_length=256)],
+    element_id: Annotated[str | None, Query(max_length=128)] = None,
+    source_index: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int | None, Query(ge=0)] = None,
+    expected_revision: Annotated[str | None, Query(max_length=256)] = None,
+) -> ApiResponse[dict[str, Any]]:
+    from app.services.source_reader import read_original_context, resolve_source_context
+
+    oracle = OracleClient()
+    chunk, _, _, _ = await resolve_source_context(
+        oracle, document_id, chunk_id, expected_revision=expected_revision
+    )
+    recipe_id = chunk.metadata.get("recipe_id")
+    if isinstance(recipe_id, str) and recipe_id:
+        detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    else:
+        found = await oracle.get_document(document_id)
+        if found is None:
+            raise HTTPException(404, "文書が見つかりません。")
+        detail, artifact = found, found.preprocess_artifact
+
+    async def load(variant: Literal["original", "prepared"]) -> bytes:
+        data, _, _ = await load_document_content(
+            detail, variant=variant, preprocess_artifact=artifact
+        )
+        return data
+
+    return ApiResponse(
+        data=await read_original_context(
+            oracle,
+            document_id,
+            chunk_id,
+            load=load,
+            element_id=element_id,
+            source_index=source_index,
+            offset=offset,
+            expected_revision=expected_revision,
+        )
+    )
+
+
+@router.get("/{document_id}/recipes/{recipe_id}/source-map")
+async def document_recipe_source_map(
+    document_id: str,
+    recipe_id: str,
+    element_id: Annotated[str, Query(min_length=1, max_length=128)],
+    expected_revision: Annotated[str, Query(min_length=1, max_length=256)],
+    source_index: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int | None, Query(ge=0)] = None,
+) -> ApiResponse[dict[str, Any]]:
+    from app.services.json_source_window import load_source_map_window
+
+    oracle = OracleClient()
+    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None or row.get("active_extraction_recipe_id") != expected_revision:
+        raise HTTPException(409, "資料の解析版が変わりました。開き直してください。")
+    saved = await oracle.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=expected_revision
+    )
+    payload = saved.get("extraction_json") if saved else {}
+
+    async def load(variant: Literal["original", "prepared"]) -> bytes:
+        data, _, _ = await load_document_content(
+            detail, variant=variant, preprocess_artifact=artifact
+        )
+        return data
+
+    return ApiResponse(
+        data=await load_source_map_window(
+            payload if isinstance(payload, Mapping) else {},
+            element_id=element_id,
+            revision=expected_revision,
+            load=load,
+            source_index=source_index,
+            offset=offset,
+        )
+    )
+
+
 @router.get("/{document_id}/recipes/{recipe_id}/extraction-view")
 async def document_recipe_extraction_view(
     document_id: str,
