@@ -429,10 +429,11 @@ for (const viewport of [
     // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
     await expect(current).toContainText("検索文から根拠の候補を集める");
     // 送り直しで API への送信が多いときは送信の回数も示す（#2966）。
-    await expect(understand).toContainText("LLM 1 回・送信 2 回");
+    await expect(understand).not.toContainText("LLM 1 回・送信 2 回");
     const liveToggle = page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-toggle`);
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(understand).toContainText("LLM 1 回・送信 2 回");
     await expect(page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-details`)).toContainText(
       "答える要求"
     );
@@ -922,7 +923,7 @@ for (const viewport of [
       "failed"
     );
     await summary.click();
-    await expect(okAnswer.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).toContainText(
+    await expect(okAnswer.getByTestId(`chat-answer-progress-step-${spanStepId("search")}`)).not.toContainText(
       "根拠 1 件 · LLM 1 回"
     );
     const answerBox = await page.getByText(okReply.content).first().boundingBox();
@@ -1074,9 +1075,9 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     const skipped = page.getByTestId(`${prefix}-step-${spanStepId("legacy-skip")}`);
     await expect(skipped).toHaveAttribute("data-status", "skipped");
     await expect(skipped.locator("[data-run-step-status-duration]")).toContainText("スキップ");
-    await expect(skipped.locator("[data-run-result-summary]")).toHaveText(reason);
+    await expect(skipped.locator("[data-run-result-summary]")).toHaveCount(0);
     await expect(page.getByTestId(prefix)).not.toContainText("skipped");
-    await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveText("設定がオフのため、検索文の追加をスキップしました。");
+    await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveCount(0);
     await skipped.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, theme => testInfo.outputPath(`${prefix}-skip-${theme}.png`));
     await inspectTraceStep(page, page.getByTestId(prefix), spanStepId("legacy-skip"));

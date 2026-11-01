@@ -20225,7 +20225,7 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 // desktop と mobile-375 の project で確かめる。
-test("Select AI の SQL は安全性の確認の工程を「省略」と出す（#1523）", async ({ page }) => {
+test("Select AI の SQL は安全性の確認の工程を「省略」と出す（#1523）", { tag: "@responsive" }, async ({ page }) => {
   await mockNl2SqlApi(page);
   const createdAt = "2026-10-12T10:00:00.000Z";
   const steps = [
@@ -20296,10 +20296,11 @@ test("Select AI の SQL は安全性の確認の工程を「省略」と出す�
   await page.getByTestId("nl2sql-job-summary").click();
   const safetyStep = page.getByTestId("nl2sql-job-step-safety_check");
   await expect(safetyStep).toHaveAttribute("data-status", "skipped");
-  // 状態は色だけでなく文字で示し、省略の理由を添える（チャットと同じ工程の定義）。
+  // 収縮行は状態だけを示し、省略の理由は展開先で確認する。
   await expect(safetyStep).toContainText("スキップ");
-  await expect(safetyStep).toContainText("Select AI が生成した SELECT 文のため省略しました");
+  await expect(safetyStep).not.toContainText("Select AI が生成した SELECT 文のため省略しました");
   await safetyStep.getByRole("button").first().click();
+  await expect(safetyStep).toContainText("Select AI が生成した SELECT 文のため省略しました");
   await expect(safetyStep).toContainText("INVOICES");
   await expect(page.getByTestId("nl2sql-job-step-execute_sql")).toHaveAttribute(
     "data-status",
