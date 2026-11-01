@@ -95,16 +95,18 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
         )
     )
     try:
-        rankings = await oracle.search_many(
-            [
-                ("syntheticneedle", [0.1] * 1536, SearchMode.VECTOR),
-                ("syntheticneedle", [], SearchMode.KEYWORD),
-            ],
-            10,
-            scoped,
-        )
-        for ranking in rankings:
-            assert len(ranking) == 1
+        searches = [
+            ("syntheticneedle", [0.1] * 1536, SearchMode.VECTOR),
+            ("syntheticneedle", [], SearchMode.KEYWORD),
+        ]
+        rankings = await oracle.search_many(searches, 10, scoped)
+        for (_, _, mode), ranking in zip(searches, rankings, strict=True):
+            failure = getattr(ranking, "failure", None)
+            if failure is not None:
+                raise AssertionError(f"{backend}/{mode.value}: 検索が失敗しました") from failure
+            status = getattr(ranking, "status", "completed")
+            assert status == "completed", f"{backend}/{mode.value}: status={status}"
+            assert len(ranking) == 1, f"{backend}/{mode.value}: count={len(ranking)}"
             assert ranking[0].document_id == ids[0]
             assert ranking[0].metadata["page_number"] == 1
         assert not await oracle.keyword_search("zzzzunmatchedzzzz", 10, scoped)
