@@ -257,7 +257,9 @@ class _EngineStageObservation:
         self._values.update(params or {})
         if self._values.get("status") == "skipped":
             self._span.set_status("skipped")
-        failed = self._values.get("status") == ANSWER_STEP_FAILED_STATUS
+        failed = self._values.get("status") in {ANSWER_STEP_FAILED_STATUS, "failed"}
+        if failed:
+            self._span.set_status("failed")
         self._span.set_display(
             kind=kind,
             params=answer_step_params(self._values),

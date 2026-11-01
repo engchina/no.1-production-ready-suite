@@ -98,3 +98,100 @@ END;
 
 {_native_hybrid_setup_sql()}
 """.strip()
+
+
+_NATIVE_SCOPE_TABLE_SQL = """
+CREATE TABLE rag_native_search_scopes (
+    chunk_set_id VARCHAR2(64) PRIMARY KEY,
+    native_scope_id NUMBER GENERATED ALWAYS AS IDENTITY UNIQUE,
+    CONSTRAINT RAG_NATIVE_SCOPE_CHUNK_SET_FK FOREIGN KEY (chunk_set_id)
+        REFERENCES rag_chunk_sets(chunk_set_id) ON DELETE CASCADE
+)
+""".strip()
+
+_NATIVE_SCOPE_TRIGGER_SQL = """
+BEGIN
+    EXECUTE IMMEDIATE q'~CREATE OR REPLACE TRIGGER RAG_CHUNKS_NATIVE_SCOPE_SYNC
+BEFORE INSERT OR UPDATE OF chunk_set_id, native_scope_id ON rag_chunks FOR EACH ROW
+BEGIN
+    IF :NEW.chunk_set_id IS NULL THEN
+        :NEW.native_scope_id := NULL;
+    ELSE
+        BEGIN
+            SELECT native_scope_id INTO :NEW.native_scope_id FROM rag_native_search_scopes
+            WHERE chunk_set_id = :NEW.chunk_set_id;
+        EXCEPTION WHEN NO_DATA_FOUND THEN
+            BEGIN
+                INSERT INTO rag_native_search_scopes (chunk_set_id) VALUES (:NEW.chunk_set_id)
+                RETURNING native_scope_id INTO :NEW.native_scope_id;
+            EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
+                SELECT native_scope_id INTO :NEW.native_scope_id FROM rag_native_search_scopes
+                WHERE chunk_set_id = :NEW.chunk_set_id;
+            END;
+        END;
+    END IF;
+END;~';
+END;
+/
+""".strip()
+
+_NATIVE_SCOPE_COLUMN_SQL = """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNKS' AND column_name = 'NATIVE_SCOPE_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunks ADD (native_scope_id NUMBER)';
+    END IF;
+END;
+/
+""".strip()
+
+_NATIVE_SCOPE_INDEX_SQL = "CREATE INDEX RAG_CHUNKS_NATIVE_SCOPE_IDX ON rag_chunks(native_scope_id)"
+
+
+def native_hybrid_scope_objects_sql() -> str:
+    """新規作成は schema manifest が検査できる通常の DDL とする。"""
+    return (
+        f"{_NATIVE_SCOPE_TABLE_SQL};\n\n{_NATIVE_SCOPE_COLUMN_SQL}\n\n"
+        f"{_NATIVE_SCOPE_INDEX_SQL};\n\n{_NATIVE_SCOPE_TRIGGER_SQL}"
+    )
+
+
+def native_hybrid_scope_migration_sql() -> str:
+    """短い安定した数値へ対応付ける。既存の圧縮表へidentityを追加しない。"""
+    return f"""
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_NATIVE_SEARCH_SCOPES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE q'~{_NATIVE_SCOPE_TABLE_SQL}~';
+    END IF;
+END;
+/
+
+{_NATIVE_SCOPE_COLUMN_SQL}
+
+INSERT INTO rag_native_search_scopes (chunk_set_id)
+SELECT cs.chunk_set_id FROM rag_chunk_sets cs WHERE NOT EXISTS (
+    SELECT 1 FROM rag_native_search_scopes s WHERE s.chunk_set_id = cs.chunk_set_id
+);
+
+UPDATE rag_chunks c SET native_scope_id = (
+    SELECT s.native_scope_id FROM rag_native_search_scopes s WHERE s.chunk_set_id = c.chunk_set_id
+) WHERE c.chunk_set_id IS NOT NULL AND c.native_scope_id IS NULL;
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_CHUNKS_NATIVE_SCOPE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE '{_NATIVE_SCOPE_INDEX_SQL}';
+    END IF;
+END;
+/
+
+{_NATIVE_SCOPE_TRIGGER_SQL}
+""".strip()
