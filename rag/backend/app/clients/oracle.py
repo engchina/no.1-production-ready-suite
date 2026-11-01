@@ -2003,7 +2003,7 @@ class OracleClient:
 
     async def document_structure_index_preferences(
         self, document_id: str
-    ) -> dict[str, bool | None]:
+    ) -> dict[str, bool | None] | None:
         """現在の所属と利用者の範囲内にあるKBの構築指定だけを読む。"""
         from app.rag.structure_index import PREFERENCE_KEY
 
@@ -2017,6 +2017,16 @@ class OracleClient:
               AND {_oracle_access_predicate_sql(alias="d")}""",
             _with_tenant_bind({"document_id": document_id}),
         )
+        if not rows:
+            unassigned = await self._fetch_one(
+                f"""SELECT d.document_id FROM rag_documents d
+                WHERE d.document_id=:document_id
+                AND {_oracle_access_predicate_sql(alias="d")}
+                AND NOT EXISTS (SELECT 1 FROM rag_document_knowledge_bases m
+                    WHERE m.document_id=d.document_id)""",
+                _with_tenant_bind({"document_id": document_id}),
+            )
+            return None if unassigned else {}
         result: dict[str, bool | None] = {}
         for row in rows:
             config = _json_loads(row.get("retrieval_config"))

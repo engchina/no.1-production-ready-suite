@@ -239,10 +239,12 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
         )
     assert await client.fetch_knowledge_base_subgraph(b.id, limit=100) == unchanged_graph
     from app.rag.request_context import current_audit_request_context
+
     async def synthetic_actor() -> object:
         return current_audit_request_context()
+
     # DB結合テストの実行者を固定し、認証サービス自体は既存のsecurity回帰で確認する。
-    monkeypatch.setattr("app.rag.structure_index_jobs.refresh_actor",synthetic_actor)
+    monkeypatch.setattr("app.rag.structure_index_jobs.refresh_actor", synthetic_actor)
     service = StructureIndexJobs()
     await service.start(client, b.id, "missing")
     await __import__("asyncio").gather(*service.tasks)

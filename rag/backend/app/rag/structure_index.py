@@ -22,6 +22,8 @@ async def structure_index_targets(
         # 決定論の旧I/O adapterはKB別設定を持たない。
         return None if default else []
     preferences = await loader(document_id)
+    if preferences is None:
+        return None if default else []
     return [
         kb_id for kb_id, value in preferences.items() if structure_index_enabled(value, default)
     ]
@@ -124,7 +126,7 @@ async def rebuild_document_structure_index(
     document = await oracle.get_document_summary(document_id)
     if kb is None or document is None:
         raise KeyError("対象が見つかりません。")
-    preferences = await oracle.document_structure_index_preferences(document_id)
+    preferences = await oracle.document_structure_index_preferences(document_id) or {}
     if knowledge_base_id not in preferences:
         raise ValueError("membership_changed")
     from app.config import get_settings

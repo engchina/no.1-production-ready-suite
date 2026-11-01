@@ -285,3 +285,24 @@ async def test_old_job_cannot_publish_after_replacement(monkeypatch: pytest.Monk
             {},
             expected_job_id="old",
         )
+
+
+async def test_unassigned_document_preserves_global_graph_behavior() -> None:
+    class Oracle:
+        async def document_structure_index_preferences(
+            self, document_id: str
+        ) -> dict[str, bool | None] | None:
+            return None
+
+    assert await structure_index_targets(Oracle(), "doc", default=True) is None
+    assert await structure_index_targets(Oracle(), "doc", default=False) == []
+
+
+async def test_empty_authorized_kb_scope_does_not_fall_back_to_global() -> None:
+    class Oracle:
+        async def document_structure_index_preferences(
+            self, document_id: str
+        ) -> dict[str, bool | None]:
+            return {}
+
+    assert await structure_index_targets(Oracle(), "doc", default=True) == []
