@@ -5,6 +5,21 @@ from app.rag.graph_index import build_graph_index
 from app.schemas.extraction import StructuredExtraction
 
 
+def test_multibyte_document_label_includes_prefix_in_character_limit() -> None:
+    name = "合成" * 256
+    graph = build_graph_index(
+        document_id="synthetic-doc",
+        knowledge_base_ids=["synthetic-kb"],
+        extraction=StructuredExtraction(),
+        chunks=[Chunk(text="合成", index=0, start_offset=0, end_offset=2)],
+        document_name=name,
+    )
+    label = graph.entities[0].canonical_name
+    assert len(label) == 512
+    assert len(label.encode("utf-8")) > 512
+    assert label.endswith("合成") or label.endswith("合")
+
+
 def test_build_graph_index_creates_entities_and_relationships() -> None:
     """構造化 chunk metadata から deterministic KG artifact を生成する。"""
     extraction = StructuredExtraction.model_validate(

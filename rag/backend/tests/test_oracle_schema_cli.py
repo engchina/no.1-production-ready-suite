@@ -506,7 +506,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 136
+    assert len(statements) == 137
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
@@ -614,6 +614,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261101_002_native_hybrid_ivf",
         "20261101_004_native_hybrid_sync_columns",
         "20261101_003_native_hybrid_scope",
+        "20261102_001_graph_name_characters",
     ]
 
 
@@ -810,6 +811,18 @@ def test_checked_in_migration_artifacts_match_the_generator() -> None:
     assert json.loads((artifacts / "oracle-schema-migration.manifest.json").read_text()) == (
         oracle_schema.oracle_schema_migration_manifest()
     )
+
+
+def test_graph_name_migration_preserves_data_and_uses_characters() -> None:
+    sections = {
+        section.name: section for section in oracle_schema.oracle_schema_migration_sections()
+    }
+    sql = sections["20261102_001_graph_name_characters"].sql.upper()
+    assert "CHAR_USED" in sql and "CHAR_LENGTH" in sql
+    assert "CANONICAL_NAME VARCHAR2(512 CHAR)" in sql
+    assert not any(word in sql for word in ("DROP", "DELETE", "TRUNCATE"))
+    baseline = " ".join(oracle_schema.oracle_schema_sql().upper().split())
+    assert "CANONICAL_NAME VARCHAR2(512 CHAR)" in baseline
 
 
 def test_ivf_migration_rebuilds_only_the_derived_index() -> None:

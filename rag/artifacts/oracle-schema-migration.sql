@@ -4061,3 +4061,19 @@ BEGIN
 END;~';
 END;
 /
+
+-- migration: 20261102_001_graph_name_characters
+
+DECLARE
+    v_char_used VARCHAR2(1);
+    v_char_length NUMBER;
+BEGIN
+    SELECT char_used, char_length INTO v_char_used, v_char_length
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_GRAPH_ENTITIES' AND column_name = 'CANONICAL_NAME';
+    IF v_char_used <> 'C' OR v_char_length < 512 THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE rag_graph_entities MODIFY (canonical_name VARCHAR2(512 CHAR))';
+    END IF;
+END;
+/

@@ -39,6 +39,7 @@ from app.clients.oracle import (
     oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
+    oracle_graph_name_character_migration_sql,
     oracle_ingestion_audit_schema_sql,
     oracle_ingestion_job_schema_sql,
     oracle_ingestion_segment_schema_sql,
@@ -644,6 +645,13 @@ END;
             name="20261101_003_native_hybrid_scope",
             table_name="rag_chunks",
             sql=native_hybrid_scope_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_001_graph_name_characters",
+            table_name="rag_graph_entities",
+            sql=oracle_graph_name_character_migration_sql(),
         )
     )
     return sections
