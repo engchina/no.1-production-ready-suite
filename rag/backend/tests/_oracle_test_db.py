@@ -192,9 +192,12 @@ def cleanup_to_baseline() -> None:
         )
         with suppress(Exception):
             cursor.execute(f"DELETE FROM rag_document_knowledge_bases WHERE {kb_sql}", kb_binds)
+        chunks_deleted = False
         for table in _DOCUMENT_CHILD_TABLES:
             with suppress(Exception):
                 cursor.execute(f"DELETE FROM {table} WHERE {document_sql}", document_binds)
+                if table == "rag_chunks" and cursor.rowcount > 0:
+                    chunks_deleted = True
         cursor.execute(
             f"""
             UPDATE rag_documents SET duplicate_of_document_id = NULL
@@ -207,5 +210,19 @@ def cleanup_to_baseline() -> None:
         with suppress(Exception):
             cursor.execute(f"DELETE FROM rag_knowledge_bases WHERE {kb_sql}", kb_binds)
         connection.commit()
+        if chunks_deleted:
+            # ON COMMIT は同期だけ。削除された合成 vector を次のテストの候補枠に残さない。
+            # 業務 transaction の中ではなく commit 後に、semantic 部分だけ整理する。
+            cursor.execute(
+                "SELECT COUNT(*) FROM user_indexes WHERE index_name='RAG_CHUNKS_HYBRID_IDX'"
+            )
+            if cursor.fetchone()[0]:
+                cursor.execute(
+                    """BEGIN
+                        CTX_DDL.OPTIMIZE_INDEX(
+                            'RAG_CHUNKS_HYBRID_IDX', CTX_DDL.OPTLEVEL_TOKEN_TYPE,
+                            section_type=>CTX_DDL.SECTION_SEMANTIC_INDEX);
+                    END;"""
+                )
     finally:
         connection.close()
