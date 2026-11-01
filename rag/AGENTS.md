@@ -55,7 +55,7 @@
 設定・工程に触る前に [docs/agents/settings-responsibility.md](./docs/agents/settings-responsibility.md)（各層が持つもの・設定群ごとの上書きの可否・複数レシピの融合・ジョブの直列 / 並行）を読む。特に次を守る。
 
 - 文書は 1〜3 件の独立した処理レシピ（preprocess / parser / chunking）を持つ。レシピの既定値は global（「取込・検索・回答設定」）から解決し、**KB からは解決しない**。解析エンジンは形式で自動に振り分けない。
-- KB は文書の membership だけを持ち（例外は項目抽出の項目の定義）、出し入れは chunk へ波及しない。KB にレシピ・検索・回答設定を持たせず、KB の legacy の設定は runtime で使わず再保存しない。
+- KB は文書の membership だけを持ち（例外は項目抽出の項目の定義とKB別の文書構造索引構築指定）、出し入れは chunk へ波及しない。KB にレシピ・検索・回答設定を持たせず、KB の legacy の設定は runtime で使わず再保存しない。
 - Search Answer Profile は検索・回答に使う設定（参照 KB・検索方法・安全チェック）だけを持つ。検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。
 - 各レシピの直近成功した active chunk_set はすべて検索対象（主レシピ・配信モードは持たない）。成功時だけ active を原子切替し、失敗時は旧 active を保つ。
 

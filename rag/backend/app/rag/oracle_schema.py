@@ -51,6 +51,7 @@ from app.clients.oracle import (
 )
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
+from app.clients.structure_index_store import structure_index_schema_sql
 from app.clients.support_guide_store import (
     oracle_support_guide_embedding_schema_sql,
     oracle_support_guide_revision_schema_sql,
@@ -195,6 +196,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="knowledge_bases",
             table_name="rag_knowledge_bases",
             sql=oracle_knowledge_base_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="structure_index_jobs",
+            table_name="rag_structure_index_jobs",
+            sql=structure_index_schema_sql(),
         ),
         OracleSchemaSection(
             name="search_answer_profiles",

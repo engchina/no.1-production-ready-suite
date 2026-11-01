@@ -1,6 +1,6 @@
 """ナレッジベース API。作成・一覧・詳細・membership 管理。"""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
@@ -26,6 +26,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStructureIndexUpdate,
     KnowledgeBaseSummary,
     KnowledgeBaseUpdateRequest,
+    StructureIndexStartRequest,
 )
 from app.schemas.settings import (
     FieldDefinitionData,
@@ -358,3 +359,74 @@ async def update_structure_index_settings(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await get_structure_index_settings(knowledge_base_id)
+
+
+@router.get("/{knowledge_base_id}/structure-index/plan")
+async def get_structure_index_plan(
+    knowledge_base_id: str, offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100)
+) -> ApiResponse[dict[str, Any]]:
+    from app.rag.structure_index import structure_index_plan
+    from app.rag.structure_index_jobs import public_state
+
+    try:
+        items = await structure_index_plan(OracleClient(), knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(404, "ナレッジベースが見つかりません。") from exc
+    counts = {
+        key: sum(item["status"] == key for item in items)
+        for key in ("MISSING", "STALE", "CURRENT", "UNAVAILABLE")
+    }
+    return ApiResponse(
+        data={
+            "counts": counts,
+            "total": len(items),
+            "offset": offset,
+            "limit": limit,
+            "items": (public_state({"items": items}, offset, limit) or {})["items"],
+        }
+    )
+
+
+@router.get("/{knowledge_base_id}/structure-index/job")
+async def get_structure_index_job(
+    knowledge_base_id: str, offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100)
+) -> ApiResponse[dict[str, Any] | None]:
+    from app.clients.structure_index_store import StructureIndexStore
+    from app.rag.structure_index_jobs import public_state
+
+    oracle = OracleClient()
+    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+        raise HTTPException(404, "ナレッジベースが見つかりません。")
+    store = StructureIndexStore(oracle)
+    state = await store.get(knowledge_base_id)
+    return ApiResponse(data=public_state(state, offset, limit))
+
+
+@router.post("/{knowledge_base_id}/structure-index/job")
+async def start_structure_index_job(
+    knowledge_base_id: str, request: StructureIndexStartRequest
+) -> ApiResponse[dict[str, Any]]:
+    from app.rag.structure_index_jobs import public_state, structure_index_jobs
+
+    oracle = OracleClient()
+    try:
+        state = await structure_index_jobs.start(oracle, knowledge_base_id, request.mode)
+    except KeyError as exc:
+        raise HTTPException(404, "ナレッジベースが見つかりません。") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return ApiResponse(data=public_state(state) or {})
+
+
+@router.post("/{knowledge_base_id}/structure-index/job/stop")
+async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[str, Any]]:
+    from app.rag.structure_index_jobs import public_state, structure_index_jobs
+
+    oracle = OracleClient()
+    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+        raise HTTPException(404, "ナレッジベースが見つかりません。")
+    try:
+        state = await structure_index_jobs.stop(oracle, knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(404, "構築の記録が見つかりません。") from exc
+    return ApiResponse(data=public_state(state) or {})

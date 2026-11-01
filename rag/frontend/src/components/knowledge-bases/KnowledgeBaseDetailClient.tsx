@@ -121,7 +121,7 @@ export function KnowledgeBaseDetailClient({ knowledgeBaseId }: { knowledgeBaseId
       <KnowledgeBaseExtractionFields knowledgeBaseId={kb.id} editable={isActive} />
 
       {/* 項目の定義の後に文書の構造を確認する。展開時のみ subgraph を取得。 */}
-      <KnowledgeBaseStructureIndex key={`${kb.id}:${kb.structure_index_enabled}`} kb={kb} editable={isActive} />
+      <KnowledgeBaseStructureIndex key={kb.id} kb={kb} editable={isActive} />
       <KnowledgeBaseGraphView knowledgeBaseId={kb.id} />
 
       {/* このナレッジ単体で検索の手応えを確認する(検索・回答プロファイル不要)。構築の設定(関係情報・抽出する項目)を

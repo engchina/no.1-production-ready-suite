@@ -69,7 +69,7 @@ class SavedOracle:
             updated_at=datetime.now(UTC),
         )
 
-    async def get_document(self, document_id: str) -> DocumentDetail:
+    async def get_document_summary(self, document_id: str) -> DocumentDetail:
         return DocumentDetail(
             id=document_id,
             file_name="synthetic.txt",
@@ -96,7 +96,25 @@ class SavedOracle:
         return {"is_active": 1}
 
 
-async def test_rebuild_reads_only_structure_and_preserves_other_kb() -> None:
+async def test_rebuild_reads_only_structure_and_preserves_other_kb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients.structure_index_store import StructureIndexStore
+
+    async def publish(
+        store: Any,
+        kb: str,
+        doc: str,
+        fp: str,
+        source: list[str],
+        graphs: dict[str, Any],
+        quality: str,
+        result: Any,
+    ) -> None:
+        assert kb == "a" and doc == "doc" and source == ["cs"]
+        store.oracle.saved.extend(graphs.values())
+
+    monkeypatch.setattr(StructureIndexStore, "publish", publish)
     oracle = SavedOracle()
     first = await rebuild_document_structure_index(oracle, "a", "doc")
     second = await rebuild_document_structure_index(oracle, "a", "doc")
@@ -106,11 +124,11 @@ async def test_rebuild_reads_only_structure_and_preserves_other_kb() -> None:
     ]
     assert any(e.canonical_name == "合成章 / 合成節" for e in oracle.saved[0].entities)
     oracle.enabled = False
-    with pytest.raises(ValueError, match="無効"):
+    with pytest.raises(ValueError, match="disabled"):
         await rebuild_document_structure_index(oracle, "a", "doc")
     oracle.enabled = True
     oracle.rows = []
-    with pytest.raises(ValueError, match="active"):
+    with pytest.raises(ValueError, match="no_chunks"):
         await rebuild_document_structure_index(oracle, "a", "doc")
 
 
@@ -161,3 +179,52 @@ def test_api_persists_nullable_override_and_rejects_other_fields(
         assert oracle.config["unrelated"] == "preserved"
     assert client.put(path, json={"enabled": "true"}).status_code == 422
     assert client.get("/api/knowledge-bases/missing/structure-index").status_code == 404
+
+
+async def test_missing_structure_is_not_a_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    oracle = SavedOracle()
+    oracle.rows[0].update(section_title=None, section_path_json=None)
+    with pytest.raises(ValueError, match="no_structure"):
+        await rebuild_document_structure_index(oracle, "a", "doc")
+    assert oracle.saved == []
+
+
+async def test_changed_source_is_rejected_before_publication() -> None:
+    oracle = SavedOracle()
+    with pytest.raises(ValueError, match="source_changed"):
+        await rebuild_document_structure_index(oracle, "a", "doc", expected_source=["old"])
+    assert oracle.saved == []
+
+
+async def test_publish_checks_source_under_lock_before_any_graph_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients import oracle as db
+    from app.clients.structure_index_store import StructureIndexStore
+    from app.rag.structure_index import source_fingerprint
+
+    writes: list[Any] = []
+
+    class Oracle:
+        async def _run_transaction(self, operation: Any) -> Any:
+            return operation("connection")
+
+    from app.clients import structure_index_store
+
+    monkeypatch.setattr(structure_index_store, "_require_active_knowledge_base", lambda *args: None)
+    monkeypatch.setattr(db, "_select_document_for_update", lambda *args: {"document_id": "doc"})
+
+    def fetch(connection: Any, sql: str, binds: Any) -> Any:
+        assert "FOR UPDATE" in sql
+        return [{"chunk_set_id": "new"}]
+
+    monkeypatch.setattr(db, "_fetch_all", fetch)
+    monkeypatch.setattr(
+        db, "_write_document_graph_index", lambda *args, **kwargs: writes.append(args)
+    )
+    with pytest.raises(ValueError, match="source_changed"):
+        store: Any = StructureIndexStore(Oracle())  # type: ignore[arg-type]  # 決定論のtransaction adapter。
+        await store.publish(
+            "kb", "doc", source_fingerprint(["old"]), ["old"], {"old": object()}, "COMPLETE", {}
+        )
+    assert writes == []

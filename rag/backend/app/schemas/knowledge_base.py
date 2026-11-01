@@ -217,3 +217,8 @@ class KnowledgeBaseStructureIndexUpdate(BaseModel):
 
 class KnowledgeBaseStructureIndexData(KnowledgeBaseStructureIndexUpdate):
     global_enabled: bool
+
+
+class StructureIndexStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["missing", "rebuild", "retry", "continue"] = "missing"

@@ -1190,6 +1190,11 @@ export interface KnowledgeBaseAdapterConfig {
   query: KnowledgeBaseQueryConfig;
 }
 
+export type StructureBuildMode = "missing" | "rebuild" | "retry" | "continue";
+export interface StructureBuildItem { document_id: string; name: string; status: string; reason?: string | null; quality?: string | null; result?: { quality: string } | null }
+export interface StructureBuildPlan { items: StructureBuildItem[]; total: number; offset: number; limit: number; counts: Record<string, number> }
+export interface StructureBuildJob extends StructureBuildPlan { job_id: string; status: string; started_at: string; finished_at: string | null }
+
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
   structure_index_enabled?: boolean | null;
   structure_index_global_enabled?: boolean;
@@ -3828,6 +3833,10 @@ export const api = {
       `/api/knowledge-bases/${encodeURIComponent(id)}/structure-index`,
       {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled})},
     ),
+  getStructureBuildPlan: (id: string, offset = 0, limit = 25) => request<StructureBuildPlan>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/plan?offset=${offset}&limit=${limit}`),
+  getStructureBuildJob: (id: string, offset = 0, limit = 25) => request<StructureBuildJob | null>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job?offset=${offset}&limit=${limit}`),
+  startStructureBuild: (id: string, mode: StructureBuildMode) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }),
+  stopStructureBuild: (id: string) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job/stop`, { method: "POST" }),
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
     requestDegradable<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,

@@ -58,6 +58,7 @@ async function mockKb(
   await page.route("**/api/knowledge-bases/kb-1/graph**", (route) =>
     route.fulfill({ json: { ...ok(graph), warning_messages: warnings() } })
   );
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", (route) => route.fulfill({ json: ok(null) }));
   await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok(kbDetail) }));
   // KB の抽出する項目（#548）。上の wildcard の一覧を返さない。
   await page.route("**/api/knowledge-bases/kb-1/extraction-fields", (route) =>
@@ -111,7 +112,8 @@ test("関係情報が無い KB は空状態を出す", async ({ page }) => {
   await expect(page.getByText("文書構造索引がまだありません。")).toBeVisible();
   // 画面に無い操作（再取込）ではなく、文書の詳細の処理レシピの「再処理」を案内する。
   const hint = page.locator("#knowledge-base-graph");
-  await expect(hint).toContainText("「再処理」");
+  await expect(hint).toContainText("「既存文書に構築」");
+  await expect(hint).toContainText("再処理");
   await expect(hint).not.toContainText("再取込");
 });
 
@@ -301,3 +303,58 @@ for (const count of [30, 80]) {
     await expectNoPageOverflow(page);
   });
 }
+
+test("構造索引は保存と補建を分け、停止・再開の状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
+  let enabled: boolean | null = null;
+  let saves = 0;
+  let starts = 0;
+  let job: Record<string, unknown> | null = null;
+  const items = [
+    { document_id: "doc-a", name: "synthetic-a.txt", status: "MISSING", reason: null },
+    { document_id: "doc-b", name: "synthetic-b.txt", status: "CURRENT", reason: null },
+    { document_id: "doc-c", name: "synthetic-c.txt", status: "UNAVAILABLE", reason: "no_chunks" },
+  ];
+  const result = (status: string) => ({ job_id: "job-a", status, started_at: "2026-01-01T00:00:00Z", finished_at: null, items: [
+    { ...items[0], status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
+    { ...items[1], status: "SKIPPED", reason: "current" }, items[2],
+  ], counts: { PARTIAL: status === "COMPLETED" ? 1 : 0, QUEUED: status === "COMPLETED" ? 0 : 1, SKIPPED: 1, UNAVAILABLE: 1 }, total: 3, offset: 0, limit: 25 });
+  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: enabled, structure_index_global_enabled: false }) }));
+  await page.route("**/api/knowledge-bases/kb-1/structure-index", async (route) => {
+    enabled = route.request().postDataJSON().enabled;
+    saves++;
+    await route.fulfill({ json: ok({ enabled, global_enabled: false }) });
+  });
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/plan**", (route) => route.fulfill({ json: ok({ items, counts: { MISSING: 1, CURRENT: 1, UNAVAILABLE: 1 }, total: 3, offset: 0, limit: 25 }) }));
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", async (route) => {
+    if (route.request().method() === "POST") {
+      if (new URL(route.request().url()).pathname.endsWith("/stop")) job = result("STOPPED");
+      else { starts++; job = result(route.request().postDataJSON().mode === "continue" ? "COMPLETED" : "RUNNING"); }
+    }
+    await route.fulfill({ json: ok(job) });
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  const settings = page.getByTestId("knowledge-base-structure-settings");
+  await settings.getByRole("combobox").click();
+  await page.getByRole("option", { name: "構築する", exact: true }).click();
+  await settings.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => saves).toBe(1);
+  expect(starts).toBe(0);
+  await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
+  await expect(settings.getByText("未構築 1 件・更新が必要 0 件・構築済み 1 件・準備不足 1 件")).toBeVisible();
+  await settings.getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
+  await expect(settings.getByRole("button", { name: "停止", exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "停止", exact: true }).click();
+  await expect(settings.getByText("停止済み", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(settings.getByText("停止済み", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "残りを続ける", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
+  await expect(settings.getByText("処理終了。文書ごとの結果を確認してください。")).toBeVisible();
+  await expect(settings.getByRole("cell", { name: "部分構築", exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await settings.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("structure-build-completed.png"), fullPage: false });
+  expect(starts).toBe(2);
+});

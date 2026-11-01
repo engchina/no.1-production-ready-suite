@@ -25,6 +25,7 @@ KB は **どの文書を検索対象にするか（membership）だけ**を持�
 
 - 文書 membership（N:N。1 文書が複数 KB に所属可、1 KB が複数文書を束ねる）。
 - 名称 / 説明 / スコープ。
+- 文書構造索引の構築だけは、KBごとの未指定/ON/OFFでレシピ・全体設定を上書きできる。未指定は従来のレシピ/全体設定に従う。解析・分割・embedding・検索拡張は上書きしない。保存だけでは既存成果を変更せず、KB詳細の補建操作で現在有効なChunkの構造情報から構築する。構築の進捗と版をOracleに保存し、他KBの図は変更しない。OFFでも既存図を削除しない。
 - 例外として、項目抽出の項目の定義（何を取り出すか）は KB ごとに持てる（無ければ全体の既定、複数 KB に属する文書は和集合。docs/knowledge-base-management.md の 8.4.1a）。項目抽出を行うかどうかは文書レシピ / global が決める。
 
 文書の KB 出し入れは `rag_document_knowledge_bases` の行 add/delete **のみ**で、chunk へ波及しない（再プラン / materialize / GC を起こさない）。KB UI から preprocess / parser / chunking・検索方法・安全チェック・品質評価を出さない。KB の legacy adapter/query config は読み取りのみ許容し、runtime では使わず、次回保存で再保存しない。
@@ -49,7 +50,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 | 回答プロンプト | 可 | 不可 | 不可 |
 | 品質評価 | 可 | 不可 | 不可 |
 
-文書構造索引の構築（構築する / しない。文書と章・節の見出しのつながり）は文書レシピで選ぶ（ナレッジベースの文書構造グラフで見られる。回答の検索で使うか〔当たった根拠と同じ狭い章節・表の根拠と、質問に見出しの語が含まれる章節の根拠を候補に足す。既定 OFF〕は検索方法の全体設定の「文書構造による検索拡張」〔`graph_expansion_enabled`。#2055。件数の上限 `graph_expansion_max_chunks` も含め、検索・回答プロファイルでは上書きしない〕で選ぶ。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
+文書構造索引の構築（構築する / しない。文書と章・節の見出しのつながり）は文書レシピの指定をKB別の構築指定で上書きできる（ナレッジベースの文書構造グラフで見られる。回答の検索で使うか〔当たった根拠と同じ狭い章節・表の根拠と、質問に見出しの語が含まれる章節の根拠を候補に足す。既定 OFF〕は検索方法の全体設定の「文書構造による検索拡張」〔`graph_expansion_enabled`。#2055。件数の上限 `graph_expansion_max_chunks` も含め、検索・回答プロファイルでは上書きしない〕で選ぶ。LLM で意味の entity を抜き出す取込と claims / community summary の構築は持たない）。共有 Oracle 索引の設定は Search Answer Profile へ保存しない。
 
 検索時の解決順は **request 明示 > Published Search Answer Profile > global defaults**。KB の legacy query override は使わない（保存時にも新規保存しない）。
 
