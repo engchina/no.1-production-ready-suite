@@ -83,7 +83,8 @@ class SavedOracle:
         return {"a": self.enabled, "b": False}
 
     async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
-        assert "chunk_text" not in sql and "embedding" not in sql
+        assert "embedding" not in sql
+        assert "reference_source_text" in sql
         assert "is_active = 1" in sql
         return self.rows
 
@@ -122,7 +123,7 @@ async def test_rebuild_reads_only_structure_and_preserves_other_kb(
     assert [e.entity_id for e in oracle.saved[0].entities] == [
         e.entity_id for e in oracle.saved[1].entities
     ]
-    assert any(e.canonical_name == "合成章 / 合成節" for e in oracle.saved[0].entities)
+    assert any(e.canonical_name == "合成章 > 合成節" for e in oracle.saved[0].entities)
     oracle.enabled = False
     with pytest.raises(ValueError, match="disabled"):
         await rebuild_document_structure_index(oracle, "a", "doc")
@@ -333,3 +334,58 @@ async def test_setting_off_does_not_change_already_confirmed_job_target(
     assert result["entities"] > 1 and len(published) == 1
     with pytest.raises(ValueError, match="disabled"):
         await rebuild_document_structure_index(oracle, "a", "doc")
+
+
+async def test_rebuild_revalidates_saved_references_without_embedding_or_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json
+
+    from app.clients.structure_index_store import StructureIndexStore
+    from app.rag.cross_references import ReferenceTarget
+
+    oracle = SavedOracle()
+    oracle.rows = [
+        {
+            "chunk_id": "doc:cs:0",
+            "chunk_set_id": "cs",
+            "chunk_index": 0,
+            "section_path_text": "第1条",
+            "content_kind": "text",
+            "stored_references": json.dumps(
+                [
+                    json.dumps(
+                        [ReferenceTarget("第2条", "article", "2", None, "第2条").to_dict()],
+                        ensure_ascii=False,
+                    )
+                ],
+                ensure_ascii=False,
+            ),
+        },
+        {
+            "chunk_id": "doc:cs:1",
+            "chunk_set_id": "cs",
+            "chunk_index": 1,
+            "section_path_text": "第2条",
+            "content_kind": "text",
+        },
+    ]
+
+    async def publish(
+        store: Any,
+        _kb: str,
+        _doc: str,
+        _fp: str,
+        _source: list[str],
+        graphs: dict[str, Any],
+        _quality: str,
+        _counts: Any,
+    ) -> None:
+        store.oracle.saved.extend(graphs.values())
+
+    monkeypatch.setattr(StructureIndexStore, "publish", publish)
+    await rebuild_document_structure_index(oracle, "a", "doc")
+    references = [
+        edge for edge in oracle.saved[0].relationships if edge.relationship_type == "references"
+    ]
+    assert len(references) == 1

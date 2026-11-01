@@ -17,6 +17,12 @@ from typing import Literal
 from rag_parser_core.language import current_pack
 
 from app.rag.chunking import Chunk
+from app.rag.cross_references import (
+    extract_references,
+    reference_targets,
+    split_section_path,
+)
+from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
 from app.schemas.extraction import StructuredExtraction
 
 GRAPH_ENTITY_MAX_PER_KB = 80
@@ -159,6 +165,53 @@ def _build_graph_index_for_kb(
                 document_id=document_id,
                 relevance_score=_chunk_relevance(chunk),
             )
+
+    # 参照は包含と別に構築する。旧metadataの推測済みパスをそのまま確定辺へ転用しない。
+    reference_source = ReferenceDocument(
+        document_id=document_id,
+        chunk_set_id=chunk_set_id,
+        name=document_name or "",
+        section_paths=tuple(_metadata_str(chunk, "section_path") or "" for chunk in chunks),
+    )
+    entity_by_path = {split_section_path(name): entity for name, entity in entity_by_name.items()}
+    for chunk in chunks:
+        source_path = _metadata_str(chunk, "section_path") or ""
+        source_entity = entity_by_path.get(split_section_path(source_path))
+        if source_entity is None:
+            continue
+        specs = extract_references(chunk.text) or [
+            target.spec for target in reference_targets(chunk.metadata)
+        ]
+        for spec in specs:
+            resolution = resolve_scoped_reference(
+                spec,
+                source=reference_source,
+                citing_path=source_path,
+                documents=(),
+            )
+            target_entity = entity_by_path.get(
+                split_section_path(resolution.target.section_path) if resolution.target else ()
+            )
+            if target_entity is None:
+                continue
+            relationship = GraphRelationship(
+                relationship_id=_graph_id(
+                    "relationship",
+                    identity_scope,
+                    knowledge_base_id,
+                    source_entity.entity_id,
+                    target_entity.entity_id,
+                    "references",
+                ),
+                knowledge_base_id=knowledge_base_id,
+                source_entity_id=source_entity.entity_id,
+                target_entity_id=target_entity.entity_id,
+                relationship_type="references",
+                description=spec.label,
+                confidence=1.0,
+                source_document_ids=[document_id],
+            )
+            relationships[relationship.relationship_id] = relationship
 
     return GraphIndex(
         entities=list(entity_by_name.values()),

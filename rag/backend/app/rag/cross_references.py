@@ -45,6 +45,8 @@ from app.rag.reference_grammar import NEXT_KEY, PREVIOUS_KEY, SAME_KEY, current_
 
 # chunk の metadata に参照先を載せる key(JSON の文字列。ChunkMetadata は scalar だけを持つ)。
 REFERENCE_TARGETS_KEY = "reference_targets_json"
+REFERENCE_RESOLUTION_VERSION_KEY = "reference_resolution_version"
+REFERENCE_RESOLUTION_VERSION = "unique-v1"
 # 回答で参照先として足した chunk に付ける印(起点の chunk_id と参照の表記)。
 REFERENCE_FROM_KEY = "reference_from_chunk_id"
 REFERENCE_LABEL_KEY = "reference_label"
@@ -647,24 +649,29 @@ class SectionIndex:
         return len(self._entries)
 
     def resolve(self, spec: ReferenceSpec, *, citing_path: Sequence[str] = ()) -> str | None:
-        """参照先の節の見出しの列(「 > 」でつないだ形)。合う節が無い・曖昧なら None。
+        """文脈で唯一に決まる参照先だけを返す。文書順で曖昧さを隠さない。"""
+        candidates = self.resolve_candidates(spec, citing_path=citing_path)
+        return candidates[0] if len(candidates) == 1 else None
 
-        候補が複数あるときは、参照元の節と共通の祖先が長いもの(同じ章の中の「第2節」など)、
-        浅いもの、文書の前の方のものの順に選ぶ。
-        """
+    def resolve_candidates(
+        self, spec: ReferenceSpec, *, citing_path: Sequence[str] = ()
+    ) -> list[str]:
+        """未検出と複数候補を呼び手が区別できるよう、同じ解決結果を返す。"""
         citing = tuple(citing_path)
         if spec.kind == "article" and spec.key in (PREVIOUS_KEY, NEXT_KEY):
-            return self._relative_article(spec.key, citing)
+            path = self._relative_article(spec.key, citing)
+            return [path] if path is not None else []
         candidates = self._candidates(spec)
         if spec.kind == "article":
             candidates = _article_part_candidates(spec, candidates, citing)
         if not candidates:
-            return None
-        best = min(
-            candidates,
-            key=lambda entry: (-_common_prefix(entry.path, citing), len(entry.path), entry.order),
-        )
-        return SECTION_PATH_SEPARATOR.join(best.path)
+            return []
+        common = max(_common_prefix(entry.path, citing) for entry in candidates)
+        return [
+            SECTION_PATH_SEPARATOR.join(entry.path)
+            for entry in candidates
+            if _common_prefix(entry.path, citing) == common
+        ]
 
     def _relative_article(self, key: str, citing: Sequence[str]) -> str | None:
         """「前条」「次条」: 参照元の条の前・次の条(本則・同じ附則の中の文書の順。#2153)。"""
@@ -832,6 +839,7 @@ def annotate_cross_references(chunks: Sequence[Any], *, document_title: str = ""
         metadata[REFERENCE_TARGETS_KEY] = json.dumps(
             [target.to_dict() for target in targets], ensure_ascii=False
         )
+        metadata[REFERENCE_RESOLUTION_VERSION_KEY] = REFERENCE_RESOLUTION_VERSION
         if targets:
             annotated += 1
     return annotated
