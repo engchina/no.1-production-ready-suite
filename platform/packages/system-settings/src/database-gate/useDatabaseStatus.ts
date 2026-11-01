@@ -18,7 +18,7 @@ export const DATABASE_STATUS_STALE_TIME_MS = 15_000;
 
 /**
  * DB の状態（`GET /api/ready/database`）。3 製品で同じ query key・cache 時間にする（#325）。
- * 失敗は自動で再試行しない（ゲートの「再試行」で利用者が確かめ直す）。
+ * 更新の実行中だけ定期確認する。失敗は自動で再試行しない（ゲートの「再試行」で利用者が確かめ直す）。
  */
 export function useDatabaseStatus(
   api: DatabaseStatusApi,
@@ -43,5 +43,6 @@ export function useDatabaseStatus(
     enabled,
     staleTime: DATABASE_STATUS_STALE_TIME_MS,
     retry: false,
+    refetchInterval: (query) => query.state.status === "success" && query.state.data?.status === "setup_required" && query.state.data.check === "schema_update_running" ? 5000 : false,
   });
 }

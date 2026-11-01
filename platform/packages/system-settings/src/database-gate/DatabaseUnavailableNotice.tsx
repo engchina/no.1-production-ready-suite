@@ -58,7 +58,8 @@ export type DatabaseNoticeKind =
   | "adb_stopped"
   | "adb_starting"
   | "adb_unavailable"
-  | "adb_available";
+  | "adb_available"
+  | "schema_updating";
 
 /** 設定の画面への導線。 */
 export interface DatabaseNoticeAction {
@@ -81,6 +82,7 @@ export interface DatabaseNoticeContent {
 }
 
 export interface DatabaseNoticeContentInput {
+  reasonCode?: string | null;
   status: DatabaseNoticeStatus;
   adbLifecycleState?: string | null;
   routes: DatabaseGateRoutes;
@@ -164,6 +166,7 @@ const UNREACHABLE_COPY: Record<AdbLifecycleGroup, UnreachableCopy> = {
  */
 export function databaseNoticeContent({
   status,
+  reasonCode,
   adbLifecycleState,
   routes,
   canManageDatabase,
@@ -197,6 +200,19 @@ export function databaseNoticeContent({
       tone: copy.tone,
       action: canManageDatabase ? databaseAction(copy.adbCard) : null,
       footer: canManageDatabase ? "dbGate.settingsHint" : "dbGate.contactAdmin.footer",
+    };
+  }
+  if (status === "setup_required" && reasonCode === "schema_update_running") {
+    return {
+      kind: "schema_updating",
+      title: "dbGate.schemaUpdating.title",
+      message: "dbGate.schemaUpdating.message",
+      icon: Hourglass,
+      tone: "info",
+      action: canManageSystemTables && routes.systemTables
+        ? { href: routes.systemTables, label: "dbGate.schemaUpdating.openStatus", icon: DatabaseZap, target: "systemTables" }
+        : null,
+      footer: "dbGate.schemaUpdating.footer",
     };
   }
   if (status === "setup_required") {
@@ -283,7 +299,7 @@ export interface DatabaseUnavailableNoticeProps {
 /** 画面に出す診断コード（`ok` と空は出さない）。 */
 export function databaseReasonCode(code: string | null | undefined): string | null {
   const value = code?.trim();
-  return value && value !== "ok" ? value : null;
+  return value && value !== "ok" && value !== "schema_update_running" ? value : null;
 }
 
 /** 設定の画面へ移る `Link`（戻り先を `state.returnTo` に入れる）。 */
@@ -322,6 +338,7 @@ export function DatabaseUnavailableNotice({
   const linkComponent = useReturnToLink(returnTo);
   const content = databaseNoticeContent({
     status,
+    reasonCode,
     adbLifecycleState,
     routes,
     canManageDatabase,
@@ -337,7 +354,7 @@ export function DatabaseUnavailableNotice({
       icon={RefreshCw}
       data-testid="database-gate-retry"
     >
-      {m["common.retry"]}
+      {m[content.kind === "schema_updating" ? "dbGate.schemaUpdating.refresh" : "common.retry"]}
     </Button>
   ) : null;
 
@@ -345,7 +362,7 @@ export function DatabaseUnavailableNotice({
     const showSettingsLink = settingsLink && canManageDatabase;
     return (
       <Banner
-        severity="warning"
+        severity={content.tone}
         title={title ?? m[content.title]}
         className={className}
         action={
