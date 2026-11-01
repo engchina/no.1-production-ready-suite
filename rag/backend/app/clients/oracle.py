@@ -831,8 +831,8 @@ class OracleClient:
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         """KG の entity(node)/relationship(edge) を KB scope で可視化用に取得する。
 
-        confidence 降順で node/edge を上限件数まで取り、端点が node 集合に含まれる
-        edge のみ返す(部分グラフの整合)。グラフ未構築なら空を返す。
+        文書/有効集合ごとに親を先に取り、選ばれた両端の関係へ絞ってから上限を適用する。
+        グラフ未構築なら空を返す。
         """
         # entity / relationship の knowledge_base_id は取込時の所属のスナップショットなので、
         # KB から外した文書の要素を出さないよう、今も所属している文書の行だけに絞る(#274)。
@@ -849,7 +849,9 @@ class OracleClient:
                 WHERE e.knowledge_base_id = :kb
                   AND {membership_sql}
                   AND {active_sql}
-                ORDER BY NVL(e.confidence, 1) DESC, e.canonical_name ASC, e.entity_id ASC
+                ORDER BY COALESCE(e.chunk_set_id, JSON_VALUE(e.source_document_ids, '$[0]')),
+                    CASE WHEN e.entity_type = 'document' THEN 0 ELSE 1 END,
+                    e.canonical_name ASC, e.entity_id ASC
             ) WHERE ROWNUM <= :limit
             """,
                 membership_sql=_graph_current_membership_predicate("e"),
@@ -869,6 +871,12 @@ class OracleClient:
         node_ids = {node["id"] for node in nodes if node["id"]}
         if not node_ids:
             return nodes, []
+        source_sql, source_binds = _oracle_in_predicate(
+            "r.source_entity_id", "graph_source", sorted(str(node) for node in node_ids)
+        )
+        target_sql, target_binds = _oracle_in_predicate(
+            "r.target_entity_id", "graph_target", sorted(str(node) for node in node_ids)
+        )
         edge_rows = await self._fetch_all(
             _render_sql(
                 """
@@ -881,6 +889,7 @@ class OracleClient:
                     NVL(r.confidence, 1) AS confidence
                 FROM rag_graph_relationships r
                 WHERE r.knowledge_base_id = :kb
+                  AND {source_sql} AND {target_sql}
                   AND {membership_sql}
                   AND {active_sql}
                 ORDER BY NVL(r.confidence, 1) DESC, r.relationship_id ASC
@@ -888,8 +897,10 @@ class OracleClient:
             """,
                 membership_sql=_graph_current_membership_predicate("r"),
                 active_sql=_graph_active_chunk_set_predicate("r"),
+                source_sql=source_sql,
+                target_sql=target_sql,
             ),
-            {"kb": knowledge_base_id, "limit": limit},
+            {"kb": knowledge_base_id, "limit": limit, **source_binds, **target_binds},
         )
         edges: list[dict[str, object]] = [
             {

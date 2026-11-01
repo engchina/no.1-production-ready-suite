@@ -50,6 +50,7 @@ async def test_rename_knowledge_base_rejects_name_of_another_knowledge_base() ->
     """改名先が別の KB の名前なら UPDATE しない。"""
     pool = FakeOraclePool(
         execute_results=[
+            [{"knowledge_base_id": "kb-1"}],
             [_knowledge_base_row("kb-1", "社内規程")],
             [_knowledge_base_row("kb-2", "設計資料")],
         ]
@@ -64,7 +65,9 @@ async def test_rename_knowledge_base_rejects_name_of_another_knowledge_base() ->
 
 async def test_rename_knowledge_base_allows_case_change_of_own_name() -> None:
     """自分の名前の大文字小文字だけを変える改名は重複扱いしない（名前の検索もしない）。"""
-    pool = FakeOraclePool(execute_results=[[_knowledge_base_row("kb-1", "faq")]])
+    pool = FakeOraclePool(
+        execute_results=[[{"knowledge_base_id": "kb-1"}], [_knowledge_base_row("kb-1", "faq")]]
+    )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     updated = await client.update_knowledge_base("kb-1", name="FAQ", update_fields={"name"})
@@ -188,7 +191,12 @@ async def test_remove_membership_from_archived_knowledge_base_is_rejected() -> N
 
 async def test_update_archived_knowledge_base_is_rejected() -> None:
     """アーカイブ済みの KB は名前・説明を変えない（画面の読み取り専用と同じ。#961）。"""
-    pool = FakeOraclePool(execute_results=[[_archived_knowledge_base_row("kb-old", "旧規程")]])
+    pool = FakeOraclePool(
+        execute_results=[
+            [{"knowledge_base_id": "kb-old"}],
+            [_archived_knowledge_base_row("kb-old", "旧規程")],
+        ]
+    )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     with pytest.raises(ValueError, match="アーカイブ済み"):

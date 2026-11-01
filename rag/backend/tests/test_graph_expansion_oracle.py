@@ -268,3 +268,47 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
         await rebuild_document_structure_index(client, b.id, doc)
     await client.set_knowledge_base_structure_index(b.id, None)
     assert await structure_index_targets(client, doc, default=False) == []
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_bounded_structure_graph_keeps_document_parents_and_connections() -> None:
+    client = OracleClient()
+    token = uuid4().hex[:8]
+    kb = await client.create_knowledge_base(name=f"合成表示範囲 {token}")
+    documents = []
+    try:
+        for number in range(2):
+            doc = await client.create_document(
+                file_name=f"synthetic-graph-{token}-{number}.txt",
+                object_storage_path=f"local://synthetic-{token}-{number}.txt",
+                content_type="text/plain",
+                knowledge_base_ids=[kb.id],
+            )
+            documents.append(doc.id)
+            chunks = [
+                Chunk(
+                    text="",
+                    index=index,
+                    start_offset=0,
+                    end_offset=0,
+                    metadata={"section_title": f"合成節 {number}-{index:03}"},
+                )
+                for index in range(60)
+            ]
+            graph = build_graph_index(
+                document_id=doc.id,
+                knowledge_base_ids=[kb.id],
+                extraction=StructuredExtraction(),
+                chunks=chunks,
+            )
+            await client.replace_document_graph_index(
+                doc.id, GraphIndex(entities=graph.entities, relationships=graph.relationships)
+            )
+        nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=80)
+        assert len(nodes) == 80 and edges
+        assert any(node["type"] == "document" for node in nodes)
+        ids = {node["id"] for node in nodes}
+        assert all(edge["source"] in ids and edge["target"] in ids for edge in edges)
+    finally:
+        for document_id in documents:
+            await client.delete_document(document_id)

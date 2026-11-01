@@ -1860,7 +1860,9 @@ async def test_oracle_client_lists_knowledge_bases_with_counts() -> None:
 
 async def test_oracle_client_updates_knowledge_base_metadata() -> None:
     """knowledge base 更新は既存行を確認してから UPDATE する。"""
-    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row()]])
+    pool = FakeOraclePool(
+        execute_results=[[{"knowledge_base_id": "kb-1"}], [_oracle_knowledge_base_row()]]
+    )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     updated = await client.update_knowledge_base(
@@ -1873,6 +1875,7 @@ async def test_oracle_client_updates_knowledge_base_metadata() -> None:
     assert updated.name == "更新済み"
     assert updated.description is None
     statements = [call.statement for call in pool.connection.calls]
+    assert "FOR UPDATE" in statements[0]
     assert any(
         "SELECT" in statement and "rag_knowledge_bases" in statement for statement in statements
     )
@@ -1881,7 +1884,12 @@ async def test_oracle_client_updates_knowledge_base_metadata() -> None:
 
 async def test_oracle_client_protects_default_knowledge_base() -> None:
     """DEFAULT は改名もアーカイブもできない。"""
-    update_pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(name="DEFAULT")]])
+    update_pool = FakeOraclePool(
+        execute_results=[
+            [{"knowledge_base_id": "kb-1"}],
+            [_oracle_knowledge_base_row(name="DEFAULT")],
+        ]
+    )
     update_client = OracleClient(
         settings=_oci_settings(), pool=update_pool, db_call_runner=_run_inline
     )
