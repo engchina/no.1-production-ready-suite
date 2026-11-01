@@ -1,6 +1,7 @@
 """合成KB・profileで原生／従来方式の範囲と一回のRRFを確認する。"""
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -116,7 +117,9 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
 
 @pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize("ratio", [(10, 1), (2, 3)])
-async def test_native_combined_original_and_provenance_channels(ratio, monkeypatch):
+async def test_native_combined_original_and_provenance_channels(
+    ratio: tuple[float, float], monkeypatch: pytest.MonkeyPatch
+) -> None:
     import json
     from types import SimpleNamespace
 
@@ -143,21 +146,23 @@ async def test_native_combined_original_and_provenance_channels(ratio, monkeypat
     calls = []
     fetch = oracle._fetch_all
 
-    async def record(statement, binds=None):
+    async def record(
+        statement: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
         if "DBMS_HYBRID_VECTOR.SEARCH" in statement:
-            calls.append(json.loads(binds["native_spec"]))
+            calls.append(json.loads(str((binds or {})["native_spec"])))
         return await fetch(statement, binds)
 
     monkeypatch.setattr(oracle, "_fetch_all", record)
     embedded = []
 
     class Embedding:
-        async def embed(self, texts, **kwargs):
+        async def embed(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
             embedded.extend(texts)
             return [[0.1] * 1536 for _ in texts]
 
     state = _SearchState()
-    engine = AnswerEngine(settings, oracle=oracle, genai=Embedding())
+    engine = AnswerEngine(settings, oracle=oracle, genai=cast(Any, Embedding()))
     result = await engine._search(
         SearchRequest(query="syntheticoriginal", filters={"knowledge_base_id": kb.id}),
         state,
@@ -183,5 +188,5 @@ async def test_native_combined_original_and_provenance_channels(ratio, monkeypat
     for chunk in state.chunks.values():
         if "native_wrrf_score" in chunk.metadata:
             assert chunk.metadata["native_rrf_contribution"] == pytest.approx(
-                chunk.metadata["native_wrrf_score"] / 6100
+                float(str(chunk.metadata["native_wrrf_score"])) / 6100
             )

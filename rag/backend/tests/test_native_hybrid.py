@@ -148,7 +148,7 @@ async def test_native_hybrid_many_is_one_combined_call_per_original() -> None:
 
 
 @pytest.mark.asyncio
-async def test_native_hybrid_score_keeps_oracle_scale_and_zero_missing_rank():
+async def test_native_hybrid_score_keeps_oracle_scale_and_zero_missing_rank() -> None:
     from app.rag.answer_engine import _hit_channels
 
     client = NativeOracle()
