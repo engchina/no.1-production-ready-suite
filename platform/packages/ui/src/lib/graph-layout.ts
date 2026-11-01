@@ -22,8 +22,11 @@ export interface GraphLayoutInput {
   rowGap: number;
 }
 
-export interface GraphLayoutResult {
+export interface GraphLayoutPositions {
   positions: Map<string, GraphPoint>;
+}
+
+export interface GraphLayoutResult extends GraphLayoutPositions {
   /** 循環を配置上だけ切った辺。元の図の関係は削除しない。 */
   brokenCycleEdges: GraphLayoutEdge[];
 }
@@ -100,3 +103,26 @@ export const layoutGraphHierarchy: GraphLayoutStrategy = (input) => {
   }
   return { positions, brokenCycleEdges };
 };
+
+export interface GraphNodeDimensions {
+  width: number;
+  height: number;
+}
+
+/** 表示中の実測だけを反映し、未表示の0寸法と同値の更新で再配置しない。 */
+export function applyGraphNodeDimensionChanges(
+  dimensions: Map<string, GraphNodeDimensions>,
+  changes: ReadonlyArray<{ type: string; id?: string; dimensions?: GraphNodeDimensions }>
+): Map<string, GraphNodeDimensions> {
+  let next: Map<string, GraphNodeDimensions> | null = null;
+  for (const change of changes) {
+    if (change.type !== "dimensions" || !change.id || !change.dimensions) continue;
+    const { width, height } = change.dimensions;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) continue;
+    const current = (next ?? dimensions).get(change.id);
+    if (current && current.width === width && current.height === height) continue;
+    next ??= new Map(dimensions);
+    next.set(change.id, { width, height });
+  }
+  return next ?? dimensions;
+}

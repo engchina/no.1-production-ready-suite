@@ -53,3 +53,16 @@ describe("layoutGraphHierarchy", () => {
     expect(() => layoutGraphHierarchy({ ...input(["a"], []), nodes: [{ id: "a", width: 0, height: 4 }] })).toThrow();
   });
 });
+
+it("keeps prior measurements immutable and ignores hidden or unchanged sizes", async () => {
+  const { applyGraphNodeDimensionChanges } = await import("../src/lib/graph-layout");
+  const original = new Map([["a", { width: 12, height: 6 }]]);
+  expect(applyGraphNodeDimensionChanges(original, [
+    { type: "dimensions", id: "a", dimensions: { width: 0, height: 0 } },
+    { type: "dimensions", id: "b", dimensions: { width: Number.NaN, height: 6 } },
+    { type: "dimensions", id: "a", dimensions: { width: 12, height: 6 } },
+  ])).toBe(original);
+  const changed = applyGraphNodeDimensionChanges(original, [{ type: "dimensions", id: "a", dimensions: { width: 18, height: 6 } }]);
+  expect(changed.get("a")?.width).toBe(18);
+  expect(original.get("a")?.width).toBe(12);
+});

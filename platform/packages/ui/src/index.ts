@@ -5,11 +5,14 @@
 // --- lib ---
 export {
   layoutGraphHierarchy,
+  applyGraphNodeDimensionChanges,
+  type GraphNodeDimensions,
   type GraphPoint,
   type GraphLayoutNode,
   type GraphLayoutEdge,
   type GraphLayoutInput,
   type GraphLayoutResult,
+  type GraphLayoutPositions,
   type GraphLayoutStrategy,
 } from "./lib/graph-layout";
 export { cn } from "./lib/utils";
