@@ -55,15 +55,25 @@ echo "VECTOR_MEMORY_SIZE を 512M にして再起動しました。"
 # CREATE USER は PL/SQL の中で実行し、失敗の文言を差し替えて password を log に出さない（文言は英語。
 # container の NLS では日本語が化ける）。
 # lite の image の FREEPDB1 には USERS の tablespace が無く、既定の SYSTEM は ASSM ではない（SecureFile の LOB を
-# 作れない）ので、USERS を作る。DB_DEVELOPER_ROLE は表・view・sequence・procedure・SQL ドメインなどの作成の
+# 作れない）ので、無い場合だけ USERS を作る。標準 image の既存 USERS は再利用する。
+# DB_DEVELOPER_ROLE は表・view・sequence・procedure・SQL ドメインなどの作成の
 # 権限をまとめた role。
 "${docker_cmd}" exec -i "${container}" sqlplus -s / as sysdba <<SQL
 WHENEVER SQLERROR EXIT FAILURE
 SET FEEDBACK OFF
 SET VERIFY OFF
 ALTER SESSION SET CONTAINER = FREEPDB1;
-CREATE TABLESPACE USERS DATAFILE '/opt/oracle/oradata/FREE/FREEPDB1/users01.dbf'
-  SIZE 256M AUTOEXTEND ON NEXT 64M;
+DECLARE
+  tablespace_count NUMBER;
+BEGIN
+  SELECT COUNT(*) INTO tablespace_count FROM DBA_TABLESPACES WHERE TABLESPACE_NAME = 'USERS';
+  IF tablespace_count = 0 THEN
+    EXECUTE IMMEDIATE q'[CREATE TABLESPACE USERS
+      DATAFILE '/opt/oracle/oradata/FREE/FREEPDB1/users01.dbf'
+      SIZE 256M AUTOEXTEND ON NEXT 64M]';
+  END IF;
+END;
+/
 BEGIN
   EXECUTE IMMEDIATE 'CREATE USER APP IDENTIFIED BY "${ORACLE_CI_PASSWORD}"'
     || ' DEFAULT TABLESPACE USERS QUOTA UNLIMITED ON USERS';
