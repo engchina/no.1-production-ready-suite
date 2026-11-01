@@ -27,6 +27,7 @@ from app.clients.native_hybrid_schema import (
     native_hybrid_scope_migration_sql,
     native_hybrid_scope_objects_sql,
     native_hybrid_sync_columns_migration_sql,
+    native_hybrid_text_search_migration_sql,
 )
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
@@ -660,6 +661,13 @@ END;
             name="20261102_002_native_missing_scopes",
             table_name="rag_chunks",
             sql=native_hybrid_missing_scope_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_003_native_text_search_only",
+            table_name="rag_chunks",
+            sql=native_hybrid_text_search_migration_sql(),
         )
     )
     return sections
