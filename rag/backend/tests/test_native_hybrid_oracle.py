@@ -27,6 +27,63 @@ class _Embedding:
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
+    from app.rag.vector_index_adapter import resolve_vector_index_adapter
+
+    settings = get_settings().model_copy(
+        update={
+            "rag_hybrid_search_backend": "oracle_native",
+            "rag_vector_index_profile": "balanced",
+            "oracle_vector_target_accuracy": 100,
+        }
+    )
+    assert resolve_vector_index_adapter(settings).target_accuracy == 100
+    oracle = OracleClient(settings)
+    ranges = await oracle._fetch_all(
+        "SELECT ixv_value FROM ctx_user_index_values "
+        "WHERE ixv_index_name='RAG_CHUNKS_HYBRID_IDX' "
+        "AND ixv_attribute='RANGE_SEARCH_ENABLE' AND ixv_value IS NOT NULL"
+    )
+    assert ranges == []
+    chunks = [
+        Chunk(
+            text=f"syntheticquantity {quantity}",
+            index=index,
+            start_offset=0,
+            end_offset=len(f"syntheticquantity {quantity}"),
+            metadata={"page_number": index + 1},
+        )
+        for index, quantity in enumerate((24, 99))
+    ]
+    document_id = await _indexed_document(
+        oracle, file_name=f"synthetic-numeric-{uuid4().hex}.txt", chunks=chunks
+    )
+    rankings = await oracle.search_many(
+        [("24", [], SearchMode.KEYWORD), ("24", [0.1] * 1536, SearchMode.VECTOR)],
+        5,
+        {"document_id": document_id},
+    )
+    for (_, _, mode), ranking in zip(
+        [("24", [], SearchMode.KEYWORD), ("24", [0.1] * 1536, SearchMode.VECTOR)],
+        rankings,
+        strict=True,
+    ):
+        failure = getattr(ranking, "failure", None)
+        if failure is not None:
+            raise AssertionError(f"{mode.value}: 検索に失敗しました") from failure
+        status = getattr(ranking, "status", "completed")
+        if status != "completed":
+            diagnostics = await _empty_native_scope_diagnostics(
+                oracle, document_id, {"document_id": document_id}
+            )
+            pytest.fail(f"{mode.value}: status={status}, diagnostics={diagnostics}")
+    assert len(rankings[0]) == 1
+    assert rankings[0][0].metadata["page_number"] == 1
+    assert len(rankings[1]) == 2
+    assert all(item.document_id == document_id for ranking in rankings for item in ranking)
+
+
+@pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize(
     "backend",
     [pytest.param("oracle_native", id=f"native-scope-{i}") for i in range(4)]

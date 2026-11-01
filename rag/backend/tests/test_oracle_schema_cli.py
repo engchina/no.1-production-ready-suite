@@ -506,7 +506,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 139
+    assert len(statements) == 140
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
@@ -616,6 +616,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261101_003_native_hybrid_scope",
         "20261102_001_graph_name_characters",
         "20261102_002_native_missing_scopes",
+        "20261102_003_native_text_search_only",
     ]
 
 
@@ -837,6 +838,21 @@ def test_ivf_migration_rebuilds_only_the_derived_index() -> None:
     assert "DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE" in current
     assert "DROP TABLE" not in current
     assert "RAG_CHUNKS_EMBEDDING_HNSW_IDX" not in current
+
+
+def test_native_hybrid_indexes_text_without_unused_json_range_components() -> None:
+    from app.clients.native_hybrid_schema import native_hybrid_objects_sql
+
+    baseline = native_hybrid_objects_sql().upper()
+    assert "SEARCH_ON TEXT" in baseline
+    sections = {
+        section.name: section.sql for section in oracle_schema.oracle_schema_migration_sections()
+    }
+    migration = sections["20261102_003_native_text_search_only"].upper()
+    assert "RANGE_SEARCH_ENABLE" in migration
+    assert "DROP INDEX RAG_CHUNKS_HYBRID_IDX FORCE" in migration
+    assert not any(word in migration for word in ("UPDATE RAG_CHUNKS", "DELETE", "DROP TABLE"))
+    assert "RAG_CHUNKS_EMBEDDING_HNSW_IDX" not in migration
 
 
 def test_native_scope_backfill_limits_payload_sync_before_updating_chunks() -> None:

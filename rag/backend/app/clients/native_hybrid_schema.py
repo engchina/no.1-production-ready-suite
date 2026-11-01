@@ -57,7 +57,7 @@ CREATE HYBRID VECTOR INDEX {NATIVE_HYBRID_INDEX}
     ON rag_chunks (hybrid_payload)
     PARAMETERS ('VECTORIZER {NATIVE_HYBRID_PREFERENCE}
         LEXER RAG_TEXT_WORLD_LEXER STOPLIST RAG_TEXT_STOPLIST
-        MAINTENANCE MANUAL SYNC (ON COMMIT)');
+        SEARCH_ON TEXT MAINTENANCE MANUAL SYNC (ON COMMIT)');
 """.strip()
 
 
@@ -238,3 +238,21 @@ UPDATE rag_chunks c SET native_scope_id = (
 def native_hybrid_sync_columns_migration_sql() -> str:
     """保存済みvectorを扱うため、UPDATE OF句ではなく更新述語で入力列を判定する。"""
     return _native_hybrid_setup_sql(sync_changed_columns=True)
+
+
+def native_hybrid_text_search_migration_sql() -> str:
+    """使わないJSON数値・日時の範囲索引を外す。派生索引はmanifestで再作成する。"""
+    return f"""
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM ctx_user_index_values
+    WHERE ixv_index_name = '{NATIVE_HYBRID_INDEX}'
+      AND ixv_class = 'SECTION_GROUP' AND ixv_attribute = 'RANGE_SEARCH_ENABLE'
+      AND ixv_value IS NOT NULL;
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP INDEX {NATIVE_HYBRID_INDEX} FORCE';
+    END IF;
+END;
+/
+""".strip()
