@@ -707,6 +707,12 @@ export function FileListClient() {
                 disabled={bulkBusy || listStale || bulkIngestCount === 0} icon={Sparkles}>
                 {`${t("fileList.bulkQueue")} (${formatNumber(bulkIngestCount)})`}
               </Button>
+        <LanguagePackBulkReprocess key={`${selectionScope}:${Array.from(selection.selected).join(",")}`} disabled={bulkBusy || listStale || selectedCount === 0} expectedReleaseId={languageReleaseId ?? items.find((item) => item.language_pack)?.language_pack?.current_release_id} loadDocumentIds={async () => {
+          if (!matchingActive) return selectedDocuments.map((document) => document.id);
+          const targets = await api.listDocumentIds({ ...filterParams, ...languageScope, q: q || undefined, knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId, limit: BULK_INGESTION_MAX_DOCUMENTS });
+          if (targets.total > targets.ids.length) throw new Error(t("settings.language.release.tooManyTargets", { count: targets.total, max: BULK_INGESTION_MAX_DOCUMENTS }));
+          return targets.ids;
+        }} />
               {/* 確認ダイアログを開く起点（確定は ConfirmDialog の danger ボタン）。赤塗りにせず secondary + tone="danger"。 */}
               <Button
                 variant="secondary"
@@ -731,12 +737,6 @@ export function FileListClient() {
           </div>
         ) : null}
 
-        <LanguagePackBulkReprocess key={`${selectionScope}:${Array.from(selection.selected).join(",")}`} disabled={bulkBusy || listStale || selectedCount === 0} expectedReleaseId={languageReleaseId ?? items.find((item) => item.language_pack)?.language_pack?.current_release_id} loadDocumentIds={async () => {
-          if (!matchingActive) return selectedDocuments.map((document) => document.id);
-          const targets = await api.listDocumentIds({ ...filterParams, ...languageScope, q: q || undefined, knowledge_base_id: knowledgeBaseId === "ALL" ? undefined : knowledgeBaseId, limit: BULK_INGESTION_MAX_DOCUMENTS });
-          if (targets.total > targets.ids.length) throw new Error(t("settings.language.release.tooManyTargets", { count: targets.total, max: BULK_INGESTION_MAX_DOCUMENTS }));
-          return targets.ids;
-        }} />
         {/* 一括投入の結果は一括操作のバーの直下に残す（次の実行・閉じるまで。messaging.md §10）。 */}
         {bulkError ? (
           <ApiErrorBanner
