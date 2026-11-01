@@ -46,6 +46,10 @@ FILE_DATA_PROFILE = "auxiliary"
 
 class AdbVectorStoreTests(unittest.TestCase):
     def setUp(self):
+        # このfixtureは従来の分割・SQL契約を検証する。原生方式は専用の回帰で扱う。
+        backend = patch.dict("os.environ", {"RAG_HYBRID_SEARCH_BACKEND": "sudachi"})
+        backend.start()
+        self.addCleanup(backend.stop)
         from rag_engine.adapters.oracle import store
 
         store._pool_cache.clear()
@@ -75,7 +79,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertFalse(candidates[0].reserved_by)
 
     def test_search_result_includes_reserved_candidates_with_their_reason(self):
-        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+        settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
         pool = [_stored_chunk(f"uid-{i}", f"chunk-{i}", page_start=i, chunk_seq=i) for i in range(1, 8)]
         common = [(f"uid-{i}", 0.1 + i * 0.01) for i in range(1, 6)]
         rankings = iter([common, common, [("uid-7", 0.05), ("uid-6", 0.06)] + common])
@@ -102,7 +106,7 @@ class AdbVectorStoreTests(unittest.TestCase):
 
     def test_vector_only_queries_skip_text_search_but_keep_vector_search(self):
         # HyDE の仮説文は embedding だけに使い、Oracle Text の CONTAINS には使わない (#911)。
-        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+        settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
         pool = [_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)]
         with (
             patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb"),
@@ -140,7 +144,7 @@ class AdbVectorStoreTests(unittest.TestCase):
             yield SimpleNamespace(response=lambda _: None, display=lambda **kwargs: None)
             observed.append(("end", operation, name))
 
-        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+        settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
         pool = [_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)]
 
         def search(**kwargs):
@@ -214,7 +218,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         self.assertTrue(any("派生" in call.args[2] for call in text.call_args_list))
 
     def test_repeated_search_in_same_scope_loads_chunks_and_checks_embeddings_once(self):
-        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+        settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
         pool = [_stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)]
         with (
             patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb"),
@@ -532,7 +536,7 @@ class AdbVectorStoreTests(unittest.TestCase):
     def test_business_term_match_boosts_ranking_without_excluding_other_chunks(self):
         """業務語に一致する chunk は channel の加点で上位に寄り、一致しない chunk も候補に残る (#848)。"""
 
-        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+        settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
         plain = _stored_chunk("uid-1", "chunk-1", page_start=1, chunk_seq=1)
         matched = _stored_chunk(
             "uid-2", "chunk-2", page_start=2, chunk_seq=2, metadata={"retrieval_profile": {"business_domains": ["販売管理"]}}
@@ -1410,7 +1414,7 @@ class AdbVectorStoreTests(unittest.TestCase):
     def test_load_chunk_embedding_status_reports_legacy_schema_rows(self):
         # v4 移行後、旧 schema のまま残る ADB 行は検索対象外。件数と案内を出し ready にしない (#819)。
         chunk_run = _chunk_run()
-        settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+        settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
         uid = _chunk_uid(chunk_run.chunk_run_id, chunk_run.chunks[1].chunk_id)
         connection = _FakeConnection(existing_hashes={uid: _retrieval_text_hash(chunk_run.chunks[1])})
         connection.legacy_rows = 2
@@ -1958,7 +1962,7 @@ def test_profile_channel_can_be_switched_off_for_ablation():
     from rag_engine.adapters.oracle import store
 
     store._pool_cache.clear()
-    settings = _replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+    settings = _replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
     with (
         patch("rag_engine.adapters.oracle.store.load_adb_settings", return_value="adb-profile"),
         patch("rag_engine.adapters.oracle.store.connect_adb_thin", side_effect=lambda *_: _ConnectionContext(object())),
@@ -2019,7 +2023,7 @@ def test_weighted_rrf_keeps_failed_vector_distinct_from_empty_and_uses_text_budg
 
     from rag_engine.resources.tracing import bind_trace_observer
 
-    settings = replace(get_settings(), embedding_output_dimensions=1536, image_embedding_enabled=False)
+    settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
     captured = []
 
     @contextmanager

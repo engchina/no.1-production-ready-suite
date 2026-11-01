@@ -3489,6 +3489,7 @@ class FakeOracleCursor:
 def _oci_settings() -> Settings:
     return Settings.model_construct(
         oci_genai_embedding_dim=3,
+        rag_hybrid_search_backend="sudachi",
         rag_min_similarity=0.05,
         oracle_vector_target_accuracy=90,
         # 設定の target accuracy をそのまま使う balanced に固定する（既定は高精度。#272）。

@@ -61,6 +61,7 @@ type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_ter
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
+    hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
     rrf_method_ratio: settings.rrf_method_ratio ?? [1, 1],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
@@ -177,6 +178,15 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
         />
       </FormGrid>
       </section>
+      <FormGrid>
+        <SelectField id="answering-hybrid-backend" width="lg" disabled={disabled}
+          label={t("settings.answering.hybridBackend")}
+          helper={t("settings.answering.hybridBackendHint")}
+          value={form.hybrid_search_backend ?? "oracle_native"}
+          options={[{value:"oracle_native", label:t("settings.answering.hybridBackend.native")},
+            {value:"sudachi", label:t("settings.answering.hybridBackend.sudachi")}]}
+          onValueChange={(value: "oracle_native" | "sudachi") => update({hybrid_search_backend:value})} />
+      </FormGrid>
       <section aria-labelledby="rrf-title" className="space-y-4">
         <h3 id="rrf-title" className="text-sm font-medium text-fg">{t("settings.answering.rrfTitle")}</h3>
         <p className="text-sm text-fg-muted">{t("settings.answering.rrfHint")}</p>

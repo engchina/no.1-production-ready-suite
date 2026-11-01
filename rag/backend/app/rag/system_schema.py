@@ -36,7 +36,12 @@ from pr_system_settings.system_schema import (
 from pr_system_settings.system_schema import (
     classify_system_schema_status as classify_schema_status,
 )
+from rag_engine.adapters.oracle.native_hybrid import (
+    NATIVE_HYBRID_INDEX,
+    NATIVE_HYBRID_PREFERENCE,
+)
 
+from app.clients.native_hybrid_schema import NATIVE_HYBRID_TRIGGER
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER_PREFERENCE,
     ORACLE_TEXT_STOPLIST,
@@ -70,7 +75,7 @@ _CREATE_TABLE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _CREATE_INDEX_PATTERN = re.compile(
-    r"^\s*CREATE\s+(?:UNIQUE\s+|VECTOR\s+)?INDEX\s+([A-Z][A-Z0-9_$#]*)\b",
+    r"^\s*CREATE\s+(?:UNIQUE\s+|(?:HYBRID\s+)?VECTOR\s+)?INDEX\s+([A-Z][A-Z0-9_$#]*)\b",
     flags=re.IGNORECASE,
 )
 
@@ -178,6 +183,7 @@ PRESERVED_TABLES: tuple[str, ...] = (
 )
 
 MANAGED_INDEXES: tuple[str, ...] = (
+    NATIVE_HYBRID_INDEX,
     "RAG_LANG_RELEASE_PREVIOUS_IDX",
     "RAG_LANG_RELEASE_RESTORE_IDX",
     "RAG_LANG_STATE_CURRENT_IDX",
@@ -278,6 +284,8 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "TABLE") for name in MANAGED_TABLES),
     *((name, "INDEX") for name in MANAGED_INDEXES),
     *MANAGED_TEXT_OBJECTS,
+    (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+    (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
 )
 
 # 旧 migration が一時的に作成したが、現行 runtime では使用しない object。
@@ -325,6 +333,13 @@ def managed_manifest_from_schema(
     """DDL 正本の CREATE TABLE / INDEX と Text object を抽出する。"""
 
     objects: set[tuple[str, str]] = set(MANAGED_TEXT_OBJECTS)
+    if sections is None:
+        objects.update(
+            {
+                (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+                (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
+            }
+        )
     for section in sections or oracle_schema_sections():
         for statement in split_sql_statements(section.sql):
             table_match = _CREATE_TABLE_PATTERN.match(statement)
@@ -722,7 +737,7 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             cursor.execute(
                 "SELECT OBJECT_NAME, OBJECT_TYPE, CREATED FROM USER_OBJECTS "
                 f"WHERE OBJECT_NAME IN ({placeholders}) "  # nosec B608 - fixed binds
-                "AND OBJECT_TYPE IN ('TABLE', 'INDEX')",
+                "AND OBJECT_TYPE IN ('TABLE', 'INDEX', 'TRIGGER')",
                 binds,
             )
             objects = {
@@ -743,6 +758,13 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             )
             if cursor.fetchone() is not None:
                 objects[(ORACLE_TEXT_STOPLIST, "TEXT_STOPLIST")] = None
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT PRE_NAME FROM CTX_USER_PREFERENCES WHERE PRE_NAME = :preference_name",
+                {"preference_name": NATIVE_HYBRID_PREFERENCE},
+            )
+            if cursor.fetchone() is not None:
+                objects[(NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE")] = None
         return objects
 
     def _ensure_control_schema(self) -> None:
@@ -830,6 +852,13 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             dropped += self._execute_drop(connection, f"DROP INDEX {index_name}")
             self._heartbeat(connection, owner)
         dropped += self._drop_text_objects(connection, objects)
+        if (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE") in objects:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "BEGIN DBMS_VECTOR_CHAIN.DROP_PREFERENCE(:name); END;",
+                    {"name": NATIVE_HYBRID_PREFERENCE},
+                )
+            dropped += 1
         retired_tables = tuple(
             name for name, object_type in RETIRED_MANAGED_OBJECTS if object_type == "TABLE"
         )

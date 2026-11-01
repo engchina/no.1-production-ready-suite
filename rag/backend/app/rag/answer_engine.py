@@ -623,6 +623,7 @@ def build_engine_settings(
         if settings.rag_runtime_rules_confirmation_enabled
         else "0",
         "RUNTIME_RULES_ANSWER_ENABLED": "1" if settings.rag_runtime_rules_answer_enabled else "0",
+        "RAG_HYBRID_SEARCH_BACKEND": settings.rag_hybrid_search_backend,
         "RAG_RRF_METHOD_RATIO": json.dumps(settings.rag_rrf_method_ratio),
         "RAG_RRF_SOURCE_RATIO": json.dumps(settings.rag_rrf_source_ratio),
         "RUNTIME_TERMS_SEARCH_ENABLED": "1" if settings.rag_runtime_terms_search_enabled else "0",

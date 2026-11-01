@@ -578,7 +578,7 @@ LlamaIndex AutoMerging 風の分割方式「親子階層」は削除し、一覧
 ## rag_poc との差分
 
 - 解析結果、チャンク、回答はファイル（`.runs/`）ではなく、本リポジトリの Oracle と Object Storage を使う。
-- ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索（vector と Oracle Text の RRF）に、rag_poc の「原質問を主軸にした重み付き融合」と Sudachi 分割を組み合わせる。
+- ADB の独自スキーマ（`rag_chunk_runs` / `rag_chunk_embeddings` など）は使わない。検索は backend の hybrid 検索を使う。「検索の実行方式」は Oracle 原生混合索引が既定で、既存の Sudachi 方式も明示選択できる。どちらも検索方式・検索文の重み付き RRF を一度だけ行う。旧独立 schema の adapter は原生方式を選ぶと明示エラーにし、暗黙に Sudachi へ戻さない。
 - chicago / osaka の 2 系統 LLM 設定と、OCI SDK の LLM 経路は廃止した。
 - 移植していないもの：
   - Gradio UI、PPT 資料、`verify/` の問題セット（データは移さない。検証 CLI `app.rag.answer_verify_cli` で rag_poc の `cases.json` / `crag_goldset.json` をそのまま使える）
@@ -636,3 +636,24 @@ SDK の `DomainProfile`、`Runtime.profile`、`create_oracle_application(profile
 登録した用語・同義語から作る追加検索文は、全文検索・ベクトル検索の候補取得に使う。出所が「用語・同義語だけ」の表現は、質問を含まないため、独立した質問として rerank の最高点集約へ加えない。完全な原質問、原質問に用語を付けた表現、独立した言い換え・分解や呼出元の質問は、引き続き既存の rerank で使う。同じ表現が独立した質問の出所も持つ場合、または出所のない呼出元の表現は保持する。確認で明示した条件や業務ガイドを含む複合の表現も、この除外の対象にしない。
 
 検索表現は削除せず、RRF の比重・候補と起点の上限・rerank モデルと最高値集約・明示範囲と権限は変えない。`rerank_query_selection` に再順位付けへ渡す質問と検索専用に残した表現を記録し、`rerank_query` は実際の呼出だけを記録する。登録用語の回答補助は引き続き独立したスイッチに従う。
+
+
+## 検索の実行方式
+
+全体の「検索方法」で `Oracle原生混合索引（既定）` と `Sudachi＋ベクトル・全文検索` を選ぶ。
+保存先は `RAG_HYBRID_SEARCH_BACKEND=oracle_native|sudachi`。設定が無い既存環境も原生方式へ変わる。
+更新ではシステムテーブルの非破壊migrationが検索用JSONと同期trigger、原生索引を追加する。
+元のchunk、検索本文、既存のCohere埋め込みは保持する。JSONに既存の数値配列を入れるため、
+DB内の外部AI資格情報や全庫のembedding再生成は不要。検索用JSON・原生索引分のDB容量と、
+書込み時の同期負荷が増える。従来の索引もSudachi方式で使用するため保持する。
+
+原生方式は `DBMS_HYBRID_VECTOR.SEARCH` の各方式の生順位を取得し、原質問と追加検索文を
+一回の重み付きRRFで融合する。索引内部の再分割や二段のRRFは行わない。権限・KB・明示範囲・
+配信中の版を検索前のID制限に使い、結果取得時にも同じSQL条件を適用する。候補上限とrerankは独立。
+原生索引が未作成・無効の場合は準備不足エラーとし、従来方式へ暗黙に切り替えない。
+各検索の失敗と0件は区別し、片方の検索が失敗しても既存の縮退規則を維持する。
+
+Traceは実際に渡した検索文と方式、範囲、候補・RRFを記録する。原生方式ではSudachiを呼ばず、
+Oracle内部で生成した語・検索式はAPIが返さないため表示できない旨を示す。
+原生のvector scoreはコサイン距離と同一視せず、確率や回答の正確さとして表示しない。
+原生方式による順位変化はrerankの入力を変え得るが、品質向上の証明ではない。

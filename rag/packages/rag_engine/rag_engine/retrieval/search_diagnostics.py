@@ -69,10 +69,14 @@ def search_diagnostics(
         raw = int(branch.get("raw_count", len(rows)))
         raw_count += raw
         input_value = str(branch.get("query") or "検索文は記録されていません（埋め込みを直接指定）")
-        if not vector:
+        if not vector and not branch.get("native"):
             input_value += " / 検索語: " + (" / ".join(oracle_expression_terms(str(branch.get("expression") or ""))) or "なし")
         fields.append({"label": f"検索 {index} の入力", "value": input_value})
-        if not vector:
+        if not vector and branch.get("native"):
+            fields.append(
+                {"label": f"全文検索入力 {index}", "value": "Oracle原生hybridのsearch_text。内部の検索語・検索式はAPIから返されません。"}
+            )
+        elif not vector:
             fields.append({"label": f"Oracle Text 検索式 {index}", "value": str(branch.get("expression") or "なし（未実行）")})
         error = str(branch.get("error") or "")
         suffix = f"（失敗: {error}）" if error else "（該当なし）" if not rows else ""
