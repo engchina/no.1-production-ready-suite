@@ -108,7 +108,8 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         self.assertEqual(_fields(steps["質問の言い換え・分解"])["設定"], SIMPLE_RETRIEVAL_LABEL)
         queries = steps["検索文をまとめ、検索語を作る"]
         self.assertRegex(_fields(queries)["結果"], r"^検索文 \d+ 本$")
-        self.assertIn("全文検索のキーワード", _fields(queries))
+        self.assertIn("全文検索の入力", _fields(queries))
+        self.assertIn("内部の検索語・検索式はAPIから返されません", _fields(queries)["全文検索の入力"])
         self.assertTrue(any(line.startswith("1. [原質問]") for line in _lines(queries)))
         self.assertEqual(_fields(steps["回答生成フロー"])["設定"], STANDARD_ANSWER_FLOW_LABEL)
 

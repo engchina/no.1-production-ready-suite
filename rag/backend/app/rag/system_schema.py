@@ -46,6 +46,7 @@ from app.clients.oracle import (
     ORACLE_TEXT_LEXER_PREFERENCE,
     ORACLE_TEXT_STOPLIST,
     OracleClient,
+    oracle_error_log_fields,
 )
 from app.rag.oracle_schema import (
     SCHEMA_VERSION,
@@ -803,7 +804,16 @@ class SystemSchemaManager(SystemSchemaManagerBase):
             if (match := _CREATE_INDEX_PATTERN.match(statement)) is not None
             and match.group(1).upper() in missing
         ]
-        self._execute_statements(connection, statements)
+        for statement in statements:
+            try:
+                self._execute_statements(connection, [statement])
+            except Exception as exc:
+                match = _CREATE_INDEX_PATTERN.match(statement)
+                if match and match.group(1).upper() == NATIVE_HYBRID_INDEX:
+                    logger.error(
+                        "rag_native_hybrid_index_create_failed", extra=oracle_error_log_fields(exc)
+                    )
+                raise
 
     def _apply_migration(self, connection: Any, migration: MigrationArtifact) -> None:
         self._execute_statements(

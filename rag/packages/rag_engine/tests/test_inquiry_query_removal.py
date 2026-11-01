@@ -84,7 +84,8 @@ class InquiryQueryRemovalTests(unittest.TestCase):
         plan = result.retrieval_query_plan
         self.assertEqual(plan["vector_queries"], [QUESTION])
         self.assertEqual(plan["text_query_variants"], [QUESTION])
-        self.assertEqual(len(plan["oracle_text_queries"]), 1)
+        # 原生方式の内部Oracle Text式は返されず、原質問は実入力に残る。
+        self.assertEqual(plan["oracle_text_queries"], [])
         self.assertEqual(plan["lexical_queries"], [])
         self.assertNotIn("inquiry_queries", plan)
         # 追加の rerank は無く、原質問だけで並べ替える。

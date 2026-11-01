@@ -11184,9 +11184,12 @@ def _fetch_all(
             cursor.prefetchrows = fetch_rows  # type: ignore[attr-defined]
             cursor.arraysize = fetch_rows  # type: ignore[attr-defined]
         normalized = _normalize_sql(statement)
+        sql_binds = _binds_for_sql(normalized, binds)
+        if sizes := _large_text_input_sizes(sql_binds):
+            cursor.setinputsizes(**sizes)
         cursor.execute(
             normalized,
-            _binds_for_sql(normalized, binds),
+            sql_binds,
             **_lob_value_execute_options(cursor),
         )
         rows = cursor.fetchall()

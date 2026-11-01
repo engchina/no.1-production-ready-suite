@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, native_search_request
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, SearchHits
 from app.config import Settings
 from app.schemas.search import SearchMode
 
@@ -48,9 +49,9 @@ class NativeOracle(OracleClient):
         self.fail_keyword = fail_keyword
 
     async def _fetch_all(
-        self, sql: str, binds: dict[str, object] | None = None
+        self, sql: str, binds: Mapping[str, object] | None = None
     ) -> list[dict[str, object]]:
-        binds = binds or {}
+        binds = dict(binds or {})
         self.calls.append((sql, binds))
         if "FROM user_indexes" in sql:
             return [{"index_name": "RAG_CHUNKS_HYBRID_IDX"}]
@@ -100,6 +101,7 @@ async def test_channel_failure_is_explicit_without_old_sql_fallback() -> None:
         [("合成", [1.0] * 1536, SearchMode.VECTOR), ("合成", [], SearchMode.KEYWORD)], 4
     )
     assert len(many[0]) == 1
+    assert isinstance(many[1], SearchHits)
     assert many[1].status == "failed"
     assert isinstance(many[1].failure, NativeHybridUnavailable)
     assert not any("CONTAINS(c.search_text" in sql for sql, _ in client.calls)
