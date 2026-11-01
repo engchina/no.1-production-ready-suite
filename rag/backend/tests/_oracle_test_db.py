@@ -234,6 +234,19 @@ def cleanup_to_baseline() -> None:
                 )
                 remaining, current = cursor.fetchone()
                 if remaining > current:
+                    # semantic 指定が no-op になる環境では、テスト索引全体を整理する。
+                    cursor.execute(
+                        "BEGIN CTX_DDL.OPTIMIZE_INDEX('RAG_CHUNKS_HYBRID_IDX', "
+                        "CTX_DDL.OPTLEVEL_FULL); END;"
+                    )
+                    cursor.execute(
+                        """SELECT
+                            (SELECT COUNT(*) FROM DR$RAG_CHUNKS_HYBRID_IDX$VR),
+                            (SELECT COUNT(*) FROM RAG_CHUNKS_HYBRID_IDX$VECTORS)
+                        FROM dual"""
+                    )
+                    remaining, current = cursor.fetchone()
+                if remaining > current:
                     raise RuntimeError(
                         "原生索引の削除済み vector が整理後も残っています: "
                         f"before={stored}/{visible}, after={remaining}/{current}"

@@ -91,3 +91,24 @@ def test_cleanup_rejects_unpurged_vectors(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(RuntimeError, match="before=4/2, after=4/2"):
         _oracle_test_db.cleanup_to_baseline()
     assert connection.calls[-1] == "close"
+
+
+def test_cleanup_uses_full_only_if_semantic_purge_is_ineffective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = CleanupConnection(0, True, 4, 2)
+    original_execute = connection.execute
+
+    def semantic_noop(sql: str, binds: Mapping[str, object] | None = None) -> None:
+        original_execute(sql, binds)
+        if "SECTION_SEMANTIC_INDEX" in sql:
+            connection.optimized = False
+
+    monkeypatch.setattr(connection, "execute", semantic_noop)
+    monkeypatch.setattr(_oracle_test_db, "_connect", lambda: connection)
+    _oracle_test_db.cleanup_to_baseline()
+    operations = [sql for sql in connection.calls if "OPTIMIZE_INDEX" in sql]
+    assert len(operations) == 2
+    assert "SECTION_SEMANTIC_INDEX" in operations[0]
+    assert "OPTLEVEL_FULL" in operations[1]
+    assert connection.calls[-1] == "close"
