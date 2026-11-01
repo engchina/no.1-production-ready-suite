@@ -8,8 +8,12 @@ from tests import _oracle_test_db
 
 
 class CleanupConnection:
-    def __init__(self, deleted: int, present: bool, fail: bool = False) -> None:
+    def __init__(
+        self, deleted: int, present: bool, stored: int, visible: int, fail: bool = False
+    ) -> None:
         self.deleted = deleted
+        self.stored = stored
+        self.visible = visible
         self.present = present
         self.fail = fail
         self.rowcount = 0
@@ -24,8 +28,10 @@ class CleanupConnection:
         if "OPTIMIZE_INDEX" in sql and self.fail:
             raise RuntimeError("合成の整理失敗")
 
-    def fetchone(self) -> tuple[int]:
-        return (int(self.present),)
+    def fetchone(self) -> tuple[int, ...]:
+        if "FROM user_indexes" in self.calls[-1]:
+            return (int(self.present),)
+        return (self.stored, self.visible)
 
     def commit(self) -> None:
         self.calls.append("commit")
@@ -35,12 +41,19 @@ class CleanupConnection:
 
 
 @pytest.mark.parametrize(
-    "deleted,present,optimized", [(2, True, True), (0, True, False), (2, False, False)]
+    "deleted,present,stored,visible,optimized",
+    [(2, True, 4, 2, True), (0, True, 4, 2, True), (0, True, 2, 2, False), (2, False, 4, 0, False)],
+    ids=["fixture-deleted", "api-already-deleted", "no-debt", "missing-index"],
 )
 def test_cleanup_purges_deleted_vectors_after_commit_only_when_needed(
-    monkeypatch: pytest.MonkeyPatch, deleted: int, present: bool, optimized: bool
+    monkeypatch: pytest.MonkeyPatch,
+    deleted: int,
+    present: bool,
+    stored: int,
+    visible: int,
+    optimized: bool,
 ) -> None:
-    connection = CleanupConnection(deleted, present)
+    connection = CleanupConnection(deleted, present, stored, visible)
     monkeypatch.setattr(_oracle_test_db, "_connect", lambda: connection)
     _oracle_test_db.cleanup_to_baseline()
     operations = [sql for sql in connection.calls if "OPTIMIZE_INDEX" in sql]
@@ -54,7 +67,7 @@ def test_cleanup_purges_deleted_vectors_after_commit_only_when_needed(
 
 
 def test_cleanup_does_not_hide_index_purge_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    connection = CleanupConnection(2, True, fail=True)
+    connection = CleanupConnection(0, True, 4, 2, fail=True)
     monkeypatch.setattr(_oracle_test_db, "_connect", lambda: connection)
     with pytest.raises(RuntimeError, match="合成の整理失敗"):
         _oracle_test_db.cleanup_to_baseline()

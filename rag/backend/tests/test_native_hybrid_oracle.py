@@ -74,7 +74,7 @@ async def test_native_text_index_keeps_numeric_words_and_vector_scope() -> None:
         status = getattr(ranking, "status", "completed")
         if status != "completed":
             diagnostics = await _empty_native_scope_diagnostics(
-                oracle, document_id, {"document_id": document_id}
+                oracle, document_id, {"document_id": document_id}, initial_top_k=5
             )
             pytest.fail(f"{mode.value}: status={status}, diagnostics={diagnostics}")
     assert len(rankings[0]) == 1
@@ -186,7 +186,11 @@ async def test_native_and_legacy_public_search_keep_scope_and_global_rrf(
 
 
 async def _empty_native_scope_diagnostics(
-    oracle: OracleClient, document_id: str, filters: dict[str, str]
+    oracle: OracleClient,
+    document_id: str,
+    filters: dict[str, str],
+    *,
+    initial_top_k: int = 10,
 ) -> dict[str, object]:
     """空結果の断言を維持し、可視性と近似探索を分ける。本文・接続情報は出さない。"""
     from app.rag.vector_index_adapter import resolve_vector_index_adapter
@@ -202,7 +206,14 @@ async def _empty_native_scope_diagnostics(
         update={"rag_vector_index_profile": "balanced", "oracle_vector_target_accuracy": 100}
     )
     exact = await OracleClient(settings).search_many(
-        [("syntheticneedle", [0.1] * 1536, SearchMode.VECTOR)], 10, filters
+        [("syntheticneedle", [0.1] * 1536, SearchMode.VECTOR)], initial_top_k, filters
+    )
+    widened = (
+        await OracleClient(settings).search_many(
+            [("syntheticneedle", [0.1] * 1536, SearchMode.VECTOR)], 10, filters
+        )
+        if initial_top_k < 10
+        else exact
     )
     failure = getattr(exact[0], "failure", None)
     index_counts = await oracle._fetch_all(
@@ -216,6 +227,9 @@ async def _empty_native_scope_diagnostics(
         "visibility": visibility,
         "index_counts": index_counts,
         "requested_accuracy": resolve_vector_index_adapter(oracle._settings).target_accuracy,
+        "diagnostic_top_k": initial_top_k,
+        "widened_top_k": 10,
+        "widened_count": len(widened[0]),
         "accuracy_100_status": getattr(exact[0], "status", "completed"),
         "accuracy_100_count": len(exact[0]),
         "accuracy_100_failure": type(failure).__name__ if failure else None,
