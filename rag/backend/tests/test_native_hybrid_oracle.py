@@ -312,3 +312,33 @@ async def test_hybrid_payload_ignores_scope_updates_but_tracks_text_and_embeddin
         assert (await payload())["embedding"] == [0, 1, 0]
     finally:
         await execute(f"DROP TABLE {table} PURGE", {})
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_save_index_allocates_native_scope_without_precreated_chunk_set() -> None:
+    """取込と同じ保存順で、新しい親集合と数値範囲を原子的に作る。"""
+    from app.schemas.extraction import StructuredExtraction
+
+    oracle = OracleClient()
+    doc = await oracle.create_document(
+        file_name="synthetic-new-scope.txt",
+        object_storage_path="local://synthetic-new-scope.txt",
+        content_type="text/plain",
+    )
+    scope = f"cs_new_{uuid4().hex[:16]}"
+    await oracle.save_index(
+        doc.id,
+        StructuredExtraction(raw_text="syntheticneedle", confidence=1),
+        [Chunk(index=0, text="syntheticneedle", start_offset=0, end_offset=15)],
+        [[0.1] * 1536],
+        chunk_set_id=scope,
+    )
+    rows = await oracle._fetch_all(
+        "SELECT c.native_scope_id, s.native_scope_id AS mapped_scope FROM rag_chunks c "
+        "JOIN rag_native_search_scopes s ON s.chunk_set_id=c.chunk_set_id "
+        "WHERE c.chunk_set_id=:id",
+        {"id": scope},
+    )
+    assert len(rows) == 1
+    assert rows[0]["native_scope_id"] == rows[0]["mapped_scope"]
+    assert int(str(rows[0]["native_scope_id"])) > 0

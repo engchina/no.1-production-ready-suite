@@ -2451,10 +2451,42 @@ async def test_oci_save_index_persists_extraction_and_chunks_atomically() -> Non
     assert inserted["embedding"] == array("f", [0.1, 0.2, 0.3])
 
 
+async def test_save_index_new_chunk_set_exists_before_chunk_insert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """親集合の事前作成なしでも trigger が数値範囲を割り当てられる。"""
+    pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    insert_many = FakeOracleCursor.executemany
+
+    def assert_parent_then_insert(
+        cursor: FakeOracleCursor,
+        statement: str,
+        parameters: Sequence[Mapping[str, object]],
+    ) -> None:
+        parents = [
+            call for call in pool.connection.calls if "MERGE INTO rag_chunk_sets" in call.statement
+        ]
+        assert len(parents) == 1
+        assert parents[0].parameters["chunk_set_id"] == "cs-new"
+        assert "WHEN MATCHED" not in parents[0].statement
+        insert_many(cursor, statement, parameters)
+
+    monkeypatch.setattr(FakeOracleCursor, "executemany", assert_parent_then_insert)
+    await client.save_index(
+        "doc-1",
+        StructuredExtraction(raw_text="合成本文", confidence=0.9),
+        [Chunk(index=0, text="合成本文", start_offset=0, end_offset=4)],
+        [[1.0, 0.0, 0.0]],
+        chunk_set_id="cs-new",
+    )
+    assert pool.connection.commits == 1
+
+
 async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> None:
     """1 ページ目の本文は chunk の行に入れず、chunk set に 1 つだけ保存する(#557)。
 
-    chunk set の行は chunk の保存の後に upsert_chunk_set が作るため、無ければ MERGE で作る。
+    chunk set の行は chunk の保存前に保証し、背景の本文は集合に一度だけ保存する。
     chunk set の無い保存(未タグ)では書かない。
     """
     from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY
@@ -2501,7 +2533,10 @@ async def test_oci_save_index_stores_first_page_context_once_per_chunk_set() -> 
         assert all(FIRST_PAGE_CONTEXT_KEY not in str(row["metadata_json"]) for row in rows)
         assert all("受注管理規程" not in str(row["search_text"]) for row in rows)
         merges = [
-            call for call in pool.connection.calls if "MERGE INTO rag_chunk_sets" in call.statement
+            call
+            for call in pool.connection.calls
+            if "MERGE INTO rag_chunk_sets" in call.statement
+            and "first_page_context" in call.statement
         ]
         if chunk_set_id is None:
             assert merges == []

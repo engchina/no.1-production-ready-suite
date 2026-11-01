@@ -213,6 +213,28 @@ END;
 """.strip()
 
 
+def native_hybrid_missing_scope_migration_sql() -> str:
+    """登録済みの親集合を持つ欠落行だけを補完する。本文と埋め込みは更新しない。"""
+    return """
+INSERT INTO rag_native_search_scopes (chunk_set_id)
+SELECT cs.chunk_set_id FROM rag_chunk_sets cs
+WHERE EXISTS (
+    SELECT 1 FROM rag_chunks c
+    WHERE c.chunk_set_id = cs.chunk_set_id AND c.native_scope_id IS NULL
+) AND NOT EXISTS (
+    SELECT 1 FROM rag_native_search_scopes s WHERE s.chunk_set_id = cs.chunk_set_id
+);
+
+UPDATE rag_chunks c SET native_scope_id = (
+    SELECT s.native_scope_id FROM rag_native_search_scopes s WHERE s.chunk_set_id = c.chunk_set_id
+) WHERE c.native_scope_id IS NULL AND EXISTS (
+    SELECT 1 FROM rag_native_search_scopes s
+    JOIN rag_chunk_sets cs ON cs.chunk_set_id = s.chunk_set_id
+    WHERE s.chunk_set_id = c.chunk_set_id
+);
+""".strip()
+
+
 def native_hybrid_sync_columns_migration_sql() -> str:
     """保存済みvectorを扱うため、UPDATE OF句ではなく更新述語で入力列を判定する。"""
     return _native_hybrid_setup_sql(sync_changed_columns=True)

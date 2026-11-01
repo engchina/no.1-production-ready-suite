@@ -10894,8 +10894,8 @@ class OracleClient:
         未タグで保存する(現行挙動・後方互換)。
 
         親子階層で分割した文書の 1 ページ目の本文(先頭の chunk の ``FIRST_PAGE_CONTEXT_KEY``)は、
-        chunk set に 1 つだけ保存する(#557)。chunk set の行は chunk の保存の後に
-        ``upsert_chunk_set`` が作るため、無ければここで作る(状態などは後の upsert / mark が書く)。
+        chunk set に 1 つだけ保存する(#557)。親集合は chunk の挿入前に保証し、
+        数値の検索範囲を同じ transaction で割り当てる。状態などは後の upsert / mark が書く。
         """
         first_page_context = (
             next(
@@ -10951,6 +10951,23 @@ class OracleClient:
                 ),
                 delete_binds,
             )
+            if chunk_set_id is not None:
+                _execute(
+                    connection,
+                    """
+                    MERGE INTO rag_chunk_sets t
+                    USING (SELECT :chunk_set_id AS chunk_set_id FROM dual) s
+                    ON (t.chunk_set_id = s.chunk_set_id)
+                    WHEN NOT MATCHED THEN INSERT
+                        (chunk_set_id, document_id, tenant_id_hash)
+                        VALUES (:chunk_set_id, :document_id, :tenant_id_hash)
+                    """,
+                    {
+                        "chunk_set_id": chunk_set_id,
+                        "document_id": document_id,
+                        "tenant_id_hash": document.tenant_id_hash,
+                    },
+                )
             rows = self._chunk_insert_rows(
                 document_id, document, chunks, embeddings, chunk_set_id=chunk_set_id
             )
