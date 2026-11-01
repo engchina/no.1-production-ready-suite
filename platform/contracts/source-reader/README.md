@@ -6,6 +6,7 @@ Agent は RAG の内部 REST API・DB を利用せず、この公開契約を使
 - `GET <content_url>?view=reader`: 引用に紐づく同一解析版の要素と前後文。
 - 続き: `cursor=<previous_cursor|next_cursor>&direction=before|after`。
 - 章節: `scope=section|parent`。目次の項目: `scope=section&section_id=<outline.id>`。
+- 章節・目次の明示的な選択は選択範囲の冒頭から読む。cursor のない paragraph は元の引用位置へ戻る。
 - `view` 省略時は従来どおり原本。完全ダウンロードは `disposition=attachment`。
 - Cookie・Referer を送らない。毎回、署名・期限・利用者・現在の権限と文書版を再確認する。
   404 は参照不可、409 は版の変化、410 は署名の期限切れ。新しい版へ黙って付け替えない。

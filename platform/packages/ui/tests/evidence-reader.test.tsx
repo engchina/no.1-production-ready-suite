@@ -49,3 +49,37 @@ it("引用元の表は HTML を文字列として並べず、共通の表で列�
   expect(host.querySelector("td")?.textContent).toContain("A");
   await act(async () => root.unmount()); host.remove();
 });
+
+
+it("引用の変更では古い続きの位置を送らず、進行中の取得を中断する", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const signals: AbortSignal[] = [];
+  const load = vi.fn((_input: unknown, signal: AbortSignal) => { signals.push(signal); return Promise.resolve(windowData); });
+  const button = (text: string) => Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes(text))!;
+  await act(async () => { root.render(<EvidenceReader readingKey="a" loadWindow={load} />); await settle(); });
+  await act(async () => { button("後文を読む").click(); await settle(); });
+  const previousSignal = signals.at(-1)!;
+  await act(async () => { root.render(<EvidenceReader readingKey="b" loadWindow={load} />); await settle(); });
+  expect(previousSignal.aborted).toBe(true);
+  expect(load.mock.calls.map(args => args[0])).toEqual([{}, {cursor: "next", direction: "after"}, {}]);
+  await act(async () => root.unmount()); host.remove();
+});
+
+it("目次は選択後に閉じ、章節の冒頭へ移って本文にフォーカスする", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const data = { ...windowData, outline: [{id:"s1", title:"節 A", parent_id:null, has_children:false}] };
+  const load = vi.fn().mockResolvedValue(data);
+  const button = (text: string) => Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes(text))!;
+  await act(async () => { root.render(<EvidenceReader readingKey="a" loadWindow={load} />); await settle(); });
+  await act(async () => { (host.querySelector("summary") as HTMLElement).click(); });
+  expect(host.querySelector("details")?.open).toBe(true);
+  await act(async () => { button("節 A").click(); await settle(); });
+  expect(host.querySelector("details")?.open).toBe(false);
+  expect(load.mock.calls.at(-1)?.[0]).toEqual({scope:"section",section_id:"s1"});
+  expect(document.activeElement).toBe(host.querySelector('[data-testid="evidence-reader-content"]'));
+  await act(async () => { button("親章節を読む").click(); await settle(); });
+  expect(load.mock.calls.at(-1)?.[0]).toEqual({scope:"parent"});
+  await act(async () => { button("引用位置に戻る").click(); await settle(); });
+  expect(load.mock.calls.at(-1)?.[0]).toEqual({});
+  await act(async () => root.unmount()); host.remove();
+});

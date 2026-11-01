@@ -55,6 +55,7 @@ function searchStreamBody(): string {
 }
 
 async function search(page: Page) {
+  await page.addInitScript(() => localStorage.setItem("production-ready-rag.ui", JSON.stringify({state:{theme:matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"},version:0})));
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) =>
@@ -72,7 +73,7 @@ async function search(page: Page) {
   await page.route("**/api/documents/doc-a/content**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json; charset=utf-8", body: DOCUMENT_TEXT })
   );
-  await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill({ json: { data: readerWindow(EXCERPT, new URL(route.request().url()).searchParams.has("cursor")) } }));
+  await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill({ json: { data: readerWindow(EXCERPT, new URL(route.request().url()).searchParams) } }));
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /プロファイル A/);
   await page.keyboard.press("Escape");
@@ -121,8 +122,81 @@ test("抜粋の長い根拠を開いてもプレビューは画面に残り、�
   await expect(scroll.getByTestId("evidence-excerpt-fade")).toHaveCSS("opacity", "0");
 });
 
-function readerWindow(quote: string, continuation: boolean) {
-  return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: "paragraph",
-    blocks: [{ id: continuation ? "following" : "anchor", text: continuation ? "合成の続き" : "前文。".repeat(400) + quote, offset: 0, highlights: continuation ? [] : [[1200, 1200 + quote.length]], cited: !continuation }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],
-    previous_cursor: "before", next_cursor: continuation ? null : "after", outline: [{ id: "section-a", title: "節 A", parent_id: null, has_children: false }] };
+function readerWindow(quote: string, params: URLSearchParams) {
+  const cursor = params.get("cursor");
+  const scope = params.get("scope");
+  const section = params.get("section_id");
+  const continuation = cursor !== null;
+  const body = section ? "目次で選んだ節の冒頭" : scope === "parent" ? "親章節の冒頭" : scope === "section" ? "本節の冒頭" : cursor === "before" ? "合成の前文" : continuation ? "合成の続き" : "前文。".repeat(400) + quote;
+  return { revision: "v1", anchor_status: "exact", section_path: ["章 A", "節 A"], scope: scope ?? "paragraph",
+    blocks: [{ id: continuation ? cursor : scope ?? "anchor", text: body, offset: 0, highlights: continuation || scope ? [] : [[1200, 1200 + quote.length]], cited: !continuation && !scope }, { id: "context", kind: "table", text: "<table><tr><th>項目</th><th>値</th></tr><tr><td>A</td><td>1</td></tr></table>", offset: 0, highlights: [], cited: false }],
+    previous_cursor: scope ? null : "before", next_cursor: continuation ? null : "after",
+    outline: Array.from({length:25}, (_,i) => ({id:`section-${i}`,title:`節 ${i+1}：合成の長い章節見出しを折り返して表示する`,parent_id:null,has_children:false})) };
 }
+
+test("長い目次は本文を押し出さず、五つの読み取り操作で選んだ範囲へ移る", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await search(page);
+  await expect(page.locator("html")).toHaveClass(new RegExp(testInfo.project.use.colorScheme === "dark" ? "dark" : "^(?!.*dark)"));
+  await page.getByTestId("evidence-card").getByRole("button", { name: "文書 A.json の根拠を表示" }).click();
+  const reader = page.getByTestId("evidence-reader");
+  const body = reader.getByRole("region", {name:"引用元の本文"});
+  const outline = reader.getByTestId("evidence-reader-outline");
+  await expect(body.locator("mark")).toBeInViewport();
+  await reader.getByRole("button", {name:"前文を読む",exact:true}).click();
+  await expect(body).toContainText("合成の前文");
+  await reader.getByRole("button", {name:"本節を読む",exact:true}).click();
+  await expect(body).toContainText("本節の冒頭");
+  await expect(body).toBeFocused();
+  await expect.poll(() => body.evaluate(node => node.scrollTop)).toBe(0);
+  await expect(reader.getByRole("button", {name:"前文を読む",exact:true})).toBeDisabled();
+  await reader.getByRole("button", {name:"親章節を読む",exact:true}).click();
+  await expect(body).toContainText("親章節の冒頭");
+  await reader.getByTestId("evidence-reader-outline-toggle").click();
+  await expect(outline).toHaveAttribute("open", "");
+  const nav = outline.getByRole("navigation", {name:"目次"});
+  expect((await nav.boundingBox())!.height).toBeGreaterThan(page.viewportSize()!.height * .2);
+  await expect(body).toBeInViewport();
+  expect((await body.boundingBox())!.height).toBeGreaterThanOrEqual(page.viewportSize()!.height * .2);
+  await page.screenshot({path:testInfo.outputPath(`reader-outline-${testInfo.project.name}.png`)});
+  await nav.getByRole("button").last().click();
+  await expect(outline).not.toHaveAttribute("open", "");
+  await expect(body).toContainText("目次で選んだ節の冒頭");
+  await expect(body).toBeFocused();
+  await reader.getByRole("button", {name:"引用位置に戻る",exact:true}).click();
+  await expect(body.locator("mark")).toBeInViewport();
+  await reader.getByRole("button", {name:"後文を読む",exact:true}).click();
+  await expect(body).toContainText("合成の続き");
+  await expect(reader.getByRole("button", {name:"後文を読む",exact:true})).toBeDisabled();
+  await expectNoPageOverflow(page);
+});
+
+
+test("四窓目で古い窓を破棄しても表示位置を保ち、前後の取得が重複しない", {tag:"@responsive"}, async ({page}) => {
+  await search(page);
+  await page.route("**/api/documents/doc-a/reader?**", route => {
+    const params = new URL(route.request().url()).searchParams;
+    const number = Number(params.get("cursor") ?? "0");
+    return route.fulfill({json:{data:{revision:"v1",anchor_status:"exact",section_path:[],scope:"paragraph",
+      blocks:[{id:`window-${number}`,text:`窓 ${number} の本文。` + "合成の長い段落。\n".repeat(100),offset:0,highlights:[],cited:number===0}],
+      previous_cursor:number>0?String(number-1):null,next_cursor:String(number+1),outline:[]}}});
+  });
+  await page.getByTestId("evidence-card").getByRole("button", {name:"文書 A.json の根拠を表示"}).click();
+  const reader = page.getByTestId("evidence-reader");
+  const body = reader.getByRole("region", {name:"引用元の本文"});
+  for(let i=1;i<=2;i++) {
+    await reader.getByRole("button",{name:"後文を読む",exact:true}).click();
+    await expect(body.locator(`[data-reader-block="window-${i}:0"]`)).toHaveCount(1);
+  }
+  const retained = body.locator('[data-reader-block="window-1:0"]');
+  await retained.evaluate(node => node.scrollIntoView({block:"start"}));
+  const top = (await retained.boundingBox())!.y;
+  await reader.getByRole("button",{name:"後文を読む",exact:true}).click();
+  await expect(body.locator('[data-reader-block="window-3:0"]')).toHaveCount(1);
+  await expect(body.locator("[data-reader-block]")).toHaveCount(3);
+  await expect(body.locator('[data-reader-block="window-0:0"]')).toHaveCount(0);
+  expect(Math.abs((await retained.boundingBox())!.y-top)).toBeLessThan(2);
+  await reader.getByRole("button",{name:"前文を読む",exact:true}).click();
+  await expect(body.locator('[data-reader-block="window-0:0"]')).toHaveCount(1);
+  await expect(body.locator("[data-reader-block]")).toHaveCount(3);
+  expect(Math.abs((await retained.boundingBox())!.y-top)).toBeLessThan(2);
+});
