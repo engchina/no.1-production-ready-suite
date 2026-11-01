@@ -245,7 +245,7 @@ for (const theme of ["light", "dark"] as const) {
         const target = element.querySelector(selector);
         return target ? getComputedStyle(target) : null;
       };
-      const buttons = [...element.querySelectorAll(".react-flow__controls-button")];
+      const buttons = [...element.querySelectorAll("button")].filter(button => ["拡大", "縮小", "全体表示"].includes(button.getAttribute("aria-label") ?? ""));
       return {
         tokens,
         buttonCount: buttons.length,
@@ -257,7 +257,8 @@ for (const theme of ["light", "dark"] as const) {
       };
     });
     expect(colors.buttonCount).toBe(3);
-    expect(new Set(colors.buttonBackgrounds)).toEqual(new Set([colors.tokens.raised]));
+    // 共通 ghost Button は透明な面を通して親の surface を表示する。
+    expect(new Set(colors.buttonBackgrounds)).toEqual(new Set(["rgba(0, 0, 0, 0)"]));
     expect(new Set(colors.buttonColors)).toEqual(new Set([colors.tokens.fg]));
     // 帰属表示（React Flow のリンク）は消さず、色だけ合わせる。
     expect(colors.attributionBackground).toBe(colors.tokens.raised);
@@ -414,3 +415,63 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("04-partial-failure.png") });
 });
+
+for (const width of [1280, 1920, 375]) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`共通の文書構造画布で階層・検索・選択と種類切替を操作する ${width}px ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript((state) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })), { theme, sidebarCollapsed: width === 375 });
+      const nodes = [
+        { id: "doc", name: "合成文書 A", type: "document", confidence: 1 },
+        { id: "section-a", name: "合成章 A", type: "section", confidence: 1 },
+        { id: "section-b", name: "合成章 B", type: "section", confidence: 1 },
+        { id: "table", name: "合成表 A", type: "table_section", confidence: 1 },
+        ...Array.from({ length: 10 }, (_, index) => ({ id: `extra-${index}`, name: `合成節 ${index}`, type: "section", confidence: 1 })),
+      ];
+      await mockKb(page, { status: "ok", nodes, edges: nodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: "doc", target: node.id, type: "contains", confidence: 1 })), truncated: true });
+      await page.goto("/knowledge-bases/kb-1");
+      await disclosureSummary(page, "文書構造グラフを表示").click();
+      const graph = page.locator("#knowledge-base-graph");
+      const documentNode = graph.locator('.react-flow__node[data-id="doc"]');
+      const sectionNode = graph.locator('.react-flow__node[data-id="section-a"]');
+      await expect(documentNode).toBeVisible();
+      await expect(sectionNode).toBeVisible();
+      await expect.poll(async () => (await documentNode.boundingBox())!.x < (await sectionNode.boundingBox())!.x).toBe(true);
+      await documentNode.focus();
+      await page.keyboard.press("Enter");
+      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("合成文書 A");
+      const search = graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true });
+      await search.fill("合成章 B");
+      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("合成章 B");
+      await expect(search).toHaveAccessibleDescription("現在読み込み済みの範囲を検索します。");
+      await expect(graph.getByText("ノードが多いため一部のみ表示しています。", { exact: true })).toBeVisible();
+      await graph.getByRole("button", { name: "検索語をクリア", exact: true }).click();
+      const edge = graph.locator('.react-flow__edge[data-id="edge-0"]');
+      await edge.focus();
+      await page.keyboard.press("Space");
+      await expect(graph.getByRole("region", { name: "選択した関係" })).toContainText("合成文書 A");
+      await expect(graph.getByRole("region", { name: "選択した関係" }).locator(".font-mono")).toHaveText("edge-0");
+      const kinds = graph.getByRole("combobox", { name: "種類", exact: true });
+      await kinds.click();
+      await page.getByRole("option", { name: "表", exact: true }).click();
+      await expect(documentNode).toHaveCount(0);
+      await expect(graph.locator('.react-flow__node[data-id="table"]')).toBeVisible();
+      await kinds.click();
+      await page.getByRole("option", { name: "すべての種類", exact: true }).click();
+      const sectionLegend = graph.getByRole("group", { name: "表示する種類" }).getByRole("button", { name: "章・節", exact: true });
+      await sectionLegend.click();
+      await expect(sectionLegend).toHaveAttribute("aria-pressed", "false");
+      await expect(sectionNode).toHaveCount(0);
+      await sectionLegend.click();
+      await expect(sectionNode).toBeVisible();
+      await expectNoPageOverflow(page);
+      // 固定headerと長い親領域を避け、表示中の画布を確認してから撮る。
+      const canvas = graph.getByRole("region", { name: "文書構造グラフ", exact: true });
+      await page.setViewportSize({ width, height: 1200 });
+      await canvas.evaluate(element => element.scrollIntoView({ block: "center" }));
+      await expect(canvas.locator(".react-flow__node").first()).toBeVisible();
+      await canvas.getByRole("button", { name: "全体表示", exact: true }).click();
+      await canvas.screenshot({ path: testInfo.outputPath(`shared-structure-graph-${width}-${theme}.png`) });
+    });
+  }
+}

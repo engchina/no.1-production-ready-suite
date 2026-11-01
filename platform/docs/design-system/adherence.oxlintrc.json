@@ -17,9 +17,10 @@
                 "group": [
                   "@production-ready/ui/**",
                   "!@production-ready/ui/styles.css",
-                  "!@production-ready/ui/tokens.css"
+                  "!@production-ready/ui/tokens.css",
+                  "!@production-ready/ui/graph"
                 ],
-                "message": "共有 UI パッケージはルート（@production-ready/ui）から import する。内部パス（dist/** 等）に依存しない。"
+                "message": "共有 UI はルートか公開の graph 入口から import する。内部パス（dist/** 等）に依存しない。"
               }
             ]
           }

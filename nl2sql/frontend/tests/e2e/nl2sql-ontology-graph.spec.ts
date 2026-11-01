@@ -432,33 +432,14 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
   const fieldCenterY = fieldBox!.y + fieldBox!.height / 2;
   const inputCenterY = inputBox!.y + inputBox!.height / 2;
   expect(Math.abs(fieldCenterY - inputCenterY)).toBeLessThanOrEqual(1.5);
-  expect(inputBox!.x).toBeGreaterThan(fieldBox!.x + 28);
-  expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(fieldBox!.x + fieldBox!.width - 10);
-  expect(inputBox!.height).toBeLessThan(fieldBox!.height - 8);
-
-  const inputFrameStyles = await input.evaluate((element) => {
-    const style = window.getComputedStyle(element);
-    return {
-      borderTopWidth: style.borderTopWidth,
-      borderRightWidth: style.borderRightWidth,
-      borderBottomWidth: style.borderBottomWidth,
-      borderLeftWidth: style.borderLeftWidth,
-      boxShadow: style.boxShadow,
-      outlineStyle: style.outlineStyle,
-      paddingTop: style.paddingTop,
-      paddingBottom: style.paddingBottom,
-    };
-  });
-  expect(inputFrameStyles).toMatchObject({
-    borderTopWidth: "0px",
-    borderRightWidth: "0px",
-    borderBottomWidth: "0px",
-    borderLeftWidth: "0px",
-    outlineStyle: "none",
-    paddingTop: "0px",
-    paddingBottom: "0px",
-  });
-  expect(hasVisibleBoxShadow(inputFrameStyles.boxShadow)).toBe(false);
+  // 共通 SearchField は input 自体が枠とアイコン余白を持つ。
+  expect(inputBox!.x).toBeGreaterThanOrEqual(fieldBox!.x);
+  expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(fieldBox!.x + fieldBox!.width + 1);
+  expect(Math.abs(inputBox!.height - fieldBox!.height)).toBeLessThanOrEqual(1);
+  await expect(input).toHaveCSS("border-top-width", "1px");
+  const leadingPadding = await input.evaluate(element => parseFloat(getComputedStyle(element).paddingLeft));
+  expect(leadingPadding).toBeGreaterThanOrEqual(28);
+  await expect(input).toHaveAttribute("aria-describedby", /.+/);
 
   const kindFilter = playground.getByRole("combobox", { name: "概念の種類", exact: true });
   await kindFilter.focus();
@@ -470,24 +451,11 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
     .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid")))
     .toBe("ontology-graph-search");
 
-  const focusedInputStyles = await input.evaluate((element) => {
-    const style = window.getComputedStyle(element);
-    return {
-      borderTopWidth: style.borderTopWidth,
-      boxShadow: style.boxShadow,
-      outlineStyle: style.outlineStyle,
-    };
-  });
-  expect(focusedInputStyles).toMatchObject({
-    borderTopWidth: "0px",
-    outlineStyle: "none",
-  });
-  expect(hasVisibleBoxShadow(focusedInputStyles.boxShadow)).toBe(false);
-
-  const focusedFieldShadow = await field.evaluate(
-    (element) => window.getComputedStyle(element).boxShadow
-  );
-  expect(hasVisibleBoxShadow(focusedFieldShadow)).toBe(true);
+  // 共通フォーム規約の枠線と内側の影でキーボードフォーカスを示す。
+  await expect(input).toBeFocused();
+  const focusShadow = await input.evaluate(element => getComputedStyle(element).boxShadow);
+  expect(hasVisibleBoxShadow(focusShadow)).toBe(true);
+  await expect(input).toHaveCSS("outline-style", "none");
 
   if (viewportWidth >= 640) {
     const laneBox = await playground.getByTestId("ontology-graph-lane-business").boundingBox();
@@ -717,7 +685,15 @@ test("グラフ操作部は旧版の外観でモード・凡例・ズーム・�
   await search.press("Escape");
   await expect(nav).toHaveCount(0);
   await expectNoHorizontalScroll(page);
-  await playground.screenshot({ path: testInfo.outputPath("ontology-controls-restored.png") });
+  // 長い親領域を撮ると、画布が画面外になり遅延描画の空画像になる。
+  const canvas = playground.getByTestId("ontology-graph-canvas");
+  const screenshotWidth = page.viewportSize()!.width;
+  await page.setViewportSize({ width: screenshotWidth, height: 1200 });
+  await canvas.evaluate(element => element.scrollIntoView({ block: "center" }));
+  await expect(canvas.locator(".react-flow__node").first()).toBeVisible();
+  await playground.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
+  await expectEntireGraphInCanvas(playground);
+  await canvas.screenshot({ path: testInfo.outputPath("ontology-controls-restored.png") });
 });
 
 test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができる", { tag: "@responsive" }, async ({ page }, testInfo) => {

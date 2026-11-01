@@ -73,7 +73,8 @@ export default defineConfig(({ command, isPreview }) => {
       },
       // 共有 UI パッケージ（file: リンク）の React 重複を防ぐ（"Invalid hook call" 回避）。
       // 共有システム設定パッケージが Router / React Query の context を共有できるよう、これらも 1 コピーへ集約する（#97）。
-      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query"],
+      // 共通画布の provider と製品の hook も同じ React Flow context を使う。
+      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query", "@xyflow/react"],
     },
     server: {
       host: "0.0.0.0",

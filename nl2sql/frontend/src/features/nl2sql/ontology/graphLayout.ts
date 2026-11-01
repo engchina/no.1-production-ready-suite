@@ -3,10 +3,8 @@
 import { formatDbObjectName } from "../dbObjectIdentity";
 import type { OntologyGraph, OntologyJsonValue, OntologyNode, OntologyNodeKind } from "./types";
 
-export interface GraphPoint {
-  x: number;
-  y: number;
-}
+import type { GraphPoint, GraphLayoutPositions } from "@production-ready/ui";
+export type { GraphPoint } from "@production-ready/ui";
 
 export type OntologyGraphSemanticLaneId = "business" | "attribute" | "physical" | "detail";
 
@@ -17,8 +15,7 @@ export interface OntologyGraphSemanticLane {
   nodeCount: number;
 }
 
-export interface OntologyGraphSemanticLayout {
-  positions: Map<string, GraphPoint>;
+export interface OntologyGraphSemanticLayout extends GraphLayoutPositions {
   lanes: OntologyGraphSemanticLane[];
   laneByNodeId: Map<string, OntologyGraphSemanticLaneId>;
   clusterByNodeId: Map<string, string>;

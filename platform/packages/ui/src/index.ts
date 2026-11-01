@@ -3,6 +3,18 @@
 // デザイントークン CSS は別 export（"@production-ready/ui/tokens.css"）で取り込む。
 
 // --- lib ---
+export {
+  layoutGraphHierarchy,
+  applyGraphNodeDimensionChanges,
+  type GraphNodeDimensions,
+  type GraphPoint,
+  type GraphLayoutNode,
+  type GraphLayoutEdge,
+  type GraphLayoutInput,
+  type GraphLayoutResult,
+  type GraphLayoutPositions,
+  type GraphLayoutStrategy,
+} from "./lib/graph-layout";
 export { cn } from "./lib/utils";
 export { surfaceTintFor, type SurfaceTint } from "./lib/surface-tint";
 export {
