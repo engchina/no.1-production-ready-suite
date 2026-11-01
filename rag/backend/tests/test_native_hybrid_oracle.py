@@ -9,7 +9,7 @@ import pytest
 
 from app.api.routes.search import _resolve_query_context
 from app.clients.oracle import OracleClient
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.rag.answer_engine import AnswerEngine, _SearchState
 from app.rag.chunking import Chunk
 from app.rag.request_context import (
@@ -30,7 +30,7 @@ class _Embedding:
 class _FirstNativeReadOracle(OracleClient):
     """初回の範囲件数と実行行数だけを保持し、合成 CI の空結果を切り分ける。"""
 
-    def __init__(self, settings):
+    def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
         self.read_tag = "native_first_read_" + uuid4().hex[:12]
         self.first_reads: list[dict[str, object]] = []
