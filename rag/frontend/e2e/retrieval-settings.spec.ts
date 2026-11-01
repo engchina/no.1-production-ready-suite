@@ -579,6 +579,7 @@ for (const width of [1280, 375]) {
       await expect(search).toHaveAccessibleDescription(/原質問.*生成した検索文には.*行いません/);
       await search.click();
       await page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+      await expect(page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true })).not.toHaveAttribute("aria-busy", "true");
       await expect(search).toBeChecked();
       expect(saved.at(-1)).toMatchObject({ runtime_terms_search_enabled: true, query_strategy: "auto_routing" });
       expect(saved.at(-1)).not.toHaveProperty("runtime_terms_answer_enabled");
@@ -587,6 +588,8 @@ for (const width of [1280, 375]) {
       await confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true }).click();
       await expect(confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).toBeDisabled();
       expect(saved.at(-1)).toEqual({ runtime_rules_confirmation_enabled: true });
+      await expect(confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).not.toHaveAttribute("aria-busy", "true");
+      await expect(confirm).toBeChecked();
       await area.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`search-expressions-${width}-${theme}.png`) });
       await expectNoPageOverflow(page);
@@ -602,6 +605,7 @@ for (const width of [1280, 375]) {
         const save = card.getByRole("button", { name: field === "runtime_terms_answer_enabled" ? "用語・同義語の使用を保存" : "登録ルールの回答設定を保存", exact: true });
         await save.click();
         await expect(save).toBeDisabled();
+        await expect(save).not.toHaveAttribute("aria-busy", "true");
         expect(saved.at(-1)).toEqual({ [field]: true });
       }
       await page.getByTestId("answer-term-settings-card").scrollIntoViewIfNeeded();
