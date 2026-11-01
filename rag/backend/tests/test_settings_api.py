@@ -3569,7 +3569,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
         "rrf_method_ratio": [1.0, 1.0],
-        "rrf_source_ratio": [8.0, 2.0],
+        "rrf_source_ratio": [7.0, 3.0],
         "runtime_terms_search_enabled": False,
         "runtime_terms_answer_enabled": False,
         "query_strategy": "auto_routing",
@@ -3975,11 +3975,11 @@ def test_rule_usage_settings_are_independent(
 def test_rrf_ratios_default_save_and_reload(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     settings = get_settings()
     monkeypatch.setattr(settings, "rag_rrf_method_ratio", (1.0, 1.0))
-    monkeypatch.setattr(settings, "rag_rrf_source_ratio", (8.0, 2.0))
+    monkeypatch.setattr(settings, "rag_rrf_source_ratio", (7.0, 3.0))
     env_file = _settings_env_file(monkeypatch, tmp_path)
     initial = client.get("/api/settings/answering").json()["data"]
     assert initial["rrf_method_ratio"] == [1, 1]
-    assert initial["rrf_source_ratio"] == [8, 2]
+    assert initial["rrf_source_ratio"] == [7, 3]
     response = client.patch(
         "/api/settings/answering", json={"rrf_method_ratio": [1, 3], "rrf_source_ratio": [4, 1]}
     )

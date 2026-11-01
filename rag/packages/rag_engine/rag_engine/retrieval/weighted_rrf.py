@@ -13,8 +13,8 @@ from dataclasses import dataclass
 class RrfWeights:
     vector: float = 1
     keyword: float = 1
-    original: float = 8
-    additional: float = 2
+    original: float = 7
+    additional: float = 3
 
     def __post_init__(self) -> None:
         values = (self.vector, self.keyword, self.original, self.additional)

@@ -55,8 +55,8 @@ class AdbVectorStoreTests(unittest.TestCase):
         from rag_engine.retrieval.weighted_rrf import RrfWeights, source_weights
 
         weights = source_weights(["原質問", "追加 A", "追加 B", "追加 C", "追加 D"], RrfWeights())
-        self.assertAlmostEqual(weights["原質問"], 0.8)
-        self.assertAlmostEqual(sum(list(weights.values())[1:]), 0.2)
+        self.assertAlmostEqual(weights["原質問"], 0.7)
+        self.assertAlmostEqual(sum(list(weights.values())[1:]), 0.3)
 
     def test_each_query_keeps_its_top_candidates_after_fusion(self):
         """1 つの派生質問にしか一致しない節が RRF 融合で候補上限から落ちても、その質問の上位として残す (#669)。"""
