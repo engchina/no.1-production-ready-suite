@@ -415,7 +415,9 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
         values = json.loads(prompt)["evidence"]
         calls.extend(values)
         return schema(
-            read_ids=[value["evidence_id"] for value in values], findings=[], unanswered=[]
+            read_receipts={value["evidence_id"]: True for value in values},
+            findings=[],
+            unanswered=[],
         )
 
     with prompt_overrides({"generation.batchReading": custom}):
