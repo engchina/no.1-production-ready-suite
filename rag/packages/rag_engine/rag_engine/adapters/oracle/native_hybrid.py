@@ -51,10 +51,15 @@ def native_search_request(
     for scope, first, last in allowed_scope_ranges:
         if scope < 1 or first > last:
             raise ValueError("検索範囲の番号区間が不正です。")
-        groups.append({"op": "AND", "args": [
-            {"op": "=", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [scope]},
-            {"op": "BETWEEN", "col": "CHUNK_INDEX", "type": "number", "args": [first, last]},
-        ]})
+        groups.append(
+            {
+                "op": "AND",
+                "args": [
+                    {"op": "=", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [scope]},
+                    {"op": "BETWEEN", "col": "CHUNK_INDEX", "type": "number", "args": [first, last]},
+                ],
+            }
+        )
     from rag_engine.retrieval.weighted_rrf import RrfWeights
 
     weights = RrfWeights(vector=method_ratio[0], keyword=method_ratio[1])
