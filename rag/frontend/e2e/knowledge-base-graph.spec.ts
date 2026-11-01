@@ -350,11 +350,17 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   await page.reload();
   await expect(settings.getByText("停止済み", { exact: true })).toBeVisible();
   await settings.getByRole("button", { name: "残りを続ける", exact: true }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "不足・更新分を構築", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "残りを続ける", exact: true }).click();
   await expect(settings.getByText("処理終了。文書ごとの結果を確認してください。")).toBeVisible();
   await expect(settings.getByRole("cell", { name: "部分構築", exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
   await settings.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("structure-build-completed.png"), fullPage: false });
+  await settings.getByRole("button", { name: "既存文書に構築", exact: true }).click();
+  await settings.getByRole("button", { name: "再構築", exact: true }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByRole("heading", { name: "構築済みも含めて再構築しますか？" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "再構築", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
   expect(starts).toBe(2);
 });

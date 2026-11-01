@@ -60,7 +60,8 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable }: { kbId:
   }, [job.data?.status, active, kbId, qc]);
   const action = useMutation({ mutationFn: (mode: StructureBuildMode | "stop") => mode === "stop" ? api.stopStructureBuild(kbId) : api.startStructureBuild(kbId, mode), onSuccess: () => { setPreview(false); setOffset(0); void qc.invalidateQueries({ queryKey: ["structure-build-job", kbId] }); } });
   const start = async (mode: StructureBuildMode) => {
-    const ok = await confirm({ title: t("knowledgeBases.structure.build.confirmTitle"), description: t("knowledgeBases.structure.build.confirmBody"), confirmLabel: t("knowledgeBases.structure.build.start"), tone: "warning" });
+    const labels: Record<StructureBuildMode, I18nKey> = { missing: "knowledgeBases.structure.build.start", rebuild: "knowledgeBases.structure.build.rebuild", retry: "knowledgeBases.structure.build.retry", continue: "knowledgeBases.structure.build.continue" };
+    const ok = await confirm({ title: t(mode === "rebuild" ? "knowledgeBases.structure.build.rebuildConfirmTitle" : "knowledgeBases.structure.build.confirmTitle"), description: t(mode === "rebuild" ? "knowledgeBases.structure.build.rebuildConfirmBody" : "knowledgeBases.structure.build.confirmBody"), confirmLabel: t(labels[mode]), tone: "warning" });
     if (ok) action.mutate(mode);
   };
   const view = preview ? plan.data : job.data?.job_id ? job.data : null;

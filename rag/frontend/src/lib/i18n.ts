@@ -2644,6 +2644,8 @@ export const ja = {
   "knowledgeBases.structure.build.stop": "停止",
   "knowledgeBases.structure.build.continue": "残りを続ける",
   "knowledgeBases.structure.build.retry": "失敗分を再試行",
+  "knowledgeBases.structure.build.rebuildConfirmTitle": "構築済みも含めて再構築しますか？",
+  "knowledgeBases.structure.build.rebuildConfirmBody": "準備不足の文書を除き、構築済みの文書も現在有効な構造情報で作り直します。文書ごとに成功してから置き換え、失敗した場合は既存の構造図を保持します。",
   "knowledgeBases.structure.build.confirmTitle": "文書構造索引を構築しますか？",
   "knowledgeBases.structure.build.confirmBody": "現在有効な文書の構造情報を使用します。文書ごとに構築し、成功後に置き換えます。画面を離れても処理は続きます。",
   "knowledgeBases.structure.build.document": "文書",
