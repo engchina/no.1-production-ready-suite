@@ -108,16 +108,18 @@ def _scope(
 @pytest.mark.parametrize(
     ("statuses", "expected"),
     [
-        (["addressed", "addressed"], "verified"),
-        (["addressed", "partial"], "partial"),
-        (["addressed", "missing"], "partial"),
-        (["addressed", "unknown"], "partial"),
+        (["addressed", "addressed"], "unverified"),
+        (["addressed", "partial"], "unverified"),
+        (["addressed", "missing"], "unverified"),
+        (["addressed", "unknown"], "unverified"),
         (["unknown"], "unverified"),
         ([], "unverified"),
     ],
     ids=["all-addressed", "partial", "missing", "unknown-mixed", "all-unknown", "no-requests"],
 )
-def test_answer_verification_reads_the_audited_requests(statuses: list[str], expected: str) -> None:
+def test_answer_verification_does_not_infer_from_request_coverage(
+    statuses: list[str], expected: str
+) -> None:
     diagnostics = {
         "envelope": {"requests": [{"id": str(i), "status": s} for i, s in enumerate(statuses)]}
     }
@@ -184,7 +186,7 @@ async def test_recorder_saves_summary_trace_record_and_purges_once() -> None:
     assert first["message_id"] == "msg-1"
     assert first["model_id"] == "model-a"
     assert first["answer_outcome"] == "answered"
-    assert first["verification"] == "verified"
+    assert first["verification"] == "unverified"
     assert first["confidence"] == "high"
     # 回答を作った実行の根拠は回答の記録にあるので、ここには持たない。
     assert first["citations"] is None
@@ -539,8 +541,10 @@ def test_list_api_requires_the_history_menu(monkeypatch: MonkeyPatch) -> None:
     assert response.status_code == 403
 
 
+@pytest.mark.parametrize("validation", [None, {"status": "completed", "valid": True}])
 def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     monkeypatch: MonkeyPatch,
+    validation: dict[str, object] | None,
 ) -> None:
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions("viewer", ["menu.history"])
@@ -573,7 +577,11 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
         "citations_json": [
             {"document_id": "doc-1", "chunk_id": "doc-1:c1", "text": "受注番号", "score": 0.9}
         ],
-        "diagnostics_json": {"outcome": "answered", "execution_steps": []},
+        "diagnostics_json": {
+            "outcome": "answered",
+            "execution_steps": [],
+            **({"answer_validation": validation} if validation else {}),
+        },
         "evaluation_input_json": None,
         "evaluation_json": None,
         "created_at": datetime(2026, 10, 15, tzinfo=UTC),
@@ -624,7 +632,7 @@ def test_detail_api_returns_404_outside_the_scope_and_joins_the_answer_record(
     # 処理の経過（trace）・段・工程の秒の古い形式の項目は返さない。
     assert not {"stages", "steps", "stage_events", "progress_events", "trace_summary"} & set(data)
     assert data["feedback"][0]["feedback_id"] == "fb-1"
-    assert data["verification"] == "verified"
+    assert data["verification"] == ("verified" if validation else "unverified")
     assert data["error_code"] is None
     assert data["storage_failures"] == [
         {"step": "chat_message_save", "error_type": "DatabaseError", "error_code": "ORA-40441"}
@@ -1328,3 +1336,26 @@ async def test_wrapped_answer_failure_records_safe_cause_and_keeps_wrapper_ident
     assert record["stages"]["error_code"] == "SYNTHETIC_FAILURE"
     assert record["stages"]["error_wrapper_type"] == "AnswerExecutionError"
     assert "秘密" not in json.dumps(record, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("verification", ["verified", "partial", "unverified"])
+def test_legacy_run_summary_does_not_infer_verification(verification: str) -> None:
+    from app.api.routes.history import _summary_fields
+
+    fields = _summary_fields({"answer_generated": 1, "verification": verification}, {})
+    assert fields["validation_execution"] is None
+    assert fields["verification"] == "unverified"
+
+
+@pytest.mark.parametrize(
+    "validation",
+    [
+        {"valid": True},
+        {"status": "disabled", "valid": True},
+        {"status": "error", "counts": {"supported": 1}},
+    ],
+)
+def test_only_completed_validation_can_establish_verification(
+    validation: dict[str, object],
+) -> None:
+    assert answer_verification({"answer_validation": validation}) == "unverified"

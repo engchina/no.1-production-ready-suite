@@ -117,36 +117,20 @@ def answer_validation_execution(
 
 
 def answer_verification(diagnostics: Mapping[str, Any] | None) -> RunVerification | None:
-    """最終の資料との照合を優先し、旧記録は要求ごとの監査から検証状態を読む。
-
-    - verified: 監査した要求がすべて根拠で答えられている。
-    - partial: 一部の要求が答えられていない・確かめられていない。
-    - unverified: 監査の記録が無い（承認済み FAQ・確認の質問だけの応答・古い記録など）。
-    回答の構造（`envelope.requests`）が無ければ None ではなく unverified にする（回答はある）。
-    """
+    """資料照合の実行結果を読む。要求への回答状況から照合済みとは推定しない。"""
     if diagnostics is None:
         return None
-    if semantic_audit_is_diagnostic_only(diagnostics):
-        return "unverified"
-    validation = diagnostics.get("answer_validation")
-    if isinstance(validation, Mapping):
-        if validation.get("valid") is True:
-            return "verified"
-        counts = validation.get("counts")
+    execution = answer_validation_execution(diagnostics)
+    if execution == "passed":
+        return "verified"
+    if execution == "partial":
+        return "partial"
+    if execution == "failed":
+        validation = diagnostics.get("answer_validation")
+        counts = validation.get("counts") if isinstance(validation, Mapping) else None
         supported = counts.get("supported") if isinstance(counts, Mapping) else 0
         return "partial" if isinstance(supported, int) and supported > 0 else "unverified"
-    envelope = diagnostics.get("envelope")
-    requests = envelope.get("requests") if isinstance(envelope, Mapping) else None
-    statuses = [
-        str(item.get("status") or "unknown")
-        for item in (requests if isinstance(requests, list) else [])
-        if isinstance(item, Mapping)
-    ]
-    if not statuses or all(status == "unknown" for status in statuses):
-        return "unverified"
-    if all(status == "addressed" for status in statuses):
-        return "verified"
-    return "partial"
+    return "unverified"
 
 
 @dataclass

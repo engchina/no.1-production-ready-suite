@@ -56,11 +56,10 @@ describe("実行履歴の表示の対応表", () => {
     ).toEqual({ variant: "danger", label: "根拠不足" });
   });
 
-  it("資料との照合は 3 段階で、回答が無ければ出さない", () => {
-    expect(runVerificationView("verified")?.label).toBe("照合済み");
-    expect(runVerificationView("unverified")?.label).toBe("未照合");
-    expect(runVerificationView("partial")?.variant).toBe("warning");
-    expect(runVerificationView("unverified")?.variant).toBe("neutral");
+  it("照合の実行記録がない旧集約値から照合済みと推定しない", () => {
+    for (const value of ["verified", "partial", "unverified"] as const) {
+      expect(runVerificationView(value)).toEqual({ variant: "neutral", label: "確認状態が不明" });
+    }
     expect(runVerificationView(null)).toBeNull();
   });
 
