@@ -429,10 +429,11 @@ for (const viewport of [
     // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
     await expect(current).toContainText("検索文から根拠の候補を集める");
     // 送り直しで API への送信が多いときは送信の回数も示す（#2966）。
-    await expect(understand).toContainText("LLM 1 回・送信 2 回");
+    await expect(understand).not.toContainText("LLM 1 回・送信 2 回");
     const liveToggle = page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-toggle`);
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(understand).toContainText("LLM 1 回・送信 2 回");
     await expect(page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-details`)).toContainText(
       "答える要求"
     );
@@ -876,6 +877,7 @@ for (const viewport of [
     const liveToggle = page.getByTestId(`chat-answer-progress-step-${rewriteId}-toggle`);
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(understand).toContainText("LLM 1 回・送信 2 回");
     await expect(page.getByTestId(`chat-answer-progress-step-${rewriteId}-details`)).toContainText("答える要求");
     await expect(current).toContainText("検索文から根拠の候補を集める");
     await expect.poll(() => timer.textContent(), { timeout: 4_000 }).not.toBe(firstElapsed);
