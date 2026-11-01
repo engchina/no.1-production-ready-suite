@@ -1073,6 +1073,35 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 });
 
 test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {
+  test("軌跡の識別子・時刻・技術属性の行間が揃う", async ({page}, testInfo) => {
+    await mockLocalAuth(page);
+    const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+    await mockRuns(page, [row]);
+    await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+      {key: "root", spec: ragSpan.root(), at: [0, 2]},
+      {key: "empty", spec: ragSpan.step("検索文をまとめ、検索語を作る"), at: [0, .1]},
+    ])});
+    await page.goto(`/history/${row.run_id}`);
+    const timeline = page.getByTestId("run-history-timeline");
+    await page.getByTestId("run-history-timeline-summary").click();
+    await inspectTraceStep(page, timeline, spanStepId("empty"));
+    const inspector = page.locator("[data-trace-inspector]");
+    await expect(inspector.locator("[data-trace-processing-content]")).toHaveCount(0);
+    const rows = await inspector.locator("dd").evaluateAll(nodes => nodes.map(node => {
+      const box = node.getBoundingClientRect();
+      return {top: box.top, bottom: box.bottom, height: box.height};
+    }));
+    expect(rows.length).toBeGreaterThanOrEqual(5);
+    const heights = rows.map(row => row.height);
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+    if (testInfo.project.name === "desktop") {
+      const gaps = rows.slice(1).map((row, index) => row.top - rows[index].bottom);
+      expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
+    }
+    await expect(inspector.locator("time")).toHaveCount(2);
+    await expectNoPageOverflow(page);
+    await inspector.screenshot({path: testInfo.outputPath("trace-field-spacing.png")});
+  });
   test("Oracle hybrid と追加検索の経路、WRRF の寄与を確認できる", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});

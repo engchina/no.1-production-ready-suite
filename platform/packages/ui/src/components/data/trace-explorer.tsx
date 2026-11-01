@@ -7,7 +7,6 @@ import { traceCategory, traceMeasuredTiming, traceOrderedSteps, traceSearchText,
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Disclosure } from "../ui/disclosure";
-import { CopyButton } from "../ui/copy-button";
 import { SearchField } from "../ui/search-field";
 import { Tabs, TabPanel } from "../ui/tabs";
 import { FilterSelect } from "./list-filters";
@@ -15,7 +14,7 @@ import { ListToolbar } from "./list-toolbar";
 import { LoadMoreFooter } from "./load-more-footer";
 import { formatRunDuration } from "./run-history";
 import { RUN_TIMELINE_CHEVRON_SIZE, runTimelineHasChildren, resolveRunDetailLabels, RunStepStatusIcon, stepDurationMs, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
-import { RunStepDetailsView, RunStepTiming, runStepContent, runStepTechnicalFields, runStepResultSummary } from "./run-step-details";
+import { hasRunStepDetails, RunStepDetailsView, RunStepTiming, runStepContent, runStepTechnicalFields, runStepResultSummary } from "./run-step-details";
 
 
 const CATEGORY_ICON = { model: Bot, tool: Wrench, stage: Layers };
@@ -171,14 +170,14 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
             {selected ? <>
               {selectedParents.length ? <p className="mt-1 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">{labels.location}: {selectedParents.at(-1)?.label}</p> : null}
               <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
-              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs"><span>Span ID:</span><code className="min-w-0 break-all font-mono text-xs text-fg-muted">{selected.id}</code><CopyButton text={selected.id} label={labels.copy} copiedMessage={labels.copied} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /></div>
-              <div className="grid min-w-0 gap-2" data-trace-inspector-content="">
-                <div data-trace-processing-content="" className="grid min-w-0 gap-2">
+              <div className="grid min-w-0 gap-1" data-trace-inspector-content="">
+                <RunStepDetailsView details={{fields: [{label: "Span ID", value: selected.id, mono: true, copyValue: selected.id, copyLabel: labels.copy}]}} />
+                {(selectedParents.length > 1 || selected.detail || hasRunStepDetails(runStepContent(selected.details)) || selected.details?.call || selected.children) ? <div data-trace-processing-content="" className="my-2 grid min-w-0 gap-2">
                 {selectedParents.length > 1 ? <Disclosure summary={labels.fullPath} variant="plain" size="sm"><ol aria-label={labels.fullPath} className="grid gap-1 text-xs text-fg-muted">{selectedParents.map(step => <li key={step.id}>{step.label}</li>)}</ol></Disclosure> : null}
                   {selected.detail ? <p className="text-xs leading-5 text-fg-muted">{selected.detail}</p> : null}
                   <RunStepDetailsView showStatistics={false} showTiming={false} details={{...runStepContent(selected.details), call: selected.details?.call}} timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: stepDurationMs(selected)}} />
                   {selected.children}
-                </div>
+                </div> : null}
                 <div data-trace-timing=""><RunStepTiming startedAt={selected.startedAt} finishedAt={selected.finishedAt} /></div>
                 <div data-trace-technical=""><RunStepDetailsView details={{fields: runStepTechnicalFields(selected.details)}} /></div>
               </div>
