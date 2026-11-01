@@ -512,6 +512,8 @@ async def update_answering_settings(
     updates = {
         field: value
         for field, value in (
+            ("rag_min_similarity", payload.min_similarity),
+            ("rag_rerank_min_relevance_score", payload.rerank_min_relevance_score),
             ("rag_runtime_rules_confirmation_enabled", payload.runtime_rules_confirmation_enabled),
             ("rag_runtime_rules_answer_enabled", payload.runtime_rules_answer_enabled),
             ("rag_hybrid_search_backend", payload.hybrid_search_backend),
@@ -572,6 +574,8 @@ async def update_answering_settings(
                     candidate.rag_runtime_terms_answer_enabled
                 ),
                 "RAG_HYBRID_SEARCH_BACKEND": candidate.rag_hybrid_search_backend,
+                "RAG_MIN_SIMILARITY": str(candidate.rag_min_similarity),
+                "RAG_RERANK_MIN_RELEVANCE_SCORE": str(candidate.rag_rerank_min_relevance_score),
                 "RAG_RRF_METHOD_RATIO": json.dumps(candidate.rag_rrf_method_ratio),
                 "RAG_RRF_SOURCE_RATIO": json.dumps(candidate.rag_rrf_source_ratio),
                 "RAG_QUERY_STRATEGY": candidate.rag_query_strategy,
@@ -605,6 +609,8 @@ async def update_answering_settings(
 
 def _answering_settings_data(settings: Settings) -> AnsweringSettingsData:
     return AnsweringSettingsData(
+        min_similarity=settings.rag_min_similarity,
+        rerank_min_relevance_score=settings.rag_rerank_min_relevance_score,
         runtime_rules_confirmation_enabled=settings.rag_runtime_rules_confirmation_enabled,
         runtime_rules_answer_enabled=settings.rag_runtime_rules_answer_enabled,
         runtime_terms_search_enabled=settings.rag_runtime_terms_search_enabled,

@@ -74,6 +74,9 @@ class NativeOracle(OracleClient):
                 "score": 100 if spec["search_fusion"] == "UNION" else 0.8,
                 "native_vector_rank": 1,
                 "native_text_rank": 1,
+                "native_vector_score": 0 if spec["search_fusion"] == "TEXT_ONLY" else 100,
+                "native_text_score": 0 if spec["search_fusion"] == "VECTOR_ONLY" else 80,
+                "native_similarity": None if spec["search_fusion"] == "TEXT_ONLY" else 1.0,
                 "file_name": "文書 A.txt",
             }
         ]
@@ -229,3 +232,163 @@ async def test_only_complete_authorized_sets_are_compressed() -> None:
         filters={"page_number_min": "1", "page_number_max": "1"},
     )
     assert len([sql for sql, _ in client.calls if "DBMS_HYBRID_VECTOR.SEARCH" in sql]) == 1
+
+
+@pytest.mark.parametrize(
+    ("vector_score", "text_score", "similarity", "minimum", "expected"),
+    [
+        (100.0, 0.0, 1.0, 0.3, (10 / 11 / 61, 0.0)),
+        (0.0, 18.0, None, 0.3, (0.0, 1 / 11 / 62)),
+        (58.82, 18.0, 0.3, 0.3, (10 / 11 / 61, 1 / 11 / 62)),
+        (58.82, 18.0, 0.299, 0.3, (0.0, 1 / 11 / 62)),
+        (58.82, 0.0, 0.299, 0.3, (0.0, 0.0)),
+        (0.0, 18.0, 0.9, 0.3, (0.0, 1 / 11 / 62)),
+        (100.0, 18.0, None, 0.3, (0.0, 1 / 11 / 62)),
+    ],
+)
+def test_native_rank_terms_keep_only_actual_admitted_channel_contributions(
+    vector_score: float,
+    text_score: float,
+    similarity: float | None,
+    minimum: float,
+    expected: tuple[float, float],
+) -> None:
+    from rag_engine.adapters.oracle.native_hybrid import native_rank_terms
+
+    terms = native_rank_terms(
+        vector_rank=1,
+        text_rank=2,
+        vector_score=vector_score,
+        text_score=text_score,
+        similarity=similarity,
+        min_similarity=minimum,
+        method_ratio=(10, 1),
+        k=60,
+    )
+    assert (terms.vector, terms.text) == pytest.approx(expected)
+    assert terms.total == pytest.approx(sum(expected))
+    assert bool(terms.vector_rank) == (expected[0] > 0)
+    assert bool(terms.text_rank) == (expected[1] > 0)
+
+
+@pytest.mark.parametrize("ratio", [(0, 1), (1, 0), (2, 3)])
+def test_native_rank_terms_respect_zero_weight_and_original_rank_gaps(
+    ratio: tuple[int, int],
+) -> None:
+    from rag_engine.adapters.oracle.native_hybrid import native_rank_terms
+
+    terms = native_rank_terms(
+        vector_rank=5,
+        text_rank=7,
+        vector_score=80,
+        text_score=12,
+        similarity=0.5,
+        min_similarity=0.3,
+        method_ratio=ratio,
+        k=20,
+    )
+    assert terms.vector == pytest.approx(ratio[0] / sum(ratio) / 25)
+    assert terms.text == pytest.approx(ratio[1] / sum(ratio) / 27)
+
+
+@pytest.mark.parametrize("channel", ["hybrid", "vector"])
+def test_native_threshold_keeps_text_independent_and_uses_true_cosine(channel: str) -> None:
+    from app.clients.oracle import _apply_native_search_threshold
+
+    rows = [
+        {
+            "chunk_id": "vector",
+            "score": 99.85,
+            "native_vector_score": 100,
+            "native_text_score": 0,
+            "native_vector_rank": 1,
+            "native_text_rank": 4,
+            "native_similarity": 0.8,
+        },
+        {
+            "chunk_id": "both-low",
+            "score": 90,
+            "native_vector_score": 58.82,
+            "native_text_score": 18,
+            "native_vector_rank": 2,
+            "native_text_rank": 1,
+            "native_similarity": 0.1,
+        },
+        {
+            "chunk_id": "low",
+            "score": 80,
+            "native_vector_score": 60,
+            "native_text_score": 0,
+            "native_vector_rank": 3,
+            "native_text_rank": 4,
+            "native_similarity": 0.2,
+        },
+        {
+            "chunk_id": "text",
+            "score": 70,
+            "native_vector_score": 0,
+            "native_text_score": 7,
+            "native_vector_rank": 4,
+            "native_text_rank": 2,
+            "native_similarity": None,
+        },
+    ]
+    selected = _apply_native_search_threshold(rows, channel, Settings(rag_min_similarity=0.3))
+    assert [row["chunk_id"] for row in selected] == (
+        ["vector", "both-low", "text"] if channel == "hybrid" else ["vector"]
+    )
+    assert selected.threshold["raw_count"] == 4
+    assert selected.threshold["retained_count"] == len(selected)
+    assert selected.threshold["excluded_count"] == 4 - len(selected)
+    assert selected.threshold["rejected_vector_count"] == 2
+    assert selected[0]["native_effective_text_rank"] == 0
+    if channel == "hybrid":
+        assert selected[0]["score"] == pytest.approx(10 / 11 / 61)
+        assert selected[1]["score"] == pytest.approx(1 / 11 / 61)
+        assert selected[1]["native_effective_vector_rank"] == 0
+        assert selected[2]["score"] == pytest.approx(1 / 11 / 62)
+        assert selected[0]["native_wrrf_score"] == 99.85
+    assert rows[0]["score"] == 99.85
+
+
+@pytest.mark.asyncio
+async def test_standalone_native_vector_uses_same_cosine_metadata_and_one_call() -> None:
+    client = NativeOracle()
+    hits = await client.vector_search([1.0] * 1536, 4, query="合成の質問")
+    assert hits and hits[0].metadata["cosine_similarity"] == 1.0
+    calls = [(sql, binds) for sql, binds in client.calls if "DBMS_HYBRID_VECTOR.SEARCH" in sql]
+    assert len(calls) == 1
+    assert "VECTOR_DISTANCE" in calls[0][0]
+    scope_sql = [sql for sql, _ in client.calls if "DBMS_HYBRID_VECTOR.SEARCH" not in sql]
+    assert all("VECTOR_DISTANCE" not in sql for sql in scope_sql)
+
+
+@pytest.mark.asyncio
+async def test_vector_filter_does_not_renumber_surviving_original_rank() -> None:
+    class GappedNativeOracle(NativeOracle):
+        async def _fetch_all(
+            self, sql: str, binds: Mapping[str, object] | None = None
+        ) -> list[dict[str, object]]:
+            rows = await super()._fetch_all(sql, binds)
+            if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+                rows[0]["native_vector_rank"] = 5
+            return rows
+
+    client = GappedNativeOracle()
+    hits = await client.vector_search([1.0] * 1536, 8)
+    assert hits[0].metadata["vector_rank"] == 5
+
+
+def test_backend_threshold_defaults_and_explicit_saved_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RAG_MIN_SIMILARITY", raising=False)
+    monkeypatch.delenv("RAG_RERANK_MIN_RELEVANCE_SCORE", raising=False)
+    default = Settings(_env_file=None)
+    assert default.rag_min_similarity == 0.05
+    assert default.rag_rerank_min_relevance_score == 0.4
+    monkeypatch.setenv("RAG_MIN_SIMILARITY", "0.18")
+    monkeypatch.setenv("RAG_RERANK_MIN_RELEVANCE_SCORE", "0.0")
+    saved = Settings(_env_file=None)
+    assert saved.rag_min_similarity == 0.18
+    assert saved.rag_rerank_min_relevance_score == 0.0

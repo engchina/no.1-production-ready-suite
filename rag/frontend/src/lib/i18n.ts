@@ -4167,6 +4167,11 @@ export const ja = {
   "settings.answering.section_expansion_input_token_percent": "根拠の入力の上限（%）",
   "settings.answering.options": "回答の検索のオプション",
   "settings.answering.rerank": "Rerank で検索候補を並べ替える",
+  "settings.answering.minSimilarity": "コサイン類似度の下限",
+  "settings.answering.minSimilarityHint": "0〜1で指定します。ベクトル検索の候補を選ぶ下限です。全文検索で独立して一致した候補は保持します。RRFスコアや回答の正確さを表す値ではありません。",
+  "settings.answering.rerankMinScore": "再ランキングの関連度スコア下限",
+  "settings.answering.rerankMinScoreHint": "0〜1で指定します。原質問と有効な追加質問の最高関連度が下限以上の候補を採用します。0はスコアで除外しません。無効時は適用しません。未採点の候補と明示添付は保持し、採点失敗時は検索結果の順序を保ちます。",
+  "settings.answering.thresholdInvalid": "類似度と関連度の下限は、0から1までの数値で入力してください。",
   "settings.answering.rerankHint":
     "OCI Generative AI の Rerank で、検索候補を質問との関連の強さの順に並べ替えます。",
   "settings.answering.autoFieldFilter": "質問から項目の条件を読み取る",

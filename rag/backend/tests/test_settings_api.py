@@ -3572,6 +3572,8 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "hybrid_search_backend": "oracle_native",
         "rrf_method_ratio": [10.0, 1.0],
         "rrf_source_ratio": [7.0, 3.0],
+        "min_similarity": settings.rag_min_similarity,
+        "rerank_min_relevance_score": settings.rag_rerank_min_relevance_score,
         "runtime_terms_search_enabled": False,
         "runtime_terms_answer_enabled": False,
         "query_strategy": "auto_routing",
@@ -4022,3 +4024,35 @@ def test_native_hybrid_default_and_settings_round_trip() -> None:
         ).status_code
         == 422
     )
+
+
+@pytest.mark.parametrize("values", [(0.0, 0.0), (0.3, 0.4), (1.0, 1.0)])
+def test_retrieval_thresholds_save_reload_and_preserve_other_settings(
+    values: tuple[float, float], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = get_settings()
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = client.get("/api/settings/answering").json()["data"]
+    assert before["min_similarity"] == settings.rag_min_similarity
+    assert before["rerank_min_relevance_score"] == settings.rag_rerank_min_relevance_score
+    payload = dict(zip(("min_similarity", "rerank_min_relevance_score"), values, strict=True))
+    response = client.patch("/api/settings/answering", json=payload)
+    assert response.status_code == 200, response.text
+    saved = Settings(_env_file=env_file)
+    assert saved.rag_min_similarity == values[0]
+    assert saved.rag_rerank_min_relevance_score == values[1]
+    assert client.get("/api/settings/answering").json()["data"]["min_similarity"] == values[0]
+    assert response.json()["data"]["query_strategy"] == before["query_strategy"]
+    assert response.json()["data"]["rerank_enabled"] == before["rerank_enabled"]
+
+
+@pytest.mark.parametrize("field", ["min_similarity", "rerank_min_relevance_score"])
+@pytest.mark.parametrize("value", [-0.01, 1.01, "NaN", "Infinity", "-Infinity"])
+def test_retrieval_thresholds_reject_invalid_without_persisting(
+    field: str, value: object, monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_text() if env_file.exists() else ""
+    response = client.patch("/api/settings/answering", json={field: value})
+    assert response.status_code == 422, response.text
+    assert (env_file.read_text() if env_file.exists() else "") == before

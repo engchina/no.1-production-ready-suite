@@ -454,6 +454,82 @@ class SearchHits(list[RetrievedChunk]):
     failure: Exception | None = None
 
 
+class NativeSearchRows(list[dict[str, object]]):
+    """有界な原生結果と、実際の閾値判定の集計。"""
+
+    def __init__(self, rows: list[dict[str, object]], threshold: dict[str, object]) -> None:
+        super().__init__(rows)
+        self.threshold = threshold
+
+
+def _apply_native_search_threshold(
+    rows: list[dict[str, object]], channel: str, settings: Settings
+) -> NativeSearchRows:
+    from rag_engine.adapters.oracle.native_hybrid import native_rank_terms
+
+    kept: list[dict[str, object]] = []
+    rejected_vectors = 0
+    preserved_text = 0
+    missing_similarity = 0
+    for original in rows:
+        row = dict(original)
+        similarity = (
+            _float_value(row["native_similarity"])
+            if row.get("native_similarity") is not None
+            else None
+        )
+        if channel == "keyword":
+            kept.append(row)
+            continue
+        vector_score = _float_value(row.get("native_vector_score", 0))
+        text_score = _float_value(row.get("native_text_score", 0))
+        terms = native_rank_terms(
+            vector_rank=row.get("native_vector_rank"),
+            text_rank=row.get("native_text_rank"),
+            vector_score=vector_score,
+            text_score=text_score,
+            similarity=similarity,
+            min_similarity=settings.rag_min_similarity,
+            method_ratio=settings.rag_rrf_method_ratio,
+            k=settings.rag_rrf_k,
+        )
+        row.update(
+            native_effective_vector_rank=terms.vector_rank,
+            native_effective_text_rank=terms.text_rank,
+            native_vector_contribution=terms.vector,
+            native_text_contribution=terms.text,
+        )
+        if vector_score > 0 and not terms.vector_rank:
+            rejected_vectors += 1
+            missing_similarity += int(similarity is None)
+            preserved_text += int(terms.text_rank > 0)
+        if channel == "hybrid":
+            row["native_wrrf_score"] = row.get("score")
+            row["native_rrf_contribution"] = terms.total
+            row["score"] = terms.total
+            accepted = terms.total > 0
+        else:
+            accepted = terms.vector_rank > 0
+        if accepted:
+            kept.append(row)
+    if channel == "hybrid":
+        kept.sort(key=lambda row: -_float_value(row.get("native_rrf_contribution", 0)))
+    return NativeSearchRows(
+        kept,
+        {
+            "min_similarity": settings.rag_min_similarity,
+            "raw_count": len(rows),
+            "retained_count": len(kept),
+            "excluded_count": len(rows) - len(kept),
+            "rejected_vector_count": rejected_vectors,
+            "preserved_text_count": preserved_text,
+            "missing_similarity_count": missing_similarity,
+        }
+        if channel != "keyword"
+        else {},
+    )
+
+
 class OracleClient:
     """Oracle AI Database 接続・ベクトル検索クライアント。"""
 
@@ -481,6 +557,13 @@ class OracleClient:
         """
         self._validate_embedding_width(embedding, "query embedding")
         await self._ensure_native_hybrid_ready()
+        if self._settings.rag_hybrid_search_backend == "oracle_native":
+            hits = await self._native_search_hits(
+                query, embedding, top_k, filters or {}, SearchMode.VECTOR
+            )
+            if hits.failure is not None:
+                raise hits.failure
+            return hits
         # 処理の経過の段(文書の検索の中の DB の検索。#3436・#3443)。
         with observe_call("stage", VECTOR_SEARCH_STAGE) as observation:
             return await self._vector_search_with_oracle(
@@ -7125,20 +7208,33 @@ class OracleClient:
                 for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), 1):
                     metadata: dict[str, Any] = {"retrieval_mode": channel}
                     if channel == "hybrid":
-                        score = _float_value(row.get("score", 0))
                         metadata.update(
-                            native_wrrf_score=score,
-                            native_rrf_contribution=score / (100 * (self._settings.rag_rrf_k + 1)),
-                            vector_rank=row.get("native_vector_rank"),
-                            keyword_rank=row.get("native_text_rank"),
+                            native_wrrf_score=row.get("native_wrrf_score"),
+                            native_rrf_contribution=row.get("native_rrf_contribution"),
+                            vector_rank=row.get("native_effective_vector_rank"),
+                            keyword_rank=row.get("native_effective_text_rank"),
+                            native_original_vector_rank=row.get("native_vector_rank"),
+                            native_original_text_rank=row.get("native_text_rank"),
+                            vector_contribution=row.get("native_vector_contribution"),
+                            keyword_contribution=row.get("native_text_contribution"),
                             vector_score=row.get("native_vector_score"),
                             keyword_score=row.get("native_text_score"),
                         )
                     else:
                         metadata.update(
-                            {f"{channel}_rank": rank, f"{channel}_score": row.get("score")}
+                            {
+                                f"{channel}_rank": row.get("native_effective_vector_rank", rank)
+                                if channel == "vector"
+                                else row.get("native_text_rank", rank),
+                                f"{channel}_score": row.get("score"),
+                            }
                         )
                     metadata = {key: value for key, value in metadata.items() if value is not None}
+                    if channel != "keyword":
+                        metadata.update(
+                            cosine_similarity=row.get("native_similarity"),
+                            min_similarity=self._settings.rag_min_similarity,
+                        )
                     result.append(_with_retrieval_metadata(chunk, **metadata))
                 if not result:
                     result.status = "empty"
@@ -7154,7 +7250,12 @@ class OracleClient:
                         {
                             "query": query,
                             "native": True,
-                            "raw_count": len(rows),
+                            "raw_count": rows.threshold.get("raw_count", len(rows))
+                            if isinstance(rows, NativeSearchRows)
+                            else len(rows),
+                            "vector_threshold": rows.threshold
+                            if isinstance(rows, NativeSearchRows)
+                            else {},
                             "error": result.error,
                             "results": [
                                 {
@@ -7164,6 +7265,10 @@ class OracleClient:
                                     "score": h.score,
                                     "vector_rank": h.metadata.get("vector_rank"),
                                     "text_rank": h.metadata.get("keyword_rank"),
+                                    "cosine_similarity": h.metadata.get("cosine_similarity"),
+                                    "native_wrrf_score": h.metadata.get("native_wrrf_score"),
+                                    "vector_contribution": h.metadata.get("vector_contribution"),
+                                    "keyword_contribution": h.metadata.get("keyword_contribution"),
                                 }
                                 for h in result
                             ],
@@ -7171,7 +7276,7 @@ class OracleClient:
                     ],
                     scope=filters,
                     limit=top_k,
-                    metric="Oracle WRRF（大きい順・確率ではありません）"
+                    metric="実命中・閾値適用後の RRF 寄与（大きい順・確率ではありません）"
                     if channel == "hybrid"
                     else "Oracle vector_score（大きい順）"
                     if channel == "vector"
@@ -7190,13 +7295,6 @@ class OracleClient:
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id"""
         vector = [float(v) for v in cast(Sequence[float], embedding)]
-        if channel == "vector":
-            binds.update(embedding=embedding, min_similarity=self._settings.rag_min_similarity)
-            where += (
-                " AND c.embedding IS NOT NULL AND "
-                + _vector_score_sql("embedding")
-                + " >= :min_similarity"
-            )
         ids = await self._fetch_all(
             f"SELECT c.chunk_id, c.native_scope_id {joins} WHERE {where}", binds
         )
@@ -7270,10 +7368,16 @@ class OracleClient:
         score = {"vector": "n.vector_score", "keyword": "n.text_score", "hybrid": "n.score"}[
             channel
         ]
+        similarity_sql = "CAST(NULL AS NUMBER)"
+        native_binds: dict[str, object] = {**binds, "native_spec": spec}
+        if channel != "keyword":
+            similarity_sql = _vector_score_sql("native_embedding")
+            native_binds["native_embedding"] = _to_vector_bind(vector)
         try:
-            return await self._fetch_all(
+            rows = await self._fetch_all(
                 f"""
                 SELECT {_SEARCH_HIT_COLUMNS}, {score} AS score,
+                    {similarity_sql} AS native_similarity,
                     n.vector_rank AS native_vector_rank, n.text_rank AS native_text_rank,
                     n.vector_score AS native_vector_score, n.text_score AS native_text_score
                 {joins}
@@ -7287,8 +7391,9 @@ class OracleClient:
                 WHERE {where}
                 ORDER BY n.position
             """,
-                {**binds, "native_spec": spec},
+                native_binds,
             )
+            return _apply_native_search_threshold(rows, channel, self._settings)
         except Exception as exc:
             raise NativeHybridUnavailable(
                 "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
