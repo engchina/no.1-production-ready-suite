@@ -62,7 +62,7 @@ type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_ter
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
-    rrf_method_ratio: settings.rrf_method_ratio ?? [1, 1],
+    rrf_method_ratio: settings.rrf_method_ratio ?? [10, 1],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
     query_strategy: settings.query_strategy,
@@ -190,6 +190,19 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
       <section aria-labelledby="rrf-title" className="space-y-4">
         <h3 id="rrf-title" className="text-sm font-medium text-fg">{t("settings.answering.rrfTitle")}</h3>
         <p className="text-sm text-fg-muted">{t("settings.answering.rrfHint")}</p>
+        <FormStatus tone="info" message={t("settings.answering.rrfOfficialDescription")} />
+        <div className="space-y-2">
+          <p>
+            <a href="https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/search.html" target="_blank" rel="noopener noreferrer" className="text-sm text-accent-fg underline underline-offset-2">
+              {t("settings.answering.rrfOfficialDefaults")}
+            </a>
+          </p>
+          <p>
+            <a href="https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/understand-hybrid-search.html" target="_blank" rel="noopener noreferrer" className="text-sm text-accent-fg underline underline-offset-2">
+              {t("settings.answering.rrfOfficialScoring")}
+            </a>
+          </p>
+        </div>
         {(["rrf_method_ratio", "rrf_source_ratio"] as const).map((key) => (
           <fieldset key={key} className="space-y-2">
             <legend className="text-sm font-medium text-fg">{t(`settings.answering.${key}`)}</legend>
@@ -197,7 +210,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
               {([0, 1] as const).map((index) => <TextField
                 key={index} id={`${key}-${index}`} width="xs" type="number" min={0} step="any"
                 label={t(`settings.answering.${key}.${index}`)}
-                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [1,1] : [7,3])[index])}
+                value={String(form[key]?.[index] ?? (key === "rrf_method_ratio" ? [10,1] : [7,3])[index])}
                 disabled={disabled} onChange={(event) => {
                   const ratio: [number, number] = [...(form[key] ?? [0,0])];
                   ratio[index] = Number(event.target.value);

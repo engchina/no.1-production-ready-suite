@@ -3570,7 +3570,7 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "runtime_rules_confirmation_enabled": False,
         "runtime_rules_answer_enabled": False,
         "hybrid_search_backend": "oracle_native",
-        "rrf_method_ratio": [1.0, 1.0],
+        "rrf_method_ratio": [10.0, 1.0],
         "rrf_source_ratio": [7.0, 3.0],
         "runtime_terms_search_enabled": False,
         "runtime_terms_answer_enabled": False,

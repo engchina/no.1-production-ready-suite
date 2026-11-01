@@ -11,7 +11,7 @@ def test_defaults_use_one_pass_with_a_shared_additional_budget():
     assert sources == pytest.approx({"原質問": 0.7, "追加 A": 0.15, "追加 B": 0.15})
     lists = [RankedList(query, channel, ("a", "b")) for query in sources for channel in ("vector", "keyword")]
     result = fuse_rankings(lists, sources, weights, k=60)
-    assert [entry.weight for entry in result.lists] == pytest.approx([0.35, 0.35, 0.075, 0.075, 0.075, 0.075])
+    assert [entry.weight for entry in result.lists] == pytest.approx([7 / 11, 0.7 / 11, 1.5 / 11, 0.15 / 11, 1.5 / 11, 0.15 / 11])
     assert result.scores == pytest.approx({"a": 1 / 61, "b": 1 / 62})
     assert sum(c.value for c in result.contributions if c.chunk_id == "a") == pytest.approx(result.scores["a"])
 
@@ -20,7 +20,7 @@ def test_one_additional_expression_exact_weights():
     w = RrfWeights()
     s = source_weights(["q", "a"], w)
     result = fuse_rankings([RankedList(q, c, ("x",)) for q in s for c in ("vector", "keyword")], s, w, k=60)
-    assert [x.weight for x in result.lists] == pytest.approx([0.35, 0.35, 0.15, 0.15])
+    assert [x.weight for x in result.lists] == pytest.approx([7 / 11, 0.7 / 11, 3 / 11, 0.3 / 11])
 
 
 def test_empty_failure_and_vector_only_do_not_redistribute():
@@ -80,8 +80,11 @@ def test_trace_details_use_the_same_calculation_and_safe_shared_format():
     details = fusion_details(r, w, s, 60)
     assert details["code"]
     actual = json.loads(details["code"][0]["text"])
+    assert actual["method_ratio"] == [10, 1]
+    assert actual["source_ratio"] == [7, 3]
+    assert actual["rank_constant"] == 60
     assert actual["lists"][1]["status"] == "failed"
-    assert actual["lists"][1]["weight"] == pytest.approx(0.15)
+    assert actual["lists"][1]["weight"] == pytest.approx(0.3 / 11)
     assert actual["contributions"][0]["contribution"] == r.scores["x"]
 
 

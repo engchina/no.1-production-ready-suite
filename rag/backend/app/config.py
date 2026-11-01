@@ -1236,7 +1236,7 @@ class Settings(
     )
     rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0)
     rag_hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
-    rag_rrf_method_ratio: tuple[float, float] = (1.0, 1.0)
+    rag_rrf_method_ratio: tuple[float, float] = (10.0, 1.0)
     rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
 
     @field_validator("rag_rrf_method_ratio", "rag_rrf_source_ratio")

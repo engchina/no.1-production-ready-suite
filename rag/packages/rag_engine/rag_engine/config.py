@@ -257,7 +257,7 @@ class Settings:
     # 検索の比較実験用。重み付けを切ると全検索文が同じ票、original_query_only は原質問だけで検索する。
     retrieval_query_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
     hybrid_search_backend: str = "oracle_native"
-    rrf_method_ratio: tuple[float, float] = (1.0, 1.0)
+    rrf_method_ratio: tuple[float, float] = (10.0, 1.0)
     rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
@@ -515,7 +515,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
     cache_dir_raw = env.get("RAG_ENGINE_ARTICLE_CATALOG_CACHE_DIR", "").strip()
     settings = Settings(
         hybrid_search_backend=_hybrid_backend(env.get("RAG_HYBRID_SEARCH_BACKEND", "oracle_native")),
-        rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[1,1]")),
+        rrf_method_ratio=_rrf_ratio(env.get("RAG_RRF_METHOD_RATIO", "[10,1]")),
         rrf_source_ratio=_rrf_ratio(env.get("RAG_RRF_SOURCE_RATIO", "[7,3]")),
         runtime_rules_confirmation_enabled=_env_bool(env, "RUNTIME_RULES_CONFIRMATION_ENABLED", False),
         runtime_rules_answer_enabled=_env_bool(env, "RUNTIME_RULES_ANSWER_ENABLED", False),
