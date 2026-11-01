@@ -4188,7 +4188,7 @@ def test_record_boundaries_are_hidden_in_review_and_exports() -> None:
     assert JSONL_RECORD_BOUNDARY in str(literal.to_document_payload()["display_text"])
 
 
-def test_partial_element_review_preserves_unseen_text():
+def test_partial_element_review_preserves_unseen_text() -> None:
     import hashlib
 
     from app.api.routes.documents import _reviewed_extraction_with_edits

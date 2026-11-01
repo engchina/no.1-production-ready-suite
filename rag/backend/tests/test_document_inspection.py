@@ -1,12 +1,16 @@
 """大きな合成文書の取得範囲と、完全エクスポートとの独立を検証する。"""
 
 import json
+from pathlib import Path
+from typing import Any
+
+import pytest
 
 from app.services.document_inspection import extraction_window, text_window
 
 
-def fixture_payload():
-    elements = [
+def fixture_payload() -> dict[str, Any]:
+    elements: list[dict[str, Any]] = [
         {
             "element_id": f"node-{i}",
             "page_number": i // 10 + 1,
@@ -23,7 +27,7 @@ def fixture_payload():
     }
 
 
-def test_long_single_line_is_read_in_finite_windows_without_losing_original():
+def test_long_single_line_is_read_in_finite_windows_without_losing_original() -> None:
     raw = json.dumps({"nodes": ["合成テキスト" * 100 for _ in range(2000)]}, ensure_ascii=False)
     windows = [text_window(raw, i, 8192) for i in range(0, len(raw), 8192)]
     assert all(len(row["text"]) <= 8192 for row in windows)
@@ -31,7 +35,7 @@ def test_long_single_line_is_read_in_finite_windows_without_losing_original():
     assert len(raw) > 1_000_000
 
 
-def test_citation_focus_can_read_target_beyond_initial_window():
+def test_citation_focus_can_read_target_beyond_initial_window() -> None:
     raw = "先頭" * 100000 + "対象の原文" + "末尾" * 10000
     result = text_window(raw, 0, 8192, "対象の原文")
     assert result["offset"] > 0
@@ -39,7 +43,7 @@ def test_citation_focus_can_read_target_beyond_initial_window():
     assert len(result["text"]) == 8192
 
 
-def test_structured_window_is_bounded_and_can_reach_last_element():
+def test_structured_window_is_bounded_and_can_reach_last_element() -> None:
     payload = fixture_payload()
     initial = extraction_window(payload, mode="structure", offset=0, limit=25)
     target = extraction_window(
@@ -54,7 +58,7 @@ def test_structured_window_is_bounded_and_can_reach_last_element():
     assert len(payload["elements"]) == 1332
 
 
-def test_page_scope_is_applied_before_range_and_text_generation():
+def test_page_scope_is_applied_before_range_and_text_generation() -> None:
     payload = fixture_payload()
     result = extraction_window(payload, mode="structure", offset=0, limit=25, page=2)
     assert result["total"] == 10
@@ -64,13 +68,13 @@ def test_page_scope_is_applied_before_range_and_text_generation():
     assert "項目0 " not in text["payload"]["raw_text"]
 
 
-def test_empty_success_is_distinct_from_missing_or_loading():
+def test_empty_success_is_distinct_from_missing_or_loading() -> None:
     result = extraction_window({}, mode="structure", offset=0, limit=25)
     assert result["total"] == 0
     assert result["payload"]["elements"] == []
 
 
-def test_one_oversized_node_cannot_mount_unbounded_text():
+def test_one_oversized_node_cannot_mount_unbounded_text() -> None:
     payload = {"elements": [{"element_id": "node-1", "text": "長文" * 100000}]}
     result = extraction_window(payload, mode="structure", offset=0, limit=25)
     assert len(result["payload"]["elements"][0]["text"]) == 8192
@@ -78,7 +82,9 @@ def test_one_oversized_node_cannot_mount_unbounded_text():
     assert len(payload["elements"][0]["text"]) == 200000
 
 
-def test_preview_cache_is_versioned_private_and_can_expire(tmp_path, monkeypatch):
+def test_preview_cache_is_versioned_private_and_can_expire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from app.services import document_preview_cache as module
 
     cache = module.DocumentPreviewCache(tmp_path / "cache")
@@ -91,7 +97,9 @@ def test_preview_cache_is_versioned_private_and_can_expire(tmp_path, monkeypatch
     assert cache.get("document:version1:page1:dpi144") is None
 
 
-def test_preview_cache_enforces_total_capacity(tmp_path, monkeypatch):
+def test_preview_cache_enforces_total_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from app.services import document_preview_cache as module
 
     monkeypatch.setattr(module, "MAX_CACHE_BYTES", 10)
@@ -102,7 +110,7 @@ def test_preview_cache_enforces_total_capacity(tmp_path, monkeypatch):
     assert cache.get("b") == b"abcdef"
 
 
-def test_long_element_can_read_every_part_and_retains_edit_identity():
+def test_long_element_can_read_every_part_and_retains_edit_identity() -> None:
     text = "長い合成本文" * 20000
     payload = {"elements": [{"element_id": "node-long", "text": text}]}
     parts = [
@@ -116,7 +124,7 @@ def test_long_element_can_read_every_part_and_retains_edit_identity():
     assert len({part["metadata"]["preview_text_sha256"] for part in parts}) == 1
 
 
-def test_table_cells_are_read_in_global_bounded_windows():
+def test_table_cells_are_read_in_global_bounded_windows() -> None:
     payload = {
         "tables": [
             {"table_id": "t1", "cells": [{"row": i, "col": 0, "text": str(i)} for i in range(1000)]}

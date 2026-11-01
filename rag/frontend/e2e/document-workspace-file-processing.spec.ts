@@ -446,7 +446,7 @@ test("PDF 原本プレビューは左サイドバーを初期表示しない", a
   const pdfFrame = page.locator('iframe[title="policy.pdf"]');
   await expect(pdfFrame).toHaveAttribute(
     "src",
-    /\/api\/documents\/doc-1\/recipes\/recipe-1\/content#page=1&pagemode=none&navpanes=0$/
+    /\/api\/documents\/doc-1\/recipes\/recipe-1\/content#pagemode=none&navpanes=0$/
   );
   await expectNoHorizontalOverflow(page);
 });
@@ -2637,7 +2637,7 @@ async function mockDocumentWorkspace(
   });
   await page.route("**/api/documents/doc-1/**/text-window", route => {
     const request = route.request().postDataJSON();
-    const text = request.variant === "prepared" ? "準備後ファイル\n交通費は1000円です。" : "合成原文\n交通費は1000円です。";
+    const text = request.variant === "prepared" ? "準備後ファイル\n交通費は1000円です。" : "経費申請\n交通費は1000円です。";
     return route.fulfill({json: {data: {text: text.slice(request.offset,request.offset+request.limit), offset: request.offset, total: text.length, limit: request.limit}, error_messages: [], warning_messages: []}});
   });
   await page.route(

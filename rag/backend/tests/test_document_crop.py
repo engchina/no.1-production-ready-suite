@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -18,7 +19,7 @@ client = AsgiTestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def isolated_preview_cache(tmp_path, monkeypatch):
+def isolated_preview_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.document_preview_cache import DocumentPreviewCache
 
     monkeypatch.setattr(

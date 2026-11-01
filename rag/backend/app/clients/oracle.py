@@ -5813,8 +5813,10 @@ class OracleClient:
                    OR (JSON_VALUE(c.metadata_json, '$.page_start'
                                        RETURNING NUMBER NULL ON ERROR) IS NULL
                        AND EXISTS (SELECT 1 FROM page_elements pe
-                           WHERE JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
-                               PASSING pe.element_id AS "eid"))))
+                           WHERE (JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
+                               PASSING pe.element_id AS "eid") OR DBMS_LOB.INSTR(
+                               ',' || JSON_VALUE(c.metadata_json, '$.element_ids'
+                                   RETURNING CLOB) || ',', ',' || pe.element_id || ',') > 0))))
             ORDER BY c.chunk_index, c.chunk_id
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
             """,

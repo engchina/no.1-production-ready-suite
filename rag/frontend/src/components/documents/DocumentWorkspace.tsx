@@ -450,7 +450,7 @@ export function DocumentWorkspace({
       offset: viewOffset, limit: 25, text_offset: elementTextOffset, cell_offset: cellOffset, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
       ...(requestedElementId && viewOffset === 0 ? {element_id: requestedElementId} : {}),
     }, signal),
-    enabled: Boolean(selectedRecipeId && hasSelectedRecipeExtraction) && inspectorTab !== "chunks",
+    enabled: Boolean(selectedRecipeId && hasSelectedRecipeExtraction),
     retry: 1,
   });
   const chunkWindowQuery = useQuery({
@@ -472,7 +472,7 @@ export function DocumentWorkspace({
     const chunks = chunkWindowQuery.data?.items;
     const focus = focusedChunkQuery.data?.items[0];
     return focus ? (chunks?.some(c => c.chunk_id === focus.chunk_id) ? chunks.map(c => c.chunk_id === focus.chunk_id ? focus : c) : requestedChunkId ? [focus, ...(chunks ?? [])] : chunks) : chunks;
-  }, [chunkWindowQuery.data, focusedChunkQuery.data]) };
+  }, [chunkWindowQuery.data, focusedChunkQuery.data, requestedChunkId]) };
   const extractionPending = hasSelectedRecipeExtraction && extractionJsonQuery.isPending;
   const extractionError = extractionJsonQuery.isError && !extractionJsonQuery.data;
   const extractionState = (content: ReactNode) => extractionPending ? (
@@ -742,7 +742,7 @@ export function DocumentWorkspace({
     () => displayedChunks.find((chunk) => chunk.chunk_id === selectedChunkId) ?? focusedChunkQuery.data?.items.find(chunk => chunk.chunk_id === selectedChunkId) ?? null,
     [displayedChunks, selectedChunkId, focusedChunkQuery.data]
   );
-  const selectedElement = useMemo(
+  const availableElement = useMemo(
     () =>
       parsedExtraction.elements.find(
         (element) => workspaceElementKey(element) === selectedElementId
@@ -750,10 +750,22 @@ export function DocumentWorkspace({
       null,
     [parsedExtraction.elements, selectedElementId]
   );
-  const selectedTableCell = useMemo(
+  const availableTableCell = useMemo(
     () => findTableCellByKey(parsedExtraction.tables, selectedTableCellKey),
     [parsedExtraction.tables, selectedTableCellKey]
   );
+  // タブの部分取得範囲を切り替えても、選択した定位子の軽量情報を維持する。
+  const locationScope = `${documentId}:${selectedRecipeId}:${selectedRecipe?.active_extraction_recipe_id}`;
+  const [elementLocation, setElementLocation] = useState<{ scope: string; value: typeof availableElement } | null>(null);
+  const [cellLocation, setCellLocation] = useState<{ scope: string; key: string | null; value: typeof availableTableCell } | null>(null);
+  if (availableElement && (elementLocation?.scope !== locationScope || elementLocation.value !== availableElement)) {
+    setElementLocation({ scope: locationScope, value: availableElement });
+  }
+  if (availableTableCell && (cellLocation?.scope !== locationScope || cellLocation.value !== availableTableCell || cellLocation.key !== selectedTableCellKey)) {
+    setCellLocation({ scope: locationScope, key: selectedTableCellKey, value: availableTableCell });
+  }
+  const selectedElement = availableElement ?? (elementLocation?.scope === locationScope && elementLocation.value && workspaceElementKey(elementLocation.value) === selectedElementId ? elementLocation.value : null);
+  const selectedTableCell = availableTableCell ?? (cellLocation?.scope === locationScope && cellLocation.key === selectedTableCellKey ? cellLocation.value : null);
   const focusPage =
     previewFocusSource === "page"
       ? null
@@ -1108,14 +1120,8 @@ export function DocumentWorkspace({
   if (focusSourceChanged) applyRequestedFocus();
 
 
-  const pageExtraction = useMemo(
-    () => selectedExtraction,
-    [selectedExtraction, currentInspectorPage]
-  );
-  const pageChunks = useMemo(
-    () => displayedChunks,
-    [displayedChunks, selectedExtraction, currentInspectorPage]
-  );
+  const pageExtraction = selectedExtraction;
+  const pageChunks = displayedChunks;
 
   if (query.isPending) {
     return (
@@ -1645,7 +1651,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-text"
                 aria-labelledby="inspector-tab-text"
                 tabIndex={0}
-                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 {extractionState(<DocumentRawText extraction={pageExtraction} />)}
                 {extractionPaging}
@@ -1658,7 +1664,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-extraction"
                 aria-labelledby="inspector-tab-extraction"
                 tabIndex={0}
-                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 {status === "REVIEW" && selectedRecipeId ? (
                   <div className="mb-2 xl:sticky xl:top-0 xl:z-10 xl:bg-surface-sunken xl:pb-2">
@@ -1781,7 +1787,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-chunks"
                 aria-labelledby="inspector-tab-chunks"
                 tabIndex={0}
-                className="xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <div className="space-y-3">
                   {selectedRecipeId &&
@@ -1854,7 +1860,7 @@ export function DocumentWorkspace({
                 id="inspector-panel-export"
                 aria-labelledby="inspector-tab-export"
                 tabIndex={0}
-                className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
+                className="relative xl:flex xl:min-h-0 xl:flex-1 xl:flex-col xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <DocumentExtractionExportPanel
                   documentId={documentId}

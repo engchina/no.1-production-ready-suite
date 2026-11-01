@@ -20,6 +20,8 @@ class DocumentPreviewCache:
         return self.root / (hashlib.sha256(identity.encode()).hexdigest() + ".cache")
 
     def get(self, identity: str) -> bytes | None:
+        if not identity:
+            return None
         path = self.path(identity)
         try:
             if time.time() - path.stat().st_mtime > CACHE_TTL_SECONDS:
@@ -30,7 +32,7 @@ class DocumentPreviewCache:
             return None
 
     def put(self, identity: str, content: bytes) -> None:
-        if len(content) > MAX_CACHE_BYTES:
+        if not identity or len(content) > MAX_CACHE_BYTES:
             return
         try:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)

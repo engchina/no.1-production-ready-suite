@@ -3004,7 +3004,7 @@ export const ja = {
   "flow.extraction.empty": "まだ抽出結果がありません。取込を実行してください。",
   "flow.extraction.documentType": "文書種別",
   "flow.extraction.confidence": "信頼度",
-  "flow.extraction.structureStats": "構造化抽出統計",
+  "flow.extraction.structureStats": "表示範囲の構造化抽出統計",
   "flow.extraction.warning.generic": "抽出の処理で確認が必要な点があります。",
   "flow.extraction.warning.codes": "警告コード: {codes}",
   "flow.extraction.stats.elements": "要素",

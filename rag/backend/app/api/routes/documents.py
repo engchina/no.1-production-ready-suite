@@ -6044,7 +6044,7 @@ def _preview_cache(
     )
     return DocumentPreviewCache(
         FilePath(get_settings().local_storage_dir) / "cache" / "document-preview"
-    ), identity
+    ), identity if detail.content_sha256 else ""
 
 
 async def _document_preview_pages_response(

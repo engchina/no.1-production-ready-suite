@@ -1330,6 +1330,8 @@ test("構造化要素は共通の最大高さで内部スクロールする", { 
   expect(dimensions.content).toBeGreaterThan(dimensions.height);
   await list.focus(); await list.press("End");
   await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await page.getByTestId("document-inspector-pane").getByRole("button", { name: "次へ", exact: true }).click();
+  await expect(list.getByText("合成要素 40", {exact: true})).toBeAttached();
   await list.getByText("合成要素 40", {exact: true}).scrollIntoViewIfNeeded();
   await expect(list.getByText("合成要素 40", {exact: true})).toBeInViewport();
   await list.screenshot({path: test.info().outputPath("structured-elements-scroll.png")});
