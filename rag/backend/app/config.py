@@ -1234,7 +1234,8 @@ class Settings(
             "token の見積もりの誤差（まれな漢字が続く本文は見積もりより多い）の余裕に使う。"
         ),
     )
-    rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0)
+    rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0, allow_inf_nan=False)
+    rag_rerank_min_relevance_score: float = Field(default=0.4, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
     rag_rrf_method_ratio: tuple[float, float] = (10.0, 1.0)
     rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)

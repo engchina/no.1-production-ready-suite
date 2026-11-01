@@ -477,7 +477,12 @@ def _best_rerank_ranks(
     # 原質問だけの関連度も残す（文書の絞り込みが原質問の点数でも比べる。#3504）。
     question_scores = {rank.index: rank.relevance_score for rank in ranks}
     merged = [
-        RerankTextRank(index=index, relevance_score=score, question_relevance_score=question_scores.get(index))
+        RerankTextRank(
+            index=index,
+            relevance_score=score,
+            question_relevance_score=question_scores.get(index),
+            question_score_explicit=True,
+        )
         for index, score in sorted(best.items(), key=lambda item: -(item[1] if item[1] is not None else -1.0))
     ]
     if not queries:
@@ -584,11 +589,43 @@ def _rerank_records(
         step.status = "失敗・取得順を保持"
         step.add("並べ替えに失敗したため、取得順の根拠を使います。")
         return list(records)
+    threshold_rows: list[dict[str, object]] = []
     reranked_candidates = _records_by_rerank_ranks(
         rerankable_candidates,
         reranked,
         cast(Settings, settings),
         candidate_indices=rerankable_indices,
+        decisions=threshold_rows,
+    )
+    excluded = sum(row["status"] == "excluded" for row in threshold_rows)
+    unscored = sum(row["status"] == "kept_unscored" for row in threshold_rows)
+    attachments = sum(row["status"] == "kept_attachment" for row in threshold_rows)
+    step.field("関連度スコアの下限", str(threshold_rows[0]["minimum"]))
+    step.field(
+        "関連度による選別",
+        f"採用 {len(reranked_candidates)} 件 / 下限未満で除外 {excluded} 件 / "
+        f"未採点で保持 {unscored} 件 / 明示添付で保持 {attachments} 件 / "
+        f"採点対象外 {len(protected_candidates) + len(remainder)} 件",
+    )
+    status_labels = {"excluded": "下限未満で除外", "kept_unscored": "未採点で保持", "kept_attachment": "明示添付で保持", "kept": "採用"}
+    for row in threshold_rows:
+        question_score = row["question_score"] if row["question_score"] is not None else "未採点"
+        adopted_score = row["adopted_score"] if row["adopted_score"] is not None else "未採点"
+        step.add(
+            f"{row['source'] or '文書名の記録なし'} / 原質問の関連度: {question_score} / "
+            f"判定に使った関連度: {adopted_score} / {status_labels[str(row['status'])]}"
+        )
+    record_retrieval_stage(
+        {
+            "stage": "rerank_threshold",
+            "phase": rerank_phase,
+            "minimum": threshold_rows[0]["minimum"],
+            "decisions": threshold_rows,
+            "excluded_count": excluded,
+            "unscored_kept_count": unscored,
+            "attachment_kept_count": attachments,
+            "outside_scoring_count": len(protected_candidates) + len(remainder),
+        }
     )
     # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
     protected_candidates, reranked_candidates = _keep_entity_expansion_positions(protected_candidates, reranked_candidates)

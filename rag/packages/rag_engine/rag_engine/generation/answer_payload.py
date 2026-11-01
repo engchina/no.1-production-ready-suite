@@ -664,6 +664,7 @@ def _rerank_scores_from_evidence(
                 "rank": metadata.get("rank"),
                 "relevance_score": metadata.get("relevance_score"),
                 "question_relevance_score": metadata.get("question_relevance_score"),
+                "question_score_explicit": bool(metadata.get("question_score_explicit")),
                 "min_relevance_score": metadata.get("min_relevance_score"),
                 "filtered": bool(metadata.get("filtered")),
                 "skipped": bool(metadata.get("skipped")),

@@ -762,12 +762,14 @@ def test_build_engine_settings_configures_rerank(tmp_path: Any) -> None:
         Settings(
             oci_compartment_id="ocid1.compartment.oc1..example",
             oci_genai_rerank_model="cohere.rerank-v4.0-fast",
+            rag_rerank_min_relevance_score=0.4,
         ),
         output_dir=tmp_path,
     )
 
     assert engine_settings.oci_compartment_id == "ocid1.compartment.oc1..example"
     assert engine_settings.rerank_model == "cohere.rerank-v4.0-fast"
+    assert engine_settings.rerank_min_relevance_score == 0.4
     assert _rerank_configured(engine_settings) is True
 
 

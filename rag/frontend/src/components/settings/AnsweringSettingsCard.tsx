@@ -61,6 +61,8 @@ type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_ter
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
+    min_similarity: settings.min_similarity ?? 0.05,
+    rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.4,
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
     rrf_method_ratio: settings.rrf_method_ratio ?? [10, 1],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
@@ -132,6 +134,9 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   // 保存中は離脱を止め、欄も変えられなくする（保存に成功すると保存値で作り直すため、保存中の変更が消える。#1002）。
   useLeaveGuard(dirty, save.isPending);
   const disabled = save.isPending;
+  const invalidThreshold = [form.min_similarity, form.rerank_min_relevance_score].some(
+    (value) => value == null || !Number.isFinite(value) || value < 0 || value > 1
+  );
   const invalidRatio = [form.rrf_method_ratio, form.rrf_source_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
 
   function update(patch: Partial<AnsweringDraft>) {
@@ -145,7 +150,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   }
 
   function submit() {
-    if (save.isPending || invalidRatio) return;
+    if (save.isPending || invalidRatio || invalidThreshold) return;
     // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
     save.mutate(form, { onSuccess: () => toast.success(t("settings.answering.saved")) });
   }
@@ -186,6 +191,15 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           options={[{value:"oracle_native", label:t("settings.answering.hybridBackend.native")},
             {value:"sudachi", label:t("settings.answering.hybridBackend.sudachi")}]}
           onValueChange={(value: "oracle_native" | "sudachi") => update({hybrid_search_backend:value})} />
+        <TextField
+          id="answering-min-similarity" type="number" min={0} max={1} step="any" width="sm"
+          label={t("settings.answering.minSimilarity")}
+          helper={t("settings.answering.minSimilarityHint")}
+          value={Number.isFinite(form.min_similarity) ? String(form.min_similarity) : ""}
+          error={form.min_similarity == null || !Number.isFinite(form.min_similarity) || form.min_similarity < 0 || form.min_similarity > 1 ? t("settings.answering.thresholdInvalid") : undefined}
+          disabled={disabled}
+          onChange={(event) => update({ min_similarity: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
+        />
       </FormGrid>
       <section aria-labelledby="rrf-title" className="space-y-4">
         <h3 id="rrf-title" className="text-sm font-medium text-fg">{t("settings.answering.rrfTitle")}</h3>
@@ -293,6 +307,17 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled}
           onChange={(checked) => update({ rerank_enabled: checked })}
         />
+        <FormGrid className="px-3 pb-3">
+        <TextField
+          id="answering-rerank-min-score" type="number" min={0} max={1} step="any" width="sm"
+          label={t("settings.answering.rerankMinScore")}
+          helper={t("settings.answering.rerankMinScoreHint")}
+          value={Number.isFinite(form.rerank_min_relevance_score) ? String(form.rerank_min_relevance_score) : ""}
+          error={form.rerank_min_relevance_score == null || !Number.isFinite(form.rerank_min_relevance_score) || form.rerank_min_relevance_score < 0 || form.rerank_min_relevance_score > 1 ? t("settings.answering.thresholdInvalid") : undefined}
+          disabled={disabled || !form.rerank_enabled}
+          onChange={(event) => update({ rerank_min_relevance_score: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
+        />
+        </FormGrid>
         <div>
           <SwitchRow id="answering-section-expansion" label={t("settings.answering.sectionExpansion")}
             description={t("settings.answering.sectionExpansionHint")} checked={form.section_expansion_enabled}
@@ -352,7 +377,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             label: t("settings.answering.save"),
             icon: Save,
             loading: save.isPending,
-            disabled: !dirty || invalidRatio,
+            disabled: !dirty || invalidRatio || invalidThreshold,
             onClick: submit,
           },
         ]}

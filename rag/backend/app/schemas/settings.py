@@ -750,6 +750,8 @@ class AnsweringSettingsData(BaseModel):
     (``PROFILE_GLOBAL_QUERY_FIELDS``)。値は backend/.env の `RAG_*`(回答の設定)に保存する。
     """
 
+    min_similarity: float = Field(default=0.05, ge=0.0, le=1.0, allow_inf_nan=False)
+    rerank_min_relevance_score: float = Field(default=0.4, ge=0.0, le=1.0, allow_inf_nan=False)
     runtime_rules_confirmation_enabled: bool = False
     runtime_rules_answer_enabled: bool = False
     hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
@@ -779,6 +781,10 @@ class AnsweringSettingsData(BaseModel):
 class AnsweringSettingsUpdate(BaseModel):
     """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
 
+    min_similarity: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
+    rerank_min_relevance_score: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
     runtime_rules_confirmation_enabled: bool | None = None
     runtime_rules_answer_enabled: bool | None = None
     hybrid_search_backend: Literal["oracle_native", "sudachi"] | None = None

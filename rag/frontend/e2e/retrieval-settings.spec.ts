@@ -232,6 +232,8 @@ for (const viewport of [
       await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
       expect(saved).toEqual([
         {
+          min_similarity: 0.05,
+          rerank_min_relevance_score: 0.4,
           hybrid_search_backend: "sudachi",
           rrf_method_ratio: [1, 1],
           rrf_source_ratio: [7, 3],
@@ -577,6 +579,7 @@ for (const width of [1280, 375]) {
       await expect(search).toHaveAccessibleDescription(/原質問.*生成した検索文には.*行いません/);
       await search.click();
       await page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true }).click();
+      await expect(page.getByTestId("answering-settings-card").getByRole("button", { name: "回答の設定を保存", exact: true })).not.toHaveAttribute("aria-busy", "true");
       await expect(search).toBeChecked();
       expect(saved.at(-1)).toMatchObject({ runtime_terms_search_enabled: true, query_strategy: "auto_routing" });
       expect(saved.at(-1)).not.toHaveProperty("runtime_terms_answer_enabled");
@@ -585,6 +588,8 @@ for (const width of [1280, 375]) {
       await confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true }).click();
       await expect(confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).toBeDisabled();
       expect(saved.at(-1)).toEqual({ runtime_rules_confirmation_enabled: true });
+      await expect(confirmCard.getByRole("button", { name: "登録ルールの確認設定を保存", exact: true })).not.toHaveAttribute("aria-busy", "true");
+      await expect(confirm).toBeChecked();
       await area.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`search-expressions-${width}-${theme}.png`) });
       await expectNoPageOverflow(page);
@@ -600,6 +605,7 @@ for (const width of [1280, 375]) {
         const save = card.getByRole("button", { name: field === "runtime_terms_answer_enabled" ? "用語・同義語の使用を保存" : "登録ルールの回答設定を保存", exact: true });
         await save.click();
         await expect(save).toBeDisabled();
+        await expect(save).not.toHaveAttribute("aria-busy", "true");
         expect(saved.at(-1)).toEqual({ [field]: true });
       }
       await page.getByTestId("answer-term-settings-card").scrollIntoViewIfNeeded();
@@ -663,4 +669,66 @@ test(`RRF の比重が未指定の場合も新しい既定値と公式説明を�
   await expectNoPageOverflow(page);
 });
 
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`類似度と関連度の下限を独立して検証・保存し、失敗時の入力を保持する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const width = page.viewportSize()?.width === 375 ? 375 : 1440;
+    await page.setViewportSize({ width, height: 900 });
+    await page.addInitScript((state) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })), { theme, sidebarCollapsed: width === 375 });
+    await mockRetrievalCards(page);
+    const saved: Record<string, unknown>[] = [];
+    await mockAnsweringSettings(page, saved, { min_similarity: 0.18, rerank_min_relevance_score: 0.27 });
+    let fail = false;
+    await page.route("**/api/settings/answering", (route) => fail && route.request().method() === "PATCH"
+      ? route.fulfill({ status: 503, json: { data: null, error_messages: ["設定を保存できません。"], warning_messages: [] } })
+      : route.fallback());
+    await page.goto("/settings/retrieval");
+    const vector = page.getByRole("spinbutton", { name: "コサイン類似度の下限", exact: true });
+    const rerank = page.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true });
+    const save = page.getByRole("button", { name: "回答の設定を保存", exact: true });
+    await expect(vector).toHaveValue("0.18");
+    await expect(rerank).toHaveValue("0.27");
+    await expect(vector).toHaveAccessibleDescription(/全文検索で独立して一致した候補は保持/);
+    await expect(rerank).toHaveAccessibleDescription(/原質問と有効な追加質問の最高関連度/);
+    await vector.fill("");
+    await expect(vector).toHaveAttribute("aria-invalid", "true");
+    await expect(save).toBeDisabled();
+    await vector.fill("1.01");
+    await expect(save).toBeDisabled();
+    expect(saved).toHaveLength(0);
+    await vector.fill("0.3");
+    await rerank.fill("0.4");
+    await save.click();
+    await expect(save).toBeDisabled();
+    expect(saved[0]).toEqual(expect.objectContaining({ min_similarity: 0.3, rerank_min_relevance_score: 0.4 }));
+    await page.reload();
+    await expect(vector).toHaveValue("0.3");
+    await expect(rerank).toHaveValue("0.4");
+    await vector.fill("0.5");
+    fail = true;
+    await save.click();
+    await expect(page.getByTestId("answering-settings-card").getByRole("alert")).toContainText("設定を保存できません。");
+    await expect(vector).toHaveValue("0.5");
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("threshold-save-error.png") });
+    await page.getByRole("button", { name: "変更を破棄", exact: true }).click();
+    await expect(vector).toHaveValue("0.3");
+    fail = false;
+    const enabled = page.getByRole("switch", { name: "Rerank で検索候補を並べ替える", exact: true });
+    await enabled.click();
+    await expect(rerank).toBeDisabled();
+    await expect(rerank).toHaveValue("0.4");
+    await save.click();
+    await expect(save).toBeDisabled();
+    await expect(save).not.toHaveAttribute("aria-busy", "true");
+    await expect(rerank).toBeDisabled();
+    await expect(rerank).toHaveValue("0.4");
+    expect(saved.at(-1)).toEqual(expect.objectContaining({ rerank_enabled: false, min_similarity: 0.3, rerank_min_relevance_score: 0.4 }));
+    await vector.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("threshold-vector-settings.png") });
+    await rerank.scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath("threshold-rerank-settings.png") });
+  });
 }

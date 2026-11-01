@@ -620,6 +620,7 @@ def build_engine_settings(
         # 常に「未実行」になる(#275)。
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
+        "RERANK_MIN_RELEVANCE_SCORE": str(settings.rag_rerank_min_relevance_score),
         "RUNTIME_RULES_CONFIRMATION_ENABLED": "1"
         if settings.rag_runtime_rules_confirmation_enabled
         else "0",
