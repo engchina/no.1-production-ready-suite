@@ -11,7 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, 
 
 from rag_engine.config import Settings
 from rag_engine.dependencies import record_retrieval_stage
-from rag_engine.generation.batch_output_repair import batch_repair_prompt, batch_validation_detail
+from rag_engine.generation.batch_output_repair import (
+    BatchQuoteMismatch,
+    batch_repair_prompt,
+    batch_validation_detail,
+    quote_mismatch_diagnostic,
+)
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
@@ -87,10 +92,13 @@ def _reading_model(values: Sequence[Mapping[str, Any]]) -> type[BatchReading]:
     originals = {key: value["text"] for key, value in zip(ids, values, strict=True)}
 
     def source_quotes(reading: BatchReading) -> BatchReading:
-        for finding in reading.findings:
-            text = originals.get(finding.evidence_id)
-            if text is None or find_width_folded(text, finding.quote) is None:
-                raise ValueError("batch_quote_not_in_input")
+        unmatched = [
+            (finding.evidence_id, finding.quote)
+            for finding in reading.findings
+            if (text := originals.get(finding.evidence_id)) is None or find_width_folded(text, finding.quote) is None
+        ]
+        if unmatched:
+            raise BatchQuoteMismatch(quote_mismatch_diagnostic(unmatched, originals))
         return reading
 
     return create_model(
@@ -123,8 +131,12 @@ def prepare_batched_evidence(
     read: Callable[[str, str, type[BatchReading]], BatchReading],
     provider_id: str | None = None,
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
+    failed_batches: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
-    """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。"""
+    """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。
+
+    ``failed_batches`` には失敗した組の記録を足す（例外で返せない診断を呼び出し側へ渡す。#4090）。
+    """
     reading_system = resolve_prompt("generation.batchReading", BATCH_READING_PROMPT)
     selected = list(spans)
     batches: list[dict[str, Any]] = []
@@ -243,6 +255,7 @@ def prepare_batched_evidence(
                     "index": len(batches) + 1,
                     "status": "running",
                     "input_chars": len(evidence_text(batch)),
+                    "input_count": len(batch),
                     "ranges": [
                         {"source_id": value["source_id"], "start": value.get("start", 0), "end": value.get("end", len(value["text"]))}
                         for value in batch
@@ -295,6 +308,8 @@ def prepare_batched_evidence(
                     receipt.update(status="failed", error=type(exc).__name__)
                     if isinstance(exc, ValidationError) and not receipt.get("validation_failures"):
                         receipt["validation_failures"] = [batch_validation_detail(exc, reading_schema)]
+                    if failed_batches is not None:
+                        failed_batches.append(receipt)
                     raise
                 finally:
                     record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})

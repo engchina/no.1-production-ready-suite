@@ -15,7 +15,7 @@ from rag_engine.adapters.oci import InvalidStructuredOutput, LlmRunawayOutput
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import GroundedDraft
+from rag_engine.models.llm import GroundedDraft, GroundedItem, RequestScopePlan
 
 GOOD = "一覧表を選択し、処理を選択します。"
 PLAN_LIMIT = 64
@@ -142,7 +142,8 @@ def test_invalid_first_generation_shows_related_quotes_instead_of_failing(failur
     assert result.confidence == "low"
     assert result.needs_human_review
     trace = result.generation_trace
-    assert trace["generation_failure"] == {"error": type(error).__name__, "stage": "answer.generate"}
+    assert trace["generation_failure"]["error"] == type(error).__name__
+    assert trace["generation_failure"]["stage"] == "answer.generate"
     assert trace["rounds"][0]["error"] == type(error).__name__
     assert "stop" not in trace["round_budget"]
     # 監査は呼ばない（草稿が無い）。
@@ -194,3 +195,126 @@ def test_invalid_plan_repair_keeps_the_draft_before_the_repair():
     assert current.timing["request_plan_repair"] == {"calls": 1, "scope": "request_plan_and_draft", "error": "ValidationError"}
     assert current.timing["request_plan_unsettled"]
     assert [name for name, _ in model.prompts][:2] == ["GroundedDraftWire", "GroundedDraftWire"]
+
+
+def _round_error() -> ValidationError:
+    """最終生成の出力の検証と同じ、型に合わない出力の例外。"""
+    with pytest.raises(ValidationError) as raised:
+        generation_draft_wire_model().model_validate_json("{}")
+    return raised.value
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_name", "category"),
+    [
+        (_round_error, "ValidationError", "schema_field"),
+        (lambda: grounded.DraftGenerationInvalid("ValidationError"), "ValidationError", "ValidationError"),
+        (lambda: grounded.DraftGenerationInvalid("request_scope_invalid"), "request_scope_invalid", "request_scope_invalid"),
+    ],
+    ids=["round_raises_validation_error", "classified_output_failure", "classified_plan_failure"],
+)
+def test_structured_output_failure_from_the_round_reaches_the_quote_fallback(monkeypatch, failure, error_name, category):
+    """#4091: 生成の round の検証の失敗は、分類の有無を問わず同じ安全な退避へ進み、HTTP 500 にしない。"""
+    ctx, _eid = _context()
+    error = failure()
+
+    def broken_round(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(grounded, "run_round", broken_round)
+    result = run(FakeModel([draft()], [audit()]), ctx).response
+
+    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
+    assert result.envelope["outcome"] == "conditional"
+    assert [entry["applies"] for entry in result.envelope["items"]] == ["quote_only"]
+    assert result.confidence == "low"
+    assert result.needs_human_review
+    trace = result.generation_trace
+    assert trace["generation_failure"]["error"] == error_name
+    assert trace["generation_failure"]["stage"] == "answer.generate"
+    assert trace["generation_failure"]["category"] == category
+
+
+@pytest.mark.parametrize(
+    "error", [TypeError("合成"), KeyError("合成"), AttributeError("合成"), RuntimeError("合成")], ids=lambda e: type(e).__name__
+)
+def test_implementation_errors_are_not_reported_as_an_answer(monkeypatch, error):
+    """#4091: 構造化出力の検証の失敗でない実装の例外は、参考情報の回答にしない。"""
+    ctx, _eid = _context()
+
+    def broken_round(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(grounded, "run_round", broken_round)
+    with pytest.raises(type(error)):
+        run(FakeModel([draft()], [audit()]), ctx)
+
+
+def test_validation_failure_detail_names_the_failed_model_without_contents():
+    """#4091: 型の名前と検査の種類で、モデルの出力の不合格か実装の不具合かを切り分けられる。本文は残さない。"""
+    secret = "合成の根拠の本文"
+    with pytest.raises(ValidationError) as raised:
+        GroundedItem(kind="rule", text=secret * 100)
+
+    detail = grounded.generation_failure_detail(raised.value)
+
+    assert detail == {"category": "schema_field", "model": "GroundedItem", "validation_error_types": {"string_too_long": 1}}
+    assert secret not in json.dumps(detail, ensure_ascii=False)
+
+
+COMPOUND_QUESTION = "同じ版の資料を使ってください。①合成の項目の意味は？②合成の処理の意味は？"
+LONG_RECORD = "合成の項目は入力を区別する識別子です。" * 60
+
+
+def test_compound_question_with_long_evidence_is_answered_without_a_generation_failure():
+    """#4091: 字数の上限より長い根拠でも、小問の計画が有効なら生成まで進み、失敗の退避にしない。"""
+    ctx = context(record(0, LONG_RECORD, "合成の項目"))
+    answer = "合成の項目は入力を区別する識別子です。"
+    label = "E1"
+    calls = []
+
+    def model(system, prompt, settings, schema, **options):
+        calls.append(schema)
+        if schema is RequestScopePlan:
+            assert "evidence" in json.loads(prompt)
+            return schema.model_validate({"request_coverage": [_plan(label)]})
+        return schema.model_validate(
+            {
+                "summary": "",
+                "confidence": "high",
+                "items": [
+                    {
+                        "kind": "rule",
+                        "request_id": "Q1",
+                        "text": answer,
+                        "citations": [{"evidence_id": label, "line_start": 1, "line_end": 1}],
+                    }
+                ],
+            }
+        )
+
+    result = run(model, ctx, question=COMPOUND_QUESTION).response
+
+    assert "generation_failure" not in result.generation_trace
+    assert calls[0] is RequestScopePlan
+    assert len(calls) >= 2
+    assert answer in result.answer_text
+
+
+def test_invalid_plan_output_at_the_first_round_reaches_the_quote_fallback():
+    """#4091: 生成の前の計画の呼び出しの出力不合格も、HTTP 500 にせず参考情報へ退避する。"""
+    ctx = context(record(0, LONG_RECORD, "合成の項目"))
+
+    def model(system, prompt, settings, schema, **options):
+        assert schema is RequestScopePlan
+        schema.model_validate({})
+
+    result = run(model, ctx, question=COMPOUND_QUESTION).response
+
+    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
+    assert result.envelope["outcome"] == "conditional"
+    failure = result.generation_trace["generation_failure"]
+    assert failure["error"] == "ValidationError"
+    assert failure["stage"] == "answer.generate"
+    assert failure["model"] == "RequestScopePlan"
+    assert LONG_RECORD not in json.dumps(failure, ensure_ascii=False)
