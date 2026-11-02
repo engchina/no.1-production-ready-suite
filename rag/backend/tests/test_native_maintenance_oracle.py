@@ -192,7 +192,7 @@ async def test_delete_reinsert_queue_restores_native_candidates(
             ("keyword", 1),
         ]
         for channel, expected in channel_counts:
-            assert await search_count(channel) == expected, channel
+            assert await search_count(channel) == expected, (channel, results[-1])
     finally:
         for name in reversed(made):
             await execute(f"DROP TABLE {name} PURGE")
