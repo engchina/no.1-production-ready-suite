@@ -279,6 +279,9 @@ def test_rag_errors_are_returned_as_screen_messages(
     response = client.get(_url(), headers=login("preview-viewer"))
     assert response.status_code == status
     assert response.json()["error_messages"]
+    # 版の失効だけは画面が案内に切り替えるので code を返す（#4092）。
+    expected = "source_stale" if error_code == "source_stale" else None
+    assert response.json().get("error_code") == expected
 
 
 @pytest.mark.parametrize(

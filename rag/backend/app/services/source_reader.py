@@ -12,6 +12,7 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from pr_backend_core.source_text import read_source_window
 
+from app.api.errors import SourceVersionStaleError
 from app.clients.oracle import OracleClient
 from app.rag.element_locator import chunk_element_ids
 from app.schemas.search import RetrievedChunk
@@ -133,7 +134,7 @@ def reading_window(
                 base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
             )
             if version != revision:
-                raise HTTPException(409, "資料の版が変わりました。引用を開き直してください。")
+                raise SourceVersionStaleError("資料の版が変わりました。引用を開き直してください。")
             if (
                 type(index) is not int
                 or type(offset) is not int
@@ -296,13 +297,14 @@ async def resolve_source_context(
     """現在の権限と chunk の版から、同一解析版の保存済み成果を解決する。"""
     chunk = await oracle.retrievable_chunk(document_id, chunk_id)
     if chunk is None:
-        stale = await oracle.accessible_chunk_exists(document_id, chunk_id)
-        raise HTTPException(
-            409 if stale else 404, "資料の版が変わりました。" if stale else "根拠を閲覧できません。"
-        )
+        # 再索引で chunk の行ごと消えることがあるので、文書が見られるかで分ける（#4092）。
+        # 見られない文書は 404 のままにし、文書・chunk の有無を明かさない。
+        if await oracle.accessible_document_exists(document_id):
+            raise SourceVersionStaleError("資料の版が変わりました。")
+        raise HTTPException(404, "根拠を閲覧できません。")
     revision = str(chunk.metadata.get("chunk_set_id") or "")
     if expected_revision is not None and revision != expected_revision:
-        raise HTTPException(409, "資料の版が変わりました。")
+        raise SourceVersionStaleError("資料の版が変わりました。")
     sources = await oracle.chunk_set_extraction_recipe_ids([revision])
     artifact = (
         await oracle.get_document_extraction_artifact(

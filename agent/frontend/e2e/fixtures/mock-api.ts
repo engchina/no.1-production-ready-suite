@@ -1989,8 +1989,8 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (!runEvidenceOf(run, query)) throw new HttpError(404, "この実行の根拠に、その資料はありません。");
       const chunkId = query.get("chunk_id") ?? "";
       const override = (state.sourcePreviews[chunkId] ?? {}) as Json;
-      const error = override.error as { status: number; message: string } | undefined;
-      if (error) throw new HttpError(error.status, error.message);
+      const error = override.error as { status: number; message: string; errorCode?: string } | undefined;
+      if (error) throw new HttpError(error.status, error.message, error.errorCode);
       state.sourcePreviewsIssued += 1;
       const base = `http://rag.e2e.test/api/source-previews/p1.${encodeURIComponent(chunkId)}.${state.sourcePreviewsIssued}.sig`;
       return {

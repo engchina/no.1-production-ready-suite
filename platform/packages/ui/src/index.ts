@@ -225,8 +225,10 @@ export {
   isAbortError,
   isNetworkFailure,
   isTimeoutError,
+  isSourceVersionStale,
   isTransportError,
   presentApiError,
+  SOURCE_VERSION_STALE_CODE,
   toApiTransportError,
   transportErrorOf,
   type ApiErrorDetail,
@@ -961,6 +963,7 @@ export * from "./lib/text-quote";
 export {
   DEFAULT_DOCUMENT_PREVIEW_LABELS,
   documentPreviewLabels,
+  SOURCE_VERSION_STALE_MESSAGE,
   type DocumentPreviewLabels,
 } from "./components/document-preview/labels";
 export {
@@ -997,5 +1000,6 @@ export { ViewportScrollRegion } from "./components/data/viewport-scroll-region";
 
 export { TraceExplorer, DEFAULT_TRACE_EXPLORER_LABELS, type TraceExplorerLabels } from "./components/data/trace-explorer";
 export { EvidenceReader, type EvidenceReadingInput, type EvidenceReadingWindow } from "./components/document-preview/evidence-reader";
+export { SourceVersionStaleNotice } from "./components/document-preview/source-version-stale-notice";
 
 export { OriginalSourcePanel, type OriginalSourceInput, type OriginalSourceWindow, type OriginalSourceLoader } from "./components/document-preview/original-source-panel";

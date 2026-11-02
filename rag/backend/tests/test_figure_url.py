@@ -78,11 +78,12 @@ class _ScopedFigureOracle(_FigureSourceOracle):
             return None
         return self.visible.get((document_id, chunk_id))
 
-    async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
+    async def accessible_document_exists(self, document_id: str) -> bool:
+        """見られる文書か（chunk が今も見えるか、古い版の chunk だけが残っている文書）。"""
         allowed = current_audit_request_context().allowed_knowledge_base_ids
         if allowed is not None and "kb-1" not in allowed:
             return False
-        return (document_id, chunk_id) in self.stale
+        return any(key[0] == document_id for key in (*self.visible, *self.stale))
 
 
 def _figure_chunk(chunk_set_id: str = "cs-1") -> RetrievedChunk:
@@ -503,9 +504,9 @@ def test_screen_figure_returns_png_in_the_session_users_scope(
     assert figures.contexts[-1].allowed_knowledge_base_ids == frozenset({"kb-1"})
     assert scopes == ["search"]
 
-    # 図でない根拠・見えない根拠は 404、古い版は 409。
+    # 図でない根拠は 404、見られる文書の今は無い根拠（再索引で行が消えた）・古い版は 409。
     assert client.get(_screen_url("c-text"), headers=headers).status_code == 404
-    assert client.get(_screen_url("other"), headers=headers).status_code == 404
+    assert client.get(_screen_url("other"), headers=headers).status_code == 409
     figures.visible = {}
     figures.stale = {("d1", "c-fig")}
     assert client.get(_screen_url(), headers=headers).status_code == 409

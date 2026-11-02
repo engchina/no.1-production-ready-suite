@@ -643,8 +643,9 @@ class _ScopedReadOracle(_RecordingReadOracle):
             return None
         return await super().retrievable_chunk(document_id, chunk_id)
 
-    async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
-        return False
+    async def accessible_document_exists(self, document_id: str) -> bool:
+        allowed = current_audit_request_context().allowed_knowledge_base_ids
+        return allowed is None or "kb-1" in allowed
 
     async def accessible_document_ids(self, document_ids: Sequence[str]) -> set[str]:
         context = current_audit_request_context()

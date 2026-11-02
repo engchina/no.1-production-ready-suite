@@ -8,6 +8,8 @@ import { Disclosure } from "../ui/disclosure";
 import { Skeleton } from "../ui/skeleton";
 import { CodepointHighlight } from "./codepoint-highlight";
 import { OriginalSourcePanel, type OriginalSourceLoader } from "./original-source-panel";
+import { SourceVersionStaleNotice } from "./source-version-stale-notice";
+import { isSourceVersionStale } from "../../lib/api-error";
 import { resolveContentLang } from "../../lib/content-lang";
 
 export interface EvidenceReadingInput {
@@ -113,6 +115,8 @@ export function EvidenceReader({ readingKey, loadWindow, enabled = true, downloa
     if (input.section_id || input.scope) setOutline({ key: readingKey, open: false });
     setRequest(old => ({ key: readingKey, input, serial: old.serial + 1 }));
   };
+  // 版の失効（#4092）: どの操作も同じ結果になるので、案内だけを出す（保存した抜粋はパネルの要約に残る）。
+  if (state.key === readingKey && isSourceVersionStale(state.error)) return <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="evidence-reader"><SourceVersionStaleNotice /></div>;
   const blocks = active.flatMap(window => window.blocks).filter((block, index, all) => all.findIndex(other => other.id === block.id && other.offset === block.offset) === index);
   return <div className="flex min-h-0 flex-1 flex-col gap-3" data-testid="evidence-reader">
     <div className="flex flex-wrap items-center gap-2">

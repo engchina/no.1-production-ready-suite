@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.api.errors import SOURCE_STALE_CODE
 from app.api.routes import documents
 from app.main import app
 from app.schemas.search import RetrievedChunk
@@ -53,7 +54,7 @@ def test_citation_source_map_pins_chunk_and_does_not_replace_stale_chunk(
     )
     oracle = SimpleNamespace(
         retrievable_chunk=AsyncMock(return_value=chunk),
-        accessible_chunk_exists=AsyncMock(return_value=True),
+        accessible_document_exists=AsyncMock(return_value=True),
         get_document=AsyncMock(return_value=detail),
         chunk_set_extraction_recipe_ids=AsyncMock(return_value={"cs1": "ex1"}),
         get_document_extraction_artifact=AsyncMock(return_value={"extraction_json": payload}),
@@ -69,7 +70,15 @@ def test_citation_source_map_pins_chunk_and_does_not_replace_stale_chunk(
     load.reset_mock()
     assert client.get(path.replace("cs1", "cs0")).status_code == 409
     oracle.retrievable_chunk.return_value = None
-    assert client.get(path).status_code == 409
-    oracle.accessible_chunk_exists.return_value = False
+    # 見られる文書の今は無い chunk: 画面が案内に切り替えられる code を返す（#4092）。
+    stale = client.get(path)
+    assert stale.status_code == 409
+    assert stale.json()["error_code"] == SOURCE_STALE_CODE
+    assert client.get(path.replace("source-map", "reader")).json()["error_code"] == (
+        SOURCE_STALE_CODE
+    )
+    oracle.accessible_document_exists.return_value = False
+    # 見られない文書は有無を明かさない（code も付けない）。
+    assert "error_code" not in client.get(path).json()
     assert client.get(path).status_code == 404
     load.assert_not_awaited()

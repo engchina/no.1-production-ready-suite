@@ -32,6 +32,8 @@ import {
   useEvidenceSource,
   useUrlSelection,
   INFORMATION_TABLE_ROW_CLASS,
+  SourceVersionStaleNotice,
+  isSourceVersionStale,
 } from "@production-ready/ui";
 import {
   BookmarkPlus,
@@ -766,7 +768,7 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
       )}
     </ViewportScrollRegion>
     {canOpenDetail && source.mounted ? <CitationSourceSheet chunk={chunk.isError ? null : chunk.data ?? null} index={selectedIndex} open={source.selected !== null} onClose={source.close} kind={detail.answer ? "answer" : "search"} scores={{ score: null, rerankScore: selected?.rerank_score ?? null }}
-      empty={chunk.isError ? <ErrorState message={chunk.error instanceof ApiError ? chunk.error.message : t("feedback.detail.noCitationsHint")} onRetry={() => void chunk.refetch()} /> : <TimedLoadingState label={t("documents.detail.loading")} operationKey="feedback-citation-source"><Skeleton className="h-40 w-full" /></TimedLoadingState>} /> : null}
+      empty={chunk.isError ? isSourceVersionStale(chunk.error) ? <SourceVersionStaleNotice /> : <ErrorState message={chunk.error instanceof ApiError ? chunk.error.message : t("feedback.detail.noCitationsHint")} onRetry={() => void chunk.refetch()} /> : <TimedLoadingState label={t("documents.detail.loading")} operationKey="feedback-citation-source"><Skeleton className="h-40 w-full" /></TimedLoadingState>} /> : null}
     </>
   );
 }

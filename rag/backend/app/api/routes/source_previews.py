@@ -39,8 +39,14 @@ from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pr_backend_core.mcp import McpToolError
 
+from app.api.errors import SourceVersionStaleError
 from app.api.routes.documents import document_content_response, load_document_content
-from app.api.signed_access import SIGNED_RESPONSE_HEADERS, enter_token_user, signed_error
+from app.api.signed_access import (
+    SIGNED_RESPONSE_HEADERS,
+    enter_token_user,
+    signed_error,
+    signed_stale_error,
+)
 from app.clients.oracle import OracleClient
 from app.config import get_settings
 from app.mcp import tools as mcp_tools
@@ -60,7 +66,6 @@ _FORBIDDEN_MESSAGE = "この文書を見る権限がありません。"
 _STALE_MESSAGE = "この根拠は文書の古い版のものです。もう一度質問してください。"
 # MCP のエラー（`rag_read_source` と同じ判定）→ HTTP の status。
 _TOOL_ERROR_STATUS = {
-    mcp_tools.SOURCE_STALE_CODE: 409,
     mcp_tools.SOURCE_NOT_FOUND_CODE: 404,
     mcp_tools.PREVIEW_FILE_MISSING_CODE: 404,
 }
@@ -85,11 +90,13 @@ async def _readable_target(claims: SourcePreviewClaims) -> tuple[Any, Any]:
         stored = chunk.metadata.get("chunk_set_id")
         current_chunk_set = stored.strip() or None if isinstance(stored, str) else None
         if current_chunk_set != claims.chunk_set_id:
-            raise signed_error(409, _STALE_MESSAGE)
+            raise signed_stale_error(_STALE_MESSAGE)
         return await mcp_tools.preview_document(oracle, claims.document_id, claims.recipe_id)
     except McpToolError as exc:
+        if exc.code == mcp_tools.SOURCE_STALE_CODE:
+            raise signed_stale_error(_STALE_MESSAGE) from None
         status = _TOOL_ERROR_STATUS.get(exc.code, exc.status or 400)
-        raise signed_error(status, _STALE_MESSAGE if status == 409 else exc.message) from None
+        raise signed_error(status, exc.message) from None
 
 
 async def _enter(request: Request, claims: SourcePreviewClaims) -> Token[Any] | None:
@@ -187,6 +194,8 @@ async def read_source_preview_content(
                         scope=scope,
                         section_id=section_id,
                     )
+            except SourceVersionStaleError:
+                raise signed_stale_error(_STALE_MESSAGE) from None
             except HTTPException as exc:
                 raise signed_error(exc.status_code, str(exc.detail)) from None
             return JSONResponse(

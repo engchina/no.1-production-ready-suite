@@ -2348,11 +2348,13 @@ def test_read_source_distinguishes_missing_and_stale(
     user = auth.user_with_permissions("searcher", ["menu.search"])
     headers = _token(user.user_uuid)
 
-    missing = _call("rag_read_source", {"document_id": "d1", "chunk_id": "nope"}, headers)
+    missing = _call("rag_read_source", {"document_id": "d9", "chunk_id": "c1"}, headers)
     assert missing["isError"] is True
     assert missing["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
-    stale = _call("rag_read_source", {"document_id": "d1", "chunk_id": "c-old"}, headers)
-    assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
+    # 見られる文書の、今は無い chunk は行が残っていなくても古い版（再索引で行が消える。#4092）。
+    for chunk_id in ("c-old", "row-removed"):
+        stale = _call("rag_read_source", {"document_id": "d1", "chunk_id": chunk_id}, headers)
+        assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
     # 検索の権限が無い利用者は呼べない。
     viewer = auth.user_with_permissions("viewer", ["menu.upload"])
     denied = _call(
@@ -3025,7 +3027,8 @@ def test_read_section_errors(auth: ProductionAuth, document_oracle: type[_Docume
 
     assert error({"document_id": "d1", "section_id": "s9"}) == mcp_tools.SECTION_NOT_FOUND_CODE
     assert error({"document_id": "d9", "section_id": "s1"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
-    assert error({"document_id": "d1", "chunk_id": "d1:cs-9:0"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert error({"document_id": "d9", "chunk_id": "d9:cs-9:0"}) == mcp_tools.SOURCE_NOT_FOUND_CODE
+    assert error({"document_id": "d1", "chunk_id": "d1:cs-9:0"}) == mcp_tools.SOURCE_STALE_CODE
     assert error({"document_id": "d1", "chunk_id": "d1:cs-old:0"}) == mcp_tools.SOURCE_STALE_CODE
     stale = "cs-old:s2:0:0"
     assert error({"document_id": "d1", "cursor": stale}) == mcp_tools.SOURCE_STALE_CODE
@@ -3255,11 +3258,11 @@ def test_read_source_returns_bounded_figure_image_rechecked_on_every_read(
     assert stale["structuredContent"]["error_code"] == mcp_tools.SOURCE_STALE_CODE
     assert [block["type"] for block in stale["content"]] == ["text"]
     assert _FigureStorage.reads == ["docs/d1/r-1/prepared.pdf"]
-    # 見えなくなった根拠も同じ（ID を知っていても読めない）。
+    # 見えない文書の根拠は無いものと同じ（ID を知っていても読めない）。
     figure_source.stale = set()
     gone = _call(
         "rag_read_source",
-        {"document_id": "d1", "chunk_id": "c-fig", "include_image": True},
+        {"document_id": "d9", "chunk_id": "c-fig", "include_image": True},
         headers,
     )
     assert gone["structuredContent"]["error_code"] == mcp_tools.SOURCE_NOT_FOUND_CODE
