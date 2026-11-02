@@ -16,7 +16,13 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from numbers import Real
 from typing import Any, Literal, Protocol
 
-from pr_backend_core.bounded_calls import KIND_LABELS, Attempt, BoundedCallFailed, ErrorKind
+from pr_backend_core.bounded_calls import (
+    KIND_LABELS,
+    Attempt,
+    BoundedCaller,
+    BoundedCallFailed,
+    ErrorKind,
+)
 from pr_backend_core.chat_progress import chat_progress_details
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.tracing import observed_span
@@ -259,18 +265,25 @@ class OciGenAiClient:
                         receipt.status = "completed"
                         return cached
 
-                async def rerank_once(attempt: Attempt) -> Sequence[tuple[object, object]]:
-                    with bind_rerank_attempt(attempt.number):
-                        return await self._rerank_with_oci(query, documents, top_n)
-
+                # 1 回の要求の上限を超える候補は分けて送る。点数は質問と文書の組で決まり、分けても
+                # 順位は変わらない(#4114)。1 つでも失敗したら全体を rerank の失敗にする。
+                size = max(1, getattr(self._settings, "rag_rerank_max_documents_per_request", 1000))
+                offsets = range(0, len(documents), size)
+                validated = []
                 # OCI SDK の再試行は切り、既存の共通実行器だけで再試行する。
-                with ingestion_ai_calls(self._settings, "rerank", total=1) as caller:
-                    results = await _unwrapped_item_failure(
-                        caller.call(rerank_once, label="rerank")
-                    )
-                validated = _validate_rerank_results(
-                    results, document_count=len(documents), top_n=top_n
-                )
+                with ingestion_ai_calls(self._settings, "rerank", total=len(offsets)) as caller:
+                    for offset in offsets:
+                        batch = documents[offset : offset + size]
+                        validated.extend(
+                            await self._rerank_batch(
+                                caller,
+                                query,
+                                batch,
+                                offset=offset,
+                                top_n=top_n if len(offsets) == 1 else len(batch),
+                            )
+                        )
+                validated = sorted(validated, key=lambda item: item[1], reverse=True)[:top_n]
                 if cache_key is not None:
                     self._store_rerank(cache_key, validated)
                 receipt.status = "completed"
@@ -355,6 +368,25 @@ class OciGenAiClient:
         if not isinstance(vectors, list):
             raise ValueError("OCI embedding response に embeddings がありません。")
         return vectors
+
+    async def _rerank_batch(
+        self,
+        caller: BoundedCaller,
+        query: str,
+        documents: list[str],
+        *,
+        offset: int,
+        top_n: int,
+    ) -> list[tuple[int, float]]:
+        """1 回の要求の結果を検証し、index を入力全体の位置へ直して返す。"""
+
+        async def rerank_once(attempt: Attempt) -> Sequence[tuple[object, object]]:
+            with bind_rerank_attempt(attempt.number):
+                return await self._rerank_with_oci(query, documents, top_n)
+
+        results = await _unwrapped_item_failure(caller.call(rerank_once, label="rerank"))
+        validated = _validate_rerank_results(results, document_count=len(documents), top_n=top_n)
+        return [(offset + index, score) for index, score in validated]
 
     async def _rerank_with_oci(
         self, query: str, documents: list[str], top_n: int

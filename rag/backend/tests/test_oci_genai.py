@@ -288,6 +288,54 @@ async def test_rerank_accepts_and_sorts_valid_oci_results() -> None:
     ]
 
 
+class _BatchRerankClient(OciGenAiClient):
+    """1 回の要求の件数を記録し、本文の番号から決まる点数を返す。"""
+
+    def __init__(self, *, max_documents: int = 3, fail_at: int | None = None) -> None:
+        super().__init__(
+            settings=_oci_settings().model_copy(
+                update={"rag_rerank_max_documents_per_request": max_documents}
+            )
+        )
+        self.requests: list[tuple[int, int]] = []
+        self.fail_at = fail_at
+
+    async def _rerank_with_oci(
+        self, query: str, documents: list[str], top_n: int
+    ) -> list[tuple[int, float]]:
+        self.requests.append((len(documents), top_n))
+        if self.fail_at == len(self.requests):
+            raise RuntimeError("合成の失敗")
+        scores = [(index, int(document) / 100) for index, document in enumerate(documents)]
+        return sorted(scores, key=lambda item: -item[1])[:top_n]
+
+
+async def test_rerank_splits_requests_over_the_limit_and_keeps_full_ranking() -> None:
+    """件数の上限を超える候補は分けて送り、入力全体の index と点数の順に直す（#4114）。"""
+    client = _BatchRerankClient(max_documents=3)
+    documents = [str(value) for value in (10, 70, 30, 90, 20, 60, 80)]
+
+    results = await client.rerank("合成の質問", documents, top_n=4)
+
+    assert client.requests == [(3, 3), (3, 3), (1, 1)]
+    assert results == [(3, 0.9), (6, 0.8), (1, 0.7), (5, 0.6)]
+
+
+async def test_rerank_within_the_limit_sends_one_request_with_top_n() -> None:
+    client = _BatchRerankClient(max_documents=3)
+
+    assert await client.rerank("合成の質問", ["10", "30", "20"], top_n=2) == [(1, 0.3), (2, 0.2)]
+    assert client.requests == [(3, 2)]
+
+
+async def test_rerank_batch_failure_fails_the_whole_rerank() -> None:
+    """一部の候補だけの順位を成功に見せない（呼び出し元は取得順へ戻して失敗を記録する）。"""
+    client = _BatchRerankClient(max_documents=2, fail_at=2)
+
+    with pytest.raises(RuntimeError):
+        await client.rerank("合成の質問", ["10", "20", "30"], top_n=3)
+
+
 async def test_rerank_cache_reuses_same_query_documents_and_top_n() -> None:
     """rerank cache は query/document/top_n が同一のときだけ結果を再利用する。"""
     client = CountingRerankClient()
