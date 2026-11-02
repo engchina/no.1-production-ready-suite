@@ -18,11 +18,23 @@ _LITERAL_ESCAPES = ("\\n", "\\t", "\\r", '\\"', "\\u")
 
 
 class BatchQuoteMismatch(ValueError):
-    """quote が入力の原文に無い。検証の例外の本文は固定のコードで、匿名の診断だけを持つ（#4090）。"""
+    """quote が入力の原文に無い。検証の例外の本文は固定のコードで、匿名の診断だけを持つ（#4090）。
 
-    def __init__(self, diagnostic: Mapping[str, Any]) -> None:
+    ``reading`` は検査した読取結果。再試行の後も残ったときに、原文で確かめられた findings だけを呼び出し側が使う。
+    """
+
+    def __init__(self, diagnostic: Mapping[str, Any], *, reading: Any = None) -> None:
         super().__init__(_QUOTE_NOT_IN_INPUT)
         self.diagnostic = dict(diagnostic)
+        self.reading = reading
+
+
+def batch_quote_mismatch(error: Exception) -> BatchQuoteMismatch | None:
+    """構造化出力の検証の失敗が quote の照合の不合格だけのとき、その例外。ほかの違反が混ざれば None。"""
+    if not isinstance(error, ValidationError):
+        return None
+    causes = [(row.get("ctx") or {}).get("error") for row in error.errors(include_input=False, include_url=False)]
+    return causes[0] if len(causes) == 1 and isinstance(causes[0], BatchQuoteMismatch) else None
 
 
 def _compact(value: str, fold: Callable[[Any], str] = fold_width) -> str:
@@ -75,10 +87,22 @@ def quote_mismatch_diagnostic(unmatched: Sequence[tuple[str, str]], originals: M
     """照合できなかった findings の理由の件数と先頭の数件の性質（モデルの実出力を保存せずに切り分ける。#4090）。"""
     inputs = {key: _compact(text) for key, text in originals.items()}
     rows = [_unmatched_quote(evidence_id, quote, inputs, originals) for evidence_id, quote in unmatched]
+    compact_quotes = [_compact(quote) for _, quote in unmatched]
     return {
         "unmatched_count": len(rows),
         "reasons": dict(Counter(row["reason"] for row in rows)),
         "samples": rows[:_MAX_MISMATCH_SAMPLES],
+        # 入力の番号だけ（モデルが書いた未知の番号は持たない）。
+        "evidence_ids": list(dict.fromkeys(evidence_id for evidence_id, _ in unmatched if evidence_id in originals)),
+        # 不合格の quote の根拠として読み直す入力: 指した入力と、quote を逐語で含む別の入力。
+        "retained_evidence_ids": list(
+            dict.fromkeys(
+                key
+                for (evidence_id, _), target in zip(unmatched, compact_quotes, strict=True)
+                for key, text in inputs.items()
+                if key == evidence_id or (target and target in text)
+            )
+        ),
     }
 
 
@@ -129,8 +153,12 @@ def batch_repair_prompt(original: str, detail: Mapping[str, Any]) -> str:
         guidance.append(
             "各 findings の evidence_id と quote を対応する入力原文に照合し、"
             "連続して存在する原文を quote に使ってください。原文を補作しないでください。"
+            "quote の途中を省略せず、離れた箇所は finding を分けてください。"
         )
-    # 照合の診断（quote_mismatch）はモデルに渡さない。指摘の形は検査の型・位置・固定コードだけ。
+        mismatches = [entry["quote_mismatch"] for entry in errors if entry.get("quote_mismatch")]
+        if failed_inputs := list(dict.fromkeys(key for mismatch in mismatches for key in mismatch.get("evidence_ids", ()))):
+            guidance.append(f"原文に無い quote があった入力: {'、'.join(failed_inputs)}")
+    # 照合の診断（quote_mismatch）の字数と理由はモデルに渡さない。指摘の形は検査の型・位置・固定コード・入力の番号だけ。
     shown = [{key: value for key, value in entry.items() if key != "quote_mismatch"} for entry in errors]
     return (
         original

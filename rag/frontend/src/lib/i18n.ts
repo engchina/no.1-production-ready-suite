@@ -4797,6 +4797,7 @@ export const ja = {
   "evaluation.failureReason.missing_content": "標準回答の必要な項目が抜けている",
   "evaluation.failureReason.answer_failed": "標準回答での評価が不合格",
   "evaluation.failureReason.answer_evaluation_error": "標準回答で評価できなかった",
+  "evaluation.failureReason.answer_generation_fallback": "回答文を生成できず参考情報を返した",
   "evaluation.failureReason.guardrail_warning": "安全チェックの警告",
   "evaluation.failureReason.case_error": "ケースの実行に失敗",
   "evaluation.failureReason.unexpected_handling": "対応が期待と違う",

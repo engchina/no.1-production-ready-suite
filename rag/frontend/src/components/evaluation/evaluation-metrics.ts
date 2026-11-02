@@ -36,6 +36,7 @@ const FAILURE_REASON_KEYS: Record<string, I18nKey> = {
   missing_content: "evaluation.failureReason.missing_content",
   answer_failed: "evaluation.failureReason.answer_failed",
   answer_evaluation_error: "evaluation.failureReason.answer_evaluation_error",
+  answer_generation_fallback: "evaluation.failureReason.answer_generation_fallback",
   guardrail_warning: "evaluation.failureReason.guardrail_warning",
   unexpected_handling: "evaluation.failureReason.unexpected_handling",
   step_missing: "evaluation.failureReason.step_missing",

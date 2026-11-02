@@ -329,13 +329,142 @@ def test_retry_prompt_does_not_carry_the_mismatch_diagnostic(monkeypatch):
     assert failure["quote_mismatch"]["reasons"] == {"quote_not_found": 1}
 
 
-def test_failed_batch_summary_has_only_class_counts_and_capacity(monkeypatch):
+def test_failed_batch_summary_has_only_class_counts_and_capacity():
     """#4090: 回答の診断には、失敗の類別・件数・容量だけを渡す（質問・引用・原文を渡さない）。"""
     secret = "入力に存在しない合成の引用"
+    values = [span(0, "合成の条件A。" * 20)]
+    model = _reading_model(values)
+    with pytest.raises(ValidationError) as raised:
+        model.model_validate(
+            {
+                "read_receipts": {"B1": True},
+                "findings": [{"evidence_id": "B1", "quote": secret, "answer": "合成の回答"}],
+                "unanswered": [],
+            }
+        )
+    detail = batch_validation_detail(raised.value, model.model_json_schema())
+    receipt = {"index": 1, "input_count": 1, "input_chars": 120, "validation_failures": [detail, detail]}
+
+    summary = batch_failure_summary(receipt, raised.value)
+
+    assert summary == {
+        "category": "batch_quote_not_in_input",
+        "batch_index": 1,
+        "input_count": 1,
+        "input_chars": 120,
+        "invalid_attempts": 2,
+        "unmatched_count": 1,
+        "unmatched_reasons": {"quote_not_found": 1},
+    }
+    assert "合成" not in json.dumps(summary, ensure_ascii=False)
+
+
+def _contained(monkeypatch, bad_rows, inputs):
+    """2 回とも ``bad_rows`` を返す読取で分割読取を動かす。"""
+    prompts = []
+
+    def provider(system, prompt, settings, schema, ignored):
+        prompts.append(prompt)
+        result = output(prompt)
+        result["findings"] = [*result["findings"], *bad_rows]
+        return schema.model_validate(result)
+
+    monkeypatch.setattr(oci, "_parse_text_once", provider)
+    return (*prepare(inputs, reader), prompts)
+
+
+def test_unverified_quote_after_the_retry_keeps_verified_findings_and_the_whole_input(monkeypatch):
+    """#4090: 再試行の後も残った quote は採らず、確かめた findings と、その入力の原文の全体で最終生成へ進む。"""
+    inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
+    rows = [{"evidence_id": "B2", "quote": "合成の条件1。...補足本文。", "answer": "採らない合成の回答"}]
+
+    selected, prompt, diagnostic, prompts = _contained(monkeypatch, rows, inputs)
+
+    # 組ごとの再試行は既存の 1 回だけ（モデルの呼び出しを増やさない。どの組にも番号 B2 の不合格がある）。
+    first_batch = diagnostic["batches"][0]
+    assert first_batch["status"] == "completed"
+    assert len(first_batch["validation_failures"]) == 2
+    assert first_batch["quote_unverified"] == {"unmatched_count": 1, "reasons": {"quote_not_found": 1}, "retained_input_count": 1}
+    assert len(prompts) == 2 * diagnostic["batch_count"]
+    # 原文に無い引用を、原文として最終生成へ渡さない。
+    assert "採らない合成の回答" not in prompt
+    whole = [value for value in selected if value["text"] == inputs[1]["text"]]
+    assert len(whole) == 1
+    # 確かめた findings の回答候補は、残した入力でも保つ。
+    assert whole[0]["batch_answer"] == "合成の回答"
+    assert not any("..." in value["text"] for value in selected)
+
+
+def test_quote_of_another_input_also_keeps_the_input_that_has_it(monkeypatch):
+    """#4090: 別の入力に逐語で在る quote は、指した入力と在る入力の両方の原文を残す（番号を推測で決めない）。"""
+    inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
+    rows = [{"evidence_id": "B1", "quote": "合成の条件2。", "answer": "採らない合成の回答"}]
+
+    selected, prompt, diagnostic, _ = _contained(monkeypatch, rows, inputs)
+
+    assert diagnostic["batches"][0]["quote_unverified"]["reasons"] == {"quote_in_other_input": 1}
+    assert diagnostic["batches"][0]["quote_unverified"]["retained_input_count"] == 2
+    assert {value["text"] for value in selected} >= {inputs[0]["text"], inputs[2]["text"]}
+    assert "採らない合成の回答" not in prompt
+
+
+def test_unknown_evidence_id_after_the_retry_adds_no_source(monkeypatch):
+    """#4090: 入力に無い番号の quote は、残す原文も無いので捨てる。"""
+    inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
+    rows = [{"evidence_id": "B99", "quote": "入力に存在しない合成の引用", "answer": "採らない合成の回答"}]
+
+    selected, prompt, diagnostic, _ = _contained(monkeypatch, rows, inputs)
+
+    assert diagnostic["batches"][0]["quote_unverified"] == {
+        "unmatched_count": 1,
+        "reasons": {"evidence_id_unknown": 1},
+        "retained_input_count": 0,
+    }
+    assert "入力に存在しない合成の引用" not in json.dumps(selected, ensure_ascii=False)
+    assert "採らない合成の回答" not in prompt
+
+
+def test_an_incomplete_receipt_is_not_contained_and_still_fails(monkeypatch):
+    """#4090: 絞るのは quote の不合格だけ。読取の確認の不足は従来どおり組の失敗にする。"""
 
     def provider(system, prompt, settings, schema, ignored):
         result = output(prompt)
-        result["findings"][0]["quote"] = secret
+        result["read_receipts"] = dict.fromkeys(result["read_receipts"], False)
+        result["findings"][0]["quote"] = "入力に存在しない合成の引用"
+        return schema.model_validate(result)
+
+    monkeypatch.setattr(oci, "_parse_text_once", provider)
+    with pytest.raises(ValidationError):
+        prepare([span(0, "合成の条件A。" * 600)], reader)
+
+
+def test_retry_names_the_failed_inputs_and_forbids_elision(monkeypatch):
+    """#4090: 実モデルの不合格の多くは「...」で途中を省いた quote。再試行の指摘に省略の禁止と入力の番号を入れる。"""
+    calls = []
+
+    def provider(system, prompt, settings, schema, ignored):
+        calls.append(prompt)
+        result = output(prompt)
+        if len(calls) == 1:
+            result["findings"][0]["quote"] = result["findings"][0]["quote"][:4] + "..." + result["findings"][0]["quote"][-4:]
+        return schema.model_validate(result)
+
+    monkeypatch.setattr(oci, "_parse_text_once", provider)
+    prepare([span(0, "合成の条件A。" * 600)], reader)
+
+    feedback = calls[1].split("## Step 4:", 1)[1]
+    assert "途中を省略せず" in feedback
+    assert "原文に無い quote があった入力: B1" in feedback
+    assert "合成" not in feedback
+
+
+def test_when_every_quote_is_rejected_and_the_inputs_do_not_fit_the_failure_is_the_quote_not_the_budget(monkeypatch):
+    """#4090: 残した原文が容量に入らなければ、容量の不足ではなく quote の不合格として参考情報へ退避する。"""
+
+    def provider(system, prompt, settings, schema, ignored):
+        result = output(prompt)
+        for finding in result["findings"]:
+            finding["quote"] = "入力に存在しない合成の引用"
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -352,18 +481,7 @@ def test_failed_batch_summary_has_only_class_counts_and_capacity(monkeypatch):
             read=reader,
             failed_batches=failed,
         )
-
-    assert len(failed) == 1
-    summary = batch_failure_summary(failed[0], raised.value)
-    assert summary["category"] == "batch_quote_not_in_input"
-    assert summary["batch_index"] == 1
-    assert summary["invalid_attempts"] == 2
-    assert summary["input_count"] == 1
-    assert summary["input_chars"] > 0
-    assert summary["unmatched_count"] == 1
-    assert summary["unmatched_reasons"] == {"quote_not_found": 1}
-    serialized = json.dumps(summary, ensure_ascii=False)
-    assert "合成" not in serialized
+    assert batch_failure_summary(failed[-1], raised.value)["category"] == "batch_quote_not_in_input"
 
 
 def test_a_failure_without_validation_detail_still_has_a_class():

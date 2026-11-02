@@ -195,6 +195,7 @@ export type EvaluationFailureReason =
   | "missing_content"
   | "answer_failed"
   | "answer_evaluation_error"
+  | "answer_generation_fallback"
   | "guardrail_warning"
   | "unexpected_handling"
   | "step_missing"

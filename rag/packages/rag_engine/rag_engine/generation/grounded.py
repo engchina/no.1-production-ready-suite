@@ -7074,7 +7074,8 @@ def run_round(
     image_fallback = ""
     presentation = _retrieved_heading_context(spans)
     scope_plan = None
-    from rag_engine.generation.input_budget import ensure_model_input
+    scope_plan_repair: dict[str, Any] = {}
+    from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, ensure_model_input
 
     raw_parse_text = parse_text
 
@@ -7087,8 +7088,8 @@ def run_round(
     range_repair: dict[str, Any] = {}
     separate_scope = uses_separate_scope_plan(question) and not range_only
 
-    def plan_scope(evidence: Sequence[dict]) -> RequestScopePlan:
-        """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。"""
+    def plan_scope(evidence: Sequence[dict], correction: Mapping[str, Any] | None = None) -> RequestScopePlan:
+        """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。``correction`` は前の計画の指摘（作り直しのときだけ）。"""
         return call_with_model_purpose(
             "answer.scope",
             parse_text,
@@ -7112,12 +7113,42 @@ def run_round(
                         }
                         for span in evidence
                     ],
+                    **({"correction": dict(correction)} if correction else {}),
                 },
                 ensure_ascii=False,
             ),
             settings,
             RequestScopePlan,
             provider_id=provider_id,
+        )
+
+    def scope_plan_issues(plan: RequestScopePlan) -> tuple[dict[str, int], list[str]]:
+        """生成の前の計画の不整合の件数（診断）と指摘の文（作り直しの入力）。検査の条件はここだけに置く。"""
+        known = {unit["id"] for unit in _contract_view(question).get("request_units", ()) if unit.get("kind") != "context"}
+        own = [entry.request_id for entry in plan.request_coverage]
+        unknown = [
+            (entry.request_id, label)
+            for entry in plan.request_coverage
+            for label in [*entry.evidence_ids, *(scope.evidence_id for scope in entry.evidence_scope)]
+            if not _label_spans(label, spans)
+        ]
+        planned = GroundedDraft(request_coverage=plan.request_coverage, items=[], summary="", confidence="high")
+        repeated = [request_id for request_id, count in Counter(own).items() if count > 1]
+        return (
+            {
+                "missing_request_count": len(known.difference(own)),
+                "foreign_request_count": len(set(own).difference(known)),
+                "duplicate_request_count": len(own) - len(set(own)),
+                "unknown_evidence_label_count": len(unknown),
+                "plan_error_count": len(_request_plan_errors(planned, spans)),
+            },
+            [
+                *(f"要求 {request_id} の計画がありません。" for request_id in sorted(known.difference(own))),
+                *(f"{request_id} は質問契約の要求の id ではありません。" for request_id in sorted(set(own).difference(known))),
+                *(f"要求 {request_id} の計画が複数あります。1 件にまとめてください。" for request_id in repeated),
+                *dict.fromkeys(f"{request_id}: {label} は Evidence の ID ではありません。" for request_id, label in unknown),
+                *_request_plan_errors(planned, spans, unknown_labels=False),
+            ],
         )
 
     # 保存された章節が無く、原文から複数の対象を復元した場合だけ、対象の照合を本文生成から分ける。
@@ -7130,28 +7161,41 @@ def run_round(
                 raise
             # 計画の出力が再実行の後も契約を満たさない。本文の生成と同じく、この round の草稿が無い失敗として分ける（#4091）。
             raise DraftGenerationInvalid(type(exc).__name__) from exc
-        planned = GroundedDraft(request_coverage=scope_plan.request_coverage, items=[], summary="", confidence="high")
-        if separate_scope:
-            units = _contract_view(question).get("request_units", ())
-            known_requests = {unit["id"] for unit in units if unit.get("kind") != "context"}
-            required_requests = known_requests
-            own_requests = [entry.request_id for entry in scope_plan.request_coverage]
-            plan_issues = {
-                "missing_request_count": len(required_requests.difference(own_requests)),
-                "foreign_request_count": len(set(own_requests).difference(known_requests)),
-                "duplicate_request_count": len(own_requests) - len(set(own_requests)),
-                "unknown_evidence_label_count": sum(
-                    not _label_spans(label, spans)
-                    for entry in scope_plan.request_coverage
-                    for label in [*entry.evidence_ids, *(scope.evidence_id for scope in entry.evidence_scope)]
-                ),
-                "plan_error_count": len(_request_plan_errors(planned, spans)),
-            }
-            if any(plan_issues.values()):
+        issues, notes = scope_plan_issues(scope_plan) if separate_scope else ({}, [])
+        if any(issues.values()):
+            # 草稿の計画の作り直し（下の invalid_request_plan）とそろえ、指摘を付けて計画だけを 1 回作り直す（#4098）。検査は
+            # 変えず、作り直しの結果にも同じ検査を掛ける。この呼び出しは計画が検査に落ちたときだけ増える。
+            scope_plan_repair = {"calls": 1, "initial_issues": issues}
+            repaired: RequestScopePlan | None = None
+            try:
+                repaired = plan_scope(
+                    presentation,
+                    {
+                        "previous_plan": scope_plan.model_dump(mode="json"),
+                        "invalid_request_plan": notes,
+                        "instruction": "previous_plan の invalid_request_plan の指摘をすべて直し、計画の全体を返してください。"
+                        "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は evidence_ids に入れないでください。",
+                    },
+                )
+            except Exception as exc:
+                if invalid_output is None or not (invalid_output(exc) or isinstance(exc, GenerationInputBudgetExceeded)):
+                    raise
+                scope_plan_repair["error"] = type(exc).__name__
+            if repaired is not None:
+                issues = scope_plan_issues(repaired)[0]
+            if repaired is None or any(issues.values()):
                 raise DraftGenerationInvalid(
                     "request_scope_invalid",
-                    detail={"request_count": len(required_requests), "evidence_count": len(spans), **plan_issues},
+                    detail={
+                        "request_count": sum(unit.get("kind") != "context" for unit in _contract_view(question).get("request_units", ())),
+                        "evidence_count": len(spans),
+                        **issues,
+                        "plan_repair": scope_plan_repair,
+                    },
                 )
+            scope_plan = repaired
+            scope_plan_repair["outcome"] = "repaired"
+        planned = GroundedDraft(request_coverage=scope_plan.request_coverage, items=[], summary="", confidence="high")
         # 計画の内外は要求の id と根拠の id だけで決まる。根拠の全文を説明の型（字数の上限がある）に入れない（#4091）。
         plan_probes = [GroundedItem(kind="rule", request_id=plan.request_id, text="根拠計画の照合") for plan in planned.request_coverage]
         selected = (
@@ -7337,7 +7381,7 @@ def run_round(
         draft = canonicalize_output(draft, "answer.generate", prompt)
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
-        generation_calls = 1 + int(scope_plan is not None)
+        generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair))
     plan_errors = _request_plan_errors(draft, spans)
     plan_unsettled: list[str] = []
     plan_recovery = ""
@@ -7471,6 +7515,8 @@ def run_round(
     timing["semantic_audit_policy"] = observation_policy()
     if range_repair:
         timing["citation_range_repair"] = range_repair
+    if scope_plan_repair:
+        timing["request_scope_repair"] = scope_plan_repair
     if plan_repair_calls:
         timing["request_plan_repair"] = {
             "calls": plan_repair_calls,
@@ -8483,10 +8529,10 @@ class DraftGenerationInvalid(RuntimeError):
     """回答文の生成の出力が、再実行の後も構造化出力の契約を満たさなかった（この round の草稿が無い。#3849）。
 
     本文は元の例外の型名か契約違反の固定の名前だけ（モデルの出力の文を持たない）。元の例外は ``__cause__``。
-    ``detail`` は契約違反の内訳の件数（#4091）。
+    ``detail`` は契約違反の内訳の件数（#4091）と計画の作り直しの記録（#4098）。
     """
 
-    def __init__(self, failure: str, *, detail: Mapping[str, int] | None = None) -> None:
+    def __init__(self, failure: str, *, detail: Mapping[str, Any] | None = None) -> None:
         super().__init__(failure)
         self.detail = dict(detail or {})
 

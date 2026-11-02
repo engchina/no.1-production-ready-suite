@@ -46,4 +46,6 @@ it("支持の未評価を意味の不支持と別の理由で表示する", asyn
  const {failureReasonLabel}=await import("./evaluation-metrics");
  expect(failureReasonLabel("claim_unassessed")).toBe("主張の支持を確認できていない");
  expect(failureReasonLabel("unsupported_claim")).not.toBe(failureReasonLabel("claim_unassessed"));
+ expect(failureReasonLabel("answer_generation_fallback")).toBe("回答文を生成できず参考情報を返した");
+ expect(failureReasonLabel("answer_generation_fallback")).not.toBe(failureReasonLabel("case_error"));
 });

@@ -153,7 +153,8 @@ def test_an_invalid_plan_does_not_start_generation(bad_plan: dict[str, Any]) -> 
 
     with pytest.raises(grounded.DraftGenerationInvalid):
         run(QUESTION, parse)
-    assert calls == [RequestScopePlan]
+    # 作り直しても検査に落ちれば生成へ進まない（作り直しは 1 回だけ。#4098）。
+    assert calls == [RequestScopePlan, RequestScopePlan]
 
 
 def test_each_generation_stage_uses_its_saved_prompt() -> None:
@@ -245,3 +246,114 @@ def test_invalid_plan_failure_keeps_issue_counts_without_contents() -> None:
     assert detail["foreign_request_count"] == 1
     assert detail["unknown_evidence_label_count"] == 1
     assert detail["evidence_count"] == 2
+
+
+def _quoted_scope(label: str, quote: str) -> dict[str, Any]:
+    return {"evidence_id": label, "target": "項目", "relation": "direct", "link_quote": quote}
+
+
+def _scope_failures(parse_plans: list[Any]) -> tuple[Any, list[dict[str, Any]]]:
+    """計画の応答を順に返す。生成まで進めば生成の応答を返す。呼び出しの入力を記録する。"""
+    prompts: list[dict[str, Any]] = []
+    plans = iter(parse_plans)
+
+    def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        if schema is RequestScopePlan:
+            prompts.append(json.loads(prompt))
+            value = next(plans)
+            if isinstance(value, Exception):
+                raise value
+            return RequestScopePlan.model_validate(value)
+        return schema.model_validate(draft(["Q1", "Q1"]))
+
+    return parse, prompts
+
+
+MISSING_PLAN = {"request_coverage": [{**plan()["request_coverage"][0], "request_id": "Q9", "evidence_ids": ["unknown"]}]}
+
+
+def test_valid_plan_is_not_repaired_and_keeps_one_plan_call() -> None:
+    """#4098: 通常の質問の呼び出しは増えない。"""
+    parse, prompts = _scope_failures([plan()])
+    result = run_long(parse)
+    assert len(prompts) == 1
+    assert "correction" not in prompts[0]
+    assert "request_scope_repair" not in result.timing
+    assert result.timing["generation_calls"] == 2
+
+
+def test_invalid_plan_is_repaired_once_with_the_findings_and_reaches_generation() -> None:
+    """#4098: 検査に落ちた計画だけ、指摘を付けて 1 回作り直し、同じ検査を通れば生成へ進む。"""
+    parse, prompts = _scope_failures([MISSING_PLAN, plan()])
+    result = run_long(parse)
+
+    assert len(prompts) == 2
+    assert "correction" not in prompts[0]
+    correction = prompts[1]["correction"]
+    assert correction["previous_plan"]["request_coverage"][0]["request_id"] == "Q9"
+    findings = "\n".join(correction["invalid_request_plan"])
+    assert "Q1" in findings and "Q9" in findings and "unknown" in findings
+    assert result.timing["generation_calls"] == 3
+    repair = result.timing["request_scope_repair"]
+    assert repair["calls"] == 1
+    assert repair["outcome"] == "repaired"
+    assert repair["initial_issues"]["missing_request_count"] == 1
+
+
+def test_a_repair_that_is_still_invalid_stops_without_a_third_plan_and_keeps_the_counts() -> None:
+    """#4098: 作り直しても検査に落ちれば生成へ進まない（検査を緩めない）。作り直しは 1 回だけ。"""
+    parse, prompts = _scope_failures([MISSING_PLAN, MISSING_PLAN, plan()])
+    with pytest.raises(grounded.DraftGenerationInvalid) as raised:
+        run_long(parse)
+
+    assert len(prompts) == 2
+    assert str(raised.value) == "request_scope_invalid"
+    detail = grounded.generation_failure_detail(raised.value)
+    assert detail["missing_request_count"] == 1
+    assert detail["plan_repair"]["calls"] == 1
+    assert detail["plan_repair"]["initial_issues"]["foreign_request_count"] == 1
+    assert "outcome" not in detail["plan_repair"]
+
+
+def test_a_repair_whose_output_is_invalid_falls_back_with_the_first_counts() -> None:
+    """#4098: 作り直しの出力が契約を満たさなければ、前の計画の検査の結果で同じ退避へ進む。"""
+    with pytest.raises(ValidationError) as schema_error:
+        RequestScopePlan.model_validate({})
+    parse, prompts = _scope_failures([MISSING_PLAN, schema_error.value])
+    with pytest.raises(grounded.DraftGenerationInvalid) as raised:
+        run_long(parse)
+
+    assert len(prompts) == 2
+    detail = grounded.generation_failure_detail(raised.value)
+    assert detail["foreign_request_count"] == 1
+    assert detail["plan_repair"]["error"] == "ValidationError"
+
+
+def test_a_repair_implementation_error_is_not_classified() -> None:
+    parse, _prompts = _scope_failures([MISSING_PLAN, KeyError("合成の実装の誤り")])
+    with pytest.raises(KeyError):
+        run_long(parse)
+
+
+def test_misattributed_scope_is_a_finding_and_the_repaired_ids_are_kept() -> None:
+    """#4098: 直した計画の根拠だけが生成へ渡り、不合格の計画の番号を使わない。"""
+    wrong = plan()
+    wrong["request_coverage"][0]["evidence_scope"] = [_quoted_scope("E1", TEXTS[1])]
+    wrong["request_coverage"][0]["evidence_ids"] = ["E1"]
+    right = plan()
+    generated: list[str] = []
+    prompts: list[dict[str, Any]] = []
+    plans = iter([wrong, right])
+
+    def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        if schema is RequestScopePlan:
+            prompts.append(json.loads(prompt))
+            return RequestScopePlan.model_validate(next(plans))
+        generated.append(prompt)
+        return schema.model_validate(draft(["Q1", "Q1"]))
+
+    result = run_long(parse)
+    assert result.timing["request_scope_repair"]["initial_issues"]["plan_error_count"] == 1
+    assert any("E2" in finding for finding in prompts[1]["correction"]["invalid_request_plan"])
+    assert RequestScopePlan.model_validate(right).model_dump_json() in generated[0]
+    assert RequestScopePlan.model_validate(wrong).model_dump_json() not in generated[0]
