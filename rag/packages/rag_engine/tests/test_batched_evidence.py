@@ -202,7 +202,11 @@ def test_synthesis_reads_all_twelve_parents_before_final_answer(monkeypatch):
         assert "分割読取の回答候補" in prompt
         return GroundedDraft(
             items=[
-                GroundedItem(kind="rule", text=s["text"], citations=[GroundedCitation(evidence_id=s["label"], quote=s["text"])])
+                GroundedItem(
+                    kind="rule",
+                    text=s["text"].split("\n", 1)[0],
+                    citations=[GroundedCitation(evidence_id=s["label"], quote=s["text"].split("\n", 1)[0])],
+                )
                 for s in final_spans
             ],
             summary="",
@@ -470,3 +474,144 @@ def test_batch_local_ids_preserve_original_sources_and_coordinates():
     assert selected[0]["start"] == 700
     assert selected[0]["end"] == 700 + len("固有の条件。")
     assert selected[0]["evidence_id"].startswith("E")
+
+
+# --- 読取の選択が少ないときの原文の補い（#4113）
+
+PRINCIPLE = "原則として合成の申請は係長が承認する。"
+EXCEPTION = "ただし合成の金額が上限を超える場合は部長が承認する。"
+UNRELATED = "合成の備品の置き場所は倉庫である。"
+
+
+def _synthesize(records, read_findings, *, budget=12000):
+    """読取は ``read_findings`` を返す。最終生成の入力と呼び出しの種類を記録する。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation import answering
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+
+    generated, calls = [], []
+
+    def model(system, prompt, settings, schema, **kwargs):
+        calls.append(schema.__name__)
+        if issubclass(schema, BatchReading):
+            return schema(findings=read_findings(json.loads(prompt)["evidence"]), unanswered=[])
+        assert issubclass(schema, generation_draft_wire_model())
+        generated.append(prompt)
+        return schema.model_validate({"summary": "", "confidence": "low", "items": [{"kind": "gap", "text": "合成の不足"}]})
+
+    def unused(*args, **kwargs):
+        pytest.fail("不要な呼出し")
+
+    settings = replace(config(), evidence_budget_chars=budget, answer_audit_mode="none", answer_max_correction_rounds=0)
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = answering.synthesize_grounded_answer(
+            "合成の申請の承認者は？", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
+        ).response
+    return result, generated, calls
+
+
+def _record(index, text, score=None):
+    from rag_engine.generation import answering
+
+    return answering.AnswerRecord(
+        id=f"p{index}",
+        engine="synthetic",
+        engine_label="Synthetic",
+        page=1,
+        seq_no=index + 1,
+        category="Chunk",
+        text=text,
+        source=f"document-{index}.txt",
+        metadata={"rerank": {"relevance_score": score, "question_relevance_score": score}} if score is not None else {},
+    )
+
+
+FILLER = "\n" + "合成の補足の本文である。" * 700
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ["same_paragraph", "other_paragraph", "other_batch"],
+)
+@pytest.mark.parametrize("findings", ["none", "only_exception"])
+def test_principle_and_exception_reach_the_final_generation(layout, findings):
+    """#4113: 読取が原則・例外を選ばなくても、最終生成の入力に残る（同じ段落・別の段落・別の組）。"""
+    if layout == "same_paragraph":
+        texts = [PRINCIPLE + EXCEPTION + FILLER[:1000], "補足" + FILLER[:1000]]
+    elif layout == "other_paragraph":
+        texts = [PRINCIPLE + "\n\n" + "補足の段落である。" * 30 + "\n\n" + EXCEPTION, "補足" + FILLER[:1000]]
+    else:
+        texts = [PRINCIPLE + FILLER[:3000], "補足" + FILLER[:9000], EXCEPTION + FILLER[:3000]]
+    records = [_record(index, text, score=1.0 - index / 10) for index, text in enumerate(texts)]
+    # 全体が予算を超えて分割読取へ進むように、点数の低い大きな原文を足す。
+    records += [_record(9, "補足" + FILLER, score=0.01)]
+
+    def read(values):
+        if findings == "none":
+            return []
+        return [finding(value, answer="合成の回答") for value in values if EXCEPTION in value["text"]][:1]
+
+    result, generated, calls = _synthesize(records, read, budget=9000)
+
+    assert PRINCIPLE in generated[0] and EXCEPTION in generated[0]
+    assert "generation_failure" not in result.generation_trace
+    # 読取の組の数と最終生成のほかに呼び出しは増えない。
+    assert calls.count("GroundedDraftWire") == 1
+    assert all(name in {"BatchReading", "GroundedDraftWire"} for name in calls)
+    reduction = result.generation_trace["generation_input_budget"]["reduction"]
+    assert reduction["program_added"]["count"] >= 1
+    assert reduction["final"]["count"] >= 2
+    assert reduction["before_reduction"]["count"] >= reduction["final"]["count"]
+
+
+def test_higher_rerank_score_is_filled_first_and_the_budget_is_kept():
+    """#4113: 足す順は原質問の rerank の点数の順。入力の予算を超えない。"""
+    records = [_record(index, f"合成の記載{index}です。" + "補足本文。" * 300, score=index / 10) for index in range(8)]
+
+    result, generated, _ = _synthesize(records, lambda values: [], budget=6000)
+
+    budget = result.generation_trace["generation_input_budget"]
+    assert budget["fits"]
+    assert budget["rendered_chars"] <= 6000
+    assert budget["reduction"]["model_selected"]["count"] == 0
+    assert "合成の記載7です。" in generated[0]
+    assert "合成の記載0です。" not in generated[0]
+
+
+def test_an_oversized_source_is_skipped_and_the_next_rank_is_filled():
+    records = [_record(0, "大きな記載。" + "補足本文。" * 3000, score=0.9), _record(1, "小さな記載です。" + "補足。" * 100, score=0.5)]
+    records += [_record(index, f"合成の記載{index}。" + "補足本文。" * 900, score=0.1) for index in range(2, 6)]
+
+    _, generated, _ = _synthesize(records, lambda values: [], budget=6000)
+
+    assert "小さな記載です。" in generated[0]
+    assert "大きな記載。" not in generated[0]
+
+
+def test_filled_source_keeps_the_reading_answer_and_does_not_duplicate_the_excerpt():
+    selected, prompt, diagnostic = prepare(
+        [span(index, f"合成の条件{index}。\n" + "補足本文。" * 200) for index in range(5)],
+        lambda system, payload, schema: schema(findings=[finding(json.loads(payload)["evidence"][0], answer="残す回答")], unanswered=[]),
+    )
+    assert "残す回答" in prompt
+    assert diagnostic["reduction"]["program_added"]["count"] >= 1
+    assert len({value["source_id"] for value in selected}) == len(selected)
+    assert any(value.get("batch_answer") == "残す回答" and value["text"].startswith("合成の条件") for value in selected)
+
+
+def test_truly_missing_evidence_stays_a_gap():
+    """#4113: 原文を足しても、根拠が無ければ生成は不足のまま（条件を推測しない）。"""
+    records = [_record(index, UNRELATED + FILLER, score=0.5) for index in range(3)]
+
+    result, generated, _ = _synthesize(records, lambda values: [], budget=9000)
+
+    assert PRINCIPLE not in generated[0]
+    assert all(item["kind"] != "rule" for item in result.envelope["items"])
+
+
+def test_short_input_is_not_filled_and_has_no_reduction_record():
+    """#4113: 分割読取をしない普通の回答の入力・呼び出しは変えない。"""
+    inputs = [span(0, "条件Aです。")]
+    selected, prompt, diagnostic = prepare(inputs, lambda *args: pytest.fail("短い入力に読取を追加しない"))
+    assert selected == inputs
+    assert "reduction" not in diagnostic

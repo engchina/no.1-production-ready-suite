@@ -2542,6 +2542,23 @@ def _audit_glossary(runtime_knowledge: RuntimeKnowledgeContext | None) -> list[d
     return [{"term": term.term, "aliases": list(term.aliases)} for term in runtime_knowledge.answer_terms if term.aliases]
 
 
+def _source_question_scores(context: AnswerContext) -> dict[str, float | None]:
+    """根拠の出典の ID ごとの、原質問への rerank の点数。親は親と子の最高値（#4113。分割読取で原文を補う順）。"""
+    scores: dict[str, float | None] = {}
+
+    def keep(key: str, score: float | None) -> None:
+        if key and (scores.get(key) is None or (score is not None and score > (scores[key] or 0.0))):
+            scores[key] = score
+
+    for record in context.records:
+        keep(record.chunk_uid or record.id, question_rerank_score(record))
+    for parent in context.evidence_tree:
+        parent_key = parent.record.chunk_uid or parent.record.id
+        for record in (parent.record, *(child.record for child in parent.children)):
+            keep(parent_key, question_rerank_score(record))
+    return scores
+
+
 def _invalid_structured_output(exc: Exception) -> bool:
     """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。"""
     from rag_engine.adapters.oci import LlmRunawayOutput, is_invalid_structured_output
@@ -2805,6 +2822,7 @@ def synthesize_grounded_answer(
                     schema=grounded.generation_output_model(question).model_json_schema(),
                     provider_id=provider,
                     failed_batches=failed_batches,
+                    source_scores=_source_question_scores(context),
                 )
                 preparing_evidence = False
                 current = generate_round(
