@@ -146,21 +146,53 @@ def test_inspection_index_requires_stable_element_ids() -> None:
     assert indexed["parser_artifacts"]["inspection_index"]["elements"] == {"e1": 0}
 
 
-def test_source_scope_filters_before_paging_and_retains_all_continuations() -> None:
+def test_source_scope_returns_every_item_of_the_left_range() -> None:
     payload = fixture_payload()
     ids = {f"node-{i}" for i in range(31)}
-    first = extraction_window(payload, mode="structure", offset=0, limit=25, scope_element_ids=ids)
-    last = extraction_window(payload, mode="structure", offset=25, limit=25, scope_element_ids=ids)
-    assert first["total"] == last["total"] == 31
-    assert len(first["payload"]["elements"]) == 25
-    assert [e["element_id"] for e in last["payload"]["elements"]] == [
-        f"node-{i}" for i in range(25, 31)
+    result = extraction_window(
+        payload, mode="structure", offset=25, limit=25, scope_element_ids=ids
+    )
+    assert result["complete"] is True
+    assert result["offset"] == 0 and result["total"] == result["limit"] == 31
+    assert [e["element_id"] for e in result["payload"]["elements"]] == [
+        f"node-{i}" for i in range(31)
     ]
     text = extraction_window(
         payload, mode="text", offset=0, limit=25, scope_element_ids={"node-30"}
     )
     assert "項目30 " in text["payload"]["raw_text"]
     assert "項目31 " not in text["payload"]["raw_text"]
+
+
+def test_left_range_does_not_truncate_long_text_or_table_cells() -> None:
+    long_text = "合成の本文" * 4000
+    payload = {
+        "elements": [{"element_id": "e0", "text": long_text, "page_number": 2}],
+        "tables": [
+            {
+                "element_id": "e0",
+                "page_number": 2,
+                "cells": [{"text": f"セル{i}"} for i in range(60)],
+            }
+        ],
+    }
+    for scope in ({"page": 2}, {"scope_element_ids": {"e0"}}):
+        structure = extraction_window(payload, mode="structure", offset=0, limit=25, **scope)
+        assert structure["complete"] is True
+        assert structure["payload"]["elements"][0]["text"] == long_text
+        assert structure["payload"]["preview_truncated"] is False
+        assert len(structure["payload"]["tables"][0]["cells"]) == 60
+        text = extraction_window(payload, mode="text", offset=0, limit=25, **scope)
+        assert text["payload"]["raw_text"] == long_text
+        assert text["total"] == text["limit"] == len(long_text)
+
+
+def test_without_a_left_range_the_document_stays_bounded() -> None:
+    payload = fixture_payload()
+    result = extraction_window(payload, mode="structure", offset=0, limit=25)
+    assert result["complete"] is False
+    assert result["limit"] == 25
+    assert len(result["payload"]["elements"]) == 25
 
 
 def test_unknown_scope_does_not_fall_back_to_whole_document() -> None:

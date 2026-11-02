@@ -940,6 +940,8 @@ class DocumentSectionsData(BaseModel):
     # 抽出結果の章節を作った方式(#715)。
     rules_mode: SectionRulesMode = "parser"
     summary_rules_match: bool | None = None
+    # 抽出結果の全章節の要約(抽出の章節 id → 要約)。人の修正の有無によらず今の抽出から返す(#4094)。
+    summaries: dict[str, str] = Field(default_factory=dict)
     sections: list[DocumentSection] = Field(default_factory=list)
     extraction_section_count: int = 0
     page_count: int | None = None

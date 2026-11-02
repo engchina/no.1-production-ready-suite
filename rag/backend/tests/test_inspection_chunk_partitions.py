@@ -190,3 +190,43 @@ async def test_counts_and_unlocated_rows_keep_document_permissions(
         assert "d.document_id IN (:access_document_id_0)" in sql
         assert binds["tenant_id_hash"] == "synthetic-tenant"
         assert binds["access_document_id_0"] == "permitted-doc"
+
+
+@pytest.mark.asyncio
+async def test_left_range_returns_every_chunk_without_a_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """左の表示範囲の Chunk は既定の件数で切らず、全部を返す（#4094）。"""
+    chunks = [f"chunk-{index}" for index in range(30)]
+    calls: list[dict[str, Any]] = []
+
+    class Oracle:
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, str]:
+            return {"active_chunk_set_id": "set", "active_extraction_recipe_id": "extraction"}
+
+        async def get_document_extraction_artifact(self, **_: Any) -> dict[str, Any]:
+            return {"extraction_json": {}}
+
+        async def list_chunk_set_chunk_window(self, chunk_set: str, **options: Any) -> Any:
+            calls.append(options)
+            return chunks[options["offset"] : options["offset"] + options["limit"]], len(chunks)
+
+        async def count_chunk_set_inspection_locations(self, *_: Any, **__: Any) -> tuple[int, int]:
+            return 30, 0
+
+    async def scope(*_: Any, **__: Any) -> dict[str, Any]:
+        return {"scope_status": "exact", "element_ids": ["known"]}
+
+    monkeypatch.setattr(routes, "OracleClient", Oracle)
+    monkeypatch.setattr(routes, "_inspector_source_scope", scope)
+
+    response = await routes.document_recipe_chunk_window(
+        "doc", "recipe", source_offset=0, offset=25, limit=25
+    )
+
+    assert response.data is not None
+    assert response.data["items"] == chunks
+    assert response.data["complete"] is True
+    assert (response.data["offset"], response.data["limit"]) == (0, 30)
+    assert [(call["offset"], call["limit"]) for call in calls] == [(0, 25), (0, 30)]
+    assert all(call["full_text"] is True for call in calls)

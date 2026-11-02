@@ -35,6 +35,8 @@ def extraction_window(
     scope_element_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """サーバーで絞り、表示対象外の本文・要素・重複metadataを返さない。"""
+    # 左の表示範囲（ページ・文字範囲）を指定したときは、その範囲の全部を返す（#4094）。
+    complete = page is not None or scope_element_ids is not None
     if mode == "navigation":
         nodes = list(payload.get("navigation") or [])
         return {
@@ -79,11 +81,18 @@ def extraction_window(
         if position is not None:
             offset = position // limit * limit
     total = len(elements)
+    if complete:
+        offset, text_offset, cell_offset = 0, 0, 0
+        limit = max(len(elements), limit)
     selected = elements[offset : offset + limit] if mode == "structure" else []
     raw = str(payload.get("display_text") or payload.get("raw_text") or "")
     if page is not None or scope_element_ids is not None:
         raw = "\n\n".join(str(row.get("text") or "") for row in elements)
-    window = text_window(raw, offset if mode == "text" else 0, TEXT_WINDOW)
+    window: dict[str, Any] = (
+        {"text": raw, "offset": 0, "total": len(raw)}
+        if complete
+        else text_window(raw, offset if mode == "text" else 0, TEXT_WINDOW)
+    )
     view = {
         key: payload[key] for key in ("document_type", "confidence", "warnings") if key in payload
     }
@@ -93,7 +102,7 @@ def extraction_window(
     for element in selected:
         element = dict(element)
         text = str(element.get("text") or "")
-        if len(text) > TEXT_WINDOW:
+        if len(text) > TEXT_WINDOW and not complete:
             element["text"] = text[text_offset : text_offset + TEXT_WINDOW]
             element["metadata"] = {
                 **(element.get("metadata") or {}),
@@ -133,9 +142,11 @@ def extraction_window(
     ordinal = 0
     for table in tables:
         cells = list(table.get("cells") or [])
-        selected_cells = cells[
-            max(0, cell_offset - ordinal) : max(0, cell_offset + limit - ordinal)
-        ]
+        selected_cells = (
+            cells
+            if complete
+            else cells[max(0, cell_offset - ordinal) : max(0, cell_offset + limit - ordinal)]
+        )
         ordinal += len(cells)
         if selected_cells:
             visible_tables.append({**table, "cells": selected_cells})
@@ -150,13 +161,15 @@ def extraction_window(
                 if (page is not None and row.get("page_number") == page)
                 or row.get("element_id") in {e.get("element_id") for e in elements}
             ]
-        view[key] = values[offset : offset + limit]
+        view[key] = values if complete else values[offset : offset + limit]
         counts.append(len(values))
+    total_count = window["total"] if mode == "text" else max(counts)
     return {
         "payload": view,
         "offset": window["offset"] if mode == "text" else offset,
-        "total": window["total"] if mode == "text" else max(counts),
-        "limit": TEXT_WINDOW if mode == "text" else limit,
+        "total": total_count,
+        "limit": max(total_count, 1) if complete else TEXT_WINDOW if mode == "text" else limit,
+        "complete": complete,
         "text_offset": text_offset,
         "text_total": text_total,
         "cell_offset": cell_offset,

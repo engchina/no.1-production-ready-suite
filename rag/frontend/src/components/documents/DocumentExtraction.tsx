@@ -97,9 +97,12 @@ export function DocumentExtraction({
   onPageSelect,
   omitWarning,
   showNavigation = true,
+  showFullElementText = false,
 }: {
   extraction: Record<string, unknown>;
   showNavigation?: boolean;
+  /** 左の表示範囲の全部を読むとき、要素の本文を省略せずに出す（続きの操作が無いので、省略すると読めない。#4094）。 */
+  showFullElementText?: boolean;
   /**
    * 同じ画面のほかの場所が出す warning（文書の先頭の Excel の表頭の確認の案内など）。ここでは出さない
    * （同じ状態の案内は 1 か所。UX 契約 messaging §10.2。#2034）。
@@ -221,13 +224,6 @@ export function DocumentExtraction({
         <DocumentSectionsPanel
           documentId={documentId}
           recipeId={recipeId}
-          summaries={
-            new Map(
-              parsed.navigation.flatMap((node) =>
-                node.summary ? [[node.section_id, node.summary] as const] : []
-              )
-            )
-          }
           onPageSelect={onPageSelect}
         />
       ) : showNavigation && parsed.navigation.length > 0 ? (
@@ -248,6 +244,7 @@ export function DocumentExtraction({
                 key={elementKey(element)}
                 element={element}
                 selected={elementKey(element) === selectedElementId}
+                fullText={showFullElementText}
                 buttonRef={
                   elementKey(element) === selectedElementId ? selectedElementRef : undefined
                 }
@@ -440,6 +437,7 @@ function StatTile({
 function ElementItem({
   element,
   selected,
+  fullText,
   buttonRef,
   onSelect,
   visionDetails = null,
@@ -448,6 +446,7 @@ function ElementItem({
 }: {
   element: DocumentElement;
   selected: boolean;
+  fullText: boolean;
   buttonRef?: Ref<HTMLButtonElement>;
   onSelect?: (elementId: string) => void;
   visionDetails?: ReturnType<typeof layoutVisionDetails>;
@@ -501,7 +500,7 @@ function ElementItem({
           ) : null}
         </div>
         <div className="mt-2">
-          <ExtractedText text={elementDisplayText(element.text)} clamp />
+          <ExtractedText text={elementDisplayText(element.text)} clamp={!fullText} />
         </div>
         {vision?.retrievalText ? (
           <p className="mt-2 line-clamp-3 border-l-2 border-accent-emphasis pl-2 text-xs leading-relaxed text-fg-muted">
@@ -546,7 +545,7 @@ function TableCellsPanel({
       <h4 className="mb-2 text-sm font-semibold text-fg">
         {t("flow.extraction.tableCells")}
       </h4>
-      <div className="max-h-[30rem] space-y-3 overflow-auto pr-1">
+      <div className={cn("space-y-3 pr-1", INFORMATION_CARD_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)} tabIndex={0} role="group" aria-label={t("flow.extraction.tableCells")} data-testid="extraction-table-cells-scroll">
         {tables
           .filter((table) => table.cells.length > 0)
           .map((table) => (

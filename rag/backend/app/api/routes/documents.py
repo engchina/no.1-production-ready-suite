@@ -1537,11 +1537,17 @@ async def document_recipe_chunk_window(
             variant=variant,
         )
     location_unavailable = scope is not None and scope["scope_status"] != "exact"
-    items, total = (
-        await oracle.list_chunk_set_chunk_window(
+    # 左の表示範囲（ページ・文字範囲）を指定したときは、その範囲の全部を返す（#4094）。
+    complete = chunk_id is None and (page is not None or scope is not None)
+    offset = 0 if complete else offset
+
+    async def _chunks_in_view(window_limit: int) -> tuple[list[DocumentChunkView], int]:
+        if not chunk_set:
+            return [], 0
+        return await oracle.list_chunk_set_chunk_window(
             str(chunk_set),
             offset=offset,
-            limit=limit,
+            limit=window_limit,
             page=page,
             scope_element_ids=([] if location_unavailable else scope["element_ids"])
             if scope is not None
@@ -1549,10 +1555,12 @@ async def document_recipe_chunk_window(
             chunk_id=chunk_id,
             location_unavailable=location_unavailable,
             extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+            full_text=complete,
         )
-        if chunk_set
-        else ([], 0)
-    )
+
+    items, total = await _chunks_in_view(limit)
+    if complete and total > len(items):
+        items, total = await _chunks_in_view(total)
     unlocated_items: list[DocumentChunkView] = []
     unlocated_total = 0
     document_total = total
@@ -1583,7 +1591,8 @@ async def document_recipe_chunk_window(
             "unlocated_offset": unlocated_offset,
             "document_total": document_total,
             "offset": offset,
-            "limit": limit,
+            "limit": max(total, limit) if complete else limit,
+            "complete": complete,
             "revision": chunk_set,
             "scope_status": scope["scope_status"]
             if scope is not None

@@ -3468,6 +3468,8 @@ test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧で�
   let originalReads=0,chunkReads=0;
   const sourceOffsets: number[] = [];
   const scopedRequests: URLSearchParams[] = [];
+  // 左の表示範囲の全部を返す（範囲は 1 回の text-window の分だけなので有限。#4094）。
+  const inRange=40;
   await page.route("**/recipes/recipe-1/content**",route=>{originalReads++;return route.fulfill({body:text,contentType:"application/json"});});
   await page.route("**/recipes/recipe-1/text-window",route=>{
     const {offset,limit}=route.request().postDataJSON();
@@ -3475,15 +3477,16 @@ test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧で�
     return route.fulfill({json:{data:{text:text.slice(offset,offset+limit),offset,total:text.length,limit,revision:"synthetic-json-v1",previous_offset:offset > 0 ? Math.max(0,offset-limit) : null,next_offset:offset+limit<text.length ? offset+limit : null},error_messages:[],warning_messages:[]}});
   });
   await page.route("**/recipes/recipe-1/extraction-view?**",route=>{
-    const q=new URL(route.request().url()).searchParams,offset=Number(q.get("offset")??0),structure=q.get("mode")==="structure";
+    const q=new URL(route.request().url()).searchParams,sourceOffset=Number(q.get("source_offset")??0),structure=q.get("mode")==="structure";
     scopedRequests.push(q);
-    return route.fulfill({json:{data:{payload:{raw_text:structure?"":text.slice(offset,offset+8192),elements:structure?Array.from({length:Math.min(25,1332-offset)},(_,i)=>({element_id:`node-${offset+i}`,kind:"text",text:`合成要素${offset+i}`,order:offset+i,metadata:{}})):[]},offset,total:structure?1332:8192,limit:structure?25:8192,scope_status:"exact"},error_messages:[],warning_messages:[]}});
+    const total=structure?inRange:8192;
+    return route.fulfill({json:{data:{payload:{raw_text:structure?"":text.slice(sourceOffset,sourceOffset+8192),elements:structure?Array.from({length:inRange},(_,i)=>({element_id:`node-${i}`,kind:"text",text:`合成要素${i}`,order:i,metadata:{}})):[]},offset:0,total,limit:total,complete:true,scope_status:"exact"},error_messages:[],warning_messages:[]}});
   });
   await page.route("**/recipes/recipe-1/chunk-window?**",route=>{
     chunkReads++;
-    const q=new URL(route.request().url()).searchParams,offset=Number(q.get("offset")??0);
+    const q=new URL(route.request().url()).searchParams;
     scopedRequests.push(q);
-    return route.fulfill({json:{data:{items:Array.from({length:25},(_,i)=>({document_id:"doc-1",chunk_id:`chunk-${offset+i}`,chunk_index:offset+i,text:`合成Chunk${offset+i}`,metadata:{},element_ids:[]})),total:1366,offset,limit:25,scope_status:"exact"},error_messages:[],warning_messages:[]}});
+    return route.fulfill({json:{data:{items:Array.from({length:inRange},(_,i)=>({document_id:"doc-1",chunk_id:`chunk-${i}`,chunk_index:i,text:`合成Chunk${i}`,metadata:{},element_ids:[]})),total:inRange,offset:0,limit:inRange,complete:true,document_total:1366,scope_status:"exact"},error_messages:[],warning_messages:[]}});
   });
   await page.goto("/documents/doc-1");
   await expect(page.getByTestId("preview-text")).toBeVisible();
@@ -3491,13 +3494,19 @@ test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧で�
   expect(await page.getByTestId("preview-text").textContent()).toHaveLength(8192);
   await page.getByTestId("document-inspector-pane").getByRole("tab",{name:"構造化要素",exact:true}).click();
   const panel=page.getByTestId("document-inspector-pane").getByRole("tabpanel");
-  await expect(panel.getByRole("button",{name:/合成要素/})).toHaveCount(25);
-  await panel.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
+  await expect(panel.getByRole("button",{name:/合成要素/})).toHaveCount(inRange);
   await expect(panel).toContainText("合成要素25");
+  await expect(panel).toContainText("合成要素39");
+  await expect(panel.getByRole("button",{name:"この範囲の続きを読む",exact:true})).toHaveCount(0);
   await page.getByRole("tab",{name:/Chunk \/ Citation/}).click();
-  await expect(page.getByTestId("document-chunk-list").locator("li")).toHaveCount(25);
-  await panel.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
+  const chunkList=page.getByTestId("document-chunk-list");
+  await expect(chunkList.locator("li")).toHaveCount(inRange);
   await expect(panel).toContainText("合成Chunk25");
+  await expect(panel).toContainText("合成Chunk39");
+  await expect(panel.getByRole("button",{name:"この範囲の続きを読む",exact:true})).toHaveCount(0);
+  // 長い一覧は共通の高さの中で、キーボードで末尾まで動かせる。
+  await chunkList.focus();await page.keyboard.press("End");
+  await expect.poll(()=>chunkList.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
   const preview = page.getByTestId("document-preview-pane");
   await preview.getByRole("button", {name:"次のページ", exact:true}).click();
   await expect.poll(() => sourceOffsets.includes(8192)).toBe(true);
@@ -3506,6 +3515,27 @@ test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧で�
   expect(originalReads).toBe(0);
   expect(sourceOffsets.every(offset => offset % 8192 === 0)).toBe(true);
   await page.screenshot({path:testInfo.outputPath("large-document-ready.png"),fullPage:true});
+  await expectNoPageOverflow(page);
+});
+
+test("左の表示範囲が無いときは、構造化要素と Chunk を続きの操作で読める", {tag:"@responsive"}, async({page})=>{
+  await mockDocumentWorkspace(page);
+  const elements=Array.from({length:30},(_,i)=>({element_id:`plain-${i}`,kind:"text",text:`合成要素${i}`,order:i,metadata:{}}));
+  await page.route("**/recipes/recipe-1/extraction-view?**",route=>fulfillDocumentInspection(route,{json:{data:{payload:{raw_text:"合成の本文",elements,tables:[],pages:[]}},error_messages:[],warning_messages:[]}}));
+  await page.route("**/recipes/recipe-1/chunk-window?**",route=>{
+    const offset=Number(new URL(route.request().url()).searchParams.get("offset")??0);
+    return route.fulfill({json:{data:{items:Array.from({length:Math.min(25,30-offset)},(_,i)=>({document_id:"doc-1",chunk_id:`plain-chunk-${offset+i}`,chunk_index:offset+i,text:`合成Chunk${offset+i}`,metadata:{},element_ids:[]})),total:30,offset,limit:25,complete:false},error_messages:[],warning_messages:[]}});
+  });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab",{name:"構造化要素",exact:true}).click();
+  const panel=page.getByTestId("document-inspector-pane").getByRole("tabpanel");
+  await expect(panel.getByRole("button",{name:/合成要素/})).toHaveCount(25);
+  await panel.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
+  await expect(panel).toContainText("合成要素29");
+  await page.getByRole("tab",{name:/Chunk \/ Citation/}).click();
+  await expect(page.getByTestId("document-chunk-list").locator("li")).toHaveCount(25);
+  await panel.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
+  await expect(panel).toContainText("合成Chunk29");
   await expectNoPageOverflow(page);
 });
 
@@ -3544,8 +3574,9 @@ for (const scenario of ["unlocated", "mixed", "unrecorded"] as const) {
       requests.push(q);
       const start=Number(q.get("unlocated_offset") ?? 0);
       const chunk=(index:number,located:boolean) => ({document_id:"doc-1",chunk_id:`${located?"located":"unlocated"}-${index}`,chunk_index:index,text:`${located?"現在範囲の合成内容":"位置未確認の合成内容"} ${index}。${"有限のカード本文です。".repeat(12)}`,element_ids:located?["el-0000"]:[],metadata:{start_offset:777,end_offset:888}});
-      const scoped=scenario==="mixed"?[chunk(100,true)]:[];
-      return route.fulfill({json:{data:{items:scoped,total:scoped.length,offset:0,limit:25,scope_status:scenario==="unrecorded"?"unrecorded":"exact",document_total:26+scoped.length,unlocated_offset:start,unlocated_total:26,unlocated_items:Array.from({length:Math.min(25,26-start)},(_,i)=>chunk(start+i,false))}}});
+      // 現在の範囲の Chunk は全部を返す。位置未確認の Chunk だけ有限ページングする（#4094）。
+      const scoped=scenario==="mixed"?Array.from({length:31},(_,i)=>chunk(100+i,true)):[];
+      return route.fulfill({json:{data:{items:scoped,total:scoped.length,offset:0,limit:Math.max(scoped.length,25),complete:true,scope_status:scenario==="unrecorded"?"unrecorded":"exact",document_total:26+scoped.length,unlocated_offset:start,unlocated_total:26,unlocated_items:Array.from({length:Math.min(25,26-start)},(_,i)=>chunk(start+i,false))}}});
     });
     await page.goto("/documents/doc-1");
     await expect(page.getByTestId("preview-text-body")).toHaveText("合成原本範囲 0");
@@ -3559,7 +3590,13 @@ for (const scenario of ["unlocated", "mixed", "unrecorded"] as const) {
     const list=page.getByTestId("document-unlocated-chunk-list");
     await expect(list.locator("li")).toHaveCount(25);
     await expect(page.getByTestId("document-chunk-list")).toHaveCount(scenario==="mixed"?1:0);
-    if(scenario==="mixed") await expect(page.getByTestId("document-chunk-list")).not.toContainText("位置未確認の合成内容");
+    if(scenario==="mixed") {
+      await expect(page.getByTestId("document-chunk-list")).not.toContainText("位置未確認の合成内容");
+      await expect(page.getByTestId("document-chunk-list").locator("li")).toHaveCount(31);
+    }
+    // 続きの操作は位置未確認の Chunk の領域だけに出す。
+    await expect(page.getByTestId("document-inspector-pane").getByRole("button",{name:"この範囲の続きを読む",exact:true})).toHaveCount(1);
+    await expect(unlocated.getByRole("button",{name:"この範囲の続きを読む",exact:true})).toHaveCount(1);
     const dimensions=await list.evaluate(el=>({height:el.clientHeight,scrollHeight:el.scrollHeight,maxHeight:parseFloat(getComputedStyle(el).maxHeight),overflow:getComputedStyle(el).overflowY}));
     expect(dimensions.overflow).toBe("auto");expect(dimensions.height).toBeLessThanOrEqual(dimensions.maxHeight+1);expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.height);
     await list.focus();await page.keyboard.press("End");

@@ -72,6 +72,13 @@ async def sections_extraction(
     return source.extraction, source.rules_mode
 
 
+def _navigation_summaries(extraction: StructuredExtraction | None) -> dict[str, str]:
+    """抽出結果の全章節の要約(抽出の章節 id → 要約)。要約の無い章節は含めない(#4094)。"""
+    if extraction is None:
+        return {}
+    return {node.section_id: node.summary for node in extraction.navigation if node.summary}
+
+
 async def document_sections(
     oracle: OracleClient, document_id: str, recipe_id: str | None
 ) -> tuple[DocumentSectionsData, set[str]] | None:
@@ -105,6 +112,7 @@ async def document_sections_with_source(
     summary_rules_match = (
         saved_rules == section_rules_fingerprint(rules_mode, store) if saved_rules else None
     )
+    summaries = _navigation_summaries(extraction)
     page_count = (len(extraction.pages) or None) if extraction else None
     stored = await oracle.get_document_sections(document_id)
     if stored is None:
@@ -114,6 +122,7 @@ async def document_sections_with_source(
                 source="extraction",
                 rules_mode=rules_mode,
                 summary_rules_match=summary_rules_match,
+                summaries=summaries,
                 sections=extracted,
                 extraction_section_count=len(extracted),
                 page_count=page_count,
@@ -128,6 +137,7 @@ async def document_sections_with_source(
             source="manual",
             rules_mode=rules_mode,
             summary_rules_match=summary_rules_match,
+            summaries=summaries,
             sections=add_new_extraction(
                 refresh_from_extraction(sections, extracted), extracted, removed
             ),
