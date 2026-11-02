@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   ApiErrorState,
+  Banner,
   Card,
   CardContent,
+  DataTable,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -21,6 +23,7 @@ import { PagedDataTable } from "@/components/ListViews";
 import { evaluatedVersionLabel } from "@/components/evaluation/EvaluationVersionField";
 import {
   agentApi,
+  type EvaluationComparison,
   type EvaluationComparisonChange,
   type EvaluationComparisonOutcome,
   type EvaluationComparisonRow,
@@ -58,8 +61,95 @@ const CHANGE_VARIANT: Record<EvaluationComparisonChange, StatusVariant> = {
 function outcomeVariant(outcome: EvaluationComparisonOutcome): StatusVariant {
   if (outcome.status === "correct") return "success";
   if (outcome.status === "incorrect" || outcome.status === "run_failed") return "danger";
-  if (outcome.status === "cancelled") return "neutral";
+  if (outcome.status === "cancelled" || outcome.status === "incomplete") return "neutral";
   return "warning";
+}
+
+function points(value: number): string {
+  const rounded = Math.round(value * 100);
+  return rounded > 0 ? `+${rounded}` : String(rounded);
+}
+
+type CapabilityRow = NonNullable<EvaluationComparison["capabilities"]>[number];
+
+/** 能力分類ごとの 2 つの評価の合格率と安全違反（#2581。総平均が同じでも分類の劣化を見分ける）。 */
+function CapabilityComparison({ rows }: { rows: CapabilityRow[] }) {
+  const cell = (item: CapabilityRow["base"]) =>
+    item ? (
+      <span className="flex flex-col tabular-nums">
+        <span className="text-fg">{t("evaluation.compare.capabilityRate", { rate: formatRate(item.pass_rate), cases: item.cases })}</span>
+        {item.safety_violations ? (
+          <span className="text-xs text-danger-fg">{t("evaluation.safety.count", { count: item.safety_violations })}</span>
+        ) : null}
+      </span>
+    ) : (
+      <span className="text-xs text-fg-muted">{t("evaluation.compare.noCase")}</span>
+    );
+  const columns: DataTableColumn<CapabilityRow>[] = [
+    {
+      key: "capability",
+      header: t("evaluation.capability.column"),
+      rowHeader: true,
+      className: "min-w-40 break-words font-medium text-fg",
+      render: (row) => row.capability || t("evaluation.capability.none"),
+    },
+    { key: "base", header: t("evaluation.compare.base"), render: (row) => cell(row.base) },
+    { key: "target", header: t("evaluation.compare.target"), render: (row) => cell(row.target) },
+  ];
+  return (
+    <DataTable<CapabilityRow>
+      rows={rows}
+      columns={columns}
+      getRowKey={(row) => row.capability}
+      ariaLabel={t("evaluation.compare.capabilityLabel")}
+      scrollAriaLabel={t("evaluation.compare.capabilityLabel")}
+      tableClassName="w-full min-w-[36rem]"
+    />
+  );
+}
+
+/**
+ * 比較の条件と、同じ定義のケースの対応比較（#2582）。差は区間とともに出し、区間が 0 をまたげば不確かと書く。
+ * ケースの定義・評価者・試行の回数が違うときは、比較の前提を警告で示す。
+ */
+function PairedSummary({ comparison }: { comparison: EvaluationComparison }) {
+  const warnings = [
+    comparison.same_cases === false
+      ? t("evaluation.compare.notSameCases", { count: comparison.definition_mismatch ?? 0 })
+      : null,
+    comparison.same_judge === false ? t("evaluation.compare.differentJudge") : null,
+    (comparison.base.trials ?? 1) !== (comparison.target.trials ?? 1)
+      ? t("evaluation.compare.trialsDiffer", { base: comparison.base.trials ?? 1, target: comparison.target.trials ?? 1 })
+      : null,
+  ].filter((item): item is string => item !== null);
+  const paired = comparison.paired;
+  return (
+    <>
+      <p className="text-sm text-fg" data-testid="evaluation-compare-paired">
+        {paired
+          ? `${t("evaluation.compare.paired", {
+              cases: paired.cases,
+              base: formatRate(paired.base_rate),
+              target: formatRate(paired.target_rate),
+              difference: points(paired.difference),
+              low: points(paired.interval[0]),
+              high: points(paired.interval[1]),
+            })}${paired.conclusive ? t("evaluation.compare.conclusive") : t("evaluation.compare.inconclusive")}`
+          : t("evaluation.compare.noPaired")}
+      </p>
+      {warnings.length ? (
+        <div data-testid="evaluation-compare-warnings">
+          <Banner severity="warning">
+            <ul className="list-disc space-y-1 pl-5">
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </Banner>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 function Outcome({ outcome }: { outcome: EvaluationComparisonOutcome | null }) {
@@ -67,6 +157,11 @@ function Outcome({ outcome }: { outcome: EvaluationComparisonOutcome | null }) {
   return (
     <span className="flex flex-col items-start gap-1">
       <StatusBadge variant={outcomeVariant(outcome)} label={t(`evaluation.status.${outcome.status}` as I18nKey)} />
+      {(outcome.trials ?? 1) > 1 ? (
+        <span className="text-xs tabular-nums text-fg">
+          {t("evaluation.compare.trials", { passed: outcome.passed_trials ?? 0, judged: outcome.judged_trials ?? 0 })}
+        </span>
+      ) : null}
       <span className="text-xs tabular-nums text-fg-muted">
         {t("evaluation.compare.score", { score: outcome.score === null ? "—" : outcome.score.toFixed(2) })}
       </span>
@@ -196,6 +291,8 @@ export function EvaluationCompare() {
                       })
                     : ""}
                 </p>
+                <PairedSummary comparison={comparison.data} />
+                {comparison.data.capabilities?.length ? <CapabilityComparison rows={comparison.data.capabilities} /> : null}
                 <ListToolbar count={listTotal(comparison.data.rows.length)} testId="evaluation-compare-toolbar" />
                 <PagedDataTable<EvaluationComparisonRow>
                   pageKey="evaluationCompare"
