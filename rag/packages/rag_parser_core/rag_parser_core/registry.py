@@ -68,6 +68,14 @@ from rag_parser_core.source import (
     is_plain_text_markup,
     template_for_source_profile,
 )
+from rag_parser_core.source_map import (
+    SCHEME_JSONL_LINE,
+    SOURCE_MAP_KEY,
+    SOURCE_WINDOW_CODEPOINTS,
+    decode_source_text,
+    source_map_artifact,
+    structured_record_ranges,
+)
 from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_JSONL_BACKEND,
     STRUCTURED_RECORDS_JSONL_PARSER_VERSION,
@@ -1150,10 +1158,35 @@ def _structured_records_jsonl_result(source_bytes: bytes) -> ParserRegistryResul
         )
     )
     return ParserRegistryResult(
-        extraction=extraction,
+        extraction=_with_structured_records_source_map(extraction, source_bytes),
         parser_backend=backend,
         parser_version=STRUCTURED_RECORDS_JSONL_PARSER_VERSION,
         template=backend,
+    )
+
+
+def _with_structured_records_source_map(
+    extraction: StructuredExtraction, source_bytes: bytes
+) -> StructuredExtraction:
+    """記録の ID（要素の ID）と JSONL の行で原本の位置を付ける（#4100）。"""
+    text = decode_source_text(source_bytes)
+    if len(text) <= SOURCE_WINDOW_CODEPOINTS:
+        return extraction
+    lines = structured_record_ranges(text)
+    source_map = source_map_artifact(
+        source_bytes,
+        text,
+        SCHEME_JSONL_LINE,
+        {
+            element.element_id: [lines[element.element_id]]
+            for element in extraction.elements
+            if element.element_id in lines
+        },
+    )
+    if source_map is None:
+        return extraction
+    return extraction.model_copy(
+        update={"parser_artifacts": {**extraction.parser_artifacts, SOURCE_MAP_KEY: source_map}}
     )
 
 
@@ -1288,11 +1321,70 @@ def _unstructured_adapter_result(
         parser_version=version,
         template=template_for_source_profile(source_profile),
     )
+    extraction = _with_unstructured_source_map(
+        extraction,
+        source_bytes,
+        elements=elements,
+        source_profile=source_profile,
+        content_type=content_type,
+        is_html=is_html,
+        partition=partition,
+        partition_kwargs=partition_kwargs,
+        suffix=suffix,
+    )
     return ParserRegistryResult(
         extraction=extraction,
         parser_backend="unstructured",
         parser_version=version,
         template=template_for_source_profile(source_profile),
+    )
+
+
+def _with_unstructured_source_map(
+    extraction: StructuredExtraction,
+    source_bytes: bytes,
+    *,
+    elements: Sequence[object],
+    source_profile: SourceProfile | None,
+    content_type: str,
+    is_html: bool,
+    partition: Callable[..., object],
+    partition_kwargs: Mapping[str, object],
+    suffix: str | None,
+) -> StructuredExtraction:
+    """原本の位置の対応を ``parser_artifacts`` に足す（要素・本文は変えない。#4100）。"""
+    from rag_parser_core.unstructured_source_map import unstructured_source_map
+
+    def repartition_html(annotated: bytes) -> Sequence[object]:
+        # 要素の本文は同じなので、言語の判定は省く（位置の記録にだけ使う解析）。
+        kwargs = {**partition_kwargs, "encoding": "utf-8", "languages": [""]}
+        html_input = _html_full_document_input(annotated)[0] if is_html else annotated
+        with _temporary_source_file(
+            html_input, source_profile, content_type, suffix=suffix
+        ) as path:
+            return _adapter_sequence_items(
+                _call_with_supported_kwargs(
+                    partition, {"filename": str(path), "content_type": content_type, **kwargs}
+                )
+            )
+
+    source_map = unstructured_source_map(
+        source_bytes,
+        extension=_source_extension(source_profile),
+        content_type=content_type or (source_profile.content_type if source_profile else ""),
+        items=elements,
+        ids=[str(_adapter_element_id(item, order)) for order, item in enumerate(elements)],
+        element_texts={
+            element.element_id: element.text
+            for element in extraction.elements
+            if element.element_id
+        },
+        repartition_html=repartition_html,
+    )
+    if source_map is None:
+        return extraction
+    return extraction.model_copy(
+        update={"parser_artifacts": {**extraction.parser_artifacts, SOURCE_MAP_KEY: source_map}}
     )
 
 

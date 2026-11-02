@@ -1173,6 +1173,7 @@ name = "parser-unstructured"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "markdown-it-py" },
     { name = "opencv-python-headless" },
     { name = "production-ready-backend-core" },
     { name = "rag-parser-core", extra = ["service"] },
@@ -1185,6 +1186,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "markdown-it-py", specifier = ">=4,<5" },
     { name = "opencv-python-headless", specifier = ">=4.10,<5.0" },
     { name = "production-ready-backend-core", editable = "../../../../platform/packages/backend_core" },
     { name = "rag-parser-core", extras = ["service"], editable = "../../../packages/rag_parser_core" },
