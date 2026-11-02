@@ -18097,8 +18097,9 @@ def oracle_evaluation_job_schema_sql(
 ) -> str:
     """品質評価の job（非同期の実行・進捗・取り消し。#390）の table DDL を返す。
 
-    評価の入力（query の本文）は保存しない。job は投入を受けた backend のプロセスで動き、
-    そのプロセスが止まったら heartbeat が途絶えて失敗になる（別のプロセスは引き継がない）。
+    質問・回答・根拠の本文は保存しない（結果の回答の診断は外す。#4107）。job は投入を受けた
+    backend のプロセスで動き、そのプロセスが止まったら heartbeat が途絶えて失敗になる（別の
+    プロセスは引き継がない）。
     """
     return f"""
 CREATE TABLE {table_name} (

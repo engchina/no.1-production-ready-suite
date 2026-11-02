@@ -653,8 +653,8 @@ class EvaluationMetrics(BaseModel):
     comparison: "EvaluationComparison | None" = None
     # 評価の実行条件（#59。`app.rag.evaluation_manifest`）。#59 より前の結果は None。
     run_manifest: dict[str, Any] | None = None
-    # 結果が JSON 型の列の上限を超えるため、各ケースの回答の診断（`diagnostics.answer`）を外して
-    # 保存した（#4103）。診断は回答の記録に `trace_id` で残っている。
+    # 各ケースの回答の診断（`diagnostics.answer`）を外して保存した（#4107）。診断は回答の記録に
+    # `trace_id` で残っている。False は実行中の結果か、この変更の前に保存した結果。
     answer_diagnostics_omitted: bool = False
 
 
@@ -905,7 +905,8 @@ class EvaluationJob(BaseModel):
 
     進捗は、終わったケースの数と今のケースで示す。結果は、成功（`SUCCEEDED`）のときだけ
     `run_result` で返す。
-    時間の上限に達して打ち切ったケースは、結果の中で失敗のケースとして返す。query の本文は持たない。
+    時間の上限に達して打ち切ったケースは、結果の中で失敗のケースとして返す。質問・回答・根拠の
+    本文は持たない（#4107）。
     """
 
     job_id: str
