@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ModelWrapValidatorHandler, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ModelWrapValidatorHandler, PrivateAttr, StrictInt, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -424,10 +424,38 @@ class RequestCoverage(_StrictModel):
     )
 
 
+class RequestLinkRange(_StrictModel):
+    """linked の関係を明記した本文の範囲。原文はコードが番号から切り出す（モデルは写さない）。"""
+
+    evidence_id: str = Field(description="操作同士の関係を明記した本文がある Evidence の id。")
+    line_start: StrictInt = Field(description="その本文の、text の行頭「番号|」の開始番号。")
+    line_end: StrictInt = Field(description="同じ本文の終了番号。開始番号以上。単一の行は開始と同じ値。")
+
+
+class RequestEvidenceScopeRange(_StrictModel):
+    """計画だけの出力の照合の行。"""
+
+    evidence_id: str = Field(description=RequestEvidenceScope.model_fields["evidence_id"].description)
+    target: str = Field(description=RequestEvidenceScope.model_fields["target"].description)
+    relation: Literal["direct", "linked", "unrelated"] = Field(description=RequestEvidenceScope.model_fields["relation"].description)
+    link: RequestLinkRange | None = Field(default=None, description="linked のときの、関係を明記した本文の範囲。それ以外は null。")
+
+
+class RequestCoverageRange(_StrictModel):
+    """計画だけの出力の、要求単位ごとの根拠の計画。"""
+
+    request_id: str = Field(description=RequestCoverage.model_fields["request_id"].description)
+    evidence_scope: list[RequestEvidenceScopeRange] = Field(
+        default_factory=list,
+        description="この要求の説明に使う根拠と、関係の判断が要る根拠だけを行にする。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。",
+    )
+    evidence_ids: list[str] = Field(default_factory=list, description=RequestCoverage.model_fields["evidence_ids"].description)
+
+
 class RequestScopePlan(_StrictModel):
     """章節情報が欠けた候補を、本文の生成とは分けて照合する。"""
 
-    request_coverage: list[RequestCoverage] = Field(max_length=64, description="質問契約の要求ごとに使用する Evidence の計画。")
+    request_coverage: list[RequestCoverageRange] = Field(max_length=64, description="質問契約の要求ごとに使用する Evidence の計画。")
 
 
 class CatalogClaimSupport(_StrictModel):

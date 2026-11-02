@@ -414,11 +414,7 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
         assert system == custom
         values = json.loads(prompt)["evidence"]
         calls.extend(values)
-        return schema(
-            read_receipts={value["evidence_id"]: True for value in values},
-            findings=[],
-            unanswered=[],
-        )
+        return schema(findings=[], unanswered=[])
 
     with prompt_overrides({"generation.batchReading": custom}):
         _, _, diagnostic = prepare_batched_evidence(
@@ -432,4 +428,4 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
             read=read,
         )
     assert diagnostic["batch_count"] > 1
-    assert "".join(value["text"] for value in calls) == inputs[0]["text"]
+    assert sum(value["text"].count("合成の原文。") for value in calls) == 400

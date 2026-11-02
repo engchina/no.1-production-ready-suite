@@ -129,7 +129,7 @@ def test_a_recovered_plan_with_only_scope_decisions_keeps_the_explanations_unmar
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_scope": [scope(labels[INTRO]), scope(labels[OUTLINE])],
+                "evidence_scope": [{"evidence_id": labels[text], "target": "対象", "relation": "direct"} for text in (INTRO, OUTLINE)],
                 "evidence_ids": GUIDE_IDS,
             }
         ]

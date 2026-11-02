@@ -12,13 +12,13 @@ from app.rag.answer_engine import _outcome_from_result, _SearchState
         (
             "evidence.batch_read",
             {
-                "category": "batch_quote_not_in_input",
+                "category": "batch_range_invalid",
                 "batch_index": 1,
                 "input_count": 80,
                 "input_chars": 79000,
                 "invalid_attempts": 2,
                 "unmatched_count": 1,
-                "unmatched_reasons": {"quote_not_found": 1},
+                "unmatched_reasons": {"range_out_of_bounds": 1},
             },
         ),
         (

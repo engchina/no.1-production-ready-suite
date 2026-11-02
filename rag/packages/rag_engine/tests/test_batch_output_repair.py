@@ -6,7 +6,7 @@ from threading import Barrier
 
 import pytest
 from pydantic import ValidationError
-from test_batched_evidence import config, prepare, span
+from test_batched_evidence import config, finding, prepare, span
 
 from rag_engine.adapters import oci
 from rag_engine.generation import batched_evidence
@@ -26,14 +26,10 @@ def reader(system, prompt, schema):
 def output(prompt):
     original = prompt.split("\n\n## Step 4:", 1)[0]
     values = json.loads(original)["evidence"]
-    return {
-        "read_receipts": {row["evidence_id"]: True for row in values},
-        "findings": [{"evidence_id": row["evidence_id"], "quote": row["text"][:16], "answer": "合成の回答"} for row in values],
-        "unanswered": [],
-    }
+    return {"findings": [finding(row) for row in values], "unanswered": []}
 
 
-@pytest.mark.parametrize("failure", ["receipt", "quote"])
+@pytest.mark.parametrize("failure", ["schema", "range"])
 def test_one_existing_retry_receives_targeted_feedback_and_keeps_all_inputs(monkeypatch, failure):
     calls = []
 
@@ -41,13 +37,13 @@ def test_one_existing_retry_receives_targeted_feedback_and_keeps_all_inputs(monk
         calls.append(prompt)
         result = output(prompt)
         if len(calls) == 1:
-            if failure == "receipt":
-                result["read_receipts"] = {}
+            if failure == "schema":
+                result.pop("unanswered")
             else:
-                result["findings"][0]["quote"] = "入力に存在しない合成の引用"
+                result["findings"][0]["start_line"] = result["findings"][0]["end_line"] = "B1-9999"
         elif len(calls) == 2:
             assert "validation_errors" in prompt
-            assert ("read_receipts" if failure == "receipt" else "batch_quote_not_in_input") in prompt
+            assert ("unanswered" if failure == "schema" else "batch_range_invalid") in prompt
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -89,7 +85,7 @@ def test_two_invalid_outputs_do_not_add_a_third_call_and_restore_context(monkeyp
 
     def provider(system, prompt, settings, schema, ignored):
         calls.append(prompt)
-        return schema.model_validate({"read_receipts": {}, "findings": [], "unanswered": []})
+        return schema.model_validate({"findings": []})
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
     monkeypatch.setattr(batched_evidence, "record_retrieval_stage", diagnostics.append)
@@ -105,19 +101,12 @@ def test_safe_errors_do_not_expose_input_message_context_or_unknown_keys():
     schema = _reading_model([span(0, "非公開の合成本文")])
     secret = "PRIVATE_SYNTHETIC_VALUE"
     with pytest.raises(ValidationError) as caught:
-        schema.model_validate(
-            {
-                "read_receipts": {"B1": True, secret: False},
-                "findings": [{"evidence_id": "B1", "quote": secret, "answer": secret}],
-                "unanswered": [],
-            }
-        )
+        schema.model_validate({"findings": [{"start_line": secret, "end_line": secret, "answer": secret}], "unanswered": [secret]})
     detail = batch_validation_detail(caught.value, schema.model_json_schema())
     saved = json.dumps(detail)
     assert secret not in saved
     assert "非公開" not in saved
-    assert "<redacted>" in saved
-    assert all(set(row) <= {"loc", "type", "protocol_code"} for row in detail["validation_errors"])
+    assert all(set(row) <= {"loc", "type", "protocol_code", "range_mismatch"} for row in detail["validation_errors"])
 
 
 def test_unknown_validator_context_is_not_serialized():
@@ -139,21 +128,6 @@ def test_unknown_validator_context_is_not_serialized():
     assert "protocol_code" not in detail["validation_errors"][0]
 
 
-def test_known_quote_protocol_code_is_preserved_without_quote():
-    schema = _reading_model([span(0, "合成の本文")])
-    with pytest.raises(ValidationError) as caught:
-        schema.model_validate(
-            {
-                "read_receipts": {"B1": True},
-                "findings": [{"evidence_id": "B1", "quote": "不存在の合成引用", "answer": "合成回答"}],
-                "unanswered": [],
-            }
-        )
-    detail = batch_validation_detail(caught.value, schema.model_json_schema())
-    assert detail["validation_errors"][0]["protocol_code"] == "batch_quote_not_in_input"
-    assert "不存在" not in json.dumps(detail)
-
-
 def test_feedback_over_input_budget_stops_before_retry(monkeypatch):
     calls = []
     original_measure = batched_evidence.model_input_measurement
@@ -164,7 +138,7 @@ def test_feedback_over_input_budget_stops_before_retry(monkeypatch):
 
     def provider(system, prompt, settings, schema, ignored):
         calls.append(prompt)
-        return schema.model_validate({"read_receipts": {}, "findings": [], "unanswered": []})
+        return schema.model_validate({"findings": []})
 
     monkeypatch.setattr(batched_evidence, "model_input_measurement", measurement)
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -182,7 +156,7 @@ def test_cancellation_after_first_rejection_prevents_retry(monkeypatch):
     def provider(system, prompt, settings, schema, ignored):
         calls.append(prompt)
         deadline.cancel()
-        return schema.model_validate({"read_receipts": {}, "findings": [], "unanswered": []})
+        return schema.model_validate({"findings": []})
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
     with bind_deadline(deadline), pytest.raises(DeadlineExceeded):
@@ -207,36 +181,12 @@ def test_context_is_scoped_to_each_thread_and_restored():
         assert list(pool.map(run, [1, 2])) == ["original", "original"]
 
 
-TABLE = "| 項目 | 条件 | 期限 |\n| --- | --- | --- |\n| 申請A | 条件甲〜条件乙 | 10 日 |\n| 申請B | 条件丙 | 20 日 |\n"
-LONG_INPUT = "第一段の合成の説明です。\n\n" + TABLE + "\n" + "第二段の合成の説明です。" * 40
-SECOND_INPUT = "別の入力の合成の記載です。" * 5
+def reading_model():
+    return _reading_model([{"text": "第一の行です。\n第二の行です。\n第三の行です。"}, {"text": "別の入力の行です。"}])
 
 
 def findings_of(*rows: tuple[str, str]) -> dict:
-    return {
-        "read_receipts": {"B1": True, "B2": True},
-        "findings": [{"evidence_id": evidence_id, "quote": quote, "answer": "合成の回答"} for evidence_id, quote in rows],
-        "unanswered": [],
-    }
-
-
-def reading_model():
-    return _reading_model([{"text": LONG_INPUT}, {"text": SECOND_INPUT}])
-
-
-@pytest.mark.parametrize(
-    "quote",
-    [
-        "第一段の合成の説明です。 | 項目 | 条件 | 期限 |",
-        "| 申請A | 条件甲〜条件乙 | 10 日 |\r\n| 申請B | 条件丙 | 20 日 |",
-        "|申請A|条件甲〜条件乙|10日|",
-        "第一段の合成の説明です。\n\n| 項目 |",
-    ],
-    ids=["newline_to_space", "crlf", "table_spacing", "paragraph_break"],
-)
-def test_whitespace_in_long_table_and_line_quotes_is_already_accepted(quote):
-    """#4090: 改行・表の空白の違いは今の照合で通るので、不合格の原因にならない（検査は緩めない）。"""
-    reading_model().model_validate(findings_of(("B1", quote)))
+    return {"findings": [{"start_line": start, "end_line": end, "answer": "合成の回答"} for start, end in rows], "unanswered": []}
 
 
 def mismatch_detail(*rows: tuple[str, str]) -> dict:
@@ -246,117 +196,108 @@ def mismatch_detail(*rows: tuple[str, str]) -> dict:
     detail = batch_validation_detail(raised.value, model.model_json_schema())
     assert json.dumps(detail, ensure_ascii=False).count("合成") == 0
     row = detail["validation_errors"][0]
-    assert row["protocol_code"] == "batch_quote_not_in_input"
-    return row["quote_mismatch"]
+    assert row["protocol_code"] == "batch_range_invalid"
+    return row["range_mismatch"]
+
+
+def test_valid_ranges_pass_the_check():
+    reading_model().model_validate(findings_of(("B1-1", "B1-3"), ("B2-1", "B2-1"), (" B1-2 ", "B1-2")))
 
 
 @pytest.mark.parametrize(
-    ("row", "reason", "expected"),
+    ("row", "reason", "retained"),
     [
-        (("B9", "第一段の合成の説明です。"), "evidence_id_unknown", {"other_input_matches": 1, "input_chars": 0}),
-        (("B2", "第一段の合成の説明です。"), "quote_in_other_input", {"other_input_matches": 1}),
-        (("B1", "第二段の合成の説明です。別の入力の合成の記載です。"), "quote_across_inputs", {"other_input_matches": 0}),
-        (("B1", "入力に存在しない合成の引用"), "quote_not_found", {"prefix_match_chars": 0}),
-        (("B1", "第一段の合成の説明です。…第二段の合成の説明です。"), "quote_not_found", {"elision_mark": True, "prefix_match_chars": 12}),
-        (("B1", "| 申請A |\\n| 申請B |"), "quote_not_found", {"literal_escape": True}),
-        (("B1", "申請A条件甲〜条件乙10日"), "quote_not_found", {"symbol_fold_match": False}),
-        (("B1", "条件甲~条件乙"), "quote_not_found", {"symbol_fold_match": True}),
+        (("B9-1", "B9-1"), "evidence_id_unknown", []),
+        (("B1-4", "B1-4"), "range_out_of_bounds", ["B1"]),
+        (("B1-0", "B1-1"), "line_label_invalid", ["B1"]),
+        (("B1-3", "B1-1"), "range_inverted", ["B1"]),
+        (("B1-1", "B2-1"), "range_across_inputs", []),
+        (("第一の行です。", "B1-1"), "line_label_invalid", []),
     ],
-    ids=["unknown_id", "other_input", "across_inputs", "not_found", "elision", "literal_escape", "table_cells_joined", "wave_dash"],
+    ids=["unknown_id", "out_of_bounds", "zero", "inverted", "across_inputs", "not_a_label"],
 )
-def test_quote_mismatch_is_classified_without_contents(row, reason, expected):
+def test_range_mismatch_is_classified_without_contents(row, reason, retained):
     mismatch = mismatch_detail(row)
     assert mismatch["unmatched_count"] == 1
     assert mismatch["reasons"] == {reason: 1}
-    sample = mismatch["samples"][0]
-    assert sample["reason"] == reason
-    assert sample["quote_chars"] > 0
-    assert {key: sample[key] for key in expected} == expected
+    assert mismatch["samples"][0]["reason"] == reason
+    assert mismatch["retained_evidence_ids"] == retained
+    assert "第一" not in json.dumps(mismatch, ensure_ascii=False)
 
 
-def test_quote_mismatch_keeps_counts_for_all_findings_and_a_bounded_sample():
-    rows = [("B1", f"存在しない合成の引用{number}") for number in range(20)]
-    mismatch = mismatch_detail(("B1", "第一段の合成の説明です。"), *rows)
+def test_range_mismatch_keeps_counts_for_all_findings_and_a_bounded_sample():
+    rows = [(f"B1-{number}", f"B1-{number}") for number in range(10, 30)]
+    mismatch = mismatch_detail(("B1-1", "B1-1"), *rows)
     assert mismatch["unmatched_count"] == 20
-    assert mismatch["reasons"] == {"quote_not_found": 20}
+    assert mismatch["reasons"] == {"range_out_of_bounds": 20}
     assert len(mismatch["samples"]) == 8
 
 
 @pytest.mark.parametrize(
-    ("payload", "category", "code"),
+    ("payload", "code"),
     [
-        (findings_of(("B1", "入力に存在しない合成の引用")), "schema_field", "batch_quote_not_in_input"),
-        ({**findings_of(), "read_receipts": {"B1": True, "B2": False}}, "schema_field", "batch_read_coverage_incomplete"),
-        ({**findings_of(), "read_receipts": {"B1": True}}, "schema_field", None),
-        ({**findings_of(), "read_receipts": {"B1": True, "B2": "true"}}, "schema_field", None),
-        ({"read_receipts": {"B1": True, "B2": True}, "findings": []}, "schema_field", None),
-        ({**findings_of(), "extra": 1}, "schema_field", None),
+        (findings_of(("B1-9", "B1-9")), "batch_range_invalid"),
+        ({"findings": []}, None),
+        ({**findings_of(), "extra": 1}, None),
+        ({"findings": [{"start_line": "B1-1", "answer": "合成の回答"}], "unanswered": []}, None),
     ],
-    ids=["quote", "unread_input", "missing_receipt", "non_bool_receipt", "missing_field", "extra_field"],
+    ids=["range", "missing_field", "extra_field", "missing_end"],
 )
-def test_each_contract_violation_keeps_its_own_class(payload, category, code):
+def test_each_contract_violation_keeps_its_own_class(payload, code):
     model = reading_model()
     with pytest.raises(ValidationError) as raised:
         model.model_validate(payload)
     detail = batch_validation_detail(raised.value, model.model_json_schema())
-    assert detail["category"] == category
+    assert detail["category"] == "schema_field"
     assert [row.get("protocol_code") for row in detail["validation_errors"]][0] == code
 
 
 def test_broken_json_is_classified_as_invalid_json():
     model = reading_model()
     with pytest.raises(ValidationError) as raised:
-        model.model_validate_json('{"read_receipts": ')
+        model.model_validate_json('{"findings": ')
     assert batch_validation_detail(raised.value, model.model_json_schema())["category"] == "invalid_json"
 
 
-def test_retry_prompt_does_not_carry_the_mismatch_diagnostic(monkeypatch):
+def test_retry_prompt_names_the_valid_lines_without_the_diagnostic(monkeypatch):
     calls = []
 
     def provider(system, prompt, settings, schema, ignored):
         calls.append(prompt)
         result = output(prompt)
         if len(calls) == 1:
-            result["findings"][0]["quote"] = "入力に存在しない合成の引用"
+            result["findings"][0]["start_line"] = result["findings"][0]["end_line"] = "B1-9999"
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
     _, _, diagnostic = prepare([span(0, "合成の条件A。" * 600)], reader)
-    assert "batch_quote_not_in_input" in calls[1]
-    assert "quote_mismatch" not in calls[1]
-    assert "unmatched_count" not in calls[1]
+    feedback = calls[1].split("## Step 4:", 1)[1]
+    assert "batch_range_invalid" in feedback
+    assert "B1 の行は B1-1〜B1-" in feedback
+    assert "range_mismatch" not in feedback
+    assert "unmatched_count" not in feedback
+    assert "合成" not in feedback
     failure = diagnostic["batches"][0]["validation_failures"][0]["validation_errors"][0]
-    assert failure["quote_mismatch"]["reasons"] == {"quote_not_found": 1}
+    assert failure["range_mismatch"]["reasons"] == {"range_out_of_bounds": 1}
 
 
 def test_failed_batch_summary_has_only_class_counts_and_capacity():
-    """#4090: 回答の診断には、失敗の類別・件数・容量だけを渡す（質問・引用・原文を渡さない）。"""
-    secret = "入力に存在しない合成の引用"
-    values = [span(0, "合成の条件A。" * 20)]
-    model = _reading_model(values)
+    """#4090: 回答の診断には、失敗の類別・件数・容量だけを渡す（質問・原文を渡さない）。"""
+    model = reading_model()
     with pytest.raises(ValidationError) as raised:
-        model.model_validate(
-            {
-                "read_receipts": {"B1": True},
-                "findings": [{"evidence_id": "B1", "quote": secret, "answer": "合成の回答"}],
-                "unanswered": [],
-            }
-        )
+        model.model_validate(findings_of(("B1-9", "B1-9")))
     detail = batch_validation_detail(raised.value, model.model_json_schema())
-    receipt = {"index": 1, "input_count": 1, "input_chars": 120, "validation_failures": [detail, detail]}
+    receipt = {"index": 1, "input_count": 2, "input_chars": 120, "validation_failures": [detail, detail]}
 
-    summary = batch_failure_summary(receipt, raised.value)
-
-    assert summary == {
-        "category": "batch_quote_not_in_input",
+    assert batch_failure_summary(receipt, raised.value) == {
+        "category": "batch_range_invalid",
         "batch_index": 1,
-        "input_count": 1,
+        "input_count": 2,
         "input_chars": 120,
         "invalid_attempts": 2,
         "unmatched_count": 1,
-        "unmatched_reasons": {"quote_not_found": 1},
+        "unmatched_reasons": {"range_out_of_bounds": 1},
     }
-    assert "合成" not in json.dumps(summary, ensure_ascii=False)
 
 
 def _contained(monkeypatch, bad_rows, inputs):
@@ -373,64 +314,48 @@ def _contained(monkeypatch, bad_rows, inputs):
     return (*prepare(inputs, reader), prompts)
 
 
-def test_unverified_quote_after_the_retry_keeps_verified_findings_and_the_whole_input(monkeypatch):
-    """#4090: 再試行の後も残った quote は採らず、確かめた findings と、その入力の原文の全体で最終生成へ進む。"""
+def test_invalid_range_after_the_retry_keeps_valid_findings_and_the_whole_input(monkeypatch):
+    """#4090: 再試行の後も無効な範囲は採らず、有効な findings と、その入力の原文の全体で最終生成へ進む。"""
     inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
-    rows = [{"evidence_id": "B2", "quote": "合成の条件1。...補足本文。", "answer": "採らない合成の回答"}]
+    rows = [{"start_line": "B2-9999", "end_line": "B2-9999", "answer": "採らない合成の回答"}]
 
     selected, prompt, diagnostic, prompts = _contained(monkeypatch, rows, inputs)
 
-    # 組ごとの再試行は既存の 1 回だけ（モデルの呼び出しを増やさない。どの組にも番号 B2 の不合格がある）。
     first_batch = diagnostic["batches"][0]
     assert first_batch["status"] == "completed"
     assert len(first_batch["validation_failures"]) == 2
-    assert first_batch["quote_unverified"] == {"unmatched_count": 1, "reasons": {"quote_not_found": 1}, "retained_input_count": 1}
+    assert first_batch["range_unverified"] == {"unmatched_count": 1, "reasons": {"range_out_of_bounds": 1}, "retained_input_count": 1}
+    # 組ごとの再試行は既存の 1 回だけ（モデルの呼び出しを増やさない。どの組にも番号 B2 の不合格がある）。
     assert len(prompts) == 2 * diagnostic["batch_count"]
-    # 原文に無い引用を、原文として最終生成へ渡さない。
     assert "採らない合成の回答" not in prompt
     whole = [value for value in selected if value["text"] == inputs[1]["text"]]
     assert len(whole) == 1
-    # 確かめた findings の回答候補は、残した入力でも保つ。
+    # 有効な findings の回答候補は、残した入力でも保つ。
     assert whole[0]["batch_answer"] == "合成の回答"
-    assert not any("..." in value["text"] for value in selected)
 
 
-def test_quote_of_another_input_also_keeps_the_input_that_has_it(monkeypatch):
-    """#4090: 別の入力に逐語で在る quote は、指した入力と在る入力の両方の原文を残す（番号を推測で決めない）。"""
+def test_unknown_input_after_the_retry_adds_no_source(monkeypatch):
+    """#4090: 入力に無い番号の範囲は、残す原文も無いので捨てる。"""
     inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
-    rows = [{"evidence_id": "B1", "quote": "合成の条件2。", "answer": "採らない合成の回答"}]
+    rows = [{"start_line": "B99-1", "end_line": "B99-1", "answer": "採らない合成の回答"}]
 
-    selected, prompt, diagnostic, _ = _contained(monkeypatch, rows, inputs)
+    _, prompt, diagnostic, _ = _contained(monkeypatch, rows, inputs)
 
-    assert diagnostic["batches"][0]["quote_unverified"]["reasons"] == {"quote_in_other_input": 1}
-    assert diagnostic["batches"][0]["quote_unverified"]["retained_input_count"] == 2
-    assert {value["text"] for value in selected} >= {inputs[0]["text"], inputs[2]["text"]}
-    assert "採らない合成の回答" not in prompt
-
-
-def test_unknown_evidence_id_after_the_retry_adds_no_source(monkeypatch):
-    """#4090: 入力に無い番号の quote は、残す原文も無いので捨てる。"""
-    inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
-    rows = [{"evidence_id": "B99", "quote": "入力に存在しない合成の引用", "answer": "採らない合成の回答"}]
-
-    selected, prompt, diagnostic, _ = _contained(monkeypatch, rows, inputs)
-
-    assert diagnostic["batches"][0]["quote_unverified"] == {
+    assert diagnostic["batches"][0]["range_unverified"] == {
         "unmatched_count": 1,
         "reasons": {"evidence_id_unknown": 1},
         "retained_input_count": 0,
     }
-    assert "入力に存在しない合成の引用" not in json.dumps(selected, ensure_ascii=False)
     assert "採らない合成の回答" not in prompt
 
 
-def test_an_incomplete_receipt_is_not_contained_and_still_fails(monkeypatch):
-    """#4090: 絞るのは quote の不合格だけ。読取の確認の不足は従来どおり組の失敗にする。"""
+def test_a_schema_violation_is_not_contained_and_still_fails(monkeypatch):
+    """#4090: 絞るのは範囲の不合格だけ。schema の違反は従来どおり組の失敗にする。"""
 
     def provider(system, prompt, settings, schema, ignored):
         result = output(prompt)
-        result["read_receipts"] = dict.fromkeys(result["read_receipts"], False)
-        result["findings"][0]["quote"] = "入力に存在しない合成の引用"
+        result.pop("unanswered")
+        result["findings"][0]["start_line"] = "B1-9999"
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -438,33 +363,13 @@ def test_an_incomplete_receipt_is_not_contained_and_still_fails(monkeypatch):
         prepare([span(0, "合成の条件A。" * 600)], reader)
 
 
-def test_retry_names_the_failed_inputs_and_forbids_elision(monkeypatch):
-    """#4090: 実モデルの不合格の多くは「...」で途中を省いた quote。再試行の指摘に省略の禁止と入力の番号を入れる。"""
-    calls = []
-
-    def provider(system, prompt, settings, schema, ignored):
-        calls.append(prompt)
-        result = output(prompt)
-        if len(calls) == 1:
-            result["findings"][0]["quote"] = result["findings"][0]["quote"][:4] + "..." + result["findings"][0]["quote"][-4:]
-        return schema.model_validate(result)
-
-    monkeypatch.setattr(oci, "_parse_text_once", provider)
-    prepare([span(0, "合成の条件A。" * 600)], reader)
-
-    feedback = calls[1].split("## Step 4:", 1)[1]
-    assert "途中を省略せず" in feedback
-    assert "原文に無い quote があった入力: B1" in feedback
-    assert "合成" not in feedback
-
-
-def test_when_every_quote_is_rejected_and_the_inputs_do_not_fit_the_failure_is_the_quote_not_the_budget(monkeypatch):
-    """#4090: 残した原文が容量に入らなければ、容量の不足ではなく quote の不合格として参考情報へ退避する。"""
+def test_when_every_range_is_rejected_and_the_inputs_do_not_fit_the_failure_is_the_range_not_the_budget(monkeypatch):
+    """#4090: 残した原文が容量に入らなければ、容量の不足ではなく範囲の不合格として参考情報へ退避する。"""
 
     def provider(system, prompt, settings, schema, ignored):
         result = output(prompt)
-        for finding in result["findings"]:
-            finding["quote"] = "入力に存在しない合成の引用"
+        for row in result["findings"]:
+            row["end_line"] = row["start_line"].split("-")[0] + "-9999"
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -481,7 +386,7 @@ def test_when_every_quote_is_rejected_and_the_inputs_do_not_fit_the_failure_is_t
             read=reader,
             failed_batches=failed,
         )
-    assert batch_failure_summary(failed[-1], raised.value)["category"] == "batch_quote_not_in_input"
+    assert batch_failure_summary(failed[-1], raised.value)["category"] == "batch_range_invalid"
 
 
 def test_a_failure_without_validation_detail_still_has_a_class():
