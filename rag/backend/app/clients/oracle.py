@@ -454,6 +454,14 @@ class SearchHits(list[RetrievedChunk]):
     failure: Exception | None = None
 
 
+# section_path が JSON_VALUE の既定の RETURNING VARCHAR2(4000) に入らない行(#4126・#4144)。
+# 超えた値には JSON_VALUE / JSON_QUERY が NULL を返すので、CLOB で読み直す行の印にする。
+SECTION_PATH_OVERFLOW_SQL = """(
+    JSON_VALUE(c.metadata_json, '$.section_path' RETURNING VARCHAR2(4000)) IS NULL
+    AND JSON_EXISTS(c.metadata_json, '$.section_path')
+    AND JSON_QUERY(c.metadata_json, '$.section_path' RETURNING VARCHAR2(4000)) IS NULL)"""
+_SECTION_PATH_CLOB_SQL = "JSON_VALUE(c.metadata_json, '$.section_path' RETURNING CLOB)"
+
 _NATIVE_SCOPE_JOINS = """FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id"""
@@ -1322,23 +1330,49 @@ class OracleClient:
         見出しの列は chunk の ``section_path``(「 > 」でつないだ文字列)。文書ごとに読み順で返す。
         """
         where_sql, binds = _oracle_retrieval_where(filters)
+        # GROUP BY は CLOB に使えないので、通常は VARCHAR2 で集計する。超えたパスの行は印を付け、
+        # あるときだけ CLOB で読み直してここで集計する。
         rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT d.file_name,
                    JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
-                   COUNT(*) AS chunk_count
+                   COUNT(*) AS chunk_count,
+                   MIN(c.chunk_index) AS first_chunk_index,
+                   MAX(CASE WHEN {overflow_sql} THEN 1 ELSE 0 END) AS path_overflow
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
             WHERE {where_sql}
-              AND JSON_VALUE(c.metadata_json, '$.section_path') IS NOT NULL
+              AND (JSON_VALUE(c.metadata_json, '$.section_path') IS NOT NULL OR {overflow_sql})
             GROUP BY d.file_name, JSON_VALUE(c.metadata_json, '$.section_path')
             ORDER BY d.file_name, MIN(c.chunk_index)
             """,
                 where_sql=where_sql,
+                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
             ),
             binds,
         )
+        if any(row.get("path_overflow") for row in rows):
+            rows = _merge_overflowed_sections(
+                rows,
+                await self._fetch_all(
+                    _render_sql(
+                        """
+                    SELECT d.file_name,
+                           {path_sql} AS section_path,
+                           c.chunk_index
+                    FROM rag_chunks c
+                    JOIN rag_documents d ON d.document_id = c.document_id
+                    WHERE {where_sql}
+                      AND {overflow_sql}
+                    """,
+                        where_sql=where_sql,
+                        path_sql=_SECTION_PATH_CLOB_SQL,
+                        overflow_sql=SECTION_PATH_OVERFLOW_SQL,
+                    ),
+                    binds,
+                ),
+            )
         return [
             (str(row["file_name"]), str(row["section_path"]), _int_value(row.get("chunk_count")))
             for row in rows
@@ -1372,11 +1406,16 @@ class OracleClient:
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
                   AND d.file_name = :screen_file_name
-                  AND INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
+                  AND (
+                      INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
+                      OR ({overflow_sql} AND INSTR({path_sql}, :screen_heading) > 0)
+                  )
                 ORDER BY c.document_id, c.chunk_index, c.chunk_id
             ) WHERE ROWNUM <= :screen_limit
             """,
                 where_sql=where_sql,
+                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
+                path_sql=_SECTION_PATH_CLOB_SQL,
             ),
             {
                 **binds,
@@ -1425,24 +1464,20 @@ class OracleClient:
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
-                  AND (
-                      JSON_VALUE(c.metadata_json, '$.section_path') = :reference_section_path
-                      OR SUBSTR(
-                          JSON_VALUE(c.metadata_json, '$.section_path'),
-                          1,
-                          :reference_prefix_length
-                      ) = :reference_section_prefix
-                  )
+                  AND ({section_sql})
                 ORDER BY c.chunk_set_id, c.chunk_index, c.chunk_id
             ) WHERE ROWNUM <= :reference_limit
             """,
                 where_sql=where_sql,
+                section_sql=_reference_section_sql(section_path, prefix),
             ),
             {
                 **binds,
                 "reference_section_path": section_path,
                 "reference_section_prefix": prefix,
                 "reference_prefix_length": len(prefix),
+                # CLOB の長さは UTF-16 の単位で数える(4 バイト文字は 2)。
+                "reference_prefix_lob_length": len(prefix.encode("utf-16-le")) // 2,
                 "reference_limit": max(1, int(limit)),
             },
         )
@@ -1574,12 +1609,14 @@ class OracleClient:
             _render_sql(
                 """
             SELECT x.document_id, x.file_name, x.section_path,
-                   MIN(x.chunk_index) AS first_chunk_index
+                   MIN(x.chunk_index) AS first_chunk_index,
+                   MAX(x.path_overflow) AS path_overflow
             FROM (
                 SELECT d.document_id,
                        d.file_name,
                        c.chunk_index,
-                       JSON_VALUE(c.metadata_json, '$.section_path') AS section_path
+                       JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
+                       CASE WHEN {overflow_sql} THEN 1 ELSE 0 END AS path_overflow
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
@@ -1587,9 +1624,30 @@ class OracleClient:
             GROUP BY x.document_id, x.file_name, x.section_path
             """,
                 where_sql=where_sql,
+                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
             ),
             binds,
         )
+        if any(row.get("path_overflow") for row in rows):
+            # 超えたパスの見出しにだけタイトルがある文書も照合する。その行を CLOB で足す(#4144)。
+            rows += await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT d.document_id,
+                       d.file_name,
+                       {path_sql} AS section_path,
+                       c.chunk_index AS first_chunk_index
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND {overflow_sql}
+                """,
+                    where_sql=where_sql,
+                    path_sql=_SECTION_PATH_CLOB_SQL,
+                    overflow_sql=SECTION_PATH_OVERFLOW_SQL,
+                ),
+                binds,
+            )
         return _match_reference_documents(rows, unique_titles, limit=max(1, int(limit)))
 
     async def retrieval_older_versions(
@@ -11949,6 +12007,70 @@ def _large_text_input_sizes(
             clob = importlib.import_module("oracledb").DB_TYPE_CLOB
         sizes[name] = clob
     return sizes
+
+
+def _reference_section_sql(section_path: str, prefix: str) -> str:
+    """交差参照の参照先の節とその下の節の条件(#4144)。全体を比べ、先頭だけの一致では当てない。
+
+    長い文字列(``_is_large_text``)の bind は CLOB になり、``=`` で比べられない。その比較は
+    ``DBMS_LOB.COMPARE`` にする。超えたパスの行は JSON_VALUE が NULL を返すので、接頭辞は
+    短くても CLOB で読み直して比べる。どちらも長くなければ、通常の行の比較は従来と同じ。
+    """
+    value = "JSON_VALUE(c.metadata_json, '$.section_path')"
+    under_lob = (
+        f"DBMS_LOB.COMPARE({_SECTION_PATH_CLOB_SQL}, :reference_section_prefix, "
+        ":reference_prefix_lob_length) = 0"
+    )
+    exact = (
+        f"DBMS_LOB.COMPARE({_SECTION_PATH_CLOB_SQL}, :reference_section_path) = 0"
+        if _is_large_text(section_path)
+        else f"{value} = :reference_section_path"
+    )
+    under = (
+        under_lob
+        if _is_large_text(prefix)
+        else f"""SUBSTR({value}, 1, :reference_prefix_length) = :reference_section_prefix
+            OR ({SECTION_PATH_OVERFLOW_SQL} AND {under_lob})"""
+    )
+    return f"{exact} OR {under}"
+
+
+def _merge_overflowed_sections(
+    rows: Sequence[Mapping[str, object]], overflowed: Sequence[Mapping[str, object]]
+) -> list[dict[str, object]]:
+    """VARCHAR2 で集計した節に、CLOB で読み直した節を足し、文書ごとの読み順に並べる(#4144)。
+
+    文書名の並びは DB の照合順序に従うので、集計の行の並びをそのまま使う。
+    """
+    file_order = {
+        name: index
+        for index, name in enumerate(dict.fromkeys(row.get("file_name") for row in rows))
+    }
+    merged: dict[tuple[object, str], dict[str, object]] = {}
+    for row in overflowed:
+        if not row.get("section_path"):
+            continue
+        key = (row.get("file_name"), str(row["section_path"]))
+        index = _int_value(row.get("chunk_index"))
+        section = merged.setdefault(
+            key,
+            {
+                "file_name": key[0],
+                "section_path": key[1],
+                "chunk_count": 0,
+                "first_chunk_index": index,
+            },
+        )
+        section["chunk_count"] = _int_value(section["chunk_count"]) + 1
+        section["first_chunk_index"] = min(_int_value(section["first_chunk_index"]), index)
+    sections = [dict(row) for row in rows if row.get("section_path")] + list(merged.values())
+    return sorted(
+        sections,
+        key=lambda section: (
+            file_order.get(section.get("file_name"), len(file_order)),
+            _int_value(section.get("first_chunk_index")),
+        ),
+    )
 
 
 def _is_large_text(value: str) -> bool:
