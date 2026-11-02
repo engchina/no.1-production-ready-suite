@@ -73,6 +73,7 @@ PREVIEW_FAILED_MESSAGE = (
     "RAG から原文のプレビューを取得できませんでした。時間をおいて再度お試しください。"
 )
 
+SOURCE_STALE_CODE = "source_stale"
 # RAG の MCP のエラー（`rag_read_source`。code は契約 rag-tools.json の `errors`）→ 画面へ返す
 # status と文言。
 _TOOL_ERRORS: dict[str, tuple[int, str]] = {
@@ -83,7 +84,7 @@ _TOOL_ERRORS: dict[str, tuple[int, str]] = {
     "MCP_TOOL_FORBIDDEN": (403, NOT_FOUND_MESSAGE),
 }
 _PREVIEW_TOOL_ERRORS: dict[str, tuple[int, str]] = {
-    "source_stale": (409, PREVIEW_STALE_MESSAGE),
+    SOURCE_STALE_CODE: (409, PREVIEW_STALE_MESSAGE),
     "source_not_found": (404, PREVIEW_NOT_FOUND_MESSAGE),
     "preview_file_missing": (404, PREVIEW_FILE_MISSING_MESSAGE),
     "preview_unavailable": (503, PREVIEW_UNAVAILABLE_MESSAGE),
@@ -129,12 +130,18 @@ class RunSourcePreviewData(BaseModel):
 
 
 class RunFigureUrlError(Exception):
-    """画面へ返す失敗（status と日本語の文言）。"""
+    """画面へ返す失敗（status と日本語の文言。画面が見分けるものは `code`）。"""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(self, status_code: int, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.message = message
+        self.code = code
+
+    @property
+    def detail(self) -> str | dict[str, str]:
+        """`HTTPException.detail`（`code` は応答の `error_code` になる）。"""
+        return {"code": self.code, "message": self.message} if self.code else self.message
 
 
 # 画面から根拠を開くときに読む成果物の種類（router が中身を読み込んでから渡す）。
@@ -303,7 +310,9 @@ def issue_run_source_preview(
             "agent_run_source_preview_failed",
             extra={"run_id": run.id, "error_code": error_code or exc.code},
         )
-        raise RunFigureUrlError(status, message) from None
+        # 版の失効は障害ではないので、画面が案内を出せるように code を返す（#4092）。
+        code = SOURCE_STALE_CODE if error_code == SOURCE_STALE_CODE else None
+        raise RunFigureUrlError(status, message, code=code) from None
     preview = output.get("preview")
     if not isinstance(preview, dict):
         raise RunFigureUrlError(502, PREVIEW_FAILED_MESSAGE)

@@ -102,6 +102,7 @@ from rag_parser_core.sheet_records import (
 )
 from rag_parser_core.xml_tree_json import xml_tree_citation_key
 
+from app.api.errors import SOURCE_STALE_CODE as SOURCE_STALE_CODE
 from app.api.errors import DocumentFileMissingError
 from app.api.routes import documents as documents_route
 from app.api.routes import search as search_route
@@ -381,7 +382,6 @@ CURSOR_CHUNK_SET_CHARS = 12
 CURSOR_MAX_LENGTH = 256
 SECTION_NOT_FOUND_CODE = "section_not_found"
 SOURCE_NOT_FOUND_CODE = "source_not_found"
-SOURCE_STALE_CODE = "source_stale"
 # 見つからない・使えない検索・回答プロファイルの id（#2355）。message に次の手を書く。
 SEARCH_ANSWER_PROFILE_NOT_FOUND_CODE = "search_answer_profile_not_found"
 # 図の元の画像（rag_read_source の include_image。#1282）。長い辺は VLM が縮めずに読める大きさ、
@@ -3563,7 +3563,8 @@ async def readable_chunk(oracle: OracleClient, document_id: str, chunk_id: str) 
     chunk = await oracle.retrievable_chunk(document_id, chunk_id)
     if chunk is not None:
         return chunk
-    if await oracle.accessible_chunk_exists(document_id, chunk_id):
+    # 再索引で chunk の行ごと消えることがあるので、文書が見られるかで分ける（#4092）。
+    if await oracle.accessible_document_exists(document_id):
         raise McpToolError(
             SOURCE_STALE_CODE,
             "この根拠は文書の古い版のものです。rag_search で検索し直してください。",

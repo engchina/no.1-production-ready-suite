@@ -88,6 +88,9 @@ export function documentPreviewLabels(overrides: Partial<DocumentPreviewLabels> 
 
 export const DEFAULT_DOCUMENT_PREVIEW_LABELS: DocumentPreviewLabels = documentPreviewLabels();
 
+/** 引用の版を表示できないときの案内（3 製品で同じ文言）。 */
+export const SOURCE_VERSION_STALE_MESSAGE = "資料が再処理されたため、回答時点の引用の版は表示できません。";
+
 /** 原本対応の表示文言。RAGとAgentが同じリソースを使用する。 */
 export function originalSourceLabels() {
   return {

@@ -149,3 +149,62 @@ it("Pythonのcodepoint範囲はemojiの後でも正しい文字を強調する",
   expect(host.querySelector("mark")?.textContent).toBe("引用");
   await act(async () => root.unmount()); host.remove();
 });
+
+function apiFailure(status: number, errorCode?: string) {
+  return Object.assign(new Error("合成の API の失敗"), { status, errorCode });
+}
+const STALE_TEXT = "資料が再処理されたため、回答時点の引用の版は表示できません。";
+
+describe("版の失効（#4092）", () => {
+  it("版の失効は案内だけを出し、エラーと再試行と本文の操作を出さず、取り直さない", async () => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    const load = vi.fn().mockRejectedValue(apiFailure(409, "source_stale"));
+    await act(async () => { root.render(<EvidenceReader readingKey="d1:old" loadWindow={load} downloadUrl="/synthetic" />); await settle(); });
+    const notice = host.querySelector('[data-testid="source-version-stale-notice"]');
+    expect(notice?.textContent).toContain(STALE_TEXT);
+    expect(notice?.querySelector('[role="status"]')).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector("button")).toBeNull();
+    expect(host.querySelector("a")).toBeNull();
+    expect(host.textContent).not.toContain("合成の API の失敗");
+    expect(load).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount()); host.remove();
+  });
+  it("読んでいる途中で失効したときも同じ案内にする", async () => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    const load = vi.fn().mockResolvedValueOnce(windowData).mockRejectedValueOnce(apiFailure(409, "source_stale"));
+    await act(async () => { root.render(<EvidenceReader readingKey="d1:c1" loadWindow={load} />); await settle(); });
+    const next = Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes("後文を読む"))!;
+    await act(async () => { next.click(); await settle(); });
+    expect(host.textContent).toContain(STALE_TEXT);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => root.unmount()); host.remove();
+  });
+  it.each([
+    ["500", apiFailure(500)],
+    ["本当の 404", apiFailure(404)],
+    ["code の無い 409", apiFailure(409)],
+    ["通信の失敗", new TypeError("Failed to fetch")],
+  ])("%s はエラーと再試行のまま", async (_name, failure) => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    const load = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(windowData);
+    await act(async () => { root.render(<EvidenceReader readingKey="d1:c1" loadWindow={load} />); await settle(); });
+    expect(host.querySelector('[data-testid="source-version-stale-notice"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    const retry = Array.from(host.querySelectorAll("button")).find(node => node.textContent?.includes("再試行"))!;
+    await act(async () => { retry.click(); await settle(); });
+    expect(host.querySelector("mark")?.textContent).toBe("合成の引用");
+    await act(async () => root.unmount()); host.remove();
+  });
+  it("原本の対応箇所も版の失効は案内にする", async () => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    const original = vi.fn().mockRejectedValue(apiFailure(409, "source_stale"));
+    await act(async () => { root.render(<EvidenceReader readingKey="d1:c1" loadWindow={vi.fn().mockResolvedValue(windowData)} loadOriginal={original} />); await settle(); });
+    const summary = host.querySelector<HTMLElement>('[data-testid="original-source-panel"] summary, [data-testid="original-source-panel"] button')!;
+    await act(async () => { summary.click(); await settle(); });
+    const panel = host.querySelector('[data-testid="original-source-panel"]')!;
+    expect(panel.textContent).toContain(STALE_TEXT);
+    expect(panel.textContent).not.toContain("再試行");
+    await act(async () => root.unmount()); host.remove();
+  });
+});

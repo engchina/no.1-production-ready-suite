@@ -3238,7 +3238,7 @@ async def get_run_figure_url(
             )
         )
     except RunFigureUrlError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from None
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     # URL はトークンを含むので、ブラウザ・中継の cache に残さない。
     response.headers["Cache-Control"] = "private, no-store"
     return ApiResponse(data=data)
@@ -3282,7 +3282,7 @@ async def get_run_source_preview(
             )
         )
     except RunFigureUrlError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from None
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
     # URL はトークンを含むので、ブラウザ・中継の cache に残さない。
     response.headers["Cache-Control"] = "private, no-store"
     return ApiResponse(data=data)

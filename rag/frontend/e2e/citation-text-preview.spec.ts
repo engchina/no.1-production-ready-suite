@@ -122,6 +122,34 @@ test("抜粋の長い根拠を開いてもプレビューは画面に残り、�
   await expect(scroll.getByTestId("evidence-excerpt-fade")).toHaveCSS("opacity", "0");
 });
 
+// #4092: 再索引で引用の版が無くなった根拠は、赤いエラーと再試行ではなく案内にする。本当の障害はエラーのまま。
+test("引用の版が無い根拠は案内を出し、障害はエラーと再試行のまま", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await search(page);
+  let failure = { status: 409, json: { data: null, error_messages: ["資料の版が変わりました。"], warning_messages: [], error_code: "source_stale" } as object };
+  await page.route("**/api/documents/doc-a/reader?**", route => route.fulfill(failure));
+  await page.getByTestId("evidence-card").getByRole("button", { name: "文書 A.json の根拠を表示" }).click();
+  const sheet = page.getByRole("dialog", { name: "検索で見つかった箇所" });
+  const preview = sheet.getByTestId("evidence-source-preview");
+  const notice = preview.getByTestId("source-version-stale-notice");
+  await expect(notice).toContainText("資料が再処理されたため、回答時点の引用の版は表示できません。");
+  await expect(notice.getByRole("status")).toBeVisible();
+  await expect(notice).toBeInViewport();
+  await expect(preview.getByRole("alert")).toHaveCount(0);
+  await expect(preview.getByRole("button")).toHaveCount(0);
+  // 保存した抜粋は要約で読める。
+  await expect(sheet.getByTestId("evidence-source-summary")).toContainText("文書 A.json");
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath(`rag-stale-citation-${testInfo.project.name}.png`) });
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+
+  failure = { status: 500, json: { data: null, error_messages: ["合成の障害です。"], warning_messages: [] } };
+  await page.getByTestId("evidence-card").getByRole("button", { name: "文書 A.json の根拠を表示" }).click();
+  await expect(preview.getByRole("alert")).toContainText("合成の障害です。");
+  await expect(preview.getByRole("button", { name: "再試行" })).toBeVisible();
+  await expect(preview.getByTestId("source-version-stale-notice")).toHaveCount(0);
+});
+
 function readerWindow(quote: string, params: URLSearchParams) {
   const cursor = params.get("cursor");
   const scope = params.get("scope");
