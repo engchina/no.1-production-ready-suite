@@ -24,10 +24,14 @@ async def test_cross_document_reference_rebuild_and_directional_pages() -> None:
         chunks=source_chunks,
         knowledge_base_id=kb.id,
     )
+    target_chunks = _chunks([(f"第{index + 1}条", 1) for index in range(100)])
+    for chunk in target_chunks:
+        # 対象側の本文に自己参照を混ぜず、起点の明示参照だけを検証する。
+        chunk.text = "合成の本文。"
     _target_id, target_set = await _indexed_document(
         client,
         file_name="合成参照規程.pdf",
-        chunks=_chunks([(f"第{index + 1}条", 1) for index in range(100)]),
+        chunks=target_chunks,
         knowledge_base_id=kb.id,
     )
     await rebuild_document_structure_index(client, kb.id, source_id)
@@ -40,7 +44,7 @@ async def test_cross_document_reference_rebuild_and_directional_pages() -> None:
     assert page["items"][0]["target"]["id"] == target_node
     assert await store.node(kb.id, target_node) is not None
     incoming = await store.page(kb.id, target_node, direction="incoming", offset=0, limit=25)
-    assert incoming["items"][0]["source"]["id"] == source_node
+    assert {item["source"]["id"] for item in incoming["items"]} == {source_node}
     assert await store.page(kb.id, source_node, direction="outgoing", offset=25, limit=25) == {
         "items": [],
         "offset": 25,
