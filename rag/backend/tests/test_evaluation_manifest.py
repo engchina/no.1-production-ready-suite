@@ -114,7 +114,7 @@ async def _manifest(
 
 
 async def test_manifest_identifies_conditions_without_secrets(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(get_settings(), "enterprise_ai_api_key", "sk-test-secret-value")
+    monkeypatch.setattr(get_settings(), "oci_enterprise_ai_api_key", "sk-test-secret-value")
     oracle = FakeOracle()
 
     manifest = await _manifest(oracle)

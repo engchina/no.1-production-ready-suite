@@ -14,7 +14,6 @@ from typing import Any
 import httpx
 import pytest
 from pr_backend_core.llm_request_params import reset_dropped_parameters
-from pr_backend_core.llm_request_params_httpx import ParameterDroppingClient
 
 from rag_engine.adapters import oci
 
@@ -58,10 +57,13 @@ def test_openai_client_drops_temperature_and_remembers(monkeypatch: pytest.Monke
             return httpx.Response(400, json=UNSUPPORTED_TEMPERATURE)
         return httpx.Response(200, json=_RESPONSE)
 
+    # _openai_client は記録・再生の包み（#2574）を通すので、そちらを差し替える。
+    # 差し替える前の class を取っておく（lambda の中で引くと差し替え後を見てしまう）。
+    recording_client = oci._RecordingHttpClient
     monkeypatch.setattr(
         oci,
-        "ParameterDroppingClient",
-        lambda **kwargs: ParameterDroppingClient(transport=httpx.MockTransport(handler), **kwargs),
+        "_RecordingHttpClient",
+        lambda **kwargs: recording_client(transport=httpx.MockTransport(handler), **kwargs),
     )
     # provider ごとの cache を通さずに作る（テストの間で client を持ち越さない）。
     client = oci._openai_client.__wrapped__("provider-a", ENDPOINT, "test-key", "", 30, 0)

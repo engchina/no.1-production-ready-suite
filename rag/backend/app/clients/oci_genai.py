@@ -20,6 +20,7 @@ from pr_backend_core.bounded_calls import KIND_LABELS, Attempt, BoundedCallFaile
 from pr_backend_core.chat_progress import chat_progress_details
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.tracing import observed_span
+from rag_engine.resources.external_calls import external_call
 from rag_engine.resources.rerank_diagnostics import (
     RerankCallReceipt,
     bind_rerank_attempt,
@@ -326,12 +327,33 @@ class OciGenAiClient:
             },
         ) as span:
             span.set_call_input(lambda: oci_call_snapshot(details), restricted=True)
-            response = await self._sdk_call_runner(lambda: self._client().embed_text(details))
-            span.set_call_output(lambda: oci_call_snapshot(response.data))
-        embeddings = getattr(response.data, "embeddings", None)
+            # 評価の記録・再生の対象（#2574）。session が無ければそのまま SDK を呼ぶので、
+            # 本番の経路は変わらない。記録に残すのは入力の hash と埋め込みの値だけ。
+            embeddings = await self._sdk_call_runner(
+                lambda: external_call(
+                    "embeddings",
+                    {
+                        "model": self._settings.oci_genai_embedding_model,
+                        "input_type": str(input_type),
+                        "dimensions": self._settings.oci_genai_embedding_dim,
+                        "inputs": texts,
+                    },
+                    lambda: self._embed_text_vectors(details, span),
+                    label=self._settings.oci_genai_embedding_model,
+                )
+            )
         if not isinstance(embeddings, list):
             raise ValueError("OCI embedding response に embeddings がありません。")
         return embeddings
+
+    def _embed_text_vectors(self, details: object, span: Any) -> list[list[float]]:
+        """OCI の embedding を 1 回呼び、埋め込みの値だけを返す（#2574 の記録の単位）。"""
+        response = self._client().embed_text(details)
+        span.set_call_output(lambda: oci_call_snapshot(response.data))
+        vectors = getattr(response.data, "embeddings", None)
+        if not isinstance(vectors, list):
+            raise ValueError("OCI embedding response に embeddings がありません。")
+        return vectors
 
     async def _rerank_with_oci(
         self, query: str, documents: list[str], top_n: int

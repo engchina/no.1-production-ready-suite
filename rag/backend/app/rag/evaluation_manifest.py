@@ -118,9 +118,9 @@ async def build_run_manifest(
         "models": {
             "answer": answer_model or UNVERIFIED,
             "judge": enterprise_ai_judge_model_id(settings, answer_model) or UNVERIFIED,
-            "embedding": settings.genai_embedding_model or UNVERIFIED,
-            "embedding_dim": settings.genai_embedding_dim,
-            "rerank": settings.genai_rerank_model or UNVERIFIED,
+            "embedding": settings.oci_genai_embedding_model or UNVERIFIED,
+            "embedding_dim": settings.oci_genai_embedding_dim,
+            "rerank": settings.oci_genai_rerank_model or UNVERIFIED,
             "snapshot": UNVERIFIED,
         },
         "profiles": profiles,

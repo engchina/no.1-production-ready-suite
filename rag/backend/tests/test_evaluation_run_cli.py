@@ -27,7 +27,7 @@ def _restore_settings(monkeypatch: MonkeyPatch) -> None:
     """CLI が書き換える設定（接続・並行の数）を、テストの後に元へ戻す。"""
     settings = get_settings()
     names = ["rag_evaluation_concurrency"] + [
-        f"enterprise_ai_{slot}{field}"
+        f"oci_enterprise_ai_{slot}{field}"
         for slot in ("", "secondary_", "tertiary_")
         for field in ("api_key", "endpoint")
     ]
@@ -91,7 +91,7 @@ def test_record_then_replay_without_api(tmp_path: Path, monkeypatch: MonkeyPatch
 
     # 別の日・API キーなしでも、記録の日で再生する。
     monkeypatch.setattr(config_module, "local_today", lambda settings: date(2026, 11, 5))
-    monkeypatch.setattr(get_settings(), "enterprise_ai_api_key", "")
+    monkeypatch.setattr(get_settings(), "oci_enterprise_ai_api_key", "")
     seen_today = _fake_run(monkeypatch, live=_offline)
     output = tmp_path / "replay.json"
 
@@ -101,7 +101,7 @@ def test_record_then_replay_without_api(tmp_path: Path, monkeypatch: MonkeyPatch
 
     assert code == 0
     assert seen_today == [date(2026, 10, 31)]
-    assert get_settings().enterprise_ai_api_key == evaluation_run_cli.REPLAY_PLACEHOLDER_KEY
+    assert get_settings().oci_enterprise_ai_api_key == evaluation_run_cli.REPLAY_PLACEHOLDER_KEY
     external = json.loads(output.read_text(encoding="utf-8"))["data"]["run_manifest"][
         "external_calls"
     ]
@@ -152,31 +152,3 @@ def test_diff_reports_condition_changes_and_old_results(
     assert "実行中に条件が変わりました（x）" in capsys.readouterr().out
     assert evaluation_run_cli.main(["diff", str(left), str(write("old.json", None))]) == 1
     assert "#59 より前の結果" in capsys.readouterr().err
-
-
-def test_genai_http_failures_replay_with_same_status(monkeypatch: MonkeyPatch) -> None:
-    """埋め込み・再ランクの HTTP の失敗は、再生でも同じ status の HTTPError にする。"""
-    import urllib.error
-    from email.message import Message
-
-    from rag_engine.resources.external_calls import ExternalCallSession, use_external_calls
-
-    from app.clients.genai import GenAiClient
-
-    url = "https://embedding.example/v1/embeddings"
-    body = {"model": "embedding-a", "input": ["x"]}
-
-    def rate_limited(self: GenAiClient, url: str, body: dict[str, Any], *, rerank: bool) -> Any:
-        raise urllib.error.HTTPError(url, 429, "Too Many Requests", Message(), None)
-
-    monkeypatch.setattr(GenAiClient, "_send", rate_limited)
-    client = GenAiClient(settings=get_settings())
-    session = ExternalCallSession("record")
-    with use_external_calls(session), pytest.raises(urllib.error.HTTPError):
-        client._post(url, body, rerank=False)
-
-    monkeypatch.setattr(GenAiClient, "_send", lambda *args, **kwargs: _offline())
-    replay = ExternalCallSession.from_recording(session.to_recording({}))
-    with use_external_calls(replay), pytest.raises(urllib.error.HTTPError) as raised:
-        client._post(url, body, rerank=False)
-    assert raised.value.code == 429

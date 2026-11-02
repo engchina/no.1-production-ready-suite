@@ -64,6 +64,7 @@ from rag_engine.resources.deadline import (
     expire_deadline,
     remaining_seconds,
 )
+from rag_engine.resources.external_calls import send_http
 from rag_engine.resources.llm_usage import (
     record_llm_effort_retry,
     record_llm_output_retry,
@@ -160,6 +161,17 @@ def _runtime(
 LLM_TEMPERATURE = 0.0
 
 
+class _RecordingHttpClient(ParameterDroppingClient):
+    """モデルの API の httpx client。評価の記録・再生の session があれば応答を記録・再生する（#2574）。
+
+    session が無ければ素通しなので、本番の経路は変わらない。
+    """
+
+    def send(self, request: Any, *args: Any, **kwargs: Any) -> Any:
+        parent = super().send
+        return send_http(lambda item: parent(item, *args, **kwargs), request)
+
+
 @application_cache(maxsize=16)
 def _openai_client(
     provider_id: str,
@@ -193,7 +205,7 @@ def _openai_client(
         # モデルが受け付けない引数（temperature など）の 400 は、外して 1 回だけ送り直し、以後この
         # モデルには送らない（#3539。platform の部品）。受け付けるモデルには temperature 0 を送り続ける。
         # timeout・接続の上限・redirect は SDK の既定の client と同じにする。
-        http_client=ParameterDroppingClient(timeout=timeout, limits=DEFAULT_CONNECTION_LIMITS, follow_redirects=True),
+        http_client=_RecordingHttpClient(timeout=timeout, limits=DEFAULT_CONNECTION_LIMITS, follow_redirects=True),
     )
 
 

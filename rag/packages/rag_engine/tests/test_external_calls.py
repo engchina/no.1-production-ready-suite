@@ -14,9 +14,8 @@ import httpx
 import openai
 import pytest
 
-from rag_engine.adapters import model_api
+from rag_engine.adapters import oci
 from rag_engine.resources.external_calls import (
-    ExternalCallMismatch,
     ExternalCallSession,
     external_call,
     external_call_mode,
@@ -25,7 +24,7 @@ from rag_engine.resources.external_calls import (
 
 ENDPOINT = "https://enterprise-ai.example/openai/v1"
 MODEL = "model-a"
-CLIENT_CLASS = model_api._ModelApiClient
+CLIENT_CLASS = oci._RecordingHttpClient
 
 
 def _response(text: str) -> dict[str, Any]:
@@ -52,11 +51,11 @@ def _response(text: str) -> dict[str, Any]:
 
 def _client(monkeypatch: pytest.MonkeyPatch, handler: Any) -> Any:
     monkeypatch.setattr(
-        model_api,
-        "_ModelApiClient",
+        oci,
+        "_RecordingHttpClient",
         lambda **kwargs: CLIENT_CLASS(transport=httpx.MockTransport(handler), **kwargs),
     )
-    return model_api._openai_client.__wrapped__("provider-a", ENDPOINT, "sk-test-secret", "", 30, 0)
+    return oci._openai_client.__wrapped__("provider-a", ENDPOINT, "sk-test-secret", "", 30, 0)
 
 
 def _live_handler(request: httpx.Request) -> httpx.Response:
@@ -134,35 +133,16 @@ def test_replayed_stream_body_reads_like_live(monkeypatch: pytest.MonkeyPatch) -
 
     request = httpx.Request("POST", f"{ENDPOINT}/responses", json={"model": MODEL, "stream": True})
     session = ExternalCallSession("record")
-    with use_external_calls(session), model_api._ModelApiClient(transport=httpx.MockTransport(handler)) as live:
+    with use_external_calls(session), oci._RecordingHttpClient(transport=httpx.MockTransport(handler)) as live:
         recorded = live.send(request, stream=True)
         assert list(recorded.iter_lines())[1] == 'data: {"delta": "a"}'
 
     replay = ExternalCallSession.from_recording(session.to_recording({}))
-    offline = model_api._ModelApiClient(transport=httpx.MockTransport(_offline_handler))
+    offline = oci._RecordingHttpClient(transport=httpx.MockTransport(_offline_handler))
     with use_external_calls(replay), offline:
         replayed = offline.send(request, stream=True)
         assert replayed.headers["content-type"] == "text/event-stream"
         assert b"".join(replayed.iter_bytes()) == events
-
-
-def test_rerank_is_recorded_and_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = {"output": {"results": [{"index": 1, "relevance_score": 0.9}]}}
-    monkeypatch.setattr(model_api, "_send_rerank_request", lambda *args: payload)
-    session = ExternalCallSession("record")
-    body = {"model": "rerank-a", "query": "q", "documents": ["a", "b"]}
-    with use_external_calls(session):
-        assert model_api._rerank_request(f"{ENDPOINT}/reranks", body, "sk-test-secret", 30) == payload
-
-    def offline(*args: object) -> dict[str, Any]:
-        raise AssertionError("再生で実の API を呼びました")
-
-    monkeypatch.setattr(model_api, "_send_rerank_request", offline)
-    replay = ExternalCallSession.from_recording(session.to_recording({}))
-    with use_external_calls(replay):
-        assert model_api._rerank_request(f"{ENDPOINT}/reranks", body, "", 30) == payload
-        with pytest.raises(ExternalCallMismatch):
-            model_api._rerank_request(f"{ENDPOINT}/reranks", {**body, "query": "other"}, "", 30)
 
 
 def test_without_session_calls_live_and_rejects_unknown_format() -> None:
