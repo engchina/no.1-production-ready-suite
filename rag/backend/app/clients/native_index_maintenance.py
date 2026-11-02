@@ -124,7 +124,9 @@ def maintain_native_vectors(
     workerだけが呼ぶ。件数検査もそのworkerに限定する。
 
     検索の候補の不足を起こす $VR の残骸を先に片付ける(#4097)。呼出しの成功では完了とせず、
-    件数が残れば FULL へ進む(Oracle Free では semantic が残骸を減らさない。#4021)。
+    件数が残れば FULL へ進む(Oracle Free では semantic で残骸が減らないことがある。#4021)。
+    件数が合っても SEARCH が足りないことがある(Oracle Free の小さい索引で確認。#4097)ので、
+    間隔を置いて FULL も行う。
 
     ``before_call`` は整理を始めるまでの呼出しの前に、``before_verify`` は整理が返った後の
     件数検査の呼出しの前に呼ぶ。整理の時間で後の検査を失敗させない（#4097）。
