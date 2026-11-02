@@ -299,7 +299,6 @@ async def test_answer_engine_answers_with_backend_search_and_evidence(
     # このスタブは rule だけを返すため、操作の引用の各件数は 0。
     assert diagnostics["procedure_quotes"] == {
         "original": 0,
-        "paraphrase_verified": 0,
         "unmatched": 0,
     }
     # rag_poc の回答 viewer と同じく外部データの確認・問い合わせ型も診断に載せる(#651)。

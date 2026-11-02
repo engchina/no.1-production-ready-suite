@@ -59,10 +59,9 @@ def test_copy_fields_are_not_in_the_schemas_sent_to_the_models() -> None:
     assert {"support_ranges", "evidence_id"} <= set(final)
     assert not {"evidence_quote", "support_quote"} & set(final)
     review = GroundedItemReview.model_json_schema()
-    assert "support_range" in review["properties"] and "support_quote" not in review["properties"]
-    assert "quote" not in review["$defs"]["AuditLineRange"]["properties"]
+    assert not {"support_quote", "support_range", "supported_fragments"} & set(review["properties"])
     wire = json.dumps(audit_wire_schema(GroundedFactAudit, ("Q1",)).model_json_schema(), ensure_ascii=False)
-    assert "support_quote" not in wire and "support_range" in wire
+    assert not any(name in wire for name in ("support_quote", "support_range", "supported_fragments"))
 
 
 def test_evidence_is_numbered_for_the_model_and_the_code_cuts_the_original() -> None:
@@ -151,13 +150,10 @@ def test_contradicted_judgement_survives_an_invalid_range() -> None:
     assert claim["support_quote"] == "" and len(calls) == 1
 
 
-def test_generation_audit_evidence_uses_the_same_numbers_as_the_cut() -> None:
+def test_final_validation_evidence_uses_the_same_numbers_as_the_cut() -> None:
     span = {"evidence_id": "E1", "label": "E1", "text": LONG}
     view = grounded.audit_line_view(span)
     assert view.rendered.splitlines()[1] == f"2| {SECOND}"
     assert view.range_text(2, 3) == (f"{SECOND}\n{THIRD}", None)
     assert view.range_text(4, 4) == ("", "citation_range_out_of_bounds")
     assert view.range_text(None, None) == ("", "citation_range_missing")
-    # 上限で切った本文の番号と単位が同じなので、切り出しも同じ本文から行う。
-    capped = grounded.audit_line_view(span, max_chars=len(FIRST) + 1)
-    assert capped.rendered == FIRST + "\n" and capped.range_text(None, None) == (FIRST, None)

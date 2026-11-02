@@ -10,8 +10,6 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ModelWrapValidatorHandler, PrivateAttr, StrictInt, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from rag_engine.generation.citation_wire import LINE_END_DESCRIPTION, LINE_START_DESCRIPTION
-
 
 @dataclass(frozen=True)
 class RerankTextRank:
@@ -704,26 +702,6 @@ class OutputFieldEvidence(_StrictModel):
         return self.asserts_output_fields and (not self.definition_quote.strip() or self.output_artifact_matches is not True)
 
 
-class AuditLineRange(_StrictModel):
-    """監査が支持に使う根拠の本文の範囲。原文はコードが番号から切り出す（モデルは写さない）。"""
-
-    evidence_id: str = Field(description="範囲がある根拠の evidence_id。")
-    line_start: StrictInt | None = Field(description=LINE_START_DESCRIPTION)
-    line_end: StrictInt | None = Field(description=LINE_END_DESCRIPTION)
-
-
-class GroundedSupportedFragment(_StrictModel):
-    """複合した説明のうち、同じ監査で独立に支持を判定した元の説明の片。"""
-
-    text: str = Field(min_length=1, max_length=600, description="元item.textの連続した部分をそのまま写す。書き換えない。")
-    support: Literal["supported", "unknown"] = Field(
-        default="unknown", description="引用集合がこの片全体を支えると確認したときだけsupported。"
-    )
-    citations: list[AuditLineRange] = Field(
-        default_factory=list, max_length=4, description="このitemの実際の引用の範囲の中で、この片を支持する本文の範囲。"
-    )
-
-
 class GroundedItemReview(_StrictModel):
     """1 item の局所監査。引用が言い換えを支持するかと、質問への適用性を分ける。"""
 
@@ -744,15 +722,6 @@ class GroundedItemReview(_StrictModel):
     )
     condition: str = Field(default="", description="conditional のとき原文の条件。")
     reason: str = Field(description="判定の根拠を短く。")
-    support_range: AuditLineRange | None = Field(
-        default=None,
-        description="段落を支持する連続した本文の範囲。返す必要がなければ null。",
-    )
-    supported_fragments: list[GroundedSupportedFragment] = Field(
-        default_factory=list,
-        max_length=40,
-        description="contradictedの複合itemに、独立に支持できる元の説明の部分がある場合だけ返す。各片は元textの厳密な抜粋と、このitemが実際に引用した本文の範囲で裏付ける。判断不能ならunknownまたは空。",
-    )
     # 原判定を保持し、採否への利用だけを別の方針にする。モデルの応答 schema には内部方針を出さない。
     observed_support: SkipJsonSchema[str] = Field(default="", description="監査が答えた支持判定（応答の schema には出さない）。")
     observed_applicability: SkipJsonSchema[str] = Field(default="", description="監査が答えた適用性の記録（応答の schema には出さない）。")
