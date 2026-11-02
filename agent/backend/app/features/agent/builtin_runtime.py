@@ -49,6 +49,7 @@ from agents import (
     OpenAIResponsesModel,
     RunConfig,
     RunContextWrapper,
+    RunHooks,
     Runner,
     RunState,
     set_tracing_disabled,
@@ -109,6 +110,8 @@ from pr_system_settings.model import (
 from app.features.agent import (
     call_abort,
     data_scope,
+    external_writes,
+    run_budget,
     run_claim,
     run_config,
     tool_grounding,
@@ -374,6 +377,11 @@ _STATIC_INSTRUCTIONS_ATTR = "_agent_static_instructions"
 # （`_OciResponses.create`）とモデルの呼び出しの span の属性（#2583）が読む。
 _ACTIVE_CONTEXT_WINDOW: ContextVar[_ContextWindow | None] = ContextVar(
     "agent_context_window", default=None
+)
+# いま実行している Run 全体の実行予算（#2599。`execute_run`・`resume_run` が入れる）。差し戻し・
+# 承認の後の再開の SDK 実行も同じ予算に積む（モデルの呼び出しの前・応答の後・ツールの境界が読む）。
+_ACTIVE_RUN_BUDGET: ContextVar[run_budget.RunBudget | None] = ContextVar(
+    "agent_run_budget", default=None
 )
 
 
@@ -1356,6 +1364,12 @@ def tool_failure_payload(result: ToolResult) -> dict[str, Any]:
         "error_code": result.error_code,
     }
     details = result.error_details if isinstance(result.error_details, dict) else {}
+    if external_writes.is_outcome_unknown(result):
+        # 届いた後の失敗（#2601）: 未実行と扱わせず、繰り返さずに確かめる案内を足す。
+        operation = details.get("operation_key") or result.audit_metadata.get("operation_key")
+        key = operation if isinstance(operation, str) else None
+        payload.update(external_writes.unknown_outcome_payload(key))
+
     callee_code = details.get("error_code")
     if isinstance(callee_code, str) and _CALLEE_ERROR_CODE.fullmatch(callee_code):
         payload["tool_error_code"] = callee_code
@@ -1651,7 +1665,20 @@ class _ToolRecorder:
             return True
         if self.prepare_arguments(name, parsed).errors:
             return False
+        # 結果不明の書き込みと同じ操作は、自動実行のツールでも人の照合を求める（#2601。承認の記録と
+        # 同じく、データの範囲を当てた引数で照合する）。
+        scoped = _scoped_call(ToolCall(name=name, arguments=dict(parsed)), self.data_scopes)
+        if self.unknown_origin(name, entry.definition, scoped.arguments) is not None:
+            return True
         return _active_policy().decide(entry.definition) == ToolPolicyDecision.ASK
+
+    def unknown_origin(
+        self, name: str, contract: ToolDefinition | None, arguments: dict[str, Any]
+    ) -> Any | None:
+        """同じツール・同じ引数の、結果不明のまま解消していない書き込みの step（#2601）。"""
+        if contract is None or name == CONFIRMATION_TOOL or not external_writes.guarded(contract):
+            return None
+        return external_writes.unresolved_unknown(_run_steps(self.run_id), name, arguments)
 
     def authorize(self, call: ToolCall, model_arguments: Mapping[str, Any]) -> _Authorization:
         """ツール権限と承認を、呼び先へ送る直前の最新のポリシーで確かめる（#2610）。
@@ -1669,7 +1696,8 @@ class _ToolRecorder:
         contract = entry.definition if entry is not None else tool_registry.get(call.name)
         if call.name == CONFIRMATION_TOOL:
             return _Authorization(policy, force=True, reason="confirmation")
-        if contract is None or policy.decide(contract) != ToolPolicyDecision.ASK:
+        resend = self.unknown_origin(call.name, contract, call.arguments) is not None
+        if contract is None or (policy.decide(contract) != ToolPolicyDecision.ASK and not resend):
             return _Authorization(policy, force=False, reason="policy")
         approval = runtime_repository.approved_builtin_call(
             self.run_id, call.trace_id or "", call.name
@@ -1751,6 +1779,20 @@ class _ToolRecorder:
             # 上限で実行しなかった呼び出しも処理の経過に残す（step は作らない。#3226）。
             record_skipped_tool(self.run_id, ToolCall(name=name, arguments={}, trace_id=call_id))
             return self.loop_refused(name, stop)
+        # Run 全体の実行予算に達した後は、外部の操作を始めない（#2599。step は作らず未実行に残す）。
+        budget = _ACTIVE_RUN_BUDGET.get()
+        exceeded = budget.reserve_tool_call() if budget is not None else None
+        if exceeded is not None:
+            record_skipped_tool(self.run_id, ToolCall(name=name, arguments={}, trace_id=call_id))
+            logger.info(
+                "builtin_runtime_tool_call_rejected",
+                extra={
+                    "run_id": self.run_id,
+                    "tool_name": name,
+                    "error_code": run_budget.RUN_BUDGET_EXCEEDED_CODE,
+                },
+            )
+            return json.dumps(run_budget.tool_refusal(exceeded), ensure_ascii=False)
         # 2. 引数: 読めない JSON・object 以外を空の引数にせず、モデルに見せた schema で確かめる
         # （#2630）。
         parsed, parse_errors = parse_arguments(arguments)
@@ -1830,6 +1872,12 @@ class _ToolRecorder:
         if scoped is not None and scoped.error is not None:
             # 範囲外は呼び先へ送らない（予算にも数えない）。step には拒否を残す。
             return self.reject_out_of_scope(call, scoped)
+        contract = entry.definition if entry is not None else tool_registry.get(name)
+        if contract is not None and name != CONFIRMATION_TOOL and external_writes.guarded(contract):
+            # 同じ call ID の書き込みを既に送った（同じ承認の再開など。#2601）: 送り直さない。
+            sent = external_writes.sent_step(_run_steps(self.run_id), call_id)
+            if sent is not None:
+                return self.already_sent_result(sent)
         # 3. ツール権限・承認: 実行の直前の最新のポリシーで確かめる（#2610）。
         authorization = self.authorize(call, parsed)
         if authorization.refused:
@@ -1844,6 +1892,13 @@ class _ToolRecorder:
             )
         # 予算は await の前に数える（同じ応答の並列の呼び出しでも上限を超えない）。
         exceeded = self.budget.reserve(name) if self.budget is not None else None
+        if (
+            exceeded is None
+            and contract is not None
+            and name != CONFIRMATION_TOOL
+            and external_writes.has_side_effects(contract)
+        ):
+            call = call.model_copy(update={"operation_key": self.operation_key_for(call, contract)})
         try:
             step_id, context = runtime_repository.start_builtin_tool_step(self.run_id, call)
         except RunNotActiveError:
@@ -1865,6 +1920,25 @@ class _ToolRecorder:
                 {"error": message, "error_code": BUDGET_EXCEEDED_CODE, "budget": exceeded},
                 ensure_ascii=False,
             )
+        if call.operation_key and contract is not None and external_writes.guarded(contract):
+            # 送る前に、実行を始めた記録（step と ID）を保存先に書き切る（#2601）。書けなければ
+            # 送らない（落ちた後に、送ったかもしれない書き込みを見分けられなくなるため）。
+            try:
+                await asyncio.to_thread(runtime_repository.flush_writes)
+            except Exception:  # noqa: BLE001 - 保存先の失敗の種類に依らず送らない
+                logger.warning(
+                    "builtin_runtime_tool_intent_not_persisted",
+                    extra={"run_id": self.run_id, "tool_name": name},
+                    exc_info=True,
+                )
+                not_sent = ToolResult(
+                    name=name,
+                    success=False,
+                    error=external_writes.INTENT_NOT_PERSISTED_MESSAGE,
+                    error_code=external_writes.INTENT_NOT_PERSISTED_CODE,
+                )
+                runtime_repository.finish_builtin_tool_step(self.run_id, step_id, not_sent)
+                return json.dumps(tool_failure_payload(not_sent), ensure_ascii=False)
         base = mcp_base_tool_name(name)
         guide_note: dict[str, Any] | None = None
 
@@ -1960,6 +2034,40 @@ class _ToolRecorder:
         return json.dumps(
             self.with_loop_notice(tool_failure_payload(result), step_id), ensure_ascii=False
         )
+
+    def operation_key_for(self, call: ToolCall, contract: ToolDefinition) -> str:
+        """送る呼び出しの論理操作の ID（#2601）。
+
+        結果不明の操作の送り直しは、最初の ID を引き継ぐ。
+        """
+        origin = self.unknown_origin(call.name, contract, call.arguments)
+        if origin is not None:
+            return str(origin.tool_call.operation_key)
+        from app.features.agent.runtime import runtime_repository
+
+        return external_writes.operation_key(
+            run_id=self.run_id,
+            user_uuid=runtime_repository.get_run(self.run_id).created_by_user_uuid,
+            tool_name=call.name,
+            arguments=call.arguments,
+            call_id=call.trace_id or "",
+        )
+
+    def already_sent_result(self, step: Any) -> str:
+        """同じ call ID で既に送った書き込み（#2601）。記録した結果を返し、呼び先へは送らない。"""
+        logger.info(
+            "builtin_runtime_tool_call_already_sent",
+            extra={"run_id": self.run_id, "tool_name": step.tool_call.name, "step_id": step.id},
+        )
+        result = step.tool_result
+        if result is not None and result.success:
+            return json.dumps(
+                {**(result.output or {}), "already_executed": True},
+                ensure_ascii=False,
+                default=str,
+            )
+        unknown = result if result is not None else external_writes.interrupted_result(step)
+        return json.dumps(tool_failure_payload(unknown), ensure_ascii=False)
 
     def reject_out_of_scope(self, call: ToolCall, scoped: data_scope.ScopeEnforcement) -> str:
         """範囲の外のプロファイルの呼び出しを、呼び先へ送らずにツールのエラーにする（#1378）。"""
@@ -3352,7 +3460,15 @@ def _run_config(run_id: str, sdk_agent: Agent[Any]) -> RunConfig:
         stop = await asyncio.to_thread(_tool_loop_stop, run_id)
         if stop is not None:
             raise stop
-        return window(data) if window is not None else data.model_data
+        model_data = window(data) if window is not None else data.model_data
+        # Run 全体の実行予算（#2599）: 呼ぶ前に 1 回と入力の見積もりを予約する。超えるなら呼ばない。
+        budget = _ACTIVE_RUN_BUDGET.get()
+        if budget is not None:
+            estimate = window.last_input.tokens_after if window and window.last_input else 0
+            exceeded = budget.reserve_model_call(estimate)
+            if exceeded is not None:
+                raise _run_budget_stop(run_id, budget, exceeded)
+        return model_data
 
     return RunConfig(
         tool_not_found_behavior="return_error_to_model",
@@ -3376,19 +3492,95 @@ async def _run_sdk(
     """
     try:
         config = _run_config(run_id, sdk_agent)
+        hooks = _RunBudgetHooks()
         result = await Runner.run(
-            sdk_agent, run_input, context=context, max_turns=_max_turns(), run_config=config
+            sdk_agent,
+            run_input,
+            context=context,
+            max_turns=_max_turns(),
+            run_config=config,
+            hooks=hooks,
         )
         for _ in range(_max_turns()):
             state = _settle_unreadable_calls(sdk_agent, result)
             if state is None:
                 break
             result = await Runner.run(
-                sdk_agent, state, context=context, max_turns=_max_turns(), run_config=config
+                sdk_agent,
+                state,
+                context=context,
+                max_turns=_max_turns(),
+                run_config=config,
+                hooks=hooks,
             )
         return result
     finally:
         _ACTIVE_CONTEXT_WINDOW.set(None)
+
+
+class _RunBudgetHooks(RunHooks[Any]):
+    """モデルの応答の usage で、Run 全体の実行予算の予約を精算する（#2599）。"""
+
+    async def on_llm_end(
+        self, context: RunContextWrapper[Any], agent: Agent[Any], response: ModelResponse
+    ) -> None:
+        budget = _ACTIVE_RUN_BUDGET.get()
+        if budget is not None:
+            budget.settle(response.usage)
+
+
+def _run_budget_stop(
+    run_id: str, budget: run_budget.RunBudget, exceeded: Mapping[str, Any]
+) -> BuiltinRuntimeError:
+    """Run 全体の実行予算で Run を終える理由（モデルを呼ばずに決まった文を作る。#2599）。"""
+    logger.warning(
+        "builtin_runtime_run_budget_exceeded",
+        extra={
+            "run_id": run_id,
+            "scope": exceeded.get("scope"),
+            "limit": exceeded.get("limit"),
+            "used": exceeded.get("used"),
+            "model_calls": budget.model_calls,
+            "total_tokens": budget.total_tokens,
+            "unmeasured_calls": budget.unmeasured_calls,
+            "refused_tool_calls": budget.refused_tool_calls,
+        },
+    )
+    return BuiltinRuntimeError(
+        run_budget.RUN_BUDGET_EXCEEDED_CODE, run_budget.exceeded_message(exceeded, budget)
+    )
+
+
+def _begin_run_budget(run: Any) -> Any:
+    """この実行の Run 全体の実行予算（前の実行の消費から続ける）を入れる（戻す token を返す）。"""
+    budget = run_budget.RunBudget.for_run(
+        run.metadata, run_budget.RunBudgetLimits.from_settings(get_settings())
+    )
+    return _ACTIVE_RUN_BUDGET.set(budget)
+
+
+def _record_run_budget(run_id: str) -> None:
+    """この実行までの Run 全体の実行予算の消費を Run に残す（区切りの書き込みの前に呼ぶ。#2599）。
+
+    結果の無い step（呼び先へ送った後に結果が届いていない）は、結果不明として数える。
+    """
+    from app.features.agent.runtime import StepStatus, runtime_repository
+
+    budget = _ACTIVE_RUN_BUDGET.get()
+    if budget is None:
+        return
+    unknown = sum(
+        1
+        for step in _run_steps(run_id)
+        if step.status in {StepStatus.PENDING, StepStatus.RUNNING} and step.tool_result is None
+    )
+    try:
+        runtime_repository.record_run_budget(run_id, budget.snapshot(unknown_steps=unknown))
+    except Exception as exc:  # noqa: BLE001 - 記録は補助。残せなくても Run の結果は書く
+        logger.warning(
+            "builtin_runtime_run_budget_record_failed",
+            extra={"run_id": run_id, "exception_type": type(exc).__name__},
+        )
 
 
 def _readable_arguments(raw: object) -> bool:
@@ -3729,6 +3921,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
             ),
         ):
             execution = run_claim.bind_execution(run.id, run.metadata)
+            budget_token = _begin_run_budget(run)
             # 公開中の版に固定したスキルで動く（#1855）。
             pinned = use_pinned_skills(agent.pinned_skills)
             result: Any = None
@@ -3793,6 +3986,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     await cancel_run_nl2sql_jobs(run_id, agent.data_scopes)
                     finish_operation_trace(run_id, status="cancelled")
                 reset_pinned_skills(pinned)
+                _ACTIVE_RUN_BUDGET.reset(budget_token)
                 run_claim.release_execution(execution)
 
 
@@ -3824,6 +4018,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     "builtin_runtime_wait_span_failed",
                     extra={"run_id": run_id, "exception_type": type(exc).__name__},
                 )
+            budget_token = _begin_run_budget(run)
             pinned = use_pinned_skills(agent.pinned_skills)
             result: Any = None
             try:
@@ -3912,6 +4107,7 @@ async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                     await cancel_run_nl2sql_jobs(run_id, agent.data_scopes)
                     finish_operation_trace(run_id, status="cancelled")
                 reset_pinned_skills(pinned)
+                _ACTIVE_RUN_BUDGET.reset(budget_token)
                 run_claim.release_execution(execution)
 
 
@@ -5265,6 +5461,8 @@ def _record_usage(run_id: str, source: object, model_id: str) -> None:
     """
     from app.features.agent.runtime import RunUsage, runtime_repository
 
+    # Run 全体の実行予算の消費も、同じ区切り（完了・失敗・承認待ち）で残す（#2599）。
+    _record_run_budget(run_id)
     usage = getattr(getattr(source, "context_wrapper", None), "usage", None)
     if usage is None:
         return

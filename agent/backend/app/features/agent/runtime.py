@@ -51,7 +51,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.features.agent import call_abort, run_claim, storage_backend
+from app.features.agent import call_abort, external_writes, run_claim, storage_backend
 from app.features.agent import runtime_checkpoint_store as checkpoint_store
 from app.features.agent.chat_progress import note_run_span
 from app.features.agent.clarification_cancel import (
@@ -78,6 +78,7 @@ from app.features.agent.confirmation import (
 from app.features.agent.confirmation import METADATA_KEYS as CONFIRMATION_METADATA_KEYS
 from app.features.agent.data_scope import AgentDataScopes, normalize_data_scopes
 from app.features.agent.output_fields import AgentOutputField, validate_output_fields
+from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.skills import (
     BUSINESS_RAG_RESEARCH_SKILL_ID,
@@ -683,6 +684,8 @@ RESERVED_RUN_METADATA_KEYS = frozenset(
         CANCEL_METADATA_KEY,
         # 回答前の確認（#1839）。確認の答えの操作から作る。
         *CONFIRMATION_METADATA_KEYS,
+        # Run 全体の実行予算の消費（#2599）。利用者が少ない消費を書いて予算を増やせないようにする。
+        RUN_BUDGET_METADATA_KEY,
     }
 )
 
@@ -1496,6 +1499,7 @@ class AgentRuntimeRepositoryContract(Protocol):
     ) -> None: ...
     def run_statuses(self, run_ids: Collection[str]) -> dict[str, RunStatus]: ...
     def record_builtin_usage(self, run_id: str, usage: RunUsage) -> None: ...
+    def record_run_budget(self, run_id: str, snapshot: JsonObject) -> None: ...
     def list_runs(self) -> list[RunState]: ...
     def list_run_summaries(self) -> list[RunSummary]: ...
     def list_approval_summaries(self) -> list[ApprovalSummary]: ...
@@ -2983,6 +2987,11 @@ class AgentRuntimeRepository:
                 step.tool_call = step.tool_call.model_copy(
                     update={"arguments": call.arguments, "data_scope": call.data_scope}
                 )
+            if step.tool_call is not None and call.operation_key:
+                # 承認済みの step にも、送る論理操作の ID を残す（#2601）。
+                step.tool_call = step.tool_call.model_copy(
+                    update={"operation_key": call.operation_key}
+                )
             step.status = StepStatus.RUNNING
             step.started_at = _now()
             self._append_event(
@@ -2993,6 +3002,7 @@ class AgentRuntimeRepository:
             )
             context = self._tool_invocation_context_locked(run, call, approval_id=step.approval_id)
             self._persist_locked()
+
             return step.id, context
 
     def finish_builtin_tool_step(self, run_id: str, step_id: str, result: ToolResult) -> None:
@@ -3094,6 +3104,8 @@ class AgentRuntimeRepository:
                     },
                 )
             for call in calls:
+                # 結果不明の書き込みと同じ操作の送り直しは、照合を求める理由にする（#2601）。
+                unknown = external_writes.unresolved_unknown(run.steps, call.name, call.arguments)
                 step = RunStep(
                     run_id=run_id,
                     status=StepStatus.WAITING_APPROVAL,
@@ -3104,7 +3116,9 @@ class AgentRuntimeRepository:
                     run_id=run_id,
                     step_id=step.id,
                     tool_call=call,
-                    reason=f"{call.name} は承認が必要です。",
+                    reason=external_writes.approval_reason(call.name)
+                    if unknown is not None
+                    else f"{call.name} は承認が必要です。",
                 )
                 step.approval_id = approval.id
                 run.steps.append(step)
@@ -3211,6 +3225,14 @@ class AgentRuntimeRepository:
         previous_status = run.status.value
         for step in run.steps:
             if step.status in {StepStatus.PENDING, StepStatus.RUNNING}:
+                if (
+                    step.status == StepStatus.RUNNING
+                    and step.tool_result is None
+                    and step.tool_call is not None
+                    and step.tool_call.operation_key
+                ):
+                    # 送ったかもしれない書き込みは、未実行と断定せず結果不明にする（#2601）。
+                    step.tool_result = external_writes.interrupted_result(step)
                 step.status = StepStatus.FAILED
                 step.completed_at = step.completed_at or now
         run.pending_tool_calls.clear()
@@ -3349,6 +3371,20 @@ class AgentRuntimeRepository:
             self._mark_run_changed(run)
             self._persist_locked()
             self._record_fact_locked(run)
+
+    def record_run_budget(self, run_id: str, snapshot: JsonObject) -> None:
+        """Run 全体の実行予算の消費（再開を含めた累計。#2599 `run_budget`）を metadata に残す。
+
+        取り消し・失敗で終えた Run にも残す（消費は戻らない）。別の実行が始まった後の遅れた
+        書き戻しは、新しい実行の累計を上書きしない（#2606）。
+        """
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or self._stale_execution_locked(run, "run_budget", segment_end=False):
+                return
+            run.metadata = {**run.metadata, RUN_BUDGET_METADATA_KEY: deepcopy(snapshot)}
+            self._mark_run_changed(run)
+            self._persist_locked()
 
     def note_builtin_warning(self, run_id: str, message: str) -> None:
         """実行は続けるが利用者に伝えたいこと（取得できなかった MCP 接続など）をイベントに残す。"""
@@ -4093,6 +4129,7 @@ class AgentRuntimeRepository:
         return ToolInvocationContext(
             approval_id=approval_id,
             trace_id=call.trace_id,
+            operation_key=call.operation_key,
             agent_id=run.agent_id,
             run_id=run.id,
             user_uuid=run.created_by_user_uuid,
