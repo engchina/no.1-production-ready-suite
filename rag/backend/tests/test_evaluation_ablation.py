@@ -271,7 +271,10 @@ def test_cli_records_and_replays_ablation(
         def call(kind: str, case: str) -> Any:
             def respond() -> Any:
                 assert live["on"], "再生で実の API を呼びました"
-                return {"ok": True}
+                # 実の client と同じ形（埋め込みは vector の list、再ランクは平たい順位の list）。
+                if kind == "rerank":
+                    return [{"index": 0, "relevance_score": 0.9}]
+                return [[0.1, 0.2]]
 
             return external_call(kind, {"case": case}, respond)
 

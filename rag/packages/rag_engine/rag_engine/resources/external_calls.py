@@ -98,7 +98,7 @@ class ExternalCallSession:
                 raise ExternalCallMismatch(message)
         entry = self.entries[index]
         if "error" in entry:
-            raise (build_error or _builtin_error)(entry["error"])
+            raise (build_error or builtin_external_error)(entry["error"])
         return entry["result"]  # type: ignore[no-any-return]
 
     def _append(self, entry: dict[str, Any]) -> None:
@@ -161,7 +161,7 @@ def send_http(send: Callable[[httpx.Request], httpx.Response], request: httpx.Re
         error_type = getattr(httpx, str(error.get("type")), None)
         if isinstance(error_type, type) and issubclass(error_type, httpx.RequestError):
             return error_type(str(error.get("message", "")), request=request)
-        return _builtin_error(error)
+        return builtin_external_error(error)
 
     payload = {"method": request.method, "path": request.url.path, "body": _decode_request_body(request.content)}
     model = payload["body"].get("model") if isinstance(payload["body"], dict) else None
@@ -205,7 +205,7 @@ _BUILTIN_ERRORS: dict[str, type[Exception]] = {
 }
 
 
-def _builtin_error(error: Mapping[str, Any]) -> BaseException:
+def builtin_external_error(error: Mapping[str, Any]) -> BaseException:
     """記録した失敗の例外（標準の種類はその型、ほかは RuntimeError）。"""
     error_type = _BUILTIN_ERRORS.get(str(error.get("type")), RuntimeError)
     return error_type(str(error.get("message", "")))
@@ -215,6 +215,7 @@ __all__ = [
     "RECORDING_FORMAT",
     "ExternalCallMismatch",
     "ExternalCallSession",
+    "builtin_external_error",
     "external_call",
     "external_call_mode",
     "request_key",
