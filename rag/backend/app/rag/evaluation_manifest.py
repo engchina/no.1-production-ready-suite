@@ -9,6 +9,8 @@
 - 既存の追跡を使う: 設定の fingerprint（``rag_config_fingerprint``）・プロンプトの版
   （``answer_prompt_version``）・プロファイルの版（``search_answer_profile_revision``）。
 - 秘密（API キー・接続の情報）・質問や根拠の原文は入れない。条件の値（filters）は hash だけを残す。
+- 回答のモデルは検索・回答プロファイルの解決後の値を残し、全体の既定と ``answer_source`` で
+  区別する。比較のプロファイルの pass のモデルは ``models.compare`` に残す。
 - モデルの snapshot（提供側の重みの版）は API から取れないため ``unverified`` と書く。
 - 読めなかった条件は ``unverified`` にし、評価は止めない（条件の差として現れる）。
 """
@@ -39,8 +41,10 @@ from app.rag.evaluation import evaluation_settings
 from app.rag.search_answer_profile_knowledge import RUNTIME_KNOWLEDGE_KIND, load_domain_keywords
 from app.schemas.evaluation import EvaluationRunRequest
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 UNVERIFIED = "unverified"
+ANSWER_MODEL_FROM_PROFILE = "search_answer_profile"
+ANSWER_MODEL_FROM_GLOBAL_DEFAULT = "global_default"
 # 2 つの結果の条件の比較に入れない項目（同じ条件で別の実行・別のコードの版を比べるため）。
 NON_CONDITION_KEYS = frozenset(
     {"code_version", "external_calls", "changed_during_run", "comparable", "manifest_version"}
@@ -86,7 +90,13 @@ async def build_run_manifest(
     knowledge_base_ids = set(request.knowledge_base_ids)
     for profile in profiles.values():
         knowledge_base_ids.update(profile.get("knowledge_base_ids") or [])
-    answer_model = enterprise_ai_default_model_id(settings)
+    answer_models = _answer_models(settings, profiles.get(request.search_answer_profile_id or ""))
+    compare_profile_id = request.compare_search_answer_profile_id
+    compare_models = (
+        {"compare": _answer_models(settings, profiles.get(compare_profile_id))}
+        if compare_profile_id
+        else {}
+    )
     return {
         "manifest_version": MANIFEST_VERSION,
         "as_of": as_of.isoformat(),
@@ -116,8 +126,8 @@ async def build_run_manifest(
             "prompt_version": await _prompt_version(oracle),
         },
         "models": {
-            "answer": answer_model or UNVERIFIED,
-            "judge": enterprise_ai_judge_model_id(settings, answer_model) or UNVERIFIED,
+            **answer_models,
+            **compare_models,
             "embedding": settings.oci_genai_embedding_model or UNVERIFIED,
             "embedding_dim": settings.oci_genai_embedding_dim,
             "rerank": settings.oci_genai_rerank_model or UNVERIFIED,
@@ -128,6 +138,25 @@ async def build_run_manifest(
         "code_version": code_version(),
         # 外部の AI の応答を実の API で得たか、記録・再生したか（再生は live の評価と区別する）。
         "external_calls": {"mode": external_call_mode()},
+    }
+
+
+def _answer_models(settings: Settings, profile: Mapping[str, Any] | None) -> dict[str, str]:
+    """1 つの pass の回答のモデルとその出所、判定のモデル（評価のケースの解決と同じ規則）。
+
+    プロファイルの指定はプロファイルの回答のモデルを優先し、未指定は全体の既定を継承する。プロファイルが
+    読めなければ実際のモデルが分からないので、全体の既定を書かず ``unverified`` にする。
+    """
+    if profile is None or "answer_model_id" in profile:
+        profile_model = str((profile or {}).get("answer_model_id") or "")
+        answer_model = profile_model or enterprise_ai_default_model_id(settings) or UNVERIFIED
+        source = ANSWER_MODEL_FROM_PROFILE if profile_model else ANSWER_MODEL_FROM_GLOBAL_DEFAULT
+    else:
+        answer_model = source = UNVERIFIED
+    return {
+        "answer": answer_model,
+        "answer_source": source,
+        "judge": enterprise_ai_judge_model_id(settings, answer_model) or UNVERIFIED,
     }
 
 
@@ -189,6 +218,7 @@ async def _profile(oracle: ManifestOracle, profile_id: str) -> dict[str, Any]:
         return {"id": profile_id, "status": UNVERIFIED}
     return {
         **search_answer_profile_revision(view),
+        "answer_model_id": view.config.answer_model_id,
         "knowledge_sha256": _sha256(knowledge or {}),
         "domain_keywords_sha256": _sha256(keywords or []),
         "knowledge_base_ids": sorted(view.config.normalized_knowledge_base_ids()),

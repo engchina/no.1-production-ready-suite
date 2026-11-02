@@ -121,6 +121,73 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         "crag_skip_on_strong_signals": resolved_settings.rag_crag_skip_on_strong_signals,
         "crag_skip_min_rerank_score": resolved_settings.rag_crag_skip_min_rerank_score,
         "query_expansion_max_queries": resolved_settings.rag_query_expansion_max_queries,
+        "history_rewrite_enabled": resolved_settings.rag_history_rewrite_enabled,
+        "search_top_k_default": resolved_settings.rag_search_top_k_default,
+        "guardrails_input_enabled": resolved_settings.rag_guardrails_input_enabled,
+        "guardrails_output_enabled": resolved_settings.rag_guardrails_output_enabled,
+        # 検索の経路と候補の予算(#4141。rerank に進む候補の数が変わる)。
+        "hybrid_search_backend": resolved_settings.rag_hybrid_search_backend,
+        "rrf_method_ratio": resolved_settings.rag_rrf_method_ratio,
+        "rrf_source_ratio": resolved_settings.rag_rrf_source_ratio,
+        "retrieval_query_limit": resolved_settings.rag_retrieval_query_limit,
+        "retrieval_candidate_limit": resolved_settings.rag_retrieval_candidate_limit,
+        "rerank_candidate_limit": resolved_settings.rag_rerank_candidate_limit,
+        "rerank_min_relevance_score": resolved_settings.rag_rerank_min_relevance_score,
+        "candidate_diversity_depth": resolved_settings.rag_candidate_diversity_depth,
+        "candidate_diversity_max_extra": resolved_settings.rag_candidate_diversity_max_extra,
+        "candidate_diversity_new_document": resolved_settings.rag_candidate_diversity_new_document,
+        "candidate_diversity_present_document": (
+            resolved_settings.rag_candidate_diversity_present_document
+        ),
+        # 段ごとの追加の検索の予算(#4141)。
+        "section_expansion_followup_reserve_percent": (
+            resolved_settings.rag_section_expansion_followup_reserve_percent
+        ),
+        "request_coverage_chunks_per_subquestion": (
+            resolved_settings.rag_request_coverage_chunks_per_subquestion
+        ),
+        "request_coverage_deadline_seconds": (
+            resolved_settings.rag_request_coverage_deadline_seconds
+        ),
+        "request_coverage_max_chunks": resolved_settings.rag_request_coverage_max_chunks,
+        "request_coverage_max_queries": resolved_settings.rag_request_coverage_max_queries,
+        "request_coverage_max_subquestions": (
+            resolved_settings.rag_request_coverage_max_subquestions
+        ),
+        "guide_step_chunks_per_step": resolved_settings.rag_guide_step_chunks_per_step,
+        "guide_step_deadline_seconds": resolved_settings.rag_guide_step_deadline_seconds,
+        "guide_reference_max_chunks": resolved_settings.rag_guide_reference_max_chunks,
+        "article_catalog_max_articles": resolved_settings.rag_article_catalog_max_articles,
+        "article_catalog_original_question_search": (
+            resolved_settings.rag_article_catalog_original_question_search
+        ),
+        "article_catalog_refine_articles": resolved_settings.rag_article_catalog_refine_articles,
+        "article_catalog_refine_candidates": (
+            resolved_settings.rag_article_catalog_refine_candidates
+        ),
+        "article_catalog_output_token_cap": resolved_settings.rag_article_catalog_output_token_cap,
+        "article_catalog_review_enabled": resolved_settings.rag_article_catalog_review_enabled,
+        # 用語・回答ルール・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
+        "runtime_rules_confirmation_enabled": (
+            resolved_settings.rag_runtime_rules_confirmation_enabled
+        ),
+        "runtime_rules_answer_enabled": resolved_settings.rag_runtime_rules_answer_enabled,
+        "runtime_terms_search_enabled": resolved_settings.rag_runtime_terms_search_enabled,
+        "runtime_terms_answer_enabled": resolved_settings.rag_runtime_terms_answer_enabled,
+        "support_guide_enabled": resolved_settings.rag_support_guide_enabled,
+        "support_guide_semantic_match_enabled": (
+            resolved_settings.rag_support_guide_semantic_match_enabled
+        ),
+        "support_guide_semantic_threshold": resolved_settings.rag_support_guide_semantic_threshold,
+        "support_guide_close_match_clarification_enabled": (
+            resolved_settings.rag_support_guide_close_match_clarification_enabled
+        ),
+        "support_guide_close_match_margin": resolved_settings.rag_support_guide_close_match_margin,
+        # 最終照合の入力の分け方(#4141)。
+        "answer_validation_batch_passages": resolved_settings.rag_answer_validation_batch_passages,
+        "answer_validation_max_input_bytes": (
+            resolved_settings.rag_answer_validation_max_input_bytes
+        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
