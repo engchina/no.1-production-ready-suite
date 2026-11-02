@@ -84,6 +84,7 @@ from app.rag.search_answer_profile_config import (
     dump_search_answer_profile_config,
     parse_search_answer_profile_config,
 )
+from app.rag.section_revisions import SectionExtractionBase
 from app.rag.source_profile import build_source_profile
 from app.rag.support_guide_runtime import GUIDE_PREVIEW_TRACE_PREFIX
 from app.rag.vector_index_adapter import default_vector_index_build, resolve_vector_index_adapter
@@ -4607,12 +4608,15 @@ class OracleClient:
         await self._run_transaction(operation)
 
     async def get_document_sections(self, document_id: str) -> dict[str, object] | None:
-        """人が修正した文書の章節(#713)。未保存は None。"""
+        """人が修正した文書の章節(#713)と、今の版が基にした抽出(#4171)。未保存は None。"""
         row = await self._fetch_one(
             """
-            SELECT sections_json, revision, updated_at
-            FROM rag_document_sections
-            WHERE document_id = :document_id
+            SELECT s.sections_json, s.revision, s.updated_at,
+                   r.base_extraction_recipe_id, r.base_outline_sha256
+            FROM rag_document_sections s
+            LEFT JOIN rag_document_section_revisions r
+              ON r.document_id = s.document_id AND r.revision_no = s.revision
+            WHERE s.document_id = :document_id
             """,
             {"document_id": document_id},
         )
@@ -4626,6 +4630,8 @@ class OracleClient:
             "sections": sections if isinstance(sections, list | dict) else [],
             "revision": int(cast(int, row.get("revision") or 1)),
             "updated_at": row.get("updated_at"),
+            "base_extraction_recipe_id": _optional_str(row.get("base_extraction_recipe_id")),
+            "base_outline_sha256": _optional_str(row.get("base_outline_sha256")),
         }
 
     async def save_document_sections(
@@ -4634,65 +4640,87 @@ class OracleClient:
         sections: Mapping[str, object],
         *,
         base_revision: int | None,
+        extraction_base: SectionExtractionBase,
     ) -> int:
-        """人が修正した章節を保存し、新しい revision を返す(#713)。
+        """人が修正した章節を新しい版として保存し、今の版の番号を返す(#713・#4171)。
 
-        ``base_revision`` は読み込んだときの revision(未保存なら None)。保存済みの revision と
-        違えば ``DocumentSectionsConflictError``(読み込んだ後にほかの人が保存した)。
+        ``base_revision`` は読み込んだときの版(未保存なら None)。今の版と違えば
+        ``DocumentSectionsConflictError``(読み込んだ後にほかの人が保存した)。
         """
-        binds = {"document_id": document_id, "sections_json": _json_bind(dict(sections))}
 
         def operation(connection: OracleConnectionProtocol) -> int:
-            row = _fetch_one(
+            from app.clients.section_revision_store import commit_section_save
+
+            return commit_section_save(
                 connection,
-                """
-                SELECT revision FROM rag_document_sections
-                WHERE document_id = :document_id
-                FOR UPDATE
-                """,
-                {"document_id": document_id},
+                document_id=document_id,
+                sections=sections,
+                base_revision=base_revision,
+                extraction_base=extraction_base,
             )
-            current = int(cast(int, row["revision"])) if row is not None else None
-            if current != base_revision:
-                raise DocumentSectionsConflictError(document_id)
-            if current is None:
-                _execute(
-                    connection,
-                    """
-                    INSERT INTO rag_document_sections (document_id, sections_json)
-                    VALUES (:document_id, :sections_json)
-                    """,
-                    binds,
-                    input_sizes=_json_input_sizes("sections_json"),
-                )
-                return 1
-            _execute(
-                connection,
-                """
-                UPDATE rag_document_sections
-                SET sections_json = :sections_json,
-                    revision = revision + 1,
-                    updated_at = SYSTIMESTAMP
-                WHERE document_id = :document_id
-                """,
-                binds,
-                input_sizes=_json_input_sizes("sections_json"),
-            )
-            return current + 1
 
         return await self._run_transaction(operation)
 
-    async def delete_document_sections(self, document_id: str) -> None:
-        """人が修正した章節を消し、抽出結果の章節に戻す(#713)。"""
+    async def delete_document_sections(
+        self, document_id: str, *, extraction_base: SectionExtractionBase
+    ) -> None:
+        """人が修正した章節を抽出結果の章節に戻し、戻したことを版にする(#713・#4171)。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                "DELETE FROM rag_document_sections WHERE document_id = :document_id",
-                {"document_id": document_id},
+            from app.clients.section_revision_store import commit_section_reset
+
+            commit_section_reset(
+                connection, document_id=document_id, extraction_base=extraction_base
             )
 
         await self._run_transaction(operation)
+
+    async def restore_document_section_revision(
+        self,
+        document_id: str,
+        revision_no: int,
+        *,
+        expected_revision: int | None,
+        extraction_base: SectionExtractionBase,
+    ) -> int:
+        """章節の版の内容を新しい版として今の修正にし、新しい版の番号を返す(#4171)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            from app.clients.section_revision_store import commit_section_restore
+
+            return commit_section_restore(
+                connection,
+                document_id=document_id,
+                revision_no=revision_no,
+                expected_revision=expected_revision,
+                extraction_base=extraction_base,
+            )
+
+        return await self._run_transaction(operation)
+
+    async def list_document_section_revisions(self, document_id: str) -> list[dict[str, object]]:
+        """文書の章節の版を新しい順に返す(本文は読まない。#4171)。"""
+        from app.clients.section_revision_store import (
+            LIST_SECTION_REVISIONS_SQL,
+            section_revision_row,
+        )
+
+        rows = await self._fetch_all(LIST_SECTION_REVISIONS_SQL, {"document_id": document_id})
+        return [section_revision_row(row) for row in rows]
+
+    async def get_document_section_revision(
+        self, document_id: str, revision_no: int
+    ) -> dict[str, object] | None:
+        """文書の章節の版を本文つきで返す(#4171)。"""
+        from app.clients.section_revision_store import (
+            GET_SECTION_REVISION_SQL,
+            section_revision_row,
+        )
+
+        row = await self._fetch_one(
+            GET_SECTION_REVISION_SQL, {"document_id": document_id, "revision_no": revision_no}
+        )
+        return section_revision_row(row) if row is not None else None
 
     async def list_search_answer_profile_chunk_texts(
         self,

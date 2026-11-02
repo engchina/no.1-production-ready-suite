@@ -17,6 +17,7 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  History,
   IndentDecrease,
   IndentIncrease,
   ListPlus,
@@ -58,6 +59,8 @@ import {
   useResetDocumentSections,
   useSaveDocumentSections,
 } from "@/lib/queries";
+
+import { SectionBaseChangedNotice, SectionRevisionHistory } from "./SectionRevisionHistory";
 
 let newSectionSerial = 0;
 
@@ -104,6 +107,7 @@ export function DocumentSectionsPanel({
   const [draft, setDraft] = useState<DocumentSection[] | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const data = query.data;
   // 抽出の全章節の要約（ナビゲーション要約が有効なとき。抽出の章節 id → 要約）。
   const summaries = useMemo(() => new Map(Object.entries(data?.summaries ?? {})), [data?.summaries]);
@@ -227,10 +231,26 @@ export function DocumentSectionsPanel({
             <p className="text-xs text-fg-muted">
               {sections.length > 0 ? t("sections.hint.view") : t("sections.empty")}
             </p>
-            <Button type="button" variant="secondary" size="sm" icon={Pencil} onClick={startEdit}>
-              {t("sections.action.edit")}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                icon={History}
+                onClick={() => setHistoryOpen(true)}
+                aria-haspopup="dialog"
+                aria-controls="section-revision-history"
+              >
+                {t("sections.revisions.open")}
+              </Button>
+              <Button type="button" variant="secondary" size="sm" icon={Pencil} onClick={startEdit}>
+                {t("sections.action.edit")}
+              </Button>
+            </div>
           </div>
+          {manual && data?.base_changed ? (
+            <SectionBaseChangedNotice outlineChanged={Boolean(data.base_outline_changed)} />
+          ) : null}
           {unmatched > 0 ? (
             <div data-testid="sections-summary-mismatch">
               <Banner severity="warning">{t("sections.summaryMismatch", { count: unmatched })}</Banner>
@@ -404,6 +424,14 @@ export function DocumentSectionsPanel({
           />
         </div>
       )}
+      {/* 編集中は履歴を開けないので、復元で未保存の修正を失わない。 */}
+      <SectionRevisionHistory
+        documentId={documentId}
+        recipeId={recipeId}
+        currentRevision={data?.revision ?? null}
+        open={historyOpen && draft === null}
+        onClose={() => setHistoryOpen(false)}
+      />
     </Disclosure>
   );
 }

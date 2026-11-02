@@ -2665,6 +2665,15 @@ class Settings(
             "（今の版・基の解析の版・検索に出している版は残す。版の番号は振り直さない）。"
         ),
     )
+    rag_section_max_revisions: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description=(
+            "人が修正した章節の履歴に文書ごとに残す版の数（#4171）。保存・復元・抽出結果への戻しの"
+            "ときに古い版から消す（今の版は残す。版の番号は振り直さない）。"
+        ),
+    )
     rag_review_gate_enabled: bool = Field(
         default=True,
         description=(

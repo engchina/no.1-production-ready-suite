@@ -152,6 +152,8 @@ export const queryKeys = {
     ["documents", id, "knowledge-bases"] as const,
   documentSections: (id: string, recipeId: string | null) =>
     ["documents", id, "sections", recipeId] as const,
+  documentSectionRevisions: (id: string) =>
+    ["documents", id, "sections", "revisions"] as const,
   knowledgeBases: (params: {
     status?: KnowledgeBaseStatus;
     q?: string;
@@ -507,6 +509,57 @@ export function useResetDocumentSections(id: string) {
   return useMutation({
     mutationFn: (recipeId: string | null) => api.resetDocumentSections(id, recipeId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["documents", id, "sections"] }),
+  });
+}
+
+/** 人が修正した章節の履歴（#4171）。`documents/{id}/sections` の下のキーなので保存・戻しで読み直す。 */
+export function useDocumentSectionRevisions(
+  id: string,
+  recipeId: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: [...queryKeys.documentSectionRevisions(id), recipeId],
+    queryFn: () => api.listDocumentSectionRevisions(id, recipeId),
+    enabled,
+    retry: retryUnlessNotFound,
+  });
+}
+
+export function useDocumentSectionRevisionDiff(
+  id: string,
+  revisionNo: number,
+  options: { against: number | null; offset: number; limit: number },
+) {
+  return useQuery({
+    queryKey: [...queryKeys.documentSectionRevisions(id), revisionNo, "diff", options],
+    queryFn: () => api.diffDocumentSectionRevision(id, revisionNo, options),
+    retry: retryUnlessNotFound,
+  });
+}
+
+export function useRestoreDocumentSectionRevision(id: string) {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["documents", id, "sections"] });
+  return useMutation({
+    mutationFn: ({
+      revisionNo,
+      expectedRevision,
+      recipeId,
+    }: {
+      revisionNo: number;
+      expectedRevision: number | null;
+      recipeId: string | null;
+    }) =>
+      api.restoreDocumentSectionRevision(id, revisionNo, {
+        expected_revision: expectedRevision,
+        recipe_id: recipeId,
+      }),
+    onSuccess: invalidate,
+    // 409（ほかの保存が先に入った）は今の状態を読み込み直す。
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) void invalidate();
+    },
   });
 }
 

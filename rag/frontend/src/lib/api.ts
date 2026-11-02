@@ -3674,6 +3674,35 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
+  listDocumentSectionRevisions: (id: string, recipeId?: string | null) =>
+    request<DocumentSectionRevisionHistory>(
+      `/api/documents/${encodeURIComponent(id)}/sections/revisions${
+        recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : ""
+      }`,
+    ),
+  diffDocumentSectionRevision: (
+    id: string,
+    revisionNo: number,
+    options: { against: number | null; offset: number; limit: number },
+  ) => {
+    const params = new URLSearchParams({
+      offset: String(options.offset),
+      limit: String(options.limit),
+    });
+    if (options.against != null) params.set("against", String(options.against));
+    return request<DocumentSectionRevisionDiff>(
+      `/api/documents/${encodeURIComponent(id)}/sections/revisions/${revisionNo}/diff?${params.toString()}`,
+    );
+  },
+  restoreDocumentSectionRevision: (
+    id: string,
+    revisionNo: number,
+    body: { expected_revision: number | null; recipe_id: string | null },
+  ) =>
+    request<DocumentSectionsData>(
+      `/api/documents/${encodeURIComponent(id)}/sections/revisions/${revisionNo}/restore`,
+      jsonBody(body),
+    ),
 
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
@@ -4896,12 +4925,61 @@ export interface DocumentSectionsData {
   page_count: number | null;
   revision: number | null;
   updated_at: string | null;
+  /** 人の修正の基にした抽出と今の抽出が違う（#4171）。文の修正・再解析で変わる。 */
+  base_changed?: boolean;
+  /** そのうち、抽出の章節まで変わった（修正の前提が変わった）。 */
+  base_outline_changed?: boolean;
 }
 
 export interface DocumentSectionsSaveRequest {
   sections: DocumentSection[];
   base_revision: number | null;
   recipe_id?: string | null;
+}
+
+/** 人が修正した章節の版 1 件（#4171）。 */
+export interface DocumentSectionRevisionSummary {
+  revision_no: number;
+  parent_revision_no: number | null;
+  restored_from_revision_no: number | null;
+  /** extracted は修正の前の抽出の章節、reset は抽出結果へ戻した版。 */
+  kind: "extracted" | "edited" | "restored" | "reset";
+  /** 基にした抽出（履歴の前の修正は不明で null）。 */
+  base_extraction_recipe_id: string | null;
+  changed_section_count: number;
+  created_at: string;
+  is_current: boolean;
+  base_changed: boolean;
+  base_outline_changed: boolean;
+}
+
+export interface DocumentSectionRevisionHistory {
+  revisions: DocumentSectionRevisionSummary[];
+  current_revision_no: number | null;
+  max_revisions: number;
+}
+
+export interface DocumentSectionRevisionSnapshot {
+  title: string;
+  level: number;
+  page_start: number | null;
+  page_end: number | null;
+}
+
+export interface DocumentSectionRevisionChange {
+  section_id: string;
+  change: "added" | "removed" | "changed" | "moved";
+  before: DocumentSectionRevisionSnapshot | null;
+  after: DocumentSectionRevisionSnapshot | null;
+}
+
+export interface DocumentSectionRevisionDiff {
+  revision_no: number;
+  against_revision_no: number | null;
+  total: number;
+  offset: number;
+  limit: number;
+  changes: DocumentSectionRevisionChange[];
 }
 
 export interface ApprovedFaqSuggestionData {

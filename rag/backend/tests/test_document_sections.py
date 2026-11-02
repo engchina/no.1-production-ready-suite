@@ -64,7 +64,12 @@ class FakeSectionsOracle:
         return self.stored
 
     async def save_document_sections(
-        self, document_id: str, sections: dict[str, Any], *, base_revision: int | None
+        self,
+        document_id: str,
+        sections: dict[str, Any],
+        *,
+        base_revision: int | None,
+        extraction_base: Any = None,
     ) -> int:
         current = self.stored["revision"] if self.stored else None
         if current != base_revision:
@@ -73,7 +78,7 @@ class FakeSectionsOracle:
         self.stored = {"sections": sections, "revision": revision, "updated_at": None}
         return revision
 
-    async def delete_document_sections(self, document_id: str) -> None:
+    async def delete_document_sections(self, document_id: str, *, extraction_base: Any) -> None:
         self.stored = None
 
 
