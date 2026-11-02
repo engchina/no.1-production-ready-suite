@@ -4,7 +4,7 @@
 名指しした文書名とページ)を外した後の検索(CRAG の補正検索を含む)と、実体・関係情報の拡張の範囲に、
 利用者が指定した条件(文書名・分類・手の項目の条件・ナレッジベース・旧版の扱い)・基準日・認可の
 範囲(監査 context の predicate)が残ることを確かめる。本文が明記した参照を辿る交差参照(#1280)は、
-意図して文書名の絞り込みを越える。DB と LLM は呼ばない(決定論の代役。内容は合成)。
+利用者が指定した文書名・分類の範囲も保つ。DB と LLM は呼ばない(決定論の代役。内容は合成)。
 """
 
 from __future__ import annotations
@@ -268,6 +268,12 @@ class ContextReferenceOracle(ReferenceOracle):
         super().__init__(hits, sections)
         self.contexts: list[AuditRequestContext] = []
 
+    def _in_scope(self, filters: dict[str, str], chunk: RetrievedChunk) -> bool:
+        file_name = filters.get("file_name")
+        return super()._in_scope(filters, chunk) and (
+            not file_name or file_name in (chunk.file_name or "")
+        )
+
     async def retrieval_reference_documents(
         self, filters: dict[str, str], *, title: str, limit: int
     ) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -315,13 +321,10 @@ def _reference_corpus() -> ContextReferenceOracle:
     return ContextReferenceOracle([anchor], [referenced])
 
 
-async def test_reference_expansion_crosses_the_file_name_but_entity_and_graph_do_not(
+async def test_reference_entity_and_graph_expansion_keep_the_explicit_file_name(
     access: AuditRequestContext, plans: tuple[PlanRecorder, PlanRecorder]
 ) -> None:
-    """本文が明記した参照は利用者の文書名の外へも辿る(#1280)。実体・関係情報の拡張は文書名を残す。
-
-    どちらの拡張も、ナレッジベース・旧版の扱い・基準日と認可の範囲は残す。
-    """
+    """明示参照・実体・関係の補充は、全て明示範囲・基準日・認可を保つ(#4026)。"""
     oracle = _reference_corpus()
     engine = AnswerEngine(
         Settings(
@@ -345,14 +348,14 @@ async def test_reference_expansion_crosses_the_file_name_but_entity_and_graph_do
 
     result = await engine._search(request, _SearchState(), retrieval_queries=["合成の手順"])
 
-    # 参照先(文書名の外の文書 B)を辿って足し、参照先を探す範囲は文書名・分類の絞り込みを外す。
-    assert "doc-b:cs-9:0" in [child.chunk_uid for child in result.child_chunks]
+    # 範囲外の参照先を根拠に足さず、候補の照合にも明示条件を渡す。
+    assert "doc-b:cs-9:0" not in [child.chunk_uid for child in result.child_chunks]
     reference_filters = [
         *(call["filters"] for call in oracle.document_batch_calls),
         *(call["filters"] for call in oracle.reference_calls),
     ]
     assert reference_filters
-    kept = {"knowledge_base_id": "kb-a", "include_superseded": "true", "as_of": "2020-06-30"}
+    kept = filters
     assert all(item == kept for item in reference_filters)
     # 実体・関係情報の拡張は、利用者が指定した文書名・分類を残す。
     entity, graph = plans

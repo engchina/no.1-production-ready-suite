@@ -9,8 +9,7 @@ caller。#2651)を、サービストークン(claim ``profile_ids``。#1379)で�
 - 自動の条件(質問から読み取った抽出項目の条件・質問が名指しした文書名とページ)を外した後の検索、
   実体・関係情報の拡張の範囲、章節の拡張の読み取りに、呼び出し元の条件と基準日が残る。
 - どの検索・拡張も、トークンの範囲に絞った監査 context(認可の述語)で Oracle を読む。
-- 本文が明記した参照を辿る交差参照(#1280)は、呼び出し元の文書名の外へも辿る(利用者の判断 B)。
-  参照で足した文書の章節の拡張も、参照先と同じ範囲で読む(#3325)。
+- 本文が明記した参照と章節の補充も、明示した文書名・分類・基準日と認可の範囲を保つ(#4026)。
 """
 
 from __future__ import annotations
@@ -314,18 +313,14 @@ def test_mcp_relaxation_keeps_caller_conditions_as_of_and_token_scope(
 
 
 @pytest.mark.parametrize("tool,extra", TOOLS)
-def test_mcp_reference_expansion_crosses_caller_file_name_but_entity_and_graph_do_not(
+def test_mcp_reference_entity_and_graph_keep_caller_file_name(
     auth: ProductionAuth,
     monkeypatch: MonkeyPatch,
     plans: tuple[PlanRecorder, PlanRecorder],
     tool: str,
     extra: dict[str, Any],
 ) -> None:
-    """本文が明記した参照は、呼び出し元の文書名の外の文書へも辿る(#1280。利用者の判断 B)。
-
-    参照先を探す範囲は文書名・分類を外し、KB・旧版の扱い・基準日とトークンの範囲は残す。同じ
-    呼び出しの実体・関係情報の拡張は、呼び出し元の文書名・分類を残す。
-    """
+    """参照・実体・関係の全補充に、呼び出し元の明示条件と認可を渡す(#4026)。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _fake_llm)
@@ -345,15 +340,15 @@ def test_mcp_reference_expansion_crosses_caller_file_name_but_entity_and_graph_d
         _headers(auth),
     )
 
-    # 参照先(呼び出し元の文書名の外の文書 B)を辿って根拠に足す。
+    # 明示した文書名の外の参照先は根拠に足さない。
     evidence = result["structuredContent"]["evidence"]
-    assert "doc-b:cs-9:0" in [item["chunk_id"] for item in evidence]
+    assert "doc-b:cs-9:0" not in [item["chunk_id"] for item in evidence]
     reference_filters = [
         *(call["filters"] for call in oracle.document_batch_calls),
         *(call["filters"] for call in oracle.reference_calls),
     ]
     assert reference_filters
-    kept = {"knowledge_base_id": "kb-1,kb-2", "include_superseded": "true", "as_of": "2020-06-30"}
+    kept = {**filters, "knowledge_base_id": "kb-1,kb-2", "include_superseded": "true"}
     assert all(item == kept for item in reference_filters)
     # 実体・関係情報の拡張は、呼び出し元の文書名・分類を残す(自動の項目の条件は含めない)。
     entity, graph = plans
@@ -445,15 +440,10 @@ class ScopedViewSectionReferenceOracle(_ResultLookups, ScopedViewOracle, Context
         return True
 
 
-def test_mcp_section_expansion_reads_reference_target_outside_caller_file_name(
+def test_mcp_section_expansion_does_not_read_reference_outside_caller_file_name(
     auth: ProductionAuth, monkeypatch: MonkeyPatch
 ) -> None:
-    """呼び出し元の文書名の外へ参照で辿った文書 B の章節は、参照先と同じ範囲で読む(#3325)。
-
-    範囲は KB(トークンの範囲のプロファイルの参照先)・旧版の扱い・基準日で、呼び出し元の文書名・
-    分類は重ねない。認可の範囲はトークンの範囲に絞った監査 context の述語で当たる。呼び出し元の
-    文書名の中の文書 A の章節は、呼び出し元の条件のまま読む。
-    """
+    """明示範囲外の参照先とその章節を読み込まず、元文書の章節は同じ範囲で読む。"""
     import rag_engine.adapters.oci as engine_oci
 
     monkeypatch.setattr(engine_oci, "parse_text_response", _section_answer_llm)
@@ -484,11 +474,9 @@ def test_mcp_section_expansion_reads_reference_target_outside_caller_file_name(
     )
 
     evidence = result["structuredContent"]["evidence"]
-    assert "doc-b:cs-9:1" in [item["chunk_id"] for item in evidence]
-    kept = {"knowledge_base_id": "kb-1,kb-2", "include_superseded": "true", "as_of": "2020-06-30"}
+    assert not any(item["document_id"] == "doc-b" for item in evidence)
     reference_reads = [scoped for document, _section, scoped in stub.reads if document == "doc-b"]
-    assert reference_reads
-    assert all(scoped == kept for scoped in reference_reads)
+    assert reference_reads == []
     own_reads = [scoped for document, _section, scoped in stub.reads if document == "doc-a"]
     assert own_reads
     assert all(scoped["file_name"] == "合成文書A" for scoped in own_reads)
