@@ -184,6 +184,7 @@ from app.rag.structure_index import structure_index_targets
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
+    compute_isolated_extraction_id,
     extraction_recipe_subset,
 )
 from app.rag.vision import (
@@ -215,7 +216,9 @@ INGESTION_INTERNAL_ERROR_MESSAGE = "取込処理に失敗しました。時間�
 # 解析中のページの進捗を解析サービスから読む間隔(秒。#1999)。
 _PARSE_PROGRESS_POLL_SECONDS = 3.0
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 1
+# 保存した抽出結果の版。解析の出力の内容が変わる修正で上げ、古い結果を再開・再処理で使い直さない
+# (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140)。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 3
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
@@ -609,10 +612,13 @@ class IngestionPipeline:
         settings: Settings | None = None,
         recipe_id: str | None = None,
         recipe_revision: int | None = None,
+        build_id: str | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._recipe_id = recipe_id
         self._recipe_revision = recipe_revision
+        # 再構築の識別子（job と試行）。検索に出している版の抽出を上書きしないために使う（#4115）。
+        self._build_id = build_id
         # ``record_outcome=False`` で索引まで終えた取込の、記録していない成功の内容(#504)。
         # 公開の工程(ingest / index_reviewed / chunk_reviewed / index_chunked)の開始で空に戻す。
         self.deferred_success_outcome: IngestionSuccessOutcome | None = None
@@ -1738,6 +1744,15 @@ class IngestionPipeline:
                     self._recipe_id,
                     self._recipe_revision,
                 )
+                served_ids = getattr(self._oracle, "served_extraction_ids", None)
+                if (
+                    self._build_id is not None
+                    and callable(served_ids)
+                    and extraction_recipe_id in await served_ids(document_id)
+                ):
+                    extraction_recipe_id = compute_isolated_extraction_id(
+                        extraction_recipe_id, self._build_id
+                    )
             recipe = extraction_recipe_subset(recipe_settings)
             await self._oracle.upsert_document_extraction_artifact(
                 document_id=document_id,
@@ -4089,9 +4104,11 @@ def _unsupported_parser_message(result: ParserRegistryResult) -> str:
     if result.unsupported_reason in {
         "legacy_office_binary_not_supported",
         "macro_enabled_office_not_supported",
+        "office_template_not_supported",
     }:
         return (
-            "旧形式の Office・マクロ付きの Office は原本のままでは解析できません。"
+            "旧形式の Office・マクロ付きの Office・Office テンプレートは"
+            "原本のままでは解析できません。"
             "文書レシピのファイル準備で変換(Word・PowerPoint は「Office→PDF」、"
             "Word は「Word→JSONL」も可、Excel は「Excel→JSONL」)を選んでから取り込んでください"
             "(マクロは実行しません)。"

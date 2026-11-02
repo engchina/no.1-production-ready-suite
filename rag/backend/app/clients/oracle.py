@@ -166,6 +166,11 @@ ORACLE_TEXT_STOP_WORDS = (
     "んで",
 )
 SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
+# 検索に出している chunk_set（``cs``）。再取込で作っている途中の候補は含めない（#4115）。
+# レシピの無い旧データだけ is_serving で見る。
+_SERVED_CHUNK_SET_SQL = (
+    "((cs.is_active = 1 AND cs.status = 'INDEXED') OR (cs.recipe_id IS NULL AND cs.is_serving = 1))"
+)
 type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
@@ -454,6 +459,25 @@ class SearchHits(list[RetrievedChunk]):
     failure: Exception | None = None
 
 
+# section_path が JSON_VALUE の既定の RETURNING VARCHAR2(4000) に入らない行(#4126・#4144)。
+# 超えた値には JSON_VALUE / JSON_QUERY が NULL を返すので、CLOB で読み直す行の印にする。
+SECTION_PATH_OVERFLOW_SQL = """(
+    JSON_VALUE(c.metadata_json, '$.section_path' RETURNING VARCHAR2(4000)) IS NULL
+    AND JSON_EXISTS(c.metadata_json, '$.section_path')
+    AND JSON_QUERY(c.metadata_json, '$.section_path' RETURNING VARCHAR2(4000)) IS NULL)"""
+_SECTION_PATH_CLOB_SQL = "JSON_VALUE(c.metadata_json, '$.section_path' RETURNING CLOB)"
+
+
+def _metadata_text_clob_sql(field: str) -> str:
+    return f"JSON_VALUE(c.metadata_json, '$.{field}' RETURNING CLOB)"
+
+
+def _metadata_long_text_sql(field: str) -> str:
+    """文字列の値が既定の VARCHAR2(4000) に入らない行(#4157)。配列・JSON null は含まない。"""
+    return f"""(JSON_VALUE(c.metadata_json, '$.{field}' RETURNING VARCHAR2(4000)) IS NULL
+    AND {_metadata_text_clob_sql(field)} IS NOT NULL)"""
+
+
 _NATIVE_SCOPE_JOINS = """FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id"""
@@ -466,14 +490,190 @@ class _NativeScope:
     allowed_ids: list[str]
     complete_scopes: list[int]
     scope_ranges: list[tuple[int, int, int]]
+    # 許可された chunk のうち埋め込みを持つ行の数(ベクトルの読み方の判断と不足の判定に使う)。
+    vector_chunks: int
 
 
 class NativeSearchRows(list[dict[str, object]]):
-    """有界な原生結果と、実際の閾値判定の集計。"""
+    """有界な原生結果と、実際の閾値判定・ベクトルの読み方の集計。"""
 
-    def __init__(self, rows: list[dict[str, object]], threshold: dict[str, object]) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        threshold: dict[str, object],
+        vector_retrieval: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(rows)
         self.threshold = threshold
+        self.vector_retrieval = vector_retrieval or {}
+        # 範囲の条件を分けて SEARCH を呼んだ回数(#4149)。
+        self.filter_batches = 1
+
+
+def _native_vector_retrieval(
+    *, method: str, scope: _NativeScope, top_k: int, exact_max_chunks: int, returned: int
+) -> dict[str, object]:
+    """ベクトルの分岐の読み方と不足を診断に残す形にする(#4134・#4097)。"""
+    expected = min(top_k, scope.vector_chunks)
+    return {
+        "method": method,
+        "scope_vector_chunks": scope.vector_chunks,
+        "exact_max_chunks": exact_max_chunks,
+        "requested": top_k,
+        "expected": expected,
+        "returned": returned,
+        "shortage": returned < expected,
+    }
+
+
+def _native_exact_vector_statement(
+    *, where: str, scope: _NativeScope, top_k: int
+) -> tuple[str, dict[str, object]]:
+    """許可された行を基表から距離順に読む SQL と bind(#4134・#4097)。
+
+    原生の検索と同じく、解決済みの範囲で読む行を決め、結果の行に同じ権限の条件(``where``)を
+    掛け直す。権限の条件を許可された全行に掛けると、それだけで秒単位になることがある(#4133)。
+    上位の行を距離だけで決め、本文・metadata はその行だけ読む(#2137)。
+    """
+    top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=2000)
+    binds: dict[str, object] = {}
+    if scope.complete_scopes:
+        binds["exact_scope_ids"] = json.dumps(scope.complete_scopes)
+    complete_sql = """SELECT scope_id FROM JSON_TABLE(:exact_scope_ids, '$[*]'
+                    COLUMNS (scope_id NUMBER PATH '$'))"""
+    if scope.complete_scopes and not scope.scope_ranges and not scope.allowed_ids:
+        # 多くの範囲はこの形。native_scope_id の索引から読むだけで済む。
+        allowed_sql = f"candidate.native_scope_id IN ({complete_sql})"
+    else:
+        allowed: list[str] = []
+        if scope.complete_scopes:
+            allowed.append(
+                f"""SELECT scoped.chunk_id FROM rag_chunks scoped
+                WHERE scoped.native_scope_id IN ({complete_sql})"""
+            )
+        if scope.scope_ranges:
+            binds["exact_scope_ranges"] = json.dumps(scope.scope_ranges)
+            allowed.append(
+                """SELECT ranged.chunk_id FROM rag_chunks ranged
+                JOIN JSON_TABLE(:exact_scope_ranges, '$[*]' COLUMNS (
+                    scope_id NUMBER PATH '$[0]',
+                    first_index NUMBER PATH '$[1]',
+                    last_index NUMBER PATH '$[2]')) section_range
+                  ON ranged.native_scope_id = section_range.scope_id
+                 AND ranged.chunk_index BETWEEN section_range.first_index
+                     AND section_range.last_index"""
+            )
+        if scope.allowed_ids:
+            binds["exact_chunk_ids"] = json.dumps(scope.allowed_ids)
+            allowed.append(
+                """SELECT chunk_id FROM JSON_TABLE(:exact_chunk_ids, '$[*]'
+                    COLUMNS (chunk_id VARCHAR2(128) PATH '$'))"""
+            )
+        if not allowed:
+            raise ValueError("検索範囲が不正です。")
+        # 相関の副問い合わせを OR で結ぶと行ごとの FILTER になるので、行の集合を先に作る。
+        union_sql = "\n                UNION ALL\n                ".join(allowed)
+        allowed_sql = f"candidate.chunk_id IN (\n                {union_sql}\n            )"
+    statement = f"""
+        SELECT {_SEARCH_HIT_COLUMNS},
+            100 / (1 + nearest.distance) AS score,
+            1 - nearest.distance AS native_similarity,
+            100 / (1 + nearest.distance) AS native_vector_score
+        FROM (
+            SELECT candidate.chunk_id, candidate.document_id, candidate.chunk_index,
+                VECTOR_DISTANCE(candidate.embedding, :native_embedding, COSINE) AS distance
+            FROM rag_chunks candidate
+            WHERE candidate.embedding IS NOT NULL AND {allowed_sql}
+            ORDER BY distance ASC, candidate.document_id ASC, candidate.chunk_index ASC,
+                candidate.chunk_id ASC
+            FETCH EXACT FIRST {top_k_literal} ROWS ONLY
+        ) nearest
+        JOIN rag_chunks c ON c.chunk_id = nearest.chunk_id
+        JOIN rag_documents d ON d.document_id = c.document_id
+        LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+        LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+        WHERE {where}
+        ORDER BY nearest.distance ASC, nearest.document_id ASC, nearest.chunk_index ASC,
+            nearest.chunk_id ASC
+    """
+    return statement, binds
+
+
+def _merge_native_exact_rows(
+    vector_rows: list[dict[str, object]], text_rows: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """距離順の行と全文の行を chunk ごとにまとめ、経路の順位を残す(融合は呼出し側で一度だけ)。"""
+    merged: dict[str, dict[str, object]] = {}
+    for rank, row in enumerate(vector_rows, 1):
+        merged[str(row["chunk_id"])] = {
+            **row,
+            "native_vector_rank": rank,
+            "native_text_rank": None,
+            "native_text_score": 0,
+        }
+    for row in text_rows:
+        chunk_id = str(row["chunk_id"])
+        text_fields = {
+            "native_text_rank": row.get("native_text_rank"),
+            "native_text_score": row.get("native_text_score"),
+        }
+        if chunk_id in merged:
+            merged[chunk_id].update(text_fields)
+        else:
+            merged[chunk_id] = {
+                **row,
+                **text_fields,
+                "native_similarity": None,
+                "native_vector_rank": None,
+                "native_vector_score": 0,
+            }
+    return list(merged.values())
+
+
+def _merge_native_filter_batches(
+    batches: Sequence[list[dict[str, object]]], channel: str, top_k: int
+) -> list[dict[str, object]]:
+    """範囲を分けた SEARCH の結果を、1 回の呼び出しと同じ形の経路の順位にまとめる(#4149)。
+
+    点数は問いと行で決まり filter に依らない(合成の索引で確認)。範囲は重ならないので、各回の
+    上位 k 件を合わせて点数で並べ直せば範囲全体の上位 k 件になる。経路ごとに k 件で切り、順位を
+    付け直す。全文の順位は SEARCH の ``rank()`` と同じく同点を同じ順位にする。ベクトルの点数は
+    丸められているので、同点は実際のコサイン類似度で分ける(SEARCH の順位は丸める前で決まる)。
+    """
+    rows = {str(row["chunk_id"]): row for batch in batches for row in batch}
+
+    def stable(row: dict[str, object]) -> tuple[str, float, str]:
+        return (
+            str(row.get("document_id")),
+            _float_value(row.get("chunk_index", 0)),
+            str(row["chunk_id"]),
+        )
+
+    vector_rows = sorted(
+        (row for row in rows.values() if _float_value(row.get("native_vector_score", 0)) > 0),
+        key=lambda row: (
+            -_float_value(row.get("native_vector_score", 0)),
+            -_float_value(row.get("native_similarity", 0)),
+            *stable(row),
+        ),
+    )[:top_k]
+    text_rows: list[dict[str, object]] = []
+    previous_score: float | None = None
+    rank = 0
+    for position, row in enumerate(
+        sorted(
+            (row for row in rows.values() if _float_value(row.get("native_text_score", 0)) > 0),
+            key=lambda row: (-_float_value(row.get("native_text_score", 0)), *stable(row)),
+        )[:top_k],
+        1,
+    ):
+        score = _float_value(row.get("native_text_score", 0))
+        if score != previous_score:
+            rank, previous_score = position, score
+        text_rows.append({**row, "native_text_rank": rank})
+    merged = _merge_native_exact_rows(vector_rows, text_rows)
+    # Oracle の WRRF の点数は回ごとの値で比べられない。融合の点数は順位から一度だけ計算する。
+    return [{**row, "score": None} for row in merged] if channel == "hybrid" else merged
 
 
 def _apply_native_search_threshold(
@@ -1168,7 +1368,8 @@ class OracleClient:
             _render_sql(
                 """
             SELECT d.document_id, d.file_name,
-                   MAX(JSON_VALUE(c.metadata_json, '$.xml_tree_document_title')) AS title
+                   MAX(JSON_VALUE(c.metadata_json, '$.xml_tree_document_title')) AS title,
+                   MAX(CASE WHEN {long_title_sql} THEN 1 ELSE 0 END) AS title_overflow
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
             WHERE {where_sql}
@@ -1177,11 +1378,37 @@ class OracleClient:
             ORDER BY d.file_name
             """,
                 where_sql=where_sql,
+                long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
             ),
             binds,
         )
+        long_titles: dict[str, str] = {}
+        if any(row.get("title_overflow") for row in rows):
+            # MAX は CLOB に使えないので、超えた題名の行だけを読み直す(#4157)。
+            for row in await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT c.document_id, {title_sql} AS title
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND JSON_EXISTS(c.metadata_json, '$.xml_tree_label_arabic')
+                  AND {long_title_sql}
+                """,
+                    where_sql=where_sql,
+                    title_sql=_metadata_text_clob_sql("xml_tree_document_title"),
+                    long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
+                ),
+                binds,
+            ):
+                long_titles.setdefault(str(row["document_id"]), str(row["title"]))
         return [
-            (str(row["document_id"]), str(row.get("title") or row["file_name"]))
+            (
+                str(row["document_id"]),
+                str(
+                    row.get("title") or long_titles.get(str(row["document_id"])) or row["file_name"]
+                ),
+            )
             for row in rows
             if row.get("document_id") and row.get("file_name")
         ]
@@ -1194,23 +1421,49 @@ class OracleClient:
         見出しの列は chunk の ``section_path``(「 > 」でつないだ文字列)。文書ごとに読み順で返す。
         """
         where_sql, binds = _oracle_retrieval_where(filters)
+        # GROUP BY は CLOB に使えないので、通常は VARCHAR2 で集計する。超えたパスの行は印を付け、
+        # あるときだけ CLOB で読み直してここで集計する。
         rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT d.file_name,
                    JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
-                   COUNT(*) AS chunk_count
+                   COUNT(*) AS chunk_count,
+                   MIN(c.chunk_index) AS first_chunk_index,
+                   MAX(CASE WHEN {overflow_sql} THEN 1 ELSE 0 END) AS path_overflow
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
             WHERE {where_sql}
-              AND JSON_VALUE(c.metadata_json, '$.section_path') IS NOT NULL
+              AND (JSON_VALUE(c.metadata_json, '$.section_path') IS NOT NULL OR {overflow_sql})
             GROUP BY d.file_name, JSON_VALUE(c.metadata_json, '$.section_path')
             ORDER BY d.file_name, MIN(c.chunk_index)
             """,
                 where_sql=where_sql,
+                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
             ),
             binds,
         )
+        if any(row.get("path_overflow") for row in rows):
+            rows = _merge_overflowed_sections(
+                rows,
+                await self._fetch_all(
+                    _render_sql(
+                        """
+                    SELECT d.file_name,
+                           {path_sql} AS section_path,
+                           c.chunk_index
+                    FROM rag_chunks c
+                    JOIN rag_documents d ON d.document_id = c.document_id
+                    WHERE {where_sql}
+                      AND {overflow_sql}
+                    """,
+                        where_sql=where_sql,
+                        path_sql=_SECTION_PATH_CLOB_SQL,
+                        overflow_sql=SECTION_PATH_OVERFLOW_SQL,
+                    ),
+                    binds,
+                ),
+            )
         return [
             (str(row["file_name"]), str(row["section_path"]), _int_value(row.get("chunk_count")))
             for row in rows
@@ -1244,11 +1497,16 @@ class OracleClient:
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
                   AND d.file_name = :screen_file_name
-                  AND INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
+                  AND (
+                      INSTR(JSON_VALUE(c.metadata_json, '$.section_path'), :screen_heading) > 0
+                      OR ({overflow_sql} AND INSTR({path_sql}, :screen_heading) > 0)
+                  )
                 ORDER BY c.document_id, c.chunk_index, c.chunk_id
             ) WHERE ROWNUM <= :screen_limit
             """,
                 where_sql=where_sql,
+                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
+                path_sql=_SECTION_PATH_CLOB_SQL,
             ),
             {
                 **binds,
@@ -1297,24 +1555,20 @@ class OracleClient:
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
-                  AND (
-                      JSON_VALUE(c.metadata_json, '$.section_path') = :reference_section_path
-                      OR SUBSTR(
-                          JSON_VALUE(c.metadata_json, '$.section_path'),
-                          1,
-                          :reference_prefix_length
-                      ) = :reference_section_prefix
-                  )
+                  AND ({section_sql})
                 ORDER BY c.chunk_set_id, c.chunk_index, c.chunk_id
             ) WHERE ROWNUM <= :reference_limit
             """,
                 where_sql=where_sql,
+                section_sql=_reference_section_sql(section_path, prefix),
             ),
             {
                 **binds,
                 "reference_section_path": section_path,
                 "reference_section_prefix": prefix,
                 "reference_prefix_length": len(prefix),
+                # CLOB の長さは UTF-16 の単位で数える(4 バイト文字は 2)。
+                "reference_prefix_lob_length": len(prefix.encode("utf-16-le")) // 2,
                 "reference_limit": max(1, int(limit)),
             },
         )
@@ -1446,12 +1700,14 @@ class OracleClient:
             _render_sql(
                 """
             SELECT x.document_id, x.file_name, x.section_path,
-                   MIN(x.chunk_index) AS first_chunk_index
+                   MIN(x.chunk_index) AS first_chunk_index,
+                   MAX(x.path_overflow) AS path_overflow
             FROM (
                 SELECT d.document_id,
                        d.file_name,
                        c.chunk_index,
-                       JSON_VALUE(c.metadata_json, '$.section_path') AS section_path
+                       JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
+                       CASE WHEN {overflow_sql} THEN 1 ELSE 0 END AS path_overflow
                 FROM rag_chunks c
                 JOIN rag_documents d ON d.document_id = c.document_id
                 WHERE {where_sql}
@@ -1459,9 +1715,30 @@ class OracleClient:
             GROUP BY x.document_id, x.file_name, x.section_path
             """,
                 where_sql=where_sql,
+                overflow_sql=SECTION_PATH_OVERFLOW_SQL,
             ),
             binds,
         )
+        if any(row.get("path_overflow") for row in rows):
+            # 超えたパスの見出しにだけタイトルがある文書も照合する。その行を CLOB で足す(#4144)。
+            rows += await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT d.document_id,
+                       d.file_name,
+                       {path_sql} AS section_path,
+                       c.chunk_index AS first_chunk_index
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND {overflow_sql}
+                """,
+                    where_sql=where_sql,
+                    path_sql=_SECTION_PATH_CLOB_SQL,
+                    overflow_sql=SECTION_PATH_OVERFLOW_SQL,
+                ),
+                binds,
+            )
         return _match_reference_documents(rows, unique_titles, limit=max(1, int(limit)))
 
     async def retrieval_older_versions(
@@ -1489,7 +1766,8 @@ class OracleClient:
             _render_sql(
                 """
             SELECT * FROM (
-                SELECT t.document_id, t.file_name, t.superseded_by_document_id, t.root_heading
+                SELECT t.document_id, t.file_name, t.superseded_by_document_id, t.root_heading,
+                       t.long_section_path
                 FROM (
                     SELECT d.document_id,
                            d.file_name,
@@ -1504,13 +1782,19 @@ class OracleClient:
                                )
                                ELSE JSON_VALUE(c.metadata_json, '$.section_path')
                            END AS root_heading,
+                           CASE
+                               WHEN JSON_VALUE(c.metadata_json, '$.section_path') IS NULL
+                               THEN {path_sql}
+                           END AS long_section_path,
                            ROW_NUMBER() OVER (
                                PARTITION BY d.document_id
                                ORDER BY
                                    CASE
-                                       WHEN JSON_VALUE(c.metadata_json, '$.section_path') IS NULL
-                                       THEN 1
-                                       ELSE 0
+                                       WHEN JSON_VALUE(
+                                           c.metadata_json, '$.section_path'
+                                       ) IS NOT NULL OR {path_sql} IS NOT NULL
+                                       THEN 0
+                                       ELSE 1
                                    END,
                                    c.chunk_index
                            ) AS heading_rank
@@ -1525,6 +1809,7 @@ class OracleClient:
             """,
                 where_sql=where_sql,
                 in_sql=in_sql,
+                path_sql=_SECTION_PATH_CLOB_SQL,
             ),
             {**binds, **in_binds, "older_version_limit": max(1, int(limit))},
         )
@@ -1538,7 +1823,8 @@ class OracleClient:
                 OlderDocumentVersion(
                     document_id=document_id,
                     file_name=_optional_str(row.get("file_name")),
-                    title=_optional_str(row.get("root_heading")),
+                    title=_optional_str(row.get("root_heading"))
+                    or _root_heading(_optional_str(row.get("long_section_path"))),
                     superseded_by_document_id=superseded_by,
                 )
             )
@@ -1827,6 +2113,10 @@ class OracleClient:
                 c.chunk_index,
                 c.chunk_id,
                 JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
+                CASE
+                    WHEN JSON_VALUE(c.metadata_json, '$.section_path') IS NULL
+                    THEN {path_sql}
+                END AS long_section_path,
                 JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER) AS page_start,
                 JSON_VALUE(c.metadata_json, '$.page_end' RETURNING NUMBER) AS page_end,
                 DBMS_LOB.GETLENGTH(c.chunk_text) AS chars
@@ -1840,6 +2130,7 @@ class OracleClient:
             """,
                 where_sql=where_sql,
                 chunk_set_sql=chunk_set_sql,
+                path_sql=_SECTION_PATH_CLOB_SQL,
             ),
             query_binds,
         )
@@ -1849,7 +2140,9 @@ class OracleClient:
             {
                 "chunk_index": _int_value(row.get("chunk_index")),
                 "chunk_id": str(row["chunk_id"]),
-                "section_path": _optional_str(row.get("section_path")),
+                "section_path": _optional_str(
+                    row.get("section_path") or row.get("long_section_path")
+                ),
                 "page_start": _optional_int(row.get("page_start")),
                 "page_end": _optional_int(row.get("page_end")),
                 "chars": _int_value(row.get("chars")),
@@ -2359,7 +2652,7 @@ class OracleClient:
     ) -> list[dict[str, object]]:
         """評価の条件（#59）に残す、検索に出る chunk_set と、その内容の版を返す（読み取りだけ）。
 
-        利用者の範囲（tenant・文書・KB）の中の配信中（is_serving）の chunk_set ごとに、レシピの版・
+        利用者の範囲（tenant・文書・KB）の中の検索に出している chunk_set ごとに、レシピの版・
         抽出の元の hash と更新時刻・chunk と vector の件数・更新時刻を返す。``knowledge_base_ids``
         を渡すとその KB の文書だけ（空なら範囲の全部）。削除・権限の剥奪・active の切替・抽出の
         更新で行が変わるため、評価の前後で比べて実行中の更新を検出できる。
@@ -2384,7 +2677,8 @@ class OracleClient:
                 r.config_revision, r.materialized_revision,
                 e.source_sha256, e.updated_at AS extraction_updated_at
             FROM rag_documents d
-            JOIN rag_chunk_sets cs ON cs.document_id = d.document_id AND cs.is_serving = 1
+            JOIN rag_chunk_sets cs ON cs.document_id = d.document_id
+             AND {_SERVED_CHUNK_SET_SQL}
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
             LEFT JOIN rag_document_extractions e
               ON e.document_id = cs.document_id AND e.extraction_recipe_id = cs.extraction_recipe_id
@@ -2798,7 +3092,7 @@ class OracleClient:
             locked_recipe = _fetch_one(
                 connection,
                 """
-                SELECT recipe_id FROM rag_document_recipes
+                SELECT recipe_id, document_id FROM rag_document_recipes
                 WHERE recipe_id = :recipe_id
                 FOR UPDATE
                 """,
@@ -2806,6 +3100,7 @@ class OracleClient:
             )
             if locked_recipe is None:
                 raise KeyError("レシピが見つかりません。")
+            document_id = str(locked_recipe["document_id"])
             selected = _fetch_one(
                 connection,
                 """
@@ -2860,10 +3155,21 @@ class OracleClient:
                     "materialized_revision": materialized_revision,
                 },
             )
+            # 文書の一覧の集約状態も同じ transaction で切り替える（少なくとも 1 レシピが検索可能なら
+            # INDEXED。#4115）。
+            _execute(
+                connection,
+                """
+                UPDATE rag_documents
+                SET status = 'INDEXED', error_message = NULL, indexed_at = SYSTIMESTAMP
+                WHERE document_id = :document_id
+                """,
+                {"document_id": document_id},
+            )
             stale_sets = _fetch_all(
                 connection,
                 """
-                SELECT chunk_set_id FROM rag_chunk_sets
+                SELECT chunk_set_id, extraction_recipe_id FROM rag_chunk_sets
                 WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
@@ -2898,6 +3204,69 @@ class OracleClient:
                 WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+            # 旧版だけが使っていた抽出を消す。どの chunk_set・レシピからも参照されないものに限る。
+            stale_extractions = {
+                str(row["extraction_recipe_id"])
+                for row in stale_sets
+                if row.get("extraction_recipe_id")
+            }
+            for stale_extraction in sorted(stale_extractions):
+                _execute(
+                    connection,
+                    """
+                    DELETE FROM rag_document_extractions e
+                    WHERE e.document_id = :document_id
+                      AND e.extraction_recipe_id = :extraction_recipe_id
+                      AND NOT EXISTS (
+                          SELECT 1 FROM rag_chunk_sets cs
+                          WHERE cs.extraction_recipe_id = e.extraction_recipe_id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM rag_document_recipes r
+                          WHERE r.active_extraction_recipe_id = e.extraction_recipe_id
+                      )
+                    """,
+                    {"document_id": document_id, "extraction_recipe_id": stale_extraction},
+                )
+
+        await self._run_transaction(operation)
+
+    async def document_has_served_output(self, document_id: str) -> bool:
+        """検索に出している版（active かつ索引済みの chunk_set）が文書にあるか（#4115）。"""
+        row = await self._fetch_one(
+            """
+            SELECT 1 AS served FROM rag_chunk_sets
+            WHERE document_id = :document_id AND is_active = 1 AND status = 'INDEXED'
+            FETCH FIRST 1 ROWS ONLY
+            """,
+            {"document_id": document_id},
+        )
+        return row is not None
+
+    async def served_extraction_ids(self, document_id: str) -> set[str]:
+        """検索に出している版が読む抽出の ID（再構築で上書きしない。#4115）。"""
+        rows = await self._fetch_all(
+            """
+            SELECT DISTINCT extraction_recipe_id FROM rag_chunk_sets
+            WHERE document_id = :document_id AND is_active = 1 AND status = 'INDEXED'
+              AND extraction_recipe_id IS NOT NULL
+            """,
+            {"document_id": document_id},
+        )
+        return {str(row["extraction_recipe_id"]) for row in rows}
+
+    async def delete_recipe_segment_checkpoints(self, document_id: str, recipe_id: str) -> None:
+        """再取込で解析をやり直すよう、レシピの区間の checkpoint だけを消す（#4115）。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_ingestion_segments
+                WHERE document_id = :document_id AND recipe_id = :recipe_id
+                """,
+                {"document_id": document_id, "recipe_id": recipe_id},
             )
 
         await self._run_transaction(operation)
@@ -4372,7 +4741,8 @@ class OracleClient:
             f"""
             SELECT c.chunk_id, c.document_id, c.search_text
             FROM rag_chunks c
-            JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id AND cs.is_serving = 1
+            JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+             AND {_SERVED_CHUNK_SET_SQL}
             WHERE c.document_id IN (
                 SELECT dkb.document_id
                 FROM rag_document_knowledge_bases dkb
@@ -7403,6 +7773,12 @@ class OracleClient:
                             "vector_threshold": rows.threshold
                             if isinstance(rows, NativeSearchRows)
                             else {},
+                            "vector_retrieval": rows.vector_retrieval
+                            if isinstance(rows, NativeSearchRows)
+                            else {},
+                            "filter_batches": rows.filter_batches
+                            if isinstance(rows, NativeSearchRows)
+                            else 1,
                             "error": result.error,
                             "results": [
                                 {
@@ -7440,12 +7816,14 @@ class OracleClient:
         """
         where, binds = _oracle_retrieval_where(filters)
         allowed = await self._fetch_all(
-            f"SELECT c.native_scope_id, COUNT(*) AS allowed_count {_NATIVE_SCOPE_JOINS} "
-            f"WHERE {where} GROUP BY c.native_scope_id",
+            "SELECT c.native_scope_id, COUNT(*) AS allowed_count, "
+            "SUM(CASE WHEN c.embedding IS NOT NULL THEN 1 ELSE 0 END) AS vector_count "
+            f"{_NATIVE_SCOPE_JOINS} WHERE {where} GROUP BY c.native_scope_id",
             binds,
         )
         if not allowed:
             return None
+        vector_chunks = sum(int(str(row["vector_count"])) for row in allowed)
         allowed_counts = {
             int(str(row["native_scope_id"])): int(str(row["allowed_count"]))
             for row in allowed
@@ -7468,7 +7846,12 @@ class OracleClient:
             ]
         partial_scopes = sorted(set(allowed_counts) - set(complete_scopes))
         if not partial_scopes and not has_unscoped:
-            return _NativeScope(allowed_ids=[], complete_scopes=complete_scopes, scope_ranges=[])
+            return _NativeScope(
+                allowed_ids=[],
+                complete_scopes=complete_scopes,
+                scope_ranges=[],
+                vector_chunks=vector_chunks,
+            )
         ids = await self._fetch_all(
             f"""SELECT c.chunk_id, c.native_scope_id {_NATIVE_SCOPE_JOINS}
             WHERE {where} AND (c.native_scope_id IS NULL OR c.native_scope_id IN (
@@ -7514,7 +7897,63 @@ class OracleClient:
             ],
             complete_scopes=complete_scopes,
             scope_ranges=scope_ranges,
+            vector_chunks=vector_chunks,
         )
+
+    async def _native_exact_rows(
+        self,
+        channel: str,
+        query: str,
+        vector: list[float],
+        *,
+        top_k: int,
+        filters: dict[str, str],
+        scope: _NativeScope,
+    ) -> NativeSearchRows:
+        """許可された行を基表から距離順に読み、全文の結果と順位を合わせる(#4134・#4097)。
+
+        原生索引の近似の読み方は、問いに近い centroid に範囲の行が無いと 0 件になり(#4134)、
+        削除の残骸が上位 k 件の枠を使うと指定した件数より少なくなる(#4097)。範囲の行を直接読めば
+        どちらの影響も受けない。範囲と権限は原生の分岐の結果に掛ける条件と同じものを使う。
+        """
+
+        async def nearest() -> list[dict[str, object]]:
+            if not scope.vector_chunks:
+                return []
+            where, binds = _oracle_retrieval_where(filters)
+            statement, scope_binds = _native_exact_vector_statement(
+                where=where, scope=scope, top_k=top_k
+            )
+            with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
+                return await self._fetch_all(
+                    statement,
+                    {**binds, **scope_binds, "native_embedding": _to_vector_bind(vector)},
+                )
+
+        if channel == "hybrid":
+            vector_rows, text_rows = await asyncio.gather(
+                nearest(),
+                self._native_rows(
+                    "keyword", query, (), top_k=top_k, filters=filters, native_scope=scope
+                ),
+            )
+        else:
+            vector_rows, text_rows = await nearest(), []
+        rows = _merge_native_exact_rows(vector_rows, text_rows)
+        if channel == "hybrid":
+            # Oracle の WRRF の点数は無い。融合の点数は順位から一度だけ計算する。
+            rows = [{**row, "score": None} for row in rows]
+        selected = _apply_native_search_threshold(rows, channel, self._settings)
+        selected.vector_retrieval = _native_vector_retrieval(
+            method="exact_scope",
+            scope=scope,
+            top_k=top_k,
+            exact_max_chunks=self._settings.rag_native_vector_exact_max_chunks,
+            returned=len(vector_rows),
+        )
+        if isinstance(text_rows, NativeSearchRows):
+            selected.filter_batches = text_rows.filter_batches
+        return selected
 
     async def _native_rows(
         self,
@@ -7524,47 +7963,74 @@ class OracleClient:
         *,
         top_k: int,
         filters: dict[str, str],
-        native_scope: asyncio.Future[_NativeScope | None] | None = None,
+        native_scope: asyncio.Future[_NativeScope | None] | _NativeScope | None = None,
     ) -> list[dict[str, object]]:
-        from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, request_json
+        from rag_engine.adapters.oracle.native_hybrid import (
+            NATIVE_FILTER_CONCURRENCY,
+            NativeHybridUnavailable,
+            native_filter_batches,
+            request_json,
+        )
 
         where, binds = _oracle_retrieval_where(filters)
         joins = _NATIVE_SCOPE_JOINS
         vector = [float(v) for v in cast(Sequence[float], embedding)]
-        scope = (
-            await asyncio.shield(native_scope)
-            if native_scope is not None
-            else await self._resolve_native_scope(filters)
-        )
+        scope: _NativeScope | None
+        if isinstance(native_scope, _NativeScope):
+            scope = native_scope
+        elif native_scope is not None:
+            scope = await asyncio.shield(native_scope)
+        else:
+            scope = await self._resolve_native_scope(filters)
         if scope is None:
             return []
-        spec = request_json(
-            query=query,
-            vector=vector,
-            channel=channel,
-            allowed_ids=scope.allowed_ids,
-            allowed_scopes=scope.complete_scopes,
-            allowed_scope_ranges=scope.scope_ranges,
-            limit=top_k,
-            rank_constant=self._settings.rag_rrf_k,
-            accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
-            method_ratio=self._settings.rag_rrf_method_ratio,
-            # 質問の全文を search_text で渡すと、よくある語を含むほぼ全行が当たる(#4011)。
-            text_contains=(
-                _oracle_text_query(query, settings=self._settings) if channel != "vector" else None
-            ),
-        )
+        exact_max_chunks = self._settings.rag_native_vector_exact_max_chunks
+        if channel != "keyword" and scope.vector_chunks <= exact_max_chunks:
+            try:
+                return await self._native_exact_rows(
+                    channel, query, vector, top_k=top_k, filters=filters, scope=scope
+                )
+            except NativeHybridUnavailable:
+                raise
+            except Exception as exc:
+                raise NativeHybridUnavailable(
+                    "範囲の行を距離順に読めませんでした。管理CLIで索引と同期状態を確認してください。"
+                ) from exc
+        specs = [
+            request_json(
+                query=query,
+                vector=vector,
+                channel=channel,
+                allowed_ids=batch.allowed_ids,
+                allowed_scopes=batch.allowed_scopes,
+                allowed_scope_spans=batch.allowed_scope_spans,
+                allowed_scope_ranges=batch.allowed_scope_ranges,
+                limit=top_k,
+                rank_constant=self._settings.rag_rrf_k,
+                accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
+                method_ratio=self._settings.rag_rrf_method_ratio,
+                # 質問の全文を search_text で渡すと、よくある語を含むほぼ全行が当たる(#4011)。
+                text_contains=(
+                    _oracle_text_query(query, settings=self._settings)
+                    if channel != "vector"
+                    else None
+                ),
+            )
+            for batch in native_filter_batches(
+                allowed_ids=scope.allowed_ids,
+                allowed_scopes=scope.complete_scopes,
+                allowed_scope_ranges=scope.scope_ranges,
+            )
+        ]
         score = {"vector": "n.vector_score", "keyword": "n.text_score", "hybrid": "n.score"}[
             channel
         ]
         similarity_sql = "CAST(NULL AS NUMBER)"
-        native_binds: dict[str, object] = {**binds, "native_spec": spec}
+        native_binds: dict[str, object] = dict(binds)
         if channel != "keyword":
             similarity_sql = _vector_score_sql("native_embedding")
             native_binds["native_embedding"] = _to_vector_bind(vector)
-        try:
-            rows = await self._fetch_all(
-                f"""
+        statement = f"""
                 SELECT {_SEARCH_HIT_COLUMNS}, {score} AS score,
                     {similarity_sql} AS native_similarity,
                     n.vector_rank AS native_vector_rank, n.text_rank AS native_text_rank,
@@ -7579,10 +8045,42 @@ class OracleClient:
                     ON c.ROWID = CHARTOROWID(n.source_rowid)
                 WHERE {where}
                 ORDER BY n.position
-            """,
-                native_binds,
-            )
-            return _apply_native_search_threshold(rows, channel, self._settings)
+            """
+        semaphore = asyncio.Semaphore(NATIVE_FILTER_CONCURRENCY)
+
+        async def read_batch(spec: str) -> list[dict[str, object]]:
+            async with semaphore:
+                return await self._fetch_all(statement, {**native_binds, "native_spec": spec})
+
+        try:
+            if len(specs) == 1:
+                rows = await read_batch(specs[0])
+            else:
+                # 1 回でも失敗したら検索の失敗にする(範囲の一部だけの結果を返さない)。
+                async with asyncio.TaskGroup() as group:
+                    reads = [group.create_task(read_batch(spec)) for spec in specs]
+                rows = _merge_native_filter_batches(
+                    [read.result() for read in reads], channel, top_k
+                )
+                logger.info("native_search_filter_batches", extra={"filter_batches": len(specs)})
+            selected = _apply_native_search_threshold(rows, channel, self._settings)
+            selected.filter_batches = len(specs)
+            if channel != "keyword":
+                selected.vector_retrieval = _native_vector_retrieval(
+                    method="native_index",
+                    scope=scope,
+                    top_k=top_k,
+                    exact_max_chunks=exact_max_chunks,
+                    returned=sum(
+                        _float_value(row.get("native_vector_score", 0)) > 0 for row in rows
+                    ),
+                )
+                if selected.vector_retrieval["shortage"]:
+                    logger.warning(
+                        "原生索引のベクトル候補が不足: %s",
+                        json.dumps(selected.vector_retrieval, ensure_ascii=False),
+                    )
+            return selected
         except Exception as exc:
             raise NativeHybridUnavailable(
                 "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
@@ -8046,6 +8544,13 @@ class OracleClient:
             LEFT JOIN rag_chunks c
                 ON c.document_id = d.document_id
                AND d.status = 'INDEXED'
+               AND (
+                   c.chunk_set_id IS NULL
+                   OR c.chunk_set_id IN (
+                       SELECT cs.chunk_set_id FROM rag_chunk_sets cs
+                       WHERE {_SERVED_CHUNK_SET_SQL}
+                   )
+               )
             WHERE {where_sql}
             GROUP BY
                 kb.knowledge_base_id,
@@ -8067,6 +8572,7 @@ class OracleClient:
             {paging_sql}
             """,
                 where_sql=where_sql,
+                _SERVED_CHUNK_SET_SQL=_SERVED_CHUNK_SET_SQL,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 paging_sql=paging_sql,
                 name_order_sql=_oracle_natural_name_order_sql("kb.name"),
@@ -8132,6 +8638,13 @@ class OracleClient:
             LEFT JOIN rag_chunks c
                 ON c.document_id = d.document_id
                AND d.status = 'INDEXED'
+               AND (
+                   c.chunk_set_id IS NULL
+                   OR c.chunk_set_id IN (
+                       SELECT cs.chunk_set_id FROM rag_chunk_sets cs
+                       WHERE {_SERVED_CHUNK_SET_SQL}
+                   )
+               )
             WHERE kb.knowledge_base_id = :knowledge_base_id
               AND {knowledge_base_access_sql}
             GROUP BY
@@ -8146,6 +8659,7 @@ class OracleClient:
                 kb.updated_at,
                 kb.archived_at
             """.format(
+                _SERVED_CHUNK_SET_SQL=_SERVED_CHUNK_SET_SQL,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
             ),
@@ -11733,6 +12247,75 @@ def _large_text_input_sizes(
     return sizes
 
 
+def _root_heading(section_path: str | None) -> str | None:
+    """見出しの列の先頭の見出し。"""
+    return section_path.split(" > ", 1)[0] if section_path else None
+
+
+def _reference_section_sql(section_path: str, prefix: str) -> str:
+    """交差参照の参照先の節とその下の節の条件(#4144)。全体を比べ、先頭だけの一致では当てない。
+
+    長い文字列(``_is_large_text``)の bind は CLOB になり、``=`` で比べられない。その比較は
+    ``DBMS_LOB.COMPARE`` にする。超えたパスの行は JSON_VALUE が NULL を返すので、接頭辞は
+    短くても CLOB で読み直して比べる。どちらも長くなければ、通常の行の比較は従来と同じ。
+    """
+    value = "JSON_VALUE(c.metadata_json, '$.section_path')"
+    under_lob = (
+        f"DBMS_LOB.COMPARE({_SECTION_PATH_CLOB_SQL}, :reference_section_prefix, "
+        ":reference_prefix_lob_length) = 0"
+    )
+    exact = (
+        f"DBMS_LOB.COMPARE({_SECTION_PATH_CLOB_SQL}, :reference_section_path) = 0"
+        if _is_large_text(section_path)
+        else f"{value} = :reference_section_path"
+    )
+    under = (
+        under_lob
+        if _is_large_text(prefix)
+        else f"""SUBSTR({value}, 1, :reference_prefix_length) = :reference_section_prefix
+            OR ({SECTION_PATH_OVERFLOW_SQL} AND {under_lob})"""
+    )
+    return f"{exact} OR {under}"
+
+
+def _merge_overflowed_sections(
+    rows: Sequence[Mapping[str, object]], overflowed: Sequence[Mapping[str, object]]
+) -> list[dict[str, object]]:
+    """VARCHAR2 で集計した節に、CLOB で読み直した節を足し、文書ごとの読み順に並べる(#4144)。
+
+    文書名の並びは DB の照合順序に従うので、集計の行の並びをそのまま使う。
+    """
+    file_order = {
+        name: index
+        for index, name in enumerate(dict.fromkeys(row.get("file_name") for row in rows))
+    }
+    merged: dict[tuple[object, str], dict[str, object]] = {}
+    for row in overflowed:
+        if not row.get("section_path"):
+            continue
+        key = (row.get("file_name"), str(row["section_path"]))
+        index = _int_value(row.get("chunk_index"))
+        section = merged.setdefault(
+            key,
+            {
+                "file_name": key[0],
+                "section_path": key[1],
+                "chunk_count": 0,
+                "first_chunk_index": index,
+            },
+        )
+        section["chunk_count"] = _int_value(section["chunk_count"]) + 1
+        section["first_chunk_index"] = min(_int_value(section["first_chunk_index"]), index)
+    sections = [dict(row) for row in rows if row.get("section_path")] + list(merged.values())
+    return sorted(
+        sections,
+        key=lambda section: (
+            file_order.get(section.get("file_name"), len(file_order)),
+            _int_value(section.get("first_chunk_index")),
+        ),
+    )
+
+
 def _is_large_text(value: str) -> bool:
     # 1 文字は UTF-8 で 4 バイトまで。短い文字列は符号化せずに判定する。
     if len(value) * 4 < LARGE_TEXT_BIND_BYTES:
@@ -14228,17 +14811,11 @@ def _oracle_retrieval_clauses(
             )
             binds["filter_content_kind"] = cleaned.casefold()
         elif key == "section_title":
-            clauses.append(
-                "LOWER(JSON_VALUE(c.metadata_json, '$.section_title')) "
-                "LIKE :filter_section_title ESCAPE '\\'"
-            )
-            binds["filter_section_title"] = _like_pattern(cleaned)
+            clause, binds["filter_section_title"] = _metadata_text_filter("section_title", cleaned)
+            clauses.append(clause)
         elif key == "section_path":
-            clauses.append(
-                "LOWER(JSON_VALUE(c.metadata_json, '$.section_path')) "
-                "LIKE :filter_section_path ESCAPE '\\'"
-            )
-            binds["filter_section_path"] = _like_pattern(cleaned)
+            clause, binds["filter_section_path"] = _metadata_text_filter("section_path", cleaned)
+            clauses.append(clause)
         elif key == "source_acl":
             clauses.append(
                 "LOWER(JSON_VALUE(c.metadata_json, '$.source_acl')) = :filter_source_acl"
@@ -15217,6 +15794,24 @@ def _with_conversation_access_bind(binds: Mapping[str, object]) -> dict[str, obj
     if context.user_id_hash is not None and not context.all_users_visible:
         resolved["conversation_user_id_hash"] = context.user_id_hash
     return resolved
+
+
+def _metadata_text_filter(field: str, value: str) -> tuple[str, str]:
+    """見出しの値の部分一致の条件と bind の値(大文字小文字を区別しない。#4157)。
+
+    既定の VARCHAR2(4000) を超えた値は JSON_VALUE が NULL を返すので、その行は CLOB で比べる。
+    語そのものが CLOB の bind になる長さでは LIKE が ORA-64203 になるので、INSTR で比べる。
+    """
+    bind = f":filter_{field}"
+    pattern = _like_pattern(value)
+    clob = f"LOWER({_metadata_text_clob_sql(field)})"
+    if _is_large_text(pattern):
+        return f"INSTR({clob}, {bind}) > 0", value.casefold()
+    return (
+        f"""(LOWER(JSON_VALUE(c.metadata_json, '$.{field}')) LIKE {bind} ESCAPE '\\'
+            OR ({_metadata_long_text_sql(field)} AND {clob} LIKE {bind} ESCAPE '\\'))""",
+        pattern,
+    )
 
 
 def _like_pattern(value: str) -> str:
@@ -17508,8 +18103,9 @@ def oracle_evaluation_job_schema_sql(
 ) -> str:
     """品質評価の job（非同期の実行・進捗・取り消し。#390）の table DDL を返す。
 
-    評価の入力（query の本文）は保存しない。job は投入を受けた backend のプロセスで動き、
-    そのプロセスが止まったら heartbeat が途絶えて失敗になる（別のプロセスは引き継がない）。
+    質問・回答・根拠の本文は保存しない（結果の回答の診断は外す。#4107）。job は投入を受けた
+    backend のプロセスで動き、そのプロセスが止まったら heartbeat が途絶えて失敗になる（別の
+    プロセスは引き継がない）。
     """
     return f"""
 CREATE TABLE {table_name} (

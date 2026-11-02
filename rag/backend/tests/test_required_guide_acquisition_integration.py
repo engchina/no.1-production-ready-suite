@@ -117,7 +117,14 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
         # 実際の生成wireを検証する。旧canonical quote fixtureとしては返さない。
         return schema.model_validate(
             {
-                "request_coverage": [{"request_id": "Q1", "evidence_ids": [evidence_id]}],
+                "request_coverage": [
+                    {
+                        "request_id": "Q1",
+                        "evidence_scope": [
+                            {"evidence_id": evidence_id, "target": "合成設定", "relation": "direct"}
+                        ],
+                    }
+                ],
                 "items": [
                     {
                         "request_id": "Q1",

@@ -818,6 +818,13 @@ class Settings(
             "application/vnd.ms-word.document.macroEnabled.12",
             "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
             "application/vnd.ms-excel.sheet.macroEnabled.12",
+            # Office のテンプレート(ファイル準備で変換してから読む。マクロは実行しない。#4054)。
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+            "application/vnd.ms-word.template.macroEnabled.12",
+            "application/vnd.openxmlformats-officedocument.presentationml.template",
+            "application/vnd.ms-powerpoint.template.macroEnabled.12",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+            "application/vnd.ms-excel.template.macroEnabled.12",
             # ODT・RTF(ファイル準備の Office→PDF で PDF にしてから読む。#3351)。
             "application/vnd.oasis.opendocument.text",
             "application/rtf",
@@ -825,6 +832,16 @@ class Settings(
             "text/rtf",
             "application/octet-stream",
         ]
+    )
+    office_template_max_members: int = Field(
+        default=20_000,
+        ge=1,
+        description="アップロードで受け付ける Office テンプレートの ZIP の要素の数の上限(#4054)。",
+    )
+    office_template_max_uncompressed_bytes: int = Field(
+        default=512 * 1024 * 1024,
+        ge=1,
+        description="アップロードで受け付ける Office テンプレートの展開後の合計の上限(#4054)。",
     )
 
     # --- 取込 queue ---
@@ -1238,6 +1255,24 @@ class Settings(
     rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_rerank_min_relevance_score: float = Field(default=0.4, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
+    rag_native_vector_exact_max_chunks: int = Field(
+        default=50000,
+        ge=0,
+        description=(
+            "原生方式のベクトルの分岐で、許可された chunk がこの件数以下なら範囲の行を距離順に読む"
+            "(#4134・#4097)。超えると原生索引で読み、不足は診断とログに残す。0 は常に原生索引。"
+        ),
+    )
+    rag_native_index_full_optimize_interval_hours: float = Field(
+        default=0,
+        ge=0,
+        allow_inf_nan=False,
+        description=(
+            "原生索引の整理で、semantic の後に FULL も行う最小の間隔(時間。#4097)。"
+            "0 は要求ごとに semantic と FULL を行う。semantic で件数が合っても SEARCH が"
+            "戻らないことがあるので、実索引で確かめるまでは 0 のまま広げない。"
+        ),
+    )
     rag_rrf_method_ratio: tuple[float, float] = (10.0, 1.0)
     rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
 
@@ -1597,10 +1632,12 @@ class Settings(
         ),
     )
     rag_request_coverage_retrieval_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "回答の生成の前に、質問の要求ごとに根拠があるかを語の一致で確かめ(LLM は呼ばない)、"
-            "根拠の無い要求だけを要求の文で 1 回ずつ検索し直して回答の材料に足す(#1279)。"
+            "生成が根拠の無い要求を明示したとき(または実行済みの監査が材料の不足と判定したとき)だけ、"
+            "その要求を探し直す(#1279・#4114)。違う検索文を作れない要求は、質問の拡張の"
+            "仮説文を 1 回作る(LLM 1 回。仮説文は検索と rerank の比較にだけ使う)。"
+            "不足の無い回答では呼ばない。"
             "全体設定だけで決め、検索・回答プロファイルでは上書きしない。"
         ),
     )
@@ -2262,9 +2299,9 @@ class Settings(
         description=(
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
             "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Word・PowerPoint→PDF"
-            "(.doc/.docm/.ppt/.pptm を含む。Excel は対象外)、"
+            "(.doc/.docm/.dotx/.dotm/.ppt/.pptm/.potx/.potm を含む。Excel は対象外)、"
             "csv_to_jsonl は CSV→構造化 JSON、"
-            "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm)→構造化 JSON、"
+            "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm/.xltx/.xltm)→構造化 JSON、"
             "word_to_jsonl は Word→構造化 JSON"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
@@ -2301,7 +2338,8 @@ class Settings(
     rag_preprocess_word_to_jsonl_service_url: str = Field(
         default="http://127.0.0.1:18017",
         description=(
-            "Word(.doc/.docx/.docm)→構造化レコード JSONL 前処理マイクロサービスの base URL(#2457)。"
+            "Word(.doc/.docx/.docm/.dotx/.dotm)→構造化レコード JSONL 前処理マイクロサービスの "
+            "base URL(#2457)。"
         ),
     )
     rag_preprocess_service_timeout_seconds: float = Field(

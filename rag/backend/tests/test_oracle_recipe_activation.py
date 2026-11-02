@@ -30,7 +30,7 @@ class _RecordingCursor:
         lock_or_select = statement.startswith("SELECT recipe_id") or statement.startswith(
             "SELECT chunk_set_id FROM rag_chunk_sets WHERE chunk_set_id"
         )
-        self._rows = [{"ok": 1}] if lock_or_select else []
+        self._rows = [{"ok": 1, "document_id": "doc-1"}] if lock_or_select else []
 
     def fetchall(self) -> list[dict[str, object]]:
         return self._rows

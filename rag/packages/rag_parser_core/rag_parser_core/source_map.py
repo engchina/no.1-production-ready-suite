@@ -613,6 +613,11 @@ class LineIndex:
         return self._starts[line] if line < len(self._starts) else self._length
 
 
+def physical_line_starts(text: str) -> list[int]:
+    """物理行の開始の位置（``csv.reader`` の ``line_num`` と同じ改行の規則で区切る）。"""
+    return [0, *(match.end() for match in re.finditer(r"\r\n|\r|\n", text))]
+
+
 def text_locator(index: LineIndex, start: int, end: int) -> str:
     """RFC 5147 の ``char`` と ``line`` の考え方の位置。"""
     return (

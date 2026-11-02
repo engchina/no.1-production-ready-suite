@@ -91,14 +91,14 @@ def test_non_procedure_and_already_marked_passages_get_no_button_mark():
     rule = "実行ボタンは管理者だけが使える。"
     by_text = checked_by_text("登録の手順は？", operation(rule, "E1", kind="rule"))
     assert not button_marks(by_text[rule])
-    # 計画に写した原文が出典の根拠に無い（出典そのものが確かでない）説明には、ボタン名の印を重ねない。
+    # 計画で対象を照合できなかった（出典そのものが確かでない）説明には、ボタン名の印を重ねない。
     shifted = GroundedDraft.model_validate(
         {
             "request_coverage": [
                 {
                     "request_id": "Q1",
-                    "evidence_ids": ["E1"],
-                    "evidence_scope": [{"evidence_id": "E1", "target": "対象", "relation": "direct", "link_quote": EXECUTE}],
+                    "evidence_ids": ["E2"],
+                    "evidence_scope": [{"evidence_id": "E2", "target": "対象", "relation": "direct"}],
                 }
             ],
             "items": [operation("必要な項目を入力し、保存ボタンを押す。", "E1")],
@@ -106,7 +106,7 @@ def test_non_procedure_and_already_marked_passages_get_no_button_mark():
             "confidence": "high",
         }
     )
-    checked, _ = verify("登録の手順は？", shifted, SPANS)
+    checked, _ = verify("登録の手順は？", shifted, SPANS, plan_unsettled=["Q1: E1 の対象を計画で照合できませんでした。"])
     entry = next(entry for entry in checked if not entry.added)
     assert any(mark["code"] == "unassessed" for mark in entry.marks)
     assert not button_marks(entry)

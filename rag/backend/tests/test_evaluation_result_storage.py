@@ -1,8 +1,9 @@
-"""品質評価の結果を JSON 型の列に収める処理のテスト（#4103）。"""
+"""品質評価の結果の保存の内容のテスト（#4103・#4107）。"""
 
 from __future__ import annotations
 
 import copy
+import json
 import logging
 from io import BytesIO
 from types import SimpleNamespace
@@ -13,13 +14,13 @@ from openpyxl import load_workbook  # type: ignore[import-untyped]
 
 from app.api.routes import evaluation as evaluation_routes
 from app.clients.oracle import OracleClient
-from app.rag.evaluation_result_storage import (
-    EVALUATION_RESULT_MAX_JSON_BYTES,
-    fit_evaluation_result,
-    without_answer_diagnostics,
-)
+from app.rag.evaluation_result_storage import without_answer_diagnostics
 from app.rag.evaluation_results_excel import evaluation_results_xlsx
-from app.schemas.evaluation import EvaluationMetrics, EvaluationResultExportRequest
+from app.schemas.evaluation import (
+    EvaluationCase,
+    EvaluationMetrics,
+    EvaluationResultExportRequest,
+)
 
 
 def _case(case_id: str) -> dict[str, Any]:
@@ -44,32 +45,54 @@ def _result() -> dict[str, Any]:
     }
 
 
-def test_small_result_is_kept_as_is() -> None:
+QUESTION_MARKER = "合成の質問の原文"
+EVIDENCE_MARKER = "合成の根拠の原文"
+
+
+def _result_with_source_text() -> dict[str, Any]:
+    """回答の診断が本文を持つ項目を、実際の結果と同じ形で持つ合成の結果。"""
     result = _result()
-    assert fit_evaluation_result(result) is result
+    result["case_results"][0]["diagnostics"]["answer"] = {
+        "original_question": QUESTION_MARKER,
+        "rewritten_question": QUESTION_MARKER,
+        "request_coverage": {"requests": [{"id": "r1", "text": QUESTION_MARKER}]},
+        "envelope": {
+            "requests": [{"id": "r1", "text": QUESTION_MARKER}],
+            "items": [{"evidence_id": "e1", "text": EVIDENCE_MARKER}],
+        },
+        "execution_steps": [{"name": "工程", "details": {"lines": [f"質問: {QUESTION_MARKER}"]}}],
+        "generation_citation_traces": [{"input": f"{QUESTION_MARKER} {EVIDENCE_MARKER}"}],
+    }
+    return result
 
 
-def test_over_limit_result_omits_only_answer_diagnostics() -> None:
+def test_saved_result_omits_only_answer_diagnostics() -> None:
     result = _result()
     original = copy.deepcopy(result)
 
-    fitted = fit_evaluation_result(result, max_bytes=10)
+    compact = without_answer_diagnostics(result)
 
-    assert fitted["answer_diagnostics_omitted"] is True
-    assert fitted["answer_correctness"] == 0.75
-    for case in fitted["case_results"]:
+    assert compact["answer_diagnostics_omitted"] is True
+    assert compact["answer_correctness"] == 0.75
+    for case in compact["case_results"]:
+        assert case["trace_id"].startswith("trace-")
         assert case["answer_correctness"] == 0.75
         assert case["failure_reasons"] == ["合成の理由"]
         assert case["diagnostics"] == {"config_fingerprint": "fingerprint", "answer": None}
-    # 渡した結果は変えない（API の応答や artifact に使い回すため）。
+    # 渡した結果は変えない（API の応答や除去実験に使い回すため）。
     assert result == original
 
 
-def test_size_counts_utf8_bytes_not_characters() -> None:
-    """列の上限はバイトで効くので、文字数では判定しない。"""
-    result = _result()
-    result["case_results"][0]["diagnostics"]["answer"]["note"] = "あ" * 1000
-    assert fit_evaluation_result(result, max_bytes=2000) is not result
+def test_saved_result_has_no_source_text_of_answer_diagnostics() -> None:
+    """質問・根拠の文は、固定の項目にも工程の表示の文にも残らない（#4107）。"""
+    result = _result_with_source_text()
+    result["comparison"] = {"search_answer_profile_id": "p", "metrics": _result_with_source_text()}
+    assert QUESTION_MARKER in json.dumps(result, ensure_ascii=False)
+
+    saved = json.dumps(without_answer_diagnostics(result), ensure_ascii=False)
+
+    assert QUESTION_MARKER not in saved
+    assert EVIDENCE_MARKER not in saved
 
 
 def test_comparison_metrics_also_omit_answer_diagnostics() -> None:
@@ -89,8 +112,7 @@ def test_comparison_metrics_also_omit_answer_diagnostics() -> None:
 
 def test_result_without_cases_is_accepted() -> None:
     """判定の校正など、ケースの結果が無い結果も壊さない。"""
-    compact = without_answer_diagnostics({"status": "done"})
-    assert compact == {"status": "done", "answer_diagnostics_omitted": True}
+    assert without_answer_diagnostics({"status": "done"}) == {"status": "done"}
 
 
 def test_excel_is_the_same_without_answer_diagnostics() -> None:
@@ -108,7 +130,19 @@ def test_excel_is_the_same_without_answer_diagnostics() -> None:
     assert sheets(compact) == sheets(full)
 
 
-async def test_artifact_over_limit_is_saved_without_answer_diagnostics(
+def test_excel_question_comes_from_inputs_not_saved_result() -> None:
+    """公式の Excel の質問は、画面が保持した実行時の入力から出す（保存した結果に頼らない）。"""
+    case = EvaluationCase(id="c1", query=QUESTION_MARKER)
+    metrics = EvaluationMetrics.model_validate(without_answer_diagnostics(_result()))
+
+    content = evaluation_results_xlsx(metrics, EvaluationResultExportRequest(cases=[case]))
+
+    rows = list(load_workbook(BytesIO(content))["主条件の結果"].values)
+    assert rows[0][:2] == ("ケース ID", "質問")
+    assert rows[1][:2] == ("c1", QUESTION_MARKER)
+
+
+async def test_artifact_is_saved_without_answer_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     saved: dict[str, Any] = {}
@@ -118,14 +152,10 @@ async def test_artifact_over_limit_is_saved_without_answer_diagnostics(
         return "artifact-1"
 
     monkeypatch.setattr(OracleClient, "save_evaluation_artifact", fake_save)
-    result = _result()
-    result["case_results"][0]["diagnostics"]["answer"]["note"] = "x" * (
-        EVALUATION_RESULT_MAX_JSON_BYTES + 1
-    )
 
     run_id = await evaluation_routes._save_evaluation_artifact(
         request_summary={"kind": "run"},
-        result_summary=result,
+        result_summary=_result_with_source_text(),
         knowledge_base_ids=[],
         passed=True,
     )
@@ -133,6 +163,7 @@ async def test_artifact_over_limit_is_saved_without_answer_diagnostics(
     assert run_id == "artifact-1"
     assert saved["result_summary"]["answer_diagnostics_omitted"] is True
     assert saved["result_summary"]["case_results"][0]["answer_correctness"] == 0.75
+    assert QUESTION_MARKER not in json.dumps(saved, ensure_ascii=False)
 
 
 async def test_artifact_save_failure_logs_oracle_code(

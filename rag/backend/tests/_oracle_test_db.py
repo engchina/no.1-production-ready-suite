@@ -126,7 +126,7 @@ def ensure_schema() -> str | None:
     if result["status"] != "ready":
         raise RuntimeError("RAG system schema の初期化後 status が ready ではありません。")
     with _schema_connection() as connection:
-        settle_test_native_index(connection)
+        settle_at_session_start(connection)
     _schema_skip_reason = None
     return None
 
@@ -214,6 +214,18 @@ def cleanup_to_baseline() -> None:
         connection.close()
 
 
+def settle_at_session_start(connection: Any) -> None:
+    """worker の開始の整理。別の worker のテストが整理の間に行を消すと残骸が残るので、失敗にしない。
+
+    整理の要求は完了にせず残す。行を消した worker の後始末（``cleanup_to_baseline``）が
+    片付ける（#4177）。
+    """
+    from app.clients.native_index_maintenance import NativeIndexMaintenanceIncomplete
+
+    with suppress(NativeIndexMaintenanceIncomplete):
+        settle_test_native_index(connection)
+
+
 def settle_test_native_index(connection: Any) -> None:
     """専用テストschemaで実際のworkerと同じ整理を行い、要求snapshotを完了する。"""
     from app.clients.native_index_maintenance import maintain_native_vectors
@@ -231,7 +243,7 @@ def settle_test_native_index(connection: Any) -> None:
         previous_timeout = connection.call_timeout
         try:
             connection.call_timeout = OPTIMIZE_CALL_TIMEOUT_MS
-            maintain_native_vectors(connection)
+            maintain_native_vectors(connection, plan="full")
         finally:
             connection.call_timeout = previous_timeout
         for event_id in event_ids:

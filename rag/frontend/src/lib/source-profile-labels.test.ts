@@ -81,6 +81,8 @@ describe("documentFileTypeLabel", () => {
   it.each([
     ["sample.PDF", "PDF"], ["sample.docx", "Word"], ["sample.doc", "Word"],
     ["sample.xlsx", "Excel"], ["sample.xlsm", "Excel"], ["sample.pptx", "PowerPoint"],
+    ["sample.dotx", "Word"], ["sample.dotm", "Word"], ["sample.xltx", "Excel"], ["sample.xltm", "Excel"],
+    ["sample.potx", "PowerPoint"], ["sample.potm", "PowerPoint"],
     ["sample.csv", "CSV"], ["sample.custom", "CUSTOM"],
   ])("profile がない %s も原本の拡張子で表示する", (file_name, expected) => {
     expect(documentFileTypeLabel({file_name, source_profile: null, content_type: null})).toBe(expected);

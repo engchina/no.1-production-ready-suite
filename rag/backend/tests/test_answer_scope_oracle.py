@@ -24,6 +24,7 @@ async def _indexed_document(
     large_category: str | None = None,
     duplicate_of_document_id: str | None = None,
     knowledge_base_ids: list[str] | None = None,
+    embeddings: list[list[float]] | None = None,
 ) -> str:
     """検索対象(INDEXED・active な chunk_set)の文書を 1 件作る。"""
     detail = await client.create_document(
@@ -44,7 +45,7 @@ async def _indexed_document(
         document_id,
         StructuredExtraction(raw_text="本文", confidence=0.9),
         chunks,
-        [_EMBEDDING] * len(chunks),
+        embeddings or [_EMBEDDING] * len(chunks),
         chunk_set_id=chunk_set_id,
     )
     await client.mark_chunk_set_indexed(

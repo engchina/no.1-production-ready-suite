@@ -105,3 +105,29 @@ def test_cleanup_does_not_acknowledge_failed_full(monkeypatch: pytest.MonkeyPatc
         _oracle_test_db.cleanup_to_baseline()
     assert not any("WHERE event_id=:event_id" in sql for sql in connection.calls)
     assert connection.call_timeout == 1000
+
+
+def test_session_start_keeps_the_request_when_vectors_stay_unpurged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """別の worker の削除で残骸が残っても、開始を失敗にせず、整理の要求を消さない（#4177）。"""
+    connection = CleanupConnection(0, True, 4, 2)
+    original_execute = connection.execute
+
+    def ineffective(sql: str, binds: Mapping[str, object] | None = None) -> None:
+        original_execute(sql, binds)
+        connection.optimized = False
+
+    monkeypatch.setattr(connection, "execute", ineffective)
+
+    _oracle_test_db.settle_at_session_start(connection)
+
+    assert any("OPTIMIZE_INDEX" in sql for sql in connection.calls)
+    assert not any("WHERE event_id=:event_id" in sql for sql in connection.calls)
+
+
+def test_session_start_does_not_hide_a_failed_full() -> None:
+    connection = CleanupConnection(0, True, 4, 2, fail=True)
+
+    with pytest.raises(RuntimeError, match="合成の整理失敗"):
+        _oracle_test_db.settle_at_session_start(connection)

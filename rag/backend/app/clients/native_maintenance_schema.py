@@ -4,6 +4,8 @@ EVENTS_TABLE = "RAG_NATIVE_INDEX_EVENTS"
 STATE_TABLE = "RAG_NATIVE_INDEX_MAINTENANCE"
 MAINTENANCE_TRIGGER = "RAG_CHUNKS_NATIVE_MAINT"
 STATE_KEY = "hybrid_vectors"
+# FULL の整理を最後に終えた時刻の行(``last_completed_at``)。要求の lease とは別に持つ。
+FULL_STATE_KEY = "hybrid_vectors_full"
 
 
 def native_maintenance_tables_sql() -> str:

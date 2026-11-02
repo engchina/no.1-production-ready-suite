@@ -82,9 +82,9 @@ uv run python -m app.rag.evaluation_cli \
 | `as_of` / `as_of_source` | 検索の基準日。`filters.as_of` が無ければ評価の開始時の今日（`run_start`）にし、評価の間は固定する（日付を跨いでも全ケースが同じ日。通常の質問は今日のまま） |
 | `evaluation_set` | 評価セット（ケース）の sha256 と件数 |
 | `request` | top_k・条件の key と値の hash・ナレッジベース・検索・回答プロファイル・`rag_overrides` |
-| `settings` | 設定の fingerprint（`rag_config_fingerprint`）・プロンプトの版（`answer_prompt_version`） |
-| `models` | 回答・判定・埋め込み（次元）・再ランクのモデル。提供側の重みの版は API で取れないため `snapshot: unverified` |
-| `profiles` | 検索・回答プロファイルの更新時刻・設定の sha256・用語と回答ルール・ドメインキーワードの sha256・参照 KB |
+| `settings` | 検索・回答の結果に効く全体設定（候補の上限などの検索の予算を含む）の fingerprint（`rag_config_fingerprint`）・プロンプトの版（`answer_prompt_version`） |
+| `models` | 回答（検索・回答プロファイルの解決後の値。`answer_source` は `search_answer_profile` / `global_default`。比較のプロファイルの pass は `compare`）・判定・埋め込み（次元）・再ランクのモデル。プロファイルが読めなければ回答は `unverified`。提供側の重みの版は API で取れないため `snapshot: unverified` |
+| `profiles` | 検索・回答プロファイルの更新時刻・設定の sha256・回答のモデルの指定・用語と回答ルール・ドメインキーワードの sha256・参照 KB |
 | `corpus` | 検索に出る（配信中の）chunk_set の id・件数と、レシピの版・抽出の元の hash と更新時刻を含む行の sha256。active の切替・抽出の更新・削除・権限の剥奪で変わる |
 | `code_version` / `external_calls` | backend の git の commit（手元の変更は `+dirty`）と、外部の AI の応答の扱い（`live` / `record` / `replay`）。この 2 つは条件の比較に入れない |
 

@@ -191,6 +191,11 @@ def compute_extraction_recipe_id(source_sha256: str, settings: Settings) -> str:
     return _digest("er", payload)
 
 
+def compute_isolated_extraction_id(extraction_recipe_id: str, build_id: str) -> str:
+    """検索に出している版が読む抽出を上書きしないための、再構築ごとの extraction artifact ID。"""
+    return _digest("er", {"v": KEY_VERSION, "base": extraction_recipe_id, "build": build_id})
+
+
 def compute_document_recipe_extraction_id(
     extraction_recipe_id: str,
     recipe_id: str,

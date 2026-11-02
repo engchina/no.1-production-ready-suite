@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field, StrictInt, create_model
 from pydantic.json_schema import SkipJsonSchema
@@ -21,7 +22,7 @@ LINE_END_DESCRIPTION = (
 )
 
 if TYPE_CHECKING:
-    from rag_engine.models.llm import GroundedDraft
+    from rag_engine.models.llm import GroundedDraft, RequestCoverage, RequestCoverageRange, RequestLinkRange
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,7 @@ def bind_wire_range(line_start: int | None, line_end: int | None, *, unit_count:
 @lru_cache(maxsize=1)
 def generation_draft_wire_model() -> type[BaseModel]:
     """既存の項目・草稿のFieldInfoを保ち、生成時だけ引用を整数の契約へ置き換える。"""
-    from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, _StrictModel
+    from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, RequestCoverageRange, _StrictModel
 
     citation = create_model(
         "GroundedCitationWire",
@@ -69,24 +70,60 @@ def generation_draft_wire_model() -> type[BaseModel]:
     )
     item_fields: dict[str, Any] = {"citations": (GenericAlias(list, citation), deepcopy(GroundedItem.model_fields["citations"]))}
     item = create_model("GroundedItemWire", __base__=GroundedItem, **item_fields)
-    draft_fields: dict[str, Any] = {"items": (GenericAlias(list, item), deepcopy(GroundedDraft.model_fields["items"]))}
+    draft_fields: dict[str, Any] = {
+        "request_coverage": (GenericAlias(list, RequestCoverageRange), deepcopy(GroundedDraft.model_fields["request_coverage"])),
+        "items": (GenericAlias(list, item), deepcopy(GroundedDraft.model_fields["items"])),
+    }
     return create_model("GroundedDraftWire", __base__=GroundedDraft, **draft_fields)
 
 
 @lru_cache(maxsize=1)
 def planned_generation_wire_model() -> type[BaseModel]:
     """根拠計画を入力で受け取る生成では、その計画を出力 schema から除く。"""
-    from rag_engine.models.llm import RequestCoverage
+    from rag_engine.models.llm import RequestCoverageRange
 
     return create_model(
         "PlannedGroundedDraftWire",
         __base__=generation_draft_wire_model(),
-        request_coverage=(SkipJsonSchema[list[RequestCoverage]], Field(default_factory=list, exclude=True)),
+        request_coverage=(SkipJsonSchema[list[RequestCoverageRange]], Field(default_factory=list, exclude=True)),
     )
 
 
-def canonical_generation_draft(value: BaseModel) -> GroundedDraft:
-    """新wireは整数の指定を私有属性へ残す。既存の草稿・履歴のlinesは変更しない。"""
+def canonical_request_coverage(rows: Sequence[RequestCoverageRange], link_text: Callable[[RequestLinkRange], str]) -> list[RequestCoverage]:
+    """番号で返した計画を、下流の検査と保存が読む形へ変える。
+
+    linked の原文（link_quote）は ``link_text`` が番号の範囲から切り出す（無効な範囲は空文字で、計画の検査の指摘に任せる）。
+    計画に使う根拠（evidence_ids）は direct と linked の行そのものなので、コードが導く。
+    """
+    from rag_engine.models.llm import RequestCoverage
+
+    result = []
+    for row in rows:
+        result.append(
+            RequestCoverage.model_validate(
+                {
+                    "request_id": row.request_id,
+                    "evidence_scope": [
+                        {
+                            "evidence_id": scope.evidence_id,
+                            "target": scope.target,
+                            "relation": scope.relation,
+                            "link_quote": link_text(scope.link) if scope.relation == "linked" and scope.link is not None else "",
+                        }
+                        for scope in row.evidence_scope
+                    ],
+                    "evidence_ids": list(dict.fromkeys(scope.evidence_id for scope in row.evidence_scope if scope.relation != "unrelated")),
+                }
+            )
+        )
+    return result
+
+
+def canonical_generation_draft(value: BaseModel, link_text: Callable[[RequestLinkRange], str] = lambda _link: "") -> GroundedDraft:
+    """新wireは整数の指定を私有属性へ残す。既存の草稿・履歴のlinesは変更しない。
+
+    ``link_text`` は計画の linked の番号の範囲から原文を切り出す（呼び出し側が送った根拠を知っている）。
+    """
     from rag_engine.models.llm import GroundedCitation, GroundedDraft
 
     line_limit = next((entry.max_length for entry in GroundedCitation.model_fields["lines"].metadata if hasattr(entry, "max_length")), None)
@@ -97,6 +134,10 @@ def canonical_generation_draft(value: BaseModel) -> GroundedDraft:
         value = wire.model_validate(value.model_dump())
     # 未指定の計画を「空の計画を明示した応答」へ変え、不要な計画の再生成を起こさない。
     raw = value.model_dump(exclude_unset=True)
+    if "request_coverage" in raw:
+        raw["request_coverage"] = [
+            plan.model_dump(exclude_unset=True) for plan in canonical_request_coverage(cast(Any, value).request_coverage, link_text)
+        ]
     ranges: list[list[tuple[int | None, int | None]]] = []
     for item in raw.get("items", []):
         own: list[tuple[int | None, int | None]] = []

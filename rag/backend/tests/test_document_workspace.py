@@ -1,7 +1,9 @@
 """文書プレビュー（原本配信）と抽出本文表示用 API のテスト。"""
 
 import hashlib
+import io
 import json
+import zipfile
 from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -1930,6 +1932,189 @@ def test_document_upload_accepts_macro_enabled_office() -> None:
     assert body["source_profile"]["modality"] == "office"
     assert body["source_profile"]["unsupported_reason"] == "macro_enabled_office_not_supported"
     assert body["parser_notice"]["code"] == "office_conversion_required"
+
+
+def _synthetic_ooxml(main_part_type: str, *, extra_parts: dict[str, bytes] | None = None) -> bytes:
+    """本体の部品だけを持つ合成の OOXML の package。"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as package:
+        package.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            f'<Override PartName="/main.xml" ContentType="{main_part_type}"/></Types>',
+        )
+        package.writestr("main.xml", b"<root/>")
+        for name, payload in (extra_parts or {}).items():
+            package.writestr(name, payload)
+    return buffer.getvalue()
+
+
+_TEMPLATE_UPLOADS = [
+    (
+        "form.dotx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml",
+        "office_template_not_supported",
+        "Office→PDF",
+    ),
+    (
+        "form.dotm",
+        "application/vnd.ms-word.template.macroEnabled.12",
+        "application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
+        "macro_enabled_office_not_supported",
+        "Office→PDF",
+    ),
+    (
+        "form.potx",
+        "application/vnd.openxmlformats-officedocument.presentationml.template",
+        "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml",
+        "office_template_not_supported",
+        "Office→PDF",
+    ),
+    (
+        "form.potm",
+        "application/vnd.ms-powerpoint.template.macroEnabled.12",
+        "application/vnd.ms-powerpoint.template.macroEnabled.main+xml",
+        "macro_enabled_office_not_supported",
+        "Office→PDF",
+    ),
+    (
+        "form.xltx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+        "office_template_not_supported",
+        "Excel→JSONL",
+    ),
+    (
+        "form.xltm",
+        "application/vnd.ms-excel.template.macroEnabled.12",
+        "application/vnd.ms-excel.template.macroEnabled.main+xml",
+        "macro_enabled_office_not_supported",
+        "Excel→JSONL",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type", "main_part_type", "reason", "preprocess"), _TEMPLATE_UPLOADS
+)
+@pytest.mark.parametrize("sends_mime", [True, False])
+def test_document_upload_accepts_office_template(
+    file_name: str,
+    content_type: str,
+    main_part_type: str,
+    reason: str,
+    preprocess: str,
+    sends_mime: bool,
+) -> None:
+    """正しいテンプレートは保存でき、変換を案内する(解析エンジンは切り替えない。#4054)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={
+            "file": (
+                file_name,
+                _synthetic_ooxml(main_part_type),
+                content_type if sends_mime else "application/octet-stream",
+            )
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()["data"]
+    assert body["ingestion_started"] is False
+    assert body["source_profile"]["modality"] == "office"
+    assert body["source_profile"]["unsupported_reason"] == reason
+    assert body["parser_notice"]["code"] == "office_conversion_required"
+    assert f"「{preprocess}」" in body["parser_notice"]["message"]
+    assert body["parser_notice"]["suggested_backend"] is None
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type", "data"),
+    [
+        ("form.dotx", _TEMPLATE_UPLOADS[0][1], b"PK\x03\x04broken"),
+        ("form.xltx", _TEMPLATE_UPLOADS[4][1], b"not a package"),
+        # .docx の名前を変えた原本。
+        (
+            "form.dotx",
+            _TEMPLATE_UPLOADS[0][1],
+            _synthetic_ooxml(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+            ),
+        ),
+        # マクロなしの拡張子に VBA の部品。
+        (
+            "form.xltx",
+            _TEMPLATE_UPLOADS[4][1],
+            _synthetic_ooxml(_TEMPLATE_UPLOADS[4][2], extra_parts={"xl/vbaProject.bin": b"x"}),
+        ),
+        # 拡張子と MIME type の不一致。
+        ("form.dotx", "application/pdf", _synthetic_ooxml(_TEMPLATE_UPLOADS[0][2])),
+        ("form.docx", _TEMPLATE_UPLOADS[0][1], _synthetic_ooxml(_TEMPLATE_UPLOADS[0][2])),
+    ],
+    ids=["broken", "not_package", "renamed_docx", "vba_in_plain", "mime_pdf", "ext_docx"],
+)
+def test_document_upload_rejects_invalid_office_template_before_storing(
+    file_name: str, content_type: str, data: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_if_stored() -> None:
+        raise AssertionError("不正なテンプレートの原本を保存しない")
+
+    monkeypatch.setattr("app.api.routes.documents.ObjectStorageClient", fail_if_stored)
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": (file_name, data, content_type)},
+    )
+
+    assert resp.status_code == 415
+    assert "受け付けませんでした" in resp.json()["error_messages"][0]
+
+
+def test_batch_upload_reports_rejected_template_without_conversion_profile() -> None:
+    """確認で止めたテンプレートには「変換が必要」の判定を添えない(#4054)。"""
+    resp = client.post(
+        "/api/documents/batch-upload",
+        files=[("files", ("broken.xltx", b"not a package", _TEMPLATE_UPLOADS[4][1]))],
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["uploaded_count"] == 0
+    failed = body["failed_items"][0]
+    assert failed["status_code"] == 415
+    assert "受け付けませんでした" in failed["message"]
+    assert failed["source_profile"] is None
+
+
+@pytest.mark.parametrize("file_name", ["old.dot", "old.pot", "old.xlt", "book.xlsb", "a.ppsx"])
+def test_document_upload_keeps_rejecting_other_extensions(file_name: str) -> None:
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": (file_name, b"PK\x03\x04synthetic", "application/octet-stream")},
+    )
+
+    assert resp.status_code == 415
+    assert resp.json()["error_messages"] == ["対応していないファイル形式です。"]
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("plain.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ("plain.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ],
+)
+def test_document_upload_keeps_docx_and_xlsx_route(file_name: str, content_type: str) -> None:
+    """既存の .docx / .xlsx の判定は変えない(テンプレートの確認は掛けない。#4054)。"""
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": (file_name, b"PK\x03\x04synthetic", content_type)},
+    )
+
+    assert resp.status_code == 200, resp.text
+    profile = resp.json()["data"]["source_profile"]
+    assert profile["unsupported_reason"] is None
+    assert profile["parser_profile"] == "local_office_structure"
 
 
 @pytest.mark.parametrize(
@@ -4216,3 +4401,63 @@ def test_partial_element_review_preserves_unseen_text() -> None:
     )
     with pytest.raises(DocumentReviewEditConflictError):
         _reviewed_extraction_with_edits(extraction, stale)
+
+
+def test_force_reingest_keeps_served_output_and_clears_only_recipe_checkpoints(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """#4115: 検索に出している版がある文書の再取込は、旧版を消さず解析の checkpoint だけ消す。"""
+    document_id = _upload("reingest.txt", b"reingest", "text/plain")
+    reset_calls: list[str] = []
+    checkpoint_calls: list[tuple[str, str]] = []
+
+    async def tracking_reset(document_id: str, **kwargs: object) -> DocumentDetail:
+        reset_calls.append(document_id)
+        raise AssertionError("検索に出している版を消さない")
+
+    async def served(_document_id: str) -> bool:
+        return True
+
+    async def clear_checkpoints(document_id: str, recipe_id: str) -> None:
+        checkpoint_calls.append((document_id, recipe_id))
+
+    fake = fake_document_dependencies
+    fake.reset_document_ingestion_outputs = tracking_reset  # type: ignore[method-assign]
+    fake.document_has_served_output = served  # type: ignore[attr-defined]
+    fake.delete_recipe_segment_checkpoints = clear_checkpoints  # type: ignore[attr-defined]
+
+    async def default_recipe(_document_id: str) -> dict[str, object]:
+        return {"recipe_id": "recipe-default", "status": FileStatus.INDEXED.value}
+
+    fake.ensure_default_document_recipe = default_recipe  # type: ignore[attr-defined]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"force": "true"})
+
+    assert resp.status_code == 200
+    assert reset_calls == []
+    assert checkpoint_calls == [(document_id, "recipe-default")]
+
+
+def test_first_ingest_without_served_output_still_resets_outputs(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """#4115: 検索に出している版が無ければ、今までどおり出力を初期化する。"""
+    document_id = _upload("first.txt", b"first", "text/plain")
+    reset_calls: list[str] = []
+    original_reset = fake_document_dependencies.reset_document_ingestion_outputs
+
+    async def tracking_reset(document_id: str, **kwargs: object) -> DocumentDetail:
+        reset_calls.append(document_id)
+        return await original_reset(document_id, **kwargs)  # type: ignore[arg-type]
+
+    async def served(_document_id: str) -> bool:
+        return False
+
+    fake = fake_document_dependencies
+    fake.reset_document_ingestion_outputs = tracking_reset  # type: ignore[method-assign]
+    fake.document_has_served_output = served  # type: ignore[attr-defined]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    assert reset_calls == [document_id]

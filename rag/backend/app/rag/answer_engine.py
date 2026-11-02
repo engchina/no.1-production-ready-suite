@@ -3057,6 +3057,10 @@ class AnswerEngine:
             for chunk in original_chunks(row.chunk for row in text.chunks)
         ]
         if not chunks:
+            # chunk を持たない章節（見出しだけ）は読むものが無いので、全量を読めた扱い（#4138）。
+            # chunk があるのに見えない・原文が無い章節だけを未読にする。
+            if text.complete and text.section.chunk_count == 0:
+                return SectionRead(complete=True)
             return SectionRead(complete=False, reason="partial_read")
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
@@ -3470,7 +3474,7 @@ def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
     mode = str(metadata.get("retrieval_mode") or "")
     query = f"q{query_index + 1}"
     channels: set[str] = set()
-    if "native_wrrf_score" in metadata:
+    if "native_rrf_contribution" in metadata or "native_wrrf_score" in metadata:
         if float(str(metadata.get("vector_rank") or 0)) > 0:
             channels.add(f"vector:{query}")
         if float(str(metadata.get("keyword_rank") or 0)) > 0:

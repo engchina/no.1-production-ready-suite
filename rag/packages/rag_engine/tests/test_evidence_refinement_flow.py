@@ -74,9 +74,7 @@ def payload(*, gap: bool = False) -> dict[str, Any]:
     return {
         "summary": "対象の画面を開く方法です。",
         "confidence": "medium",
-        "request_coverage": [
-            {"request_id": "Q1", "evidence_ids": ["E1"], "evidence_scope": [{"evidence_id": "E1", "target": "対象A", "relation": "direct"}]}
-        ],
+        "request_coverage": [{"request_id": "Q1", "evidence_scope": [{"evidence_id": "E1", "target": "対象A", "relation": "direct"}]}],
         "items": [
             {"kind": "gap", "text": "保存方法はまだ確かめられません。", "request_id": "Q1", "citations": []}
             if gap
@@ -272,7 +270,6 @@ def test_kept_nonconsecutive_label_id_and_numeric_range_are_not_rebound(monkeypa
     reordered = AnswerContext(records=[original_context.records[2], changed, original_context.records[1]], text="")
     monkeypatch.setattr(__import__(__name__), "context", lambda: reordered)
     value = payload()
-    value["request_coverage"][0]["evidence_ids"] = ["E2"]
     value["request_coverage"][0]["evidence_scope"][0]["evidence_id"] = "E2"
     value["items"][0]["citations"] = [{"evidence_id": "E2", "line_start": 1, "line_end": 1}]
     checked: list[Any] = []
@@ -300,7 +297,6 @@ def test_actual_joint_citations_keep_both_original_sources_and_their_order() -> 
     value = payload()
     value["items"][0]["text"] = OPEN + SAVE
     value["items"][0]["citations"].append({"evidence_id": "E2", "line_start": 1, "line_end": 1})
-    value["request_coverage"][0]["evidence_ids"].append("E2")
     value["request_coverage"][0]["evidence_scope"].append({"evidence_id": "E2", "target": "対象A", "relation": "direct"})
     parser = Parser([value])
     result = run(parser)
@@ -536,7 +532,6 @@ def test_none_adopts_added_guide_step_with_unassessed_mark_end_to_end() -> None:
     )
     refined = payload()
     refined["summary"] = "画面を開いて保存する方法です。"
-    refined["request_coverage"][0]["evidence_ids"].append("E2")
     refined["request_coverage"][0]["evidence_scope"].append({"evidence_id": "E2", "target": "対象A", "relation": "direct"})
     refined["items"].append(
         {"kind": "operation", "text": SAVE, "request_id": "Q1", "citations": [{"evidence_id": "E2", "line_start": 1, "line_end": 1}]}

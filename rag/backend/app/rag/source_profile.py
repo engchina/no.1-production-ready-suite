@@ -6,6 +6,12 @@ from pathlib import PurePath
 from charset_normalizer import from_bytes
 from rag_parser_core.source import PLAIN_TEXT_MARKUP_EXTENSIONS, is_plain_text_markup
 
+from app.rag.office_template import (
+    MACRO_TEMPLATE_EXTENSIONS,
+    MACRO_TEMPLATE_MEDIA_TYPES,
+    OFFICE_TEMPLATE_EXTENSIONS,
+    OFFICE_TEMPLATE_MEDIA_TYPES,
+)
 from app.schemas.document import SourceModality, SourcePreviewKind, SourceProfile
 
 LARGE_FILE_WARNING_BYTES = 50 * 1024 * 1024
@@ -141,6 +147,7 @@ OFFICE_EXTENSIONS = {
     ".xls",
     ".xlsx",
     ".xlsm",
+    *OFFICE_TEMPLATE_EXTENSIONS,
 }
 
 LEGACY_OFFICE_EXTENSIONS = {
@@ -155,19 +162,25 @@ LEGACY_OFFICE_MEDIA_TYPES = {
     "application/vnd.ms-excel",
 }
 
-# マクロ付きの OpenXML の Office。原本のままでは解析せず、ファイル準備で変換してから読む
-# （マクロは実行しない。旧形式のバイナリと同じ扱い。#2470）。
+# マクロ付きの OpenXML の Office(テンプレートを含む。#4054)。原本のままでは解析せず、ファイル準備で
+# 変換してから読む（マクロは実行しない。旧形式のバイナリと同じ扱い。#2470）。
 MACRO_OFFICE_EXTENSIONS = {
     ".docm",
     ".pptm",
     ".xlsm",
+    *MACRO_TEMPLATE_EXTENSIONS,
 }
 
 MACRO_OFFICE_MEDIA_TYPES = {
     "application/vnd.ms-word.document.macroenabled.12",
     "application/vnd.ms-powerpoint.presentation.macroenabled.12",
     "application/vnd.ms-excel.sheet.macroenabled.12",
+    *MACRO_TEMPLATE_MEDIA_TYPES,
 }
+
+# マクロを含まないテンプレート。解析エンジンは原本を読まず、ファイル準備で変換してから読む(#4054)。
+PLAIN_TEMPLATE_EXTENSIONS = OFFICE_TEMPLATE_EXTENSIONS - MACRO_TEMPLATE_EXTENSIONS
+PLAIN_TEMPLATE_MEDIA_TYPES = OFFICE_TEMPLATE_MEDIA_TYPES - MACRO_TEMPLATE_MEDIA_TYPES
 
 # ODT・RTF。原本のままでは解析せず、ファイル準備の Office→PDF で PDF にしてから読む(#3351。
 # unstructured は pandoc で読むが、pandoc は GPL のため入れない)。
@@ -320,6 +333,7 @@ def _source_modality(content_type: str, extension: str | None) -> SourceModality
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         *MACRO_OFFICE_MEDIA_TYPES,
+        *PLAIN_TEMPLATE_MEDIA_TYPES,
     }:
         return SourceModality.OFFICE
     return SourceModality.UNKNOWN
@@ -348,6 +362,8 @@ def _parser_profile(
     if modality == SourceModality.OFFICE:
         if _is_macro_office(extension=extension, content_type=content_type):
             return "unsupported_macro_enabled_office"
+        if _is_plain_template(extension=extension, content_type=content_type):
+            return "unsupported_office_template"
         if _is_openxml_office(extension=extension, content_type=content_type):
             return "local_office_structure"
         if _is_legacy_office_binary(extension=extension, content_type=content_type):
@@ -377,9 +393,9 @@ def _parser_backend(
         content_type=content_type,
     ):
         return "unsupported"
-    if modality == SourceModality.OFFICE and _is_macro_office(
-        extension=extension,
-        content_type=content_type,
+    if modality == SourceModality.OFFICE and (
+        _is_macro_office(extension=extension, content_type=content_type)
+        or _is_plain_template(extension=extension, content_type=content_type)
     ):
         return "unsupported"
     if modality == SourceModality.OFFICE and _is_openxml_office(
@@ -420,6 +436,7 @@ def _preview_kind(
         if (
             _is_legacy_office_binary(extension=extension, content_type=content_type)
             or _is_macro_office(extension=extension, content_type=content_type)
+            or _is_plain_template(extension=extension, content_type=content_type)
             or _is_odt_rtf(extension=extension, content_type=content_type)
         ):
             return SourcePreviewKind.UNSUPPORTED
@@ -454,6 +471,11 @@ def _unsupported_reason(
         content_type=content_type,
     ):
         return "macro_enabled_office_not_supported"
+    if modality == SourceModality.OFFICE and _is_plain_template(
+        extension=extension,
+        content_type=content_type,
+    ):
+        return "office_template_not_supported"
     if modality == SourceModality.OFFICE and _is_odt_rtf(
         extension=extension,
         content_type=content_type,
@@ -505,6 +527,11 @@ def _quality_warnings(
         content_type=content_type,
     ):
         warnings.append("unsupported_macro_enabled_office")
+    if modality == SourceModality.OFFICE and _is_plain_template(
+        extension=extension,
+        content_type=content_type,
+    ):
+        warnings.append("unsupported_office_template")
     if modality == SourceModality.OFFICE and _is_odt_rtf(
         extension=extension,
         content_type=content_type,
@@ -549,8 +576,13 @@ def _is_legacy_office_binary(*, extension: str | None, content_type: str) -> boo
 
 
 def _is_macro_office(*, extension: str | None, content_type: str) -> bool:
-    """マクロ付きの OpenXML の Office（.docm / .xlsm / .pptm）か判定する。"""
+    """マクロ付きの OpenXML の Office（マクロ付きのテンプレートを含む）か判定する。"""
     return extension in MACRO_OFFICE_EXTENSIONS or content_type in MACRO_OFFICE_MEDIA_TYPES
+
+
+def _is_plain_template(*, extension: str | None, content_type: str) -> bool:
+    """マクロを含まないテンプレート（.dotx / .potx / .xltx）か判定する(#4054)。"""
+    return extension in PLAIN_TEMPLATE_EXTENSIONS or content_type in PLAIN_TEMPLATE_MEDIA_TYPES
 
 
 def _is_odt_rtf(*, extension: str | None, content_type: str) -> bool:

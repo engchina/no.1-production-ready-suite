@@ -63,6 +63,7 @@ async def structure_index_plan(
         SUM(CASE WHEN JSON_VALUE(c.metadata_json,'$.section_title') IS NOT NULL
             OR JSON_EXISTS(c.metadata_json,'$.section_path[0]')
             OR JSON_VALUE(c.metadata_json,'$.section_path') IS NOT NULL
+            OR JSON_VALUE(c.metadata_json,'$.section_title' RETURNING CLOB) IS NOT NULL
             THEN 1 ELSE 0 END) AS headings
         FROM rag_document_knowledge_bases m JOIN rag_documents d ON d.document_id=m.document_id
         LEFT JOIN rag_chunk_sets cs ON cs.document_id=d.document_id AND cs.is_active=1

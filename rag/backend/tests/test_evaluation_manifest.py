@@ -16,17 +16,29 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pr_system_settings.model import ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER
 from pytest import MonkeyPatch
 
 from app import config as config_module
-from app.config import fixed_today, get_settings, settings_today
+from app.config import (
+    Settings,
+    enterprise_ai_default_model_id,
+    fixed_today,
+    get_settings,
+    settings_today,
+)
+from app.rag.evaluation import _judge_model_id
 from app.rag.evaluation_manifest import (
     build_run_manifest,
     comparison_differences,
     with_run_check,
 )
-from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
+from app.rag.search_answer_profile_config import (
+    SearchAnswerProfileConfig,
+    resolve_search_answer_profile_settings,
+)
 from app.schemas.evaluation import EvaluationMetrics, EvaluationRunRequest
+from app.schemas.search import SearchResponse
 
 _SECRET_QUERY = "社外秘キーワード ABC-123 の承認条件"
 
@@ -199,6 +211,148 @@ async def test_run_check_marks_updates_during_run_as_not_comparable(
 
     assert checked["comparable"] is False
     assert expected in checked["changed_during_run"]
+
+
+def _model_settings(**update: object) -> Settings:
+    return get_settings().model_copy(
+        update={
+            "oci_enterprise_ai_default_text_model": "model-default",
+            "oci_enterprise_ai_default_judge_model": "",
+            "oci_enterprise_ai_models": [
+                {"model_id": "model-default", "display_name": "既定"},
+                {"model_id": "model-profile", "display_name": "プロファイル"},
+                {"model_id": "model-compare", "display_name": "比較"},
+            ],
+            **update,
+        }
+    )
+
+
+async def _models(
+    oracle: FakeOracle, settings: Settings, request: EvaluationRunRequest | None = None
+) -> dict[str, Any]:
+    manifest = await build_run_manifest(
+        request or _request(),
+        settings=settings,
+        oracle=oracle,
+        as_of=date(2026, 10, 31),
+        as_of_source="run_start",
+    )
+    return dict(manifest["models"])
+
+
+async def test_manifest_records_profile_answer_model_like_case_resolution() -> None:
+    """プロファイルの回答のモデルを残し、ケースの解決と判定のモデルと食い違わない（#4141）。"""
+    settings = _model_settings(
+        oci_enterprise_ai_default_judge_model=ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER
+    )
+    oracle = FakeOracle()
+    oracle.profile.config = SearchAnswerProfileConfig(
+        knowledge_base_ids=["kb-1"], answer_model_id="model-profile"
+    )
+
+    models = await _models(oracle, settings)
+
+    case_settings, _ = resolve_search_answer_profile_settings(settings, oracle.profile.config)
+    assert models["answer"] == enterprise_ai_default_model_id(case_settings) == "model-profile"
+    assert models["answer_source"] == "search_answer_profile"
+    response = SearchResponse(answer="", trace_id="t", elapsed_ms=0)
+    assert models["judge"] == _judge_model_id(settings, response, case_settings) == "model-profile"
+
+
+async def test_manifest_keeps_global_default_when_profile_inherits_model() -> None:
+    settings = _model_settings()
+
+    models = await _models(FakeOracle(), settings)
+
+    assert models["answer"] == "model-default"
+    assert models["answer_source"] == "global_default"
+    assert "compare" not in models
+
+
+async def test_manifest_detects_profile_answer_model_change() -> None:
+    settings = _model_settings()
+    oracle = FakeOracle()
+    before = await build_run_manifest(
+        _request(), settings=settings, oracle=oracle, as_of=date(2026, 10, 31), as_of_source="x"
+    )
+    oracle.profile.config = SearchAnswerProfileConfig(
+        knowledge_base_ids=["kb-1"], answer_model_id="model-profile"
+    )
+    after = await build_run_manifest(
+        _request(), settings=settings, oracle=oracle, as_of=date(2026, 10, 31), as_of_source="x"
+    )
+
+    assert {
+        "models.answer",
+        "models.answer_source",
+        "profiles.profile-1.answer_model_id",
+        "profiles.profile-1.config_sha256",
+    } <= set(comparison_differences(before, after))
+
+
+async def test_manifest_records_compare_profile_answer_model() -> None:
+    class TwoProfiles(FakeOracle):
+        async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
+            if search_answer_profile_id == "profile-2":
+                return SimpleNamespace(
+                    id="profile-2",
+                    updated_at=datetime(2026, 10, 1, tzinfo=UTC),
+                    config=SearchAnswerProfileConfig(
+                        knowledge_base_ids=["kb-1"], answer_model_id="model-compare"
+                    ),
+                )
+            return await super().get_search_answer_profile(search_answer_profile_id)
+
+    models = await _models(
+        TwoProfiles(),
+        _model_settings(),
+        _request(compare_search_answer_profile_id="profile-2"),
+    )
+
+    assert models["answer"] == "model-default"
+    assert models["compare"]["answer"] == "model-compare"
+    assert models["compare"]["answer_source"] == "search_answer_profile"
+
+
+@pytest.mark.parametrize("readable", [False, True], ids=["unreadable", "not_found"])
+async def test_manifest_does_not_guess_model_when_profile_is_unavailable(readable: bool) -> None:
+    """プロファイルが読めないときは全体の既定を書かず unverified にする。"""
+
+    class Unavailable(FakeOracle):
+        async def get_search_answer_profile(self, search_answer_profile_id: str) -> object | None:
+            del search_answer_profile_id
+            if readable:
+                return None
+            raise RuntimeError("DB に接続できません")
+
+    settings = _model_settings(
+        oci_enterprise_ai_default_judge_model=ENTERPRISE_AI_JUDGE_SAME_AS_ANSWER
+    )
+
+    models = await _models(Unavailable(), settings)
+
+    assert models["answer"] == "unverified"
+    assert models["answer_source"] == "unverified"
+    assert models["judge"] == "unverified"
+
+
+async def test_manifest_fingerprint_changes_when_candidate_limit_changes() -> None:
+    """候補の上限の違いを、2 つの結果の条件の差として読める（#4141）。"""
+    oracle = FakeOracle()
+
+    async def manifest(limit: int) -> dict[str, Any]:
+        return await build_run_manifest(
+            _request(),
+            settings=get_settings().model_copy(update={"rag_retrieval_candidate_limit": limit}),
+            oracle=oracle,
+            as_of=date(2026, 10, 31),
+            as_of_source="run_start",
+        )
+
+    assert comparison_differences(await manifest(150), await manifest(1000)) == [
+        "settings.rag_config_fingerprint"
+    ]
 
 
 async def test_manifest_marks_unreadable_conditions_unverified() -> None:

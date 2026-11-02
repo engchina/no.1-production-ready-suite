@@ -200,7 +200,6 @@ def test_a_dependency_needs_an_actual_source_quote_but_not_question_word_overlap
             }
         )
 
-    assert _outside_request_plan(item, span, plan("記載のない連携関係。"), [span, link])
     assert _outside_request_plan(item, span, plan(""), [span, link])
     assert not _outside_request_plan(item, span, plan(link["text"]), [span, link])
 
@@ -389,7 +388,6 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
     labels = ids(ctx, CASES["summary"]["question"])
     plan = {
         "request_id": "Q1",
-        "evidence_ids": [labels[correct]],
         "evidence_scope": [
             {"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct"},
             {"evidence_id": labels[other], "target": "独立した設定", "relation": "unrelated"},

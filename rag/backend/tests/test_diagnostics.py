@@ -107,7 +107,7 @@ def test_rag_config_fingerprint_changes_when_context_group_max_chunks_changes() 
         {"rag_neighbor_child_count": 5},
         {"rag_rerank_enabled": False},
         {"rag_screen_linking_enabled": True},
-        {"rag_request_coverage_retrieval_enabled": True},
+        {"rag_request_coverage_retrieval_enabled": False},
     ],
     ids=[
         "query_strategy",
@@ -135,3 +135,126 @@ def test_rag_config_fingerprint_changes_with_vector_index_profile() -> None:
     }
 
     assert len(fingerprints) == 3
+
+
+# fingerprint に入れない RAG の設定（#4141）。検索・回答の結果に効く設定を足すときは fingerprint に
+# 入れ、効かないものだけをここに理由の分類つきで足す。下のテストが分類の漏れを失敗にする。
+_FINGERPRINT_EXEMPT_PREFIXES = (
+    # 取込の工程。成果は manifest の corpus（chunk_set の id と内容の版）に残る。
+    "rag_parser_",
+    "rag_preprocess_",
+    "rag_pdf_",
+    "rag_page_continuation_",
+    "rag_heading_level_inference_",
+    "rag_navigation_summary_",
+    "rag_raptor_",
+    "rag_field_extraction_",
+    "rag_auto_",
+    # 運用・実行の並行数・待ち時間・再試行・cache。結果の定義を変えない。
+    "rag_ai_call_",
+    "rag_llm_",
+    "rag_http_service_",
+    "rag_service_",
+    "rag_embedding_",
+    "rag_rerank_cache_",
+    "rag_evaluation_",
+    "rag_article_catalog_cache_",
+    # 別の機能の管理の設定。回答の入力に入らない。
+    "rag_approved_faq_",
+    "rag_support_guide_import_",
+    "rag_chat_",
+)
+_FINGERPRINT_EXEMPT_FIELDS = frozenset(
+    {
+        # 取込の工程。
+        "rag_canonical_artifact_prefix",
+        "rag_chunk_child_target_chars",
+        "rag_chunk_context_header_enabled",
+        "rag_chunk_delimiter",
+        "rag_chunk_min_chars",
+        "rag_chunk_parent_max_children",
+        "rag_chunk_parent_max_pages",
+        "rag_chunk_parent_target_chars",
+        "rag_chunk_table_child_target_chars",
+        "rag_chunking_strategy",
+        "rag_entity_attribute_columns",
+        "rag_entity_index_enabled",
+        "rag_entity_name_columns",
+        "rag_extraction_artifact_cache_enabled",
+        "rag_extraction_artifact_prefix",
+        "rag_graph_profile",
+        "rag_review_gate_enabled",
+        "rag_section_extraction_enabled",
+        "rag_segment_checkpoint_enabled",
+        "rag_vision_concurrency",
+        "rag_vision_enabled",
+        "rag_xml_tree_json_source_url_template",
+        # 運用・実行の待ち時間と並行数（同じ入力の回答を変える設定ではない）。
+        "rag_answer_record_retention_days",
+        "rag_answer_timeout_seconds",
+        "rag_answer_validation_concurrency",
+        "rag_answer_validation_timeout_seconds",
+        "rag_article_catalog_call_timeout_seconds",
+        "rag_mcp_catalog_article_evidence_limit",
+        "rag_native_index_full_optimize_interval_hours",
+        "rag_rerank_max_documents_per_request",
+        "rag_support_guide_max_published_revisions",
+        # 要求ごとにプロファイルから解決する値。内容の版は manifest の profiles に残る。
+        "rag_answer_contact_override",
+        "rag_domain_keywords",
+        "rag_guide_preview",
+        "rag_language_pack_overrides",
+        "rag_runtime_knowledge",
+        "rag_search_answer_profile_revision",
+        "rag_support_guide",
+        # 言語資源の差のファイルの置き場所。値は path で、内容の版ではない。
+        "rag_language_pack_file",
+    }
+)
+
+
+def _is_fingerprint_exempt(field: str) -> bool:
+    return field in _FINGERPRINT_EXEMPT_FIELDS or field.startswith(_FINGERPRINT_EXEMPT_PREFIXES)
+
+
+def _changed_value(value: object) -> object:
+    """検証を通さない ``model_copy`` に渡す、元と違う値。"""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int | float):
+        return value + 1
+    if isinstance(value, str):
+        return f"{value}-changed"
+    if isinstance(value, dict):
+        return {**value, "changed": 1}
+    if isinstance(value, list):
+        return [*value, "changed"]
+    return "changed"
+
+
+_FINGERPRINTED_FIELDS = sorted(
+    field
+    for field in Settings.model_fields
+    if field.startswith("rag_") and not _is_fingerprint_exempt(field)
+)
+
+
+@pytest.mark.parametrize("field", _FINGERPRINTED_FIELDS, ids=_FINGERPRINTED_FIELDS)
+def test_rag_config_fingerprint_covers_settings_that_affect_results(field: str) -> None:
+    """除外の分類に無い RAG の設定は fingerprint に入れる（入れ忘れを新しい設定でも失敗にする）。"""
+    base = Settings()
+    changed = base.model_copy(update={field: _changed_value(getattr(base, field))})
+
+    assert rag_config_fingerprint(base) != rag_config_fingerprint(changed)
+
+
+def test_rag_config_fingerprint_exempt_list_has_only_existing_settings() -> None:
+    """消えた設定の名前を除外の一覧に残さない。"""
+    assert not _FINGERPRINT_EXEMPT_FIELDS - set(Settings.model_fields)
+
+
+def test_rag_config_fingerprint_changes_when_candidate_limit_changes() -> None:
+    """rerank へ進める基本候補の上限（150 → 1000）で fingerprint が変わる（#4141）。"""
+    assert rag_config_fingerprint(
+        Settings(rag_retrieval_candidate_limit=150)
+    ) != rag_config_fingerprint(Settings(rag_retrieval_candidate_limit=1000))

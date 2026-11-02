@@ -35,6 +35,15 @@ _SCOPE_KEYS = frozenset(
 )
 
 
+def _vector_retrieval_text(retrieval: Mapping[str, Any]) -> str:
+    method = "範囲の行を距離順に読む" if retrieval["method"] == "exact_scope" else "原生索引の近似検索"
+    counts = (
+        f"範囲のベクトル {retrieval['scope_vector_chunks']} 件（距離順に読む上限 {retrieval['exact_max_chunks']} 件）/ "
+        f"要求 {retrieval['requested']} 件 / 範囲から返せる数 {retrieval['expected']} 件 / 取得 {retrieval['returned']} 件"
+    )
+    return f"{method} / {counts}" + (" / 候補不足" if retrieval["shortage"] else "")
+
+
 def search_diagnostics(
     stage: str,
     *,
@@ -45,10 +54,13 @@ def search_diagnostics(
 ) -> dict[str, Any]:
     """順位は DB の返却順。各分岐は実行済みの入力、原始件数、採用した結果だけを渡す。"""
     vector = stage == VECTOR_SEARCH_STAGE
+    exact_scope = any((branch.get("vector_retrieval") or {}).get("method") == "exact_scope" for branch in branches)
     fields = [
         {
             "label": "目的",
-            "value": "原質問の埋め込みと本文を使い、Oracle の1回の呼び出しでベクトル・全文検索と WRRF の融合を行います。"
+            "value": "原質問の埋め込みと本文を使い、範囲の行の距離順と Oracle の全文検索を読み、順位で融合します。"
+            if stage == HYBRID_SEARCH_STAGE and exact_scope
+            else "原質問の埋め込みと本文を使い、Oracle の1回の呼び出しでベクトル・全文検索と WRRF の融合を行います。"
             if stage == HYBRID_SEARCH_STAGE
             else "検索文の埋め込みを使い、意味の近い文書の箇所を探します。"
             if vector
@@ -74,6 +86,16 @@ def search_diagnostics(
         if not vector and not branch.get("native"):
             input_value += " / 検索語: " + (" / ".join(oracle_expression_terms(str(branch.get("expression") or ""))) or "なし")
         fields.append({"label": f"検索 {index} の入力", "value": input_value})
+        retrieval = branch.get("vector_retrieval")
+        if isinstance(retrieval, Mapping) and retrieval:
+            fields.append({"label": f"ベクトルの読み方 {index}", "value": _vector_retrieval_text(retrieval)})
+        if int(branch.get("filter_batches", 1)) > 1:
+            fields.append(
+                {
+                    "label": f"検索範囲の分割 {index}",
+                    "value": f"範囲の条件が Oracle の上限を超えるので {branch['filter_batches']} 回に分けて検索し、点数順に合わせました。",
+                }
+            )
         threshold = branch.get("vector_threshold")
         if isinstance(threshold, Mapping) and threshold:
             fields.append({"label": "コサイン類似度の下限", "value": str(threshold["min_similarity"])})
@@ -112,6 +134,10 @@ def search_diagnostics(
                         f"Oracle 原始 WRRF: {row['native_wrrf_score']} / "
                         f"有効ベクトル寄与: {row.get('vector_contribution', 0)} / "
                         f"有効全文寄与: {row.get('keyword_contribution', 0)}"
+                    )
+                elif "vector_contribution" in row:
+                    branch_lines.append(
+                        f"有効ベクトル寄与: {row.get('vector_contribution') or 0} / 有効全文寄与: {row.get('keyword_contribution') or 0}"
                     )
             if "cosine_similarity" in row:
                 branch_lines.append(f"コサイン類似度: {row['cosine_similarity'] if row['cosine_similarity'] is not None else '未取得'}")

@@ -2570,3 +2570,180 @@ async def test_equally_matching_documents_do_not_select_first_target() -> None:
     )
     assert [child.chunk_uid for child in result.child_chunks] == [anchor.chunk_id]
     assert oracle.reference_calls == []
+
+
+async def test_screen_sections_merge_overflowed_paths_in_reading_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """超えたパスの行があるときだけ読み直し、文書の並びと読み順を保ってまとめる(#4144)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    long_path = "長" * 2000
+    calls: list[str] = []
+
+    async def fake_fetch_all(statement: str, binds: Any = None) -> list[dict[str, Any]]:
+        calls.append(statement)
+        if len(calls) == 2:
+            assert "RETURNING CLOB" in statement
+            return [
+                {"file_name": "z.pdf", "section_path": long_path, "chunk_index": 4},
+                {"file_name": "z.pdf", "section_path": long_path, "chunk_index": 2},
+                # 長い配列は JSON_VALUE が NULL を返す。節にしない。
+                {"file_name": "z.pdf", "section_path": None, "chunk_index": 9},
+            ]
+        return [
+            {
+                "file_name": "z.pdf",
+                "section_path": "第1章",
+                "chunk_count": 1,
+                "first_chunk_index": 1,
+                "path_overflow": 0,
+            },
+            {
+                "file_name": "z.pdf",
+                "section_path": "第3章",
+                "chunk_count": 1,
+                "first_chunk_index": 5,
+                "path_overflow": 0,
+            },
+            {
+                "file_name": "z.pdf",
+                "section_path": None,
+                "chunk_count": 3,
+                "first_chunk_index": 2,
+                "path_overflow": 1,
+            },
+            {
+                "file_name": "a.pdf",
+                "section_path": "第1章",
+                "chunk_count": 1,
+                "first_chunk_index": 0,
+                "path_overflow": 0,
+            },
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.retrieval_screen_sections({"knowledge_base_id": "kb-1"}) == [
+        ("z.pdf", "第1章", 1),
+        ("z.pdf", long_path, 2),
+        ("z.pdf", "第3章", 1),
+        ("a.pdf", "第1章", 1),
+    ]
+    assert len(calls) == 2
+
+
+async def test_catalog_queries_do_not_grow_without_overflowed_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """超えたパスが無ければ、目録も文書名の照合も問い合わせは 1 回のまま(#4144)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[str] = []
+
+    async def fake_fetch_all(statement: str, binds: Any = None) -> list[dict[str, Any]]:
+        calls.append(statement)
+        return [
+            {
+                "document_id": "doc-1",
+                "file_name": "合成資料.pdf",
+                "section_path": "第1章",
+                "chunk_count": 1,
+                "first_chunk_index": 0,
+                "path_overflow": 0,
+            }
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+    filters = {"knowledge_base_id": "kb-1"}
+
+    assert await client.retrieval_screen_sections(filters) == [("合成資料.pdf", "第1章", 1)]
+    assert await client.retrieval_reference_documents(filters, title="合成資料", limit=5)
+    assert len(calls) == 2
+    assert not any("RETURNING CLOB" in statement for statement in calls)
+
+
+async def test_reference_documents_match_title_in_overflowed_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """超えたパスの先頭の見出しにだけあるタイトルでも、参照先の文書の候補になる(#4144)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    calls: list[str] = []
+
+    async def fake_fetch_all(statement: str, binds: Any = None) -> list[dict[str, Any]]:
+        calls.append(statement)
+        if len(calls) == 2:
+            assert "RETURNING CLOB" in statement
+            return [
+                {
+                    "document_id": "doc-1",
+                    "file_name": "opaque.pdf",
+                    "section_path": "合成タイトル > " + "長" * 2000,
+                    "first_chunk_index": 3,
+                }
+            ]
+        return [
+            {
+                "document_id": "doc-1",
+                "file_name": "opaque.pdf",
+                "section_path": None,
+                "first_chunk_index": 3,
+                "path_overflow": 1,
+            }
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.retrieval_reference_documents(
+        {"knowledge_base_id": "kb-1"}, title="合成タイトル", limit=5
+    ) == [("doc-1", "opaque.pdf", ("合成タイトル",))]
+
+
+@pytest.mark.parametrize(
+    ("section_path", "exact_lob", "prefix_lob_only"),
+    [
+        pytest.param("第3章 承認", False, False, id="short"),
+        # 「 > 」を足した接頭辞だけが CLOB の bind になる(3997 バイト)。
+        pytest.param("合" * 1332 + "a", False, True, id="prefix_is_large"),
+        pytest.param("合" * 1333 + "a", True, True, id="path_is_large"),
+    ],
+)
+def test_reference_section_sql_compares_large_binds_as_lob(
+    section_path: str, exact_lob: bool, prefix_lob_only: bool
+) -> None:
+    """CLOB の bind を ``=`` で比べない(ORA-22848)。短ければ通常の行の比較は従来のまま(#4144)。"""
+    from app.clients.oracle import _reference_section_sql
+
+    sql = _reference_section_sql(section_path, f"{section_path} > ")
+
+    assert ("= :reference_section_path" not in sql) is exact_lob
+    assert ("COMPARE(" in sql and ":reference_section_path) = 0" in sql) is exact_lob
+    assert ("= :reference_section_prefix" not in sql) is prefix_lob_only
+    # 接頭辞は超えた行のために、どの長さでも CLOB でも比べる。
+    assert ":reference_section_prefix, :reference_prefix_lob_length) = 0" in sql
+
+
+async def test_reference_chunks_count_lob_prefix_in_utf16_units(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLOB の接頭辞の長さは UTF-16 の単位(4 バイト文字は 2)、VARCHAR2 は文字数(#4144)。"""
+    from app.clients.oracle import OracleClient
+
+    client = OracleClient(settings=Settings())
+    seen: dict[str, Any] = {}
+
+    async def fake_fetch_all(statement: str, binds: Any = None) -> list[dict[str, Any]]:
+        seen.update(binds)
+        return []
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+    await client.retrieval_reference_chunks(
+        {"knowledge_base_id": "kb-1"}, document_id="doc-1", section_path="\U00020bb7章", limit=1
+    )
+
+    assert seen["reference_prefix_length"] == len("\U00020bb7章 > ")
+    assert seen["reference_prefix_lob_length"] == len("\U00020bb7章 > ") + 1

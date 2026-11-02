@@ -207,12 +207,20 @@ def request_hints(target: RequestTarget, runtime_knowledge: Any, tokenize: Calla
 
 
 def targeted_queries(
-    target: RequestTarget, hints: Sequence[str], *, unmatched: Sequence[str] = (), searched: Iterable[str] = ()
+    target: RequestTarget,
+    hints: Sequence[str],
+    *,
+    unmatched: Sequence[str] = (),
+    searched: Iterable[str] = (),
+    expansions: Sequence[str] = (),
 ) -> tuple[str, ...]:
     """欠けた要求 1 件の検索文。要求の文（小問は前置き＋小問の文）を主軸にし、手がかりがあれば手がかり付きの文を、
-    根拠に現れなかった語（``unmatched``）があればその語だけの文を足す。最初の検索の文（``searched``）と同じ文は除く。"""
+    根拠に現れなかった語（``unmatched``）があればその語だけの文を足す。最初の検索の文（``searched``）と同じ文は除く。
+
+    ``expansions`` は同じ文しか作れない要求のために呼び出し元が作った検索文（`run_targeted_retrievals` の ``expand``）。
+    """
     text = target.query or target.text
-    candidates = (text, " ".join([text, *hints]) if hints else "", " ".join(unmatched))
+    candidates = (text, " ".join([text, *hints]) if hints else "", " ".join(unmatched), *expansions)
     done = {_query_key(query) for query in searched}
     queries: dict[str, str] = {}
     for query in candidates:
@@ -284,11 +292,13 @@ def run_targeted_retrievals(
     tokenize: Callable[[str], Sequence[str]],
     searched_queries: Sequence[str] = (),
     clock: Callable[[], float] = monotonic,
+    expand: Callable[[RequestTarget], Sequence[str]] | None = None,
 ) -> tuple[list[TargetedRetrieval], str]:
     """計画（`plan_targeted_retrievals`）の要求ごとに 1 回だけ検索する。戻り値は (結果, 打ち切りの理由)。
 
     最初の検索の文（``searched_queries``）と違う検索文を作れない要求は検索しない。どの要求も作れなければ
-    打ち切りの理由を ``same_query`` にする（#2810）。
+    打ち切りの理由を ``same_query`` にする（#2810）。``expand`` があれば、作れなかった要求だけに 1 回呼び、返った
+    文で検索する（プログラムで作れる検索文を先に使う。#4114）。
 
     retrieve(request_text, queries) は AnswerContext（evidence_tree と expansion_records を持つ）を返す。
     検索の失敗は要求ごとに記録し、回答は既存の根拠で続ける（失敗と「根拠が無い」を区別する。handoff §9 の 5）。
@@ -320,8 +330,11 @@ def run_targeted_retrievals(
             if previous is not None:
                 results.append(replace(previous, request_id=target.id, reused=True, chunk_cap=planned.chunk_cap))
                 continue
-            same_query += 1
-            continue
+            if expand is not None:
+                queries = targeted_queries(target, (), searched=searched, expansions=tuple(expand(target)))
+            if not queries:
+                same_query += 1
+                continue
         searched.extend(queries)
         began = clock()
         try:

@@ -156,7 +156,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 | `RAG_ANSWER_VALIDATION_MAX_INPUT_BYTES` | `96000` | 回答の最終の検証（`rag_validate_answer`）でモデルに渡す入力の上限（UTF-8 の bytes。指示・質問・回答・根拠を含む。16,000〜1,000,000）。根拠は渡された順に収まるだけ使い、収まらない根拠は検証に使わない（`evidence_truncated`）。検証のモデルの入力の上限より小さくする（下の「最終の検証の質問の事実と根拠の予算」）。`backend/.env` だけで変える |
 | `RAG_ANSWER_VALIDATION_TIMEOUT_SECONDS` | `540` | 回答の最終の検証の通しの上限（秒。600 以下。#2700）。根拠の読み直しから監査の LLM の呼び出しまでを含み、LLM 1 回の timeout・再試行・停滞の送り直しをこの残り時間に縮める。上限までに監査が返らなかった段落は `unassessed`（`status=partial`。どの段落も返らなければ `timed_out`）にして返す（下の「最終の検証の時間の上限と段落の組」）。Agent の接続 `rag` の待ち時間（`AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`、既定 630 秒）より短くする。`backend/.env` だけで変える |
 | `RAG_ANSWER_VALIDATION_BATCH_PASSAGES` / `RAG_ANSWER_VALIDATION_CONCURRENCY` | `5` / `4` | 回答の最終の検証で、監査の LLM の 1 回の呼び出しに渡す回答の段落の数（1〜128）と、同時に監査する組の数（1〜16。#2700）。`backend/.env` だけで変える |
-| `RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` | `false` | 要求ごとの根拠の確認と、根拠の無い要求だけの再検索（#1279、handoff §8.3 / §9）。回答の生成の前に、質問契約の要求単位（`task_contract.request_units`。背景の文は除く）ごとに、回答の材料（親と子の本文）が要求の語（全文検索と同じ分かち書き）をどれだけ含むかを決定的に判定する（`rag_engine/retrieval/request_coverage.py`。LLM は呼ばない）。最良の根拠が語の 6 割以上を含めば「根拠あり」、3 割台なら「一部」、それ未満なら「なし」。「なし」と「一部」の要求ごとに（「なし」を先に）、その要求の文（＋要求の語を含む用語の別名・業務ガイドの検索の手がかり）と、「一部」の要求では根拠に現れなかった語だけの文で 1 回ずつ検索し（最初の検索と同じ検索文は使わない。1 要求の質問は、違う検索文を作れるときだけ検索し、作れなければ `same_query` として省く。#2810）（embedding・hybrid 検索・rerank。文書の選択と画面目録は使わない）、回答の材料に無い根拠を既存の根拠の後ろに足す（既存の根拠は減らさない）。工程の名前は「要求ごとの根拠の確認」、記録は `diagnostics.answer.request_coverage`（要求ごとの状態・再検索の前後・検索文・足した根拠・時間）。取込・検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、全体設定だけで決め、検索・回答プロファイルでは上書きしない |
+| `RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` | `true` | 根拠の無い要求の探し直し（#1279・#2730・#3675・#4114）。生成が kind=gap で不足を明示したとき、または実行済みの監査が材料の不足と判定したときだけ動き、不足の無い回答では検索も LLM も増えない。要求の文（＋要求の語を含む用語の別名）で違う検索文を作れればそれで検索し、作れない要求（最初の検索と同じ文になる要求）だけ、既存の質問の拡張で仮説文を 1 回作る（LLM 1 回。`rag_engine/retrieval/request_coverage.py::run_targeted_retrievals`）。仮説文は意味検索と rerank の比較にだけ使い、根拠にも回答の入力にもしない。rerank の基準の文は要求の原文で、関連度は原文と検索文の最高値（`question_score` に原文の点数を残す）。回答の材料に無い親を既存の根拠の後ろに足し（既存の根拠は減らさない）、新しい根拠があれば 1 回だけ作り直す。工程の名前は「未回答の要求の探し直し」、記録は `diagnostics.answer.request_coverage.after_generation`（検索文・足した根拠・時間・`llm_calls`）と round の `request_recovery`。取込・検索・回答設定 > 検索方法「回答の検索と生成」で変更でき、全体設定だけで決め、検索・回答プロファイルでは上書きしない |
 | `RAG_REQUEST_COVERAGE_MAX_QUERIES` | `2` | 根拠の無い要求の再検索の回数の上限（1 要求 1 回、0〜5） |
 | `RAG_REQUEST_COVERAGE_MAX_CHUNKS` | `4` | 再検索で回答の材料に足す根拠（親 chunk）の数の上限（0〜12）。要求ごとに順番に 1 件ずつ選ぶ |
 | `RAG_REQUEST_COVERAGE_DEADLINE_SECONDS` | `10` | 再検索の期限（秒、0〜60）。過ぎたら次の要求の検索を始めない（実行中の 1 回は止めない） |
@@ -667,12 +667,38 @@ DB内の外部AI資格情報や全庫のembedding再生成は不要。検索用J
 配信中の版を検索前のID制限に使い、結果取得時にも同じSQL条件を適用する。候補上限とrerankは独立。
 原生索引が未作成・無効の場合は準備不足エラーとし、従来方式へ暗黙に切り替えない。
 各検索の失敗と0件は区別し、片方の検索が失敗しても既存の縮退規則を維持する。
+許可された chunk が `RAG_NATIVE_VECTOR_EXACT_MAX_CHUNKS` 以下なら、ベクトルの分岐は下の「ベクトルの分岐の読み方」のとおり範囲の行を距離順に読み、`SEARCH` は全文の分岐だけに使う。
 
 Traceは実際に渡した検索文と方式、範囲、候補・RRFを記録する。原生方式ではSudachiを呼ばず、
 Oracle内部で生成した語・検索式はAPIが返さないため表示できない旨を示す。
 原生のvector scoreはコサイン距離と同一視せず、確率や回答の正確さとして表示しない。
 原生方式による順位変化はrerankの入力を変え得るが、品質向上の証明ではない。
 
+
+### ベクトルの分岐の読み方（#4134・#4097）
+
+`DBMS_HYBRID_VECTOR.SEARCH` のベクトルの分岐は、`DBMS_HYBRID_VECTOR.GET_SQL` で確かめると、`$VR` と基表を `doc_rowid = ROWID` で結合した SQL を `FETCH APPROX FIRST k ROWS ONLY WITH TARGET ACCURACY n` で読み、その外で `$K` と未同期の DML により行を除く。そのため範囲を付けると次の 2 つで k 件より少なくなる。どちらも同じ合成の索引で再現した。
+
+- **問いに近い centroid に範囲の行が無い（#4134）。** Oracle の[IVF の計画](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/optimizer-plans-ivf-vector-indexes.html)は、選んだ centroid の partition の行だけに範囲の条件を掛ける。範囲の行がそこに無ければ 0 件になる。`accuracy=100` は partition を増やさない。`index_probes` は `accuracy` が 0 のときだけ SQL に反映され、partition の大半を読むまで件数が戻らない（合成の 82 centroid で `probes 30` は 0 件、`probes 64` で 50 件）。`FETCH FIRST n TO m ROWS` の[打ち切り可能な反復](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/terminable-iteration-ivf.html)は件数を戻すが、`SEARCH` のパラメータには無い。
+- **削除の残骸が上位 k 件の枠を使う（#4097）。** 文書の削除で `$VR` の行は整理まで残る（lazy delete）。空いた ROWID を新しい行が使うと、古い行が基表との結合と範囲の条件を通り、上位 k 件に入ってから `$K` で除かれる。件数は残骸の割合に応じて減る。
+
+**対処:** 許可された chunk が `RAG_NATIVE_VECTOR_EXACT_MAX_CHUNKS`（既定 50,000）以下なら、基表の範囲の行を `FETCH EXACT` で距離順に読む。`$VR` を読まないのでどちらの影響も受けない。範囲は `SEARCH` の `filter_by` と同じ解決済みの範囲を使い、結果の行に同じ権限の条件を掛け直す。hybrid は全文の `TEXT_ONLY` の `SEARCH` と距離順の結果を chunk ごとに合わせ、順位から融合の点数を一度だけ計算する。範囲がこれを超えると原生索引で読み、不足（範囲に候補があるのに k 件未満）は処理の経過の「ベクトルの読み方」と warning のログに残す。退避の再検索はしない。
+
+合成の表（1536 次元・`native_scope_id` の索引あり）で距離順に読む時間の中央値（上限 50 件。別の埋め込みを 5 回）: 1,000 行 3 ms、5,000 行 21 ms、20,000 行 83 ms、50,000 行 210 ms。同じ規模の `SEARCH`（256 次元・20,000 行）は 85〜150 ms で、IVF の計画でも `$VR` を全件読む。実データの時間は環境で変わるので、処理の経過と合わせて見直す。
+
+### 範囲の条件の長さ（#4149）
+
+`DBMS_HYBRID_VECTOR.SEARCH` は `filter_by` を SQL の条件の文字列へ展開し（`DBMS_HYBRID_VECTOR.GET_SQL` で確かめられる）、展開後が約 4,000 バイトを超えると `DRG-50857` で失敗する。文書に記載は無く、合成の索引で測った値である。決まるのは引数の数ではなくバイト数で（`TO_NUMBER('n'), ` の桁、文字列の長さ、マルチバイト）、検索文の長さでは動かない。全文で最大 3,991 バイトまで成功し、ベクトルと hybrid は 3 桁の値で 4 件少ないところで失敗する。そのため上限を `NATIVE_FILTER_MAX_BYTES`（3,600 バイト）にしている。
+
+`native_filter_batches` は範囲を次の順に扱う。どの形でも許す行は元の範囲と同じで、権限の条件は各回の結果に同じように掛ける。
+
+1. 収まる範囲はそのまま渡す。
+2. 超えたら連続する `native_scope_id` を `BETWEEN` にまとめる（短くなるときだけ）。合成の範囲で `IN` と結果の順序は同じだった。
+3. それでも超えたら条件を分けて `SEARCH` を複数回呼び、結果を合わせる（同時に読むのは `NATIVE_FILTER_CONCURRENCY` 本まで）。`NATIVE_FILTER_MAX_BATCHES`（32 回）を超える範囲は失敗にする。範囲を黙って削らない。1 回でも失敗したら検索の失敗にする。
+
+合わせ方（`_merge_native_filter_batches`）: 点数は問いと行で決まり `filter_by` に依らないので、各回の上位 k 件を点数で並べ直せば範囲全体の上位 k 件になる。経路ごとに k 件で切り、順位を付け直す。全文は `rank()` と同じく同点を同じ順位にし、ベクトルは丸めた点数の同点をコサイン類似度で分ける。Oracle の WRRF の点数は回ごとの値で比べられないので、分けたときは距離順の hybrid と同じく付けず、順位から融合の点数を一度だけ計算する。分けた回数は処理の経過の「検索範囲の分割」とログ（`native_search_filter_batches`）に残す。
+
+合成の索引（20,000 行・2,000 集合）で、全文の点数の並びは範囲で絞った真の順位と一致した（同点の中の行は入れ替わる）。時間は全文で 1 回 30〜60 ms、飛び飛びの 1,000 集合は 6 回の直列で 230〜490 ms、hybrid は 650〜900 ms。選ばなかった案: 結果で範囲を絞る方法は上位の枠を範囲の外の行が使うので件数が減る（300 集合で 50 件のうち 10〜32 件）。`CONTAINS` を直接読む方法は速いが、`search_text` から作る式を API が返さず同じ命中にできない（語を `ACCUM` にした式は命中数も点数も違った）。
 
 ### RRFの既定比率
 

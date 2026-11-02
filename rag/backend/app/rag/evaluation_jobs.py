@@ -7,7 +7,7 @@ golden set の評価（`/run`）は、ケースごとに回答生成（最長
 実行と保存:
 - job は投入を受けた backend のプロセスの中で `asyncio` の task として動く（取込 job のような
   別の worker には渡さない）。評価は request の文脈（利用者・対象範囲。監査にも使う）で検索する
-  ため、投入した request の文脈をそのまま使う。query の本文は保存しない。
+  ため、投入した request の文脈をそのまま使う。質問・回答・根拠の本文は保存しない（#4107）。
 - 状態は Oracle の `rag_evaluation_jobs` に保存する（Gunicorn の複数の worker のどれに状態の取得・
   取り消しが届いても同じ結果にするため）。Oracle の接続設定が無い開発環境では、プロセスの中の
   memory に保存する。
@@ -22,9 +22,9 @@ golden set の評価（`/run`）は、ケースごとに回答生成（最長
   `evaluation_job_time_limit_seconds`）。評価はケースを 1 件ずつ回答するため、固定の上限では
   推論型のモデル（1 回の回答が数分）の評価が問の数に応じて打ち切られる。上限に達したら、
   実行中のケースを打ち切り、残りのケースは実行せずに失敗として記録して結果を返す（#383 と同じ）。
-- 結果は JSON 型の列に収めて保存する（`app.rag.evaluation_result_storage`）。保存に失敗したら、
-  heartbeat を続けたまま回答の診断を外して書き直し、それでも書けなければ理由を job の失敗として
-  残す（#4103）。全ケースが終わった評価を、heartbeat の途絶（プロセスの停止）に見せない。
+- 結果は回答の診断を外して保存する（`app.rag.evaluation_result_storage`。#4107）。保存に失敗したら、
+  heartbeat を続けたまま書き直し、それでも書けなければ理由を job の失敗として残す（#4103）。
+  全ケースが終わった評価を、heartbeat の途絶（プロセスの停止）に見せない。
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from pr_backend_core.bounded_calls import BoundedCallAborted
 from app.clients.oracle import OracleClient, oracle_error_log_fields
 from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings
 from app.rag.evaluation import EvaluationProgressCallback
-from app.rag.evaluation_result_storage import fit_evaluation_result, without_answer_diagnostics
+from app.rag.evaluation_result_storage import without_answer_diagnostics
 from app.rag.request_context import current_audit_request_context
 from app.schemas.evaluation import (
     EvaluationCase,
@@ -445,12 +445,11 @@ class OracleEvaluationJobStore:
         error_message: str | None,
         evaluation_run_id: str | None,
     ) -> bool:
-        fitted = await asyncio.to_thread(fit_evaluation_result, result) if result else result
         return await self._client.finish_evaluation_job(
             job_id,
             lease_owner=lease_owner,
             status=status,
-            result=fitted,
+            result=result,
             error_message=error_message,
             evaluation_run_id=evaluation_run_id,
         )
@@ -806,16 +805,14 @@ class EvaluationJobService:
     ) -> None:
         """job を閉じる。書き終わるまで heartbeat は動いている（`_run` の finally で止める）。
 
-        1 回目は結果をそのまま書く。失敗したら、大きさや内容が原因でも通るよう回答の診断を外し、
-        間隔を置いて書き直す（DB の一時的な障害の間も待つ）。
+        結果は回答の診断を外して書く（#4107）。失敗したら、間隔を置いて書き直す（DB の一時的な
+        障害の間も待つ）。
         """
+        payload = without_answer_diagnostics(result) if result is not None else None
         last_error: Exception | None = None
         for attempt, delay in enumerate((0.0, *self._finish_retry_seconds), start=1):
             if delay > 0:
                 await asyncio.sleep(delay)
-            payload = (
-                without_answer_diagnostics(result) if attempt > 1 and result is not None else result
-            )
             try:
                 written = await store.finish(
                     job_id,

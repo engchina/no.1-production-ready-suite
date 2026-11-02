@@ -798,6 +798,61 @@ def test_macro_enabled_workbook_is_read_without_macros() -> None:
     assert loaded["sheets"][0]["blocks"][0]["values"] == {"名前": "行 A", "値": "1"}
 
 
+def _with_main_type(data: bytes, main_type: bytes, *, vba: bool) -> bytes:
+    """.xlsx の本体の content type を変えた合成の package(テンプレートの形)を作る。"""
+    import zipfile
+
+    source = zipfile.ZipFile(io.BytesIO(data))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            if info.filename == "[Content_Types].xml":
+                payload = payload.replace(
+                    b"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+                    main_type,
+                )
+                assert main_type in payload
+            target.writestr(info, payload)
+        if vba:
+            target.writestr("xl/vbaProject.bin", b"synthetic-macro")
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("extension", "content_type", "main_type", "vba"),
+    [
+        (
+            ".xltx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+            b"application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+            False,
+        ),
+        (
+            ".xltm",
+            "application/vnd.ms-excel.template.macroEnabled.12",
+            b"application/vnd.ms-excel.template.macroEnabled.main+xml",
+            True,
+        ),
+    ],
+)
+def test_excel_template_is_read_without_macros(
+    extension: str, content_type: str, main_type: bytes, vba: bool
+) -> None:
+    # テンプレートも .xlsx と同じく読み、マクロは読まない・実行しない（#4054）。
+    data = _with_main_type(_xlsx_bytes({"一覧": [["名前", "値"], ["行 A", 1]]}), main_type, vba=vba)
+    outcome = convert(
+        data,
+        content_type,
+        "excel_to_jsonl",
+        SimpleNamespace(extension=extension),  # type: ignore[arg-type]
+    )
+    assert outcome.converted is True
+    assert b"synthetic-macro" not in (outcome.derived_bytes or b"")
+    loaded = _loaded(outcome.derived_bytes)
+    assert loaded["sheets"][0]["blocks"][0]["values"] == {"名前": "行 A", "値": "1"}
+
+
 def test_note_rows_below_a_table_become_note_records_not_a_new_table() -> None:
     """表の下の注記の行を別の表・表頭にせず、注記の記録にする（#3566）。データは合成。
 

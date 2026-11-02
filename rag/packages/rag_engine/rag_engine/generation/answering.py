@@ -280,6 +280,7 @@ from rag_engine.retrieval.request_coverage import (
     COVERAGE_SCHEMA_VERSION,
     CoverageBudget,
     CoverageUsage,
+    RequestTarget,
     TargetedRetrieval,
     coverage_counts,
     coverage_targets,
@@ -2972,16 +2973,8 @@ def synthesize_grounded_answer(
                 feedback.pop("unanswered_requests")
             if set(feedback) == {"supported_items"}:
                 feedback = {}
-        missing_texts = {row["request_id"]: str(row.get("missing_content") or "") for row in best[0].unanswered}
-        for item in best[0].draft.items:
-            if item.kind == "gap" and item.request_id:
-                missing_texts.setdefault(item.request_id, item.text)
-                if not missing_texts[item.request_id]:
-                    missing_texts[item.request_id] = item.text
         retrieval_requests = [
-            {"request_id": row["request_id"], "status": row["status"], "search_text": missing_texts.get(row["request_id"], "")}
-            for row in recovery_plan
-            if row["action"] == "retrieval"
+            {"request_id": row["request_id"], "status": row["status"]} for row in recovery_plan if row["action"] == "retrieval"
         ]
         if recover_requests is not None and retrieval_requests and not retrieval_attempted and number < max_rounds - 1:
             retrieval_attempted = True
@@ -3738,10 +3731,13 @@ def _cover_missing_requests(
     clock: Callable[[], float] = monotonic,
     unanswered_requests: Sequence[Mapping[str, Any]] | None = None,
     usage: CoverageUsage | None = None,
+    answer_llm_provider: str | None = None,
 ) -> tuple[AnswerContext, dict[str, Any]]:
     """生成・実行済み監査が示した不足を、元の要求 ID と原文に解決して予算内で探し直す。
 
     原資料の文字上の一致は判定しない。補助検索は既存の権限・範囲・予算を維持し、既存根拠を追い出さない。
+    違う検索文をプログラムで作れない要求は、既存の質問の拡張（仮説文）で資料の書き方に寄せる（#4114）。仮説文は
+    検索と rerank の比較にだけ使い、根拠にも回答の入力にもしない。rerank の基準の文は要求の原文のまま。
     """
     tokenize = _coverage_tokenizer(settings)
     targets = coverage_targets(question, tokenize)
@@ -3762,14 +3758,6 @@ def _cover_missing_requests(
             ]
             if statuses:
                 row["answer_status"] = "missing" if "missing" in statuses else "partial"
-        # 生成・監査が示す不足内容は補助の検索文にだけ使う。要求の原文・明示範囲・権限は変えない。
-        searches = {
-            str(entry.get("request_id")): str(entry.get("search_text") or "").strip()
-            for entry in unanswered_requests
-            if str(entry.get("request_id")) in known_ids
-        }
-        targets = [replace(target, query=searches.get(target.id) or target.text) for target in targets]
-
     budget = _request_coverage_budget(settings)
     if usage is not None:
         budget = usage.remaining(budget)
@@ -3796,9 +3784,20 @@ def _cover_missing_requests(
 
     # 欠けた要求の検索では、文書の選択（後回し）と画面目録（LLM を呼ぶ）を使わない。
     search_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False)
-    per_query = max(1, min(int(top_k), max(budget.max_chunks, budget.chunks_per_subquestion)))
+    # 上位が読取済みの親だけでも新しい親を選べるよう、読取済みの数だけ広げる（足す数は下の select_new_parents の上限のまま）。
+    per_query = max(1, min(int(top_k), max(budget.max_chunks, budget.chunks_per_subquestion) + len(context.records)))
+    hypotheses: dict[str, str] = {}
+
+    def expand(target: RequestTarget) -> Sequence[str]:
+        trace["llm_calls"] += 1
+        generated = build_query_expansion(
+            target.query or target.text, HYDE_STRATEGY, settings, answer_llm_provider=answer_llm_provider
+        ).generated_queries
+        hypotheses.update({_dedupe_query_key(query): query for query in generated})
+        return generated
 
     def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
+        generated = tuple(query for query in queries if _dedupe_query_key(query) in hypotheses)
         return build_adb_hybrid_answer_context(
             text,
             run_id,
@@ -3813,6 +3812,8 @@ def _cover_missing_requests(
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
             runtime_knowledge=runtime_knowledge,
+            vector_only_queries=generated,
+            trusted_queries=generated,
         )
 
     started = clock()
@@ -3825,6 +3826,7 @@ def _cover_missing_requests(
         tokenize=tokenize,
         searched_queries=(*searched_queries, *(usage.searched_queries if usage else ())),
         clock=clock,
+        expand=expand if unanswered_requests is not None else None,
     )
     elapsed = max(0.0, clock() - started)
     if usage is not None:
@@ -6190,6 +6192,7 @@ def answer_question_result(
                 usage=coverage_usage,
                 unanswered_requests=unanswered,
                 searched_queries=coverage_usage.searched_queries if crag_attempts else retrieval_queries,
+                answer_llm_provider=answer_llm_provider,
             )
             request_coverage.setdefault("after_generation", []).append(trace)
             if trace.get("re_retrieval", {}).get("applied"):

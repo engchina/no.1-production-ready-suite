@@ -143,7 +143,7 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
 | PDF（`.pdf`）・画像（`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif`） | 解析できる | そのまま「処理を開始」 |
 | Word・PowerPoint（`.docx` / `.pptx`） | 解析できない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから Docling で解析）か、「文書解析」で **Unstructured** を選ぶ |
 | Excel（`.xlsx`） | 解析できない | 処理レシピの「ファイル準備」で **Excel→JSONL** を選ぶ（文書解析は構造化レコード JSONL）か、「文書解析」で **Unstructured** を選ぶ。**Office→PDF は Excel を変換しない**（#2470） |
-| 旧形式・マクロ付きの Office（`.doc` / `.ppt` / `.xls`・`.docm` / `.pptm` / `.xlsm`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
+| 旧形式・マクロ付き・テンプレートの Office（`.doc` / `.ppt` / `.xls`・`.docm` / `.pptm` / `.xlsm`・`.dotx` / `.dotm` / `.potx` / `.potm` / `.xltx` / `.xltm`。テンプレートは拡張子・MIME type と原本の package が一致しないと保存しない。#4054） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で変換を選ぶ（Word・PowerPoint は **Office→PDF**、Word は **Word→JSONL** も可、Excel は **Excel→JSONL**）。マクロは実行しない（LibreOffice は変換ごとのプロファイルでマクロを無効にし、Excel→JSONL は VBA を読まない）。変換を選ばずに始めると、ファイル準備を飛ばして案内を出す（#2470） |
 | ODT・RTF（`.odt` / `.rtf`） | 原本のままでは解析しない | 処理レシピの「ファイル準備」で **Office→PDF** を選ぶ（PDF にしてから解析する）。Unstructured は原本を読まない（pandoc を入れないため。#3351） |
 | テキスト・Markdown・reStructuredText・Org・CSV / TSV・JSON / JSONL・XML・HTML（`.txt` / `.md` / `.rst` / `.org` / `.csv` / `.tsv` / `.json` / `.jsonl` / `.xml` / `.html` など） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ（`.rst` / `.org` はプレーンテキストとして読む。#3351） |
 | メール（`.eml`） | 解析できない | 処理レシピの「文書解析」で **Unstructured** を選ぶ |
@@ -416,7 +416,7 @@ port 18017、URL の設定 `RAG_PREPROCESS_WORD_TO_JSONL_SERVICE_URL`）を足�
 1. 本番（OCI Compute）: `sudo platform/deploy/suite-update.sh` で再配備する。`init_script.sh` が、以前の stack の `rag_services.txt` に
    無くても必ず配備するサービスとして足し、`libreoffice-core`・`libreoffice-writer` を入れて unit を作って起動する。
 2. 開発（このマシンの worktree・主の checkout）: `scripts/rag-services.sh install preprocess-word-to-jsonl`（LibreOffice が無ければ
-   注意を出す。.docx・.docm は LibreOffice なしで読める）。backend の `.env` は既定（`127.0.0.1:18017`）なら書かなくてよい。
+   注意を出す。.docx・.docm・.dotx・.dotm は LibreOffice なしで読める）。backend の `.env` は既定（`127.0.0.1:18017`）なら書かなくてよい。
 3. backend・取込 worker を再起動する。「運用設定 › サービス管理」に Word→JSONL が出て、起動していることを確かめる。
 
 ## 既存環境の更新手順（#2457 ファイル準備 CSV→JSONL・Excel→JSONL への改名と保存値の移行）
@@ -583,6 +583,13 @@ XML ツリー JSON の解析サービス（`parser-xml-tree-json`）は、文書
 サービス管理画面から文書分割のサービス項目を除いた。分割方式・分割結果・保存済み chunk は変更しない。
 backend と取込 worker を更新して再起動する。旧 `RAG_CHUNKING_SERVICE_ENABLED` / `RAG_CHUNKING_SERVICE_URL` は
 使わないため、設定ファイルに残っていれば削除する。独自に分割のサービスを起動していた環境では、そのプロセスも停止する。
+
+## 既存環境の更新手順（#4114 根拠の無い要求の探し直しの既定）
+
+`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED` の既定を有効に戻した（#2850 の無効化の後、#3675 で生成が不足を明示したときだけ動く形に変わったため）。
+指定していない環境は、更新後の backend・取込 worker の再起動から有効になる。不足の無い回答では検索も LLM も増えない。不足があった回答では、
+違う検索文を作れない要求ごとに質問の拡張の LLM を 1 回呼び、検索と rerank を 1 回行い、新しい根拠があれば生成を 1 回作り直す。
+明示した値は維持する。無効にしたい環境は `false` を指定するか、取込・検索・回答設定 › 検索方法の「回答の検索と生成」で無効にして保存する。
 
 ## 既存環境の更新手順（#2850 根拠の無い要求の再検索の既定）
 

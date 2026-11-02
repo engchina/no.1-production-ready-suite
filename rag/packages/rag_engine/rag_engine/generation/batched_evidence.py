@@ -37,10 +37,9 @@ question は完全な原質問です。generation_context の条件・否定・�
 その範囲が支える回答を answer に書いてください。
 条件、例外、否定、数値、比較対象の違いを保ってください。回答候補自体を事実の出典にはせず、evidence の原文で確かめてください。
 一つの結論に離れた箇所が必要なら、同じ answer に対して箇所ごとに finding を書いてください。
-答えられない部分は unanswered に書き、この資料だけで原質問全体に記載がないとは断定しないでください。
 
 ## Step 3: 読取結果を返す
-findings と unanswered を指定の構造で返してください。
+findings を指定の構造で返してください。該当がなければ空にしてください。
 """
 # 句点も改行も無い長い行を、番号で選べる大きさに分ける上限（読取の入力だけ。最終生成の引用単位は変えない）。
 READING_UNIT_MAX_CHARS = 400
@@ -56,7 +55,6 @@ class BatchFinding(BaseModel):
 class BatchReading(BaseModel):
     model_config = ConfigDict(extra="forbid")
     findings: list[BatchFinding] = Field(description="原文で裏付けた回答候補。該当がなければ空。")
-    unanswered: list[str] = Field(description="この入力では答えられない部分。")
 
 
 def reading_units(value: Mapping[str, Any]) -> list[tuple[int, int]]:
@@ -129,7 +127,6 @@ def prepare_batched_evidence(
     selected = list(spans)
     batches: list[dict[str, Any]] = []
     read_sources: set[str] = set()
-    unanswered: list[str] = []
     context = render([])
 
     def final_prompt(values: Sequence[dict[str, Any]]) -> str:
@@ -139,10 +136,8 @@ def prepare_batched_evidence(
             for value in values
             if value.get("batch_answer")
         ]
-        if notes or unanswered:
-            prompt += "\n\n## 分割読取の回答候補（事実の出典は添付した原文）\n" + json.dumps(
-                {"candidates": notes, "unanswered_in_individual_batches": list(dict.fromkeys(unanswered))}, ensure_ascii=False
-            )
+        if notes:
+            prompt += "\n\n## 分割読取の回答候補（事実の出典は添付した原文）\n" + json.dumps({"candidates": notes}, ensure_ascii=False)
         return prompt
 
     def final_measure(values: Sequence[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
@@ -397,7 +392,6 @@ def prepare_batched_evidence(
                             "reasons": mismatch.diagnostic["reasons"],
                             "retained_input_count": len(retained),
                         }
-                    unanswered.extend(reading.unanswered)
                     read_sources.update(value["source_id"] for value in batch)
                     unverified = mismatch.diagnostic["unmatched_count"] if mismatch is not None else 0
                     receipt.update(status="completed", finding_count=len(reading.findings) - unverified)

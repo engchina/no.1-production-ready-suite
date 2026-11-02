@@ -11,7 +11,7 @@
 
 文書は中身に加えて **1〜3 件の独立した処理レシピ（preprocess / parser / chunking）** を自身のプロパティとして持つ。各レシピは設定、ジョブ、成果物、エラー、工程状態を個別に保持する。
 
-- ファイル準備（preprocess）。旧形式・マクロ付きの Office（.doc / .ppt / .xls・.docm / .pptm / .xlsm）と ODT・RTF（.odt / .rtf。#3351）は原本のままでは解析せず、文書レシピで変換を選んだときだけ取り込む（Word・PowerPoint・ODT・RTF は Office→PDF（Word は Word→JSONL も可）、Excel は Excel→JSONL。Office→PDF は Excel を変換しない。マクロは実行しない。判定は `backend/app/rag/parser_source_guard.py`。#2470）。
+- ファイル準備（preprocess）。旧形式・マクロ付き・テンプレートの Office（.doc / .ppt / .xls・.docm / .pptm / .xlsm・.dotx / .dotm / .potx / .potm / .xltx / .xltm。#4054）と ODT・RTF（.odt / .rtf。#3351）は原本のままでは解析せず、文書レシピで変換を選んだときだけ取り込む（Word・PowerPoint・ODT・RTF は Office→PDF（Word は Word→JSONL も可）、Excel は Excel→JSONL。Office→PDF は Excel を変換しない。マクロは実行しない。判定は `backend/app/rag/parser_source_guard.py`。テンプレートは拡張子・MIME type と原本の package の種類を保存の前に照らす〔`backend/app/rag/office_template.py`〕。#2470）。
 - 文書解析（parser / OCR engine）と、図・画像の読み取り（Vision。解析エンジンに関係なく解析の後に backend の共通の段で読み取る。切り替えはレシピだけ）。global の既定エンジンは Docling（PDF と画像だけ）。それ以外の形式は取込前に止めて処理レシピで Unstructured などを選ぶよう案内し、自動では振り分けない（判定は `backend/app/rag/parser_source_guard.py` の 1 か所。Unstructured のサービスは統合 stack の既定で配備する。#1559）。XML ツリー JSON（tag / attr / children の木の JSON。parser-xml-tree-json）も Docling・Unstructured と同じ使用エンジンの 1 つで、選んだときだけ使う（形式で自動には振り分けない。対応しない形の JSON は取込で扱えない旨のエラーにする。サービスは既定で配備し、既定は停止（使うときはサービス管理画面で起動する）。#2042・#2453）。構造化レコード JSONL（前処理 csv_to_jsonl / excel_to_jsonl / word_to_jsonl の成果物。parser-structured-records-jsonl）も同じく選んだときだけ使う使用エンジンで、文書レシピの分割方式「固定分割」と組み合わせると記録の境界で 1 記録 1 chunk になる（解析と分割はどちらも文書レシピの層。#2457）。Docling / Unstructured はこの JSONL を受けず、取込の前に「構造化レコード JSONL を選ぶ」診断で止める（黙って変換しない）。画面でファイル準備に CSV→JSONL・Excel→JSONL・Word→JSONL を選ぶと、解析エンジンと分割（固定分割符・既定の分割符 `<<<JSONL_RECORD_BOUNDARY>>>`）を見える上書きとして入れて保存する（実行時に隠れて切り替えない）。
 - 文書分割（chunking strategy、chunk size、overlap、parent-child）。
 - 索引構築（vector index build、GraphRAG、navigation summary、field extraction）。
@@ -58,7 +58,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 同じ文書の検索精度を上げたい場合はレシピを最大 3 件まで追加し、それぞれを独立して materialize する。**各レシピの直近成功した active chunk_set はすべて検索対象**とし、hybrid RRF + rerank で融合する。回答に渡す根拠の選択（`rag_engine` の `evidence_spans`）では、本文が同じ根拠に加えて、同じ文書で解析の要素の ID（`element_ids`。親子分割の親は子の `source_record_refs`）が小さい側の 8 割以上重なり、短い側の本文の 9 割以上がもう一方に含まれる根拠を 1 つにまとめる（source-span 重複除去。順位の高い位置に範囲の広いほうを残し、まとめた chunk_id は `source_aliases` に残す。要素の ID の無い分割は本文が同じものだけをまとめる。#1331）。主レシピ、候補、配信中、昇格の概念は持たず、配信モード（`single / fused / routed`）の設定も持たない。設定変更後の再処理中や再処理失敗時も、直前の active chunk_set を検索対象として維持する。KB membership を変えてもレシピ集合や chunk_set は変わらない。
 
-レシピ追加・削除は親文書行をロックして **最少 1 件・最大 3 件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。
+レシピ追加・削除は親文書行をロックして **最少 1 件・最大 3 件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。文書単位の再取込も同じで、検索に出している版は切替まで残し、処理の進み具合はレシピの status で示す（文書の status は `INDEXED` のまま。#4115）。
 
 GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI / API diagnostics にその状態を表示する。
 

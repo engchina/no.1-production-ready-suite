@@ -636,6 +636,26 @@ def test_template_is_read_as_document() -> None:
     assert "word_macros_not_executed" not in outcome.warnings
 
 
+def test_macro_enabled_template_is_read_without_macros() -> None:
+    """.dotm も VBA の部品を捨てて本文だけを読む（#4054）。"""
+    template = _replace_member(
+        _macro_enabled_docx(),
+        "[Content_Types].xml",
+        lambda payload: payload.replace(
+            b"application/vnd.ms-word.document.macroEnabled.main+xml",
+            b"application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
+        ),
+    )
+    assert b"macroEnabledTemplate" in zipfile.ZipFile(io.BytesIO(template)).read(
+        "[Content_Types].xml"
+    )
+    assert converters.inspect_docx_package(template) == "macro"
+    outcome = _convert(template, ".dotm")
+    assert outcome.converted
+    assert b"synthetic-vba" not in (outcome.derived_bytes or b"")
+    assert "word_macros_not_executed" in outcome.warnings
+
+
 def test_corrupt_and_non_word_packages_are_rejected() -> None:
     assert _reason(synthetic_docx()[:200]) == "word_corrupt"
     no_main = _replace_member(

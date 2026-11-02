@@ -1327,6 +1327,8 @@ export const ja = {
   "settings.language.field.alias_negations.help": "この語がある文は同じものの根拠にしません（例: 異なる、別の）。",
   "settings.language.field.internal_label_words": "内部の番号の語",
   "settings.language.field.internal_label_words.help": "回答に出してはいけない内部の番号の語です（「規則0」の「規則」）。",
+  "settings.language.field.citation_unit_words": "引用の単位の語",
+  "settings.language.field.citation_unit_words.help": "説明の文の括弧に写された引用の番号の単位です（「行4」の「行」）。番号が出典の範囲に入るときだけ、位置の写しとして外します。",
   "settings.language.field.amount_units": "算式の単位",
   "settings.language.field.amount_units.help": "算式の数に付く単位です。計算のときは外します（例: 円、か月、人）。",
   "settings.language.field.amount_scale_units": "桁の単位",
@@ -1688,16 +1690,16 @@ export const ja = {
     "原本をそのまま解析します。既定の方式です。",
   "settings.preprocess.profile.office_to_pdf": "Office→PDF",
   "settings.preprocess.profile.office_to_pdf.description":
-    "Word・PowerPoint の文書(旧形式の .doc・.ppt、マクロ付きの .docm・.pptm を含む)を PDF にしてから解析します。マクロは実行しません。PDF にした文書はブラウザーでプレビューできます。Excel は「Excel→JSONL」を使います。",
+    "Word・PowerPoint の文書(旧形式の .doc・.ppt、マクロ付きの .docm・.pptm、テンプレートの .dotx・.dotm・.potx・.potm を含む)を PDF にしてから解析します。マクロは実行しません。PDF にした文書はブラウザーでプレビューできます。Excel は「Excel→JSONL」を使います。",
   "settings.preprocess.profile.csv_to_jsonl": "CSV→JSONL",
   "settings.preprocess.profile.csv_to_jsonl.description":
     "CSV の表頭を除くデータの 1 記録を、列名と値の組の JSONL に変換します。空行は除き、元の行の位置を保ちます。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.excel_to_jsonl": "Excel→JSONL",
   "settings.preprocess.profile.excel_to_jsonl.description":
-    "Excel ファイル(.xls・.xlsx・マクロ付きの .xlsm)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。マクロは実行しません。シート・行・セル範囲を保ちます。既定では表示シート・表示セルを読み、数式は保存済みの計算結果を使います。計算結果がないセルは数式の文字列と警告を残します。文書解析は「構造化レコード JSONL」を使います。",
+    "Excel ファイル(.xls・.xlsx・マクロ付きの .xlsm、テンプレートの .xltx・.xltm)の表の 1 行(手順は 1 手順)を、見出しの列名と値の組の 1 件の記録(JSONL)にしてから解析します。マクロは実行しません。シート・行・セル範囲を保ちます。既定では表示シート・表示セルを読み、数式は保存済みの計算結果を使います。計算結果がないセルは数式の文字列と警告を残します。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.profile.word_to_jsonl": "Word→JSONL",
   "settings.preprocess.profile.word_to_jsonl.description":
-    "Word ファイル(.doc・.docx・マクロ付きの .docm)を、見出しの下の段落・リスト・表のまとまりを 1 件の記録(JSONL)にしてから解析します。見出しの階層と本文の順序を保ち、長い節は分割します。画像・ヘッダー・フッターは読み取らず、ページ番号は付けません。.doc は .docx にしてから読み、マクロは実行しません。文書解析は「構造化レコード JSONL」を使います。",
+    "Word ファイル(.doc・.docx・マクロ付きの .docm、テンプレートの .dotx・.dotm)を、見出しの下の段落・リスト・表のまとまりを 1 件の記録(JSONL)にしてから解析します。見出しの階層と本文の順序を保ち、長い節は分割します。画像・ヘッダー・フッターは読み取らず、ページ番号は付けません。.doc は .docx にしてから読み、マクロは実行しません。文書解析は「構造化レコード JSONL」を使います。",
   "settings.preprocess.actions.save": "保存",
   "settings.preprocess.actions.label": "ファイル準備の設定の操作",
   "settings.preprocess.actions.saved": "ファイル準備の設定を保存しました。",
@@ -2946,6 +2948,7 @@ export const ja = {
   "sourceProfile.parser.tiffImage": "TIFF 画像未対応",
   "sourceProfile.parser.legacyOffice": "旧 Office(要変換)",
   "sourceProfile.parser.macroOffice": "マクロ付き Office(要変換)",
+  "sourceProfile.parser.officeTemplate": "Office テンプレート(要変換)",
   "sourceProfile.parser.odtRtf": "ODT・RTF(要変換)",
   "sourceProfile.parser.generic": "汎用解析",
   "sourceProfile.warning.duplicate": "同一内容の文書が既に登録されています。",
@@ -2962,6 +2965,8 @@ export const ja = {
     "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.warning.unsupportedMacroOffice":
     "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
+  "sourceProfile.warning.unsupportedOfficeTemplate":
+    "Office テンプレートは変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.warning.unsupportedOdtRtf":
     "ODT・RTF は変換が必要です（文書レシピのファイル準備で Office→PDF を選択）。",
   "sourceProfile.warning.parserFallback": "一部の解析で fallback が使われました。",
@@ -2979,6 +2984,8 @@ export const ja = {
     "旧形式の Office は変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.unsupported.macroOfficeNotSupported":
     "マクロ付きの Office は変換が必要です（文書レシピのファイル準備で変換を選択。マクロは実行しません）。",
+  "sourceProfile.unsupported.officeTemplateNotSupported":
+    "Office テンプレートは変換が必要です（文書レシピのファイル準備で変換を選択）。",
   "sourceProfile.unsupported.odtRtfNotSupported":
     "ODT・RTF は変換が必要です（文書レシピのファイル準備で Office→PDF を選択）。",
   "sourceProfile.unsupported.unknownFileType": "対応する parser を判定できないファイル形式です。",
@@ -4590,6 +4597,7 @@ export const ja = {
   "evaluation.ingestionQuality.warning.unsupportedTiffImage": "TIFF 画像未対応",
   "evaluation.ingestionQuality.warning.unsupportedLegacyOffice": "旧 Office(要変換)",
   "evaluation.ingestionQuality.warning.unsupportedMacroOffice": "マクロ付き Office(要変換)",
+  "evaluation.ingestionQuality.warning.unsupportedOfficeTemplate": "Office テンプレート(要変換)",
   "evaluation.ingestionQuality.warning.unsupportedOdtRtf": "ODT・RTF(要変換)",
   "evaluation.ingestionQuality.parser.legacy": "旧形式",
   "evaluation.thresholdFailures": "閾値未達",

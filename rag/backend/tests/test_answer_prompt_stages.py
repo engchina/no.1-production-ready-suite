@@ -414,7 +414,7 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
         assert system == custom
         values = json.loads(prompt)["evidence"]
         calls.extend(values)
-        return schema(findings=[], unanswered=[])
+        return schema(findings=[])
 
     with prompt_overrides({"generation.batchReading": custom}):
         _, _, diagnostic = prepare_batched_evidence(

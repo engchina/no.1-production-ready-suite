@@ -69,11 +69,9 @@ def test_a_label_the_scope_judges_direct_is_in_the_plan_without_being_in_evidenc
     assert kept == {OPEN, STEPS} and marked == set()
 
 
-def test_a_linked_label_needs_its_relation_quote_in_the_sent_evidence():
+def test_a_linked_label_needs_the_relation_quote_the_code_cut_from_its_range():
     found = plan_draft(["E1"], [scope("E1"), scope("E3", "linked", AFTER)], [cited(AFTER, "E3")])
     assert not outside(found, "E3")
-    missing = plan_draft(["E1"], [scope("E1"), scope("E3", "linked", "登録の後で保存する。")], [cited(AFTER, "E3")])
-    assert outside(missing, "E3")
     empty = plan_draft(["E1"], [scope("E1"), scope("E3", "linked")], [cited(AFTER, "E3")])
     assert outside(empty, "E3")
 
@@ -102,17 +100,6 @@ def test_a_scope_row_that_names_no_sent_evidence_authorizes_nothing():
     assert not outside(draft, "E1")
 
 
-def test_a_cited_scope_only_row_is_checked_for_a_quote_from_another_evidence():
-    # E2 の照合に E1 の原文を写した。説明が E2 を引けば、evidence_ids に無くても取り違えを指摘する。
-    scopes = [scope("E1", quote=OPEN), scope("E2", quote=OPEN)]
-    draft = plan_draft(["E1"], scopes, [cited(STEPS, "E2")])
-    assert any("E2 の照合に写した原文は E2 に無く、E1 にあります" in error for error in _request_plan_errors(draft, SPANS))
-    checked, _ = verify("設定の手順は？", draft, SPANS)
-    assert any(mark["code"] == "unassessed" and "E2" in mark["detail"] for entry in checked for mark in entry.marks)
-    # 説明が引かない行は出典にならないので、作り直しの理由にしない。
-    assert not _request_plan_errors(plan_draft(["E1"], scopes, [cited(OPEN, "E1")]), SPANS)
-
-
 def test_the_ignored_label_record_of_a_scope_only_plan_does_not_point_to_guide_coverage():
     draft = plan_draft(GUIDE_IDS, [scope("E1")], [cited(OPEN, "E1")])
     for error in _unknown_plan_label_errors(draft, SPANS, scope_plan=True):
@@ -129,8 +116,9 @@ def test_a_recovered_plan_with_only_scope_decisions_keeps_the_explanations_unmar
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_scope": [{"evidence_id": labels[text], "target": "対象", "relation": "direct"} for text in (INTRO, OUTLINE)],
-                "evidence_ids": GUIDE_IDS,
+                "evidence_scope": [
+                    {"evidence_id": label, "target": "対象", "relation": "direct"} for label in (labels[INTRO], labels[OUTLINE], *GUIDE_IDS)
+                ],
             }
         ]
     }

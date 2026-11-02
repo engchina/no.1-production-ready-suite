@@ -21,7 +21,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -61,13 +61,16 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_content import citation_content_unusable
+from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_wire import (
     bind_wire_range,
     canonical_generation_draft,
+    canonical_request_coverage,
     generation_draft_wire_model,
     planned_generation_wire_model,
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
+from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
@@ -88,6 +91,7 @@ from rag_engine.models.llm import (
     GroundedItem,
     RequestCoverage,
     RequestEvidenceScope,
+    RequestLinkRange,
     RequestScopePlan,
 )
 from rag_engine.parsing.content_labels import content_labels
@@ -596,6 +600,8 @@ STANDARD_MAX_ROUNDS = 2
 # 目的の一部だけ）は作り直さない。目的違い（off_target）は別の対象に答えた誤りなので直す。
 STANDARD_CORRECTION_KEYS = (
     "button_name_issues",
+    "date_value_issues",
+    "internal_label_issues",
     "citation_range_issues",
     "dropped_items",
     "downgraded_items",
@@ -1263,6 +1269,8 @@ QUESTION_TARGET_CHECK = "質問の対象"
 QUESTION_ERROR_CHECK = "質問のエラー"
 OTHER_DOCUMENT_CHECK = "別文書の手順"
 CITED_BUTTON_CHECK = "ボタン名"
+DATE_VALUE_CHECK = "年の一致"
+INTERNAL_LABEL_CHECK = "内部の番号"
 # 警告の理由に添える原文の引用の長さ。
 MARK_QUOTE_MAX_CHARS = 80
 
@@ -1545,6 +1553,10 @@ class CheckedItem:
     # 本文では主張を 1 回だけ出し、出典行を出典ごとに並べる。
     also: list[CheckedItem] = field(default_factory=list)
     button_name_issues: list[str] = field(default_factory=list)
+    # 説明に書いた年のうち、質問と引いた根拠から説明できない年（#4042）。
+    date_value_issues: list[str] = field(default_factory=list)
+    # 説明の文に混ざっていた根拠の ID（位置の写しの括弧ではなく、文の中にあったもの。#4153）。
+    internal_label_issues: list[str] = field(default_factory=list)
 
     def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
         """言い換えを本文に残したまま、段落に印（``code`` は契約の語彙）を付ける。``reason`` は trace・是正の指摘の文。"""
@@ -1705,202 +1717,6 @@ def _attachment_label(label: str, spans: Sequence[dict]) -> bool:
 _MISSING_REQUEST_PLAN = "説明に使う要求ごとの根拠計画がありません。"
 
 
-def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict], cited: Collection[str] = ()) -> dict[str, list[str]]:
-    """direct の照合に写した原文が、指した根拠に無く送信した別の根拠にある計画の行（出典 ID の取り違え。#3804）。
-
-    戻り値は計画の表示 ID → 原文がある根拠の表示 ID。モデル自身の記述どうしの矛盾なので意味の判断は要らない。
-    linked の原文は関係を明記した別の根拠にあってよいので対象外。どこにも無い原文（言い換え）・指した根拠にも
-    ある原文・添付の根拠も、取り違えと言い切れないので対象外にする。ここでは別の ID へ付け替えず、まず作り直しに
-    任せる。作り直しても残った行は、原文がある根拠が 1 つに決まるときだけ ``reanchor_misattributed_citations`` が
-    付け替える。対象は evidence_ids の行と、``cited``（その小問の説明が引いた label）の行。evidence_ids に無い direct の行も
-    説明が引けば出典になる（#3827）が、説明が引かない行は出典にならないので作り直しの理由にしない。
-    """
-    found: dict[str, list[str]] = {}
-    used = {*plan.evidence_ids, *cited}
-    for scope in plan.evidence_scope:
-        quote = scope.link_quote.strip()
-        label = scope.evidence_id
-        if scope.relation != "direct" or not quote or label not in used or label in found or _attachment_label(label, spans):
-            continue
-        named = _label_spans(label, spans)
-        if not named or any(quote_in_text(quote, str(span.get("text") or "")) for span in named):
-            continue
-        named_ids = {span["evidence_id"] for span in named}
-        others = [
-            str(span.get("label") or span["evidence_id"])
-            for span in spans
-            if span["evidence_id"] not in named_ids and quote_in_text(quote, str(span.get("text") or ""))
-        ]
-        if others:
-            found[label] = list(dict.fromkeys(others))
-    return found
-
-
-def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
-    """説明が出典に引いた根拠のうち、その小問の計画で原文と ID が食い違う表示 ID（#3804）。"""
-    cited = [citation.evidence_id for citation in item.citations]
-    labels = {label for plan in _item_request_plans(item, draft) for label in _misattributed_scopes(plan, spans, cited)}
-    flagged = {span["evidence_id"]: label for label in labels for span in _label_spans(label, spans)}
-    return list(
-        dict.fromkeys(
-            flagged[span["evidence_id"]]
-            for cited in item.citations
-            for span in _label_spans(cited.evidence_id, spans)
-            if span["evidence_id"] in flagged
-        )
-    )
-
-
-REANCHOR_REASON = "plan_quote_misattributed"
-
-
-def _quote_lines(quote: str, span: Mapping[str, Any]) -> str | None:
-    """quote を含む引用単位の行の範囲（``lines`` の書き方。行番号の無い根拠は空 = 全文）。
-
-    モデルに示した版（送信時の引用単位）の本文で、照合の形（``_canonical``）の連続した一致を探す。同じ根拠に
-    複数あれば、原文照合（``_original_range``）と同じく最初の位置にする。短すぎる・連続して一致しない（離れた
-    断片の継ぎ合わせでしか一致しない）ときは None（行を推測で選ばない）。
-    """
-    snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
-    view = snapshot[1] if snapshot is not None and snapshot[0] is span else _citation_view(span)
-    needle, _ = _canonical(quote)
-    if not view.units or len(needle) < _QUOTE_SENTENCE_MIN_CHARS:
-        return None
-    haystack, positions = _canonical(view.text)
-    start = haystack.find(needle)
-    if start < 0:
-        return None
-    if not view.numbered:
-        return ""
-    begin, end = positions[start], positions[start + len(needle) - 1] + 1
-    hits = [number for number, (first, last) in enumerate(view.units, 1) if first < end and begin < last]
-    if not hits:
-        return None
-    return str(hits[0]) if hits[0] == hits[-1] else f"{hits[0]}-{hits[-1]}"
-
-
-def reanchor_misattributed_citations(draft: GroundedDraft, spans: Sequence[dict]) -> tuple[GroundedDraft, list[dict[str, Any]]]:
-    """作り直しても残った出典 ID の取り違え（#3804）を、原文がある根拠へ付け替える（引用の事後の訂正。#3852）。
-
-    ``_misattributed_scopes`` の行のうち、direct の原文が送った別の根拠の 1 つだけ（会話の添付ではない）に逐語であるとき、
-    計画の行の evidence_id（と evidence_ids）と、その小問の説明が誤った根拠を指す出典を、その根拠と原文を含む
-    行の範囲へ付け替える。付け替えた出典は、ほかの出典と同じ原文照合・決定的な検査（と監査）に掛かる。説明の文は
-    変えず、説明も出典も外さない。原文がある根拠が 2 つ以上（添付を含む）・原文の行を連続した一致で決められない・
-    計画にその label の行が複数ある・付け替え先に direct 以外の判断が残る、のどれかなら付け替えない（印を付ける
-    従来の扱いのまま）。
-    戻り値は付け替えた草稿と、付け替えの記録（trace 用）。
-    """
-    moves: dict[int, dict[str, tuple[dict, str, str]]] = {}
-    for plan_index, plan in enumerate(draft.request_coverage):
-        if "evidence_scope" not in plan.model_fields_set:
-            continue
-        cited = [
-            citation.evidence_id
-            for item in draft.items
-            if item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
-            for citation in item.citations
-        ]
-        planned: dict[str, tuple[dict, str, str]] = {}
-        for label in _misattributed_scopes(plan, spans, cited):
-            rows = [scope for scope in plan.evidence_scope if scope.evidence_id == label]
-            if len(rows) != 1:
-                continue
-            quote = rows[0].link_quote.strip()
-            named_ids = {span["evidence_id"] for span in _label_spans(label, spans)}
-            # 添付も候補に数える（添付にもある原文は、付け替え先が 1 つに決まらない）。添付へは付け替えない。
-            candidates = list(
-                {
-                    span["evidence_id"]: span
-                    for span in spans
-                    if span["evidence_id"] not in named_ids and quote_in_text(quote, str(span.get("text") or ""))
-                }.values()
-            )
-            if len(candidates) != 1 or candidates[0].get("conversation_attachment"):
-                continue
-            target = candidates[0]
-            lines = _quote_lines(quote, target)
-            if lines is None:
-                continue
-            planned[label] = (target, str(target.get("label") or target["evidence_id"]), lines)
-        # 付け替え先の根拠に、付け替えない行の direct 以外の判断（linked・unrelated）があれば、計画が矛盾するので付け替えない。
-        for label, (target, _target_label, _lines) in list(planned.items()):
-            if any(
-                scope.evidence_id not in planned
-                and scope.relation != "direct"
-                and any(span["evidence_id"] == target["evidence_id"] for span in _label_spans(scope.evidence_id, spans))
-                for scope in plan.evidence_scope
-            ):
-                del planned[label]
-        if planned:
-            moves[plan_index] = planned
-    if not moves:
-        return draft, []
-
-    def span_set(label: str) -> frozenset[str]:
-        return frozenset(span["evidence_id"] for span in _label_spans(label, spans))
-
-    # 付け替えは元の草稿の出典から一度に決める（2 つの行が互いの ID を取り違えた計画を、順に付け替えて戻さない）。
-    indexes: dict[tuple[int, str], list[int]] = {}
-    items = []
-    for item_index, item in enumerate(draft.items):
-        targets = {
-            span_set(label): (plan_index, label, move[1], move[2])
-            for plan_index, plan in enumerate(draft.request_coverage)
-            if plan_index in moves and item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
-            for label, move in moves[plan_index].items()
-        }
-        citations = []
-        for citation in item.citations:
-            found = targets.get(span_set(citation.evidence_id)) if citation.evidence_id else None
-            if found is None:
-                citations.append(citation)
-                continue
-            plan_index, label, target_label, lines = found
-            citations.append(GroundedCitation(evidence_id=target_label, lines=lines))
-            moved_items = indexes.setdefault((plan_index, label), [])
-            if item_index not in moved_items:
-                moved_items.append(item_index)
-        items.append(item.model_copy(update={"citations": citations}) if citations != list(item.citations) else item)
-    records: list[dict[str, Any]] = []
-    for plan_index, planned in moves.items():
-        for label, (target, target_label, lines) in planned.items():
-            named = _label_spans(label, spans)
-            records.append(
-                {
-                    "reason": REANCHOR_REASON,
-                    "request_id": draft.request_coverage[plan_index].request_id,
-                    "from_label": label,
-                    "from_evidence_id": str(named[0]["evidence_id"]) if len(named) == 1 else "",
-                    "to_label": target_label,
-                    "to_evidence_id": str(target["evidence_id"]),
-                    "lines": lines,
-                    "item_indexes": indexes.get((plan_index, label), []),
-                }
-            )
-    plans = []
-    for plan_index, plan in enumerate(draft.request_coverage):
-        plan_moves = moves.get(plan_index)
-        if not plan_moves:
-            plans.append(plan)
-            continue
-        plans.append(
-            plan.model_copy(
-                update={
-                    "evidence_scope": [
-                        scope.model_copy(update={"evidence_id": plan_moves[scope.evidence_id][1]})
-                        if scope.evidence_id in plan_moves
-                        else scope
-                        for scope in plan.evidence_scope
-                    ],
-                    "evidence_ids": list(
-                        dict.fromkeys(plan_moves[label][1] if label in plan_moves else label for label in plan.evidence_ids)
-                    ),
-                }
-            )
-        )
-    return draft.model_copy(update={"request_coverage": plans, "items": items}), records
-
-
 def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict], *, scope_plan: bool = False) -> list[str]:
     """計画の evidence_ids のうち、送った根拠のどれにも当たらない label の指摘（業務ガイドの要件 ID を書いたなど。#3825）。
 
@@ -1911,9 +1727,9 @@ def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict], *, s
     立てたか。その計画は作り直さないので、直し方ではなく計画の根拠として扱わないことを書く（#3827）。
     """
     advice = (
-        "計画の根拠として扱いません（evidence_ids に使えるのは [E1] 形式の根拠の番号だけです）。"
+        "計画の根拠として扱いません（evidence_id に使えるのは [E1] 形式の根拠の番号だけです）。"
         if scope_plan
-        else "evidence_ids には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+        else "evidence_scope の evidence_id には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
     )
     return list(
         dict.fromkeys(
@@ -1944,21 +1760,8 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown
             scopes = _scope_decisions(plan, label)
             if len(scopes) != 1:
                 errors.append(f"{plan.request_id}: {label} の対象の照合は1件必要です。")
-            elif scopes[0].relation == "unrelated":
-                errors.append(f"{plan.request_id}: unrelated の {label} は evidence_ids と items に使えません。")
             elif scopes[0].relation == "linked" and not scopes[0].link_quote.strip():
-                errors.append(f"{plan.request_id}: linked の {label} は関係を明記した原文が必要です。")
-        cited = [
-            citation.evidence_id
-            for item in draft.items
-            if item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
-            for citation in item.citations
-        ]
-        for label, others in _misattributed_scopes(plan, spans, cited).items():
-            errors.append(
-                f"{plan.request_id}: {label} の照合に写した原文は {label} に無く、{'・'.join(others)} にあります。"
-                "その原文で説明するなら、計画と items の出典をその原文がある根拠にしてください。"
-            )
+                errors.append(f"{plan.request_id}: linked の {label} は link に関係を明記した本文の番号の範囲が必要です。")
     # 同じ request_id の計画が複数あると同じ指摘が重なる（#3808）。作り直しの入力に同じ文を繰り返さない。
     return list(dict.fromkeys(errors))
 
@@ -1969,42 +1772,51 @@ def scope_evidence_text(span: Mapping[str, Any]) -> str:
     return _numbered_text(text, citation_units(text, image_text=_image_text(span)), numbered=True)
 
 
-def _scope_range_text(label: str, line_start: int, line_end: int, spans: Sequence[dict]) -> str:
-    """指定した番号の範囲の連続した原文。根拠が 1 つに決まらない・範囲が無効なら空文字（推測で切り詰めない）。"""
-    named = _label_spans(label, spans)
+def _scope_range_text(link: RequestLinkRange, spans: Sequence[dict], *, numbered: bool | None = None) -> str:
+    """指定した番号の範囲の連続した原文。根拠が 1 つに決まらない・範囲が無効なら空文字（推測で切り詰めない）。
+
+    ``numbered`` はモデルに番号を示した根拠か（計画だけの入力は常に番号付き。None は生成の根拠ブロックの表示に従う）。
+    番号を示していない根拠の null は全文を指す。
+    """
+    named = _label_spans(link.evidence_id, spans)
     if len(named) != 1:
         return ""
-    text = str(named[0].get("text") or "")
-    units = citation_units(text, image_text=_image_text(named[0]))
-    binding = bind_wire_range(line_start, line_end, unit_count=len(units), numbered=True)
+    view = _sent_view(named[0])
+    if not view.units:
+        return ""
+    binding = bind_wire_range(
+        link.line_start, link.line_end, unit_count=len(view.units), numbered=view.numbered if numbered is None else numbered
+    )
     if binding.reason_code is not None:
         return ""
-    return text[units[line_start - 1][0] : units[line_end - 1][1]].strip()
+    if binding.whole_text:
+        return view.text.strip()
+    assert link.line_start is not None and link.line_end is not None
+    return view.text[view.units[link.line_start - 1][0] : view.units[link.line_end - 1][1]].strip()
 
 
 def resolve_scope_plan(plan: RequestScopePlan, spans: Sequence[dict]) -> list[RequestCoverage]:
-    """番号で返した計画を、コードが原文を切り出した計画へ変える。
+    """計画だけの出力を、コードが原文を切り出した計画へ変える。無効な範囲は ``_request_plan_errors`` の指摘に任せる。
 
-    linked の範囲が無効なら原文を空にして、``_request_plan_errors`` の指摘に任せる。原文は常に指した根拠から
-    切り出すので、原文と番号の食い違いは起きない。
+    計画だけの入力の本文は常に番号付きで、番号は引用単位（``scope_evidence_text``）。
     """
-    result = []
-    for entry in plan.request_coverage:
-        fields: dict[str, Any] = {"request_id": entry.request_id, "evidence_ids": entry.evidence_ids}
-        if "evidence_scope" in entry.model_fields_set:
-            fields["evidence_scope"] = [
-                {
-                    "evidence_id": scope.evidence_id,
-                    "target": scope.target,
-                    "relation": scope.relation,
-                    "link_quote": _scope_range_text(scope.link.evidence_id, scope.link.line_start, scope.link.line_end, spans)
-                    if scope.relation == "linked" and scope.link is not None
-                    else "",
-                }
-                for scope in entry.evidence_scope
-            ]
-        result.append(RequestCoverage.model_validate(fields))
-    return result
+
+    def link_text(link: RequestLinkRange) -> str:
+        named = _label_spans(link.evidence_id, spans)
+        if len(named) != 1:
+            return ""
+        text = str(named[0].get("text") or "")
+        units = citation_units(text, image_text=_image_text(named[0]))
+        binding = bind_wire_range(link.line_start, link.line_end, unit_count=len(units), numbered=True)
+        if binding.reason_code is not None or link.line_start is None or link.line_end is None:
+            return ""
+        return text[units[link.line_start - 1][0] : units[link.line_end - 1][1]].strip()
+
+    return canonical_request_coverage(plan.request_coverage, link_text)
+
+
+# 計画のうち、コードが作る欄（モデルの出力の欄ではない）。作り直しの入力に出さない。
+_PLAN_FIELDS_FROM_CODE: dict[str, Any] = {"__all__": {"evidence_ids": True, "evidence_scope": {"__all__": {"link_quote": True}}}}
 
 
 def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[RequestCoverage]:
@@ -2015,6 +1827,38 @@ def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[Reques
     if not plans and not item.request_id and len(draft.request_coverage) == 1:
         plans = list(draft.request_coverage)
     return plans
+
+
+def plan_rows_from_citations(draft: GroundedDraft, spans: Sequence[dict]) -> tuple[GroundedDraft, list[str]]:
+    """同じ出力の計画に行が無く説明が引いた根拠を、direct の行で足す。戻り値は草稿と足した根拠の番号（#4117）。
+
+    モデルが自分で引いた根拠なので、使うと判断したことはコードで分かる。unrelated の判断がある根拠・送っていない番号は
+    足さない（判断を覆さない。引用の検査は従来どおり掛かる）。計画そのものが無い草稿は対象にしない。
+    """
+    rows: dict[str, list[RequestEvidenceScope]] = {}
+    for item in draft.items:
+        if item.kind == "gap":
+            continue
+        for plan in _item_request_plans(item, draft):
+            for citation in item.citations:
+                label = citation.evidence_id
+                known = [*(scope.evidence_id for scope in plan.evidence_scope), *(row.evidence_id for row in rows.get(plan.request_id, ()))]
+                if label not in known and _label_spans(label, spans):
+                    rows.setdefault(plan.request_id, []).append(RequestEvidenceScope(evidence_id=label, target="", relation="direct"))
+    if not rows:
+        return draft, []
+    coverage = []
+    for plan in draft.request_coverage:
+        added = rows.get(plan.request_id, [])
+        coverage.append(
+            plan.model_copy(
+                update={
+                    "evidence_scope": [*plan.evidence_scope, *added],
+                    "evidence_ids": list(dict.fromkeys([*plan.evidence_ids, *(row.evidence_id for row in added)])),
+                }
+            )
+        )
+    return draft.model_copy(update={"request_coverage": coverage}), [row.evidence_id for added in rows.values() for row in added]
 
 
 def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
@@ -2042,11 +1886,8 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
             if len(scopes) != 1:
                 continue
             scope = scopes[0]
-            if scope.relation == "direct" or (
-                scope.relation == "linked"
-                and scope.link_quote.strip()
-                and any(quote_in_text(scope.link_quote, str(candidate.get("text") or "")) for candidate in spans)
-            ):
+            # linked の原文はコードが指定の範囲から切り出すので、空でなければ根拠にある。
+            if scope.relation == "direct" or (scope.relation == "linked" and scope.link_quote.strip()):
                 labels.add(label)
     labels.update(label for plan in draft.guide_coverage for label in plan.evidence_ids)
     allowed = {str(candidate["evidence_id"]) for label in labels for candidate in _label_spans(label, spans)}
@@ -2414,11 +2255,6 @@ def verify(
             candidate.mark("quote_unmatched", "引用元の候補はありますが、元の引用の逐語一致は確認できていません。")
         if scope_unsettled:
             candidate.mark("unassessed", "質問の対象と根拠の対応を確かめられなかった")
-        if misattributed := _misattributed_labels(item, draft, spans):
-            # 計画に写した原文が出典の根拠に無く別の根拠にある（#3804）。付け替え先が 1 つに決まらず残った取り違え
-            # （``reanchor_misattributed_citations``）は、本文を外さず、出典の支持を確かめていない印を付ける（支持の成功にも
-            # 失敗にもしない）。
-            candidate.mark("unassessed", f"根拠計画で {'・'.join(misattributed)} に写した原文が、その出典の根拠に無い")
         entry = candidate
         check_item = _check_item(entry.item)
         if conflict := _table_binding_conflict(check_item, view):
@@ -2429,8 +2265,9 @@ def verify(
         return entry, notes, subs
 
     for index, item in enumerate(draft.items):
+        mixed_labels: tuple[str, ...] = ()
         if item.kind != "gap":
-            item = _inline_evidence(item, spans)
+            item, mixed_labels = _inline_evidence(item, spans)
         if item.kind == "gap":
             if item.request_id in context_ids:
                 # 背景文（kind=context）は答える対象ではない。それに対する gap は利用者に意味がない (#650)。
@@ -2446,7 +2283,7 @@ def verify(
                     }
                 )
                 continue
-            if _EVIDENCE_LABEL.search(item.text):
+            if EVIDENCE_LABEL.search(item.text):
                 # 「E5 は…参照できません」は prompt の話で文書の話ではない。利用者に見せない (#642)。
                 dropped.append(
                     {"index": index, "evidence_id": "", "reason": "根拠ラベルを参照する gap は公開しない", "text": item.text, "quote": ""}
@@ -2462,6 +2299,14 @@ def verify(
                 # 案内したボタン名が、引いたどの原文にも無い（#3822）。本文と出典は変えず、段落に警告を付ける。
                 entry.button_name_issues = list(absent)
                 _mark_check(entry, CITED_BUTTON_CHECK, "引いた原文に無い: " + "、".join(absent))
+            if years := _item_absent_years(question, entry):
+                # 本文は書き換えない。印を付け、是正で作り直す（直らなければ印のまま）。
+                entry.date_value_issues = years
+                _mark_check(entry, DATE_VALUE_CHECK, "質問と引いた原文に無い年: " + "、".join(years))
+            if mixed_labels:
+                # 文の中の ID の字だけを除いたので、文が崩れている可能性がある。是正で作り直す（直らなければ印のまま）。
+                entry.internal_label_issues = list(mixed_labels)
+                _mark_check(entry, INTERNAL_LABEL_CHECK, "説明の文に内部の番号が混ざっていた")
         checked.extend(kept_entries)
         dropped.extend(notes)
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
@@ -2540,6 +2385,14 @@ def _cited_button_gaps(question: str, entry: CheckedItem) -> list[str]:
     return button_names_absent(fold_model_view(entry.item.text), texts, fold_model_view(question)) if views else []
 
 
+def _item_absent_years(question: str, entry: CheckedItem) -> list[str]:
+    """説明の年のうち、質問と説明が引いたすべての根拠から説明できない年（#4042）。"""
+    if not entry.published or entry.added or entry.item.kind == "gap":
+        return []
+    sources = [text for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
+    return absent_years(entry.item.text, question, sources) if sources else []
+
+
 def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
     """規則の検査の不合格に警告を付ける。理由（detail）は検査の名前と理由に、引用した原文を添える（#2738）。"""
     note = _quote_note(entry)
@@ -2593,44 +2446,28 @@ def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match
     return entry
 
 
-_EVIDENCE_LABEL = re.compile(r"(?<![A-Za-z0-9])E[0-9]{1,3}(?![A-Za-z0-9])")
-_INLINE_EVIDENCE = re.compile(r"[（(\[【]\s*(E[0-9]{1,3}(?:\s*[,、・]\s*E[0-9]{1,3})*)\s*[）)\]】]")
-
-
-def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> GroundedItem:
-    """本文中の根拠ラベルを非表示にし、一意なら引用元の候補にする。原文中の同じ記号は保つ。"""
-    codes = _document_evidence_codes(spans)
-    labels = [
-        label.group()
-        for match in _INLINE_EVIDENCE.finditer(item.text)
-        for label in _EVIDENCE_LABEL.finditer(match.group(1))
-        if label.group() not in codes
-    ]
-    text = _clean_evidence_labels(item.text, spans)
-    item = item.model_copy(update={"text": text})
-    if not _named_spans(item, spans) and len(set(labels)) == 1:
-        item = item.with_citation(evidence_id=labels[0])
-    return item
+def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, tuple[str, ...]]:
+    """説明の文の位置の写しを外し、一意なら引用元の候補にする。戻り値は item と、文に混ざっていた根拠の ID。"""
+    cleaned = clean_evidence_locators(
+        item.text,
+        codes=_document_evidence_codes(spans),
+        citations=item.citations,
+        source_text="\n".join(str(span.get("text") or "") for span in spans),
+    )
+    item = item.model_copy(update={"text": cleaned.text})
+    if not _named_spans(item, spans) and len(cleaned.labels) == 1:
+        item = item.with_citation(evidence_id=cleaned.labels[0])
+    return item, cleaned.residual
 
 
 def _clean_evidence_labels(text: str, spans: Sequence[dict]) -> str:
     """表示用の文から内部ラベルを除く。根拠本文にあるコードは説明の対象なので残す。"""
-    codes = _document_evidence_codes(spans)
-
-    def bracketed(match: re.Match[str]) -> str:
-        labels = _EVIDENCE_LABEL.findall(match.group(1))
-        retained = [label for label in labels if label in codes]
-        if len(retained) == len(labels):
-            return match.group()
-        return match.group()[0] + "、".join(retained) + match.group()[-1] if retained else ""
-
-    text = _INLINE_EVIDENCE.sub(bracketed, text)
-    return _EVIDENCE_LABEL.sub(lambda match: match.group() if match.group() in codes else "", text).strip()
+    return clean_evidence_locators(text, codes=_document_evidence_codes(spans)).text
 
 
 def _document_evidence_codes(spans: Sequence[dict]) -> set[str]:
     """資料のコードを、モデルが読む文字の形にそろえて取り出す。"""
-    return set(_EVIDENCE_LABEL.findall(fold_width("\n".join(str(span.get("text") or "") for span in spans))))
+    return set(EVIDENCE_LABEL.findall(fold_width("\n".join(str(span.get("text") or "") for span in spans))))
 
 
 def recover_audited_quotes(
@@ -4759,6 +4596,12 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
     )
 
 
+def _sent_view(span: Mapping[str, Any]) -> CitationView:
+    """モデルに示した版（送信時に固定した本文と引用単位）。記録が無ければ今の本文から作る。"""
+    snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
+    return snapshot[1] if snapshot is not None and snapshot[0] is span else _citation_view(span)
+
+
 def _citation_extraction(item: GroundedItem) -> dict[str, str]:
     return dict(item.citations[0]._extraction) if item.citations else {}
 
@@ -4885,78 +4728,6 @@ def citation_range_targets(
                 }
             )
     return targets
-
-
-def repair_ranges_from_plan_quotes(
-    draft: GroundedDraft, spans: Sequence[dict], targets: Sequence[Mapping[str, Any]], diagnostic: Mapping[str, Any]
-) -> tuple[GroundedDraft, dict[str, Any]]:
-    """範囲修復で残った不正を、同じ要求・出典の一意な逐語原文からだけ結び直す。
-
-    原文との一致は説明の意味支持を認定しない。復元した引用も通常の検査と監査へ戻す。
-    """
-    from rag_engine.generation.citation_range_repair import CitationRangeRepair, apply_range_repair
-
-    failed = {
-        (row["item_index"], row["citation_index"])
-        for row in diagnostic.get("rejected", ())
-        if row.get("reason_code") in CITATION_RANGE_ERROR_CODES
-    }
-    proposals, selected = [], []
-    for target in targets:
-        index, citation_index = target["item_index"], target["citation_index"]
-        if (index, citation_index) not in failed:
-            continue
-        item = draft.items[index]
-        if item.kind == "gap" or not item.request_id.strip():
-            continue
-        citation = item.citations[citation_index]
-        rows = [
-            scope
-            for plan in _item_request_plans(item, draft)
-            if "evidence_scope" in plan.model_fields_set
-            for scope in plan.evidence_scope
-            if scope.evidence_id == citation.evidence_id
-        ]
-        named = _label_spans(citation.evidence_id, spans)
-        if len(rows) != 1 or rows[0].relation != "direct" or len(named) != 1:
-            continue
-        quote = rows[0].link_quote.strip()
-        needle, _ = _canonical(quote)
-        haystack, _ = _canonical(_citation_view(named[0]).text)
-        start = haystack.find(needle) if needle else -1
-        if start < 0 or haystack.find(needle, start + 1) >= 0 or heading_only_quote(quote, named[0]):
-            continue
-        lines = _quote_lines(quote, named[0])
-        if lines is None:
-            continue
-        first: int | None = None
-        last: int | None = None
-        if lines:
-            parts = lines.split("-", 1)
-            first, last = int(parts[0]), int(parts[-1])
-        proposals.append(
-            {
-                "item_index": index,
-                "citation_index": citation_index,
-                "evidence_id": citation.evidence_id,
-                "line_start": first,
-                "line_end": last,
-            }
-        )
-        selected.append(target)
-    if not proposals:
-        return draft, dict(diagnostic)
-    repaired, local = apply_range_repair(draft, CitationRangeRepair.model_validate({"ranges": proposals}), selected)
-    if not local["adopted"]:
-        return draft, dict(diagnostic)
-    restored = {(row["item_index"], row["citation_index"]) for row in local["adopted"]}
-    result = dict(diagnostic)
-    result["model_rejected"] = list(diagnostic.get("rejected", ()))
-    result["plan_quote_fallback"] = local["adopted"]
-    result["adopted"] = [*diagnostic.get("adopted", ()), *local["adopted"]]
-    result["rejected"] = [row for row in diagnostic.get("rejected", ()) if (row["item_index"], row["citation_index"]) not in restored]
-    result["status"] = "completed" if len(result["adopted"]) == len(targets) and not result["rejected"] else "partial"
-    return repaired, result
 
 
 def restore_previous_citation_ranges(
@@ -5246,14 +5017,26 @@ def _rendered_evidence_span(
     )
 
 
+def _width_changed_runs(text: str) -> list[str]:
+    """幅の正規化で変わる文字・数字・記号の連なり。句読点と空白は字の違いを問う質問の対象にならないので除く。"""
+    runs: list[str] = []
+    current = ""
+    for char in text:
+        if fold_width(char) != char and unicodedata.category(char)[0] in "LNMS":
+            current += char
+        elif current:
+            runs.append(current)
+            current = ""
+    return [*runs, current] if current else runs
+
+
 def _original_character_forms(span: Mapping[str, Any], units: Sequence[tuple[int, int]]) -> str:
-    """照合用の幅正規化で変わる引用単位は、原文の文字表記も補助情報として渡す。"""
+    """幅の正規化で変わった字を補助情報で渡す（全角と半角を区別する質問に答えるため。#3858）。
+
+    引用単位の全文は重ねない。引用の原文はコードが番号の範囲から切り出すので、モデルに写させる必要が無い（#4139）。
+    """
     text = str(span.get("text") or "")
-    originals = [
-        {"引用単位": index, "原文": text[start:end]}
-        for index, (start, end) in enumerate(units, 1)
-        if text[start:end] != fold_width(text[start:end])
-    ]
+    originals = list(dict.fromkeys(run for start, end in units for run in _width_changed_runs(text[start:end])))
     return "原文の文字表記: " + json.dumps(originals, ensure_ascii=False) if originals else ""
 
 
@@ -5343,6 +5126,8 @@ class Round:
     # summary を確かめきれなかった理由（監査なし・不支持・保証の過剰・原因の推測など）。summary は残し、段落に
     # 警告（summary_unaudited）を付ける（#2738）。空でも意味監査の成功とは限らず、実施状態は別に記録する。
     summary_warning: str = ""
+    # 要約に書いた年のうち、質問と引いた根拠から説明できない年（#4042）。
+    summary_absent_years: list[str] = field(default_factory=list)
     # 監査が回答の時間の上限（確定の分を残した期限）までに終わらず、監査なしの round にした (#1516)。
     audit_cut: bool = False
     # 生成と監査の秒・prompt の文字数・LLM の token の数（遅い round の理由を確かめる。#1516）。
@@ -5490,6 +5275,36 @@ class Round:
                 for e in self.checked
                 if e.button_name_issues and not e.removed
             ],
+            "internal_label_issues": [
+                {
+                    "text": e.item.text,
+                    "hint": "text に根拠の番号と行の番号を書かないでください。出典は citations にだけ書き、text は利用者向けの文にしてください。",
+                }
+                for e in self.checked
+                if e.internal_label_issues and not e.removed
+            ],
+            "date_value_issues": [
+                *(
+                    {
+                        "text": e.item.text,
+                        "absent_years": e.date_value_issues,
+                        "hint": "質問と引用した原文に無い年を書かないでください。質問の年を保ち、原文に年が無ければ月日だけで説明してください。",
+                    }
+                    for e in self.checked
+                    if e.date_value_issues and not e.removed
+                ),
+                *(
+                    [
+                        {
+                            "text": str(self.draft.summary),
+                            "absent_years": self.summary_absent_years,
+                            "hint": "要約に、質問と引用した原文に無い年を書かないでください。",
+                        }
+                    ]
+                    if self.summary_absent_years
+                    else []
+                ),
+            ],
             "document_value_issues": [
                 {
                     "text": e.item.text,
@@ -5531,6 +5346,8 @@ class Round:
             deterministic_keys = {
                 "button_name_issues",
                 "citation_range_issues",
+                "date_value_issues",
+                "internal_label_issues",
                 "dropped_items",
                 "downgraded_items",
                 "document_value_issues",
@@ -7181,7 +6998,7 @@ def run_round(
         unknown = [
             (entry.request_id, label)
             for entry in plan.request_coverage
-            for label in [*entry.evidence_ids, *(scope.evidence_id for scope in entry.evidence_scope)]
+            for label in dict.fromkeys(scope.evidence_id for scope in entry.evidence_scope)
             if not _label_spans(label, spans)
         ]
         planned = GroundedDraft(request_coverage=plan.request_coverage, items=[], summary="", confidence="high")
@@ -7226,7 +7043,7 @@ def run_round(
                         "previous_plan": scope_plan.wire.model_dump(mode="json"),
                         "invalid_request_plan": notes,
                         "instruction": "previous_plan の invalid_request_plan の指摘をすべて直し、計画の全体を返してください。"
-                        "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は evidence_ids に入れないでください。"
+                        "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は direct と linked にしないでください。"
                         "linked の link には関係を明記した本文の番号の範囲を指定してください。",
                     },
                 )
@@ -7322,8 +7139,14 @@ def run_round(
         "unrecorded_evidence_ids": unrecorded_input_ids,
     }
 
+    plan_rows_added: list[str] = []
+
     def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
-        canonical = canonical_generation_draft(value)
+        canonical = canonical_generation_draft(value, lambda link: _scope_range_text(link, spans))
+        if scope_plan is None and isinstance(value, generation_model):
+            # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
+            canonical, added = plan_rows_from_citations(canonical, spans)
+            plan_rows_added.extend(added)
         provider_text = value._provider_output_text if isinstance(value, GroundedDraft) else None
         generation_outputs.append(
             {
@@ -7381,7 +7204,6 @@ def run_round(
                 provider_id=provider_id,
             )
             draft, range_repair = apply_range_repair(previous_draft, response, targets)
-            draft, range_repair = repair_ranges_from_plan_quotes(draft, spans, targets, range_repair)
             generation_outputs.append(
                 {
                     "purpose": "answer.repair",
@@ -7464,7 +7286,7 @@ def run_round(
             + json.dumps(
                 {
                     "invalid_request_plan": plan_errors,
-                    "previous_draft": draft.model_dump(mode="json"),
+                    "previous_draft": draft.model_dump(mode="json", exclude={"request_coverage": _PLAN_FIELDS_FROM_CODE}),
                     "instruction": "invalid_request_plan の指摘をすべて直し（対象の照合が抜けた根拠は照合し、unrelated は計画と説明から除く）、根拠計画と items が対応する完全な草稿を返してください。",
                 },
                 ensure_ascii=False,
@@ -7500,13 +7322,6 @@ def run_round(
         # 何の根拠も指さず計画の内外を変えないので、残っても未決に数えず、無視した指摘として記録だけする（#3825）。
         plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
         plan_repair_calls = 1
-    reanchored: list[dict[str, Any]] = []
-    if not range_only:
-        # 作り直しても残った出典 ID の取り違えは、原文がある根拠が 1 つに決まるときだけ付け替え、ほかの出典と同じ照合に
-        # 掛ける（モデルの呼び出しは増やさない）。決まらなければ従来どおり印を付ける（verify）。
-        draft, reanchored = reanchor_misattributed_citations(draft, spans)
-        if reanchored:
-            plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
     plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
     # 計画だけの出力（answer.scope）で立てた計画には guide_coverage の欄が無く、作り直しも計画を変えない（#3827）。
     plan_ignored = _unknown_plan_label_errors(draft, spans, scope_plan=scope_plan is not None or plan_recovery == "planned")
@@ -7561,8 +7376,6 @@ def run_round(
         "transport_attempts_recorded": False,
         "input": input_snapshot,
         "outputs": generation_outputs,
-        # 草稿の出典をシステムが付け替えた記録（どの行・出典を、どの根拠のどの行へ、なぜ）。final_draft は付け替えた後。
-        **({"citation_reanchored": reanchored} if reanchored else {}),
         "final_draft": draft.model_dump(mode="json", exclude_unset=True),
     }
     timing["generation_calls"] = generation_calls
@@ -7571,6 +7384,8 @@ def run_round(
         timing["citation_range_repair"] = range_repair
     if scope_plan_repair:
         timing["request_scope_repair"] = scope_plan_repair
+    if plan_rows_added:
+        timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
     if plan_repair_calls:
         timing["request_plan_repair"] = {
             "calls": plan_repair_calls,
@@ -7592,8 +7407,6 @@ def run_round(
         timing["request_plan_recovery"] = plan_recovery
     if plan_unsettled:
         timing["request_plan_unsettled"] = plan_unsettled
-    if reanchored:
-        timing["citation_reanchored"] = reanchored
     if plan_ignored:
         # 最後の草稿の計画に残った、送った根拠のどれにも当たらない label の指摘（計画の内外の判定には使わない）。
         timing["request_plan_ignored"] = plan_ignored
@@ -7985,6 +7798,14 @@ def run_round(
         summary_reason = summary_reason or "要求の根拠計画にない説明を除外したため、要約の結論を保留"
     if diagnostic_only(timing):
         summary_warning = "監査なし" if audit_mode == AUDIT_MODE_NONE else ""
+    # 要約の年も説明と同じ材料で照らす（#4042）。推測の値へ書き換えず、定型文にして是正に任せる。本文の説明は残す。
+    summary_absent = absent_years(
+        str(draft.summary),
+        question,
+        [text for entry in published for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)],
+    )
+    if summary_absent:
+        summary_reason = summary_reason or f"質問と引いた原文に無い年を要約が述べている: {'、'.join(summary_absent)}"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (
@@ -8014,6 +7835,7 @@ def run_round(
         withdrawn_requests={e.item.request_id for e in withdrawn if e.item.request_id},
         summary_reason=summary_reason,
         summary_warning=summary_warning,
+        summary_absent_years=summary_absent,
         audit_cut=audit_cut,
         timing=timing,
         citation_trace=citation_trace,
@@ -8089,6 +7911,16 @@ _ASSUMPTION_NO_CITED_HINT = (
 )
 
 
+# 監査なしの型でも是正する、決定的な検査の指摘。
+_AUDIT_NONE_CORRECTION_KEYS = (
+    "citation_range_issues",
+    "document_value_issues",
+    "button_name_issues",
+    "date_value_issues",
+    "internal_label_issues",
+)
+
+
 def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_unconfirmed: bool = False) -> dict:
     """次の組へ渡す指摘を監査の型で絞る（#2795）。通常の回答は事実の問題だけで、無ければ空（作り直さない）。
 
@@ -8099,12 +7931,8 @@ def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_
     if audit_mode == AUDIT_MODE_NONE:
         if assume_unconfirmed and feedback.get("no_cited_evidence"):
             return {"no_cited_evidence": _ASSUMPTION_NO_CITED_HINT}
-        if any(feedback.get(key) for key in ("document_value_issues", "citation_range_issues", "button_name_issues")):
-            return {
-                key: feedback[key]
-                for key in ("citation_range_issues", "document_value_issues", "button_name_issues", "supported_items")
-                if feedback.get(key)
-            }
+        if any(feedback.get(key) for key in _AUDIT_NONE_CORRECTION_KEYS):
+            return {key: feedback[key] for key in (*_AUDIT_NONE_CORRECTION_KEYS, "supported_items") if feedback.get(key)}
         return {}
     if audit_mode == AUDIT_MODE_DETAILED:
         return dict(feedback)
@@ -8310,6 +8138,7 @@ NO_IMPROVEMENT_REASONS = frozenset(
 # 業務ガイドの必須の手順を説明していないこと（#2491。手順の根拠は材料にある）も同じ。
 REGENERATION_FEEDBACK_KEYS = (
     "button_name_issues",
+    "internal_label_issues",
     "citation_range_issues",
     "dropped_items",
     "downgraded_items",
@@ -8333,6 +8162,8 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
             {json.dumps(ref, ensure_ascii=False, sort_keys=True, default=str) for ref in feedback.get("unused_evidence_ids") or ()}
         ),
         **({"button_name_issues": len(feedback["button_name_issues"])} if feedback.get("button_name_issues") else {}),
+        **({"date_value_issues": len(feedback["date_value_issues"])} if feedback.get("date_value_issues") else {}),
+        **({"internal_label_issues": len(feedback["internal_label_issues"])} if feedback.get("internal_label_issues") else {}),
         "citation_ranges": sorted(
             (str(row.get("item_index")), str(row.get("evidence_id")), str(row.get("reason_code")))
             for row in feedback.get("citation_range_issues") or ()
@@ -8557,6 +8388,10 @@ def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     if count := len(feedback.get("button_name_issues") or ()):
         labels.append(f"引用原文にないボタン操作 {count} 件")
+    if count := len(feedback.get("date_value_issues") or ()):
+        labels.append(f"質問と引用原文に無い年 {count} 件")
+    if count := len(feedback.get("internal_label_issues") or ()):
+        labels.append(f"説明の文に混ざった内部の番号 {count} 件")
     ranges = feedback.get("citation_range_issues") or ()
     if count := sum(row.get("reason_code") != CITATION_HEADING_ONLY for row in ranges):
         labels.append(f"範囲を確認できない引用 {count} 件")

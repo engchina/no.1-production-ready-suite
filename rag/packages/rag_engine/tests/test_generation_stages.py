@@ -55,7 +55,6 @@ def plan(question: str = QUESTION) -> dict[str, Any]:
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_ids": ["E1", "E2"],
                 "evidence_scope": [{"evidence_id": eid, "target": "項目", "relation": "direct"} for eid in ("E1", "E2")],
             }
         ]
@@ -137,8 +136,18 @@ def test_generation_keeps_source_coverage_after_planning(question: str) -> None:
     "bad_plan",
     [
         {"request_coverage": []},
-        {"request_coverage": [*plan()["request_coverage"], {"request_id": "foreign", "evidence_ids": ["E1"]}]},
-        {"request_coverage": [{**row, "evidence_ids": ["unknown"]} for row in plan()["request_coverage"]]},
+        {
+            "request_coverage": [
+                *plan()["request_coverage"],
+                {"request_id": "foreign", "evidence_scope": [{"evidence_id": "E1", "target": "項目", "relation": "direct"}]},
+            ]
+        },
+        {
+            "request_coverage": [
+                {**row, "evidence_scope": [{"evidence_id": "unknown", "target": "項目", "relation": "direct"}]}
+                for row in plan()["request_coverage"]
+            ]
+        },
         {"request_coverage": [*plan()["request_coverage"], plan()["request_coverage"][0]]},
     ],
     ids=["missing", "foreign-request", "unknown-evidence", "duplicate-request"],
@@ -233,7 +242,9 @@ def test_plan_call_implementation_errors_are_not_classified() -> None:
 
 def test_invalid_plan_failure_keeps_issue_counts_without_contents() -> None:
     """#4091: 計画の不整合は、どの検査に当たったかの件数だけを診断に残す。"""
-    missing = {"request_coverage": [{**plan()["request_coverage"][0], "request_id": "Q9", "evidence_ids": ["unknown"]}]}
+    missing = {
+        "request_coverage": [{"request_id": "Q9", "evidence_scope": [{"evidence_id": "unknown", "target": "項目", "relation": "direct"}]}]
+    }
 
     def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
         return RequestScopePlan.model_validate(missing)
@@ -265,7 +276,9 @@ def _scope_failures(parse_plans: list[Any]) -> tuple[Any, list[dict[str, Any]]]:
     return parse, prompts
 
 
-MISSING_PLAN = {"request_coverage": [{**plan()["request_coverage"][0], "request_id": "Q9", "evidence_ids": ["unknown"]}]}
+MISSING_PLAN = {
+    "request_coverage": [{"request_id": "Q9", "evidence_scope": [{"evidence_id": "unknown", "target": "項目", "relation": "direct"}]}]
+}
 
 
 def test_valid_plan_is_not_repaired_and_keeps_one_plan_call() -> None:
@@ -336,7 +349,6 @@ def _linked_plan(link: dict[str, Any] | None) -> dict[str, Any]:
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_ids": ["E1"],
                 "evidence_scope": [{"evidence_id": "E1", "target": "項目", "relation": "linked", "link": link}],
             }
         ]
@@ -387,7 +399,7 @@ def test_invalid_linked_range_is_a_finding_and_is_repaired(link: dict[str, Any] 
 def test_unrelated_evidence_in_the_plan_is_a_finding_and_the_repaired_plan_is_used() -> None:
     """#4098: 直した計画だけが生成へ渡る。"""
     wrong = plan()
-    wrong["request_coverage"][0]["evidence_scope"][0]["relation"] = "unrelated"
+    wrong["request_coverage"][0]["evidence_scope"].append({"evidence_id": "E1", "target": "項目", "relation": "unrelated"})
     right = plan()
     generated: list[str] = []
     prompts: list[dict[str, Any]] = []
@@ -405,3 +417,131 @@ def test_unrelated_evidence_in_the_plan_is_a_finding_and_the_repaired_plan_is_us
     assert any("E1" in finding for finding in prompts[1]["correction"]["invalid_request_plan"])
     assert RequestScopePlan.model_validate(right).model_dump_json() in generated[0]
     assert RequestScopePlan.model_validate(wrong).model_dump_json() not in generated[0]
+
+
+def _direct_draft(scope: list[dict[str, Any]]) -> dict[str, Any]:
+    """小問の無い質問の草稿（計画を同じ出力で返す）。"""
+    return {
+        "request_coverage": [{"request_id": "Q1", "evidence_scope": scope}],
+        "items": [
+            {
+                "kind": "rule",
+                "request_id": "Q1",
+                "text": TEXTS[0],
+                "citations": [{"evidence_id": "E1", "line_start": 1, "line_end": 1}],
+            }
+        ],
+        "summary": TEXTS[0],
+        "confidence": "medium",
+    }
+
+
+def _run_direct(*outputs: dict[str, Any]) -> tuple[Any, list[Any]]:
+    """小問の無い質問の生成を、番号の計画の応答で 1 回の round だけ通す。"""
+    calls: list[Any] = []
+    values = iter(outputs)
+
+    def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        calls.append((schema, prompt))
+        return schema.model_validate(next(values))
+
+    return run(TEXTS[0] + "について教えてください。", parse), calls
+
+
+def test_generation_output_has_no_copied_plan_fields_and_code_cuts_the_link_quote() -> None:
+    """#4117: 生成の出力の計画に写しの欄が無く、linked の原文はコードが番号の範囲から切り出す。"""
+    schema = json.dumps(generation_draft_wire_model().model_json_schema(), ensure_ascii=False)
+    assert "link_quote" not in schema
+    assert '"evidence_ids"' in schema  # guide_coverage の欄だけに残る
+    plan_schema = generation_draft_wire_model().model_json_schema()["$defs"]["RequestCoverageRange"]["properties"]
+    assert set(plan_schema) == {"request_id", "evidence_scope"}
+    result, calls = _run_direct(
+        _direct_draft(
+            [
+                {"evidence_id": "E1", "target": "項目", "relation": "direct"},
+                {
+                    "evidence_id": "E2",
+                    "target": "項目",
+                    "relation": "linked",
+                    "link": {"evidence_id": "E2", "line_start": 1, "line_end": 1},
+                },
+            ]
+        )
+    )
+    assert len(calls) == 1
+    plan_row = result.draft.request_coverage[0]
+    assert plan_row.evidence_ids == ["E1", "E2"]
+    assert [(scope.relation, scope.link_quote) for scope in plan_row.evidence_scope] == [("direct", ""), ("linked", TEXTS[1])]
+    assert "request_plan_errors" not in result.timing
+
+
+@pytest.mark.parametrize(
+    "link",
+    [None, {"evidence_id": "E2", "line_start": 9, "line_end": 9}, {"evidence_id": "E9", "line_start": 1, "line_end": 1}],
+    ids=["no_range", "out_of_bounds", "unknown_evidence"],
+)
+def test_generation_with_an_invalid_link_range_is_repaired_once_with_the_finding(link: dict[str, Any] | None) -> None:
+    """#4117: 無効な範囲を推測で直さず、計画の検査の指摘で作り直す。検査は緩めない。"""
+    bad = _direct_draft(
+        [
+            {"evidence_id": "E1", "target": "項目", "relation": "direct"},
+            {"evidence_id": "E2", "target": "項目", "relation": "linked", "link": link},
+        ]
+    )
+    good = _direct_draft([{"evidence_id": "E1", "target": "項目", "relation": "direct"}])
+    result, calls = _run_direct(bad, good)
+    assert len(calls) == 2
+    assert any("linked の E2" in error and "link" in error for error in result.timing["request_plan_errors"])
+    repair_input = calls[1][1]
+    assert "invalid_request_plan" in repair_input
+    # 作り直しの入力の草稿に、コードが作る欄（原文の写しと導いた根拠の一覧）を出さない。
+    assert "link_quote" not in repair_input and '"evidence_ids"' not in repair_input
+    assert result.timing["request_plan_repair"]["calls"] == 1
+    assert "request_plan_unsettled" not in result.timing
+
+
+def test_evidence_ids_cannot_disagree_with_the_scope_rows() -> None:
+    """#4117: 計画の根拠は行から導くので、一覧と行の食い違いの作り直しが起きない。"""
+    result, calls = _run_direct(
+        _direct_draft(
+            [
+                {"evidence_id": "E1", "target": "項目", "relation": "direct"},
+                {"evidence_id": "E2", "target": "別の項目", "relation": "unrelated"},
+            ]
+        )
+    )
+    assert len(calls) == 1
+    assert result.draft.request_coverage[0].evidence_ids == ["E1"]
+    assert "request_plan_errors" not in result.timing
+
+
+def test_a_cited_evidence_without_a_plan_row_is_added_by_code_without_a_repair_or_a_mark() -> None:
+    """#4117: 同じ出力の計画に行が無く説明が引いた根拠は、コードが direct の行を足す。作り直しも印も要らない。"""
+    output = _direct_draft([{"evidence_id": "E2", "target": "項目", "relation": "direct"}])
+    result, calls = _run_direct(output)
+    assert len(calls) == 1
+    plan_row = result.draft.request_coverage[0]
+    assert plan_row.evidence_ids == ["E2", "E1"]
+    assert [(scope.evidence_id, scope.relation) for scope in plan_row.evidence_scope] == [("E2", "direct"), ("E1", "direct")]
+    assert result.timing["request_plan_rows_from_citations"] == ["E1"]
+    assert "request_plan_unsettled" not in result.timing
+    entry = next(entry for entry in result.checked if entry.item.text == TEXTS[0])
+    assert entry.confirmed and not entry.marks
+
+
+def test_a_cited_evidence_the_plan_judged_unrelated_stays_excluded() -> None:
+    """#4117: 判断を覆さない。unrelated の根拠の説明は外す。"""
+    output = _direct_draft([{"evidence_id": "E1", "target": "項目", "relation": "unrelated"}])
+    result, calls = _run_direct(output)
+    assert len(calls) == 1
+    assert "request_plan_rows_from_citations" not in result.timing
+    assert not any(entry.item.text == TEXTS[0] and entry.published for entry in result.checked)
+
+
+def test_an_unknown_cited_label_gets_no_plan_row() -> None:
+    """#4117: 送っていない番号は足さない。引用の検査が扱う。"""
+    output = _direct_draft([{"evidence_id": "E1", "target": "項目", "relation": "direct"}])
+    output["items"][0]["citations"] = [{"evidence_id": "E9", "line_start": 1, "line_end": 1}]
+    result, _calls = _run_direct(output)
+    assert "request_plan_rows_from_citations" not in result.timing
+    assert [scope.evidence_id for scope in result.draft.request_coverage[0].evidence_scope] == ["E1"]

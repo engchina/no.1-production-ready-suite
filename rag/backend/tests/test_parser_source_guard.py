@@ -147,6 +147,12 @@ _DOCM = "application/vnd.ms-word.document.macroEnabled.12"
 _PPTM = "application/vnd.ms-powerpoint.presentation.macroEnabled.12"
 _XLSM = "application/vnd.ms-excel.sheet.macroEnabled.12"
 _ODT = "application/vnd.oasis.opendocument.text"
+_DOTX = "application/vnd.openxmlformats-officedocument.wordprocessingml.template"
+_DOTM = "application/vnd.ms-word.template.macroEnabled.12"
+_POTX = "application/vnd.openxmlformats-officedocument.presentationml.template"
+_POTM = "application/vnd.ms-powerpoint.template.macroEnabled.12"
+_XLTX = "application/vnd.openxmlformats-officedocument.spreadsheetml.template"
+_XLTM = "application/vnd.ms-excel.template.macroEnabled.12"
 
 
 def _preprocess(profile: str, **update: Any) -> Settings:
@@ -164,6 +170,14 @@ def _preprocess(profile: str, **update: Any) -> Settings:
         ("macro.docm", _DOCM, "macro_enabled_office_not_supported"),
         ("macro.pptm", _PPTM, "macro_enabled_office_not_supported"),
         ("macro.xlsm", _XLSM, "macro_enabled_office_not_supported"),
+        ("form.dotx", _DOTX, "office_template_not_supported"),
+        ("form.potx", _POTX, "office_template_not_supported"),
+        ("form.xltx", _XLTX, "office_template_not_supported"),
+        ("form.dotm", _DOTM, "macro_enabled_office_not_supported"),
+        ("form.potm", _POTM, "macro_enabled_office_not_supported"),
+        ("form.xltm", _XLTM, "macro_enabled_office_not_supported"),
+        ("form.dotx", "application/octet-stream", "office_template_not_supported"),
+        ("form.xltm", "application/octet-stream", "macro_enabled_office_not_supported"),
         ("memo.odt", _ODT, "odt_rtf_not_supported"),
         ("memo.rtf", "text/rtf", "odt_rtf_not_supported"),
         ("memo.rtf", "application/rtf", "odt_rtf_not_supported"),
@@ -181,7 +195,9 @@ def test_office_needing_conversion_is_blocked_without_converting_preprocess(
     assert block.code == "office_conversion_required"
     assert "原本のままでは解析できません" in block.message
     assert "マクロは実行しません" in block.message
-    expected = "Excel→JSONL" if file_name.endswith(("xls", "xlsm")) else "Office→PDF"
+    expected = (
+        "Excel→JSONL" if file_name.endswith(("xls", "xlsm", "xltx", "xltm")) else "Office→PDF"
+    )
     assert f"「{expected}」" in block.message
 
 
@@ -192,6 +208,12 @@ def test_office_needing_conversion_is_blocked_without_converting_preprocess(
         ("old.ppt", _PPT),
         ("macro.docm", _DOCM),
         ("macro.pptm", _PPTM),
+        ("form.dotx", _DOTX),
+        ("form.dotm", _DOTM),
+        ("form.potx", _POTX),
+        ("form.potm", _POTM),
+        ("form", _DOTX),
+        ("form", _POTM),
         ("memo.odt", _ODT),
         ("memo.rtf", "text/rtf"),
         ("memo", _ODT),
@@ -210,6 +232,9 @@ def test_office_to_pdf_converts_word_and_powerpoint(file_name: str, content_type
         ("old.xls", _XLS),
         ("macro.xlsm", _XLSM),
         ("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ("form.xltx", _XLTX),
+        ("form.xltm", _XLTM),
+        ("form", _XLTX),
     ],
 )
 def test_office_to_pdf_does_not_convert_excel(file_name: str, content_type: str) -> None:
@@ -224,7 +249,15 @@ def test_office_to_pdf_does_not_convert_excel(file_name: str, content_type: str)
     assert parser_source_block(jsonl, profile) is None
 
 
-@pytest.mark.parametrize(("file_name", "content_type"), [("old.doc", _WORD), ("macro.docm", _DOCM)])
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("old.doc", _WORD),
+        ("macro.docm", _DOCM),
+        ("form.dotx", _DOTX),
+        ("form.dotm", _DOTM),
+    ],
+)
 def test_word_to_jsonl_converts_legacy_and_macro_word(file_name: str, content_type: str) -> None:
     """Word→JSONL は .doc / .docm を変換する（#2457 の ④。解析エンジンは構造化レコード JSONL）。"""
     profile = _profile(file_name, content_type)
@@ -242,7 +275,14 @@ def test_word_to_jsonl_converts_legacy_and_macro_word(file_name: str, content_ty
 
 def test_word_to_jsonl_does_not_convert_excel_or_powerpoint() -> None:
     jsonl = _preprocess("word_to_jsonl", rag_parser_adapter_backend="structured_records_jsonl")
-    for file_name, content_type in (("old.xls", _XLS), ("old.ppt", _PPT), ("macro.xlsm", _XLSM)):
+    for file_name, content_type in (
+        ("old.xls", _XLS),
+        ("old.ppt", _PPT),
+        ("macro.xlsm", _XLSM),
+        ("form.xltx", _XLTX),
+        ("form.potx", _POTX),
+        ("form.potm", _POTM),
+    ):
         block = parser_source_block(jsonl, _profile(file_name, content_type))
         assert block is not None and block.code == "office_conversion_required"
 
@@ -252,6 +292,50 @@ def test_excel_to_jsonl_does_not_convert_word() -> None:
     jsonl = _preprocess("excel_to_jsonl", rag_parser_adapter_backend="structured_records_jsonl")
     block = parser_source_block(jsonl, profile)
     assert block is not None and block.code == "office_conversion_required"
+
+
+@pytest.mark.parametrize("file_name", ["form.dotx", "form.dotm", "form.potx", "form.potm"])
+def test_excel_to_jsonl_does_not_convert_word_or_powerpoint_template(file_name: str) -> None:
+    jsonl = _preprocess("excel_to_jsonl", rag_parser_adapter_backend="structured_records_jsonl")
+    block = parser_source_block(jsonl, _profile(file_name, "application/octet-stream"))
+    assert block is not None and block.code == "office_conversion_required"
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [("form.xltx", _XLTX), ("form.xltm", _XLTM), ("form", _XLTX)],
+)
+def test_excel_to_jsonl_converts_excel_template(file_name: str, content_type: str) -> None:
+    """Excel のテンプレートは Excel→JSONL で読む(解析エンジンは自動で切り替えない。#4054)。"""
+    profile = _profile(file_name, content_type)
+    jsonl = _preprocess("excel_to_jsonl", rag_parser_adapter_backend="structured_records_jsonl")
+    assert parser_source_guard.settings_convert_source(jsonl, profile)
+    assert parser_source_block(jsonl, profile) is None
+    docling = parser_source_block(_preprocess("excel_to_jsonl"), profile)
+    assert docling is not None
+    assert docling.suggested_backend == "structured_records_jsonl"
+
+
+@pytest.mark.parametrize(
+    ("file_name", "reason"),
+    [
+        ("form.dotx", "unsupported_office_template"),
+        ("form.dotm", "unsupported_macro_enabled_office"),
+    ],
+)
+def test_template_is_not_read_as_is_even_by_unstructured(file_name: str, reason: str) -> None:
+    """テンプレートは Unstructured を選んでも原本のまま読まず、変換を案内する(#4054)。"""
+    profile = _profile(file_name, "application/octet-stream")
+    assert profile.parser_backend == "unsupported"
+    assert profile.preview_kind == "unsupported"
+    assert reason in profile.quality_warnings
+    settings = get_settings().model_copy(update={"rag_parser_adapter_backend": "unstructured"})
+    block = parser_source_block(settings, profile)
+    assert block is not None and block.code == "office_conversion_required"
+    converted = parser_source_guard.converted_source_profile(profile, converted=True)
+    assert converted is not None
+    assert converted.unsupported_reason is None
+    assert reason not in converted.quality_warnings
 
 
 @pytest.mark.parametrize("preprocess", ["word_to_jsonl", "excel_to_jsonl"])

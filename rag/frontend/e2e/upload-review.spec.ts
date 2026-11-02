@@ -635,6 +635,52 @@ test("マクロ付きの Office はアップロードでき、ファイル準備
   await expectNoPageOverflow(page);
 });
 
+// #4054: テンプレートは送れ、変換の案内を 1 か所に出す。原本の確認で止めたファイルは理由と対処をそのまま示す。
+test("Office テンプレートはアップロードでき、確認で止めたファイルは理由を示す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const invalidMessage =
+    "内容が .xltx の Office テンプレートではないか、ファイルが壊れているため、受け付けませんでした。Office で開けることと拡張子を確かめてからアップロードし直してください。";
+  await mockLocalAuth(page);
+  await mockUploadPage(page);
+  await page.route("**/api/documents/batch-upload", async (route) => {
+    await route.fulfill({
+      json: apiEnvelope({
+        items: [
+          {
+            ...uploadResult("form.dotm"),
+            parser_notice: {
+              code: "office_conversion_required",
+              backend: "docling",
+              file_format: ".dotm",
+              suggested_backend: null,
+              message: "変換を選んでから取り込んでください。",
+            },
+          },
+        ],
+        failed_items: [{ file_name: "broken.xltx", status_code: 415, message: invalidMessage, source_profile: null }],
+        total_count: 2,
+        uploaded_count: 1,
+        failed_count: 1,
+        queued_count: 0,
+        skipped_count: 0,
+      }),
+    });
+  });
+
+  await page.goto("/upload");
+  await expect(page.locator('input[type="file"]')).toHaveAttribute("accept", /\.dotx,\.dotm,\.potx,\.potm,\.xltx,\.xltm/);
+  await expect(page.getByText(/DOTX, DOTM, POTX, POTM, XLTX, XLTM/)).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles([textFile("form.dotm", 6), textFile("broken.xltx", 6)]);
+  await page.getByRole("button", { name: /アップロードを開始/ }).click();
+
+  await expect(page.getByRole("heading", { name: "アップロード結果" })).toBeVisible();
+  await expect(
+    page.getByText("原本のままでは解析できない形式です（処理レシピのファイル準備で変換を選択）")
+  ).toHaveCount(1);
+  await expect(page.getByText(invalidMessage).first()).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("office-template-upload.png"), fullPage: true });
+  await expectNoPageOverflow(page);
+});
+
 test(
   "HEIC / HEIF・EPUB・音声・動画は送る前に変換の方法を示して送らず、対応形式の案内にも未対応と出す（#3351・#3369）",
   { tag: "@responsive" },

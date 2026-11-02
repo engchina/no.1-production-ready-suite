@@ -3,15 +3,29 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
-from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, native_search_request
+from rag_engine.adapters.oracle.native_hybrid import (
+    NATIVE_FILTER_MAX_BATCHES,
+    NATIVE_FILTER_MAX_BYTES,
+    NativeFilterBatch,
+    NativeHybridUnavailable,
+    native_filter_batches,
+    native_search_request,
+    render_native_filter,
+)
 
-from app.clients.oracle import OracleClient, SearchHits
+from app.clients.oracle import (
+    NativeSearchRows,
+    OracleClient,
+    SearchHits,
+    _merge_native_filter_batches,
+)
 from app.config import Settings
 from app.schemas.search import SearchMode
 
@@ -51,15 +65,16 @@ def test_native_request_scopes_before_ranking_and_does_not_infer_queries() -> No
     assert spec["return"]["topN"] == 600
     with pytest.raises(ValueError):
         native_search_request(query="合成", vector=[1], channel="vector", allowed_ids=[])
-    large = native_search_request(
-        query="合成", vector=[1], channel="vector", allowed_ids=[str(i) for i in range(2100)]
-    )
-    assert [len(v["args"]) for v in large["filter_by"]["args"]] == [1000, 1000, 100]
 
 
 class NativeOracle(OracleClient):
     def __init__(self, *, fail_keyword: bool = False) -> None:
-        super().__init__(Settings(rag_hybrid_search_backend="oracle_native"))
+        # 原生索引の経路の契約を確かめる(範囲の行を距離順に読む経路は下の専用のテスト)。
+        super().__init__(
+            Settings(
+                rag_hybrid_search_backend="oracle_native", rag_native_vector_exact_max_chunks=0
+            )
+        )
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.fail_keyword = fail_keyword
 
@@ -74,7 +89,7 @@ class NativeOracle(OracleClient):
             assert "is_active = 1" in sql
             assert "d.status = 'INDEXED'" in sql
             if "allowed_count" in sql:
-                return [{"native_scope_id": None, "allowed_count": 1}]
+                return [{"native_scope_id": None, "allowed_count": 1, "vector_count": 1}]
             return [{"chunk_id": "a", "native_scope_id": None}]
         spec = json.loads(str(binds["native_spec"]))
         assert spec["filter_by"]["args"] == ["a"]
@@ -204,8 +219,8 @@ class ScopedNativeOracle(NativeOracle):
         self.reads.append(sql)
         if "allowed_count" in sql:
             return [
-                {"native_scope_id": 1, "allowed_count": 400},
-                {"native_scope_id": 2, "allowed_count": 1},
+                {"native_scope_id": 1, "allowed_count": 400, "vector_count": 400},
+                {"native_scope_id": 2, "allowed_count": 1, "vector_count": 1},
             ]
         if "COUNT(*) AS chunk_count" in sql:
             return [
@@ -274,7 +289,7 @@ class CompleteScopeOracle(NativeOracle):
             return [{"index_name": "RAG_CHUNKS_HYBRID_IDX"}]
         self.reads.append(sql)
         if "allowed_count" in sql:
-            return [{"native_scope_id": 7, "allowed_count": 40000}]
+            return [{"native_scope_id": 7, "allowed_count": 40000, "vector_count": 40000}]
         if "COUNT(*) AS chunk_count" in sql:
             return [{"native_scope_id": 7, "chunk_count": 40000}]
         if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
@@ -545,3 +560,556 @@ async def test_native_metadata_omits_unmatched_channel_rank(present: str) -> Non
     assert f"{absent}_rank" not in hits[0].metadata
     assert hits[0].metadata[f"{absent}_contribution"] == 0
     assert hits[0].metadata[f"{present}_rank"] == 1
+
+
+class ExactScopeOracle(OracleClient):
+    """範囲の行を距離順に読む経路(#4134・#4097)。読んだ SQL と検索の要求を記録する。"""
+
+    def __init__(self, *, vector_chunks: int = 3, exact_max_chunks: int = 50000) -> None:
+        super().__init__(
+            Settings(
+                rag_hybrid_search_backend="oracle_native",
+                rag_native_vector_exact_max_chunks=exact_max_chunks,
+                rag_min_similarity=0.3,
+            )
+        )
+        self.vector_chunks = vector_chunks
+        self.exact_sql: list[str] = []
+        self.exact_binds: list[dict[str, object]] = []
+        self.searches: list[dict[str, Any]] = []
+        self.search_rows: list[dict[str, object]] = []
+        self.fail_exact = False
+
+    async def _fetch_all(
+        self, sql: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if "FROM user_indexes" in sql:
+            return [{"index_name": "RAG_CHUNKS_HYBRID_IDX"}]
+        if "allowed_count" in sql:
+            assert "c.embedding IS NOT NULL" in sql
+            return [{"native_scope_id": 7, "allowed_count": 5, "vector_count": self.vector_chunks}]
+        if "COUNT(*) AS chunk_count" in sql:
+            return [{"native_scope_id": 7, "chunk_count": 5}]
+        if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+            spec = json.loads(str((binds or {})["native_spec"]))
+            self.searches.append(spec)
+            return self.search_rows
+        assert "FETCH EXACT FIRST" in sql
+        if self.fail_exact:
+            raise RuntimeError("合成の距離順の失敗")
+        self.exact_sql.append(sql)
+        self.exact_binds.append(dict(binds or {}))
+        return [
+            _exact_row("near", 0.1),
+            _exact_row("middle", 0.4),
+            _exact_row("far", 0.9),  # 類似度 0.1 は下限 0.3 より低い。
+        ]
+
+
+def _exact_row(chunk_id: str, distance: float) -> dict[str, object]:
+    return {
+        "document_id": "doc-a",
+        "chunk_id": chunk_id,
+        "chunk_text": f"合成の本文 {chunk_id}",
+        "metadata_json": {},
+        "chunk_index": 0,
+        "file_name": "文書 A.txt",
+        "score": 100 / (1 + distance),
+        "native_similarity": 1 - distance,
+        "native_vector_score": 100 / (1 + distance),
+    }
+
+
+def _text_row(chunk_id: str, rank: int) -> dict[str, object]:
+    return {
+        "document_id": "doc-a",
+        "chunk_id": chunk_id,
+        "chunk_text": f"合成の本文 {chunk_id}",
+        "metadata_json": {},
+        "chunk_index": 1,
+        "file_name": "文書 A.txt",
+        "score": 8,
+        "native_similarity": None,
+        "native_vector_rank": None,
+        "native_text_rank": rank,
+        "native_vector_score": 0,
+        "native_text_score": 8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_vector_channel_reads_scope_rows_in_distance_order_without_search() -> None:
+    client = ExactScopeOracle()
+
+    rows = await client._native_rows(
+        "vector", "合成", [1.0] * 1536, top_k=3, filters={"document_id": "doc-a"}
+    )
+
+    assert client.searches == []
+    assert [row["chunk_id"] for row in rows] == ["near", "middle"]
+    assert [row["native_vector_rank"] for row in rows] == [1, 2]
+    assert rows[0]["score"] == pytest.approx(100 / 1.1)
+    sql = client.exact_sql[0]
+    # 解決済みの範囲で読む行を決め、結果の行に原生の分岐と同じ権限の条件を掛け直す。
+    assert json.loads(str(client.exact_binds[0]["exact_scope_ids"])) == [7]
+    assert "candidate.native_scope_id IN (" in sql
+    assert sql.index("FETCH EXACT FIRST 3 ROWS ONLY") < sql.index(":filter_document_id")
+    assert "is_active = 1" in sql and "d.status = 'INDEXED'" in sql
+    assert "candidate.embedding IS NOT NULL" in sql
+    assert "DR$" not in sql
+    assert client.exact_binds[0]["filter_document_id"] == "doc-a"
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval == {
+        "method": "exact_scope",
+        "scope_vector_chunks": 3,
+        "exact_max_chunks": 50000,
+        "requested": 3,
+        "expected": 3,
+        "returned": 3,
+        "shortage": False,
+    }
+    assert rows.threshold["rejected_vector_count"] == 1
+
+
+def test_exact_statement_keeps_partial_ranges_and_individual_ids_in_scope() -> None:
+    from app.clients.oracle import _native_exact_vector_statement, _NativeScope
+
+    scope = _NativeScope(
+        allowed_ids=["single-a"],
+        complete_scopes=[1, 2],
+        scope_ranges=[(3, 0, 4)],
+        vector_chunks=9,
+    )
+    sql, binds = _native_exact_vector_statement(where="1 = 1", scope=scope, top_k=5)
+
+    assert json.loads(str(binds["exact_scope_ids"])) == [1, 2]
+    assert json.loads(str(binds["exact_scope_ranges"])) == [[3, 0, 4]]
+    assert json.loads(str(binds["exact_chunk_ids"])) == ["single-a"]
+    assert sql.count("UNION ALL") == 2
+    only_ids = _NativeScope(
+        allowed_ids=["single-a"], complete_scopes=[], scope_ranges=[], vector_chunks=1
+    )
+    sql, binds = _native_exact_vector_statement(where="1 = 1", scope=only_ids, top_k=5)
+    assert set(binds) == {"exact_chunk_ids"}
+    assert "UNION ALL" not in sql
+    with pytest.raises(ValueError):
+        _native_exact_vector_statement(
+            where="1 = 1",
+            scope=_NativeScope(
+                allowed_ids=[], complete_scopes=[], scope_ranges=[], vector_chunks=0
+            ),
+            top_k=5,
+        )
+
+
+@pytest.mark.asyncio
+async def test_hybrid_channel_ranks_exact_vectors_with_one_text_search() -> None:
+    from app.rag.answer_engine import _hit_channels
+
+    client = ExactScopeOracle()
+    client.search_rows = [_text_row("middle", 1), _text_row("text-only", 2)]
+
+    results = await client.search_many([("合成", [1.0] * 1536, SearchMode.HYBRID)], 3)
+
+    assert [spec["search_fusion"] for spec in client.searches] == ["TEXT_ONLY"]
+    hits = {hit.chunk_id: hit for hit in results[0]}
+    # 全文と重なる行が先頭に来る。類似度の下限より低いベクトルだけの行は残らない。
+    assert [hit.chunk_id for hit in results[0]] == ["middle", "near", "text-only"]
+    assert hits["middle"].metadata["vector_rank"] == 2
+    assert hits["middle"].metadata["keyword_rank"] == 1
+    assert hits["near"].metadata["vector_rank"] == 1
+    assert "keyword_rank" not in hits["near"].metadata
+    assert "vector_rank" not in hits["text-only"].metadata
+    assert "native_wrrf_score" not in hits["near"].metadata
+    assert _hit_channels(hits["near"], 0) == {"vector:q1"}
+    assert _hit_channels(hits["middle"], 0) == {"vector:q1", "keyword:oracle_text:q1"}
+    assert _hit_channels(hits["text-only"], 0) == {"keyword:oracle_text:q1"}
+
+
+@pytest.mark.asyncio
+async def test_exact_read_does_not_query_when_no_chunk_has_an_embedding() -> None:
+    client = ExactScopeOracle(vector_chunks=0)
+    client.search_rows = [_text_row("text-only", 1)]
+
+    rows = await client._native_rows("hybrid", "合成", [1.0] * 1536, top_k=3, filters={})
+
+    assert client.exact_sql == []
+    assert [row["chunk_id"] for row in rows] == ["text-only"]
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval["expected"] == 0
+    assert rows.vector_retrieval["shortage"] is False
+
+
+@pytest.mark.asyncio
+async def test_exact_read_failure_is_a_failed_search_not_an_empty_result() -> None:
+    client = ExactScopeOracle()
+    client.fail_exact = True
+
+    results = await client.search_many([("合成", [1.0] * 1536, SearchMode.VECTOR)], 3)
+
+    assert getattr(results[0], "status", "") == "failed"
+    assert isinstance(getattr(results[0], "failure", None), NativeHybridUnavailable)
+
+
+@pytest.mark.parametrize(
+    ("channel", "returned", "shortage"),
+    [("vector", 0, True), ("hybrid", 1, True), ("vector", 2, False)],
+)
+@pytest.mark.asyncio
+async def test_native_index_shortage_over_the_limit_is_recorded_without_exact_read(
+    channel: str, returned: int, shortage: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = ExactScopeOracle(vector_chunks=10, exact_max_chunks=5)
+    vector_rows = [
+        {**_text_row(f"v{i}", 1), "native_vector_rank": i + 1, "native_vector_score": 80}
+        for i in range(returned)
+    ]
+    client.search_rows = (
+        [*vector_rows, _text_row("text-only", 2)] if channel == "hybrid" else (vector_rows)
+    )
+
+    with caplog.at_level("WARNING", logger="app.clients.oracle"):
+        rows = await client._native_rows(channel, "合成", [1.0] * 1536, top_k=2, filters={})
+
+    assert client.exact_sql == []
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval["method"] == "native_index"
+    assert rows.vector_retrieval["expected"] == 2
+    assert rows.vector_retrieval["returned"] == returned
+    assert rows.vector_retrieval["shortage"] is shortage
+    assert ("候補が不足" in caplog.text) is shortage
+
+
+@pytest.mark.asyncio
+async def test_keyword_channel_never_reads_exact_rows() -> None:
+    client = ExactScopeOracle()
+    client.search_rows = [_text_row("text-only", 1)]
+
+    rows = await client._native_rows("keyword", "合成", (), top_k=3, filters={})
+
+    assert client.exact_sql == []
+    assert [spec["search_fusion"] for spec in client.searches] == ["TEXT_ONLY"]
+    assert isinstance(rows, NativeSearchRows) and rows.vector_retrieval == {}
+
+
+@pytest.mark.asyncio
+async def test_vector_search_trace_shows_how_the_vector_branch_was_read() -> None:
+    client = ExactScopeOracle()
+    details: list[dict[str, Any]] = []
+
+    class _Observation:
+        def display(self, *, details: object = None, params: object = None) -> None:
+            if isinstance(details, dict):
+                captured.append(details)
+
+    captured = details
+
+    @contextmanager
+    def observe(*_: object, **__: object) -> Iterator[_Observation]:
+        yield _Observation()
+
+    with patch("app.clients.oracle.observe_call", observe):
+        await client.search_many([("合成", [1.0] * 1536, SearchMode.VECTOR)], 3)
+
+    fields = {field["label"]: field["value"] for field in details[0]["fields"]}
+    assert "範囲の行を距離順に読む" in fields["ベクトルの読み方 1"]
+    assert "取得 3 件" in fields["ベクトルの読み方 1"]
+
+
+def test_exact_chunk_limit_default_and_bounds() -> None:
+    assert Settings().rag_native_vector_exact_max_chunks == 50000
+    assert Settings(rag_native_vector_exact_max_chunks=0).rag_native_vector_exact_max_chunks == 0
+    with pytest.raises(ValidationError):
+        Settings(rag_native_vector_exact_max_chunks=-1)
+
+
+def _filter_bytes(batch: NativeFilterBatch) -> int:
+    spec = native_search_request(
+        query="合成",
+        vector=[1],
+        channel="keyword",
+        allowed_ids=batch.allowed_ids,
+        allowed_scopes=batch.allowed_scopes,
+        allowed_scope_spans=batch.allowed_scope_spans,
+        allowed_scope_ranges=batch.allowed_scope_ranges,
+    )
+    return len(render_native_filter(spec["filter_by"]).encode("utf-8"))
+
+
+def _fragmented_scopes(count: int) -> list[int]:
+    return [1000 + index * 2 for index in range(count)]
+
+
+def test_scope_within_the_limit_keeps_the_same_filter_shape() -> None:
+    assert native_filter_batches(allowed_scopes=[3, 1, 2, 2]) == [
+        NativeFilterBatch(allowed_scopes=(1, 2, 3))
+    ]
+
+
+def test_consecutive_scopes_over_the_limit_become_one_between() -> None:
+    batches = native_filter_batches(allowed_scopes=list(range(100, 1100)))
+
+    assert batches == [NativeFilterBatch(allowed_scope_spans=((100, 1099),))]
+
+
+def test_short_runs_stay_in_the_in_list_when_between_would_not_be_shorter() -> None:
+    long_run = list(range(5000, 5300))
+    short_run = [10, 11]
+
+    batches = native_filter_batches(allowed_scopes=[*long_run, *short_run])
+
+    assert batches == [
+        NativeFilterBatch(allowed_scopes=(10, 11), allowed_scope_spans=((5000, 5299),))
+    ]
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"allowed_scopes": _fragmented_scopes(1000)},
+        {"allowed_scopes": [10_000_000 + index * 2 for index in range(1000)]},
+        {"allowed_ids": [f"{index:032x}" for index in range(400)]},
+        {"allowed_ids": [f"合成の識別子{index}" for index in range(300)]},
+        {"allowed_scope_ranges": [(index + 1, 0, 4) for index in range(80)]},
+        {
+            "allowed_ids": [f"{index:032x}" for index in range(50)],
+            "allowed_scopes": [*_fragmented_scopes(300), *range(1, 40)],
+            "allowed_scope_ranges": [(90_000 + index, 0, 9) for index in range(10)],
+        },
+    ],
+    ids=["fragmented", "seven-digits", "chunk-ids", "multibyte-ids", "ranges", "mixed"],
+)
+def test_long_scope_splits_within_the_limit_without_losing_or_repeating_a_row(
+    scope: dict[str, Any],
+) -> None:
+    batches = native_filter_batches(**scope)
+
+    assert len(batches) > 1
+    assert all(_filter_bytes(batch) <= NATIVE_FILTER_MAX_BYTES for batch in batches)
+    for name in ("allowed_ids", "allowed_scope_ranges"):
+        kept = [value for batch in batches for value in getattr(batch, name)]
+        assert sorted(kept) == sorted(scope.get(name, []))
+    scopes = [value for batch in batches for value in batch.allowed_scopes]
+    for first, last in (span for batch in batches for span in batch.allowed_scope_spans):
+        scopes.extend(range(first, last + 1))
+    assert sorted(scopes) == sorted(scope.get("allowed_scopes", []))
+
+
+def test_scope_beyond_the_batch_limit_fails_instead_of_dropping_rows() -> None:
+    too_many = [f"{index:032x}" for index in range(100 * (NATIVE_FILTER_MAX_BATCHES + 1))]
+
+    with pytest.raises(NativeHybridUnavailable):
+        native_filter_batches(allowed_ids=too_many)
+
+
+def test_render_native_filter_matches_the_expanded_condition() -> None:
+    node = {
+        "op": "OR",
+        "args": [
+            {"op": "IN", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [7, 8]},
+            {"op": "BETWEEN", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [1, 5]},
+            {
+                "op": "AND",
+                "args": [
+                    {"op": "=", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [9]},
+                    {"op": "BETWEEN", "col": "CHUNK_INDEX", "type": "number", "args": [0, 3]},
+                ],
+            },
+            {"op": "IN", "col": "CHUNK_ID", "type": "string", "args": ["a'b"]},
+        ],
+    }
+
+    assert render_native_filter(node) == (
+        """( ( THEBASE."NATIVE_SCOPE_ID" IN (TO_NUMBER('7'), TO_NUMBER('8') ) )"""
+        """ OR ( THEBASE."NATIVE_SCOPE_ID" BETWEEN TO_NUMBER('1')AND TO_NUMBER('5') )"""
+        """ OR ( ( THEBASE."NATIVE_SCOPE_ID" = (TO_NUMBER('9') ) )"""
+        """ AND ( THEBASE."CHUNK_INDEX" BETWEEN TO_NUMBER('0')AND TO_NUMBER('3') ) )"""
+        """ OR ( THEBASE."CHUNK_ID" IN ('a''b' ) ) )"""
+    )
+
+
+def _batch_row(
+    chunk_id: str,
+    *,
+    vector_score: float = 0,
+    similarity: float | None = None,
+    text_score: float = 0,
+    rank: int = 1,
+) -> dict[str, object]:
+    return {
+        "document_id": "doc-a",
+        "chunk_id": chunk_id,
+        "chunk_text": f"合成の本文 {chunk_id}",
+        "metadata_json": {},
+        "chunk_index": 0,
+        "file_name": "文書 A.txt",
+        "score": vector_score or text_score,
+        "native_similarity": similarity,
+        "native_vector_score": vector_score,
+        "native_vector_rank": rank if vector_score else 0,
+        "native_text_score": text_score,
+        "native_text_rank": rank if text_score else 0,
+    }
+
+
+def test_merging_text_batches_ranks_ties_like_a_single_search() -> None:
+    merged = _merge_native_filter_batches(
+        [
+            [_batch_row("a", text_score=90, rank=1), _batch_row("c", text_score=50, rank=2)],
+            [_batch_row("b", text_score=90, rank=1), _batch_row("d", text_score=40, rank=2)],
+        ],
+        "keyword",
+        3,
+    )
+
+    assert [(row["chunk_id"], row["native_text_rank"]) for row in merged] == [
+        ("a", 1),
+        ("b", 1),
+        ("c", 3),
+    ]
+    assert [row["score"] for row in merged] == [90, 90, 50]
+
+
+def test_merging_vector_batches_breaks_rounded_ties_by_real_similarity() -> None:
+    merged = _merge_native_filter_batches(
+        [
+            [_batch_row("low", vector_score=85.43, similarity=0.70)],
+            [
+                _batch_row("high", vector_score=85.43, similarity=0.71),
+                _batch_row("cut", vector_score=10, similarity=0.1, rank=2),
+            ],
+        ],
+        "vector",
+        2,
+    )
+
+    assert [(row["chunk_id"], row["native_vector_rank"]) for row in merged] == [
+        ("high", 1),
+        ("low", 2),
+    ]
+
+
+def test_merging_hybrid_batches_ranks_each_branch_across_batches_and_drops_the_oracle_score() -> (
+    None
+):
+    merged = _merge_native_filter_batches(
+        [
+            [
+                _batch_row("both", vector_score=80, similarity=0.9, text_score=30),
+                _batch_row("text", text_score=60, rank=2),
+            ],
+            [
+                _batch_row("vector", vector_score=90, similarity=0.95),
+                _batch_row("neither", vector_score=10, similarity=0.1, rank=2),
+            ],
+        ],
+        "hybrid",
+        2,
+    )
+
+    by_id = {str(row["chunk_id"]): row for row in merged}
+    assert set(by_id) == {"vector", "both", "text"}
+    assert by_id["vector"]["native_vector_rank"] == 1
+    assert by_id["both"]["native_vector_rank"] == 2
+    assert by_id["text"]["native_text_rank"] == 1
+    assert by_id["both"]["native_text_rank"] == 2
+    assert by_id["text"]["native_vector_rank"] is None
+    assert all(row["score"] is None for row in merged)
+
+
+class LongScopeOracle(OracleClient):
+    """範囲の条件が上限を超える検索。回ごとの結果を差し替える。"""
+
+    def __init__(self, *, exact_max_chunks: int = 0) -> None:
+        super().__init__(
+            Settings(
+                rag_hybrid_search_backend="oracle_native",
+                rag_native_vector_exact_max_chunks=exact_max_chunks,
+                rag_min_similarity=0.0,
+            )
+        )
+        self.searches: list[dict[str, Any]] = []
+        self.fail_batch: int | None = None
+
+    async def _fetch_all(
+        self, sql: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if "FROM user_indexes" in sql:
+            return [{"index_name": "RAG_CHUNKS_HYBRID_IDX"}]
+        if "allowed_count" in sql:
+            return [
+                {"native_scope_id": scope, "allowed_count": 10, "vector_count": 10}
+                for scope in _fragmented_scopes(1000)
+            ]
+        if "COUNT(*) AS chunk_count" in sql:
+            return [
+                {"native_scope_id": scope, "chunk_count": 10} for scope in _fragmented_scopes(1000)
+            ]
+        if "FETCH EXACT FIRST" in sql:
+            return [_exact_row("exact", 0.1)]
+        assert "DBMS_HYBRID_VECTOR.SEARCH" in sql
+        spec = json.loads(str((binds or {})["native_spec"]))
+        self.searches.append(spec)
+        batch = len(self.searches)
+        if batch == self.fail_batch:
+            raise RuntimeError("合成の SEARCH の失敗")
+        return [
+            _batch_row(
+                f"chunk-{batch}",
+                vector_score=0 if "text" in spec and "vector" not in spec else 50 + batch,
+                similarity=None if "text" in spec and "vector" not in spec else 0.5 + batch / 100,
+                text_score=0 if "vector" in spec and "text" not in spec else 40 + batch,
+            )
+        ]
+
+
+@pytest.mark.parametrize("channel", ["keyword", "vector", "hybrid"])
+@pytest.mark.asyncio
+async def test_long_scope_runs_one_search_per_batch_and_merges_every_branch(channel: str) -> None:
+    client = LongScopeOracle()
+
+    rows = await client._native_rows(channel, "合成", [1.0] * 1536, top_k=50, filters={})
+
+    assert len(client.searches) == 6
+    for spec in client.searches:
+        assert (
+            len(render_native_filter(spec["filter_by"]).encode("utf-8")) <= NATIVE_FILTER_MAX_BYTES
+        )
+    filtered = [value for spec in client.searches for value in spec["filter_by"]["args"]]
+    assert sorted(filtered) == _fragmented_scopes(1000)
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.filter_batches == 6
+    assert {row["chunk_id"] for row in rows} == {f"chunk-{batch}" for batch in range(1, 7)}
+    if channel == "hybrid":
+        assert all(row.get("native_wrrf_score") is None for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_long_scope_keeps_exact_vector_read_and_only_splits_the_text_branch() -> None:
+    client = LongScopeOracle(exact_max_chunks=50_000)
+
+    rows = await client._native_rows("hybrid", "合成", [1.0] * 1536, top_k=50, filters={})
+
+    assert [spec["search_fusion"] for spec in client.searches] == ["TEXT_ONLY"] * 6
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval["method"] == "exact_scope"
+    assert rows.filter_batches == 6
+    assert {row["chunk_id"] for row in rows} == {
+        "exact",
+        *(f"chunk-{batch}" for batch in range(1, 7)),
+    }
+
+
+@pytest.mark.parametrize("fail_batch", [1, 6], ids=["first", "last"])
+@pytest.mark.asyncio
+async def test_one_failed_batch_fails_the_search_instead_of_returning_part_of_the_scope(
+    fail_batch: int,
+) -> None:
+    client = LongScopeOracle()
+    client.fail_batch = fail_batch
+
+    results = await client.search_many([("合成", [1.0] * 1536, SearchMode.KEYWORD)], 50)
+
+    assert getattr(results[0], "status", "") == "failed"
+    assert isinstance(getattr(results[0], "failure", None), NativeHybridUnavailable)
+    assert list(results[0]) == []

@@ -1953,7 +1953,8 @@ class GroundedAnswerTest(unittest.TestCase):
         for claim in (year["text"], delete["text"]):
             self.assertIn(claim, result.answer_text)
             self.assertNotIn("unsupported", marks(result).get(claim, []))
-        self.assertEqual(len(model.prompts), 2)
+        # 根拠と質問に無い年（#4042）があるので、生成と監査の組を 1 回作り直す。
+        self.assertEqual(len(model.prompts), 4)
 
 
 class AuditRetryAndHeadingTest(unittest.TestCase):
