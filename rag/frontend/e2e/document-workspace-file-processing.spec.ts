@@ -1472,6 +1472,32 @@ test("文書 workspace はこの文書の取込 job と時間線を表示する"
   await expectNoHorizontalOverflow(page);
 });
 
+test(
+  "新しい版があって適用しなかった取込 job は失敗ではなく理由を表示する（#4167）",
+  { tag: "@responsive" },
+  async ({ page }) => {
+    await mockDocumentWorkspace(page, {
+      latestJobStatus: "SKIPPED",
+      latestJobSkipReason: "superseded_by_newer_version",
+      pdfPreview: true,
+    });
+
+    await page.goto("/documents/doc-1");
+    await page.getByText("処理の詳細(診断)").click();
+
+    const panel = page
+      .getByRole("heading", { name: "工程ごとの実行状況" })
+      .locator("xpath=ancestor::section[1]");
+    await expect(
+      panel.getByText(
+        "処理の間に新しい版が有効になったため、この結果は適用しませんでした。検索には新しい版を使います。"
+      )
+    ).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "失敗しました" })).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  }
+);
+
 test("失敗した取込 job は取込中 banner を残さず原因を表示する", async ({ page }) => {
   await mockDocumentWorkspace(page, {
     documentStatus: "ERROR",
@@ -2331,7 +2357,8 @@ async function mockDocumentWorkspace(
     /** 既定の 2 件の後ろに足す chunk の数（一覧の内部スクロールの検証用。#403）。 */
     extraChunkCount?: number;
     mineruSegment?: boolean;
-    latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+    latestJobStatus?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED";
+    latestJobSkipReason?: string;
     latestJobPhase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
     latestJobStartedAt?: string;
     /** 4工程すべての成功ジョブを返す(工程別サマリ表示の検証用)。 */
@@ -2534,6 +2561,7 @@ async function mockDocumentWorkspace(
                 {
                   startedAt: options.latestJobStartedAt,
                   errorMessage: options.sharedErrorMessage,
+                  skipReason: options.latestJobSkipReason,
                   progress: options.jobProgress,
                   phase: options.backgroundFailureAfterEnqueue
                     ? "PREPROCESS"
@@ -3158,12 +3186,13 @@ function retrySegmentsJob() {
 }
 
 function ingestionJob(
-  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED",
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED",
   options: {
     queuedAt?: string;
     startedAt?: string;
     finishedAt?: string;
     errorMessage?: string;
+    skipReason?: string;
     phase?: "PREPROCESS" | "EXTRACT" | "CHUNK" | "INDEX";
     progress?: Record<string, unknown>;
   } = {}
@@ -3177,14 +3206,14 @@ function ingestionJob(
     phase: options.phase ?? "EXTRACT",
     parser_profile: "enterprise_ai_pdf_layout",
     quality_warnings: [],
-    skip_reason: null,
+    skip_reason: options.skipReason ?? null,
     error_message: status === "FAILED" ? options.errorMessage ?? "取込処理に失敗しました。" : null,
     attempt_count: status === "QUEUED" ? 0 : 1,
     max_attempts: 3,
     queued_at: options.queuedAt ?? "2026-06-15T00:00:05Z",
     started_at: status === "QUEUED" ? null : options.startedAt ?? "2026-06-15T00:00:10Z",
     finished_at:
-      status === "SUCCEEDED" || status === "FAILED"
+      status === "SUCCEEDED" || status === "FAILED" || status === "SKIPPED"
         ? options.finishedAt ?? "2026-06-15T00:00:20Z"
         : null,
     progress: options.progress ?? null,

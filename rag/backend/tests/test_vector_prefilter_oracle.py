@@ -93,7 +93,9 @@ async def _chunk_set(
         chunk_set_id=chunk_set_id, chunk_count=len(vectors), vector_count=len(vectors)
     )
     if activate:
-        await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=chunk_set_id)
+        await client.activate_recipe_chunk_set(
+            recipe_id=recipe_id, chunk_set_id=chunk_set_id, expected_base_chunk_set_id=None
+        )
     return chunk_set_id
 
 

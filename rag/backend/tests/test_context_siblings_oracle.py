@@ -64,6 +64,7 @@ async def _indexed_document(
     await client.activate_recipe_chunk_set(
         recipe_id=recipe_id,
         chunk_set_id=chunk_set_id,
+        expected_base_chunk_set_id=None,
         materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
     )
     await client.update_document_status(document_id, FileStatus.INDEXED)
