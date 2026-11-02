@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import partial
@@ -12,6 +13,8 @@ from uuid import uuid4
 from app.clients.oracle import OracleClient
 from app.clients.structure_index_store import ACTIVE, StructureIndexStore
 from app.rag.structure_index import rebuild_document_structure_index, structure_index_plan
+
+logger = logging.getLogger(__name__)
 
 REASONS = {
     "no_chunks",
@@ -252,6 +255,15 @@ class StructureIndexJobs:
                         if isinstance(exc, ValueError) and str(exc) in REASONS
                         else "processing_error"
                     )
+                    if reason == "processing_error":
+                        logger.warning(
+                            "structure_index_document_failed",
+                            extra={
+                                "job_id": job_id,
+                                "document_id": did,
+                                "error_type": type(exc).__name__,
+                            },
+                        )
                     await store.mutate(kb_id, partial(update, status="FAILED", reason=reason))
 
             def finish(state: dict[str, Any] | None) -> dict[str, Any]:

@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from functools import cached_property
 from typing import Literal
 
 from app.rag.cross_references import (
     ReferenceSpec,
     SectionIndex,
-    document_name_match,
+    document_name_keys,
+    document_name_rank,
     same_document_title,
     split_section_path,
+    title_key,
 )
 
 
@@ -23,6 +26,15 @@ class ReferenceDocument:
     chunk_set_id: str | None
     name: str
     section_paths: tuple[str, ...]
+
+    # 参照の数だけ全文書の見出しを解析し直さないよう、同じsnapshotの解析結果を使い回す。
+    @cached_property
+    def name_keys(self) -> tuple[frozenset[str], str]:
+        return document_name_keys(self.name, self.section_paths)
+
+    @cached_property
+    def section_index(self) -> SectionIndex:
+        return SectionIndex(self.section_paths)
 
 
 @dataclass(frozen=True)
@@ -62,12 +74,12 @@ def resolve_scoped_reference(
     ):
         candidates = [source]
     else:
+        key = title_key(spec.document_title)
         matches = [
             (score, item)
             for item in documents
             if item.document_id != source.document_id
-            and (score := document_name_match(spec.document_title, item.name, item.section_paths))
-            is not None
+            and (score := document_name_rank(key, item.name_keys)) is not None
         ]
         best = min((score for score, _item in matches), default=None)
         candidates = [item for score, item in matches if score == best]
@@ -83,7 +95,7 @@ def resolve_scoped_reference(
         paths: list[str | None] = [None]
     else:
         paths = list(
-            SectionIndex(document.section_paths).resolve_candidates(
+            document.section_index.resolve_candidates(
                 spec,
                 citing_path=(
                     split_section_path(citing_path)

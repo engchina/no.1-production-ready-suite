@@ -34,6 +34,21 @@ async def test_cross_document_reference_rebuild_and_directional_pages() -> None:
         chunks=target_chunks,
         knowledge_base_id=kb.id,
     )
+    # JSON nullのsection_pathを持つ文書が同じKBにあっても、目録の取得を止めない。
+    null_path_chunks = _chunks([("第1条", 1)])
+    null_path_chunks[0].metadata["section_path"] = None
+    null_path_id, _null_path_set = await _indexed_document(
+        client,
+        file_name="synthetic-reference-null-path.pdf",
+        chunks=null_path_chunks,
+        knowledge_base_id=kb.id,
+    )
+    stored_null = await client._fetch_all(
+        """SELECT 1 FROM rag_chunks WHERE document_id=:id
+        AND JSON_QUERY(metadata_json,'$.section_path' RETURNING VARCHAR2(4000))='null'""",
+        {"id": null_path_id},
+    )
+    assert stored_null
     await rebuild_document_structure_index(client, kb.id, source_id)
     store = GraphReferenceStore(client)
     source_node = _graph_id("entity", source_set, kb.id, "第1条")
