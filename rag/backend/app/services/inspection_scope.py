@@ -38,7 +38,7 @@ def _window_units(
 
 
 def _offset_ranges(units: tuple[SourceUnit, ...], window: list[SourceUnit]) -> list[list[int]]:
-    """Chunk の ``start_offset``（要素の本文の位置）を単位へ所属させる範囲（単位の間の改行を含む）。"""
+    """Chunk の ``start_offset``（要素の本文の位置）が単位に所属する範囲（間の改行を含む）。"""
     last = max(unit.text_end for unit in units)
     return [
         [unit.text_start, CHUNK_OFFSET_MAX if unit.text_end == last else unit.text_end]
