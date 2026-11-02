@@ -172,11 +172,11 @@ def test_original_forms_are_supplementary_and_bound_to_units():
     spans = _grounded_spans("原文の文字は？", context(record(0, raw, "文字表記")), (), None)
     block = grounded.evidence_block_text(spans)
     assert "全角ABC、半角ABC" in block
-    assert "全角ＡＢＣ、半角ABC" in block
     start = block.index("原文の文字表記: ") + len("原文の文字表記: ")
     annotations = json.JSONDecoder().raw_decode(block[start:])[0]
-    assert any("ＡＢＣ" in row["原文"] and row["引用単位"] == 2 for row in annotations)
-    assert not any("変更のない本文" in row["原文"] for row in annotations)
+    assert annotations == ["ＡＢＣ", "ｶﾞ"]
+    # 引用単位の全文は重ねない。句読点・空白の幅だけが変わる単位は載せない（#4139）。
+    assert "全角ＡＢＣ、半角ABC" not in block
     view = grounded._citation_view(spans[0])
     assert view.model_rendered in block
     assert view.text == spans[0]["text"]
@@ -198,7 +198,7 @@ def test_answer_can_distinguish_original_full_and_half_width_characters():
     answer = "全角は「ＡＢＣ」、半角は「ABC」と記載されています。"
 
     def generate(prompt):
-        assert "全角ＡＢＣ、半角ABC。" in prompt
+        assert '"ＡＢＣ"' in prompt
         assert "全角ABC、半角ABC。" in prompt
         return draft(item(eid, answer, "全角ＡＢＣ、半角ABC。", kind="rule"), summary=answer)
 
@@ -206,3 +206,18 @@ def test_answer_can_distinguish_original_full_and_half_width_characters():
     result = run(model, ctx, question).response
     assert answer in result.answer_text
     assert result.evidence_facts[0]["quote"] == "全角ＡＢＣ、半角ABC。"
+
+
+def test_a_unit_where_only_punctuation_width_changes_adds_no_metadata():
+    """#4139: 全角の句読点・括弧・空白だけが変わる単位は、字の違いが無いので補助情報を増やさない。"""
+    raw = "第１条（目的），本文\u3000です。\n条件（Ａ）、半角（B）です。"
+    spans = _grounded_spans("目的は？", context(record(0, "全角（括弧），記号：だけです。\u3000本文。", "本文")), (), None)
+    assert "原文の文字表記" not in grounded.evidence_block_text(spans)
+    spans = _grounded_spans("目的は？", context(record(0, raw, "本文")), (), None)
+    block = grounded.evidence_block_text(spans)
+    start = block.index("原文の文字表記: ") + len("原文の文字表記: ")
+    annotations = json.JSONDecoder().raw_decode(block[start:])[0]
+    # 中身だけを載せ、原文の全文を重ねない。
+    assert annotations == ["１", "Ａ"]
+    # 引用の原文はコードが切り出すので、全角のまま残る。
+    assert spans[0]["text"] == raw
