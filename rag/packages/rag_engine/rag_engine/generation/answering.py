@@ -2561,10 +2561,13 @@ def _source_question_scores(context: AnswerContext) -> dict[str, float | None]:
 
 
 def _invalid_structured_output(exc: Exception) -> bool:
-    """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。"""
-    from rag_engine.adapters.oci import LlmRunawayOutput, is_invalid_structured_output
+    """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。
 
-    return isinstance(exc, LlmRunawayOutput) or is_invalid_structured_output(exc)
+    SDK が stream から応答を組み立てられないまま送り直しも尽きたとき（#4182）も、使える出力が無い点は同じなので含める。
+    """
+    from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamAssemblyFailed, is_invalid_structured_output
+
+    return isinstance(exc, LlmRunawayOutput | LlmStreamAssemblyFailed) or is_invalid_structured_output(exc)
 
 
 def synthesize_grounded_answer(
