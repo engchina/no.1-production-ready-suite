@@ -7,6 +7,7 @@
 
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, observed_audit, record
 
@@ -151,6 +152,15 @@ class MaxCorrectionRoundsTest(unittest.TestCase):
         self.assertEqual(stop["round"], 2)
         self.assertIn(GOOD, result.answer_text)
         self.assertNotIn("作り直しをしていません", result.answer_text)
+
+    def test_term_usage_step_is_recorded_once_across_correction_rounds(self):
+        """プロンプトの組み立ての回数・是正の組の数によらず、工程は 1 回だけ残す（#4095）。"""
+        ctx, model = self._miscopied()
+        with patch.object(answering, "_record_term_usage", wraps=answering._record_term_usage) as record_usage:
+            _run(model, ctx)
+        self.assertEqual(len(_drafts(model)), 2)
+        record_usage.assert_called_once()
+        self.assertIs(record_usage.call_args.kwargs["answer"], True)
 
     def test_default_keeps_the_correction(self):
         ctx, model = self._miscopied()
