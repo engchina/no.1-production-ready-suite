@@ -164,3 +164,18 @@ def test_native_trace_shows_vector_read_method_and_shortage() -> None:
     assert fields["ベクトルの読み方 1"].startswith("原生索引の近似検索 /")
     assert fields["ベクトルの読み方 1"].endswith("取得 0 件 / 候補不足")
     assert "Oracle の1回の呼び出し" in fields["目的"]
+
+
+def test_search_diagnostics_shows_split_scope_only_when_the_search_was_split() -> None:
+    def fields(filter_batches: int) -> dict[str, str]:
+        details = search_diagnostics(
+            "全文検索",
+            branches=[{"native": True, "raw_count": 0, "filter_batches": filter_batches, "results": []}],
+            scope={},
+            limit=50,
+            metric="Oracle text_score",
+        )
+        return {field["label"]: field["value"] for field in details["fields"]}
+
+    assert "検索範囲の分割 1" not in fields(1)
+    assert "6 回に分けて" in fields(6)["検索範囲の分割 1"]

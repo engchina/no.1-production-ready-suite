@@ -490,6 +490,8 @@ class NativeSearchRows(list[dict[str, object]]):
         super().__init__(rows)
         self.threshold = threshold
         self.vector_retrieval = vector_retrieval or {}
+        # 範囲の条件を分けて SEARCH を呼んだ回数(#4149)。
+        self.filter_batches = 1
 
 
 def _native_vector_retrieval(
@@ -610,6 +612,52 @@ def _merge_native_exact_rows(
                 "native_vector_score": 0,
             }
     return list(merged.values())
+
+
+def _merge_native_filter_batches(
+    batches: Sequence[list[dict[str, object]]], channel: str, top_k: int
+) -> list[dict[str, object]]:
+    """範囲を分けた SEARCH の結果を、1 回の呼び出しと同じ形の経路の順位にまとめる(#4149)。
+
+    点数は問いと行で決まり filter に依らない(合成の索引で確認)。範囲は重ならないので、各回の
+    上位 k 件を合わせて点数で並べ直せば範囲全体の上位 k 件になる。経路ごとに k 件で切り、順位を
+    付け直す。全文の順位は SEARCH の ``rank()`` と同じく同点を同じ順位にする。ベクトルの点数は
+    丸められているので、同点は実際のコサイン類似度で分ける(SEARCH の順位は丸める前で決まる)。
+    """
+    rows = {str(row["chunk_id"]): row for batch in batches for row in batch}
+
+    def stable(row: dict[str, object]) -> tuple[str, float, str]:
+        return (
+            str(row.get("document_id")),
+            _float_value(row.get("chunk_index", 0)),
+            str(row["chunk_id"]),
+        )
+
+    vector_rows = sorted(
+        (row for row in rows.values() if _float_value(row.get("native_vector_score", 0)) > 0),
+        key=lambda row: (
+            -_float_value(row.get("native_vector_score", 0)),
+            -_float_value(row.get("native_similarity", 0)),
+            *stable(row),
+        ),
+    )[:top_k]
+    text_rows: list[dict[str, object]] = []
+    previous_score: float | None = None
+    rank = 0
+    for position, row in enumerate(
+        sorted(
+            (row for row in rows.values() if _float_value(row.get("native_text_score", 0)) > 0),
+            key=lambda row: (-_float_value(row.get("native_text_score", 0)), *stable(row)),
+        )[:top_k],
+        1,
+    ):
+        score = _float_value(row.get("native_text_score", 0))
+        if score != previous_score:
+            rank, previous_score = position, score
+        text_rows.append({**row, "native_text_rank": rank})
+    merged = _merge_native_exact_rows(vector_rows, text_rows)
+    # Oracle の WRRF の点数は回ごとの値で比べられない。融合の点数は順位から一度だけ計算する。
+    return [{**row, "score": None} for row in merged] if channel == "hybrid" else merged
 
 
 def _apply_native_search_threshold(
@@ -7592,6 +7640,9 @@ class OracleClient:
                             "vector_retrieval": rows.vector_retrieval
                             if isinstance(rows, NativeSearchRows)
                             else {},
+                            "filter_batches": rows.filter_batches
+                            if isinstance(rows, NativeSearchRows)
+                            else 1,
                             "error": result.error,
                             "results": [
                                 {
@@ -7764,6 +7815,8 @@ class OracleClient:
             exact_max_chunks=self._settings.rag_native_vector_exact_max_chunks,
             returned=len(vector_rows),
         )
+        if isinstance(text_rows, NativeSearchRows):
+            selected.filter_batches = text_rows.filter_batches
         return selected
 
     async def _native_rows(
@@ -7776,7 +7829,12 @@ class OracleClient:
         filters: dict[str, str],
         native_scope: asyncio.Future[_NativeScope | None] | _NativeScope | None = None,
     ) -> list[dict[str, object]]:
-        from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, request_json
+        from rag_engine.adapters.oracle.native_hybrid import (
+            NATIVE_FILTER_CONCURRENCY,
+            NativeHybridUnavailable,
+            native_filter_batches,
+            request_json,
+        )
 
         where, binds = _oracle_retrieval_where(filters)
         joins = _NATIVE_SCOPE_JOINS
@@ -7802,29 +7860,35 @@ class OracleClient:
                 raise NativeHybridUnavailable(
                     "範囲の行を距離順に読めませんでした。管理CLIで索引と同期状態を確認してください。"
                 ) from exc
-        spec = request_json(
-            query=query,
-            vector=vector,
-            channel=channel,
-            allowed_ids=scope.allowed_ids,
-            allowed_scopes=scope.complete_scopes,
-            allowed_scope_ranges=scope.scope_ranges,
-            limit=top_k,
-            rank_constant=self._settings.rag_rrf_k,
-            accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
-            method_ratio=self._settings.rag_rrf_method_ratio,
-        )
+        specs = [
+            request_json(
+                query=query,
+                vector=vector,
+                channel=channel,
+                allowed_ids=batch.allowed_ids,
+                allowed_scopes=batch.allowed_scopes,
+                allowed_scope_spans=batch.allowed_scope_spans,
+                allowed_scope_ranges=batch.allowed_scope_ranges,
+                limit=top_k,
+                rank_constant=self._settings.rag_rrf_k,
+                accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
+                method_ratio=self._settings.rag_rrf_method_ratio,
+            )
+            for batch in native_filter_batches(
+                allowed_ids=scope.allowed_ids,
+                allowed_scopes=scope.complete_scopes,
+                allowed_scope_ranges=scope.scope_ranges,
+            )
+        ]
         score = {"vector": "n.vector_score", "keyword": "n.text_score", "hybrid": "n.score"}[
             channel
         ]
         similarity_sql = "CAST(NULL AS NUMBER)"
-        native_binds: dict[str, object] = {**binds, "native_spec": spec}
+        native_binds: dict[str, object] = dict(binds)
         if channel != "keyword":
             similarity_sql = _vector_score_sql("native_embedding")
             native_binds["native_embedding"] = _to_vector_bind(vector)
-        try:
-            rows = await self._fetch_all(
-                f"""
+        statement = f"""
                 SELECT {_SEARCH_HIT_COLUMNS}, {score} AS score,
                     {similarity_sql} AS native_similarity,
                     n.vector_rank AS native_vector_rank, n.text_rank AS native_text_rank,
@@ -7839,10 +7903,26 @@ class OracleClient:
                     ON c.ROWID = CHARTOROWID(n.source_rowid)
                 WHERE {where}
                 ORDER BY n.position
-            """,
-                native_binds,
-            )
+            """
+        semaphore = asyncio.Semaphore(NATIVE_FILTER_CONCURRENCY)
+
+        async def read_batch(spec: str) -> list[dict[str, object]]:
+            async with semaphore:
+                return await self._fetch_all(statement, {**native_binds, "native_spec": spec})
+
+        try:
+            if len(specs) == 1:
+                rows = await read_batch(specs[0])
+            else:
+                # 1 回でも失敗したら検索の失敗にする(範囲の一部だけの結果を返さない)。
+                async with asyncio.TaskGroup() as group:
+                    reads = [group.create_task(read_batch(spec)) for spec in specs]
+                rows = _merge_native_filter_batches(
+                    [read.result() for read in reads], channel, top_k
+                )
+                logger.info("native_search_filter_batches", extra={"filter_batches": len(specs)})
             selected = _apply_native_search_threshold(rows, channel, self._settings)
+            selected.filter_batches = len(specs)
             if channel != "keyword":
                 selected.vector_retrieval = _native_vector_retrieval(
                     method="native_index",
