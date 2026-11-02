@@ -258,7 +258,7 @@ def build_structure_parent_child_chunks(
             overlap=0,
             table_chunk_size=resolved.table_child_target_chars,
         )
-    children = _attach_headings(children)
+    children = _attach_headings(children, target_chars=resolved.child_target_chars)
     depth = _section_unit_depth(children)
     groups: list[list[Chunk]] = []
     for chunk in children:
@@ -335,12 +335,15 @@ def _extends_section(heading: Chunk, chunk: Chunk) -> bool:
     return bool(path) and _section_parts(chunk)[: len(path)] == path
 
 
-def _attach_headings(children: list[Chunk]) -> list[Chunk]:
+def _attach_headings(children: list[Chunk], *, target_chars: int) -> list[Chunk]:
     """見出しだけの子を、その見出しの下の最初の本文の子の先頭に付ける。
 
     構造認識の要素の分割は、見出しと続く本文が子の目標を超えると見出しだけの子を作る。見出しだけの
     子は検索に当てる単位にならないので、Docling の親子と同じく見出しを本文の子に含める。表・記録の
     子(本文を行として読む)と、下に本文の無い見出しには付けずにそのまま残す。
+
+    付ける見出しの合計は子の目標まで(本文に近い見出しから。#4128)。同じ節の見出しが続いて目標を
+    超える分は、目標までまとめた見出しだけの子にする。
     """
     result: list[Chunk] = []
     pending: list[Chunk] = []
@@ -353,13 +356,44 @@ def _attach_headings(children: list[Chunk]) -> list[Chunk]:
             continue
         attachable = chunk.metadata.get("content_kind") not in {"table", SHEET_RECORD_CONTENT_KIND}
         if pending and attachable and _extends_section(pending[-1], chunk):
-            chunk = _with_heading_prefix(pending, chunk)
+            attached, overflow = _split_headings(pending, target_chars)
+            result.extend(_grouped_headings(overflow, target_chars))
+            chunk = _with_heading_prefix(attached, chunk)
         else:
             result.extend(pending)
         pending = []
         result.append(chunk)
     result.extend(pending)
     return [replace(chunk, index=index) for index, chunk in enumerate(result)]
+
+
+def _split_headings(headings: list[Chunk], target_chars: int) -> tuple[list[Chunk], list[Chunk]]:
+    """本文に近い見出しから、合計が目標までの見出しと残りに分ける(最も近い見出しは必ず付ける)。"""
+    used = 0
+    start = len(headings)
+    for index in range(len(headings) - 1, -1, -1):
+        used += len(headings[index].text) + 1
+        if start < len(headings) and used > target_chars:
+            break
+        start = index
+    return headings[start:], headings[:start]
+
+
+def _grouped_headings(headings: list[Chunk], target_chars: int) -> list[Chunk]:
+    """本文に付けない見出しを、順番を保って目標までの見出しだけの子にまとめる。"""
+    grouped: list[Chunk] = []
+    group: list[Chunk] = []
+    used = 0
+    for heading in headings:
+        cost = len(heading.text) + 1
+        if group and used + cost > target_chars:
+            grouped.append(_with_heading_prefix(group[:-1], group[-1]) if group[:-1] else group[0])
+            group, used = [], 0
+        group.append(heading)
+        used += cost
+    if group:
+        grouped.append(_with_heading_prefix(group[:-1], group[-1]) if group[:-1] else group[0])
+    return grouped
 
 
 def _with_heading_prefix(headings: list[Chunk], chunk: Chunk) -> Chunk:
@@ -386,8 +420,17 @@ def _with_heading_prefix(headings: list[Chunk], chunk: Chunk) -> Chunk:
             "element_kinds": ",".join(sorted(kinds)),
             "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "text_chars": len(text),
+            **_size_compliance_with_headings(chunk, len(text)),
         },
     )
+
+
+def _size_compliance_with_headings(chunk: Chunk, text_chars: int) -> dict[str, str]:
+    """見出しを足した後の長さで記録し直す（足す前の記録のままにしない。#4128）。"""
+    limit = chunk.metadata.get("chunk_size_limit")
+    if not isinstance(limit, int):
+        return {}
+    return {"chunk_size_compliance": "within_limit" if text_chars <= limit else "overflow"}
 
 
 def _section_unit_depth(children: list[Chunk]) -> int:
