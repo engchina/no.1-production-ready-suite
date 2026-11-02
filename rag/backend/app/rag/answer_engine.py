@@ -3474,7 +3474,7 @@ def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
     mode = str(metadata.get("retrieval_mode") or "")
     query = f"q{query_index + 1}"
     channels: set[str] = set()
-    if "native_wrrf_score" in metadata:
+    if "native_rrf_contribution" in metadata or "native_wrrf_score" in metadata:
         if float(str(metadata.get("vector_rank") or 0)) > 0:
             channels.add(f"vector:{query}")
         if float(str(metadata.get("keyword_rank") or 0)) > 0:

@@ -667,12 +667,24 @@ DB内の外部AI資格情報や全庫のembedding再生成は不要。検索用J
 配信中の版を検索前のID制限に使い、結果取得時にも同じSQL条件を適用する。候補上限とrerankは独立。
 原生索引が未作成・無効の場合は準備不足エラーとし、従来方式へ暗黙に切り替えない。
 各検索の失敗と0件は区別し、片方の検索が失敗しても既存の縮退規則を維持する。
+許可された chunk が `RAG_NATIVE_VECTOR_EXACT_MAX_CHUNKS` 以下なら、ベクトルの分岐は下の「ベクトルの分岐の読み方」のとおり範囲の行を距離順に読み、`SEARCH` は全文の分岐だけに使う。
 
 Traceは実際に渡した検索文と方式、範囲、候補・RRFを記録する。原生方式ではSudachiを呼ばず、
 Oracle内部で生成した語・検索式はAPIが返さないため表示できない旨を示す。
 原生のvector scoreはコサイン距離と同一視せず、確率や回答の正確さとして表示しない。
 原生方式による順位変化はrerankの入力を変え得るが、品質向上の証明ではない。
 
+
+### ベクトルの分岐の読み方（#4134・#4097）
+
+`DBMS_HYBRID_VECTOR.SEARCH` のベクトルの分岐は、`DBMS_HYBRID_VECTOR.GET_SQL` で確かめると、`$VR` と基表を `doc_rowid = ROWID` で結合した SQL を `FETCH APPROX FIRST k ROWS ONLY WITH TARGET ACCURACY n` で読み、その外で `$K` と未同期の DML により行を除く。そのため範囲を付けると次の 2 つで k 件より少なくなる。どちらも同じ合成の索引で再現した。
+
+- **問いに近い centroid に範囲の行が無い（#4134）。** Oracle の[IVF の計画](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/optimizer-plans-ivf-vector-indexes.html)は、選んだ centroid の partition の行だけに範囲の条件を掛ける。範囲の行がそこに無ければ 0 件になる。`accuracy=100` は partition を増やさない。`index_probes` は `accuracy` が 0 のときだけ SQL に反映され、partition の大半を読むまで件数が戻らない（合成の 82 centroid で `probes 30` は 0 件、`probes 64` で 50 件）。`FETCH FIRST n TO m ROWS` の[打ち切り可能な反復](https://docs.oracle.com/en/database/oracle/oracle-database/26/vecse/terminable-iteration-ivf.html)は件数を戻すが、`SEARCH` のパラメータには無い。
+- **削除の残骸が上位 k 件の枠を使う（#4097）。** 文書の削除で `$VR` の行は整理まで残る（lazy delete）。空いた ROWID を新しい行が使うと、古い行が基表との結合と範囲の条件を通り、上位 k 件に入ってから `$K` で除かれる。件数は残骸の割合に応じて減る。
+
+**対処:** 許可された chunk が `RAG_NATIVE_VECTOR_EXACT_MAX_CHUNKS`（既定 50,000）以下なら、基表の範囲の行を `FETCH EXACT` で距離順に読む。`$VR` を読まないのでどちらの影響も受けない。範囲は `SEARCH` の `filter_by` と同じ解決済みの範囲を使い、結果の行に同じ権限の条件を掛け直す。hybrid は全文の `TEXT_ONLY` の `SEARCH` と距離順の結果を chunk ごとに合わせ、順位から融合の点数を一度だけ計算する。範囲がこれを超えると原生索引で読み、不足（範囲に候補があるのに k 件未満）は処理の経過の「ベクトルの読み方」と warning のログに残す。退避の再検索はしない。
+
+合成の表（1536 次元・`native_scope_id` の索引あり）で距離順に読む時間の中央値（上限 50 件。別の埋め込みを 5 回）: 1,000 行 3 ms、5,000 行 21 ms、20,000 行 83 ms、50,000 行 210 ms。同じ規模の `SEARCH`（256 次元・20,000 行）は 85〜150 ms で、IVF の計画でも `$VR` を全件読む。実データの時間は環境で変わるので、処理の経過と合わせて見直す。
 
 ### RRFの既定比率
 

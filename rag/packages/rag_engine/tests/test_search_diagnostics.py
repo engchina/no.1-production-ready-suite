@@ -94,3 +94,73 @@ def test_native_threshold_trace_uses_actual_counts_and_channel_contributions() -
     assert "Oracle 原始 WRRF: 98.53" in rendered
     assert "有効ベクトル寄与: 0 / 有効全文寄与: 0.001" in rendered
     assert "コサイン類似度: 未取得" in rendered
+
+
+def test_native_trace_shows_vector_read_method_and_shortage() -> None:
+    from rag_engine.retrieval.search_stages import HYBRID_SEARCH_STAGE
+
+    exact = search_diagnostics(
+        HYBRID_SEARCH_STAGE,
+        branches=[
+            {
+                "native": True,
+                "raw_count": 1,
+                "vector_retrieval": {
+                    "method": "exact_scope",
+                    "scope_vector_chunks": 1030,
+                    "exact_max_chunks": 50000,
+                    "requested": 50,
+                    "expected": 50,
+                    "returned": 50,
+                    "shortage": False,
+                },
+                "results": [
+                    {
+                        "id": "a",
+                        "vector_rank": 1,
+                        "text_rank": 0,
+                        "vector_contribution": 0.01,
+                        "keyword_contribution": 0,
+                    }
+                ],
+            }
+        ],
+        scope={},
+        limit=50,
+        metric="有効 RRF 寄与",
+    )
+    fields = {entry["label"]: entry["value"] for entry in exact["fields"]}
+    assert fields["ベクトルの読み方 1"] == (
+        "範囲の行を距離順に読む / 範囲のベクトル 1030 件（距離順に読む上限 50000 件）/ 要求 50 件 / 範囲から返せる数 50 件 / 取得 50 件"
+    )
+    assert "範囲の行の距離順" in fields["目的"]
+    rendered = str(exact)
+    assert "Oracle 原始 WRRF" not in rendered
+    assert "有効ベクトル寄与: 0.01 / 有効全文寄与: 0" in rendered
+
+    short = search_diagnostics(
+        HYBRID_SEARCH_STAGE,
+        branches=[
+            {
+                "native": True,
+                "raw_count": 0,
+                "vector_retrieval": {
+                    "method": "native_index",
+                    "scope_vector_chunks": 60000,
+                    "exact_max_chunks": 50000,
+                    "requested": 50,
+                    "expected": 50,
+                    "returned": 0,
+                    "shortage": True,
+                },
+                "results": [],
+            }
+        ],
+        scope={},
+        limit=50,
+        metric="有効 RRF 寄与",
+    )
+    fields = {entry["label"]: entry["value"] for entry in short["fields"]}
+    assert fields["ベクトルの読み方 1"].startswith("原生索引の近似検索 /")
+    assert fields["ベクトルの読み方 1"].endswith("取得 0 件 / 候補不足")
+    assert "Oracle の1回の呼び出し" in fields["目的"]
