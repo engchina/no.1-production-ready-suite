@@ -1327,10 +1327,6 @@ def _unstructured_adapter_result(
         elements=elements,
         source_profile=source_profile,
         content_type=content_type,
-        is_html=is_html,
-        partition=partition,
-        partition_kwargs=partition_kwargs,
-        suffix=suffix,
     )
     return ParserRegistryResult(
         extraction=extraction,
@@ -1347,26 +1343,9 @@ def _with_unstructured_source_map(
     elements: Sequence[object],
     source_profile: SourceProfile | None,
     content_type: str,
-    is_html: bool,
-    partition: Callable[..., object],
-    partition_kwargs: Mapping[str, object],
-    suffix: str | None,
 ) -> StructuredExtraction:
     """原本の位置の対応を ``parser_artifacts`` に足す（要素・本文は変えない。#4100）。"""
     from rag_parser_core.unstructured_source_map import unstructured_source_map
-
-    def repartition_html(annotated: bytes) -> Sequence[object]:
-        # 要素の本文は同じなので、言語の判定は省く（位置の記録にだけ使う解析）。
-        kwargs = {**partition_kwargs, "encoding": "utf-8", "languages": [""]}
-        html_input = _html_full_document_input(annotated)[0] if is_html else annotated
-        with _temporary_source_file(
-            html_input, source_profile, content_type, suffix=suffix
-        ) as path:
-            return _adapter_sequence_items(
-                _call_with_supported_kwargs(
-                    partition, {"filename": str(path), "content_type": content_type, **kwargs}
-                )
-            )
 
     source_map = unstructured_source_map(
         source_bytes,
@@ -1379,7 +1358,6 @@ def _with_unstructured_source_map(
             for element in extraction.elements
             if element.element_id
         },
-        repartition_html=repartition_html,
     )
     if source_map is None:
         return extraction

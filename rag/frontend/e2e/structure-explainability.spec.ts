@@ -1527,7 +1527,7 @@ const SOURCE_MAP_FORMATS = [
   {format: "csv", first: "| 列1 | 列2 |\n| 0001 | 合成の値 1 |", later: "| 列1 | 列2 |\n| 0900 | 合成の値 900 |", laterChunk: "| 0900 | 合成の値 900 |"},
   {format: "tsv", first: "| 列1 | 列2 |\n| 1 | 合成の値 1 |", later: "| 列1 | 列2 |\n| 900 | 合成の値 900 |", laterChunk: "| 900 | 合成の値 900 |"},
   {format: "jsonl", first: "合成の行 line=1", later: "合成の行 line=700", laterChunk: "合成の行の Chunk line=700"},
-  {format: "json", first: "合成の値 /a/0", later: "合成の値 /a/300", laterChunk: null},
+  {format: "json", first: "合成の値 /a/0", later: "合成の値 /a/300", laterChunk: "合成の値の Chunk /a/300"},
   {format: "xml", first: "合成のタグの本文 1", later: "合成のタグの本文 600", laterChunk: "合成のタグの Chunk 600"},
   {format: "XML ツリー JSON", first: "合成の条 1", later: "合成の条 40", laterChunk: "合成の条の Chunk 40"},
   {format: "構造化レコード JSONL", first: "合成の記録 row-000001", later: "合成の記録 row-000300", laterChunk: "合成の記録の Chunk row-000300"},
@@ -1553,7 +1553,7 @@ for (const {format, first, later, laterChunk} of SOURCE_MAP_FORMATS) {
     await page.route("**/recipes/recipe-1/chunk-window?**", async route => {
       const laterRange = new URL(route.request().url()).searchParams.get("source_offset") === "8192";
       const text = laterRange ? laterChunk : "最初の範囲の Chunk";
-      const items = text ? [{document_id: "doc-1", chunk_id: "source-map-chunk", chunk_index: 0, text, element_ids: [], metadata: {}}] : [];
+      const items = [{document_id: "doc-1", chunk_id: "source-map-chunk", chunk_index: 0, text, element_ids: [], metadata: {}}];
       await route.fulfill({json: {data: {items, total: items.length, document_total: 2, offset: 0, limit: 25, complete: true, scope_status: "exact"}}});
     });
     await page.goto("/documents/doc-1");
@@ -1567,8 +1567,7 @@ for (const {format, first, later, laterChunk} of SOURCE_MAP_FORMATS) {
     await inspector.getByRole("tab", {name: "構造化要素", exact: true}).click();
     await expect(inspector).toContainText(later.split("\n").at(-1)!);
     await inspector.getByRole("tab", {name: /Chunk \/ Citation/}).click();
-    // 普通の JSON の Chunk は原本の座標を持たないので開始の範囲にだけ所属し、後の範囲は案内になる。
-    await expect(inspector).toContainText(laterChunk ?? "現在の原本表示範囲に対応する Chunk はありません。");
+    await expect(inspector).toContainText(laterChunk);
     await expect(inspector).not.toContainText("位置情報が記録されていないため");
     await expectNoHorizontalOverflow(page);
     await page.screenshot({path: test.info().outputPath(`inspector-source-map-${SOURCE_MAP_FORMATS.findIndex(row => row.format === format)}.png`)});

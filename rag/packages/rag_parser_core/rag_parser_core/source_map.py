@@ -17,7 +17,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
 from xml.parsers import expat
@@ -199,7 +199,7 @@ def jsonl_element_ranges(
         return []
     ranges: list[SourceRange] = []
     for (start, end, number), element_text in zip(lines, element_texts, strict=True):
-        if _pretty_lines(json.loads(text[start:end])) != _stripped_lines(element_text):
+        if _json_format(json.loads(text[start:end]), element_text) is None:
             return []
         ranges.append(SourceRange(start, end, f"line={number}"))
     return ranges
@@ -282,9 +282,23 @@ def _json_tree(text: str) -> _JsonNode:
     return root
 
 
-def _pretty_lines(value: Any) -> list[str]:
-    """Unstructured の整形（``indent=2``・``sort_keys=True``）の行（字下げは adapter が除く）。"""
-    return [line.strip() for line in json.dumps(value, indent=2, sort_keys=True).splitlines()]
+def _pretty_lines(value: Any, *, ensure_ascii: bool = True, sort_keys: bool = True) -> list[str]:
+    """整形した JSON の行（字下げは adapter が除くので比べない）。"""
+    dumped = json.dumps(value, indent=2, ensure_ascii=ensure_ascii, sort_keys=sort_keys)
+    return [line.strip() for line in dumped.splitlines()]
+
+
+def _json_format(value: Any, text: str) -> bool | None:
+    """要素の本文が値の整形と同じなら、キーを並べ替えているかを返す。違えば None。
+
+    Unstructured の版や adapter でエスケープ・キーの順が変わっても、記録を続けられるように比べる。
+    """
+    lines = _stripped_lines(text)
+    for sort_keys in (True, False):
+        for ensure_ascii in (True, False):
+            if _pretty_lines(value, ensure_ascii=ensure_ascii, sort_keys=sort_keys) == lines:
+                return sort_keys
+    return None
 
 
 def _stripped_lines(text: str) -> list[str]:
@@ -301,21 +315,25 @@ class _JsonUnit:
     source_end: int
 
 
-def _json_units(node: _JsonNode, value: Any, line: int) -> tuple[list[_JsonUnit], int]:
-    """値の整形後の行の範囲を、整形と同じ順（キーの昇順）で数えて単位にする。"""
-    size = len(_pretty_lines(value))
+def _json_units(
+    node: _JsonNode, value: Any, line: int, *, sort_keys: bool
+) -> tuple[list[_JsonUnit], int]:
+    """値の整形後の行の範囲を、整形と同じ順で数えて単位にする。"""
+    size = len(_pretty_lines(value, sort_keys=sort_keys))
     small = node.end - node.start <= SOURCE_UNIT_CODEPOINTS
     if small or not node.children or not value:
-        return [_JsonUnit(node.pointer, node.pointer, line, line + size, node.start, node.end)], (
-            line + size
-        )
+        unit = _JsonUnit(node.pointer, node.pointer, line, line + size, node.start, node.end)
+        return [unit], line + size
     units: list[_JsonUnit] = []
     cursor = line + 1  # 開く括弧の行
     children = dict(node.children)
-    keys = sorted(children) if node.is_object else [str(i) for i in range(len(value))]
+    if node.is_object:
+        keys = sorted(children) if sort_keys else list(children)
+    else:
+        keys = [str(i) for i in range(len(value))]
     for key in keys:
         child_value = value[key] if node.is_object else value[int(key)]
-        child_units, cursor = _json_units(children[key], child_value, cursor)
+        child_units, cursor = _json_units(children[key], child_value, cursor, sort_keys=sort_keys)
         units.extend(child_units)
     first, last = units[0], units[-1]
     # 括弧の行は最初と最後の単位に含める（本文の範囲に隙間を作らない）。
@@ -366,11 +384,11 @@ def _merged_json_units(units: Iterable[_JsonUnit]) -> list[_JsonUnit]:
 def json_element_ranges(text: str, element_text: str) -> list[SourceRange]:
     """1 つの JSON の要素の、JSON Pointer の単位ごとの範囲（整形した本文が同じことを検証する）。"""
     value = json.loads(text)
-    lines = _pretty_lines(value)
-    if lines != _stripped_lines(element_text):
+    sort_keys = _json_format(value, element_text)
+    if sort_keys is None:
         return []
-    units, end = _json_units(_json_tree(text), value, 0)
-    if end != len(lines):
+    units, end = _json_units(_json_tree(text), value, 0, sort_keys=sort_keys)
+    if end != len(_stripped_lines(element_text)):
         return []
     offsets = [0]
     for line in element_text.split("\n"):
@@ -391,7 +409,6 @@ def json_element_ranges(text: str, element_text: str) -> list[SourceRange]:
 
 # ---- HTML ---------------------------------------------------------------------------------------
 
-HTML_POSITION_ATTRIBUTE = "data-page-number"
 _HTML_VOID_TAGS = frozenset(
     {
         "area",
@@ -410,69 +427,108 @@ _HTML_VOID_TAGS = frozenset(
         "wbr",
     }
 )
+# 中身をそのまま子に分けても読み方が変わらない入れ物（表・リスト・段落は分けない）。
+_HTML_CONTAINER_TAGS = frozenset(
+    {"html", "body", "main", "div", "section", "article", "aside", "header", "footer", "nav"}
+)
 
 
 @dataclass
-class HtmlTagPosition:
+class HtmlNode:
+    """解析器の ``getpos()`` が記録したタグの範囲。"""
+
     tag: str
     start: int
     end: int
     line: int
     column: int
+    has_text: bool = False
+    children: list[HtmlNode] = field(default_factory=list)
 
 
-class _HtmlTagRecorder(HTMLParser):
-    """開始タグの位置（解析器の ``getpos()``）と、閉じるタグまでの範囲を記録する。"""
-
+class _HtmlTreeRecorder(HTMLParser):
     def __init__(self, text: str) -> None:
         super().__init__(convert_charrefs=False)
+        self._text = text
         self._line_starts = [0, *(match.end() for match in re.finditer("\n", text))]
-        self._length = len(text)
-        self.tags: list[HtmlTagPosition] = []
-        self._open: list[HtmlTagPosition] = []
+        self.root = HtmlNode("", 0, len(text), 1, 0)
+        self._open: list[HtmlNode] = [self.root]
 
     def _position(self) -> tuple[int, int, int]:
         line, column = self.getpos()
         return self._line_starts[line - 1] + column, line, column
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def _add(self, tag: str, *, closed: bool) -> None:
         start, line, column = self._position()
-        item = HtmlTagPosition(tag, start, self._length, line, column)
-        self.tags.append(item)
-        if tag not in _HTML_VOID_TAGS:
-            self._open.append(item)
+        end = start + len(self.get_starttag_text() or "") if closed else len(self._text)
+        node = HtmlNode(tag, start, end, line, column)
+        self._open[-1].children.append(node)
+        if not closed:
+            self._open.append(node)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._add(tag, closed=tag in _HTML_VOID_TAGS)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        start, line, column = self._position()
-        self.tags.append(HtmlTagPosition(tag, start, start, line, column))
+        self._add(tag, closed=True)
 
     def handle_endtag(self, tag: str) -> None:
-        for index in range(len(self._open) - 1, -1, -1):
+        for index in range(len(self._open) - 1, 0, -1):
             if self._open[index].tag == tag:
-                end = self._position()[0]
+                start = self._position()[0]
+                close = self._text.find(">", start)
+                end = close + 1 if close >= 0 else len(self._text)
                 for item in self._open[index:]:
                     item.end = end
                 del self._open[index:]
                 return
 
+    def handle_data(self, data: str) -> None:
+        if data.strip():
+            self._open[-1].has_text = True
 
-def html_tag_positions(text: str) -> list[HtmlTagPosition]:
-    recorder = _HtmlTagRecorder(text)
+    def handle_entityref(self, name: str) -> None:
+        self._open[-1].has_text = True
+
+    def handle_charref(self, name: str) -> None:
+        self._open[-1].has_text = True
+
+
+def _html_segments(node: HtmlNode) -> Iterator[HtmlNode]:
+    """入れ物を子に分け、隣り合う子を目安の文字数までまとめる。文字のある入れ物は分けない。"""
+    pending: HtmlNode | None = None
+    for child in node.children:
+        splittable = (
+            child.tag in _HTML_CONTAINER_TAGS
+            and not child.has_text
+            and bool(child.children)
+            and child.end - child.start > SOURCE_UNIT_CODEPOINTS
+        )
+        if splittable:
+            if pending is not None:
+                yield pending
+                pending = None
+            yield from _html_segments(child)
+            continue
+        if pending is None:
+            pending = HtmlNode(child.tag, child.start, child.end, child.line, child.column)
+        else:
+            pending.end = child.end
+        if pending.end - pending.start >= SOURCE_UNIT_CODEPOINTS:
+            yield pending
+            pending = None
+    if pending is not None:
+        yield pending
+
+
+def html_segments(text: str) -> list[HtmlNode]:
+    """要素の順に並んだ、それだけで解析できる原本の区切り。"""
+    recorder = _HtmlTreeRecorder(text)
     recorder.feed(text)
     recorder.close()
-    return recorder.tags
-
-
-def annotate_html_positions(text: str, tags: Sequence[HtmlTagPosition]) -> str:
-    """開始タグに通し番号（1 始まり）の属性を足す。Unstructured が要素の metadata へ通す。"""
-    parts: list[str] = []
-    last = 0
-    for number, tag in enumerate(tags, start=1):
-        insert_at = tag.start + 1 + len(tag.tag)
-        parts.extend((text[last:insert_at], f' {HTML_POSITION_ATTRIBUTE}="{number}"'))
-        last = insert_at
-    parts.append(text[last:])
-    return "".join(parts)
+    if recorder.root.has_text:
+        return [HtmlNode("", 0, len(text), 1, 0)]
+    return list(_html_segments(recorder.root))
 
 
 # ---- XML ----------------------------------------------------------------------------------------
@@ -592,7 +648,6 @@ def nonblank_line_ranges(text: str, start: int, end: int) -> list[tuple[int, int
 
 __all__ = [
     "FRAGMENT_SCHEMES",
-    "HTML_POSITION_ATTRIBUTE",
     "SCHEME_DELIMITED_ROW",
     "SCHEME_HTML_SOURCE",
     "SCHEME_JSONL_LINE",
@@ -604,15 +659,14 @@ __all__ = [
     "SOURCE_MAP_VERSION",
     "SOURCE_UNIT_CODEPOINTS",
     "SOURCE_WINDOW_CODEPOINTS",
-    "HtmlTagPosition",
+    "HtmlNode",
     "LineIndex",
     "SourceRange",
     "XmlLeaf",
-    "annotate_html_positions",
     "decode_source_text",
     "delimited_element_ranges",
     "delimited_record_ranges",
-    "html_tag_positions",
+    "html_segments",
     "iter_text_blocks",
     "json_element_ranges",
     "jsonl_element_ranges",

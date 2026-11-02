@@ -77,6 +77,7 @@ async def test_chunk_window_scopes_one_element_by_recorded_rows() -> None:
         {"element_ids": "table", "table_data_row_start": 58},
         {"element_ids": "table"},
     ]
+    starts = [0, 0, 5]
     document_id = await _indexed_document(
         oracle,
         file_name=f"synthetic-{uuid4().hex}.csv",
@@ -84,8 +85,8 @@ async def test_chunk_window_scopes_one_element_by_recorded_rows() -> None:
             Chunk(
                 index=index,
                 text=f"合成の行{index}",
-                start_offset=0,
-                end_offset=5,
+                start_offset=starts[index],
+                end_offset=starts[index] + 5,
                 metadata=metadata,
             )
             for index, metadata in enumerate(metadata_rows)
@@ -105,12 +106,19 @@ async def test_chunk_window_scopes_one_element_by_recorded_rows() -> None:
         chunk_set_id=chunk_set, document_id=document_id, extraction_recipe_id=revision
     )
 
-    async def indexes(row_start: int, row_end: int, *, at_start: bool) -> list[int]:
+    async def indexes(
+        row_start: int, row_end: int, *, at_start: bool, offsets: list[list[int]] | None = None
+    ) -> list[int]:
         chunks, _ = await oracle.list_chunk_set_chunk_window(
             chunk_set,
             extraction_recipe_id=revision,
             scope_element_ids=["table"],
-            scope_rows={"row_start": row_start, "row_end": row_end, "at_start": at_start},
+            scope_rows={
+                "row_start": row_start,
+                "row_end": row_end,
+                "at_start": at_start,
+                "offset_ranges": offsets or [],
+            },
         )
         return [chunk.chunk_index for chunk in chunks]
 
@@ -119,6 +127,9 @@ async def test_chunk_window_scopes_one_element_by_recorded_rows() -> None:
     assert await indexes(58, 200, at_start=False) == [1]
     assert await indexes(0, -1, at_start=True) == [2]
     assert await indexes(0, -1, at_start=False) == []
+    # 行の単位が無い要素は、分割が記録した本文の位置で所属させる。Chunk 2 は位置 5 から。
+    assert await indexes(0, -1, at_start=False, offsets=[[3, 9]]) == [2]
+    assert await indexes(0, -1, at_start=True, offsets=[[100, 200]]) == []
 
 
 @pytest.mark.usefixtures("oracle_db")

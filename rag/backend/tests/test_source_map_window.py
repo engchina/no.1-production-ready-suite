@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import _structured_records_jsonl_result
 from rag_parser_core.source_map import (
     SourceRange,
@@ -24,6 +25,7 @@ from rag_parser_core.structured_records import (
 )
 from rag_parser_core.xml_tree_json import xml_tree_json_extraction
 
+from app.rag.chunking import chunk_extraction_with_strategy
 from app.services.document_inspection import extraction_window
 from app.services.inspection_scope import source_inspection
 
@@ -202,9 +204,26 @@ def test_json_units_follow_windows_and_chunks_stay_in_start_window() -> None:
         shown.append(view["payload"]["raw_text"])
     # 全部の行がどこかの範囲に 1 回だけ出る。
     assert sorted("\n".join(shown).split("\n")) == sorted(element_text.split("\n"))
-    # JSON の Chunk は位置を持たないので要素の開始の範囲にだけ所属する。
-    assert windows[0]["chunk_rows"] == {"row_start": 0, "row_end": -1, "at_start": True}
-    assert windows[1]["chunk_rows"] == {"row_start": 0, "row_end": -1, "at_start": False}
+    # JSON の Chunk は、分割が記録した本文の位置で、その単位の範囲にだけ所属する。
+    chunks = chunk_extraction_with_strategy(
+        StructuredExtraction(
+            raw_text=element_text,
+            elements=[DocumentElement(kind="text", text=element_text, order=0, element_id="j")],
+        )
+    )
+    assert len(chunks) > len(windows)
+    owners: list[int] = []
+    for chunk in chunks:
+        owner = [
+            index
+            for index, window in enumerate(windows)
+            if any(a <= chunk.start_offset <= b for a, b in window["chunk_rows"]["offset_ranges"])
+        ]
+        assert len(owner) == 1, chunk.start_offset
+        owners.append(owner[0])
+    assert len(set(owners)) > 1
+    assert windows[0]["chunk_rows"]["at_start"] is True
+    assert windows[1]["chunk_rows"]["at_start"] is False
 
 
 def test_xml_tags_follow_windows_in_source_order() -> None:

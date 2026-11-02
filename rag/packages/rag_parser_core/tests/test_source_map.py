@@ -1,11 +1,14 @@
 """解析の座標から原本の位置を作る処理の回帰（#4100）。本文の検索で位置を決めない。"""
 
+import ast
 import hashlib
 import json
+from pathlib import Path
 from xml.parsers import expat
 
 import pytest
 
+from rag_parser_core import unstructured_source_map as unstructured_source_map_module
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import _with_structured_records_source_map
 from rag_parser_core.source_map import (
@@ -13,11 +16,10 @@ from rag_parser_core.source_map import (
     SOURCE_UNIT_CODEPOINTS,
     LineIndex,
     SourceRange,
-    annotate_html_positions,
     decode_source_text,
     delimited_element_ranges,
     delimited_record_ranges,
-    html_tag_positions,
+    html_segments,
     iter_text_blocks,
     json_element_ranges,
     jsonl_element_ranges,
@@ -127,22 +129,33 @@ def test_json_rejects_text_that_differs_from_formatted_source() -> None:
     assert json_element_ranges(text, '{\n"a": 2\n}') == []
 
 
-def test_html_positions_come_from_parser_and_annotation_keeps_source_text() -> None:
+def test_html_segments_split_containers_and_keep_blocks_whole() -> None:
+    rows = "".join(f"<tr><td>{i}</td></tr>" for i in range(200))
+    paragraphs = "".join(f"<p>本文 {i} の段落です</p>\n" for i in range(200))
     text = (
-        "<!doctype html>\n<!-- <p>注釈</p> --><body>\n"
-        '<script>"<p>x</p>"</script><p class="c">本文<br/>二行</p>\n<IMG src=a><div>囲み</body>'
+        "<!doctype html>\n<!-- <p>注釈</p> --><html><head><title>題</title></head>\n"
+        f'<body><div id="a">{paragraphs}</div>\n<table>{rows}</table>\n'
+        f"<div>囲み<p>内側</p>{paragraphs}</div>\n<img src=a><script>'<p>x</p>'</script>"
+        "</body></html>"
     )
-    tags = html_tag_positions(text)
-    assert [t.tag for t in tags] == ["body", "script", "p", "br", "img", "div"]
-    for tag in tags:
-        assert text[tag.start] == "<"
-        assert text[tag.start + 1 : tag.start + 1 + len(tag.tag)].lower() == tag.tag
-    paragraph = tags[2]
-    assert text[paragraph.start : paragraph.end].endswith("二行")
-    annotated = annotate_html_positions(text, tags)
-    assert '<p data-page-number="3" class="c">' in annotated
-    assert annotated.replace(' data-page-number="3"', "").count("本文") == 1
-    assert [t.tag for t in html_tag_positions(annotated)] == [t.tag for t in tags]
+    segments = html_segments(text)
+    assert len(segments) > 3
+    slices = [text[node.start : node.end] for node in segments]
+    # 順番どおりで重ならない。
+    assert all(a.end <= b.start for a, b in zip(segments, segments[1:], strict=False))
+    # 文字のある入れ物と表は分けない。段落は分けて目安の文字数にまとめる。
+    tables = [value for value in slices if value.startswith("<table>")]
+    assert len(tables) == 1 and tables[0].endswith("</table>")
+    assert sum(1 for value in slices if value.startswith("<div>囲み")) == 1
+    assert sum(1 for value in slices if value.startswith("<p>")) > 1
+    assert all(text[node.start] == "<" for node in segments)
+    assert all(value.count("<p>") == value.count("</p>") for value in slices)
+
+
+def test_html_text_outside_tags_keeps_one_segment() -> None:
+    text = "地の文<p>本文</p>" * 1000
+    segments = html_segments(text)
+    assert [(node.start, node.end) for node in segments] == [(0, len(text))]
 
 
 def test_xml_leaves_follow_close_order_and_text_before_first_child() -> None:
@@ -208,16 +221,36 @@ def test_artifact_records_version_and_source_digest() -> None:
     assert source_map_artifact(data, text, "text_char", {}) is None
 
 
-def test_short_sources_and_unsupported_formats_record_nothing() -> None:
-    def never(_: bytes) -> list[object]:
-        raise AssertionError
+def test_no_private_unstructured_names_are_imported() -> None:
+    """Unstructured の private な名前に依存しない（版を上げても位置の記録を保つ）。"""
+    source = Path(unstructured_source_map_module.__file__).read_text(encoding="utf-8")
+    imported = [
+        alias.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("unstructured")
+        for alias in node.names
+    ]
+    assert imported
+    assert [name for name in imported if name.startswith("_")] == []
 
-    arguments = {
-        "items": [],
-        "ids": [],
-        "element_texts": {},
-        "repartition_html": never,
-    }
+
+def test_json_format_follows_escape_and_key_order_of_the_element_text() -> None:
+    value = {"z": "先頭", "a": [{"k": i, "v": "値" * 8} for i in range(300)]}
+    text = json.dumps(value, ensure_ascii=False, indent=1)
+    for ensure_ascii in (True, False):
+        for sort_keys in (True, False):
+            element_text = json.dumps(
+                value, indent=2, ensure_ascii=ensure_ascii, sort_keys=sort_keys
+            )
+            units = json_element_ranges(text, element_text)
+            assert units[0].start == 0
+            assert units[-1].end == len(element_text)
+            if not sort_keys:
+                assert units[0].locator.startswith("/z")
+
+
+def test_short_sources_and_unsupported_formats_record_nothing() -> None:
+    arguments = {"items": [], "ids": [], "element_texts": {}}
     assert (
         unstructured_source_map(b"a" * 8192, extension=".csv", content_type="", **arguments) is None
     )
@@ -227,19 +260,15 @@ def test_short_sources_and_unsupported_formats_record_nothing() -> None:
 
 
 def test_recording_failure_does_not_stop_parsing() -> None:
-    def fails(_: bytes) -> list[object]:
-        raise RuntimeError("synthetic")
-
-    html = ("<p>本文</p>" * 2000).encode()
+    # 壊れた JSON は記録の処理で例外になるが、解析の結果には影響しない。
     assert (
         unstructured_source_map(
-            html,
-            extension=".html",
-            content_type="text/html",
-            items=[],
-            ids=[],
-            element_texts={},
-            repartition_html=fails,
+            ("{" + "x" * 9000).encode(),
+            extension=".json",
+            content_type="application/json",
+            items=[object()],
+            ids=["e"],
+            element_texts={"e": "本文"},
         )
         is None
     )

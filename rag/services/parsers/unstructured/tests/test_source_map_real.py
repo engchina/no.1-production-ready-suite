@@ -81,26 +81,29 @@ def test_markdown_records_block_lines_without_blank_separated_lists() -> None:
     assert first_line("続きの段落 3") == "続きの段落 3"
 
 
-def test_html_position_passes_through_parser_and_keeps_existing_attribute() -> None:
+def test_html_segments_match_whole_parse_and_point_to_source() -> None:
     source = (
-        "<html><body><main><h1>見出し</h1>\n"
+        "<!doctype html>\n<html><head><title>題</title></head><body><main><h1>見出し</h1>\n"
         + "".join(
             f"<p data-page-number='9'>段落 <b>{i}</b> です</p>\n<div>囲み<p>内側 {i}</p></div>\n"
             for i in range(400)
         )
-        + "<table><tr><th>列</th></tr><tr><td>値</td></tr></table></main></body></html>"
+        + "<table><tr><th>列</th></tr><tr><td>値</td></tr></table>\n"
+        + "<ul><li>項目 a</li><li>項目 b</li></ul></main>\n<footer>版</footer></body></html>"
     )
     data = source.encode()
     extraction = _parse(data, "text/html", ".html", "html")
     source_map = _assert_every_element_recorded(extraction, data, "html_source")
-    # main の置換の後の位置ではなく、原本の位置を指す。
+    # main の置換の後の位置ではなく、原本の位置を指す。範囲の中にその要素の文字がある。
     for element in extraction.elements[:40]:
         span = source_map["elements"][element.element_id][0]
         assert source[span["source_start"]] == "<"
         assert element.text.split(" ")[0] in source[span["source_start"] : span["source_end"]]
-    # 原本の属性は通常の解析のまま（位置の記録の通し番号がページ番号に混ざらない）。
-    paragraph = next(e for e in extraction.elements if e.text.startswith("段落 3"))
-    assert paragraph.page_number == 9
+    # 後ろの要素ほど後ろの位置になり、表示範囲に分かれる。
+    starts = [source_map["elements"][e.element_id][0]["source_start"] for e in extraction.elements]
+    assert starts == sorted(starts)
+    assert len(set(starts)) > 10
+    assert max(starts) > 8192
 
 
 def test_html_position_does_not_add_page_numbers() -> None:
@@ -170,9 +173,6 @@ def test_broken_xml_keeps_parser_behaviour() -> None:
     class Item:
         text = "本文"
 
-    def never(_: bytes) -> list[object]:
-        raise AssertionError
-
     assert (
         unstructured_source_map(
             ("<a>" + "本文" * 5000).encode(),
@@ -181,7 +181,6 @@ def test_broken_xml_keeps_parser_behaviour() -> None:
             items=[Item()],
             ids=["e"],
             element_texts={},
-            repartition_html=never,
         )
         is None
     )
@@ -239,9 +238,6 @@ def test_unverified_order_records_nothing_and_keeps_parsing() -> None:
     texts = [element.text for element in extraction.elements]
     texts[1], texts[2] = texts[2], texts[1]
 
-    def never(_: bytes) -> list[object]:
-        raise AssertionError
-
     assert (
         unstructured_source_map(
             data,
@@ -250,7 +246,6 @@ def test_unverified_order_records_nothing_and_keeps_parsing() -> None:
             items=[Item(text) for text in texts],
             ids=[str(index) for index in range(len(texts))],
             element_texts={},
-            repartition_html=never,
         )
         is None
     )

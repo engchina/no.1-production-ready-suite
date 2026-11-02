@@ -17,6 +17,9 @@ from rag_parser_core.source_map import (
 from app.services.json_source_rebuild import payload_with_source_map
 from app.services.source_map_resolve import SourceUnit, resolve_source_map
 
+# 最後の単位は要素の末尾までなので、Chunk の位置の上限を区切らない。
+CHUNK_OFFSET_MAX = 2**53
+
 
 def decode_inspection_text(data: bytes) -> str:
     """既存の原本閲覧と同じ、UTF-8 優先の文字コード検出を使う。"""
@@ -34,6 +37,15 @@ def _window_units(
     return grouped
 
 
+def _offset_ranges(units: tuple[SourceUnit, ...], window: list[SourceUnit]) -> list[list[int]]:
+    """Chunk の ``start_offset``（要素の本文の位置）を単位へ所属させる範囲。単位の間の改行を含める。"""
+    last = max(unit.text_end for unit in units)
+    return [
+        [unit.text_start, CHUNK_OFFSET_MAX if unit.text_end == last else unit.text_end]
+        for unit in window
+    ]
+
+
 def _fragment_view(units: list[SourceUnit]) -> dict[str, Any]:
     rows = [unit for unit in units if unit.row_start is not None and unit.row_end is not None]
     return {
@@ -45,11 +57,16 @@ def _fragment_view(units: list[SourceUnit]) -> dict[str, Any]:
 
 
 def _chunk_rows(
-    fragments: Mapping[str, Mapping[str, Any]], starts: Mapping[str, int], start: int, end: int
+    fragments: Mapping[str, Mapping[str, Any]],
+    starts: Mapping[str, int],
+    start: int,
+    end: int,
+    offset_ranges: list[list[int]],
 ) -> dict[str, Any] | None:
-    """単位に分けた要素の Chunk の所属（分割が記録した行の番号。表頭の次の行が 1）。
+    """単位に分けた要素の Chunk の所属（分割が記録した行の番号と本文の位置）。
 
-    行の番号を持たない Chunk は位置が分からないので、要素の開始の範囲にだけ所属する。
+    表は行の番号（表頭の次の行が 1）で、行の単位を持たない要素は ``start_offset`` で所属させる。
+    どちらの座標も持たない Chunk は位置が分からないので、要素の開始の範囲にだけ所属する。
     """
     if not fragments:
         return None
@@ -57,6 +74,7 @@ def _chunk_rows(
     return {
         "row_start": min(row[0] for row in rows) - 1 if rows else 0,
         "row_end": max(row[1] for row in rows) - 1 if rows else -1,
+        "offset_ranges": [] if rows else offset_ranges,
         "at_start": any(start <= starts.get(eid, -1) < end for eid in fragments),
     }
 
@@ -141,10 +159,15 @@ def source_inspection(
     index = max(0, bisect.bisect_right(cuts, min(target, max(0, len(text) - 1))) - 1)
     start = cuts[index]
     end = cuts[index + 1] if index + 1 < len(cuts) else len(text)
-    fragments = {
-        element: _fragment_view(items)
-        for element, items in _window_units(units, start, end).items()
-    }
+    window_units = _window_units(units, start, end)
+    fragments = {element: _fragment_view(items) for element, items in window_units.items()}
+    offset_ranges = [
+        value
+        for element, items in window_units.items()
+        for value in _offset_ranges(
+            tuple(unit for unit in units if unit.element_id == element), items
+        )
+    ]
     split_elements = {unit.element_id for unit in units}
     return {
         "text": text[start:end],
@@ -160,7 +183,7 @@ def source_inspection(
             if eid in fragments or (eid not in split_elements and start <= position < end)
         ],
         "element_fragments": fragments,
-        "chunk_rows": _chunk_rows(fragments, starts, start, end),
+        "chunk_rows": _chunk_rows(fragments, starts, start, end, offset_ranges),
         "element_starts": starts,
         "previous_offset": cuts[index - 1] if index else None,
         "next_offset": cuts[index + 1] if index + 1 < len(cuts) else None,

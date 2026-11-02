@@ -1,7 +1,8 @@
 """Unstructured の要素に原本の位置を付ける（#4100。形式の座標は ``source_map``）。
 
-parser のサービスの中で、Unstructured の解析と同じ関数を使う。private な関数に依存するので、版を
-上げて import や出力が変わったら位置を記録しないだけにする（解析は止めない。実物のテストで検出）。
+parser のサービスの中で、Unstructured の公開の関数を位置の分かる区切りごとに当てる（private な関数や
+属性の動きに依存しない。テストで確かめる）。版を上げて結果が全体の解析と合わなくなったら位置を記録
+しないだけにする（解析は止めない）。
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 import csv
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from rag_parser_core.source_map import (
@@ -23,10 +24,9 @@ from rag_parser_core.source_map import (
     SOURCE_WINDOW_CODEPOINTS,
     LineIndex,
     SourceRange,
-    annotate_html_positions,
     decode_source_text,
     delimited_element_ranges,
-    html_tag_positions,
+    html_segments,
     iter_text_blocks,
     json_element_ranges,
     jsonl_element_ranges,
@@ -104,8 +104,11 @@ def _text_ranges(
         group_broken_paragraphs,
         new_line_grouper,
     )
-    from unstructured.nlp.patterns import DOUBLE_PARAGRAPH_PATTERN_RE
-    from unstructured.partition.text import _is_empty_bullet, _split_by_paragraph
+    from unstructured.nlp.patterns import (
+        DOUBLE_PARAGRAPH_PATTERN_RE,
+        PARAGRAPH_PATTERN,
+        UNICODE_BULLETS_RE,
+    )
 
     line_mode = auto_paragraph_grouper(text) == new_line_grouper(text)
     separator = re.compile(r"\n") if line_mode else DOUBLE_PARAGRAPH_PATTERN_RE
@@ -114,10 +117,12 @@ def _text_ranges(
     ranges: dict[str, list[SourceRange]] = {}
     ordinal = 0
     for start, end in iter_text_blocks(text, separator):
+        # 段落の行に分け、記号だけの行を除く（partition_text の読み方と同じ）。
         outputs = [
             value.strip()
-            for value in _split_by_paragraph(group(text[start:end]))
-            if value.strip() and not _is_empty_bullet(value.strip())
+            for value in re.split(PARAGRAPH_PATTERN, group(text[start:end]).strip())
+            if value.strip()
+            and not (len(value.strip()) == 1 and UNICODE_BULLETS_RE.match(value.strip()))
         ]
         block_lines = nonblank_line_ranges(text, start, end)
         for index, output in enumerate(outputs):
@@ -195,26 +200,29 @@ def _markdown_ranges(
 
 
 def _html_ranges(
-    text: str,
-    items: Sequence[object],
-    ids: Sequence[str],
-    repartition: Callable[[bytes], Sequence[object]],
+    text: str, items: Sequence[object], ids: Sequence[str]
 ) -> dict[str, list[SourceRange]]:
-    """開始タグの通し番号を解析器に通して、要素を記録したタグの位置へ戻す。"""
-    tags = html_tag_positions(text)
-    annotated = repartition(annotate_html_positions(text, tags).encode("utf-8"))
-    if [_element_text(item) for item in annotated] != [_element_text(item) for item in items]:
-        return {}
+    """記録したタグの区切りごとに解析し、連結が全体の解析と同じときだけ区切りの位置を使う。"""
+    from unstructured.partition.html import partition_html
+
     ranges: dict[str, list[SourceRange]] = {}
-    for item, element_id in zip(annotated, ids, strict=True):
-        number = getattr(getattr(item, "metadata", None), "page_number", None)
-        if not isinstance(number, int) or not 1 <= number <= len(tags):
-            return {}
-        tag = tags[number - 1]
-        ranges[element_id] = [
-            SourceRange(tag.start, tag.end, f"line={tag.line};col={tag.column};tag={tag.tag}")
-        ]
-    return ranges
+    ordinal = 0
+    for segment in html_segments(text):
+        fragment = text[segment.start : segment.end]
+        if not fragment.strip():
+            continue
+        try:
+            parts = partition_html(text=fragment, languages=[""], skip_headers_and_footers=False)
+        except ValueError:
+            # 文字の無い区切り（スクリプトだけなど）は要素を作らない。
+            parts = []
+        locator = f"line={segment.line};col={segment.column};tag={segment.tag}"
+        for part in parts:
+            if ordinal >= len(items) or _element_text(part) != _element_text(items[ordinal]):
+                return {}
+            ranges[ids[ordinal]] = [SourceRange(segment.start, segment.end, locator)]
+            ordinal += 1
+    return ranges if ordinal == len(items) else {}
 
 
 def _xml_ranges(
@@ -244,7 +252,6 @@ def unstructured_source_map(
     items: Sequence[object],
     ids: Sequence[str],
     element_texts: Mapping[str, str],
-    repartition_html: Callable[[bytes], Sequence[object]],
 ) -> dict[str, Any] | None:
     """位置の対応を作る。検証に通らないとき・形式の対象外のときは None（解析は止めない）。
 
@@ -258,7 +265,7 @@ def unstructured_source_map(
     if len(text) <= SOURCE_WINDOW_CODEPOINTS:
         return None
     try:
-        scheme, ranges = _element_ranges(kind, text, items, ids, element_texts, repartition_html)
+        scheme, ranges = _element_ranges(kind, text, items, ids, element_texts)
     except Exception:  # noqa: BLE001 - 位置の記録の失敗で解析を止めない。
         logger.warning("source_map_failed", extra={"format": kind}, exc_info=True)
         return None
@@ -281,14 +288,13 @@ def _element_ranges(
     items: Sequence[object],
     ids: Sequence[str],
     element_texts: Mapping[str, str],
-    repartition_html: Callable[[bytes], Sequence[object]],
 ) -> ElementRanges:
     if kind == "text":
         return SCHEME_TEXT_CHAR, _text_ranges(text, items, ids)
     if kind == "markdown":
         return SCHEME_MARKDOWN_SOURCE, _markdown_ranges(text, items, ids)
     if kind == "html":
-        return SCHEME_HTML_SOURCE, _html_ranges(text, items, ids, repartition_html)
+        return SCHEME_HTML_SOURCE, _html_ranges(text, items, ids)
     if kind == "xml":
         return SCHEME_XML_SOURCE, _xml_ranges(text, items, ids)
     if kind == "jsonl":
