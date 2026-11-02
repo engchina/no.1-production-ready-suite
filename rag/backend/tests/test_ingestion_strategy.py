@@ -698,7 +698,9 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
     payload = json.loads(data)
     parser_artifacts = payload["parser_artifacts"]
     trace_key = key.rsplit("/", 1)[-1].removesuffix(".json")
-    assert parser_artifacts["extraction_artifact_schema_version"] == 1
+    assert parser_artifacts["extraction_artifact_schema_version"] == (
+        ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION
+    )
     assert parser_artifacts["extraction_artifact_kind"] == "full"
     assert parser_artifacts["extraction_artifact_document_id"] == "doc-artifact"
     assert parser_artifacts["extraction_artifact_trace_id"] == trace_key
@@ -706,7 +708,9 @@ async def test_ingestion_pipeline_caches_extraction_artifact_and_segment_checkpo
     artifact_path = oracle.saved_extraction.parser_artifacts["extraction_artifact_path"]
     assert isinstance(artifact_path, str)
     assert artifact_path.startswith("oci://namespace/bucket/artifacts/extractions/doc-artifact/")
-    assert oracle.saved_extraction.parser_artifacts["extraction_artifact_schema_version"] == 1
+    assert oracle.saved_extraction.parser_artifacts["extraction_artifact_schema_version"] == (
+        ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION
+    )
     assert oracle.saved_extraction.parser_artifacts["extraction_artifact_kind"] == "full"
     assert oracle.segments
     assert all(segment.status == "SUCCEEDED" for segment in oracle.segments.values())

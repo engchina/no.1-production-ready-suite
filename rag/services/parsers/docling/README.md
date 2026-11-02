@@ -25,6 +25,17 @@ scripts/rag-services.sh install parser-docling   # venv を作り unit と sudoe
 scripts/rag-services.sh run parser-docling       # systemd の無い環境で前面に起動
 ```
 
+## 分数と上付き・下付き（#4140）
+
+Docling は上下に積んだ分子と分母を同じ行の字の並びにするので、解析の後に `rag_engine.parsing.math_layout` が PDF の text layer の字の位置と、ページに描かれた細い横線から構造を本文へ戻します（`1/(1-x)`・`(a+b)/(c-d)`・`x^2`・`a_1`）。モデル・追加の依存を使わず、1 ページあたり数 ms です。
+
+- 分数: 短い横線の真上と真下に、線の幅に収まり中央にそろった字があるときだけ。下線・取り消し線・表の罫線・区切りの線は対象にしません。式が複数の record に分かれていたら最初の record へまとめます。
+- 上付き・下付き: 分数を含む塊と、Docling が数式と判定した塊だけ（本文の脚注の番号を指数にしません）。
+- 線の無い積み重ね（2 行の式・行列と区別できない）と、フォーム XObject の中の線と、text layer の無いスキャンは推測せず、元の本文のままです。
+- Docling の公式の式の認識（`do_formula_enrichment`。CodeFormulaV2）は使いません。日本語を含む式で字が崩れ、CPU で 1 式あたり約 1 分かかるためです。
+
+保存済みの文書には再処理（解析の工程から）するまで反映されません。
+
 ## OCR モデルの検証と復旧
 
 Terraform の初回配備・再配備と `scripts/rag-services.sh sync parser-docling` は、モデル取得の前後に登録済み RapidOCR（ONNX・Torch など）の SHA-256 と Hugging Face モデルの hash を検証します。RapidOCR の期待値と取得元は導入済み公式 registry を使用します。版面・表・コード／数式・画像分類などの Hugging Face モデルは、取得 metadata の commit と ETag（LFS は SHA-256、Git blob は SHA-1）を使い、同じ版を検証・再取得します。metadata が無いファイルを検証済みとは扱いません。

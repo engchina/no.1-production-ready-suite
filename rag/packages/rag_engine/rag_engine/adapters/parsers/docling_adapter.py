@@ -28,9 +28,10 @@ from rag_engine.models.layout import LayoutRecord
 from rag_engine.parsing.categories import normalize_category
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.coordinates import clamp_bbox, pdf_bottom_left_to_image_top_left
+from rag_engine.parsing.math_layout import MathBlock, restore_math_text
 from rag_engine.parsing.picture_text import format_docling_picture_ocr_text
 from rag_engine.parsing.progress import ACTIVE_PAGE_PROGRESS, PageProgress
-from rag_engine.parsing.rendering import pdf_image_object_bounds, pdf_text_lines_in_bbox
+from rag_engine.parsing.rendering import pdf_image_object_bounds, pdf_math_page_contents, pdf_text_lines_in_bbox
 from rag_engine.parsing.table_structure import misplaced_cell_repairs, unassigned_table_lines
 
 DOCLING_ROW_TOLERANCE_RATIO = 0.005
@@ -319,7 +320,81 @@ class DoclingAdapter:
                         },
                     )
                 )
+        records = _restore_math_layout(records, context.pdf_path, page_lookup)
         return _sort_and_renumber_records(records, _reading_order_keys(payload), _multi_column_pages(payload, page_lookup))
+
+
+# 分数・上付き下付きの構造を戻す対象の本文の分類（#4140）。表・図・見出しは対象にしない。
+_MATH_LAYOUT_CATEGORIES = frozenset({"Text", "Formula", "List-item", "Caption", "Footnote"})
+
+
+def _restore_math_layout(records: list[LayoutRecord], pdf_path: Any, page_lookup: dict[int, Any]) -> list[LayoutRecord]:
+    """PDF の字の配置と線から、分数・上付き下付きの構造を本文に戻す（#4140）。
+
+    解析エンジンが式を複数の record に分けたときは、最初の record に 1 つへまとめる。PDF でない入力・読めない
+    PDF・text layer の無いページではそのまま返す（解析は止めない）。
+    """
+    if not str(pdf_path).lower().endswith(".pdf"):
+        return records
+    blocks_by_page: dict[int, list[MathBlock]] = {}
+    by_id = {record.id: record for record in records}
+    for record in records:
+        if _math_layout_target(record) and record.page in page_lookup:
+            blocks_by_page.setdefault(record.page, []).append(_math_block(record, page_lookup[record.page]))
+    if not blocks_by_page:
+        return records
+    formula_pages = {page for page, blocks in blocks_by_page.items() if any(block.is_formula for block in blocks)}
+    try:
+        contents = pdf_math_page_contents(pdf_path, sorted(blocks_by_page), always_read_glyphs=formula_pages)
+    except Exception:
+        return records
+    removed: set[str] = set()
+    for page_number, (glyphs, horizontal_rules, vertical_rules) in contents.items():
+        for restored in restore_math_text(blocks_by_page[page_number], glyphs, horizontal_rules, vertical_rules):
+            merged = [by_id[key] for key in restored.merged_keys]
+            target = merged[0]
+            target.text = restored.text
+            target.bbox = [
+                min(record.bbox[0] for record in merged),
+                min(record.bbox[1] for record in merged),
+                max(record.bbox[2] for record in merged),
+                max(record.bbox[3] for record in merged),
+            ]
+            if any(record.category == "Formula" for record in merged):
+                target.category = "Formula"
+            # raw は同じ item を複数の record（ページをまたぐ prov）で共有するので、書き換えない。
+            target.raw = {
+                **target.raw,
+                "math_layout": {
+                    "fractions": restored.fraction_count,
+                    "scripts": restored.script_count,
+                    "merged_record_ids": list(restored.merged_keys[1:]),
+                },
+            }
+            removed.update(restored.merged_keys[1:])
+    return [record for record in records if record.id not in removed]
+
+
+def _math_layout_target(record: LayoutRecord) -> bool:
+    return (
+        record.category in _MATH_LAYOUT_CATEGORIES
+        and bool(record.text.strip())
+        and record.raw_type != "table_unassigned_text"
+        and not record.raw.get(INSTRUCTION_CALLOUT_FLAG)
+    )
+
+
+def _math_block(record: LayoutRecord, page: Any) -> MathBlock:
+    """record の画像の座標（左上原点）の bbox を、PDF point（左下原点）にする。"""
+    scale_x = page.pdf_width / page.width
+    scale_y = page.pdf_height / page.height
+    left, top, right, bottom = record.bbox
+    return MathBlock(
+        key=record.id,
+        box=(left * scale_x, page.pdf_height - bottom * scale_y, right * scale_x, page.pdf_height - top * scale_y),
+        text=record.text,
+        is_formula=record.category == "Formula",
+    )
 
 
 def _charspan_texts(text: str, provenances: list[dict[str, Any]]) -> list[str] | None:
