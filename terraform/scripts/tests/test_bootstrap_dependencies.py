@@ -1,4 +1,4 @@
-"""Git の無い初回配備を実 bootstrap と隔離した command で検証する。"""
+"""Git と CA の無い初回配備を実 bootstrap と隔離した command で検証する。"""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ class BootstrapDependencyTests(unittest.TestCase):
             executable = shutil.which(command)
             assert executable
             (self.bin / command).symlink_to(executable)
+        self.ca_marker = self.cwd / "ca-installed"
+        self.command("rpm", f'test "$*" = "-q ca-certificates" && test -f "{self.ca_marker}"')
         self.command("sleep", "exit 0")
         self.command("dos2unix", "exit 0")
         self.command("runuser", 'shift 3; exec "$@"')
@@ -68,7 +70,8 @@ class BootstrapDependencyTests(unittest.TestCase):
             body += 'if [ ! -f "${TASK_EVENTS}.attempted" ]; then : > "${TASK_EVENTS}.attempted"; exit 1; fi\n'
         if not broken:
             # PATH に Git が無い状態から、導入成功時に初めて使えるようにする。
-            body += f'/bin/ln -s "{self.git_source}" "{self.bin}/git"\n'
+            body += f'if [ ! -e "{self.bin}/git" ]; then /bin/ln -s "{self.git_source}" "{self.bin}/git"; fi\n'
+            body += f': > "{self.ca_marker}"\n'
         self.command("dnf", body)
 
     def run_bootstrap(self) -> subprocess.CompletedProcess[str]:
@@ -115,8 +118,26 @@ class BootstrapDependencyTests(unittest.TestCase):
         self.assertEqual(len(self.events()), 1)
         self.assertIn("Git is still unavailable", result.stdout)
 
+    def test_existing_git_without_ca_installs_before_https_clone(self) -> None:
+        (self.bin / "git").symlink_to(self.git_source)
+        self.installer()
+        result = self.run_bootstrap()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.events()[0], "install -y install ca-certificates git")
+        self.assertTrue(self.events()[1].startswith("git clone --branch main"))
+        self.assertTrue(self.ca_marker.exists())
+
+    def test_install_without_ca_stops_before_https_clone(self) -> None:
+        (self.bin / "git").symlink_to(self.git_source)
+        self.installer(broken=True)
+        result = self.run_bootstrap()
+        self.assertEqual(result.returncode, 127, result.stdout + result.stderr)
+        self.assertEqual(len(self.events()), 1)
+        self.assertIn("CA certificates are still unavailable", result.stdout)
+
     def test_existing_git_skips_install_and_supports_reexecution(self) -> None:
         (self.bin / "git").symlink_to(self.git_source)
+        self.ca_marker.touch()
         self.command("dnf", "exit 99")
         first = self.run_bootstrap()
         second = self.run_bootstrap()
