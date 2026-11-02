@@ -13,6 +13,7 @@ import html
 import importlib
 import importlib.util
 import inspect
+import json
 import logging
 import os
 import re
@@ -73,6 +74,7 @@ from rag_parser_core.source_map import (
     SOURCE_MAP_KEY,
     SOURCE_WINDOW_CODEPOINTS,
     decode_source_text,
+    jsonl_line_ranges,
     source_map_artifact,
     structured_record_ranges,
 )
@@ -88,10 +90,13 @@ from rag_parser_core.structured_records import (
     with_record_boundaries,
 )
 from rag_parser_core.unstructured_compat import ensure_pi_heif_absent_stub
+from rag_parser_core.unstructured_source_map import source_format
 
 # 共有 contract 型・定数は result.py(軽量)へ移設済み。registry は実装専用とし、backend が
 # registry を読み込まずに型を参照できるようにする。本モジュール固有の定数のみ残す。
 TABLE_PRESERVE_ROWS_TEMPLATE = "table_preserve_rows"
+# Unstructured の partition_csv が判定する区切り（,;|）と、pandas が推定する区切りのタブ。
+_CSV_DELIMITER_CANDIDATES = (",", ";", "|", "\t")
 
 logger = logging.getLogger(__name__)
 
@@ -1277,18 +1282,31 @@ def _unstructured_adapter_result(
     )
     if main_expanded:
         partition_kwargs.update(encoding="utf-8", skip_headers_and_footers=False)
-    with _temporary_source_file(
-        partition_bytes, source_profile, content_type, suffix=suffix
-    ) as path:
-        partitioned = _call_with_supported_kwargs(
-            partition,
-            {
-                "filename": str(path),
-                "content_type": content_type,
-                **partition_kwargs,
-            },
-        )
-    elements = _adapter_sequence_items(partitioned)
+    single_column = _single_column_csv_table(source_bytes, source_profile, content_type)
+    if single_column is not None and not single_column.has_spaces:
+        # 区切りの候補の文字が無いと pandas が値の中の文字を区切りと推定する（#4102）。
+        partitioned: object = [single_column.table]
+    else:
+        try:
+            with _temporary_source_file(
+                partition_bytes, source_profile, content_type, suffix=suffix
+            ) as path:
+                partitioned = _call_with_supported_kwargs(
+                    partition,
+                    {
+                        "filename": str(path),
+                        "content_type": content_type,
+                        **partition_kwargs,
+                    },
+                )
+        except ValueError:
+            # 空白を区切りと推定して列の数が合わないとき（pandas の ParserError は ValueError）。
+            if single_column is None:
+                raise
+            partitioned = [single_column.table]
+    elements = _with_source_json_text(
+        _adapter_sequence_items(partitioned), source_bytes, source_profile, content_type
+    )
     if not elements:
         return _adapter_fallback_result("unstructured", "unstructured_adapter_empty")
     version = _adapter_version("unstructured")
@@ -1334,6 +1352,75 @@ def _unstructured_adapter_result(
         parser_version=version,
         template=template_for_source_profile(source_profile),
     )
+
+
+def _with_source_json_text(
+    elements: list[object],
+    source_bytes: bytes,
+    source_profile: SourceProfile | None,
+    content_type: str,
+) -> list[object]:
+    """JSON の要素の本文を、原本の文字とキーの順で整形し直す（#4101）。
+
+    Unstructured は ``json.dumps(indent=2, sort_keys=True)`` で整形するので、日本語が ``\\uXXXX``
+    のままになり、キーの順も原本と変わる。同じ値のときだけ置き換える（要素の形の JSON は対象外）。
+    """
+    kind = source_format(
+        _source_extension(source_profile),
+        content_type or (source_profile.content_type if source_profile else ""),
+    )
+    if kind not in {"json", "jsonl"}:
+        return elements
+    text = decode_source_text(source_bytes)
+    try:
+        values = (
+            [json.loads(text)]
+            if kind == "json"
+            else [json.loads(text[start:end]) for start, end, _ in jsonl_line_ranges(text)]
+        )
+        if len(values) != len(elements):
+            return elements
+        for item, value in zip(elements, values, strict=True):
+            if json.loads(str(getattr(item, "text", ""))) != value:
+                return elements
+    except (ValueError, RecursionError):
+        return elements
+    for item, value in zip(elements, values, strict=True):
+        item.text = json.dumps(value, indent=2, ensure_ascii=False)  # type: ignore[attr-defined]
+    return elements
+
+
+@dataclass(frozen=True)
+class _SingleColumnCsv:
+    table: object
+    has_spaces: bool
+
+
+def _single_column_csv_table(
+    source_bytes: bytes,
+    source_profile: SourceProfile | None,
+    content_type: str,
+) -> _SingleColumnCsv | None:
+    """区切りの候補の文字が 1 つも無い CSV を、1 行 = 1 記録の表の要素にする（#4102）。
+
+    1 列の表は adapter の方針どおり ``tables`` のセルにしない（本文の行だけで読む）。
+    """
+    kind = source_format(
+        _source_extension(source_profile),
+        content_type or (source_profile.content_type if source_profile else ""),
+    )
+    if kind != "csv":
+        return None
+    text = decode_source_text(source_bytes)
+    if any(delimiter in text for delimiter in _CSV_DELIMITER_CANDIDATES):
+        return None
+    rows = [row[:1] for row in csv.reader(StringIO(text)) if row and row[0].strip()]
+    if not rows:
+        return None
+    table = types.SimpleNamespace(
+        category="Table", text="\n".join(_clean_table_cell(row[0]) for row in rows), metadata=None
+    )
+    return _SingleColumnCsv(table=table, has_spaces=" " in text)
 
 
 def _with_unstructured_source_map(

@@ -4,13 +4,16 @@ import ast
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from xml.parsers import expat
 
 import pytest
 
+from rag_parser_core import registry
 from rag_parser_core import unstructured_source_map as unstructured_source_map_module
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import _with_structured_records_source_map
+from rag_parser_core.source import SourceProfile
 from rag_parser_core.source_map import (
     SCHEME_JSONL_LINE,
     SOURCE_UNIT_CODEPOINTS,
@@ -287,3 +290,39 @@ def test_structured_records_map_lines_by_record_id() -> None:
     assert mapped["scheme"] == SCHEME_JSONL_LINE
     assert mapped["elements"]["r2"][0]["locator"] == "line=3"
     assert structured_record_ranges(data.decode())["r2"].locator == "line=3"
+
+
+def test_adapter_rewrites_json_text_only_for_the_same_value() -> None:
+    profile = SourceProfile.model_construct(extension=".json", content_type="application/json")
+    data = json.dumps({"z": "値", "a": 1}).encode()
+    same = SimpleNamespace(text=json.dumps({"a": 1, "z": "値"}, indent=2, sort_keys=True))
+    registry._with_source_json_text([same], data, profile, "application/json")
+    assert same.text == json.dumps({"z": "値", "a": 1}, indent=2, ensure_ascii=False)
+    other = SimpleNamespace(text="要素の形から戻した本文")
+    registry._with_source_json_text([other], data, profile, "application/json")
+    assert other.text == "要素の形から戻した本文"
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ("値0\n値1\n\n値2\n".encode(), "値0\n値1\n値2"),
+        ('"値\n続き"\n値1\n'.encode(), "値 続き\n値1"),
+    ],
+)
+def test_single_column_csv_has_one_line_per_record(data: bytes, expected: str) -> None:
+    profile = SourceProfile.model_construct(extension=".csv", content_type="text/csv")
+    table = registry._single_column_csv_table(data, profile, "text/csv")
+    assert table is not None and table.table.text == expected
+    assert table.has_spaces is False
+
+
+@pytest.mark.parametrize("data", [b"a,b\nc,d\n", b"a;b\n", b"a|b\n", b"a\tb\n", b"", b"\n"])
+def test_csv_with_delimiter_candidates_stays_with_unstructured(data: bytes) -> None:
+    profile = SourceProfile.model_construct(extension=".csv", content_type="text/csv")
+    assert registry._single_column_csv_table(data, profile, "text/csv") is None
+
+
+def test_only_csv_is_handled_as_single_column() -> None:
+    profile = SourceProfile.model_construct(extension=".tsv", content_type="text/tsv")
+    assert registry._single_column_csv_table(b"a\nb\n", profile, "text/tsv") is None

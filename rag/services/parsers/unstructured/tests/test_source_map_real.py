@@ -134,6 +134,63 @@ def test_delimited_rows_become_units_with_converted_values(
     assert text[units[1]["start"] :].startswith(f"| {units[1]['row_start'] - 2:03d} |")
 
 
+def test_json_text_keeps_source_characters_and_key_order() -> None:
+    value = {"z": "先頭の値", "a": {"c": "日本語", "b": [1, 2.5, None, True]}}
+    extraction = _parse(json.dumps(value, ensure_ascii=True).encode(), "application/json", ".json")
+    text = extraction.elements[0].text
+    assert "先頭の値" in text and "日本語" in text and "\\u" not in text
+    assert text.index('"z"') < text.index('"a"') and text.index('"c"') < text.index('"b"')
+    assert json.loads(text) == value
+
+
+def test_jsonl_text_keeps_source_characters_for_each_line() -> None:
+    lines = [{"k": 2, "a": "値 1"}, {"k": 3, "a": "値 2"}]
+    data = "\n".join(json.dumps(line, ensure_ascii=True) for line in lines).encode()
+    extraction = _parse(data, "application/x-ndjson", ".jsonl")
+    texts = [element.text for element in extraction.elements]
+    assert [json.loads(text) for text in texts] == lines
+    assert "値 1" in texts[0] and "値 2" in texts[1]
+    assert all(text.index('"k"') < text.index('"a"') for text in texts)
+
+
+def test_element_shaped_jsonl_text_is_left_as_parsed() -> None:
+    lines = [json.dumps({"type": "Title", "text": f"見出し {i}"}) for i in range(3)]
+    extraction = _parse("\n".join(lines).encode(), "application/x-ndjson", ".jsonl")
+    assert [element.text for element in extraction.elements] == ["見出し 0", "見出し 1", "見出し 2"]
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        [f"値{i}" for i in range(3000)],
+        ["abc", "abd", "abe"],
+        [f"合成 値 {i}" if i % 7 else f"合成{i}" for i in range(400)],
+    ],
+)
+def test_single_column_csv_keeps_one_line_per_record(values: list[str]) -> None:
+    source = "\n".join(values) + "\n"
+    extraction = _parse(source.encode(), "text/csv", ".csv")
+    assert len(extraction.elements) == 1
+    assert extraction.elements[0].kind == "table"
+    lines = extraction.elements[0].text.split("\n")
+    assert len(lines) == len(values)
+    assert values[-1] in lines[-1]
+
+
+def test_long_single_column_csv_records_row_units() -> None:
+    source = "\n".join(f"値{i}" for i in range(3000))
+    data = source.encode()
+    extraction = _parse(data, "text/csv", ".csv")
+    source_map = _assert_every_element_recorded(extraction, data, "delimited_row")
+    units = source_map["elements"][extraction.elements[0].element_id]
+    assert units[-1]["row_end"] == 3000
+
+
+def test_multi_column_csv_still_uses_unstructured_table() -> None:
+    extraction = _parse("列1,列2\na,b\nc,d\n".encode(), "text/csv", ".csv")
+    assert {cell.col for cell in extraction.tables[0].cells} == {0, 1}
+
+
 def test_jsonl_records_line_numbers() -> None:
     lines = [json.dumps({"k": i, "v": "値" * 5}, ensure_ascii=False) for i in range(500)]
     data = ("\n".join(lines) + "\n").encode()
@@ -213,8 +270,11 @@ def test_json_records_pointer_units_with_sorted_output() -> None:
     source_map = _assert_every_element_recorded(extraction, data, "json_pointer")
     units = source_map["elements"][extraction.elements[0].element_id]
     assert len(units) > 1
-    assert units[0]["locator"].startswith("/a/0")
+    # 本文は原本の文字とキーの順（#4101）。
+    assert units[0]["locator"].startswith("/z")
     assert units[0]["start"] == 0
+    assert "先頭" in extraction.elements[0].text
+    assert "\\u" not in extraction.elements[0].text
     assert units[-1]["end"] == len(extraction.elements[0].text)
 
 
