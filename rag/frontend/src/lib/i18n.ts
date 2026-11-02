@@ -3106,6 +3106,12 @@ export const ja = {
     "全体の既定の項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書では項目抽出は実行されません。文書解析の設定の「解析後の処理」で項目を追加するか、標準の項目に戻してください。",
   "documents.processingConfig.fieldSchemaStandard":
     "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。文書が属するナレッジベースで項目を定義していれば、その項目を使います。",
+  "flow.inspector.currentRange": "原本の表示範囲に同期（開始 {start} / 全 {total} 文字）",
+  "flow.inspector.unmapped": "この原本の版に対応する位置情報が記録されていないため、表示範囲に同期できません。抽出エクスポートで全体を確認できます。",
+  "flow.inspector.noStarts": "この表示範囲で新しく始まる要素はありません。前の範囲から続く要素は、開始した範囲で確認できます。",
+  "flow.inspector.withinRange": "この表示範囲内: {start}–{end} / {total}",
+  "flow.inspector.continue": "この範囲の続きを読む",
+  "flow.inspector.restart": "この範囲の先頭に戻る",
   "flow.inspector.currentPage": "表示中のページ: p.{page}",
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "documents.processingConfig.sectionRules": "章節の抽出規則",

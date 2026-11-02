@@ -2,6 +2,7 @@
 
 import {
   Check,
+  ArrowDown,
   Clock3,
   Download,
   FileSearch,
@@ -21,10 +22,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, useId, type ReactNod
 import { useSearchParams } from "react-router-dom";
 
 import { useQuery } from "@tanstack/react-query";
-import { paginationLabels } from "@/lib/pagination-labels";
 
 import { CategorySelectFields } from "./CategorySelectFields";
 import { DocumentPreview } from "./DocumentPreview";
+import { DocumentSectionsPanel } from "./DocumentSectionsPanel";
 import { LanguagePackDocumentPanel } from "./LanguagePackDocumentPanel";
 import { DocumentRecipeManager } from "./DocumentRecipeManager";
 import { DocumentVersionEditor } from "./DocumentVersionEditor";
@@ -77,7 +78,6 @@ import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/Knowledge
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   ApiErrorState,
-  Pagination,
   Banner,
   Button,
   buttonVariants,
@@ -91,6 +91,7 @@ import {
   FormGrid,
   FormStatus,
   INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_CARD_LIST_SCROLL_CLASS,
   ListSkeleton,
   ProcessingIndicator,
   SelectField,
@@ -425,7 +426,7 @@ export function DocumentWorkspace({
   );
   // インスペクタ右ペインのタブ。要素/表セル指定の deep-link は構造化要素を、
   // chunk のみの引用 deep-link は Chunk タブを初期表示する。
-  const [inspectorTab, setInspectorTab] = useState<"text" | "extraction" | "chunks" | "export">(() => {
+  const [inspectorTab, setInspectorTab] = useState<"navigation" | "text" | "extraction" | "chunks" | "export">(() => {
     if (requestedElementId || requestedTableId || requestedCellRef) return "extraction";
     return requestedChunkId ? "chunks" : "text";
   });
@@ -436,18 +437,31 @@ export function DocumentWorkspace({
     setInspectorPage(current => current?.scope === inspectorScope && current.page === page ? current : { scope: inspectorScope, page });
   }, [inspectorScope]);
 
+  const [textRange, setTextRange] = useState<{scope: string; offset: number; total: number; revision: string} | null>(null);
+  const currentTextRange = textRange?.scope === inspectorScope ? textRange : null;
+  const reportTextRange = useCallback((range: {offset: number; total: number; revision?: string}) => {
+    if (!range.revision) return;
+    setTextRange(current => current?.scope === inspectorScope && current.offset === range.offset && current.revision === range.revision
+      ? current : {scope: inspectorScope, offset: range.offset, total: range.total, revision: range.revision!});
+  }, [inspectorScope]);
+  const sourceScope: Record<string, string | number> = currentTextRange ? {
+    source_offset: currentTextRange.offset, source_revision: currentTextRange.revision, variant: previewVariant,
+  } : {};
+  const [sectionFocus, setSectionFocus] = useState<{id: string; key: string} | null>(null);
+  const inspectorPanelRef = useRef<HTMLDivElement>(null);
+
   const [viewOffset, setViewOffset] = useState(0);
   const [elementTextOffset, setElementTextOffset] = useState(0);
   const [cellOffset, setCellOffset] = useState(0);
   const [chunkOffset, setChunkOffset] = useState(0);
-  const windowChanged = useValuesChanged([documentId, selectedRecipeId, inspectorTab, currentInspectorPage]);
+  const windowChanged = useValuesChanged([documentId, selectedRecipeId, inspectorTab, currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision]);
   if (windowChanged) { setViewOffset(0); setChunkOffset(0); setElementTextOffset(0); setCellOffset(0); setShowChunkDetails(false); }
   const extractionJsonQuery = useQuery({
     queryKey: ["documents", documentId, "recipes", selectedRecipeId, "extraction-view", inspectorTab,
-      currentInspectorPage, viewOffset, requestedElementId, elementTextOffset, cellOffset, selectedRecipe?.active_extraction_recipe_id],
+      currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, viewOffset, requestedElementId, elementTextOffset, cellOffset, selectedRecipe?.active_extraction_recipe_id],
     queryFn: ({signal}) => api.documentExtractionView(documentId, selectedRecipeId!, {
-      mode: inspectorTab === "extraction" ? "structure" : inspectorTab === "text" ? "text" : "summary",
-      offset: viewOffset, limit: 25, text_offset: elementTextOffset, cell_offset: cellOffset, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
+      mode: inspectorTab === "extraction" ? "structure" : inspectorTab === "text" ? "text" : inspectorTab === "navigation" ? "navigation" : "summary",
+      offset: viewOffset, limit: 25, ...(inspectorTab !== "navigation" && inspectorTab !== "export" ? sourceScope : {}), text_offset: elementTextOffset, cell_offset: cellOffset, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
       ...(requestedElementId && viewOffset === 0 ? {element_id: requestedElementId} : {}),
     }, signal),
     enabled: Boolean(selectedRecipeId && hasSelectedRecipeExtraction),
@@ -455,9 +469,9 @@ export function DocumentWorkspace({
   });
   const chunkWindowQuery = useQuery({
     queryKey: ["documents", documentId, "recipes", selectedRecipeId, "chunk-window", chunkOffset,
-      currentInspectorPage, selectedRecipe?.active_chunk_set_id],
+      currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, selectedRecipe?.active_chunk_set_id],
     queryFn: ({signal}) => api.documentChunkWindow(documentId, selectedRecipeId!, {
-      offset: chunkOffset, limit: 25, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
+      offset: chunkOffset, limit: 25, ...sourceScope, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
     }, signal),
     enabled: Boolean(selectedRecipeId) && inspectorTab === "chunks",
     retry: 1,
@@ -471,19 +485,20 @@ export function DocumentWorkspace({
   const chunksQuery = { ...chunkWindowQuery, data: useMemo(() => {
     const chunks = chunkWindowQuery.data?.items;
     const focus = focusedChunkQuery.data?.items[0];
-    return focus ? (chunks?.some(c => c.chunk_id === focus.chunk_id) ? chunks.map(c => c.chunk_id === focus.chunk_id ? focus : c) : requestedChunkId ? [focus, ...(chunks ?? [])] : chunks) : chunks;
-  }, [chunkWindowQuery.data, focusedChunkQuery.data, requestedChunkId]) };
+    return focus ? (chunks?.some(c => c.chunk_id === focus.chunk_id) ? chunks.map(c => c.chunk_id === focus.chunk_id ? focus : c) : chunks) : chunks;
+  }, [chunkWindowQuery.data, focusedChunkQuery.data]) };
   const extractionPending = hasSelectedRecipeExtraction && extractionJsonQuery.isPending;
   const extractionError = extractionJsonQuery.isError && !extractionJsonQuery.data;
   const extractionState = (content: ReactNode) => extractionPending ? (
     <TimedLoadingState label={t("flow.extractionExport.loading")} operationKey="document-extraction-load" framed={false} testId="document-extraction-loading"><ListSkeleton rows={3} /></TimedLoadingState>
   ) : extractionError ? <ApiErrorState fallback={t("flow.extractionExport.loadError")} error={extractionJsonQuery.error} onRetry={() => void extractionJsonQuery.refetch()} /> : content;
-  const extractionPaging = extractionJsonQuery.data && extractionJsonQuery.data.total > extractionJsonQuery.data.limit ? (
-    <Pagination page={Math.floor(extractionJsonQuery.data.offset / extractionJsonQuery.data.limit) + 1}
-      disabled={hasReviewEdits}
-      totalPages={Math.ceil(extractionJsonQuery.data.total / extractionJsonQuery.data.limit)}
-      onPageChange={page => setViewOffset((page - 1) * extractionJsonQuery.data!.limit)} labels={paginationLabels()} />
+  const scopeStatus = inspectorTab === "chunks" ? chunkWindowQuery.data?.scope_status : extractionJsonQuery.data?.scope_status;
+  const unaligned = currentTextRange && scopeStatus && !["exact", "page"].includes(scopeStatus);
+  const extractionPaging = extractionJsonQuery.data ? (
+    <InspectionContinuation offset={extractionJsonQuery.data.offset} total={extractionJsonQuery.data.total}
+      limit={extractionJsonQuery.data.limit} disabled={hasReviewEdits} onOffset={setViewOffset} />
   ) : null;
+  useEffect(() => { inspectorPanelRef.current?.scrollTo({top: 0}); }, [inspectorTab, currentInspectorPage, currentTextRange?.offset, viewOffset, chunkOffset, elementTextOffset, cellOffset]);
   const requestedUrlFocus = useMemo<UrlFallbackFocus | null>(() => {
     const page = integerSearchParam(searchParams.get("page"));
     const bbox = bboxSearchParam(searchParams.get("bbox"));
@@ -1602,7 +1617,11 @@ export function DocumentWorkspace({
                 showFallbackDownload={false}
                 focusPage={effectiveFocusPage}
                 onPageChange={reportInspectorPage}
-                focusRequestKey={urlFallbackFocus?.key ?? focusRequest?.key ?? null}
+                onTextRangeChange={reportTextRange}
+                focusElementId={requestedElementId ?? (requestedChunkId ? focusedChunkQuery.data?.items[0]?.element_ids[0] : null)}
+                focusSectionId={sectionFocus?.id}
+
+                focusRequestKey={sectionFocus?.key ?? urlFallbackFocus?.key ?? focusRequest?.key ?? null}
                 focusBbox={effectiveFocusBbox}
                 focusBboxMode={effectiveFocusBboxMode}
                 focusBboxUnit={effectiveFocusBboxUnit}
@@ -1628,6 +1647,7 @@ export function DocumentWorkspace({
               value={inspectorTab}
               onChange={(value) => setInspectorTab(value as typeof inspectorTab)}
               items={[
+                { id: "navigation", label: t("flow.extraction.navigation.title") },
                 { id: "text", label: t("flow.extraction.rawText") },
                 { id: "extraction", label: t("flow.extraction.title") },
                 {
@@ -1639,21 +1659,36 @@ export function DocumentWorkspace({
               ]}
             />
 
-            {currentInspectorPage !== null && inspectorTab !== "export" ? (
+            {currentInspectorPage !== null && inspectorTab !== "export" && inspectorTab !== "navigation" ? (
               <p className="mb-2 text-xs text-fg-muted" data-testid="inspector-current-page">
                 {t("flow.inspector.currentPage", { page: currentInspectorPage })}
               </p>
             ) : null}
 
+            {currentTextRange && inspectorTab !== "export" && inspectorTab !== "navigation" ? (
+              <p className="mb-2 text-xs text-fg-muted" data-testid="inspector-current-range" aria-live="polite">{t("flow.inspector.currentRange", {start: currentTextRange.offset + 1, total: currentTextRange.total})}</p>
+            ) : null}
+            {unaligned && inspectorTab !== "export" && inspectorTab !== "navigation" ? <Banner severity="info">{t("flow.inspector.unmapped")}</Banner> : null}
+            {inspectorTab === "navigation" ? <div role="tabpanel" id="inspector-panel-navigation" aria-labelledby="inspector-tab-navigation" tabIndex={0}>
+              <DocumentSectionsPanel documentId={documentId} recipeId={selectedRecipeId} onPageSelect={selectPage}
+                summaries={new Map(parsedExtraction.navigation.flatMap(node => node.summary ? [[node.section_id, node.summary] as const] : []))}
+                onSectionSelect={section => {
+                  if (section.page_start !== null) { setSectionFocus(null); selectPage(section.page_start); }
+                  else if (section.source_section_id) { setSectionFocus({id: section.source_section_id, key: `section-${section.source_section_id}-${++pageFocusSerialRef.current}`}); }
+                }} />
+              {extractionPaging}
+            </div> : null}
+
             {inspectorTab === "text" ? (
               <div
                 role="tabpanel"
+                ref={inspectorPanelRef}
                 id="inspector-panel-text"
                 aria-labelledby="inspector-tab-text"
                 tabIndex={0}
                 className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
-                {extractionState(<DocumentRawText extraction={pageExtraction} />)}
+                {extractionState(unaligned ? null : <DocumentRawText extraction={pageExtraction} emptyMessage={currentTextRange || currentInspectorPage ? t("flow.inspector.noStarts") : undefined} />)}
                 {extractionPaging}
               </div>
             ) : null}
@@ -1661,6 +1696,7 @@ export function DocumentWorkspace({
             {inspectorTab === "extraction" ? (
               <div
                 role="tabpanel"
+                ref={inspectorPanelRef}
                 id="inspector-panel-extraction"
                 aria-labelledby="inspector-tab-extraction"
                 tabIndex={0}
@@ -1756,6 +1792,7 @@ export function DocumentWorkspace({
                 ) : (
                   <DocumentExtraction
                     extraction={pageExtraction}
+                    showNavigation={false}
                     documentId={documentId}
                     selectedElementId={selectedElementId}
                     selectedTableCellKey={selectedTableCellKey}
@@ -1773,11 +1810,10 @@ export function DocumentWorkspace({
                 {extractionPaging}
                 {extractionJsonQuery.data?.text_total && extractionJsonQuery.data.text_total > 8192 ? <section aria-label={t("flow.inspector.longElement")}>
                   <p className="text-xs text-fg-muted">{t("flow.inspector.longElement")}</p>
-                  <Pagination page={Math.floor(elementTextOffset / 8192) + 1} totalPages={Math.ceil(extractionJsonQuery.data.text_total / 8192)} disabled={hasReviewEdits} onPageChange={page => setElementTextOffset((page - 1) * 8192)} labels={paginationLabels()} />
+                  <InspectionContinuation offset={elementTextOffset} total={extractionJsonQuery.data.text_total} limit={8192} disabled={hasReviewEdits} onOffset={setElementTextOffset} />
                 </section> : null}
                 {extractionJsonQuery.data?.cell_total && extractionJsonQuery.data.cell_total > 25 ? <section aria-label={t("flow.extraction.tableCells")}>
-                  <p className="text-xs text-fg-muted">{t("flow.extraction.tableCells")}</p>
-                  <Pagination page={Math.floor(cellOffset / 25) + 1} totalPages={Math.ceil(extractionJsonQuery.data.cell_total / 25)} disabled={hasReviewEdits} onPageChange={page => setCellOffset((page - 1) * 25)} labels={paginationLabels()} />
+                  <InspectionContinuation offset={cellOffset} total={extractionJsonQuery.data.cell_total} limit={25} disabled={hasReviewEdits} onOffset={setCellOffset} />
                 </section> : null}
               </div>
             ) : null}
@@ -1785,6 +1821,7 @@ export function DocumentWorkspace({
             {inspectorTab === "chunks" ? (
               <div
                 role="tabpanel"
+                ref={inspectorPanelRef}
                 id="inspector-panel-chunks"
                 aria-labelledby="inspector-tab-chunks"
                 tabIndex={0}
@@ -1828,9 +1865,7 @@ export function DocumentWorkspace({
                       result={chunkPreview.data ?? null}
                     />
                   ) : null}
-                  {chunkWindowQuery.data && chunkWindowQuery.data.total > 25 ? <Pagination
-                    page={Math.floor(chunkOffset / 25) + 1} totalPages={Math.ceil(chunkWindowQuery.data.total / 25)}
-                    onPageChange={page => setChunkOffset((page - 1) * 25)} labels={paginationLabels()} /> : null}
+                  {chunkWindowQuery.data ? <InspectionContinuation offset={chunkOffset} total={chunkWindowQuery.data.total} limit={25} onOffset={setChunkOffset} /> : null}
                   <DocumentChunksPanel
                     chunks={pageChunks}
                     // レシピが無い・取得できないときは chunk の取得自体が無効（isPending のまま）なので、
@@ -3003,7 +3038,7 @@ function DocumentChunksPanel({
     scrollFocusedControlIntoView(selectedChunkRef.current, { focus: true });
   }, [focusRequestKey, selectedChunkId]);
 
-  // 一覧は 5 / 8 行の高さで中をスクロールする（xl 以上はプレビューと同じ高さのパネルがスクロールする。#403）。
+  // 本文を含むカードは共通の高カード用上限で止め、短い一覧は内容の高さだけを使う。
   // 要素・表セルの選択やタブの切り替えで、選ばれた chunk が見える範囲の外にあれば、
   // そのスクロール領域の中だけを動かして見せる（ページは動かさない）。
   // URL の指定（focusRequestKey）は上の effect がフォーカスごと動かす。再取得では動かさない。
@@ -3019,7 +3054,7 @@ function DocumentChunksPanel({
       <div aria-busy="true" data-testid="document-chunks-loading">
         <ListSkeleton
           rowClassName="h-[7rem]"
-          className={cn("overflow-hidden", INFORMATION_LIST_SCROLL_CLASS, "xl:max-h-none")}
+          className={cn("overflow-hidden", INFORMATION_CARD_LIST_SCROLL_CLASS)}
         />
       </div>
     );
@@ -3034,7 +3069,7 @@ function DocumentChunksPanel({
       >
         <ListSkeleton
           rowClassName="h-[7rem]"
-          className={cn("overflow-hidden", INFORMATION_LIST_SCROLL_CLASS, "xl:max-h-none")}
+          className={cn("overflow-hidden", INFORMATION_CARD_LIST_SCROLL_CLASS)}
         />
       </TimedLoadingState>
     );
@@ -3060,12 +3095,10 @@ function DocumentChunksPanel({
       ref={listRef}
       aria-label={t("flow.chunks.listLabel", { count: chunks.length })}
       data-testid="document-chunk-list"
+      tabIndex={0}
       className={cn(
         "space-y-3 rounded-lg border border-border bg-surface-sunken p-3 [scrollbar-gutter:stable]",
-        INFORMATION_LIST_SCROLL_CLASS,
-        // xl 以上はプレビューの横に並び、タブのパネル（プレビューと同じ高さ）がスクロールする。
-        // 一覧にも高さを付けると、スクロールが二重になりパネルの下が空く。
-        "xl:max-h-none xl:overflow-visible"
+        INFORMATION_CARD_LIST_SCROLL_CLASS
       )}
     >
       {chunks.map((chunk) => {
@@ -3563,4 +3596,14 @@ function ErrorCodeDetails({
       <p className="break-all text-xs text-fg-muted">{t("flow.segments.errorCode", { code })}</p>
     </Disclosure>
   );
+}
+
+/** 左の表示範囲内だけを有界に継続取得する。文書全体の別ページには移動しない。 */
+function InspectionContinuation({offset, total, limit, onOffset, disabled = false}: {offset: number; total: number; limit: number; onOffset: (offset: number) => void; disabled?: boolean}) {
+  if (total <= limit) return null;
+  return <div className="my-2 flex flex-wrap items-center gap-2">
+    <p className="text-xs text-fg-muted" role="status">{t("flow.inspector.withinRange", {start: offset + 1, end: Math.min(offset + limit, total), total})}</p>
+    {offset + limit < total ? <Button variant="secondary" size="sm" icon={ArrowDown} disabled={disabled} onClick={() => onOffset(offset + limit)}>{t("flow.inspector.continue")}</Button> : null}
+    {offset > 0 ? <Button variant="ghost" size="sm" icon={RotateCcw} disabled={disabled} onClick={() => onOffset(0)}>{t("flow.inspector.restart")}</Button> : null}
+  </div>;
 }

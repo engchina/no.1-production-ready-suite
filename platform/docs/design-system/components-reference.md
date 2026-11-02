@@ -1433,9 +1433,12 @@ INFORMATION_TABLE_FIXED_VISIBLE_ROWS // 5 — 幅によらず 5 行の一覧
 INFORMATION_TABLE_ROW_CLASS          // "h-[3.5rem]" — DataTable の rowProps の className（行の最小高さ）
 INFORMATION_LIST_ROW_CLASS           // "min-h-[3.5rem]" — 表ではない行リストの行
 INFORMATION_LIST_SCROLL_CLASS        // "max-h-[17.5rem] overflow-auto md:max-h-[28rem]" — 表ではない行リストの 5 / 8 行
+INFORMATION_CARD_LIST_SCROLL_CLASS   // "bounded-scroll-area-lg" — 本文を含む高いカード（引用・構造化要素）
 INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS // "h-56 max-h-56 overflow-auto"
 INFORMATION_TABLE_FOCUS_CLASS        // Tab で到達できるスクロール領域のフォーカスの表示（outline）
 ```
+
+一覧の高さは内容に合わせて使い分けます。短い行は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）、本文を含む引用・構造化要素のカードは `INFORMATION_CARD_LIST_SCROLL_CLASS`（通常 `min(34rem, 68vh)`、640px 以下 `min(28rem, 60vh)`）を使用します。後者は既存の共有 CSS `bounded-scroll-area-lg` に集約し、短い内容の高さは固定しません。カードごとには縦の上限を重ねず、一覧全体を 1 つのスクロール領域にします。領域に `tabIndex={0}`・内容を表す `aria-label` と `INFORMATION_TABLE_FOCUS_CLASS` を付け、キーボードでも末尾まで読めるようにします。
 
 ```tsx
 /** 見た目は 1 つ: 地は --color-surface-hover、prefers-reduced-motion では点滅しない。 */
@@ -4037,3 +4040,7 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 `RunStepDetailsView` は識別子・時刻・技術属性を同じ列幅と行間で表示する。行の最小高さは共有の `--control-height-sm` に揃え、コピーの有無で縦のリズムを変えない。処理内容がないグループは余白も作らない。
 
 「処理の経過」の収縮行は名前・状態・所要時間に限定し、結果・スキップ理由を行の直下に重複表示しない。必要な説明は展開した詳細と軌跡に保持する。
+
+### テキスト原本の表示範囲通知（#3995）
+
+`DocumentPreview` の `loadTextRange` は `DocumentTextRange` を返す。任意の `revision` と `previous_offset`／`next_offset` を使って、長さ上限を保った構造単位の移動ができる。`onTextRangeChange` は取得に成功して実際に表示した範囲だけを通知する。座標は Unicode codepoint とし、原本と抽出本文の座標の変換・版の検証は製品が担当する。失敗・取消した応答では通知しない。`focusRequestKey` を変えるとテキストの引用／章節位置も再取得する。

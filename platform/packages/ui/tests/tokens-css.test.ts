@@ -123,6 +123,20 @@ describe("tokens CSS", () => {
     expect(read("tokens/spacing.css")).toMatch(/--form-max-width: 60rem;/);
   });
 
+  it("本文カードのスクロール上限は視口に収まり、短い内容を固定高さにしない", () => {
+    const base = read("tokens/base.css");
+    const shared = base.match(/\.bounded-scroll-area,\s*\.bounded-scroll-area-lg\s*\{([^}]*)\}/)?.[1];
+    expect(shared).toMatch(/overflow-y:\s*auto;/);
+    expect(shared).toMatch(/scrollbar-gutter:\s*stable;/);
+    expect(shared).not.toMatch(/overscroll-behavior:\s*contain/);
+    const limits = [...base.matchAll(/\.bounded-scroll-area-lg\s*\{([^}]*)\}/g)].map(match => match[1]).filter(rule => rule.includes("max-height:"));
+    expect(limits).toHaveLength(2);
+    for (const rule of limits) {
+      expect(rule).toMatch(/max-height:\s*min\([\d.]+rem,\s*[\d.]+vh\);/);
+      expect(rule).not.toMatch(/(?:^|[;\s])(?:min-)?height:/);
+    }
+  });
+
   it("フォーム入力のフォーカスリングは外側へはみ出さない（内側 1px のリング）", () => {
     const base = read("tokens/base.css");
     const rule = base.match(
