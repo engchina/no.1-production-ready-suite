@@ -1529,7 +1529,7 @@ def verify(package_path: Path) -> None:
 
 
 def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, script: str) -> None:
-    """任意の bastion の Compute（#2670）。既定は作らず、配置先・shape・image・SSH キーを主 Compute と独立に設定する。"""
+    """任意の bastion の Compute（#2670）。既定は作らず、compartment だけ配備先を継承し、他の構成は独立に設定する。"""
     groups = _schema_groups(schema)
     if groups.get("Bastion") != ("true", ["bastion_enabled"]):
         raise AssertionError(f"the Bastion group must hold only bastion_enabled: {groups.get('Bastion')}")
@@ -1547,16 +1547,20 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         ["type        = bool", "default     = false"],
         context="bastion_enabled Terraform default",
     )
-    for name in ("bastion_shape", "bastion_image_source_id", "bastion_ssh_authorized_keys", "bastion_compartment_ocid", "bastion_availability_domain", "bastion_vcn_id", "bastion_subnet_id"):
+    for name in ("bastion_shape", "bastion_image_source_id", "bastion_ssh_authorized_keys", "bastion_availability_domain", "bastion_vcn_id", "bastion_subnet_id"):
         _require_all(
             _schema_variable(schema, name), ["required: true", "visible: bastion_enabled"],
             context=f"{name} dedicated schema",
         )
+    if "bastion_compartment_ocid" in schema or "bastion_compartment_ocid" in variables or "bastion_compartment_ocid" in bastion:
+        raise AssertionError("Bastion compartment must inherit compartment_ocid without a separate input")
+    for name in ("bastion_availability_domain", "bastion_vcn_id", "bastion_subnet_id"):
+        _require_all(_schema_variable(schema, name), ["compartmentId: ${compartment_ocid}"], context=f"{name} inherited compartment")
     for name, default in {"bastion_shape": "VM.Standard.E5.Flex", "bastion_image_source_id": ORACLE_LINUX_IMAGES[DEFAULT_IMAGE_REGION]}.items():
         _require_all(_schema_variable(schema, name), [f'default: "{default}"'], context=f"{name} schema default")
         _require_all(_terraform_variable(variables, name), [f'default     = "{default}"'], context=f"{name} Terraform default")
     _require_all(_schema_variable(schema, "bastion_ssh_authorized_keys"), ["type: oci:core:ssh:publickey"], context="bastion SSH control")
-    _require_all(_schema_variable(schema, "bastion_subnet_id"), ["compartmentId: ${bastion_compartment_ocid}", "vcnId: ${bastion_vcn_id}"], context="bastion subnet dependencies")
+    _require_all(_schema_variable(schema, "bastion_subnet_id"), ["compartmentId: ${compartment_ocid}", "vcnId: ${bastion_vcn_id}"], context="bastion subnet dependencies")
     for name, default in BASTION_DEFAULTS.items():
         _require_all(_schema_variable(schema, name), [f"default: {default}"], context=f"{name} schema default")
         _require_all(
@@ -1591,10 +1595,10 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         ],
         context="bastion.tf",
     )
-    for reference in ("var.instance_", "var.ssh_authorized_keys", "var.subnet_ai_subnet_id", "var.availability_domain", "var.compartment_ocid", "var.vcn_ai_vcn_id"):
+    for reference in ("var.instance_", "var.ssh_authorized_keys", "var.subnet_ai_subnet_id", "var.availability_domain", "var.vcn_ai_vcn_id"):
         if reference in bastion:
             raise AssertionError(f"bastion must not inherit main Compute input: {reference}")
-    _require_all(re.sub(r"[ \t]+", " ", bastion), ["availability_domain = var.bastion_availability_domain", "compartment_id = var.bastion_compartment_ocid", "subnet_id = var.bastion_subnet_id"], context="bastion placement")
+    _require_all(re.sub(r"[ \t]+", " ", bastion), ["availability_domain = var.bastion_availability_domain", "compartment_id = var.compartment_ocid", "subnet_id = var.bastion_subnet_id"], context="bastion placement")
     # bastion に 3 製品の配備・ADB の情報を渡さない（Suite の Compute の cloud-init とは別）。
     for leaked in ("cloud_init_user_data", "wallet", "platform_env", "backend_envs", "adb_password"):
         if leaked in bastion:

@@ -36,6 +36,7 @@
   - `ap-tokyo-1`: `ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa`
   - `us-chicago-1`: `ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a`
   - image を新しくするときは、`schema.yaml`・`variables.tf`・`terraform/scripts/verify_stack_contract.py`（`ORACLE_LINUX_IMAGES`）を同じ PR でそろえます。
+  Resource Manager では stack 作成先のリージョンを選び、主 Compute と bastion の両方に同じリージョンの image を指定します。Chicago への配備では、両方とも `us-chicago-1` の image を選択してください。
   これら以外のリージョンで stack を作ると、`region` の validation で plan が失敗します。
 - 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢は東京・大阪のみです。Chicago の保存値には非対応の案内が残ります（#3904）。これは画面の案内の制限で、管理 API の失敗を確認したものではありません。
 
@@ -46,7 +47,7 @@
 1. 配備先のコンパートメント
 2. ADB の利用方法、新規 / 既存 ADB、ADB のネットワーク、アプリ用の DB ユーザー
 3. 主 Compute の構成、ネットワークと SSH、HTTPS
-4. bastion の作成、専用の構成、ネットワークと接続
+4. bastion の作成、専用の構成、ネットワークと接続（コンパートメントは 1 の配備先を継承）
 5. アプリケーション管理者、RAG の追加 parser、NL2SQL Deep Data Security
 
 非表示の内部設定と製品の選択は表示しません。主 Compute と bastion の image 候補は大阪・東京・Chicago の順で、既定はどちらも大阪です。
@@ -443,7 +444,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   `bastion_boot_volume_size` / `bastion_boot_volume_vpus`）。shape（`bastion_shape`）・image（Oracle Linux 9 の `bastion_image_source_id`）・
   SSH キー（`bastion_ssh_authorized_keys`）は bastion 専用に設定します。主 Compute からの継承はしません。
   shape は独立した既定の E5 Flex、image は大阪の x86 Oracle Linux 9 です。image の候補は大阪・東京・Chicago の順です。
-  `bastion_compartment_ocid` / `bastion_availability_domain` / `bastion_vcn_id` / `bastion_subnet_id` で配置先を指定します。
+  コンパートメントは先頭の `compartment_ocid`（Suite の配備先）を継承し、別途選択しません。
+  AD・VCN・subnet の候補も同じコンパートメントで絞り込み、`bastion_availability_domain` / `bastion_vcn_id` / `bastion_subnet_id` で指定します。
   bastion を有効にした場合は配置先・subnet と SSH 公開キーを入力してください。未指定のままでは plan が失敗します。
   以前の入力で主 Compute の値を継承していた stack も、次の更新前に bastion 専用の値を明示してください。
   公開 IP は subnet から自動で決めます（public subnet なら付ける）。

@@ -30,7 +30,6 @@ class BastionFormTests(unittest.TestCase):
             "image_source_id",
             "ssh_authorized_keys",
             "subnet_id",
-            "compartment_ocid",
             "availability_domain",
             "vcn_id",
         ):
@@ -38,6 +37,20 @@ class BastionFormTests(unittest.TestCase):
                 block = _schema_variable(schema, f"bastion_{name}")
                 self.assertIn("visible: bastion_enabled", block)
                 self.assertIn("required: true", block)
+
+    def test_compartment_is_inherited_for_resource_and_form_candidates(self) -> None:
+        stack = ROOT / "terraform/stack"
+        schema = (stack / "schema.yaml").read_text()
+        variables = (stack / "variables.tf").read_text()
+        self.assertNotIn("bastion_compartment_ocid", schema)
+        self.assertNotIn("bastion_compartment_ocid", variables)
+        for name in ("availability_domain", "vcn_id", "subnet_id"):
+            self.assertIn(
+                "compartmentId: ${compartment_ocid}",
+                _schema_variable(schema, f"bastion_{name}"),
+            )
+        source = (stack / "bastion.tf").read_text()
+        self.assertRegex(source, r"compartment_id\s*= var\.compartment_ocid")
 
     def test_bastion_has_its_own_defaults(self) -> None:
         schema = (ROOT / "terraform/stack/schema.yaml").read_text()
@@ -56,7 +69,6 @@ class BastionFormTests(unittest.TestCase):
             "ssh_authorized_keys",
             "subnet_ai_subnet_id",
             "availability_domain",
-            "compartment_ocid",
             "vcn_ai_vcn_id",
         ):
             with self.subTest(reference=name):
@@ -74,7 +86,6 @@ class BastionPlanTests(unittest.TestCase):
     }
     VALID: ClassVar[dict[str, object]] = {
         "bastion_enabled": True,
-        "bastion_compartment_ocid": "synthetic-bastion-compartment",
         "bastion_availability_domain": "synthetic-bastion-ad",
         "bastion_vcn_id": "synthetic-bastion-vcn",
         "bastion_subnet_id": "synthetic-bastion-subnet",
@@ -85,7 +96,7 @@ class BastionPlanTests(unittest.TestCase):
         "shape": "VM.Standard.E5.Flex",
         "image": ORACLE_LINUX_IMAGES["ap-osaka-1"],
         "ssh_keys": str(VALID["bastion_ssh_authorized_keys"]),
-        "compartment": str(VALID["bastion_compartment_ocid"]),
+        "compartment": MAIN["compartment_ocid"],
         "availability_domain": str(VALID["bastion_availability_domain"]),
         "subnet": str(VALID["bastion_subnet_id"]),
     }
@@ -171,7 +182,11 @@ class BastionPlanTests(unittest.TestCase):
         self.assertEqual(self.planned_inputs(self.VALID), self.EXPECTED)
 
     def test_changing_main_compute_does_not_change_bastion(self) -> None:
-        changed = {key: f"changed-{value}" for key, value in self.MAIN.items()}
+        changed = {
+            key: f"changed-{value}"
+            for key, value in self.MAIN.items()
+            if key != "compartment_ocid"
+        }
         changed["instance_shape"] = "VM.Standard.E5.Flex"
         self.assertEqual(self.planned_inputs(self.VALID | changed), self.EXPECTED)
 
@@ -181,7 +196,7 @@ class BastionPlanTests(unittest.TestCase):
             ("bastion_image_source_id", "image", "synthetic-bastion-image"),
             ("bastion_ssh_authorized_keys", "ssh_keys", "synthetic-other-public-key"),
             ("bastion_subnet_id", "subnet", "synthetic-other-subnet"),
-            ("bastion_compartment_ocid", "compartment", "synthetic-other-compartment"),
+            ("compartment_ocid", "compartment", "synthetic-other-compartment"),
             (
                 "bastion_availability_domain",
                 "availability_domain",
@@ -196,7 +211,6 @@ class BastionPlanTests(unittest.TestCase):
 
     def test_enabled_bastion_rejects_missing_or_whitespace_inputs(self) -> None:
         for name in (
-            "compartment_ocid",
             "availability_domain",
             "subnet_id",
             "ssh_authorized_keys",
