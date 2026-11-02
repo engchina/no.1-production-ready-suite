@@ -1,4 +1,4 @@
-"""共有 DB テストの直列化に必要な pytest / xdist の互換性。"""
+"""共有 Oracle テストの直列化に必要な pytest / xdist の互換性。"""
 
 from __future__ import annotations
 
