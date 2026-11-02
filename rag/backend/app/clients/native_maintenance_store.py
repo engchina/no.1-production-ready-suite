@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 EVENT_BATCH_LIMIT = 1000
 LEASE_SECONDS = 600
 OPTIMIZE_CALL_TIMEOUT_MS = 180_000
+# 整理が返った後の件数検査の呼出しごとの上限。整理の残り時間とは別に持つ（#4097）。
+VERIFY_CALL_TIMEOUT_MS = 60_000
 
 
 class TimedMaintenanceConnection(OracleConnectionProtocol, Protocol):
@@ -168,6 +170,9 @@ class NativeMaintenanceStore:
                         raise TimeoutError("索引整理の実行時間上限を超えました。")
                     connection.call_timeout = max(1, math.ceil(remaining * 1000))
 
+                def before_verify() -> None:
+                    connection.call_timeout = VERIFY_CALL_TIMEOUT_MS
+
                 # 接続待ちの間に失効した古いworkerは、索引操作を始めない。
                 cursor = connection.cursor()
                 try:
@@ -190,7 +195,9 @@ class NativeMaintenanceStore:
                 finally:
                     cursor.close()
                 result = maintain_native_vectors(
-                    cast(MaintenanceConnection, connection), before_call=before_call
+                    cast(MaintenanceConnection, connection),
+                    before_call=before_call,
+                    before_verify=before_verify,
                 )
                 logger.info(
                     "native_index_maintenance_optimized",
