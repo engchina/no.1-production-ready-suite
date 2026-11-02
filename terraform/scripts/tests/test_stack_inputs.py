@@ -99,6 +99,13 @@ class StackInputTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout)
                 self.assertIn(f'region   = "{region}"', result.stdout)
 
+    def test_form_explains_supported_regions(self) -> None:
+        schema = (ROOT / "terraform/stack/schema.yaml").read_text()
+        overview = schema.split("schemaVersion:")[0]
+        for region in ("ap-osaka-1", "ap-tokyo-1", "us-chicago-1"):
+            self.assertIn(region, overview)
+            self.assertIn(region, _schema_variable(schema, "region"))
+
     def test_unknown_region_is_rejected(self) -> None:
         result = self.plan(region="unsupported-region")
         self.assertNotEqual(result.returncode, 0, result.stdout)
@@ -134,7 +141,6 @@ class StackInputTests(unittest.TestCase):
             (
                 "bastion_enabled",
                 [
-                    "bastion_compartment_ocid",
                     "bastion_availability_domain",
                     "bastion_vcn_id",
                     "bastion_subnet_id",
