@@ -35,7 +35,7 @@ from app.api.routes.search import (
 )
 from app.clients.ai_calls import make_ai_caller
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, oracle_error_log_fields
 from app.config import (
     OCI_ENTERPRISE_AI_TIMEOUT_MAX_SECONDS,
     Settings,
@@ -72,6 +72,7 @@ from app.rag.evaluation_jobs import (
 from app.rag.evaluation_manifest import build_run_manifest, with_run_check
 from app.rag.evaluation_paired import compare_paired
 from app.rag.evaluation_process import guide_process_row, process_draft
+from app.rag.evaluation_result_storage import fit_evaluation_result
 from app.rag.evaluation_results_excel import evaluation_results_xlsx
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_process_import import (
@@ -606,15 +607,14 @@ async def _save_evaluation_artifact(
         return await OracleClient().save_evaluation_artifact(
             {
                 "request_summary": request_summary,
-                "result_summary": result_summary,
+                "result_summary": await asyncio.to_thread(fit_evaluation_result, result_summary),
                 "knowledge_base_ids": list(knowledge_base_ids),
                 "passed": passed,
             }
         )
     except Exception as exc:
-        logger.info(
-            "evaluation_artifact_persistence_skipped",
-            extra={"error_type": type(exc).__name__},
+        logger.warning(
+            "evaluation_artifact_persistence_skipped", extra=oracle_error_log_fields(exc)
         )
         return None
 

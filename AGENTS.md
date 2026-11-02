@@ -93,6 +93,7 @@
 - **修正の後は根因・変更箇所・方法・変えない範囲を利用者へ説明する**（結果だけで終えない）。
 - **不具合は局所検証で一つずつ直してからフルフローを確認する。** 毎回全工程を再実行せず、関連回帰の通過後に統合受入を行う。局所成功と全体成功を分け、必須 CI は省略しない（[手順](./docs/agents/ci.md)）。
 - Excel（.xlsx / .xlsm / .csv / .tsv）の作成・編集・分析は Codex の `spreadsheet` skill を使う（[導入と検証](./docs/agents/spreadsheets.md)）。その他の文書（.docx / .pptx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。
+- **プログラムで安定して処理できることは LLM に任せない。** モデルの出力の誤りは提示文の調整で直さず、誤りが起きない構造に変える（[docs/agents/prompts.md](./docs/agents/prompts.md)）。
 - **LLM に渡す文（プロンプト・skill・MCP の説明）を書く・変える前に [docs/agents/prompts.md](./docs/agents/prompts.md) を読む。** 実際に渡す Prompt は Step 形式で責務を明確にし、複雑な処理だけを段階に分ける。1 つの規則は 1 つの層にだけ書き、コードで保証できることはコードに置き、経緯や内部の仕組みを書かない。変えたら同じ PR で関係するテストを直し、最初のターンに渡す字数の前後を PR に書く。
 
 ## 配備
