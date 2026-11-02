@@ -6,9 +6,35 @@ from rag_engine.generation.answer_models import AnswerQuestionResult
 from app.rag.answer_engine import _outcome_from_result, _SearchState
 
 
-@pytest.mark.parametrize("stage", ["evidence.batch_read", "answer.generate"])
-def test_generation_failure_stage_survives_answer_conversion(stage: str) -> None:
-    failure = {"error": "ValidationError", "stage": stage}
+@pytest.mark.parametrize(
+    ("stage", "detail"),
+    [
+        (
+            "evidence.batch_read",
+            {
+                "category": "batch_quote_not_in_input",
+                "batch_index": 1,
+                "input_count": 80,
+                "input_chars": 79000,
+                "invalid_attempts": 2,
+                "unmatched_count": 1,
+                "unmatched_reasons": {"quote_not_found": 1},
+            },
+        ),
+        (
+            "answer.generate",
+            {
+                "category": "schema_field",
+                "model": "RequestScopePlan",
+                "validation_error_types": {"missing": 1},
+            },
+        ),
+    ],
+)
+def test_generation_failure_detail_survives_answer_conversion(
+    stage: str, detail: dict[str, object]
+) -> None:
+    failure = {"error": "ValidationError", "stage": stage, **detail}
     result = AnswerQuestionResult(
         answer="合成の参考情報",
         question_display="合成の質問",

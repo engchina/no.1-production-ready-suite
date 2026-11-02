@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
@@ -164,3 +165,83 @@ def test_each_generation_stage_uses_its_saved_prompt() -> None:
     ):
         assert grounded.generation_system_prompt(QUESTION) == "## Step 1: 根拠計画後の保存済み指示"
         assert grounded.generation_system_prompt("項目Aの意味は？") == "## Step 1: 単純な質問の保存済み指示"
+
+
+LONG_TEXT = "項目Cは処理の条件を定めます。" * 80
+
+
+def long_spans() -> list[dict[str, Any]]:
+    result = [{**row, "text": LONG_TEXT if row["label"] == "E1" else row["text"]} for row in spans()]
+    grounded.format_functions(result)
+    return result
+
+
+def run_long(parse: Any) -> grounded.Round:
+    evidence = long_spans()
+    assert len(evidence[0]["text"]) > 600
+    return grounded.run_round(
+        QUESTION,
+        evidence,
+        get_settings(environ={}, dotenv_path=None),
+        prompt="原質問: " + QUESTION + "\n" + grounded.evidence_block_text(evidence),
+        image_paths=(),
+        provider_id=None,
+        parse_text=parse,
+        parse_images=parse,
+        audit_mode="none",
+        invalid_output=lambda exc: isinstance(exc, ValidationError),
+    )
+
+
+def test_a_valid_plan_with_long_evidence_reaches_generation() -> None:
+    """#4091: 説明の字数の上限より長い根拠でも、有効な計画は実装の ValidationError で止まらず生成へ進む。"""
+    calls: list[Any] = []
+
+    def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        calls.append(schema)
+        if schema is RequestScopePlan:
+            return RequestScopePlan.model_validate(plan())
+        assert "項目Cは処理の条件を定めます。" in prompt and "要求ごとの根拠計画" in prompt
+        return schema.model_validate(draft(["Q1", "Q1"]))
+
+    result = run_long(parse)
+    assert calls[0] is RequestScopePlan
+    assert len(calls) == 2
+    assert result.timing["generation_calls"] == 2
+
+
+def test_invalid_plan_output_is_classified_as_a_draft_failure() -> None:
+    """#4091: 生成の前の計画の出力が再実行の後も不合格なら、ほかの生成の出力と同じ失敗として送出する。"""
+
+    def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
+        return RequestScopePlan.model_validate({})
+
+    with pytest.raises(grounded.DraftGenerationInvalid) as raised:
+        run_long(parse)
+    assert str(raised.value) == "ValidationError"
+    assert isinstance(raised.value.__cause__, ValidationError)
+
+
+def test_plan_call_implementation_errors_are_not_classified() -> None:
+    def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
+        raise KeyError("合成の実装の誤り")
+
+    with pytest.raises(KeyError):
+        run_long(parse)
+
+
+def test_invalid_plan_failure_keeps_issue_counts_without_contents() -> None:
+    """#4091: 計画の不整合は、どの検査に当たったかの件数だけを診断に残す。"""
+    missing = {"request_coverage": [{**plan()["request_coverage"][0], "request_id": "Q9", "evidence_ids": ["unknown"]}]}
+
+    def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
+        return RequestScopePlan.model_validate(missing)
+
+    with pytest.raises(grounded.DraftGenerationInvalid) as raised:
+        run_long(parse)
+    detail = grounded.generation_failure_detail(raised.value)
+    assert detail["category"] == "request_scope_invalid"
+    assert detail["missing_request_count"] == 1
+    assert detail["foreign_request_count"] == 1
+    assert detail["unknown_evidence_label_count"] == 1
+    assert detail["evidence_count"] == 2

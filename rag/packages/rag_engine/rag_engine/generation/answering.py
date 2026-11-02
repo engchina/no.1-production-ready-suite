@@ -2588,6 +2588,7 @@ def synthesize_grounded_answer(
         ).with_term_usage(search=settings.runtime_terms_search_enabled, answer=settings.runtime_terms_answer_enabled)
 
     from rag_engine.generation import grounded
+    from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.batched_evidence import prepare_batched_evidence
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
@@ -2659,6 +2660,8 @@ def synthesize_grounded_answer(
     # 1 組目の生成の出力が契約を満たさず草稿が無い（元の例外の型名。#3849）。関係する資料の記載だけを示す。
     generation_failure = ""
     generation_failure_stage = "answer.generate"
+    # 退避の原因の類別・件数・容量（質問・原文は持たない。#4090・#4091）。
+    generation_failure_detail: dict[str, Any] = {}
     # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
     # 根拠の画面の図で業務ガイドの条件が決まったら、round ごとにその条件の手順の計画に切り替える（#2689）。
     base_knowledge = runtime_knowledge
@@ -2778,6 +2781,7 @@ def synthesize_grounded_answer(
             ) as step,
         ):
             preparing_evidence = False
+            failed_batches: list[dict[str, Any]] = []
             try:
                 # 生成は回答文の生成、監査は回答の監査の推論の量で呼ぶ (#1499 / #1528。run_round は settings を LLM の
                 # 呼び出しにだけ使う)。
@@ -2800,6 +2804,7 @@ def synthesize_grounded_answer(
                     system=generation_system,
                     schema=grounded.generation_output_model(question).model_json_schema(),
                     provider_id=provider,
+                    failed_batches=failed_batches,
                 )
                 preparing_evidence = False
                 current = generate_round(
@@ -2821,18 +2826,15 @@ def synthesize_grounded_answer(
                 # 切れたときは草稿が無いので、関係する資料の記載だけを示す。外側の期限・取り消し・他の失敗は送出する。
                 cut = budget.cut_round(number, has_draft=best is not None)
                 # 1 組目の生成の出力が再実行の後も契約を満たさなかった（#3849）。根拠は回答に渡すと決めた後なので、
-                # 回答全体を失敗にせず、草稿の無い round で関係する資料の記載を示す。
+                # 回答全体を失敗にせず、草稿の無い round で関係する資料の記載を示す。工程を問わず同じ判定にする（#4091）。
+                # 構造化出力の検証の失敗以外の実装の例外は、ここに入れず送出する。
                 input_limited = isinstance(exc, GenerationInputBudgetExceeded)
                 if input_limited:
                     input_diagnostic = exc.diagnostic
                 invalid_draft = (
                     best is None
                     and not cut
-                    and (
-                        isinstance(exc, grounded.DraftGenerationInvalid)
-                        or (preparing_evidence and _invalid_structured_output(exc))
-                        or input_limited
-                    )
+                    and (isinstance(exc, grounded.DraftGenerationInvalid) or _invalid_structured_output(exc) or input_limited)
                 )
                 if best is None and not cut and not invalid_draft:
                     raise
@@ -2852,6 +2854,19 @@ def synthesize_grounded_answer(
                 if invalid_draft:
                     generation_failure = error_name
                     generation_failure_stage = "evidence.batch_read" if preparing_evidence else "answer.generate"
+                    generation_failure_detail = (
+                        {"category": "input_budget_exceeded", "reason": str(input_diagnostic.get("reason", ""))}
+                        if input_limited
+                        else batch_failure_summary(failed_batches[-1], exc)
+                        if preparing_evidence and failed_batches
+                        else grounded.generation_failure_detail(exc)
+                    )
+                    logger.warning(
+                        "answer generation fell back to document quotes: stage=%s error=%s detail=%s",
+                        generation_failure_stage,
+                        generation_failure,
+                        json.dumps(generation_failure_detail, ensure_ascii=False),
+                    )
                     best = (
                         grounded.timed_out_round(
                             question,
@@ -3500,7 +3515,11 @@ def synthesize_grounded_answer(
         "rounds": rounds,
         "round_budget": budget.trace(current),
         # 1 組目の生成の出力が契約を満たさず、関係する資料の記載だけを示した（元の例外の型名。#3849）。
-        **({"generation_failure": {"error": generation_failure, "stage": generation_failure_stage}} if generation_failure else {}),
+        **(
+            {"generation_failure": {"error": generation_failure, "stage": generation_failure_stage, **generation_failure_detail}}
+            if generation_failure
+            else {}
+        ),
         "llm_calls": sum(r.get("timing", {}).get("generation_calls", 1) + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
         "image_fallback": image_decision,
         "final_fact_count": len(published),

@@ -20,6 +20,7 @@ import logging
 import math
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
@@ -33,7 +34,7 @@ from typing import Any
 from httpx import TimeoutException
 from openai import APITimeoutError
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import alternation, arabic_numbers
 
@@ -7122,43 +7123,42 @@ def run_round(
     # 保存された章節が無く、原文から複数の対象を復元した場合だけ、対象の照合を本文生成から分ける。
     recovered_sections = len({span["function"] for span in presentation}) > len({span["function"] for span in spans})
     if not range_only and (separate_scope or recovered_sections):
-        scope_plan = plan_scope(presentation)
+        try:
+            scope_plan = plan_scope(presentation)
+        except Exception as exc:
+            if invalid_output is None or not invalid_output(exc):
+                raise
+            # 計画の出力が再実行の後も契約を満たさない。本文の生成と同じく、この round の草稿が無い失敗として分ける（#4091）。
+            raise DraftGenerationInvalid(type(exc).__name__) from exc
         planned = GroundedDraft(request_coverage=scope_plan.request_coverage, items=[], summary="", confidence="high")
         if separate_scope:
             units = _contract_view(question).get("request_units", ())
             known_requests = {unit["id"] for unit in units if unit.get("kind") != "context"}
             required_requests = known_requests
             own_requests = [entry.request_id for entry in scope_plan.request_coverage]
-            invalid = (
-                not required_requests.issubset(own_requests)
-                or not set(own_requests).issubset(known_requests)
-                or len(own_requests) != len(set(own_requests))
-                or any(
+            plan_issues = {
+                "missing_request_count": len(required_requests.difference(own_requests)),
+                "foreign_request_count": len(set(own_requests).difference(known_requests)),
+                "duplicate_request_count": len(own_requests) - len(set(own_requests)),
+                "unknown_evidence_label_count": sum(
                     not _label_spans(label, spans)
                     for entry in scope_plan.request_coverage
                     for label in [*entry.evidence_ids, *(scope.evidence_id for scope in entry.evidence_scope)]
+                ),
+                "plan_error_count": len(_request_plan_errors(planned, spans)),
+            }
+            if any(plan_issues.values()):
+                raise DraftGenerationInvalid(
+                    "request_scope_invalid",
+                    detail={"request_count": len(required_requests), "evidence_count": len(spans), **plan_issues},
                 )
-                or bool(_request_plan_errors(planned, spans))
-            )
-            if invalid:
-                raise DraftGenerationInvalid("request_scope_invalid")
-        selected = [
-            span
-            for span in spans
-            if any(
-                not _outside_request_plan(
-                    GroundedItem(
-                        kind="rule", request_id=plan.request_id, text=span["text"], citations=[GroundedCitation(evidence_id=span["label"])]
-                    ),
-                    span,
-                    planned,
-                    spans,
-                )
-                for plan in planned.request_coverage
-            )
-        ]
-        if separate_scope:
-            selected = list(spans)
+        # 計画の内外は要求の id と根拠の id だけで決まる。根拠の全文を説明の型（字数の上限がある）に入れない（#4091）。
+        plan_probes = [GroundedItem(kind="rule", request_id=plan.request_id, text="根拠計画の照合") for plan in planned.request_coverage]
+        selected = (
+            list(spans)
+            if separate_scope
+            else [span for span in spans if any(not _outside_request_plan(probe, span, planned, spans) for probe in plan_probes)]
+        )
         prompt = prompt.replace(
             evidence_block_text(spans),
             evidence_block_text(selected),
@@ -8482,8 +8482,31 @@ def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
 class DraftGenerationInvalid(RuntimeError):
     """回答文の生成の出力が、再実行の後も構造化出力の契約を満たさなかった（この round の草稿が無い。#3849）。
 
-    本文は元の例外の型名だけ（モデルの出力の文を持たない）。元の例外は ``__cause__``。
+    本文は元の例外の型名か契約違反の固定の名前だけ（モデルの出力の文を持たない）。元の例外は ``__cause__``。
+    ``detail`` は契約違反の内訳の件数（#4091）。
     """
+
+    def __init__(self, failure: str, *, detail: Mapping[str, int] | None = None) -> None:
+        super().__init__(failure)
+        self.detail = dict(detail or {})
+
+
+def generation_failure_detail(exc: Exception) -> dict[str, Any]:
+    """生成の不合格の類別と件数（#4091）。質問・原文・モデルの出力は持たない。
+
+    ``model`` は検証に失敗した型の名前。モデルの出力の型でなければ、出力の不合格ではなく実装の不具合を疑う手がかり。
+    """
+    details = structured_failure_details(exc)
+    invalid = exc if isinstance(exc, DraftGenerationInvalid) else None
+    source = invalid.__cause__ if invalid is not None and invalid.__cause__ is not None else exc
+    result: dict[str, Any] = {"category": str(invalid) if invalid is not None and source is invalid else details["category"]}
+    for key in ("provider_status", "incomplete_reason", "cutoff_reason", "contract_code"):
+        if key in details:
+            result[key] = details[key]
+    if isinstance(source, ValidationError):
+        result["model"] = source.title
+        result["validation_error_types"] = dict(Counter(row["type"] for row in details.get("validation_errors", ())))
+    return {**result, **(invalid.detail if invalid is not None else {})}
 
 
 def timed_out_round(question: str, *, reason: str = "時間の上限までに生成が終わらなかった") -> Round:
