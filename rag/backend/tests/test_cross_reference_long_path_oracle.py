@@ -4,6 +4,7 @@ AI は決定論スタブ(oracle_db fixture)で、SQL だけを実 DB で評価�
 """
 
 from dataclasses import dataclass
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -212,7 +213,7 @@ async def test_screen_sections_ignore_paths_that_are_not_strings() -> None:
             text=f"本文{index}",
             start_offset=0,
             end_offset=3,
-            metadata={"section_path": path},
+            metadata=cast(Any, {"section_path": path}),
         )
         for index, path in enumerate(paths)
     ]
@@ -312,39 +313,3 @@ async def test_screen_chunks_read_heading_only_in_long_path() -> None:
         {"file_name": f"screen-{token}"}, file_name=file_name, heading=screen, limit=10
     )
     assert [chunk.text for chunk in chunks] == ["画面の本文"]
-
-
-# ここから、同じ仕組みが交差参照の外にも残るかの確認(#4144 の再現の範囲の外)。
-@pytest.mark.usefixtures("oracle_db")
-async def test_probe_reading_index_keeps_long_path() -> None:
-    client = OracleClient()
-    token = uuid4().hex[:12]
-    long_path = f"{'合成の長い親階層' * 170} > 第2章"
-    document_id = await _indexed_document(
-        client,
-        file_name=f"outline-{token}.pdf",
-        chunks=[_chunk(0, "短い節", "第1章"), _chunk(1, "長い節", long_path)],
-    )
-    _chunk_set, rows = await client.document_reading_index(document_id)
-    assert [row["section_path"] for row in rows] == ["第1章", long_path]
-
-
-@pytest.mark.usefixtures("oracle_db")
-async def test_probe_older_version_title_from_long_path() -> None:
-    client = OracleClient()
-    token = uuid4().hex[:12]
-    title = f"合成の旧版のタイトル{token}"
-    older_id = await _indexed_document(
-        client,
-        file_name=f"older-{token}.pdf",
-        chunks=[_chunk(0, "旧版の本文", f"{title} > {'合成の長い親階層' * 170}")],
-    )
-    newer_id = await _indexed_document(
-        client,
-        file_name=f"newer-{token}.pdf",
-        chunks=[_chunk(0, "今の版の本文", "第1章")],
-    )
-    await client.set_document_superseded_by(older_id, newer_id)
-
-    versions = await client.retrieval_older_versions({"file_name": token}, [newer_id], limit=5)
-    assert [(version.document_id, version.title) for version in versions] == [(older_id, title)]

@@ -115,14 +115,12 @@ class GraphReferenceStore:
 
     async def documents(self, kb_id: str) -> tuple[ReferenceDocument, ...]:
         """現行の許可範囲から本文を含まない参照先目録を得る。"""
-        from app.clients.oracle import _oracle_retrieval_where
+        from app.clients.oracle import SECTION_PATH_OVERFLOW_SQL, _oracle_retrieval_where
 
         where, binds = _oracle_retrieval_where({"knowledge_base_id": kb_id}, effective_period=False)
         # DISTINCT は CLOB に使えないので、通常は VARCHAR2 で読む。4000 バイトを超えるパスは
         # どちらの関数も NULL を返すので印を付け、その行だけを CLOB で読み直す。
-        overflow = """JSON_EXISTS(c.metadata_json,'$.section_path')
-            AND JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) IS NULL
-            AND JSON_QUERY(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) IS NULL"""
+        overflow = SECTION_PATH_OVERFLOW_SQL
         rows = await self.oracle._fetch_all(
             f"""SELECT DISTINCT c.document_id,c.chunk_set_id,d.file_name,
             JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path,
