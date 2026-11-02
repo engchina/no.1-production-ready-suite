@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path as FilePath
 from pathlib import PurePath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -35,6 +35,7 @@ from rag_parser_core.structured_records import RecordBoundaryError, record_bound
 
 from app.api.errors import DocumentFileMissingError, SourceVersionStaleError
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
+from app.clients.extraction_revision_store import max_extraction_revisions
 from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
 from app.clients.oracle import (
@@ -77,6 +78,7 @@ from app.rag.document_sections_service import (
     sections_extraction,
 )
 from app.rag.extraction_field_adapter import field_extraction_outcome, load_field_schema
+from app.rag.extraction_revisions import ExtractionElementChange, extraction_element_changes
 from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
@@ -122,7 +124,6 @@ from app.rag.section_rules import (
 from app.rag.source_profile import build_source_profile, rejected_upload_format_message
 from app.rag.variant_keys import (
     compute_chunk_set_id,
-    compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
     compute_graph_layer_id,
     compute_isolated_extraction_id,
@@ -172,6 +173,11 @@ from app.schemas.document import (
     DocumentTableCellTextEdit,
     DocumentTextWindowRequest,
     DuplicateDocumentRef,
+    ExtractionRevisionDiff,
+    ExtractionRevisionElementChange,
+    ExtractionRevisionHistory,
+    ExtractionRevisionRestoreRequest,
+    ExtractionRevisionSummary,
     FileStatus,
     IngestionJob,
     IngestionJobLease,
@@ -205,6 +211,9 @@ from app.services.document_inspection import extraction_window, text_window
 from app.services.document_preview_cache import DocumentPreviewCache
 
 router = APIRouter()
+
+# 抽出の版の差分で 1 要素に返す文字数の上限（差分は確認用で、全文は抽出の画面で読む）。
+_REVISION_DIFF_TEXT_MAX_CHARS = 4000
 logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
@@ -2240,6 +2249,208 @@ async def save_document_recipe_review_edits(
     return ApiResponse(data=await _document_recipe_view(oracle, row))
 
 
+def _extraction_revision_summary(
+    revision: Mapping[str, object],
+    *,
+    current_extraction_recipe_id: object,
+    current_base_revision_no: int | None,
+    current_parse_extraction_recipe_id: str | None,
+    served_extraction_ids: set[str],
+) -> ExtractionRevisionSummary:
+    extraction_recipe_id = revision["extraction_recipe_id"]
+    return ExtractionRevisionSummary.model_validate(
+        {
+            **revision,
+            "kind": str(revision["revision_kind"]).lower(),
+            "is_current": extraction_recipe_id == current_extraction_recipe_id,
+            "is_serving": extraction_recipe_id in served_extraction_ids,
+            "base_changed": revision["base_revision_no"] != current_base_revision_no,
+            "settings_changed": (
+                revision["parse_extraction_recipe_id"] != current_parse_extraction_recipe_id
+            ),
+        }
+    )
+
+
+@router.get(
+    "/{document_id}/recipes/{recipe_id}/extraction-revisions",
+    response_model=ApiResponse[ExtractionRevisionHistory],
+)
+async def list_document_recipe_extraction_revisions(
+    document_id: str, recipe_id: str
+) -> ApiResponse[ExtractionRevisionHistory]:
+    """レシピの抽出の修訂の版を新しい順に返す(本文は読まない。#2644)。"""
+    oracle = OracleClient()
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    detail = await oracle.get_document_summary(document_id)
+    if row is None or detail is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    revisions = await oracle.list_document_recipe_extraction_revisions(recipe_id)
+    current_id = row.get("active_extraction_recipe_id")
+    current = next((rev for rev in revisions if rev["extraction_recipe_id"] == current_id), None)
+    current_parse_id = (
+        _recipe_parse_extraction_id(
+            detail.content_sha256,
+            row,
+            await oracle.document_extraction_recipe_subset(
+                document_id=document_id, extraction_recipe_id=str(current_id)
+            ),
+        )
+        if revisions and current_id and detail.content_sha256
+        else None
+    )
+    served = await oracle.recipe_served_extraction_ids(recipe_id) if revisions else set()
+    current_base = _optional_revision_no(current["base_revision_no"]) if current else None
+    return ApiResponse(
+        data=ExtractionRevisionHistory(
+            revisions=[
+                _extraction_revision_summary(
+                    revision,
+                    current_extraction_recipe_id=current_id,
+                    current_base_revision_no=current_base,
+                    current_parse_extraction_recipe_id=current_parse_id,
+                    served_extraction_ids=served,
+                )
+                for revision in revisions
+            ],
+            current_revision_no=(
+                _optional_revision_no(current["revision_no"]) if current else None
+            ),
+            reparsed_since_last_revision=bool(revisions) and current is None,
+            max_revisions=max_extraction_revisions(),
+        )
+    )
+
+
+def _optional_revision_no(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+@router.get(
+    "/{document_id}/recipes/{recipe_id}/extraction-revisions/{revision_no}/diff",
+    response_model=ApiResponse[ExtractionRevisionDiff],
+)
+async def diff_document_recipe_extraction_revision(
+    document_id: str,
+    recipe_id: str,
+    revision_no: int,
+    against: Annotated[int | None, Query(ge=1)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> ApiResponse[ExtractionRevisionDiff]:
+    """版と比べる版(既定は親の版)の要素の文の差分を返す(#2644)。
+
+    親の版が上限で消えている・親の無い最初の版は、比べる版なし(``against_revision_no`` が null)。
+    """
+    oracle = OracleClient()
+    if await oracle.get_document_recipe(document_id, recipe_id) is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    revision = await oracle.get_document_recipe_extraction_revision(recipe_id, revision_no)
+    if revision is None:
+        raise HTTPException(status_code=404, detail="抽出の版が見つかりません。")
+    against_no = against if against is not None else revision["parent_revision_no"]
+    baseline = (
+        await oracle.get_document_recipe_extraction_revision(recipe_id, int(str(against_no)))
+        if against_no is not None
+        else None
+    )
+    if against is not None and baseline is None:
+        raise HTTPException(status_code=404, detail="比べる版が見つかりません。")
+    changes = (
+        await asyncio.to_thread(
+            extraction_element_changes,
+            cast("Mapping[str, object]", baseline["extraction_json"]),
+            cast("Mapping[str, object]", revision["extraction_json"]),
+        )
+        if baseline is not None
+        else []
+    )
+    return ApiResponse(
+        data=ExtractionRevisionDiff(
+            revision_no=revision_no,
+            against_revision_no=int(str(against_no)) if baseline is not None else None,
+            total=len(changes),
+            offset=offset,
+            limit=limit,
+            changes=[
+                _extraction_revision_change_view(change)
+                for change in changes[offset : offset + limit]
+            ],
+        )
+    )
+
+
+def _extraction_revision_change_view(
+    change: ExtractionElementChange,
+) -> ExtractionRevisionElementChange:
+    before = change.before
+    after = change.after
+    return ExtractionRevisionElementChange(
+        element_id=change.element_id,
+        change=change.change,
+        page_number=change.page_number,
+        before=before[:_REVISION_DIFF_TEXT_MAX_CHARS] if before is not None else None,
+        after=after[:_REVISION_DIFF_TEXT_MAX_CHARS] if after is not None else None,
+        truncated=max(len(before or ""), len(after or "")) > _REVISION_DIFF_TEXT_MAX_CHARS,
+    )
+
+
+@router.post(
+    "/{document_id}/recipes/{recipe_id}/extraction-revisions/{revision_no}/restore",
+    response_model=ApiResponse[DocumentRecipeView],
+)
+async def restore_document_recipe_extraction_revision(
+    http_request: Request,
+    document_id: str,
+    recipe_id: str,
+    revision_no: int,
+    body: ExtractionRevisionRestoreRequest,
+) -> ApiResponse[DocumentRecipeView]:
+    """指定の版の内容を新しい版として今の抽出にする(過去の版は書き換えない。#2644)。"""
+    enforce_rate_limit("ingest", http_request)
+    oracle = OracleClient()
+    detail = await oracle.get_document_summary(document_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    if not detail.content_sha256:
+        raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
+    content_sha256 = detail.content_sha256
+
+    def build(
+        recipe: Mapping[str, object],
+        artifact: Mapping[str, object],
+        revision: Mapping[str, object],
+    ) -> ReviewedExtractionWrite:
+        write = _reviewed_extraction_write(
+            content_sha256,
+            recipe,
+            artifact,
+            cast("Mapping[str, object]", revision["extraction_json"]),
+        )
+        if revision["parse_extraction_recipe_id"] != write.parse_extraction_recipe_id:
+            raise DocumentReviewEditConflictError(
+                "原本か解析の設定が変わったため、この版は復元できません。"
+            )
+        return write
+
+    try:
+        await oracle.restore_document_recipe_extraction_revision(
+            document_id=document_id,
+            recipe_id=recipe_id,
+            revision_no=revision_no,
+            expected_extraction_recipe_id=body.expected_extraction_recipe_id,
+            build=build,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except DocumentReviewEditConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    return ApiResponse(data=await _document_recipe_view(oracle, row))
+
+
 def _candidate_chunking_settings(base: Settings, overrides: Mapping[str, object]) -> Settings:
     """global 設定に chunking 上書きを重ねた候補レシピ設定を返す(cross-field 検証込み)。
 
@@ -3313,6 +3524,54 @@ async def save_document_superseded_by(
     return ApiResponse(data=detail)
 
 
+def _recipe_subset_of(artifact: Mapping[str, object]) -> dict[str, object] | None:
+    raw_recipe_subset = artifact.get("recipe_subset")
+    return (
+        {str(key): value for key, value in raw_recipe_subset.items()}
+        if isinstance(raw_recipe_subset, Mapping)
+        else None
+    )
+
+
+def _recipe_parse_extraction_id(
+    content_sha256: str,
+    recipe: Mapping[str, object],
+    recipe_subset: Mapping[str, object] | None,
+) -> str:
+    """原本と解析の設定で決まる ID(同じ原本・設定の解析の結果なら同じ)。"""
+    config = DocumentProcessingConfig.model_validate(recipe.get("processing_config") or {})
+    recipe_settings, _ = _merge_document_processing_config(config)
+    if recipe_subset and isinstance(recipe_subset.get("rag_preprocess_profile"), str):
+        recipe_settings = recipe_settings.model_copy(
+            update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
+        )
+    return compute_extraction_recipe_id(content_sha256, recipe_settings)
+
+
+def _reviewed_extraction_write(
+    content_sha256: str,
+    recipe: Mapping[str, object],
+    artifact: Mapping[str, object],
+    extraction: Mapping[str, object],
+) -> ReviewedExtractionWrite:
+    """修正・復元の内容を、保存ごとに新しい ID の抽出として書く内容にする(#2644)。
+
+    ID を使い回さないので、検索に出している版や過去の版の抽出を上書きしない。
+    """
+    recipe_subset = _recipe_subset_of(artifact)
+    parse_extraction_recipe_id = _recipe_parse_extraction_id(content_sha256, recipe, recipe_subset)
+    return ReviewedExtractionWrite(
+        extraction_recipe_id=compute_isolated_extraction_id(
+            parse_extraction_recipe_id, uuid4().hex
+        ),
+        source_sha256=content_sha256,
+        extraction=extraction,
+        recipe_subset=recipe_subset,
+        status=str(artifact.get("status") or "materialized"),
+        parse_extraction_recipe_id=parse_extraction_recipe_id,
+    )
+
+
 async def _apply_recipe_review_text_edits(
     document_id: str,
     recipe_id: str,
@@ -3322,8 +3581,8 @@ async def _apply_recipe_review_text_edits(
 
     修正は要素・表セルの差分として、レシピの行ロックの下で読んだ最新の抽出成果へ当てる
     (#2616)。別の要素・表セルへの並行の修正は両方残し、読み込んだ後に同じ要素・表セルが
-    ほかの保存で変わっていたら 409 にする(``base_text`` で照合する)。初回の保存は共有の
-    抽出成果を書き換えず、レシピ固有の ID へ copy-on-write する。
+    ほかの保存で変わっていたら 409 にする(``base_text`` で照合する)。保存ごとに新しい版を作り、
+    前の版の抽出を書き換えない(#2644)。
     """
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
@@ -3332,7 +3591,6 @@ async def _apply_recipe_review_text_edits(
     if not detail.content_sha256:
         raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
     content_sha256 = detail.content_sha256
-    served_extractions = await _served_extraction_ids(oracle, document_id)
 
     def build(
         recipe: Mapping[str, object], artifact: Mapping[str, object]
@@ -3341,38 +3599,8 @@ async def _apply_recipe_review_text_edits(
             StructuredExtraction.model_validate(artifact["extraction_json"]),
             edits,
         )
-        raw_recipe_subset = artifact.get("recipe_subset")
-        recipe_subset = (
-            {str(key): value for key, value in raw_recipe_subset.items()}
-            if isinstance(raw_recipe_subset, Mapping)
-            else None
-        )
-        config = DocumentProcessingConfig.model_validate(recipe.get("processing_config") or {})
-        recipe_settings, _ = _merge_document_processing_config(config)
-        if recipe_subset and isinstance(recipe_subset.get("rag_preprocess_profile"), str):
-            recipe_settings = recipe_settings.model_copy(
-                update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
-            )
-        base_extraction_recipe_id = compute_extraction_recipe_id(content_sha256, recipe_settings)
-        extraction_recipe_id = compute_document_recipe_extraction_id(
-            base_extraction_recipe_id,
-            recipe_id,
-            int(str(recipe.get("config_revision") or 1)),
-        )
-        if extraction_recipe_id in served_extractions:
-            # 検索に出している版の抽出は書き換えない（#4115）。確認中の候補の抽出を続けて使う。
-            current = str(recipe.get("active_extraction_recipe_id") or "")
-            extraction_recipe_id = (
-                current
-                if current and current not in served_extractions
-                else compute_isolated_extraction_id(extraction_recipe_id, uuid4().hex)
-            )
-        return ReviewedExtractionWrite(
-            extraction_recipe_id=extraction_recipe_id,
-            source_sha256=content_sha256,
-            extraction=extraction.to_document_payload(),
-            recipe_subset=recipe_subset,
-            status=str(artifact.get("status") or "materialized"),
+        return _reviewed_extraction_write(
+            content_sha256, recipe, artifact, extraction.to_document_payload()
         )
 
     try:
@@ -4134,12 +4362,6 @@ async def _has_served_output(oracle: OracleClient, document_id: str) -> bool:
     """文書に検索に出している版があるか（再取込の開始時に旧版を消さない判定。#4115）。"""
     check = getattr(oracle, "document_has_served_output", None)
     return bool(await check(document_id)) if callable(check) else False
-
-
-async def _served_extraction_ids(oracle: OracleClient, document_id: str) -> set[str]:
-    """検索に出している版が読む抽出の ID（上書きしない。#4115）。"""
-    read = getattr(oracle, "served_extraction_ids", None)
-    return set(await read(document_id)) if callable(read) else set()
 
 
 async def _default_recipe_failed(oracle: OracleClient, document_id: str) -> bool:

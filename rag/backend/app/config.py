@@ -2656,6 +2656,15 @@ class Settings(
         max_length=256,
         description="構造化抽出 artifact の Object Storage key prefix。",
     )
+    rag_extraction_max_revisions: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description=(
+            "抽出の修正の履歴にレシピごとに残す版の数（#2644）。保存・復元のときに古い版から消す"
+            "（今の版・基の解析の版・検索に出している版は残す。版の番号は振り直さない）。"
+        ),
+    )
     rag_review_gate_enabled: bool = Field(
         default=True,
         description=(

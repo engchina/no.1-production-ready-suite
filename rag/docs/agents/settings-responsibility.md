@@ -62,6 +62,8 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 版に属するデータは chunk_set から辿る（#4166）。章節の対応は chunk_set ごとに置き換え、ほかの版の行を消さない（chunk_set の行を消す処理が一緒に消す）。解析したファイルは抽出の `parser_artifacts.source_derivation` が正本で、根拠の読み取りはレシピの行の `preprocess_artifact`（最後のファイル準備の結果。確認の画面が見る）ではなくここを読む。
 
+抽出の確認の修正は文書レシピの層で版にする（#2644。`rag_document_extraction_revisions`）。保存と復元のたびに新しい ID の抽出と不変の版を作り、親の版と基にした解析の版を記録する。過去の版の行は書き換えない。解析の結果は最初の保存のときに版にする（修正しない文書に写しを持たない）。解析をやり直した後は修正の前提が変わったことを画面で示し、自動で取り込まない。原本か解析の設定が今と違う版は復元しない。復元は確認待ちのレシピだけで、検索に出している版は次の切替まで変わらない。版の数の上限は `RAG_EXTRACTION_MAX_REVISIONS`（今の版・基の解析の版・検索に出している版は残す）。
+
 GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI / API diagnostics にその状態を表示する。
 
 ### 章節の抽出規則と章節の要約

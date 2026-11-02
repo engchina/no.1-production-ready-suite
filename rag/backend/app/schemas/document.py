@@ -805,6 +805,67 @@ class DocumentApproveRequest(DocumentReviewEditsRequest):
     raw_text: str | None = Field(default=None, max_length=2000000)
 
 
+class ExtractionRevisionSummary(BaseModel):
+    """抽出の修訂の版 1 件(本文は持たない。#2644)。"""
+
+    revision_no: int = Field(ge=1)
+    parent_revision_no: int | None = None
+    # 基にした解析の版の番号(解析の版は自分自身)。
+    base_revision_no: int = Field(ge=1)
+    restored_from_revision_no: int | None = None
+    kind: Literal["parsed", "edited", "restored"]
+    changed_element_count: int = Field(default=0, ge=0)
+    created_at: datetime
+    is_current: bool = False
+    # 検索に出している chunk_set がこの版の抽出から作られている。
+    is_serving: bool = False
+    # 今の抽出と違う解析を基にしている(解析のやり直しで修正の前提が変わった)。
+    base_changed: bool = False
+    # 原本か解析の設定が今と違う(復元できない)。
+    settings_changed: bool = False
+
+
+class ExtractionRevisionHistory(BaseModel):
+    """レシピの抽出の修訂の履歴(#2644)。"""
+
+    revisions: list[ExtractionRevisionSummary]
+    current_revision_no: int | None = None
+    # 版があるのに今の抽出が版に無い(解析をやり直した後で、まだ保存していない)。
+    reparsed_since_last_revision: bool = False
+    max_revisions: int = Field(ge=1)
+
+
+class ExtractionRevisionElementChange(BaseModel):
+    """版の間で文が変わった要素 1 件(#2644)。"""
+
+    element_id: str
+    change: Literal["added", "removed", "changed"]
+    page_number: int | None = None
+    before: str | None = None
+    after: str | None = None
+    # 文が長いので先頭だけを返した。
+    truncated: bool = False
+
+
+class ExtractionRevisionDiff(BaseModel):
+    """2 つの版の要素の文の差分(#2644)。"""
+
+    revision_no: int
+    # 比べた版(比べる版が無ければ null)。
+    against_revision_no: int | None = None
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    changes: list[ExtractionRevisionElementChange]
+
+
+class ExtractionRevisionRestoreRequest(BaseModel):
+    """旧版の復元(#2644)。"""
+
+    # 画面が読んだ今の抽出。違えばほかの保存が先に入っているので 409。
+    expected_extraction_recipe_id: str = Field(min_length=1, max_length=64)
+
+
 class DocumentDeleteResult(BaseModel):
     """ドキュメント削除結果。"""
 

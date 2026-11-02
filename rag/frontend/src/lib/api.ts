@@ -406,6 +406,51 @@ export interface DocumentApproveRequest extends DocumentReviewEditsRequest {
   raw_text?: string | null;
 }
 
+/** 抽出の修訂の版 1 件（#2644）。 */
+export interface ExtractionRevisionSummary {
+  revision_no: number;
+  parent_revision_no: number | null;
+  /** 基にした解析の版の番号。 */
+  base_revision_no: number;
+  restored_from_revision_no: number | null;
+  kind: "parsed" | "edited" | "restored";
+  changed_element_count: number;
+  created_at: string;
+  is_current: boolean;
+  /** 検索に出している chunk_set がこの版の抽出から作られている。 */
+  is_serving: boolean;
+  /** 今の抽出と違う解析を基にしている。 */
+  base_changed: boolean;
+  /** 原本か解析の設定が今と違う（復元できない）。 */
+  settings_changed: boolean;
+}
+
+export interface ExtractionRevisionHistory {
+  revisions: ExtractionRevisionSummary[];
+  current_revision_no: number | null;
+  /** 版があるのに今の抽出が版に無い（解析をやり直した後で、まだ保存していない）。 */
+  reparsed_since_last_revision: boolean;
+  max_revisions: number;
+}
+
+export interface ExtractionRevisionElementChange {
+  element_id: string;
+  change: "added" | "removed" | "changed";
+  page_number: number | null;
+  before: string | null;
+  after: string | null;
+  truncated: boolean;
+}
+
+export interface ExtractionRevisionDiff {
+  revision_no: number;
+  against_revision_no: number | null;
+  total: number;
+  offset: number;
+  limit: number;
+  changes: ExtractionRevisionElementChange[];
+}
+
 export interface IngestionJob {
   id: string;
   document_id: string;
@@ -3761,6 +3806,41 @@ export const api = {
         recipeId,
       )}/review-edits`,
       { ...jsonBody(payload), method: "PATCH" },
+    ),
+  listDocumentRecipeExtractionRevisions: (id: string, recipeId: string) =>
+    request<ExtractionRevisionHistory>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/extraction-revisions`,
+    ),
+  diffDocumentRecipeExtractionRevision: (
+    id: string,
+    recipeId: string,
+    revisionNo: number,
+    options: { against: number | null; offset: number; limit: number },
+  ) => {
+    const params = new URLSearchParams({
+      offset: String(options.offset),
+      limit: String(options.limit),
+    });
+    if (options.against != null) params.set("against", String(options.against));
+    return request<ExtractionRevisionDiff>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/extraction-revisions/${revisionNo}/diff?${params.toString()}`,
+    );
+  },
+  restoreDocumentRecipeExtractionRevision: (
+    id: string,
+    recipeId: string,
+    revisionNo: number,
+    expectedExtractionRecipeId: string,
+  ) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/extraction-revisions/${revisionNo}/restore`,
+      jsonBody({ expected_extraction_recipe_id: expectedExtractionRecipeId }),
     ),
   getIngestionJob: (id: string) =>
     request<IngestionJob>(
