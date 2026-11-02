@@ -950,6 +950,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
             "- openssl",
             # 運用の道具（#1566）: 最新のコードの取得（platform/deploy/suite-pull.sh）と、長い作業を切れない端末で。
             "- git",
+            "run_with_retries 5 dnf -y install ca-certificates git",
+            "command -v git >/dev/null 2>&1",
             "- tmux",
         ],
         context="Compute bootstrap",
@@ -972,7 +974,7 @@ def _verify_bootstrap(bootstrap: str) -> None:
         raise AssertionError("the Agent uses the backend login; cloud-init must not write Basic authentication files")
     _require_in_order(
         bootstrap,
-        ["clone_or_update_repo ", "run_suite_init\n"],
+        ["ensure_bootstrap_dependencies\n", 'clone_or_update_repo "${application_git_url}"', "run_suite_init\n"],
         context="bootstrap order",
     )
 

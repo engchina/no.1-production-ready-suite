@@ -104,7 +104,8 @@ write_files:
     owner: "root:root"
     content: |
       #!/usr/bin/env bash
-      set -euo pipefail
+      # ERR trap を関数内にも引き継ぎ、依存の導入失敗を明示する。
+      set -Eeuo pipefail
 
       APP_ROOT="/u01/aipoc"
       # 3 製品（rag/ nl2sql/ agent/）と共有 platform（platform/）は同じ monorepo にあるため、clone は1回だけ行う。
@@ -132,6 +133,19 @@ write_files:
           sleep $((attempt * 5))
         done
         return "$${status}"
+      }
+
+      ensure_bootstrap_dependencies() {
+        # cloud-init の package 導入が失敗しても runcmd は実行されるため、clone の前に確認する。
+        if command -v git >/dev/null 2>&1; then
+          return 0
+        fi
+        log "Git is unavailable; installing bootstrap dependencies before repository access."
+        run_with_retries 5 dnf -y install ca-certificates git
+        if ! command -v git >/dev/null 2>&1; then
+          log "Git is still unavailable after installing bootstrap dependencies."
+          return 127
+        fi
       }
 
       clone_or_update_repo() {
@@ -166,6 +180,7 @@ write_files:
         APP_ROOT="$${APP_ROOT}" bash "$${init_script}"
       }
 
+      ensure_bootstrap_dependencies
       clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${SUITE_REPO_DIR}"
       run_suite_init
       log "Deployment finished. See /var/log/suite-init.log."

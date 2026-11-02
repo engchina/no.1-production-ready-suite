@@ -526,6 +526,9 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   （再起動は要らない。#1844）。結果に「再起動が必要なプロセスがあります」と出たら、挙げたプロセス（別に動かす
   dispatcher・読み直せなかった backend）を再起動する（backend は `suite-restart.sh --no-build`）。CLI で適用したときは、
   動いている backend を再起動する（`suite-restart.sh` は再起動まで行う）。
+- **初回配備で `git: command not found` になる場合**: bootstrap は clone／fetch の前に Git を確認し、未導入なら `dnf -y install ca-certificates git` を再試行付きで実行します。導入に失敗した場合はそこで停止します。
+  旧 bootstrap で停止済みの Compute は、`sudo dnf -y install ca-certificates git` が成功した後、`sudo bash /u01/aipoc/bootstrap-suite.sh` で再開できます。VM を作り直す必要はありません。
+  最初に cloud-init の package 導入が失敗した原因は `/var/log/cloud-init.log`・`/var/log/cloud-init-output.log`・`/var/log/dnf.log` で確認してください。cloud-init の終了表示だけでは、製品の配備完了を示しません。
 - **配備が途中で失敗したときのやり直し**（#1994）: 先に `sudo tail -n 50 /var/log/cloud-init-custom.log` と `/var/log/suite-init.log` で止まった所を確かめ、
   原因（`/` の空き〔`df -h /`。#1984〕・ネットワーク・ADB など）を直してから、repo（`/u01/aipoc/no.1-production-ready-suite`）があれば
   `sudo .../platform/deploy/suite-update.sh`（最新の main を取得して再配備）か `suite-restart.sh`（今のコードで再配備）を実行する。
