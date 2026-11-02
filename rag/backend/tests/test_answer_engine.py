@@ -988,7 +988,9 @@ async def test_answer_engine_attaches_evidence_images_for_vision_answer_model(
 
     loaded: list[str] = []
 
-    async def fake_source(oracle: object, document_id: str) -> bytes:
+    async def fake_source(
+        oracle: object, document_id: str, *args: object, **kwargs: object
+    ) -> bytes:
         loaded.append(document_id)
         return _pdf_with_figure()
 
@@ -1061,7 +1063,9 @@ async def test_answer_engine_never_attaches_images_for_text_answer_model(
 
     import app.rag.answer_engine as engine_module
 
-    async def fail_source(oracle: object, document_id: str) -> bytes:
+    async def fail_source(
+        oracle: object, document_id: str, *args: object, **kwargs: object
+    ) -> bytes:
         raise AssertionError("画像を読めない回答のモデルでは原本を読まない")
 
     def fail_multimodal(*args: Any, **kwargs: Any) -> Any:
@@ -3556,7 +3560,9 @@ async def test_evidence_images_are_cropped_once_per_chunk_in_an_answer(
         crops.append(page)
         return b"\x89PNG fake"
 
-    async def fake_source(oracle: object, document_id: str) -> bytes:
+    async def fake_source(
+        oracle: object, document_id: str, *args: object, **kwargs: object
+    ) -> bytes:
         return b"%PDF"
 
     monkeypatch.setattr(engine_module, "crop_png", fake_crop)

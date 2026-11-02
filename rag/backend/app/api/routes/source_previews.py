@@ -91,7 +91,9 @@ async def _readable_target(claims: SourcePreviewClaims) -> tuple[Any, Any]:
         current_chunk_set = stored.strip() or None if isinstance(stored, str) else None
         if current_chunk_set != claims.chunk_set_id:
             raise signed_stale_error(_STALE_MESSAGE)
-        return await mcp_tools.preview_document(oracle, claims.document_id, claims.recipe_id)
+        return await mcp_tools.preview_document(
+            oracle, claims.document_id, claims.recipe_id, chunk_set_id=claims.chunk_set_id
+        )
     except McpToolError as exc:
         if exc.code == mcp_tools.SOURCE_STALE_CODE:
             raise signed_stale_error(_STALE_MESSAGE) from None

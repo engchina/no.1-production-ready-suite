@@ -7,10 +7,16 @@ PDF / 画像を開く・描くのは ``app.rag.pdf_backend``(PDFium と Pillow�
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
+
+from pydantic import ValidationError
+from rag_parser_core.preprocess import SourceDerivation
 
 from app.clients.object_storage import ObjectStorageClient
 from app.clients.oracle import OracleClient
+from app.rag.ingestion import preprocess_artifact_from_derivation
 from app.rag.pdf_backend import PageSource, SourceOpenError, intersect, open_source, png_bytes
 from app.schemas.document import DocumentPreprocessArtifact
 
@@ -24,12 +30,57 @@ class DocumentSourceNotFoundError(LookupError):
     """文書、またはその原本ファイルが見つからない。"""
 
 
+def _artifact_from_derivation(detail: Any, raw: object) -> DocumentPreprocessArtifact | None:
+    if not isinstance(raw, Mapping) or not raw:
+        return None
+    try:
+        derivation = SourceDerivation.model_validate(raw)
+    except ValidationError:
+        return None
+    return preprocess_artifact_from_derivation(
+        derivation,
+        original_file_name=detail.file_name,
+        original_object_storage_path=detail.object_storage_path,
+        fallback_content_type=detail.content_type or "application/octet-stream",
+    )
+
+
+def prepared_artifact_from_extraction(
+    detail: Any, extraction: Mapping[str, Any]
+) -> DocumentPreprocessArtifact | None:
+    """抽出が解析したファイル。系譜が無ければ None。
+
+    bbox と要素の位置はこのファイルの座標で、レシピの行の artifact は再処理の開始で新しいファイルを
+    指す。版の根拠はレシピの行ではなくここから読む（#4166）。
+    """
+    artifacts = extraction.get("parser_artifacts")
+    raw = artifacts.get("source_derivation") if isinstance(artifacts, Mapping) else None
+    return _artifact_from_derivation(detail, raw)
+
+
+async def chunk_set_prepared_artifact(
+    oracle: OracleClient, detail: Any, document_id: str, chunk_set_id: str | None
+) -> DocumentPreprocessArtifact | None:
+    """chunk_set の抽出が解析したファイル。抽出か系譜が無ければ None（#4166）。"""
+    if not chunk_set_id:
+        return None
+    raw = await oracle.chunk_set_source_derivation(
+        document_id=document_id, chunk_set_id=chunk_set_id
+    )
+    return _artifact_from_derivation(detail, raw)
+
+
 async def load_parsed_source(
-    oracle: OracleClient, document_id: str, recipe_id: str | None = None
+    oracle: OracleClient,
+    document_id: str,
+    recipe_id: str | None = None,
+    *,
+    chunk_set_id: str | None = None,
 ) -> bytes:
     """解析に使ったファイル(ファイル準備後の artifact があればそれ、無ければ原本)を返す。
 
-    ``recipe_id`` を渡すと、その処理レシピのファイル準備後の artifact を使う(レシピごとに
+    ``chunk_set_id`` を渡すと、その版が解析したファイルを読む（#4166）。版の系譜が無いときと
+    ``chunk_set_id`` が無いときは ``recipe_id`` の処理レシピの artifact を使う(レシピごとに
     解析したファイルが違うため、bbox はそのファイルの座標。#1282)。レシピが無ければ文書の
     artifact に戻す。参照パスが不正な場合は ValueError(ObjectStorageClient の契約)。
     """
@@ -42,6 +93,9 @@ async def load_parsed_source(
         if recipe is not None:
             raw = recipe.get("preprocess_artifact")
             artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
+    artifact = (
+        await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id) or artifact
+    )
     path = (
         artifact.object_storage_path
         if artifact is not None and artifact.object_storage_path

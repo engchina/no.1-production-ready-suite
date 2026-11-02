@@ -217,13 +217,7 @@ async def test_document_job_transient_db_error_requeues_and_restores_document(
         _ = args, kwargs
         raise _dead_session_error()
 
-    async def noop(*args: object, **kwargs: object) -> None:
-        _ = args, kwargs
-
-    monkeypatch.setattr(documents_route, "_ingest_existing_document", fail)
-    monkeypatch.setattr(documents_route, "_chunk_reviewed_document", fail)
-    monkeypatch.setattr(documents_route, "_index_reviewed_document", fail)
-    monkeypatch.setattr(documents_route, "_reset_document_outputs_for_extract", noop)
+    monkeypatch.setattr(documents_route, "_materialize_experiment_candidate", fail)
 
     await documents_route._run_ingestion_job("job-doc-1")
 

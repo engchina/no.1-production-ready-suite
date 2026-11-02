@@ -18,7 +18,8 @@ import sys
 from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -33,7 +34,6 @@ from app.rag.request_context import (
     current_audit_request_context,
 )
 from app.schemas.document import (
-    DocumentDetail,
     FileStatus,
     IngestionJob,
     IngestionJobLease,
@@ -925,7 +925,7 @@ def test_job_runner_stops_on_sigterm_without_writing_job_state(
 
 
 class _Pipeline:
-    """``_ingest_existing_document`` の代わり: release まで待ち、成功するか ``error`` を投げる。"""
+    """レシピの隔離構築の代わり: release まで待ち、成功するか ``error`` を投げる。"""
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -933,18 +933,13 @@ class _Pipeline:
         self.error: Exception | None = None
         self.check_cancel = False
         self.cancel_results: list[bool] = []
-        self.auto_advanced: list[str] = []
+        self.success_recorded: list[str] = []
         self.dispatched: list[str] = []
 
     async def __call__(
-        self,
-        document_id: str,
-        *,
-        force: bool,
-        use_prepared_artifact: bool,
-        cancel_checker: object = None,
-    ) -> DocumentDetail:
-        _ = document_id, force, use_prepared_artifact
+        self, oracle: object, job: IngestionJob, *, cancel_checker: object = None
+    ) -> documents._RecipeJobResult:
+        _ = oracle
         self.started.set()
         await self.release.wait()
         if self.check_cancel and callable(cancel_checker):
@@ -954,12 +949,9 @@ class _Pipeline:
                 raise IngestionCancelledError("取り消されました。")
         if self.error is not None:
             raise self.error
-        # 自動進行(次工程の投入)は差し替えるため、中身は使わない。
-        return cast(DocumentDetail, object())
-
-    async def auto_advance(self, job: IngestionJob, detail: DocumentDetail) -> None:
-        _ = detail
-        self.auto_advanced.append(job.id)
+        # 成功の記録は job を SUCCEEDED にできた後にだけ呼ばれる。
+        outcome = SimpleNamespace(record=lambda: self.success_recorded.append(job.id))
+        return documents._RecipeJobResult(success_outcome=cast(Any, outcome))
 
     def dispatch(self, job_id: str, *, force: bool = False) -> None:
         _ = force
@@ -971,13 +963,8 @@ def pipeline(monkeypatch: pytest.MonkeyPatch, store: _LeaseQueueStore) -> _Pipel
     install_language_release_stub(monkeypatch)
     pipeline = _Pipeline()
 
-    async def reset_outputs(*args: object, **kwargs: object) -> None:
-        _ = args, kwargs
-
     monkeypatch.setattr(documents, "OracleClient", lambda: store)
-    monkeypatch.setattr(documents, "_ingest_existing_document", pipeline)
-    monkeypatch.setattr(documents, "_reset_document_outputs_for_extract", reset_outputs)
-    monkeypatch.setattr(documents, "_enqueue_auto_advance_job", pipeline.auto_advance)
+    monkeypatch.setattr(documents, "_materialize_experiment_candidate", pipeline)
     monkeypatch.setattr(documents, "_dispatch_ingestion_job", pipeline.dispatch)
     return pipeline
 
@@ -1044,7 +1031,7 @@ async def test_stale_run_result_does_not_overwrite_reclaimed_job(
         await asyncio.wait_for(run_a, timeout=5)
 
     _assert_reclaimed_job_untouched(store, "job-stale", "doc-stale")
-    assert pipeline.auto_advanced == []
+    assert pipeline.success_recorded == []
     assert pipeline.dispatched == []
     assert _stale_result_discarded(caplog, job_id="job-stale", lease_owner="worker-a")
 
@@ -1180,7 +1167,7 @@ async def test_run_finishes_job_it_still_holds(
     await asyncio.wait_for(run, timeout=5)
 
     assert store.job("job-ok").status == IngestionJobStatus.SUCCEEDED
-    assert pipeline.auto_advanced == ["job-ok"]
+    assert pipeline.success_recorded == ["job-ok"]
 
 
 async def test_run_without_lease_fails_job_as_before(

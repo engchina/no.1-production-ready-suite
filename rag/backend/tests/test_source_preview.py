@@ -98,6 +98,7 @@ class _PreviewOracle:
     visible: dict[tuple[str, str], RetrievedChunk] = {}
     stale: set[tuple[str, str]] = set()
     documents: dict[str, Any] = {}
+    derivations: dict[tuple[str, str], dict[str, object]] = {}
 
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
         allowed = current_audit_request_context().allowed_knowledge_base_ids
@@ -114,6 +115,11 @@ class _PreviewOracle:
 
     async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: list[str]) -> dict[str, str]:
         return {}
+
+    async def chunk_set_source_derivation(
+        self, *, document_id: str, chunk_set_id: str
+    ) -> dict[str, object] | None:
+        return self.derivations.get((document_id, chunk_set_id))
 
     async def get_document(self, document_id: str) -> Any:
         return self.documents.get(document_id)
@@ -171,6 +177,7 @@ def previews(monkeypatch: MonkeyPatch) -> type[_PreviewOracle]:
     }
     _PreviewOracle.stale = set()
     _PreviewOracle.documents = _documents()
+    _PreviewOracle.derivations = {}
     _Storage.files = {
         _PDF_PATH: _figure_pdf(),
         _PREPARED_PATH: _figure_pdf(),
@@ -427,6 +434,30 @@ def test_page_and_content_return_private_responses(
     assert text.status_code == 200
     assert text.headers["content-type"].startswith("application/json")
     assert text.content.decode() == '{"合成": "本文"}'
+
+
+def test_signed_preview_reads_the_file_of_the_evidence_version(
+    auth: ProductionAuth, previews: type[_PreviewOracle]
+) -> None:
+    """再処理でレシピのファイルが変わっても、根拠の版が解析したファイルを開く（#4166）。"""
+    old_path = "docs/d2/r-1/old-prepared.pdf"
+    _Storage.files[old_path] = _figure_pdf()
+    previews.derivations[("d2", "cs-1")] = {
+        "derivation_id": "dv-old",
+        "preprocess_profile": "office_to_pdf",
+        "converted": True,
+        "converter_name": "stub",
+        "derived_object_path": old_path,
+        "derived_content_type": "application/pdf",
+    }
+    user = auth.user_with_permissions("searcher", ["menu.search"], knowledge_base_ids=["kb-1"])
+    preview = _preview(user.user_uuid, "d2", "c2")
+    _Storage.reads = []
+
+    assert client.get(preview["content_path"]).status_code == 200
+    assert client.get(f"{_page_path(preview, 1)}?dpi=72").status_code == 200
+
+    assert set(_Storage.reads) == {old_path}
 
 
 def test_urls_are_bound_to_user_and_recheck_permission_and_version(

@@ -339,7 +339,7 @@ class _RecordingStore:
     async def document_chunk_sets(self, document_id: str) -> list[ChunkSetChunks]:
         return list(self.chunk_sets)
 
-    async def replace_document_section_maps(
+    async def replace_chunk_set_section_maps(
         self, document_id: str, maps: Sequence[SectionChunkMap]
     ) -> None:
         self.replaced.append((document_id, list(maps)))

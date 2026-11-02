@@ -149,6 +149,7 @@ from app.rag.document_crop import (
     BoundedCrop,
     CropTooLargeError,
     DocumentSourceNotFoundError,
+    chunk_set_prepared_artifact,
     crop_png_bounded,
     load_parsed_source,
     page_sizes,
@@ -3502,7 +3503,10 @@ async def crop_figure(
         )
     try:
         source = await load_parsed_source(
-            oracle, chunk.document_id, _metadata_str(metadata, "recipe_id")
+            oracle,
+            chunk.document_id,
+            _metadata_str(metadata, "recipe_id"),
+            chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
         )
     except (DocumentSourceNotFoundError, ValueError) as exc:
         raise McpToolError(
@@ -4157,9 +4161,14 @@ def _figure_url(
 
 
 async def preview_document(
-    oracle: OracleClient, document_id: str, recipe_id: str | None
+    oracle: OracleClient,
+    document_id: str,
+    recipe_id: str | None,
+    *,
+    chunk_set_id: str | None = None,
 ) -> tuple[Any, DocumentPreprocessArtifact | None]:
-    """プレビューする文書と、処理後のファイル（処理レシピの根拠はそのレシピの処理後のファイル）。
+    """プレビューする文書と、処理後のファイル（根拠の版が解析したファイル。版の系譜が無ければ
+    処理レシピの今のファイル）。
 
     呼ぶ前に、根拠の chunk が検索と同じ見え方の条件で見えることを確かめておく
     （``readable_chunk``）。
@@ -4174,7 +4183,8 @@ async def preview_document(
             raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の処理レシピが見つかりません。")
         raw = row.get("preprocess_artifact")
         artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
-    return detail, artifact
+    versioned = await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id)
+    return detail, versioned or artifact
 
 
 async def preview_file(
@@ -4210,7 +4220,12 @@ async def _source_preview(
             status=403,
         )
     recipe_id = _metadata_str(metadata, "recipe_id")
-    detail, artifact = await preview_document(oracle, chunk.document_id, recipe_id)
+    detail, artifact = await preview_document(
+        oracle,
+        chunk.document_id,
+        recipe_id,
+        chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
+    )
     file_name = str(getattr(detail, "file_name", None) or chunk.file_name or chunk.document_id)
     kind, variant = preview_kind(file_name, artifact)
     try:
