@@ -66,7 +66,7 @@ SUITE_SITE_NAME="production-ready-suite"
 # AppStream の nginx の module の stream（1.24 系。CI の Suite / Oracle Linux 9 も同じ stream で確かめる）。
 NGINX_MODULE_STREAM="1.24"
 # suite-init.sh が dnf で入れる OS の package（製品の init_script.sh は製品が使うものだけを入れる）。
-SUITE_OS_PACKAGES=(firewalld git nginx openssl policycoreutils-python-utils tar unzip)
+SUITE_OS_PACKAGES=(ca-certificates firewalld git nginx openssl policycoreutils-python-utils tar tmux unzip)
 TLS_RENEW_UNIT="production-ready-suite-tls-renew"
 # 時間帯（#3255）: PLATFORM_TIMEZONE が無いときの既定（backend の pr_backend_core.timezones・Terraform の timezone と同じ）。
 SUITE_DEFAULT_TIMEZONE="UTC"

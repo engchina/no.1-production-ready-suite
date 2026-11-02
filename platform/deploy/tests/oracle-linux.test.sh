@@ -44,6 +44,11 @@ mapfile -t cloud_init_packages < <(
 mapfile -t suite_packages < <(
   SUITE_INIT_TEST_MODE=true bash -c 'source "$1/platform/deploy/suite-init.sh"; printf "%s\n" "${SUITE_OS_PACKAGES[@]}"; echo "MODULE nginx:${NGINX_MODULE_STREAM}"' _ "${repo}"
 )
+# cloud-init の導入に失敗しても、共通の再配備で必須依存を補完する。
+for required_package in ca-certificates git tmux; do
+  printf '%s\n' "${suite_packages[@]}" | grep -qxF "${required_package}" \
+    || fail "suite-init の必須 package が無い: ${required_package}"
+done
 mapfile -t nl2sql_packages < <(
   NL2SQL_INIT_TEST_MODE=true bash -c 'source "$1/nl2sql/init_script.sh"; printf "%s\n" "${SYSTEM_PACKAGES[@]}"' _ "${repo}"
 )
@@ -104,7 +109,7 @@ echo "oracle-linux: package の名前: pass"
 # ---------------------------------------------------------------- 2. command と構文
 
 # image にあり、スクリプトが入れずに使う command。
-for command_name in bash curl install mktemp runuser sha256sum stat timeout useradd; do
+for command_name in bash curl install mktemp rpm runuser sha256sum stat timeout useradd; do
   command -v "${command_name}" >/dev/null 2>&1 || fail "image に ${command_name} が無い"
 done
 for script in "${repo}"/platform/deploy/*.sh "${repo}"/rag/init_script.sh "${repo}"/rag/scripts/rag-systemd.sh \

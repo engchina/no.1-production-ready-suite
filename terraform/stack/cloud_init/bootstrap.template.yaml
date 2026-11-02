@@ -137,13 +137,17 @@ write_files:
 
       ensure_bootstrap_dependencies() {
         # cloud-init の package 導入が失敗しても runcmd は実行されるため、clone の前に確認する。
-        if command -v git >/dev/null 2>&1; then
+        if command -v git >/dev/null 2>&1 && rpm -q ca-certificates >/dev/null 2>&1; then
           return 0
         fi
-        log "Git is unavailable; installing bootstrap dependencies before repository access."
+        log "Git or CA certificates are unavailable; installing bootstrap dependencies before repository access."
         run_with_retries 5 dnf -y install ca-certificates git
         if ! command -v git >/dev/null 2>&1; then
           log "Git is still unavailable after installing bootstrap dependencies."
+          return 127
+        fi
+        if ! rpm -q ca-certificates >/dev/null 2>&1; then
+          log "CA certificates are still unavailable after installing bootstrap dependencies."
           return 127
         fi
       }

@@ -951,7 +951,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
             # 運用の道具（#1566）: 最新のコードの取得（platform/deploy/suite-pull.sh）と、長い作業を切れない端末で。
             "- git",
             "run_with_retries 5 dnf -y install ca-certificates git",
-            "command -v git >/dev/null 2>&1",
+            "command -v git >/dev/null 2>&1 && rpm -q ca-certificates >/dev/null 2>&1",
+            "if ! rpm -q ca-certificates >/dev/null 2>&1; then",
             "- tmux",
         ],
         context="Compute bootstrap",

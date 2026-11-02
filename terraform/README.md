@@ -527,7 +527,7 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   （再起動は要らない。#1844）。結果に「再起動が必要なプロセスがあります」と出たら、挙げたプロセス（別に動かす
   dispatcher・読み直せなかった backend）を再起動する（backend は `suite-restart.sh --no-build`）。CLI で適用したときは、
   動いている backend を再起動する（`suite-restart.sh` は再起動まで行う）。
-- **初回配備で `git: command not found` になる場合**: bootstrap は clone／fetch の前に Git を確認し、未導入なら `dnf -y install ca-certificates git` を再試行付きで実行します。導入に失敗した場合はそこで停止します。
+- **初回配備で `git: command not found` になる場合**: bootstrap は clone／fetch の前に Git と `ca-certificates` の RPM を確認し、どちらかが未導入なら `dnf -y install ca-certificates git` を再試行付きで実行します。導入に失敗した場合はそこで停止します。
   旧 bootstrap で停止済みの Compute は、`sudo dnf -y install ca-certificates git` が成功した後、`sudo bash /u01/aipoc/bootstrap-suite.sh` で再開できます。VM を作り直す必要はありません。
   最初に cloud-init の package 導入が失敗した原因は `/var/log/cloud-init.log`・`/var/log/cloud-init-output.log`・`/var/log/dnf.log` で確認してください。cloud-init の終了表示だけでは、製品の配備完了を示しません。
 - **配備が途中で失敗したときのやり直し**（#1994）: 先に `sudo tail -n 50 /var/log/cloud-init-custom.log` と `/var/log/suite-init.log` で止まった所を確かめ、
@@ -536,7 +536,9 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   repo の clone の前に止まったときだけ `sudo bash /u01/aipoc/bootstrap-suite.sh` を実行する（repo があれば所有者〔opc〕で更新してから
   `suite-init.sh` を実行する）。stack の再 apply はしない（cloud-init の user_data が変わると Compute が作り直される）。
 - 2 つのスクリプトは lock を共有し、同時の実行を防ぐ。log は `/var/log/suite-ops.log`（再配備の詳細は `/var/log/suite-init.log`）。
-- cloud-init は `git` と `tmux` を入れる。
+- `git`・`tmux`・`ca-certificates` は cloud-init と共通の `suite-init.sh` で導入します。初回の package 導入に失敗しても、Git と CA は HTTPS の clone 前に bootstrap が再試行して補完し、tmux は共通初期化で補完します。通常の `suite-update.sh` も共通初期化を実行するため、既存 Compute の tmux の欠落を補完できます。更新の取得前から Git／CA が欠けている場合は、先に `sudo dnf -y install ca-certificates git` を実行してください。
+  `tmux: command not found` の場合は `rpm -q tmux ca-certificates` と `command -v git tmux` で確認してください。tmux だけを先に使いたい場合は `sudo dnf -y install tmux`、通常の再配備は repo の直下で `sudo -n ./platform/deploy/suite-update.sh` を実行します。初回に未導入となった理由は cloud-init／dnf のログで切り分け、未導入だけで配備全体の失敗と断定しません。
+  `curl` は Oracle Linux 9 image の `curl-minimal` を使い、衝突する `curl` package を追加しません。`dos2unix` は任意の改行正規化（未導入でも処理継続）で、共通の必須依存へは追加しません。
 - 製品の `init_script.sh` は backend の `/api/health` を 3 秒ごとに最大 300 秒待ち（`SUITE_BACKEND_HEALTH_TIMEOUT_SECONDS`）、15 秒ごとに経過・状態・
   再起動の回数を出す。service が `failed` になるか再起動を 3 回繰り返したら、すぐに status と journal を出して失敗にする（#1642）。
 - OS の再起動では、enabled の unit（`WantedBy=multi-user.target`）と Nginx が自動で起動する。

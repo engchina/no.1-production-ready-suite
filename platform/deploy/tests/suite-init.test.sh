@@ -174,7 +174,7 @@ prepare_case() {
   install_os_packages >/dev/null
   grep -qx 'dnf -y module enable nginx:1.24' "${calls}" || fail "Nginx の module の stream を固定しない"
   grep -qx "dnf -y install ${SUITE_OS_PACKAGES[*]}" "${calls}" || fail "OS の package を dnf で入れない"
-  for name in nginx firewalld policycoreutils-python-utils; do
+  for name in ca-certificates git tmux nginx firewalld policycoreutils-python-utils; do
     printf ' %s ' "${SUITE_OS_PACKAGES[*]}" | grep -qF " ${name} " || fail "${name} を入れない"
   done
   # 既定（HTTPS on・80 / 443）: 443 だけを開け、80 は開けない（#1638）。http_port_t の追加は要らない。
