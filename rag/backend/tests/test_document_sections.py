@@ -98,6 +98,48 @@ def test_sections_come_from_extraction_until_edited(oracle: FakeSectionsOracle) 
     assert {s["origin"] for s in data["sections"]} == {"extraction"}
 
 
+def test_sections_return_every_navigation_summary(oracle: FakeSectionsOracle) -> None:
+    """一覧と同じく、要約も 25 件で切らずに全章節を返す(#4094)。"""
+    oracle.navigation = [
+        DocumentNavigationNode(
+            section_id=f"nav-{index}",
+            title=f"合成の章節 {index}",
+            depth=1,
+            page_start=1,
+            page_end=1,
+            summary=f"合成の要約 {index}" if index != 2 else None,
+        )
+        for index in range(1, 31)
+    ]
+
+    data = client.get(URL).json()["data"]
+
+    assert len(data["sections"]) == 30
+    assert len(data["summaries"]) == 29
+    assert data["summaries"]["nav-30"] == "合成の要約 30"
+    assert "nav-2" not in data["summaries"]
+    # 章節の行には要約を持たせない(保存の要求の形を変えない)。
+    assert all("summary" not in section for section in data["sections"])
+
+    # 保存の応答でも返し、保存の要求は行に余分な項目を受けない。
+    saved = client.put(URL, json={"sections": data["sections"], "base_revision": None}).json()
+    assert saved["data"]["source"] == "manual"
+    assert saved["data"]["summaries"] == data["summaries"]
+    rejected = client.put(
+        URL,
+        json={"sections": [{**data["sections"][0], "summary": "x"}], "base_revision": 1},
+    )
+    assert rejected.status_code == 422
+
+
+def test_sections_summaries_are_empty_without_extraction(oracle: FakeSectionsOracle) -> None:
+    async def no_artifact(**_: Any) -> None:
+        return None
+
+    oracle.get_document_extraction_artifact = no_artifact  # type: ignore[method-assign,assignment]
+    assert client.get(URL).json()["data"]["summaries"] == {}
+
+
 def test_saved_sections_are_shared_and_refresh_unedited_pages(
     oracle: FakeSectionsOracle,
 ) -> None:

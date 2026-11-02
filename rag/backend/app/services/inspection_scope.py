@@ -10,6 +10,8 @@ from typing import Any
 from charset_normalizer import from_bytes
 from rag_parser_core.json_source_map import raw_string_ranges
 
+from app.services.json_source_rebuild import payload_with_source_map
+
 
 def decode_inspection_text(data: bytes) -> str:
     """既存の原本閲覧と同じ、UTF-8 優先の文字コード検出を使う。"""
@@ -29,10 +31,13 @@ def source_inspection(
     element_id: str | None = None,
     expected_revision: str | None = None,
 ) -> dict[str, Any]:
-    """Unicode codepoint の半開区間。原本対応の無い版は推測しない。"""
+    """Unicode codepoint の半開区間。原本対応は記録か決定的な再計算だけを使い、推測しない。"""
     revision = hashlib.sha256(data).hexdigest()
     text = decode_inspection_text(data)
     starts: dict[str, int] = {}
+    limit = max(1, min(8192, limit))
+    if expected_revision is None or expected_revision == revision:
+        payload = payload_with_source_map(payload, data)
     artifacts = payload.get("parser_artifacts") or {}
     mapping = artifacts.get("json_source_map") if isinstance(artifacts, Mapping) else None
     mapping = mapping if isinstance(mapping, Mapping) else {}
@@ -64,10 +69,17 @@ def source_inspection(
                 status = "exact" if starts else "unrecorded"
             except (KeyError, ValueError, TypeError, IndexError, RecursionError, UnicodeError):
                 status, starts = "unresolved", {}
+    if status == "unrecorded" and len(text) <= limit:
+        # 原本全体が 1 つの表示範囲なら、位置が無くても全要素がこの範囲に所属する（#4094）。
+        starts = {
+            str(element["element_id"]): 0
+            for element in payload.get("elements") or []
+            if element.get("element_id")
+        }
+        status = "exact" if starts else status
     # 短い構造ノードの途中を避ける。長大ノードだけを有限の文字窓に分ける。
     boundaries = sorted(set(starts.values()))
     cuts = [0]
-    limit = max(1, min(8192, limit))
     while cuts[-1] + limit < len(text):
         target = cuts[-1] + limit
         i = bisect.bisect_right(boundaries, target) - 1

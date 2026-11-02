@@ -379,8 +379,9 @@ function extractedSections(): SectionRow[] {
 }
 
 async function mockDocumentSections(page: Page) {
-  const state: { sections: SectionRow[]; revision: number | null; saved: unknown[] } = {
+  const state: { sections: SectionRow[]; summaries: Record<string, string>; revision: number | null; saved: unknown[] } = {
     sections: extractedSections(),
+    summaries: {},
     revision: null,
     saved: [],
   };
@@ -389,6 +390,7 @@ async function mockDocumentSections(page: Page) {
       document_id: "doc-1",
       source: state.revision === null ? "extraction" : "manual",
       sections: state.sections,
+      summaries: state.summaries,
       extraction_section_count: 3,
       page_count: 3,
       revision: state.revision,
@@ -1221,6 +1223,7 @@ for (const { summarized, ruleSummary, staleRules } of [{ summarized: false, rule
       await fulfillDocumentInspection(route, { json: {
         data: { document_id: "doc-1", source: "extraction", rules_mode: mode, summary_rules_match: staleRules ? false : null,
           sections: [{ id, title: parser ? "解析見出し A" : "1. 節 A", level: 1, page_start: 1, page_end: 1, origin: "extraction", source_section_id: id, edited: false }],
+          summaries: summarized ? { [ruleSummary ? "rule-a" : "nav-a"]: "保存済みの合成要約 A" } : {},
           extraction_section_count: 1, page_count: 1, revision: null, updated_at: null },
         error_messages: [], warning_messages: [],
       } });
@@ -1257,20 +1260,43 @@ for (const { summarized, ruleSummary, staleRules } of [{ summarized: false, rule
 }
 
 
-test("長い章節ナビゲーションは共通の高さで止まり、編集も内部スクロールできる", { tag: "@responsive" }, async ({ page }) => {
-  await mockDocumentDetail(page);
+test("長い章節ナビゲーションは共通の高い上限で止まり、続きの操作なしで全章節の要約を出し、編集も内部スクロールできる", { tag: "@responsive" }, async ({ page }) => {
+  const elements = Array.from({ length: 30 }, (_, i) => ({ element_id: `long-${i}`, kind: "text", text: `合成要素 ${i + 1}`, order: i, page_number: 1 }));
+  await mockDocumentDetail(page, { extraction: { raw_text: "合成の本文", elements, pages: [], tables: [], fields: [], assets: [] } });
+  const extractionViews: URLSearchParams[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/extraction-view")) extractionViews.push(url.searchParams);
+  });
   const state = await mockDocumentSections(page);
   state.sections = Array.from({ length: 80 }, (_, i) => ({
     id: `nav-long-${i}`, title: `合成の章節 ${i + 1}`, level: 1, page_start: 1, page_end: 1,
     origin: "extraction", source_section_id: `nav-long-${i}`, edited: false,
   }));
+  state.summaries = Object.fromEntries(state.sections.map((section, i) => [section.id, `合成の要約 ${i + 1}`]));
   const panel = await openSections(page);
   const list = panel.getByTestId("sections-navigation-scroll");
   await expect(list).toBeVisible();
+  // 共通の高い上限（構造化要素と同じ bounded-scroll-area-lg）。手書きの高さにしない。
   const dimensions = await list.evaluate(node => ({ height: node.clientHeight, content: node.scrollHeight,
-    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) }));
+    expected: Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68)),
+    overflowY: getComputedStyle(node).overflowY, gutter: getComputedStyle(node).scrollbarGutter }));
   expect(Math.abs(dimensions.height - dimensions.expected)).toBeLessThanOrEqual(1);
   expect(dimensions.content).toBeGreaterThan(dimensions.height);
+  expect(dimensions.overflowY).toBe("auto");
+  expect(dimensions.gutter).toBe("stable");
+  // 一覧は GET /sections の全件なので、続きの操作を出さず、26 件目以降の要約も最初から出す。
+  const inspector = page.getByTestId("document-inspector-pane");
+  await expect(inspector.getByRole("button", { name: "この範囲の続きを読む", exact: true })).toHaveCount(0);
+  await expect(inspector).not.toContainText("この表示範囲内");
+  for (const n of [1, 26, 80]) await expect(list.getByText(`合成の要約 ${n}`, { exact: true })).toBeAttached();
+  await expect.poll(() => extractionViews.length).toBeGreaterThan(0);
+  expect(extractionViews.filter(params => params.get("mode") === "navigation")).toHaveLength(0);
+  // 右ペインは左のプレビューの高さに収まり、はみ出した分はタブの内容の中でスクロールする。
+  const overflow = await page.locator("#inspector-panel-navigation").evaluate(node => node.getBoundingClientRect().bottom - node.closest('[data-testid="document-inspector-pane"]')!.getBoundingClientRect().bottom);
+  expect(overflow).toBeLessThanOrEqual(1);
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("sections-navigation-page.png") });
   await list.focus(); await list.press("End");
   await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
   await list.getByRole("button").last().scrollIntoViewIfNeeded();
@@ -1312,7 +1338,19 @@ test("本文・構造化要素・Chunk はプレビューの現在ページだ�
   await expect(inspector).toContainText("合成ページ 2 の本文"); await expect(inspector).not.toContainText("合成ページ 1 の本文");
   await page.getByRole("tab", {name: "構造化要素", exact: true}).click();
   await expect(inspector).toContainText("合成ページ 2 の本文"); await expect(inspector).not.toContainText("合成ページ 1 の本文");
+  const extractionViews: URLSearchParams[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/extraction-view")) extractionViews.push(url.searchParams);
+  });
   await page.getByRole("tab", {name: "章節ナビゲーション", exact: true}).click();
+  await expect(page.getByTestId("sections-navigation-scroll")).toBeVisible();
+  // 章節ナビゲーションのタブでは概要を 1 回読むだけで、ページが動いても読み直さない。
+  await expect.poll(() => extractionViews.map(params => params.get("mode"))).toEqual(["summary"]);
+  expect(extractionViews[0].has("page")).toBe(false);
+  await page.getByRole("button", {name: "次のページ", exact: true}).click();
+  await expect(page.getByTestId("preview-page-status")).toHaveText("3 / 3");
+  expect(extractionViews).toHaveLength(1);
   await page.getByTestId("sections-navigation-scroll").getByRole("button", {name: "第1章 総則（p.1–2）をプレビューで開く"}).click();
   await page.getByRole("tab", {name: "構造化要素", exact: true}).click();
   await expect(page.getByTestId("inspector-current-page")).toHaveText("表示中のページ: p.1");
@@ -1339,11 +1377,55 @@ test("構造化要素は共通の最大高さで内部スクロールする", { 
   expect(dimensions.content).toBeGreaterThan(dimensions.height);
   await list.focus(); await list.press("End");
   await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
-  await page.getByTestId("document-inspector-pane").getByRole("button", { name: "この範囲の続きを読む", exact: true }).click();
+  // 左の表示範囲の全部が届くので、続きの操作なしで 26 件目以降まで読める（#4094）。
+  await expect(page.getByTestId("document-inspector-pane").getByRole("button", { name: "この範囲の続きを読む", exact: true })).toHaveCount(0);
+  await expect(list.getByText("合成要素 26", {exact: true})).toBeAttached();
   await expect(list.getByText("合成要素 40", {exact: true})).toBeAttached();
   await list.getByText("合成要素 40", {exact: true}).scrollIntoViewIfNeeded();
   await expect(list.getByText("合成要素 40", {exact: true})).toBeInViewport();
   await list.screenshot({path: test.info().outputPath("structured-elements-scroll.png")});
+  await expectNoPageOverflow(page);
+});
+
+test("表示範囲の全部を読むとき、長い要素と多セルの表は共通の高さの中でスクロールし横にあふれない", { tag: "@responsive" }, async ({ page }) => {
+  const unbroken = "合成の改行なし本文".repeat(800);
+  const elements = [
+    {element_id: "long-element", kind: "text", text: `${unbroken}合成の長い要素の末尾`, order: 0, page_number: 1},
+    ...Array.from({ length: 3 }, (_, i) => ({element_id: `short-${i}`, kind: "text", text: `合成の短い要素 ${i + 1}`, order: i + 1, page_number: 1})),
+  ];
+  const cells = Array.from({ length: 300 }, (_, i) => ({row: Math.floor(i / 6), col: i % 6, row_span: 1, col_span: 1, text: `合成セル ${i + 1}`}));
+  await mockDocumentDetail(page, { extraction: { raw_text: `${unbroken}合成の本文の末尾`, elements, pages: [], fields: [], assets: [],
+    tables: [{table_id: "table-many", caption: "合成の表", page_number: 1, element_id: "long-element", cells}] } });
+  await page.goto("/documents/doc-1");
+  const inspector = page.getByTestId("document-inspector-pane");
+  await expect(inspector).toContainText("合成の本文の末尾");
+  await expectNoHorizontalOverflow(page);
+  await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
+  const heightLimit = () => Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68));
+  const limit = await page.evaluate(heightLimit);
+  for (const [testId, last] of [["structured-elements-scroll", "合成の短い要素 3"], ["extraction-table-cells-scroll", "合成セル 295"]] as const) {
+    const region = inspector.getByTestId(testId);
+    await region.scrollIntoViewIfNeeded();
+    const box = await region.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight, width: node.clientWidth, contentWidth: node.scrollWidth}));
+    expect(Math.abs(box.height - limit)).toBeLessThanOrEqual(1);
+    expect(box.content).toBeGreaterThan(box.height);
+    expect(box.contentWidth).toBeLessThanOrEqual(box.width + 1);
+    await region.focus();
+    await region.press("End");
+    await expect.poll(() => region.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    await expect(region.getByText(last, {exact: true})).toBeInViewport();
+    await region.screenshot({path: test.info().outputPath(`${testId}.png`)});
+  }
+  // 列の多い表は表の中で横に動かす。末尾のセルにもキーボードで届く。
+  const lastCell = inspector.getByRole("button", { name: /合成セル 300/ });
+  await lastCell.focus();
+  await expect(lastCell).toBeInViewport();
+  // 続きの操作が無いので、長い要素の本文を省略しない。
+  const longText = inspector.getByTestId("structured-elements-scroll").getByText(/合成の長い要素の末尾/);
+  await expect(longText).not.toHaveClass(/line-clamp/);
+  await expect(longText).toContainText("合成の長い要素の末尾");
+  await expect(inspector.getByRole("button", { name: "この範囲の続きを読む", exact: true })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
   await expectNoPageOverflow(page);
 });
 
@@ -1388,19 +1470,22 @@ test("テキスト原本の範囲に3タブが追従し、26件目も範囲内�
   await page.route("**/recipes/recipe-1/extraction-view?**", async route => {
     const params = new URL(route.request().url()).searchParams;
     requests.push(params.toString());
-    const later = params.get("source_offset") === "8192", offset = Number(params.get("offset") || 0);
+    const later = params.get("source_offset") === "8192";
     const mode = params.get("mode");
     const rows = later ? [{element_id: "later", kind: "text", text: "別範囲の要素", order: 32}] : elements;
     const text = later ? "別範囲の本文" : "最初の範囲の本文";
-    await route.fulfill({json: {data: {payload: {raw_text: mode === "text" ? text : "", elements: mode === "structure" ? rows.slice(offset, offset + 25) : [], tables: [], pages: []},
-      total: mode === "text" ? text.length : rows.length, offset, limit: mode === "text" ? 8192 : 25, scope_status: "exact"}}});
+    const total = mode === "text" ? text.length : rows.length;
+    await route.fulfill({json: {data: {payload: {raw_text: mode === "text" ? text : "", elements: mode === "structure" ? rows : [], tables: [], pages: []},
+      total, offset: 0, limit: total, complete: true, scope_status: "exact"}}});
   });
   await page.route("**/recipes/recipe-1/chunk-window?**", async route => {
     const params = new URL(route.request().url()).searchParams;
     requests.push(params.toString());
     const later = params.get("source_offset") === "8192";
-    await route.fulfill({json: {data: {items: [{document_id: "doc-1", chunk_id: "sync-chunk", chunk_index: 0,
-      text: later ? "別範囲の引用" : "最初の範囲の引用", element_ids: [], metadata: {}}], total: 1, offset: 0, limit: 25, scope_status: "exact"}}});
+    const items = later
+      ? [{document_id: "doc-1", chunk_id: "sync-chunk", chunk_index: 0, text: "別範囲の引用", element_ids: [], metadata: {}}]
+      : Array.from({length: 31}, (_, i) => ({document_id: "doc-1", chunk_id: `sync-chunk-${i}`, chunk_index: i, text: `最初の範囲の引用 ${i + 1}`, element_ids: [], metadata: {}}));
+    await route.fulfill({json: {data: {items, total: items.length, offset: 0, limit: Math.max(items.length, 25), complete: true, scope_status: "exact"}}});
   });
   await page.goto("/documents/doc-1");
   const inspector = page.getByTestId("document-inspector-pane");
@@ -1408,10 +1493,17 @@ test("テキスト原本の範囲に3タブが追従し、26件目も範囲内�
   await expect(page.getByTestId("inspector-current-range")).toContainText("開始 1");
   await expect(inspector).toContainText("最初の範囲の本文");
   await inspector.getByRole("tab", {name: "構造化要素", exact: true}).click();
-  await expect(inspector).toContainText("合成同期要素 25");
-  await inspector.getByRole("button", {name: "この範囲の続きを読む", exact: true}).click();
+  // 範囲の全部が 1 回で届くので、続きの操作なしで 26 件目以降まで読める（#4094）。
   await expect(inspector).toContainText("合成同期要素 26");
+  await expect(inspector).toContainText("合成同期要素 31");
+  await expect(inspector.getByRole("button", {name: "この範囲の続きを読む", exact: true})).toHaveCount(0);
   await expect(inspector.getByRole("spinbutton")).toHaveCount(0);
+  await inspector.getByRole("tab", {name: /Chunk \/ Citation/}).click();
+  await expect(page.getByTestId("document-chunk-list").locator("li")).toHaveCount(31);
+  await expect(inspector).toContainText("最初の範囲の引用 31");
+  await expect(inspector.getByRole("button", {name: "この範囲の続きを読む", exact: true})).toHaveCount(0);
+  await inspector.getByRole("tab", {name: "構造化要素", exact: true}).click();
+  await expect(inspector).toContainText("合成同期要素 26");
   await page.getByRole("button", {name: "次のページ", exact: true}).click();
   await expect(page.getByTestId("inspector-current-range")).toContainText("開始 8193");
   await expect(inspector).toContainText("別範囲の要素");
@@ -1434,5 +1526,14 @@ test("位置対応のない旧記録は推測して同期せず理由を示す",
   await page.goto("/documents/doc-1");
   await expect(page.getByTestId("document-inspector-pane")).toContainText("位置情報が記録されていないため");
   await expect(page.getByTestId("document-inspector-pane")).not.toContainText("本文テキストはまだありません");
+  // 案内の Banner と下の部品のあいだに共通の余白（mb-2 = 0.5rem）を入れる。
+  const gap = await page.locator("#inspector-panel-text").evaluate(node => ({
+    banner: node.previousElementSibling?.textContent ?? "",
+    gap: node.getBoundingClientRect().top - node.previousElementSibling!.getBoundingClientRect().bottom,
+    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.5,
+  }));
+  expect(gap.banner).toContain("位置情報が記録されていないため");
+  expect(Math.abs(gap.gap - gap.expected)).toBeLessThanOrEqual(1);
+  await page.getByTestId("document-inspector-pane").screenshot({path: test.info().outputPath("inspector-unmapped-banner.png")});
   await expectNoHorizontalOverflow(page);
 });

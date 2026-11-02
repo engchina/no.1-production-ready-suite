@@ -9,18 +9,22 @@ export async function fulfillDocumentInspection(route: Route, options: Parameter
     const page = Number(url.searchParams.get("page"));
     const id = url.searchParams.get("chunk_id");
     const rows = (envelope.data as Record<string, unknown>[]).filter(c => (!id || c.chunk_id === id) && (!page || Number(c.page_start) <= page && Number(c.page_end) >= page));
+    // 左の表示範囲（ページ・文字範囲）を指定した応答は、その範囲の全部を返す（backend と同じ。#4094）。
+    if (!id && (page || url.searchParams.has("source_offset"))) return route.fulfill({...options, json: {...envelope, data: {items: rows, total: rows.length, offset: 0, limit: Math.max(rows.length, limit), complete: true}}});
     return route.fulfill({...options, json: {...envelope, data: {items: rows.slice(offset, offset + limit), total: rows.length, offset, limit}}});
   }
   if (envelope?.data && url.pathname.endsWith("/extraction-view") && !Array.isArray(envelope.data)) {
     const data = envelope.data;
     const payload = (data.payload ?? data) as Record<string, unknown>;
     const mode = url.searchParams.get("mode"), page = Number(url.searchParams.get("page"));
-    const offset = Number(url.searchParams.get("offset") ?? 0);
+    // 左の表示範囲（ページ・文字範囲）を指定した応答は、その範囲の全部を返す（backend と同じ。#4094）。
+    const complete = Boolean(page) || url.searchParams.has("source_offset");
+    const offset = complete ? 0 : Number(url.searchParams.get("offset") ?? 0);
     const elements = ((payload.elements ?? []) as Record<string, unknown>[]).filter(e => !page || Number(e.page_number) === page);
     const text = page ? elements.map(e=>e.text ?? "").join("\n\n") : String(payload.display_text ?? payload.raw_text ?? "");
-    const limit = mode === "text" ? 8192 : 25;
-    return route.fulfill({...options, json: {...envelope, data: {...data, content: "", offset, limit,
-      total: mode === "text" ? text.length : elements.length,
+    const total = mode === "text" ? text.length : elements.length;
+    const limit = complete ? Math.max(total, 1) : mode === "text" ? 8192 : 25;
+    return route.fulfill({...options, json: {...envelope, data: {...data, content: "", offset, limit, complete, total,
       payload: {...payload, raw_text: mode === "text" ? text.slice(offset,offset+limit) : "", display_text: mode === "text" ? text.slice(offset,offset+limit) : "", elements: mode === "structure" ? elements.slice(offset,offset+limit) : []},
     }}});
   }

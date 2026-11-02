@@ -6024,6 +6024,7 @@ class OracleClient:
         extraction_recipe_id: str | None = None,
         unlocated_only: bool = False,
         location_unavailable: bool = False,
+        full_text: bool = False,
     ) -> tuple[list[DocumentChunkView], int]:
         """権限と版を保って、必要な範囲の chunk だけを読む。"""
         rows = await self._fetch_all(
@@ -6091,7 +6092,8 @@ class OracleClient:
         if chunk_id is None:
             # 一覧に親本文などの重複を含めない。完全な値は選択時に1件だけ読む。
             for chunk in chunks:
-                chunk.text = chunk.text[:1024]
+                if not full_text:
+                    chunk.text = chunk.text[:1024]
                 chunk.metadata = {
                     key: value
                     for key, value in chunk.metadata.items()
@@ -13659,7 +13661,11 @@ def _oracle_natural_name_order_sql(expression: str) -> str:
 
 
 def _inspection_chunk_location_cte() -> str:
-    """位置の帰属と件数で同じ版・要素照合を使う。本文座標から位置を推測しない。"""
+    """位置の帰属と件数で同じ版・要素照合を使う。本文座標から位置を推測しない。
+
+    Chunk ごとに全要素を走査しないよう、element_ids（配列・カンマ区切り）を行にして要素と結合する。
+    結合できなかった Chunk だけ、記録の形によらない照合に戻す（#4094）。
+    """
     return _render_sql(
         """
         WITH element_order AS (
@@ -13671,17 +13677,38 @@ def _inspection_chunk_location_cte() -> str:
                           WHERE cs.chunk_set_id=:chunk_set_id
                             AND cs.document_id=e.document_id
                             AND cs.extraction_recipe_id=e.extraction_recipe_id)
+        ), listed_first AS (
+            SELECT listed.chunk_id,
+                MIN(eo.element_id) KEEP (DENSE_RANK FIRST ORDER BY eo.ordinal) AS element_id
+            FROM (
+                SELECT lc.chunk_id, jt.element_id FROM rag_chunks lc,
+                    JSON_TABLE(lc.metadata_json, '$.element_ids[*]' COLUMNS (
+                        element_id VARCHAR2(512) PATH '$')) jt
+                WHERE lc.chunk_set_id=:chunk_set_id
+                UNION ALL
+                SELECT lc.chunk_id, jt.element_id FROM rag_chunks lc,
+                    JSON_TABLE('["' || REPLACE(
+                        JSON_VALUE(lc.metadata_json, '$.element_ids' RETURNING CLOB),
+                        ',', '","') || '"]', '$[*]' COLUMNS (
+                        element_id VARCHAR2(512) PATH '$')) jt
+                WHERE lc.chunk_set_id=:chunk_set_id
+                  AND JSON_VALUE(lc.metadata_json, '$.element_ids' RETURNING CLOB) IS NOT NULL
+            ) listed
+            JOIN element_order eo ON eo.element_id = listed.element_id
+            GROUP BY listed.chunk_id
         ), inspection_chunks AS (
             SELECT c.*,
-                CASE WHEN :location_unavailable=1 THEN NULL ELSE
+                CASE WHEN :location_unavailable=1 THEN NULL ELSE COALESCE(lf.element_id,
+                    CASE WHEN JSON_EXISTS(c.metadata_json, '$.element_ids') THEN
                     (SELECT eo.element_id FROM element_order eo
                      WHERE JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
                            PASSING eo.element_id AS "eid") OR DBMS_LOB.INSTR(
                            ',' || JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB)
                            || ',', ',' || eo.element_id || ',')>0
-                     ORDER BY eo.ordinal FETCH FIRST 1 ROW ONLY)
+                     ORDER BY eo.ordinal FETCH FIRST 1 ROW ONLY) END)
                 END AS first_element_id
             FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
+            LEFT JOIN listed_first lf ON lf.chunk_id=c.chunk_id
             WHERE c.chunk_set_id=:chunk_set_id AND {access_predicate}
         )
         """,

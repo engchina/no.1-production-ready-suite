@@ -457,12 +457,15 @@ export function DocumentWorkspace({
   const [unlocatedOffset, setUnlocatedOffset] = useState(0);
   const windowChanged = useValuesChanged([documentId, selectedRecipeId, inspectorTab, currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision]);
   if (windowChanged) { setViewOffset(0); setChunkOffset(0); setUnlocatedOffset(0); setElementTextOffset(0); setCellOffset(0); setShowChunkDetails(false); }
+  // 章節ナビゲーションの一覧と要約は GET /sections が全件を返す。このタブでは解析エンジンの表示などに使う概要だけを読み、
+  // プレビューのページ・表示範囲が動いても読み直さない。
+  const navigationTabActive = inspectorTab === "navigation";
   const extractionJsonQuery = useQuery({
     queryKey: ["documents", documentId, "recipes", selectedRecipeId, "extraction-view", inspectorTab,
-      currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, viewOffset, requestedElementId, elementTextOffset, cellOffset, selectedRecipe?.active_extraction_recipe_id],
+      navigationTabActive ? null : currentInspectorPage, navigationTabActive ? null : currentTextRange?.offset, navigationTabActive ? null : currentTextRange?.revision, viewOffset, requestedElementId, elementTextOffset, cellOffset, selectedRecipe?.active_extraction_recipe_id],
     queryFn: ({signal}) => api.documentExtractionView(documentId, selectedRecipeId!, {
-      mode: inspectorTab === "extraction" ? "structure" : inspectorTab === "text" ? "text" : inspectorTab === "navigation" ? "navigation" : "summary",
-      offset: viewOffset, limit: 25, ...(inspectorTab !== "navigation" && inspectorTab !== "export" ? sourceScope : {}), text_offset: elementTextOffset, cell_offset: cellOffset, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
+      mode: inspectorTab === "extraction" ? "structure" : inspectorTab === "text" ? "text" : "summary",
+      offset: viewOffset, limit: 25, ...(!navigationTabActive && inspectorTab !== "export" ? sourceScope : {}), text_offset: elementTextOffset, cell_offset: cellOffset, ...(currentInspectorPage && !navigationTabActive ? {page: currentInspectorPage} : {}),
       ...(requestedElementId && viewOffset === 0 ? {element_id: requestedElementId} : {}),
     }, signal),
     enabled: Boolean(selectedRecipeId && hasSelectedRecipeExtraction),
@@ -508,7 +511,8 @@ export function DocumentWorkspace({
   ) : extractionError ? <ApiErrorState fallback={t("flow.extractionExport.loadError")} error={extractionJsonQuery.error} onRetry={() => void extractionJsonQuery.refetch()} /> : content;
   const scopeStatus = inspectorTab === "chunks" ? chunkWindowQuery.data?.scope_status : extractionJsonQuery.data?.scope_status;
   const unaligned = currentTextRange && scopeStatus && !["exact", "page"].includes(scopeStatus);
-  const extractionPaging = extractionJsonQuery.data ? (
+  // 左の表示範囲を指定した応答（complete）は範囲の全部なので、続きの操作を出さない（#4094）。
+  const extractionPaging = extractionJsonQuery.data && !extractionJsonQuery.data.complete ? (
     <InspectionContinuation offset={extractionJsonQuery.data.offset} total={extractionJsonQuery.data.total}
       limit={extractionJsonQuery.data.limit} disabled={hasReviewEdits} onOffset={setViewOffset} />
   ) : null;
@@ -1683,15 +1687,13 @@ export function DocumentWorkspace({
             {currentTextRange && inspectorTab !== "export" && inspectorTab !== "navigation" ? (
               <p className="mb-2 text-xs text-fg-muted" data-testid="inspector-current-range" aria-live="polite">{t("flow.inspector.currentRange", {start: currentTextRange.offset + 1, total: currentTextRange.total})}</p>
             ) : null}
-            {unaligned && inspectorTab !== "export" && inspectorTab !== "navigation" ? <Banner severity="info">{t("flow.inspector.unmapped")}</Banner> : null}
-            {inspectorTab === "navigation" ? <div role="tabpanel" id="inspector-panel-navigation" aria-labelledby="inspector-tab-navigation" tabIndex={0}>
+            {unaligned && inspectorTab !== "export" && inspectorTab !== "navigation" ? <Banner severity="info" className="mb-2">{t("flow.inspector.unmapped")}</Banner> : null}
+            {inspectorTab === "navigation" ? <div role="tabpanel" id="inspector-panel-navigation" aria-labelledby="inspector-tab-navigation" tabIndex={0} className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]">
               <DocumentSectionsPanel documentId={documentId} recipeId={selectedRecipeId} onPageSelect={selectPage}
-                summaries={new Map(parsedExtraction.navigation.flatMap(node => node.summary ? [[node.section_id, node.summary] as const] : []))}
                 onSectionSelect={section => {
                   if (section.page_start !== null) { setSectionFocus(null); selectPage(section.page_start); }
                   else if (section.source_section_id) { setSectionFocus({id: section.source_section_id, key: `section-${section.source_section_id}-${++pageFocusSerialRef.current}`}); }
                 }} />
-              {extractionPaging}
             </div> : null}
 
             {inspectorTab === "text" ? (
@@ -1808,6 +1810,7 @@ export function DocumentWorkspace({
                   <DocumentExtraction
                     extraction={pageExtraction}
                     showNavigation={false}
+                    showFullElementText={Boolean(extractionJsonQuery.data?.complete)}
                     documentId={documentId}
                     selectedElementId={selectedElementId}
                     selectedTableCellKey={selectedTableCellKey}
@@ -1823,11 +1826,11 @@ export function DocumentWorkspace({
                   />
                 ))}
                 {extractionPaging}
-                {extractionJsonQuery.data?.text_total && extractionJsonQuery.data.text_total > 8192 ? <section aria-label={t("flow.inspector.longElement")}>
+                {!extractionJsonQuery.data?.complete && extractionJsonQuery.data?.text_total && extractionJsonQuery.data.text_total > 8192 ? <section aria-label={t("flow.inspector.longElement")}>
                   <p className="text-xs text-fg-muted">{t("flow.inspector.longElement")}</p>
                   <InspectionContinuation offset={elementTextOffset} total={extractionJsonQuery.data.text_total} limit={8192} disabled={hasReviewEdits} onOffset={setElementTextOffset} />
                 </section> : null}
-                {extractionJsonQuery.data?.cell_total && extractionJsonQuery.data.cell_total > 25 ? <section aria-label={t("flow.extraction.tableCells")}>
+                {!extractionJsonQuery.data?.complete && extractionJsonQuery.data?.cell_total && extractionJsonQuery.data.cell_total > 25 ? <section aria-label={t("flow.extraction.tableCells")}>
                   <InspectionContinuation offset={cellOffset} total={extractionJsonQuery.data.cell_total} limit={25} disabled={hasReviewEdits} onOffset={setCellOffset} />
                 </section> : null}
               </div>
@@ -1880,9 +1883,10 @@ export function DocumentWorkspace({
                       result={chunkPreview.data ?? null}
                     />
                   ) : null}
-                  {chunkWindowQuery.data ? <InspectionContinuation offset={chunkOffset} total={chunkWindowQuery.data.total} limit={25} onOffset={setChunkOffset} /> : null}
+                  {chunkWindowQuery.data && !chunkWindowQuery.data.complete ? <InspectionContinuation offset={chunkOffset} total={chunkWindowQuery.data.total} limit={25} onOffset={setChunkOffset} /> : null}
                   <DocumentChunksPanel
                     chunks={pageChunks}
+                    showFullText={Boolean(chunkWindowQuery.data?.complete)}
                     // レシピが無い・取得できないときは chunk の取得自体が無効（isPending のまま）なので、
                     // 実際に取得している間（isLoading）だけ読込中にする（#281）。
                     loading={chunkPreview.isPending || (!chunkPreview.data && chunksQuery.isLoading)}
@@ -3041,9 +3045,12 @@ function DocumentChunksPanel({
   selectedChunkId,
   focusRequestKey,
   onSelect,
+  showFullText = false,
 }: {
   chunks: DocumentChunkView[];
   loading: boolean;
+  /** 左の表示範囲の全部を読むときは、Chunk の本文を行数で切らない（#4094）。 */
+  showFullText?: boolean;
   /** 分割のやり直し（ボタンの loading と ProcessingIndicator が状態を出す）による読込か。 */
   rerunPending?: boolean;
   emptyTitle?: string;
@@ -3168,7 +3175,7 @@ function DocumentChunksPanel({
                 </div>
               ) : null}
               <div className="mt-2">
-                <ExtractedText text={chunk.text} clamp />
+                <ExtractedText text={chunk.text} clamp={!showFullText} />
               </div>
               <div className="mt-2 flex">
                 <InfoChip

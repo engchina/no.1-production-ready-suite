@@ -4,7 +4,7 @@ import {
   Disclosure,
   FormActionBar,
   FormStatus,
-  INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_CARD_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
   ListSkeleton,
   RowActionMenu,
@@ -27,7 +27,7 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -88,14 +88,11 @@ function indentStyle(level: number) {
 export function DocumentSectionsPanel({
   documentId,
   recipeId,
-  summaries,
   onPageSelect,
   onSectionSelect,
 }: {
   documentId: string;
   recipeId: string | null;
-  /** 抽出の章節の要約（ナビゲーション要約が有効なとき。抽出の章節 id → 要約）。 */
-  summaries?: ReadonlyMap<string, string>;
   onPageSelect?: (page: number) => void;
   onSectionSelect?: (section: DocumentSection) => void;
 }) {
@@ -108,6 +105,8 @@ export function DocumentSectionsPanel({
   const [submitted, setSubmitted] = useState(false);
   const [saveError, setSaveError] = useState("");
   const data = query.data;
+  // 抽出の全章節の要約（ナビゲーション要約が有効なとき。抽出の章節 id → 要約）。
+  const summaries = useMemo(() => new Map(Object.entries(data?.summaries ?? {})), [data?.summaries]);
   const sections = draft ?? data?.sections ?? [];
   const pageCount = data?.page_count ?? null;
   const errors = sectionErrors(sections, pageCount);
@@ -197,7 +196,7 @@ export function DocumentSectionsPanel({
 
   const manual = data?.source === "manual";
   const matchingSummaries = data?.summary_rules_match === false ? undefined : summaries;
-  const unmatched = data?.summary_rules_match === false ? summaries?.size ?? 0 : data
+  const unmatched = data?.summary_rules_match === false ? summaries.size : data
     ? unmatchedSummaryCount(data.sections, summaries)
     : 0;
   return (
@@ -238,7 +237,7 @@ export function DocumentSectionsPanel({
             </div>
           ) : null}
           {sections.length > 0 ? (
-            <ol className={`relative space-y-0.5 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+            <ol className={`space-y-0.5 ${INFORMATION_CARD_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
               tabIndex={0} data-testid="sections-navigation-scroll" aria-label={t("flow.extraction.navigation.title")}>
               {sections.map((section) => {
                 const pages = sectionPageLabel(section);
@@ -300,7 +299,7 @@ export function DocumentSectionsPanel({
           {draft.length > 0 ? (
             // 列の見出しを持つ表の形の編集の行（size sm。名前・開始・終了の列の幅は列で決める）なので、欄の幅の段の
             // 検査（findFieldsOffWidthScale）の対象から外す（表の中の欄と同じ扱い。#1891）。
-            <ol className={`relative space-y-2 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+            <ol className={`space-y-2 ${INFORMATION_CARD_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
               tabIndex={0} data-testid="sections-editor-scroll" aria-label={t("sections.editor.label")} data-field-width-exempt="">
               {draft.map((section, index) => {
                 const fieldErrors = submitted ? errors.get(section.id) : undefined;

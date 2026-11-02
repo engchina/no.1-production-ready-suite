@@ -997,6 +997,7 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
             edited: false,
           },
         ],
+        summaries: { "sec-1": "章の要約テキスト" },
         extraction_section_count: 1,
         page_count: 1,
         revision: null,
