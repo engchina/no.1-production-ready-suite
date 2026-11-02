@@ -1262,16 +1262,28 @@ class Settings(
         description="検索文ごとに各検索経路から取得する上限。起点数・多様化の有無とは独立。",
     )
     rag_retrieval_candidate_limit: int = Field(
-        default=150,
+        default=1000,
         ge=1,
         le=2000,
-        description="融合順位から選ぶ基本候補の上限。回答起点数 top_k とは独立。",
+        description=(
+            "融合順位から rerank へ進める基本候補の上限。回答起点数 top_k とは独立。"
+            "選別は rerank の点数で行うので、融合の順位では費用を抑える上限としてだけ切る(#4114)。"
+        ),
     )
     rag_rerank_candidate_limit: int = Field(
         default=0,
         ge=0,
         le=2000,
         description="明示参照・多様化・各種拡張を含む精排入力の合計上限。0は有効な各段の既存上限の合計から互換上限を導出。",
+    )
+    rag_rerank_max_documents_per_request: int = Field(
+        default=1000,
+        ge=1,
+        le=1000,
+        description=(
+            "rerank の 1 回の要求に載せる候補数。OCI の上限は 1000 件で、超える候補は分けて送る"
+            "(1 件 1 件の点数は変わらない。#4114)。"
+        ),
     )
     rag_candidate_diversity_depth: int = Field(
         default=600,

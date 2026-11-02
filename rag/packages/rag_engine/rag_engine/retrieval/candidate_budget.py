@@ -3,6 +3,9 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+# 融合順位の基本候補の既定の上限。backend の既定（RAG_RETRIEVAL_CANDIDATE_LIMIT）と同じ値。
+DEFAULT_FUSION_LIMIT = 1000
+
 
 def record_id(record: Any) -> str:
     return str(record.chunk_uid or record.id)
@@ -46,7 +49,7 @@ def select_candidates(
         if text:
             originals[key] = uid
         unique.append(record)
-    limits = dict(stage_limits if stage_limits is not None else {"fusion": 150})
+    limits = dict(stage_limits if stage_limits is not None else {"fusion": DEFAULT_FUSION_LIMIT})
     effective_limit = max(1, limit) if limit > 0 else sum(limits.values())
     selected: list[Any] = []
     admitted: dict[str, int] = {}
@@ -74,7 +77,7 @@ def select_candidates(
 def stage_limits(settings: Any, records: Sequence[Any]) -> dict[str, int]:
     """既存各段の上限の和。付加された件数を最適な予算と見なさない。"""
     limits = dict(getattr(settings, "retrieval_stage_limits", {}) or {})
-    limits.setdefault("fusion", max(1, int(getattr(settings, "retrieval_candidate_limit", 150))))
+    limits.setdefault("fusion", max(1, int(getattr(settings, "retrieval_candidate_limit", DEFAULT_FUSION_LIMIT))))
     if getattr(settings, "screen_linking_enabled", False):
         from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN, MAX_LINKED_SCREENS
 
