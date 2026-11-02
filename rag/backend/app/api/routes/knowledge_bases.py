@@ -392,7 +392,7 @@ async def get_structure_index_job(
     knowledge_base_id: str, offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100)
 ) -> ApiResponse[dict[str, Any] | None]:
     from app.clients.structure_index_store import StructureIndexStore
-    from app.rag.structure_index_jobs import public_state
+    from app.rag.structure_index_jobs import current_public_state
 
     oracle = OracleClient()
     if await oracle.get_knowledge_base(knowledge_base_id) is None:
@@ -400,7 +400,13 @@ async def get_structure_index_job(
     store = StructureIndexStore(oracle)
     state = await store.get(knowledge_base_id)
     return ApiResponse(
-        data=public_state(await store.visible_state(knowledge_base_id, state), offset, limit)
+        data=await current_public_state(
+            oracle,
+            knowledge_base_id,
+            await store.visible_state(knowledge_base_id, state),
+            offset,
+            limit,
+        )
     )
 
 
@@ -408,7 +414,7 @@ async def get_structure_index_job(
 async def start_structure_index_job(
     knowledge_base_id: str, request: StructureIndexStartRequest
 ) -> ApiResponse[dict[str, Any]]:
-    from app.rag.structure_index_jobs import public_state, structure_index_jobs
+    from app.rag.structure_index_jobs import current_public_state, structure_index_jobs
 
     oracle = OracleClient()
     try:
@@ -420,14 +426,18 @@ async def start_structure_index_job(
     from app.clients.structure_index_store import StructureIndexStore
 
     return ApiResponse(
-        data=public_state(await StructureIndexStore(oracle).visible_state(knowledge_base_id, state))
+        data=await current_public_state(
+            oracle,
+            knowledge_base_id,
+            await StructureIndexStore(oracle).visible_state(knowledge_base_id, state),
+        )
         or {}
     )
 
 
 @router.post("/{knowledge_base_id}/structure-index/job/stop")
 async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[str, Any]]:
-    from app.rag.structure_index_jobs import public_state, structure_index_jobs
+    from app.rag.structure_index_jobs import current_public_state, structure_index_jobs
 
     oracle = OracleClient()
     if await oracle.get_knowledge_base(knowledge_base_id) is None:
@@ -439,6 +449,10 @@ async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[s
     from app.clients.structure_index_store import StructureIndexStore
 
     return ApiResponse(
-        data=public_state(await StructureIndexStore(oracle).visible_state(knowledge_base_id, state))
+        data=await current_public_state(
+            oracle,
+            knowledge_base_id,
+            await StructureIndexStore(oracle).visible_state(knowledge_base_id, state),
+        )
         or {}
     )

@@ -33,14 +33,27 @@ def source_fingerprint(chunk_sets: list[str]) -> str:
     return hashlib.sha256(json.dumps(sorted(chunk_sets)).encode()).hexdigest()
 
 
-async def structure_index_plan(oracle: Any, knowledge_base_id: str) -> list[dict[str, Any]]:
+async def structure_index_plan(
+    oracle: Any, knowledge_base_id: str, *, document_ids: list[str] | None = None
+) -> list[dict[str, Any]]:
     """本文を取らず、現在見える所属文書とactive成果・補建記録を比較する。"""
-    from app.clients.oracle import _oracle_access_predicate_sql, _with_tenant_bind
+    from app.clients.oracle import (
+        _oracle_access_predicate_sql,
+        _oracle_in_predicate,
+        _with_tenant_bind,
+    )
     from app.clients.structure_index_store import StructureIndexStore
 
     kb = await oracle.get_knowledge_base(knowledge_base_id)
     if kb is None:
         raise KeyError("ナレッジベースが見つかりません。")
+    if document_ids == []:
+        return []
+    scope_sql, scope_binds = (
+        _oracle_in_predicate("d.document_id", "structure_doc", document_ids)
+        if document_ids is not None
+        else ("1=1", {})
+    )
     rows = await oracle._fetch_all(
         f"""SELECT d.document_id,d.file_name,cs.chunk_set_id,
         JSON_VALUE(r.processing_config,'$.graph_profile') AS recipe_graph_profile,
@@ -54,10 +67,11 @@ async def structure_index_plan(oracle: Any, knowledge_base_id: str) -> list[dict
         LEFT JOIN rag_chunks c ON c.chunk_set_id=cs.chunk_set_id
         LEFT JOIN rag_document_recipes r ON r.recipe_id=cs.recipe_id
         WHERE m.knowledge_base_id=:kb AND {_oracle_access_predicate_sql(alias="d")}
+        AND {scope_sql}
         GROUP BY d.document_id,d.file_name,cs.chunk_set_id,
             JSON_VALUE(r.processing_config,'$.graph_profile')
         ORDER BY d.document_id,cs.chunk_set_id""",
-        _with_tenant_bind({"kb": knowledge_base_id}),
+        _with_tenant_bind({"kb": knowledge_base_id, **scope_binds}),
     )
     from app.config import get_settings
 
@@ -104,6 +118,12 @@ async def structure_index_plan(oracle: Any, knowledge_base_id: str) -> list[dict
         )
         item["quality"] = built["quality"] if built else None
         item["reason"] = "no_chunks" if not item["chunk_sets"] else item.pop("unavailable", None)
+        # 構築設定OFFは新しい作業の可否であり、既存索引を無効にはしない。
+        item["index_status"] = (
+            ("CURRENT" if built["source_fingerprint"] == item["fingerprint"] else "STALE")
+            if built and item["chunk_sets"] and item["reason"] == "disabled"
+            else item["status"]
+        )
     return list(documents.values())
 
 

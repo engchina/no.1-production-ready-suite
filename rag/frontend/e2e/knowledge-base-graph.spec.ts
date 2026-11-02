@@ -318,8 +318,8 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
     { document_id: "doc-c", name: "synthetic-c.txt", status: "UNAVAILABLE", reason: "no_chunks" },
   ];
   const result = (status: string) => ({ job_id: "job-a", status, started_at: "2026-01-01T00:00:00Z", finished_at: null, items: [
-    { ...items[0], status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
-    { ...items[1], status: "SKIPPED", reason: "current" }, items[2],
+    { ...items[0], index_status: status === "COMPLETED" ? "CURRENT" : "MISSING", index_quality: status === "COMPLETED" ? "PARTIAL" : null, status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
+    { ...items[1], status: "SKIPPED", index_status: "CURRENT", reason: "current" }, { ...items[2], index_status: "UNAVAILABLE" },
   ], counts: { PARTIAL: status === "COMPLETED" ? 1 : 0, QUEUED: status === "COMPLETED" ? 0 : 1, SKIPPED: 1, UNAVAILABLE: 1 }, total: 3, offset: 0, limit: 25 });
   await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: enabled, structure_index_global_enabled: false }) }));
   await page.route("**/api/knowledge-bases/kb-1/structure-index", async (route) => {
@@ -384,7 +384,7 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
     if (route.request().method() === "POST") {
       jobAttempts++;
       if (jobAttempts === 1) { await route.fulfill({ status: 503, json: { detail: "一時的に開始できません。" } }); return; }
-      job = { job_id: "job-retry", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z", items: [{ ...item, status: "FAILED", reason: "processing_error" }], counts: { FAILED: 1 }, total: 1, offset: 0, limit: 25 };
+      job = { job_id: "job-retry", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z", items: [{ ...item, status: "FAILED", index_status: "MISSING", reason: "processing_error" }], counts: { FAILED: 1 }, total: 1, offset: 0, limit: 25 };
     }
     await route.fulfill({ json: ok(job) });
   });
@@ -410,7 +410,7 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
   await page.screenshot({ path: testInfo.outputPath("03-start-error.png") });
   await settings.getByRole("button", { name: "再試行", exact: true }).click();
   await expect.poll(() => jobAttempts).toBe(2);
-  await expect(settings.getByRole("cell", { name: "失敗", exact: true })).toBeVisible();
+  await expect(settings.getByRole("cell", { name: /^失敗：/ })).toBeVisible();
   await expect(settings.getByRole("button", { name: "失敗分を再試行", exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("04-partial-failure.png") });
@@ -475,3 +475,44 @@ for (const width of [1280, 1920, 375]) {
     });
   }
 }
+
+
+test("構造索引の現在状態と今回の結果を分け、版変更後に再確認する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
+  let changed = false;
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", (route) => route.fulfill({ json: ok({
+    job_id: "synthetic-state-job", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z",
+    items: [
+      { document_id: "synthetic-skip", name: "synthetic-skip.txt", status: "SKIPPED", reason: "current", index_status: changed ? "STALE" : "CURRENT", index_quality: "COMPLETE" },
+      { document_id: "synthetic-fail", name: "synthetic-fail.txt", status: "FAILED", reason: "processing_error", index_status: "CURRENT", index_quality: "COMPLETE" },
+      { document_id: "synthetic-old", name: "synthetic-old.txt", status: "SUCCEEDED", index_status: "STALE" },
+      { document_id: "synthetic-active", name: "synthetic-active.txt", status: "RUNNING", index_status: "MISSING" },
+      { document_id: "synthetic-unready", name: "synthetic-unready.txt", status: "UNAVAILABLE", reason: "no_chunks", index_status: "UNAVAILABLE", index_reason: "no_chunks" },
+      { document_id: "synthetic-pending", name: "synthetic-pending.txt", status: "QUEUED", index_status: "MISSING" },
+    ], counts: { SKIPPED: 1, FAILED: 1, SUCCEEDED: 1, RUNNING: 1, UNAVAILABLE: 1, QUEUED: 1 }, total: 6, offset: 0, limit: 25,
+  }) }));
+  await page.goto("/knowledge-bases/kb-1");
+  const build = page.getByTestId("knowledge-base-structure-build");
+  const row = (name: string) => build.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(1)).toHaveText("構築済み");
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(2)).toContainText("スキップ：処理対象の版は構築済みでした。");
+  await expect(row("synthetic-fail.txt").getByRole("cell").nth(1)).toHaveText("構築済み");
+  await expect(row("synthetic-fail.txt").getByRole("cell").nth(2)).toContainText("失敗：");
+  await expect(row("synthetic-old.txt").getByRole("cell").nth(1)).toHaveText("更新が必要");
+  await expect(row("synthetic-old.txt").getByRole("cell").nth(2)).toHaveText("成功");
+  await expect(row("synthetic-active.txt").getByRole("cell").nth(1)).toHaveText("未構築");
+  await expect(row("synthetic-active.txt").getByRole("cell").nth(2)).toHaveText("構築中");
+  await expect(row("synthetic-unready.txt").getByRole("cell").nth(1)).toHaveText("準備不足");
+  await expect(row("synthetic-pending.txt").getByRole("cell").nth(2)).toHaveText("待機中");
+  await build.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("current-index-and-operation.png") });
+  if (testInfo.project.name === "mobile") {
+    await row("synthetic-skip.txt").getByRole("cell").nth(2).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("current-index-operation-details.png") });
+  }
+  changed = true;
+  await page.reload();
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(1)).toHaveText("更新が必要");
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(2)).toContainText("スキップ：");
+});
