@@ -25,6 +25,8 @@ from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
+from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
+from rag_engine.retrieval.rerank_scores import rerank_first_key
 
 BATCH_READING_PROMPT = """## Step 1: 質問と根拠を読む
 question は完全な原質問です。generation_context の条件・否定・確認済み前提を保ち、evidence の全文を読んでください。
@@ -115,10 +117,12 @@ def prepare_batched_evidence(
     provider_id: str | None = None,
     tag: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]] = list,
     failed_batches: list[dict[str, Any]] | None = None,
+    source_scores: Mapping[str, float | None] | None = None,
 ) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
     """短い入力は直接生成し、長い入力だけ全件読取から最終生成へ渡す。
 
     ``failed_batches`` には失敗した組の記録を足す（例外で返せない診断を呼び出し側へ渡す。#4090）。
+    ``source_scores`` は出典の ID ごとの原質問への rerank の点数。読取で選ばれなかった原文を予算まで補う順に使う（#4113）。
     """
     reading_system = resolve_prompt("generation.batchReading", BATCH_READING_PROMPT)
     reading_schema = BatchReading.model_json_schema()
@@ -226,7 +230,81 @@ def prepare_batched_evidence(
             result.append(current)
         return result
 
+    def fill_to_budget(chosen: Sequence[dict[str, Any]]) -> tuple[list[dict[str, Any]], str, dict[str, Any], dict[str, Any]]:
+        """読取で選ばれなかった原文を、原質問の rerank の点数の順に入力の予算まで足す（#4113。モデルの呼び出しは増やさない）。
+
+        読取の選択だけに任せると、原則・例外・適用条件が最終生成の入力から落ちる。足すのは検索で選ばれた原文そのもので、
+        出典の照合は最終生成で従来どおり掛かる。同じ原文の抜粋は全文へ置き換え、読取の回答候補は保つ。
+        """
+
+        def rank(value: Mapping[str, Any]) -> tuple[int, tuple[int, float]]:
+            # 条の目録で選んだ条は rerank 最優先の例外（rerank_scores.keeps_original_order と同じ扱い）。
+            return (0 if value.get(ARTICLE_CATALOG_KEY) else 1, rerank_first_key((source_scores or {}).get(str(value["source_id"]))))
+
+        def inside(excerpt: Mapping[str, Any], value: Mapping[str, Any]) -> bool:
+            return bool(
+                excerpt["source_id"] == value["source_id"]
+                and excerpt.get("start", 0) >= value.get("start", 0)
+                and excerpt.get("end", len(excerpt["text"])) <= value.get("end", len(value["text"]))
+            )
+
+        def extended(count: int, candidates: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+            result = list(chosen)
+            for value in candidates[:count]:
+                answers = [excerpt["batch_answer"] for excerpt in result if inside(excerpt, value) and excerpt.get("batch_answer")]
+                result = [excerpt for excerpt in result if not inside(excerpt, value)]
+                result.append({**value, **({"batch_answer": "\n".join(answers)} if answers else {})})
+            return tag(result)
+
+        # 文字数は根拠のブロックの大きさで見積もり、入らない大きな原文は飛ばして次の順位を足す。
+        room = settings.evidence_budget_chars - len(evidence_text(tag(list(chosen))))
+        candidates = []
+        for value in sorted(spans, key=rank):
+            if any(excerpt["text"] == value["text"] and inside(excerpt, value) for excerpt in chosen):
+                continue
+            size = len(evidence_text(tag([value])))
+            if size <= room:
+                candidates.append(value)
+                room -= size
+
+        # token を含む判定は全体で行う。入らなければ、足す件数を二分探索で減らす。``chosen`` だけなら入ることは確かめ済み。
+        def attempt(count: int) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+            values = extended(count, candidates)
+            return (values, *final_measure(values))
+
+        count = len(candidates)
+        final, final_prompt_text, final_measured = attempt(count)
+        if not final_measured["fits"]:
+            count = 0
+            final, final_prompt_text, final_measured = attempt(0)
+            low, high = 0, len(candidates) - 1
+            while low < high:
+                middle = (low + high + 1) // 2
+                trial = attempt(middle)
+                if trial[2]["fits"]:
+                    final, final_prompt_text, final_measured = trial
+                    count = low = middle
+                else:
+                    high = middle - 1
+        added = candidates[:count]
+
+        def size_of(values: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+            return {"count": len(values), "chars": sum(len(value["text"]) for value in values)}
+
+        return (
+            final,
+            final_prompt_text,
+            final_measured,
+            {
+                "before_reduction": size_of(spans),
+                "model_selected": size_of(chosen),
+                "program_added": size_of(added),
+                "final": size_of(final),
+            },
+        )
+
     prompt, measurement = final_measure(selected)
+    reduction: dict[str, Any] = {}
     if not measurement["fits"]:
         # 文字予算だけを緩めず、system・schema・出力予約込みで各読取と最終生成を検査する。
         remaining_passes = max(1, sum(len(value["text"]) for value in selected).bit_length())
@@ -336,11 +414,13 @@ def prepare_batched_evidence(
             prompt, measurement = final_measure(selected)
             if not measurement["fits"] and len(prompt) >= previous_size:
                 stop_reduction("batch_reduction_did_not_shrink")
+        selected, prompt, measurement, reduction = fill_to_budget(selected)
     return (
         selected,
         prompt,
         {
             **measurement,
+            **({"reduction": reduction} if reduction else {}),
             "configured_chars": settings.evidence_budget_chars,
             "excluded_span_count": 0,
             "batch_count": len(batches),
