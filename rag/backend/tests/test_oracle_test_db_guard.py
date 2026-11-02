@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, ClassVar
 
 import pytest
@@ -25,6 +26,8 @@ class _FakeManager:
 
     status_payload: ClassVar[dict[str, Any]] = {}
     initialize_calls: ClassVar[list[dict[str, Any]]] = []
+    settle_calls: ClassVar[list[object]] = []
+    connection: ClassVar[object] = object()
 
     def __init__(self, _connection_factory: Any) -> None:
         pass
@@ -41,6 +44,20 @@ class _FakeManager:
 def fake_manager(monkeypatch: pytest.MonkeyPatch) -> Iterator[type[_FakeManager]]:
     monkeypatch.setattr(_oracle_test_db, "SystemSchemaManager", _FakeManager)
     _FakeManager.initialize_calls = []
+    _FakeManager.settle_calls = []
+
+    @contextmanager
+    def connection() -> Iterator[object]:
+        yield _FakeManager.connection
+
+    def settle(value: object) -> None:
+        assert value is _FakeManager.connection
+        # 整理は schema の適用成功後に同じ専用接続で行う。
+        assert _FakeManager.initialize_calls == [{}]
+        _FakeManager.settle_calls.append(value)
+
+    monkeypatch.setattr(_oracle_test_db, "_schema_connection", connection)
+    monkeypatch.setattr(_oracle_test_db, "settle_test_native_index", settle)
     previous = _oracle_test_db._schema_skip_reason
     _oracle_test_db.ensure_schema.cache_clear()
     yield _FakeManager
@@ -60,6 +77,7 @@ def test_ensure_schema_does_not_apply_pending_destructive_migrations(
     reason = _oracle_test_db.ensure_schema()
 
     assert fake_manager.initialize_calls == []
+    assert fake_manager.settle_calls == []
     assert reason is not None
     assert "20260930_005_retire_standard_engine_objects" in reason
     assert "--allow-destructive" in reason
@@ -74,7 +92,12 @@ def test_ensure_schema_applies_non_destructive_migrations(
     assert _oracle_test_db.ensure_schema() is None
     # 承認（allow_destructive）は渡さない。
     assert fake_manager.initialize_calls == [{}]
+    assert fake_manager.settle_calls == [fake_manager.connection]
     assert _oracle_test_db.schema_skip_reason() is None
+    # 同一プロセス内の再確認で適用と整理を繰り返さない。
+    assert _oracle_test_db.ensure_schema() is None
+    assert fake_manager.initialize_calls == [{}]
+    assert fake_manager.settle_calls == [fake_manager.connection]
 
 
 def test_oracle_db_fixture_skips_with_reason_when_schema_was_not_updated(
