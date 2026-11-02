@@ -51,8 +51,8 @@ class _RecipeStatusOracle:
 async def test_failed_recipe_on_indexed_document_is_not_skipped_as_already_indexed() -> None:
     failed = cast(OracleClient, _RecipeStatusOracle(FileStatus.ERROR))
     indexed = cast(OracleClient, _RecipeStatusOracle(FileStatus.INDEXED))
-    assert await documents_route._default_recipe_is_indexed(failed, "doc-1") is False
-    assert await documents_route._default_recipe_is_indexed(indexed, "doc-1") is True
+    assert await documents_route._default_recipe_failed(failed, "doc-1") is True
+    assert await documents_route._default_recipe_failed(indexed, "doc-1") is False
 
 
 def test_isolated_extraction_id_depends_on_the_build() -> None:

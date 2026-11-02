@@ -4640,7 +4640,7 @@ async def _enqueue_ingestion_job_for_document(
     if (
         detail.status == FileStatus.INDEXED
         and not force
-        and await _default_recipe_is_indexed(oracle, document_id)
+        and not await _default_recipe_failed(oracle, document_id)
     ):
         return await _create_ingestion_job_record(
             oracle=oracle,
@@ -4694,13 +4694,13 @@ async def _served_extraction_ids(oracle: OracleClient, document_id: str) -> set[
     return set(await read(document_id)) if callable(read) else set()
 
 
-async def _default_recipe_is_indexed(oracle: OracleClient, document_id: str) -> bool:
-    """既定レシピが索引済みか。旧版で答えながら失敗したレシピは再実行できるようにする（#4115）。"""
+async def _default_recipe_failed(oracle: OracleClient, document_id: str) -> bool:
+    """既定レシピが失敗したか。旧版で答えながら失敗したレシピは再実行できるようにする（#4115）。"""
     ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
     if not callable(ensure_recipe):
-        return True
+        return False
     recipe = await ensure_recipe(document_id)
-    return str(recipe.get("status") or FileStatus.INDEXED.value) == FileStatus.INDEXED.value
+    return str(recipe.get("status") or "") == FileStatus.ERROR.value
 
 
 async def _raise_if_default_recipe_job_active(oracle: OracleClient, document_id: str) -> None:
@@ -4746,7 +4746,7 @@ async def _enqueue_index_phase_job_for_document(
     if (
         detail.status == FileStatus.INDEXED
         and not force
-        and await _default_recipe_is_indexed(oracle, document_id)
+        and not await _default_recipe_failed(oracle, document_id)
     ):
         source_profile = _source_profile_for_detail(detail)
         return await _create_ingestion_job_record(
