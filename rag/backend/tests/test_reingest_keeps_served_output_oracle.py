@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.clients.chunk_set_retention_store import ChunkSetRetentionStore
 from app.clients.oracle import OracleClient, _NativeScope
 from app.config import get_settings
 from app.rag.chunking import Chunk
@@ -77,7 +78,7 @@ async def test_candidate_stays_hidden_until_switch_and_old_extraction_is_collect
     corpus_sets = {row["chunk_set_id"] for row in corpus if row["document_id"] == document.id}
     assert corpus_sets == {old_set}
 
-    # 切替: 新版だけになり、旧版だけが使っていた抽出も消える。
+    # 切替: 検索は新版だけになる。旧版は退役して残り、清掃の後に抽出も消える（#4168）。
     await client.activate_recipe_chunk_set(
         recipe_id=recipe_id,
         chunk_set_id=new_set,
@@ -86,6 +87,11 @@ async def test_candidate_stays_hidden_until_switch_and_old_extraction_is_collect
     )
     assert await client.retrievable_chunk(document.id, new_chunk.chunk_id) is not None
     assert await client.retrievable_chunk(document.id, old_chunk.chunk_id) is None
+    assert await client.readable_version_chunk(document.id, old_chunk.chunk_id) is not None
+    assert await client.served_extraction_ids(document.id) == {old_extraction, new_extraction}
+    await ChunkSetRetentionStore(client).expire_recipe(
+        recipe_id, retention_days=0, retained_versions=0, canonical_prefix="artifacts/canonical"
+    )
     assert await client.served_extraction_ids(document.id) == {new_extraction}
     assert (
         await client.get_document_extraction_artifact(

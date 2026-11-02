@@ -4268,3 +4268,22 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261102_007_chunk_set_retired_at
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'RETIRED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunk_sets ADD (retired_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_CHUNK_SETS_RETIRED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_chunk_sets_retired_idx ON rag_chunk_sets (retired_at)';
+    END IF;
+END;
+/

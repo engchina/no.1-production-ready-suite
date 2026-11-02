@@ -14,6 +14,7 @@ import pytest
 from rag_parser_core.preprocess import SourceDerivation
 
 from app import main as app_main
+from app.api.errors import SourceVersionStaleError
 from app.api.routes import documents as documents_route
 from app.clients import object_storage as object_storage_module
 from app.clients.object_storage import ObjectStorageClient
@@ -201,7 +202,7 @@ def test_saved_extraction_payload_carries_the_file_lineage() -> None:
 
 def _source_map_oracle(detail: Any, chunk: RetrievedChunk, payload: dict[str, Any]) -> Any:
     return SimpleNamespace(
-        retrievable_chunk=AsyncMock(return_value=chunk),
+        readable_version_chunk=AsyncMock(return_value=chunk),
         accessible_document_exists=AsyncMock(return_value=True),
         get_document=AsyncMock(return_value=detail),
         get_document_recipe=AsyncMock(
@@ -310,3 +311,77 @@ async def test_job_without_recipe_stops_with_user_error_and_touches_nothing() ->
     )
     with pytest.raises(IngestionUserError, match="文書の処理レシピから再実行"):
         await documents_route._materialize_experiment_candidate(cast(Any, object()), job)
+
+
+def _version_oracle(*, version_exists: bool, derivation: dict[str, Any] | None) -> Any:
+    detail = SimpleNamespace(
+        file_name="synthetic.docx",
+        content_type="application/octet-stream",
+        object_storage_path="docs/original.docx",
+        preprocess_artifact=None,
+    )
+    return SimpleNamespace(
+        get_document=AsyncMock(return_value=detail),
+        get_document_recipe=AsyncMock(
+            return_value={
+                "preprocess_artifact": {
+                    "derivation_id": "new",
+                    "profile": "office_to_pdf",
+                    "converted": True,
+                    "object_storage_path": "artifacts/new.pdf",
+                    "file_name": "new.pdf",
+                }
+            }
+        ),
+        recipe_version_exists=AsyncMock(return_value=version_exists),
+        chunk_set_source_derivation=AsyncMock(return_value=derivation),
+    )
+
+
+async def test_recipe_file_is_the_new_file_without_a_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ファイル準備の確認の画面（版を渡さない）は今までどおり新しいファイルを見る。"""
+    oracle = _version_oracle(version_exists=True, derivation=None)
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: oracle)
+
+    _, artifact = await documents_route._recipe_detail_and_artifact("d1", "r1")
+
+    assert artifact is not None and artifact.object_storage_path == "artifacts/new.pdf"
+    oracle.recipe_version_exists.assert_not_awaited()
+
+
+async def test_recipe_file_is_the_file_of_the_cited_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    derivation = _derivation("old", "artifacts/old.pdf").model_dump(mode="json")
+    oracle = _version_oracle(version_exists=True, derivation=derivation)
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: oracle)
+
+    _, artifact = await documents_route._recipe_detail_and_artifact("d1", "r1", "cs-old")
+
+    assert artifact is not None and artifact.object_storage_path == "artifacts/old.pdf"
+    oracle.recipe_version_exists.assert_awaited_once_with(
+        document_id="d1", recipe_id="r1", chunk_set_id="cs-old"
+    )
+
+
+async def test_recipe_file_of_a_deleted_version_is_stale_not_the_new_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oracle = _version_oracle(version_exists=False, derivation=None)
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: oracle)
+
+    with pytest.raises(SourceVersionStaleError):
+        await documents_route._recipe_detail_and_artifact("d1", "r1", "cs-gone")
+
+
+async def test_recipe_file_without_lineage_falls_back_to_the_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oracle = _version_oracle(version_exists=True, derivation=None)
+    monkeypatch.setattr(documents_route, "OracleClient", lambda: oracle)
+
+    _, artifact = await documents_route._recipe_detail_and_artifact("d1", "r1", "cs-old")
+
+    assert artifact is not None and artifact.object_storage_path == "artifacts/new.pdf"

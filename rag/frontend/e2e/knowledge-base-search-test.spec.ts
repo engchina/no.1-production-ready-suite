@@ -56,7 +56,11 @@ function kbDetail(indexedDocumentCount: number) {
 }
 
 // SSE 応答(stage→metadata→citations→delta→done)。streamSearch は \n\n 区切りで解析する。
-function searchStreamBody(fileName = "policy.pdf", citationCount = 1) {
+function searchStreamBody(
+  fileName = "policy.pdf",
+  citationCount = 1,
+  metadata: Record<string, unknown> = {},
+) {
   const citations = Array.from({ length: citationCount }, (_, index) => ({
     document_id: `doc-${index + 1}`,
     chunk_id: `doc-${index + 1}:cs_1:0`,
@@ -65,7 +69,7 @@ function searchStreamBody(fileName = "policy.pdf", citationCount = 1) {
     rerank_score: 0.82,
     file_name: index === 0 ? fileName : `policy-${index + 1}.pdf`,
     category_name: null,
-    metadata: {},
+    metadata,
   }));
   return [
     'event: stage\ndata: {"trace_id":"trace-1","stage":"retrieval","outcome":"success","elapsed_ms":12,"attributes":{}}',
@@ -411,6 +415,94 @@ test("原本が無い PDF の引用プレビューは 404 の本文を iframe �
   await expect(dialog.getByText(MISSING_ORIGINAL)).toBeVisible();
   await expect(dialog.locator("iframe")).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "再試行" })).toBeVisible();
+});
+
+// 切替の後も、引用した版のファイルの頁を出す（#4168）。
+async function mockVersionedOfficeCitation(page: Page): Promise<void> {
+  await mockKbPage(page, 1);
+  const preparedArtifact = {
+    file_name: "policy.pdf",
+    content_type: "application/pdf",
+    object_storage_path: "artifacts/canonical/doc-1/trace/canonical.pdf",
+  };
+  await page.route("**/api/documents/doc-1", (route) =>
+    route.fulfill({ json: ok({ id: "doc-1", preprocess_artifact: null }) })
+  );
+  await page.route("**/api/documents/doc-1/recipes", (route) =>
+    route.fulfill({ json: ok([{ recipe_id: "recipe-1", status: "INDEXED", steps: [], preprocess_artifact: preparedArtifact }]) })
+  );
+  await page.route("**/api/search/stream", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: searchStreamBody("policy.docx", 1, {
+        recipe_id: "recipe-1",
+        chunk_set_id: "cs-cited",
+      }),
+    })
+  );
+}
+
+async function openCitation(page: Page) {
+  await page.goto("/knowledge-bases/kb-1");
+  await page.getByPlaceholder("このナレッジベースに質問してみる…").fill("有給休暇の付与日数は？");
+  await page.getByRole("button", { name: "検索テスト" }).click();
+  await page.getByRole("button", { name: /の根拠を表示$/ }).click();
+  return page.getByRole("dialog");
+}
+
+test("引用プレビューの頁は引用した版のファイルを開く", { tag: "@responsive" }, async ({ page }) => {
+  const requested: string[] = [];
+  await mockVersionedOfficeCitation(page);
+  await page.route(/\/api\/documents\/doc-1\/recipes\/recipe-1\/preview-pages\?/, (route) => {
+    requested.push(route.request().url());
+    return route.fulfill({
+      json: ok({ page_count: 1, pages: [{ page_number: 1, width: 612, height: 792 }] }),
+    });
+  });
+  await page.route(/\/api\/documents\/doc-1\/recipes\/recipe-1\/preview-pages\/1\?/, (route) => {
+    requested.push(route.request().url());
+    return route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+        "base64"
+      ),
+    });
+  });
+
+  const dialog = await openCitation(page);
+
+  await expect(dialog.locator("iframe")).toHaveCount(0);
+  await expect.poll(() => requested.length).toBeGreaterThanOrEqual(2);
+  for (const url of requested) {
+    const params = new URL(url).searchParams;
+    expect(params.get("chunk_set_id")).toBe("cs-cited");
+    expect(params.get("variant")).toBe("prepared");
+  }
+  await expectNoPageOverflow(page);
+});
+
+test("消えた版の引用プレビューは iframe や再試行に戻さず、版の失効を案内する", { tag: "@responsive" }, async ({ page }) => {
+  await mockVersionedOfficeCitation(page);
+  await page.route(/\/api\/documents\/doc-1\/recipes\/recipe-1\/preview-pages\?/, (route) =>
+    route.fulfill({
+      status: 409,
+      json: {
+        data: null,
+        error_messages: ["資料の版が変わりました。"],
+        warning_messages: [],
+        error_code: "source_stale",
+      },
+    })
+  );
+
+  const dialog = await openCitation(page);
+
+  await expect(dialog.getByTestId("source-version-stale-notice")).toBeVisible();
+  await expect(dialog.locator("iframe")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "再試行", exact: true })).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });
 
 test("Office 引用プレビューの降格表示では原本をダウンロードできる", async ({ page }) => {

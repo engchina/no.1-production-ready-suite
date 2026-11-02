@@ -64,6 +64,8 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 切替は「job の開始時の active が今も active で、その実行が今も job を持っている」ときだけ行う（`activate_recipe_chunk_set` の transaction の中で確かめる。#4167）。active が変わっていたら候補を捨て、job は失敗ではなく `SKIPPED`（`skip_reason` = `superseded_by_newer_version`）にする。再解析は高価なので自動でやり直さない。切替のたびに `rag_recipe_version_log` へ 1 行を足す（親の版・原本の hash・抽出の ID・分割までの入力の ID・言語資源の公開版・chunk の数・job）。この表は chunk_set に FK を持たず、旧版の行を消しても残り、文書・レシピの削除で消える。本文・質問は入れない。
 
+切替（commit）と旧版の削除（expire）は分ける（#4168）。切替は旧版に `retired_at` を付けるだけで行を消さない（一度も active にならなかった候補だけは切替で消す）。検索・回答・件数・回答の監査は今までどおり active だけを見る。根拠を ID で読む経路（`readable_version_chunk`・`rag_read_source`・`rag_read_section` の版の指定と cursor・定位子・引用のプレビュー）だけが退役した版を読む。権限・テナントの条件は同じ。旧版の抽出も上書きしない（`served_extraction_ids`）。清掃（`chunk_set_retention`）はレシピの行を lock して、退役の新しい順に `RAG_CHUNK_SET_RETAINED_VERSIONS` を超えた版と `RAG_CHUNK_SET_RETENTION_DAYS` を超えた版を `_delete_chunk_set_outputs` で消し、どこからも参照されなくなった `artifacts/canonical/…` のファイルを文書の削除と同じ後始末の記録で消す。同じレシピに QUEUED / RUNNING の取込 job があれば待つ。何度実行しても同じ結果になる。清掃の後の根拠は `source_stale` の案内になる。既定の日数と版の数は提案で、利用者の確認待ち。
+
 GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI / API diagnostics にその状態を表示する。
 
 ### 章節の抽出規則と章節の要約

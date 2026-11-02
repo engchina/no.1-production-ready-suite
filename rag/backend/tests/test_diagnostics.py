@@ -191,6 +191,8 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_xml_tree_json_source_url_template",
         # 運用・実行の待ち時間と並行数（同じ入力の回答を変える設定ではない）。
         "rag_answer_record_retention_days",
+        "rag_chunk_set_retention_days",
+        "rag_chunk_set_retained_versions",
         "rag_answer_timeout_seconds",
         "rag_answer_validation_concurrency",
         "rag_answer_validation_timeout_seconds",

@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from rag_parser_core.preprocess import SourceDerivation
 
+from app.clients.chunk_set_retention_store import ChunkSetRetentionStore
 from app.clients.oracle import OracleClient
 from app.clients.section_map_store import SectionMapStore
 from app.rag.chunking import Chunk
@@ -172,8 +173,13 @@ async def test_chunk_set_removal_removes_its_section_rows() -> None:
         expected_base_chunk_set_id=old_set,
         extraction_recipe_id=f"ex_n_{suffix}",
     )
-    assert await _map_rows(client, document_id) == {}
+    # 切替は旧版の行を消さない。清掃が chunk_set と一緒に消す（#4168）。
+    assert set(await _map_rows(client, document_id)) == {old_set}
     await rebuild_document_section_map(document_id, oracle=client)
+    assert set(await _map_rows(client, document_id)) == {old_set, new_set}
+    await ChunkSetRetentionStore(client).expire_recipe(
+        recipe_id, retention_days=0, retained_versions=0, canonical_prefix="artifacts/canonical"
+    )
     assert set(await _map_rows(client, document_id)) == {new_set}
 
     # レシピの削除でも残らない。

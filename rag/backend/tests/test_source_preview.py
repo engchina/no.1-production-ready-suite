@@ -106,6 +106,8 @@ class _PreviewOracle:
             return None
         return self.visible.get((document_id, chunk_id))
 
+    readable_version_chunk = retrievable_chunk
+
     async def accessible_document_exists(self, document_id: str) -> bool:
         """見られる文書か（chunk が今も見えるか、古い版の chunk だけが残っている文書）。"""
         allowed = current_audit_request_context().allowed_knowledge_base_ids

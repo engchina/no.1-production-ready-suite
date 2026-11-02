@@ -3560,14 +3560,14 @@ async def _read_image(
 
 
 async def readable_chunk(oracle: OracleClient, document_id: str, chunk_id: str) -> RetrievedChunk:
-    """検索と同じ見え方の条件で chunk を読み直す（見えない・古い版は区別できるエラー）。
+    """検索と同じ見え方の条件に、保持の間の旧版を加えて読み直す（消えた版は区別できるエラー）。
 
     rag_read_source と、図の署名つきの URL の読み取り（#1311）で同じ判定を使う。
     """
-    chunk = await oracle.retrievable_chunk(document_id, chunk_id)
+    chunk = await oracle.readable_version_chunk(document_id, chunk_id)
     if chunk is not None:
         return chunk
-    # 再索引で chunk の行ごと消えることがあるので、文書が見られるかで分ける（#4092）。
+    # 清掃で chunk の行ごと消えた版は、文書が見られるかで分ける（#4092・#4168）。
     if await oracle.accessible_document_exists(document_id):
         raise McpToolError(
             SOURCE_STALE_CODE,

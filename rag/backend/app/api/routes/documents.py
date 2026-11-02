@@ -68,6 +68,7 @@ from app.rag.chunking_strategy import resolve_small_to_big_params
 from app.rag.document_cleanup import DocumentCleanupOutcome, run_document_cleanup
 from app.rag.document_crop import (
     DocumentSourceNotFoundError,
+    chunk_set_prepared_artifact,
     crop_png,
     load_parsed_source,
     page_sizes,
@@ -1987,17 +1988,15 @@ async def document_recipe_content(
     recipe_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
+    chunk_set_id: Annotated[str | None, Query(max_length=64)] = None,
 ) -> Response:
-    """選択レシピの原本または固有のファイル準備 artifact を返す。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    row = await oracle.get_document_recipe(document_id, recipe_id)
-    if detail is None or row is None:
-        raise HTTPException(status_code=404, detail="レシピが見つかりません。")
-    artifact = (
-        DocumentPreprocessArtifact.model_validate(row["preprocess_artifact"])
-        if row.get("preprocess_artifact")
-        else None
+    """選択レシピの原本または固有のファイル準備 artifact を返す。
+
+    ``chunk_set_id`` を渡すと、処理後のファイルをその版が解析したものにする(引用の表示。#4168)。
+    原本は版で変わらないので、版が消えていても返す。
+    """
+    detail, artifact = await _recipe_detail_and_artifact(
+        document_id, recipe_id, chunk_set_id if variant == "prepared" else None
     )
     return await document_content_response(
         detail,
@@ -2008,13 +2007,28 @@ async def document_recipe_content(
 
 
 async def _recipe_detail_and_artifact(
-    document_id: str, recipe_id: str
+    document_id: str, recipe_id: str, chunk_set_id: str | None = None
 ) -> tuple[DocumentDetail, DocumentPreprocessArtifact | None]:
+    """レシピの今のファイル。``chunk_set_id`` を渡すとその版が解析したファイル(#4168)。
+
+    版を渡すのは引用の表示で、ファイル準備の確認の画面は渡さない(新しいファイルを見る)。
+    消えた版は新しいファイルに置き換えず、版の失効にする。系譜の無い版はレシピの行を読む(#4166)。
+    """
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     row = await oracle.get_document_recipe(document_id, recipe_id)
     if detail is None or row is None:
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
+    if chunk_set_id is not None:
+        if not await oracle.recipe_version_exists(
+            document_id=document_id, recipe_id=recipe_id, chunk_set_id=chunk_set_id
+        ):
+            raise SourceVersionStaleError("資料の版が変わりました。")
+        version_artifact = await chunk_set_prepared_artifact(
+            oracle, detail, document_id, chunk_set_id
+        )
+        if version_artifact is not None:
+            return detail, version_artifact
     artifact = (
         DocumentPreprocessArtifact.model_validate(row["preprocess_artifact"])
         if row.get("preprocess_artifact")
@@ -2031,9 +2045,12 @@ async def document_recipe_preview_pages(
     document_id: str,
     recipe_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
+    chunk_set_id: Annotated[str | None, Query(max_length=64)] = None,
 ) -> ApiResponse[DocumentPreviewPages]:
     """選択レシピの原本 / 処理後ファイルのページ一覧(ページ画像のプレビュー用)。"""
-    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    detail, artifact = await _recipe_detail_and_artifact(
+        document_id, recipe_id, chunk_set_id if variant == "prepared" else None
+    )
     return await _document_preview_pages_response(
         detail, variant=variant, preprocess_artifact=artifact
     )
@@ -2046,9 +2063,12 @@ async def document_recipe_preview_page_image(
     page_number: Annotated[int, Path(ge=1, le=10000)],
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     dpi: Annotated[int, Query(ge=48, le=288)] = 144,
+    chunk_set_id: Annotated[str | None, Query(max_length=64)] = None,
 ) -> Response:
     """選択レシピの原本 / 処理後ファイルの 1 ページを PNG で返す(bbox の強調を重ねる)。"""
-    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    detail, artifact = await _recipe_detail_and_artifact(
+        document_id, recipe_id, chunk_set_id if variant == "prepared" else None
+    )
     return await _document_preview_page_image_response(
         detail, page_number=page_number, variant=variant, dpi=dpi, preprocess_artifact=artifact
     )
@@ -2424,7 +2444,7 @@ async def _materialize_experiment_candidate(
         status=_PHASE_TO_RUNNING_STATUS[job.phase],
     )
     if job.phase != IngestionJobPhase.INDEX:
-        # 構築の前にレシピへ結び付ける。途中で失敗した候補も、次の切替の掃除で消える（#4115）。
+        # 構築の前にレシピへ結び付ける。途中で失敗した候補も、次の切替で消える（#4115）。
         await oracle.upsert_chunk_set(
             chunk_set_id=candidate_chunk_set_id,
             document_id=job.document_id,
@@ -2666,7 +2686,7 @@ async def _materialize_experiment_candidate(
         )
     except RecipeActivationFencedError as exc:
         # 手前の確認の後に取り消し・lease の喪失・claim し直しが起きた。後始末は取り消しと同じ
-        # (lease を失っていれば何も戻さない)。候補は次の切替の掃除で消える。
+        # (lease を失っていれば何も戻さない)。候補は次の切替で消える。
         raise IngestionCancelledError(INGESTION_JOB_CANCELLED_MESSAGE) from exc
     except RecipeActivationConflictError as exc:
         # 再解析は高価なので、自動でやり直さず候補を捨てる(#4165)。
@@ -4164,7 +4184,7 @@ async def _has_served_output(oracle: OracleClient, document_id: str) -> bool:
 
 
 async def _served_extraction_ids(oracle: OracleClient, document_id: str) -> set[str]:
-    """検索に出している版が読む抽出の ID（上書きしない。#4115）。"""
+    """検索に出している版と退役した版が読む抽出の ID（上書きしない。#4115・#4168）。"""
     read = getattr(oracle, "served_extraction_ids", None)
     return set(await read(document_id)) if callable(read) else set()
 
@@ -6060,9 +6080,9 @@ def _normalize_upload_knowledge_base_ids(values: list[str] | None) -> list[str]:
 async def get_document_citation_chunk(
     document_id: str, chunk_id: str
 ) -> ApiResponse[RetrievedChunk]:
-    """閲覧可能な現行の根拠だけを ID で読み、原文の位置を返す。検索は行わない。"""
+    """閲覧可能な根拠（保持の間の旧版を含む）を ID で読み、原文の位置を返す。検索は行わない。"""
     oracle = OracleClient()
-    chunk = await oracle.retrievable_chunk(document_id, chunk_id)
+    chunk = await oracle.readable_version_chunk(document_id, chunk_id)
     if chunk is None:
         # 見られる文書の今は無い chunk は版の失効（#4092）。見られない文書は 404 のまま。
         if await oracle.accessible_document_exists(document_id):
