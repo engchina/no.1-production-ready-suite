@@ -920,7 +920,14 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 #1898）として渡し、RAG は資料ではない前提として根拠と並べて、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を
 確かめる（前提は資料の内容の裏付けには使わない）。この Run で成功した業務データ（NL2SQL）の照会の結果（`status=done`。照会の
 質問・実行した SQL・列と先頭の 50 行。10 件まで）は `data_results` として渡し、件数・金額・一覧の段落と、資料の規則を結果に
-当てはめた結論を、資料の根拠だけで「確かめられない」として外さない（#1950）。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
+当てはめた結論を、資料の根拠だけで「確かめられない」として外さない（#1950）。段落ごとの出典（`passage_citations`。段落の位置
+`answer_range` とその接続の根拠の `chunk_id`。#104）も渡す: 業務 Agent の回答は使ったツールと根拠を本文とは別に示すので段落に出典を
+書かないことが多く、RAG は段落の実際の出典の集合だけで裏付ける（未引用の資料で裏付けない）ため、渡さないと正しい段落もすべて
+`unassessed` になる。出典は「回答の根拠」が検証の判定の無いときに使う決定的な照合（段落が書いた文書名と頁・章節の参照・引用・同じ
+文字の並び。`answer_evidence.validation_passage_citations`）で作り、段落そのものに当たる根拠が無い段落（表の値の行など）は回答全体が
+出典にした根拠にする。回答のどこにも当たらなければ渡さない。本文に出典を書いた段落は RAG が本文の出典を使い、渡した出典で広げない。
+契約に `passage_citations` の無い古い RAG には渡さない。使ったツールの名前だけの行（「- `rag__rag_retrieve_evidence`」）は検証の前に
+外す（`without_lookup_notes`）。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
 サービストークン・step）を通し、「承認」は待たない。予算には数えない。接続ごとの判定は段落（`answer_quote`）ごとに
 まとめ（どれかの接続が矛盾と判定すれば矛盾、そうでなくどれかの接続が裏付ければ裏付けあり）、結果は成果物
 （`kind="answer_validation"`・「資料との照合」。接続ごとの結果は `connections`）に残す。valid でなければ、段落の印を付ける（#2738）。本文から外すのは根拠と
@@ -966,11 +973,11 @@ Markdown の見出しで切った節と同じく独立させ、同じ項目の�
 （AnswerEnvelope）と同じ語彙の対応（`answered` / `conditional` / `needs_clarification` / `needs_environment_data` /
 `needs_human` / `insufficient_evidence`）を、モデルを呼ばずに決めて残す（`answer_outcome`。内容は `value`・決めた手がかりの
 `basis`・最後の `rag_search` の対応 `rag_outcome`・不足の印 `signals`）。決め方は上から順に、空の回答 → 拒答、確認の質問
-だけの回答 → `needs_clarification`、最終の検証が業務ガイドの手順・影響範囲・版の検査の error を回答全体の警告にした → `needs_human`（`basis` は `validation_guide_check`。どの段落の手順が誤りかを決められないので人が確かめる。本文は出す。#1491・#2738）、最終の検証が残った主張の段落をすべて未確認とした（根拠で確かめた段落が 1 つも無い。`no_evidence` を含む）か主張の段落をすべて矛盾で外した → 拒答（`basis` は `validation_nothing_confirmed`。本文と印は出す。#2738）、回答が最後の `rag_search` に拠る（その後に
+だけの回答 → `needs_clarification`、最終の検証が業務ガイドの手順・影響範囲・版の検査の error を回答全体の警告にした → `needs_human`（`basis` は `validation_guide_check`。どの段落の手順が誤りかを決められないので人が確かめる。本文は出す。#1491・#2738）、最終の検証が残った主張の段落をすべて未確認とした（根拠で確かめた段落が 1 つも無い。`no_evidence` を含む）か主張の段落をすべて矛盾で外した → 拒答（`basis` は `validation_nothing_confirmed`。本文と印は出す。#2738。未確認の理由が確かめが終わっていない〔`unassessed`〕か、監査は根拠で裏付けた〔`audit_status=supported`〕のに監査が写した原文・返した根拠の ID を根拠に結び付けられなかっただけ〔監査の応答の側の照合の誤り。`reference_check` が `quote_unmatched`・`audit_id_invalid` など。回答が書いた ID の誤り `answer_id_invalid` は含めない〕の段落しか無いときは、根拠が無いことを示さないので拒答に数えず、未確認の印つきの回答として下の規則で決める。#104・#108。RAG はその段落を誤りを差し戻して 1 回だけ監査し直し、同じ照合を通れば `supported`〔`reference_reaudit: adopted`〕にする。照合に失敗した判定の、監査が写した原文 `support_quote` と返した ID `audit_evidence_id` は、成果物の `result.claims` に残す。#112）、回答が最後の `rag_search` に拠る（その後に
 根拠を集め直していない）ならその対応（`needs_environment_data` の後に現場のデータの道具が成功したら `answered` /
 `conditional`、確認を求められたが質問だけでなく答えたら `conditional`、`answered` でも回答が不足を示せば `conditional`）、
 `rag_search` に拠らず業務ガイドの判断が人への引き継ぎなら `needs_human`、それ以外は Agent が自分で組み立てた回答として
-段落で決める（現場のデータの道具を使っておらず、Run のどれかの `rag_search` が `insufficient_evidence` を返し、回答の最初の段落〔結論。見出し・出典を除く〕が質問の対象を資料から確かめられないと述べたら、調べた資料の一覧・近い規定の紹介が続いても `insufficient_evidence`〔`basis` は `absence_conclusion`。参考の説明は本文に残す。#1454〕。それ以外は、主張の段落〔最終の検証が矛盾で外した段落と、実データの確認を促す段落〔RAG の判定 `data_confirmation` か、
+段落で決める（現場のデータの道具〔業務プロファイルの一覧・推薦 `nl2sql_list_profiles` などは、使える業務データを探すだけで値・記録を確かめないので数えない。拒答の段階 `refusal_stage` と同じ定義。#108〕を使っておらず、Run のどれかの `rag_search` が `insufficient_evidence` を返し、回答の最初の段落〔結論。見出し・出典を除く〕が質問の対象を資料から確かめられないと述べたら、調べた資料の一覧・近い規定の紹介が続いても `insufficient_evidence`〔`basis` は `absence_conclusion`。参考の説明は本文に残す。#1454〕。それ以外は、主張の段落〔最終の検証が矛盾で外した段落と、実データの確認を促す段落〔RAG の判定 `data_confirmation` か、
 外していない `environment_check` の段落。#1317〕を除く〕が無ければ、実データの確認を促していれば `needs_environment_data`、
 それ以外は拒答。主張があり、不足の印〔資料に記載が無い文・拒答の文〔結論の段落が質問に答え〔補足の外の主張に、最終の検証が根拠で確かめた段落がある〕、不足の文が補足の段落〔見出しが「補足」「注記」などの節と「なお、」で始まる段落〕にだけあるときは、質問が求めない周辺の事柄の不足として印にせず、記録の `supplement_absence` だけを付ける。#1475〕・主張に添えた質問・モデルが書いた確かめられない点の節・
 最終の検証が矛盾で外した段落〔`contradicted_removed`〕・未確認の印の段落〔`unverified_passages`。#2738〕〔外した段落・未確認の段落が補足の段落にだけあり、結論の段落に最終の検証が根拠で確かめた段落があるときは印にせず、記録の `supplement_withheld` / `supplement_unverified` だけを付ける。#1491〕・決定的な検査の error・実データの確認・業務ガイドの条件が分からないまま答えた〔`guide_conditions`。

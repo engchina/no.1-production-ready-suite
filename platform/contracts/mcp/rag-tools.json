@@ -82,7 +82,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -692,7 +692,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -862,7 +862,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1274,7 +1274,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -1743,7 +1743,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2530,7 +2530,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2779,7 +2779,7 @@
       "outputSchema": {
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -2913,7 +2913,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -4283,7 +4283,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -5861,7 +5861,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
@@ -6098,6 +6098,30 @@
       "description": "回答の段落ごとの主張を、渡した根拠（今の権限と版で読み直す）で監査します。公開する前の最終の検証に使います。見出し・出典の行・利用者への質問の段落は主張ではないので監査せず、claims に含めません。requests（要求の充足）・guide（業務ガイド）を渡すと、要求の漏れ・手順ごとの説明と順序・分岐・影響範囲も確かめます。",
       "inputSchema": {
         "$defs": {
+          "AnswerRangeInput": {
+            "additionalProperties": false,
+            "description": "answer の中の段落の位置（文字の位置。[start, end)）。",
+            "properties": {
+              "start": {
+                "maximum": 20000,
+                "minimum": 0,
+                "title": "Start",
+                "type": "integer"
+              },
+              "end": {
+                "maximum": 20000,
+                "minimum": 0,
+                "title": "End",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "title": "AnswerRangeInput",
+            "type": "object"
+          },
           "EvidenceRefInput": {
             "additionalProperties": false,
             "properties": {
@@ -6119,6 +6143,34 @@
               "chunk_id"
             ],
             "title": "EvidenceRefInput",
+            "type": "object"
+          },
+          "PassageCitationInput": {
+            "additionalProperties": false,
+            "description": "呼び出し側が回答の段落に結び付けた根拠（段落の位置と、その段落の根拠の chunk_id）。",
+            "properties": {
+              "answer_range": {
+                "$ref": "#/$defs/AnswerRangeInput",
+                "description": "answer の中の段落の位置（rag_validate_answer の claims の answer_range と同じ数え方）。"
+              },
+              "chunk_ids": {
+                "description": "その段落の根拠の chunk_id（evidence に含めたもの）。evidence に無い chunk_id は使わない。",
+                "items": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 30,
+                "minItems": 1,
+                "title": "Chunk Ids",
+                "type": "array"
+              }
+            },
+            "required": [
+              "answer_range",
+              "chunk_ids"
+            ],
+            "title": "PassageCitationInput",
             "type": "object"
           },
           "ValidateDataResultInput": {
@@ -6358,6 +6410,15 @@
             },
             "maxItems": 10,
             "title": "Data Results",
+            "type": "array"
+          },
+          "passage_citations": {
+            "description": "段落ごとの出典（answer の中の段落の位置と、その段落の根拠の chunk_id）。本文に出典（根拠の ID・出典の行）が無い段落だけ、ここで渡した根拠をその段落の出典として監査する（本文が出典を書いた段落は本文の出典を使う）。evidence に無い chunk_id は使わない。",
+            "items": {
+              "$ref": "#/$defs/PassageCitationInput"
+            },
+            "maxItems": 300,
+            "title": "Passage Citations",
             "type": "array"
           }
         },
@@ -6699,6 +6760,49 @@
                 "default": null,
                 "description": "support_check が table_corrected のとき、段落を根拠の表の正しい値に直した文（表の照合で確かめた）。段落を外す代わりに、この文に置き換えて示せる。それ以外は null。",
                 "title": "Revised Text"
+              },
+              "support_quote": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "reference_check が監査の応答の誤り（audit_id_invalid / ambiguous_id / audit_id_missing / quote_unmatched）のとき、監査が裏付けとして写した原文（先頭 200 字。渡した根拠・質問に対する監査の出力で、照合の失敗の原因を確かめる診断）。それ以外は null。",
+                "title": "Support Quote"
+              },
+              "audit_evidence_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "reference_check が監査の応答の誤りのとき、監査が返した根拠の ID（照合に使う内部の ID で、chunk_id ではない。先頭 200 字。診断）。それ以外は null。",
+                "title": "Audit Evidence Id"
+              },
+              "reference_reaudit": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "adopted",
+                      "rejected"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "監査は裏付けたが、監査の応答の参照（写した原文・返した ID）を根拠に照合できなかった段落を監査し直した結果（adopted=監査し直しの判定が同じ照合を通り、その判定〔supported〕にした / rejected=監査し直しても照合を通らず、citation_error のまま）。監査し直していなければ null。",
+                "title": "Reference Reaudit"
               }
             },
             "required": [
@@ -6842,7 +6946,7 @@
         },
         "properties": {
           "schema_version": {
-            "default": 38,
+            "default": 39,
             "description": "出力の形の版（変わったら上がる）。",
             "title": "Schema Version",
             "type": "integer"
