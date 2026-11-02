@@ -1,7 +1,7 @@
 # 任意の bastion の Compute（#2670）。bastion_enabled が true のときだけ作る。3 製品は入れない（compute.tf の
 # oci_core_instance.suite が 1 台で持つ）。管理者が VNC の GUI（GNOME + Google Chrome）から、private subnet の
 # Suite の Compute の画面や、プライベート・エンドポイントの ADB に届くための踏み台。
-# - 配置先・shape・image（Oracle Linux 9）・SSH キー・subnet は bastion 専用の入力を使う。
+# - compartment は先頭の配備先を継承する。AD・shape・image（Oracle Linux 9）・SSH キー・subnet は bastion 専用の入力を使う。
 # - cloud_init/bastion.sh が GNOME・TigerVNC（:1 = TCP 5901）・Google Chrome を入れ、firewalld で 5901 を開ける。
 # - VNC のパスワードは metadata の bastion_vnc_password_b64 で渡す（user_data には書かない）。値は state に残る。
 # - 通信は subnet の security list（stack の外）で許可する（terraform/README.md「bastion の Compute」）。
@@ -26,7 +26,7 @@ resource "oci_core_instance" "bastion" {
     recovery_action             = "STOP_INSTANCE"
   }
   availability_domain = var.bastion_availability_domain
-  compartment_id      = var.bastion_compartment_ocid
+  compartment_id      = var.compartment_ocid
   create_vnic_details {
     assign_ipv6ip             = "false"
     assign_private_dns_record = "true"
@@ -60,10 +60,6 @@ resource "oci_core_instance" "bastion" {
   }
 
   lifecycle {
-    precondition {
-      condition     = trimspace(var.bastion_compartment_ocid) != ""
-      error_message = "bastion を作成するときは bastion_compartment_ocid を専用に指定してください。"
-    }
     precondition {
       condition     = trimspace(var.bastion_availability_domain) != ""
       error_message = "bastion を作成するときは bastion_availability_domain を専用に指定してください。"

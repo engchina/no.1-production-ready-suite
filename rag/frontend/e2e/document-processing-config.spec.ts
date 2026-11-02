@@ -977,7 +977,7 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
   await expect(layerChips.getByTestId("recipe-layer-navigation")).toContainText("構築済み");
   await expect(layerChips.getByTestId("recipe-layer-metadata")).toHaveCount(0);
 
-  // 構造化要素タブに章節ナビ・図表要約・抽出項目の折りたたみセクション。章節は章節の API から
+  // 章節は独立タブ、図表要約・抽出項目は構造化要素タブ。章節は章節の API から
   // 読み、抽出の章節の要約を添える（#713）。
   await page.route("**/api/documents/doc-1/sections**", (route) =>
     fulfillDocumentInspection(route, {
@@ -1004,10 +1004,11 @@ test("派生レイヤー状態チップ・項目の定義が 0 件の警告・�
       }),
     })
   );
-  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("tab", { name: "章節ナビゲーション" }).click();
   const navigationSection = page.getByTestId("extraction-navigation");
   await expect(navigationSection).toContainText("第1章 総則");
   await expect(navigationSection).toContainText("章の要約テキスト");
+  await page.getByRole("tab", { name: "構造化要素" }).click();
   const assetSection = page.getByTestId("extraction-asset-summaries");
   await assetSection.getByText("図表の要約").click();
   await expect(assetSection).toContainText("承認の流れを示す図");

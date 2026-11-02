@@ -1485,39 +1485,111 @@ async def list_document_recipe_chunks(
     )
 
 
+async def _inspector_source_scope(
+    document_id: str,
+    recipe_id: str,
+    payload: Mapping[str, Any],
+    *,
+    offset: int,
+    revision: str,
+    variant: Literal["original", "prepared"],
+) -> dict[str, Any]:
+    from app.services.inspection_scope import source_inspection
+
+    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
+    return await asyncio.to_thread(
+        source_inspection, payload, data, offset=offset, limit=8192, expected_revision=revision
+    )
+
+
 @router.get("/{document_id}/recipes/{recipe_id}/chunk-window")
 async def document_recipe_chunk_window(
     document_id: str,
     recipe_id: str,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    unlocated_offset: Annotated[int, Query(ge=0)] = 0,
     page: Annotated[int | None, Query(ge=1)] = None,
     chunk_id: str | None = None,
+    source_offset: Annotated[int | None, Query(ge=0)] = None,
+    source_revision: Annotated[str | None, Query(max_length=64)] = None,
+    variant: Literal["original", "prepared"] = "original",
 ) -> ApiResponse[dict[str, Any]]:
     oracle = OracleClient()
     row = await oracle.get_document_recipe(document_id, recipe_id)
     if row is None:
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
     chunk_set = row.get("active_chunk_set_id")
+    scope = None
+    if source_offset is not None and page is None:
+        artifact = await oracle.get_document_extraction_artifact(
+            document_id=document_id,
+            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+        )
+        payload = artifact.get("extraction_json") if artifact else {}
+        scope = await _inspector_source_scope(
+            document_id,
+            recipe_id,
+            payload if isinstance(payload, Mapping) else {},
+            offset=source_offset,
+            revision=source_revision or "",
+            variant=variant,
+        )
+    location_unavailable = scope is not None and scope["scope_status"] != "exact"
     items, total = (
         await oracle.list_chunk_set_chunk_window(
             str(chunk_set),
             offset=offset,
             limit=limit,
             page=page,
+            scope_element_ids=([] if location_unavailable else scope["element_ids"])
+            if scope is not None
+            else None,
             chunk_id=chunk_id,
+            location_unavailable=location_unavailable,
             extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
         )
         if chunk_set
         else ([], 0)
     )
+    unlocated_items: list[DocumentChunkView] = []
+    unlocated_total = 0
+    document_total = total
+    if chunk_set:
+        document_total, unlocated_count = await oracle.count_chunk_set_inspection_locations(
+            str(chunk_set),
+            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+            location_unavailable=location_unavailable,
+        )
+    if chunk_set and scope is not None:
+        unlocated_total = unlocated_count
+    if chunk_set and scope is not None and unlocated_total:
+        unlocated_items, _ = await oracle.list_chunk_set_chunk_window(
+            str(chunk_set),
+            offset=unlocated_offset,
+            limit=limit,
+            chunk_id=chunk_id,
+            unlocated_only=True,
+            location_unavailable=location_unavailable,
+            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+        )
     return ApiResponse(
         data={
             "items": items,
             "total": total,
+            "unlocated_items": unlocated_items,
+            "unlocated_total": unlocated_total,
+            "unlocated_offset": unlocated_offset,
+            "document_total": document_total,
             "offset": offset,
             "limit": limit,
             "revision": chunk_set,
+            "scope_status": scope["scope_status"]
+            if scope is not None
+            else "page"
+            if page
+            else "unscoped",
         }
     )
 
@@ -1633,10 +1705,13 @@ async def document_recipe_source_map(
 async def document_recipe_extraction_view(
     document_id: str,
     recipe_id: str,
-    mode: Literal["text", "structure", "summary"] = "text",
+    mode: Literal["text", "structure", "summary", "navigation"] = "text",
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     page: Annotated[int | None, Query(ge=1)] = None,
+    source_offset: Annotated[int | None, Query(ge=0)] = None,
+    source_revision: Annotated[str | None, Query(max_length=64)] = None,
+    variant: Literal["original", "prepared"] = "original",
     element_id: str | None = None,
     text_offset: Annotated[int, Query(ge=0)] = 0,
     cell_offset: Annotated[int, Query(ge=0)] = 0,
@@ -1656,10 +1731,24 @@ async def document_recipe_extraction_view(
     if not artifact or not artifact.get("extraction_json"):
         raise HTTPException(status_code=404, detail="抽出結果が見つかりません。")
 
+    extraction = await asyncio.to_thread(
+        StructuredExtraction.model_validate, artifact["extraction_json"]
+    )
+    payload = extraction.to_document_payload()
+    scope = None
+    if source_offset is not None and mode != "navigation":
+        scope = await _inspector_source_scope(
+            document_id,
+            recipe_id,
+            payload,
+            offset=source_offset,
+            revision=source_revision or "",
+            variant=variant,
+        )
+
     def build() -> dict[str, Any]:
-        extraction = StructuredExtraction.model_validate(artifact["extraction_json"])
         view = extraction_window(
-            extraction.to_document_payload(),
+            payload,
             mode=mode,
             offset=offset,
             limit=limit,
@@ -1667,9 +1756,15 @@ async def document_recipe_extraction_view(
             element_id=element_id,
             text_offset=text_offset,
             cell_offset=cell_offset,
+            scope_element_ids=set(scope["element_ids"]) if scope is not None else None,
         )
         return {
             **view,
+            "scope_status": scope["scope_status"]
+            if scope is not None
+            else "page"
+            if page is not None
+            else "unscoped",
             "revision": revision,
             "parser_backend": _extraction_parser_backend(extraction),
             "parser_profile": _extraction_parser_profile(extraction),
@@ -6104,12 +6199,52 @@ async def document_recipe_text_window(
     variant, offset, limit, focus = request.variant, request.offset, request.limit, request.focus
     data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
 
+    payload: dict[str, Any] = {}
+    if recipe_id:
+        row = await OracleClient().get_document_recipe(document_id, recipe_id)
+        revision = row.get("active_extraction_recipe_id") if row else None
+        extraction = (
+            await OracleClient().get_document_extraction_artifact(
+                document_id=document_id, extraction_recipe_id=str(revision)
+            )
+            if revision
+            else None
+        )
+        if extraction and extraction.get("extraction_json"):
+            raw_payload = extraction["extraction_json"]
+            payload = dict(raw_payload) if isinstance(raw_payload, Mapping) else {}
+
     def build() -> dict[str, Any]:
-        try:
-            text = data.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            decoded = from_bytes(data).best()
-            text = str(decoded) if decoded is not None else data.decode("utf-8", errors="replace")
+        if recipe_id:
+            from app.services.inspection_scope import source_inspection
+
+            target = request.element_id
+            if request.section_id:
+                node = next(
+                    (
+                        node
+                        for node in payload.get("navigation", [])
+                        if node.get("section_id") == request.section_id
+                    ),
+                    None,
+                )
+                target = (node.get("element_ids") or [None])[0] if node else None
+            result = source_inspection(payload, data, offset=offset, limit=limit, element_id=target)
+            if (request.element_id or request.section_id) and (
+                not target or target not in result["element_starts"]
+            ):
+                raise HTTPException(
+                    409, "この位置に対応する原本の情報がありません。文書の再解析が必要です。"
+                )
+            return {
+                key: value
+                for key, value in result.items()
+                if key not in {"element_ids", "element_starts"}
+            }
+
+        from app.services.inspection_scope import decode_inspection_text
+
+        text = decode_inspection_text(data)
         return {
             **text_window(text, offset, limit, focus),
             "revision": hashlib.sha256(data).hexdigest(),

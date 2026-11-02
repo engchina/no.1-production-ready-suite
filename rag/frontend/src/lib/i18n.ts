@@ -3109,6 +3109,12 @@ export const ja = {
     "全体の既定の項目の定義が 0 件で保存されているため、ナレッジベースで項目を定義していない文書では項目抽出は実行されません。文書解析の設定の「解析後の処理」で項目を追加するか、標準の項目に戻してください。",
   "documents.processingConfig.fieldSchemaStandard":
     "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。文書が属するナレッジベースで項目を定義していれば、その項目を使います。",
+  "flow.inspector.currentRange": "原本の表示範囲に同期（開始 {start} / 全 {total} 文字）",
+  "flow.inspector.unmapped": "この原本の版に対応する位置情報が記録されていないため、表示範囲に同期できません。抽出エクスポートで全体を確認できます。",
+  "flow.inspector.noStarts": "この表示範囲で新しく始まる要素はありません。前の範囲から続く要素は、開始した範囲で確認できます。",
+  "flow.inspector.withinRange": "この表示範囲内: {start}–{end} / {total}",
+  "flow.inspector.continue": "この範囲の続きを読む",
+  "flow.inspector.restart": "この範囲の先頭に戻る",
   "flow.inspector.currentPage": "表示中のページ: p.{page}",
   "flow.extraction.navigation.title": "章節ナビゲーション",
   "documents.processingConfig.sectionRules": "章節の抽出規則",
@@ -3301,6 +3307,10 @@ export const ja = {
   "flow.chunks.downloadJson": "JSON をダウンロード",
   "flow.chunks.downloadJsonAria": "保存済みの Chunk の JSON をダウンロード",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
+  "flow.chunks.scopeEmpty": "現在の原本表示範囲に対応する Chunk はありません。",
+  "flow.chunks.unlocatedRange": "位置未確認の Chunk: {start}–{end} / {total}",
+  "flow.chunks.unlocatedTitle": "原本上の位置を確認できない Chunk",
+  "flow.chunks.unlocatedDescription": "索引済みですが、原本上の位置を確認できません。現在表示している原本の範囲に対応するとは限りません。",
   "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
   "flow.chunks.smallToBigFallbackTitle": "親子階層で分割されていない Chunk です",
   "flow.chunks.smallToBigFallback":

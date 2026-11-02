@@ -415,7 +415,7 @@ async function mockDocumentSections(page: Page) {
 
 async function openSections(page: Page) {
   await page.goto("/documents/doc-1");
-  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("tab", { name: "章節ナビゲーション" }).click();
   return page.getByTestId("extraction-navigation");
 }
 
@@ -427,10 +427,8 @@ test("章節ナビゲーションは各章節のページ範囲を出す", { tag
   await expect(panel.getByRole("button", { name: "第1章 総則（p.1–2）をプレビューで開く" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "第2章 申請（p.3）をプレビューで開く" })).toBeVisible();
   // 章節は要素の一覧（「構造化要素」の見出し）より上に出す（#735）。
-  const elementsHeading = page.getByRole("heading", { level: 4, name: /^構造化要素/ });
-  const panelBox = await panel.boundingBox();
-  const headingBox = await elementsHeading.boundingBox();
-  expect(panelBox!.y).toBeLessThan(headingBox!.y);
+  await expect(page.getByRole("tab", {name: "章節ナビゲーション"})).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("document-inspector-pane").getByRole("heading", {level: 4, name: /^構造化要素/})).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
 });
 
@@ -1004,6 +1002,15 @@ async function mockDocumentDetail(
       },
     });
   });
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/text-window", async (route) => {
+    const {offset = 0, limit = 8192} = route.request().postDataJSON() as {offset?: number; limit?: number};
+    const text = String(extraction.raw_text ?? "");
+    await fulfillDocumentInspection(route, {json: {data: {
+      text: text.slice(offset, offset + limit), offset, limit, total: text.length, revision: "synthetic-original-v1",
+      previous_offset: offset > 0 ? Math.max(0, offset - limit) : null,
+      next_offset: offset + limit < text.length ? offset + limit : null,
+    }, error_messages: [], warning_messages: []}});
+  });
   await page.route("**/api/documents/doc-1/recipes/recipe-1/content**", async (route) => {
     await fulfillDocumentInspection(route, {
       status: 200,
@@ -1237,7 +1244,7 @@ for (const { summarized, ruleSummary, staleRules } of [{ summarized: false, rule
     // 保存済みの抽出結果を変えずに、表示側の方式だけを解析見出しへ戻す。
     mode = "parser";
     await page.reload();
-    await page.getByRole("tab", { name: "構造化要素" }).click();
+    await page.getByRole("tab", { name: "章節ナビゲーション" }).click();
     await expect(panel.getByText("解析見出し A", { exact: true })).toBeVisible();
     if (ruleSummary) {
       await expect(mismatch).toContainText("抽出から再処理");
@@ -1305,7 +1312,9 @@ test("本文・構造化要素・Chunk はプレビューの現在ページだ�
   await expect(inspector).toContainText("合成ページ 2 の本文"); await expect(inspector).not.toContainText("合成ページ 1 の本文");
   await page.getByRole("tab", {name: "構造化要素", exact: true}).click();
   await expect(inspector).toContainText("合成ページ 2 の本文"); await expect(inspector).not.toContainText("合成ページ 1 の本文");
+  await page.getByRole("tab", {name: "章節ナビゲーション", exact: true}).click();
   await page.getByTestId("sections-navigation-scroll").getByRole("button", {name: "第1章 総則（p.1–2）をプレビューで開く"}).click();
+  await page.getByRole("tab", {name: "構造化要素", exact: true}).click();
   await expect(page.getByTestId("inspector-current-page")).toHaveText("表示中のページ: p.1");
   await expect(inspector).toContainText("合成ページ 1 の本文");
   await page.getByRole("button", {name: "次のページ", exact: true}).click();
@@ -1325,15 +1334,105 @@ test("構造化要素は共通の最大高さで内部スクロールする", { 
   const list = page.getByTestId("structured-elements-scroll");
   await expect(list).toBeVisible();
   const dimensions = await list.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight,
-    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5)}));
+    expected: Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68))}));
   expect(Math.abs(dimensions.height - dimensions.expected)).toBeLessThanOrEqual(1);
   expect(dimensions.content).toBeGreaterThan(dimensions.height);
   await list.focus(); await list.press("End");
   await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
-  await page.getByTestId("document-inspector-pane").getByRole("button", { name: "次へ", exact: true }).click();
+  await page.getByTestId("document-inspector-pane").getByRole("button", { name: "この範囲の続きを読む", exact: true }).click();
   await expect(list.getByText("合成要素 40", {exact: true})).toBeAttached();
   await list.getByText("合成要素 40", {exact: true}).scrollIntoViewIfNeeded();
   await expect(list.getByText("合成要素 40", {exact: true})).toBeInViewport();
   await list.screenshot({path: test.info().outputPath("structured-elements-scroll.png")});
   await expectNoPageOverflow(page);
+});
+
+
+test("Citation の高カード一覧は共通の大きい上限で止まり、最後までキーボードで読める", { tag: "@responsive" }, async ({ page }) => {
+  const chunks = Array.from({length: 20}, (_, index) => ({
+    document_id: "doc-1", chunk_id: `scroll-chunk-${index}`, chunk_index: index,
+    text: `合成引用 ${index + 1}。${"引用の本文と前後の説明。".repeat(18)}`,
+    content_kind: "text", page_start: 1, page_end: 1, metadata: {}, element_ids: [],
+  }));
+  await mockDocumentDetail(page, {chunks});
+  await page.goto("/documents/doc-1");
+  const inspector = page.getByTestId("document-inspector-pane");
+  await expect(inspector.getByRole("tab").first()).toHaveText("章節ナビゲーション");
+  await inspector.getByRole("tab", {name: /Chunk \/ Citation/}).click();
+  const list = page.getByTestId("document-chunk-list");
+  await expect(list).toBeVisible();
+  const size = await list.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight,
+    expected: Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68))}));
+  expect(Math.abs(size.height - size.expected)).toBeLessThanOrEqual(2);
+  expect(size.content).toBeGreaterThan(size.height);
+  await list.focus(); await list.press("End");
+  await expect.poll(() => list.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await list.getByRole("button").last().scrollIntoViewIfNeeded();
+  await expect(list.getByRole("button").last()).toBeInViewport();
+  await inspector.getByRole("tablist").scrollIntoViewIfNeeded();
+  await page.screenshot({path: test.info().outputPath("citation-card-scroll.png")});
+  await expectNoPageOverflow(page);
+});
+
+test("テキスト原本の範囲に3タブが追従し、26件目も範囲内で読める", {tag: "@responsive"}, async ({page}) => {
+  await mockDocumentDetail(page);
+  await mockDocumentSections(page);
+  const elements = Array.from({length: 31}, (_, i) => ({element_id: `sync-${i}`, kind: "text", text: `合成同期要素 ${i + 1}`, order: i}));
+  const requests: string[] = [];
+  await page.route("**/recipes/recipe-1/text-window", async route => {
+    const body = route.request().postDataJSON();
+    const offset = Number(body.offset || 0);
+    await route.fulfill({json: {data: {text: offset ? "次の合成範囲" : "最初の合成範囲", offset,
+      total: 10000, limit: 8192, revision: "synthetic-source-v1", previous_offset: offset ? 0 : null, next_offset: offset ? null : 8192}}});
+  });
+  await page.route("**/recipes/recipe-1/extraction-view?**", async route => {
+    const params = new URL(route.request().url()).searchParams;
+    requests.push(params.toString());
+    const later = params.get("source_offset") === "8192", offset = Number(params.get("offset") || 0);
+    const mode = params.get("mode");
+    const rows = later ? [{element_id: "later", kind: "text", text: "別範囲の要素", order: 32}] : elements;
+    const text = later ? "別範囲の本文" : "最初の範囲の本文";
+    await route.fulfill({json: {data: {payload: {raw_text: mode === "text" ? text : "", elements: mode === "structure" ? rows.slice(offset, offset + 25) : [], tables: [], pages: []},
+      total: mode === "text" ? text.length : rows.length, offset, limit: mode === "text" ? 8192 : 25, scope_status: "exact"}}});
+  });
+  await page.route("**/recipes/recipe-1/chunk-window?**", async route => {
+    const params = new URL(route.request().url()).searchParams;
+    requests.push(params.toString());
+    const later = params.get("source_offset") === "8192";
+    await route.fulfill({json: {data: {items: [{document_id: "doc-1", chunk_id: "sync-chunk", chunk_index: 0,
+      text: later ? "別範囲の引用" : "最初の範囲の引用", element_ids: [], metadata: {}}], total: 1, offset: 0, limit: 25, scope_status: "exact"}}});
+  });
+  await page.goto("/documents/doc-1");
+  const inspector = page.getByTestId("document-inspector-pane");
+  await expect(inspector.getByRole("tab")).toHaveText(["章節ナビゲーション", "本文テキスト", "構造化要素", /Chunk \/ Citation/, "抽出エクスポート"]);
+  await expect(page.getByTestId("inspector-current-range")).toContainText("開始 1");
+  await expect(inspector).toContainText("最初の範囲の本文");
+  await inspector.getByRole("tab", {name: "構造化要素", exact: true}).click();
+  await expect(inspector).toContainText("合成同期要素 25");
+  await inspector.getByRole("button", {name: "この範囲の続きを読む", exact: true}).click();
+  await expect(inspector).toContainText("合成同期要素 26");
+  await expect(inspector.getByRole("spinbutton")).toHaveCount(0);
+  await page.getByRole("button", {name: "次のページ", exact: true}).click();
+  await expect(page.getByTestId("inspector-current-range")).toContainText("開始 8193");
+  await expect(inspector).toContainText("別範囲の要素");
+  await expect(inspector).not.toContainText("合成同期要素 26");
+  await inspector.getByRole("tab", {name: "本文テキスト", exact: true}).click();
+  await expect(inspector).toContainText("別範囲の本文");
+  await inspector.getByRole("tab", {name: /Chunk \/ Citation/}).click();
+  await expect(inspector).toContainText("別範囲の引用");
+  expect(requests.some(q => q.includes("source_revision=synthetic-source-v1") && q.includes("source_offset=8192"))).toBe(true);
+  await expectNoHorizontalOverflow(page);
+  await inspector.getByRole("tablist").scrollIntoViewIfNeeded();
+  await page.screenshot({path: test.info().outputPath("inspector-text-synchronized.png")});
+});
+
+
+test("位置対応のない旧記録は推測して同期せず理由を示す", {tag: "@responsive"}, async ({page}) => {
+  await mockDocumentDetail(page);
+  await page.route("**/recipes/recipe-1/text-window", route => route.fulfill({json: {data: {text: "旧原本", offset: 0, total: 3, limit: 8192, revision: "legacy-v1"}}}));
+  await page.route("**/recipes/recipe-1/extraction-view?**", route => route.fulfill({json: {data: {payload: {raw_text: "", elements: [], tables: [], pages: []}, offset: 0, total: 0, limit: 8192, scope_status: "unrecorded"}}}));
+  await page.goto("/documents/doc-1");
+  await expect(page.getByTestId("document-inspector-pane")).toContainText("位置情報が記録されていないため");
+  await expect(page.getByTestId("document-inspector-pane")).not.toContainText("本文テキストはまだありません");
+  await expectNoHorizontalOverflow(page);
 });

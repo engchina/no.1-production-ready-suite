@@ -522,12 +522,6 @@ variable "bastion_display_name" {
   default     = "PRODUCTION_READY_BASTION"
 }
 
-variable "bastion_compartment_ocid" {
-  description = "Compartment OCID of the independent bastion Compute instance."
-  type        = string
-  default     = ""
-}
-
 variable "bastion_availability_domain" {
   description = "Availability domain of the independent bastion Compute instance."
   type        = string

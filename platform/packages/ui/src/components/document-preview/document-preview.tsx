@@ -52,6 +52,16 @@ export interface DocumentPreviewFocus {
   focusPageSize?: BboxPageSize | null;
 }
 
+export interface DocumentTextRange {
+  text: string;
+  offset: number;
+  total: number;
+  limit: number;
+  revision?: string;
+  previous_offset?: number | null;
+  next_offset?: number | null;
+}
+
 export interface DocumentPreviewProps extends DocumentPreviewFocus {
   kind: DocumentPreviewKind;
   /** ページ画像のビューアで表示中の実ページを通知する。 */
@@ -67,7 +77,9 @@ export interface DocumentPreviewProps extends DocumentPreviewFocus {
    * `text`: 本文を読む。失敗は throw する（`ApiErrorState` が理由と対処を出す）。`textKey` が変わると読み直す。
    */
   loadText?: (signal: AbortSignal) => Promise<string>;
-  loadTextRange?: (offset: number, signal: AbortSignal) => Promise<{ text: string; offset: number; total: number; limit: number }>;
+  loadTextRange?: (offset: number, signal: AbortSignal) => Promise<DocumentTextRange>;
+  /** 実際に表示した原本の範囲。文字座標は Unicode codepoint。 */
+  onTextRangeChange?: (range: DocumentTextRange) => void;
   textKey?: string;
   /**
    * `text`: 引用した箇所（根拠の抜粋の本文）。本文の中で見つかれば、そこへスクロールして強調する（PDF の bbox の強調と
@@ -108,6 +120,7 @@ export function DocumentPreview({
   iframeUrl = null,
   loadText,
   loadTextRange,
+  onTextRangeChange,
   textKey,
   focusText = null,
   textLang,
@@ -203,9 +216,10 @@ export function DocumentPreview({
     return (
       <PreviewFrame className={className} sizing={sizing} labels={labels} {...focus}>
         <TextPreview
-          key={textKey}
+          key={`${textKey ?? ""}:${focusRequestKey ?? ""}`}
           loadText={loadText}
           loadTextRange={loadTextRange}
+          onTextRangeChange={onTextRangeChange}
           fileName={fileName}
           focusText={focusText}
           textLang={textLang}
@@ -354,9 +368,10 @@ function BboxLocator({
  * 本文の表示（読み込み・失敗と再試行・中でスクロール）。読み方は製品の `loadText`。`focusText`（引用した箇所）が
  * 本文の中で見つかれば強調し、本文の領域の中だけをその位置へスクロールする（パネル全体は動かさない。#2512）。
  */
-function TextPreview({ loadText, loadTextRange, fileName, focusText, textLang, labels }: {
+function TextPreview({ loadText, loadTextRange, onTextRangeChange, fileName, focusText, textLang, labels }: {
   loadText: DocumentPreviewProps["loadText"];
   loadTextRange: DocumentPreviewProps["loadTextRange"];
+  onTextRangeChange: DocumentPreviewProps["onTextRangeChange"];
   fileName: string;
   focusText: string | null;
   textLang: string | null | undefined;
@@ -364,7 +379,7 @@ function TextPreview({ loadText, loadTextRange, fileName, focusText, textLang, l
 }) {
   const [attempt, setAttempt] = useState(0);
   const [offset, setOffset] = useState(0);
-  const [result, setResult] = useState<{ key: string; text: string; offset: number; total: number; limit: number; error?: unknown } | null>(null);
+  const [result, setResult] = useState<(DocumentTextRange & { key: string; error?: unknown }) | null>(null);
   const key = `${attempt}:${offset}:${focusText ?? ""}`;
   const current = result?.key === key ? result : null;
   useEffect(() => {
@@ -378,13 +393,14 @@ function TextPreview({ loadText, loadTextRange, fileName, focusText, textLang, l
       .catch((error: unknown) => { if (!controller.signal.aborted) setResult({ key, text: "", offset, total: 0, limit: 8192, error }); });
     return () => controller.abort();
   }, [key]);
+  useEffect(() => { if (current && !current.error) onTextRangeChange?.(current); }, [current, onTextRangeChange]);
   if (current?.error != null) return <ApiErrorState error={current.error} fallback={labels.fetchError} onRetry={() => setAttempt(v => v + 1)} retryLabel={labels.retry} />;
   if (!current) return <TimedLoadingState label={labels.textLoading} operationKey="preview-text-load" framed={false} testId="preview-text-loading"><Skeleton className="h-40 w-full" /></TimedLoadingState>;
   return <div className="flex h-full min-h-0 flex-col gap-2">
     {current.total > current.limit ? <div className="flex flex-wrap items-center justify-between gap-2" aria-label={labels.toolbar}>
-      <Button size="sm" variant="secondary" icon={ArrowLeft} disabled={current.offset === 0} onClick={() => setOffset(Math.max(0, current.offset - current.limit))}>{labels.previousPage}</Button>
-      <span className="text-xs text-fg-muted">{labels.textRange(current.offset + 1, Math.min(current.total, current.offset + current.text.length), current.total)}</span>
-      <Button size="sm" variant="secondary" icon={ArrowRight} disabled={current.offset + current.limit >= current.total} onClick={() => setOffset(current.offset + current.limit)}>{labels.nextPage}</Button>
+      <Button size="sm" variant="secondary" icon={ArrowLeft} disabled={current.offset === 0} onClick={() => setOffset(current.previous_offset ?? Math.max(0, current.offset - current.limit))}>{labels.previousPage}</Button>
+      <span className="text-xs text-fg-muted">{labels.textRange(current.offset + 1, Math.min(current.total, current.offset + [...current.text].length), current.total)}</span>
+      <Button size="sm" variant="secondary" icon={ArrowRight} disabled={current.next_offset === null || (current.next_offset === undefined && current.offset + current.limit >= current.total)} onClick={() => setOffset(current.next_offset ?? current.offset + current.limit)}>{labels.nextPage}</Button>
     </div> : null}
     <div className="min-h-0 flex-1"><TextPreviewBody text={current.text} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} /></div>
   </div>;

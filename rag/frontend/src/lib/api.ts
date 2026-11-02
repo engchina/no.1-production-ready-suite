@@ -3491,12 +3491,12 @@ export const api = {
     for (const [key,value] of Object.entries(input)) if (value !== undefined) search.set(key,String(value));
     return request<OriginalSourceWindow>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/source-map?${search}`, { signal });
   },
-  documentTextWindow: (id: string, recipeId: string | null, body: { offset: number; limit: number; variant: string; focus?: string | null }, signal: AbortSignal) =>
-    request<{ text: string; offset: number; total: number; limit: number }>(`/api/documents/${encodeURIComponent(id)}${recipeId ? `/recipes/${encodeURIComponent(recipeId)}` : ""}/text-window`, { ...jsonBody(body), signal }),
+  documentTextWindow: (id: string, recipeId: string | null, body: { offset: number; limit: number; variant: string; focus?: string | null; element_id?: string | null; section_id?: string | null }, signal: AbortSignal) =>
+    request<{ text: string; offset: number; total: number; limit: number; revision?: string; previous_offset?: number | null; next_offset?: number | null }>(`/api/documents/${encodeURIComponent(id)}${recipeId ? `/recipes/${encodeURIComponent(recipeId)}` : ""}/text-window`, { ...jsonBody(body), signal }),
   documentExtractionView: (id: string, recipeId: string, options: Record<string, string | number>, signal?: AbortSignal) =>
-    request<DocumentExtractionExport & { offset: number; total: number; limit: number; text_offset?: number; text_total?: number; cell_offset?: number; cell_total?: number }>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/extraction-view?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),
+    request<DocumentExtractionExport & { offset: number; total: number; limit: number; text_offset?: number; text_total?: number; cell_offset?: number; cell_total?: number; scope_status?: string }>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/extraction-view?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),
   documentChunkWindow: (id: string, recipeId: string, options: Record<string, string | number>, signal?: AbortSignal) =>
-    request<{items: DocumentChunkView[]; total: number; offset: number; limit: number}>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunk-window?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),
+    request<{items: DocumentChunkView[]; total: number; offset: number; limit: number; scope_status?: string; unlocated_items?: DocumentChunkView[]; unlocated_total?: number; unlocated_offset?: number; document_total?: number}>(`/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunk-window?${new URLSearchParams(Object.entries(options).map(([key,value]) => [key,String(value)]))}`, {signal}),
   listDocumentRecipeChunks: (id: string, recipeId: string) =>
     request<DocumentChunkView[]>(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/chunks`,
