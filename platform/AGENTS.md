@@ -1,6 +1,6 @@
 # AGENTS.md — Production Ready Platform
 
-> 共通基盤（`platform/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステムの共通ルール・共通の技術方針は、root の [../AGENTS.md](../AGENTS.md) と、そこから案内する root の `docs/agents/` を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集する。
+> 共通基盤（`platform/`）固有のルール。共通のルールは root の [../AGENTS.md](../AGENTS.md) を先に適用する。
 > 共有パッケージの運用（版管理・変更時の確認範囲）は [CONTRIBUTING.md](./CONTRIBUTING.md)。Issue の label と PR title の scope は `platform`。
 
 ## デザインシステム / UI
@@ -24,40 +24,7 @@
 
 ### lint
 
-`docs/design-system/adherence.oxlintrc.json` がデザインシステムの遵守ルールの正本。新しいコードにこの lint を通すことで、デザインシステムからのずれを止める。
-
-- 対象は各製品の `frontend/src/**/*.{ts,tsx}` と `packages/system-settings/src`（`packages/system-settings/.oxlintrc.json`。`npm run lint`。CI は `Platform / UI`。#1891）。検出する規則の一覧と理由は、adherence の各ルールの `message` と README の表（§0）にある。
-- 規則のテストは RAG の `frontend/src/design-system-adherence.test.ts`（ESLint の `lintText` で検出と許容の例を確かめる）。規則を足すときは同じテストに例を足す。
-- prop の妥当性は TypeScript の型チェックに任せ、lint では検査しない。
-- oxlint にはネイティブの `no-restricted-syntax` が無いため、同じ `{selector, message}` を受け取る JS プラグイン `docs/design-system/design-system-plugin.mjs` を置き、adherence 設定から相対パスで読み込む。
-- **各製品はルールもプラグインもコピーせず、相対パス（`../../platform/docs/design-system/…`）で参照する**（コピーすると変更が届かない）。
-
-```jsonc
-// oxlint（frontend/.oxlintrc.json）
-{
-  "extends": ["../../platform/docs/design-system/adherence.oxlintrc.json"]
-}
-```
-
-```js
-// ESLint（frontend/eslint.config.mjs）— 同じセレクタを ESLint 標準の no-restricted-syntax に渡す
-import adherence from "../../platform/docs/design-system/adherence.oxlintrc.json" with { type: "json" };
-const { rules } = adherence.overrides[0];
-export default [
-  // …
-  {
-    files: ["src/**/*.{ts,tsx}"],
-    rules: {
-      "no-restricted-syntax": rules["design-system/restricted-syntax"],
-      "no-restricted-imports": rules["no-restricted-imports"],
-    },
-  },
-];
-```
-
-- adherence 設定は oxlint と ESLint の両方が読むため、コメントや独自キーの無い純粋な JSON に保つ（未知のキーがあると oxlint が読み込みに失敗する）。
-- ルールを変えるときは、NL2SQL（oxlint）と RAG / Agent（ESLint）の `src` で違反件数を確かめて PR の `検証結果` に書く。違反が残るなら、同じ PR で製品を直すか、製品ごとの追従 Issue を作ってから merge する。
-- 製品固有のルールは各製品の設定に足してよいが、同じルール名（`design-system/restricted-syntax` / `no-restricted-syntax`）は上書きしない（adherence のセレクタが消える）。
+遵守ルールの正本は `docs/design-system/adherence.oxlintrc.json`。規則を足す・変える・製品から参照するときは [docs/agents/lint.md](./docs/agents/lint.md) を読む。**各製品はルールもプラグインもコピーせず、相対パスで参照する。**
 
 ## CI / 検証コマンド
 

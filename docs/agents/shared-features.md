@@ -15,3 +15,7 @@
 - **権限管理のメニューの一覧は左のナビを正本にする**: 製品の `nav-config.ts` から `permissionNavSections` / `arrangePermissionsByNav`（製品の `PERMISSIONS_API.permissions` を通す）で作り、backend の `group` / `label` を画面に使わない（名前はサイドナビの表示名。`sidebarLabelKey` があればそれ）。ナビに無い capability はナビの後ろに置く。画面のあるメニュー権限は必ずナビの項目にし、ずれは各製品のテスト（RAG `src/lib/permission-nav.test.ts`、NL2SQL `tests/permission-nav.test.ts`、Agent `e2e/permission-catalog.spec.ts`）が検出する。権限の code・保存値は変えない。
 
 - **軌跡の本文記録は3製品で1つの設定**（運用設定 › 軌跡の記録。システムテーブルの直下。#3901）。既定は無効で、共有 API と `PLATFORM_TRACE_RECORDING_SETTINGS` の単一行で管理する。新しい呼び出しの開始時に判断し、入力・出力・返却された思考・Schema・本文の診断詳細を対象とする。本文を止めても時刻・状態・階層・モデル・usage は残し、既存の trace と通常の業務記録は削除しない。
+
+## 3 製品で同じ機能の説明の文
+
+利用者が入力する自然言語は 3 製品で「質問」と呼ぶ（#1183。root の AGENTS.md「言語」）。チャットの副題・空の状態・処理の経過・停止の案内などは同じ書き方にし、製品の名詞だけを変える（例: 副題「〈対象〉に質問し、〈確かめるもの〉を確かめながら会話を続ける」、空の状態「質問を入力して会話を始めます」「同じ会話の中では、前の質問と〈回答 / SQL〉を踏まえて…」）。

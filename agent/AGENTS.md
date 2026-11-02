@@ -1,6 +1,6 @@
 # AGENTS.md — Production Control Plane for AI Agents
 
-> Agent（`agent/`）固有のルール。GitHub 運用・Issue / PR 規約・CI・デザインシステム・共通の技術方針（言語・AI / DB の分担・シークレット・UI 変更の検証）は、root の [../AGENTS.md](../AGENTS.md) と、そこから案内する root の `docs/agents/` を先に適用する。ルールを変えるときはこのファイル（共通ルールは root）を編集し、詳細は下の表の文書に書く。
+> Agent（`agent/`）固有のルール。共通のルールは root の [../AGENTS.md](../AGENTS.md) を先に適用する。詳細は下の表の文書に書く。
 > Issue の label は `product:agent`、PR title の scope は `agent`。
 
 ## 作業ごとに読む文書
@@ -10,6 +10,8 @@
 | 組み込み Runtime・ツールの実行・業務 Agent の版・保存先・スキル | [docs/agents/runtime.md](./docs/agents/runtime.md) |
 | MCP（外部への公開・MCP 接続・サービストークン・再試行） | [docs/agents/mcp.md](./docs/agents/mcp.md) |
 | 画面・ナビ・用語・「AI 活用」のデータの見え方・権限・Playwright | [docs/agents/ui.md](./docs/agents/ui.md) |
+| API・認証・RBAC・Snapshot・技術スタック | [docs/agents/api-security.md](./docs/agents/api-security.md) |
+| 検証のコマンド・E2E smoke・Runtime のテスト・worktree での起動 | [docs/agents/development.md](./docs/agents/development.md) |
 | コードの置き場所 | [docs/agents/structure.md](./docs/agents/structure.md) |
 | 設計の全体 | [docs/agent-control-plane-design.md](./docs/agent-control-plane-design.md) |
 
@@ -42,41 +44,20 @@
 - RAG / NL2SQL へは公開の契約（`platform/contracts/`）だけに依存し、内部の module・表・画面の API・内部の規則の一致を前提にしない（#3240。`tests/test_product_boundaries.py`）。
 - 呼び先へのサービストークンの `sub` は Run の利用者（承認後の実行も承認者ではない）。書き込みのツールは、呼び先に届いた後の失敗では再送しない。
 
-## 技術スタック（Agent 固有の分）
-
-- Backend は httpx と Oracle（`python-oracledb`）、Frontend は共有 UI に加えて shadcn/ui。
-- 状態は開発で memory / file、本番で Oracle AI Database。外部 queue・外部 vector DB は追加しない。
-- 観測は Prometheus・OpenTelemetry・Langfuse。業務データの原文と secret は trace に送らない。
-
 ## UI/UX
 
 詳細は [docs/agents/ui.md](./docs/agents/ui.md)。特に次を守る。
 
 - ナビは **AI 活用** → **Agent 構築** → **改善・運用** → セキュリティ設定 → ユーザーとロール → 運用設定 → システム設定。既定の入口はチャット。Tools・ツール権限をナビに出さない。
 - 画面・ナビの文言に「Control Plane」「Runtime」のような基盤の用語を使わない（Run → 「実行」、Skill → 「スキル」、組み込み Runtime → 「実行環境」。識別子・URL・権限コードは変えない）。
-- 「AI 活用」は system_admin は全員、それ以外は自分の Run・会話だけ（ほかの利用者の Run は 404）。system_admin が他の利用者の会話・Run にできるのは閲覧と運用の操作（停止・削除・承認の判断・再開）だけで、続きの質問・確認への答え・評価・名前の変更は持ち主だけ（403。#3244）。承認・再開は、実行した人と system_admin だけ。
-- lint は `frontend/eslint.config.js` が `../../platform/docs/design-system/adherence.oxlintrc.json` を import する。Playwright は `desktop` と `mobile-375` の 2 project。
 
-## API
+## API とセキュリティ
 
-- Snapshot 正式版は `agent-control-plane.snapshot.v2`。業務 Agent はツールの項目を持たない（保存済みの `tool_names`・`migration_required` は読むときに無視する。#3240）。
-- `POST /api/runs` は `agent_id` と `goal`（会話の続きは `thread_id`、確認の取り消しの操作は `clarification_cancel`。#1441・#1445）を受け取り、組み込み Runtime で実行する。旧エンジン（v1 の Run・`tool_calls`・planner・Memory・`X-Agent-API-Version: 1`）は持たない。
-- Skill は instructions と MCP ツールの許可リスト（`mcp_requirements`）だけを持つ。ToolCall のテンプレート（`tool_calls`）・`POST /api/skills/plan`・`agent_skill_run` は持たない。
-
-## セキュリティ
-
-- manifest ID を検証する。
-- 業務 Agent が使う Skill の削除は `409`。
-- RBAC は viewer / operator / approver / auditor / admin を維持する。自分の業務 Agent の作成（`agent.agents.build`）はロールに対応させず、持ち主の判定は router の `_policy_manages_agent` で行う（#2523）。
-- 画面のログインは共通認証（Cookie のセッション）。capability は 5 ロールに対応し、利用者（local はローカル利用者）から `ActorPolicy` を作って router の既存の判定に流す。local でもユーザー・ロールは Oracle の `PLATFORM_*`。Agent 独自の header / JWT / 外部 policy の認可（旧 `AGENT_RBAC_*`）は持たない。対象範囲はエージェントだけで、検索・回答プロファイルの判定は RAG に任せる。
-- 新しい API は必ず権限 manifest（`app/security/permissions.py`）に登録する（登録外は 403。完全性テストがある）。API は HTTP だけで、push は SSE、操作は REST にする（WebSocket は持たない。#2260）。
-- 承認の決定者（`decided_by`）は Cookie の利用者から決め、request の値を使わない。
+詳細は [docs/agents/api-security.md](./docs/agents/api-security.md)。新しい API は必ず権限 manifest（`app/security/permissions.py`）に登録する（登録外は 403）。承認の決定者は Cookie の利用者から決め、request の値を使わない。
 
 ## 開発・検証
 
-- 機能変更と同時に pytest / Playwright を追加・更新する。
-- 完了前に `scripts/check-all.sh`（backend の ruff format / ruff check / mypy / pytest・bandit、frontend の lint / build）を実行する。ローカルの既定は Playwright と pip-audit を省く。関係する spec だけ `SKIP_E2E=0 E2E_ARGS="e2e/<対象>.spec.ts" scripts/check-all.sh`、全部は `FULL=1`。
-- CI の job は `Agent / Backend`・`Agent / Frontend`・`Agent / E2E smoke`。smoke に入れる spec は `ci.yml` の `agent-e2e` に書く（ログイン・認証・Run の stream・Runtime の主導線など、壊れると全体に響くもの。合計が CI でおおむね 1 分に収まる量）。
-- 組み込み Runtime のテストは SDK の `ScriptedModel`（`agents.testing`）でモデルを台本にし、OCI へは接続しない。実環境の OCI Enterprise AI での確認は手動 / ステージングで行い、PR に分けて書く。
-- 既存のユーザーの変更を尊重し、無関係な差分を戻さない。
-- **worktree で Agent の backend を主の `.env`（`platform/.env` の `PLATFORM_ORACLE_*`）のまま起動しない**（#1916）。主の dev server（8020）と同じ DB の Run・業務 Agent の保存先（`AGENT_RUNTIME_CHECKPOINTS` / `AGENT_RUNTIME_ENTITIES`）に 2 つ目のプロセスが書く。書き込みは head を lock して別のプロセスの変更を Run・業務 Agent の単位で取り込むので更新は消えないが、起動した側は主の dev server の実行中の Run を「中断した Run」として失敗にし（#1894）、互いのメモリは次に書くまで古いまま。worktree の確認は pytest（保存先は memory・偽の Oracle）と CI の実 Oracle の結合テストで行い、実画面で要るなら主の dev server を使う。どうしても起動するなら、別の DB（別の `PLATFORM_ENV_FILE`）か `AGENT_RUNTIME_REPOSITORY_BACKEND=memory` にする。重なったときはログ `agent_runtime_checkpoint_concurrent_write`（相手の `other_writer_id`）が出る。
+詳細は [docs/agents/development.md](./docs/agents/development.md)。
+
+- 完了前に `scripts/check-all.sh` を実行する。Runtime のテストは OCI へ接続しない。
+- **worktree で Agent の backend を主の `.env` のまま起動しない**（#1916。主の dev server の実行中の Run を失敗にする）。確認は pytest と CI の実 Oracle の結合テストで行い、実画面で要るなら主の dev server を使う。
