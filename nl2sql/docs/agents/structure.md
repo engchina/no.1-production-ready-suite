@@ -49,3 +49,7 @@ docs/                     NL2SQL 固有の設計・運用・テスト計画・UI
 scripts/                  開発・Compute 上の起動 / 更新 / ログのスクリプトと、そのテスト
 init_script.sh            NL2SQL の配備の手順（systemd の backend・worker。platform/deploy/suite-init.sh が呼ぶ）
 ```
+
+## 古い Issue 番号
+
+NL2SQL の docs・コメントの `#N` のうち、2026-09-25 の monorepo 統合より前のものは旧 repo `engchina/no.1-production-ready-nl2sql` の番号。

@@ -1,7 +1,7 @@
 # AGENTS.md — No.1 Production Ready Suite（monorepo 共通ルール）
 
 > monorepo 全体の共通ルールの正本（Claude Code と Codex が直接読む。`CLAUDE.md` は置かない）。作業対象のディレクトリの `AGENTS.md` もあわせて適用し、矛盾する場合は製品固有のルールを優先する（GitHub 運用と CI は本ファイルが優先）。
-> 本ファイルには守る規則と、作業ごとに読む文書の案内だけを書く。詳細は下の表の文書にあり、**その作業を始める前に読む**（本ファイルと同じ強さで守る）。詳細を足すときは表の文書に書き、本ファイルには規則の要約と案内だけを足す。Codex は repo の直下から起動したディレクトリまでの `AGENTS.md` を合計 32 KiB で切るため、本ファイルは 20 KB 以下、製品の `AGENTS.md` との合計は 32 KB 以下に保つ（`scripts/check-agents-md-size.sh`）。`@path` の import は使わない。
+> 本ファイルには守る規則と案内だけを書き、詳細は下の表の文書に書く（**その作業を始める前に読む**。本ファイルと同じ強さで守る）。大きさの上限は `scripts/check-agents-md-size.sh`（本ファイル 20 KiB、製品の `AGENTS.md` との合計 32 KiB）。`@path` の import は使わない。
 
 ## 作業ごとに読む文書
 
@@ -15,6 +15,7 @@
 | 配備（Terraform・Compute・Nginx・DB ユーザー・release） | [docs/agents/deploy.md](./docs/agents/deploy.md) |
 | 3 製品で同じ機能（システム設定・ナビ・API キー・アカウント・データの見え方・権限管理） | [docs/agents/shared-features.md](./docs/agents/shared-features.md) |
 | `.env` の変数・DB の object の名前 | [docs/agents/naming.md](./docs/agents/naming.md) |
+| Python の版の変更 | [docs/agents/ci.md](./docs/agents/ci.md) |
 | backend の実装の標準 | [platform/docs/backend-standard.md](./platform/docs/backend-standard.md) |
 
 ## 構成
@@ -39,7 +40,7 @@
 
 - 応答・Issue / PR・commit message・コードコメントは日本語（identifier・API path・file path・command・固有名詞は英語のまま）。ユーザーが会話で別の言語を指定したら、応答だけ合わせる。
 - システムの主要言語は日本語。UI 文言・エラー・通知・LLM への指示と出力は日本語を前提とし、ユーザー向け文言は i18n 経由で管理する。
-- **利用者が入力する自然言語は、3 製品で「質問」と呼ぶ（#1183）。** 「クエリ」は SQL・技術の概念（サブクエリ・クエリ文字列など）にだけ使う（識別子・API・i18n のキーは変えなくてよい）。3 製品で同じ機能の説明の文（チャットの副題・空の状態・処理の経過・停止の案内など）は同じ書き方にし、製品の名詞だけを変える（例: 副題「〈対象〉に質問し、〈確かめるもの〉を確かめながら会話を続ける」、空の状態「質問を入力して会話を始めます」「同じ会話の中では、前の質問と〈回答 / SQL〉を踏まえて…」）。
+- **利用者が入力する自然言語は、3 製品で「質問」と呼ぶ（#1183）。** 「クエリ」は SQL・技術の概念（サブクエリ・クエリ文字列など）にだけ使う（識別子・API・i18n のキーは変えなくてよい）。3 製品で同じ機能の説明の文は同じ書き方にする（[docs/agents/shared-features.md](./docs/agents/shared-features.md)）。
 
 ## 開発ワークフロー / GitHub 運用
 
@@ -84,7 +85,7 @@
 - **AI / DB は OCI / Oracle に集約する**: LLM / VLM = **OCI Enterprise AI**、embedding / rerank = **OCI Generative AI**（Cohere Embed v4 / Rerank v4 fast）、ベクトル検索 = **Oracle AI Vector Search**、データの正本 = **Oracle AI Database**。この分担を取り違えない。外部ベクトル DB・別 LLM provider・別 SaaS は入れず、逸脱するなら理由を添えてユーザーに確認する。
 - **Oracle の製品名は公式名で、バージョン（`26ai` 等）を入れない**（「Oracle AI Database」「Oracle AI Vector Search」「Oracle Autonomous AI Database」）。対応バージョンは [terraform/README.md](./terraform/README.md)「Autonomous AI Database（全製品で共有）」だけに書く（`adb_db_version`・`oracle_26ai` などの値・識別子は変えない）。
 - Backend は Python 3.12 + FastAPI + Pydantic v2 + uv と `pr_backend_core`。Frontend は Vite + React Router + TypeScript + Tailwind + 共有 UI + TanStack Query + Zustand。
-- **Python は 3.12 に固定する**（全 `pyproject.toml` の `requires-python = ">=3.12,<3.13"`、直下の `.python-version` は `3.12`。uv は project の中で直下の `.python-version` を読まないため、上限は `requires-python` で掛ける）。版を変えるときは `pyproject.toml`・`uv.lock`・CI の `python-version`・各製品の `init_script.sh` の `uv python install` / `--python` を同じ PR でそろえる。
+- **Python は 3.12 に固定する**（版を変えるときは [docs/agents/ci.md](./docs/agents/ci.md)）。
 - シークレットは `.env` / secret store 経由（ハードコード・commit・API 応答への展開をしない）。LLM の出力は Pydantic で検証してから使う。
 - **ハードコードしない。** 特定の文書・業務・質問・データに合わせた語・規則・閾値・手順をコード（分岐・正規表現・プロンプトの例）に書かない。必要なら skill（`skills/<name>/SKILL.md`）か設定（`.env`・設定画面・検索・回答プロファイル・言語資源）に置き、コードは汎用の仕組みにする。
 - OCI / Oracle / LLM を呼ぶ層は CI では決定論スタブ / 録画応答でテストし、実サービスは手動 / ステージングで確かめる。
@@ -92,23 +93,19 @@
 - **修正の後は根因・変更箇所・方法・変えない範囲を利用者へ説明する**（結果だけで終えない）。
 - **不具合は局所検証で一つずつ直してからフルフローを確認する。** 毎回全工程を再実行せず、関連回帰の通過後に統合受入を行う。局所成功と全体成功を分け、必須 CI は省略しない（[手順](./docs/agents/ci.md)）。
 - Excel（.xlsx / .xlsm / .csv / .tsv）の作成・編集・分析は Codex の `spreadsheet` skill を使う（[導入と検証](./docs/agents/spreadsheets.md)）。その他の文書（.docx / .pptx / .pdf）の生成は対応する skill（`document-skills:*` / `pdf`）を使う。
-- **実際に渡す Prompt は Step 形式で責務を明確にし、複雑な処理だけを構造化した段階に分ける。** 全呼出を連鎖化せず、コードの保証・条件・原文・権限境界を保つ。分割の判断と検証は [docs/agents/prompts.md](./docs/agents/prompts.md)。
-- **LLM に渡す文（プロンプト・skill・MCP の説明）を書く・変える前に [docs/agents/prompts.md](./docs/agents/prompts.md) を読む。** 1 つの規則は 1 つの層にだけ書き、コードで保証できることはコードに置き、経緯や内部の仕組みを書かない。変えたら同じ PR で関係するテストを直し、最初のターンに渡す字数の前後を PR に書く。
+- **LLM に渡す文（プロンプト・skill・MCP の説明）を書く・変える前に [docs/agents/prompts.md](./docs/agents/prompts.md) を読む。** 実際に渡す Prompt は Step 形式で責務を明確にし、複雑な処理だけを段階に分ける。1 つの規則は 1 つの層にだけ書き、コードで保証できることはコードに置き、経緯や内部の仕組みを書かない。変えたら同じ PR で関係するテストを直し、最初のターンに渡す字数の前後を PR に書く。
 
 ## 配備
 
-詳細は [docs/agents/deploy.md](./docs/agents/deploy.md)。
+詳細（Terraform・Compute・Nginx・DB ユーザー・release）は [docs/agents/deploy.md](./docs/agents/deploy.md)。
 
-- 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx。Dockerfile・compose は持たない）。
+- 自前のコードは Docker を使わずネイティブで動かす（開発は `uv run` / `npm run dev`、本番は systemd + Nginx）。
 - **再配備は repo の直下で `sudo -n ./platform/deploy/suite-update.sh` を実行する。**
-- Terraform stack は `terraform/stack/` に 1 つだけ。選んだ製品を 1 台の Compute（Oracle Linux 9、ユーザー `opc`）に入れ、`platform/deploy/suite-init.sh` が各製品の `init_script.sh` を呼ぶ（製品は単独では配備しない）。Nginx の location は `platform/deploy/suite-nginx.sh` だけに書く。
-- 3 製品は既定で ADB のアプリ用の DB ユーザー（ADMIN ではない）で接続する。DB の新しい機能を使うときは付ける権限で足りるかを確かめる。release tag は `suite-v*` だけ。
 
 ## 共通の仕組みと設定・命名
 
 詳細は [docs/agents/shared-features.md](./docs/agents/shared-features.md) と [docs/agents/naming.md](./docs/agents/naming.md)。
 
-- **Agent の業務 Agent は、スキルが宣言したツールだけを使う**（直接の指定・明示の構成の暗黙の切り替え・未対応の成功扱い・検索の結果を根拠にした承認の省略をしない。五つの不変条件の正本は [agent/docs/agents/runtime.md](./agent/docs/agents/runtime.md)。#3240）。
 - **3 製品で同じ機能は platform に 1 セットだけ置く**（システム設定・ユーザー / ロール管理・API キー・アカウントの画面）。サイドナビの下部の並びと名前、ナビのアイコン、権限管理のメニューの一覧（左のナビが正本）は 3 製品でそろえる。
 - **「AI 活用」の下の機能は、system_admin は全員のデータ、それ以外は自分のデータだけ**を扱う（backend で絞り、他人のデータは 404）。system_admin が他の利用者のデータにできるのは閲覧と運用の操作（停止・削除・承認の判断）だけで、続きの質問・実行・回答・評価は持ち主だけ（#3244）。
 - **`.env.example` は変数を用途別に分類し、工程の設定は使う工程の順にできる限り並べ、説明コメントも対応する変数と一緒に置く**（詳細: [docs/agents/naming.md](./docs/agents/naming.md)）。
