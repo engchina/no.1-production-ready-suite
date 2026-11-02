@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import shutil
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import RLock
 from typing import Any, Literal
 
 from rag_engine.models.layout import PageImage
-from rag_engine.parsing.math_layout import PdfGlyph, PdfRule
+from rag_engine.parsing.math_layout import PdfGlyph, PdfMathPage, PdfRule
 
 SourceFileKind = Literal["pdf", "image"]
 
@@ -25,6 +26,8 @@ PDFIUM_LOCK = RLock()
 # 分数の線や罫線として見る、細い線の太さの上限と長さの下限（pt。#4140）。
 _THIN_RULE_POINTS = 2.0
 _MIN_RULE_LENGTH_POINTS = 3.0
+# フォーム XObject の入れ子をたどる深さの上限（循環する壊れた PDF で止めるため）。
+_MAX_FORM_DEPTH = 8
 # 横書きの字とみなす回転の上限（radian）。PDFium は回転が分からない字に -1 を返す。
 _MAX_HORIZONTAL_ANGLE = 0.01
 
@@ -200,28 +203,22 @@ def pdf_image_object_bounds(pdf_path: str | Path, page_number: int) -> list[tupl
             document.close()
 
 
-def pdf_math_page_contents(
-    pdf_path: str | Path, page_numbers: Iterable[int], *, always_read_glyphs: Collection[int] = ()
-) -> dict[int, tuple[list[PdfGlyph], list[PdfRule], list[PdfRule]]]:
-    """ページごとの text layer の字と、細い横線・縦線（PDF point。左下原点。#4140）。
+def pdf_math_page_contents(pdf_path: str | Path, page_numbers: Iterable[int]) -> dict[int, PdfMathPage]:
+    """ページごとの text layer の字と線（PDF point。左下原点。#4140・#4154）。
 
-    細い線が無く ``always_read_glyphs`` にも無いページは字を読まない（空の字を返す）。ページの内容に
-    直接描いた線だけを見る（フォーム XObject の中の座標はページの座標とは限らない）。
+    フォーム XObject の中の線も、親のフォームの行列を重ねてページの座標で返す。
     """
     pdfium = _import_pdfium()
     import pypdfium2.raw as pdfium_c
 
-    contents: dict[int, tuple[list[PdfGlyph], list[PdfRule], list[PdfRule]]] = {}
+    contents: dict[int, PdfMathPage] = {}
     with PDFIUM_LOCK:
         document = pdfium.PdfDocument(str(pdf_path))
         try:
             for page_number in page_numbers:
                 page = document[page_number - 1]
                 try:
-                    horizontal, vertical = _pdf_thin_rules(page, pdfium_c)
-                    read_glyphs = horizontal or page_number in always_read_glyphs
-                    glyphs = _pdf_page_glyphs(page, pdfium_c) if read_glyphs else []
-                    contents[page_number] = (glyphs, horizontal, vertical)
+                    contents[page_number] = _pdf_math_page(page, pdfium_c)
                 finally:
                     page.close()
         finally:
@@ -229,17 +226,39 @@ def pdf_math_page_contents(
     return contents
 
 
-def _pdf_thin_rules(page: Any, pdfium_c: Any) -> tuple[list[PdfRule], list[PdfRule]]:
+def _pdf_math_page(page: Any, pdfium_c: Any) -> PdfMathPage:
     horizontal: list[PdfRule] = []
     vertical: list[PdfRule] = []
-    for path in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_PATH], max_depth=0):
-        left, bottom, right, top = (float(value) for value in path.get_bounds())
+    other_paths: list[tuple[float, float, float, float]] = []
+    images: list[tuple[float, float, float, float]] = []
+    for item in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_PATH, pdfium_c.FPDF_PAGEOBJ_IMAGE], max_depth=_MAX_FORM_DEPTH):
+        bounds = _page_object_bounds(item)
+        if item.type == pdfium_c.FPDF_PAGEOBJ_IMAGE:
+            images.append(bounds)
+            continue
+        left, bottom, right, top = bounds
         width, height = right - left, top - bottom
         if height <= _THIN_RULE_POINTS and width >= _MIN_RULE_LENGTH_POINTS:
             horizontal.append(PdfRule((top + bottom) / 2, left, right))
         elif width <= _THIN_RULE_POINTS and height >= _MIN_RULE_LENGTH_POINTS:
             vertical.append(PdfRule((left + right) / 2, bottom, top))
-    return horizontal, vertical
+        else:
+            other_paths.append(bounds)
+    return PdfMathPage(_pdf_page_glyphs(page, pdfium_c), horizontal, vertical, other_paths, images)
+
+
+def _page_object_bounds(item: Any) -> tuple[float, float, float, float]:
+    """object の外接矩形をページの座標で返す。
+
+    PDFium の外接矩形は親のフォームの座標なので、親のフォームの行列を内側から順に当てる（フォームの
+    /Matrix は外接矩形に含まれる）。
+    """
+    left, bottom, right, top = (float(value) for value in item.get_bounds())
+    container = item.container
+    while container is not None:
+        left, bottom, right, top = container.get_matrix().on_rect(left, bottom, right, top)
+        container = container.container
+    return left, bottom, right, top
 
 
 def _pdf_page_glyphs(page: Any, pdfium_c: Any) -> list[PdfGlyph]:
@@ -269,7 +288,7 @@ def _pdf_page_glyphs(page: Any, pdfium_c: Any) -> list[PdfGlyph]:
                     left=float(left),
                     right=float(right),
                     baseline=float(origin_y.value),
-                    size=float(pdfium_c.FPDFText_GetFontSize(textpage, index)),
+                    size=_glyph_size(textpage, index, pdfium_c),
                     space_before=space_before,
                 )
             )
@@ -277,6 +296,21 @@ def _pdf_page_glyphs(page: Any, pdfium_c: Any) -> list[PdfGlyph]:
         return glyphs
     finally:
         textpage.close()
+
+
+def _glyph_size(textpage: Any, index: int, pdfium_c: Any) -> float:
+    """ページの上の字の大きさ（pt）。
+
+    ``FPDFText_GetFontSize`` は text の命令の値で、行列の拡大を含まない（``/F1 1 Tf 10 0 0 10 x y Tm``
+    なら 1）。字の行列の縦の拡大を掛ける。
+    """
+    size = float(pdfium_c.FPDFText_GetFontSize(textpage, index))
+    matrix = pdfium_c.FS_MATRIX()
+    if pdfium_c.FPDFText_GetMatrix(textpage, index, matrix):
+        scale = math.hypot(matrix.c, matrix.d)
+        if scale > 0:
+            return size * scale
+    return size
 
 
 def copy_pdf_to_run(pdf_path: str | Path, output_dir: str | Path) -> str:
