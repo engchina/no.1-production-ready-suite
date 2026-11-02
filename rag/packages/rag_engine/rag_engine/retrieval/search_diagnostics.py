@@ -89,6 +89,13 @@ def search_diagnostics(
         retrieval = branch.get("vector_retrieval")
         if isinstance(retrieval, Mapping) and retrieval:
             fields.append({"label": f"ベクトルの読み方 {index}", "value": _vector_retrieval_text(retrieval)})
+        if int(branch.get("filter_batches", 1)) > 1:
+            fields.append(
+                {
+                    "label": f"検索範囲の分割 {index}",
+                    "value": f"範囲の条件が Oracle の上限を超えるので {branch['filter_batches']} 回に分けて検索し、点数順に合わせました。",
+                }
+            )
         threshold = branch.get("vector_threshold")
         if isinstance(threshold, Mapping) and threshold:
             fields.append({"label": "コサイン類似度の下限", "value": str(threshold["min_similarity"])})

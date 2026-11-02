@@ -1,5 +1,6 @@
 """合成KB・profileで原生／従来方式の範囲と一回のRRFを確認する。"""
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 from uuid import uuid4
@@ -509,6 +510,111 @@ async def test_native_vector_exact_read_keeps_page_limited_scope() -> None:
     assert rows.vector_retrieval["method"] == "exact_scope"
     assert rows.vector_retrieval["expected"] == 3
     assert sorted(int(str(row["chunk_index"])) for row in rows) == [0, 1, 2]
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_long_native_scope_searches_every_branch_and_stays_inside_the_scope() -> None:
+    """範囲の条件が SEARCH の上限を超えても検索でき、範囲の外の行を返さない(#4149)。
+
+    実際に 1,000 集合を作らず、範囲に存在しない飛び飛びの識別子を足して条件だけを長くする。
+    """
+    from rag_engine.adapters.oracle.native_hybrid import (
+        NATIVE_FILTER_MAX_BYTES,
+        native_filter_batches,
+        native_search_request,
+        render_native_filter,
+    )
+
+    from app.clients.oracle import NativeSearchRows, _NativeScope
+
+    settings = get_settings().model_copy(
+        update={"rag_hybrid_search_backend": "oracle_native", "rag_min_similarity": 0.0}
+    )
+    token = uuid4().hex[:10]
+    word = f"synthetic{token}"
+    oracle = OracleClient(settings)
+
+    async def document(label: str, primary: int) -> str:
+        return await _indexed_document(
+            oracle,
+            file_name=f"synthetic-{label}-{token}.txt",
+            chunks=[
+                Chunk(
+                    text=f"{word} {label} item {index}",
+                    index=index,
+                    start_offset=0,
+                    end_offset=30,
+                    metadata={"page_number": 1},
+                )
+                for index in range(3)
+            ],
+            embeddings=[_axis_vector(primary, 10 + index, 0.02) for index in range(3)],
+        )
+
+    by_scope = await document("byscope", 0)
+    by_id = await document("byid", 0)
+    outside = await document("outside", 0)
+    scoped = await oracle._fetch_all(
+        "SELECT MAX(native_scope_id) AS scope_id FROM rag_chunks WHERE document_id = :document_id",
+        {"document_id": by_scope},
+    )
+    listed = await oracle._fetch_all(
+        "SELECT chunk_id FROM rag_chunks WHERE document_id = :document_id",
+        {"document_id": by_id},
+    )
+    filler = [2_000_000_000 + index * 2 for index in range(1000)]
+    scope = _NativeScope(
+        allowed_ids=[str(row["chunk_id"]) for row in listed],
+        complete_scopes=[int(str(scoped[0]["scope_id"])), *filler],
+        scope_ranges=[],
+        vector_chunks=6,
+    )
+    batches = native_filter_batches(
+        allowed_ids=scope.allowed_ids, allowed_scopes=scope.complete_scopes
+    )
+    assert len(batches) > 1
+
+    # 長さの判定の形は、Oracle が展開する条件と同じであること。
+    spec = native_search_request(
+        query=word,
+        vector=[0.1] * 1536,
+        channel="keyword",
+        allowed_ids=batches[0].allowed_ids,
+        allowed_scopes=batches[0].allowed_scopes,
+    )
+    expanded = await oracle._fetch_all(
+        "SELECT DBMS_HYBRID_VECTOR.GET_SQL(JSON(:native_spec)) AS statement FROM dual",
+        {"native_spec": json.dumps(spec, ensure_ascii=False)},
+    )
+    rendered = render_native_filter(spec["filter_by"])
+    assert rendered in str(expanded[0]["statement"])
+    assert len(rendered.encode("utf-8")) <= NATIVE_FILTER_MAX_BYTES
+
+    question = _axis_vector(0, 1, 0.1)
+    exact_oracle = oracle
+    index_oracle = OracleClient(
+        settings.model_copy(update={"rag_native_vector_exact_max_chunks": 0})
+    )
+    for client, channel in (
+        (exact_oracle, "keyword"),
+        (exact_oracle, "hybrid"),
+        (index_oracle, "vector"),
+        (index_oracle, "hybrid"),
+    ):
+        rows = await client._native_rows(
+            channel, word, question, top_k=6, filters={}, native_scope=scope
+        )
+        assert isinstance(rows, NativeSearchRows)
+        assert rows.filter_batches == len(batches), channel
+        documents = {str(row["document_id"]) for row in rows}
+        assert outside not in documents, channel
+        if channel == "vector":
+            # 原生索引の近似の読み方は件数を保証しない(#4134)。範囲の外を返さないことを確かめる。
+            assert rows and documents <= {by_scope, by_id}
+        else:
+            assert documents == {by_scope, by_id}, channel
+            assert len(rows) == 6, channel
+            assert all(row["native_text_rank"] for row in rows), channel
 
 
 @pytest.mark.usefixtures("oracle_db")
