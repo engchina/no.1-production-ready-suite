@@ -126,7 +126,7 @@ run_venv_case() (
     shift
     printf '%s | attempts=%s\n' "$*" "${attempts}" >> "${case_dir}/commands.log"
     # docling のモデル取得は失敗させ、配備が止まらないことを確かめる。
-    if printf '%s\n' "$*" | grep -q 'docling-tools models download'; then
+    if printf '%s\n' "$*" | grep -q '.venv/bin/python -m rag_engine.resources.docling_models'; then
       return 1
     fi
     return 0
@@ -366,7 +366,7 @@ grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/preprocess/office_to_pdf uv
   || fail "preprocess-office-to-pdf の venv をサービスのディレクトリで作っていない"
 # 取込時の PIIマスクと spaCy の日本語モデルは削除した（#3358）。venv は lock どおりで、追加の取得をしない。
 grep -Eq -- "--inexact|spacy download" "${venv_commands}" && fail "削除した PIIマスクの venv の例外（--inexact・spaCy のモデル）が残っている"
-grep -Fq "run_as_service_user_in_dir ${rag_dir}/services/parsers/docling .venv/bin/docling-tools models download" "${venv_commands}" \
+grep -Fq "run_as_service_user_in_dir ${rag_dir}/services/parsers/docling .venv/bin/python -m rag_engine.resources.docling_models" "${venv_commands}" \
   || fail "docling のモデルを SERVICE_USER の ~/.cache に取得していない"
 grep -Fq "WARNING: parser-docling could not download its models now" "${TEST_TMP_DIR}/venvs/venvs.log" \
   || fail "docling のモデル取得の失敗で配備が止まった、または警告を出していない"

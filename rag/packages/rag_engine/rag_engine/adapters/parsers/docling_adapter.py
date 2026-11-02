@@ -1112,6 +1112,9 @@ def _build_docling_converter(settings: Settings):
     artifacts_path = _docling_artifacts_path(Path(docling_settings.cache_dir))
     if artifacts_path is not None:
         pipeline_options.artifacts_path = artifacts_path
+        from rag_engine.resources.docling_models import verify_docling_cache
+
+        verify_docling_cache(artifacts_path, include_ocr=settings.docling_do_ocr)
     pipeline_options.do_ocr = settings.docling_do_ocr
     pipeline_options.do_table_structure = settings.docling_do_table_structure
     pipeline_options.accelerator_options = AcceleratorOptions(num_threads=settings.docling_num_threads, device=device)

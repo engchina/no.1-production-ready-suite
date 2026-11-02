@@ -431,6 +431,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   127.0.0.1 なので、security list は要りません。
 - ログインのセッションは 3 製品で共通です（#1565。下の「ログインのセッションの共有（#1565）」）。`/`（Agent、無ければ最初の製品）を含め、
   どの製品の `/login` でログインしても全製品を使えます。
+- Docling のモデル取得は、RapidOCR の ONNX／Torch と版面・表などの Hugging Face モデルを、公式 registry の SHA-256／取得版の ETag と照合します。不一致は対象モデルだけ再取得し、検証成功後に原子的に置き換えます。取得・検証の失敗は配備ログに残します。既存環境の復旧コマンドは [Docling の手順](../rag/services/parsers/docling/README.md#ocr-モデルの検証と復旧)を参照してください。
 - Wallet は `/u01/aipoc/wallet`、ログは `/var/log/cloud-init-custom.log`（bootstrap）・`/var/log/suite-init.log`（全体）・`/var/log/<製品>-init.log`。
 - apply 後の output に、`application_url`（`/`）、製品ごとの URL（`rag_application_url` など。配備しなかった製品は表示されない）、
   `ca_certificate_url`（HTTPS のとき）、`ssh_to_instance`、bastion を作ったときは `bastion_vnc_address`・`ssh_to_bastion` が出ます。
