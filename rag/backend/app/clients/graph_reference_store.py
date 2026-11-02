@@ -7,7 +7,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from typing import Any
 
-from app.rag.graph_index import graph_display_name_sql
+from app.rag.graph_index import _clean_label, graph_display_name_sql
 from app.rag.reference_records import GraphReferenceRecord
 from app.rag.reference_resolution import ReferenceDocument
 
@@ -42,6 +42,26 @@ CREATE INDEX rag_graph_refs_target_idx ON rag_graph_references
 """.strip()
 
 
+def _column_section_path(path: str | None) -> str | None:
+    """section path の列（VARCHAR2(4000 CHAR)）へ書く値。
+
+    4000 バイト以上は CLOB の bind になり、列を超えると ORA-22835・ORA-64203 で構築全体が
+    失敗する。そのようなパスは図のノードの表示名で保存する（図のノードとは表示名で結ぶ）。
+    """
+    from app.clients.oracle import _is_large_text
+
+    if path is None or not _is_large_text(path):
+        return path
+    return _clean_label(path)
+
+
+def _column_row(record: GraphReferenceRecord) -> dict[str, Any]:
+    row = record.to_dict()
+    for column in ("source_section_path", "target_section_path"):
+        row[column] = _column_section_path(row[column])
+    return row
+
+
 def write_graph_references(
     connection: Any,
     *,
@@ -69,8 +89,16 @@ def write_graph_references(
                 VALUES (:reference_id,:knowledge_base_id,:source_document_id,:source_chunk_set_id,
                 :source_chunk_id,:source_section_path,:label,:kind,:key,:document_title,:status,
                 :target_document_id,:target_chunk_set_id,:target_section_path)""",
-                [record.to_dict() for record in records[offset : offset + 250]],
+                [_column_row(record) for record in records[offset : offset + 250]],
             )
+
+
+def _endpoint_entity_sql(side: str) -> str:
+    """保存した section path のノード。表示名で保存した端点の ID はパスから求まらない。"""
+    return f"""(SELECT CASE WHEN COUNT(*)=1 THEN MIN(e.entity_id) END FROM rag_graph_entities e
+            WHERE e.chunk_set_id=r.{side}_chunk_set_id
+            AND e.knowledge_base_id=r.knowledge_base_id
+            AND e.canonical_name=r.{side}_section_path) AS {side}_entity_id"""
 
 
 def _catalog_section_path(row: Mapping[str, object]) -> str:
@@ -90,19 +118,36 @@ class GraphReferenceStore:
         from app.clients.oracle import _oracle_retrieval_where
 
         where, binds = _oracle_retrieval_where({"knowledge_base_id": kb_id}, effective_period=False)
+        # DISTINCT は CLOB に使えないので、通常は VARCHAR2 で読む。4000 バイトを超えるパスは
+        # どちらの関数も NULL を返すので印を付け、その行だけを CLOB で読み直す。
+        overflow = """JSON_EXISTS(c.metadata_json,'$.section_path')
+            AND JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) IS NULL
+            AND JSON_QUERY(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) IS NULL"""
         rows = await self.oracle._fetch_all(
             f"""SELECT DISTINCT c.document_id,c.chunk_set_id,d.file_name,
             JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path,
-            JSON_QUERY(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path_json
+            JSON_QUERY(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path_json,
+            CASE WHEN {overflow} THEN 1 ELSE 0 END AS path_overflow
             FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
             WHERE {where} ORDER BY c.document_id,c.chunk_set_id,path""",
             binds,
         )
-        grouped: dict[tuple[str, str, str], list[str]] = defaultdict(list)
+        overflowed = any(row.get("path_overflow") for row in rows)
+        rows = [row for row in rows if not row.get("path_overflow")]
+        if overflowed:
+            rows += await self.oracle._fetch_all(
+                f"""SELECT c.document_id,c.chunk_set_id,d.file_name,
+                JSON_VALUE(c.metadata_json,'$.section_path' RETURNING CLOB) AS path,
+                JSON_QUERY(c.metadata_json,'$.section_path' RETURNING CLOB) AS path_json
+                FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
+                WHERE {where} AND {overflow}""",
+                binds,
+            )
+        grouped: dict[tuple[str, str, str], dict[str, None]] = defaultdict(dict)
         for row in rows:
             grouped[
                 (str(row["document_id"]), str(row.get("chunk_set_id") or ""), str(row["file_name"]))
-            ].append(_catalog_section_path(row))
+            ][_catalog_section_path(row)] = None
         return tuple(
             ReferenceDocument(did, cs or None, name, tuple(paths))
             for (did, cs, name), paths in grouped.items()
@@ -135,7 +180,8 @@ class GraphReferenceStore:
         # 参照先の構造図が未構築でも、許可された実在の参照位置だけを読み込める。
         records = await self.oracle._fetch_all(
             f"""SELECT r.*,s.file_name AS source_name,t.file_name AS target_name,
-            ts.chunk_set_id AS active_target_set
+            ts.chunk_set_id AS active_target_set,
+            {_endpoint_entity_sql("source")},{_endpoint_entity_sql("target")}
             FROM rag_graph_references r
             JOIN rag_chunk_sets ss ON ss.chunk_set_id=r.source_chunk_set_id AND ss.is_active=1
             JOIN rag_documents s ON s.document_id=r.source_document_id
@@ -207,7 +253,8 @@ class GraphReferenceStore:
             location_binds["node_id"] = node_id
         rows = await self.oracle._fetch_all(
             f"""SELECT r.*,s.file_name AS source_name,t.file_name AS target_name,
-            ts.chunk_set_id AS active_target_set
+            ts.chunk_set_id AS active_target_set,
+            {_endpoint_entity_sql("source")},{_endpoint_entity_sql("target")}
             FROM rag_graph_references r
             JOIN rag_chunk_sets ss ON ss.chunk_set_id=r.source_chunk_set_id AND ss.is_active=1
             JOIN rag_documents s ON s.document_id=r.source_document_id
@@ -253,7 +300,8 @@ class GraphReferenceStore:
                 path or f"{current_pack().text('labels', 'whole_document')}: {row[f'{side}_name']}"
             )
             return {
-                "id": graph_section_node_id(row[f"{side}_chunk_set_id"], kb_id, name),
+                "id": row.get(f"{side}_entity_id")
+                or graph_section_node_id(row[f"{side}_chunk_set_id"], kb_id, name),
                 "name": name,
                 "type": "section" if path else "document",
                 "confidence": 1.0,

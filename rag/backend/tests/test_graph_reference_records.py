@@ -101,9 +101,9 @@ async def test_unindexed_target_is_loaded_only_from_a_visible_versioned_referenc
 
     class Oracle:
         async def _fetch_all(self, sql: str, binds: object) -> list[dict[str, Any]]:
-            if "FROM rag_graph_entities" in sql:
+            if "FROM rag_graph_references" not in sql:
                 return []
-            assert "rag_graph_references" in sql and "r.reference_id=:reference_id" in sql
+            assert "r.reference_id=:reference_id" in sql
             assert "JOIN rag_document_knowledge_bases sm" in sql
             assert "ts.is_active=1" in sql
             return [row]
@@ -139,18 +139,18 @@ def _long_path_record(source_path: str, target_path: str | None) -> GraphReferen
 @pytest.mark.parametrize(
     ("path", "stored_whole"),
     [
-        ("a" * 4000, True),
+        ("a" * 3999, True),
         ("合" * 1333, True),
-        ("a" * 4001, False),
+        ("a" * 4000, False),
         ("合" * 1334, False),
         ("合" * 4000, False),
     ],
-    ids=["4000_bytes", "3999_bytes_multibyte", "4001_bytes", "4002_bytes_multibyte", "12000_bytes"],
+    ids=["3999_bytes", "3999_bytes_multibyte", "4000_bytes", "4002_bytes_multibyte", "12000_bytes"],
 )
 def test_write_keeps_section_paths_within_the_column(
     monkeypatch: pytest.MonkeyPatch, path: str, stored_whole: bool
 ) -> None:
-    """#4126: 列に入るパスは変えず、入らないパスは図のノードと同じ表示名で保存する。"""
+    """#4126: CLOB の bind にならないパスは変えず、それ以外は図のノードの表示名で保存する。"""
     from app.clients import oracle as oracle_module
     from app.clients.graph_reference_store import write_graph_references
     from app.rag.graph_index import _clean_label
@@ -167,7 +167,7 @@ def test_write_keeps_section_paths_within_the_column(
     expected = path if stored_whole else _clean_label(path)
     assert [row["source_section_path"] for row in written] == [expected, expected]
     assert [row["target_section_path"] for row in written] == [expected, None]
-    assert all(len(row["source_section_path"].encode()) <= 4000 for row in written)
+    assert all(len(row["source_section_path"].encode()) < 4000 for row in written)
     # 保存した値の表示名は変わらない（SQL の表示名の式で図のノードへ結べる）。
     assert _clean_label(expected) == _clean_label(path)
 

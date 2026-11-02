@@ -1,5 +1,6 @@
 """版付きの参照記録と双方向のページングを、合成データで実Oracle上に確認する。"""
 
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -185,6 +186,42 @@ async def test_same_document_reference_over_the_column_limit_does_not_fail_the_b
 
 
 @pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize(
+    ("parent", "stored_whole"),
+    [
+        pytest.param("合" * 1329, True, id="3999_bytes"),
+        pytest.param("合" * 1329 + "a", False, id="4000_bytes"),
+    ],
+)
+async def test_reference_path_at_the_bind_boundary_is_written(
+    parent: str, stored_whole: bool
+) -> None:
+    """#4126: VARCHAR の bind で入る最長のパスは完全なまま、次の長さは表示名で保存する。"""
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-boundary-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    first, second = f"{parent} > 第1条", f"{parent} > 第2条"
+    assert len(second.encode()) == (3999 if stored_whole else 4000)
+    chunks = _chunks([(first, 1), (second, 1)])
+    chunks[0].text = "第2条を参照する。"
+    chunks[1].text = "合成の本文。"
+    _document_id, chunk_set_id = await _indexed_document(
+        client,
+        file_name="synthetic-boundary.pdf",
+        chunks=chunks,
+        knowledge_base_id=kb.id,
+    )
+    first_node = graph_section_node_id(chunk_set_id, kb.id, first)
+    second_node = graph_section_node_id(chunk_set_id, kb.id, second)
+    outgoing = await GraphReferenceStore(client).page(
+        kb.id, first_node, direction="outgoing", offset=0, limit=25
+    )
+    target = outgoing["items"][0]["target"]
+    assert target["id"] == second_node
+    assert target["name"] == (second if stored_whole else _clean_label(second))
+
+
+@pytest.mark.usefixtures("oracle_db")
 @pytest.mark.parametrize("parent", _OVER_COLUMN_LIMIT)
 async def test_cross_document_reference_resolves_a_section_over_the_column_limit(
     parent: str,
@@ -240,7 +277,8 @@ async def test_reference_catalog_keeps_string_and_array_paths_over_4000_bytes() 
         knowledge_base_id=kb.id,
     )
     array_chunks = _chunks([("placeholder", 1)])
-    array_chunks[0].metadata["section_path"] = [parent, "第3条"]
+    # 配列の section_path は ChunkMetadata の型の外だが、目録と補建は読める形として扱う。
+    array_chunks[0].metadata["section_path"] = cast(Any, [parent, "第3条"])
     array_id, _array_set = await _indexed_document(
         client,
         file_name="synthetic-catalog-array.pdf",
