@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +14,20 @@ from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, na
 from app.clients.oracle import OracleClient, SearchHits
 from app.config import Settings
 from app.schemas.search import SearchMode
+
+
+def test_native_text_channel_uses_the_contains_expression_when_given() -> None:
+    spec = native_search_request(
+        query="合成の質問",
+        vector=[1],
+        channel="hybrid",
+        allowed_ids=["a"],
+        text_contains="{合成} ACCUM {質問}",
+    )
+    assert spec["text"]["contains"] == "{合成} ACCUM {質問}"
+    assert "search_text" not in spec["text"]
+    assert spec["text"]["inpath"] == ["$.text"]
+    assert spec["vector"]["search_vector"] == [1]
 
 
 def test_default_and_reject_unknown_backend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,12 +100,11 @@ class NativeOracle(OracleClient):
 
 
 @pytest.mark.asyncio
-async def test_both_entry_points_execute_native_and_never_sudachi() -> None:
+async def test_both_entry_points_execute_native_and_never_legacy_sql() -> None:
     client = NativeOracle()
     vector = [1.0] * 1536
-    with patch(
-        "app.clients.oracle._oracle_text_query", side_effect=AssertionError("Sudachi呼出し禁止")
-    ):
+    # 語の分割だけを共有し(#4011)、検索は原生の SEARCH だけで行う。
+    with patch("app.clients.oracle._oracle_text_query", return_value="{合成}"):
         one = await client.hybrid_search("合成の質問", vector, 4)
         many = await client.search_many(
             [("合成の質問", vector, SearchMode.VECTOR), ("合成の質問", vector, SearchMode.KEYWORD)],
@@ -323,6 +337,32 @@ async def test_scope_failure_is_reported_per_search_without_empty_success() -> N
 
     assert [getattr(hits, "status", "") for hits in results] == ["failed", "failed"]
     assert client.filters == []
+
+
+@pytest.mark.asyncio
+async def test_native_rows_send_tokenized_contains_and_fall_back_without_terms() -> None:
+    """語に分けられない質問は、これまでどおり質問のまま渡す(空の式で失敗させない。#4011)。"""
+    client = CompleteScopeOracle()
+    specs: list[dict[str, Any]] = []
+    original = client._fetch_all
+
+    async def capture(
+        sql: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+            specs.append(json.loads(str((binds or {})["native_spec"])))
+        return await original(sql, binds)
+
+    with patch.object(client, "_fetch_all", capture):
+        with patch("app.clients.oracle._oracle_text_query", return_value="{合成}"):
+            await client._native_rows("keyword", "合成", [], top_k=4, filters={})
+            await client._native_rows("vector", "合成", [1.0] * 1536, top_k=4, filters={})
+        with patch("app.clients.oracle._oracle_text_query", return_value=None):
+            await client._native_rows("keyword", "。", [], top_k=4, filters={})
+
+    assert specs[0]["text"]["contains"] == "{合成}"
+    assert "text" not in specs[1]
+    assert specs[2]["text"]["search_text"] == "。"
 
 
 @pytest.mark.parametrize(

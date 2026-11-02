@@ -84,8 +84,13 @@ def native_search_request(
     rank_constant: int = 60,
     accuracy: int = 100,
     method_ratio: tuple[float, float] = (10, 1),
+    text_contains: str | None = None,
 ) -> dict[str, Any]:
-    """許可されたchunkの集合を検索前に制限する。空の集合では実行しない。"""
+    """許可されたchunkの集合を検索前に制限する。空の集合では実行しない。
+
+    ``text_contains`` は全文の分岐の CONTAINS の式(語に分けた質問。#4011)。無ければ質問をそのまま
+    ``search_text`` で渡す。
+    """
     if id_column not in {"CHUNK_ID", "CHUNK_UID"}:
         raise ValueError("検索範囲の列が不正です。")
     identifiers = list(dict.fromkeys(allowed_ids))
@@ -140,7 +145,7 @@ def native_search_request(
         }
     if channel in {"keyword", "hybrid"}:
         request["text"] = {
-            "search_text": query,
+            **({"contains": text_contains} if text_contains else {"search_text": query}),
             "inpath": ["$.text"],
             "result_max": limit,
             "rank_penalty": rank_constant,

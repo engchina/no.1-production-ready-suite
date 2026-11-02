@@ -7549,6 +7549,10 @@ class OracleClient:
             rank_constant=self._settings.rag_rrf_k,
             accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
             method_ratio=self._settings.rag_rrf_method_ratio,
+            # 質問の全文を search_text で渡すと、よくある語を含むほぼ全行が当たる(#4011)。
+            text_contains=(
+                _oracle_text_query(query, settings=self._settings) if channel != "vector" else None
+            ),
         )
         score = {"vector": "n.vector_score", "keyword": "n.text_score", "hybrid": "n.score"}[
             channel
