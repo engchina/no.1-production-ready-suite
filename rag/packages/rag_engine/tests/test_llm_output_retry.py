@@ -11,6 +11,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
+import pytest
+
 from rag_engine.adapters import oci
 from rag_engine.config import get_settings
 from rag_engine.generation import execution_record
@@ -395,3 +397,82 @@ class DeadlineOutputBudgetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _http_response(status: str, text: str, reason: str | None = None) -> dict:
+    """Responses API の合成の HTTP 応答。"""
+    return {
+        "id": "r",
+        "object": "response",
+        "created_at": 0,
+        "model": "synthetic",
+        "status": status,
+        "incomplete_details": {"reason": reason} if reason else None,
+        "output": [
+            {
+                "id": "o",
+                "type": "message",
+                "role": "assistant",
+                "status": status,
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": False,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {
+            "input_tokens": 1,
+            "output_tokens": 3,
+            "total_tokens": 4,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+
+
+def _real_sdk_client(monkeypatch, responses: list[dict]) -> list[dict]:
+    """実の OpenAI SDK に合成の HTTP 応答を返す（スタブの parse では SDK の本文の検証を確かめられない）。"""
+    import json
+
+    import httpx
+    from openai import OpenAI
+
+    bodies: list[dict] = []
+    values = iter(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=next(values))
+
+    client = OpenAI(api_key="x", base_url="http://synthetic/v1", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda provider, settings: client)
+    monkeypatch.setattr(oci, "_openai_client_with_deadline", lambda value, settings: value)
+    return bodies
+
+
+def test_a_truncated_response_from_the_real_sdk_reaches_the_widening_resend(monkeypatch):
+    """#4145: 上限で切れた応答が検証の失敗にならず、上限を広げる送り直しに届く。"""
+    bodies = _real_sdk_client(
+        monkeypatch,
+        [_http_response("incomplete", '{"text":"途中', "max_output_tokens"), _http_response("completed", '{"text":"完了"}')],
+    )
+    settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
+    result = oci._openai_parsed([], settings, TextOutput, SimpleNamespace(**vars(PROVIDER), max_output_tokens=4000))
+    assert result.text == "完了"
+    assert [body["max_output_tokens"] for body in bodies] == [1000, 2000]
+    assert all("text" in body and body["text"]["format"]["type"] == "json_schema" for body in bodies)
+
+
+def test_invalid_json_in_a_completed_response_stays_a_validation_error(monkeypatch):
+    """#4145: 完了した応答の不正な JSON は従来どおり検証の失敗（再実行の対象）。"""
+    from pydantic import ValidationError
+
+    _real_sdk_client(monkeypatch, [_http_response("completed", '{"text":"途中')])
+    with pytest.raises(ValidationError) as raised:
+        oci._openai_parsed(
+            [],
+            replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000),
+            TextOutput,
+            SimpleNamespace(**vars(PROVIDER), max_output_tokens=4000),
+        )
+    assert oci.is_invalid_structured_output(raised.value)

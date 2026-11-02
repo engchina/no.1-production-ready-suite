@@ -870,7 +870,13 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     )
                 else:
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
-                    response = client.responses.create(**wire_request) if is_audit_wire(text_format) else client.responses.parse(**request)
+                    # text_format を渡すと SDK が応答の組み立ての中で本文を検証し、上限で切れた応答（未完了）も検証の失敗になって
+                    # 下の送り直しに届かない（#4145）。schema だけを送り、応答の状態を確かめてから本文を検証する。
+                    response = (
+                        client.responses.create(**wire_request)
+                        if is_audit_wire(text_format)
+                        else client.responses.parse(**_response_wire_request(request))
+                    )
                 if capture is None or not capture.has_terminal:
                     observation.response(response)
                 usage = _value(response, "usage")
@@ -1694,6 +1700,10 @@ def _parsed_response[StructuredOutputT: BaseModel](
         parsed = _value(content, "parsed")
         if parsed is not None:
             return _coerce_parsed_output(parsed, text_format, provider, response=response)
+
+    if text := _response_output_text(response):
+        # 完了した応答の本文を検証する。不正な JSON は pydantic の ValidationError（再実行の対象）のまま。
+        return _coerce_parsed_output(text_format.model_validate_json(text), text_format, provider, response=response)
 
     raise RuntimeError(f"{provider.label} の Responses API 応答に parsed output がありません。")
 
