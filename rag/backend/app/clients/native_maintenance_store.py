@@ -10,9 +10,20 @@ from time import monotonic
 from typing import Protocol, cast
 from uuid import uuid4
 
-from app.clients.native_index_maintenance import MaintenanceConnection, maintain_native_vectors
-from app.clients.native_maintenance_schema import EVENTS_TABLE, STATE_KEY, STATE_TABLE
-from app.clients.oracle import OracleClient, OracleConnectionProtocol
+from app.clients.native_index_maintenance import (
+    MaintenanceConnection,
+    MaintenancePlan,
+    NativeMaintenanceResult,
+    maintain_native_vectors,
+)
+from app.clients.native_maintenance_schema import (
+    EVENTS_TABLE,
+    FULL_STATE_KEY,
+    STATE_KEY,
+    STATE_TABLE,
+)
+from app.clients.oracle import OracleClient, OracleConnectionProtocol, OracleCursorProtocol
+from app.config import get_settings
 from app.rag.native_index_maintenance import MaintenanceLease
 
 logger = logging.getLogger(__name__)
@@ -29,8 +40,15 @@ class TimedMaintenanceConnection(OracleConnectionProtocol, Protocol):
 
 
 class NativeMaintenanceStore:
-    def __init__(self, oracle: OracleClient | None = None) -> None:
+    def __init__(
+        self, oracle: OracleClient | None = None, *, full_interval_hours: float | None = None
+    ) -> None:
         self.oracle = oracle or OracleClient()
+        self.full_interval_hours = (
+            get_settings().rag_native_index_full_optimize_interval_hours
+            if full_interval_hours is None
+            else full_interval_hours
+        )
 
     async def claim(self, owner: str) -> MaintenanceLease | None:
         token = uuid4().hex
@@ -39,13 +57,14 @@ class NativeMaintenanceStore:
             cursor = connection.cursor()
             try:
                 cursor.execute(
-                    f"""SELECT 1 FROM {STATE_TABLE}
+                    f"""SELECT attempt_count FROM {STATE_TABLE}
                     WHERE state_key=:state_key AND next_attempt_at<=SYSTIMESTAMP
                     AND (lease_until IS NULL OR lease_until<SYSTIMESTAMP)
                     FOR UPDATE SKIP LOCKED""",
                     {"state_key": STATE_KEY},
                 )
-                if cursor.fetchone() is None:
+                state = cursor.fetchone()
+                if state is None:
                     return None
                 cursor.execute(
                     f"""SELECT event_id FROM {EVENTS_TABLE}
@@ -67,7 +86,7 @@ class NativeMaintenanceStore:
                         "state_key": STATE_KEY,
                     },
                 )
-                return MaintenanceLease(owner, token, ids)
+                return MaintenanceLease(owner, token, ids, attempt=int(str(state[0])) + 1)
             finally:
                 cursor.close()
 
@@ -155,7 +174,40 @@ class NativeMaintenanceStore:
 
         await self.oracle._run_transaction(operation)
 
+    def _plan(self, cursor: OracleCursorProtocol, lease: MaintenanceLease) -> MaintenancePlan:
+        """失敗の次は FULL に戻す。FULL の間隔が過ぎていれば semantic の後に FULL も行う。"""
+        if lease.attempt > 1:
+            return "full"
+        cursor.execute(
+            f"""SELECT CASE WHEN last_completed_at>SYSTIMESTAMP
+                    -NUMTODSINTERVAL(:interval_hours, 'HOUR') THEN 0 ELSE 1 END
+            FROM {STATE_TABLE} WHERE state_key=:state_key""",
+            {"interval_hours": self.full_interval_hours, "state_key": FULL_STATE_KEY},
+        )
+        row = cursor.fetchone()
+        return "semantic_then_full" if row is None or int(str(row[0])) == 1 else "semantic"
+
+    async def _record_full_completed(self) -> None:
+        def operation(connection: OracleConnectionProtocol) -> None:
+            cursor = connection.cursor()
+            try:
+                cursor.execute(
+                    f"""MERGE INTO {STATE_TABLE} s
+                    USING (SELECT :state_key state_key FROM dual) v ON (s.state_key=v.state_key)
+                    WHEN MATCHED THEN UPDATE SET
+                        last_completed_at=SYSTIMESTAMP, updated_at=SYSTIMESTAMP
+                    WHEN NOT MATCHED THEN INSERT (state_key, last_completed_at)
+                        VALUES (v.state_key, SYSTIMESTAMP)""",
+                    {"state_key": FULL_STATE_KEY},
+                )
+            finally:
+                cursor.close()
+
+        await self.oracle._run_transaction(operation)
+
     async def optimize(self, lease: MaintenanceLease) -> None:
+        results: list[NativeMaintenanceResult] = []
+
         def operation() -> None:
             connection = cast(TimedMaintenanceConnection, self.oracle.acquire_connection())
             previous_timeout = getattr(connection, "call_timeout", None)
@@ -192,13 +244,17 @@ class NativeMaintenanceStore:
                     before_call()
                     if cursor.fetchone() is None:
                         raise RuntimeError("索引整理のleaseが失効しています。")
+                    before_call()
+                    plan = self._plan(cursor, lease)
                 finally:
                     cursor.close()
                 result = maintain_native_vectors(
                     cast(MaintenanceConnection, connection),
                     before_call=before_call,
                     before_verify=before_verify,
+                    plan=plan,
                 )
+                results.append(result)
                 logger.info(
                     "native_index_maintenance_optimized",
                     extra={
@@ -228,3 +284,12 @@ class NativeMaintenanceStore:
             with suppress(Exception):
                 await asyncio.shield(task)
             raise
+        if results and results[0].full_completed:
+            # 記録に失敗しても整理は終わっている。次の要求で FULL がもう一度走るだけ。
+            try:
+                await self._record_full_completed()
+            except Exception as exc:
+                logger.warning(
+                    "native_index_maintenance_full_record_failed",
+                    extra={"error_type": type(exc).__name__},
+                )

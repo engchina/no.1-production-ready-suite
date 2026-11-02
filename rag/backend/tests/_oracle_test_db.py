@@ -231,7 +231,7 @@ def settle_test_native_index(connection: Any) -> None:
         previous_timeout = connection.call_timeout
         try:
             connection.call_timeout = OPTIMIZE_CALL_TIMEOUT_MS
-            maintain_native_vectors(connection)
+            maintain_native_vectors(connection, plan="full")
         finally:
             connection.call_timeout = previous_timeout
         for event_id in event_ids:

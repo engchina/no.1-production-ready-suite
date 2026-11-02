@@ -65,7 +65,9 @@ async def test_delete_reinsert_queue_restores_native_candidates(
                 connection.call_timeout = 180_000
                 results.append(
                     maintain_native_vectors(
-                        cast(MaintenanceConnection, connection), index_name=index
+                        cast(MaintenanceConnection, connection),
+                        index_name=index,
+                        plan="semantic_then_full",
                     )
                 )
             finally:
@@ -143,10 +145,29 @@ async def test_delete_reinsert_queue_restores_native_candidates(
         )
         replacement = await store.claim("worker-b")
         assert replacement is not None and replacement.token != lease.token
+        assert (lease.attempt, replacement.attempt) == (1, 2)
         assert not await store.complete(lease)
         assert not await store.heartbeat(lease)
         assert await store.complete(replacement)
         assert await store.claim("worker-c") is None
+
+        def plan(interval_hours: float) -> str:
+            store.full_interval_hours = interval_hours
+            connection = oracle.acquire_connection()
+            try:
+                cursor = connection.cursor()
+                try:
+                    return store._plan(cursor, MaintenanceLease("worker-d", "token-d", ()))
+                finally:
+                    cursor.close()
+            finally:
+                connection.close()
+
+        assert await oracle._db_call_runner(lambda: plan(24)) == "semantic_then_full"
+        await store._record_full_completed()
+        await store._record_full_completed()
+        assert await oracle._db_call_runner(lambda: plan(24)) == "semantic"
+        assert await oracle._db_call_runner(lambda: plan(0)) == "semantic_then_full"
         for _generation in range(8):
             await execute(f"DELETE FROM {table}")
             for item in (24, 99):
@@ -164,6 +185,8 @@ async def test_delete_reinsert_queue_restores_native_candidates(
             if _generation == 0:
                 assert await search_count("vector") == 2, "initial-vector-baseline"
         assert await run_maintenance_once(store, "synthetic-worker") == "complete"
+        # 件数の一致では検索の回復を保証しない(#4097)ので、FULL を終えた後で判定する。
+        assert results[-1].strategy == "semantic_then_full"
         assert results[-1].before.stored >= results[-1].before.visible
         assert results[-1].after.stored == results[-1].after.visible == 2
         assert await run_maintenance_once(store, "synthetic-worker") == "idle"

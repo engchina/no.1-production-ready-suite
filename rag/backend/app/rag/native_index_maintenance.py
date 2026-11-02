@@ -18,6 +18,8 @@ class MaintenanceLease:
     owner: str
     token: str
     event_ids: tuple[str, ...]
+    # この取得が何回目の試行か(完了で 1 に戻る)。失敗の次の回は FULL に戻す。
+    attempt: int = 1
 
 
 class MaintenanceStore(Protocol):
