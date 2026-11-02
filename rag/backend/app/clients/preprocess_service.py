@@ -172,13 +172,13 @@ _SOURCE_REASON_MESSAGES: dict[str, str] = {
         "Word で開けることを確かめてからアップロードし直してください。"
     ),
     "word_not_word_document": (
-        "ファイル準備の「Word→JSONL」: Word(.doc / .docx / .docm)の文書ではないため、"
-        "取込を停止しました。この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから"
+        "ファイル準備の「Word→JSONL」: Word(.doc / .docx / .docm / .dotx / .dotm)の文書では"
+        "ないため、取込を停止しました。この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから"
         "再実行してください。"
     ),
     "word_unsupported_format": (
-        "ファイル準備の「Word→JSONL」: Word(.doc / .docx / .docm)の文書ではないため、"
-        "取込を停止しました。この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから"
+        "ファイル準備の「Word→JSONL」: Word(.doc / .docx / .docm / .dotx / .dotm)の文書では"
+        "ないため、取込を停止しました。この文書の「処理レシピ」で「ファイル準備」を別の方式に変えてから"
         "再実行してください。"
     ),
     "word_no_content": (
@@ -198,7 +198,7 @@ _SOURCE_REASON_MESSAGES: dict[str, str] = {
         "ファイル準備の「Word→JSONL」: 旧形式(.doc)を変換する LibreOffice が前処理のサービス"
         "(preprocess-word-to-jsonl)の環境に無いため、取込を停止しました。"
         "管理者に LibreOffice の導入を確認してもらってください"
-        "(.docx・.docm は LibreOffice なしで読めます)。"
+        "(.docx・.docm・.dotx・.dotm は LibreOffice なしで読めます)。"
     ),
 }
 

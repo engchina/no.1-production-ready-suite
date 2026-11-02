@@ -818,6 +818,13 @@ class Settings(
             "application/vnd.ms-word.document.macroEnabled.12",
             "application/vnd.ms-powerpoint.presentation.macroEnabled.12",
             "application/vnd.ms-excel.sheet.macroEnabled.12",
+            # Office のテンプレート(ファイル準備で変換してから読む。マクロは実行しない。#4054)。
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+            "application/vnd.ms-word.template.macroEnabled.12",
+            "application/vnd.openxmlformats-officedocument.presentationml.template",
+            "application/vnd.ms-powerpoint.template.macroEnabled.12",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+            "application/vnd.ms-excel.template.macroEnabled.12",
             # ODT・RTF(ファイル準備の Office→PDF で PDF にしてから読む。#3351)。
             "application/vnd.oasis.opendocument.text",
             "application/rtf",
@@ -825,6 +832,16 @@ class Settings(
             "text/rtf",
             "application/octet-stream",
         ]
+    )
+    office_template_max_members: int = Field(
+        default=20_000,
+        ge=1,
+        description="アップロードで受け付ける Office テンプレートの ZIP の要素の数の上限(#4054)。",
+    )
+    office_template_max_uncompressed_bytes: int = Field(
+        default=512 * 1024 * 1024,
+        ge=1,
+        description="アップロードで受け付ける Office テンプレートの展開後の合計の上限(#4054)。",
     )
 
     # --- 取込 queue ---
@@ -2270,9 +2287,9 @@ class Settings(
         description=(
             "parse の前に原本を一度だけ canonical な中間物へ変換する前処理プリセット。"
             "passthrough(既定)は変換せず現行挙動と一致。office_to_pdf は Word・PowerPoint→PDF"
-            "(.doc/.docm/.ppt/.pptm を含む。Excel は対象外)、"
+            "(.doc/.docm/.dotx/.dotm/.ppt/.pptm/.potx/.potm を含む。Excel は対象外)、"
             "csv_to_jsonl は CSV→構造化 JSON、"
-            "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm)→構造化 JSON、"
+            "excel_to_jsonl は Excel(.xls/.xlsx/.xlsm/.xltx/.xltm)→構造化 JSON、"
             "word_to_jsonl は Word→構造化 JSON"
             "(いずれも各々独立した前処理マイクロサービス)。"
         ),
@@ -2309,7 +2326,8 @@ class Settings(
     rag_preprocess_word_to_jsonl_service_url: str = Field(
         default="http://127.0.0.1:18017",
         description=(
-            "Word(.doc/.docx/.docm)→構造化レコード JSONL 前処理マイクロサービスの base URL(#2457)。"
+            "Word(.doc/.docx/.docm/.dotx/.dotm)→構造化レコード JSONL 前処理マイクロサービスの "
+            "base URL(#2457)。"
         ),
     )
     rag_preprocess_service_timeout_seconds: float = Field(

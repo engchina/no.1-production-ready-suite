@@ -4104,9 +4104,11 @@ def _unsupported_parser_message(result: ParserRegistryResult) -> str:
     if result.unsupported_reason in {
         "legacy_office_binary_not_supported",
         "macro_enabled_office_not_supported",
+        "office_template_not_supported",
     }:
         return (
-            "旧形式の Office・マクロ付きの Office は原本のままでは解析できません。"
+            "旧形式の Office・マクロ付きの Office・Office テンプレートは"
+            "原本のままでは解析できません。"
             "文書レシピのファイル準備で変換(Word・PowerPoint は「Office→PDF」、"
             "Word は「Word→JSONL」も可、Excel は「Excel→JSONL」)を選んでから取り込んでください"
             "(マクロは実行しません)。"

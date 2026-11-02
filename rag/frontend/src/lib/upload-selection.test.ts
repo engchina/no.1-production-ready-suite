@@ -25,6 +25,16 @@ describe("uploadFileProblem", () => {
     }
   });
 
+  // #4054
+  it("Office テンプレートは送り、旧形式のテンプレートは未対応のまま止める", () => {
+    for (const name of ["form.dotx", "form.DOTM", "form.potx", "form.potm", "form.xltx", "form.xltm"]) {
+      expect(uploadFileProblem(file(name, 5), 10)).toBeNull();
+    }
+    for (const name of ["form.dot", "form.pot", "form.xlt"]) {
+      expect(uploadFileProblem(file(name, 5), 10)).toBe("unsupported");
+    }
+  });
+
   // #3369
   it("音声・動画は取り込まない形式として案内する理由で止める", () => {
     for (const name of ["voice.mp3", "VOICE.WAV", "record.ogg", "meeting.m4a", "clip.mp4", "clip.mov", "clip.webm"]) {

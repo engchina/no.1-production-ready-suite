@@ -1,7 +1,8 @@
 """Office→PDF 前処理マイクロサービスの変換実装。
 
 LibreOffice headless(`soffice`)で Word・PowerPoint の文書(旧形式の .doc / .ppt、マクロ付きの
-.docm / .pptm を含む)を PDF へ変換する。表計算(.xls / .xlsx / .xlsm / .ods)は変換しない
+.docm / .pptm、テンプレートの .dotx / .dotm / .potx / .potm を含む)を PDF へ変換する。
+表計算(.xls / .xlsx / .xlsm / .xltx / .xltm / .ods)は変換しない
 (Excel は前処理 excel_to_jsonl で読む。#2470)。LibreOffice は変換ごとに新しいプロファイルで
 マクロの実行を無効にして動かす(マクロは実行しない)。LibreOffice はこのサービスにのみ含め、
 他 parser / backend に非干渉。未導入・変換失敗・対象外のときは passthrough(変換しない)へ縮退する。
@@ -22,15 +23,19 @@ _OFFICE_SUFFIX_BY_EXTENSION = {
     "docx": ".docx",
     "doc": ".doc",
     "docm": ".docm",
+    "dotx": ".dotx",
+    "dotm": ".dotm",
     "pptx": ".pptx",
     "ppt": ".ppt",
     "pptm": ".pptm",
+    "potx": ".potx",
+    "potm": ".potm",
     "odt": ".odt",
     "odp": ".odp",
     "rtf": ".rtf",
 }
 # 表計算は変換しない(Excel→JSONL で読む)。
-_SPREADSHEET_EXTENSIONS = frozenset({"xls", "xlsx", "xlsm", "ods"})
+_SPREADSHEET_EXTENSIONS = frozenset({"xls", "xlsx", "xlsm", "xltx", "xltm", "ods"})
 _SCRIPTING = "/org.openoffice.Office.Common/Security/Scripting"
 # 変換ごとに作る LibreOffice の利用者のプロファイル。マクロを実行しない。
 _MACRO_DISABLED_REGISTRY = (
