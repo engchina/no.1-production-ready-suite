@@ -3,6 +3,7 @@
 import pytest
 from fastapi import HTTPException
 
+from app.api.errors import SOURCE_STALE_CODE
 from app.api.routes import documents
 from app.schemas.search import RetrievedChunk
 from app.security.permissions import ROUTE_PERMISSIONS
@@ -31,17 +32,26 @@ async def test_source_preserves_original_ids_and_position(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("readable", "status", "code"),
+    [(True, 409, SOURCE_STALE_CODE), (False, 404, None)],
+    ids=["readable-document-is-stale", "hidden-document-is-not-found"],
+)
 async def test_source_does_not_substitute_a_hidden_or_obsolete_chunk(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, readable: bool, status: int, code: str | None
 ) -> None:
     class Oracle:
         async def retrievable_chunk(self, document_id: str, chunk_id: str) -> None:
             return None
 
+        async def accessible_document_exists(self, document_id: str) -> bool:
+            return readable
+
     monkeypatch.setattr(documents, "OracleClient", Oracle)
     with pytest.raises(HTTPException) as error:
         await documents.get_document_citation_chunk("document-a", "old-set:7")
-    assert error.value.status_code == 404
+    assert error.value.status_code == status
+    assert getattr(error.value, "code", None) == code
 
 
 def test_source_requires_same_document_view_permission() -> None:

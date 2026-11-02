@@ -21,7 +21,7 @@ from prometheus_client import make_asgi_app
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, Response
 
-from app.api.errors import DocumentFileMissingError
+from app.api.errors import CodedApiError
 from app.api.router import api_router
 from app.clients.oracle import close_oracle_pool, warm_oracle_pool
 from app.config import Settings, get_settings
@@ -254,11 +254,9 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         return api_error_response(422, [str(exc)], request_id=_response_request_id(request))
 
-    @app.exception_handler(DocumentFileMissingError)
-    async def document_file_missing_handler(
-        request: Request, exc: DocumentFileMissingError
-    ) -> JSONResponse:
-        """文書のファイルが保存先に無い（#1210）。画面が見分けられるよう `error_code` を足す。"""
+    @app.exception_handler(CodedApiError)
+    async def coded_api_error_handler(request: Request, exc: CodedApiError) -> JSONResponse:
+        """画面が見分ける失敗（#1210・#4092）。`error_code` を足す。"""
         body = ApiResponse[object](
             data=None, error_messages=http_exception_messages(exc.detail, exc.status_code)
         ).model_dump(mode="json")
@@ -266,7 +264,7 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content=body,
-            headers={"X-Request-ID": _response_request_id(request)},
+            headers={**(exc.headers or {}), "X-Request-ID": _response_request_id(request)},
         )
 
     @app.exception_handler(SecurityApiError)

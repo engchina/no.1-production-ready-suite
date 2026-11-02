@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request
 from pr_system_settings.auth.errors import SecurityApiError
 from starlette.concurrency import run_in_threadpool
 
+from app.api.errors import SourceVersionStaleError
 from app.config import get_settings
 from app.mcp import tools as mcp_tools
 from app.rag.request_context import AuditRequestContext, set_audit_request_context
@@ -31,6 +32,13 @@ SIGNED_RESPONSE_HEADERS = {
 def signed_error(status_code: int, message: str) -> HTTPException:
     """署名つきの URL の読み取りの失敗（cache・Referer に残さない header つき）。"""
     return HTTPException(status_code=status_code, detail=message, headers=SIGNED_RESPONSE_HEADERS)
+
+
+def signed_stale_error(message: str) -> SourceVersionStaleError:
+    """版の失効の応答。画面が別の origin からでも `error_code` を読めるようにする（#4092）。"""
+    return SourceVersionStaleError(
+        message, headers={**SIGNED_RESPONSE_HEADERS, "Access-Control-Allow-Origin": "*"}
+    )
 
 
 async def enter_token_user(

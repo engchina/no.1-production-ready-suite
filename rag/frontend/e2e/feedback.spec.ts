@@ -932,6 +932,19 @@ test("フィードバックの根拠を同じ右側パネルの該当ページ�
   await expect(open).toBeFocused();
 });
 
+test("再索引で版が無くなった根拠は、エラーと再試行ではなく案内を出す", { tag: "@responsive" }, async ({ page }) => {
+  await mockFeedback(page, []);
+  await page.route("**/api/documents/doc-1/chunks/**", route => route.fulfill({ status: 409, json: { data: null, error_messages: ["資料の版が変わりました。"], warning_messages: [], error_code: "source_stale" } }));
+  await page.goto("/feedback?feedback=feedback-answer&tab=evidence");
+  await page.getByRole("tab", { name: "根拠", exact: true }).click();
+  await page.getByRole("button", { name: /の根拠を表示$/ }).first().click();
+  const sheet = page.getByRole("dialog", { name: "回答の根拠", exact: true });
+  await expect(sheet.getByTestId("source-version-stale-notice")).toContainText("資料が再処理されたため、回答時点の引用の版は表示できません。");
+  await expect(sheet.getByRole("alert")).toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: "再試行" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 test("現在は閲覧できない根拠を別の文書や引用へ置き換えない", { tag: "@responsive" }, async ({ page }) => {
   await mockFeedback(page, []);
   await page.route("**/api/documents/doc-1/chunks/**", route => route.fulfill({ status: 404, json: { error_messages: ["この根拠は現在の閲覧範囲では表示できません。"], warning_messages: [] } }));
