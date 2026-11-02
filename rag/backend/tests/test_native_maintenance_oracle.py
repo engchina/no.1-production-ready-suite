@@ -143,10 +143,29 @@ async def test_delete_reinsert_queue_restores_native_candidates(
         )
         replacement = await store.claim("worker-b")
         assert replacement is not None and replacement.token != lease.token
+        assert (lease.attempt, replacement.attempt) == (1, 2)
         assert not await store.complete(lease)
         assert not await store.heartbeat(lease)
         assert await store.complete(replacement)
         assert await store.claim("worker-c") is None
+
+        def plan(interval_hours: float) -> str:
+            store.full_interval_hours = interval_hours
+            connection = oracle.acquire_connection()
+            try:
+                cursor = connection.cursor()
+                try:
+                    return store._plan(cursor, MaintenanceLease("worker-d", "token-d", ()))
+                finally:
+                    cursor.close()
+            finally:
+                connection.close()
+
+        assert await oracle._db_call_runner(lambda: plan(24)) == "semantic_then_full"
+        await store._record_full_completed()
+        await store._record_full_completed()
+        assert await oracle._db_call_runner(lambda: plan(24)) == "semantic"
+        assert await oracle._db_call_runner(lambda: plan(0)) == "semantic_then_full"
         for _generation in range(8):
             await execute(f"DELETE FROM {table}")
             for item in (24, 99):

@@ -1263,6 +1263,16 @@ class Settings(
             "(#4134・#4097)。超えると原生索引で読み、不足は診断とログに残す。0 は常に原生索引。"
         ),
     )
+    rag_native_index_full_optimize_interval_hours: float = Field(
+        default=24,
+        ge=0,
+        allow_inf_nan=False,
+        description=(
+            "原生索引の整理で、全文の分まで整理する FULL の最小の間隔(時間。#4097)。"
+            "要求ごとの整理は $VR だけを片付け、この間隔が過ぎていれば続けて FULL も行う。"
+            "0 は要求ごとに FULL も行う。"
+        ),
+    )
     rag_rrf_method_ratio: tuple[float, float] = (10.0, 1.0)
     rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
 

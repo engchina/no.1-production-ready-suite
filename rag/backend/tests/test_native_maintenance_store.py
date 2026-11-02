@@ -38,12 +38,20 @@ class Connection:
 class Oracle:
     def __init__(self, connection: Connection) -> None:
         self.connection = connection
+        self.transactions = 0
+        self.fail_record = False
 
     def acquire_connection(self) -> Connection:
         return self.connection
 
     async def _db_call_runner(self, callback: Callable[[], None]) -> None:
         callback()
+
+    async def _run_transaction(self, callback: Callable[[Connection], None]) -> None:
+        self.transactions += 1
+        if self.fail_record:
+            raise RuntimeError("合成の記録の失敗")
+        callback(self.connection)
 
 
 @pytest.mark.parametrize("valid", [True, False])
@@ -61,13 +69,68 @@ async def test_expired_lease_cannot_start_and_timeout_is_restored(valid: bool) -
     assert connection.closed
 
 
+class PlanConnection(Connection):
+    def __init__(self, *, full_due: tuple[int, ...] | None) -> None:
+        super().__init__()
+        self.full_due = full_due
+
+    def fetchone(self) -> tuple[int, ...] | None:
+        if "NUMTODSINTERVAL(:interval_hours" in self.sql[-1]:
+            return self.full_due
+        return super().fetchone()
+
+    def optimizers(self) -> list[str]:
+        return [
+            "semantic" if "SECTION_SEMANTIC_INDEX" in sql else "full"
+            for sql in self.sql
+            if "OPTIMIZE_INDEX" in sql
+        ]
+
+    def recorded_full(self) -> bool:
+        return any("MERGE INTO" in sql for sql in self.sql)
+
+
+@pytest.mark.parametrize(
+    ("full_due", "attempt", "optimizers", "recorded"),
+    [
+        ((0,), 1, ["semantic"], False),
+        ((1,), 1, ["semantic", "full"], True),
+        (None, 1, ["semantic", "full"], True),
+        ((0,), 2, ["full"], True),
+    ],
+    ids=["within-interval", "interval-passed", "never-ran", "retry-after-failure"],
+)
+async def test_plan_follows_the_full_interval_and_the_attempt(
+    full_due: tuple[int, ...] | None, attempt: int, optimizers: list[str], recorded: bool
+) -> None:
+    connection = PlanConnection(full_due=full_due)
+    oracle = Oracle(connection)
+    store = NativeMaintenanceStore(cast(OracleClient, oracle), full_interval_hours=24)
+
+    await store.optimize(MaintenanceLease("worker-a", "token-a", ("event-a",), attempt=attempt))
+
+    assert connection.optimizers() == optimizers
+    assert connection.recorded_full() is recorded
+
+
+async def test_failing_to_record_full_does_not_fail_the_finished_cleanup() -> None:
+    connection = PlanConnection(full_due=(1,))
+    oracle = Oracle(connection)
+    oracle.fail_record = True
+    store = NativeMaintenanceStore(cast(OracleClient, oracle), full_interval_hours=24)
+
+    await store.optimize(LEASE)
+
+    assert oracle.transactions == 1
+
+
 async def test_total_deadline_prevents_later_optimizer_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     connection = Connection()
     store = NativeMaintenanceStore(cast(OracleClient, Oracle(connection)))
     # lease取得・件数照合後に予算切れ。各SQLに180秒ずつ足し続けない。
-    readings = iter([0.0, 0.0, 0.0, 0.0, 0.0, 181.0])
+    readings = iter([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 181.0])
     monkeypatch.setattr("app.clients.native_maintenance_store.monotonic", lambda: next(readings))
     with pytest.raises(TimeoutError):
         await store.optimize(LEASE)
