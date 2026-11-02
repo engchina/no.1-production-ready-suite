@@ -26,7 +26,7 @@ def reader(system, prompt, schema):
 def output(prompt):
     original = prompt.split("\n\n## Step 4:", 1)[0]
     values = json.loads(original)["evidence"]
-    return {"findings": [finding(row) for row in values], "unanswered": []}
+    return {"findings": [finding(row) for row in values]}
 
 
 @pytest.mark.parametrize("failure", ["schema", "range"])
@@ -38,12 +38,12 @@ def test_one_existing_retry_receives_targeted_feedback_and_keeps_all_inputs(monk
         result = output(prompt)
         if len(calls) == 1:
             if failure == "schema":
-                result.pop("unanswered")
+                result.pop("findings")
             else:
                 result["findings"][0]["start_line"] = result["findings"][0]["end_line"] = "B1-9999"
         elif len(calls) == 2:
             assert "validation_errors" in prompt
-            assert ("unanswered" if failure == "schema" else "batch_range_invalid") in prompt
+            assert ("findings" if failure == "schema" else "batch_range_invalid") in prompt
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -85,7 +85,7 @@ def test_two_invalid_outputs_do_not_add_a_third_call_and_restore_context(monkeyp
 
     def provider(system, prompt, settings, schema, ignored):
         calls.append(prompt)
-        return schema.model_validate({"findings": []})
+        return schema.model_validate({})
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
     monkeypatch.setattr(batched_evidence, "record_retrieval_stage", diagnostics.append)
@@ -138,7 +138,7 @@ def test_feedback_over_input_budget_stops_before_retry(monkeypatch):
 
     def provider(system, prompt, settings, schema, ignored):
         calls.append(prompt)
-        return schema.model_validate({"findings": []})
+        return schema.model_validate({})
 
     monkeypatch.setattr(batched_evidence, "model_input_measurement", measurement)
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -156,7 +156,7 @@ def test_cancellation_after_first_rejection_prevents_retry(monkeypatch):
     def provider(system, prompt, settings, schema, ignored):
         calls.append(prompt)
         deadline.cancel()
-        return schema.model_validate({"findings": []})
+        return schema.model_validate({})
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
     with bind_deadline(deadline), pytest.raises(DeadlineExceeded):
@@ -186,7 +186,7 @@ def reading_model():
 
 
 def findings_of(*rows: tuple[str, str]) -> dict:
-    return {"findings": [{"start_line": start, "end_line": end, "answer": "合成の回答"} for start, end in rows], "unanswered": []}
+    return {"findings": [{"start_line": start, "end_line": end, "answer": "合成の回答"} for start, end in rows]}
 
 
 def mismatch_detail(*rows: tuple[str, str]) -> dict:
@@ -237,9 +237,9 @@ def test_range_mismatch_keeps_counts_for_all_findings_and_a_bounded_sample():
     ("payload", "code"),
     [
         (findings_of(("B1-9", "B1-9")), "batch_range_invalid"),
-        ({"findings": []}, None),
+        ({}, None),
         ({**findings_of(), "extra": 1}, None),
-        ({"findings": [{"start_line": "B1-1", "answer": "合成の回答"}], "unanswered": []}, None),
+        ({"findings": [{"start_line": "B1-1", "answer": "合成の回答"}]}, None),
     ],
     ids=["range", "missing_field", "extra_field", "missing_end"],
 )
@@ -354,8 +354,8 @@ def test_a_schema_violation_is_not_contained_and_still_fails(monkeypatch):
 
     def provider(system, prompt, settings, schema, ignored):
         result = output(prompt)
-        result.pop("unanswered")
         result["findings"][0]["start_line"] = "B1-9999"
+        result["extra"] = 1
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)

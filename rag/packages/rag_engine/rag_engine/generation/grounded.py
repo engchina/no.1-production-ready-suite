@@ -5023,14 +5023,26 @@ def _rendered_evidence_span(
     )
 
 
+def _width_changed_runs(text: str) -> list[str]:
+    """幅の正規化で変わる文字・数字・記号の連なり。句読点と空白は字の違いを問う質問の対象にならないので除く。"""
+    runs: list[str] = []
+    current = ""
+    for char in text:
+        if fold_width(char) != char and unicodedata.category(char)[0] in "LNMS":
+            current += char
+        elif current:
+            runs.append(current)
+            current = ""
+    return [*runs, current] if current else runs
+
+
 def _original_character_forms(span: Mapping[str, Any], units: Sequence[tuple[int, int]]) -> str:
-    """照合用の幅正規化で変わる引用単位は、原文の文字表記も補助情報として渡す。"""
+    """幅の正規化で変わった字を補助情報で渡す（全角と半角を区別する質問に答えるため。#3858）。
+
+    引用単位の全文は重ねない。引用の原文はコードが番号の範囲から切り出すので、モデルに写させる必要が無い（#4139）。
+    """
     text = str(span.get("text") or "")
-    originals = [
-        {"引用単位": index, "原文": text[start:end]}
-        for index, (start, end) in enumerate(units, 1)
-        if text[start:end] != fold_width(text[start:end])
-    ]
+    originals = list(dict.fromkeys(run for start, end in units for run in _width_changed_runs(text[start:end])))
     return "原文の文字表記: " + json.dumps(originals, ensure_ascii=False) if originals else ""
 
 

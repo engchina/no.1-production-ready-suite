@@ -64,7 +64,6 @@ def test_twelve_parents_and_oversized_parent_are_read_without_character_loss():
                     for s in payload["evidence"]
                     if s["text"].split("| ", 1)[1].startswith("条件")
                 ],
-                "unanswered": [],
             }
         )
 
@@ -97,7 +96,6 @@ def test_failed_batch_does_not_become_success(failure):
         return schema.model_validate(
             {
                 **({} if failure == "missing" else {"findings": [finding(values[0], first=9999)] if failure == "invalid_range" else []}),
-                "unanswered": [],
             }
         )
 
@@ -143,7 +141,7 @@ def test_partition_respects_model_tokens_and_preserves_nonzero_parent_offsets():
         assert model_input_measurement(config(answer_max_input_tokens=2300), system, prompt, schema.model_json_schema())["fits"]
         values = json.loads(prompt)["evidence"]
         seen.extend(values)
-        return schema(findings=[], unanswered=[])
+        return schema(findings=[])
 
     _, _, receipt = prepare([original], read, answer_max_input_tokens=2300)
     assert receipt["batch_count"] > 1
@@ -194,7 +192,6 @@ def test_synthesis_reads_all_twelve_parents_before_final_answer(monkeypatch):
                 findings=[
                     finding(s, answer=body(s).split("。", 1)[0] + "。") for s in inputs if s["text"].split("| ", 1)[1].startswith("条件")
                 ],
-                unanswered=[],
             )
         assert seen == {r.source for r in records}
         if schema is RequestScopePlan:
@@ -242,7 +239,6 @@ def test_map_results_are_reduced_again_when_they_cannot_fit_together():
                 finding(value, answer=body(value).split("。", 1)[0], last=1 if reducing else min(2, value["text"].count("\n") + 1))
                 for value in values
             ],
-            unanswered=[],
         )
 
     selected, _, diagnostic = prepare(inputs, read)
@@ -256,7 +252,6 @@ def test_nonshrinking_map_results_do_not_silently_discard_sources():
         values = json.loads(prompt)["evidence"]
         return schema(
             findings=[finding(value, answer=body(value)[:100], last=value["text"].count("\n") + 1) for value in values],
-            unanswered=[],
         )
 
     with pytest.raises(GenerationInputBudgetExceeded) as raised:
@@ -288,7 +283,7 @@ def test_concurrent_readers_keep_inputs_separate():
         def read(system, prompt, schema):
             values = json.loads(prompt)["evidence"]
             assert all(value["source"].startswith(prefix) for value in values)
-            return schema(findings=[], unanswered=[])
+            return schema(findings=[])
 
         values = [{**span(i, "合成の本文。" * 300), "source_id": f"{prefix}-{i}", "source": f"{prefix}-{i}"} for i in range(3)]
         return prepare(values, read)[2]["read_source_count"]
@@ -327,7 +322,7 @@ def test_invalid_range_uses_existing_structured_output_retry(first_range, reason
             if calls == 1:
                 row = {**row, "start_line": first_range[0], "end_line": first_range[1]}
             try:
-                return schema.model_validate({"findings": [row], "unanswered": []})
+                return schema.model_validate({"findings": [row]})
             except ValidationError as exc:
                 reasons.append(exc.errors()[0]["ctx"]["error"].diagnostic["reasons"])
                 raise
@@ -350,7 +345,7 @@ def test_code_cuts_the_verbatim_original_from_the_selected_lines():
         assert "quote" not in schema.model_json_schema()["$defs"]["BatchFinding"]["properties"]
         values = json.loads(prompt)["evidence"]
         first_input = values[0]["text"].startswith("B1-1| 第一の条件です。\nB1-2| 第二の条件です。")
-        return schema(findings=[finding(values[0], first=2, last=3)] if first_input else [], unanswered=[])
+        return schema(findings=[finding(values[0], first=2, last=3)] if first_input else [])
 
     selected, _, diagnostic = prepare([original], read)
     assert selected[0]["text"] == "第二の条件です。\n第三の条件です。"
@@ -392,9 +387,7 @@ def test_rejected_range_reaches_the_final_generation_with_the_original_and_no_ge
 
     def model(system, prompt, settings, schema, **kwargs):
         if issubclass(schema, BatchReading):
-            return schema.model_validate(
-                {"findings": [{"start_line": "B1-9999", "end_line": "B1-9999", "answer": "採らない合成の回答"}], "unanswered": []}
-            )
+            return schema.model_validate({"findings": [{"start_line": "B1-9999", "end_line": "B1-9999", "answer": "採らない合成の回答"}]})
         assert issubclass(schema, generation_draft_wire_model())
         generated.append(prompt)
         return schema.model_validate({"summary": "", "confidence": "low", "items": [{"kind": "gap", "text": "合成の不足"}]})
@@ -434,7 +427,7 @@ def test_invalid_batch_reading_returns_unverified_source_material_without_an_ans
 
     def model(system, prompt, settings, schema, **kwargs):
         assert issubclass(schema, BatchReading)
-        return schema.model_validate({"findings": [{"start_line": "x"}], "unanswered": []})
+        return schema.model_validate({"findings": [{"start_line": "x"}]})
 
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
@@ -465,7 +458,7 @@ def test_batch_local_ids_preserve_original_sources_and_coordinates():
         values = json.loads(prompt)["evidence"]
         assert [value["evidence_id"] for value in values] == [f"B{index}" for index in range(1, len(values) + 1)]
         findings = [finding(value, answer="固有の条件。") for value in values if body(value).startswith("固有の条件。")]
-        return schema(findings=findings, unanswered=[])
+        return schema(findings=findings)
 
     selected, _, diagnostic = prepare([original], read)
     assert diagnostic["read_source_count"] == 1
@@ -494,7 +487,7 @@ def _synthesize(records, read_findings, *, budget=12000):
     def model(system, prompt, settings, schema, **kwargs):
         calls.append(schema.__name__)
         if issubclass(schema, BatchReading):
-            return schema(findings=read_findings(json.loads(prompt)["evidence"]), unanswered=[])
+            return schema(findings=read_findings(json.loads(prompt)["evidence"]))
         assert issubclass(schema, generation_draft_wire_model())
         generated.append(prompt)
         return schema.model_validate({"summary": "", "confidence": "low", "items": [{"kind": "gap", "text": "合成の不足"}]})
@@ -591,7 +584,7 @@ def test_an_oversized_source_is_skipped_and_the_next_rank_is_filled():
 def test_filled_source_keeps_the_reading_answer_and_does_not_duplicate_the_excerpt():
     selected, prompt, diagnostic = prepare(
         [span(index, f"合成の条件{index}。\n" + "補足本文。" * 200) for index in range(5)],
-        lambda system, payload, schema: schema(findings=[finding(json.loads(payload)["evidence"][0], answer="残す回答")], unanswered=[]),
+        lambda system, payload, schema: schema(findings=[finding(json.loads(payload)["evidence"][0], answer="残す回答")]),
     )
     assert "残す回答" in prompt
     assert diagnostic["reduction"]["program_added"]["count"] >= 1
