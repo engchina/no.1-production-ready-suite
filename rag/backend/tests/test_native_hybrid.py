@@ -204,6 +204,8 @@ class ScopedNativeOracle(NativeOracle):
         self, sql: str, binds: Mapping[str, object] | None = None
     ) -> list[dict[str, object]]:
         self.reads.append(sql)
+        if "native_checked_scope_ids" in (binds or {}):
+            return []
         if "allowed_count" in sql:
             return [
                 {"native_scope_id": 1, "allowed_count": 400, "vector_count": 400},
