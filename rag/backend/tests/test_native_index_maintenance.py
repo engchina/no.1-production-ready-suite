@@ -6,6 +6,7 @@ import pytest
 
 from app.clients.native_index_maintenance import (
     NativeIndexMaintenanceIncomplete,
+    NativeIndexVerificationFailed,
     maintain_native_vectors,
 )
 
@@ -66,6 +67,33 @@ def test_database_failure_does_not_start_another_optimizer() -> None:
     connection = IndexConnection([(12, 2)], fail=True)
     with pytest.raises(RuntimeError, match="合成の整理失敗"):
         maintain_native_vectors(connection)
+    assert len([sql for sql in connection.calls if "OPTIMIZE_INDEX" in sql]) == 1
+
+
+def test_verification_uses_its_own_hook_after_optimizer_returns() -> None:
+    connection = IndexConnection([(2, 2), (2, 2)])
+    order: list[str] = []
+
+    def before_call() -> None:
+        order.append("call")
+        if any("OPTIMIZE_INDEX" in sql for sql in connection.calls):
+            raise TimeoutError("整理の期限を後の検査へ持ち込まない")
+
+    def before_verify() -> None:
+        order.append("verify")
+
+    result = maintain_native_vectors(
+        connection, before_call=before_call, before_verify=before_verify
+    )
+    assert result.after.stored == 2
+    assert order == ["call", "call", "call", "verify", "verify"]
+
+
+def test_verification_failure_is_distinct_from_optimizer_failure() -> None:
+    connection = IndexConnection([(2, 2)])
+    with pytest.raises(NativeIndexVerificationFailed) as raised:
+        maintain_native_vectors(connection)
+    assert isinstance(raised.value.__cause__, StopIteration)
     assert len([sql for sql in connection.calls if "OPTIMIZE_INDEX" in sql]) == 1
 
 

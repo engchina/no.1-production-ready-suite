@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from app.clients.native_maintenance_store import NativeMaintenanceStore
+from app.clients.native_maintenance_store import VERIFY_CALL_TIMEOUT_MS, NativeMaintenanceStore
 from app.clients.oracle import OracleClient
 from app.rag.native_index_maintenance import MaintenanceLease
 
@@ -72,6 +72,29 @@ async def test_total_deadline_prevents_later_optimizer_call(
     with pytest.raises(TimeoutError):
         await store.optimize(LEASE)
     assert not any("OPTIMIZE_INDEX" in sql for sql in connection.sql)
+    assert connection.call_timeout == 1000 and connection.closed
+
+
+async def test_optimizer_returning_past_deadline_is_not_reported_as_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """整理が上限を超えて正常に返ったら、後の件数検査で失敗にせず完了へ進める（#4097）。"""
+    clock = [0.0]
+    verify_timeouts: list[int] = []
+
+    class SlowOptimizer(Connection):
+        def execute(self, statement: str, binds: Mapping[str, object] | None = None) -> None:
+            super().execute(statement, binds)
+            if "OPTIMIZE_INDEX" in statement:
+                clock[0] = 500.0
+            elif clock[0] > 0:
+                verify_timeouts.append(self.call_timeout)
+
+    connection = SlowOptimizer()
+    store = NativeMaintenanceStore(cast(OracleClient, Oracle(connection)))
+    monkeypatch.setattr("app.clients.native_maintenance_store.monotonic", lambda: clock[0])
+    await store.optimize(LEASE)
+    assert verify_timeouts == [VERIFY_CALL_TIMEOUT_MS]
     assert connection.call_timeout == 1000 and connection.closed
 
 
