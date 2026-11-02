@@ -964,56 +964,6 @@ async def test_canonical_artifact_persists_even_when_extraction_cache_disabled()
     assert "/canonical.pdf" in storage.puts[0][0]
 
 
-class _NonPersistingOracle:
-    """save_preprocess_artifact を受けるが永続化しない(読み戻すと artifact なし)スタブ。"""
-
-    async def save_preprocess_artifact(self, document_id: str, artifact: Any) -> None:
-        _ = document_id, artifact
-
-    async def get_document(self, document_id: str) -> DocumentDetail:
-        return DocumentDetail(
-            id=document_id,
-            file_name="x.pdf",
-            status=FileStatus.PREPROCESSING,
-            content_type="application/pdf",
-            file_size_bytes=1,
-            content_sha256="a" * 64,
-            uploaded_at=datetime.now(UTC),
-            indexed_at=None,
-            preprocess_artifact=None,
-        )
-
-
-async def test_preprocess_artifact_save_not_persisted_surfaces_as_error() -> None:
-    """ファイル準備 artifact の保存が永続化しなければ silent にせず ERROR 用例外を出す。"""
-    from rag_parser_core.preprocess import SourceDerivation
-
-    pipeline = IngestionPipeline(
-        vlm=CapturingVlm(),
-        genai=FakeEmbeddingClient(),
-        oracle=cast(Any, _NonPersistingOracle()),
-        settings=Settings(rag_parser_adapter_backend="local"),
-    )
-    derivation = SourceDerivation(
-        derivation_id="d1",
-        preprocess_profile="office_to_pdf",
-        converted=True,
-        derived_object_path="local://artifacts/canonical/doc-x/t/canonical.pdf",
-        derived_content_type="application/pdf",
-        source_content_type="application/pdf",
-        source_sha256="a" * 64,
-        derived_sha256="b" * 64,
-    )
-    with pytest.raises(IngestionUserError, match="処理後ファイル情報を保存できませんでした"):
-        await pipeline._save_preprocess_artifact(
-            document_id="doc-x",
-            source_derivation=derivation,
-            original_file_name="x.pdf",
-            original_object_storage_path="local://uploaded/x.pdf",
-            fallback_content_type="application/pdf",
-        )
-
-
 async def test_ingestion_pipeline_reuses_full_extraction_artifact_after_embedding_failure() -> None:
     """VLM 成功後の後段失敗は full extraction artifact から復旧し VLM を再実行しない。"""
     oracle = FakeOracle()

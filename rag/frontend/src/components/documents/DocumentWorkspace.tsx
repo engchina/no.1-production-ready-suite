@@ -1204,10 +1204,7 @@ export function DocumentWorkspace({
         ...(selectedPreviewVariant === "prepared" ? { variant: selectedPreviewVariant } : {}),
         disposition: "attachment",
       })
-    : api.documentContentUrl(documentId, {
-    ...(selectedPreviewVariant === "prepared" ? { variant: selectedPreviewVariant } : {}),
-    disposition: "attachment",
-      });
+    : api.documentContentUrl(documentId, { disposition: "attachment" });
   const duplicateSource = doc.duplicate_source;
   const duplicateMessage = duplicateSource
     ? t("upload.duplicateDetail", {

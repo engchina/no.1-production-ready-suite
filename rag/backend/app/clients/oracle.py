@@ -251,7 +251,6 @@ class StoredDocument:
     status: FileStatus
     uploaded_at: datetime
     object_storage_path: str | None = None
-    preprocess_artifact: dict[str, object] | None = None
     content_type: str | None = None
     file_size_bytes: int | None = None
     content_sha256: str | None = None
@@ -2763,7 +2762,7 @@ class OracleClient:
                 """
                 SELECT
                     d.document_id, d.tenant_id_hash, d.status, d.processing_config,
-                    d.preprocess_artifact, d.error_message, d.uploaded_at, d.indexed_at,
+                    d.error_message, d.uploaded_at, d.indexed_at,
                     (
                         SELECT COUNT(*) FROM rag_document_recipes r
                         WHERE r.document_id = d.document_id
@@ -3540,6 +3539,22 @@ class OracleClient:
             WHERE cs.document_id = :document_id AND cs.chunk_set_id = :chunk_set_id
             """,
             {"document_id": document_id, "chunk_set_id": chunk_set_id},
+        )
+        return (_json_loads(row.get("source_derivation")) or None) if row else None
+
+    async def extraction_source_derivation(
+        self, *, document_id: str, extraction_recipe_id: str
+    ) -> dict[str, object] | None:
+        """抽出が解析したファイルの系譜（抽出の本文は読まない。無ければ None）。"""
+        row = await self._fetch_one(
+            """
+            SELECT JSON_QUERY(
+                       extraction_json, '$.parser_artifacts.source_derivation' RETURNING CLOB
+                   ) AS source_derivation
+            FROM rag_document_extractions
+            WHERE document_id = :document_id AND extraction_recipe_id = :extraction_recipe_id
+            """,
+            {"document_id": document_id, "extraction_recipe_id": extraction_recipe_id},
         )
         return (_json_loads(row.get("source_derivation")) or None) if row else None
 
@@ -6228,28 +6243,18 @@ class OracleClient:
 
         await self._run_transaction(operation)
 
-    async def save_preprocess_artifact(
-        self,
-        document_id: str,
-        artifact: DocumentPreprocessArtifact | None,
-    ) -> DocumentDetail:
-        """ファイル準備の出力ファイル情報を保存する。"""
-        return await self._save_preprocess_artifact_with_oracle(document_id, artifact)
-
     async def reset_document_ingestion_outputs(
         self,
         document_id: str,
         *,
         status: FileStatus = FileStatus.UPLOADED,
         error_message: str | None = None,
-        clear_preprocess_artifact: bool = False,
     ) -> DocumentDetail:
         """再取込前に旧抽出・索引・checkpoint と派生状態を破棄する。"""
         return await self._reset_document_ingestion_outputs_with_oracle(
             document_id=document_id,
             status=status,
             error_message=error_message,
-            clear_preprocess_artifact=clear_preprocess_artifact,
         )
 
     async def reset_document_chunk_outputs(
@@ -11023,7 +11028,6 @@ class OracleClient:
                 tenant_id_hash,
                 category_name,
                 object_storage_path,
-                preprocess_artifact,
                 content_type,
                 file_size_bytes,
                 content_sha256,
@@ -11152,57 +11156,12 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
-    async def _save_preprocess_artifact_with_oracle(
-        self,
-        document_id: str,
-        artifact: DocumentPreprocessArtifact | None,
-    ) -> DocumentDetail:
-        """Oracle document table へファイル準備出力情報を保存する。"""
-
-        def operation(connection: OracleConnectionProtocol) -> DocumentDetail:
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET preprocess_artifact = :preprocess_artifact
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "preprocess_artifact": (
-                            _json_dumps(artifact.model_dump(mode="json"))
-                            if artifact is not None
-                            else None
-                        ),
-                    }
-                ),
-            )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
-
-        return await self._run_transaction(operation)
-
     async def _reset_document_ingestion_outputs_with_oracle(
         self,
         *,
         document_id: str,
         status: FileStatus,
         error_message: str | None,
-        clear_preprocess_artifact: bool,
     ) -> DocumentDetail:
         """同一文書の再取込開始時に、旧実体化結果を transaction 内で初期化する。"""
 
@@ -11301,9 +11260,6 @@ class OracleClient:
                 ),
                 _with_tenant_bind({"document_id": document_id}),
             )
-            preprocess_reset_sql = (
-                "preprocess_artifact = NULL," if clear_preprocess_artifact else ""
-            )
             _execute(
                 connection,
                 _render_sql(
@@ -11312,12 +11268,11 @@ class OracleClient:
                 SET
                     status = :status,
                     error_message = :error_message,
-                    __PREPROCESS_RESET__
                     extraction = NULL,
                     indexed_at = NULL
                 WHERE document_id = :document_id
                   AND {access_predicate}
-                """.replace("__PREPROCESS_RESET__", preprocess_reset_sql),
+                """,
                     access_predicate=_oracle_access_predicate_sql(),
                 ),
                 _with_tenant_bind(
@@ -13216,7 +13171,6 @@ def _select_document(
             tenant_id_hash,
             category_name,
             object_storage_path,
-            preprocess_artifact,
             content_type,
             file_size_bytes,
             content_sha256,
@@ -13346,7 +13300,7 @@ def _with_superseded_file_names[D: DocumentSummary](
     ]
 
 
-# rag_documents の JSON 列(extraction / preprocess_artifact / classification / processing_config)を
+# rag_documents の JSON 列(extraction / classification / processing_config)を
 # 除いた列。存在確認・状態確認・chunk の保存に使う(#341)。大きな JSON 列(行の外の LOB)を
 # 必要の無い経路で読まない(ADB の result cache の不具合 #333 の引き金になった)。
 _DOCUMENT_STATE_COLUMNS_SQL = """
@@ -13592,7 +13546,7 @@ def _default_document_recipe_values(row: Mapping[str, object]) -> dict[str, obje
         "processing_config": row.get("processing_config"),
         "status": status.value,
         "failed_phase": None,
-        "preprocess_artifact": row.get("preprocess_artifact"),
+        "preprocess_artifact": None,
         "active_extraction_recipe_id": None,
         "config_revision": 1,
         "materialized_revision": 1 if status == FileStatus.INDEXED else None,
@@ -13689,7 +13643,7 @@ def _ensure_default_document_recipe_row(
             """
         SELECT
             d.document_id, d.tenant_id_hash, d.status, d.processing_config,
-            d.preprocess_artifact, d.error_message, d.uploaded_at, d.indexed_at
+            d.error_message, d.uploaded_at, d.indexed_at
         FROM rag_documents d
         WHERE d.document_id = :document_id
           AND {access_predicate}
@@ -16029,7 +15983,6 @@ def _stored_document_from_row(row: Mapping[str, object]) -> StoredDocument:
         status=_file_status(row["status"]),
         uploaded_at=_datetime_value(row.get("uploaded_at")),
         object_storage_path=_optional_str(row.get("object_storage_path")),
-        preprocess_artifact=_json_loads(row.get("preprocess_artifact")) or None,
         content_type=_optional_str(row.get("content_type")),
         file_size_bytes=_optional_int(row.get("file_size_bytes")),
         content_sha256=_optional_str(row.get("content_sha256")),
@@ -17734,7 +17687,6 @@ CREATE TABLE {table_name} (
     tenant_id_hash           CHAR(64),
     category_name            VARCHAR2(256),
     object_storage_path      VARCHAR2(1024),
-    preprocess_artifact      JSON,
     processing_config        JSON,
     classification           JSON,
     content_type             VARCHAR2(255),
@@ -18337,11 +18289,6 @@ def _to_document_detail(document: StoredDocument) -> DocumentDetail:
         superseded_by_document_id=document.superseded_by_document_id,
         superseded_at=document.superseded_at,
         object_storage_path=document.object_storage_path,
-        preprocess_artifact=(
-            DocumentPreprocessArtifact.model_validate(document.preprocess_artifact)
-            if document.preprocess_artifact
-            else None
-        ),
         extraction=document.extraction,
         error_message=document.error_message,
         classification=(

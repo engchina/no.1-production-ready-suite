@@ -44,12 +44,14 @@ def _install(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
         id="doc-1",
         content_sha256=hashlib.sha256(data).hexdigest(),
         object_storage_path="docs/doc-1/source",
-        preprocess_artifact=None,
     )
 
     class FakeOracle:
         async def get_document(self, document_id: str) -> object | None:
             return detail if document_id == "doc-1" else None
+
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
+            return {"recipe_id": recipe_id, "preprocess_artifact": None}
 
     class FakeStorage:
         async def get(self, path: str) -> bytes:
@@ -70,7 +72,7 @@ def test_crop_pdf_region_from_page_image_coordinates(monkeypatch: pytest.MonkeyP
 
     # 1200x1600 px のページ画像座標(2 倍)で指定した bbox は PDF の 100..300 x 100..200 pt。
     response = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-1/crop",
         params={
             "page": 1,
             "x0": 200,
@@ -91,7 +93,7 @@ def test_crop_pdf_region_from_page_image_coordinates(monkeypatch: pytest.MonkeyP
 def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(monkeypatch, _png_bytes())
     ok = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-1/crop",
         params={
             "page": 1,
             "x0": 0,
@@ -105,7 +107,7 @@ def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch)
     assert ok.status_code == 200
 
     reversed_box = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-1/crop",
         params={
             "page": 1,
             "x0": 50,
@@ -118,7 +120,7 @@ def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch)
     )
     assert reversed_box.status_code == 422
     beyond_page = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-1/crop",
         params={
             "page": 3,
             "x0": 0,
@@ -131,7 +133,7 @@ def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch)
     )
     assert beyond_page.status_code == 422
     missing = client.get(
-        "/api/documents/other/crop",
+        "/api/documents/other/recipes/recipe-1/crop",
         params={
             "page": 1,
             "x0": 0,
@@ -151,7 +153,6 @@ def _install_preview(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
         id="doc-1",
         content_sha256=hashlib.sha256(data).hexdigest(),
         object_storage_path="docs/doc-1/source",
-        preprocess_artifact=None,
         file_name="source.pdf",
         content_type="application/pdf",
     )
@@ -259,7 +260,6 @@ def test_recipe_preview_pages_use_recipe_prepared_artifact(
         id="doc-1",
         content_sha256="synthetic-docx-source",
         object_storage_path="docs/doc-1/source.docx",
-        preprocess_artifact=None,
         file_name="source.docx",
         content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
@@ -353,7 +353,6 @@ async def test_load_parsed_source_uses_recipe_prepared_artifact(
         id="doc-1",
         content_sha256="synthetic-source",
         object_storage_path="docs/doc-1/source.docx",
-        preprocess_artifact=None,
     )
     read: list[str] = []
 
@@ -384,13 +383,113 @@ async def test_load_parsed_source_uses_recipe_prepared_artifact(
     oracle = cast(Any, FakeOracle())
 
     await document_crop.load_parsed_source(oracle, "doc-1", "recipe-1")
-    # レシピが無ければ文書のファイル(ここでは原本)。
-    await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
+    # レシピの指定が無ければ原本。
     await document_crop.load_parsed_source(oracle, "doc-1")
     assert read == [
         "docs/doc-1/recipe-1/prepared.pdf",
         "docs/doc-1/source.docx",
-        "docs/doc-1/source.docx",
     ]
+    # 指定したレシピが無いときは、別のファイルを開いて bbox を当てない。
+    with pytest.raises(document_crop.DocumentSourceNotFoundError):
+        await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
     with pytest.raises(document_crop.DocumentSourceNotFoundError):
         await document_crop.load_parsed_source(oracle, "doc-2", "recipe-1")
+
+
+def _derivation_of(path: str) -> dict[str, object]:
+    return {
+        "derivation_id": f"d-{path}",
+        "preprocess_profile": "office_to_pdf",
+        "converted": True,
+        "derived_object_path": path,
+        "derived_content_type": "application/pdf",
+        "source_content_type": "application/msword",
+        "source_sha256": "a" * 64,
+        "derived_sha256": "b" * 64,
+    }
+
+
+def test_recipe_crop_reads_the_file_the_extraction_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """切り出しは表示している抽出の版のファイルを開く。系譜が無ければレシピの今のファイル（#4185）。
+
+    再処理の開始でレシピの行は新しいファイルを指すが、画面の bbox は表示している版のファイルの座標。
+    """
+    data = _pdf_bytes()
+    detail = SimpleNamespace(
+        id="doc-1",
+        file_name="source.docx",
+        content_type="application/msword",
+        content_sha256="synthetic",
+        object_storage_path="docs/doc-1/source.docx",
+    )
+    read: list[str] = []
+    asked: list[tuple[str, str]] = []
+
+    class FakeOracle:
+        async def get_document(self, document_id: str) -> object | None:
+            return detail if document_id == "doc-1" else None
+
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
+            if recipe_id != "recipe-1":
+                return None
+            return {
+                "recipe_id": recipe_id,
+                "preprocess_artifact": {
+                    "derivation_id": "new",
+                    "profile": "office_to_pdf",
+                    "converted": True,
+                    "object_storage_path": "artifacts/canonical/doc-1/new/canonical.pdf",
+                    "content_type": "application/pdf",
+                    "file_name": "new.pdf",
+                },
+            }
+
+        async def extraction_source_derivation(
+            self, *, document_id: str, extraction_recipe_id: str
+        ) -> dict[str, object] | None:
+            asked.append((document_id, extraction_recipe_id))
+            if extraction_recipe_id == "er-old":
+                return _derivation_of("artifacts/canonical/doc-1/old/canonical.pdf")
+            return None
+
+    class FakeStorage:
+        async def get(self, path: str) -> bytes:
+            read.append(path)
+            return data
+
+    monkeypatch.setattr(documents_route, "OracleClient", FakeOracle)
+    monkeypatch.setattr(document_crop, "ObjectStorageClient", FakeStorage)
+    box = {
+        "page": 1,
+        "x0": 200,
+        "y0": 200,
+        "x1": 600,
+        "y1": 400,
+        "page_width": 1200,
+        "page_height": 1600,
+    }
+
+    url = "/api/documents/doc-1/recipes/recipe-1/crop"
+    assert client.get(url, params={**box, "revision": "er-old"}).status_code == 200
+    assert client.get(url, params={**box, "revision": "er-no-lineage"}).status_code == 200
+    assert client.get(url, params=box).status_code == 200
+    unknown = client.get("/api/documents/doc-1/recipes/unknown/crop", params=box)
+
+    assert read == [
+        "artifacts/canonical/doc-1/old/canonical.pdf",
+        "artifacts/canonical/doc-1/new/canonical.pdf",
+        "artifacts/canonical/doc-1/new/canonical.pdf",
+    ]
+    assert asked == [("doc-1", "er-old"), ("doc-1", "er-no-lineage")]
+    assert unknown.status_code == 404
+
+
+def test_document_level_crop_route_is_gone() -> None:
+    """レシピを指定しない切り出しの入口は無い（解析したファイルはレシピごと。#4185）。"""
+    response = client.get(
+        "/api/documents/doc-1/crop",
+        params={"page": 1, "x0": 0, "y0": 0, "x1": 1, "y1": 1, "page_width": 1, "page_height": 1},
+    )
+    assert response.status_code == 404

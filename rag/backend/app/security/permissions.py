@@ -413,7 +413,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
-    ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/crop"): _DOCUMENT_VIEW,
     # 根拠の図の画像（RAG の根拠のカード・サイドパネルの「図を開く」。#2428）。
     ("GET", "/figures"): _DOCUMENT_VIEW,
     ("POST", f"{_D}/text-window"): _DOCUMENT_VIEW,

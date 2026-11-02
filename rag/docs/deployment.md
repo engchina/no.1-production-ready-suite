@@ -214,6 +214,17 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4185 文書の行の処理後のファイルの列の削除）
+
+処理後のファイルはレシピの行（`rag_document_recipes.preprocess_artifact`）と抽出の系譜が持つ。文書の行の列
+`rag_documents.preprocess_artifact` は書き手も読み手も無くなったので消す。
+
+1. 消す前に、この列に値が無いことを確かめる: `SELECT COUNT(*) FROM rag_documents WHERE preprocess_artifact IS NOT NULL`。
+2. システムテーブルを更新する（migration `20261102_009_retire_document_preprocess_artifact`。列があるときだけ消す。
+   何度当てても同じ）。**データを削除する migration なので、承認（CLI の `--allow-destructive`・画面の確認ダイアログ）が
+   要る**（「既存環境の更新手順の共通の注意」）。**承認するまでは、ほかの未適用の migration も当たらない。**
+3. backend の更新との順序は問わない（新しい版のコードはこの列を読み書きしない）。
+
 ## 既存環境の更新手順（#3343 PDF の処理を PyMuPDF から pypdfium2 に置き換え）
 
 backend の PDF の処理（文書のプレビューの頁の画像・bbox の切り出し・dots.ocr へ渡す頁の画像・頁の境目の段落の続きの判定の

@@ -721,7 +721,6 @@ export interface StructuredExtraction {
 
 export interface DocumentDetail extends DocumentSummary {
   object_storage_path: string | null;
-  preprocess_artifact: DocumentPreprocessArtifact | null;
   extraction: Record<string, unknown>;
   error_message: string | null;
   duplicate_source: DuplicateDocumentRef | null;
@@ -3766,16 +3765,12 @@ export const api = {
     request<IngestionJob>(
       `/api/documents/ingestion-jobs/${encodeURIComponent(id)}`,
     ),
-  /** 原本/処理後ファイルの配信 URL（プレビュー/ダウンロード用）。 */
+  /** 原本の配信 URL（プレビュー/ダウンロード用）。処理後のファイルはレシピの URL で開く。 */
   documentContentUrl: (
     id: string,
-    options: {
-      variant?: "original" | "prepared";
-      disposition?: "inline" | "attachment";
-    } = {},
+    options: { disposition?: "inline" | "attachment" } = {},
   ) => {
     const search = new URLSearchParams();
-    if (options.variant) search.set("variant", options.variant);
     if (options.disposition) search.set("disposition", options.disposition);
     const qs = search.toString();
     return appPath(`/api/documents/${encodeURIComponent(id)}/content${qs ? `?${qs}` : ""}`);
@@ -3805,7 +3800,7 @@ export const api = {
   ) =>
     request<DocumentPreviewPages>(
       `${documentPreviewPagesBase(id, options.recipeId)}${
-        options.variant ? `?variant=${options.variant}` : ""
+        options.recipeId && options.variant ? `?variant=${options.variant}` : ""
       }`,
     ),
   documentPreviewPageImageUrl: (
@@ -3814,7 +3809,7 @@ export const api = {
     options: { recipeId?: string | null; variant?: "original" | "prepared"; dpi?: number } = {},
   ) => {
     const search = new URLSearchParams();
-    if (options.variant) search.set("variant", options.variant);
+    if (options.recipeId && options.variant) search.set("variant", options.variant);
     if (options.dpi) search.set("dpi", String(options.dpi));
     const qs = search.toString();
     return appPath(`${documentPreviewPagesBase(id, options.recipeId)}/${pageNumber}${qs ? `?${qs}` : ""}`);

@@ -255,6 +255,8 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "ALTER TABLE rag_documents ADD (preprocess_artifact JSON)" in sql
     assert "''PREPROCESSING''" in sql
     assert "-- migration: 20260627_001_documents_preprocessed_status" in sql
+    assert "-- migration: 20261102_009_retire_document_preprocess_artifact" in sql
+    assert "ALTER TABLE rag_documents DROP COLUMN preprocess_artifact" in sql
     assert "''PREPROCESSED''" in sql
     assert "-- migration: 20260629_001_chunk_sets_serving" in sql
     assert "-- migration: 20260629_002_drop_kb_chunk_set_bindings" in sql
@@ -508,7 +510,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 146
+    assert len(statements) == 147
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
@@ -621,6 +623,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261102_003_native_text_search_only",
         "20261102_004_native_index_maintenance",
         "20261102_005_graph_references",
+        "20261102_009_retire_document_preprocess_artifact",
     ]
 
 

@@ -95,8 +95,16 @@ export function layoutVisionDetails(
   return { lines, excludedReason };
 }
 
-/** 図・表要素の切り出し画像 URL(crop API)。bbox / ページ寸法が無ければ null。 */
-export function elementCropUrl(documentId: string, element: DocumentElement): string | null {
+/**
+ * 図・表要素の切り出し画像 URL(crop API)。bbox / ページ寸法が無ければ null。
+ * bbox は解析したファイルの座標なので、表示している抽出の版（revision）のファイルから切り出す。
+ */
+export function elementCropUrl(
+  documentId: string,
+  recipeId: string,
+  revision: string | null,
+  element: DocumentElement,
+): string | null {
   const bbox = element.bbox;
   const metadata = element.metadata ?? {};
   const width = metadata.page_width;
@@ -121,6 +129,9 @@ export function elementCropUrl(documentId: string, element: DocumentElement): st
     page_width: String(width),
     page_height: String(height),
   });
+  if (revision) search.set("revision", revision);
   // `<img src>` に入るので配信の base を付ける（#1316）。
-  return appPath(`/api/documents/${encodeURIComponent(documentId)}/crop?${search.toString()}`);
+  return appPath(
+    `/api/documents/${encodeURIComponent(documentId)}/recipes/${encodeURIComponent(recipeId)}/crop?${search.toString()}`,
+  );
 }

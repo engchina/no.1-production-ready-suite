@@ -158,5 +158,7 @@ def test_referenced_uris_checks_all_documents_without_tenant_scope(
     assert "tenant_id_hash" not in statement
     assert sorted(str(value) for value in binds.values()) == ["local://a", "local://b"]
     assert "rag_ingestion_segments" in statement
+    # 処理後のファイルはレシピの行が持つ（文書の行には持たない。#4185）。
+    assert "FROM rag_document_recipes" in statement
     assert anyio.run(store.referenced_uris, []) == set()
     assert len(oracle.fetches) == 1

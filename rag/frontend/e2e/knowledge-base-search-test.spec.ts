@@ -415,9 +415,6 @@ test("原本が無い PDF の引用プレビューは 404 の本文を iframe �
 
 test("Office 引用プレビューの降格表示では原本をダウンロードできる", async ({ page }) => {
   await mockKbPage(page, 1);
-  await page.route("**/api/documents/doc-1", (route) =>
-    route.fulfill({ json: ok({ preprocess_artifact: null }) })
-  );
   await page.route("**/api/search/stream", (route) =>
     route.fulfill({
       status: 200,

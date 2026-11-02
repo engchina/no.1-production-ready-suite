@@ -58,7 +58,7 @@ describe("配信の base（Issue 1316）", () => {
     expect(mod.appPath("/api/x")).toBe("/api/x");
     expect(fetchMock).toHaveBeenCalledWith("/api/ready/database", expect.anything());
     expect(mod.api.documentContentUrl("d1")).toBe("/api/documents/d1/content");
-    expect(mod.elementCropUrl("d1", FIGURE)).toMatch(/^\/api\/documents\/d1\/crop\?/u);
+    expect(mod.elementCropUrl("d1", "r1", null, FIGURE)).toMatch(/^\/api\/documents\/d1\/recipes\/r1\/crop\?/u);
   });
 
   it("base が /rag/ のときは送る request と URL を /rag/api/... にし、router の basename を /rag にする", async () => {
@@ -91,7 +91,7 @@ describe("配信の base（Issue 1316）", () => {
     expect(mod.api.documentRecipeExtractionExportUrl("d1", "r1", "markdown")).toBe(
       "/rag/api/documents/d1/recipes/r1/extraction-export?format=markdown&download=true"
     );
-    expect(mod.elementCropUrl("d1", FIGURE)).toMatch(/^\/rag\/api\/documents\/d1\/crop\?/u);
+    expect(mod.elementCropUrl("d1", "r1", null, FIGURE)).toMatch(/^\/rag\/api\/documents\/d1\/recipes\/r1\/crop\?/u);
   });
 
   it("base が /rag/ のとき、検索とチャットの SSE も /rag/api/... へ送る", async () => {

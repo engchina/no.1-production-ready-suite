@@ -12,7 +12,7 @@ from app.rag.document_crop import chunk_set_prepared_artifact
 from app.rag.ingestion import _extraction_with_source_derivation
 from app.rag.section_chunk_map import MapChunk, SectionChunkMap, build_section_chunk_map
 from app.rag.section_map_service import rebuild_document_section_map, section_outline
-from app.schemas.document import FileStatus
+from app.schemas.document import DocumentPreprocessArtifact, FileStatus
 from app.schemas.extraction import StructuredExtraction
 
 
@@ -274,3 +274,44 @@ async def test_chunk_set_source_derivation_reads_the_file_of_the_version() -> No
     assert artifact.object_storage_path == derivation.derived_object_path
     assert artifact.derivation_id == derivation.derivation_id
     assert await chunk_set_prepared_artifact(client, detail, document_id, without_lineage) is None
+
+    # 抽出の版からも同じ系譜が読める（画面の切り出し。#4185）。
+    by_extraction = await client.extraction_source_derivation(
+        document_id=document_id, extraction_recipe_id=f"ex_l_{suffix}"
+    )
+    assert by_extraction == raw
+    for extraction_id in (f"ex_p_{suffix}", f"missing_{suffix}"):
+        assert (
+            await client.extraction_source_derivation(
+                document_id=document_id, extraction_recipe_id=extraction_id
+            )
+            is None
+        )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_document_reset_keeps_recipe_prepared_file() -> None:
+    """文書の初期化はレシピの処理後のファイルを変えない（文書単位の EXTRACT の前提。#4185）。"""
+    client = OracleClient()
+    document_id, recipe_id = await _new_document(client, "reset-prepared")
+    path = f"artifacts/canonical/{document_id}/trace-a/canonical.pdf"
+    await client.update_document_recipe_status(
+        recipe_id=recipe_id,
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id="synthetic",
+            profile="office_to_pdf",
+            converted=True,
+            object_storage_path=path,
+            content_type="application/pdf",
+            file_name="synthetic.pdf",
+        ),
+    )
+
+    await client.reset_document_ingestion_outputs(document_id, status=FileStatus.UPLOADED)
+
+    recipe = await client.get_document_recipe(document_id, recipe_id)
+    assert recipe is not None
+    artifact = recipe["preprocess_artifact"]
+    assert isinstance(artifact, dict)
+    assert artifact["object_storage_path"] == path

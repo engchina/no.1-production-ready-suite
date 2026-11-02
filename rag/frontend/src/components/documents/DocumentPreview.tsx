@@ -123,7 +123,7 @@ export function DocumentPreview({
   ) =>
     recipeId
       ? api.documentRecipeContentUrl(documentId, recipeId, options)
-      : api.documentContentUrl(documentId, options);
+      : api.documentContentUrl(documentId, { disposition: options.disposition });
   const url = variant === "prepared" ? contentUrl({ variant }) : contentUrl();
   const downloadUrl = contentUrl({
     ...(variant === "prepared" ? { variant } : {}),

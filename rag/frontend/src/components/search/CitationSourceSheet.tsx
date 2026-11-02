@@ -5,7 +5,7 @@ import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import type { CitationPosition } from "@/lib/answer-text";
 import { api, type RetrievedChunk } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { useDocument, useDocumentRecipes } from "@/lib/queries";
+import { useDocumentRecipes } from "@/lib/queries";
 import { firstMetadataToken } from "@/lib/table-cell-focus";
 
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
@@ -89,8 +89,7 @@ function CitationSourcePreview({
   const loadOriginal = useCallback((input: OriginalSourceInput, signal: AbortSignal) => api.documentSourceMap(chunk.document_id, chunk.chunk_id, input, signal), [chunk.document_id, chunk.chunk_id]);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
-  // パネルを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
-  const previewDoc = useDocument(open ? chunk.document_id : null);
+  // パネルを開いたときだけレシピを取得し、Office 原本でも変換済 PDF を表示する。
   const previewRecipes = useDocumentRecipes(open ? chunk.document_id : null);
   const previewRecipe = previewRecipes.data?.find((recipe) => recipe.recipe_id === recipeId);
   const focus = evidencePreviewFocus(chunk.metadata);
@@ -102,11 +101,7 @@ function CitationSourcePreview({
       documentId={chunk.document_id}
       recipeId={recipeId}
       fileName={previewFileName}
-      preparedArtifact={
-        recipeId
-          ? (previewRecipe?.preprocess_artifact ?? null)
-          : (previewDoc.data?.preprocess_artifact ?? null)
-      }
+      preparedArtifact={previewRecipe?.preprocess_artifact ?? null}
       focusPage={focus.focusPage}
       focusBbox={highlight ? focus.focusBbox : null}
       focusBboxMode={focus.focusBboxMode}

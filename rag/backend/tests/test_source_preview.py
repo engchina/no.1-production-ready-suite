@@ -75,19 +75,16 @@ def _documents() -> dict[str, Any]:
             file_name="文書 A.pdf",
             content_type="application/pdf",
             object_storage_path=_PDF_PATH,
-            preprocess_artifact=None,
         ),
         "d2": SimpleNamespace(
             file_name="文書 B.docx",
             content_type=None,
             object_storage_path="docs/d2/source.docx",
-            preprocess_artifact=None,
         ),
         "d3": SimpleNamespace(
             file_name="文書 C.json",
             content_type="application/json",
             object_storage_path=_TEXT_PATH,
-            preprocess_artifact=None,
         ),
     }
 

@@ -753,7 +753,6 @@ class _ScopedDocumentOracle:
         detail = _documents()["d1"]
         detail.id = document_id
         detail.content_sha256 = None
-        detail.preprocess_artifact = None
         return detail
 
 

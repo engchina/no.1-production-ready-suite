@@ -701,7 +701,37 @@ END;
             sql=_create_missing_objects_sql(graph_reference_schema_sql(), "明示参照"),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_009_retire_document_preprocess_artifact",
+            table_name="rag_documents",
+            sql=retire_document_preprocess_artifact_sql(),
+            destructive_note=(
+                "書き手も読み手も無くなった列 rag_documents.preprocess_artifact を削除します"
+                "（処理後のファイルはレシピの行 rag_document_recipes.preprocess_artifact と"
+                "抽出の系譜が持ちます）。適用前に、この列の NULL でない行が無いことを"
+                "確かめてください。削除後は復元できません。"
+            ),
+        )
+    )
     return sections
+
+
+def retire_document_preprocess_artifact_sql() -> str:
+    """文書の行の処理後のファイルの列を、あるときだけ削除する（#4185）。"""
+    return """
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_DOCUMENTS' AND column_name = 'PREPROCESS_ARTIFACT';
+    IF v_count > 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_documents DROP COLUMN preprocess_artifact';
+    END IF;
+END;
+/
+""".strip()
 
 
 def retire_query_history_sql() -> str:

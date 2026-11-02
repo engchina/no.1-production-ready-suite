@@ -903,7 +903,6 @@ test("フィードバックの根拠を同じ右側パネルの該当ページ�
       category_name: null, metadata: { page_start: 2, page_width: 612, page_height: 792, bbox: [61, 79, 306, 158], bbox_unit: "absolute" },
     }, error_messages: [], warning_messages: [] } });
   });
-  await page.route("**/api/documents/doc-1", route => route.fulfill({ json: { data: { document_id: "doc-1", file_name: "合成文書.pdf", preprocess_artifact: null }, error_messages: [], warning_messages: [] } }));
   await page.route("**/api/documents/doc-1/recipes", route => route.fulfill({ json: { data: [], error_messages: [], warning_messages: [] } }));
   await page.route(/\/api\/documents\/doc-1\/preview-pages(?:\?|$)/, route => route.fulfill({ json: { data: { page_count: 3, pages: [1, 2, 3].map(page_number => ({ page_number, width: 612, height: 792 })) }, error_messages: [], warning_messages: [] } }));
   await page.route(/\/api\/documents\/doc-1\/preview-pages\/\d+(?:\?|$)/, route => {

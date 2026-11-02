@@ -38,7 +38,7 @@ from tests.test_oracle_adapter import (
     _run_inline,
 )
 
-_JSON_COLUMNS = ("extraction", "classification", "preprocess_artifact")
+_JSON_COLUMNS = ("extraction", "classification")
 _WRITE_PREFIXES = ("MERGE", "INSERT", "UPDATE", "DELETE")
 
 
@@ -170,6 +170,7 @@ async def test_list_document_recipes_returns_virtual_default_recipe_without_writ
         select_list = statement.split("FROM rag_documents", 1)[0]
         assert "extraction" not in select_list
         assert "classification" not in select_list
+        assert "preprocess_artifact" not in select_list
 
 
 async def test_list_document_recipes_raises_key_error_for_missing_document() -> None:
@@ -268,7 +269,7 @@ async def test_ensure_default_document_recipe_creates_missing_recipe_one() -> No
     assert merge.parameters["status"] == "INDEXED"
     assert merge.parameters["tenant_id_hash"] == "t" * 64
     assert merge.parameters["materialized_revision"] == 1
-    # レシピ 1 の元にする preprocess_artifact / processing_config は読むが、抽出結果は読まない。
+    # レシピ 1 の元にする processing_config は読むが、抽出結果も処理後のファイルの列も読まない。
     for statement in _document_selects(pool):
         select_list = statement.split("FROM rag_documents", 1)[0]
         assert "extraction" not in select_list

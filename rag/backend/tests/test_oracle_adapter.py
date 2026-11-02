@@ -763,43 +763,23 @@ async def test_oracle_client_persists_documents_through_pool() -> None:
     assert "INSERT INTO rag_document_knowledge_bases" in pool.connection.many_calls[0].statement
 
 
-async def test_oracle_client_get_document_restores_preprocess_artifact(
+async def test_oracle_client_get_document_does_not_read_preprocess_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """文書詳細は保存済みファイル準備 artifact を欠落させず返す。"""
-    row = _oracle_document_row(status="PREPROCESSED")
-    row["preprocess_artifact"] = json.dumps(
-        {
-            "derivation_id": "derivation-1",
-            "profile": "office_to_pdf",
-            "converted": True,
-            "object_storage_path": "oci://namespace/bucket/artifacts/canonical/doc-1.pdf",
-            "content_type": "application/pdf",
-            "sha256": "b" * 64,
-            "file_name": "policy.pdf",
-        }
-    )
+    """処理後のファイルはレシピの行が持つので、文書の取得は文書の行の列を読まない（#4185）。"""
     pool = FakeOraclePool(
         execute_results=[
-            [row],
-            [{"document_id": "doc-1", "knowledge_base_id": "kb-1", "name": "社内規程"}],
+            [_oracle_document_row(status="PREPROCESSED")],
+            [{"document_id": "doc-1", "knowledge_base_id": "kb-1", "name": "ナレッジベース A"}],
         ]
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-    # 公開版の取得は独立に検証し、このテストでは元の文書 SQL の応答だけを供給する。
     monkeypatch.setattr(client, "document_language_pack_uses", AsyncMock(return_value={}))
 
     detail = await client.get_document("doc-1")
 
-    assert "preprocess_artifact" in pool.connection.calls[0].statement
     assert detail is not None
-    assert detail.preprocess_artifact is not None
-    assert (
-        detail.preprocess_artifact.object_storage_path
-        == "oci://namespace/bucket/artifacts/canonical/doc-1.pdf"
-    )
-    assert detail.preprocess_artifact.content_type == "application/pdf"
-    assert detail.preprocess_artifact.sha256 == "b" * 64
+    assert "preprocess_artifact" not in pool.connection.calls[0].statement
 
 
 async def test_oracle_read_retries_one_recoverable_disconnect(

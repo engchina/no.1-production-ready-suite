@@ -60,7 +60,7 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 レシピ追加・削除は親文書行をロックして **最少 1 件・最大 3 件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。文書単位の再取込も同じで、検索に出している版は切替まで残し、処理の進み具合はレシピの status で示す（文書の status は `INDEXED` のまま。#4115）。
 
-版に属するデータは chunk_set から辿る（#4166）。章節の対応は chunk_set ごとに置き換え、ほかの版の行を消さない（chunk_set の行を消す処理が一緒に消す）。解析したファイルは抽出の `parser_artifacts.source_derivation` が正本で、根拠の読み取りはレシピの行の `preprocess_artifact`（最後のファイル準備の結果。確認の画面が見る）ではなくここを読む。
+版に属するデータは chunk_set から辿る（#4166）。章節の対応は chunk_set ごとに置き換え、ほかの版の行を消さない（chunk_set の行を消す処理が一緒に消す）。処理後のファイルはレシピの行だけが持ち、文書の行には持たない（#4185。文書単位の `content`・`preview-pages` は原本だけを返す）。解析したファイルは抽出の `parser_artifacts.source_derivation` が正本で、根拠の読み取りはレシピの行の `preprocess_artifact`（最後のファイル準備の結果。確認の画面が見る）ではなくここを読む。
 
 GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI / API diagnostics にその状態を表示する。
 

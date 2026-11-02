@@ -11,7 +11,15 @@ const UNSUPPORTED_NOTICE = "このファイル形式はプレビューに対応�
 // 以前の Office 独自の案内（再処理の手順）。もう出さない。
 const OFFICE_REPROCESS_NOTICE = /Office 原本はブラウザー/;
 
-// Office 原本 + 変換済 PDF(preprocess_artifact)あり。
+// Office 原本 + レシピの変換済 PDF(preprocess_artifact)あり。
+const preparedPdfArtifact = {
+  object_storage_path: "prepared/doc-1.pdf",
+  content_type: "application/pdf",
+  file_name: "report.pdf",
+  profile: "office_to_pdf",
+  converted: true,
+};
+
 const documentDetail = {
   id: "doc-1",
   file_name: "report.docx",
@@ -27,19 +35,11 @@ const documentDetail = {
   object_storage_path: "indexed/doc-1.docx",
   extraction: {},
   error_message: null,
-  preprocess_artifact: {
-    object_storage_path: "prepared/doc-1.pdf",
-    content_type: "application/pdf",
-    file_name: "report.pdf",
-    profile: "office_to_pdf",
-    converted: true,
-  },
 };
 
 async function mockWorkspace(
   page: Page,
-  preprocessArtifact: typeof documentDetail.preprocess_artifact | null =
-    documentDetail.preprocess_artifact
+  preprocessArtifact: typeof preparedPdfArtifact | null = preparedPdfArtifact
 ): Promise<void> {
   await page.route("**/api/knowledge-bases**", (route) =>
     fulfillDocumentInspection(route, {
@@ -182,7 +182,7 @@ test("変換なし(passthrough)の処理後は無効化し、専用メッセー�
 
 test("Office の非 PDF artifact を PDF iframe で開かない", async ({ page }) => {
   await mockWorkspace(page, {
-    ...documentDetail.preprocess_artifact,
+    ...preparedPdfArtifact,
     content_type: "application/json",
     file_name: "report.json",
   });

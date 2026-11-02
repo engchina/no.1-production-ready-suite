@@ -70,31 +70,57 @@ async def chunk_set_prepared_artifact(
     return _artifact_from_derivation(detail, raw)
 
 
+async def _versioned_artifact(
+    oracle: OracleClient,
+    detail: Any,
+    document_id: str,
+    *,
+    chunk_set_id: str | None,
+    extraction_recipe_id: str | None,
+) -> DocumentPreprocessArtifact | None:
+    if extraction_recipe_id:
+        raw = await oracle.extraction_source_derivation(
+            document_id=document_id, extraction_recipe_id=extraction_recipe_id
+        )
+        return _artifact_from_derivation(detail, raw)
+    return await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id)
+
+
 async def load_parsed_source(
     oracle: OracleClient,
     document_id: str,
     recipe_id: str | None = None,
     *,
     chunk_set_id: str | None = None,
+    extraction_recipe_id: str | None = None,
 ) -> bytes:
     """解析に使ったファイル(ファイル準備後の artifact があればそれ、無ければ原本)を返す。
 
-    ``chunk_set_id`` を渡すと、その版が解析したファイルを読む（#4166）。版の系譜が無いときと
-    ``chunk_set_id`` が無いときは ``recipe_id`` の処理レシピの artifact を使う(レシピごとに
-    解析したファイルが違うため、bbox はそのファイルの座標。#1282)。レシピが無ければ文書の
-    artifact に戻す。参照パスが不正な場合は ValueError(ObjectStorageClient の契約)。
+    ``extraction_recipe_id``・``chunk_set_id`` を渡すと、その版が解析したファイルを読む
+    （#4166・#4185）。版の系譜が無いときと版の指定が無いときは ``recipe_id`` の処理レシピの
+    artifact を使う(レシピごとに解析したファイルが違うため、bbox はそのファイルの座標。#1282)。
+    ``recipe_id`` を渡してレシピが無ければ DocumentSourceNotFoundError。レシピも版の指定も無ければ
+    原本を開く。参照パスが不正な場合は ValueError(ObjectStorageClient の契約)。
     """
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise DocumentSourceNotFoundError("ドキュメントが見つかりません。")
-    artifact = detail.preprocess_artifact
+    artifact: DocumentPreprocessArtifact | None = None
     if recipe_id:
         recipe = await oracle.get_document_recipe(document_id, recipe_id)
-        if recipe is not None:
-            raw = recipe.get("preprocess_artifact")
-            artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
+        if recipe is None:
+            raise DocumentSourceNotFoundError("レシピが見つかりません。")
+        raw = recipe.get("preprocess_artifact")
+        artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
     artifact = (
-        await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id) or artifact
+        await _versioned_artifact(
+            oracle,
+            detail,
+            document_id,
+            chunk_set_id=chunk_set_id,
+            extraction_recipe_id=extraction_recipe_id,
+        )
+        or artifact
     )
     path = (
         artifact.object_storage_path

@@ -17,7 +17,7 @@ def test_recipe_source_map_pins_extraction_version_and_refuses_missing_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw, payload = fixture()
-    detail = SimpleNamespace(object_storage_path="synthetic.json", preprocess_artifact=None)
+    detail = SimpleNamespace(object_storage_path="synthetic.json")
     oracle = SimpleNamespace(
         get_document=AsyncMock(return_value=detail),
         get_document_recipe=AsyncMock(return_value={"active_extraction_recipe_id": "ex1"}),
@@ -44,7 +44,7 @@ def test_citation_source_map_pins_chunk_and_does_not_replace_stale_chunk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw, payload = fixture()
-    detail = SimpleNamespace(object_storage_path="synthetic.json", preprocess_artifact=None)
+    detail = SimpleNamespace(object_storage_path="synthetic.json")
     chunk = RetrievedChunk(
         document_id="d1",
         chunk_id="c1",

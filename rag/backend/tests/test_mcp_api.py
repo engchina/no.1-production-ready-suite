@@ -3146,7 +3146,7 @@ class _FigureSourceOracle(_SourceOracle):
     async def get_document(self, document_id: str) -> object | None:
         if document_id != "d1":
             return None
-        return SimpleNamespace(object_storage_path="docs/d1/source.pdf", preprocess_artifact=None)
+        return SimpleNamespace(object_storage_path="docs/d1/source.pdf")
 
     async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
         del document_id

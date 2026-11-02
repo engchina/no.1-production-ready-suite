@@ -1606,3 +1606,27 @@ test("位置対応のない旧記録は推測して同期せず理由を示す",
   await page.getByTestId("document-inspector-pane").screenshot({path: test.info().outputPath("inspector-unmapped-banner.png")});
   await expectNoHorizontalOverflow(page);
 });
+
+test("構造化要素の図の切り出しは、レシピと表示している抽出の版のファイルを開く", {tag: "@responsive"}, async ({page}) => {
+  await mockDocumentDetail(page);
+  await mockDocumentSections(page);
+  const crops: URL[] = [];
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/crop?**", async route => {
+    crops.push(new URL(route.request().url()));
+    await route.fulfill({contentType: "image/png", body: Buffer.from(PNG_PIXEL.split(",")[1] ?? "", "base64")});
+  });
+  await page.route("**/recipes/recipe-1/extraction-view?**", route => route.fulfill({json: {data: {payload: {
+    raw_text: "",
+    elements: [{element_id: "fig-1", kind: "figure", content_kind: "figure", text: "合成の図", order: 0, page_number: 1, bbox: [10, 20, 110, 70], metadata: {page_width: 1000, page_height: 1400}}],
+    tables: [], pages: [],
+    parser_artifacts: {layout_records: {records: [{id: "fig-1", raw: {vision_description: {main_topic: "合成の図の説明"}}}]}},
+  }, total: 1, offset: 0, limit: 25, complete: true, scope_status: "exact"}}}));
+  await page.goto("/documents/doc-1");
+  const inspector = page.getByTestId("document-inspector-pane");
+  await inspector.getByRole("tab", {name: "構造化要素", exact: true}).click();
+  await inspector.getByText("画像の読み取り内容", {exact: true}).click();
+  await expect(inspector.getByRole("img", {name: "解析に使ったファイルから切り出した図・表の画像"})).toBeVisible();
+  await expect.poll(() => crops.length).toBeGreaterThan(0);
+  expect(crops[0]?.searchParams.get("revision")).toBe("er-recipe-1-r1");
+  await expectNoPageOverflow(page);
+});

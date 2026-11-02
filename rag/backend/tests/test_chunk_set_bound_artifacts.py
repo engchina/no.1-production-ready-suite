@@ -67,7 +67,6 @@ class _Oracle:
             file_name="synthetic.docx",
             content_type="application/octet-stream",
             object_storage_path=original_path,
-            preprocess_artifact=None,
         )
 
     async def update_document_recipe_status(self, **kwargs: Any) -> None:
@@ -108,7 +107,7 @@ async def reprocessed(
     )
     for name, path in (("a", paths["a"]), ("b", paths["b"])):
         await pipeline._save_preprocess_artifact(
-            document_id="d1",
+            recipe_id="r1",
             source_derivation=_derivation(name, path),
             original_file_name="synthetic.docx",
             original_object_storage_path=paths["original"],
@@ -236,7 +235,6 @@ def test_source_map_routes_read_the_file_of_the_extraction(
         file_name="synthetic.json",
         content_type="application/json",
         object_storage_path="docs/original.json",
-        preprocess_artifact=None,
     )
     chunk = RetrievedChunk(
         document_id="d1",

@@ -78,7 +78,7 @@ async def test_text_window_uses_same_decoder_with_or_without_recipe(
     from app.schemas.document import DocumentTextWindowRequest
 
     text = "合成の本文です。文字コードを検出して表示します。" * 20
-    detail = SimpleNamespace(preprocess_artifact=None)
+    detail = SimpleNamespace()
 
     class TextOracle:
         async def get_document(self, document_id: str) -> SimpleNamespace:

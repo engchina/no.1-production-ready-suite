@@ -2128,8 +2128,7 @@ test("再処理の job が順番待ちの間は前回の失敗を出さず、ま
             failed_phase: "INDEX",
             processing_config: {},
             effective_processing_config: {},
-            preprocess_artifact: documentDetail({ status: "ERROR", preparedArtifact: true })
-              .preprocess_artifact,
+            preprocess_artifact: preparedArtifactFixture({ preparedArtifact: true }),
             active_extraction_recipe_id: "er-recipe-1-r1",
             active_chunk_set_id: null,
             pending_chunk_set_id: "chunk-set-pending",
@@ -2421,7 +2420,7 @@ async function mockDocumentWorkspace(
                 : null,
             processing_config: {},
             effective_processing_config: {},
-            preprocess_artifact: detail.preprocess_artifact,
+            preprocess_artifact: preparedArtifactFixture(options),
             active_extraction_recipe_id: hasExtraction ? "er-recipe-1-r1" : null,
             active_chunk_set_id: status === "INDEXED" ? "chunk-set-recipe-1" : null,
             pending_chunk_set_id: options.pendingChunkSet ? "chunk-set-pending" : null,
@@ -3191,6 +3190,38 @@ function ingestionJob(
   };
 }
 
+/** レシピの処理後ファイル。無い指定なら null。 */
+function preparedArtifactFixture(
+  options: {
+    imagePreview?: boolean;
+    pdfPreview?: boolean;
+    preparedArtifact?: boolean;
+    brokenPreparedArtifact?: boolean;
+  } = {}
+) {
+  if (!options.preparedArtifact && !options.brokenPreparedArtifact) return null;
+  return {
+    derivation_id: "prepared-1",
+    profile: options.brokenPreparedArtifact ? "office_to_pdf" : "text_normalize",
+    converted: true,
+    converter_name: options.brokenPreparedArtifact ? "office_to_pdf" : "text_normalize",
+    converter_version: "v1",
+    source_content_type: options.pdfPreview
+      ? "application/pdf"
+      : options.imagePreview
+        ? "image/png"
+        : "text/plain",
+    source_sha256: "a".repeat(64),
+    // 壊れ状態: 変換は成功(converted=true)したが保存パスが欠落している。
+    object_storage_path: options.brokenPreparedArtifact ? null : "local://policy__prepared.txt",
+    content_type: "text/plain",
+    sha256: "b".repeat(64),
+    file_name: "policy__prepared.txt",
+    page_map: {},
+    warnings: [],
+  };
+}
+
 function documentDetail(
   options: {
     duplicate?: boolean;
@@ -3236,27 +3267,6 @@ function documentDetail(
     uploaded_at: "2026-06-15T00:00:00Z",
     indexed_at: "2026-06-15T00:00:03Z",
     object_storage_path: `local://${fileName}`,
-    preprocess_artifact:
-      options.preparedArtifact || options.brokenPreparedArtifact
-        ? {
-            derivation_id: "prepared-1",
-            profile: options.brokenPreparedArtifact ? "office_to_pdf" : "text_normalize",
-            converted: true,
-            converter_name: options.brokenPreparedArtifact ? "office_to_pdf" : "text_normalize",
-            converter_version: "v1",
-            source_content_type: contentType,
-            source_sha256: "a".repeat(64),
-            // 壊れ状態: 変換は成功(converted=true)したが保存パスが欠落している。
-            object_storage_path: options.brokenPreparedArtifact
-              ? null
-              : "local://policy__prepared.txt",
-            content_type: "text/plain",
-            sha256: "b".repeat(64),
-            file_name: "policy__prepared.txt",
-            page_map: {},
-            warnings: [],
-          }
-        : null,
     extraction: {
       raw_text: "経費申請\n交通費は1000円です。",
       document_type: "規程",

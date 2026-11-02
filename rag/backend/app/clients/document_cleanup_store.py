@@ -275,7 +275,7 @@ class DocumentCleanupStore:
             WHERE object_storage_path IN ({in_list})
             UNION
             SELECT JSON_VALUE(preprocess_artifact, '$.object_storage_path') AS uri
-            FROM rag_documents
+            FROM rag_document_recipes
             WHERE JSON_VALUE(preprocess_artifact, '$.object_storage_path') IN ({in_list})
             UNION
             SELECT artifact_path AS uri

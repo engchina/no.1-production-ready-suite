@@ -4176,7 +4176,7 @@ async def preview_document(
     detail = await oracle.get_document(document_id)
     if detail is None or getattr(detail, "object_storage_path", None) is None:
         raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の文書が見つかりません。")
-    artifact: DocumentPreprocessArtifact | None = detail.preprocess_artifact
+    artifact: DocumentPreprocessArtifact | None = None
     if recipe_id:
         row = await oracle.get_document_recipe(document_id, recipe_id)
         if row is None:

@@ -19,7 +19,12 @@ from app.clients.document_cleanup_store import (
     DocumentCleanupTargets,
 )
 from app.clients.oracle import DocumentDeleteBlockedByRunningIngestionError, OracleClient
-from app.schemas.document import IngestionJob, IngestionJobStatus
+from app.schemas.document import (
+    DocumentPreprocessArtifact,
+    FileStatus,
+    IngestionJob,
+    IngestionJobStatus,
+)
 
 
 async def _delete_cleanup_rows(client: OracleClient, document_ids: list[str]) -> None:
@@ -74,6 +79,21 @@ async def test_document_cleanup_record_is_written_with_document_delete() -> None
         assert await store.referenced_uris(
             [targets.source_uri or "", f"local://uploaded/{token}/remaining.txt"]
         ) == {f"local://uploaded/{token}/remaining.txt"}
+        # 残っている文書のレシピが指す処理後のファイルも消さない（#4185）。
+        recipe = await client.ensure_default_document_recipe(remaining.id)
+        prepared_uri = f"local://artifacts/canonical/{remaining.id}/prepared.pdf"
+        await client.update_document_recipe_status(
+            recipe_id=str(recipe["recipe_id"]),
+            status=FileStatus.PREPROCESSED,
+            preprocess_artifact=DocumentPreprocessArtifact(
+                derivation_id=f"cleanup-{token}",
+                profile="office_to_pdf",
+                converted=True,
+                object_storage_path=prepared_uri,
+                file_name="prepared.pdf",
+            ),
+        )
+        assert await store.referenced_uris([prepared_uri]) == {prepared_uri}
         assert await store.document_exists(remaining.id)
         assert not await store.document_exists(deleted.id)
         # 消えた文書の再削除は None（記録は増えない）。

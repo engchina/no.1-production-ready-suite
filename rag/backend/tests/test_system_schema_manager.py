@@ -710,12 +710,14 @@ def test_update_retires_graph_claims_community_tables_with_approval() -> None:
         assert (name, "TABLE") in database.objects
 
 
-# データを消す SQL（テーブルの DROP・行の DELETE・TRUNCATE）。`ON DELETE CASCADE` は含めない。
-_DATA_LOSS_SQL = re.compile(r"\b(DROP\s+TABLE|DELETE\s+FROM|TRUNCATE\s+TABLE)\b", re.IGNORECASE)
+# データを消す SQL（テーブル・列の DROP・行の DELETE・TRUNCATE）。`ON DELETE CASCADE` は含めない。
+_DATA_LOSS_SQL = re.compile(
+    r"\b(DROP\s+TABLE|DROP\s+COLUMN|DELETE\s+FROM|TRUNCATE\s+TABLE)\b", re.IGNORECASE
+)
 
 
 def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
-    """DROP TABLE・DELETE を含む migration は、すべて「破壊的」の印と説明を持つ（#619）。
+    """表・列の DROP と DELETE を含む migration は、すべて「破壊的」の印と説明を持つ（#619）。
 
     新しい migration でデータを消すときに印を付け忘れると、テストの fixture や「作成・更新」が
     確認なしに当ててしまうため、SQL から検出して照合する。
@@ -736,6 +738,7 @@ def test_migrations_that_drop_or_delete_data_are_marked_destructive() -> None:
         "20261003_001_search_answer_profiles",
         "20261016_001_retire_evaluation_compare",
         "20261029_001_retire_query_history",
+        "20261102_009_retire_document_preprocess_artifact",
     } == marked
     assert all(migration.destructive_note for migration in MIGRATIONS if migration.destructive)
     # 印は checksum（SQL だけ）に影響しない（適用済みの DB を outdated にしない）。

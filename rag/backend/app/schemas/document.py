@@ -422,7 +422,6 @@ class DocumentDetail(DocumentSummary):
     """詳細表示用。VLM/LLM の抽出本文とメタデータを含む。"""
 
     object_storage_path: str | None = None
-    preprocess_artifact: DocumentPreprocessArtifact | None = None
     extraction: dict[str, object] = Field(default_factory=dict)
     error_message: str | None = None
     duplicate_source: DuplicateDocumentRef | None = None

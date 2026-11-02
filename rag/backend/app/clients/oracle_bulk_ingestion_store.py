@@ -141,10 +141,7 @@ def _document_state_query(document_ids: Sequence[str]) -> tuple[str, dict[str, o
             d.uploaded_at,
             d.indexed_at,
             CASE WHEN d.object_storage_path IS NULL THEN 0 ELSE 1 END AS has_source,
-            CASE
-                WHEN d.preprocess_artifact IS NULL AND d.extraction IS NULL THEN 0
-                ELSE 1
-            END AS has_outputs,
+            CASE WHEN d.extraction IS NULL THEN 0 ELSE 1 END AS has_outputs,
             (
                 SELECT MIN(s.status) KEEP (DENSE_RANK FIRST ORDER BY s.slot_no)
                 FROM rag_document_recipes s

@@ -318,15 +318,11 @@ class FakeWorkspaceOracle:
         *,
         status: FileStatus = FileStatus.UPLOADED,
         error_message: str | None = None,
-        clear_preprocess_artifact: bool = False,
     ) -> DocumentDetail:
         detail = self.documents[document_id]
         updated = detail.model_copy(
             update={
                 "status": status,
-                "preprocess_artifact": (
-                    None if clear_preprocess_artifact else detail.preprocess_artifact
-                ),
                 "extraction": {},
                 "error_message": error_message,
                 "indexed_at": None,
@@ -335,16 +331,6 @@ class FakeWorkspaceOracle:
         self.documents[document_id] = updated
         self.chunks.pop(document_id, None)
         self.ingestion_segments.pop(document_id, None)
-        return updated
-
-    async def save_preprocess_artifact(
-        self,
-        document_id: str,
-        artifact: DocumentPreprocessArtifact | None,
-    ) -> DocumentDetail:
-        detail = self.documents[document_id]
-        updated = detail.model_copy(update={"preprocess_artifact": artifact})
-        self.documents[document_id] = updated
         return updated
 
     async def reset_document_chunk_outputs(
@@ -520,6 +506,12 @@ class FakeWorkspaceOracle:
             return None
         return dict(row)
 
+    async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
+        for row in self.recipes.values():
+            if row.get("document_id") == document_id and row.get("slot_no") == 1:
+                return dict(row)
+        return {"recipe_id": f"default-{document_id}", "document_id": document_id, "slot_no": 1}
+
     async def update_document_recipe_status(
         self, *, recipe_id: str, status: FileStatus, **kwargs: object
     ) -> None:
@@ -613,23 +605,6 @@ class FakeWorkspaceIngestionPipeline:
         _ = prompt, source_profile, chunk_set_id, cancel_checker
         detail = await self._oracle.get_document(document_id)
         assert detail is not None
-        if prepared_artifact is None:
-            await self._oracle.save_preprocess_artifact(
-                document_id,
-                DocumentPreprocessArtifact(
-                    derivation_id="fake-passthrough",
-                    profile="none",
-                    converted=False,
-                    source_content_type=detail.content_type,
-                    source_sha256=detail.content_sha256,
-                    object_storage_path=original_object_storage_path,
-                    content_type=content_type,
-                    sha256=hashlib.sha256(image_bytes).hexdigest(),
-                    file_name=f"{detail.file_name.rsplit('.', 1)[0]}__prepared.txt",
-                ),
-            )
-            detail = await self._oracle.get_document(document_id)
-            assert detail is not None
         raw_text = image_bytes.decode("utf-8", errors="replace")
         self._oracle.documents[document_id] = detail.model_copy(
             update={
@@ -722,8 +697,10 @@ class FakeDocumentCleanupStore:
         referenced: set[str] = set()
         for detail in self.oracle.documents.values():
             referenced.add(detail.object_storage_path or "")
-            if detail.preprocess_artifact is not None:
-                referenced.add(detail.preprocess_artifact.object_storage_path or "")
+        for recipe in self.oracle.recipes.values():
+            artifact = recipe.get("preprocess_artifact")
+            if isinstance(artifact, Mapping):
+                referenced.add(str(artifact.get("object_storage_path") or ""))
         for segments in self.oracle.ingestion_segments.values():
             referenced.update(segment.artifact_path or "" for segment in segments)
         return {uri for uri in uris if uri in referenced}
@@ -2256,29 +2233,15 @@ def test_retry_ingestion_job_creates_new_job_for_failed_document(
     assert original_job.json()["data"]["status"] == "FAILED"
 
 
-def test_preprocess_reprocess_clears_prepared_artifact_and_outputs(
+def test_preprocess_reprocess_clears_outputs(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """PREPROCESS 再処理は処理後ファイル情報と抽出/Chunk を削除して原本からやり直す。"""
+    """PREPROCESS 再処理は抽出/Chunk を削除して原本からやり直す。"""
     document_id = _upload("policy.txt", b"original-body", "text/plain")
-    prepared_path = anyio.run(
-        ObjectStorageClient().put,
-        f"artifacts/canonical/{document_id}/old-prepared.txt",
-        b"old-prepared",
-        "text/plain",
-    )
     detail = fake_document_dependencies.documents[document_id]
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="old",
-                profile="text_normalize",
-                converted=True,
-                object_storage_path=prepared_path,
-                content_type="text/plain",
-                file_name="policy__prepared.txt",
-            ),
             "extraction": {"raw_text": "old extraction"},
             "indexed_at": datetime.now(UTC),
         }
@@ -2300,15 +2263,19 @@ def test_preprocess_reprocess_clears_prepared_artifact_and_outputs(
     assert resp.status_code == 200
     job = resp.json()["data"]
     assert job["phase"] == "PREPROCESS"
-    assert fake_document_dependencies.documents[document_id].preprocess_artifact is None
     assert fake_document_dependencies.documents[document_id].extraction == {}
     assert document_id not in fake_document_dependencies.chunks
 
 
-def test_extract_reprocess_keeps_existing_prepared_artifact(
+@pytest.mark.parametrize(
+    ("status", "force"), [(FileStatus.INDEXED, True), (FileStatus.PREPROCESSED, False)]
+)
+def test_document_extract_uses_default_recipe_prepared_file(
     fake_document_dependencies: FakeWorkspaceOracle,
+    status: FileStatus,
+    force: bool,
 ) -> None:
-    """EXTRACT の再投入は保存済みの処理後ファイルの情報を消さない。"""
+    """文書単位の EXTRACT は既定レシピの処理後ファイルを見て投入し、その情報を消さない（#4185）。"""
     document_id = _upload("policy.txt", b"original-body", "text/plain")
     prepared_body = b"prepared-body"
     prepared_path = anyio.run(
@@ -2329,22 +2296,29 @@ def test_extract_reprocess_keeps_existing_prepared_artifact(
     )
     fake_document_dependencies.documents[document_id] = detail.model_copy(
         update={
-            "status": FileStatus.INDEXED,
-            "preprocess_artifact": artifact,
+            "status": status,
             "extraction": {"raw_text": "old extraction"},
-            "indexed_at": datetime.now(UTC),
+            "indexed_at": datetime.now(UTC) if status == FileStatus.INDEXED else None,
         }
+    )
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=status,
+        preprocess_artifact=artifact,
     )
 
     resp = client.post(
         f"/api/documents/{document_id}/ingestion-jobs",
-        params={"force": "true", "phase": "EXTRACT"},
+        params={"force": str(force).lower(), "phase": "EXTRACT"},
     )
 
     assert resp.status_code == 200
     job = resp.json()["data"]
     assert job["phase"] == "EXTRACT"
-    assert fake_document_dependencies.documents[document_id].preprocess_artifact == artifact
+    assert fake_document_dependencies.recipes[recipe_id]["preprocess_artifact"] == (
+        artifact.model_dump(mode="json")
+    )
 
 
 def test_extract_reprocess_requires_prepared_artifact() -> None:
@@ -2360,6 +2334,28 @@ def test_extract_reprocess_requires_prepared_artifact() -> None:
     assert resp.json()["error_messages"] == [
         "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
     ]
+
+
+def test_document_extract_rejects_recipe_artifact_without_file_location(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """既定レシピの artifact にファイルの場所が無ければ、worker へ渡す前に止める（#4185）。"""
+    document_id = _upload("policy.txt", b"original-body", "text/plain")
+    _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id="passthrough", profile="none", converted=False, file_name="policy.txt"
+        ),
+    )
+
+    resp = client.post(
+        f"/api/documents/{document_id}/ingestion-jobs",
+        params={"force": "true", "phase": "EXTRACT"},
+    )
+
+    assert resp.status_code == 409
 
 
 def test_retry_failed_chunk_job_requeues_from_error(
@@ -2898,10 +2894,10 @@ def test_document_content_prefers_stored_content_type_without_extension() -> Non
     assert "filename*=UTF-8''policy" in resp.headers["content-disposition"]
 
 
-def test_document_content_returns_prepared_artifact(
+def test_recipe_content_returns_prepared_artifact(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """処理後ファイル配信は preprocess_artifact の path / filename / content-type を使う。"""
+    """処理後ファイル配信はレシピの artifact の path / filename / content-type を使う。"""
     document_id = _upload("私の上司.docx", b"office-body", "application/octet-stream")
     prepared_body = b"%PDF-1.7\nprepared"
     prepared_path = anyio.run(
@@ -2910,23 +2906,24 @@ def test_document_content_returns_prepared_artifact(
         prepared_body,
         "application/pdf",
     )
-    detail = fake_document_dependencies.documents[document_id]
-    fake_document_dependencies.documents[document_id] = detail.model_copy(
-        update={
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="der-1",
-                profile="office_pdf",
-                converted=True,
-                object_storage_path=prepared_path,
-                content_type="application/pdf",
-                sha256="dummy",
-                file_name="私の上司__prepared.pdf",
-            )
-        }
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id="der-1",
+            profile="office_pdf",
+            converted=True,
+            object_storage_path=prepared_path,
+            content_type="application/pdf",
+            sha256="dummy",
+            file_name="私の上司__prepared.pdf",
+        ),
     )
 
     resp = client.get(
-        f"/api/documents/{document_id}/content?variant=prepared&disposition=attachment"
+        f"/api/documents/{document_id}/recipes/{recipe_id}/content"
+        "?variant=prepared&disposition=attachment"
     )
 
     assert resp.status_code == 200
@@ -2938,11 +2935,14 @@ def test_document_content_returns_prepared_artifact(
     )
 
 
-def test_document_content_prepared_missing_returns_404() -> None:
+def test_recipe_content_prepared_missing_returns_404(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
     """処理後ファイルが無い場合、原本へ黙って戻さない。"""
     document_id = _upload("policy.txt", b"body", "text/plain")
+    recipe_id = _seed_recipe(fake_document_dependencies, document_id, status=FileStatus.UPLOADED)
 
-    resp = client.get(f"/api/documents/{document_id}/content?variant=prepared")
+    resp = client.get(f"/api/documents/{document_id}/recipes/{recipe_id}/content?variant=prepared")
 
     assert resp.status_code == 404
     assert resp.json()["error_messages"] == [
@@ -3228,14 +3228,6 @@ def test_delete_document_removes_extraction_artifacts(
     ].model_copy(
         update={
             "status": FileStatus.INDEXED,
-            "preprocess_artifact": DocumentPreprocessArtifact(
-                derivation_id="der-delete",
-                profile="office_pdf",
-                converted=True,
-                object_storage_path=prepared_artifact_path,
-                content_type="application/pdf",
-                file_name="policy__prepared.pdf",
-            ),
             "extraction": {"parser_artifacts": {"extraction_artifact_path": full_artifact_path}},
         }
     )
@@ -4353,7 +4345,7 @@ def test_force_reingest_keeps_served_output_and_clears_only_recipe_checkpoints(
     async def default_recipe(_document_id: str) -> dict[str, object]:
         return {"recipe_id": "recipe-default", "status": FileStatus.INDEXED.value}
 
-    fake.ensure_default_document_recipe = default_recipe  # type: ignore[attr-defined]
+    fake.ensure_default_document_recipe = default_recipe  # type: ignore[method-assign,assignment]
 
     resp = client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"force": "true"})
 

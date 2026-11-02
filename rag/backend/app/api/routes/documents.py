@@ -1667,7 +1667,7 @@ async def document_source_map(
         found = await oracle.get_document(document_id)
         if found is None:
             raise HTTPException(404, "文書が見つかりません。")
-        detail, artifact = found, found.preprocess_artifact
+        detail, artifact = found, None
     artifact = prepared_artifact_from_extraction(detail, payload) or artifact
 
     async def load(variant: Literal["original", "prepared"]) -> bytes:
@@ -4099,8 +4099,10 @@ async def _enqueue_ingestion_job_for_document(
             skip_reason="already_indexed",
             phase=phase,
         )
-    if phase == IngestionJobPhase.EXTRACT and (
-        detail.preprocess_artifact is None or not detail.preprocess_artifact.object_storage_path
+    if (
+        phase == IngestionJobPhase.EXTRACT
+        and _recipe_prepared_artifact(await oracle.ensure_default_document_recipe(document_id))
+        is None
     ):
         raise HTTPException(
             status_code=409,
@@ -4110,12 +4112,6 @@ async def _enqueue_ingestion_job_for_document(
         # 検索に出している版は切替まで残す。解析はやり直すので区間の checkpoint だけ消す（#4115）。
         recipe = await oracle.ensure_default_document_recipe(document_id)
         await oracle.delete_recipe_segment_checkpoints(document_id, str(recipe["recipe_id"]))
-    elif phase == IngestionJobPhase.PREPROCESS:
-        await _reset_document_outputs_for_extract(
-            oracle,
-            document_id,
-            clear_preprocess_artifact=True,
-        )
     else:
         await _reset_document_outputs_for_extract(oracle, document_id)
 
@@ -4267,9 +4263,7 @@ async def _enqueue_failed_segment_retry_job_for_document(
         recipe = await oracle.get_document_recipe(document_id, recipe_id)
         if recipe is None:
             raise HTTPException(status_code=404, detail="レシピが見つかりません。")
-        raw_artifact = recipe.get("preprocess_artifact")
-        artifact = DocumentPreprocessArtifact.model_validate(raw_artifact) if raw_artifact else None
-        if artifact is None or not artifact.object_storage_path:
+        if _recipe_prepared_artifact(recipe) is None:
             raise HTTPException(
                 status_code=409,
                 detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
@@ -4382,20 +4376,21 @@ async def _create_ingestion_job_record(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+def _recipe_prepared_artifact(recipe: Mapping[str, Any]) -> DocumentPreprocessArtifact | None:
+    """レシピの処理後のファイル。ファイルの場所が無ければ None。"""
+    raw = recipe.get("preprocess_artifact")
+    artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
+    return artifact if artifact is not None and artifact.object_storage_path else None
+
+
 async def _reset_document_outputs_for_extract(
     oracle: OracleClient,
     document_id: str,
-    *,
-    clear_preprocess_artifact: bool = False,
 ) -> None:
     """EXTRACT 再投入前に旧抽出・checkpoint・派生結果を初期化する。"""
     reset_outputs = getattr(oracle, "reset_document_ingestion_outputs", None)
     if callable(reset_outputs):
-        await reset_outputs(
-            document_id,
-            status=FileStatus.UPLOADED,
-            clear_preprocess_artifact=clear_preprocess_artifact,
-        )
+        await reset_outputs(document_id, status=FileStatus.UPLOADED)
         return
     await oracle.update_document_status(document_id, FileStatus.UPLOADED)
 
@@ -5003,8 +4998,6 @@ async def _document_artifact_paths(
     paths: list[str] = []
     if extraction_artifact_path := _extraction_artifact_path(detail.extraction):
         paths.append(extraction_artifact_path)
-    if detail.preprocess_artifact is not None and detail.preprocess_artifact.object_storage_path:
-        paths.append(detail.preprocess_artifact.object_storage_path)
     try:
         segments = await oracle.list_ingestion_segments(detail.id)
     except Exception:
@@ -5561,33 +5554,31 @@ async def _finish_ingestion_job_unless_cancelled(
 @router.get("/{document_id}/content")
 async def document_content(
     document_id: str,
-    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
 ) -> Response:
-    """原本またはファイル準備後 artifact を返す（文書プレビュー/ダウンロード用）。"""
+    """原本を返す（処理後のファイルはレシピごとなので `/recipes/{id}/content`）。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return await document_content_response(
         detail,
-        variant=variant,
+        variant="original",
         disposition=disposition,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
 @router.get("/{document_id}/preview-pages", response_model=ApiResponse[DocumentPreviewPages])
 async def document_preview_pages(
     document_id: str,
-    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
 ) -> ApiResponse[DocumentPreviewPages]:
-    """原本 / 処理後ファイルのページ一覧(PDF をページ画像で表示し、bbox の強調を重ねる。#349)。"""
+    """原本のページ一覧(PDF をページ画像で表示し、bbox の強調を重ねる。#349)。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return await _document_preview_pages_response(
-        detail, variant=variant, preprocess_artifact=detail.preprocess_artifact
+        detail, variant="original", preprocess_artifact=None
     )
 
 
@@ -5595,19 +5586,18 @@ async def document_preview_pages(
 async def document_preview_page_image(
     document_id: str,
     page_number: Annotated[int, Path(ge=1, le=10000)],
-    variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     dpi: Annotated[int, Query(ge=48, le=288)] = 144,
 ) -> Response:
-    """原本 / 処理後ファイルの 1 ページを PNG で返す(ページの /Rotate を反映した向き)。"""
+    """原本の 1 ページを PNG で返す(ページの /Rotate を反映した向き)。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
     return await _document_preview_page_image_response(
         detail,
         page_number=page_number,
-        variant=variant,
+        variant="original",
         dpi=dpi,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
@@ -5622,8 +5612,7 @@ async def document_recipe_text_window(
         found_detail = await OracleClient().get_document(document_id)
         if found_detail is None:
             raise HTTPException(status_code=404, detail="文書が見つかりません。")
-        detail = found_detail
-        artifact = detail.preprocess_artifact
+        detail, artifact = found_detail, None
     variant, offset, limit, focus = request.variant, request.offset, request.limit, request.focus
 
     payload: dict[str, Any] = {}
@@ -5753,9 +5742,10 @@ async def _document_preview_page_image_response(
     )
 
 
-@router.get("/{document_id}/crop")
-async def document_crop(
+@router.get("/{document_id}/recipes/{recipe_id}/crop")
+async def document_recipe_crop(
     document_id: str,
+    recipe_id: str,
     page: Annotated[int, Query(ge=1, le=10000)],
     x0: Annotated[float, Query(ge=0)],
     y0: Annotated[float, Query(ge=0)],
@@ -5764,16 +5754,20 @@ async def document_crop(
     page_width: Annotated[float, Query(gt=0)],
     page_height: Annotated[float, Query(gt=0)],
     dpi: Annotated[int, Query(ge=36, le=300)] = 150,
+    revision: Annotated[str | None, Query(min_length=1, max_length=256)] = None,
 ) -> Response:
     """解析に使ったファイルから bbox の領域を PNG で切り出す(解析結果プレビュー用)。
 
-    bbox は解析結果のページ画像 px 座標(page_width / page_height 基準)。ファイル準備後の
-    artifact があればそれ(解析対象)を、無ければ原本を開く。画像ファイルは 1 ページとして扱う。
+    bbox は解析結果のページ画像 px 座標(page_width / page_height 基準)。``revision``（抽出の版）が
+    解析したファイルを開く。版の指定か系譜が無ければレシピの今のファイル、それも無ければ原本を開く。
+    画像ファイルは 1 ページとして扱う。
     """
     if x1 <= x0 or y1 <= y0 or x1 > page_width * 1.001 or y1 > page_height * 1.001:
         raise HTTPException(status_code=422, detail="切り出し範囲が不正です。")
     try:
-        data = await load_parsed_source(OracleClient(), document_id)
+        data = await load_parsed_source(
+            OracleClient(), document_id, recipe_id, extraction_recipe_id=revision
+        )
     except DocumentSourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
