@@ -1282,6 +1282,10 @@ def _compact(value: str) -> str:
 
 
 _MARKUP_TAG = re.compile(r"<[^<>]{1,40}>")
+# Markdown の表の区切りの行（「|---|---|」「| :--- | ---: |」）。表の根拠は HTML で渡るがモデルは Markdown の表に
+# 写して引用することがあり、区切りの行は HTML の tag と同じく表の形だけで語を持たない（#108）。セルの区切り（縦棒）を
+# 含む行に限る（単独の「---」は文の記号として残す）。
+_MARKDOWN_TABLE_RULE = re.compile(r"(?m)^[ \t]*\|?(?:[ \t]*:?-{3,}:?[ \t]*\|)+(?:[ \t]*:?-{3,}:?[ \t]*)?$")
 # 対になった Markdown の表示記法だけを除き、単独の演算記号は原文として残す。
 _QUOTE_EMPHASIS = re.compile(r"(?P<mark>\*\*|__|`)(?=\S)(?P<body>[^\n]*?\S)(?P=mark)")
 # 意味を変えない表記の違い。表のセル区切り（HTML tag は別に除く）、句読点、コロン、中点、矢印、括弧・引用符の種類。
@@ -1291,7 +1295,7 @@ _QUOTE_EMPHASIS = re.compile(r"(?P<mark>\*\*|__|`)(?=\S)(?P<body>[^\n]*?\S)(?P=m
 def _canonical(value: str) -> tuple[str, list[int]]:
     """引用照合用の文字列と、各文字の元の位置を返します。
 
-    空白、表のセル区切り（HTML tag・縦棒）、読点を除き、全角 / 半角を同一視する。表の根拠は HTML で
+    空白、表のセル区切り（HTML tag・縦棒・Markdown の表の区切りの行）、読点を除き、全角 / 半角を同一視する。表の根拠は HTML で
     渡るがモデルは tag を外して引用し、図内の文字は OCR で1語ごとに改行・読点が揺れるため。
     文字・数字・記号の並びは変えないので、照合は決定的なまま。
     文字の形は全文検索の索引と同じ ``fold_text``（NFKC・波線とダッシュ）でそろえる。モデルは根拠を全角・半角を
@@ -1299,6 +1303,8 @@ def _canonical(value: str) -> tuple[str, list[int]]:
     """
     masked: set[int] = set()
     for match in _MARKUP_TAG.finditer(value):
+        masked.update(range(match.start(), match.end()))
+    for match in _MARKDOWN_TABLE_RULE.finditer(value):
         masked.update(range(match.start(), match.end()))
     for match in _QUOTE_EMPHASIS.finditer(value):
         masked.update(range(match.start(), match.start("body")))
@@ -1331,19 +1337,43 @@ def _original_range(quote: str, text: str) -> str:
 # 原文範囲の末尾に続く句点。照合では無視するが、表示する原文には含める。
 
 
+# 構造化出力の文字列の中で、改行・タブが二重に escape されて残った字（「\\n」の 2 字。#112）。
+_ESCAPED_BREAK = re.compile(r"\\r\\n|\\[nrt]")
+# 監査モデルが原文の離れた箇所（表の行・各 chunk の見出し）をつなぐ「 / 」（前後に空白のある斜線。#119）。
+_SLASH_JOIN = re.compile(r"\s+[/／]\s+")
+# 「 / 」でつないだ断片として受け入れる最小の文字数（空白・記号を除く。「第3条(出張旅費)」が 7）。短い断片（「一般社員」「15,000円」）は
+# 表の離れたセルを組み替えて区分と値を取り違えた引用でも原文に見つかるので、行・見出しの長さに限る。
+_MIN_JOINED_FRAGMENT_CHARS = 7
+
+
 def _original_quote(quote: str, text: str) -> str:
     """原文と照合できた引用を返します。文字や数字の違い、出典の推測は受け入れません。
 
     連続範囲として一致しない複数行の引用は、各行が同じ原文の連続範囲なら受け入れる。図や表では見出しと
     内容が読み順で離れ、モデルは同じ根拠の2か所を改行で継ぎ合わせて引用する。どの行も原文そのままなので
     推測は含まない。言い換えを支持するかどうかは item 単位の監査が判断する。
+
+    モデルの構造化出力が改行を二重に escape し、引用に「\\n」の 2 字（逆斜線と n）が残ることがある（実モデルで
+    1 回の応答のすべての引用に起きた。#112）。原文にその 2 字が無く、そのままでは照合できないときだけ、改行と
+    して読み直して照合する（空白は照合で無視するので、文字・数字の並びの基準は変わらない）。
     """
+    matched = _verbatim_quote(quote, text)
+    if matched or not _ESCAPED_BREAK.search(quote) or _ESCAPED_BREAK.search(text):
+        return matched
+    return _verbatim_quote(_ESCAPED_BREAK.sub("\n", quote), text)
+
+
+def _verbatim_quote(quote: str, text: str) -> str:
+    """``_original_quote`` の照合（escape の残りを読み直す前）。"""
     matched = _original_range(quote, text)
     if matched:
         return matched
     elided = _elided_quote(quote, text)
     if elided:
         return elided
+    joined = _slash_joined_quote(quote, text)
+    if joined:
+        return joined
     lines = [line for line in quote.splitlines() if len(_canonical(line)[0]) >= 2]
     if len(lines) < 2:
         # 手順番号（①②…、1.、(1)）で区切られた複数の手順を 1 行につないだ引用。間の ※ 注記などを
@@ -1377,6 +1407,29 @@ def _elided_quote(quote: str, text: str) -> str:
     if len(parts) == 1:
         return _original_range(parts[0], text)
     return _ordered_ranges(parts, text)
+
+
+def _slash_joined_quote(quote: str, text: str) -> str:
+    """「 / 」でつないだ引用を、断片ごとに原文と照合します（#119）。
+
+    監査モデルは表の離れた行や複数の見出しを `A / B` とつないで写す（行の順を入れ替えることもある）。改行で
+    つないだ複数行の引用と同じく、各断片が原文そのままなら受け入れ、読み順は問わない。省略記号・改行も断片の
+    区切りにする。断片の語の並びは変えないので、区切りの斜線を落とした引用・値を入れ替えた引用は通さない。
+    断片は行・見出しの長さ（`_MIN_JOINED_FRAGMENT_CHARS`）に限る（短いセルの組み替えを通さない）。
+    """
+    if not _SLASH_JOIN.search(quote):
+        return ""
+    parts = [
+        part
+        for line in quote.splitlines()
+        for piece in check_cues().ellipsis_split.split(line)
+        for part in _SLASH_JOIN.split(piece)
+        if len(_canonical(part)[0]) >= 2
+    ]
+    if len(parts) < 2 or any(len(_canonical(part)[0]) < _MIN_JOINED_FRAGMENT_CHARS for part in parts):
+        return ""
+    matched = [_original_range(part, text) for part in parts]
+    return " … ".join(matched) if all(matched) else ""
 
 
 def _ordered_ranges(parts: Sequence[str], text: str) -> str:

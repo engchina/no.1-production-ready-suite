@@ -1002,14 +1002,47 @@ _LOOKUP_ACTION = re.compile(
 )
 
 
+# 調べるのに使ったツールの名前だけの行（「- `rag__rag_retrieve_evidence`」「- `rag__rag_recommend_
+# search_answer_profile`（社内規程 Q&A を推薦）」。#104）。モデルに渡すツールの名前は
+# `<接続>__<ツール>` なので、`__` を含む名前に限る（設定のキーなど snake_case の語の説明は
+# 外さない）。
+_TOOL_NAME = r"`?[a-z][a-z0-9_]*__[a-z][a-z0-9_]*`?(?:\s*[（(][^（）()]*[）)])?"
+# 先頭の「使用したツール:」の見出し（同じ行にツール名を書く形。強調の印つき。#117）も許す。
+_TOOL_NAME_LINE = re.compile(
+    r"(?:(?:使用した|使った|利用した|呼び出した|使用|利用)?ツール(?:名)?\s*\**\s*[:：]\s*\**\s*)?"
+    rf"{_TOOL_NAME}(?:\s*[、,，/／]\s*{_TOOL_NAME})*[。.]?"
+)
+
+
+# ツール名に、回数（「×2」）・括弧の補足・「→」「:」の後の結果の説明だけが続く行
+# （「- `rag__rag_retrieve_evidence` ×2（「社員食堂 献立」で検索）」
+# 「- `rag__…` → 推薦プロファイル: 社内規程 Q&A」。#129）。
+_TOOL_REPORT_LINE = re.compile(
+    rf"{_TOOL_NAME}(?:\s*[×xX]\s*[0-9]+)?(?:\s*[（(][^（）()]*[）)])?(?:\s*(?:→|->|⇒|[:：])\s*\S.*)?"
+)
+# 検索・回答プロファイルの選択の報告の行
+# （「- 検索・回答プロファイル：社内規程 Q&A（ID: …）」。#129）。
+_PROFILE_NOTE = re.compile(r"[^:：。]{0,20}プロファイル(?:名)?\s*\**\s*[:：]")
+
+
 def is_lookup_note(text: str) -> bool:
     """調べるのに使ったツール・プロファイル・内部の ID だけを述べる行か（#2328）。
 
     「〈プロファイル名〉（ID: 0f3a9c2e…）を用いて上記根拠を取得しました。」のような
     作業の経過で、資料の主張ではない（使ったツールと根拠は画面と MCP の `sources` が
     別に示す）。内部の識別子（`_INTERNAL_ID`）と調べ方の述語（`_LOOKUP_ACTION`）の
-    両方がある文に限る。操作の指示・質問は除く。
+    両方がある文に限る。操作の指示・質問は除く。使ったツールの名前（`<接続>__<ツール>`）だけを
+    並べた行（「- `rag__rag_retrieve_evidence`」。括弧の補足つきを含む。#104）も作業の経過にする。
     """
+    bare = _strip_bullet(text).strip("*").strip()
+    if len(bare) <= 200 and (
+        _TOOL_NAME_LINE.fullmatch(bare)
+        or _TOOL_REPORT_LINE.fullmatch(bare)
+        or _PROFILE_NOTE.match(bare)
+    ):
+        # 使ったツールの名前だけの行（#104）。回答の本文ではなく作業の経過（`__` を強調の印として
+        # 外す前に見る）。
+        return True
     value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
     if not value or len(value) > 200 or is_question(value) or _OPERATION.search(value):
         return False
@@ -1028,6 +1061,12 @@ _ABSENCE_CONCLUSION = re.compile(
     r"(?:見つかりません|見つけられません|見当たりません|ありません|確認できません|確かめられません)"
     r"(?:でした)?[。．]?$"
 )
+# 質問の対象を主語にして、確かめられなかったとだけ結ぶ文（#108。「社員食堂の今日の献立は確かめられ
+# ませんでした。」）。「確かめられない」は資料・データで確かめた結果を述べる語で、業務の事実の主張
+# （「…は変更できません」）にならないので、主語の語を限らない。
+_UNCONFIRMED_CONCLUSION = re.compile(
+    r"^[^。]{1,60}?(?:は|が)[、,]?\s*確かめられません(?:でした)?[。．]?$"
+)
 
 
 def is_absence_conclusion(text: str) -> bool:
@@ -1035,13 +1074,15 @@ def is_absence_conclusion(text: str) -> bool:
 
     `is_absence` に加えて、前に調べたことだけを述べる節（「資料を確認しましたが、」）が付いた
     不足の文も数える（段落の判定〔主張ではない段落〕には使わない。回答の対応を決めるときに、
-    最初の段落にだけ使う）。数量・逆接（前の節を除く）・操作を含む文は除く。
+    最初の段落にだけ使う）。質問の対象を主語にして確かめられなかったとだけ結ぶ文（#108）も数える。
+    文頭のお詫びの節（「申し訳ありませんが、」）は外して判定する。数量・逆接（前の節を除く）・
+    操作を含む文は除く。
     """
     if is_absence(text):
         return True
-    value = _EMPHASIS.sub("", _strip_bullet(text)).strip()
+    value = _APOLOGY_LEAD.sub("", _EMPHASIS.sub("", _strip_bullet(text)).strip())
     value = _TRAILING_NOTE.sub("", _SEARCHED_LEAD.sub("", value, count=1))
-    if not _ABSENCE_CONCLUSION.search(value):
+    if not (_ABSENCE_CONCLUSION.search(value) or _UNCONFIRMED_CONCLUSION.search(value)):
         return False
     return not _ABSENCE_CLAIM.search(value) and not _OPERATION.search(value)
 
