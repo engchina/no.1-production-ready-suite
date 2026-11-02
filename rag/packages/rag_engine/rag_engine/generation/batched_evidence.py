@@ -7,12 +7,14 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, create_model, model_validator
 
 from rag_engine.config import Settings
 from rag_engine.dependencies import record_retrieval_stage
+from rag_engine.generation.batch_output_repair import batch_repair_prompt, batch_validation_detail
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.runtime import resolve_prompt
+from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.character_forms import find_width_folded
 
 BATCH_READING_PROMPT = """## Step 1: 質問と根拠を読む
@@ -247,8 +249,32 @@ def prepare_batched_evidence(
                     ],
                 }
                 batches.append(receipt)
+                reading_model = _reading_model(batch)
+                reading_schema = reading_model.model_json_schema()
+
+                def repair(
+                    error: Exception,
+                    will_retry: bool,
+                    *,
+                    original: str = payload,
+                    batch_schema: Mapping[str, Any] = reading_schema,
+                    batch_receipt: dict[str, Any] = receipt,
+                ) -> str | None:
+                    detail = batch_validation_detail(error, batch_schema)
+                    batch_receipt.setdefault("validation_failures", []).append(detail)
+                    if not will_retry:
+                        return None
+                    corrected = batch_repair_prompt(original, detail)
+                    batch_receipt["repair_input"] = {"original_prompt_chars": len(original), "retry_prompt_chars": len(corrected)}
+                    if not model_input_measurement(settings, reading_system, corrected, batch_schema, provider_id=provider_id)["fits"]:
+                        batch_receipt["repair_input"]["status"] = "input_budget_exceeded"
+                        fail("batch_repair_input_budget_exceeded")
+                    batch_receipt["repair_input"]["status"] = "within_budget"
+                    return corrected
+
                 try:
-                    reading = read(reading_system, payload, _reading_model(batch))
+                    with bind_structured_output_repair(repair):
+                        reading = read(reading_system, payload, reading_model)
                     by_id = {f"B{index}": value for index, value in enumerate(batch, 1)}
                     for finding in reading.findings:
                         original = by_id.get(finding.evidence_id)
@@ -267,6 +293,8 @@ def prepare_batched_evidence(
                     receipt.update(status="completed", finding_count=len(reading.findings))
                 except Exception as exc:
                     receipt.update(status="failed", error=type(exc).__name__)
+                    if isinstance(exc, ValidationError) and not receipt.get("validation_failures"):
+                        receipt["validation_failures"] = [batch_validation_detail(exc, reading_schema)]
                     raise
                 finally:
                     record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})

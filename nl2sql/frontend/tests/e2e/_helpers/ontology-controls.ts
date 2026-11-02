@@ -62,8 +62,20 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   const legend = scope.getByTestId("ontology-graph-legend").getByRole("button").first();
   // 補助テキストの下限は 12px（README §3）。
   await expect(legend).toHaveCSS("font-size", "12px");
-  await expect(legend).toHaveCSS("border-top-width", "0px");
-  await expect(legend).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(legend).toHaveCSS("border-top-width", "1px");
+  // 選択した共通 Button はデザインシステムの accent を使う。
+  const legendTokens = await legend.evaluate(element => {
+    const probe = document.createElement("span");
+    element.append(probe);
+    probe.style.color = "var(--color-accent-fg)";
+    const border = getComputedStyle(probe).color;
+    probe.style.color = "var(--color-accent-muted)";
+    const background = getComputedStyle(probe).color;
+    probe.remove();
+    return { border, background };
+  });
+  await expect(legend).toHaveCSS("border-top-color", legendTokens.border);
+  await expect(legend).toHaveCSS("background-color", legendTokens.background);
   await legend.focus();
   await page.keyboard.press("Space");
   await expect(legend).toHaveAttribute("aria-pressed", "false");

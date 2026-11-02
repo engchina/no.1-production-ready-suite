@@ -5950,13 +5950,19 @@ class OracleClient:
         limit: int = 25,
         page: int | None = None,
         chunk_id: str | None = None,
+        scope_element_ids: list[str] | None = None,
         extraction_recipe_id: str | None = None,
+        unlocated_only: bool = False,
+        location_unavailable: bool = False,
     ) -> tuple[list[DocumentChunkView], int]:
         """権限と版を保って、必要な範囲の chunk だけを読む。"""
         rows = await self._fetch_all(
             _render_sql(
                 """
-            WITH page_elements AS (
+            {location_cte}, scope_ids AS (
+                SELECT element_id FROM JSON_TABLE(:scope_ids, '$[*]' COLUMNS (
+                    element_id VARCHAR2(512) PATH '$'))
+            ), page_elements AS (
                 SELECT ep.element_id FROM rag_document_extractions e,
                     JSON_TABLE(e.extraction_json, '$.elements[*]' COLUMNS (
                         element_id VARCHAR2(512) PATH '$.element_id',
@@ -5976,33 +5982,25 @@ class OracleClient:
             )
             SELECT c.document_id, c.chunk_id, c.chunk_index,
                    c.chunk_text, c.metadata_json, COUNT(*) OVER () AS window_total
-            FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
-            WHERE c.chunk_set_id = :chunk_set_id AND {access_predicate}
-              AND (:chunk_id IS NULL OR c.chunk_id = :chunk_id)
+            FROM inspection_chunks c
+            WHERE (:chunk_id IS NULL OR c.chunk_id = :chunk_id)
+              AND (:unlocated_only=0 OR c.first_element_id IS NULL)
+              AND (:scope_active=0 OR c.first_element_id IN (SELECT element_id FROM scope_ids))
               AND (:page IS NULL OR
                    COALESCE(JSON_VALUE(c.metadata_json, '$.page_start'
                                        RETURNING NUMBER NULL ON ERROR),
-                            JSON_VALUE(c.metadata_json, '$.page_end'
-                                       RETURNING NUMBER NULL ON ERROR),
                             JSON_VALUE(c.metadata_json, '$.page_number'
-                                       RETURNING NUMBER NULL ON ERROR)) <= :page
-                   AND COALESCE(JSON_VALUE(c.metadata_json, '$.page_end'
-                                       RETURNING NUMBER NULL ON ERROR),
-                                JSON_VALUE(c.metadata_json, '$.page_start'
-                                       RETURNING NUMBER NULL ON ERROR),
-                                JSON_VALUE(c.metadata_json, '$.page_number'
-                                       RETURNING NUMBER NULL ON ERROR)) >= :page
+                                       RETURNING NUMBER NULL ON ERROR))=:page
                    OR (JSON_VALUE(c.metadata_json, '$.page_start'
                                        RETURNING NUMBER NULL ON ERROR) IS NULL
-                       AND EXISTS (SELECT 1 FROM page_elements pe
-                           WHERE (JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
-                               PASSING pe.element_id AS "eid") OR DBMS_LOB.INSTR(
-                               ',' || JSON_VALUE(c.metadata_json, '$.element_ids'
-                                   RETURNING CLOB) || ',', ',' || pe.element_id || ',') > 0))))
+                       AND JSON_VALUE(c.metadata_json, '$.page_number'
+                                       RETURNING NUMBER NULL ON ERROR) IS NULL
+                       AND c.first_element_id
+                           IN (SELECT element_id FROM page_elements)))
             ORDER BY c.chunk_index, c.chunk_id
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
             """,
-                access_predicate=_oracle_access_predicate_sql(alias="d"),
+                location_cte=_inspection_chunk_location_cte(),
             ),
             _with_tenant_bind(
                 {
@@ -6010,6 +6008,10 @@ class OracleClient:
                     "offset": offset,
                     "limit": limit,
                     "page": page,
+                    "scope_active": int(scope_element_ids is not None),
+                    "unlocated_only": int(unlocated_only),
+                    "location_unavailable": int(location_unavailable),
+                    "scope_ids": json.dumps(scope_element_ids or []),
                     "chunk_id": chunk_id,
                     "extraction_recipe_id": extraction_recipe_id,
                 }
@@ -6026,6 +6028,31 @@ class OracleClient:
                     if key not in {"parent_text", "engine_search_text", "context_header"}
                 }
         return chunks, int(str(rows[0]["window_total"])) if rows else 0
+
+    async def count_chunk_set_inspection_locations(
+        self,
+        chunk_set_id: str,
+        *,
+        extraction_recipe_id: str | None,
+        location_unavailable: bool = False,
+    ) -> tuple[int, int]:
+        """同じ版と権限の Chunk を、本文を転送せずに集計する。"""
+        row = await self._fetch_one(
+            _inspection_chunk_location_cte() + " SELECT COUNT(*) AS document_total, "
+            "COUNT(CASE WHEN first_element_id IS NULL THEN 1 END) AS unlocated_total "
+            "FROM inspection_chunks",
+            _with_tenant_bind(
+                {
+                    "chunk_set_id": chunk_set_id,
+                    "extraction_recipe_id": extraction_recipe_id,
+                    "location_unavailable": int(location_unavailable),
+                }
+            ),
+        )
+        return (
+            int(str(row["document_total"])) if row else 0,
+            int(str(row["unlocated_total"])) if row else 0,
+        )
 
     async def list_chunk_set_chunks(self, chunk_set_id: str) -> list[DocumentChunkView]:
         """指定 chunk_set の chunk/citation metadata を返す。"""
@@ -13574,6 +13601,37 @@ def _oracle_natural_name_order_sql(expression: str) -> str:
             CONNECT BY LEVEL <= REGEXP_COUNT({normalized}, '[0-9]+|[^0-9]+')
         )
     ), 'NLS_SORT=JAPANESE_M_CI')"""
+
+
+def _inspection_chunk_location_cte() -> str:
+    """位置の帰属と件数で同じ版・要素照合を使う。本文座標から位置を推測しない。"""
+    return _render_sql(
+        """
+        WITH element_order AS (
+            SELECT ep.element_id, ep.ordinal FROM rag_document_extractions e,
+                JSON_TABLE(e.extraction_json, '$.elements[*]' COLUMNS (
+                    ordinal FOR ORDINALITY, element_id VARCHAR2(512) PATH '$.element_id')) ep
+            WHERE e.extraction_recipe_id=:extraction_recipe_id
+              AND EXISTS (SELECT 1 FROM rag_chunk_sets cs
+                          WHERE cs.chunk_set_id=:chunk_set_id
+                            AND cs.document_id=e.document_id
+                            AND cs.extraction_recipe_id=e.extraction_recipe_id)
+        ), inspection_chunks AS (
+            SELECT c.*,
+                CASE WHEN :location_unavailable=1 THEN NULL ELSE
+                    (SELECT eo.element_id FROM element_order eo
+                     WHERE JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
+                           PASSING eo.element_id AS "eid") OR DBMS_LOB.INSTR(
+                           ',' || JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB)
+                           || ',', ',' || eo.element_id || ',')>0
+                     ORDER BY eo.ordinal FETCH FIRST 1 ROW ONLY)
+                END AS first_element_id
+            FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
+            WHERE c.chunk_set_id=:chunk_set_id AND {access_predicate}
+        )
+        """,
+        access_predicate=_oracle_access_predicate_sql(alias="d"),
+    )
 
 
 def _render_sql(template: str, **parts: str) -> str:

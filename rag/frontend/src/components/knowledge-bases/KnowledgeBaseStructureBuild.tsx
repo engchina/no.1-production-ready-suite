@@ -21,6 +21,7 @@ const statusLabels: Record<string, I18nKey> = {
   PARTIAL: "knowledgeBases.structure.build.status.PARTIAL",
   FAILED: "knowledgeBases.structure.build.status.FAILED",
   SKIPPED: "knowledgeBases.structure.build.status.SKIPPED",
+  UNKNOWN: "knowledgeBases.structure.build.status.UNKNOWN",
  };
 const reasonLabels: Record<string, I18nKey> = {
   no_chunks: "knowledgeBases.structure.build.reason.no_chunks",
@@ -66,10 +67,23 @@ export function KnowledgeBaseStructureBuild({ kbId, enabled, editable }: { kbId:
     if (ok) action.mutate(mode);
   };
   const view = preview ? plan.data : job.data?.job_id ? job.data : null;
+  const currentStatus = (item: StructureBuildItem) => {
+    const status = preview ? item.status : item.index_status ?? "UNKNOWN";
+    const quality = preview ? item.quality : item.index_quality;
+    return t(statusLabels[status === "CURRENT" && quality === "PARTIAL" ? "PARTIAL" : status] ?? "knowledgeBases.structure.build.status.UNKNOWN");
+  };
+  const detail = (item: StructureBuildItem) => {
+    const reason = item.reason ? t(reasonLabels[item.reason] ?? "knowledgeBases.structure.build.reason.processing_error") : item.quality === "PARTIAL" || item.result?.quality === "PARTIAL" ? t("knowledgeBases.structure.build.reason.partial") : "";
+    if (preview) return reason || "—";
+    const status = t(statusLabels[item.status] ?? "knowledgeBases.structure.build.status.UNKNOWN");
+    const operation = reason ? t("knowledgeBases.structure.build.resultDetail", { status, reason }) : status;
+    const currentReason = item.index_reason && item.index_reason !== item.reason ? t(reasonLabels[item.index_reason] ?? "knowledgeBases.structure.build.reason.processing_error") : null;
+    return currentReason ? <div className="grid gap-1"><span>{operation}</span><span className="text-fg-muted">{t("knowledgeBases.structure.build.currentDetail", { reason: currentReason })}</span></div> : operation;
+  };
   const columns: DataTableColumn<StructureBuildItem>[] = [
     { key: "name", header: t("knowledgeBases.structure.build.document"), render: (item) => <span className="break-all">{item.name}</span> },
-    { key: "status", className: "whitespace-nowrap", header: t("knowledgeBases.structure.build.status"), render: (item) => t(statusLabels[item.status] ?? "knowledgeBases.structure.build.status.FAILED") },
-    { key: "reason", header: t("knowledgeBases.structure.build.reason"), render: (item) => item.reason ? t(reasonLabels[item.reason] ?? "knowledgeBases.structure.build.reason.processing_error") : item.quality === "PARTIAL" || item.result?.quality === "PARTIAL" ? t("knowledgeBases.structure.build.reason.partial") : "—" },
+    { key: "status", className: "whitespace-nowrap", header: t("knowledgeBases.structure.build.status"), render: currentStatus },
+    { key: "reason", header: t("knowledgeBases.structure.build.reason"), render: detail },
   ];
   return <div className="grid gap-3" data-testid="knowledge-base-structure-build">
     <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.build.help")}</p>

@@ -245,7 +245,7 @@ for (const theme of ["light", "dark"] as const) {
         const target = element.querySelector(selector);
         return target ? getComputedStyle(target) : null;
       };
-      const buttons = [...element.querySelectorAll(".react-flow__controls-button")];
+      const buttons = [...element.querySelectorAll("button")].filter(button => ["拡大", "縮小", "全体表示"].includes(button.getAttribute("aria-label") ?? ""));
       return {
         tokens,
         buttonCount: buttons.length,
@@ -257,7 +257,8 @@ for (const theme of ["light", "dark"] as const) {
       };
     });
     expect(colors.buttonCount).toBe(3);
-    expect(new Set(colors.buttonBackgrounds)).toEqual(new Set([colors.tokens.raised]));
+    // 共通 ghost Button は透明な面を通して親の surface を表示する。
+    expect(new Set(colors.buttonBackgrounds)).toEqual(new Set(["rgba(0, 0, 0, 0)"]));
     expect(new Set(colors.buttonColors)).toEqual(new Set([colors.tokens.fg]));
     // 帰属表示（React Flow のリンク）は消さず、色だけ合わせる。
     expect(colors.attributionBackground).toBe(colors.tokens.raised);
@@ -317,8 +318,8 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
     { document_id: "doc-c", name: "synthetic-c.txt", status: "UNAVAILABLE", reason: "no_chunks" },
   ];
   const result = (status: string) => ({ job_id: "job-a", status, started_at: "2026-01-01T00:00:00Z", finished_at: null, items: [
-    { ...items[0], status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
-    { ...items[1], status: "SKIPPED", reason: "current" }, items[2],
+    { ...items[0], index_status: status === "COMPLETED" ? "CURRENT" : "MISSING", index_quality: status === "COMPLETED" ? "PARTIAL" : null, status: status === "COMPLETED" ? "PARTIAL" : "QUEUED", result: status === "COMPLETED" ? { quality: "PARTIAL" } : null },
+    { ...items[1], status: "SKIPPED", index_status: "CURRENT", reason: "current" }, { ...items[2], index_status: "UNAVAILABLE" },
   ], counts: { PARTIAL: status === "COMPLETED" ? 1 : 0, QUEUED: status === "COMPLETED" ? 0 : 1, SKIPPED: 1, UNAVAILABLE: 1 }, total: 3, offset: 0, limit: 25 });
   await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: enabled, structure_index_global_enabled: false }) }));
   await page.route("**/api/knowledge-bases/kb-1/structure-index", async (route) => {
@@ -383,7 +384,7 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
     if (route.request().method() === "POST") {
       jobAttempts++;
       if (jobAttempts === 1) { await route.fulfill({ status: 503, json: { detail: "一時的に開始できません。" } }); return; }
-      job = { job_id: "job-retry", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z", items: [{ ...item, status: "FAILED", reason: "processing_error" }], counts: { FAILED: 1 }, total: 1, offset: 0, limit: 25 };
+      job = { job_id: "job-retry", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z", items: [{ ...item, status: "FAILED", index_status: "MISSING", reason: "processing_error" }], counts: { FAILED: 1 }, total: 1, offset: 0, limit: 25 };
     }
     await route.fulfill({ json: ok(job) });
   });
@@ -409,8 +410,109 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
   await page.screenshot({ path: testInfo.outputPath("03-start-error.png") });
   await settings.getByRole("button", { name: "再試行", exact: true }).click();
   await expect.poll(() => jobAttempts).toBe(2);
-  await expect(settings.getByRole("cell", { name: "失敗", exact: true })).toBeVisible();
+  await expect(settings.getByRole("cell", { name: /^失敗：/ })).toBeVisible();
   await expect(settings.getByRole("button", { name: "失敗分を再試行", exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("04-partial-failure.png") });
+});
+
+for (const width of [1280, 1920, 375]) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`共通の文書構造画布で階層・検索・選択と種類切替を操作する ${width}px ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript((state) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state, version: 0 })), { theme, sidebarCollapsed: width === 375 });
+      const nodes = [
+        { id: "doc", name: "合成文書 A", type: "document", confidence: 1 },
+        { id: "section-a", name: "合成章 A", type: "section", confidence: 1 },
+        { id: "section-b", name: "合成章 B", type: "section", confidence: 1 },
+        { id: "table", name: "合成表 A", type: "table_section", confidence: 1 },
+        ...Array.from({ length: 10 }, (_, index) => ({ id: `extra-${index}`, name: `合成節 ${index}`, type: "section", confidence: 1 })),
+      ];
+      await mockKb(page, { status: "ok", nodes, edges: nodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: "doc", target: node.id, type: "contains", confidence: 1 })), truncated: true });
+      await page.goto("/knowledge-bases/kb-1");
+      await disclosureSummary(page, "文書構造グラフを表示").click();
+      const graph = page.locator("#knowledge-base-graph");
+      const documentNode = graph.locator('.react-flow__node[data-id="doc"]');
+      const sectionNode = graph.locator('.react-flow__node[data-id="section-a"]');
+      await expect(documentNode).toBeVisible();
+      await expect(sectionNode).toBeVisible();
+      await expect.poll(async () => (await documentNode.boundingBox())!.x < (await sectionNode.boundingBox())!.x).toBe(true);
+      await documentNode.focus();
+      await page.keyboard.press("Enter");
+      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("合成文書 A");
+      const search = graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true });
+      await search.fill("合成章 B");
+      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("合成章 B");
+      await expect(search).toHaveAccessibleDescription("現在読み込み済みの範囲を検索します。");
+      await expect(graph.getByText("ノードが多いため一部のみ表示しています。", { exact: true })).toBeVisible();
+      await graph.getByRole("button", { name: "検索語をクリア", exact: true }).click();
+      const edge = graph.locator('.react-flow__edge[data-id="edge-0"]');
+      await edge.focus();
+      await page.keyboard.press("Space");
+      await expect(graph.getByRole("region", { name: "選択した関係" })).toContainText("合成文書 A");
+      await expect(graph.getByRole("region", { name: "選択した関係" }).locator(".font-mono")).toHaveText("edge-0");
+      const kinds = graph.getByRole("combobox", { name: "種類", exact: true });
+      await kinds.click();
+      await page.getByRole("option", { name: "表", exact: true }).click();
+      await expect(documentNode).toHaveCount(0);
+      await expect(graph.locator('.react-flow__node[data-id="table"]')).toBeVisible();
+      await kinds.click();
+      await page.getByRole("option", { name: "すべての種類", exact: true }).click();
+      const sectionLegend = graph.getByRole("group", { name: "表示する種類" }).getByRole("button", { name: "章・節", exact: true });
+      await sectionLegend.click();
+      await expect(sectionLegend).toHaveAttribute("aria-pressed", "false");
+      await expect(sectionNode).toHaveCount(0);
+      await sectionLegend.click();
+      await expect(sectionNode).toBeVisible();
+      await expectNoPageOverflow(page);
+      // 固定headerと長い親領域を避け、表示中の画布を確認してから撮る。
+      const canvas = graph.getByRole("region", { name: "文書構造グラフ", exact: true });
+      await page.setViewportSize({ width, height: 1200 });
+      await canvas.evaluate(element => element.scrollIntoView({ block: "center" }));
+      await expect(canvas.locator(".react-flow__node").first()).toBeVisible();
+      await canvas.getByRole("button", { name: "全体表示", exact: true }).click();
+      await canvas.screenshot({ path: testInfo.outputPath(`shared-structure-graph-${width}-${theme}.png`) });
+    });
+  }
+}
+
+
+test("構造索引の現在状態と今回の結果を分け、版変更後に再確認する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
+  let changed = false;
+  await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", (route) => route.fulfill({ json: ok({
+    job_id: "synthetic-state-job", status: "COMPLETED", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:01Z",
+    items: [
+      { document_id: "synthetic-skip", name: "synthetic-skip.txt", status: "SKIPPED", reason: "current", index_status: changed ? "STALE" : "CURRENT", index_quality: "COMPLETE" },
+      { document_id: "synthetic-fail", name: "synthetic-fail.txt", status: "FAILED", reason: "processing_error", index_status: "CURRENT", index_quality: "COMPLETE" },
+      { document_id: "synthetic-old", name: "synthetic-old.txt", status: "SUCCEEDED", index_status: "STALE" },
+      { document_id: "synthetic-active", name: "synthetic-active.txt", status: "RUNNING", index_status: "MISSING" },
+      { document_id: "synthetic-unready", name: "synthetic-unready.txt", status: "UNAVAILABLE", reason: "no_chunks", index_status: "UNAVAILABLE", index_reason: "no_chunks" },
+      { document_id: "synthetic-pending", name: "synthetic-pending.txt", status: "QUEUED", index_status: "MISSING" },
+    ], counts: { SKIPPED: 1, FAILED: 1, SUCCEEDED: 1, RUNNING: 1, UNAVAILABLE: 1, QUEUED: 1 }, total: 6, offset: 0, limit: 25,
+  }) }));
+  await page.goto("/knowledge-bases/kb-1");
+  const build = page.getByTestId("knowledge-base-structure-build");
+  const row = (name: string) => build.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(1)).toHaveText("構築済み");
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(2)).toContainText("スキップ：処理対象の版は構築済みでした。");
+  await expect(row("synthetic-fail.txt").getByRole("cell").nth(1)).toHaveText("構築済み");
+  await expect(row("synthetic-fail.txt").getByRole("cell").nth(2)).toContainText("失敗：");
+  await expect(row("synthetic-old.txt").getByRole("cell").nth(1)).toHaveText("更新が必要");
+  await expect(row("synthetic-old.txt").getByRole("cell").nth(2)).toHaveText("成功");
+  await expect(row("synthetic-active.txt").getByRole("cell").nth(1)).toHaveText("未構築");
+  await expect(row("synthetic-active.txt").getByRole("cell").nth(2)).toHaveText("構築中");
+  await expect(row("synthetic-unready.txt").getByRole("cell").nth(1)).toHaveText("準備不足");
+  await expect(row("synthetic-pending.txt").getByRole("cell").nth(2)).toHaveText("待機中");
+  await build.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("current-index-and-operation.png") });
+  if (testInfo.project.name === "mobile") {
+    await row("synthetic-skip.txt").getByRole("cell").nth(2).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("current-index-operation-details.png") });
+  }
+  changed = true;
+  await page.reload();
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(1)).toHaveText("更新が必要");
+  await expect(row("synthetic-skip.txt").getByRole("cell").nth(2)).toContainText("スキップ：");
 });

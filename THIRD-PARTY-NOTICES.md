@@ -6,6 +6,8 @@ No.1 Production Ready Suite（`platform/`・`rag/`・`nl2sql/`・`agent/`）が�
 
 3 製品は 1 台の Compute にまとめて配備し、platform の共通基盤と多くの依存を共有するため、通知は製品ごとに分けずにこの 1 つのファイルに置き、表の「場所」の列で製品・lockfile を示します。
 
+共有グラフ画布（#4018）は、RAG／NL2SQL が既に使用している `@xyflow/react` 12.12.0（MIT）を、platform UI の任意の peer dependency として使用します。図を使う製品は `@production-ready/ui/graph` を読み込み、配布物のライセンス原文と React Flow の帰属表示を保持します。グラフを使わない製品への必須依存にはしません。
+
 Unstructured parser のセキュリティ更新（#3957）では、`pyasn1` 0.6.5（BSD-2-Clause）と `pypdf` 6.21.4（BSD-3-Clause）を PyPI の配布 metadata で確認しました。新たな copyleft の部品は追加していません。これらも再配布する場合は、配布物のライセンス原文を保持してください。
 
 ## 入手の経路と再配布

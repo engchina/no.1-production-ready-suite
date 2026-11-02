@@ -1,5 +1,5 @@
 import { fulfillDocumentInspection } from "./document-inspection-mocks";
-import { expect, type Page, test } from "./fixtures/test";
+import { expect, type Page, type Route, test } from "./fixtures/test";
 import { expandSidebarSections, mockDatabaseReady, mockLocalAuth, openSidebarNav } from "./_helpers";
 
 // 段階レビュー可能なファイル処理(EXTRACT → CHUNK → INDEX)の REVIEW ゲート UI を検証する。
@@ -94,6 +94,17 @@ function reviewDocumentDetail(status = "REVIEW") {
     },
     knowledge_bases: [{ id: "kb-1", name: "社内規程" }],
   };
+}
+
+async function fulfillReviewTextWindow(route: Route, text: string) {
+  const { offset = 0, limit = 8192 } = route.request().postDataJSON() as { offset?: number; limit?: number };
+  return fulfillDocumentInspection(route, { json: {
+    data: { text: text.slice(offset, offset + limit), offset, limit, total: text.length,
+      revision: "synthetic-review-source-v1",
+      previous_offset: offset > 0 ? Math.max(0, offset - limit) : null,
+      next_offset: offset + limit < text.length ? offset + limit : null },
+    error_messages: [], warning_messages: [],
+  } });
 }
 
 function chunkJob() {
@@ -255,6 +266,9 @@ async function mockReviewWorkspace(page: Page, options: { extractionWarnings?: s
       },
     })
   );
+  await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/text-window`, route =>
+    fulfillReviewTextWindow(route, extraction.raw_text)
+  );
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/content**`, (route) =>
     fulfillDocumentInspection(route, { status: 200, contentType: "text/plain", body: "経費申請\n交通費は1000円です。" })
   );
@@ -271,6 +285,7 @@ async function mockReviewWorkspace(page: Page, options: { extractionWarnings?: s
 test("REVIEW 文書は確認待ち表示と承認・再処理導線だけを出す", async ({ page }) => {
   await mockReviewWorkspace(page);
   await page.goto(`/documents/${DOC_ID}`);
+  await expect(page.getByTestId("preview-text-body")).toHaveText(reviewDocumentDetail().extraction.raw_text);
 
   await expect(page.getByRole("tab", { name: "本文テキスト" })).toHaveAttribute(
     "aria-selected",
@@ -605,6 +620,8 @@ test("レシピを切り替えるときは未保存の修正の破棄を確認�
           warning_messages: [],
         },
       });
+    } else if (path.endsWith("/text-window")) {
+      await fulfillReviewTextWindow(route, extraction.raw_text);
     } else if (path.endsWith("/content")) {
       await fulfillDocumentInspection(route, { status: 200, contentType: "text/plain", body: extraction.raw_text });
     } else {

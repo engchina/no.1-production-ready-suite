@@ -444,3 +444,24 @@ const e = <Button icon={Search}>検索</Button>;
     expect(linesWith(messages, SELECT_SEARCH_ICON)).toEqual([]);
   });
 });
+
+
+describe("adherence: 共通図の公開入口", () => {
+  it("公開graphとCSSだけを許可し、内部パスの禁止を維持する", async () => {
+    const eslint = new ESLint({
+      overrideConfigFile: true,
+      overrideConfig: [{
+        files: ["**/*.js"],
+        rules: { "no-restricted-imports": adherence.overrides[0].rules["no-restricted-imports"] as never },
+      }],
+    });
+    const [result] = await eslint.lintText([
+      'import { Button } from "@production-ready/ui";',
+      'import { GraphCanvas } from "@production-ready/ui/graph";',
+      'import "@production-ready/ui/styles.css";',
+      'import { X } from "@production-ready/ui/dist/index.js";',
+      'import { Y } from "@production-ready/ui/graph/internal";',
+    ].join("\n"), { filePath: "probe.js" });
+    expect(result.messages.map((message) => message.line)).toEqual([4, 5]);
+  });
+});

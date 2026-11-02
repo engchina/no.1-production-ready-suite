@@ -419,7 +419,7 @@ def test_invalid_batch_reading_returns_unverified_source_material_without_an_ans
     assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
     assert result.envelope["outcome"] == "conditional"
     assert result.needs_human_review
-    assert result.generation_trace["generation_failure"]["error"] == "ValidationError"
+    assert result.generation_trace["generation_failure"] == {"error": "ValidationError", "stage": "evidence.batch_read"}
     assert all(item["applies"] == "quote_only" for item in result.envelope["items"])
 
 

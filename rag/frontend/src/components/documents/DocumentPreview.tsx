@@ -18,6 +18,7 @@ import {
   type BboxOverlayUnit,
   type BboxPageSize,
   type DocumentPreviewKind,
+  type DocumentTextRange,
   type DocumentPreviewPagesState,
   type PreviewHighlight,
   type PreviewSizing,
@@ -80,6 +81,9 @@ export function DocumentPreview({
   showFallbackDownload = true,
   focusPage = null,
   onPageChange,
+  onTextRangeChange,
+  focusElementId = null,
+  focusSectionId = null,
   focusRequestKey = null,
   focusBbox = null,
   focusBboxMode = null,
@@ -99,6 +103,9 @@ export function DocumentPreview({
   showFallbackDownload?: boolean;
   focusPage?: number | null;
   onPageChange?: (page: number) => void;
+  onTextRangeChange?: (range: DocumentTextRange) => void;
+  focusElementId?: string | null;
+  focusSectionId?: string | null;
   focusRequestKey?: string | null;
   focusBbox?: number[] | null;
   focusBboxMode?: BboxCoordinateMode | null;
@@ -139,7 +146,8 @@ export function DocumentPreview({
   const pages = useDocumentPdfPages(documentId, recipeId, pdfVariant, sharedKind === "pdf");
   const loadTextRange = useCallback((offset: number, signal: AbortSignal) =>
     api.documentTextWindow(documentId, recipeId, { offset, limit: 8192, variant,
-      focus: offset === 0 ? focusText : null }, signal), [documentId, recipeId, variant, focusText]);
+      focus: offset === 0 ? focusText : null,
+      element_id: offset === 0 ? focusElementId : null, section_id: offset === 0 ? focusSectionId : null }, signal), [documentId, recipeId, variant, focusText, focusElementId, focusSectionId]);
 
   return (
     <SharedDocumentPreview
@@ -157,6 +165,7 @@ export function DocumentPreview({
       downloadUrl={showFallbackDownload ? downloadUrl : null}
       focusPage={focusPage}
       onPageChange={onPageChange}
+      onTextRangeChange={onTextRangeChange}
       focusRequestKey={focusRequestKey}
       focusBbox={focusBbox}
       focusBboxMode={focusBboxMode}

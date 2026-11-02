@@ -104,7 +104,8 @@ write_files:
     owner: "root:root"
     content: |
       #!/usr/bin/env bash
-      set -euo pipefail
+      # ERR trap を関数内にも引き継ぎ、依存の導入失敗を明示する。
+      set -Eeuo pipefail
 
       APP_ROOT="/u01/aipoc"
       # 3 製品（rag/ nl2sql/ agent/）と共有 platform（platform/）は同じ monorepo にあるため、clone は1回だけ行う。
@@ -134,6 +135,19 @@ write_files:
         return "$${status}"
       }
 
+      ensure_bootstrap_dependencies() {
+        # cloud-init の package 導入が失敗しても runcmd は実行されるため、clone の前に確認する。
+        if command -v git >/dev/null 2>&1; then
+          return 0
+        fi
+        log "Git is unavailable; installing bootstrap dependencies before repository access."
+        run_with_retries 5 dnf -y install ca-certificates git
+        if ! command -v git >/dev/null 2>&1; then
+          log "Git is still unavailable after installing bootstrap dependencies."
+          return 127
+        fi
+      }
+
       clone_or_update_repo() {
         local url="$1"
         local ref="$2"
@@ -155,6 +169,7 @@ write_files:
 
       # 選んだ製品を 1 台に配備する（#1316）。各製品の init_script.sh は suite-init.sh が順に呼び、
       # Nginx の site（/rag/ /nl2sql/ /agent/、HTTPS）・firewalld（公開の port）・SELinux は suite-init.sh が 1 か所で設定する。
+      # suite-init.sh の Docling モデル取得は、公式 registry の SHA-256 で検証・修復する。
       run_suite_init() {
         local init_script="$${SUITE_REPO_DIR}/platform/deploy/suite-init.sh"
         if [ ! -f "$${init_script}" ]; then
@@ -166,6 +181,7 @@ write_files:
         APP_ROOT="$${APP_ROOT}" bash "$${init_script}"
       }
 
+      ensure_bootstrap_dependencies
       clone_or_update_repo "${application_git_url}" "${application_git_ref}" "$${SUITE_REPO_DIR}"
       run_suite_init
       log "Deployment finished. See /var/log/suite-init.log."

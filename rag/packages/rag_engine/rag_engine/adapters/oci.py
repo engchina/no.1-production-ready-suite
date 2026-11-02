@@ -81,6 +81,7 @@ from rag_engine.resources.rerank_diagnostics import (
 )
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import structured_failure_details
+from rag_engine.resources.structured_output_retry import notify_invalid_output, structured_output_prompt
 from rag_engine.resources.tracing import observe_call
 
 VISION_SYSTEM_PROMPT = (
@@ -370,7 +371,7 @@ def _parse_text_with_retry[StructuredOutputT: BaseModel](
 ) -> StructuredOutputT:
     label = "Responses text"
     return _parse_with_retry(
-        lambda: _parse_text_once(system_prompt, prompt, settings, text_format, provider),
+        lambda: _parse_text_once(system_prompt, structured_output_prompt(prompt), settings, text_format, provider),
         label,
         settings,
         retries=_llm_transport_retries(settings),
@@ -457,9 +458,12 @@ def _parse_with_retry[StructuredOutputT: BaseModel](
         except DeadlineExceeded:
             raise
         except Exception as exc:
-            if is_invalid_structured_output(exc) and invalid_output_retries < INVALID_OUTPUT_RETRIES:
-                invalid_output_retries += 1  # 通信系の再試行回数は消費しない
-                continue
+            if is_invalid_structured_output(exc):
+                will_retry = invalid_output_retries < INVALID_OUTPUT_RETRIES
+                notify_invalid_output(exc, will_retry)
+                if will_retry:
+                    invalid_output_retries += 1  # 通信系の再試行回数は消費しない
+                    continue
             if attempt >= retry_count or not _is_retryable_error(exc):
                 raise
             wait = min(initial_wait * (2**attempt), max_wait)

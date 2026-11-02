@@ -103,7 +103,7 @@ rag_uv_sync_args() {
 rag_service_model_command() {
   case "$1" in
     parser-docling)
-      printf '%s\n' '.venv/bin/docling-tools models download'
+      printf '%s\n' '.venv/bin/python -m rag_engine.resources.docling_models'
       ;;
   esac
 }

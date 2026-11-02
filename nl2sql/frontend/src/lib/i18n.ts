@@ -1186,6 +1186,7 @@ const nl2sqlJa = {
   "nl2sql.ontology.graphResetLayout": "レイアウトをリセット",
   "nl2sql.ontology.graphSelectionAnnouncement": "選択中: {label}",
   "nl2sql.ontology.graphSearch": "グラフ内を検索",
+  "nl2sql.ontology.graphSearchScope": "現在読み込み済みの範囲を検索します。",
   "nl2sql.ontology.graphSearchNoMatch": "0 件",
   "nl2sql.ontology.graphSearchPrev": "前の一致へ移動",
   "nl2sql.ontology.graphSearchNext": "次の一致へ移動",
