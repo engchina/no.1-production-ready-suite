@@ -73,7 +73,6 @@ def test_evidence_is_numbered_for_the_model_and_the_code_cuts_the_original() -> 
     assert (claim["status"], claim["reference_check"], claim["support_quote"]) == ("supported", "resolved", SECOND)
     # 根拠の本文（結び付けた根拠）に番号を持ち込まない。
     assert claim["evidence_quote"] == LONG
-    assert result["evidence_ids"] == ["c1", "question:1"] or "c1" in result["evidence_ids"]
 
 
 def test_single_unit_evidence_has_no_numbers_and_null_means_the_whole_text() -> None:

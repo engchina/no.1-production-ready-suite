@@ -173,6 +173,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った根拠の evidence_id をすべて「,」で区切って evidence_id に書く。
 - evidence_id は evidence_items の evidence_id の値（E で始まる値）を省かず・短くせずにそのまま書く。id（chunk の id）や回答に書かれた ID を evidence_id に書かない。
 - 回答に書かれた根拠の ID（【証拠 ID …】など）は evidence_items の id に当たる。ID の照合はシステムが行うので、ID の書き方ではなく裏付けの有無で判定する。
+- evidence_items の text の行頭の「番号|」はコードが付けた番号で、本文ではない。
 - passage_citations は段落に実際に付いた出典の evidence_id の集合。資料の主張は、この集合だけで対象・操作・条件・順序を裏付ける。複数の出典を共同で使ってよいが、未引用の資料を代わりに選ばない。
 - 出典が無い、出典の対応が未確認、対象との一致が unknown の資料の主張は unassessed。質問・利用者の答え・照会結果は資料の内容の裏付けに使わない。
 - citation_error は、段落が書いた根拠の ID が evidence_items に無いときだけに使う。段落に ID が無いことを citation_error にしない。
