@@ -35,7 +35,6 @@ from app.rag.evaluation_jobs import (
     evaluation_job_time_limit_seconds,
     set_evaluation_job_service,
 )
-from app.rag.evaluation_result_storage import EVALUATION_RESULT_MAX_JSON_BYTES
 from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
 from app.rag.request_context import (
     AuditRequestContext,
@@ -407,15 +406,11 @@ async def _submit_finished_evaluation(service: EvaluationJobService) -> str:
     return job.job_id
 
 
-async def test_result_rejected_by_column_is_saved_without_answer_diagnostics(
+async def test_finished_result_is_saved_without_answer_diagnostics(
     owner: AuditRequestContext,
 ) -> None:
-    """結果が書けなければ回答の診断を外して書き直し、得点を残して SUCCEEDED にする。"""
-    store = _FinishFailingStore(
-        lambda _status, result: (
-            result is not None and result["case_results"][0]["diagnostics"]["answer"] is not None
-        )
-    )
+    """結果は最初の書き込みから回答の診断を外し、得点を残して SUCCEEDED にする（#4107）。"""
+    store = _FinishFailingStore(lambda _status, _result: False)
     service = _finish_service(store)
     job_id = await _submit_finished_evaluation(service)
     await service.wait_for(job_id)
@@ -427,7 +422,27 @@ async def test_result_rejected_by_column_is_saved_without_answer_diagnostics(
     assert job.run_result.answer_diagnostics_omitted is True
     assert job.run_result.case_results[0].answer_correctness == 0.5
     assert job.run_result.case_results[0].diagnostics.answer is None
+    assert len(store.finish_calls) == 1
+
+
+async def test_retried_write_also_omits_answer_diagnostics(owner: AuditRequestContext) -> None:
+    """書き直しでも同じ内容（診断なし）を書く。"""
+    attempts: list[object] = []
+
+    def fails_once(_status: str, _result: object) -> bool:
+        attempts.append(_status)
+        return len(attempts) == 1
+
+    store = _FinishFailingStore(fails_once)
+    service = _finish_service(store)
+    job_id = await _submit_finished_evaluation(service)
+    await service.wait_for(job_id)
+
+    assert (await service.get(job_id)).status == "SUCCEEDED"
     assert len(store.finish_calls) == 2
+    for _status, result in store.finish_calls:
+        assert result is not None
+        assert result["case_results"][0]["diagnostics"]["answer"] is None
 
 
 async def test_unsaved_result_is_reported_with_cause_instead_of_stale(
@@ -933,29 +948,6 @@ async def test_oracle_store_writes_only_under_own_lease() -> None:
 
     connection.rowcount = 0
     assert not await store.heartbeat("job-1", lease_owner="worker-a")
-
-
-async def test_oracle_store_omits_answer_diagnostics_over_column_limit() -> None:
-    """列の上限を超える結果は、回答の診断を外した JSON を bind する（#4103）。"""
-    connection = _FakeConnection(rowcount=1)
-    store = _oracle_store(connection)
-    result = _result_with_answer_diagnostics()
-    result["case_results"][0]["diagnostics"]["answer"]["note"] = "x" * (
-        EVALUATION_RESULT_MAX_JSON_BYTES + 1
-    )
-
-    assert await store.finish(
-        "job-1",
-        lease_owner="w",
-        status="SUCCEEDED",
-        result=result,
-        error_message=None,
-        evaluation_run_id=None,
-    )
-    saved = json.loads(cast(str, connection.calls[0].parameters["result_json"]))
-    assert saved["answer_diagnostics_omitted"] is True
-    assert saved["case_results"][0]["answer_correctness"] == 0.5
-    assert saved["case_results"][0]["diagnostics"]["answer"] is None
 
 
 async def test_oracle_store_scopes_reads_and_cancel_to_owner() -> None:
