@@ -167,9 +167,9 @@ async def rebuild_document_structure_index(
     )
     rows = await oracle._fetch_all(
         f"""SELECT c.chunk_id,c.chunk_index,c.chunk_set_id,c.chunk_text AS reference_source_text,
-        JSON_VALUE(c.metadata_json,'$.section_title' RETURNING VARCHAR2(2000)) AS section_title,
+        JSON_VALUE(c.metadata_json,'$.section_title' RETURNING CLOB) AS section_title,
         JSON_QUERY(c.metadata_json,'$.section_path' RETURNING CLOB) AS section_path_json,
-        JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS section_path_text,
+        JSON_VALUE(c.metadata_json,'$.section_path' RETURNING CLOB) AS section_path_text,
         JSON_VALUE(c.metadata_json,'$.content_kind') AS content_kind,
         JSON_VALUE(c.metadata_json,'$.page_number') AS page_number,
         JSON_QUERY(c.metadata_json,'$.reference_targets_json' RETURNING CLOB WITH WRAPPER)

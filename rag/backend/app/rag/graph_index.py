@@ -26,6 +26,13 @@ from app.rag.reference_records import GraphReferenceRecord, build_reference_reco
 from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
 from app.schemas.extraction import StructuredExtraction
 
+# 表示名の上限（rag_graph_entities.canonical_name の列の大きさ）。同一性には使わない。
+GRAPH_NAME_MAX_CHARS = 512
+# 長い表示名で省く位置の印。区別に要る先頭（文書・上位の見出し）と末尾（最後の見出し）を残す。
+GRAPH_NAME_ELISION = "…"
+_GRAPH_NAME_HEAD_CHARS = (GRAPH_NAME_MAX_CHARS - len(GRAPH_NAME_ELISION)) // 2
+_GRAPH_NAME_TAIL_CHARS = GRAPH_NAME_MAX_CHARS - len(GRAPH_NAME_ELISION) - _GRAPH_NAME_HEAD_CHARS
+
 
 @dataclass(frozen=True)
 class GraphEntity:
@@ -136,7 +143,10 @@ def _build_graph_index_for_kb(
         extraction=extraction,
         document_name=document_name,
     )
-    entity_by_name: dict[str, GraphEntity] = {document_entity.canonical_name: document_entity}
+    # 同一性は切り詰めない完全な名前。表示名(canonical_name)は上限で省略され、一意とは限らない。
+    entity_by_name: dict[str, GraphEntity] = {
+        _document_identity(extraction, document_name): document_entity
+    }
     relationships: dict[str, GraphRelationship] = {}
     links: dict[tuple[str, str], GraphEntityChunkLink] = {}
 
@@ -150,7 +160,7 @@ def _build_graph_index_for_kb(
                     identity_scope=identity_scope,
                     knowledge_base_id=knowledge_base_id,
                     chunk=chunk,
-                    canonical_name=name,
+                    identity=name,
                 )
                 entity_by_name[name] = entity
                 relationship = _contains_relationship(
@@ -159,7 +169,7 @@ def _build_graph_index_for_kb(
                     knowledge_base_id=knowledge_base_id,
                     source_entity_id=document_entity.entity_id,
                     target_entity_id=entity.entity_id,
-                    target_name=name,
+                    target_name=entity.canonical_name,
                 )
                 relationships[relationship.relationship_id] = relationship
             if entity is None:
@@ -234,6 +244,20 @@ def _build_graph_index_for_kb(
     )
 
 
+def _document_type_label(extraction: StructuredExtraction) -> str:
+    return _clean_label(extraction.document_type) or current_pack().text(
+        "labels", "default_document_type"
+    )
+
+
+def _document_identity(extraction: StructuredExtraction, document_name: str | None) -> str:
+    # 文書の種類だけでは同じ種類の文書が同じ名前になり、グラフで区別できない(#2051)。
+    # 文書全体の名前は言語資源(#2181)。
+    whole = current_pack().text("labels", "whole_document")
+    name = _normalize_label(document_name or "") or _document_type_label(extraction)
+    return _normalize_label(f"{whole}: {name}")
+
+
 def _document_entity(
     *,
     document_id: str,
@@ -243,17 +267,12 @@ def _document_entity(
     document_name: str | None = None,
 ) -> GraphEntity:
     pack = current_pack()
-    document_type = _clean_label(extraction.document_type) or pack.text(
-        "labels", "default_document_type"
-    )
-    # 文書の種類だけでは同じ種類の文書が同じ名前になり、グラフで区別できない(#2051)。
-    # 文書全体の名前は言語資源(#2181)。
-    whole = pack.text("labels", "whole_document")
-    canonical_name = _clean_label(f"{whole}: {_clean_label(document_name or '') or document_type}")
+    document_type = _document_type_label(extraction)
+    identity = _document_identity(extraction, document_name)
     return GraphEntity(
-        entity_id=_graph_id("entity", identity_scope, knowledge_base_id, canonical_name),
+        entity_id=_graph_id("entity", identity_scope, knowledge_base_id, identity),
         knowledge_base_id=knowledge_base_id,
-        canonical_name=canonical_name,
+        canonical_name=_clean_label(identity),
         entity_type="document",
         description=pack.text("labels", "graph_document").format(document_type=document_type),
         confidence=_confidence(extraction.confidence),
@@ -267,10 +286,11 @@ def _section_entity(
     identity_scope: str,
     knowledge_base_id: str | None,
     chunk: Chunk,
-    canonical_name: str,
+    identity: str,
 ) -> GraphEntity:
     content_kind = _metadata_str(chunk, "content_kind") or "text"
     page = _metadata_str(chunk, "page_number")
+    canonical_name = _clean_label(identity)
     description_parts = [
         current_pack()
         .text("labels", "graph_section")
@@ -279,7 +299,7 @@ def _section_entity(
     if page:
         description_parts.append(f"page={page}")
     return GraphEntity(
-        entity_id=_graph_id("entity", identity_scope, knowledge_base_id, canonical_name),
+        entity_id=_graph_id("entity", identity_scope, knowledge_base_id, identity),
         knowledge_base_id=knowledge_base_id,
         canonical_name=canonical_name,
         entity_type=_entity_type_for_content_kind(content_kind),
@@ -370,7 +390,7 @@ def _metadata_str(chunk: Chunk, key: str) -> str | None:
     if value is None or isinstance(value, bool):
         return None
     cleaned = str(value).strip()
-    return cleaned[:512] if cleaned else None
+    return cleaned or None
 
 
 def _metadata_float(chunk: Chunk, key: str) -> float | None:
@@ -393,15 +413,39 @@ def _confidence(value: float | None) -> float:
     return max(0.0, min(float(value), 1.0))
 
 
+def _normalize_label(value: str) -> str:
+    """同一性に使う名前。空白だけをそろえ、長さでは切らない。"""
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def _clean_label(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()[:512]
+    """表示名。上限を超えた分は中間を省く(SQL の同じ規則は graph_display_name_sql)。"""
+    label = _normalize_label(value)
+    if len(label) <= GRAPH_NAME_MAX_CHARS:
+        return label
+    return f"{label[:_GRAPH_NAME_HEAD_CHARS]}{GRAPH_NAME_ELISION}{label[-_GRAPH_NAME_TAIL_CHARS:]}"
+
+
+def graph_display_name_sql(column: str) -> str:
+    """保存した完全なパスの列から、entity の表示名(``_clean_label``)を SQL で求める式。"""
+    label = f"TRIM(REGEXP_REPLACE({column},'[[:space:]]+',' '))"
+    return (
+        f"CASE WHEN LENGTH({label})<={GRAPH_NAME_MAX_CHARS} THEN {label} "
+        f"ELSE SUBSTR({label},1,{_GRAPH_NAME_HEAD_CHARS})||'{GRAPH_NAME_ELISION}'"
+        f"||SUBSTR({label},-{_GRAPH_NAME_TAIL_CHARS}) END"
+    )
+
+
+def graph_section_node_id(chunk_set_id: object, knowledge_base_id: object, name: str) -> str:
+    """完全なパス・文書全体の名前から、構造図の entity と同じ ID を求める。"""
+    return _graph_id("entity", chunk_set_id, knowledge_base_id, _normalize_label(name))
 
 
 def _dedupe_labels(values: list[str]) -> list[str]:
     seen: set[str] = set()
     labels: list[str] = []
     for value in values:
-        label = _clean_label(value)
+        label = _normalize_label(value)
         if not label or label in seen:
             continue
         seen.add(label)
