@@ -386,6 +386,57 @@ def test_quote_validation_uses_existing_structured_output_retry(failure):
     assert diagnostic["read_source_count"] == 1
 
 
+def test_rejected_quote_reaches_the_final_generation_with_the_original_and_no_generation_failure():
+    """#4090: 1 件の quote の不合格で組全体を退避にせず、原文を根拠に最終生成へ進む。不合格の quote と answer は渡さない。"""
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation import answering
+    from rag_engine.generation.citation_wire import generation_draft_wire_model
+
+    records = [
+        answering.AnswerRecord(
+            id=f"p{i}",
+            engine="synthetic",
+            engine_label="Synthetic",
+            page=1,
+            seq_no=1,
+            category="Chunk",
+            text=f"条件{i}は値{i}です。\n" + "補足。" * 1500,
+            source=f"document-{i}.txt",
+        )
+        for i in range(4)
+    ]
+    generated: list[str] = []
+
+    def model(system, prompt, settings, schema, **kwargs):
+        if issubclass(schema, BatchReading):
+            values = json.loads(prompt.split("\n\n## Step 4:", 1)[0])["evidence"]
+            return schema.model_validate(
+                {
+                    "read_receipts": {value["evidence_id"]: True for value in values},
+                    "findings": [{"evidence_id": "B1", "quote": "条件...値", "answer": "採らない合成の回答"}],
+                    "unanswered": [],
+                }
+            )
+        assert issubclass(schema, generation_draft_wire_model())
+        generated.append(prompt)
+        return schema.model_validate({"summary": "", "confidence": "low", "items": [{"kind": "gap", "text": "合成の不足"}]})
+
+    def unused(*args, **kwargs):
+        pytest.fail("不要な呼出し")
+
+    settings = replace(config(), evidence_budget_chars=12000, answer_audit_mode="none", answer_max_correction_rounds=0)
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = answering.synthesize_grounded_answer(
+            "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
+        ).response
+
+    assert "generation_failure" not in result.generation_trace
+    assert generated
+    assert "採らない合成の回答" not in generated[0]
+    assert "条件...値" not in generated[0]
+    assert "条件0は値0です。" in generated[0]
+
+
 def test_invalid_batch_reading_returns_unverified_source_material_without_an_answer():
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation import answering, grounded

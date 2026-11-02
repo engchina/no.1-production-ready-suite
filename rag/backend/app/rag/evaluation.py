@@ -1048,6 +1048,9 @@ def _case_result(
             failure_reasons.append("unsupported_claim")
         if judgement.claims_supported is None and judgement.status == "completed":
             failure_reasons.append("claim_unassessed")
+    # 退避した回答は成功の生成に数えない（#4104）。status は評価の処理の完了のまま。
+    if any((run.response.diagnostics.answer or {}).get("generation_failure") for run in runs):
+        failure_reasons.append("answer_generation_fallback")
     return EvaluationCaseResult(
         case_id=case.id,
         trace_id=response.trace_id,

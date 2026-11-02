@@ -13,6 +13,7 @@ from rag_engine.config import Settings
 from rag_engine.dependencies import record_retrieval_stage
 from rag_engine.generation.batch_output_repair import (
     BatchQuoteMismatch,
+    batch_quote_mismatch,
     batch_repair_prompt,
     batch_validation_detail,
     quote_mismatch_diagnostic,
@@ -28,9 +29,10 @@ question は完全な原質問です。generation_context の条件・否定・�
 
 ## Step 2: 根拠付きの回答候補を作る
 各対象・小問について、evidence_id を選び、その入力の判断に必要な前提を含む連続した原文を quote に写してください。
+quote は本文の 1 か所を一字も変えずに写し、「...」「…」で途中を省いたり、語を抜いたり、見出しや記号を書き換えたりしないでください。
 その範囲が支える回答を answer に書いてください。
 条件、例外、否定、数値、比較対象の違いを保ってください。回答候補自体を事実の出典にはせず、evidence の原文で確かめてください。
-一つの結論に複数の原文が必要なら、同じ answer に対して原文ごとに finding を書いてください。
+一つの結論に複数の原文や離れた箇所が必要なら、同じ answer に対して原文ごとに finding を書いてください。
 答えられない部分は unanswered に書き、この資料だけで原質問全体に記載がないとは断定しないでください。
 
 ## Step 3: 読取結果を返す
@@ -98,7 +100,7 @@ def _reading_model(values: Sequence[Mapping[str, Any]]) -> type[BatchReading]:
             if (text := originals.get(finding.evidence_id)) is None or find_width_folded(text, finding.quote) is None
         ]
         if unmatched:
-            raise BatchQuoteMismatch(quote_mismatch_diagnostic(unmatched, originals))
+            raise BatchQuoteMismatch(quote_mismatch_diagnostic(unmatched, originals), reading=reading)
         return reading
 
     return create_model(
@@ -198,8 +200,20 @@ def prepare_batched_evidence(
             ]
         )
 
+    # 確かめられない quote の入力の原文を残した最後の組。入らなければ、容量ではなく quote の不合格として失敗にする。
+    unverified_failure: tuple[ValidationError, dict[str, Any]] | None = None
+
     def fail(reason: str, **detail: Any) -> None:
         raise GenerationInputBudgetExceeded({"reason": reason, "fits": False, "batch_count": len(batches), "batches": batches, **detail})
+
+    def stop_reduction(reason: str) -> None:
+        if unverified_failure is None:
+            fail(reason)
+            return
+        error, failed_receipt = unverified_failure
+        if failed_batches is not None:
+            failed_batches.append(failed_receipt)
+        raise error
 
     def partition(values: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         result: list[list[dict[str, Any]]] = []
@@ -245,7 +259,7 @@ def prepare_batched_evidence(
         remaining_passes = max(1, sum(len(value["text"]) for value in selected).bit_length())
         while not measurement["fits"]:
             if not selected or remaining_passes <= 0:
-                fail("batch_reduction_did_not_fit")
+                stop_reduction("batch_reduction_did_not_fit")
             remaining_passes -= 1
             previous_size = len(prompt)
             reduced: dict[tuple[str, int, int], dict[str, Any]] = {}
@@ -286,13 +300,24 @@ def prepare_batched_evidence(
                     return corrected
 
                 try:
+                    mismatch: BatchQuoteMismatch | None = None
                     with bind_structured_output_repair(repair):
-                        reading = read(reading_system, payload, reading_model)
+                        try:
+                            reading = read(reading_system, payload, reading_model)
+                        except ValidationError as exc:
+                            mismatch = batch_quote_mismatch(exc)
+                            if mismatch is None:
+                                raise
+                            reading = mismatch.reading
+                            unverified_failure = (exc, receipt)
                     by_id = {f"B{index}": value for index, value in enumerate(batch, 1)}
                     for finding in reading.findings:
                         original = by_id.get(finding.evidence_id)
                         location = find_width_folded(original["text"], finding.quote) if original else None
                         if original is None or location is None:
+                            # 再試行の後も原文で確かめられなかった quote は、その answer ごと使わない。
+                            if mismatch is not None:
+                                continue
                             raise ValueError("batch_quote_not_in_input")
                         excerpt = _slice(original, *location)
                         key = (excerpt["source_id"], excerpt["start"], excerpt["end"])
@@ -301,9 +326,27 @@ def prepare_batched_evidence(
                         else:
                             excerpt["batch_answer"] = finding.answer
                         reduced[key] = excerpt
+                    if mismatch is not None:
+                        # 不合格の範囲を組から入力へ絞る（#4090）。モデルの quote と answer を採らず、その入力の原文の全体を
+                        # 最終生成へ残す。引用の検査は最終生成の出典にも掛かる。
+                        retained = [by_id[key] for key in mismatch.diagnostic["retained_evidence_ids"]]
+                        for value in retained:
+                            whole = _slice(value, 0, len(value["text"]))
+                            start, end = whole.get("start", 0), whole.get("end", len(whole["text"]))
+                            inside = [key for key in reduced if key[0] == whole["source_id"] and start <= key[1] and key[2] <= end]
+                            answers = [reduced.pop(key)["batch_answer"] for key in inside]
+                            if answers:
+                                whole["batch_answer"] = "\n".join(answers)
+                            reduced[(whole["source_id"], start, end)] = whole
+                        receipt["quote_unverified"] = {
+                            "unmatched_count": mismatch.diagnostic["unmatched_count"],
+                            "reasons": mismatch.diagnostic["reasons"],
+                            "retained_input_count": len(retained),
+                        }
                     unanswered.extend(reading.unanswered)
                     read_sources.update(value["source_id"] for value in batch)
-                    receipt.update(status="completed", finding_count=len(reading.findings))
+                    unverified = mismatch.diagnostic["unmatched_count"] if mismatch is not None else 0
+                    receipt.update(status="completed", finding_count=len(reading.findings) - unverified)
                 except Exception as exc:
                     receipt.update(status="failed", error=type(exc).__name__)
                     if isinstance(exc, ValidationError) and not receipt.get("validation_failures"):
@@ -316,7 +359,7 @@ def prepare_batched_evidence(
             selected = tag(list(reduced.values()))
             prompt, measurement = final_measure(selected)
             if not measurement["fits"] and len(prompt) >= previous_size:
-                fail("batch_reduction_did_not_shrink")
+                stop_reduction("batch_reduction_did_not_shrink")
     return (
         selected,
         prompt,

@@ -128,6 +128,8 @@ EvaluationFailureReason = Literal[
     "wrong_screen",
     # 回答の監査が、回答は質問の目的に答えていない（goal_alignment=off_target）と判定した（#2402）。
     "off_target",
+    # 回答文の生成の出力が検査を通らず、参考情報へ退避した（#4104）。case_error とは別に数える。
+    "answer_generation_fallback",
     "case_error",
 ]
 
