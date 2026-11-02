@@ -29,8 +29,14 @@ class ScopedOracle:
         self, chunk_set_id: str, **kwargs: Any
     ) -> tuple[list[Any], int]:
         assert chunk_set_id == "chunks-a"
-        assert kwargs["scope_element_ids"] == ["b"]
+        if not kwargs.get("unlocated_only"):
+            assert kwargs["scope_element_ids"] == ["b"]
         return [], 0
+
+    async def count_chunk_set_inspection_locations(
+        self, *args: Any, **kwargs: Any
+    ) -> tuple[int, int]:
+        return 0, 0
 
 
 async def scope(*args: Any, **kwargs: Any) -> dict[str, Any]:

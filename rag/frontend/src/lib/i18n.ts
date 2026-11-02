@@ -3304,6 +3304,10 @@ export const ja = {
   "flow.chunks.downloadJson": "JSON をダウンロード",
   "flow.chunks.downloadJsonAria": "保存済みの Chunk の JSON をダウンロード",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
+  "flow.chunks.scopeEmpty": "現在の原本表示範囲に対応する Chunk はありません。",
+  "flow.chunks.unlocatedRange": "位置未確認の Chunk: {start}–{end} / {total}",
+  "flow.chunks.unlocatedTitle": "原本上の位置を確認できない Chunk",
+  "flow.chunks.unlocatedDescription": "索引済みですが、原本上の位置を確認できません。現在表示している原本の範囲に対応するとは限りません。",
   "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
   "flow.chunks.smallToBigFallbackTitle": "親子階層で分割されていない Chunk です",
   "flow.chunks.smallToBigFallback":

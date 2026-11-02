@@ -1509,6 +1509,7 @@ async def document_recipe_chunk_window(
     recipe_id: str,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    unlocated_offset: Annotated[int, Query(ge=0)] = 0,
     page: Annotated[int | None, Query(ge=1)] = None,
     chunk_id: str | None = None,
     source_offset: Annotated[int | None, Query(ge=0)] = None,
@@ -1521,7 +1522,7 @@ async def document_recipe_chunk_window(
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
     chunk_set = row.get("active_chunk_set_id")
     scope = None
-    if source_offset is not None:
+    if source_offset is not None and page is None:
         artifact = await oracle.get_document_extraction_artifact(
             document_id=document_id,
             extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
@@ -1535,23 +1536,52 @@ async def document_recipe_chunk_window(
             revision=source_revision or "",
             variant=variant,
         )
+    location_unavailable = scope is not None and scope["scope_status"] != "exact"
     items, total = (
         await oracle.list_chunk_set_chunk_window(
             str(chunk_set),
             offset=offset,
             limit=limit,
             page=page,
-            scope_element_ids=scope["element_ids"] if scope is not None else None,
+            scope_element_ids=([] if location_unavailable else scope["element_ids"])
+            if scope is not None
+            else None,
             chunk_id=chunk_id,
+            location_unavailable=location_unavailable,
             extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
         )
         if chunk_set
         else ([], 0)
     )
+    unlocated_items: list[DocumentChunkView] = []
+    unlocated_total = 0
+    document_total = total
+    if chunk_set:
+        document_total, unlocated_count = await oracle.count_chunk_set_inspection_locations(
+            str(chunk_set),
+            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+            location_unavailable=location_unavailable,
+        )
+    if chunk_set and scope is not None:
+        unlocated_total = unlocated_count
+    if chunk_set and scope is not None and unlocated_total:
+        unlocated_items, _ = await oracle.list_chunk_set_chunk_window(
+            str(chunk_set),
+            offset=unlocated_offset,
+            limit=limit,
+            chunk_id=chunk_id,
+            unlocated_only=True,
+            location_unavailable=location_unavailable,
+            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+        )
     return ApiResponse(
         data={
             "items": items,
             "total": total,
+            "unlocated_items": unlocated_items,
+            "unlocated_total": unlocated_total,
+            "unlocated_offset": unlocated_offset,
+            "document_total": document_total,
             "offset": offset,
             "limit": limit,
             "revision": chunk_set,
