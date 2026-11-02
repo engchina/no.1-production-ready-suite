@@ -169,6 +169,7 @@ write_files:
 
       # 選んだ製品を 1 台に配備する（#1316）。各製品の init_script.sh は suite-init.sh が順に呼び、
       # Nginx の site（/rag/ /nl2sql/ /agent/、HTTPS）・firewalld（公開の port）・SELinux は suite-init.sh が 1 か所で設定する。
+      # suite-init.sh の Docling モデル取得は、公式 registry の SHA-256 で検証・修復する。
       run_suite_init() {
         local init_script="$${SUITE_REPO_DIR}/platform/deploy/suite-init.sh"
         if [ ! -f "$${init_script}" ]; then

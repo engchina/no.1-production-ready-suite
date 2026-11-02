@@ -972,6 +972,8 @@ def _verify_bootstrap(bootstrap: str) -> None:
         raise AssertionError("rag_services.txt must be written only when RAG is deployed")
     if "basic_auth" in bootstrap:
         raise AssertionError("the Agent uses the backend login; cloud-init must not write Basic authentication files")
+    model_script = (REPO_ROOT / "rag/scripts/rag-systemd.sh").read_text(encoding="utf-8")
+    _require_all(model_script, [".venv/bin/python -m rag_engine.resources.docling_models"], context="verified Docling model download")
     _require_in_order(
         bootstrap,
         ["ensure_bootstrap_dependencies\n", 'clone_or_update_repo "${application_git_url}"', "run_suite_init\n"],
