@@ -3057,6 +3057,10 @@ class AnswerEngine:
             for chunk in original_chunks(row.chunk for row in text.chunks)
         ]
         if not chunks:
+            # chunk を持たない章節（見出しだけ）は読むものが無いので、全量を読めた扱い（#4138）。
+            # chunk があるのに見えない・原文が無い章節だけを未読にする。
+            if text.complete and text.section.chunk_count == 0:
+                return SectionRead(complete=True)
             return SectionRead(complete=False, reason="partial_read")
         await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)

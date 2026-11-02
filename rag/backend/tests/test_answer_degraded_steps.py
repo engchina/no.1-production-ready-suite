@@ -8,6 +8,7 @@
 
 import json
 from collections.abc import Awaitable, Callable, Iterator
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -852,3 +853,27 @@ def test_unconfigured_rerank_does_not_show_the_rerank_model() -> None:
     engine = _engine(FakeOracle(), oci_compartment_id="", rag_rerank_enabled=True)
 
     assert engine._models_used()["rerank"] == ""
+
+
+@pytest.mark.parametrize(
+    ("chunk_count", "complete", "reason"),
+    [(0, True, ""), (2, False, "partial_read")],
+    ids=["heading_only", "chunks_not_visible"],
+)
+async def test_section_without_visible_chunks(
+    monkeypatch: pytest.MonkeyPatch, chunk_count: int, complete: bool, reason: str
+) -> None:
+    """#4138: chunk の無い章節は全量を読めた扱い。chunk があって見えない章節だけ未読にする。"""
+    from app.rag import section_map_service
+
+    async def empty(*args: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(
+            chunks=[], complete=chunk_count == 0, section=SimpleNamespace(chunk_count=chunk_count)
+        )
+
+    monkeypatch.setattr(section_map_service, "read_section", empty)
+    read = await _engine(FakeOracle())._section_chunks(
+        SearchRequest(query="q"), _SearchState(), "doc-a", "cs-a", "s1"
+    )
+    assert list(read) == []
+    assert getattr(read, "complete", None) is complete and getattr(read, "reason", "") == reason

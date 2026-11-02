@@ -1082,3 +1082,88 @@ def test_unavailable_extraction_is_explicitly_identified_as_disabled_setting():
     assert result.trace["large_section_handoff"] == "extract_then_integrate_unavailable"
     assert result.trace["large_section_handoff_reason"] == "disabled_by_setting"
     assert result.unread or result.omitted
+
+
+def _reader_for(
+    stub: SectionStub, empty: sections.SectionInfo, section: str = "s2"
+) -> tuple[sections.SectionOutline, sections.SectionReader]:
+    outline = stub.outline(chunk_uid=LEAVES[section][0])
+    assert outline is not None
+    outline = replace(outline, sections=(*outline.sections, empty))
+    reader = sections.SectionReader(stub.chunks, set())
+    return outline, reader
+
+
+def _heading_only(section_id: str = "s2-h", *, chunk_count: int = 0) -> sections.SectionInfo:
+    return sections.SectionInfo(
+        section_id=section_id,
+        title="見出しだけの節",
+        level=2,
+        parent_section_id="s2",
+        page_start=2,
+        page_end=4,
+        chunk_count=chunk_count,
+        chars=0,
+    )
+
+
+def test_a_section_without_chunks_has_nothing_to_read_and_is_not_unread():
+    """#4138: chunk を持たない章節（見出しだけ）は読むものが無い。読めなかった章節にしない。"""
+
+    class Stub(SectionStub):
+        def chunks(self, *, section_id: str, **options: object) -> list[StoredChunk]:
+            if section_id == "s2-h":
+                return sections.SectionRead(complete=True)
+            return super().chunks(section_id=section_id, **options)
+
+    empty = _heading_only()
+    outline, reader = _reader_for(Stub(), empty)
+    assert reader.read(outline, empty) == []
+    assert reader.section_key(outline, empty) not in reader.failures
+
+
+@pytest.mark.parametrize(
+    "response",
+    [sections.SectionRead(complete=False, reason="partial_read"), sections.SectionRead(complete=True)],
+    ids=["not_readable", "empty_response"],
+)
+def test_a_section_with_chunks_that_returns_nothing_stays_unread(response: sections.SectionRead):
+    """#4138: chunk があるのに読めない章節は、未確認の範囲として残す（案内を消さない）。"""
+
+    class Stub(SectionStub):
+        def chunks(self, *, section_id: str, **options: object) -> list[StoredChunk]:
+            if section_id == "s2-h":
+                return response
+            return super().chunks(section_id=section_id, **options)
+
+    section = _heading_only(chunk_count=2)
+    outline, reader = _reader_for(Stub(), section)
+    assert reader.read(outline, section) == []
+    assert reader.failures[reader.section_key(outline, section)] == sections.STOP_PARTIAL
+
+
+def test_a_heading_only_child_does_not_make_the_answer_partial():
+    """#4138: 親の章節の子を読む段で、見出しだけの子は読めなかった章節に入らない。"""
+    empty = replace(_heading_only("s3-h"), parent_section_id="s3")
+
+    class Stub(SectionStub):
+        def outline(self, **options: object) -> sections.SectionOutline | None:
+            outline = super().outline(**options)
+            return replace(outline, sections=(*outline.sections, empty)) if outline else None
+
+        def chunks(self, *, section_id: str, **options: object) -> list[StoredChunk]:
+            if section_id == "s3-h":
+                self.read_calls.append(section_id)
+                return sections.SectionRead(complete=True)
+            return super().chunks(section_id=section_id, **options)
+
+    stub = Stub()
+    result = _expand(
+        _seed_context("c31a"),
+        _settings(answer_max_input_tokens=2400),
+        Grader(needs=None),
+        stub,
+        rerank=lambda q, docs, s, top_n=None: [SimpleNamespace(index=i) for i in reversed(range(len(docs)))],
+    )
+    assert "s3-h" in stub.read_calls
+    assert "s3-h" not in [item.section_id for item in (*result.unread, *result.omitted)]
