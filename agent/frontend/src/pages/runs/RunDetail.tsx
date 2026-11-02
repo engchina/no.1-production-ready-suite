@@ -52,7 +52,12 @@ import { processFailureLabels, runFailure } from "@/lib/process-failure";
 import { MENU_PERMISSIONS, type AgentCapabilities } from "@/lib/permissions";
 import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerNoticeText, internalRecordArtifacts, userOutputArtifacts } from "@/lib/run-artifacts";
-import { answerStructureTitles, noticeHeading, structureAnswer } from "@/lib/answer-structure";
+import {
+  answerStructureTitles,
+  noticeHeading,
+  structureAnswer,
+  withoutFrameHeading,
+} from "@/lib/answer-structure";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
 import {
   agentRunDetailLabels,
@@ -260,7 +265,11 @@ export function RunDetail({
           answers.length ? (
             <RunDetailSection title={t("run.section.answer")} testId="run-answer-section">
               {answers.map((artifact) => {
-                const text = String(artifact.content.text ?? artifact.content.answer);
+                // 本文の先頭の「## 回答」は節の見出し「回答」と重なるので除く（#4061）。
+                const text = withoutFrameHeading(
+                  String(artifact.content.text ?? artifact.content.answer),
+                  t("run.section.answer")
+                );
                 // 回答の本文はチャットと同じ節の形（根拠の行つき。#2328）。結び付けられなければ Markdown のまま
                 // （表は共通の結果の表。#1158 / #1808）。
                 const blocks =
