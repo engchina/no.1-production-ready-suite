@@ -4216,3 +4216,63 @@ def test_partial_element_review_preserves_unseen_text() -> None:
     )
     with pytest.raises(DocumentReviewEditConflictError):
         _reviewed_extraction_with_edits(extraction, stale)
+
+
+def test_force_reingest_keeps_served_output_and_clears_only_recipe_checkpoints(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """#4115: 検索に出している版がある文書の再取込は、旧版を消さず解析の checkpoint だけ消す。"""
+    document_id = _upload("reingest.txt", b"reingest", "text/plain")
+    reset_calls: list[str] = []
+    checkpoint_calls: list[tuple[str, str]] = []
+
+    async def tracking_reset(document_id: str, **kwargs: object) -> DocumentDetail:
+        reset_calls.append(document_id)
+        raise AssertionError("検索に出している版を消さない")
+
+    async def served(_document_id: str) -> bool:
+        return True
+
+    async def clear_checkpoints(document_id: str, recipe_id: str) -> None:
+        checkpoint_calls.append((document_id, recipe_id))
+
+    fake = fake_document_dependencies
+    fake.reset_document_ingestion_outputs = tracking_reset  # type: ignore[method-assign]
+    fake.document_has_served_output = served  # type: ignore[attr-defined]
+    fake.delete_recipe_segment_checkpoints = clear_checkpoints  # type: ignore[attr-defined]
+
+    async def default_recipe(_document_id: str) -> dict[str, object]:
+        return {"recipe_id": "recipe-default", "status": FileStatus.INDEXED.value}
+
+    fake.ensure_default_document_recipe = default_recipe  # type: ignore[attr-defined]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs", params={"force": "true"})
+
+    assert resp.status_code == 200
+    assert reset_calls == []
+    assert checkpoint_calls == [(document_id, "recipe-default")]
+
+
+def test_first_ingest_without_served_output_still_resets_outputs(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
+    """#4115: 検索に出している版が無ければ、今までどおり出力を初期化する。"""
+    document_id = _upload("first.txt", b"first", "text/plain")
+    reset_calls: list[str] = []
+    original_reset = fake_document_dependencies.reset_document_ingestion_outputs
+
+    async def tracking_reset(document_id: str, **kwargs: object) -> DocumentDetail:
+        reset_calls.append(document_id)
+        return await original_reset(document_id, **kwargs)  # type: ignore[arg-type]
+
+    async def served(_document_id: str) -> bool:
+        return False
+
+    fake = fake_document_dependencies
+    fake.reset_document_ingestion_outputs = tracking_reset  # type: ignore[method-assign]
+    fake.document_has_served_output = served  # type: ignore[attr-defined]
+
+    resp = client.post(f"/api/documents/{document_id}/ingestion-jobs")
+
+    assert resp.status_code == 200
+    assert reset_calls == [document_id]

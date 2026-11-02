@@ -184,6 +184,7 @@ from app.rag.structure_index import structure_index_targets
 from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
+    compute_isolated_extraction_id,
     extraction_recipe_subset,
 )
 from app.rag.vision import (
@@ -611,10 +612,13 @@ class IngestionPipeline:
         settings: Settings | None = None,
         recipe_id: str | None = None,
         recipe_revision: int | None = None,
+        build_id: str | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._recipe_id = recipe_id
         self._recipe_revision = recipe_revision
+        # 再構築の識別子（job と試行）。検索に出している版の抽出を上書きしないために使う（#4115）。
+        self._build_id = build_id
         # ``record_outcome=False`` で索引まで終えた取込の、記録していない成功の内容(#504)。
         # 公開の工程(ingest / index_reviewed / chunk_reviewed / index_chunked)の開始で空に戻す。
         self.deferred_success_outcome: IngestionSuccessOutcome | None = None
@@ -1740,6 +1744,15 @@ class IngestionPipeline:
                     self._recipe_id,
                     self._recipe_revision,
                 )
+                served_ids = getattr(self._oracle, "served_extraction_ids", None)
+                if (
+                    self._build_id is not None
+                    and callable(served_ids)
+                    and extraction_recipe_id in await served_ids(document_id)
+                ):
+                    extraction_recipe_id = compute_isolated_extraction_id(
+                        extraction_recipe_id, self._build_id
+                    )
             recipe = extraction_recipe_subset(recipe_settings)
             await self._oracle.upsert_document_extraction_artifact(
                 document_id=document_id,
