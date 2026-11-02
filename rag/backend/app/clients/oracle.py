@@ -492,6 +492,8 @@ class _NativeScope:
     scope_ranges: list[tuple[int, int, int]]
     # 許可された chunk のうち埋め込みを持つ行の数(ベクトルの読み方の判断と不足の判定に使う)。
     vector_chunks: int
+    # 読んだ範囲に含まれる chunk set の範囲の全部(範囲が今も有効かの確認に使う)。
+    scope_ids: tuple[int, ...] = ()
 
 
 class NativeSearchRows(list[dict[str, object]]):
@@ -904,18 +906,40 @@ class OracleClient:
             for _, embedding, mode in searches:
                 if mode != SearchMode.KEYWORD:
                     self._validate_embedding_width(embedding, "query embedding")
-            # 同じ要求の検索文は範囲が同じなので、範囲の解決は 1 回だけにする(#4011)。
-            native_scope = asyncio.ensure_future(self._resolve_native_scope(filters))
-            return list(
-                await asyncio.gather(
-                    *(
-                        self._native_search_hits(
-                            query, embedding, top_k, filters, mode, native_scope=native_scope
+            native_filters = filters
+
+            async def read_all(
+                native_scope: asyncio.Future[_NativeScope | None],
+            ) -> list[list[RetrievedChunk]]:
+                return list(
+                    await asyncio.gather(
+                        *(
+                            self._native_search_hits(
+                                query,
+                                embedding,
+                                top_k,
+                                native_filters,
+                                mode,
+                                native_scope=native_scope,
+                            )
+                            for query, embedding, mode in searches
                         )
-                        for query, embedding, mode in searches
                     )
                 )
-            )
+
+            # 同じ要求の検索文は範囲が同じなので、範囲の解決は 1 回だけにする(#4011)。
+            native_scope = asyncio.ensure_future(self._resolve_native_scope(filters))
+            native_results = await read_all(native_scope)
+            try:
+                scope = await native_scope
+            except Exception:
+                # 範囲を読めなかった失敗は、各検索文の結果にすでに入っている。
+                return native_results
+            if await self._native_scope_is_stale(scope, filters):
+                native_results = await read_all(
+                    asyncio.ensure_future(self._resolve_native_scope(filters))
+                )
+            return native_results
         branch_queries: list[str] = []
         branch_kinds: list[str] = []
         binds: dict[str, object] = {}
@@ -7851,6 +7875,7 @@ class OracleClient:
                 complete_scopes=complete_scopes,
                 scope_ranges=[],
                 vector_chunks=vector_chunks,
+                scope_ids=tuple(allowed_counts),
             )
         ids = await self._fetch_all(
             f"""SELECT c.chunk_id, c.native_scope_id {_NATIVE_SCOPE_JOINS}
@@ -7898,6 +7923,58 @@ class OracleClient:
             complete_scopes=complete_scopes,
             scope_ranges=scope_ranges,
             vector_chunks=vector_chunks,
+            scope_ids=tuple(allowed_counts),
+        )
+
+    async def _native_scope_is_stale(
+        self, scope: _NativeScope | None, filters: dict[str, str]
+    ) -> bool:
+        """読んだ範囲に、検索の条件を満たす行が無くなった chunk set があるかを返す(#4179)。
+
+        範囲の解決と検索は別の文なので、間に切替が commit されると、検索は範囲の外の新版を読まず、
+        対象の文書の根拠が欠ける。範囲ごとに 1 行あるかだけを索引で確かめる。確認に失敗しても、
+        読めた結果を捨てない。
+        """
+        if scope is None or not scope.scope_ids:
+            return False
+        where, binds = _oracle_retrieval_where(filters)
+        try:
+            stale = await self._fetch_all(
+                f"""SELECT s.scope_id FROM JSON_TABLE(:native_checked_scope_ids, '$[*]'
+                    COLUMNS (scope_id NUMBER PATH '$')) s
+                WHERE NOT EXISTS (
+                    SELECT 1 {_NATIVE_SCOPE_JOINS}
+                    WHERE {where} AND c.native_scope_id = s.scope_id)""",
+                {**binds, "native_checked_scope_ids": json.dumps(list(scope.scope_ids))},
+            )
+        except Exception as exc:
+            logger.warning("native_scope_check_failed", extra=oracle_error_log_fields(exc))
+            return False
+        return bool(stale)
+
+    async def _native_rows_in_current_scope(
+        self,
+        channel: str,
+        query: str,
+        embedding: object,
+        *,
+        top_k: int,
+        filters: dict[str, str],
+    ) -> list[dict[str, object]]:
+        """範囲を解決して読み、読む間に範囲が古くなったら 1 回だけ読み直す(#4179)。"""
+        scope = await self._resolve_native_scope(filters)
+        if scope is None:
+            return []
+        rows = await self._native_rows(
+            channel, query, embedding, top_k=top_k, filters=filters, native_scope=scope
+        )
+        if not await self._native_scope_is_stale(scope, filters):
+            return rows
+        scope = await self._resolve_native_scope(filters)
+        if scope is None:
+            return []
+        return await self._native_rows(
+            channel, query, embedding, top_k=top_k, filters=filters, native_scope=scope
         )
 
     async def _native_exact_rows(
@@ -7972,16 +8049,18 @@ class OracleClient:
             request_json,
         )
 
+        if native_scope is None:
+            return await self._native_rows_in_current_scope(
+                channel, query, embedding, top_k=top_k, filters=filters
+            )
         where, binds = _oracle_retrieval_where(filters)
         joins = _NATIVE_SCOPE_JOINS
         vector = [float(v) for v in cast(Sequence[float], embedding)]
         scope: _NativeScope | None
         if isinstance(native_scope, _NativeScope):
             scope = native_scope
-        elif native_scope is not None:
-            scope = await asyncio.shield(native_scope)
         else:
-            scope = await self._resolve_native_scope(filters)
+            scope = await asyncio.shield(native_scope)
         if scope is None:
             return []
         exact_max_chunks = self._settings.rag_native_vector_exact_max_chunks

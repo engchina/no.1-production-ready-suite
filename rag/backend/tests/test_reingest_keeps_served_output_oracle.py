@@ -4,7 +4,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, _NativeScope
+from app.config import get_settings
 from app.rag.chunking import Chunk
 from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
@@ -103,3 +104,60 @@ async def test_recipe_checkpoints_are_cleared_only_for_that_recipe() -> None:
     )
     recipe = await client.ensure_default_document_recipe(document.id)
     await client.delete_recipe_segment_checkpoints(document.id, str(recipe["recipe_id"]))
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_native_search_finds_new_version_when_switch_commits_after_scope_resolve() -> None:
+    """範囲を読んだ直後に切替が commit されても、対象の文書の根拠を返す（#4179）。"""
+    settings = get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_native"})
+    client = OracleClient(settings)
+    word = f"switchword{uuid4().hex[:10]}"
+    kb = await client.create_knowledge_base(name=f"synthetic-switch-{uuid4().hex[:8]}")
+    document = await client.create_document(
+        file_name="synthetic-switch.txt",
+        object_storage_path="synthetic-switch.txt",
+        content_type="text/plain",
+        knowledge_base_ids=[kb.id],
+    )
+    recipe = await client.ensure_default_document_recipe(document.id)
+    recipe_id = str(recipe["recipe_id"])
+    suffix = uuid4().hex[:12]
+    old_set, new_set = f"old_{suffix}", f"new_{suffix}"
+    extraction = StructuredExtraction(raw_text=word, confidence=0.9)
+
+    async def chunk_set(chunk_set_id: str) -> None:
+        await client.upsert_chunk_set(
+            chunk_set_id=chunk_set_id, document_id=document.id, recipe_id=recipe_id
+        )
+        await client.save_index(
+            document.id,
+            extraction,
+            [Chunk(index=0, text=f"{word} {chunk_set_id}", start_offset=0, end_offset=1)],
+            [[0.1] * 1536],
+            chunk_set_id=chunk_set_id,
+        )
+        await client.mark_chunk_set_indexed(
+            chunk_set_id=chunk_set_id, chunk_count=1, vector_count=1
+        )
+
+    await chunk_set(old_set)
+    await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=old_set)
+    await client.update_document_status(document.id, FileStatus.INDEXED)
+    await chunk_set(new_set)
+
+    resolve = client._resolve_native_scope
+    switched = False
+
+    async def resolve_then_switch(filters: dict[str, str]) -> _NativeScope | None:
+        nonlocal switched
+        scope = await resolve(filters)
+        if not switched:
+            switched = True
+            await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=new_set)
+        return scope
+
+    client._resolve_native_scope = resolve_then_switch  # type: ignore[method-assign]
+    hits = await client.keyword_search(word, 5, {"knowledge_base_id": kb.id})
+
+    assert switched
+    assert {hit.chunk_id.split(":")[1] for hit in hits} == {new_set}
