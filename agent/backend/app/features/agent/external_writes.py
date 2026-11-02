@@ -10,6 +10,7 @@
   （`idempotentHint`）。届いた後の失敗も通信の層で再送し、結果不明の後の呼び直しも妨げない。
 - 標準の自動実行（`standard_auto_approve`。`nl2sql_query`）: 副作用は読み取りの job の作成だけ。
   重複しても業務の副作用は無いので、結果不明の後の呼び直しも妨げない（job ID で照合できる）。
+  モデルへ「繰り返さない」案内も返さない（#4093）。
 - それ以外（`guarded`）: 書き込み・副作用があり得る。次の規則で守る。
 
 `guarded` と冪等のツールの呼び出しには論理操作の ID（`operation_key`）を付け、MCP の
@@ -63,7 +64,7 @@ OUTCOME_UNKNOWN_RUN_MESSAGE = (
     "外部への書き込みの結果が不明です（相手で反映済みかもしれません）。相手のシステムで反映されたかを"
     "確かめてから、必要なときだけ再実行してください。"
 )
-# モデルへの案内（結果不明の失敗の結果に足す）。
+# モデルへの案内（`guarded` のツールの結果不明の失敗の結果に足す）。
 
 OUTCOME_UNKNOWN_NEXT_STEP = (
     "この操作は相手に届いた可能性があり、反映されたかは分かりません。同じ操作を繰り返さないで"
@@ -110,6 +111,19 @@ def is_outcome_unknown(result: ToolResult | None) -> bool:
         and isinstance(result.error_details, dict)
         and result.error_details.get("outcome") == OUTCOME_UNKNOWN
     )
+
+
+def unknown_write_operation(result: ToolResult | None) -> str | None:
+    """結果不明の書き込み（規則 5 の承認が要るもの）の結果なら、その論理操作の ID を返す。
+
+    `step_outcome_unknown` と同じ条件（結果不明の印と ID の両方）で判定し、モデルへの案内と承認の
+    要否を一致させる。`standard_auto_approve` のツールは ID を持たないので対象にならない。
+    """
+    if result is None or not is_outcome_unknown(result):
+        return None
+    details = result.error_details if isinstance(result.error_details, dict) else {}
+    operation = details.get("operation_key") or result.audit_metadata.get("operation_key")
+    return operation if isinstance(operation, str) and operation else None
 
 
 def _status(step: Any) -> str:
@@ -179,12 +193,13 @@ def approval_reason(name: str) -> str:
     )
 
 
-def unknown_outcome_payload(operation: str | None) -> dict[str, Any]:
-    """モデルへ返す結果に足す、結果不明の項目。"""
-    payload: dict[str, Any] = {"outcome": OUTCOME_UNKNOWN, "next_step": OUTCOME_UNKNOWN_NEXT_STEP}
-    if operation:
-        payload["operation_key"] = operation
-    return payload
+def unknown_outcome_payload(operation: str) -> dict[str, Any]:
+    """モデルへ返す結果に足す、結果不明の書き込みの項目。"""
+    return {
+        "outcome": OUTCOME_UNKNOWN,
+        "next_step": OUTCOME_UNKNOWN_NEXT_STEP,
+        "operation_key": operation,
+    }
 
 
 def unknown_steps(steps: Iterable[Any], *, run_ended: bool) -> list[Any]:

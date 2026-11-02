@@ -1364,11 +1364,11 @@ def tool_failure_payload(result: ToolResult) -> dict[str, Any]:
         "error_code": result.error_code,
     }
     details = result.error_details if isinstance(result.error_details, dict) else {}
-    if external_writes.is_outcome_unknown(result):
-        # 届いた後の失敗（#2601）: 未実行と扱わせず、繰り返さずに確かめる案内を足す。
-        operation = details.get("operation_key") or result.audit_metadata.get("operation_key")
-        key = operation if isinstance(operation, str) else None
-        payload.update(external_writes.unknown_outcome_payload(key))
+    operation = external_writes.unknown_write_operation(result)
+    if operation is not None:
+        # 書き込みの届いた後の失敗（#2601）: 未実行と扱わせず、繰り返さずに確かめる案内を足す。
+        # 呼び直しを止めないツール（`nl2sql_query` など）には足さない（#4093）。
+        payload.update(external_writes.unknown_outcome_payload(operation))
 
     callee_code = details.get("error_code")
     if isinstance(callee_code, str) and _CALLEE_ERROR_CODE.fullmatch(callee_code):
