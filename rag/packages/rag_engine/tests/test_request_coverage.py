@@ -266,19 +266,17 @@ def _cover(
         classification_filter=None,
         runtime_knowledge=None,
         searched_queries=searched,
-        unanswered_requests=[{"request_id": "Q1", "status": "partial", "search_text": "請求書の再発行方法は？"}] if gaps else None,
+        unanswered_requests=[{"request_id": "Q1", "status": "partial"}] if gaps else None,
     )
 
 
 def test_cover_missing_requests_adds_evidence_and_records_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = _patch_search(
-        monkeypatch, {"請求書の再発行方法は？": context(parent("inv", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))}
-    )
+    calls = _patch_search(monkeypatch, {QUESTION: context(parent("inv", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))})
     ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
 
     merged, trace = _cover(ctx, _settings())
 
-    assert calls == [("請求書の再発行方法は？", ("請求書の再発行方法は？",))]
+    assert calls == [(QUESTION, (QUESTION,))]
     # 既存の根拠を先に残し、足した根拠を後ろに置く。
     assert [r.chunk_uid for r in merged.records] == ["run:p1", "run:inv"]
     assert merged.evidence_tree[-1].reason == "request_coverage"
@@ -334,7 +332,7 @@ def test_cover_missing_requests_respects_disabled_setting(monkeypatch: pytest.Mo
 
 
 def test_cover_missing_requests_caps_added_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_search(monkeypatch, {"請求書の再発行方法は？": context(*(parent(f"inv{i}", "請求書の再発行") for i in range(5)))})
+    _patch_search(monkeypatch, {QUESTION: context(*(parent(f"inv{i}", "請求書の再発行") for i in range(5)))})
     ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
 
     merged, trace = _cover(ctx, _settings(request_coverage_max_chunks=2))
@@ -345,7 +343,7 @@ def test_cover_missing_requests_caps_added_chunks(monkeypatch: pytest.MonkeyPatc
 
 def test_cover_missing_requests_no_new_evidence_keeps_context(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
-    _patch_search(monkeypatch, {"請求書の再発行方法は？": ctx})
+    _patch_search(monkeypatch, {QUESTION: ctx})
 
     merged, trace = _cover(ctx, _settings())
 
@@ -388,7 +386,7 @@ def test_engine_settings_default_and_env() -> None:
         dotenv_path=None,
     )
 
-    assert default.request_coverage_retrieval_enabled is False
+    assert default.request_coverage_retrieval_enabled is True
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
     assert default.request_coverage_deadline_seconds == 10.0
     assert custom.request_coverage_retrieval_enabled is True
@@ -402,9 +400,7 @@ def test_cover_missing_requests_counts_in_the_shared_extra_retrieval_budget(monk
     """再検索の回数は追加の検索の枠（#2395）から取り、枠の残りが無ければ再検索しない。"""
     from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
 
-    calls = _patch_search(
-        monkeypatch, {"請求書の再発行方法は？": context(parent("inv", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))}
-    )
+    calls = _patch_search(monkeypatch, {QUESTION: context(parent("inv", "請求書の再発行は、請求一覧で再発行ボタンを押します。"))})
     ctx = context(parent("p1", "受注番号を入力し、登録ボタンを押します。"))
 
     def cover(budget: ExtraRetrievalBudget) -> dict[str, Any]:
@@ -421,7 +417,7 @@ def test_cover_missing_requests_counts_in_the_shared_extra_retrieval_budget(monk
             classification_filter=None,
             runtime_knowledge=None,
             extra_budget=budget,
-            unanswered_requests=[{"request_id": "Q1", "status": "partial", "search_text": "請求書の再発行方法は？"}],
+            unanswered_requests=[{"request_id": "Q1", "status": "partial"}],
         )[1]
 
     used = ExtraRetrievalBudget(max_queries=2, used={"guide_steps": 2})

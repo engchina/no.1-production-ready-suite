@@ -10,6 +10,7 @@ from test_request_coverage import _patch_search, context, parent
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering as a
+from rag_engine.generation.answer_models import QueryExpansionResult
 from rag_engine.retrieval.extra_retrieval import ExtraRetrievalBudget
 from rag_engine.retrieval.request_coverage import CoverageUsage, RequestTarget, request_rows
 
@@ -67,7 +68,7 @@ def test_pre_and_post_generation_share_all_limits(monkeypatch):
     from test_request_coverage import _settings
     from test_request_coverage import parent as p
 
-    calls = _patch_search(monkeypatch, {"請求書の再発行方法は？": context(p("new", "請求書 再発行"))})
+    calls = _patch_search(monkeypatch, {two_requests: context(p("new", "請求書 再発行"))})
     usage, extra = CoverageUsage(), ExtraRetrievalBudget(5)
     old = context(p("old", "受注 登録"))
     first, _ = cover(
@@ -76,7 +77,7 @@ def test_pre_and_post_generation_share_all_limits(monkeypatch):
         usage=usage,
         extra=extra,
         question=two_requests,
-        unanswered=[{"request_id": "Q1", "status": "missing", "search_text": "請求書の再発行方法は？"}],
+        unanswered=[{"request_id": "Q1", "status": "missing"}],
     )
     assert usage.queries == 1
     second, trace = cover(
@@ -85,7 +86,7 @@ def test_pre_and_post_generation_share_all_limits(monkeypatch):
         usage=usage,
         extra=extra,
         question=two_requests,
-        unanswered=[{"request_id": "Q1", "status": "missing", "search_text": "請求書の再発行方法は？"}],
+        unanswered=[{"request_id": "Q1", "status": "missing"}],
     )
     assert trace["re_retrieval"]["skipped"] == "no_budget"
     assert second is first and len(calls) == 1
@@ -137,7 +138,7 @@ def test_generated_gap_can_retrieve_and_regenerate_without_enabling_audit(monkey
         return context(parent("old", OLD_TEXT), parent("new", NEW_TEXT)), {"applied": True}
 
     result, model = _synthesize(monkeypatch, gap(), recover)
-    assert calls == [[{"request_id": "Q1", "status": "missing", "search_text": "操作の根拠がありません。"}]]
+    assert calls == [[{"request_id": "Q1", "status": "missing"}]]
     assert NEW_TEXT in result.response.answer_text
     assert NEW_TEXT in model.prompts[1][1]
     assert len(model.prompts) == 2
@@ -211,12 +212,125 @@ def test_main_answer_flow_wires_recovery_and_respects_disabled_setting(monkeypat
     assert len(calls) == (2 if enabled else 1)
     assert len(model.prompts) == (2 if enabled else 1)
     if enabled:
-        assert calls[1][1] == ("操作の根拠がありません。",)
+        assert calls[1][1] == (QUESTION,)
         trace = result.generation_trace["request_coverage"]["after_generation"][0]
         assert trace["re_retrieval"]["applied"] is True
         assert NEW_TEXT in result.answer
     else:
         assert result.generation_trace["request_coverage"]["re_retrieval"]["skipped"] == "disabled"
+
+
+def _hypothesis_expansion(monkeypatch, generated):
+    """質問の拡張の代役。呼ばれた (文, 方式) を記録する。"""
+    asked = []
+
+    def fake(question, strategy, config, **kwargs):
+        asked.append((question, strategy))
+        return QueryExpansionResult(
+            original_question=question, selected_strategy=strategy, effective_strategy=strategy, generated_queries=tuple(generated)
+        )
+
+    monkeypatch.setattr(a, "build_query_expansion", fake)
+    return asked
+
+
+def _cover_same_query(ctx, **kwargs):
+    # 最初の検索の文が要求の文と同じ（プログラムでは違う検索文を作れない）場合。
+    return a._cover_missing_requests(
+        QUESTION,
+        ctx,
+        settings(),
+        run_id="run",
+        preferred_engines=["docling"],
+        top_k=8,
+        neighbor_child_count=0,
+        rerank_enabled=False,
+        retrieval_scope="knowledge_base",
+        classification_filter=None,
+        runtime_knowledge=None,
+        searched_queries=(QUESTION,),
+        unanswered_requests=[{"request_id": "Q1", "status": "missing"}],
+        **kwargs,
+    )
+
+
+def test_same_query_gap_searches_with_hypotheses_once_and_keeps_original_as_rerank_question(monkeypatch):
+    hypotheses = ("対象Aの設定は設定画面の保存ボタンで変更する。", "設定の変更は項目を選んで保存する。")
+    received = {}
+
+    def fake_build(question, run_id, engines, config, **kwargs):
+        received.update(question=question, **kwargs)
+        return context(parent("new", NEW_TEXT))
+
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", fake_build)
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [text])
+    asked = _hypothesis_expansion(monkeypatch, hypotheses)
+
+    merged, trace = _cover_same_query(context(parent("old", OLD_TEXT)))
+
+    assert asked == [(QUESTION, a.HYDE_STRATEGY)]
+    assert trace["llm_calls"] == 1
+    # rerank の基準は要求の原文。仮説文は検索と比較にだけ使い、全文検索と検索文の選別には掛けない。
+    assert received["question"] == QUESTION
+    assert received["retrieval_queries"] == hypotheses
+    assert received["vector_only_queries"] == hypotheses
+    assert received["trusted_queries"] == hypotheses
+    # 仮説文は根拠に入らない。足すのは検索で取れた原文だけ。
+    assert {r.text for r in merged.records} == {OLD_TEXT, NEW_TEXT}
+    assert not any(query in r.text for query in hypotheses for r in merged.records)
+
+
+def test_program_built_query_does_not_call_the_model(monkeypatch):
+    calls = _patch_search(monkeypatch, {QUESTION: context(parent("new", NEW_TEXT))})
+    asked = _hypothesis_expansion(monkeypatch, ("仮説文",))
+
+    _, trace = cover(context(parent("old", OLD_TEXT)), settings(), unanswered=[{"request_id": "Q1", "status": "missing"}])
+
+    assert asked == [] and trace["llm_calls"] == 0
+    assert calls == [(QUESTION, (QUESTION,))]
+
+
+def test_no_gap_never_expands_or_searches(monkeypatch):
+    calls = _patch_search(monkeypatch, {})
+    asked = _hypothesis_expansion(monkeypatch, ("仮説文",))
+
+    ctx = context(parent("old", OLD_TEXT))
+    merged, trace = cover(ctx, settings(), unanswered=[])
+
+    assert merged is ctx
+    assert (asked, calls) == ([], [])
+    assert trace["re_retrieval"] == {"applied": False, "skipped": "no_explicit_gap"}
+
+
+def test_failed_or_empty_expansion_stops_without_searching(monkeypatch):
+    calls = _patch_search(monkeypatch, {})
+    _hypothesis_expansion(monkeypatch, ())
+
+    ctx = context(parent("old", OLD_TEXT))
+    merged, trace = _cover_same_query(ctx)
+
+    assert merged is ctx and calls == []
+    assert trace["re_retrieval"] == {"applied": False, "skipped": "same_query"}
+
+
+def test_search_widens_past_read_parents_but_adds_within_the_chunk_budget(monkeypatch):
+    received = {}
+    read = [parent(f"old{i}", OLD_TEXT + str(i)) for i in range(4)]
+    found = [*read, *(parent(f"new{i}", NEW_TEXT + str(i)) for i in range(4))]
+
+    def fake_build(question, run_id, engines, config, **kwargs):
+        received.update(top_k=kwargs["top_k"], max_records=kwargs["max_records"])
+        return context(*found)
+
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", fake_build)
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [text])
+
+    merged, trace = cover(context(*read), settings(request_coverage_max_chunks=2), unanswered=[{"request_id": "Q1", "status": "missing"}])
+
+    # 上位が読取済みの親で埋まっても、読取済みの数だけ広げて新しい親を選ぶ（検索の top_k 8 を超えない）。
+    assert received == {"top_k": 6, "max_records": 6}
+    assert trace["re_retrieval"]["added_chunk_ids"] == sorted(["run:new0", "run:new1"])
+    assert {r.chunk_uid for r in merged.records} == {*(f"run:old{i}" for i in range(4)), "run:new0", "run:new1"}
 
 
 def test_same_focused_query_is_not_repeated_across_phases(monkeypatch):
