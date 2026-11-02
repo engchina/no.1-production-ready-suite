@@ -44,7 +44,8 @@ nl2sql-config-audit = "app.cli.config_audit:main"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3",
+  # pytest-xdist 3.8 は pytest 9.2 の nodeid 変更に未対応（#4035）。
+  "pytest>=8.3,<9.2",
   "pytest-asyncio>=0.25",
   "pytest-cov>=6.0",
   "pytest-xdist>=3.8",
