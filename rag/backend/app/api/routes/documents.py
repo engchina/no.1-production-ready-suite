@@ -33,7 +33,7 @@ from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginat
 from pr_backend_core.oracle_errors import oracle_error_codes
 from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
 
-from app.api.errors import DocumentFileMissingError
+from app.api.errors import DocumentFileMissingError, SourceVersionStaleError
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
 from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
 from app.clients.oci_genai import EMBEDDING_INPUT_MAX_CHARS
@@ -6587,7 +6587,11 @@ async def get_document_citation_chunk(
     document_id: str, chunk_id: str
 ) -> ApiResponse[RetrievedChunk]:
     """閲覧可能な現行の根拠だけを ID で読み、原文の位置を返す。検索は行わない。"""
-    chunk = await OracleClient().retrievable_chunk(document_id, chunk_id)
+    oracle = OracleClient()
+    chunk = await oracle.retrievable_chunk(document_id, chunk_id)
     if chunk is None:
+        # 見られる文書の今は無い chunk は版の失効（#4092）。見られない文書は 404 のまま。
+        if await oracle.accessible_document_exists(document_id):
+            raise SourceVersionStaleError("資料の版が変わりました。")
         raise HTTPException(status_code=404, detail="この根拠は現在の閲覧範囲では表示できません。")
     return ApiResponse(data=chunk)

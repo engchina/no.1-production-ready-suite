@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isSourceVersionStale } from "../../lib/api-error";
 import { resolveContentLang } from "../../lib/content-lang";
 import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
@@ -7,6 +8,7 @@ import { Disclosure } from "../ui/disclosure";
 import { Skeleton } from "../ui/skeleton";
 import { CodepointHighlight } from "./codepoint-highlight";
 import { originalSourceLabels } from "./labels";
+import { SourceVersionStaleNotice } from "./source-version-stale-notice";
 
 export interface OriginalSourceInput {
   element_id: string;
@@ -65,10 +67,11 @@ export function OriginalSourcePanel({readingKey, elementId, revision, loadWindow
     move.current = true; setRequest(old => ({key,source_index,offset,serial:old.serial+1}));
   };
   const pending = state.key === key && state.pending;
+  const stale = state.key === key && isSourceVersionStale(state.error);
   return <Disclosure summary={labels.title} open={open} onOpenChange={value => {move.current = value; setOpen(value);}} data-testid="original-source-panel">
     {pending ? <TimedLoadingState label={labels.loading} operationKey={`${key}:${request.serial}`} framed={false}><Skeleton className="h-16 w-full" /></TimedLoadingState> : null}
-    {state.key === key && state.error ? <ApiErrorState error={state.error} fallback={labels.failed} onRetry={() => {move.current = true; setRequest(old => ({...(old.key === key ? old : {key}), serial:old.serial+1}));}} retryLabel={labels.retry} /> : null}
-    {data ? <div ref={body} tabIndex={0} role="region" aria-label={labels.body} className="space-y-2" data-testid="original-source-content">
+    {state.key === key && state.error ? stale ? <SourceVersionStaleNotice /> : <ApiErrorState error={state.error} fallback={labels.failed} onRetry={() => {move.current = true; setRequest(old => ({...(old.key === key ? old : {key}), serial:old.serial+1}));}} retryLabel={labels.retry} /> : null}
+    {data && !stale ? <div ref={body} tabIndex={0} role="region" aria-label={labels.body} className="space-y-2" data-testid="original-source-content">
       {data.status !== "exact" ? <p className="text-sm text-fg-muted" role="status">{data.status === "unrecorded" ? labels.unrecorded : data.status === "version_mismatch" ? labels.versionMismatch : labels.unresolved}</p> : <>
         <p className="text-xs text-fg-muted">{data.variant === "prepared" ? labels.prepared : labels.original} · {(data.source_index ?? 0) + 1} / {data.source_count}</p>
         <p className="break-all font-mono text-xs">{data.pointer}</p>

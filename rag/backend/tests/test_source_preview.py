@@ -105,11 +105,12 @@ class _PreviewOracle:
             return None
         return self.visible.get((document_id, chunk_id))
 
-    async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
+    async def accessible_document_exists(self, document_id: str) -> bool:
+        """見られる文書か（chunk が今も見えるか、古い版の chunk だけが残っている文書）。"""
         allowed = current_audit_request_context().allowed_knowledge_base_ids
         if allowed is not None and "kb-1" not in allowed:
             return False
-        return (document_id, chunk_id) in self.stale
+        return any(key[0] == document_id for key in (*self.visible, *self.stale))
 
     async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: list[str]) -> dict[str, str]:
         return {}
@@ -465,8 +466,18 @@ def test_urls_are_bound_to_user_and_recheck_permission_and_version(
     previews.visible = {}
     previews.stale = {("d1", "c1")}
     assert client.get(path).status_code == 409
+    # 画面が別の origin からでも版の失効を見分けられる（#4092）。
+    stale = client.get(f"{preview['content_path']}?view=reader")
+    assert (stale.status_code, stale.json()["error_code"]) == (409, "source_stale")
+    assert stale.headers["access-control-allow-origin"] == "*"
+    assert stale.headers["cache-control"] == "private, no-store"
     previews.stale = set()
     assert client.get(preview["content_path"]).status_code == 404
+    # 再索引で chunk の行が消えても、見られる文書なら版の失効（見えない文書は 404 のまま）。
+    previews.visible = {("d1", "c-new"): current}
+    removed = client.get(f"{preview['content_path']}?view=reader")
+    assert (removed.status_code, removed.json()["error_code"]) == (409, "source_stale")
+    assert client.get(path).status_code == 409
     previews.visible = {("d1", "c1"): current}
     assert client.get(path).status_code == 200
 

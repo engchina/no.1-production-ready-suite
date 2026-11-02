@@ -248,6 +248,21 @@ export function httpApiErrorPresentation(
   };
 }
 
+/**
+ * 見られる文書の、引用した版を表示できない失敗の code（再索引の後の古い根拠など。RAG / Agent の API の `error_code`。#4092）。
+ * 障害ではなく、同じ ID で取り直しても変わらないので、エラーと再試行を出さず案内にする（`SourceVersionStaleNotice`）。
+ */
+export const SOURCE_VERSION_STALE_CODE = "source_stale";
+
+/** 版の失効の失敗か（製品の `ApiError` の `errorCode` で見分ける。status の一致だけでは判定しない）。 */
+export function isSourceVersionStale(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { errorCode?: unknown }).errorCode === SOURCE_VERSION_STALE_CODE
+  );
+}
+
 /** JavaScript の組み込みの例外（文が英語で、利用者向けではない）。 */
 const BUILTIN_ERROR_NAMES = new Set([
   "TypeError",

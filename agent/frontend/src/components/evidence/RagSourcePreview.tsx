@@ -7,13 +7,15 @@ import {
   type EvidenceReadingWindow,
   type OriginalSourceInput,
   type OriginalSourceWindow,
+  SourceVersionStaleNotice,
   documentPreviewLabels,
   evidencePreviewFocus,
+  isSourceVersionStale,
   type DocumentPreviewPagesState,
   type PreviewViewerPage,
 } from "@production-ready/ui";
 
-import { agentApi, type RunSourcePreview } from "@/lib/api";
+import { agentApi, ApiError, type RunSourcePreview } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
 /** 原文のプレビューの文言（RAG と同じ。再試行だけ Agent の共通の文言）。 */
@@ -28,7 +30,8 @@ const MIN_REFRESH_MS = 30_000;
  *
  * データは Agent の backend から取る（画面を見ている利用者として RAG が作る、利用者・根拠・版に縛った短命の署名つきの
  * URL。RAG の画面用の Cookie の API は呼ばない）。URL は保存せず、パネルを開いている間は期限の前に取り直す。
- * 出せない根拠（権限が無い・ファイルが無い・資料の更新）は backend の理由と再試行を出す。
+ * 出せない根拠（権限が無い・ファイルが無い）は backend の理由と再試行を出す。資料の再処理で版が失効した根拠は、取り直しても
+ * 変わらないので案内を出す（RAG と同じ `SourceVersionStaleNotice`。#4092）。
  */
 export function RagSourcePreview({
   runId,
@@ -71,6 +74,7 @@ export function RagSourcePreview({
   const loadOriginal = useCallback((input: OriginalSourceInput, signal: AbortSignal) => loadPreviewWindow<OriginalSourceWindow>(contentUrl ?? "", input, signal, "source-map"), [contentUrl]);
 
   if (preview.isError) {
+    if (isSourceVersionStale(preview.error)) return <SourceVersionStaleNotice />;
     return (
       <DocumentPreview
         kind="pdf"
@@ -145,7 +149,8 @@ async function loadPreviewWindow<T>(url: string, input: object, signal: AbortSig
         ? (envelope as { error_messages?: unknown }).error_messages
         : null;
     const message = Array.isArray(messages) && typeof messages[0] === "string" ? messages[0] : null;
-    throw new Error(message ?? t("evidence.previewTextFailed"));
+    const errorCode = envelope && typeof envelope === "object" && "error_code" in envelope ? (envelope as { error_code?: unknown }).error_code : null;
+    throw new ApiError(response.status, [message ?? t("evidence.previewTextFailed")], typeof errorCode === "string" ? { errorCode } : {});
   }
   const envelope = await response.json() as { data: T };
   return envelope.data;

@@ -1003,6 +1003,36 @@ test("原文を出せない根拠は理由と再試行を出し、本文の資�
   await expect(preview.getByTestId("evidence-reader-content")).toContainText('{"合成": "本文"}');
 });
 
+// #4092: 再索引で引用の版が無くなった根拠は、RAG と同じ案内にする（プレビューの発行・本文の読み取りのどちらで分かっても）。
+test("引用の版が無い根拠は案内を出し、エラーと再試行を出さない", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedRun(mockApi);
+  await page.route("http://rag.e2e.test/**", (route) => route.fulfill({
+    status: 409,
+    json: { data: null, error_messages: ["この根拠は文書の古い版のものです。"], warning_messages: [], error_code: "source_stale" },
+    headers: { "Access-Control-Allow-Origin": "*" },
+  }));
+  mockApi.state.sourcePreviews[CHUNK_A] = {
+    error: { status: 409, message: "資料が更新されたため、この根拠の原文は表示できません。", errorCode: "source_stale" },
+  };
+  mockApi.state.sourcePreviews[CHUNK_B] = { kind: "text", file_name: "合成の文書.json", pages: [], page_url_template: null, highlight_metadata: {} };
+  await page.goto("/chat");
+  await openThread(page);
+  const links = page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("answer-citation-link");
+  const sheet = page.getByRole("dialog", { name: "回答の根拠" });
+  const preview = sheet.getByTestId("evidence-source-preview");
+  for (const index of [0, 1]) {
+    await links.nth(index).click();
+    await expect(preview.getByTestId("source-version-stale-notice")).toContainText("資料が再処理されたため、回答時点の引用の版は表示できません。");
+    await expect(preview.getByRole("alert")).toHaveCount(0);
+    await expect(preview.getByRole("button", { name: "再試行" })).toHaveCount(0);
+    await expect(sheet.getByTestId("evidence-source-summary")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`agent-stale-citation-${index}-${testInfo.project.name}.png`) });
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+  }
+});
+
 // #2512: 抜粋の長い根拠で「抜粋と頁・章節」を開いても、原文のプレビューを画面の外へ押し出さない。抜粋は要約の中の
 // 高さに上限のある領域でスクロールし（Tab で届き、下端のフェードで続きを示す）、テキストの原文は引用した箇所へ
 // 移って強調する。内容はすべて合成のデータ。

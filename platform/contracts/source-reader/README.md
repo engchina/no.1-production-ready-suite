@@ -10,6 +10,10 @@ Agent は RAG の内部 REST API・DB を利用せず、この公開契約を使
 - `view` 省略時は従来どおり原本。完全ダウンロードは `disposition=attachment`。
 - Cookie・Referer を送らない。毎回、署名・期限・利用者・現在の権限と文書版を再確認する。
   404 は参照不可、409 は版の変化、410 は署名の期限切れ。新しい版へ黙って付け替えない。
+- 版の失効は、見られる文書の根拠の版を表示できないときの 409 で、応答に `error_code: "source_stale"` を付ける
+  （chunk が別の chunk set になった・再索引で chunk の行が消えた・古い cursor）。取り直しても変わらないので、
+  画面はエラーと再試行ではなく共有 UI の `SourceVersionStaleNotice` を出す（判定は `isSourceVersionStale`）。
+  見られない文書は chunk の有無に関わらず 404 にし、文書の存在を明かさない。
 
 JSON の `data` は共有 UI の `EvidenceReadingWindow` に対応する:
 
