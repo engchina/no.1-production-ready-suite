@@ -1,18 +1,23 @@
-"""PDF の text layer の配置から、分数と上付き・下付きの構造を本文に戻す（#4140）。
+"""PDF の text layer の配置から、分数と上付き・下付きの構造を本文に戻す（#4140・#4154）。
 
 解析エンジンは字を読み順に並べるので、上下に積んだ分子と分母は同じ行の字の並びになり、どちらが分子か
-読み取れなくなる。ここでは字の位置と PDF に描かれた横線だけを見て、次の場合に構造を文字列にする。
+読み取れなくなる。ここでは字の位置と PDF に描かれた線だけを見て、次の場合に構造を文字列にする。
 
 - 分数: 短い横線の真上と真下に、線の幅に収まり中央にそろった字がある（``a/(b-c)``）。
-- 上付き・下付き: 字が周りより小さく、基準線より上か下にある（``x^2``・``a_1``）。分数を含むか、解析
-  エンジンが数式と判定した塊だけで行う（本文の脚注の番号を指数にしないため）。
+- 線の無い分数: 上下の字の並びの真ん中の高さに同じ式の行があり、演算子で隣り合い、字の配置で 2 行の式・
+  行列・左そろえの並びではないと言えるものだけ（``_stacked_fractions``）。
+- 上付き・下付き（分数を含む塊と、解析エンジンが数式と判定した塊）: 字が周りより小さく、基準線より上か下に
+  ある（``x^2``・``a_1``）。
+- 上付き・下付き（それ以外の本文）: 脚注の番号と区別できるものだけ、元の本文のその箇所だけを直す
+  （``_body_script_edits``）。
 
-位置だけで決まる処理で、モデルを呼ばない。線の無い積み重ね（2 行の式・行列と区別できない）と text layer
-の無いスキャンは推測せず、元の本文のままにする。
+位置だけで決まる処理で、モデルを呼ばない。条件に当たらない積み重ねと text layer の無いスキャンは推測せず、
+元の本文のままにする。
 """
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections import Counter
 from collections.abc import Sequence
@@ -49,6 +54,38 @@ _MAX_MERGED_BLOCK_HEIGHT_RATIO = 1.5
 _MIN_TEXT_AGREEMENT = 0.85
 _ADDED_NOTATION = frozenset("()/^_{}")
 
+# 線の無い分数の判定（字の大きさに対する割合）。上下の中心の距離・同じ基準線の差・字の並びの中の隙間。
+_STACK_MIN_SEPARATION_RATIO = 1.0
+_STACK_MAX_SEPARATION_RATIO = 2.4
+_STACK_SAME_BASELINE_RATIO = 0.1
+_STACK_RUN_GAP_RATIO = 0.6
+# 上下の字の並びの真ん中の高さと、同じ行の字の中心の差の許容。
+_STACK_AXIS_RATIO = 0.2
+# 上下の字の大きさの差の許容（割合）と、同じ行の字がこの距離の中にあれば隣とみる距離。
+_STACK_SIZE_RATIO = 0.1
+_STACK_NEIGHBOR_RATIO = 1.0
+# 上下の並びの中央のずれの許容。幅の差で「左そろえではない」と言うには、幅の差の 1/4 より小さいずれを求める。
+_STACK_CENTERED_RATIO = 0.25
+_STACK_WIDTH_DIFFERENCE_RATIO = 0.5
+# 上下の外にこの距離（中心の差）で別の字があれば、3 行以上の並びか上付きを含むとみて戻さない。
+_STACK_CLEARANCE_RATIO = 1.25
+_STACK_OPERATORS = frozenset("=＝+＋-−－–×✕*＊∗·÷<>＜＞≤≥≦≧≠≈≒±∓")
+_STACK_CLOSING_BRACKETS = frozenset(")）]］}｝|｜")
+# 括弧の形の線（字の大きさに対する幅の上限と、上下の並びの高さに対する割合）。
+_BRACKET_MAX_WIDTH_RATIO = 1.0
+_BRACKET_MIN_HEIGHT_RATIO = 0.8
+
+# 本文の上付き・下付きの判定。上付きは語の短い記号と数字・括弧の後だけにする（語の後の脚注の番号を除く）。
+_SCRIPT_ADJACENT_RATIO = 0.3
+_EXPONENT_MAX_LETTERS = 2
+_EXPONENT_MAX_ALNUM = 3
+_SUBSCRIPT_MAX_BASE = 8
+_EXPONENT_PATTERN = re.compile(r"[+\-−－]?[0-9a-zA-Z]{1,4}")
+_SUBSCRIPT_PATTERN = re.compile(r"[+\-−－]?[0-9a-zA-Z]{1,6}")
+# 脚注の本文の行頭の印（``1 本文``・``(1) 本文``・``注1 本文``・``a) 本文``）。
+_FOOTNOTE_NUMBER_LINE = re.compile(r"\s*\S{0,2}?[\(（]?([0-9]{1,3})[\)）.．:：]?(?:\s|$)")
+_FOOTNOTE_LETTER_LINE = re.compile(r"\s*[\(（]?([a-z])[\)）.．:：](?:\s|$)")
+
 
 @dataclass(frozen=True)
 class PdfGlyph:
@@ -72,6 +109,21 @@ class PdfRule:
 
 
 @dataclass(frozen=True)
+class PdfMathPage:
+    """1 ページの字と線（すべてページの座標の PDF point）。
+
+    ``other_paths`` は細い線でない path の外接矩形（left, bottom, right, top。曲線で描いた括弧など）。
+    ``images`` は画像の外接矩形。
+    """
+
+    glyphs: list[PdfGlyph]
+    horizontal_rules: list[PdfRule]
+    vertical_rules: list[PdfRule]
+    other_paths: list[tuple[float, float, float, float]]
+    images: list[tuple[float, float, float, float]]
+
+
+@dataclass(frozen=True)
 class MathBlock:
     """解析エンジンの 1 つの本文の塊（``box`` は PDF point の left, bottom, right, top）。"""
 
@@ -90,6 +142,8 @@ class RestoredBlock:
     merged_keys: tuple[str, ...]
     fraction_count: int
     script_count: int
+    stacked_fraction_count: int = 0
+    line_count: int = 1
 
 
 @dataclass
@@ -105,6 +159,7 @@ class _Token:
     fractions: int = 0
     scripts: int = 0
     is_fraction: bool = False
+    is_stacked: bool = False
     space_before: bool = False
 
     @property
@@ -116,11 +171,22 @@ class _Token:
         return (self.left + self.right) / 2
 
 
+def has_glyph_in_box(box: tuple[float, float, float, float], glyphs: Sequence[PdfGlyph]) -> bool:
+    """領域の中に text layer の字があるか（無ければスキャンの領域）。"""
+    left, bottom, right, top = box
+    return any(
+        left <= (glyph.left + glyph.right) / 2 <= right and bottom <= glyph.baseline + _CENTER_RATIO * glyph.size <= top
+        for glyph in glyphs
+        if glyph.text.strip()
+    )
+
+
 def restore_math_text(
     blocks: Sequence[MathBlock],
     glyphs: Sequence[PdfGlyph],
     horizontal_rules: Sequence[PdfRule],
     vertical_rules: Sequence[PdfRule] = (),
+    other_paths: Sequence[tuple[float, float, float, float]] = (),
 ) -> list[RestoredBlock]:
     """1 ページの本文の塊のうち、構造が分かったものだけを戻して返す（無ければ空）。"""
     tokens = _block_tokens(blocks, glyphs)
@@ -139,6 +205,13 @@ def restore_math_text(
         tokens = [token for token in tokens if id(token) not in members]
         groups.append(set(composite.keys) | _main_line_keys(rule, composite, tokens, heights))
         tokens.append(composite)
+    for stack in _stacked_fractions(tokens, horizontal_rules, vertical_rules, other_paths):
+        axis_rule = PdfRule(stack.axis, stack.left, stack.right)
+        composite = _fraction_token(axis_rule, stack.upper, stack.lower, is_stacked=True)
+        members = {id(token) for token in (*stack.upper, *stack.lower)}
+        tokens = [token for token in tokens if id(token) not in members]
+        groups.append(set(composite.keys) | _main_line_keys(axis_rule, composite, tokens, heights))
+        tokens.append(composite)
 
     order = {block.key: index for index, block in enumerate(blocks)}
     merged = _merge_groups(groups)
@@ -151,14 +224,22 @@ def restore_math_text(
         text, fractions, scripts = _compose(members_of_group)
         original = " ".join(by_key[key].text for key in keys)
         if fractions and _agrees_with_original(original, text):
-            restored.append(RestoredBlock(keys[0], text, tuple(keys), fractions, scripts))
+            stacked = sum(token.is_stacked for token in members_of_group)
+            line_count = len(_lines(members_of_group))
+            restored.append(RestoredBlock(keys[0], text, tuple(keys), fractions, scripts, stacked, line_count))
+    footnote_markers = _footnote_markers(blocks, tokens)
     for block in blocks:
-        if block.key in grouped or not block.is_formula:
+        if block.key in grouped:
             continue
         members_of_block = [token for token in tokens if block.key in token.keys]
-        text, _, scripts = _compose(members_of_block)
-        if scripts and _agrees_with_original(block.text, text):
-            restored.append(RestoredBlock(block.key, text, (block.key,), 0, scripts))
+        if block.is_formula:
+            text, _, scripts = _compose(members_of_block)
+            if scripts and _agrees_with_original(block.text, text):
+                restored.append(RestoredBlock(block.key, text, (block.key,), 0, scripts))
+            continue
+        edited = _body_script_edits(block.text, members_of_block, footnote_markers)
+        if edited is not None:
+            restored.append(RestoredBlock(block.key, edited[0], (block.key,), 0, edited[1]))
     return sorted(restored, key=lambda item: order[item.key])
 
 
@@ -267,7 +348,7 @@ def _has_outside_neighbor(part: Sequence[_Token], rule: PdfRule, rules: Sequence
     return False
 
 
-def _fraction_token(rule: PdfRule, numerator: Sequence[_Token], denominator: Sequence[_Token]) -> _Token:
+def _fraction_token(rule: PdfRule, numerator: Sequence[_Token], denominator: Sequence[_Token], *, is_stacked: bool = False) -> _Token:
     numerator_text, numerator_fractions, numerator_scripts = _compose(numerator)
     denominator_text, denominator_fractions, denominator_scripts = _compose(denominator)
     members = (*numerator, *denominator)
@@ -284,6 +365,7 @@ def _fraction_token(rule: PdfRule, numerator: Sequence[_Token], denominator: Seq
         fractions=1 + numerator_fractions + denominator_fractions,
         scripts=numerator_scripts + denominator_scripts,
         is_fraction=True,
+        is_stacked=is_stacked,
     )
 
 
@@ -338,8 +420,8 @@ def _merge_groups(groups: Sequence[set[str]]) -> list[set[str]]:
     return merged
 
 
-def _compose(tokens: Sequence[_Token]) -> tuple[str, int, int]:
-    """字の並びを行に分け、左から順の本文にする（本文・分数の数・上付き下付きの数）。"""
+def _lines(tokens: Sequence[_Token]) -> list[list[_Token]]:
+    """字の並びを行に分ける（上の行から）。行の中の順は整えない。"""
     lines: list[list[_Token]] = []
     for token in sorted(tokens, key=lambda item: -item.center):
         for line in lines:
@@ -349,6 +431,12 @@ def _compose(tokens: Sequence[_Token]) -> tuple[str, int, int]:
                 break
         else:
             lines.append([token])
+    return lines
+
+
+def _compose(tokens: Sequence[_Token]) -> tuple[str, int, int]:
+    """字の並びを行に分け、左から順の本文にする（本文・分数の数・上付き下付きの数）。"""
+    lines = _lines(tokens)
     fractions = sum(token.fractions for token in tokens)
     scripts = sum(token.scripts for token in tokens)
     texts: list[str] = []
@@ -427,3 +515,284 @@ def _agrees_with_original(original: str, restored: str) -> bool:
         return False
     common = sum((left & right).values())
     return common / sum(left.values()) >= _MIN_TEXT_AGREEMENT and common / sum(right.values()) >= _MIN_TEXT_AGREEMENT
+
+
+@dataclass(frozen=True)
+class _Stack:
+    """線の無い分数の候補（上下の字の並びと、同じ行で左右に隣る字）。"""
+
+    upper: list[_Token]
+    lower: list[_Token]
+    axis: float
+    left: float
+    right: float
+    size: float
+    left_neighbor: _Token | None
+    right_neighbor: _Token | None
+    proves_centering: bool
+
+
+def _stacked_fractions(
+    tokens: Sequence[_Token],
+    horizontal_rules: Sequence[PdfRule],
+    vertical_rules: Sequence[PdfRule],
+    other_paths: Sequence[tuple[float, float, float, float]],
+) -> list[_Stack]:
+    """線の無い分数のうち、字の配置だけで分数と言えるもの。
+
+    次のすべてに当たるときだけ分数とする。当たらなければ 2 行の式・行列・縦の並びと区別できないので戻さない。
+
+    1. 上下の字の並びの真ん中の高さに同じ行の字があり、隣の字が演算子（式の中の項で、行の途中にある）。
+       2 行の式は同じ行の字が片方の並びの高さにあるので当たらない。
+    2. 上下の並びの近くに別の字・線・括弧の形の線が無い（3 行以上の並び・行列・上付きを含むものを除く）。
+    3. 中央にそろっていると言える: 幅が違うのに中央がそろう、または左右に同じ行の字が続く（分数の連なりを含む）。
+       幅が同じで右に続きが無い並びは左そろえの 2 行と区別できない。
+    """
+    runs = _baseline_runs(tokens)
+    candidates = [
+        stack
+        for upper in runs
+        for lower in runs
+        if upper is not lower
+        and (stack := _stack_candidate(upper, lower, tokens, horizontal_rules, vertical_rules, other_paths)) is not None
+    ]
+    return [stack for stack in candidates if _proves_fraction(stack, candidates)]
+
+
+def _baseline_runs(tokens: Sequence[_Token]) -> list[list[_Token]]:
+    """同じ基準線・同じ大きさで続く字の並び（分数に戻した字を除く）。"""
+    runs: list[list[_Token]] = []
+    for token in sorted((item for item in tokens if not item.is_fraction), key=lambda item: item.left):
+        for run in runs:
+            last = run[-1]
+            if (
+                abs(token.baseline - last.baseline) <= _STACK_SAME_BASELINE_RATIO * last.size
+                and abs(token.size - last.size) <= _STACK_SIZE_RATIO * last.size
+                and token.left - last.right <= _STACK_RUN_GAP_RATIO * last.size
+            ):
+                run.append(token)
+                break
+        else:
+            runs.append([token])
+    return runs
+
+
+def _stack_candidate(
+    upper: Sequence[_Token],
+    lower: Sequence[_Token],
+    tokens: Sequence[_Token],
+    horizontal_rules: Sequence[PdfRule],
+    vertical_rules: Sequence[PdfRule],
+    other_paths: Sequence[tuple[float, float, float, float]],
+) -> _Stack | None:
+    size = upper[0].size
+    if abs(lower[0].size - size) > _STACK_SIZE_RATIO * size:
+        return None
+    separation = upper[0].center - lower[0].center
+    if not _STACK_MIN_SEPARATION_RATIO * size <= separation <= _STACK_MAX_SEPARATION_RATIO * size:
+        return None
+    upper_left, upper_right = upper[0].left, upper[-1].right
+    lower_left, lower_right = lower[0].left, lower[-1].right
+    upper_width, lower_width = upper_right - upper_left, lower_right - lower_left
+    offset = abs((upper_left + upper_right) / 2 - (lower_left + lower_right) / 2)
+    if offset > _STACK_CENTERED_RATIO * size:
+        return None
+    left, right = min(upper_left, lower_left), max(upper_right, lower_right)
+    axis = (upper[0].center + lower[0].center) / 2
+    members = {id(token) for token in (*upper, *lower)}
+    if _has_stack_obstacle(
+        (left, lower[0].center, right, upper[0].center), size, tokens, members, horizontal_rules, vertical_rules, other_paths
+    ):
+        return None
+    left_neighbor, right_neighbor = _axis_neighbors(axis, left, right, size, tokens, members)
+    left_is_operator = left_neighbor is not None and left_neighbor.text in _STACK_OPERATORS
+    right_is_operator = right_neighbor is not None and right_neighbor.text in _STACK_OPERATORS
+    if not (left_is_operator or right_is_operator):
+        return None
+    if right_neighbor is not None and right_neighbor.text in _STACK_CLOSING_BRACKETS:
+        return None
+    width_difference = abs(upper_width - lower_width)
+    proves_centering = width_difference >= _STACK_WIDTH_DIFFERENCE_RATIO * size and offset < _STACK_CENTERED_RATIO * width_difference
+    return _Stack(list(upper), list(lower), axis, left, right, size, left_neighbor, right_neighbor, proves_centering)
+
+
+def _has_stack_obstacle(
+    box: tuple[float, float, float, float],
+    size: float,
+    tokens: Sequence[_Token],
+    members: set[int],
+    horizontal_rules: Sequence[PdfRule],
+    vertical_rules: Sequence[PdfRule],
+    other_paths: Sequence[tuple[float, float, float, float]],
+) -> bool:
+    left, lower_center, right, upper_center = box
+    clearance = _STACK_CLEARANCE_RATIO * size
+    for token in tokens:
+        if id(token) in members or not left <= token.middle <= right:
+            continue
+        if lower_center - clearance <= token.center <= upper_center + clearance:
+            return True
+    # 表の罫線など、上下の並びの間を通る線。
+    if any(lower_center <= rule.position <= upper_center and rule.start < right and rule.end > left for rule in horizontal_rules):
+        return True
+    # 縦の線・曲線の括弧（上下の並びと同じくらい高く、左右のすぐ外にある細いもの）。
+    reach = _STACK_NEIGHBOR_RATIO * size
+    height = upper_center - lower_center
+    edges = [(rule.position, rule.start, rule.position, rule.end) for rule in vertical_rules]
+    edges.extend((path[0], path[1], path[2], path[3]) for path in other_paths if path[2] - path[0] <= _BRACKET_MAX_WIDTH_RATIO * size)
+    return any(
+        top - bottom >= _BRACKET_MIN_HEIGHT_RATIO * height
+        and min(top, upper_center) - max(bottom, lower_center) >= _BRACKET_MIN_HEIGHT_RATIO * height
+        and (0 <= left - edge_right <= reach or 0 <= edge_left - right <= reach or (edge_left < right and edge_right > left))
+        for edge_left, bottom, edge_right, top in edges
+    )
+
+
+def _axis_neighbors(
+    axis: float, left: float, right: float, size: float, tokens: Sequence[_Token], members: set[int]
+) -> tuple[_Token | None, _Token | None]:
+    """上下の並びの真ん中の高さで、左右に一番近い字。"""
+    reach = _STACK_NEIGHBOR_RATIO * size
+    on_axis = [
+        token for token in tokens if id(token) not in members and abs(token.center - axis) <= _STACK_AXIS_RATIO * max(token.size, size)
+    ]
+    before = [token for token in on_axis if 0 <= left - token.right <= reach]
+    after = [token for token in on_axis if 0 <= token.left - right <= reach]
+    return (
+        max(before, key=lambda token: token.right, default=None),
+        min(after, key=lambda token: token.left, default=None),
+    )
+
+
+def _proves_fraction(stack: _Stack, candidates: Sequence[_Stack]) -> bool:
+    if stack.proves_centering or (stack.left_neighbor is not None and stack.right_neighbor is not None):
+        return True
+    return any(_joined_by_operator(stack, other) for other in candidates if other is not stack)
+
+
+def _joined_by_operator(stack: _Stack, other: _Stack) -> bool:
+    """同じ行で演算子 1 字を挟んで別の候補と隣り合う（``p/q + r/s`` の最後の項）。"""
+    if abs(stack.axis - other.axis) > _STACK_AXIS_RATIO * stack.size:
+        return False
+    reach = _STACK_NEIGHBOR_RATIO * stack.size
+    before, after = stack.left_neighbor, stack.right_neighbor
+    return (before is not None and before.text in _STACK_OPERATORS and 0 <= before.left - other.right <= reach) or (
+        after is not None and after.text in _STACK_OPERATORS and 0 <= other.left - after.right <= reach
+    )
+
+
+def _footnote_markers(blocks: Sequence[MathBlock], tokens: Sequence[_Token]) -> set[str]:
+    """このページで脚注の本文の行頭にある印。同じ印の上付きは脚注の番号とみる。"""
+    markers: set[str] = set()
+    for block in blocks:
+        normalized = unicodedata.normalize("NFKC", block.text)
+        match = _FOOTNOTE_NUMBER_LINE.match(normalized) or _FOOTNOTE_LETTER_LINE.match(normalized)
+        if match is not None:
+            markers.add(match.group(1))
+    for line in _lines([token for token in tokens if not token.is_fraction]):
+        ordered = sorted(line, key=lambda item: item.left)
+        base_size, base_line = _line_reference(ordered)
+        for token in ordered:
+            if _script_level(token, base_size, base_line) != 1:
+                break
+            markers.add(unicodedata.normalize("NFKC", token.text))
+    return markers
+
+
+def _body_script_edits(text: str, tokens: Sequence[_Token], footnote_markers: set[str]) -> tuple[str, int] | None:
+    """本文の中の上付き・下付きを、元の本文のその箇所だけ直す（直すものが無ければ None）。
+
+    段落の改行・空白は解析エンジンの本文のまま保つ。字の配置から求めた箇所の数と本文の中の同じ字の並びの数が
+    違うとき（同じ字の並びが普通の大きさでもある）は、どちらか決められないので直さない。
+    """
+    found = Counter[tuple[str, str, int]]()
+    for line in _lines([token for token in tokens if not token.is_fraction]):
+        found.update(_line_body_scripts(sorted(line, key=lambda item: item.left), footnote_markers))
+    if not found:
+        return None
+    spans: list[tuple[int, int, str]] = []
+    for (base, script, level), count in found.items():
+        matches = list(re.finditer(rf"{re.escape(base)}\s*{re.escape(script)}", text))
+        if len(matches) != count:
+            continue
+        mark = "^" if level > 0 else "_"
+        body = script if len(script) == 1 else f"{{{script}}}"
+        spans.extend((match.start(), match.end(), f"{base}{mark}{body}") for match in matches)
+    if not spans:
+        return None
+    spans.sort()
+    if any(previous[1] > current[0] for previous, current in zip(spans, spans[1:], strict=False)):
+        return None
+    pieces: list[str] = []
+    cursor = 0
+    for start, end, replacement in spans:
+        pieces.extend((text[cursor:start], replacement))
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces), len(spans)
+
+
+def _line_body_scripts(line: Sequence[_Token], footnote_markers: set[str]) -> list[tuple[str, str, int]]:
+    """1 行の中の、脚注の番号と区別できる上付き・下付き（基の字・上付きの字・上なら 1、下なら -1）。"""
+    base_size, base_line = _line_reference(line)
+    levels = [_script_level(token, base_size, base_line) for token in line]
+    found: list[tuple[str, str, int]] = []
+    index = 0
+    while index < len(line):
+        level = levels[index]
+        if not level:
+            index += 1
+            continue
+        end = index
+        while end + 1 < len(line) and levels[end + 1] == level:
+            end += 1
+        script = "".join(token.text for token in line[index : end + 1])
+        base = _script_base(line, levels, index)
+        if base and _is_body_script(base, script, level, footnote_markers):
+            found.append((base, script, level))
+        index = end + 1
+    return found
+
+
+def _script_base(line: Sequence[_Token], levels: Sequence[int], index: int) -> str:
+    """上付き・下付きの直前に隙間なく続く基の字（英数字か、閉じた括弧の中が英数字と演算子だけの項）。"""
+    chars: list[str] = []
+    depth = 0
+    for cursor in range(index - 1, -1, -1):
+        token, follower = line[cursor], line[cursor + 1]
+        if levels[cursor] or follower.space_before or follower.left - token.right > _SCRIPT_ADJACENT_RATIO * token.size:
+            break
+        char = unicodedata.normalize("NFKC", token.text)
+        if char == ")":
+            depth += 1
+        elif char == "(":
+            if not depth:
+                break
+            depth -= 1
+        elif depth:
+            if not (char.isascii() or _is_base_char(char) or char in _STACK_OPERATORS):
+                return ""
+        elif not _is_base_char(char):
+            break
+        chars.append(token.text)
+        if not depth and char == "(":
+            break
+    return "" if depth else "".join(reversed(chars))
+
+
+def _is_base_char(char: str) -> bool:
+    return len(char) == 1 and char.isalnum() and (char.isascii() or unicodedata.name(char, "").startswith("GREEK"))
+
+
+def _is_body_script(base: str, script: str, level: int, footnote_markers: set[str]) -> bool:
+    normalized_script = unicodedata.normalize("NFKC", script)
+    if level < 0:
+        return len(base) <= _SUBSCRIPT_MAX_BASE and _SUBSCRIPT_PATTERN.fullmatch(normalized_script) is not None
+    if normalized_script == "1" or normalized_script in footnote_markers:
+        return False
+    if _EXPONENT_PATTERN.fullmatch(normalized_script) is None:
+        return False
+    if base.endswith((")", "）")):
+        return True
+    normalized_base = unicodedata.normalize("NFKC", base)
+    return len(normalized_base) <= (_EXPONENT_MAX_LETTERS if normalized_base.isalpha() else _EXPONENT_MAX_ALNUM)

@@ -188,6 +188,7 @@ from app.rag.variant_keys import (
     extraction_recipe_subset,
 )
 from app.rag.vision import (
+    WARNING_FORMULA_REQUIRES_VISION,
     EnterpriseAiPictureDescriber,
     read_figures_with_vision,
     vision_failure,
@@ -218,7 +219,7 @@ _PARSE_PROGRESS_POLL_SECONDS = 3.0
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
 # 保存した抽出結果の版。解析の出力の内容が変わる修正で上げ、古い結果を再開・再処理で使い直さない
 # (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 2
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 3
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
@@ -2928,7 +2929,17 @@ class IngestionPipeline:
         使うため、同じ図の VLM を呼び直さない。``stop`` は先読みを途中で止める印。
         """
         if not self._settings.rag_vision_enabled:
-            return extraction
+            if not self._settings.rag_vision_formula_enabled:
+                return extraction
+            # 暗黙に Vision を有効にしない。選んだ設定が効いていないことを結果に残す。
+            return extraction.model_copy(
+                update={
+                    "warnings": [
+                        *extraction.warnings,
+                        WARNING_FORMULA_REQUIRES_VISION,
+                    ]
+                }
+            )
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
         from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
         from rag_engine.resources.runtime import bind_prompt_overrides
@@ -3005,6 +3016,7 @@ class IngestionPipeline:
                     ),
                     progress_callback=progress_callback,
                     work_dir=job.work_dir() if job is not None else None,
+                    read_formulas=self._settings.rag_vision_formula_enabled,
                 )
             except IngestionCancelledError:
                 raise
