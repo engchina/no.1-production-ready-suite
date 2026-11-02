@@ -123,6 +123,7 @@ from app.rag.variant_keys import (
     compute_document_recipe_extraction_id,
     compute_extraction_recipe_id,
     compute_graph_layer_id,
+    compute_isolated_extraction_id,
     compute_metadata_layer_id,
     compute_nav_layer_id,
     extraction_recipe_subset,
@@ -2384,18 +2385,28 @@ async def _materialize_experiment_candidate(
     )
     base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
     candidate_chunk_set_id = hashlib.sha256(
-        f"{base_chunk_set_id}:{recipe_id}:{job.recipe_revision}:{job.id}".encode()
+        # 試行も材料にする。切替の後の再投入が active の chunk_set を置き換えないように（#4115）。
+        f"{base_chunk_set_id}:{recipe_id}:{job.recipe_revision}:{job.id}:{job.attempt_count}".encode()
     ).hexdigest()
     await _raise_if_job_cancelled(cancel_checker)
     await oracle.update_document_recipe_status(
         recipe_id=recipe_id,
         status=_PHASE_TO_RUNNING_STATUS[job.phase],
     )
+    if job.phase != IngestionJobPhase.INDEX:
+        # 構築の前にレシピへ結び付ける。途中で失敗した候補も、次の切替の掃除で消える（#4115）。
+        await oracle.upsert_chunk_set(
+            chunk_set_id=candidate_chunk_set_id,
+            document_id=job.document_id,
+            recipe_id=recipe_id,
+            recipe_subset=_processing_recipe_snapshot(candidate_config, effective_candidate_config),
+        )
     pipeline = IngestionPipeline(
         oracle=oracle,
         settings=candidate_settings,
         recipe_id=recipe_id,
         recipe_revision=job.recipe_revision,
+        build_id=f"{job.id}:{job.attempt_count}",
     )
     extraction_recipe_id = compute_extraction_recipe_id(detail.content_sha256, candidate_settings)
     if job.phase in {
@@ -2617,8 +2628,6 @@ async def _materialize_experiment_candidate(
         extraction_recipe_id=extraction_recipe_id,
         materialized_revision=job.recipe_revision,
     )
-    # 文書一覧の legacy 集約状態。少なくとも1レシピが検索可能なら INDEXED とする。
-    await oracle.update_document_status(job.document_id, FileStatus.INDEXED)
     # INDEX まで到達した経路は自動進行の追加投入不要(CHUNK→INDEX はここで完結)。
     # 成功の監査・metric はここでは記録せず、呼び出し側が job を SUCCEEDED にできた後に記録する。
     # この後の status の更新の失敗や SUCCEEDED を書く直前の取り消しで、成功しなかった job の
@@ -3304,6 +3313,7 @@ async def _apply_recipe_review_text_edits(
     if not detail.content_sha256:
         raise HTTPException(status_code=409, detail="文書のソースハッシュが未確定です。")
     content_sha256 = detail.content_sha256
+    served_extractions = await _served_extraction_ids(oracle, document_id)
 
     def build(
         recipe: Mapping[str, object], artifact: Mapping[str, object]
@@ -3325,12 +3335,21 @@ async def _apply_recipe_review_text_edits(
                 update={"rag_preprocess_profile": recipe_subset["rag_preprocess_profile"]}
             )
         base_extraction_recipe_id = compute_extraction_recipe_id(content_sha256, recipe_settings)
+        extraction_recipe_id = compute_document_recipe_extraction_id(
+            base_extraction_recipe_id,
+            recipe_id,
+            int(str(recipe.get("config_revision") or 1)),
+        )
+        if extraction_recipe_id in served_extractions:
+            # 検索に出している版の抽出は書き換えない（#4115）。確認中の候補の抽出を続けて使う。
+            current = str(recipe.get("active_extraction_recipe_id") or "")
+            extraction_recipe_id = (
+                current
+                if current and current not in served_extractions
+                else compute_isolated_extraction_id(extraction_recipe_id, uuid4().hex)
+            )
         return ReviewedExtractionWrite(
-            extraction_recipe_id=compute_document_recipe_extraction_id(
-                base_extraction_recipe_id,
-                recipe_id,
-                int(str(recipe.get("config_revision") or 1)),
-            ),
+            extraction_recipe_id=extraction_recipe_id,
             source_sha256=content_sha256,
             extraction=extraction.to_document_payload(),
             recipe_subset=recipe_subset,
@@ -4618,7 +4637,11 @@ async def _enqueue_ingestion_job_for_document(
         return await _enqueue_index_phase_job_for_document(document_id, force=force)
     # 既定レシピの解析エンジン(既定は Docling)で扱えない形式は、出力を初期化する前に止める(#286)。
     await _raise_if_parser_source_blocked(recipe_settings, source_profile, phase)
-    if detail.status == FileStatus.INDEXED and not force:
+    if (
+        detail.status == FileStatus.INDEXED
+        and not force
+        and not await _default_recipe_failed(oracle, document_id)
+    ):
         return await _create_ingestion_job_record(
             oracle=oracle,
             document_id=document_id,
@@ -4635,7 +4658,11 @@ async def _enqueue_ingestion_job_for_document(
             status_code=409,
             detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
         )
-    if phase == IngestionJobPhase.PREPROCESS:
+    if await _has_served_output(oracle, document_id):
+        # 検索に出している版は切替まで残す。解析はやり直すので区間の checkpoint だけ消す（#4115）。
+        recipe = await oracle.ensure_default_document_recipe(document_id)
+        await oracle.delete_recipe_segment_checkpoints(document_id, str(recipe["recipe_id"]))
+    elif phase == IngestionJobPhase.PREPROCESS:
         await _reset_document_outputs_for_extract(
             oracle,
             document_id,
@@ -4653,6 +4680,27 @@ async def _enqueue_ingestion_job_for_document(
     )
     _dispatch_ingestion_job(job.id, force=force)
     return job
+
+
+async def _has_served_output(oracle: OracleClient, document_id: str) -> bool:
+    """文書に検索に出している版があるか（再取込の開始時に旧版を消さない判定。#4115）。"""
+    check = getattr(oracle, "document_has_served_output", None)
+    return bool(await check(document_id)) if callable(check) else False
+
+
+async def _served_extraction_ids(oracle: OracleClient, document_id: str) -> set[str]:
+    """検索に出している版が読む抽出の ID（上書きしない。#4115）。"""
+    read = getattr(oracle, "served_extraction_ids", None)
+    return set(await read(document_id)) if callable(read) else set()
+
+
+async def _default_recipe_failed(oracle: OracleClient, document_id: str) -> bool:
+    """既定レシピが失敗したか。旧版で答えながら失敗したレシピは再実行できるようにする（#4115）。"""
+    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
+    if not callable(ensure_recipe):
+        return False
+    recipe = await ensure_recipe(document_id)
+    return str(recipe.get("status") or "") == FileStatus.ERROR.value
 
 
 async def _raise_if_default_recipe_job_active(oracle: OracleClient, document_id: str) -> None:
@@ -4695,7 +4743,11 @@ async def _enqueue_index_phase_job_for_document(
             status_code=409,
             detail="Chunk 確認済みの文書のみ索引できます。",
         )
-    if detail.status == FileStatus.INDEXED and not force:
+    if (
+        detail.status == FileStatus.INDEXED
+        and not force
+        and not await _default_recipe_failed(oracle, document_id)
+    ):
         source_profile = _source_profile_for_detail(detail)
         return await _create_ingestion_job_record(
             oracle=oracle,
@@ -4706,7 +4758,7 @@ async def _enqueue_index_phase_job_for_document(
             skip_reason="already_indexed",
             phase=IngestionJobPhase.INDEX,
         )
-    if force:
+    if force and not await _has_served_output(oracle, document_id):
         await oracle.reset_document_index_outputs(document_id, status=FileStatus.CHUNKED)
     source_profile = _source_profile_for_detail(detail)
     job = await _create_ingestion_job_record(
@@ -4737,7 +4789,9 @@ async def _enqueue_chunk_phase_job_for_document(
             status_code=409,
             detail="抽出確認済みの文書のみ Chunk 作成できます。",
         )
-    if force or detail.status != FileStatus.REVIEW:
+    if (force or detail.status != FileStatus.REVIEW) and not await _has_served_output(
+        oracle, document_id
+    ):
         await oracle.reset_document_chunk_outputs(document_id, status=FileStatus.REVIEW)
     source_profile = _source_profile_for_detail(detail)
     job = await _create_ingestion_job_record(

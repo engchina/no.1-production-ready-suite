@@ -166,6 +166,11 @@ ORACLE_TEXT_STOP_WORDS = (
     "んで",
 )
 SEARCHABLE_FILE_STATUSES = {FileStatus.INDEXED}
+# 検索に出している chunk_set（``cs``）。再取込で作っている途中の候補は含めない（#4115）。
+# レシピの無い旧データだけ is_serving で見る。
+_SERVED_CHUNK_SET_SQL = (
+    "((cs.is_active = 1 AND cs.status = 'INDEXED') OR (cs.recipe_id IS NULL AND cs.is_serving = 1))"
+)
 type MetadataValue = JsonValue
 type DbCallRunner = Callable[[Callable[[], Any]], Awaitable[Any]]
 T = TypeVar("T")
@@ -2647,7 +2652,7 @@ class OracleClient:
     ) -> list[dict[str, object]]:
         """評価の条件（#59）に残す、検索に出る chunk_set と、その内容の版を返す（読み取りだけ）。
 
-        利用者の範囲（tenant・文書・KB）の中の配信中（is_serving）の chunk_set ごとに、レシピの版・
+        利用者の範囲（tenant・文書・KB）の中の検索に出している chunk_set ごとに、レシピの版・
         抽出の元の hash と更新時刻・chunk と vector の件数・更新時刻を返す。``knowledge_base_ids``
         を渡すとその KB の文書だけ（空なら範囲の全部）。削除・権限の剥奪・active の切替・抽出の
         更新で行が変わるため、評価の前後で比べて実行中の更新を検出できる。
@@ -2672,7 +2677,8 @@ class OracleClient:
                 r.config_revision, r.materialized_revision,
                 e.source_sha256, e.updated_at AS extraction_updated_at
             FROM rag_documents d
-            JOIN rag_chunk_sets cs ON cs.document_id = d.document_id AND cs.is_serving = 1
+            JOIN rag_chunk_sets cs ON cs.document_id = d.document_id
+             AND {_SERVED_CHUNK_SET_SQL}
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
             LEFT JOIN rag_document_extractions e
               ON e.document_id = cs.document_id AND e.extraction_recipe_id = cs.extraction_recipe_id
@@ -3086,7 +3092,7 @@ class OracleClient:
             locked_recipe = _fetch_one(
                 connection,
                 """
-                SELECT recipe_id FROM rag_document_recipes
+                SELECT recipe_id, document_id FROM rag_document_recipes
                 WHERE recipe_id = :recipe_id
                 FOR UPDATE
                 """,
@@ -3094,6 +3100,7 @@ class OracleClient:
             )
             if locked_recipe is None:
                 raise KeyError("レシピが見つかりません。")
+            document_id = str(locked_recipe["document_id"])
             selected = _fetch_one(
                 connection,
                 """
@@ -3148,10 +3155,21 @@ class OracleClient:
                     "materialized_revision": materialized_revision,
                 },
             )
+            # 文書の一覧の集約状態も同じ transaction で切り替える（少なくとも 1 レシピが検索可能なら
+            # INDEXED。#4115）。
+            _execute(
+                connection,
+                """
+                UPDATE rag_documents
+                SET status = 'INDEXED', error_message = NULL, indexed_at = SYSTIMESTAMP
+                WHERE document_id = :document_id
+                """,
+                {"document_id": document_id},
+            )
             stale_sets = _fetch_all(
                 connection,
                 """
-                SELECT chunk_set_id FROM rag_chunk_sets
+                SELECT chunk_set_id, extraction_recipe_id FROM rag_chunk_sets
                 WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
@@ -3186,6 +3204,69 @@ class OracleClient:
                 WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+            # 旧版だけが使っていた抽出を消す。どの chunk_set・レシピからも参照されないものに限る。
+            stale_extractions = {
+                str(row["extraction_recipe_id"])
+                for row in stale_sets
+                if row.get("extraction_recipe_id")
+            }
+            for stale_extraction in sorted(stale_extractions):
+                _execute(
+                    connection,
+                    """
+                    DELETE FROM rag_document_extractions e
+                    WHERE e.document_id = :document_id
+                      AND e.extraction_recipe_id = :extraction_recipe_id
+                      AND NOT EXISTS (
+                          SELECT 1 FROM rag_chunk_sets cs
+                          WHERE cs.extraction_recipe_id = e.extraction_recipe_id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM rag_document_recipes r
+                          WHERE r.active_extraction_recipe_id = e.extraction_recipe_id
+                      )
+                    """,
+                    {"document_id": document_id, "extraction_recipe_id": stale_extraction},
+                )
+
+        await self._run_transaction(operation)
+
+    async def document_has_served_output(self, document_id: str) -> bool:
+        """検索に出している版（active かつ索引済みの chunk_set）が文書にあるか（#4115）。"""
+        row = await self._fetch_one(
+            """
+            SELECT 1 AS served FROM rag_chunk_sets
+            WHERE document_id = :document_id AND is_active = 1 AND status = 'INDEXED'
+            FETCH FIRST 1 ROWS ONLY
+            """,
+            {"document_id": document_id},
+        )
+        return row is not None
+
+    async def served_extraction_ids(self, document_id: str) -> set[str]:
+        """検索に出している版が読む抽出の ID（再構築で上書きしない。#4115）。"""
+        rows = await self._fetch_all(
+            """
+            SELECT DISTINCT extraction_recipe_id FROM rag_chunk_sets
+            WHERE document_id = :document_id AND is_active = 1 AND status = 'INDEXED'
+              AND extraction_recipe_id IS NOT NULL
+            """,
+            {"document_id": document_id},
+        )
+        return {str(row["extraction_recipe_id"]) for row in rows}
+
+    async def delete_recipe_segment_checkpoints(self, document_id: str, recipe_id: str) -> None:
+        """再取込で解析をやり直すよう、レシピの区間の checkpoint だけを消す（#4115）。"""
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_ingestion_segments
+                WHERE document_id = :document_id AND recipe_id = :recipe_id
+                """,
+                {"document_id": document_id, "recipe_id": recipe_id},
             )
 
         await self._run_transaction(operation)
@@ -4660,7 +4741,8 @@ class OracleClient:
             f"""
             SELECT c.chunk_id, c.document_id, c.search_text
             FROM rag_chunks c
-            JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id AND cs.is_serving = 1
+            JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+             AND {_SERVED_CHUNK_SET_SQL}
             WHERE c.document_id IN (
                 SELECT dkb.document_id
                 FROM rag_document_knowledge_bases dkb
@@ -8456,6 +8538,13 @@ class OracleClient:
             LEFT JOIN rag_chunks c
                 ON c.document_id = d.document_id
                AND d.status = 'INDEXED'
+               AND (
+                   c.chunk_set_id IS NULL
+                   OR c.chunk_set_id IN (
+                       SELECT cs.chunk_set_id FROM rag_chunk_sets cs
+                       WHERE {_SERVED_CHUNK_SET_SQL}
+                   )
+               )
             WHERE {where_sql}
             GROUP BY
                 kb.knowledge_base_id,
@@ -8477,6 +8566,7 @@ class OracleClient:
             {paging_sql}
             """,
                 where_sql=where_sql,
+                _SERVED_CHUNK_SET_SQL=_SERVED_CHUNK_SET_SQL,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 paging_sql=paging_sql,
                 name_order_sql=_oracle_natural_name_order_sql("kb.name"),
@@ -8542,6 +8632,13 @@ class OracleClient:
             LEFT JOIN rag_chunks c
                 ON c.document_id = d.document_id
                AND d.status = 'INDEXED'
+               AND (
+                   c.chunk_set_id IS NULL
+                   OR c.chunk_set_id IN (
+                       SELECT cs.chunk_set_id FROM rag_chunk_sets cs
+                       WHERE {_SERVED_CHUNK_SET_SQL}
+                   )
+               )
             WHERE kb.knowledge_base_id = :knowledge_base_id
               AND {knowledge_base_access_sql}
             GROUP BY
@@ -8556,6 +8653,7 @@ class OracleClient:
                 kb.updated_at,
                 kb.archived_at
             """.format(
+                _SERVED_CHUNK_SET_SQL=_SERVED_CHUNK_SET_SQL,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
             ),

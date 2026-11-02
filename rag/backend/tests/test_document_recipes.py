@@ -747,6 +747,9 @@ class _FakeRecipeJobOracle:
         self.jobs: dict[str, IngestionJob] = {}
         self.config_revision = 1
 
+    async def upsert_chunk_set(self, *, chunk_set_id: str = "", **kwargs: object) -> None:
+        _ = chunk_set_id, kwargs
+
     async def pin_ingestion_job_language_pack(self, job_id: str, release_id: str) -> str:
         item = self.jobs[job_id]
         pinned = item.language_pack_release_id or release_id
@@ -1223,7 +1226,7 @@ class _CompletingRecipeOracle(_FakeRecipeJobOracle):
         _ = chunk_set_id
         return 3
 
-    async def upsert_chunk_set(self, *, chunk_set_id: str, **kwargs: object) -> None:
+    async def upsert_chunk_set(self, *, chunk_set_id: str = "", **kwargs: object) -> None:
         self.chunk_set_rows[chunk_set_id] = {"chunk_set_id": chunk_set_id, **kwargs}
 
     async def mark_chunk_set_chunked(self, **kwargs: object) -> None:
@@ -1413,7 +1416,6 @@ async def test_recipe_job_records_success_outcome_once_after_succeeded(
     assert _RecordingRecipePipeline.calls == expected_calls
     assert _RecordingRecipePipeline.events == [
         "activate",
-        "document_indexed",
         "job_succeeded",
         "success",
     ]
@@ -1437,7 +1439,6 @@ async def test_recipe_job_rebuilds_the_section_map_after_it_succeeds(
 
     assert _RecordingRecipePipeline.events == [
         "activate",
-        "document_indexed",
         "job_succeeded",
         "section_map:ingestion",
         "success",
@@ -1461,7 +1462,7 @@ async def test_materialize_returns_success_outcome_without_recording(
 
     assert result.next_phase is None
     assert isinstance(result.success_outcome, _RecordingOutcome)
-    assert _RecordingRecipePipeline.events == ["activate", "document_indexed"]
+    assert _RecordingRecipePipeline.events == ["activate"]
 
 
 @pytest.mark.parametrize(
@@ -1469,7 +1470,6 @@ async def test_materialize_returns_success_outcome_without_recording(
     [
         ("cancelled_before_activation", IngestionJobStatus.CANCELLED),
         ("activation_failed", IngestionJobStatus.FAILED),
-        ("document_status_update_failed", IngestionJobStatus.FAILED),
         ("cancelled_before_succeeded", IngestionJobStatus.CANCELLED),
     ],
 )
@@ -1480,13 +1480,13 @@ async def test_recipe_job_leaves_no_success_outcome_when_not_succeeded(
 ) -> None:
     """SUCCEEDED にならなかったレシピの job は、成功の監査・metric を記録しない(#504 / #514)。
 
-    切り替えの前の取り消し・切り替えの失敗に加え、切り替えの後の文書の status の更新の失敗と、
-    SUCCEEDED を書く直前の取り消しでも、成功を残さない。
+    切り替えの前の取り消し・切り替えの失敗に加え、SUCCEEDED を書く直前の取り消しでも、成功を
+    残さない。文書の status の更新は切り替えの transaction に入っている(#4115)。
     """
     fake = _EventRecipeOracle()
     job_id = _prepare_recipe_run(monkeypatch, fake, IngestionJobPhase.INDEX)
     original_mark_indexed = fake.mark_chunk_set_indexed
-    original_update_status = fake.update_document_status
+    original_activate = fake.activate_recipe_chunk_set
 
     async def mark_indexed_then_cancel(**kwargs: object) -> None:
         # 索引を終えた後(切り替えの直前の取り消しの確認より前)に取り消す。
@@ -1497,23 +1497,17 @@ async def test_recipe_job_leaves_no_success_outcome_when_not_succeeded(
         _ = kwargs
         raise RuntimeError("activate failed")
 
-    async def failing_update_status(*args: object, **kwargs: object) -> None:
-        _ = args, kwargs
-        raise RuntimeError("update document status failed")
-
-    async def update_status_then_cancel(*args: object, **kwargs: object) -> None:
+    async def activate_then_cancel(**kwargs: Any) -> None:
         # 工程をすべて終えた後、SUCCEEDED を書く直前に取り消す。
-        await original_update_status(*args, **kwargs)
+        await original_activate(**kwargs)
         _cancel_recipe_job(fake, job_id)
 
     if failure == "cancelled_before_activation":
         monkeypatch.setattr(fake, "mark_chunk_set_indexed", mark_indexed_then_cancel)
     elif failure == "activation_failed":
         monkeypatch.setattr(fake, "activate_recipe_chunk_set", failing_activate)
-    elif failure == "document_status_update_failed":
-        monkeypatch.setattr(fake, "update_document_status", failing_update_status)
     else:
-        monkeypatch.setattr(fake, "update_document_status", update_status_then_cancel)
+        monkeypatch.setattr(fake, "activate_recipe_chunk_set", activate_then_cancel)
 
     await documents_route._run_ingestion_job(job_id)
 
@@ -1543,7 +1537,6 @@ async def test_recipe_job_stays_succeeded_when_success_outcome_recording_fails(
     assert fake.jobs[job_id].status == IngestionJobStatus.SUCCEEDED
     assert _RecordingRecipePipeline.events == [
         "activate",
-        "document_indexed",
         "job_succeeded",
         "success_failed",
     ]
