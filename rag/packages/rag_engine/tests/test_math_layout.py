@@ -207,8 +207,8 @@ def _body(*glyphs: list[PdfGlyph], text: str, extra: tuple[MathBlock, ...] = ())
     return [item.text for item in restore_math_text([_block(text, is_formula=False), *extra], flat, [])]
 
 
-def test_body_exponents_and_subscripts_change_only_those_places() -> None:
-    """数式と判定されていない本文でも、基が短い記号の上付きと下付きはその箇所だけ直す。"""
+def test_body_exponents_change_only_those_places_and_subscripts_stay() -> None:
+    """数式と判定されていない本文でも、基が短い記号の上付きはその箇所だけ直す。下付きは直さない。"""
     glyphs = [
         *_run("E=mc", 100.0, 500.0),
         *_run("2", 124.0, 504.0, size=6.0),
@@ -217,7 +217,7 @@ def test_body_exponents_and_subscripts_change_only_those_places() -> None:
         *_run("O", 150.0, 500.0),
     ]
 
-    assert _body(glyphs, text="E=mc 2 と H2O  の   本文") == ["E=mc^2 と H_2O  の   本文"]
+    assert _body(glyphs, text="E=mc 2 と H2O  の   本文") == ["E=mc^2 と H2O  の   本文"]
 
 
 def test_body_negative_exponent_after_a_number_is_restored() -> None:
@@ -226,7 +226,7 @@ def test_body_negative_exponent_after_a_number_is_restored() -> None:
     assert _body(glyphs, text="誤差 10 -3 以下") == ["誤差 10^{-3} 以下"]
 
 
-def test_body_scripts_after_a_group_and_in_a_chemical_formula() -> None:
+def test_body_exponent_after_a_group_is_restored_and_a_subscript_is_not() -> None:
     group = [*_run("(a+b)", 100.0, 500.0), *_run("2", 130.0, 504.0, size=6.0)]
     assert _body(group, text="(a+b) 2 です") == ["(a+b)^2 です"]
 
@@ -236,7 +236,7 @@ def test_body_scripts_after_a_group_and_in_a_chemical_formula() -> None:
         *_run("O", 116.0, 500.0),
         *_run("3", 122.0, 498.0, size=6.0),
     ]
-    assert _body(chemical, text="Fe2O3 です") == ["Fe_2O_3 です"]
+    assert _body(chemical, text="Fe2O3 です") == []
 
 
 @pytest.mark.parametrize(

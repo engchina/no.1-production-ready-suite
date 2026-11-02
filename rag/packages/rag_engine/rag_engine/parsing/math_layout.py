@@ -8,8 +8,8 @@
   行列・左そろえの並びではないと言えるものだけ（``_stacked_fractions``）。
 - 上付き・下付き（分数を含む塊と、解析エンジンが数式と判定した塊）: 字が周りより小さく、基準線より上か下に
   ある（``x^2``・``a_1``）。
-- 上付き・下付き（それ以外の本文）: 脚注の番号と区別できるものだけ、元の本文のその箇所だけを直す
-  （``_body_script_edits``）。
+- 上付き（それ以外の本文）: 脚注の番号と区別できるものだけ、元の本文のその箇所だけを直す
+  （``_body_script_edits``）。下付きは直さない。
 
 位置だけで決まる処理で、モデルを呼ばない。条件に当たらない積み重ねと text layer の無いスキャンは推測せず、
 元の本文のままにする。
@@ -75,13 +75,11 @@ _STACK_CLOSING_BRACKETS = frozenset(")）]］}｝|｜")
 _BRACKET_MAX_WIDTH_RATIO = 1.0
 _BRACKET_MIN_HEIGHT_RATIO = 0.8
 
-# 本文の上付き・下付きの判定。上付きは語の短い記号と数字・括弧の後だけにする（語の後の脚注の番号を除く）。
+# 本文の上付きの判定。語の短い記号と数字・括弧の後だけにする（語の後の脚注の番号を除く）。
 _SCRIPT_ADJACENT_RATIO = 0.3
 _EXPONENT_MAX_LETTERS = 2
 _EXPONENT_MAX_ALNUM = 3
-_SUBSCRIPT_MAX_BASE = 8
 _EXPONENT_PATTERN = re.compile(r"[+\-−－]?[0-9a-zA-Z]{1,4}")
-_SUBSCRIPT_PATTERN = re.compile(r"[+\-−－]?[0-9a-zA-Z]{1,6}")
 # 脚注の本文の行頭の印（``1 本文``・``(1) 本文``・``注1 本文``・``a) 本文``）。
 _FOOTNOTE_NUMBER_LINE = re.compile(r"\s*\S{0,2}?[\(（]?([0-9]{1,3})[\)）.．:：]?(?:\s|$)")
 _FOOTNOTE_LETTER_LINE = re.compile(r"\s*[\(（]?([a-z])[\)）.．:：](?:\s|$)")
@@ -700,24 +698,23 @@ def _footnote_markers(blocks: Sequence[MathBlock], tokens: Sequence[_Token]) -> 
 
 
 def _body_script_edits(text: str, tokens: Sequence[_Token], footnote_markers: set[str]) -> tuple[str, int] | None:
-    """本文の中の上付き・下付きを、元の本文のその箇所だけ直す（直すものが無ければ None）。
+    """本文の中の上付きを、元の本文のその箇所だけ直す（直すものが無ければ None）。
 
     段落の改行・空白は解析エンジンの本文のまま保つ。字の配置から求めた箇所の数と本文の中の同じ字の並びの数が
     違うとき（同じ字の並びが普通の大きさでもある）は、どちらか決められないので直さない。
     """
-    found = Counter[tuple[str, str, int]]()
+    found = Counter[tuple[str, str]]()
     for line in _lines([token for token in tokens if not token.is_fraction]):
         found.update(_line_body_scripts(sorted(line, key=lambda item: item.left), footnote_markers))
     if not found:
         return None
     spans: list[tuple[int, int, str]] = []
-    for (base, script, level), count in found.items():
+    for (base, script), count in found.items():
         matches = list(re.finditer(rf"{re.escape(base)}\s*{re.escape(script)}", text))
         if len(matches) != count:
             continue
-        mark = "^" if level > 0 else "_"
         body = script if len(script) == 1 else f"{{{script}}}"
-        spans.extend((match.start(), match.end(), f"{base}{mark}{body}") for match in matches)
+        spans.extend((match.start(), match.end(), f"{base}^{body}") for match in matches)
     if not spans:
         return None
     spans.sort()
@@ -732,11 +729,11 @@ def _body_script_edits(text: str, tokens: Sequence[_Token], footnote_markers: se
     return "".join(pieces), len(spans)
 
 
-def _line_body_scripts(line: Sequence[_Token], footnote_markers: set[str]) -> list[tuple[str, str, int]]:
-    """1 行の中の、脚注の番号と区別できる上付き・下付き（基の字・上付きの字・上なら 1、下なら -1）。"""
+def _line_body_scripts(line: Sequence[_Token], footnote_markers: set[str]) -> list[tuple[str, str]]:
+    """1 行の中の、脚注の番号と区別できる上付き（基の字・上付きの字）。"""
     base_size, base_line = _line_reference(line)
     levels = [_script_level(token, base_size, base_line) for token in line]
-    found: list[tuple[str, str, int]] = []
+    found: list[tuple[str, str]] = []
     index = 0
     while index < len(line):
         level = levels[index]
@@ -748,8 +745,8 @@ def _line_body_scripts(line: Sequence[_Token], footnote_markers: set[str]) -> li
             end += 1
         script = "".join(token.text for token in line[index : end + 1])
         base = _script_base(line, levels, index)
-        if base and _is_body_script(base, script, level, footnote_markers):
-            found.append((base, script, level))
+        if level > 0 and base and _is_body_exponent(base, script, footnote_markers):
+            found.append((base, script))
         index = end + 1
     return found
 
@@ -784,10 +781,8 @@ def _is_base_char(char: str) -> bool:
     return len(char) == 1 and char.isalnum() and (char.isascii() or unicodedata.name(char, "").startswith("GREEK"))
 
 
-def _is_body_script(base: str, script: str, level: int, footnote_markers: set[str]) -> bool:
+def _is_body_exponent(base: str, script: str, footnote_markers: set[str]) -> bool:
     normalized_script = unicodedata.normalize("NFKC", script)
-    if level < 0:
-        return len(base) <= _SUBSCRIPT_MAX_BASE and _SUBSCRIPT_PATTERN.fullmatch(normalized_script) is not None
     if normalized_script == "1" or normalized_script in footnote_markers:
         return False
     if _EXPONENT_PATTERN.fullmatch(normalized_script) is None:

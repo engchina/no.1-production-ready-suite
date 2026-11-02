@@ -188,7 +188,6 @@ from app.rag.variant_keys import (
     extraction_recipe_subset,
 )
 from app.rag.vision import (
-    WARNING_FORMULA_REQUIRES_VISION,
     EnterpriseAiPictureDescriber,
     read_figures_with_vision,
     vision_failure,
@@ -2929,17 +2928,7 @@ class IngestionPipeline:
         使うため、同じ図の VLM を呼び直さない。``stop`` は先読みを途中で止める印。
         """
         if not self._settings.rag_vision_enabled:
-            if not self._settings.rag_vision_formula_enabled:
-                return extraction
-            # 暗黙に Vision を有効にしない。選んだ設定が効いていないことを結果に残す。
-            return extraction.model_copy(
-                update={
-                    "warnings": [
-                        *extraction.warnings,
-                        WARNING_FORMULA_REQUIRES_VISION,
-                    ]
-                }
-            )
+            return extraction
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
         from rag_engine.parsing.vision_prompt_rules import refine_image_retrieval_prompt
         from rag_engine.resources.runtime import bind_prompt_overrides
@@ -3016,7 +3005,6 @@ class IngestionPipeline:
                     ),
                     progress_callback=progress_callback,
                     work_dir=job.work_dir() if job is not None else None,
-                    read_formulas=self._settings.rag_vision_formula_enabled,
                 )
             except IngestionCancelledError:
                 raise
