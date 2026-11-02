@@ -499,9 +499,11 @@ test("明示参照の方向を分け、未表示の参照先を取得して位�
   await references.getByRole("tab", { name: "参照元", exact: true }).click();
   await expect.poll(() => directions.includes("incoming")).toBe(true);
   await references.getByRole("tab", { name: "参照先", exact: true }).click();
+  await references.screenshot({ path: testInfo.outputPath("reference-directions.png") });
   await references.getByRole("button", { name: "図で位置を確認" }).click();
   const destination = page.locator(`.react-flow__node[data-id="${target.id}"]`);
   await expect(destination).toBeVisible();
+  await expect(destination).toBeInViewport();
   await expect(destination).toHaveClass(/selected/);
   await expect(page.locator(".react-flow__edge-text")).toContainText("参照");
   await expectNoPageOverflow(page);
@@ -546,4 +548,28 @@ test("構造索引の現在状態と今回の結果を分け、版変更後に�
   await page.reload();
   await expect(row("synthetic-skip.txt").getByRole("cell").nth(1)).toHaveText("更新が必要");
   await expect(row("synthetic-skip.txt").getByRole("cell").nth(2)).toContainText("スキップ：");
+});
+
+test("参照一覧の取得失敗を再試行でき、次のページだけを読む", { tag: "@responsive" }, async ({ page }) => {
+  const source = { id: "a".repeat(64), name: "合成章 A", type: "section", confidence: 1 };
+  await mockKb(page, { status: "ok", nodes: [source], edges: [], truncated: false });
+  let attempts = 0;
+  await page.route("**/api/knowledge-bases/kb-1/graph/references**", (route) => {
+    attempts += 1;
+    if (attempts === 1) return route.fulfill({ status: 503, json: { error_messages: ["一時的に取得できません。"] } });
+    const offset = Number(new URL(route.request().url()).searchParams.get("offset"));
+    return route.fulfill({ json: ok({ items: [{ id: `ref-${offset}`, label: offset ? "後続の参照" : "先頭の参照", status: "not_found", source, target: null }], offset, has_more: offset === 0, direction: "outgoing" }) });
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const node = page.locator(`.react-flow__node[data-id="${source.id}"]`);
+  await node.focus(); await page.keyboard.press("Enter");
+  const panel = page.getByTestId("graph-references");
+  await expect(panel.getByRole("alert")).toContainText("一時的に取得できません。");
+  await panel.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(panel.getByText("先頭の参照", { exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "次へ", exact: true }).click();
+  await expect(panel.getByText("後続の参照", { exact: true })).toBeVisible();
+  await expect(panel.getByText("先頭の参照", { exact: true })).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });

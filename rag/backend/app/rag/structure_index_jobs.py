@@ -185,6 +185,7 @@ class StructureIndexJobs:
                 await asyncio.sleep(10)
                 await store.mutate(kb_id, current)
 
+        reference_catalog_cache: dict[Any, Any] = {}
         heartbeat_task = asyncio.create_task(heartbeat())
         try:
             while True:
@@ -233,6 +234,7 @@ class StructureIndexJobs:
                             expected_source=item["chunk_sets"],
                             expected_job_id=job_id,
                             build_chunk_sets=item.get("build_chunk_sets"),
+                            reference_catalog_cache=reference_catalog_cache,
                         )
                     finally:
                         reset_audit_request_context(token)

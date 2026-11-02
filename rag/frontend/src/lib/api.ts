@@ -1211,6 +1211,8 @@ export interface KnowledgeBaseGraphNode {
   name: string;
   type: string | null;
   confidence: number;
+  reference_id?: string;
+  document_name?: string;
 }
 
 export interface KnowledgeBaseGraphEdge {
@@ -3853,8 +3855,8 @@ export const api = {
   getStructureBuildJob: (id: string, offset = 0, limit = 25) => request<StructureBuildJob | null>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job?offset=${offset}&limit=${limit}`),
   startStructureBuild: (id: string, mode: StructureBuildMode) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }),
   stopStructureBuild: (id: string) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job/stop`, { method: "POST" }),
-  getKnowledgeBaseGraphReferences: (id: string, nodeId: string, direction: "outgoing" | "incoming", offset = 0) =>
-    request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}`),
+  getKnowledgeBaseGraphReferences: (id: string, nodeId: string, direction: "outgoing" | "incoming", offset = 0, referenceId?: string) =>
+    request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}${referenceId ? `&reference_id=${encodeURIComponent(referenceId)}` : ""}`),
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
     requestDegradable<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,

@@ -731,6 +731,17 @@ class ReferenceOracle:
             return True
         return chunk.document_id in self.knowledge_bases.get(knowledge_base_id, set())
 
+    async def retrieval_reference_versions(
+        self, filters: dict[str, str], document_id: str
+    ) -> list[str]:
+        return list(
+            {
+                str(row.metadata.get("chunk_set_id") or "")
+                for row in self.sections
+                if row.document_id == document_id
+            }
+        )
+
     async def retrieval_reference_documents(
         self, filters: dict[str, str], *, title: str, limit: int
     ) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -920,7 +931,10 @@ async def test_search_continues_when_reference_target_cannot_be_read() -> None:
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a"]
 
 
-async def test_search_resolves_other_document_reference_within_scope() -> None:
+@pytest.mark.parametrize("ambiguous_version", [False, True])
+async def test_search_resolves_other_document_reference_within_scope(
+    ambiguous_version: bool,
+) -> None:
     """他の文書への参照は、検索範囲の文書から文書名で探し、その文書の見出しで節を決める。"""
     target = ReferenceTarget("「権限」", "title", "権限", "経費精算マニュアル")
     anchor = _retrieved(
@@ -946,6 +960,8 @@ async def test_search_resolves_other_document_reference_within_scope() -> None:
             chunk_set_id="cs-8",
         )
     ]
+    if not ambiguous_version:
+        manual = manual[:2]
     oracle = ReferenceOracle([anchor], manual)
     oracle.documents = [
         ("doc-2", "経費精算マニュアル.pdf", ("第4章 権限",)),
@@ -958,20 +974,26 @@ async def test_search_resolves_other_document_reference_within_scope() -> None:
         retrieval_queries=["q"],
     )
 
-    assert [child.chunk_uid for child in result.child_chunks] == [
-        "doc-1:a",
-        "doc-2:cs-9:0",
-        "doc-2:cs-9:1",
-    ]
+    assert [child.chunk_uid for child in result.child_chunks] == (
+        ["doc-1:a"]
+        if ambiguous_version
+        else [
+            "doc-1:a",
+            "doc-2:cs-9:0",
+            "doc-2:cs-9:1",
+        ]
+    )
     assert oracle.document_calls == [
         {
             "filters": {"knowledge_base_id": "kb-1", "category_name": "経費"},
             "title": "経費精算マニュアル",
         }
     ]
-    assert oracle.section_calls == [
-        {"knowledge_base_id": "kb-1", "category_name": "経費", "document_id": "doc-2"}
-    ]
+    assert oracle.section_calls == (
+        []
+        if ambiguous_version
+        else [{"knowledge_base_id": "kb-1", "category_name": "経費", "document_id": "doc-2"}]
+    )
 
 
 async def test_search_matches_other_document_titles_in_one_read() -> None:

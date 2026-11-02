@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -100,7 +101,9 @@ class GraphReferenceStore:
             for (did, cs, name), paths in grouped.items()
         )
 
-    async def node(self, kb_id: str, node_id: str) -> dict[str, Any] | None:
+    async def node(
+        self, kb_id: str, node_id: str, reference_id: str | None = None
+    ) -> dict[str, Any] | None:
         """graph nodeを現行の権限・所属・成果物で確認する。"""
         from app.clients.oracle import (
             _oracle_access_predicate_sql,
@@ -118,7 +121,43 @@ class GraphReferenceStore:
             AND {_oracle_access_predicate_sql(alias="d")}""",
             _with_tenant_bind({"kb": kb_id, "node_id": node_id}),
         )
-        return dict(rows[0]) if rows else None
+        if rows and reference_id is None:
+            return dict(rows[0])
+        if reference_id is None:
+            return None
+        # 参照先の構造図が未構築でも、許可された実在の参照位置だけを読み込める。
+        records = await self.oracle._fetch_all(
+            f"""SELECT r.*,s.file_name AS source_name,t.file_name AS target_name,
+            ts.chunk_set_id AS active_target_set
+            FROM rag_graph_references r
+            JOIN rag_chunk_sets ss ON ss.chunk_set_id=r.source_chunk_set_id AND ss.is_active=1
+            JOIN rag_documents s ON s.document_id=r.source_document_id
+            JOIN rag_document_knowledge_bases sm ON sm.document_id=s.document_id
+                AND sm.knowledge_base_id=r.knowledge_base_id
+            LEFT JOIN rag_documents t ON t.document_id=r.target_document_id
+                AND {_oracle_access_predicate_sql(alias="t")}
+                AND EXISTS (SELECT 1 FROM rag_document_knowledge_bases tm
+                    WHERE tm.document_id=t.document_id AND tm.knowledge_base_id=r.knowledge_base_id)
+            LEFT JOIN rag_chunk_sets ts ON ts.document_id=t.document_id
+                AND ts.chunk_set_id=r.target_chunk_set_id AND ts.is_active=1
+            WHERE r.knowledge_base_id=:kb AND r.reference_id=:reference_id
+            AND {_oracle_access_predicate_sql(alias="s")}""",
+            _with_tenant_bind({"kb": kb_id, "reference_id": reference_id}),
+        )
+        if not records:
+            return None
+        view = self._view(kb_id, records[0])
+        for endpoint in (view["source"], view["target"]):
+            if endpoint and endpoint["id"] == node_id:
+                return {
+                    "entity_id": node_id,
+                    "canonical_name": endpoint["name"],
+                    "entity_type": endpoint["type"],
+                    "reference_location": True,
+                    "document_id": endpoint["document_id"],
+                    "chunk_set_id": endpoint["chunk_set_id"],
+                }
+        return None
 
     async def page(
         self,
@@ -128,19 +167,35 @@ class GraphReferenceStore:
         direction: str,
         offset: int,
         limit: int,
+        reference_id: str | None = None,
     ) -> dict[str, Any]:
         """参照元・先を独立にページングする。未許可の対象名・識別子を返さない。"""
         from app.clients.oracle import _oracle_access_predicate_sql, _with_tenant_bind
 
-        node = await self.node(kb_id, node_id)
+        node = await self.node(kb_id, node_id, reference_id)
         if node is None:
             raise KeyError("対象が見つかりません。")
         path = None if node["entity_type"] == "document" else node["canonical_name"]
         side = "target" if direction == "incoming" else "source"
-        where = f"""r.{side}_document_id=:node_doc AND r.{side}_chunk_set_id=:node_set
-            AND (:node_path IS NULL OR r.{side}_section_path=:node_path)"""
+        where = f"r.{side}_document_id=:node_doc AND r.{side}_chunk_set_id=:node_set"
+        if path is not None:
+            if node.get("reference_location"):
+                where += f" AND r.{side}_section_path=:node_path"
+            elif direction == "outgoing":
+                # 表示名は切り詰められていても、紐づく原文Chunkで参照元を特定する。
+                where += """ AND EXISTS (SELECT 1 FROM rag_graph_entity_chunks nc
+                    WHERE nc.entity_id=:node_id AND nc.chunk_id=r.source_chunk_id)"""
+            else:
+                # 旧図のノードは表示名をキーにしていたため、表示上の同じ集合を返す。
+                where += """ AND SUBSTR(TRIM(REGEXP_REPLACE(r.target_section_path,
+                    '[[:space:]]+', ' ')),1,512)=:node_path"""
         if direction == "incoming":
             where += " AND t.document_id IS NOT NULL AND ts.chunk_set_id IS NOT NULL"
+        location_binds: dict[str, Any] = {}
+        if ":node_path" in where:
+            location_binds["node_path"] = path
+        if ":node_id" in where:
+            location_binds["node_id"] = node_id
         rows = await self.oracle._fetch_all(
             f"""SELECT r.*,s.file_name AS source_name,t.file_name AS target_name,
             ts.chunk_set_id AS active_target_set
@@ -164,7 +219,7 @@ class GraphReferenceStore:
                     "kb": kb_id,
                     "node_doc": node["document_id"],
                     "node_set": node["chunk_set_id"],
-                    "node_path": path,
+                    **location_binds,
                     "offset": offset,
                     "take": limit + 1,
                 }
@@ -181,7 +236,7 @@ class GraphReferenceStore:
     def _view(kb_id: str, row: Any) -> dict[str, Any]:
         from rag_parser_core.language import current_pack
 
-        from app.rag.graph_index import _clean_label, _graph_id
+        from app.rag.graph_index import _graph_id
 
         def endpoint(side: str) -> dict[str, Any]:
             path = row.get(f"{side}_section_path")
@@ -189,10 +244,14 @@ class GraphReferenceStore:
                 path or f"{current_pack().text('labels', 'whole_document')}: {row[f'{side}_name']}"
             )
             return {
-                "id": _graph_id("entity", row[f"{side}_chunk_set_id"], kb_id, _clean_label(name)),
+                "id": _graph_id(
+                    "entity", row[f"{side}_chunk_set_id"], kb_id, re.sub(r"\s+", " ", name).strip()
+                ),
                 "name": name,
                 "type": "section" if path else "document",
                 "confidence": 1.0,
+                "reference_id": row["reference_id"],
+                "document_name": row[f"{side}_name"],
                 "document_id": row[f"{side}_document_id"],
                 "chunk_set_id": row[f"{side}_chunk_set_id"],
                 "section_path": path,
@@ -235,10 +294,12 @@ class GraphReferenceStore:
             JOIN rag_documents t ON t.document_id=r.target_document_id
             JOIN rag_graph_entities se ON se.chunk_set_id=ss.chunk_set_id
                 AND se.knowledge_base_id=r.knowledge_base_id
-                AND se.canonical_name=r.source_section_path
+                AND (se.canonical_name=r.source_section_path
+                    OR (r.source_section_path IS NULL AND se.entity_type='document'))
             JOIN rag_graph_entities te ON te.chunk_set_id=ts.chunk_set_id
                 AND te.knowledge_base_id=r.knowledge_base_id
-                AND (te.canonical_name=r.target_section_path
+                AND (te.canonical_name=TRIM(REGEXP_REPLACE(
+                    r.target_section_path,'[[:space:]]+', ' '))
                     OR (r.target_section_path IS NULL AND te.entity_type='document'))
             WHERE r.knowledge_base_id=:kb AND r.resolution_status='resolved'
             AND {source_sql} AND {target_sql}

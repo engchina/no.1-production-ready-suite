@@ -32,6 +32,7 @@ function StructureNode({ data, selected }: NodeProps<Node<StructureNodeData>>) {
   return <GraphNodeFrame selected={selected} matched={data.matched} title={data.item.name || data.item.id}>
     <Handle type="target" position={Position.Left} className="invisible" />
     <div className="mb-1 flex items-center gap-1 text-xs text-fg-muted"><Icon aria-hidden size={14} />{kindLabel(data.item.type)}</div>
+    {data.item.document_name ? <div className="line-clamp-1 text-xs text-fg-muted">{data.item.document_name}</div> : null}
     <div className={data.item.name ? "line-clamp-2 font-medium" : "line-clamp-2 font-mono"}>{data.item.name || data.item.id}</div>
     <Handle type="source" position={Position.Right} className="invisible" />
   </GraphNodeFrame>;
@@ -42,6 +43,7 @@ function StructureCanvas({ data: initialData, knowledgeBaseId }: { data: Knowled
   const [extraNodes, setExtraNodes] = useState<KnowledgeBaseGraphNode[]>([]);
   const [referenceEdge, setReferenceEdge] = useState<KnowledgeBaseGraphData["edges"][number] | null>(null);
   const focusedReference = useRef<string | null>(null);
+  const canvasAnchor = useRef<HTMLDivElement>(null);
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
   const data = useMemo(() => ({ ...initialData, nodes: [...new Map([...initialData.nodes, ...extraNodes].map((node) => [node.id, node])).values()], edges: referenceEdge ? [...initialData.edges.filter((edge) => edge.id !== referenceEdge.id), referenceEdge] : initialData.edges }), [initialData, extraNodes, referenceEdge]);
   const flow = useReactFlow<Node<StructureNodeData>, Edge>();
@@ -77,11 +79,13 @@ function StructureCanvas({ data: initialData, knowledgeBaseId }: { data: Knowled
   useEffect(() => {
     if (!pendingFocus || focusedReference.current === pendingFocus) return;
     const position = layout.positions.get(pendingFocus);
-    if (position) {
-      void flow.setCenter(position.x + GRAPH_DEFAULT_NODE_SIZE.width / 2, position.y + GRAPH_DEFAULT_NODE_SIZE.height / 2, { zoom: 1, duration: 0 });
+    const size = sizes.get(pendingFocus);
+    if (position && size) {
+      canvasAnchor.current?.scrollIntoView({ block: "center", behavior: "instant" });
+      void flow.setCenter(position.x + size.width / 2, position.y + size.height / 2, { zoom: 1, duration: 0 });
       focusedReference.current = pendingFocus;
     }
-  }, [pendingFocus, layout, flow]);
+  }, [pendingFocus, layout, sizes, flow]);
   const locateReference = (item: GraphReferenceItem, target: KnowledgeBaseGraphNode) => {
     focusedReference.current = null;
     setKind(""); setDisabledKinds(new Set());
@@ -115,6 +119,7 @@ function StructureCanvas({ data: initialData, knowledgeBaseId }: { data: Knowled
   const nodeName = (id: string) => data.nodes.find((node) => node.id === id)?.name || id;
   const fields = selectedNode ? [
     { label: t("knowledgeBases.graph.name"), value: selectedNode.name || selectedNode.id },
+    ...(selectedNode.document_name ? [{ label: t("knowledgeBases.structure.build.document"), value: selectedNode.document_name }] : []),
     { label: t("knowledgeBases.graph.kind"), value: kindLabel(selectedNode.type) },
     { label: t("knowledgeBases.graph.identifier"), value: selectedNode.id, technical: true },
   ] : selectedEdge ? [
@@ -128,15 +133,15 @@ function StructureCanvas({ data: initialData, knowledgeBaseId }: { data: Knowled
       <GraphSearchNavigation labels={{ search: t("knowledgeBases.graph.search"), clear: t("common.clearSearch"), previous: t("knowledgeBases.graph.previousMatch"), next: t("knowledgeBases.graph.nextMatch"), noMatch: t("knowledgeBases.graph.noMatch"), scope: t("knowledgeBases.graph.searchScope") }} value={search} onChange={searchChanged} count={matches.length} cursor={cursor} onPrevious={() => jump(-1)} onNext={() => jump(1)} testId="knowledge-base-graph-search" />
       <SelectField id={filterId} label={t("knowledgeBases.graph.kind")} labelHidden size="lg" width="md" value={kind} onValueChange={(value) => { setKind(value); setSelection(null); setCursor(0); }} options={[{ value: "", label: t("knowledgeBases.graph.allKinds") }, ...kinds.map((value) => ({ value, label: kindLabel(value) }))]} />
     </div>
-    <GraphCanvasFrame role="region" aria-label={t("knowledgeBases.graph.title")}>
+    <div ref={canvasAnchor}><GraphCanvasFrame role="region" aria-label={t("knowledgeBases.graph.title")}>
       <GraphCanvas nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} onNodesChange={measured} nodesDraggable={false} elementsSelectable={false} zoomOnScroll={false} preventScrolling={false}
         onSelectNode={(id) => setSelection({ type: "node", id })} onSelectEdge={(id) => setSelection({ type: "edge", id })}
         miniMap={visibleNodes.length > 12 ? { "aria-label": t("knowledgeBases.graph.minimap") } : false}>
         <GraphCanvasControls labels={{ zoomIn: t("knowledgeBases.graph.zoomIn"), zoomOut: t("knowledgeBases.graph.zoomOut"), fit: t("knowledgeBases.graph.fitView"), reset: t("knowledgeBases.graph.reset") }} />
         <GraphLegend label={t("knowledgeBases.graph.legend")} items={kinds.map((value) => ({ id: value, label: kindLabel(value) }))} disabledIds={disabledKinds} onToggle={(id) => { setDisabledKinds((before) => { const next = new Set(before); if (next.has(id)) next.delete(id); else next.add(id); return next; }); setSelection(null); setCursor(0); }} testId="knowledge-base-graph-legend" />
       </GraphCanvas>
-    </GraphCanvasFrame>
-    {selectedNode ? <GraphReferencePanel key={`${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} nodeId={selectedNode.id} onLocate={locateReference} /> : null}
+    </GraphCanvasFrame></div>
+    {selectedNode ? <GraphReferencePanel key={`${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} nodeId={selectedNode.id} referenceId={selectedNode.reference_id} onLocate={locateReference} /> : null}
     {fields.length ? <GraphSelectionDetails title={t(selectedNode ? "knowledgeBases.graph.selectedNode" : "knowledgeBases.graph.selectedEdge")} closeLabel={t("knowledgeBases.graph.clearSelection")} onClose={() => setSelection(null)} fields={fields} /> : null}
   </div>;
 }

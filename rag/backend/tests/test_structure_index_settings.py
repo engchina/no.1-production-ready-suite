@@ -398,3 +398,41 @@ async def test_rebuild_revalidates_saved_references_without_embedding_or_model(
         edge for edge in oracle.saved[0].relationships if edge.relationship_type == "references"
     ]
     assert len(references) == 1
+
+
+async def test_rebuild_reuses_catalog_only_for_the_same_authorization_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from app.clients.graph_reference_store import GraphReferenceStore
+    from app.clients.structure_index_store import StructureIndexStore
+    from app.rag.request_context import (
+        current_audit_request_context,
+        reset_audit_request_context,
+        set_audit_request_context,
+    )
+
+    calls: list[str] = []
+
+    async def documents(store: Any, kb_id: str) -> tuple[Any, ...]:
+        calls.append(kb_id)
+        return ()
+
+    async def publish(*args: Any, **kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(GraphReferenceStore, "documents", documents)
+    monkeypatch.setattr(StructureIndexStore, "publish", publish)
+    cache: dict[Any, Any] = {}
+    oracle = SavedOracle()
+    await rebuild_document_structure_index(oracle, "a", "doc", reference_catalog_cache=cache)
+    await rebuild_document_structure_index(oracle, "a", "doc", reference_catalog_cache=cache)
+    assert calls == ["a"]
+    context = replace(current_audit_request_context(), allowed_document_ids=frozenset({"doc"}))
+    token = set_audit_request_context(context)
+    try:
+        await rebuild_document_structure_index(oracle, "a", "doc", reference_catalog_cache=cache)
+    finally:
+        reset_audit_request_context(token)
+    assert calls == ["a", "a"]

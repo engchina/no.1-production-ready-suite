@@ -1375,6 +1375,18 @@ class OracleClient:
         )
         return [_retrieved_chunk_from_row(row) for row in rows]
 
+    async def retrieval_reference_versions(
+        self, filters: dict[str, str], document_id: str
+    ) -> list[str]:
+        """参照先の検索範囲内にある成果物版を確認する。順位だけで版を選ばない。"""
+        where, binds = _oracle_retrieval_where({**filters, "document_id": document_id})
+        rows = await self._fetch_all(
+            f"SELECT DISTINCT c.chunk_set_id FROM rag_chunks c "
+            f"JOIN rag_documents d ON d.document_id=c.document_id WHERE {where}",
+            binds,
+        )
+        return [str(row.get("chunk_set_id") or "") for row in rows]
+
     async def retrieval_reference_documents(
         self, filters: dict[str, str], *, title: str, limit: int
     ) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -17782,13 +17794,17 @@ def _write_document_graph_index(
     if chunk_set_id is not None:
         from app.clients.graph_reference_store import write_graph_references
 
-        for kb_id in {entity.knowledge_base_id for entity in graph_index.entities} - {None}:
+        for reference_kb_id in {entity.knowledge_base_id for entity in graph_index.entities} - {
+            None
+        }:
             write_graph_references(
                 connection,
-                knowledge_base_id=str(kb_id),
+                knowledge_base_id=str(reference_kb_id),
                 chunk_set_id=chunk_set_id,
                 records=[
-                    record for record in graph_index.references if record.knowledge_base_id == kb_id
+                    record
+                    for record in graph_index.references
+                    if record.knowledge_base_id == reference_kb_id
                 ],
             )
 

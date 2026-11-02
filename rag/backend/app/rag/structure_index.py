@@ -137,6 +137,7 @@ async def rebuild_document_structure_index(
     expected_source: list[str] | None = None,
     expected_job_id: str | None = None,
     build_chunk_sets: list[str] | None = None,
+    reference_catalog_cache: dict[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """保存済みactive成果から補建する。参照再抽出に本文を読み、embeddingは変更しない。"""
     import asyncio
@@ -190,8 +191,15 @@ async def rebuild_document_structure_index(
     if expected_source is not None and source != sorted(expected_source):
         raise ValueError("source_changed")
     from app.clients.graph_reference_store import GraphReferenceStore
+    from app.rag.request_context import current_audit_request_context
 
-    reference_documents = await GraphReferenceStore(oracle).documents(knowledge_base_id)
+    # 同じjobの文書ごとにKB全体の目録を読み直さない。権限変更時は再取得する。
+    catalog_key = (knowledge_base_id, current_audit_request_context())
+    reference_documents = (reference_catalog_cache or {}).get(catalog_key)
+    if reference_documents is None:
+        reference_documents = await GraphReferenceStore(oracle).documents(knowledge_base_id)
+        if reference_catalog_cache is not None:
+            reference_catalog_cache[catalog_key] = reference_documents
     graphs = {}
     counts: dict[str, Any] = {
         "chunk_sets": len(source),

@@ -8,15 +8,15 @@ import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 
 /** 選択した章節の参照関係だけを取得し、図の未表示部分を必要時に開く。 */
-export function GraphReferencePanel({ kbId, nodeId, onLocate }: {
-  kbId: string; nodeId: string; onLocate: (item: GraphReferenceItem, target: KnowledgeBaseGraphNode) => void;
+export function GraphReferencePanel({ kbId, nodeId, referenceId, onLocate }: {
+  kbId: string; nodeId: string; referenceId?: string; onLocate: (item: GraphReferenceItem, target: KnowledgeBaseGraphNode) => void;
 }) {
   const [direction, setDirection] = useState<"outgoing" | "incoming">("outgoing");
   const [offset, setOffset] = useState(0);
-  const query = useQuery({ queryKey: ["graph-references", kbId, nodeId, direction, offset], queryFn: () => api.getKnowledgeBaseGraphReferences(kbId, nodeId, direction, offset) });
+  const query = useQuery({ retry: false, queryKey: ["graph-references", kbId, nodeId, referenceId, direction, offset], queryFn: () => api.getKnowledgeBaseGraphReferences(kbId, nodeId, direction, offset, referenceId) });
   const columns: DataTableColumn<GraphReferenceItem>[] = [
     { key: "label", header: t("knowledgeBases.graph.references"), render: (item) => <span className="break-words">{item.label}</span> },
-    { key: "target", header: t(`knowledgeBases.graph.${direction}`), render: (item) => <span className="break-words">{(direction === "incoming" ? item.source : item.target)?.name ?? "—"}</span> },
+    { key: "target", header: t(`knowledgeBases.graph.${direction}`), render: (item) => <div className="grid gap-1 break-words"><span className="text-xs text-fg-muted">{(direction === "incoming" ? item.source : item.target)?.document_name}</span><span>{(direction === "incoming" ? item.source : item.target)?.name ?? "—"}</span></div> },
     { key: "status", header: t("knowledgeBases.structure.build.status"), render: (item) => t(`knowledgeBases.graph.referenceStatus.${item.status}`) },
     { key: "locate", header: t("knowledgeBases.graph.referenceLocate"), render: (item) => {
       const target = direction === "incoming" ? item.source : item.target;

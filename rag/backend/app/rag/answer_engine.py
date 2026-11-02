@@ -406,6 +406,7 @@ class _SearchState:
     reference_section_indexes: dict[tuple[str, str], SectionIndex] = field(default_factory=dict)
     # 他の文書への参照の文書名に合う文書((範囲, 文書名の比較形) ごと。当たり方の順。#1400)。
     reference_documents: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
+    reference_versions: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     # 参照の文書名の照合の DB の行(同じ key。辿る前に候補の文書名をまとめて 1 回で読む。#2137)。
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
@@ -2764,7 +2765,16 @@ class AnswerEngine:
             if document_id != anchor.document_id
             and (not scope.get("document_id") or document_id == scope["document_id"])
         }
-        return next(iter(identifiers)) if len(identifiers) == 1 else None
+        if len(identifiers) != 1:
+            return None
+        document_id = next(iter(identifiers))
+        key = (json.dumps(scope, ensure_ascii=False, sort_keys=True), document_id)
+        if key not in state.reference_versions:
+            state.reference_versions[key] = await self._oracle.retrieval_reference_versions(
+                scope, document_id
+            )
+        versions = state.reference_versions[key]
+        return document_id if len(versions) == 1 and versions[0] else None
 
     async def _reference_documents(
         self, scope: dict[str, str], state: _SearchState, title: str
@@ -2831,8 +2841,10 @@ class AnswerEngine:
         rows = [hit for hit in original_chunks(hits) if hit.document_id == document_id]
         if not rows:
             return []
-        first_set = rows[0].metadata.get("chunk_set_id")
-        rows = [row for row in rows if row.metadata.get("chunk_set_id") == first_set]
+        version = state.reference_versions[
+            (json.dumps(scope, ensure_ascii=False, sort_keys=True), document_id)
+        ][0]
+        rows = [row for row in rows if row.metadata.get("chunk_set_id") == version]
         if len(rows) < 2 or not self._settings.rag_rerank_enabled:
             return rows
         try:

@@ -186,6 +186,9 @@ async def get_knowledge_base_graph(
 async def get_knowledge_base_graph_references(
     knowledge_base_id: str,
     node_id: str = Query(min_length=64, max_length=64, pattern="^[a-f0-9]+$"),
+    reference_id: str | None = Query(
+        default=None, min_length=64, max_length=64, pattern="^[a-f0-9]+$"
+    ),
     direction: str = Query(default="outgoing", pattern="^(outgoing|incoming)$"),
     offset: int = Query(default=0, ge=0, le=100000),
     limit: int = Query(default=25, ge=1, le=100),
@@ -198,7 +201,12 @@ async def get_knowledge_base_graph_references(
         raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
     try:
         data = await GraphReferenceStore(oracle).page(
-            knowledge_base_id, node_id, direction=direction, offset=offset, limit=limit
+            knowledge_base_id,
+            node_id,
+            direction=direction,
+            offset=offset,
+            limit=limit,
+            reference_id=reference_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="対象が見つかりません。") from exc
