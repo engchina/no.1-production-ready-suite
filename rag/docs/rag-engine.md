@@ -416,7 +416,7 @@ claims は、監査の応答の ID の誤りの判定に、返した ID（`audit
 文・手順に固有な度合い）を通し、共通の文だけで手順を `explained` にしない（`grounded.guide_step_assignment`）。
 最終の検証（`rag_validate_answer`）に業務ガイドを渡すと、同じ規則で Agent の回答の段落と手順を対応付ける
 （`evaluation/guide_step_validation.py`。手順の根拠は渡した根拠のうち参照の頁の範囲に当たるものと本文に検索の手がかりが
-出るもの、手順の説明の item は監査が裏付けとして写した原文。embedding は語で決まらない共有の item があるときだけ 1 回）。
+出るもの、手順の説明の item は裏付けた段落の本文。embedding は語で決まらない共有の item があるときだけ 1 回）。
 結果は出力の `guide_steps`（`explained` / `reference_only` / `unused` / `no_evidence`。`no_evidence` は渡した根拠に手順の
 根拠が無い）で、説明の無い必須の手順は warning の finding `guide_step_unexplained`（文は回答の不足の行と同じ）にする。
 順序の検査は説明にした段落の位置で行い、手順の題名の一致だけで `guide_steps_unmatched` にしない（MCP の出力の版 24）。
