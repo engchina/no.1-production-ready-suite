@@ -922,19 +922,20 @@ def _check(spec: FieldSpec, value: Any) -> tuple[Any, str | None]:
     return words, None
 
 
-# 既存の公開版を読み取る際だけ補える、索引に影響しない追加の表示文言。
-_COMPATIBLE_ANSWER_LABELS = frozenset(
+# 既存の公開版を読み取る際だけ補える、索引に影響しない追加の項目。
+_COMPATIBLE_FIELDS: frozenset[tuple[str, str]] = frozenset(
     {
-        "insufficient_evidence_summary",
-        "empty_search_guidance",
-        "abstention_guidance",
-        "answer_evidence_budget_limited",
-        "crag_refusal_summary",
-        "crag_missing_aspect_template",
-        "crag_unknown_aspect_template",
-        "crag_quote_only_note",
-        "crag_definition_aspect_template",
-        "guide_acquisition_incomplete_template",
+        ("answer_labels", "insufficient_evidence_summary"),
+        ("answer_labels", "empty_search_guidance"),
+        ("answer_labels", "abstention_guidance"),
+        ("answer_labels", "answer_evidence_budget_limited"),
+        ("answer_labels", "crag_refusal_summary"),
+        ("answer_labels", "crag_missing_aspect_template"),
+        ("answer_labels", "crag_unknown_aspect_template"),
+        ("answer_labels", "crag_quote_only_note"),
+        ("answer_labels", "crag_definition_aspect_template"),
+        ("answer_labels", "guide_acquisition_incomplete_template"),
+        ("grounding_cues", "citation_unit_words"),
     }
 )
 
@@ -1003,17 +1004,14 @@ def _retired_inquiry(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def complete_compatible_pack(data: Mapping[str, Any]) -> dict[str, Any]:
-    """表示文言の欠けと廃止済み項目を実行用に整え、保存内容は変更しない。"""
+    """追加の項目の欠けと廃止済み項目を実行用に整え、保存内容は変更しない。"""
     _retired_inquiry(data)
     result = {key: value for key, value in data.items() if key != "inquiry_cues"}
-    labels = data.get("answer_labels")
-    if isinstance(labels, Mapping):
-        completed = dict(labels)
-        defaults = _builtin_data()["answer_labels"]
-        for key in _COMPATIBLE_ANSWER_LABELS:
-            if key not in completed:
-                completed[key] = defaults[key]
-        result["answer_labels"] = completed
+    defaults = _builtin_data()
+    for section, key in _COMPATIBLE_FIELDS:
+        fields = result.get(section)
+        if isinstance(fields, Mapping) and key not in fields:
+            result[section] = {**fields, key: defaults[section][key]}
     return result
 
 
@@ -1021,14 +1019,12 @@ def stored_pack_hash(data: Mapping[str, Any], pack: LanguagePack) -> str:
     """保存時の項目集合で照合する。許可した欠け以外の正規化は受け入れない。"""
     if complete_compatible_pack(data) != pack.to_dict():
         raise ValueError("言語資源は全項目を含む完全な設定で保存してください。")
-    labels = data.get("answer_labels") or {}
     specs = tuple(
         spec
         for spec in FIELD_SPECS
         if not (
-            spec.section == "answer_labels"
-            and spec.key in _COMPATIBLE_ANSWER_LABELS
-            and spec.key not in labels
+            (spec.section, spec.key) in _COMPATIBLE_FIELDS
+            and spec.key not in (data.get(spec.section) or {})
         )
     )
     retired = _retired_inquiry(data)
@@ -1048,7 +1044,7 @@ def stored_pack_ingest_hash(data: Mapping[str, Any], pack: LanguagePack) -> str:
 
 
 def build_pack(data: Mapping[str, Any]) -> LanguagePack:
-    """追加表示文言の欠けだけ補い、それ以外の欠け・余り・形の誤りを拒否する。"""
+    """追加の項目の欠けだけ補い、それ以外の欠け・余り・形の誤りを拒否する。"""
     data = complete_compatible_pack(data)
     errors: dict[str, str] = {}
     sections: dict[str, dict[str, Any]] = {section: {} for section in SECTIONS}
