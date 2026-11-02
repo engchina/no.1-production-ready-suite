@@ -454,8 +454,9 @@ export function DocumentWorkspace({
   const [elementTextOffset, setElementTextOffset] = useState(0);
   const [cellOffset, setCellOffset] = useState(0);
   const [chunkOffset, setChunkOffset] = useState(0);
+  const [unlocatedOffset, setUnlocatedOffset] = useState(0);
   const windowChanged = useValuesChanged([documentId, selectedRecipeId, inspectorTab, currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision]);
-  if (windowChanged) { setViewOffset(0); setChunkOffset(0); setElementTextOffset(0); setCellOffset(0); setShowChunkDetails(false); }
+  if (windowChanged) { setViewOffset(0); setChunkOffset(0); setUnlocatedOffset(0); setElementTextOffset(0); setCellOffset(0); setShowChunkDetails(false); }
   const extractionJsonQuery = useQuery({
     queryKey: ["documents", documentId, "recipes", selectedRecipeId, "extraction-view", inspectorTab,
       currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, viewOffset, requestedElementId, elementTextOffset, cellOffset, selectedRecipe?.active_extraction_recipe_id],
@@ -468,10 +469,10 @@ export function DocumentWorkspace({
     retry: 1,
   });
   const chunkWindowQuery = useQuery({
-    queryKey: ["documents", documentId, "recipes", selectedRecipeId, "chunk-window", chunkOffset,
+    queryKey: ["documents", documentId, "recipes", selectedRecipeId, "chunk-window", chunkOffset, unlocatedOffset,
       currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, selectedRecipe?.active_chunk_set_id],
     queryFn: ({signal}) => api.documentChunkWindow(documentId, selectedRecipeId!, {
-      offset: chunkOffset, limit: 25, ...sourceScope, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
+      offset: chunkOffset, unlocated_offset: unlocatedOffset, limit: 25, ...sourceScope, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
     }, signal),
     enabled: Boolean(selectedRecipeId) && inspectorTab === "chunks",
     retry: 1,
@@ -487,6 +488,19 @@ export function DocumentWorkspace({
     const focus = focusedChunkQuery.data?.items[0];
     return focus ? (chunks?.some(c => c.chunk_id === focus.chunk_id) ? chunks.map(c => c.chunk_id === focus.chunk_id ? focus : c) : chunks) : chunks;
   }, [chunkWindowQuery.data, focusedChunkQuery.data]) };
+  const unlocatedChunks = useMemo(() => {
+    const chunks = chunkWindowQuery.data?.unlocated_items ?? [];
+    const focus = focusedChunkQuery.data?.unlocated_items?.[0] ?? focusedChunkQuery.data?.items[0];
+    return focus ? chunks.map(chunk => chunk.chunk_id === focus.chunk_id ? focus : chunk) : chunks;
+  }, [chunkWindowQuery.data, focusedChunkQuery.data]);
+  const selectInspectorChunk = (chunk: DocumentChunkView) => {
+    setShowChunkDetails(true);
+    setUrlFallbackFocus(null);
+    setSelectedChunkId(chunk.chunk_id);
+    setSelectedElementId(chunk.element_ids[0] ?? null);
+    setSelectedTableCellKey(null);
+    setPreviewFocusSource("chunk");
+  };
   const extractionPending = hasSelectedRecipeExtraction && extractionJsonQuery.isPending;
   const extractionError = extractionJsonQuery.isError && !extractionJsonQuery.data;
   const extractionState = (content: ReactNode) => extractionPending ? (
@@ -498,7 +512,7 @@ export function DocumentWorkspace({
     <InspectionContinuation offset={extractionJsonQuery.data.offset} total={extractionJsonQuery.data.total}
       limit={extractionJsonQuery.data.limit} disabled={hasReviewEdits} onOffset={setViewOffset} />
   ) : null;
-  useEffect(() => { inspectorPanelRef.current?.scrollTo({top: 0}); }, [inspectorTab, currentInspectorPage, currentTextRange?.offset, viewOffset, chunkOffset, elementTextOffset, cellOffset]);
+  useEffect(() => { inspectorPanelRef.current?.scrollTo({top: 0}); }, [inspectorTab, currentInspectorPage, currentTextRange?.offset, viewOffset, chunkOffset, unlocatedOffset, elementTextOffset, cellOffset]);
   const requestedUrlFocus = useMemo<UrlFallbackFocus | null>(() => {
     const page = integerSearchParam(searchParams.get("page"));
     const bbox = bboxSearchParam(searchParams.get("bbox"));
@@ -754,8 +768,8 @@ export function DocumentWorkspace({
     [chunkPreview.data?.chunks, chunksQuery.data]
   );
   const selectedChunk = useMemo(
-    () => displayedChunks.find((chunk) => chunk.chunk_id === selectedChunkId) ?? focusedChunkQuery.data?.items.find(chunk => chunk.chunk_id === selectedChunkId) ?? null,
-    [displayedChunks, selectedChunkId, focusedChunkQuery.data]
+    () => displayedChunks.find((chunk) => chunk.chunk_id === selectedChunkId) ?? unlocatedChunks.find(chunk => chunk.chunk_id === selectedChunkId) ?? focusedChunkQuery.data?.items.find(chunk => chunk.chunk_id === selectedChunkId) ?? focusedChunkQuery.data?.unlocated_items?.find(chunk => chunk.chunk_id === selectedChunkId) ?? null,
+    [displayedChunks, unlocatedChunks, selectedChunkId, focusedChunkQuery.data]
   );
   const availableElement = useMemo(
     () =>
@@ -994,6 +1008,7 @@ export function DocumentWorkspace({
   // 依存が変わったときだけ動かす（effect の deps と同じ）ので、同じ要求を二度適用しない。
   const focusSourceChanged = useValuesChanged([
     displayedChunks,
+    unlocatedChunks,
     parsedExtraction.elements,
     parsedExtraction.tables,
     requestedCellCol,
@@ -1008,7 +1023,7 @@ export function DocumentWorkspace({
     selectedElementId,
   ]);
   const applyRequestedFocus = () => {
-    const chunks = displayedChunks;
+    const chunks = [...displayedChunks, ...unlocatedChunks];
     if (
       !chunks.length &&
       !requestedChunkId &&
@@ -1653,7 +1668,7 @@ export function DocumentWorkspace({
                 {
                   id: "chunks",
                   label: t("flow.chunks.title"),
-                  count: chunkWindowQuery.data?.total || undefined,
+                  count: (chunkWindowQuery.data?.document_total ?? chunkWindowQuery.data?.total) || undefined,
                 },
                 { id: "export", label: t("flow.extractionExport.title") },
               ]}
@@ -1877,15 +1892,19 @@ export function DocumentWorkspace({
                     error={!chunkPreview.data && chunksQuery.isError}
                     selectedChunkId={selectedChunkId}
                     focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null}
-                    onSelect={(chunk) => {
-                      setShowChunkDetails(true);
-                      setUrlFallbackFocus(null);
-                      setSelectedChunkId(chunk.chunk_id);
-                      setSelectedElementId(chunk.element_ids[0] ?? null);
-                      setSelectedTableCellKey(null);
-                      setPreviewFocusSource("chunk");
-                    }}
+                    emptyTitle={currentTextRange && (chunkWindowQuery.data?.document_total ?? 0) > 0 ? t("flow.chunks.scopeEmpty") : undefined}
+                    onSelect={selectInspectorChunk}
                   />
+                  {!chunkPreview.data && (chunkWindowQuery.data?.unlocated_total ?? 0) > 0 ? (
+                    <section aria-labelledby="unlocated-chunks-title" data-testid="document-unlocated-chunks" className="space-y-3">
+                      <h3 id="unlocated-chunks-title" className="text-sm font-semibold">{t("flow.chunks.unlocatedTitle")}</h3>
+                      <p className="text-sm text-fg-muted">{t("flow.chunks.unlocatedDescription")}</p>
+                      <InspectionContinuation offset={unlocatedOffset} total={chunkWindowQuery.data!.unlocated_total!} limit={25} rangeLabel={t("flow.chunks.unlocatedRange", {start: unlocatedOffset + 1, end: Math.min(unlocatedOffset + 25, chunkWindowQuery.data!.unlocated_total!), total: chunkWindowQuery.data!.unlocated_total!})} disabled={chunkWindowQuery.isFetching} onOffset={setUnlocatedOffset} />
+                      <DocumentChunksPanel chunks={unlocatedChunks} loading={false} error={false}
+                        selectedChunkId={selectedChunkId} testId="document-unlocated-chunk-list"
+                        focusRequestKey={focusRequest?.target === "chunk" ? focusRequest.key : null} onSelect={selectInspectorChunk} />
+                    </section>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -3016,6 +3035,8 @@ function DocumentChunksPanel({
   chunks,
   loading,
   rerunPending = false,
+  emptyTitle,
+  testId = "document-chunk-list",
   error,
   selectedChunkId,
   focusRequestKey,
@@ -3025,6 +3046,8 @@ function DocumentChunksPanel({
   loading: boolean;
   /** 分割のやり直し（ボタンの loading と ProcessingIndicator が状態を出す）による読込か。 */
   rerunPending?: boolean;
+  emptyTitle?: string;
+  testId?: string;
   error: boolean;
   selectedChunkId: string | null;
   focusRequestKey?: string | null;
@@ -3084,7 +3107,7 @@ function DocumentChunksPanel({
   if (!chunks.length) {
     return (
       <div className="rounded-md border border-border bg-surface-sunken">
-        <EmptyState title={t("flow.chunks.empty")} />
+        <EmptyState title={emptyTitle ?? t("flow.chunks.empty")} />
       </div>
     );
   }
@@ -3094,7 +3117,7 @@ function DocumentChunksPanel({
     <ol
       ref={listRef}
       aria-label={t("flow.chunks.listLabel", { count: chunks.length })}
-      data-testid="document-chunk-list"
+      data-testid={testId}
       tabIndex={0}
       className={cn(
         "space-y-3 rounded-lg border border-border bg-surface-sunken p-3 [scrollbar-gutter:stable]",
@@ -3599,10 +3622,10 @@ function ErrorCodeDetails({
 }
 
 /** 左の表示範囲内だけを有界に継続取得する。文書全体の別ページには移動しない。 */
-function InspectionContinuation({offset, total, limit, onOffset, disabled = false}: {offset: number; total: number; limit: number; onOffset: (offset: number) => void; disabled?: boolean}) {
+function InspectionContinuation({offset, total, limit, onOffset, disabled = false, rangeLabel}: {offset: number; total: number; limit: number; onOffset: (offset: number) => void; disabled?: boolean; rangeLabel?: string}) {
   if (total <= limit) return null;
   return <div className="my-2 flex flex-wrap items-center gap-2">
-    <p className="text-xs text-fg-muted" role="status">{t("flow.inspector.withinRange", {start: offset + 1, end: Math.min(offset + limit, total), total})}</p>
+    <p className="text-xs text-fg-muted" role="status">{rangeLabel ?? t("flow.inspector.withinRange", {start: offset + 1, end: Math.min(offset + limit, total), total})}</p>
     {offset + limit < total ? <Button variant="secondary" size="sm" icon={ArrowDown} disabled={disabled} onClick={() => onOffset(offset + limit)}>{t("flow.inspector.continue")}</Button> : null}
     {offset > 0 ? <Button variant="ghost" size="sm" icon={RotateCcw} disabled={disabled} onClick={() => onOffset(0)}>{t("flow.inspector.restart")}</Button> : null}
   </div>;

@@ -3529,3 +3529,51 @@ test("構造化要素から解析版を固定して原本ノードを開く", {t
   await page.screenshot({path:testInfo.outputPath(`element-original-${testInfo.project.name}.png`),animations:"disabled"});
   await expectNoPageOverflow(page);
 });
+
+for (const scenario of ["unlocated", "mixed", "unrecorded"] as const) {
+  test(`原本同期は位置未確認 Chunk を別領域で有界表示する ${scenario}`, {tag:"@responsive"}, async ({page},testInfo) => {
+    await mockDocumentWorkspace(page);
+    const requests: URLSearchParams[] = [];
+    const rawWindowCalls: number[] = [];
+    await page.route("**/recipes/recipe-1/text-window", route => {
+      const body=route.request().postDataJSON();rawWindowCalls.push(body.offset);
+      return route.fulfill({json:{data:{text:`合成原本範囲 ${body.offset}`,offset:body.offset,total:16384,limit:8192,revision:"synthetic-scope-v1",previous_offset:body.offset?0:null,next_offset:body.offset?null:8192}}});
+    });
+    await page.route("**/recipes/recipe-1/chunk-window?**", route => {
+      const q=new URL(route.request().url()).searchParams;
+      requests.push(q);
+      const start=Number(q.get("unlocated_offset") ?? 0);
+      const chunk=(index:number,located:boolean) => ({document_id:"doc-1",chunk_id:`${located?"located":"unlocated"}-${index}`,chunk_index:index,text:`${located?"現在範囲の合成内容":"位置未確認の合成内容"} ${index}。${"有限のカード本文です。".repeat(12)}`,element_ids:located?["el-0000"]:[],metadata:{start_offset:777,end_offset:888}});
+      const scoped=scenario==="mixed"?[chunk(100,true)]:[];
+      return route.fulfill({json:{data:{items:scoped,total:scoped.length,offset:0,limit:25,scope_status:scenario==="unrecorded"?"unrecorded":"exact",document_total:26+scoped.length,unlocated_offset:start,unlocated_total:26,unlocated_items:Array.from({length:Math.min(25,26-start)},(_,i)=>chunk(start+i,false))}}});
+    });
+    await page.goto("/documents/doc-1");
+    await expect(page.getByTestId("preview-text-body")).toHaveText("合成原本範囲 0");
+    await page.getByTestId("document-preview-pane").getByRole("button",{name:"次のページ",exact:true}).click();
+    await expect(page.getByTestId("preview-text-body")).toHaveText("合成原本範囲 8192");
+    await page.getByRole("tab",{name:/Chunk \/ Citation/}).click();
+    const unlocated=page.getByTestId("document-unlocated-chunks");
+    await expect(unlocated.getByRole("heading",{name:"原本上の位置を確認できない Chunk"})).toBeVisible();
+    await expect(unlocated).toContainText("現在表示している原本の範囲に対応するとは限りません。");
+    await expect(page.getByText("chunk はまだ作成されていません。",{exact:true})).toHaveCount(0);
+    const list=page.getByTestId("document-unlocated-chunk-list");
+    await expect(list.locator("li")).toHaveCount(25);
+    await expect(page.getByTestId("document-chunk-list")).toHaveCount(scenario==="mixed"?1:0);
+    if(scenario==="mixed") await expect(page.getByTestId("document-chunk-list")).not.toContainText("位置未確認の合成内容");
+    const dimensions=await list.evaluate(el=>({height:el.clientHeight,scrollHeight:el.scrollHeight,maxHeight:parseFloat(getComputedStyle(el).maxHeight),overflow:getComputedStyle(el).overflowY}));
+    expect(dimensions.overflow).toBe("auto");expect(dimensions.height).toBeLessThanOrEqual(dimensions.maxHeight+1);expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.height);
+    await list.focus();await page.keyboard.press("End");
+    await expect.poll(()=>list.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+    await unlocated.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
+    await expect(list.locator("li")).toHaveCount(1);await expect(list).toContainText("位置未確認の合成内容 25");
+    const readsBeforeSelect=rawWindowCalls.length;
+    await list.getByRole("button").first().click();
+    await expect(list.getByRole("button").first()).toHaveAttribute("aria-pressed","true");
+    await expect(page.getByTestId("preview-text-body")).toHaveText("合成原本範囲 8192");
+    expect(rawWindowCalls.length).toBe(readsBeforeSelect);
+    expect(requests.some(q=>q.get("unlocated_offset")==="25" && q.get("offset")==="0" && q.get("source_revision")==="synthetic-scope-v1")).toBe(true);
+    await list.scrollIntoViewIfNeeded();
+    await page.screenshot({path:testInfo.outputPath(`unlocated-${scenario}.png`),fullPage:true});
+    await expectNoPageOverflow(page);
+  });
+}
