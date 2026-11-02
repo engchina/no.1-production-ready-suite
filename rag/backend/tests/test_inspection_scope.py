@@ -2,11 +2,12 @@
 
 import hashlib
 import json
+from typing import Any
 
 from app.services.inspection_scope import source_inspection
 
 
-def synthetic_source():
+def synthetic_source() -> tuple[bytes, dict[str, Any]]:
     values = ['合成😀\\"' * 300, "長文" * 9000, "末尾"]
     data = json.dumps({"nodes": values}, ensure_ascii=True).encode()
     payload = {
@@ -34,7 +35,7 @@ def synthetic_source():
     return data, payload
 
 
-def test_source_windows_cover_raw_json_and_assign_crossing_elements_once():
+def test_source_windows_cover_raw_json_and_assign_crossing_elements_once() -> None:
     data, payload = synthetic_source()
     windows = []
     offset = 0
@@ -53,7 +54,7 @@ def test_source_windows_cover_raw_json_and_assign_crossing_elements_once():
         assert previous["offset"] == windows[i - 1]["offset"]
 
 
-def test_focus_is_mapped_to_raw_escaped_unicode_and_canonical_segment():
+def test_focus_is_mapped_to_raw_escaped_unicode_and_canonical_segment() -> None:
     data, payload = synthetic_source()
     window = source_inspection(payload, data, offset=0, limit=8192, element_id="e2")
     assert "e2" in window["element_ids"]
@@ -61,7 +62,7 @@ def test_focus_is_mapped_to_raw_escaped_unicode_and_canonical_segment():
     assert window == source_inspection(payload, data, offset=window["offset"], limit=8192)
 
 
-def test_version_and_legacy_mapping_fail_closed():
+def test_version_and_legacy_mapping_fail_closed() -> None:
     data, payload = synthetic_source()
     assert (
         source_inspection(payload, data + b" ", offset=0, limit=8192)["scope_status"]
@@ -81,7 +82,7 @@ def test_version_and_legacy_mapping_fail_closed():
     )
 
 
-def test_malformed_mapping_is_unresolved_without_guessing_positions():
+def test_malformed_mapping_is_unresolved_without_guessing_positions() -> None:
     data, payload = synthetic_source()
     payload["parser_artifacts"]["json_source_map"]["elements"] = ["invalid"]
     result = source_inspection(payload, data, offset=0, limit=8192)
@@ -89,7 +90,7 @@ def test_malformed_mapping_is_unresolved_without_guessing_positions():
     assert result["element_ids"] == []
 
 
-def test_non_utf8_source_uses_existing_charset_detection():
+def test_non_utf8_source_uses_existing_charset_detection() -> None:
     text = "合成の本文です。文字コードを検出して表示します。" * 20
     result = source_inspection({}, text.encode("cp932"), offset=0, limit=8192)
     assert result["text"] == text

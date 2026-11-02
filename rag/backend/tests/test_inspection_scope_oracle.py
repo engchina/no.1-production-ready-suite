@@ -1,5 +1,6 @@
 """開始位置の帰属と、跨るChunkの重複除去を実Oracle SQLで確認する。"""
 
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -21,14 +22,18 @@ async def test_chunk_window_uses_start_page_and_first_element() -> None:
                 text="最初の要素から次の要素まで",
                 start_offset=0,
                 end_offset=20,
-                metadata={"element_ids": ["first", "second"], "page_start": 1, "page_end": 2},
+                metadata={
+                    "element_ids": "first,second",
+                    "page_start": 1,
+                    "page_end": 2,
+                },
             ),
             Chunk(
                 index=1,
                 text="次の要素",
                 start_offset=20,
                 end_offset=25,
-                metadata={"element_ids": ["second"], "page_start": 2, "page_end": 2},
+                metadata={"element_ids": "second", "page_start": 2, "page_end": 2},
             ),
         ],
     )
@@ -47,7 +52,8 @@ async def test_chunk_window_uses_start_page_and_first_element() -> None:
             ]
         },
     )
-    for kwargs in ({"page": 2}, {"scope_element_ids": ["second"]}):
+    scopes: list[dict[str, Any]] = [{"page": 2}, {"scope_element_ids": ["second"]}]
+    for kwargs in scopes:
         chunks, total = await oracle.list_chunk_set_chunk_window(
             chunk_set, extraction_recipe_id=revision, **kwargs
         )
