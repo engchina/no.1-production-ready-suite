@@ -41,7 +41,8 @@ def plan_draft(evidence_ids, scopes, items):
 def unknown_error(label):
     return (
         f"Q1: {label} は Evidence の ID ではありません。"
-        "evidence_ids には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+        "evidence_scope の evidence_id には [E1] 形式の根拠の番号だけを書き、"
+        "業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
     )
 
 

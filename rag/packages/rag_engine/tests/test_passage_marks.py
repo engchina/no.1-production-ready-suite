@@ -130,7 +130,6 @@ def _run_example(step_review: str = "supported"):
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_ids": [steps, table],
                 "evidence_scope": [
                     {"evidence_id": steps, "target": "設定の変更", "relation": "direct"},
                     {"evidence_id": table, "target": "区分の選択肢", "relation": "direct"},

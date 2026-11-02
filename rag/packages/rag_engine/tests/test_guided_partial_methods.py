@@ -89,7 +89,6 @@ def run(*, omit_methods: bool = False, unconditional: bool = False, unknown_c: b
                     "request_coverage": [
                         {
                             "request_id": "Q1",
-                            "evidence_ids": ["E1", "E2", "E3"],
                             "evidence_scope": [
                                 {"evidence_id": f"E{index}", "target": text, "relation": "direct"} for index, text in enumerate(TEXTS, 1)
                             ],
