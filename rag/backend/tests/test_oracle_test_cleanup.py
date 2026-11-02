@@ -11,6 +11,7 @@ class CleanupConnection:
     def __init__(
         self, deleted: int, present: bool, stored: int, visible: int, fail: bool = False
     ) -> None:
+        self.call_timeout = 1000
         self.deleted = deleted
         self.stored = stored
         self.visible = visible
@@ -35,6 +36,9 @@ class CleanupConnection:
         if "FROM user_indexes" in self.calls[-1]:
             return (int(self.present),)
         return (self.visible if self.optimized else self.stored, self.visible)
+
+    def fetchall(self) -> list[tuple[str]]:
+        return [("captured-event",)] if self.deleted or self.stored > self.visible else []
 
     def commit(self) -> None:
         self.calls.append("commit")
@@ -63,10 +67,11 @@ def test_cleanup_purges_deleted_vectors_after_commit_only_when_needed(
     assert bool(operations) == optimized
     if optimized:
         assert connection.calls.index("commit") < connection.calls.index(operations[0])
-        assert "OPTLEVEL_TOKEN_TYPE" in operations[0]
-        assert "SECTION_SEMANTIC_INDEX" in operations[0]
-        assert "FULL" not in operations[0]
+        assert "OPTLEVEL_FULL" in operations[0]
+        assert "maxtime" not in operations[0].lower()
     assert connection.calls[-1] == "close"
+    if present and optimized:
+        assert any("WHERE event_id=:event_id" in sql for sql in connection.calls)
 
 
 def test_cleanup_does_not_hide_index_purge_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,27 +93,15 @@ def test_cleanup_rejects_unpurged_vectors(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(connection, "execute", ineffective)
     monkeypatch.setattr(_oracle_test_db, "_connect", lambda: connection)
-    with pytest.raises(RuntimeError, match="before=4/2, after=4/2"):
+    with pytest.raises(RuntimeError, match="整理が残っています"):
         _oracle_test_db.cleanup_to_baseline()
     assert connection.calls[-1] == "close"
 
 
-def test_cleanup_uses_full_only_if_semantic_purge_is_ineffective(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    connection = CleanupConnection(0, True, 4, 2)
-    original_execute = connection.execute
-
-    def semantic_noop(sql: str, binds: Mapping[str, object] | None = None) -> None:
-        original_execute(sql, binds)
-        if "SECTION_SEMANTIC_INDEX" in sql:
-            connection.optimized = False
-
-    monkeypatch.setattr(connection, "execute", semantic_noop)
+def test_cleanup_does_not_acknowledge_failed_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = CleanupConnection(0, True, 4, 2, fail=True)
     monkeypatch.setattr(_oracle_test_db, "_connect", lambda: connection)
-    _oracle_test_db.cleanup_to_baseline()
-    operations = [sql for sql in connection.calls if "OPTIMIZE_INDEX" in sql]
-    assert len(operations) == 2
-    assert "SECTION_SEMANTIC_INDEX" in operations[0]
-    assert "OPTLEVEL_FULL" in operations[1]
-    assert connection.calls[-1] == "close"
+    with pytest.raises(RuntimeError, match="合成の整理失敗"):
+        _oracle_test_db.cleanup_to_baseline()
+    assert not any("WHERE event_id=:event_id" in sql for sql in connection.calls)
+    assert connection.call_timeout == 1000

@@ -98,6 +98,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 処理の経過の span を共通の span の表に書く書き手（process ごと。fork の後に始める。
         # #3226）。
         start_trace_span_writer(settings)
+        from app.rag.native_index_maintenance import run_native_maintenance_loop
+
+        maintenance_stop = asyncio.Event()
+        # 取込を止めた環境でも文書の削除・更新は行われる。leaseで多重実行を防ぐ。
+        maintenance_task = asyncio.create_task(run_native_maintenance_loop(maintenance_stop))
         worker_task: asyncio.Task[None] | None = None
         worker_stop: asyncio.Event | None = None
         if (
@@ -159,6 +164,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     worker_stop.set()
                 with suppress(asyncio.CancelledError):
                     await worker_task
+            maintenance_stop.set()
+            maintenance_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await maintenance_task
             # 待っている span を書いてから接続の pool を閉じる。
             stop_trace_span_writer()
             close_trace_exporter()

@@ -80,6 +80,7 @@ API_LIFESPAN_TASKS: dict[str, str] = {
     "_warm_search": "接続の pool と vector index の設定を用意するだけ（範囲の条件を通らない）",
     "start_trace_span_writer": "処理の経過の span を書くだけ（読まない）",
     "run_forever": "in-process の取込の worker（IngestionQueueWorker）。system の context に入る",
+    "run_native_maintenance_loop": "原生索引の整理要求を読むworker。system の context に入る",
     "get_evaluation_job_service": "停止で自分の lease の評価の job を失敗にする（更新だけ）",
     "get_chat_answer_run_service": "停止で作成中の回答を取り消す（各 run は要求の context のまま）",
 }
