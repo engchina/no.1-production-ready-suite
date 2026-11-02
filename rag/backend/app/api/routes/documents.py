@@ -2252,7 +2252,7 @@ async def save_document_recipe_review_edits(
 def _extraction_revision_summary(
     revision: Mapping[str, object],
     *,
-    current_extraction_recipe_id: object,
+    current_revision_no: int | None,
     current_base_revision_no: int | None,
     current_parse_extraction_recipe_id: str | None,
     served_extraction_ids: set[str],
@@ -2262,7 +2262,7 @@ def _extraction_revision_summary(
         {
             **revision,
             "kind": str(revision["revision_kind"]).lower(),
-            "is_current": extraction_recipe_id == current_extraction_recipe_id,
+            "is_current": revision["revision_no"] == current_revision_no,
             "is_serving": extraction_recipe_id in served_extraction_ids,
             "base_changed": revision["base_revision_no"] != current_base_revision_no,
             "settings_changed": (
@@ -2287,7 +2287,10 @@ async def list_document_recipe_extraction_revisions(
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
     revisions = await oracle.list_document_recipe_extraction_revisions(recipe_id)
     current_id = row.get("active_extraction_recipe_id")
-    current = next((rev for rev in revisions if rev["extraction_recipe_id"] == current_id), None)
+    # 今の版は最新の版だけ。同じ設定で解析し直すと、解析の ID は古い解析の版と同じになる。
+    current = (
+        revisions[0] if revisions and revisions[0]["extraction_recipe_id"] == current_id else None
+    )
     current_parse_id = (
         _recipe_parse_extraction_id(
             detail.content_sha256,
@@ -2300,22 +2303,21 @@ async def list_document_recipe_extraction_revisions(
         else None
     )
     served = await oracle.recipe_served_extraction_ids(recipe_id) if revisions else set()
+    current_no = _optional_revision_no(current["revision_no"]) if current else None
     current_base = _optional_revision_no(current["base_revision_no"]) if current else None
     return ApiResponse(
         data=ExtractionRevisionHistory(
             revisions=[
                 _extraction_revision_summary(
                     revision,
-                    current_extraction_recipe_id=current_id,
+                    current_revision_no=current_no,
                     current_base_revision_no=current_base,
                     current_parse_extraction_recipe_id=current_parse_id,
                     served_extraction_ids=served,
                 )
                 for revision in revisions
             ],
-            current_revision_no=(
-                _optional_revision_no(current["revision_no"]) if current else None
-            ),
+            current_revision_no=current_no,
             reparsed_since_last_revision=bool(revisions) and current is None,
             max_revisions=max_extraction_revisions(),
         )

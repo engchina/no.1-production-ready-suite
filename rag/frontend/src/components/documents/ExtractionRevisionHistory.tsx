@@ -25,7 +25,7 @@ import { ApiErrorState } from "@/components/StateViews";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type {
   ExtractionRevisionElementChange,
-  ExtractionRevisionHistory as History_,
+  ExtractionRevisionHistory as ExtractionRevisionHistoryData,
   ExtractionRevisionSummary,
 } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -77,7 +77,7 @@ export function ExtractionRevisionHistory({
   recipeId: string;
   open: boolean;
   onClose: () => void;
-  history: History_ | undefined;
+  history: ExtractionRevisionHistoryData | undefined;
   loading: boolean;
   error: unknown;
   onRetry: () => void;

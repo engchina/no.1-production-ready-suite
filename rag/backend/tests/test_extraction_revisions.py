@@ -197,6 +197,30 @@ async def test_history_shows_reparse_without_rewriting_revisions(
     assert [row.base_changed for row in history.revisions] == [True]
 
 
+async def test_reparse_under_the_id_of_an_old_parse_is_not_that_revision(
+    use_oracle: Callable[[_Oracle], _Oracle],
+) -> None:
+    """同じ設定の再解析は解析の ID が同じになる。古い解析の版を今の版として見せない。"""
+    use_oracle(
+        _Oracle(
+            [
+                _revision(2, parent=1, base=1, extraction_id="er-edited"),
+                _revision(1, kind="PARSED", base=1, extraction_id="er-parse"),
+            ],
+            current="er-parse",
+        )
+    )
+
+    history = (
+        await documents_route.list_document_recipe_extraction_revisions(_DOCUMENT_ID, _RECIPE_ID)
+    ).data
+
+    assert history is not None
+    assert history.current_revision_no is None
+    assert history.reparsed_since_last_revision is True
+    assert [row.is_current for row in history.revisions] == [False, False]
+
+
 async def test_history_without_revisions_is_not_a_reparse(
     use_oracle: Callable[[_Oracle], _Oracle],
 ) -> None:

@@ -3650,6 +3650,7 @@ class OracleClient:
         def operation(connection: OracleConnectionProtocol) -> int:
             from app.clients.extraction_revision_store import (
                 commit_extraction_revision,
+                latest_revision,
                 select_revision_for_restore,
             )
 
@@ -3662,7 +3663,13 @@ class OracleClient:
             target = select_revision_for_restore(connection, recipe_id, revision_no)
             if target is None:
                 raise KeyError("抽出の版が見つかりません。")
-            if target["extraction_recipe_id"] == source_id:
+            # 今の版は最新の版だけ。同じ設定で解析し直すと、解析の ID は古い解析の版と同じになる。
+            latest = latest_revision(connection, recipe_id)
+            if (
+                latest is not None
+                and latest["extraction_recipe_id"] == source_id
+                and _int_value(latest["revision_no"]) == target["revision_no"]
+            ):
                 raise DocumentReviewEditConflictError("この版はすでに今の版です。")
             return commit_extraction_revision(
                 connection,

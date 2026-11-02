@@ -48,9 +48,15 @@ def _write(
     return build
 
 
-async def _parse(client: OracleClient, document_id: str, recipe_id: str, *texts: str) -> str:
+async def _parse(
+    client: OracleClient,
+    document_id: str,
+    recipe_id: str,
+    *texts: str,
+    extraction_id: str | None = None,
+) -> str:
     """解析の結果を入れ、レシピを確認待ちにする（解析の worker の書き方と同じ。版は作らない）。"""
-    extraction_id = f"er_parsed_{uuid4().hex[:24]}"
+    extraction_id = extraction_id or f"er_parsed_{uuid4().hex[:24]}"
     await client.upsert_document_extraction_artifact(
         document_id=document_id,
         extraction_recipe_id=extraction_id,
@@ -219,6 +225,36 @@ async def check_reparse_is_recorded_before_the_next_save(client: OracleClient) -
     assert await _revision_texts(client, recipe_id, 3) == ["A-new"]
 
 
+async def check_reparse_under_the_same_id_is_a_new_revision(client: OracleClient) -> None:
+    """同じ設定の再解析は解析の ID が同じになる。古い解析の版を今の版にせず、復元もできる。"""
+    document_id, recipe_id = await _new_recipe(client)
+    parsed_id = await _parse(client, document_id, recipe_id, "A0")
+    await _save(client, document_id, recipe_id, "A1")
+
+    await _parse(client, document_id, recipe_id, "A-new", extraction_id=parsed_id)
+    # 古い解析の版の内容は再解析で変わらない。
+    assert await _revision_texts(client, recipe_id, 1) == ["A0"]
+
+    restored_no = await client.restore_document_recipe_extraction_revision(
+        document_id=document_id,
+        recipe_id=recipe_id,
+        revision_no=1,
+        expected_extraction_recipe_id=parsed_id,
+        build=_restore_build,
+    )
+
+    assert restored_no == 4
+    revisions = await client.list_document_recipe_extraction_revisions(recipe_id)
+    assert [(row["revision_no"], row["revision_kind"]) for row in revisions] == [
+        (4, "RESTORED"),
+        (3, "PARSED"),
+        (2, "EDITED"),
+        (1, "PARSED"),
+    ]
+    assert await _revision_texts(client, recipe_id, 3) == ["A-new"]
+    assert await _revision_texts(client, recipe_id, 4) == ["A0"]
+
+
 async def check_serving_chunk_set_keeps_its_extraction(client: OracleClient) -> None:
     """保存・復元は、検索に出している版の抽出と active の chunk_set を変えない。"""
     document_id, recipe_id = await _new_recipe(client)
@@ -292,6 +328,7 @@ SCENARIOS = (
     check_save_without_change_makes_no_revision,
     check_restore_is_a_new_revision,
     check_reparse_is_recorded_before_the_next_save,
+    check_reparse_under_the_same_id_is_a_new_revision,
     check_serving_chunk_set_keeps_its_extraction,
     check_deleting_the_recipe_deletes_its_revisions,
 )
