@@ -462,6 +462,17 @@ SECTION_PATH_OVERFLOW_SQL = """(
     AND JSON_QUERY(c.metadata_json, '$.section_path' RETURNING VARCHAR2(4000)) IS NULL)"""
 _SECTION_PATH_CLOB_SQL = "JSON_VALUE(c.metadata_json, '$.section_path' RETURNING CLOB)"
 
+
+def _metadata_text_clob_sql(field: str) -> str:
+    return f"JSON_VALUE(c.metadata_json, '$.{field}' RETURNING CLOB)"
+
+
+def _metadata_long_text_sql(field: str) -> str:
+    """文字列の値が既定の VARCHAR2(4000) に入らない行(#4157)。配列・JSON null は含まない。"""
+    return f"""(JSON_VALUE(c.metadata_json, '$.{field}' RETURNING VARCHAR2(4000)) IS NULL
+    AND {_metadata_text_clob_sql(field)} IS NOT NULL)"""
+
+
 _NATIVE_SCOPE_JOINS = """FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
             LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
             LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id"""
@@ -1352,7 +1363,8 @@ class OracleClient:
             _render_sql(
                 """
             SELECT d.document_id, d.file_name,
-                   MAX(JSON_VALUE(c.metadata_json, '$.xml_tree_document_title')) AS title
+                   MAX(JSON_VALUE(c.metadata_json, '$.xml_tree_document_title')) AS title,
+                   MAX(CASE WHEN {long_title_sql} THEN 1 ELSE 0 END) AS title_overflow
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
             WHERE {where_sql}
@@ -1361,11 +1373,37 @@ class OracleClient:
             ORDER BY d.file_name
             """,
                 where_sql=where_sql,
+                long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
             ),
             binds,
         )
+        long_titles: dict[str, str] = {}
+        if any(row.get("title_overflow") for row in rows):
+            # MAX は CLOB に使えないので、超えた題名の行だけを読み直す(#4157)。
+            for row in await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT c.document_id, {title_sql} AS title
+                FROM rag_chunks c
+                JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND JSON_EXISTS(c.metadata_json, '$.xml_tree_label_arabic')
+                  AND {long_title_sql}
+                """,
+                    where_sql=where_sql,
+                    title_sql=_metadata_text_clob_sql("xml_tree_document_title"),
+                    long_title_sql=_metadata_long_text_sql("xml_tree_document_title"),
+                ),
+                binds,
+            ):
+                long_titles.setdefault(str(row["document_id"]), str(row["title"]))
         return [
-            (str(row["document_id"]), str(row.get("title") or row["file_name"]))
+            (
+                str(row["document_id"]),
+                str(
+                    row.get("title") or long_titles.get(str(row["document_id"])) or row["file_name"]
+                ),
+            )
             for row in rows
             if row.get("document_id") and row.get("file_name")
         ]
@@ -1723,7 +1761,8 @@ class OracleClient:
             _render_sql(
                 """
             SELECT * FROM (
-                SELECT t.document_id, t.file_name, t.superseded_by_document_id, t.root_heading
+                SELECT t.document_id, t.file_name, t.superseded_by_document_id, t.root_heading,
+                       t.long_section_path
                 FROM (
                     SELECT d.document_id,
                            d.file_name,
@@ -1738,13 +1777,19 @@ class OracleClient:
                                )
                                ELSE JSON_VALUE(c.metadata_json, '$.section_path')
                            END AS root_heading,
+                           CASE
+                               WHEN JSON_VALUE(c.metadata_json, '$.section_path') IS NULL
+                               THEN {path_sql}
+                           END AS long_section_path,
                            ROW_NUMBER() OVER (
                                PARTITION BY d.document_id
                                ORDER BY
                                    CASE
-                                       WHEN JSON_VALUE(c.metadata_json, '$.section_path') IS NULL
-                                       THEN 1
-                                       ELSE 0
+                                       WHEN JSON_VALUE(
+                                           c.metadata_json, '$.section_path'
+                                       ) IS NOT NULL OR {path_sql} IS NOT NULL
+                                       THEN 0
+                                       ELSE 1
                                    END,
                                    c.chunk_index
                            ) AS heading_rank
@@ -1759,6 +1804,7 @@ class OracleClient:
             """,
                 where_sql=where_sql,
                 in_sql=in_sql,
+                path_sql=_SECTION_PATH_CLOB_SQL,
             ),
             {**binds, **in_binds, "older_version_limit": max(1, int(limit))},
         )
@@ -1772,7 +1818,8 @@ class OracleClient:
                 OlderDocumentVersion(
                     document_id=document_id,
                     file_name=_optional_str(row.get("file_name")),
-                    title=_optional_str(row.get("root_heading")),
+                    title=_optional_str(row.get("root_heading"))
+                    or _root_heading(_optional_str(row.get("long_section_path"))),
                     superseded_by_document_id=superseded_by,
                 )
             )
@@ -2061,6 +2108,10 @@ class OracleClient:
                 c.chunk_index,
                 c.chunk_id,
                 JSON_VALUE(c.metadata_json, '$.section_path') AS section_path,
+                CASE
+                    WHEN JSON_VALUE(c.metadata_json, '$.section_path') IS NULL
+                    THEN {path_sql}
+                END AS long_section_path,
                 JSON_VALUE(c.metadata_json, '$.page_start' RETURNING NUMBER) AS page_start,
                 JSON_VALUE(c.metadata_json, '$.page_end' RETURNING NUMBER) AS page_end,
                 DBMS_LOB.GETLENGTH(c.chunk_text) AS chars
@@ -2074,6 +2125,7 @@ class OracleClient:
             """,
                 where_sql=where_sql,
                 chunk_set_sql=chunk_set_sql,
+                path_sql=_SECTION_PATH_CLOB_SQL,
             ),
             query_binds,
         )
@@ -2083,7 +2135,9 @@ class OracleClient:
             {
                 "chunk_index": _int_value(row.get("chunk_index")),
                 "chunk_id": str(row["chunk_id"]),
-                "section_path": _optional_str(row.get("section_path")),
+                "section_path": _optional_str(
+                    row.get("section_path") or row.get("long_section_path")
+                ),
                 "page_start": _optional_int(row.get("page_start")),
                 "page_end": _optional_int(row.get("page_end")),
                 "chars": _int_value(row.get("chars")),
@@ -12089,6 +12143,11 @@ def _large_text_input_sizes(
     return sizes
 
 
+def _root_heading(section_path: str | None) -> str | None:
+    """見出しの列の先頭の見出し。"""
+    return section_path.split(" > ", 1)[0] if section_path else None
+
+
 def _reference_section_sql(section_path: str, prefix: str) -> str:
     """交差参照の参照先の節とその下の節の条件(#4144)。全体を比べ、先頭だけの一致では当てない。
 
@@ -14648,17 +14707,11 @@ def _oracle_retrieval_clauses(
             )
             binds["filter_content_kind"] = cleaned.casefold()
         elif key == "section_title":
-            clauses.append(
-                "LOWER(JSON_VALUE(c.metadata_json, '$.section_title')) "
-                "LIKE :filter_section_title ESCAPE '\\'"
-            )
-            binds["filter_section_title"] = _like_pattern(cleaned)
+            clause, binds["filter_section_title"] = _metadata_text_filter("section_title", cleaned)
+            clauses.append(clause)
         elif key == "section_path":
-            clauses.append(
-                "LOWER(JSON_VALUE(c.metadata_json, '$.section_path')) "
-                "LIKE :filter_section_path ESCAPE '\\'"
-            )
-            binds["filter_section_path"] = _like_pattern(cleaned)
+            clause, binds["filter_section_path"] = _metadata_text_filter("section_path", cleaned)
+            clauses.append(clause)
         elif key == "source_acl":
             clauses.append(
                 "LOWER(JSON_VALUE(c.metadata_json, '$.source_acl')) = :filter_source_acl"
@@ -15637,6 +15690,24 @@ def _with_conversation_access_bind(binds: Mapping[str, object]) -> dict[str, obj
     if context.user_id_hash is not None and not context.all_users_visible:
         resolved["conversation_user_id_hash"] = context.user_id_hash
     return resolved
+
+
+def _metadata_text_filter(field: str, value: str) -> tuple[str, str]:
+    """見出しの値の部分一致の条件と bind の値(大文字小文字を区別しない。#4157)。
+
+    既定の VARCHAR2(4000) を超えた値は JSON_VALUE が NULL を返すので、その行は CLOB で比べる。
+    語そのものが CLOB の bind になる長さでは LIKE が ORA-64203 になるので、INSTR で比べる。
+    """
+    bind = f":filter_{field}"
+    pattern = _like_pattern(value)
+    clob = f"LOWER({_metadata_text_clob_sql(field)})"
+    if _is_large_text(pattern):
+        return f"INSTR({clob}, {bind}) > 0", value.casefold()
+    return (
+        f"""(LOWER(JSON_VALUE(c.metadata_json, '$.{field}')) LIKE {bind} ESCAPE '\\'
+            OR ({_metadata_long_text_sql(field)} AND {clob} LIKE {bind} ESCAPE '\\'))""",
+        pattern,
+    )
 
 
 def _like_pattern(value: str) -> str:
