@@ -146,6 +146,17 @@ def test_enabled_without_match_explains_no_usage(tmp_path: Path, terms: list[dic
         assert "用語" not in _fields(steps[name])
 
 
+@pytest.mark.parametrize("answer", [False, True])
+def test_answer_term_step_is_recorded_once_per_answer(tmp_path: Path, answer: bool) -> None:
+    """プロンプトを何度組み立てても、回答生成の用語の工程は 1 件だけ（#4095）。"""
+    knowledge = _write(tmp_path / "knowledge.json", terms=[_TERM])
+    observer = _SpanRecorder()
+    result = _run(knowledge, observer=observer, answer=answer)
+    steps = [step for step in result.execution_steps if step["name"] == ANSWER_TERMS_STEP]
+    assert len(steps) == 1
+    assert ("説明" in _fields(steps[0])) is answer
+
+
 def test_load_error_is_reported_once(tmp_path: Path) -> None:
     path = tmp_path / "rk.json"
     path.write_text("{broken", encoding="utf-8")
