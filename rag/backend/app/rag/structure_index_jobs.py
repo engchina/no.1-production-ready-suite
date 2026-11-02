@@ -95,6 +95,39 @@ def public_state(
     return result
 
 
+async def current_public_state(
+    oracle: Any,
+    kb_id: str,
+    state: dict[str, Any] | None,
+    offset: int = 0,
+    limit: int = 25,
+) -> dict[str, Any] | None:
+    """作業記録を変えず、可視ページの現在版の索引状態を読み直して添える。"""
+    result = public_state(state, offset, limit)
+    if result is None or not result["items"]:
+        return result
+    current = {
+        item["document_id"]: item
+        for item in await structure_index_plan(
+            oracle, kb_id, document_ids=[item["document_id"] for item in result["items"]]
+        )
+    }
+    enriched = []
+    for item in result["items"]:
+        snapshot = current.get(item["document_id"], {})
+        status = snapshot.get("index_status", snapshot.get("status", "UNKNOWN"))
+        enriched.append(
+            {
+                **item,
+                "index_status": status,
+                "index_reason": snapshot.get("reason") if status == "UNAVAILABLE" else None,
+                "index_quality": snapshot.get("quality"),
+            }
+        )
+    result["items"] = enriched
+    return result
+
+
 class StructureIndexJobs:
     def __init__(self) -> None:
         self.tasks: set[asyncio.Task[None]] = set()
