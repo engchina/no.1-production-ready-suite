@@ -69,6 +69,7 @@ from rag_engine.generation.citation_wire import (
     planned_generation_wire_model,
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
+from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
@@ -598,6 +599,7 @@ STANDARD_MAX_ROUNDS = 2
 # 目的の一部だけ）は作り直さない。目的違い（off_target）は別の対象に答えた誤りなので直す。
 STANDARD_CORRECTION_KEYS = (
     "button_name_issues",
+    "date_value_issues",
     "citation_range_issues",
     "dropped_items",
     "downgraded_items",
@@ -1265,6 +1267,7 @@ QUESTION_TARGET_CHECK = "質問の対象"
 QUESTION_ERROR_CHECK = "質問のエラー"
 OTHER_DOCUMENT_CHECK = "別文書の手順"
 CITED_BUTTON_CHECK = "ボタン名"
+DATE_VALUE_CHECK = "年の一致"
 # 警告の理由に添える原文の引用の長さ。
 MARK_QUOTE_MAX_CHARS = 80
 
@@ -1547,6 +1550,8 @@ class CheckedItem:
     # 本文では主張を 1 回だけ出し、出典行を出典ごとに並べる。
     also: list[CheckedItem] = field(default_factory=list)
     button_name_issues: list[str] = field(default_factory=list)
+    # 説明に書いた年のうち、質問と引いた根拠から説明できない年（#4042）。
+    date_value_issues: list[str] = field(default_factory=list)
 
     def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
         """言い換えを本文に残したまま、段落に印（``code`` は契約の語彙）を付ける。``reason`` は trace・是正の指摘の文。"""
@@ -2288,6 +2293,10 @@ def verify(
                 # 案内したボタン名が、引いたどの原文にも無い（#3822）。本文と出典は変えず、段落に警告を付ける。
                 entry.button_name_issues = list(absent)
                 _mark_check(entry, CITED_BUTTON_CHECK, "引いた原文に無い: " + "、".join(absent))
+            if years := _item_absent_years(question, entry):
+                # 本文は書き換えない。印を付け、是正で作り直す（直らなければ印のまま）。
+                entry.date_value_issues = years
+                _mark_check(entry, DATE_VALUE_CHECK, "質問と引いた原文に無い年: " + "、".join(years))
         checked.extend(kept_entries)
         dropped.extend(notes)
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
@@ -2364,6 +2373,14 @@ def _cited_button_gaps(question: str, entry: CheckedItem) -> list[str]:
     views = [check_view(cited.span) for cited in item_citations(entry) if cited.span]
     texts = [str(part) for view in views for part in (view.get("text", ""), *(view.get("section_path") or ()))]
     return button_names_absent(fold_model_view(entry.item.text), texts, fold_model_view(question)) if views else []
+
+
+def _item_absent_years(question: str, entry: CheckedItem) -> list[str]:
+    """説明の年のうち、質問と説明が引いたすべての根拠から説明できない年（#4042）。"""
+    if not entry.published or entry.added or entry.item.kind == "gap":
+        return []
+    sources = [text for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
+    return absent_years(entry.item.text, question, sources) if sources else []
 
 
 def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
@@ -5103,6 +5120,8 @@ class Round:
     # summary を確かめきれなかった理由（監査なし・不支持・保証の過剰・原因の推測など）。summary は残し、段落に
     # 警告（summary_unaudited）を付ける（#2738）。空でも意味監査の成功とは限らず、実施状態は別に記録する。
     summary_warning: str = ""
+    # 要約に書いた年のうち、質問と引いた根拠から説明できない年（#4042）。
+    summary_absent_years: list[str] = field(default_factory=list)
     # 監査が回答の時間の上限（確定の分を残した期限）までに終わらず、監査なしの round にした (#1516)。
     audit_cut: bool = False
     # 生成と監査の秒・prompt の文字数・LLM の token の数（遅い round の理由を確かめる。#1516）。
@@ -5250,6 +5269,28 @@ class Round:
                 for e in self.checked
                 if e.button_name_issues and not e.removed
             ],
+            "date_value_issues": [
+                *(
+                    {
+                        "text": e.item.text,
+                        "absent_years": e.date_value_issues,
+                        "hint": "質問と引用した原文に無い年を書かないでください。質問の年を保ち、原文に年が無ければ月日だけで説明してください。",
+                    }
+                    for e in self.checked
+                    if e.date_value_issues and not e.removed
+                ),
+                *(
+                    [
+                        {
+                            "text": str(self.draft.summary),
+                            "absent_years": self.summary_absent_years,
+                            "hint": "要約に、質問と引用した原文に無い年を書かないでください。",
+                        }
+                    ]
+                    if self.summary_absent_years
+                    else []
+                ),
+            ],
             "document_value_issues": [
                 {
                     "text": e.item.text,
@@ -5291,6 +5332,7 @@ class Round:
             deterministic_keys = {
                 "button_name_issues",
                 "citation_range_issues",
+                "date_value_issues",
                 "dropped_items",
                 "downgraded_items",
                 "document_value_issues",
@@ -7741,6 +7783,14 @@ def run_round(
         summary_reason = summary_reason or "要求の根拠計画にない説明を除外したため、要約の結論を保留"
     if diagnostic_only(timing):
         summary_warning = "監査なし" if audit_mode == AUDIT_MODE_NONE else ""
+    # 要約の年も説明と同じ材料で照らす（#4042）。推測の値へ書き換えず、定型文にして是正に任せる。本文の説明は残す。
+    summary_absent = absent_years(
+        str(draft.summary),
+        question,
+        [text for entry in published for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)],
+    )
+    if summary_absent:
+        summary_reason = summary_reason or f"質問と引いた原文に無い年を要約が述べている: {'、'.join(summary_absent)}"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (
@@ -7770,6 +7820,7 @@ def run_round(
         withdrawn_requests={e.item.request_id for e in withdrawn if e.item.request_id},
         summary_reason=summary_reason,
         summary_warning=summary_warning,
+        summary_absent_years=summary_absent,
         audit_cut=audit_cut,
         timing=timing,
         citation_trace=citation_trace,
@@ -7855,10 +7906,10 @@ def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_
     if audit_mode == AUDIT_MODE_NONE:
         if assume_unconfirmed and feedback.get("no_cited_evidence"):
             return {"no_cited_evidence": _ASSUMPTION_NO_CITED_HINT}
-        if any(feedback.get(key) for key in ("document_value_issues", "citation_range_issues", "button_name_issues")):
+        if any(feedback.get(key) for key in ("document_value_issues", "citation_range_issues", "button_name_issues", "date_value_issues")):
             return {
                 key: feedback[key]
-                for key in ("citation_range_issues", "document_value_issues", "button_name_issues", "supported_items")
+                for key in ("citation_range_issues", "document_value_issues", "button_name_issues", "date_value_issues", "supported_items")
                 if feedback.get(key)
             }
         return {}
@@ -8089,6 +8140,7 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
             {json.dumps(ref, ensure_ascii=False, sort_keys=True, default=str) for ref in feedback.get("unused_evidence_ids") or ()}
         ),
         **({"button_name_issues": len(feedback["button_name_issues"])} if feedback.get("button_name_issues") else {}),
+        **({"date_value_issues": len(feedback["date_value_issues"])} if feedback.get("date_value_issues") else {}),
         "citation_ranges": sorted(
             (str(row.get("item_index")), str(row.get("evidence_id")), str(row.get("reason_code")))
             for row in feedback.get("citation_range_issues") or ()
@@ -8313,6 +8365,8 @@ def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     if count := len(feedback.get("button_name_issues") or ()):
         labels.append(f"引用原文にないボタン操作 {count} 件")
+    if count := len(feedback.get("date_value_issues") or ()):
+        labels.append(f"質問と引用原文に無い年 {count} 件")
     ranges = feedback.get("citation_range_issues") or ()
     if count := sum(row.get("reason_code") != CITATION_HEADING_ONLY for row in ranges):
         labels.append(f"範囲を確認できない引用 {count} 件")
