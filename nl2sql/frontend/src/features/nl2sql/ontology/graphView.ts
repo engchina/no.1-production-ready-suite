@@ -190,35 +190,9 @@ export function applyOntologyNodePositionChanges(
   return next ?? overrides;
 }
 
-export interface OntologyNodeDimensions {
-  width: number;
-  height: number;
-}
-
-/**
- * React Flow が通知する dimensions change を実測サイズ Map へ反映する。
- * この実測値をノードへ `measured` として返さないと、配列再生成(hover 等)のたびに
- * React Flow が handleBounds をリセットし、全エッジが 1 フレーム消えて点滅する。
- * 値が同じなら同一 Map 参照を返し、measure → 反映 → 再 measure のループを断つ。
- */
-export function applyOntologyNodeDimensionChanges(
-  dimensions: Map<string, OntologyNodeDimensions>,
-  changes: ReadonlyArray<{ type: string; id?: string; dimensions?: OntologyNodeDimensions }>
-): Map<string, OntologyNodeDimensions> {
-  let next: Map<string, OntologyNodeDimensions> | null = null;
-  for (const change of changes) {
-    if (change.type !== "dimensions" || !change.id || !change.dimensions) continue;
-    const { width, height } = change.dimensions;
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      continue;
-    }
-    const current = (next ?? dimensions).get(change.id);
-    if (current && current.width === width && current.height === height) continue;
-    next ??= new Map(dimensions);
-    next.set(change.id, { width, height });
-  }
-  return next ?? dimensions;
-}
+/** 共通の実測更新処理を使い、同値の通知で再配置・点滅させない。 */
+export type { GraphNodeDimensions as OntologyNodeDimensions } from "@production-ready/ui";
+export { applyGraphNodeDimensionChanges as applyOntologyNodeDimensionChanges } from "@production-ready/ui";
 
 export function ontologyGraphWithDetailVisibility(
   graph: OntologyGraph,

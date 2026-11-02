@@ -36,6 +36,7 @@
   - `ap-tokyo-1`: `ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa`
   - `us-chicago-1`: `ocid1.image.oc1.us-chicago-1.aaaaaaaaltnu52rsd7s6p7yepblc6cdq7b7orqkndiwlz2eggv5ja2ltn52a`
   - image を新しくするときは、`schema.yaml`・`variables.tf`・`terraform/scripts/verify_stack_contract.py`（`ORACLE_LINUX_IMAGES`）を同じ PR でそろえます。
+  Resource Manager では stack 作成先のリージョンを選び、主 Compute と bastion の両方に同じリージョンの image を指定します。Chicago への配備では、両方とも `us-chicago-1` の image を選択してください。
   これら以外のリージョンで stack を作ると、`region` の validation で plan が失敗します。
 - 共通 `.env` の `PLATFORM_ORACLE_ADB_REGION` には stack のリージョンが入ります。システム設定 > データベース の「Autonomous Database 管理」のリージョンの選択肢は東京・大阪のみです。Chicago の保存値には非対応の案内が残ります（#3904）。これは画面の案内の制限で、管理 API の失敗を確認したものではありません。
 
@@ -46,7 +47,7 @@
 1. 配備先のコンパートメント
 2. ADB の利用方法、新規 / 既存 ADB、ADB のネットワーク、アプリ用の DB ユーザー
 3. 主 Compute の構成、ネットワークと SSH、HTTPS
-4. bastion の作成、専用の構成、ネットワークと接続
+4. bastion の作成、専用の構成、ネットワークと接続（コンパートメントは 1 の配備先を継承）
 5. アプリケーション管理者、RAG の追加 parser、NL2SQL Deep Data Security
 
 非表示の内部設定と製品の選択は表示しません。主 Compute と bastion の image 候補は大阪・東京・Chicago の順で、既定はどちらも大阪です。
@@ -430,6 +431,7 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   127.0.0.1 なので、security list は要りません。
 - ログインのセッションは 3 製品で共通です（#1565。下の「ログインのセッションの共有（#1565）」）。`/`（Agent、無ければ最初の製品）を含め、
   どの製品の `/login` でログインしても全製品を使えます。
+- Docling のモデル取得は、RapidOCR の ONNX／Torch と版面・表などの Hugging Face モデルを、公式 registry の SHA-256／取得版の ETag と照合します。不一致は対象モデルだけ再取得し、検証成功後に原子的に置き換えます。取得・検証の失敗は配備ログに残します。既存環境の復旧コマンドは [Docling の手順](../rag/services/parsers/docling/README.md#ocr-モデルの検証と復旧)を参照してください。
 - Wallet は `/u01/aipoc/wallet`、ログは `/var/log/cloud-init-custom.log`（bootstrap）・`/var/log/suite-init.log`（全体）・`/var/log/<製品>-init.log`。
 - apply 後の output に、`application_url`（`/`）、製品ごとの URL（`rag_application_url` など。配備しなかった製品は表示されない）、
   `ca_certificate_url`（HTTPS のとき）、`ssh_to_instance`、bastion を作ったときは `bastion_vnc_address`・`ssh_to_bastion` が出ます。
@@ -443,7 +445,8 @@ cd /u01/aipoc/no.1-production-ready-suite/agent/backend && sudo -u opc /usr/loca
   `bastion_boot_volume_size` / `bastion_boot_volume_vpus`）。shape（`bastion_shape`）・image（Oracle Linux 9 の `bastion_image_source_id`）・
   SSH キー（`bastion_ssh_authorized_keys`）は bastion 専用に設定します。主 Compute からの継承はしません。
   shape は独立した既定の E5 Flex、image は大阪の x86 Oracle Linux 9 です。image の候補は大阪・東京・Chicago の順です。
-  `bastion_compartment_ocid` / `bastion_availability_domain` / `bastion_vcn_id` / `bastion_subnet_id` で配置先を指定します。
+  コンパートメントは先頭の `compartment_ocid`（Suite の配備先）を継承し、別途選択しません。
+  AD・VCN・subnet の候補も同じコンパートメントで絞り込み、`bastion_availability_domain` / `bastion_vcn_id` / `bastion_subnet_id` で指定します。
   bastion を有効にした場合は配置先・subnet と SSH 公開キーを入力してください。未指定のままでは plan が失敗します。
   以前の入力で主 Compute の値を継承していた stack も、次の更新前に bastion 専用の値を明示してください。
   公開 IP は subnet から自動で決めます（public subnet なら付ける）。
@@ -524,6 +527,9 @@ SELinux の設定（`semanage` は `policycoreutils-python-utils`）:
   （再起動は要らない。#1844）。結果に「再起動が必要なプロセスがあります」と出たら、挙げたプロセス（別に動かす
   dispatcher・読み直せなかった backend）を再起動する（backend は `suite-restart.sh --no-build`）。CLI で適用したときは、
   動いている backend を再起動する（`suite-restart.sh` は再起動まで行う）。
+- **初回配備で `git: command not found` になる場合**: bootstrap は clone／fetch の前に Git を確認し、未導入なら `dnf -y install ca-certificates git` を再試行付きで実行します。導入に失敗した場合はそこで停止します。
+  旧 bootstrap で停止済みの Compute は、`sudo dnf -y install ca-certificates git` が成功した後、`sudo bash /u01/aipoc/bootstrap-suite.sh` で再開できます。VM を作り直す必要はありません。
+  最初に cloud-init の package 導入が失敗した原因は `/var/log/cloud-init.log`・`/var/log/cloud-init-output.log`・`/var/log/dnf.log` で確認してください。cloud-init の終了表示だけでは、製品の配備完了を示しません。
 - **配備が途中で失敗したときのやり直し**（#1994）: 先に `sudo tail -n 50 /var/log/cloud-init-custom.log` と `/var/log/suite-init.log` で止まった所を確かめ、
   原因（`/` の空き〔`df -h /`。#1984〕・ネットワーク・ADB など）を直してから、repo（`/u01/aipoc/no.1-production-ready-suite`）があれば
   `sudo .../platform/deploy/suite-update.sh`（最新の main を取得して再配備）か `suite-restart.sh`（今のコードで再配備）を実行する。
