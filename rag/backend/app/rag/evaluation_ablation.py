@@ -284,7 +284,9 @@ def _call_counts(calls: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     for call in calls:
         kind = "llm" if call.get("kind") == "http" else str(call.get("kind"))
         counts[kind] = counts.get(kind, 0) + 1
-        status = (call.get("result") or {}).get("status")
+        # 埋め込み・再ランクの結果は list で、HTTP の status を持つのは生成・判定の応答だけ。
+        result = call.get("result")
+        status = result.get("status") if isinstance(result, Mapping) else None
         if "error" in call or (isinstance(status, int) and status >= 400):
             counts["failed"] = counts.get("failed", 0) + 1
     return counts

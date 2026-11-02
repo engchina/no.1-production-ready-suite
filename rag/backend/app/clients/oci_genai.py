@@ -12,7 +12,7 @@ import logging
 import math
 import re
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from numbers import Real
 from typing import Any, Literal, Protocol
 
@@ -20,7 +20,7 @@ from pr_backend_core.bounded_calls import KIND_LABELS, Attempt, BoundedCallFaile
 from pr_backend_core.chat_progress import chat_progress_details
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.tracing import observed_span
-from rag_engine.resources.external_calls import external_call
+from rag_engine.resources.external_calls import builtin_external_error, external_call
 from rag_engine.resources.rerank_diagnostics import (
     RerankCallReceipt,
     bind_rerank_attempt,
@@ -340,6 +340,7 @@ class OciGenAiClient:
                     },
                     lambda: self._embed_text_vectors(details, span),
                     label=self._settings.oci_genai_embedding_model,
+                    build_error=_replayed_sdk_error,
                 )
             )
         if not isinstance(embeddings, list):
@@ -371,7 +372,7 @@ class OciGenAiClient:
         attempt_number = current_rerank_attempt()
         attempt: dict[str, Any] | None = None
 
-        def invoke_sdk() -> Any:
+        def invoke_sdk() -> list[dict[str, object]]:
             nonlocal attempt
             client = self._client()
             attempt = receipt.begin_sdk(attempt_number) if receipt is not None else None
@@ -387,7 +388,8 @@ class OciGenAiClient:
                 raise
             if receipt is not None and attempt is not None:
                 receipt.finish_sdk(attempt, "completed")
-            return response
+            span.set_call_output(lambda: oci_call_snapshot(response.data))
+            return _flat_document_ranks(response.data)
 
         with observed_span(
             "gen_ai.rerank",
@@ -404,8 +406,22 @@ class OciGenAiClient:
         ) as span:
             span.set_call_input(lambda: oci_call_snapshot(details), restricted=True)
             try:
-                response = await self._sdk_call_runner(invoke_sdk)
-                span.set_call_output(lambda: oci_call_snapshot(response.data))
+                # 評価の記録・再生の対象（#4089）。session が無ければそのまま SDK を呼ぶ。再生では
+                # SDK を呼ばないので試行の記録は作らず、rerank.status は not_run のままになる。
+                ranks = await self._sdk_call_runner(
+                    lambda: external_call(
+                        "rerank",
+                        {
+                            "model": self._settings.oci_genai_rerank_model,
+                            "top_n": top_n,
+                            "query": query,
+                            "documents": documents,
+                        },
+                        invoke_sdk,
+                        label=self._settings.oci_genai_rerank_model,
+                        build_error=_replayed_sdk_error,
+                    )
+                )
             finally:
                 if receipt is not None:
                     span.set_attributes(receipt.attributes())
@@ -417,13 +433,7 @@ class OciGenAiClient:
                             else "not_run",
                         }
                     )
-        document_ranks = getattr(response.data, "document_ranks", None)
-        if not isinstance(document_ranks, list):
-            raise ValueError("OCI rerank response に document_ranks がありません。")
-        return [
-            (getattr(rank, "index", None), getattr(rank, "relevance_score", None))
-            for rank in document_ranks
-        ]
+        return [(rank["index"], rank["relevance_score"]) for rank in ranks]
 
     def _client(self) -> GenerativeAiInferenceClientProtocol:
         """OCI Generative AI Inference client を遅延初期化する。"""
@@ -496,6 +506,30 @@ class OciGenAiClient:
         max_entries = getattr(self._settings, "rag_rerank_cache_max_entries", 1024)
         while len(self._rerank_cache) > max_entries:
             self._rerank_cache.popitem(last=False)
+
+
+def _flat_document_ranks(data: object) -> list[dict[str, object]]:
+    """rerank の応答を、使う値だけの JSON にできる形にする（#4089 の記録の単位）。"""
+    document_ranks = getattr(data, "document_ranks", None)
+    if not isinstance(document_ranks, list):
+        raise ValueError("OCI rerank response に document_ranks がありません。")
+    return [
+        {
+            "index": getattr(rank, "index", None),
+            "relevance_score": getattr(rank, "relevance_score", None),
+        }
+        for rank in document_ranks
+    ]
+
+
+def _replayed_sdk_error(error: Mapping[str, Any]) -> BaseException:
+    """記録した SDK の失敗を、再試行の判定が記録のときと同じになる例外に戻す。"""
+    status = error.get("status")
+    message = str(error.get("message", ""))
+    if error.get("type") == "ServiceError" and isinstance(status, int):
+        exceptions = importlib.import_module("oci.exceptions")
+        return exceptions.ServiceError(status, None, {}, message)  # type: ignore[no-any-return]
+    return builtin_external_error(error)
 
 
 async def _unwrapped_item_failure[T](awaitable: Awaitable[T]) -> T:
