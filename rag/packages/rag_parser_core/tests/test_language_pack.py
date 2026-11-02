@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from importlib import resources
+from pathlib import Path
 
 import pytest
 
+from rag_parser_core.language import _COMPATIBLE_FIELDS as COMPATIBLE_FIELDS
 from rag_parser_core.language import (
     FIELD_SPECS,
     LanguagePackError,
@@ -435,3 +437,37 @@ def test_invalid_abstention_labels_are_not_defaulted(key: str, value: object) ->
     raw["answer_labels"][key] = value
     with pytest.raises(LanguagePackError):
         build_pack(raw)
+
+
+def test_legacy_pack_fills_citation_unit_words_without_changing_ingest() -> None:
+    raw = builtin_pack().to_dict()
+    del raw["grounding_cues"]["citation_unit_words"]
+    saved = json.dumps(raw, ensure_ascii=False)
+    pack = build_pack(raw)
+    assert pack.words("grounding_cues", "citation_unit_words") == builtin_pack().words(
+        "grounding_cues", "citation_unit_words"
+    )
+    assert pack.ingest_hash == builtin_pack().ingest_hash
+    assert json.dumps(raw, ensure_ascii=False) == saved
+
+
+def test_citation_unit_words_explicit_null_is_not_defaulted() -> None:
+    raw = builtin_pack().to_dict()
+    raw["grounding_cues"]["citation_unit_words"] = None
+    with pytest.raises(LanguagePackError):
+        build_pack(raw)
+
+
+def test_field_changes_keep_published_releases_readable() -> None:
+    """公開版は不変なので、項目を足すなら読み取りで補い、消すなら移行を決める。
+
+    固定の一覧は「この時点の公開版が持つ項目」。項目を足すときは一覧を変えず
+    ``_COMPATIBLE_FIELDS`` に足す。取込に使う項目は補えないので、再索引の扱いを決める。
+    """
+    path = Path(__file__).parent / "fixtures" / "language_pack_published_fields.json"
+    published = {tuple(item.split(".", 1)) for item in json.loads(path.read_text("utf-8"))}
+    current = {(spec.section, spec.key) for spec in FIELD_SPECS}
+    assert published <= current, "公開版が持つ項目を消すと、その公開版を読めなくなる"
+    assert current - published <= COMPATIBLE_FIELDS, "足した項目は既存の公開版に無いので補う"
+    ingest = {(spec.section, spec.key) for spec in FIELD_SPECS if spec.ingest}
+    assert not ingest & COMPATIBLE_FIELDS, "取込に使う項目を補うと、保存時の索引と食い違う"

@@ -109,15 +109,7 @@ _COMPAT_KEYS = (
 )
 
 
-def legacy_release_row(mask: int = 63) -> dict[str, object]:
-    """旧形式の項目集合から独立に元の保存 hash を計算する。"""
-    row = release_row()
-    effective = builtin_pack().to_dict()
-    effective["answer_labels"]["cause_gap"] = "合成の保存済み文言"
-    effective["answer_labels"]["crag_quote_only_note"] = "合成の保存済み注記"
-    for index, key in enumerate(_COMPAT_KEYS):
-        if mask & (1 << index):
-            del effective["answer_labels"][key]
+def _stored_hash(effective: dict[str, object]) -> str:
     canonical = json.dumps(
         [
             [section, key, value]
@@ -127,11 +119,45 @@ def legacy_release_row(mask: int = 63) -> dict[str, object]:
         ],
         ensure_ascii=False,
     )
+    return hashlib.sha256(f"{effective['locale']}\n{canonical}".encode()).hexdigest()[:16]
+
+
+def legacy_release_row(mask: int = 63) -> dict[str, object]:
+    """旧形式の項目集合から独立に元の保存 hash を計算する。"""
+    row = release_row()
+    effective = builtin_pack().to_dict()
+    effective["answer_labels"]["cause_gap"] = "合成の保存済み文言"
+    effective["answer_labels"]["crag_quote_only_note"] = "合成の保存済み注記"
+    for index, key in enumerate(_COMPAT_KEYS):
+        if mask & (1 << index):
+            del effective["answer_labels"][key]
     row["effective_json"] = effective
-    row["content_hash"] = hashlib.sha256(
-        f"{effective['locale']}\n{canonical}".encode()
-    ).hexdigest()[:16]
+    row["content_hash"] = _stored_hash(effective)
     return row
+
+
+def test_release_saved_before_citation_unit_words_stays_readable() -> None:
+    """語の項目が増える前の公開版を読み、保存内容と hash を変えずに既定で補う。"""
+    from app.rag.language_pack_releases import pack_from_release
+
+    row = release_row()
+    effective = builtin_pack().to_dict()
+    del effective["grounding_cues"]["citation_unit_words"]
+    row["effective_json"] = effective
+    row["content_hash"] = _stored_hash(effective)
+    untouched = deepcopy(row)
+
+    release = _release(row)
+
+    assert row == untouched
+    assert release.effective == effective
+    assert release.hash == row["content_hash"]
+    assert pack_from_release(release).words(
+        "grounding_cues", "citation_unit_words"
+    ) == builtin_pack().words("grounding_cues", "citation_unit_words")
+    assert _validated(effective, allow_legacy=True).ingest_hash == builtin_pack().ingest_hash
+    with pytest.raises(ValueError):
+        _validated(effective)
 
 
 @pytest.mark.parametrize("mask", range(64))
