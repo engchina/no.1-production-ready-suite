@@ -152,8 +152,12 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
     status = None
     reason = None
     cutoff = None
+    stream_location = None
     for cause in chain:
         invalid_json = invalid_json or isinstance(cause, JSONDecodeError)
+        candidate_location = _get(cause, "sdk_stream_location")
+        if stream_location is None and isinstance(candidate_location, str) and candidate_location:
+            stream_location = candidate_location
         candidate_cutoff = _get(cause, "reason")
         if cutoff is None and isinstance(candidate_cutoff, str) and candidate_cutoff in _CUTOFF_REASONS:
             cutoff = candidate_cutoff
@@ -196,4 +200,7 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
         result["category"] = "schema_enum" if any(e["type"] in {"enum", "literal_error"} for e in errors) else "schema_field"
     if contract_code is not None:
         result["contract_code"] = contract_code
+    if stream_location is not None:
+        result["category"] = "stream_assembly"
+        result["stream_location"] = stream_location
     return result
