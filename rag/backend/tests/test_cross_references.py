@@ -608,6 +608,12 @@ def _retrieved(
         "page_end": 1,
     }
     if targets:
+        from app.rag.cross_references import (
+            REFERENCE_RESOLUTION_VERSION,
+            REFERENCE_RESOLUTION_VERSION_KEY,
+        )
+
+        metadata[REFERENCE_RESOLUTION_VERSION_KEY] = REFERENCE_RESOLUTION_VERSION
         metadata[REFERENCE_TARGETS_KEY] = json.dumps(
             [target.to_dict() for target in targets], ensure_ascii=False
         )
@@ -714,10 +720,27 @@ class ReferenceOracle:
         ][:limit]
 
     def _in_scope(self, filters: dict[str, str], chunk: RetrievedChunk) -> bool:
+        if filters.get("document_id") and chunk.document_id != filters["document_id"]:
+            return False
+        if filters.get("page_number_max") and int(str(chunk.metadata.get("page_start") or 0)) > int(
+            filters["page_number_max"]
+        ):
+            return False
         knowledge_base_id = filters.get("knowledge_base_id")
         if self.knowledge_bases is None or not knowledge_base_id:
             return True
         return chunk.document_id in self.knowledge_bases.get(knowledge_base_id, set())
+
+    async def retrieval_reference_versions(
+        self, filters: dict[str, str], document_id: str
+    ) -> list[str]:
+        return list(
+            {
+                str(row.metadata.get("chunk_set_id") or "")
+                for row in self.sections
+                if row.document_id == document_id
+            }
+        )
 
     async def retrieval_reference_documents(
         self, filters: dict[str, str], *, title: str, limit: int
@@ -836,10 +859,14 @@ async def test_search_adds_referenced_section_after_citing_anchor() -> None:
     assert child.metadata["rrf_score"] == pytest.approx(
         result.child_chunks[0].metadata["rrf_score"] * 0.5
     )
-    # 参照先は参照元と同じ版(chunk_set)から読み、検索範囲は KB だけに絞る(文書名・分類は外す)。
+    # 参照先は参照元と同じ版から読み、明示した文書名・分類も残す。
     (call,) = oracle.reference_calls
     assert call["chunk_set_id"] == "cs-1"
-    assert call["filters"] == {"knowledge_base_id": "kb-1"}
+    assert call["filters"] == {
+        "knowledge_base_id": "kb-1",
+        "file_name": "経費",
+        "large_category": "業務A",
+    }
     added = state.chunks["doc-1:cs-1:s0"]
     assert added.metadata[REFERENCE_FROM_KEY] == "doc-1:a"
     assert added.metadata[REFERENCE_LABEL_KEY] == "第3章"
@@ -904,7 +931,10 @@ async def test_search_continues_when_reference_target_cannot_be_read() -> None:
     assert [child.chunk_uid for child in result.child_chunks] == ["doc-1:a"]
 
 
-async def test_search_resolves_other_document_reference_within_scope() -> None:
+@pytest.mark.parametrize("ambiguous_version", [False, True])
+async def test_search_resolves_other_document_reference_within_scope(
+    ambiguous_version: bool,
+) -> None:
     """他の文書への参照は、検索範囲の文書から文書名で探し、その文書の見出しで節を決める。"""
     target = ReferenceTarget("「権限」", "title", "権限", "経費精算マニュアル")
     anchor = _retrieved(
@@ -930,6 +960,8 @@ async def test_search_resolves_other_document_reference_within_scope() -> None:
             chunk_set_id="cs-8",
         )
     ]
+    if not ambiguous_version:
+        manual = manual[:2]
     oracle = ReferenceOracle([anchor], manual)
     oracle.documents = [
         ("doc-2", "経費精算マニュアル.pdf", ("第4章 権限",)),
@@ -942,15 +974,26 @@ async def test_search_resolves_other_document_reference_within_scope() -> None:
         retrieval_queries=["q"],
     )
 
-    assert [child.chunk_uid for child in result.child_chunks] == [
-        "doc-1:a",
-        "doc-2:cs-9:0",
-        "doc-2:cs-9:1",
-    ]
+    assert [child.chunk_uid for child in result.child_chunks] == (
+        ["doc-1:a"]
+        if ambiguous_version
+        else [
+            "doc-1:a",
+            "doc-2:cs-9:0",
+            "doc-2:cs-9:1",
+        ]
+    )
     assert oracle.document_calls == [
-        {"filters": {"knowledge_base_id": "kb-1"}, "title": "経費精算マニュアル"}
+        {
+            "filters": {"knowledge_base_id": "kb-1", "category_name": "経費"},
+            "title": "経費精算マニュアル",
+        }
     ]
-    assert oracle.section_calls == [{"knowledge_base_id": "kb-1", "document_id": "doc-2"}]
+    assert oracle.section_calls == (
+        []
+        if ambiguous_version
+        else [{"knowledge_base_id": "kb-1", "category_name": "経費", "document_id": "doc-2"}]
+    )
 
 
 async def test_search_matches_other_document_titles_in_one_read() -> None:
@@ -1058,7 +1101,12 @@ async def test_search_resolves_references_of_chunks_without_ingest_targets() -> 
     # 見出しの列は文書と版(chunk_set)ごとに 1 回だけ、検索と同じ範囲(KB)で読む。取込で解決済みの
     # 印(空の列)のある chunk と、参照の無い chunk では読まない。
     assert oracle.section_calls == [
-        {"knowledge_base_id": "kb-1", "document_id": "doc-1", "chunk_set_id": "cs-1"}
+        {
+            "knowledge_base_id": "kb-1",
+            "file_name": "経費",
+            "document_id": "doc-1",
+            "chunk_set_id": "cs-1",
+        }
     ]
     assert [call["section_path"] for call in oracle.reference_calls] == ["第3章 承認"]
     assert {item["resolved_at"] for item in state.reference_expansions.values()} == {"query"}
@@ -2175,47 +2223,25 @@ def _section_engine(oracle: ReferenceOracle) -> AnswerEngine:
     )
 
 
-@pytest.mark.parametrize(
-    ("anchor_document", "added"),
-    [("doc-a", ["doc-b:cs-9:1"]), ("doc-c", ["doc-b:cs-9:1", "doc-b:cs-9:0"])],
-    ids=["chapter-of-other-document", "whole-other-document"],
-)
-async def test_section_expansion_reads_reference_target_outside_caller_document_filter(
-    section_scope: SectionScopeMap, anchor_document: str, added: list[str]
+@pytest.mark.parametrize("anchor_document", ["doc-a", "doc-c"])
+async def test_section_expansion_does_not_bypass_explicit_document_filter(
+    section_scope: SectionScopeMap, anchor_document: str
 ) -> None:
-    """文書を絞った検索の交差参照で足した文書 B の章節は、参照先と同じ範囲で読める(#3325)。
-
-    呼び出し元の文書の絞り込み(document_id)は、参照で足した B の章節の読み取りに重ねない。
-    ナレッジベース・基準日は残す。絞り込んだ文書 A / C の章節は呼び出し元の条件のまま読む。
-    """
+    """参照で指された別文書も、呼び出し元の明示範囲を越えて読まない。"""
     oracle = SectionReferenceOracle(
         [], _section_corpus(), knowledge_bases={_SECTION_KB: {"doc-a", "doc-b", "doc-c"}}
     )
     filters = {"knowledge_base_id": _SECTION_KB, "document_id": anchor_document}
-
     outcome = await _section_engine(oracle).run(
         SearchRequest(query="合成の操作の手順は？", filters=filters)
     )
-
-    references = outcome.diagnostics["reference_expansion"]
-    assert sorted(item["chunk_id"] for item in references["chunks"]) == sorted(added)
-    reads = section_scope.reads
-    reference_reads = [scoped for document, _section, scoped in reads if document == "doc-b"]
-    assert reference_reads
-    # 参照先の章節は参照先を探した範囲(KB・基準日)で読み、呼び出し元の文書の条件を重ねない。
-    assert all(set(scoped) == {"knowledge_base_id", "as_of"} for scoped in reference_reads)
-    assert all(scoped["knowledge_base_id"] == _SECTION_KB for scoped in reference_reads)
-    # 絞り込んだ文書の章節は呼び出し元の条件(文書の絞り込みを含む)のまま読む。
-    own_reads = [scoped for document, _section, scoped in reads if document != "doc-b"]
-    assert own_reads
-    assert all(scoped["document_id"] == anchor_document for scoped in own_reads)
-    expansion = outcome.diagnostics["section_expansion"]
-    assert expansion["stop_reason"] != "partial_read"
-    assert all(item.get("document_id") != "doc-b" for item in expansion.get("unread", []))
-    assert "回答に未反映の関連章節" not in outcome.answer
-    assert "原文の一部だけを取得" not in outcome.answer
-    assert outcome.diagnostics["outcome"] == "answered"
-    assert _SECTION_ANSWER in outcome.answer
+    assert not outcome.diagnostics.get("reference_expansion", {}).get("chunks")
+    assert section_scope.reads
+    assert all(document == anchor_document for document, _section, _scope in section_scope.reads)
+    assert all(
+        scope["document_id"] == anchor_document
+        for _document, _section, scope in section_scope.reads
+    )
 
 
 async def test_section_expansion_does_not_read_reference_target_outside_knowledge_base(
@@ -2281,18 +2307,10 @@ async def test_section_expansion_keeps_caller_filters_for_sections_not_reached_b
         SearchRequest(query="合成の操作の手順は？", filters=caller)
     )
 
-    assert [item["chunk_id"] for item in outcome.diagnostics["reference_expansion"]["chunks"]] == [
-        "doc-a:cs-1:1"
-    ]
+    assert not outcome.diagnostics.get("reference_expansion", {}).get("chunks")
     reads = {section: scoped for _document, section, scoped in section_scope.reads}
-    # 主の検索で当たった章節は、呼び出し元の条件(文書・ページ)のまま読む。
     assert reads["doc-a:第1章 概要"] == {**caller, "as_of": reads["doc-a:第1章 概要"]["as_of"]}
-    # 参照で足した章節は、参照先と同じ範囲(KB・基準日)で読む。
-    assert set(reads["doc-a:第3章 手順"]) == {"knowledge_base_id", "as_of"}
-    assert all(
-        item.get("section_id") != "doc-a:第3章 手順"
-        for item in outcome.diagnostics["section_expansion"].get("unread", [])
-    )
+    assert "doc-a:第3章 手順" not in reads
 
 
 # ---- MCP の根拠 ----
@@ -2518,3 +2536,37 @@ def test_number_units_kanji_name_chars_and_coordination_come_from_settings(
     assert [s.document_title for s in document_name_references(text)] == ["保守マニュアル"]
     reference_words(name_chars=["一-鿿"])
     assert document_name_references(text) == []
+
+
+async def test_legacy_reference_does_not_bypass_ambiguous_target_validation() -> None:
+    from app.rag.cross_references import REFERENCE_RESOLUTION_VERSION_KEY
+
+    target = ReferenceTarget("第2節", "jsection", "2", None, "第1章 > 第2節")
+    anchor = _retrieved("synthetic:anchor", "第2節を参照。", "序文", targets=[target])
+    anchor.metadata.pop(REFERENCE_RESOLUTION_VERSION_KEY)
+    rows = [
+        _retrieved("synthetic:one", "合成本文A", "第1章 > 第2節"),
+        _retrieved("synthetic:two", "合成本文B", "第2章 > 第2節"),
+    ]
+    oracle = ReferenceOracle([anchor], rows)
+    result = await _engine(oracle)._search(
+        SearchRequest(query="synthetic"), _SearchState(), retrieval_queries=["synthetic"]
+    )
+    assert [child.chunk_uid for child in result.child_chunks] == [anchor.chunk_id]
+    assert oracle.section_calls
+    assert oracle.reference_calls == []
+
+
+async def test_equally_matching_documents_do_not_select_first_target() -> None:
+    target = ReferenceTarget("第2条", "article", "2", "合成参照文書")
+    anchor = _retrieved("synthetic:anchor", "合成参照文書の第2条を参照。", "序文", targets=[target])
+    oracle = ReferenceOracle([anchor], [])
+    oracle.documents = [
+        ("synthetic-a", "合成参照文書.pdf", ()),
+        ("synthetic-b", "合成参照文書.txt", ()),
+    ]
+    result = await _engine(oracle)._search(
+        SearchRequest(query="synthetic"), _SearchState(), retrieval_queries=["synthetic"]
+    )
+    assert [child.chunk_uid for child in result.child_chunks] == [anchor.chunk_id]
+    assert oracle.reference_calls == []

@@ -95,6 +95,7 @@ def test_build_graph_index_creates_entities_and_relationships() -> None:
         "entities",
         "relationships",
         "entity_chunk_links",
+        "references",
     }
 
 

@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -130,6 +131,10 @@ class FakeKnowledgeBaseOracle:
             self.extraction_fields.pop(knowledge_base_id, None)
         else:
             self.extraction_fields[knowledge_base_id] = fields
+
+    async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
+        assert "rag_graph_references" in sql
+        return []
 
     async def fetch_knowledge_base_subgraph(
         self, knowledge_base_id: str, *, limit: int

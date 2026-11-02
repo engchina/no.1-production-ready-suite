@@ -135,6 +135,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "search_audit",
         "ingestion_audit",
         "knowledge_graph",
+        "graph_references",
         "entities",
         "section_map",
         "citation_feedback",
@@ -507,7 +508,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 145
+    assert len(statements) == 146
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
@@ -619,6 +620,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261102_002_native_missing_scopes",
         "20261102_003_native_text_search_only",
         "20261102_004_native_index_maintenance",
+        "20261102_005_graph_references",
     ]
 
 

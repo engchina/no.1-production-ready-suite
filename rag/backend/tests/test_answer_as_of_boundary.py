@@ -186,8 +186,8 @@ async def test_main_search_and_expansions_use_the_same_as_of(
     entity, graph = plans
     assert entity.scopes == [request.filters]
     assert graph.scopes == [request.filters]
-    # 交差参照は KB・旧版の扱い・基準日だけを保ち、文書名の絞り込みは外す(#1280)。
-    expected = {"as_of": as_of, "knowledge_base_id": "kb-a", "include_superseded": "true"}
+    # 交差参照も基準日と利用者が指定した文書名を含む全ての条件を保つ(#4026)。
+    expected = request.filters
     assert {frozenset(call["filters"].items()) for call in oracle.document_batch_calls} <= {
         frozenset(expected.items())
     }

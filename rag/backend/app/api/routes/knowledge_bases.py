@@ -153,6 +153,19 @@ async def get_knowledge_base_graph(
 
     async def _load() -> KnowledgeBaseGraphData:
         nodes, edges = await oracle.fetch_knowledge_base_subgraph(knowledge_base_id, limit=limit)
+        from app.clients.graph_reference_store import GraphReferenceStore
+
+        references = await GraphReferenceStore(oracle).visible_edges(
+            knowledge_base_id, [str(node["id"]) for node in nodes], limit=limit
+        )
+        # 同文書の旧graph辺と新しい参照記録を二重に表示しない。
+        pairs = {(edge["source"], edge["target"]) for edge in references}
+        edges = [
+            edge
+            for edge in edges
+            if edge.get("type") != "references" or (edge["source"], edge["target"]) not in pairs
+        ]
+        edges.extend(references)
         return KnowledgeBaseGraphData(
             status="ok" if nodes else "empty",
             nodes=[KnowledgeBaseGraphNode(**node) for node in nodes],
@@ -167,6 +180,37 @@ async def get_knowledge_base_graph(
         log_label="knowledge_base_graph",
     )
     return ApiResponse(data=data, warning_messages=[degraded.message] if degraded else [])
+
+
+@router.get("/{knowledge_base_id}/graph/references")
+async def get_knowledge_base_graph_references(
+    knowledge_base_id: str,
+    node_id: str = Query(min_length=64, max_length=64, pattern="^[a-f0-9]+$"),
+    reference_id: str | None = Query(
+        default=None, min_length=64, max_length=64, pattern="^[a-f0-9]+$"
+    ),
+    direction: str = Query(default="outgoing", pattern="^(outgoing|incoming)$"),
+    offset: int = Query(default=0, ge=0, le=100000),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> ApiResponse[dict[str, Any]]:
+    """同じ版の参照先・参照元を、読み取り時点の権限で返す。"""
+    from app.clients.graph_reference_store import GraphReferenceStore
+
+    oracle = OracleClient()
+    if await oracle.get_knowledge_base(knowledge_base_id) is None:
+        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
+    try:
+        data = await GraphReferenceStore(oracle).page(
+            knowledge_base_id,
+            node_id,
+            direction=direction,
+            offset=offset,
+            limit=limit,
+            reference_id=reference_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="対象が見つかりません。") from exc
+    return ApiResponse(data=data)
 
 
 @router.patch("/{knowledge_base_id}", response_model=ApiResponse[KnowledgeBaseDetail])

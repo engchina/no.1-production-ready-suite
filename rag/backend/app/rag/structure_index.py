@@ -30,7 +30,9 @@ async def structure_index_targets(
 
 
 def source_fingerprint(chunk_sets: list[str]) -> str:
-    return hashlib.sha256(json.dumps(sorted(chunk_sets)).encode()).hexdigest()
+    # 同じChunk集合でも構築契約が変わった旧索引は「構築済み」にしない。
+    payload = {"version": "explicit-references-v1", "chunk_sets": sorted(chunk_sets)}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 async def structure_index_plan(
@@ -135,16 +137,15 @@ async def rebuild_document_structure_index(
     expected_source: list[str] | None = None,
     expected_job_id: str | None = None,
     build_chunk_sets: list[str] | None = None,
+    reference_catalog_cache: dict[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """保存済みactive成果からKBの構造索引だけを補建する。本文/embeddingは読み書きしない。"""
+    """保存済みactive成果から補建する。参照再抽出に本文を読み、embeddingは変更しない。"""
     import asyncio
 
     from app.clients.oracle import _oracle_retrieval_where
     from app.clients.structure_index_store import StructureIndexStore
     from app.rag.chunking import Chunk
     from app.rag.graph_index import (
-        GRAPH_ENTITY_MAX_PER_KB,
-        _entity_names_for_chunk,
         build_graph_index,
     )
     from app.schemas.extraction import StructuredExtraction
@@ -165,12 +166,14 @@ async def rebuild_document_structure_index(
         {"knowledge_base_id": knowledge_base_id, "document_id": document_id}
     )
     rows = await oracle._fetch_all(
-        f"""SELECT c.chunk_id,c.chunk_index,c.chunk_set_id,
+        f"""SELECT c.chunk_id,c.chunk_index,c.chunk_set_id,c.chunk_text AS reference_source_text,
         JSON_VALUE(c.metadata_json,'$.section_title' RETURNING VARCHAR2(2000)) AS section_title,
         JSON_QUERY(c.metadata_json,'$.section_path' RETURNING CLOB) AS section_path_json,
         JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS section_path_text,
         JSON_VALUE(c.metadata_json,'$.content_kind') AS content_kind,
         JSON_VALUE(c.metadata_json,'$.page_number') AS page_number,
+        JSON_QUERY(c.metadata_json,'$.reference_targets_json' RETURNING CLOB WITH WRAPPER)
+            AS stored_references,
         JSON_VALUE(r.processing_config,'$.graph_profile') AS recipe_graph_profile
         FROM rag_chunks c JOIN rag_documents d ON d.document_id=c.document_id
         LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id=c.chunk_set_id
@@ -187,6 +190,16 @@ async def rebuild_document_structure_index(
         raise ValueError("no_chunks")
     if expected_source is not None and source != sorted(expected_source):
         raise ValueError("source_changed")
+    from app.clients.graph_reference_store import GraphReferenceStore
+    from app.rag.request_context import current_audit_request_context
+
+    # 同じjobの文書ごとにKB全体の目録を読み直さない。権限変更時は再取得する。
+    catalog_key = (knowledge_base_id, current_audit_request_context())
+    reference_documents = (reference_catalog_cache or {}).get(catalog_key)
+    if reference_documents is None:
+        reference_documents = await GraphReferenceStore(oracle).documents(knowledge_base_id)
+        if reference_catalog_cache is not None:
+            reference_catalog_cache[catalog_key] = reference_documents
     graphs = {}
     counts: dict[str, Any] = {
         "chunk_sets": len(source),
@@ -220,7 +233,7 @@ async def rebuild_document_structure_index(
             if not path and row.get("section_path_json"):
                 path = json.loads(str(row["section_path_json"]))
             if isinstance(path, list):
-                path = " / ".join(str(part) for part in path)
+                path = " > ".join(str(part) for part in path)
             metadata = {
                 key: row[key]
                 for key in ("section_title", "content_kind", "page_number")
@@ -228,10 +241,20 @@ async def rebuild_document_structure_index(
             }
             if path:
                 metadata["section_path"] = path
+            if row.get("stored_references"):
+                stored = json.loads(str(row["stored_references"]))
+                if stored:
+                    metadata["reference_targets_json"] = stored[0]
             if not path and not row.get("section_title"):
                 missing += 1
             chunks.append(
-                Chunk(text="", index=index, start_offset=0, end_offset=0, metadata=metadata)
+                Chunk(
+                    text=str(row.get("reference_source_text") or ""),
+                    index=index,
+                    start_offset=0,
+                    end_offset=0,
+                    metadata=metadata,
+                )
             )
         if missing == len(group):
             raise ValueError("no_structure")
@@ -243,9 +266,9 @@ async def rebuild_document_structure_index(
             chunks=chunks,
             chunk_set_id=chunk_set_id,
             document_name=document.file_name,
+            reference_documents=reference_documents,
         )
-        unique = {name for chunk in chunks for name in _entity_names_for_chunk(chunk)}
-        if missing or len(unique) + 1 > GRAPH_ENTITY_MAX_PER_KB:
+        if missing:
             counts["quality"] = "PARTIAL"
         graphs[chunk_set_id] = graph
         counts["entities"] += len(graph.entities)

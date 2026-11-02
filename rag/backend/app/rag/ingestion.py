@@ -89,7 +89,12 @@ from app.rag.chunking_small_to_big import (
     small_to_big_parent_source,
 )
 from app.rag.chunking_strategy import resolve_chunking_params
-from app.rag.cross_references import annotate_cross_references, apply_reference_search_context
+from app.rag.cross_references import (
+    annotate_cross_references,
+    apply_reference_search_context,
+    extract_references,
+    reference_targets,
+)
 from app.rag.entity_index import EntityIndex, EntityIndexOptions, build_entity_index
 from app.rag.extraction_field_adapter import (
     FIELD_EXTRACTION_OUTCOME_ARTIFACT_KEY,
@@ -3927,17 +3932,39 @@ class IngestionPipeline:
         """構造化抽出から関係情報(文書と章・節の見出しのつながり)を作り Oracle へ保存する。"""
         knowledge_bases = await self._oracle.list_document_knowledge_bases(document_id)
         document = await self._oracle.get_document(document_id)
-        graph_index = await asyncio.to_thread(
-            build_graph_index,
-            document_id=document_id,
-            knowledge_base_ids=knowledge_base_ids
+        from app.clients.graph_reference_store import GraphReferenceStore
+
+        kb_ids = (
+            knowledge_base_ids
             if knowledge_base_ids is not None
-            else [knowledge_base.id for knowledge_base in knowledge_bases],
-            extraction=extraction,
-            chunks=chunks,
-            chunk_set_id=chunk_set_id,
-            document_name=document.file_name if document is not None else None,
+            else [kb.id for kb in knowledge_bases]
         )
+        graph_index = GraphIndex()
+        index_targets: list[str | None] = list(kb_ids) if kb_ids else [None]
+        for kb_id in index_targets:
+            catalog = (
+                await GraphReferenceStore(self._oracle).documents(kb_id)
+                if kb_id
+                and any(
+                    extract_references(chunk.text) or reference_targets(chunk.metadata)
+                    for chunk in chunks
+                )
+                else ()
+            )
+            part = await asyncio.to_thread(
+                build_graph_index,
+                document_id=document_id,
+                knowledge_base_ids=[kb_id] if kb_id else [],
+                extraction=extraction,
+                chunks=chunks,
+                chunk_set_id=chunk_set_id,
+                document_name=document.file_name if document is not None else None,
+                reference_documents=catalog,
+            )
+            graph_index.entities.extend(part.entities)
+            graph_index.relationships.extend(part.relationships)
+            graph_index.entity_chunk_links.extend(part.entity_chunk_links)
+            graph_index.references.extend(part.references)
         await self._oracle.replace_document_graph_index(
             document_id,
             graph_index,

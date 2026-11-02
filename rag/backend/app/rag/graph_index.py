@@ -17,9 +17,14 @@ from typing import Literal
 from rag_parser_core.language import current_pack
 
 from app.rag.chunking import Chunk
+from app.rag.cross_references import (
+    extract_references,
+    reference_targets,
+    split_section_path,
+)
+from app.rag.reference_records import GraphReferenceRecord, build_reference_records
+from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
 from app.schemas.extraction import StructuredExtraction
-
-GRAPH_ENTITY_MAX_PER_KB = 80
 
 
 @dataclass(frozen=True)
@@ -63,6 +68,7 @@ class GraphEntityChunkLink:
 class GraphIndex:
     """1 document から生成した関係情報の index。"""
 
+    references: list[GraphReferenceRecord] = field(default_factory=list)
     entities: list[GraphEntity] = field(default_factory=list)
     relationships: list[GraphRelationship] = field(default_factory=list)
     entity_chunk_links: list[GraphEntityChunkLink] = field(default_factory=list)
@@ -76,6 +82,7 @@ def build_graph_index(
     chunks: list[Chunk],
     chunk_set_id: str | None = None,
     document_name: str | None = None,
+    reference_documents: tuple[ReferenceDocument, ...] = (),
 ) -> GraphIndex:
     """構造化抽出と chunk から関係情報(entity / relationship / entity-chunk link)を生成する。
 
@@ -84,6 +91,7 @@ def build_graph_index(
     if not chunks:
         return GraphIndex()
     kb_ids: list[str | None] = list(knowledge_base_ids) if knowledge_base_ids else [None]
+    references: list[GraphReferenceRecord] = []
     entities: list[GraphEntity] = []
     relationships: list[GraphRelationship] = []
     links: list[GraphEntityChunkLink] = []
@@ -96,11 +104,14 @@ def build_graph_index(
             extraction=extraction,
             chunks=chunks,
             document_name=document_name,
+            reference_documents=reference_documents,
         )
+        references.extend(kb_index.references)
         entities.extend(kb_index.entities)
         relationships.extend(kb_index.relationships)
         links.extend(kb_index.entity_chunk_links)
     return GraphIndex(
+        references=references,
         entities=entities,
         relationships=relationships,
         entity_chunk_links=links,
@@ -116,6 +127,7 @@ def _build_graph_index_for_kb(
     extraction: StructuredExtraction,
     chunks: list[Chunk],
     document_name: str | None = None,
+    reference_documents: tuple[ReferenceDocument, ...] = (),
 ) -> GraphIndex:
     document_entity = _document_entity(
         document_id=document_id,
@@ -132,7 +144,7 @@ def _build_graph_index_for_kb(
         names = _entity_names_for_chunk(chunk)
         for name in names:
             entity = entity_by_name.get(name)
-            if entity is None and len(entity_by_name) < GRAPH_ENTITY_MAX_PER_KB:
+            if entity is None:
                 entity = _section_entity(
                     document_id=document_id,
                     identity_scope=identity_scope,
@@ -160,7 +172,62 @@ def _build_graph_index_for_kb(
                 relevance_score=_chunk_relevance(chunk),
             )
 
+    # 参照は包含と別に構築する。旧metadataの推測済みパスをそのまま確定辺へ転用しない。
+    reference_source = ReferenceDocument(
+        document_id=document_id,
+        chunk_set_id=chunk_set_id,
+        name=document_name or "",
+        section_paths=tuple(_metadata_str(chunk, "section_path") or "" for chunk in chunks),
+    )
+    entity_by_path = {split_section_path(name): entity for name, entity in entity_by_name.items()}
+    for chunk in chunks:
+        source_path = _metadata_str(chunk, "section_path") or ""
+        source_entity = entity_by_path.get(split_section_path(source_path))
+        if source_entity is None:
+            continue
+        specs = extract_references(chunk.text) or [
+            target.spec for target in reference_targets(chunk.metadata)
+        ]
+        for spec in specs:
+            resolution = resolve_scoped_reference(
+                spec,
+                source=reference_source,
+                citing_path=source_path,
+                documents=(),
+            )
+            target_entity = entity_by_path.get(
+                split_section_path(resolution.target.section_path) if resolution.target else ()
+            )
+            if target_entity is None:
+                continue
+            relationship = GraphRelationship(
+                relationship_id=_graph_id(
+                    "relationship",
+                    identity_scope,
+                    knowledge_base_id,
+                    source_entity.entity_id,
+                    target_entity.entity_id,
+                    "references",
+                ),
+                knowledge_base_id=knowledge_base_id,
+                source_entity_id=source_entity.entity_id,
+                target_entity_id=target_entity.entity_id,
+                relationship_type="references",
+                description=spec.label,
+                confidence=1.0,
+                source_document_ids=[document_id],
+            )
+            relationships[relationship.relationship_id] = relationship
+
     return GraphIndex(
+        references=build_reference_records(
+            knowledge_base_id=knowledge_base_id,
+            source=reference_source,
+            chunks=chunks,
+            documents=reference_documents,
+        )
+        if knowledge_base_id is not None
+        else [],
         entities=list(entity_by_name.values()),
         relationships=list(relationships.values()),
         entity_chunk_links=list(links.values()),

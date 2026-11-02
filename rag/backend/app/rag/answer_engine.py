@@ -90,6 +90,8 @@ from app.rag.cross_references import (
     REFERENCE_FROM_KEY,
     REFERENCE_LABEL_KEY,
     REFERENCE_RANK_KEY,
+    REFERENCE_RESOLUTION_VERSION,
+    REFERENCE_RESOLUTION_VERSION_KEY,
     REFERENCE_TARGETS_KEY,
     ReferenceTarget,
     SectionIndex,
@@ -195,7 +197,6 @@ _DOCUMENT_REFERENCE_CANDIDATES = 8
 # と違い、意図して利用者の絞り込みを越える(#3260)。基準日(as_of)は時点の境界なので外さない
 # (主検索と同じ日で有効期間を判定する。#2602)。利用者の権限(認可の範囲)は検索条件ではなく
 # SQL の述語で当たるので、ここでも外れない。
-_REFERENCE_SCOPE_FILTER_KEYS = ("knowledge_base_id", "include_superseded", AS_OF_FILTER_KEY)
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
 # 診断に出す交差参照の起点の記録の、検索の回数の上限(CRAG の各回・要求ごとの再検索)。
@@ -405,6 +406,7 @@ class _SearchState:
     reference_section_indexes: dict[tuple[str, str], SectionIndex] = field(default_factory=dict)
     # 他の文書への参照の文書名に合う文書((範囲, 文書名の比較形) ごと。当たり方の順。#1400)。
     reference_documents: dict[tuple[str, str], list[tuple[str, str]]] = field(default_factory=dict)
+    reference_versions: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     # 参照の文書名の照合の DB の行(同じ key。辿る前に候補の文書名をまとめて 1 回で読む。#2137)。
     reference_document_rows: dict[tuple[str, str], list[tuple[str, str, tuple[str, ...]]]] = field(
         default_factory=dict
@@ -468,16 +470,12 @@ def _relaxation_steps(
 
 
 def _reference_scope(filters: Mapping[str, str]) -> dict[str, str]:
-    """交差参照の参照先を探して読む範囲: ナレッジベース・旧版の扱い・基準日だけ(#1280・#3260)。
+    """明示参照でも利用者が指定した検索範囲を外さない。
 
     ``filters`` は利用者が指定した条件(``request.filters``)。参照で足した chunk の章節を読むときも
     同じ範囲を使う(#3325)。利用者の権限は検索条件ではなく SQL の述語で当たる。
     """
-    return {
-        key: value
-        for key, value in filters.items()
-        if key in _REFERENCE_SCOPE_FILTER_KEYS and value.strip()
-    }
+    return {key: value for key, value in filters.items() if value.strip()}
 
 
 def _section_chain(sections: Sequence[Any], owner_section_id: str) -> list[str]:
@@ -499,8 +497,7 @@ def _expansion_scope(filters: Mapping[str, str]) -> dict[str, str]:
     条件を含む。拡張は主の検索と同じ範囲の中で広げ、利用者が指定した範囲の外から黙って根拠を足さ
     ない。質問から推測して自動で足した条件(``_question_filters``・``merge_field_conditions``)は
     含まない(0 件で外す条件。#2401)。利用者の権限は検索条件ではなく SQL の述語で当たる。本文が
-    明記した参照を辿る交差参照は、意図して文書名などの絞り込みを越える
-    (``_REFERENCE_SCOPE_FILTER_KEYS``)。
+    明記した参照を辿る交差参照も同じ明示範囲を維持する。
     """
     return {key: value for key, value in filters.items() if value.strip()}
 
@@ -2403,8 +2400,8 @@ class AnswerEngine:
         ``rag_reference_expansion_max_chunks`` 件まで、参照先 1 つにつき節の先頭から
         ``_REFERENCE_CHUNKS_PER_TARGET`` 件まで。順位は rag_engine の rerank が決める(LLM は
         呼ばない)。参照先の範囲は検索範囲のナレッジベース(と利用者の権限・旧版の扱い・基準日)で、
-        文書名・ページ・分類・項目の絞り込みは使わない(本文が明記した参照は、利用者が指定した文書名の
-        外へも辿る。``_REFERENCE_SCOPE_FILTER_KEYS``。#3260)。読めない参照先は足さない(回答は続ける)。
+        文書名・ページ・分類・項目の明示条件も維持する。範囲外・読めない参照先は足さない
+        (回答は続ける)。
 
         文書名だけの参照(「時間帯は定期保守計画で確かめます」。#1400)は、参照先の文書の中を
         ``question``(検索文とその埋め込み)で検索し、rerank で質問に関連の高い chunk を選ぶ
@@ -2594,7 +2591,10 @@ class AnswerEngine:
         印のある chunk でも、本文の文書名だけの参照(#1400)が印に無ければ足す(#1400 より前の取込)。
         """
         metadata = anchor.metadata
-        if REFERENCE_TARGETS_KEY in metadata:
+        if (
+            REFERENCE_TARGETS_KEY in metadata
+            and metadata.get(REFERENCE_RESOLUTION_VERSION_KEY) == REFERENCE_RESOLUTION_VERSION
+        ):
             stored = reference_targets(metadata)
             extra = _document_name_targets(anchor, stored)
             if extra:
@@ -2604,6 +2604,9 @@ class AnswerEngine:
         if anchor.chunk_id in state.query_reference_targets:
             return state.query_reference_targets[anchor.chunk_id]
         specs = [] if is_derived_chunk(anchor) else extract_references(anchor.text)
+        if not specs and not is_derived_chunk(anchor):
+            # 旧記録の解決先は信用せず、元の参照表記から現在の同版・同範囲で再検証する。
+            specs = [target.spec for target in reference_targets(metadata)]
         targets: list[ReferenceTarget] = []
         if specs:
             file_name = anchor.file_name or ""
@@ -2717,8 +2720,35 @@ class AnswerEngine:
         ]
         if not rows:
             return []
-        first_set = rows[0].metadata.get("chunk_set_id")
-        return [row for row in rows if row.metadata.get("chunk_set_id") == first_set]
+        from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
+
+        versions = {str(row.metadata.get("chunk_set_id") or "") for row in rows}
+        candidates = tuple(
+            ReferenceDocument(
+                document_id,
+                version or None,
+                target.document_title or "",
+                tuple(path for _name, path, _count in sections),
+            )
+            for version in versions
+        )
+        source = ReferenceDocument(
+            anchor.document_id,
+            str(anchor.metadata.get("chunk_set_id") or "") or None,
+            anchor.file_name or "",
+            (),
+        )
+        resolved = resolve_scoped_reference(
+            target.spec,
+            source=source,
+            citing_path=str(anchor.metadata.get("section_path") or ""),
+            documents=candidates,
+        )
+        if resolved.target is None:
+            return []
+        return [
+            row for row in rows if row.metadata.get("chunk_set_id") == resolved.target.chunk_set_id
+        ]
 
     async def _referenced_document_id(
         self,
@@ -2727,12 +2757,24 @@ class AnswerEngine:
         anchor: RetrievedChunk,
         target: ReferenceTarget,
     ) -> str | None:
-        """参照の文書名に合う検索範囲の文書のうち、最も確かなもの(参照元の文書は除く)。"""
+        """範囲内で唯一に特定できる文書だけを返す。並び順で曖昧さを隠さない。"""
         documents = await self._reference_documents(scope, state, target.document_title or "")
-        return next(
-            (document_id for document_id, _name in documents if document_id != anchor.document_id),
-            None,
-        )
+        identifiers = {
+            document_id
+            for document_id, _name in documents
+            if document_id != anchor.document_id
+            and (not scope.get("document_id") or document_id == scope["document_id"])
+        }
+        if len(identifiers) != 1:
+            return None
+        document_id = next(iter(identifiers))
+        key = (json.dumps(scope, ensure_ascii=False, sort_keys=True), document_id)
+        if key not in state.reference_versions:
+            state.reference_versions[key] = await self._oracle.retrieval_reference_versions(
+                scope, document_id
+            )
+        versions = state.reference_versions[key]
+        return document_id if len(versions) == 1 and versions[0] else None
 
     async def _reference_documents(
         self, scope: dict[str, str], state: _SearchState, title: str
@@ -2759,7 +2801,12 @@ class AnswerEngine:
                 for document_id, file_name, headings in rows
                 if (match := document_name_match(title, file_name, headings)) is not None
             )
-            documents = [(document_id, file_name) for _m, _l, document_id, file_name in ranked]
+            # 一致の強さで絞るが、同順位を名前の長さ・文書順で一つに決めない。
+            documents = [
+                (document_id, file_name)
+                for match, _length, document_id, file_name in ranked
+                if match == ranked[0][0]
+            ]
         state.reference_documents[cache_key] = documents
         return documents
 
@@ -2794,8 +2841,10 @@ class AnswerEngine:
         rows = [hit for hit in original_chunks(hits) if hit.document_id == document_id]
         if not rows:
             return []
-        first_set = rows[0].metadata.get("chunk_set_id")
-        rows = [row for row in rows if row.metadata.get("chunk_set_id") == first_set]
+        version = state.reference_versions[
+            (json.dumps(scope, ensure_ascii=False, sort_keys=True), document_id)
+        ][0]
+        rows = [row for row in rows if row.metadata.get("chunk_set_id") == version]
         if len(rows) < 2 or not self._settings.rag_rerank_enabled:
             return rows
         try:

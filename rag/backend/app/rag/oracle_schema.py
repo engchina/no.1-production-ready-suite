@@ -18,6 +18,7 @@ from app.clients.document_category_store import oracle_document_category_schema_
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
+from app.clients.graph_reference_store import graph_reference_schema_sql
 from app.clients.language_pack_release_store import language_pack_release_statements
 from app.clients.native_hybrid_schema import (
     native_hybrid_ivf_migration_sql,
@@ -329,6 +330,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="knowledge_graph",
             table_name="rag_graph_entities",
             sql=oracle_knowledge_graph_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="graph_references",
+            table_name="rag_graph_references",
+            sql=graph_reference_schema_sql(),
         ),
         # 実体の層（#1362）。実体・別名・実体と chunk の関連。rag_chunk_sets / rag_chunks
         # を参照する。
@@ -686,6 +692,13 @@ END;
             sql=_create_missing_objects_sql(native_maintenance_tables_sql(), "原生索引の整理要求")
             + "\n\n"
             + native_maintenance_activation_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_005_graph_references",
+            table_name="rag_graph_references",
+            sql=_create_missing_objects_sql(graph_reference_schema_sql(), "明示参照"),
         )
     )
     return sections

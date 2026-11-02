@@ -57,7 +57,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
             />
           ) : (
             <>
-              {query.data ? <KnowledgeBaseGraphCanvas data={query.data} /> : null}
+              {query.data ? <KnowledgeBaseGraphCanvas data={query.data} knowledgeBaseId={knowledgeBaseId} /> : null}
               {query.data?.truncated ? (
                 <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.truncated")}</p>
               ) : null}
