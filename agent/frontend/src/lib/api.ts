@@ -450,6 +450,19 @@ export interface EvaluationCase {
   expected_output?: Record<string, EvaluationOutputValue>[];
 }
 
+/**
+ * 評価ケースの能力分類と安全の期待（任意。#2581）。保存したケースでも省かれることがある（#2581 より前の
+ * ケース）ので、`Required<EvaluationCase>` には含めない。
+ */
+export interface EvaluationCaseLabels {
+  /** 能力分類（評価データで決める語）。 */
+  capability?: string;
+  /** 実行してはいけないツール（実行に成功したら安全違反。ブロックされた試行は違反にしない）。 */
+  forbidden_tools?: string[];
+  /** 操作を完了したと報告する語（期待するツールを実行せずにこの語で答えたら安全違反）。 */
+  completion_claims?: string[];
+}
+
 /** 出力の項目の値（文字・数値・真偽・null。#2558）。 */
 export type EvaluationOutputValue = string | number | boolean | null;
 
@@ -494,12 +507,12 @@ export interface EvaluationSetInput {
   agent_id: string;
   name: string;
   description: string;
-  cases: EvaluationCase[];
+  cases: (EvaluationCase & EvaluationCaseLabels)[];
 }
 
 export interface EvaluationSet extends EvaluationSetInput {
   id: string;
-  cases: Required<EvaluationCase>[];
+  cases: (Required<EvaluationCase> & EvaluationCaseLabels)[];
   created_by_user_uuid: string | null;
   created_at: string;
   updated_at: string;
@@ -556,7 +569,11 @@ export interface EvaluationClarificationRound {
 }
 
 export interface EvaluationCaseResult {
-  case: Required<Omit<EvaluationCase, "expected_output" | "expected_approval">> & Pick<EvaluationCase, "expected_output" | "expected_approval">;
+  case: Required<Omit<EvaluationCase, "expected_output" | "expected_approval">> &
+    Pick<EvaluationCase, "expected_output" | "expected_approval"> &
+    EvaluationCaseLabels;
+  /** 試行の番号（1 から。#2582。結果は「ケース × 試行」で、#2582 より前の評価は 1 回だけ）。 */
+  trial?: number;
   status: EvaluationCaseStatus;
   run_id: string | null;
   answer: string;
@@ -578,6 +595,9 @@ export interface EvaluationCaseResult {
   /** 出力の項目の判定（#2558。期待する出力の無いケースは空と null）。 */
   field_results?: EvaluationFieldResult[];
   field_correct?: boolean | null;
+  /** 安全違反（#2581。コードで判定し、LLM の合否で上書きしない）と、止まった禁止・書き込みの試行。 */
+  safety_violations?: EvaluationSafetyViolation[];
+  blocked_attempts?: string[];
   error: string | null;
   duration_ms: number | null;
 }
@@ -606,6 +626,74 @@ export interface EvaluationSummary {
   field_items?: number;
   field_items_correct?: number;
   field_item_accuracy?: number | null;
+  /**
+   * 反復試行（#2582）。件数と `pass_rate` は試行の単位、`judged_cases` は 1 回以上判定できたケースの数。
+   * 区間は 95%（Wilson。単位はケース）。Pass@k / Pass^k の分母は k 回すべてを判定できたケース（`complete_cases`）。
+   */
+  trials?: number;
+  cases?: number;
+  judged_cases?: number;
+  judged_trials?: number;
+  pass_rate_interval?: EvaluationInterval | null;
+  complete_cases?: number;
+  incomplete_cases?: number;
+  missing_trials?: number;
+  stable_cases?: number;
+  unstable_cases?: number;
+  pass_at_k?: number | null;
+  pass_at_k_interval?: EvaluationInterval | null;
+  pass_hat_k?: number | null;
+  pass_hat_k_interval?: EvaluationInterval | null;
+  /** 安全違反のあった試行・ケースと、止まった禁止・書き込みの試行（#2581。合格率には含めない）。 */
+  safety_violations?: number;
+  safety_violation_cases?: number;
+  blocked_attempts?: number;
+  /** 能力分類ごとの集計（#2581。分類の無い評価は空）。 */
+  capabilities?: EvaluationCapabilitySummary[];
+}
+
+/** 安全違反の種類（#2581）。 */
+export type EvaluationSafetyViolationKind = "forbidden_tool_executed" | "unapproved_write" | "unexecuted_claim";
+
+export interface EvaluationSafetyViolation {
+  kind: EvaluationSafetyViolationKind;
+  /** 対象のツール（未実行の完了報告は語）。 */
+  tool: string;
+  run_id: string | null;
+  detail: string;
+}
+
+/** 能力分類ごとの集計（#2581。区間は分類のケースの数で求める）。 */
+export interface EvaluationCapabilitySummary {
+  capability: string;
+  cases: number;
+  trials: number;
+  judged_trials: number;
+  missing_trials: number;
+  correct: number;
+  pass_rate: number | null;
+  pass_rate_interval: EvaluationInterval | null;
+  safety_violations: number;
+}
+
+/** 95% の区間の [下限, 上限]（#2582）。 */
+export type EvaluationInterval = [number, number];
+
+/** ケースの k 回の試行の安定性（#2582）。 */
+export type EvaluationStability = "stable_pass" | "stable_fail" | "unstable" | "incomplete" | "unjudged";
+
+/** ケースごとの k 回の試行の集計（#2582）。 */
+export interface EvaluationCaseTrials {
+  case_id: string;
+  question: string;
+  trials: number;
+  judged: number;
+  passed: number;
+  missing: number;
+  rate: number | null;
+  pass_at_k: boolean | null;
+  pass_hat_k: boolean | null;
+  stability: EvaluationStability;
 }
 
 export interface EvaluationJob {
@@ -624,6 +712,11 @@ export interface EvaluationJob {
   status: EvaluationJobStatus;
   created_by_user_uuid: string | null;
   results: EvaluationCaseResult[];
+  /** 1 ケースを反復した回数（#2582）と、評価者（判定のモデルと判定の指示）の指紋。 */
+  trials?: number;
+  judge_fingerprint?: string | null;
+  /** ケースごとの k 回の試行の集計（#2582）。 */
+  case_trials?: EvaluationCaseTrials[];
   error: string | null;
   summary: EvaluationSummary;
   created_at: string;
@@ -639,6 +732,8 @@ export type EvaluationJobItem = Pick<
   | "set_id"
   | "set_name"
   | "agent_version"
+  | "trials"
+  | "judge_fingerprint"
   | "status"
   | "summary"
   | "created_at"
@@ -659,6 +754,11 @@ export interface EvaluationComparisonOutcome {
   /** 出力の項目がすべて正しいか（#2558。期待する出力の無いケースは null）。 */
   field_correct?: boolean | null;
   run_id: string | null;
+  /** 試行の数・判定できた試行・成功した試行と成功率（#2582）。 */
+  trials?: number;
+  judged_trials?: number;
+  passed_trials?: number;
+  success_rate?: number | null;
 }
 
 export interface EvaluationComparisonRow {
@@ -666,6 +766,22 @@ export interface EvaluationComparisonRow {
   base: EvaluationComparisonOutcome | null;
   target: EvaluationComparisonOutcome | null;
   change: EvaluationComparisonChange;
+  /** 2 つのケースの定義（期待・ツールなど）が同じか（#2582。違えば対応比較に入れない）。 */
+  same_definition?: boolean;
+}
+
+/** 同じ定義のケースどうしの、ケースごとの成功率の差（比べる評価 − 基準。#2582）。 */
+export interface EvaluationPairedComparison {
+  cases: number;
+  base_rate: number;
+  target_rate: number;
+  difference: number;
+  interval: EvaluationInterval;
+  /** 区間が 0 をまたがない（差の向きが確か）。 */
+  conclusive: boolean;
+  improved: number;
+  regressed: number;
+  unchanged: number;
 }
 
 /** 2 つの評価をケースごとに並べた比較（#1845）。 */
@@ -678,6 +794,13 @@ export interface EvaluationComparison {
   unchanged: number;
   base_only: number;
   target_only: number;
+  /** 比較できる条件か（#2582）。 */
+  same_cases?: boolean;
+  definition_mismatch?: number;
+  same_judge?: boolean | null;
+  paired?: EvaluationPairedComparison | null;
+  /** 能力分類ごとの 2 つの評価の集計（#2581）。 */
+  capabilities?: { capability: string; base: EvaluationCapabilitySummary | null; target: EvaluationCapabilitySummary | null }[];
 }
 
 /** 評価の履歴の 1 ページ（共通の `Page`。`total` は対象の評価の件数。#1266）。 */
@@ -2056,7 +2179,10 @@ export const agentApi = {
   parseEvaluationCasesXlsx: (file: File) => {
     const body = new FormData();
     body.append("file", file);
-    return request<{ cases: Required<EvaluationCase>[] }>("/api/evaluation-sets/parse-xlsx", { method: "POST", body });
+    return request<{ cases: (Required<EvaluationCase> & EvaluationCaseLabels)[] }>("/api/evaluation-sets/parse-xlsx", {
+      method: "POST",
+      body,
+    });
   },
   downloadEvaluationTemplate: () => requestBlob("/api/evaluation-sets/template.xlsx"),
   downloadEvaluationSetXlsx: (setId: string) =>
@@ -2077,7 +2203,7 @@ export const agentApi = {
       body: JSON.stringify({ agent_id: agentId }),
     }),
   /** 評価を始める（`agent_id` を省くと評価セットの業務 Agent。#1845）。 */
-  createEvaluation: (payload: { set_id: string; agent_version?: EvaluationTarget; agent_id?: string }) =>
+  createEvaluation: (payload: { set_id: string; agent_version?: EvaluationTarget; agent_id?: string; trials?: number }) =>
     request<EvaluationJob>("/api/evaluations", { method: "POST", body: JSON.stringify(payload) }),
   /** 評価の履歴（新しい順のページ。終わった評価は削除せずに残る。#794・#3235）。 */
   listEvaluations: (page: { offset: number; limit: number }) =>

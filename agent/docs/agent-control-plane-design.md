@@ -745,6 +745,43 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   上限で止まった判定は上限を広げて（広げられなければ推論の量を 1 段下げて。#2023）1 回だけ送り直す（#1845）。権限・認証・モデルの設定の誤り・割り当ての使い切りは、そのケースに
   理由を残し、残りのケースを始めずに job を失敗にする（同じ失敗をくり返さない）。業務 Agent の Run の中の呼び出しは対象外
   （Run ごとの SDK の再試行のまま）。
+- 品質評価は 1 ケースを k 回反復できる（`POST /api/evaluations` の `trials`。既定 1、10 まで。#2582）。ケースの数 × k は実行の
+  予算 `AGENT_EVALUATION_MAX_TRIAL_RUNS`（既定 200）まで。結果は「ケース × 試行」（`results[].trial`）で、試行の順に並べる
+  （取消で途中で止まっても先の試行はすべてのケースがそろう。Run の `metadata.evaluation_trial`）。概要の `pass_rate` は判定できた
+  試行の平均で、ほかに Pass^k（k 回すべて成功したケースの割合）・Pass@k（どれか 1 回成功）・安定 / 不安定・欠測（未完了・評価者の
+  失敗・取消・承認の停止）を出す。Pass@k / Pass^k の分母は k 回すべてを判定できたケースだけで、欠測のある k 回を成功に数えない。
+  区間（95%）の単位はケースで、合格率と Pass@k / Pass^k は Wilson の score 区間、2 つの評価の対応のある差（`GET /api/evaluations/compare`
+  の `paired`）は定義が同じケースだけで MOVER の区間を求める（集計は `pr_evaluation_scoring.trials`）。評価者の指紋
+  （`judge_fingerprint`: 判定のモデルの設定と判定の指示の hash）が違う評価どうしは `same_judge=false` と出し、公開前の回帰の門の
+  基準にしない。
+- 評価ケースは能力分類（`capability`）・禁止するツール（`forbidden_tools`）・完了を示す語（`completion_claims`）を任意で持てる
+  （#2581。分類の語は評価データで決め、実装に業務の語を持たない）。安全違反は Run の step・承認・ツールの結果の事実だけでコードが判定し
+  （`safety_check`）、LLM の合否で上書きしない: 禁止するツールの実行（`forbidden_tool_executed`）・承認が要る / 拒否されたツールの
+  承認なしの実行（`unapproved_write`）・期待するツール（無ければ書き込みのツール）を実行していないのに完了を示す語で答えた
+  （`unexecuted_claim`）。評価の dry-run・権限の拒否・承認待ちで止まった試行は `blocked_attempts` に残し、違反にしない。概要は
+  安全違反の試行・ケースの数と、能力分類ごとの母数・判定・欠測・合格率（区間は分類のケースの数で求める）を出し、合格率には含めない。
+  公開前の評価の門は、下書きを最後に変えた後の今の下書きの評価（取り消し・失敗を含むすべて）のどれかに安全違反があれば、合格率の門の
+  設定に依らず公開を断る（評価し直して違反が出なかった回で打ち消さない）。
+- 品質評価の評価者（回答の要点の判定・出力の項目の意味の判定）は、人が判定した校正セットで校正する（#2600。
+  `python -m app.cli.judge_calibration`。合成のセットは `agent/evaluation/judge-calibration/`）。dev / holdout に分け、holdout の
+  件数・判定率・κ・誤合格の率で合否を決め（RAG / suite と同じ `pr_evaluation_scoring` の閾値）、観点（否定・数値・日付・条件・
+  長さや丁寧さの偏り・回答の中の評価者への指示・未実行の完了報告など）ごとの誤合格 / 誤不合格・判定できなかった件と判定の理由を
+  出す。評価者・指示を変えたら前の結果と比べ、校正セットが違えば比較できない理由を出す。安全・状態の遷移はコードの判定（上の `safety_check`）が正本で、
+  LLM の判定で上書きしない。手順は [agent-judge-calibration.md](./agent-judge-calibration.md)。
+
+- Run の実行構成の指紋（#2585）: 組み込み Runtime は SDK の Agent を組み立てるたびに、指示の変わらない部分・モデルに渡すツールの定義・
+  スキル・MCP の schema・モデルの設定・データの範囲の hash を `metadata.run_config`（予約の key）に残す（本文・資格情報は入れない。
+  再開で構成が変われば `previous_fingerprints`）。ツール権限の承認 / 自動は指紋に入らない。開発・CI 用の記録再生
+  `python -m app.cli.run_replay`（合成の記録。モデル・MCP・実の通信は 0）が、同じ構成で承認・拒否・中断・呼び先へ届く呼び出し・
+  成果物が記録と同じかを確かめる。利用者向けの再実行（`POST /api/runs/{run_id}/replay`）とは別。手順は
+  [agent-run-replay.md](./agent-run-replay.md)。
+
+- 実行補助の除去実験（#2587）: `POST /api/evaluations` の `disabled_aids`（`final_validation`・`tool_grounding`・`context_compaction`）で、
+  その評価の Run（dry-run）だけ補助を外す（Run の metadata `evaluation_disabled_aids`。評価の Run でなければ読まない。権限・承認・
+  データの範囲・予算は外せない）。`GET /api/evaluations/ablation` が全構成の評価と並べ、対応のある差と区間・悪化したケース・完了の
+  仕方・モデル / ツール / MCP / RAG の呼び出し・token・p50 / p95・補助のコード経路が動いたかと、判定（adopt / reconsider /
+  undetermined / not_applicable / not_comparable）を出す。外した評価は公開の合格率・回帰の門と「前回」に使わない（安全違反の拒否には
+  数える）。手順は [agent-aid-ablation.md](./agent-aid-ablation.md)。
 
 ## 7. Snapshot migration
 
