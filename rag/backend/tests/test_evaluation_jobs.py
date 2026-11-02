@@ -7,6 +7,7 @@ import json
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -34,6 +35,7 @@ from app.rag.evaluation_jobs import (
     evaluation_job_time_limit_seconds,
     set_evaluation_job_service,
 )
+from app.rag.evaluation_result_storage import EVALUATION_RESULT_MAX_JSON_BYTES
 from app.rag.pipeline import SearchStageProgress, SearchStageProgressCallback
 from app.rag.request_context import (
     AuditRequestContext,
@@ -325,6 +327,217 @@ async def test_shutdown_fails_running_jobs_of_this_process(
     stopped = await service.get(submitted.job_id)
     assert stopped.status == "FAILED"
     assert stopped.error_message == EVALUATION_JOB_SHUTDOWN_MESSAGE
+
+
+# ---- 完了の保存の失敗（#4103） ----
+
+
+def _column_too_large() -> Exception:
+    """JSON 型の列の上限を超えたときの python-oracledb の例外と同じ形。"""
+    return Exception(SimpleNamespace(code=40604, full_code="ORA-40604"))
+
+
+def _result_with_answer_diagnostics() -> dict[str, Any]:
+    return {
+        **_metrics_json(1),
+        "case_results": [
+            {
+                "case_id": "c1",
+                "trace_id": "trace-1",
+                "answer_correctness": 0.5,
+                "elapsed_ms": 1.0,
+                "diagnostics": {"answer": {"retrieval_stages": []}},
+            }
+        ],
+    }
+
+
+class _FinishFailingStore(MemoryEvaluationJobStore):
+    """完了の書き込みを、`fails` が真を返す間は失敗させる保存先。"""
+
+    def __init__(self, fails: Any) -> None:
+        super().__init__()
+        self.fails = fails
+        self.finish_calls: list[tuple[str, Mapping[str, Any] | None]] = []
+        self.heartbeats = 0
+
+    async def finish(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        status: Any,
+        result: Mapping[str, Any] | None,
+        error_message: str | None,
+        evaluation_run_id: str | None,
+    ) -> bool:
+        self.finish_calls.append((status, result))
+        if self.fails(status, result):
+            raise _column_too_large()
+        return await super().finish(
+            job_id,
+            lease_owner=lease_owner,
+            status=status,
+            result=result,
+            error_message=error_message,
+            evaluation_run_id=evaluation_run_id,
+        )
+
+    async def heartbeat(self, job_id: str, *, lease_owner: str) -> bool:
+        self.heartbeats += 1
+        return await super().heartbeat(job_id, lease_owner=lease_owner)
+
+
+def _finish_service(
+    store: MemoryEvaluationJobStore, *, retries: tuple[float, ...] = (0.0, 0.0)
+) -> EvaluationJobService:
+    return EvaluationJobService(
+        store, heartbeat_seconds=0.005, worker_id="test-worker", finish_retry_seconds=retries
+    )
+
+
+async def _submit_finished_evaluation(service: EvaluationJobService) -> str:
+    async def executor(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
+        await progress(completed_cases=1, current_case_id=None)
+        return EvaluationJobOutcome(result=_result_with_answer_diagnostics())
+
+    job = await service.submit(
+        kind="run", total_cases=1, time_limit_seconds=3600, executor=executor
+    )
+    return job.job_id
+
+
+async def test_result_rejected_by_column_is_saved_without_answer_diagnostics(
+    owner: AuditRequestContext,
+) -> None:
+    """結果が書けなければ回答の診断を外して書き直し、得点を残して SUCCEEDED にする。"""
+    store = _FinishFailingStore(
+        lambda _status, result: (
+            result is not None and result["case_results"][0]["diagnostics"]["answer"] is not None
+        )
+    )
+    service = _finish_service(store)
+    job_id = await _submit_finished_evaluation(service)
+    await service.wait_for(job_id)
+
+    job = await service.get(job_id)
+    assert job.status == "SUCCEEDED"
+    assert job.error_message is None
+    assert job.run_result is not None
+    assert job.run_result.answer_diagnostics_omitted is True
+    assert job.run_result.case_results[0].answer_correctness == 0.5
+    assert job.run_result.case_results[0].diagnostics.answer is None
+    assert len(store.finish_calls) == 2
+
+
+async def test_unsaved_result_is_reported_with_cause_instead_of_stale(
+    owner: AuditRequestContext,
+) -> None:
+    """どうしても書けなければ、理由を書いて失敗にする。heartbeat の途絶の文言にしない。"""
+    store = _FinishFailingStore(lambda status, _result: status == "SUCCEEDED")
+    service = _finish_service(store)
+    job_id = await _submit_finished_evaluation(service)
+    await service.wait_for(job_id)
+
+    job = await service.get(job_id)
+    assert job.status == "FAILED"
+    assert job.error_message != EVALUATION_JOB_STALE_MESSAGE
+    assert job.error_message is not None
+    assert "結果をデータベースに保存できませんでした" in job.error_message
+    assert job.error_message.endswith("エラー種別: ORA-40604")
+    assert job.completed_cases == 1
+    assert job.run_result is None
+    # 1 回目と書き直し 2 回のあと、理由の書き込み。
+    assert [status for status, _ in store.finish_calls] == ["SUCCEEDED"] * 3 + ["FAILED"]
+
+
+async def test_heartbeat_continues_until_finish_is_written(owner: AuditRequestContext) -> None:
+    """書き直しの間も heartbeat を続け、別のプロセスに止まったと判定されない。"""
+    recovered = asyncio.Event()
+    store = _FinishFailingStore(lambda _status, _result: not recovered.is_set())
+    service = _finish_service(store, retries=(0.01, 0.01, 0.01, 0.01, 0.01, 5.0))
+    job_id = await _submit_finished_evaluation(service)
+    await _eventually(lambda: len(store.finish_calls) >= 3)
+    beats = store.heartbeats
+    await _eventually(lambda: store.heartbeats > beats)
+
+    other_process = EvaluationJobService(store, stale_seconds=120.0, worker_id="other-worker")
+    assert (await other_process.get(job_id)).status == "RUNNING"
+
+    recovered.set()
+    await service.wait_for(job_id)
+    assert (await service.get(job_id)).status == "SUCCEEDED"
+
+
+async def test_job_is_stale_only_when_database_stays_unavailable(
+    owner: AuditRequestContext,
+) -> None:
+    """理由も書けない（DB が使えない）ときは、これまでどおり heartbeat の途絶で失敗になる。"""
+    now = datetime.now(UTC)
+    store = _FinishFailingStore(lambda _status, _result: True)
+    service = _finish_service(store)
+    job_id = await _submit_finished_evaluation(service)
+    await service.wait_for(job_id)
+    assert (await service.get(job_id)).status == "RUNNING"
+
+    store._clock = lambda: now + timedelta(seconds=121)  # noqa: SLF001 - 時計を進める
+    other_process = EvaluationJobService(store, stale_seconds=120.0, worker_id="other-worker")
+    stale = await other_process.get(job_id)
+    assert stale.status == "FAILED"
+    assert stale.error_message == EVALUATION_JOB_STALE_MESSAGE
+
+
+async def test_shutdown_during_finish_retry_reports_shutdown(owner: AuditRequestContext) -> None:
+    """保存の書き直しの間に backend が止まったら、停止の文言で失敗にする。"""
+    store = _FinishFailingStore(lambda status, _result: status == "SUCCEEDED")
+    service = _finish_service(store, retries=(60.0,))
+    job_id = await _submit_finished_evaluation(service)
+    await _eventually(lambda: len(store.finish_calls) == 1)
+
+    await service.shutdown()
+    job = await service.get(job_id)
+    assert job.status == "FAILED"
+    assert job.error_message == EVALUATION_JOB_SHUTDOWN_MESSAGE
+
+
+async def test_cancel_during_finish_retry_stops_rewriting(owner: AuditRequestContext) -> None:
+    """保存の書き直しの間の取り消しは、取り消しのまま残す。"""
+    store = _FinishFailingStore(lambda status, _result: status == "SUCCEEDED")
+    service = _finish_service(store, retries=(60.0,))
+    job_id = await _submit_finished_evaluation(service)
+    await _eventually(lambda: len(store.finish_calls) == 1)
+
+    job = await service.cancel(job_id)
+    assert job.status == "CANCELLED"
+    await service.wait_for(job_id)
+    assert (await service.get(job_id)).error_message == EVALUATION_JOB_CANCELLED_MESSAGE
+    assert len(store.finish_calls) == 1
+
+
+async def test_failed_job_write_is_retried_without_result(owner: AuditRequestContext) -> None:
+    """評価そのものの失敗の書き込みも書き直す（結果は無いまま）。"""
+    calls = 0
+
+    def fails(_status: str, _result: object) -> bool:
+        nonlocal calls
+        calls += 1
+        return calls == 1
+
+    store = _FinishFailingStore(fails)
+    service = _finish_service(store)
+
+    async def executor(_progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
+        raise RuntimeError("合成の失敗")
+
+    submitted = await service.submit(
+        kind="run", total_cases=1, time_limit_seconds=3600, executor=executor
+    )
+    await service.wait_for(submitted.job_id)
+    job = await service.get(submitted.job_id)
+    assert job.status == "FAILED"
+    assert job.error_message is not None
+    assert "エラー種別: RuntimeError" in job.error_message
+    assert store.finish_calls == [("FAILED", None), ("FAILED", None)]
 
 
 class SlowPipeline:
@@ -720,6 +933,29 @@ async def test_oracle_store_writes_only_under_own_lease() -> None:
 
     connection.rowcount = 0
     assert not await store.heartbeat("job-1", lease_owner="worker-a")
+
+
+async def test_oracle_store_omits_answer_diagnostics_over_column_limit() -> None:
+    """列の上限を超える結果は、回答の診断を外した JSON を bind する（#4103）。"""
+    connection = _FakeConnection(rowcount=1)
+    store = _oracle_store(connection)
+    result = _result_with_answer_diagnostics()
+    result["case_results"][0]["diagnostics"]["answer"]["note"] = "x" * (
+        EVALUATION_RESULT_MAX_JSON_BYTES + 1
+    )
+
+    assert await store.finish(
+        "job-1",
+        lease_owner="w",
+        status="SUCCEEDED",
+        result=result,
+        error_message=None,
+        evaluation_run_id=None,
+    )
+    saved = json.loads(cast(str, connection.calls[0].parameters["result_json"]))
+    assert saved["answer_diagnostics_omitted"] is True
+    assert saved["case_results"][0]["answer_correctness"] == 0.5
+    assert saved["case_results"][0]["diagnostics"]["answer"] is None
 
 
 async def test_oracle_store_scopes_reads_and_cancel_to_owner() -> None:
