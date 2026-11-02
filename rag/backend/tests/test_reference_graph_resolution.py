@@ -173,7 +173,7 @@ def test_resolving_many_references_parses_each_catalog_document_once(
     alias_calls: list[str] = []
     index_calls: list[tuple[str, ...]] = []
     aliases = cross_references.document_name_aliases
-    section_index = reference_resolution.SectionIndex
+    section_index = cross_references.SectionIndex
 
     def counted_aliases(value: str) -> set[str]:
         alias_calls.append(value)
