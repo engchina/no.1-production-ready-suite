@@ -516,7 +516,9 @@ class SectionReader:
             response = self.read_chunks(document_id=outline.document_id, chunk_set_id=outline.chunk_set_id, section_id=section.section_id)
             chunks = list(response)
             count = sum(getattr(chunk, "chunk_level", "") != "parent" for chunk in chunks)
-            if not chunks or not getattr(response, "complete", count >= section.chunk_count):
+            # chunk を 1 つも持たない章節（見出しだけ）は読むものが無い。未読にしない（#4138）。
+            missing = not chunks and section.chunk_count > 0
+            if missing or not getattr(response, "complete", count >= section.chunk_count):
                 self.failures[key] = getattr(response, "reason", "") or STOP_PARTIAL
         except Exception as exc:  # noqa: BLE001 - 読取失敗を未確認として残して回答を続ける
             if type(exc).__name__ == "DeadlineExceeded":
