@@ -4,14 +4,15 @@
   「文書全体」）。階層・親・ページの範囲・chunk の数・文字数を持ち、MCP の ``rag_outline`` が
   そのまま返す。文書の削除
   で消える（``ON DELETE CASCADE``）。chunk_set には FK を張らない（実体の層と同じ。取込は chunk を
-  保存した後で chunk_set の行を作る経路がある）。chunk_set の GC で残った行は、次の作り直し（同じ
-  文書）で消す。読む側は有効な chunk_set だけを見る。
+  保存した後で chunk_set の行を作る経路がある）。chunk_set の行を消す処理が同じ transaction で
+  章節の行も消す。読む側は有効な chunk_set だけを見る。
 - ``rag_section_chunks``: 章節に入る chunk（章節の中の順・所有の章節か）。chunk の削除と章節の行の
   削除で消える。
 
-対応は文書ごとに作り直す（``replace_document_section_maps``）。chunk・embedding・ベクトル索引は変え
-ない。本文を読む SQL は chunk と文書を検索と同じ見え方の条件（``_oracle_retrieval_where``）で join
-し、範囲の外の chunk を返さない。
+対応は chunk_set ごとに作り直す（``replace_chunk_set_section_maps``）。渡していない chunk_set の行
+は変えない（版を残すため。#4166）。chunk・embedding・ベクトル索引は変えない。本文を読む SQL は chunk
+と文書を検索と同じ見え方の条件（``_oracle_retrieval_where``）で join し、範囲の外の chunk を返さ
+ない。
 """
 
 from __future__ import annotations
@@ -262,10 +263,16 @@ class SectionMapStore:
                 entry.chunks.append(chunk)
         return list(grouped.values())
 
-    async def replace_document_section_maps(
+    async def replace_chunk_set_section_maps(
         self, document_id: str, maps: Sequence[SectionChunkMap]
     ) -> None:
-        """文書の対応を置き換える（前の対応は消してから入れる。chunk は変えない）。"""
+        """渡した chunk_set の対応だけを置き換える（ほかの chunk_set の行と chunk は変えない）。"""
+        if not maps:
+            return
+        chunk_set_sql, chunk_set_binds = _oracle_in_predicate(
+            "chunk_set_id", "replace_chunk_set", list(dict.fromkeys(m.chunk_set_id for m in maps))
+        )
+        delete_binds = {"document_id": document_id, **chunk_set_binds}
 
         def operation(connection: OracleConnectionProtocol) -> None:
             # 同じ文書の作り直し（章節の保存と規則の変更の後の作り直しなど）を直列にする。
@@ -281,13 +288,19 @@ class SectionMapStore:
                 return
             _execute(
                 connection,
-                f"DELETE FROM {SECTION_CHUNKS_TABLE} WHERE document_id = :document_id",
-                {"document_id": document_id},
+                f"""
+                DELETE FROM {SECTION_CHUNKS_TABLE}
+                WHERE document_id = :document_id AND {chunk_set_sql}
+                """,
+                delete_binds,
             )
             _execute(
                 connection,
-                f"DELETE FROM {CHUNK_SET_SECTIONS_TABLE} WHERE document_id = :document_id",
-                {"document_id": document_id},
+                f"""
+                DELETE FROM {CHUNK_SET_SECTIONS_TABLE}
+                WHERE document_id = :document_id AND {chunk_set_sql}
+                """,
+                delete_binds,
             )
             sections = [
                 {

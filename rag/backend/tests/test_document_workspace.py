@@ -6,7 +6,7 @@ import json
 import zipfile
 from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -535,12 +535,6 @@ class FakeWorkspaceOracle:
     async def mark_chunk_set_indexed(self, **kwargs: object) -> None:
         _ = kwargs
 
-    async def delete_stale_document_chunk_sets(self, **kwargs: object) -> None:
-        _ = kwargs
-
-    async def set_document_serving_chunk_set(self, **kwargs: object) -> None:
-        _ = kwargs
-
     async def upsert_document_extraction_artifact(self, **kwargs: object) -> None:
         extraction_recipe_id = kwargs.get("extraction_recipe_id")
         if isinstance(extraction_recipe_id, str) and "extraction" in kwargs:
@@ -649,6 +643,28 @@ class FakeWorkspaceIngestionPipeline:
         return await self._oracle.update_document_status(document_id, FileStatus.INDEXED)
 
 
+async def _materialize_with_fake(
+    oracle: Any,
+    job: IngestionJob,
+    *,
+    cancel_checker: Any = None,
+) -> documents_route._RecipeJobResult:
+    """レシピの隔離構築の代わり: fake の pipeline で文書を進める（worker の前後を確かめる）。"""
+    detail = await oracle.get_document(job.document_id)
+    assert detail is not None
+    data, _ = await documents_route._load_source_bytes(oracle, job.document_id, detail)
+    pipeline = cast(Any, documents_route).IngestionPipeline(oracle=oracle, settings=get_settings())
+    await pipeline.ingest(
+        job.document_id,
+        data,
+        "prompt",
+        content_type=detail.content_type or "application/octet-stream",
+        original_object_storage_path=detail.object_storage_path,
+        cancel_checker=cancel_checker,
+    )
+    return documents_route._RecipeJobResult()
+
+
 class FakeDocumentCleanupStore:
     """文書の削除の後始末の記録（#2452）の fake。文書の行の削除と記録を 1 回で行う。"""
 
@@ -730,6 +746,9 @@ def fake_document_dependencies(monkeypatch: pytest.MonkeyPatch) -> FakeWorkspace
         documents_route, "DocumentCleanupStore", lambda oracle: fake_oracle.cleanup_store
     )
     monkeypatch.setattr(documents_route, "IngestionPipeline", FakeWorkspaceIngestionPipeline)
+    monkeypatch.setattr(
+        documents_route, "_materialize_experiment_candidate", _materialize_with_fake
+    )
     FakeWorkspaceIngestionPipeline.last_settings = None
     return fake_oracle
 
@@ -1625,75 +1644,6 @@ def test_document_processing_config_resolves_preprocess_profile_and_auto_advance
     assert effective.auto_index_after_chunk_enabled is True
 
 
-def test_preprocess_auto_advance_waits_for_manual_review_when_disabled(
-    fake_document_dependencies: FakeWorkspaceOracle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """自動進行が無効なら PREPROCESS 完了後は REVIEW に留まり、Chunk は投入しない。"""
-    monkeypatch.setattr(
-        documents_route,
-        "get_settings",
-        lambda: Settings(rag_auto_chunk_after_extract_enabled=False),
-    )
-    document_id = _upload("manual-review.txt", b"review text", "text/plain")
-    detail = fake_document_dependencies.documents[document_id].model_copy(
-        update={
-            "status": FileStatus.REVIEW,
-            "extraction": {"document_type": "text", "raw_text": "review text"},
-        }
-    )
-    fake_document_dependencies.documents[document_id] = detail
-    job = IngestionJob(
-        id="job-preprocess",
-        document_id=document_id,
-        status=IngestionJobStatus.RUNNING,
-        phase=IngestionJobPhase.PREPROCESS,
-        parser_profile="local_text_structure",
-        queued_at=datetime.now(UTC),
-        started_at=datetime.now(UTC),
-    )
-
-    anyio.run(documents_route._enqueue_auto_advance_job, job, detail)
-
-    assert fake_document_dependencies.ingestion_jobs == {}
-
-
-def test_preprocess_auto_advance_queues_chunk_when_enabled(
-    fake_document_dependencies: FakeWorkspaceOracle,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """設定有効時だけ PREPROCESS 完了後に CHUNK job を自動投入する。"""
-    monkeypatch.setattr(
-        documents_route,
-        "get_settings",
-        lambda: Settings(rag_auto_chunk_after_extract_enabled=True),
-    )
-    document_id = _upload("auto-review.txt", b"review text", "text/plain")
-    detail = fake_document_dependencies.documents[document_id].model_copy(
-        update={
-            "status": FileStatus.REVIEW,
-            "extraction": {"document_type": "text", "raw_text": "review text"},
-        }
-    )
-    fake_document_dependencies.documents[document_id] = detail
-    job = IngestionJob(
-        id="job-preprocess",
-        document_id=document_id,
-        status=IngestionJobStatus.RUNNING,
-        phase=IngestionJobPhase.PREPROCESS,
-        parser_profile="local_text_structure",
-        queued_at=datetime.now(UTC),
-        started_at=datetime.now(UTC),
-    )
-
-    anyio.run(documents_route._enqueue_auto_advance_job, job, detail)
-
-    jobs = list(fake_document_dependencies.ingestion_jobs.values())
-    assert len(jobs) == 1
-    assert jobs[0].phase == IngestionJobPhase.CHUNK
-    assert jobs[0].status == IngestionJobStatus.QUEUED
-
-
 def test_document_chunk_reprocess_resets_downstream_only(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
@@ -2354,19 +2304,11 @@ def test_preprocess_reprocess_clears_prepared_artifact_and_outputs(
     assert fake_document_dependencies.documents[document_id].extraction == {}
     assert document_id not in fake_document_dependencies.chunks
 
-    anyio.run(documents_route._run_ingestion_job, job["id"])
 
-    updated = fake_document_dependencies.documents[document_id]
-    assert updated.status == FileStatus.INDEXED
-    assert updated.preprocess_artifact is not None
-    assert updated.preprocess_artifact.object_storage_path == updated.object_storage_path
-    assert updated.extraction["raw_text"] == "original-body"
-
-
-def test_extract_reprocess_uses_existing_prepared_artifact(
+def test_extract_reprocess_keeps_existing_prepared_artifact(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
-    """EXTRACT 再処理は原本へ戻らず、保存済みの処理後ファイルを抽出入力にする。"""
+    """EXTRACT の再投入は保存済みの処理後ファイルの情報を消さない。"""
     document_id = _upload("policy.txt", b"original-body", "text/plain")
     prepared_body = b"prepared-body"
     prepared_path = anyio.run(
@@ -2403,12 +2345,6 @@ def test_extract_reprocess_uses_existing_prepared_artifact(
     job = resp.json()["data"]
     assert job["phase"] == "EXTRACT"
     assert fake_document_dependencies.documents[document_id].preprocess_artifact == artifact
-
-    anyio.run(documents_route._run_ingestion_job, job["id"])
-
-    updated = fake_document_dependencies.documents[document_id]
-    assert updated.preprocess_artifact == artifact
-    assert updated.extraction["raw_text"] == "prepared-body"
 
 
 def test_extract_reprocess_requires_prepared_artifact() -> None:
@@ -2677,26 +2613,20 @@ def test_running_ingestion_job_does_not_overwrite_cancelled_status(
     fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
 
     async def cancel_during_ingest(
-        document_id: str,
-        *,
-        force: bool = False,
-        use_prepared_artifact: bool = False,
-        cancel_checker: object | None = None,
-    ) -> DocumentDetail:
-        _ = force, use_prepared_artifact, cancel_checker
-        job = fake_document_dependencies.ingestion_jobs[queued_job.id]
-        fake_document_dependencies.ingestion_jobs[queued_job.id] = job.model_copy(
+        oracle: object, job: IngestionJob, *, cancel_checker: object | None = None
+    ) -> documents_route._RecipeJobResult:
+        _ = oracle, job, cancel_checker
+        current = fake_document_dependencies.ingestion_jobs[queued_job.id]
+        fake_document_dependencies.ingestion_jobs[queued_job.id] = current.model_copy(
             update={
                 "status": IngestionJobStatus.CANCELLED,
                 "error_message": documents_route.INGESTION_JOB_CANCELLED_MESSAGE,
                 "finished_at": datetime.now(UTC),
             }
         )
-        detail = await fake_document_dependencies.get_document(document_id)
-        assert detail is not None
-        return detail
+        return documents_route._RecipeJobResult()
 
-    monkeypatch.setattr(documents_route, "_ingest_existing_document", cancel_during_ingest)
+    monkeypatch.setattr(documents_route, "_materialize_experiment_candidate", cancel_during_ingest)
 
     anyio.run(documents_route._run_ingestion_job, queued_job.id)
 
@@ -2820,21 +2750,15 @@ def test_cancel_during_finish_keeps_cancelled_and_skips_auto_advance(
     )
 
     async def ingest_to_review(
-        document_id: str,
-        *,
-        force: bool = False,
-        use_prepared_artifact: bool = False,
-        cancel_checker: object | None = None,
-    ) -> DocumentDetail:
-        _ = force, use_prepared_artifact, cancel_checker
-        detail = await fake_document_dependencies.update_document_status(
-            document_id, FileStatus.REVIEW
-        )
+        oracle: object, job: IngestionJob, *, cancel_checker: object | None = None
+    ) -> documents_route._RecipeJobResult:
+        _ = oracle, cancel_checker
+        await fake_document_dependencies.update_document_status(job.document_id, FileStatus.REVIEW)
         # pipeline は REVIEW まで書き終えた。この後の完了処理の途中で cancel が割り込む。
         armed["on"] = True
-        return detail
+        return documents_route._RecipeJobResult(next_phase=IngestionJobPhase.CHUNK)
 
-    monkeypatch.setattr(documents_route, "_ingest_existing_document", ingest_to_review)
+    monkeypatch.setattr(documents_route, "_materialize_experiment_candidate", ingest_to_review)
 
     anyio.run(documents_route._run_ingestion_job, queued_job.id)
 

@@ -1,8 +1,8 @@
 """章節と chunk の対応の作り直しと、章節の本文の読み取り（#1438）。
 
 - 作り直し（``rebuild_document_section_map``）: 文書の章節の正本（``document_sections``）と、
-  有効な chunk_set の chunk の位置から対応を決め（``app.rag.section_chunk_map``）、対応の表
-  だけを置き換える。
+  有効な chunk_set の chunk の位置から対応を決め（``app.rag.section_chunk_map``）、その chunk_set の
+  対応の行だけを置き換える（ほかの版の行は残す。#4166）。
   chunk・embedding・ベクトル索引は変えない。取込の job の成功・章節の保存（PUT / DELETE）・章節の
   抽出規則の変更・レシピの章節の方式の変更の後に呼ぶ（``refresh_document_section_map``。失敗しても
   呼び出し元の処理は止めず、ログに残す）。
@@ -68,7 +68,7 @@ async def rebuild_document_section_map(
         )
         for item in await store.document_chunk_sets(document_id)
     ]
-    await store.replace_document_section_maps(document_id, maps)
+    await store.replace_chunk_set_section_maps(document_id, maps)
     return maps
 
 

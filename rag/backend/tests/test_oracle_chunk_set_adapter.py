@@ -292,24 +292,6 @@ async def test_document_extraction_artifact_round_trip_and_gc() -> None:
     assert reloaded["status"] == "error"
     assert reloaded["extraction_json"] == got["extraction_json"]
 
-    # ex_b 以外を残す GC → ex_a が消える。
-    removed = await client.delete_document_extractions_except(
-        document_id=document_id, keep_extraction_ids=[ex_b]
-    )
-    assert removed == [ex_a]
-    assert (
-        await client.get_document_extraction_artifact(
-            document_id=document_id, extraction_recipe_id=ex_a
-        )
-        is None
-    )
-    assert (
-        await client.get_document_extraction_artifact(
-            document_id=document_id, extraction_recipe_id=ex_b
-        )
-        is not None
-    )
-
 
 @pytest.mark.usefixtures("oracle_db")
 async def test_saved_embedding_commit_updates_search_text_and_preserves_original_in_oracle() -> (

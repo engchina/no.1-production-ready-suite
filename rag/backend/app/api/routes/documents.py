@@ -68,6 +68,7 @@ from app.rag.document_crop import (
     crop_png,
     load_parsed_source,
     page_sizes,
+    prepared_artifact_from_extraction,
     render_page_png,
 )
 from app.rag.document_sections import removed_source_ids, section_errors
@@ -127,7 +128,6 @@ from app.rag.variant_keys import (
     compute_isolated_extraction_id,
     compute_metadata_layer_id,
     compute_nav_layer_id,
-    extraction_recipe_subset,
 )
 from app.rag.variant_planner import MaterializationPlan, plan_document_materializations
 from app.schemas.common import ApiResponse, Page
@@ -218,7 +218,6 @@ UPLOAD_STORAGE_FAILED_MESSAGE = (
 MAX_UPLOAD_FILE_NAME_CHARS = 255
 MAX_UPLOAD_FILE_NAME_BYTES = 512
 _MAX_PRESERVED_SUFFIX_CHARS = 16
-CHUNK_SET_PUBLISH_ERROR_MESSAGE = "索引の公開設定に失敗しました。時間をおいて再実行してください。"
 DELETE_BLOCKING_INGESTION_STATUSES = frozenset({IngestionJobStatus.RUNNING})
 # cancel API が CANCELLED へ遷移できる状態。
 _CANCELLABLE_INGESTION_JOB_STATUSES = (IngestionJobStatus.QUEUED, IngestionJobStatus.RUNNING)
@@ -1514,6 +1513,7 @@ async def _inspector_source_scope(
     from app.services.inspection_scope import source_inspection
 
     detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    artifact = prepared_artifact_from_extraction(detail, payload) or artifact
     data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
     return await asyncio.to_thread(
         source_inspection, payload, data, offset=offset, limit=8192, expected_revision=revision
@@ -1657,7 +1657,7 @@ async def document_source_map(
     from app.services.source_reader import read_original_context, resolve_source_context
 
     oracle = OracleClient()
-    chunk, _, _, _ = await resolve_source_context(
+    chunk, _, _, payload = await resolve_source_context(
         oracle, document_id, chunk_id, expected_revision=expected_revision
     )
     recipe_id = chunk.metadata.get("recipe_id")
@@ -1668,6 +1668,7 @@ async def document_source_map(
         if found is None:
             raise HTTPException(404, "文書が見つかりません。")
         detail, artifact = found, found.preprocess_artifact
+    artifact = prepared_artifact_from_extraction(detail, payload) or artifact
 
     async def load(variant: Literal["original", "prepared"]) -> bytes:
         data, _, _ = await load_document_content(
@@ -1709,6 +1710,8 @@ async def document_recipe_source_map(
         document_id=document_id, extraction_recipe_id=expected_revision
     )
     payload = saved.get("extraction_json") if saved else {}
+    payload = payload if isinstance(payload, Mapping) else {}
+    artifact = prepared_artifact_from_extraction(detail, payload) or artifact
 
     async def load(variant: Literal["original", "prepared"]) -> bytes:
         data, _, _ = await load_document_content(
@@ -1718,7 +1721,7 @@ async def document_recipe_source_map(
 
     return ApiResponse(
         data=await load_source_map_window(
-            payload if isinstance(payload, Mapping) else {},
+            payload,
             element_id=element_id,
             revision=expected_revision,
             load=load,
@@ -3815,420 +3818,6 @@ async def _load_source_bytes(
     return data, source_profile
 
 
-async def _load_prepared_source_bytes(
-    oracle: OracleClient,
-    document_id: str,
-    detail: DocumentDetail,
-) -> tuple[bytes, SourceProfile]:
-    """保存済みファイル準備 artifact を取得する。欠落時は原本へ戻さない。"""
-    artifact = detail.preprocess_artifact
-    if artifact is None or not artifact.object_storage_path:
-        raise HTTPException(
-            status_code=409,
-            detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
-        )
-    try:
-        data = await ObjectStorageClient().get(artifact.object_storage_path)
-    except FileNotFoundError as exc:
-        await oracle.update_document_status(
-            document_id,
-            FileStatus.ERROR,
-            "処理後ファイルが見つかりません。ファイル準備から再処理してください。",
-        )
-        raise HTTPException(
-            status_code=409,
-            detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
-        ) from exc
-    except ValueError as exc:
-        await oracle.update_document_status(document_id, FileStatus.ERROR, str(exc))
-        raise HTTPException(status_code=400, detail="処理後ファイルの参照パスが不正です。") from exc
-
-    if artifact.sha256 and _sha256_hex(data) != artifact.sha256:
-        message = "処理後ファイルの SHA-256 がファイル準備時と一致しません。"
-        await oracle.update_document_status(document_id, FileStatus.ERROR, message)
-        raise HTTPException(status_code=409, detail=message)
-
-    source_profile = _source_profile_for_detail(detail)
-    return data, source_profile
-
-
-async def _ingest_existing_document(
-    document_id: str,
-    *,
-    force: bool = False,
-    use_prepared_artifact: bool = False,
-    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-) -> DocumentDetail:
-    """保存済み原本を検証して取込パイプラインへ渡す。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None or detail.object_storage_path is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status in (
-        FileStatus.PREPROCESSING,
-        FileStatus.INGESTING,
-        FileStatus.CHUNKING,
-        FileStatus.INDEXING,
-    ):
-        raise HTTPException(status_code=409, detail="このドキュメントは現在取込中です。")
-    if detail.status == FileStatus.INDEXED and not force:
-        return detail
-    if use_prepared_artifact:
-        data, source_profile = await _load_prepared_source_bytes(oracle, document_id, detail)
-        ingest_content_type = (
-            detail.preprocess_artifact.content_type
-            if detail.preprocess_artifact is not None and detail.preprocess_artifact.content_type
-            else "application/octet-stream"
-        )
-        prepared_artifact = detail.preprocess_artifact
-    else:
-        data, source_profile = await _load_source_bytes(oracle, document_id, detail)
-        ingest_content_type = detail.content_type or "application/octet-stream"
-        prepared_artifact = None
-    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
-    plan, _configs = await _materialization_plan_for_document(
-        oracle,
-        detail,
-        global_settings=effective_settings,
-    )
-    ingest_prompt = "ドキュメントを日本語で OCR し、本文テキストを抽出してください。"
-    if plan is None or not plan.chunk_sets:
-        chunk_set_id = _document_chunk_set_id(detail, effective_settings)
-        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-        result = await pipeline.ingest(
-            document_id=document_id,
-            image_bytes=data,
-            prompt=ingest_prompt,
-            content_type=ingest_content_type,
-            source_profile=source_profile,
-            chunk_set_id=chunk_set_id,
-            original_object_storage_path=detail.object_storage_path,
-            prepared_artifact=prepared_artifact,
-            cancel_checker=cancel_checker,
-        )
-        await _reconcile_document_chunk_sets(
-            oracle,
-            document_id,
-            result,
-            chunk_set_id,
-            effective_settings,
-            processing_config,
-        )
-        return result
-    # plan 実体化: 抽出グループ(parser×preprocess)ごとに extract 1 回 → 各 chunking で index。
-    result = detail
-    recipe_groups = plan.chunk_sets_by_extraction_recipe()
-    total_chunk_sets = sum(len(chunk_set_ids) for chunk_set_ids in recipe_groups.values())
-    processed_chunk_sets = 0
-    for _recipe_id, chunk_set_ids in recipe_groups.items():
-        for index, chunk_set_id in enumerate(chunk_set_ids):
-            pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-            processed_chunk_sets += 1
-            # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
-            record_outcome = processed_chunk_sets == total_chunk_sets
-            if index == 0:
-                result = await pipeline.ingest(
-                    document_id=document_id,
-                    image_bytes=data,
-                    prompt=ingest_prompt,
-                    content_type=ingest_content_type,
-                    source_profile=source_profile,
-                    chunk_set_id=chunk_set_id,
-                    record_outcome=record_outcome,
-                    original_object_storage_path=detail.object_storage_path,
-                    prepared_artifact=prepared_artifact,
-                    cancel_checker=cancel_checker,
-                )
-                if result.status == FileStatus.REVIEW:
-                    # REVIEW ゲート ON: 抽出は REVIEW で停止。残りは承認後に CHUNK→INDEX する。
-                    return result
-            else:
-                # 同抽出(同 parser/前処理)の chunking 変種: 抽出を再利用して re-chunk。
-                result = await pipeline.index_reviewed(
-                    document_id,
-                    chunk_set_id=chunk_set_id,
-                    record_outcome=record_outcome,
-                    cancel_checker=cancel_checker,
-                )
-    await _reconcile_plan_chunk_sets(
-        oracle, document_id, result, plan, effective_settings, processing_config
-    )
-    return result
-
-
-async def _chunk_reviewed_document(
-    document_id: str,
-    *,
-    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-) -> DocumentDetail:
-    """REVIEW で承認済みの文書を CHUNK だけ実行する。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status not in (FileStatus.REVIEW, FileStatus.CHUNKING):
-        raise HTTPException(
-            status_code=409,
-            detail="プレビュー確認待ちの文書のみ Chunk 作成できます。",
-        )
-    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
-    plan, _configs = await _materialization_plan_for_document(
-        oracle,
-        detail,
-        global_settings=effective_settings,
-    )
-    if plan is None or not plan.chunk_sets:
-        chunk_set_id = _document_chunk_set_id(detail, effective_settings)
-        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-        result = await pipeline.chunk_reviewed(
-            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
-        )
-        await _reconcile_document_chunk_sets_chunked(
-            oracle,
-            document_id,
-            result,
-            chunk_set_id,
-            effective_settings,
-            processing_config,
-        )
-        return result
-    # 3 層モデル: plan は常に単一 extraction recipe。保存済み extraction から chunk 化する。
-    result = detail
-    chunk_set_ids = sorted(plan.chunk_sets)
-    for index, chunk_set_id in enumerate(chunk_set_ids):
-        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-        # 成功 metric/audit は最後の chunk_set でのみ出し、1 文書 1 論理取込に集約する。
-        result = await pipeline.chunk_reviewed(
-            document_id,
-            chunk_set_id=chunk_set_id,
-            record_outcome=index == len(chunk_set_ids) - 1,
-            cancel_checker=cancel_checker,
-        )
-    await _reconcile_plan_chunk_sets_chunked(
-        oracle, document_id, result, plan, effective_settings, processing_config
-    )
-    return result
-
-
-async def _index_reviewed_document(
-    document_id: str,
-    *,
-    cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-) -> DocumentDetail:
-    """CHUNKED の文書を後段(embedding/index)だけ実行する。"""
-    oracle = OracleClient()
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    if detail.status not in (FileStatus.CHUNKED, FileStatus.INDEXING):
-        raise HTTPException(
-            status_code=409,
-            detail="Chunk 確認済みの文書のみ索引できます。",
-        )
-    effective_settings, processing_config = await _resolve_ingestion_settings(oracle, document_id)
-    plan, _configs = await _materialization_plan_for_document(
-        oracle,
-        detail,
-        global_settings=effective_settings,
-    )
-    if plan is None or not plan.chunk_sets:
-        chunk_set_id = _document_chunk_set_id(detail, effective_settings)
-        if chunk_set_id is None:
-            raise HTTPException(status_code=409, detail="索引対象の chunk_set がありません。")
-        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-        result = await pipeline.index_chunked(
-            document_id, chunk_set_id=chunk_set_id, cancel_checker=cancel_checker
-        )
-        await _reconcile_document_chunk_sets(
-            oracle,
-            document_id,
-            result,
-            chunk_set_id,
-            effective_settings,
-            processing_config,
-        )
-        return result
-    result = detail
-    chunk_set_ids = sorted(plan.chunk_sets)
-    for index, chunk_set_id in enumerate(chunk_set_ids):
-        # 3 層モデル: レシピは文書単位(global)。
-        pipeline = IngestionPipeline(oracle=oracle, settings=effective_settings)
-        result = await pipeline.index_chunked(
-            document_id,
-            chunk_set_id=chunk_set_id,
-            record_outcome=index == len(chunk_set_ids) - 1,
-            cancel_checker=cancel_checker,
-        )
-    await _reconcile_plan_chunk_sets(
-        oracle, document_id, result, plan, effective_settings, processing_config
-    )
-    return result
-
-
-async def _reconcile_plan_chunk_sets(
-    oracle: OracleClient,
-    document_id: str,
-    detail: DocumentDetail,
-    plan: MaterializationPlan,
-    effective_settings: Settings,
-    processing_config: DocumentProcessingConfig,
-) -> None:
-    """plan の各 chunk_set を永続化し、文書の serving を確定、plan に無い chunk_set を GC する。
-
-    chunk は save_index で挿入時タグ付け済み。serving 設定 / extraction artifact まで揃って
-    初めて検索可能な INDEXED とみなすため、失敗時は ERROR に戻す。
-    """
-    if detail.status != FileStatus.INDEXED:
-        return
-    _, effective_config = _merge_document_processing_config(processing_config)
-    recipe_snapshot = _processing_recipe_snapshot(processing_config, effective_config)
-    try:
-        for chunk_set_id in plan.chunk_sets:
-            chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
-            extraction_recipe_id = plan.extraction_recipe_for_chunk_set(chunk_set_id)
-            await oracle.upsert_chunk_set(
-                chunk_set_id=chunk_set_id,
-                document_id=document_id,
-                extraction_recipe_id=extraction_recipe_id,
-                recipe_subset=recipe_snapshot,
-            )
-            await oracle.mark_chunk_set_indexed(
-                chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
-            )
-            if extraction_recipe_id is not None:
-                await _record_document_extraction_artifact(
-                    oracle,
-                    detail,
-                    extraction_recipe_id=extraction_recipe_id,
-                    settings=effective_settings,
-                )
-        # 3 層モデル: 文書の serving chunk_set を設定(単一レシピなので plan の chunk_set)。
-        serving_chunk_sets = sorted(plan.chunk_sets)
-        if serving_chunk_sets:
-            await oracle.set_document_serving_chunk_set(
-                document_id=document_id, chunk_set_id=serving_chunk_sets[0]
-            )
-        await _reconcile_plan_artifact_layers(oracle, document_id, detail, plan, effective_settings)
-        await oracle.delete_document_chunk_sets_except(
-            document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
-        )
-        await oracle.delete_document_extractions_except(
-            document_id=document_id, keep_extraction_ids=list(plan.extraction_recipes)
-        )
-        if plan.truncated_extractions:
-            logger.warning(
-                "抽出数が上限を超え %d 件を打ち切りました(document_id=%s)。",
-                len(plan.truncated_extractions),
-                document_id,
-            )
-    except Exception as exc:
-        logger.warning(
-            "chunk_set plan reconcile に失敗しました。document_id=%s",
-            document_id,
-            exc_info=True,
-        )
-        await oracle.update_document_status(
-            document_id,
-            FileStatus.ERROR,
-            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
-        )
-        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
-
-
-async def _reconcile_plan_chunk_sets_chunked(
-    oracle: OracleClient,
-    document_id: str,
-    detail: DocumentDetail,
-    plan: MaterializationPlan,
-    effective_settings: Settings,
-    processing_config: DocumentProcessingConfig,
-) -> None:
-    """plan の各 chunk_set を CHUNKED として永続化する。KB binding は INDEX 後に作る。"""
-    if detail.status != FileStatus.CHUNKED:
-        return
-    _, effective_config = _merge_document_processing_config(processing_config)
-    recipe_snapshot = _processing_recipe_snapshot(processing_config, effective_config)
-    try:
-        for chunk_set_id in plan.chunk_sets:
-            chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
-            extraction_recipe_id = plan.extraction_recipe_for_chunk_set(chunk_set_id)
-            await oracle.upsert_chunk_set(
-                chunk_set_id=chunk_set_id,
-                document_id=document_id,
-                extraction_recipe_id=extraction_recipe_id,
-                recipe_subset=recipe_snapshot,
-                status="CHUNKED",
-            )
-            await oracle.mark_chunk_set_chunked(chunk_set_id=chunk_set_id, chunk_count=chunk_count)
-            if extraction_recipe_id is not None:
-                await _record_document_extraction_artifact(
-                    oracle,
-                    detail,
-                    extraction_recipe_id=extraction_recipe_id,
-                    settings=effective_settings,
-                )
-        await oracle.delete_document_chunk_sets_except(
-            document_id=document_id, keep_chunk_set_ids=list(plan.chunk_sets)
-        )
-        await oracle.delete_document_extractions_except(
-            document_id=document_id, keep_extraction_ids=list(plan.extraction_recipes)
-        )
-    except Exception as exc:
-        logger.warning(
-            "chunk_set chunk plan reconcile に失敗しました。document_id=%s",
-            document_id,
-            exc_info=True,
-        )
-        await oracle.update_document_status(
-            document_id,
-            FileStatus.ERROR,
-            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
-        )
-        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
-
-
-async def _reconcile_plan_artifact_layers(
-    oracle: OracleClient,
-    document_id: str,
-    detail: DocumentDetail,
-    plan: MaterializationPlan,
-    effective_settings: Settings,
-) -> None:
-    """plan に含まれる派生 layer の状態を永続化する。"""
-    configs = dict(await oracle.list_document_knowledge_base_configs(document_id))
-    effective_by_kb = _effective_ingestion_settings_by_kb(effective_settings, configs)
-    fields_configured = await _document_has_field_definitions(oracle, document_id)
-    for chunk_set_id in plan.chunk_sets:
-        for layer, user_label in _ARTIFACT_LAYER_LABELS:
-            requested_ids = _requested_layer_ids_for_chunk_set(
-                chunk_set_id,
-                plan,
-                effective_by_kb,
-                layer=layer,
-            )
-            for layer_id in requested_ids:
-                status, reason = _materialized_layer_state(
-                    layer=layer,
-                    user_label=user_label,
-                    extraction=detail.extraction,
-                    settings=effective_settings,
-                    field_definitions_configured=fields_configured,
-                )
-                await oracle.upsert_artifact_layer(
-                    layer_id=layer_id,
-                    layer_kind=layer,
-                    parent_chunk_set_id=chunk_set_id,
-                    document_id=document_id,
-                    requested=True,
-                    status=status.value,
-                    reason=reason,
-                    metrics=_layer_metrics(layer, detail.extraction),
-                    input_fingerprint=recorded_layer_fingerprint(
-                        layer, detail.extraction, effective_settings
-                    ),
-                )
-
-
 async def _document_has_field_definitions(oracle: OracleClient, document_id: str) -> bool:
     """文書に効く項目抽出の定義(所属 KB の定義か全体の既定。#548)が 1 件以上あるか。"""
     return bool(
@@ -4371,163 +3960,6 @@ def _navigation_nodes_from_extraction(
 
 def _metadata_item_count(value: object) -> int:
     return len(value) if isinstance(value, list | tuple) else 0
-
-
-def _document_chunk_set_id(detail: DocumentDetail, settings: Settings) -> str | None:
-    """文書の content_sha256 と effective 取込設定から chunk_set_id を求める(無ければ None)。"""
-    if not detail.content_sha256:
-        return None
-    return compute_chunk_set_id(detail.content_sha256, settings)
-
-
-def _document_extraction_recipe_id(detail: DocumentDetail, settings: Settings) -> str | None:
-    """文書の content_sha256 と effective 解析設定から extraction_recipe_id を求める。"""
-    if not detail.content_sha256:
-        return None
-    return compute_extraction_recipe_id(detail.content_sha256, settings)
-
-
-def _extraction_recipe_subset(settings: Settings) -> dict[str, object]:
-    """extraction recipe の人が読める snapshot。正規 ID は variant_keys 側の hash を正とする。"""
-    return extraction_recipe_subset(settings)
-
-
-async def _record_document_extraction_artifact(
-    oracle: OracleClient,
-    detail: DocumentDetail,
-    *,
-    extraction_recipe_id: str | None,
-    settings: Settings,
-    status: DocumentLayerStatusName = DocumentLayerStatusName.MATERIALIZED,
-    reason: str | None = None,
-) -> None:
-    """extraction recipe 単位の抽出 artifact 状態を保存する。"""
-    if extraction_recipe_id is None:
-        return
-    await oracle.upsert_document_extraction_artifact(
-        document_id=detail.id,
-        extraction_recipe_id=extraction_recipe_id,
-        source_sha256=detail.content_sha256,
-        recipe_subset=_extraction_recipe_subset(settings),
-        status=status.value,
-        reason=reason,
-        metrics=_extraction_metrics(detail.extraction),
-    )
-
-
-def _extraction_metrics(extraction: Mapping[str, object] | None) -> dict[str, object]:
-    if not extraction:
-        return {}
-    return {
-        "element_count": _metadata_item_count(extraction.get("elements")),
-        "table_count": _metadata_item_count(extraction.get("tables")),
-        "asset_count": _metadata_item_count(extraction.get("assets")),
-        "field_count": _metadata_item_count(extraction.get("fields")),
-    }
-
-
-async def _reconcile_document_chunk_sets(
-    oracle: OracleClient,
-    document_id: str,
-    detail: DocumentDetail,
-    chunk_set_id: str | None,
-    effective_settings: Settings,
-    processing_config: DocumentProcessingConfig,
-) -> None:
-    """取込後、materialize した chunk_set を記録し文書の serving を確定する(planner 駆動の基盤)。
-
-    chunk は save_index で**挿入時に chunk_set_id タグ付け済み**。本関数は chunk_set 行の永続化・
-    serving 設定・旧 chunk_set(とその chunk、未タグ chunk)の GC を行う。serving 確定まで揃って
-    初めて検索可能な INDEXED とみなすため、失敗時は ERROR に戻す。
-    """
-    if detail.status != FileStatus.INDEXED or chunk_set_id is None:
-        return
-    try:
-        chunk_count = await oracle.count_document_chunks(document_id)
-        extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
-        _, effective_config = _merge_document_processing_config(processing_config)
-        await oracle.upsert_chunk_set(
-            chunk_set_id=chunk_set_id,
-            document_id=document_id,
-            extraction_recipe_id=extraction_recipe_id,
-            recipe_subset=_processing_recipe_snapshot(processing_config, effective_config),
-        )
-        await oracle.mark_chunk_set_indexed(
-            chunk_set_id=chunk_set_id, chunk_count=chunk_count, vector_count=chunk_count
-        )
-        await _record_document_extraction_artifact(
-            oracle,
-            detail,
-            extraction_recipe_id=extraction_recipe_id,
-            settings=effective_settings,
-        )
-        # 取込設定変更で生じた旧 chunk_set とその chunk(+未タグ chunk)を削除し、keep だけ残す。
-        await oracle.delete_stale_document_chunk_sets(
-            document_id=document_id, keep_chunk_set_id=chunk_set_id
-        )
-        # 3 層モデル: この単一 chunk_set を文書の serving にする(retrieval はこれを検索対象)。
-        # 所属 KB は membership(rag_document_knowledge_bases)が正本で、別表 binding は持たない。
-        await oracle.set_document_serving_chunk_set(
-            document_id=document_id, chunk_set_id=chunk_set_id
-        )
-    except Exception as exc:
-        logger.warning(
-            "chunk_set reconcile に失敗しました。document_id=%s",
-            document_id,
-            exc_info=True,
-        )
-        await oracle.update_document_status(
-            document_id,
-            FileStatus.ERROR,
-            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
-        )
-        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
-
-
-async def _reconcile_document_chunk_sets_chunked(
-    oracle: OracleClient,
-    document_id: str,
-    detail: DocumentDetail,
-    chunk_set_id: str | None,
-    effective_settings: Settings,
-    processing_config: DocumentProcessingConfig,
-) -> None:
-    """CHUNK 後、chunk_set 行だけを記録する。KB binding は INDEX 完了まで作らない。"""
-    if detail.status != FileStatus.CHUNKED or chunk_set_id is None:
-        return
-    try:
-        chunk_count = await oracle.count_chunk_set_chunks(chunk_set_id)
-        extraction_recipe_id = _document_extraction_recipe_id(detail, effective_settings)
-        _, effective_config = _merge_document_processing_config(processing_config)
-        await oracle.upsert_chunk_set(
-            chunk_set_id=chunk_set_id,
-            document_id=document_id,
-            extraction_recipe_id=extraction_recipe_id,
-            recipe_subset=_processing_recipe_snapshot(processing_config, effective_config),
-            status="CHUNKED",
-        )
-        await oracle.mark_chunk_set_chunked(chunk_set_id=chunk_set_id, chunk_count=chunk_count)
-        await _record_document_extraction_artifact(
-            oracle,
-            detail,
-            extraction_recipe_id=extraction_recipe_id,
-            settings=effective_settings,
-        )
-        await oracle.delete_stale_document_chunk_sets(
-            document_id=document_id, keep_chunk_set_id=chunk_set_id
-        )
-    except Exception as exc:
-        logger.warning(
-            "chunk_set chunk reconcile に失敗しました。document_id=%s",
-            document_id,
-            exc_info=True,
-        )
-        await oracle.update_document_status(
-            document_id,
-            FileStatus.ERROR,
-            CHUNK_SET_PUBLISH_ERROR_MESSAGE,
-        )
-        raise IngestionUserError(CHUNK_SET_PUBLISH_ERROR_MESSAGE) from exc
 
 
 async def _resolve_ingestion_settings(
@@ -5669,17 +5101,6 @@ async def _run_ingestion_job(
         )
 
 
-async def _validate_legacy_language_input(oracle: OracleClient, job: IngestionJob) -> None:
-    release = active_release()
-    detail = await oracle.get_document(job.document_id)
-    extraction = detail.extraction if detail else None
-    artifacts = extraction.get("parser_artifacts", {}) if extraction else {}
-    if release and not await artifact_language_compatible(oracle, artifacts, job.phase.value):
-        raise IngestionUserError(
-            "既存の抽出結果の言語資源を再利用できません。文書解析から再処理してください。"
-        )
-
-
 async def _run_pinned_ingestion_job(
     oracle: OracleClient,
     job: IngestionJob,
@@ -5709,8 +5130,6 @@ async def _run_pinned_ingestion_job(
     next_recipe_phase: IngestionJobPhase | None = None
     # レシピ経路で、job を SUCCEEDED にできた後に記録する成功の監査・metric(#514)。
     recipe_success_outcome: IngestionSuccessOutcome | None = None
-    # 文書単位の job の実行結果。自動進行(次工程の投入)は SUCCEEDED を書けた後に判定する。
-    finished_detail: DocumentDetail | None = None
     try:
         async with track_ingestion_progress(write_progress):
             if job.recipe_id is not None:
@@ -5719,58 +5138,13 @@ async def _run_pinned_ingestion_job(
                     recipe_id=job.recipe_id,
                     status=_PHASE_TO_RUNNING_STATUS[job.phase],
                 )
-            if job.recipe_id is not None or job.settings_overrides is not None:
-                # 正式レシピは旧 active を維持した隔離 materialize。recipe_id の無い旧実験の job は
-                # 利用者向けのエラーで止める（#486）。
-                recipe_result = await _materialize_experiment_candidate(
-                    oracle, job, cancel_checker=is_cancelled
-                )
-                next_recipe_phase = recipe_result.next_phase
-                recipe_success_outcome = recipe_result.success_outcome
-            elif job.phase == IngestionJobPhase.CHUNK:
-                await _validate_legacy_language_input(oracle, job)
-                finished_detail = await _chunk_reviewed_document(
-                    job.document_id,
-                    cancel_checker=is_cancelled,
-                )
-            elif job.phase == IngestionJobPhase.INDEX:
-                await _validate_legacy_language_input(oracle, job)
-                finished_detail = await _index_reviewed_document(
-                    job.document_id,
-                    cancel_checker=is_cancelled,
-                )
-            elif job.phase == IngestionJobPhase.EXTRACT:
-                current_detail = await oracle.get_document(job.document_id)
-                if (
-                    current_detail is None
-                    or current_detail.preprocess_artifact is None
-                    or not current_detail.preprocess_artifact.object_storage_path
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
-                    )
-                await _raise_if_job_cancelled(is_cancelled)
-                await _reset_document_outputs_for_extract(oracle, job.document_id)
-                finished_detail = await _ingest_existing_document(
-                    job.document_id,
-                    force=True,
-                    use_prepared_artifact=True,
-                    cancel_checker=is_cancelled,
-                )
-            else:
-                await _raise_if_job_cancelled(is_cancelled)
-                await _reset_document_outputs_for_extract(
-                    oracle,
-                    job.document_id,
-                    clear_preprocess_artifact=True,
-                )
-                finished_detail = await _ingest_existing_document(
-                    job.document_id,
-                    force=True,
-                    use_prepared_artifact=False,
-                    cancel_checker=is_cancelled,
-                )
+            # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
+            # 止める（#486）。
+            recipe_result = await _materialize_experiment_candidate(
+                oracle, job, cancel_checker=is_cancelled
+            )
+            next_recipe_phase = recipe_result.next_phase
+            recipe_success_outcome = recipe_result.success_outcome
     except HTTPException as exc:
         await _fail_ingestion_job(oracle, job, str(exc.detail), lease_owner=lease_owner)
         logger.info(
@@ -5854,8 +5228,6 @@ async def _run_pinned_ingestion_job(
         await refresh_document_section_map(job.document_id, oracle=oracle, reason="ingestion")
         if recipe_success_outcome is not None:
             _record_recipe_success_outcome(job, recipe_success_outcome)
-        if finished_detail is not None:
-            await _enqueue_auto_advance_job(job, finished_detail)
         if next_recipe_phase is not None and job.recipe_id is not None:
             # 現在ジョブは SUCCEEDED になったので、同一レシピの次フェーズ job を投入できる
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は
@@ -6156,31 +5528,6 @@ def _safe_ingestion_job_error_message(error: Exception) -> str:
     return "取込処理に失敗しました。"
 
 
-async def _enqueue_auto_advance_job(job: IngestionJob, detail: DocumentDetail) -> None:
-    """文書の有効な処理レシピに従い次 stage の job を投入する。"""
-    try:
-        settings, _config = await _resolve_ingestion_settings(OracleClient(), job.document_id)
-        if (
-            job.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
-            and detail.status == FileStatus.REVIEW
-            and settings.rag_auto_chunk_after_extract_enabled
-        ):
-            await _enqueue_chunk_phase_job_for_document(job.document_id)
-        elif (
-            job.phase == IngestionJobPhase.CHUNK
-            and detail.status == FileStatus.CHUNKED
-            and settings.rag_auto_index_after_chunk_enabled
-        ):
-            await _enqueue_index_phase_job_for_document(job.document_id)
-    except Exception:
-        logger.warning(
-            "auto advance job enqueue failed. document_id=%s phase=%s",
-            job.document_id,
-            job.phase,
-            exc_info=True,
-        )
-
-
 async def _finish_ingestion_job_unless_cancelled(
     oracle: OracleClient,
     job_id: str,
@@ -6278,7 +5625,6 @@ async def document_recipe_text_window(
         detail = found_detail
         artifact = detail.preprocess_artifact
     variant, offset, limit, focus = request.variant, request.offset, request.limit, request.focus
-    data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
 
     payload: dict[str, Any] = {}
     if recipe_id:
@@ -6294,6 +5640,8 @@ async def document_recipe_text_window(
         if extraction and extraction.get("extraction_json"):
             raw_payload = extraction["extraction_json"]
             payload = dict(raw_payload) if isinstance(raw_payload, Mapping) else {}
+        artifact = prepared_artifact_from_extraction(detail, payload) or artifact
+    data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
 
     def build() -> dict[str, Any]:
         if recipe_id:

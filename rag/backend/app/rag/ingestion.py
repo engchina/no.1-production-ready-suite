@@ -2532,30 +2532,11 @@ class IngestionPipeline:
         original_object_storage_path: str | None,
         fallback_content_type: str,
     ) -> DocumentPreprocessArtifact:
-        content_type = (
-            source_derivation.derived_content_type
-            or source_derivation.source_content_type
-            or fallback_content_type
-            or "application/octet-stream"
-        )
-        artifact = DocumentPreprocessArtifact(
-            derivation_id=source_derivation.derivation_id,
-            profile=source_derivation.preprocess_profile,
-            converted=source_derivation.converted,
-            converter_name=source_derivation.converter_name,
-            converter_version=source_derivation.converter_version,
-            source_content_type=source_derivation.source_content_type,
-            source_sha256=source_derivation.source_sha256,
-            object_storage_path=(
-                source_derivation.derived_object_path
-                if source_derivation.converted
-                else original_object_storage_path
-            ),
-            content_type=content_type,
-            sha256=source_derivation.derived_sha256 or source_derivation.source_sha256,
-            file_name=_prepared_artifact_file_name(original_file_name, content_type),
-            page_map={str(key): int(value) for key, value in source_derivation.page_map.items()},
-            warnings=list(source_derivation.warnings),
+        artifact = preprocess_artifact_from_derivation(
+            source_derivation,
+            original_file_name=original_file_name,
+            original_object_storage_path=original_object_storage_path,
+            fallback_content_type=fallback_content_type,
         )
         if self._recipe_id is not None:
             await self._oracle.update_document_recipe_status(
@@ -4530,6 +4511,39 @@ def _prepared_artifact_file_name(original_file_name: str, content_type: str) -> 
     base = raw_name.rsplit(".", 1)[0] if "." in raw_name else raw_name
     base = (base[:220]).rstrip(" .") or "document"
     return f"{base}__prepared{_canonical_artifact_extension(content_type)}"
+
+
+def preprocess_artifact_from_derivation(
+    derivation: SourceDerivation,
+    *,
+    original_file_name: str,
+    original_object_storage_path: str | None,
+    fallback_content_type: str,
+) -> DocumentPreprocessArtifact:
+    """派生系譜から処理後ファイルの artifact を作る（変換しなかったときは原本を指す）。"""
+    content_type = (
+        derivation.derived_content_type
+        or derivation.source_content_type
+        or fallback_content_type
+        or "application/octet-stream"
+    )
+    return DocumentPreprocessArtifact(
+        derivation_id=derivation.derivation_id,
+        profile=derivation.preprocess_profile,
+        converted=derivation.converted,
+        converter_name=derivation.converter_name,
+        converter_version=derivation.converter_version,
+        source_content_type=derivation.source_content_type,
+        source_sha256=derivation.source_sha256,
+        object_storage_path=(
+            derivation.derived_object_path if derivation.converted else original_object_storage_path
+        ),
+        content_type=content_type,
+        sha256=derivation.derived_sha256 or derivation.source_sha256,
+        file_name=_prepared_artifact_file_name(original_file_name, content_type),
+        page_map={str(key): int(value) for key, value in derivation.page_map.items()},
+        warnings=list(derivation.warnings),
+    )
 
 
 def _source_derivation_from_preprocess_artifact(

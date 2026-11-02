@@ -11,7 +11,6 @@ from rag_parser_core.language import builtin_pack, current_pack, pack_from_paylo
 
 from app.api.routes import documents
 from app.clients import oracle as oracle_module
-from app.rag.ingestion import IngestionUserError
 from app.rag.ingestion_language import (
     artifact_language_compatible,
     ingestion_release_job_id,
@@ -192,18 +191,6 @@ async def test_worker_release_resolution_failure_finishes_running_job(
     await documents._run_ingestion_job("job-a")
     assert failures == ["job-a"]
     assert active_release() is None
-
-
-async def test_legacy_partial_job_does_not_attribute_unknown_extraction_to_current() -> None:
-    class Oracle:
-        async def get_document(self, _identity: str) -> None:
-            return None
-
-    with (
-        ingestion_release_scope(release(), "job-a"),
-        pytest.raises(IngestionUserError, match="文書解析から再処理"),
-    ):
-        await documents._validate_legacy_language_input(cast(Any, Oracle()), job())
 
 
 async def test_recipe_enqueue_forwards_expected_release(monkeypatch: pytest.MonkeyPatch) -> None:
