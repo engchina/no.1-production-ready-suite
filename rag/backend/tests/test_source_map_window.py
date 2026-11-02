@@ -336,7 +336,7 @@ def test_structured_records_jsonl_follows_windows_by_record_id() -> None:
 def _csv_origin_payload(source: bytes, jsonl: bytes) -> dict[str, Any]:
     result = _structured_records_jsonl_result(jsonl)
     assert result.extraction is not None
-    payload = result.extraction.to_document_payload()
+    payload: dict[str, Any] = dict(result.extraction.to_document_payload())
     payload["parser_artifacts"]["source_derivation"] = {
         "converted": True,
         "source_sha256": hashlib.sha256(source).hexdigest(),
