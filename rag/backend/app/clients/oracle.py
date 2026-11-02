@@ -6021,6 +6021,7 @@ class OracleClient:
         page: int | None = None,
         chunk_id: str | None = None,
         scope_element_ids: list[str] | None = None,
+        scope_rows: Mapping[str, Any] | None = None,
         extraction_recipe_id: str | None = None,
         unlocated_only: bool = False,
         location_unavailable: bool = False,
@@ -6057,6 +6058,13 @@ class OracleClient:
             WHERE (:chunk_id IS NULL OR c.chunk_id = :chunk_id)
               AND (:unlocated_only=0 OR c.first_element_id IS NULL)
               AND (:scope_active=0 OR c.first_element_id IN (SELECT element_id FROM scope_ids))
+              AND (:scope_rows_active=0
+                   OR JSON_VALUE(c.metadata_json, '$.table_data_row_start'
+                                 RETURNING NUMBER NULL ON ERROR)
+                      BETWEEN :scope_row_start AND :scope_row_end
+                   OR (:scope_rows_at_start=1
+                       AND JSON_VALUE(c.metadata_json, '$.table_data_row_start'
+                                      RETURNING NUMBER NULL ON ERROR) IS NULL))
               AND (:page IS NULL OR
                    COALESCE(JSON_VALUE(c.metadata_json, '$.page_start'
                                        RETURNING NUMBER NULL ON ERROR),
@@ -6083,6 +6091,10 @@ class OracleClient:
                     "unlocated_only": int(unlocated_only),
                     "location_unavailable": int(location_unavailable),
                     "scope_ids": json.dumps(scope_element_ids or []),
+                    "scope_rows_active": int(scope_rows is not None),
+                    "scope_row_start": scope_rows["row_start"] if scope_rows else 0,
+                    "scope_row_end": scope_rows["row_end"] if scope_rows else -1,
+                    "scope_rows_at_start": int(bool(scope_rows and scope_rows["at_start"])),
                     "chunk_id": chunk_id,
                     "extraction_recipe_id": extraction_recipe_id,
                 }

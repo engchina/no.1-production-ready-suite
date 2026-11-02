@@ -1519,6 +1519,76 @@ test("テキスト原本の範囲に3タブが追従し、26件目も範囲内�
 });
 
 
+// 解析が記録した原本の位置で右が左の表示範囲に追従する（#4100）。形式ごとの座標は backend のテストで確かめる。
+const SOURCE_MAP_FORMATS = [
+  {format: "txt", first: "合成の段落 1", later: "合成の段落 900", laterChunk: "合成の段落の Chunk 900"},
+  {format: "md", first: "合成の節 1", later: "合成の節 300", laterChunk: "合成の節の Chunk 300"},
+  {format: "html", first: "合成の要素 1", later: "合成の要素 800", laterChunk: "合成の要素の Chunk 800"},
+  {format: "csv", first: "| 列1 | 列2 |\n| 0001 | 合成の値 1 |", later: "| 列1 | 列2 |\n| 0900 | 合成の値 900 |", laterChunk: "| 0900 | 合成の値 900 |"},
+  {format: "tsv", first: "| 列1 | 列2 |\n| 1 | 合成の値 1 |", later: "| 列1 | 列2 |\n| 900 | 合成の値 900 |", laterChunk: "| 900 | 合成の値 900 |"},
+  {format: "jsonl", first: "合成の行 line=1", later: "合成の行 line=700", laterChunk: "合成の行の Chunk line=700"},
+  {format: "json", first: "合成の値 /a/0", later: "合成の値 /a/300", laterChunk: null},
+  {format: "xml", first: "合成のタグの本文 1", later: "合成のタグの本文 600", laterChunk: "合成のタグの Chunk 600"},
+  {format: "XML ツリー JSON", first: "合成の条 1", later: "合成の条 40", laterChunk: "合成の条の Chunk 40"},
+  {format: "構造化レコード JSONL", first: "合成の記録 row-000001", later: "合成の記録 row-000300", laterChunk: "合成の記録の Chunk row-000300"},
+] as const;
+
+for (const {format, first, later, laterChunk} of SOURCE_MAP_FORMATS) {
+  test(`長い ${format} の原本で右の 3 タブが左の表示範囲に追従する`, {tag: "@responsive"}, async ({page}) => {
+    await mockDocumentDetail(page);
+    await mockDocumentSections(page);
+    await page.route("**/recipes/recipe-1/text-window", async route => {
+      const offset = Number(route.request().postDataJSON().offset || 0);
+      await route.fulfill({json: {data: {text: offset ? "後の範囲の原本" : "最初の範囲の原本", offset,
+        total: 20000, limit: 8192, revision: "synthetic-source-v2", previous_offset: offset ? 0 : null, next_offset: offset ? null : 8192}}});
+    });
+    await page.route("**/recipes/recipe-1/extraction-view?**", async route => {
+      const params = new URL(route.request().url()).searchParams;
+      const text = params.get("source_offset") === "8192" ? later : first;
+      const mode = params.get("mode");
+      const rows = [{element_id: "source-map-element", kind: "text", text, order: 0}];
+      await route.fulfill({json: {data: {payload: {raw_text: mode === "text" ? text : "", elements: mode === "structure" ? rows : [], tables: [], pages: []},
+        total: mode === "text" ? text.length : 1, offset: 0, limit: mode === "text" ? text.length : 1, complete: true, scope_status: "exact"}}});
+    });
+    await page.route("**/recipes/recipe-1/chunk-window?**", async route => {
+      const laterRange = new URL(route.request().url()).searchParams.get("source_offset") === "8192";
+      const text = laterRange ? laterChunk : "最初の範囲の Chunk";
+      const items = text ? [{document_id: "doc-1", chunk_id: "source-map-chunk", chunk_index: 0, text, element_ids: [], metadata: {}}] : [];
+      await route.fulfill({json: {data: {items, total: items.length, document_total: 2, offset: 0, limit: 25, complete: true, scope_status: "exact"}}});
+    });
+    await page.goto("/documents/doc-1");
+    const inspector = page.getByTestId("document-inspector-pane");
+    await expect(page.getByTestId("inspector-current-range")).toContainText("開始 1");
+    await expect(inspector).toContainText(first.split("\n").at(-1)!);
+    await page.getByRole("button", {name: "次のページ", exact: true}).click();
+    await expect(page.getByTestId("inspector-current-range")).toContainText("開始 8193");
+    await expect(inspector).toContainText(later.split("\n").at(-1)!);
+    await expect(inspector).not.toContainText(first.split("\n").at(-1)!);
+    await inspector.getByRole("tab", {name: "構造化要素", exact: true}).click();
+    await expect(inspector).toContainText(later.split("\n").at(-1)!);
+    await inspector.getByRole("tab", {name: /Chunk \/ Citation/}).click();
+    // 普通の JSON の Chunk は原本の座標を持たないので開始の範囲にだけ所属し、後の範囲は案内になる。
+    await expect(inspector).toContainText(laterChunk ?? "現在の原本表示範囲に対応する Chunk はありません。");
+    await expect(inspector).not.toContainText("位置情報が記録されていないため");
+    await expectNoHorizontalOverflow(page);
+    await page.screenshot({path: test.info().outputPath(`inspector-source-map-${SOURCE_MAP_FORMATS.findIndex(row => row.format === format)}.png`)});
+  });
+}
+
+test("原本の版が違うときは版の違いを案内し、同期の結果を出さない", {tag: "@responsive"}, async ({page}) => {
+  await mockDocumentDetail(page);
+  await page.route("**/recipes/recipe-1/text-window", route => route.fulfill({json: {data: {text: "今の原本", offset: 0, total: 20000, limit: 8192, revision: "changed-v2", next_offset: 8192, previous_offset: null}}}));
+  await page.route("**/recipes/recipe-1/extraction-view?**", route => route.fulfill({json: {data: {payload: {raw_text: "", elements: [], tables: [], pages: []}, offset: 0, total: 0, limit: 8192, complete: true, scope_status: "version_mismatch"}}}));
+  await page.goto("/documents/doc-1");
+  const inspector = page.getByTestId("document-inspector-pane");
+  await expect(inspector).toContainText("原本の版が違うため");
+  await expect(inspector).not.toContainText("位置情報が記録されていないため");
+  await expect(inspector).not.toContainText("本文テキストはまだありません");
+  await page.getByTestId("document-inspector-pane").screenshot({path: test.info().outputPath("inspector-version-mismatch.png")});
+  await expectNoHorizontalOverflow(page);
+});
+
+
 test("位置対応のない旧記録は推測して同期せず理由を示す", {tag: "@responsive"}, async ({page}) => {
   await mockDocumentDetail(page);
   await page.route("**/recipes/recipe-1/text-window", route => route.fulfill({json: {data: {text: "旧原本", offset: 0, total: 3, limit: 8192, revision: "legacy-v1"}}}));

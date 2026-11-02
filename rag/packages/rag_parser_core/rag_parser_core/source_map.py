@@ -20,6 +20,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
+from xml.parsers import expat
 
 from charset_normalizer import from_bytes
 
@@ -33,6 +34,7 @@ SOURCE_UNIT_CODEPOINTS = 1024
 SCHEME_TEXT_CHAR = "text_char"
 SCHEME_MARKDOWN_SOURCE = "markdown_source"
 SCHEME_HTML_SOURCE = "html_source"
+SCHEME_XML_SOURCE = "xml_source"
 SCHEME_DELIMITED_ROW = "delimited_row"
 SCHEME_JSONL_LINE = "jsonl_line"
 SCHEME_JSON_POINTER = "json_pointer"
@@ -473,6 +475,71 @@ def annotate_html_positions(text: str, tags: Sequence[HtmlTagPosition]) -> str:
     return "".join(parts)
 
 
+# ---- XML ----------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class XmlLeaf:
+    """文字を持つ XML の要素（lxml の ``element.text`` と同じ、最初の子の前までの文字）。"""
+
+    text: str
+    source_range: SourceRange
+
+
+def xml_leaves(text: str) -> list[XmlLeaf]:
+    """expat が記録したタグの位置で、要素が閉じる順（Unstructured の読む順）に並べる。"""
+    encoded = text.encode("utf-8")
+    # 復号済みの文字列を渡すので、原本の宣言の文字コードを使わない。
+    parser = expat.ParserCreate("utf-8")
+    parser.buffer_text = True
+    parser.UseForeignDTD(False)
+    leaves: list[XmlLeaf] = []
+    # (タグ名, 開始の文字の位置, 行, 列, 文字の断片, 子やコメントが始まったか)
+    stack: list[list[Any]] = []
+    last_byte = 0
+    last_char = 0
+
+    def char_position() -> int:
+        """byte の位置を文字の位置へ。解析の順に増えるので差分だけ復号する。"""
+        nonlocal last_byte, last_char
+        byte = parser.CurrentByteIndex
+        last_char += len(encoded[last_byte:byte].decode("utf-8"))
+        last_byte = byte
+        return last_char
+
+    def close_text() -> None:
+        if stack:
+            stack[-1][5] = True
+
+    def start(tag: str, _attrs: Any) -> None:
+        close_text()
+        stack.append(
+            [tag, char_position(), parser.CurrentLineNumber, parser.CurrentColumnNumber, [], False]
+        )
+
+    def end(_tag: str) -> None:
+        tag, position, line, column, parts, _ = stack.pop()
+        value = "".join(parts)
+        if value.strip():
+            locator = f"line={line};col={column};tag={tag}"
+            leaves.append(XmlLeaf(value, SourceRange(position, char_position(), locator)))
+
+    def characters(data: str) -> None:
+        if stack and not stack[-1][5]:
+            stack[-1][4].append(data)
+
+    def other(*_args: Any) -> None:
+        close_text()
+
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.CharacterDataHandler = characters
+    parser.CommentHandler = other
+    parser.ProcessingInstructionHandler = other
+    parser.Parse(encoded, True)
+    return leaves
+
+
 # ---- 行の位置 -----------------------------------------------------------------------------------
 
 
@@ -532,6 +599,7 @@ __all__ = [
     "SCHEME_JSON_POINTER",
     "SCHEME_MARKDOWN_SOURCE",
     "SCHEME_TEXT_CHAR",
+    "SCHEME_XML_SOURCE",
     "SOURCE_MAP_KEY",
     "SOURCE_MAP_VERSION",
     "SOURCE_UNIT_CODEPOINTS",
@@ -539,6 +607,7 @@ __all__ = [
     "HtmlTagPosition",
     "LineIndex",
     "SourceRange",
+    "XmlLeaf",
     "annotate_html_positions",
     "decode_source_text",
     "delimited_element_ranges",
@@ -552,4 +621,5 @@ __all__ = [
     "source_map_artifact",
     "structured_record_ranges",
     "text_locator",
+    "xml_leaves",
 ]

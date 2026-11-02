@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from xml.parsers import expat
 
 import pytest
 
@@ -24,6 +25,7 @@ from rag_parser_core.source_map import (
     source_map_artifact,
     structured_record_ranges,
     text_locator,
+    xml_leaves,
 )
 from rag_parser_core.unstructured_source_map import source_format, unstructured_source_map
 
@@ -143,6 +145,30 @@ def test_html_positions_come_from_parser_and_annotation_keeps_source_text() -> N
     assert [t.tag for t in html_tag_positions(annotated)] == [t.tag for t in tags]
 
 
+def test_xml_leaves_follow_close_order_and_text_before_first_child() -> None:
+    text = (
+        '<?xml version="1.0" encoding="Shift_JIS"?>\n<!-- 注釈 -->\n<root>\n'
+        '  <item id="1">前の文字<sub>内側 &amp; 値</sub>後ろの文字</item>\n'
+        "  <note>コメントの前<!-- x -->コメントの後</note>\n"
+        "  <空></空>\n"
+        "  <![CDATA[無視]]>\n"
+        "</root>"
+    )
+    leaves = xml_leaves(text)
+    assert [leaf.text for leaf in leaves] == ["内側 & 値", "前の文字", "コメントの前"]
+    inner, outer, note = (leaf.source_range for leaf in leaves)
+    assert text[inner.source_start :].startswith("<sub>")
+    assert text[inner.source_start : inner.source_end].endswith("値")
+    assert text[outer.source_start :].startswith('<item id="1">')
+    assert text[note.source_start :].startswith("<note>")
+    assert outer.locator == "line=4;col=2;tag=item"
+
+
+def test_xml_rejects_broken_source() -> None:
+    with pytest.raises(expat.ExpatError):
+        xml_leaves("<a><b></a>")
+
+
 def test_text_blocks_and_locator_use_character_and_line_coordinates() -> None:
     text = "一行目\n  二行目  \n\n\n三行目\n"
     index = LineIndex(text)
@@ -162,6 +188,8 @@ def test_source_format_prefers_extension() -> None:
     assert source_format(".json", "text/plain") == "json"
     assert source_format("", "text/html; charset=utf-8") == "html"
     assert source_format("", "application/x-ndjson") == "jsonl"
+    assert source_format(".xml", "text/plain") == "xml"
+    assert source_format("", "text/xml") == "xml"
     assert source_format(".pdf", "application/pdf") is None
 
 

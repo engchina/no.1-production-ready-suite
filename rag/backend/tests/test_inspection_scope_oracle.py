@@ -69,6 +69,59 @@ async def test_chunk_window_uses_start_page_and_first_element() -> None:
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_chunk_window_scopes_one_element_by_recorded_rows() -> None:
+    """1 つの要素の表は、分割が記録した行の番号で表示範囲に所属させる（#4100）。"""
+    oracle = OracleClient()
+    metadata_rows: list[ChunkMetadata] = [
+        {"element_ids": "table", "table_data_row_start": 1},
+        {"element_ids": "table", "table_data_row_start": 58},
+        {"element_ids": "table"},
+    ]
+    document_id = await _indexed_document(
+        oracle,
+        file_name=f"synthetic-{uuid4().hex}.csv",
+        chunks=[
+            Chunk(
+                index=index,
+                text=f"合成の行{index}",
+                start_offset=0,
+                end_offset=5,
+                metadata=metadata,
+            )
+            for index, metadata in enumerate(metadata_rows)
+        ],
+    )
+    recipe = (await oracle.list_document_recipes(document_id))[0]
+    chunk_set = str(recipe["active_chunk_set_id"])
+    revision = f"synthetic-{uuid4().hex}"
+    await oracle.upsert_document_extraction_artifact(
+        document_id=document_id,
+        extraction_recipe_id=revision,
+        source_sha256=None,
+        status="materialized",
+        extraction={"elements": [{"element_id": "table"}]},
+    )
+    await oracle.upsert_chunk_set(
+        chunk_set_id=chunk_set, document_id=document_id, extraction_recipe_id=revision
+    )
+
+    async def indexes(row_start: int, row_end: int, *, at_start: bool) -> list[int]:
+        chunks, _ = await oracle.list_chunk_set_chunk_window(
+            chunk_set,
+            extraction_recipe_id=revision,
+            scope_element_ids=["table"],
+            scope_rows={"row_start": row_start, "row_end": row_end, "at_start": at_start},
+        )
+        return [chunk.chunk_index for chunk in chunks]
+
+    # 行の番号の無い Chunk は要素の開始の範囲にだけ所属する。
+    assert await indexes(0, 57, at_start=True) == [0, 2]
+    assert await indexes(58, 200, at_start=False) == [1]
+    assert await indexes(0, -1, at_start=True) == [2]
+    assert await indexes(0, -1, at_start=False) == []
+
+
+@pytest.mark.usefixtures("oracle_db")
 async def test_unlocated_partition_keeps_unknown_ids_and_version_boundaries() -> None:
     from app.rag.request_context import (
         AuditRequestContext,

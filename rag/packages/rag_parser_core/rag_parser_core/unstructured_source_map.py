@@ -19,6 +19,7 @@ from rag_parser_core.source_map import (
     SCHEME_JSONL_LINE,
     SCHEME_MARKDOWN_SOURCE,
     SCHEME_TEXT_CHAR,
+    SCHEME_XML_SOURCE,
     SOURCE_WINDOW_CODEPOINTS,
     LineIndex,
     SourceRange,
@@ -32,6 +33,7 @@ from rag_parser_core.source_map import (
     nonblank_line_ranges,
     source_map_artifact,
     text_locator,
+    xml_leaves,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ _HTML_EXTENSIONS = frozenset({".html", ".htm", ".xhtml"})
 _TEXT_CONTENT_TYPES = frozenset({"text/plain"})
 _MARKDOWN_CONTENT_TYPES = frozenset({"text/markdown", "text/x-markdown"})
 _HTML_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
+_XML_CONTENT_TYPES = frozenset({"application/xml", "text/xml"})
 _NDJSON_CONTENT_TYPES = frozenset(
     {"application/x-ndjson", "application/jsonl", "application/ndjson"}
 )
@@ -58,6 +61,8 @@ def source_format(extension: str, content_type: str) -> str | None:
         return "markdown"
     if extension in _HTML_EXTENSIONS:
         return "html"
+    if extension == ".xml":
+        return "xml"
     if extension == ".csv":
         return "csv"
     if extension == ".tsv":
@@ -72,6 +77,8 @@ def source_format(extension: str, content_type: str) -> str | None:
         return "markdown"
     if normalized in _HTML_CONTENT_TYPES:
         return "html"
+    if normalized in _XML_CONTENT_TYPES:
+        return "xml"
     if normalized in {"text/csv", "application/csv"}:
         return "csv"
     if normalized == "text/tab-separated-values":
@@ -210,6 +217,25 @@ def _html_ranges(
     return ranges
 
 
+def _xml_ranges(
+    text: str, items: Sequence[object], ids: Sequence[str]
+) -> dict[str, list[SourceRange]]:
+    """閉じる順の文字のある要素と、Unstructured の要素を順番どおりに対応させる。"""
+    from unstructured.cleaners.core import clean_bullets
+
+    leaves = xml_leaves(text)
+    if len(leaves) != len(items):
+        return {}
+    ranges: dict[str, list[SourceRange]] = {}
+    for leaf, item, element_id in zip(leaves, items, ids, strict=True):
+        output = leaf.text.strip()
+        element_text = _element_text(item).strip()
+        if element_text != output and element_text != clean_bullets(output):
+            return {}
+        ranges[element_id] = [leaf.source_range]
+    return ranges
+
+
 def unstructured_source_map(
     data: bytes,
     *,
@@ -263,6 +289,8 @@ def _element_ranges(
         return SCHEME_MARKDOWN_SOURCE, _markdown_ranges(text, items, ids)
     if kind == "html":
         return SCHEME_HTML_SOURCE, _html_ranges(text, items, ids, repartition_html)
+    if kind == "xml":
+        return SCHEME_XML_SOURCE, _xml_ranges(text, items, ids)
     if kind == "jsonl":
         ranges = jsonl_element_ranges(text, [_element_text(item) for item in items])
         return SCHEME_JSONL_LINE, (

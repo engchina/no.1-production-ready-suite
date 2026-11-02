@@ -139,6 +139,73 @@ def test_jsonl_records_line_numbers() -> None:
     assert source_map["elements"][extraction.elements[3].element_id][0]["locator"] == "line=4"
 
 
+def test_xml_records_tag_positions_in_close_order() -> None:
+    source = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n<root>\n'
+        + "".join(
+            f'<item id="{i}">\n  前の文字 {i}<name>名前 {i}</name>\n'
+            f"  <note>注記 {i} &amp; 本文</note>\n</item>\n"
+            for i in range(300)
+        )
+        + "</root>\n"
+    )
+    data = source.encode()
+    for content_type in ("application/xml", "text/xml"):
+        extraction = _parse(data, content_type, ".xml")
+        source_map = _assert_every_element_recorded(extraction, data, "xml_source")
+        by_text = {element.text: element for element in extraction.elements}
+        for text, opening in (
+            ("名前 7", "<name>名前 7"),
+            ("注記 7 & 本文", "<note>注記 7"),
+            ("前の文字 7", '<item id="7">'),
+        ):
+            span = source_map["elements"][by_text[text].element_id][0]
+            assert source[span["source_start"] :].startswith(opening)
+            assert span["locator"].startswith("line=")
+
+
+def test_broken_xml_keeps_parser_behaviour() -> None:
+    from rag_parser_core.unstructured_source_map import unstructured_source_map
+
+    class Item:
+        text = "本文"
+
+    def never(_: bytes) -> list[object]:
+        raise AssertionError
+
+    assert (
+        unstructured_source_map(
+            ("<a>" + "本文" * 5000).encode(),
+            extension=".xml",
+            content_type="application/xml",
+            items=[Item()],
+            ids=["e"],
+            element_texts={},
+            repartition_html=never,
+        )
+        is None
+    )
+
+
+def test_element_shaped_jsonl_is_not_recorded_when_output_differs() -> None:
+    # 要素の形の行は Unstructured が要素に戻す（本文が整形した JSON にならない）ので記録しない。
+    lines = [json.dumps({"type": "Title", "text": f"見出し {i}" + "値" * 20}) for i in range(400)]
+    data = ("\n".join(lines) + "\n").encode()
+    extraction = _parse(data, "application/x-ndjson", ".jsonl")
+    assert extraction.elements
+    assert "source_map" not in extraction.parser_artifacts
+
+
+def test_blank_lines_in_jsonl_keep_physical_line_numbers() -> None:
+    lines: list[str] = []
+    for i in range(500):
+        lines.extend([json.dumps({"k": i, "v": "値" * 20}, ensure_ascii=False), ""])
+    data = "\n".join(lines).encode()
+    extraction = _parse(data, "application/x-ndjson", ".jsonl")
+    source_map = _assert_every_element_recorded(extraction, data, "jsonl_line")
+    assert source_map["elements"][extraction.elements[2].element_id][0]["locator"] == "line=5"
+
+
 def test_json_records_pointer_units_with_sorted_output() -> None:
     value = {"z": "先頭", "a": [{"k": i, "v": "値" * 5} for i in range(600)], "m": {"x": 1}}
     data = json.dumps(value, ensure_ascii=False, indent=1).encode()

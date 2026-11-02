@@ -3124,6 +3124,7 @@ export const ja = {
     "標準の項目（文書の種類・文書タイトル・発行日・作成日・発行元・作成部署）を抽出します。文書が属するナレッジベースで項目を定義していれば、その項目を使います。",
   "flow.inspector.currentRange": "原本の表示範囲に同期（開始 {start} / 全 {total} 文字）",
   "flow.inspector.unmapped": "この原本の版に対応する位置情報が記録されていないため、表示範囲に同期できません。抽出エクスポートで全体を確認できます。",
+  "flow.inspector.versionMismatch": "解析したときの原本と、表示している原本の版が違うため、表示範囲に同期できません。再解析すると同期できます。",
   "flow.inspector.noStarts": "この表示範囲で新しく始まる要素はありません。前の範囲から続く要素は、開始した範囲で確認できます。",
   "flow.inspector.withinRange": "この表示範囲内: {start}–{end} / {total}",
   "flow.inspector.continue": "この範囲の続きを読む",
