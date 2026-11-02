@@ -966,3 +966,5 @@ class DocumentTextWindowRequest(BaseModel):
     limit: int = Field(default=8192, ge=1, le=8192, strict=True)
     variant: Literal["original", "prepared"] = "original"
     focus: str | None = Field(default=None, max_length=8192)
+    element_id: str | None = Field(default=None, max_length=512)
+    section_id: str | None = Field(default=None, max_length=64)

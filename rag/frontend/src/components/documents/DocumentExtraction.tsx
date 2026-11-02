@@ -10,7 +10,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, type ReactNode, type Ref } from "react";
 
-import { OriginalSourcePanel, type OriginalSourceInput, Banner, CopyButton, Disclosure, excerptHasTable, excerptPlainText, INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS, cn } from "@production-ready/ui";
+import { OriginalSourcePanel, type OriginalSourceInput, Banner, CopyButton, Disclosure, excerptHasTable, excerptPlainText, INFORMATION_CARD_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS, cn } from "@production-ready/ui";
 import { api } from "@/lib/api";
 import type {
   DocumentElement,
@@ -62,10 +62,10 @@ const KIND_LABELS: Record<string, Parameters<typeof t>[0]> = {
 };
 
 /** RAG 取込で得た本文テキストを表示する。 */
-export function DocumentRawText({ extraction }: { extraction: Record<string, unknown> }) {
+export function DocumentRawText({ extraction, emptyMessage }: { extraction: Record<string, unknown>; emptyMessage?: string }) {
   const { displayText } = parseStructuredExtraction(extraction);
   if (!displayText) {
-    return <p className="text-sm text-fg-muted">{t("flow.extraction.noRawText")}</p>;
+    return <p className="text-sm text-fg-muted">{emptyMessage ?? t("flow.extraction.noRawText")}</p>;
   }
 
   return (
@@ -96,8 +96,10 @@ export function DocumentExtraction({
   extractionRevision = null,
   onPageSelect,
   omitWarning,
+  showNavigation = true,
 }: {
   extraction: Record<string, unknown>;
+  showNavigation?: boolean;
   /**
    * 同じ画面のほかの場所が出す warning（文書の先頭の Excel の表頭の確認の案内など）。ここでは出さない
    * （同じ状態の案内は 1 か所。UX 契約 messaging §10.2。#2034）。
@@ -215,7 +217,7 @@ export function DocumentExtraction({
       ) : null}
 
       {/* 章節は要素の一覧より先に出す（#735）。文書の詳細では章節を修正・追加・削除できる（#713）。文書の無い表示は抽出結果の章節だけを出す。 */}
-      {documentId ? (
+      {showNavigation && documentId ? (
         <DocumentSectionsPanel
           documentId={documentId}
           recipeId={recipeId}
@@ -228,7 +230,7 @@ export function DocumentExtraction({
           }
           onPageSelect={onPageSelect}
         />
-      ) : parsed.navigation.length > 0 ? (
+      ) : showNavigation && parsed.navigation.length > 0 ? (
         <NavigationTreePanel nodes={parsed.navigation} />
       ) : null}
 
@@ -240,7 +242,7 @@ export function DocumentExtraction({
               {formatNumber(stats.elementCount)}
             </span>
           </h4>
-          <ol className={cn("space-y-3 pr-1", INFORMATION_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)} tabIndex={0} aria-label={t("flow.extraction.elements")} data-testid="structured-elements-scroll">
+          <ol className={cn("space-y-3 pr-1", INFORMATION_CARD_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)} tabIndex={0} aria-label={t("flow.extraction.elements")} data-testid="structured-elements-scroll">
             {parsed.elements.map((element) => (
               <ElementItem
                 key={elementKey(element)}

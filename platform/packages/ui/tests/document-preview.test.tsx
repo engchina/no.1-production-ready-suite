@@ -142,6 +142,30 @@ describe("DocumentPreview", () => {
     host.remove();
   });
 
+  it("原本の構造境界と版を通知し、前後へ同じ区切りで移動できる", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const offsets: number[] = [];
+    const reported: {offset: number; revision?: string}[] = [];
+    await act(async () => {
+      root.render(<DocumentPreview kind="text" fileName="synthetic.json" textKey="source-v1"
+        loadTextRange={async (offset) => {
+          offsets.push(offset);
+          return {text: offset === 0 ? "先頭の構造" : "次の構造", offset, total: 10000, limit: 8192,
+            revision: "source-v1", previous_offset: offset === 0 ? null : 0, next_offset: offset === 0 ? 6000 : null};
+        }} onTextRangeChange={range => reported.push(range)} />);
+    });
+    expect(reported.at(-1)).toMatchObject({offset: 0, revision: "source-v1"});
+    await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("次のページ"))!.click(); });
+    expect(offsets).toEqual([0, 6000]);
+    expect(host.querySelector('[data-testid="preview-text"]')?.textContent).toBe("次の構造");
+    expect(reported.at(-1)).toMatchObject({offset: 6000, revision: "source-v1"});
+    await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("前のページ"))!.click(); });
+    expect(offsets).toEqual([0, 6000, 0]);
+    act(() => root.unmount()); host.remove();
+  });
+
   it("文言は上書きできる", () => {
     const host = html(
       <DocumentPreview

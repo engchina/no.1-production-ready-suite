@@ -7,6 +7,7 @@ import { ChatSkeleton, FormSkeleton, ListSkeleton, SKELETON_CLASS, Skeleton, Tab
 import * as ui from "../src/index";
 import {
   INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
+  INFORMATION_CARD_LIST_SCROLL_CLASS,
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_LIST_VISIBLE_ROWS,
@@ -39,6 +40,7 @@ describe("一覧の表示密度の定数（#265、NL2SQL の基準と同じ値�
   });
 
   it("パッケージのルートから export される", () => {
+    expect(ui.INFORMATION_CARD_LIST_SCROLL_CLASS).toBe(INFORMATION_CARD_LIST_SCROLL_CLASS);
     expect(ui.INFORMATION_TABLE_VISIBLE_ROWS).toBe(INFORMATION_TABLE_VISIBLE_ROWS);
     expect(ui.INFORMATION_TABLE_ROW_CLASS).toBe(INFORMATION_TABLE_ROW_CLASS);
     expect(ui.TableSkeleton).toBe(TableSkeleton);

@@ -1,5 +1,5 @@
 title: "Deploy Production Ready Suite on Oracle Cloud Infrastructure"
-stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database (new or existing) and one Compute instance are shared by every selected product; Nginx serves them under /rag/, /nl2sql/ and /agent/ (HTTPS on port 443 with a private CA by default). Configure AI runtime settings after startup from each application's System Settings."
+stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database (new or existing) and one Compute instance are shared by every selected product; Nginx serves them under /rag/, /nl2sql/ and /agent/ (HTTPS on port 443 with a private CA by default). 対応リージョンは大阪（ap-osaka-1）、東京（ap-tokyo-1）、Chicago（us-chicago-1）です。Suite と Bastion の image は配備先リージョンに合わせて選択します。 Configure AI runtime settings after startup from each application's System Settings."
 schemaVersion: 1.1.0
 version: "20261008.1"
 locale: "en"
@@ -116,7 +116,6 @@ variableGroups:
   - title: "bastion のネットワークと接続"
     visible: bastion_enabled
     variables:
-      - bastion_compartment_ocid
       - bastion_availability_domain
       - bastion_vcn_id
       - bastion_subnet_id
@@ -171,6 +170,7 @@ variableGroups:
 variables:
   region:
     title: Region
+    description: "対応リージョンは大阪（ap-osaka-1）、東京（ap-tokyo-1）、Chicago（us-chicago-1）です。Resource Manager の stack を作成するリージョンを使用します。"
     type: oci:identity:region:name
     required: true
     visible: false
@@ -181,6 +181,7 @@ variables:
     required: true
     visible: true
     title: "Create in compartment"
+    description: "Suite と Bastion の Compute に共通の配備先です。Bastion の AD・VCN・subnet もこのコンパートメントから選択します。"
 
   availability_domain:
     type: oci:identity:availabilitydomain:name
@@ -717,7 +718,7 @@ variables:
     required: true
     visible: true
     title: "Bastion Compute"
-    description: "オンにすると、Suite の Compute とは別に bastion の Compute を 1 台作ります。GNOME のデスクトップ・TigerVNC（:1 = TCP 5901。firewalld で開けます）・Google Chrome を入れます。配置先・shape・image（Oracle Linux 9）・SSH キーは bastion 専用に指定します。主 Compute の設定は使いません。bastion から ADB（1522）と Suite の Compute（公開の port・22）に届くよう、それぞれの subnet の security list で bastion の subnet の CIDR を許可してください。"
+    description: "オンにすると、Suite の Compute とは別に bastion の Compute を 1 台作ります。GNOME のデスクトップ・TigerVNC（:1 = TCP 5901。firewalld で開けます）・Google Chrome を入れます。コンパートメントは先頭の配備先を継承します。AD・VCN・subnet・shape・image（Oracle Linux 9）・SSH キーは bastion 専用に指定します。bastion から ADB（1522）と Suite の Compute（公開の port・22）に届くよう、それぞれの subnet の security list で bastion の subnet の CIDR を許可してください。"
     default: false
 
   bastion_display_name:
@@ -727,12 +728,6 @@ variables:
     title: "Bastion instance name"
     default: "PRODUCTION_READY_BASTION"
 
-  bastion_compartment_ocid:
-    type: oci:identity:compartment:id
-    required: true
-    visible: bastion_enabled
-    title: "Bastion compartment"
-
   bastion_availability_domain:
     type: oci:identity:availabilitydomain:name
     required: true
@@ -740,7 +735,7 @@ variables:
     title: "Bastion availability domain"
     dependsOn:
       region: ${region}
-      compartmentId: ${bastion_compartment_ocid}
+      compartmentId: ${compartment_ocid}
 
   bastion_vcn_id:
     type: oci:core:vcn:id
@@ -748,7 +743,7 @@ variables:
     visible: bastion_enabled
     title: "Bastion VCN"
     dependsOn:
-      compartmentId: ${bastion_compartment_ocid}
+      compartmentId: ${compartment_ocid}
 
   bastion_shape:
     type: enum
@@ -766,7 +761,7 @@ variables:
     required: true
     visible: bastion_enabled
     title: "Bastion image"
-    description: "bastion 専用の Oracle Linux 9 image。配備先リージョンの image を選びます。既定は大阪です。"
+    description: "bastion 専用の Oracle Linux 9 image。大阪・東京・Chicago の候補から配備先リージョンの image を選びます。既定は大阪です。"
     enum:
       - "ocid1.image.oc1.ap-osaka-1.aaaaaaaabdp5adn6fy2h63s5iizgqv77wz4fqrjzosackszdo2gn5rn436ha"
       - "ocid1.image.oc1.ap-tokyo-1.aaaaaaaawxmm5rja45shcpoactn4avvfv2sty55ap5jnaxqmpzbgtdc7qcsa"
@@ -816,7 +811,7 @@ variables:
     title: "Bastion subnet"
     description: "bastion 専用の subnet を選びます。主 Compute の subnet は使いません。管理者の CIDR から TCP 22 と 5901 を許可してください。"
     dependsOn:
-      compartmentId: ${bastion_compartment_ocid}
+      compartmentId: ${compartment_ocid}
       vcnId: ${bastion_vcn_id}
 
   bastion_vnc_password:

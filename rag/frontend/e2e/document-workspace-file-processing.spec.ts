@@ -202,21 +202,26 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
     };
   });
   expect(panelMetrics.clientHeight).toBeCloseTo(previewHeight, 0);
-  expect(panelMetrics.scrollHeight).toBeGreaterThan(panelMetrics.clientHeight + 1);
+  // 高い引用カードは一覧自身がスクロールし、外側のペインを伸ばさない。
+  expect(panelMetrics.scrollHeight).toBeLessThanOrEqual(panelMetrics.clientHeight + 1);
   expect(panelMetrics.overflowY).toBe("auto");
   expect(panelMetrics.overscrollBehaviorY).toBe("auto");
 
-  await panel.scrollIntoViewIfNeeded();
+  const list = page.getByTestId("document-chunk-list");
+  const listMetrics = await list.evaluate(element => ({height: element.clientHeight, content: element.scrollHeight, overflowY: getComputedStyle(element).overflowY}));
+  expect(listMetrics.content).toBeGreaterThan(listMetrics.height + 1);
+  expect(listMetrics.overflowY).toBe("auto");
+  await list.scrollIntoViewIfNeeded();
   const main = page.locator("main");
   const mainScrollTopBeforePanelScroll = await main.evaluate((element) => element.scrollTop);
-  await panel.hover();
+  await list.hover();
   await page.mouse.wheel(0, 400);
-  await expect.poll(() => panel.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(
     mainScrollTopBeforePanelScroll
   );
 
-  await panel.evaluate((element) => {
+  await list.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
   const mainScrollTop = await main.evaluate((element) => element.scrollTop);
@@ -859,7 +864,7 @@ test("章節ナビゲーションの章節を押すと、プレビューをそ�
   });
 
   await page.goto("/documents/doc-1");
-  await page.getByRole("tab", { name: "構造化要素" }).click();
+  await page.getByRole("tab", { name: "章節ナビゲーション" }).click();
   await expect(page.getByTestId("preview-page-status")).toHaveText("1 / 2");
   await page
     .getByTestId("extraction-navigation")
@@ -2251,32 +2256,23 @@ test("抽出セグメントが多い場合は高さ固定で内部スクロー�
   await expectNoHorizontalOverflow(page);
 });
 
-test("chunk が多い場合は 5 / 8 行の高さで中をスクロールし、選んだ chunk を一覧の中で見せる", { tag: "@responsive" }, async ({ page }) => {
+test("chunk が多い場合は高カード用の上限で中をスクロールし、選んだ chunk を一覧の中で見せる", { tag: "@responsive" }, async ({ page }) => {
   await mockDocumentWorkspace(page, { extraChunkCount: 23 });
   await page.goto("/documents/doc-1");
   await page.getByRole("tab", { name: "Chunk / Citation", exact: false }).click();
 
   const list = page.getByTestId("document-chunk-list");
   await expect(list.getByRole("button")).toHaveCount(25);
-  const width = page.viewportSize()?.width ?? 1440;
   const metrics = await list.evaluate((element) => ({
-    maxHeight: getComputedStyle(element).maxHeight,
-    rem: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+    maxHeight: Number.parseFloat(getComputedStyle(element).maxHeight),
+    expected: Math.min(Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68)),
     scrollable: element.scrollHeight > element.clientHeight + 1,
-    panelScrollable: (() => {
-      const panel = element.closest('[role="tabpanel"]') as HTMLElement;
-      return getComputedStyle(panel).overflowY === "auto" && panel.scrollHeight > panel.clientHeight + 1;
-    })(),
   }));
-  if (width >= 1280) {
-    // xl 以上はプレビューの横に並び、プレビューと同じ高さのタブのパネルがスクロールする（二重のスクロールにしない）。
-    expect(metrics.maxHeight).toBe("none");
-    expect(metrics.panelScrollable).toBe(true);
-  } else {
-    const expectedRem = width >= 768 ? 28 : 17.5;
-    expect(Math.abs(Number.parseFloat(metrics.maxHeight) - expectedRem * metrics.rem)).toBeLessThanOrEqual(1);
-    expect(metrics.scrollable).toBe(true);
-  }
+  expect(Math.abs(metrics.maxHeight - metrics.expected)).toBeLessThanOrEqual(1);
+  expect(metrics.scrollable).toBe(true);
+  await list.focus();
+  await list.press("End");
+  await expect.poll(() => list.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
 
   // 末尾の chunk を選び、別のタブへ移って戻っても、選んだ chunk がスクロール領域の中で見える位置にある。
   const lastChunk = list.getByRole("button").last();
@@ -3470,19 +3466,24 @@ test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧で�
   await mockDocumentWorkspace(page);
   const text=JSON.stringify({nodes:Array.from({length:2000},(_,i)=>({id:i,text:"合成テキスト".repeat(100)}))});
   let originalReads=0,chunkReads=0;
+  const sourceOffsets: number[] = [];
+  const scopedRequests: URLSearchParams[] = [];
   await page.route("**/recipes/recipe-1/content**",route=>{originalReads++;return route.fulfill({body:text,contentType:"application/json"});});
   await page.route("**/recipes/recipe-1/text-window",route=>{
     const {offset,limit}=route.request().postDataJSON();
-    return route.fulfill({json:{data:{text:text.slice(offset,offset+limit),offset,total:text.length,limit},error_messages:[],warning_messages:[]}});
+    sourceOffsets.push(offset);
+    return route.fulfill({json:{data:{text:text.slice(offset,offset+limit),offset,total:text.length,limit,revision:"synthetic-json-v1",previous_offset:offset > 0 ? Math.max(0,offset-limit) : null,next_offset:offset+limit<text.length ? offset+limit : null},error_messages:[],warning_messages:[]}});
   });
   await page.route("**/recipes/recipe-1/extraction-view?**",route=>{
     const q=new URL(route.request().url()).searchParams,offset=Number(q.get("offset")??0),structure=q.get("mode")==="structure";
-    return route.fulfill({json:{data:{payload:{raw_text:structure?"":text.slice(offset,offset+8192),elements:structure?Array.from({length:Math.min(25,1332-offset)},(_,i)=>({element_id:`node-${offset+i}`,kind:"text",text:`合成要素${offset+i}`,order:offset+i,metadata:{}})):[]},offset,total:structure?1332:text.length,limit:structure?25:8192},error_messages:[],warning_messages:[]}});
+    scopedRequests.push(q);
+    return route.fulfill({json:{data:{payload:{raw_text:structure?"":text.slice(offset,offset+8192),elements:structure?Array.from({length:Math.min(25,1332-offset)},(_,i)=>({element_id:`node-${offset+i}`,kind:"text",text:`合成要素${offset+i}`,order:offset+i,metadata:{}})):[]},offset,total:structure?1332:8192,limit:structure?25:8192,scope_status:"exact"},error_messages:[],warning_messages:[]}});
   });
   await page.route("**/recipes/recipe-1/chunk-window?**",route=>{
     chunkReads++;
     const q=new URL(route.request().url()).searchParams,offset=Number(q.get("offset")??0);
-    return route.fulfill({json:{data:{items:Array.from({length:25},(_,i)=>({document_id:"doc-1",chunk_id:`chunk-${offset+i}`,chunk_index:offset+i,text:`合成Chunk${offset+i}`,metadata:{},element_ids:[]})),total:1366,offset,limit:25},error_messages:[],warning_messages:[]}});
+    scopedRequests.push(q);
+    return route.fulfill({json:{data:{items:Array.from({length:25},(_,i)=>({document_id:"doc-1",chunk_id:`chunk-${offset+i}`,chunk_index:offset+i,text:`合成Chunk${offset+i}`,metadata:{},element_ids:[]})),total:1366,offset,limit:25,scope_status:"exact"},error_messages:[],warning_messages:[]}});
   });
   await page.goto("/documents/doc-1");
   await expect(page.getByTestId("preview-text")).toBeVisible();
@@ -3491,12 +3492,19 @@ test("大きな一行JSONも原文・抽出・Chunkを有限範囲で閲覧で�
   await page.getByTestId("document-inspector-pane").getByRole("tab",{name:"構造化要素",exact:true}).click();
   const panel=page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(panel.getByRole("button",{name:/合成要素/})).toHaveCount(25);
-  await panel.getByRole("button",{name:"次へ",exact:true}).click();
+  await panel.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
   await expect(panel).toContainText("合成要素25");
   await page.getByRole("tab",{name:/Chunk \/ Citation/}).click();
   await expect(page.getByTestId("document-chunk-list").locator("li")).toHaveCount(25);
-  await panel.getByRole("button",{name:"次へ",exact:true}).click();
+  await panel.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
   await expect(panel).toContainText("合成Chunk25");
+  const preview = page.getByTestId("document-preview-pane");
+  await preview.getByRole("button", {name:"次のページ", exact:true}).click();
+  await expect.poll(() => sourceOffsets.includes(8192)).toBe(true);
+  await expect(page.getByTestId("preview-text-body")).toHaveText(text.slice(8192,16384));
+  await expect.poll(() => scopedRequests.some(q => q.get("source_offset") === "8192" && q.get("source_revision") === "synthetic-json-v1")).toBe(true);
+  expect(originalReads).toBe(0);
+  expect(sourceOffsets.every(offset => offset % 8192 === 0)).toBe(true);
   await page.screenshot({path:testInfo.outputPath("large-document-ready.png"),fullPage:true});
   await expectNoPageOverflow(page);
 });
@@ -3521,3 +3529,51 @@ test("構造化要素から解析版を固定して原本ノードを開く", {t
   await page.screenshot({path:testInfo.outputPath(`element-original-${testInfo.project.name}.png`),animations:"disabled"});
   await expectNoPageOverflow(page);
 });
+
+for (const scenario of ["unlocated", "mixed", "unrecorded"] as const) {
+  test(`原本同期は位置未確認 Chunk を別領域で有界表示する ${scenario}`, {tag:"@responsive"}, async ({page},testInfo) => {
+    await mockDocumentWorkspace(page);
+    const requests: URLSearchParams[] = [];
+    const rawWindowCalls: number[] = [];
+    await page.route("**/recipes/recipe-1/text-window", route => {
+      const body=route.request().postDataJSON();rawWindowCalls.push(body.offset);
+      return route.fulfill({json:{data:{text:`合成原本範囲 ${body.offset}`,offset:body.offset,total:16384,limit:8192,revision:"synthetic-scope-v1",previous_offset:body.offset?0:null,next_offset:body.offset?null:8192}}});
+    });
+    await page.route("**/recipes/recipe-1/chunk-window?**", route => {
+      const q=new URL(route.request().url()).searchParams;
+      requests.push(q);
+      const start=Number(q.get("unlocated_offset") ?? 0);
+      const chunk=(index:number,located:boolean) => ({document_id:"doc-1",chunk_id:`${located?"located":"unlocated"}-${index}`,chunk_index:index,text:`${located?"現在範囲の合成内容":"位置未確認の合成内容"} ${index}。${"有限のカード本文です。".repeat(12)}`,element_ids:located?["el-0000"]:[],metadata:{start_offset:777,end_offset:888}});
+      const scoped=scenario==="mixed"?[chunk(100,true)]:[];
+      return route.fulfill({json:{data:{items:scoped,total:scoped.length,offset:0,limit:25,scope_status:scenario==="unrecorded"?"unrecorded":"exact",document_total:26+scoped.length,unlocated_offset:start,unlocated_total:26,unlocated_items:Array.from({length:Math.min(25,26-start)},(_,i)=>chunk(start+i,false))}}});
+    });
+    await page.goto("/documents/doc-1");
+    await expect(page.getByTestId("preview-text-body")).toHaveText("合成原本範囲 0");
+    await page.getByTestId("document-preview-pane").getByRole("button",{name:"次のページ",exact:true}).click();
+    await expect(page.getByTestId("preview-text-body")).toHaveText("合成原本範囲 8192");
+    await page.getByRole("tab",{name:/Chunk \/ Citation/}).click();
+    const unlocated=page.getByTestId("document-unlocated-chunks");
+    await expect(unlocated.getByRole("heading",{name:"原本上の位置を確認できない Chunk"})).toBeVisible();
+    await expect(unlocated).toContainText("現在表示している原本の範囲に対応するとは限りません。");
+    await expect(page.getByText("chunk はまだ作成されていません。",{exact:true})).toHaveCount(0);
+    const list=page.getByTestId("document-unlocated-chunk-list");
+    await expect(list.locator("li")).toHaveCount(25);
+    await expect(page.getByTestId("document-chunk-list")).toHaveCount(scenario==="mixed"?1:0);
+    if(scenario==="mixed") await expect(page.getByTestId("document-chunk-list")).not.toContainText("位置未確認の合成内容");
+    const dimensions=await list.evaluate(el=>({height:el.clientHeight,scrollHeight:el.scrollHeight,maxHeight:parseFloat(getComputedStyle(el).maxHeight),overflow:getComputedStyle(el).overflowY}));
+    expect(dimensions.overflow).toBe("auto");expect(dimensions.height).toBeLessThanOrEqual(dimensions.maxHeight+1);expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.height);
+    await list.focus();await page.keyboard.press("End");
+    await expect.poll(()=>list.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+    await unlocated.getByRole("button",{name:"この範囲の続きを読む",exact:true}).click();
+    await expect(list.locator("li")).toHaveCount(1);await expect(list).toContainText("位置未確認の合成内容 25");
+    const readsBeforeSelect=rawWindowCalls.length;
+    await list.getByRole("button").first().click();
+    await expect(list.getByRole("button").first()).toHaveAttribute("aria-pressed","true");
+    await expect(page.getByTestId("preview-text-body")).toHaveText("合成原本範囲 8192");
+    expect(rawWindowCalls.length).toBe(readsBeforeSelect);
+    expect(requests.some(q=>q.get("unlocated_offset")==="25" && q.get("offset")==="0" && q.get("source_revision")==="synthetic-scope-v1")).toBe(true);
+    await list.scrollIntoViewIfNeeded();
+    await page.screenshot({path:testInfo.outputPath(`unlocated-${scenario}.png`),fullPage:true});
+    await expectNoPageOverflow(page);
+  });
+}
