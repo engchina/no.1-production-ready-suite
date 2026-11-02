@@ -30,6 +30,10 @@ from app.clients.native_hybrid_schema import (
     native_hybrid_sync_columns_migration_sql,
     native_hybrid_text_search_migration_sql,
 )
+from app.clients.native_maintenance_schema import (
+    native_maintenance_activation_sql,
+    native_maintenance_tables_sql,
+)
 from app.clients.oracle import (
     oracle_answer_prompt_schema_sql,
     oracle_answer_record_schema_sql,
@@ -301,6 +305,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="chunk_sets",
             table_name="rag_chunk_sets",
             sql=oracle_chunk_set_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="native_maintenance",
+            table_name="rag_native_index_maintenance",
+            sql=native_maintenance_tables_sql() + "\n\n" + native_maintenance_activation_sql(),
         ),
         OracleSchemaSection(
             name="native_search_scopes",
@@ -674,6 +683,15 @@ END;
             name="20261102_003_native_text_search_only",
             table_name="rag_chunks",
             sql=native_hybrid_text_search_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_004_native_index_maintenance",
+            table_name="rag_native_index_maintenance",
+            sql=_create_missing_objects_sql(native_maintenance_tables_sql(), "原生索引の整理要求")
+            + "\n\n"
+            + native_maintenance_activation_sql(),
         )
     )
     sections.append(

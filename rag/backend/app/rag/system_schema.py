@@ -42,6 +42,7 @@ from rag_engine.adapters.oracle.native_hybrid import (
 )
 
 from app.clients.native_hybrid_schema import NATIVE_HYBRID_TRIGGER
+from app.clients.native_maintenance_schema import MAINTENANCE_TRIGGER
 from app.clients.oracle import (
     ORACLE_TEXT_LEXER_PREFERENCE,
     ORACLE_TEXT_STOPLIST,
@@ -146,6 +147,8 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_CHUNKS",
     "RAG_CHUNK_SETS",
     "RAG_NATIVE_SEARCH_SCOPES",
+    "RAG_NATIVE_INDEX_MAINTENANCE",
+    "RAG_NATIVE_INDEX_EVENTS",
     "RAG_DOCUMENT_EXTRACTIONS",
     "RAG_ARTIFACT_LAYERS",
     "RAG_SEARCH_AUDIT",
@@ -281,6 +284,7 @@ MANAGED_INDEXES: tuple[str, ...] = (
     "RAG_EVALUATION_CALIBRATIONS_JUDGE_IDX",
     "RAG_ROLE_SEARCH_ANSWER_PROFILES_VIEW_IDX",
     "RAG_ROLE_KNOWLEDGE_BASES_KB_IDX",
+    "RAG_NATIVE_INDEX_EVENTS_TIME",
 )
 
 MANAGED_TEXT_OBJECTS: tuple[tuple[str, str], ...] = (
@@ -293,6 +297,7 @@ MANAGED_OBJECTS: tuple[tuple[str, str], ...] = (
     *((name, "INDEX") for name in MANAGED_INDEXES),
     *MANAGED_TEXT_OBJECTS,
     (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+    (MAINTENANCE_TRIGGER, "TRIGGER"),
     ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
     (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
 )
@@ -346,6 +351,7 @@ def managed_manifest_from_schema(
         objects.update(
             {
                 (NATIVE_HYBRID_TRIGGER, "TRIGGER"),
+                (MAINTENANCE_TRIGGER, "TRIGGER"),
                 ("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER"),
                 (NATIVE_HYBRID_PREFERENCE, "VECTORIZER_PREFERENCE"),
             }
