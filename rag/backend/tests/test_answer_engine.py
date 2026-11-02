@@ -11,6 +11,7 @@ from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import (
     CragRetrievalGradeOutput,
     GroundedDraft,
+    QueryExpansionOutput,
     QueryRoutingOutput,
     RequestScopePlan,
 )
@@ -3213,6 +3214,8 @@ async def _answer_with_coverage(
     import rag_engine.adapters.oci as engine_oci
 
     def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
+        if schema is QueryExpansionOutput:
+            return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)
         if schema in (GroundedDraft, generation_draft_wire_model()) and _INVOICE_TEXT not in prompt:
             data = result.model_dump(exclude_unset=True)
@@ -3245,7 +3248,7 @@ async def _answer_with_coverage(
 async def test_request_coverage_re_retrieves_only_missing_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """根拠の無い要求だけを要求の文で 1 回検索し、その根拠を回答の材料と診断に足す(#1279)。"""
+    """根拠の無い要求だけを仮説文で 1 回検索し、その根拠を回答の材料と診断に足す(#1279・#4114)。"""
     oracle = CoverageOracle()
 
     outcome = await _answer_with_coverage(
@@ -3260,7 +3263,7 @@ async def test_request_coverage_re_retrieves_only_missing_request(
     assert re_retrieval["applied"] is True
     assert [query["request_id"] for query in re_retrieval["queries"]] == ["Q1"]
     assert re_retrieval["queries"][0]["queries"][0] == "請求書の再発行方法は？"
-    assert after_trace["llm_calls"] == 0
+    assert after_trace["llm_calls"] == 1
     assert all(row["status"] == "unassessed" for row in after_trace["requests"])
     # 足した根拠が回答の材料(根拠の木)に入る。
     assert any(key.startswith("doc-invoice:") for key in re_retrieval["added_chunk_ids"])
@@ -3413,7 +3416,7 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
         output_dir=tmp_path,
     )
 
-    assert default.request_coverage_retrieval_enabled is False
+    assert default.request_coverage_retrieval_enabled is True
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
     assert default.request_coverage_deadline_seconds == 10.0
     assert custom.request_coverage_retrieval_enabled is True
@@ -3443,10 +3446,12 @@ def test_search_answer_profile_ignores_legacy_request_coverage() -> None:
         query=KnowledgeBaseQueryConfig(request_coverage_retrieval_enabled=True),
     )
 
-    settings, _ = resolve_search_answer_profile_settings(Settings(), config)
+    settings, _ = resolve_search_answer_profile_settings(
+        Settings(rag_request_coverage_retrieval_enabled=False), config
+    )
 
     assert settings.rag_request_coverage_retrieval_enabled is False
-    assert Settings().rag_request_coverage_retrieval_enabled is False
+    assert Settings().rag_request_coverage_retrieval_enabled is True
 
 
 async def test_guide_preview_is_recorded_without_extra_model_calls(

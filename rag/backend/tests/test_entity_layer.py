@@ -483,7 +483,8 @@ def test_settings_default_off_for_recipe_and_expansion(monkeypatch: pytest.Monke
     # 任意の検索拡張は明示的に有効化した場合だけ使う。
     assert settings.rag_entity_expansion_enabled is False
     assert settings.rag_screen_linking_enabled is False
-    assert settings.rag_request_coverage_retrieval_enabled is False
+    # 不足を生成が明示したときだけ動くので、既定で有効（#4114）。
+    assert settings.rag_request_coverage_retrieval_enabled is True
     assert settings.rag_entity_expansion_max_chunks == 6
     with pytest.raises(ValueError):
         Settings(rag_entity_expansion_max_chunks=0)
