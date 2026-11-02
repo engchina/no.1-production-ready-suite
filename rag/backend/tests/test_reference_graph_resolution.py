@@ -1,5 +1,7 @@
 """合成文書による参照解決の曖昧さと構造グラフの回帰。"""
 
+from functools import partial
+
 from app.rag.chunking import Chunk
 from app.rag.cross_references import ReferenceSpec, SectionIndex
 from app.rag.graph_index import build_graph_index
@@ -48,22 +50,17 @@ def test_scoped_cross_document_resolution_pins_version_and_rejects_ambiguity() -
     source = ReferenceDocument("source", "s1", "synthetic-source.txt", ("第1条",))
     target = ReferenceDocument("target", "t1", "合成参照文書.txt", ("第2条",))
     spec = ReferenceSpec("合成参照文書第2条", "article", "2", "合成参照文書")
-    args = dict(spec=spec, source=source, citing_path="第1条")
-    resolved = resolve_scoped_reference(**args, documents=(target,))
+    resolve = partial(resolve_scoped_reference, spec, source=source, citing_path="第1条")
+    resolved = resolve(documents=(target,))
     assert resolved.status == "resolved"
     assert resolved.target is not None and resolved.target.chunk_set_id == "t1"
-    assert resolve_scoped_reference(**args, documents=()).status == "not_found"
+    assert resolve(documents=()).status == "not_found"
     other_document = ReferenceDocument("another", "a1", target.name, target.section_paths)
-    assert (
-        resolve_scoped_reference(**args, documents=(target, other_document)).status == "ambiguous"
-    )
+    assert resolve(documents=(target, other_document)).status == "ambiguous"
     other_version = ReferenceDocument(target.document_id, "t2", target.name, target.section_paths)
-    assert (
-        resolve_scoped_reference(**args, documents=(target, other_version)).status
-        == "version_unconfirmed"
-    )
+    assert resolve(documents=(target, other_version)).status == "version_unconfirmed"
     unknown_version = ReferenceDocument(target.document_id, None, target.name, target.section_paths)
-    assert resolve_scoped_reference(**args, documents=(unknown_version,)).target is None
+    assert resolve(documents=(unknown_version,)).target is None
 
 
 def test_legacy_resolved_path_is_not_trusted_when_rebuilding_graph() -> None:

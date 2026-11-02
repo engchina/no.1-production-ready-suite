@@ -1,5 +1,8 @@
 """合成参照の版・未解決状態と、画面への権限漏れを確認する。"""
 
+from functools import partial
+from typing import Any
+
 from app.clients.graph_reference_store import GraphReferenceStore
 from app.rag.chunking import Chunk
 from app.rag.reference_records import build_reference_records
@@ -18,22 +21,22 @@ def test_records_keep_cross_document_target_version_and_unresolved_state() -> No
         )
     ]
     target = ReferenceDocument("target", "t1", "合成規程.txt", ("第2条",))
-    args = dict(knowledge_base_id="kb", source=source, chunks=chunks)
-    records = build_reference_records(**args, documents=(target,))
+    build = partial(build_reference_records, knowledge_base_id="kb", source=source, chunks=chunks)
+    records = build(documents=(target,))
     assert len(records) == 1
     assert records[0].status == "resolved"
     assert records[0].target_document_id == "target"
     assert records[0].target_chunk_set_id == "t1"
-    assert records == build_reference_records(**args, documents=(target,))
-    missing = build_reference_records(**args, documents=())
+    assert records == build(documents=(target,))
+    missing = build(documents=())
     assert missing[0].status == "not_found"
     assert missing[0].reference_id == records[0].reference_id
     ambiguous = ReferenceDocument("another", "a1", target.name, target.section_paths)
-    assert build_reference_records(**args, documents=(target, ambiguous))[0].status == "ambiguous"
+    assert build(documents=(target, ambiguous))[0].status == "ambiguous"
 
 
 def test_invisible_target_and_replaced_version_never_leak_target_locator() -> None:
-    row = dict(
+    row: dict[str, Any] = dict(
         reference_id="ref",
         label="第2条",
         resolution_status="resolved",
@@ -78,7 +81,7 @@ def test_unknown_source_version_is_never_promoted_to_a_resolved_reference() -> N
 async def test_unindexed_target_is_loaded_only_from_a_visible_versioned_reference() -> None:
     from app.rag.graph_index import _graph_id
 
-    row = dict(
+    row: dict[str, Any] = dict(
         reference_id="ref",
         label="第2条",
         resolution_status="resolved",
@@ -94,7 +97,7 @@ async def test_unindexed_target_is_loaded_only_from_a_visible_versioned_referenc
     )
 
     class Oracle:
-        async def _fetch_all(self, sql: str, binds: object) -> list[dict[str, object]]:
+        async def _fetch_all(self, sql: str, binds: object) -> list[dict[str, Any]]:
             if "FROM rag_graph_entities" in sql:
                 return []
             assert "rag_graph_references" in sql and "r.reference_id=:reference_id" in sql
@@ -104,7 +107,8 @@ async def test_unindexed_target_is_loaded_only_from_a_visible_versioned_referenc
 
     store = GraphReferenceStore(Oracle())
     target_id = _graph_id("entity", "t1", "kb", "第2条")
-    assert (await store.node("kb", target_id, "ref"))["chunk_set_id"] == "t1"
+    node = await store.node("kb", target_id, "ref")
+    assert node is not None and node["chunk_set_id"] == "t1"
     assert await store.node("kb", "different", "ref") is None
     row["target_name"] = None
     assert await store.node("kb", target_id, "ref") is None
@@ -114,7 +118,7 @@ def test_long_reference_locator_keeps_the_full_path_and_a_distinct_stable_id() -
     from app.rag.graph_index import _graph_id
 
     common = "合成の長い親階層" * 80
-    row = dict(
+    row: dict[str, Any] = dict(
         reference_id="ref",
         label="第2条",
         resolution_status="resolved",

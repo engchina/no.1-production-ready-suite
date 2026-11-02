@@ -722,7 +722,7 @@ class ReferenceOracle:
     def _in_scope(self, filters: dict[str, str], chunk: RetrievedChunk) -> bool:
         if filters.get("document_id") and chunk.document_id != filters["document_id"]:
             return False
-        if filters.get("page_number_max") and int(chunk.metadata.get("page_start") or 0) > int(
+        if filters.get("page_number_max") and int(str(chunk.metadata.get("page_start") or 0)) > int(
             filters["page_number_max"]
         ):
             return False
