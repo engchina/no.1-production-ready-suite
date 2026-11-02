@@ -454,6 +454,20 @@ class SearchHits(list[RetrievedChunk]):
     failure: Exception | None = None
 
 
+_NATIVE_SCOPE_JOINS = """FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id"""
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeScope:
+    """原生検索の ``filter_by`` に渡す、許可された chunk の範囲(#4011)。"""
+
+    allowed_ids: list[str]
+    complete_scopes: list[int]
+    scope_ranges: list[tuple[int, int, int]]
+
+
 class NativeSearchRows(list[dict[str, object]]):
     """有界な原生結果と、実際の閾値判定の集計。"""
 
@@ -690,10 +704,14 @@ class OracleClient:
             for _, embedding, mode in searches:
                 if mode != SearchMode.KEYWORD:
                     self._validate_embedding_width(embedding, "query embedding")
+            # 同じ要求の検索文は範囲が同じなので、範囲の解決は 1 回だけにする(#4011)。
+            native_scope = asyncio.ensure_future(self._resolve_native_scope(filters))
             return list(
                 await asyncio.gather(
                     *(
-                        self._native_search_hits(query, embedding, top_k, filters, mode)
+                        self._native_search_hits(
+                            query, embedding, top_k, filters, mode, native_scope=native_scope
+                        )
                         for query, embedding, mode in searches
                     )
                 )
@@ -7309,6 +7327,8 @@ class OracleClient:
         top_k: int,
         filters: dict[str, str],
         mode: SearchMode,
+        *,
+        native_scope: asyncio.Future[_NativeScope | None] | None = None,
     ) -> SearchHits:
         channel = {
             SearchMode.HYBRID: "hybrid",
@@ -7330,6 +7350,7 @@ class OracleClient:
                     _to_vector_bind(embedding) if mode == SearchMode.VECTOR else embedding,
                     top_k=top_k,
                     filters=filters,
+                    native_scope=native_scope,
                 )
                 for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), 1):
                     metadata: dict[str, Any] = {"retrieval_mode": channel}
@@ -7411,48 +7432,58 @@ class OracleClient:
             )
         return result
 
-    async def _native_rows(
-        self, channel: str, query: str, embedding: object, *, top_k: int, filters: dict[str, str]
-    ) -> list[dict[str, object]]:
-        from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, request_json
+    async def _resolve_native_scope(self, filters: dict[str, str]) -> _NativeScope | None:
+        """許可された chunk を原生検索の範囲へ縮約する。許可された chunk が無ければ None(#4011)。
 
+        全行が許可された chunk set は件数だけで分かるので、chunk ID を読まない(範囲が数万件のとき
+        ID の転送だけで数十秒かかる)。ページ・行単位の制限がある集合と、集合の無い行だけ ID を読む。
+        """
         where, binds = _oracle_retrieval_where(filters)
-        joins = """FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
-            LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
-            LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id"""
-        vector = [float(v) for v in cast(Sequence[float], embedding)]
-        ids = await self._fetch_all(
-            f"SELECT c.chunk_id, c.native_scope_id {joins} WHERE {where}", binds
+        allowed = await self._fetch_all(
+            f"SELECT c.native_scope_id, COUNT(*) AS allowed_count {_NATIVE_SCOPE_JOINS} "
+            f"WHERE {where} GROUP BY c.native_scope_id",
+            binds,
         )
-        if not ids:
-            return []
-        # 全行が許可された chunk set だけを安定した数値キーに縮約する。
-        # ページ・行単位の制限がある集合は chunk ID のまま残す。
+        if not allowed:
+            return None
+        allowed_counts = {
+            int(str(row["native_scope_id"])): int(str(row["allowed_count"]))
+            for row in allowed
+            if row.get("native_scope_id") is not None
+        }
+        has_unscoped = any(row.get("native_scope_id") is None for row in allowed)
+        complete_scopes: list[int] = []
+        if allowed_counts:
+            totals = await self._fetch_all(
+                """SELECT c.native_scope_id, COUNT(*) AS chunk_count FROM rag_chunks c
+                JOIN JSON_TABLE(:scope_ids, '$[*]' COLUMNS (scope_id NUMBER PATH '$')) s
+                  ON c.native_scope_id = s.scope_id GROUP BY c.native_scope_id""",
+                {"scope_ids": json.dumps(list(allowed_counts))},
+            )
+            complete_scopes = [
+                int(str(row["native_scope_id"]))
+                for row in totals
+                if allowed_counts.get(int(str(row["native_scope_id"])))
+                == int(str(row["chunk_count"]))
+            ]
+        partial_scopes = sorted(set(allowed_counts) - set(complete_scopes))
+        if not partial_scopes and not has_unscoped:
+            return _NativeScope(allowed_ids=[], complete_scopes=complete_scopes, scope_ranges=[])
+        ids = await self._fetch_all(
+            f"""SELECT c.chunk_id, c.native_scope_id {_NATIVE_SCOPE_JOINS}
+            WHERE {where} AND (c.native_scope_id IS NULL OR c.native_scope_id IN (
+                SELECT scope_id FROM JSON_TABLE(:partial_scope_ids, '$[*]'
+                    COLUMNS (scope_id NUMBER PATH '$'))))""",
+            {**binds, "partial_scope_ids": json.dumps(partial_scopes)},
+        )
         scope_members: dict[int, set[str]] = {}
         for row in ids:
             if row.get("native_scope_id") is not None:
                 scope_members.setdefault(int(str(row["native_scope_id"])), set()).add(
                     str(row["chunk_id"])
                 )
-        complete_scopes: list[int] = []
-        if scope_members:
-            totals = await self._fetch_all(
-                """SELECT c.native_scope_id, COUNT(*) AS chunk_count FROM rag_chunks c
-                JOIN JSON_TABLE(:scope_ids, '$[*]' COLUMNS (scope_id NUMBER PATH '$')) s
-                  ON c.native_scope_id = s.scope_id GROUP BY c.native_scope_id""",
-                {"scope_ids": json.dumps(list(scope_members))},
-            )
-            complete_scopes = [
-                int(str(row["native_scope_id"]))
-                for row in totals
-                if len(scope_members.get(int(str(row["native_scope_id"])), set()))
-                == int(str(row["chunk_count"]))
-            ]
-        compressed_ids = {
-            identifier for scope in complete_scopes for identifier in scope_members[scope]
-        }
+        compressed_ids: set[str] = set()
         scope_ranges: list[tuple[int, int, int]] = []
-        partial_scopes = sorted(set(scope_members) - set(complete_scopes))
         if partial_scopes:
             members = await self._fetch_all(
                 """SELECT c.native_scope_id, c.chunk_index, c.chunk_id FROM rag_chunks c
@@ -7466,7 +7497,7 @@ class OracleClient:
                 by_index.setdefault(key, set()).add(str(row["chunk_id"]))
             # 同じ index に許可外の行があれば、その index は区間にせず個別IDで残す。
             for (scope, index), member_ids in sorted(by_index.items()):
-                if not member_ids <= scope_members[scope]:
+                if not member_ids <= scope_members.get(scope, set()):
                     continue
                 compressed_ids.update(member_ids)
                 if (
@@ -7477,15 +7508,43 @@ class OracleClient:
                     scope_ranges[-1] = (scope, scope_ranges[-1][1], index)
                 else:
                     scope_ranges.append((scope, index, index))
+        return _NativeScope(
+            allowed_ids=[
+                str(row["chunk_id"]) for row in ids if str(row["chunk_id"]) not in compressed_ids
+            ],
+            complete_scopes=complete_scopes,
+            scope_ranges=scope_ranges,
+        )
+
+    async def _native_rows(
+        self,
+        channel: str,
+        query: str,
+        embedding: object,
+        *,
+        top_k: int,
+        filters: dict[str, str],
+        native_scope: asyncio.Future[_NativeScope | None] | None = None,
+    ) -> list[dict[str, object]]:
+        from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, request_json
+
+        where, binds = _oracle_retrieval_where(filters)
+        joins = _NATIVE_SCOPE_JOINS
+        vector = [float(v) for v in cast(Sequence[float], embedding)]
+        scope = (
+            await asyncio.shield(native_scope)
+            if native_scope is not None
+            else await self._resolve_native_scope(filters)
+        )
+        if scope is None:
+            return []
         spec = request_json(
             query=query,
             vector=vector,
             channel=channel,
-            allowed_ids=[
-                str(row["chunk_id"]) for row in ids if str(row["chunk_id"]) not in compressed_ids
-            ],
-            allowed_scopes=complete_scopes,
-            allowed_scope_ranges=scope_ranges,
+            allowed_ids=scope.allowed_ids,
+            allowed_scopes=scope.complete_scopes,
+            allowed_scope_ranges=scope.scope_ranges,
             limit=top_k,
             rank_constant=self._settings.rag_rrf_k,
             accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,

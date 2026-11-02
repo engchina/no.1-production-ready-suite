@@ -58,7 +58,9 @@ class NativeOracle(OracleClient):
         if "DBMS_HYBRID_VECTOR.SEARCH" not in sql:
             assert "is_active = 1" in sql
             assert "d.status = 'INDEXED'" in sql
-            return [{"chunk_id": "a"}]
+            if "allowed_count" in sql:
+                return [{"native_scope_id": None, "allowed_count": 1}]
+            return [{"chunk_id": "a", "native_scope_id": None}]
         spec = json.loads(str(binds["native_spec"]))
         assert spec["filter_by"]["args"] == ["a"]
         assert "WHERE" in sql and "is_active = 1" in sql
@@ -178,9 +180,19 @@ def test_numeric_scope_filter_keeps_large_scope_small() -> None:
 
 
 class ScopedNativeOracle(NativeOracle):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[str] = []
+
     async def _fetch_all(
         self, sql: str, binds: Mapping[str, object] | None = None
     ) -> list[dict[str, object]]:
+        self.reads.append(sql)
+        if "allowed_count" in sql:
+            return [
+                {"native_scope_id": 1, "allowed_count": 400},
+                {"native_scope_id": 2, "allowed_count": 1},
+            ]
         if "COUNT(*) AS chunk_count" in sql:
             return [
                 {"native_scope_id": 1, "chunk_count": 400},
@@ -192,9 +204,8 @@ class ScopedNativeOracle(NativeOracle):
                 {"native_scope_id": 2, "chunk_index": 1, "chunk_id": "outside-b"},
             ]
         if "SELECT c.chunk_id, c.native_scope_id" in sql:
-            return [{"chunk_id": f"{index:0100}", "native_scope_id": 1} for index in range(400)] + [
-                {"chunk_id": "partial-a", "native_scope_id": 2}
-            ]
+            assert json.loads(str((binds or {})["partial_scope_ids"])) == [2]
+            return [{"chunk_id": "partial-a", "native_scope_id": 2}]
         if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
             self.calls.append((sql, dict(binds or {})))
             spec = json.loads(str((binds or {})["native_spec"]))
@@ -232,6 +243,86 @@ async def test_only_complete_authorized_sets_are_compressed() -> None:
         filters={"page_number_min": "1", "page_number_max": "1"},
     )
     assert len([sql for sql, _ in client.calls if "DBMS_HYBRID_VECTOR.SEARCH" in sql]) == 1
+
+
+class CompleteScopeOracle(NativeOracle):
+    """全行が許可された chunk set だけの範囲。読んだ SQL と検索の filter を記録する。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[str] = []
+        self.filters: list[object] = []
+
+    async def _fetch_all(
+        self, sql: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if "FROM user_indexes" in sql:
+            return [{"index_name": "RAG_CHUNKS_HYBRID_IDX"}]
+        self.reads.append(sql)
+        if "allowed_count" in sql:
+            return [{"native_scope_id": 7, "allowed_count": 40000}]
+        if "COUNT(*) AS chunk_count" in sql:
+            return [{"native_scope_id": 7, "chunk_count": 40000}]
+        if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+            self.filters.append(json.loads(str((binds or {})["native_spec"]))["filter_by"])
+            return []
+        raise AssertionError("全行が許可された集合で chunk ID を読まない")
+
+
+@pytest.mark.asyncio
+async def test_complete_scope_is_resolved_without_reading_chunk_ids() -> None:
+    client = CompleteScopeOracle()
+
+    await client._native_rows("hybrid", "合成の検索", [1.0] * 1536, top_k=10, filters={})
+
+    assert client.filters == [{"op": "IN", "col": "NATIVE_SCOPE_ID", "type": "number", "args": [7]}]
+
+
+@pytest.mark.asyncio
+async def test_search_many_resolves_the_shared_scope_once() -> None:
+    """検索文ごとに範囲を解決し直さない。検索は検索文ごとに 1 回のまま(#4011)。"""
+    client = CompleteScopeOracle()
+    searches = [(f"合成の検索文 {index}", [1.0] * 1536, SearchMode.HYBRID) for index in range(3)]
+
+    await client.search_many(searches, 4)
+
+    assert len([sql for sql in client.reads if "allowed_count" in sql]) == 1
+    assert len(client.filters) == 3
+
+
+@pytest.mark.asyncio
+async def test_empty_scope_does_not_search() -> None:
+    class EmptyScopeOracle(CompleteScopeOracle):
+        async def _fetch_all(
+            self, sql: str, binds: Mapping[str, object] | None = None
+        ) -> list[dict[str, object]]:
+            if "allowed_count" in sql:
+                return []
+            return await super()._fetch_all(sql, binds)
+
+    client = EmptyScopeOracle()
+
+    assert await client._native_rows("hybrid", "合成", [1.0] * 1536, top_k=4, filters={}) == []
+    assert client.filters == []
+
+
+@pytest.mark.asyncio
+async def test_scope_failure_is_reported_per_search_without_empty_success() -> None:
+    class FailingScopeOracle(CompleteScopeOracle):
+        async def _fetch_all(
+            self, sql: str, binds: Mapping[str, object] | None = None
+        ) -> list[dict[str, object]]:
+            if "allowed_count" in sql:
+                raise RuntimeError("合成の範囲の失敗")
+            return await super()._fetch_all(sql, binds)
+
+    client = FailingScopeOracle()
+    searches = [(f"合成 {index}", [1.0] * 1536, SearchMode.HYBRID) for index in range(2)]
+
+    results = await client.search_many(searches, 4)
+
+    assert [getattr(hits, "status", "") for hits in results] == ["failed", "failed"]
+    assert client.filters == []
 
 
 @pytest.mark.parametrize(
