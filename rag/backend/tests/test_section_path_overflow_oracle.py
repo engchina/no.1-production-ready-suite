@@ -8,7 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.clients.oracle import OracleClient, _oracle_retrieval_where
+from app.clients.oracle import OracleClient, _metadata_text_filter, _oracle_retrieval_where
+from app.config import Settings
 from app.rag.chunking import Chunk
 from app.rag.structure_index import structure_index_plan
 from tests.test_answer_scope_oracle import _chunk, _indexed_document
@@ -244,3 +245,85 @@ async def test_article_documents_do_not_add_a_query_without_long_title(
 
     assert documents == [(document_id, "短い題名")]
     assert len(statements) == 1
+
+
+def test_section_filter_uses_like_for_short_value_and_instr_for_large_value() -> None:
+    """短い語は従来の LIKE のまま超えた行だけ CLOB でも比べ、CLOB の bind は LIKE に渡さない。"""
+    clause, bind = _metadata_text_filter("section_path", "A_b%")
+    assert bind == "%a\\_b\\%%"
+    assert "LOWER(JSON_VALUE(c.metadata_json, '$.section_path')) LIKE" in clause
+    assert "RETURNING CLOB)) LIKE :filter_section_path" in clause
+
+    word = "合" * 1400
+    clause, bind = _metadata_text_filter("section_title", "Ａ" + word)
+    assert bind == ("Ａ" + word).casefold()
+    assert clause.startswith("INSTR(LOWER(JSON_VALUE(c.metadata_json, '$.section_title'")
+    assert "LIKE" not in clause
+
+
+async def test_article_documents_read_long_titles_only_when_marked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = OracleClient(settings=Settings())
+    statements: list[str] = []
+
+    async def fake_fetch_all(statement: str, binds: Any = None) -> list[dict[str, Any]]:
+        statements.append(statement)
+        if len(statements) == 2:
+            return [{"document_id": "doc-1", "title": "長" * 2000}]
+        return [
+            {"document_id": "doc-1", "file_name": "a.pdf", "title": None, "title_overflow": 1},
+            {"document_id": "doc-2", "file_name": "b.pdf", "title": "短い", "title_overflow": 0},
+            {"document_id": "doc-3", "file_name": "c.pdf", "title": None, "title_overflow": 0},
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    assert await client.retrieval_article_documents({"knowledge_base_id": "kb-1"}) == [
+        ("doc-1", "長" * 2000),
+        ("doc-2", "短い"),
+        ("doc-3", "c.pdf"),
+    ]
+    assert len(statements) == 2
+
+
+async def test_reading_index_and_older_versions_use_one_query_for_long_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = OracleClient(settings=Settings())
+    long_path = "合成タイトル > " + "長" * 2000
+    statements: list[str] = []
+
+    async def fake_fetch_all(statement: str, binds: Any = None) -> list[dict[str, Any]]:
+        statements.append(statement)
+        if "root_heading" in statement:
+            return [
+                {
+                    "document_id": "old-1",
+                    "file_name": "old.pdf",
+                    "superseded_by_document_id": "new-1",
+                    "root_heading": None,
+                    "long_section_path": long_path,
+                }
+            ]
+        return [
+            {
+                "chunk_set_id": "cs-1",
+                "chunk_index": 0,
+                "chunk_id": "c-1",
+                "section_path": None,
+                "long_section_path": long_path,
+                "chars": 1,
+            }
+        ]
+
+    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
+
+    [version] = await client.retrieval_older_versions(
+        {"knowledge_base_id": "kb-1"}, ["new-1"], limit=1
+    )
+    _chunk_set, rows = await client.document_reading_index("doc-1")
+
+    assert version.title == "合成タイトル"
+    assert rows[0]["section_path"] == long_path
+    assert len(statements) == 2
