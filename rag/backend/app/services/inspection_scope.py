@@ -12,10 +12,16 @@ from rag_parser_core.source_map import (
     SOURCE_MAP_KEY,
     SOURCE_WINDOW_CODEPOINTS,
     decode_source_text,
+    physical_line_starts,
 )
 
 from app.services.json_source_rebuild import payload_with_source_map
-from app.services.source_map_resolve import SourceUnit, resolve_source_map
+from app.services.source_map_resolve import (
+    STATUS_EXACT,
+    STATUS_UNRESOLVED,
+    SourceUnit,
+    resolve_source_map,
+)
 
 # 最後の単位は要素の末尾までなので、Chunk の位置の上限を区切らない。
 CHUNK_OFFSET_MAX = 2**53
@@ -24,6 +30,39 @@ CHUNK_OFFSET_MAX = 2**53
 def decode_inspection_text(data: bytes) -> str:
     """既存の原本閲覧と同じ、UTF-8 優先の文字コード検出を使う。"""
     return decode_source_text(data)
+
+
+def _origin_record_starts(
+    payload: Mapping[str, Any], text: str, revision: str
+) -> tuple[str, dict[str, int]] | None:
+    """前処理の変換元の原本で、記録が持つ原本の物理行を位置にする（行から文字へ換算するだけ）。
+
+    変換元の原本でない・行を持つ記録が無いときは None。行の番号が崩れていれば同期しない。
+    """
+    artifacts = payload.get("parser_artifacts")
+    derivation = artifacts.get("source_derivation") if isinstance(artifacts, Mapping) else None
+    if (
+        not isinstance(derivation, Mapping)
+        or not derivation.get("converted")
+        or derivation.get("source_sha256") != revision
+    ):
+        return None
+    lines = {
+        str(element["element_id"]): element["metadata"]["source_line_start"]
+        for element in payload.get("elements") or []
+        if element.get("element_id") and "source_line_start" in (element.get("metadata") or {})
+    }
+    if not lines:
+        return None
+    line_starts = physical_line_starts(text)
+    starts: dict[str, int] = {}
+    previous = 0
+    for element_id, line in lines.items():
+        if type(line) is not int or not previous < line <= len(line_starts):
+            return STATUS_UNRESOLVED, {}
+        starts[element_id] = line_starts[line - 1]
+        previous = line
+    return STATUS_EXACT, starts
 
 
 def _window_units(
@@ -103,6 +142,8 @@ def source_inspection(
     status = "unrecorded"
     if expected_revision is not None and expected_revision != revision:
         status = "version_mismatch"
+    elif origin := _origin_record_starts(payload, text, revision):
+        status, starts = origin
     elif isinstance(source_map, Mapping):
         resolved = resolve_source_map(
             source_map,

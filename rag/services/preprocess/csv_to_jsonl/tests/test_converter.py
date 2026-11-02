@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from rag_parser_core.source_map import physical_line_starts
 from rag_parser_core.structured_records import (
     STRUCTURED_RECORDS_CONTENT_TYPE,
     RowLine,
@@ -141,3 +143,15 @@ def test_empty_input_passes_through() -> None:
     outcome = convert(b"", "text/csv", "csv_to_jsonl", None)
     assert outcome.converted is False
     assert "csv_empty" in outcome.warnings
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_recorded_physical_lines_convert_to_the_record_start(newline: str) -> None:
+    """記録の row_start を原本の文字の位置に換算すると、その記録の先頭になる（#4173）。"""
+    rows = ["a,b", "1,x", f'2,"y{newline}z"', "", "3,w"]
+    text = newline.join(rows) + newline
+    outcome = convert(("\ufeff" + text).encode(), "text/csv", "csv_to_jsonl", None)
+    assert outcome.derived_bytes is not None
+    records = [json.loads(line) for line in outcome.derived_bytes.decode().splitlines()][1:]
+    line_starts = physical_line_starts(text)
+    assert [text[line_starts[r["location"]["row_start"] - 1]] for r in records] == ["1", "2", "3"]
