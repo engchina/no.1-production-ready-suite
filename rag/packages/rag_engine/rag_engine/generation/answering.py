@@ -2207,8 +2207,6 @@ def _grounded_prompt(
     """
     from rag_engine.generation.grounded import build_context_block
 
-    _record_term_usage(runtime_knowledge, answer=True)
-
     preface = "\n\n".join(
         section
         for section in (
@@ -2725,6 +2723,8 @@ def synthesize_grounded_answer(
             guide_task_scope=round_knowledge.guide_task_scope if round_knowledge else (),
         )
 
+    # 用語の照合結果は 1 回の回答の中で変わらない。プロンプトの組み立ての回数によらず 1 回だけ残す（#4095）。
+    _record_term_usage(base_knowledge, answer=True)
     for number in range(max_rounds):
         # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
         field_kinds = form_field_kinds.question_field_kinds(question, context)
