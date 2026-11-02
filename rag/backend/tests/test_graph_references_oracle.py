@@ -189,8 +189,8 @@ async def test_same_document_reference_over_the_column_limit_does_not_fail_the_b
 @pytest.mark.parametrize(
     ("parent", "stored_whole"),
     [
-        pytest.param("合" * 1329, True, id="3999_bytes"),
-        pytest.param("合" * 1329 + "a", False, id="4000_bytes"),
+        pytest.param("合" * 1329 + "aa", True, id="3999_bytes"),
+        pytest.param("合" * 1329 + "aaa", False, id="4000_bytes"),
     ],
 )
 async def test_reference_path_at_the_bind_boundary_is_written(
