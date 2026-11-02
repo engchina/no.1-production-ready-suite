@@ -28,6 +28,7 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import text_patterns
 
 from rag_engine.generation import passage_marks
+from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.models.llm import ApplicationAudit, ApplicationDraft, GroundedApplication, GroundedAudit
 from rag_engine.resources.runtime import resolve_prompt
@@ -138,6 +139,9 @@ def check_applications(
             entry.reject(f"算式が合わない: {mismatch}")
         if label := _internal_label().search(f"{application.reasoning}\n{application.result}"):
             entry.reject(f"内部の番号『{label.group(0)}』を利用者向けの文に書いている")
+        sources = [text for rule in entry.entries for text in span_texts(rule.span)]
+        if years := absent_years(f"{application.reasoning}\n{application.result}", question, sources):
+            entry.warn(f"質問と規則の原文に無い年: {'、'.join(years)}")
         checked.append(entry)
     return checked
 
