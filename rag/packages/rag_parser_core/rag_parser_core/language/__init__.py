@@ -759,6 +759,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "alias_words",
         "alias_negations",
         "internal_label_words",
+        "citation_unit_words",
         "amount_units",
         "fact_counters",
         "native_operation_words",

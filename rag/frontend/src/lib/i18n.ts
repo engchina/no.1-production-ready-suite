@@ -1327,6 +1327,8 @@ export const ja = {
   "settings.language.field.alias_negations.help": "この語がある文は同じものの根拠にしません（例: 異なる、別の）。",
   "settings.language.field.internal_label_words": "内部の番号の語",
   "settings.language.field.internal_label_words.help": "回答に出してはいけない内部の番号の語です（「規則0」の「規則」）。",
+  "settings.language.field.citation_unit_words": "引用の単位の語",
+  "settings.language.field.citation_unit_words.help": "説明の文の括弧に写された引用の番号の単位です（「行4」の「行」）。番号が出典の範囲に入るときだけ、位置の写しとして外します。",
   "settings.language.field.amount_units": "算式の単位",
   "settings.language.field.amount_units.help": "算式の数に付く単位です。計算のときは外します（例: 円、か月、人）。",
   "settings.language.field.amount_scale_units": "桁の単位",

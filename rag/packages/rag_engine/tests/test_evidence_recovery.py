@@ -127,14 +127,16 @@ def test_a_real_document_code_is_not_an_internal_label():
 def test_document_codes_survive_different_brackets_and_character_widths(source, text):
     spans = [{"text": source, "evidence_id": "document", "label": "E1"}]
     assert grounded._clean_evidence_labels(text + "（E1）", spans) == text
-    cleaned = grounded._inline_evidence(GroundedDraft.model_validate(draft(item("", text, ""))).items[0], spans)
+    cleaned, _ = grounded._inline_evidence(GroundedDraft.model_validate(draft(item("", text, ""))).items[0], spans)
     assert cleaned.text == text
     assert cleaned.evidence_id == ""
 
 
 def test_mixed_bracketed_codes_keep_real_codes_and_resolve_only_internal_labels():
     spans = [{"text": "コード Ｅ６", "evidence_id": "document", "label": "E1"}]
-    cleaned = grounded._inline_evidence(GroundedDraft.model_validate(draft(item("", "コード（E6、E1）を確認します。", ""))).items[0], spans)
+    cleaned, _ = grounded._inline_evidence(
+        GroundedDraft.model_validate(draft(item("", "コード（E6、E1）を確認します。", ""))).items[0], spans
+    )
     assert cleaned.text == "コード（E6）を確認します。"
     assert cleaned.evidence_id == "E1"
 

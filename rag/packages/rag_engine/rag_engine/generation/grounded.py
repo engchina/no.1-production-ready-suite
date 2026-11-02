@@ -61,6 +61,7 @@ from rag_engine.generation.applications import render_lines as application_lines
 from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_content import citation_content_unusable
+from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
 from rag_engine.generation.citation_wire import (
     bind_wire_range,
     canonical_generation_draft,
@@ -600,6 +601,7 @@ STANDARD_MAX_ROUNDS = 2
 STANDARD_CORRECTION_KEYS = (
     "button_name_issues",
     "date_value_issues",
+    "internal_label_issues",
     "citation_range_issues",
     "dropped_items",
     "downgraded_items",
@@ -1268,6 +1270,7 @@ QUESTION_ERROR_CHECK = "質問のエラー"
 OTHER_DOCUMENT_CHECK = "別文書の手順"
 CITED_BUTTON_CHECK = "ボタン名"
 DATE_VALUE_CHECK = "年の一致"
+INTERNAL_LABEL_CHECK = "内部の番号"
 # 警告の理由に添える原文の引用の長さ。
 MARK_QUOTE_MAX_CHARS = 80
 
@@ -1552,6 +1555,8 @@ class CheckedItem:
     button_name_issues: list[str] = field(default_factory=list)
     # 説明に書いた年のうち、質問と引いた根拠から説明できない年（#4042）。
     date_value_issues: list[str] = field(default_factory=list)
+    # 説明の文に混ざっていた根拠の ID（位置の写しの括弧ではなく、文の中にあったもの。#4153）。
+    internal_label_issues: list[str] = field(default_factory=list)
 
     def mark(self, code: str, detail: str = "", *, reason: str = "") -> None:
         """言い換えを本文に残したまま、段落に印（``code`` は契約の語彙）を付ける。``reason`` は trace・是正の指摘の文。"""
@@ -2260,8 +2265,9 @@ def verify(
         return entry, notes, subs
 
     for index, item in enumerate(draft.items):
+        mixed_labels: tuple[str, ...] = ()
         if item.kind != "gap":
-            item = _inline_evidence(item, spans)
+            item, mixed_labels = _inline_evidence(item, spans)
         if item.kind == "gap":
             if item.request_id in context_ids:
                 # 背景文（kind=context）は答える対象ではない。それに対する gap は利用者に意味がない (#650)。
@@ -2277,7 +2283,7 @@ def verify(
                     }
                 )
                 continue
-            if _EVIDENCE_LABEL.search(item.text):
+            if EVIDENCE_LABEL.search(item.text):
                 # 「E5 は…参照できません」は prompt の話で文書の話ではない。利用者に見せない (#642)。
                 dropped.append(
                     {"index": index, "evidence_id": "", "reason": "根拠ラベルを参照する gap は公開しない", "text": item.text, "quote": ""}
@@ -2297,6 +2303,10 @@ def verify(
                 # 本文は書き換えない。印を付け、是正で作り直す（直らなければ印のまま）。
                 entry.date_value_issues = years
                 _mark_check(entry, DATE_VALUE_CHECK, "質問と引いた原文に無い年: " + "、".join(years))
+            if mixed_labels:
+                # 文の中の ID の字だけを除いたので、文が崩れている可能性がある。是正で作り直す（直らなければ印のまま）。
+                entry.internal_label_issues = list(mixed_labels)
+                _mark_check(entry, INTERNAL_LABEL_CHECK, "説明の文に内部の番号が混ざっていた")
         checked.extend(kept_entries)
         dropped.extend(notes)
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
@@ -2436,44 +2446,28 @@ def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match
     return entry
 
 
-_EVIDENCE_LABEL = re.compile(r"(?<![A-Za-z0-9])E[0-9]{1,3}(?![A-Za-z0-9])")
-_INLINE_EVIDENCE = re.compile(r"[（(\[【]\s*(E[0-9]{1,3}(?:\s*[,、・]\s*E[0-9]{1,3})*)\s*[）)\]】]")
-
-
-def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> GroundedItem:
-    """本文中の根拠ラベルを非表示にし、一意なら引用元の候補にする。原文中の同じ記号は保つ。"""
-    codes = _document_evidence_codes(spans)
-    labels = [
-        label.group()
-        for match in _INLINE_EVIDENCE.finditer(item.text)
-        for label in _EVIDENCE_LABEL.finditer(match.group(1))
-        if label.group() not in codes
-    ]
-    text = _clean_evidence_labels(item.text, spans)
-    item = item.model_copy(update={"text": text})
-    if not _named_spans(item, spans) and len(set(labels)) == 1:
-        item = item.with_citation(evidence_id=labels[0])
-    return item
+def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> tuple[GroundedItem, tuple[str, ...]]:
+    """説明の文の位置の写しを外し、一意なら引用元の候補にする。戻り値は item と、文に混ざっていた根拠の ID。"""
+    cleaned = clean_evidence_locators(
+        item.text,
+        codes=_document_evidence_codes(spans),
+        citations=item.citations,
+        source_text="\n".join(str(span.get("text") or "") for span in spans),
+    )
+    item = item.model_copy(update={"text": cleaned.text})
+    if not _named_spans(item, spans) and len(cleaned.labels) == 1:
+        item = item.with_citation(evidence_id=cleaned.labels[0])
+    return item, cleaned.residual
 
 
 def _clean_evidence_labels(text: str, spans: Sequence[dict]) -> str:
     """表示用の文から内部ラベルを除く。根拠本文にあるコードは説明の対象なので残す。"""
-    codes = _document_evidence_codes(spans)
-
-    def bracketed(match: re.Match[str]) -> str:
-        labels = _EVIDENCE_LABEL.findall(match.group(1))
-        retained = [label for label in labels if label in codes]
-        if len(retained) == len(labels):
-            return match.group()
-        return match.group()[0] + "、".join(retained) + match.group()[-1] if retained else ""
-
-    text = _INLINE_EVIDENCE.sub(bracketed, text)
-    return _EVIDENCE_LABEL.sub(lambda match: match.group() if match.group() in codes else "", text).strip()
+    return clean_evidence_locators(text, codes=_document_evidence_codes(spans)).text
 
 
 def _document_evidence_codes(spans: Sequence[dict]) -> set[str]:
     """資料のコードを、モデルが読む文字の形にそろえて取り出す。"""
-    return set(_EVIDENCE_LABEL.findall(fold_width("\n".join(str(span.get("text") or "") for span in spans))))
+    return set(EVIDENCE_LABEL.findall(fold_width("\n".join(str(span.get("text") or "") for span in spans))))
 
 
 def recover_audited_quotes(
@@ -5281,6 +5275,14 @@ class Round:
                 for e in self.checked
                 if e.button_name_issues and not e.removed
             ],
+            "internal_label_issues": [
+                {
+                    "text": e.item.text,
+                    "hint": "text に根拠の番号と行の番号を書かないでください。出典は citations にだけ書き、text は利用者向けの文にしてください。",
+                }
+                for e in self.checked
+                if e.internal_label_issues and not e.removed
+            ],
             "date_value_issues": [
                 *(
                     {
@@ -5345,6 +5347,7 @@ class Round:
                 "button_name_issues",
                 "citation_range_issues",
                 "date_value_issues",
+                "internal_label_issues",
                 "dropped_items",
                 "downgraded_items",
                 "document_value_issues",
@@ -7908,6 +7911,16 @@ _ASSUMPTION_NO_CITED_HINT = (
 )
 
 
+# 監査なしの型でも是正する、決定的な検査の指摘。
+_AUDIT_NONE_CORRECTION_KEYS = (
+    "citation_range_issues",
+    "document_value_issues",
+    "button_name_issues",
+    "date_value_issues",
+    "internal_label_issues",
+)
+
+
 def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_unconfirmed: bool = False) -> dict:
     """次の組へ渡す指摘を監査の型で絞る（#2795）。通常の回答は事実の問題だけで、無ければ空（作り直さない）。
 
@@ -7918,12 +7931,8 @@ def correction_feedback(feedback: Mapping[str, Any], audit_mode: str, *, assume_
     if audit_mode == AUDIT_MODE_NONE:
         if assume_unconfirmed and feedback.get("no_cited_evidence"):
             return {"no_cited_evidence": _ASSUMPTION_NO_CITED_HINT}
-        if any(feedback.get(key) for key in ("document_value_issues", "citation_range_issues", "button_name_issues", "date_value_issues")):
-            return {
-                key: feedback[key]
-                for key in ("citation_range_issues", "document_value_issues", "button_name_issues", "date_value_issues", "supported_items")
-                if feedback.get(key)
-            }
+        if any(feedback.get(key) for key in _AUDIT_NONE_CORRECTION_KEYS):
+            return {key: feedback[key] for key in (*_AUDIT_NONE_CORRECTION_KEYS, "supported_items") if feedback.get(key)}
         return {}
     if audit_mode == AUDIT_MODE_DETAILED:
         return dict(feedback)
@@ -8129,6 +8138,7 @@ NO_IMPROVEMENT_REASONS = frozenset(
 # 業務ガイドの必須の手順を説明していないこと（#2491。手順の根拠は材料にある）も同じ。
 REGENERATION_FEEDBACK_KEYS = (
     "button_name_issues",
+    "internal_label_issues",
     "citation_range_issues",
     "dropped_items",
     "downgraded_items",
@@ -8153,6 +8163,7 @@ def feedback_signature(feedback: dict[str, Any] | None) -> dict[str, Any]:
         ),
         **({"button_name_issues": len(feedback["button_name_issues"])} if feedback.get("button_name_issues") else {}),
         **({"date_value_issues": len(feedback["date_value_issues"])} if feedback.get("date_value_issues") else {}),
+        **({"internal_label_issues": len(feedback["internal_label_issues"])} if feedback.get("internal_label_issues") else {}),
         "citation_ranges": sorted(
             (str(row.get("item_index")), str(row.get("evidence_id")), str(row.get("reason_code")))
             for row in feedback.get("citation_range_issues") or ()
@@ -8379,6 +8390,8 @@ def pending_feedback_labels(feedback: dict[str, Any]) -> list[str]:
         labels.append(f"引用原文にないボタン操作 {count} 件")
     if count := len(feedback.get("date_value_issues") or ()):
         labels.append(f"質問と引用原文に無い年 {count} 件")
+    if count := len(feedback.get("internal_label_issues") or ()):
+        labels.append(f"説明の文に混ざった内部の番号 {count} 件")
     ranges = feedback.get("citation_range_issues") or ()
     if count := sum(row.get("reason_code") != CITATION_HEADING_ONLY for row in ranges):
         labels.append(f"範囲を確認できない引用 {count} 件")

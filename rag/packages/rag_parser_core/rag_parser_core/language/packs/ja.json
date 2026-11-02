@@ -2999,6 +2999,12 @@
     "internal_label_words": [
       "規則"
     ],
+    "citation_unit_words": [
+      "行",
+      "行目",
+      "line",
+      "lines"
+    ],
     "amount_units": [
       "万円",
       "億円",
