@@ -135,3 +135,129 @@ async def test_rebuild_reads_section_paths_over_4000_bytes() -> None:
     assert await GraphReferenceStore(client).node(
         kb.id, graph_section_node_id(chunk_set_id, kb.id, path)
     )
+
+
+# #4126: 参照の section path の列（VARCHAR2(4000 CHAR)）を超える 3 つの長さ。
+_OVER_COLUMN_LIMIT = [
+    pytest.param("合成の長い親階層" * 170, id="over_4000_bytes_under_4000_chars"),
+    pytest.param("synthetic-long-parent-" * 230, id="over_4000_chars"),
+    pytest.param("合成の長い親階層" * 400, id="over_the_clob_bind_size"),
+]
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("parent", _OVER_COLUMN_LIMIT)
+async def test_same_document_reference_over_the_column_limit_does_not_fail_the_build(
+    parent: str,
+) -> None:
+    """#4126: 参照元・参照先のパスが列を超えても構築でき、辺と参照元・参照先が節ごとに分かれる。"""
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-over-limit-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    first, second = f"{parent} > 第1条", f"{parent} > 第2条"
+    chunks = _chunks([(first, 1), (second, 1)])
+    chunks[0].text = "第2条を参照する。"
+    chunks[1].text = "合成の本文。"
+    document_id, chunk_set_id = await _indexed_document(
+        client,
+        file_name="synthetic-over-limit.pdf",
+        chunks=chunks,
+        knowledge_base_id=kb.id,
+    )
+    await rebuild_document_structure_index(client, kb.id, document_id)
+
+    first_node = graph_section_node_id(chunk_set_id, kb.id, first)
+    second_node = graph_section_node_id(chunk_set_id, kb.id, second)
+    store = GraphReferenceStore(client)
+    edges = await store.visible_edges(kb.id, [first_node, second_node], limit=25)
+    assert [(edge["source"], edge["target"]) for edge in edges] == [(first_node, second_node)]
+    outgoing = await store.page(kb.id, first_node, direction="outgoing", offset=0, limit=25)
+    assert [item["status"] for item in outgoing["items"]] == ["resolved"]
+    item = outgoing["items"][0]
+    assert item["source"]["id"] == first_node
+    assert item["target"]["id"] == second_node
+    assert item["target"]["name"] == _clean_label(second)
+    incoming = await store.page(kb.id, second_node, direction="incoming", offset=0, limit=25)
+    assert [row["source"]["id"] for row in incoming["items"]] == [first_node]
+    assert (await store.page(kb.id, first_node, direction="incoming", offset=0, limit=25))[
+        "items"
+    ] == []
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("parent", _OVER_COLUMN_LIMIT)
+async def test_cross_document_reference_resolves_a_section_over_the_column_limit(
+    parent: str,
+) -> None:
+    """#4126: 目録が長いパスを失わず、別文書の長いパスの節へ解決できる。"""
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-cross-limit-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    wanted = f"{parent} > 第2条"
+    target_chunks = _chunks([(f"{parent} > 第1条", 1), (wanted, 1)])
+    for chunk in target_chunks:
+        chunk.text = "合成の本文。"
+    _target_id, target_set = await _indexed_document(
+        client,
+        file_name="合成長大規程.pdf",
+        chunks=target_chunks,
+        knowledge_base_id=kb.id,
+    )
+    source_chunks = _chunks([("第1条", 1)])
+    source_chunks[0].text = "合成長大規程の第2条を参照する。"
+    source_id, source_set = await _indexed_document(
+        client,
+        file_name="synthetic-cross-limit-source.pdf",
+        chunks=source_chunks,
+        knowledge_base_id=kb.id,
+    )
+    await rebuild_document_structure_index(client, kb.id, source_id)
+
+    source_node = _graph_id("entity", source_set, kb.id, "第1条")
+    target_node = graph_section_node_id(target_set, kb.id, wanted)
+    store = GraphReferenceStore(client)
+    page = await store.page(kb.id, source_node, direction="outgoing", offset=0, limit=25)
+    assert [item["status"] for item in page["items"]] == ["resolved"]
+    assert page["items"][0]["target"]["id"] == target_node
+    assert page["items"][0]["target"]["name"] == _clean_label(wanted)
+    edges = await store.visible_edges(kb.id, [source_node, target_node], limit=25)
+    assert [(edge["source"], edge["target"]) for edge in edges] == [(source_node, target_node)]
+    incoming = await store.page(kb.id, target_node, direction="incoming", offset=0, limit=25)
+    assert [item["source"]["id"] for item in incoming["items"]] == [source_node]
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_reference_catalog_keeps_string_and_array_paths_over_4000_bytes() -> None:
+    """#4126: 目録が文字列・配列の長いパスを読み、短いパスの文書はこれまでどおり読む。"""
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-catalog-{uuid4().hex[:8]}")
+    parent = "合成の長い親階層" * 170
+    string_chunks = _chunks([(f"{parent} > 第1条", 2), ("第2条", 1)])
+    string_id, _string_set = await _indexed_document(
+        client,
+        file_name="synthetic-catalog-string.pdf",
+        chunks=string_chunks,
+        knowledge_base_id=kb.id,
+    )
+    array_chunks = _chunks([("placeholder", 1)])
+    array_chunks[0].metadata["section_path"] = [parent, "第3条"]
+    array_id, _array_set = await _indexed_document(
+        client,
+        file_name="synthetic-catalog-array.pdf",
+        chunks=array_chunks,
+        knowledge_base_id=kb.id,
+    )
+    short_id, _short_set = await _indexed_document(
+        client,
+        file_name="synthetic-catalog-short.pdf",
+        chunks=_chunks([("第4条", 1)]),
+        knowledge_base_id=kb.id,
+    )
+
+    catalog = {
+        item.document_id: sorted(item.section_paths)
+        for item in await GraphReferenceStore(client).documents(kb.id)
+    }
+    assert catalog[string_id] == sorted([f"{parent} > 第1条", "第2条"])
+    assert catalog[array_id] == [f"{parent} > 第3条"]
+    assert catalog[short_id] == ["第4条"]
