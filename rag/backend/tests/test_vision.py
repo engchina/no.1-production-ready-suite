@@ -1082,14 +1082,21 @@ async def test_connection_reset_stays_item_failure_because_it_can_depend_on_the_
 
 def test_unreached_failure_after_a_success_stays_item_failure() -> None:
     """同じ job で成功した図があれば接続は生きている。その図だけの失敗として続ける(#4084)。"""
-    from pr_backend_core.bounded_calls import BoundedCallFailed, ErrorKind
+    from pr_backend_core.bounded_calls import (
+        BoundedCaller,
+        BoundedCallFailed,
+        BoundedCallPolicy,
+        ErrorKind,
+    )
 
     from app.rag.vision import _unreached_failure_abort
 
     failure = BoundedCallFailed("failed", kind=ErrorKind.NETWORK)
     failure.__cause__ = OSError(errno.EHOSTUNREACH, "unreachable")
 
-    assert _unreached_failure_abort(failure, SimpleNamespace(successes=1, label="Vision")) is None
-    aborted = _unreached_failure_abort(failure, SimpleNamespace(successes=0, label="Vision"))
+    caller = BoundedCaller("rag.vision", BoundedCallPolicy(), label="Vision")
+    aborted = _unreached_failure_abort(failure, caller)
     assert aborted is not None
+    caller.successes = 1
+    assert _unreached_failure_abort(failure, caller) is None
     assert aborted.stops_batch is True
