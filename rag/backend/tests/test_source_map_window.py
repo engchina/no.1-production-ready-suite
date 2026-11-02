@@ -333,6 +333,97 @@ def test_structured_records_jsonl_follows_windows_by_record_id() -> None:
             assert f'"record_id":"{record_id}"' in window["text"].replace(": ", ":")
 
 
+def _csv_origin_payload(source: bytes, jsonl: bytes) -> dict[str, Any]:
+    result = _structured_records_jsonl_result(jsonl)
+    assert result.extraction is not None
+    payload = result.extraction.to_document_payload()
+    payload["parser_artifacts"]["source_derivation"] = {
+        "converted": True,
+        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "derived_sha256": hashlib.sha256(jsonl).hexdigest(),
+    }
+    return payload
+
+
+def _csv_origin(newline: str = "\n", *, bom: bool = False) -> tuple[bytes, bytes]:
+    """引用符の中の改行と空の行を含む合成の CSV と、前処理と同じ物理行を持つ記録。"""
+    rows = [f"番号,値{newline}"]
+    lines: list[DocumentLine | RowLine] = [
+        DocumentLine(
+            record_id="document",
+            source_type="csv",
+            converter="csv_to_jsonl",
+            converter_version="v3",
+            header_row=1,
+        )
+    ]
+    line = 2
+    for index in range(1, 901):
+        multi = index % 50 == 0
+        rows.append(
+            f'{index},"合成の値 {index}{newline}続き"{newline}'
+            if multi
+            else f"{index},合成の値 {index}{newline}"
+        )
+        end = line + 1 if multi else line
+        lines.append(
+            RowLine(
+                record_id=f"row-{index:06d}",
+                source_type="csv",
+                location=RecordLocation(row_start=line, row_end=end),
+                fields=[RecordField(name="番号", position=1, value=str(index))],
+            )
+        )
+        line = end + 1
+        if index % 100 == 0:
+            rows.append(newline)
+            line += 1
+    source = ("\ufeff" if bom else "") + "".join(rows)
+    return source.encode(), dump_structured_records(lines)
+
+
+@pytest.mark.parametrize(
+    ("newline", "bom"), [("\n", False), ("\r\n", False), ("\r", False), ("\n", True)]
+)
+def test_csv_records_follow_windows_of_the_original_source(newline: str, bom: bool) -> None:
+    source, jsonl = _csv_origin(newline, bom=bom)
+    payload = _csv_origin_payload(source, jsonl)
+    windows = list(_windows(payload, source))
+    assert len(windows) > 1
+    assert {window["scope_status"] for window in windows} == {"exact"}
+    assigned = [eid for window in windows for eid in window["element_ids"]]
+    assert assigned == [f"row-{index:06d}" for index in range(1, 901)]
+    # 記録の開始はその範囲の原本の行の頭で、記録の途中で範囲を切らない。
+    for window in windows:
+        for record_id in window["element_ids"]:
+            number = int(record_id.removeprefix("row-"))
+            assert f"{number}," in window["text"]
+    for window in windows[1:]:
+        assert window["text"].split(",", 1)[0].lstrip().isdigit()
+
+
+def test_csv_records_keep_the_prepared_view_and_reject_another_original() -> None:
+    source, jsonl = _csv_origin()
+    payload = _csv_origin_payload(source, jsonl)
+    prepared = source_inspection(payload, jsonl, offset=0, limit=8192)
+    assert prepared["scope_status"] == "exact"
+    assert prepared["element_ids"][0] == "row-000001"
+    assert '"record_id":"row-000001"' in prepared["text"].replace(": ", ":")
+    other = source_inspection(payload, source + b"9999,\n", offset=0, limit=8192)
+    assert other["scope_status"] == "version_mismatch"
+    assert other["element_ids"] == []
+
+
+@pytest.mark.parametrize("line", [0, 10**6, "2", True])
+def test_csv_records_with_broken_line_numbers_are_unresolved(line: object) -> None:
+    source, jsonl = _csv_origin()
+    payload = _csv_origin_payload(source, jsonl)
+    payload["elements"][5]["metadata"]["source_line_start"] = line
+    window = source_inspection(payload, source, offset=0, limit=8192)
+    assert window["scope_status"] == "unresolved"
+    assert window["element_ids"] == []
+
+
 def test_jsonl_ranges_integrate_with_inspection() -> None:
     values = [{"k": i, "v": "値" * 20} for i in range(600)]
     text = "\n".join(json.dumps(v, ensure_ascii=False) for v in values)
