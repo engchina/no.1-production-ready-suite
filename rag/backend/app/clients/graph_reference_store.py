@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any
 
 from app.rag.reference_records import GraphReferenceRecord
@@ -72,6 +73,14 @@ def write_graph_references(
             )
 
 
+def _catalog_section_path(row: Mapping[str, object]) -> str:
+    """文字列・配列のsection_pathを目録の文字列にする。JSON nullなどは章節パスなしと同じ。"""
+    if row.get("path"):
+        return str(row["path"])
+    parts = json.loads(str(row.get("path_json") or "null"))
+    return " > ".join(str(part) for part in parts) if isinstance(parts, list) else ""
+
+
 class GraphReferenceStore:
     def __init__(self, oracle: Any) -> None:
         self.oracle = oracle
@@ -93,9 +102,7 @@ class GraphReferenceStore:
         for row in rows:
             grouped[
                 (str(row["document_id"]), str(row.get("chunk_set_id") or ""), str(row["file_name"]))
-            ].append(
-                str(row.get("path") or " > ".join(json.loads(str(row.get("path_json") or "[]"))))
-            )
+            ].append(_catalog_section_path(row))
         return tuple(
             ReferenceDocument(did, cs or None, name, tuple(paths))
             for (did, cs, name), paths in grouped.items()

@@ -3,7 +3,9 @@
 from functools import partial
 from typing import Any
 
-from app.clients.graph_reference_store import GraphReferenceStore
+import pytest
+
+from app.clients.graph_reference_store import GraphReferenceStore, _catalog_section_path
 from app.rag.chunking import Chunk
 from app.rag.reference_records import build_reference_records
 from app.rag.reference_resolution import ReferenceDocument
@@ -138,3 +140,20 @@ def test_long_reference_locator_keeps_the_full_path_and_a_distinct_stable_id() -
     assert first["id"] != second["id"]
     assert first["section_path"] == common + " > 第2条"
     assert first["id"] != _graph_id("entity", "t1", "kb", first["name"][:512])
+
+
+@pytest.mark.parametrize(
+    ("path", "path_json", "expected"),
+    [
+        ("第1条", None, "第1条"),
+        (None, '["第1章", "第1条"]', "第1章 > 第1条"),
+        (None, '["第1章", 1]', "第1章 > 1"),
+        (None, "null", ""),
+        (None, '{"section": "第1条"}', ""),
+        (None, None, ""),
+    ],
+)
+def test_catalog_section_path_accepts_every_stored_json_shape(
+    path: str | None, path_json: str | None, expected: str
+) -> None:
+    assert _catalog_section_path({"path": path, "path_json": path_json}) == expected

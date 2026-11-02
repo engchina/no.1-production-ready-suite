@@ -552,6 +552,27 @@ def document_name_aliases(value: str) -> set[str]:
     return {key for key in (title_key(item) for item in variants) if len(key) >= 2}
 
 
+def document_name_keys(file_name: str, headings: Iterable[str] = ()) -> tuple[frozenset[str], str]:
+    """文書側の照合の鍵(タイトル・ファイル名の別名と、拡張子を除くファイル名)。"""
+    aliases = document_name_aliases(file_name)
+    for heading in dict.fromkeys(headings):
+        if title_heading(heading):
+            aliases |= document_name_aliases(heading)
+    return frozenset(aliases), title_key(_FILE_EXTENSION.sub("", normalize_text(file_name)))
+
+
+def document_name_rank(key: str, keys: tuple[frozenset[str], str]) -> int | None:
+    """``title_key`` にした文書名と文書側の鍵を比べた順位(規則は ``document_name_match``)。"""
+    if len(key) < 2:
+        return None
+    aliases, stem = keys
+    if key in aliases:
+        return 0
+    if len(stem) >= 2 and key in stem:
+        return 1
+    return None
+
+
 def document_name_match(name: str, file_name: str, headings: Iterable[str] = ()) -> int | None:
     """参照の文書名が文書に当たるか(当たり方の順位。小さいほど確か。当たらなければ None)。
 
@@ -564,16 +585,7 @@ def document_name_match(name: str, file_name: str, headings: Iterable[str] = ())
     key = title_key(name)
     if len(key) < 2:
         return None
-    aliases = document_name_aliases(file_name)
-    for heading in headings:
-        if title_heading(heading):
-            aliases |= document_name_aliases(heading)
-    if key in aliases:
-        return 0
-    stem = title_key(_FILE_EXTENSION.sub("", normalize_text(file_name)))
-    if len(stem) >= 2 and key in stem:
-        return 1
-    return None
+    return document_name_rank(key, document_name_keys(file_name, headings))
 
 
 # ---- 解決 ----

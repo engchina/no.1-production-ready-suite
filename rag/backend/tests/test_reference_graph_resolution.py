@@ -1,10 +1,14 @@
 """合成文書による参照解決の曖昧さと構造グラフの回帰。"""
 
 from functools import partial
+from typing import Any
+
+import pytest
 
 from app.rag.chunking import Chunk
-from app.rag.cross_references import ReferenceSpec, SectionIndex
+from app.rag.cross_references import ReferenceSpec, SectionIndex, extract_references
 from app.rag.graph_index import build_graph_index
+from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
 from app.schemas.extraction import StructuredExtraction
 
 
@@ -159,3 +163,40 @@ def test_reference_targets_beyond_initial_graph_window_are_indexed() -> None:
     assert len(graph.entities) == 101
     assert any(edge.relationship_type == "references" for edge in graph.relationships)
     assert graph.references[0].target_section_path == "第100条"
+
+
+def test_resolving_many_references_parses_each_catalog_document_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.rag import cross_references, reference_resolution
+
+    alias_calls: list[str] = []
+    index_calls: list[tuple[str, ...]] = []
+    aliases = cross_references.document_name_aliases
+    section_index = reference_resolution.SectionIndex
+
+    def counted_aliases(value: str) -> set[str]:
+        alias_calls.append(value)
+        return aliases(value)
+
+    def counted_index(paths: tuple[str, ...]) -> Any:
+        index_calls.append(paths)
+        return section_index(paths)
+
+    monkeypatch.setattr(cross_references, "document_name_aliases", counted_aliases)
+    monkeypatch.setattr(reference_resolution, "SectionIndex", counted_index)
+    source = ReferenceDocument("source", "s1", "合成の起点.txt", ("第1条",))
+    target = ReferenceDocument("target", "t1", "合成規程.txt", ("第1条", "第2条", "第3条"))
+    other = ReferenceDocument("other", "o1", "合成細則.txt", ("第1条",))
+    spec = extract_references("合成規程の第2条を参照する。")[0]
+    results = [
+        resolve_scoped_reference(
+            spec, source=source, citing_path="第1条", documents=(target, other)
+        )
+        for _ in range(50)
+    ]
+    assert {result.status for result in results} == {"resolved"}
+    assert {result.target.section_path for result in results if result.target} == {"第2条"}
+    # 文書のファイル名の1回と、見出しになれる章節ごとの1回を超えない。
+    assert len(alias_calls) <= 2 + len(target.section_paths) + len(other.section_paths)
+    assert index_calls == [target.section_paths]

@@ -91,6 +91,32 @@ async def test_partial_failure_and_retry_only_failed(
     assert calls == ["a", "b", "b"]
 
 
+async def test_unexpected_document_failure_is_logged_without_document_name(
+    jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, saved = jobs
+
+    async def build(oracle: Any, kb: str, doc: str, **kwargs: Any) -> Any:
+        raise TypeError("合成の本文を含む例外")
+
+    monkeypatch.setattr(module, "rebuild_document_structure_index", build)
+    with caplog.at_level("WARNING", logger=module.__name__):
+        await service.start(Oracle(), "kb", "missing")
+        await asyncio.gather(*service.tasks)
+    assert [item["reason"] for item in saved["kb"]["items"][:2]] == [
+        "processing_error",
+        "processing_error",
+    ]
+    failed = [r for r in caplog.records if r.message == "structure_index_document_failed"]
+    assert [(r.document_id, r.error_type) for r in failed] == [  # type: ignore[attr-defined]
+        ("a", "TypeError"),
+        ("b", "TypeError"),
+    ]
+    assert "合成の本文" not in caplog.text
+
+
 async def test_stop_finishes_current_then_resume_and_deduplicates(
     jobs: Any,
     monkeypatch: pytest.MonkeyPatch,
