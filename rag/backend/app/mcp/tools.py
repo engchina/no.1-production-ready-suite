@@ -324,8 +324,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 39: rag_validate_answer の claims に、監査の応答の参照の誤りの診断（監査が写した原文
 #     support_quote・返した根拠の ID audit_evidence_id）と、その誤りの監査し直しの結果
 #     （reference_reaudit）を足した（#4058）。
-MCP_OUTPUT_SCHEMA_VERSION = 39
-# rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
+# 40: rag_validate_answer の claims から support_quote を外し、reference_check・support_check の
+#     quote_unmatched を無くした（監査は根拠の ID だけを返す。#4152）。
+MCP_OUTPUT_SCHEMA_VERSION = 40
+# rag_validate_answer の判定の診断（監査が返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
@@ -2289,7 +2291,6 @@ class ValidatedClaim(BaseModel):
             "answer_id_invalid=回答が書いた ID が根拠に無い / "
             "audit_id_invalid=監査が返した ID だけが根拠に無い / "
             "ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / "
-            "quote_unmatched=引用が根拠に無い / "
             "not_figure=figure_only の根拠が図ではない〔status は unsupported〕 / "
             "single_figure=figure_only の ID が決まらず、根拠の唯一の図に結び付けた）。"
             "照合しない判定は null。"
@@ -2310,7 +2311,6 @@ class ValidatedClaim(BaseModel):
             "〔処理・画面・成果物・状態〕の記載 / "
             "value_unbound=段落が根拠の表の別の行・列の値を結び付けている〔status は contradicted。"
             "理由に表の正しい対応〕か、監査の理由だけが表と違う対応を述べている〔unsupported〕 / "
-            "quote_unmatched=裏付けとして写した原文が根拠に無い / "
             "figure_recheck=図の項目だけの裏付けを確かめ直し、図の見た目だけで決まる・図と矛盾する"
             "とした / premise_conflict=段落が勧める内容が、利用者が確認で答えた条件・制約と"
             "両立しない〔status は contradicted〕 / table_corrected=段落の表の対応の取り違えを、"
@@ -2326,19 +2326,11 @@ class ValidatedClaim(BaseModel):
             "それ以外は null。"
         ),
     )
-    support_quote: str | None = Field(
-        default=None,
-        description=(
-            "reference_check が監査の応答の誤り（audit_id_invalid / ambiguous_id / "
-            "audit_id_missing / quote_unmatched）のとき、監査が裏付けとして写した原文（先頭 "
-            f"{CLAIM_DIAGNOSTIC_CHARS} 字。渡した根拠・質問に対する監査の出力で、照合の失敗の"
-            "原因を確かめる診断）。それ以外は null。"
-        ),
-    )
     audit_evidence_id: str | None = Field(
         default=None,
         description=(
-            "reference_check が監査の応答の誤りのとき、監査が返した根拠の ID（照合に使う"
+            "reference_check が監査の応答の誤り（audit_id_invalid / ambiguous_id / "
+            "audit_id_missing）のとき、監査が返した根拠の ID（照合に使う"
             f"内部の ID で、chunk_id ではない。先頭 {CLAIM_DIAGNOSTIC_CHARS} 字。診断）。"
             "それ以外は null。"
         ),
@@ -2346,7 +2338,7 @@ class ValidatedClaim(BaseModel):
     reference_reaudit: Literal["adopted", "rejected"] | None = Field(
         default=None,
         description=(
-            "監査は裏付けたが、監査の応答の参照（写した原文・返した ID）を根拠に照合できな"
+            "監査は裏付けたが、監査の応答の ID を根拠に照合できな"
             "かった段落を監査し直した結果（adopted=監査し直しの判定が同じ照合を通り、その"
             "判定〔supported〕にした / rejected=監査し直しても照合を通らず、citation_error の"
             "まま）。監査し直していなければ null。"
@@ -4736,15 +4728,14 @@ def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput
     check_profile(scope, arguments.search_answer_profile_id)
 
 
-def _reference_diagnostic(claim: Mapping[str, Any], key: str) -> str | None:
-    """監査の応答の参照の誤り（`AUDIT_REFERENCE_FAILURES`）の判定の診断の値（上限で切る。#112）。
+def _audit_evidence_id(claim: Mapping[str, Any]) -> str | None:
+    """監査の応答の ID の誤り（`AUDIT_REFERENCE_FAILURES`）の判定で、監査が返した ID（#112）。
 
-    値は呼び出し側が渡した根拠（今の権限と版で読み直した本文）・質問・前提に対する監査の出力なので、
-    呼び出し側の権限の外の本文を含まない。それ以外の判定は None（応答を大きくしない）。
+    それ以外の判定は None（応答を大きくしない）。
     """
     if claim.get("reference_check") not in AUDIT_REFERENCE_FAILURES:
         return None
-    value = " ".join(str(claim.get(key) or "").split())
+    value = " ".join(str(claim.get("audit_evidence_id") or "").split())
     return value[:CLAIM_DIAGNOSTIC_CHARS] or None
 
 
@@ -5280,9 +5271,8 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     support_check=str(claim.get("support_check") or "") or None,
                     # 表の正しい値に直した段落（#3005）。
                     revised_text=str(claim.get("revised_text") or "") or None,
-                    # 監査の応答の参照の誤りの診断と監査し直し（#112）。
-                    support_quote=_reference_diagnostic(claim, "support_quote"),
-                    audit_evidence_id=_reference_diagnostic(claim, "audit_evidence_id"),
+                    # 監査の応答の ID の誤りの診断と監査し直し（#112）。
+                    audit_evidence_id=_audit_evidence_id(claim),
                     reference_reaudit=claim.get("reference_reaudit") or None,
                 )
                 for claim in result.claim_checks

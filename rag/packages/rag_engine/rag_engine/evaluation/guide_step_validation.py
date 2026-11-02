@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import re
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -26,8 +25,6 @@ from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan, GuideStep
 
-# 監査が離れた 2 か所の原文をつなぐ印（`ValidationClaimCheck.evidence_quote` の説明）。
-_QUOTE_JOINS = re.compile(r"…+|\.{3,}")
 # 本文の照合に使う手がかりの最短の長さ（1 文字の語は本文のどこにでも出る）。
 _MIN_HINT_CHARS = 2
 # GroundedItem の text・quote の上限。
@@ -78,14 +75,8 @@ def step_sources(plan: GuidePlan, evidence: Sequence[Mapping[str, Any]]) -> dict
     }
 
 
-def _quotes(claim: Mapping[str, Any]) -> list[str]:
-    quote = str(claim.get("support_quote") or "").strip()
-    parts = [part.strip() for part in _QUOTE_JOINS.split(quote)] if quote else []
-    return [part for part in parts if part] or [str(claim.get("answer_quote") or "").strip()]
-
-
 def _items(claims: Sequence[Mapping[str, Any]], spans: Sequence[dict]) -> tuple[list[grounded.CheckedItem], list[str]]:
-    """裏付けた段落の手順の説明の item（引用の片ごと）と、item ごとの段落の本文。"""
+    """裏付けた段落の手順の説明の item と、item ごとの段落の本文。"""
     by_id = {span["source_id"]: span for span in spans}
     checked: list[grounded.CheckedItem] = []
     paragraphs: list[str] = []
@@ -93,26 +84,25 @@ def _items(claims: Sequence[Mapping[str, Any]], spans: Sequence[dict]) -> tuple[
         if claim.get("status") != "supported":
             continue
         paragraph = str(claim.get("answer_quote") or "").strip()
+        if not paragraph:
+            continue
         own = by_id.get(str(claim.get("source_id") or ""))
-        for quote in _quotes(claim):
-            if not quote or not paragraph:
-                continue
-            # 引用の原文がある根拠（段落を結び付けた根拠を先に見る）。無ければ段落を結び付けた根拠。
-            ordered = [own, *spans] if own is not None else list(spans)
-            span = next((item for item in ordered if item is not None and grounded.quote_in_text(quote, item["text"])), own)
-            if span is None:
-                continue
-            checked.append(
-                grounded.CheckedItem(
-                    GroundedItem(
-                        kind="operation",
-                        text=paragraph[:_MAX_ITEM_CHARS],
-                        citations=[GroundedCitation(evidence_id="", quote=quote[:_MAX_ITEM_CHARS])],
-                    ),
-                    span=span,
-                )
+        # 段落の本文がある根拠（段落を結び付けた根拠を先に見る）。無ければ段落を結び付けた根拠。
+        ordered = [own, *spans] if own is not None else list(spans)
+        span = next((item for item in ordered if item is not None and grounded.quote_in_text(paragraph, item["text"])), own)
+        if span is None:
+            continue
+        checked.append(
+            grounded.CheckedItem(
+                GroundedItem(
+                    kind="operation",
+                    text=paragraph[:_MAX_ITEM_CHARS],
+                    citations=[GroundedCitation(evidence_id="", quote=paragraph[:_MAX_ITEM_CHARS])],
+                ),
+                span=span,
             )
-            paragraphs.append(paragraph)
+        )
+        paragraphs.append(paragraph)
     return checked, paragraphs
 
 

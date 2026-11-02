@@ -758,32 +758,13 @@ def _span_id(item):
 
 
 def _span_for_misnamed_id(claim, catalog):
-    """片段 ID の代わりにチャンク ID・出典名を返した claim を、引用の原文照合で片段へ結び直します。
+    """片段 ID の代わりにチャンク ID を返した claim を、そのチャンクの最初の片段へ結び直します。
 
-    評価入力の根拠は evidence_id（片段）と id（チャンク）の両方を持ち、モデルは取り違えることがある。
-    原文照合は決定的なので、ID の誤記だけで正しい引用を引用エラーにしない。引用が空、または
-    一致する片段が1つに決まらない場合は None（従来どおり引用エラー）。
+    評価入力の根拠は evidence_id（片段）と id（チャンク）の両方を持ち、モデルは取り違えることがある。チャンク ID は
+    catalog 内で一意に根拠を指すので、有効な片段 ID を返した場合と検証の厳しさは変わらない。出典のファイル名は
+    複数のチャンクを指すので結び付けない。
     """
-    quote = (claim.evidence_quote or "").strip()
-    if not quote:
-        # 評価モデルには引用を再入力させない設計なので、引用なしで ID だけを返すのが通常。チャンク ID は
-        # catalog 内で一意に根拠を指すため、そのチャンクの最初の片段へ結び付ける（有効な片段 ID を返した場合と
-        # 検証の厳しさは変わらない）。出典のファイル名は複数のチャンクを指すため、引用なしでは決めない。
-        return next((span for span in catalog.values() if claim.evidence_id and claim.evidence_id == str(span.get("id") or "")), None)
-
-    def named(name):
-        return [
-            span
-            for span in catalog.values()
-            if name and name in {str(span.get("id") or ""), str(span.get("source") or ""), str(span.get("parent_id") or "")}
-        ]
-
-    # evidence_id が別の根拠を名指ししている場合は、その根拠だけで照合する（出典名で別の根拠へ付け替えない）。
-    candidates = named(claim.evidence_id) or named(claim.source_id)
-    # 表の根拠は HTML で渡るが、モデルは tag を外してセルをつないだ引用を返す。回答生成と同じ基準で照合する。
-    matches = [span for span in candidates if quote_in_text(quote, span["text"])]
-    # 同じチャンクの複数の片段に一致する場合は最初の片段でよい。別のチャンクにまたがる場合は決めない。
-    return matches[0] if matches and len({span.get("id") for span in matches}) == 1 else None
+    return next((span for span in catalog.values() if claim.evidence_id and claim.evidence_id == str(span.get("id") or "")), None)
 
 
 # 1 つの evidence_id の欄に複数の根拠を書いたときの区切り（「E…, E…」「E… / E…」「[E…、E…]」）。
@@ -915,13 +896,12 @@ def _spans_for_ids(claim, catalog):
     なり、正しい結論が引用エラーで外されていた。モデルは ID を短く書くこともある（後ろを切った片段の ID・
     回答から写した途中を省いた chunk の id。#1391）。書いた ID がすべて根拠の 1 つに決まるときだけ結び付け、
     1 つでも決まらなければ None（従来どおり引用エラー）。括弧で囲んだ 1 つの ID・ラベルを付けた ID も同じ。
-    引用（evidence_quote）を返したときは、結び付けた片段のどれかに引用が含まれることも求める。
     """
-    return _resolve_tokens(_evidence_tokens(claim, catalog), claim, catalog)
+    return _resolve_tokens(_evidence_tokens(claim, catalog), catalog)
 
 
-def _resolve_tokens(tokens, claim, catalog):
-    """ID の語をすべて片段へ結び付ける（1 つでも決まらない・語が無い・引用がどの片段にも無ければ None）。"""
+def _resolve_tokens(tokens, catalog):
+    """ID の語をすべて片段へ結び付ける（1 つでも決まらない・語が無ければ None）。"""
     if not tokens:
         return None
     spans = []
@@ -931,14 +911,6 @@ def _resolve_tokens(tokens, claim, catalog):
             return None
         if span not in spans:
             spans.append(span)
-    quote = (claim.evidence_quote or "").strip()
-    # 複数の片段にまたがる引用（各片段の見出しを「 / 」でつないだ形。#119）は、つないだ本文で照合する。
-    if (
-        quote
-        and not any(quote_in_text(quote, span["text"]) for span in spans)
-        and not (len(spans) > 1 and quote_in_text(quote, "\n".join(span["text"] for span in spans)))
-    ):
-        return None
     return spans
 
 
@@ -949,7 +921,7 @@ def _spans_for_passage_citations(claim, catalog):
     写し損ねても（ラベルごと写す・別の表記にする）、段落の ID が完全一致・前方一致・途中を省いた形（#1391）で
     根拠の 1 つにすべて決まれば、その根拠に結び付ける。段落に ID が無い・1 つでも根拠に無い ID があれば None。
     """
-    return _resolve_tokens(_passage_tokens(claim), claim, catalog)
+    return _resolve_tokens(_passage_tokens(claim), catalog)
 
 
 def _passage_tokens(claim):
@@ -965,7 +937,6 @@ REFERENCE_ANSWER_ID_INVALID = "answer_id_invalid"  # 段落が書いた ID が�
 REFERENCE_AUDIT_ID_INVALID = "audit_id_invalid"  # 監査が返した ID が根拠に無い（監査の応答だけの誤り）
 REFERENCE_AMBIGUOUS_ID = "ambiguous_id"  # 省いて書いた ID が複数の chunk に当たり、1 つに決まらない
 REFERENCE_AUDIT_ID_MISSING = "audit_id_missing"  # 監査が ID を返さず、段落も ID を書いていない
-REFERENCE_QUOTE_UNMATCHED = "quote_unmatched"  # ID は決まるが、監査が返した引用がその根拠に無い
 # 段落の分類の照合の結果（ClaimCheck.classification_check。#2625）。
 CLASSIFICATION_NON_CLAIM_MISMATCH = "non_claim_mismatch"  # モデルは not_a_claim、コードは見出し・出典の行と認めない
 CLASSIFICATION_REAUDITED = "reaudited"  # 分類が食い違った段落を、内容で監査し直した判定
@@ -976,20 +947,17 @@ REFERENCE_CHECKS = (
     REFERENCE_AUDIT_ID_INVALID,
     REFERENCE_AMBIGUOUS_ID,
     REFERENCE_AUDIT_ID_MISSING,
-    REFERENCE_QUOTE_UNMATCHED,
 )
 # 監査の応答の側の誤り（回答の引用の誤りではない）。
-AUDIT_REFERENCE_FAILURES = frozenset(
-    {REFERENCE_AUDIT_ID_INVALID, REFERENCE_AMBIGUOUS_ID, REFERENCE_AUDIT_ID_MISSING, REFERENCE_QUOTE_UNMATCHED}
-)
+AUDIT_REFERENCE_FAILURES = frozenset({REFERENCE_AUDIT_ID_INVALID, REFERENCE_AMBIGUOUS_ID, REFERENCE_AUDIT_ID_MISSING})
 
 
 def _unresolved_reference(claim, catalog, *, passage_citations):
     """根拠に結び付けられなかった判定の ID の検査の結果（どちらの側の、どの誤りか）。
 
     段落が書いた ID が根拠に無ければ回答の引用の誤り。そうでなく監査が返した ID が根拠に無ければ監査の応答だけの
-    誤り。どちらも根拠にはあるが省いた ID が 1 つに決まらなければ曖昧。監査が ID を返さず段落も書いていなければ
-    ID の欠落。ID はすべて決まるのに結び付かないのは、監査が返した引用がその根拠に無いとき。
+    誤り。どちらも根拠にはあるが省いた ID が 1 つに決まらなければ曖昧。それ以外は ID の欠落（監査が ID を返さず、
+    段落も書いていない。ID がすべて決まれば結び付くので、ここには来ない）。
     """
     passage = [_token_reference(token, catalog) for token in _passage_tokens(claim)] if passage_citations else []
     audit = [_token_reference(token, catalog) for token in _evidence_tokens(claim, catalog)]
@@ -999,9 +967,7 @@ def _unresolved_reference(claim, catalog, *, passage_citations):
         return REFERENCE_AUDIT_ID_INVALID
     if "ambiguous" in audit or "ambiguous" in passage:
         return REFERENCE_AMBIGUOUS_ID
-    if not audit and not passage:
-        return REFERENCE_AUDIT_ID_MISSING
-    return REFERENCE_QUOTE_UNMATCHED
+    return REFERENCE_AUDIT_ID_MISSING
 
 
 def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, heading_lines=()):

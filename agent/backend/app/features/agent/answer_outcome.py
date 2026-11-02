@@ -34,8 +34,8 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    確かめた段落が 1 つも無い。根拠を読めない `no_evidence` を含む）か、主張の段落をすべて根拠と
    矛盾するとして外した → insufficient_evidence（本文は出す。#2738）。未確認の理由が「確かめが
    終わっていない」（`unassessed`。監査が終わらない・段落の出典が無い）か、監査は根拠で裏付けた
-   （`audit_status=supported`）のに、監査が写した原文・返した根拠の ID を根拠に結び付けられなかった
-   だけ（監査の応答の側の照合の誤り。`quote_unmatched`・未登録の ID。#108）の段落しか無いときは、
+   （`audit_status=supported`）のに、返した根拠の ID を根拠に結び付けられなかった
+   だけ（監査の応答の側の照合の誤り。未登録の ID。#108）の段落しか無いときは、
    根拠が無いことを示していないので拒答に数えず、下の規則で決める（未確認の印つきの回答。#104・
    #108）。回答が書いた ID が根拠に無い（`answer_id_invalid`）・根拠で確かめられない・根拠と矛盾する
    段落は今までどおり数える。
@@ -223,14 +223,12 @@ _RAG_LOOKUP_GUIDES = "rag_lookup_guides"
 _GUIDE_CONDITIONAL_DECISIONS = frozenset({"clarify", "branch"})
 # 最終の検証の印の理由「確かめが終わっていない」（#104。根拠が無いことを示さない）。
 _UNASSESSED = "unassessed"
-# 監査の応答の側の照合の誤りで付く印の理由（引用の原文が根拠に見当たらない・出典を確かめられない。
-# #108）。判定（`claims`）が監査の応答の誤りと決まるときだけ、確かめが終わっていない扱いにする。
-_PENDING_CODES = frozenset({_UNASSESSED, "quote_unmatched", "citation_error"})
+# 監査の応答の側の照合の誤りで付く印の理由（出典を確かめられない。#108）。判定（`claims`）が
+# 監査の応答の誤りと決まるときだけ、確かめが終わっていない扱いにする。
+_PENDING_CODES = frozenset({_UNASSESSED, "citation_error"})
 # RAG の `rag_validate_answer` の、監査の応答の側の照合の誤り（`reference_check`。RAG の
 # `AUDIT_REFERENCE_FAILURES`。回答の引用の誤り `answer_id_invalid` は含めない）。
-_AUDIT_REFERENCE_FAILURES = frozenset(
-    {"quote_unmatched", "audit_id_invalid", "ambiguous_id", "audit_id_missing"}
-)
+_AUDIT_REFERENCE_FAILURES = frozenset({"audit_id_invalid", "ambiguous_id", "audit_id_missing"})
 # RAG の `rag_validate_answer` の、実データの確認を促すだけの段落の判定。
 _DATA_CONFIRMATION = "data_confirmation"
 # 結論の段落を探すときに飛ばす、主張ではない段落の種類（見出し・出典・表の形）。
@@ -366,11 +364,11 @@ def _validation_parts(
 
 
 def _audit_trace_failure(claim: JsonObject) -> bool:
-    """監査は根拠で裏付けた（`audit_status=supported`）のに、監査が写した原文・返した根拠の ID を
+    """監査は根拠で裏付けた（`audit_status=supported`）のに、監査が返した根拠の ID を
     根拠に結び付けられなかっただけの判定か（#108）。
 
-    RAG は、監査が写した原文（support_quote）が結び付けた根拠に無い・監査が根拠に無い ID
-    （ファイル名など）を返したとき、裏付けを採らず `citation_error` にする（`reference_check` が
+    RAG は、監査が根拠に無い ID（ファイル名など）を返したとき、裏付けを採らず
+    `citation_error` にする（`reference_check` が
     監査の応答の側の誤り）。根拠で確かめられない・根拠と矛盾するとは違い、根拠が無いことを
     示さない。回答が書いた ID が根拠に無い（`answer_id_invalid`）は回答の引用の誤りなので含めない。
     """
@@ -385,10 +383,10 @@ def _pending_only(validation: JsonObject | None) -> set[str]:
     """未確認の印の理由が「確かめが終わっていない」だけの段落（#104・#108）。
 
     RAG が段落を監査し終えなかった・段落の出典が無く裏付けを確かめられなかった（`unassessed`）か、
-    監査は裏付けたが引用の照合だけが監査の応答の誤りで通らなかった（`_audit_trace_failure`。印の
-    理由は `quote_unmatched` / `citation_error`）段落。根拠で確かめられない（`unsupported`）・
+    監査は裏付けたが ID の照合だけが監査の応答の誤りで通らなかった（`_audit_trace_failure`。印の
+    理由は `citation_error`）段落。根拠で確かめられない（`unsupported`）・
     根拠を読めない（`no_evidence`）・回答の引用の誤りとは違い、根拠が無いことを示さない。
-    `quote_unmatched` / `citation_error` の印は、その段落の確かめられなかった判定がすべて
+    `citation_error` の印は、その段落の確かめられなかった判定がすべて
     `unassessed` か監査の応答の誤りのときだけ数える。判定が出た（`completed`）ときだけ使う。
     """
     if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
