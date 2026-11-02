@@ -280,10 +280,11 @@ for stuck in UNAVAILABLE TERMINATED INACCESSIBLE STANDBY RESTORE_FAILED SOMETHIN
 done
 
 # 6. 時間切れ: STARTING のまま上限を超えたら止める。
+# 起動の状態遷移は別ケースで検証し、短い上限内に次のpollへ進むことは要求しない。
 case_dir="${task_dir}/timeout"
 write_env "${case_dir}"
 status=0
-run_adb "${case_dir}" "$(state_json '["STOPPED", "STARTING"]')" ensure --timeout-seconds 0.5 --interval-seconds 0.1 \
+run_adb "${case_dir}" "$(state_json '["STARTING"]')" ensure --timeout-seconds 0.5 --interval-seconds 0.1 \
   --script-name /u01/aipoc/no.1-production-ready-suite/platform/deploy/suite-update.sh || status=$?
 [ "${status}" -eq 1 ] || fail "時間切れで 1 にならない（${status}）"
 last_line "${case_dir}" | grep -qF "ADB が 0.5 秒以内に AVAILABLE になりません（今の状態 STARTING）" || fail "時間切れの理由: $(cat "${case_dir}/out.log")"
