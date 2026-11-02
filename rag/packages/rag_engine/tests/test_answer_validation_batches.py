@@ -42,7 +42,6 @@ def _supported(ids: list[str], evidence_id: str) -> ClaimAuditOutput:
                     "status": "supported",
                     "evidence_id": evidence_id,
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "根拠に記載",
                 }
                 for passage_id in ids

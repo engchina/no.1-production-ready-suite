@@ -65,7 +65,7 @@ def test_final_validation_uses_all_paragraphs_of_each_step():
     paragraphs = [FIRST, FIRST + "続けて条件を確認します。"]
     result = validate_guide_steps(
         plan,
-        [{"status": "supported", "answer_quote": text, "support_quote": FIRST, "source_id": "shared"} for text in paragraphs],
+        [{"status": "supported", "answer_quote": text, "source_id": "shared"} for text in paragraphs],
         [{"id": "shared", "text": SPAN["text"]}],
     )
     assert result["steps"][0]["answer_quote"] == "\n".join(paragraphs)

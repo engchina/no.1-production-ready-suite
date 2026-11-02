@@ -231,7 +231,6 @@ def test_system_sections_are_not_claims():
         ("unsupported", "target_mismatch", "target_mismatch"),
         ("unsupported", "value_unbound", "value_unbound"),
         ("citation_error", "", "citation_error"),
-        ("citation_error", "quote_unmatched", "quote_unmatched"),
         ("unassessed", "", "unassessed"),
         ("figure_only", "", "figure_not_read"),
         ("supported", "", ""),
