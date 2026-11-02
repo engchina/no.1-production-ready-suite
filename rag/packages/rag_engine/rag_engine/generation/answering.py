@@ -2660,6 +2660,7 @@ def synthesize_grounded_answer(
     correction_failure = ""
     # 1 組目の生成の出力が契約を満たさず草稿が無い（元の例外の型名。#3849）。関係する資料の記載だけを示す。
     generation_failure = ""
+    generation_failure_stage = "answer.generate"
     # 業務ガイドの手順ごとの根拠と、充足で必須に数えない手順（#2491）。監査・是正・回答の構造で同じ単位を使う。
     # 根拠の画面の図で業務ガイドの条件が決まったら、round ごとにその条件の手順の計画に切り替える（#2689）。
     base_knowledge = runtime_knowledge
@@ -2850,6 +2851,7 @@ def synthesize_grounded_answer(
                 )
                 if invalid_draft:
                     generation_failure = error_name
+                    generation_failure_stage = "evidence.batch_read" if preparing_evidence else "answer.generate"
                     best = (
                         grounded.timed_out_round(
                             question,
@@ -2865,6 +2867,9 @@ def synthesize_grounded_answer(
                     step.result(
                         "モデルの入力予算に必須の根拠または指示が入らないため、生成を送信せず資料の記載を示します"
                         if input_limited
+                        else "資料の分割読取の出力が形式の検査を通らなかったため、"
+                        f"回答文を生成せず、質問に関係する資料の記載だけを示します（{generation_failure}）"
+                        if preparing_evidence
                         else "回答文の生成の出力が形式の検査を通らなかったため、"
                         f"質問に関係する資料の記載だけを示します（{generation_failure}）"
                     )
@@ -3495,7 +3500,7 @@ def synthesize_grounded_answer(
         "rounds": rounds,
         "round_budget": budget.trace(current),
         # 1 組目の生成の出力が契約を満たさず、関係する資料の記載だけを示した（元の例外の型名。#3849）。
-        **({"generation_failure": {"error": generation_failure, "stage": "answer.generate"}} if generation_failure else {}),
+        **({"generation_failure": {"error": generation_failure, "stage": generation_failure_stage}} if generation_failure else {}),
         "llm_calls": sum(r.get("timing", {}).get("generation_calls", 1) + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
