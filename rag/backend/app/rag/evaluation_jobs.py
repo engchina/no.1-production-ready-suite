@@ -22,6 +22,9 @@ golden set の評価（`/run`）は、ケースごとに回答生成（最長
   `evaluation_job_time_limit_seconds`）。評価はケースを 1 件ずつ回答するため、固定の上限では
   推論型のモデル（1 回の回答が数分）の評価が問の数に応じて打ち切られる。上限に達したら、
   実行中のケースを打ち切り、残りのケースは実行せずに失敗として記録して結果を返す（#383 と同じ）。
+- 結果は JSON 型の列に収めて保存する（`app.rag.evaluation_result_storage`）。保存に失敗したら、
+  heartbeat を続けたまま回答の診断を外して書き直し、それでも書けなければ理由を job の失敗として
+  残す（#4103）。全ケースが終わった評価を、heartbeat の途絶（プロセスの停止）に見せない。
 """
 
 from __future__ import annotations
@@ -40,9 +43,10 @@ from typing import Any, Protocol
 
 from pr_backend_core.bounded_calls import BoundedCallAborted
 
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, oracle_error_log_fields
 from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings
 from app.rag.evaluation import EvaluationProgressCallback
+from app.rag.evaluation_result_storage import fit_evaluation_result, without_answer_diagnostics
 from app.rag.request_context import current_audit_request_context
 from app.schemas.evaluation import (
     EvaluationCase,
@@ -58,6 +62,8 @@ logger = logging.getLogger(__name__)
 EVALUATION_JOB_HEARTBEAT_SECONDS = 10.0
 # heartbeat がこれを超えて途絶えた RUNNING の job は、プロセスが止まったとみなして失敗にする（秒）。
 EVALUATION_JOB_STALE_SECONDS = 120.0
+# 完了の保存に失敗したときの書き直しの間隔（秒）。
+EVALUATION_JOB_FINISH_RETRY_SECONDS: tuple[float, ...] = (5.0, 15.0, 30.0, 60.0)
 # 同時に実行する品質評価の job の数の上限（全プロセスの合計）。評価は LLM を何度も呼ぶため、
 # 画面と nightly が同時に動く程度に抑える。
 EVALUATION_JOB_MAX_RUNNING = 2
@@ -119,6 +125,17 @@ def evaluation_job_failed_message(error: BaseException) -> str:
         "品質評価の実行中に予期しないエラーが発生したため、評価を中断しました。"
         "サーバーのログを確認して、もう一度実行してください。"
         f" エラー種別: {type(error).__name__}"
+    )
+
+
+def evaluation_job_save_failed_message(error: BaseException) -> str:
+    """評価は終わったが結果を保存できなかったときの文言（heartbeat の途絶と分ける。#4103）。"""
+    fields = oracle_error_log_fields(error)
+    error_kind = fields["full_code"] or fields["error_type"]
+    return (
+        "品質評価は最後まで実行しましたが、結果をデータベースに保存できませんでした。"
+        "サーバーのログを確認して、もう一度実行してください。"
+        f" エラー種別: {error_kind}"
     )
 
 
@@ -428,11 +445,12 @@ class OracleEvaluationJobStore:
         error_message: str | None,
         evaluation_run_id: str | None,
     ) -> bool:
+        fitted = await asyncio.to_thread(fit_evaluation_result, result) if result else result
         return await self._client.finish_evaluation_job(
             job_id,
             lease_owner=lease_owner,
             status=status,
-            result=result,
+            result=fitted,
             error_message=error_message,
             evaluation_run_id=evaluation_run_id,
         )
@@ -556,12 +574,14 @@ class EvaluationJobService:
         stale_seconds: float = EVALUATION_JOB_STALE_SECONDS,
         max_running: int = EVALUATION_JOB_MAX_RUNNING,
         worker_id: str | None = None,
+        finish_retry_seconds: Iterable[float] = EVALUATION_JOB_FINISH_RETRY_SECONDS,
     ) -> None:
         self._store = store
         self._memory_store: MemoryEvaluationJobStore | None = None
         self._heartbeat_seconds = heartbeat_seconds
         self._stale_seconds = stale_seconds
         self._max_running = max_running
+        self._finish_retry_seconds = tuple(finish_retry_seconds)
         self._fixed_worker_id = worker_id
         self._worker_id: str | None = None
         self._worker_pid: int | None = None
@@ -784,25 +804,70 @@ class EvaluationJobService:
         error_message: str | None,
         evaluation_run_id: str | None,
     ) -> None:
-        try:
-            written = await store.finish(
-                job_id,
-                lease_owner=self.worker_id,
-                status=status,
-                result=result,
-                error_message=error_message,
-                evaluation_run_id=evaluation_run_id,
+        """job を閉じる。書き終わるまで heartbeat は動いている（`_run` の finally で止める）。
+
+        1 回目は結果をそのまま書く。失敗したら、大きさや内容が原因でも通るよう回答の診断を外し、
+        間隔を置いて書き直す（DB の一時的な障害の間も待つ）。
+        """
+        last_error: Exception | None = None
+        for attempt, delay in enumerate((0.0, *self._finish_retry_seconds), start=1):
+            if delay > 0:
+                await asyncio.sleep(delay)
+            payload = (
+                without_answer_diagnostics(result) if attempt > 1 and result is not None else result
             )
-        except Exception as exc:  # noqa: BLE001 - 書けなければ heartbeat の途絶で失敗になる
-            logger.warning(
-                "evaluation_job_finish_failed",
-                extra={"job_id": job_id, "error_type": type(exc).__name__},
+            try:
+                written = await store.finish(
+                    job_id,
+                    lease_owner=self.worker_id,
+                    status=status,
+                    result=payload,
+                    error_message=error_message,
+                    evaluation_run_id=evaluation_run_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - 書き直して、それでも駄目なら理由を残す
+                last_error = exc
+                logger.warning(
+                    "evaluation_job_finish_failed",
+                    extra={"job_id": job_id, "attempt": attempt, **oracle_error_log_fields(exc)},
+                )
+                continue
+            logger.info(
+                "evaluation_job_finished",
+                extra={"job_id": job_id, "status": status, "written": written},
             )
             return
-        logger.info(
-            "evaluation_job_finished",
-            extra={"job_id": job_id, "status": status, "written": written},
+        if status == "SUCCEEDED" and last_error is not None:
+            await self._record_save_failure(store, job_id, last_error, evaluation_run_id)
+        else:
+            logger.error("evaluation_job_finish_abandoned", extra={"job_id": job_id})
+
+    async def _record_save_failure(
+        self,
+        store: EvaluationJobStore,
+        job_id: str,
+        error: Exception,
+        evaluation_run_id: str | None,
+    ) -> None:
+        """結果を書けなかった理由を job に残す。これも書けなければ（DB の障害）ログだけが残る。"""
+        logger.error(
+            "evaluation_job_result_not_saved",
+            extra={"job_id": job_id, **oracle_error_log_fields(error)},
         )
+        try:
+            await store.finish(
+                job_id,
+                lease_owner=self.worker_id,
+                status="FAILED",
+                result=None,
+                error_message=evaluation_job_save_failed_message(error),
+                evaluation_run_id=evaluation_run_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - 行は RUNNING のまま、heartbeat の途絶で失敗になる
+            logger.error(
+                "evaluation_job_finish_abandoned",
+                extra={"job_id": job_id, **oracle_error_log_fields(exc)},
+            )
 
     async def _heartbeat_loop(
         self,
