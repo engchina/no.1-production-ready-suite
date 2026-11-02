@@ -28,11 +28,12 @@ import httpx
 import pytest
 from agents import FunctionTool
 from agents.testing import ScriptedModel, assistant_message, function_call
+from mcp_support import fake_product_mcp
 from pytest import MonkeyPatch
 
 import app.features.agent.tools as tools_module
 from app.features.agent import builtin_runtime, external_writes
-from app.features.agent.builtin_runtime import ModelTarget
+from app.features.agent.builtin_runtime import ModelTarget, tool_failure_payload
 from app.features.agent.config import runtime_config_store
 from app.features.agent.runtime import (
     AgentProfile,
@@ -48,8 +49,10 @@ from app.features.agent.tools import (
     OUTCOME_UNKNOWN,
     ExternalToolError,
     ToolCall,
+    ToolResult,
     mcp_function_name,
 )
+from app.settings import get_settings
 
 SERVER_ID = "test72-ext"
 SKILL_ID = "test72-skill"
@@ -491,3 +494,81 @@ def test_operation_key_is_bound_to_run_user_tool_arguments_and_call() -> None:
         {"call_id": "call-2"},
     ):
         assert external_writes.operation_key(**{**base, **change}) != key
+
+
+# ---- 呼び直しを止めないツールへの案内（#4093） --------------------------------------------------
+
+
+def test_payload_guidance_requires_an_operation_key() -> None:
+    """案内は、承認の対象（ID のある結果不明の書き込み）の結果にだけ付く。"""
+    unknown = {"outcome": OUTCOME_UNKNOWN}
+    without_key = ToolResult(
+        name="nl2sql__nl2sql_query", success=False, error="失敗", error_details=unknown
+    )
+    assert external_writes.unknown_write_operation(without_key) is None
+    assert set(tool_failure_payload(without_key)) == {"error", "error_code"}
+
+    with_key = without_key.model_copy(update={"audit_metadata": {"operation_key": "op_a"}})
+    assert tool_failure_payload(with_key) == {
+        "error": "失敗",
+        "error_code": None,
+        "outcome": OUTCOME_UNKNOWN,
+        "next_step": external_writes.OUTCOME_UNKNOWN_NEXT_STEP,
+        "operation_key": "op_a",
+    }
+
+
+@pytest.mark.parametrize(
+    "failure", ["timeout", 504, "invalid_json"], ids=["timeout", "http_504", "invalid_json"]
+)
+def test_nl2sql_query_gets_no_approval_guidance_and_can_be_called_again(
+    monkeypatch: MonkeyPatch, failure: Any
+) -> None:
+    """`nl2sql_query` の届いた後の失敗: 承認の案内を返さず、同じ引数の呼び直しは承認なしで届く。"""
+    mcp = fake_product_mcp(monkeypatch)
+    mcp.tool_call_statuses.append(failure)
+    function = "nl2sql__nl2sql_query"
+    arguments = {"question": "合成の質問", "profile_id": "profile-sales"}
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=SKILL_ID,
+            name="合成の問い合わせの Skill",
+            instructions="業務データを調べる。",
+            mcp_requirements=[SkillMcpRequirement(server_id="nl2sql", tool_names=["nl2sql_query"])],
+        )
+    )
+    runtime_repository.create_agent(
+        AgentProfile(id=AGENT_ID, name="合成の問い合わせの業務 Agent", skill_ids=[SKILL_ID])
+    )
+    model = _script(
+        monkeypatch,
+        [function_call(function, arguments, call_id="call-1")],
+        [function_call(function, arguments, call_id="call-2")],
+        [assistant_message("合成の回答です。")],
+    )
+    monkeypatch.setattr(get_settings(), "agent_final_validation_enabled", False)
+    try:
+        run_id = _create_run()
+        anyio.run(builtin_runtime.execute_run, run_id)
+        run = runtime_repository.get_run(run_id)
+        first, second = run.steps[:2]
+    finally:
+        with contextlib.suppress(KeyError, ValueError):
+            runtime_repository.delete_agent(AGENT_ID)
+        with contextlib.suppress(KeyError, ValueError):
+            skill_registry.remove(SKILL_ID)
+
+    assert first.tool_result is not None
+    # 通信の層の印は変わらない（再試行の種類は変えない）。ID が無いので結果不明の書き込みではない。
+    assert first.tool_result.error_details["outcome"] == OUTCOME_UNKNOWN
+    assert first.tool_call is not None and first.tool_call.operation_key is None
+    assert not external_writes.step_outcome_unknown(first)
+    told = _tool_output(model, 1, "call-1")
+    assert "error" in told
+    for absent in ("outcome", "next_step", "operation_key"):
+        assert absent not in told
+    # 呼び直しは承認で止まらず、呼び先へ届いて成功する。
+    assert run.status == RunStatus.COMPLETED
+    assert run.approvals == []
+    assert len(mcp.calls_of("nl2sql_query")) == 2
+    assert second.tool_result is not None and second.tool_result.success
