@@ -12,6 +12,7 @@ export {
   INFORMATION_TABLE_ROW_CLASS,
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
+  INFORMATION_CARD_LIST_SCROLL_CLASS,
   INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
 } from "./lib/list-density";
@@ -962,6 +963,7 @@ export {
   type DocumentPreviewKind,
   type DocumentPreviewPagesState,
   type DocumentPreviewProps,
+  type DocumentTextRange,
 } from "./components/document-preview/document-preview";
 
 export { TraceDetails } from "./components/data/trace-details";

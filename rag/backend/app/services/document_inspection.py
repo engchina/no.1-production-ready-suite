@@ -32,10 +32,21 @@ def extraction_window(
     element_id: str | None = None,
     text_offset: int = 0,
     cell_offset: int = 0,
+    scope_element_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """サーバーで絞り、表示対象外の本文・要素・重複metadataを返さない。"""
+    if mode == "navigation":
+        nodes = list(payload.get("navigation") or [])
+        return {
+            "payload": {"navigation": nodes[offset : offset + limit]},
+            "offset": offset,
+            "total": len(nodes),
+            "limit": limit,
+        }
     elements = list(payload.get("elements") or [])
     pages = list(payload.get("pages") or [])
+    if scope_element_ids is not None:
+        elements = [row for row in elements if row.get("element_id") in scope_element_ids]
     if page is not None:
         ids = {
             value
@@ -70,7 +81,7 @@ def extraction_window(
     total = len(elements)
     selected = elements[offset : offset + limit] if mode == "structure" else []
     raw = str(payload.get("display_text") or payload.get("raw_text") or "")
-    if page is not None:
+    if page is not None or scope_element_ids is not None:
         raw = "\n\n".join(str(row.get("text") or "") for row in elements)
     window = text_window(raw, offset if mode == "text" else 0, TEXT_WINDOW)
     view = {
@@ -110,11 +121,11 @@ def extraction_window(
     if isinstance(lineage, Mapping):
         view["parser_artifacts"]["source_derivation"] = dict(lineage)
     tables = list(payload.get("tables") or []) if mode == "structure" else []
-    if page is not None:
+    if page is not None or scope_element_ids is not None:
         tables = [
             row
             for row in tables
-            if row.get("page_number") == page
+            if (page is not None and row.get("page_number") == page)
             or row.get("element_id") in {e.get("element_id") for e in elements}
         ]
     cell_total = sum(len(row.get("cells") or []) for row in tables)
@@ -129,20 +140,22 @@ def extraction_window(
         if selected_cells:
             visible_tables.append({**table, "cells": selected_cells})
     view["tables"] = visible_tables
+    counts = [total, len(tables)]
     for key in ("assets", "fields", "navigation"):
         values = list(payload.get(key) or []) if mode == "structure" else []
-        if page is not None:
-            values = [row for row in values if row.get("page_number") == page]
+        if page is not None or scope_element_ids is not None:
+            values = [
+                row
+                for row in values
+                if (page is not None and row.get("page_number") == page)
+                or row.get("element_id") in {e.get("element_id") for e in elements}
+            ]
         view[key] = values[offset : offset + limit]
+        counts.append(len(values))
     return {
         "payload": view,
         "offset": window["offset"] if mode == "text" else offset,
-        "total": window["total"]
-        if mode == "text"
-        else max(
-            total,
-            *(len(payload.get(key) or []) for key in ("tables", "assets", "fields", "navigation")),
-        ),
+        "total": window["total"] if mode == "text" else max(counts),
         "limit": TEXT_WINDOW if mode == "text" else limit,
         "text_offset": text_offset,
         "text_total": text_total,

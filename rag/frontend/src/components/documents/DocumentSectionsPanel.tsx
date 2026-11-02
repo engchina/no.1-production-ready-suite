@@ -90,12 +90,14 @@ export function DocumentSectionsPanel({
   recipeId,
   summaries,
   onPageSelect,
+  onSectionSelect,
 }: {
   documentId: string;
   recipeId: string | null;
   /** 抽出の章節の要約（ナビゲーション要約が有効なとき。抽出の章節 id → 要約）。 */
   summaries?: ReadonlyMap<string, string>;
   onPageSelect?: (page: number) => void;
+  onSectionSelect?: (section: DocumentSection) => void;
 }) {
   const query = useDocumentSections(documentId, recipeId);
   const save = useSaveDocumentSections(documentId);
@@ -248,8 +250,8 @@ export function DocumentSectionsPanel({
                     <button
                       type="button"
                       className="flex w-full items-start justify-between gap-2 rounded-md px-2 py-1.5 text-left hover:bg-surface-hover disabled:cursor-default disabled:hover:bg-transparent"
-                      disabled={section.page_start === null || !onPageSelect}
-                      onClick={() => section.page_start !== null && onPageSelect?.(section.page_start)}
+                      disabled={section.page_start === null ? !onSectionSelect || !section.source_section_id : !onSectionSelect && !onPageSelect}
+                      onClick={() => onSectionSelect ? onSectionSelect(section) : section.page_start !== null && onPageSelect?.(section.page_start)}
                       aria-label={
                         pages
                           ? t("sections.jump.aria", { title: section.title, pages })

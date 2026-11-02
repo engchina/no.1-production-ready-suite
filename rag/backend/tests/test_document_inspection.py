@@ -144,3 +144,31 @@ def test_inspection_index_requires_stable_element_ids() -> None:
     assert with_inspection_index(legacy) == legacy
     indexed = with_inspection_index({"elements": [{"element_id": "e1", "text": "合成の本文"}]})
     assert indexed["parser_artifacts"]["inspection_index"]["elements"] == {"e1": 0}
+
+
+def test_source_scope_filters_before_paging_and_retains_all_continuations() -> None:
+    payload = fixture_payload()
+    ids = {f"node-{i}" for i in range(31)}
+    first = extraction_window(payload, mode="structure", offset=0, limit=25, scope_element_ids=ids)
+    last = extraction_window(payload, mode="structure", offset=25, limit=25, scope_element_ids=ids)
+    assert first["total"] == last["total"] == 31
+    assert len(first["payload"]["elements"]) == 25
+    assert [e["element_id"] for e in last["payload"]["elements"]] == [
+        f"node-{i}" for i in range(25, 31)
+    ]
+    text = extraction_window(
+        payload, mode="text", offset=0, limit=25, scope_element_ids={"node-30"}
+    )
+    assert "項目30 " in text["payload"]["raw_text"]
+    assert "項目31 " not in text["payload"]["raw_text"]
+
+
+def test_unknown_scope_does_not_fall_back_to_whole_document() -> None:
+    payload = fixture_payload()
+    payload["tables"] = [{"element_id": "node-40", "cells": [{"text": "範囲外"}]}]
+    payload["fields"] = [{"element_id": "node-40", "text": "範囲外"}]
+    result = extraction_window(
+        payload, mode="structure", offset=0, limit=25, scope_element_ids=set()
+    )
+    assert result["total"] == result["cell_total"] == 0
+    assert result["payload"]["elements"] == result["payload"]["tables"] == []

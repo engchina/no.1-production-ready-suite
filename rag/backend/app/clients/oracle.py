@@ -5950,13 +5950,24 @@ class OracleClient:
         limit: int = 25,
         page: int | None = None,
         chunk_id: str | None = None,
+        scope_element_ids: list[str] | None = None,
         extraction_recipe_id: str | None = None,
     ) -> tuple[list[DocumentChunkView], int]:
         """権限と版を保って、必要な範囲の chunk だけを読む。"""
         rows = await self._fetch_all(
             _render_sql(
                 """
-            WITH page_elements AS (
+            WITH element_order AS (
+                SELECT ep.element_id, ep.ordinal FROM rag_document_extractions e,
+                    JSON_TABLE(e.extraction_json, '$.elements[*]' COLUMNS (
+                        ordinal FOR ORDINALITY, element_id VARCHAR2(512) PATH '$.element_id')) ep
+                WHERE e.extraction_recipe_id=:extraction_recipe_id
+                  AND e.document_id=(SELECT document_id FROM rag_chunk_sets
+                                       WHERE chunk_set_id=:chunk_set_id)
+            ), scope_ids AS (
+                SELECT element_id FROM JSON_TABLE(:scope_ids, '$[*]' COLUMNS (
+                    element_id VARCHAR2(512) PATH '$'))
+            ), page_elements AS (
                 SELECT ep.element_id FROM rag_document_extractions e,
                     JSON_TABLE(e.extraction_json, '$.elements[*]' COLUMNS (
                         element_id VARCHAR2(512) PATH '$.element_id',
@@ -5979,26 +5990,31 @@ class OracleClient:
             FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
             WHERE c.chunk_set_id = :chunk_set_id AND {access_predicate}
               AND (:chunk_id IS NULL OR c.chunk_id = :chunk_id)
+              AND (:scope_active=0 OR (SELECT eo.element_id FROM element_order eo
+                       WHERE JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
+                           PASSING eo.element_id AS "eid") OR DBMS_LOB.INSTR(
+                           ',' || JSON_VALUE(c.metadata_json, '$.element_ids'
+                                       RETURNING CLOB) || ',',
+                           ',' || eo.element_id || ',')>0
+                       ORDER BY eo.ordinal FETCH FIRST 1 ROW ONLY)
+                           IN (SELECT element_id FROM scope_ids))
               AND (:page IS NULL OR
                    COALESCE(JSON_VALUE(c.metadata_json, '$.page_start'
                                        RETURNING NUMBER NULL ON ERROR),
-                            JSON_VALUE(c.metadata_json, '$.page_end'
-                                       RETURNING NUMBER NULL ON ERROR),
                             JSON_VALUE(c.metadata_json, '$.page_number'
-                                       RETURNING NUMBER NULL ON ERROR)) <= :page
-                   AND COALESCE(JSON_VALUE(c.metadata_json, '$.page_end'
-                                       RETURNING NUMBER NULL ON ERROR),
-                                JSON_VALUE(c.metadata_json, '$.page_start'
-                                       RETURNING NUMBER NULL ON ERROR),
-                                JSON_VALUE(c.metadata_json, '$.page_number'
-                                       RETURNING NUMBER NULL ON ERROR)) >= :page
+                                       RETURNING NUMBER NULL ON ERROR))=:page
                    OR (JSON_VALUE(c.metadata_json, '$.page_start'
                                        RETURNING NUMBER NULL ON ERROR) IS NULL
-                       AND EXISTS (SELECT 1 FROM page_elements pe
-                           WHERE (JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
-                               PASSING pe.element_id AS "eid") OR DBMS_LOB.INSTR(
+                       AND JSON_VALUE(c.metadata_json, '$.page_number'
+                                       RETURNING NUMBER NULL ON ERROR) IS NULL
+                       AND (SELECT eo.element_id FROM element_order eo
+                           WHERE JSON_EXISTS(c.metadata_json, '$.element_ids[*]?(@ == $eid)'
+                               PASSING eo.element_id AS "eid") OR DBMS_LOB.INSTR(
                                ',' || JSON_VALUE(c.metadata_json, '$.element_ids'
-                                   RETURNING CLOB) || ',', ',' || pe.element_id || ',') > 0))))
+                                       RETURNING CLOB) || ',',
+                               ',' || eo.element_id || ',')>0
+                           ORDER BY eo.ordinal FETCH FIRST 1 ROW ONLY)
+                           IN (SELECT element_id FROM page_elements)))
             ORDER BY c.chunk_index, c.chunk_id
             OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
             """,
@@ -6010,6 +6026,8 @@ class OracleClient:
                     "offset": offset,
                     "limit": limit,
                     "page": page,
+                    "scope_active": int(scope_element_ids is not None),
+                    "scope_ids": json.dumps(scope_element_ids or []),
                     "chunk_id": chunk_id,
                     "extraction_recipe_id": extraction_recipe_id,
                 }
