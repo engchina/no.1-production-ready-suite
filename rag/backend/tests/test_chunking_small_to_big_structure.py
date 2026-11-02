@@ -23,7 +23,9 @@ from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import (
     PARENT_SOURCE_STRUCTURE,
     SMALL_TO_BIG_PARENT_GROUP_KIND,
+    _split_headings,
     build_parent_child_chunks,
+    build_structure_parent_child_chunks,
     small_to_big_parent_source,
 )
 from app.rag.chunking_strategy import SmallToBigParams
@@ -262,3 +264,109 @@ def test_answer_restores_parent_text_for_non_layout_children() -> None:
     (parent,) = _stored_parents([child], cast(Any, _State()))
     assert parent.text == hit.metadata["parent_text"]
     assert SENTENCE in parent.text and hit.text in parent.text
+
+
+def _heading_chain(count: int, *, body: str | None = "合成の本文です。") -> StructuredExtraction:
+    """同じ節の見出しだけの要素が続く文書（同じ行の繰り返しなど）。"""
+    line = "合成の短い見出しの行です。"
+    elements = [
+        DocumentElement(kind="title", text=line, order=i, element_id=f"e{i}", section_path=[line])
+        for i in range(count)
+    ]
+    if body is not None:
+        elements.append(
+            DocumentElement(
+                kind="text", text=body, order=count, element_id=f"e{count}", section_path=[line]
+            )
+        )
+    return StructuredExtraction(
+        raw_text="\n\n".join(element.text for element in elements), elements=elements
+    )
+
+
+def test_heading_chain_is_kept_within_child_target() -> None:
+    """見出しの合計は子の目標まで。残りは目標までの見出しだけの子にする（#4128）。"""
+    params = SmallToBigParams(child_target_chars=200)
+    extraction = _heading_chain(650)
+    chunks = build_structure_parent_child_chunks(extraction, params=params)
+    assert len(chunks) > 1
+    body_chunk = chunks[-1]
+    assert body_chunk.text.endswith("合成の本文です。")
+    # 付ける見出しの合計が目標まで。本文の子も同じ目標なので、合計は目標の 2 倍を超えない。
+    assert len(body_chunk.text) <= 2 * 200 + 1
+    assert all(len(chunk.text) <= 200 for chunk in chunks[:-1])
+    # どの要素も失わず、順番も変わらない。
+    element_ids = [
+        element_id
+        for chunk in chunks
+        for element_id in str(chunk.metadata["element_ids"]).split(",")
+    ]
+    assert element_ids == [f"e{i}" for i in range(651)]
+    for chunk in chunks:
+        expected = "within_limit" if len(chunk.text) <= 200 else "overflow"
+        assert chunk.metadata["chunk_size_compliance"] == expected
+
+
+def test_compliance_records_length_after_attaching_heading() -> None:
+    params = SmallToBigParams(child_target_chars=200)
+    line = "合成の見出し" * 4
+    long_body = "合成の本文です。" * 24  # 192 文字。見出しを足すと目標を超える。
+    extraction = StructuredExtraction(
+        raw_text=f"{line}\n\n{long_body}",
+        elements=[
+            DocumentElement(kind="title", text=line, order=0, element_id="h", section_path=[line]),
+            DocumentElement(
+                kind="text", text=long_body, order=1, element_id="b", section_path=[line]
+            ),
+        ],
+    )
+    chunk = build_structure_parent_child_chunks(extraction, params=params)[0]
+    assert len(chunk.text) > 200
+    assert chunk.metadata["chunk_size_compliance"] == "overflow"
+
+
+def _heading(text: str) -> Chunk:
+    return Chunk(text=text, index=0, start_offset=0, end_offset=len(text), metadata={})
+
+
+def test_nearest_heading_is_always_attached_even_when_longer_than_target() -> None:
+    headings = [_heading("前の見出し"), _heading("合" * 80)]
+    attached, overflow = _split_headings(headings, 50)
+    assert attached == headings[1:]
+    assert overflow == headings[:1]
+
+
+def test_all_headings_are_attached_when_they_fit() -> None:
+    headings = [_heading("見出し A"), _heading("見出し B")]
+    assert _split_headings(headings, 50) == (headings, [])
+
+
+def test_distinct_headings_and_normal_sections_are_unchanged() -> None:
+    params = SmallToBigParams(child_target_chars=1000)
+    elements = []
+    for i in range(20):
+        path = [f"合成の節 {i}"]
+        elements.append(
+            DocumentElement(
+                kind="title", text=path[0], order=2 * i, element_id=f"h{i}", section_path=path
+            )
+        )
+        elements.append(
+            DocumentElement(
+                kind="text",
+                text=f"合成の本文 {i}。",
+                order=2 * i + 1,
+                element_id=f"b{i}",
+                section_path=path,
+            )
+        )
+    chunks = build_structure_parent_child_chunks(
+        StructuredExtraction(
+            raw_text="\n\n".join(element.text for element in elements), elements=elements
+        ),
+        params=params,
+    )
+    assert [chunk.text for chunk in chunks] == [
+        f"合成の節 {i}\n合成の本文 {i}。" for i in range(20)
+    ]
+    assert all(chunk.metadata["chunk_size_compliance"] == "within_limit" for chunk in chunks)
