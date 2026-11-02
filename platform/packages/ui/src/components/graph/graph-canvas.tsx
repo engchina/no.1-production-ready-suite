@@ -20,6 +20,12 @@ import { SearchField } from "../ui/search-field";
 
 export { ReactFlowProvider as GraphCanvasProvider };
 
+/**
+ * 小地図の大きさ（10rem × 6.5rem。ルート 14px）。React Flow は `style` の幅・高さで viewBox を割り算するので、
+ * 数値で渡す（"10rem" のような文字列では viewBox が NaN になり、ノードの無い四角になる。#4078）。
+ */
+const GRAPH_MINIMAP_SIZE = { width: 140, height: 91 } as const;
+
 export function GraphCanvasFrame({
   compact = false,
   className,
@@ -75,7 +81,7 @@ export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge 
         nodeStrokeColor="var(--color-border-control)"
         {...miniMap}
         className={cn("hidden sm:block", miniMap.className)}
-        style={{ width: "10rem", height: "6.5rem", ...miniMap.style }}
+        style={{ ...miniMap.style, ...GRAPH_MINIMAP_SIZE }}
         ariaLabel={miniMap.ariaLabel ?? miniMap["aria-label"] ?? GRAPH_CANVAS_JA["minimap.ariaLabel"]}
       /> : null}
       {children}
@@ -171,6 +177,14 @@ export const GRAPH_DEFAULT_NODE_SIZE = { width: 256, height: 88 } as const;
 
 export function GraphNodeFrame({ selected, matched, children, className, ...props }: ComponentProps<"div"> & { selected?: boolean; matched?: boolean; children: ReactNode }) {
   return <div {...props} className={cn("min-h-[5.5rem] w-64 rounded-lg border bg-surface px-3 py-2 text-sm leading-normal text-fg shadow-sm", selected ? "border-accent-fg" : "border-border-control", matched && "outline-2 outline-accent-fg", className)}>{children}</div>;
+}
+
+/** ノードの主な表示名と、その上の補助の文脈。文脈は 1 行、主な表示名は 2 行まで。 */
+export function GraphNodeLabel({ primary, context, technical = false }: { primary: string; context?: string; technical?: boolean }) {
+  return <>
+    {context ? <div className="line-clamp-1 text-xs text-fg-muted">{context}</div> : null}
+    <div className={cn("line-clamp-2 font-medium", technical && "font-mono font-normal")}>{primary}</div>
+  </>;
 }
 
 export function GraphLegend({

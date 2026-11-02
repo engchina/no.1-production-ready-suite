@@ -6,7 +6,7 @@ import pytest
 
 from app.clients.graph_reference_store import GraphReferenceStore
 from app.clients.oracle import OracleClient
-from app.rag.graph_index import _graph_id
+from app.rag.graph_index import _clean_label, _graph_id, graph_section_node_id
 from app.rag.structure_index import rebuild_document_structure_index
 from tests.test_graph_expansion_oracle import _chunks, _indexed_document
 
@@ -71,3 +71,67 @@ async def test_cross_document_reference_rebuild_and_directional_pages() -> None:
     other = await client.create_knowledge_base(name=f"synthetic-other-{uuid4().hex[:8]}")
     with pytest.raises(KeyError):
         await store.page(other.id, source_node, direction="outgoing", offset=0, limit=25)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_long_section_paths_keep_distinct_nodes_and_references() -> None:
+    """#4051: 先頭が共通の長いパスでも、補建後のノード・参照の辺・参照元が章節ごとに分かれる。"""
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-long-path-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    common = "合成の長い親階層" * 80
+    first, second = f"{common} > 第1条", f"{common} > 第2条"
+    assert first[:512] == second[:512]
+    chunks = _chunks([(first, 1), (second, 1)])
+    chunks[0].text = "第2条を参照する。"
+    chunks[1].text = "合成の本文。"
+    document_id, chunk_set_id = await _indexed_document(
+        client,
+        file_name="synthetic-long-path.pdf",
+        chunks=chunks,
+        knowledge_base_id=kb.id,
+    )
+    await rebuild_document_structure_index(client, kb.id, document_id)
+    rows = await client._fetch_all(
+        "SELECT entity_id,canonical_name FROM rag_graph_entities WHERE chunk_set_id=:id",
+        {"id": chunk_set_id},
+    )
+    names = {str(row["entity_id"]): str(row["canonical_name"]) for row in rows}
+    first_node = graph_section_node_id(chunk_set_id, kb.id, first)
+    second_node = graph_section_node_id(chunk_set_id, kb.id, second)
+    # SQL の表示名の式と Python の表示名が同じ規則であることも、辺の結合で確かめる。
+    assert names[first_node] == _clean_label(first)
+    assert names[second_node] == _clean_label(second)
+
+    store = GraphReferenceStore(client)
+    edges = await store.visible_edges(kb.id, [first_node, second_node], limit=25)
+    assert [(edge["source"], edge["target"]) for edge in edges] == [(first_node, second_node)]
+    outgoing = await store.page(kb.id, first_node, direction="outgoing", offset=0, limit=25)
+    assert [item["target"]["id"] for item in outgoing["items"]] == [second_node]
+    incoming = await store.page(kb.id, second_node, direction="incoming", offset=0, limit=25)
+    assert [item["source"]["id"] for item in incoming["items"]] == [first_node]
+    assert (await store.page(kb.id, first_node, direction="incoming", offset=0, limit=25))[
+        "items"
+    ] == []
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_rebuild_reads_section_paths_over_4000_bytes() -> None:
+    """補建の読み取りで長いパスを失わない（同一性が取込と変わらない）。"""
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-long-read-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    path = "合成の長い親階層" * 170 + " > 第1条"
+    assert len(path.encode()) > 4000
+    chunks = _chunks([(path, 1)])
+    chunks[0].text = "合成の本文。"
+    document_id, chunk_set_id = await _indexed_document(
+        client,
+        file_name="synthetic-long-read.pdf",
+        chunks=chunks,
+        knowledge_base_id=kb.id,
+    )
+    await rebuild_document_structure_index(client, kb.id, document_id)
+    assert await GraphReferenceStore(client).node(
+        kb.id, graph_section_node_id(chunk_set_id, kb.id, path)
+    )

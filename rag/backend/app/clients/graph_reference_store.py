@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import re
 from collections import defaultdict
 from collections.abc import Mapping
 from typing import Any
 
+from app.rag.graph_index import graph_display_name_sql
 from app.rag.reference_records import GraphReferenceRecord
 from app.rag.reference_resolution import ReferenceDocument
 
@@ -193,9 +193,11 @@ class GraphReferenceStore:
                 where += """ AND EXISTS (SELECT 1 FROM rag_graph_entity_chunks nc
                     WHERE nc.entity_id=:node_id AND nc.chunk_id=r.source_chunk_id)"""
             else:
-                # 旧図のノードは表示名をキーにしていたため、表示上の同じ集合を返す。
-                where += """ AND SUBSTR(TRIM(REGEXP_REPLACE(r.target_section_path,
-                    '[[:space:]]+', ' ')),1,512)=:node_path"""
+                # 図のノードは完全なパスを持たず表示名だけを保存するので、表示名で照合する。
+                # 補建前の図は先頭で切り詰めた表示名を持つため、その集合も返す。
+                where += f""" AND ({graph_display_name_sql("r.target_section_path")}=:node_path
+                    OR SUBSTR(TRIM(REGEXP_REPLACE(r.target_section_path,
+                    '[[:space:]]+', ' ')),1,512)=:node_path)"""
         if direction == "incoming":
             where += " AND t.document_id IS NOT NULL AND ts.chunk_set_id IS NOT NULL"
         location_binds: dict[str, Any] = {}
@@ -243,7 +245,7 @@ class GraphReferenceStore:
     def _view(kb_id: str, row: Any) -> dict[str, Any]:
         from rag_parser_core.language import current_pack
 
-        from app.rag.graph_index import _graph_id
+        from app.rag.graph_index import graph_section_node_id
 
         def endpoint(side: str) -> dict[str, Any]:
             path = row.get(f"{side}_section_path")
@@ -251,9 +253,7 @@ class GraphReferenceStore:
                 path or f"{current_pack().text('labels', 'whole_document')}: {row[f'{side}_name']}"
             )
             return {
-                "id": _graph_id(
-                    "entity", row[f"{side}_chunk_set_id"], kb_id, re.sub(r"\s+", " ", name).strip()
-                ),
+                "id": graph_section_node_id(row[f"{side}_chunk_set_id"], kb_id, name),
                 "name": name,
                 "type": "section" if path else "document",
                 "confidence": 1.0,
@@ -301,12 +301,11 @@ class GraphReferenceStore:
             JOIN rag_documents t ON t.document_id=r.target_document_id
             JOIN rag_graph_entities se ON se.chunk_set_id=ss.chunk_set_id
                 AND se.knowledge_base_id=r.knowledge_base_id
-                AND (se.canonical_name=r.source_section_path
+                AND (se.canonical_name={graph_display_name_sql("r.source_section_path")}
                     OR (r.source_section_path IS NULL AND se.entity_type='document'))
             JOIN rag_graph_entities te ON te.chunk_set_id=ts.chunk_set_id
                 AND te.knowledge_base_id=r.knowledge_base_id
-                AND (te.canonical_name=TRIM(REGEXP_REPLACE(
-                    r.target_section_path,'[[:space:]]+', ' '))
+                AND (te.canonical_name={graph_display_name_sql("r.target_section_path")}
                     OR (r.target_section_path IS NULL AND te.entity_type='document'))
             WHERE r.knowledge_base_id=:kb AND r.resolution_status='resolved'
             AND {source_sql} AND {target_sql}

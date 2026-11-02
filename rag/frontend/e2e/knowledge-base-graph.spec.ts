@@ -301,11 +301,57 @@ for (const count of [30, 80]) {
     await graph.getByRole("button", { name: "全体表示", exact: true }).click();
     await expect.poll(fits).toBe(true);
     await expect(graph.locator(".react-flow__edge-text").first()).toHaveText("含む");
+    // 小地図の viewBox は有限の値で、ノードが描かれる（#4078）。375px は小地図を出さない。
+    const minimap = graph.locator(".react-flow__minimap svg");
+    await expect(graph.locator(".react-flow__minimap-node")).toHaveCount(count);
+    const viewBox = (await minimap.getAttribute("viewBox"))!.split(" ").map(Number);
+    expect(viewBox).toHaveLength(4);
+    expect(viewBox.every(Number.isFinite)).toBe(true);
+    expect(viewBox[2]).toBeGreaterThan(0);
+    expect(viewBox[3]).toBeGreaterThan(0);
+    if (page.viewportSize()!.width >= 640) await expect(minimap).toBeVisible();
+    else await expect(minimap).toBeHidden();
     await graph.scrollIntoViewIfNeeded();
     await page.screenshot({ path: test.info().outputPath(`graph-${count}.png`) });
     await expectNoPageOverflow(page);
   });
 }
+
+test("長い共通の接頭辞を持つ章節は末尾の見出しで区別でき、完全な名前を詳細で読める", { tag: "@responsive" }, async ({ page }) => {
+  // #4079: 文書名が長いと、先頭から出す表示は行数の上限で同じ文字列に見えていた。
+  const common = "合成の長い文書名".repeat(40);
+  const paths = [`${common} > 第1章 > 第1条`, `${common} > 第1章 > 第2条`, `${common} > 第2章 > 第1条`];
+  await mockKb(page, {
+    status: "ok",
+    nodes: [
+      { id: "doc", name: `文書全体: ${common}`, type: "document", confidence: 1 },
+      ...paths.map((name, index) => ({ id: `section-${index}`, name, type: "section", confidence: 1 })),
+    ],
+    edges: paths.map((_, index) => ({ id: `edge-${index}`, source: "doc", target: `section-${index}`, type: "contains", confidence: 1 })),
+    truncated: false,
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const graph = page.locator("#knowledge-base-graph");
+  const node = (index: number) => graph.locator(`.react-flow__node[data-id="section-${index}"]`);
+  await expect(node(0)).toBeVisible();
+
+  const label = async (index: number) => (await node(index).innerText()).split("\n").slice(1).join(" / ");
+  expect(await label(0)).toBe("… > 第1章 / 第1条");
+  expect(await label(1)).toBe("… > 第1章 / 第2条");
+  expect(await label(2)).toBe("… > 第2章 / 第1条");
+
+  // 完全な名前は title（ポインター）と選択の詳細（タッチ・キーボード）で読める。
+  await expect(node(1).locator("[title]")).toHaveAttribute("title", paths[1]!);
+  await expect(node(1)).toHaveAttribute("aria-label", `章・節：${paths[1]}`);
+  await node(1).focus();
+  await page.keyboard.press("Enter");
+  await expect(graph.getByRole("region", { name: "選択したノード" }).getByText(paths[1]!, { exact: true })).toBeVisible();
+
+  // 文書の節点はファイル名で、階層のパスとして分けない。
+  await expect(graph.locator('.react-flow__node[data-id="doc"] .line-clamp-2')).toHaveText(`文書全体: ${common}`);
+  await expectNoPageOverflow(page);
+});
 
 test("構造索引は保存と補建を分け、停止・再開の状態を保持する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });

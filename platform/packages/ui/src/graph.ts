@@ -6,6 +6,7 @@ export {
   GraphCanvasControls,
   GraphSearchNavigation,
   GraphNodeFrame,
+  GraphNodeLabel,
   GRAPH_DEFAULT_NODE_SIZE,
   GraphLegend,
   GraphSelectionDetails,
@@ -13,4 +14,5 @@ export {
   type GraphSearchLabels,
 } from "./components/graph/graph-canvas";
 export { applyGraphNodeDimensionChanges, type GraphNodeDimensions, layoutGraphHierarchy, type GraphPoint, type GraphLayoutInput, type GraphLayoutResult, type GraphLayoutPositions, type GraphLayoutStrategy } from "./lib/graph-layout";
+export { graphPathLabel, type GraphPathLabel } from "./lib/graph-path-label";
 export { normalizeGraphSearch } from "./lib/graph-search";

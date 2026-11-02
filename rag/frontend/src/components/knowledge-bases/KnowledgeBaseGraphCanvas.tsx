@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Handle, MarkerType, Position, useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
 import { FileText, Heading, Image, Layers, Table2, type LucideIcon } from "lucide-react";
 import { SelectField } from "@production-ready/ui";
-import { GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, GraphLegend, GraphNodeFrame, GraphSearchNavigation, GraphSelectionDetails, GRAPH_DEFAULT_NODE_SIZE, applyGraphNodeDimensionChanges, type GraphNodeDimensions, layoutGraphHierarchy, normalizeGraphSearch } from "@production-ready/ui/graph";
+import { GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, GraphLegend, GraphNodeFrame, GraphNodeLabel, GraphSearchNavigation, GraphSelectionDetails, GRAPH_DEFAULT_NODE_SIZE, applyGraphNodeDimensionChanges, graphPathLabel, type GraphNodeDimensions, layoutGraphHierarchy, normalizeGraphSearch } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 
 import type { GraphReferenceItem, KnowledgeBaseGraphData, KnowledgeBaseGraphNode } from "@/lib/api";
@@ -27,13 +27,18 @@ const KIND_ICONS: Record<string, LucideIcon> = { document: FileText, section: He
 function edgeLabel(kind: string | null) {
   return t(kind === "contains" ? "knowledgeBases.graph.contains" : kind === "references" ? "knowledgeBases.graph.references" : "knowledgeBases.graph.related");
 }
+const SECTION_PATH_SEPARATOR = " > ";
+function nodeLabel(item: KnowledgeBaseGraphNode) {
+  // 文書の節点の名前はファイル名で、階層のパスではない。
+  return item.name && item.type !== "document" ? graphPathLabel(item.name, SECTION_PATH_SEPARATOR) : { primary: item.name || item.id };
+}
 function StructureNode({ data, selected }: NodeProps<Node<StructureNodeData>>) {
   const Icon = KIND_ICONS[data.item.type ?? ""] ?? Layers;
   return <GraphNodeFrame selected={selected} matched={data.matched} title={data.item.name || data.item.id}>
     <Handle type="target" position={Position.Left} className="invisible" />
     <div className="mb-1 flex items-center gap-1 text-xs text-fg-muted"><Icon aria-hidden size={14} />{kindLabel(data.item.type)}</div>
     {data.item.document_name ? <div className="line-clamp-1 text-xs text-fg-muted">{data.item.document_name}</div> : null}
-    <div className={data.item.name ? "line-clamp-2 font-medium" : "line-clamp-2 font-mono"}>{data.item.name || data.item.id}</div>
+    <GraphNodeLabel {...nodeLabel(data.item)} technical={!data.item.name} />
     <Handle type="source" position={Position.Right} className="invisible" />
   </GraphNodeFrame>;
 }
