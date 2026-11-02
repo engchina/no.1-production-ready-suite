@@ -82,6 +82,17 @@ def _extraction(body_records: list[dict[str, object]] | None = None) -> Structur
     )
 
 
+def test_small_to_big_keeps_restored_fraction_in_chunk_and_search_text() -> None:
+    """解析で戻した分数の表記が、索引の本文と検索の本文で別の行に分かれない（#4140）。"""
+    formula = "C = A * 1/(1-x)"
+    extraction = _extraction([_record(3, "Formula", formula, [50, 180, 900, 240])])
+
+    chunks = build_parent_child_chunks(extraction, source_name="source.pdf")
+
+    body = next(chunk for chunk in chunks if formula in chunk.text)
+    assert formula in str(body.metadata[ENGINE_SEARCH_TEXT_KEY])
+
+
 def test_small_to_big_chunks_keep_parent_search_text_and_element_refs() -> None:
     chunks = build_parent_child_chunks(_extraction(), source_name="manual.pdf")
 

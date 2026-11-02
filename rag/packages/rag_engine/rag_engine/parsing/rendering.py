@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import ctypes
 import shutil
+from collections.abc import Collection, Iterable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import RLock
-from typing import Literal
+from typing import Any, Literal
 
 from rag_engine.models.layout import PageImage
+from rag_engine.parsing.math_layout import PdfGlyph, PdfRule
 
 SourceFileKind = Literal["pdf", "image"]
 
@@ -19,6 +22,11 @@ MAX_IMAGE_PDF_PAGE_DIMENSION = 14400.0
 # 同じ process の中の PDFium の呼び出し（開く・描く・読む・閉じる）は、すべてこの 1 つの lock の中で行う
 # （#3362）。rag_engine の外（RAG backend など）から呼ぶときも、この lock を使う。
 PDFIUM_LOCK = RLock()
+# 分数の線や罫線として見る、細い線の太さの上限と長さの下限（pt。#4140）。
+_THIN_RULE_POINTS = 2.0
+_MIN_RULE_LENGTH_POINTS = 3.0
+# 横書きの字とみなす回転の上限（radian）。PDFium は回転が分からない字に -1 を返す。
+_MAX_HORIZONTAL_ANGLE = 0.01
 
 
 def source_file_kind(source_path: str | Path) -> SourceFileKind:
@@ -190,6 +198,85 @@ def pdf_image_object_bounds(pdf_path: str | Path, page_number: int) -> list[tupl
                 page.close()
         finally:
             document.close()
+
+
+def pdf_math_page_contents(
+    pdf_path: str | Path, page_numbers: Iterable[int], *, always_read_glyphs: Collection[int] = ()
+) -> dict[int, tuple[list[PdfGlyph], list[PdfRule], list[PdfRule]]]:
+    """ページごとの text layer の字と、細い横線・縦線（PDF point。左下原点。#4140）。
+
+    細い線が無く ``always_read_glyphs`` にも無いページは字を読まない（空の字を返す）。ページの内容に
+    直接描いた線だけを見る（フォーム XObject の中の座標はページの座標とは限らない）。
+    """
+    pdfium = _import_pdfium()
+    import pypdfium2.raw as pdfium_c
+
+    contents: dict[int, tuple[list[PdfGlyph], list[PdfRule], list[PdfRule]]] = {}
+    with PDFIUM_LOCK:
+        document = pdfium.PdfDocument(str(pdf_path))
+        try:
+            for page_number in page_numbers:
+                page = document[page_number - 1]
+                try:
+                    horizontal, vertical = _pdf_thin_rules(page, pdfium_c)
+                    read_glyphs = horizontal or page_number in always_read_glyphs
+                    glyphs = _pdf_page_glyphs(page, pdfium_c) if read_glyphs else []
+                    contents[page_number] = (glyphs, horizontal, vertical)
+                finally:
+                    page.close()
+        finally:
+            document.close()
+    return contents
+
+
+def _pdf_thin_rules(page: Any, pdfium_c: Any) -> tuple[list[PdfRule], list[PdfRule]]:
+    horizontal: list[PdfRule] = []
+    vertical: list[PdfRule] = []
+    for path in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_PATH], max_depth=0):
+        left, bottom, right, top = (float(value) for value in path.get_bounds())
+        width, height = right - left, top - bottom
+        if height <= _THIN_RULE_POINTS and width >= _MIN_RULE_LENGTH_POINTS:
+            horizontal.append(PdfRule((top + bottom) / 2, left, right))
+        elif width <= _THIN_RULE_POINTS and height >= _MIN_RULE_LENGTH_POINTS:
+            vertical.append(PdfRule((left + right) / 2, bottom, top))
+    return horizontal, vertical
+
+
+def _pdf_page_glyphs(page: Any, pdfium_c: Any) -> list[PdfGlyph]:
+    textpage = page.get_textpage()
+    try:
+        glyphs: list[PdfGlyph] = []
+        origin_x, origin_y = ctypes.c_double(), ctypes.c_double()
+        space_before = False
+        for index in range(textpage.count_chars()):
+            codepoint = pdfium_c.FPDFText_GetUnicode(textpage, index)
+            text = chr(codepoint) if codepoint else ""
+            if text.isspace():
+                # 改行は別の行なので、同じ行の字の間の空白としない。
+                space_before = text not in "\r\n"
+                continue
+            if not text.isprintable() or pdfium_c.FPDFText_IsGenerated(textpage, index) == 1:
+                continue
+            angle = pdfium_c.FPDFText_GetCharAngle(textpage, index)
+            if angle != -1 and abs(angle) > _MAX_HORIZONTAL_ANGLE:
+                continue  # 回転した字は分数の配置の判定に使わない。
+            if not pdfium_c.FPDFText_GetCharOrigin(textpage, index, origin_x, origin_y):
+                continue
+            left, _bottom, right, _top = textpage.get_charbox(index)
+            glyphs.append(
+                PdfGlyph(
+                    text=text,
+                    left=float(left),
+                    right=float(right),
+                    baseline=float(origin_y.value),
+                    size=float(pdfium_c.FPDFText_GetFontSize(textpage, index)),
+                    space_before=space_before,
+                )
+            )
+            space_before = False
+        return glyphs
+    finally:
+        textpage.close()
 
 
 def copy_pdf_to_run(pdf_path: str | Path, output_dir: str | Path) -> str:

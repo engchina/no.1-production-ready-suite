@@ -113,11 +113,13 @@ async def test_cached_full_artifact_document_mismatch_is_not_reused() -> None:
 
 def _full_artifact_case(
     parse_key: str | None,
+    *,
+    schema_version: int = ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION,
 ) -> tuple[IngestionPipeline, IngestionSegment]:
     document_id = "doc-full-parse-key"
     cached_path = "local://artifacts/extractions/doc-full-parse-key/full.json"
     artifacts: dict[str, Any] = {
-        "extraction_artifact_schema_version": ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION,
+        "extraction_artifact_schema_version": schema_version,
         "extraction_artifact_kind": "full",
         "extraction_artifact_document_id": document_id,
         "extraction_artifact_trace_id": "trace-previous",
@@ -170,6 +172,14 @@ async def test_cached_full_artifact_with_other_parse_key_is_not_reused() -> None
 async def test_cached_full_artifact_without_parse_key_is_not_reused() -> None:
     """鍵を持たない(#2076 の前の)artifact は、入力が同じか分からないため再利用しない。"""
     pipeline, segment = _full_artifact_case(None)
+
+    assert await pipeline._load_cached_full_extraction([segment], parse_key="key-a") is None
+
+
+async def test_cached_full_artifact_of_older_version_is_not_reused() -> None:
+    """解析の出力を変えた版の前の結果は、同じ入力でも再利用せず解析し直す(#4140)。"""
+    current = ingestion_module.EXTRACTION_ARTIFACT_SCHEMA_VERSION
+    pipeline, segment = _full_artifact_case("key-a", schema_version=current - 1)
 
     assert await pipeline._load_cached_full_extraction([segment], parse_key="key-a") is None
 
