@@ -138,10 +138,10 @@ _LABELLED_PREFIXES = (
 # ページの無い文書（Markdown・テキスト・HTML・メール）、不明（警告しない）。
 DocumentFormat = Literal["paged", "slides", "sheet", "text", "unknown"]
 _FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
-    **dict.fromkeys((".pdf", ".docx", ".doc", ".rtf", ".odt"), "paged"),
+    **dict.fromkeys((".pdf", ".docx", ".doc", ".dotx", ".dotm", ".rtf", ".odt"), "paged"),
     **dict.fromkeys((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"), "paged"),
-    **dict.fromkeys((".pptx", ".ppt", ".odp"), "slides"),
-    **dict.fromkeys((".xlsx", ".xlsm", ".xls", ".ods", ".csv", ".tsv"), "sheet"),
+    **dict.fromkeys((".pptx", ".ppt", ".potx", ".potm", ".odp"), "slides"),
+    **dict.fromkeys((".xlsx", ".xlsm", ".xls", ".xltx", ".xltm", ".ods", ".csv", ".tsv"), "sheet"),
     **dict.fromkeys(
         (
             *(".md", ".markdown", ".rst", ".org", ".txt", ".text"),
@@ -154,11 +154,17 @@ _FORMAT_LABELS: dict[str, str] = {
     ".pdf": "PDF",
     ".docx": "Word",
     ".doc": "Word",
+    ".dotx": "Word",
+    ".dotm": "Word",
     ".pptx": "PowerPoint",
     ".ppt": "PowerPoint",
+    ".potx": "PowerPoint",
+    ".potm": "PowerPoint",
     ".xlsx": "表計算（Excel）",
     ".xlsm": "表計算（Excel）",
     ".xls": "表計算（Excel）",
+    ".xltx": "表計算（Excel）",
+    ".xltm": "表計算（Excel）",
     ".csv": "表計算（CSV）",
     ".tsv": "表計算（TSV）",
     ".md": "Markdown",

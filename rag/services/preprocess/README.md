@@ -6,10 +6,10 @@ parse の **前** に原本を一度だけ canonical な中間物へ変換する
 
 | サービス | profile | 画面の名前 | 変換 | 主依存 | 既定 URL |
 |---|---|---|---|---|---|
-| [office_to_pdf](./office_to_pdf) | `office_to_pdf` | Office→PDF | Word・PowerPoint(.doc/.docx/.docm/.ppt/.pptx/.pptm)と ODT・RTF(.odt/.rtf。#3351)→ PDF。Excel は対象外 | LibreOffice | `http://127.0.0.1:18010` |
+| [office_to_pdf](./office_to_pdf) | `office_to_pdf` | Office→PDF | Word・PowerPoint(.doc/.docx/.docm/.dotx/.dotm/.ppt/.pptx/.pptm/.potx/.potm)と ODT・RTF(.odt/.rtf。#3351)→ PDF。Excel は対象外 | LibreOffice | `http://127.0.0.1:18010` |
 | [csv_to_jsonl](./csv_to_jsonl) | `csv_to_jsonl` | CSV→JSONL | CSV → 構造化レコード JSONL | (純 Python) | `http://127.0.0.1:18012` |
-| [excel_to_jsonl](./excel_to_jsonl) | `excel_to_jsonl` | Excel→JSONL | Excel(.xls/.xlsx/.xlsm) → 構造化レコード JSONL | openpyxl + xlrd | `http://127.0.0.1:18013` |
-| [word_to_jsonl](./word_to_jsonl) | `word_to_jsonl` | Word→JSONL | Word(.doc/.docx/.docm) → 構造化レコード JSONL(見出しの下の段落・リスト・表のまとまり) | LibreOffice(.doc だけ)+ python-docx | `http://127.0.0.1:18017` |
+| [excel_to_jsonl](./excel_to_jsonl) | `excel_to_jsonl` | Excel→JSONL | Excel(.xls/.xlsx/.xlsm/.xltx/.xltm) → 構造化レコード JSONL | openpyxl + xlrd | `http://127.0.0.1:18013` |
+| [word_to_jsonl](./word_to_jsonl) | `word_to_jsonl` | Word→JSONL | Word(.doc/.docx/.docm/.dotx/.dotm) → 構造化レコード JSONL(見出しの下の段落・リスト・表のまとまり) | LibreOffice(.doc だけ)+ python-docx | `http://127.0.0.1:18017` |
 
 PDF を画像として読み直す変換(`pdf_to_page_images`)は #3347 で削除した(スキャンの PDF は Docling の OCR が読む)。
 取込時の PIIマスク(`pii_redact`。Presidio + spaCy の日本語モデル)は #3358 で削除した。

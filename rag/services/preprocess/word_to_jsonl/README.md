@@ -1,6 +1,6 @@
 # preprocess-word-to-jsonl
 
-parse の **前** に Word(`.doc` / `.docx` / マクロ付きの `.docm`)の本文を見出しの階層で読み、見出しの下の段落・リスト・表と
+parse の **前** に Word(`.doc` / `.docx` / マクロ付きの `.docm` / テンプレートの `.dotx`・`.dotm`)の本文を見出しの階層で読み、見出しの下の段落・リスト・表と
 表の前後の説明を **意味のまとまりの記録** にした構造化レコード JSONL(`rag_parser_core.structured_records`)へ変換する
 前処理マイクロサービス(#2457)。表示の行ごとには分けない。解析エンジン「構造化レコード JSONL」(parser-structured-records-jsonl)
 が記録を 1 つずつ要素にし、文書レシピの分割「固定分割」(既定の分割符 `<<<JSONL_RECORD_BOUNDARY>>>`)で 1 記録 1 chunk になる。

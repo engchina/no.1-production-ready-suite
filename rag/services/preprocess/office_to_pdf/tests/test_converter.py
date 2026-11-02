@@ -45,14 +45,14 @@ def _profile(extension: str):
 def test_spreadsheet_is_not_converted(monkeypatch) -> None:
     # Office→PDF は Word・PowerPoint だけ。Excel は Excel→JSONL で読む(#2470)。
     monkeypatch.setattr(converters, "soffice_path", lambda: "/usr/bin/soffice")
-    for extension in (".xls", ".xlsx", ".xlsm", ".ods"):
+    for extension in (".xls", ".xlsx", ".xlsm", ".xltx", ".xltm", ".ods"):
         outcome = convert(b"\x00", "application/octet-stream", "office_to_pdf", _profile(extension))
         assert outcome.converted is False
         assert "office_to_pdf_spreadsheet_not_supported" in outcome.warnings
 
 
 def test_legacy_and_macro_word_powerpoint_keep_suffix() -> None:
-    for extension in (".doc", ".docm", ".ppt", ".pptm"):
+    for extension in (".doc", ".docm", ".dotx", ".dotm", ".ppt", ".pptm", ".potx", ".potm"):
         assert _office_suffix(_profile(extension)) == extension
 
 

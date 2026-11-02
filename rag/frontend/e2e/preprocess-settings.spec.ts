@@ -31,7 +31,7 @@ for (const viewport of [
     // CSV→JSONL・Excel→JSONL の順で、使う解析エンジンも説明に出す（#2457）。
     await expect(page.getByRole("radio", { name: /CSV→JSONL.*表頭を除くデータの 1 記録/ })).toBeVisible();
     await expect(
-      page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx・マクロ付きの \.xlsm\)/ })
+      page.getByRole("radio", { name: /Excel→JSONL.*Excel ファイル\(\.xls・\.xlsx・マクロ付きの \.xlsm、テンプレートの \.xltx・\.xltm\)/ })
     ).toBeVisible();
     await expect(page.getByRole("radio", { name: /CSV→JSONL.*構造化レコード JSONL/ })).toBeVisible();
     await expect(page.getByRole("radio", { name: /^Excel→JSONL/ })).toHaveAccessibleName(/保存済みの計算結果/);

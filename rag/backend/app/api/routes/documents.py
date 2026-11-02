@@ -107,6 +107,7 @@ from app.rag.mineru_license import (
     mineru_license_acknowledged,
 )
 from app.rag.navigation import build_navigation_tree
+from app.rag.office_template import office_template_format, office_template_upload_problem
 from app.rag.parser_source_guard import check_parser_source, settings_convert_source
 from app.rag.published_language import initialized_release_store
 from app.rag.rate_limit import enforce_rate_limit
@@ -354,6 +355,10 @@ async def _failed_upload_source_profile(file: UploadFile) -> SourceProfile | Non
     original_file_name = file.filename or "document.bin"
     file_name = _safe_display_filename(original_file_name)
     content_type = _normalized_content_type(file.content_type)
+    # 確認で止めたテンプレートに「変換が必要」の判定を添えると、変換で直るように読める(#4054)。
+    extension = PurePath(file_name).suffix
+    if office_template_format(extension, content_type) is not None:
+        return None
     data: bytes | None = None
     file_size_bytes = _upload_file_size_hint(file)
     content_sha256 = ""
@@ -449,6 +454,17 @@ async def _store_uploaded_document(
     data = await _read_upload_file(file, settings.max_upload_bytes)
     if not data:
         raise HTTPException(status_code=400, detail="空のファイルはアップロードできません。")
+    # Office テンプレートは拡張子・MIME type と原本の package を照らし、保存する前に止める(#4054)。
+    template_problem = await asyncio.to_thread(
+        office_template_upload_problem,
+        file_name=file_name,
+        content_type=content_type,
+        data=data,
+        max_members=settings.office_template_max_members,
+        max_uncompressed_bytes=settings.office_template_max_uncompressed_bytes,
+    )
+    if template_problem is not None:
+        raise HTTPException(status_code=415, detail=template_problem)
 
     storage = ObjectStorageClient()
     oracle = OracleClient()
