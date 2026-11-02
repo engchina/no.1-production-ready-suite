@@ -358,17 +358,13 @@ AUDIT_SYSTEM_PROMPT = (
         ""
         "## Step 2: 各主張を原文と照合する（support）\n"
         "- citation_resolution が抽出失敗を示す引用は support=unknown とし、evidence の別の行で引用を置き換えて supported にしない。"
-        "evidence の全文は材料の有無を判断するために使う。"
-        "抽出失敗の記録がない旧形式の quote_unmatched は、引用元の原文を確定できる場合に限り support_quote にその原文を返す。\n"
+        "evidence の全文は材料の有無を判断するために使う。\n"
         "- text の操作・画面・値・効果・原因・対象・適用条件・順序を、当該 item が実際に引用した citations の原文集合と照合する。"
         "複数の引用が別々の部分を共同で支持してよく、各引用が主張全体を単独で支える必要はない。"
         "集合が全主張を裏付け、かつ各 index の evidence_id 自身も少なくとも一部に寄与するときだけ supported。"
         "集合にない内容を足した主張は unsupported。関連するだけの引用は supported にしない。\n"
         "- contradicted は引用原文と操作・値・可否・順序・対象が両立しない場合。"
         "書かれていないだけなら unsupported。判定できない場合は unknown。\n"
-        "- contradicted の item に独立に支持できる部分が残る場合、supported_fragments に元の text の連続した抜粋と supported/unknown を返す。"
-        "各片の citations はこの item が実際に引用した原文の範囲だけから選び、evidence_id と連続した支持原文を写す。"
-        "引用集合がその片全体を支持すると確認したときだけ supported。別資料の内容で補わず、支持できる片がなければ空にする。\n"
         "- text が quote の規則を述べ、quote にある例外・ただし書き・適用の条件だけを省いているときは unsupported にせず supported とし、"
         "省いた例外・条件は source_applicability で扱う。\n"
         "- 実データが未提供という理由だけで unsupported や n"
@@ -2470,46 +2466,6 @@ def _document_evidence_codes(spans: Sequence[dict]) -> set[str]:
     return set(EVIDENCE_LABEL.findall(fold_width("\n".join(str(span.get("text") or "") for span in spans))))
 
 
-def recover_audited_quotes(
-    question: str, checked: Sequence[CheckedItem], audit: GroundedAudit, spans: Sequence[dict], *, guide_sources: Sequence[str] = ()
-) -> set[int]:
-    """監査が支持した言い換えを、監査の原文引用で再検査する。引用不一致以外の印は消さない。"""
-    recovered: set[int] = set()
-    for review in audit.reviews:
-        if not 0 <= review.index < len(checked) or sum(r.index == review.index for r in audit.reviews) != 1:
-            continue
-        entry = checked[review.index]
-        if (
-            not entry.unmatched
-            or entry.carried
-            or entry.removed
-            or entry.span is None
-            or review.support != "supported"
-            or _citation_support_unverified(entry)
-        ):
-            continue
-        quote = _original_quote(review.support_quote, entry.span["text"])
-        if not quote:
-            continue
-        item = entry.item.with_citation(quote=quote, lines="", evidence_id=entry.span["evidence_id"])
-        verified, _ = verify(question, GroundedDraft(items=[item], summary="", confidence="low"), spans, guide_sources=guide_sources)
-        replacement = next((candidate for candidate in verified if candidate.draft_index == 0), None)
-        if replacement is None or replacement.unmatched or replacement.removed:
-            continue
-        entry.item, entry.span = replacement.item, replacement.span
-        entry.marks = [
-            mark for mark in entry.marks if mark.get("code") not in {"quote_unmatched", *CITATION_EXTRACTION_CODES}
-        ] + replacement.marks
-        entry.hints = replacement.hints
-        entry.unmatched = False
-        entry.quote_match = "audited_paraphrase"
-        entry.citation_resolution["support_quote"] = quote
-        entry.citation_resolution["support_check"] = "audited_paraphrase"
-        if entry.draft_index is not None:
-            recovered.add(entry.draft_index)
-    return recovered
-
-
 # 対象の種別。同じ種別の別対象（帳票→別の帳票、画面→別の画面）への置き換えだけを検出する。
 # 「一覧」「リスト」単独は画面上の一覧（帳票設定の一覧）にも使われ、帳票の種別にしない（「一覧表」は帳票）(#654)。
 
@@ -3437,77 +3393,6 @@ def settle_citation_reviews(
     )
 
 
-def _retain_supported_fragments(entry: CheckedItem, review: Any) -> bool:
-    """同次監査が支持した元説明の片だけを、元の引用の範囲内で残す。indexは変えない。"""
-    original = entry.item.text
-    actual = item_citations(entry)
-    accepted: list[tuple[int, str, list[CheckedItem]]] = []
-    rejected: list[dict[str, str]] = []
-    for fragment in review.supported_fragments:
-        text = fragment.text.strip()
-        sources: list[CheckedItem] = []
-        valid = fragment.support == "supported" and bool(text) and text != original and text in original and bool(fragment.citations)
-        for proof in fragment.citations:
-            source = next(
-                (
-                    cited
-                    for cited in actual
-                    if cited.span
-                    and bool(proof.evidence_id.strip())
-                    and bool(proof.quote.strip())
-                    and proof.evidence_id in {cited.item.evidence_id, cited.span["evidence_id"], cited.span.get("label")}
-                    and not cited.unmatched
-                    and cited.citation_resolution.get("authenticity") != "unverified"
-                    and proof.quote in cited.item.quote
-                    and proof.quote in cited.span["text"]
-                ),
-                None,
-            )
-            if source is None:
-                valid = False
-                break
-            sources.append(source)
-        if valid:
-            accepted.append((original.index(text), text, sources))
-        else:
-            rejected.append({"text": text, "reason": "unverified_fragment_or_nonactual_citation"})
-    if not accepted:
-        if review.supported_fragments:
-            entry.review_assessment["partial_salvage"] = {"status": "rejected", "original_text": original, "rejected": rejected}
-        return False
-    accepted.sort(key=lambda value: value[0])
-    retained_text = "\n".join(dict.fromkeys(text for _offset, text, _sources in accepted))
-    # 重なる片を連結して元の複合説明全体を支持済みに戻さない。
-    covered: set[int] = set()
-    for offset, text, _sources in accepted:
-        covered.update(range(offset, offset + len(text)))
-    if all(index in covered for index, char in enumerate(original) if not char.isspace()):
-        return False
-    selected = list({id(source): source for _offset, _text, sources in accepted for source in sources}.values())
-    primary = selected[0]
-    # 引用自体は元の検証済み引用を保持する。抽出provenanceを新しい引用へ流用しない。
-    entry.item = entry.item.model_copy(update={"text": retained_text, "citations": list(primary.item.citations)})
-    entry.span, entry.quote_match = primary.span, primary.quote_match
-    entry.citation_resolution = dict(primary.citation_resolution)
-    entry.also = [replace(source, item=source.item.model_copy(update={"text": retained_text}), also=[]) for source in selected[1:]]
-    entry.review_assessment.update(
-        effective_support="supported",
-        partial_salvage={
-            "status": "retained",
-            "original_text": original,
-            "original_support": review.support,
-            "discard_reason": review.reason,
-            "retained_text": retained_text,
-            "retained_sources": [{"evidence_id": source.item.evidence_id, "quote": source.item.quote} for source in selected],
-            "rejected": rejected,
-        },
-    )
-    if review.applicability != "matched":
-        entry.item = entry.item.model_copy(update={"applies": "unverified", "condition": ""})
-    entry.withdrawn = True
-    return True
-
-
 def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
     """監査の判定で段落の印を付ける（#2738）。supported を決定的検査の印から戻すことはしない。
 
@@ -3560,8 +3445,6 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
                 entry.mark("unsupported", "出力ファイルの項目定義の引用を根拠に確認できません。")
         reason = f"監査: {review.support}/{review.applicability} {review.reason}"
         if review.support == "contradicted":
-            if _retain_supported_fragments(entry, review):
-                continue
             entry.remove(review.reason, reason=reason)
             entry.withdrawn = True
             continue
@@ -4626,8 +4509,6 @@ def citation_support_policy(
         if entry is not None and _citation_support_unverified(entry):
             update.update(
                 support="unknown",
-                support_quote="",
-                supported_fragments=[],
                 reason=(
                     passage_marks.reason("citation_content_unusable")["label"]
                     if entry.citation_resolution.get("content_usability") == "unusable"
@@ -6786,13 +6667,7 @@ def finalize_summary(
         )
     ):
         return current
-    unsettled = [
-        entry
-        for entry in current.checked
-        if not entry.added
-        and entry.item.kind != "gap"
-        and (not entry.confirmed or entry.review_assessment.get("partial_salvage", {}).get("status") == "retained")
-    ]
+    unsettled = [entry for entry in current.checked if not entry.added and entry.item.kind != "gap" and not entry.confirmed]
     exact_confirmed = any(entry.confirmed and summary == entry.item.text.strip() for entry in current.checked)
     audit = current.audit if current.review_execution == "completed" else None
     unsupported = audit is not None and not audit.summary_supported
@@ -7729,7 +7604,6 @@ def run_round(
     procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
     timing["procedure_quotes"] = {
         "original": sum(e.span is not None and quote_in_text(e.item.text, e.span["text"]) for e in procedures),
-        "paraphrase_verified": sum(e.quote_match == "audited_paraphrase" for e in procedures),
         "unmatched": sum(e.unmatched for e in procedures),
     }
     if audit_mode == AUDIT_MODE_NONE:

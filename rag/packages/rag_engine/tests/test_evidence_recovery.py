@@ -9,7 +9,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans, synthesize_grounded_answer
-from rag_engine.models.llm import GroundedAudit, GroundedDraft
+from rag_engine.models.llm import GroundedDraft
 
 QUESTION = "一覧から対象を送信する方法"
 ORIGINAL = "一覧画面を開き、対象の行を選択して送信ボタンを押します。"
@@ -20,13 +20,12 @@ def _spans():
     return _grounded_spans(QUESTION, context(record(0, ORIGINAL, "一覧画面", page=4, source="手順書 A.pdf")), (), None)
 
 
-def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evidence_id="E1", complete_guide=False):
+def _run(*, support="supported", mode="standard", suffix="", evidence_id="E1", complete_guide=False):
     spans = _spans()
     generated = draft(item(evidence_id, PARAPHRASE + suffix, "対象を決めて提出してください。"), summary="操作の説明（E1）")
     response = audit((0, support, "matched", ""), requests=[("Q1", "addressed", "")])
     if mode == "standard":
         response.pop("unused_evidence_ids")
-    response["reviews"][0]["support_quote"] = quote
     if complete_guide:
         response["guide_requirement_reviews"] = [
             {
@@ -60,7 +59,7 @@ def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evi
 def test_uncalibrated_original_does_not_replace_the_actual_quote_or_complete_the_guide(mode):
     result, model, spans = _run(mode=mode, suffix="（E1）", evidence_id="", complete_guide=True)
     entry = next(e for e in result.checked if e.draft_index == 0)
-    assert not entry.confirmed and entry.quote_match != "audited_paraphrase"
+    assert not entry.confirmed
     assert entry.item.quote == "対象を決めて提出してください。"
     assert entry.item.text == PARAPHRASE
     # 引用原文の不一致という基本検査は残り、語義の完了判定は未知のまま。
@@ -71,10 +70,8 @@ def test_uncalibrated_original_does_not_replace_the_actual_quote_or_complete_the
     inputs = json.loads(model.prompts[-1][1])
     assert inputs["items"][0]["quote_unmatched"] is True
     assert "当該 item が実際に引用した citations の原文集合と照合する" in grounded.audit_system_prompt(detailed=mode == "detailed")
-    assert result.timing["procedure_quotes"]["paraphrase_verified"] == 0
     assert not result.dropped[0].get("ignored", False)
     observed = result.timing["semantic_audit_observation"]["audit"]
-    assert observed["reviews"][0]["support_quote"] == ORIGINAL
     assert observed["guide_requirement_reviews"][0]["answer_state"] == "explained"
     assert result.checked[0].review_assessment["effective_support"] == "unknown"
     assert "E1" not in result.summary
@@ -83,16 +80,9 @@ def test_uncalibrated_original_does_not_replace_the_actual_quote_or_complete_the
     assert result.dropped[0]["evidence_id"] == spans[0]["label"]
 
 
-@pytest.mark.parametrize(
-    "support,quote",
-    [
-        ("unsupported", ORIGINAL),
-        ("supported", "資料に無い操作です。"),
-        ("supported", ""),
-    ],
-)
-def test_unverified_claim_or_invalid_original_keeps_marks(support, quote):
-    result, _, _ = _run(support=support, quote=quote)
+@pytest.mark.parametrize("support", ["unsupported", "supported"])
+def test_unverified_claim_or_invalid_original_keeps_marks(support):
+    result, _, _ = _run(support=support)
     entry = next(e for e in result.checked if e.draft_index == 0)
     assert not entry.confirmed
     assert any(mark["code"] == "quote_unmatched" for mark in entry.marks)
@@ -157,7 +147,6 @@ def test_observed_recovery_keeps_a_later_guide_reference_only_in_diagnostics(mod
         summary="操作の説明",
     )
     response = audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), (2, "supported", "matched", ""))
-    response["reviews"][1]["support_quote"] = ORIGINAL
     response["guide_requirement_reviews"] = [
         {"requirement_id": "save:0", "answer_state": "explained", "item_indexes": [2], "answer_quote": save, "reason": ""}
     ]
@@ -235,19 +224,4 @@ def test_observed_recovery_keeps_body_without_promoting_an_invalid_quote_to_a_so
     assert PARAPHRASE in result.answer_text
     assert "E1" not in result.answer_text
     assert result.generation_trace["citation_lines"] == []
-    assert result.generation_trace["procedure_quotes"]["paraphrase_verified"] == 0
     assert any(reason["code"] == "quote_unmatched" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])
-    assert result.generation_trace["semantic_audit_observation"]["audit"]["reviews"][0]["support_quote"] == ORIGINAL
-
-
-def test_recovery_keeps_other_marks_and_rejects_duplicate_reviews():
-    result, _, spans = _run(mode="none")
-    entry = next(e for e in result.checked if e.draft_index == 0)
-    entry.mark("unsupported", "別の未確認の主張")
-    response = audit((0, "supported", "matched", ""))
-    response["reviews"][0]["support_quote"] = ORIGINAL
-    duplicate = GroundedAudit.model_validate({**response, "reviews": response["reviews"] * 2})
-    assert not grounded.recover_audited_quotes(QUESTION, result.checked, duplicate, spans)
-    grounded.recover_audited_quotes(QUESTION, result.checked, GroundedAudit.model_validate(response), spans)
-    assert any(mark["code"] == "unsupported" for mark in entry.marks)
-    assert not entry.confirmed

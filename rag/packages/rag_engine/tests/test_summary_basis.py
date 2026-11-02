@@ -61,13 +61,6 @@ def test_unsupported_summary_is_not_saved_by_valid_basis():
     assert grounded.finalize_summary(round_value([FIRST, SECOND], supported=False)).summary == grounded.answer_labels().neutral_summary
 
 
-def test_original_compound_basis_does_not_bind_a_salvaged_fragment():
-    fragment = entry(FIRST)
-    fragment.review_assessment["partial_salvage"] = {"status": "retained"}
-    current = round_value([FIRST + BAD], checked=[fragment])
-    assert grounded.finalize_summary(current).summary == grounded.answer_labels().neutral_summary
-
-
 def test_basis_survives_reordering_without_indices():
     current = round_value([FIRST, SECOND], checked=[entry(BAD, removed=True), entry(SECOND), entry(FIRST)])
     assert grounded.finalize_summary(current).summary == SUMMARY
