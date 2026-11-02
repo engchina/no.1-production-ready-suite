@@ -229,7 +229,13 @@ _PENDING_CODES = frozenset({_UNASSESSED, "quote_unmatched", "citation_error"})
 # RAG の `rag_validate_answer` の、監査の応答の側の照合の誤り（`reference_check`。RAG の
 # `AUDIT_REFERENCE_FAILURES`。回答の引用の誤り `answer_id_invalid` は含めない）。
 _AUDIT_REFERENCE_FAILURES = frozenset(
-    {"quote_unmatched", "audit_id_invalid", "ambiguous_id", "audit_id_missing"}
+    {
+        "quote_unmatched",
+        "audit_id_invalid",
+        "ambiguous_id",
+        "audit_id_missing",
+        "audit_range_invalid",
+    }
 )
 # RAG の `rag_validate_answer` の、実データの確認を促すだけの段落の判定。
 _DATA_CONFIRMATION = "data_confirmation"
@@ -366,10 +372,10 @@ def _validation_parts(
 
 
 def _audit_trace_failure(claim: JsonObject) -> bool:
-    """監査は根拠で裏付けた（`audit_status=supported`）のに、監査が写した原文・返した根拠の ID を
-    根拠に結び付けられなかっただけの判定か（#108）。
+    """監査は根拠で裏付けた（`audit_status=supported`）のに、監査が指した本文の範囲・返した根拠の
+    ID を根拠に結び付けられなかっただけの判定か（#108）。
 
-    RAG は、監査が写した原文（support_quote）が結び付けた根拠に無い・監査が根拠に無い ID
+    RAG は、監査が指した範囲が無効・結び付けた根拠に無い、監査が根拠に無い ID
     （ファイル名など）を返したとき、裏付けを採らず `citation_error` にする（`reference_check` が
     監査の応答の側の誤り）。根拠で確かめられない・根拠と矛盾するとは違い、根拠が無いことを
     示さない。回答が書いた ID が根拠に無い（`answer_id_invalid`）は回答の引用の誤りなので含めない。

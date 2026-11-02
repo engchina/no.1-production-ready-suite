@@ -259,6 +259,18 @@ def test_supported_audit_with_unmatched_quotes_is_not_a_refusal() -> None:
     assert (content["value"], content["basis"]) == ("answered", "answer_passages")
 
 
+def test_audit_returning_invalid_line_numbers_is_not_a_refusal() -> None:
+    # #4152: 監査の範囲の番号が無効な段落は、監査の応答の誤りなので根拠が無いことを示さない。
+    invalid = {
+        **_unknown_id(TABLE_LEAD),
+        "reference_check": "audit_range_invalid",
+        "audit_support_range": "E02284da54382ec31f90d:99-99",
+    }
+    validation = _validated(TABLE_ANSWER, invalid, *(_supported(row) for row in TABLE_ROWS))
+    content = answer_outcome(TABLE_ANSWER, steps=_retrieval_steps(), validation=validation)
+    assert (content["value"], content["signals"]) == ("conditional", ["unverified_passages"])
+
+
 def test_audit_returning_a_file_name_as_evidence_id_is_not_a_refusal() -> None:
     # run_13a17c51…: 監査が導入の 1 文の根拠の ID にファイル名を返した（未登録の原文 ID）。
     validation = _validated(
@@ -277,12 +289,12 @@ def test_audit_returning_a_file_name_as_evidence_id_is_not_a_refusal() -> None:
 
 
 def test_reference_failure_diagnostics_are_kept_in_the_validation_artifact() -> None:
-    # #112: RAG が返す監査の応答の参照の誤りの診断（監査が写した原文・返した ID）と監査し直しの
+    # #112: RAG が返す監査の応答の参照の誤りの診断（監査が指した範囲・返した ID）と監査し直しの
     # 結果を、Run の「資料との照合」の成果物にそのまま残す（根本原因を Run から確かめられるように
     # する）。
     failed = {
         **_quote_unmatched(HOTEL_LEAD),
-        "support_quote": "一般社員の宿泊費の上限は1泊12,000円",
+        "audit_support_range": "E02284da54382ec31f90d:3-4",
         "audit_evidence_id": "E02284da54382ec31f90d",
         "reference_reaudit": "rejected",
     }
@@ -291,10 +303,10 @@ def test_reference_failure_diagnostics_are_kept_in_the_validation_artifact() -> 
     for result in (validation["result"], validation["connections"][0]["result"]):
         claims = {claim["answer_quote"]: claim for claim in result["claims"]}
         assert (
-            claims[HOTEL_LEAD]["support_quote"],
+            claims[HOTEL_LEAD]["audit_support_range"],
             claims[HOTEL_LEAD]["audit_evidence_id"],
             claims[HOTEL_LEAD]["reference_reaudit"],
-        ) == ("一般社員の宿泊費の上限は1泊12,000円", "E02284da54382ec31f90d", "rejected")
+        ) == ("E02284da54382ec31f90d:3-4", "E02284da54382ec31f90d", "rejected")
         assert claims[HOTEL_NOTE]["reference_reaudit"] == "adopted"
     content = answer_outcome(HOTEL_ANSWER, steps=_retrieval_steps(), validation=validation)
     assert (content["value"], content["signals"]) == ("conditional", ["unverified_passages"])

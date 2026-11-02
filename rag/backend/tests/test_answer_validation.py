@@ -228,9 +228,9 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
     auth: Any,  # noqa: F811
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """監査の応答の参照の誤りの判定だけ、監査が写した原文と返した ID を上限の字数で返し、
+    """監査の応答の参照の誤りの判定だけ、監査が指した範囲と返した ID を上限の字数で返し、
     監査し直しの結果を返す（#112）。"""
-    long_quote = "一般社員の宿泊費の上限は\n1泊12,000円" + "あ" * 300
+    long_range = ", ".join(f"E02284da54382ec31f90d:{number}-{number}" for number in range(40))
 
     async def fake_validate(
         question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
@@ -244,11 +244,11 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
                     "answer_quote": "上限は 12,000円。",
                     "status": "citation_error",
                     "source_id": "c1",
-                    "reason": "裏付けとして写した原文が、結び付けた根拠に見当たりません。",
+                    "reason": "裏付けに指した範囲が、結び付けた根拠にありません。",
                     "audit_status": "supported",
                     "reference_check": "quote_unmatched",
                     "support_check": "quote_unmatched",
-                    "support_quote": long_quote,
+                    "audit_support_range": long_range,
                     "audit_evidence_id": "E02284da54382ec31f90d",
                     "reference_reaudit": "rejected",
                 },
@@ -260,7 +260,7 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
                     "reason": "表に記載",
                     "audit_status": "supported",
                     "reference_check": "resolved",
-                    "support_quote": "課長以上 15,000円",
+                    "audit_support_range": "E02284da54382ec31f90d:2-2",
                     "audit_evidence_id": "E02284da54382ec31f90d",
                     "reference_reaudit": "adopted",
                 },
@@ -271,7 +271,7 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
                     "reason": "表に記載",
                     "audit_status": "supported",
                     "reference_check": "resolved",
-                    "support_quote": "一般社員 2,000円",
+                    "audit_support_range": "E02284da54382ec31f90d:3-3",
                 },
             ],
         )
@@ -288,18 +288,19 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
         _token(user.user_uuid),
     )["structuredContent"]
     failed, adopted, plain = body["claims"]
-    assert (
-        failed["support_quote"]
-        == ("一般社員の宿泊費の上限は 1泊12,000円" + "あ" * 300)[: mcp_tools.CLAIM_DIAGNOSTIC_CHARS]
-    )
-    assert len(failed["support_quote"]) == mcp_tools.CLAIM_DIAGNOSTIC_CHARS == 200
+    assert failed["audit_support_range"] == long_range[: mcp_tools.CLAIM_DIAGNOSTIC_CHARS]
+    assert len(failed["audit_support_range"]) == mcp_tools.CLAIM_DIAGNOSTIC_CHARS == 200
     assert (failed["audit_evidence_id"], failed["reference_reaudit"]) == (
         "E02284da54382ec31f90d",
         "rejected",
     )
-    assert (adopted["support_quote"], adopted["audit_evidence_id"]) == (None, None)
+    assert (adopted["audit_support_range"], adopted["audit_evidence_id"]) == (None, None)
     assert adopted["reference_reaudit"] == "adopted"
-    assert (plain["support_quote"], plain["audit_evidence_id"], plain["reference_reaudit"]) == (
+    assert (
+        plain["audit_support_range"],
+        plain["audit_evidence_id"],
+        plain["reference_reaudit"],
+    ) == (
         None,
         None,
         None,
@@ -1247,7 +1248,6 @@ def _location_aware_model(
                 "status": status,
                 "evidence_id": evidence_id,
                 "source_id": "",
-                "evidence_quote": "",
                 "reason": reason,
             }
         )

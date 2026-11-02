@@ -9,6 +9,8 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
 
+from audit_ranges import line_range
+
 from rag_engine.evaluation.answer_validation import QUESTION_ID, ClaimAuditOutput, validate_answer_claims
 from rag_engine.evaluation.guide_step_validation import step_sources, validate_guide_steps
 from rag_engine.retrieval.guide_steps import GuidePlan
@@ -59,7 +61,7 @@ def _plan(steps: list[dict[str, Any]] = STEPS) -> GuidePlan:
 
 
 def _audit(quotes: list[str]) -> Callable[..., ClaimAuditOutput]:
-    """段落の順に、裏付けとして写した原文（quote）を返す監査のスタブ（すべて supported）。"""
+    """段落の順に、裏付けの原文（quote）がある根拠の範囲を返す監査のスタブ（すべて supported）。"""
 
     def parse(system: str, inputs: str, settings: Any, schema: Any, provider_id: str | None = None) -> ClaimAuditOutput:
         payload = json.loads(inputs)
@@ -72,7 +74,7 @@ def _audit(quotes: list[str]) -> Callable[..., ClaimAuditOutput]:
                     "answer_quote": "段落",
                     "answer_passage_id": passage["id"],
                     "evidence_id": chunk["evidence_id"],
-                    "evidence_quote": quote,
+                    "support_ranges": [line_range(chunk)],
                     "applicability": "matched",
                     "status": "supported",
                     "source_id": "",

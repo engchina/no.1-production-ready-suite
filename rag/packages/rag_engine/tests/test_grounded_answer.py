@@ -1719,7 +1719,9 @@ class GroundedAnswerTest(unittest.TestCase):
 
         audited = _json.loads(next(prompt for name, prompt in model.prompts if name == "GroundedAudit"))
         self.assertEqual(len(audited["evidence"]), 1)
-        self.assertLessEqual(len(next(iter(audited["evidence"].values()))), grounded.AUDIT_EVIDENCE_TEXT_CHARS)
+        # 上限は本文の字数（行頭の番号は数えない）。
+        shown = re.sub(r"(?:^|\n)\d+\| ", "", next(iter(audited["evidence"].values())))
+        self.assertLessEqual(len(shown), grounded.AUDIT_EVIDENCE_TEXT_CHARS)
 
     def test_unaudited_round_keeps_its_summary_with_a_warning(self):
         """字句の差では確定せず、引用と監査の原判定を分ける（モデルはスタブ）。"""

@@ -26,7 +26,7 @@ def _run(*, quote=ORIGINAL, support="supported", mode="standard", suffix="", evi
     response = audit((0, support, "matched", ""), requests=[("Q1", "addressed", "")])
     if mode == "standard":
         response.pop("unused_evidence_ids")
-    response["reviews"][0]["support_quote"] = quote
+    response["reviews"][0]["support_range"] = {"evidence_id": spans[0]["label"], "line_start": None, "line_end": None} if quote else None
     if complete_guide:
         response["guide_requirement_reviews"] = [
             {
@@ -74,7 +74,7 @@ def test_uncalibrated_original_does_not_replace_the_actual_quote_or_complete_the
     assert result.timing["procedure_quotes"]["paraphrase_verified"] == 0
     assert not result.dropped[0].get("ignored", False)
     observed = result.timing["semantic_audit_observation"]["audit"]
-    assert observed["reviews"][0]["support_quote"] == ORIGINAL
+    assert observed["reviews"][0]["support_range"] == {"evidence_id": spans[0]["label"], "line_start": None, "line_end": None}
     assert observed["guide_requirement_reviews"][0]["answer_state"] == "explained"
     assert result.checked[0].review_assessment["effective_support"] == "unknown"
     assert "E1" not in result.summary
@@ -157,7 +157,7 @@ def test_observed_recovery_keeps_a_later_guide_reference_only_in_diagnostics(mod
         summary="操作の説明",
     )
     response = audit((0, "supported", "matched", ""), (1, "supported", "matched", ""), (2, "supported", "matched", ""))
-    response["reviews"][1]["support_quote"] = ORIGINAL
+    response["reviews"][1]["support_range"] = {"evidence_id": spans[0]["label"], "line_start": None, "line_end": None}
     response["guide_requirement_reviews"] = [
         {"requirement_id": "save:0", "answer_state": "explained", "item_indexes": [2], "answer_quote": save, "reason": ""}
     ]
@@ -237,7 +237,7 @@ def test_observed_recovery_keeps_body_without_promoting_an_invalid_quote_to_a_so
     assert result.generation_trace["citation_lines"] == []
     assert result.generation_trace["procedure_quotes"]["paraphrase_verified"] == 0
     assert any(reason["code"] == "quote_unmatched" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])
-    assert result.generation_trace["semantic_audit_observation"]["audit"]["reviews"][0]["support_quote"] == ORIGINAL
+    assert result.generation_trace["semantic_audit_observation"]["audit"]["reviews"][0]["support_range"]["line_start"] is None
 
 
 def test_recovery_keeps_other_marks_and_rejects_duplicate_reviews():
@@ -245,7 +245,7 @@ def test_recovery_keeps_other_marks_and_rejects_duplicate_reviews():
     entry = next(e for e in result.checked if e.draft_index == 0)
     entry.mark("unsupported", "別の未確認の主張")
     response = audit((0, "supported", "matched", ""))
-    response["reviews"][0]["support_quote"] = ORIGINAL
+    response["reviews"][0]["support_range"] = {"evidence_id": spans[0]["label"], "line_start": None, "line_end": None}
     duplicate = GroundedAudit.model_validate({**response, "reviews": response["reviews"] * 2})
     assert not grounded.recover_audited_quotes(QUESTION, result.checked, duplicate, spans)
     grounded.recover_audited_quotes(QUESTION, result.checked, GroundedAudit.model_validate(response), spans)

@@ -10,7 +10,7 @@ from rag_engine.generation.grounded import (
     recover_audited_quotes,
     verify,
 )
-from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem, GroundedItemReview
+from rag_engine.models.llm import AuditLineRange, GroundedAudit, GroundedDraft, GroundedItem, GroundedItemReview
 
 
 def span(text: str) -> dict:
@@ -68,7 +68,7 @@ def test_policy_is_not_part_of_the_model_response_contract() -> None:
     assert not {"applicability_action", "observed_applicability", "applicability_policy_reason"} & properties.keys()
 
 
-def test_near_quote_is_a_candidate_until_a_verbatim_support_quote_is_checked() -> None:
+def test_near_quote_is_a_candidate_until_a_support_range_is_checked() -> None:
     original = "入力した情報を確認してから、画面の保存ボタンを押してください。"
     misquoted = "入力した情報を確認してから、画面の保存ボタンを押してくださいます。"
     draft = GroundedDraft(
@@ -86,7 +86,14 @@ def test_near_quote_is_a_candidate_until_a_verbatim_support_quote_is_checked() -
     # 支持の判定だけでは引用一致を昇格しない。
     apply_audit(checked, policy)
     assert entry.unmatched and not entry.confirmed
-    policy.reviews[0].support_quote = original
+    # 別の根拠・無効な番号の範囲では回復しない（原文はコードが範囲から切り出す。#4152）。
+    for wrong in (
+        AuditLineRange(evidence_id="e2", line_start=None, line_end=None),
+        AuditLineRange(evidence_id="e1", line_start=9, line_end=9),
+    ):
+        policy.reviews[0].support_range = wrong
+        assert not recover_audited_quotes("操作を教えてください。", checked, policy, [span(original)])
+    policy.reviews[0].support_range = AuditLineRange(evidence_id="e1", line_start=None, line_end=None)
     assert recover_audited_quotes("操作を教えてください。", checked, policy, [span(original)]) == {0}
     assert not entry.unmatched and entry.quote_match == "audited_paraphrase"
     assert entry.citation_resolution["requested_quote"] == misquoted

@@ -54,7 +54,6 @@ def test_claims_are_bound_to_passages_and_evidence() -> None:
                         "status": "supported",
                         "evidence_id": evidence_id,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     },
                     {
@@ -63,7 +62,6 @@ def test_claims_are_bound_to_passages_and_evidence() -> None:
                         "status": "unsupported",
                         "evidence_id": "",
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "延長の記載が無い",
                     },
                 ]
@@ -87,7 +85,7 @@ def test_claims_violating_the_contract_on_the_last_attempt_are_dropped_not_faile
     def parse(system, inputs, settings, schema, provider_id=None):
         ids, _ = _passages(inputs)
         calls.append(inputs)
-        claim = {"status": "unsupported", "evidence_id": "", "source_id": "", "evidence_quote": "", "reason": "記載が無い"}
+        claim = {"status": "unsupported", "evidence_id": "", "source_id": "", "reason": "記載が無い"}
         return ClaimAuditOutput.model_validate(
             {
                 "claim_checks": [
@@ -118,7 +116,6 @@ def test_missing_passages_are_unassessed_and_empty_answers_are_not_audited() -> 
                         "status": "data_confirmation",
                         "evidence_id": "",
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "実データの確認",
                     },
                 ]
@@ -168,7 +165,6 @@ def test_headings_citations_and_questions_are_not_audited() -> None:
                         "status": "supported",
                         "evidence_id": evidence_id,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     },
                     {
@@ -177,7 +173,6 @@ def test_headings_citations_and_questions_are_not_audited() -> None:
                         "status": "unsupported",
                         "evidence_id": "",
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "延長の記載が無い",
                     },
                 ]
@@ -246,7 +241,6 @@ def test_location_lines_evidence_ids_and_table_structure_are_not_audited() -> No
                         "status": "supported",
                         "evidence_id": evidence_id,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     }
                     for item in payload["answer_passages"]
@@ -304,7 +298,7 @@ RETENTION = {
 BRIDGE_ANSWER = "人事評価システムは「極秘」扱いなので、データは **10 年間** 保管されます。"
 
 
-def _bridge_validation(evidence_id: str, *, evidence_quote: str = "") -> dict:
+def _bridge_validation(evidence_id: str) -> dict:
     def parse(system, inputs, settings, schema, provider_id=None):
         import json
 
@@ -320,7 +314,6 @@ def _bridge_validation(evidence_id: str, *, evidence_quote: str = "") -> dict:
                         "status": "supported",
                         "evidence_id": evidence_id.format(ledger=ids[LEDGER["id"]], retention=ids[RETENTION["id"]]),
                         "source_id": "",
-                        "evidence_quote": evidence_quote,
                         "reason": "台帳で極秘、規程で極秘は 10 年と確かめられる。",
                     },
                 ]
@@ -354,9 +347,9 @@ def test_claim_supported_by_two_evidence_ids_is_not_a_citation_error() -> None:
 
 
 def test_unknown_or_unquoted_ids_in_a_list_stay_citation_errors() -> None:
-    """並べた ID の 1 つでも根拠に無い・引用がどの根拠にも無いときは、今までどおり引用エラー (#1364)。"""
-    for written, quote in (("{ledger}, E0000000000000000000", ""), ("{ledger} {retention}", "根拠に無い文"), ("E0000000000000000000", "")):
-        [claim] = _bridge_validation(written, evidence_quote=quote)["claim_checks"]
+    """並べた ID の 1 つでも根拠に無いときは、今までどおり引用エラー (#1364)。"""
+    for written in ("{ledger}, E0000000000000000000", "E0000000000000000000"):
+        [claim] = _bridge_validation(written)["claim_checks"]
         assert claim["status"] == "citation_error", written
         assert claim["reason"].startswith("未登録の原文ID。")
 
@@ -426,7 +419,6 @@ def test_citation_lines_of_the_evaluation_answers_are_not_audited(case: dict) ->
                         "status": "supported",
                         "evidence_id": evidence_id,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     }
                     for item in payload["answer_passages"]
@@ -456,7 +448,6 @@ def test_citation_line_marked_not_a_claim_is_not_unassessed() -> None:
                     "status": "not_a_claim",
                     "evidence_id": "",
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "主張ではない",
                 }
                 for item in passages
@@ -491,7 +482,6 @@ def test_location_line_and_closing_marked_not_a_claim_are_not_unassessed() -> No
                     "status": "not_a_claim",
                     "evidence_id": "",
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "主張ではない",
                 }
                 for item in passages
@@ -589,7 +579,6 @@ def test_headings_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
                         "status": "supported",
                         "evidence_id": evidence_id,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     }
                     for item in payload["answer_passages"]
@@ -665,7 +654,6 @@ def test_heading_phrase_marked_not_a_claim_is_not_unassessed() -> None:
                     "status": "not_a_claim",
                     "evidence_id": "",
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "主張ではない",
                 }
                 for item in passages
@@ -691,7 +679,6 @@ def test_numbered_heading_marked_not_a_claim_follows_the_answer_lines() -> None:
                     "status": "not_a_claim",
                     "evidence_id": "",
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "主張ではない",
                 }
             ]
@@ -774,7 +761,6 @@ def _portal_validation(written: list[str]) -> dict:
                         "status": "supported",
                         "evidence_id": evidence_id.format(*ids),
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠文書に手順が記載されているため",
                     }
                     for passage, evidence_id in zip(payload["answer_passages"], written, strict=True)
@@ -879,7 +865,6 @@ def _retention_validation(written: list[str], rechecks: list[dict] | None = None
                         "status": "supported",
                         "evidence_id": evidence_id,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "台帳と規程で裏付けられます。",
                     }
                     for passage, evidence_id in zip(payload["answer_passages"], answers, strict=True)
@@ -1004,7 +989,6 @@ def _deadline_validation(
                         "status": status,
                         "evidence_id": evidence_id,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "主張は根拠で裏付けられる。",
                     }
                     for passage, (status, evidence_id) in zip(payload["answer_passages"], answers, strict=True)
@@ -1190,7 +1174,6 @@ def _window_validation(
                         "status": answers[passage["id"]][0],
                         "evidence_id": written(passage["id"]),
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "定期保守計画と変更手順書で根拠で裏付けられています。",
                     }
                     for passage in payload["answer_passages"]
@@ -1331,7 +1314,6 @@ def _oms_validation(answer: str, verdict) -> tuple[dict, str]:
                         "status": status,
                         "evidence_id": ids[chunk_id],
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "台帳の OMS の行で判定。",
                     }
                     for passage in payload["answer_passages"]
@@ -1445,7 +1427,6 @@ def test_paragraphs_that_only_write_the_location_differently_are_not_unsupported
                         "status": "supported" if located else "unsupported",
                         "evidence_id": item["evidence_id"] if located else "",
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "内容と行が根拠と一致" if located else "行23 という位置情報は根拠に含まれない",
                     },
                 ]
@@ -1535,7 +1516,6 @@ def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
                         "status": "supported",
                         "evidence_id": _documents(payload)[0]["evidence_id"],
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     }
                     for item in payload["answer_passages"]
@@ -1600,7 +1580,6 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
                 "status": status,
                 "evidence_id": evidence_id,
                 "source_id": "",
-                "evidence_quote": "",
                 "reason": "判定",
             }
 
@@ -1621,7 +1600,7 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
     premise = _documents(seen["payload"])[0]
     assert (premise["id"], premise["source"]) == (f"{PREMISE_ID_PREFIX}1", PREMISE_SOURCE)
     # モデルには根拠の本文の文字の形をそろえて渡す（「？」は半角になる。#1350）。
-    assert premise["text"].endswith("\n利用者の答え: いいえ")
+    assert premise["text"].endswith("| 利用者の答え: いいえ")
     assert premise_items(premises)[0]["text"] == "確認の質問: 所属部署の部門長の承認は得ていますか？\n利用者の答え: いいえ"
     assert PREMISE_SOURCE in seen["system"]
     assert result["counts"] == {"supported": 1, "unassessed": 1, "unsupported": 1}
@@ -1702,7 +1681,6 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
                 "status": status,
                 "evidence_id": evidence_id,
                 "source_id": "",
-                "evidence_quote": "",
                 "reason": "判定",
             }
 
@@ -1749,7 +1727,6 @@ def test_premise_consistency_check_failure_keeps_the_audit_verdicts() -> None:
                         "status": "supported",
                         "evidence_id": document["evidence_id"],
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "判定",
                     }
                     for item in payload["answer_passages"]
@@ -1810,7 +1787,6 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
                         "status": "supported",
                         "evidence_id": data["evidence_id"],
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "結果の件数",
                     },
                     {
@@ -1819,7 +1795,6 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
                         "status": "supported",
                         "evidence_id": f"{data['evidence_id']},{document['evidence_id']}",
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "規則を結果に当てはめた",
                     },
                 ]
@@ -1884,7 +1859,6 @@ def test_question_facts_support_stated_facts_and_rules_applied_to_them() -> None
                 "status": status,
                 "evidence_id": evidence_id,
                 "source_id": "",
-                "evidence_quote": "",
                 "reason": "判定",
             }
 
@@ -1994,7 +1968,6 @@ def test_contradiction_with_an_unknown_audit_id_stays_contradicted() -> None:
                         "status": "contradicted",
                         "evidence_id": UNKNOWN_SPAN_ID,
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "合成資料は設定Aが無効と記載している。",
                     }
                 ]
@@ -2108,7 +2081,6 @@ def test_diagnostics_are_not_in_the_schema_sent_to_the_model() -> None:
                     "status": "contradicted",
                     "evidence_id": UNKNOWN_SPAN_ID,
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "合成の理由。",
                     "audit_status": "supported",
                     "reference_check": "resolved",
@@ -2164,7 +2136,6 @@ def _claim_output(payload: dict, statuses: dict[str, str]) -> ClaimAuditOutput:
                     "status": statuses[item["text"]],
                     "evidence_id": evidence_id if statuses[item["text"]] in {"supported", "contradicted"} else "",
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "合成の理由。",
                 }
                 for item in payload["answer_passages"]
@@ -2281,7 +2252,6 @@ def test_quality_evaluation_records_the_classification_mismatch() -> None:
                     "status": "not_a_claim",
                     "evidence_id": "",
                     "source_id": "",
-                    "evidence_quote": "",
                     "reason": "見出し",
                     "classification_check": "reaudited",
                 }
@@ -2328,7 +2298,6 @@ def _figure_validation(statuses: dict[int, tuple[str, str]], recheck: dict[int, 
     ``recheck`` は図の項目だけの supported を確かめ直す呼び出しへの、段落の番号 → 判定（図の項目を根拠にする）。
     """
     seen: dict = {"calls": []}
-    texts = {"t1": FLOW_TEXT["text"], "f1": FLOW_FIGURE["text"]}
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
@@ -2351,7 +2320,6 @@ def _figure_validation(statuses: dict[int, tuple[str, str]], recheck: dict[int, 
                     "status": status,
                     "evidence_id": ids.get(chunk, ""),
                     "source_id": "",
-                    "evidence_quote": texts.get(chunk, "") if status == "supported" else "",
                     "claim_target": "判定の後の処理",
                     "evidence_target": "判定の後の処理",
                     "applicability": "matched",
@@ -2489,27 +2457,6 @@ def test_nested_item_label_and_extra_citation_do_not_pollute_counts() -> None:
     assert result["counts"] == {"supported": 1}
     assert result["reaudited_passage_ids"] == []
     assert [c["answer_quote"] for c in result["claim_checks"]] == [f"- {fact}"]
-
-
-@pytest.mark.parametrize("quote", ["対象の状 態を確認します。", "**対象の状態**を確認します。", "対象の`状態`を確認します。"])
-def test_support_quote_accepts_pdf_spaces_and_balanced_markdown(quote: str) -> None:
-    fact = "対象の状態を確認します。"
-
-    def parse(system, inputs, settings, schema, provider_id=None):
-        payload = json.loads(inputs)
-        output = _claim_output(payload, {fact: "supported"})
-        output.claim_checks[0].evidence_quote = quote
-        return output
-
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
-        result = validate_answer_claims(
-            "対象は？",
-            fact + "\n根拠：manual.pdf p.1",
-            [{"id": "c1", "source": "manual.pdf", "page_start": 1, "text": "対象の状 態を確認します。"}],
-            settings=None,
-        )
-    assert result["counts"] == {"supported": 1}
-    assert result["claim_checks"][0]["support_check"] == ""
 
 
 @pytest.mark.parametrize(

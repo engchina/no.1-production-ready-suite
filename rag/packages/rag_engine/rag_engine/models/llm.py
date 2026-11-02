@@ -10,6 +10,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ModelWrapValidatorHandler, PrivateAttr, StrictInt, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from rag_engine.generation.citation_wire import LINE_END_DESCRIPTION, LINE_START_DESCRIPTION
+
 
 @dataclass(frozen=True)
 class RerankTextRank:
@@ -702,11 +704,12 @@ class OutputFieldEvidence(_StrictModel):
         return self.asserts_output_fields and (not self.definition_quote.strip() or self.output_artifact_matches is not True)
 
 
-class GroundedFragmentCitation(_StrictModel):
-    """元の説明が実際に引用した原文の中で、局所的な支持に使う箇所。"""
+class AuditLineRange(_StrictModel):
+    """監査が支持に使う根拠の本文の範囲。原文はコードが番号から切り出す（モデルは写さない）。"""
 
-    evidence_id: str
-    quote: str = Field(min_length=1, max_length=600, description="このitemの実際の引用内から写した連続した支持原文。")
+    evidence_id: str = Field(description="範囲がある根拠の evidence_id。")
+    line_start: StrictInt | None = Field(description=LINE_START_DESCRIPTION)
+    line_end: StrictInt | None = Field(description=LINE_END_DESCRIPTION)
 
 
 class GroundedSupportedFragment(_StrictModel):
@@ -716,7 +719,9 @@ class GroundedSupportedFragment(_StrictModel):
     support: Literal["supported", "unknown"] = Field(
         default="unknown", description="引用集合がこの片全体を支えると確認したときだけsupported。"
     )
-    citations: list[GroundedFragmentCitation] = Field(default_factory=list, max_length=4)
+    citations: list[AuditLineRange] = Field(
+        default_factory=list, max_length=4, description="このitemの実際の引用の範囲の中で、この片を支持する本文の範囲。"
+    )
 
 
 class GroundedItemReview(_StrictModel):
@@ -739,15 +744,14 @@ class GroundedItemReview(_StrictModel):
     )
     condition: str = Field(default="", description="conditional のとき原文の条件。")
     reason: str = Field(description="判定の根拠を短く。")
-    support_quote: str = Field(
-        default="",
-        max_length=600,
-        description="段落を支持する連続した原文（根拠からの抜粋）。",
+    support_range: AuditLineRange | None = Field(
+        default=None,
+        description="段落を支持する連続した本文の範囲。返す必要がなければ null。",
     )
     supported_fragments: list[GroundedSupportedFragment] = Field(
         default_factory=list,
         max_length=40,
-        description="contradictedの複合itemに、独立に支持できる元の説明の部分がある場合だけ返す。各片は元textの厳密な抜粋と、このitemが実際に引用した出典・原文で裏付ける。判断不能ならunknownまたは空。",
+        description="contradictedの複合itemに、独立に支持できる元の説明の部分がある場合だけ返す。各片は元textの厳密な抜粋と、このitemが実際に引用した本文の範囲で裏付ける。判断不能ならunknownまたは空。",
     )
     # 原判定を保持し、採否への利用だけを別の方針にする。モデルの応答 schema には内部方針を出さない。
     observed_support: SkipJsonSchema[str] = Field(default="", description="監査が答えた支持判定（応答の schema には出さない）。")

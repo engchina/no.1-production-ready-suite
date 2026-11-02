@@ -965,7 +965,8 @@ REFERENCE_ANSWER_ID_INVALID = "answer_id_invalid"  # 段落が書いた ID が�
 REFERENCE_AUDIT_ID_INVALID = "audit_id_invalid"  # 監査が返した ID が根拠に無い（監査の応答だけの誤り）
 REFERENCE_AMBIGUOUS_ID = "ambiguous_id"  # 省いて書いた ID が複数の chunk に当たり、1 つに決まらない
 REFERENCE_AUDIT_ID_MISSING = "audit_id_missing"  # 監査が ID を返さず、段落も ID を書いていない
-REFERENCE_QUOTE_UNMATCHED = "quote_unmatched"  # ID は決まるが、監査が返した引用がその根拠に無い
+REFERENCE_QUOTE_UNMATCHED = "quote_unmatched"  # ID は決まるが、監査の引用（範囲から切り出した原文）がその根拠に無い
+REFERENCE_AUDIT_RANGE_INVALID = "audit_range_invalid"  # 監査が返した本文の範囲が無効（番号が根拠の本文に無い・根拠に決まらない）
 # 段落の分類の照合の結果（ClaimCheck.classification_check。#2625）。
 CLASSIFICATION_NON_CLAIM_MISMATCH = "non_claim_mismatch"  # モデルは not_a_claim、コードは見出し・出典の行と認めない
 CLASSIFICATION_REAUDITED = "reaudited"  # 分類が食い違った段落を、内容で監査し直した判定
@@ -977,10 +978,17 @@ REFERENCE_CHECKS = (
     REFERENCE_AMBIGUOUS_ID,
     REFERENCE_AUDIT_ID_MISSING,
     REFERENCE_QUOTE_UNMATCHED,
+    REFERENCE_AUDIT_RANGE_INVALID,
 )
 # 監査の応答の側の誤り（回答の引用の誤りではない）。
 AUDIT_REFERENCE_FAILURES = frozenset(
-    {REFERENCE_AUDIT_ID_INVALID, REFERENCE_AMBIGUOUS_ID, REFERENCE_AUDIT_ID_MISSING, REFERENCE_QUOTE_UNMATCHED}
+    {
+        REFERENCE_AUDIT_ID_INVALID,
+        REFERENCE_AMBIGUOUS_ID,
+        REFERENCE_AUDIT_ID_MISSING,
+        REFERENCE_QUOTE_UNMATCHED,
+        REFERENCE_AUDIT_RANGE_INVALID,
+    }
 )
 
 

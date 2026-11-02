@@ -176,15 +176,16 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
     assert '"original": "生産本部に属します。"' in feedback
 
 
-def test_uncalibrated_support_quote_does_not_recover_a_miscopied_citation():
+def test_uncalibrated_support_range_does_not_recover_a_miscopied_citation():
     """未校正の支持原文で写し誤りを解消しない。低層の引用候補抽出の既存境界も維持する。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     hops = list(_hops(by_text))
     hops[1] = item(by_text[CODES], "略号「労」は労務部です。", "略号「労」: 労務部。研究本部に属します。", kind="rule", request_id="Q1")
     supported = _supported(4)
-    # 元の引用には写し誤りがあるため、支持の判定と合わせて監査の支持原文を返す。
-    supported["reviews"][1]["support_quote"] = "略号「労」: 労務部。"
+    # 元の引用には写し誤りがあるため、支持の判定と合わせて監査の支持の範囲を返す。
+    support_range = {"evidence_id": by_text[CODES], "line_start": None, "line_end": None}
+    supported["reviews"][1]["support_range"] = support_range
     model = FakeModel([draft(*hops, summary=CONCLUSION)], [supported])
 
     result = run(model, ctx, QUESTION).response
@@ -196,7 +197,7 @@ def test_uncalibrated_support_quote_does_not_recover_a_miscopied_citation():
     assert result.generation_trace["finalization"]["summary"]["status"] == "unverified"
     assert result.generation_trace["finalization"]["summary"]["citations"]["status"] == "unresolved"
     assert result.generation_trace["rounds"][0]["items"][1]["quote_match"] != "audited_paraphrase"
-    assert observed_audit(result)["reviews"][1]["support_quote"] == "略号「労」: 労務部。"
+    assert observed_audit(result)["reviews"][1]["support_range"] == support_range
     assert result.generation_trace["rounds"][0]["items"][1]["review_assessment"]["effective_support"] == "unknown"
     spans = [{"evidence_id": "E1", "label": "E1", "text": CODES}]
 
@@ -213,7 +214,7 @@ def test_uncalibrated_support_quote_does_not_recover_a_miscopied_citation():
     assert bound("operation", "略号「労」は労務部です。")[0] is None  # 手順は従来どおり
 
 
-def test_miscopied_trailing_sentence_without_audit_support_quote_keeps_the_claim_unconfirmed():
+def test_miscopied_trailing_sentence_without_audit_support_range_keeps_the_claim_unconfirmed():
     """原文候補があっても、支持原文なしの監査だけで引用不一致を解消しない。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
@@ -225,7 +226,7 @@ def test_miscopied_trailing_sentence_without_audit_support_quote_keeps_the_claim
     assert result.generation_trace["finalization"]["summary"]["status"] == "unverified"
     assert result.generation_trace["finalization"]["summary"]["citations"]["status"] == "unresolved"
     assert observed_supports(result) == ["supported"] * 4
-    assert not observed_audit(result)["reviews"][1]["support_quote"]
+    assert not observed_audit(result)["reviews"][1]["support_range"]
     for hop in hops:
         assert hop["text"] in result.answer_text
     mark = next(mark for mark in result.envelope["passage_marks"] if mark["text"] != CONCLUSION)

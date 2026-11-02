@@ -339,12 +339,12 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 
 **最終の検証の対応・対象の確かめ（#2659・#2657・#2653）**: 語・値・名前が根拠のどこかにあること、同じ話題の根拠が
 あることは、段落が述べる対応（区分と値・成果物と列・処理と操作）の裏付けにならない。検証のモデルは、判定（`status`）の
-前に、判定に使った根拠の記載（`evidence_quote`。根拠の本文からそのまま写す）、段落が内容を当てはめている対象
+前に、判定に使った根拠の記載（`support_ranges`。根拠の ID と本文の番号の範囲で指し、原文はコードが切り出す。#4152）、段落が内容を当てはめている対象
 （`claim_target`。段落が書いていない点は質問の対象）と根拠の記載の対象（`evidence_target`）、その 2 つが同じか
 （`applicability`: `matched` / `not_applicable` / `unknown`）を返す（strict schema の生成順。判定の規則は
 `answer_policy.RELATION_SUPPORT_POLICY`）。システムは次の `supported` を採らず、理由を `support_check` に、監査の判定を
-`audit_status` に残す（否定の判定は変えない。`evaluation/answer_validation.py` の `_enforce_support`）: 写した原文が
-結び付けた根拠に無い（`quote_unmatched`。`citation_error`）・対象が別（`target_mismatch`。`unsupported`）・段落が根拠の表の
+`audit_status` に残す（否定の判定は変えない。`evaluation/answer_validation.py` の `_enforce_support`）: 範囲から切り出した原文が
+結び付けた根拠に無い（別の根拠を指した。`quote_unmatched`。`citation_error`）・範囲の番号が無効（`audit_range_invalid`。`citation_error`）・対象が別（`target_mismatch`。`unsupported`）・段落が根拠の表の
 別の行の区分と値を結び付けている（`value_unbound`。表が否定した対応なので `contradicted`〔#2998〕。理由に表の正しい対応
 〔「根拠の表では『項目 X2』の値は『K-01-2』（『K-01-1』は別の行の値）です。」。`table_binding.table_mismatch_notes`〕を書く。HTML の表・Markdown の表・「名前：値」の行の並び
 〔箇条書きの印・等号の区切りを含む〕・1 文の中で並べた「A は x、B は y」を、表の行と列で照合する決定的な検査
@@ -364,19 +364,17 @@ executor が埋まっても待たない。1 回の検証ごとに `rag_answer_va
 （`grounded._table_binding_conflict`。取り違えた説明を根拠と矛盾として外し、表の正しい対応を理由に出す。#2998）でも使い、回答の生成の監査の指示（3.1）にも
 同じ規則（`RELATION_SUPPORT_RULES`）を入れる。
 
-**監査の応答の参照の誤りの監査し直し（#112）**: 監査が `supported` と判定したのに、監査の応答の参照（写した原文・返した
-`evidence_id`）だけを根拠に結び付けられず `citation_error` になった段落（`reference_check` が `quote_unmatched`・
-`audit_id_invalid`・`ambiguous_id`・`audit_id_missing`。回答が書いた ID の誤り `answer_id_invalid` は除く）は、誤りの種類・返した
-ID・写した原文（200 字まで）と「原文は 1 字も変えずに写す・ID は evidence_items の evidence_id を書く」差し戻しの文
+**監査の応答の参照の誤りの監査し直し（#112）**: 監査が `supported` と判定したのに、監査の応答の参照（指した本文の範囲・返した
+`evidence_id`）だけを根拠に結び付けられず `citation_error` になった段落（`reference_check` が `quote_unmatched`〔範囲が別の根拠を指した〕・
+`audit_range_invalid`〔番号が無効〕・`audit_id_invalid`・`ambiguous_id`・`audit_id_missing`。回答が書いた ID の誤り `answer_id_invalid` は除く）は、誤りの種類・返した
+ID・返した範囲（200 字まで）と「範囲は本文の番号で指す・ID は evidence_items の evidence_id を書く」差し戻しの文
 （`REFERENCE_REAUDIT_FEEDBACK`）で、その段落だけを同じ根拠で 1 回監査し直す（`_reaudit_reference_failures`。対象が無い・期限を
 過ぎたら呼ばない。再試行しない）。監査し直しの判定は最初と同じ決定的な検査（根拠への結び付け・`_enforce_support`・実際の引用の
 集合の制限）を通り、段落の判定がすべて `supported` になったときだけ採る（`reference_reaudit=adopted`）。それ以外（否定の判定・
 呼び出しの失敗）は最初の `citation_error` のまま（`rejected`）。結果の `reference_reaudit` に状態と対象・採った段落を残す。MCP の
-claims は、監査の応答の参照の誤りの判定に、監査が写した原文（`support_quote`）と返した ID（`audit_evidence_id`）を 200 字まで返す
-（呼び出し側が渡した根拠に対する監査の出力で、権限の外の本文を含まない）。稼働中の設定で同じ回答を繰り返し監査して確かめた原因は、
-構造化出力の文字列で改行が二重に escape された「\n」の 2 字（その応答のすべての引用。照合は改行として読み直す。
-`grounded._ESCAPED_BREAK`）と、2 つの根拠・表の行を「 / 」でつないだ引用（原文の斜線と区別できないので照合は広げず、監査し直しで
-直させる）だった。
+claims は、監査の応答の参照の誤りの判定に、監査が指した範囲（`audit_support_range`）と返した ID（`audit_evidence_id`）を 200 字まで返す
+（本文を含まない）。原文の写しは #4152 で無くした（写し違いの原因は `grounded._ESCAPED_BREAK` が読み直す改行の escape や、2 つの根拠を
+「 / 」でつないだ引用などだった。生成の引用・分割読取・計画と同じく、番号の範囲で指して原文はコードが切り出す）。
 
 **表の値に直す（#3005）**: 段落・説明が根拠の表の別の行・列の値を結び付けたとき（`value_unbound`）、表の正しい値に直して残す（研究と改訂。RARR と同じ考え方）。`generation/table_revision.py` が LLM に段落と表の正しい対応（`table_mismatch_notes`）だけを渡し、誤った値だけを最小限に直させ（構造化出力 `TableRevision`）、直した文を決定的に確かめる（表の照合で取り違えが無い・正しい値をすべて述べる・元の段落との近さ 0.6 以上・長さ 1.6 倍以内）。確かめに通らない・LLM が失敗したら、今どおり矛盾として外す。回答の生成は `grounded.revise_table_conflicts`（印 `table_corrected`。理由に直した前後）、最終の検証は `rag_validate_answer` の claims の `revised_text`（`support_check=table_corrected`。status は `contradicted` のまま。Agent は段落を直した文に置き換えて `table_corrected` の印を付ける）。LLM の呼び出しは取り違えがある段落だけ。
 
@@ -417,7 +415,7 @@ claims は、監査の応答の参照の誤りの判定に、監査が写した�
 文・手順に固有な度合い）を通し、共通の文だけで手順を `explained` にしない（`grounded.guide_step_assignment`）。
 最終の検証（`rag_validate_answer`）に業務ガイドを渡すと、同じ規則で Agent の回答の段落と手順を対応付ける
 （`evaluation/guide_step_validation.py`。手順の根拠は渡した根拠のうち参照の頁の範囲に当たるものと本文に検索の手がかりが
-出るもの、手順の説明の item は監査が裏付けとして写した原文。embedding は語で決まらない共有の item があるときだけ 1 回）。
+出るもの、手順の説明の item は監査が指した範囲から切り出した原文。embedding は語で決まらない共有の item があるときだけ 1 回）。
 結果は出力の `guide_steps`（`explained` / `reference_only` / `unused` / `no_evidence`。`no_evidence` は渡した根拠に手順の
 根拠が無い）で、説明の無い必須の手順は warning の finding `guide_step_unexplained`（文は回答の不足の行と同じ）にする。
 順序の検査は説明にした段落の位置で行い、手順の題名の一致だけで `guide_steps_unmatched` にしない（MCP の出力の版 24）。

@@ -25,8 +25,12 @@ def checked():
     )
 
 
-def fragment(text=OPEN, quote=OPEN, evidence_id="E1", support="supported"):
-    return {"text": text, "support": support, "citations": [{"evidence_id": evidence_id, "quote": quote}]}
+def proof(evidence_id="E1", line_start=None, line_end=None):
+    return {"evidence_id": evidence_id, "line_start": line_start, "line_end": line_end}
+
+
+def fragment(text=OPEN, lines=(None, None), evidence_id="E1", support="supported"):
+    return {"text": text, "support": support, "citations": [proof(evidence_id, *lines)]}
 
 
 def apply(entry, fragments, *, support="contradicted"):
@@ -70,7 +74,7 @@ def test_supported_original_fragment_survives_without_reindexing():
     [
         fragment(text="対象画面へ進みます。"),
         fragment(evidence_id="E2"),
-        fragment(quote="存在しない引用"),
+        fragment(lines=(2, 2)),
         fragment(support="unknown"),
         fragment(text=COMPOUND),
     ],
@@ -90,12 +94,26 @@ def test_same_span_but_unquoted_text_cannot_be_used_as_support():
     assert entry.removed
 
 
-def test_whitespace_quote_does_not_prove_a_fragment_even_when_present():
+def test_whitespace_range_does_not_prove_a_fragment_even_when_present():
     entry = checked()
-    entry.item = entry.item.model_copy(update={"citations": [GroundedCitation(evidence_id="E1", quote=SOURCE + " ")]})
-    entry.span = {**entry.span, "text": SOURCE + " "}
-    apply(entry, [fragment(quote=" ")])
+    entry.span = {**entry.span, "text": " "}
+    apply(entry, [fragment()])
     assert entry.removed
+
+
+def test_range_of_a_numbered_source_must_stay_inside_the_actual_citation():
+    """番号の範囲から切り出した原文も、元の引用の範囲の中だけを支持に使う（#4152）。"""
+    source = "\n".join([OPEN, "内容は保存しません。", "別の設定の説明です。"])
+    entry = checked()
+    entry.item = entry.item.model_copy(update={"citations": [GroundedCitation(evidence_id="E1", quote=OPEN + "\n内容は保存しません。")]})
+    entry.span = {**entry.span, "text": source}
+    assert grounded.audit_line_view(entry.span).rendered.startswith("1| ")
+    outside = checked()
+    outside.item, outside.span = entry.item, entry.span
+    apply(outside, [fragment(lines=(3, 3))])
+    assert outside.removed
+    apply(entry, [fragment(lines=(1, 1))])
+    assert entry.item.text == OPEN and not entry.removed
 
 
 def test_unknown_overall_review_does_not_promote_a_fragment():
@@ -127,7 +145,7 @@ def test_one_fragment_may_be_jointly_supported_by_two_actual_citations():
     piece = {
         "text": first + second,
         "support": "supported",
-        "citations": [{"evidence_id": "E1", "quote": first}, {"evidence_id": "E2", "quote": second}],
+        "citations": [proof("E1"), proof("E2")],
     }
     apply(entry, [piece])
     assert entry.item.text == first + second

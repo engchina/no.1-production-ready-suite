@@ -324,8 +324,10 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 39: rag_validate_answer の claims に、監査の応答の参照の誤りの診断（監査が写した原文
 #     support_quote・返した根拠の ID audit_evidence_id）と、その誤りの監査し直しの結果
 #     （reference_reaudit）を足した（#4058）。
-MCP_OUTPUT_SCHEMA_VERSION = 39
-# rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
+# 40: rag_validate_answer の claims の support_quote を audit_support_range（監査が指した
+#     本文の範囲）に替え、reference_check に audit_range_invalid を足した（#4152）。
+MCP_OUTPUT_SCHEMA_VERSION = 40
+# rag_validate_answer の判定の診断（監査が指した範囲・返した根拠の ID。#4058）の上限の文字数。
 CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
@@ -2289,7 +2291,8 @@ class ValidatedClaim(BaseModel):
             "answer_id_invalid=回答が書いた ID が根拠に無い / "
             "audit_id_invalid=監査が返した ID だけが根拠に無い / "
             "ambiguous_id=省いた ID が複数の根拠に当たる / audit_id_missing=ID が無い / "
-            "quote_unmatched=引用が根拠に無い / "
+            "quote_unmatched=監査が指した範囲が結び付けた根拠に無い / "
+            "audit_range_invalid=監査が指した範囲の番号が無効 / "
             "not_figure=figure_only の根拠が図ではない〔status は unsupported〕 / "
             "single_figure=figure_only の ID が決まらず、根拠の唯一の図に結び付けた）。"
             "照合しない判定は null。"
@@ -2326,13 +2329,13 @@ class ValidatedClaim(BaseModel):
             "それ以外は null。"
         ),
     )
-    support_quote: str | None = Field(
+    audit_support_range: str | None = Field(
         default=None,
         description=(
             "reference_check が監査の応答の誤り（audit_id_invalid / ambiguous_id / "
-            "audit_id_missing / quote_unmatched）のとき、監査が裏付けとして写した原文（先頭 "
-            f"{CLAIM_DIAGNOSTIC_CHARS} 字。渡した根拠・質問に対する監査の出力で、照合の失敗の"
-            "原因を確かめる診断）。それ以外は null。"
+            "audit_id_missing / quote_unmatched / audit_range_invalid）のとき、監査が裏付けに"
+            f"指した本文の範囲（内部の根拠の ID と番号。先頭 {CLAIM_DIAGNOSTIC_CHARS} 字。照合の"
+            "失敗の原因を確かめる診断）。それ以外は null。"
         ),
     )
     audit_evidence_id: str | None = Field(
@@ -2346,7 +2349,7 @@ class ValidatedClaim(BaseModel):
     reference_reaudit: Literal["adopted", "rejected"] | None = Field(
         default=None,
         description=(
-            "監査は裏付けたが、監査の応答の参照（写した原文・返した ID）を根拠に照合できな"
+            "監査は裏付けたが、監査の応答の参照（指した範囲・返した ID）を根拠に照合できな"
             "かった段落を監査し直した結果（adopted=監査し直しの判定が同じ照合を通り、その"
             "判定〔supported〕にした / rejected=監査し直しても照合を通らず、citation_error の"
             "まま）。監査し直していなければ null。"
@@ -5281,7 +5284,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     # 表の正しい値に直した段落（#3005）。
                     revised_text=str(claim.get("revised_text") or "") or None,
                     # 監査の応答の参照の誤りの診断と監査し直し（#112）。
-                    support_quote=_reference_diagnostic(claim, "support_quote"),
+                    audit_support_range=_reference_diagnostic(claim, "audit_support_range"),
                     audit_evidence_id=_reference_diagnostic(claim, "audit_evidence_id"),
                     reference_reaudit=claim.get("reference_reaudit") or None,
                 )

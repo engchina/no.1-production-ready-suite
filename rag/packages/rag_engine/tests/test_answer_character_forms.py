@@ -143,7 +143,6 @@ def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
                         "status": "supported",
                         "evidence_id": [i for i in payload["evidence_items"] if i.get("id") != "question:1"][0]["evidence_id"],
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     }
                 ]

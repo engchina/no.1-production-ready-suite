@@ -83,6 +83,7 @@ from rag_engine.generation.value_grounding import CURRENT_VALUE_REASON, unsuppor
 from rag_engine.knowledge.prompt_files import continue_prompt_steps, neutralize_boundary_markers
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
+    AuditLineRange,
     CatalogEvidenceReviews,
     GroundedAudit,
     GroundedCitation,
@@ -332,7 +333,7 @@ AUDIT_SYSTEM_PROMPT = (
         "確かめてから判定する。\n"
         "- evidence: evidence_id ごとの引用元の本文。"
         "quote はこの本文から切り出した抜粋で、item の主張の一部し"
-        "か含まないことがある。\n"
+        "か含まないことがある。行頭の「番号|」はコードが付けた番号で、本文ではない。\n"
         "- citations: 同じ主張が実際に引用した原文と evidence_id の集合。複数の引用が共同で支持してよい。\n"
         "- function_context: 同じ機能の補助本文。材料の有無・要求の充足の判定専用で、引用の支持に代用しない。\n"
         "- gaps: 草稿が kind=gap にした未確認事項。\n"
@@ -359,7 +360,7 @@ AUDIT_SYSTEM_PROMPT = (
         "## Step 2: 各主張を原文と照合する（support）\n"
         "- citation_resolution が抽出失敗を示す引用は support=unknown とし、evidence の別の行で引用を置き換えて supported にしない。"
         "evidence の全文は材料の有無を判断するために使う。"
-        "抽出失敗の記録がない旧形式の quote_unmatched は、引用元の原文を確定できる場合に限り support_quote にその原文を返す。\n"
+        "抽出失敗の記録がない旧形式の quote_unmatched は、引用元の原文を確定できる場合に限り support_range にその本文の範囲を返す。\n"
         "- text の操作・画面・値・効果・原因・対象・適用条件・順序を、当該 item が実際に引用した citations の原文集合と照合する。"
         "複数の引用が別々の部分を共同で支持してよく、各引用が主張全体を単独で支える必要はない。"
         "集合が全主張を裏付け、かつ各 index の evidence_id 自身も少なくとも一部に寄与するときだけ supported。"
@@ -367,7 +368,7 @@ AUDIT_SYSTEM_PROMPT = (
         "- contradicted は引用原文と操作・値・可否・順序・対象が両立しない場合。"
         "書かれていないだけなら unsupported。判定できない場合は unknown。\n"
         "- contradicted の item に独立に支持できる部分が残る場合、supported_fragments に元の text の連続した抜粋と supported/unknown を返す。"
-        "各片の citations はこの item が実際に引用した原文の範囲だけから選び、evidence_id と連続した支持原文を写す。"
+        "各片の citations はこの item が実際に引用した原文の範囲だけから選び、evidence_id と本文の番号の範囲を返す。"
         "引用集合がその片全体を支持すると確認したときだけ supported。別資料の内容で補わず、支持できる片がなければ空にする。\n"
         "- text が quote の規則を述べ、quote にある例外・ただし書き・適用の条件だけを省いているときは unsupported にせず supported とし、"
         "省いた例外・条件は source_applicability で扱う。\n"
@@ -2488,7 +2489,7 @@ def recover_audited_quotes(
             or _citation_support_unverified(entry)
         ):
             continue
-        quote = _original_quote(review.support_quote, entry.span["text"])
+        quote = _audit_range_text(review.support_range, entry.span) if review.support_range else ""
         if not quote:
             continue
         item = entry.item.with_citation(quote=quote, lines="", evidence_id=entry.span["evidence_id"])
@@ -3454,12 +3455,12 @@ def _retain_supported_fragments(entry: CheckedItem, review: Any) -> bool:
                     for cited in actual
                     if cited.span
                     and bool(proof.evidence_id.strip())
-                    and bool(proof.quote.strip())
                     and proof.evidence_id in {cited.item.evidence_id, cited.span["evidence_id"], cited.span.get("label")}
                     and not cited.unmatched
                     and cited.citation_resolution.get("authenticity") != "unverified"
-                    and proof.quote in cited.item.quote
-                    and proof.quote in cited.span["text"]
+                    and (quote := _audit_span_view(cited.span).range_text(proof.line_start, proof.line_end)[0])
+                    and quote in cited.item.quote
+                    and quote in cited.span["text"]
                 ),
                 None,
             )
@@ -4488,6 +4489,48 @@ def numbered_text(text: str) -> str:
     return _numbered_text(text, units)
 
 
+@dataclass(frozen=True)
+class AuditLineView:
+    """監査に示す本文と番号。モデルに渡す文と、番号から原文を切り出す単位を同じものにする。"""
+
+    text: str
+    units: tuple[tuple[int, int], ...]
+    numbered: bool
+
+    @property
+    def rendered(self) -> str:
+        return _numbered_text(self.text, self.units, numbered=self.numbered)
+
+    def range_text(self, line_start: int | None, line_end: int | None) -> tuple[str, str | None]:
+        """番号の範囲の連続した原文と、無効の理由。無効な範囲は推測で直さず、切り詰めない。"""
+        binding = bind_wire_range(line_start, line_end, unit_count=len(self.units), numbered=self.numbered)
+        if binding.reason_code is not None:
+            return "", binding.reason_code
+        if binding.whole_text:
+            return self.text.strip(), None
+        assert line_start is not None and line_end is not None
+        return self.text[self.units[line_start - 1][0] : self.units[line_end - 1][1]].strip(), None
+
+
+def audit_line_view(span: Mapping[str, Any], *, max_chars: int | None = None) -> AuditLineView:
+    """監査に示す根拠の本文の番号。単位が 1 つの本文は番号を付けず、範囲の null は全文を指す。"""
+    text = str(span.get("text") or "")[:max_chars]
+    units = tuple(citation_units(text, image_text=_image_text(span)))
+    return AuditLineView(text, units, len(units) > 1)
+
+
+def _audit_span_view(span: Mapping[str, Any]) -> AuditLineView:
+    """生成の監査の入力（``evidence``）に示す本文。"""
+    return audit_line_view(span, max_chars=AUDIT_EVIDENCE_TEXT_CHARS)
+
+
+def _audit_range_text(citation: AuditLineRange, span: Mapping[str, Any]) -> str:
+    """監査が指した範囲の原文。別の根拠を指した・範囲が無効なら空文字。"""
+    if citation.evidence_id.strip() not in {span.get("evidence_id"), span.get("label")}:
+        return ""
+    return _audit_span_view(span).range_text(citation.line_start, citation.line_end)[0]
+
+
 def _numbered_text(text: str, units: Sequence[tuple[int, int]], *, numbered: bool | None = None) -> str:
     if not (_numbered(text, units) if numbered is None else numbered):
         return text
@@ -4626,7 +4669,7 @@ def citation_support_policy(
         if entry is not None and _citation_support_unverified(entry):
             update.update(
                 support="unknown",
-                support_quote="",
+                support_range=None,
                 supported_fragments=[],
                 reason=(
                     passage_marks.reason("citation_content_unusable")["label"]
@@ -7554,7 +7597,7 @@ def run_round(
             # 一部しか含まないことが多い。画面の生成説明が根拠のときは function_context が空になる
             # （同じ機能の「別の」span の、生成説明を「除いた」本文という定義のため）ので、引用元を
             # 見せないと監査は根拠に書かれている操作まで「根拠にない」と判定する (#1086)。
-            "evidence": {e.span["evidence_id"]: e.span.get("text", "")[:AUDIT_EVIDENCE_TEXT_CHARS] for _, e in audit_entries},
+            "evidence": {e.span["evidence_id"]: _audit_span_view(e.span).rendered for _, e in audit_entries},
             "evidence_sources": {e.span["evidence_id"]: e.span.get("source", "") for _, e in audit_entries},
             # 同じ機能の本文（生成説明を除く）。決定的検査（#676/#698）と同じく、隣の span にある手順を
             # text が書いただけで「引用にない操作」と判定させない (#706)。機能ごとに 1 回だけ載せる。

@@ -62,7 +62,15 @@ async def test_final_validation_mode_reaches_real_claim_parser_and_keeps_its_ver
                         "answer_quote": passages[0]["text"],
                         "answer_passage_id": passages[0]["id"],
                         "evidence_id": evidence["evidence_id"],
-                        "evidence_quote": source if verdict == "supported" else "",
+                        "support_ranges": [
+                            {
+                                "evidence_id": evidence["evidence_id"],
+                                "line_start": None,
+                                "line_end": None,
+                            }
+                        ]
+                        if verdict == "supported"
+                        else [],
                         "claim_target": "有効期限",
                         "evidence_target": "有効期限",
                         "applicability": "matched",
