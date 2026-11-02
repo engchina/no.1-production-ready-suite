@@ -13,8 +13,8 @@ from rag_engine.adapters.oracle.native_hybrid import NATIVE_HYBRID_INDEX
 
 logger = logging.getLogger(__name__)
 
-# semantic: $VR だけを整理する。残れば FULL へ進む。
-# semantic_then_full: 全文の分($I・$N)も今回まとめて整理する。FULL の失敗で要求を残さない。
+# semantic: $VR だけを整理する。残れば FULL へ進む。FULL の間隔を広げたときだけ使う。
+# semantic_then_full: 既定。続けて FULL も行う。$VR の件数が合えば FULL の失敗で要求を残さない。
 # full: 前回の失敗の後。semantic を飛ばして、続きから再開できる FULL だけを実行する。
 MaintenancePlan = Literal["semantic", "semantic_then_full", "full"]
 _SEMANTIC_OPTIMIZE_SQL = """BEGIN CTX_DDL.OPTIMIZE_INDEX(:index_name, CTX_DDL.OPTLEVEL_TOKEN_TYPE,
@@ -126,7 +126,7 @@ def maintain_native_vectors(
     検索の候補の不足を起こす $VR の残骸を先に片付ける(#4097)。呼出しの成功では完了とせず、
     件数が残れば FULL へ進む(Oracle Free では semantic で残骸が減らないことがある。#4021)。
     件数が合っても SEARCH が足りないことがある(Oracle Free の小さい索引で確認。#4097)ので、
-    間隔を置いて FULL も行う。
+    件数の一致を検索の回復として扱わず、既定では要求ごとに続けて FULL も行う。
 
     ``before_call`` は整理を始めるまでの呼出しの前に、``before_verify`` は整理が返った後の
     件数検査の呼出しの前に呼ぶ。整理の時間で後の検査を失敗させない（#4097）。
@@ -150,7 +150,8 @@ def maintain_native_vectors(
             except Exception as exc:
                 if plan != "semantic_then_full" or after.has_deleted_vectors:
                     raise
-                # $VR は片付いているので検索は不足しない。全文の分は次の要求で続きから進める。
+                # 再試行の繰り返しを避けて要求は完了にし、次の要求の FULL に任せる。
+                # 件数は合っていても検索の回復は確かめていない(#4097)ので warning に残す。
                 logger.warning(
                     "native_index_maintenance_full_deferred",
                     extra={"error_type": type(exc).__name__},

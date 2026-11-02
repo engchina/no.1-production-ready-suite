@@ -8,7 +8,8 @@ API と取込 worker が永続要求を処理します。取込を無効にし�
 
 - 業務の commit 後、別接続で `CTX_DDL.OPTIMIZE_INDEX(..., CTX_DDL.OPTLEVEL_TOKEN_TYPE, section_type => CTX_DDL.SECTION_SEMANTIC_INDEX)` を実行して `$VR` の削除残骸を片付けます（検索の候補の不足を起こすのはこの残骸です。#4097）。索引の再作成、LLM、embedding の呼出しはありません。
 - 呼出しの成功では完了としません。`$VR` と可視の件数を比べ、残っていれば serial の `OPTLEVEL_FULL` へ進みます（Oracle Free では semantic で残骸が減らないことがあります。#4021）。件数が合っても `SEARCH` が足りないことがあり（Oracle Free の小さい索引で確認。FULL で戻りました。#4097）、件数の確認だけでは検索の回復を保証しません。
-- `RAG_NATIVE_INDEX_FULL_OPTIMIZE_INTERVAL_HOURS`（既定 24）が過ぎていれば、semantic の後に `OPTLEVEL_FULL` も実行して全文の分（`$I`・`$N`）を整理します。この FULL が時間切れになっても、`$VR` が片付いていれば要求は完了します（続きは次の要求で進みます）。最後に FULL を終えた時刻は `RAG_NATIVE_INDEX_MAINTENANCE` の `state_key='hybrid_vectors_full'` の行に残します。
+- 既定（`RAG_NATIVE_INDEX_FULL_OPTIMIZE_INTERVAL_HOURS=0`）では要求ごとに semantic の後で `OPTLEVEL_FULL` も実行します。全文の分（`$I`・`$N`）もここで整理します。実索引で semantic の後の検索を確かめるまで、この値は広げません。値を広げると、間隔が過ぎるまで FULL を飛ばします。最後に FULL を終えた時刻は `RAG_NATIVE_INDEX_MAINTENANCE` の `state_key='hybrid_vectors_full'` の行に残します。
+- この FULL が時間切れになっても、`$VR` の件数が合っていれば要求は完了にします（時間切れの再試行を繰り返さないためです。続きは次の要求で進みます）。**このとき検索の回復は確かめていません。** ログの `native_index_maintenance_full_deferred` で分かります。
 - 失敗の次の回は semantic を飛ばして FULL だけを実行します。FULL は serial なら続きから再開できますが、`TOKEN_TYPE` は毎回最後まで実行するので、時間内に終わらないと進みません。
 - Oracle の [OPTIMIZE_INDEX 仕様](https://docs.oracle.com/en/database/oracle/oracle-database/26/ccref/optimize_index.html) は、整理時も問い合わせ・DML を継続できることと、整理する接続に暗黙 commit が発生することを説明しています。このため業務接続・lease の行 lock を持つ接続では整理しません。
 - 確認間隔は15秒、lease は600秒です。接続取得後に token と残り lease を再確認します。整理全体の実行予算180秒を各 DB 呼出しの残り時間へ反映し、heartbeat は30秒間隔で延長します。

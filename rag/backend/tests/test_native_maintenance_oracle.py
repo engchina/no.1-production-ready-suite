@@ -65,7 +65,9 @@ async def test_delete_reinsert_queue_restores_native_candidates(
                 connection.call_timeout = 180_000
                 results.append(
                     maintain_native_vectors(
-                        cast(MaintenanceConnection, connection), index_name=index
+                        cast(MaintenanceConnection, connection),
+                        index_name=index,
+                        plan="semantic_then_full",
                     )
                 )
             finally:
@@ -183,6 +185,8 @@ async def test_delete_reinsert_queue_restores_native_candidates(
             if _generation == 0:
                 assert await search_count("vector") == 2, "initial-vector-baseline"
         assert await run_maintenance_once(store, "synthetic-worker") == "complete"
+        # 件数の一致では検索の回復を保証しない(#4097)ので、FULL を終えた後で判定する。
+        assert results[-1].strategy == "semantic_then_full"
         assert results[-1].before.stored >= results[-1].before.visible
         assert results[-1].after.stored == results[-1].after.visible == 2
         assert await run_maintenance_once(store, "synthetic-worker") == "idle"
@@ -191,24 +195,8 @@ async def test_delete_reinsert_queue_restores_native_candidates(
             ("hybrid", 2),
             ("keyword", 1),
         ]
-        expected_counts = dict(channel_counts)
-        counts = {channel: await search_count(channel) for channel in expected_counts}
-        if counts != expected_counts:
-            # 件数が合っても SEARCH が足りないことがある。FULL で戻るかも一緒に報告する。
-            semantic_result = results[-1]
-
-            def full() -> None:
-                connection = oracle.acquire_connection()
-                try:
-                    maintain_native_vectors(
-                        cast(MaintenanceConnection, connection), index_name=index, plan="full"
-                    )
-                finally:
-                    connection.close()
-
-            await oracle._db_call_runner(full)
-            after_full = {channel: await search_count(channel) for channel in expected_counts}
-            pytest.fail(f"{semantic_result} の後 {counts}、続けて FULL の後 {after_full}")
+        for channel, expected in channel_counts:
+            assert await search_count(channel) == expected, channel
     finally:
         for name in reversed(made):
             await execute(f"DROP TABLE {name} PURGE")

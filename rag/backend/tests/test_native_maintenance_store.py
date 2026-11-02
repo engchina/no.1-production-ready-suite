@@ -8,6 +8,7 @@ import pytest
 
 from app.clients.native_maintenance_store import VERIFY_CALL_TIMEOUT_MS, NativeMaintenanceStore
 from app.clients.oracle import OracleClient
+from app.config import Settings
 from app.rag.native_index_maintenance import MaintenanceLease
 
 LEASE = MaintenanceLease("worker-a", "token-a", ("event-a",))
@@ -111,6 +112,12 @@ async def test_plan_follows_the_full_interval_and_the_attempt(
 
     assert connection.optimizers() == optimizers
     assert connection.recorded_full() is recorded
+
+
+def test_full_runs_on_every_request_by_default() -> None:
+    """件数の一致では検索の回復を保証しないので、既定で FULL を飛ばさない(#4097)。"""
+    field = Settings.model_fields["rag_native_index_full_optimize_interval_hours"]
+    assert field.default == 0
 
 
 async def test_failing_to_record_full_does_not_fail_the_finished_cleanup() -> None:
