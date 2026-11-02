@@ -513,3 +513,35 @@ def test_evidence_ids_cannot_disagree_with_the_scope_rows() -> None:
     assert len(calls) == 1
     assert result.draft.request_coverage[0].evidence_ids == ["E1"]
     assert "request_plan_errors" not in result.timing
+
+
+def test_a_cited_evidence_without_a_plan_row_is_added_by_code_without_a_repair_or_a_mark() -> None:
+    """#4117: 同じ出力の計画に行が無く説明が引いた根拠は、コードが direct の行を足す。作り直しも印も要らない。"""
+    output = _direct_draft([{"evidence_id": "E2", "target": "項目", "relation": "direct"}])
+    result, calls = _run_direct(output)
+    assert len(calls) == 1
+    plan_row = result.draft.request_coverage[0]
+    assert plan_row.evidence_ids == ["E2", "E1"]
+    assert [(scope.evidence_id, scope.relation) for scope in plan_row.evidence_scope] == [("E2", "direct"), ("E1", "direct")]
+    assert result.timing["request_plan_rows_from_citations"] == ["E1"]
+    assert "request_plan_unsettled" not in result.timing
+    entry = next(entry for entry in result.checked if entry.item.text == TEXTS[0])
+    assert entry.confirmed and not entry.marks
+
+
+def test_a_cited_evidence_the_plan_judged_unrelated_stays_excluded() -> None:
+    """#4117: 判断を覆さない。unrelated の根拠の説明は外す。"""
+    output = _direct_draft([{"evidence_id": "E1", "target": "項目", "relation": "unrelated"}])
+    result, calls = _run_direct(output)
+    assert len(calls) == 1
+    assert "request_plan_rows_from_citations" not in result.timing
+    assert not any(entry.item.text == TEXTS[0] and entry.published for entry in result.checked)
+
+
+def test_an_unknown_cited_label_gets_no_plan_row() -> None:
+    """#4117: 送っていない番号は足さない。引用の検査が扱う。"""
+    output = _direct_draft([{"evidence_id": "E1", "target": "項目", "relation": "direct"}])
+    output["items"][0]["citations"] = [{"evidence_id": "E9", "line_start": 1, "line_end": 1}]
+    result, _calls = _run_direct(output)
+    assert "request_plan_rows_from_citations" not in result.timing
+    assert [scope.evidence_id for scope in result.draft.request_coverage[0].evidence_scope] == ["E1"]

@@ -1819,6 +1819,38 @@ def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[Reques
     return plans
 
 
+def plan_rows_from_citations(draft: GroundedDraft, spans: Sequence[dict]) -> tuple[GroundedDraft, list[str]]:
+    """同じ出力の計画に行が無く説明が引いた根拠を、direct の行で足す。戻り値は草稿と足した根拠の番号（#4117）。
+
+    モデルが自分で引いた根拠なので、使うと判断したことはコードで分かる。unrelated の判断がある根拠・送っていない番号は
+    足さない（判断を覆さない。引用の検査は従来どおり掛かる）。計画そのものが無い草稿は対象にしない。
+    """
+    rows: dict[str, list[RequestEvidenceScope]] = {}
+    for item in draft.items:
+        if item.kind == "gap":
+            continue
+        for plan in _item_request_plans(item, draft):
+            for citation in item.citations:
+                label = citation.evidence_id
+                known = [*(scope.evidence_id for scope in plan.evidence_scope), *(row.evidence_id for row in rows.get(plan.request_id, ()))]
+                if label not in known and _label_spans(label, spans):
+                    rows.setdefault(plan.request_id, []).append(RequestEvidenceScope(evidence_id=label, target="", relation="direct"))
+    if not rows:
+        return draft, []
+    coverage = []
+    for plan in draft.request_coverage:
+        added = rows.get(plan.request_id, [])
+        coverage.append(
+            plan.model_copy(
+                update={
+                    "evidence_scope": [*plan.evidence_scope, *added],
+                    "evidence_ids": list(dict.fromkeys([*plan.evidence_ids, *(row.evidence_id for row in added)])),
+                }
+            )
+        )
+    return draft.model_copy(update={"request_coverage": coverage}), [row.evidence_id for added in rows.values() for row in added]
+
+
 def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, spans: Sequence[dict]) -> bool:
     """要求の根拠計画を最終説明にも適用する。計画の無い旧応答は従来の原文照合を使う。
 
@@ -7050,8 +7082,14 @@ def run_round(
         "unrecorded_evidence_ids": unrecorded_input_ids,
     }
 
+    plan_rows_added: list[str] = []
+
     def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
         canonical = canonical_generation_draft(value, lambda link: _scope_range_text(link, spans))
+        if scope_plan is None and isinstance(value, generation_model):
+            # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
+            canonical, added = plan_rows_from_citations(canonical, spans)
+            plan_rows_added.extend(added)
         provider_text = value._provider_output_text if isinstance(value, GroundedDraft) else None
         generation_outputs.append(
             {
@@ -7289,6 +7327,8 @@ def run_round(
         timing["citation_range_repair"] = range_repair
     if scope_plan_repair:
         timing["request_scope_repair"] = scope_plan_repair
+    if plan_rows_added:
+        timing["request_plan_rows_from_citations"] = list(dict.fromkeys(plan_rows_added))
     if plan_repair_calls:
         timing["request_plan_repair"] = {
             "calls": plan_repair_calls,
