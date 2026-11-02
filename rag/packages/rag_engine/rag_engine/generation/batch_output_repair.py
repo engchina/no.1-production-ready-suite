@@ -1,108 +1,91 @@
 """分割読取の契約違反を、原文を含めない診断と再試行指示へ変える。"""
 
 import json
+import re
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import ValidationError
 
+from rag_engine.generation.citation_wire import bind_wire_range
 from rag_engine.resources.structured_failures import structured_failure_details
-from rag_engine.retrieval.character_forms import fold_text, fold_width
 
-_PROTOCOL_CODES = {"batch_quote_not_in_input", "batch_read_coverage_incomplete"}
-_QUOTE_NOT_IN_INPUT = "batch_quote_not_in_input"
+RANGE_INVALID_CODE = "batch_range_invalid"
+_PROTOCOL_CODES = {RANGE_INVALID_CODE}
 _MAX_MISMATCH_SAMPLES = 8
-_ELISION_MARKS = ("…", "...", "・・・", "‥")
-_LITERAL_ESCAPES = ("\\n", "\\t", "\\r", '\\"', "\\u")
 
 
-class BatchQuoteMismatch(ValueError):
-    """quote が入力の原文に無い。検証の例外の本文は固定のコードで、匿名の診断だけを持つ（#4090）。
+class BatchRangeInvalid(ValueError):
+    """指定した番号の範囲が入力に無い。検証の例外の本文は固定のコードで、匿名の診断だけを持つ（#4090）。
 
-    ``reading`` は検査した読取結果。再試行の後も残ったときに、原文で確かめられた findings だけを呼び出し側が使う。
+    ``reading`` は検査した読取結果。再試行の後も残ったときに、有効な範囲の findings だけを呼び出し側が使う。
     """
 
     def __init__(self, diagnostic: Mapping[str, Any], *, reading: Any = None) -> None:
-        super().__init__(_QUOTE_NOT_IN_INPUT)
+        super().__init__(RANGE_INVALID_CODE)
         self.diagnostic = dict(diagnostic)
         self.reading = reading
 
 
-def batch_quote_mismatch(error: Exception) -> BatchQuoteMismatch | None:
-    """構造化出力の検証の失敗が quote の照合の不合格だけのとき、その例外。ほかの違反が混ざれば None。"""
+def batch_range_invalid(error: Exception) -> BatchRangeInvalid | None:
+    """構造化出力の検証の失敗が番号の範囲の不合格だけのとき、その例外。ほかの違反が混ざれば None。"""
     if not isinstance(error, ValidationError):
         return None
     causes = [(row.get("ctx") or {}).get("error") for row in error.errors(include_input=False, include_url=False)]
-    return causes[0] if len(causes) == 1 and isinstance(causes[0], BatchQuoteMismatch) else None
+    return causes[0] if len(causes) == 1 and isinstance(causes[0], BatchRangeInvalid) else None
 
 
-def _compact(value: str, fold: Callable[[Any], str] = fold_width) -> str:
-    """引用の照合（``find_width_folded``）と同じく、文字の幅と空白を同一視した形。"""
-    return "".join(fold(value).split())
+_LINE_LABEL = re.compile(r"(B\d+)-(\d+)")
 
 
-def _longest_edge_match(target: str, text: str, *, suffix: bool = False) -> int:
-    """``target`` の先頭（``suffix`` なら末尾）から ``text`` に連続して現れる字数。短い部分が必ず先に現れるので二分探索できる。"""
-    low, high = 0, len(target)
-    while low < high:
-        middle = (low + high + 1) // 2
-        if (target[-middle:] if suffix else target[:middle]) in text:
-            low = middle
-        else:
-            high = middle - 1
-    return low
+def parse_line_range(start_line: str, end_line: str) -> tuple[str, int, int]:
+    """行頭の番号の組から、入力の番号と行の範囲。形が違えば行を 0 にする（``range_error_reason`` が拒む）。"""
+    start, end = _LINE_LABEL.fullmatch(start_line.strip()), _LINE_LABEL.fullmatch(end_line.strip())
+    if start is None or end is None:
+        return "", 0, 0
+    if start.group(1) != end.group(1):
+        return "", -1, -1
+    return start.group(1), int(start.group(2)), int(end.group(2))
 
 
-def _unmatched_quote(evidence_id: str, quote: str, inputs: Mapping[str, str], originals: Mapping[str, str]) -> dict[str, Any]:
-    """照合できなかった 1 件の性質。字数と真偽だけで、引用も原文も持たない。``inputs`` は ``_compact`` にした入力。"""
-    target = _compact(quote)
-    own = inputs.get(evidence_id)
-    joined = "".join(inputs.values())
-    others = sum(target in text for key, text in inputs.items() if key != evidence_id) if target else 0
-    if own is None:
-        reason = "evidence_id_unknown"
-    elif others:
-        reason = "quote_in_other_input"
-    elif target and target in joined:
-        reason = "quote_across_inputs"
-    else:
-        reason = "quote_not_found"
-    compared = own if own is not None else joined
-    original = originals.get(evidence_id)
-    return {
-        "reason": reason,
-        "quote_chars": len(target),
-        "input_chars": len(own) if own is not None else 0,
-        "other_input_matches": others,
-        "prefix_match_chars": _longest_edge_match(target, compared),
-        "suffix_match_chars": _longest_edge_match(target, compared, suffix=True),
-        "elision_mark": any(mark in quote for mark in _ELISION_MARKS),
-        "literal_escape": any(mark in quote for mark in _LITERAL_ESCAPES),
-        "symbol_fold_match": original is not None and bool(target) and _compact(quote, fold_text) in _compact(original, fold_text),
-    }
+def range_error_reason(start_line: str, end_line: str, unit_counts: Mapping[str, int]) -> str | None:
+    """番号の範囲の不合格の理由。有効なら None。"""
+    evidence_id, first, last = parse_line_range(start_line, end_line)
+    if first == 0:
+        return "line_label_invalid"
+    if first < 0:
+        return "range_across_inputs"
+    if evidence_id not in unit_counts:
+        return "evidence_id_unknown"
+    code = bind_wire_range(first, last, unit_count=unit_counts[evidence_id], numbered=True).reason_code
+    return {"citation_range_out_of_bounds": "range_out_of_bounds", "citation_range_invalid": "range_inverted"}.get(code or "", code)
 
 
-def quote_mismatch_diagnostic(unmatched: Sequence[tuple[str, str]], originals: Mapping[str, str]) -> dict[str, Any]:
-    """照合できなかった findings の理由の件数と先頭の数件の性質（モデルの実出力を保存せずに切り分ける。#4090）。"""
-    inputs = {key: _compact(text) for key, text in originals.items()}
-    rows = [_unmatched_quote(evidence_id, quote, inputs, originals) for evidence_id, quote in unmatched]
-    compact_quotes = [_compact(quote) for _, quote in unmatched]
+def range_mismatch_diagnostic(invalid: Sequence[tuple[str, str]], unit_counts: Mapping[str, int]) -> dict[str, Any]:
+    """不合格の findings の理由の件数と、先頭の数件の番号（形の合う番号と件数だけで、原文を持たない。#4090）。"""
+    rows = []
+    known: list[str] = []
+    for start_line, end_line in invalid:
+        evidence_id, first, last = parse_line_range(start_line, end_line)
+        if evidence_id in unit_counts and evidence_id not in known:
+            known.append(evidence_id)
+        rows.append(
+            {
+                "reason": range_error_reason(start_line, end_line, unit_counts),
+                "line_start": first,
+                "line_end": last,
+                "unit_count": unit_counts.get(evidence_id, 0),
+            }
+        )
     return {
         "unmatched_count": len(rows),
-        "reasons": dict(Counter(row["reason"] for row in rows)),
+        "reasons": dict(Counter(str(row["reason"]) for row in rows)),
         "samples": rows[:_MAX_MISMATCH_SAMPLES],
-        # 入力の番号だけ（モデルが書いた未知の番号は持たない）。
-        "evidence_ids": list(dict.fromkeys(evidence_id for evidence_id, _ in unmatched if evidence_id in originals)),
-        # 不合格の quote の根拠として読み直す入力: 指した入力と、quote を逐語で含む別の入力。
-        "retained_evidence_ids": list(
-            dict.fromkeys(
-                key
-                for (evidence_id, _), target in zip(unmatched, compact_quotes, strict=True)
-                for key, text in inputs.items()
-                if key == evidence_id or (target and target in text)
-            )
-        ),
+        # 入力の番号と単位の数だけ（モデルが書いた未知の番号は持たない）。不合格の範囲の入力は原文の全体を残す。
+        "retained_evidence_ids": known,
+        "unit_counts": {key: unit_counts[key] for key in known},
+        "input_count": len(unit_counts),
     }
 
 
@@ -116,8 +99,8 @@ def batch_validation_detail(error: Exception, schema: Mapping[str, Any]) -> dict
             protocol_error = (row.get("ctx") or {}).get("error")
             if isinstance(protocol_error, ValueError) and protocol_error.args in [(code,) for code in _PROTOCOL_CODES]:
                 safe["protocol_code"] = protocol_error.args[0]
-            if isinstance(protocol_error, BatchQuoteMismatch):
-                safe["quote_mismatch"] = protocol_error.diagnostic
+            if isinstance(protocol_error, BatchRangeInvalid):
+                safe["range_mismatch"] = protocol_error.diagnostic
     return detail
 
 
@@ -127,7 +110,7 @@ def batch_failure_summary(receipt: Mapping[str, Any], error: Exception) -> dict[
     last = attempts[-1] if attempts else structured_failure_details(error)
     errors = last.get("validation_errors", ())
     code = next((row["protocol_code"] for row in errors if row.get("protocol_code")), None)
-    mismatch = next((row["quote_mismatch"] for row in errors if row.get("quote_mismatch")), None)
+    mismatch = next((row["range_mismatch"] for row in errors if row.get("range_mismatch")), None)
     return {
         "category": code or last["category"],
         "batch_index": receipt["index"],
@@ -144,22 +127,21 @@ def batch_repair_prompt(original: str, detail: Mapping[str, Any]) -> str:
         "前の読取結果は指定形式の検査を通りませんでした。次の指摘を直し、同じ入力全体について完全な読取結果を返してください。",
     ]
     errors = detail.get("validation_errors", [])
-    if any("read_receipts" in entry["loc"] or entry.get("protocol_code") == "batch_read_coverage_incomplete" for entry in errors):
+    mismatches = [entry["range_mismatch"] for entry in errors if entry.get("range_mismatch")]
+    if mismatches:
         guidance.append(
-            "read_receipts は入力の全 evidence_id を記録してください。"
-            "本文を実際に確認した入力だけを true とし、確認できない入力を確認済みに変えないでください。"
+            "各 findings の start_line と end_line には、同じ入力の行頭の番号（例: B1-3）をそのまま、開始以上の終了で指定してください。"
         )
-    if any("quote" in entry["loc"] or entry.get("protocol_code") == _QUOTE_NOT_IN_INPUT for entry in errors):
-        guidance.append(
-            "各 findings の evidence_id と quote を対応する入力原文に照合し、"
-            "連続して存在する原文を quote に使ってください。原文を補作しないでください。"
-            "quote の途中を省略せず、離れた箇所は finding を分けてください。"
+        guidance.extend(
+            f"{key} の行は {key}-1〜{key}-{count} です。" for mismatch in mismatches for key, count in mismatch["unit_counts"].items()
         )
-        mismatches = [entry["quote_mismatch"] for entry in errors if entry.get("quote_mismatch")]
-        if failed_inputs := list(dict.fromkeys(key for mismatch in mismatches for key in mismatch.get("evidence_ids", ()))):
-            guidance.append(f"原文に無い quote があった入力: {'、'.join(failed_inputs)}")
-    # 照合の診断（quote_mismatch）の字数と理由はモデルに渡さない。指摘の形は検査の型・位置・固定コード・入力の番号だけ。
-    shown = [{key: value for key, value in entry.items() if key != "quote_mismatch"} for entry in errors]
+        guidance.extend(
+            f"evidence_id は B1〜B{mismatch['input_count']} です。"
+            for mismatch in mismatches
+            if mismatch["reasons"].get("evidence_id_unknown")
+        )
+    # 照合の診断（range_mismatch）の件数はモデルに渡さない。指摘の形は検査の型・位置・固定コードと、上の番号の範囲だけ。
+    shown = [{key: value for key, value in entry.items() if key != "range_mismatch"} for entry in errors]
     return (
         original
         + "\n\n## Step 4: 読取結果の形式を修正する\n"

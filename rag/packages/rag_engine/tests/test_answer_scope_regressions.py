@@ -391,8 +391,8 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
         "request_id": "Q1",
         "evidence_ids": [labels[correct]],
         "evidence_scope": [
-            {"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct", "link_quote": ""},
-            {"evidence_id": labels[other], "target": "独立した設定", "relation": "unrelated", "link_quote": ""},
+            {"evidence_id": labels[correct], "target": "CSV の更新", "relation": "direct"},
+            {"evidence_id": labels[other], "target": "独立した設定", "relation": "unrelated"},
         ],
     }
     model = FakeModel(

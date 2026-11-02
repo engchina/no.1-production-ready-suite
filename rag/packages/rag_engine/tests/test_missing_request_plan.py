@@ -50,9 +50,7 @@ def _plan(*scopes: tuple[str, str]) -> dict:
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_scope": [
-                    {"evidence_id": label, "target": "資料", "relation": relation, "link_quote": ""} for label, relation in scopes
-                ],
+                "evidence_scope": [{"evidence_id": label, "target": "資料", "relation": relation} for label, relation in scopes],
                 "evidence_ids": [label for label, relation in scopes if relation != "unrelated"],
             }
         ]

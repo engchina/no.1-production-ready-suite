@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import replace
 
 import pytest
+from pydantic import ValidationError
 
 from rag_engine.config import get_settings
 from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
@@ -35,7 +36,17 @@ def prepare(spans, read, **kwargs):
 
 
 def span(index, text):
-    return {"evidence_id": f"E{index}", "source_id": f"p{index}", "text": text, "start": 0, "end": len(text)}
+    return {"evidence_id": f"E{index}", "source_id": f"p{index}", "source": f"p{index}", "text": text, "start": 0, "end": len(text)}
+
+
+def body(value):
+    """入力の本文から行頭の番号を除く（改行を含む単位の間は問わない）。"""
+    return "".join(line.split("| ", 1)[1] for line in value["text"].split("\n"))
+
+
+def finding(value, answer="合成の回答", first=1, last=None):
+    label = value["evidence_id"]
+    return {"start_line": f"{label}-{first}", "end_line": f"{label}-{first if last is None else last}", "answer": answer}
 
 
 def test_twelve_parents_and_oversized_parent_are_read_without_character_loss():
@@ -45,14 +56,13 @@ def test_twelve_parents_and_oversized_parent_are_read_without_character_loss():
     def read(system, prompt, schema):
         payload = json.loads(prompt)
         for source in payload["evidence"]:
-            seen[source["source_id"]].append((source["start"], source["text"]))
+            seen[source["source"]].append(body(source))
         return schema.model_validate(
             {
-                "read_receipts": {s["evidence_id"]: True for s in payload["evidence"]},
                 "findings": [
-                    {"answer": s["text"].split("。", 1)[0], "evidence_id": s["evidence_id"], "quote": s["text"].split("。", 1)[0] + "。"}
+                    finding(s, answer=body(s).split("。", 1)[0])
                     for s in payload["evidence"]
-                    if s["text"].startswith("条件")
+                    if s["text"].split("| ", 1)[1].startswith("条件")
                 ],
                 "unanswered": [],
             }
@@ -63,7 +73,7 @@ def test_twelve_parents_and_oversized_parent_are_read_without_character_loss():
     assert diagnostic["read_source_count"] == 12
     assert diagnostic["excluded_span_count"] == 0
     for original in inputs:
-        assert "".join(text for _, text in sorted(seen[original["source_id"]])) == original["text"]
+        assert "".join(seen[original["source_id"]]) == original["text"]
     assert {s["source_id"] for s in selected} == {s["source_id"] for s in inputs}
     assert all(s["text"] in inputs[int(s["source_id"][1:])]["text"] for s in selected)
     assert len(block(selected)) <= 3500
@@ -78,18 +88,15 @@ def test_short_input_uses_one_normal_generation_without_reader():
     assert prompt == block(inputs)
 
 
-@pytest.mark.parametrize("failure", ["missing", "invented_quote", "exception"])
-def test_failed_or_unread_batch_does_not_become_success(failure):
+@pytest.mark.parametrize("failure", ["missing", "invalid_range", "exception"])
+def test_failed_batch_does_not_become_success(failure):
     def read(system, prompt, schema):
         if failure == "exception":
             raise TimeoutError("synthetic")
         values = json.loads(prompt)["evidence"]
         return schema.model_validate(
             {
-                "read_receipts": {} if failure == "missing" else {s["evidence_id"]: True for s in values},
-                "findings": [{"answer": "合成の回答", "evidence_id": values[0]["evidence_id"], "quote": "存在しない引用"}]
-                if failure == "invented_quote"
-                else [],
+                **({} if failure == "missing" else {"findings": [finding(values[0], first=9999)] if failure == "invalid_range" else []}),
                 "unanswered": [],
             }
         )
@@ -136,13 +143,17 @@ def test_partition_respects_model_tokens_and_preserves_nonzero_parent_offsets():
         assert model_input_measurement(config(answer_max_input_tokens=2300), system, prompt, schema.model_json_schema())["fits"]
         values = json.loads(prompt)["evidence"]
         seen.extend(values)
-        return schema(read_receipts={s["evidence_id"]: True for s in values}, findings=[], unanswered=[])
+        return schema(findings=[], unanswered=[])
 
     _, _, receipt = prepare([original], read, answer_max_input_tokens=2300)
     assert receipt["batch_count"] > 1
-    assert "".join(value["text"] for value in seen) == original["text"]
-    assert seen[0]["start"] == 900
-    assert seen[-1]["end"] == original["end"]
+    assert receipt["batches"][0]["ranges"][0]["start"] == 900
+    assert receipt["batches"][-1]["ranges"][-1]["end"] == original["end"]
+    assert sum(range_row["end"] - range_row["start"] for batch in receipt["batches"] for range_row in batch["ranges"]) == len(
+        original["text"]
+    )
+    assert "".join(value["text"].replace("\n", "") for value in seen).count("本文の条件です。") == 500
+    assert not any("start" in value or "source_id" in value for value in seen)
 
 
 def test_synthesis_reads_all_twelve_parents_before_final_answer(monkeypatch):
@@ -178,21 +189,14 @@ def test_synthesis_reads_all_twelve_parents_before_final_answer(monkeypatch):
         captured.append(schema)
         if issubclass(schema, BatchReading):
             inputs = json.loads(prompt)["evidence"]
-            seen.update(s["source_id"] for s in inputs)
+            seen.update(s["source"] for s in inputs)
             return schema(
-                read_receipts={s["evidence_id"]: True for s in inputs},
                 findings=[
-                    {
-                        "answer": s["text"].split("。", 1)[0] + "。",
-                        "evidence_id": s["evidence_id"],
-                        "quote": s["text"].split("。", 1)[0] + "。",
-                    }
-                    for s in inputs
-                    if s["text"].startswith("条件")
+                    finding(s, answer=body(s).split("。", 1)[0] + "。") for s in inputs if s["text"].split("| ", 1)[1].startswith("条件")
                 ],
                 unanswered=[],
             )
-        assert seen == {r.id for r in records}
+        assert seen == {r.source for r in records}
         if schema is RequestScopePlan:
             return schema(request_coverage=[])
         assert "分割読取の回答候補" in prompt
@@ -230,13 +234,8 @@ def test_map_results_are_reduced_again_when_they_cannot_fit_together():
         reducing = any(value.get("batch_answer") for value in values)
         reduction_calls.append(reducing)
         return schema(
-            read_receipts={value["evidence_id"]: True for value in values},
             findings=[
-                {
-                    "answer": value["text"].split("。", 1)[0],
-                    "evidence_id": value["evidence_id"],
-                    "quote": value["text"].split("。", 1)[0] + "。" if reducing else value["text"][:300],
-                }
+                finding(value, answer=body(value).split("。", 1)[0], last=1 if reducing else min(2, value["text"].count("\n") + 1))
                 for value in values
             ],
             unanswered=[],
@@ -252,8 +251,7 @@ def test_nonshrinking_map_results_do_not_silently_discard_sources():
     def read(system, prompt, schema):
         values = json.loads(prompt)["evidence"]
         return schema(
-            read_receipts={value["evidence_id"]: True for value in values},
-            findings=[{"answer": value["text"], "evidence_id": value["evidence_id"], "quote": value["text"]} for value in values],
+            findings=[finding(value, answer=body(value)[:100], last=value["text"].count("\n") + 1) for value in values],
             unanswered=[],
         )
 
@@ -279,115 +277,96 @@ def test_parent_larger_than_old_24000_gate_can_use_single_generation():
     assert diagnostic["batch_count"] == 0
 
 
-@pytest.mark.parametrize("failure", ["missing", "unread", "unknown"])
-def test_reader_schema_binds_receipt_to_all_input_ids(failure):
-    from pydantic import ValidationError
-
-    def read(system, prompt, schema):
-        values = json.loads(prompt)["evidence"]
-        ids = [value["evidence_id"] for value in values]
-        field = schema.model_json_schema()["$defs"]["BatchReadReceipts"]
-        assert field["required"] == list(field["properties"]) == ids
-        invalid = {key: True for key in ids}
-        if failure == "missing":
-            invalid.pop(ids[-1])
-        elif failure == "unknown":
-            invalid["unknown"] = True
-        else:
-            invalid[ids[-1]] = False
-        with pytest.raises(ValidationError):
-            schema.model_validate({"read_receipts": invalid, "findings": [], "unanswered": []})
-        return schema(read_receipts=dict.fromkeys(ids, True), findings=[], unanswered=[])
-
-    prepare([span(i, "合成の本文。" * 40) for i in range(20)], read)
-
-
-def test_incomplete_receipt_uses_existing_structured_output_retry():
-    from rag_engine.adapters.oci import _parse_with_retry
-
-    calls = 0
-    batches = 0
-
-    def read(system, prompt, schema):
-        nonlocal batches
-        batches += 1
-        ids = [value["evidence_id"] for value in json.loads(prompt)["evidence"]]
-
-        def operation():
-            nonlocal calls
-            calls += 1
-            return schema.model_validate(
-                {"read_receipts": {} if calls == 1 else dict.fromkeys(ids, True), "findings": [], "unanswered": []}
-            )
-
-        return _parse_with_retry(operation, "synthetic", config(), retries=0)
-
-    _, _, diagnostic = prepare([span(0, "合成の本文。" * 2000)], read)
-    assert calls == batches + 1
-    assert diagnostic["read_source_count"] == 1
-
-
-def test_concurrent_reader_schemas_keep_receipts_separate():
+def test_concurrent_readers_keep_inputs_separate():
     from concurrent.futures import ThreadPoolExecutor
 
     def run(prefix):
         def read(system, prompt, schema):
             values = json.loads(prompt)["evidence"]
-            ids = [value["evidence_id"] for value in values]
-            assert schema.model_json_schema()["$defs"]["BatchReadReceipts"]["required"] == ids
-            assert all(value["source_id"].startswith(prefix) for value in values)
-            return schema(read_receipts=dict.fromkeys(ids, True), findings=[], unanswered=[])
+            assert all(value["source"].startswith(prefix) for value in values)
+            return schema(findings=[], unanswered=[])
 
-        values = [{**span(i, "合成の本文。" * 300), "source_id": f"{prefix}-{i}"} for i in range(3)]
+        values = [{**span(i, "合成の本文。" * 300), "source_id": f"{prefix}-{i}", "source": f"{prefix}-{i}"} for i in range(3)]
         return prepare(values, read)[2]["read_source_count"]
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert list(executor.map(run, ["left", "right"])) == [3, 3]
 
 
-@pytest.mark.parametrize("failure", ["unknown_source", "invented_quote", "noncontiguous_quote"])
-def test_quote_validation_uses_existing_structured_output_retry(failure):
+@pytest.mark.parametrize(
+    ("first_range", "reason"),
+    [
+        (("B9-1", "B9-1"), "evidence_id_unknown"),
+        (("B1-9999", "B1-9999"), "range_out_of_bounds"),
+        (("B1-2", "B1-1"), "range_inverted"),
+        (("B1-1", "B2-1"), "range_across_inputs"),
+        (("1", "2"), "line_label_invalid"),
+    ],
+    ids=["unknown_input", "out_of_bounds", "inverted", "across_inputs", "not_a_label"],
+)
+def test_invalid_range_uses_existing_structured_output_retry(first_range, reason):
     from rag_engine.adapters.oci import _parse_with_retry
 
     calls = 0
     batches = 0
+    reasons = []
 
     def read(system, prompt, schema):
         nonlocal batches
         batches += 1
         values = json.loads(prompt)["evidence"]
-        source = values[0]
-        receipt = {value["evidence_id"]: True for value in values}
-        valid_quote = source["text"][:5]
 
         def operation():
             nonlocal calls
             calls += 1
-            first = calls == 1
-            quote = ("存在しない原文" if failure == "invented_quote" else valid_quote + "…" + valid_quote) if first else valid_quote
-            return schema.model_validate(
-                {
-                    "read_receipts": receipt,
-                    "findings": [
-                        {
-                            "evidence_id": "unknown" if first and failure == "unknown_source" else source["evidence_id"],
-                            "quote": quote,
-                            "answer": "合成の回答",
-                        }
-                    ],
-                    "unanswered": [],
-                }
-            )
+            row = finding(values[0])
+            if calls == 1:
+                row = {**row, "start_line": first_range[0], "end_line": first_range[1]}
+            try:
+                return schema.model_validate({"findings": [row], "unanswered": []})
+            except ValidationError as exc:
+                reasons.append(exc.errors()[0]["ctx"]["error"].diagnostic["reasons"])
+                raise
 
         return _parse_with_retry(operation, "synthetic", config(), retries=0)
 
-    _, _, diagnostic = prepare([span(0, "合成の本文。" * 2000)], read)
+    inputs = [span(i, "合成の本文。" * 200) for i in range(4)]
+    _, _, diagnostic = prepare(inputs, read)
     assert calls == batches + 1
-    assert diagnostic["read_source_count"] == 1
+    assert reasons == [{reason: 1}]
+    assert diagnostic["read_source_count"] == 4
 
 
-def test_rejected_quote_reaches_the_final_generation_with_the_original_and_no_generation_failure():
-    """#4090: 1 件の quote の不合格で組全体を退避にせず、原文を根拠に最終生成へ進む。不合格の quote と answer は渡さない。"""
+def test_code_cuts_the_verbatim_original_from_the_selected_lines():
+    """#4090: 原文と座標はコードが番号から切り出す。モデルの出力に原文の欄は無い。"""
+    text = "第一の条件です。\n第二の条件です。\n第三の条件です。\n" + "補足本文。" * 1500
+    original = {**span(0, text), "start": 300, "end": 300 + len(text)}
+
+    def read(system, prompt, schema):
+        assert "quote" not in schema.model_json_schema()["$defs"]["BatchFinding"]["properties"]
+        values = json.loads(prompt)["evidence"]
+        first_input = values[0]["text"].startswith("B1-1| 第一の条件です。\nB1-2| 第二の条件です。")
+        return schema(findings=[finding(values[0], first=2, last=3)] if first_input else [], unanswered=[])
+
+    selected, _, diagnostic = prepare([original], read)
+    assert selected[0]["text"] == "第二の条件です。\n第三の条件です。"
+    assert selected[0]["start"] == 300 + text.index("第二")
+    assert selected[0]["end"] == selected[0]["start"] + len(selected[0]["text"])
+    assert selected[0]["batch_answer"] == "合成の回答"
+    assert diagnostic["batches"][0]["selected_range_chars"] == [len(selected[0]["text"])]
+
+
+def test_a_long_line_without_a_break_is_split_into_selectable_units():
+    from rag_engine.generation.batched_evidence import READING_UNIT_MAX_CHARS, reading_units
+
+    text = "あ" * (READING_UNIT_MAX_CHARS * 2 + 10)
+    units = reading_units({"text": text})
+    assert [end - start for start, end in units] == [READING_UNIT_MAX_CHARS, READING_UNIT_MAX_CHARS, 10]
+    assert "".join(text[start:end] for start, end in units) == text
+
+
+def test_rejected_range_reaches_the_final_generation_with_the_original_and_no_generation_failure():
+    """#4090: 1 件の範囲の不合格で組全体を退避にせず、原文を根拠に最終生成へ進む。不合格の answer は渡さない。"""
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation import answering
     from rag_engine.generation.citation_wire import generation_draft_wire_model
@@ -409,13 +388,8 @@ def test_rejected_quote_reaches_the_final_generation_with_the_original_and_no_ge
 
     def model(system, prompt, settings, schema, **kwargs):
         if issubclass(schema, BatchReading):
-            values = json.loads(prompt.split("\n\n## Step 4:", 1)[0])["evidence"]
             return schema.model_validate(
-                {
-                    "read_receipts": {value["evidence_id"]: True for value in values},
-                    "findings": [{"evidence_id": "B1", "quote": "条件...値", "answer": "採らない合成の回答"}],
-                    "unanswered": [],
-                }
+                {"findings": [{"start_line": "B1-9999", "end_line": "B1-9999", "answer": "採らない合成の回答"}], "unanswered": []}
             )
         assert issubclass(schema, generation_draft_wire_model())
         generated.append(prompt)
@@ -433,7 +407,6 @@ def test_rejected_quote_reaches_the_final_generation_with_the_original_and_no_ge
     assert "generation_failure" not in result.generation_trace
     assert generated
     assert "採らない合成の回答" not in generated[0]
-    assert "条件...値" not in generated[0]
     assert "条件0は値0です。" in generated[0]
 
 
@@ -457,7 +430,7 @@ def test_invalid_batch_reading_returns_unverified_source_material_without_an_ans
 
     def model(system, prompt, settings, schema, **kwargs):
         assert issubclass(schema, BatchReading)
-        return schema.model_validate({"read_receipts": {}, "findings": [], "unanswered": []})
+        return schema.model_validate({"findings": [{"start_line": "x"}], "unanswered": []})
 
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
@@ -481,18 +454,14 @@ def test_invalid_batch_reading_returns_unverified_source_material_without_an_ans
 
 
 def test_batch_local_ids_preserve_original_sources_and_coordinates():
-    original = {**span(0, "固有の条件。" + "補足。" * 2000), "evidence_id": "E" + "0123456789abcdef" * 4, "start": 700}
+    original = {**span(0, "固有の条件。\n" + "補足。" * 2000), "evidence_id": "E" + "0123456789abcdef" * 4, "start": 700}
     original["end"] = original["start"] + len(original["text"])
 
     def read(system, prompt, schema):
         values = json.loads(prompt)["evidence"]
         assert [value["evidence_id"] for value in values] == [f"B{index}" for index in range(1, len(values) + 1)]
-        findings = [
-            {"evidence_id": value["evidence_id"], "quote": "固有の条件。", "answer": "固有の条件。"}
-            for value in values
-            if value["text"].startswith("固有の条件。")
-        ]
-        return schema(read_receipts={value["evidence_id"]: True for value in values}, findings=findings, unanswered=[])
+        findings = [finding(value, answer="固有の条件。") for value in values if body(value).startswith("固有の条件。")]
+        return schema(findings=findings, unanswered=[])
 
     selected, _, diagnostic = prepare([original], read)
     assert diagnostic["read_source_count"] == 1

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from time import monotonic
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 from httpx import TimeoutException
 from openai import APITimeoutError
@@ -1961,6 +1961,50 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown
             )
     # 同じ request_id の計画が複数あると同じ指摘が重なる（#3808）。作り直しの入力に同じ文を繰り返さない。
     return list(dict.fromkeys(errors))
+
+
+def scope_evidence_text(span: Mapping[str, Any]) -> str:
+    """計画の入力の本文。行頭の番号は生成の根拠ブロックの引用単位と同じ。"""
+    text = str(span.get("text") or "")
+    return _numbered_text(text, citation_units(text, image_text=_image_text(span)), numbered=True)
+
+
+def _scope_range_text(label: str, line_start: int, line_end: int, spans: Sequence[dict]) -> str:
+    """指定した番号の範囲の連続した原文。根拠が 1 つに決まらない・範囲が無効なら空文字（推測で切り詰めない）。"""
+    named = _label_spans(label, spans)
+    if len(named) != 1:
+        return ""
+    text = str(named[0].get("text") or "")
+    units = citation_units(text, image_text=_image_text(named[0]))
+    binding = bind_wire_range(line_start, line_end, unit_count=len(units), numbered=True)
+    if binding.reason_code is not None:
+        return ""
+    return text[units[line_start - 1][0] : units[line_end - 1][1]].strip()
+
+
+def resolve_scope_plan(plan: RequestScopePlan, spans: Sequence[dict]) -> list[RequestCoverage]:
+    """番号で返した計画を、コードが原文を切り出した計画へ変える。
+
+    linked の範囲が無効なら原文を空にして、``_request_plan_errors`` の指摘に任せる。原文は常に指した根拠から
+    切り出すので、原文と番号の食い違いは起きない。
+    """
+    result = []
+    for entry in plan.request_coverage:
+        fields: dict[str, Any] = {"request_id": entry.request_id, "evidence_ids": entry.evidence_ids}
+        if "evidence_scope" in entry.model_fields_set:
+            fields["evidence_scope"] = [
+                {
+                    "evidence_id": scope.evidence_id,
+                    "target": scope.target,
+                    "relation": scope.relation,
+                    "link_quote": _scope_range_text(scope.link.evidence_id, scope.link.line_start, scope.link.line_end, spans)
+                    if scope.relation == "linked" and scope.link is not None
+                    else "",
+                }
+                for scope in entry.evidence_scope
+            ]
+        result.append(RequestCoverage.model_validate(fields))
+    return result
 
 
 def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[RequestCoverage]:
@@ -7003,6 +7047,13 @@ ASSUMPTION_SYSTEM_PROMPT = (
 )
 
 
+class _ScopePlan(NamedTuple):
+    """モデルが返した番号の計画と、コードが原文を切り出した計画。"""
+
+    wire: RequestScopePlan
+    request_coverage: list[RequestCoverage]
+
+
 def run_round(
     question: str,
     spans: Sequence[dict],
@@ -7088,9 +7139,9 @@ def run_round(
     range_repair: dict[str, Any] = {}
     separate_scope = uses_separate_scope_plan(question) and not range_only
 
-    def plan_scope(evidence: Sequence[dict], correction: Mapping[str, Any] | None = None) -> RequestScopePlan:
+    def plan_scope(evidence: Sequence[dict], correction: Mapping[str, Any] | None = None) -> _ScopePlan:
         """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。``correction`` は前の計画の指摘（作り直しのときだけ）。"""
-        return call_with_model_purpose(
+        plan = call_with_model_purpose(
             "answer.scope",
             parse_text,
             resolve_prompt("generation.instruction", SCOPE_PLAN_SYSTEM_PROMPT),
@@ -7108,7 +7159,7 @@ def run_round(
                             "evidence_id": span["label"],
                             "source": span.get("source", ""),
                             "section": _function_title(span),
-                            "text": span["text"],
+                            "text": scope_evidence_text(span),
                             **({"catalog": True} if span.get(ARTICLE_CATALOG_KEY) else {}),
                         }
                         for span in evidence
@@ -7121,8 +7172,9 @@ def run_round(
             RequestScopePlan,
             provider_id=provider_id,
         )
+        return _ScopePlan(plan, resolve_scope_plan(plan, spans))
 
-    def scope_plan_issues(plan: RequestScopePlan) -> tuple[dict[str, int], list[str]]:
+    def scope_plan_issues(plan: _ScopePlan) -> tuple[dict[str, int], list[str]]:
         """生成の前の計画の不整合の件数（診断）と指摘の文（作り直しの入力）。検査の条件はここだけに置く。"""
         known = {unit["id"] for unit in _contract_view(question).get("request_units", ()) if unit.get("kind") != "context"}
         own = [entry.request_id for entry in plan.request_coverage]
@@ -7166,15 +7218,16 @@ def run_round(
             # 草稿の計画の作り直し（下の invalid_request_plan）とそろえ、指摘を付けて計画だけを 1 回作り直す（#4098）。検査は
             # 変えず、作り直しの結果にも同じ検査を掛ける。この呼び出しは計画が検査に落ちたときだけ増える。
             scope_plan_repair = {"calls": 1, "initial_issues": issues}
-            repaired: RequestScopePlan | None = None
+            repaired: _ScopePlan | None = None
             try:
                 repaired = plan_scope(
                     presentation,
                     {
-                        "previous_plan": scope_plan.model_dump(mode="json"),
+                        "previous_plan": scope_plan.wire.model_dump(mode="json"),
                         "invalid_request_plan": notes,
                         "instruction": "previous_plan の invalid_request_plan の指摘をすべて直し、計画の全体を返してください。"
-                        "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は evidence_ids に入れないでください。",
+                        "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は evidence_ids に入れないでください。"
+                        "linked の link には関係を明記した本文の番号の範囲を指定してください。",
                     },
                 )
             except Exception as exc:
@@ -7207,7 +7260,8 @@ def run_round(
             evidence_block_text(spans),
             evidence_block_text(selected),
         )
-        prompt += "\n要求ごとの根拠計画:\n" + scope_plan.model_dump_json()
+        # 番号の形のまま渡す。生成の根拠ブロックの行番号と同じで、原文を重ねて入力を増やさない。
+        prompt += "\n要求ごとの根拠計画:\n" + scope_plan.wire.model_dump_json()
     generation_system = generation_system_prompt(question)
     if assume_unconfirmed:
         # 保存した本体の Step の数が既定と違っても、前提の部品の番号を本体の続きにする（#3810）。

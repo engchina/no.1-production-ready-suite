@@ -87,7 +87,7 @@ def test_subquestions_are_planned_before_generation_with_original_context() -> N
         if schema is RequestScopePlan:
             inputs = json.loads(prompt)
             assert inputs["question"] == QUESTION
-            assert [row["text"] for row in inputs["evidence"]] == TEXTS
+            assert [row["text"] for row in inputs["evidence"]] == [f"1| {text}" for text in TEXTS]
             return RequestScopePlan.model_validate(planned)
         assert calls[0] is RequestScopePlan
         assert "request_coverage" not in schema.model_json_schema()["properties"]
@@ -96,7 +96,7 @@ def test_subquestions_are_planned_before_generation_with_original_context() -> N
 
     result = run(QUESTION, parse)
     assert len(calls) == 2 and result.audit_calls == 0
-    assert result.draft.request_coverage == RequestScopePlan.model_validate(planned).request_coverage
+    assert [(entry.request_id, entry.evidence_ids) for entry in result.draft.request_coverage] == [("Q1", ["E1", "E2"])]
     assert [entry.item.text for entry in result.checked if not entry.added] == TEXTS
     assert result.timing["generation_calls"] == 2
 
@@ -248,10 +248,6 @@ def test_invalid_plan_failure_keeps_issue_counts_without_contents() -> None:
     assert detail["evidence_count"] == 2
 
 
-def _quoted_scope(label: str, quote: str) -> dict[str, Any]:
-    return {"evidence_id": label, "target": "項目", "relation": "direct", "link_quote": quote}
-
-
 def _scope_failures(parse_plans: list[Any]) -> tuple[Any, list[dict[str, Any]]]:
     """計画の応答を順に返す。生成まで進めば生成の応答を返す。呼び出しの入力を記録する。"""
     prompts: list[dict[str, Any]] = []
@@ -335,11 +331,63 @@ def test_a_repair_implementation_error_is_not_classified() -> None:
         run_long(parse)
 
 
-def test_misattributed_scope_is_a_finding_and_the_repaired_ids_are_kept() -> None:
-    """#4098: 直した計画の根拠だけが生成へ渡り、不合格の計画の番号を使わない。"""
+def _linked_plan(link: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "request_coverage": [
+            {
+                "request_id": "Q1",
+                "evidence_ids": ["E1"],
+                "evidence_scope": [{"evidence_id": "E1", "target": "項目", "relation": "linked", "link": link}],
+            }
+        ]
+    }
+
+
+def test_code_cuts_the_link_quote_from_the_numbered_range_and_the_input_is_numbered() -> None:
+    """#4098: linked の原文はコードが番号から切り出す。計画に原文の欄は無く、原文と番号は食い違わない。"""
+    prompts: list[dict[str, Any]] = []
+    generated: list[str] = []
+
+    def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        if schema is RequestScopePlan:
+            prompts.append(json.loads(prompt))
+            return RequestScopePlan.model_validate(_linked_plan({"evidence_id": "E2", "line_start": 1, "line_end": 1}))
+        generated.append(prompt)
+        return schema.model_validate(draft(["Q1", "Q1"]))
+
+    current = run(QUESTION, parse)
+    assert [row["text"] for row in prompts[0]["evidence"]] == [f"1| {text}" for text in TEXTS]
+    assert "link_quote" not in json.dumps(RequestScopePlan.model_json_schema())
+    scope = current.draft.request_coverage[0].evidence_scope[0]
+    assert (scope.relation, scope.link_quote) == ("linked", TEXTS[1])
+    # 生成へは番号の形のまま渡し、原文を重ねない。
+    assert '"line_start":1' in generated[0] and "link_quote" not in generated[0].split("要求ごとの根拠計画:")[1]
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        None,
+        {"evidence_id": "E2", "line_start": 9, "line_end": 9},
+        {"evidence_id": "E2", "line_start": 1, "line_end": 0},
+        {"evidence_id": "E9", "line_start": 1, "line_end": 1},
+    ],
+    ids=["no_range", "out_of_bounds", "inverted", "unknown_evidence"],
+)
+def test_invalid_linked_range_is_a_finding_and_is_repaired(link: dict[str, Any] | None) -> None:
+    """#4098: 無効な範囲を推測で直さず、関係の原文が無い指摘として 1 回作り直す。"""
+    parse, prompts = _scope_failures([_linked_plan(link), plan()])
+    result = run_long(parse)
+    assert len(prompts) == 2
+    assert result.timing["request_scope_repair"]["initial_issues"]["plan_error_count"] == 1
+    assert any("linked" in finding for finding in prompts[1]["correction"]["invalid_request_plan"])
+    assert result.timing["request_scope_repair"]["outcome"] == "repaired"
+
+
+def test_unrelated_evidence_in_the_plan_is_a_finding_and_the_repaired_plan_is_used() -> None:
+    """#4098: 直した計画だけが生成へ渡る。"""
     wrong = plan()
-    wrong["request_coverage"][0]["evidence_scope"] = [_quoted_scope("E1", TEXTS[1])]
-    wrong["request_coverage"][0]["evidence_ids"] = ["E1"]
+    wrong["request_coverage"][0]["evidence_scope"][0]["relation"] = "unrelated"
     right = plan()
     generated: list[str] = []
     prompts: list[dict[str, Any]] = []
@@ -354,6 +402,6 @@ def test_misattributed_scope_is_a_finding_and_the_repaired_ids_are_kept() -> Non
 
     result = run_long(parse)
     assert result.timing["request_scope_repair"]["initial_issues"]["plan_error_count"] == 1
-    assert any("E2" in finding for finding in prompts[1]["correction"]["invalid_request_plan"])
+    assert any("E1" in finding for finding in prompts[1]["correction"]["invalid_request_plan"])
     assert RequestScopePlan.model_validate(right).model_dump_json() in generated[0]
     assert RequestScopePlan.model_validate(wrong).model_dump_json() not in generated[0]
