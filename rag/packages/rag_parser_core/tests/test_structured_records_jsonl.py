@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 
+from rag_parser_core import registry
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, adapter_supports_source
 from rag_parser_core.registry import run_external_adapter
 from rag_parser_core.sheet_records import (
@@ -326,3 +330,28 @@ def test_oversized_form_field_is_rejected_and_csv_cannot_have_form_fields() -> N
     ]
     parsed = parse_structured_records(dump_structured_records(lines))
     assert parsed == StructuredRecordsError("unsupported_record_type", 2)
+
+
+def test_long_jsonl_records_line_of_each_record_id() -> None:
+    """記録の ID（要素の ID）と JSONL の物理行で原本の位置を記録する（#4100）。"""
+    values = [f"値{i}" + "本文" * 10 for i in range(300)]
+    data = _csv(*values)
+    result = registry._structured_records_jsonl_result(data)
+    assert result.extraction is not None
+    source_map = result.extraction.parser_artifacts["source_map"]
+    assert source_map["scheme"] == "jsonl_line"
+    assert source_map["sha256"] == hashlib.sha256(data).hexdigest()
+    lines = data.decode().split("\n")
+    elements = result.extraction.elements
+    assert set(source_map["elements"]) == {element.element_id for element in elements}
+    for element in (elements[0], elements[150], elements[-1]):
+        span = source_map["elements"][element.element_id][0]
+        line = int(span["locator"].removeprefix("line="))
+        assert json.loads(lines[line - 1])["record_id"] == element.element_id
+        assert data.decode()[span["source_start"] : span["source_end"]] == lines[line - 1]
+
+
+def test_short_jsonl_records_no_position() -> None:
+    result = registry._structured_records_jsonl_result(_csv("短い値"))
+    assert result.extraction is not None
+    assert "source_map" not in result.extraction.parser_artifacts

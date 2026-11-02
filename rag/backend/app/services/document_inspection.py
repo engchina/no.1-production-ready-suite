@@ -33,6 +33,7 @@ def extraction_window(
     text_offset: int = 0,
     cell_offset: int = 0,
     scope_element_ids: set[str] | None = None,
+    scope_fragments: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """サーバーで絞り、表示対象外の本文・要素・重複metadataを返さない。"""
     # 左の表示範囲（ページ・文字範囲）を指定したときは、その範囲の全部を返す（#4094）。
@@ -49,6 +50,11 @@ def extraction_window(
     pages = list(payload.get("pages") or [])
     if scope_element_ids is not None:
         elements = [row for row in elements if row.get("element_id") in scope_element_ids]
+    fragments = scope_fragments or {}
+    if fragments:
+        elements = [
+            _fragment_element(row, fragments.get(row.get("element_id"))) for row in elements
+        ]
     if page is not None:
         ids = {
             value
@@ -142,6 +148,7 @@ def extraction_window(
     ordinal = 0
     for table in tables:
         cells = list(table.get("cells") or [])
+        cells = _fragment_cells(cells, fragments.get(table.get("element_id")))
         selected_cells = (
             cells
             if complete
@@ -175,6 +182,32 @@ def extraction_window(
         "cell_offset": cell_offset,
         "cell_total": cell_total,
     }
+
+
+def _fragment_element(row: dict[str, Any], fragment: Mapping[str, Any] | None) -> dict[str, Any]:
+    """要素の本文を、この表示範囲で始まる単位だけにする。表は表頭の行を付ける（#4100）。"""
+    if fragment is None:
+        return row
+    text = str(row.get("text") or "")
+    parts = [text[start:end] for start, end in fragment["ranges"]]
+    rows = fragment.get("rows")
+    if rows and rows[0] > 1:
+        parts.insert(0, text.split("\n", 1)[0])
+    return {**row, "text": "\n".join(parts)}
+
+
+def _fragment_cells(
+    cells: list[dict[str, Any]], fragment: Mapping[str, Any] | None
+) -> list[dict[str, Any]]:
+    """表頭のセルと、この表示範囲の行のセルだけにする（``rows`` は記録の番号。1 始まり）。"""
+    rows = fragment.get("rows") if fragment is not None else None
+    if not rows:
+        return cells
+    return [
+        cell
+        for cell in cells
+        if cell.get("row") == 0 or rows[0] <= cell.get("row", -1) + 1 <= rows[1]
+    ]
 
 
 def with_inspection_index(payload: Mapping[str, Any]) -> dict[str, Any]:

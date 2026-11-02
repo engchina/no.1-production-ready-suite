@@ -15,6 +15,14 @@ Unstructured を独立したプロセス(サービスごとの uv の venv)で�
   `rag_parser_core.unstructured_compat` が何もしない `register_heif_opener` の stub を置く（HEIC / HEIF は Pillow が開けないまま）
 - OS 依存(poppler / tesseract)は host に入れる(`rag/init_script.sh` / `rag/docs/deployment.md`)
 
+## 原本の位置の記録（#4100）
+
+Unstructured は要素に原本の文字位置を持たせないので、要素の分け方を変えずに、同じ原本から位置を別に記録して
+`parser_artifacts["source_map"]` に置く（`rag_parser_core.unstructured_source_map`）。1 つの表示範囲（8192 文字）を超える
+テキスト系の原本だけが対象。位置の記録は Unstructured の公開の関数だけを使い、
+区切りごとの結果が全体の解析と合うことを確かめる。版を上げて結果が合わなくなると位置を記録しないだけで、解析は止まらない。版を上げるときは
+`tests/test_source_map_real.py`（CI の `RAG / Parser unstructured`）で確かめる。
+
 ## 起動(uv の venv + systemd。#286)
 
 サービスごとの uv の venv(`uv sync --locked --no-dev --python 3.12`)で動き、本番・開発とも systemd の unit

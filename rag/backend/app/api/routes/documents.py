@@ -1552,6 +1552,7 @@ async def document_recipe_chunk_window(
             scope_element_ids=([] if location_unavailable else scope["element_ids"])
             if scope is not None
             else None,
+            scope_rows=scope.get("chunk_rows") if scope is not None else None,
             chunk_id=chunk_id,
             location_unavailable=location_unavailable,
             extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
@@ -1766,6 +1767,7 @@ async def document_recipe_extraction_view(
             text_offset=text_offset,
             cell_offset=cell_offset,
             scope_element_ids=set(scope["element_ids"]) if scope is not None else None,
+            scope_fragments=scope.get("element_fragments") if scope is not None else None,
         )
         return {
             **view,
@@ -6248,7 +6250,7 @@ async def document_recipe_text_window(
             return {
                 key: value
                 for key, value in result.items()
-                if key not in {"element_ids", "element_starts"}
+                if key not in {"element_ids", "element_starts", "element_fragments", "chunk_rows"}
             }
 
         from app.services.inspection_scope import decode_inspection_text

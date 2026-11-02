@@ -7,19 +7,76 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
-from charset_normalizer import from_bytes
 from rag_parser_core.json_source_map import raw_string_ranges
+from rag_parser_core.source_map import (
+    SOURCE_MAP_KEY,
+    SOURCE_WINDOW_CODEPOINTS,
+    decode_source_text,
+)
 
 from app.services.json_source_rebuild import payload_with_source_map
+from app.services.source_map_resolve import SourceUnit, resolve_source_map
+
+# 最後の単位は要素の末尾までなので、Chunk の位置の上限を区切らない。
+CHUNK_OFFSET_MAX = 2**53
 
 
 def decode_inspection_text(data: bytes) -> str:
     """既存の原本閲覧と同じ、UTF-8 優先の文字コード検出を使う。"""
-    try:
-        return data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        decoded = from_bytes(data).best()
-        return str(decoded) if decoded is not None else data.decode("utf-8", errors="replace")
+    return decode_source_text(data)
+
+
+def _window_units(
+    units: tuple[SourceUnit, ...], start: int, end: int
+) -> dict[str, list[SourceUnit]]:
+    """この表示範囲で始まる単位（要素の本文の順）。単位も開始位置のある範囲にだけ所属する。"""
+    grouped: dict[str, list[SourceUnit]] = {}
+    for unit in sorted(units, key=lambda item: item.text_start):
+        if start <= unit.source_start < end:
+            grouped.setdefault(unit.element_id, []).append(unit)
+    return grouped
+
+
+def _offset_ranges(units: tuple[SourceUnit, ...], window: list[SourceUnit]) -> list[list[int]]:
+    """Chunk の ``start_offset``（要素の本文の位置）が単位に所属する範囲（間の改行を含む）。"""
+    last = max(unit.text_end for unit in units)
+    return [
+        [unit.text_start, CHUNK_OFFSET_MAX if unit.text_end == last else unit.text_end]
+        for unit in window
+    ]
+
+
+def _fragment_view(units: list[SourceUnit]) -> dict[str, Any]:
+    rows = [unit for unit in units if unit.row_start is not None and unit.row_end is not None]
+    return {
+        "ranges": [[unit.text_start, unit.text_end] for unit in units],
+        "rows": [min(u.row_start or 0 for u in rows), max(u.row_end or 0 for u in rows)]
+        if rows
+        else None,
+    }
+
+
+def _chunk_rows(
+    fragments: Mapping[str, Mapping[str, Any]],
+    starts: Mapping[str, int],
+    start: int,
+    end: int,
+    offset_ranges: list[list[int]],
+) -> dict[str, Any] | None:
+    """単位に分けた要素の Chunk の所属（分割が記録した行の番号と本文の位置）。
+
+    表は行の番号（表頭の次の行が 1）で、行の単位を持たない要素は ``start_offset`` で所属させる。
+    どちらの座標も持たない Chunk は位置が分からないので、要素の開始の範囲にだけ所属する。
+    """
+    if not fragments:
+        return None
+    rows = [view["rows"] for view in fragments.values() if view["rows"]]
+    return {
+        "row_start": min(row[0] for row in rows) - 1 if rows else 0,
+        "row_end": max(row[1] for row in rows) - 1 if rows else -1,
+        "offset_ranges": [] if rows else offset_ranges,
+        "at_start": any(start <= starts.get(eid, -1) < end for eid in fragments),
+    }
 
 
 def source_inspection(
@@ -35,15 +92,29 @@ def source_inspection(
     revision = hashlib.sha256(data).hexdigest()
     text = decode_inspection_text(data)
     starts: dict[str, int] = {}
-    limit = max(1, min(8192, limit))
+    units: tuple[SourceUnit, ...] = ()
+    limit = max(1, min(SOURCE_WINDOW_CODEPOINTS, limit))
     if expected_revision is None or expected_revision == revision:
         payload = payload_with_source_map(payload, data)
     artifacts = payload.get("parser_artifacts") or {}
     mapping = artifacts.get("json_source_map") if isinstance(artifacts, Mapping) else None
     mapping = mapping if isinstance(mapping, Mapping) else {}
+    source_map = artifacts.get(SOURCE_MAP_KEY) if isinstance(artifacts, Mapping) else None
     status = "unrecorded"
     if expected_revision is not None and expected_revision != revision:
         status = "version_mismatch"
+    elif isinstance(source_map, Mapping):
+        resolved = resolve_source_map(
+            source_map,
+            data=data,
+            text_length=len(text),
+            element_texts={
+                str(element["element_id"]): str(element.get("text") or "")
+                for element in payload.get("elements") or []
+                if element.get("element_id")
+            },
+        )
+        status, starts, units = resolved.status, resolved.starts, resolved.units
     elif mapping.get("version") == 1 and mapping.get("coordinate_unit") == "unicode_codepoint":
         if mapping.get("sha256") != revision:
             status = "version_mismatch"
@@ -78,7 +149,7 @@ def source_inspection(
         }
         status = "exact" if starts else status
     # 短い構造ノードの途中を避ける。長大ノードだけを有限の文字窓に分ける。
-    boundaries = sorted(set(starts.values()))
+    boundaries = sorted({*starts.values(), *(unit.source_start for unit in units)})
     cuts = [0]
     while cuts[-1] + limit < len(text):
         target = cuts[-1] + limit
@@ -88,6 +159,16 @@ def source_inspection(
     index = max(0, bisect.bisect_right(cuts, min(target, max(0, len(text) - 1))) - 1)
     start = cuts[index]
     end = cuts[index + 1] if index + 1 < len(cuts) else len(text)
+    window_units = _window_units(units, start, end)
+    fragments = {element: _fragment_view(items) for element, items in window_units.items()}
+    offset_ranges = [
+        value
+        for element, items in window_units.items()
+        for value in _offset_ranges(
+            tuple(unit for unit in units if unit.element_id == element), items
+        )
+    ]
+    split_elements = {unit.element_id for unit in units}
     return {
         "text": text[start:end],
         "offset": start,
@@ -96,7 +177,13 @@ def source_inspection(
         "limit": limit,
         "revision": revision,
         "scope_status": status,
-        "element_ids": [eid for eid, position in starts.items() if start <= position < end],
+        "element_ids": [
+            eid
+            for eid, position in starts.items()
+            if eid in fragments or (eid not in split_elements and start <= position < end)
+        ],
+        "element_fragments": fragments,
+        "chunk_rows": _chunk_rows(fragments, starts, start, end, offset_ranges),
         "element_starts": starts,
         "previous_offset": cuts[index - 1] if index else None,
         "next_offset": cuts[index + 1] if index + 1 < len(cuts) else None,

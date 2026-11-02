@@ -9,6 +9,8 @@ dependencies = [
     # 残す形式の extra だけを入れる（all-docs にしない。#3351）。pi-heif（pdf / image の extra）と pypandoc-binary は
     # 下の exclude-dependencies で入れない。
     "unstructured[pdf,image,docx,pptx,xlsx,csv,tsv,md]==0.27.8",
+    # Markdown の原本の位置（Token.map）を記録する（rag_parser_core.unstructured_source_map。#4100）。
+    "markdown-it-py>=4,<5",
     # unstructured-inference が import する cv2 は、GUI 版ではなく headless 版で入れる(#310)。
     # GUI 版は libxcb / libGL / glib を要し、slim の base image では import が失敗する。
     "opencv-python-headless>=4.10,<5.0",

@@ -1687,7 +1687,7 @@ export function DocumentWorkspace({
             {currentTextRange && inspectorTab !== "export" && inspectorTab !== "navigation" ? (
               <p className="mb-2 text-xs text-fg-muted" data-testid="inspector-current-range" aria-live="polite">{t("flow.inspector.currentRange", {start: currentTextRange.offset + 1, total: currentTextRange.total})}</p>
             ) : null}
-            {unaligned && inspectorTab !== "export" && inspectorTab !== "navigation" ? <Banner severity="info" className="mb-2">{t("flow.inspector.unmapped")}</Banner> : null}
+            {unaligned && inspectorTab !== "export" && inspectorTab !== "navigation" ? <Banner severity={scopeStatus === "version_mismatch" ? "warning" : "info"} className="mb-2">{t(scopeStatus === "version_mismatch" ? "flow.inspector.versionMismatch" : "flow.inspector.unmapped")}</Banner> : null}
             {inspectorTab === "navigation" ? <div role="tabpanel" id="inspector-panel-navigation" aria-labelledby="inspector-tab-navigation" tabIndex={0} className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]">
               <DocumentSectionsPanel documentId={documentId} recipeId={selectedRecipeId} onPageSelect={selectPage}
                 onSectionSelect={section => {
