@@ -75,6 +75,7 @@ from app.features.agent.confirmation import CONFIRMATION_TOOL
 from app.features.agent.job_cancel import RUN_CANCEL_TRACE_PREFIX
 from app.features.agent.support_task import (
     GUIDE_CHECK_TRACE_PREFIX,
+    NON_GROUNDING_TOOLS,
     nl2sql_clarification_pending,
 )
 from app.features.agent.tools import MCP_TOOL_SEPARATOR, mcp_base_tool_name
@@ -98,19 +99,9 @@ MAX_RETRIES = 1
 REFUSAL_BEFORE_TOOLS = "before_tools"
 REFUSAL_AFTER_TOOLS = "after_tools"
 
-# 根拠・データを確かめないツール（業務プロファイル・検索・回答プロファイルの一覧と推薦）と、
-# Control Plane が自分で呼ぶツール（最終の検証・SQL の生成前の確認の取り消し）。
-_NON_GROUNDING_TOOLS = frozenset(
-    {
-        "rag_list_search_answer_profiles",
-        "rag_recommend_search_answer_profile",
-        "rag_validate_answer",
-        "nl2sql_list_profiles",
-        "nl2sql_recommend_profile",
-        "nl2sql_cancel_requirement",
-        "nl2sql_cancel_job",
-    }
-)
+# 根拠・データを確かめないツール（`support_task.NON_GROUNDING_TOOLS`。回答の対応の現場のデータの
+# 道具の判定と同じ。#108）。
+_NON_GROUNDING_TOOLS = NON_GROUNDING_TOOLS
 # Control Plane が自分で呼んだ step の trace_id の接頭辞（最終の検証は回答の確定の後なので
 # ここでは現れないが、念のため数えない）。
 _CONTROL_PLANE_TRACE_PREFIXES = (
@@ -132,6 +123,19 @@ RETRY_HEAD_DECLINED = (
     "直前の回答は、ツールで調べずに、質問をこの業務の範囲外・確かめられないと判断しています。"
     "そのままでは利用者に出せません。範囲の内外と、資料・業務データに根拠があるかは、ツールの結果で"
     "判断してください。質問に答えるのに要るツールを呼んで調べてから、改めて回答してください。"
+)
+# 根拠・データのツールを渡した Run の system の指示（#2608。lesson06: 先に調べ、根拠が無いときだけ
+# 拒答する）。範囲の内外と根拠の有無を、モデルがツールを呼ぶ前に決めず、ツールの結果で判断させる。
+# 以前の指示「業務の範囲外の質問のときは…答えられないと答える」は、調べる前の範囲の判断を認めて
+# おり、範囲内で索引済みの根拠がある質問も調べずに範囲外と拒答していた（差し戻しの文
+# `RETRY_HEAD_DECLINED` と system の指示が食い違い、差し戻しの後も調べないことがあった）。
+# 権限・データの範囲の外はツールが呼び先へ送らないので、調べられるのは利用者と業務 Agent に
+# 許された範囲だけ（調べても権限は広がらない）。根拠が無いときの拒答（#1835）は変えない。
+SEARCH_FIRST_INSTRUCTION = (
+    "質問がこの業務の範囲内か、資料・業務データに根拠があるかは、ツールを呼ぶ前に決めず、"
+    "ツールで調べた結果で判断してください。範囲外に見える質問も、まず資料・業務データのツールで"
+    "調べてください。調べても根拠が見つからないときは、一般的な知識で答えず、"
+    "確かめられないため答えられないと答えてください。"
 )
 # 差し戻しはツールを 1 つも呼んでいない回答にだけ行うので、範囲外かどうかを調べずに決めてよいとは
 # 書かない（#2608。調べずに範囲外と判断した拒答を、差し戻しの文が認めていた）。
@@ -606,6 +610,7 @@ __all__ = [
     "RETRY_MESSAGE",
     "RETRY_MESSAGE_ASSUME",
     "RETRY_MESSAGE_CONFIRMABLE",
+    "SEARCH_FIRST_INSTRUCTION",
     "clarified_in_text",
     "declined",
     "grounding_attempted",

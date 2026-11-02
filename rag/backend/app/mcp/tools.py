@@ -75,6 +75,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from rag_engine.evaluation.answer_eval import AUDIT_REFERENCE_FAILURES
 from rag_engine.generation.operation_audit import answer_passage_ranges
 from rag_engine.generation.table_binding import evidence_tables
 from rag_engine.knowledge.runtime_knowledge import (
@@ -319,7 +320,12 @@ MCP_SERVER_NAME = "production-ready-rag"
 # 38: rag_search・rag_retrieve_evidence に、安全チェックを完了できず止めたか
 #     （guardrail_degraded）と、根拠 0 件のときに 0 件になった段と件数（zero_evidence）を足した
 #     （#3546。#3262 の残り）。
-MCP_OUTPUT_SCHEMA_VERSION = 38
+# 39: rag_validate_answer の claims に、監査の応答の参照の誤りの診断（監査が写した原文
+#     support_quote・返した根拠の ID audit_evidence_id）と、その誤りの監査し直しの結果
+#     （reference_reaudit）を足した（#4058）。
+MCP_OUTPUT_SCHEMA_VERSION = 39
+# rag_validate_answer の判定の診断（監査が写した原文・返した根拠の ID。#4058）の上限の文字数。
+CLAIM_DIAGNOSTIC_CHARS = 200
 # 根拠の本文の 1 件の上限と、応答の根拠の合計の予算（token の見積もり。3 製品で共通の規則。
 # 値と決め方は pr_backend_core.source_text。#3321）。
 EVIDENCE_TEXT_ITEM_MAX_TOKENS = SOURCE_TEXT_ITEM_MAX_TOKENS
@@ -744,6 +750,45 @@ class EvidenceRefInput(BaseModel):
     chunk_id: str = Field(..., min_length=1, max_length=512)
 
 
+# 呼び出し側が渡せる段落の出典の件数の上限（回答の上限 20000 文字の段落の数より十分に大きい）と、
+# 1 つの段落に結び付けられる根拠の上限（evidence の上限と同じ）。#104。
+MAX_PASSAGE_CITATIONS = 300
+
+
+class AnswerRangeInput(BaseModel):
+    """answer の中の段落の位置（文字の位置。[start, end)）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(..., ge=0, le=20000)
+    end: int = Field(..., ge=0, le=20000)
+
+
+class PassageCitationInput(BaseModel):
+    """呼び出し側が回答の段落に結び付けた根拠（段落の位置と、その段落の根拠の chunk_id）。"""
+
+    # 本文に出典を書かない呼び出し側（業務 Agent）が渡す（#104）。
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer_range: AnswerRangeInput = Field(
+        ...,
+        description=(
+            "answer の中の段落の位置（rag_validate_answer の claims の answer_range と"
+            "同じ数え方）。"
+        ),
+    )
+    chunk_ids: list[Annotated[str, Field(min_length=1, max_length=512)]] = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+        description=(
+            "その段落の根拠の chunk_id（evidence に含めたもの）。evidence に無い chunk_id は"
+            "使わない。"
+        ),
+    )
+
+
 class ValidateRequestInput(BaseModel):
     """AnswerEnvelope の要求 1 件（rag_search の requests と同じ形）。"""
 
@@ -881,6 +926,18 @@ class ValidateAnswerInput(BaseModel):
             "根拠と並べ、結果の値をそのまま述べた段落と、資料の規則を結果の値に当てはめた結論を確かめる"
             "（資料・規程・手順の内容の裏付けには使わない）。結果だけで裏付けた段落の chunk_id は"
             " null。"
+        ),
+    )
+    passage_citations: list[PassageCitationInput] = Field(
+        default_factory=list,
+        max_length=MAX_PASSAGE_CITATIONS,
+        description=(
+            # 回答の本文に出典（根拠の ID・出典の行）を書かない呼び出し側（業務 Agent。根拠は
+            # 回答とは別に示す）が、段落ごとの根拠を渡す（#104）。本文が出典を書いた段落は本文の
+            # 出典を使い、これで広げない。
+            "段落ごとの出典（answer の中の段落の位置と、その段落の根拠の chunk_id）。本文に出典"
+            "（根拠の ID・出典の行）が無い段落だけ、ここで渡した根拠をその段落の出典として監査する"
+            "（本文が出典を書いた段落は本文の出典を使う）。evidence に無い chunk_id は使わない。"
         ),
     )
 
@@ -2267,6 +2324,32 @@ class ValidatedClaim(BaseModel):
             "support_check が table_corrected のとき、段落を根拠の表の正しい値に直した文"
             "（表の照合で確かめた）。段落を外す代わりに、この文に置き換えて示せる。"
             "それ以外は null。"
+        ),
+    )
+    support_quote: str | None = Field(
+        default=None,
+        description=(
+            "reference_check が監査の応答の誤り（audit_id_invalid / ambiguous_id / "
+            "audit_id_missing / quote_unmatched）のとき、監査が裏付けとして写した原文（先頭 "
+            f"{CLAIM_DIAGNOSTIC_CHARS} 字。渡した根拠・質問に対する監査の出力で、照合の失敗の"
+            "原因を確かめる診断）。それ以外は null。"
+        ),
+    )
+    audit_evidence_id: str | None = Field(
+        default=None,
+        description=(
+            "reference_check が監査の応答の誤りのとき、監査が返した根拠の ID（照合に使う"
+            f"内部の ID で、chunk_id ではない。先頭 {CLAIM_DIAGNOSTIC_CHARS} 字。診断）。"
+            "それ以外は null。"
+        ),
+    )
+    reference_reaudit: Literal["adopted", "rejected"] | None = Field(
+        default=None,
+        description=(
+            "監査は裏付けたが、監査の応答の参照（写した原文・返した ID）を根拠に照合できな"
+            "かった段落を監査し直した結果（adopted=監査し直しの判定が同じ照合を通り、その"
+            "判定〔supported〕にした / rejected=監査し直しても照合を通らず、citation_error の"
+            "まま）。監査し直していなければ null。"
         ),
     )
 
@@ -4652,6 +4735,18 @@ def _check_guides_scope(scope: ProfileScope | None, arguments: LookupGuidesInput
     check_profile(scope, arguments.search_answer_profile_id)
 
 
+def _reference_diagnostic(claim: Mapping[str, Any], key: str) -> str | None:
+    """監査の応答の参照の誤り（`AUDIT_REFERENCE_FAILURES`）の判定の診断の値（上限で切る。#112）。
+
+    値は呼び出し側が渡した根拠（今の権限と版で読み直した本文）・質問・前提に対する監査の出力なので、
+    呼び出し側の権限の外の本文を含まない。それ以外の判定は None（応答を大きくしない）。
+    """
+    if claim.get("reference_check") not in AUDIT_REFERENCE_FAILURES:
+        return None
+    value = " ".join(str(claim.get(key) or "").split())
+    return value[:CLAIM_DIAGNOSTIC_CHARS] or None
+
+
 def _claim_chunk_id(source_id: object) -> str | None:
     """判定の根拠の chunk_id（利用者の前提〔premise:…〕だけで裏付けた段落は None。#1898）。"""
     value = str(source_id or "")
@@ -5137,6 +5232,14 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     answer_trace_ids=arguments.answer_trace_ids,
                     premises=[item.model_dump() for item in arguments.premises],
                     data_results=[item.model_dump() for item in arguments.data_results],
+                    passage_citations=[
+                        {
+                            "start": item.answer_range.start,
+                            "end": item.answer_range.end,
+                            "chunk_ids": list(item.chunk_ids),
+                        }
+                        for item in arguments.passage_citations
+                    ],
                     guide=(
                         GuideCheckRef(
                             guide.search_answer_profile_id,
@@ -5176,6 +5279,10 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                     support_check=str(claim.get("support_check") or "") or None,
                     # 表の正しい値に直した段落（#3005）。
                     revised_text=str(claim.get("revised_text") or "") or None,
+                    # 監査の応答の参照の誤りの診断と監査し直し（#112）。
+                    support_quote=_reference_diagnostic(claim, "support_quote"),
+                    audit_evidence_id=_reference_diagnostic(claim, "audit_evidence_id"),
+                    reference_reaudit=claim.get("reference_reaudit") or None,
                 )
                 for claim in result.claim_checks
             ],

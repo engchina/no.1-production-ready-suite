@@ -745,6 +745,43 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   上限で止まった判定は上限を広げて（広げられなければ推論の量を 1 段下げて。#2023）1 回だけ送り直す（#1845）。権限・認証・モデルの設定の誤り・割り当ての使い切りは、そのケースに
   理由を残し、残りのケースを始めずに job を失敗にする（同じ失敗をくり返さない）。業務 Agent の Run の中の呼び出しは対象外
   （Run ごとの SDK の再試行のまま）。
+- 品質評価は 1 ケースを k 回反復できる（`POST /api/evaluations` の `trials`。既定 1、10 まで。#2582）。ケースの数 × k は実行の
+  予算 `AGENT_EVALUATION_MAX_TRIAL_RUNS`（既定 200）まで。結果は「ケース × 試行」（`results[].trial`）で、試行の順に並べる
+  （取消で途中で止まっても先の試行はすべてのケースがそろう。Run の `metadata.evaluation_trial`）。概要の `pass_rate` は判定できた
+  試行の平均で、ほかに Pass^k（k 回すべて成功したケースの割合）・Pass@k（どれか 1 回成功）・安定 / 不安定・欠測（未完了・評価者の
+  失敗・取消・承認の停止）を出す。Pass@k / Pass^k の分母は k 回すべてを判定できたケースだけで、欠測のある k 回を成功に数えない。
+  区間（95%）の単位はケースで、合格率と Pass@k / Pass^k は Wilson の score 区間、2 つの評価の対応のある差（`GET /api/evaluations/compare`
+  の `paired`）は定義が同じケースだけで MOVER の区間を求める（集計は `pr_evaluation_scoring.trials`）。評価者の指紋
+  （`judge_fingerprint`: 判定のモデルの設定と判定の指示の hash）が違う評価どうしは `same_judge=false` と出し、公開前の回帰の門の
+  基準にしない。
+- 評価ケースは能力分類（`capability`）・禁止するツール（`forbidden_tools`）・完了を示す語（`completion_claims`）を任意で持てる
+  （#2581。分類の語は評価データで決め、実装に業務の語を持たない）。安全違反は Run の step・承認・ツールの結果の事実だけでコードが判定し
+  （`safety_check`）、LLM の合否で上書きしない: 禁止するツールの実行（`forbidden_tool_executed`）・承認が要る / 拒否されたツールの
+  承認なしの実行（`unapproved_write`）・期待するツール（無ければ書き込みのツール）を実行していないのに完了を示す語で答えた
+  （`unexecuted_claim`）。評価の dry-run・権限の拒否・承認待ちで止まった試行は `blocked_attempts` に残し、違反にしない。概要は
+  安全違反の試行・ケースの数と、能力分類ごとの母数・判定・欠測・合格率（区間は分類のケースの数で求める）を出し、合格率には含めない。
+  公開前の評価の門は、下書きを最後に変えた後の今の下書きの評価（取り消し・失敗を含むすべて）のどれかに安全違反があれば、合格率の門の
+  設定に依らず公開を断る（評価し直して違反が出なかった回で打ち消さない）。
+- 品質評価の評価者（回答の要点の判定・出力の項目の意味の判定）は、人が判定した校正セットで校正する（#2600。
+  `python -m app.cli.judge_calibration`。合成のセットは `agent/evaluation/judge-calibration/`）。dev / holdout に分け、holdout の
+  件数・判定率・κ・誤合格の率で合否を決め（RAG / suite と同じ `pr_evaluation_scoring` の閾値）、観点（否定・数値・日付・条件・
+  長さや丁寧さの偏り・回答の中の評価者への指示・未実行の完了報告など）ごとの誤合格 / 誤不合格・判定できなかった件と判定の理由を
+  出す。評価者・指示を変えたら前の結果と比べ、校正セットが違えば比較できない理由を出す。安全・状態の遷移はコードの判定（上の `safety_check`）が正本で、
+  LLM の判定で上書きしない。手順は [agent-judge-calibration.md](./agent-judge-calibration.md)。
+
+- Run の実行構成の指紋（#2585）: 組み込み Runtime は SDK の Agent を組み立てるたびに、指示の変わらない部分・モデルに渡すツールの定義・
+  スキル・MCP の schema・モデルの設定・データの範囲の hash を `metadata.run_config`（予約の key）に残す（本文・資格情報は入れない。
+  再開で構成が変われば `previous_fingerprints`）。ツール権限の承認 / 自動は指紋に入らない。開発・CI 用の記録再生
+  `python -m app.cli.run_replay`（合成の記録。モデル・MCP・実の通信は 0）が、同じ構成で承認・拒否・中断・呼び先へ届く呼び出し・
+  成果物が記録と同じかを確かめる。利用者向けの再実行（`POST /api/runs/{run_id}/replay`）とは別。手順は
+  [agent-run-replay.md](./agent-run-replay.md)。
+
+- 実行補助の除去実験（#2587）: `POST /api/evaluations` の `disabled_aids`（`final_validation`・`tool_grounding`・`context_compaction`）で、
+  その評価の Run（dry-run）だけ補助を外す（Run の metadata `evaluation_disabled_aids`。評価の Run でなければ読まない。権限・承認・
+  データの範囲・予算は外せない）。`GET /api/evaluations/ablation` が全構成の評価と並べ、対応のある差と区間・悪化したケース・完了の
+  仕方・モデル / ツール / MCP / RAG の呼び出し・token・p50 / p95・補助のコード経路が動いたかと、判定（adopt / reconsider /
+  undetermined / not_applicable / not_comparable）を出す。外した評価は公開の合格率・回帰の門と「前回」に使わない（安全違反の拒否には
+  数える）。手順は [agent-aid-ablation.md](./agent-aid-ablation.md)。
 
 ## 7. Snapshot migration
 
@@ -920,7 +957,14 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 #1898）として渡し、RAG は資料ではない前提として根拠と並べて、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を
 確かめる（前提は資料の内容の裏付けには使わない）。この Run で成功した業務データ（NL2SQL）の照会の結果（`status=done`。照会の
 質問・実行した SQL・列と先頭の 50 行。10 件まで）は `data_results` として渡し、件数・金額・一覧の段落と、資料の規則を結果に
-当てはめた結論を、資料の根拠だけで「確かめられない」として外さない（#1950）。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
+当てはめた結論を、資料の根拠だけで「確かめられない」として外さない（#1950）。段落ごとの出典（`passage_citations`。段落の位置
+`answer_range` とその接続の根拠の `chunk_id`。#104）も渡す: 業務 Agent の回答は使ったツールと根拠を本文とは別に示すので段落に出典を
+書かないことが多く、RAG は段落の実際の出典の集合だけで裏付ける（未引用の資料で裏付けない）ため、渡さないと正しい段落もすべて
+`unassessed` になる。出典は「回答の根拠」が検証の判定の無いときに使う決定的な照合（段落が書いた文書名と頁・章節の参照・引用・同じ
+文字の並び。`answer_evidence.validation_passage_citations`）で作り、段落そのものに当たる根拠が無い段落（表の値の行など）は回答全体が
+出典にした根拠にする。回答のどこにも当たらなければ渡さない。本文に出典を書いた段落は RAG が本文の出典を使い、渡した出典で広げない。
+契約に `passage_citations` の無い古い RAG には渡さない。使ったツールの名前だけの行（「- `rag__rag_retrieve_evidence`」）は検証の前に
+外す（`without_lookup_notes`）。呼び出しはモデルのツールと同じ境界（ポリシーの「拒否」・監査・Run の利用者の
 サービストークン・step）を通し、「承認」は待たない。予算には数えない。接続ごとの判定は段落（`answer_quote`）ごとに
 まとめ（どれかの接続が矛盾と判定すれば矛盾、そうでなくどれかの接続が裏付ければ裏付けあり）、結果は成果物
 （`kind="answer_validation"`・「資料との照合」。接続ごとの結果は `connections`）に残す。valid でなければ、段落の印を付ける（#2738）。本文から外すのは根拠と
@@ -966,11 +1010,11 @@ Markdown の見出しで切った節と同じく独立させ、同じ項目の�
 （AnswerEnvelope）と同じ語彙の対応（`answered` / `conditional` / `needs_clarification` / `needs_environment_data` /
 `needs_human` / `insufficient_evidence`）を、モデルを呼ばずに決めて残す（`answer_outcome`。内容は `value`・決めた手がかりの
 `basis`・最後の `rag_search` の対応 `rag_outcome`・不足の印 `signals`）。決め方は上から順に、空の回答 → 拒答、確認の質問
-だけの回答 → `needs_clarification`、最終の検証が業務ガイドの手順・影響範囲・版の検査の error を回答全体の警告にした → `needs_human`（`basis` は `validation_guide_check`。どの段落の手順が誤りかを決められないので人が確かめる。本文は出す。#1491・#2738）、最終の検証が残った主張の段落をすべて未確認とした（根拠で確かめた段落が 1 つも無い。`no_evidence` を含む）か主張の段落をすべて矛盾で外した → 拒答（`basis` は `validation_nothing_confirmed`。本文と印は出す。#2738）、回答が最後の `rag_search` に拠る（その後に
+だけの回答 → `needs_clarification`、最終の検証が業務ガイドの手順・影響範囲・版の検査の error を回答全体の警告にした → `needs_human`（`basis` は `validation_guide_check`。どの段落の手順が誤りかを決められないので人が確かめる。本文は出す。#1491・#2738）、最終の検証が残った主張の段落をすべて未確認とした（根拠で確かめた段落が 1 つも無い。`no_evidence` を含む）か主張の段落をすべて矛盾で外した → 拒答（`basis` は `validation_nothing_confirmed`。本文と印は出す。#2738。未確認の理由が確かめが終わっていない〔`unassessed`〕か、監査は根拠で裏付けた〔`audit_status=supported`〕のに監査が写した原文・返した根拠の ID を根拠に結び付けられなかっただけ〔監査の応答の側の照合の誤り。`reference_check` が `quote_unmatched`・`audit_id_invalid` など。回答が書いた ID の誤り `answer_id_invalid` は含めない〕の段落しか無いときは、根拠が無いことを示さないので拒答に数えず、未確認の印つきの回答として下の規則で決める。#104・#108。RAG はその段落を誤りを差し戻して 1 回だけ監査し直し、同じ照合を通れば `supported`〔`reference_reaudit: adopted`〕にする。照合に失敗した判定の、監査が写した原文 `support_quote` と返した ID `audit_evidence_id` は、成果物の `result.claims` に残す。#112）、回答が最後の `rag_search` に拠る（その後に
 根拠を集め直していない）ならその対応（`needs_environment_data` の後に現場のデータの道具が成功したら `answered` /
 `conditional`、確認を求められたが質問だけでなく答えたら `conditional`、`answered` でも回答が不足を示せば `conditional`）、
 `rag_search` に拠らず業務ガイドの判断が人への引き継ぎなら `needs_human`、それ以外は Agent が自分で組み立てた回答として
-段落で決める（現場のデータの道具を使っておらず、Run のどれかの `rag_search` が `insufficient_evidence` を返し、回答の最初の段落〔結論。見出し・出典を除く〕が質問の対象を資料から確かめられないと述べたら、調べた資料の一覧・近い規定の紹介が続いても `insufficient_evidence`〔`basis` は `absence_conclusion`。参考の説明は本文に残す。#1454〕。それ以外は、主張の段落〔最終の検証が矛盾で外した段落と、実データの確認を促す段落〔RAG の判定 `data_confirmation` か、
+段落で決める（現場のデータの道具〔業務プロファイルの一覧・推薦 `nl2sql_list_profiles` などは、使える業務データを探すだけで値・記録を確かめないので数えない。拒答の段階 `refusal_stage` と同じ定義。#108〕を使っておらず、Run のどれかの `rag_search` が `insufficient_evidence` を返し、回答の最初の段落〔結論。見出し・出典を除く〕が質問の対象を資料から確かめられないと述べたら、調べた資料の一覧・近い規定の紹介が続いても `insufficient_evidence`〔`basis` は `absence_conclusion`。参考の説明は本文に残す。#1454〕。それ以外は、主張の段落〔最終の検証が矛盾で外した段落と、実データの確認を促す段落〔RAG の判定 `data_confirmation` か、
 外していない `environment_check` の段落。#1317〕を除く〕が無ければ、実データの確認を促していれば `needs_environment_data`、
 それ以外は拒答。主張があり、不足の印〔資料に記載が無い文・拒答の文〔結論の段落が質問に答え〔補足の外の主張に、最終の検証が根拠で確かめた段落がある〕、不足の文が補足の段落〔見出しが「補足」「注記」などの節と「なお、」で始まる段落〕にだけあるときは、質問が求めない周辺の事柄の不足として印にせず、記録の `supplement_absence` だけを付ける。#1475〕・主張に添えた質問・モデルが書いた確かめられない点の節・
 最終の検証が矛盾で外した段落〔`contradicted_removed`〕・未確認の印の段落〔`unverified_passages`。#2738〕〔外した段落・未確認の段落が補足の段落にだけあり、結論の段落に最終の検証が根拠で確かめた段落があるときは印にせず、記録の `supplement_withheld` / `supplement_unverified` だけを付ける。#1491〕・決定的な検査の error・実データの確認・業務ガイドの条件が分からないまま答えた〔`guide_conditions`。
@@ -988,7 +1032,7 @@ Agent ごとに変わり、申告と本文の食い違いの扱いも要るた�
 返してよい。ツールで調べても確かめられないなら答えられないと答える」を利用者のメッセージとしてモデルへ返して Run を続ける
 （差し戻しは調べていない回答にだけ行うので、範囲外かを調べずに決めてよいとは書かない。回答の結論が範囲外・答えられないと
 述べる回答〔調べずに判断した拒答。`tool_grounding.declined`〕は、範囲の内外と根拠の有無をツールの結果で判断させる頭の文
-`RETRY_HEAD_DECLINED` で差し戻す。#2608。同じ
+`RETRY_HEAD_DECLINED` で差し戻す。#2608。system の指示もこれに合わせ、根拠・データのツールを渡した Run では、範囲の内外と根拠の有無をツールを呼ぶ前に決めず、範囲外に見える質問も先に調べ、根拠が見つからないときだけ答えられないと答えさせる〔`tool_grounding.SEARCH_FIRST_INSTRUCTION`。組み込みのスキルの指示と回答前の確認の方針も同じ。以前の「業務の範囲外の質問のときは答えられないと答える」は調べる前の拒答を認めていた。#2608〕。同じ
 SDK の Agent・ツール・予算。利用量は前の分に積む。差し戻しの回数は Run の metadata `tool_grounding` に残し、承認待ちから
 再開しても 2 回目を差し戻さない）。それでも呼ばなければ、本文を出さずに決まった拒答の文（「社内の資料・業務データで
 確かめられなかったため、お答えできません。推測ではお答えしていません。」＋業務 Agent の説明とスキルの表示名＋渡したツールの

@@ -59,6 +59,21 @@ export type StructuredBlock =
 const BULLET = /^\s*(?:[-*+・•]|(\d{1,3})[.)．）])\s+/;
 const HEADING = /^\s*(?:#{1,6}\s+(.+?)\s*#*|\*\*([^*\n]{1,60})\*\*\s*[:：]?|【([^】\n]{1,30})】\s*[:：]?)\s*$/;
 const MARKDOWN_BLOCK = /^\s*(?:\||```|~~~|>|\s{2,}[-*+]\s)/;
+// 区切り線（`---` / `***` / `___`）。段落の文としては描けないので、塊を Markdown のまま描く（#4061）。
+const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+// Markdown の箇条書きの行（`・` は Markdown の箇条書きではないので含めない）。
+const MARKDOWN_LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\S/;
+
+/**
+ * 本文の先頭の見出しが、本文を囲む枠の見出し（チャットの `ChatAnswerBody`・実行の詳細の節の「回答」）と同じ文言なら
+ * その行を除く（#4061）。LLM が本文を「## 回答」で始めると、枠の見出しの直下に同じ見出しが二重に出るため。
+ * 先頭の 1 行だけを見る。本文の途中の見出しと、文言の違う見出しは残す。
+ */
+export function withoutFrameHeading(answer: string, frameHeading: string): string {
+  const match = /^\s*(.*)(?:\n|$)/.exec(answer);
+  if (!match || headingText(match[1]) !== frameHeading) return answer;
+  return answer.slice(match[0].length).replace(/^\s*\n/, "");
+}
 
 /** 回答の節（`notice.heading`）。資料との照合の成果物の内容から読む。 */
 export function noticeHeading(validation: Record<string, unknown> | null): string | null {
@@ -366,7 +381,9 @@ function bodyBlocks(
   let ownHeadings = false;
   chunks(body).forEach((lines, index) => {
     const key = `b${index}`;
-    if (lines.some((item) => MARKDOWN_BLOCK.test(item))) {
+    // 区切り線を含む塊と、見出しの無い段落の後ろに空行なしで箇条書きが続く塊（「---\n**根拠**\n- 文書 A.pdf」）は、
+    // 段落の文（行の中の Markdown だけを描く）にすると `---` と `- ` が文字のまま出るので、Markdown の塊にする（#4061）。
+    if (lines.some((item) => MARKDOWN_BLOCK.test(item) || RULE.test(item)) || mixedList(lines)) {
       const raw = lines.join("\n");
       blocks.push({ kind: "markdown", key, text: displayText(raw, markers), raw, chunkIds: ids(raw) });
       return;
@@ -419,6 +436,15 @@ function bodyBlocks(
   });
   merge(blocks);
   return { blocks, ownHeadings };
+}
+
+/**
+ * 見出しの無い塊で、段落の文と Markdown の箇条書きの行が混ざる（箇条書きだけではない）とき true。
+ * 見出しで始まる塊は、見出しの節の項目にする（今までどおり）。
+ */
+function mixedList(lines: readonly string[]): boolean {
+  if (headingText(lines[0]) !== null) return false;
+  return lines.some((item) => MARKDOWN_LIST_ITEM.test(item)) && !lines.every((item) => BULLET.test(item));
 }
 
 /** 空の見出しの節の直後の箇条書きは、その見出しの節にまとめる（見出しと箇条書きの間に空行がある書き方）。 */

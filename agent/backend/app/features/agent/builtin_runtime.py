@@ -110,6 +110,7 @@ from app.features.agent import (
     call_abort,
     data_scope,
     run_claim,
+    run_config,
     tool_grounding,
     tool_loop_guard,
 )
@@ -117,6 +118,7 @@ from app.features.agent.answer_evidence import (
     ANSWER_EVIDENCE_KIND,
     ANSWER_EVIDENCE_NAME,
     answer_evidence,
+    run_validation_passage_citations,
 )
 from app.features.agent.answer_identifiers import IdentifierCheck, identifier_index
 from app.features.agent.answer_notice import answer_takes_notice, current_answer_notice
@@ -230,6 +232,7 @@ from app.features.agent.context_window import (
     provider_overflow_message,
     tools_text,
 )
+from app.features.agent.evaluation_aids import aid_enabled
 from app.features.agent.guide_steps import unresolved_guide_steps, unresolved_guide_steps_message
 from app.features.agent.job_cancel import (
     NL2SQL_CANCEL_JOB_TOOL,
@@ -258,6 +261,7 @@ from app.features.agent.skills import (
     EVIDENCE_PLANNING_CALLER,
     reset_pinned_skills,
     resolve_skill,
+    skill_registry,
     use_pinned_skills,
 )
 from app.features.agent.support_task import (
@@ -1199,15 +1203,23 @@ def compose_instructions(
     ツールの素の名前を、モデルが呼ぶ名前（`<接続>__<ツール>`）に書き直す（#1303）。
     """
     exposed = exposed_tool_names or ()
+    # 根拠・データのツールを渡す Run は、範囲の内外と根拠の有無をツールで調べた結果で判断させる
+    # （#2608。調べる前に範囲外と決めて拒答させない）。渡さない Run は調べる手段が無いので、確かめ
+    # られない質問・範囲外の質問は答えられないと答える（#1835）。
+    refusal = (
+        tool_grounding.SEARCH_FIRST_INSTRUCTION
+        if tool_grounding.grounding_tools(exposed)
+        else "ツールで確かめられないとき・業務の範囲外の質問のときは、一般的な知識で答えず、"
+        "確かめられないため答えられないと答えてください。"
+    )
     sections = [
         "あなたは業務 Agent です。日本語で、根拠を示して簡潔に回答してください。"
         "ツールの結果に無いことは推測で補わず、分からないと答えてください。"
         # 業務の事実はツールの結果だけで答える（#1835。ツールを呼ばずに作った回答は Control Plane
         # が差し戻し、それでも呼ばなければ拒答にする）。
         "業務の事実（規程・手順・数値・状態・記録など）は、ツールの結果だけで答えてください。"
-        "ツールで確かめられないとき・業務の範囲外の質問のときは、一般的な知識で答えず、"
-        "確かめられないため答えられないと答えてください。"
-        "質問が曖昧で対象が分からないときは、確認の質問をしてください。"
+        + refusal
+        + "質問が曖昧で対象が分からないときは、確認の質問をしてください。"
         "複数の資料を根拠にするときは、資料（ファイル）ごとにまとめて答え、"
         "別の資料の内容を交互に混ぜないでください。"
         # 使ったツール・根拠は回答とは別に示す（チャットの根拠の塊・MCP の sources。#2328）。
@@ -2653,7 +2665,7 @@ def build_function_tools(
     if (
         confirmation is not None
         and CONFIRMATION_TOOL in exposed
-        and get_settings().agent_tool_grounding_required
+        and aid_enabled(run_id, "tool_grounding")
         and tool_grounding.grounding_tools(exposed)
     ):
         # 回答前の確認の前に、資料・業務データのツールで調べさせる（#1917。拒答のガード #1835 と
@@ -2837,7 +2849,55 @@ def build_sdk_agent(
         ),
     )
     setattr(sdk_agent, _STATIC_INSTRUCTIONS_ATTR, static_instructions)
+    config = _run_configuration(
+        skill_ids, static_instructions, tools, mcp_tools, target, data_scopes
+    )
+    # Run の無い組み立て（設定の確認など）では残さない。
+    with suppress(KeyError):
+        runtime_repository.note_run_config(run_id, config)
     return sdk_agent
+
+
+def _run_configuration(
+    skill_ids: list[str],
+    static_instructions: str,
+    tools: Sequence[Any],
+    mcp_tools: Sequence[McpRuntimeTool],
+    target: ModelTarget,
+    data_scopes: data_scope.AgentDataScopes | None,
+) -> dict[str, Any]:
+    """Run の実行構成の指紋（#2585。本文・資格情報は入れない）。"""
+    skills: list[dict[str, Any]] = []
+    for skill_id in skill_ids:
+        resolved = resolve_skill(skill_id)
+        if resolved is None:
+            continue
+        current = skill_registry.get(skill_id)
+        contents = {item.path: item.content for item in (current.references if current else [])}
+        dumped = resolved.model_dump(mode="json", exclude={"updated_at", "created_at"})
+        dumped["references"] = [
+            {
+                "path": item.path,
+                "sha256": run_config.sha256(contents[item.path]) if item.path in contents else None,
+            }
+            for item in resolved.references
+        ]
+        skills.append(dumped)
+    return run_config.run_configuration(
+        static_instructions=static_instructions,
+        tools=tools,
+        skills=skills,
+        mcp_tools=[definition for definition, _handler in mcp_tools],
+        model={
+            "model_id": target.model_id,
+            "reasoning_effort": target.reasoning_effort,
+            "max_output_tokens": target.max_output_tokens,
+            "max_input_tokens": target.max_input_tokens,
+            "vision_enabled": target.vision_enabled,
+        },
+        data_scopes=data_scopes,
+        sdk_version=sdk_version(),
+    )
 
 
 # 無いツールの呼び出しの返答で、候補として並べるツールの数の上限（#1303）。
@@ -3017,7 +3077,7 @@ class _ContextWindow:
         # 指示の変わらない部分（`build_sdk_agent`。モデルの呼び出しの span の指紋・見積もり。
         # #2583）。
         self.static_instructions = static_instructions
-        self.enabled = bool(settings.agent_context_compaction_enabled)
+        self.enabled = aid_enabled(run_id, "context_compaction")
         self.budget = ContextBudget(
             limits,
             estimate_scale=float(settings.agent_context_token_estimate_scale),
@@ -4225,7 +4285,7 @@ async def _require_tool_grounding(
     """
     from app.features.agent.runtime import runtime_repository
 
-    if not get_settings().agent_tool_grounding_required:
+    if not aid_enabled(run.id, "tool_grounding"):
         return result, False
     tool_names = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
     if not tool_grounding.grounding_tools(tool_names):
@@ -4649,7 +4709,7 @@ async def _finish(
     # モデルの最終の回答（最終の検証で段落を外す前。対応を決めるのに使う。#1305）。
     model_answer = answer
     validation: dict[str, Any] | None = None
-    if get_settings().agent_final_validation_enabled:
+    if aid_enabled(run_id, "final_validation"):
         try:
             answer, validation = await _validate_final_answer(
                 run_id, answer, rag_tools=rag_tools, data_scopes=data_scopes
@@ -5141,6 +5201,14 @@ async def _validate_with_connection(
     # この Run の業務データ（NL2SQL）の照会の結果（#1950）。件数・金額・一覧の段落を、資料の根拠
     # だけで「確かめられない」として外さない。
     data_results = validation_data_results(run.steps)
+    # 段落ごとの出典（#104）。業務 Agent の回答は根拠を本文とは別に示すので、段落に出典を
+    # 書かない。RAG は段落の実際の出典だけで裏付けるため、渡さないと正しい段落も unassessed に
+    # なる。古い RAG（契約に `passage_citations` が無い）には渡さない（extra=forbid で失敗する）。
+    passage_citations = (
+        run_validation_passage_citations(run.steps, answer, refs)
+        if _accepts_input(tool.input_schema, "passage_citations")
+        else []
+    )
     step_id, result = await recorder.call(
         ToolCall(
             name=definition.name,
@@ -5152,6 +5220,7 @@ async def _validate_with_connection(
                 **connection_check_inputs(run.steps, evidence_tool),
                 **({"premises": premises} if premises else {}),
                 **({"data_results": data_results} if data_results else {}),
+                **({"passage_citations": passage_citations} if passage_citations else {}),
             },
             trace_id=f"answer_validation_{run.id}_{config.server_id}",
         ),
@@ -5180,6 +5249,12 @@ async def _validate_with_connection(
             **common,
         )
     return validation_content(STATUS_COMPLETED, result=result.output, evidence=refs, **common)
+
+
+def _accepts_input(schema: object, name: str) -> bool:
+    """MCP のツールの inputSchema が入力の項目 `name` を持つか（契約の版の違いを吸収する）。"""
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    return isinstance(properties, dict) and name in properties
 
 
 def _record_usage(run_id: str, source: object, model_id: str) -> None:

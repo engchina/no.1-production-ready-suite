@@ -16,6 +16,11 @@ error の finding があれば valid にしない。
 呼び出し側が利用者の前提（回答の前の確認の質問と答え。#1898）を渡したときは、資料ではない前提として根拠と並べて
 監査に渡し、答えをそのまま述べた段落と、資料の規則を答えに当てはめた結論を確かめる（資料の内容の裏付けには使わない）。
 
+呼び出し側が段落ごとの出典（`passage_citations`。段落の位置と chunk_id。#104）を渡したときは、
+本文に出典（根拠の ID・出典の行）が無い段落だけ、その根拠を段落の出典として監査する（本文が
+出典を書いた段落は本文の出典を使い、渡した出典で広げない。根拠に無い chunk_id は使わない）。
+根拠を本文とは別に示す業務 Agent の回答が、出典が無いためにすべて unassessed になるのを防ぐ。
+
 時間の上限（#2700）: 検証の全体を `rag_answer_validation_timeout_seconds`（呼び出し側の
 待ち時間より短い）で打ち切る。監査は段落を組に分けて並行に呼び
 （`rag_answer_validation_batch_passages`・`rag_answer_validation_concurrency`）、上限までに
@@ -462,6 +467,7 @@ async def validate_answer(
     answer_trace_ids: Sequence[str] = (),
     premises: Sequence[Mapping[str, str]] = (),
     data_results: Sequence[Mapping[str, str]] = (),
+    passage_citations: Sequence[Mapping[str, Any]] = (),
 ) -> AnswerValidation:
     """回答の本文を根拠と照合する（MCP の `rag_validate_answer` と回答フローの「資料との照合」）。
 
@@ -484,6 +490,7 @@ async def validate_answer(
             answer_trace_ids=answer_trace_ids,
             premises=premises,
             data_results=data_results,
+            passage_citations=passage_citations,
         )
 
 
@@ -500,6 +507,7 @@ async def _validate_answer(
     answer_trace_ids: Sequence[str],
     premises: Sequence[Mapping[str, str]],
     data_results: Sequence[Mapping[str, str]],
+    passage_citations: Sequence[Mapping[str, Any]] = (),
 ) -> AnswerValidation:
     started = time.monotonic()
     limit = float(settings.rag_answer_validation_timeout_seconds)
@@ -638,6 +646,8 @@ async def _validate_answer(
                     premises=list(premises)[:MAX_PREMISES],
                     # 業務データの照会の結果（#1950）。資料ではない根拠として並べる。
                     data_results=list(data_results)[:MAX_DATA_RESULTS],
+                    # 本文に出典を書かない呼び出し側が渡した段落ごとの根拠（#104）。
+                    caller_citations=list(passage_citations),
                     batch_passages=settings.rag_answer_validation_batch_passages,
                     max_concurrency=settings.rag_answer_validation_concurrency,
                 )
@@ -692,6 +702,9 @@ async def _validate_answer(
     findings += step_findings
     blocking = any(item.severity == "error" for item in findings)
     timed_out = len(result.get("timed_out_passage_ids") or ())
+    # 監査の応答の参照の誤りの監査し直し（#112。status と、対象・採った段落の数）。
+    reaudit = result.get("reference_reaudit")
+    reaudit = reaudit if isinstance(reaudit, Mapping) else {}
     logger.info(
         "rag_answer_validation",
         extra={
@@ -702,6 +715,9 @@ async def _validate_answer(
             "validation_claims": len(result.get("claim_checks") or ()),
             "validation_timed_out_claims": timed_out,
             "validation_reused_claims": len(result.get("reused_passage_ids") or ()),
+            "validation_reference_reaudit": str(reaudit.get("status") or "not_run"),
+            "validation_reference_reaudit_targets": len(reaudit.get("target_passage_ids") or ()),
+            "validation_reference_reaudit_adopted": len(reaudit.get("adopted_passage_ids") or ()),
             "validation_guide_step_embedding": step_embedding is not None,
             **{
                 f"validation_llm_{key}": round(float(usage.get(key) or 0), 1)

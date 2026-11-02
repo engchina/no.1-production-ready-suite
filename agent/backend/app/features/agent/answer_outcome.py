@@ -32,17 +32,27 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
    手順を確かめる。#1491・#2738）
    `validation_nothing_confirmed`: 最終の検証が、残った主張の段落をすべて未確認とした（根拠で
    確かめた段落が 1 つも無い。根拠を読めない `no_evidence` を含む）か、主張の段落をすべて根拠と
-   矛盾するとして外した → insufficient_evidence（本文は出す。#2738）
+   矛盾するとして外した → insufficient_evidence（本文は出す。#2738）。未確認の理由が「確かめが
+   終わっていない」（`unassessed`。監査が終わらない・段落の出典が無い）か、監査は根拠で裏付けた
+   （`audit_status=supported`）のに、監査が写した原文・返した根拠の ID を根拠に結び付けられなかった
+   だけ（監査の応答の側の照合の誤り。`quote_unmatched`・未登録の ID。#108）の段落しか無いときは、
+   根拠が無いことを示していないので拒答に数えず、下の規則で決める（未確認の印つきの回答。#104・
+   #108）。回答が書いた ID が根拠に無い（`answer_id_invalid`）・根拠で確かめられない・根拠と矛盾する
+   段落は今までどおり数える。
 4. `rag_search`: 回答が最後の `rag_search` に拠る（その後に根拠を集め直していない）とき、
    その対応。ただし、現場のデータが要る（needs_environment_data）を現場のデータの道具（RAG 以外の
-   MCP 接続のツール。#1283）で確かめたら answered / conditional（`environment_tools`）、確認の
-   質問を求められたが質問だけで答えなかったら conditional、answered でも回答が不足を示して
-   いれば（下の「不足の印」）conditional にする。
+   MCP 接続のツール。#1283。業務プロファイルの一覧・推薦は除く。#108）で確かめたら answered /
+   conditional（`environment_tools`）、確認の質問を求められたが質問だけで答えなかったら
+   conditional、answered でも回答が不足を示していれば（下の「不足の印」）conditional にする。
 5. `guide_handoff`: `rag_search` に拠らず、最も新しい `rag_lookup_guides` の最上位の業務ガイドの
    判断が人への引き継ぎ（handoff）→ needs_human
-6. `absence_conclusion`: 現場のデータの道具を使っておらず、Run のどれかの `rag_search` が
-   insufficient_evidence を返し、回答の最初の段落（結論。見出し・出典を除く）が資料から確かめられ
-   ないと述べた → insufficient_evidence（調べた資料の一覧・近い規定の紹介が続いても。#1454）。
+6. `absence_conclusion`: 現場のデータの道具を使っておらず（業務プロファイルの一覧・推薦だけの
+   成功は使ったことにしない。空の一覧で業務データが無いと分かっただけの拒答を含む。#4058）、
+   Run のどれかの `rag_search` が insufficient_evidence を返した（または `rag_search` を使わずに
+   `rag_retrieve_evidence` で根拠を集めた。根拠を集めるだけのツールは対応を返さない。#4058）
+   うえで、回答の最初の段落（結論。見出し・出典を除く）が資料から確かめられないと述べた →
+   insufficient_evidence（調べた資料の一覧・近い規定の紹介が続いても。範囲外の質問の拒答を
+   含む。#1454）。
    根拠 0 件が安全チェックの未完了・補助の処理の縮退による `rag_search`（`guardrail_degraded`・
    `degraded_steps`。資料に記載が無いことを示さない）は数えない（#3546）。
 7. `answer_passages`（または現場のデータの道具を使ったなら `environment_tools`）: Agent が自分で
@@ -119,7 +129,7 @@ from app.features.agent.rag_retrieval_state import (
 from app.features.agent.support_task import (
     RAG_RETRIEVE_EVIDENCE,
     RAG_SEARCH,
-    is_environment_tool,
+    is_environment_data_tool,
     nl2sql_clarification_pending,
 )
 from app.features.agent.tools import mcp_base_tool_name
@@ -211,6 +221,16 @@ _GAP_SIGNALS = frozenset(
 _RAG_LOOKUP_GUIDES = "rag_lookup_guides"
 # 業務ガイドの判断のうち、利用者の分かっていない条件に答えが拠るもの（#1321・#1322）。
 _GUIDE_CONDITIONAL_DECISIONS = frozenset({"clarify", "branch"})
+# 最終の検証の印の理由「確かめが終わっていない」（#104。根拠が無いことを示さない）。
+_UNASSESSED = "unassessed"
+# 監査の応答の側の照合の誤りで付く印の理由（引用の原文が根拠に見当たらない・出典を確かめられない。
+# #108）。判定（`claims`）が監査の応答の誤りと決まるときだけ、確かめが終わっていない扱いにする。
+_PENDING_CODES = frozenset({_UNASSESSED, "quote_unmatched", "citation_error"})
+# RAG の `rag_validate_answer` の、監査の応答の側の照合の誤り（`reference_check`。RAG の
+# `AUDIT_REFERENCE_FAILURES`。回答の引用の誤り `answer_id_invalid` は含めない）。
+_AUDIT_REFERENCE_FAILURES = frozenset(
+    {"quote_unmatched", "audit_id_invalid", "ambiguous_id", "audit_id_missing"}
+)
 # RAG の `rag_validate_answer` の、実データの確認を促すだけの段落の判定。
 _DATA_CONFIRMATION = "data_confirmation"
 # 結論の段落を探すときに飛ばす、主張ではない段落の種類（見出し・出典・表の形）。
@@ -260,11 +280,14 @@ def _environment_call(step: RunStep) -> bool:
 
     Control Plane が確認の取り消しで閉じた SQL の生成前の確認
     （`nl2sql_cancel_requirement`。#1441）は、現場のデータを確かめた呼び出しではないので数えない。
+    業務プロファイルの一覧・推薦（`nl2sql_list_profiles` など。使える業務データを探すだけ）も、
+    値・記録を確かめていないので数えない（空の一覧の成功で範囲外の拒答が `environment_tools` の
+    条件付きの回答になっていた。#108。拒答の段階 `refusal_stage` と同じ定義）。
     """
     return (
         _succeeded(step)
         and step.tool_call is not None
-        and is_environment_tool(step.tool_call.name)
+        and is_environment_data_tool(step.tool_call.name)
         and not (step.tool_call.trace_id or "").startswith(
             (CANCEL_TRACE_PREFIX, RUN_CANCEL_TRACE_PREFIX)
         )
@@ -340,6 +363,66 @@ def _validation_parts(
         _texts(marks, MARK_WARNING),
         confirmations,
     )
+
+
+def _audit_trace_failure(claim: JsonObject) -> bool:
+    """監査は根拠で裏付けた（`audit_status=supported`）のに、監査が写した原文・返した根拠の ID を
+    根拠に結び付けられなかっただけの判定か（#108）。
+
+    RAG は、監査が写した原文（support_quote）が結び付けた根拠に無い・監査が根拠に無い ID
+    （ファイル名など）を返したとき、裏付けを採らず `citation_error` にする（`reference_check` が
+    監査の応答の側の誤り）。根拠で確かめられない・根拠と矛盾するとは違い、根拠が無いことを
+    示さない。回答が書いた ID が根拠に無い（`answer_id_invalid`）は回答の引用の誤りなので含めない。
+    """
+    return (
+        claim.get("status") == "citation_error"
+        and claim.get("audit_status") == "supported"
+        and claim.get("reference_check") in _AUDIT_REFERENCE_FAILURES
+    )
+
+
+def _pending_only(validation: JsonObject | None) -> set[str]:
+    """未確認の印の理由が「確かめが終わっていない」だけの段落（#104・#108）。
+
+    RAG が段落を監査し終えなかった・段落の出典が無く裏付けを確かめられなかった（`unassessed`）か、
+    監査は裏付けたが引用の照合だけが監査の応答の誤りで通らなかった（`_audit_trace_failure`。印の
+    理由は `quote_unmatched` / `citation_error`）段落。根拠で確かめられない（`unsupported`）・
+    根拠を読めない（`no_evidence`）・回答の引用の誤りとは違い、根拠が無いことを示さない。
+    `quote_unmatched` / `citation_error` の印は、その段落の確かめられなかった判定がすべて
+    `unassessed` か監査の応答の誤りのときだけ数える。判定が出た（`completed`）ときだけ使う。
+    """
+    if not isinstance(validation, dict) or validation.get("status") != STATUS_COMPLETED:
+        return set()
+    result = validation.get("result")
+    claims = result.get("claims") if isinstance(result, dict) else None
+    open_claims: dict[str, list[JsonObject]] = {}
+    for claim in claims if isinstance(claims, list) else []:
+        if (
+            isinstance(claim, dict)
+            and not claim.get("non_claim")
+            and claim.get("status") not in {"supported", _DATA_CONFIRMATION}
+        ):
+            open_claims.setdefault(str(claim.get("answer_quote") or ""), []).append(claim)
+    marks = validation.get("passage_marks")
+    found: set[str] = set()
+    for item in marks if isinstance(marks, list) else []:
+        if not isinstance(item, dict) or item.get("state") != MARK_UNVERIFIED:
+            continue
+        codes = {
+            reason.get("code") for reason in item.get("reasons") or [] if isinstance(reason, dict)
+        }
+        text = str(item.get("text") or "")
+        if not codes or not codes <= _PENDING_CODES:
+            continue
+        if codes == {_UNASSESSED}:
+            found.add(text)
+            continue
+        judged = open_claims.get(text) or []
+        if judged and all(
+            claim.get("status") == _UNASSESSED or _audit_trace_failure(claim) for claim in judged
+        ):
+            found.add(text)
+    return found - {""}
 
 
 def _supported_quotes(validation: JsonObject | None) -> set[str]:
@@ -436,6 +519,28 @@ def _rag_insufficient(steps: list[RunStep]) -> bool:
             and isinstance(output, dict)
             and output.get("outcome") == INSUFFICIENT_EVIDENCE
             and not degraded_absence(output)
+        ):
+            return True
+    return False
+
+
+def _retrieved_without_search(steps: list[RunStep]) -> bool:
+    """`rag_search` を使わずに `rag_retrieve_evidence` で根拠を集めたか（#104）。
+
+    根拠を集めるだけのツールは回答の対応（outcome）を返さないので、資料から確かめられないかは
+    回答の結論で決める（範囲外の質問の拒答を条件付きの回答に数えない）。根拠 0 件が補助の処理の
+    縮退によるもの（資料に記載が無いことを示さない）は数えない（#3546）。
+    """
+    if _last_rag_search(steps) is not None:
+        return False
+    for step in steps:
+        call, result = step.tool_call, step.tool_result
+        if not _succeeded(step) or call is None or result is None:
+            continue
+        if (
+            mcp_base_tool_name(call.name) == RAG_RETRIEVE_EVIDENCE
+            and isinstance(result.output, dict)
+            and not degraded_absence(result.output)
         ):
             return True
     return False
@@ -561,10 +666,15 @@ def answer_outcome(
     # 外した段落は利用者に見えないので数えない。
     confirmations |= environment_check_passages(answer) - removed
     remaining = [text for text in claims if text not in removed and text not in confirmations]
+    pending = _pending_only(validation)
     if (
         (removed or unverified)
         and (remaining or not confirmations)
         and all(text in unverified for text in remaining)
+        # 確かめが終わっていないだけ（`unassessed`・監査の応答の側の照合の誤り）の段落しか無い
+        # ときは、根拠が無いことを示していないので拒答に数えない（#104・#108。未確認の印つきの
+        # 回答として下で決める）。
+        and (removed or any(text not in pending for text in remaining if text in unverified))
     ):
         # 根拠で確かめた段落が 1 つも無い（残った主張の段落がすべて未確認か、すべて矛盾で外した）。
         # 本文と印は出す（#2738）。実データの確認を促す段落だけが残ったときは下で決める。
@@ -634,7 +744,9 @@ def answer_outcome(
     environment = _environment_resolved(steps)
     if environment:
         signals.add(SIGNAL_ENVIRONMENT_TOOLS)
-    elif _rag_insufficient(steps) and _concludes_absence(answer):
+    elif (_rag_insufficient(steps) or _retrieved_without_search(steps)) and _concludes_absence(
+        answer
+    ):
         # 質問の対象が資料に無いと結論した回答（#1454）。調べた資料の一覧・近い規定の紹介が
         # 続いても答えなし（参考の説明は本文に残す）。
         return _content(

@@ -50,7 +50,9 @@ _SENTENCE_PUNCTUATION = re.compile(r"[、。，．]")
 # ローマ数字だけのセル（「Ⅱ」）。NFKC で「ii」になるが、値ではなく区分の名前として扱う。
 _ROMAN_CELL = re.compile(r"[\u2160-\u217f]{1,4}")
 # セルの照合に使う頭の部分（「01（通常）」「区分Ⅱ (旧)」の括弧・空白の前）。
-_CELL_KEY_END = re.compile(r"\s*[（(［\[〔【「『<＜]|\s{2,}|\s*[、。,，;；]")
+# 数の桁区切りのカンマ（「12,000円」）は区切りにしない（#4060）。
+_DIGIT_GROUP_COMMA = r"(?<![0-9])[,，]|[,，](?![0-9]{3}(?![0-9]))"
+_CELL_KEY_END = re.compile(rf"\s*[（(［\[〔【「『<＜]|\s{{2,}}|\s*(?:[、。;；]|{_DIGIT_GROUP_COMMA})")
 _ROW = re.compile(r"<tr\b[^>]*>(.*?)</tr\s*>", re.IGNORECASE | re.DOTALL)
 _CELL = re.compile(r"<t([dh])\b([^>]*)>(.*?)</t[dh]\s*>", re.IGNORECASE | re.DOTALL)
 _SPAN = re.compile(r"""(row|col)span\s*=\s*["']?(\d+)""", re.IGNORECASE)
@@ -69,7 +71,9 @@ _PROSE_PAIR = re.compile(
 )
 # 文の区間の区切り（読点・句点・改行・セミコロン）。
 _SENTENCE_END = re.compile(r"[。！？!?\n]+")
-_CLAUSE_END = re.compile(r"[、，,；;]")
+_CLAUSE_END = re.compile(rf"[、；;]|{_DIGIT_GROUP_COMMA}")
+# 値の照合の区間は、括弧の始まりでも区切る（「…です（参考：課長以上は…）」の括弧の中は別の事実。#4060）。
+_WINDOW_END = re.compile(rf"{_CLAUSE_END.pattern}|[（(]")
 # 文の中で値の照合から除く所（根拠の ID・出典の括弧・頁の参照・強調の印）。
 _CITATION = re.compile(r"【[^【】]*】|\[[^\[\]]*(?:ID|id)[^\[\]]*\]")
 _CHUNK_ID = re.compile(r"(?<![0-9A-Za-z])[0-9A-Fa-f]{6,}(?:[0-9A-Fa-f:…‥\-]|\.{2,})*:[0-9]+(?![0-9A-Za-z])")
@@ -399,7 +403,7 @@ def _windows(claim: str, values: set[str]) -> Iterable[str]:
     """文の区間（読点・句点で区切る）。表の値（``values``）の無い区間は続く区間と合わせる。"""
     for sentence in _SENTENCE_END.split(claim):
         pending = ""
-        for clause in _CLAUSE_END.split(sentence):
+        for clause in _WINDOW_END.split(sentence):
             pending = f"{pending} {clause}" if pending else clause
             if any(_mentions(value, clause) for value in values):
                 yield pending
@@ -432,6 +436,15 @@ def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]],
     def said(key: str) -> bool:
         return bool(starts(key))
 
+    def near(name: str, value: str) -> bool:
+        """見出しが値の前にあり、間に表の別の値が無いか（見出しがその値を指すか。#4060）。"""
+        values = [(place, key) for key in mentioned if table.is_value(key) and key != value for place in found[key]]
+        return any(
+            head + len(name) <= place and not any(head + len(name) <= other < place for other, _key in values)
+            for head in starts(name)
+            for place in found.get(value, [])
+        )
+
     found = {key: places for key in counts if (table.is_value(key) or table.is_label(key)) and (places := starts(key))}
     # 述べた長いセルの中にだけ現れる短いセル（「部品 1」の「1」）は、別に述べたことにしない（#3564）。
     spans = [(place, place + len(key)) for key, places in found.items() for place in places]
@@ -453,7 +466,7 @@ def _unbound_in_table(window: str, table: Table) -> tuple[list[tuple[str, str]],
         others = {key for key in distinct - {value} if not (table.columns.get(key, frozenset()) & value_columns)}
         matched = [index for index, row in enumerate(table.rows) if value in row and row & others]
         if matched:
-            other_column = _other_column(table, value, matched, said)
+            other_column = _other_column(table, value, matched, said, lambda name, value=value: near(name, value))
             if other_column:
                 unbound.append((table.cells.get(value, value), table.cells.get(other_column, other_column)))
             else:
@@ -494,11 +507,12 @@ def _parallel(table: Table, index: int, value: str, value_columns: frozenset[int
     return False
 
 
-def _other_column(table: Table, value: str, rows: Sequence[int], said: Callable[[str], bool]) -> str:
+def _other_column(table: Table, value: str, rows: Sequence[int], said: Callable[[str], bool], near: Callable[[str], bool]) -> str:
     """行は合っている値について、文がその値の列の見出しを述べず、同じ行の別の列の見出しを述べたらその見出し。
 
     見出しの行が無い表・先頭の列（行の区分・名前の列）・同じ見出しが 2 列以上ある表は見ない。その行の別の列が
-    空欄・同じ値なら疑わない。
+    空欄・同じ値なら疑わない。別の列の見出しは、値の前にあって間に表の別の値が無いとき（``near``）だけ数える
+    （「宿泊費 15,000円・日当 3,000円」の「日当」は後ろの値の見出し。#4060）。
     """
     names = [key for key in table.header if key]
     if not names or len(set(names)) != len(names):
@@ -518,7 +532,7 @@ def _other_column(table: Table, value: str, rows: Sequence[int], said: Callable[
                     and cells[other]
                     and cells[other] != key
                     and _is_label(name)
-                    and said(name)
+                    and near(name)
                 ):
                     return name
     return ""

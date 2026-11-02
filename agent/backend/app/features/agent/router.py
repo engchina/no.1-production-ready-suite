@@ -179,16 +179,20 @@ from app.features.agent.evaluation import (
     EvaluationSetFullError,
     EvaluationSetInput,
     EvaluationSetsData,
+    EvaluationSummary,
     JobStatus,
     cases_fingerprint,
     compare_jobs,
     draft_definition_hash,
     evaluation_set_store,
     evaluation_store,
+    judge_fingerprint,
+    paired_comparison,
     recorded_output_rows,
     run_evaluation_job,
     set_item,
 )
+from app.features.agent.evaluation_ablation import ablation_report
 from app.features.agent.evaluation_excel import (
     EXCEL_MAX_BYTES,
     EvaluationExcelError,
@@ -2892,6 +2896,16 @@ async def create_evaluation(
             status_code=409,
             detail="公開した版がありません。下書きで評価するか、公開してから評価してください。",
         )
+    # 反復の回数と実行の予算（#2582）。ケース × 試行の数が予算を超える評価は始めない。
+    budget = get_settings().agent_evaluation_max_trial_runs
+    if len(item.cases) * evaluation.trials > budget:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"ケース {len(item.cases)} 件 × {evaluation.trials} 回の試行は、1 回の評価の"
+                f"実行の予算（{budget} 回）を超えます。回数かケースを減らしてください。"
+            ),
+        )
     job = EvaluationJob(
         agent_id=agent.id,
         agent_name=agent.name,
@@ -2899,8 +2913,16 @@ async def create_evaluation(
         set_name=item.name,
         agent_version="draft" if target == "draft" else agent.published_version,
         definition_hash=draft_definition_hash(agent) if target == "draft" else None,
+        trials=evaluation.trials,
+        judge_fingerprint=judge_fingerprint(),
+        disabled_aids=list(evaluation.disabled_aids),
         created_by_user_uuid=_run_creator_user_uuid(request),
-        results=[EvaluationCaseResult(case=case) for case in item.cases],
+        # 試行の順に並べる（取消で止まっても、先の試行はすべてのケースがそろう。#2582）。
+        results=[
+            EvaluationCaseResult(case=case, trial=trial)
+            for trial in range(1, evaluation.trials + 1)
+            for case in item.cases
+        ],
     )
     try:
         created = evaluation_store.create(job)
@@ -2962,6 +2984,32 @@ async def compare_evaluations(
     base = _evaluation_for_actor(request, base_job_id)
     target = _evaluation_for_actor(request, target_job_id)
     return ApiResponse(data=compare_jobs(base, target))
+
+
+@router.get("/evaluations/ablation", response_model=ApiResponse[dict[str, Any]])
+async def evaluation_ablation(
+    request: Request,
+    target_job_id: Annotated[list[str], Query(min_length=1, max_length=10)],
+    base_job_id: str = Query(min_length=1, max_length=100),
+) -> ApiResponse[dict[str, Any]]:
+    """実行補助を外した評価と全構成の評価の比較の表（#2587。`evaluation_ablation`）。
+
+    権限は `GET /evaluations/compare` と同じ（メニュー権限と、利用者が使える業務 Agent の job）。
+    保存した job と Run の記録だけから作る（モデル・MCP を呼ばない）。
+    """
+    if base_job_id in target_job_id:
+        raise HTTPException(status_code=422, detail="基準と違う評価を選んでください。")
+    base = _evaluation_for_actor(request, base_job_id)
+    targets = [_evaluation_for_actor(request, job_id) for job_id in target_job_id]
+
+    def get_run(run_id: str) -> RunState | None:
+        try:
+            return runtime_repository.get_run(run_id)
+        except KeyError:
+            return None
+
+    report = await run_in_threadpool(ablation_report, base, targets, get_run)
+    return ApiResponse(data=report)
 
 
 @router.get("/evaluations/{job_id}", response_model=ApiResponse[EvaluationJob])
@@ -3906,9 +3954,27 @@ def _format_rate(value: float) -> str:
     return f"{round(value * 100)}%"
 
 
+def _rate_uncertainty(summary: EvaluationSummary) -> str:
+    """合格率の不確実性と欠測（#2582。拒否の文に添える）。"""
+    parts = []
+    if summary.pass_rate_interval is not None:
+        low, high = summary.pass_rate_interval
+        parts.append(f"95% 区間 {_format_rate(low)}〜{_format_rate(high)}")
+    parts.append(f"ケース {summary.judged_cases} 件")
+    if summary.trials > 1:
+        parts.append(f"各 {summary.trials} 回の試行")
+    if summary.missing_trials:
+        parts.append(f"欠測 {summary.missing_trials} 試行")
+    return f"（{'、'.join(parts)}）"
+
+
 def _publish_baseline(agent: AgentProfile, draft_job: EvaluationJob) -> EvaluationJob | None:
     """回帰の門の基準（#2569）: 下書きの評価と同じ評価セット・同じ評価ケースで、公開中の版を
-    評価した最新の評価（完了して合格率のあるもの）。"""
+    評価した最新の評価（完了して合格率のあるもの）。
+
+    評価者（判定のモデルと判定の指示）が違うと分かる評価は基準にしない（業務 Agent の差と評価者の
+    差を分けられないため。#2582）。
+    """
     fingerprint = cases_fingerprint(draft_job)
     return next(
         (
@@ -3917,29 +3983,92 @@ def _publish_baseline(agent: AgentProfile, draft_job: EvaluationJob) -> Evaluati
             if job.agent_id == agent.id
             and job.agent_version == agent.published_version
             and job.status == JobStatus.COMPLETED
+            and not job.disabled_aids
             and job.set_id == draft_job.set_id
             and job.summary.pass_rate is not None
             and cases_fingerprint(job) == fingerprint
+            and not (
+                job.judge_fingerprint
+                and draft_job.judge_fingerprint
+                and job.judge_fingerprint != draft_job.judge_fingerprint
+            )
         ),
         None,
     )
+
+
+def _paired_note(baseline: EvaluationJob, draft_job: EvaluationJob) -> str:
+    """公開中の版との対応のある差（同じ定義のケースごとの成功率の差。#2582）の文。"""
+    paired = paired_comparison(baseline, draft_job)
+    if paired is None:
+        return ""
+    low, high = paired.interval
+    verdict = "差の向きは確か" if paired.conclusive else "区間が 0 をまたぐため差は不確か"
+    return (
+        f"同じケース {paired.cases} 件の対応比較では差 {round(paired.difference * 100):+d} pt"
+        f"（95% 区間 {round(low * 100):+d}〜{round(high * 100):+d} pt、{verdict}）。"
+    )
+
+
+_SAFETY_KIND_LABELS = {
+    "forbidden_tool_executed": "禁止するツールの実行",
+    "unapproved_write": "承認なしの実行",
+    "unexecuted_claim": "未実行の完了報告",
+}
+
+
+def _safety_veto(agent: AgentProfile, since: datetime, definition: str) -> str | None:
+    """安全違反の拒否（#2581）: 下書きを最後に変えた後の、今の下書きの評価のどれかに安全違反があれば
+    公開を断る。
+
+    最新の 1 件だけでなく、同じ下書きのすべての評価（取り消し・失敗した評価も）を見る（評価し直して
+    違反の出なかった回で、違反を打ち消さない。統計的なぶれで安全の門を緩めない）。
+    """
+    for job in evaluation_store.list():
+        if (
+            job.agent_id != agent.id
+            or job.agent_version != "draft"
+            or job.created_at < since
+            or job.definition_hash != definition
+            or not job.summary.safety_violations
+        ):
+            continue
+        kinds = dict.fromkeys(
+            _SAFETY_KIND_LABELS.get(violation.kind, violation.kind)
+            for result in job.results
+            for violation in result.safety_violations
+        )
+        return (
+            f"今の下書きの品質評価（{job.set_name}）で安全違反が "
+            f"{job.summary.safety_violation_cases} ケース（{job.summary.safety_violations} 試行。"
+            f"{'・'.join(kinds)}）ありました。合格率に関わらず公開できません。"
+            "指示・スキル・ツール権限を直して評価し直してください。"
+        )
+    return None
 
 
 def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
     """公開前の評価の門（#2519・#2569）。満たさなければ理由の文、満たす・門が無ければ None。
 
     数えるのは、下書きを最後に変えた後に始めた、この業務 Agent の下書きの評価（完了したもの）の
-    最新の 1 件。公開中の版と下書きが同じ（変更の無い再公開）なら求めない。門は、合格率の閾値
+    最新の 1 件。公開中の版と下書きが同じ（変更の無い再公開）なら求めない。今の下書きの評価に
+    安全違反があれば、門の設定に依らず断る（#2581。`_safety_veto`）。門は、合格率の閾値
     （`AGENT_PUBLISH_MIN_PASS_RATE`）と、公開中の版との回帰（`AGENT_PUBLISH_MAX_PASS_RATE_DROP`）の
     2 つで、どちらかを使うときはケースの数の下限（`AGENT_PUBLISH_MIN_CASES`）も見る。
     """
     settings = get_settings()
     threshold = settings.agent_publish_min_pass_rate
     max_drop = settings.agent_publish_max_pass_rate_drop
-    if (threshold <= 0 and max_drop is None) or not agent.has_unpublished_changes():
+    if not agent.has_unpublished_changes():
         return None
     since = agent.draft_updated_at or agent.created_at
     current_definition = draft_definition_hash(agent)
+    # 安全違反の拒否（#2581）は合格率の門の設定に依らず、平均の品質でも打ち消さない。
+    vetoed = _safety_veto(agent, since, current_definition)
+    if vetoed is not None:
+        return vetoed
+    if threshold <= 0 and max_drop is None:
+        return None
     latest = next(
         (
             job
@@ -3947,6 +4076,8 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
             if job.agent_id == agent.id
             and job.agent_version == "draft"
             and job.status == JobStatus.COMPLETED
+            # 補助を外した除去実験（#2587）は、公開する構成の評価ではない。
+            and not job.disabled_aids
             and job.created_at >= since
             and job.definition_hash == current_definition
         ),
@@ -3973,7 +4104,8 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
         )
     if threshold > 0 and rate < threshold:
         return (
-            f"今の下書きの品質評価（{latest.set_name}）が合格率 {_format_rate(rate)}で、"
+            f"今の下書きの品質評価（{latest.set_name}）が合格率 {_format_rate(rate)}"
+            f"{_rate_uncertainty(latest.summary)}で、"
             f"公開に必要な合格率 {_format_rate(threshold)} に届いていません。"
             "指示やスキルを直して評価し直してください。"
         )
@@ -3983,17 +4115,19 @@ def _publish_evaluation_refusal(agent: AgentProfile) -> str | None:
     if baseline is None:
         return (
             f"公開するには、公開中の版（v{agent.published_version}）も同じ評価セット"
-            f"（{latest.set_name}）・同じ評価ケースで評価してください（下書きの合格率を、公開中の版と"
-            "比べて確かめます）。"
+            f"（{latest.set_name}）・同じ評価ケース・同じ評価者（判定のモデルと判定の指示）で評価して"
+            "ください（下書きの合格率を、公開中の版と比べて確かめます）。"
         )
     base_rate = baseline.summary.pass_rate or 0.0
     # 浮動小数の誤差で、ちょうど許す下げ幅を断らない。
     if rate < base_rate - max_drop - 1e-9:
         return (
-            f"今の下書きの合格率 {_format_rate(rate)} が、"
-            f"公開中の版（v{agent.published_version}）の合格率 {_format_rate(base_rate)} から"
+            f"今の下書きの合格率 {_format_rate(rate)}{_rate_uncertainty(latest.summary)} が、"
+            f"公開中の版（v{agent.published_version}）の合格率 {_format_rate(base_rate)}"
+            f"{_rate_uncertainty(baseline.summary)} から"
             "下がりすぎています（許す下げ幅は "
             f"{_format_rate(max_drop)}、評価セット {latest.set_name}）。"
+            f"{_paired_note(baseline, latest)}"
             "指示やスキルを直して評価し直してください。"
         )
     return None
