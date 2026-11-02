@@ -1221,6 +1221,20 @@ export interface KnowledgeBaseGraphEdge {
   confidence: number;
 }
 
+export interface GraphReferenceItem {
+  id: string;
+  label: string;
+  status: "resolved" | "not_found" | "ambiguous" | "version_unconfirmed";
+  source: KnowledgeBaseGraphNode;
+  target: KnowledgeBaseGraphNode | null;
+}
+export interface GraphReferencePage {
+  items: GraphReferenceItem[];
+  offset: number;
+  has_more: boolean;
+  direction: "outgoing" | "incoming";
+}
+
 export interface KnowledgeBaseGraphData {
   status: "ok" | "empty";
   nodes: KnowledgeBaseGraphNode[];
@@ -3839,6 +3853,8 @@ export const api = {
   getStructureBuildJob: (id: string, offset = 0, limit = 25) => request<StructureBuildJob | null>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job?offset=${offset}&limit=${limit}`),
   startStructureBuild: (id: string, mode: StructureBuildMode) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }),
   stopStructureBuild: (id: string) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job/stop`, { method: "POST" }),
+  getKnowledgeBaseGraphReferences: (id: string, nodeId: string, direction: "outgoing" | "incoming", offset = 0) =>
+    request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}`),
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
     requestDegradable<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from app.rag.cross_references import (
@@ -45,7 +46,20 @@ def resolve_scoped_reference(
     documents: tuple[ReferenceDocument, ...],
 ) -> ReferenceResolution:
     """許可されたsnapshotだけで解決する。候補名や本文を未解決結果へ漏らさない。"""
-    if not spec.document_title or same_document_title(spec.document_title, source.name):
+    from app.rag.reference_grammar import current_grammar
+
+    if not source.chunk_set_id:
+        return ReferenceResolution("version_unconfirmed")
+
+    if spec.document_title and (
+        expanded := current_grammar().vocabulary.abbreviation_title(
+            spec.document_title, re.sub(r"\.[A-Za-z0-9]{1,5}$", "", source.name)
+        )
+    ):
+        spec = replace(spec, document_title=expanded)
+    if not spec.document_title or same_document_title(
+        spec.document_title, re.sub(r"\.[A-Za-z0-9]{1,5}$", "", source.name)
+    ):
         candidates = [source]
     else:
         matches = [

@@ -17624,7 +17624,7 @@ def _write_document_graph_index(
             entity_ids=existing_entity_ids,
         )
     if graph_index.entities:
-        _executemany(
+        _executemany_graph(
             connection,
             """
             INSERT INTO rag_graph_entities (
@@ -17656,7 +17656,7 @@ def _write_document_graph_index(
             input_sizes=_json_input_sizes("source_document_ids"),
         )
     if graph_index.relationships:
-        _executemany(
+        _executemany_graph(
             connection,
             """
             INSERT INTO rag_graph_relationships (
@@ -17693,7 +17693,7 @@ def _write_document_graph_index(
             input_sizes=_json_input_sizes("source_document_ids"),
         )
     if graph_index.entity_chunk_links:
-        _executemany(
+        _executemany_graph(
             connection,
             """
             INSERT INTO rag_graph_entity_chunks (
@@ -17720,3 +17720,28 @@ def _write_document_graph_index(
                 for link in graph_index.entity_chunk_links
             ],
         )
+
+    if chunk_set_id is not None:
+        from app.clients.graph_reference_store import write_graph_references
+
+        for kb_id in {entity.knowledge_base_id for entity in graph_index.entities} - {None}:
+            write_graph_references(
+                connection,
+                knowledge_base_id=str(kb_id),
+                chunk_set_id=chunk_set_id,
+                records=[
+                    record for record in graph_index.references if record.knowledge_base_id == kb_id
+                ],
+            )
+
+
+def _executemany_graph(
+    connection: OracleConnectionProtocol,
+    statement: str,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    input_sizes: Mapping[str, object] | None = None,
+) -> None:
+    """永続化の件数は画面上限で切らず、有界のバッチで同じtransactionへ書く。"""
+    for offset in range(0, len(rows), 250):
+        _executemany(connection, statement, rows[offset : offset + 250], input_sizes=input_sizes)

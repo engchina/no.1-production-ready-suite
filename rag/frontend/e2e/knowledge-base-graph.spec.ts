@@ -59,6 +59,7 @@ async function mockKb(
   await page.route("**/api/knowledge-bases/kb-1/graph**", (route) =>
     route.fulfill({ json: { ...ok(graph), warning_messages: warnings() } })
   );
+  await page.route("**/api/knowledge-bases/kb-1/graph/references**", (route) => route.fulfill({ json: ok({ items: [], offset: 0, has_more: false, direction: "outgoing" }) }));
   await page.route("**/api/knowledge-bases/kb-1/structure-index/job**", (route) => route.fulfill({ json: ok(null) }));
   await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok(kbDetail) }));
   // KB の抽出する項目（#548）。上の wildcard の一覧を返さない。
@@ -475,3 +476,34 @@ for (const width of [1280, 1920, 375]) {
     });
   }
 }
+
+test("明示参照の方向を分け、未表示の参照先を取得して位置を示す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const source = { id: "a".repeat(64), name: "合成章 A", type: "section", confidence: 1 };
+  const target = { id: "b".repeat(64), name: "合成章 B", type: "section", confidence: 1 };
+  await mockKb(page, { status: "ok", nodes: [source], edges: [], truncated: true });
+  const directions: string[] = [];
+  await page.route("**/api/knowledge-bases/kb-1/graph/references**", (route) => {
+    const url = new URL(route.request().url());
+    const direction = url.searchParams.get("direction") ?? "outgoing";
+    directions.push(direction);
+    const isTarget = url.searchParams.get("node_id") === target.id;
+    return route.fulfill({ json: ok({ items: isTarget && direction === "outgoing" ? [] : [{ id: "ref-a", label: "合成章 Bを参照", status: "resolved", source, target }, { id: "ref-missing", label: "合成章 Cを参照", status: "ambiguous", source, target: null }], direction, offset: 0, has_more: false }) });
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const node = page.locator(`.react-flow__node[data-id="${source.id}"]`);
+  await node.focus(); await page.keyboard.press("Enter");
+  const references = page.getByTestId("graph-references");
+  await expect(references.getByText("候補が複数あります", { exact: true })).toBeVisible();
+  await expect(references.getByRole("button", { name: "図で位置を確認" })).toHaveCount(1);
+  await references.getByRole("tab", { name: "参照元", exact: true }).click();
+  await expect.poll(() => directions.includes("incoming")).toBe(true);
+  await references.getByRole("tab", { name: "参照先", exact: true }).click();
+  await references.getByRole("button", { name: "図で位置を確認" }).click();
+  const destination = page.locator(`.react-flow__node[data-id="${target.id}"]`);
+  await expect(destination).toBeVisible();
+  await expect(destination).toHaveClass(/selected/);
+  await expect(page.locator(".react-flow__edge-text")).toContainText("参照");
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("reference-navigation.png"), fullPage: true });
+});

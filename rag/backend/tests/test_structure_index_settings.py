@@ -84,6 +84,15 @@ class SavedOracle:
 
     async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
         assert "embedding" not in sql
+        if "SELECT DISTINCT c.document_id" in sql:
+            return [
+                {
+                    "document_id": "doc",
+                    "chunk_set_id": "cs",
+                    "file_name": "synthetic.txt",
+                    "path": "合成章 > 合成節",
+                }
+            ]
         assert "reference_source_text" in sql
         assert "is_active = 1" in sql
         return self.rows

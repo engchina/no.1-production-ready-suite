@@ -4109,3 +4109,47 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261102_005_graph_references
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_GRAPH_REFERENCES';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_graph_references ( '
+            || 'reference_id CHAR(64) PRIMARY KEY, '
+            || 'knowledge_base_id VARCHAR2(64) NOT NULL, '
+            || 'source_document_id VARCHAR2(64) NOT NULL, '
+            || 'source_chunk_set_id VARCHAR2(64) NOT NULL, '
+            || 'source_chunk_id VARCHAR2(128) NOT NULL, '
+            || 'source_section_path VARCHAR2(4000 CHAR), '
+            || 'label VARCHAR2(2000 CHAR) NOT NULL, '
+            || 'kind VARCHAR2(24) NOT NULL, '
+            || 'reference_key VARCHAR2(2000 CHAR), '
+            || 'document_title VARCHAR2(2000 CHAR), '
+            || 'resolution_status VARCHAR2(32) NOT NULL, '
+            || 'target_document_id VARCHAR2(64), '
+            || 'target_chunk_set_id VARCHAR2(64), '
+            || 'target_section_path VARCHAR2(4000 CHAR), '
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_graph_refs_kb_fk FOREIGN KEY (knowledge_base_id) '
+            || 'REFERENCES rag_knowledge_bases(knowledge_base_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_graph_refs_source_fk FOREIGN KEY (source_chunk_set_id) '
+            || 'REFERENCES rag_chunk_sets(chunk_set_id) ON DELETE CASCADE '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REFS_SOURCE_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_graph_refs_source_idx ON rag_graph_references '
+            || '(knowledge_base_id,source_chunk_set_id)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_GRAPH_REFS_TARGET_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_graph_refs_target_idx ON rag_graph_references '
+            || '(knowledge_base_id,target_chunk_set_id)';
+    END IF;
+END;
+/

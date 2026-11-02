@@ -2719,8 +2719,35 @@ class AnswerEngine:
         ]
         if not rows:
             return []
-        first_set = rows[0].metadata.get("chunk_set_id")
-        return [row for row in rows if row.metadata.get("chunk_set_id") == first_set]
+        from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
+
+        versions = {str(row.metadata.get("chunk_set_id") or "") for row in rows}
+        candidates = tuple(
+            ReferenceDocument(
+                document_id,
+                version or None,
+                target.document_title or "",
+                tuple(path for _name, path, _count in sections),
+            )
+            for version in versions
+        )
+        source = ReferenceDocument(
+            anchor.document_id,
+            str(anchor.metadata.get("chunk_set_id") or "") or None,
+            anchor.file_name or "",
+            (),
+        )
+        resolved = resolve_scoped_reference(
+            target.spec,
+            source=source,
+            citing_path=str(anchor.metadata.get("section_path") or ""),
+            documents=candidates,
+        )
+        if resolved.target is None:
+            return []
+        return [
+            row for row in rows if row.metadata.get("chunk_set_id") == resolved.target.chunk_set_id
+        ]
 
     async def _referenced_document_id(
         self,

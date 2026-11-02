@@ -1,12 +1,13 @@
-import { useEffect, useId, useMemo, useState } from "react";
-import { Handle, Position, useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Handle, MarkerType, Position, useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from "@xyflow/react";
 import { FileText, Heading, Image, Layers, Table2, type LucideIcon } from "lucide-react";
 import { SelectField } from "@production-ready/ui";
 import { GraphCanvas, GraphCanvasControls, GraphCanvasFrame, GraphCanvasProvider, GraphLegend, GraphNodeFrame, GraphSearchNavigation, GraphSelectionDetails, GRAPH_DEFAULT_NODE_SIZE, applyGraphNodeDimensionChanges, type GraphNodeDimensions, layoutGraphHierarchy, normalizeGraphSearch } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 
-import type { KnowledgeBaseGraphData, KnowledgeBaseGraphNode } from "@/lib/api";
+import type { GraphReferenceItem, KnowledgeBaseGraphData, KnowledgeBaseGraphNode } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { GraphReferencePanel } from "./GraphReferencePanel";
 
 interface StructureNodeData extends Record<string, unknown> {
   item: KnowledgeBaseGraphNode;
@@ -24,7 +25,7 @@ function kindLabel(kind: string | null) {
 }
 const KIND_ICONS: Record<string, LucideIcon> = { document: FileText, section: Heading, table_section: Table2, figure_section: Image };
 function edgeLabel(kind: string | null) {
-  return t(kind === "contains" ? "knowledgeBases.graph.contains" : "knowledgeBases.graph.related");
+  return t(kind === "contains" ? "knowledgeBases.graph.contains" : kind === "references" ? "knowledgeBases.graph.references" : "knowledgeBases.graph.related");
 }
 function StructureNode({ data, selected }: NodeProps<Node<StructureNodeData>>) {
   const Icon = KIND_ICONS[data.item.type ?? ""] ?? Layers;
@@ -37,7 +38,12 @@ function StructureNode({ data, selected }: NodeProps<Node<StructureNodeData>>) {
 }
 const NODE_TYPES = { structure: StructureNode };
 
-function StructureCanvas({ data }: { data: KnowledgeBaseGraphData }) {
+function StructureCanvas({ data: initialData, knowledgeBaseId }: { data: KnowledgeBaseGraphData; knowledgeBaseId: string }) {
+  const [extraNodes, setExtraNodes] = useState<KnowledgeBaseGraphNode[]>([]);
+  const [referenceEdge, setReferenceEdge] = useState<KnowledgeBaseGraphData["edges"][number] | null>(null);
+  const focusedReference = useRef<string | null>(null);
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null);
+  const data = useMemo(() => ({ ...initialData, nodes: [...new Map([...initialData.nodes, ...extraNodes].map((node) => [node.id, node])).values()], edges: referenceEdge ? [...initialData.edges.filter((edge) => edge.id !== referenceEdge.id), referenceEdge] : initialData.edges }), [initialData, extraNodes, referenceEdge]);
   const flow = useReactFlow<Node<StructureNodeData>, Edge>();
   const filterId = useId();
   const [search, setSearch] = useState("");
@@ -67,7 +73,22 @@ function StructureCanvas({ data }: { data: KnowledgeBaseGraphData }) {
     edges: visibleEdges.filter((edge) => edge.type === "contains"), columnGap: GRAPH_DEFAULT_NODE_SIZE.width / 4, rowGap: GRAPH_DEFAULT_NODE_SIZE.height / 2,
   }), [visibleNodes, visibleEdges, sizes]);
   const nodes: Node<StructureNodeData>[] = visibleNodes.map((node) => ({ id: node.id, type: "structure", position: layout.positions.get(node.id)!, ...(sizes.has(node.id) ? { measured: sizes.get(node.id) } : {}), ariaLabel: `${kindLabel(node.type)}：${node.name || node.id}`, data: { item: node, matched: matchedNodes.has(node.id) }, selected: selection?.type === "node" && selection.id === node.id }));
-  const edges: Edge[] = visibleEdges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target, label: edgeLabel(edge.type), ariaLabel: t("knowledgeBases.graph.connection", { from: data.nodes.find((node) => node.id === edge.source)?.name || edge.source, to: data.nodes.find((node) => node.id === edge.target)?.name || edge.target, relation: edgeLabel(edge.type) }), selected: selection?.type === "edge" && selection.id === edge.id }));
+  const edges: Edge[] = visibleEdges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target, markerEnd: edge.type === "references" ? { type: MarkerType.ArrowClosed } : undefined, label: edgeLabel(edge.type), ariaLabel: t("knowledgeBases.graph.connection", { from: data.nodes.find((node) => node.id === edge.source)?.name || edge.source, to: data.nodes.find((node) => node.id === edge.target)?.name || edge.target, relation: edgeLabel(edge.type) }), selected: selection?.type === "edge" && selection.id === edge.id }));
+  useEffect(() => {
+    if (!pendingFocus || focusedReference.current === pendingFocus) return;
+    const position = layout.positions.get(pendingFocus);
+    if (position) {
+      void flow.setCenter(position.x + GRAPH_DEFAULT_NODE_SIZE.width / 2, position.y + GRAPH_DEFAULT_NODE_SIZE.height / 2, { zoom: 1, duration: 0 });
+      focusedReference.current = pendingFocus;
+    }
+  }, [pendingFocus, layout, flow]);
+  const locateReference = (item: GraphReferenceItem, target: KnowledgeBaseGraphNode) => {
+    focusedReference.current = null;
+    setKind(""); setDisabledKinds(new Set());
+    setExtraNodes((before) => [...new Map([...before, item.source, ...(item.target ? [item.target] : [])].map((node) => [node.id, node])).values()].slice(-100));
+    if (item.target) setReferenceEdge({ id: item.id, source: item.source.id, target: item.target.id, type: "references", confidence: 1 });
+    setSelection({ type: "node", id: target.id }); setPendingFocus(target.id);
+  };
   const focus = (match: Match) => {
     setSelection(match);
     if (match.type === "edge") {
@@ -115,10 +136,11 @@ function StructureCanvas({ data }: { data: KnowledgeBaseGraphData }) {
         <GraphLegend label={t("knowledgeBases.graph.legend")} items={kinds.map((value) => ({ id: value, label: kindLabel(value) }))} disabledIds={disabledKinds} onToggle={(id) => { setDisabledKinds((before) => { const next = new Set(before); if (next.has(id)) next.delete(id); else next.add(id); return next; }); setSelection(null); setCursor(0); }} testId="knowledge-base-graph-legend" />
       </GraphCanvas>
     </GraphCanvasFrame>
+    {selectedNode ? <GraphReferencePanel key={`${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} nodeId={selectedNode.id} onLocate={locateReference} /> : null}
     {fields.length ? <GraphSelectionDetails title={t(selectedNode ? "knowledgeBases.graph.selectedNode" : "knowledgeBases.graph.selectedEdge")} closeLabel={t("knowledgeBases.graph.clearSelection")} onClose={() => setSelection(null)} fields={fields} /> : null}
   </div>;
 }
 
-export function KnowledgeBaseGraphCanvas({ data }: { data: KnowledgeBaseGraphData }) {
-  return <GraphCanvasProvider><StructureCanvas data={data} /></GraphCanvasProvider>;
+export function KnowledgeBaseGraphCanvas({ data, knowledgeBaseId }: { data: KnowledgeBaseGraphData; knowledgeBaseId: string }) {
+  return <GraphCanvasProvider><StructureCanvas data={data} knowledgeBaseId={knowledgeBaseId} /></GraphCanvasProvider>;
 }

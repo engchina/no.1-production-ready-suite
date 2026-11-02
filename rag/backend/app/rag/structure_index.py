@@ -125,8 +125,6 @@ async def rebuild_document_structure_index(
     from app.clients.structure_index_store import StructureIndexStore
     from app.rag.chunking import Chunk
     from app.rag.graph_index import (
-        GRAPH_ENTITY_MAX_PER_KB,
-        _entity_names_for_chunk,
         build_graph_index,
     )
     from app.schemas.extraction import StructuredExtraction
@@ -171,6 +169,9 @@ async def rebuild_document_structure_index(
         raise ValueError("no_chunks")
     if expected_source is not None and source != sorted(expected_source):
         raise ValueError("source_changed")
+    from app.clients.graph_reference_store import GraphReferenceStore
+
+    reference_documents = await GraphReferenceStore(oracle).documents(knowledge_base_id)
     graphs = {}
     counts: dict[str, Any] = {
         "chunk_sets": len(source),
@@ -237,9 +238,9 @@ async def rebuild_document_structure_index(
             chunks=chunks,
             chunk_set_id=chunk_set_id,
             document_name=document.file_name,
+            reference_documents=reference_documents,
         )
-        unique = {name for chunk in chunks for name in _entity_names_for_chunk(chunk)}
-        if missing or len(unique) + 1 > GRAPH_ENTITY_MAX_PER_KB:
+        if missing:
             counts["quality"] = "PARTIAL"
         graphs[chunk_set_id] = graph
         counts["entities"] += len(graph.entities)

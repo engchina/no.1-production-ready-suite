@@ -139,3 +139,26 @@ def test_relative_reference_and_cycle_are_directional_without_recursive_expansio
         for edge in graph.relationships
         if edge.relationship_type == "references"
     } == {("第1条", "第2条"), ("第2条", "第1条")}
+
+
+def test_reference_targets_beyond_initial_graph_window_are_indexed() -> None:
+    chunks = [
+        Chunk(
+            text="第100条を参照する。" if index == 0 else "合成本文。",
+            index=index,
+            start_offset=index * 20,
+            end_offset=(index + 1) * 20,
+            metadata={"section_path": f"第{index + 1}条"},
+        )
+        for index in range(100)
+    ]
+    graph = build_graph_index(
+        document_id="doc",
+        knowledge_base_ids=["kb"],
+        extraction=StructuredExtraction(),
+        chunks=chunks,
+        chunk_set_id="cs",
+    )
+    assert len(graph.entities) == 101
+    assert any(edge.relationship_type == "references" for edge in graph.relationships)
+    assert graph.references[0].target_section_path == "第100条"
