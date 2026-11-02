@@ -1238,6 +1238,14 @@ class Settings(
     rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_rerank_min_relevance_score: float = Field(default=0.4, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
+    rag_native_vector_exact_max_chunks: int = Field(
+        default=50000,
+        ge=0,
+        description=(
+            "原生方式のベクトルの分岐で、許可された chunk がこの件数以下なら範囲の行を距離順に読む"
+            "(#4134・#4097)。超えると原生索引で読み、不足は診断とログに残す。0 は常に原生索引。"
+        ),
+    )
     rag_rrf_method_ratio: tuple[float, float] = (10.0, 1.0)
     rag_rrf_source_ratio: tuple[float, float] = (7.0, 3.0)
 

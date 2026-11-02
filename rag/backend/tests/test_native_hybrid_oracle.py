@@ -369,6 +369,143 @@ async def test_large_native_scope_is_compressed_without_losing_page_or_acl(
     )
 
 
+def _axis_vector(primary: int, secondary: int, weight: float) -> list[float]:
+    """合成の単位ベクトル。``primary`` の軸の近くに置き、``secondary`` の軸へ少しずらす。"""
+    vector = [0.0] * 1536
+    vector[primary] = 1.0
+    vector[secondary] = weight
+    norm = (1 + weight * weight) ** 0.5
+    return [value / norm for value in vector]
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right, strict=True))
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_native_vector_returns_scope_rows_for_a_far_question_and_after_replacement() -> None:
+    """問いに近い行が範囲の外にだけあり、再取込で削除の残骸があっても、範囲の上位 k 件を返す。
+
+    #4134(問いに近い centroid に範囲の行が無い)と #4097(削除の残骸が上位 k 件の枠を使う)。
+    """
+    from app.clients.oracle import NativeSearchRows
+    from app.schemas.extraction import StructuredExtraction
+
+    settings = get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_native"})
+    oracle = OracleClient(settings)
+    token = uuid4().hex[:10]
+    scoped_kb = await oracle.create_knowledge_base(name=f"合成の範囲KB {token}")
+    outside_kb = await oracle.create_knowledge_base(name=f"合成の範囲外KB {token}")
+
+    def chunks(label: str, count: int) -> list[Chunk]:
+        return [
+            Chunk(
+                text=f"synthetic{token} {label} item {index}",
+                index=index,
+                start_offset=0,
+                end_offset=30,
+                metadata={"page_number": 1},
+            )
+            for index in range(count)
+        ]
+
+    scoped_vectors = [_axis_vector(0, 10 + index, 0.02 * (index + 1)) for index in range(12)]
+    scoped_chunks = chunks("scoped", len(scoped_vectors))
+    document = await _indexed_document(
+        oracle,
+        file_name=f"synthetic-scoped-{token}.txt",
+        chunks=scoped_chunks,
+        knowledge_base_ids=[scoped_kb.id],
+        embeddings=scoped_vectors,
+    )
+    outside_document = await _indexed_document(
+        oracle,
+        file_name=f"synthetic-outside-{token}.txt",
+        chunks=chunks("outside", 60),
+        knowledge_base_ids=[outside_kb.id],
+        embeddings=[_axis_vector(1, 100 + index, 0.01) for index in range(60)],
+    )
+    # 範囲の外の行にとても近く、範囲の行には類似度の下限を超える程度に近い問い。
+    question = _axis_vector(1, 0, 0.3)
+    truth = sorted(
+        range(len(scoped_vectors)), key=lambda index: -_cosine(question, scoped_vectors[index])
+    )[:5]
+    filters = {"knowledge_base_id": scoped_kb.id}
+
+    async def check_scope() -> None:
+        rows = await oracle._native_rows("vector", "", question, top_k=5, filters=filters)
+        assert isinstance(rows, NativeSearchRows)
+        assert rows.vector_retrieval["method"] == "exact_scope"
+        assert rows.vector_retrieval["scope_vector_chunks"] == len(scoped_vectors)
+        assert rows.vector_retrieval["shortage"] is False
+        assert [int(str(row["chunk_index"])) for row in rows] == truth
+        assert {row["document_id"] for row in rows} == {document}
+        assert [row["native_vector_rank"] for row in rows] == [1, 2, 3, 4, 5]
+        hybrid = await oracle._native_rows(
+            "hybrid", f"synthetic{token}", question, top_k=5, filters=filters
+        )
+        assert isinstance(hybrid, NativeSearchRows)
+        assert {row["document_id"] for row in hybrid} == {document}
+        assert sum(bool(row.get("native_effective_vector_rank")) for row in hybrid) == 5
+        assert any(row.get("native_effective_text_rank") for row in hybrid)
+
+    await check_scope()
+    chunk_sets = await oracle._fetch_all(
+        "SELECT DISTINCT chunk_set_id FROM rag_chunks WHERE document_id = :document_id",
+        {"document_id": document},
+    )
+    for _generation in range(3):
+        await oracle.save_index(
+            document,
+            StructuredExtraction(raw_text="本文", confidence=0.9),
+            scoped_chunks,
+            scoped_vectors,
+            chunk_set_id=str(chunk_sets[0]["chunk_set_id"]),
+        )
+        await check_scope()
+    unscoped = await oracle._native_rows(
+        "vector", "", question, top_k=5, filters={"knowledge_base_id": outside_kb.id}
+    )
+    assert {row["document_id"] for row in unscoped} == {outside_document}
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_native_vector_exact_read_keeps_page_limited_scope() -> None:
+    """ページで絞った範囲(chunk set の一部)でも、距離順の結果に範囲の外の行が入らない。"""
+    from app.clients.oracle import NativeSearchRows
+
+    settings = get_settings().model_copy(update={"rag_hybrid_search_backend": "oracle_native"})
+    oracle = OracleClient(settings)
+    token = uuid4().hex[:10]
+    vectors = [_axis_vector(0, 10 + index, 0.05 * (index + 1)) for index in range(8)]
+    document = await _indexed_document(
+        oracle,
+        file_name=f"synthetic-page-{token}.txt",
+        chunks=[
+            Chunk(
+                text=f"synthetic{token} item {index}",
+                index=index,
+                start_offset=0,
+                end_offset=30,
+                metadata={"page_number": 1 if index < 3 else 2},
+            )
+            for index in range(len(vectors))
+        ],
+        embeddings=vectors,
+    )
+    rows = await oracle._native_rows(
+        "vector",
+        "",
+        _axis_vector(0, 1, 0.1),
+        top_k=8,
+        filters={"document_id": document, "page_number_min": "1", "page_number_max": "1"},
+    )
+    assert isinstance(rows, NativeSearchRows)
+    assert rows.vector_retrieval["method"] == "exact_scope"
+    assert rows.vector_retrieval["expected"] == 3
+    assert sorted(int(str(row["chunk_index"])) for row in rows) == [0, 1, 2]
+
+
 @pytest.mark.usefixtures("oracle_db")
 async def test_hybrid_payload_ignores_scope_updates_but_tracks_text_and_embedding() -> None:
     """専用の合成表で同期対象の列と、既存triggerの更新を確認する。"""

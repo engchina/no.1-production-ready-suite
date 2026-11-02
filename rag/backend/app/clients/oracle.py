@@ -466,14 +466,142 @@ class _NativeScope:
     allowed_ids: list[str]
     complete_scopes: list[int]
     scope_ranges: list[tuple[int, int, int]]
+    # 許可された chunk のうち埋め込みを持つ行の数(ベクトルの読み方の判断と不足の判定に使う)。
+    vector_chunks: int
 
 
 class NativeSearchRows(list[dict[str, object]]):
-    """有界な原生結果と、実際の閾値判定の集計。"""
+    """有界な原生結果と、実際の閾値判定・ベクトルの読み方の集計。"""
 
-    def __init__(self, rows: list[dict[str, object]], threshold: dict[str, object]) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        threshold: dict[str, object],
+        vector_retrieval: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(rows)
         self.threshold = threshold
+        self.vector_retrieval = vector_retrieval or {}
+
+
+def _native_vector_retrieval(
+    *, method: str, scope: _NativeScope, top_k: int, exact_max_chunks: int, returned: int
+) -> dict[str, object]:
+    """ベクトルの分岐の読み方と不足を診断に残す形にする(#4134・#4097)。"""
+    expected = min(top_k, scope.vector_chunks)
+    return {
+        "method": method,
+        "scope_vector_chunks": scope.vector_chunks,
+        "exact_max_chunks": exact_max_chunks,
+        "requested": top_k,
+        "expected": expected,
+        "returned": returned,
+        "shortage": returned < expected,
+    }
+
+
+def _native_exact_vector_statement(
+    *, where: str, scope: _NativeScope, top_k: int
+) -> tuple[str, dict[str, object]]:
+    """許可された行を基表から距離順に読む SQL と bind(#4134・#4097)。
+
+    原生の検索と同じく、解決済みの範囲で読む行を決め、結果の行に同じ権限の条件(``where``)を
+    掛け直す。範囲の条件を距離の順位の外に置くと、許可された chunk を列ごとに評価するだけで秒単位に
+    なる(#4133)。上位の行を距離だけで決め、本文・metadata はその行だけ読む(#2137)。
+    """
+    top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=2000)
+    binds: dict[str, object] = {}
+    if scope.complete_scopes:
+        binds["exact_scope_ids"] = json.dumps(scope.complete_scopes)
+    complete_sql = """SELECT scope_id FROM JSON_TABLE(:exact_scope_ids, '$[*]'
+                    COLUMNS (scope_id NUMBER PATH '$'))"""
+    if scope.complete_scopes and not scope.scope_ranges and not scope.allowed_ids:
+        # 多くの範囲はこの形。native_scope_id の索引から読むだけで済む。
+        allowed_sql = f"candidate.native_scope_id IN ({complete_sql})"
+    else:
+        allowed: list[str] = []
+        if scope.complete_scopes:
+            allowed.append(
+                f"""SELECT scoped.chunk_id FROM rag_chunks scoped
+                WHERE scoped.native_scope_id IN ({complete_sql})"""
+            )
+        if scope.scope_ranges:
+            binds["exact_scope_ranges"] = json.dumps(scope.scope_ranges)
+            allowed.append(
+                """SELECT ranged.chunk_id FROM rag_chunks ranged
+                JOIN JSON_TABLE(:exact_scope_ranges, '$[*]' COLUMNS (
+                    scope_id NUMBER PATH '$[0]',
+                    first_index NUMBER PATH '$[1]',
+                    last_index NUMBER PATH '$[2]')) section_range
+                  ON ranged.native_scope_id = section_range.scope_id
+                 AND ranged.chunk_index BETWEEN section_range.first_index
+                     AND section_range.last_index"""
+            )
+        if scope.allowed_ids:
+            binds["exact_chunk_ids"] = json.dumps(scope.allowed_ids)
+            allowed.append(
+                """SELECT chunk_id FROM JSON_TABLE(:exact_chunk_ids, '$[*]'
+                    COLUMNS (chunk_id VARCHAR2(128) PATH '$'))"""
+            )
+        if not allowed:
+            raise ValueError("検索範囲が不正です。")
+        # 相関の副問い合わせを OR で結ぶと行ごとの FILTER になるので、行の集合を先に作る。
+        union_sql = "\n                UNION ALL\n                ".join(allowed)
+        allowed_sql = f"candidate.chunk_id IN (\n                {union_sql}\n            )"
+    statement = f"""
+        SELECT {_SEARCH_HIT_COLUMNS},
+            100 / (1 + nearest.distance) AS score,
+            1 - nearest.distance AS native_similarity,
+            100 / (1 + nearest.distance) AS native_vector_score
+        FROM (
+            SELECT candidate.chunk_id, candidate.document_id, candidate.chunk_index,
+                VECTOR_DISTANCE(candidate.embedding, :native_embedding, COSINE) AS distance
+            FROM rag_chunks candidate
+            WHERE candidate.embedding IS NOT NULL AND {allowed_sql}
+            ORDER BY distance ASC, candidate.document_id ASC, candidate.chunk_index ASC,
+                candidate.chunk_id ASC
+            FETCH EXACT FIRST {top_k_literal} ROWS ONLY
+        ) nearest
+        JOIN rag_chunks c ON c.chunk_id = nearest.chunk_id
+        JOIN rag_documents d ON d.document_id = c.document_id
+        LEFT JOIN rag_chunk_sets cs ON cs.chunk_set_id = c.chunk_set_id
+        LEFT JOIN rag_document_recipes r ON r.recipe_id = cs.recipe_id
+        WHERE {where}
+        ORDER BY nearest.distance ASC, nearest.document_id ASC, nearest.chunk_index ASC,
+            nearest.chunk_id ASC
+    """
+    return statement, binds
+
+
+def _merge_native_exact_rows(
+    vector_rows: list[dict[str, object]], text_rows: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """距離順の行と全文の行を chunk ごとにまとめ、経路の順位を残す(融合は呼出し側で一度だけ)。"""
+    merged: dict[str, dict[str, object]] = {}
+    for rank, row in enumerate(vector_rows, 1):
+        merged[str(row["chunk_id"])] = {
+            **row,
+            "native_vector_rank": rank,
+            "native_text_rank": None,
+            "native_text_score": 0,
+        }
+    for row in text_rows:
+        chunk_id = str(row["chunk_id"])
+        text_fields = {
+            "native_text_rank": row.get("native_text_rank"),
+            "native_text_score": row.get("native_text_score"),
+        }
+        if chunk_id in merged:
+            merged[chunk_id].update(text_fields)
+        else:
+            merged[chunk_id] = {
+                **row,
+                **text_fields,
+                "native_similarity": None,
+                "native_vector_rank": None,
+                "native_vector_score": 0,
+            }
+    return list(merged.values())
 
 
 def _apply_native_search_threshold(
@@ -7403,6 +7531,9 @@ class OracleClient:
                             "vector_threshold": rows.threshold
                             if isinstance(rows, NativeSearchRows)
                             else {},
+                            "vector_retrieval": rows.vector_retrieval
+                            if isinstance(rows, NativeSearchRows)
+                            else {},
                             "error": result.error,
                             "results": [
                                 {
@@ -7440,12 +7571,14 @@ class OracleClient:
         """
         where, binds = _oracle_retrieval_where(filters)
         allowed = await self._fetch_all(
-            f"SELECT c.native_scope_id, COUNT(*) AS allowed_count {_NATIVE_SCOPE_JOINS} "
-            f"WHERE {where} GROUP BY c.native_scope_id",
+            "SELECT c.native_scope_id, COUNT(*) AS allowed_count, "
+            "SUM(CASE WHEN c.embedding IS NOT NULL THEN 1 ELSE 0 END) AS vector_count "
+            f"{_NATIVE_SCOPE_JOINS} WHERE {where} GROUP BY c.native_scope_id",
             binds,
         )
         if not allowed:
             return None
+        vector_chunks = sum(int(str(row["vector_count"])) for row in allowed)
         allowed_counts = {
             int(str(row["native_scope_id"])): int(str(row["allowed_count"]))
             for row in allowed
@@ -7468,7 +7601,12 @@ class OracleClient:
             ]
         partial_scopes = sorted(set(allowed_counts) - set(complete_scopes))
         if not partial_scopes and not has_unscoped:
-            return _NativeScope(allowed_ids=[], complete_scopes=complete_scopes, scope_ranges=[])
+            return _NativeScope(
+                allowed_ids=[],
+                complete_scopes=complete_scopes,
+                scope_ranges=[],
+                vector_chunks=vector_chunks,
+            )
         ids = await self._fetch_all(
             f"""SELECT c.chunk_id, c.native_scope_id {_NATIVE_SCOPE_JOINS}
             WHERE {where} AND (c.native_scope_id IS NULL OR c.native_scope_id IN (
@@ -7514,7 +7652,61 @@ class OracleClient:
             ],
             complete_scopes=complete_scopes,
             scope_ranges=scope_ranges,
+            vector_chunks=vector_chunks,
         )
+
+    async def _native_exact_rows(
+        self,
+        channel: str,
+        query: str,
+        vector: list[float],
+        *,
+        top_k: int,
+        filters: dict[str, str],
+        scope: _NativeScope,
+    ) -> NativeSearchRows:
+        """許可された行を基表から距離順に読み、全文の結果と順位を合わせる(#4134・#4097)。
+
+        原生索引の近似の読み方は、問いに近い centroid に範囲の行が無いと 0 件になり(#4134)、
+        削除の残骸が上位 k 件の枠を使うと指定した件数より少なくなる(#4097)。範囲の行を直接読めば
+        どちらの影響も受けない。範囲と権限は原生の分岐の結果に掛ける条件と同じものを使う。
+        """
+
+        async def nearest() -> list[dict[str, object]]:
+            if not scope.vector_chunks:
+                return []
+            where, binds = _oracle_retrieval_where(filters)
+            statement, scope_binds = _native_exact_vector_statement(
+                where=where, scope=scope, top_k=top_k
+            )
+            with read_rows_per_round_trip(_SEARCH_FETCH_ROWS):
+                return await self._fetch_all(
+                    statement,
+                    {**binds, **scope_binds, "native_embedding": _to_vector_bind(vector)},
+                )
+
+        if channel == "hybrid":
+            vector_rows, text_rows = await asyncio.gather(
+                nearest(),
+                self._native_rows(
+                    "keyword", query, (), top_k=top_k, filters=filters, native_scope=scope
+                ),
+            )
+        else:
+            vector_rows, text_rows = await nearest(), []
+        rows = _merge_native_exact_rows(vector_rows, text_rows)
+        if channel == "hybrid":
+            # Oracle の WRRF の点数は無い。融合の点数は順位から一度だけ計算する。
+            rows = [{**row, "score": None} for row in rows]
+        selected = _apply_native_search_threshold(rows, channel, self._settings)
+        selected.vector_retrieval = _native_vector_retrieval(
+            method="exact_scope",
+            scope=scope,
+            top_k=top_k,
+            exact_max_chunks=self._settings.rag_native_vector_exact_max_chunks,
+            returned=len(vector_rows),
+        )
+        return selected
 
     async def _native_rows(
         self,
@@ -7524,20 +7716,34 @@ class OracleClient:
         *,
         top_k: int,
         filters: dict[str, str],
-        native_scope: asyncio.Future[_NativeScope | None] | None = None,
+        native_scope: asyncio.Future[_NativeScope | None] | _NativeScope | None = None,
     ) -> list[dict[str, object]]:
         from rag_engine.adapters.oracle.native_hybrid import NativeHybridUnavailable, request_json
 
         where, binds = _oracle_retrieval_where(filters)
         joins = _NATIVE_SCOPE_JOINS
         vector = [float(v) for v in cast(Sequence[float], embedding)]
-        scope = (
-            await asyncio.shield(native_scope)
-            if native_scope is not None
-            else await self._resolve_native_scope(filters)
-        )
+        scope: _NativeScope | None
+        if isinstance(native_scope, _NativeScope):
+            scope = native_scope
+        elif native_scope is not None:
+            scope = await asyncio.shield(native_scope)
+        else:
+            scope = await self._resolve_native_scope(filters)
         if scope is None:
             return []
+        exact_max_chunks = self._settings.rag_native_vector_exact_max_chunks
+        if channel != "keyword" and scope.vector_chunks <= exact_max_chunks:
+            try:
+                return await self._native_exact_rows(
+                    channel, query, vector, top_k=top_k, filters=filters, scope=scope
+                )
+            except NativeHybridUnavailable:
+                raise
+            except Exception as exc:
+                raise NativeHybridUnavailable(
+                    "範囲の行を距離順に読めませんでした。管理CLIで索引と同期状態を確認してください。"
+                ) from exc
         spec = request_json(
             query=query,
             vector=vector,
@@ -7578,7 +7784,23 @@ class OracleClient:
             """,
                 native_binds,
             )
-            return _apply_native_search_threshold(rows, channel, self._settings)
+            selected = _apply_native_search_threshold(rows, channel, self._settings)
+            if channel != "keyword":
+                selected.vector_retrieval = _native_vector_retrieval(
+                    method="native_index",
+                    scope=scope,
+                    top_k=top_k,
+                    exact_max_chunks=exact_max_chunks,
+                    returned=sum(
+                        _float_value(row.get("native_vector_score", 0)) > 0 for row in rows
+                    ),
+                )
+                if selected.vector_retrieval["shortage"]:
+                    logger.warning(
+                        "原生索引のベクトル候補が不足: %s",
+                        json.dumps(selected.vector_retrieval, ensure_ascii=False),
+                    )
+            return selected
         except Exception as exc:
             raise NativeHybridUnavailable(
                 "Oracle原生hybrid索引を使用できません。管理CLIで索引と同期状態を確認してください。"
