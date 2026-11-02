@@ -37,37 +37,27 @@ class IndexConnection:
         raise AssertionError("業務transactionをrollbackしない")
 
 
-def test_clean_index_does_not_optimize() -> None:
-    connection = IndexConnection([(2, 2)])
+def test_pending_request_runs_full_even_when_vector_counts_are_equal() -> None:
+    connection = IndexConnection([(2, 2), (2, 2)])
     result = maintain_native_vectors(connection)
-    assert result.strategy == "none"
+    assert result.strategy == "full"
     assert (result.before.stored, result.after.visible) == (2, 2)
-    assert not any("OPTIMIZE_INDEX" in sql for sql in connection.calls)
-
-
-def test_semantic_cleanup_restores_current_vectors_without_full_optimize() -> None:
-    connection = IndexConnection([(12, 2), (2, 2)])
-    result = maintain_native_vectors(connection)
-    assert result.strategy == "semantic"
-    assert result.after.stored == result.after.visible == 2
     operations = [sql for sql in connection.calls if "OPTIMIZE_INDEX" in sql]
     assert len(operations) == 1
-    assert "SECTION_SEMANTIC_INDEX" in operations[0]
-    assert "REBUILD" not in operations[0]
+    assert "OPTLEVEL_FULL" in operations[0]
+    assert "maxtime" not in operations[0].lower()
 
 
-def test_successful_semantic_noop_uses_bounded_full_fallback() -> None:
-    connection = IndexConnection([(12, 2), (12, 2), (2, 2)])
+def test_full_cleanup_restores_current_vectors_without_rebuild() -> None:
+    connection = IndexConnection([(12, 2), (2, 2)])
     result = maintain_native_vectors(connection)
-    assert result.strategy == "full_fallback"
-    operations = [sql for sql in connection.calls if "OPTIMIZE_INDEX" in sql]
-    assert len(operations) == 2
-    assert "maxtime" in operations[1].lower()
-    assert "REBUILD" not in operations[1]
+    assert result.after.stored == result.after.visible == 2
+    assert result.strategy == "full"
+    assert not any("REBUILD" in sql for sql in connection.calls)
 
 
 def test_remaining_debt_is_retryable_and_not_reported_as_complete() -> None:
-    connection = IndexConnection([(12, 2), (12, 2), (8, 2)])
+    connection = IndexConnection([(12, 2), (8, 2)])
     with pytest.raises(NativeIndexMaintenanceIncomplete):
         maintain_native_vectors(connection)
 
@@ -83,7 +73,7 @@ def test_concurrent_insert_does_not_require_original_visible_count() -> None:
     connection = IndexConnection([(12, 2), (4, 4)])
     result = maintain_native_vectors(connection)
     assert result.after.visible == 4
-    assert result.strategy == "semantic"
+    assert result.strategy == "full"
 
 
 @pytest.mark.parametrize("index_name", ["IDX'; DROP TABLE T; --", "IDX.X", "", "a" * 31])
@@ -91,12 +81,4 @@ def test_index_identifier_is_validated_before_database_access(index_name: str) -
     connection = IndexConnection([])
     with pytest.raises(ValueError, match="索引名"):
         maintain_native_vectors(connection, index_name=index_name)
-    assert not connection.calls
-
-
-@pytest.mark.parametrize("minutes", [0, -1, float("nan"), float("inf")])
-def test_maintenance_time_budget_is_finite_and_positive(minutes: float) -> None:
-    connection = IndexConnection([])
-    with pytest.raises(ValueError, match="時間上限"):
-        maintain_native_vectors(connection, full_optimize_minutes=minutes)
     assert not connection.calls

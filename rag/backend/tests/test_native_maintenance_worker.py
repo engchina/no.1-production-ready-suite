@@ -21,7 +21,7 @@ class QueueStore:
             return None
         return MaintenanceLease(owner, "token-a", tuple(sorted(self.events)))
 
-    async def optimize(self) -> None:
+    async def optimize(self, lease: MaintenanceLease) -> None:
         self.optimize_calls += 1
         # ID順で古い別transactionが、snapshot取得後にcommitする場合も残す。
         self.events.add("committed-0")
@@ -88,7 +88,7 @@ class HeartbeatStore(QueueStore):
         self.release = asyncio.Event()
         self.heartbeats = 0
 
-    async def optimize(self) -> None:
+    async def optimize(self, lease: MaintenanceLease) -> None:
         self.started.set()
         await self.release.wait()
 
@@ -121,3 +121,63 @@ async def test_worker_shutdown_keeps_events_for_recovery() -> None:
         await task
     assert store.events == {"committed-a"}
     assert not store.completed
+
+
+@pytest.mark.asyncio
+async def test_background_loop_skips_schema_updates() -> None:
+    from app.rag.native_index_maintenance import run_native_maintenance_loop
+
+    stop = asyncio.Event()
+    store = QueueStore()
+
+    async def not_ready() -> bool:
+        stop.set()
+        return False
+
+    await run_native_maintenance_loop(stop, store=store, schema_ready=not_ready)
+    assert store.optimize_calls == 0
+    assert store.events == {"committed-a"}
+
+
+@pytest.mark.asyncio
+async def test_background_loop_recovers_a_queue_failure() -> None:
+    from app.rag.native_index_maintenance import run_native_maintenance_loop
+
+    stop = asyncio.Event()
+
+    class RecoveringStore(QueueStore):
+        claims = 0
+
+        async def claim(self, owner: str) -> MaintenanceLease | None:
+            self.claims += 1
+            if self.claims == 1:
+                raise ConnectionError("合成の一時接続失敗")
+            return await super().claim(owner)
+
+        async def complete(self, lease: MaintenanceLease) -> bool:
+            result = await super().complete(lease)
+            stop.set()
+            return result
+
+    async def ready() -> bool:
+        return True
+
+    store = RecoveringStore()
+    await asyncio.wait_for(
+        run_native_maintenance_loop(stop, store=store, schema_ready=ready, interval_seconds=0.001),
+        timeout=2,
+    )
+    assert store.claims == 2
+    assert store.completed == [("committed-a",)]
+    assert store.events == {"committed-0"}
+
+
+@pytest.mark.asyncio
+async def test_stopped_background_loop_never_claims() -> None:
+    from app.rag.native_index_maintenance import run_native_maintenance_loop
+
+    stop = asyncio.Event()
+    stop.set()
+    store = QueueStore()
+    await run_native_maintenance_loop(stop, store=store)
+    assert store.optimize_calls == 0

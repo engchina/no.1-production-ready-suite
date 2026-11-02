@@ -297,6 +297,8 @@ class _FakeCursor:
             return
         if "DBMS_VECTOR_CHAIN.CREATE_PREFERENCE" in upper:
             self.database.objects[("RAG_CHUNKS_HYBRID_PREF", "VECTORIZER_PREFERENCE")] = None
+        if "CREATE OR REPLACE TRIGGER RAG_CHUNKS_NATIVE_MAINT" in upper:
+            self.database.objects[("RAG_CHUNKS_NATIVE_MAINT", "TRIGGER")] = None
         if "CREATE OR REPLACE TRIGGER RAG_CHUNKS_NATIVE_SCOPE_SYNC" in upper:
             self.database.objects[("RAG_CHUNKS_NATIVE_SCOPE_SYNC", "TRIGGER")] = None
         if "CREATE OR REPLACE TRIGGER RAG_CHUNKS_HYBRID_SYNC" in upper:

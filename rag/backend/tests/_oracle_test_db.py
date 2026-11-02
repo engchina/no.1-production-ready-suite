@@ -125,6 +125,8 @@ def ensure_schema() -> str | None:
     result = manager.initialize()
     if result["status"] != "ready":
         raise RuntimeError("RAG system schema の初期化後 status が ready ではありません。")
+    with _schema_connection() as connection:
+        settle_test_native_index(connection)
     _schema_skip_reason = None
     return None
 
@@ -207,49 +209,36 @@ def cleanup_to_baseline() -> None:
         with suppress(Exception):
             cursor.execute(f"DELETE FROM rag_knowledge_bases WHERE {kb_sql}", kb_binds)
         connection.commit()
-        # テスト自身が API で削除済みでも、索引の lazy delete は残る。
-        # 同期と物理整理を分け、commit 後の実残数で整理の要否を決める。
-        cursor.execute("SELECT COUNT(*) FROM user_indexes WHERE index_name='RAG_CHUNKS_HYBRID_IDX'")
-        if cursor.fetchone()[0]:
-            cursor.execute(
-                """SELECT
-                    (SELECT COUNT(*) FROM DR$RAG_CHUNKS_HYBRID_IDX$VR),
-                    (SELECT COUNT(*) FROM RAG_CHUNKS_HYBRID_IDX$VECTORS)
-                FROM dual"""
-            )
-            stored, visible = cursor.fetchone()
-            if stored > visible:
-                cursor.execute(
-                    """BEGIN
-                        CTX_DDL.OPTIMIZE_INDEX(
-                            'RAG_CHUNKS_HYBRID_IDX', CTX_DDL.OPTLEVEL_TOKEN_TYPE,
-                            section_type=>CTX_DDL.SECTION_SEMANTIC_INDEX);
-                    END;"""
-                )
-                cursor.execute(
-                    """SELECT
-                        (SELECT COUNT(*) FROM DR$RAG_CHUNKS_HYBRID_IDX$VR),
-                        (SELECT COUNT(*) FROM RAG_CHUNKS_HYBRID_IDX$VECTORS)
-                    FROM dual"""
-                )
-                remaining, current = cursor.fetchone()
-                if remaining > current:
-                    # semantic 指定が no-op になる環境では、テスト索引全体を整理する。
-                    cursor.execute(
-                        "BEGIN CTX_DDL.OPTIMIZE_INDEX('RAG_CHUNKS_HYBRID_IDX', "
-                        "CTX_DDL.OPTLEVEL_FULL); END;"
-                    )
-                    cursor.execute(
-                        """SELECT
-                            (SELECT COUNT(*) FROM DR$RAG_CHUNKS_HYBRID_IDX$VR),
-                            (SELECT COUNT(*) FROM RAG_CHUNKS_HYBRID_IDX$VECTORS)
-                        FROM dual"""
-                    )
-                    remaining, current = cursor.fetchone()
-                if remaining > current:
-                    raise RuntimeError(
-                        "原生索引の削除済み vector が整理後も残っています: "
-                        f"before={stored}/{visible}, after={remaining}/{current}"
-                    )
+        settle_test_native_index(connection)
     finally:
         connection.close()
+
+
+def settle_test_native_index(connection: Any) -> None:
+    """専用テストschemaで実際のworkerと同じ整理を行い、要求snapshotを完了する。"""
+    from app.clients.native_index_maintenance import maintain_native_vectors
+    from app.clients.native_maintenance_store import OPTIMIZE_CALL_TIMEOUT_MS
+
+    cursor = connection.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) FROM user_indexes WHERE index_name='RAG_CHUNKS_HYBRID_IDX'")
+        if not cursor.fetchone()[0]:
+            return
+        cursor.execute("SELECT event_id FROM RAG_NATIVE_INDEX_EVENTS")
+        event_ids = [str(row[0]) for row in cursor.fetchall()]
+        if not event_ids:
+            return
+        previous_timeout = connection.call_timeout
+        try:
+            connection.call_timeout = OPTIMIZE_CALL_TIMEOUT_MS
+            maintain_native_vectors(connection)
+        finally:
+            connection.call_timeout = previous_timeout
+        for event_id in event_ids:
+            cursor.execute(
+                "DELETE FROM RAG_NATIVE_INDEX_EVENTS WHERE event_id=:event_id",
+                {"event_id": event_id},
+            )
+        connection.commit()
+    finally:
+        cursor.close()
