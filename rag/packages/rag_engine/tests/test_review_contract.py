@@ -7,7 +7,6 @@ from rag_engine.generation.grounded import (
     answer_use,
     applicability_policy,
     apply_audit,
-    recover_audited_quotes,
     verify,
 )
 from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem, GroundedItemReview
@@ -68,7 +67,7 @@ def test_policy_is_not_part_of_the_model_response_contract() -> None:
     assert not {"applicability_action", "observed_applicability", "applicability_policy_reason"} & properties.keys()
 
 
-def test_near_quote_is_a_candidate_until_a_verbatim_support_quote_is_checked() -> None:
+def test_near_quote_stays_a_candidate_after_a_supported_audit() -> None:
     original = "入力した情報を確認してから、画面の保存ボタンを押してください。"
     misquoted = "入力した情報を確認してから、画面の保存ボタンを押してくださいます。"
     draft = GroundedDraft(
@@ -86,11 +85,12 @@ def test_near_quote_is_a_candidate_until_a_verbatim_support_quote_is_checked() -
     # 支持の判定だけでは引用一致を昇格しない。
     apply_audit(checked, policy)
     assert entry.unmatched and not entry.confirmed
-    policy.reviews[0].support_quote = original
-    assert recover_audited_quotes("操作を教えてください。", checked, policy, [span(original)]) == {0}
-    assert not entry.unmatched and entry.quote_match == "audited_paraphrase"
-    assert entry.citation_resolution["requested_quote"] == misquoted
-    assert entry.citation_resolution["support_check"] == "audited_paraphrase"
+
+
+def test_generation_audit_schema_has_no_unread_copy_fields() -> None:
+    """本番に読み手の無い欄を、モデルの応答の schema に戻さない（#4152）。"""
+    properties = GroundedItemReview.model_json_schema()["properties"]
+    assert not {"support_quote", "supported_fragments"} & properties.keys()
 
 
 def test_model_output_cannot_override_the_application_policy():

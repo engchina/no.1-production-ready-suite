@@ -31,10 +31,9 @@ def evidence(identity="e1", label="E1"):
 
 
 class Model:
-    def __init__(self, proposal, *, support, support_quote=""):
+    def __init__(self, proposal, *, support):
         self.proposal = proposal
         self.support = support
-        self.support_quote = support_quote
         self.inputs = []
 
     def __call__(self, system, prompt, settings, schema, **options):
@@ -50,7 +49,6 @@ class Model:
                     {
                         "index": 0,
                         "support": self.support,
-                        "support_quote": self.support_quote,
                         "applicability": "matched",
                         "reason": "合成の同次観察",
                     }
@@ -61,9 +59,9 @@ class Model:
         )
 
 
-def run(proposal, *, support, support_quote=""):
+def run(proposal, *, support):
     spans = [evidence()]
-    model = Model(proposal, support=support, support_quote=support_quote)
+    model = Model(proposal, support=support)
     result = grounded.run_round(
         QUESTION,
         spans,
@@ -88,7 +86,7 @@ def proposal(*, lines="", quote="", text=SAVE):
 
 
 def test_supported_audit_cannot_recover_an_invalid_explicit_range_from_other_lines():
-    entry, result, _model = run(proposal(lines="999-999"), support="supported", support_quote=SECOND)
+    entry, result, _model = run(proposal(lines="999-999"), support="supported")
     assert entry.item.text == SAVE and entry.published
     assert entry.item.lines == "999-999" and not entry.item.quote
     assert entry.citation_resolution["requested_lines"] == "999-999"
@@ -101,7 +99,7 @@ def test_supported_audit_cannot_recover_an_invalid_explicit_range_from_other_lin
 
 
 def test_unsupported_claim_cannot_use_uncited_second_line_as_its_original():
-    entry, result, model = run(proposal(lines="1"), support="unsupported", support_quote=SECOND)
+    entry, result, model = run(proposal(lines="1"), support="unsupported")
     assert entry.item.text == SAVE and entry.published
     assert result.verified == 0
     assert entry.item.lines == "1" and entry.item.quote == FIRST
@@ -115,7 +113,7 @@ def test_unsupported_claim_cannot_use_uncited_second_line_as_its_original():
 
 
 def test_untrusted_audit_does_not_recover_legacy_free_quote_from_other_text():
-    entry, _result, _model = run(proposal(quote="設定内容を記録する操作です。"), support="supported", support_quote=SECOND)
+    entry, _result, _model = run(proposal(quote="設定内容を記録する操作です。"), support="supported")
     assert entry.item.text == SAVE and entry.published and not entry.confirmed
     assert entry.item.quote != SECOND and entry.item.lines == ""
     assert entry.unmatched
