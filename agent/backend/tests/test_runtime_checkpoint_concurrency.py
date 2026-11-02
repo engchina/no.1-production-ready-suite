@@ -27,6 +27,7 @@ from app.features.agent.runtime import (
     AgentRuntimeMigrationRequiredError,
     AgentRuntimeOracleCheckpointRepository,
     AgentRuntimeSnapshot,
+    RunCreateRequest,
     RunState,
     RunStatus,
 )
@@ -364,6 +365,87 @@ def test_changes_on_the_event_loop_are_written_in_the_background(
     repository.flush_writes()
     assert _stored_status(table)["run_a"] == RunStatus.CANCELLED
     assert repository.pending_writes() == 0
+
+
+# ---- 版の履歴の上限と別のプロセスの Run（#4172） ------------------------------------------------
+
+
+def _published_agent(table: CheckpointTable) -> AgentRuntimeOracleCheckpointRepository:
+    process = _process(table)
+    process.create_agent(AgentProfile(id="agent_versions", name="Agent A", instructions="v1"))
+    return process
+
+
+def _version_numbers(agent: AgentProfile) -> list[int]:
+    return [item.version for item in agent.versions]
+
+
+def _stored_versions(table: CheckpointTable) -> list[int]:
+    agents = table.snapshot().agents
+    return _version_numbers(next(item for item in agents if item.id == "agent_versions"))
+
+
+def test_publish_keeps_the_version_of_a_run_created_by_another_process(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """公開するプロセスのメモリに無い Run の版も消さない。Run の終了も読んでから消す（#4172）。"""
+    monkeypatch.setattr(runtime, "max_published_versions", lambda: 1)
+    table = CheckpointTable()
+    publisher = _published_agent(table)
+    other = _process(table)
+    run = other.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id="agent_versions"))
+    assert run.metadata["agent_version"] == 1
+    assert run.id not in {item.id for item in publisher.list_runs()}
+
+    agent = publisher.publish_agent("agent_versions")
+
+    assert _version_numbers(agent) == [1, 2]
+    assert _stored_versions(table) == [1, 2]
+
+    # 別のプロセスで Run が終わると、次の公開で上限どおりに消える。
+    assert other.begin_builtin_run(run.id) is not None
+    other.complete_builtin_run(run.id, "合成の回答")
+    agent = publisher.publish_agent("agent_versions")
+    assert _version_numbers(agent) == [3]
+    assert _stored_versions(table) == [3]
+
+
+def test_publish_skill_updates_reads_runs_of_another_process_first(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """スキルの更新の取り込みも、別のプロセスの Run を読んでから版を消す（#4172）。"""
+    table = CheckpointTable()
+    publisher = _published_agent(table)
+    assert publisher.publish_agent("agent_versions").published_version == 2
+    # 公開中でない版 1 を使う Run（品質評価の版の固定と同じ）を別のプロセスが作る。
+    other = _process(table)
+    other.create_builtin_run(
+        RunCreateRequest(goal="合成の質問", agent_id="agent_versions"), agent_version=1
+    )
+    monkeypatch.setattr(runtime, "max_published_versions", lambda: 1)
+    # 取り込むスキルの更新があることにする（スキルの中身の比較は test_agent_skill_pinning）。
+    monkeypatch.setattr(runtime, "skill_updates", lambda _pins: ["skill_a"])
+
+    agent, previous = publisher.publish_skill_updates("agent_versions")
+
+    assert (previous, agent.published_version) == (2, 3)
+    assert _version_numbers(agent) == [1, 2, 3]
+    assert _stored_versions(table) == [1, 2, 3]
+
+
+def test_publish_refused_by_the_storage_leaves_the_versions_unchanged() -> None:
+    """保存先に届かない公開は版を増やさず、やり直せる（#4172）。"""
+    table = _SlowTable()
+    publisher = _published_agent(table)
+
+    table.fail_next = True
+    with pytest.raises(RuntimeError, match="ORA-03113"):
+        publisher.publish_agent("agent_versions")
+
+    agent = next(item for item in publisher.list_agents() if item.id == "agent_versions")
+    assert (_version_numbers(agent), agent.published_version) == ([1], 1)
+    assert _version_numbers(publisher.publish_agent("agent_versions")) == [1, 2]
+    assert _stored_versions(table) == [1, 2]
 
 
 def test_failed_write_is_kept_and_written_by_the_next_save() -> None:
