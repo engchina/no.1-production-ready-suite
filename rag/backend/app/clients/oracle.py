@@ -506,8 +506,8 @@ def _native_exact_vector_statement(
     """許可された行を基表から距離順に読む SQL と bind(#4134・#4097)。
 
     原生の検索と同じく、解決済みの範囲で読む行を決め、結果の行に同じ権限の条件(``where``)を
-    掛け直す。範囲の条件を距離の順位の外に置くと、許可された chunk を列ごとに評価するだけで秒単位に
-    なる(#4133)。上位の行を距離だけで決め、本文・metadata はその行だけ読む(#2137)。
+    掛け直す。権限の条件を許可された全行に掛けると、それだけで秒単位になることがある(#4133)。
+    上位の行を距離だけで決め、本文・metadata はその行だけ読む(#2137)。
     """
     top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=2000)
     binds: dict[str, object] = {}

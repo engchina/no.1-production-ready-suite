@@ -245,7 +245,12 @@ async def test_native_combined_original_and_provenance_channels(
     from types import SimpleNamespace
 
     settings = get_settings().model_copy(
-        update={"rag_hybrid_search_backend": "oracle_native", "rag_rrf_method_ratio": ratio}
+        update={
+            "rag_hybrid_search_backend": "oracle_native",
+            "rag_rrf_method_ratio": ratio,
+            # 原生索引の 1 回の UNION の契約を確かめる(範囲の行を距離順に読む経路は下のテスト)。
+            "rag_native_vector_exact_max_chunks": 0,
+        }
     )
     oracle = OracleClient(settings)
     kb = await oracle.create_knowledge_base(name=f"合成経路KB {uuid4().hex[:8]}")
