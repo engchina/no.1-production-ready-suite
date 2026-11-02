@@ -50,6 +50,12 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 from fastapi import APIRouter, HTTPException, params
+from pr_backend_core.bounded_calls import (
+    NETWORK_FAILURE_CAUSE_LABELS,
+    UNREACHED_NETWORK_FAILURE_CAUSES,
+    NetworkFailureCause,
+    network_failure_cause,
+)
 from pr_backend_core.llm_request_params import collect_dropped_parameters
 from pr_backend_core.schemas import ApiResponse
 
@@ -1801,14 +1807,32 @@ def _model_test_failure_message(target_type: ModelSettingsTestTargetType, model_
     return f"Rerank モデル「{model_id or '未入力'}」のテストに失敗しました。"
 
 
+def _network_failure_tip(cause: NetworkFailureCause) -> str:
+    """接続が確立していない失敗の案内（API key・モデル ID の誤りと取り違えさせない。#4084）。"""
+    label = NETWORK_FAILURE_CAUSE_LABELS[cause]
+    if cause in UNREACHED_NETWORK_FAILURE_CAUSES:
+        return (
+            f"{label}。要求が接続先へ届いていないため、API key やモデル ID の誤りではありません。"
+            "バックエンドの実行環境から Endpoint URL のホストとポートへ到達できるか"
+            "（DNS・経路・firewall・接続先のサービスの稼働）を確かめてください。"
+        )
+    return f"{label}。少し待って再試行し、接続先のサービスとネットワークの状態を確かめてください。"
+
+
 def _model_test_troubleshooting(
     target_type: ModelSettingsTestTargetType,
     raw_error: str,
     error_type: str,
+    network_cause: NetworkFailureCause | None = None,
 ) -> list[str]:
     """実エラーからユーザーが次に確認しやすい項目を返す。"""
     lowered = f"{raw_error} {error_type}".lower()
     tips: list[str] = []
+    if network_cause is not None:
+        tips.append(_network_failure_tip(network_cause))
+    if network_cause in UNREACHED_NETWORK_FAILURE_CAUSES:
+        # 要求が届いていないので、API key・モデル ID を疑う一般の案内を並べない。
+        return tips
     if target_type in {"enterprise_text", "enterprise_vision"}:
         tips.extend(
             [
@@ -1913,17 +1937,19 @@ async def run_model_settings_test(
             str(exc),
             [_setting_text(candidate, fields.api_key) for fields in _CONNECTION_FIELDS.values()],
         )
+        network_cause = network_failure_cause(exc)
         return ModelSettingsTestResult(
             status="failed",
             target_type=request.target_type,
             model_id=request.model_id,
             message=_model_test_failure_message(request.target_type, request.model_id),
             troubleshooting=_model_test_troubleshooting(
-                request.target_type, raw_error, type(exc).__name__
+                request.target_type, raw_error, type(exc).__name__, network_cause
             ),
             raw_error=raw_error,
             error_type=type(exc).__name__,
             elapsed_ms=_elapsed_ms(started),
+            details={"network_failure_cause": network_cause} if network_cause else {},
         )
     message = _model_test_success_message(request.target_type, request.model_id)
     if dropped:
