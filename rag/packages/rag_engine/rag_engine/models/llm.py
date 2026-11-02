@@ -398,58 +398,56 @@ class GroundedApplication(_StrictModel):
 
 
 class RequestEvidenceScope(_StrictModel):
-    """質問の対象と、各根拠が扱う対象の対応。"""
+    """質問の対象と、各根拠が扱う対象の対応（下流の検査と保存の形）。link_quote はコードが番号の範囲から切り出す。"""
 
-    evidence_id: str = Field(description="対象を照合する Evidence の id。")
-    target: str = Field(description="この根拠が操作・説明する対象。原文の対象名を写す。")
-    relation: Literal["direct", "linked", "unrelated"] = Field(
-        description="direct=質問の対象・要求について、規則・要件・定義・手順・事実を述べる。linked=別対象だが、質問の操作の前提・後続とする関係が原文に明記されている。unrelated=別の対象・独立した操作。同じ文書や頁にあるだけでは linked にしない。"
-    )
-    link_quote: str = Field(
-        default="", description="linked のとき、操作同士の関係を明記した連続する原文。関係が書かれていなければ unrelated とし空文字にする。"
-    )
+    evidence_id: str
+    target: str
+    relation: Literal["direct", "linked", "unrelated"]
+    link_quote: str = ""
 
 
 class RequestCoverage(_StrictModel):
-    """要求単位ごとに、どの根拠で答えるかの計画。items を書く前に根拠を選ばせる (#986)。"""
+    """要求単位ごとに、どの根拠で答えるかの計画（下流の検査と保存の形）。evidence_ids はコードが evidence_scope から導く。"""
 
-    request_id: str = Field(description="request_units の id。")
-    evidence_scope: list[RequestEvidenceScope] = Field(
-        default_factory=list,
-        description="候補の根拠を対象ごとに照合する。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。",
-    )
-    evidence_ids: list[str] = Field(
-        default_factory=list,
-        description="この要求の説明に使う根拠（relation=direct）と、原文に関係が明記された前提・後続操作の evidence_id（[E1] 形式の番号）。同じ内容を述べた根拠が複数の文書にあれば（規則・要件・定義を定めた条項と、それを説明・運用する手順書など）、文書ごとに挙げる。同じ文書・頁にあるだけの別操作は含めない。items はこの計画の根拠だけで作る。無ければ空にし kind=gap にする。",
-    )
+    request_id: str
+    evidence_scope: list[RequestEvidenceScope] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
 
 
 class RequestLinkRange(_StrictModel):
     """linked の関係を明記した本文の範囲。原文はコードが番号から切り出す（モデルは写さない）。"""
 
     evidence_id: str = Field(description="操作同士の関係を明記した本文がある Evidence の id。")
-    line_start: StrictInt = Field(description="その本文の、text の行頭「番号|」の開始番号。")
-    line_end: StrictInt = Field(description="同じ本文の終了番号。開始番号以上。単一の行は開始と同じ値。")
+    line_start: StrictInt | None = Field(description="その本文の、行頭「番号|」の開始番号。番号が表示されない根拠は null。")
+    line_end: StrictInt | None = Field(
+        description="同じ本文の終了番号。開始番号以上。単一の行は開始と同じ値。番号が表示されない根拠は null。"
+    )
 
 
 class RequestEvidenceScopeRange(_StrictModel):
-    """計画だけの出力の照合の行。"""
+    """モデルが返す照合の行。"""
 
-    evidence_id: str = Field(description=RequestEvidenceScope.model_fields["evidence_id"].description)
-    target: str = Field(description=RequestEvidenceScope.model_fields["target"].description)
-    relation: Literal["direct", "linked", "unrelated"] = Field(description=RequestEvidenceScope.model_fields["relation"].description)
-    link: RequestLinkRange | None = Field(default=None, description="linked のときの、関係を明記した本文の範囲。それ以外は null。")
+    evidence_id: str = Field(description="対象を照合する Evidence の id。")
+    target: str = Field(description="この根拠が操作・説明する対象。原文の対象名を写す。")
+    relation: Literal["direct", "linked", "unrelated"] = Field(
+        description="direct=質問の対象・要求について、規則・要件・定義・手順・事実を述べる。linked=別対象だが、質問の操作の前提・後続とする関係が原文に明記されている。unrelated=別の対象・独立した操作。同じ文書や頁にあるだけでは linked にしない。"
+    )
+    link: RequestLinkRange | None = Field(
+        default=None, description="linked のときの、関係を明記した本文の範囲。関係が書かれていなければ unrelated とする。それ以外は null。"
+    )
 
 
 class RequestCoverageRange(_StrictModel):
-    """計画だけの出力の、要求単位ごとの根拠の計画。"""
+    """モデルが返す、要求単位ごとの根拠の計画。items を書く前に根拠を選ばせる (#986)。"""
 
-    request_id: str = Field(description=RequestCoverage.model_fields["request_id"].description)
+    request_id: str = Field(description="request_units の id。")
     evidence_scope: list[RequestEvidenceScopeRange] = Field(
         default_factory=list,
-        description="この要求の説明に使う根拠と、関係の判断が要る根拠だけを行にする。各 evidence_id を1回ずつ、質問の対象との関係を決めてから evidence_ids を選ぶ。",
+        description="この要求の説明に使う根拠（relation=direct）と、原文に関係が明記された前提・後続操作（relation=linked）、関係の判断が要る根拠を行にする。"
+        "各 evidence_id（[E1] 形式の番号）を1回ずつ、質問の対象との関係を決める。"
+        "同じ内容を述べた根拠が複数の文書にあれば（規則・要件・定義を定めた条項と、それを説明・運用する手順書など）、文書ごとに行にする。"
+        "同じ文書・頁にあるだけの別操作を direct・linked にしない。items はこの計画の根拠だけで作る。無ければ空にし kind=gap にする。",
     )
-    evidence_ids: list[str] = Field(default_factory=list, description=RequestCoverage.model_fields["evidence_ids"].description)
 
 
 class RequestScopePlan(_StrictModel):

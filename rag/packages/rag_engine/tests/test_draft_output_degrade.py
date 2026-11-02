@@ -31,7 +31,6 @@ def _plan(eid: str, request_id: str = "Q1") -> dict:
     return {
         "request_id": request_id,
         "evidence_scope": [{"evidence_id": eid, "target": "集計表出力", "relation": "direct"}],
-        "evidence_ids": [eid],
     }
 
 
@@ -72,9 +71,9 @@ def test_64_identical_plans_are_collapsed_and_recorded_without_changing_the_sche
 def test_distinct_entries_are_kept_and_a_distinct_overflow_still_fails():
     wire = generation_draft_wire_model()
     # 内容の違う entry は寄せない（順序も保つ）。
-    other = {**_plan("E1"), "evidence_ids": []}
+    other = {**_plan("E1"), "evidence_scope": []}
     parsed = wire.model_validate_json(_wire_json(request_coverage=[_plan("E1"), other, _plan("E1"), other]))
-    assert [plan.evidence_ids for plan in parsed.request_coverage] == [["E1"], []]
+    assert [len(plan.evidence_scope) for plan in parsed.request_coverage] == [1, 0]
     assert parsed._collapsed_duplicates == {"request_coverage": 2}
     # 上限は寄せた後の件数で判定する。内容の違う entry が上限を超えれば不合格のまま（切り詰めない）。
     distinct = [_plan("E1", f"Q{number}") for number in range(PLAN_LIMIT + 1)]
@@ -170,8 +169,13 @@ def test_invalid_correction_round_keeps_the_adopted_answer_and_names_the_origina
 
 def test_invalid_plan_repair_keeps_the_draft_before_the_repair():
     ctx, eid = _context()
-    # 対象の照合の無い計画（作り直しの対象の不整合）。
-    unscoped = {**draft(item(eid, GOOD, GOOD, request_id="Q1")), "request_coverage": [{**_plan(eid), "evidence_scope": []}]}
+    # 同じ根拠への判断が食い違う計画（作り直しの対象の不整合）。
+    conflicting = {"evidence_id": eid, "target": "集計表出力", "relation": "linked"}
+    plan = _plan(eid)
+    unscoped = {
+        **draft(item(eid, GOOD, GOOD, request_id="Q1")),
+        "request_coverage": [{**plan, "evidence_ids": [eid], "evidence_scope": [*plan["evidence_scope"], conflicting]}],
+    }
     error = _oversized_items_error()
 
     def broken(prompt):

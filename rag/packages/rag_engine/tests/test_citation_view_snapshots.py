@@ -38,7 +38,6 @@ def wire_value(evidence_id: str = "E1") -> dict[str, Any]:
         "request_coverage": [
             {
                 "request_id": "Q1",
-                "evidence_ids": [evidence_id],
                 "evidence_scope": [{"evidence_id": evidence_id, "target": "対象", "relation": "direct"}],
             }
         ],

@@ -21,7 +21,7 @@ import math
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -64,6 +64,7 @@ from rag_engine.generation.citation_content import citation_content_unusable
 from rag_engine.generation.citation_wire import (
     bind_wire_range,
     canonical_generation_draft,
+    canonical_request_coverage,
     generation_draft_wire_model,
     planned_generation_wire_model,
 )
@@ -88,6 +89,7 @@ from rag_engine.models.llm import (
     GroundedItem,
     RequestCoverage,
     RequestEvidenceScope,
+    RequestLinkRange,
     RequestScopePlan,
 )
 from rag_engine.parsing.content_labels import content_labels
@@ -1705,202 +1707,6 @@ def _attachment_label(label: str, spans: Sequence[dict]) -> bool:
 _MISSING_REQUEST_PLAN = "説明に使う要求ごとの根拠計画がありません。"
 
 
-def _misattributed_scopes(plan: RequestCoverage, spans: Sequence[dict], cited: Collection[str] = ()) -> dict[str, list[str]]:
-    """direct の照合に写した原文が、指した根拠に無く送信した別の根拠にある計画の行（出典 ID の取り違え。#3804）。
-
-    戻り値は計画の表示 ID → 原文がある根拠の表示 ID。モデル自身の記述どうしの矛盾なので意味の判断は要らない。
-    linked の原文は関係を明記した別の根拠にあってよいので対象外。どこにも無い原文（言い換え）・指した根拠にも
-    ある原文・添付の根拠も、取り違えと言い切れないので対象外にする。ここでは別の ID へ付け替えず、まず作り直しに
-    任せる。作り直しても残った行は、原文がある根拠が 1 つに決まるときだけ ``reanchor_misattributed_citations`` が
-    付け替える。対象は evidence_ids の行と、``cited``（その小問の説明が引いた label）の行。evidence_ids に無い direct の行も
-    説明が引けば出典になる（#3827）が、説明が引かない行は出典にならないので作り直しの理由にしない。
-    """
-    found: dict[str, list[str]] = {}
-    used = {*plan.evidence_ids, *cited}
-    for scope in plan.evidence_scope:
-        quote = scope.link_quote.strip()
-        label = scope.evidence_id
-        if scope.relation != "direct" or not quote or label not in used or label in found or _attachment_label(label, spans):
-            continue
-        named = _label_spans(label, spans)
-        if not named or any(quote_in_text(quote, str(span.get("text") or "")) for span in named):
-            continue
-        named_ids = {span["evidence_id"] for span in named}
-        others = [
-            str(span.get("label") or span["evidence_id"])
-            for span in spans
-            if span["evidence_id"] not in named_ids and quote_in_text(quote, str(span.get("text") or ""))
-        ]
-        if others:
-            found[label] = list(dict.fromkeys(others))
-    return found
-
-
-def _misattributed_labels(item: GroundedItem, draft: GroundedDraft, spans: Sequence[dict]) -> list[str]:
-    """説明が出典に引いた根拠のうち、その小問の計画で原文と ID が食い違う表示 ID（#3804）。"""
-    cited = [citation.evidence_id for citation in item.citations]
-    labels = {label for plan in _item_request_plans(item, draft) for label in _misattributed_scopes(plan, spans, cited)}
-    flagged = {span["evidence_id"]: label for label in labels for span in _label_spans(label, spans)}
-    return list(
-        dict.fromkeys(
-            flagged[span["evidence_id"]]
-            for cited in item.citations
-            for span in _label_spans(cited.evidence_id, spans)
-            if span["evidence_id"] in flagged
-        )
-    )
-
-
-REANCHOR_REASON = "plan_quote_misattributed"
-
-
-def _quote_lines(quote: str, span: Mapping[str, Any]) -> str | None:
-    """quote を含む引用単位の行の範囲（``lines`` の書き方。行番号の無い根拠は空 = 全文）。
-
-    モデルに示した版（送信時の引用単位）の本文で、照合の形（``_canonical``）の連続した一致を探す。同じ根拠に
-    複数あれば、原文照合（``_original_range``）と同じく最初の位置にする。短すぎる・連続して一致しない（離れた
-    断片の継ぎ合わせでしか一致しない）ときは None（行を推測で選ばない）。
-    """
-    snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
-    view = snapshot[1] if snapshot is not None and snapshot[0] is span else _citation_view(span)
-    needle, _ = _canonical(quote)
-    if not view.units or len(needle) < _QUOTE_SENTENCE_MIN_CHARS:
-        return None
-    haystack, positions = _canonical(view.text)
-    start = haystack.find(needle)
-    if start < 0:
-        return None
-    if not view.numbered:
-        return ""
-    begin, end = positions[start], positions[start + len(needle) - 1] + 1
-    hits = [number for number, (first, last) in enumerate(view.units, 1) if first < end and begin < last]
-    if not hits:
-        return None
-    return str(hits[0]) if hits[0] == hits[-1] else f"{hits[0]}-{hits[-1]}"
-
-
-def reanchor_misattributed_citations(draft: GroundedDraft, spans: Sequence[dict]) -> tuple[GroundedDraft, list[dict[str, Any]]]:
-    """作り直しても残った出典 ID の取り違え（#3804）を、原文がある根拠へ付け替える（引用の事後の訂正。#3852）。
-
-    ``_misattributed_scopes`` の行のうち、direct の原文が送った別の根拠の 1 つだけ（会話の添付ではない）に逐語であるとき、
-    計画の行の evidence_id（と evidence_ids）と、その小問の説明が誤った根拠を指す出典を、その根拠と原文を含む
-    行の範囲へ付け替える。付け替えた出典は、ほかの出典と同じ原文照合・決定的な検査（と監査）に掛かる。説明の文は
-    変えず、説明も出典も外さない。原文がある根拠が 2 つ以上（添付を含む）・原文の行を連続した一致で決められない・
-    計画にその label の行が複数ある・付け替え先に direct 以外の判断が残る、のどれかなら付け替えない（印を付ける
-    従来の扱いのまま）。
-    戻り値は付け替えた草稿と、付け替えの記録（trace 用）。
-    """
-    moves: dict[int, dict[str, tuple[dict, str, str]]] = {}
-    for plan_index, plan in enumerate(draft.request_coverage):
-        if "evidence_scope" not in plan.model_fields_set:
-            continue
-        cited = [
-            citation.evidence_id
-            for item in draft.items
-            if item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
-            for citation in item.citations
-        ]
-        planned: dict[str, tuple[dict, str, str]] = {}
-        for label in _misattributed_scopes(plan, spans, cited):
-            rows = [scope for scope in plan.evidence_scope if scope.evidence_id == label]
-            if len(rows) != 1:
-                continue
-            quote = rows[0].link_quote.strip()
-            named_ids = {span["evidence_id"] for span in _label_spans(label, spans)}
-            # 添付も候補に数える（添付にもある原文は、付け替え先が 1 つに決まらない）。添付へは付け替えない。
-            candidates = list(
-                {
-                    span["evidence_id"]: span
-                    for span in spans
-                    if span["evidence_id"] not in named_ids and quote_in_text(quote, str(span.get("text") or ""))
-                }.values()
-            )
-            if len(candidates) != 1 or candidates[0].get("conversation_attachment"):
-                continue
-            target = candidates[0]
-            lines = _quote_lines(quote, target)
-            if lines is None:
-                continue
-            planned[label] = (target, str(target.get("label") or target["evidence_id"]), lines)
-        # 付け替え先の根拠に、付け替えない行の direct 以外の判断（linked・unrelated）があれば、計画が矛盾するので付け替えない。
-        for label, (target, _target_label, _lines) in list(planned.items()):
-            if any(
-                scope.evidence_id not in planned
-                and scope.relation != "direct"
-                and any(span["evidence_id"] == target["evidence_id"] for span in _label_spans(scope.evidence_id, spans))
-                for scope in plan.evidence_scope
-            ):
-                del planned[label]
-        if planned:
-            moves[plan_index] = planned
-    if not moves:
-        return draft, []
-
-    def span_set(label: str) -> frozenset[str]:
-        return frozenset(span["evidence_id"] for span in _label_spans(label, spans))
-
-    # 付け替えは元の草稿の出典から一度に決める（2 つの行が互いの ID を取り違えた計画を、順に付け替えて戻さない）。
-    indexes: dict[tuple[int, str], list[int]] = {}
-    items = []
-    for item_index, item in enumerate(draft.items):
-        targets = {
-            span_set(label): (plan_index, label, move[1], move[2])
-            for plan_index, plan in enumerate(draft.request_coverage)
-            if plan_index in moves and item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
-            for label, move in moves[plan_index].items()
-        }
-        citations = []
-        for citation in item.citations:
-            found = targets.get(span_set(citation.evidence_id)) if citation.evidence_id else None
-            if found is None:
-                citations.append(citation)
-                continue
-            plan_index, label, target_label, lines = found
-            citations.append(GroundedCitation(evidence_id=target_label, lines=lines))
-            moved_items = indexes.setdefault((plan_index, label), [])
-            if item_index not in moved_items:
-                moved_items.append(item_index)
-        items.append(item.model_copy(update={"citations": citations}) if citations != list(item.citations) else item)
-    records: list[dict[str, Any]] = []
-    for plan_index, planned in moves.items():
-        for label, (target, target_label, lines) in planned.items():
-            named = _label_spans(label, spans)
-            records.append(
-                {
-                    "reason": REANCHOR_REASON,
-                    "request_id": draft.request_coverage[plan_index].request_id,
-                    "from_label": label,
-                    "from_evidence_id": str(named[0]["evidence_id"]) if len(named) == 1 else "",
-                    "to_label": target_label,
-                    "to_evidence_id": str(target["evidence_id"]),
-                    "lines": lines,
-                    "item_indexes": indexes.get((plan_index, label), []),
-                }
-            )
-    plans = []
-    for plan_index, plan in enumerate(draft.request_coverage):
-        plan_moves = moves.get(plan_index)
-        if not plan_moves:
-            plans.append(plan)
-            continue
-        plans.append(
-            plan.model_copy(
-                update={
-                    "evidence_scope": [
-                        scope.model_copy(update={"evidence_id": plan_moves[scope.evidence_id][1]})
-                        if scope.evidence_id in plan_moves
-                        else scope
-                        for scope in plan.evidence_scope
-                    ],
-                    "evidence_ids": list(
-                        dict.fromkeys(plan_moves[label][1] if label in plan_moves else label for label in plan.evidence_ids)
-                    ),
-                }
-            )
-        )
-    return draft.model_copy(update={"request_coverage": plans, "items": items}), records
-
-
 def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict], *, scope_plan: bool = False) -> list[str]:
     """計画の evidence_ids のうち、送った根拠のどれにも当たらない label の指摘（業務ガイドの要件 ID を書いたなど。#3825）。
 
@@ -1911,9 +1717,9 @@ def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict], *, s
     立てたか。その計画は作り直さないので、直し方ではなく計画の根拠として扱わないことを書く（#3827）。
     """
     advice = (
-        "計画の根拠として扱いません（evidence_ids に使えるのは [E1] 形式の根拠の番号だけです）。"
+        "計画の根拠として扱いません（evidence_id に使えるのは [E1] 形式の根拠の番号だけです）。"
         if scope_plan
-        else "evidence_ids には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+        else "evidence_scope の evidence_id には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
     )
     return list(
         dict.fromkeys(
@@ -1944,21 +1750,8 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown
             scopes = _scope_decisions(plan, label)
             if len(scopes) != 1:
                 errors.append(f"{plan.request_id}: {label} の対象の照合は1件必要です。")
-            elif scopes[0].relation == "unrelated":
-                errors.append(f"{plan.request_id}: unrelated の {label} は evidence_ids と items に使えません。")
             elif scopes[0].relation == "linked" and not scopes[0].link_quote.strip():
-                errors.append(f"{plan.request_id}: linked の {label} は関係を明記した原文が必要です。")
-        cited = [
-            citation.evidence_id
-            for item in draft.items
-            if item.kind != "gap" and any(own is plan for own in _item_request_plans(item, draft))
-            for citation in item.citations
-        ]
-        for label, others in _misattributed_scopes(plan, spans, cited).items():
-            errors.append(
-                f"{plan.request_id}: {label} の照合に写した原文は {label} に無く、{'・'.join(others)} にあります。"
-                "その原文で説明するなら、計画と items の出典をその原文がある根拠にしてください。"
-            )
+                errors.append(f"{plan.request_id}: linked の {label} は link に関係を明記した本文の番号の範囲が必要です。")
     # 同じ request_id の計画が複数あると同じ指摘が重なる（#3808）。作り直しの入力に同じ文を繰り返さない。
     return list(dict.fromkeys(errors))
 
@@ -1969,42 +1762,51 @@ def scope_evidence_text(span: Mapping[str, Any]) -> str:
     return _numbered_text(text, citation_units(text, image_text=_image_text(span)), numbered=True)
 
 
-def _scope_range_text(label: str, line_start: int, line_end: int, spans: Sequence[dict]) -> str:
-    """指定した番号の範囲の連続した原文。根拠が 1 つに決まらない・範囲が無効なら空文字（推測で切り詰めない）。"""
-    named = _label_spans(label, spans)
+def _scope_range_text(link: RequestLinkRange, spans: Sequence[dict], *, numbered: bool | None = None) -> str:
+    """指定した番号の範囲の連続した原文。根拠が 1 つに決まらない・範囲が無効なら空文字（推測で切り詰めない）。
+
+    ``numbered`` はモデルに番号を示した根拠か（計画だけの入力は常に番号付き。None は生成の根拠ブロックの表示に従う）。
+    番号を示していない根拠の null は全文を指す。
+    """
+    named = _label_spans(link.evidence_id, spans)
     if len(named) != 1:
         return ""
-    text = str(named[0].get("text") or "")
-    units = citation_units(text, image_text=_image_text(named[0]))
-    binding = bind_wire_range(line_start, line_end, unit_count=len(units), numbered=True)
+    view = _sent_view(named[0])
+    if not view.units:
+        return ""
+    binding = bind_wire_range(
+        link.line_start, link.line_end, unit_count=len(view.units), numbered=view.numbered if numbered is None else numbered
+    )
     if binding.reason_code is not None:
         return ""
-    return text[units[line_start - 1][0] : units[line_end - 1][1]].strip()
+    if binding.whole_text:
+        return view.text.strip()
+    assert link.line_start is not None and link.line_end is not None
+    return view.text[view.units[link.line_start - 1][0] : view.units[link.line_end - 1][1]].strip()
 
 
 def resolve_scope_plan(plan: RequestScopePlan, spans: Sequence[dict]) -> list[RequestCoverage]:
-    """番号で返した計画を、コードが原文を切り出した計画へ変える。
+    """計画だけの出力を、コードが原文を切り出した計画へ変える。無効な範囲は ``_request_plan_errors`` の指摘に任せる。
 
-    linked の範囲が無効なら原文を空にして、``_request_plan_errors`` の指摘に任せる。原文は常に指した根拠から
-    切り出すので、原文と番号の食い違いは起きない。
+    計画だけの入力の本文は常に番号付きで、番号は引用単位（``scope_evidence_text``）。
     """
-    result = []
-    for entry in plan.request_coverage:
-        fields: dict[str, Any] = {"request_id": entry.request_id, "evidence_ids": entry.evidence_ids}
-        if "evidence_scope" in entry.model_fields_set:
-            fields["evidence_scope"] = [
-                {
-                    "evidence_id": scope.evidence_id,
-                    "target": scope.target,
-                    "relation": scope.relation,
-                    "link_quote": _scope_range_text(scope.link.evidence_id, scope.link.line_start, scope.link.line_end, spans)
-                    if scope.relation == "linked" and scope.link is not None
-                    else "",
-                }
-                for scope in entry.evidence_scope
-            ]
-        result.append(RequestCoverage.model_validate(fields))
-    return result
+
+    def link_text(link: RequestLinkRange) -> str:
+        named = _label_spans(link.evidence_id, spans)
+        if len(named) != 1:
+            return ""
+        text = str(named[0].get("text") or "")
+        units = citation_units(text, image_text=_image_text(named[0]))
+        binding = bind_wire_range(link.line_start, link.line_end, unit_count=len(units), numbered=True)
+        if binding.reason_code is not None or link.line_start is None or link.line_end is None:
+            return ""
+        return text[units[link.line_start - 1][0] : units[link.line_end - 1][1]].strip()
+
+    return canonical_request_coverage(plan.request_coverage, link_text)
+
+
+# 計画のうち、コードが作る欄（モデルの出力の欄ではない）。作り直しの入力に出さない。
+_PLAN_FIELDS_FROM_CODE: dict[str, Any] = {"__all__": {"evidence_ids": True, "evidence_scope": {"__all__": {"link_quote": True}}}}
 
 
 def _item_request_plans(item: GroundedItem, draft: GroundedDraft) -> list[RequestCoverage]:
@@ -2042,11 +1844,8 @@ def _outside_request_plan(item: GroundedItem, span: dict, draft: GroundedDraft, 
             if len(scopes) != 1:
                 continue
             scope = scopes[0]
-            if scope.relation == "direct" or (
-                scope.relation == "linked"
-                and scope.link_quote.strip()
-                and any(quote_in_text(scope.link_quote, str(candidate.get("text") or "")) for candidate in spans)
-            ):
+            # linked の原文はコードが指定の範囲から切り出すので、空でなければ根拠にある。
+            if scope.relation == "direct" or (scope.relation == "linked" and scope.link_quote.strip()):
                 labels.add(label)
     labels.update(label for plan in draft.guide_coverage for label in plan.evidence_ids)
     allowed = {str(candidate["evidence_id"]) for label in labels for candidate in _label_spans(label, spans)}
@@ -2414,11 +2213,6 @@ def verify(
             candidate.mark("quote_unmatched", "引用元の候補はありますが、元の引用の逐語一致は確認できていません。")
         if scope_unsettled:
             candidate.mark("unassessed", "質問の対象と根拠の対応を確かめられなかった")
-        if misattributed := _misattributed_labels(item, draft, spans):
-            # 計画に写した原文が出典の根拠に無く別の根拠にある（#3804）。付け替え先が 1 つに決まらず残った取り違え
-            # （``reanchor_misattributed_citations``）は、本文を外さず、出典の支持を確かめていない印を付ける（支持の成功にも
-            # 失敗にもしない）。
-            candidate.mark("unassessed", f"根拠計画で {'・'.join(misattributed)} に写した原文が、その出典の根拠に無い")
         entry = candidate
         check_item = _check_item(entry.item)
         if conflict := _table_binding_conflict(check_item, view):
@@ -4759,6 +4553,12 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
     )
 
 
+def _sent_view(span: Mapping[str, Any]) -> CitationView:
+    """モデルに示した版（送信時に固定した本文と引用単位）。記録が無ければ今の本文から作る。"""
+    snapshot = (_CITATION_VIEWS.get() or {}).get(id(span))
+    return snapshot[1] if snapshot is not None and snapshot[0] is span else _citation_view(span)
+
+
 def _citation_extraction(item: GroundedItem) -> dict[str, str]:
     return dict(item.citations[0]._extraction) if item.citations else {}
 
@@ -4885,78 +4685,6 @@ def citation_range_targets(
                 }
             )
     return targets
-
-
-def repair_ranges_from_plan_quotes(
-    draft: GroundedDraft, spans: Sequence[dict], targets: Sequence[Mapping[str, Any]], diagnostic: Mapping[str, Any]
-) -> tuple[GroundedDraft, dict[str, Any]]:
-    """範囲修復で残った不正を、同じ要求・出典の一意な逐語原文からだけ結び直す。
-
-    原文との一致は説明の意味支持を認定しない。復元した引用も通常の検査と監査へ戻す。
-    """
-    from rag_engine.generation.citation_range_repair import CitationRangeRepair, apply_range_repair
-
-    failed = {
-        (row["item_index"], row["citation_index"])
-        for row in diagnostic.get("rejected", ())
-        if row.get("reason_code") in CITATION_RANGE_ERROR_CODES
-    }
-    proposals, selected = [], []
-    for target in targets:
-        index, citation_index = target["item_index"], target["citation_index"]
-        if (index, citation_index) not in failed:
-            continue
-        item = draft.items[index]
-        if item.kind == "gap" or not item.request_id.strip():
-            continue
-        citation = item.citations[citation_index]
-        rows = [
-            scope
-            for plan in _item_request_plans(item, draft)
-            if "evidence_scope" in plan.model_fields_set
-            for scope in plan.evidence_scope
-            if scope.evidence_id == citation.evidence_id
-        ]
-        named = _label_spans(citation.evidence_id, spans)
-        if len(rows) != 1 or rows[0].relation != "direct" or len(named) != 1:
-            continue
-        quote = rows[0].link_quote.strip()
-        needle, _ = _canonical(quote)
-        haystack, _ = _canonical(_citation_view(named[0]).text)
-        start = haystack.find(needle) if needle else -1
-        if start < 0 or haystack.find(needle, start + 1) >= 0 or heading_only_quote(quote, named[0]):
-            continue
-        lines = _quote_lines(quote, named[0])
-        if lines is None:
-            continue
-        first: int | None = None
-        last: int | None = None
-        if lines:
-            parts = lines.split("-", 1)
-            first, last = int(parts[0]), int(parts[-1])
-        proposals.append(
-            {
-                "item_index": index,
-                "citation_index": citation_index,
-                "evidence_id": citation.evidence_id,
-                "line_start": first,
-                "line_end": last,
-            }
-        )
-        selected.append(target)
-    if not proposals:
-        return draft, dict(diagnostic)
-    repaired, local = apply_range_repair(draft, CitationRangeRepair.model_validate({"ranges": proposals}), selected)
-    if not local["adopted"]:
-        return draft, dict(diagnostic)
-    restored = {(row["item_index"], row["citation_index"]) for row in local["adopted"]}
-    result = dict(diagnostic)
-    result["model_rejected"] = list(diagnostic.get("rejected", ()))
-    result["plan_quote_fallback"] = local["adopted"]
-    result["adopted"] = [*diagnostic.get("adopted", ()), *local["adopted"]]
-    result["rejected"] = [row for row in diagnostic.get("rejected", ()) if (row["item_index"], row["citation_index"]) not in restored]
-    result["status"] = "completed" if len(result["adopted"]) == len(targets) and not result["rejected"] else "partial"
-    return repaired, result
 
 
 def restore_previous_citation_ranges(
@@ -7181,7 +6909,7 @@ def run_round(
         unknown = [
             (entry.request_id, label)
             for entry in plan.request_coverage
-            for label in [*entry.evidence_ids, *(scope.evidence_id for scope in entry.evidence_scope)]
+            for label in dict.fromkeys(scope.evidence_id for scope in entry.evidence_scope)
             if not _label_spans(label, spans)
         ]
         planned = GroundedDraft(request_coverage=plan.request_coverage, items=[], summary="", confidence="high")
@@ -7226,7 +6954,7 @@ def run_round(
                         "previous_plan": scope_plan.wire.model_dump(mode="json"),
                         "invalid_request_plan": notes,
                         "instruction": "previous_plan の invalid_request_plan の指摘をすべて直し、計画の全体を返してください。"
-                        "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は evidence_ids に入れないでください。"
+                        "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は direct と linked にしないでください。"
                         "linked の link には関係を明記した本文の番号の範囲を指定してください。",
                     },
                 )
@@ -7323,7 +7051,7 @@ def run_round(
     }
 
     def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
-        canonical = canonical_generation_draft(value)
+        canonical = canonical_generation_draft(value, lambda link: _scope_range_text(link, spans))
         provider_text = value._provider_output_text if isinstance(value, GroundedDraft) else None
         generation_outputs.append(
             {
@@ -7381,7 +7109,6 @@ def run_round(
                 provider_id=provider_id,
             )
             draft, range_repair = apply_range_repair(previous_draft, response, targets)
-            draft, range_repair = repair_ranges_from_plan_quotes(draft, spans, targets, range_repair)
             generation_outputs.append(
                 {
                     "purpose": "answer.repair",
@@ -7464,7 +7191,7 @@ def run_round(
             + json.dumps(
                 {
                     "invalid_request_plan": plan_errors,
-                    "previous_draft": draft.model_dump(mode="json"),
+                    "previous_draft": draft.model_dump(mode="json", exclude={"request_coverage": _PLAN_FIELDS_FROM_CODE}),
                     "instruction": "invalid_request_plan の指摘をすべて直し（対象の照合が抜けた根拠は照合し、unrelated は計画と説明から除く）、根拠計画と items が対応する完全な草稿を返してください。",
                 },
                 ensure_ascii=False,
@@ -7500,13 +7227,6 @@ def run_round(
         # 何の根拠も指さず計画の内外を変えないので、残っても未決に数えず、無視した指摘として記録だけする（#3825）。
         plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
         plan_repair_calls = 1
-    reanchored: list[dict[str, Any]] = []
-    if not range_only:
-        # 作り直しても残った出典 ID の取り違えは、原文がある根拠が 1 つに決まるときだけ付け替え、ほかの出典と同じ照合に
-        # 掛ける（モデルの呼び出しは増やさない）。決まらなければ従来どおり印を付ける（verify）。
-        draft, reanchored = reanchor_misattributed_citations(draft, spans)
-        if reanchored:
-            plan_unsettled = _request_plan_errors(draft, spans, unknown_labels=False)
     plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
     # 計画だけの出力（answer.scope）で立てた計画には guide_coverage の欄が無く、作り直しも計画を変えない（#3827）。
     plan_ignored = _unknown_plan_label_errors(draft, spans, scope_plan=scope_plan is not None or plan_recovery == "planned")
@@ -7561,8 +7281,6 @@ def run_round(
         "transport_attempts_recorded": False,
         "input": input_snapshot,
         "outputs": generation_outputs,
-        # 草稿の出典をシステムが付け替えた記録（どの行・出典を、どの根拠のどの行へ、なぜ）。final_draft は付け替えた後。
-        **({"citation_reanchored": reanchored} if reanchored else {}),
         "final_draft": draft.model_dump(mode="json", exclude_unset=True),
     }
     timing["generation_calls"] = generation_calls
@@ -7592,8 +7310,6 @@ def run_round(
         timing["request_plan_recovery"] = plan_recovery
     if plan_unsettled:
         timing["request_plan_unsettled"] = plan_unsettled
-    if reanchored:
-        timing["citation_reanchored"] = reanchored
     if plan_ignored:
         # 最後の草稿の計画に残った、送った根拠のどれにも当たらない label の指摘（計画の内外の判定には使わない）。
         timing["request_plan_ignored"] = plan_ignored
