@@ -2999,7 +2999,10 @@ class IngestionPipeline:
                     "vision_aborted",
                     extra={"trace_id": trace_id, "kind": exc.kind.value, "status": exc.status},
                 )
-                raise IngestionUserError(str(exc)) from exc
+                raise IngestionUserError(
+                    f"図・表の読み取りのモデル「{config.vision_model_id}」で止まりました。{exc} "
+                    "システム設定の「モデル」の接続テストで確かめてから再実行してください。"
+                ) from exc
             except Exception:
                 if segment is not None:
                     raise

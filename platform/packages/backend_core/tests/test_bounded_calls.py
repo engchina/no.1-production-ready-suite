@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import errno
 import functools
 import heapq
 import json
+import socket
 import ssl
 import threading
 import time
@@ -20,6 +22,7 @@ import pytest
 
 from pr_backend_core.bounded_calls import (
     DEFAULT_KIND_RULES,
+    NETWORK_FAILURE_CAUSE_LABELS,
     Attempt,
     BoundedCallAborted,
     BoundedCaller,
@@ -32,6 +35,7 @@ from pr_backend_core.bounded_calls import (
     SyncBoundedCaller,
     chain_classifiers,
     classify_error,
+    network_failure_cause,
     parse_retry_after,
     policy_with_concurrency,
 )
@@ -849,3 +853,51 @@ def test_sync_caller_requires_with() -> None:
     bridge = SyncBoundedCaller(_sync_caller())
     with pytest.raises(RuntimeError):
         bridge.call(lambda _attempt: 1)
+
+
+def _connect_failure(os_error: BaseException) -> Exception:
+    """SDK が接続の失敗を包む形（文に原因が無く、途中の文に接続先の IP が入る）を合成する。"""
+    middle = RuntimeError("All connection attempts failed")
+    middle.__cause__ = os_error
+    outer = ConnectionError("Connection error.")
+    outer.__cause__ = middle
+    return outer
+
+
+@pytest.mark.parametrize(
+    ("os_error", "expected"),
+    [
+        (socket.gaierror(-2, "Name or service not known"), "dns"),
+        (OSError(errno.ECONNREFUSED, "Connect call failed ('192.0.2.1', 1)"), "refused"),
+        (ConnectionRefusedError(errno.ECONNREFUSED, "refused"), "refused"),
+        (OSError(errno.EHOSTUNREACH, "Connect call failed ('192.0.2.1', 1)"), "unreachable"),
+        (OSError(errno.ENETUNREACH, "unreachable"), "unreachable"),
+        (ConnectionResetError(errno.ECONNRESET, "reset"), "reset"),
+        (
+            ExceptionGroup("multiple", [OSError(errno.EHOSTUNREACH, "a"), OSError(errno.EIO, "b")]),
+            "unreachable",
+        ),
+        (ValueError("not a network failure"), None),
+    ],
+    ids=["dns", "refused-errno", "refused-type", "host", "net", "reset", "group", "other"],
+)
+def test_network_failure_cause_follows_the_chain_by_type_and_errno(
+    os_error: BaseException, expected: str | None
+) -> None:
+    assert network_failure_cause(_connect_failure(os_error)) == expected
+
+
+def test_classify_error_names_the_network_cause_without_the_address() -> None:
+    info = classify_error(_connect_failure(OSError(errno.EHOSTUNREACH, "('192.0.2.1', 1)")))
+
+    assert info.kind is ErrorKind.NETWORK
+    assert "Connection error." in info.detail
+    assert NETWORK_FAILURE_CAUSE_LABELS["unreachable"] in info.detail
+    assert "192.0.2.1" not in info.detail
+
+
+def test_classify_error_keeps_detail_when_network_cause_is_unknown() -> None:
+    info = classify_error(ConnectionError("Connection error."))
+
+    assert info.kind is ErrorKind.NETWORK
+    assert info.detail == "ConnectionError: Connection error."

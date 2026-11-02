@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import stat
 from pathlib import Path
@@ -819,3 +820,31 @@ def test_shared_document_keeps_unknown_keys_and_loads_without_product_sections(
     assert document["other"] == {"keep": True}
     platform_env = (tmp_path / "platform.env").read_text(encoding="utf-8")
     assert f"{ENTERPRISE_AI_API_KEY_ENV}=sk-new" in platform_env
+
+
+def test_model_test_failure_names_unreached_endpoint_cause(tmp_path: Path) -> None:
+    """接続先へ届かない失敗は、API key・モデル ID の誤りと取り違えない案内にする（#4084）。"""
+    settings = FakeSettings(oci_enterprise_ai_api_key="sk-saved")
+    store = make_store(tmp_path)
+    store.load(settings)
+    request = {"settings": PAYLOAD, "target_type": "enterprise_vision", "model_id": "llm-a"}
+
+    async def fail(_candidate: Any, _request: ModelSettingsTestRequest) -> dict[str, Any]:
+        try:
+            raise OSError(errno.EHOSTUNREACH, "Connect call failed ('192.0.2.1', 1)")
+        except OSError as exc:
+            raise ConnectionError("Connection error.") from exc
+
+    failed = (
+        make_client(settings, store, run_model_test=fail)
+        .post("/api/settings/model/test", json=request)
+        .json()["data"]
+    )
+
+    assert failed["status"] == "failed"
+    assert failed["raw_error"] == "Connection error."
+    assert failed["details"] == {"network_failure_cause": "unreachable"}
+    first_tip = failed["troubleshooting"][0]
+    assert "到達できません" in first_tip
+    assert "API key やモデル ID の誤りではありません" in first_tip
+    assert "192.0.2.1" not in json.dumps(failed, ensure_ascii=False)

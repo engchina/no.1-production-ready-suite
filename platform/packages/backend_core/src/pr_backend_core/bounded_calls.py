@@ -42,10 +42,12 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import email.utils
+import errno
 import json
 import logging
 import math
 import random as _random
+import socket
 import ssl
 import threading
 import time
@@ -315,6 +317,52 @@ def _exception_chain(exc: BaseException, limit: int = 8) -> list[BaseException]:
     return chain
 
 
+NetworkFailureCause = Literal["dns", "refused", "unreachable", "reset"]
+# 接続の失敗の原因の説明（画面・job のエラーに出す。接続先のホスト・IP は入れない。#4084）。
+NETWORK_FAILURE_CAUSE_LABELS: Mapping[NetworkFailureCause, str] = {
+    "dns": "接続先のホスト名を解決できません（DNS）",
+    "refused": "接続先がポートへの接続を拒否しました（接続先のサービスの停止など）",
+    "unreachable": "接続先のホストまたはポートへ到達できません（経路・firewall）",
+    "reset": "通信の途中で接続が切れました",
+}
+# 要求が接続先へ届いていない原因。入力（画像の大きさなど）に関係なく、接続が直るまで同じ失敗になる。
+UNREACHED_NETWORK_FAILURE_CAUSES: frozenset[NetworkFailureCause] = frozenset(
+    {"dns", "refused", "unreachable"}
+)
+_NETWORK_FAILURE_ERRNOS: Mapping[int, NetworkFailureCause] = {
+    errno.ECONNREFUSED: "refused",
+    errno.EHOSTUNREACH: "unreachable",
+    errno.ENETUNREACH: "unreachable",
+    errno.ECONNRESET: "reset",
+    errno.EPIPE: "reset",
+}
+
+
+def network_failure_cause(exc: BaseException) -> NetworkFailureCause | None:
+    """原因の連鎖の OS の例外から、接続の失敗の原因を返す（分からなければ None。#4084）。
+
+    SDK の例外の文（``Connection error.``）は原因を含まず、途中の例外の文は接続先の IP を含むので、
+    文ではなく例外の型と errno で決める。接続先が複数の IP のときは ``ExceptionGroup`` の中も見る。
+    """
+    pending: list[BaseException] = [exc]
+    seen = 0
+    while pending and seen < 16:
+        item = pending.pop(0)
+        seen += 1
+        if isinstance(item, socket.gaierror):
+            return "dns"
+        if isinstance(item, OSError) and item.errno is not None:
+            cause = _NETWORK_FAILURE_ERRNOS.get(item.errno)
+            if cause is not None:
+                return cause
+        if isinstance(item, BaseExceptionGroup):
+            pending.extend(item.exceptions)
+        following = item.__cause__ or item.__context__
+        if following is not None:
+            pending.append(following)
+    return None
+
+
 def _status_of(exc: BaseException) -> int | None:
     """HTTP status を返す。
 
@@ -559,6 +607,9 @@ def classify_error(exc: BaseException) -> ClassifiedError:
         text = _text_of(item)
         kind = _kind_from_type(item, text)
         if kind is not None:
+            cause = network_failure_cause(exc) if kind is ErrorKind.NETWORK else None
+            if cause is not None:
+                detail = f"{detail}（原因: {NETWORK_FAILURE_CAUSE_LABELS[cause]}）"
             return ClassifiedError(kind, detail=detail)
     text = " ".join(_text_of(item) for item in chain)
     if any(marker in text for marker in _SAFETY_MARKERS):

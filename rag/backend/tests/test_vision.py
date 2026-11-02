@@ -7,6 +7,7 @@ VLM は決定論スタブ(``FakeDescriber``)に置き換え、切り出した画
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import json
 from collections.abc import Sequence
@@ -1011,3 +1012,84 @@ def test_unstructured_remap_reads_dict_coordinates() -> None:
     metadata = result.extraction.elements[0].metadata
     assert (metadata["page_width"], metadata["page_height"]) == (1700.0, 2200.0)
     assert metadata["bbox_coordinate_system"] == "PixelSpace"
+
+
+class _ConnectionFailingReader(FakeReader):
+    """接続できない Vision モデルのスタブ(SDK が OS の例外を包む形)。"""
+
+    def __init__(self, os_error: OSError) -> None:
+        super().__init__()
+        self._os_error = os_error
+
+    async def generate_from_images(
+        self,
+        images: Sequence[bytes],
+        prompt: str,
+        *,
+        system_prompt: str = "",
+        response_schema: Any = None,
+        response_schema_name: str = "image_description",
+        mime_type: str = "image/png",
+    ) -> str:
+        self.calls.append({"images": len(images)})
+        try:
+            raise self._os_error
+        except OSError as exc:
+            raise ConnectionError("Connection error.") from exc
+
+
+@pytest.fixture
+def _no_ai_call_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.clients import ai_calls
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(ai_calls, "_sleep", no_wait)
+
+
+@pytest.mark.usefixtures("_no_ai_call_wait")
+async def test_unreached_vision_model_fails_ingestion_instead_of_indexing_without_figures() -> None:
+    """図が少なく breaker に届かなくても、接続先へ届かないまま完了にしない(#4084)。"""
+    from app.rag.ingestion import IngestionUserError
+
+    reader = _ConnectionFailingReader(OSError(errno.EHOSTUNREACH, "('192.0.2.1', 1)"))
+    pipeline = _pipeline(enabled=True, reader=reader)
+
+    with pytest.raises(IngestionUserError) as raised:
+        await _attach(pipeline, _figure_extraction([0.168, 0.119, 0.504, 0.297]), "mineru")
+
+    message = str(raised.value)
+    assert "到達できません" in message
+    assert "接続テスト" in message
+    assert "再実行" in message
+    assert "192.0.2.1" not in message
+    # 再試行を使ってから止める(最初の 1 回 + 再試行 4 回 + 最後の 1 回)。
+    assert len(reader.calls) == 6
+
+
+@pytest.mark.usefixtures("_no_ai_call_wait")
+async def test_connection_reset_stays_item_failure_because_it_can_depend_on_the_input() -> None:
+    """要求が届いた後の切断は入力に関係しうるので、これまでどおり件の失敗で続ける(#4084)。"""
+    reader = _ConnectionFailingReader(ConnectionResetError(errno.ECONNRESET, "reset"))
+    extraction = _figure_extraction([0.168, 0.119, 0.504, 0.297])
+
+    result = await _attach(_pipeline(enabled=True, reader=reader), extraction, "mineru")
+
+    assert WARNING_PARTIAL_FAILURE in result.warnings
+    assert result.elements[1].metadata["vision_status"] == "failed"
+
+
+def test_unreached_failure_after_a_success_stays_item_failure() -> None:
+    """同じ job で成功した図があれば接続は生きている。その図だけの失敗として続ける(#4084)。"""
+    from pr_backend_core.bounded_calls import BoundedCallFailed, ErrorKind
+
+    from app.rag.vision import _unreached_failure_abort
+
+    failure = BoundedCallFailed("failed", kind=ErrorKind.NETWORK)
+    failure.__cause__ = OSError(errno.EHOSTUNREACH, "unreachable")
+
+    assert _unreached_failure_abort(failure, SimpleNamespace(successes=1, label="Vision")) is None
+    aborted = _unreached_failure_abort(failure, SimpleNamespace(successes=0, label="Vision"))
+    assert aborted is not None
+    assert aborted.stops_batch is True

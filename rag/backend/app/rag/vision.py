@@ -38,7 +38,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
 
-from pr_backend_core.bounded_calls import Attempt, BoundedCaller, BoundedCallFailed
+from pr_backend_core.bounded_calls import (
+    UNREACHED_NETWORK_FAILURE_CAUSES,
+    Attempt,
+    BoundedCallAborted,
+    BoundedCaller,
+    BoundedCallFailed,
+    ErrorKind,
+    network_failure_cause,
+)
 from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
 from pydantic import ValidationError
 from rag_engine.models.layout import LayoutRecord, PageImage
@@ -270,7 +278,13 @@ class EnterpriseAiPictureDescriber:
             self._leave()
             await self._wait_idle()
             self._enter()
-            return await caller.call(attempt_call, label=label, adaptive=True, final=True)
+            try:
+                return await caller.call(attempt_call, label=label, adaptive=True, final=True)
+            except BoundedCallFailed as exc:
+                aborted = _unreached_failure_abort(exc, caller)
+                if aborted is None:
+                    raise
+                raise aborted from exc
         finally:
             self._leave()
 
@@ -292,6 +306,30 @@ class EnterpriseAiPictureDescriber:
 
     async def _wait_idle(self) -> None:
         await self._idle_event().wait()
+
+
+def _unreached_failure_abort(
+    failure: BoundedCallFailed, caller: BoundedCaller
+) -> BoundedCallAborted | None:
+    """1 件も成功しないまま接続先へ届かなかった失敗は、件の失敗にせず段を止める(#4084)。
+
+    図の少ない文書は circuit breaker の回数に届かず、件の失敗のまま「索引済み」になる。図の説明が
+    無いまま完了と見せないよう、取込を失敗にして再実行できるようにする。接続が生きている job の
+    個別の図の失敗(成功した図がある)と、入力に関係しうる失敗(時間切れ・通信の途中の切断)は、
+    これまでどおり件の失敗にする。
+    """
+    if failure.kind is not ErrorKind.NETWORK or caller.successes > 0:
+        return None
+    cause = network_failure_cause(failure)
+    if cause not in UNREACHED_NETWORK_FAILURE_CAUSES:
+        return None
+    return BoundedCallAborted(
+        f"{caller.label}: {failure}",
+        kind=failure.kind,
+        status=failure.status,
+        attempts=failure.attempts,
+        detail=failure.detail,
+    )
 
 
 def downscale_images(images: Sequence[bytes], level: int) -> list[bytes]:
