@@ -165,6 +165,8 @@ def _published_reference_records(records: Sequence[AnswerRecord], trace: dict[st
             selected.setdefault(span["source_id"], []).append(span.get("text", ""))
             if span.get("page"):
                 pages.setdefault(span["source_id"], set()).add(span["page"])
+                if span.get("page_end") and span["page_end"] > span["page"]:
+                    pages[span["source_id"]].add(span["page_end"])
     # parent先頭は別項目の場合があるため、引用欄の抜粋も採用した原文から作る。
     return [
         replace(

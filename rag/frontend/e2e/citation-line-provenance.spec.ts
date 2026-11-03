@@ -398,3 +398,22 @@ test("意味確認未実施の操作は本文と引用を保ち、該当確認�
   await closeSheet(page);
   await expect(answer.getByText(body, { exact: true })).toBeVisible();
 });
+
+
+for (const precise of [false, true]) {
+  test(`跨頁の子に結び付いた引用は${precise ? "確定した単頁" : "終頁までの範囲"}を表示する`, {tag: "@responsive"}, async ({page}, testInfo) => {
+    const item = citation("doc-a:c-range", "合成の複数頁の根拠です。", {
+      page_start: 3, page_end: 4, answer_citation_lines: [1], answer_citation_provenance: "child",
+      ...(precise ? {answer_citation_page_ranges: [{line: 1, page_start: 3, page_end: 3}]} : {}),
+    });
+    const answer = await ask(page, [item], undefined, {
+      text: "資料により確認できた事項\n・合成の説明です。\n根拠：文書 A.pdf p.3",
+    });
+    const label = `根拠：文書 A.pdf p.${precise ? "3" : "3-4"} の原文を開く`;
+    await expect(answer.getByRole("button", {name: label, exact: true})).toBeVisible();
+    await page.screenshot({path: testInfo.outputPath(`citation-range-${precise ? "single" : "multiple"}.png`)});
+    await answer.getByRole("button", {name: label, exact: true}).click();
+    expect((await openedSheet(page)).excerpt).toBe(item.text);
+    await expectNoPageOverflow(page);
+  });
+}

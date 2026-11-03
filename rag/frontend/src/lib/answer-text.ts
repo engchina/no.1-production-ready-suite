@@ -142,6 +142,8 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
 export interface AnswerCitationRef {
   fileName: string;
   page: number | null;
+  pageEnd?: number;
+  pageRanges?: readonly (readonly [number, number])[];
   /** 表計算のシート名（#1224）。頁の根拠では null。 */
   sheet?: string | null;
   /** シートの行の範囲（セル範囲から読む）。 */
@@ -149,7 +151,7 @@ export interface AnswerCitationRef {
   rowEnd?: number | null;
 }
 
-const CITATION_LINE = /^根拠：(.+?)(?:\s+p\.(\d*))?$/;
+const CITATION_LINE = /^根拠：(.+?)(?:\s+p\.([0-9]*(?:[-–][0-9]+)?(?:\s*,\s*[0-9]+(?:[-–][0-9]+)?)*)?)?$/;
 const SHEET_CITATION_LINE = /^根拠：(.+?)\s+シート「(.+)」(?:[A-Z]+(\d+):[A-Z]+(\d+))?$/;
 
 /**
@@ -178,9 +180,9 @@ export function parseCitationLine(line: string, format?: AnswerFormat): AnswerCi
       return { fileName: sheet.file.trim(), page: null, sheet: sheet.sheet,
         rowStart: rows?.[0] ? Number(rows[0]) : null, rowEnd: rows?.[1] ? Number(rows[1]) : null };
     }
-    const pagePattern = templatePattern(format.page_location ?? "p.{page}", { page: "(?<page>[0-9]*)" });
+    const pagePattern = templatePattern(format.page_location ?? "p.{page}", { page: "(?<page>[0-9]*(?:[-–][0-9]+)?(?:\\s*,\\s*[0-9]+(?:[-–][0-9]+)?)*)" });
     const page = new RegExp("^(?<file>.+?)\\s+" + pagePattern + "$").exec(body)?.groups;
-    if (page) return { fileName: page.file.trim(), page: page.page ? Number(page.page) : null };
+    if (page) return { fileName: page.file.trim(), ...parseCitationPages(page.page ?? "") };
     return body.trim() ? { fileName: body.trim(), page: null } : null;
   }
   const trimmed = line.trim();
@@ -200,7 +202,58 @@ export function parseCitationLine(line: string, format?: AnswerFormat): AnswerCi
   if (!match) return null;
   const fileName = match[1].trim();
   if (!fileName) return null;
-  return { fileName, page: match[2] ? Number(match[2]) : null };
+  return { fileName, ...parseCitationPages(match[2] ?? "") };
+}
+
+function parseCitationPages(value: string): Pick<AnswerCitationRef, "page" | "pageEnd" | "pageRanges"> {
+  if (!value) return { page: null };
+  const ranges: [number, number][] = [];
+  for (const part of value.split(/\s*,\s*/)) {
+    const [start, end = start] = part.split(/[-–]/).map(Number);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start <= 0 || end < start) return { page: null };
+    ranges.push([start, end]);
+  }
+  return { page: ranges[0][0],
+    ...(ranges.length === 1 && ranges[0][1] > ranges[0][0] ? { pageEnd: ranges[0][1] } : {}),
+    ...(ranges.length > 1 ? { pageRanges: ranges } : {}),
+  };
+}
+
+/** 保存済み本文は書き換えず、結び付いた根拠の確定範囲を引用ラベルに表示する。 */
+export function displayCitationLine(
+  line: string, ref: AnswerCitationRef | null, chunk: RetrievedChunk, ordinal?: number, format?: AnswerFormat,
+): string {
+  if (!ref || ref.page == null || ref.sheet || normalizedFileName(ref.fileName) !== normalizedFileName(chunk.file_name ?? "")) return line;
+  const [chunkStart, chunkEnd] = chunkPages(chunk);
+  const stored = chunk.metadata.answer_citation_page_ranges;
+  let ranges: (readonly [number, number])[] = Array.isArray(stored) ? stored.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || item.line !== ordinal) return [];
+    const start = integerMetadataValue(item.page_start), end = integerMetadataValue(item.page_end);
+    return start != null && end != null && start > 0 && start <= end && start <= chunkEnd && end >= chunkStart
+      ? [[Math.max(start, chunkStart), Math.min(end, chunkEnd)] as const] : [];
+  }) : [];
+  if (!ranges.length) {
+    // 終頁を持たない旧本文の先頭頁は、引用した子全体の先頭であり単頁確定とは限らない。
+    ranges = ref.pageRanges ? [...ref.pageRanges] : [[ref.page,
+      ref.pageEnd ?? (ref.page === chunkStart && chunk.metadata.answer_citation_provenance === PROVENANCE_CHILD ? chunkEnd : ref.page)]];
+  }
+  const regions = chunk.metadata.display_regions;
+  const pages = Array.isArray(regions) ? [...new Set(regions.flatMap((region) => {
+    const page = region && typeof region === "object" && !Array.isArray(region) ? integerMetadataValue(region.page) : null;
+    return page != null && ranges.some(([start, end]) => start <= page && page <= end) ? [page] : [];
+  }))].sort((a, b) => a - b) : [];
+  if (pages.length) {
+    ranges = [];
+    for (const page of pages) {
+      const previous = ranges[ranges.length - 1];
+      if (previous && previous[1] + 1 === page) ranges[ranges.length - 1] = [previous[0], page];
+      else ranges.push([page, page]);
+    }
+  }
+  const display = ranges.map(([start, end]) => start === end ? String(start) : `${start}-${end}`).join(",");
+  const location = (format?.page_location ?? "p.{page}").replace("{page}", display);
+  const at = line.lastIndexOf(ref.fileName);
+  return at < 0 ? line : `${line.slice(0, at + ref.fileName.length)} ${location}`;
 }
 
 function normalizedFileName(value: string): string {
@@ -234,7 +287,8 @@ export function matchCitation(ref: AnswerCitationRef, citations: readonly Retrie
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const candidate of candidates) {
     const [start, end] = chunkPages(candidate.chunk);
-    const distance = page < start ? start - page : page > end ? page - end : 0;
+    const ranges = ref.pageRanges ?? [[page, ref.pageEnd ?? page]];
+    const distance = Math.min(...ranges.map(([first, last]) => last < start ? start - last : first > end ? first - end : 0));
     if (distance < bestDistance) {
       best = candidate;
       bestDistance = distance;

@@ -15,6 +15,7 @@ import { answerPassageLabels, answerPassages, withoutPassageRecordSections } fro
 import {
   answerFormat,
   citationLocation,
+  displayCitationLine,
   parseAnswerText,
   parseCitationLine,
   resolveCitationLineTargets,
@@ -123,16 +124,17 @@ export function AnswerText({
     const targets = resolveCitationLineTargets(ordinal, ref, citations);
     if (!targets.length) return [{ key: `${ordinal}:${citation}`, label: citation }];
     return targets.map((target, index) => {
-      const label = targets.length === 1 ? citation : t(
+      const display = displayCitationLine(citation, ref, citations[target.index], ordinal, format);
+      const label = targets.length === 1 ? display : t(
         target.position.kind === "unresolved"
           ? "search.answerText.citationCandidates"
           : "search.answerText.citationPart",
-        { citation, number: index + 1, total: targets.filter((entry) => entry.position.kind === "exact").length },
+        { citation: display, number: index + 1, total: targets.filter((entry) => entry.position.kind === "exact").length },
       );
       return {
         key: `${ordinal}:${citations[target.index].document_id}:${citations[target.index].chunk_id ?? target.index}:${target.position.kind}`,
         label,
-        location: citationLocation(citation, ref?.fileName),
+        location: citationLocation(display, ref?.fileName),
         ariaLabel: t("search.answerText.openCitation", { citation: label }),
         onOpen: () => source.open(target),
       };
