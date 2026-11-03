@@ -2001,12 +2001,27 @@ class AnswerEngine:
         for anchor in anchors:
             scope = str(anchor.metadata.get(CONTEXT_PAGE_SCOPE, default_scope))
             scopes.setdefault(scope, []).append(anchor)
+        receipt = context_read_receipt()
         for scope, scoped_anchors in scopes.items():
             selected = [
                 state.chunks[item.chunk_uid]
                 for item in scoped_anchors
                 if item.chunk_uid in state.chunks
             ]
+            rejected = [
+                item.chunk_id
+                for item in selected
+                if not contained(item.document_id, item.metadata, scope)
+            ]
+            if receipt is not None and rejected:
+                receipt.reads.append(
+                    {
+                        "state": "scope_filtered",
+                        "anchor_scope_excluded_ids": rejected,
+                        "read_ids": [],
+                        "page_scope": scope,
+                    }
+                )
             selected = [
                 item for item in selected if contained(item.document_id, item.metadata, scope)
             ]
@@ -2015,7 +2030,6 @@ class AnswerEngine:
                 return json.dumps([item.chunk_id, page_scope], ensure_ascii=False)
 
             pending = [item for item in selected if cache_key(item) not in state.context_reads]
-            receipt = context_read_receipt()
             if pending:
                 with _search_stage(CONTEXT_SIBLINGS_STAGE, active=receipt is None):
                     siblings = original_chunks(

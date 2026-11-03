@@ -1006,6 +1006,7 @@ def _bundle_context(
             "重複除去後の読取 ID": sorted(read_ids),
             "既存の起点と重複する ID": sorted(read_ids & anchor_ids_before),
             "範囲外で除外した ID": sorted(scoped_out),
+            "範囲外の起点 ID": sorted({uid for read in receipt.reads for uid in read.get("anchor_scope_excluded_ids", [])}),
             "文脈への採用 Chunk 数": len(adopted),
             "採用 ID": sorted(adopted),
             "前方の採用 Chunk 数": len(adopted & before_ids) if adopted <= before_ids | after_ids else None,
