@@ -496,7 +496,7 @@ describe("ChatProgress", () => {
     expect(q("p-summary")!.textContent).toBe("処理の経過（2 ステップ・4.0 秒）");
   });
 
-  it("入れ子の工程は字下げし、計測値は名前の後ろの括弧、右の列に所要時間（durationMs）を出す。今の段階はいちばん内側（#2096 / #2265）", () => {
+  it("入れ子の工程は字下げし、回数だけの展開を作らず、右の列に所要時間を出す。今の段階はいちばん内側（#2096 / #2265）", () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse(at(5)));
     const nested: ChatProgressStep[] = [
@@ -514,6 +514,8 @@ describe("ChatProgress", () => {
     expect(search.textContent).toContain("1.6 秒");
     expect(q("p-step-understand")!.textContent).toContain("質問の理解");
     expect(q("p-step-understand")!.querySelector("[data-run-result-summary]")).toBeNull();
+    expect(q("p-step-understand")!.textContent).not.toContain("LLM 1 回");
+    expect(q("p-step-understand")!.querySelector("button[aria-expanded]")).toBeNull();
     expect(q("p-step-understand")!.textContent).toContain("0.1 秒");
     expect(q("p-step-understand")!.dataset.level).toBeUndefined();
     // 時刻の無い記録の全体の所要時間は、最上位の段階の和。

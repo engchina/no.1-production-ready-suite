@@ -161,7 +161,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
     const content = document.querySelector("[data-trace-inspector-content]");
     const text = content?.querySelector("[data-trace-timing] time")?.textContent ?? "";
     const groups = Array.from(content?.children ?? []).filter(element => ["data-trace-processing-content", "data-trace-timing", "data-trace-technical"].some(attribute => element.hasAttribute(attribute)));
-    return text.includes("(") && !text.includes("T00:") && content?.firstElementChild?.textContent?.includes("Span ID") === true
+    return text.includes("(") && !text.includes("T00:") && content?.querySelector("[data-trace-timing]")?.previousElementSibling?.textContent?.includes("Span ID") === true
       && groups[0]?.hasAttribute("data-trace-processing-content") === true
       && groups[1]?.hasAttribute("data-trace-timing") === true && groups[2]?.hasAttribute("data-trace-technical") === true;
   }, undefined)).toBe(true);
@@ -195,11 +195,12 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await check(inspector).toContainText("synthetic-stage-detail");
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-inspector-content]");
-    const blocks = content?.querySelectorAll(":scope > [data-trace-processing-content], :scope > [data-trace-timing]");
-    if (!content || !blocks || blocks.length !== 2) return false;
+    const timing = content?.querySelector(":scope > [data-trace-timing]");
+    const identifier = timing?.previousElementSibling;
+    if (!content || !timing || !identifier?.textContent?.includes("Span ID")) return false;
     const gap = parseFloat(getComputedStyle(content).rowGap);
-    const actual = blocks[1].getBoundingClientRect().top - blocks[0].getBoundingClientRect().bottom;
-    return gap > 0 && Math.abs(actual - gap) < 1 && blocks[1].textContent?.includes("開始時刻") === true;
+    const actual = timing.getBoundingClientRect().top - identifier.getBoundingClientRect().bottom;
+    return gap > 0 && Math.abs(actual - gap) < 1 && timing.textContent?.includes("開始時刻") === true;
   }, undefined)).toBe(true);
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-processing-content]");

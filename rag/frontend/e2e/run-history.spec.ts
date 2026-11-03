@@ -1199,7 +1199,9 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     for (const key of ["merge", "vector", "text", "rrf", "legacy"]) {
       await inspectTraceStep(page, timeline, spanStepId(key));
       const inspector = page.locator("[data-trace-inspector]");
-      await expect(inspector).toContainText("処理内の位置:");
+      await expect(inspector).not.toContainText("処理内の位置:");
+      await expect(inspector).not.toContainText("完全な処理経路");
+      await expect(inspector.locator("[data-trace-timing]").locator("xpath=preceding-sibling::*[1]")).toContainText("Span ID");
       if (key === "merge") await expect(inspector).toContainText("縮退: RuntimeError");
       if (key === "vector") {
         await expect(inspector).toContainText("A.pdf / ページ 2");
@@ -1209,11 +1211,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
       if (key === "text") {
         await expect(inspector).toContainText(purpose);
         await expect(inspector).toContainText("該当なし");
-        await expect(inspector.getByText("処理内の位置: 検索文から根拠の候補を集める", {exact: true})).toBeVisible();
-        const path = inspector.locator("details").filter({has: page.locator("summary", {hasText: "完全な処理経路"})});
-        await expect(path).not.toHaveAttribute("open", "");
-        await path.locator("summary").click();
-        await expect(path).toContainText("質問の条件を整理して回答を作る");
+
       }
       if (key === "rrf") {
         await expect(inspector).toContainText("2：1");
@@ -1581,6 +1579,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await mockRuns(page, [row]);
   await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
     { key: "root", spec: ragSpan.root(), at: [0, 8] },
+    { key: "counts-only", spec: ragSpan.step("回答生成フロー", "root"), at: [0, 8], params: { llm_calls: 4, llm_sends: 5 } },
     { key: "attachment-off", spec: ragSpan.technical("rag.attachment_evidence", "root"), status: "skipped", at: [0, 0.001] },
     { key: "stage", spec: ragSpan.technical("synthetic.stage", "root"), at: [7, 8], details: syntheticStageDetails },
     { key: "first-attempt", spec: ragSpan.technical("gen_ai.chat", "root"), status: "failed", at: [0, 0.1] },
@@ -1594,6 +1593,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await page.getByTestId("run-history-timeline-summary").click();
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("LLM 4 回");
   await confirmTraceExplorer(page, testInfo, expect, true);
 });
 

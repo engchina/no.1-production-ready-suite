@@ -270,16 +270,17 @@ function SummaryText({ icon: Icon, children }: { icon: LucideIcon; children: Rea
 
 /**
  * チャットの段階を処理の経過の行（`RunTimeline` の段）にする（#2265）。実行の詳細の写し（Agent など）も同じ関数を
- * 使い、補足（`detail`）と計測値（`meta`。LLM の回数など）を名前の後ろの括弧に並べ、入れ子の深さ（`level`）を落とさない。
+ * 使い、補足と軌跡だけの計測値を分け、入れ子の深さを保つ。
  */
 export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineStep {
-  const detail = [step.detail, step.meta].filter(Boolean).join("・");
+  const detail = step.detail;
   const result: RunTimelineStep = { id: step.id, label: step.label, status: step.status };
   if (step.operationName) result.operationName = step.operationName;
   if (step.startedAt) result.startedAt = step.startedAt;
   if (step.finishedAt) result.finishedAt = step.finishedAt;
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);
   if (detail) result.detail = detail;
+  if (step.meta) result.traceMeta = step.meta;
   if (step.level) result.level = step.level;
   if (step.parentId) result.parentId = step.parentId;
   if (step.product) result.product = step.product;
@@ -435,7 +436,7 @@ function CurrentStepRow({
     startedAt: step.startedAt,
   });
   const label = step.label;
-  const detail = [step.detail, step.meta].filter(Boolean).join("・");
+  const detail = step.detail;
   return (
     <div
       className="grid min-w-0"

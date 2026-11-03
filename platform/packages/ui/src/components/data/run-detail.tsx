@@ -551,6 +551,8 @@ export interface RunTimelineStep {
   durationMs?: number | null;
   /** 短い補足（対象の表・ツール名・件数・LLM の回数）。名前の後ろの括弧に出す。SQL 全文・エラーの全文は `children` に入れる。 */
   detail?: string;
+  /** 軌跡だけに表示する計測値。経過の詳細の有無には使わない。 */
+  traceMeta?: string;
   /** 段の右に並べるバッジ（token・試行の回数など）。 */
   meta?: ReactNode;
   /**
