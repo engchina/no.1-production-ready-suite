@@ -56,6 +56,30 @@ describe("formatChatProgressDuration", () => {
 });
 
 describe("ChatProgress", () => {
+  it.each(["done", "failed", "cancelled"] as const)("確定終端 %s は子の試行失敗より優先する", (terminalStatus) => {
+    const steps: ChatProgressStep[] = [
+      { id: "first", label: "合成の試行", status: "failed", startedAt: at(0), finishedAt: at(1) },
+      { id: "retry", label: "合成の再試行", status: "done", startedAt: at(1), finishedAt: at(2) },
+    ];
+    render(<ChatProgress steps={steps} terminalStatus={terminalStatus} active testId="p" />);
+    expect(q("p")!.dataset.chatProgressState).toBe(terminalStatus);
+    expect(q("p")!.getAttribute("aria-busy")).toBe("false");
+    expect(host.querySelector("details")!.open).toBe(terminalStatus === "failed");
+    if (terminalStatus !== "failed") act(() => q("p-summary")!.click());
+    expect(q("p-step-first")!.textContent).toContain("失敗");
+    expect(q("p-step-retry")!.textContent).toContain("完了");
+  });
+
+  it("終端未記録では稼働中を優先し、終わった旧記録の失敗は推測で成功にしない", () => {
+    const steps: ChatProgressStep[] = [{ id: "x", label: "合成の試行", status: "failed" }];
+    render(<ChatProgress steps={steps} active testId="p" />);
+    expect(q("p")!.dataset.chatProgressState).toBe("running");
+    render(<ChatProgress steps={steps} active={false} testId="p" />);
+    expect(q("p")!.dataset.chatProgressState).toBe("failed");
+    render(<ChatProgress steps={steps} terminalStatus="done" testId="p" />);
+    expect(q("p")!.dataset.chatProgressState).toBe("done");
+  });
+
   it("一部だけの記録は、開いた中身の段の一覧の後ろに案内を出す（#3226）", () => {
     const steps: ChatProgressStep[] = [{ id: "s1", label: "合成の工程", status: "done", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z" }];
     render(<ChatProgress steps={steps} partial testId="progress" />);

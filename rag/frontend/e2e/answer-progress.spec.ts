@@ -450,6 +450,7 @@ for (const viewport of [
     const summary = page.getByTestId("search-run-progress-summary");
     // 包む段（質問の条件を整理して回答を作る）も span の行になる（実行の全体の span は行にしない。#3226）。
     await expect(summary).toHaveText(/^処理の経過（4 ステップ・3\.6 秒）$/, { timeout: 4_000 });
+    await expect(page.getByTestId("search-run-progress")).toHaveAttribute("data-chat-progress-state", "done");
     await expect(page.getByText("銀行の得点は 82 点です。").first()).toBeVisible();
     // 完了したら一覧を閉じ（チャットと同じ。#2118）、押すと開く。
     const process = page.getByRole("region", { name: "処理の経過" });

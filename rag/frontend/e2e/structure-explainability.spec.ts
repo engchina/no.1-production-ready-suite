@@ -101,9 +101,10 @@ test("文書詳細で埋め込み base64 を畳んで本文を読みやすく表
   const textPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   await expect(textPanel).toBeVisible();
 
-  // base64 の生文字列は本文テキストとして現れない。
-  await expect(page.getByText(/iVBORw0KGgo/)).toHaveCount(0);
-  await expect(page.getByText(BASE64_FRAGMENT)).toHaveCount(0);
+  // 左の原本は取得が終わると原文の data URI を表示する。右の抽出本文と区別する。
+  await expect(page.getByTestId("document-preview-pane").getByText(/iVBORw0KGgo/)).toBeVisible();
+  await expect(textPanel.getByText(/iVBORw0KGgo/)).toHaveCount(0);
+  await expect(textPanel.getByText(BASE64_FRAGMENT)).toHaveCount(0);
   // 画像はサムネイル(alt 付き <img>)で描画される。
   await expect(
     textPanel.getByRole("img", { name: "抽出された埋め込み画像" }).first()

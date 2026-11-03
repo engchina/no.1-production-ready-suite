@@ -478,6 +478,7 @@ export function SearchClient() {
       }
       progressKey={!running || processSteps.length > 0 ? "steps" : "prepare"}
       active={running}
+      terminalStatus={phase === "done" ? "done" : phase === "error" ? "failed" : phase === "cancelled" ? "cancelled" : trace.terminal}
       startedAt={running ? run.startedAtMs : undefined}
       elapsedMs={
         running ? undefined : (meta?.elapsed_ms ?? (run.endedAtMs != null ? run.endedAtMs - run.startedAtMs : null))

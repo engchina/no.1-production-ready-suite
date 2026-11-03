@@ -708,3 +708,35 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await confirmTraceExplorer(page, testInfo, expect);
 });
+
+
+test("途中の試行失敗があっても保存された成功終端を表示する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const { run, progress: log } = seedRunningRun(mockApi);
+  run.status = "completed";
+  log.step("chat-1", "failed").step("chat-2", "done", { kind: "respond" }).terminal("done");
+  await page.goto("/chat");
+  await openThread(page);
+  const progress = page.getByTestId(`chat-turn-${RUN_ID}`).getByTestId("chat-progress");
+  await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+  await expect(progress.locator("details").first()).not.toHaveAttribute("open", "");
+  await progress.getByTestId("chat-progress-summary").click();
+  await expect(progress.locator('[data-status="failed"]')).toHaveCount(1);
+  const originalViewport = page.viewportSize()!;
+  for (const width of originalViewport.width > 375 ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: originalViewport.height });
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+      await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+      await expect(progress.locator('[data-status="failed"]')).toHaveCount(1);
+      await progress.screenshot({ path: testInfo.outputPath(`terminal-success-${width}-${theme}.png`) });
+    }
+  }
+  const summary = progress.locator("summary").first();
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(progress.locator("details").first()).not.toHaveAttribute("open", "");
+  await page.keyboard.press("Enter");
+  await expect(progress.locator("details").first()).toHaveAttribute("open", "");
+  await expectNoHorizontalOverflow(page);
+});

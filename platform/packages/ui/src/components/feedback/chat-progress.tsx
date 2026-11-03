@@ -18,6 +18,7 @@ import { Disclosure } from "../ui/disclosure";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Spinner } from "../ui/spinner";
 import { formatChatProgressDuration } from "./chat-progress-format";
+import type { ChatProgressTerminalStatus } from "./chat-progress-events";
 import { reduceChatProgressSteps, type ChatProgressStepsState } from "./chat-progress-steps";
 import { useLatchedSlow, useOperationTiming } from "./processing-state";
 
@@ -131,6 +132,8 @@ export interface ChatProgressProps {
   traceId?: string;
   activityIndicator?: boolean;
   cancelled?: boolean;
+  /** 実行記録の確定した終端。子の試行の失敗より優先し、個別行は変更しない。 */
+  terminalStatus?: ChatProgressTerminalStatus | null;
   steps: ChatProgressStep[];
   /**
    * 処理中か。省略時は段階から決める（実行中の段階がある、または失敗が無く待機中の段階が残る）。
@@ -517,7 +520,8 @@ export function ChatProgress({
   traceId,
   processDetailsProps,
   activityIndicator = true,
-  cancelled = false,
+  cancelled: cancelledProp = false,
+  terminalStatus,
   className,
   testId,
 }: ChatProgressProps) {
@@ -535,11 +539,13 @@ export function ChatProgress({
     details
   );
   // 終端の判定は配信の最新の一覧で行い、表示する一覧は処理中に段階を消さない・戻さない（#1358）。
-  const active = activeProp ?? isChatProgressActive(incomingSteps);
+  const terminal = terminalStatus ?? (cancelledProp ? "cancelled" : null);
+  const active = terminal === null && (activeProp ?? isChatProgressActive(incomingSteps));
+  const cancelled = terminal === "cancelled";
   const trackedSteps = useChatProgressSteps({ key: progressKey, steps: incomingSteps, active });
   // 最初の span が届くまでは全体の状態と経過時間だけを表示し、架空の工程は追加しない。
   const steps = trackedSteps;
-  const failed = !cancelled && steps.some((step) => step.status === "failed");
+  const failed = terminal !== null ? terminal === "failed" : steps.some((step) => step.status === "failed");
   const state: ProgressState = active ? "running" : cancelled ? "cancelled" : failed ? "failed" : "done";
   // 今の段階は、最後に始まった実行中の末端の段（子の段を持たない段）。子の段を持つ実行中の段（親の工程）は今の段階に
   // せず、開始順の位置に回さない実行中の印で出す（#2840 / #3436）。親の子が終わって次の子がまだ始まっていない間は、

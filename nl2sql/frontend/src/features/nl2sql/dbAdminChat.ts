@@ -11,8 +11,10 @@ import {
   chatProgressHasSpans,
   chatProgressStepsFromEvents,
   chatProgressTraceIdOf,
+  chatProgressTerminalOf,
   parseChatProgressEvents,
   type ChatProgressStep,
+  type ChatProgressTerminalStatus,
   type ChatProgressStepStatus,
   type TraceDetailsLabels,
 } from "@production-ready/ui";
@@ -159,6 +161,7 @@ export function dbAdminChatGenerateStep(
 
 /** 1 往復の処理の経過（#3226 の案 A）。 */
 export interface DbAdminChatProgress {
+  terminal: ChatProgressTerminalStatus | null;
   steps: ChatProgressStep[];
   traceId?: string;
   /** span の無い古い形式のターン（処理の経過の位置に古い形式の案内を出す）。 */
@@ -183,6 +186,7 @@ export function dbAdminChatTraceProgress(
   const partial = (trace?.droppedSpans ?? 0) > 0;
   return {
     steps,
+    terminal: chatProgressTerminalOf(events, turnId),
     ...(traceId ? { traceId } : {}),
     legacy: events.length > 0 && !chatProgressHasSpans(events) && !partial,
     partial,

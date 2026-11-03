@@ -1,4 +1,4 @@
-import { ChatProgress, RunProcessDetails, useTraceDetailsLabels, type ChatProgressStep } from "@production-ready/ui";
+import { ChatProgress, RunProcessDetails, useTraceDetailsLabels, type ChatProgressStep, type ChatProgressTerminalStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -27,6 +27,7 @@ import { SavedAnswerRecord } from "./SavedAnswerRecord";
 export function AnswerProcess({
   steps,
   active,
+  terminalStatus,
   startedAt,
   elapsedMs,
   reconnecting,
@@ -46,6 +47,7 @@ export function AnswerProcess({
   steps: ChatProgressStep[];
   /** 処理中か。省略時は段階から決める。 */
   active?: boolean;
+  terminalStatus?: ChatProgressTerminalStatus | null;
   /** 処理全体の開始（実行中の経過時間の起点）。 */
   startedAt?: string | number | null;
   /** 完了後の全体の所要時間。省略時は段階の時刻から。 */
@@ -103,6 +105,7 @@ export function AnswerProcess({
         <ChatProgress
           steps={rows}
           active={active}
+          terminalStatus={terminalStatus}
           startedAt={startedAt}
           elapsedMs={elapsedMs}
           reconnecting={reconnecting}

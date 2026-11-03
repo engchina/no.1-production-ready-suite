@@ -681,6 +681,7 @@ function DbAdminChatTurn({
           <ChatProgress
             // 生成したときの span の木（実行は経過に足さない。実行の表示は文の区画。#3226）。
             steps={progress.steps}
+            terminalStatus={progress.terminal}
             traceId={progress.traceId}
             processDetailsProps={{ metadata: { conversationId, messageId: turn.turn_id } }}
             footer={<RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model }] : []} />}

@@ -798,6 +798,10 @@ test("実行できない SQL は理由を出し、実行の操作を出さない
   await expect(turn.getByText("ALTER SYSTEM（インスタンスの設定・セッションの強制終了など）は実行できません。")).toBeVisible();
   await expect(turn.getByTestId("db-admin-chat-execute")).toHaveCount(0);
   await expect(turn.getByRole("textbox", { name: "実行確認語" })).toHaveCount(0);
+  const progress = turn.getByTestId("db-admin-chat-progress");
+  await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+  await progress.getByTestId("db-admin-chat-progress-summary").click();
+  await expect(progress.locator('[data-status="failed"]')).toHaveCount(1);
 });
 
 test("参照するオブジェクトに無い列の文は実際の列を添えた理由を出し、AI のエラー分析で直せる", { tag: "@responsive" }, async ({ page }) => {

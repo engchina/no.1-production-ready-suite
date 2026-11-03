@@ -91,6 +91,7 @@ export function OperationStatusStrip({
         startedAt={startedAtMs}
         elapsedMs={finalElapsed}
         cancelled={cancelled}
+        terminalStatus={cancelled ? "cancelled" : job.status === "done" ? "done" : job.status === "error" ? "failed" : progress.terminal}
         reconnecting={active && progress.failed}
         traceId={progress.traceId}
         processDetailsProps={{ metadata: { conversationId: null, messageId: job.job_id } }}
