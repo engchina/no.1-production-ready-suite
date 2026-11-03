@@ -1644,8 +1644,10 @@ class AnswerEngine:
                     )
                 details = fusion_details(fusion, weights, budgets, k)
                 execution = fusion.execution(budgets)
+                if execution in {"native_only", "additional_to_native"}:
+                    observation.display(params={"name": "追加の検索結果統合"})
                 if execution == "native_only":
-                    observation.display(params={"name": "追加の検索結果統合", "status": "skipped"})
+                    observation.display(params={"status": "skipped"})
                 observation.request(
                     {
                         "source_weights": budgets,

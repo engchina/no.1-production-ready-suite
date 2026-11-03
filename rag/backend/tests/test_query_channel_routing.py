@@ -81,6 +81,7 @@ async def test_terms_are_not_embedded_and_semantic_expansions_never_text_searche
     rrf = state.retrieval_stages[-1]["rrf"]
     assert [r["channel"] for r in rrf["lists"]] == ["hybrid", "vector", "keyword"]
     assert rrf["lists"][0]["score_source"] == "oracle_wrrf"
+    assert rrf["fusion_execution"] == "additional_to_native"
 
 
 def test_native_score_is_scaled_once_without_reciprocal_of_fused_rank() -> None:
