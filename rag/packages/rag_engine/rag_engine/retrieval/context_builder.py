@@ -16,6 +16,7 @@ from rag_engine.parsing.decorative_pictures import (
     visual_role_from_ref,
 )
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
+from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.retrieval.article_catalog import is_added_catalog_article, is_catalog_article
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
@@ -396,17 +397,36 @@ def build_chunk_context_bundle(request: ContextBuildRequest) -> ContextBundle:
             selected_groups.add(id(group))
     # 非親子の前後は同じ成果物の保存順から選び、原文の個別 record として回答へ渡す。
     neighbors: dict[str, Any] = {}
+    receipt = context_read_receipt()
     for group in selected:
         for anchor in tuple(group.children.values()):
             if anchor.role != "retrieved_anchor" or _uses_parent_context(anchor.record):
                 continue
             siblings = children_by_parent.get(_child_sibling_context_key(anchor.record), [])
-            for neighbor in _chunk_neighbors(anchor.record, siblings, request.neighbor_child_count):
+            candidates = _chunk_neighbors(anchor.record, siblings, request.neighbor_child_count)
+            if receipt is not None:
+                receipt.selection.append(
+                    {
+                        "anchor_id": record_context_key(anchor.record),
+                        "eligible_neighbor_ids": [record_context_key(item) for item in candidates],
+                        "reason": (
+                            "disabled" if request.neighbor_child_count <= 0 else "no_available_neighbors" if not candidates else None
+                        ),
+                    }
+                )
+            for neighbor in candidates:
                 key = record_context_key(neighbor)
                 if key not in {record_context_key(entry.record) for entry in selected}:
                     neighbors.setdefault(key, neighbor)
-    for neighbor in neighbors.values():
+                elif receipt is not None:
+                    receipt.selection.append({"chunk_id": key, "reason": "already_in_context"})
+    for neighbor_index, neighbor in enumerate(neighbors.values()):
         if len(selected) >= request.max_records + len(added_children):
+            if receipt is not None:
+                receipt.selection.extend(
+                    {"chunk_id": record_context_key(item), "reason": "context_record_limit"}
+                    for item in list(neighbors.values())[neighbor_index:]
+                )
             break
         group = group_for_child(neighbor)
         if group is None or id(group) in selected_groups:

@@ -44,9 +44,10 @@ from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, obs
 from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
+from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.resources.deadline import DeadlineExceeded, check_deadline, current_deadline
 from rag_engine.resources.runtime import saved_prompt_overrides
-from rag_engine.resources.tracing import observe_call
+from rag_engine.resources.tracing import CallObservation, observe_call
 from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.search_stages import (
@@ -1768,7 +1769,16 @@ class AnswerEngine:
                 state.fused_ranks[chunk_id] = (rank, fused[chunk_id])
         siblings: list[RetrievedChunk] = []
         if not defer_context:
-            with _search_stage(CONTEXT_SIBLINGS_STAGE, active=bool(anchors)):
+            with _search_stage(CONTEXT_SIBLINGS_STAGE, active=bool(anchors)) as observation:
+                if observation is not None:
+                    observation.request(
+                        {
+                            "前後それぞれの最大 Chunk 数": self._settings.rag_neighbor_child_count,
+                            "起点根拠数": len(anchors),
+                            "起点根拠 ID": [item.chunk_id for item in anchors],
+                            "ページ範囲": context_scope,
+                        }
+                    )
                 siblings = original_chunks(
                     await self._oracle.context_group_siblings(
                         [
@@ -1781,6 +1791,23 @@ class AnswerEngine:
                         neighbor_child_count=self._settings.rag_neighbor_child_count,
                     )
                 )
+                if observation is not None:
+                    observation.response(
+                        {
+                            "読取 Chunk 数": len({item.chunk_id for item in siblings}),
+                            "読取 ID": sorted({item.chunk_id for item in siblings}),
+                            "範囲外で除外した ID": sorted(
+                                {
+                                    item.chunk_id
+                                    for item in siblings
+                                    if not contained(item.document_id, item.metadata, context_scope)
+                                }
+                            ),
+                            "最終採用": (
+                                "この経路は読み取り段階です。回答文脈への最終採用は未記録です。"
+                            ),
+                        }
+                    )
         siblings = [
             chunk
             for chunk in siblings
@@ -1988,12 +2015,27 @@ class AnswerEngine:
         for anchor in anchors:
             scope = str(anchor.metadata.get(CONTEXT_PAGE_SCOPE, default_scope))
             scopes.setdefault(scope, []).append(anchor)
+        receipt = context_read_receipt()
         for scope, scoped_anchors in scopes.items():
             selected = [
                 state.chunks[item.chunk_uid]
                 for item in scoped_anchors
                 if item.chunk_uid in state.chunks
             ]
+            rejected = [
+                item.chunk_id
+                for item in selected
+                if not contained(item.document_id, item.metadata, scope)
+            ]
+            if receipt is not None and rejected:
+                receipt.reads.append(
+                    {
+                        "state": "scope_filtered",
+                        "anchor_scope_excluded_ids": rejected,
+                        "read_ids": [],
+                        "page_scope": scope,
+                    }
+                )
             selected = [
                 item for item in selected if contained(item.document_id, item.metadata, scope)
             ]
@@ -2003,7 +2045,7 @@ class AnswerEngine:
 
             pending = [item for item in selected if cache_key(item) not in state.context_reads]
             if pending:
-                with _search_stage(CONTEXT_SIBLINGS_STAGE):
+                with _search_stage(CONTEXT_SIBLINGS_STAGE, active=receipt is None):
                     siblings = original_chunks(
                         await self._oracle.context_group_siblings(
                             [
@@ -2018,9 +2060,34 @@ class AnswerEngine:
                             neighbor_child_count=self._settings.rag_neighbor_child_count,
                         )
                     )
+                read_siblings = siblings
                 siblings = [
                     item for item in siblings if contained(item.document_id, item.metadata, scope)
                 ]
+                if receipt is not None:
+                    receipt.reads.append(
+                        {
+                            "anchor_ids": [item.chunk_id for item in pending],
+                            "neighbor_child_count": self._settings.rag_neighbor_child_count,
+                            "page_scope": scope,
+                            "state": "read",
+                            "read_ids": [item.chunk_id for item in read_siblings],
+                            "scope_excluded_ids": [
+                                item.chunk_id
+                                for item in read_siblings
+                                if not contained(item.document_id, item.metadata, scope)
+                            ],
+                            "relations": [
+                                {
+                                    "anchor_id": item.metadata.get("context_anchor_chunk_id"),
+                                    "chunk_id": item.chunk_id,
+                                    "distance": item.metadata.get("context_group_distance"),
+                                    "purpose": item.metadata.get("context_group_purpose"),
+                                }
+                                for item in siblings
+                            ],
+                        }
+                    )
                 for item in pending:
                     state.context_reads[cache_key(item)] = [
                         sibling
@@ -2032,6 +2099,24 @@ class AnswerEngine:
                     ]
                 for item in siblings:
                     state.chunks.setdefault(item.chunk_id, item)
+            if receipt is not None:
+                cached = [item for item in selected if item not in pending]
+                if cached:
+                    receipt.reads.append(
+                        {
+                            "anchor_ids": [item.chunk_id for item in cached],
+                            "page_scope": scope,
+                            "state": "reused",
+                            "read_ids": [],
+                            "reused_ids": sorted(
+                                {
+                                    child.chunk_id
+                                    for item in cached
+                                    for child in state.context_reads.get(cache_key(item), ())
+                                }
+                            ),
+                        }
+                    )
             chunks = {item.chunk_id: item for item in selected}
             for anchor in selected:
                 chunks.update(
@@ -3456,7 +3541,9 @@ def _json_list(value: object) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
-def _search_stage(name: str, *, active: bool = True) -> AbstractContextManager[object]:
+def _search_stage(
+    name: str, *, active: bool = True
+) -> AbstractContextManager[CallObservation | None]:
     """文書の検索の中の工程の段(``observe_call("stage", name)``。#3464)。
 
     DB の検索の段(``OracleClient`` のベクトル検索・全文検索)と同じ仕組みで、回答の工程の span

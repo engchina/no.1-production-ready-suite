@@ -1,0 +1,172 @@
+{
+  "section": {
+    "input": {
+      "有効": true,
+      "広げる段の上限": 1,
+      "根拠入力の上限 token": 64000,
+      "根拠入力の上限（%）": 50,
+      "予約 token": 0,
+      "起点根拠数": 1,
+      "準備した章節範囲": [
+        {
+          "seed_id": "c31a",
+          "document_id": "doc-1",
+          "chunk_set_id": "cs-1",
+          "origin_section_id": "s3-1",
+          "sections": [
+            {
+              "section_id": "s3-1",
+              "page_start": 5,
+              "page_end": 5
+            },
+            {
+              "section_id": "s3",
+              "page_start": 5,
+              "page_end": 7
+            },
+            {
+              "section_id": "document",
+              "page_start": 1,
+              "page_end": 8
+            }
+          ]
+        }
+      ],
+      "実行段階": "main"
+    },
+    "output": {
+      "読取章節数": 1,
+      "読了した章節数": 1,
+      "新規読取 Chunk 数": 2,
+      "読み取り候補のうち既存文脈と重複する ID": [
+        "c31a"
+      ],
+      "前後文脈と重複する ID": [],
+      "重複除去後の新規採用 Chunk 数": 1,
+      "新規採用 ID": [
+        "c31b"
+      ],
+      "実際に内容を補充した章節数": 1,
+      "起点と章節・内容の対応": [
+        {
+          "document_id": "doc-1",
+          "chunk_set_id": "cs-1",
+          "section_id": "s3-1",
+          "origin_section_id": "s3-1",
+          "page_start": 5,
+          "page_end": 5,
+          "state": "read",
+          "child_ids": [
+            "c31a",
+            "c31b"
+          ],
+          "reason": null,
+          "expected_chunk_count": 2,
+          "seed_ids": [
+            "c31a"
+          ],
+          "adopted_child_ids": [
+            "c31a",
+            "c31b"
+          ],
+          "newly_adopted_child_ids": [
+            "c31b"
+          ],
+          "already_in_context_ids": [
+            "c31a"
+          ]
+        }
+      ],
+      "読取結果": [
+        {
+          "level": 1,
+          "sections": [
+            {
+              "section_id": "s3-1",
+              "title": "3.1 空調",
+              "is_document": false,
+              "read": "whole",
+              "added_parents": 1
+            }
+          ],
+          "labels": [
+            "「点検要領.pdf」の「第3章 設備ごとの点検 > 3.1 空調」（p.5）"
+          ],
+          "added_parents": 1,
+          "grade_skipped": "not_requested"
+        }
+      ],
+      "停止理由": "必要な範囲まで読んだ",
+      "未読": [],
+      "最終採用の意味": "この工程後の回答文脈への採用。モデルによる引用数ではありません。"
+    }
+  },
+  "neighbor": {
+    "input": {
+      "前後それぞれの最大 Chunk 数": 1,
+      "起点根拠数": 1,
+      "起点根拠 ID": [
+        "c2"
+      ],
+      "文脈の最大レコード数": 10
+    },
+    "output": {
+      "読み取り記録": [
+        {
+          "state": "read",
+          "read_ids": [
+            "c1",
+            "c1",
+            "c2",
+            "c3"
+          ],
+          "scope_excluded_ids": [],
+          "relations": [
+            {
+              "chunk_id": "c1",
+              "distance": -1,
+              "purpose": "neighbor_context"
+            },
+            {
+              "chunk_id": "c3",
+              "distance": 1,
+              "purpose": "neighbor_context"
+            }
+          ]
+        }
+      ],
+      "読取 Chunk 数": 3,
+      "範囲適用後の読取 Chunk 数": 3,
+      "重複除去後の新規読取 Chunk 数": 2,
+      "重複除去後の読取 ID": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "既存の起点と重複する ID": [
+        "c2"
+      ],
+      "範囲外で除外した ID": [],
+      "文脈への採用 Chunk 数": 2,
+      "採用 ID": [
+        "c1",
+        "c3"
+      ],
+      "前方の採用 Chunk 数": 1,
+      "後方の採用 Chunk 数": 1,
+      "最終採用の意味": "この工程後の回答文脈への採用。モデルによる引用数ではありません。",
+      "選択時の除外": [],
+      "隣接候補の選択記録": [
+        {
+          "anchor_id": "chunk_uid:c2",
+          "eligible_neighbor_ids": [
+            "chunk_uid:c1",
+            "chunk_uid:c3"
+          ],
+          "reason": null
+        }
+      ],
+      "実行状態": "実行済み"
+    }
+  }
+}

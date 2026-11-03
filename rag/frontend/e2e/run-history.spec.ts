@@ -1,3 +1,4 @@
+import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
 import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
 import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
@@ -1635,6 +1636,43 @@ test("旧集約だけの履歴は照合済みと表示せず、実行結果を�
   await expect(page.getByRole("main")).not.toContainText("照合済み");
   await page.goto("/history/run-2");
   await expect(page.getByRole("main")).not.toContainText("照合済み");
+  await expectNoPageOverflow(page);
+});
+
+
+test("前後文脈と章節の読取・採用・重複を入力と結果で分けて確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1, { question: "合成の質問", answer: "合成の回答" });
+  await mockRuns(page, [row]);
+  const detail = (value: { input: unknown; output: unknown }) => ({ call: {
+    visibility: "owner", input: { status: "recorded", text: JSON.stringify(value.input, null, 2) },
+    output: { status: "recorded", text: JSON.stringify(value.output, null, 2) }, schema: { status: "not_applicable" },
+  } });
+  await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
+    { key: "root", spec: ragSpan.root(), at: [0, 2] },
+    { key: "neighbor", spec: ragSpan.step("前後の文脈の読み込み", "root"), at: [0, 1], details: detail(contextExpansionTrace.neighbor) },
+    { key: "section", spec: ragSpan.step("章節の拡張", "root"), at: [1, 2], details: detail(contextExpansionTrace.section) },
+    { key: "legacy", spec: ragSpan.step("章節の拡張", "root"), at: [1, 2] },
+  ]) });
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  for (const key of ["neighbor", "section"]) {
+    await inspectTraceStep(page, timeline, spanStepId(key));
+    const inspector = page.locator("[data-trace-inspector]");
+    await inspector.getByRole("tab", { name: "入力", exact: true }).click();
+    await expect(inspector).toContainText(key === "neighbor" ? "前後それぞれの最大 Chunk 数" : "準備した章節範囲");
+    await inspector.screenshot({ path: testInfo.outputPath(`${key}-input.png`) });
+    await inspector.getByRole("tab", { name: "結果", exact: true }).click();
+    await expect(inspector).toContainText(key === "neighbor" ? "文脈への採用 Chunk 数" : "重複除去後の新規採用 Chunk 数");
+    await expect(inspector).toContainText(key === "neighbor" ? "c3" : "c31b");
+    await inspector.screenshot({ path: testInfo.outputPath(`${key}-output.png`) });
+    await page.locator("[data-trace-explorer]").getByRole("button", { name: "経過に戻る", exact: true }).click();
+  }
+  await inspectTraceStep(page, timeline, spanStepId("legacy"));
+  const inspector = page.locator("[data-trace-inspector]");
+  await inspector.getByRole("tab", { name: "入力", exact: true }).click();
+  await expect(inspector).toContainText("記録されていません");
   await expectNoPageOverflow(page);
 });
 

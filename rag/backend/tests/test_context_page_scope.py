@@ -180,3 +180,38 @@ async def test_unscoped_search_keeps_original_context() -> None:
         "chunk-1",
         "chunk-2",
     }
+
+
+async def test_neighbor_read_receipt_preserves_scope_exclusion_and_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rag_engine.resources.context_expansion_trace import bind_context_read_receipt
+
+    values = [chunk("chunk-1", 1), chunk("chunk-2", 2), chunk("chunk-3", 3)]
+    oracle = FakeOracle()
+
+    async def siblings(anchors: list[RetrievedChunk], **kwargs: Any) -> list[RetrievedChunk]:
+        return [values[0], values[0], values[2]]
+
+    monkeypatch.setattr(oracle, "context_group_siblings", siblings)
+    state = _SearchState(chunks={item.chunk_id: item for item in values}, filters={})
+    engine = AnswerEngine(Settings(), oracle=cast(Any, oracle), genai=cast(Any, FakeGenAi()))
+    anchor = _stored_chunk_answer_record(
+        _with_context_scope(_stored_child(values[1], rrf_score=1), scope(2, 3))
+    )
+    with bind_context_read_receipt() as receipt:
+        rows = await engine._context_chunks(state, anchors=[anchor])
+    assert {item.chunk_uid for item in rows} == {"chunk-2", "chunk-3"}
+    assert receipt.reads[0]["read_ids"] == ["chunk-1", "chunk-1", "chunk-3"]
+    assert receipt.reads[0]["scope_excluded_ids"] == ["chunk-1", "chunk-1"]
+    with bind_context_read_receipt() as reused:
+        await engine._context_chunks(state, anchors=[anchor])
+    assert reused.reads == [
+        {
+            "anchor_ids": ["chunk-2"],
+            "page_scope": scope(2, 3),
+            "state": "reused",
+            "read_ids": [],
+            "reused_ids": ["chunk-3"],
+        }
+    ]
