@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from citation_unit_support import without_unit_annotations
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
@@ -116,7 +117,7 @@ def test_new_view_numbers_each_physical_line_and_extracts_the_cited_lines() -> N
     prompt = grounded.format_functions([evidence])
     view = grounded._citation_view(evidence)
     assert view.contract_version == grounded.CITATION_UNIT_CONTRACT == "explicit_units_v5"
-    assert "1| 画面Aで対象を選ぶ。\n2| 保存を押して閉じる。" in prompt
+    assert "1| 画面Aで対象を選ぶ。\n2| 保存を押して閉じる。" in without_unit_annotations(prompt)
     quoted, error = grounded.cited_quote(item(1, 2), [evidence])
     assert not error and quoted.quote == TWO
     assert grounded._citation_extraction(quoted)["citation_unit_contract"] == "explicit_units_v5"

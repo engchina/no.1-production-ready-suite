@@ -2895,6 +2895,16 @@ def synthesize_grounded_answer(
                         generation_system, grounded.resolve_prompt("generation.assumptionSystem", grounded.ASSUMPTION_SYSTEM_PROMPT)
                     )
                 preparing_evidence = True
+
+                def selected_generation_schema(
+                    values: Sequence[dict[str, Any]],
+                    *,
+                    guided: bool = bool(runtime_knowledge is not None and runtime_knowledge.guide_step_contracts),
+                ) -> Mapping[str, Any]:
+                    return grounded.generation_output_model(
+                        question, guided=guided, unit_catalog=grounded.generation_unit_catalog(values)
+                    ).model_json_schema()
+
                 spans, prompt, input_diagnostic = prepare_batched_evidence(
                     spans,
                     generation_settings,
@@ -2907,6 +2917,7 @@ def synthesize_grounded_answer(
                     render=render_generation,
                     evidence_text=grounded.evidence_block_text,
                     system=generation_system,
+                    schema_for=selected_generation_schema,
                     schema=grounded.generation_output_model(
                         question, guided=bool(runtime_knowledge is not None and runtime_knowledge.guide_step_contracts)
                     ).model_json_schema(),

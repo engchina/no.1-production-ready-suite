@@ -294,6 +294,8 @@ class GroundedCitation(_StrictModel):
     _extraction: dict[str, str] = PrivateAttr(default_factory=dict)
     # 生成用の整数範囲からの変換記録。None は保存済みの lines 形式で、モデルの出力には含めない。
     _wire_range: tuple[int | None, int | None] | None = PrivateAttr(default=None)
+    # この呼び出しで送達した不変の原文単位。モデルの出力や保存済み JSON から設定しない。
+    _unit_binding: Any = PrivateAttr(default=None)
 
     evidence_id: str = Field(description="根拠の先頭にある [E1] 形式の番号（角括弧なし）。")
     lines: str = Field(
@@ -553,6 +555,8 @@ class GroundedDraft(_StrictModel):
     _provider_output_text: str | None = PrivateAttr(default=None)
     # 検証の前に最初の 1 件へ寄せた、同じ内容の entry の数（欄ごと。#3849）。原文は _provider_output_text に残る。
     _collapsed_duplicates: dict[str, int] = PrivateAttr(default_factory=dict)
+    # 同じ回答の修正では、要求計画の表示番号も送達時の版へ結ぶ（公開の JSON へは含めない）。
+    _citation_snapshots: tuple[Any, ...] = PrivateAttr(default=())
 
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"

@@ -12,6 +12,7 @@ from rag_engine.generation.citation_wire import bind_wire_range
 from rag_engine.resources.structured_failures import failure_summary_fields, longest_validation_errors, structured_failure_details
 
 RANGE_INVALID_CODE = "batch_range_invalid"
+UNIT_INVALID_CODE = "batch_unit_invalid"
 _PROTOCOL_CODES = {RANGE_INVALID_CODE}
 _MAX_MISMATCH_SAMPLES = 8
 
@@ -96,6 +97,16 @@ def batch_validation_detail(error: Exception, schema: Mapping[str, Any]) -> dict
         rows = error.errors(include_input=False, include_url=False)
         for safe, row in zip(detail.get("validation_errors", []), rows, strict=False):
             # msg / input / 任意の ctx は渡さず、既知の固定コードだけを採用する。
+            location = row.get("loc", ())
+            if (
+                row.get("type") == "literal_error"
+                and len(location) == 4
+                and location[0] == "findings"
+                and isinstance(location[1], int)
+                and location[2] == "unit_ids"
+                and isinstance(location[3], int)
+            ):
+                safe["protocol_code"] = UNIT_INVALID_CODE
             protocol_error = (row.get("ctx") or {}).get("error")
             if isinstance(protocol_error, ValueError) and protocol_error.args in [(code,) for code in _PROTOCOL_CODES]:
                 safe["protocol_code"] = protocol_error.args[0]
@@ -145,6 +156,10 @@ def batch_repair_prompt(original: str, detail: Mapping[str, Any]) -> str:
         "前の読取結果は指定形式の検査を通りませんでした。次の指摘を直し、同じ入力全体について完全な読取結果を返してください。",
     ]
     errors = detail.get("validation_errors", [])
+    if any(entry.get("protocol_code") == UNIT_INVALID_CODE for entry in errors):
+        guidance.append(
+            "unit_ids には、同じ入力の原文の隣に表示された引用単位 ID だけを選んでください。存在しない ID を作らないでください。"
+        )
     mismatches = [entry["range_mismatch"] for entry in errors if entry.get("range_mismatch")]
     if mismatches:
         guidance.append(

@@ -17,15 +17,16 @@ from rag_engine.generation.citation_wire import generation_draft_wire_model
         (2, 999, "citation_range_out_of_bounds"),
     ],
 )
-def test_run_round_uses_integer_wire_and_preserves_unverified_body(start, end, expected):
+def test_legacy_integer_wire_is_still_checked_and_preserves_unverified_body(start, end, expected):
     evidence = spans()
     text = "対象を選択して内容を保存します。"
     calls = []
 
     def generate(system, prompt, settings, schema, **kwargs):
         calls.append(schema)
-        assert schema is generation_draft_wire_model()
-        return schema.model_validate(
+        assert issubclass(schema, generation_draft_wire_model())
+        # 保存済みの整数契約は従来の厳格な範囲検査を保つ。
+        return generation_draft_wire_model().model_validate(
             {
                 "items": [
                     {

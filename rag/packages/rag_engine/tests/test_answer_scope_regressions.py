@@ -411,7 +411,7 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
 
     def parse(system, prompt, settings, schema, **options):
         calls.append(schema)
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             return schema.model_validate({"request_coverage": [plan]})
         assert other not in prompt
         return model(system, prompt, settings, schema, **options)
@@ -426,7 +426,9 @@ def test_missing_section_metadata_is_planned_before_the_answer_and_cannot_be_ove
     assert correct in result.answer_text and other not in result.answer_text
     from rag_engine.generation.citation_wire import generation_draft_wire_model
 
-    assert calls == [RequestScopePlan, generation_draft_wire_model()]
+    assert len(calls) == 2
+    assert issubclass(calls[0], RequestScopePlan)
+    assert issubclass(calls[1], generation_draft_wire_model())
     assert result.generation_trace["llm_calls"] == 2
 
 

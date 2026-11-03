@@ -1,6 +1,7 @@
 """選択済み根拠の全文被覆と容量内の分割読取・統合を合成本文で確認する。"""
 
 import json
+import re
 from collections import defaultdict
 from dataclasses import replace
 
@@ -44,10 +45,14 @@ def span(index, text):
 
 def body(value):
     """入力の本文から行頭の番号を除く（改行を含む単位の間は問わない）。"""
-    return "".join(line.split("| ", 1)[1] for line in value["text"].split("\n"))
+    return "".join(re.sub(r"^\[U[0-9a-f]{24}\] ", "", line.split("| ", 1)[1]) for line in value["text"].split("\n"))
 
 
 def finding(value, answer="合成の回答", first=1, last=None):
+    ids = re.findall(r"(?m)^B\d+-\d+\| \[(U[0-9a-f]{24})\] ", value["text"])
+    if ids:
+        selected = ids[first - 1 : first if last is None else last]
+        return {"unit_ids": selected or ["unknown-unit"], "answer": answer}
     label = value["evidence_id"]
     return {"start_line": f"{label}-{first}", "end_line": f"{label}-{first if last is None else last}", "answer": answer}
 
@@ -62,11 +67,7 @@ def test_twelve_parents_and_oversized_parent_are_read_without_character_loss():
             seen[source["source"]].append(body(source))
         return schema.model_validate(
             {
-                "findings": [
-                    finding(s, answer=body(s).split("。", 1)[0])
-                    for s in payload["evidence"]
-                    if s["text"].split("| ", 1)[1].startswith("条件")
-                ],
+                "findings": [finding(s, answer=body(s).split("。", 1)[0]) for s in payload["evidence"] if body(s).startswith("条件")],
             }
         )
 
@@ -192,12 +193,10 @@ def test_synthesis_reads_all_twelve_parents_before_final_answer(monkeypatch):
             inputs = json.loads(prompt)["evidence"]
             seen.update(s["source"] for s in inputs)
             return schema(
-                findings=[
-                    finding(s, answer=body(s).split("。", 1)[0] + "。") for s in inputs if s["text"].split("| ", 1)[1].startswith("条件")
-                ],
+                findings=[finding(s, answer=body(s).split("。", 1)[0] + "。") for s in inputs if body(s).startswith("条件")],
             )
         assert seen == {r.source for r in records}
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             return schema(request_coverage=[])
         assert "分割読取の回答候補" in prompt
         return GroundedDraft(
@@ -297,17 +296,15 @@ def test_concurrent_readers_keep_inputs_separate():
 
 
 @pytest.mark.parametrize(
-    ("first_range", "reason"),
+    ("invalid_selection", "error_type"),
     [
-        (("B9-1", "B9-1"), "evidence_id_unknown"),
-        (("B1-9999", "B1-9999"), "range_out_of_bounds"),
-        (("B1-2", "B1-1"), "range_inverted"),
-        (("B1-1", "B2-1"), "range_across_inputs"),
-        (("1", "2"), "line_label_invalid"),
+        ({"unit_ids": ["unknown"]}, "literal_error"),
+        ({"unit_ids": []}, "too_short"),
+        ({"start_line": "B1-1", "end_line": "B1-9999"}, "extra_forbidden"),
     ],
-    ids=["unknown_input", "out_of_bounds", "inverted", "across_inputs", "not_a_label"],
+    ids=["unknown_unit", "no_unit", "free_integer_range"],
 )
-def test_invalid_range_uses_existing_structured_output_retry(first_range, reason):
+def test_invalid_unit_selection_uses_existing_structured_output_retry(invalid_selection, error_type):
     from rag_engine.adapters.oci import _parse_with_retry
 
     calls = 0
@@ -324,11 +321,11 @@ def test_invalid_range_uses_existing_structured_output_retry(first_range, reason
             calls += 1
             row = finding(values[0])
             if calls == 1:
-                row = {**row, "start_line": first_range[0], "end_line": first_range[1]}
+                row = {**invalid_selection, "answer": "合成の回答"}
             try:
                 return schema.model_validate({"findings": [row]})
             except ValidationError as exc:
-                reasons.append(exc.errors()[0]["ctx"]["error"].diagnostic["reasons"])
+                reasons.append({entry["type"] for entry in exc.errors()})
                 raise
 
         return _parse_with_retry(operation, "synthetic", config(), retries=0)
@@ -336,7 +333,7 @@ def test_invalid_range_uses_existing_structured_output_retry(first_range, reason
     inputs = [span(i, "合成の本文。" * 200) for i in range(4)]
     _, _, diagnostic = prepare(inputs, read)
     assert calls == batches + 1
-    assert reasons == [{reason: 1}]
+    assert len(reasons) == 1 and error_type in reasons[0]
     assert diagnostic["read_source_count"] == 4
 
 
@@ -346,9 +343,9 @@ def test_code_cuts_the_verbatim_original_from_the_selected_lines():
     original = {**span(0, text), "start": 300, "end": 300 + len(text)}
 
     def read(system, prompt, schema):
-        assert "quote" not in schema.model_json_schema()["$defs"]["BatchFinding"]["properties"]
+        assert set(schema.model_json_schema()["$defs"]["UnitBatchFinding"]["properties"]) == {"unit_ids", "answer"}
         values = json.loads(prompt)["evidence"]
-        first_input = values[0]["text"].startswith("B1-1| 第一の条件です。\nB1-2| 第二の条件です。")
+        first_input = body(values[0]).startswith("第一の条件です。第二の条件です。")
         return schema(findings=[finding(values[0], first=2, last=3)] if first_input else [])
 
     selected, _, diagnostic = prepare([original], read)
@@ -368,7 +365,7 @@ def test_a_long_line_without_a_break_is_split_into_selectable_units():
     assert "".join(text[start:end] for start, end in units) == text
 
 
-def test_rejected_range_reaches_the_final_generation_with_the_original_and_no_generation_failure():
+def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_generation():
     """#4090: 1 件の範囲の不合格で組全体を退避にせず、原文を根拠に最終生成へ進む。不合格の answer は渡さない。"""
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation import answering
@@ -388,10 +385,20 @@ def test_rejected_range_reaches_the_final_generation_with_the_original_and_no_ge
         for i in range(4)
     ]
     generated: list[str] = []
+    batches = 0
 
     def model(system, prompt, settings, schema, **kwargs):
+        nonlocal batches
         if issubclass(schema, BatchReading):
-            return schema.model_validate({"findings": [{"start_line": "B1-9999", "end_line": "B1-9999", "answer": "採らない合成の回答"}]})
+            batches += 1
+            values = json.loads(prompt)["evidence"]
+            return schema.model_validate(
+                {
+                    "findings": [{"unit_ids": ["unknown"], "answer": "採らない合成の回答"}]
+                    if batches == 1
+                    else [finding(row) for row in values]
+                }
+            )
         assert issubclass(schema, generation_draft_wire_model())
         generated.append(prompt)
         return schema.model_validate({"summary": "", "confidence": "low", "items": [{"kind": "gap", "text": "合成の不足"}]})

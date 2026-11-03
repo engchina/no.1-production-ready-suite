@@ -62,6 +62,7 @@ from rag_engine.generation.audit_recovery import merge_audit_retry
 from rag_engine.generation.check_cues import check_cues
 from rag_engine.generation.citation_content import citation_content_unusable
 from rag_engine.generation.citation_locator import EVIDENCE_LABEL, clean_evidence_locators
+from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog, unit_generation_model, unit_scope_model
 from rag_engine.generation.citation_wire import (
     bind_wire_range,
     canonical_generation_draft,
@@ -168,7 +169,7 @@ GENERATE_SYSTEM_PROMPT = (
 - guide_task_scope は業務ガイドと確認済み条件で決まった本問の要求範囲。required=true の手順・依存関係・完了条件に沿って items を作り、原質問に語がない理由で対象外にしない。required=false の未確定分岐は勝手に選ばない。利用者が自分で行えない必須手順も省かず、資料で裏付けられない要件は gap に残す。
 - 業務ガイドは本問の業務範囲を定める管理された指示で、資料の事実根拠とは別である。items の text には quote の原文が裏付ける内容だけを書き、業務ガイドの文（確認先・方針）を写さない。業務ガイドの窓口と引き継ぐ条件は、システムが「業務ガイドの案内」として本文に出す。
 - guide_condition_notices は確認済み条件で選んだ業務ガイドの分岐の補足で、システムが「業務ガイドの案内」として本文に出す（写さない）。summary と items には、補足と食い違う結論（補足が案内しないとした内容、補足と異なる依頼先・作業の担い手）を書かない。
-- この指示の quote は、citations の各出典（evidence_id と引用する行範囲）が指す根拠の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
+- この指示の quote は、citations が選択した引用単位 ID の原文を意味する。quote を別に生成するのではなく、その原文が支える内容を書く。
 #### Evidence の見出し行
 - origin（見出し行では `origin=` と表記）: document_text は解析された本文、image_extraction は画像からの生成説明・OCR、unclassified は未分類。
 - catalog: 条で構成された文書の条の目録から、質問の根拠の候補として選ばれた条。
@@ -299,11 +300,16 @@ def generation_system_prompt(question: str) -> str:
     return resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT)
 
 
-def generation_output_model(question: str, *, guided: bool = False) -> type[BaseModel]:
+def generation_output_model(question: str, *, guided: bool = False, unit_catalog: SentUnitCatalog | None = None) -> type[BaseModel]:
     """``guided`` は業務ガイドの要件（guide_contracts）を入力で渡す生成か。"""
-    if uses_separate_scope_plan(question):
-        return planned_generation_wire_model(guided=guided)
-    return guided_generation_wire_model() if guided else generation_draft_wire_model()
+    base = (
+        planned_generation_wire_model(guided=guided)
+        if uses_separate_scope_plan(question)
+        else guided_generation_wire_model()
+        if guided
+        else generation_draft_wire_model()
+    )
+    return unit_generation_model(base, unit_catalog) if unit_catalog is not None else base
 
 
 # 監査の判断順を Step で示す。UI の読み取り専用表示と実行はこの定数を共有する。
@@ -1770,7 +1776,11 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown
 def scope_evidence_text(span: Mapping[str, Any]) -> str:
     """計画の入力の本文。行頭の番号は生成の根拠ブロックの引用単位と同じ。"""
     text = str(span.get("text") or "")
-    return _numbered_text(text, citation_units(text, image_text=_image_text(span)), numbered=True)
+    units = citation_units(text, image_text=_image_text(span))
+    snapshot = EvidenceUnitSnapshot.create(span, units, CITATION_UNIT_CONTRACT)
+    return "\n".join(
+        f"{index}| [{uid}] {text[start:end]}" for index, ((start, end), uid) in enumerate(zip(units, snapshot.unit_ids, strict=True), 1)
+    )
 
 
 def _scope_range_text(link: RequestLinkRange, spans: Sequence[dict], *, numbered: bool | None = None) -> str:
@@ -1813,7 +1823,15 @@ def resolve_scope_plan(plan: RequestScopePlan, spans: Sequence[dict]) -> list[Re
             return ""
         return text[units[link.line_start - 1][0] : units[link.line_end - 1][1]].strip()
 
-    return canonical_request_coverage(plan.request_coverage, link_text)
+    catalog = SentUnitCatalog(
+        [
+            EvidenceUnitSnapshot.create(
+                span, citation_units(str(span.get("text") or ""), image_text=_image_text(span)), CITATION_UNIT_CONTRACT
+            )
+            for span in spans
+        ]
+    )
+    return canonical_request_coverage(plan.request_coverage, link_text, unit_catalog=catalog)
 
 
 # 計画のうち、コードが作る欄（モデルの出力の欄ではない）。作り直しの入力に出さない。
@@ -4445,6 +4463,8 @@ class CitationView:
     # 描画から導く送信用の文字列。原文・引用単位・hashで版を比較し、派生値は比較しない。
     model_rendered: str = field(default="", compare=False)
     present_in_prompt: bool | None = field(default=None, compare=False)
+    # 引用先は表示時の全文・属性へ結び、後続の可変辞書から作り直さない。
+    span_json: str = field(default="", compare=False)
 
 
 # リクエスト局所の実提示記録。span 自身へ proof を埋めず、JSON やモデル入力へ漏らさない。
@@ -4484,7 +4504,19 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
         rendered,
         hashlib.sha256(displayed.encode()).hexdigest(),
         displayed,
+        span_json=json.dumps(dict(span), ensure_ascii=False, sort_keys=True),
     )
+
+
+def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -> SentUnitCatalog:
+    snapshots = []
+    for span in spans:
+        view = _sent_view(span)
+        if sent_only and view.present_in_prompt is not True:
+            continue
+        original = json.loads(view.span_json) if view.span_json else span
+        snapshots.append(EvidenceUnitSnapshot.create(original, view.units, view.contract_version))
+    return SentUnitCatalog(snapshots)
 
 
 def _sent_view(span: Mapping[str, Any]) -> CitationView:
@@ -4538,6 +4570,9 @@ def _with_extraction(item: GroundedItem, metadata: dict[str, str], *, quote: str
 
 
 def _line_citation_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict]:
+    binding = item.citations[0]._unit_binding if item.citations else None
+    if binding is not None:
+        return [binding.snapshot.span()]
     # 安定 ID / 表示 ID の一致を、別の本文の出典 alias と混ぜない。
     direct = [span for span in spans if item.evidence_id and item.evidence_id in {span["evidence_id"], span.get("label")}]
     return direct if direct else _named_spans(item, spans)
@@ -4556,7 +4591,11 @@ def _heading_only_marked(entry: CheckedItem) -> bool:
     直せないので数えない（草稿の作り直しの指摘に残る）。
     """
     proof = entry.citation_resolution
-    return not entry.removed and proof.get("reason_code") == CITATION_HEADING_ONLY and proof.get("range_contract") == "integer_pair"
+    return (
+        not entry.removed
+        and proof.get("reason_code") == CITATION_HEADING_ONLY
+        and proof.get("range_contract") in {"integer_pair", "stable_unit_ids"}
+    )
 
 
 def citation_range_targets(
@@ -4571,7 +4610,13 @@ def citation_range_targets(
             named = _line_citation_spans(item.model_copy(update={"citations": [citation]}), spans)
             if len(named) != 1:
                 continue
-            view = _citation_view(named[0])
+            original_binding = citation._unit_binding
+            view = _citation_view(named[0], explicit_units=True) if original_binding is not None else _citation_view(named[0])
+            unit_snapshot = (
+                original_binding.snapshot
+                if original_binding is not None
+                else EvidenceUnitSnapshot.create(named[0], view.units, view.contract_version)
+            )
             # (検査の記録, 見出しだけの引用で印が付いて残った説明の出典か)
             proofs = [
                 (own.citation_resolution, _heading_only_marked(own))
@@ -4611,6 +4656,7 @@ def citation_range_targets(
                     "citation_index": citation_index,
                     "evidence_id": citation.evidence_id,
                     "unit_count": len(view.units),
+                    "snapshot_id": unit_snapshot.snapshot_id,
                     "numbered": numbered,
                     "reason_code": reason_code,
                     **({"hint": HEADING_ONLY_REASON} if reason_code == CITATION_HEADING_ONLY else {}),
@@ -4725,7 +4771,16 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     if len(named) != 1:
         return fail("citation_id_ambiguous", "引用の ID が複数の根拠を指しています。一意な表示 ID を指定してください。")
     span = named[0]
-    view = _citation_view(span)
+    unit_binding = item.citations[0]._unit_binding if item.citations else None
+    view = _citation_view(span, explicit_units=True) if unit_binding is not None else _citation_view(span)
+    if unit_binding is not None:
+        view = replace(view, units=unit_binding.snapshot.units, contract_version=unit_binding.snapshot.contract, present_in_prompt=True)
+        metadata.update(
+            sent_view_status="matched",
+            snapshot_id=unit_binding.snapshot.snapshot_id,
+            selected_unit_ids=json.dumps(unit_binding.unit_ids),
+            range_contract="stable_unit_ids",
+        )
     metadata.update(
         {
             "resolved_evidence_id": view.evidence_id,
@@ -4768,7 +4823,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     if interval is not None:
         binding = bind_wire_range(*interval, unit_count=len(units), numbered=extraction_view.numbered)
         metadata["requested_lines"] = binding.lines
-        metadata["range_contract"] = "integer_pair"
+        metadata["range_contract"] = "stable_unit_ids" if unit_binding is not None else "integer_pair"
         if binding.reason_code:
             metadata["requested_range_status"] = {
                 "citation_range_missing": "missing",
@@ -4890,6 +4945,16 @@ def _rendered_evidence_span(
     本文の後を ``[/E1]`` の行で閉じる（#3806）。補助情報が長く本文が短いと、本文に最も近い ID が次のブロックの
     見出しになり、モデルが本文を隣の根拠の ID に結び付けて出典を取り違えていた。
     """
+    text = str(span.get("text") or "")
+    selected_units = tuple(units if units is not None else citation_units(text, image_text=_image_text(span)))
+    snapshot = EvidenceUnitSnapshot.create(span, selected_units, CITATION_UNIT_CONTRACT)
+    if numbered is True or numbered is None and _numbered(text, selected_units):
+        body = "\n".join(
+            f"{index}| [{unit_id}] {text[start:end]}"
+            for index, ((start, end), unit_id) in enumerate(zip(selected_units, snapshot.unit_ids, strict=True), 1)
+        )
+    else:
+        body = text
     return (
         f"[{span['label']}] {span.get('location') or 'p.' + str(span.get('page', ''))} origin={span.get('origin', 'unclassified')}"
         + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
@@ -4897,11 +4962,7 @@ def _rendered_evidence_span(
         + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
         + _source_note(dict(span))
         + "\n"
-        + _numbered_text(
-            str(span.get("text") or ""),
-            units if units is not None else citation_units(str(span.get("text") or ""), image_text=_image_text(span)),
-            numbered=numbered,
-        ).rstrip("\n")
+        + body.rstrip("\n")
         + f"\n[/{span['label']}]"
     )
 
@@ -6841,6 +6902,15 @@ def run_round(
 
     def plan_scope(evidence: Sequence[dict], correction: Mapping[str, Any] | None = None) -> _ScopePlan:
         """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。``correction`` は前の計画の指摘（作り直しのときだけ）。"""
+        catalog = SentUnitCatalog(
+            [
+                EvidenceUnitSnapshot.create(
+                    span, citation_units(str(span.get("text") or ""), image_text=_image_text(span)), CITATION_UNIT_CONTRACT
+                )
+                for span in evidence
+            ]
+        )
+        plan_model = unit_scope_model(RequestScopePlan, catalog)
         plan = call_with_model_purpose(
             "answer.scope",
             parse_text,
@@ -6869,10 +6939,10 @@ def run_round(
                 ensure_ascii=False,
             ),
             settings,
-            RequestScopePlan,
+            plan_model,
             provider_id=provider_id,
         )
-        return _ScopePlan(plan, resolve_scope_plan(plan, spans))
+        return _ScopePlan(plan, resolve_scope_plan(plan, evidence))
 
     def scope_plan_issues(plan: _ScopePlan) -> tuple[dict[str, int], list[str]]:
         """生成の前の計画の不整合の件数（診断）と指摘の文（作り直しの入力）。検査の条件はここだけに置く。"""
@@ -6927,7 +6997,7 @@ def run_round(
                         "invalid_request_plan": notes,
                         "instruction": "previous_plan の invalid_request_plan の指摘をすべて直し、計画の全体を返してください。"
                         "要求ごとに計画を 1 件にし、根拠の番号は原文を照合して選び直し、対象が確かめられない根拠は direct と linked にしないでください。"
-                        "linked の link には関係を明記した本文の番号の範囲を指定してください。",
+                        "linked の link には関係を明記した原文の引用単位 ID を選んでください。",
                     },
                 )
             except Exception as exc:
@@ -6968,7 +7038,6 @@ def run_round(
         generation_system += continue_prompt_steps(
             generation_system, resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT)
         )
-    generation_model = generation_output_model(question, guided=bool(guide_step_contracts))
     generation_outputs: list[dict[str, Any]] = []
     cached_views = _CITATION_VIEWS.get() or {}
     input_views = tuple(cached[1] for span in spans if (cached := cached_views.get(id(span))) is not None and cached[0] is span)
@@ -7006,6 +7075,8 @@ def run_round(
             if current_spans.get(key) is span
         }
     )
+    unit_catalog = generation_unit_catalog(spans, sent_only=True)
+    generation_model = generation_output_model(question, guided=bool(guide_step_contracts), unit_catalog=unit_catalog)
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",
@@ -7025,7 +7096,7 @@ def run_round(
     plan_rows_added: list[str] = []
 
     def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
-        canonical = canonical_generation_draft(value, lambda link: _scope_range_text(link, spans))
+        canonical = canonical_generation_draft(value, lambda link: _scope_range_text(link, spans), unit_catalog=unit_catalog)
         if scope_plan is None and isinstance(value, generation_model):
             # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
             canonical, added = plan_rows_from_citations(canonical, spans)
@@ -7063,17 +7134,37 @@ def run_round(
     if range_only:
         from rag_engine.generation.citation_range_repair import (
             CITATION_RANGE_REPAIR_SYSTEM_PROMPT,
-            CitationRangeRepair,
             apply_range_repair,
+            unit_range_repair_model,
         )
 
         assert previous_draft is not None
+        if previous_draft._citation_snapshots:
+            # 範囲だけの修正では、引用と要求計画を同じ送達版で照合する。現在の E1 へ結び替えない。
+            spans = [snapshot.span() for snapshot in previous_draft._citation_snapshots]
         targets = citation_range_targets(previous_draft, spans, previous, previous_dropped)
         draft = previous_draft.model_copy(deep=True)
         generation_calls = 0
         if targets:
+            snapshots = []
+            for target in targets:
+                item = previous_draft.items[target["item_index"]]
+                citation = item.citations[target["citation_index"]]
+                if citation._unit_binding is not None:
+                    snapshots.append(citation._unit_binding.snapshot)
+                else:
+                    named = _line_citation_spans(item.model_copy(update={"citations": [citation]}), spans)
+                    view = _sent_view(named[0])
+                    snapshots.append(EvidenceUnitSnapshot.create(named[0], view.units, view.contract_version))
+            repair_catalog = SentUnitCatalog(snapshots)
+            source_inputs = [snapshot.prompt_record() for snapshot in dict((value.snapshot_id, value) for value in snapshots).values()]
             repair_input = "## Step 1: 入力を読む\n" + json.dumps(
-                {"original_context": prompt, "immutable_draft": previous_draft.model_dump(mode="json"), "targets": targets},
+                {
+                    "original_context": prompt,
+                    "immutable_draft": previous_draft.model_dump(mode="json"),
+                    "targets": targets,
+                    "citation_sources": source_inputs,
+                },
                 ensure_ascii=False,
             )
             repair_system = resolve_prompt("generation.citationRepair", CITATION_RANGE_REPAIR_SYSTEM_PROMPT)
@@ -7083,10 +7174,10 @@ def run_round(
                 repair_system,
                 repair_input,
                 settings,
-                CitationRangeRepair,
+                unit_range_repair_model(repair_catalog),
                 provider_id=provider_id,
             )
-            draft, range_repair = apply_range_repair(previous_draft, response, targets)
+            draft, range_repair = apply_range_repair(previous_draft, response, targets, unit_catalog=repair_catalog)
             generation_outputs.append(
                 {
                     "purpose": "answer.repair",

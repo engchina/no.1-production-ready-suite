@@ -109,13 +109,22 @@ def planned_generation_wire_model(*, guided: bool = False) -> type[BaseModel]:
     )
 
 
-def canonical_request_coverage(rows: Sequence[RequestCoverageRange], link_text: Callable[[RequestLinkRange], str]) -> list[RequestCoverage]:
+def canonical_request_coverage(
+    rows: Sequence[RequestCoverageRange], link_text: Callable[[RequestLinkRange], str], *, unit_catalog: Any = None
+) -> list[RequestCoverage]:
     """番号で返した計画を、下流の検査と保存が読む形へ変える。
 
     linked の原文（link_quote）は ``link_text`` が番号の範囲から切り出す（無効な範囲は空文字で、計画の検査の指摘に任せる）。
     計画に使う根拠（evidence_ids）は direct と linked の行そのものなので、コードが導く。
     """
     from rag_engine.models.llm import RequestCoverage
+
+    def resolve_link(link: Any) -> str:
+        if hasattr(link, "unit_ids"):
+            if unit_catalog is None:
+                raise ValueError("送達した引用単位の対応がありません。")
+            return "\n".join(binding.text.strip() for binding in unit_catalog.bind(link.unit_ids))
+        return link_text(link)
 
     result = []
     for row in rows:
@@ -128,7 +137,7 @@ def canonical_request_coverage(rows: Sequence[RequestCoverageRange], link_text: 
                             "evidence_id": scope.evidence_id,
                             "target": scope.target,
                             "relation": scope.relation,
-                            "link_quote": link_text(scope.link) if scope.relation == "linked" and scope.link is not None else "",
+                            "link_quote": resolve_link(scope.link) if scope.relation == "linked" and scope.link is not None else "",
                         }
                         for scope in row.evidence_scope
                     ],
@@ -139,12 +148,45 @@ def canonical_request_coverage(rows: Sequence[RequestCoverageRange], link_text: 
     return result
 
 
-def canonical_generation_draft(value: BaseModel, link_text: Callable[[RequestLinkRange], str] = lambda _link: "") -> GroundedDraft:
+def canonical_generation_draft(
+    value: BaseModel, link_text: Callable[[RequestLinkRange], str] = lambda _link: "", *, unit_catalog: Any = None
+) -> GroundedDraft:
     """新wireは整数の指定を私有属性へ残す。既存の草稿・履歴のlinesは変更しない。
 
     ``link_text`` は計画の linked の番号の範囲から原文を切り出す（呼び出し側が送った根拠を知っている）。
     """
     from rag_engine.models.llm import GroundedCitation, GroundedDraft
+
+    if getattr(type(value), "_uses_unit_ids", False):
+        if unit_catalog is None:
+            raise ValueError("送達した引用単位の対応がありません。")
+        raw = value.model_dump(exclude_unset=True)
+        if "request_coverage" in raw:
+            raw["request_coverage"] = [
+                plan.model_dump(exclude_unset=True)
+                for plan in canonical_request_coverage(cast(Any, value).request_coverage, link_text, unit_catalog=unit_catalog)
+            ]
+        bindings = []
+        for item in raw.get("items", []):
+            unit_bindings = [binding for citation in item.get("citations", []) for binding in unit_catalog.bind(citation["unit_ids"])]
+            item["citations"] = [
+                {
+                    "evidence_id": binding.snapshot.span()["evidence_id"],
+                    "lines": str(binding.first + 1) if binding.first == binding.last else f"{binding.first + 1}-{binding.last + 1}",
+                }
+                for binding in unit_bindings
+            ]
+            bindings.append(unit_bindings)
+        draft = GroundedDraft.model_validate(raw)
+        draft._citation_snapshots = unit_catalog.snapshots
+        if isinstance(value, GroundedDraft):
+            draft._provider_output_text = value._provider_output_text
+            draft._collapsed_duplicates = dict(value._collapsed_duplicates)
+        for item, unit_bindings in zip(draft.items, bindings, strict=True):
+            for citation, binding in zip(item.citations, unit_bindings, strict=True):
+                citation._wire_range = (binding.first + 1, binding.last + 1)
+                citation._unit_binding = binding
+        return draft
 
     line_limit = next((entry.max_length for entry in GroundedCitation.model_fields["lines"].metadata if hasattr(entry, "max_length")), None)
     wire = generation_draft_wire_model()

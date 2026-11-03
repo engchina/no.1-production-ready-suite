@@ -2,10 +2,12 @@
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Any
+from types import GenericAlias
+from typing import Any, cast
 
-from pydantic import Field, PrivateAttr, StrictInt
+from pydantic import Field, PrivateAttr, StrictInt, create_model
 
+from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.citation_wire import LINE_END_DESCRIPTION, LINE_START_DESCRIPTION, bind_wire_range
 from rag_engine.models.llm import GroundedDraft, _StrictModel
 
@@ -27,8 +29,22 @@ class CitationRangeRepair(_StrictModel):
     ranges: list[CitationRangeUpdate]
 
 
+def unit_range_repair_model(catalog: SentUnitCatalog) -> type[CitationRangeRepair]:
+    """元の送達版の単位だけを選び直す。位置・原文の ID はコードが決める。"""
+    fields: dict[str, Any] = {"item_index": (StrictInt, ...), "citation_index": (StrictInt, ...)}
+    update = create_model("UnitCitationRangeUpdate", __base__=catalog.selection_model(), **fields)
+    repair_fields: dict[str, Any] = {"ranges": (GenericAlias(list, update), ...)}
+    model = create_model(CitationRangeRepair.__name__, __base__=CitationRangeRepair, **repair_fields)
+    cast(Any, model)._uses_unit_ids = True
+    return model
+
+
 def apply_range_repair(
-    draft: GroundedDraft, response: CitationRangeRepair, targets: Sequence[Mapping[str, Any]]
+    draft: GroundedDraft,
+    response: CitationRangeRepair,
+    targets: Sequence[Mapping[str, Any]],
+    *,
+    unit_catalog: SentUnitCatalog | None = None,
 ) -> tuple[GroundedDraft, dict[str, Any]]:
     """実際に指定した根拠の範囲だけ採用し、失敗した引用・本文・計画は元のまま残す。"""
     repaired = draft.model_copy(deep=True)
@@ -37,6 +53,7 @@ def apply_range_repair(
     adopted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for row in response.ranges:
+        unit_binding = None
         key = row.item_index, row.citation_index
         target = expected.get(key)
         reason = ""
@@ -44,6 +61,21 @@ def apply_range_repair(
             reason = "unknown_target"
         elif counts[key] != 1:
             reason = "duplicate_target"
+        elif getattr(type(response), "_uses_unit_ids", False):
+            if unit_catalog is None:
+                reason = "citation_unit_catalog_missing"
+            else:
+                selected = unit_catalog.bind(cast(Any, row).unit_ids)
+                if len(selected) != 1:
+                    reason = "citation_range_disconnected"
+                elif selected[0].snapshot.snapshot_id != target.get("snapshot_id"):
+                    reason = "evidence_id_changed"
+                else:
+                    unit_binding = selected[0]
+                    binding = bind_wire_range(
+                        unit_binding.first + 1, unit_binding.last + 1, unit_count=len(unit_binding.snapshot.units), numbered=True
+                    )
+                    reason = binding.reason_code or ""
         elif row.evidence_id != target["evidence_id"]:
             reason = "evidence_id_changed"
         else:
@@ -59,7 +91,11 @@ def apply_range_repair(
         citation = repaired.items[row.item_index].citations[row.citation_index]
         # 私有の抽出証明は再利用せず、通常の原文・提示版の検証へ戻す。
         citation.lines = binding.lines
-        citation._wire_range = row.line_start, row.line_end
+        if unit_binding is not None:
+            citation._wire_range = unit_binding.first + 1, unit_binding.last + 1
+            citation._unit_binding = unit_binding
+        else:
+            citation._wire_range = row.line_start, row.line_end
         citation._extraction = {}
         adopted.append(detail)
     missing = [{"item_index": key[0], "citation_index": key[1], "reason_code": "missing_target"} for key in expected if key not in counts]
