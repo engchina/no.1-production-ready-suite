@@ -52,6 +52,34 @@ def call_body_failures(span_details: Mapping[str, Any]) -> dict[str, BodyFailure
     return faults
 
 
+def mark_call_body_failures(
+    span_details: Mapping[str, Any], faults: Mapping[str, BodyFailure]
+) -> dict[str, dict[str, Any]]:
+    """実際の登録障害を保存snapshotへ反映する。入力値や非公開欄は変更しない。"""
+    result: dict[str, dict[str, Any]] = {}
+    for span_id, value in span_details.items():
+        details = (
+            value
+            if isinstance(value, ChatProgressStepDetails)
+            else ChatProgressStepDetails.model_validate(value)
+        )
+        call = details.call
+        if call is not None:
+            changes = {}
+            for name in ("input", "output", "schema_"):
+                content = getattr(call, name)
+                reference = content.body_reference
+                reason = faults.get(reference.body_id) if reference is not None else None
+                if reason is not None and content.status not in {"withheld", "not_recorded"}:
+                    changes[name] = content.model_copy(
+                        update={"status": "incomplete", "failure_code": reason}
+                    )
+            if changes:
+                details = details.model_copy(update={"call": call.model_copy(update=changes)})
+        result[span_id] = details.model_dump(mode="json", exclude_none=True)
+    return result
+
+
 def _registered(cursor: Any, reference: BodyReference) -> bool:
     # 正本保存取引がattachしたmanifestだけをロックする。writerは箱も所属も作らない。
     cursor.execute(

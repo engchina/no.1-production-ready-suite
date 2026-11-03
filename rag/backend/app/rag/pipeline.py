@@ -88,6 +88,7 @@ from app.rag.support_guide_runtime import (
     apply_guide_to_diagnostics,
     guide_short_circuit_outcome,
 )
+from app.rag.trace_bodies import trace_body_capture
 from app.rag.trace_store import AnswerTrace, operation_trace_parent
 from app.schemas.common import JsonValue
 from app.schemas.search import (
@@ -498,6 +499,7 @@ class RagPipeline:
             trace.run_id = trace_id
         self._trace = trace
         with (
+            trace_body_capture(),
             operation_trace_parent() as links,
             operation_trace(
                 "rag.answer" if request.generate_answer else "rag.search",

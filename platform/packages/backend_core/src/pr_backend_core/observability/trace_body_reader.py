@@ -3,24 +3,20 @@
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from ..chat_progress import ChatProgressStepDetails
+from ..chat_progress import CallContent, ChatProgressStepDetails
 from .trace_bodies import BodyOwner, BodyPage, read_body_page
 
 CallBodySlot = Literal["input", "output", "schema"]
 
 
-def read_call_body_page(
-    cursor: Any,
-    owner: BodyOwner,
+def saved_call_body_content(
     span_details: Mapping[str, Any],
     *,
     span_id: str,
     slot: CallBodySlot,
-    first_part: int = 0,
-    max_parts: int = 8,
     allow_restricted: bool = False,
-) -> BodyPage | None:
-    """製品側で正本へのアクセスを確認した後に呼ぶ。任意のbody IDは受け取らない。"""
+) -> CallContent | None:
+    """認可済み正本の正式な欄を解決する。非公開欄の参照自体を渡さない。"""
     value = span_details.get(span_id)
     if value is None or slot not in {"input", "output", "schema"}:
         return None
@@ -39,6 +35,28 @@ def read_call_body_page(
         "schema": details.call.schema_,
     }[slot]
     if content.status in {"withheld", "not_recorded"} or content.body_reference is None:
+        return None
+    if content.body_reference.visibility == "system_admin" and not allow_restricted:
+        return None
+    return content
+
+
+def read_call_body_page(
+    cursor: Any,
+    owner: BodyOwner,
+    span_details: Mapping[str, Any],
+    *,
+    span_id: str,
+    slot: CallBodySlot,
+    first_part: int = 0,
+    max_parts: int = 8,
+    allow_restricted: bool = False,
+) -> BodyPage | None:
+    """製品側で正本へのアクセスを確認した後に呼ぶ。任意のbody IDは受け取らない。"""
+    content = saved_call_body_content(
+        span_details, span_id=span_id, slot=slot, allow_restricted=allow_restricted
+    )
+    if content is None or content.body_reference is None:
         return None
     return read_body_page(
         cursor,

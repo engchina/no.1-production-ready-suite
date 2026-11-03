@@ -11,7 +11,7 @@ from typing import Any
 
 from ..config.tracing import TracingSettings
 from .call_body_capture import call_body_capture
-from .trace_bodies import BodyFailure, BodyOwner, attach_body_owner, mark_body_incomplete
+from .trace_bodies import BodyFailure, BodyOwner, mark_body_incomplete, replace_body_owner
 from .trace_body_buffer import BodyCaptureSession, TraceBodyBuffer
 from .trace_body_registry import (
     call_body_failures,
@@ -80,12 +80,10 @@ class TraceBodyPersistence:
         except Exception:
             logger.warning("trace_body_reference_capture_failed")
             return {}
-        if not references:
-            return {}
         faults: dict[str, BodyFailure] = {}
         try:
             cursor.execute("SAVEPOINT trace_body_registration")
-            attach_body_owner(cursor, owner, references)
+            replace_body_owner(cursor, owner, references)
             for reference in references:
                 if reference.body_id in captured_faults:
                     reason = captured_faults[reference.body_id]

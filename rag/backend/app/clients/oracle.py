@@ -92,6 +92,12 @@ from app.rag.section_revisions import SectionExtractionBase
 from app.rag.source_profile import build_source_profile
 from app.rag.stored_answer import answer_format_record
 from app.rag.support_guide_runtime import GUIDE_PREVIEW_TRACE_PREFIX
+from app.rag.trace_bodies import (
+    confirm_trace_body_saved,
+    register_trace_body_owner,
+    release_deleted_trace_body_owners,
+    trace_with_body_failures,
+)
 from app.rag.vector_index_adapter import default_vector_index_build, resolve_vector_index_adapter
 from app.schemas.classification import CLASSIFICATION_CATEGORY_KEYS, category_label
 from app.schemas.common import JsonValue
@@ -4557,6 +4563,8 @@ class OracleClient:
 
     async def save_answer_record(self, record: Mapping[str, object]) -> None:
         """回答を保存する(同じ trace_id は上書き)。"""
+        diagnostics = record.get("diagnostics")
+        saved_trace = diagnostics.get("trace") if isinstance(diagnostics, Mapping) else None
         binds = {
             "trace_id": record["trace_id"],
             "search_answer_profile_id": record.get("search_answer_profile_id"),
@@ -4608,8 +4616,25 @@ class OracleClient:
                     "citations_json", "diagnostics_json", "evaluation_input_json"
                 ),
             )
+            faults = register_trace_body_owner(
+                connection, "answer_record", str(record["trace_id"]), saved_trace
+            )
+            if faults:
+                updated = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
+                updated["trace"] = trace_with_body_failures(saved_trace, faults)
+                try:
+                    _execute(
+                        connection,
+                        "UPDATE rag_answer_records SET diagnostics_json = :diagnostics "
+                        "WHERE trace_id = :trace_id",
+                        {"diagnostics": _json_bind(updated), "trace_id": record["trace_id"]},
+                        input_sizes=_json_input_sizes("diagnostics"),
+                    )
+                except Exception:
+                    logger.warning("trace_body_failure_snapshot_save_failed")
 
         await self._run_transaction(operation)
+        confirm_trace_body_saved(saved_trace)
 
     async def list_answer_records(
         self,
@@ -4798,12 +4823,15 @@ class OracleClient:
 
         # ponytail: created_at 単独 index なしの全走査。記録が大量になったら index を足す。
         def operation(connection: OracleConnectionProtocol) -> int:
-            return _execute_count(
+            deleted = _execute_count(
                 connection,
                 "DELETE FROM rag_answer_records "
                 "WHERE created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')",
                 {"days": retention_days},
             )
+            if deleted:
+                release_deleted_trace_body_owners(connection, "answer_record")
+            return deleted
 
         return await self._run_transaction(operation)
 
@@ -5224,6 +5252,7 @@ class OracleClient:
                 ),
                 _with_conversation_access_bind({"conversation_id": conversation_id}),
             )
+            release_deleted_trace_body_owners(connection, "message")
 
         await self._run_transaction(operation)
 
@@ -5378,9 +5407,12 @@ class OracleClient:
                     }
                 ),
             )
+            _register_message_trace_body(connection, stored.id, stored.progress)
             return stored
 
-        return await self._run_transaction(operation)
+        result = await self._run_transaction(operation)
+        confirm_trace_body_saved(stored.progress)
+        return result
 
     async def list_messages(
         self,
@@ -5457,7 +5489,7 @@ class OracleClient:
         """
 
         def operation(connection: OracleConnectionProtocol) -> int:
-            return _execute_count(
+            updated = _execute_count(
                 connection,
                 """
                 UPDATE rag_messages
@@ -5473,8 +5505,14 @@ class OracleClient:
                     "progress_json": _json_dumps(progress),
                 },
             )
+            if updated:
+                _register_message_trace_body(connection, message_id, progress)
+            return updated
 
-        return await self._run_transaction(operation) > 0
+        updated = await self._run_transaction(operation) > 0
+        if updated:
+            confirm_trace_body_saved(progress)
+        return updated
 
     async def heartbeat_chat_message(self, message_id: str, *, lease_owner: str) -> bool:
         """作成中の回答の heartbeat を DB の時刻で書く(#1175)。
@@ -5531,6 +5569,7 @@ class OracleClient:
                 binds,
             )
             if updated:
+                _register_message_trace_body(connection, message.id, message.progress)
                 _execute(
                     connection,
                     _render_sql(
@@ -5546,7 +5585,10 @@ class OracleClient:
                 )
             return updated
 
-        return await self._run_transaction(operation) > 0
+        updated = await self._run_transaction(operation) > 0
+        if updated:
+            confirm_trace_body_saved(message.progress)
+        return updated
 
     async def close_streaming_chat_message(
         self,
@@ -5614,9 +5656,15 @@ class OracleClient:
             binds["progress_json"] = _json_dumps(progress)
 
         def operation(connection: OracleConnectionProtocol) -> int:
-            return _execute_count(connection, statement, binds)
+            updated = _execute_count(connection, statement, binds)
+            if updated and progress is not None:
+                _register_message_trace_body(connection, message_id, progress)
+            return updated
 
-        return await self._run_transaction(operation) > 0
+        updated = await self._run_transaction(operation) > 0
+        if updated and progress is not None:
+            confirm_trace_body_saved(progress)
+        return updated
 
     async def get_chat_message(self, conversation_id: str, message_id: str) -> StoredMessage | None:
         """会話の 1 つのメッセージ(tenant/user scope)。段階の polling / SSE で読み直す(#1359)。
@@ -12596,6 +12644,25 @@ def _fetch_one(
 ) -> dict[str, object] | None:
     rows = _fetch_all(connection, statement, binds)
     return rows[0] if rows else None
+
+
+def _register_message_trace_body(
+    connection: OracleConnectionProtocol, message_id: str, progress: object
+) -> None:
+    faults = register_trace_body_owner(connection, "message", message_id, progress)
+    if not faults:
+        return
+    try:
+        _execute(
+            connection,
+            "UPDATE rag_messages SET progress_json = :progress WHERE message_id = :message_id",
+            {
+                "progress": _json_dumps(trace_with_body_failures(progress, faults)),
+                "message_id": message_id,
+            },
+        )
+    except Exception:
+        logger.warning("trace_body_failure_snapshot_save_failed")
 
 
 def _execute(

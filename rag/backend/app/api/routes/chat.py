@@ -26,6 +26,8 @@ from pr_backend_core.chat_history_window import (
     chat_history_days,
 )
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.trace_bodies import BodyPage
+from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.auth.visibility import (
     OTHERS_CONTENT_FORBIDDEN_MESSAGE,
     OTHERS_CONTENT_FORBIDDEN_STATUS,
@@ -112,6 +114,7 @@ from app.rag.support_guide_runtime import (
     guide_clarification_record,
     resolve_guide_clarification,
 )
+from app.rag.trace_bodies import capture_trace_bodies, read_saved_trace_body
 from app.rag.trace_store import AnswerTrace, TraceSnapshot, TraceTerminal, trace_snapshot
 from app.schemas.chat import (
     ChatAnswerCancelResult,
@@ -1305,6 +1308,7 @@ async def _answer_turn(
 ) -> None:
     """各モデルへ fan-out して回答を作り、event を記録する（購読の有無に関係なく最後まで進む）。"""
 
+    @capture_trace_bodies
     async def run_model(column: dict[str, str]) -> None:
         model_id = column["model_id"]
         message_id = run.message_ids[model_id]
@@ -1609,3 +1613,31 @@ async def get_answer_trace(
         terminal=_MESSAGE_TERMINAL.get(message.status),
     )
     return ApiResponse(data=snapshot)
+
+
+@router.get(
+    "/conversations/{conversation_id}/messages/{assistant_message_id}/trace/spans/{span_id}/{slot}/body",
+    response_model=ApiResponse[BodyPage],
+)
+async def get_answer_trace_body(
+    conversation_id: str,
+    assistant_message_id: str,
+    span_id: str,
+    slot: CallBodySlot,
+    first_part: int = Query(default=0, ge=0),
+) -> ApiResponse[BodyPage]:
+    _require_chat_enabled(get_settings())
+    oracle = OracleClient()
+    message = await _load_answer_message(oracle, conversation_id, assistant_message_id)
+    page = await run_in_threadpool(
+        read_saved_trace_body,
+        message.progress,
+        "message",
+        message.id,
+        span_id=span_id,
+        slot=slot,
+        first_part=first_part,
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="記録本文が見つかりません。")
+    return ApiResponse(data=page)

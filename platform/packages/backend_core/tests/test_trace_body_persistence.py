@@ -195,7 +195,7 @@ def test_owner_attach_failure_rolls_back_only_trace_registration() -> None:
     assert persistence.buffer.pending == (0, 0)
 
 
-def test_short_or_missing_call_content_does_not_touch_database() -> None:
+def test_inline_content_reconciles_owner_without_creating_external_body() -> None:
     database = Database()
     persistence = manager(database)
     assert not persistence.register(
@@ -203,7 +203,8 @@ def test_short_or_missing_call_content_does_not_touch_database() -> None:
         BodyOwner("rag", "message", "record-a"),
         {"span-a": {"call": {"input": call_content("small").model_dump()}}},
     )
-    assert database.data.savepoint is None
+    assert database.data.savepoint is not None
+    assert not database.data.manifests and not database.data.owners
 
 
 def test_background_write_failure_rolls_back_and_marks_record_incomplete(

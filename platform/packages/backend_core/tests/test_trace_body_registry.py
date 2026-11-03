@@ -1,6 +1,7 @@
 """正本の保存rollbackや削除の後にwriterが到着しても本文を作らない。"""
 
 from dataclasses import asdict
+from typing import Any
 
 from test_trace_bodies import OwnerCursor
 
@@ -13,6 +14,7 @@ from pr_backend_core.observability.trace_bodies import (
 from pr_backend_core.observability.trace_body_registry import (
     call_body_references,
     fail_registered_body,
+    mark_call_body_failures,
     write_registered_body,
 )
 
@@ -49,3 +51,26 @@ def test_reference_collection_ignores_model_payload_and_only_accepts_call_contra
     assert not call_body_references(
         {"span-a": {"fields": [{"label": "result", "value": str(nested)}]}}
     )
+
+
+def test_registration_failure_updates_only_matching_visible_call_snapshot() -> None:
+    reference = prepare_body("合成本文", part_characters=2).reference
+    source: dict[str, Any] = {
+        "span-a": {
+            "call": {
+                "input": {
+                    "status": "recorded",
+                    "text": "preview",
+                    "body_reference": asdict(reference),
+                },
+                "output": {"status": "recorded", "text": "retained-inline"},
+                "schema": {"status": "withheld", "body_reference": asdict(reference)},
+            }
+        }
+    }
+    updated = mark_call_body_failures(source, {reference.body_id: "storage_unavailable"})
+    assert updated["span-a"]["call"]["input"]["status"] == "incomplete"
+    assert updated["span-a"]["call"]["input"]["failure_code"] == "storage_unavailable"
+    assert updated["span-a"]["call"]["output"]["text"] == "retained-inline"
+    assert updated["span-a"]["call"]["schema"]["status"] == "withheld"
+    assert source["span-a"]["call"]["input"]["status"] == "recorded"

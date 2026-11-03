@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -38,8 +39,15 @@ from app.clients.oracle import (
     _with_tenant_bind,
 )
 from app.rag.request_context import access_scope_context, current_audit_request_context
+from app.rag.trace_bodies import (
+    confirm_trace_body_saved,
+    register_trace_body_owner,
+    release_deleted_trace_body_owners,
+    trace_with_body_failures,
+)
 
 RUN_HISTORY_TABLE = "rag_run_history"
+logger = logging.getLogger(__name__)
 # 会話の表（実行の会話の持ち主を引く。#1954）。
 CONVERSATION_TABLE = "rag_conversations"
 RUN_SURFACES = ("search", "chat")
@@ -241,6 +249,8 @@ class RunHistoryStore:
         実行した利用者は今の context から決める（呼び出し側の値は信じない）。
         """
         context = current_audit_request_context()
+        stages = record.get("stages")
+        saved_trace = stages.get("trace") if isinstance(stages, Mapping) else None
         binds = {
             "run_id": record["run_id"],
             "surface": record["surface"],
@@ -306,8 +316,25 @@ class RunHistoryStore:
                 binds,
                 input_sizes=_json_input_sizes("stages_json", "citations_json"),
             )
+            faults = register_trace_body_owner(
+                connection, "history", str(record["run_id"]), saved_trace
+            )
+            if faults:
+                updated = dict(stages) if isinstance(stages, Mapping) else {}
+                updated["trace"] = trace_with_body_failures(saved_trace, faults)
+                try:
+                    _execute(
+                        connection,
+                        f"UPDATE {RUN_HISTORY_TABLE} SET stages_json = :stages "
+                        "WHERE run_id = :run_id",
+                        {"stages": _json_bind(updated), "run_id": record["run_id"]},
+                        input_sizes=_json_input_sizes("stages"),
+                    )
+                except Exception:
+                    logger.warning("trace_body_failure_snapshot_save_failed")
 
         await self._oracle._run_transaction(operation)  # noqa: SLF001
+        confirm_trace_body_saved(saved_trace)
 
     async def list_runs(
         self,
@@ -402,12 +429,15 @@ class RunHistoryStore:
             return 0
 
         def operation(connection: OracleConnectionProtocol) -> int:
-            return _execute_count(
+            deleted = _execute_count(
                 connection,
                 f"DELETE FROM {RUN_HISTORY_TABLE} "
                 "WHERE created_at < SYSTIMESTAMP - NUMTODSINTERVAL(:days, 'DAY')",
                 {"days": retention_days},
             )
+            if deleted:
+                release_deleted_trace_body_owners(connection, "history")
+            return deleted
 
         return await self._oracle._run_transaction(operation)  # noqa: SLF001
 
