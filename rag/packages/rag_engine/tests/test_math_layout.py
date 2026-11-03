@@ -532,16 +532,18 @@ def test_fraction_with_font_size_set_by_the_text_matrix_is_restored(tmp_path: Pa
     assert restored.text == "1/(1-x)"
 
 
-def _picture_records(text: str, *, category: str = "Picture") -> list[LayoutRecord]:
+def _picture_records(
+    text: str, *, category: str = "Picture", bbox: tuple[float, float, float, float] = (150.0, 180.0, 300.0, 230.0)
+) -> list[LayoutRecord]:
     """解析エンジンが図と判定した塊（中身の無い図と、同じ範囲の文字の record）。"""
     return [
-        _record("1", "", [150.0, 180.0, 300.0, 230.0], category=category, self_ref="#/pictures/0"),
+        _record("1", "", list(bbox), category=category, self_ref="#/pictures/0"),
         LayoutRecord(
             id="2",
             engine="docling",
             page=1,
             seq_no=2,
-            bbox=[150.0, 180.0, 300.0, 230.0],
+            bbox=list(bbox),
             coord_system="image_top_left",
             page_width=1200,
             page_height=1600,
@@ -593,3 +595,265 @@ def test_adapter_keeps_records_when_pdf_cannot_be_read(pdf_path: str) -> None:
     records = [_record("1", "1 1-x", [150.0, 180.0, 300.0, 230.0])]
 
     assert _restore_math_layout(records, pdf_path, {1: _PAGE})[0].text == "1 1-x"
+
+
+# 以下は #4224。折り返した項目名・幅の広い線・2 行の分母が並ぶ式（文字はすべて合成）。
+_NARROW_PITCH = 12.0  # 字の大きさの 1.2 倍。折り返しの行間で、上下の間に線を引く余地が無い。
+_LONG_DENOMINATOR = "1-x abcdefghijklmnopqrstuvwxyzabcdefghijkl"
+
+
+def _wide_fraction(left: float, rule_y: float = 500.0) -> tuple[list[PdfGlyph], PdfRule]:
+    """分母より字の大きさの 4 倍を超えて長い線と、小さな字の分母（線との隙間が字の大きさより広い）。"""
+    rule = PdfRule(rule_y, left, left + 300.0)
+    width = len(_LONG_DENOMINATOR) * 9.0 * 0.6
+    glyphs = [
+        *_run("1", left + 148.0, rule_y + 5.0),
+        *_run(_LONG_DENOMINATOR, left + (300.0 - width) / 2, rule_y - 18.0, size=9.0),
+    ]
+    return glyphs, rule
+
+
+def _wrapped_label(text: tuple[str, ...], left: float, axis: float, pitch: float) -> list[PdfGlyph]:
+    """折り返した項目名。行の真ん中が axis の高さになるよう左にそろえて置く。"""
+    top = axis + pitch * (len(text) - 1) / 2 - _SIZE * 0.35
+    return [glyph for index, line in enumerate(text) for glyph in _run(line, left, top - index * pitch)]
+
+
+def _axis_run(text: str, left: float, axis: float = 500.0) -> list[PdfGlyph]:
+    return _run(text, left, axis - _SIZE * 0.35)
+
+
+def test_wide_rule_next_to_an_operator_with_a_wrapped_label_is_restored() -> None:
+    """線が分母より長く、分母の字が小さくても、軸に演算子が隣るなら分数。折り返した項目名は 1 つの項にする。"""
+    parts, rule = _wide_fraction(200.0)
+    glyphs = [*_wrapped_label(("PPP", "QQ"), 160.0, 500.0, 21.0), *_axis_run("*", 185.0), *parts]
+    blocks = [
+        MathBlock("upper", (155.0, 505.0, 180.0, 520.0), "PPP"),
+        MathBlock("op", (182.0, 495.0, 195.0, 505.0), "*"),
+        MathBlock("lower", (155.0, 480.0, 180.0, 495.0), "QQ"),
+        MathBlock("num", (340.0, 503.0, 360.0, 516.0), "1"),
+        MathBlock("den", (200.0, 478.0, 500.0, 492.0), _LONG_DENOMINATOR),
+    ]
+
+    (restored,) = restore_math_text(blocks, glyphs, [rule])
+
+    assert restored.text == f"PPP QQ * 1/({_LONG_DENOMINATOR})"
+    assert restored.merged_keys == ("upper", "op", "lower", "num", "den")
+    assert restored.line_count == 1
+
+
+def test_wide_rule_without_an_operator_is_still_not_a_fraction() -> None:
+    """軸に演算子が無ければ、長い線は区切りの線と区別できないので戻さない。"""
+    parts, rule = _wide_fraction(200.0)
+
+    assert _text_of([_block(f"1 {_LONG_DENOMINATOR}")], parts, rule) == []
+
+
+def test_wrapped_denominator_stays_inside_the_fraction() -> None:
+    """分母の 2 行目もかっこの中に入れ、左そろえの折り返しでも順序を保つ。"""
+    rule = PdfRule(500.0, 100.0, 220.0)
+    glyphs = [
+        *_axis_run("A =", 70.0),
+        *_run("1", 158.0, 503.0),
+        *_run("1-x abcdefghijklmn", 106.0, 487.0),
+        *_run("opqrst", 106.0, 475.0),
+        *_axis_run("+ B", 226.0),
+    ]
+
+    assert _text_of([_block("A = 1 1-x abcdefghijklmn + B opqrst")], glyphs, rule) == ["A = 1/(1-x abcdefghijklmn opqrst) + B"]
+
+
+def test_line_below_the_denominator_that_leaves_the_rule_is_not_part_of_it() -> None:
+    """線の外へ続く次の行は本文なので、分母に入れない。"""
+    rule = PdfRule(500.0, 120.0, 160.0)
+    blocks = [
+        MathBlock("formula", (60.0, 484.0, 250.0, 516.0), "A = 1 1-x"),
+        MathBlock("body", (60.0, 460.0, 400.0, 482.0), "next line of the body continues past the rule"),
+    ]
+    glyphs = [
+        *_axis_run("A =", 95.0),
+        *_run("1", 138.0, 503.0),
+        *_run("1-x", 130.0, 487.0),
+        *_run("next line of the body continues past the rule", 62.0, 475.0),
+    ]
+
+    (restored,) = restore_math_text(blocks, glyphs, [rule])
+
+    assert restored.text == "A = 1/(1-x)"
+    assert restored.merged_keys == ("formula",)
+
+
+def test_wrapped_label_beside_a_ruled_fraction_is_not_a_fraction() -> None:
+    """線のある分数の隣の項目名は、中央にそろって演算子に挟まれても分数にせず、項の順序を保つ。"""
+    rule = PdfRule(500.0, 230.0, 270.0)
+    blocks = [
+        MathBlock("head", (235.0, 503.0, 265.0, 516.0), "SSS"),
+        MathBlock("rest", (165.0, 470.0, 400.0, 507.0), "= RRRR TTTT + - U 1-x"),
+    ]
+    glyphs = [
+        *_axis_run("=", 170.0),
+        *_wrapped_label(("RRRR", "TTTT"), 190.0, 500.0, _NARROW_PITCH),
+        *_axis_run("+", 219.0),
+        *_run("SSS", 240.0, 505.0),
+        *_run("1-x", 240.0, 487.0),
+        *_axis_run("- U", 276.0),
+    ]
+
+    (restored,) = restore_math_text(blocks, glyphs, [rule])
+
+    assert restored.text == "= RRRR TTTT + SSS/(1-x) - U"
+    assert restored.stacked_fraction_count == 0
+    assert restored.line_count == 1
+
+
+def test_numerator_in_a_heading_block_is_used_only_when_the_rule_has_an_operator() -> None:
+    """解析エンジンが見出しと判定した分子は、軸に演算子が隣る線のときだけ字を使う。"""
+    rule = PdfRule(500.0, 230.0, 270.0)
+    heading = MathBlock("head", (235.0, 503.0, 265.0, 516.0), "SSS", expression_only=True)
+    rest = MathBlock("rest", (100.0, 470.0, 400.0, 502.0), "= 1-x")
+    numerator, denominator = _run("SSS", 240.0, 505.0), _run("1-x", 240.0, 487.0)
+
+    (restored,) = restore_math_text([heading, rest], [*_axis_run("=", 215.0), *numerator, *denominator], [rule])
+    assert restored.text == "= SSS/(1-x)"
+    assert restored.merged_keys == ("head", "rest")
+
+    # 見出しの下の区切りの線: 軸に演算子が無いので、見出しと次の行をつなげない。
+    plain_body = MathBlock("rest", (100.0, 470.0, 400.0, 502.0), "1-x")
+    assert restore_math_text([heading, plain_body], [*numerator, *denominator], [rule]) == []
+
+
+def test_heading_block_text_is_never_changed_on_its_own() -> None:
+    """見出しの塊は、式の一部と確かめられないかぎり上付きも直さない。"""
+    heading = MathBlock("head", _PAGE_BOX, "mc 2", expression_only=True)
+    glyphs = [*_run("mc", 100.0, 500.0), *_run("2", 112.0, 504.0, size=6.0)]
+
+    assert restore_math_text([heading], glyphs, []) == []
+
+
+def test_stack_on_a_page_with_a_ruled_fraction_is_not_guessed() -> None:
+    """線を描く文書の線の無い積み重ねは、分数でなく項目名の折り返しとみる。"""
+    parts, rule = _fraction("1", "1-x", 80.0, 700.0)
+    stack = [*_run("G =", 50.0, 500.0), *_stack("p", "q", 72.0), *_run("+", 82.0, 500.0), *_stack("r", "s", 92.0)]
+    blocks = [
+        MathBlock("ruled", (70.0, 680.0, 110.0, 715.0), "1 1-x"),
+        MathBlock("stack", (40.0, 480.0, 120.0, 520.0), "G = p q + r s"),
+    ]
+
+    (restored,) = restore_math_text(blocks, [*parts, *stack], [rule])
+
+    assert restored.key == "ruled"
+    assert restored.text == "1/(1-x)"
+
+
+def test_stack_with_a_line_pitch_too_narrow_for_a_rule_is_not_a_fraction() -> None:
+    """上下の行間に線を引く余地が無い積み重ねは、演算子に挟まれても折り返しの行とみる。"""
+    label = _wrapped_label(("RRRR", "TTTT"), 72.0, 503.5, _NARROW_PITCH)
+
+    assert _restored_text(_run("G =", 50.0, 500.0), label, _run("+ U", 102.0, 500.0), text="G = RRRR TTTT + U") == []
+
+
+def test_wrapped_label_without_an_operator_towards_the_fraction_is_left_alone() -> None:
+    """分数との間に演算子が無い 2 行は、式の項と言えないのでまとめない。"""
+    parts, rule = _fraction("1", "1-x", 200.0, 500.0)
+    blocks = [
+        MathBlock("upper", (165.0, 505.0, 198.0, 520.0), "AAAA"),
+        MathBlock("lower", (165.0, 480.0, 198.0, 495.0), "BBBB"),
+        MathBlock("formula", (198.0, 480.0, 225.0, 520.0), "1 1-x"),
+    ]
+
+    (restored,) = restore_math_text(blocks, [*_wrapped_label(("AAAA", "BBBB"), 170.0, 500.0, 21.0), *parts], [rule])
+
+    assert restored.merged_keys == ("formula",)
+    assert restored.text == "1/(1-x)"
+
+
+def test_curved_brackets_around_a_ruled_expression_are_kept() -> None:
+    """曲線の括弧が左右で対になり、式を囲むときは括弧を本文に戻す（項の結びつきが変わるので）。"""
+    parts, rule = _fraction("1", "1-x", 200.0, 500.0)
+    glyphs = [*_axis_run("U -", 135.0), *_axis_run("A *", 170.0), *parts, *_axis_run("- V", 234.0)]
+    paths = [(160.0, 476.0, 166.0, 524.0), (222.0, 476.0, 228.0, 524.0)]
+
+    (restored,) = restore_math_text([_block("U - A * 1 1-x - V")], glyphs, [rule], (), paths)
+    assert restored.text == "U - (A * 1/(1-x)) - V"
+
+    # 片側だけの曲線（場合分けの括弧など）は、対にならないので足さない。
+    (one_sided,) = restore_math_text([_block("U - A * 1 1-x - V")], glyphs, [rule], (), paths[:1])
+    assert one_sided.text == "U - A * 1/(1-x) - V"
+
+
+def test_radical_bar_is_not_a_fraction_bar_and_keeps_the_root() -> None:
+    """分母の根号の線は分数の線にせず、根号を本文に残す（落とすと別の式になる）。"""
+    bar = PdfRule(500.0, 110.0, 150.0)
+    radical_bar = PdfRule(497.0, 113.0, 150.0)
+    stroke = (106.0, 472.0, 114.5, 498.0)
+    glyphs = [*_axis_run("A =", 85.0), *_run("num", 121.0, 505.0), *_run("a+b", 121.0, 485.0)]
+
+    assert _text_of([_block("A = num a+b")], glyphs, bar) == ["A = num/(a+b)"]
+    (restored,) = restore_math_text([_block("A = num a+b")], glyphs, [bar, radical_bar], (), [stroke])
+    assert restored.text == "A = num/√(a+b)"
+
+    # 分母の根号で線が式の行より上がっても、項の順序を保つ。
+    raised = [
+        *_axis_run("A =", 85.0, axis=494.0),
+        *_run("num", 121.0, 505.0),
+        *_run("a+b", 121.0, 485.0),
+        *_axis_run("* B", 157.0, axis=494.0),
+    ]
+    (kept_order,) = restore_math_text([_block("A = num * B a+b")], raised, [bar, radical_bar], (), [stroke])
+    assert kept_order.text == "A = num/√(a+b) * B"
+    assert kept_order.line_count == 1
+
+
+def test_picture_with_curved_brackets_becomes_a_formula_in_the_body(tmp_path: Path) -> None:
+    """図と判定された括弧つきの式も、字と線だけの 1 行になれば本文の式にする。"""
+    pdf = _pdf_with_form(
+        tmp_path / "source.pdf",
+        b"\n".join(
+            (
+                b"BT /F1 10 Tf 92 707 Td (PP) Tj ET",
+                b"BT /F1 10 Tf 92 693 Td (QQ) Tj ET",
+                b"BT /F1 10 Tf 116 697 Td (*) Tj ET",
+                b"BT /F1 10 Tf 148 703 Td (1) Tj ET",
+                b"BT /F1 10 Tf 143 689 Td (1-x) Tj ET",
+                b"130 699.7 40 0.6 re f",
+                b"0.5 w 88 680 m 80 690 80 710 88 722 c S",
+                b"0.5 w 174 680 m 182 690 182 710 174 722 c S",
+                b"BT /F1 10 Tf 189 697 Td (- U) Tj ET",
+            )
+        ),
+        b"",
+    )
+
+    (restored,) = _restore_math_layout(_picture_records("PP QQ * 1 1-x - U", bbox=(160.0, 156.0, 420.0, 240.0)), pdf, {1: _PAGE})
+
+    assert restored.category == "Formula"
+    assert restored.text == "(PP QQ * 1/(1-x)) - U"
+
+
+def test_adapter_uses_a_heading_only_as_part_of_a_ruled_expression(tmp_path: Path) -> None:
+    """見出しと判定された分子は、線のある式の分子のときだけ式の record にまとめ、それ以外の見出しは変えない。"""
+    pdf = _pdf_with_form(
+        tmp_path / "source.pdf",
+        b"\n".join(
+            (
+                b"BT /F1 10 Tf 108 697 Td (A =) Tj ET",
+                b"BT /F1 10 Tf 140 703 Td (num) Tj ET",
+                b"BT /F1 10 Tf 143 689 Td (1-x) Tj ET",
+                b"130 699.7 40 0.6 re f",
+                b"BT /F1 10 Tf 100 600 Td (Plain heading) Tj ET",
+            )
+        ),
+        b"",
+    )
+    records = [
+        _record("1", "num", [268.0, 170.0, 340.0, 190.0], category="Section-header"),
+        _record("2", "A = 1-x", [190.0, 190.0, 340.0, 225.0], category="Text"),
+        _record("3", "Plain heading", [190.0, 380.0, 340.0, 405.0], category="Section-header"),
+    ]
+
+    restored = _restore_math_layout(records, pdf, {1: _PAGE})
+
+    assert [(record.id, record.category, record.text) for record in restored] == [
+        ("1", "Formula", "A = num/(1-x)"),
+        ("3", "Section-header", "Plain heading"),
+    ]
