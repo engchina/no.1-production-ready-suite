@@ -3,10 +3,9 @@
 #104 の後の合成の再試験（品質評価 rag-research の合成 3 ケース × 3 試行・チャット）で、次の 2 つが
 残った。どちらも実際の Run（`rag_validate_answer` の結果・Run の step）の形で確かめる。
 
-- B1: 監査モデルは段落を根拠で裏付けた（`audit_status=supported`）のに、監査が写した原文が根拠に
-  見当たらない（`quote_unmatched`。run_803ced7b…）・監査が根拠の ID にファイル名を返した（未登録の
-  原文 ID。run_13a17c51…）だけで、正しい回答が `validation_nothing_confirmed` の拒答に
-  数えられていた。
+- B1: 監査モデルは段落を根拠で裏付けた（`audit_status=supported`）のに、監査が根拠の ID に
+  ファイル名を返した（未登録の原文 ID。run_13a17c51…）だけで、正しい回答が
+  `validation_nothing_confirmed` の拒答に数えられていた。
 - B2: 範囲外の質問（「社員食堂の今日の献立」。run_d4686772…）で、空の `nl2sql_list_profiles` の
   成功を現場のデータの確認に数え、拒答が `environment_tools` の条件付きの回答になっていた。
 """
@@ -77,17 +76,15 @@ def _supported(quote: str, chunk_id: str = CHUNK_TABLE) -> dict[str, Any]:
     }
 
 
-def _quote_unmatched(quote: str, chunk_id: str = CHUNK_TABLE) -> dict[str, Any]:
-    """監査は裏付けたが、監査が写した原文が根拠に見当たらない判定（run_803ced7b… の形）。"""
+def _audit_id_invalid(quote: str, chunk_id: str = CHUNK_TABLE) -> dict[str, Any]:
+    """監査は裏付けたが、監査が返した根拠の ID が根拠に決まらない判定。"""
     return {
         "answer_quote": quote,
         "status": "citation_error",
         "chunk_id": chunk_id,
-        "reason": "裏付けとして写した原文が、結び付けた根拠に見当たりません。（採らなかった監査の"
-        "判定 supported の理由: 表に「一般社員」の行があり、回答の主張と完全に一致する。）",
+        "reason": "未登録の原文ID。表に「一般社員」の行があり、回答の主張と完全に一致する。",
         "audit_status": "supported",
-        "reference_check": "quote_unmatched",
-        "support_check": "quote_unmatched",
+        "reference_check": "audit_id_invalid",
     }
 
 
@@ -99,7 +96,7 @@ def _unknown_id(quote: str) -> dict[str, Any]:
         "chunk_id": "社内規程サンプル.pdf",
         "reason": "未登録の原文ID。規程名と第3条（出張旅費）の表が確認できる。主張と一致。",
         "audit_status": "supported",
-        "reference_check": "quote_unmatched",
+        "reference_check": "audit_id_invalid",
         "support_check": None,
     }
 
@@ -228,18 +225,18 @@ def _menu_validation() -> dict[str, Any]:
     )
 
 
-def test_supported_audit_with_unmatched_quotes_is_not_a_refusal() -> None:
-    # run_803ced7b…: 監査は 3 段落とも supported だが、写した原文の照合（quote_unmatched）で
+def test_supported_audit_with_invalid_audit_ids_is_not_a_refusal() -> None:
+    # 監査は 3 段落とも supported だが、返した ID の照合（audit_id_invalid）で
     # すべて citation_error。根拠が無いことは示していないので拒答にしない（#108）。
     validation = _validated(
         HOTEL_ANSWER,
-        _quote_unmatched(HOTEL_LEAD),
-        _quote_unmatched(HOTEL_SOURCE, CHUNK_HEADER),
-        _quote_unmatched(HOTEL_NOTE),
+        _audit_id_invalid(HOTEL_LEAD),
+        _audit_id_invalid(HOTEL_SOURCE, CHUNK_HEADER),
+        _audit_id_invalid(HOTEL_NOTE),
     )
     assert [mark["reasons"][0]["code"] for mark in validation["passage_marks"]] == [
-        "quote_unmatched",
-        "quote_unmatched",
+        "citation_error",
+        "citation_error",
     ]
     content = answer_outcome(HOTEL_ANSWER, steps=_retrieval_steps(), validation=validation)
     assert (content["value"], content["basis"], content["signals"]) == (
@@ -277,12 +274,11 @@ def test_audit_returning_a_file_name_as_evidence_id_is_not_a_refusal() -> None:
 
 
 def test_reference_failure_diagnostics_are_kept_in_the_validation_artifact() -> None:
-    # #112: RAG が返す監査の応答の参照の誤りの診断（監査が写した原文・返した ID）と監査し直しの
+    # #112: RAG が返す監査の応答の ID の誤りの診断（返した ID）と監査し直しの
     # 結果を、Run の「資料との照合」の成果物にそのまま残す（根本原因を Run から確かめられるように
     # する）。
     failed = {
-        **_quote_unmatched(HOTEL_LEAD),
-        "support_quote": "一般社員の宿泊費の上限は1泊12,000円",
+        **_audit_id_invalid(HOTEL_LEAD),
         "audit_evidence_id": "E02284da54382ec31f90d",
         "reference_reaudit": "rejected",
     }
@@ -291,10 +287,9 @@ def test_reference_failure_diagnostics_are_kept_in_the_validation_artifact() -> 
     for result in (validation["result"], validation["connections"][0]["result"]):
         claims = {claim["answer_quote"]: claim for claim in result["claims"]}
         assert (
-            claims[HOTEL_LEAD]["support_quote"],
             claims[HOTEL_LEAD]["audit_evidence_id"],
             claims[HOTEL_LEAD]["reference_reaudit"],
-        ) == ("一般社員の宿泊費の上限は1泊12,000円", "E02284da54382ec31f90d", "rejected")
+        ) == ("E02284da54382ec31f90d", "rejected")
         assert claims[HOTEL_NOTE]["reference_reaudit"] == "adopted"
     content = answer_outcome(HOTEL_ANSWER, steps=_retrieval_steps(), validation=validation)
     assert (content["value"], content["signals"]) == ("conditional", ["unverified_passages"])
@@ -315,11 +310,14 @@ def test_reference_failure_diagnostics_are_kept_in_the_validation_artifact() -> 
     [
         # 回答が書いた根拠の ID が根拠に無い（回答の引用の誤り）。
         (
-            {**_quote_unmatched(HOTEL_LEAD), "reference_check": "answer_id_invalid"},
+            {**_audit_id_invalid(HOTEL_LEAD), "reference_check": "answer_id_invalid"},
             "answer_id_invalid",
         ),
         # 監査の元の判定が supported でない出典の誤り。
-        ({**_quote_unmatched(HOTEL_LEAD), "audit_status": "citation_error"}, "audit_not_supported"),
+        (
+            {**_audit_id_invalid(HOTEL_LEAD), "audit_status": "citation_error"},
+            "audit_not_supported",
+        ),
         # 根拠で確かめられない。
         (
             {"answer_quote": HOTEL_LEAD, "status": "unsupported", "reason": "記載が無い。"},
@@ -336,8 +334,8 @@ def test_real_citation_errors_and_unsupported_passages_stay_refusals(
     validation = _validated(
         HOTEL_ANSWER,
         lead,
-        _quote_unmatched(HOTEL_SOURCE, CHUNK_HEADER),
-        _quote_unmatched(HOTEL_NOTE),
+        _audit_id_invalid(HOTEL_SOURCE, CHUNK_HEADER),
+        _audit_id_invalid(HOTEL_NOTE),
     )
     content = answer_outcome(HOTEL_ANSWER, steps=_retrieval_steps(), validation=validation)
     assert (content["value"], content["basis"]) == (
@@ -356,7 +354,7 @@ def test_contradicted_passage_is_still_removed_and_counted() -> None:
         "audit_status": "contradicted",
         "reference_check": "resolved",
     }
-    validation = _validated(HOTEL_ANSWER, contradicted, _quote_unmatched(HOTEL_NOTE))
+    validation = _validated(HOTEL_ANSWER, contradicted, _audit_id_invalid(HOTEL_NOTE))
     assert [item["text"] for item in validation["removed_passages"]] == [HOTEL_LEAD]
     content = answer_outcome(HOTEL_ANSWER, steps=_retrieval_steps(), validation=validation)
     assert (content["value"], content["basis"]) == (
@@ -412,7 +410,7 @@ def test_apology_lead_unconfirmed_conclusion_is_an_absence_conclusion() -> None:
 
 def test_quality_summary_three_cases_three_trials_counts_only_actual_refusals() -> None:
     # 合成 3 ケース × 3 試行（評価 rag-research の再試験。#108）: hotel は 1 試行が
-    # quote_unmatched、
+    # audit_id_invalid、
     # overtime は答えた回答、out-of-scope は 3 試行とも範囲外の拒答（NL2SQL の空の探索を含む）。
     # refused_after_tools は実際の拒答の数（3）と一致する。
     hotel_supported = _validated(
@@ -423,9 +421,9 @@ def test_quality_summary_three_cases_three_trials_counts_only_actual_refusals() 
     )
     hotel_unmatched = _validated(
         HOTEL_ANSWER,
-        _quote_unmatched(HOTEL_LEAD),
-        _quote_unmatched(HOTEL_SOURCE, CHUNK_HEADER),
-        _quote_unmatched(HOTEL_NOTE),
+        _audit_id_invalid(HOTEL_LEAD),
+        _audit_id_invalid(HOTEL_SOURCE, CHUNK_HEADER),
+        _audit_id_invalid(HOTEL_NOTE),
     )
     overtime = "時間外勤務の上限は月 45 時間、年 360 時間です。"
     overtime_validation = _validated(overtime, _supported(overtime))

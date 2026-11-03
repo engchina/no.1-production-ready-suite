@@ -228,9 +228,9 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
     auth: Any,  # noqa: F811
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """監査の応答の参照の誤りの判定だけ、監査が写した原文と返した ID を上限の字数で返し、
+    """監査の応答の ID の誤りの判定だけ、返した ID を上限の字数で返し、
     監査し直しの結果を返す（#112）。"""
-    long_quote = "一般社員の宿泊費の上限は\n1泊12,000円" + "あ" * 300
+    long_id = "file\nname" + "x" * 300
 
     async def fake_validate(
         question: str, answer: str, refs: list[EvidenceRef], settings: Any, **kwargs: Any
@@ -244,12 +244,10 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
                     "answer_quote": "上限は 12,000円。",
                     "status": "citation_error",
                     "source_id": "c1",
-                    "reason": "裏付けとして写した原文が、結び付けた根拠に見当たりません。",
+                    "reason": "未登録の原文ID。",
                     "audit_status": "supported",
-                    "reference_check": "quote_unmatched",
-                    "support_check": "quote_unmatched",
-                    "support_quote": long_quote,
-                    "audit_evidence_id": "E02284da54382ec31f90d",
+                    "reference_check": "audit_id_invalid",
+                    "audit_evidence_id": long_id,
                     "reference_reaudit": "rejected",
                 },
                 # 監査し直しで照合を通った判定は、誤りではないので診断を返さない。
@@ -260,7 +258,6 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
                     "reason": "表に記載",
                     "audit_status": "supported",
                     "reference_check": "resolved",
-                    "support_quote": "課長以上 15,000円",
                     "audit_evidence_id": "E02284da54382ec31f90d",
                     "reference_reaudit": "adopted",
                 },
@@ -271,7 +268,6 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
                     "reason": "表に記載",
                     "audit_status": "supported",
                     "reference_check": "resolved",
-                    "support_quote": "一般社員 2,000円",
                 },
             ],
         )
@@ -289,21 +285,14 @@ def test_mcp_validate_answer_returns_reference_failure_diagnostics(
     )["structuredContent"]
     failed, adopted, plain = body["claims"]
     assert (
-        failed["support_quote"]
-        == ("一般社員の宿泊費の上限は 1泊12,000円" + "あ" * 300)[: mcp_tools.CLAIM_DIAGNOSTIC_CHARS]
+        failed["audit_evidence_id"] == ("file name" + "x" * 300)[: mcp_tools.CLAIM_DIAGNOSTIC_CHARS]
     )
-    assert len(failed["support_quote"]) == mcp_tools.CLAIM_DIAGNOSTIC_CHARS == 200
-    assert (failed["audit_evidence_id"], failed["reference_reaudit"]) == (
-        "E02284da54382ec31f90d",
-        "rejected",
-    )
-    assert (adopted["support_quote"], adopted["audit_evidence_id"]) == (None, None)
+    assert len(failed["audit_evidence_id"]) == mcp_tools.CLAIM_DIAGNOSTIC_CHARS == 200
+    assert failed["reference_reaudit"] == "rejected"
+    assert "support_quote" not in failed
+    assert adopted["audit_evidence_id"] is None
     assert adopted["reference_reaudit"] == "adopted"
-    assert (plain["support_quote"], plain["audit_evidence_id"], plain["reference_reaudit"]) == (
-        None,
-        None,
-        None,
-    )
+    assert (plain["audit_evidence_id"], plain["reference_reaudit"]) == (None, None)
 
 
 @pytest.mark.usefixtures("auth")
@@ -807,6 +796,10 @@ _STEP_VECTORS = (
     ("設定 A の値", (1.0, 0.0, 0.3)),
     ("反映ボタンを押", (0.0, 1.0, 0.3)),
     ("保存ボタンを押", (0.5, 0.5, 1.0)),
+    # 回答の段落の言い換え（監査の判定の段落の本文で手順と照らす）。
+    ("設定 A に値", (1.0, 0.0, 0.3)),
+    ("反映ボタンで", (0.0, 1.0, 0.3)),
+    ("保存ボタンで", (0.5, 0.5, 1.0)),
 )
 
 
@@ -835,8 +828,8 @@ class _SharedOracle(_GuideOracle):
         )
 
 
-def _paragraph_claims(monkeypatch: MonkeyPatch, quotes: dict[str, str]) -> None:
-    """段落（行）ごとに、裏付けとして写した原文を返す主張の監査のスタブ（すべて supported）。"""
+def _paragraph_claims(monkeypatch: MonkeyPatch) -> None:
+    """段落（行）ごとの主張の監査のスタブ（すべて supported）。"""
 
     def fake_claims(
         question: str, answer: str, items: list[dict[str, Any]], settings: Any, **_options: Any
@@ -850,7 +843,6 @@ def _paragraph_claims(monkeypatch: MonkeyPatch, quotes: dict[str, str]) -> None:
                     "answer_quote": line,
                     "status": "supported",
                     "source_id": "c2",
-                    "support_quote": next(q for key, q in quotes.items() if key in line),
                     "reason": "記載",
                 }
                 for line in lines
@@ -889,9 +881,7 @@ async def test_validate_answer_checks_each_guide_step_by_its_main_operation(
         support_guide_store.SupportGuideStore, "published_contents", published_contents
     )
     calls = _stub_embed(monkeypatch)
-    _paragraph_claims(
-        monkeypatch, {"設定 A に": _MAIN_1, "反映ボタンで": _MAIN_2, "保存ボタン": _COMMON}
-    )
+    _paragraph_claims(monkeypatch)
     oracle = cast(Any, _SharedOracle())
     guide = GuideCheckRef("sap-1", "guide-1", 2)
     refs = [EvidenceRef("d2", "c2")]

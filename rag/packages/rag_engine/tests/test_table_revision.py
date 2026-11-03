@@ -114,7 +114,6 @@ def test_final_validation_returns_the_corrected_passage() -> None:
                         "answer_quote": "段落",
                         "answer_passage_id": passage["id"],
                         "evidence_id": evidence,
-                        "evidence_quote": "",
                         "applicability": "matched",
                         "status": "supported",
                         "source_id": "",

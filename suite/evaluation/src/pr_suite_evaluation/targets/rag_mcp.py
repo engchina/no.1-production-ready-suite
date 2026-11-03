@@ -43,7 +43,7 @@ TOOL = "rag_search"
 # 出力の形は 36 と同じ）、#3546 で安全チェックの未完了 guardrail_degraded と根拠 0 件の段
 # zero_evidence を足して 38、#4058 で rag_validate_answer の判定の診断を足して 39
 # 〔rag_search の出力の形は 38 と同じ〕）。
-RAG_SEARCH_SCHEMA_VERSION = 39
+RAG_SEARCH_SCHEMA_VERSION = 40
 # 返す根拠の上限（契約の evidence_limit の maximum）。
 DEFAULT_EVIDENCE_LIMIT = 50
 MAX_EVIDENCE_LIMIT = 50

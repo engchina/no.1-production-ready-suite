@@ -60,7 +60,6 @@ def test_original_question_state_is_checked_without_a_clarification_answer(quest
                         "answer_quote": passage["text"],
                         "answer_passage_id": passage["id"],
                         "evidence_id": evidence["evidence_id"],
-                        "evidence_quote": case["evidence"],
                         "source_id": "",
                         "applicability": "matched",
                         "status": "supported",

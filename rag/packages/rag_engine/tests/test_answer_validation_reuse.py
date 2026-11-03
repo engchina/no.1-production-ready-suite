@@ -115,7 +115,6 @@ def test_only_unmatched_passages_go_to_the_model() -> None:
                             if i.get("id") == ("c-manual" if "承認者" in item["text"] else "c-rule")
                         ),
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に記載",
                     }
                     for item in payload["answer_passages"]
@@ -147,7 +146,6 @@ def test_reuse_needs_the_evidence_to_be_reread() -> None:
                         "status": "unsupported",
                         "evidence_id": "",
                         "source_id": "",
-                        "evidence_quote": "",
                         "reason": "根拠に無い",
                     }
                 ]

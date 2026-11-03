@@ -1915,10 +1915,7 @@ def test_supported_claims_with_unbound_audit_ids_still_keep_the_answer() -> None
     published = publish_answer(SETTING_ANSWER, _verdict(claim))
     assert published.body == SETTING_ANSWER
     assert published.passage_marks[0]["reasons"][0]["code"] == "citation_error"
-    # 引用が根拠に無い（quote_unmatched）・監査の元の判定が根拠に無い段落は、その理由にする。
-    unmatched = _unbound("citation_error", "supported", "quote_unmatched")
-    marks = publish_answer(SETTING_ANSWER, _verdict(unmatched)).passage_marks
-    assert marks[0]["reasons"][0]["code"] == "quote_unmatched"
+    # 監査の元の判定が根拠に無い段落は、その理由にする。
     refuted = _unbound("citation_error", "unsupported", "audit_id_invalid")
     marks = publish_answer(SETTING_ANSWER, _verdict(refuted)).passage_marks
     assert marks[0]["reasons"][0]["code"] == "unsupported"
@@ -3065,25 +3062,22 @@ def test_answer_trace_ids_are_the_searches_of_the_connection() -> None:
 
 
 def test_paragraphs_rag_did_not_adopt_as_supported_are_marked_with_the_reason() -> None:
-    """RAG が監査の supported を採らなかった段落（別の対象の記載・表の別の行の値・写した原文が根拠に
-    無い）は本文に残し、規則の検査は警告、写した原文が無いのは未確認の印にする（#2653・#2659・
-    #2738）。"""
+    """RAG が監査の supported を採らなかった段落（別の対象の記載・表の別の行の値）は本文に残し、
+    規則の検査は警告の印にする（#2653・#2659・#2738）。"""
     own_step = "処理 A の一覧で対象を選び、取消ボタンを押します。"
     other_step = "エラー E10 が出た場合は、訂正画面で設定値を 5 に変更します。"
     swapped = "区分Ⅱでは選択肢の値 01 を選びます。"
-    unquoted = "取消の後は、処理 A をもう一度実行します。"
 
-    def not_adopted(quote: str, check: str, status: str = "unsupported") -> dict[str, Any]:
-        claim = _claim(quote, status, "根拠の対象が違う。")
+    def not_adopted(quote: str, check: str) -> dict[str, Any]:
+        claim = _claim(quote, "unsupported", "根拠の対象が違う。")
         return {**claim, "audit_status": "supported", "support_check": check}
 
     result = _verdict(
         _claim(own_step, "supported"),
         not_adopted(other_step, "target_mismatch"),
         not_adopted(swapped, "value_unbound"),
-        not_adopted(unquoted, "quote_unmatched", "citation_error"),
     )
-    answer = f"{own_step}\n\n{other_step}\n\n{swapped}\n\n{unquoted}"
+    answer = f"{own_step}\n\n{other_step}\n\n{swapped}"
 
     published = publish_answer(answer, result)
 
@@ -3094,19 +3088,17 @@ def test_paragraphs_rag_did_not_adopt_as_supported_are_marked_with_the_reason() 
     ] == [
         (other_step, "warning", "target_mismatch"),
         (swapped, "warning", "value_unbound"),
-        (unquoted, "unverified", "quote_unmatched"),
     ]
     assert published.sections[0].splitlines()[3:] == [
         f"- 根拠は別の対象についての記載: 「{other_step}」",
         f"- 根拠の表の対応と違う可能性: 「{swapped}」",
-        f"- 引用の原文が根拠に見当たらない: 「{unquoted}」",
     ]
     assert published.withheld == {
         "removed": 0,
-        "unverified": 1,
+        "unverified": 0,
         "warnings": 2,
         "all": False,
-        "listed": 3,
+        "listed": 2,
     }
 
 
@@ -3180,7 +3172,7 @@ def _contract_verdict(case: dict[str, Any]) -> dict[str, Any]:
             elif text in marks:
                 reason = marks[text]["reasons"][0]
                 claim = _claim(text, "unsupported", reason["detail"])
-                if reason["code"] in {"target_mismatch", "value_unbound", "quote_unmatched"}:
+                if reason["code"] in {"target_mismatch", "value_unbound"}:
                     claim.update(audit_status="supported", support_check=reason["code"])
                 claims.append(claim)
             else:

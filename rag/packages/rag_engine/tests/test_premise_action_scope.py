@@ -95,22 +95,6 @@ def test_unbound_or_incomplete_conflict_never_overrides_support(change):
     assert diagnostics and all(not item["adopted"] for item in diagnostics)
 
 
-def test_ignored_execution_conflict_does_not_bypass_quote_verification():
-    claim = ValidationClaimCheck(
-        answer_quote="変更案を示します。",
-        answer_passage_id="A1",
-        status="supported",
-        source_id="c1",
-        evidence_quote="原文にはない引用。",
-        support_quote="原文にはない引用。",
-        applicability="matched",
-        reason="合成の監査応答",
-    )
-    [result] = _enforce_support([claim], [{"id": "A1", "text": claim.answer_quote}], {}, {"c1": "確認してから変更します。"}, [])
-    assert result.status == "citation_error"
-    assert result.support_check == "quote_unmatched"
-
-
 @pytest.mark.parametrize("error", [RuntimeError("synthetic failure"), TimeoutError("synthetic timeout")])
 def test_failed_comparison_keeps_prior_support_and_failure_status(error):
     diagnostics = []

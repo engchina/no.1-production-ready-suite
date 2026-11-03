@@ -30,7 +30,6 @@ def test_uncited_evidence_cannot_replace_the_actual_citation(first_text):
                     "answer_passage_id": payload["answer_passages"][0]["id"],
                     "status": "supported",
                     "evidence_id": chosen["evidence_id"],
-                    "evidence_quote": OPERATION,
                     "source_id": "",
                     "applicability": "matched",
                     "reason": "合成の誤った引用選択",
@@ -46,8 +45,7 @@ def test_uncited_evidence_cannot_replace_the_actual_citation(first_text):
     assert claim["audit_status"] == "supported"
 
 
-@pytest.mark.parametrize("support_quote", [OPERATION, OPERATION + "…" + CONDITION])
-def test_two_actual_citations_can_jointly_support_operation_and_condition(support_quote):
+def test_two_actual_citations_can_jointly_support_operation_and_condition():
     answer = f"承認済みの場合だけ、{OPERATION}【証拠 ID {FIRST}】【証拠 ID {SECOND}】"
     evidence = [{"id": FIRST, "source": "a.pdf", "text": OPERATION}, {"id": SECOND, "source": "b.pdf", "text": CONDITION}]
 
@@ -64,7 +62,6 @@ def test_two_actual_citations_can_jointly_support_operation_and_condition(suppor
                     "answer_passage_id": passage["id"],
                     "status": "supported",
                     "evidence_id": ",".join(row["evidence_id"] for row in docs),
-                    "evidence_quote": support_quote,
                     "source_id": "",
                     "applicability": "matched",
                     "reason": "操作と条件を実際の2引用で共同確認",
@@ -92,7 +89,6 @@ def test_unknown_target_does_not_become_supported_even_with_an_actual_citation()
                     "answer_passage_id": payload["answer_passages"][0]["id"],
                     "status": "supported",
                     "evidence_id": evidence["evidence_id"],
-                    "evidence_quote": OPERATION,
                     "source_id": "",
                     "applicability": "unknown",
                     "reason": "対象との対応は未確認",
@@ -123,7 +119,6 @@ def _supported_by(chosen_id: str, seen: list[dict]):
                     "answer_passage_id": passage["id"],
                     "status": "supported",
                     "evidence_id": chosen["evidence_id"],
-                    "evidence_quote": OPERATION,
                     "source_id": "",
                     "applicability": "matched",
                     "reason": "合成の判定",

@@ -205,7 +205,6 @@ MARK_WARNING = "warning"
 PASSAGE_REASONS: dict[str, tuple[str, str]] = {
     "unsupported": (MARK_UNVERIFIED, "根拠で確かめられない"),
     "citation_error": (MARK_UNVERIFIED, "出典を確かめられない"),
-    "quote_unmatched": (MARK_UNVERIFIED, "引用の原文が根拠に見当たらない"),
     "unassessed": (MARK_UNVERIFIED, "確かめが終わっていない"),
     "figure_not_read": (MARK_UNVERIFIED, "図の画像を読めておらず確かめられない"),
     "target_mismatch": (MARK_WARNING, "根拠は別の対象についての記載"),
@@ -225,7 +224,7 @@ ANSWER_WARNING_REASONS = {
 }
 # RAG が監査の裏付け（supported）を採らなかった理由（`support_check`。#2659・#2653）のうち、印の
 # 理由にするもの（それ以外は判定〔`status`〕で決める）。
-_SUPPORT_CHECK_REASONS = frozenset({"target_mismatch", "value_unbound", "quote_unmatched"})
+_SUPPORT_CHECK_REASONS = frozenset({"target_mismatch", "value_unbound"})
 # 判定（`status`）ごとの印の理由（`supported`・`data_confirmation` など、ここに無い判定は
 # 印にしない）。
 _STATUS_REASONS = {
@@ -1715,10 +1714,10 @@ def claim_reason(claim: JsonObject) -> str | None:
     """本文に残す段落の判定の、印の理由の code（印にしない判定は None）。
 
     根拠と矛盾する段落（`is_contradicted`）は呼ぶ側が先に分ける（本文から外す）。RAG が監査の
-    裏付けを採らなかった理由（`support_check`）のうち、別の対象・表の行の対応は警告、写した原文が
-    根拠に無いのは未確認にする。図の画像を読めていない図の見た目の段落は `figure_not_read`。
-    出典を照合できない段落は、引用が根拠に無ければ `quote_unmatched`、監査の元の判定が
-    根拠に無い（`audit_status=unsupported`）なら `unsupported`。
+    裏付けを採らなかった理由（`support_check`）のうち、別の対象・表の行の対応は警告にする。
+    図の画像を読めていない図の見た目の段落は `figure_not_read`。
+    出典を照合できない段落は、監査の元の判定が根拠に無い（`audit_status=unsupported`）なら
+    `unsupported`。
     """
     status = claim.get("status")
     if status == "supported" or claim.get("non_claim"):
@@ -1728,11 +1727,8 @@ def claim_reason(claim: JsonObject) -> str | None:
     support = claim.get("support_check")
     if support in _SUPPORT_CHECK_REASONS and status in INVALID_CLAIM_STATUSES:
         return str(support)
-    if status == "citation_error":
-        if claim.get("reference_check") == "quote_unmatched":
-            return "quote_unmatched"
-        if claim.get("audit_status") == "unsupported":
-            return "unsupported"
+    if status == "citation_error" and claim.get("audit_status") == "unsupported":
+        return "unsupported"
     return _STATUS_REASONS.get(str(status))
 
 

@@ -59,7 +59,7 @@ def _plan(steps: list[dict[str, Any]] = STEPS) -> GuidePlan:
 
 
 def _audit(quotes: list[str]) -> Callable[..., ClaimAuditOutput]:
-    """段落の順に、裏付けとして写した原文（quote）を返す監査のスタブ（すべて supported）。"""
+    """段落の順に、原文（quote）を含む根拠の ID を返す監査のスタブ（すべて supported）。"""
 
     def parse(system: str, inputs: str, settings: Any, schema: Any, provider_id: str | None = None) -> ClaimAuditOutput:
         payload = json.loads(inputs)
@@ -72,7 +72,6 @@ def _audit(quotes: list[str]) -> Callable[..., ClaimAuditOutput]:
                     "answer_quote": "段落",
                     "answer_passage_id": passage["id"],
                     "evidence_id": chunk["evidence_id"],
-                    "evidence_quote": quote,
                     "applicability": "matched",
                     "status": "supported",
                     "source_id": "",
@@ -139,7 +138,7 @@ def test_step_without_passed_evidence_is_no_evidence_and_shares_unknown() -> Non
 def test_unsupported_paragraph_does_not_explain_a_step() -> None:
     """裏付けの無い段落（呼び出し側が回答から外す）は手順の説明に数えない。"""
     plan = _plan()
-    claims = [{"answer_quote": "設定 A に値を入れる。", "status": "unsupported", "source_id": "c-shared", "support_quote": MAIN_1}]
+    claims = [{"answer_quote": "設定 A に値を入れる。", "status": "unsupported", "source_id": "c-shared"}]
     result = validate_guide_steps(plan, claims, EVIDENCE, embed=StubEmbed())
     assert [step["status"] for step in result["steps"]] == ["unused", "unused"]
     assert result["embedding"] is None

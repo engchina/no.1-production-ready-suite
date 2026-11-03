@@ -344,9 +344,9 @@ false〕・`listed`〔節の項目の数〕）で件数を出す。MCP の `agen
 検証の前に回答から外す（末尾の節にも書かない。RAG の検証はモデルが `not_a_claim` にした本文の行を
 `unassessed` に直すため〔主張を `not_a_claim` にして監査を逃れるのを防ぐ。#1306。その段落はその段落だけで 1 回監査し直し、
 決まらなければ `classification_check: non_claim_mismatch` の `unassessed` のまま返す。#2625〕、Agent はモデルの判定ではなく決定的な
-判定で外す）。RAG が監査の `supported` を採らなかった段落（根拠が別の対象の記載・写した原文が根拠に無い・監査の理由だけが根拠の
-表と違う対応を述べた。`support_check`。#2659・#2653）は `unsupported`（原文が無いときは `citation_error`）で返り、Agent は本文に残して、
-別の対象・表の対応は警告（`target_mismatch` / `value_unbound`）、写した原文が無いのは未確認（`quote_unmatched`）の印にする（#2738）。
+判定で外す）。RAG が監査の `supported` を採らなかった段落（根拠が別の対象の記載・監査の理由だけが根拠の
+表と違う対応を述べた。`support_check`。#2659・#2653）は `unsupported` で返り、Agent は本文に残して、
+別の対象・表の対応は警告（`target_mismatch` / `value_unbound`）の印にする（#2738）。
 段落が根拠の表の別の行・列の値を結び付けた（表が否定した対応）ときは、RAG が `contradicted`（`support_check=value_unbound`。理由に
 表の正しい対応）で返し、Agent は矛盾として外す（#2998）。RAG が表の正しい値に直せた段落（`support_check=table_corrected`・
 `revised_text`。#3005）は外さず、本文の段落を直した文に置き換えて「根拠の表の値に直した」（`table_corrected`。警告）の印を付ける。
@@ -985,8 +985,7 @@ Control Plane が同じ接続の `rag_lookup_guides` を 1 回呼ぶ（質問は
 まとめ（どれかの接続が矛盾と判定すれば矛盾、そうでなくどれかの接続が裏付ければ裏付けあり）、結果は成果物
 （`kind="answer_validation"`・「資料との照合」。接続ごとの結果は `connections`）に残す。valid でなければ、段落の印を付ける（#2738）。本文から外すのは根拠と
 矛盾する段落（`contradicted`。RAG が根拠の ID を照合できずに判定を変えても、監査の元の判定 `audit_status` が矛盾なら矛盾。
-#2622）だけで、根拠で確かめられない（`unsupported`）・出典を確かめられない（`citation_error`。引用が根拠に無ければ
-`quote_unmatched`）・確かめが終わっていない（`unassessed`）・図の画像を読めていない（`figure_not_read`）段落は本文に残して
+#2622）だけで、根拠で確かめられない（`unsupported`）・出典を確かめられない（`citation_error`）・確かめが終わっていない（`unassessed`）・図の画像を読めていない（`figure_not_read`）段落は本文に残して
 未確認（`unverified`）の印を付け、RAG の規則の検査（`target_mismatch`・`unsupported` の `value_unbound`）は警告（`warning`）の印にする。
 節の項目は段落の 80 文字までの引用と理由の短い文（「根拠で確かめられない」など。検証のモデルが書いた理由は内部の語を含むので
 本文に出さず、印の `detail` と成果物〔実行の詳細の監査ログの元の JSON。#2403〕に残す。#1833）で、古い版・見つからない根拠の
@@ -1026,7 +1025,7 @@ Markdown の見出しで切った節と同じく独立させ、同じ項目の�
 （AnswerEnvelope）と同じ語彙の対応（`answered` / `conditional` / `needs_clarification` / `needs_environment_data` /
 `needs_human` / `insufficient_evidence`）を、モデルを呼ばずに決めて残す（`answer_outcome`。内容は `value`・決めた手がかりの
 `basis`・最後の `rag_search` の対応 `rag_outcome`・不足の印 `signals`）。決め方は上から順に、空の回答 → 拒答、確認の質問
-だけの回答 → `needs_clarification`、最終の検証が業務ガイドの手順・影響範囲・版の検査の error を回答全体の警告にした → `needs_human`（`basis` は `validation_guide_check`。どの段落の手順が誤りかを決められないので人が確かめる。本文は出す。#1491・#2738）、最終の検証が残った主張の段落をすべて未確認とした（根拠で確かめた段落が 1 つも無い。`no_evidence` を含む）か主張の段落をすべて矛盾で外した → 拒答（`basis` は `validation_nothing_confirmed`。本文と印は出す。#2738。未確認の理由が確かめが終わっていない〔`unassessed`〕か、監査は根拠で裏付けた〔`audit_status=supported`〕のに監査が写した原文・返した根拠の ID を根拠に結び付けられなかっただけ〔監査の応答の側の照合の誤り。`reference_check` が `quote_unmatched`・`audit_id_invalid` など。回答が書いた ID の誤り `answer_id_invalid` は含めない〕の段落しか無いときは、根拠が無いことを示さないので拒答に数えず、未確認の印つきの回答として下の規則で決める。#104・#108。RAG はその段落を誤りを差し戻して 1 回だけ監査し直し、同じ照合を通れば `supported`〔`reference_reaudit: adopted`〕にする。照合に失敗した判定の、監査が写した原文 `support_quote` と返した ID `audit_evidence_id` は、成果物の `result.claims` に残す。#112）、回答が最後の `rag_search` に拠る（その後に
+だけの回答 → `needs_clarification`、最終の検証が業務ガイドの手順・影響範囲・版の検査の error を回答全体の警告にした → `needs_human`（`basis` は `validation_guide_check`。どの段落の手順が誤りかを決められないので人が確かめる。本文は出す。#1491・#2738）、最終の検証が残った主張の段落をすべて未確認とした（根拠で確かめた段落が 1 つも無い。`no_evidence` を含む）か主張の段落をすべて矛盾で外した → 拒答（`basis` は `validation_nothing_confirmed`。本文と印は出す。#2738。未確認の理由が確かめが終わっていない〔`unassessed`〕か、監査は根拠で裏付けた〔`audit_status=supported`〕のに監査が返した根拠の ID を根拠に結び付けられなかっただけ〔監査の応答の側の照合の誤り。`reference_check` が `audit_id_invalid` など。回答が書いた ID の誤り `answer_id_invalid` は含めない〕の段落しか無いときは、根拠が無いことを示さないので拒答に数えず、未確認の印つきの回答として下の規則で決める。#104・#108。RAG はその段落を誤りを差し戻して 1 回だけ監査し直し、同じ照合を通れば `supported`〔`reference_reaudit: adopted`〕にする。照合に失敗した判定の、監査が写した原文 `support_quote` と返した ID `audit_evidence_id` は、成果物の `result.claims` に残す。#112）、回答が最後の `rag_search` に拠る（その後に
 根拠を集め直していない）ならその対応（`needs_environment_data` の後に現場のデータの道具が成功したら `answered` /
 `conditional`、確認を求められたが質問だけでなく答えたら `conditional`、`answered` でも回答が不足を示せば `conditional`）、
 `rag_search` に拠らず業務ガイドの判断が人への引き継ぎなら `needs_human`、それ以外は Agent が自分で組み立てた回答として
