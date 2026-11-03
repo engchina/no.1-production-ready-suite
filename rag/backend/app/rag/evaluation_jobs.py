@@ -7,7 +7,8 @@ golden set の評価（`/run`）は、ケースごとに回答生成（最長
 実行と保存:
 - job は投入を受けた backend のプロセスの中で `asyncio` の task として動く（取込 job のような
   別の worker には渡さない）。評価は request の文脈（利用者・対象範囲。監査にも使う）で検索する
-  ため、投入した request の文脈をそのまま使う。質問・回答・根拠の本文は保存しない（#4107）。
+  ため、投入した request の文脈をそのまま使う。job の表に質問・回答・根拠の本文は保存しない
+  （#4107）。アップロードした Excel の本体は別に保存する（#4212。`evaluation_source_workbooks`）。
 - 状態は Oracle の `rag_evaluation_jobs` に保存する（Gunicorn の複数の worker のどれに状態の取得・
   取り消しが届いても同じ結果にするため）。Oracle の接続設定が無い開発環境では、プロセスの中の
   memory に保存する。
@@ -210,6 +211,8 @@ class EvaluationJobRecord:
     evaluation_run_id: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # アップロードした Excel（#4212）。
+    source_workbook_id: str | None = None
     # 終わった job を読むときだけ入れる、保存したケースの結果（#4208）。
     case_rows: list[EvaluationJobCaseRow] = field(default_factory=list, repr=False)
 
@@ -475,6 +478,7 @@ class OracleEvaluationJobStore:
                 "total_cases": record.total_cases,
                 "lease_owner": record.lease_owner,
                 "time_limit_seconds": record.time_limit_seconds,
+                "source_workbook_id": record.source_workbook_id,
             }
         )
 
@@ -631,6 +635,7 @@ def _record_from_row(
         error_message=_optional_str(row.get("error_message")),
         result=dict(result) if isinstance(result, Mapping) else None,
         evaluation_run_id=_optional_str(row.get("evaluation_run_id")),
+        source_workbook_id=_optional_str(row.get("source_workbook_id")),
         started_at=_optional_datetime(row.get("started_at")),
         finished_at=_optional_datetime(row.get("finished_at")),
     )
@@ -696,6 +701,7 @@ def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
         heartbeat_at=record.heartbeat_at,
         run_result=run_result,
         partial_result=partial_result,
+        source_workbook_id=record.source_workbook_id,
     )
 
 
@@ -771,6 +777,7 @@ class EvaluationJobService:
         time_limit_seconds: int,
         executor: EvaluationJobExecutor,
         job_id: str | None = None,
+        source_workbook_id: str | None = None,
     ) -> EvaluationJob:
         """job を作り、このプロセスの task で実行を始める。
 
@@ -800,6 +807,7 @@ class EvaluationJobService:
             tenant_id_hash=tenant_id_hash,
             user_id_hash=user_id_hash,
             lease_owner=self.worker_id,
+            source_workbook_id=source_workbook_id,
         )
         await store.create(record)
         logger.info(

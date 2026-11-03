@@ -1992,6 +1992,8 @@ export interface EvaluationImportResult {
   search_answer_profile_id?: string | null;
   knowledge_base_ids: string[];
   document_names: Record<string, string>;
+  /** 保存した元のファイルの ID（#4212。結果をこのファイルに足してダウンロードする）。 */
+  source_workbook_id?: string | null;
   max_rows: number;
   max_bytes: number;
 }
@@ -1999,6 +2001,8 @@ export interface EvaluationImportResult {
 /** ダウンロードしたファイル（Excel のテンプレートなど）。 */
 export interface DownloadedFile {
   blob: Blob;
+  /** 品質評価の結果の Excel の作り方（`uploaded` / `generated`。#4212）。 */
+  resultsSource?: string | null;
   fileName: string;
 }
 
@@ -2013,6 +2017,8 @@ export interface EvaluationRunRequestBody {
   search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
   compare_search_answer_profile_id?: string | null;
+  /** アップロードした Excel（#4212）。 */
+  source_workbook_id?: string | null;
 }
 
 /** 標準回答による LLM の評価の要約（詳細は回答の記録）。 */
@@ -2128,6 +2134,8 @@ export interface EvaluationJob {
   heartbeat_at: string | null;
   run_result: EvaluationMetrics | null;
   partial_result: EvaluationMetrics | null;
+  /** アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。 */
+  source_workbook_id: string | null;
 }
 
 // --- 品質評価: 判定の校正（#3578） ---
@@ -3419,7 +3427,11 @@ async function requestFile(
     notifyAuthStatus(res.status, error.requestId, error.errorCode);
     throw error;
   }
-  return { blob: await res.blob(), fileName: contentDispositionFileName(res) ?? fallbackName };
+  return {
+    blob: await res.blob(),
+    fileName: contentDispositionFileName(res) ?? fallbackName,
+    resultsSource: res.headers.get("X-Evaluation-Results-Source"),
+  };
 }
 
 /** Content-Disposition の filename（無ければ null）。 */

@@ -4717,6 +4717,9 @@ export const ja = {
   "evaluation.thresholdFailures": "閾値未達",
   "evaluation.export.action": "Excel をダウンロード",
   "evaluation.export.done": "評価結果の Excel をダウンロードしました。",
+  "evaluation.export.helperUploaded": "アップロードした Excel の各行の右に結果の列を足してダウンロードします。元のシートとセルは変えません。",
+  "evaluation.export.helperGenerated": "アップロードした Excel が無い評価は、結果だけの Excel をダウンロードします。",
+  "evaluation.export.fallback": "アップロードした Excel を読めなかったため、結果だけの Excel をダウンロードしました。",
   "evaluation.export.error": "評価結果をダウンロードできませんでした。もう一度試してください。",
   "evaluation.cases": "ケース別結果",
   "evaluation.knowledgeBaseScope.helper":
@@ -4741,7 +4744,7 @@ export const ja = {
     "実行中のケースを止めます。終わったケースの結果も残りません。",
   "evaluation.job.cancelConfirm.confirm": "取り消す",
   "evaluation.job.cancelledTitle": "評価を取り消しました。",
-  "evaluation.job.partialResult": "終わった {saved} 件の結果を下に出しています（全 {total} 件）。Excel でもダウンロードできます。",
+  "evaluation.job.partialResult": "終わった {saved} 件の結果を下に出しています（全 {total} 件）。Excel でもダウンロードでき、残りの行は「未実行」になります。",
   "evaluation.job.partialResultHint": "途中までの結果なので、合否は判定していません。",
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
   "evaluation.job.failedDetails": "詳細",
@@ -4783,6 +4786,7 @@ export const ja = {
   "evaluation.import.templateHint":
     "列は「質問」「期待する根拠」「標準回答」「必須の回答要点」「期待する応答の判断」「回答の過程」の 6 つで、質問だけが必須です。期待する判断には回答・確認・保留を指定します。評価に必要な入力や根拠が不足する指標は「未評価」となり、合格を意味しません。検索・回答プロファイルを選んでからダウンロードすると、参照する文書の一覧（ファイル名・文書 ID）が入ります。",
   "evaluation.import.templateDone": "テンプレートをダウンロードしました。",
+  "evaluation.import.storedNotice": "検証した Excel は、結果を足してダウンロードするために保存します（見られるのはアップロードした本人だけ）。",
   "evaluation.import.templateError":
     "テンプレートをダウンロードできませんでした。時間をおいて、もう一度試してください。",
   "evaluation.import.validating": "Excel を確かめています",

@@ -52,6 +52,7 @@ export async function mockEvaluationJobs(
         !succeeded && job.status !== "RUNNING"
           ? options.partialResult?.(job.payload) ?? null
           : null,
+      source_workbook_id: (job.payload.source_workbook_id as string | undefined) ?? null,
     };
   };
   const finish = (job: MockJob, status: JobStatus, message: string | null = null) => {
@@ -217,10 +218,13 @@ export async function uploadEvaluationExcel(page: Page, name = "cases.xlsx") {
 }
 
 /** 評価を実行できる状態にする（プロファイルを選び、Excel を検証する）。 */
-export async function prepareEvaluationRun(page: Page) {
+export async function prepareEvaluationRun(
+  page: Page,
+  importResult?: () => Record<string, unknown>
+) {
   await mockEvaluationProfiles(page);
   await page.reload();
-  const imports = await mockEvaluationImport(page);
+  const imports = await mockEvaluationImport(page, importResult);
   await chooseEvaluationProfile(page);
   await uploadEvaluationExcel(page);
   await expect(page.getByTestId("evaluation-import-ready")).toBeVisible();

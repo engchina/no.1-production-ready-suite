@@ -18,6 +18,7 @@ from app.clients.document_category_store import oracle_document_category_schema_
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
+from app.clients.evaluation_workbook_store import oracle_evaluation_source_workbook_schema_sql
 from app.clients.extraction_revision_store import oracle_extraction_revision_schema_sql
 from app.clients.graph_reference_store import graph_reference_schema_sql
 from app.clients.language_pack_release_store import language_pack_release_statements
@@ -383,6 +384,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="evaluation_artifacts",
             table_name="rag_evaluation_runs",
             sql=oracle_evaluation_artifact_schema_sql(),
+        ),
+        # 品質評価にアップロードした Excel（#4212）。job が参照するので先に作る。
+        OracleSchemaSection(
+            name="evaluation_source_workbooks",
+            table_name="rag_evaluation_source_workbooks",
+            sql=oracle_evaluation_source_workbook_schema_sql(),
         ),
         # 品質評価の job（非同期の実行・進捗・取り消し。#390）。
         OracleSchemaSection(
@@ -765,6 +772,13 @@ END;
             sql=evaluation_job_case_results_migration_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261103_4212_evaluation_source_workbooks",
+            table_name="rag_evaluation_source_workbooks",
+            sql=evaluation_source_workbooks_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -856,6 +870,45 @@ def evaluation_job_case_results_migration_sql() -> str:
     return _create_missing_objects_sql(
         oracle_evaluation_job_case_result_schema_sql(), "品質評価のケースごとの結果"
     )
+
+
+def evaluation_source_workbooks_migration_sql() -> str:
+    """品質評価にアップロードした Excel の表と、job からの参照の列を無ければ足す（#4212）。
+
+    表・列・制約・索引を足すだけで、既存の行は変えない（既存の job の列は NULL）。
+    """
+    objects = _create_missing_objects_sql(
+        oracle_evaluation_source_workbook_schema_sql(), "品質評価にアップロードした Excel"
+    )
+    column = """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'SOURCE_WORKBOOK_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (source_workbook_id VARCHAR2(64))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND constraint_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_FK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs '
+            || 'ADD CONSTRAINT rag_evaluation_jobs_source_workbook_fk '
+            || 'FOREIGN KEY (source_workbook_id) '
+            || 'REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_evaluation_jobs_source_workbook_idx '
+            || 'ON rag_evaluation_jobs (source_workbook_id)';
+    END IF;
+END;
+/"""
+    return f"{objects}\n\n{column}"
 
 
 def evaluation_job_calibration_kind_migration_sql() -> str:

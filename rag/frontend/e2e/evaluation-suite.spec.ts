@@ -516,6 +516,53 @@ test("失敗した評価でも、終わったケースの結果を表示して�
   expect(exportRequests).toHaveLength(1);
 });
 
+// #4212: アップロードした Excel の ID を投入に渡し、結果を元のファイルに足してダウンロードする。
+test("アップロードした Excel に結果の列を足してダウンロードすることを案内する", async ({ page }) => {
+  const jobs = await mockEvaluationJobs(page, {
+    autoComplete: true,
+    runResult: () => evaluationMetrics("standard"),
+  });
+  await page.goto("/evaluation");
+  await prepareEvaluationRun(page, () =>
+    evaluationImportResult({ file_name: "cases.xlsx", source_workbook_id: "workbook-1" })
+  );
+  await expect(page.getByTestId("evaluation-import-stored")).toContainText("本人だけ");
+  await page.getByRole("button", { name: "評価実行", exact: true }).click();
+  await expect(page.getByTestId("evaluation-export-helper")).toContainText(
+    "アップロードした Excel の各行の右に結果の列を足して"
+  );
+  expect(jobs.runPayloads[0]).toMatchObject({ source_workbook_id: "workbook-1" });
+  await expectNoPageOverflow(page);
+
+  const respond = async (source: string) => {
+    await page.unroute("**/api/evaluation/jobs/*/results.xlsx");
+    await page.route("**/api/evaluation/jobs/*/results.xlsx", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: {
+          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="evaluation_results.xlsx"; filename*=UTF-8''cases_results.xlsx`,
+          "X-Evaluation-Results-Source": source,
+        },
+        body: "xlsx",
+      })
+    );
+  };
+  await respond("uploaded");
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Excel をダウンロード", exact: true }).click();
+  expect((await downloaded).suggestedFilename()).toBe("cases_results.xlsx");
+  await expect(page.getByText("評価結果の Excel をダウンロードしました。")).toBeVisible();
+
+  await respond("generated");
+  const fallback = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Excel をダウンロード", exact: true }).click();
+  await fallback;
+  await expect(
+    page.getByText("アップロードした Excel を読めなかったため、結果だけの Excel をダウンロードしました。")
+  ).toBeVisible();
+});
+
 // #977: 状態の取得が retry を使い切って失敗しても、実行中の job の状態の取得を止めない（止めると「実行中」のまま）。
 test("実行中の評価の状態の取得が一時的に失敗しても、取得を続けて完了を出す", async ({ page }) => {
   test.setTimeout(60_000);

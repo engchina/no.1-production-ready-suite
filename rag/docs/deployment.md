@@ -214,6 +214,15 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4212 品質評価の結果をアップロードした Excel に足す）
+
+検証を通った評価リクエストの Excel をアップロードの保存先に保存し、結果のダウンロードはそのファイルのケースの行の右に結果の列を足した形にした（元のシート・セル・書式は変えない）。
+
+1. システムテーブルを更新する（migration `20261103_4212_evaluation_source_workbooks`。表 `rag_evaluation_source_workbooks`（索引 `rag_evaluation_source_workbooks_owner_idx`）を作り、`rag_evaluation_jobs` に列 `source_workbook_id`、FK（`ON DELETE SET NULL`）、索引 `rag_evaluation_jobs_source_workbook_idx` を足す。既存の行は変えない）。
+2. backend を更新する（依存に `lxml` を足した）。保存先は `PLATFORM_UPLOAD_STORAGE_BACKEND` の設定のまま（prefix `evaluation-workbooks/`）。
+3. 保存するファイルには質問・標準回答などの本文が入る。見られるのは投入した本人だけで、job が使うファイルは job と同じく残る（#3235）。評価に使わなかったファイルは、同じ本人の次の保存のときに 24 時間を過ぎたものから消す。
+4. 更新の前に投入した job・API で Excel なしで投入した job の結果のファイルは、これまでの結果だけのファイルになる。
+
 ## 既存環境の更新手順（#4208 品質評価のケースごとの結果の保存）
 
 ケースが終わるたびに結果を 1 行保存し、最後の保存の失敗・致命的な失敗・取り消し・プロセスの停止でも、終わったケースの結果を API（`partial_result`）と Excel で読めるようにした。
@@ -1937,6 +1946,7 @@ uv run python -m app.rag.file_processing_staging_cli \
 - `RAG_ANSWER_TIMEOUT_SECONDS`: LLM を呼ぶ回答生成（`/api/search`・`/api/search/stream`・チャットの送信・MCP・品質評価の 1 ケース）の通しの timeout（既定 600 秒で、上限の LLM 1 回の timeout の上限と同じ。#375 / #383 / #1425。推論の量の既定 medium で推論型のモデルの 1 回の呼び出しが数十秒になるため 300 秒から広げた）。agentic（検索の計画・multi_hop の再分解）を使う検索・回答プロファイルでは LLM を最大 3 回呼ぶため、推論型のモデルの p95 latency × 呼び出し回数より長くする。画面は SSE を打ち切らず、`/api/search` の非ストリームは 630 秒、Nginx（`platform/deploy/suite-nginx.sh` が生成する回答生成・評価・MCP・業務ガイドを試すの `location`。#1597）は 660 秒待つ（backend の 504 と理由が画面に届くよう、外側ほど長くする）。
 - 品質評価（golden set）は job（`/api/evaluation/jobs/run`。#390）で動く。1 ケースを `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切り、時間切れになった工程をケースの結果（`error_stage` と `error_message`）に残して次のケースへ進む。job 全体は、投入時の回答の回数（ケース × 往復）× `RAG_ANSWER_TIMEOUT_SECONDS` と `RAG_EVALUATION_JOB_TIMEOUT_SECONDS`（最小値。既定 3600 秒、60〜86400）の大きいほうで打ち切り（86400 秒を超えない。#1430。推論型のモデルでは 1 回の回答が数分かかるため、固定の上限では問の数に応じて打ち切られる）、残りのケースは実行せずに失敗（`error_type=EvaluationTimeBudgetExceeded`）として結果を返す。job の上限は job の `time_limit_seconds` で返し、画面は「全体の上限 N 分」として出す。画面は job の状態を 2 秒ごとに取得して進捗（終わったケースの数 / 全体・実行中のケース・経過時間）を出し、取り消しもできる。評価 CLI は job の終わりを `RAG_EVALUATION_TIMEOUT_SECONDS`（未指定なら job の上限 + 300 秒）まで待ち、超えたら job を取り消す。
   - job は投入を受けた backend のプロセスの中で動き、状態は `rag_evaluation_jobs` に保存する（Gunicorn の別の worker に状態の取得・取り消しが届いても同じ結果になる）。backend の停止・再起動では実行中の job を失敗にし（別のプロセスは引き継がない）、プロセスが落ちて heartbeat が 120 秒途絶えた job も、次の状態の取得で失敗にする。同時に実行できる job は 2 件まで（全プロセスの合計）。終わった job は自動では消さない（#3235。以前は 7 日で消していた。結果は評価 artifact の `rag_evaluation_runs` にも残る）。
+  - 結果の Excel は、アップロードした Excel がある job はそのファイルのケースの行（`case_id` の行番号で決める）の右に結果の列を足し、回答の本文は `trace_id` で回答の記録から読む（#4212）。元の Excel が無い・読めない job は結果だけのファイルにする（応答の見出し `X-Evaluation-Results-Source` が `uploaded` / `generated`）。
   - ケースが終わるたびに結果を `rag_evaluation_job_case_results` に 1 行保存する（#4208。回答の診断は外す）。job が失敗・取り消しになったら、保存した行を `partial_result` で返し、画面と Excel に終わったケースまでを出す（合否は判定しない）。
   - 以前の同期の `/api/evaluation/run` は、外部から直接呼ぶ利用のために残している。評価全体を 600 秒で打ち切り、Nginx は 660 秒待つ（#383）。
 - `RAG_SEARCH_TIMEOUT_SECONDS`（品質評価の 1 ケースの上限、既定 30 秒）は #383 で削除した。品質評価の 1 ケースも `RAG_ANSWER_TIMEOUT_SECONDS` で打ち切る。既存の `rag/backend/.env` に残っていても読まれない（害はない）ので、次に編集するときに消す。

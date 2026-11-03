@@ -4367,3 +4367,59 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261103_4212_evaluation_source_workbooks
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_SOURCE_WORKBOOKS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_source_workbooks ( '
+            || 'workbook_id         VARCHAR2(64) PRIMARY KEY, '
+            || 'tenant_id_hash      VARCHAR2(64), '
+            || 'user_id_hash        VARCHAR2(64), '
+            || 'file_name           VARCHAR2(512 CHAR) NOT NULL, '
+            || 'content_sha256      VARCHAR2(64) NOT NULL, '
+            || 'byte_size           NUMBER(12) NOT NULL, '
+            || 'object_storage_path VARCHAR2(1024 CHAR) NOT NULL, '
+            || 'created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_SOURCE_WORKBOOKS_OWNER_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_source_workbooks_owner_idx '
+            || 'ON rag_evaluation_source_workbooks (tenant_id_hash, user_id_hash, content_sha256)';
+    END IF;
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'SOURCE_WORKBOOK_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (source_workbook_id VARCHAR2(64))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND constraint_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_FK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs '
+            || 'ADD CONSTRAINT rag_evaluation_jobs_source_workbook_fk '
+            || 'FOREIGN KEY (source_workbook_id) '
+            || 'REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_evaluation_jobs_source_workbook_idx '
+            || 'ON rag_evaluation_jobs (source_workbook_id)';
+    END IF;
+END;
+/

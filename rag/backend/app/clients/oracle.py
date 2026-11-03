@@ -4576,6 +4576,29 @@ class OracleClient:
         )
         return _row_count_value(row)
 
+    async def evaluation_answers_by_trace_ids(self, trace_ids: Sequence[str]) -> dict[str, str]:
+        """品質評価の結果の Excel に出す回答の本文を返す（#4212。回答の記録の範囲で絞る）。"""
+        unique = list(dict.fromkeys(trace_id for trace_id in trace_ids if trace_id))
+        answers: dict[str, str] = {}
+        for start in range(0, len(unique), _EVALUATION_ANSWER_BATCH):
+            batch = unique[start : start + _EVALUATION_ANSWER_BATCH]
+            names = [f"trace_id_{index}" for index in range(len(batch))]
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT trace_id, answer
+                FROM rag_answer_records
+                WHERE trace_id IN ({placeholders})
+                  AND {scope_sql}
+                """,
+                    placeholders=", ".join(f":{name}" for name in names),
+                    scope_sql=_answer_record_scope_sql(),
+                ),
+                _with_answer_record_scope_bind(dict(zip(names, batch, strict=True))),
+            )
+            answers.update({str(row["trace_id"]): str(row.get("answer") or "") for row in rows})
+        return answers
+
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
         """保存済み回答を 1 件返す（利用できる検索・回答プロファイルの回答だけ。#214）。"""
         row = await self._fetch_one(
@@ -7458,6 +7481,7 @@ class OracleClient:
                     lease_owner,
                     heartbeat_at,
                     time_limit_seconds,
+                    source_workbook_id,
                     created_at,
                     started_at,
                     updated_at
@@ -7472,6 +7496,7 @@ class OracleClient:
                     :lease_owner,
                     SYSTIMESTAMP,
                     :time_limit_seconds,
+                    :source_workbook_id,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP
@@ -7485,6 +7510,7 @@ class OracleClient:
                     "total_cases": job["total_cases"],
                     "lease_owner": job["lease_owner"],
                     "time_limit_seconds": job["time_limit_seconds"],
+                    "source_workbook_id": job.get("source_workbook_id"),
                 },
             )
         )
@@ -7511,6 +7537,7 @@ class OracleClient:
                 error_message,
                 result_json,
                 evaluation_run_id,
+                source_workbook_id,
                 created_at,
                 started_at,
                 finished_at,
@@ -12635,6 +12662,8 @@ def _record_db_execute(started: float, *, rows: int = 0) -> None:
 
 # 品質評価の job を、投入した利用者（tenant と user の hash）だけが見られるようにする条件（#390）。
 # hash が無い（認証なしの開発環境など）場合は、hash の無い job だけを対象にする。
+# 回答の本文を 1 回に読む trace の数（`IN` の上限は 1000。評価は 1 job で最大 400 ケース）。
+_EVALUATION_ANSWER_BATCH = 500
 _EVALUATION_JOB_OWNER_SQL = (
     "(tenant_id_hash = :tenant_id_hash OR (tenant_id_hash IS NULL AND :tenant_id_hash IS NULL)) "
     "AND (user_id_hash = :user_id_hash OR (user_id_hash IS NULL AND :user_id_hash IS NULL))"
@@ -18610,10 +18639,13 @@ CREATE TABLE {table_name} (
     error_message           VARCHAR2(2000 CHAR),
     result_json             JSON,
     evaluation_run_id       VARCHAR2(64),
+    source_workbook_id      VARCHAR2(64),
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
     updated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_source_workbook_fk FOREIGN KEY (source_workbook_id)
+        REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL,
     CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run', 'calibration')),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
@@ -18623,7 +18655,10 @@ CREATE INDEX {table_name}_status_idx
     ON {table_name} (status, heartbeat_at);
 
 CREATE INDEX {table_name}_owner_created_idx
-    ON {table_name} (tenant_id_hash, user_id_hash, created_at DESC)
+    ON {table_name} (tenant_id_hash, user_id_hash, created_at DESC);
+
+CREATE INDEX {table_name}_source_workbook_idx
+    ON {table_name} (source_workbook_id)
 """.strip()
 
 

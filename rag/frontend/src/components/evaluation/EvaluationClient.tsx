@@ -120,6 +120,7 @@ import {
 
 const ResultExportContext = createContext<{
   jobId: string;
+  hasSourceWorkbook: boolean;
   input: EvaluationImportResult | null;
   profileName: string | null;
   compareProfileName: string | null;
@@ -347,6 +348,7 @@ export function EvaluationClient() {
       const job = await runMutation.mutateAsync({
         cases: runInput.cases,
         search_answer_profile_id: profileId,
+        ...(runInput.source_workbook_id ? { source_workbook_id: runInput.source_workbook_id } : {}),
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
       setRunCaseLabels(buildEvaluationCaseLabels(runInput));
@@ -503,7 +505,7 @@ export function EvaluationClient() {
           <EvaluationJobSection
             state={runJob}
             renderResult={(job, metrics) => (
-              <ResultExportContext.Provider value={{jobId:job.job_id,input:runInputSnapshot,
+              <ResultExportContext.Provider value={{jobId:job.job_id,hasSourceWorkbook:Boolean(job.source_workbook_id),input:runInputSnapshot,
                 profileName:runProfileName,compareProfileName:runCompareName}}>
               {metrics.comparison ? (
                 <EvaluationComparisonResult
@@ -1135,11 +1137,16 @@ function CaseTable({
         question: label.question, evidence: label.evidence.map(item => item.label),
         standard_answer_preview: null, has_standard_answer: false,
       }));
-      saveDownloadedFile(await api.downloadEvaluationResults(exportContext.jobId, {
+      const file = await api.downloadEvaluationResults(exportContext.jobId, {
         rows: input?.rows ?? fallbackRows, cases: input?.cases ?? [],
         profile_name: exportContext.profileName, compare_profile_name: exportContext.compareProfileName,
-      }));
-      toast.success(t("evaluation.export.done"));
+      });
+      saveDownloadedFile(file);
+      if (exportContext.hasSourceWorkbook && file.resultsSource !== "uploaded") {
+        toast.warning(t("evaluation.export.fallback"));
+      } else {
+        toast.success(t("evaluation.export.done"));
+      }
     } catch (error) {
       setDownloadError(error instanceof ApiError ? error.message : t("evaluation.export.error"));
     } finally { setDownloading(false); }
@@ -1171,6 +1178,15 @@ function CaseTable({
           </Button>
         ) : null}
       </div>
+      {exportContext ? (
+        <p className="mb-2 text-xs text-fg-muted" data-testid="evaluation-export-helper">
+          {t(
+            exportContext.hasSourceWorkbook
+              ? "evaluation.export.helperUploaded"
+              : "evaluation.export.helperGenerated"
+          )}
+        </p>
+      ) : null}
       {downloadError ? <Banner severity="danger">{downloadError}</Banner> : null}
       <PagedDataTable<EvaluationCaseResult>
         viewport="bounded"

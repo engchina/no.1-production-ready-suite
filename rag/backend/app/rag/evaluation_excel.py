@@ -285,6 +285,8 @@ class EvaluationExcelParse:
 
     rows: list[EvaluationExcelRow] = field(default_factory=list)
     issues: list[EvaluationImportIssue] = field(default_factory=list)
+    # ケースを読んだシートの名前（結果の列を足すシート。#4212）。
+    sheet_title: str | None = None
 
 
 def evaluation_case_id(row: int) -> str:
@@ -344,6 +346,7 @@ def parse_evaluation_workbook(data: bytes) -> EvaluationExcelParse:
         if sheet is None:
             result.issues.append(_file_issue("シートがありません。"))
             return result
+        result.sheet_title = str(sheet.title)
         rows = sheet.iter_rows(values_only=True)
         first: tuple[object, ...] | None = next(rows, None)
         header = tuple(first or ())

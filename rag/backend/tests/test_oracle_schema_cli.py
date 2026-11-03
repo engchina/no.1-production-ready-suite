@@ -144,6 +144,7 @@ def test_oracle_schema_manifest_is_deterministic() -> None:
         "citation_feedback",
         "feedback_details",
         "evaluation_artifacts",
+        "evaluation_source_workbooks",
         "evaluation_jobs",
         "evaluation_job_case_results",
         "evaluation_calibration",
@@ -512,7 +513,7 @@ def test_oracle_schema_migration_sql_adds_ingestion_job_attempt_counters() -> No
     assert "SET ''$.chunk_delimiter'' = ''\\n\\n''" in jsonl_migration
     assert "= ''fixed_delimiter''" in jsonl_migration
     assert "DROP" not in jsonl_migration and "DELETE" not in jsonl_migration
-    assert len(statements) == 151
+    assert len(statements) == 153
     assert all(
         statement.startswith(
             ("-- migration:", "DECLARE", "INSERT", "MERGE", "UPDATE", "COMMIT", "CREATE", "BEGIN")
@@ -630,6 +631,7 @@ def test_oracle_schema_migration_manifest_is_deterministic() -> None:
         "20261102_008_document_extraction_revisions",
         "20261102_4171_document_section_revisions",
         "20261103_4208_evaluation_job_case_results",
+        "20261103_4212_evaluation_source_workbooks",
     ]
 
 
@@ -880,3 +882,18 @@ def test_native_scope_backfill_limits_payload_sync_before_updating_chunks() -> N
         if section.name == "20261101_004_native_hybrid_sync_columns"
     )
     assert "UPDATING('SEARCH_TEXT')" in guarded and "UPDATING('EMBEDDING')" in guarded
+
+
+def test_evaluation_source_workbooks_migration_only_adds_objects() -> None:
+    """表・列・制約・索引を無ければ足すだけで、既存の行を変えない（#4212）。"""
+    migrations = {
+        section.name: section for section in oracle_schema.oracle_schema_migration_sections()
+    }
+    sql = migrations["20261103_4212_evaluation_source_workbooks"].sql
+    assert migrations["20261103_4212_evaluation_source_workbooks"].destructive_note == ""
+    assert "ALTER TABLE rag_evaluation_jobs ADD (source_workbook_id VARCHAR2(64))" in sql
+    assert "ON DELETE SET NULL" in sql
+    assert "CREATE INDEX rag_evaluation_jobs_source_workbook_idx" in sql
+    assert "UPDATE" not in sql
+    assert "DELETE FROM" not in sql
+    assert "DROP" not in sql
