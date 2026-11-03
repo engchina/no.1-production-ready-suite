@@ -1871,7 +1871,7 @@
               }
             ],
             "default": null,
-            "description": "根拠の要素の定位子（evidence の locator.element_locator）。文書分割の設定を変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。解析をやり直した後の古い定位子は source_stale のエラー。chunk_id とどちらか一方を渡す。",
+            "description": "根拠の要素の定位子（evidence の locator.element_locator）。文書分割の設定を変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。古い版が消えた後の定位子は source_stale のエラー。chunk_id とどちらか一方を渡す。",
             "title": "Locator"
           },
           "offset": {
@@ -1965,7 +1965,7 @@
             "type": "object"
           },
           "EvidenceImageRef": {
-            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
+            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。",
             "properties": {
               "document_id": {
                 "title": "Document Id",
@@ -3162,7 +3162,7 @@
             "type": "object"
           },
           "EvidenceImageRef": {
-            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
+            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。",
             "properties": {
               "document_id": {
                 "title": "Document Id",
@@ -4688,7 +4688,7 @@
             "type": "object"
           },
           "EvidenceImageRef": {
-            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の版（chunk_set）が変わると source_stale になる。",
+            "description": "図の根拠の元の画像の領域（#1282）。\n\n場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と\ninclude_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した\n場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。",
             "properties": {
               "document_id": {
                 "title": "Document Id",
@@ -7136,7 +7136,7 @@
     },
     {
       "code": "source_stale",
-      "description": "文書の版（chunk_set）が作り直され、根拠の id・定位子・続きの位置が古い。"
+      "description": "文書の古い版（chunk_set）が消え、根拠の id・定位子・続きの位置を読めない。"
     }
   ]
 }
