@@ -27,6 +27,7 @@ from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
+from itertools import groupby
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any, NamedTuple
@@ -73,6 +74,7 @@ from rag_engine.generation.citation_wire import (
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.date_consistency import absent_years, span_texts
+from rag_engine.generation.document_inputs import document_key, order_document_spans
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
@@ -5020,19 +5022,11 @@ def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
     _CITATION_VIEWS.set(snapshots)
     spans = _retrieved_heading_context(originals)
     displayed_views = {id(shown): snapshots[id(original)][1] for original, shown in zip(originals, spans, strict=True)}
-    groups: dict[tuple, list[dict]] = {}
-    for span in spans:
-        groups.setdefault(span["function"], []).append(span)
-    # 同じ文書の機能を続けて並べ、文書を単位に読ませる（文書は初めて現れた順、文書の中は根拠の順）。
-    documents: dict[tuple[str, ...], int] = {}
-    for span in spans:
-        documents.setdefault(_document_key(span), len(documents))
-    ordered = sorted(groups.values(), key=lambda members: documents[_document_key(members[0])])
+    # 章節を先にまとめると、同じ文書内の離れた位置が先行する。原文順にした後、連続する章節だけを見出しにする。
+    ordered = order_document_spans(spans)
+    groups = [list(members) for _, members in groupby(ordered, key=lambda span: (document_key(span), span["function"]))]
     blocks = []
-    for number, members in enumerate(ordered, 1):
-        # 選択順位と表示 ID を保ち、原文位置の分かる同じ機能の本文だけを読み順へ戻す。
-        if all(span.get("source_order") is not None for span in members):
-            members = sorted(members, key=lambda span: span["source_order"])
+    for number, members in enumerate(groups, 1):
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
