@@ -394,7 +394,7 @@ def test_full_trace_body_follows_job_history_and_actual_turn_owners(
                 if page.next_part is None:
                     break
                 position = page.next_part
-            assert json.loads(restored) == text
+            assert restored == text
             assert (
                 read_body_page(
                     cursor, BodyOwner("nl2sql", "jobs", uuid.uuid4().hex), content.body_reference
