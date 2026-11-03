@@ -1092,7 +1092,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expect(step.getByText(result, {exact: true})).toHaveCount(1);
     await timeline.screenshot({path: testInfo.outputPath("timeline-no-duplicate-summary.png")});
   });
-  test("軌跡の識別子・時刻は行内コピーの寸法、文字属性は本文の行高に揃う", async ({page}, testInfo) => {
+  test("軌跡の識別子は行内コピーの寸法、時刻と文字属性は本文の行高に揃う", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});
     await mockRuns(page, [row]);
@@ -1115,7 +1115,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
         target: matchMedia("(pointer: coarse)").matches ? 44 : 24};
     }));
     expect(rows.length).toBeGreaterThanOrEqual(5);
-    expect(rows.filter(row => row.copy)).toHaveLength(3);
+    expect(rows.filter(row => row.copy)).toHaveLength(1);
     for (const row of rows) {
       if (row.copy) {
         expect(Math.abs(row.buttonHeight - row.target)).toBeLessThanOrEqual(1);
