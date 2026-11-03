@@ -42,7 +42,7 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
 
   // エクスポートタブ: 内容は表示せず、ダウンロード・コピーの操作だけを出す（詳細は下の #561 のテスト）。
   await page.getByRole("tab", { name: "抽出エクスポート" }).click();
-  await expect(page.getByRole("link", { name: "Markdown をダウンロード" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "抽出結果（Markdown） をダウンロード" })).toBeVisible();
 
   // Chunk タブ: chunk を選ぶとプレビューに bbox がハイライトされる。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
@@ -1970,7 +1970,7 @@ test("ファイル準備の開始 message を操作欄に表示し、本文 expo
   await expect(actionStatus).toHaveCount(1);
 
   // 取込後、エクスポート(現在のタブ)が自動更新され、ダウンロードできるようになる。
-  await expect(page.getByRole("link", { name: "Markdown をダウンロード" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "抽出結果（Markdown） をダウンロード" })).toBeVisible({
     timeout: 9_000,
   });
   // Chunk タブにも反映される。
@@ -2282,7 +2282,7 @@ test("chunk が多い場合は高カード用の上限で中をスクロール�
   await expect(list.getByRole("button")).toHaveCount(25);
   const metrics = await list.evaluate((element) => ({
     maxHeight: Number.parseFloat(getComputedStyle(element).maxHeight),
-    expected: Math.min(Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68)),
+    expected: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5,
     scrollable: element.scrollHeight > element.clientHeight + 1,
   }));
   expect(Math.abs(metrics.maxHeight - metrics.expected)).toBeLessThanOrEqual(1);
