@@ -19,9 +19,10 @@ def test_adjacent_functions_are_not_one_operation_but_explicit_transition_is_all
     assert evidence_scope_error([a, span("照会", "登録から照会へ移動できません。")])
 
 
-def test_document_version_and_business_are_separate():
+def test_document_versions_are_checked_without_classification_restrictions():
     assert evidence_scope_error([span("登録", document_scope=["doc", "1"]), span("登録", document_scope=["doc", "2"])])
-    assert evidence_scope_error([span("登録", business_scope="給与"), span("登録", business_scope="倉庫")])
+    assert not evidence_scope_error([span("登録", business_scope="分類A"), span("登録", business_scope="分類B")])
+    assert not evidence_scope_error([span("登録", document_scope=["doc", "1"]), span("登録", document_scope=["doc", "1"])])
     assert not evidence_scope_error([span("登録"), span("登録")])
 
 

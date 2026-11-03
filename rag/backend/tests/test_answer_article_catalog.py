@@ -124,7 +124,7 @@ async def test_article_chunks_mark_the_first_child_of_each_selected_article(
 ) -> None:
     """選んだ条の章節の最初の child に印を付け、親と一緒に返す。
 
-    分類・1 ページ目の本文も付け、state に入れる。
+    1 ページ目の本文は保持し、state に入れる。
     """
     from app.clients import section_map_store
 
@@ -161,7 +161,8 @@ async def test_article_chunks_mark_the_first_child_of_each_selected_article(
         "document": _FILE,
         "title": "第二条（届出）",
     }
-    assert children[0].metadata["document"]["classification"] == {"large_category": "業務A"}
+    assert "classification" not in children[0].metadata.get("document", {})
+    assert oracle.classification_calls == []
     assert any(chunk.chunk_level == "parent" for chunk in stored)
     assert "law:c2" in state.chunks
     # 読めなかった条も選んだ条として診断に残す(chunk_id は無し)。

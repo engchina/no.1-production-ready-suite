@@ -1314,37 +1314,6 @@ class OracleClient:
         )
         return row is not None
 
-    async def document_classifications(
-        self, document_ids: Sequence[str]
-    ) -> dict[str, dict[str, object]]:
-        """文書の分類(rag_documents.classification)を document_id ごとにまとめて返す。
-
-        分類の無い文書は含めない。分類は chunk に焼き込まず、回答のときに読む(#545)。
-        """
-        ids = _unique_optional_sequence(list(document_ids))
-        if not ids:
-            return {}
-        in_sql, binds = _oracle_in_predicate("d.document_id", "classification_document", ids)
-        rows = await self._fetch_all(
-            _render_sql(
-                """
-            SELECT d.document_id, d.classification
-            FROM rag_documents d
-            WHERE {in_sql}
-              AND {access_sql}
-            """,
-                in_sql=in_sql,
-                access_sql=_oracle_access_predicate_sql(alias="d"),
-            ),
-            _with_tenant_bind(binds, alias="d"),
-        )
-        classifications: dict[str, dict[str, object]] = {}
-        for row in rows:
-            classification = _json_loads(row.get("classification"))
-            if classification:
-                classifications[str(row["document_id"])] = classification
-        return classifications
-
     async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
         """検索と同じ条件(KB・分類・文書名など)の文書に保存済みの大分類を DISTINCT で返す。
 

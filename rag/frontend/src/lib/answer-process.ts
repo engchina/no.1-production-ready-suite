@@ -80,7 +80,7 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "実体・別名による検索拡張": "answer.step.expandEntities",
   "文書構造による検索拡張": "answer.step.expandStructure",
   "根拠の図の切り出し": "answer.step.prepareFigures",
-  "文書の分類と背景の読み込み": "answer.step.loadDocumentInfo",
+  "文書の先頭ページの読み込み": "answer.step.loadDocumentInfo",
   "元の質問の検索": "answer.step.searchOriginalQuestion",
 };
 

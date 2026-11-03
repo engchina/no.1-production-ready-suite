@@ -4672,7 +4672,7 @@ export const ja = {
   "answer.step.expandEntities": "対象の名前と別名で関連する根拠を探す",
   "answer.step.expandStructure": "文書の章と表のつながりから根拠を加える",
   "answer.step.prepareFigures": "根拠の位置から図を切り出す",
-  "answer.step.loadDocumentInfo": "文書の分類と背景を読み込む",
+  "answer.step.loadDocumentInfo": "文書の先頭ページを読み込む",
   "answer.step.searchOriginalQuestion": "元の質問で候補の文書を探す",
   "answer.step.attempt": "{name}（{count} 回目）",
   "answer.progress.label": "回答を生成しています（{stage}）",
