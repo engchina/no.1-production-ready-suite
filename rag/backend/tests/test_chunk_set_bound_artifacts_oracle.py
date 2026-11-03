@@ -120,7 +120,10 @@ async def test_rebuild_keeps_rows_of_chunk_sets_outside_the_target() -> None:
     active_set, retired_set = f"active_{suffix}", f"retired_{suffix}"
     await _chunk_set(client, document_id, recipe_id, active_set, f"ex_a_{suffix}")
     await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=active_set, extraction_recipe_id=f"ex_a_{suffix}"
+        recipe_id=recipe_id,
+        chunk_set_id=active_set,
+        expected_base_chunk_set_id=None,
+        extraction_recipe_id=f"ex_a_{suffix}",
     )
     # 切替の後に残した旧版に当たる chunk_set（#4168 の前提）。有効ではなく、対応だけ持つ。
     retired_chunk = await _chunk_set(client, document_id, recipe_id, retired_set, f"ex_r_{suffix}")
@@ -154,14 +157,20 @@ async def test_chunk_set_removal_removes_its_section_rows() -> None:
     old_set, new_set = f"old_{suffix}", f"new_{suffix}"
     await _chunk_set(client, document_id, recipe_id, old_set, f"ex_o_{suffix}")
     await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=old_set, extraction_recipe_id=f"ex_o_{suffix}"
+        recipe_id=recipe_id,
+        chunk_set_id=old_set,
+        expected_base_chunk_set_id=None,
+        extraction_recipe_id=f"ex_o_{suffix}",
     )
     await rebuild_document_section_map(document_id, oracle=client)
     assert set(await _map_rows(client, document_id)) == {old_set}
 
     await _chunk_set(client, document_id, recipe_id, new_set, f"ex_n_{suffix}")
     await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=new_set, extraction_recipe_id=f"ex_n_{suffix}"
+        recipe_id=recipe_id,
+        chunk_set_id=new_set,
+        expected_base_chunk_set_id=old_set,
+        extraction_recipe_id=f"ex_n_{suffix}",
     )
     assert await _map_rows(client, document_id) == {}
     await rebuild_document_section_map(document_id, oracle=client)
@@ -173,7 +182,10 @@ async def test_chunk_set_removal_removes_its_section_rows() -> None:
     second_set = f"second_{suffix}"
     await _chunk_set(client, document_id, second_id, second_set, f"ex_s_{suffix}")
     await client.activate_recipe_chunk_set(
-        recipe_id=second_id, chunk_set_id=second_set, extraction_recipe_id=f"ex_s_{suffix}"
+        recipe_id=second_id,
+        chunk_set_id=second_set,
+        expected_base_chunk_set_id=None,
+        extraction_recipe_id=f"ex_s_{suffix}",
     )
     await rebuild_document_section_map(document_id, oracle=client)
     assert set(await _map_rows(client, document_id)) == {new_set, second_set}
@@ -190,7 +202,10 @@ async def test_document_resets_do_not_delete_served_output() -> None:
     served_set = f"served_{suffix}"
     chunk_id = await _chunk_set(client, document_id, recipe_id, served_set, f"ex_{suffix}")
     await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=served_set, extraction_recipe_id=f"ex_{suffix}"
+        recipe_id=recipe_id,
+        chunk_set_id=served_set,
+        expected_base_chunk_set_id=None,
+        extraction_recipe_id=f"ex_{suffix}",
     )
     await rebuild_document_section_map(document_id, oracle=client)
     before = await _map_rows(client, document_id)

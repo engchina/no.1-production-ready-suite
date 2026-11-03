@@ -4222,3 +4222,49 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261102_006_recipe_version_log
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_RECIPE_VERSION_LOG';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_recipe_version_log ( '
+            || 'log_id                    VARCHAR2(64) PRIMARY KEY, '
+            || 'document_id               VARCHAR2(64) NOT NULL, '
+            || 'recipe_id                 VARCHAR2(64) NOT NULL, '
+            || 'chunk_set_id              VARCHAR2(64) NOT NULL, '
+            || 'parent_chunk_set_id       VARCHAR2(64), '
+            || 'operation                 VARCHAR2(16) NOT NULL, '
+            || 'source_sha256             CHAR(64), '
+            || 'extraction_recipe_id      VARCHAR2(64), '
+            || 'chunk_set_input_id        VARCHAR2(64), '
+            || 'recipe_revision           NUMBER(10), '
+            || 'language_pack_release_id  VARCHAR2(64), '
+            || 'language_pack_ingest_hash VARCHAR2(64), '
+            || 'chunk_count               NUMBER(10) NOT NULL, '
+            || 'job_id                    VARCHAR2(64), '
+            || 'activated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_recipe_version_log_op_ck '
+            || 'CHECK (operation IN (''INITIAL'', ''REPROCESS'', ''ROLLBACK'')), '
+            || 'CONSTRAINT rag_recipe_version_log_doc_fk '
+            || 'FOREIGN KEY (document_id) REFERENCES rag_documents (document_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_recipe_version_log_rcp_fk '
+            || 'FOREIGN KEY (recipe_id) REFERENCES rag_document_recipes (recipe_id) ON DELETE CASCADE '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_RECIPE_VERSION_LOG_RCP_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_recipe_version_log_rcp_idx '
+            || 'ON rag_recipe_version_log (recipe_id, activated_at DESC)';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_RECIPE_VERSION_LOG_DOC_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_recipe_version_log_doc_idx '
+            || 'ON rag_recipe_version_log (document_id)';
+    END IF;
+END;
+/

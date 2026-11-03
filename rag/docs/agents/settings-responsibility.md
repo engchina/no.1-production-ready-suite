@@ -62,6 +62,8 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 版に属するデータは chunk_set から辿る（#4166）。章節の対応は chunk_set ごとに置き換え、ほかの版の行を消さない（chunk_set の行を消す処理が一緒に消す）。解析したファイルは抽出の `parser_artifacts.source_derivation` が正本で、根拠の読み取りはレシピの行の `preprocess_artifact`（最後のファイル準備の結果。確認の画面が見る）ではなくここを読む。
 
+切替は「job の開始時の active が今も active で、その実行が今も job を持っている」ときだけ行う（`activate_recipe_chunk_set` の transaction の中で確かめる。#4167）。active が変わっていたら候補を捨て、job は失敗ではなく `SKIPPED`（`skip_reason` = `superseded_by_newer_version`）にする。再解析は高価なので自動でやり直さない。切替のたびに `rag_recipe_version_log` へ 1 行を足す（親の版・原本の hash・抽出の ID・分割までの入力の ID・言語資源の公開版・chunk の数・job）。この表は chunk_set に FK を持たず、旧版の行を消しても残り、文書・レシピの削除で消える。本文・質問は入れない。
+
 GraphRAG、navigation summary、field extraction が planning のみで実 materialize 未完の場合は、UI / API diagnostics にその状態を表示する。
 
 ### 章節の抽出規則と章節の要約

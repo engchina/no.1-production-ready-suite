@@ -53,7 +53,9 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
                 chunk_set_id=old_set, document_id=document_id, recipe_id=recipe_id
             )
         await client.mark_chunk_set_indexed(chunk_set_id=old_set, chunk_count=0, vector_count=0)
-        await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=old_set)
+        await client.activate_recipe_chunk_set(
+            recipe_id=recipe_id, chunk_set_id=old_set, expected_base_chunk_set_id=None
+        )
         item = IngestionJob(
             id=f"job-{suffix}",
             document_id=document_id,
@@ -93,14 +95,18 @@ async def test_pinned_outputs_filter_and_failed_build_keep_serving_version() -> 
         assert await client.count_documents(**args) == total
         # 未完了の成果物を active にする操作は拒否し、旧版を引き続き表示する。
         with pytest.raises(ValueError):
-            await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=new_set)
+            await client.activate_recipe_chunk_set(
+                recipe_id=recipe_id, chunk_set_id=new_set, expected_base_chunk_set_id=old_set
+            )
         assert (
             await client.document_language_pack_uses(
                 [document_id], current_release_id=releases[1].id
             )
         )[document_id].recipes[0].release_id == releases[0].id
         await client.mark_chunk_set_indexed(chunk_set_id=new_set, chunk_count=0, vector_count=0)
-        await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=new_set)
+        await client.activate_recipe_chunk_set(
+            recipe_id=recipe_id, chunk_set_id=new_set, expected_base_chunk_set_id=old_set
+        )
         now = (
             await client.document_language_pack_uses(
                 [document_id], current_release_id=releases[1].id

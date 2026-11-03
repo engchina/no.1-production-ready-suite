@@ -148,9 +148,13 @@ export function visibleSourceWarningKeys(
   return warnings.map(sourceWarningKey).filter((key) => !reason || t(key) !== reason);
 }
 
+/** 有効な版が job の開始時から変わっていて、結果を適用しなかった job の skip_reason（#4167）。 */
+export const INGESTION_SKIP_REASON_SUPERSEDED = "superseded_by_newer_version";
+
 /** 取込 job の skip_reason（重複・未対応形式など）を利用者向けの文に直す。 */
 export function ingestionSkipReasonLabel(reason: string | null | undefined): string {
   if (reason === "duplicate_content") return t("sourceProfile.warning.duplicate");
+  if (reason === INGESTION_SKIP_REASON_SUPERSEDED) return t("flow.jobs.skipReason.superseded");
   return (
     unsupportedReasonLabel(reason) ||
     t("flow.phase.skipped", { phase: t("flow.jobs.phase.preprocess") })
