@@ -162,7 +162,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
               <div className="grid min-w-0 gap-1" data-trace-inspector-content="">
                 <div data-trace-processing-content="" className="grid min-w-0 gap-2">
                   <RunStepDetailsView forceTabs activeTab={detailTab} onTabChange={setDetailTab}
-                    stepStatus={selected.status} reasoningApplicable={traceCategory(selected) === "model"}
+                    stepStatus={selected.status} reasoningApplicable={selected.details?.call ? undefined : traceCategory(selected) === "model"}
                     showStatistics={false} showTiming={false}
                     details={{...runStepContent(selected.details, [selected.detail, selected.traceMeta].filter(Boolean).join(" · ") || undefined), call: selected.details?.call}}
                     timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: stepDurationMs(selected)}} />

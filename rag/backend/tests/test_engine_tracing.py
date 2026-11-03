@@ -181,6 +181,7 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
 
     from pr_backend_core.observability.model_purpose import model_call_purpose
     from rag_engine.adapters import oci
+    from rag_engine.config import LlmProviderSettings
     from rag_engine.config import get_settings as engine_settings
     from rag_engine.generation.batched_evidence import _reading_model
     from rag_engine.resources.call_context import call_context, update_call_context
@@ -220,7 +221,14 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
         return "合成の修正入力" if will_retry else None
 
     monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *args: Client())
-    provider = SimpleNamespace(model="synthetic-model", label="synthetic", reasoning_effort="")
+    provider = LlmProviderSettings(
+        provider_id="synthetic",
+        label="synthetic",
+        region="",
+        project_id="",
+        api_key="",
+        model="synthetic-model",
+    )
     settings = replace(engine_settings(environ={}, dotenv_path=None), llm_retries=0)
     configure_tracing(TracingSettings(), service_name="synthetic")
     try:
@@ -238,7 +246,7 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
             ),
             bind_structured_output_repair(repair),
         ):
-            result = oci._parse_with_retry(
+            result: Any = oci._parse_with_retry(
                 lambda: oci._openai_parsed([], settings, schema, provider),
                 "synthetic",
                 settings,
