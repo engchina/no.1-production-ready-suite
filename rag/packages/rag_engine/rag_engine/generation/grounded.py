@@ -734,6 +734,9 @@ def tag_spans(question: str, spans: Sequence[dict]) -> list[dict]:
     wanted = {"definition"} | ({"operation_entry"} if explicit_requests(question) else set())
     tagged, pinned = [], 0
     for span in spans:
+        if span.get("document_background_only"):
+            tagged.append({**span, "tags": [], "function": function_key(span), "pinned": False, "label": f"E{len(tagged) + 1}"})
+            continue
         tags = set().union(*(tagger(question, span) for tagger in SPAN_TAGGERS))
         # 図の OCR 集約（項目名が 1 行ずつ並ぶ断片）は質問の語を含んでも必須根拠にしない。原文として補うと
         # 判読できない 600 文字が「資料の記載」に出る (#723)。検索・生成の根拠としては残す。
@@ -2160,6 +2163,7 @@ def verify(
     計画の外の説明を外さずに本文に残して ``unassessed`` の印を付ける（根拠と矛盾した説明ではない。#2738）。
     計画がはっきり unrelated と判断した根拠の説明は、今までどおり外す。
     """
+    spans = [span for span in spans if not span.get("document_background_only")]
     checked: list[CheckedItem] = []
     dropped: list[dict] = []
     views = {id(span): check_view(span) for span in spans}
@@ -4513,6 +4517,8 @@ def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = Non
 def generation_unit_catalog(spans: Sequence[dict], *, sent_only: bool = False) -> SentUnitCatalog:
     snapshots = []
     for span in spans:
+        if span.get("document_background_only"):
+            continue
         view = _sent_view(span)
         if sent_only and view.present_in_prompt is not True:
             continue
@@ -4948,6 +4954,16 @@ def _rendered_evidence_span(
     見出しになり、モデルが本文を隣の根拠の ID に結び付けて出典を取り違えていた。
     """
     text = str(span.get("text") or "")
+    if span.get("document_background_only"):
+        truncated = (span.get("background_ref") or {}).get("truncated")
+        completeness = (
+            "保存時に欠落のある旧記録"
+            if truncated is True
+            else "完全性が記録されていない旧記録"
+            if truncated is not False
+            else "原文の補助情報"
+        )
+        return f"文書の先頭ページ背景（{completeness}・Chunkの引用対象外、参照 {span['source_id']}）\n" + text
     selected_units = tuple(units if units is not None else citation_units(text, image_text=_image_text(span)))
     snapshot = EvidenceUnitSnapshot.create(span, selected_units, CITATION_UNIT_CONTRACT)
     if numbered is True or numbered is None and _numbered(text, selected_units):

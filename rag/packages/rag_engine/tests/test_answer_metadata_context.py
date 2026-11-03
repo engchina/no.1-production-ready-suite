@@ -52,7 +52,7 @@ def test_parent_fallback_and_final_packet_prepend_background():
         format_evidence_packet(evidence_spans("説明", [r])),
     ]
     for value in values:
-        assert value.index("FIRST_PAGE_SENTINEL") < value.index("BODY_SENTINEL")
+        assert "FIRST_PAGE_SENTINEL" not in value
         assert value.index("SECTION_SENTINEL") < value.index("BODY_SENTINEL")
     assert r.page == 2 and r.text == "BODY_SENTINEL"
 
@@ -75,10 +75,10 @@ def test_child_scope_is_separate_and_does_not_mutate_saved_metadata():
 def test_document_dedup_version_separation_and_budget():
     r = record()
     spans = evidence_spans("説明", [r, replace(r, id="p3", page=3, text="BODY_3")])
-    assert format_evidence_packet(spans).count("FIRST_PAGE_SENTINEL") == 1
+    assert "FIRST_PAGE_SENTINEL" not in format_evidence_packet(spans)
     other = replace(r, id="v2", metadata={**r.metadata, "document": {**r.metadata["document"], "effective_from": "2026-04-01"}})
     spans = evidence_spans("説明", [r, other])
-    assert format_evidence_packet(spans).count("FIRST_PAGE_SENTINEL") == 2
+    assert "FIRST_PAGE_SENTINEL" not in format_evidence_packet(spans)
     spans = evidence_spans("説明", [r], budget=160)
     assert sum(len(s["text"]) + len(s.get("answer_context", "")) for s in spans) <= 160
     assert "BODY_SENTINEL" in format_evidence_packet(spans)
@@ -157,7 +157,7 @@ def test_prompt_prefix_leaves_section_and_child_scope_to_source_note():
     assert "SECTION_SENTINEL" in full and "CHILD_SCOPE_SENTINEL" in full
     short = answer_metadata_context(scoped, include_section=False)
     assert "SECTION_SENTINEL" not in short and "CHILD_SCOPE_SENTINEL" not in short
-    assert "FIRST_PAGE_SENTINEL" in short
+    assert "FIRST_PAGE_SENTINEL" not in short
     spans = evidence_spans("説明", [scoped])
     assert "Section context" not in format_evidence_packet(spans)
     assert "SECTION_SENTINEL" in json.dumps(spans[0]["source_context"], ensure_ascii=False)

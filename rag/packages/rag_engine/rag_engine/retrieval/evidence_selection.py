@@ -444,7 +444,6 @@ def evidence_spans(
         budget = 2**63 - 1
     remaining = max(0, budget)
     context_remaining = max(0, budget // 10)
-    seen_documents = set()
     result = []
     ordered = _same_unit_first(list(unique.items()), question)
     if labels:
@@ -546,7 +545,6 @@ def evidence_spans(
         if source_cost >= remaining:
             continue
         remaining -= source_cost
-        document_key = document_context_key(record)
         required = definition_windows(text, labels)
         # まとめた根拠（#1331）の child も、本文が残す根拠の中に一意に見つかれば位置と頁に使う。
         parent_keys = member_keys[key]
@@ -587,7 +585,6 @@ def evidence_spans(
                 max(0, remaining - sum(b - a for a, b in priority_ranges) - priority_extra_cost),
                 max(0, remaining // 10),
             ),
-            include_first_page=document_key not in seen_documents,
             include_section=False,
         )
         context_remaining -= len(prefix)
@@ -702,6 +699,13 @@ def evidence_spans(
                     "evidence_id": span_id,
                     "source_id": source_id,
                     "document_scope": list(document_context_key(record)),
+                    "page_scope": str((getattr(record, "metadata", {}) or {}).get("context_page_ranges") or ""),
+                    "source_record_ids": list(
+                        dict.fromkeys(
+                            [str(value) for value in (getattr(record, "metadata", {}) or {}).get("element_ids", ())]
+                            + [str(ref.get("id") or ref.get("record_id") or "") for ref in getattr(record, "source_record_refs", ())]
+                        )
+                    ),
                     "source": getattr(record, "source", ""),
                     "source_context": source_info,
                     # 関連度順で選んだ根拠も、生成時は見出しと本文を原文順に読めるようにする。
@@ -737,7 +741,6 @@ def evidence_spans(
             if prefix:
                 result[-1]["answer_context"] = prefix
                 prefix = ""
-                seen_documents.add(document_key)
             if len(pages) == 1:
                 result[-1]["page"] = result[-1]["page_end"] = next(iter(pages))
             # 抜粋の範囲に重なる子と、その子の親の本文の中の範囲（#2710）。出典の行を、引用が実際に入る子へ

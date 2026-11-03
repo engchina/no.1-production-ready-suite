@@ -657,7 +657,14 @@ class ReferenceOracle:
     async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
         return []
 
-    async def chunk_set_first_page_contexts(self, ids: list[str]) -> dict[str, dict[str, object]]:
+    async def retrieval_document_first_chunk(
+        self, filters: dict[str, str], *, document_id: str, chunk_set_id: str
+    ) -> RetrievedChunk | None:
+        return None
+
+    async def chunk_set_first_page_contexts(
+        self, ids: list[str], *, filters: dict[str, str] | None = None
+    ) -> dict[str, dict[str, object]]:
         return {}
 
     async def hybrid_search(

@@ -110,6 +110,7 @@ class DocumentMetadataTests(unittest.TestCase):
                     "text": "page 1",
                     "engine": "docling",
                     "record_ids": ["docling-p1-1"],
+                    "source_units": [{"record_id": "docling-p1-1", "start": 0, "end": 6}],
                     "truncated": False,
                 },
             }

@@ -168,13 +168,19 @@ def test_each_same_name_document_gets_its_own_first_page_background():
     )
 
     spans = evidence_spans(QUESTION, [left, right, again])
-    contexts = {span["source_id"]: span.get("answer_context", "") for span in spans}
-
-    assert "背景 A" in contexts["document-a:g"] and "背景 B" not in contexts["document-a:g"]
-    assert "背景 B" in contexts["document-b:g"] and "背景 A" not in contexts["document-b:g"]
-    # 同じ文書の 2 つ目の根拠には、背景を繰り返さない。
-    assert "First-page background" not in contexts["document-a:g2"]
-
+    assert all("背景 A" not in span.get("answer_context", "") and "背景 B" not in span.get("answer_context", "") for span in spans)
     bundle = context_bundle_from_records([left, right, again], max_chars=20000)
-    assert bundle.text.count("背景 A") == 1
-    assert bundle.text.count("背景 B") == 1
+    assert "背景 A" not in bundle.text and "背景 B" not in bundle.text
+    from rag_engine.generation.answer_models import AnswerContext
+    from rag_engine.generation.document_background import BACKGROUND_ONLY, DocumentBackgroundReader
+
+    reader = DocumentBackgroundReader()
+    context = AnswerContext([left, right, again], bundle.text)
+    reader.remember(context)
+    _, prepared, diagnostic = reader.append(QUESTION, context, spans)
+    backgrounds = [value for value in prepared if value.get(BACKGROUND_ONLY)]
+    assert len(backgrounds) == 2
+    by_document = {value["document_scope"][-1]: value["text"] for value in backgrounds}
+    assert "背景 A" in by_document["document-a"] and "背景 B" not in by_document["document-a"]
+    assert "背景 B" in by_document["document-b"] and "背景 A" not in by_document["document-b"]
+    assert diagnostic["selected_documents"] == 2

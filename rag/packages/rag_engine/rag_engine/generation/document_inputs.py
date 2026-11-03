@@ -1,7 +1,10 @@
 """選択順位・文書の版・原文位置を保つ生成入力の並べ方。"""
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 
 
 def document_key(span: Mapping[str, Any]) -> tuple[str, ...]:
@@ -33,3 +36,23 @@ def document_groups(
 
 def order_document_spans(spans: Sequence[dict[str, Any]], *, priority: Mapping[tuple[str, ...], int] | None = None) -> list[dict[str, Any]]:
     return [value for members in document_groups(spans, priority=priority) for value in members]
+
+
+def document_priority(spans: Sequence[dict[str, Any]], source_scores: Mapping[str, float | None] | None) -> dict[tuple[str, ...], int]:
+    """選択済みChunkの原質問スコアの最高値で並べ、明示した目録文書の既存位置は保つ。"""
+    groups = document_groups(spans)
+    catalog = {index for index, members in enumerate(groups) if any(value.get(ARTICLE_CATALOG_KEY) for value in members)}
+
+    def rank(members: list[dict[str, Any]]) -> tuple[int, float]:
+        scores = [
+            score
+            for value in members
+            if (score := (source_scores or {}).get(str(value.get("source_id") or ""))) is not None
+            and not isinstance(score, bool)
+            and math.isfinite(score)
+        ]
+        return (0, -max(scores)) if scores else (1, 0.0)
+
+    ranked = iter(sorted((members for index, members in enumerate(groups) if index not in catalog), key=rank))
+    ordered = [members if index in catalog else next(ranked) for index, members in enumerate(groups)]
+    return {document_key(members[0]): index for index, members in enumerate(ordered)}
