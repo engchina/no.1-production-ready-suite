@@ -97,8 +97,8 @@ it("回答ラウンドの採否を完了状態と分け、古い記録では補�
   ];
   const rows = chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS);
   expect(rows[0].status).toBe("done");
-  expect(rows[0].detail).toBe("採用");
+  expect(rows[0].outcome).toBe("採用");
   expect(rows[1].status).toBe("done");
-  expect(rows[1].detail).toBe("不採用");
-  expect(rows[2].detail).toBeUndefined();
+  expect(rows[1].outcome).toBe("不採用");
+  expect(rows[2].outcome).toBeUndefined();
 });

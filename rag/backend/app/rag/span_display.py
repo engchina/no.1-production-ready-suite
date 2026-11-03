@@ -168,8 +168,9 @@ def answer_step_params(values: Mapping[str, object]) -> DisplayParams:
         llm_sends = values.get("llm_sends")
         if isinstance(llm_sends, int) and not isinstance(llm_sends, bool) and llm_sends > llm_calls:
             params["llm_sends"] = llm_sends
-    if isinstance(values.get("accepted"), bool):
-        params["accepted"] = values["accepted"]
+    accepted = values.get("accepted")
+    if isinstance(accepted, bool):
+        params["accepted"] = accepted
     round_number = values.get("round")
     if isinstance(round_number, int) and not isinstance(round_number, bool) and round_number > 0:
         params["round"] = round_number
