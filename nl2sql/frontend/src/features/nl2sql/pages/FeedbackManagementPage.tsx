@@ -224,6 +224,8 @@ export function FeedbackManagementPage() {
   // 出したままヘッダーのボタンの loading で示す（実行履歴と同じ。messaging.md §3.6・§3.7、#1777）。
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [message, setMessage] = useState("");
+  // 読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。
+  const [loadFailed, setLoadFailed] = useState(false);
   const [actionResult, setActionResult] = useState<ActionResult>(null);
   const showActionError = (origin: ActionResultOrigin, err: unknown, fallback: string) =>
     setActionResult({ origin, tone: "danger", message: apiErrorMessage(err, fallback) });
@@ -503,6 +505,7 @@ export function FeedbackManagementPage() {
           setSavedFeedbackConfig(configData);
         }
         setLoadedOnce(true);
+        setLoadFailed(false);
         setMessage("");
         if (announce) toast.success(t("common.action.refreshed"));
       });
@@ -510,6 +513,7 @@ export function FeedbackManagementPage() {
       if (isAbortError(err)) {
         return;
       }
+      setLoadFailed(true);
       setMessage(apiErrorMessage(err, t("feedbackManagement.error.load")));
     } finally {
       if (sequence === loadSequence.current) setLoading("");
@@ -984,6 +988,9 @@ export function FeedbackManagementPage() {
                 left={
                   initialEntriesLoading ? (
                     <FeedbackEntriesListSkeleton timed={initialLoading} />
+                  ) : feedback?.read_failed || (loadFailed && !feedback) ? (
+                    // 読み取れなかった（理由はページの先頭）。「Select AI feedback はありません」と出さない（#4217）。
+                    <p className="p-3 text-sm text-fg-muted" data-testid="feedback-entries-load-failed">{t("common.list.loadUnavailable")}</p>
                   ) : (
                     <FeedbackEntriesList
                       entries={selectAiFeedbackItems}
@@ -1239,6 +1246,8 @@ export function FeedbackManagementPage() {
                       selectedId={selectedFeedbackId}
                       onSelect={(id) => void selectReview(id)}
                     />
+                  ) : loadFailed ? (
+                    <p className="p-3 text-sm text-fg-muted" data-testid="app-feedback-load-failed">{t("common.list.loadUnavailable")}</p>
                   ) : (
                     <div className="p-3">
                       {appFeedbackFiltersActive ? (

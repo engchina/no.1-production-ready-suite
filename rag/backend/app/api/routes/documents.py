@@ -28,7 +28,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
+from pr_backend_core.api import OffsetParams, offset_params, paginate
 from pr_backend_core.oracle_errors import oracle_error_codes
 from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
 from rag_parser_core.text_encoding import detect_text_match
@@ -62,7 +62,7 @@ from app.config import (
     Settings,
     get_settings,
 )
-from app.db_degradation import load_or_degrade
+from app.db_read_failures import read_or_raise
 from app.rag.bulk_ingestion import BulkIngestionStore, accept_bulk_ingestion
 from app.rag.chunking import Chunk, chunk_extraction_with_strategy
 from app.rag.chunking_small_to_big import SMALL_TO_BIG_STRATEGY, build_parent_child_chunks
@@ -643,7 +643,7 @@ async def list_documents(
     language_pack_relation: LanguagePackIndexRelation | None = None,
     current_release_id: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> ApiResponse[Page[DocumentSummary]]:
-    """取込対象ドキュメントの一覧を返す。DB 停止時は空一覧 + warning で縮退する。
+    """取込対象ドキュメントの一覧を返す。読み取りの失敗は API の失敗にする（#4217）。
 
     状態の絞り込みは一覧の行に出る状態の 1 つを選ぶ(#2677): ``status`` は順番待ちでない文書の
     状態(レシピ1の状態)、``queued_phase`` はレシピ1の取込の job が順番待ちの段(行に
@@ -681,16 +681,13 @@ async def list_documents(
         )
         return paginate(documents, total=total, limit=paging.limit, offset=paging.offset)
 
-    fallback: Page[DocumentSummary] = empty_page(paging)
-    page, degraded = await load_or_degrade(
+    page = await read_or_raise(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=fallback,
         log_label="documents_list",
     )
     return ApiResponse(
         data=page,
-        warning_messages=[degraded.message] if degraded else [],
     )
 
 
@@ -895,7 +892,7 @@ async def list_ingestion_jobs(
     paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     status: Annotated[IngestionJobStatus | None, Query()] = None,
 ) -> ApiResponse[Page[IngestionJob]]:
-    """直近の取込 job 一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
+    """直近の取込 job 一覧を返す。読み取りの失敗は API の失敗にする（#4217）。"""
     oracle = OracleClient()
     settings = get_settings()
 
@@ -906,16 +903,13 @@ async def list_ingestion_jobs(
         total = await oracle.count_ingestion_jobs(status=status)
         return paginate(page_items, total=total, limit=paging.limit, offset=paging.offset)
 
-    fallback: Page[IngestionJob] = empty_page(paging)
-    page, degraded = await load_or_degrade(
+    page = await read_or_raise(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=fallback,
         log_label="ingestion_jobs_list",
     )
     return ApiResponse(
         data=page,
-        warning_messages=[degraded.message] if degraded else [],
     )
 
 

@@ -152,6 +152,8 @@ export function QuestionClassifierModelsPage() {
   }));
   const [candidateHasActiveFilters, setCandidateHasActiveFilters] = useState(false);
   const [candidateError, setCandidateError] = useState("");
+  // まとめての読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。
+  const [loadFailed, setLoadFailed] = useState(false);
   const [candidateActionError, setCandidateActionError] = useState("");
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [candidateProfileOverrides, setCandidateProfileOverrides] = useState<Record<string, string>>({});
@@ -316,6 +318,7 @@ export function QuestionClassifierModelsPage() {
       );
 
       // 失敗の案内の「再試行」は、取り直せるまで案内を残す（押すと消えて結果が分からなくなるのを防ぐ。#2034）。
+      setLoadFailed(false);
       setMessage("");
       if (announce) toast.success(t("common.action.refreshed"));
     })
@@ -323,6 +326,7 @@ export function QuestionClassifierModelsPage() {
         if (isAbortError(err)) {
           return;
         }
+        setLoadFailed(true);
         setMessage(apiErrorMessage(err, t("qcm.error.load")));
       })
       .finally(() => {
@@ -671,6 +675,7 @@ export function QuestionClassifierModelsPage() {
             ariaLabel={t("qcm.training.workspace")}
           >
             <TrainingDataPanel
+              loadFailed={loadFailed}
               examples={filteredExamples}
               totalExamples={classifierTrainingData?.total_examples ?? 0}
               categories={classifierTrainingData?.categories ?? []}
@@ -756,7 +761,7 @@ export function QuestionClassifierModelsPage() {
               offset={candidatePaging.offset}
               pageSize={candidatePaging.pageSize}
               loading={loading}
-              error={candidateError}
+              error={candidateError || (loadFailed ? t("qcm.candidates.error.load") : "")}
               actionError={candidateActionError}
               hasActiveFilters={candidateHasActiveFilters}
               // 一覧の絞り込みは条件を変えたらすぐ適用する（検索語は SearchField の debounce・IME 対応。#535）。
@@ -795,6 +800,7 @@ export function QuestionClassifierModelsPage() {
 }
 
 function TrainingDataPanel({
+  loadFailed,
   examples,
   totalExamples,
   categories,
@@ -824,6 +830,8 @@ function TrainingDataPanel({
 }: {
   /** 一覧のページ番号と表示件数（作業状態。#1891）。 */
   paging: WorkspacePaging;
+  /** 読み取りに失敗した（0 件と言い切れない。#4217）。 */
+  loadFailed: boolean;
   examples: ClassifierTrainingExample[];
   totalExamples: number;
   categories: string[];
@@ -938,6 +946,7 @@ function TrainingDataPanel({
         {/* 一覧の再読み込み・行の編集・削除の失敗は一覧の直上に出す（messaging.md §10.1）。 */}
         {listError ? <Banner severity="danger">{listError}</Banner> : null}
         <TrainingDataTable
+          loadFailed={loadFailed}
           examples={examples}
           search={search}
           paging={paging}
@@ -959,6 +968,7 @@ function TrainingDataPanel({
 }
 
 function TrainingDataTable({
+  loadFailed,
   examples,
   search,
   paging,
@@ -974,6 +984,8 @@ function TrainingDataTable({
   onSaveEdit,
   onDelete,
 }: {
+  /** 読み取りに失敗した（0 件と言い切れない。#4217）。 */
+  loadFailed: boolean;
   examples: ClassifierTrainingExample[];
   search: string;
   paging: WorkspacePaging;
@@ -1004,6 +1016,10 @@ function TrainingDataTable({
   });
   const hasFilter = Boolean(search.trim());
 
+  // 読み取れなかったときは「未登録」と言わない（原因と再試行はページの先頭の案内。#4217）。
+  if (loadFailed && examples.length === 0) {
+    return <p className="p-3 text-sm text-fg-muted" data-testid="qcm-training-load-failed">{t("common.list.loadUnavailable")}</p>;
+  }
   if (examples.length === 0) {
     return (
       <EmptyState

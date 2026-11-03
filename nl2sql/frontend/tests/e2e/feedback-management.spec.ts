@@ -587,3 +587,20 @@ test("再読込の失敗の「再試行」は案内を残したまま押した�
   await expect(retry).toHaveCount(0);
   await expect(processing).toHaveCount(0);
 });
+
+test("読み取りに失敗したら「フィードバックはまだありません」と出さない (#4217)", async ({ page }) => {
+  await mockFeedbackApi(page);
+  await page.route(/\/api\/nl2sql\/feedback\?.*$/, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ data: null, error_messages: ["読み取れませんでした。"] }),
+    })
+  );
+
+  await page.goto("/feedback-management?tab=appFeedback");
+
+  await expect(page.getByTestId("app-feedback-load-failed")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("読み取れませんでした。")).toBeVisible();
+  await expect(page.getByText("フィードバックはまだありません")).toHaveCount(0);
+});

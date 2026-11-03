@@ -26,6 +26,7 @@ import {
   ListToolbar,
   useActionPending,
   ApiErrorBanner,
+  dataLoadView,
 } from "@production-ready/ui";
 import { Link, useSearchParams } from "react-router-dom";
 import { CheckSquare, History, RefreshCw, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
@@ -34,10 +35,10 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { LanguagePackBulkReprocess } from "@/components/documents/LanguagePackBulkReprocess";
 import { LanguagePackUseSummary } from "@/components/documents/LanguagePackDocumentPanel";
-import { DegradedBanner } from "@/components/DegradedBanner";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { EmptyState, ApiErrorState } from "@/components/StateViews";
+import { EmptyState } from "@/components/StateViews";
 import {
   api,
   ApiError,
@@ -53,7 +54,6 @@ import {
 import {
   useDeleteDocument,
   useDocuments,
-  initialLoadError,
   useEnqueueDocumentIngestionJob,
   useKnowledgeBaseChoices,
   useKnowledgeBasesByIds,
@@ -209,12 +209,11 @@ export function FileListClient() {
       ? null
       : (selectedKnowledgeBaseLookup.data?.items.find((item) => item.id === knowledgeBaseId) ?? null);
   // 復元した KB 絞り込みが削除・アーカイブ済みなら、その条件だけ「すべて」に戻す。
-  // 別の ID の結果を出している間・DB の縮退応答（warning 付きの空一覧）では判定しない。
+  // 別の ID の結果を出している間・読み取りの失敗（isSuccess にならない）では判定しない。
   const knowledgeBaseFilterMissing =
     knowledgeBaseId !== "ALL" &&
     selectedKnowledgeBaseLookup.isSuccess &&
     !selectedKnowledgeBaseLookup.isPlaceholderData &&
-    (selectedKnowledgeBaseLookup.data.warning_messages?.length ?? 0) === 0 &&
     selectedKnowledgeBase?.status !== "ACTIVE";
   useEffect(() => {
     if (knowledgeBaseFilterMissing) {
@@ -230,9 +229,8 @@ export function FileListClient() {
   // 絞り込み・検索・ページを変えて取り直す間は、前の条件の一覧（keepPreviousData。#535）を出したまま。
   // その間の件数・行は今の条件の結果ではないため、選択・一括操作・件数に使わない（#2696）。
   const listStale = query.isPlaceholderData;
-  // 全面のエラーは初回の取得（一覧が無い）の失敗だけ。一覧があるときの再取得の失敗は一覧の上に出す（#938）。
-  const loadError = initialLoadError(query);
-  const refreshError = query.isError && !loadError ? query.error : null;
+  // 全面のエラーは一覧が無いときの失敗だけ。一覧があるときの再取得の失敗は一覧の上に出す（#938・#4217）。
+  const load = dataLoadView(query, { isEmpty: page?.total === 0 });
   // ヘッダーの「最新情報を取得」は押した取り直しの間だけ回す（定期の取り直し・投入や削除の後の invalidate・
   // 絞り込みの切り替えでは回さない。前の一覧は出したまま。#819・#2012）。
   const manualRefresh = useActionPending();
@@ -515,13 +513,6 @@ export function FileListClient() {
         ]}
       />
       <PageBody wide>
-        {/* DB 停止時の縮退お知らせ(非ブロッキング) */}
-        <DegradedBanner
-          messages={page?.warning_messages}
-          onRetry={() => void query.refetch()}
-          isRetrying={query.isFetching}
-        />
-
         {/* 一覧のツールバー: 左に検索、その右に状態・ナレッジベースの絞り込み（page-archetypes.md「一覧のツールバー」。#600）。
             状態は 11 種あり FilterChipGroup の上限（5）を超えるため FilterSelect、ナレッジベースは数百件から選ぶので
             検索できる選択（ラベルはボタンの中）にする（#578・#1933）。 */}
@@ -535,7 +526,7 @@ export function FileListClient() {
               onSearch={applySearch}
               clearLabel={t("common.clearSearch")}
               resultCountLabel={
-                page && !listStale
+                page && !listStale && load.phase !== "failed"
                   ? t("common.searchResultCount", { count: formatNumber(page.total) })
                   : ""
               }
@@ -603,7 +594,7 @@ export function FileListClient() {
           labels={listToolbarLabels()}
           count={listCountProps({
             // 前の条件の一覧を出している間は、その件数を今の条件の件数として出さない（#2696）。
-            matchedTotal: listStale ? undefined : page?.total,
+            matchedTotal: listStale || load.phase === "failed" ? undefined : page?.total,
             filtered,
             allTotal: allTotal.data,
           })}
@@ -622,28 +613,15 @@ export function FileListClient() {
 
         {/* 前回取得した一覧があるときの再取得（自動更新を含む）の失敗は、一覧と選択を残して知らせる
             （全面のエラーにすると、見えない選択行の一括操作だけが残る。messaging.md §3.6・#311・#938）。 */}
-        {refreshError ? (
-          <div data-testid="file-list-refresh-error">
-            <Banner
-              severity="warning"
-              title={t("fileList.refreshError")}
-              action={
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={RefreshCw}
-                  // 自動更新・自動の再試行の間も押せるよう、押した再試行の間だけ loading にする。
-                  loading={manualRetrying}
-                  onClick={() => void retryList()}
-                >
-                  {t("common.retry")}
-                </Button>
-              }
-            >
-              <p>{loadErrorMessage(refreshError)}</p>
-            </Banner>
-          </div>
+        {load.phase === "stale" ? (
+          <DataLoadStaleNotice
+            error={query.error}
+            dataUpdatedAt={query.dataUpdatedAt}
+            onRetry={() => void retryList()}
+            // 自動更新・自動の再試行の間も押せるよう、押した再試行の間だけ loading にする。
+            retrying={manualRetrying}
+            testId="file-list-refresh-error"
+          />
         ) : null}
 
         {/* 一括操作バー。選択で出し入れせず常に出し、選択が無いときは操作を無効にする（表の位置を
@@ -754,11 +732,12 @@ export function FileListClient() {
           />
         ) : null}
 
-        {loadError ? (
-          <ApiErrorState
-            error={loadError}
+        {load.phase === "failed" ? (
+          <DataLoadFailure
+            error={query.error}
             fallback={t("fileList.loadError")}
             onRetry={() => void query.refetch()}
+            testId="file-list-load-failure"
           />
         ) : query.isPending ? (
           <TimedLoadingState
@@ -852,9 +831,6 @@ export function FileListClient() {
 }
 
 /** 一覧の取得の失敗の文。backend の理由（ApiError）があればそれを出す。 */
-function loadErrorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : t("fileList.loadError");
-}
 
 /** 行の「ファイル準備を実行」の結果を知らせる。SKIPPED は状態が変わらないため理由を出す。 */
 function notifyRowEnqueued(doc: DocumentSummary, job: IngestionJob) {

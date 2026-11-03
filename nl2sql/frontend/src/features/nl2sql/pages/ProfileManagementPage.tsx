@@ -370,6 +370,7 @@ function updateSelectAiConfig(
 }
 
 function ProfileList({
+  loadFailed,
   profiles,
   totalCount,
   unfilteredTotal,
@@ -395,6 +396,8 @@ function ProfileList({
   unfilteredTotal?: number;
   selectedProfileId: string;
   loading: boolean;
+  /** 読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。 */
+  loadFailed: boolean;
   /** 読み込み中の文言と経過時間を一覧の位置に出すか。作業領域の先頭に同じ処理の表示があるときは false。 */
   loadingIndicator?: boolean;
   search: string;
@@ -454,6 +457,8 @@ function ProfileList({
           // 同じ読み込みの経過時間は作業領域の先頭に出ているため、ここでは形だけを出す（messaging.md §3.7）。
           <TableSkeleton columns={3} testId="profile-list-skeleton" />
         )
+      ) : loadFailed && profiles.length === 0 ? (
+        <p className="p-3 text-sm text-fg-muted" data-testid="profile-list-load-failed">{t("common.list.loadUnavailable")}</p>
       ) : profiles.length === 0 ? (
         <EmptyState
           title={search.trim() ? t("profiles.list.noResultsTitle") : t("profiles.empty.title")}
@@ -2257,6 +2262,7 @@ export function ProfileManagementPage() {
               processing={showProfileWorkspaceProcessing ? profileWorkspaceProcessing : undefined}
             >
               <ProfileList
+                loadFailed={profilesQuery.isError}
                 profiles={profiles}
                 totalCount={profileTotal}
                 unfilteredTotal={unfilteredProfileTotal}

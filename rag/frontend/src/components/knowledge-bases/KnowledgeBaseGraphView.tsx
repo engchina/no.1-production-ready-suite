@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Share2 } from "lucide-react";
 
-import { DegradedBanner } from "@/components/DegradedBanner";
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { DataLoadFailure } from "@/components/DataLoadStates";
+import { EmptyState } from "@/components/StateViews";
 import { Disclosure, Skeleton, TimedLoadingState } from "@production-ready/ui";
 import { KnowledgeBaseGraphCanvas } from "./KnowledgeBaseGraphCanvas";
 import { useKnowledgeBaseGraph } from "@/lib/queries";
@@ -17,10 +17,6 @@ import { t } from "@/lib/i18n";
 export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const [open, setOpen] = useState(false);
   const query = useKnowledgeBaseGraph(open ? knowledgeBaseId : null);
-  // DB が止まっていると backend は空の図と warning_messages を返す。取得できなかったことを
-  // 「関係情報がまだありません」と区別して出す（空の案内は、取得できて本当に空のときだけ）。
-  const warnings = query.data?.warning_messages ?? [];
-  const degraded = warnings.length > 0;
   const isEmpty = query.data && (query.data.status === "empty" || query.data.nodes.length === 0);
 
   return (
@@ -43,12 +39,11 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
               <Skeleton className="h-[25.71rem] w-full rounded-md" />
             </TimedLoadingState>
           ) : query.isError ? (
-            <ErrorState message={t("knowledgeBases.graph.error")} onRetry={() => void query.refetch()} />
-          ) : degraded ? (
-            <DegradedBanner
-              messages={warnings}
+            // 読み取れなかったことを「関係情報がまだありません」と区別する（#4217）。
+            <DataLoadFailure
+              error={query.error}
+              fallback={t("knowledgeBases.graph.error")}
               onRetry={() => void query.refetch()}
-              isRetrying={query.isFetching}
             />
           ) : isEmpty ? (
             <EmptyState

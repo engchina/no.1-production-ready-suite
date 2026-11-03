@@ -18,7 +18,14 @@ export const ja = {
   "common.clearSearch": "検索語をクリア",
   // 一覧の絞り込みの件数の読み上げ（SearchField の resultCountLabel。#535）。
   "common.searchResultCount": "{count} 件が一致しました",
-  "common.degraded.title": "データベースに接続できません",
+  "common.dataLoad.timeout":
+    "読み取りがタイムアウトしました。データベースが混み合っている可能性があります。データは失われていません。少し待ってから再試行してください。",
+  "common.dataLoad.unavailable":
+    "データベースに接続できません。データは失われていません。データベースの起動状態と接続の設定を確かめてから、再試行してください。",
+  "common.dataLoad.unavailableRestricted":
+    "データベースに接続できません。データは失われていません。少し待ってから再試行し、続くときはシステム管理者に連絡してください。",
+  "common.dataLoad.staleTitle": "{time} 時点の内容を表示しています",
+  "common.dataLoad.staleOther": "最新の内容を読み取れませんでした。データは失われていません。再試行してください。",
   // DB ゲート（3製品共通の部品。#325）。既定の文言は platform が持ち、製品名の入る文言だけを上書きする（#820）。
   "dbGate.notConfigured.message":
     "RAG 機能(取込・検索・索引)を使うには、まずデータベースの接続情報を設定してください。設定が完了すると、この画面は自動的に利用できるようになります。",
@@ -2118,7 +2125,6 @@ export const ja = {
   "fileList.loading": "文書一覧を読み込んでいます",
   "fileList.scrollLabel": "文書一覧。スクロールできます。",
   "fileList.loadError": "文書の一覧を取得できませんでした。接続を確認して再試行してください。",
-  "fileList.refreshError": "最新の状態を取得できませんでした。表示は前回取得した内容です。",
   "fileList.ingest.toast.queued": "「{name}」のファイル準備を開始しました。",
   "fileList.queue.toast.statusHint": "状態は一覧に反映されます。",
   "fileList.ingest.toast.skipped": "「{name}」はファイル準備をスキップしました。",
@@ -5569,6 +5575,7 @@ export const ja = {
   "evaluation.calibration.create.jobs": "元にする品質評価",
   "evaluation.calibration.create.jobsHelp": "自分が実行した、終わった品質評価から選びます（複数選べます）。",
   "evaluation.calibration.create.jobsLoading": "品質評価を読み込んでいます",
+  "evaluation.calibration.create.jobsLoadError": "品質評価の一覧を読み取れませんでした。",
   "evaluation.calibration.create.jobsEmpty": "終わった品質評価がありません。先に「評価の実行」で評価してください。",
   "evaluation.calibration.create.jobsRequired": "品質評価を 1 つ以上選んでください。",
   "evaluation.calibration.create.select": "選ぶ",
@@ -5714,6 +5721,7 @@ export const ja = {
   "evaluation.calibration.synthetic.title": "合成の対照",
   "evaluation.calibration.synthetic.description":
     "回答をコードで壊した対照です。壊した観点を fail とし、評価器の誤合格を別に集計します。壊しても誤りにならない回答（順序に意味の無い箇条書きを逆にしたなど）は除外します。",
+  "evaluation.calibration.synthetic.loadError": "合成の対照を読み取れませんでした。",
   "evaluation.calibration.synthetic.empty": "合成の対照はありません",
   "evaluation.calibration.synthetic.kind": "壊し方",
   "evaluation.calibration.synthetic.change": "変えた所",
@@ -5742,6 +5750,7 @@ export const ja = {
   "evaluation.calibration.result.title": "校正の結果",
   "evaluation.calibration.result.description":
     "観点ごとに holdout の件数・判定率・κ・誤合格の率を閾値と比べます。dev は基準の調整に、合成の対照は壊した回答の誤合格を見るのに使います。",
+  "evaluation.calibration.result.loadError": "校正の結果を読み取れませんでした。",
   "evaluation.calibration.result.empty": "校正の結果はありません",
   "evaluation.calibration.result.emptyHint": "最終の判定が決まったら「校正を実行」で評価器を校正します。",
   "evaluation.calibration.result.passed": "全観点が合格",

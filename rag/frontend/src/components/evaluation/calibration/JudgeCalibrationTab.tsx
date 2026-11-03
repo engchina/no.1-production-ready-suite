@@ -22,7 +22,7 @@ import {
 import { FileUp, Plus, Scale, X } from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
 
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
 import { ApiError, type LabelSetSummary } from "@/lib/api";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
@@ -461,7 +461,16 @@ function CreateLabelSetForm({
                 <Skeleton className="h-10 w-full" aria-hidden="true" />
               </TimedLoadingState>
             ) : (
-              <SourceJobTable jobs={jobs} selected={jobIds} onToggle={toggle} />
+              sourcesQuery.isError ? (
+                // 読み取れなかったときは「終わった品質評価がありません」と言わない（#4217）。
+                <ApiErrorState
+                  error={sourcesQuery.error}
+                  fallback={t("evaluation.calibration.create.jobsLoadError")}
+                  onRetry={() => void sourcesQuery.refetch()}
+                />
+              ) : (
+                <SourceJobTable jobs={jobs} selected={jobIds} onToggle={toggle} />
+              )
             )}
             {jobsError ? (
               <p role="alert" className="text-sm text-danger-fg">

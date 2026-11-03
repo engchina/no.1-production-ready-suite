@@ -550,6 +550,26 @@ async def test_select_ai_feedback_route_returns_the_offset_page_with_default_lim
     assert (data["limit"], data["offset"]) == (25, 0)
 
 
+def test_select_ai_feedback_read_failure_is_flagged() -> None:
+    """読み取りの失敗は `read_failed` で明示する（空の items を 0 件と取り違えない。#4217）。"""
+    from unittest.mock import MagicMock
+
+    from app.features.nl2sql.models import SelectAiFeedbackEntriesData
+    from app.features.nl2sql.oracle_adapter import OracleAdapterError
+    from app.features.nl2sql.service import Nl2SqlService
+
+    service = MagicMock()
+    service._use_oracle_runtime.return_value = True
+    service._oracle_adapter.list_select_ai_feedback_entries.side_effect = OracleAdapterError(
+        "読み取れません"
+    )
+    data = Nl2SqlService.list_select_ai_feedback_entries(service, "PROFILE_A")
+    assert isinstance(data, SelectAiFeedbackEntriesData)
+    assert data.read_failed is True
+    assert data.items == []
+    assert data.warnings
+
+
 async def test_history_route_returns_the_offset_page_shape() -> None:
     """応答は共通の `Page`（items / total / limit / offset / has_next）と `unfiltered_total`。"""
     from app.main import app

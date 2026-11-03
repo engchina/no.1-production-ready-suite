@@ -2222,6 +2222,22 @@ import { SearchableMultiSelect, SearchableSelectField } from "@production-ready/
 
 ---
 
+## DataLoadFailureState / StaleDataNotice / dataLoadView（#4217）
+
+データ領域の読み取りの失敗（振る舞いの正本は [messaging.md §3.6.1](../ux-contracts/messaging.md)）。
+
+```tsx
+const load = dataLoadView(query, { isEmpty: page?.total === 0 });
+// load.phase: "loading" | "failed" | "stale" | "ready"。load.blockCreate は「新規作成」の disabled に渡す。
+{load.phase === "stale" ? <StaleDataNotice error={query.error} updatedAt={formatted} labels={labels} onRetry={retry} retrying={query.isFetching} /> : null}
+{load.phase === "failed" ? <DataLoadFailureState error={query.error} fallback={t("…loadError")} labels={labels} onRetry={retry} databaseAction={canManage ? <DatabaseSettingsLink routes={routes} /> : undefined} /> : …}
+```
+
+- 原因は `dataLoadFailureKind(error)`（製品の `ApiError` の `errorCode` を読む）。文言（`DataLoadFailureLabels`）は製品の i18n を渡す。
+- `databaseAction` は接続の失敗のときだけ再試行の前に出る。開ける利用者のときだけ渡す。データベース設定へのリンクは `@production-ready/system-settings` の `DatabaseSettingsLink`。
+- `QueryClient` の既定に `retryDataLoad` / `dataLoadRetryDelay` を渡す。
+- `ErrorState` の `focusRetry`（再試行へフォーカス）と `action`（再試行の前の導線）はこの部品が使う。
+
 ## ApiErrorBanner / ApiErrorState / presentApiError — **新規**（#900 / #906）
 
 API の失敗を、**利用者向けの要約（何が起きたか）・次の操作・「詳細」（技術的な情報）**に分けて出す部品と関数（UX 契約 messaging.md §10.3.1）。NL2SQL の #900 の仕組みを platform に移し、3 製品で使う。

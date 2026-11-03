@@ -6,7 +6,7 @@ import {
   DATABASE_STATUS_QUERY_KEY,
   SYSTEM_TABLES_QUERY_KEY,
 } from "@production-ready/system-settings";
-import { DEFAULT_RUN_PERIOD, runPeriodSince, type RunPeriod } from "@production-ready/ui";
+import { DEFAULT_RUN_PERIOD, retryDataLoad, runPeriodSince, type RunPeriod } from "@production-ready/ui";
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -371,10 +371,13 @@ export function useDocuments(
     queryFn: () => api.listDocuments(params),
     // 検索語・絞り込み・ページを変えている間は、前の一覧を出したまま取り直す（#535。useKnowledgeBases と同じ）。
     placeholderData: keepPreviousData,
-    refetchInterval: (query) =>
-      documentsHaveActiveWork(query.state.data?.items) || options.graceActive
+    refetchInterval: (query) => {
+      // 読み取りに失敗している間は定期の取り直しを止める（混んでいる DB を読み続けない）。戻すのは利用者の再試行（#4217）。
+      if (query.state.status === "error") return false;
+      return documentsHaveActiveWork(query.state.data?.items) || options.graceActive
         ? ACTIVE_REFETCH_INTERVAL_MS
-        : false,
+        : false;
+    },
   });
 }
 
@@ -393,13 +396,15 @@ export function useListTotal(
     queryKey: [prefix, "list-total", params] as const,
     queryFn: fetchTotal,
     enabled,
+    // 件数の補助なので、失敗しても読み直さない（一覧の読み取りの失敗に重ねて DB を読まない。#4217）。
+    retry: false,
   });
 }
 
-/** 404 以外の失敗だけを最大 3 回まで再試行する(TanStack Query の既定の回数に合わせる)。 */
+/** 404 は再試行しない。それ以外は共通の方針（`retryDataLoad`）に従う。 */
 export function retryUnlessNotFound(failureCount: number, error: unknown): boolean {
   if (error instanceof ApiError && error.status === 404) return false;
-  return failureCount < 3;
+  return retryDataLoad(failureCount, error);
 }
 
 /**
@@ -1357,7 +1362,6 @@ export function useAllSearchAnswerProfiles(params: { status?: SearchAnswerProfil
     queryFn: async () => {
       const first = await api.listSearchAnswerProfiles({ ...params, limit: 50, offset: 0 });
       const items = [...first.items];
-      const warnings = [...first.warning_messages];
       let page = first;
       while (page.has_next && page.items.length > 0) {
         page = await api.listSearchAnswerProfiles({
@@ -1366,9 +1370,8 @@ export function useAllSearchAnswerProfiles(params: { status?: SearchAnswerProfil
           offset: page.offset + page.items.length,
         });
         items.push(...page.items);
-        warnings.push(...page.warning_messages);
       }
-      return { ...first, items, has_next: page.has_next, warning_messages: warnings };
+      return { ...first, items, has_next: page.has_next };
     },
   });
 }

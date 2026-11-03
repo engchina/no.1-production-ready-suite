@@ -14,11 +14,14 @@ import {
   type ListCountLabels,
   type ListToolbarLabels,
   type PaginationLabels,
-  ApiErrorState,
+  DataLoadFailureState,
+  StaleDataNotice,
+  type DataLoadFailureLabels,
   formatPaginationNumber,
   offsetForPage,
 } from "@production-ready/ui";
 
+import { formatDateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { useWorkspaceState, type WorkspaceField, type WorkspaceValidator } from "@/lib/workspace-state";
 
@@ -153,6 +156,24 @@ export function listScrollLabel(name: string | undefined): string | undefined {
   return name ? t("list.scrollLabel", { name }) : undefined;
 }
 
+function dataLoadLabels(): DataLoadFailureLabels {
+  return {
+    timeout: t("common.dataLoad.timeout"),
+    unavailable: t("common.dataLoad.unavailable"),
+    unavailableRestricted: t("common.dataLoad.unavailableRestricted"),
+    retry: t("common.retry"),
+    staleTitle: (time) => t("common.dataLoad.staleTitle", { time }),
+    staleOther: t("common.dataLoad.staleOther"),
+  };
+}
+
+/** 前回の内容が 0 件か（配列・`items` を持つページ）。残す内容が無いので失敗の表示にする。 */
+function isEmptyData(data: unknown): boolean {
+  if (Array.isArray(data)) return data.length === 0;
+  const items = (data as { items?: unknown } | null)?.items;
+  return Array.isArray(items) && items.length === 0;
+}
+
 /**
  * TanStack Query の初回の取得・失敗・成功で表示を分ける（UX 契約 messaging.md §3.6 / §3.7）。
  * 読み込み中は「〜を読み込んでいます」と経過時間（`TimedLoadingState`）の下に、内容の形の Skeleton を置いて寸法を予約する。
@@ -166,7 +187,15 @@ export function QueryState<T>({
   testId = "query-loading",
   children,
 }: {
-  query: { isLoading: boolean; error: Error | null; data?: T; refetch?: () => unknown };
+  query: {
+    isLoading: boolean;
+    error: Error | null;
+    data?: T;
+    refetch?: () => unknown;
+    /** 前回の内容を読み取った時刻。渡すと、再取得の失敗で前回の内容を残す（#4217）。 */
+    dataUpdatedAt?: number;
+    isFetching?: boolean;
+  };
   /** i18n 済みの「〜を読み込んでいます」。 */
   loadingLabel: string;
   /** 読み込み後の内容の形をした Skeleton（`TableSkeleton` / `ListSkeleton` / `FormSkeleton` など）。 */
@@ -190,14 +219,30 @@ export function QueryState<T>({
     );
   }
   if (query.error) {
-    // 取得の失敗は領域だけを占め、再試行を出す（messaging.md §3.6）。
+    // 取得の失敗は領域だけを占め、再試行を出す（messaging.md §3.6.1）。0 件の空の状態にしない（#4217）。
     const refetch = query.refetch;
+    const retry = () => void refetch?.();
+    if (query.data !== undefined && query.dataUpdatedAt && !isEmptyData(query.data)) {
+      // 前回の内容があれば残し、いつの内容かを示す。
+      return (
+        <>
+          <StaleDataNotice
+            error={query.error}
+            updatedAt={formatDateTime(new Date(query.dataUpdatedAt).toISOString())}
+            labels={dataLoadLabels()}
+            onRetry={retry}
+            retrying={query.isFetching}
+          />
+          {children}
+        </>
+      );
+    }
     return (
-      <ApiErrorState
+      <DataLoadFailureState
         error={query.error}
         fallback={t("common.error.load")}
-        retryLabel={t("common.retry")}
-        onRetry={refetch ? () => void refetch() : undefined}
+        labels={dataLoadLabels()}
+        onRetry={retry}
       />
     );
   }

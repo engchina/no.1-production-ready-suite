@@ -262,6 +262,34 @@ export function adbLifecycleLabel(state: string): string {
     : state;
 }
 
+/**
+ * データベース設定（ADB 管理のカード）へのリンク。開ける利用者のときだけ描く（#820）。
+ * 縮退の Banner・読み取りの失敗（`DataLoadFailureState`）の導線で同じ形にする（#4217）。
+ */
+export function DatabaseSettingsLink({
+  routes,
+  messages,
+  linkComponent = Link,
+}: {
+  routes: DatabaseGateRoutes;
+  messages?: Partial<DatabaseGateMessages>;
+  linkComponent?: ButtonLinkComponent;
+}) {
+  const label = { ...DATABASE_GATE_MESSAGES, ...messages }["dbGate.openDatabaseSettings"];
+  return (
+    <ButtonLink
+      to={databaseSettingsHref(routes.databaseSettings, true)}
+      linkComponent={linkComponent}
+      variant="secondary"
+      size="sm"
+      icon={Settings}
+      trailingIcon={ArrowRight}
+    >
+      {label}
+    </ButtonLink>
+  );
+}
+
 export interface DatabaseUnavailableNoticeProps {
   /** `gate`＝主領域の中央の案内カード、`banner`＝カードやページの先頭の常設の Banner。 */
   mode?: "gate" | "banner";
@@ -370,16 +398,7 @@ export function DatabaseUnavailableNotice({
             <>
               {retryButton}
               {showSettingsLink ? (
-                <ButtonLink
-                  to={databaseSettingsHref(routes.databaseSettings, true)}
-                  linkComponent={linkComponent}
-                  variant="secondary"
-                  size="sm"
-                  icon={Settings}
-                  trailingIcon={ArrowRight}
-                >
-                  {m["dbGate.openDatabaseSettings"]}
-                </ButtonLink>
+                <DatabaseSettingsLink routes={routes} messages={m} linkComponent={linkComponent} />
               ) : null}
             </>
           ) : undefined

@@ -96,7 +96,8 @@ test("回答前の確認の未入力案内は補助テキストで、無効な�
   const hint = page.locator("#nl2sql-guided-query-required");
   await expect(hint).toBeVisible();
   await expect(hint).not.toHaveAttribute("role", "alert");
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  // 未モックの API の 404 は読み取りの失敗として alert になる。案内の文は alert にしない。
+  await expect(page.getByRole("alert").filter({ hasText: "回答前の確認を始めるには" })).toHaveCount(0);
   const button = page.getByRole("button", { name: "回答前の確認", exact: true });
   await expect(button).toBeDisabled();
   await expect(button).toHaveAccessibleDescription("回答前の確認を始めるには質問を入力してください。");

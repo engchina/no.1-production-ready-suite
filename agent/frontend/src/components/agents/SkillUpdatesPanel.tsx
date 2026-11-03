@@ -220,7 +220,8 @@ export function SkillUpdatesPanel({
                     <p className="text-xs text-fg-muted">{t("agent.skillUpdates.draftNotPublished")}</p>
                   ) : null}
                   <div className="flex flex-wrap items-center gap-2">
-                    {evaluationSets.isLoading ? null : sets ? (
+                    {/* 読み取れなかったときは「評価セットがありません」と言わない（#4217）。 */}
+                    {evaluationSets.isLoading || evaluationSets.isError ? null : sets ? (
                       <ButtonLink
                         to={evaluationHref(agent.id)}
                         linkComponent={Link}

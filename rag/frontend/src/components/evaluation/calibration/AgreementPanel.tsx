@@ -19,7 +19,7 @@ import {
 import { Gavel, Users } from "lucide-react";
 import { useState } from "react";
 
-import { EmptyState, ErrorState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
 import {
   ApiError,
   type AgreementFilter,
@@ -491,6 +491,14 @@ function SyntheticItemsCard({ labelSetId }: { labelSetId: string }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {query.isError ? (
+          // 読み取れなかったときは「合成の対照はありません」と言わない（#4217）。
+          <ApiErrorState
+            error={query.error}
+            fallback={t("evaluation.calibration.synthetic.loadError")}
+            onRetry={() => void query.refetch()}
+          />
+        ) : (
         <DataTable
           ariaLabel={t("evaluation.calibration.synthetic.title")}
           testId="calibration-synthetic-table"
@@ -546,6 +554,7 @@ function SyntheticItemsCard({ labelSetId }: { labelSetId: string }) {
             },
           ]}
         />
+        )}
       </CardContent>
     </Card>
   );

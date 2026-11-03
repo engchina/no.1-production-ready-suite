@@ -731,7 +731,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 tableClassName="w-full table-fixed"
                 stickyHeader
                 empty={
-                  <EmptyState
+                  // 読み取りに失敗したときは 0 件と言わない（原因は上の Banner。#4217）。
+                  loadError ? null : <EmptyState
                     title={search ? m.noResultsTitle : m.empty}
                     hint={search ? m.noResultsHint : undefined}
                     action={search ? <SecurityClearSearchAction onClear={() => setSearch("")} /> : undefined}
