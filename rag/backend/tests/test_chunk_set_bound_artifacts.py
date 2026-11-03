@@ -11,6 +11,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from pr_backend_core.mcp import McpToolError
 from rag_parser_core.preprocess import SourceDerivation
 
 from app import main as app_main
@@ -159,15 +160,48 @@ async def test_version_without_conversion_reads_the_original(
     assert await load_parsed_source(read, "d1", "r1", chunk_set_id="cs-plain") == _ORIGINAL
 
 
-@pytest.mark.parametrize("derivation", [None, {}, {"converted": "not-a-derivation"}])
-async def test_version_without_usable_lineage_falls_back_to_the_recipe_file(
-    reprocessed: tuple[_Oracle, dict[str, str]], derivation: object
+async def test_version_lookup_does_not_require_the_current_recipe(
+    reprocessed: tuple[_Oracle, dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """抽出の行か系譜が無い版は、今までどおりレシピのファイルを読む（読めなくしない）。"""
+    oracle, paths = reprocessed
+    read_recipe = AsyncMock(side_effect=AssertionError("現在のレシピは読まない"))
+    monkeypatch.setattr(oracle, "get_document_recipe", read_recipe)
+    read = cast(Any, oracle)
+    assert await load_parsed_source(read, "d1", "r1", chunk_set_id="cs-old") == _FILE_A
+    _, artifact = await mcp_tools.preview_document(read, "d1", "r1", chunk_set_id="cs-old")
+    assert artifact is not None and artifact.object_storage_path == paths["a"]
+    read_recipe.assert_not_awaited()
+
+
+async def test_converted_version_requires_its_stored_file_path(
+    reprocessed: tuple[_Oracle, dict[str, str]],
+) -> None:
+    oracle, _paths = reprocessed
+    oracle.derivations["cs-broken"] = _derivation("broken", None).model_dump(mode="json")
+    with pytest.raises(DocumentSourceNotFoundError, match="参照先"):
+        await load_parsed_source(cast(Any, oracle), "d1", "r1", chunk_set_id="cs-broken")
+    with pytest.raises(McpToolError, match="参照先"):
+        await mcp_tools.preview_document(cast(Any, oracle), "d1", "r1", chunk_set_id="cs-broken")
+
+
+@pytest.mark.parametrize("derivation", [None, {}, {"converted": "not-a-derivation"}])
+async def test_version_without_usable_lineage_fails_without_reading_recipe_file(
+    reprocessed: tuple[_Oracle, dict[str, str]],
+    derivation: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """版の系譜が無ければ現在のレシピや原本へ戻さず、欠落を報告する。"""
     oracle, _paths = reprocessed
     oracle.derivations["cs-unknown"] = derivation
     read = cast(Any, oracle)
-    assert await load_parsed_source(read, "d1", "r1", chunk_set_id="cs-unknown") == _FILE_B
+    read_recipe = AsyncMock(side_effect=AssertionError("現在のレシピは読まない"))
+    monkeypatch.setattr(oracle, "get_document_recipe", read_recipe)
+    with pytest.raises(DocumentSourceNotFoundError, match="系譜"):
+        await load_parsed_source(read, "d1", "r1", chunk_set_id="cs-unknown")
+    with pytest.raises(McpToolError, match="系譜"):
+        await mcp_tools.preview_document(read, "d1", "r1", chunk_set_id="cs-unknown")
+    read_recipe.assert_not_awaited()
 
 
 async def test_missing_old_file_is_reported_not_replaced_with_the_new_file(

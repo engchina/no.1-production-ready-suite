@@ -1,7 +1,5 @@
 """言語資源の公開契約と、失敗時に公開版を書き換えないことを確かめる。"""
 
-import hashlib
-import json
 from copy import deepcopy
 from datetime import UTC, datetime
 
@@ -99,147 +97,79 @@ async def test_invalid_paging_does_not_connect(limit: int, offset: int) -> None:
     assert pool.acquire_calls == 0
 
 
-_COMPAT_KEYS = (
-    "crag_refusal_summary",
-    "crag_missing_aspect_template",
-    "crag_unknown_aspect_template",
-    "crag_quote_only_note",
-    "crag_definition_aspect_template",
-    "guide_acquisition_incomplete_template",
+@pytest.mark.parametrize(
+    "section,key",
+    [
+        ("answer_labels", "insufficient_evidence_summary"),
+        ("answer_labels", "empty_search_guidance"),
+        ("answer_labels", "abstention_guidance"),
+        ("answer_labels", "answer_evidence_budget_limited"),
+        ("answer_labels", "crag_refusal_summary"),
+        ("answer_labels", "crag_missing_aspect_template"),
+        ("answer_labels", "crag_unknown_aspect_template"),
+        ("answer_labels", "crag_quote_only_note"),
+        ("answer_labels", "crag_definition_aspect_template"),
+        ("answer_labels", "guide_acquisition_incomplete_template"),
+        ("grounding_cues", "citation_unit_words"),
+    ],
 )
-
-
-def _stored_hash(effective: dict[str, object]) -> str:
-    canonical = json.dumps(
-        [
-            [section, key, value]
-            for section, fields in sorted(effective.items())
-            if isinstance(fields, dict)
-            for key, value in sorted(fields.items())
-        ],
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(f"{effective['locale']}\n{canonical}".encode()).hexdigest()[:16]
-
-
-def legacy_release_row(mask: int = 63) -> dict[str, object]:
-    """旧形式の項目集合から独立に元の保存 hash を計算する。"""
-    row = release_row()
-    effective = builtin_pack().to_dict()
-    effective["answer_labels"]["cause_gap"] = "合成の保存済み文言"
-    effective["answer_labels"]["crag_quote_only_note"] = "合成の保存済み注記"
-    for index, key in enumerate(_COMPAT_KEYS):
-        if mask & (1 << index):
-            del effective["answer_labels"][key]
-    row["effective_json"] = effective
-    row["content_hash"] = _stored_hash(effective)
-    return row
-
-
-def test_release_saved_before_citation_unit_words_stays_readable() -> None:
-    """語の項目が増える前の公開版を読み、保存内容と hash を変えずに既定で補う。"""
+def test_missing_fields_are_rejected_by_storage_and_runtime(section: str, key: str) -> None:
     from app.rag.language_pack_releases import pack_from_release
 
     row = release_row()
-    effective = builtin_pack().to_dict()
-    del effective["grounding_cues"]["citation_unit_words"]
-    row["effective_json"] = effective
-    row["content_hash"] = _stored_hash(effective)
-    untouched = deepcopy(row)
-
-    release = _release(row)
-
-    assert row == untouched
-    assert release.effective == effective
-    assert release.hash == row["content_hash"]
-    assert pack_from_release(release).words(
-        "grounding_cues", "citation_unit_words"
-    ) == builtin_pack().words("grounding_cues", "citation_unit_words")
-    assert _validated(effective, allow_legacy=True).ingest_hash == builtin_pack().ingest_hash
-    with pytest.raises(ValueError):
-        _validated(effective)
-
-
-@pytest.mark.parametrize("mask", range(64))
-def test_legacy_release_keeps_stored_payload_hash_and_custom_values(mask: int) -> None:
-    from rag_parser_core.language import current_pack
-
-    from app.rag.language_pack_releases import bind_release, pack_from_release
-
-    row = legacy_release_row(mask)
-    untouched = deepcopy(row)
-    release = _release(row)
-    assert release.effective == row["effective_json"]
-    assert release.hash == row["content_hash"]
-    runtime = pack_from_release(release)
-    assert runtime.text("answer_labels", "cause_gap") == "合成の保存済み文言"
-    if mask:
-        assert runtime.hash != release.hash
-    else:
-        assert runtime.hash == release.hash
-    for key in _COMPAT_KEYS:
-        expected = release.effective["answer_labels"].get(
-            key, builtin_pack().text("answer_labels", key)
-        )
-        assert runtime.text("answer_labels", key) == expected
-    with bind_release(release):
-        assert current_pack().hash == runtime.hash
-    assert row == untouched
-    assert release.effective == row["effective_json"]
+    original = _release(row)
+    effective = deepcopy(original.effective)
+    del effective[section][key]
+    before = deepcopy(effective)
+    with pytest.raises(ValueError, match=key):
+        _release({**row, "effective_json": effective})
+    with pytest.raises(ValueError, match=key):
+        pack_from_release(original.model_copy(update={"effective": effective}))
+    assert effective == before
 
 
 @pytest.mark.parametrize(
-    "mutation", ["hash", "mandatory", "extra", "normalized", "ingest", "coerced"]
+    "mutation", ["hash", "ingest", "extra", "normalized", "coerced", "retired"]
 )
-def test_legacy_release_does_not_weaken_integrity(mutation: str) -> None:
+def test_release_requires_canonical_content_and_current_hashes(mutation: str) -> None:
     from app.rag.language_pack_releases import pack_from_release
 
-    row = legacy_release_row()
-    original = _release(deepcopy(row))
-    effective = row["effective_json"]
-    assert isinstance(effective, dict)
+    row = release_row()
+    original = _release(row)
+    effective = deepcopy(original.effective)
     if mutation == "hash":
         row["content_hash"] = "incorrect"
     elif mutation == "ingest":
         row["ingest_hash"] = "incorrect"
-    elif mutation == "mandatory":
-        del effective["answer_labels"]["cause_gap"]
     elif mutation == "extra":
         effective["answer_labels"]["unknown_key"] = "合成の余剰項目"
+    elif mutation == "normalized":
+        effective["answer_labels"]["cause_gap"] += " "
     elif mutation == "coerced":
         effective["answer_labels"]["crag_refusal_summary"] = 3
     else:
-        effective["answer_labels"]["cause_gap"] += " "
+        effective["inquiry_cues"] = {"column_words": ["合成"]}
+    row["effective_json"] = effective
     with pytest.raises(ValueError):
         _release(row)
-    broken = original.model_copy(
-        update={
-            "effective": effective,
-            "hash": row["content_hash"],
-            "ingest_hash": row["ingest_hash"],
-        }
-    )
     with pytest.raises(ValueError):
-        pack_from_release(broken)
+        pack_from_release(
+            original.model_copy(
+                update={
+                    "effective": effective,
+                    "hash": row["content_hash"],
+                    "ingest_hash": row["ingest_hash"],
+                }
+            )
+        )
 
 
-@pytest.mark.parametrize("missing_extra", [False, True])
-def test_legacy_draft_read_is_compatible_but_save_validation_is_strict(missing_extra: bool) -> None:
+def test_incomplete_draft_fails_without_writes() -> None:
     from app.clients.language_pack_release_store import _state
 
-    row = legacy_release_row()
-    unchanged = deepcopy(row)
-    draft = deepcopy(row["effective_json"])
-    assert isinstance(draft, dict)
-    if missing_extra:
-        for key in (
-            "insufficient_evidence_summary",
-            "empty_search_guidance",
-            "abstention_guidance",
-            "answer_evidence_budget_limited",
-        ):
-            del draft["answer_labels"][key]
-    original_draft = deepcopy(draft)
+    draft = builtin_pack().to_dict()
+    del draft["answer_labels"]["crag_refusal_summary"]
+    before = deepcopy(draft)
     pool = FakeOraclePool(
         execute_results=[
             [
@@ -249,137 +179,82 @@ def test_legacy_draft_read_is_compatible_but_save_validation_is_strict(missing_e
                     "current_release_id": "release-a",
                 }
             ],
-            [row],
+            [release_row()],
         ]
     )
-    state = _state(pool.connection)
-    assert state.current.hash == row["content_hash"]
-    assert state.current.effective == row["effective_json"]
-    assert state.draft_revision == 1
-    assert state.draft_effective == _validated(draft, allow_legacy=True).to_dict()
-    assert _validated(state.draft_effective).ingest_hash == state.current.ingest_hash
-    assert state.draft_effective["answer_labels"]["cause_gap"] == "合成の保存済み文言"
-    assert draft == original_draft and row == unchanged
+    with pytest.raises(ValueError, match="crag_refusal_summary"):
+        _state(pool.connection)
+    assert draft == before
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
-    with pytest.raises(ValueError):
-        _validated(draft)
 
 
-async def test_explicit_publish_enriches_new_release_without_rewriting_old(
+@pytest.mark.parametrize("restoring", [False, True])
+async def test_publish_and_restore_preserve_complete_snapshot(
     monkeypatch: pytest.MonkeyPatch,
+    restoring: bool,
 ) -> None:
     from app.clients import language_pack_release_store as store_module
     from app.clients import oracle as oracle_module
     from app.rag.language_pack_releases import pack_from_release
 
-    row = legacy_release_row()
-    unchanged = deepcopy(row)
-    old = _release(row)
-    state = LanguagePackReleaseState(draft_revision=1, draft_effective=old.effective, current=old)
+    old = _release(release_row())
+    effective = deepcopy(old.effective)
+    effective["answer_labels"]["cause_gap"] = "合成の保存済み文言"
+    pack = _validated(effective)
+    source = old.model_copy(
+        update={
+            "id": "release-source",
+            "effective": effective,
+            "hash": pack.hash,
+            "ingest_hash": pack.ingest_hash,
+        }
+    )
+    state = LanguagePackReleaseState(draft_revision=1, draft_effective=effective, current=old)
     inserted: list[LanguagePackRelease] = []
     monkeypatch.setattr(store_module, "_state", lambda *_args, **_kwargs: state)
+    monkeypatch.setattr(store_module, "_get", lambda *_args: source)
     monkeypatch.setattr(
         store_module, "_insert", lambda _connection, release: inserted.append(release)
     )
     monkeypatch.setattr(oracle_module, "_execute", lambda *_args, **_kwargs: None)
     pool = FakeOraclePool()
     oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-    await LanguagePackReleaseStore(oracle).publish(expected_revision=1, expected_current_id=old.id)
+    store = LanguagePackReleaseStore(oracle)
+    if restoring:
+        await store.restore(source.id, expected_revision=1, expected_current_id=old.id)
+    else:
+        await store.publish(expected_revision=1, expected_current_id=old.id)
     assert len(inserted) == 1
     new = inserted[0]
-    assert new.version == old.version + 1
+    assert new.effective == effective
     assert new.previous_id == old.id
-    assert new.hash != old.hash
-    assert new.ingest_hash == old.ingest_hash
-    assert _validated(new.effective).hash == new.hash
-    assert pack_from_release(new).hash == new.hash
-    assert new.effective["answer_labels"]["cause_gap"] == "合成の保存済み文言"
-    assert row == unchanged
-    assert old.effective == row["effective_json"]
-    assert old.hash == row["content_hash"]
+    assert new.version == old.version + 1
+    assert new.restored_from == (source.id if restoring else None)
+    assert pack_from_release(new).hash == pack.hash
+    assert old.effective == builtin_pack().to_dict()
 
 
-def retired_inquiry_release_row() -> dict[str, object]:
-    from rag_parser_core.language import FIELD_SPECS
+@pytest.mark.parametrize("restoring", [False, True])
+async def test_publish_and_restore_reject_incomplete_snapshot_before_insert(
+    monkeypatch: pytest.MonkeyPatch,
+    restoring: bool,
+) -> None:
+    from app.clients import language_pack_release_store as store_module
 
-    row = release_row()
-    data = deepcopy(row["effective_json"])
-    assert isinstance(data, dict)
-    data["inquiry_cues"] = {
-        "document_kind_words": ["合成=synthetic"],
-        "file_data_kind": "synthetic",
-        "decision_words": ["合成=procedure"],
-        **{
-            key: ["合成"]
-            for key in [
-                "operation_trigger_terms",
-                "condition_trigger_terms",
-                "condition_terms",
-                "file_data_terms",
-                "visual_terms",
-                "external_context_terms",
-                "screen_suffixes",
-                "screen_name_bracket_chars",
-                "route_arrow_chars",
-                "interrogative_words",
-                "term_joiner_chars",
-                "page_ordinal_suffixes",
-                "column_words",
-            ]
-        },
-    }
-
-    def digest(ingest: bool) -> str:
-        fields = {(spec.section, spec.key) for spec in FIELD_SPECS if not ingest or spec.ingest}
-        retired = (
-            [
-                "document_kind_words",
-                "file_data_kind",
-                "operation_trigger_terms",
-                "condition_trigger_terms",
-                "condition_terms",
-                "file_data_terms",
-            ]
-            if ingest
-            else list(data["inquiry_cues"])
-        )
-        fields.update(("inquiry_cues", key) for key in retired)
-        payload = [[section, key, data[section][key]] for section, key in sorted(fields)]
-        return hashlib.sha256(
-            (data["locale"] + "\n" + json.dumps(payload, ensure_ascii=False)).encode()
-        ).hexdigest()[:16]
-
-    row["effective_json"] = data
-    row["content_hash"] = digest(False)
-    row["ingest_hash"] = digest(True)
-    return row
-
-
-def test_retired_inquiry_release_preserves_history_and_cleans_runtime() -> None:
-    from app.rag.language_pack_releases import pack_from_release
-
-    row = retired_inquiry_release_row()
-    untouched = deepcopy(row)
-    release = _release(row)
-    assert "inquiry_cues" in release.effective
-    assert "inquiry_cues" not in pack_from_release(release).to_dict()
-    assert row == untouched
-    with pytest.raises(ValueError):
-        _validated(release.effective)
-
-
-@pytest.mark.parametrize("mutation", ["unknown", "value", "hash", "ingest"])
-def test_retired_inquiry_release_keeps_integrity_checks(mutation: str) -> None:
-    row = retired_inquiry_release_row()
-    effective = row["effective_json"]
-    assert isinstance(effective, dict)
-    if mutation == "unknown":
-        effective["inquiry_cues"]["unknown"] = ["合成"]
-    elif mutation == "value":
-        effective["inquiry_cues"]["condition_terms"] = ["変更"]
-    elif mutation == "hash":
-        row["content_hash"] = "invalid"
-    else:
-        row["ingest_hash"] = "invalid"
-    with pytest.raises(ValueError):
-        _release(row)
+    current = _release(release_row())
+    effective = deepcopy(current.effective)
+    del effective["grounding_cues"]["citation_unit_words"]
+    state = LanguagePackReleaseState(draft_revision=1, draft_effective=effective, current=current)
+    monkeypatch.setattr(store_module, "_state", lambda *_args, **_kwargs: state)
+    monkeypatch.setattr(
+        store_module, "_get", lambda *_args: current.model_copy(update={"effective": effective})
+    )
+    pool = FakeOraclePool()
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    store = LanguagePackReleaseStore(oracle)
+    with pytest.raises(ValueError, match="citation_unit_words"):
+        if restoring:
+            await store.restore(current.id, expected_revision=1, expected_current_id=current.id)
+        else:
+            await store.publish(expected_revision=1, expected_current_id=current.id)
+    assert pool.connection.calls == []

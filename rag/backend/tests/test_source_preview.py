@@ -177,7 +177,17 @@ def previews(monkeypatch: MonkeyPatch) -> type[_PreviewOracle]:
     }
     _PreviewOracle.stale = set()
     _PreviewOracle.documents = _documents()
-    _PreviewOracle.derivations = {}
+    _PreviewOracle.derivations = {
+        ("d1", "cs-1"): {"derivation_id": "source-d1", "converted": False},
+        ("d2", "cs-1"): {
+            "derivation_id": "prepared-d2",
+            "preprocess_profile": "office_to_pdf",
+            "converted": True,
+            "derived_object_path": _PREPARED_PATH,
+            "derived_content_type": "application/pdf",
+        },
+        ("d3", "cs-1"): {"derivation_id": "source-d3", "converted": False},
+    }
     _Storage.files = {
         _PDF_PATH: _figure_pdf(),
         _PREPARED_PATH: _figure_pdf(),

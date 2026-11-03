@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 from importlib import resources
-from pathlib import Path
 
 import pytest
 
-from rag_parser_core.language import _COMPATIBLE_FIELDS as COMPATIBLE_FIELDS
 from rag_parser_core.language import (
     FIELD_SPECS,
     LanguagePackError,
@@ -329,59 +327,25 @@ def test_numeric_layout_gaps_and_mixed_notation():
         assert "48000" not in arabic_numbers(text)
 
 
-_CRAG_COMPAT_KEYS = (
-    "crag_refusal_summary",
-    "crag_missing_aspect_template",
-    "crag_unknown_aspect_template",
-    "crag_quote_only_note",
-    "crag_definition_aspect_template",
-)
-
-
-@pytest.mark.parametrize("mask", range(32))
-def test_build_pack_fills_only_absent_new_crag_labels(mask: int) -> None:
+@pytest.mark.parametrize("spec", FIELD_SPECS, ids=lambda spec: f"{spec.section}.{spec.key}")
+def test_every_language_field_is_required(spec) -> None:
     raw = builtin_pack().to_dict()
-    raw["answer_labels"]["cause_gap"] = "合成の独自文言"
-    raw["answer_labels"]["crag_quote_only_note"] = "合成の独自注記"
-    for index, key in enumerate(_CRAG_COMPAT_KEYS):
-        if mask & (1 << index):
-            del raw["answer_labels"][key]
+    del raw[spec.section][spec.key]
     saved = json.dumps(raw, ensure_ascii=False)
-    pack = build_pack(raw)
-    assert pack.text("answer_labels", "cause_gap") == "合成の独自文言"
-    for key in _CRAG_COMPAT_KEYS:
-        expected = raw["answer_labels"].get(key, builtin_pack().text("answer_labels", key))
-        assert pack.text("answer_labels", key) == expected
+    with pytest.raises(LanguagePackError) as caught:
+        build_pack(raw)
+    assert caught.value.errors[f"{spec.section}.{spec.key}"] == "値がありません。"
     assert json.dumps(raw, ensure_ascii=False) == saved
 
 
-@pytest.mark.parametrize("value", [None, ""])
-def test_new_crag_label_explicit_invalid_value_is_not_defaulted(value: object) -> None:
+@pytest.mark.parametrize("fields", [{}, {"column_words": ["合成"]}])
+def test_retired_inquiry_section_is_rejected(fields) -> None:
     raw = builtin_pack().to_dict()
-    raw["answer_labels"]["crag_refusal_summary"] = value
-    with pytest.raises(LanguagePackError):
+    raw["inquiry_cues"] = fields
+    with pytest.raises(LanguagePackError, match="inquiry_cues"):
         build_pack(raw)
-
-
-def test_other_missing_language_fields_still_fail() -> None:
-    raw = builtin_pack().to_dict()
-    del raw["answer_labels"]["cause_gap"]
-    with pytest.raises(LanguagePackError, match="cause_gap"):
-        build_pack(raw)
-
-
-def test_legacy_pack_fills_acquisition_label_without_changing_saved_values() -> None:
-    raw = builtin_pack().to_dict()
-    del raw["answer_labels"]["guide_acquisition_incomplete_template"]
-    raw["answer_labels"]["cause_gap"] = "合成の保存済み表示"
-    original = json.dumps(raw, ensure_ascii=False)
-    pack = build_pack(raw)
-    assert pack.text(
-        "answer_labels", "guide_acquisition_incomplete_template"
-    ) == builtin_pack().text("answer_labels", "guide_acquisition_incomplete_template")
-    assert pack.text("answer_labels", "cause_gap") == "合成の保存済み表示"
-    assert pack.ingest_hash == builtin_pack().ingest_hash
-    assert json.dumps(raw, ensure_ascii=False) == original
+    with pytest.raises(LanguagePackError, match="inquiry_cues"):
+        resolve(builtin_pack(), {"inquiry_cues": fields})
 
 
 def test_acquisition_label_preserves_custom_text_and_only_changes_display_hash() -> None:
@@ -396,14 +360,6 @@ def test_acquisition_label_preserves_custom_text_and_only_changes_display_hash()
     assert pack.ingest_hash == builtin_pack().ingest_hash
 
 
-@pytest.mark.parametrize("value", [None, ""])
-def test_acquisition_label_explicit_invalid_value_is_not_defaulted(value: object) -> None:
-    raw = builtin_pack().to_dict()
-    raw["answer_labels"]["guide_acquisition_incomplete_template"] = value
-    with pytest.raises(LanguagePackError):
-        build_pack(raw)
-
-
 @pytest.mark.parametrize("snapshot", [[], None, "invalid", 3])
 def test_invalid_snapshot_returns_field_error_instead_of_internal_exception(
     snapshot: object,
@@ -411,63 +367,3 @@ def test_invalid_snapshot_returns_field_error_instead_of_internal_exception(
     with pytest.raises(LanguagePackError, match="snapshot") as caught:
         pack_from_payload(json.dumps({"snapshot": snapshot}))
     assert set(caught.value.errors) == {"snapshot"}
-
-
-@pytest.mark.parametrize(
-    "key", ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance"]
-)
-def test_legacy_pack_fills_abstention_labels_without_changing_ingest(key: str) -> None:
-    raw = builtin_pack().to_dict()
-    del raw["answer_labels"][key]
-    raw["answer_labels"]["cause_gap"] = "合成の保存済み表示"
-    original = json.dumps(raw, ensure_ascii=False)
-    pack = build_pack(raw)
-    assert pack.text("answer_labels", key) == builtin_pack().text("answer_labels", key)
-    assert pack.text("answer_labels", "cause_gap") == "合成の保存済み表示"
-    assert json.dumps(raw, ensure_ascii=False) == original
-    assert pack.ingest_hash == builtin_pack().ingest_hash
-
-
-@pytest.mark.parametrize(
-    "key", ["insufficient_evidence_summary", "empty_search_guidance", "abstention_guidance"]
-)
-@pytest.mark.parametrize("value", [None, ""])
-def test_invalid_abstention_labels_are_not_defaulted(key: str, value: object) -> None:
-    raw = builtin_pack().to_dict()
-    raw["answer_labels"][key] = value
-    with pytest.raises(LanguagePackError):
-        build_pack(raw)
-
-
-def test_legacy_pack_fills_citation_unit_words_without_changing_ingest() -> None:
-    raw = builtin_pack().to_dict()
-    del raw["grounding_cues"]["citation_unit_words"]
-    saved = json.dumps(raw, ensure_ascii=False)
-    pack = build_pack(raw)
-    assert pack.words("grounding_cues", "citation_unit_words") == builtin_pack().words(
-        "grounding_cues", "citation_unit_words"
-    )
-    assert pack.ingest_hash == builtin_pack().ingest_hash
-    assert json.dumps(raw, ensure_ascii=False) == saved
-
-
-def test_citation_unit_words_explicit_null_is_not_defaulted() -> None:
-    raw = builtin_pack().to_dict()
-    raw["grounding_cues"]["citation_unit_words"] = None
-    with pytest.raises(LanguagePackError):
-        build_pack(raw)
-
-
-def test_field_changes_keep_published_releases_readable() -> None:
-    """公開版は不変なので、項目を足すなら読み取りで補い、消すなら移行を決める。
-
-    固定の一覧は「この時点の公開版が持つ項目」。項目を足すときは一覧を変えず
-    ``_COMPATIBLE_FIELDS`` に足す。取込に使う項目は補えないので、再索引の扱いを決める。
-    """
-    path = Path(__file__).parent / "fixtures" / "language_pack_published_fields.json"
-    published = {tuple(item.split(".", 1)) for item in json.loads(path.read_text("utf-8"))}
-    current = {(spec.section, spec.key) for spec in FIELD_SPECS}
-    assert published <= current, "公開版が持つ項目を消すと、その公開版を読めなくなる"
-    assert current - published <= COMPATIBLE_FIELDS, "足した項目は既存の公開版に無いので補う"
-    ingest = {(spec.section, spec.key) for spec in FIELD_SPECS if spec.ingest}
-    assert not ingest & COMPATIBLE_FIELDS, "取込に使う項目を補うと、保存時の索引と食い違う"

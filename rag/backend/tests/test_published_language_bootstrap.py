@@ -1,4 +1,4 @@
-"""既存の公開版があるときは、旧ファイルから実行設定を変えない。"""
+"""公開版が無ければ組み込みの言語資源を公開し、旧ファイルは読まない。"""
 
 from types import SimpleNamespace
 from typing import cast
@@ -26,14 +26,16 @@ async def test_existing_publication_does_not_read_changed_or_unreadable_legacy_f
     store.ensure_initialized.assert_not_awaited()
 
 
-@pytest.mark.parametrize("error", [ValueError("broken"), OSError("unreadable")])
-async def test_first_bootstrap_uses_builtin_when_legacy_is_not_readable(
-    monkeypatch: pytest.MonkeyPatch, error: Exception
+async def test_first_use_publishes_builtin_without_reading_old_file(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = SimpleNamespace(
-        current=AsyncMock(side_effect=LookupError()), ensure_initialized=AsyncMock()
+        current=AsyncMock(side_effect=LookupError("言語資源の公開版がまだありません。")),
+        ensure_initialized=AsyncMock(),
     )
     monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
-    monkeypatch.setattr(LANGUAGE_PACK_STORE, "overrides", Mock(side_effect=error))
+    read_old_file = Mock(side_effect=AssertionError("旧ファイルは読み込まない"))
+    monkeypatch.setattr(LANGUAGE_PACK_STORE, "overrides", read_old_file)
     assert cast(object, await published_language.initialized_release_store(OracleClient())) is store
+    read_old_file.assert_not_called()
     store.ensure_initialized.assert_awaited_once_with(builtin_pack().to_dict())

@@ -9,6 +9,7 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -1495,47 +1496,34 @@ def test_stream_message_delivers_answer_when_chat_message_save_fails(
     assert assistant.trace_id == metadata["trace_id"]
 
 
-def test_create_conversation_with_legacy_active_language_pack(
+def test_create_conversation_rejects_incomplete_active_language_pack(
     fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
 ) -> None:
-    from rag_parser_core.language import builtin_pack, current_pack
+    from rag_parser_core.language import builtin_pack
 
     from app.clients.language_pack_release_store import _release
     from app.rag import published_language_runtime
     from app.schemas.language_pack_release import LanguagePackRelease
-    from tests.test_language_pack_release_store import legacy_release_row
+    from tests.test_language_pack_release_store import release_row
 
-    row = legacy_release_row()
-    seen: list[str] = []
+    row = release_row()
+    effective = builtin_pack().to_dict()
+    del effective["answer_labels"]["crag_refusal_summary"]
+    row["effective_json"] = effective
 
-    class LegacyStore:
+    class IncompleteStore:
         async def current(self) -> LanguagePackRelease:
             return _release(row)
 
-    async def initialized() -> LegacyStore:
-        return LegacyStore()
+    async def initialized() -> IncompleteStore:
+        return IncompleteStore()
 
     monkeypatch.setattr(published_language_runtime, "initialized_release_store", initialized)
-    original_create = fake_oracle.create_conversation
-
-    async def capture_create(
-        *, search_answer_profile_id: str, title: str | None = None
-    ) -> StoredConversation:
-        seen.append(current_pack().text("answer_labels", "crag_refusal_summary"))
-        seen.append(current_pack().text("answer_labels", "cause_gap"))
-        return await original_create(search_answer_profile_id=search_answer_profile_id, title=title)
-
-    monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)
-    response = client.post(
-        "/api/chat/conversations",
-        json={"search_answer_profile_id": "bv-1", "title": "合成の互換性確認"},
-    )
-    assert response.status_code == 200
-    assert response.json()["data"]["messages"] == []
-    assert seen == [
-        builtin_pack().text("answer_labels", "crag_refusal_summary"),
-        "合成の保存済み文言",
-    ]
-    effective = row["effective_json"]
-    assert isinstance(effective, dict)
-    assert effective["answer_labels"].get("crag_refusal_summary") is None
+    create = AsyncMock(side_effect=AssertionError("公開版が不正なときは会話を作らない"))
+    monkeypatch.setattr(fake_oracle, "create_conversation", create)
+    with pytest.raises(ValueError, match="crag_refusal_summary"):
+        client.post(
+            "/api/chat/conversations",
+            json={"search_answer_profile_id": "bv-1", "title": "合成の検証"},
+        )
+    create.assert_not_awaited()

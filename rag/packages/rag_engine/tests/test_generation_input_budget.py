@@ -42,12 +42,11 @@ def test_synthesis_does_not_send_fixed_input_that_cannot_fit():
     assert trace["generation_failure"]["error"] == "GenerationInputBudgetExceeded"
 
 
-def test_budget_notice_is_compatible_with_existing_published_language_pack():
+def test_budget_notice_requires_a_complete_published_language_pack():
     from rag_parser_core.language import build_pack, builtin_pack
 
     current = builtin_pack()
     saved = current.to_dict()
     saved["answer_labels"].pop("answer_evidence_budget_limited")
-    loaded = build_pack(saved)
-    assert loaded.ingest_hash == current.ingest_hash
-    assert loaded.text("answer_labels", "answer_evidence_budget_limited").format(count=2)
+    with pytest.raises(ValueError, match="answer_evidence_budget_limited"):
+        build_pack(saved)

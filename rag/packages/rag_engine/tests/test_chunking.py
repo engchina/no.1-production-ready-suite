@@ -634,7 +634,7 @@ class ChunkingTests(unittest.TestCase):
         )
         self.assertNotIn("図1 掛率登録画面", " ".join(p for c in children for p in c.metadata["section_path"]))
 
-    def test_legacy_picture_ocr_heading_is_normalized_in_chunks(self):
+    def test_picture_ocr_keeps_input_text_without_reading_old_labels(self):
         bbox = [10, 20, 300, 400]
         payload = _viewer_payload(
             [
@@ -642,12 +642,12 @@ class ChunkingTests(unittest.TestCase):
                     1,
                     1,
                     "Picture",
-                    "回答用本文: 請求先欄は会社名で固定。",
+                    "合成の図の説明。",
                     raw_type="picture",
                     bbox=bbox,
                     raw={"vision_crop": "docling/vision/docling-p1-1.png"},
                 ),
-                _record(1, 2, "Picture", "Docling OCR:\n請求先欄 会社名", raw_type="picture_ocr_text", bbox=bbox),
+                _record(1, 2, "Picture", "Docling OCR:\n合成の文字列", raw_type="picture_ocr_text", bbox=bbox),
             ]
         )
 
@@ -660,8 +660,7 @@ class ChunkingTests(unittest.TestCase):
         children = [chunk for chunk in chunks if chunk.chunk_level == CHILD_CHUNK_LEVEL]
 
         self.assertEqual(len(children), 1)
-        self.assertIn("OCR抽出テキスト:\n請求先欄 会社名", children[0].text)
-        self.assertNotIn("Docling OCR", children[0].text)
+        self.assertIn("OCR抽出テキスト:\nDocling OCR:\n合成の文字列", children[0].text)
 
     def test_small_footer_logo_picture_is_excluded_from_chunks(self):
         payload = _viewer_payload(

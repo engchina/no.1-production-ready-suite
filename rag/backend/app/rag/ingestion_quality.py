@@ -155,9 +155,7 @@ def summarize_ingestion_quality(
     """保存済み extraction JSON から evaluation response 用の品質集計を作る。"""
     reports: list[IngestionQualityReport] = []
     for extraction in extractions:
-        report = _quality_report_from_payload(extraction)
-        if report is not None:
-            reports.append(report)
+        reports.append(_quality_report_from_payload(extraction))
     warning_counts: dict[str, int] = {}
     risk_counts = {"low": 0, "medium": 0, "high": 0}
     parser_profile_counts: dict[str, int] = {}
@@ -198,95 +196,11 @@ def summarize_ingestion_quality(
 
 def _quality_report_from_payload(
     extraction: Mapping[str, object],
-) -> IngestionQualityReport | None:
+) -> IngestionQualityReport:
     payload = extraction.get("quality_report")
     if not isinstance(payload, Mapping):
-        return _legacy_quality_report_from_payload(extraction)
+        raise ValueError("保存済みの抽出結果に品質レポートがありません。再解析してください。")
     return IngestionQualityReport.model_validate(payload)
-
-
-def _legacy_quality_report_from_payload(
-    extraction: Mapping[str, object],
-) -> IngestionQualityReport | None:
-    """旧 extraction も評価集計に入れるため、最低限の品質レポートを推定する。"""
-    elements = _mapping_items(extraction.get("elements"))
-    pages_payload = _mapping_items(extraction.get("pages"))
-    tables = _mapping_items(extraction.get("tables"))
-    assets = _mapping_items(extraction.get("assets"))
-    artifacts = _mapping(extraction.get("parser_artifacts"))
-    if not elements and not pages_payload and not tables and not assets and not artifacts:
-        return None
-    table_count = sum(1 for element in elements if _mapping_kind(element) == "table")
-    figure_count = sum(
-        1 for element in elements if _mapping_kind(element) in {"figure", "figure_caption"}
-    )
-    formula_count = sum(
-        1
-        for element in elements
-        if _mapping_kind(element) in {"formula", "equation"}
-        or _mapping_label(element.get("content_kind")) == "equation"
-    )
-    low_confidence_count = sum(
-        1 for element in elements if _is_low_confidence(element.get("confidence"))
-    )
-    for table in tables:
-        low_confidence_count += sum(
-            1
-            for cell in _mapping_items(table.get("cells"))
-            if _is_low_confidence(cell.get("confidence"))
-        )
-    table_count = max(
-        table_count,
-        len(tables),
-        _artifact_count(artifacts, TABLE_ARTIFACT_COUNT_KEYS),
-    )
-    figure_count = max(
-        figure_count,
-        sum(1 for asset in assets if _is_figure_asset_kind(_mapping_label(asset.get("kind")))),
-        _artifact_count(artifacts, FIGURE_ARTIFACT_COUNT_KEYS),
-    )
-    formula_count = max(formula_count, _artifact_count(artifacts, FORMULA_ARTIFACT_COUNT_KEYS))
-    low_confidence_count = max(
-        low_confidence_count,
-        _artifact_count(artifacts, LOW_CONFIDENCE_ARTIFACT_COUNT_KEYS),
-    )
-    failed_segment_count = _artifact_count(artifacts, FAILED_SEGMENT_ARTIFACT_COUNT_KEYS)
-    pages = _legacy_content_pages(
-        elements=elements,
-        pages=pages_payload,
-        tables=tables,
-        assets=assets,
-    )
-    extraction_page_count = max(
-        len(pages_payload),
-        _artifact_count(artifacts, PAGE_ARTIFACT_COUNT_KEYS),
-    )
-    page_count = max(extraction_page_count, len(pages))
-    long_document = page_count >= LONG_DOCUMENT_PAGE_THRESHOLD
-    warnings = _dedupe_warnings(
-        [
-            "table_structure_review" if table_count else "",
-            "figure_ocr_review" if figure_count else "",
-            "formula_review" if formula_count else "",
-            "long_document" if long_document else "",
-            "low_confidence_elements" if low_confidence_count else "",
-            "failed_segments" if failed_segment_count else "",
-        ]
-    )
-    return IngestionQualityReport(
-        parser_profile="legacy",
-        risk_level=_risk_level(warnings),
-        page_count=page_count,
-        page_coverage=_page_coverage(pages, extraction_page_count),
-        table_count=table_count,
-        figure_count=figure_count,
-        formula_count=formula_count,
-        element_count=len(elements),
-        low_confidence_count=low_confidence_count,
-        failed_segment_count=failed_segment_count,
-        long_document=long_document,
-        quality_warnings=warnings,
-    )
 
 
 def _structured_content_pages(extraction: StructuredExtraction) -> set[int]:
@@ -313,29 +227,6 @@ def _structured_low_confidence_count(extraction: StructuredExtraction) -> int:
     return count
 
 
-def _legacy_content_pages(
-    *,
-    elements: Sequence[Mapping[str, object]],
-    pages: Sequence[Mapping[str, object]],
-    tables: Sequence[Mapping[str, object]],
-    assets: Sequence[Mapping[str, object]],
-) -> set[int]:
-    page_numbers: set[int] = set()
-    for element in elements:
-        if page_number := _page_number(element.get("page_number")):
-            page_numbers.add(page_number)
-    for page in pages:
-        if _mapping_items(page.get("element_ids")) or _string_items(page.get("element_ids")):
-            page_number = _page_number(page.get("page_number"))
-            if page_number is not None:
-                page_numbers.add(page_number)
-    for container in (*tables, *assets):
-        page_number = _page_number(container.get("page_number"))
-        if page_number is not None:
-            page_numbers.add(page_number)
-    return page_numbers
-
-
 def _artifact_count(artifacts: Mapping[str, object], keys: Sequence[str]) -> int:
     return max((_positive_int(artifacts.get(key)) for key in keys), default=0)
 
@@ -350,44 +241,6 @@ def _positive_int(value: object) -> int:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return 0
-
-
-def _mapping(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _mapping_items(value: object) -> list[Mapping[str, object]]:
-    if not isinstance(value, list):
-        return []
-    items: list[Mapping[str, object]] = []
-    for item in value:
-        if isinstance(item, Mapping):
-            items.append(item)
-    return items
-
-
-def _string_items(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, str) and item.strip()]
-
-
-def _mapping_kind(value: Mapping[str, object]) -> str:
-    return _mapping_label(value.get("kind"))
-
-
-def _mapping_label(value: object) -> str:
-    return str(value).strip().casefold() if value is not None else ""
-
-
-def _page_number(value: object) -> int | None:
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
-        return value
-    return None
-
-
-def _is_low_confidence(value: object) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool) and value < 0.65
 
 
 def _is_figure_asset_kind(kind: str) -> bool:

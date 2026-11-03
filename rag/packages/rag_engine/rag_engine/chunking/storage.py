@@ -394,19 +394,8 @@ def _chunk_contracts() -> dict[str, Any]:
 
 
 def _validate_chunk_contracts(value: Any) -> None:
-    """現在の契約を検証し、廃止した推定情報だけが余分な旧契約も署名と現行の版を確認して読みます。"""
-    current = _chunk_contracts()
-    if value == current:
-        return
-    retired = {"inquiry_chunk_metadata_schema_version", "inquiry_profile_contract_hash"}
-    if isinstance(value, dict) and set(value) == set(current) | retired:
-        contents = {key: item for key, item in value.items() if key != "fingerprint"}
-        fingerprint = hashlib.sha256(
-            json.dumps(contents, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        if value.get("fingerprint") == fingerprint and all(value.get(key) == current[key] for key in current if key != "fingerprint"):
-            return
-    if value != current:
+    """現在の保存・検索契約だけを受け入れる。"""
+    if value != _chunk_contracts():
         raise ValueError("対応していない chunk contracts です。再チャンキングしてください。")
 
 

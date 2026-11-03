@@ -1,13 +1,13 @@
-"""廃止した規則の設定が旧プロファイルの読込を壊さない。"""
+"""廃止した規則の設定をプロファイルの読込で拒否する。"""
 
 import pytest
 from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
 
-def test_retired_inquiry_overrides_are_ignored():
+def test_retired_inquiry_overrides_are_rejected():
     base = builtin_pack()
-    pack = resolve(base, {"inquiry_cues": {"column_words": ["合成"], "external_context_terms": ["合成"]}})
-    assert pack.hash == base.hash
+    with pytest.raises(LanguagePackError, match="inquiry_cues"):
+        resolve(base, {"inquiry_cues": {"column_words": ["合成"], "external_context_terms": ["合成"]}})
     assert not any(field.section == "inquiry_cues" for field in FIELD_SPECS)
 
 

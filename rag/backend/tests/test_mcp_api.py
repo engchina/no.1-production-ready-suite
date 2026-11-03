@@ -3135,18 +3135,29 @@ def _figure_pdf() -> bytes:
 
 
 class _FigureSourceOracle(_SourceOracle):
-    """図の chunk と、処理レシピのファイル準備後の artifact を持つ fake。"""
+    """図の chunk と、その版が解析したファイルの系譜を持つ fake。"""
 
     async def chunk_set_source_derivation(
         self, *, document_id: str, chunk_set_id: str
     ) -> dict[str, object] | None:
         del document_id, chunk_set_id
-        return None
+        return {
+            "derivation_id": "dv-1",
+            "preprocess_profile": "pdf_normalize",
+            "converted": True,
+            "derived_object_path": "docs/d1/r-1/prepared.pdf",
+            "derived_content_type": "application/pdf",
+        }
 
     async def get_document(self, document_id: str) -> object | None:
         if document_id != "d1":
             return None
-        return SimpleNamespace(object_storage_path="docs/d1/source.pdf", preprocess_artifact=None)
+        return SimpleNamespace(
+            file_name="synthetic.pdf",
+            content_type="application/pdf",
+            object_storage_path="docs/d1/source.pdf",
+            preprocess_artifact=None,
+        )
 
     async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
         del document_id

@@ -1,5 +1,7 @@
 """取込品質レポートの構造カウントを検証する。"""
 
+import pytest
+
 from app.rag.ingestion_quality import (
     build_ingestion_quality_report,
     summarize_ingestion_quality,
@@ -73,57 +75,21 @@ def test_quality_report_counts_first_class_structure_and_parser_artifacts() -> N
     ]
 
 
-def test_legacy_quality_summary_infers_first_class_tables_assets_and_artifacts() -> None:
-    """quality_report が無い旧 extraction JSON も構造 metadata から集計する。"""
-    summary = summarize_ingestion_quality(
-        [
-            {
-                "elements": [
-                    {
-                        "kind": "text",
-                        "text": "本文",
-                        "page_number": 1,
-                        "confidence": 0.6,
-                    }
-                ],
-                "pages": [
-                    {"page_number": 1, "element_ids": ["el-1"]},
-                    {"page_number": 2, "element_ids": []},
-                ],
-                "tables": [
-                    {
-                        "table_id": "tbl-1",
-                        "page_number": 2,
-                        "cells": [{"row": 0, "col": 0, "text": "A", "confidence": 0.4}],
-                    }
-                ],
-                "assets": [{"asset_id": "chart-1", "kind": "chart", "page_number": 2}],
-                "parser_artifacts": {
-                    "page_count": "4",
-                    "adapter_table_count": 2,
-                    "formula_count": 1,
-                    "failed_segment_count": 1,
-                },
-            }
-        ]
-    )
+@pytest.mark.parametrize("report", [None, "invalid"])
+def test_quality_summary_requires_saved_report(report: object) -> None:
+    with pytest.raises(ValueError, match="品質レポート"):
+        summarize_ingestion_quality(
+            [{"elements": [{"kind": "text", "text": "合成"}], "quality_report": report}]
+        )
 
+
+def test_quality_summary_uses_saved_report() -> None:
+    extraction = StructuredExtraction(raw_text="合成", parser_artifacts={"table_count": 2})
+    report = build_ingestion_quality_report(extraction, parser_profile="synthetic")
+    summary = summarize_ingestion_quality([{"quality_report": report.model_dump(mode="json")}])
     assert summary["document_count"] == 1
     assert summary["table_document_count"] == 1
-    assert summary["figure_document_count"] == 1
-    assert summary["formula_document_count"] == 1
-    assert summary["low_confidence_document_count"] == 1
-    assert summary["failed_segment_document_count"] == 1
-    assert summary["average_page_coverage"] == 0.5
-    assert summary["warning_counts"] == {
-        "table_structure_review": 1,
-        "figure_ocr_review": 1,
-        "formula_review": 1,
-        "low_confidence_elements": 1,
-        "failed_segments": 1,
-    }
-    assert summary["risk_counts"] == {"low": 0, "medium": 1, "high": 0}
-    assert summary["parser_profile_counts"] == {"legacy": 1}
+    assert summary["parser_profile_counts"] == {"synthetic": 1}
 
 
 def test_risk_level_ignores_exception_type_suffix_on_warning_codes() -> None:
