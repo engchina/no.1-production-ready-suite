@@ -48,6 +48,29 @@ def test_text_records_character_and_line_positions(source: str, expected_line: s
     assert second["locator"].startswith("char=")
 
 
+@pytest.mark.parametrize(
+    ("extension", "source", "scheme"),
+    [
+        (".txt", "\n\n".join(f"段落 {i} の本文です" for i in range(800)), "text_char"),
+        (".md", "\n\n".join(f"# 見出し {i}\n\n本文 {i}" for i in range(800)), "markdown_source"),
+        (
+            ".html",
+            "<html><body>" + "".join(f"<p>本文 {i}</p>" for i in range(800)) + "</body></html>",
+            "html_source",
+        ),
+        (".csv", "列A,列B\n" + "".join(f"{i},値{i}\n" for i in range(1500)), "delimited_row"),
+        (".jsonl", "".join(f'{{"a": "本文 {i}"}}\n' for i in range(800)), "jsonl_line"),
+        (".json", json.dumps({f"k{i}": f"本文 {i}" for i in range(800)}), "json_pointer"),
+        (".xml", "<r>" + "".join(f"<a>本文 {i}</a>" for i in range(800)) + "</r>", "xml_source"),
+    ],
+)
+def test_unknown_content_type_is_detected_from_the_extension(
+    extension: str, source: str, scheme: str
+) -> None:
+    extraction = _parse(source.encode(), "application/octet-stream", extension)
+    assert extraction.parser_artifacts["source_map"]["scheme"] == scheme
+
+
 def test_broken_paragraph_lines_join_to_one_element_at_paragraph_start() -> None:
     source = "\n\n".join(
         f"段落 {i} の 1 行目 です よ と\n段落 {i} の 2 行目 です よ" for i in range(500)

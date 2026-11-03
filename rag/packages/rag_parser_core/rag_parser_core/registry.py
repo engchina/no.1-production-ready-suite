@@ -15,6 +15,7 @@ import importlib.util
 import inspect
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -1295,7 +1296,7 @@ def _unstructured_adapter_result(
                     partition,
                     {
                         "filename": str(path),
-                        "content_type": content_type,
+                        "content_type": _partition_content_type(content_type, source_profile),
                         **partition_kwargs,
                     },
                 )
@@ -2152,6 +2153,17 @@ def _first_adapter_extraction_page_number(extraction: StructuredExtraction) -> i
         if element.page_number is not None:
             return element.page_number
     return 1
+
+
+def _partition_content_type(content_type: str, source_profile: SourceProfile | None) -> str | None:
+    """種類が分からない値を拡張子の種類にする（#4202）。
+
+    そのまま渡すと Unstructured は拒み、渡さないと内容の推定で形式が変わる（1 行の XML）。
+    """
+    if _normalized_content_type_for_parser(content_type) not in {"", "application/octet-stream"}:
+        return content_type
+    extension = (source_profile.extension if source_profile is not None else "") or ""
+    return mimetypes.guess_type(f"source{extension}")[0]
 
 
 def _unstructured_partition_kwargs(
