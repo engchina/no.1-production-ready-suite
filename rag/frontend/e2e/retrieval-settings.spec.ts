@@ -232,6 +232,8 @@ for (const viewport of [
       await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
       expect(saved).toEqual([
         {
+          retrieval_query_limit: 600,
+          rerank_top_n: 0,
           min_similarity: 0.05,
           rerank_min_relevance_score: 0.4,
           hybrid_search_backend: "sudachi",
@@ -771,3 +773,79 @@ test("回答の検索と生成の設定は群ごとに枠と見出しがあり�
   await card.getByRole("region", { name: "検索文の作成", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("groups.png") });
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`検索候補数と重排後 Top-N を独立して検証・保存する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme, sidebarCollapsed: true }, version: 0 })), theme);
+    await mockRetrievalCards(page);
+    const saved: Record<string, unknown>[] = [];
+    await mockAnsweringSettings(page, saved);
+    await page.goto("/settings/retrieval");
+    const card = page.getByTestId("answering-settings-card");
+    const search = card.getByRole("spinbutton", { name: "検索候補数の上限", exact: true });
+    const topN = card.getByRole("spinbutton", { name: "再ランキング後の採用件数（Top-N）", exact: true });
+    const min = card.getByRole("spinbutton", { name: "コサイン類似度の下限", exact: true });
+    const score = card.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true });
+    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+    const reset = card.getByRole("button", { name: "変更を破棄", exact: true });
+    await expect(search).toHaveValue("600");
+    await expect(topN).toHaveValue("0");
+    await expect(card.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true })).not.toBeChecked();
+    await expect(topN).toHaveAccessibleDescription(/0 は追加制限なし.*明示添付.*別枠/);
+    const boxes = await Promise.all([search.boundingBox(), min.boundingBox(), topN.boundingBox(), score.boundingBox()]);
+    if ((page.viewportSize()?.width ?? 0) >= 1280) {
+      expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThanOrEqual(2);
+      expect(boxes[0]!.x).toBeGreaterThan(boxes[1]!.x);
+      expect(Math.abs(boxes[2]!.y - boxes[3]!.y)).toBeLessThanOrEqual(2);
+      expect(boxes[2]!.x).toBeGreaterThan(boxes[3]!.x);
+    } else {
+      expect(boxes[0]!.y).toBeGreaterThan(boxes[1]!.y);
+      expect(boxes[2]!.y).toBeGreaterThan(boxes[3]!.y);
+    }
+    const group = card.getByRole("region", { name: "検索の実行", exact: true });
+    await group.scrollIntoViewIfNeeded();
+    await group.screenshot({ path: testInfo.outputPath("retrieval-count.png") });
+    const rerankGroup = card.getByTestId("answering-rerank-block");
+    await rerankGroup.scrollIntoViewIfNeeded();
+    await rerankGroup.screenshot({ path: testInfo.outputPath("rerank-count.png") });
+    for (const invalid of ["", "0", "1.5", "2001"]) {
+      await search.fill(invalid);
+      await expect(save).toBeDisabled();
+    }
+    await search.fill("150");
+    for (const invalid of ["", "-1", "1.5", "2001"]) {
+      await topN.fill(invalid);
+      await expect(save).toBeDisabled();
+    }
+    await topN.fill("2");
+    await save.click();
+    await expect(save).toBeDisabled();
+    expect(saved.at(-1)).toMatchObject({ retrieval_query_limit: 150, rerank_top_n: 2 });
+    await expect(search).toHaveValue("150");
+    await expect(topN).toHaveValue("2");
+    await page.reload();
+    await expect(search).toHaveValue("150");
+    await expect(topN).toHaveValue("2");
+    await page.route("**/api/settings/answering", async route => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      await route.fulfill({ status: 500, json: { data: null, error_messages: ["合成の保存失敗"], warning_messages: [] } });
+    });
+    await search.fill("180");
+    await topN.fill("3");
+    await save.click();
+    await expect(card).toContainText("合成の保存失敗");
+    await expect(search).toHaveValue("180");
+    await expect(topN).toHaveValue("3");
+    await reset.click();
+    await expect(search).toHaveValue("150");
+    await expect(topN).toHaveValue("2");
+    const rerank = card.getByRole("switch", { name: "Rerank で検索候補を並べ替える", exact: true });
+    await rerank.click();
+    await expect(topN).toBeDisabled();
+    await expect(search).toBeEnabled();
+    await reset.click();
+    await expect(topN).toBeEnabled();
+    await expectNoPageOverflow(page);
+
+  });
+}

@@ -281,6 +281,7 @@ class Settings:
     # 基本候補と、拡張を含む精排入力の合計は回答起点数から独立する。
     retrieval_candidate_limit: int = 1000
     rerank_candidate_limit: int = 0
+    rerank_top_n: int = 0
     # 呼出元が解決した、各候補経路の既存の上限。KB/レシピには設定しない。
     retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
@@ -591,6 +592,7 @@ def get_settings(*, environ: Mapping[str, str] | None = None, dotenv_path: str |
         retrieval_top_k=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_TOP_K", DEFAULT_RETRIEVAL_TOP_K_SETTING)),
         retrieval_candidate_limit=max(1, _env_int(env, "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT", 1000)),
         rerank_candidate_limit=max(0, _env_int(env, "RAG_ENGINE_RERANK_CANDIDATE_LIMIT", 0)),
+        rerank_top_n=max(0, _env_int(env, "RAG_ENGINE_RERANK_TOP_N", 0)),
         retrieval_stage_limits={
             str(key): max(0, int(value)) for key, value in json.loads(env.get("RAG_ENGINE_RETRIEVAL_STAGE_LIMITS", "{}")).items()
         },

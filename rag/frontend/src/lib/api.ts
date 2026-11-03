@@ -2886,6 +2886,8 @@ export interface ChunkingSettingsUpdate {
 
 /** 回答の検索と生成の全体既定(全体設定だけで決め、検索・回答プロファイルでは上書きしない。#593)。 */
 export interface AnsweringSettingsData {
+  retrieval_query_limit?: number;
+  rerank_top_n?: number;
   min_similarity?: number;
   rerank_min_relevance_score?: number;
   hybrid_search_backend?: "oracle_native" | "sudachi";
