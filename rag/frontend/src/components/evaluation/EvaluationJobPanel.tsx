@@ -22,6 +22,7 @@ import {
   EVALUATION_JOB_STATUS_VARIANT,
   evaluationJobCountLabel,
   evaluationJobCurrentCaseLabel,
+  evaluationJobPartialLabel,
   evaluationJobStatusLabel,
   evaluationJobTimeLimitLabel,
   isEvaluationJobActive,
@@ -52,6 +53,7 @@ export function EvaluationJobPanel({
 }) {
   const active = isEvaluationJobActive(job);
   const currentCase = currentLabel === undefined ? evaluationJobCurrentCaseLabel(job) : currentLabel;
+  const partialLabel = evaluationJobPartialLabel(job);
   return (
     <Card className="min-w-0" data-testid={testPrefix}>
       <CardHeader>
@@ -124,6 +126,11 @@ export function EvaluationJobPanel({
         ) : null}
         {job.status === "CANCELLED" ? (
           <Banner severity="info" title={t("evaluation.job.cancelledTitle")} />
+        ) : null}
+        {partialLabel ? (
+          <Banner severity="info" title={partialLabel}>
+            {t("evaluation.job.partialResultHint")}
+          </Banner>
         ) : null}
       </CardContent>
     </Card>

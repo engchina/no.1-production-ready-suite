@@ -70,6 +70,7 @@ import { toast } from "@/lib/toast";
 
 import {
   evaluationCaseErrorSummary,
+  evaluationJobShownResult,
   isEvaluationJobActive,
   isEvaluationJobId,
 } from "./evaluation-job";
@@ -501,23 +502,21 @@ export function EvaluationClient() {
         {runJob.jobId ? (
           <EvaluationJobSection
             state={runJob}
-            renderResult={(job) =>
-              job.run_result ? (
-                <ResultExportContext.Provider value={{jobId:job.job_id,input:runInputSnapshot,
-                  profileName:runProfileName,compareProfileName:runCompareName}}>
-                {job.run_result.comparison ? (
-                  <EvaluationComparisonResult
-                    metrics={job.run_result}
-                    baseName={runProfileName}
-                    comparedName={runCompareName}
-                    caseLabels={runCaseLabels}
-                  />
-                ) : (
-                  <EvaluationResult metrics={job.run_result} caseLabels={runCaseLabels} />
-                )}
-                </ResultExportContext.Provider>
-              ) : null
-            }
+            renderResult={(job, metrics) => (
+              <ResultExportContext.Provider value={{jobId:job.job_id,input:runInputSnapshot,
+                profileName:runProfileName,compareProfileName:runCompareName}}>
+              {metrics.comparison ? (
+                <EvaluationComparisonResult
+                  metrics={metrics}
+                  baseName={runProfileName}
+                  comparedName={runCompareName}
+                  caseLabels={runCaseLabels}
+                />
+              ) : (
+                <EvaluationResult metrics={metrics} caseLabels={runCaseLabels} />
+              )}
+              </ResultExportContext.Provider>
+            )}
           />
         ) : runMutation.isPending ? (
           <EvaluationResultSkeleton />
@@ -649,13 +648,13 @@ function useEvaluationJobState(): EvaluationJobState {
   };
 }
 
-/** job の実行状況と、実行中は結果の Skeleton、成功したら結果を出す。 */
+/** job の実行状況と、実行中は結果の Skeleton、結果（成功か途中までの結果。#4208）があれば結果を出す。 */
 function EvaluationJobSection({
   state,
   renderResult,
 }: {
   state: EvaluationJobState;
-  renderResult: (job: EvaluationJob) => ReactNode;
+  renderResult: (job: EvaluationJob, metrics: EvaluationMetrics) => ReactNode;
 }) {
   const { job, query } = state;
   if (!job) {
@@ -674,6 +673,7 @@ function EvaluationJobSection({
   // 実行中に状態の取得が失敗したとき（再起動・通信断など）。取得は自動で続けるので、最後に分かっている
   // 状態のまま、パネルの直下に取得できていないことを出す（取得できたら消える。#977）。
   const pollError = query.isError && job.status === "RUNNING" ? query.error : null;
+  const shownResult = evaluationJobShownResult(job);
   return (
     <>
       <EvaluationJobPanel
@@ -689,7 +689,7 @@ function EvaluationJobSection({
         </Banner>
       ) : null}
       {job.status === "RUNNING" ? <EvaluationResultSkeleton /> : null}
-      {job.status === "SUCCEEDED" ? renderResult(job) : null}
+      {shownResult ? renderResult(job, shownResult) : null}
     </>
   );
 }

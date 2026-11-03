@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { EvaluationJob } from "@/lib/api";
+import type { EvaluationJob, EvaluationMetrics } from "@/lib/api";
 
 import {
   EVALUATION_JOB_STATUS_VARIANT,
   evaluationCaseErrorSummary,
   evaluationJobCountLabel,
   evaluationJobCurrentCaseLabel,
+  evaluationJobPartialLabel,
   evaluationJobPercent,
+  evaluationJobShownResult,
   evaluationJobStatusLabel,
   evaluationJobTimeLimitLabel,
   isEvaluationJobActive,
@@ -31,6 +33,7 @@ function job(overrides: Partial<EvaluationJob> = {}): EvaluationJob {
     finished_at: null,
     heartbeat_at: "2026-09-28T00:00:10Z",
     run_result: null,
+    partial_result: null,
     ...overrides,
   };
 }
@@ -122,5 +125,28 @@ describe("評価 job の失敗の文", () => {
       errorType: null,
     });
     expect(splitEvaluationJobFailure(null)).toEqual({ message: "", errorType: null });
+  });
+});
+
+describe("途中までの結果（Issue 4208）", () => {
+  const metrics = (caseCount: number, comparison?: EvaluationMetrics["comparison"]) =>
+    ({ case_count: caseCount, comparison: comparison ?? null }) as EvaluationMetrics;
+
+  it("結果の領域には成功の結果を優先し、無ければ途中までの結果を出す", () => {
+    const partial = metrics(2);
+    expect(evaluationJobShownResult(job({ partial_result: partial }))).toBe(partial);
+    const done = metrics(3);
+    expect(evaluationJobShownResult(job({ run_result: done }))).toBe(done);
+    expect(evaluationJobShownResult(job())).toBeNull();
+  });
+
+  it("範囲の文言は比べるプロファイルの分も数え、途中までの結果が無ければ出さない", () => {
+    const comparison = { search_answer_profile_id: "p", metrics: metrics(1) };
+    const label = evaluationJobPartialLabel(
+      job({ total_cases: 10, partial_result: metrics(2, comparison as EvaluationMetrics["comparison"]) })
+    );
+    expect(label).toContain("3 件");
+    expect(label).toContain("全 10 件");
+    expect(evaluationJobPartialLabel(job())).toBeNull();
   });
 });

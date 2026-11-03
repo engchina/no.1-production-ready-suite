@@ -47,9 +47,15 @@ def _format(sheet: Any, widths: list[int]) -> None:
 
 
 def evaluation_results_xlsx(
-    metrics: EvaluationMetrics, inputs: EvaluationResultExportRequest
+    metrics: EvaluationMetrics,
+    inputs: EvaluationResultExportRequest,
+    *,
+    partial_of_total: int | None = None,
 ) -> bytes:
-    """全ページ分の結果を出す。文字列は式として評価させない。"""
+    """全ページ分の結果を出す。文字列は式として評価させない。
+
+    `partial_of_total` は途中までの結果（#4208）の全ケースの数で、概要の末尾に範囲を書く。
+    """
     workbook = Workbook()
     overview = workbook.active
     assert overview is not None
@@ -76,6 +82,11 @@ def evaluation_results_xlsx(
                 ],
             ],
         )
+    if partial_of_total is not None:
+        saved = metrics.case_count + (
+            metrics.comparison.metrics.case_count if metrics.comparison else 0
+        )
+        _append(overview, ["途中までの結果", f"全 {partial_of_total} ケースのうち {saved} ケース"])
     rows = {row.case_id: row for row in inputs.rows}
     cases = {case.id: case for case in inputs.cases}
     for title, _profile, result in groups:

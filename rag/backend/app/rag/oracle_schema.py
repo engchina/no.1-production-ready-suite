@@ -44,6 +44,7 @@ from app.clients.oracle import (
     oracle_document_schema_sql,
     oracle_document_sections_schema_sql,
     oracle_evaluation_artifact_schema_sql,
+    oracle_evaluation_job_case_result_schema_sql,
     oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
@@ -388,6 +389,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="evaluation_jobs",
             table_name="rag_evaluation_jobs",
             sql=oracle_evaluation_job_schema_sql(),
+        ),
+        # 品質評価の job のケースごとの結果（#4208）。
+        OracleSchemaSection(
+            name="evaluation_job_case_results",
+            table_name="rag_evaluation_job_case_results",
+            sql=oracle_evaluation_job_case_result_schema_sql(),
         ),
         # 品質評価の判定の校正（記入の集合・項目・判定・校正の結果。#3578）。
         OracleSchemaSection(
@@ -744,6 +751,13 @@ END;
             sql=_create_missing_objects_sql(oracle_section_revision_schema_sql(), "章節の修正の版"),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261103_4208_evaluation_job_case_results",
+            table_name="rag_evaluation_job_case_results",
+            sql=evaluation_job_case_results_migration_sql(),
+        )
+    )
     return sections
 
 
@@ -800,6 +814,17 @@ def evaluation_calibration_migration_sql() -> str:
     （``oracle_evaluation_calibration_schema_sql``）から作る。
     """
     return _create_missing_objects_sql(oracle_evaluation_calibration_schema_sql(), "判定の校正")
+
+
+def evaluation_job_case_results_migration_sql() -> str:
+    """品質評価の job のケースごとの結果の表を無ければ作る（#4208）。
+
+    表を足すだけでデータは変えない。DDL は正本
+    （``oracle_evaluation_job_case_result_schema_sql``）から作る。
+    """
+    return _create_missing_objects_sql(
+        oracle_evaluation_job_case_result_schema_sql(), "品質評価のケースごとの結果"
+    )
 
 
 def evaluation_job_calibration_kind_migration_sql() -> str:
