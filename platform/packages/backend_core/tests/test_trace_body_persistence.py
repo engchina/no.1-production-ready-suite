@@ -237,3 +237,32 @@ def test_background_write_failure_rolls_back_and_marks_record_incomplete(
         assert database.data.manifests[body_id][5] == "incomplete"
     finally:
         persistence.stop()
+
+
+def test_nested_capture_keeps_failed_pipeline_body_until_outer_error_record_save() -> None:
+    database = Database()
+    persistence = manager(database)
+    persistence.start()
+    try:
+        with persistence.capture():
+            try:
+                with persistence.capture():
+                    content = call_content("synthetic failed input " * 10000)
+                    assert content.body_reference is not None
+                    raise RuntimeError("synthetic pipeline failure")
+            except RuntimeError:
+                assert persistence.buffer.pending[0] == 1
+                details = {"span-a": {"call": {"input": content.model_dump()}}}
+                with database.connection():
+                    database.data.primary_saved = True
+                    assert not persistence.register(
+                        database.data, BodyOwner("rag", "history", "record-a"), details
+                    )
+                    database.commit()
+                persistence.confirm_saved(details)
+                assert persistence.buffer.pending == (0, 0)
+        assert persistence.stop()
+        assert content.body_reference is not None
+        assert database.data.manifests[content.body_reference.body_id][5] == "complete"
+    finally:
+        persistence.stop()

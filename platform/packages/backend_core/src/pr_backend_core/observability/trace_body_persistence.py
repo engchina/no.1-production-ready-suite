@@ -6,12 +6,13 @@ import contextlib
 import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from ..config.tracing import TracingSettings
 from .call_body_capture import call_body_capture
 from .trace_bodies import BodyFailure, BodyOwner, attach_body_owner, mark_body_incomplete
-from .trace_body_buffer import TraceBodyBuffer
+from .trace_body_buffer import BodyCaptureSession, TraceBodyBuffer
 from .trace_body_registry import (
     call_body_failures,
     call_body_references,
@@ -35,6 +36,9 @@ class TraceBodyPersistence:
         self._clob_type = clob_type
         self._part_characters = settings.trace_body_part_characters
         self._shutdown_seconds = settings.trace_shutdown_timeout_seconds
+        self._session: ContextVar[BodyCaptureSession | None] = ContextVar(
+            "trace_body_persistence_session", default=None
+        )
         self.buffer = TraceBodyBuffer(
             max_bodies=settings.trace_body_buffer_size, max_bytes=settings.trace_body_buffer_bytes
         )
@@ -53,11 +57,17 @@ class TraceBodyPersistence:
 
     @contextmanager
     def capture(self) -> Iterator[None]:
+        # 内部pipeline終了の後に外側が失敗記録を保存する場合も、本文を先に解放しない。
+        if self._session.get() is not None:
+            yield
+            return
         session = self.buffer.session()
+        token = self._session.set(session)
         try:
             with call_body_capture(session.capture, part_characters=self._part_characters):
                 yield
         finally:
+            self._session.reset(token)
             session.close()
 
     def register(
