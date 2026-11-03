@@ -223,3 +223,50 @@ def test_shared_trace_body_roundtrip_ownership_and_final_deletion(text: str) -> 
                 {"body_id": reference.body_id},
             )
             connection.commit()
+
+
+def test_partial_trace_body_write_rolls_back_and_failure_does_not_downgrade_complete() -> None:
+    """途中のINSERT後に整合性検査が失敗しても、部分本文をcompleteとしない。"""
+    from dataclasses import replace
+
+    import oracledb
+    from pr_backend_core.observability.trace_bodies import (
+        BodyOwner,
+        attach_body_owner,
+        mark_body_incomplete,
+        prepare_body,
+        read_body_page,
+        write_body,
+    )
+
+    body = prepare_body("合成本文" * 1000, part_characters=101)
+    owner = BodyOwner("agent", "history", uuid4().hex)
+    try:
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            attach_body_owner(cursor, owner, [body.reference])
+            connection.commit()
+            corrupted = replace(body, text="別" + body.text[1:])
+            with pytest.raises(ValueError, match="do not cover"):
+                write_body(cursor, corrupted, clob_type=oracledb.DB_TYPE_CLOB, batch_size=2)
+            connection.rollback()
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            page = read_body_page(cursor, owner, body.reference)
+            assert page is not None and page.status == "pending" and not page.parts
+            mark_body_incomplete(cursor, body.reference, "write_failed")
+            connection.commit()
+            page = read_body_page(cursor, owner, body.reference)
+            assert page is not None and page.status == "incomplete"
+            assert page.failure_code == "write_failed"
+            write_body(cursor, body, clob_type=oracledb.DB_TYPE_CLOB)
+            connection.commit()
+            mark_body_incomplete(cursor, body.reference, "write_failed")
+            connection.commit()
+            page = read_body_page(cursor, owner, body.reference)
+            assert page is not None and page.status == "complete" and page.failure_code is None
+    finally:
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id",
+                {"body_id": body.reference.body_id},
+            )
+            connection.commit()
