@@ -3125,3 +3125,38 @@ for (const outcome of ["success", "failure"] as const) {
     await expect(chatComposer(page)).toHaveValue("合成の質問 B");
   });
 }
+
+
+for (const savedFormat of [false, true]) {
+  test(`保存したチャットの未確認の節を独立表示し理由を保つ (format-${savedFormat})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const format = savedFormat ? { rules_section: "確認済みの節 A", unsourced_section: "未確認の節 B" } : undefined;
+    const titles = format ?? { rules_section: "資料により確認できた事項", unsourced_section: "資料の出典を確かめられない説明" };
+    const confirmed = "項目 A は識別子です。";
+    const unverified = "項目 B の値は未確認です。";
+    const reason = "指定された単位は送信時の根拠にありません。";
+    const response = {
+      ...assistantMessage, citations: [], answer_format: format,
+      content: [titles.rules_section, "・" + confirmed, titles.unsourced_section, "原文と照合できない説明です。", "・" + unverified].join("\n"),
+      passage_marks: [{ text: unverified, state: "unverified", reasons: [{ code: "citation_range_out_of_bounds", label: "引用行が根拠の範囲外", detail: reason }] }],
+      removed_passages: [], answer_warnings: [],
+    };
+    await mockChat(page, "ready", [{ ...userMessage, content: "合成の質問です。" }, response]);
+    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
+    for (const reload of [false, true]) {
+      if (reload) await page.reload();
+      const answer = page.getByTestId("answer-text");
+      const confirmedSection = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: titles.rules_section, exact: true }) });
+      const unverifiedSection = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: titles.unsourced_section, exact: true }) });
+      await expect(confirmedSection).toContainText(confirmed);
+      await expect(confirmedSection).not.toContainText(unverified);
+      await expect(unverifiedSection).toContainText(unverified);
+      await expect(unverifiedSection).toContainText("原文と照合できない説明です。");
+      const marker = unverifiedSection.getByTestId("answer-passage-mark");
+      await expect(marker).toHaveAttribute("data-passage-state", "unverified");
+      await marker.getByTestId("answer-passage-mark-toggle").click();
+      await expect(marker.getByTestId("answer-passage-mark-reasons")).toContainText(reason);
+      await expectNoPageOverflow(page);
+    }
+    await page.getByTestId("answer-text").screenshot({ path: testInfo.outputPath("saved-answer-sections.png") });
+  });
+}

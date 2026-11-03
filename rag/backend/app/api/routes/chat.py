@@ -101,7 +101,12 @@ from app.rag.search_answer_profile_knowledge import (
     resolve_clarification,
 )
 from app.rag.signed_url import SignedUrlUnavailableError
-from app.rag.stored_answer import passage_mark_record, stored_citation, stored_citations
+from app.rag.stored_answer import (
+    answer_format_record,
+    passage_mark_record,
+    stored_citation,
+    stored_citations,
+)
 from app.rag.support_guide_runtime import (
     GUIDE_CLARIFICATION_PREFIX,
     guide_clarification_record,
@@ -270,6 +275,7 @@ def _to_chat_message(
         answer_attached_images=(
             message.answer_attached_images if message.status == "COMPLETE" else 0
         ),
+        answer_format=(message.answer_format if message.status == "COMPLETE" else None),
         # 段落の印（終わった回答だけ。#2738）。契約の項目だけを返す。
         **(
             passage_mark_record(message.passage_record)
@@ -1140,6 +1146,9 @@ async def _generate_chat_answer(
             answer_notice=result.notice,
             # 段落の印（#2738）。列には保存せず、回答の記録（diagnostics_json）から読み直す。
             passage_record=passage_mark_record(result.diagnostics.answer),
+            answer_format=answer_format_record(
+                (result.diagnostics.answer or {}).get("answer_format")
+            ),
         )
     except Exception as exc:
         await run_recorder.record(

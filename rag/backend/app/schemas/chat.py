@@ -98,6 +98,8 @@ class ChatMessage(BaseModel):
     passage_marks: list[dict[str, Any]] = Field(default_factory=list)
     removed_passages: list[dict[str, Any]] = Field(default_factory=list)
     answer_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    # 生成時の表示形式。古い回答・未完了の回答では None。
+    answer_format: dict[str, str] | None = None
     # 回答のモデル（``model``）へ添付した根拠の画像の件数（ASSISTANT の終わった回答だけ。回答の
     # 記録の診断の ``models.attached_images``。#3444）。1 件以上なら回答の見出しに「画像も参照」を
     # 出す。

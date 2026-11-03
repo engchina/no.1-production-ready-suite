@@ -220,6 +220,16 @@ def _passage_entry(value: object) -> dict[str, Any] | None:
     return entry
 
 
+def answer_format_record(value: object) -> dict[str, str] | None:
+    """生成時の表示形式だけを返す。現在の設定で過去の回答を再解釈しない。"""
+    if not isinstance(value, Mapping):
+        return None
+    entries = {
+        key: item for key, item in value.items() if isinstance(key, str) and isinstance(item, str)
+    }
+    return entries or None
+
+
 def passage_mark_record(envelope: Mapping[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
     """回答の構造（envelope）から、段落の印・外した段落・回答全体の警告を記録の形で取り出す（#2738）。
 

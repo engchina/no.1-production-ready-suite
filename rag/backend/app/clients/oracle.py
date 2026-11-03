@@ -90,6 +90,7 @@ from app.rag.search_answer_profile_config import (
 )
 from app.rag.section_revisions import SectionExtractionBase
 from app.rag.source_profile import build_source_profile
+from app.rag.stored_answer import answer_format_record
 from app.rag.support_guide_runtime import GUIDE_PREVIEW_TRACE_PREFIX
 from app.rag.vector_index_adapter import default_vector_index_build, resolve_vector_index_adapter
 from app.schemas.classification import CLASSIFICATION_CATEGORY_KEYS, category_label
@@ -371,6 +372,8 @@ class StoredMessage:
     # 保存せず、回答の記録（rag_answer_records の diagnostics_json）から trace_id で読む。
     # 記録の無い回答（保存の失敗・保存期間の経過・この機能より前の回答）は None。
     passage_record: dict[str, Any] | None = None
+    # 生成時の節・引用の表示形式。回答の記録から読む（メッセージの列は増やさない）。
+    answer_format: dict[str, str] | None = None
     # 回答のモデルへ添付した根拠の画像の件数（ASSISTANT の回答だけ。回答の記録の診断の
     # ``models.attached_images``。#3444）。画像を添付しなかった回答・記録の無い回答は 0。
     answer_attached_images: int = 0
@@ -5308,6 +5311,8 @@ class OracleClient:
                 m.answer_notice,
                 m.attachments_json,
                 m.created_at,
+                JSON_QUERY(r.diagnostics_json, '$.answer_format' RETURNING CLOB)
+                    AS answer_format_json,
                 JSON_QUERY(r.diagnostics_json, '$.passage_marks' RETURNING CLOB)
                     AS passage_marks_json,
                 JSON_QUERY(r.diagnostics_json, '$.removed_passages' RETURNING CLOB)
@@ -16617,6 +16622,7 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
             else None
         ),
         passage_record=_message_passage_record(row),
+        answer_format=answer_format_record(_json_loads(row.get("answer_format_json"))),
         answer_attached_images=max(0, _optional_int(row.get("answer_attached_images")) or 0),
     )
 
