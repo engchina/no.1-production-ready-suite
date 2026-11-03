@@ -24,6 +24,7 @@ from rag_engine.generation.batch_output_repair import (
     repair_feedback_upper_bound,
 )
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
+from rag_engine.generation.document_inputs import document_groups, document_key, order_document_spans
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.call_context import call_context, update_call_context
@@ -152,12 +153,14 @@ def prepare_batched_evidence(
     ``source_scores`` は出典の ID ごとの原質問への rerank の点数。読取で選ばれなかった原文を予算まで補う順に使う（#4113）。
     """
     reading_system = resolve_prompt("generation.batchReading", BATCH_READING_PROMPT)
-    selected = list(spans)
+    document_order = {document_key(group[0]): index for index, group in enumerate(document_groups(spans))}
+    selected = order_document_spans(spans, priority=document_order)
     batches: list[dict[str, Any]] = []
     read_sources: set[str] = set()
     context = render([])
 
     def final_prompt(values: Sequence[dict[str, Any]]) -> str:
+        values = order_document_spans(values, priority=document_order)
         prompt = render(values)
         notes = [
             {"evidence_id": value["label"] if "label" in value else value["evidence_id"], "answer": value["batch_answer"]}
@@ -187,6 +190,7 @@ def prepare_batched_evidence(
                 "evidence": [
                     {
                         "evidence_id": f"B{index}",
+                        "document_group": f"D{document_order[document_key(value)] + 1}",
                         **{key: value[key] for key in fields if key in value},
                         "text": _labeled_text(f"B{index}", value),
                     }
@@ -236,37 +240,51 @@ def prepare_batched_evidence(
     def partition(values: Sequence[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         result: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
-        for value in values:
-            offset = 0
-            while offset < len(value["text"]):
-                rest = _slice(value, offset, len(value["text"]))
-                if fits([*current, rest]):
-                    current.append(rest)
-                    break
-                if current:
-                    result.append(current)
-                    current = []
-                    continue
-                low, high = 0, len(value["text"]) - offset
-                while low < high:
-                    mid = (low + high + 1) // 2
-                    if fits([_slice(value, offset, offset + mid)]):
-                        low = mid
-                    else:
-                        high = mid - 1
-                if low == 0:
-                    fail("batch_fixed_input_or_source_metadata_exceeds_limit")
-                # 容量内の最後の段落境界を優先する。境界が無い長文も欠落なく分割する。
-                end = offset + low
-                boundaries = [
-                    position + len(separator)
-                    for separator in ("\n\n", "\n", "。", ". ")
-                    if (position := value["text"].rfind(separator, offset + low // 2, end)) >= 0
-                ]
-                if boundaries:
-                    end = max(boundaries)
-                result.append([_slice(value, offset, end)])
-                offset = end
+        for document in document_groups(values, priority=document_order):
+            if fits([*current, *document]):
+                current.extend(document)
+                continue
+            if current:
+                result.append(current)
+                current = []
+            if fits(document):
+                current.extend(document)
+                continue
+            # 文書単独でも入らない場合に限って、その文書の原文を順番に分ける。
+            for value in document:
+                offset = 0
+                while offset < len(value["text"]):
+                    rest = _slice(value, offset, len(value["text"]))
+                    if fits([*current, rest]):
+                        current.append(rest)
+                        break
+                    if current:
+                        result.append(current)
+                        current = []
+                        continue
+                    low, high = 0, len(value["text"]) - offset
+                    while low < high:
+                        mid = (low + high + 1) // 2
+                        if fits([_slice(value, offset, offset + mid)]):
+                            low = mid
+                        else:
+                            high = mid - 1
+                    if low == 0:
+                        fail("batch_fixed_input_or_source_metadata_exceeds_limit")
+                    # 容量内の最後の段落境界を優先する。境界が無い長文も欠落なく分割する。
+                    end = offset + low
+                    boundaries = [
+                        position + len(separator)
+                        for separator in ("\n\n", "\n", "。", ". ")
+                        if (position := value["text"].rfind(separator, offset + low // 2, end)) >= 0
+                    ]
+                    if boundaries:
+                        end = max(boundaries)
+                    result.append([_slice(value, offset, end)])
+                    offset = end
+            if current:
+                result.append(current)
+                current = []
         if current:
             result.append(current)
         return result
@@ -295,7 +313,7 @@ def prepare_batched_evidence(
                 answers = [excerpt["batch_answer"] for excerpt in result if inside(excerpt, value) and excerpt.get("batch_answer")]
                 result = [excerpt for excerpt in result if not inside(excerpt, value)]
                 result.append({**value, **({"batch_answer": "\n".join(answers)} if answers else {})})
-            return tag(result)
+            return order_document_spans(tag(result), priority=document_order)
 
         # 文字数は根拠のブロックの大きさで見積もり、入らない大きな原文は飛ばして次の順位を足す。
         room = settings.evidence_budget_chars - len(evidence_text(tag(list(chosen))))
@@ -368,6 +386,17 @@ def prepare_batched_evidence(
                     "status": "running",
                     "input_chars": len(evidence_text(batch)),
                     "input_count": len(batch),
+                    "documents": [
+                        {
+                            "group": f"D{document_order[document_key(group[0])] + 1}",
+                            "source_ids": list(dict.fromkeys(value["source_id"] for value in group)),
+                            "continued_from_previous": batch_index > 1
+                            and any(document_key(value) == document_key(group[0]) for value in pass_batches[batch_index - 2]),
+                            "continues_in_next": batch_index < len(pass_batches)
+                            and any(document_key(value) == document_key(group[0]) for value in pass_batches[batch_index]),
+                        }
+                        for group in document_groups(batch, priority=document_order)
+                    ],
                     "ranges": [
                         {"source_id": value["source_id"], "start": value.get("start", 0), "end": value.get("end", len(value["text"]))}
                         for value in batch
@@ -471,11 +500,12 @@ def prepare_batched_evidence(
                     unverified_failure = (exc, receipt)
                 finally:
                     record_retrieval_stage({"stage": "generation_evidence_batch", **receipt})
-            selected = tag(list(reduced.values()))
+            selected = order_document_spans(tag(list(reduced.values())), priority=document_order)
             prompt, measurement = final_measure(selected)
             if not measurement["fits"] and len(prompt) >= previous_size:
                 stop_reduction("batch_reduction_did_not_shrink")
         selected, prompt, measurement, reduction = fill_to_budget(selected)
+    selected = order_document_spans(selected, priority=document_order)
     return (
         selected,
         prompt,
