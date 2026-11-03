@@ -3138,11 +3138,30 @@ def synthesize_grounded_answer(
             retrieval_attempted = True
             if budget.allows_round(number + 1):
                 with _execution_step("未回答の要求の探し直し") as retrieval_step:
+                    retrieval_step.input(
+                        lambda number=number, retrieval_requests=retrieval_requests, recovery_plan=recovery_plan, context=context: {
+                            "質問": question,
+                            "元の回答の回": number + 1,
+                            "再検索する要求": retrieval_requests,
+                            "判断": recovery_plan,
+                            "既存根拠": candidate_snapshot(context.records),
+                        }
+                    )
                     try:
                         retrieved_context, retrieval_trace = recover_requests(context, retrieval_requests)
                     except Exception as exc:  # noqa: BLE001 - 補助の検索の失敗で採用済みの回答を捨てない。
                         report_degraded("unanswered_request_retrieval", exc)
                         retrieved_context, retrieval_trace = context, {"error": type(exc).__name__, "applied": False}
+                        retrieval_step.status = "failed"
+                    retrieval_step.output(
+                        lambda retrieval_trace=retrieval_trace, retrieved_context=retrieved_context, context=context: {
+                            "検索の記録": retrieval_trace,
+                            "返却根拠": candidate_snapshot(retrieved_context.records),
+                            "新規追加ID": sorted(
+                                {r.chunk_uid or r.id for r in retrieved_context.records} - {r.chunk_uid or r.id for r in context.records}
+                            ),
+                        }
+                    )
                     rounds[-1]["request_retrieval"] = retrieval_trace
                     added_ids = {r.chunk_uid or r.id for r in retrieved_context.records} - {r.chunk_uid or r.id for r in context.records}
                     if added_ids:
@@ -3154,6 +3173,18 @@ def synthesize_grounded_answer(
                         retrieval_step.result("新しい根拠を追加できなかったため、取得済みの資料で回答を確定します")
             else:
                 rounds[-1]["request_retrieval"] = {"applied": False, "skipped": "deadline"}
+                with _execution_step("未回答の要求の探し直し") as retrieval_step:
+                    retrieval_step.input(
+                        lambda number=number, retrieval_requests=retrieval_requests, recovery_plan=recovery_plan, context=context: {
+                            "質問": question,
+                            "元の回答の回": number + 1,
+                            "再検索する要求": retrieval_requests,
+                            "判断": recovery_plan,
+                            "既存根拠": candidate_snapshot(context.records),
+                        }
+                    )
+                    retrieval_step.skip("回答の時間予算が不足しているため、追加検索を実行しません。")
+                    retrieval_step.output({"検索の記録": rounds[-1]["request_retrieval"], "新規追加ID": []})
         for decision in recovery_plan:
             if decision["action"] == "retrieval":
                 retrieval_result = rounds[-1].get("request_retrieval", {})

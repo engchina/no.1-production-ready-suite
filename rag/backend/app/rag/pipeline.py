@@ -9,7 +9,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from time import perf_counter, time
 from typing import Any, Literal, cast
 
@@ -820,6 +820,12 @@ class RagPipeline:
                 progress_callback=stage_callback,
                 result_details=lambda result: answer_guardrail_details(result, outcome.answer),
                 result_outcome=guardrail_stage_outcome,
+                request_snapshot=lambda: {
+                    "回答本文": outcome.answer,
+                    "渡した根拠本文": outcome.context_text,
+                    "出力検査の設定": self._settings.rag_guardrails_output_enabled,
+                },
+                result_snapshot=asdict,
             )
             record_guardrail_findings(
                 "answer",
@@ -1249,6 +1255,8 @@ async def _observe_stage[T](
     result_details: Callable[[T], Mapping[str, object] | None] | None = None,
     progress_callback: SearchStageProgressCallback | None = None,
     result_outcome: Callable[[T], Literal["success", "skipped", "error"]] | None = None,
+    request_snapshot: Callable[[], object] | None = None,
+    result_snapshot: Callable[[T], object] | None = None,
 ) -> T:
     """非同期 stage の処理時間を outcome 付きで記録する。
 
@@ -1264,6 +1272,15 @@ async def _observe_stage[T](
         attributes={"pr.stage": stage},
         display=SpanDisplay(kind=kind) if kind is not None else None,
     ) as span:
+        if request_snapshot is not None:
+            try:
+                span.set_call_input(request_snapshot, restricted=True)
+            except Exception as exc:  # noqa: BLE001 - 記録の失敗で検査や回答を止めない。
+                logger.warning("stage input snapshot failed", extra={**safe_exception_fields(exc)})
+                span.set_call_input(
+                    {"recording_status": "incomplete", "error_type": type(exc).__name__},
+                    restricted=True,
+                )
         started_at = perf_counter()
         base_attributes = dict(attributes or {})
         await _emit_stage_progress(
@@ -1328,6 +1345,14 @@ async def _observe_stage[T](
                 attributes=error_attributes,
             )
             raise
+        if result_snapshot is not None:
+            try:
+                span.set_call_output(lambda: result_snapshot(result))
+            except Exception as exc:  # noqa: BLE001 - 記録の失敗で検査や回答を止めない。
+                logger.warning("stage output snapshot failed", extra={**safe_exception_fields(exc)})
+                span.set_call_output(
+                    {"recording_status": "incomplete", "error_type": type(exc).__name__}
+                )
         elapsed = perf_counter() - started_at
         outcome = result_outcome(result) if result_outcome is not None else "success"
         span.set_status({"success": "done", "skipped": "skipped", "error": "failed"}[outcome])
