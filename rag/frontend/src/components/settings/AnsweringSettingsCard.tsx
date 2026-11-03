@@ -15,7 +15,7 @@ import {
   TextField,
 } from "@production-ready/ui";
 import { MessageSquareText, RotateCcw, Save } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { ApiErrorState } from "@/components/StateViews";
 import {
@@ -90,6 +90,18 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
  * 回答の検索と生成の全体既定（質問の拡張・回答の生成方式・根拠の前後の数・rerank・画面目録。#593）。
  * 検索・回答プロファイルでは上書きしない（`PROFILE_GLOBAL_QUERY_FIELDS`）。検索・回答プロファイルを指定しない呼び出し(MCP など)もこの値を使う。
  */
+/** 見出しと枠のある設定の群。枠の中の切り替えの一覧と同じ線と余白にそろえる（#4238）。 */
+function SettingsGroup({ id, title, children }: { id: string; title: string; children: ReactNode }) {
+  return (
+    <section aria-labelledby={id} className="divide-y divide-border rounded-md border border-border">
+      <h3 id={id} className="px-3 py-3 text-sm font-medium text-fg">
+        {title}
+      </h3>
+      <div className="space-y-4 p-3">{children}</div>
+    </section>
+  );
+}
+
 export function AnsweringSettingsCard() {
   const query = useAnsweringSettings();
   return (
@@ -159,8 +171,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
     <div className="space-y-4">
       {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。
           選択肢の名前が長い（20 字ほど）質問の拡張・回答の生成方式は lg、数は xs（#1891）。 */}
-      <section aria-labelledby="search-expression-title" className="space-y-4">
-        <h3 id="search-expression-title" className="text-sm font-medium text-fg">{t("settings.answering.searchExpressionTitle")}</h3>
+      <SettingsGroup id="search-expression-title" title={t("settings.answering.searchExpressionTitle")}>
       <FormGrid>
         <SelectField
           id="answering-query-strategy"
@@ -182,7 +193,8 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           onChange={(checked) => update({ runtime_terms_search_enabled: checked })}
         />
       </FormGrid>
-      </section>
+      </SettingsGroup>
+      <SettingsGroup id="search-execution-title" title={t("settings.answering.searchExecutionTitle")}>
       <FormGrid>
         <SelectField id="answering-hybrid-backend" width="lg" disabled={disabled}
           label={t("settings.answering.hybridBackend")}
@@ -201,8 +213,8 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           onChange={(event) => update({ min_similarity: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />
       </FormGrid>
-      <section aria-labelledby="rrf-title" className="space-y-4">
-        <h3 id="rrf-title" className="text-sm font-medium text-fg">{t("settings.answering.rrfTitle")}</h3>
+      </SettingsGroup>
+      <SettingsGroup id="rrf-title" title={t("settings.answering.rrfTitle")}>
         <p className="text-sm text-fg-muted">{t("settings.answering.rrfHint")}</p>
         <FormStatus tone="info" message={t("settings.answering.rrfOfficialDescription")} />
         <div className="space-y-2">
@@ -235,7 +247,8 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           </fieldset>
         ))}
         {invalidRatio ? <p role="alert" className="text-sm text-danger-fg">{t("settings.answering.rrfInvalid")}</p> : null}
-      </section>
+      </SettingsGroup>
+      <SettingsGroup id="answer-generation-title" title={t("settings.answering.answerGenerationTitle")}>
       <FormGrid>
         <SelectField
           id="answering-answer-flow"
@@ -260,6 +273,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           onValueChange={(value) => update({ neighbor_child_count: Number(value) })}
         />
       </FormGrid>
+      </SettingsGroup>
       <div
         role="group"
         aria-label={t("settings.answering.options")}
@@ -299,6 +313,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled}
           onChange={(checked) => update({ screen_linking_enabled: checked })}
         />
+        <div data-testid="answering-rerank-block">
         <SwitchRow
           id="answering-rerank"
           label={t("settings.answering.rerank")}
@@ -318,6 +333,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           onChange={(event) => update({ rerank_min_relevance_score: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />
         </FormGrid>
+        </div>
         <div>
           <SwitchRow id="answering-section-expansion" label={t("settings.answering.sectionExpansion")}
             description={t("settings.answering.sectionExpansionHint")} checked={form.section_expansion_enabled}
