@@ -99,8 +99,10 @@ ANSWER_STEP_DISPLAY_NAMES: dict[str, str] = {
     "要求ごとの根拠の確認": "要求ごとに根拠の対応を確認する",
     "回答に添付する画像": "回答モデルへ渡す根拠画像を準備する",
     "回答文の生成と根拠確認": "回答文を作って根拠と照合する",
-    "是正": "指摘された箇所の回答を直す",
-    "是正の打ち切り": "回答の修正を打ち切る",
+    "回答の修正が必要か確認する": "回答の修正が必要か確認する",
+    "回答の修正": "回答の修正",
+    "是正": "回答の修正方針を決める",
+    "是正の打ち切り": "回答の修正を終了する",
     "文書ごとの起点の上限": "同じ文書の超過候補を後ろへ回す",
     "条の選択": "根拠に使う条を目録から選ぶ",
     "未回答の要求の探し直し": "未回答の要求の根拠を探し直す",
@@ -166,6 +168,11 @@ def answer_step_params(values: Mapping[str, object]) -> DisplayParams:
         llm_sends = values.get("llm_sends")
         if isinstance(llm_sends, int) and not isinstance(llm_sends, bool) and llm_sends > llm_calls:
             params["llm_sends"] = llm_sends
+    if isinstance(values.get("accepted"), bool):
+        params["accepted"] = values["accepted"]
+    round_number = values.get("round")
+    if isinstance(round_number, int) and not isinstance(round_number, bool) and round_number > 0:
+        params["round"] = round_number
     note = str(values.get("status") or "").strip()
     if note not in _PLAIN_STEP_STATUSES:
         params["note"] = note

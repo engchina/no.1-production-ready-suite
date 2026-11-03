@@ -65,6 +65,8 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "要求ごとの根拠の確認": "answer.step.coverRequests",
   "回答に添付する画像": "answer.step.attachImages",
   "回答文の生成と根拠確認": "answer.step.generateAnswer",
+  "回答の修正が必要か確認する": "answer.step.checkRevision",
+  "回答の修正": "answer.step.skipRevision",
   "是正": "answer.step.revise",
   "是正の打ち切り": "answer.step.stopRevising",
   "文書ごとの起点の上限": "answer.step.deferDocumentCandidates",
