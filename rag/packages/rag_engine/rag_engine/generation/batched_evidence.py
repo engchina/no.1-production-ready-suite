@@ -24,6 +24,7 @@ from rag_engine.generation.batch_output_repair import (
 )
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
+from rag_engine.resources.call_context import call_context, update_call_context
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
@@ -323,16 +324,22 @@ def prepare_batched_evidence(
     if not measurement["fits"]:
         # 文字予算だけを緩めず、system・schema・出力予約込みで各読取と最終生成を検査する。
         remaining_passes = max(1, sum(len(value["text"]) for value in selected).bit_length())
+        pass_index = 0
         while not measurement["fits"]:
+            pass_index += 1
             if not selected or remaining_passes <= 0:
                 stop_reduction("batch_reduction_did_not_fit")
             remaining_passes -= 1
             previous_size = len(prompt)
             reduced: dict[tuple[str, int, int], dict[str, Any]] = {}
-            for batch in partition(selected):
+            pass_batches = list(partition(selected))
+            for batch_index, batch in enumerate(pass_batches, 1):
                 payload = read_prompt(batch)
                 receipt: dict[str, Any] = {
                     "index": len(batches) + 1,
+                    "pass_index": pass_index,
+                    "batch_index": batch_index,
+                    "batch_count": len(pass_batches),
                     "status": "running",
                     "input_chars": len(evidence_text(batch)),
                     "input_count": len(batch),
@@ -353,6 +360,13 @@ def prepare_batched_evidence(
                     batch_receipt: dict[str, Any] = receipt,
                 ) -> str | None:
                     detail = batch_validation_detail(error, batch_schema)
+                    is_range_error = batch_range_invalid(error) is not None
+                    update_call_context(
+                        {
+                            "pr.call.role": "batch_range_repair" if is_range_error else "batch_read",
+                            "pr.retry.reason": "citation_range_invalid" if is_range_error else "invalid_structured_output",
+                        }
+                    )
                     batch_receipt.setdefault("validation_failures", []).append(detail)
                     if not will_retry:
                         return None
@@ -362,7 +376,17 @@ def prepare_batched_evidence(
 
                 try:
                     mismatch: BatchRangeInvalid | None = None
-                    with bind_structured_output_repair(repair):
+                    with (
+                        call_context(
+                            {
+                                "pr.call.role": "batch_read",
+                                "pr.batch.pass": pass_index,
+                                "pr.batch.index": batch_index,
+                                "pr.batch.count": len(pass_batches),
+                            }
+                        ),
+                        bind_structured_output_repair(repair),
+                    ):
                         try:
                             reading = read(reading_system, payload, reading_model)
                         except ValidationError as exc:

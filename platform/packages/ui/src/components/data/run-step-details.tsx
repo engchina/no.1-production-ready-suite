@@ -138,6 +138,8 @@ export interface RunStepDetailsLabels {
   /** 長さを切ったときの印。 */
   truncated: string;
   disabled: string;
+  skipped: string;
+  notApplicable: string;
   partial: string;
   requestedDimensions: string;
   inputType: string;
@@ -182,6 +184,8 @@ export interface RunStepDetailsLabels {
 }
 
 export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
+  skipped: "この工程はスキップされたため、入力・結果はありません。",
+  notApplicable: "この工程には適用されません。",
   disabled: "本文の記録は設定で無効です。この呼び出しの入力・結果・思考・入出力仕様は保存していません。",
   partial: "完了前に記録された応答です。受信済みの内容を表示しています。", requestedDimensions: "要求した次元数", inputType: "入力の用途", topN: "要求した上位件数",
   vectors: "記録されたベクトル", dimensions: "記録された次元数", partialVector: "一部のみ記録", rank: "順位", score: "関連度", document: "文書", sourceIndex: "元の index",
@@ -214,6 +218,11 @@ export interface RunStepDetailsViewProps {
   labels?: Partial<RunStepDetailsLabels>;
   className?: string;
   testId?: string;
+  forceTabs?: boolean;
+  activeTab?: string;
+  onTabChange?: (tab: string) => void;
+  stepStatus?: string;
+  reasoningApplicable?: boolean;
   showTiming?: boolean;
   showStatistics?: boolean;
   timing?: { startedAt?: string | null; finishedAt?: string | null; durationMs?: number | null };
@@ -295,13 +304,17 @@ export function RunStepTiming({startedAt, finishedAt, labels: input}: {startedAt
 
 /** 呼び出しの内容は選んだタブだけ描画し、大きい JSON を同時に展開しない。 */
 export function RunStepDetailsView(props: RunStepDetailsViewProps) {
-  const [tab, setTab] = useState("input");
+  const [ownTab, setOwnTab] = useState("overview");
+  const tab = props.activeTab ?? ownTab;
+  const setTab = props.onTabChange ?? setOwnTab;
   const id = useId();
   const labels = { ...DEFAULT_RUN_STEP_DETAILS_LABELS, ...props.labels };
   const call = props.details.call;
   const presentation = useMemo(() => call ? callPresentation(call) : null, [call]);
-  if (!call) return <RunStepDetailsBody {...props} />;
-  const content = tab === "input" ? call.input : tab === "output" || tab === "reasoning" ? call.output : call.schema;
+  if (!call && !props.forceTabs) return <RunStepDetailsBody {...props} />;
+  const empty: CallContent = {status: "not_recorded", text: ""};
+  const content = (tab === "input" ? call?.input : tab === "output" || tab === "reasoning" ? call?.output : call?.schema) ?? empty;
+  const overviewEmpty = !hasRunStepDetails({...props.details, call: undefined}) && (call?.capture_enabled === false || !Object.values(presentation?.stats ?? {}).some(value => typeof value === "string" || typeof value === "number"));
   const blocks = tab === "input" ? presentation?.input : tab === "output" ? presentation?.output : tab === "reasoning" ? presentation?.reasoning : [];
   const semanticOutput = tab === "output" && Boolean(presentation?.embeddings.length || presentation?.ranks.length);
   return <div className="grid min-w-0 gap-2" data-call-details="" data-testid={props.testId}>
@@ -312,14 +325,16 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
     ]} />
     <TabPanel idPrefix={id} id={tab} value={tab}>
       {tab === "schema" ? <p className="mb-2 text-xs text-fg-muted">{labels.schemaDescription}</p> : null}
-      {tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
+      {tab === "overview" && overviewEmpty ? <p className="text-xs text-fg-muted">{props.stepStatus === "skipped" ? labels.skipped : call?.capture_enabled === false ? labels.disabled : labels.notRecorded}</p> : tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
         tab === "timing" ? <RunStepDetailsBody details={{ fields: [
           { label: labels.startedAt, value: props.timing?.startedAt ? formatRunDateTime(props.timing.startedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
           { label: labels.finishedAt, value: props.timing?.finishedAt ? formatRunDateTime(props.timing.finishedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
           { label: labels.duration, value: formatRunDuration(props.timing?.durationMs, labels.notRecorded) },
         ] }} labels={labels} /> :
+        props.stepStatus === "skipped" ? <p className="text-xs text-fg-muted">{labels.skipped}</p> :
+        tab === "reasoning" && props.reasoningApplicable === false ? <p className="text-xs text-fg-muted">{labels.notApplicable}</p> :
         content.status === "withheld" ? <p className="text-xs text-fg-muted">{labels.withheld}</p> :
-        call.capture_enabled === false ? <p className="text-xs text-fg-muted">{labels.disabled}</p> :
+        call?.capture_enabled === false ? <p className="text-xs text-fg-muted">{labels.disabled}</p> :
         content.status === "not_recorded" ? <p className="text-xs text-fg-muted">{labels.notRecorded}</p> :
         <div className="grid min-w-0 gap-3">
           {(tab === "output" || tab === "reasoning") && presentation?.partial ? <p className="text-xs text-fg-muted">{labels.partial}</p> : null}

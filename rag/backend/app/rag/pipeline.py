@@ -20,7 +20,10 @@ from pr_backend_core.chat_history import (
 )
 from pr_backend_core.logging import safe_error_code, safe_exception_fields
 from pr_backend_core.observability.genai import record_genai_usage
-from pr_backend_core.observability.model_purpose import async_call_with_model_purpose
+from pr_backend_core.observability.model_purpose import (
+    async_call_with_model_purpose,
+    model_purpose_attributes,
+)
 from pr_backend_core.observability.tracing import (
     ObservedSpan,
     SpanDisplay,
@@ -239,11 +242,15 @@ class _EngineStageObservation:
         self._span = span
         self._values: dict[str, object] = {}
 
+    @property
+    def capture_enabled(self) -> bool:
+        return self._span.call_content_enabled
+
     def request(self, value: object, *, schema: object = None) -> None:
-        pass
+        self._span.set_call_input(value, schema=schema, restricted=True)
 
     def response(self, value: object) -> None:
-        pass
+        self._span.set_call_output(value)
 
     def usage(self, value: object) -> None:
         pass
@@ -283,6 +290,14 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
         ) as stage_span:
             yield _EngineStageObservation(stage_span)
         return
+    from rag_engine.resources.call_context import next_send_attributes
+
+    call_attributes = next_send_attributes() if operation == "chat" else {}
+    if operation == "chat":
+        if call_attributes.get("pr.call.role") == "batch_range_repair":
+            call_attributes["pr.gen_ai.purpose"] = "evidence.repair_batch_range"
+        elif model_purpose_attributes().get("pr.gen_ai.purpose") == "answer.generate":
+            call_attributes["pr.call.role"] = "draft_generation"
     with observed_span(
         f"gen_ai.{operation}",
         kind="client",
@@ -291,11 +306,20 @@ def _observe_engine_call(operation: str, model: str) -> Iterator[CallObservation
             "gen_ai.operation.name": operation,
             "gen_ai.provider.name": "oracle",
             "gen_ai.request.model": model,
+            **call_attributes,
         },
     ) as span:
 
         class Observation:
             capture_enabled = span.call_content_enabled
+
+            def attributes(self, values: Mapping[str, object]) -> None:
+                span.set_attributes(values)
+                if (
+                    values.get("pr.call.validation_status") in {"rejected", "incomplete"}
+                    or values.get("pr.call.transport_status") == "failed"
+                ):
+                    span.set_status("failed")
 
             def request(self, value: object, *, schema: object = None) -> None:
                 span.set_call_input(

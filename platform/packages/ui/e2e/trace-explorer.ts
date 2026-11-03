@@ -1,7 +1,7 @@
 /** 3 製品の実画面で、共有の軌跡の調査を確かめる。 */
 // 製品ごとに独立した Playwright を使うため、実行環境と型は呼び出し元から渡す。
 interface ExplorerLocator {
-  getByRole(role: "button" | "heading" | "searchbox" | "tab" | "combobox" | "option", options: {name: string; exact?: boolean}): ExplorerLocator;
+  getByRole(role: "button" | "heading" | "searchbox" | "tab" | "combobox" | "option", options?: {name: string; exact?: boolean}): ExplorerLocator;
   locator(selector: string): ExplorerLocator;
   first(): ExplorerLocator;
   last(): ExplorerLocator;
@@ -121,6 +121,8 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   }, undefined)).toBe(true);
   const inspector = explorer.locator("[data-trace-inspector]");
   await check(inspector).toBeVisible();
+  await check(inspector.getByRole("tab", {name: "概要", exact: true})).toHaveAttribute("aria-selected", "true");
+  await check(inspector.getByRole("tab")).toHaveCount(5);
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();
   await check(inspector).toContainText("synthetic-call-input");
   await inspector.getByRole("tab", {name: "結果", exact: true}).click();
@@ -190,6 +192,10 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await explorer.getByRole("button", {name: "条件をクリア", exact: true}).last().click();
   await search.fill("synthetic-stage-detail");
   await explorer.locator('[data-trace-record][data-trace-category="stage"] button').first().click();
+  await check(inspector.getByRole("tab")).toHaveCount(5);
+  await check(inspector.getByRole("tab", {name: "入力", exact: true})).toHaveAttribute("aria-selected", "true");
+  await check(inspector).toContainText("記録されていません");
+  await inspector.getByRole("tab", {name: "概要", exact: true}).click();
   await check(inspector).toContainText("synthetic-stage-detail");
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-inspector-content]");

@@ -15,7 +15,8 @@ it("選択した内容だけ表示し、未記録と制限・切り詰めを区�
       schema: { status: "truncated", text: "synthetic-schema" },
     } }} timing={{ startedAt: "2026-01-01T00:00:00Z", durationMs: 42 }} />));
     const click = (label: string) => act(() => (Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(el => el.textContent === label))!.click());
-    expect(host.textContent).toContain("synthetic-input");
+    expect(host.textContent).not.toContain("synthetic-input");
+    expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("概要");
     click("概要"); expect(host.textContent).toContain("model-a");
     click("入力"); expect(host.textContent).toContain("synthetic-input");
     click("結果"); expect(host.textContent).toContain("現在の権限"); expect(host.textContent).not.toContain("private-output");
@@ -34,6 +35,7 @@ it("思考と回答を JSON に隠さず本文として別に描く", () => {
       output: saved({ output: [{ type: "reasoning", content: [{ type: "reasoning_text", text: "合成の思考" }] }, { type: "message", content: [{ type: "output_text", text: "合成の回答" }] }] }), schema: saved({}),
     } }} />));
     const click = (label: string) => act(() => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(el => el.textContent === label)!.click());
+    click("入力");
     expect(host.querySelector('[data-call-readable]')?.textContent).toContain("合成の質問");
     click("思考"); expect(host.querySelector('[data-call-readable]')?.textContent).toContain("合成の思考");
     expect(host.querySelector('[data-call-readable]')?.textContent).not.toContain("合成の回答");

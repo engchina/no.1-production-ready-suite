@@ -13,7 +13,7 @@ import { ListToolbar } from "./list-toolbar";
 import { LoadMoreFooter } from "./load-more-footer";
 import { formatRunDuration } from "./run-history";
 import { RUN_TIMELINE_CHEVRON_SIZE, runTimelineHasChildren, resolveRunDetailLabels, RunStepStatusIcon, stepDurationMs, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
-import { hasRunStepDetails, RunStepDetailsView, RunStepTiming, runStepContent, runStepTechnicalFields, runStepResultSummary } from "./run-step-details";
+import { RunStepDetailsView, RunStepTiming, runStepContent, runStepTechnicalFields, runStepResultSummary } from "./run-step-details";
 
 
 const CATEGORY_ICON = { model: Bot, tool: Wrench, stage: Layers };
@@ -50,6 +50,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
   const [category, setCategory] = useState<TraceCategory | "all">("all");
   const [status, setStatus] = useState("all");
   const [order, setOrder] = useState<TraceOrder>("hierarchy");
+  const [detailTab, setDetailTab] = useState("overview");
   const [selectedId, setSelectedId] = useState<string | null>(() => steps.find(step => step.status === "failed")?.id ?? steps.find(step => step.details?.call && traceCategory(step) === "model")?.id ?? steps.find(step => step.details?.call)?.id ?? steps[0]?.id ?? null);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [limit, setLimit] = useState(50);
@@ -159,11 +160,14 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
             {selected ? <>
               <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
               <div className="grid min-w-0 gap-1" data-trace-inspector-content="">
-                {(selected.detail || selected.traceMeta || hasRunStepDetails(runStepContent(selected.details)) || selected.details?.call || selected.children) ? <div data-trace-processing-content="" className="grid min-w-0 gap-2">
-                  {selected.detail || selected.traceMeta ? <p className="text-xs leading-5 text-fg-muted">{[selected.detail, selected.traceMeta].filter(Boolean).join(" · ")}</p> : null}
-                  <RunStepDetailsView showStatistics={false} showTiming={false} details={{...runStepContent(selected.details), call: selected.details?.call}} timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: stepDurationMs(selected)}} />
-                  {selected.children}
-                </div> : null}
+                <div data-trace-processing-content="" className="grid min-w-0 gap-2">
+                  <RunStepDetailsView forceTabs activeTab={detailTab} onTabChange={setDetailTab}
+                    stepStatus={selected.status} reasoningApplicable={traceCategory(selected) === "model"}
+                    showStatistics={false} showTiming={false}
+                    details={{...runStepContent(selected.details, [selected.detail, selected.traceMeta].filter(Boolean).join(" · ") || undefined), call: selected.details?.call}}
+                    timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: stepDurationMs(selected)}} />
+                  {detailTab === "overview" ? selected.children : null}
+                </div>
                 <RunStepDetailsView labels={{copied: labels.copied, copyFailed: labels.copyFailed}} details={{fields: [{label: "Span ID", value: selected.id, mono: true, copyValue: selected.id, copyLabel: labels.copy}]}} />
                 <div data-trace-timing=""><RunStepTiming startedAt={selected.startedAt} finishedAt={selected.finishedAt} /></div>
                 <div data-trace-technical=""><RunStepDetailsView details={{fields: runStepTechnicalFields(selected.details)}} /></div>
