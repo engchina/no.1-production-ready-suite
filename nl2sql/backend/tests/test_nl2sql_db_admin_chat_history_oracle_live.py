@@ -100,11 +100,18 @@ class _RemapConnection:
 
 
 @pytest.fixture
-def chat_store(live_settings: Any) -> Iterator[tuple[OracleNl2SqlAdapter, DbAdminChatStore]]:
+def chat_store(
+    live_settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[OracleNl2SqlAdapter, DbAdminChatStore]]:
     """migration 024 の DDL を一意な名前の一時の表に作った store（終わったら消す）。"""
 
     adapter = OracleNl2SqlAdapter(live_settings)
     prefix = "T2319_" + uuid.uuid4().hex[:8].upper()
+    # 名前を差し替えた一時表は全文の正式な所属先ではない。共通本文の実表には触れない。
+    # 正式な表と本文のlifecycleは末尾の専用testで別に確かめる。
+    monkeypatch.setattr(
+        "app.features.nl2sql.db_admin_chat_store.release_deleted_bodies", lambda *_: None
+    )
 
     @contextmanager
     def connection() -> Iterator[Any]:
@@ -337,3 +344,98 @@ def test_plan_blocks_unknown_columns_on_the_app_connection(live_settings: Any) -
     assert first.unknown_columns == ["GRANTEE"]
     assert first.blocked_reason.startswith("列が存在しません: GRANTEE")
     assert second.blocked_reason == "" and second.unknown_columns == []
+
+
+def test_full_trace_body_follows_job_history_and_actual_turn_owners(
+    live_settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import oracledb
+    from pr_backend_core.observability.call_details import call_content
+    from pr_backend_core.observability.trace_bodies import BodyOwner, read_body_page
+    from pr_backend_core.observability.trace_body_persistence import TraceBodyPersistence
+
+    from app.features.nl2sql import trace_bodies
+    from app.features.nl2sql.incremental_store import OracleIncrementalNl2SqlRepository
+
+    adapter = OracleNl2SqlAdapter(live_settings)
+    connect = adapter.pooled_connection
+    repository = OracleIncrementalNl2SqlRepository(connection_factory=connect)
+    store = DbAdminChatStore(connect)
+    identity = uuid.uuid4().hex
+    persistence = TraceBodyPersistence(
+        connect, clob_type=oracledb.DB_TYPE_CLOB, settings=live_settings
+    )
+    monkeypatch.setattr(trace_bodies, "_PERSISTENCE", persistence)
+    persistence.start()
+    content = None
+    text = "合成の本文。" * 16000 + "末尾の条件。"
+    try:
+        store.create_conversation(identity, owner_user_uuid="synthetic-user", title="合成の会話")
+        with persistence.capture():
+            content = call_content(text)
+            assert content.body_reference is not None
+            details = {"a" * 16: {"call": {"input": content.model_dump(mode="json")}}}
+            repository.put_document("jobs", identity, {"span_details": details})
+            repository.put_document("history", identity, {"span_details": details})
+            store.append_turn(
+                identity,
+                _turn(identity, "合成の質問", "SELECT 1 FROM DUAL").model_copy(
+                    update={"span_details": details}
+                ),
+            )
+        assert persistence.stop()
+        owner = BodyOwner("nl2sql", "jobs", identity)
+        position, restored = 0, ""
+        with connect() as conn, conn.cursor() as cursor:
+            while True:
+                page = read_body_page(cursor, owner, content.body_reference, first_part=position)
+                assert page is not None and page.status == "complete", page
+                restored += "".join(part.text for part in page.parts)
+                if page.next_part is None:
+                    break
+                position = page.next_part
+            assert json.loads(restored) == text
+            assert (
+                read_body_page(
+                    cursor, BodyOwner("nl2sql", "jobs", uuid.uuid4().hex), content.body_reference
+                )
+                is None
+            )
+        assert store.delete_conversation(identity)
+        repository.delete_document("jobs", identity)
+        with connect() as conn, conn.cursor() as cursor:
+            assert (
+                read_body_page(
+                    cursor, BodyOwner("nl2sql", "db_admin_turn", identity), content.body_reference
+                )
+                is None
+            )
+            page = read_body_page(
+                cursor, BodyOwner("nl2sql", "history", identity), content.body_reference
+            )
+            assert page is not None and page.status == "complete"
+        repository.delete_document("history", identity)
+        with connect() as conn, conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT COUNT(*) FROM PLATFORM_TRACE_BODY_PARTS WHERE BODY_ID = :body_id",
+                {"body_id": content.body_reference.body_id},
+            )
+            assert cursor.fetchone()[0] == 0
+            assert (
+                read_body_page(
+                    cursor, BodyOwner("nl2sql", "history", identity), content.body_reference
+                )
+                is None
+            )
+    finally:
+        assert persistence.stop()
+        store.delete_conversation(identity)
+        repository.delete_document("jobs", identity)
+        repository.delete_document("history", identity)
+        if content is not None and content.body_reference is not None:
+            with connect() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id",
+                    {"body_id": content.body_reference.body_id},
+                )
+                conn.commit()

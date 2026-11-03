@@ -497,6 +497,7 @@ from .tabular_files import (
     select_workbook_sheet,
     validate_tabular_text_signature,
 )
+from .trace_bodies import capture_trace_bodies
 from .trace_spans import (
     TraceTerminal,
     combined_listener,
@@ -9448,6 +9449,27 @@ class Nl2SqlService:
             job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
         )
 
+    def job_trace_body_source(
+        self,
+        job_id: str,
+        *,
+        actor_user_uuid: str = "",
+        actor_can_manage: bool = False,
+    ) -> tuple[dict[str, dict[str, Any]], str, bool] | None:
+        """全文API用に正本と同じ所有権を確認し、scope確認に必要な情報を返す。"""
+        job = self._load_job_record(job_id)
+        if job is None:
+            return None
+        self._assert_job_access(
+            job, actor_user_uuid=actor_user_uuid, actor_can_manage=actor_can_manage
+        )
+        with self._lock:
+            return (
+                dict(job.span_details),
+                job.request.profile_id or "default",
+                job.request.is_chat_turn,
+            )
+
     def get_job_trace(
         self,
         job_id: str,
@@ -18210,6 +18232,7 @@ class Nl2SqlService:
             lines
         )
 
+    @capture_trace_bodies
     def generate_db_admin_chat_sql(
         self,
         question: str,
@@ -18596,6 +18619,7 @@ class Nl2SqlService:
             raise LookupError(conversation_id)
         logger.info("nl2sql_db_admin_chat_deleted", extra={"conversation_id": conversation_id})
 
+    @capture_trace_bodies
     def send_db_admin_chat_question(
         self,
         request: DbAdminChatGenerateRequest,
@@ -18680,6 +18704,12 @@ class Nl2SqlService:
         if saved is None:  # pragma: no cover - 直前に保存した会話が読めないのは DB の異常
             raise LookupError(conversation_id)
         return DbAdminChatSendData(conversation=saved, turn=turn)
+
+    def db_admin_chat_turn_body_source(
+        self, conversation_id: str, turn_id: str, *, actor: str, all_users: bool
+    ) -> dict[str, dict[str, Any]]:
+        turn = self._db_admin_chat_turn(conversation_id, turn_id, actor=actor, all_users=all_users)
+        return dict(turn.span_details)
 
     def db_admin_chat_turn_trace(
         self, conversation_id: str, turn_id: str, *, actor: str, all_users: bool
@@ -23676,6 +23706,7 @@ class Nl2SqlService:
             truncated = snapshot is not None and snapshot.truncated
         return collector.summary(primary_model=primary_model, truncated=truncated)
 
+    @capture_trace_bodies
     def _run_job_safely(self, job_id: str) -> None:
         with self._lock:
             pending_trace = self._jobs.get(job_id)

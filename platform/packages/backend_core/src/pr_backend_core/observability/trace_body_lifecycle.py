@@ -42,3 +42,16 @@ def captured_body_call[**P, T](
             return await function(*args, **kwargs)
 
     return wrapped
+
+
+def captured_sync_body_call[**P, T](
+    function: Callable[P, T],
+    *,
+    persistence: Callable[[], TraceBodyPersistence | None],
+) -> Callable[P, T]:
+    @wraps(function)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
+        with body_capture_scope(persistence()):
+            return function(*args, **kwargs)
+
+    return wrapped

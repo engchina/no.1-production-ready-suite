@@ -10,6 +10,7 @@ from pr_backend_core.observability.trace_bodies import PreparedBody
 from pr_backend_core.observability.trace_body_lifecycle import (
     body_capture_scope,
     captured_body_call,
+    captured_sync_body_call,
 )
 from pr_backend_core.observability.trace_body_writer import BodySubmission
 
@@ -53,4 +54,20 @@ async def test_async_boundary_keeps_result_exception_and_restores_capture() -> N
     assert current_body_capture() is None
     with pytest.raises(RuntimeError, match="synthetic failure"):
         await wrapped(True)
+    assert current_body_capture() is None
+
+
+def test_sync_boundary_keeps_result_exception_and_nested_capture() -> None:
+    def operation(*, fail: bool) -> str:
+        with body_capture_scope(None):
+            assert current_body_capture() is not None
+        if fail:
+            raise RuntimeError("synthetic sync failure")
+        return "synthetic result"
+
+    wrapped = captured_sync_body_call(operation, persistence=lambda: None)
+    assert wrapped(fail=False) == "synthetic result"
+    assert current_body_capture() is None
+    with pytest.raises(RuntimeError, match="synthetic sync failure"):
+        wrapped(fail=True)
     assert current_body_capture() is None
