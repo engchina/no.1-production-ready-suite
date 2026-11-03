@@ -326,6 +326,8 @@ class DoclingAdapter:
 
 # 分数・上付き下付きの構造を戻す対象の本文の分類（#4140）。表・見出しは対象にしない。図は中の文字の record だけ。
 _MATH_LAYOUT_CATEGORIES = frozenset({"Text", "Formula", "List-item", "Caption", "Footnote"})
+# 解析エンジンは短い分子を見出しと判定することがある。線のある式の一部と確かめられたときだけ字を使う（#4224）。
+_MATH_EXPRESSION_ONLY_CATEGORIES = frozenset({"Title", "Section-header"})
 
 
 def _restore_math_layout(records: list[LayoutRecord], pdf_path: Any, page_lookup: dict[int, Any]) -> list[LayoutRecord]:
@@ -363,7 +365,10 @@ def _restore_math_layout(records: list[LayoutRecord], pdf_path: Any, page_lookup
             ]
             target.text = restored.text
             target.bbox = box
-            if any(record.category == "Formula" for record in merged):
+            if target.category in _MATH_EXPRESSION_ONLY_CATEGORIES:
+                target.category = "Formula"
+                target.raw_type = "formula"
+            elif any(record.category == "Formula" for record in merged):
                 target.category = "Formula"
             elif target.raw_type == PICTURE_OCR_TEXT_RAW_TYPE:
                 removed.update(_settle_picture_formula(target, restored, records, content, page_lookup[page_number]))
@@ -411,7 +416,7 @@ def _math_layout_target(record: LayoutRecord) -> bool:
     if record.raw_type == PICTURE_OCR_TEXT_RAW_TYPE:
         return bool(record.text.strip())
     return (
-        record.category in _MATH_LAYOUT_CATEGORIES
+        record.category in _MATH_LAYOUT_CATEGORIES | _MATH_EXPRESSION_ONLY_CATEGORIES
         and bool(record.text.strip())
         and record.raw_type != "table_unassigned_text"
         and not record.raw.get(INSTRUCTION_CALLOUT_FLAG)
@@ -423,7 +428,13 @@ def _math_block(record: LayoutRecord, page: Any) -> MathBlock:
     text = record.text
     if record.raw_type == PICTURE_OCR_TEXT_RAW_TYPE:
         text = text.removeprefix(f"{picture_ocr_text_label()}:").strip()
-    return MathBlock(key=record.id, box=_pdf_box(record, page), text=text, is_formula=record.category == "Formula")
+    return MathBlock(
+        key=record.id,
+        box=_pdf_box(record, page),
+        text=text,
+        is_formula=record.category == "Formula",
+        expression_only=record.category in _MATH_EXPRESSION_ONLY_CATEGORIES,
+    )
 
 
 def _pdf_box(record: LayoutRecord, page: Any) -> tuple[float, float, float, float]:

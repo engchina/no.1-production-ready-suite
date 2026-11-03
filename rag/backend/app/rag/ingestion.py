@@ -217,8 +217,8 @@ INGESTION_INTERNAL_ERROR_MESSAGE = "取込処理に失敗しました。時間�
 _PARSE_PROGRESS_POLL_SECONDS = 3.0
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
 # 保存した抽出結果の版。解析の出力の内容が変わる修正で上げ、古い結果を再開・再処理で使い直さない
-# (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140)。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 3
+# (2: PDF の分数・上付き下付きの構造を本文に戻す。#4140。3: #4154。4: #4224)。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 4
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
 OBSERVABILITY_DOCUMENT_TYPES = frozenset(
     {
