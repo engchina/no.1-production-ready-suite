@@ -426,6 +426,7 @@ def test_batch_reading_uses_saved_stage_instruction() -> None:
             system="指示",
             schema={},
             read=read,
+            unusable_output=lambda error: False,
         )
     assert diagnostic["batch_count"] > 1
     assert sum(value["text"].count("合成の原文。") for value in calls) == 400

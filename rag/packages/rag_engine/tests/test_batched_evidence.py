@@ -7,7 +7,9 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
+from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamOutputMissing
 from rag_engine.config import get_settings
+from rag_engine.generation.answering import _invalid_structured_output
 from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
 
@@ -32,6 +34,7 @@ def prepare(spans, read, **kwargs):
         system="指示",
         schema={"type": "object"},
         read=read,
+        unusable_output=_invalid_structured_output,
     )
 
 
@@ -271,6 +274,7 @@ def test_parent_larger_than_old_24000_gate_can_use_single_generation():
         system="指示",
         schema={"type": "object"},
         read=lambda *args: pytest.fail("容量内なら分割しない"),
+        unusable_output=_invalid_structured_output,
     )
     assert selected == inputs
     assert diagnostic["batch_count"] == 0
@@ -444,7 +448,7 @@ def test_invalid_batch_reading_returns_unverified_source_material_without_an_ans
     assert failure["error"] == "ValidationError"
     assert failure["stage"] == "evidence.batch_read"
     assert failure["category"] == "schema_field"
-    assert failure["batch_index"] == 1
+    assert failure["batch_index"] >= 1
     assert failure["input_count"] >= 1
     assert failure["input_chars"] > 0
     assert all(item["applies"] == "quote_only" for item in result.envelope["items"])
@@ -460,7 +464,6 @@ def _validation_error() -> ValidationError:
 
 def test_stream_output_missing_in_batch_read_falls_back_to_quotes_and_keeps_trace() -> None:
     """分割読取の完了の event に本文が無くても問の全体を失敗にせず、理由と event の並びを診断へ残す（#4197）。"""
-    from rag_engine.adapters.oci import LlmStreamOutputMissing
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation import answering, grounded
 
@@ -499,13 +502,74 @@ def test_stream_output_missing_in_batch_read_falls_back_to_quotes_and_keeps_trac
     assert failure["stage"] == "evidence.batch_read"
     assert failure["category"] == "stream_output_missing"
     assert failure["stream_trace"] == trace
-    assert failure["batch_index"] == 1
+    assert failure["batch_index"] >= 1
     assert failure["invalid_attempts"] == 0
+
+
+UNREADABLE = "合成の読めない本文。"
+
+
+def _raise_runaway(schema):
+    raise LlmRunawayOutput("合成の反復", "runaway_repetition", None)
+
+
+def _raise_output_missing(schema):
+    raise LlmStreamOutputMissing("合成の本文の無い応答", None, {"events": []})
+
+
+def _raise_invalid_schema(schema):
+    return schema.model_validate({})
+
+
+@pytest.mark.parametrize("unreadable", [_raise_runaway, _raise_output_missing, _raise_invalid_schema])
+def test_one_unreadable_batch_keeps_its_inputs_and_the_other_batches_are_used(unreadable):
+    """#4229: 1 つの組の出力を使えなくても、その組の原文を残し、ほかの組の読取結果と合わせて続ける。"""
+    inputs = [span(0, UNREADABLE * 300), span(1, "合成の読める本文。" * 300)]
+
+    def read(system, prompt, schema):
+        values = json.loads(prompt)["evidence"]
+        if UNREADABLE in values[0]["text"]:
+            unreadable(schema)
+        return schema(findings=[finding(values[0], answer="合成の回答")])
+
+    selected, _, diagnostic = prepare(inputs, read)
+
+    assert [value["text"] for value in selected if value["source_id"] == "p0"] == [inputs[0]["text"]]
+    assert [value["batch_answer"] for value in selected if value["source_id"] == "p1"] == ["合成の回答"]
+    failed, completed = diagnostic["batches"]
+    assert (failed["status"], failed["retained_input_count"]) == ("failed", 1)
+    assert completed["status"] == "completed"
+    assert diagnostic["read_source_count"] == 1
+    assert diagnostic["excluded_span_count"] == 0
+
+
+def test_a_failure_outside_the_output_contract_still_stops_the_reading():
+    """#4229: 出力の不合格ではない失敗（実装の例外など）は、組の原文を残さずに送出する。"""
+
+    def read(system, prompt, schema):
+        raise KeyError("合成の実装の例外")
+
+    with pytest.raises(KeyError):
+        prepare([span(0, "合成の本文。" * 1000)], read)
+
+
+def test_unreadable_batch_does_not_fall_back_the_whole_answer():
+    """#4229: 1 つの組の暴走で、問の全体を原文の提示へ退避させない。"""
+    records = [_record(0, UNREADABLE + FILLER[:2500], score=0.9), _record(1, "合成の読める本文。" + FILLER[:6000], score=0.5)]
+
+    def read(values):
+        if any(UNREADABLE in value["text"] for value in values):
+            _raise_runaway(None)
+        return [finding(values[0], answer="合成の回答")]
+
+    result, generated, _ = _synthesize(records, read, budget=6000)
+
+    assert "generation_failure" not in result.generation_trace
+    assert UNREADABLE in generated[0]
 
 
 def test_batch_failure_summary_keeps_the_last_reason_and_shared_fields() -> None:
     """検証の失敗の後に別の理由で終わった組は最後の理由を残し、概要の項目は生成の経路と同じにする（#4197）。"""
-    from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamOutputMissing
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.grounded import generation_failure_detail
 

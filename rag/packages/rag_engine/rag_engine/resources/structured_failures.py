@@ -207,6 +207,11 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
     return result
 
 
+def longest_validation_errors() -> list[dict[str, Any]]:
+    """``structured_failure_details`` の ``validation_errors`` の件数と形の上限（指摘の入る余裕を先に確保するため）。"""
+    return [{"type": max(_VALIDATION_TYPES, key=len), "loc": ["<redacted>"] * _MAX_LOCATION}] * _MAX_ERRORS
+
+
 def failure_summary_fields(details: Mapping[str, Any]) -> dict[str, Any]:
     """``structured_failure_details`` のうち、回答の診断の失敗の概要へ残す項目（経路を問わず同じ。#4197）。"""
     return {key: details[key] for key in _SUMMARY_FIELDS if key in details}
