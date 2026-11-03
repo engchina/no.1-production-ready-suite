@@ -1271,7 +1271,7 @@ function ProcessIdentifierRow({ label, value, trace = false }: { label: string; 
   return <div className="flex min-w-0 items-center gap-2 text-xs leading-5" data-process-identifier={label} data-trace-id-row={trace ? "" : undefined}>
     <span className="shrink-0 text-fg-muted">{label}:{" "}</span>
     <span className="min-w-0 break-all font-mono text-fg">{value || "—"}</span>
-    {value ? <CopyButton type="button" variant="ghost" size="sm" iconOnly className="shrink-0" text={value}
+    {value ? <CopyButton inline type="button" variant="ghost" size="sm" iconOnly className="shrink-0" text={value}
       label={labels.copy.replace("{label}", label)} copiedMessage={labels.copied.replace("{label}", label)} failedMessage={labels.copyFailed.replace("{label}", label)} /> : null}
   </div>;
 }

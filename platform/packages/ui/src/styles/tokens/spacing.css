@@ -35,6 +35,7 @@
      sm = 表・密な行、md = 既定、lg = 工程を進める主操作の行・主な問い合わせの入力の行。
      --button-height-* / --field-height は同じ値の別名（既存の参照のため残す）。 */
   --control-height-sm: 32px;
+  --control-height-inline: 24px; /* 読み取り専用のメタデータの行内コピー（#4246）。 */
   --control-height-md: 36px;
   --control-height-lg: 40px;
   --control-height-touch: 44px;
@@ -89,6 +90,7 @@
 @media (pointer: coarse) {
   :root {
     --control-height-sm: var(--control-height-touch);
+    --control-height-inline: var(--control-height-touch);
     --control-height-md: var(--control-height-touch);
     --control-height-lg: var(--control-height-touch);
   }

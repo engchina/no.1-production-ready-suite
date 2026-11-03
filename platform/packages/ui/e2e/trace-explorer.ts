@@ -40,6 +40,9 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
     const rows = Array.from(detail?.querySelectorAll("[data-process-identifier]") ?? []);
     const gap = parseFloat(getComputedStyle(document.documentElement).fontSize) / 4;
     const models = detail?.querySelector("[data-run-used-models]");
+    const target = matchMedia("(pointer: coarse)").matches ? 44 : 24;
+    const copies = Array.from(detail?.querySelectorAll("[data-copy-inline]") ?? []);
+    if (!copies.length || copies.some(copy => Math.abs(copy.getBoundingClientRect().height - target) > 1)) return false;
     const groups = [...rows, ...(models ? [models] : [])];
     return rows.length === 3 && models !== null && groups.slice(1).every((row, index) =>
       row.getBoundingClientRect().top - groups[index].getBoundingClientRect().bottom <= gap + 1
@@ -132,6 +135,15 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await inspector.getByRole("tab", {name: "Schema", exact: true}).click();
   await check(inspector).toContainText("synthetic-call-schema");
   await check(inspector.locator("[data-trace-timing]")).toContainText("開始時刻");
+  check(await page.evaluate(() => {
+    const fields = Array.from(document.querySelectorAll("[data-trace-timing] dt"));
+    return fields.length === 2 && fields.every(label => {
+      const value = label.nextElementSibling;
+      if (!value) return false;
+      const a = label.getBoundingClientRect(), b = value.getBoundingClientRect();
+      return a.right <= b.left && Math.abs((a.top + a.height / 2) - (b.top + b.height / 2)) <= 1;
+    });
+  }, undefined)).toBe(true);
   await check(inspector.locator("[data-trace-technical]")).toContainText("Span name");
   check(await page.evaluate(() => {
     const fields = Array.from(document.querySelectorAll("[data-trace-technical] dd"))

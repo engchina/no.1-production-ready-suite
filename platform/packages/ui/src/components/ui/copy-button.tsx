@@ -2,6 +2,7 @@ import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { copyTextToClipboard } from "../../lib/clipboard";
+import { cn } from "../../lib/utils";
 import { toast } from "../../store/toast-store";
 import { Button, type ButtonProps } from "./button";
 
@@ -14,6 +15,8 @@ export type CopyButtonProps = Omit<
 > & {
   /** 既定は secondary。文字のすぐ横に置く小さな操作（ID の横など）は ghost。 */
   variant?: "secondary" | "ghost";
+  /** 読み取り専用の行内操作。ポインターでは24px、タッチでは標準44pxを保つ。 */
+  inline?: boolean;
   /**
    * コピーする文字。関数なら押したときに求める。Promise を返す（押してから取得する）と、取得の間は `loading` にし、
    * Safari のために取得を待つ前に `ClipboardItem` へ渡す。
@@ -54,6 +57,9 @@ export function CopyButton({
   testId,
   variant = "secondary",
   iconOnly,
+  inline = false,
+  className,
+  size,
   ...props
 }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
@@ -101,6 +107,9 @@ export function CopyButton({
         iconOnly={iconOnly}
         aria-label={iconOnly ? label : undefined}
         {...props}
+        size={inline ? "sm" : size}
+        className={cn(inline && "[--button-height-sm:var(--control-height-inline)]", className)}
+        data-copy-inline={inline ? "" : undefined}
         icon={copied ? Check : Copy}
         loading={copying}
         data-copy-state={copied ? "copied" : "idle"}

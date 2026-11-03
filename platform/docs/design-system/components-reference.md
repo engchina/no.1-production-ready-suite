@@ -2466,7 +2466,8 @@ type PreconditionBannerProps = {
 | secure context でない（http の配備）・Clipboard API が無いときは隠した textarea と `execCommand("copy")` で書き、フォーカスを戻す（`copyTextToClipboard`） | 自作の CA を入れる前の http の確認でもコピーできる |
 | 見た目は共有の `Button`（既定 `variant="secondary"`、文字のすぐ横の小さな操作は `ghost`）。`size` は同じ行の部品と同じ値を渡す（内容のコピーは `sm`、`FieldActionRow` の中は欄と同じ `md`） | README §4「操作部品の高さと幅」。`type="button"` 固定でフォームを送信しない |
 
-- props: `text`（`string` / `() => string | Promise<string>`）・`label`・`copiedMessage`・`failedMessage`・`onCopyError?(message)`・`onCopied?`・`testId?`・`variant?`（`secondary` / `ghost`）と `Button` の `size` / `iconOnly` / `disabled` / `aria-label` / `className` など（`icon` / `loading` / `onClick` / `children` は部品が持つ）。
+- 読み取り専用の識別子・時刻の行内コピーは `inline` と `iconOnly`・`variant="ghost"` を組み合わせる。ポインターでは `--control-height-inline`（24px）、タッチ端末では既定の44pxにする。フォームの欄や主要操作の高さは変更しない（#4246）。
+- props: `text`（`string` / `() => string | Promise<string>`）・`label`・`copiedMessage`・`failedMessage`・`onCopyError?(message)`・`onCopied?`・`testId?`・`variant?`（`secondary` / `ghost`）・`inline?` と `Button` の `size` / `iconOnly` / `disabled` / `aria-label` / `className` など（`icon` / `loading` / `onClick` / `children` は部品が持つ）。
 - 状態は `data-copy-state="idle" | "copied"` でも見える（e2e はこれと `role="status"` の文言で確かめる）。
 - 単体テスト: `platform/packages/ui/tests/copy-button.test.tsx`・`tests/clipboard.test.ts`。
 

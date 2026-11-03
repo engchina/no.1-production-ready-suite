@@ -239,7 +239,7 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
                 )}
               >
                 {field.copyValue && !field.copyLabel ? <time dateTime={field.copyValue} title={field.copyValue}>{field.value}</time> : <span>{field.value}</span>}
-                {field.copyValue ? <CopyButton text={field.copyValue} label={field.copyLabel ?? `${field.label}: ${labels.copyOriginalTime}`} copiedMessage={field.copyLabel ? labels.copied : labels.copiedTime} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /> : null}
+                {field.copyValue ? <CopyButton inline text={field.copyValue} label={field.copyLabel ?? `${field.label}: ${labels.copyOriginalTime}`} copiedMessage={field.copyLabel ? labels.copied : labels.copiedTime} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /> : null}
               </dd>
             </div>
           ))}
@@ -286,7 +286,7 @@ export function RunStepTiming({startedAt, finishedAt, labels: input}: {startedAt
   return <RunStepDetailsBody details={{fields: [
     {label: labels.startedAt, value: startedAt ? formatRunDateTime(startedAt, {seconds: true, timeZone: true}) : labels.notRecorded, copyValue: startedAt ?? undefined},
     {label: labels.finishedAt, value: finishedAt ? formatRunDateTime(finishedAt, {seconds: true, timeZone: true}) : labels.notRecorded, copyValue: finishedAt ?? undefined},
-  ]}} labels={labels} />;
+  ]}} labels={labels} className="[&_dl]:grid-cols-[4rem_minmax(0,1fr)] @md:[&_dl]:grid-cols-[10rem_minmax(0,1fr)]" />;
 }
 
 /** 呼び出しの内容は選んだタブだけ描画し、大きい JSON を同時に展開しない。 */

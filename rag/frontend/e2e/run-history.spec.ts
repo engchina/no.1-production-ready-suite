@@ -1092,7 +1092,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expect(step.getByText(result, {exact: true})).toHaveCount(1);
     await timeline.screenshot({path: testInfo.outputPath("timeline-no-duplicate-summary.png")});
   });
-  test("軌跡の識別子・時刻・技術属性の行間が揃う", async ({page}, testInfo) => {
+  test("軌跡の識別子・時刻は行内コピーの寸法、文字属性は本文の行高に揃う", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});
     await mockRuns(page, [row]);
@@ -1107,15 +1107,22 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     const inspector = page.locator("[data-trace-inspector]");
     await expect(inspector.locator("[data-trace-processing-content]")).toHaveCount(0);
     const rows = await inspector.locator("dd").evaluateAll(nodes => nodes.map(node => {
-      const box = node.getBoundingClientRect();
-      return {top: box.top, bottom: box.bottom, height: box.height};
+      const button = node.querySelector("button");
+      const value = node.querySelector("span, time");
+      return {height: node.getBoundingClientRect().height, copy: Boolean(button),
+        valueHeight: value?.getBoundingClientRect().height ?? 0,
+        buttonHeight: button?.getBoundingClientRect().height ?? 0,
+        target: matchMedia("(pointer: coarse)").matches ? 44 : 24};
     }));
     expect(rows.length).toBeGreaterThanOrEqual(5);
-    const heights = rows.map(row => row.height);
-    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
-    if (testInfo.project.name === "desktop") {
-      const gaps = rows.slice(1).map((row, index) => row.top - rows[index].bottom);
-      expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
+    expect(rows.filter(row => row.copy)).toHaveLength(3);
+    for (const row of rows) {
+      if (row.copy) {
+        expect(Math.abs(row.buttonHeight - row.target)).toBeLessThanOrEqual(1);
+        expect(row.height).toBeLessThanOrEqual(Math.max(row.valueHeight, row.target) + 1);
+      } else {
+        expect(row.height).toBeLessThanOrEqual(row.valueHeight + 1);
+      }
     }
     await expect(inspector.locator("time")).toHaveCount(2);
     await expectNoPageOverflow(page);
