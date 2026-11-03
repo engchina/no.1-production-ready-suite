@@ -71,6 +71,47 @@ def test_unknown_content_type_is_detected_from_the_extension(
     assert extraction.parser_artifacts["source_map"]["scheme"] == scheme
 
 
+@pytest.mark.parametrize("encoding", ["cp932", "euc_jp"])
+@pytest.mark.parametrize(
+    ("extension", "content_type", "source"),
+    [
+        (".txt", "text/plain", "\n\n".join(f"第{i}段落の合成の値" for i in range(900))),
+        (
+            ".md",
+            "text/markdown",
+            "\n\n".join(f"# 見出し{i}\n\n合成の値{i}" for i in range(500)),
+        ),
+        (".csv", "text/csv", "番号,値\n" + "".join(f"{i},合成の値{i}\n" for i in range(800))),
+        (
+            ".tsv",
+            "text/tab-separated-values",
+            "番号\t値\n" + "".join(f"{i}\t合成の値{i}\n" for i in range(800)),
+        ),
+        (
+            ".json",
+            "application/json",
+            json.dumps({f"k{i}": f"合成の値{i}" for i in range(500)}, ensure_ascii=False),
+        ),
+        (
+            ".jsonl",
+            "application/x-ndjson",
+            "".join(
+                json.dumps({"a": f"合成の値{i}"}, ensure_ascii=False) + "\n" for i in range(500)
+            ),
+        ),
+    ],
+)
+def test_japanese_legacy_encoding_keeps_text_and_positions(
+    encoding: str, extension: str, content_type: str, source: str
+) -> None:
+    data = source.encode(encoding)
+    extraction = _parse(data, content_type, extension)
+    assert "合成の値" in "\n".join(element.text for element in extraction.elements)
+    source_map = extraction.parser_artifacts["source_map"]
+    assert source_map["source_length"] == len(source)
+    assert set(source_map["elements"]) == {element.element_id for element in extraction.elements}
+
+
 def test_broken_paragraph_lines_join_to_one_element_at_paragraph_start() -> None:
     source = "\n\n".join(
         f"段落 {i} の 1 行目 です よ と\n段落 {i} の 2 行目 です よ" for i in range(500)

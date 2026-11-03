@@ -16,7 +16,6 @@ from typing import Annotated, Any, Literal, cast
 from urllib.parse import quote
 from uuid import uuid4
 
-from charset_normalizer import from_bytes
 from fastapi import (
     APIRouter,
     Depends,
@@ -32,6 +31,7 @@ from fastapi import (
 from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
 from pr_backend_core.oracle_errors import oracle_error_codes
 from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
+from rag_parser_core.text_encoding import detect_text_match
 
 from app.api.errors import DocumentFileMissingError, SourceVersionStaleError
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
@@ -6439,7 +6439,7 @@ def _detect_text_charset(data: bytes) -> str:
         return "utf-8"
     except UnicodeDecodeError:
         pass
-    match = from_bytes(data).best()
+    match = detect_text_match(data)
     if match is None or not match.encoding:
         return "utf-8"
     # python codec 名（例: cp932 / euc_jis_2004）を WHATWG ラベルへ寄せる
