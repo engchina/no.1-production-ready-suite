@@ -793,3 +793,41 @@ async def test_native_cosine_threshold_preserves_independent_text_and_actual_rrf
             )
     null_hit = next(hit for hit in hits if hit.text == texts[2])
     assert null_hit.metadata["cosine_similarity"] is None
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("backend", ["oracle_native", "sudachi"])
+@pytest.mark.parametrize("mode", [SearchMode.VECTOR, SearchMode.KEYWORD, SearchMode.HYBRID])
+async def test_zero_candidate_limit_keeps_all_scoped_rows(backend: str, mode: SearchMode) -> None:
+    token = uuid4().hex[:10]
+    word = f"synthetic{token}"
+    settings = get_settings().model_copy(
+        update={
+            "rag_hybrid_search_backend": backend,
+            "rag_min_similarity": 0.0,
+            "rag_native_vector_exact_max_chunks": 1,
+        }
+    )
+    oracle = OracleClient(settings)
+    document_id = await _indexed_document(
+        oracle,
+        file_name=f"synthetic-unlimited-{token}.txt",
+        chunks=[
+            Chunk(
+                text=f"{word} item {i}",
+                index=i,
+                start_offset=0,
+                end_offset=30,
+                metadata={"page_number": i + 1},
+            )
+            for i in range(3)
+        ],
+    )
+    results = await oracle.search_many(
+        [(word, [0.1] * 1536, mode)], 0, {"document_id": document_id}
+    )
+    hits = results[0]
+    if failure := getattr(hits, "failure", None):
+        raise AssertionError("検索の実行に失敗しました") from failure
+    assert len(hits) == 3
+    assert {hit.document_id for hit in hits} == {document_id}

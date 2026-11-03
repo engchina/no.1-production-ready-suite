@@ -232,10 +232,10 @@ for (const viewport of [
       await expect(page.getByText("回答の検索と生成の設定を保存しました。")).toBeVisible();
       expect(saved).toEqual([
         {
-          retrieval_query_limit: 600,
-          rerank_top_n: 0,
-          min_similarity: 0.05,
-          rerank_min_relevance_score: 0.4,
+          retrieval_query_limit: 300,
+          rerank_top_n: 300,
+          min_similarity: 0.2,
+          rerank_min_relevance_score: 0.2,
           hybrid_search_backend: "sudachi",
           rrf_method_ratio: [1, 1],
           rrf_source_ratio: [7, 3],
@@ -788,8 +788,10 @@ for (const theme of ["light", "dark"] as const) {
     const score = card.getByRole("spinbutton", { name: "再ランキングの関連度スコア下限", exact: true });
     const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
     const reset = card.getByRole("button", { name: "変更を破棄", exact: true });
-    await expect(search).toHaveValue("600");
-    await expect(topN).toHaveValue("0");
+    await expect(search).toHaveValue("300");
+    await expect(topN).toHaveValue("300");
+    await expect(min).toHaveValue("0.2");
+    await expect(score).toHaveValue("0.2");
     await expect(card.getByRole("switch", { name: "登録ルールによる確認の使用", exact: true })).not.toBeChecked();
     await expect(topN).toHaveAccessibleDescription(/0 は追加制限なし.*明示添付.*別枠/);
     const boxes = await Promise.all([search.boundingBox(), min.boundingBox(), topN.boundingBox(), score.boundingBox()]);
@@ -808,10 +810,15 @@ for (const theme of ["light", "dark"] as const) {
     const rerankGroup = card.getByTestId("answering-rerank-block");
     await rerankGroup.scrollIntoViewIfNeeded();
     await rerankGroup.screenshot({ path: testInfo.outputPath("rerank-count.png") });
-    for (const invalid of ["", "0", "1.5", "2001"]) {
+    for (const invalid of ["", "-1", "1.5", "2001"]) {
       await search.fill(invalid);
       await expect(save).toBeDisabled();
     }
+    await search.fill("0");
+    await expect(save).toBeEnabled();
+    await save.click();
+    expect(saved.at(-1)).toMatchObject({retrieval_query_limit: 0});
+    await expect(search).toHaveAccessibleDescription(/0 は追加制限なし/);
     await search.fill("150");
     for (const invalid of ["", "-1", "1.5", "2001"]) {
       await topN.fill(invalid);

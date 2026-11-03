@@ -530,6 +530,8 @@ class _NativeScope:
     vector_chunks: int
     # 読んだ範囲に含まれる chunk set の範囲の全部(範囲が今も有効かの確認に使う)。
     scope_ids: tuple[int, ...] = ()
+    # 0=件数制限なしを原生APIの正整数へ変換するための、許可範囲の実行時の全行数。
+    total_chunks: int = 0
 
 
 class NativeSearchRows(list[dict[str, object]]):
@@ -552,7 +554,7 @@ def _native_vector_retrieval(
     *, method: str, scope: _NativeScope, top_k: int, exact_max_chunks: int, returned: int
 ) -> dict[str, object]:
     """ベクトルの分岐の読み方と不足を診断に残す形にする(#4134・#4097)。"""
-    expected = min(top_k, scope.vector_chunks)
+    expected = min(top_k, scope.vector_chunks) if top_k else scope.vector_chunks
     return {
         "method": method,
         "scope_vector_chunks": scope.vector_chunks,
@@ -573,7 +575,8 @@ def _native_exact_vector_statement(
     掛け直す。権限の条件を許可された全行に掛けると、それだけで秒単位になることがある(#4133)。
     上位の行を距離だけで決め、本文・metadata はその行だけ読む(#2137)。
     """
-    top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=2000)
+    top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=0, maximum=2000)
+    fetch_clause = f"FETCH EXACT FIRST {top_k_literal} ROWS ONLY" if top_k else ""
     binds: dict[str, object] = {}
     if scope.complete_scopes:
         binds["exact_scope_ids"] = json.dumps(scope.complete_scopes)
@@ -624,7 +627,7 @@ def _native_exact_vector_statement(
             WHERE candidate.embedding IS NOT NULL AND {allowed_sql}
             ORDER BY distance ASC, candidate.document_id ASC, candidate.chunk_index ASC,
                 candidate.chunk_id ASC
-            FETCH EXACT FIRST {top_k_literal} ROWS ONLY
+            {fetch_clause}
         ) nearest
         JOIN rag_chunks c ON c.chunk_id = nearest.chunk_id
         JOIN rag_documents d ON d.document_id = c.document_id
@@ -694,7 +697,7 @@ def _merge_native_filter_batches(
             -_float_value(row.get("native_similarity", 0)),
             *stable(row),
         ),
-    )[:top_k]
+    )[: top_k or None]
     text_rows: list[dict[str, object]] = []
     previous_score: float | None = None
     rank = 0
@@ -702,7 +705,7 @@ def _merge_native_filter_batches(
         sorted(
             (row for row in rows.values() if _float_value(row.get("native_text_score", 0)) > 0),
             key=lambda row: (-_float_value(row.get("native_text_score", 0)), *stable(row)),
-        )[:top_k],
+        )[: top_k or None],
         1,
     ):
         score = _float_value(row.get("native_text_score", 0))
@@ -1163,7 +1166,7 @@ class OracleClient:
                 fused[chunk_id],
                 scores[chunk_id],
             ),
-        )[:top_k]
+        )[: top_k or None]
         fused_count = len(ranked_ids)
         branch_metadata: dict[str, MetadataValue] = {
             "retrieval_vector_count": len(vector_hits),
@@ -8086,6 +8089,7 @@ class OracleClient:
                 scope_ranges=[],
                 vector_chunks=vector_chunks,
                 scope_ids=tuple(allowed_counts),
+                total_chunks=sum(allowed_counts.values()),
             )
         ids = await self._fetch_all(
             f"""SELECT c.chunk_id, c.native_scope_id {_NATIVE_SCOPE_JOINS}
@@ -8134,6 +8138,8 @@ class OracleClient:
             scope_ranges=scope_ranges,
             vector_chunks=vector_chunks,
             scope_ids=tuple(allowed_counts),
+            total_chunks=sum(allowed_counts.values())
+            + sum(row.get("native_scope_id") is None for row in ids),
         )
 
     async def _native_scope_is_stale(
@@ -8294,7 +8300,7 @@ class OracleClient:
                 allowed_scopes=batch.allowed_scopes,
                 allowed_scope_spans=batch.allowed_scope_spans,
                 allowed_scope_ranges=batch.allowed_scope_ranges,
-                limit=top_k,
+                limit=top_k or scope.total_chunks,
                 rank_constant=self._settings.rag_rrf_k,
                 accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
                 method_ratio=self._settings.rag_rrf_method_ratio,
@@ -15815,7 +15821,7 @@ def _graph_current_membership_predicate(alias: str) -> str:
 
 def _oracle_vector_fetch_clause(*, top_k: int, target_accuracy: int) -> str:
     """Oracle AI Vector Search の approximate top-k 句を安全な整数 literal で返す。"""
-    top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=1000)
+    top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=2000)
     target_accuracy_literal = _bounded_int_literal(
         target_accuracy,
         name="oracle_vector_target_accuracy",
@@ -15844,8 +15850,10 @@ def vector_search_statement(
     """
     document_sql, chunk_sql, binds = _oracle_retrieval_where_split(filters, vector_prefilter=True)
     binds.update({"embedding": embedding_bind, "min_similarity": settings.rag_min_similarity})
-    if exact:
-        top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=1000)
+    if top_k == 0:
+        fetch_clause = ""
+    elif exact:
+        top_k_literal = _bounded_int_literal(top_k, name="top_k", minimum=1, maximum=2000)
         fetch_clause = f"FETCH EXACT FIRST {top_k_literal} ROWS ONLY"
     else:
         # backend の中の決定論の解決(メモ化した値。#828・#3218)。
@@ -15951,7 +15959,7 @@ def _keyword_search_sql(*, select_list: str, query_bind: str, where_sql: str) ->
                 c.chunk_index ASC,
                 c.chunk_id ASC
         )
-        WHERE ROWNUM <= :top_k
+        WHERE (:top_k = 0 OR ROWNUM <= :top_k)
         """,
         select_list=select_list,
         hits_view=_keyword_hits_view_sql(query_bind=query_bind, where_sql=where_sql),
@@ -18730,7 +18738,7 @@ def _with_citation_hits(
         for hit in citation_hits
     ]
     head_ids = {hit.chunk_id for hit in head}
-    return [*head, *(hit for hit in fused if hit.chunk_id not in head_ids)][:top_k]
+    return [*head, *(hit for hit in fused if hit.chunk_id not in head_ids)][: top_k or None]
 
 
 def _with_retrieval_metadata(
