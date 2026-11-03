@@ -732,3 +732,30 @@ for (const theme of ["light", "dark"] as const) {
     await page.screenshot({ path: testInfo.outputPath("threshold-rerank-settings.png") });
   });
 }
+
+test("回答の検索と生成の設定は群ごとに枠と見出しがあり、Rerank の下限は切り替えと同じ塊に入る (#4238)", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockRetrievalCards(page);
+  await mockAnsweringSettings(page, []);
+  await page.goto("/settings/retrieval");
+  const card = page.getByTestId("answering-settings-card");
+  for (const title of ["検索文の作成", "検索の実行", "検索結果の統合（RRF）", "回答の生成"]) {
+    const group = card.getByRole("region", { name: title, exact: true });
+    await expect(group).toBeVisible();
+    await expect(group).toHaveCSS("border-top-style", "solid");
+    await expect(group).toHaveCSS("border-top-width", "1px");
+  }
+  // 区切りの線は切り替えの行の上にだけあり、下限の欄は切り替えの行の続きとして余白を持つ。
+  const rerankBlock = card.getByTestId("answering-rerank-block");
+  const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
+  const boxes = await Promise.all([rerankBlock.boundingBox(), options.boundingBox()]);
+  expect(Math.abs((boxes[0]?.width ?? 0) - (boxes[1]?.width ?? 0))).toBeLessThanOrEqual(2); // 親の枠の分だけ狭い
+  await expect(rerankBlock.locator("#answering-rerank-min-score")).toBeVisible();
+  const label = page.getByText("再ランキングの関連度スコア下限", { exact: true });
+  const [labelBox, rowBox] = await Promise.all([label.boundingBox(), rerankBlock.boundingBox()]);
+  expect((labelBox?.y ?? 0) - (rowBox?.y ?? 0)).toBeGreaterThan(40);
+  await expectNoPageOverflow(page);
+  await rerankBlock.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("rerank-block.png") });
+  await card.getByRole("region", { name: "検索文の作成", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("groups.png") });
+});

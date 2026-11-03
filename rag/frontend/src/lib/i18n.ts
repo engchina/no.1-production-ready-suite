@@ -4322,6 +4322,8 @@ export const ja = {
   "settings.answering.rrfInvalid": "比重は 0 以上で指定し、各組の少なくとも一方を 0 より大きくしてください。",
   "answer.step.rrfFusion": "検索結果の統合（RRF）",
   "settings.answering.searchExpressionTitle": "検索文の作成",
+  "settings.answering.searchExecutionTitle": "検索の実行",
+  "settings.answering.answerGenerationTitle": "回答の生成",
   "settings.answering.runtimeRulesConfirmation": "登録ルールによる確認の使用",
   "settings.answering.runtimeRulesConfirmationHint": "登録ルールの確認設定を回答前の確認に使用します。登録内容は検索・回答プロファイルの知識で管理します。この設定は、システムに必要な確認、安全チェック、権限管理や他の独立した機能を無効にしません。",
   "settings.answering.runtimeRulesAnswer": "回答生成での登録ルールの使用",
