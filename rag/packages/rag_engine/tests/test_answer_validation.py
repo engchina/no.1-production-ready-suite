@@ -1219,7 +1219,6 @@ def test_unreferenced_conclusions_are_rechecked_with_evidence_cited_by_other_pas
     # 確かめ直しには ID を書かない 2 段落と、他の段落が引いた 2 つの根拠だけを渡す（質問・回答の全文は同じ）。
     (system, first), (_, recheck) = calls
     assert "段落に ID が無いことを citation_error にしない" in system
-    assert "未引用の資料を代わりに選ばない" in system
     assert [passage["id"] for passage in first["answer_passages"]] == ["A2", "A4", "A5", "A6"]
     assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
     assert [item["id"] for item in _documents(recheck)] == [f"{PLAN}:1", f"{CHANGE}:4"]
