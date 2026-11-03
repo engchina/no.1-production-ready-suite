@@ -6318,66 +6318,103 @@ def answer_question_result(
                 runtime_knowledge=runtime_knowledge,
             )
 
-        overflow_results, overflow_trace = search_overflow_requests(
-            request_text,
-            tokenize=lambda text: tokenize_text_search_query_with_trace(text, domain_keywords=overflow_keywords, config=overflow_config),
-            retrieve=overflow_retrieve,
-            extra_budget=extra_budget,
-            coverage_budget=_request_coverage_budget(settings),
-            usage=coverage_usage,
-            searched_queries=retrieval_queries,
-            initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
-            allow_split=not caller_planned and not getattr(settings, "retrieval_original_query_only", False),
-            skip_reason="caller_planned" if caller_planned else "original_query_only",
-        )
-        overflow_added: set[str] = set()
-        existing_overflow_ids = {record.chunk_uid or record.id for record in context.records}
-        overflow_parents = select_new_parents(
-            [TargetedRetrieval(result.request_id, (result.query,), result.context.evidence_tree) for result in overflow_results],
-            existing_overflow_ids,
-            _request_coverage_budget(settings).max_chunks,
-        )
-        if overflow_parents:
-            bundle = context_bundle_from_parent_evidence(
-                tuple(replace(parent, reason="query_overflow") for _, parent in overflow_parents), max_chars=MAX_CONTEXT_CHARS
+        with _execution_step(
+            "検索上限の要求別補完", "全文検索の語数上限に達した質問を、元の要求と共通条件に分けて検索します。"
+        ) as overflow_step:
+            overflow_step.input(
+                lambda: {
+                    "原質問": request_text,
+                    "既検索文": list(retrieval_queries),
+                    "既存根拠": candidate_snapshot(context.records),
+                    "追加検索予算": extra_budget.to_payload(),
+                    "要求別の予算": asdict(_request_coverage_budget(settings)),
+                    "使用済みの要求別予算": asdict(coverage_usage),
+                    "呼出側で計画済み": caller_planned,
+                    "原質問のみ": bool(getattr(settings, "retrieval_original_query_only", False)),
+                    "検索範囲": selected_retrieval_scope,
+                    "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
+                }
             )
-            candidate = _merge_crag_evidence(
-                context,
-                AnswerContext(records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree),
-                normalized_question,
-                max_records=len(context.records) + len(bundle.records),
-                max_chars=MAX_CONTEXT_CHARS * 2,
+            overflow_results, overflow_trace = search_overflow_requests(
+                request_text,
+                tokenize=lambda text: tokenize_text_search_query_with_trace(
+                    text, domain_keywords=overflow_keywords, config=overflow_config
+                ),
+                retrieve=overflow_retrieve,
+                extra_budget=extra_budget,
+                coverage_budget=_request_coverage_budget(settings),
+                usage=coverage_usage,
+                searched_queries=retrieval_queries,
+                initial_query_overflowed=any(item.get("truncated") for item in text_search_info.tokenization_traces),
+                allow_split=not caller_planned and not getattr(settings, "retrieval_original_query_only", False),
+                skip_reason="caller_planned" if caller_planned else "original_query_only",
             )
-            merged_ids = {record.chunk_uid or record.id for record in candidate.records}
-            if existing_overflow_ids <= merged_ids:
-                context = replace(
-                    candidate,
-                    expansion_records=tuple(
-                        dict(
-                            (record.chunk_uid or record.id, record)
-                            for record in (
-                                *context.expansion_records,
-                                *(record for result in overflow_results for record in result.context.expansion_records),
-                            )
-                        ).values()
-                    ),
-                    preferred_child_ids=context.preferred_child_ids,
-                    ranked_candidates=context.ranked_candidates,
-                    deferred_records=context.deferred_records,
-                    document_selection=context.document_selection,
+            overflow_added: set[str] = set()
+            existing_overflow_ids = {record.chunk_uid or record.id for record in context.records}
+            overflow_parents = select_new_parents(
+                [TargetedRetrieval(result.request_id, (result.query,), result.context.evidence_tree) for result in overflow_results],
+                existing_overflow_ids,
+                _request_coverage_budget(settings).max_chunks,
+            )
+            if overflow_parents:
+                bundle = context_bundle_from_parent_evidence(
+                    tuple(replace(parent, reason="query_overflow") for _, parent in overflow_parents), max_chars=MAX_CONTEXT_CHARS
                 )
-                overflow_added = merged_ids - existing_overflow_ids
-        coverage_usage.chunks += len(overflow_added)
-        overflow_trace["added_chunk_ids"] = sorted(overflow_added)
-        if overflow_trace.get("triggered"):
-            with _execution_step(
-                "検索上限の要求別補完", "全文検索の語数上限に達した質問を、元の要求と共通条件に分けて検索します。"
-            ) as overflow_step:
+                candidate = _merge_crag_evidence(
+                    context,
+                    AnswerContext(
+                        records=list(bundle.records), text=bundle.text, evidence=bundle.evidence, evidence_tree=bundle.evidence_tree
+                    ),
+                    normalized_question,
+                    max_records=len(context.records) + len(bundle.records),
+                    max_chars=MAX_CONTEXT_CHARS * 2,
+                )
+                merged_ids = {record.chunk_uid or record.id for record in candidate.records}
+                if existing_overflow_ids <= merged_ids:
+                    context = replace(
+                        candidate,
+                        expansion_records=tuple(
+                            dict(
+                                (record.chunk_uid or record.id, record)
+                                for record in (
+                                    *context.expansion_records,
+                                    *(record for result in overflow_results for record in result.context.expansion_records),
+                                )
+                            ).values()
+                        ),
+                        preferred_child_ids=context.preferred_child_ids,
+                        ranked_candidates=context.ranked_candidates,
+                        deferred_records=context.deferred_records,
+                        document_selection=context.document_selection,
+                    )
+                    overflow_added = merged_ids - existing_overflow_ids
+            coverage_usage.chunks += len(overflow_added)
+            overflow_trace["added_chunk_ids"] = sorted(overflow_added)
+            overflow_step.output(
+                lambda: {
+                    "検索結果": overflow_trace,
+                    "要求ごとの返却根拠": [
+                        {"要求ID": item.request_id, "検索文": item.query, "候補": candidate_snapshot(item.context.records)}
+                        for item in overflow_results
+                    ],
+                    "新規採用ID": sorted(overflow_added),
+                    "処理後の根拠": candidate_snapshot(context.records),
+                }
+            )
+            if overflow_trace.get("triggered"):
                 statuses = [str(row["status"]) for row in overflow_trace["requests"]]
                 overflow_step.result(f"要求 {len(statuses)} 件、新しい根拠 {len(overflow_added)} 件")
                 overflow_step.field("追加検索の残り", str(extra_budget.remaining))
                 overflow_step.field("未検索", str(sum(status.startswith("unsearched_") for status in statuses)))
                 overflow_step.field("失敗", str(statuses.count("failed")))
+            else:
+                overflow_step.skip(
+                    {
+                        "caller_planned": "呼出側が検索文を計画済みのため、要求別には分割しません。",
+                        "original_query_only": "原質問のみを検索する設定のため、要求別には分割しません。",
+                        "tokenization_failed": "検索語の抽出に失敗したため、補完検索を実行していません。",
+                    }.get(str(overflow_trace.get("skipped") or ""), "語数上限の超過がないため追加検索は不要です。")
+                )
         # 業務ガイドの手順が後に来るなら、その根拠から広げる分の入力を残す。
         context, section_expansion = complete_sections(
             context, "main", reserve=guide_plan is not None and bool(getattr(settings, "guide_step_retrieval_enabled", False))
@@ -6405,6 +6442,29 @@ def answer_question_result(
             with _execution_step(
                 "業務ガイドの手順ごとの検索", "業務ガイドの手順ごとに検索し、手順が参照する資料の頁の根拠を回答の材料に加えます。"
             ) as guide_step:
+                guide_step.input(
+                    lambda: {
+                        "質問": normalized_question,
+                        "手順計画": asdict(guide_plan),
+                        "既存根拠": candidate_snapshot(context.records),
+                        "追加検索予算": extra_budget.to_payload(),
+                        "検索範囲": selected_retrieval_scope,
+                        "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
+                        "起点数": chunk_top_k,
+                        "前後それぞれのChunk数": chunk_neighbor_count,
+                        "再ランキング": effective_rerank_enabled,
+                        "設定": {
+                            key: getattr(settings, key, None)
+                            for key in (
+                                "guide_step_retrieval_enabled",
+                                "guide_step_max_queries",
+                                "guide_step_chunks_per_step",
+                                "guide_step_deadline_seconds",
+                                "guide_reference_max_chunks",
+                            )
+                        },
+                    }
+                )
                 context, guide_step_trace, step_sources = _cover_guide_steps(
                     normalized_question,
                     context,
@@ -6430,10 +6490,17 @@ def answer_question_result(
                     guide_acquisition=tuple((guide_step_trace.get("required_acquisition") or {}).get("targets") or ()),
                     guide_acquisition_notices=_guide_acquisition_notices(guide_step_trace),
                 )
+                guide_step.output(
+                    lambda: {
+                        "検索と取得の記録": guide_step_trace,
+                        "手順と根拠の対応": step_sources,
+                        "処理後の根拠": candidate_snapshot(context.records),
+                        "新規採用ID": list(guide_step_trace.get("added_chunk_ids") or ()),
+                    }
+                )
                 skipped = str(guide_step_trace.get("skipped") or "")
                 if skipped:
-                    guide_step.hide()
-                    guide_step.result(_GUIDE_STEP_SKIP_LABELS.get(skipped, f"しない（{skipped}）"))
+                    guide_step.skip(_GUIDE_STEP_SKIP_LABELS.get(skipped, f"しない（{skipped}）"))
                 else:
                     steps = guide_step_trace.get("steps") or []
                     guide_step.result(
@@ -6525,6 +6592,15 @@ def answer_question_result(
             # 読めないモデルは根拠の本文（取り込み時に作った図の説明を含む）だけで答える。質問の語で要否を決めない。
             has_images = any(record_has_image_evidence(record) for record in context.records)
             reads_images = answer_model_reads_images(settings, answer_llm_provider)
+            image_step.input(
+                lambda: {
+                    "質問": normalized_question,
+                    "根拠ID": [item.chunk_uid or item.id for item in context.records],
+                    "画像を含む根拠ID": [item.chunk_uid or item.id for item in context.records if record_has_image_evidence(item)],
+                    "回答モデルの指定": answer_llm_provider,
+                    "画像を読める": reads_images,
+                }
+            )
             image_evidence = (
                 answer_image_evidence(context.records, settings.output_dir, question=normalized_question)
                 if has_images and reads_images
@@ -6532,6 +6608,26 @@ def answer_question_result(
             )
             image_prompt_mode = _image_prompt_mode(image_evidence, settings, answer_llm_provider)
             attached = [item for item in image_evidence if item.get("prompt_path")] if image_prompt_mode == "vision_attachments" else []
+            image_step.output(
+                lambda: {
+                    "入力方式": image_prompt_mode,
+                    "準備画像数": len(image_evidence),
+                    "添付画像数": len(attached),
+                    "理由": (
+                        "no_image_evidence"
+                        if not has_images
+                        else "model_without_vision"
+                        if not reads_images
+                        else "no_attachable_image"
+                        if not attached
+                        else "attached"
+                    ),
+                    "画像": [
+                        {**{key: item.get(key) for key in ("image_id", "page", "visual_kind")}, "添付": item in attached}
+                        for item in image_evidence
+                    ],
+                }
+            )
             if not has_images:
                 # 記録の文からは省くが、処理の経過の段は出るので理由を残す（#2341）。
                 image_step.hide()
