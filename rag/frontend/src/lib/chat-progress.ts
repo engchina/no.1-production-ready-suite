@@ -43,10 +43,8 @@ const PIPELINE_DEFINITIONS: ChatProgressStepDefinitions = Object.fromEntries(
 export const CHAT_PROGRESS_DEFINITIONS: ChatProgressStepDefinitions = {
   [ANSWER_STEP_KIND]: {
     label: (_status, params) => answerStepDisplayName(text(params, "name")),
-    detail: (_status, params) => [
-      answerStepMeta({ note: text(params, "note") }),
-      typeof params.accepted === "boolean" ? t(params.accepted ? "answer.step.adopted" : "answer.step.notAdopted") : undefined,
-    ].filter(Boolean).join(" · ") || undefined,
+    detail: (_status, params) => answerStepMeta({ note: text(params, "note") }),
+    outcome: (_status, params) => typeof params.accepted === "boolean" ? t(params.accepted ? "answer.step.adopted" : "answer.step.notAdopted") : undefined,
     meta: (_status, params) =>
       answerStepMeta({ llmCalls: count(params, "llm_calls"), llmSends: count(params, "llm_sends") }),
   },

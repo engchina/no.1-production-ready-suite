@@ -2240,7 +2240,7 @@ class AnswerEngine:
 
     def _read_depth(self, candidate_limit: int) -> int:
         """検索文ごとの取得上限。融合後の候補数・多様化の有無・起点数とは独立。"""
-        return max(1, self._settings.rag_retrieval_query_limit)
+        return self._settings.rag_retrieval_query_limit
 
     async def _query_hits(
         self,

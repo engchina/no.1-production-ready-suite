@@ -126,6 +126,8 @@ def _settings(**overrides: Any) -> Settings:
             "oci_compartment_id": "ocid1.compartment.oc1..example",
             "rag_query_strategy": "simple_retrieval",
             "rag_answer_flow": "standard_rag",
+            # 融合の候補予算だけを検証し、検索ごとの既定上限とは切り離す。
+            "rag_retrieval_query_limit": 600,
             **overrides,
         }
     )
@@ -246,7 +248,7 @@ async def test_source_below_minimum_score_is_reported_as_insufficient(
     outcome = await AnswerEngine(
         _settings(),
         oracle=cast(Any, _RankedOracle(_ranked_chunks())),
-        genai=cast(Any, _ScoredGenAi(needed_score=0.26)),
+        genai=cast(Any, _ScoredGenAi(needed_score=0.16)),
     ).run(SearchRequest(query=QUESTION, generate_answer=True))
 
     assert outcome.diagnostics["outcome"] == "insufficient_evidence"

@@ -1675,3 +1675,35 @@ test("前後文脈と章節の読取・採用・重複を入力と結果で分�
   await expect(inspector).toContainText("記録されていません");
   await expectNoPageOverflow(page);
 });
+
+test("回答修正の方針・再生成の採否・最終採用回を分けて確認できる", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+  await mockRuns(page, [row]);
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+    {key: "root", spec: ragSpan.root(), at: [0, 4]},
+    {key: "round1", spec: ragSpan.step("回答文の生成と根拠確認（1回目）", "root"), at: [0, 1], params: {accepted: true, round: 1}, details: {fields: [{label: "採否", value: "採用"}]}},
+    {key: "check", spec: ragSpan.step("回答の修正が必要か確認する", "root"), at: [1, 1.1], details: {fields: [{label: "結果", value: "修正が必要です"}, {label: "指摘", value: "範囲を確認できない引用 1 件"}]}},
+    {key: "plan", spec: ragSpan.step("是正", "root"), at: [1.1, 1.2], details: {fields: [{label: "次の回答の作成", value: "2 回目"}, {label: "結果", value: "検査の指摘を渡して作り直します"}]}},
+    {key: "round2", spec: ragSpan.step("回答文の生成と根拠確認（2回目）", "root"), at: [1.2, 3], params: {accepted: false, round: 2}, details: {fields: [{label: "採否", value: "不採用（前の回の回答を維持）"}]}},
+    {key: "end", spec: ragSpan.step("是正の打ち切り", "root"), at: [3, 4], details: {fields: [{label: "結果", value: "改善が確認できないため、1回目の回答を採用しました。"}, {label: "最終採用", value: "1 回目"}]}},
+  ])});
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  await expect(timeline).toContainText("回答の修正が必要か確認する");
+  await expect(timeline).toContainText("回答の修正方針を決める");
+  await expect(timeline).toContainText("回答の修正を終了する");
+  const first = timeline.locator(`[data-run-timeline-step="${spanStepId("round1")}"]`);
+  const second = timeline.locator(`[data-run-timeline-step="${spanStepId("round2")}"]`);
+  await expect(first).toHaveAttribute("data-status", "done");
+  await expect(first).toContainText("採用");
+  await expect(second).toHaveAttribute("data-status", "done");
+  await expect(second).toContainText("不採用");
+  await timeline.screenshot({path: testInfo.outputPath("correction-adoption-timeline.png")});
+  await inspectTraceStep(page, timeline, spanStepId("end"));
+  const inspector = page.locator("[data-trace-inspector]");
+  await expect(inspector).toContainText("改善が確認できないため、1回目の回答を採用しました。");
+  await expectNoPageOverflow(page);
+  await inspector.screenshot({path: testInfo.outputPath("correction-final-round.png")});
+});
