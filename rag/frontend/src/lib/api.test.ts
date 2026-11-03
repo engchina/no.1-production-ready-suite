@@ -330,39 +330,29 @@ describe("api.request envelope", () => {
     expect(url).toContain("offset=40");
   });
 
-  it("listDocuments は縮退応答の warning_messages を data へ併設する", async () => {
+  it("一覧の読み取りの失敗は空のページにせず、error_code 付きの ApiError にする", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async () =>
-        jsonResponse({
-          data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
-          error_messages: [],
-          warning_messages: ["データベースに接続できませんでした。"],
-        })
+        jsonResponse(
+          {
+            data: null,
+            error_messages: ["データの読み取りがタイムアウトしました。"],
+            warning_messages: [],
+            error_code: "database_read_timeout",
+          },
+          503,
+        )
       )
     );
 
-    const page = await api.listDocuments();
-
-    expect(page.items).toEqual([]);
-    expect(page.warning_messages).toEqual(["データベースに接続できませんでした。"]);
-  });
-
-  it("正常応答では warning_messages が空配列になる", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(async () =>
-        jsonResponse({
-          data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
-          error_messages: [],
-          warning_messages: [],
-        })
-      )
-    );
-
-    const page = await api.listKnowledgeBases({ status: "ACTIVE" });
-
-    expect(page.warning_messages).toEqual([]);
+    await expect(api.listDocuments()).rejects.toMatchObject({
+      status: 503,
+      errorCode: "database_read_timeout",
+    });
+    await expect(api.listKnowledgeBases({ status: "ACTIVE" })).rejects.toMatchObject({
+      errorCode: "database_read_timeout",
+    });
   });
 
   it("knowledge base API は CRUD endpoint を呼び分ける", async () => {

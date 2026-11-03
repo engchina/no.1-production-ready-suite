@@ -2953,6 +2953,8 @@ class SelectAiFeedbackEntriesData(Page[SelectAiFeedbackEntry]):
     """
 
     runtime: str = "deterministic"
+    # 読み取りに失敗した（items が空でも 0 件ではない。理由は warnings。#4217）。
+    read_failed: bool = False
     profile_name: str = ""
     index_name: str = ""
     table_name: str = ""

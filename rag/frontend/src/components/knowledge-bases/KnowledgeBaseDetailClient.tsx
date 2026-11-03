@@ -6,7 +6,8 @@ import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { DocumentPicker, type DocumentPickerSelection } from "@/components/documents/DocumentPicker";
-import { EmptyState, ApiErrorState } from "@/components/StateViews";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
+import { EmptyState } from "@/components/StateViews";
 import { EditorTargetState } from "@/components/layout/EntityLayout";
 import { useAuth } from "@/components/security/AuthProvider";
 import {
@@ -24,6 +25,7 @@ import {
   RowActionMenu,
   SearchField,
   TimedLoadingState,
+  dataLoadView,
 } from "@production-ready/ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
@@ -240,6 +242,7 @@ function KnowledgeBaseDocuments({
   const assignButtonRef = useRef<HTMLButtonElement | null>(null);
   const page = documents.data;
   const total = page?.total ?? 0;
+  const load = dataLoadView(documents, { isEmpty: total === 0 });
 
   const closeAssignment = () => {
     setAssigning(false);
@@ -301,7 +304,7 @@ function KnowledgeBaseDocuments({
           ) : undefined
         }
         count={listCountProps({
-          matchedTotal: page?.total,
+          matchedTotal: load.phase === "failed" ? undefined : page?.total,
           filtered: query !== "",
           allTotal: allTotal.data,
         })}
@@ -310,17 +313,27 @@ function KnowledgeBaseDocuments({
       {canAssign && assigning ? (
         <DocumentAssignment id="knowledge-base-add-documents" knowledgeBase={knowledgeBase} onClose={closeAssignment} />
       ) : null}
-      {documents.isError ? (
-        <ApiErrorState
+      {load.phase === "stale" ? (
+        <DataLoadStaleNotice
+          error={documents.error}
+          dataUpdatedAt={documents.dataUpdatedAt}
+          onRetry={() => void documents.refetch()}
+          retrying={documents.isFetching}
+          testId="knowledge-base-documents-stale"
+        />
+      ) : null}
+      {load.phase === "failed" ? (
+        <DataLoadFailure
           error={documents.error}
           fallback={t("knowledgeBases.error.documents")}
           onRetry={() => void documents.refetch()}
+          testId="knowledge-base-documents-load-failure"
         />
       ) : documents.isPending ? (
         <KnowledgeBaseDocumentsSkeleton />
       ) : total > 0 ? (
         <>
-          {documents.data.items.length === 0 ? (
+          {(page?.items.length ?? 0) === 0 ? (
             // 外した結果いまのページが空になったら、OffsetPagination が最後のページへ戻す。戻る間は空の案内を出さない。
             <KnowledgeBaseDocumentsSkeleton />
           ) : (
@@ -329,7 +342,7 @@ function KnowledgeBaseDocuments({
               aria-busy={documents.isPlaceholderData || undefined}
               data-testid="knowledge-base-documents-list"
             >
-              {documents.data.items.map((document) => (
+              {page?.items.map((document) => (
                 <KnowledgeBaseDocumentRow
                   key={document.id}
                   document={document}
@@ -344,7 +357,7 @@ function KnowledgeBaseDocuments({
             offset={offset}
             limit={limit}
             total={total}
-            count={documents.data.items.length}
+            count={page?.items.length ?? 0}
             onPageChange={(_page, nextOffset) => setOffset(nextOffset)}
             onPageSizeChange={setLimit}
             labels={paginationLabels()}

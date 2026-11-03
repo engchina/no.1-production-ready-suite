@@ -152,8 +152,7 @@ test("文書構造グラフは抽出項目と検索テストの間にあり、�
   await page.screenshot({ path: testInfo.outputPath("knowledge-base-section-order.png"), fullPage: false });
 });
 
-// DB が止まっていて関係情報を取得できない（backend は空 + warning_messages で縮退する）ときは、
-// 「関係情報がまだありません」と区別して、取得できないことと再試行を出す。
+// 関係情報を読み取れないときは、「関係情報がまだありません」と区別して、原因と再試行を出す（#4217）。
 for (const viewport of [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 375, height: 812 },
@@ -162,36 +161,43 @@ for (const viewport of [
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    let degraded = true;
+    await page.clock.install();
+    await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
+    let failing = true;
     let graphRequests = 0;
-    page.on("request", (request) => {
-      if (new URL(request.url()).pathname === "/api/knowledge-bases/kb-1/graph") graphRequests += 1;
+    await page.route("**/api/knowledge-bases/kb-1/graph**", async (route) => {
+      graphRequests += 1;
+      if (!failing) return route.fallback();
+      return route.fulfill({
+        status: 503,
+        json: {
+          data: null,
+          error_messages: ["データの読み取りがタイムアウトしました。"],
+          warning_messages: [],
+          error_code: "database_read_timeout",
+        },
+      });
     });
-    await mockKb(
-      page,
-      { status: "empty", nodes: [], edges: [], truncated: false },
-      () =>
-        degraded
-          ? ["データベースに接続できませんでした。データベースの起動状態を確認して再試行してください。"]
-          : []
-    );
 
     await page.goto("/knowledge-bases/kb-1");
     await disclosureSummary(page, "文書構造グラフを表示").click();
+    await expect.poll(() => graphRequests).toBe(1);
+    // 自動の再試行（間隔を空けて 2 回）を進める。
+    await page.clock.runFor(5_100);
+    await expect.poll(() => graphRequests).toBe(2);
+    await page.clock.runFor(15_100);
+    await expect.poll(() => graphRequests).toBe(3);
 
     const section = page.locator("#knowledge-base-graph");
-    await expect(section.getByRole("status").filter({ hasText: "データベースに接続できません" })).toBeVisible();
-    await expect(section).toContainText("データベースに接続できませんでした。");
+    await expect(section.getByRole("alert")).toContainText("読み取りがタイムアウトしました");
     await expect(section.getByText("文書構造索引がまだありません。")).toHaveCount(0);
     await expectNoPageOverflow(page);
 
     // 復旧したら再試行で取り直し、本当に空なら空の状態を出す。
-    degraded = false;
-    const before = graphRequests;
+    failing = false;
     await section.getByRole("button", { name: "再試行" }).click();
-    await expect.poll(() => graphRequests).toBeGreaterThan(before);
     await expect(section.getByText("文書構造索引がまだありません。")).toBeVisible();
-    await expect(section.getByRole("status").filter({ hasText: "データベースに接続できません" })).toHaveCount(0);
+    await expect(section.getByRole("alert")).toHaveCount(0);
   });
 }
 

@@ -778,3 +778,21 @@ test("実行条件の変更で無効になった評価を合格と表示しな�
   await page.getByTestId("evaluation-summary").scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("evaluation-definition-changed.png"), fullPage: true });
 });
+
+test("業務 Agent を読み取れないときは「評価セットはまだありません」と出さない (#4217)", async ({ page, mockApi }) => {
+  void mockApi;
+  await page.route("**/api/agents", (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ data: null, error_messages: ["読み取れませんでした。"], warning_messages: [] }),
+        })
+      : route.fallback(),
+  );
+
+  await page.goto("/evaluation");
+
+  await expect(page.getByRole("alert").filter({ hasText: "読み取れませんでした。" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("この業務 Agent の評価セットはまだありません")).toHaveCount(0);
+});

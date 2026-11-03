@@ -15,7 +15,7 @@ import {
 import { FlaskConical } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { EmptyState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import {
   ApiError,
   type CalibrationSummary,
@@ -191,7 +191,16 @@ export function CalibrationPanel({ detail }: { detail: LabelSetDetail }) {
           onCancel={() => void cancel()}
         />
       ) : null}
-      <CalibrationResult summary={shown} />
+      {calibrations.isError ? (
+        // 読み取れなかったときは「校正の結果はありません」と言わない（#4217）。
+        <ApiErrorState
+          error={calibrations.error}
+          fallback={t("evaluation.calibration.result.loadError")}
+          onRetry={() => void calibrations.refetch()}
+        />
+      ) : (
+        <CalibrationResult summary={shown} />
+      )}
       {items.length > 1 ? (
         <CalibrationHistory
           items={items}

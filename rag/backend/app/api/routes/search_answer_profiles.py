@@ -7,11 +7,11 @@ KB が「文書をどう加工して索引するか」を司るのに対し、�
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
+from pr_backend_core.api import OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.config import get_settings
-from app.db_degradation import load_or_degrade
+from app.db_read_failures import read_or_raise
 from app.rag.search_answer_profile_config import validate_profile_answer_model
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search_answer_profile import (
@@ -34,7 +34,7 @@ async def list_search_answer_profiles(
     status: SearchAnswerProfileStatus | None = None,
     q: str | None = Query(default=None, min_length=1, max_length=200),
 ) -> ApiResponse[Page[SearchAnswerProfileSummary]]:
-    """検索・回答プロファイル一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
+    """検索・回答プロファイル一覧を返す。読み取りの失敗は API の失敗にする（#4217）。"""
     oracle = OracleClient()
     settings = get_settings()
 
@@ -46,16 +46,13 @@ async def list_search_answer_profiles(
         total = await oracle.count_search_answer_profiles(status=status, query=q)
         return paginate(items, total=total, limit=paging.limit, offset=paging.offset)
 
-    fallback: Page[SearchAnswerProfileSummary] = empty_page(paging)
-    page, degraded = await load_or_degrade(
+    page = await read_or_raise(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=fallback,
         log_label="search_answer_profiles_list",
     )
     return ApiResponse(
         data=page,
-        warning_messages=[degraded.message] if degraded else [],
     )
 
 

@@ -1193,6 +1193,14 @@ const agentJa = {
   "common.loading": "読み込み中",
   "common.skipToMain": "本文へスキップ",
   "common.retry": "再試行",
+  "common.dataLoad.timeout":
+    "読み取りがタイムアウトしました。データベースが混み合っている可能性があります。データは失われていません。少し待ってから再試行してください。",
+  "common.dataLoad.unavailable":
+    "データベースに接続できません。データは失われていません。データベースの起動状態と接続の設定を確かめてから、再試行してください。",
+  "common.dataLoad.unavailableRestricted":
+    "データベースに接続できません。データは失われていません。少し待ってから再試行し、続くときはシステム管理者に連絡してください。",
+  "common.dataLoad.staleTitle": "{time} 時点の内容を表示しています",
+  "common.dataLoad.staleOther": "最新の内容を読み取れませんでした。データは失われていません。再試行してください。",
   "common.save": "保存",
   "common.create": "作成",
   "common.approve": "承認",

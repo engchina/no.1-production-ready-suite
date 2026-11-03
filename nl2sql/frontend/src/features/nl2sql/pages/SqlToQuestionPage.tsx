@@ -496,6 +496,7 @@ export function SqlToQuestionPage() {
                 buttonSpinning={refreshOrigin !== null}
                 profile={selectedProfile}
                 tables={schemaTables}
+                loadFailed={Boolean(loadError)}
               />
             }
           />
@@ -623,6 +624,7 @@ export function SqlToQuestionPage() {
 }
 
 function SchemaPreview({
+  loadFailed,
   loading,
   buttonSpinning,
   profile,
@@ -631,6 +633,8 @@ function SchemaPreview({
   loading: boolean;
   buttonSpinning: boolean;
   profile: ProfileUsageContext | null;
+  /** 読み取りに失敗した（0 件と言い切れない。原因と再試行はページの先頭の案内。#4217）。 */
+  loadFailed: boolean;
   tables: SchemaTable[];
 }) {
   if (loading) {
@@ -665,7 +669,9 @@ function SchemaPreview({
         <Database size={16} aria-hidden="true" />
         {t("sqlToQuestion.schema.title")}
       </h3>
-      {tables.length === 0 ? (
+      {loadFailed && tables.length === 0 ? (
+        <p className="p-3 text-sm text-fg-muted" data-testid="sql-to-question-schema-load-failed">{t("common.list.loadUnavailable")}</p>
+      ) : tables.length === 0 ? (
         <EmptyState
           title={t("sqlToQuestion.schema.emptyTitle")}
           hint={t("sqlToQuestion.schema.empty")}

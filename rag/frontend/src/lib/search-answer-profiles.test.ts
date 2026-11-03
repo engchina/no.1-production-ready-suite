@@ -65,21 +65,26 @@ describe("api 検索・回答プロファイル(Search Answer Profile)", () => {
     expect(body.config.query.query_strategy).toBe("rag_fusion");
   });
 
-  it("listSearchAnswerProfiles は warning_messages 付きで縮退できる", async () => {
+  it("listSearchAnswerProfiles の読み取りの失敗は error_code 付きの ApiError にする", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        jsonResponse({
-          data: { items: [], total: 0, limit: 50, offset: 0, has_next: false },
-          error_messages: [],
-          warning_messages: ["データベースに接続できません。"],
-        })
+        jsonResponse(
+          {
+            data: null,
+            error_messages: ["データベースに接続できませんでした。"],
+            warning_messages: [],
+            error_code: "database_unavailable",
+          },
+          503,
+        )
       )
     );
 
-    const page = await api.listSearchAnswerProfiles({ status: "ACTIVE" });
-    expect(page.total).toBe(0);
-    expect(page.warning_messages).toEqual(["データベースに接続できません。"]);
+    await expect(api.listSearchAnswerProfiles({ status: "ACTIVE" })).rejects.toMatchObject({
+      status: 503,
+      errorCode: "database_unavailable",
+    });
   });
 
   it("archiveSearchAnswerProfile は archive endpoint を POST する", async () => {

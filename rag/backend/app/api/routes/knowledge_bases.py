@@ -3,11 +3,11 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
+from pr_backend_core.api import OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
 from app.config import get_settings
-from app.db_degradation import load_or_degrade
+from app.db_read_failures import read_or_raise
 from app.rag.extraction_field_adapter import (
     FieldDefinition,
     load_field_schema,
@@ -80,7 +80,7 @@ async def list_knowledge_bases(
         ),
     ] = None,
 ) -> ApiResponse[Page[KnowledgeBaseSummary]]:
-    """ナレッジベース一覧を返す。DB 停止時は空一覧 + warning で縮退する。"""
+    """ナレッジベース一覧を返す。読み取りの失敗は API の失敗にする（#4217）。"""
     oracle = OracleClient()
     settings = get_settings()
 
@@ -95,16 +95,13 @@ async def list_knowledge_bases(
         total = await oracle.count_knowledge_bases(status=status, query=q, knowledge_base_ids=ids)
         return paginate(items, total=total, limit=paging.limit, offset=paging.offset)
 
-    fallback: Page[KnowledgeBaseSummary] = empty_page(paging)
-    page, degraded = await load_or_degrade(
+    page = await read_or_raise(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=fallback,
         log_label="knowledge_bases_list",
     )
     return ApiResponse(
         data=page,
-        warning_messages=[degraded.message] if degraded else [],
     )
 
 
@@ -145,13 +142,13 @@ async def get_knowledge_base_graph(
     knowledge_base_id: str,
     limit: int = Query(default=80, ge=1, le=300),
 ) -> ApiResponse[KnowledgeBaseGraphData]:
-    """KB の関係情報(GraphRAG)を可視化用 subgraph で返す。DB 停止時は空で縮退する。"""
+    """KB の関係情報(GraphRAG)を可視化用 subgraph で返す。読み取りの失敗は API の失敗にする。"""
     oracle = OracleClient()
     settings = get_settings()
-    if await oracle.get_knowledge_base(knowledge_base_id) is None:
-        raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
 
     async def _load() -> KnowledgeBaseGraphData:
+        if await oracle.get_knowledge_base(knowledge_base_id) is None:
+            raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
         nodes, edges = await oracle.fetch_knowledge_base_subgraph(knowledge_base_id, limit=limit)
         from app.clients.graph_reference_store import GraphReferenceStore
 
@@ -173,13 +170,12 @@ async def get_knowledge_base_graph(
             truncated=len(nodes) >= limit,
         )
 
-    data, degraded = await load_or_degrade(
+    data = await read_or_raise(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=KnowledgeBaseGraphData(),
         log_label="knowledge_base_graph",
     )
-    return ApiResponse(data=data, warning_messages=[degraded.message] if degraded else [])
+    return ApiResponse(data=data)
 
 
 @router.get("/{knowledge_base_id}/graph/references")

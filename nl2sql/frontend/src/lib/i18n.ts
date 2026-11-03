@@ -356,6 +356,7 @@ const nl2sqlJa = {
   "listDetail.next": "次へ",
   "listDetail.resize": "一覧の幅",
   "listDetail.resizeHint": "ドラッグ・左右の矢印キーで一覧の幅を変更・ダブルクリックか Home で既定の幅に戻す",
+  "common.list.loadUnavailable": "読み取れなかったため、一覧を表示できません。",
   "common.errorWithRequestId": "{message}（リクエストID: {requestId}）",
   "common.requestId": "リクエストID",
   "common.clearSearch": "検索語をクリア",

@@ -12,6 +12,13 @@ DOCUMENT_FILE_MISSING_CODE = "RAG_DOCUMENT_FILE_MISSING"
 # 文書は見られるが、指定の根拠の版が今は無い（再索引で chunk が作り直された。古い chunk_set・
 # cursor を含む）。MCP の `rag_read_source` と同じ code。画面はエラーではなく案内を出す（#4092）。
 SOURCE_STALE_CODE = "source_stale"
+# DB の読み取りの失敗（#4217）。画面は「0 件」ではなく失敗として出し、code で原因の文を分ける。
+# 値は 3 製品で共通（`@production-ready/ui` の `dataLoadFailureKind`）。
+DATABASE_READ_TIMEOUT_CODE = "database_read_timeout"
+DATABASE_UNAVAILABLE_CODE = "database_unavailable"
+DATABASE_READ_FAILED_CODE = "database_read_failed"
+# 同じ読み取りをすぐ繰り返しても混雑を増やすだけなので、次に試すまでの目安を返す（秒）。
+DATABASE_READ_RETRY_AFTER_SECONDS = 5
 
 
 class CodedApiError(HTTPException):
@@ -36,3 +43,41 @@ class SourceVersionStaleError(CodedApiError):
 
     def __init__(self, message: str, *, headers: Mapping[str, str] | None = None) -> None:
         super().__init__(status_code=409, detail=message, headers=dict(headers or {}) or None)
+
+
+class DatabaseReadTimeoutError(CodedApiError):
+    """読み取りが時間の上限に達した（503）。DB は混んでいるだけかもしれない。"""
+
+    code = DATABASE_READ_TIMEOUT_CODE
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=503,
+            detail="データの読み取りがタイムアウトしました。データは失われていません。",
+            headers={"Retry-After": str(DATABASE_READ_RETRY_AFTER_SECONDS)},
+        )
+
+
+class DatabaseUnavailableError(CodedApiError):
+    """DB に接続できない（503）。"""
+
+    code = DATABASE_UNAVAILABLE_CODE
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=503,
+            detail="データベースに接続できませんでした。データは失われていません。",
+            headers={"Retry-After": str(DATABASE_READ_RETRY_AFTER_SECONDS)},
+        )
+
+
+class DatabaseReadFailedError(CodedApiError):
+    """接続・時間の上限以外の理由で読み取りが失敗した（500）。"""
+
+    code = DATABASE_READ_FAILED_CODE
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=500,
+            detail="データを読み取れませんでした。データは失われていません。",
+        )

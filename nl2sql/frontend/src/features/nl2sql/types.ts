@@ -1789,6 +1789,8 @@ export interface SelectAiFeedbackEntry {
 
 export interface SelectAiFeedbackEntriesData {
   runtime: string;
+  /** 読み取りに失敗した（`items` が空でも 0 件ではない。理由は `warnings`。#4217）。 */
+  read_failed?: boolean;
   profile_name: string;
   index_name: string;
   table_name: string;

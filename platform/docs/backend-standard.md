@@ -244,7 +244,7 @@ in-process へ縮退せず、MCP の `rag_search` が止まった）。
 
 | 型 | query の受け取り | 応答 | 組み立て |
 |---|---|---|---|
-| offset 型（任意のページへ移る一覧） | `paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))]`（`limit` 1..max は `Query(le=)` で 422、`offset` 0 以上） | `Page[T]`（`items` / `total` / `limit` / `offset` / `has_next`） | DB のページ: `paginate(items, total=, limit=paging.limit, offset=paging.offset)`。メモリ上の全件: `paginate_slice(items, paging)`。縮退の fallback: `empty_page(paging)` |
+| offset 型（任意のページへ移る一覧） | `paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))]`（`limit` 1..max は `Query(le=)` で 422、`offset` 0 以上） | `Page[T]`（`items` / `total` / `limit` / `offset` / `has_next`） | DB のページ: `paginate(items, total=, limit=paging.limit, offset=paging.offset)`。メモリ上の全件: `paginate_slice(items, paging)`。読み取りの失敗を `empty_page(paging)` で 200 にしない（HTTP の失敗と `error_code` で返す。messaging.md §3.6.1。#4217） |
 | カーソル型（「前へ / 次へ」と「さらに読み込む」） | `paging: Annotated[CursorParams, Depends(cursor_params(default=50, max_limit=100))]`（`cursor` は最初のページで None、最大 512 文字） | `CursorPage[T]`（`items` / `next_cursor: str \| None` / `total: int \| None`）。製品の付加情報（件数の内訳・version）は継承して足す | `cursor_page(items, next_cursor=, total=)`。`next_cursor` は続きが無ければ `None`（空文字は使わない） |
 
 - カーソルの文字列は `encode_cursor(dict)` / `decode_cursor(cursor, required=(...))`（base64url の JSON）か、offset をそのまま続きの印にする `encode_offset_cursor` / `decode_offset_cursor` / `next_offset_cursor`。壊れたカーソルは `InvalidCursorError` で、router が 422 にする。

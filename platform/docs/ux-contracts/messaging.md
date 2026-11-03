@@ -268,6 +268,22 @@ if (!query.data?.length) return <EmptyState title={…} hint={…} />;          
 - `ErrorState` のメッセージには原因と、再試行 / 設定への誘導を含める（`error-recovery`）。
 - 画面の前提（対象の選択の一覧など）を読み込んでいる間は、それに依存する領域にも空の状態を出さず、形の Skeleton で覆う（経過時間は前提を取得している領域の 1 か所だけ）。失敗を 0 件の空の状態と同じ分岐で出さない。チャットの具体的な規則は §11.7。
 
+#### 3.6.1 データ領域の読み取りの失敗（#4217）
+
+一覧などのデータ領域を読み取れなかったことを、**0 件と同じ表示にしない**。「0 件」「最初の〜を作成」は、読み取れて本当に無いと分かったときだけ出す。
+
+- **失敗は backend が明示する**: 読み取りの失敗を 200 + 空のデータで返さない。HTTP の失敗と `error_code` で返し、画面は code で原因を分ける（文言を照合しない）。
+
+  | 原因 | status | `error_code` | 共通の文の要点 | 導線 |
+  |---|---|---|---|---|
+  | 時間の上限・pool の待ち（`DPY-4005`） | 503（`Retry-After`） | `database_read_timeout` | 読み取りがタイムアウトした・混み合っている可能性・データは失われていない | 再試行だけ。DB の不通と言わない |
+  | 接続の失敗 | 503（`Retry-After`） | `database_unavailable`（NL2SQL `oracle_connection_unavailable`、Agent `agent_storage_unavailable`） | 接続できない・データは失われていない | データベース設定（開ける利用者だけ。§3.4.1）→ 再試行。開けない利用者には管理者への連絡 |
+  | それ以外 | 500 | `database_read_failed` など | backend の利用者向けの文 | 再試行だけ |
+
+- **部品**: 判定は `dataLoadView(query, { isEmpty })`（`loading` / `failed` / `stale` / `ready`）。`failed` は `DataLoadFailureState`（領域だけを占める `ErrorState`。`role="alert"`、再試行へフォーカスを移す。入力中の欄・開いているダイアログからは奪わない）、`stale` は `StaleDataNotice`（前回の一覧を残し、見出しで「いつの内容か」を示す。warning なので `role="status"`（§2）、ほかにフォーカスがあれば動かさない）。`ready` になるまで空の状態を出さない。`failed` では件数を出さない。前回が 0 件のまま失敗したら、残す内容が無いので `failed` にする。ダイアログ・全画面のブロックは使わない。`DatabaseGate` は本当に接続できない・未設定のときだけ（§3.4.1）。
+- **作成を止める**: `dataLoadView` の `blockCreate` の間は一覧の「新規作成」を `disabled` にする（読み取れていないのに作ると重複するおそれがある。理由は失敗の表示が示す）。
+- **自動の再試行は控えめに**: 製品の `QueryClient` の既定に `retryDataLoad` / `dataLoadRetryDelay` を渡す。上限 2 回。DB の読み取りの失敗の後は 5 秒・15 秒の間隔を空ける（同じ読み取りをすぐ繰り返しても混雑を増やすだけ）。4xx は試さない。待ちの間は読み込み中のまま（`TimedLoadingState` の経過時間が続く）。その後は利用者の再試行に任せる。定期の取り直しも失敗の間は止める。
+
 ### 3.7 処理中・経過時間
 
 - 利用者が直接見ている取得・送信・実行と durable job は、対象の領域の中に `ProcessingIndicator` または `TimedLoadingState` を出す。静かな polling、prefetch、background refresh では出さない。

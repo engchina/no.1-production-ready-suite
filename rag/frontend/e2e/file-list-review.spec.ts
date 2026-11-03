@@ -406,7 +406,7 @@ test("自動更新の失敗では一覧と選択を残し、失敗を知らせ�
 
   // 前回取得した一覧と選択は残し、全面のエラーに置き換えない。
   const warning = page.getByTestId("file-list-refresh-error");
-  await expect(warning).toContainText("最新の状態を取得できませんでした");
+  await expect(warning).toContainText("時点の内容を表示しています");
   await expect(warning).toContainText("DB に接続できません。");
   await expect(page.getByRole("link", { name: "policy.txt" })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "この行を選択" }).nth(1)).toBeChecked();

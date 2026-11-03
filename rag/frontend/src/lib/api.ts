@@ -146,7 +146,7 @@ export const EVALUATION_JOB_POLL_INTERVAL_MS = 2_000;
 /** チャットが会話の回答の保存有無を一度に引き当てる trace_id の上限（backend と同じ）。 */
 export const ANSWER_TRACE_ID_FILTER_MAX = 100;
 
-/** DB 停止時に warning_messages を併せて返す閲覧系レスポンス。 */
+/** 成功しても warning_messages を併せて返す応答（削除の後始末の失敗など）。 */
 export type Degradable<T> = T & { warning_messages: string[] };
 export type JsonValue =
   string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -3288,11 +3288,7 @@ export async function request<T>(
   return envelope.data as T;
 }
 
-/**
- * DB 停止時に縮退応答(空 data + warning_messages)を返す閲覧系 API 用。
- * data オブジェクトへ `warning_messages` を併設して返すため、既存の
- * data アクセス(`page.items` 等)を壊さずに縮退状態を画面へ伝えられる。
- */
+/** 成功しても warning_messages を返す API 用。data オブジェクトへ `warning_messages` を併設して返す。 */
 async function requestDegradable<T extends object>(
   path: string,
   init?: RequestInit,
@@ -3500,7 +3496,7 @@ export const api = {
     if (params.language_pack_relation) search.set("language_pack_relation", params.language_pack_relation);
     if (params.current_release_id) search.set("current_release_id", params.current_release_id);
     const qs = search.toString();
-    return requestDegradable<Page<DocumentSummary>>(
+    return request<Page<DocumentSummary>>(
       `/api/documents${qs ? `?${qs}` : ""}`,
     );
   },
@@ -3947,7 +3943,7 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return requestDegradable<Page<KnowledgeBaseSummary>>(
+    return request<Page<KnowledgeBaseSummary>>(
       `/api/knowledge-bases${qs ? `?${qs}` : ""}`,
     );
   },
@@ -3955,7 +3951,6 @@ export const api = {
     request<KnowledgeBaseDetail>(
       `/api/knowledge-bases/${encodeURIComponent(id)}`,
     ),
-  // DB が止まっていると backend は空の図と warning_messages で縮退するため、warning も返す（空と区別する）。
   updateKnowledgeBaseStructureIndex: (id: string, enabled: boolean | null) =>
     request<{ enabled: boolean | null; global_enabled: boolean }>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/structure-index`,
@@ -3968,7 +3963,7 @@ export const api = {
   getKnowledgeBaseGraphReferences: (id: string, nodeId: string, direction: "outgoing" | "incoming", offset = 0, referenceId?: string) =>
     request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}${referenceId ? `&reference_id=${encodeURIComponent(referenceId)}` : ""}`),
   getKnowledgeBaseGraph: (id: string, limit = 80) =>
-    requestDegradable<KnowledgeBaseGraphData>(
+    request<KnowledgeBaseGraphData>(
       `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,
     ),
   // KB ごとの項目抽出の定義（#548）。fields: null で全体の既定に戻す。
@@ -4043,7 +4038,7 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return requestDegradable<Page<SearchAnswerProfileSummary>>(
+    return request<Page<SearchAnswerProfileSummary>>(
       `/api/search-answer-profiles${qs ? `?${qs}` : ""}`,
     );
   },
@@ -4334,7 +4329,7 @@ export const api = {
     if (params.limit != null) search.set("limit", String(params.limit));
     if (params.offset != null) search.set("offset", String(params.offset));
     const qs = search.toString();
-    return requestDegradable<ChatHistoryPage<ConversationSummary>>(
+    return request<ChatHistoryPage<ConversationSummary>>(
       `/api/chat/conversations${qs ? `?${qs}` : ""}`,
     );
   },

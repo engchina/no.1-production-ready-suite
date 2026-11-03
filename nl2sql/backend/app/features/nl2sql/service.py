@@ -22031,6 +22031,7 @@ class Nl2SqlService:
     ) -> SelectAiFeedbackEntriesData:
         """Select AI feedback の 1 ページ（offset 型。#1891）。"""
         warnings: list[str] = []
+        read_failed = False
         runtime = "oracle" if self._use_oracle_runtime() else "deterministic"
         if self._use_oracle_runtime():
             try:
@@ -22058,11 +22059,13 @@ class Nl2SqlService:
                 )
             except OracleAdapterError as exc:
                 warnings.append(str(exc))
+                read_failed = True
         else:
             warnings.append("Select AI feedback 管理には NL2SQL_RUNTIME_MODE=oracle が必要です。")
         return SelectAiFeedbackEntriesData(
             **dict(empty_page(limit=limit, offset=offset)),
             runtime=runtime,
+            read_failed=read_failed,
             profile_name=profile_name,
             warnings=warnings,
         )

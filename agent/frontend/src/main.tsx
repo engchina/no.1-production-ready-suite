@@ -10,6 +10,8 @@ import {
   createTraceDetailsLabels,
   initTheme,
   loadStylesAfterFirstRender,
+  dataLoadRetryDelay,
+  retryDataLoad,
 } from "@production-ready/ui";
 import {
   UnsavedChangesBlocker,
@@ -34,7 +36,10 @@ if (!root) {
   throw new Error("root element が見つかりません。");
 }
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  // 読み取りの自動の再試行は回数を抑えて間隔を空ける（混んでいる DB を繰り返し読まない。#4217）。
+  defaultOptions: { queries: { retry: retryDataLoad, retryDelay: dataLoadRetryDelay } },
+});
 
 const TRACE_DETAILS_LABELS = createTraceDetailsLabels(t, { product: "agent" });
 

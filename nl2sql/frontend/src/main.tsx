@@ -4,7 +4,7 @@ import { RouterProvider, createBrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmProvider, Toaster } from "@production-ready/ui";
 import { TraceDetailsLabelsProvider } from "@production-ready/ui";
-import { initTheme, loadStylesAfterFirstRender } from "@production-ready/ui";
+import { dataLoadRetryDelay, initTheme, loadStylesAfterFirstRender, retryDataLoad } from "@production-ready/ui";
 import {
   UnsavedChangesBlocker,
   useConfirmNavigationKey,
@@ -42,7 +42,10 @@ if (!root) {
   throw new Error("root element が見つかりません。");
 }
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  // 読み取りの自動の再試行は回数を抑えて間隔を空ける（混んでいる DB を繰り返し読まない。#4217）。
+  defaultOptions: { queries: { retry: retryDataLoad, retryDelay: dataLoadRetryDelay } },
+});
 
 /** 共有 ConfirmProvider に NL2SQL の文言を注入し、ルート遷移で開いている確認をキャンセルする。 */
 function AppConfirmProvider({ children }: { children: ReactNode }) {

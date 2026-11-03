@@ -1,6 +1,7 @@
 import { AlertCircle, Inbox, RefreshCw } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
+import { focusDataLoadRecovery } from "../../lib/data-load";
 import { Button } from "../ui/button";
 import { MessageText } from "../ui/message-text";
 import { Skeleton } from "../ui/skeleton";
@@ -42,13 +43,23 @@ export function ErrorState({
   onRetry,
   retryLabel = "再試行",
   details,
+  action,
+  focusRetry = false,
 }: {
   message: string;
   onRetry?: () => void;
   retryLabel?: string;
   /** 技術的な詳細（`ApiErrorDetailList`）。本文の下に、左揃えで全幅に出す（messaging.md §10.3。#906）。 */
   details?: ReactNode;
+  /** 再試行の前に置く導線（データベース設定へのリンクなど。messaging.md §3.4.1 の Tab 順）。 */
+  action?: ReactNode;
+  /** 出たときに再試行へフォーカスを移す（入力中の欄からは奪わない）。データ領域の読み取りの失敗で使う。 */
+  focusRetry?: boolean;
 }) {
+  const retryRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (focusRetry) focusDataLoadRecovery(retryRef.current);
+  }, [focusRetry]);
   return (
     <div
       role="alert"
@@ -60,10 +71,15 @@ export function ErrorState({
         <MessageText text={message} />
       </p>
       {details ? <div className="w-full min-w-0 text-left">{details}</div> : null}
-      {onRetry ? (
-        <Button type="button" variant="secondary" size="sm" icon={RefreshCw} onClick={onRetry}>
-          <span>{retryLabel}</span>
-        </Button>
+      {action || onRetry ? (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {action}
+          {onRetry ? (
+            <Button ref={retryRef} type="button" variant="secondary" size="sm" icon={RefreshCw} onClick={onRetry}>
+              <span>{retryLabel}</span>
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

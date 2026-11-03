@@ -20,16 +20,17 @@ import {
   INFORMATION_TABLE_VISIBLE_ROWS,
   OffsetPagination,
   ListToolbar,
+  dataLoadView,
 } from "@production-ready/ui";
 import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
-import { DegradedBanner } from "@/components/DegradedBanner";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { EditorDraftNotice } from "@/components/layout/EntityLayout";
 import { readEditorDraft } from "@/components/layout/use-entity-editor-draft";
 import { useAuth } from "@/components/security/AuthProvider";
-import { EmptyState, ApiErrorState } from "@/components/StateViews";
+import { EmptyState } from "@/components/StateViews";
 import { api, type KnowledgeBaseStatus, type KnowledgeBaseSummary } from "@/lib/api";
 import { useEditorRoute } from "@/lib/editor-route";
 import { formatDateTime, formatNumber } from "@/lib/format";
@@ -135,6 +136,8 @@ function KnowledgeBaseList({
   );
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
+  // 読み取れていない間は 0 件と言わず、重ねて作らせない（#4217）。
+  const load = dataLoadView(query, { isEmpty: page?.total === 0 });
 
   // 行の操作（アーカイブ）は詳細ページの ObjectActionBar と同じ定義を使う。
   const knowledgeBaseActions = useKnowledgeBaseActions();
@@ -165,17 +168,22 @@ function KnowledgeBaseList({
                   label: t("knowledgeBases.actions.newKnowledgeBase"),
                   icon: Plus,
                   onClick: onCreate,
+                  disabled: load.blockCreate,
                 },
               ]
             : []
         }
       />
       <PageBody wide className="grid grid-cols-1 gap-5">
-        <DegradedBanner
-          messages={page?.warning_messages}
-          onRetry={() => void query.refetch()}
-          isRetrying={query.isFetching}
-        />
+        {load.phase === "stale" ? (
+          <DataLoadStaleNotice
+            error={query.error}
+            dataUpdatedAt={query.dataUpdatedAt}
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+            testId="knowledge-bases-stale"
+          />
+        ) : null}
 
         {newDraft && onCreate ? (
           <EditorDraftNotice message={t("knowledgeBases.draftPending")} onOpen={onCreate} />
@@ -192,7 +200,9 @@ function KnowledgeBaseList({
               onSearch={applySearch}
               clearLabel={t("common.clearSearch")}
               resultCountLabel={
-                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+                page && load.phase !== "failed"
+                  ? t("common.searchResultCount", { count: formatNumber(page.total) })
+                  : ""
               }
               placeholder={t("knowledgeBases.search.placeholder")}
             />
@@ -213,18 +223,19 @@ function KnowledgeBaseList({
           onClearFilters={() => resetView(() => setView((current) => ({ ...current, q: "", filter: "ALL" })))}
           labels={listToolbarLabels()}
           count={listCountProps({
-            matchedTotal: page?.total,
+            matchedTotal: load.phase === "failed" ? undefined : page?.total,
             filtered,
             allTotal: allTotal.data,
           })}
           testId="knowledge-base-list-toolbar"
         />
 
-        {query.isError ? (
-          <ApiErrorState
+        {load.phase === "failed" ? (
+          <DataLoadFailure
             error={query.error}
             fallback={t("knowledgeBases.error.load")}
             onRetry={() => void query.refetch()}
+            testId="knowledge-bases-load-failure"
           />
         ) : query.isPending ? (
           <TimedLoadingState

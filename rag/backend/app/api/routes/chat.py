@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pr_backend_core.api import OffsetParams, empty_page, offset_params, paginate
+from pr_backend_core.api import OffsetParams, offset_params, paginate
 from pr_backend_core.chat_history_window import (
     ChatHistoryPage,
     chat_history_cutoff,
@@ -52,7 +52,7 @@ from app.config import (
     enterprise_ai_default_model_id,
     get_settings,
 )
-from app.db_degradation import load_or_degrade
+from app.db_read_failures import read_or_raise
 from app.rag.answer_engine import AnswerScope
 from app.rag.answer_failure import describe_answer_failure
 from app.rag.answer_notice import current_answer_notice
@@ -354,7 +354,7 @@ async def list_conversations(
     paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=200))],
     search_answer_profile_id: str | None = Query(default=None, max_length=128),
 ) -> ApiResponse[ChatHistoryPage[ConversationSummary]]:
-    """会話一覧を返す。DB 停止時は空一覧 + warning で縮退する。
+    """会話一覧を返す。読み取りの失敗は API の失敗にする（#4217）。
 
     system_admin は全員の会話（利用者の表示名つき）、それ以外は自分の会話だけ（#1889）。
     最後の更新が会話の履歴の期間（共通の設定 `PLATFORM_CHAT_HISTORY_DAYS`）の中の会話だけを、
@@ -384,16 +384,13 @@ async def list_conversations(
             offset=paging.offset,
         )
 
-    fallback: Page[ConversationSummary] = empty_page(paging)
-    page, degraded = await load_or_degrade(
+    page = await read_or_raise(
         _load,
         timeout_seconds=settings.db_read_timeout_seconds,
-        fallback=fallback,
         log_label="conversations_list",
     )
     return ApiResponse(
         data=ChatHistoryPage[ConversationSummary].from_page(page, history_days=history_days),
-        warning_messages=[degraded.message] if degraded else [],
     )
 
 

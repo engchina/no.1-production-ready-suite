@@ -200,6 +200,7 @@ export {
 } from "./database-gate/DatabaseGate";
 export {
   DATABASE_UNAVAILABLE_TITLE_ID,
+  DatabaseSettingsLink,
   DatabaseUnavailableNotice,
   adbLifecycleGroup,
   adbLifecycleLabel,

@@ -139,6 +139,7 @@ export function AutomationsPage() {
         agents={usableAgents}
         allAgents={allAgents}
         agentsLoading={agents.isLoading}
+        agentsLoadFailed={agents.isError}
         readOnly={!canManage}
         onBack={() => editor.backToList()}
         onCreated={(item) => editor.openItem(item.id, { replace: true })}
@@ -167,6 +168,7 @@ export function AutomationsPage() {
         agents={usableAgents}
         allAgents={allAgents}
         agentsLoading={agents.isLoading}
+        agentsLoadFailed={agents.isError}
         readOnly={!canManage}
         onBack={() => editor.backToList()}
         onCreated={() => undefined}
@@ -419,6 +421,7 @@ function AutomationEditor({
   agents,
   allAgents,
   agentsLoading,
+  agentsLoadFailed,
   readOnly,
   onBack,
   onCreated,
@@ -431,6 +434,8 @@ function AutomationEditor({
   /** すべての業務 Agent（保存済みの業務 Agent が実行できなくなったときの表示名に使う）。 */
   allAgents: AgentProfile[];
   agentsLoading: boolean;
+  /** 読み取りに失敗した（「使える業務 Agent がありません」と言わない。#4217）。 */
+  agentsLoadFailed: boolean;
   readOnly: boolean;
   onBack: () => void;
   onCreated: (item: Automation) => void;
@@ -632,7 +637,9 @@ function AutomationEditor({
                       options={agentOptions}
                       error={agentError}
                       helper={
-                        !agentsLoading && agents.length === 0
+                        agentsLoadFailed && agents.length === 0
+                          ? t("common.error.load")
+                          : !agentsLoading && agents.length === 0
                           ? t("automation.agentNone")
                           : draft.agentId && draft.agentId === savedAgentId && savedAgentUnavailable
                             ? t("automation.agentUnavailableHint")

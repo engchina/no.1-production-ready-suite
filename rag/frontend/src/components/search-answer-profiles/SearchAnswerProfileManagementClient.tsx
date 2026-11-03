@@ -39,13 +39,14 @@ import {
   ListToolbar,
   FormGrid,
   type FieldWidth,
+  dataLoadView,
 } from "@production-ready/ui";
 import { Archive, Plus, RotateCcw, Save, Sparkles } from "lucide-react";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 
-import { DegradedBanner } from "@/components/DegradedBanner";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { ContactGuidanceFieldset } from "@/components/search-answer-profiles/ContactGuidanceFieldset";
-import { EmptyState, ApiErrorState } from "@/components/StateViews";
+import { EmptyState } from "@/components/StateViews";
 import {
   KnowledgeBaseScopePicker,
   useKnowledgeBaseSelectionHealth,
@@ -340,6 +341,8 @@ function SearchAnswerProfileList({
   );
   const page = query.data;
   const items = useMemo(() => page?.items ?? [], [page?.items]);
+  // 読み取れていない間は 0 件と言わず、重ねて作らせない（#4217）。
+  const load = dataLoadView(query, { isEmpty: page?.total === 0 });
   const actionsFor = useSearchAnswerProfileActions();
   // 参照 KB がアーカイブ・削除されて検索対象から外れている検索・回答プロファイル（#302）。
   const hasKnowledgeBaseIssues = items.some(
@@ -363,17 +366,22 @@ function SearchAnswerProfileList({
                   label: t("searchAnswerProfiles.actions.newView"),
                   icon: Plus,
                   onClick: onCreate,
+                  disabled: load.blockCreate,
                 },
               ]
             : []
         }
       />
       <PageBody wide className="grid grid-cols-1 gap-5">
-        <DegradedBanner
-          messages={page?.warning_messages}
-          onRetry={() => void query.refetch()}
-          isRetrying={query.isFetching}
-        />
+        {load.phase === "stale" ? (
+          <DataLoadStaleNotice
+            error={query.error}
+            dataUpdatedAt={query.dataUpdatedAt}
+            onRetry={() => void query.refetch()}
+            retrying={query.isFetching}
+            testId="search-answer-profiles-stale"
+          />
+        ) : null}
 
         {hasKnowledgeBaseIssues ? (
           <Banner
@@ -402,7 +410,9 @@ function SearchAnswerProfileList({
               }}
               clearLabel={t("common.clearSearch")}
               resultCountLabel={
-                page ? t("common.searchResultCount", { count: formatNumber(page.total) }) : ""
+                page && load.phase !== "failed"
+                  ? t("common.searchResultCount", { count: formatNumber(page.total) })
+                  : ""
               }
               placeholder={t("searchAnswerProfiles.search.placeholder")}
             />
@@ -428,18 +438,19 @@ function SearchAnswerProfileList({
           onClearFilters={() => setView((current) => ({ ...current, q: "", filter: "ALL", offset: 0 }))}
           labels={listToolbarLabels()}
           count={listCountProps({
-            matchedTotal: page?.total,
+            matchedTotal: load.phase === "failed" ? undefined : page?.total,
             filtered,
             allTotal: allTotal.data,
           })}
           testId="search-answer-profile-list-toolbar"
         />
 
-        {query.isError ? (
-          <ApiErrorState
+        {load.phase === "failed" ? (
+          <DataLoadFailure
             error={query.error}
             fallback={t("searchAnswerProfiles.error.title")}
             onRetry={() => void query.refetch()}
+            testId="search-answer-profiles-load-failure"
           />
         ) : query.isPending ? (
           <TimedLoadingState

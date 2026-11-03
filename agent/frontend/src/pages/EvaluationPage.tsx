@@ -217,6 +217,8 @@ export function EvaluationPage() {
   }
   return (
     <EvaluationOverview
+      agentsError={agents.data ? null : agents.error}
+      onRetryAgents={() => void agents.refetch()}
       agentId={selectedAgentId}
       agent={selectedAgent}
       version={target}
@@ -237,6 +239,8 @@ export function EvaluationPage() {
 }
 
 function EvaluationOverview({
+  agentsError,
+  onRetryAgents,
   agentId,
   agent,
   version,
@@ -254,6 +258,9 @@ function EvaluationOverview({
   starting,
 }: {
   agentId: string;
+  /** 業務 Agent の一覧を読み取れなかった（前回の内容が無いとき）。 */
+  agentsError: Error | null;
+  onRetryAgents: () => void;
   agent: AgentProfile | undefined;
   version: EvaluationTarget;
   onVersionChange: (version: EvaluationTarget) => void;
@@ -454,7 +461,15 @@ function EvaluationOverview({
                 onValueChange={(value) => onTrialsChange(Number(value))}
               />
             </div>
-            {sets.isLoading ? (
+            {agentsError ? (
+              // 業務 Agent を読み取れないと評価セットも読めない。「評価セットはまだありません」と言わない（#4217）。
+              <ApiErrorState
+                error={agentsError}
+                fallback={t("common.error.load")}
+                retryLabel={t("common.retry")}
+                onRetry={onRetryAgents}
+              />
+            ) : sets.isLoading ? (
               <TimedLoadingState label={t("loading.evaluationSets")} testId="evaluation-sets-loading">
                 <TableSkeleton columns={4} />
               </TimedLoadingState>
