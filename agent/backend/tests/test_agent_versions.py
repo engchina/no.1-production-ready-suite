@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,15 +17,22 @@ from security_support import (
     login,
 )
 
+from app.features.agent.confirmation import ConfirmationRequest, item_from_arguments
 from app.features.agent.runtime import (
     AgentProfile,
+    AgentProfilePatch,
     AgentRuntimeRepository,
     AgentRuntimeSnapshot,
     AgentVersion,
+    ApprovalDecisionRequest,
     RunCreateRequest,
+    RunState,
+    RunStatus,
     _prune_agent_versions,
+    agent_for_run,
     runtime_repository,
 )
+from app.features.agent.tools import ToolCall
 from app.security.permissions import MENU_RUNS, RUNS_OPERATE
 from app.security.service import set_security_service
 
@@ -274,21 +281,175 @@ def test_prune_keeps_old_published_version() -> None:
 def test_runs_of_pruned_versions_stay_readable_and_never_use_draft(
     scheduled: list[str],
 ) -> None:
-    """消した版の Run は残って開ける。消えた版で続ける Run は下書きでなく公開中の版で動く。
-
-    #2356。
-    """
+    """消した版の Run は残って開ける。版が無い Run は下書きでなく公開中の版で動く（#2356）。"""
     client.post("/api/agents", json={"id": AGENT_ID, "name": "Agent A", "instructions": "v1"})
     _publish()
     run = client.post("/api/runs", json={"goal": "質問", "agent_id": AGENT_ID}).json()["data"]
     assert run["metadata"]["agent_version"] == 1
+    # 終わった Run の版は上限で消える。
+    repository: Any = runtime_repository
+    repository._runs[run["id"]].status = RunStatus.COMPLETED  # noqa: SLF001 - 状態だけを作る
     for index in range(2, 7):
         _publish_with_instructions(f"v{index}")
     client.patch(f"/api/agents/{AGENT_ID}", json={"instructions": "下書き（未公開）"})
     agents = client.get("/api/agents").json()["data"]["agents"]
     assert 1 not in _versions(next(item for item in agents if item["id"] == AGENT_ID))
-
     detail = client.get(f"/api/runs/{run['id']}")
     assert detail.status_code == 200, detail.text
     assert detail.json()["data"]["metadata"]["agent_version"] == 1
+
+    # 旧データなど、版が本当に無いまま続く Run の安全策（#4172 でも残す）。
+    repository._runs[run["id"]].status = RunStatus.QUEUED  # noqa: SLF001 - 状態だけを作る
     assert _instructions_used(run["id"]) == "v6"
+
+
+# ---- 未完了の Run が使う版（#4172） --------------------------------------------------------------
+
+
+def _version_repository(*agent_ids: str) -> AgentRuntimeRepository:
+    """指示 v1 を公開した業務 Agent を持つ repository（Run は作るだけで実行しない）。"""
+    repository = AgentRuntimeRepository()
+    for agent_id in agent_ids or (AGENT_ID,):
+        repository.create_agent(AgentProfile(id=agent_id, name="Agent A", instructions="v1"))
+    return repository
+
+
+def _publish_versions(
+    repository: AgentRuntimeRepository, numbers: Iterable[int], agent_id: str = AGENT_ID
+) -> AgentProfile:
+    """指示を変えて版を公開する（版の番号は公開の順。指示は `v<番号>`）。"""
+    agent = next(item for item in repository.list_agents() if item.id == agent_id)
+    for number in numbers:
+        repository.patch_agent(agent_id, AgentProfilePatch(instructions=f"v{number}"))
+        agent = repository.publish_agent(agent_id)
+    return agent
+
+
+def _queued_run(
+    repository: AgentRuntimeRepository, agent_id: str = AGENT_ID, *, draft: bool = False
+) -> RunState:
+    return repository.create_builtin_run(
+        RunCreateRequest(goal="合成の質問", agent_id=agent_id, draft=draft)
+    )
+
+
+def _approval_call() -> ToolCall:
+    return ToolCall(name="synthetic_write", arguments={"value": 1}, trace_id="call-1")
+
+
+def _confirmation() -> ConfirmationRequest:
+    arguments = {
+        "question": "どちらの条件で調べますか？",
+        "reason": "条件が質問から決められません。",
+        "options": [
+            {"label": "条件 A", "description": ""},
+            {"label": "条件 B", "description": ""},
+        ],
+        "multiple": False,
+    }
+    return ConfirmationRequest(
+        source="agent", call_id="call-ask", items=[item_from_arguments(arguments)]
+    )
+
+
+def _run_in_status(repository: AgentRuntimeRepository, status: RunStatus) -> RunState:
+    """公開の API の遷移で、未完了の各状態の Run を作る。"""
+    run = _queued_run(repository)
+    if status != RunStatus.QUEUED:
+        assert repository.begin_builtin_run(run.id) is not None
+    if status == RunStatus.WAITING_APPROVAL:
+        repository.request_builtin_approvals(run.id, [_approval_call()], state="{}")
+    elif status == RunStatus.WAITING_CONFIRMATION:
+        repository.request_builtin_approvals(
+            run.id, [], state="{}", confirmations=[_confirmation()]
+        )
+    stored = repository.get_run(run.id)
+    assert stored.status == status
+    return stored
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.WAITING_APPROVAL,
+        RunStatus.WAITING_CONFIRMATION,
+    ],
+)
+def test_unfinished_run_keeps_its_version_over_the_limit(status: RunStatus) -> None:
+    """未完了の Run の版は上限を超えても残り、Run はその版の内容で続く（#4172）。"""
+    repository = _version_repository()
+    run = _run_in_status(repository, status)
+    assert run.metadata["agent_version"] == 1
+
+    agent = _publish_versions(repository, range(2, 8))
+
+    # 残す版は上限に数える: 公開中の版 + Run の版 + 直近の版で計 5 版。
+    assert [item.version for item in agent.versions] == [1, 4, 5, 6, 7]
+    assert agent_for_run(agent, run).instructions == "v1"
+
+
+def test_run_resumed_after_approval_uses_its_version_and_later_publish_prunes_it() -> None:
+    """承認を待つ間に公開が続いても再開は同じ版。完了の後の公開で上限どおりに消える（#4172）。"""
+    repository = _version_repository()
+    run = _run_in_status(repository, RunStatus.WAITING_APPROVAL)
+
+    _publish_versions(repository, range(2, 8))
+
+    [approval] = repository.get_run(run.id).approvals
+    repository.decide_approval(approval.id, ApprovalDecisionRequest(approved=True))
+    resumed = repository.begin_builtin_resume(run.id)
+    assert resumed is not None
+    assert resumed[1].instructions == "v1"
+    assert resumed[0].metadata["agent_version"] == 1
+
+    repository.complete_builtin_run(run.id, "合成の回答")
+    assert repository.get_run(run.id).status == RunStatus.COMPLETED
+    agent = _publish_versions(repository, [8])
+    assert [item.version for item in agent.versions] == [4, 5, 6, 7, 8]
+    # 完了した Run の版の番号の記録は変えない。
+    assert repository.get_run(run.id).metadata["agent_version"] == 1
+
+
+@pytest.mark.parametrize("status", [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED])
+def test_finished_run_does_not_keep_its_version(status: RunStatus) -> None:
+    repository = _version_repository()
+    run = _queued_run(repository)
+    repository._runs[run.id].status = status  # noqa: SLF001 - 終了の状態だけを作る
+
+    agent = _publish_versions(repository, range(2, 7))
+
+    assert [item.version for item in agent.versions] == [2, 3, 4, 5, 6]
+    assert repository.get_run(run.id).metadata["agent_version"] == 1
+
+
+def test_only_the_same_agents_published_runs_keep_a_version() -> None:
+    """別の業務 Agent の Run・下書きの Run は、この業務 Agent の版を残さない（#4172）。"""
+    other_id = f"{AGENT_ID}-other"
+    repository = _version_repository(AGENT_ID, other_id)
+    other_run = _queued_run(repository, other_id)
+    assert other_run.metadata["agent_version"] == 1
+    draft_run = _queued_run(repository, draft=True)
+    assert draft_run.metadata["agent_version"] == "draft"
+
+    agent = _publish_versions(repository, range(2, 7))
+
+    assert [item.version for item in agent.versions] == [2, 3, 4, 5, 6]
+
+
+def test_more_unfinished_versions_than_the_limit_are_all_kept() -> None:
+    """未完了の Run の版が上限より多くても消さない。Run が終われば上限に戻る（#4172）。"""
+    repository = _version_repository()
+    runs = [_queued_run(repository)]
+    for number in range(2, 8):
+        _publish_versions(repository, [number])
+        runs.append(_queued_run(repository))
+
+    agent = _publish_versions(repository, [8])
+    assert [item.version for item in agent.versions] == [1, 2, 3, 4, 5, 6, 7, 8]
+
+    for run in runs:
+        repository._runs[run.id].status = RunStatus.COMPLETED  # noqa: SLF001 - 状態だけを作る
+    agent = _publish_versions(repository, [9])
+    assert [item.version for item in agent.versions] == [5, 6, 7, 8, 9]

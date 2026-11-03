@@ -64,6 +64,7 @@ from app.rag.extraction_field_adapter import (
     FieldSchemaStore,
     field_schema_from_json,
 )
+from app.rag.extraction_revisions import extraction_content_changed
 from app.rag.graph_index import (
     GraphEntity,
     GraphEntityChunkLink,
@@ -87,6 +88,7 @@ from app.rag.search_answer_profile_config import (
     dump_search_answer_profile_config,
     parse_search_answer_profile_config,
 )
+from app.rag.section_revisions import SectionExtractionBase
 from app.rag.source_profile import build_source_profile
 from app.rag.support_guide_runtime import GUIDE_PREVIEW_TRACE_PREFIX
 from app.rag.vector_index_adapter import default_vector_index_build, resolve_vector_index_adapter
@@ -470,6 +472,8 @@ class ReviewedExtractionWrite:
     extraction: Mapping[str, object]
     recipe_subset: Mapping[str, object] | None
     status: str
+    # 原本と解析の設定で決まる ID。設定が変わった版を復元しないために版に残す（#2644）。
+    parse_extraction_recipe_id: str
 
 
 class KnowledgeBaseNameConflictError(ValueError):
@@ -3722,6 +3726,19 @@ class OracleClient:
         normalized["metrics_json"] = _json_loads(normalized.get("metrics_json"))
         return normalized
 
+    async def document_extraction_recipe_subset(
+        self, *, document_id: str, extraction_recipe_id: str
+    ) -> dict[str, object] | None:
+        """抽出の ``recipe_subset`` だけを読む(抽出の本文は読まない。無ければ None)。"""
+        row = await self._fetch_one(
+            """
+            SELECT recipe_subset FROM rag_document_extractions
+            WHERE document_id = :document_id AND extraction_recipe_id = :extraction_recipe_id
+            """,
+            {"document_id": document_id, "extraction_recipe_id": extraction_recipe_id},
+        )
+        return (_json_loads(row.get("recipe_subset")) or None) if row else None
+
     async def save_document_recipe_review_extraction(
         self,
         *,
@@ -3732,94 +3749,126 @@ class OracleClient:
         """抽出確認の修正を、レシピの行ロックの下で最新の抽出成果へ当てて保存する(#2616)。
 
         レシピの行を ``FOR UPDATE`` で押さえてから、レシピの状態と今の抽出成果を読み、
-        ``build(レシピの行, 抽出成果の行)`` が作った成果を書き、レシピの成果の参照を切り替える。
-        同じレシピの保存・承認・job の投入はこの行ロックで直列になるため、読んだ後に別の保存が
-        入って先の修正を上書きすることはない(修正は要素・表セルの差分として最新の成果へ当てる)。
-        確認待ちでない・処理中・抽出結果が無いときは ``DocumentReviewEditConflictError``。
-        ``build`` の例外は transaction を rollback してそのまま返す。書いた成果の ID を返す。
+        ``build(レシピの行, 抽出成果の行)`` が作った成果を新しい版として書き、レシピの成果の参照を
+        切り替える(#2644)。同じレシピの保存・復元・承認・job の投入はこの行ロックで直列になるため、
+        読んだ後に別の保存が入って先の修正を上書きすることはない(修正は要素・表セルの差分として
+        最新の成果へ当てる)。確認待ちでない・処理中・抽出結果が無いときは
+        ``DocumentReviewEditConflictError``。``build`` の例外は transaction を rollback してそのまま
+        返す。文が変わらない保存は版を作らない。今の成果の ID を返す。
         """
         tenant = current_audit_request_context().tenant_id_hash
 
         def operation(connection: OracleConnectionProtocol) -> str:
-            _ensure_recipe_row_if_default(connection, document_id, recipe_id)
-            locked = _select_document_recipe_for_update(connection, document_id, recipe_id)
-            if locked is None:
-                raise KeyError("レシピが見つかりません。")
-            recipe = _document_recipe_row(locked)
-            if recipe["status"] != FileStatus.REVIEW.value:
-                raise DocumentReviewEditConflictError("確認待ちのレシピのみ修正できます。")
-            active_job = _fetch_one(
-                connection,
-                """
-                SELECT job_id FROM rag_ingestion_jobs
-                WHERE recipe_id = :recipe_id
-                  AND document_id = :document_id
-                  AND status IN ('QUEUED', 'RUNNING')
-                FETCH FIRST 1 ROWS ONLY
-                """,
-                {"recipe_id": recipe_id, "document_id": document_id},
-            )
-            if active_job is not None:
-                raise DocumentReviewEditConflictError("このレシピは処理中または待機中です。")
-            source_extraction_recipe_id = recipe["active_extraction_recipe_id"]
-            if source_extraction_recipe_id is None:
-                raise DocumentReviewEditConflictError("修正対象の抽出結果がありません。")
-            artifact_row = _fetch_one(
-                connection,
-                """
-                SELECT document_id, extraction_recipe_id, source_sha256, status, reason,
-                       recipe_subset, extraction_json, metrics_json
-                FROM rag_document_extractions
-                WHERE document_id = :document_id
-                  AND extraction_recipe_id = :extraction_recipe_id
-                """,
-                {
-                    "document_id": document_id,
-                    "extraction_recipe_id": source_extraction_recipe_id,
-                },
-            )
-            artifact = (
-                {str(key).lower(): value for key, value in artifact_row.items()}
-                if artifact_row is not None
-                else {}
-            )
-            artifact["recipe_subset"] = _json_loads(artifact.get("recipe_subset"))
-            artifact["extraction_json"] = _json_loads(artifact.get("extraction_json"))
-            artifact["metrics_json"] = _json_loads(artifact.get("metrics_json"))
-            if artifact_row is None or not artifact["extraction_json"]:
-                raise DocumentReviewEditConflictError("修正対象の抽出結果がありません。")
+            from app.clients.extraction_revision_store import commit_extraction_revision
+
+            recipe, artifact = _lock_recipe_for_review_change(connection, document_id, recipe_id)
             write = build(recipe, artifact)
-            _merge_document_extraction_artifact(
+            source_extraction = cast("Mapping[str, object]", artifact["extraction_json"])
+            source_id = str(recipe["active_extraction_recipe_id"])
+            if not extraction_content_changed(source_extraction, write.extraction):
+                return source_id
+            commit_extraction_revision(
                 connection,
-                {
-                    "document_id": document_id,
-                    "extraction_recipe_id": write.extraction_recipe_id,
-                    "source_sha256": write.source_sha256,
-                    "tenant_id_hash": tenant,
-                    "recipe_subset": _json_bind(write.recipe_subset),
-                    "extraction_json": _json_bind(with_inspection_index(write.extraction)),
-                    "status": write.status,
-                    "reason": None,
-                    "metrics_json": _json_bind(None),
-                },
-                update_extraction=True,
-            )
-            _execute(
-                connection,
-                """
-                UPDATE rag_document_recipes
-                SET active_extraction_recipe_id = :extraction_recipe_id,
-                    failed_phase = NULL,
-                    error_message = NULL,
-                    finished_at = NULL,
-                    updated_at = SYSTIMESTAMP
-                WHERE recipe_id = :recipe_id
-                """,
-                {"recipe_id": recipe_id, "extraction_recipe_id": write.extraction_recipe_id},
+                document_id=document_id,
+                recipe_id=recipe_id,
+                tenant_id_hash=tenant,
+                source_extraction_recipe_id=source_id,
+                source_extraction=source_extraction,
+                write=write,
+                kind="EDITED",
             )
             return write.extraction_recipe_id
 
         return await self._run_transaction(operation)
+
+    async def restore_document_recipe_extraction_revision(
+        self,
+        *,
+        document_id: str,
+        recipe_id: str,
+        revision_no: int,
+        expected_extraction_recipe_id: str,
+        build: Callable[
+            [Mapping[str, object], Mapping[str, object], Mapping[str, object]],
+            ReviewedExtractionWrite,
+        ],
+    ) -> int:
+        """指定の版の内容を新しい版として今の抽出にし、新しい版の番号を返す(#2644)。
+
+        過去の版の行は変えない。``expected_extraction_recipe_id`` は画面が読んだ今の抽出で、違えば
+        ほかの保存が先に入っているので ``DocumentReviewEditConflictError``。旧 active の chunk_set
+        は変えない(次の分割・索引の切替まで検索に出し続ける)。版が無ければ ``KeyError``。
+        ``build(レシピの行, 抽出成果の行, 版の行)`` の例外は rollback してそのまま返す。
+        """
+        tenant = current_audit_request_context().tenant_id_hash
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            from app.clients.extraction_revision_store import (
+                commit_extraction_revision,
+                latest_revision,
+                select_revision_for_restore,
+            )
+
+            recipe, artifact = _lock_recipe_for_review_change(connection, document_id, recipe_id)
+            source_id = str(recipe["active_extraction_recipe_id"])
+            if source_id != expected_extraction_recipe_id:
+                raise DocumentReviewEditConflictError(
+                    "読み込んだ後に、ほかの操作で抽出結果が変わりました。開き直してください。"
+                )
+            target = select_revision_for_restore(connection, recipe_id, revision_no)
+            if target is None:
+                raise KeyError("抽出の版が見つかりません。")
+            # 今の版は最新の版だけ。同じ設定で解析し直すと、解析の ID は古い解析の版と同じになる。
+            latest = latest_revision(connection, recipe_id)
+            if (
+                latest is not None
+                and latest["extraction_recipe_id"] == source_id
+                and _int_value(latest["revision_no"]) == target["revision_no"]
+            ):
+                raise DocumentReviewEditConflictError("この版はすでに今の版です。")
+            return commit_extraction_revision(
+                connection,
+                document_id=document_id,
+                recipe_id=recipe_id,
+                tenant_id_hash=tenant,
+                source_extraction_recipe_id=source_id,
+                source_extraction=cast("Mapping[str, object]", artifact["extraction_json"]),
+                write=build(recipe, artifact, target),
+                kind="RESTORED",
+                restored_from=(
+                    _int_value(target["revision_no"]),
+                    _int_value(target["base_revision_no"]),
+                ),
+            )
+
+        return await self._run_transaction(operation)
+
+    async def list_document_recipe_extraction_revisions(
+        self, recipe_id: str
+    ) -> list[dict[str, object]]:
+        """レシピの抽出の版を新しい順に返す(本文は読まない。#2644)。"""
+        from app.clients.extraction_revision_store import LIST_REVISIONS_SQL, revision_row
+
+        rows = await self._fetch_all(LIST_REVISIONS_SQL, {"recipe_id": recipe_id})
+        return [revision_row(row) for row in rows]
+
+    async def get_document_recipe_extraction_revision(
+        self, recipe_id: str, revision_no: int
+    ) -> dict[str, object] | None:
+        """レシピの抽出の版を本文つきで返す(#2644)。"""
+        from app.clients.extraction_revision_store import GET_REVISION_SQL, revision_row
+
+        row = await self._fetch_one(
+            GET_REVISION_SQL, {"recipe_id": recipe_id, "revision_no": revision_no}
+        )
+        return revision_row(row) if row is not None else None
+
+    async def recipe_served_extraction_ids(self, recipe_id: str) -> set[str]:
+        """レシピの、検索に出している版が読む抽出の ID(#2644)。"""
+        from app.clients.extraction_revision_store import SERVED_EXTRACTIONS_OF_RECIPE_SQL
+
+        rows = await self._fetch_all(SERVED_EXTRACTIONS_OF_RECIPE_SQL, {"recipe_id": recipe_id})
+        return {str(row["extraction_recipe_id"]) for row in rows}
 
     async def upsert_artifact_layer(
         self,
@@ -4713,12 +4762,15 @@ class OracleClient:
         await self._run_transaction(operation)
 
     async def get_document_sections(self, document_id: str) -> dict[str, object] | None:
-        """人が修正した文書の章節(#713)。未保存は None。"""
+        """人が修正した文書の章節(#713)と、今の版が基にした抽出(#4171)。未保存は None。"""
         row = await self._fetch_one(
             """
-            SELECT sections_json, revision, updated_at
-            FROM rag_document_sections
-            WHERE document_id = :document_id
+            SELECT s.sections_json, s.revision, s.updated_at,
+                   r.base_extraction_recipe_id, r.base_outline_sha256
+            FROM rag_document_sections s
+            LEFT JOIN rag_document_section_revisions r
+              ON r.document_id = s.document_id AND r.revision_no = s.revision
+            WHERE s.document_id = :document_id
             """,
             {"document_id": document_id},
         )
@@ -4732,6 +4784,8 @@ class OracleClient:
             "sections": sections if isinstance(sections, list | dict) else [],
             "revision": int(cast(int, row.get("revision") or 1)),
             "updated_at": row.get("updated_at"),
+            "base_extraction_recipe_id": _optional_str(row.get("base_extraction_recipe_id")),
+            "base_outline_sha256": _optional_str(row.get("base_outline_sha256")),
         }
 
     async def save_document_sections(
@@ -4740,65 +4794,87 @@ class OracleClient:
         sections: Mapping[str, object],
         *,
         base_revision: int | None,
+        extraction_base: SectionExtractionBase,
     ) -> int:
-        """人が修正した章節を保存し、新しい revision を返す(#713)。
+        """人が修正した章節を新しい版として保存し、今の版の番号を返す(#713・#4171)。
 
-        ``base_revision`` は読み込んだときの revision(未保存なら None)。保存済みの revision と
-        違えば ``DocumentSectionsConflictError``(読み込んだ後にほかの人が保存した)。
+        ``base_revision`` は読み込んだときの版(未保存なら None)。今の版と違えば
+        ``DocumentSectionsConflictError``(読み込んだ後にほかの人が保存した)。
         """
-        binds = {"document_id": document_id, "sections_json": _json_bind(dict(sections))}
 
         def operation(connection: OracleConnectionProtocol) -> int:
-            row = _fetch_one(
+            from app.clients.section_revision_store import commit_section_save
+
+            return commit_section_save(
                 connection,
-                """
-                SELECT revision FROM rag_document_sections
-                WHERE document_id = :document_id
-                FOR UPDATE
-                """,
-                {"document_id": document_id},
+                document_id=document_id,
+                sections=sections,
+                base_revision=base_revision,
+                extraction_base=extraction_base,
             )
-            current = int(cast(int, row["revision"])) if row is not None else None
-            if current != base_revision:
-                raise DocumentSectionsConflictError(document_id)
-            if current is None:
-                _execute(
-                    connection,
-                    """
-                    INSERT INTO rag_document_sections (document_id, sections_json)
-                    VALUES (:document_id, :sections_json)
-                    """,
-                    binds,
-                    input_sizes=_json_input_sizes("sections_json"),
-                )
-                return 1
-            _execute(
-                connection,
-                """
-                UPDATE rag_document_sections
-                SET sections_json = :sections_json,
-                    revision = revision + 1,
-                    updated_at = SYSTIMESTAMP
-                WHERE document_id = :document_id
-                """,
-                binds,
-                input_sizes=_json_input_sizes("sections_json"),
-            )
-            return current + 1
 
         return await self._run_transaction(operation)
 
-    async def delete_document_sections(self, document_id: str) -> None:
-        """人が修正した章節を消し、抽出結果の章節に戻す(#713)。"""
+    async def delete_document_sections(
+        self, document_id: str, *, extraction_base: SectionExtractionBase
+    ) -> None:
+        """人が修正した章節を抽出結果の章節に戻し、戻したことを版にする(#713・#4171)。"""
 
         def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                "DELETE FROM rag_document_sections WHERE document_id = :document_id",
-                {"document_id": document_id},
+            from app.clients.section_revision_store import commit_section_reset
+
+            commit_section_reset(
+                connection, document_id=document_id, extraction_base=extraction_base
             )
 
         await self._run_transaction(operation)
+
+    async def restore_document_section_revision(
+        self,
+        document_id: str,
+        revision_no: int,
+        *,
+        expected_revision: int | None,
+        extraction_base: SectionExtractionBase,
+    ) -> int:
+        """章節の版の内容を新しい版として今の修正にし、新しい版の番号を返す(#4171)。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            from app.clients.section_revision_store import commit_section_restore
+
+            return commit_section_restore(
+                connection,
+                document_id=document_id,
+                revision_no=revision_no,
+                expected_revision=expected_revision,
+                extraction_base=extraction_base,
+            )
+
+        return await self._run_transaction(operation)
+
+    async def list_document_section_revisions(self, document_id: str) -> list[dict[str, object]]:
+        """文書の章節の版を新しい順に返す(本文は読まない。#4171)。"""
+        from app.clients.section_revision_store import (
+            LIST_SECTION_REVISIONS_SQL,
+            section_revision_row,
+        )
+
+        rows = await self._fetch_all(LIST_SECTION_REVISIONS_SQL, {"document_id": document_id})
+        return [section_revision_row(row) for row in rows]
+
+    async def get_document_section_revision(
+        self, document_id: str, revision_no: int
+    ) -> dict[str, object] | None:
+        """文書の章節の版を本文つきで返す(#4171)。"""
+        from app.clients.section_revision_store import (
+            GET_SECTION_REVISION_SQL,
+            section_revision_row,
+        )
+
+        row = await self._fetch_one(
+            GET_SECTION_REVISION_SQL, {"document_id": document_id, "revision_no": revision_no}
+        )
+        return section_revision_row(row) if row is not None else None
 
     async def list_search_answer_profile_chunk_texts(
         self,
@@ -13785,6 +13861,65 @@ def _merge_document_extraction_artifact(
             "metrics_json",
         ),
     )
+
+
+def _lock_recipe_for_review_change(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+    recipe_id: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """確認待ちのレシピの行を押さえ、(レシピの行, 今の抽出成果の行) を返す(#2616・#2644)。
+
+    確認待ちでない・処理中・抽出結果が無いときは ``DocumentReviewEditConflictError``。
+    """
+    _ensure_recipe_row_if_default(connection, document_id, recipe_id)
+    locked = _select_document_recipe_for_update(connection, document_id, recipe_id)
+    if locked is None:
+        raise KeyError("レシピが見つかりません。")
+    recipe = _document_recipe_row(locked)
+    if recipe["status"] != FileStatus.REVIEW.value:
+        raise DocumentReviewEditConflictError("確認待ちのレシピのみ修正できます。")
+    active_job = _fetch_one(
+        connection,
+        """
+        SELECT job_id FROM rag_ingestion_jobs
+        WHERE recipe_id = :recipe_id
+          AND document_id = :document_id
+          AND status IN ('QUEUED', 'RUNNING')
+        FETCH FIRST 1 ROWS ONLY
+        """,
+        {"recipe_id": recipe_id, "document_id": document_id},
+    )
+    if active_job is not None:
+        raise DocumentReviewEditConflictError("このレシピは処理中または待機中です。")
+    source_extraction_recipe_id = recipe["active_extraction_recipe_id"]
+    if source_extraction_recipe_id is None:
+        raise DocumentReviewEditConflictError("修正対象の抽出結果がありません。")
+    artifact_row = _fetch_one(
+        connection,
+        """
+        SELECT document_id, extraction_recipe_id, source_sha256, status, reason,
+               recipe_subset, extraction_json, metrics_json
+        FROM rag_document_extractions
+        WHERE document_id = :document_id
+          AND extraction_recipe_id = :extraction_recipe_id
+        """,
+        {
+            "document_id": document_id,
+            "extraction_recipe_id": source_extraction_recipe_id,
+        },
+    )
+    artifact = (
+        {str(key).lower(): value for key, value in artifact_row.items()}
+        if artifact_row is not None
+        else {}
+    )
+    artifact["recipe_subset"] = _json_loads(artifact.get("recipe_subset"))
+    artifact["extraction_json"] = _json_loads(artifact.get("extraction_json"))
+    artifact["metrics_json"] = _json_loads(artifact.get("metrics_json"))
+    if artifact_row is None or not artifact["extraction_json"]:
+        raise DocumentReviewEditConflictError("修正対象の抽出結果がありません。")
+    return recipe, artifact
 
 
 def _select_document_recipe_for_update(

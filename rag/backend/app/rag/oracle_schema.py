@@ -18,6 +18,7 @@ from app.clients.document_category_store import oracle_document_category_schema_
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
+from app.clients.extraction_revision_store import oracle_extraction_revision_schema_sql
 from app.clients.graph_reference_store import graph_reference_schema_sql
 from app.clients.language_pack_release_store import language_pack_release_statements
 from app.clients.native_hybrid_schema import (
@@ -63,6 +64,7 @@ from app.clients.oracle import (
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
 from app.clients.recipe_version_log import recipe_version_log_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
+from app.clients.section_revision_store import oracle_section_revision_schema_sql
 from app.clients.structure_index_store import structure_index_schema_sql
 from app.clients.support_guide_store import (
     oracle_support_guide_embedding_schema_sql,
@@ -275,6 +277,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             sql=oracle_document_sections_schema_sql(),
         ),
         OracleSchemaSection(
+            name="document_section_revisions",
+            table_name="rag_document_section_revisions",
+            sql=oracle_section_revision_schema_sql(),
+        ),
+        OracleSchemaSection(
             name="conversations",
             table_name="rag_conversations",
             sql=oracle_conversation_schema_sql(),
@@ -336,6 +343,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="graph_references",
             table_name="rag_graph_references",
             sql=graph_reference_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="document_extraction_revisions",
+            table_name="rag_document_extraction_revisions",
+            sql=oracle_extraction_revision_schema_sql(),
         ),
         # 実体の層（#1362）。実体・別名・実体と chunk の関連。rag_chunk_sets / rag_chunks
         # を参照する。
@@ -720,6 +732,23 @@ END;
             name="20261102_007_chunk_set_retired_at",
             table_name="rag_chunk_sets",
             sql=chunk_set_retired_at_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_008_document_extraction_revisions",
+            table_name="rag_document_extraction_revisions",
+            sql=_create_missing_objects_sql(
+                oracle_extraction_revision_schema_sql(), "抽出の修訂の版"
+            ),
+        )
+    )
+    # 番号は Issue の番号。並行の PR の連番（20261102_006 など）と重ならない。
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_4171_document_section_revisions",
+            table_name="rag_document_section_revisions",
+            sql=_create_missing_objects_sql(oracle_section_revision_schema_sql(), "章節の修正の版"),
         )
     )
     return sections

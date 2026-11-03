@@ -50,7 +50,9 @@ class _Responses:
 
     def parse(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
-        return SimpleNamespace(status="completed", output_parsed=TextOutput(text="ok"))
+        return SimpleNamespace(
+            status="completed", output_text=TextOutput(text="ok").model_dump_json()
+        )
 
 
 def test_engine_parse_does_not_send_seed() -> None:

@@ -14,6 +14,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -531,13 +532,6 @@ def is_invalid_structured_output(exc: Exception) -> bool:
     return isinstance(exc, ValidationError)
 
 
-def _audit_wire_request(request: dict[str, Any]) -> dict[str, Any]:
-    """固定キー監査だけはraw JSONをcodecで検査する。同じstrict schemaをSDKで送る。"""
-    if not is_audit_wire(request.get("text_format")):
-        return request
-    return _response_wire_request(request)
-
-
 def _response_wire_request(request: dict[str, Any]) -> dict[str, Any]:
     """SDK が送る structured output の schema を JSON にそろえる。"""
     from openai.lib._parsing._responses import type_to_text_format_param
@@ -799,10 +793,11 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     回答の期限がある文脈で停滞の検出（`settings.llm_stall_detection`。#1926）が ON なら、応答を streaming で受け、
     停滞した呼び出し（`_stream_parsed`）を打ち切って同じ要求を送り直す（`llm_stall_resends` 回まで。最後の送信は
     検出せずに期限まで待つ）。打ち切った呼び出しは理由（`stall_idle` / `stall_slow`）を未完了の理由として残す。
-    stream が失敗の event で終わった呼び出し（`LlmStreamFailed`。理由は `stream_error`）も、同じ要求を
-    ``STREAM_FAILED_RESENDS`` 回まで送り直す（#2814）。streaming の呼び出しで暴走の検出（`settings.llm_runaway_detection`）
-    が ON なら、出力が同じ並びの繰り返し・空白だけで続いた呼び出しを打ち切り（`LlmRunawayOutput`）、推論の量を 1 段
-    下げて（下げられなければそのまま）``RUNAWAY_RESENDS`` 回まで送り直す（#2966。出力の上限まで待たない）。
+    stream が失敗の event で終わった呼び出し（`LlmStreamFailed`。理由は `stream_error`）と、完了の event の応答に本文が無い
+    呼び出し（`LlmStreamOutputMissing`。#4197）も、同じ要求を ``STREAM_FAILED_RESENDS`` 回まで送り直す（#2814）。
+    streaming の呼び出しで暴走の検出（`settings.llm_runaway_detection`）が ON なら、出力が同じ並びの繰り返し・空白だけで
+    続いた呼び出しを打ち切り（`LlmRunawayOutput`）、推論の量を 1 段下げて（下げられなければそのまま）
+    ``RUNAWAY_RESENDS`` 回まで送り直す（#2966。出力の上限まで待たない）。
     streaming しない呼び出しも、暴走の検出が ON なら、出力の上限で未完了の応答の出力の文に同じ暴走があるか
     （`_runaway_response_reason`）を確かめ、上限を広げずに同じ送り直しにする（#3835。上限を広げても空白・繰り返しが
     続くだけなので）。打ち切りの理由は工程の記録の `incomplete_reasons` と失敗の詳細（`cutoff_reason`）に残す。
@@ -848,14 +843,12 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         started = time.monotonic()
         try:
             with observe_call("chat", provider.model) as observation:
+                # SDK に本文を検証させない（応答の状態を確かめてからコードで検証する。#4145・#4197）。schema だけを送る。
+                wire_request = _response_wire_request(request)
                 if getattr(observation, "capture_enabled", True):
-                    snapshot = _response_wire_request(request)
-                    if streamed:
-                        snapshot["stream"] = True
-                    observation.request(snapshot, schema=snapshot["text"]["format"])
+                    observation.request({**wire_request, **({"stream": True} if streamed else {})}, schema=wire_request["text"]["format"])
                 else:
                     observation.request(None)
-                wire_request = _audit_wire_request(request)
                 capture = (
                     CallStreamCapture(observation.response, enabled=getattr(observation, "capture_enabled", True)) if streamed else None
                 )
@@ -865,17 +858,16 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                         wire_request,
                         settings,
                         limits,
+                        text_format=text_format,
                         runaway=runaway,
                         capture=capture,
                     )
                 else:
                     client = _openai_client_with_deadline(_openai_client_for_provider(provider, settings), settings)
                     # text_format を渡すと SDK が応答の組み立ての中で本文を検証し、上限で切れた応答（未完了）も検証の失敗になって
-                    # 下の送り直しに届かない（#4145）。schema だけを送り、応答の状態を確かめてから本文を検証する。
+                    # 下の送り直しに届かない（#4145）。
                     response = (
-                        client.responses.create(**wire_request)
-                        if is_audit_wire(text_format)
-                        else client.responses.parse(**_response_wire_request(request))
+                        client.responses.create(**wire_request) if is_audit_wire(text_format) else client.responses.parse(**wire_request)
                     )
                 if capture is None or not capture.has_terminal:
                     observation.response(response)
@@ -934,7 +926,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
             stall_resends += 1
             continue
         seconds = time.monotonic() - started
-        _record_usage(
+        record_usage = partial(
+            _record_usage,
             response,
             provider,
             text_format,
@@ -947,6 +940,7 @@ def _openai_parsed[StructuredOutputT: BaseModel](
         try:
             parsed = _parsed_response(response, text_format, provider)
         except IncompleteResponse as exc:
+            record_usage()
             if time_capped and exc.reason == INCOMPLETE_OUTPUT_REASON:
                 # 残りの時間で出せる分を出し切っても終わらなかった。送り直しても期限に間に合わない。
                 expire_deadline()
@@ -977,6 +971,10 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                 record_llm_effort_retry()
             attempt += 1
             continue
+        except Exception as exc:
+            record_usage(rejected=exc)
+            raise
+        record_usage()
         _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
         if timing is not None:
             _note_stream_timing(provider, timing)
@@ -1063,6 +1061,8 @@ class _StreamTiming:
     last_delta_seconds: float | None = None
     deltas: int = 0
     max_gap_seconds: float = 0.0
+    # 開始を知らせていない出力の項目を指す event の数（`_StreamEventTrail`。#4197）。
+    unordered_events: int = 0
 
     @property
     def delta_rate(self) -> float | None:
@@ -1243,6 +1243,53 @@ class LlmStreamFailed(ConnectionError):
         self.timing = timing
 
 
+class LlmStreamOutputMissing(LlmStreamFailed):
+    """完了の event の応答に本文も拒否も無かった（送り直す。送り直しても同じなら出力の不合格と同じに退避する。#4197）。
+
+    ``stream_trace`` は本文を除いた event の並び（`_StreamEventTrail.trace`）。
+    """
+
+    def __init__(self, message: str, timing: _StreamTiming, stream_trace: dict[str, Any]) -> None:
+        super().__init__(message, timing)
+        self.stream_trace = stream_trace
+
+
+# 本文を除いた event の記録の上限（delta は数えるだけで並びに残さない）。
+STREAM_EVENT_TRAIL_LIMIT = 40
+
+
+class _StreamEventTrail:
+    """本文を除いた event の type と番号の並びと、開始を知らせていない出力の項目を指す event を記録する（#4197）。
+
+    応答の本文は完了の event だけから読むので、event の順は結果に効かない。provider の順を記録から確かめるために残す。
+    """
+
+    def __init__(self, timing: _StreamTiming) -> None:
+        self.timing = timing
+        self.rows: list[dict[str, Any]] = []
+        self.announced: set[int] = set()
+        self.first_unordered: dict[str, Any] | None = None
+
+    def feed(self, kind: str, event: Any) -> None:
+        output_index = _value(event, "output_index")
+        row = {"type": kind[:80], "output_index": output_index, "content_index": _value(event, "content_index")}
+        if kind == "response.output_item.added":
+            self.announced.add(output_index)
+        elif output_index is not None and output_index not in self.announced:
+            self.timing.unordered_events += 1
+            self.first_unordered = self.first_unordered or row
+        if not kind.endswith(".delta") and len(self.rows) < STREAM_EVENT_TRAIL_LIMIT:
+            self.rows.append(row)
+
+    def trace(self, final: Any) -> dict[str, Any]:
+        return {
+            "events": self.rows,
+            "delta_events": self.timing.deltas,
+            "unordered_events": self.timing.unordered_events,
+            "final_output_types": [str(_value(item, "type") or "")[:80] for item in _value(final, "output", []) or []],
+        }
+
+
 def _stall_detection_enabled(settings: Settings) -> bool:
     """停滞の検出をするか（回答の期限がある文脈だけ。取込などの期限の無い呼び出しは従来どおり）。"""
     return bool(getattr(settings, "llm_stall_detection", False)) and current_deadline() is not None
@@ -1282,17 +1329,22 @@ def _stream_parsed(
     settings: Settings,
     limits: _StallLimits | None,
     *,
+    text_format: type | None = None,
     runaway: bool = False,
     capture: CallStreamCapture | None = None,
 ) -> tuple[Any, _StreamTiming]:
-    """Responses API を streaming で呼び、完了（または未完了）の応答と時刻を返す（#1926）。
+    """Responses API を streaming で呼び、完了（または未完了）の event の応答と時刻を返す（#1926）。
+
+    SDK の組み立て（`responses.stream`）を通さず、event をそのまま読む。応答は完了の event が持つ全体を使うので、provider の
+    event の順（項目の開始より前の content_part・delta など）では失敗しない（#4197）。``request`` は wire の形（schema は ``text``）。
 
     1 回の待ちの上限（httpx の read timeout。event の間隔）は、停滞の検出をする送信では ``limits.idle_seconds``、
     しない送信（最後の送り直し）では全体の上限。全体の上限（LLM 1 回の timeout と回答の期限の残りの短いほう）と
     取り消しは event ごとに確かめる。停滞を検出したら stream を閉じて（接続を切って）`LlmStreamStalled` を送出する。
     出力の速さ（直近 `STALL_RATE_WINDOW_SECONDS` 秒の delta の数）は、最初の delta から同じ秒が経ってから確かめる。
     ``runaway`` なら出力の文の末尾で暴走（`_RunawayMonitor`）を確かめ、暴走なら stream を閉じて `LlmRunawayOutput` を
-    送出する（#2966）。失敗の event と、SDK が event から応答を組み立てられなかった stream（#3000）は `LlmStreamFailed`。
+    送出する（#2966）。失敗の event と、完了の event なしに切れた stream は `LlmStreamFailed`、完了の event の応答に本文も
+    拒否も無ければ `LlmStreamOutputMissing`。本文の検証は呼び出し側が応答の状態を確かめてから行う。
     """
     import httpx
 
@@ -1305,14 +1357,16 @@ def _stream_parsed(
     read_timeout = min(limits.idle_seconds, total) if limits is not None else total
     idle_bound = limits is not None and limits.idle_seconds < total
     timing = _StreamTiming()
-    schema = request.get("text_format")
-    draft_arrays = isinstance(schema, type) and issubclass(schema, GroundedDraft)
+    trail = _StreamEventTrail(timing)
+    draft_arrays = isinstance(text_format, type) and issubclass(text_format, GroundedDraft)
     monitor = _RunawayMonitor(draft_arrays=draft_arrays) if runaway else None
     window: deque[float] = deque()
     final: Any = None
     last = started
     try:
-        with client.with_options(timeout=httpx.Timeout(total, read=read_timeout), max_retries=0).responses.stream(**request) as stream:
+        with client.with_options(timeout=httpx.Timeout(total, read=read_timeout), max_retries=0).responses.create(
+            stream=True, **request
+        ) as stream:
             for event in stream:
                 if capture is not None:
                     capture.feed(event)
@@ -1323,6 +1377,7 @@ def _stream_parsed(
                 if timing.first_event_seconds is None:
                     timing.first_event_seconds = elapsed
                 kind = str(_value(event, "type") or "")
+                trail.feed(kind, event)
                 if kind.endswith(".delta"):
                     timing.deltas += 1
                     timing.last_delta_seconds = elapsed
@@ -1360,10 +1415,6 @@ def _stream_parsed(
         if _is_stream_error_event(exc):
             # OpenAI SDK は stream の error の event を event として返さず APIError として送出する（#2814）。
             raise LlmStreamFailed(f"LLM の応答が失敗の event で終わりました: {str(exc)[:300]}", timing) from exc
-        if isinstance(exc, AssertionError):
-            # OpenAI SDK は event から応答を組み立てるとき、delta が指す出力の種類を assert で確かめる。provider が種類の
-            # 合わない出力を指す event を送ると AssertionError になる（#3000）。provider の一時的な失敗として送り直す。
-            raise LlmStreamFailed(f"LLM の応答の stream の event を組み立てられませんでした（{type(exc).__name__}）。", timing) from exc
         with suppress(AttributeError):
             exc.timing = timing  # type: ignore[attr-defined]
         raise
@@ -1372,6 +1423,17 @@ def _stream_parsed(
             capture.flush(interrupted=final is None)
     if final is None:
         raise LlmStreamFailed("LLM の応答の stream が完了の event なしに終わりました。", timing)
+    if timing.unordered_events:
+        _logger.warning(
+            "LLM stream events out of order: unordered_events=%d first=%s final_output_types=%s",
+            timing.unordered_events,
+            json.dumps(trail.first_unordered, ensure_ascii=False),
+            ",".join(trail.trace(final)["final_output_types"]) or "-",
+        )
+    if _value(final, "status") == "completed" and not _response_output_text(final) and not _response_refusal(final):
+        trace = trail.trace(final)
+        _logger.warning("LLM stream completed without output: trace=%s", json.dumps(trace, ensure_ascii=False))
+        raise LlmStreamOutputMissing("LLM の応答の完了の event に本文がありません。", timing, trace)
     return final, timing
 
 
@@ -1414,6 +1476,7 @@ def _record_usage(
     deadline_capped: bool = False,
     timing: _StreamTiming | None = None,
     cutoff_reason: str = "",
+    rejected: Exception | None = None,
 ) -> None:
     """1 回の呼び出しの token の数と秒を、工程の記録の累積と log に残す（#1516。遅い工程の理由を確かめる）。
 
@@ -1421,19 +1484,22 @@ def _record_usage(
     広げた送り直しの何回目か（0 は最初の送信）、``max_output_tokens`` はその送信の出力の上限（#1527）、
     ``deadline_capped`` はその上限を回答の期限の残りで抑えたか（#1548）。streaming で受けた呼び出しは ``timing``
     （最初の event までの秒・出力の速さ・最大の間隔。#1926）も残す。``cutoff_reason`` は、出力の暴走と見分けた
-    未完了の応答の理由（`runaway_whitespace` など。#3835）で、未完了の理由の代わりに残す。
+    未完了の応答の理由（`runaway_whitespace` など。#3835）で、未完了の理由の代わりに残す。``rejected`` は応答の本文を
+    検証した例外で、構造化出力の不合格なら失敗として類別（本文を含まない）を残す。使った token の数は残る。
     """
     usage = response_usage(response)
     status = str(_value(response, "status") or "")
     reason = str(_value(_value(response, "incomplete_details"), "reason") or "unknown") if status == "incomplete" else ""
     reason = cutoff_reason or reason
+    invalid = rejected if rejected is not None and is_invalid_structured_output(rejected) else None
     _log_call(
         usage,
         seconds,
         provider,
         text_format,
-        status=status,
-        reason=reason,
+        status="failed" if invalid is not None else status,
+        reason=type(invalid).__name__ if invalid is not None else reason,
+        failure_details=structured_failure_details(invalid, text_format) if invalid is not None else None,
         attempt=attempt,
         max_output_tokens=max_output_tokens,
         deadline_capped=deadline_capped,
@@ -1482,6 +1548,8 @@ def _timing_fields(timing: _StreamTiming | None) -> dict[str, float]:
     if timing is None:
         return {}
     fields: dict[str, float] = {"max_gap_seconds": round(timing.max_gap_seconds, 2), "delta_events": timing.deltas}
+    if timing.unordered_events:
+        fields["unordered_events"] = timing.unordered_events
     if timing.first_event_seconds is not None:
         fields["first_event_seconds"] = round(timing.first_event_seconds, 2)
     if timing.first_delta_seconds is not None:
@@ -1688,45 +1756,16 @@ def _parsed_response[StructuredOutputT: BaseModel](
         except (ValueError, TypeError) as exc:
             raise InvalidStructuredOutput("固定キー監査の応答を構造検証できません。") from exc
 
-    parsed = _value(response, "output_parsed")
-    if parsed is not None:
-        return _coerce_parsed_output(parsed, text_format, provider, response=response)
-
     refusal = _response_refusal(response)
     if refusal:
         raise RuntimeError(f"{provider.label} の Responses API が拒否を返しました: {refusal}")
 
-    for content in _iter_response_content(response):
-        parsed = _value(content, "parsed")
-        if parsed is not None:
-            return _coerce_parsed_output(parsed, text_format, provider, response=response)
-
-    if text := _response_output_text(response):
-        # 完了した応答の本文を検証する。不正な JSON は pydantic の ValidationError（再実行の対象）のまま。
-        return _coerce_parsed_output(text_format.model_validate_json(text), text_format, provider, response=response)
-
-    raise RuntimeError(f"{provider.label} の Responses API 応答に parsed output がありません。")
-
-
-def _coerce_parsed_output[StructuredOutputT: BaseModel](
-    parsed: Any,
-    text_format: type[StructuredOutputT],
-    provider: LlmProviderSettings,
-    *,
-    response: Any = None,
-) -> StructuredOutputT:
-    if isinstance(parsed, text_format):
-        output = parsed
-    else:
-        try:
-            output = text_format.model_validate(parsed)
-        except Exception as exc:
-            raise InvalidStructuredOutput(f"{provider.label} の LLM parsed output 型が不正です。") from exc
+    text = _response_output_text(response)
+    if not text:
+        raise RuntimeError(f"{provider.label} の Responses API 応答に本文がありません。")
+    # 完了した応答の本文を検証する。不正な JSON は pydantic の ValidationError（再実行の対象）のまま。
+    output = text_format.model_validate_json(text)
     if "_provider_output_text" in output.__private_attributes__:
-        text = _value(response, "output_text")
-        if not isinstance(text, str):
-            pieces = [_value(content, "text") for content in _iter_response_content(response) if _value(content, "type") == "output_text"]
-            text = "".join(piece for piece in pieces if isinstance(piece, str)) if pieces else None
         cast(Any, output)._provider_output_text = text
     return output
 

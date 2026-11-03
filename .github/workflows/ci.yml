@@ -461,6 +461,8 @@ jobs:
               - "rag/backend/tests/test_recipe_activation_baseline_oracle.py"
               - "rag/backend/app/clients/structure_index_store.py"
               - "rag/backend/app/clients/graph_reference_store.py"
+              - "rag/backend/app/clients/extraction_revision_store.py"
+              - "rag/backend/app/clients/section_revision_store.py"
               - "rag/backend/app/rag/reference_*.py"
               - "rag/backend/app/rag/graph_index.py"
               - "rag/backend/app/rag/structure_index*.py"

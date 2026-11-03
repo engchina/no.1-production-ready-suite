@@ -1,6 +1,6 @@
 """LLM の OpenAI 互換 client は、モデルが受け付けない引数を外して送り直す（#3539）。
 
-回答・監査などの呼び出し（`responses.parse` / `responses.stream`）は `temperature` 0 を送る。サンプリングの
+回答・監査などの呼び出し（`responses.parse` / `responses.create`）は `temperature` 0 を送る。サンプリングの
 引数を受け付けない推論モデルの 400 では、その引数を外して 1 回だけ送り直し、以後そのモデルには送らない。
 HTTP は httpx.MockTransport（決定論。合成の 400 の本文）で受け、OCI へは接続しない。
 """

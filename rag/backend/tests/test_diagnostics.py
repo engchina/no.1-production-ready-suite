@@ -201,6 +201,8 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_native_index_full_optimize_interval_hours",
         "rag_rerank_max_documents_per_request",
         "rag_support_guide_max_published_revisions",
+        "rag_extraction_max_revisions",
+        "rag_section_max_revisions",
         # 要求ごとにプロファイルから解決する値。内容の版は manifest の profiles に残る。
         "rag_answer_contact_override",
         "rag_domain_keywords",

@@ -43,7 +43,7 @@ class _Responses:
         self._owner.calls.append(self._owner.options)
         if self._owner.errors:
             raise self._owner.errors.pop(0)
-        return SimpleNamespace(status="completed", output_parsed=TextOutput(text="ok"))
+        return SimpleNamespace(status="completed", output_text=TextOutput(text="ok").model_dump_json())
 
 
 class _FakeClient:

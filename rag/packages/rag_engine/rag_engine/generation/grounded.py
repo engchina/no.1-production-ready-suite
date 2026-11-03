@@ -106,7 +106,7 @@ from rag_engine.resources.deadline import (
 )
 from rag_engine.resources.llm_usage import usage_delta, usage_line, usage_snapshot
 from rag_engine.resources.runtime import resolve_prompt
-from rag_engine.resources.structured_failures import structured_failure_details
+from rag_engine.resources.structured_failures import failure_summary_fields, structured_failure_details
 from rag_engine.retrieval.answer_requirements import answer_requirements
 from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
 from rag_engine.retrieval.character_forms import fold_model_view, fold_text, fold_text_with_positions, fold_width
@@ -8308,10 +8308,10 @@ def generation_failure_detail(exc: Exception) -> dict[str, Any]:
     details = structured_failure_details(exc)
     invalid = exc if isinstance(exc, DraftGenerationInvalid) else None
     source = invalid.__cause__ if invalid is not None and invalid.__cause__ is not None else exc
-    result: dict[str, Any] = {"category": str(invalid) if invalid is not None and source is invalid else details["category"]}
-    for key in ("provider_status", "incomplete_reason", "cutoff_reason", "contract_code"):
-        if key in details:
-            result[key] = details[key]
+    result: dict[str, Any] = {
+        "category": str(invalid) if invalid is not None and source is invalid else details["category"],
+        **failure_summary_fields(details),
+    }
     if isinstance(source, ValidationError):
         result["model"] = source.title
         result["validation_error_types"] = dict(Counter(row["type"] for row in details.get("validation_errors", ())))

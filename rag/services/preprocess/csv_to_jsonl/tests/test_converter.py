@@ -34,6 +34,12 @@ def _values(row: RowLine) -> dict[str, str]:
     return {item.name: item.value for item in row.fields}
 
 
+@pytest.mark.parametrize("encoding", ["cp932", "euc_jp"])
+def test_japanese_legacy_encoding_keeps_values(encoding: str) -> None:
+    document = _document("番号,値\n1,合成の値\n2,合成の値\n".encode(encoding))
+    assert _values(_rows(document)[0]) == {"番号": "1", "値": "合成の値"}
+
+
 def test_csv_to_jsonl_records_with_header_and_lines() -> None:
     document = _document(b"name,age\nAlice,30\nBob,25\n")
     assert document.document.source_type == "csv"

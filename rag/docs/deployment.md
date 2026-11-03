@@ -221,7 +221,7 @@ readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`�
 候補として次の切替で消える。
 
 設定（`rag/backend/.env`）: `RAG_CHUNK_SET_RETENTION_DAYS`（既定 7）と `RAG_CHUNK_SET_RETAINED_VERSIONS`（既定 1）。
-**既定の値は提案で、利用者の確認待ち。** 清掃は取込ワーカーの定期の処理で動く。切替の後に `rag_chunks` と原生索引の行が
+清掃は取込ワーカーの定期の処理で動く。切替の後に `rag_chunks` と原生索引の行が
 旧版の分だけ残るので、保持の間は保存量が増える。
 
 ## 既存環境の更新手順（#4167 active の切替の基線の照合と履歴）

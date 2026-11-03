@@ -2561,10 +2561,13 @@ def _source_question_scores(context: AnswerContext) -> dict[str, float | None]:
 
 
 def _invalid_structured_output(exc: Exception) -> bool:
-    """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。"""
-    from rag_engine.adapters.oci import LlmRunawayOutput, is_invalid_structured_output
+    """LLM の応答が構造化出力の契約を満たさなかった例外か（再試行の後も。#2772）。
 
-    return isinstance(exc, LlmRunawayOutput) or is_invalid_structured_output(exc)
+    完了の event の応答に本文が無いまま送り直しも尽きたとき（#4197）も、使える出力が無い点は同じなので含める。
+    """
+    from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamOutputMissing, is_invalid_structured_output
+
+    return isinstance(exc, LlmRunawayOutput | LlmStreamOutputMissing) or is_invalid_structured_output(exc)
 
 
 def synthesize_grounded_answer(
@@ -2898,13 +2901,16 @@ def synthesize_grounded_answer(
                         images,
                         mode,
                     )
+                    work = "資料の分割読取" if preparing_evidence else "回答文の生成"
+                    problem = (
+                        "の応答に本文が無かった"
+                        if generation_failure_detail.get("category") == "stream_output_missing"
+                        else "の出力が形式の検査を通らなかった"
+                    )
                     step.result(
                         "モデルの入力予算に必須の根拠または指示が入らないため、生成を送信せず資料の記載を示します"
                         if input_limited
-                        else "資料の分割読取の出力が形式の検査を通らなかったため、"
-                        f"回答文を生成せず、質問に関係する資料の記載だけを示します（{generation_failure}）"
-                        if preparing_evidence
-                        else "回答文の生成の出力が形式の検査を通らなかったため、"
+                        else f"{work}{problem}ため、{'回答文を生成せず、' if preparing_evidence else ''}"
                         f"質問に関係する資料の記載だけを示します（{generation_failure}）"
                     )
                 elif best is None:

@@ -35,6 +35,7 @@ from rag_parser_core.structured_records import (
     RowLine,
     dump_structured_records,
 )
+from rag_parser_core.text_encoding import detect_text_match
 
 CONVERTER_NAME = "csv_to_jsonl"
 CONVERTER_VERSION = "v3"
@@ -62,15 +63,10 @@ def _decode_csv(source_bytes: bytes) -> tuple[str | None, list[str]]:
     try:
         return source_bytes.decode("utf-8-sig"), warnings
     except UnicodeDecodeError:
-        try:
-            from charset_normalizer import from_bytes
-
-            best = from_bytes(source_bytes).best()
-            if best is not None:
-                warnings.append("csv_charset_fallback")
-                return str(best), warnings
-        except Exception:  # noqa: BLE001 - 判定失敗は utf-8(置換)へ縮退する
-            pass
+        best = detect_text_match(source_bytes)
+        if best is not None:
+            warnings.append("csv_charset_fallback")
+            return str(best), warnings
         warnings.append("csv_charset_fallback")
         return source_bytes.decode("utf-8", errors="replace"), warnings
 

@@ -2652,7 +2652,7 @@ class Settings(
         ge=0,
         le=3650,
         description=(
-            "切替で退役した版（chunk_set）を残す日数(#4168)。既定の 7 は提案で、利用者の確認待ち。"
+            "切替で退役した版（chunk_set）を残す日数(#4168)。"
             "切替の前に検索された根拠をこの間は開ける。0 は次の清掃で消す。"
         ),
     )
@@ -2662,7 +2662,7 @@ class Settings(
         le=10,
         description=(
             "レシピごとに残す退役した版の数(#4168)。新しい順に数え、超えた版は日数に関わらず次の"
-            "清掃で消す。既定の 1 は提案で、利用者の確認待ち。"
+            "清掃で消す。"
         ),
     )
     rag_extraction_artifact_cache_enabled: bool = Field(
@@ -2673,6 +2673,24 @@ class Settings(
         default="artifacts/extractions",
         max_length=256,
         description="構造化抽出 artifact の Object Storage key prefix。",
+    )
+    rag_extraction_max_revisions: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description=(
+            "抽出の修正の履歴にレシピごとに残す版の数（#2644）。保存・復元のときに古い版から消す"
+            "（今の版・基の解析の版・検索に出している版は残す。版の番号は振り直さない）。"
+        ),
+    )
+    rag_section_max_revisions: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description=(
+            "人が修正した章節の履歴に文書ごとに残す版の数（#4171）。保存・復元・抽出結果への戻しの"
+            "ときに古い版から消す（今の版は残す。版の番号は振り直さない）。"
+        ),
     )
     rag_review_gate_enabled: bool = Field(
         default=True,

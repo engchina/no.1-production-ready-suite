@@ -3,8 +3,8 @@
 import mimetypes
 from pathlib import PurePath
 
-from charset_normalizer import from_bytes
 from rag_parser_core.source import PLAIN_TEXT_MARKUP_EXTENSIONS, is_plain_text_markup
+from rag_parser_core.text_encoding import detect_text_match
 
 from app.rag.office_template import (
     MACRO_TEMPLATE_EXTENSIONS,
@@ -617,7 +617,7 @@ def _detect_text_charset(data: bytes) -> str:
         return "utf-8"
     except UnicodeDecodeError:
         pass
-    match = from_bytes(data).best()
+    match = detect_text_match(data)
     if match is None or not match.encoding:
         return "utf-8"
     label = match.encoding.replace("_", "-").lower()

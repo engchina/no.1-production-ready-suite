@@ -15,6 +15,7 @@ import importlib.util
 import inspect
 import json
 import logging
+import mimetypes
 import os
 import re
 import sys
@@ -31,8 +32,6 @@ from io import BytesIO, StringIO
 from pathlib import Path, PurePath
 from typing import Any, cast
 from xml.etree import ElementTree
-
-from charset_normalizer import from_bytes
 
 from rag_parser_core.capabilities import adapter_supports_source
 from rag_parser_core.extraction import (
@@ -89,6 +88,7 @@ from rag_parser_core.structured_records import (
     structured_records_extraction,
     with_record_boundaries,
 )
+from rag_parser_core.text_encoding import detect_text_match
 from rag_parser_core.unstructured_compat import ensure_pi_heif_absent_stub
 from rag_parser_core.unstructured_source_map import source_format
 
@@ -1282,6 +1282,10 @@ def _unstructured_adapter_result(
     )
     if main_expanded:
         partition_kwargs.update(encoding="utf-8", skip_headers_and_footers=False)
+    utf8_text = _utf8_partition_text(partition_bytes, source_profile, content_type)
+    if utf8_text is not None:
+        partition_bytes = utf8_text
+        partition_kwargs["encoding"] = "utf-8"
     single_column = _single_column_csv_table(source_bytes, source_profile, content_type)
     if single_column is not None and not single_column.has_spaces:
         # 区切りの候補の文字が無いと pandas が値の中の文字を区切りと推定する（#4102）。
@@ -1295,7 +1299,7 @@ def _unstructured_adapter_result(
                     partition,
                     {
                         "filename": str(path),
-                        "content_type": content_type,
+                        "content_type": _partition_content_type(content_type, source_profile),
                         **partition_kwargs,
                     },
                 )
@@ -2152,6 +2156,34 @@ def _first_adapter_extraction_page_number(extraction: StructuredExtraction) -> i
         if element.page_number is not None:
             return element.page_number
     return 1
+
+
+def _utf8_partition_text(
+    source_bytes: bytes, source_profile: SourceProfile | None, content_type: str
+) -> bytes | None:
+    """UTF-8 ではないテキストを UTF-8 にする（Unstructured は判定を誤るか UTF-8 として読む）。
+
+    HTML と XML は文書の中で文字コードを宣言するので、そのまま渡す。
+    """
+    extension = (source_profile.extension if source_profile is not None else "") or ""
+    if source_format(extension, content_type) in {None, "html", "xml"}:
+        return None
+    try:
+        source_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return decode_source_text(source_bytes).encode("utf-8")
+    return None
+
+
+def _partition_content_type(content_type: str, source_profile: SourceProfile | None) -> str | None:
+    """種類が分からない値を拡張子の種類にする（#4202）。
+
+    そのまま渡すと Unstructured は拒み、渡さないと内容の推定で形式が変わる（1 行の XML）。
+    """
+    if _normalized_content_type_for_parser(content_type) not in {"", "application/octet-stream"}:
+        return content_type
+    extension = (source_profile.extension if source_profile is not None else "") or ""
+    return mimetypes.guess_type(f"source{extension}")[0]
 
 
 def _unstructured_partition_kwargs(
@@ -5729,7 +5761,7 @@ def _decode_text_bytes(data: bytes) -> str:
             return data.decode(encoding)
         except UnicodeDecodeError:
             continue
-    match = from_bytes(data).best()
+    match = detect_text_match(data)
     if match is not None:
         return str(match)
     return data.decode("utf-8", errors="replace")

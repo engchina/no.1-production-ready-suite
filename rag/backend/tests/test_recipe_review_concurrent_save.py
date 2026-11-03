@@ -209,7 +209,7 @@ async def test_sequential_saves_keep_both_edits_and_leave_other_artifacts(
     assert (texts["el-a"], texts["el-b"]) == ("A1", "B1")
     reviewed_id = store.recipes[_RECIPE_ID]["active_extraction_recipe_id"]
     assert reviewed_id != _SHARED_ID
-    # 2 回目も同じレシピ固有の成果へ書き、元の抽出成果は copy-on-write で残る。
+    # 保存ごとに新しい ID の成果へ書き、前の成果を書き換えない(#2644)。
     assert store.artifacts[_SHARED_ID]["extraction_json"] == _extraction()
     assert store.artifacts[_OTHER_ID]["extraction_json"] == _extraction()
     assert store.texts(_OTHER_RECIPE_ID)["el-a"] == "A0"
@@ -247,6 +247,24 @@ async def test_concurrent_saves_with_same_text_both_succeed(store: _ReviewStore)
 
     assert errors == [None, None]
     assert store.texts()["el-a"] == "A1"
+
+
+async def test_each_save_writes_a_new_extraction_id(store: _ReviewStore) -> None:
+    """保存ごとに新しい ID になり、前の保存の成果の内容は同じ ID のまま変わらない(#2644)。
+
+    解析の worker は原本・設定・レシピ・revision で決まる ID を使う。修正の保存がこの ID を使うと
+    解析の結果を上書きするので、保存の ID は解析の ID と別にする。
+    """
+    await _apply_recipe_review_text_edits(_DOCUMENT_ID, _RECIPE_ID, _element("el-a", "A0", "A1"))
+    first_id = str(store.recipes[_RECIPE_ID]["active_extraction_recipe_id"])
+    first_content = copy.deepcopy(store.artifacts[first_id])
+
+    await _apply_recipe_review_text_edits(_DOCUMENT_ID, _RECIPE_ID, _element("el-a", "A1", "A2"))
+
+    second_id = str(store.recipes[_RECIPE_ID]["active_extraction_recipe_id"])
+    assert second_id not in {first_id, _SHARED_ID}
+    assert store.artifacts[first_id] == first_content
+    assert store.texts()["el-a"] == "A2"
 
 
 async def test_concurrent_table_cell_saves(store: _ReviewStore) -> None:

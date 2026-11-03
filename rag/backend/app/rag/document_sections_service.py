@@ -14,6 +14,11 @@ from app.rag.document_sections import (
     refresh_from_extraction,
     stored_sections_payload,
 )
+from app.rag.section_revisions import (
+    SectionExtractionBase,
+    base_change_flags,
+    extraction_base_of,
+)
 from app.rag.section_rules import (
     NAVIGATION_RULES_FINGERPRINT_ARTIFACT,
     extraction_sections,
@@ -73,13 +78,13 @@ async def sections_source(
     )
 
 
-async def sections_extraction(
-    oracle: OracleClient, document_id: str, recipe_id: str | None
-) -> tuple[StructuredExtraction | None, SectionRulesMode]:
-    """章節の元にする抽出結果(``recipe_id``、無ければ既定のレシピの今の抽出。無ければ None)と、
-    そのレシピの章節の抽出規則の方式(#715)。"""
-    source = await sections_source(oracle, document_id, recipe_id)
-    return source.extraction, source.rules_mode
+def section_extraction_base(source: SectionsSource) -> SectionExtractionBase:
+    """今の抽出を、章節の修正の基として記録する形にする(#4171)。"""
+    return extraction_base_of(
+        source.extraction_recipe_id,
+        extraction_sections(source.extraction, source.rules_mode, load_section_rules()),
+        has_extraction=source.extraction is not None,
+    )
 
 
 def _navigation_summaries(extraction: StructuredExtraction | None) -> dict[str, str]:
@@ -141,6 +146,13 @@ async def document_sections_with_source(
             source,
         )
     sections, removed = stored_sections_payload(stored["sections"])
+    base_changed, base_outline_changed = base_change_flags(
+        recorded_extraction_recipe_id=stored.get("base_extraction_recipe_id"),
+        recorded_outline_sha256=stored.get("base_outline_sha256"),
+        current=extraction_base_of(
+            source.extraction_recipe_id, extracted, has_extraction=extraction is not None
+        ),
+    )
     return (
         DocumentSectionsData(
             document_id=document_id,
@@ -155,6 +167,8 @@ async def document_sections_with_source(
             page_count=page_count,
             revision=cast(int, stored["revision"]),
             updated_at=cast(datetime | None, stored.get("updated_at")),
+            base_changed=base_changed,
+            base_outline_changed=base_outline_changed,
         ),
         removed,
         source,

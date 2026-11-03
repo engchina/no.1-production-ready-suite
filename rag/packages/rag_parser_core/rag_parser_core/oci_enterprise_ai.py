@@ -24,11 +24,11 @@ from typing import Any, Protocol
 
 import httpx
 import openai
-from charset_normalizer import from_bytes
 from pr_backend_core.llm_request_params_httpx import AsyncParameterDroppingClient
 from pydantic import ValidationError
 
 from rag_parser_core.extraction import StructuredExtraction
+from rag_parser_core.text_encoding import detect_text_match
 
 DEFAULT_LLM_PATH = "/responses"
 DEFAULT_VLM_PATH = "/responses"
@@ -1432,7 +1432,7 @@ def _decode_text_bytes(data: bytes) -> str:
             return data.decode(encoding)
         except UnicodeDecodeError:
             continue
-    match = from_bytes(data).best()
+    match = detect_text_match(data)
     if match is not None:
         return str(match)
     return data.decode("utf-8", errors="replace")

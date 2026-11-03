@@ -22,7 +22,7 @@ from html.parser import HTMLParser
 from typing import Any
 from xml.parsers import expat
 
-from charset_normalizer import from_bytes
+from rag_parser_core.text_encoding import detect_text_match
 
 SOURCE_MAP_KEY = "source_map"
 SOURCE_MAP_VERSION = 2
@@ -47,7 +47,7 @@ def decode_source_text(data: bytes) -> str:
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
-        decoded = from_bytes(data).best()
+        decoded = detect_text_match(data)
         return str(decoded) if decoded is not None else data.decode("utf-8", errors="replace")
 
 

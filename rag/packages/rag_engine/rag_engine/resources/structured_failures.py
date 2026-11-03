@@ -74,6 +74,7 @@ _PROVIDER_STATUSES = {"incomplete", "completed", "failed", "cancelled", "queued"
 _INCOMPLETE_REASONS = {"max_output_tokens", "content_filter"}
 # 出力の暴走で呼び出しを打ち切った理由（`rag_engine.adapters.oci.LlmRunawayOutput.reason`。#2966・#3835）。
 _CUTOFF_REASONS = {"runaway_whitespace", "runaway_repetition"}
+_SUMMARY_FIELDS = ("provider_status", "incomplete_reason", "cutoff_reason", "contract_code", "stream_trace")
 
 
 def _get(value: object, name: str) -> object:
@@ -152,8 +153,12 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
     status = None
     reason = None
     cutoff = None
+    stream_trace = None
     for cause in chain:
         invalid_json = invalid_json or isinstance(cause, JSONDecodeError)
+        candidate_trace = _get(cause, "stream_trace")
+        if stream_trace is None and isinstance(candidate_trace, Mapping):
+            stream_trace = dict(candidate_trace)
         candidate_cutoff = _get(cause, "reason")
         if cutoff is None and isinstance(candidate_cutoff, str) and candidate_cutoff in _CUTOFF_REASONS:
             cutoff = candidate_cutoff
@@ -196,4 +201,12 @@ def structured_failure_details(exc: BaseException, schema: type[BaseModel] | Map
         result["category"] = "schema_enum" if any(e["type"] in {"enum", "literal_error"} for e in errors) else "schema_field"
     if contract_code is not None:
         result["contract_code"] = contract_code
+    if stream_trace is not None:
+        result["category"] = "stream_output_missing"
+        result["stream_trace"] = stream_trace
     return result
+
+
+def failure_summary_fields(details: Mapping[str, Any]) -> dict[str, Any]:
+    """``structured_failure_details`` のうち、回答の診断の失敗の概要へ残す項目（経路を問わず同じ。#4197）。"""
+    return {key: details[key] for key in _SUMMARY_FIELDS if key in details}

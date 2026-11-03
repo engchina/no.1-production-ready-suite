@@ -16,7 +16,7 @@ from rag_engine.resources.tracing import bind_trace_observer
 def test_sdk_boundary_records_private_request_schema_and_response(monkeypatch, streamed, failed):
     recorded = []
     sent = []
-    response = SimpleNamespace(status="completed", output_parsed=TextOutput(text="合成の結果"), usage=None)
+    response = SimpleNamespace(status="completed", output_text=TextOutput(text="合成の結果").model_dump_json(), usage=None)
 
     class Observation:
         def usage(self, value):
@@ -67,11 +67,8 @@ def test_sdk_boundary_records_private_request_schema_and_response(monkeypatch, s
     assert "text_format" not in request
     assert request["text"]["format"] == schema
     assert schema["strict"] is True and schema["schema"]["properties"]["text"]["type"] == "string"
-    # SDK に本文を検証させない（応答の状態を確かめてからコードで検証する。#4145）。送る schema は同じ。
-    if streamed:
-        assert sent[0]["text_format"] is TextOutput
-    else:
-        assert "text_format" not in sent[0] and sent[0]["text"]["format"] == schema
+    # SDK に本文を検証させない（応答の状態を確かめてからコードで検証する。#4145・#4197）。送る schema は同じ。
+    assert "text_format" not in sent[0] and sent[0]["text"]["format"] == schema
     if not failed:
         assert recorded[1][1] is response
 
@@ -91,7 +88,7 @@ def test_stream_failure_keeps_received_prefix():
             yield SimpleNamespace(type="response.output_text.delta", delta="合成の途中の回答", output_index=1)
             raise RuntimeError("synthetic failure")
 
-    client = SimpleNamespace(responses=SimpleNamespace(stream=lambda **_: Stream()))
+    client = SimpleNamespace(responses=SimpleNamespace(create=lambda **_: Stream()))
     client.with_options = lambda **_: client
     snapshots = []
     with pytest.raises(RuntimeError, match="synthetic failure"):

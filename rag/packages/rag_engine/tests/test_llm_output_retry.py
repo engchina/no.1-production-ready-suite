@@ -49,7 +49,7 @@ def _incomplete(reason):
 
 
 def _completed():
-    return SimpleNamespace(status="completed", output_parsed=TextOutput(text="ok"), usage=USAGE)
+    return SimpleNamespace(status="completed", output_text=TextOutput(text="ok").model_dump_json(), usage=USAGE)
 
 
 class OutputRetryRecordTest(unittest.TestCase):
@@ -103,7 +103,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertNotIn("output_retries", usage)
 
     def test_corrupted_generated_text_retries_without_repairing_characters(self):
-        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="説明\ufffd"), usage=USAGE)
+        corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="説明\ufffd").model_dump_json(), usage=USAGE)
         client = _Client([corrupted, _completed()])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client):
@@ -112,7 +112,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertEqual(len(client.budgets), 2)
 
     def test_repeated_corruption_fails_with_existing_retry_limit(self):
-        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="説明\ufffd"), usage=USAGE)
+        corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="説明\ufffd").model_dump_json(), usage=USAGE)
         client = _Client([corrupted, corrupted])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client), self.assertRaises(oci.InvalidStructuredOutput):
@@ -121,7 +121,7 @@ class OutputRetryRecordTest(unittest.TestCase):
 
     def test_rejected_corruption_names_the_fields_but_not_the_text(self):
         # 退けた出力の原文は残らないので、どの欄に置換文字があったかを例外と log に残す（#3849）。本文は残さない。
-        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="合成の説明�"), usage=USAGE)
+        corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="合成の説明�").model_dump_json(), usage=USAGE)
         client = _Client([corrupted, corrupted])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with (
@@ -144,7 +144,7 @@ class OutputRetryRecordTest(unittest.TestCase):
         self.assertEqual(oci.replacement_char_paths({"xs": ["�"] * 20}, limit=2), ["xs[0]", "xs[1]"])
 
     def test_original_replacement_character_is_preserved(self):
-        corrupted = SimpleNamespace(status="completed", output_parsed=TextOutput(text="原文\ufffd"), usage=USAGE)
+        corrupted = SimpleNamespace(status="completed", output_text=TextOutput(text="原文\ufffd").model_dump_json(), usage=USAGE)
         client = _Client([corrupted])
         settings = replace(get_settings(environ={}, dotenv_path=None), answer_max_tokens=1000)
         with mock.patch.object(oci, "_openai_client_for_provider", return_value=client):

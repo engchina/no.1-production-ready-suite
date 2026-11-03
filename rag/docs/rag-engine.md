@@ -260,6 +260,13 @@ LLM の呼び出しを streaming で受け（`rag_engine.adapters.oci._stream_pa
 `llm_usage` にその工程の最大の待ち（`first_event_seconds_max`）と最も遅い速さ（`delta_rate_min`）を残し、遅い呼び出しが待ちか
 出力の途中の停滞かを記録から見分けられる。
 
+**stream の受け方（#4197）**: SDK の組み立て（`responses.stream`）を通さず、`responses.create(stream=True)` の event をそのまま読む。
+delta は停滞・暴走の検出と途中経過の記録にだけ使い、応答は完了の event（`response.completed` / `response.incomplete`）が持つ全体を
+使う。本文の検証は応答の状態を確かめてからコードで行うので、provider の event の順（項目の開始より前の content_part・delta など）
+では失敗しない。順の違いは `llm_unordered_events` と WARNING（本文なし）に残す。完了の event に本文も拒否も無いときは
+`LlmStreamOutputMissing` で送り直し、尽きたら原文の提示へ退避して、`generation_failure` の `category=stream_output_missing` と
+`stream_trace`（event の type・番号の並びと最終の出力の種類。本文なし）に残す。
+
 **是正の「改善なし」の打ち切り（#1527）**: 時間が残っていても、次のときは是正の組を始めず、それまでの最良の組で
 確定する（工程「是正の打ち切り」。`round_budget.stop.reason` が `no_improvement_*`）。時間の上限ではないので、本文の
 「回答時間の上限により省略した処理」には出さない（残った不足は採用した組の回答がそのまま示す）。

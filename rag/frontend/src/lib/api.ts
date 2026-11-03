@@ -406,6 +406,51 @@ export interface DocumentApproveRequest extends DocumentReviewEditsRequest {
   raw_text?: string | null;
 }
 
+/** 抽出の修訂の版 1 件（#2644）。 */
+export interface ExtractionRevisionSummary {
+  revision_no: number;
+  parent_revision_no: number | null;
+  /** 基にした解析の版の番号。 */
+  base_revision_no: number;
+  restored_from_revision_no: number | null;
+  kind: "parsed" | "edited" | "restored";
+  changed_element_count: number;
+  created_at: string;
+  is_current: boolean;
+  /** 検索に出している chunk_set がこの版の抽出から作られている。 */
+  is_serving: boolean;
+  /** 今の抽出と違う解析を基にしている。 */
+  base_changed: boolean;
+  /** 原本か解析の設定が今と違う（復元できない）。 */
+  settings_changed: boolean;
+}
+
+export interface ExtractionRevisionHistory {
+  revisions: ExtractionRevisionSummary[];
+  current_revision_no: number | null;
+  /** 版があるのに今の抽出が版に無い（解析をやり直した後で、まだ保存していない）。 */
+  reparsed_since_last_revision: boolean;
+  max_revisions: number;
+}
+
+export interface ExtractionRevisionElementChange {
+  element_id: string;
+  change: "added" | "removed" | "changed";
+  page_number: number | null;
+  before: string | null;
+  after: string | null;
+  truncated: boolean;
+}
+
+export interface ExtractionRevisionDiff {
+  revision_no: number;
+  against_revision_no: number | null;
+  total: number;
+  offset: number;
+  limit: number;
+  changes: ExtractionRevisionElementChange[];
+}
+
 export interface IngestionJob {
   id: string;
   document_id: string;
@@ -3629,6 +3674,35 @@ export const api = {
       }`,
       { method: "DELETE" },
     ),
+  listDocumentSectionRevisions: (id: string, recipeId?: string | null) =>
+    request<DocumentSectionRevisionHistory>(
+      `/api/documents/${encodeURIComponent(id)}/sections/revisions${
+        recipeId ? `?recipe_id=${encodeURIComponent(recipeId)}` : ""
+      }`,
+    ),
+  diffDocumentSectionRevision: (
+    id: string,
+    revisionNo: number,
+    options: { against: number | null; offset: number; limit: number },
+  ) => {
+    const params = new URLSearchParams({
+      offset: String(options.offset),
+      limit: String(options.limit),
+    });
+    if (options.against != null) params.set("against", String(options.against));
+    return request<DocumentSectionRevisionDiff>(
+      `/api/documents/${encodeURIComponent(id)}/sections/revisions/${revisionNo}/diff?${params.toString()}`,
+    );
+  },
+  restoreDocumentSectionRevision: (
+    id: string,
+    revisionNo: number,
+    body: { expected_revision: number | null; recipe_id: string | null },
+  ) =>
+    request<DocumentSectionsData>(
+      `/api/documents/${encodeURIComponent(id)}/sections/revisions/${revisionNo}/restore`,
+      jsonBody(body),
+    ),
 
   getSectionRulesSettings: () => request<SectionRulesSettingsData>("/api/settings/section-rules"),
   saveSectionRulesSettings: (body: { mode: SectionRulesMode; rules: SectionRule[] }) =>
@@ -3761,6 +3835,41 @@ export const api = {
         recipeId,
       )}/review-edits`,
       { ...jsonBody(payload), method: "PATCH" },
+    ),
+  listDocumentRecipeExtractionRevisions: (id: string, recipeId: string) =>
+    request<ExtractionRevisionHistory>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/extraction-revisions`,
+    ),
+  diffDocumentRecipeExtractionRevision: (
+    id: string,
+    recipeId: string,
+    revisionNo: number,
+    options: { against: number | null; offset: number; limit: number },
+  ) => {
+    const params = new URLSearchParams({
+      offset: String(options.offset),
+      limit: String(options.limit),
+    });
+    if (options.against != null) params.set("against", String(options.against));
+    return request<ExtractionRevisionDiff>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/extraction-revisions/${revisionNo}/diff?${params.toString()}`,
+    );
+  },
+  restoreDocumentRecipeExtractionRevision: (
+    id: string,
+    recipeId: string,
+    revisionNo: number,
+    expectedExtractionRecipeId: string,
+  ) =>
+    request<DocumentRecipeView>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
+        recipeId,
+      )}/extraction-revisions/${revisionNo}/restore`,
+      jsonBody({ expected_extraction_recipe_id: expectedExtractionRecipeId }),
     ),
   getIngestionJob: (id: string) =>
     request<IngestionJob>(
@@ -4832,12 +4941,61 @@ export interface DocumentSectionsData {
   page_count: number | null;
   revision: number | null;
   updated_at: string | null;
+  /** 人の修正の基にした抽出と今の抽出が違う（#4171）。文の修正・再解析で変わる。 */
+  base_changed?: boolean;
+  /** そのうち、抽出の章節まで変わった（修正の前提が変わった）。 */
+  base_outline_changed?: boolean;
 }
 
 export interface DocumentSectionsSaveRequest {
   sections: DocumentSection[];
   base_revision: number | null;
   recipe_id?: string | null;
+}
+
+/** 人が修正した章節の版 1 件（#4171）。 */
+export interface DocumentSectionRevisionSummary {
+  revision_no: number;
+  parent_revision_no: number | null;
+  restored_from_revision_no: number | null;
+  /** extracted は修正の前の抽出の章節、reset は抽出結果へ戻した版。 */
+  kind: "extracted" | "edited" | "restored" | "reset";
+  /** 基にした抽出（履歴の前の修正は不明で null）。 */
+  base_extraction_recipe_id: string | null;
+  changed_section_count: number;
+  created_at: string;
+  is_current: boolean;
+  base_changed: boolean;
+  base_outline_changed: boolean;
+}
+
+export interface DocumentSectionRevisionHistory {
+  revisions: DocumentSectionRevisionSummary[];
+  current_revision_no: number | null;
+  max_revisions: number;
+}
+
+export interface DocumentSectionRevisionSnapshot {
+  title: string;
+  level: number;
+  page_start: number | null;
+  page_end: number | null;
+}
+
+export interface DocumentSectionRevisionChange {
+  section_id: string;
+  change: "added" | "removed" | "changed" | "moved";
+  before: DocumentSectionRevisionSnapshot | null;
+  after: DocumentSectionRevisionSnapshot | null;
+}
+
+export interface DocumentSectionRevisionDiff {
+  revision_no: number;
+  against_revision_no: number | null;
+  total: number;
+  offset: number;
+  limit: number;
+  changes: DocumentSectionRevisionChange[];
 }
 
 export interface ApprovedFaqSuggestionData {
