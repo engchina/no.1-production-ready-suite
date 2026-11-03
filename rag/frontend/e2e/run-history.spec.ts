@@ -1092,7 +1092,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expect(step.getByText(result, {exact: true})).toHaveCount(1);
     await timeline.screenshot({path: testInfo.outputPath("timeline-no-duplicate-summary.png")});
   });
-  test("軌跡の識別子・時刻・技術属性の行間が揃う", async ({page}, testInfo) => {
+  test("軌跡の識別子は行内コピーの寸法、時刻と文字属性は本文の行高に揃う", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});
     await mockRuns(page, [row]);
@@ -1107,15 +1107,22 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     const inspector = page.locator("[data-trace-inspector]");
     await expect(inspector.locator("[data-trace-processing-content]")).toHaveCount(0);
     const rows = await inspector.locator("dd").evaluateAll(nodes => nodes.map(node => {
-      const box = node.getBoundingClientRect();
-      return {top: box.top, bottom: box.bottom, height: box.height};
+      const button = node.querySelector("button");
+      const value = node.querySelector("span, time");
+      return {height: node.getBoundingClientRect().height, copy: Boolean(button),
+        valueHeight: value?.getBoundingClientRect().height ?? 0,
+        buttonHeight: button?.getBoundingClientRect().height ?? 0,
+        target: matchMedia("(pointer: coarse)").matches ? 44 : 24};
     }));
     expect(rows.length).toBeGreaterThanOrEqual(5);
-    const heights = rows.map(row => row.height);
-    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
-    if (testInfo.project.name === "desktop") {
-      const gaps = rows.slice(1).map((row, index) => row.top - rows[index].bottom);
-      expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
+    expect(rows.filter(row => row.copy)).toHaveLength(1);
+    for (const row of rows) {
+      if (row.copy) {
+        expect(Math.abs(row.buttonHeight - row.target)).toBeLessThanOrEqual(1);
+        expect(row.height).toBeLessThanOrEqual(Math.max(row.valueHeight, row.target) + 1);
+      } else {
+        expect(row.height).toBeLessThanOrEqual(row.valueHeight + 1);
+      }
     }
     await expect(inspector.locator("time")).toHaveCount(2);
     await expectNoPageOverflow(page);
@@ -1192,7 +1199,9 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     for (const key of ["merge", "vector", "text", "rrf", "legacy"]) {
       await inspectTraceStep(page, timeline, spanStepId(key));
       const inspector = page.locator("[data-trace-inspector]");
-      await expect(inspector).toContainText("処理内の位置:");
+      await expect(inspector).not.toContainText("処理内の位置:");
+      await expect(inspector).not.toContainText("完全な処理経路");
+      await expect(inspector.locator("[data-trace-timing]").locator("xpath=preceding-sibling::*[1]")).toContainText("Span ID");
       if (key === "merge") await expect(inspector).toContainText("縮退: RuntimeError");
       if (key === "vector") {
         await expect(inspector).toContainText("A.pdf / ページ 2");
@@ -1202,11 +1211,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
       if (key === "text") {
         await expect(inspector).toContainText(purpose);
         await expect(inspector).toContainText("該当なし");
-        await expect(inspector.getByText("処理内の位置: 検索文から根拠の候補を集める", {exact: true})).toBeVisible();
-        const path = inspector.locator("details").filter({has: page.locator("summary", {hasText: "完全な処理経路"})});
-        await expect(path).not.toHaveAttribute("open", "");
-        await path.locator("summary").click();
-        await expect(path).toContainText("質問の条件を整理して回答を作る");
+
       }
       if (key === "rrf") {
         await expect(inspector).toContainText("2：1");
@@ -1574,8 +1579,10 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await mockRuns(page, [row]);
   await mockTraceApi(page, { [row.run_id]: savedSpanProgress(row.run_id, [
     { key: "root", spec: ragSpan.root(), at: [0, 8] },
+    { key: "counts-only", spec: ragSpan.step("回答生成フロー", "root"), at: [0, 8], params: { llm_calls: 4, llm_sends: 5 } },
     { key: "attachment-off", spec: ragSpan.technical("rag.attachment_evidence", "root"), status: "skipped", at: [0, 0.001] },
     { key: "stage", spec: ragSpan.technical("synthetic.stage", "root"), at: [7, 8], details: syntheticStageDetails },
+    { key: "first-attempt", spec: ragSpan.technical("gen_ai.chat", "root"), status: "failed", at: [0, 0.1] },
     { key: "model", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [0, 1], details: { call: syntheticCallDetails } },
     { key: "tool", spec: ragSpan.technical("gen_ai.execute_tool", "root", { "gen_ai.tool.name": "synthetic-tool" }), at: [1, 3], details: { call: syntheticCallDetails } },
     { key: "model-2", spec: ragSpan.technical("gen_ai.chat", "root", { "gen_ai.request.model": "synthetic-model" }), at: [3, 4], details: { call: syntheticCallDetails } },
@@ -1586,6 +1593,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   await page.getByTestId("run-history-timeline-summary").click();
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
+  await expect(page.locator("[data-run-timeline]")).not.toContainText("LLM 4 回");
   await confirmTraceExplorer(page, testInfo, expect, true);
 });
 

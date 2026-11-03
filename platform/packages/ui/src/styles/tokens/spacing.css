@@ -38,6 +38,7 @@
   --control-height-md: 36px;
   --control-height-lg: 40px;
   --control-height-touch: 44px;
+  --control-height-inline: 24px; /* 読み取り専用のメタデータの行内コピー（#4246）。 */
   --button-height-sm: var(--control-height-sm);
   --button-height-md: var(--control-height-md);
   --button-height-lg: var(--control-height-lg);
@@ -91,5 +92,6 @@
     --control-height-sm: var(--control-height-touch);
     --control-height-md: var(--control-height-touch);
     --control-height-lg: var(--control-height-touch);
+    --control-height-inline: var(--control-height-touch);
   }
 }

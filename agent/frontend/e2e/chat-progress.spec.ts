@@ -699,6 +699,7 @@ test("呼び出しの詳細で入力・結果・思考・Schema・計時を確�
   log.step("chat-1", "done", { kind: "plan", details: { call: syntheticCallDetails } }).step("chat-2", "running");
   log.step("synthetic-stage", "done", { name: "agent.prepare", parent: "chat-1", details: syntheticStageDetails });
   log.step("attachment-off", "skipped", {name: "agent.attachment_evidence", parent: "chat-1"});
+  log.step("first-attempt", "failed", { name: "gen_ai.chat", parent: "chat-1" });
   run.status = "completed";
   log.terminal("done");
   await page.goto(`/runs?id=${RUN_ID}`);

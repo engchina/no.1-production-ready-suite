@@ -2466,7 +2466,8 @@ type PreconditionBannerProps = {
 | secure context でない（http の配備）・Clipboard API が無いときは隠した textarea と `execCommand("copy")` で書き、フォーカスを戻す（`copyTextToClipboard`） | 自作の CA を入れる前の http の確認でもコピーできる |
 | 見た目は共有の `Button`（既定 `variant="secondary"`、文字のすぐ横の小さな操作は `ghost`）。`size` は同じ行の部品と同じ値を渡す（内容のコピーは `sm`、`FieldActionRow` の中は欄と同じ `md`） | README §4「操作部品の高さと幅」。`type="button"` 固定でフォームを送信しない |
 
-- props: `text`（`string` / `() => string | Promise<string>`）・`label`・`copiedMessage`・`failedMessage`・`onCopyError?(message)`・`onCopied?`・`testId?`・`variant?`（`secondary` / `ghost`）と `Button` の `size` / `iconOnly` / `disabled` / `aria-label` / `className` など（`icon` / `loading` / `onClick` / `children` は部品が持つ）。
+- 読み取り専用の識別子の行内コピーは `inline` と `iconOnly`・`variant="ghost"` を組み合わせる。ポインターでは `--control-height-inline`（24px）、タッチ端末では既定の44pxにする。フォームの欄や主要操作の高さは変更しない（#4246）。
+- props: `text`（`string` / `() => string | Promise<string>`）・`label`・`copiedMessage`・`failedMessage`・`onCopyError?(message)`・`onCopied?`・`testId?`・`variant?`（`secondary` / `ghost`）・`inline?` と `Button` の `size` / `iconOnly` / `disabled` / `aria-label` / `className` など（`icon` / `loading` / `onClick` / `children` は部品が持つ）。
 - 状態は `data-copy-state="idle" | "copied"` でも見える（e2e はこれと `role="status"` の文言で確かめる）。
 - 単体テスト: `platform/packages/ui/tests/copy-button.test.tsx`・`tests/clipboard.test.ts`。
 
@@ -4054,7 +4055,7 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 
 ### 実行の詳細のフィールド間隔
 
-`RunStepDetailsView` は識別子・時刻・技術属性を同じ列幅と行間で表示する。行の最小高さは共有の `--control-height-sm` に揃え、コピーの有無で縦のリズムを変えない。処理内容がないグループは余白も作らない。
+`RunStepDetailsView` は識別子・時刻・技術属性を同じ列幅と行間で表示する。文字だけの行は本文の行高に合わせ、識別子のコピーだけに共有の行内操作の高さを確保する。開始・終了時刻にはコピー操作を置かず、Span ID の直後に表示する。処理内容がないグループは余白も作らない。
 
 「処理の経過」の収縮行は名前・状態・所要時間に限定し、結果・スキップ理由を行の直下に重複表示しない。必要な説明は展開した詳細と軌跡に保持する。
 

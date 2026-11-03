@@ -16,17 +16,18 @@ const steps: RunTimelineStep[] = [
   { id: "tool-a", parentId: "root", level: 1, label: "合成のツール", status: "failed", operationName: "gen_ai.execute_tool", startedAt: "2026-01-01T00:00:01Z", finishedAt: "2026-01-01T00:00:04Z", details: {lines: ["synthetic-error"]} },
 ];
 describe("記録した値だけを使う軌跡", () => {
-  it("直接の親と完全な経路を区別し、旧記録の欠損値を推定しない", () => {
+  it("詳細に親の位置や経路を表示せず、識別子と時刻を連続して配置する", () => {
     const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
     try {
       const nested: RunTimelineStep[] = [steps[0], {...steps[1], id: "parent", label: "直接の親"},
         {id: "leaf", parentId: "parent", level: 2, label: "合成の検索", status: "failed"}];
       act(() => root.render(<TraceExplorer steps={nested} onClose={() => {}} />));
       const inspector = host.querySelector('[data-trace-inspector]')!;
-      expect(inspector.textContent).toContain("処理内の位置: 直接の親");
-      const fullPath = Array.from(inspector.querySelectorAll("details")).find(item => item.textContent?.includes("完全な処理経路"))!;
-      expect(fullPath.open).toBe(false);
-      expect(fullPath.textContent).toContain("合成の実行");
+      expect(inspector.textContent).not.toContain("処理内の位置");
+      expect(inspector.textContent).not.toContain("完全な処理経路");
+      const timing = inspector.querySelector('[data-trace-timing]')!;
+      expect(timing.previousElementSibling?.textContent).toContain("Span ID");
+      expect(timing.nextElementSibling?.hasAttribute("data-trace-technical")).toBe(true);
       expect(inspector.textContent).not.toContain(" / ");
       expect(inspector.textContent).not.toContain("Sudachi");
     } finally { act(() => root.unmount()); host.remove(); }
@@ -134,11 +135,11 @@ it("経過は処理内容だけを描き、軌跡は同じ内容の後に時刻�
     const explore = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent?.includes("軌跡を調べる"))!;
     act(() => explore.click());
     const content = host.querySelector("[data-trace-inspector-content]")!;
-    expect(Array.from(content.children).slice(1).map(node => node.hasAttribute("data-trace-processing-content") ? "content" : node.hasAttribute("data-trace-timing") ? "time" : "technical")).toEqual(["content", "time", "technical"]);
+    expect(Array.from(content.children).map(node => node.hasAttribute("data-trace-processing-content") ? "content" : node.hasAttribute("data-trace-timing") ? "time" : "technical")).toEqual(["content", "technical", "time", "technical"]);
     expect(content.querySelector("[data-trace-processing-content]")?.textContent).toContain("合成の引用資料");
     expect(content.querySelector("[data-trace-technical]")?.textContent).toContain("Span name");
     expect(content.querySelector("time")?.getAttribute("datetime")).toBe(steps[0].startedAt);
-    expect(host.querySelector('button[aria-label="開始時刻: 元の ISO 時刻をコピー"]')).not.toBeNull();
+    expect(content.querySelector("[data-trace-timing] button")).toBeNull();
   } finally { act(() => root.unmount()); host.remove(); }
 });
 

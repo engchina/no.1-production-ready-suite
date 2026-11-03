@@ -844,6 +844,22 @@ describe("RunTimelineSection（#2473）", () => {
     expect(container.textContent).toContain("処理の詳細の中身");
   });
 
+  it.each(["succeeded", "failed", "cancelled", "blocked", "running", "queued", "waiting"] as const)("実行全体の %s を途中の失敗より優先し、失敗履歴は残す", (status) => {
+    render(<RunTimelineSection title="処理の経過" status={status}
+      steps={[...steps, {id: "first-attempt", label: "最初の試行", status: "failed"}, {id: "retry", label: "再試行", status: "done"}]}
+      defaultOpen testId="section" />);
+    const summary = container.querySelector("[data-testid='section-summary']");
+    expect(summary?.className.includes("text-danger-fg")).toBe(status === "failed");
+    expect(summary?.className.includes("text-success-fg")).toBe(status === "succeeded");
+    expect(container.querySelector('[data-run-timeline-step="first-attempt"]')?.getAttribute("data-status")).toBe("failed");
+    expect(container.querySelector('[data-run-timeline-step="retry"]')?.getAttribute("data-status")).toBe("done");
+  });
+
+  it("最終失敗は失敗工程が記録されていなくても見出しを失敗にする", () => {
+    render(<RunTimelineSection title="処理の経過" status="failed" steps={steps} testId="section" />);
+    expect(container.querySelector("[data-testid='section-summary']")?.className).toContain("text-danger-fg");
+  });
+
   it("defaultOpen で最初から開き、失敗した段があれば見出しを危険の色にする", () => {
     render(
       <RunTimelineSection

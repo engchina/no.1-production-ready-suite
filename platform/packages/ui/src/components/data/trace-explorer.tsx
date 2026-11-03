@@ -6,7 +6,6 @@ import { operationTimestampMs } from "../../lib/operation-timing";
 import { traceCategory, traceMeasuredTiming, traceOrderedSteps, traceSearchText, type TraceCategory, type TraceOrder } from "../../lib/trace-explorer";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { Disclosure } from "../ui/disclosure";
 import { SearchField } from "../ui/search-field";
 import { Tabs, TabPanel } from "../ui/tabs";
 import { FilterSelect } from "./list-filters";
@@ -27,7 +26,6 @@ export const DEFAULT_TRACE_EXPLORER_LABELS = {
   unknown: "時刻が記録されていない呼び出しは、時間の概観に表示していません。", inflight: "終了時刻のない呼び出しは開始位置だけを表示します。",
   empty: "条件に一致する呼び出しがありません。", reset: "条件をクリア", choose: "呼び出しを選ぶと詳細が表示されます。",
   list: "呼び出しの一覧", backToList: "一覧に戻る", previous: "前の呼び出し", next: "次の呼び出し", noDetails: "呼び出しの内容は記録されていません。",
-  location: "処理内の位置", fullPath: "完全な処理経路",
   copy: "ID をコピー", copied: "ID をコピーしました", copyFailed: "ID をコピーできませんでした。", more: "さらに表示", retry: "再試行",
   loaded: (shown: number, total: number) => `${shown} / ${total} 件を表示`,
 };
@@ -87,15 +85,6 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
     if (!step) return;
     setLimit(value => Math.max(value, selectedIndex + delta + 1));
     setSelectedId(step.id);
-  }
-  const selectedParents: RunTimelineStep[] = [];
-  const visited = new Set<string>(selected ? [selected.id] : []);
-  let parent = selected?.parentId;
-  while (parent && !visited.has(parent)) {
-    visited.add(parent);
-    const step = steps.find(item => item.id === parent);
-    if (!step) break;
-    selectedParents.unshift(step); parent = step.parentId;
   }
   // 選択した行を含む単位まで表示し、詳細から一覧へフォーカスを戻せるようにする。
   const visibleLimit = Math.max(limit, Math.ceil((selectedIndex + 1) / 50) * 50);
@@ -168,16 +157,14 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
             </div>
             <h4 id={`${id}-selected`} ref={titleRef} tabIndex={-1} className={cn("break-words font-normal leading-5 text-fg [overflow-wrap:anywhere]", runTimelineNameClass(size))}>{selected?.label ?? labels.choose}</h4>
             {selected ? <>
-              {selectedParents.length ? <p className="mt-1 break-words text-xs text-fg-muted [overflow-wrap:anywhere]">{labels.location}: {selectedParents.at(-1)?.label}</p> : null}
               <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
               <div className="grid min-w-0 gap-1" data-trace-inspector-content="">
-                <RunStepDetailsView labels={{copied: labels.copied, copyFailed: labels.copyFailed}} details={{fields: [{label: "Span ID", value: selected.id, mono: true, copyValue: selected.id, copyLabel: labels.copy}]}} />
-                {(selectedParents.length > 1 || selected.detail || hasRunStepDetails(runStepContent(selected.details)) || selected.details?.call || selected.children) ? <div data-trace-processing-content="" className="grid min-w-0 gap-2">
-                {selectedParents.length > 1 ? <Disclosure summary={labels.fullPath} variant="plain" size="sm"><ol aria-label={labels.fullPath} className="grid gap-1 text-xs text-fg-muted">{selectedParents.map(step => <li key={step.id}>{step.label}</li>)}</ol></Disclosure> : null}
-                  {selected.detail ? <p className="text-xs leading-5 text-fg-muted">{selected.detail}</p> : null}
+                {(selected.detail || selected.traceMeta || hasRunStepDetails(runStepContent(selected.details)) || selected.details?.call || selected.children) ? <div data-trace-processing-content="" className="grid min-w-0 gap-2">
+                  {selected.detail || selected.traceMeta ? <p className="text-xs leading-5 text-fg-muted">{[selected.detail, selected.traceMeta].filter(Boolean).join(" · ")}</p> : null}
                   <RunStepDetailsView showStatistics={false} showTiming={false} details={{...runStepContent(selected.details), call: selected.details?.call}} timing={{startedAt: selected.startedAt, finishedAt: selected.finishedAt, durationMs: stepDurationMs(selected)}} />
                   {selected.children}
                 </div> : null}
+                <RunStepDetailsView labels={{copied: labels.copied, copyFailed: labels.copyFailed}} details={{fields: [{label: "Span ID", value: selected.id, mono: true, copyValue: selected.id, copyLabel: labels.copy}]}} />
                 <div data-trace-timing=""><RunStepTiming startedAt={selected.startedAt} finishedAt={selected.finishedAt} /></div>
                 <div data-trace-technical=""><RunStepDetailsView details={{fields: runStepTechnicalFields(selected.details)}} /></div>
               </div>

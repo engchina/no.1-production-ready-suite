@@ -52,8 +52,9 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
     expect(steps.map((item) => [item.label, item.status, item.meta ?? null])).toEqual([
       ["前の会話を踏まえて質問を補う", "done", null],
       ["検索文から根拠の候補を集める", "running", null],
-      ["質問から対象と条件を読み取る", "failed", "該当なし · LLM 1 回・送信 2 回"],
+      ["質問から対象と条件を読み取る", "failed", "LLM 1 回・送信 2 回"],
     ]);
+    expect(steps[2].detail).toBe("該当なし");
     expect(steps[0]).toMatchObject({ startedAt: "2026-10-04T00:00:00.000Z", finishedAt: "2026-10-04T00:00:01.000Z" });
   });
 

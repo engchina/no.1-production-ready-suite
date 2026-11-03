@@ -32,6 +32,32 @@ interface ExplorerAssertions {
 
 export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {outputPath(...paths: string[]): string}, expect: (value: unknown) => unknown, probeLayout = false) {
   const check = (value: unknown) => expect(value) as ExplorerAssertions;
+  const processDetails = page.locator("[data-run-process-details]").first();
+  const wasOpen = await page.evaluate(() => document.querySelector("[data-run-process-details]")?.hasAttribute("open") ?? false, undefined);
+  if (!wasOpen) await processDetails.locator("summary").first().click();
+  check(await page.evaluate(() => {
+    const detail = document.querySelector("[data-run-process-details]");
+    const rows = Array.from(detail?.querySelectorAll("[data-process-identifier]") ?? []);
+    const gap = parseFloat(getComputedStyle(document.documentElement).fontSize) / 4;
+    const models = detail?.querySelector("[data-run-used-models]");
+    const target = matchMedia("(pointer: coarse)").matches ? 44 : 24;
+    const copies = Array.from(detail?.querySelectorAll("[data-copy-inline]") ?? []);
+    if (!copies.length || copies.some(copy => Math.abs(copy.getBoundingClientRect().height - target) > 1)) return false;
+    const groups = [...rows, ...(models ? [models] : [])];
+    return rows.length === 3 && models !== null && groups.slice(1).every((row, index) =>
+      row.getBoundingClientRect().top - groups[index].getBoundingClientRect().bottom <= gap + 1
+    );
+  }, undefined)).toBe(true);
+  await processDetails.screenshot({path: testInfo.outputPath("process-details-compact.png")});
+  if (!wasOpen) await processDetails.locator("summary").first().click();
+  check(await page.evaluate(() => {
+    const summary = document.querySelector("[data-run-progress-summary]");
+    return summary?.getAttribute("data-run-status") === "succeeded"
+      && summary.classList.contains("text-success-fg")
+      && !summary.querySelector(".lucide-circle-x")
+      && document.querySelector('[data-run-timeline-step][data-status="failed"]') !== null;
+  }, undefined)).toBe(true);
+  await page.locator("[data-run-timeline-section]").first().screenshot({path: testInfo.outputPath("recovered-run-summary.png")});
   const normalRows = await page.evaluate(() => Array.from(document.querySelectorAll("[data-run-timeline-step]")).map(row => ({
     id: row.getAttribute("data-run-timeline-step"), name: row.querySelector("[data-run-timeline-label]")?.textContent,
     level: row.getAttribute("data-level") ?? "0", parent: row.getAttribute("data-parent-id"),
@@ -71,7 +97,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await explorer.getByRole("button", {name: "条件をクリア", exact: true}).last().click();
   await explorer.getByRole("combobox", {name: "状態"}).click();
   await page.getByRole("option", {name: "失敗", exact: true}).click();
-  await check(explorer).toContainText("条件に一致する呼び出しがありません");
+  await check(explorer.locator("[data-trace-record]")).toHaveCount(1);
   await explorer.getByRole("button", {name: "条件をクリア", exact: true}).last().click();
   await search.fill("no-synthetic-match");
   await check(explorer).toContainText("条件に一致する呼び出しがありません");
@@ -109,16 +135,30 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await inspector.getByRole("tab", {name: "Schema", exact: true}).click();
   await check(inspector).toContainText("synthetic-call-schema");
   await check(inspector.locator("[data-trace-timing]")).toContainText("開始時刻");
+  check(await page.evaluate(() => {
+    const fields = Array.from(document.querySelectorAll("[data-trace-timing] dt"));
+    return fields.length === 2 && fields.every(label => {
+      const value = label.nextElementSibling;
+      if (!value) return false;
+      const a = label.getBoundingClientRect(), b = value.getBoundingClientRect();
+      return a.right <= b.left && Math.abs((a.top + a.height / 2) - (b.top + b.height / 2)) <= 1;
+    });
+  }, undefined)).toBe(true);
   await check(inspector.locator("[data-trace-technical]")).toContainText("Span name");
-  const raw = await page.evaluate(() => document.querySelector("[data-trace-timing] time")?.getAttribute("datetime"), undefined);
-  await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", {configurable: true, value: {writeText: async (text: string) => {document.documentElement.dataset.copiedIso = text;}}}); }, undefined);
-  await inspector.getByRole("button", {name: "開始時刻: 元の ISO 時刻をコピー", exact: true}).click();
-  check(await page.evaluate(() => document.documentElement.dataset.copiedIso, undefined)).toEqual(raw);
+  check(await page.evaluate(() => {
+    const fields = Array.from(document.querySelectorAll("[data-trace-technical] dd"))
+      .filter(field => !field.querySelector("button"));
+    return fields.length > 0 && fields.every(field => {
+      const value = field.querySelector("span");
+      return value !== null && field.getBoundingClientRect().height <= value.getBoundingClientRect().height + 1;
+    });
+  }, undefined)).toBe(true);
+  await check(inspector.locator("[data-trace-timing] button")).toHaveCount(0);
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-inspector-content]");
     const text = content?.querySelector("[data-trace-timing] time")?.textContent ?? "";
     const groups = Array.from(content?.children ?? []).filter(element => ["data-trace-processing-content", "data-trace-timing", "data-trace-technical"].some(attribute => element.hasAttribute(attribute)));
-    return text.includes("(") && !text.includes("T00:") && content?.firstElementChild?.textContent?.includes("Span ID") === true
+    return text.includes("(") && !text.includes("T00:") && content?.querySelector("[data-trace-timing]")?.previousElementSibling?.textContent?.includes("Span ID") === true
       && groups[0]?.hasAttribute("data-trace-processing-content") === true
       && groups[1]?.hasAttribute("data-trace-timing") === true && groups[2]?.hasAttribute("data-trace-technical") === true;
   }, undefined)).toBe(true);
@@ -127,6 +167,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   for (const theme of ["light", "dark"]) {
     await page.evaluate(value => { document.documentElement.classList.remove("light", "dark"); document.documentElement.dataset.theme = value; }, theme);
     await explorer.screenshot({path: testInfo.outputPath(`trace-explorer-detail-${theme}.png`)});
+    await inspector.screenshot({path: testInfo.outputPath(`trace-inspector-${theme}.png`)});
     await page.screenshot({path: testInfo.outputPath(`trace-explorer-page-${theme}.png`), fullPage: true});
   }
   if (probeLayout) {
@@ -151,11 +192,12 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await check(inspector).toContainText("synthetic-stage-detail");
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-inspector-content]");
-    const blocks = content?.querySelectorAll(":scope > [data-trace-processing-content], :scope > [data-trace-timing]");
-    if (!content || !blocks || blocks.length !== 2) return false;
+    const timing = content?.querySelector(":scope > [data-trace-timing]");
+    const identifier = timing?.previousElementSibling;
+    if (!content || !timing || !identifier?.textContent?.includes("Span ID")) return false;
     const gap = parseFloat(getComputedStyle(content).rowGap);
-    const actual = blocks[1].getBoundingClientRect().top - blocks[0].getBoundingClientRect().bottom;
-    return gap > 0 && Math.abs(actual - gap) < 1 && blocks[1].textContent?.includes("開始時刻") === true;
+    const actual = timing.getBoundingClientRect().top - identifier.getBoundingClientRect().bottom;
+    return gap > 0 && Math.abs(actual - gap) < 1 && timing.textContent?.includes("開始時刻") === true;
   }, undefined)).toBe(true);
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-processing-content]");

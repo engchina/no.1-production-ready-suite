@@ -112,12 +112,13 @@ describe("処理の経過の span の木（Issue 3226）", () => {
       [t("search.stage.historyRewrite"), 0, "done", null],
       [t("search.stage.answer"), 0, "done", null],
       [t("answer.step.answerFlow"), 1, "done", null],
-      [answerStepDisplayName("文書検索"), 2, "done", "該当なし · LLM 2 回"],
+      [answerStepDisplayName("文書検索"), 2, "done", "LLM 2 回"],
       [`${t("trace.span.embeddings")} · synthetic-embed`, 3, "done", null],
       // 実行中の span は実行中の行になる。
       [t("search.stage.answerGuardrail"), 0, "running", null],
     ]);
     // 行を開くと技術の値（span の名前）が付く。
+    expect(steps[3].detail).toBe("該当なし");
     expect(steps[3].details?.fields?.some((field) => field.label === "Span name" && field.value === "rag.engine.stage")).toBe(true);
     expect(chatProgressTraceIdOf(events)).toBe(TRACE_ID);
     expect(chatProgressHasSpans(events)).toBe(true);
