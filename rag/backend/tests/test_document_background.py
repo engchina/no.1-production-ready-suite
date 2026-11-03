@@ -1,6 +1,7 @@
 """最終選択後の背景取得の範囲・版・再利用を合成データで確認する。"""
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +10,7 @@ from app.rag.document_background import selected_document_backgrounds
 from app.schemas.search import PAGE_RANGES_FILTER_KEY, RetrievedChunk
 
 
-def _chunk(document="doc-a", version="version-a", page=1):
+def _chunk(document: str = "doc-a", version: str = "version-a", page: int = 1) -> RetrievedChunk:
     return RetrievedChunk(
         document_id=document,
         chunk_id=f"{document}-{version}-{page}",
@@ -19,24 +20,26 @@ def _chunk(document="doc-a", version="version-a", page=1):
     )
 
 
-def _span(document="doc-a", version="version-a", **extra):
+def _span(document: str = "doc-a", version: str = "version-a", **extra: Any) -> dict[str, Any]:
     return {"document_scope": [document, "", "run", "native", version, document], **extra}
 
 
-def _state(*chunks):
+def _state(*chunks: RetrievedChunk) -> SimpleNamespace:
     return SimpleNamespace(
         chunks={chunk.chunk_id: chunk for chunk in chunks}, document_backgrounds={}
     )
 
 
-def _oracle(first=None, page=None):
+def _oracle(
+    first: RetrievedChunk | None = None, page: dict[str, Any] | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(
         retrieval_document_first_chunk=AsyncMock(return_value=first),
         chunk_set_first_page_contexts=AsyncMock(return_value={"version-a": page} if page else {}),
     )
 
 
-async def test_background_reads_selected_versions_and_reuses_identical_scope():
+async def test_background_reads_selected_versions_and_reuses_identical_scope() -> None:
     first = _chunk()
     selected = _chunk(page=3)
     state = _state(selected)
@@ -60,7 +63,7 @@ async def test_background_reads_selected_versions_and_reuses_identical_scope():
 
 
 @pytest.mark.parametrize("first", [_chunk(document="other"), _chunk(version="other")])
-async def test_wrong_document_or_version_is_never_admitted(first):
+async def test_wrong_document_or_version_is_never_admitted(first: RetrievedChunk) -> None:
     selected = _chunk(page=3)
     state = _state(selected)
     result = await selected_document_backgrounds(_oracle(first), state, {}, [_span()])
@@ -68,7 +71,7 @@ async def test_wrong_document_or_version_is_never_admitted(first):
     assert list(state.chunks) == [selected.chunk_id]
 
 
-async def test_page_scope_excludes_literal_first_without_substituting_later_chunk():
+async def test_page_scope_excludes_literal_first_without_substituting_later_chunk() -> None:
     import json
 
     scope = json.dumps([{"document_id": "doc-a", "page_start": 2, "page_end": 4}])
@@ -88,7 +91,9 @@ async def test_page_scope_excludes_literal_first_without_substituting_later_chun
         ({"section_title": "section-a"}, "content_scope_not_verifiable"),
     ],
 )
-async def test_full_page_is_not_read_when_its_scope_cannot_be_authorized(filters, status):
+async def test_full_page_is_not_read_when_its_scope_cannot_be_authorized(
+    filters: dict[str, str], status: str
+) -> None:
     oracle = _oracle()
     result = await selected_document_backgrounds(oracle, _state(_chunk(page=3)), filters, [_span()])
     assert result[0]["first_page_status"] == status
@@ -102,14 +107,16 @@ async def test_full_page_is_not_read_when_its_scope_cannot_be_authorized(filters
         ({"status": "available", "text": "old"}, "completeness_not_recorded"),
     ],
 )
-async def test_old_prefix_is_not_described_as_complete(page, status):
+async def test_old_prefix_is_not_described_as_complete(page: dict[str, Any], status: str) -> None:
     result = await selected_document_backgrounds(
         _oracle(page=page), _state(_chunk()), {}, [_span()]
     )
     assert result[0]["first_page_status"] == status
 
 
-async def test_legacy_page_recovery_uses_exact_immutable_revision(monkeypatch):
+async def test_legacy_page_recovery_uses_exact_immutable_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.clients.oracle import OracleClient
     from app.rag.document_background import first_page_for_index
     from app.schemas.extraction import DocumentElement, ExtractionPage, StructuredExtraction
@@ -146,6 +153,7 @@ async def test_legacy_page_recovery_uses_exact_immutable_revision(monkeypatch):
     from rag_engine.knowledge.document_metadata import normalize_first_page_context
 
     assert normalize_first_page_context(result["version-a"]) == result["version-a"]
+    assert fetch.await_args is not None
     sql, binds = fetch.await_args.args
     assert "revision.extraction_recipe_id = cs.extraction_recipe_id" in sql
     assert "revision.recipe_id = cs.recipe_id" in sql

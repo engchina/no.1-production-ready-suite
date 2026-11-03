@@ -113,7 +113,9 @@ class FakeOracle:
         self.classification_calls.append(list(document_ids))
         raise AssertionError("回答候補の分類を別途読み取らない")
 
-    async def retrieval_document_first_chunk(self, filters, *, document_id, chunk_set_id):
+    async def retrieval_document_first_chunk(
+        self, filters: dict[str, str], *, document_id: str, chunk_set_id: str
+    ) -> RetrievedChunk | None:
         values = [
             chunk
             for chunk in self.chunks
@@ -121,13 +123,13 @@ class FakeOracle:
             and str(chunk.metadata.get("chunk_set_id") or "") == chunk_set_id
         ]
         return (
-            min(values, key=lambda chunk: int(chunk.metadata.get("chunk_index") or 0))
+            min(values, key=lambda chunk: int(str(chunk.metadata.get("chunk_index") or 0)))
             if values
             else None
         )
 
     async def chunk_set_first_page_contexts(
-        self, chunk_set_ids: list[str], *, filters=None
+        self, chunk_set_ids: list[str], *, filters: dict[str, str] | None = None
     ) -> dict[str, dict[str, object]]:
         self.first_page_calls.append(list(chunk_set_ids))
         return {
