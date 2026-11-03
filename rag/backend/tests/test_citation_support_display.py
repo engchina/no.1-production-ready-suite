@@ -1,5 +1,6 @@
 """定位のみの引用を意味支持の確認済みとして表示しない。"""
 
+import re
 from typing import Any
 
 import pytest
@@ -120,7 +121,9 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
                     {
                         "kind": "operation",
                         "text": claim,
-                        "citations": [{"evidence_id": "E1", "line_start": 1, "line_end": 1}],
+                        "citations": [
+                            {"unit_ids": [re.findall(r"\[(U[0-9a-f]{24})\]", args[1])[0]]}
+                        ],
                     }
                 ],
                 "summary": "",

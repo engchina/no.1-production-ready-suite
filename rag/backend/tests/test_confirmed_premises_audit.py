@@ -134,7 +134,7 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
                 },
             )
         result = _fake_llm(system, prompt, config, schema, **options)
-        if schema in (GroundedDraft, generation_draft_wire_model()):
+        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             # この回帰は履歴互換の草稿を返し、引用wire自体の検証とは分ける。
             data = result.model_dump()
             ids = list(dict.fromkeys(row["citations"][0]["evidence_id"] for row in data["items"]))

@@ -107,7 +107,7 @@ def capture_generation(
     captured: list[str] = []
 
     def parse(system: str, actual_prompt: str, settings: Any, schema: Any, **kwargs: Any) -> GroundedDraft:
-        assert schema is generation_draft_wire_model()
+        assert issubclass(schema, generation_draft_wire_model())
         captured.append(actual_prompt)
         return GroundedDraft(items=[], summary="", confidence="low")
 

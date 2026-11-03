@@ -183,11 +183,16 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
     from rag_engine.adapters import oci
     from rag_engine.config import LlmProviderSettings
     from rag_engine.config import get_settings as engine_settings
-    from rag_engine.generation.batched_evidence import _reading_model
+    from rag_engine.generation.batched_evidence import _reading_model, reading_unit_catalog
     from rag_engine.resources.call_context import call_context, update_call_context
     from rag_engine.resources.structured_output_retry import bind_structured_output_repair
 
     schema = _reading_model([{"text": "合成の本文。", "source_id": "source-a"}])
+    actual_id = reading_unit_catalog([{"text": "合成の本文。", "source_id": "source-a"}]).unit_ids[
+        0
+    ]
+    foreign_id = "U" + "f" * 24
+    assert actual_id != foreign_id
     sent: list[dict[str, Any]] = []
 
     class Response(SimpleNamespace):
@@ -205,18 +210,18 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
             import json
 
             sent.append(kwargs)
-            last = "B1-2" if len(sent) == 1 else "B1-1"
+            chosen = foreign_id if len(sent) == 1 else actual_id
             return Response(
                 status="completed",
                 output_text=json.dumps(
-                    {"findings": [{"start_line": "B1-1", "end_line": last, "answer": "合成の回答"}]}
+                    {"findings": [{"unit_ids": [chosen], "answer": "合成の回答"}]}
                 ),
                 usage=None,
             )
 
     def repair(error: Exception, will_retry: bool) -> str | None:
         update_call_context(
-            {"pr.call.role": "batch_range_repair", "pr.retry.reason": "citation_range_invalid"}
+            {"pr.call.role": "batch_range_repair", "pr.retry.reason": "citation_unit_invalid"}
         )
         return "合成の修正入力" if will_retry else None
 
@@ -251,7 +256,7 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
                 "synthetic",
                 settings,
             )
-        assert result.findings[0].end_line == "B1-1"
+        assert result.findings[0].unit_ids == [actual_id]
         calls = [span for span in summary.spans if span.operation_name == "gen_ai.chat"]
         assert len(sent) == len(calls) == 2
         assert [span.status for span in calls] == ["failed", "done"]
@@ -270,7 +275,7 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
         import json
 
         recorded = json.loads(calls[0].display.details.call.output.text)
-        assert json.loads(recorded["output_text"])["findings"][0]["end_line"] == "B1-2"
+        assert json.loads(recorded["output_text"])["findings"][0]["unit_ids"] == [foreign_id]
         assert (
             next(span for span in summary.spans if span.operation_name == "rag.search").status
             == "done"

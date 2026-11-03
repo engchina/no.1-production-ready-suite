@@ -184,7 +184,7 @@ async def test_final_answer_generation_receives_assumptions(
 
     def llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         output = _fake_llm(system, prompt, settings, schema, **options)
-        if schema in (GroundedDraft, generation_draft_wire_model()):
+        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             prompts.append(system)
             assert system.endswith(ASSUMPTION_SYSTEM_PROMPT) is (policy == "assume")
             if policy == "assume":

@@ -672,7 +672,7 @@ def test_unread_sections_make_the_answer_conditional():
     }
 
     def model(system, prompt, settings, schema, **options):
-        if schema in (GroundedDraft, generation_draft_wire_model()):
+        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
             return GroundedDraft.model_validate(draft)
         if is_audit_wire(schema):
@@ -981,7 +981,7 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
     }
 
     def model(system, prompt, settings, schema, **options):
-        if schema in (GroundedDraft, generation_draft_wire_model()):
+        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
             return GroundedDraft.model_validate(draft)
         if is_audit_wire(schema):

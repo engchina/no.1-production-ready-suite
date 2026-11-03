@@ -996,7 +996,7 @@ def _fake_llm_with_usage(model: str, *, fail_on: type | None = None) -> Any:
 
     def fake(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
         with observe_call("chat", model) as observation:
-            if fail_on is not None and schema is fail_on:
+            if fail_on is not None and issubclass(schema, fail_on):
                 raise TimeoutError("合成の時間切れ")
             observation.usage(
                 {

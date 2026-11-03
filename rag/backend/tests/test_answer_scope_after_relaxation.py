@@ -401,7 +401,7 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
             return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)
         if (
-            schema in (GroundedDraft, generation_draft_wire_model())
+            issubclass(schema, (GroundedDraft, generation_draft_wire_model()))
             and "請求書の再発行は、請求一覧" not in prompt
         ):
             data = result.model_dump(exclude_unset=True)

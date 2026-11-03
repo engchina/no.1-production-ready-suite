@@ -234,7 +234,7 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
         nonlocal generations, audits
         assert config.answer_audit_mode == mode
         assert config.answer_max_correction_rounds == 2
-        if schema in (GroundedDraft, generation_draft_wire_model()):
+        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             generations += 1
             label = re.search(r"\[(E[0-9]+)\]", prompt)
             assert label is not None
@@ -372,7 +372,7 @@ async def test_formal_none_entry_keeps_invalid_id_and_range_checks(
 
     def model(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
         schemas.append(schema.__name__)
-        if schema in (GroundedDraft, generation_draft_wire_model()):
+        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             found = re.search(r"\[(E[0-9]+)\]", prompt)
             assert found is not None
             return GroundedDraft.model_validate(

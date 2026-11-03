@@ -7076,7 +7076,8 @@ def run_round(
         }
     )
     unit_catalog = generation_unit_catalog(spans, sent_only=True)
-    generation_model = generation_output_model(question, guided=bool(guide_step_contracts), unit_catalog=unit_catalog)
+    generation_base = generation_output_model(question, guided=bool(guide_step_contracts))
+    generation_model = unit_generation_model(generation_base, unit_catalog)
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",
@@ -7097,7 +7098,7 @@ def run_round(
 
     def canonicalize_output(value: BaseModel, purpose: str, input_prompt: str) -> GroundedDraft:
         canonical = canonical_generation_draft(value, lambda link: _scope_range_text(link, spans), unit_catalog=unit_catalog)
-        if scope_plan is None and isinstance(value, generation_model):
+        if scope_plan is None and isinstance(value, generation_base):
             # 計画を同じ出力で返す生成だけ。生成の前に立てた計画（answer.scope）は説明に合わせて変えない。
             canonical, added = plan_rows_from_citations(canonical, spans)
             plan_rows_added.extend(added)
