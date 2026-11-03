@@ -3478,7 +3478,10 @@ def apply_audit(checked: Sequence[CheckedItem], audit: GroundedAudit) -> None:
 
 def _citation(span: dict) -> str:
     # 頁の無い根拠（Excel の行の記録）はシートとセル範囲を出す（#1224）。
-    location = span.get("location") or answer_labels().page(span.get("page", ""))
+    page = span.get("page", "")
+    end = span.get("page_end")
+    pages = f"{page}-{end}" if isinstance(page, int) and isinstance(end, int) and end > page else page
+    location = span.get("location") or answer_labels().page(pages)
     return f"{answer_labels().citation_prefix}{span.get('source', '')} {location}"
 
 

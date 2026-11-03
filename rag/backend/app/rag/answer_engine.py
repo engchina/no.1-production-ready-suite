@@ -4715,6 +4715,7 @@ def _section_expansion_diagnostics(trace: Any) -> dict[str, Any]:
 # （ファイル名と頁で推測しない）。番号を付けるのは、出典行の主張を支える子と確定した
 # chunk だけ（#2710）。
 ANSWER_CITATION_LINES_KEY = "answer_citation_lines"
+ANSWER_CITATION_PAGE_RANGES_KEY = "answer_citation_page_ranges"
 # 出典行の主張を支える子が決まらなかったときの、候補の chunk の出典行の番号（#2710）。
 # 画面はどれか 1 つを正しい位置として強調せず、「位置未確定」として候補を示す。
 ANSWER_CITATION_CANDIDATE_LINES_KEY = "answer_citation_candidate_lines"
@@ -4754,6 +4755,7 @@ def _with_citation_lines(
             if value := str(parent.get(key) or ""):
                 children_by_parent.setdefault(value, children)
     lines: dict[str, list[int]] = {}
+    line_pages: dict[str, list[dict[str, int]]] = {}
     candidate_lines: dict[str, list[int]] = {}
     for ordinal, ref in enumerate(refs, 1):
         if not isinstance(ref, Mapping):
@@ -4761,6 +4763,14 @@ def _with_citation_lines(
         exact = _known_ids(ref.get("scope_source_ids"), pages)
         for chunk_id in exact:
             lines.setdefault(chunk_id, []).append(ordinal)
+            # 終頁のある記録だけを確定した頁範囲として渡す。旧記録の先頭頁を単頁確定と扱わない。
+            if ref.get("page_end") is not None:
+                start = max(pages[chunk_id][0], _int(ref.get("page")))
+                end = min(pages[chunk_id][1], _int(ref.get("page_end")))
+                if 0 < start <= end:
+                    line_pages.setdefault(chunk_id, []).append(
+                        {"line": ordinal, "page_start": start, "page_end": end}
+                    )
         candidates = [
             chunk_id
             for chunk_id in _known_ids(ref.get("candidate_source_ids"), pages)
@@ -4778,6 +4788,8 @@ def _with_citation_lines(
         if chunk.chunk_id in lines:
             update[ANSWER_CITATION_LINES_KEY] = lines[chunk.chunk_id]
             update[ANSWER_CITATION_PROVENANCE_KEY] = ANSWER_CITATION_PROVENANCE_CHILD
+        if chunk.chunk_id in line_pages:
+            update[ANSWER_CITATION_PAGE_RANGES_KEY] = line_pages[chunk.chunk_id]
         if chunk.chunk_id in candidate_lines:
             update[ANSWER_CITATION_CANDIDATE_LINES_KEY] = candidate_lines[chunk.chunk_id]
         result.append(

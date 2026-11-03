@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RetrievedChunk } from "./api";
 import {
   citationLocation,
+  displayCitationLine,
   matchCitation,
   matchCitationLine,
   parseAnswerText,
@@ -383,5 +384,39 @@ describe("生成時に保存した回答の表示形式", () => {
     expect(blocks?.[2]).toMatchObject({ title: "実行順[機能 A]", entries: [{ citationLines: [2] }] });
     expect(parseCitationLine("出典[例]：文書 A.pdf 頁[3]", format)).toEqual({ fileName: "文書 A.pdf", page: 3 });
     expect(parseCitationLine("出典[例]：文書 A.xlsx 表[シート A] A3:D6", format)).toEqual({ fileName: "文書 A.xlsx", page: null, sheet: "シート A", rowStart: 3, rowEnd: 6 });
+  });
+});
+
+
+describe("引用ラベルの頁範囲", () => {
+  const line = "根拠：sample.pdf p.3";
+  it("範囲と離れた頁を解析する", () => {
+    expect(parseCitationLine("根拠：sample.pdf p.3-4")).toEqual({fileName: "sample.pdf", page: 3, pageEnd: 4});
+    expect(parseCitationLine("根拠：sample.pdf p.3,5")).toEqual({fileName: "sample.pdf", page: 3, pageRanges: [[3,3],[5,5]]});
+  });
+  it("旧本文の先頭頁を確定した子の範囲で表示する", () => {
+    const item = chunk("sample.pdf", 3, 4);
+    item.metadata.answer_citation_provenance = "child";
+    expect(displayCitationLine(line, parseCitationLine(line), item, 1)).toBe("根拠：sample.pdf p.3-4");
+  });
+  it("行ごとに確定した単頁を子全体へ広げない", () => {
+    const item = chunk("sample.pdf", 3, 4);
+    item.metadata.answer_citation_provenance = "child";
+    item.metadata.answer_citation_page_ranges = [{line: 1, page_start: 3, page_end: 3}];
+    expect(displayCitationLine(line, parseCitationLine(line), item, 1)).toBe(line);
+  });
+  it("離れた表示位置の間の頁を追加しない", () => {
+    const item = chunk("sample.pdf", 3, 5);
+    item.metadata.answer_citation_provenance = "child";
+    item.metadata.display_regions = [{page: 3}, {page: 5}];
+    expect(displayCitationLine(line, parseCitationLine(line), item, 1)).toBe("根拠：sample.pdf p.3,5");
+    const parsed = parseCitationLine("根拠：sample.pdf p.3,5")!;
+    expect(matchCitation(parsed, [chunk("sample.pdf",4), chunk("sample.pdf",5)])).toBe(1);
+  });
+  it("子の途中の単頁はそのまま表示する", () => {
+    const item = chunk("sample.pdf", 3, 4);
+    item.metadata.answer_citation_provenance = "child";
+    const specific = "根拠：sample.pdf p.4";
+    expect(displayCitationLine(specific, parseCitationLine(specific), item, 1)).toBe(specific);
   });
 });

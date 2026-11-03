@@ -122,3 +122,18 @@ def test_each_item_has_its_own_citation_line_even_when_reusing_same_page_or_chil
     assert _lines(result) == {"a": [1, 3], "b": [2, 3]}
     assert _lines(result, ANSWER_CITATION_CANDIDATE_LINES_KEY) == {"candidate": [4]}
     assert result[2].metadata.get(ANSWER_CITATION_PROVENANCE_KEY) is None
+
+
+def test_citation_page_ranges_are_stored_per_exact_line():
+    citations = [_chunk("c1", 3, 4)]
+    refs = [
+        {"source_id": "p", "scope_source_ids": ["c1"], "page": 3, "page_end": 4},
+        {"source_id": "p", "scope_source_ids": ["c1"], "page": 4, "page_end": 4},
+        {"source_id": "p", "scope_source_ids": ["c1"], "page": 3},
+    ]
+    result = _with_citation_lines(citations, [_parent("p", ("c1", True))], refs)
+    assert result[0].metadata["answer_citation_page_ranges"] == [
+        {"line": 1, "page_start": 3, "page_end": 4},
+        {"line": 2, "page_start": 4, "page_end": 4},
+    ]
+    assert "answer_citation_page_ranges" not in citations[0].metadata
