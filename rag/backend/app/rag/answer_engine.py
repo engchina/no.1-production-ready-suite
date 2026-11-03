@@ -9,7 +9,6 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   複数の検索文は原質問主軸の重み付き RRF で融合し、同じ親の兄弟 chunk と
   親本文(``parent_text``)で親子を復元する。
   質問の語から検索条件・候補の除外・加点は推定しない。利用者の明示した範囲と認可を保つ。
-  文書の分類は metadata（document.classification）、
   1 ページ目の本文は document.first_page_context に載せる。
 - 画面目録の連携(``RAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
   ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
@@ -157,9 +156,6 @@ ENGINE_SOURCE_RUN_ID = "0" * 16
 CALLER_QUERY_STRATEGY = "simple_retrieval"
 # 回答フロー 1 件の I/O 待ちの上限(秒)。LLM/検索の個別 timeout は各 client が持つ。
 _IO_TIMEOUT_SECONDS = 600.0
-# 質問が挙げた文書名のうち、ナレッジベースにあるか確かめる数の上限(1 語ごとに SQL 1 回)。
-# 質問の業務名として照合する大分類の名前の最短の文字数(1 文字の名前は質問の別の語に偶然含まれる)。
-_MIN_BUSINESS_NAME_CHARS = 2
 # 画面目録の cache((検索条件, 索引の状態) → 目録)。索引の状態は文書の追加・再索引で変わる(#554)。
 _SCREEN_CATALOG_CACHE: dict[tuple[str, str], dict[str, list[str]]] = {}
 _SCREEN_CATALOG_CACHE_SIZE = 32
@@ -190,13 +186,6 @@ _REFERENCE_DOCUMENT_CANDIDATES = 20
 # 検索して rerank にかける chunk の数(このうち関連の高い順に参照先 1 つにつき
 # ``_REFERENCE_CHUNKS_PER_TARGET`` 件を足す)。
 _DOCUMENT_REFERENCE_CANDIDATES = 8
-# 交差参照: 参照先を探す範囲に残す検索条件(ナレッジベース・旧版の扱い・基準日だけ)。文書名・
-# ページ・分類・項目などの絞り込みは参照を辿るときには使わない(業務の絞り込みで正当な参照を
-# 止めない。§7.2)。本文に明記された参照(「第 5 条を参照」など)は、利用者が指定した文書名の外の
-# 文書へも辿る(引用を辿る一般的なやり方と同じ。#1280)。実体・関係情報の拡張(``_expansion_scope``)
-# と違い、意図して利用者の絞り込みを越える(#3260)。基準日(as_of)は時点の境界なので外さない
-# (主検索と同じ日で有効期間を判定する。#2602)。利用者の権限(認可の範囲)は検索条件ではなく
-# SQL の述語で当たるので、ここでも外れない。
 # 診断に出す交差参照の件数の上限。
 _REFERENCE_DIAGNOSTICS_LIMIT = 10
 # 診断に出す交差参照の起点の記録の、検索の回数の上限(CRAG の各回・要求ごとの再検索)。
@@ -360,9 +349,6 @@ class _SearchState:
     # 質問の文書名・ページを足した検索条件(#546)。CRAG の各回で同じなので、最初の検索で
     # 1 回だけ決める。
     filters: dict[str, str] | None = None
-    # 文書の分類(rag_documents.classification)を document_id ごとに保持する(#545)。
-    classifications: dict[str, dict[str, object]] = field(default_factory=dict)
-    loaded_classification_ids: set[str] = field(default_factory=set)
     # 画面目録(#554)。CRAG の各回で同じなので、1 回の回答で 1 回だけ作る。
     screen_catalog: dict[str, list[str]] | None = None
     # 質問から読み取った抽出項目の条件のうち検索に足したもの(#652)。
@@ -1668,7 +1654,6 @@ class AnswerEngine:
                     "relaxed": state.relaxed[relaxed_before:],
                 }
             )
-        await self._load_classifications([state.chunks[chunk_id] for chunk_id in fused], state)
         citation_ids: list[str] = []
         citation_search = getattr(self._oracle, "citation_label_search", None)
         if citation_search is not None:
@@ -1841,19 +1826,12 @@ class AnswerEngine:
             graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
         added = [*referenced, *entity_chunks, *graph_chunks]
         evidence = [*anchors, *siblings, *added]
-        # 文書の分類(足した根拠の文書)と文書の背景(1 ページ目の本文)は短い読み取りなので 1 つの段に
-        # まとめる。読むものが無ければ段を出さない(#3464)。
+        # 文書の背景(1 ページ目の本文)を読む。未取得のものが無ければ段を出さない。
         with _search_stage(
             DOCUMENT_INFO_STAGE,
-            active=bool(
-                _missing_classifications(added, state)
-                or _missing_first_page_contexts(evidence, state)
-            ),
+            active=bool(_missing_first_page_contexts(evidence, state)),
         ):
-            if added:
-                await self._load_classifications(added, state)
             await self._load_first_page_contexts(evidence, state)
-        classifications = state.classifications
         children = []
         for chunk in anchors:
             if chunk.chunk_id in entity_ids:
@@ -1866,7 +1844,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=fused.get(chunk.chunk_id, 0.0),
-                    classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
                     retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
@@ -1875,7 +1852,6 @@ class AnswerEngine:
                 _stored_child(
                     reference,
                     rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
-                    classification=classifications.get(reference.document_id),
                     first_page_context=_first_page_context(reference, state),
                     retrieval_channels=state.retrieval_channels.get(reference.chunk_id),
                 )
@@ -1889,7 +1865,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=base_score * _ENTITY_SCORE_DECAY,
-                    classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
                     retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
@@ -1902,7 +1877,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=base_score * _GRAPH_SCORE_DECAY,
-                    classification=classifications.get(chunk.document_id),
                     first_page_context=_first_page_context(chunk, state),
                     retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
@@ -1928,7 +1902,6 @@ class AnswerEngine:
                 _stored_child(
                     sibling,
                     rrf_score=0.0,
-                    classification=classifications.get(sibling.document_id),
                     first_page_context=_first_page_context(sibling, state),
                     retrieval_channels=state.retrieval_channels.get(sibling.chunk_id),
                 ),
@@ -2043,7 +2016,6 @@ class AnswerEngine:
                     (item.chunk_id, item) for item in state.context_reads.get(cache_key(anchor), ())
                 )
             originals = list(chunks.values())
-            await self._load_classifications(originals, state)
             # 範囲外の1ページ目を文書背景としても渡さない。
             if not scope:
                 await self._load_first_page_contexts(originals, state)
@@ -2055,7 +2027,6 @@ class AnswerEngine:
                     _stored_child(
                         state.chunks.get(item.chunk_id, item),
                         rrf_score=0.0,
-                        classification=state.classifications.get(item.document_id),
                         first_page_context=_first_page_context(item, state) if not scope else None,
                         retrieval_channels=state.retrieval_channels.get(item.chunk_id),
                     ),
@@ -2909,7 +2880,7 @@ class AnswerEngine:
     ) -> list[Any]:
         """選ばれた画面の child(画面ごとに上限まで)と、その親を検索範囲から読む(#554)。
 
-        検索結果に無かった chunk も引用に戻せるよう ``state.chunks`` に入れる。分類・1 ページ目の
+        検索結果に無かった chunk も引用に戻せるよう ``state.chunks`` に入れる。1 ページ目の
         本文(#557)・根拠画像は検索の候補と同じく付ける。読めない画面は足さない(回答は続ける)。
         """
         from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN
@@ -2940,8 +2911,7 @@ class AnswerEngine:
         if not added:
             return []
         chunks = list(added.values())
-        # 分類と 1 ページ目の本文は、読んでいない文書・chunk set の分だけをまとめて 1 回で読む。
-        await self._load_classifications(chunks, state)
+        # 1 ページ目の本文は、未取得の chunk set の分だけをまとめて読む。
         await self._load_first_page_contexts(chunks, state)
         if self._attach_images:
             for chunk in chunks:
@@ -2951,7 +2921,6 @@ class AnswerEngine:
             _stored_child(
                 chunk,
                 rrf_score=0.0,
-                classification=state.classifications.get(chunk.document_id),
                 first_page_context=_first_page_context(chunk, state),
             )
             for chunk in chunks
@@ -3028,7 +2997,7 @@ class AnswerEngine:
         範囲(``_reference_scope``。ナレッジベース・旧版の扱い・基準日と利用者の権限)で読む。呼び出し
         元の文書・文書名・ページなどの絞り込みの外の参照先でも、参照で足した文書の章節を読めなくしない
         (#3325)。それ以外の章節は回答の検索と同じ条件のまま。
-        読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、分類・1 ページ目の本文・根拠画像は
+        読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、1 ページ目の本文・根拠画像は
         検索の候補と同じく付ける。読めなければ空(広げずに回答を続ける)。
         """
         from rag_engine.generation.section_expansion import MAX_SECTION_CHUNKS, SectionRead
@@ -3063,7 +3032,6 @@ class AnswerEngine:
             if text.complete and text.section.chunk_count == 0:
                 return SectionRead(complete=True)
             return SectionRead(complete=False, reason="partial_read")
-        await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
         if self._attach_images:
             for chunk in chunks:
@@ -3073,7 +3041,6 @@ class AnswerEngine:
             _stored_child(
                 chunk,
                 rrf_score=0.0,
-                classification=state.classifications.get(chunk.document_id),
                 first_page_context=_first_page_context(chunk, state),
             )
             for chunk in chunks
@@ -3208,7 +3175,7 @@ class AnswerEngine:
     ) -> list[Any]:
         """目録で選んだ条の章節の最初の child(印を付ける)と、その親を読む(#2254)。
 
-        読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、分類・1 ページ目の本文・根拠画像は
+        読んだ chunk は引用へ戻せるよう ``state.chunks`` に入れ、1 ページ目の本文・根拠画像は
         検索の候補と同じく付ける。読めない条は足さない(回答は続ける)。
         """
         from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY
@@ -3251,7 +3218,6 @@ class AnswerEngine:
         if not found:
             return []
         chunks = [state.chunks.setdefault(chunk.chunk_id, chunk) for chunk, _ in found]
-        await self._load_classifications(chunks, state)
         await self._load_first_page_contexts(chunks, state)
         if self._attach_images:
             for chunk in chunks:
@@ -3262,7 +3228,6 @@ class AnswerEngine:
             child = _stored_child(
                 chunk,
                 rrf_score=0.0,
-                classification=state.classifications.get(chunk.document_id),
                 first_page_context=_first_page_context(chunk, state),
             )
             child.metadata[ARTICLE_CATALOG_KEY] = {
@@ -3272,16 +3237,6 @@ class AnswerEngine:
             }
             children.append(child)
         return [*children, *_stored_parents(children, state)]
-
-    async def _load_classifications(
-        self, chunks: Sequence[RetrievedChunk], state: _SearchState
-    ) -> None:
-        """まだ読んでいない文書の分類を、ヒットした document_id でまとめて 1 回で読む(#545)。"""
-        missing = _missing_classifications(chunks, state)
-        if not missing:
-            return
-        state.classifications.update(await self._oracle.document_classifications(missing))
-        state.loaded_classification_ids.update(missing)
 
     async def _load_first_page_contexts(
         self, chunks: Sequence[RetrievedChunk], state: _SearchState
@@ -3451,11 +3406,6 @@ def _search_stage(name: str, *, active: bool = True) -> AbstractContextManager[o
     (「文書の検索」)の子の段になる。行うことの無い工程(``active`` が偽)は段を出さない。
     """
     return observe_call("stage", name) if active else nullcontext()
-
-
-def _missing_classifications(chunks: Sequence[RetrievedChunk], state: _SearchState) -> list[str]:
-    """まだ分類を読んでいない文書の id(``_load_classifications`` が読む文書)。"""
-    return sorted({chunk.document_id for chunk in chunks} - state.loaded_classification_ids)
 
 
 def _missing_first_page_contexts(
@@ -3741,19 +3691,15 @@ def _stored_child(
     chunk: RetrievedChunk,
     *,
     rrf_score: float,
-    classification: Mapping[str, object] | None = None,
     first_page_context: Mapping[str, object] | None = None,
     retrieval_channels: Collection[str] | None = None,
 ) -> Any:
     """backend の chunk を rag_engine の子 chunk にする。
 
-    ``classification`` は文書の分類(rag_documents.classification)。rag_engine は
-    ``metadata["document"]["classification"]`` で業務の候補を絞る
-    (``_same_business_records``。#545)。
     ``first_page_context`` は chunk set の文書の 1 ページ目の本文。rag_engine は
     ``metadata["document"]["first_page_context"]`` を回答の「文書の背景」にする(#557)。
     chunk 自身が持つ値(#557 より前に保存した chunk)があれば、そちらを使う。
-    分類と 1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
     ``retrieval_channels`` は検索で当たった経路(``_hit_channels``)。rag_engine の検索の実装と同じ
     ``adb_hybrid.retrieval_channels`` に書く(根拠の記録と、文書の検索の工程の候補の経路。#3443)。
     ``adb_hybrid`` には経路だけを書き、並べ替え・文脈の選択に効く値(``rrf_score`` など)は書かない。
@@ -3768,12 +3714,6 @@ def _stored_child(
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
     for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
         metadata[key] = chunk.metadata.get(key, "")
-    if classification:
-        document = metadata.get("document")
-        metadata["document"] = {
-            **(document if isinstance(document, dict) else {}),
-            "classification": dict(classification),
-        }
     if first_page_context:
         document = metadata.get("document")
         document = document if isinstance(document, dict) else {}

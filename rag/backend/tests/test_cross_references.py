@@ -657,9 +657,6 @@ class ReferenceOracle:
     async def retrieval_large_categories(self, filters: dict[str, str]) -> list[str]:
         return []
 
-    async def document_classifications(self, ids: list[str]) -> dict[str, dict[str, object]]:
-        return {}
-
     async def chunk_set_first_page_contexts(self, ids: list[str]) -> dict[str, dict[str, object]]:
         return {}
 

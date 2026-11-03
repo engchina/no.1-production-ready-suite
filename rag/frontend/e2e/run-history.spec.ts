@@ -1128,6 +1128,22 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await expectNoPageOverflow(page);
     await inspector.screenshot({path: testInfo.outputPath("trace-field-spacing.png")});
   });
+  test("文書情報の工程は分類ではなく先頭ページの読み込みを表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
+    await mockLocalAuth(page);
+    const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+    await mockRuns(page, [row]);
+    await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+      {key: "root", spec: ragSpan.root(), at: [0, 2]},
+      {key: "first-page", spec: ragSpan.step("文書の先頭ページの読み込み"), at: [0, .1]},
+    ])});
+    await page.goto(`/history/${row.run_id}`);
+    await page.getByTestId("run-history-timeline-summary").click();
+    const timeline = page.getByTestId("run-history-timeline");
+    await expect(timeline).toContainText("文書の先頭ページを読み込む");
+    await expect(timeline).not.toContainText("分類と背景");
+    await expectNoPageOverflow(page);
+    await timeline.screenshot({path: testInfo.outputPath("first-page-stage.png")});
+  });
   test("Oracle hybrid と追加検索の経路、WRRF の寄与を確認できる", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});

@@ -111,11 +111,7 @@ class FakeOracle:
         self, document_ids: list[str]
     ) -> dict[str, dict[str, object]]:
         self.classification_calls.append(list(document_ids))
-        return {
-            document_id: self.classifications[document_id]
-            for document_id in document_ids
-            if document_id in self.classifications
-        }
+        raise AssertionError("回答候補の分類を別途読み取らない")
 
     async def chunk_set_first_page_contexts(
         self, chunk_set_ids: list[str]
@@ -1623,13 +1619,10 @@ async def _answer_two_documents(
     ],
     ids=["code-prefix", "full-width-question", "full-width-stored"],
 )
-async def test_answer_engine_keeps_only_candidates_of_named_business(
+async def test_answer_engine_does_not_read_classification_or_infer_filters_from_question(
     monkeypatch: pytest.MonkeyPatch, stored: str, question: str
 ) -> None:
-    """質問が検索範囲の大分類を名指ししたら、その業務の文書の候補だけが根拠に残る(#545 / #553)。
-
-    番号の接頭辞・全角半角の違いは #547 の正規化で吸収する。
-    """
+    """質問の分類名から範囲を狭めず、候補の分類も別途取得しない。"""
     oracle = TwoDocumentOracle()
     oracle.classifications = {
         "doc-a": {"large_category": stored},
@@ -1643,8 +1636,7 @@ async def test_answer_engine_keeps_only_candidates_of_named_business(
     )
 
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
-    # 分類はヒットした document_id でまとめて 1 回だけ読む(N+1 にしない)。
-    assert oracle.classification_calls == [["doc-a", "doc-b"]]
+    assert oracle.classification_calls == []
     # 大分類の語の一覧は、検索と同じ範囲(回答の初めに決めた基準日を含む。#2602)で 1 回の回答に
     # 1 回だけ読む(#553)。
     assert oracle.large_category_calls == []
@@ -1726,8 +1718,8 @@ async def test_answer_engine_answers_without_business_names_when_load_fails(
     assert {chunk.document_id for chunk in outcome.citations} == {"doc-a", "doc-b"}
 
 
-async def test_answer_engine_search_puts_document_classification_on_child_and_parent() -> None:
-    """子・親の chunk の metadata に document.classification を載せる(#545)。"""
+async def test_search_does_not_attach_unused_classification_to_child_or_parent() -> None:
+    """検索の子・親へ不要な分類を取得・付与しない。"""
     from app.rag.answer_engine import _SearchState
 
     oracle = TwoDocumentOracle()
@@ -1739,10 +1731,9 @@ async def test_answer_engine_search_puts_document_classification_on_child_and_pa
     )
 
     documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in result.all_chunks}
-    assert documents["doc-a:c1"] == {
-        "classification": {"large_category": "業務A", "small_category": "登録"}
-    }
-    assert documents["doc-a:doc-a-p1"] == documents["doc-a:c1"]
+    assert documents["doc-a:c1"] is None
+    assert documents["doc-a:doc-a-p1"] is None
+    assert oracle.classification_calls == []
     assert documents["doc-b:c1"] is None
     # 分類は検索用テキスト(埋め込み・全文検索の入力)には入れない。
     child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-a:c1")
@@ -1938,40 +1929,6 @@ async def test_screen_filters_take_precedence_over_question(
 
 def _order(result: Any) -> list[str]:
     return [chunk.chunk_uid for chunk in result.child_chunks]
-
-
-async def test_oracle_document_classifications_reads_hit_documents_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """分類はヒットした document_id の IN で 1 回だけ読み、分類の無い文書は返さない(#545)。"""
-    from app.clients.oracle import OracleClient
-
-    client = OracleClient(settings=Settings())
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    async def fake_fetch_all(
-        statement: str, binds: dict[str, object] | None = None
-    ) -> list[dict[str, object]]:
-        calls.append((statement, dict(binds or {})))
-        return [
-            {"document_id": "doc-a", "classification": '{"large_category": "業務A"}'},
-            {"document_id": "doc-b", "classification": None},
-        ]
-
-    monkeypatch.setattr(client, "_fetch_all", fake_fetch_all)
-
-    assert await client.document_classifications([]) == {}
-    assert calls == []
-    result = await client.document_classifications(["doc-a", "doc-b", "doc-a"])
-
-    assert result == {"doc-a": {"large_category": "業務A"}}
-    assert len(calls) == 1
-    statement, binds = calls[0]
-    assert "FROM rag_documents d" in statement
-    document_binds = [
-        value for key, value in binds.items() if key.startswith("classification_document")
-    ]
-    assert document_binds == ["doc-a", "doc-b"]
 
 
 async def test_oracle_has_retrieval_chunks_uses_search_scope(
@@ -2214,8 +2171,8 @@ async def test_screen_linking_reads_catalog_with_the_auto_field_conditions(
         assert json.loads(filters["extraction_fields"]) == [condition.model_dump()]
 
 
-async def test_screen_chunks_carry_classification_and_first_page_context() -> None:
-    """画面目録から加える chunk にも分類と 1 ページ目の本文を載せる(1 回で読む。#554 / #557)。"""
+async def test_screen_chunks_keep_first_page_context_without_classification_read() -> None:
+    """画面目録の追加候補では分類を読まず、先頭ページは保持する。"""
     from app.rag.answer_engine import _SearchState
 
     oracle = ScreenOracle()
@@ -2229,14 +2186,11 @@ async def test_screen_chunks_carry_classification_and_first_page_context() -> No
     )
 
     documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in stored}
-    expected = {
-        "classification": {"large_category": "業務A"},
-        "first_page_context": _first_page_context(),
-    }
+    expected = {"first_page_context": _first_page_context()}
     assert documents["setting:c1"] == expected
     assert documents["doc-setting:cs-setting:setting-p1"] == expected
     assert "setting:c2" not in documents
-    assert oracle.classification_calls == [["doc-setting"]]
+    assert oracle.classification_calls == []
     assert oracle.first_page_calls == [["cs-setting"]]
     # 引用に戻せるよう、検索結果に無かった chunk も state に入れる。
     assert "setting:c1" in state.chunks

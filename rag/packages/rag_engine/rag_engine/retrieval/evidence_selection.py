@@ -702,11 +702,6 @@ def evidence_spans(
                     "evidence_id": span_id,
                     "source_id": source_id,
                     "document_scope": list(document_context_key(record)),
-                    # 分類は v4 で document 配下 (#814)。
-                    "business_scope": str(
-                        (((getattr(record, "metadata", {}) or {}).get("document") or {}).get("classification") or {}).get("large_category")
-                        or ""
-                    ),
                     "source": getattr(record, "source", ""),
                     "source_context": source_info,
                     # 関連度順で選んだ根拠も、生成時は見出しと本文を原文順に読めるようにする。
