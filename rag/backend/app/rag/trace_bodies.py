@@ -7,7 +7,6 @@ import logging
 import threading
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
-from functools import wraps
 from typing import Any, Literal
 
 from pr_backend_core.observability.trace_bodies import (
@@ -16,6 +15,10 @@ from pr_backend_core.observability.trace_bodies import (
     BodyPage,
     read_body_page,
     release_body_owners,
+)
+from pr_backend_core.observability.trace_body_lifecycle import (
+    body_capture_scope,
+    captured_body_call,
 )
 from pr_backend_core.observability.trace_body_persistence import TraceBodyPersistence
 from pr_backend_core.observability.trace_body_reader import CallBodySlot, saved_call_body_content
@@ -72,8 +75,7 @@ def stop_trace_body_persistence() -> None:
 
 @contextmanager
 def trace_body_capture() -> Iterator[None]:
-    persistence = _PERSISTENCE
-    with persistence.capture() if persistence is not None else contextlib.nullcontext():
+    with body_capture_scope(_PERSISTENCE):
         yield
 
 
@@ -82,12 +84,7 @@ def capture_trace_bodies[**P, T](
 ) -> Callable[P, Coroutine[Any, Any, T]]:
     """内側のpipelineと外側の失敗記録保存を同じ本文sessionにまとめる。"""
 
-    @wraps(function)
-    async def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
-        with trace_body_capture():
-            return await function(*args, **kwargs)
-
-    return wrapped
+    return captured_body_call(function, persistence=lambda: _PERSISTENCE)
 
 
 def trace_body_details(trace: object) -> Mapping[str, Any]:

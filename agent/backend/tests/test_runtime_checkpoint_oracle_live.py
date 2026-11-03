@@ -86,6 +86,126 @@ def _head(checkpoint_key: str) -> tuple[dict[str, Any], int, str]:
         return json.loads(row[0].read()), int(row[1]), str(row[2])
 
 
+def test_run_full_body_survives_thread_delete_and_follows_entity_tombstone(
+    checkpoint_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pr_backend_core.chat_progress import CallDetails, ChatProgressStepDetails
+    from pr_backend_core.observability.call_details import call_content
+    from pr_backend_core.observability.trace_bodies import read_body_page, release_body_owner
+    from pr_backend_core.observability.trace_body_persistence import TraceBodyPersistence
+    from pr_backend_core.observability.tracing import SpanDisplay, SpanUpdate
+
+    from app.features.agent import trace_bodies
+    from app.oracle_connection import platform_oracle_connection
+    from app.settings import get_settings
+
+    repository = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    run = repository.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id="default"))
+    assert repository.begin_builtin_run(run.id) is not None
+    persistence = TraceBodyPersistence(
+        platform_oracle_connection, clob_type=oracledb.DB_TYPE_CLOB, settings=get_settings()
+    )
+    monkeypatch.setattr(trace_bodies, "_PERSISTENCE", persistence)
+    persistence.start()
+    owner = trace_bodies.run_body_owner(checkpoint_key, run.id)
+    content = None
+    text = "合成の全文。" * 16000 + "最終条件。"
+    try:
+        with persistence.capture():
+            content = call_content(text)
+            assert content.body_reference is not None
+            at = datetime.now(UTC)
+            trace_id = uuid4().hex
+            assert repository.record_builtin_span(
+                run.id,
+                SpanUpdate(
+                    trace_id=trace_id,
+                    span_id="a" * 16,
+                    operation_name="agent.execute",
+                    root=True,
+                    status="running",
+                    started_at=at,
+                ),
+            )
+            assert repository.record_builtin_span(
+                run.id,
+                SpanUpdate(
+                    trace_id=trace_id,
+                    span_id="b" * 16,
+                    parent_span_id="a" * 16,
+                    operation_name="synthetic.call",
+                    status="done",
+                    started_at=at,
+                    finished_at=at,
+                    display=SpanDisplay(
+                        details=ChatProgressStepDetails(call=CallDetails(input=content))
+                    ),
+                ),
+            )
+            repository.complete_builtin_run(run.id, "合成の回答")
+        assert persistence.stop()
+        position, restored = 0, ""
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            while True:
+                page = read_body_page(cursor, owner, content.body_reference, first_part=position)
+                assert page is not None and page.status == "complete", page
+                restored += "".join(part.text for part in page.parts)
+                if page.next_part is None:
+                    break
+                position = page.next_part
+            assert restored == text
+            assert (
+                read_body_page(
+                    cursor,
+                    trace_bodies.run_body_owner(checkpoint_key + "-other", run.id),
+                    content.body_reference,
+                )
+                is None
+            )
+        finished = repository.get_run(run.id)
+        assert finished.thread_id is not None
+        repository.delete_thread(finished.thread_id, user_uuid=None, all_users=True)
+        assert repository.get_run(run.id).thread_id is None
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            assert read_body_page(cursor, owner, content.body_reference) is not None
+            head = checkpoint_store.read_head(
+                cursor, RUNTIME_CHECKPOINT_TABLE, checkpoint_key, for_update=True
+            )
+            assert head is not None
+            checkpoint_store.write_entities(
+                cursor,
+                checkpoint_key,
+                {(checkpoint_store.RUN, run.id): None},
+                version=head.version + 1,
+            )
+            checkpoint_store.update_head(
+                cursor,
+                RUNTIME_CHECKPOINT_TABLE,
+                checkpoint_key,
+                version=head.version + 1,
+                text=None,
+            )
+            connection.commit()
+            assert read_body_page(cursor, owner, content.body_reference) is None
+            cursor.execute(
+                "SELECT COUNT(*) FROM PLATFORM_TRACE_BODY_PARTS WHERE BODY_ID = :body_id",
+                {"body_id": content.body_reference.body_id},
+            )
+            assert cursor.fetchone()[0] == 0
+    finally:
+        persistence.stop()
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            release_body_owner(cursor, owner)
+            if content is not None and content.body_reference is not None:
+                cursor.execute(
+                    "DELETE FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id "
+                    "AND NOT EXISTS (SELECT 1 FROM PLATFORM_TRACE_BODY_OWNERS o "
+                    "WHERE o.BODY_ID = :body_id)",
+                    {"body_id": content.body_reference.body_id},
+                )
+            connection.commit()
+
+
 def _entities(checkpoint_key: str) -> dict[tuple[str, str], tuple[str | None, int]]:
     with connect_platform_oracle() as connection, connection.cursor() as cursor:
         cursor.execute(
