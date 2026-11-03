@@ -1,6 +1,8 @@
 """出力の検査の実施・省略・検査不能を progress / chat / trace で区別する。"""
 
 import asyncio
+import json
+from dataclasses import asdict
 from typing import Any, cast
 
 import pytest
@@ -68,6 +70,8 @@ async def test_inspection_outcome_reaches_progress_chat_and_trace(
                 progress_callback=capture,
                 result_outcome=guardrail_stage_outcome,
                 result_details=lambda value: answer_guardrail_details(value, "合成の回答"),
+                request_snapshot=lambda: {"回答本文": "合成の回答", "authorization": "private-key"},
+                result_snapshot=asdict,
             )
         assert calls == (["合成の回答"] if enabled else [])
         assert [event.outcome for event in events] == ["started", expected_outcome]
@@ -86,6 +90,12 @@ async def test_inspection_outcome_reaches_progress_chat_and_trace(
             ).status
             == expected_status
         )
+        call = step.details.call
+        assert call and call.input.status == call.output.status == "recorded"
+        assert call.visibility == "system_admin"
+        assert "private-key" not in call.model_dump_json()
+        assert json.loads(call.output.text)["allowed"] is result.allowed
+        assert json.loads(call.output.text)["skipped_reason"] == result.skipped_reason
         assert result.allowed == (
             not enabled or inspection is not None and not inspection.prompt_injection
         )
@@ -158,11 +168,25 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
         ),
     )
     oracle = SavingOracle()
+    tracker = RecordingTrace(model_id="synthetic")
     response = await RagPipeline(
         settings=Settings(rag_guardrails_input_enabled=False),
         oracle=cast(Any, oracle),
         genai=cast(Any, FakeGenAi()),
-    ).run(SearchRequest(query="合成の質問", knowledge_base_ids=["kb-1"]))
+    ).run(SearchRequest(query="合成の質問", knowledge_base_ids=["kb-1"]), trace=tracker)
+    step = next(
+        row
+        for row in fold_chat_progress_events(tracker.events).step_list()
+        if row.kind == "answer_guardrail"
+    )
+    assert step.details and step.details.call
+    call = step.details.call
+    assert json.loads(call.input.text) == {
+        "回答本文": "合成の回答",
+        "渡した根拠本文": "合成の資料",
+        "出力検査の設定": False,
+    }
+    assert json.loads(call.output.text)["sanitized_text"] == final_text
     assert response.answer == final_text == oracle.saved[-1]["answer"]
     assert response.diagnostics.answer is not None
     validation = response.diagnostics.answer["answer_validation"]
@@ -174,3 +198,61 @@ async def test_saved_validation_and_evaluation_follow_the_final_body(
         assert "claim_checks" not in validation and "counts" not in validation
         assert isinstance(validation["previous_body_validation"], dict)
     assert oracle.saved[-1]["evaluation_input"]["answer_text"] == final_text
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("failed_phase", ["input", "output"])
+async def test_snapshot_failure_does_not_change_operation_result(
+    enabled: bool, failed_phase: str
+) -> None:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    calls: list[str] = []
+
+    def input_value() -> object:
+        calls.append("input")
+        if failed_phase == "input":
+            raise ValueError("private exception sentinel")
+        return {"input": "synthetic"}
+
+    def output_value(result: str) -> object:
+        calls.append("output")
+        if failed_phase == "output":
+            raise ValueError("private exception sentinel")
+        return {"result": result}
+
+    async def operation() -> str:
+        calls.append("operation")
+        return "synthetic-result"
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            call_content_policy(lambda: enabled),
+            operation_trace("task", operation_id="synthetic") as summary,
+        ):
+            result = await _observe_stage(
+                "synthetic",
+                "answer_guardrail",
+                operation(),
+                request_snapshot=input_value,
+                result_snapshot=output_value,
+            )
+        assert result == "synthetic-result"
+        span = next(item for item in summary.spans if item.operation_name == "rag.answer_guardrail")
+        assert span.status == "done"
+        assert span.display and span.display.details and span.display.details.call
+        call = span.display.details.call
+        assert calls == (["input", "operation", "output"] if enabled else ["operation"])
+        assert call.capture_enabled is enabled
+        assert "private exception sentinel" not in call.model_dump_json()
+        if enabled:
+            payload = call.input if failed_phase == "input" else call.output
+            assert json.loads(payload.text) == {
+                "recording_status": "incomplete",
+                "error_type": "ValueError",
+            }
+        else:
+            assert not call.input.text and not call.output.text
+    finally:
+        shutdown_tracing()
