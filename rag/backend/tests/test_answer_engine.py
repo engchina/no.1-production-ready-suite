@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import date
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -3707,7 +3708,9 @@ def test_context_parent_uses_only_stored_parent_text_and_artifact_scope() -> Non
     assert parents[0].chunk_uid != parents[1].chunk_uid
 
 
-def test_coverage_review_setting_reaches_the_engine(tmp_path, monkeypatch) -> None:
+def test_coverage_review_setting_reaches_the_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """読み直しの設定が engine へ届き、既定は有効（#4231。テストの環境だけ無効にしている）。"""
     from app.config import Settings
     from app.rag.answer_engine import build_engine_settings
