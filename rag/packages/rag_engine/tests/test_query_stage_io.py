@@ -1,0 +1,108 @@
+"""検索準備の実入力・実出力を工程ごとに記録する合成回帰。"""
+
+from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import replace
+
+import pytest
+from test_runtime_knowledge_steps import _RULE, _TERM, _run, _write
+
+from rag_engine.generation import answering
+
+
+class Recorder:
+    def __init__(self):
+        self.calls = defaultdict(list)
+
+    @contextmanager
+    def observe(self, operation, model):
+        value = {}
+        self.calls[(operation, model)].append(value)
+
+        class Observation:
+            def request(self, payload, *, schema=None):
+                value["input"] = payload
+
+            def response(self, payload):
+                value["output"] = payload
+
+            def usage(self, payload):
+                pass
+
+            def display(self, *args, **kwargs):
+                pass
+
+        yield Observation()
+
+    def stage(self, name):
+        values = self.calls[("stage", name)]
+        assert len(values) == 1
+        return values[0]
+
+
+@pytest.mark.parametrize("search,answer", [(False, False), (True, False), (False, True), (True, True)])
+def test_stage_io_matches_actual_enabled_inputs_and_queries(tmp_path, search, answer):
+    recorder = Recorder()
+    result = _run(_write(tmp_path / "knowledge.json", terms=[_TERM], rules=[_RULE]), observer=recorder, search=search, answer=answer)
+    for name, enabled in [(answering.TERM_SEARCH_STEP, search), (answering.TERM_ANSWER_STEP, answer)]:
+        call = recorder.stage(name)
+        assert call["input"]["原質問"] == result.runtime_knowledge.original_question
+        assert call["input"]["検索への使用"] is search
+        assert call["input"]["回答への使用"] is answer
+        assert [term["term"] for term in call["output"]["一致した用語"]] == ([_TERM["term"]] if enabled else [])
+        assert call["output"]["状態"] == ("照合完了" if enabled else "設定オフ")
+    rules = recorder.stage(answering.RULE_ANSWER_STEP)
+    assert [rule["rule_id"] for rule in rules["output"]["選択した登録ルール"]] == [_RULE["id"]]
+    assert rules["output"]["状態"] == "選択完了"
+    confirmation = recorder.stage(answering.RULE_CONFIRMATION_STEP)
+    assert confirmation["input"]["有効"] is False
+    assert confirmation["output"]["選択した登録ルール"] == []
+    rewrite = recorder.stage("質問の言い換え・分解")
+    assert rewrite["output"]["実行状態"] == "skipped"
+    merged = recorder.stage("検索文をまとめ、検索語を作る")
+    actual = [item["本文"] for item in merged["output"]["採用した検索文"]]
+    assert actual == result.retrieval_query_plan["text_query_variants"]
+    assert merged["output"]["全文検索の入力"]["oracle_text_queries"] == result.text_search_queries
+    assert all(item["出どころ"] for item in merged["output"]["採用した検索文"])
+
+
+def test_no_term_match_is_completed_with_empty_output(tmp_path):
+    recorder = Recorder()
+    _run(_write(tmp_path / "knowledge.json", terms=[_TERM]), question="合成の別の質問", observer=recorder, search=True)
+    output = recorder.stage(answering.TERM_SEARCH_STEP)["output"]
+    assert output == {"状態": "照合完了", "読込エラー": "", "一致した用語": [], "追加検索文": []}
+
+
+def test_term_load_failure_is_recorded_without_inventing_a_match(tmp_path, monkeypatch):
+    from rag_engine.knowledge import runtime_knowledge
+
+    def fail(*args):
+        raise ValueError("synthetic")
+
+    monkeypatch.setattr(runtime_knowledge, "_matched_terms", fail)
+    recorder = Recorder()
+    _run(_write(tmp_path / "knowledge.json", terms=[_TERM]), observer=recorder, search=True)
+    call = recorder.stage(answering.TERM_SEARCH_STEP)
+    assert call["input"]["原質問"]
+    assert call["output"]["状態"] == "読込失敗"
+    assert call["output"]["読込エラー"]
+    assert call["output"]["一致した用語"] == []
+
+
+def test_rewrite_output_and_rejections_are_the_actual_values(tmp_path, monkeypatch):
+    def expand(question, strategy, settings, **kwargs):
+        return replace(
+            answering._base_query_expansion(question, strategy),
+            generated_queries=("合成用語Aの期限",),
+            rejected_queries=({"query": "合成の無関係な検索文", "reason": "synthetic_reason"},),
+        )
+
+    monkeypatch.setattr(answering, "build_query_expansion", expand)
+    recorder = Recorder()
+    result = _run(_write(tmp_path / "knowledge.json"), observer=recorder, strategy="query_decomposition")
+    call = recorder.stage("質問の言い換え・分解")
+    output = call["output"]["実際の質問拡張"]
+    assert call["input"]["設定"] == "query_decomposition"
+    assert output["generated_queries"] == result.generated_queries
+    assert output["rejected_queries"] == ({"query": "合成の無関係な検索文", "reason": "synthetic_reason"},)
+    assert call["output"]["実行状態"] == "完了"
