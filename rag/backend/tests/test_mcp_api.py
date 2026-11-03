@@ -3137,6 +3137,12 @@ def _figure_pdf() -> bytes:
 class _FigureSourceOracle(_SourceOracle):
     """図の chunk と、処理レシピのファイル準備後の artifact を持つ fake。"""
 
+    async def chunk_set_source_derivation(
+        self, *, document_id: str, chunk_set_id: str
+    ) -> dict[str, object] | None:
+        del document_id, chunk_set_id
+        return None
+
     async def get_document(self, document_id: str) -> object | None:
         if document_id != "d1":
             return None

@@ -3335,7 +3335,7 @@ class AnswerEngine:
             name = f"{_safe_name(image_id)}.png"
             target = crop_dir / name
             if not target.is_file():
-                source = await self._parsed_source(chunk.document_id, state)
+                source = await self._parsed_source(chunk, state)
                 if source is None:
                     return
                 try:
@@ -3358,13 +3358,22 @@ class AnswerEngine:
             update={"metadata": {**chunk.metadata, "engine_metadata_json": encoded}}
         )
 
-    async def _parsed_source(self, document_id: str, state: _SearchState) -> bytes | None:
-        if document_id not in state.sources:
+    async def _parsed_source(self, chunk: RetrievedChunk, state: _SearchState) -> bytes | None:
+        """根拠の版が解析したファイル（同じ文書でもレシピごとに違う）。"""
+        recipe_id = chunk.metadata.get("recipe_id")
+        chunk_set_id = chunk.metadata.get("chunk_set_id")
+        key = f"{chunk.document_id}:{chunk_set_id}"
+        if key not in state.sources:
             try:
-                state.sources[document_id] = await load_parsed_source(self._oracle, document_id)
+                state.sources[key] = await load_parsed_source(
+                    self._oracle,
+                    chunk.document_id,
+                    recipe_id if isinstance(recipe_id, str) else None,
+                    chunk_set_id=chunk_set_id if isinstance(chunk_set_id, str) else None,
+                )
             except (DocumentSourceNotFoundError, ValueError):
-                state.sources[document_id] = None
-        return state.sources[document_id]
+                state.sources[key] = None
+        return state.sources[key]
 
     async def _rerank(self, query: str, documents: list[str], top_n: int | None) -> list[Any]:
         from rag_engine.models.llm import RerankTextRank

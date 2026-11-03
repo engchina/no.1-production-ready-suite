@@ -3026,6 +3026,16 @@ class OracleClient:
             _execute(
                 connection,
                 """
+                DELETE FROM rag_chunk_set_sections
+                WHERE chunk_set_id IN (
+                    SELECT chunk_set_id FROM rag_chunk_sets WHERE recipe_id = :recipe_id
+                )
+                """,
+                {"recipe_id": recipe_id},
+            )
+            _execute(
+                connection,
+                """
                 DELETE FROM rag_chunks
                 WHERE chunk_set_id IN (
                     SELECT chunk_set_id FROM rag_chunk_sets WHERE recipe_id = :recipe_id
@@ -3210,6 +3220,18 @@ class OracleClient:
                     chunk_set_id=stale_chunk_set_id,
                     entity_ids=[str(row["entity_id"]) for row in entity_rows],
                 )
+            # 章節の対応は作り直しでは消えない。消す chunk_set の分はここで一緒に消す（#4166）。
+            _execute(
+                connection,
+                """
+                DELETE FROM rag_chunk_set_sections
+                WHERE chunk_set_id IN (
+                    SELECT chunk_set_id FROM rag_chunk_sets
+                    WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
+                )
+                """,
+                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
             _execute(
                 connection,
                 """
@@ -3294,47 +3316,6 @@ class OracleClient:
             )
 
         await self._run_transaction(operation)
-
-    async def delete_document_extractions_except(
-        self, *, document_id: str, keep_extraction_ids: Sequence[str]
-    ) -> list[str]:
-        """plan に無い extraction を削除する(GC)。keep が空なら何もしない(安全側)。
-
-        chunk_set GC を先に走らせた後に呼ぶ前提(参照されない抽出だけ残る)。削除した id を返す。
-        """
-        keep = list(dict.fromkeys(keep_extraction_ids))
-        if not keep:
-            return []
-        keep_in_sql, keep_binds = _oracle_in_predicate("extraction_recipe_id", "keep_ex", keep)
-        binds: dict[str, object] = {"document_id": document_id, **keep_binds}
-
-        def operation(connection: OracleConnectionProtocol) -> list[str]:
-            rows = _fetch_all(
-                connection,
-                _render_sql(
-                    """
-                    SELECT extraction_recipe_id FROM rag_document_extractions
-                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
-                    """,
-                    keep_in_sql=keep_in_sql,
-                ),
-                binds,
-            )
-            removed = [str(next(iter(row.values()))) for row in rows]
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                    DELETE FROM rag_document_extractions
-                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
-                    """,
-                    keep_in_sql=keep_in_sql,
-                ),
-                binds,
-            )
-            return removed
-
-        return await self._run_transaction(operation)
 
     async def upsert_chunk_set(
         self,
@@ -3542,6 +3523,25 @@ class OracleClient:
             )
 
         await self._run_transaction(operation)
+
+    async def chunk_set_source_derivation(
+        self, *, document_id: str, chunk_set_id: str
+    ) -> dict[str, object] | None:
+        """chunk_set の抽出が解析したファイルの系譜（抽出の本文は読まない。無ければ None）。"""
+        row = await self._fetch_one(
+            """
+            SELECT JSON_QUERY(
+                       e.extraction_json, '$.parser_artifacts.source_derivation' RETURNING CLOB
+                   ) AS source_derivation
+            FROM rag_chunk_sets cs
+            JOIN rag_document_extractions e
+              ON e.document_id = cs.document_id
+             AND e.extraction_recipe_id = cs.extraction_recipe_id
+            WHERE cs.document_id = :document_id AND cs.chunk_set_id = :chunk_set_id
+            """,
+            {"document_id": document_id, "chunk_set_id": chunk_set_id},
+        )
+        return (_json_loads(row.get("source_derivation")) or None) if row else None
 
     async def get_document_extraction_artifact(
         self,
@@ -3998,103 +3998,6 @@ class OracleClient:
             {"chunk_set_id": chunk_set_id},
         )
         return int(str(next(iter(row.values())))) if row else 0
-
-    async def delete_document_chunk_sets_except(
-        self, *, document_id: str, keep_chunk_set_ids: Sequence[str]
-    ) -> list[str]:
-        """plan に無い chunk_set(とその chunk、未タグ chunk)を削除する。keep だけ残す。
-
-        複数 materialization の cleanup。keep が空なら何もしない(安全側・現行 chunk は保持)。
-        削除した chunk_set id を返す。
-        """
-        keep = list(dict.fromkeys(keep_chunk_set_ids))
-        if not keep:
-            return []
-        keep_in_sql, keep_binds = _oracle_in_predicate("chunk_set_id", "keep_cs", keep)
-        binds: dict[str, object] = {"document_id": document_id, **keep_binds}
-
-        def operation(connection: OracleConnectionProtocol) -> list[str]:
-            rows = _fetch_all(
-                connection,
-                _render_sql(
-                    """
-                    SELECT chunk_set_id FROM rag_chunk_sets
-                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
-                    """,
-                    keep_in_sql=keep_in_sql,
-                ),
-                binds,
-            )
-            removed = [str(next(iter(row.values()))) for row in rows]
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                    DELETE FROM rag_chunks
-                    WHERE document_id = :document_id
-                      AND (NOT ({keep_in_sql}) OR chunk_set_id IS NULL)
-                    """,
-                    keep_in_sql=keep_in_sql,
-                ),
-                binds,
-            )
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                    DELETE FROM rag_chunk_sets
-                    WHERE document_id = :document_id AND NOT ({keep_in_sql})
-                    """,
-                    keep_in_sql=keep_in_sql,
-                ),
-                binds,
-            )
-            return removed
-
-        return await self._run_transaction(operation)
-
-    async def delete_stale_document_chunk_sets(
-        self, *, document_id: str, keep_chunk_set_id: str
-    ) -> list[str]:
-        """文書の keep 以外の chunk_set と、その chunk(+未タグ chunk)を削除する。
-
-        取込設定変更時の旧 chunk_set GC。keep の chunk だけを残し、別 chunk_set の chunk・
-        未タグ(NULL)chunk・別 chunk_set 行を削除する(binding は FK cascade)。削除した
-        chunk_set id を返す。
-        """
-        binds = {"document_id": document_id, "keep_chunk_set_id": keep_chunk_set_id}
-
-        def operation(connection: OracleConnectionProtocol) -> list[str]:
-            rows = _fetch_all(
-                connection,
-                """
-                SELECT chunk_set_id FROM rag_chunk_sets
-                WHERE document_id = :document_id AND chunk_set_id <> :keep_chunk_set_id
-                """,
-                binds,
-            )
-            removed = [str(next(iter(row.values()))) for row in rows]
-            # keep 以外の chunk と未タグ(NULL)chunk を削除する(挿入時タグの一貫性を保つ)。
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunks
-                WHERE document_id = :document_id
-                  AND (chunk_set_id <> :keep_chunk_set_id OR chunk_set_id IS NULL)
-                """,
-                binds,
-            )
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunk_sets
-                WHERE document_id = :document_id AND chunk_set_id <> :keep_chunk_set_id
-                """,
-                binds,
-            )
-            return removed
-
-        return await self._run_transaction(operation)
 
     async def create_search_answer_profile(
         self,
@@ -11308,6 +11211,9 @@ class OracleClient:
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
 
+            if _lock_document_with_served_output(connection, document_id):
+                return _document_detail_in_transaction(connection, document_id)
+
             graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
             _delete_graph_rows_for_document(
                 connection,
@@ -11347,6 +11253,11 @@ class OracleClient:
                     access_predicate=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                "DELETE FROM rag_chunk_set_sections WHERE document_id = :document_id",
+                {"document_id": document_id},
             )
             _execute(
                 connection,
@@ -11417,17 +11328,7 @@ class OracleClient:
                     }
                 ),
             )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
+            return _document_detail_in_transaction(connection, document_id)
 
         return await self._run_transaction(operation)
 
@@ -11444,6 +11345,9 @@ class OracleClient:
             existing = _select_document_state(connection, document_id)
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
+
+            if _lock_document_with_served_output(connection, document_id):
+                return _document_detail_in_transaction(connection, document_id)
 
             graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
             _delete_graph_rows_for_document(
@@ -11466,6 +11370,11 @@ class OracleClient:
                     access_predicate=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind({"document_id": document_id}),
+            )
+            _execute(
+                connection,
+                "DELETE FROM rag_chunk_set_sections WHERE document_id = :document_id",
+                {"document_id": document_id},
             )
             _execute(
                 connection,
@@ -11509,17 +11418,7 @@ class OracleClient:
                     }
                 ),
             )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
+            return _document_detail_in_transaction(connection, document_id)
 
         return await self._run_transaction(operation)
 
@@ -11536,6 +11435,9 @@ class OracleClient:
             existing = _select_document_state(connection, document_id)
             if existing is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
+
+            if _lock_document_with_served_output(connection, document_id):
+                return _document_detail_in_transaction(connection, document_id)
 
             graph_entity_ids = _select_graph_entity_ids_for_document(connection, document_id)
             _delete_graph_rows_for_document(
@@ -11604,17 +11506,7 @@ class OracleClient:
                     }
                 ),
             )
-            document = _select_document(connection, document_id)
-            if document is None:
-                raise KeyError(f"document_id={document_id} は存在しません。")
-            return _to_document_detail(document).model_copy(
-                update={
-                    "knowledge_bases": _select_document_knowledge_base_refs(
-                        connection,
-                        document_id,
-                    )
-                }
-            )
+            return _document_detail_in_transaction(connection, document_id)
 
         return await self._run_transaction(operation)
 
@@ -13529,6 +13421,48 @@ _DOCUMENT_LIST_COLUMNS_SQL = (
             ) THEN 1 ELSE 0 END AS ingestion_active
 """
 )
+
+
+def _lock_document_with_served_output(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> bool:
+    """文書の行を lock し、検索に出している版があるかを返す。
+
+    切替も文書の行を更新するので、lock の後の判定は進行中の切替の結果を見る（#4166）。
+    """
+    _fetch_one(
+        connection,
+        "SELECT document_id FROM rag_documents WHERE document_id = :document_id FOR UPDATE",
+        {"document_id": document_id},
+    )
+    return (
+        _fetch_one(
+            connection,
+            """
+            SELECT 1 AS served FROM rag_chunk_sets
+            WHERE document_id = :document_id AND is_active = 1 AND status = 'INDEXED'
+            FETCH FIRST 1 ROWS ONLY
+            """,
+            {"document_id": document_id},
+        )
+        is not None
+    )
+
+
+def _document_detail_in_transaction(
+    connection: OracleConnectionProtocol,
+    document_id: str,
+) -> DocumentDetail:
+    """transaction の中で文書の詳細（所属の KB つき）を読み直す。"""
+    document = _select_document(connection, document_id)
+    if document is None:
+        raise KeyError(f"document_id={document_id} は存在しません。")
+    return _to_document_detail(document).model_copy(
+        update={
+            "knowledge_bases": _select_document_knowledge_base_refs(connection, document_id),
+        }
+    )
 
 
 def _select_document_state(
