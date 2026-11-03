@@ -425,6 +425,7 @@ jobs:
               - ".github/scripts/oracle-free-ci.sh"
               - ".github/scripts/pytest-skip-gate.py"
               - "platform/packages/backend_core/src/pr_backend_core/oracle_*.py"
+              - "platform/packages/backend_core/src/pr_backend_core/observability/trace_bodies.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/system_schema.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/migrations.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/store.py"

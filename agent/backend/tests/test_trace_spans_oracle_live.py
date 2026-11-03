@@ -154,3 +154,72 @@ def test_span_times_keep_sub_seconds_and_order(trace_id: str) -> None:
         times[first],
         times[second],
     ]
+
+
+@pytest.mark.parametrize("text", ["", "先頭。" + "合成の本文。" * 16000 + "最後の条件。"])
+def test_shared_trace_body_roundtrip_ownership_and_final_deletion(text: str) -> None:
+    """共通本文DAOを実Oracleで検証する。製品の正本の認可は別の結合層が担う。"""
+    import oracledb
+    from pr_backend_core.observability.trace_bodies import (
+        BodyDeleted,
+        BodyOwner,
+        attach_body_owner,
+        prepare_body,
+        read_body_page,
+        release_body_owner,
+        write_body,
+    )
+
+    prepared = prepare_body(text, part_characters=4097, visibility="system_admin")
+    reference = prepared.reference
+    message = BodyOwner("agent", "message", uuid4().hex)
+    history = BodyOwner("agent", "history", uuid4().hex)
+    unrelated = BodyOwner("agent", "message", uuid4().hex)
+    try:
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            attach_body_owner(cursor, message, [reference])
+            attach_body_owner(cursor, history, [reference])
+            write_body(cursor, prepared, clob_type=oracledb.DB_TYPE_CLOB, batch_size=3)
+            connection.commit()
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            assert read_body_page(cursor, message, reference) is None
+            assert read_body_page(cursor, unrelated, reference, allow_restricted=True) is None
+            collected: list[str] = []
+            start = 0
+            while True:
+                page = read_body_page(
+                    cursor, message, reference, first_part=start, max_parts=3, allow_restricted=True
+                )
+                assert page is not None and page.status == "complete" and page.failure_code is None
+                collected.extend(part.text for part in page.parts)
+                if page.next_part is None:
+                    break
+                start = page.next_part
+            assert "".join(collected) == text
+            release_body_owner(cursor, message)
+            connection.rollback()
+            assert read_body_page(cursor, message, reference, allow_restricted=True) is not None
+            release_body_owner(cursor, message)
+            connection.commit()
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            assert read_body_page(cursor, message, reference, allow_restricted=True) is None
+            assert read_body_page(cursor, history, reference, allow_restricted=True) is not None
+            release_body_owner(cursor, history)
+            connection.commit()
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            assert read_body_page(cursor, history, reference, allow_restricted=True) is None
+            cursor.execute(
+                "SELECT COUNT(*) FROM PLATFORM_TRACE_BODY_PARTS WHERE BODY_ID = :body_id",
+                {"body_id": reference.body_id},
+            )
+            assert cursor.fetchone()[0] == 0
+            with pytest.raises(BodyDeleted):
+                write_body(cursor, prepared, clob_type=oracledb.DB_TYPE_CLOB)
+            connection.rollback()
+    finally:
+        with connect_platform_oracle() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id",
+                {"body_id": reference.body_id},
+            )
+            connection.commit()
