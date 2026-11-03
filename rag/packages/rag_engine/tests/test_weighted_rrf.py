@@ -108,3 +108,33 @@ def test_zero_weight_distinguishes_deduplication_from_candidate_admission():
     assert record["unique_count"] == 2
     assert record["candidate_count"] == 1
     assert result.scores == pytest.approx({"b": 1 / 61})
+
+
+@pytest.mark.parametrize(
+    "rankings,sources,weights,expected",
+    [
+        ([RankedList("q", "hybrid", ("a",), native_scores=(0.01,))], {"q": 1.0}, RrfWeights(), "native_only"),
+        (
+            [RankedList("q", "hybrid", ("a",), native_scores=(0.01,)), RankedList("extra", "vector", ("b",))],
+            {"q": 0.7, "extra": 0.3},
+            RrfWeights(),
+            "additional_to_native",
+        ),
+        ([RankedList("q", "vector", ("a",)), RankedList("q", "keyword", ("b",))], {"q": 1.0}, RrfWeights(), "outer_rrf"),
+        ([RankedList("q", "hybrid", ("a",))], {"q": 1.0}, RrfWeights(), "outer_rrf"),
+        ([RankedList("q", "hybrid", ())], {"q": 1.0}, RrfWeights(), "empty"),
+        ([RankedList("q", "hybrid", (), status="failed")], {"q": 1.0}, RrfWeights(), "empty"),
+        (
+            [RankedList("q", "hybrid", ("a",), native_scores=(0.01,)), RankedList("extra", "vector", ("b",))],
+            {"q": 1.0, "extra": 0.0},
+            RrfWeights(),
+            "native_only",
+        ),
+    ],
+)
+def test_fusion_execution_is_based_on_real_contributions(rankings, sources, weights, expected):
+    result = fuse_rankings(rankings, sources, weights, k=60)
+    original_scores = dict(result.scores)
+    assert result.execution(sources) == expected
+    assert result.diagnostics(weights, sources, 60)["fusion_execution"] == expected
+    assert result.scores == original_scores

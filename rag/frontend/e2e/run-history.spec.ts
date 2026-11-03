@@ -1707,3 +1707,29 @@ test("回答修正の方針・再生成の採否・最終採用回を分けて�
   await expectNoPageOverflow(page);
   await inspector.screenshot({path: testInfo.outputPath("correction-final-round.png")});
 });
+
+test("Oracle内部で統合済みの場合だけ追加の統合をスキップと表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+  await mockRuns(page, [row]);
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+    {key: "root", spec: ragSpan.root(), at: [0, 2]},
+    {key: "native-only", spec: ragSpan.step("追加の検索結果統合", "root"), at: [0, .1], status: "skipped",
+      details: {fields: [{label: "追加統合", value: "原質問の検索内で統合済み"}]}},
+    {key: "outer", spec: ragSpan.step("検索結果の統合（RRF）", "root"), at: [.1, 2],
+      details: {fields: [{label: "結果", value: "検索結果を統合しました"}]}},
+  ])});
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  const native = timeline.locator(`[data-run-timeline-step="${spanStepId("native-only")}"]`);
+  const outer = timeline.locator(`[data-run-timeline-step="${spanStepId("outer")}"]`);
+  await expect(native).toHaveAttribute("data-status", "skipped");
+  await expect(native).toContainText("追加の検索結果統合");
+  await expect(outer).toHaveAttribute("data-status", "done");
+  await timeline.screenshot({path: testInfo.outputPath("fusion-execution-status.png")});
+  await inspectTraceStep(page, timeline, spanStepId("native-only"));
+  await expect(page.locator("[data-trace-inspector]")).toContainText("原質問の検索内で統合済み");
+  await expectNoPageOverflow(page);
+  await page.locator("[data-trace-inspector]").screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+});

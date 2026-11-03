@@ -4328,6 +4328,7 @@ export const ja = {
   "settings.answering.rrf_source_ratio.1": "追加検索文全体の比重",
   "settings.answering.rrfInvalid": "比重は 0 以上で指定し、各組の少なくとも一方を 0 より大きくしてください。",
   "answer.step.rrfFusion": "検索結果の統合（RRF）",
+  "answer.step.additionalFusion": "追加の検索結果統合",
   "settings.answering.searchExpressionTitle": "検索文の作成",
   "settings.answering.searchExecutionTitle": "検索の実行",
   "settings.answering.answerGenerationTitle": "回答の生成",
