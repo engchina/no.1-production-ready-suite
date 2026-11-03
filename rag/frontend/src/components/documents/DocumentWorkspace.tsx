@@ -72,6 +72,11 @@ import {
   splitErrorCode,
 } from "./ingestion-error-display";
 import { useRecipeOperationError } from "./recipe-operation-error";
+import {
+  ExtractionRevisionHistory,
+  ExtractionRevisionHistoryButton,
+  ReparsedNotice,
+} from "./ExtractionRevisionHistory";
 import { IngestionSegmentStrip } from "./IngestionSegmentStrip";
 import { ReviewTextEditor } from "./ReviewTextEditor";
 import { KnowledgeBaseScopePicker } from "@/components/knowledge-bases/KnowledgeBaseScopePicker";
@@ -155,6 +160,7 @@ import {
   useReplaceDocumentKnowledgeBases,
   useRetryFailedDocumentIngestionSegments,
   useSaveDocumentClassification,
+  useDocumentRecipeExtractionRevisions,
   useSaveDocumentRecipeReviewEdits,
 } from "@/lib/queries";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -378,6 +384,14 @@ export function DocumentWorkspace({
   const enqueueIngestion = useEnqueueDocumentRecipeJob();
   const approveDocument = useApproveDocumentRecipe();
   const saveReviewEdits = useSaveDocumentRecipeReviewEdits();
+  const [revisionHistoryOpen, setRevisionHistoryOpen] = useState(false);
+  // 再解析の案内とボタンの件数に使う（本文を読まない軽い問い合わせ。#2644）。
+  const revisionHistory = useDocumentRecipeExtractionRevisions(
+    documentId,
+    selectedRecipeId,
+    hasSelectedRecipeExtraction,
+  );
+  const revisionCount = revisionHistory.data?.revisions.length ?? 0;
   const confirm = useConfirm();
   const retryFailedSegments = useRetryFailedDocumentIngestionSegments();
   const queuedJob = useIngestionJob(enqueueIngestion.data?.id ?? null);
@@ -1511,6 +1525,22 @@ export function DocumentWorkspace({
           // 未保存の抽出確認の修正があるあいだは、レシピの操作からも承認させない（本文側の承認と同じ。#944）。
           approveBlocked={status === "REVIEW" && hasReviewEdits}
         />
+        {selectedRecipeId ? (
+          <ExtractionRevisionHistory
+            key={`revisions:${selectedRecipeId}`}
+            documentId={documentId}
+            recipeId={selectedRecipeId}
+            open={revisionHistoryOpen}
+            onClose={() => setRevisionHistoryOpen(false)}
+            history={revisionHistory.data}
+            loading={revisionHistory.isPending}
+            error={revisionHistory.error}
+            onRetry={() => void revisionHistory.refetch()}
+            canRestore={status === "REVIEW"}
+            hasUnsavedEdits={hasReviewEdits}
+            currentExtractionRecipeId={selectedRecipe?.active_extraction_recipe_id ?? null}
+          />
+        ) : null}
         <LanguagePackDocumentPanel key={selectedRecipeId ?? "default"} documentId={documentId} fileName={doc.file_name} use={doc.language_pack} recipe={selectedRecipe ?? null} />
         {/* 状態メッセージ単一スロット(messaging-spec §9): 失敗原因 > 実行中 > ゲート案内 を 1 本だけ表示する。
             工程の操作（承認・実行・再試行・再処理）はこの案内の中に置き、押した結果（投入の失敗・開始・承認の失敗）は
@@ -1723,8 +1753,21 @@ export function DocumentWorkspace({
                 tabIndex={0}
                 className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
+                {status !== "REVIEW" && revisionCount > 0 ? (
+                  <div className="mb-2 flex justify-end">
+                    <ExtractionRevisionHistoryButton
+                      count={revisionCount}
+                      onOpen={() => setRevisionHistoryOpen(true)}
+                    />
+                  </div>
+                ) : null}
                 {status === "REVIEW" && selectedRecipeId ? (
                   <div className="mb-2 xl:sticky xl:top-0 xl:z-10 xl:bg-surface-sunken xl:pb-2">
+                    {revisionHistory.data?.reparsed_since_last_revision ? (
+                      <div className="mb-2">
+                        <ReparsedNotice />
+                      </div>
+                    ) : null}
                     {editingReview ? (
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
@@ -1750,6 +1793,10 @@ export function DocumentWorkspace({
                           ) : null}
                         </div>
                         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                          <ExtractionRevisionHistoryButton
+                            count={revisionCount}
+                            onOpen={() => setRevisionHistoryOpen(true)}
+                          />
                           <Button
                             size="sm"
                             variant="secondary"
@@ -1785,7 +1832,11 @@ export function DocumentWorkspace({
                         </div>
                       </div>
                     ) : (
-                      <div className="flex justify-end">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <ExtractionRevisionHistoryButton
+                          count={revisionCount}
+                          onOpen={() => setRevisionHistoryOpen(true)}
+                        />
                         <Button
                           size="sm"
                           variant="ghost"

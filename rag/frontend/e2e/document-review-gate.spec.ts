@@ -624,6 +624,14 @@ test("レシピを切り替えるときは未保存の修正の破棄を確認�
       await fulfillReviewTextWindow(route, extraction.raw_text);
     } else if (path.endsWith("/content")) {
       await fulfillDocumentInspection(route, { status: 200, contentType: "text/plain", body: extraction.raw_text });
+    } else if (path.endsWith("/extraction-revisions")) {
+      await route.fulfill({
+        json: {
+          data: { revisions: [], current_revision_no: null, reparsed_since_last_revision: false, max_revisions: 20 },
+          error_messages: [],
+          warning_messages: [],
+        },
+      });
     } else {
       await fulfillDocumentInspection(route, { json: { data: [], error_messages: [], warning_messages: [] } });
     }

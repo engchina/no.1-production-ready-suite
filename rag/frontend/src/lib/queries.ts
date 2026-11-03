@@ -129,6 +129,8 @@ export const queryKeys = {
     ["documents", id, "preview-pages", recipeId ?? "", variant] as const,
   documentRecipeChunks: (id: string, recipeId: string) =>
     ["documents", id, "recipes", recipeId, "chunks"] as const,
+  documentRecipeExtractionRevisions: (id: string, recipeId: string) =>
+    ["documents", id, "recipes", recipeId, "extraction-revisions"] as const,
   documentRecipeExtractionExport: (
     id: string,
     recipeId: string,
@@ -730,6 +732,68 @@ export function useSaveDocumentRecipeReviewEdits() {
     onSuccess: (_recipe, variables) =>
       invalidateDocumentRecipeQueries(qc, variables.id),
     // 409（ほかの保存が先に同じ箇所を変えた・承認済み）は、今の抽出結果と状態を読み込み直す（#2616）。
+    onError: (error, variables) => {
+      if (error instanceof ApiError && error.status === 409) {
+        invalidateDocumentRecipeQueries(qc, variables.id);
+      }
+    },
+  });
+}
+
+/** 抽出の修正の履歴（#2644）。保存・復元で読み直す（`documents/{id}/recipes` の下のキー）。 */
+export function useDocumentRecipeExtractionRevisions(
+  id: string,
+  recipeId: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: queryKeys.documentRecipeExtractionRevisions(id, recipeId ?? ""),
+    queryFn: () => api.listDocumentRecipeExtractionRevisions(id, recipeId as string),
+    enabled: enabled && recipeId != null,
+    retry: retryUnlessNotFound,
+  });
+}
+
+export function useDocumentRecipeExtractionRevisionDiff(
+  id: string,
+  recipeId: string,
+  revisionNo: number,
+  options: { against: number | null; offset: number; limit: number },
+) {
+  return useQuery({
+    queryKey: [
+      ...queryKeys.documentRecipeExtractionRevisions(id, recipeId),
+      revisionNo,
+      "diff",
+      options,
+    ],
+    queryFn: () => api.diffDocumentRecipeExtractionRevision(id, recipeId, revisionNo, options),
+    retry: retryUnlessNotFound,
+  });
+}
+
+export function useRestoreDocumentRecipeExtractionRevision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipeId,
+      revisionNo,
+      expectedExtractionRecipeId,
+    }: {
+      id: string;
+      recipeId: string;
+      revisionNo: number;
+      expectedExtractionRecipeId: string;
+    }) =>
+      api.restoreDocumentRecipeExtractionRevision(
+        id,
+        recipeId,
+        revisionNo,
+        expectedExtractionRecipeId,
+      ),
+    onSuccess: (_recipe, variables) => invalidateDocumentRecipeQueries(qc, variables.id),
+    // 409（ほかの保存が先に入った・確認待ちでなくなった）は今の状態を読み込み直す。
     onError: (error, variables) => {
       if (error instanceof ApiError && error.status === 409) {
         invalidateDocumentRecipeQueries(qc, variables.id);

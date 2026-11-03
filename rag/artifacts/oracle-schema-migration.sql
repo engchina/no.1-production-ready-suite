@@ -4268,3 +4268,32 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261102_008_document_extraction_revisions
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_DOCUMENT_EXTRACTION_REVISIONS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_document_extraction_revisions ( '
+            || 'recipe_id                  VARCHAR2(64) NOT NULL, '
+            || 'revision_no                NUMBER(10) NOT NULL, '
+            || 'parent_revision_no         NUMBER(10), '
+            || 'base_revision_no           NUMBER(10) NOT NULL, '
+            || 'restored_from_revision_no  NUMBER(10), '
+            || 'revision_kind              VARCHAR2(16) NOT NULL, '
+            || 'extraction_recipe_id       VARCHAR2(64) NOT NULL, '
+            || 'parse_extraction_recipe_id VARCHAR2(64) NOT NULL, '
+            || 'changed_element_count      NUMBER(10) DEFAULT 0 NOT NULL, '
+            || 'extraction_json            JSON NOT NULL, '
+            || 'created_at                 TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_doc_ext_rev_pk PRIMARY KEY (recipe_id, revision_no), '
+            || 'CONSTRAINT rag_doc_ext_rev_recipe_fk FOREIGN KEY (recipe_id) '
+            || 'REFERENCES rag_document_recipes (recipe_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_doc_ext_rev_kind_ck '
+            || 'CHECK (revision_kind IN (''PARSED'', ''EDITED'', ''RESTORED'')) '
+            || ')';
+    END IF;
+END;
+/

@@ -12,6 +12,7 @@ import asyncio
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -64,12 +65,13 @@ def _write(
         extraction={**extraction, "raw_text": "A1"},
         recipe_subset=None,
         status="materialized",
+        parse_extraction_recipe_id="er_parse",
     )
 
 
 async def test_review_save_locks_recipe_before_reading_and_writes_in_one_transaction() -> None:
     """レシピの行を押さえてから成果を読み、書き込みと参照の切り替えを同じ transaction で行う。"""
-    pool = FakeOraclePool(execute_results=[[_recipe_row()], [], [_artifact_row()]])
+    pool = FakeOraclePool(execute_results=[[_recipe_row()], [], [_artifact_row()], []])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     seen: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
 
@@ -88,14 +90,29 @@ async def test_review_save_locks_recipe_before_reading_and_writes_in_one_transac
     assert "FOR UPDATE OF r.recipe_id" in statements[0]
     assert "FROM rag_ingestion_jobs" in statements[1]
     assert "FROM rag_document_extractions" in statements[2]
-    assert statements[3].lstrip().startswith("MERGE INTO rag_document_extractions")
-    assert statements[4].lstrip().startswith("UPDATE rag_document_recipes")
+    # 版が無いので、今の抽出を解析の版として記録してから新しい版を書く(#2644)。
+    assert "FROM rag_document_extraction_revisions" in statements[3]
+    assert statements[4].lstrip().startswith("INSERT INTO rag_document_extraction_revisions")
+    assert statements[5].lstrip().startswith("MERGE INTO rag_document_extractions")
+    assert statements[6].lstrip().startswith("UPDATE rag_document_recipes")
+    assert statements[7].lstrip().startswith("INSERT INTO rag_document_extraction_revisions")
+    assert statements[8].lstrip().startswith("DELETE FROM rag_document_extractions")
     assert pool.connection.calls[2].parameters["extraction_recipe_id"] == "er_base"
-    assert pool.connection.calls[3].parameters["extraction_recipe_id"] == "er_reviewed"
-    assert pool.connection.calls[4].parameters == {
+    parsed = pool.connection.calls[4].parameters
+    assert (parsed["revision_no"], parsed["revision_kind"]) == (1, "PARSED")
+    assert parsed["parent_revision_no"] is None
+    assert parsed["extraction_recipe_id"] == "er_base"
+    assert pool.connection.calls[5].parameters["extraction_recipe_id"] == "er_reviewed"
+    assert pool.connection.calls[6].parameters == {
         "recipe_id": "recipe-2",
         "extraction_recipe_id": "er_reviewed",
     }
+    edited = pool.connection.calls[7].parameters
+    assert (edited["revision_no"], edited["revision_kind"]) == (2, "EDITED")
+    assert (edited["parent_revision_no"], edited["base_revision_no"]) == (1, 1)
+    assert edited["extraction_recipe_id"] == "er_reviewed"
+    # 切替の前の抽出は、参照が無ければ消す(内容は版に残っている)。
+    assert pool.connection.calls[8].parameters["extraction_recipe_id"] == "er_base"
     assert pool.connection.commits == 1
     [(recipe, artifact)] = seen
     assert recipe["config_revision"] == 3
@@ -129,7 +146,10 @@ async def test_review_save_rejects_without_writing(
         )
 
     statements = [call.statement for call in pool.connection.calls]
-    assert not any(statement.lstrip().startswith(("MERGE", "UPDATE")) for statement in statements)
+    assert not any(
+        statement.lstrip().startswith(("MERGE", "UPDATE", "INSERT", "DELETE"))
+        for statement in statements
+    )
     assert pool.connection.commits == 0
     assert pool.connection.rollbacks == 1
 
@@ -167,11 +187,12 @@ def _element_edit_build(element_id: str, text: str) -> tuple[list[str], _Build]:
             if element["element_id"] == element_id:
                 element["text"] = text
         return ReviewedExtractionWrite(
-            extraction_recipe_id=f"er_rv_{str(recipe['recipe_id'])[:20]}",
+            extraction_recipe_id=f"er_rv_{uuid4().hex[:24]}",
             source_sha256="b" * 64,
             extraction={**extraction, "elements": elements},
             recipe_subset=None,
             status="materialized",
+            parse_extraction_recipe_id="er_parse",
         )
 
     return seen, build
@@ -218,8 +239,12 @@ async def test_concurrent_review_saves_keep_both_element_edits() -> None:
         ),
     )
 
-    reviewed_id = saved[0]
-    assert saved[1] == reviewed_id
+    # 保存ごとに新しい ID の版になる(#2644)。今の成果は後に入った保存のもの。
+    assert saved[0] != saved[1]
+    row = await client.get_document_recipe(detail.id, recipe_id)
+    assert row is not None
+    reviewed_id = str(row["active_extraction_recipe_id"])
+    assert reviewed_id in saved
     # 後に入った保存は、先の保存の修正を含む成果を読んでいる。
     assert sorted([*seen_a, *seen_b]) in (
         sorted(["A1,B1", "A2,B1"]),
@@ -232,19 +257,14 @@ async def test_concurrent_review_saves_keep_both_element_edits() -> None:
     reviewed_json = reviewed["extraction_json"]
     assert isinstance(reviewed_json, dict)
     assert [element["text"] for element in reviewed_json["elements"]] == ["A2", "B2"]
-    # 元の抽出成果は書き換えない(copy-on-write)。
-    base = await client.get_document_extraction_artifact(
-        document_id=detail.id, extraction_recipe_id=base_id
-    )
-    assert base is not None
-    base_json = base["extraction_json"]
-    assert isinstance(base_json, dict)
-    base_content = dict(base_json)
-    assert base_content.pop("parser_artifacts") == {
+    # 元の抽出の内容は解析の版として残る(#2644)。
+    parsed = await client.get_document_recipe_extraction_revision(recipe_id, 1)
+    assert parsed is not None
+    assert parsed["revision_kind"] == "PARSED"
+    assert parsed["extraction_recipe_id"] == base_id
+    parsed_content = dict(cast("dict[str, object]", parsed["extraction_json"]))
+    assert parsed_content.pop("parser_artifacts") == {
         "inspection_index": {"version": 1, "elements": {"a": 0, "b": 1}}
     }
-    assert base_content == original
-    row = await client.get_document_recipe(detail.id, recipe_id)
-    assert row is not None
-    assert row["active_extraction_recipe_id"] == reviewed_id
+    assert parsed_content == original
     assert row["status"] == FileStatus.REVIEW.value
