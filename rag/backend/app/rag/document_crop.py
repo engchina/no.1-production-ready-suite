@@ -30,13 +30,20 @@ class DocumentSourceNotFoundError(LookupError):
     """文書、またはその原本ファイルが見つからない。"""
 
 
-def _artifact_from_derivation(detail: Any, raw: object) -> DocumentPreprocessArtifact | None:
+class VersionSourceUnknownError(DocumentSourceNotFoundError):
+    """版（抽出）が解析したファイルの記録が無い。別のファイルで代用しない。"""
+
+    def __init__(self) -> None:
+        super().__init__("この版が解析したファイルの記録がありません。")
+
+
+def _artifact_from_derivation(detail: Any, raw: object) -> DocumentPreprocessArtifact:
     if not isinstance(raw, Mapping) or not raw:
-        return None
+        raise VersionSourceUnknownError
     try:
         derivation = SourceDerivation.model_validate(raw)
-    except ValidationError:
-        return None
+    except ValidationError as exc:
+        raise VersionSourceUnknownError from exc
     return preprocess_artifact_from_derivation(
         derivation,
         original_file_name=detail.file_name,
@@ -47,8 +54,8 @@ def _artifact_from_derivation(detail: Any, raw: object) -> DocumentPreprocessArt
 
 def prepared_artifact_from_extraction(
     detail: Any, extraction: Mapping[str, Any]
-) -> DocumentPreprocessArtifact | None:
-    """抽出が解析したファイル。系譜が無ければ None。
+) -> DocumentPreprocessArtifact:
+    """抽出が解析したファイル。系譜が無ければ ``VersionSourceUnknownError``。
 
     bbox と要素の位置はこのファイルの座標で、レシピの行の artifact は再処理の開始で新しいファイルを
     指す。版の根拠はレシピの行ではなくここから読む（#4166）。
@@ -59,11 +66,9 @@ def prepared_artifact_from_extraction(
 
 
 async def chunk_set_prepared_artifact(
-    oracle: OracleClient, detail: Any, document_id: str, chunk_set_id: str | None
-) -> DocumentPreprocessArtifact | None:
-    """chunk_set の抽出が解析したファイル。抽出か系譜が無ければ None（#4166）。"""
-    if not chunk_set_id:
-        return None
+    oracle: OracleClient, detail: Any, document_id: str, chunk_set_id: str
+) -> DocumentPreprocessArtifact:
+    """chunk_set の抽出が解析したファイル。抽出か系譜が無ければ ``VersionSourceUnknownError``。"""
     raw = await oracle.chunk_set_source_derivation(
         document_id=document_id, chunk_set_id=chunk_set_id
     )
@@ -79,23 +84,23 @@ async def load_parsed_source(
 ) -> bytes:
     """解析に使ったファイル(ファイル準備後の artifact があればそれ、無ければ原本)を返す。
 
-    ``chunk_set_id`` を渡すと、その版が解析したファイルを読む（#4166）。版の系譜が無いときと
-    ``chunk_set_id`` が無いときは ``recipe_id`` の処理レシピの artifact を使う(レシピごとに
-    解析したファイルが違うため、bbox はそのファイルの座標。#1282)。レシピが無ければ文書の
-    artifact に戻す。参照パスが不正な場合は ValueError(ObjectStorageClient の契約)。
+    ``chunk_set_id`` を渡すと、その版が解析したファイルを読む（#4166）。記録が無い版は
+    ``VersionSourceUnknownError`` で、ほかのファイルで代用しない。``chunk_set_id`` が無いときは
+    ``recipe_id`` の処理レシピの artifact を使う(レシピごとに解析したファイルが違うため、bbox は
+    そのファイルの座標。#1282)。レシピが無ければ文書の artifact を使う。参照パスが不正な場合は
+    ValueError(ObjectStorageClient の契約)。
     """
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise DocumentSourceNotFoundError("ドキュメントが見つかりません。")
     artifact = detail.preprocess_artifact
-    if recipe_id:
+    if chunk_set_id:
+        artifact = await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id)
+    elif recipe_id:
         recipe = await oracle.get_document_recipe(document_id, recipe_id)
         if recipe is not None:
             raw = recipe.get("preprocess_artifact")
             artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
-    artifact = (
-        await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id) or artifact
-    )
     path = (
         artifact.object_storage_path
         if artifact is not None and artifact.object_storage_path

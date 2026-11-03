@@ -29,7 +29,7 @@ from app.clients.oracle import (
     _with_tenant_bind,
     delete_document_rows,
 )
-from app.rag.request_context import current_audit_request_context
+from app.rag.request_context import AuditRequestContext, current_audit_request_context
 
 DOCUMENT_CLEANUP_TABLE = "rag_document_cleanups"
 
@@ -128,6 +128,35 @@ def _placeholders(prefix: str, values: Sequence[str]) -> tuple[str, dict[str, ob
     return ", ".join(f":{name}" for name in names), dict(zip(names, values, strict=True))
 
 
+def insert_document_cleanup_record(
+    connection: OracleConnectionProtocol,
+    task: DocumentCleanupTask,
+    *,
+    context: AuditRequestContext,
+) -> None:
+    """呼び出し側の transaction に後始末の記録を足す（行の削除と一緒に commit する）。"""
+    _execute(
+        connection,
+        f"""
+        INSERT INTO {DOCUMENT_CLEANUP_TABLE} (
+            cleanup_id, document_id, file_name, tenant_id_hash, user_id_hash, targets
+        ) VALUES (
+            :cleanup_id, :document_id, :file_name, :tenant_id_hash, :user_id_hash,
+            :targets
+        )
+        """,
+        {
+            "cleanup_id": task.cleanup_id,
+            "document_id": task.document_id,
+            "file_name": task.file_name,
+            "tenant_id_hash": context.tenant_id_hash,
+            "user_id_hash": context.user_id_hash,
+            "targets": _json_bind(task.targets.to_json()),
+        },
+        input_sizes=_json_input_sizes("targets"),
+    )
+
+
 class DocumentCleanupStore:
     """後始末の記録の読み書き（OracleClient の接続と transaction を使う）。"""
 
@@ -154,26 +183,7 @@ class DocumentCleanupStore:
                 return None
             if targets.is_empty:
                 return task
-            _execute(
-                connection,
-                f"""
-                INSERT INTO {DOCUMENT_CLEANUP_TABLE} (
-                    cleanup_id, document_id, file_name, tenant_id_hash, user_id_hash, targets
-                ) VALUES (
-                    :cleanup_id, :document_id, :file_name, :tenant_id_hash, :user_id_hash,
-                    :targets
-                )
-                """,
-                {
-                    "cleanup_id": task.cleanup_id,
-                    "document_id": document_id,
-                    "file_name": file_name,
-                    "tenant_id_hash": context.tenant_id_hash,
-                    "user_id_hash": context.user_id_hash,
-                    "targets": _json_bind(targets.to_json()),
-                },
-                input_sizes=_json_input_sizes("targets"),
-            )
+            insert_document_cleanup_record(connection, task, context=context)
             return task
 
         return await self._oracle._run_transaction(operation, retry_deadlocks=True)
@@ -276,6 +286,10 @@ class DocumentCleanupStore:
             UNION
             SELECT JSON_VALUE(preprocess_artifact, '$.object_storage_path') AS uri
             FROM rag_documents
+            WHERE JSON_VALUE(preprocess_artifact, '$.object_storage_path') IN ({in_list})
+            UNION
+            SELECT JSON_VALUE(preprocess_artifact, '$.object_storage_path') AS uri
+            FROM rag_document_recipes
             WHERE JSON_VALUE(preprocess_artifact, '$.object_storage_path') IN ({in_list})
             UNION
             SELECT artifact_path AS uri

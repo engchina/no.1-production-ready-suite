@@ -229,6 +229,8 @@ class _RecordingReadOracle:
         self.contexts.append(current_audit_request_context())
         return _chunk(chunk_id, text="本文")
 
+    readable_version_chunk = retrievable_chunk
+
     async def chunk_set_extraction_recipe_ids(self, chunk_set_ids: list[str]) -> dict[str, str]:
         return {}
 

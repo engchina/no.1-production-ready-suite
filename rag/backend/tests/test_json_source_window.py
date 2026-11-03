@@ -14,6 +14,14 @@ def fixture() -> tuple[bytes, dict[str, Any]]:
     return raw, {
         "elements": [{"element_id": "e1", "text": "Heading\nSame 😀 text"}],
         "parser_artifacts": {
+            "source_derivation": {
+                "derivation_id": "dv-plain",
+                "preprocess_profile": "passthrough",
+                "converted": False,
+                "converter_name": "passthrough",
+                "source_content_type": "application/json",
+                "source_sha256": hashlib.sha256(raw).hexdigest(),
+            },
             "json_source_map": {
                 "version": 1,
                 "coordinate_unit": "unicode_codepoint",
@@ -29,7 +37,7 @@ def fixture() -> tuple[bytes, dict[str, Any]]:
                         }
                     ]
                 },
-            }
+            },
         },
     }
 

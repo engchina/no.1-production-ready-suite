@@ -46,6 +46,7 @@ from rag_pipeline_core.chunking import (
     chunk_derived_elements,
     chunk_extraction,
     chunk_extraction_with_strategy,
+    sentence_boundary,
     without_derived_elements,
 )
 
@@ -68,6 +69,8 @@ ENGINE_SEARCH_TEXT_KEY = "engine_search_text"
 # chunk にだけ載せる。保存では chunk の行から外し、chunk set に 1 つだけ保存する。
 FIRST_PAGE_CONTEXT_KEY = "first_page_context_json"
 # 親子を作った入力(取込の trace の ``chunk_parent_source``)。
+# 本文を行・文で分けると意味が崩れる種類。見出しを足して上限を超えても分けない。
+UNSPLIT_BODY_KINDS = frozenset({"code", "equation", "figure"})
 PARENT_SOURCE_LAYOUT = "layout_records"
 PARENT_SOURCE_SHEET_RECORDS = "sheet_records"
 PARENT_SOURCE_XML_TREE = "xml_tree_units"
@@ -258,7 +261,15 @@ def build_structure_parent_child_chunks(
             overlap=0,
             table_chunk_size=resolved.table_child_target_chars,
         )
-    children = _attach_headings(children, target_chars=resolved.child_target_chars)
+    children = _attach_headings(
+        children,
+        target_chars=resolved.child_target_chars,
+        element_texts={
+            element.element_id: element.text
+            for element in extraction.elements
+            if element.element_id
+        },
+    )
     depth = _section_unit_depth(children)
     groups: list[list[Chunk]] = []
     for chunk in children:
@@ -335,7 +346,9 @@ def _extends_section(heading: Chunk, chunk: Chunk) -> bool:
     return bool(path) and _section_parts(chunk)[: len(path)] == path
 
 
-def _attach_headings(children: list[Chunk], *, target_chars: int) -> list[Chunk]:
+def _attach_headings(
+    children: list[Chunk], *, target_chars: int, element_texts: Mapping[str, str]
+) -> list[Chunk]:
     """見出しだけの子を、その見出しの下の最初の本文の子の先頭に付ける。
 
     構造認識の要素の分割は、見出しと続く本文が子の目標を超えると見出しだけの子を作る。見出しだけの
@@ -343,7 +356,8 @@ def _attach_headings(children: list[Chunk], *, target_chars: int) -> list[Chunk]
     子(本文を行として読む)と、下に本文の無い見出しには付けずにそのまま残す。
 
     付ける見出しの合計は子の目標まで(本文に近い見出しから。#4128)。同じ節の見出しが続いて目標を
-    超える分は、目標までまとめた見出しだけの子にする。
+    超える分は、目標までまとめた見出しだけの子にする。見出しと本文は同じ上限を共有し、合計が上限を
+    超える本文は、見出しを付けて上限に収まる前半と、見出しを付けない残りに分ける(#4209)。
     """
     result: list[Chunk] = []
     pending: list[Chunk] = []
@@ -358,13 +372,90 @@ def _attach_headings(children: list[Chunk], *, target_chars: int) -> list[Chunk]
         if pending and attachable and _extends_section(pending[-1], chunk):
             attached, overflow = _split_headings(pending, target_chars)
             result.extend(_grouped_headings(overflow, target_chars))
-            chunk = _with_heading_prefix(attached, chunk)
+            heading_chars = sum(len(heading.text) + 1 for heading in attached)
+            limit = _chunk_limit(chunk, target_chars)
+            if heading_chars + len(chunk.text) <= limit or not _can_split_body(chunk):
+                chunk = _with_heading_prefix(attached, chunk)
+            elif parts := _split_body(chunk, limit - heading_chars, limit, element_texts):
+                result.append(_with_heading_prefix(attached, parts[0]))
+                chunk = parts[1]
+            else:
+                result.extend(_grouped_headings(attached, target_chars))
         else:
             result.extend(pending)
         pending = []
         result.append(chunk)
     result.extend(pending)
     return [replace(chunk, index=index) for index, chunk in enumerate(result)]
+
+
+def _chunk_limit(chunk: Chunk, target_chars: int) -> int:
+    limit = chunk.metadata.get("chunk_size_limit")
+    return limit if isinstance(limit, int) else target_chars
+
+
+def _can_split_body(chunk: Chunk) -> bool:
+    return chunk.metadata.get("content_kind") not in UNSPLIT_BODY_KINDS and not (
+        chunk.metadata.get("chunk_record_boundary")
+    )
+
+
+def _split_body(
+    chunk: Chunk, room: int, limit: int, element_texts: Mapping[str, str]
+) -> tuple[Chunk, Chunk] | None:
+    """本文を ``room`` 文字以内の前半と残りに分ける。
+
+    切る位置は ``room`` 以内の最後の文末か改行。どちらも無ければ ``room`` で切る。余地が上限の半分
+    未満で文の途中になるときは、見出しだけの小さな断片を作らないよう None を返す。
+    """
+    if room <= 0:
+        return None
+    text = chunk.text
+    ends = [match.end() for match in sentence_boundary().finditer(text, 0, room)]
+    ends += [index + 1 for index, char in enumerate(text[:room]) if char == "\n"]
+    cut = max(ends, default=room if room >= limit // 2 else 0)
+    if cut <= 0:
+        return None
+    rest_start = cut + len(text[cut:]) - len(text[cut:].lstrip())
+    first_ids, rest_ids = _part_element_ids(chunk, cut, element_texts)
+    first = _body_part(chunk, 0, cut, first_ids, limit)
+    return first, _body_part(chunk, rest_start, len(text), rest_ids, limit)
+
+
+def _body_part(chunk: Chunk, start: int, end: int, element_ids: str, limit: int) -> Chunk:
+    text = chunk.text[start:end].rstrip()
+    return replace(
+        chunk,
+        text=text,
+        start_offset=chunk.start_offset + start,
+        end_offset=chunk.start_offset + start + len(text),
+        metadata={
+            **chunk.metadata,
+            "element_ids": element_ids,
+            "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "text_chars": len(text),
+            "chunk_size_compliance": "within_limit" if len(text) <= limit else "overflow",
+        },
+    )
+
+
+def _part_element_ids(chunk: Chunk, cut: int, element_texts: Mapping[str, str]) -> tuple[str, str]:
+    """前半と残りの要素 ID。要素をつないだ本文でなければ、位置が分からないので分けない。"""
+    all_ids = str(chunk.metadata.get("element_ids") or "")
+    ids = [element_id for element_id in all_ids.split(",") if element_id]
+    if "\n".join(element_texts.get(element_id, "") for element_id in ids) != chunk.text:
+        return all_ids, all_ids
+    first: list[str] = []
+    rest: list[str] = []
+    position = 0
+    for element_id in ids:
+        end = position + len(element_texts[element_id])
+        if position < cut:
+            first.append(element_id)
+        if end > cut:
+            rest.append(element_id)
+        position = end + 1
+    return ",".join(first), ",".join(rest)
 
 
 def _split_headings(headings: list[Chunk], target_chars: int) -> tuple[list[Chunk], list[Chunk]]:

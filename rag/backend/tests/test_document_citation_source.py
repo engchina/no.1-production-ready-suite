@@ -25,6 +25,8 @@ async def test_source_preserves_original_ids_and_position(monkeypatch: pytest.Mo
             calls.append((document_id, chunk_id))
             return source
 
+        readable_version_chunk = retrievable_chunk
+
     monkeypatch.setattr(documents, "OracleClient", Oracle)
     response = await documents.get_document_citation_chunk("document-a", "document-a:set-a:7")
     assert calls == [("document-a", "document-a:set-a:7")]
@@ -43,6 +45,8 @@ async def test_source_does_not_substitute_a_hidden_or_obsolete_chunk(
     class Oracle:
         async def retrievable_chunk(self, document_id: str, chunk_id: str) -> None:
             return None
+
+        readable_version_chunk = retrievable_chunk
 
         async def accessible_document_exists(self, document_id: str) -> bool:
             return readable

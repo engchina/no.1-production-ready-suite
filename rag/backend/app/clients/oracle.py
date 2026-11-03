@@ -1890,6 +1890,41 @@ class OracleClient:
             )
         return versions
 
+    async def readable_version_chunk(
+        self, document_id: str, chunk_id: str
+    ) -> RetrievedChunk | None:
+        """引用した根拠を ID で読む。``retrievable_chunk`` と同じ条件に、退役した版を加える(#4168)。
+
+        切替の前に検索された根拠を保持の間は開ける。権限・テナント・文書の状態の条件は同じ。
+        回答の監査は ``retrievable_chunk`` のまま(旧版の根拠を今の根拠として確かめない)。
+        """
+        where_sql, binds = _version_read_where()
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                c.chunk_set_id,
+                d.file_name,
+                d.category_name,
+                d.superseded_by_document_id,
+                0 AS score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND c.document_id = :read_document_id
+              AND c.chunk_id = :read_chunk_id
+            """,
+                where_sql=where_sql,
+            ),
+            {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
+        )
+        return _retrieved_chunk_from_row(row) if row is not None else None
+
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
         """検索と同じ見え方の条件で 1 件の chunk を返す（MCP の ``rag_read_source``。#1219）。
 
@@ -1976,16 +2011,14 @@ class OracleClient:
     async def retrievable_element_chunk(
         self, document_id: str, extraction_recipe_id: str, element_id: str
     ) -> RetrievedChunk | None:
-        """要素の定位子が指す要素を含む、今の有効な chunk を返す（#1330）。
+        """要素の定位子が指す要素を含む chunk を返す（#1330）。
 
-        ``retrievable_chunk`` と同じ見え方の条件（tenant・ナレッジベース・INDEXED・
-        有効な chunk_set）に、同じ解析の結果（``extraction_recipe_id``）の chunk_set を加える。
-        文書分割の設定を変えて chunk を作り直しても、同じ要素を含む chunk を返す。
+        ``readable_version_chunk`` と同じ見え方の条件に、同じ解析の結果
+        （``extraction_recipe_id``）の chunk_set を加える。文書分割の設定を変えて chunk を作り直して
+        も、同じ要素を含む chunk を返す。有効な版を先に見て、無ければ保持の間の旧版を見る（#4168）。
         1 つの要素が複数の chunk に分かれたときは、文書の中で最初の chunk を返す。
         """
-        where_sql, binds = _oracle_retrieval_where(
-            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
-        )
+        where_sql, binds = _version_read_where()
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -2010,7 +2043,8 @@ class OracleClient:
               AND DBMS_LOB.INSTR(
                   JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB), :read_element_id
               ) > 0
-            ORDER BY c.chunk_index
+            ORDER BY locator_cs.is_active DESC, locator_cs.retired_at DESC NULLS LAST,
+                c.chunk_index
             FETCH FIRST 50 ROWS ONLY
             """,
                 where_sql=where_sql,
@@ -2269,11 +2303,10 @@ class OracleClient:
     ) -> list[RetrievedChunk]:
         """文書の 1 つの chunk_set の chunk を、``from_index`` から chunk の順に読む（#1332）。
 
-        見え方の条件は ``document_reading_index`` と同じ。chunk_set が有効でなくなっていれば空。
+        見え方の条件は ``document_reading_index`` に、退役した版を加えたもの（読んでいる途中の
+        cursor を切替の後も続ける。#4168）。chunk_set が消えていれば空。
         """
-        where_sql, binds = _oracle_retrieval_where(
-            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
-        )
+        where_sql, binds = _version_read_where()
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -3159,7 +3192,11 @@ class OracleClient:
         job_fence: IngestionJobFence | None = None,
         chunk_set_input_id: str | None = None,
     ) -> None:
-        """基線が今も active なら成功出力へ原子切替し、履歴を残し、同レシピの旧出力を GC する。
+        """基線が今も active なら成功出力へ原子切替し、履歴を残し、旧版に退役の時刻を付ける。
+
+        旧版の行は消さない。保持を超えた版は清掃（``chunk_set_retention``）が消す（#4168）。
+        一度も active にならなかった候補は、切替で読み手がいなくなるのでここで消す。
+        戻す操作（#4170）で退役した版を選ぶと、その版の退役の時刻を消す。
 
         ``expected_base_chunk_set_id`` は呼び出し側が作り始める前に読んだ active（無ければ None）。
         違えば ``RecipeActivationConflictError``（#4167。Iceberg の check-and-put）。
@@ -3221,6 +3258,11 @@ class OracleClient:
                 """
                 UPDATE rag_chunk_sets
                 SET is_active = CASE WHEN chunk_set_id = :chunk_set_id THEN 1 ELSE 0 END,
+                    retired_at = CASE
+                        WHEN chunk_set_id = :chunk_set_id THEN NULL
+                        WHEN is_active = 1 THEN SYSTIMESTAMP
+                        ELSE retired_at
+                    END,
                     updated_at = SYSTIMESTAMP
                 WHERE recipe_id = :recipe_id
                 """,
@@ -3262,7 +3304,7 @@ class OracleClient:
                 """,
                 {"document_id": document_id},
             )
-            # 切替が起きたときだけ履歴を足す。旧版の GC と同じ transaction で書く（#4167）。
+            # 切替が起きたときだけ履歴を足す（#4167）。
             if current_chunk_set_id != chunk_set_id:
                 _execute(
                     connection,
@@ -3282,15 +3324,18 @@ class OracleClient:
                         "job_id": job_fence.job_id if job_fence is not None else None,
                     },
                 )
-            stale_sets = _fetch_all(
+            never_served = _fetch_all(
                 connection,
                 """
                 SELECT chunk_set_id, extraction_recipe_id FROM rag_chunk_sets
-                WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
+                WHERE recipe_id = :recipe_id
+                  AND chunk_set_id <> :chunk_set_id
+                  AND is_active = 0
+                  AND retired_at IS NULL
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
             )
-            _delete_chunk_set_outputs(connection, document_id=document_id, chunk_sets=stale_sets)
+            _delete_chunk_set_outputs(connection, document_id=document_id, chunk_sets=never_served)
 
         await self._run_transaction(operation)
 
@@ -3299,7 +3344,7 @@ class OracleClient:
     ) -> bool:
         """切り替えなかった候補を捨て、レシピの抽出の指す先を active の版へ戻す（#4167）。
 
-        active の版は消さない。消せたら True。
+        active の版と退役した版は消さない（退役した版は清掃だけが消す。#4168）。消せたら True。
         """
 
         def operation(connection: OracleConnectionProtocol) -> bool:
@@ -3319,6 +3364,7 @@ class OracleClient:
                 """
                 SELECT chunk_set_id, extraction_recipe_id FROM rag_chunk_sets
                 WHERE chunk_set_id = :chunk_set_id AND recipe_id = :recipe_id AND is_active = 0
+                  AND retired_at IS NULL
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
             )
@@ -3384,11 +3430,13 @@ class OracleClient:
         return row is not None
 
     async def served_extraction_ids(self, document_id: str) -> set[str]:
-        """検索に出している版が読む抽出の ID（再構築で上書きしない。#4115）。"""
+        """検索に出している版と退役した版が読む抽出の ID（再構築で上書きしない。#4115・#4168）。"""
         rows = await self._fetch_all(
             """
             SELECT DISTINCT extraction_recipe_id FROM rag_chunk_sets
-            WHERE document_id = :document_id AND is_active = 1 AND status = 'INDEXED'
+            WHERE document_id = :document_id
+              AND (is_active = 1 OR retired_at IS NOT NULL)
+              AND status = 'INDEXED'
               AND extraction_recipe_id IS NOT NULL
             """,
             {"document_id": document_id},
@@ -3616,6 +3664,23 @@ class OracleClient:
             )
 
         await self._run_transaction(operation)
+
+    async def recipe_version_exists(
+        self, *, document_id: str, recipe_id: str, chunk_set_id: str
+    ) -> bool:
+        """検索に出している版か退役した版か（候補と消えた版は False。#4168）。"""
+        row = await self._fetch_one(
+            """
+            SELECT 1 AS found FROM rag_chunk_sets
+            WHERE chunk_set_id = :chunk_set_id
+              AND document_id = :document_id
+              AND recipe_id = :recipe_id
+              AND status = 'INDEXED'
+              AND (is_active = 1 OR retired_at IS NOT NULL)
+            """,
+            {"chunk_set_id": chunk_set_id, "document_id": document_id, "recipe_id": recipe_id},
+        )
+        return row is not None
 
     async def chunk_set_source_derivation(
         self, *, document_id: str, chunk_set_id: str
@@ -15009,13 +15074,14 @@ def _duplicate_reuses_canonical_sql(*, include_superseded: bool) -> str:
 
 
 def _oracle_retrieval_where(
-    filters: dict[str, str], *, effective_period: bool = True
+    filters: dict[str, str], *, effective_period: bool = True, include_retired: bool = False
 ) -> tuple[str, dict[str, object]]:
     """検索と同じ見え方の条件(``c`` = chunk と ``d`` = 文書を join した SQL の WHERE)。
 
     ``effective_period=False`` は有効期間で絞らない(ID で読む入口。#3249)。検索で有効期間を当てて
     選んだ根拠を、ID で読み直すときに今日の日付で変えない。tenant・認可の範囲・INDEXED・有効な
-    chunk_set の条件は同じに当てる。
+    chunk_set の条件は同じに当てる。``include_retired=True`` は有効な chunk_set に退役した版を
+    加える(``_version_read_where`` だけが使う。#4168)。
 
     文書の側の条件で文書の集合を副問い合わせで先に決め(``c.document_id IN (...)``)、
     chunk の側の条件を並べる(#2800)。両方を 1 つの WHERE に並べると、ナレッジベースの
@@ -15023,7 +15089,7 @@ def _oracle_retrieval_where(
     範囲の chunk を読むだけの SQL が 1 回 9 秒かかった(分けると 0.7 秒。読む行は同じ)。
     """
     document_sql, chunk_sql, binds = _oracle_retrieval_where_split(
-        filters, effective_period=effective_period
+        filters, effective_period=effective_period, include_retired=include_retired
     )
     return (
         f"c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})"
@@ -15036,8 +15102,19 @@ def _oracle_retrieval_where(
 _CHUNK_SIDE_CLAUSE = re.compile(r"(?<![\w.$])(?:c|cs|r)\.")
 
 
+def _version_read_where() -> tuple[str, dict[str, object]]:
+    """ID で根拠を読む経路の条件: 旧版の文書も、有効期間の外も、退役した版も読む(#4168)。"""
+    return _oracle_retrieval_where(
+        {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False, include_retired=True
+    )
+
+
 def _oracle_retrieval_where_split(
-    filters: dict[str, str], *, effective_period: bool = True, vector_prefilter: bool = False
+    filters: dict[str, str],
+    *,
+    effective_period: bool = True,
+    vector_prefilter: bool = False,
+    include_retired: bool = False,
 ) -> tuple[str, str, dict[str, object]]:
     """``_oracle_retrieval_where`` と同じ条件を、文書の側（``d`` だけ）と chunk の側に
     分ける(#2800)。
@@ -15052,7 +15129,10 @@ def _oracle_retrieval_where_split(
     (``_ACTIVE_CHUNK_PREFILTER_SQL``)にする(vector の検索だけ。#2592)。
     """
     clauses, binds = _oracle_retrieval_clauses(
-        filters, effective_period=effective_period, vector_prefilter=vector_prefilter
+        filters,
+        effective_period=effective_period,
+        vector_prefilter=vector_prefilter,
+        include_retired=include_retired,
     )
     chunk = [clause for clause in clauses if _CHUNK_SIDE_CLAUSE.search(clause)]
     document = [clause for clause in clauses if not _CHUNK_SIDE_CLAUSE.search(clause)]
@@ -15093,7 +15173,11 @@ _ACTIVE_CHUNK_PREFILTER_SQL = f"""
 
 
 def _oracle_retrieval_clauses(
-    filters: dict[str, str], *, effective_period: bool = True, vector_prefilter: bool = False
+    filters: dict[str, str],
+    *,
+    effective_period: bool = True,
+    vector_prefilter: bool = False,
+    include_retired: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
@@ -15104,7 +15188,14 @@ def _oracle_retrieval_clauses(
     elif not explicit_chunk_set_id:
         # 1 文書 1〜3 レシピ: 各レシピの直近成功出力だけを常に融合検索する。
         # 旧 schema の未タグ chunk はレシピ行がまだ無い文書に限り後方互換で採用する。
-        clauses.append("""
+        # include_retired は ID で根拠を読む経路だけ。退役した版は検索・回答・件数に出さない
+        # (#4168)。
+        served_sql = (
+            "(active_cs.is_active = 1 OR active_cs.retired_at IS NOT NULL)"
+            if include_retired
+            else "active_cs.is_active = 1"
+        )
+        clauses.append(f"""
             (
                 EXISTS (
                     SELECT 1
@@ -15112,7 +15203,7 @@ def _oracle_retrieval_clauses(
                     JOIN rag_document_recipes active_r
                       ON active_r.recipe_id = active_cs.recipe_id
                     WHERE active_cs.chunk_set_id = c.chunk_set_id
-                      AND active_cs.is_active = 1
+                      AND {served_sql}
                       AND active_cs.status = 'INDEXED'
                 )
                 OR (
@@ -18018,6 +18109,7 @@ CREATE TABLE rag_chunk_sets (
     vector_count    NUMBER(10) DEFAULT 0 NOT NULL,
     is_serving      NUMBER(1) DEFAULT 1 NOT NULL,
     is_active       NUMBER(1) DEFAULT 0 NOT NULL,
+    retired_at      TIMESTAMP WITH TIME ZONE,
     metrics_json    JSON,
     first_page_context JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
@@ -18048,6 +18140,9 @@ CREATE UNIQUE INDEX rag_chunk_sets_recipe_active_uidx
 
 CREATE INDEX rag_chunk_sets_extraction_idx
     ON rag_chunk_sets (document_id, extraction_recipe_id);
+
+CREATE INDEX rag_chunk_sets_retired_idx
+    ON rag_chunk_sets (retired_at);
 
 CREATE TABLE rag_document_extractions (
     document_id          VARCHAR2(64) NOT NULL,
