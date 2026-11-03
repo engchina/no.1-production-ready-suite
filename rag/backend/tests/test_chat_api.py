@@ -1569,3 +1569,33 @@ def test_create_conversation_with_legacy_active_language_pack(
     effective = row["effective_json"]
     assert isinstance(effective, dict)
     assert effective["answer_labels"].get("crag_refusal_summary") is None
+
+
+def test_chat_stream_reports_inner_ai_network_failure(
+    monkeypatch: MonkeyPatch, trace_db: FakeTraceDb
+) -> None:
+    import errno
+
+    from tests.test_answer_failure import _network_failure
+
+    class FailedPipeline:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def run(self, *args: object, **kwargs: object) -> SearchResponse:
+            raise _network_failure(OSError(errno.ECONNREFUSED, "private-endpoint"))
+
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-network")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", FailedPipeline)
+    response = client.post(
+        "/api/chat/conversations/conv-network/messages/stream", json={"content": "合成の質問"}
+    )
+    [event] = _sse_events(response.text, "error")
+    assert event["error_type"] == "APIConnectionError"
+    assert event["network_failure_cause"] == "refused"
+    assert "管理者" in str(event["message"])
+    assert "private-endpoint" not in json.dumps(event, ensure_ascii=False)
+    _, assistant = fake.messages["conv-network"]
+    assert assistant.status == "ERROR" and assistant.content == event["message"]

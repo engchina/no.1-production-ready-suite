@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -400,3 +402,63 @@ def test_wrapped_failure_identity_keeps_the_cause_without_its_message() -> None:
     # 原因の参照が循環しても、例外の本文を使わずに終える。
     cause.__cause__ = wrapped
     assert answer_error_identity(wrapped) == ("SyntheticFailure", "SYNTHETIC_FAILURE")
+
+
+def _network_failure(cause: BaseException) -> AnswerExecutionError:
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://synthetic.invalid/v1/responses")
+    connection = httpx.ConnectError("private-endpoint", request=request)
+    connection.__cause__ = cause
+    api = openai.APIConnectionError(request=request)
+    api.__cause__ = connection
+    return _wrapped(api)
+
+
+@pytest.mark.parametrize(
+    "cause, expected, admin",
+    [
+        (socket.gaierror(socket.EAI_NONAME, "private-endpoint"), "dns", True),
+        (OSError(errno.ECONNREFUSED, "private-endpoint"), "refused", True),
+        (OSError(errno.EHOSTUNREACH, "private-endpoint"), "unreachable", True),
+        (OSError(errno.ECONNRESET, "private-endpoint"), "reset", False),
+    ],
+)
+def test_network_failure_uses_safe_cause_and_action(
+    cause: BaseException, expected: str, admin: bool
+) -> None:
+    error = _network_failure(cause)
+    failure = describe_answer_failure(error, "定型文")
+    api = describe_answer_api_failure(error)
+    assert api is not None and api.kind == "network"
+    assert failure.error_type == api.error_type == "APIConnectionError"
+    assert failure.network_failure_cause == expected
+    assert api.details()["network_failure_cause"] == expected
+    assert failure.event_fields()["network_failure_cause"] == expected
+    assert not failure.incomplete and failure.reason is None
+    assert ("管理者" in failure.message) is admin
+    assert "private-endpoint" not in json.dumps(failure.event_fields(), ensure_ascii=False)
+    assert chat_route._chat_error_message(error) == failure.message
+
+
+def test_os_failure_outside_ai_keeps_generic_message() -> None:
+    failure = describe_answer_failure(OSError(errno.EHOSTUNREACH, "private-endpoint"), "定型文")
+    assert failure.message == "定型文" and failure.network_failure_cause is None
+
+
+def test_search_stream_keeps_safe_network_cause(monkeypatch: MonkeyPatch) -> None:
+    class Pipeline:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def run(self, *args: object, **kwargs: object) -> SearchResponse:
+            raise _network_failure(OSError(errno.EHOSTUNREACH, "private-endpoint"))
+
+    monkeypatch.setattr(search_route, "RagPipeline", Pipeline)
+    response = client.post("/api/search/stream", json={"query": "合成の質問"})
+    event = _error_event(response.text)
+    assert event["network_failure_cause"] == "unreachable"
+    assert event["error_type"] == "APIConnectionError"
+    assert "管理者" in str(event["message"])
+    assert "private-endpoint" not in json.dumps(event, ensure_ascii=False)

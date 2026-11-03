@@ -23,7 +23,15 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
-from pr_backend_core.bounded_calls import KIND_LABELS, ErrorKind, classify_error
+from pr_backend_core.bounded_calls import (
+    KIND_LABELS,
+    NETWORK_FAILURE_CAUSE_LABELS,
+    UNREACHED_NETWORK_FAILURE_CAUSES,
+    ErrorKind,
+    NetworkFailureCause,
+    classify_error,
+    network_failure_cause,
+)
 from pr_backend_core.logging import safe_error_code
 from rag_engine.adapters.oci import IncompleteResponse
 from rag_engine.generation.execution_record import AnswerExecutionError
@@ -50,6 +58,7 @@ class AnswerFailure:
     stage: str | None = None
     # エラーコード（ORA-03146 など。例外の本文は持たない。画面の「詳細」に出す。#2342）。
     error_code: str | None = None
+    network_failure_cause: NetworkFailureCause | None = None
 
     @property
     def incomplete(self) -> bool:
@@ -58,7 +67,7 @@ class AnswerFailure:
     def event_fields(self) -> dict[str, Any]:
         """SSE の `error` event に足す項目（値の無いものは入れない）。"""
         fields: dict[str, Any] = {"message": self.message, "error_type": self.error_type}
-        for key in ("reason", "detail", "stage", "error_code"):
+        for key in ("reason", "detail", "stage", "error_code", "network_failure_cause"):
             if (value := getattr(self, key)) is not None:
                 fields[key] = value
         return fields
@@ -115,7 +124,7 @@ def failed_stage(exc: BaseException) -> str | None:
 def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
     """回答の失敗を、利用者向けの文と「詳細」の項目にする。
 
-    未完了でなければ ``fallback`` の定型文。
+    未完了と安全に分類できる AI の接続失敗以外は ``fallback`` の定型文。
     """
     stage = failed_stage(exc)
     incomplete = find_incomplete_response(exc)
@@ -126,6 +135,14 @@ def describe_answer_failure(exc: BaseException, fallback: str) -> AnswerFailure:
             reason=incomplete.reason or "unknown",
             detail=incomplete.detail or None,
             stage=stage,
+        )
+    api = describe_answer_api_failure(exc)
+    if api is not None and api.network_failure_cause is not None:
+        return AnswerFailure(
+            message=api.message,
+            error_type=api.error_type,
+            stage=stage,
+            network_failure_cause=api.network_failure_cause,
         )
     error_type, code = answer_error_identity(exc)
     return AnswerFailure(
@@ -182,11 +199,18 @@ class AnswerApiFailure:
     stage: str | None = None
     # 呼び先が示した待ちの秒数（`Retry-After`。示さなければ None）。
     retry_after_seconds: int | None = None
+    network_failure_cause: NetworkFailureCause | None = None
 
     def details(self) -> dict[str, Any]:
         """MCP のツールのエラーの `details`（値の無いものは入れない）。"""
         fields: dict[str, Any] = {"kind": self.kind, "error_type": self.error_type}
-        for key in ("provider_status", "provider_code", "stage", "retry_after_seconds"):
+        for key in (
+            "provider_status",
+            "provider_code",
+            "stage",
+            "retry_after_seconds",
+            "network_failure_cause",
+        ):
             if (value := getattr(self, key)) is not None:
                 fields[key] = value
         return fields
@@ -225,12 +249,20 @@ def describe_answer_api_failure(exc: BaseException) -> AnswerApiFailure | None:
     stage = failed_stage(exc)
     where = f"。中断した工程: {stage}" if stage else ""
     provider_code = getattr(api_error, "code", None)
+    cause = network_failure_cause(exc) if kind is ErrorKind.NETWORK else None
+    if cause is not None:
+        label = NETWORK_FAILURE_CAUSE_LABELS[cause]
+    advice = (
+        "管理者に AI の接続先サービスと接続状態を確かめてもらってください。"
+        if cause in UNREACHED_NETWORK_FAILURE_CAUSES
+        else _advice(kind, retry_after)
+    )
     return AnswerApiFailure(
         kind=kind.value,
         status=_KIND_STATUS.get(kind, 502),
         message=(
             "回答の作成中に AI の API の呼び出しに失敗したため、検索を終えられませんでした"
-            f"（{label}{where}）。{_advice(kind, retry_after)}"
+            f"（{label}{where}）。{advice}"
         ),
         error_type=type(api_error).__name__,
         provider_status=classified.status,
@@ -239,6 +271,7 @@ def describe_answer_api_failure(exc: BaseException) -> AnswerApiFailure | None:
         else None,
         stage=stage,
         retry_after_seconds=retry_after,
+        network_failure_cause=cause,
     )
 
 
