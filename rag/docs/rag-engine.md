@@ -89,7 +89,7 @@ KB（ナレッジベース）は検索対象の範囲を決めるだけで、上
 
 文書の版（#1248）: 文書詳細の「版」で、その文書を置き換えた新しい版の文書を選ぶと、その文書は旧版（`rag_documents.superseded_by_document_id` / `superseded_at`）になる。置き換えの記録は文書の属性で、KB の membership・レシピは変えない。旧版の chunk は、既定では回答の検索（`rag_search`・チャット・RAG 検索）の対象から外す（`_oracle_retrieval_where` の `d.superseded_by_document_id IS NULL`）。旧版・変更点を尋ねるときは `filters` の `include_superseded=true`（MCP は引数 `include_superseded: true`。#1392）で含め、その根拠の出典の文書名に「（旧版）」を付ける（MCP の根拠は `superseded: true`）。MCP の `rag_search` / `rag_retrieve_evidence` は、旧版を含めずに検索したとき、当たった今の版の文書の旧版を `older_versions`（文書名と先頭の見出しのタイトル。`OracleClient.retrieval_older_versions` が旧版を含めた検索と同じ範囲の中から引く）で返す（#1405）。`document_id` で文書を名指しする経路（文書の chunk 数・根拠の前後の補完）と MCP の `rag_read_source` は旧版も読む。自分自身・循環（A→B→A）・見えない文書は新しい版にできない（422）。新しい版の文書を削除すると、旧版は今有効な版に戻る。
 
-回答の業務の絞り込み（#545 / #546 / #553）: 業務の範囲の正本は検索・回答プロファイル・ナレッジベース（検索範囲）で、その中で質問が大分類の名前を含むときだけ、さらにその業務の候補に絞る。大分類の語の一覧は、検索範囲（`filters` と同じ条件）の文書に保存済みの大分類の DISTINCT（`OracleClient.retrieval_large_categories`）で、1 回の回答で 1 回だけ読む。質問との比較は #547 の正規化（NFKC・空白・番号の接頭辞を外す `category_label`）と大文字・小文字の違いを無視して行い、長い名前から照合する（「業務A」の中の「業務」は拾わない）。一致した大分類は rag_engine の `AnswerDependencies.business_domains` で質問の理解（`inquiry_conditions.business_domains`）へ渡し、rag_engine の `_same_business_records`（一致する候補が無ければ絞らない）と business_match のチャネルが使う。名指しが無い、範囲外の大分類、一致する候補が無いときは絞らない。業務名はこの保存済み分類の一覧だけから照合する。
+分類の絞り込みは利用者が指定した検索条件を Oracle の WHERE に適用する。初期検索と参照・実体・構造図などの拡張は同じ分類条件を維持する。質問の語から分類を推定して狭めず、回答候補の分類を別途取得して付与する処理も行わない。文書に保存した分類の管理・検索条件と、文書の先頭ページ背景の取得は維持する。
 
 ## 使い方（推奨の流れ）
 
