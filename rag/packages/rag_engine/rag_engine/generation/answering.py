@@ -234,6 +234,7 @@ from rag_engine.knowledge.runtime_knowledge import (
 )
 from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
 from rag_engine.models.storage import AdbHybridSearchUnavailable
+from rag_engine.resources.context_expansion_trace import bind_context_read_receipt
 from rag_engine.resources.rerank_diagnostics import bind_rerank_context
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.structured_failures import structured_failure_details
@@ -954,24 +955,81 @@ def _bundle_context(
         if child.role == "retrieved_anchor"
     }
     selected = [record for record in ranked_children if retrieval_record_id(record) in anchor_ids]
-    loaded = injected_context_chunks(anchors=selected, settings=settings)
-    if loaded is not None:
-        known = {retrieval_record_id(record): record for record in active_records}
-        fresh = {retrieval_record_id(record): record for record in map(_stored_chunk_answer_record, loaded)}
-        for record in ranked_children:
-            uid = retrieval_record_id(record)
-            if uid in fresh:
-                metadata = {**(record.metadata or {}), **(fresh[uid].metadata or {})}
-                # 遅延取得で並べ替えの点数・順序を消さない。画像等の新しい原文情報だけを補う。
-                metadata.update({key: record.metadata[key] for key in ("rerank", "rrf_score") if key in record.metadata})
-                fresh[uid] = replace(record, metadata=metadata)
-        known.update(fresh)
-        request = replace(request, ranked_children=[fresh.get(retrieval_record_id(record), record) for record in ranked_children])
-        # 呼出元が保持する回復候補にも、実際に読み取った原文を残す。
-        if isinstance(active_records, list):
-            active_records[:] = known.values()
-        request = replace(request, active_records=list(known.values()))
-    bundle = build_chunk_context_bundle(request)
+    with (
+        _execution_step("前後の文脈の読み込み", "選択した起点の前後から文脈を読み、回答の材料に加えます。") as step,
+        bind_context_read_receipt() as receipt,
+    ):
+        step.input(
+            {
+                "前後それぞれの最大 Chunk 数": neighbor_child_count,
+                "起点根拠数": len(selected),
+                "起点根拠 ID": [retrieval_record_id(record) for record in selected],
+                "文脈の最大レコード数": max_records,
+            }
+        )
+        loaded = injected_context_chunks(anchors=selected, settings=settings)
+        if loaded is not None:
+            known = {retrieval_record_id(record): record for record in active_records}
+            fresh = {retrieval_record_id(record): record for record in map(_stored_chunk_answer_record, loaded)}
+            for record in ranked_children:
+                uid = retrieval_record_id(record)
+                if uid in fresh:
+                    metadata = {**(record.metadata or {}), **(fresh[uid].metadata or {})}
+                    # 遅延取得で並べ替えの点数・順序を消さない。画像等の新しい原文情報だけを補う。
+                    metadata.update({key: record.metadata[key] for key in ("rerank", "rrf_score") if key in record.metadata})
+                    fresh[uid] = replace(record, metadata=metadata)
+            known.update(fresh)
+            request = replace(request, ranked_children=[fresh.get(retrieval_record_id(record), record) for record in ranked_children])
+            # 呼出元が保持する回復候補にも、実際に読み取った原文を残す。
+            if isinstance(active_records, list):
+                active_records[:] = known.values()
+            request = replace(request, active_records=list(known.values()))
+        bundle = build_chunk_context_bundle(request)
+
+        adopted = {
+            retrieval_record_id(child.record)
+            for parent in bundle.evidence_tree
+            for child in parent.children
+            if child.role == "neighbor_context"
+        }
+        anchor_ids_before = {retrieval_record_id(record) for record in selected}
+        read_ids = {uid for read in receipt.reads for uid in read.get("read_ids", [])}
+        scoped_out = {uid for read in receipt.reads for uid in read.get("scope_excluded_ids", [])}
+        relations = [item for read in receipt.reads for item in read.get("relations", []) if item.get("purpose") == "neighbor_context"]
+        before_ids = {item["chunk_id"] for item in relations if isinstance(item.get("distance"), int) and item["distance"] < 0}
+        after_ids = {item["chunk_id"] for item in relations if isinstance(item.get("distance"), int) and item["distance"] > 0}
+        output = {
+            "読み取り記録": receipt.reads,
+            "読取 Chunk 数": len(read_ids) if receipt.reads else None,
+            "範囲適用後の読取 Chunk 数": len(read_ids - scoped_out) if receipt.reads else None,
+            "重複除去後の新規読取 Chunk 数": len(read_ids - scoped_out - anchor_ids_before) if receipt.reads else None,
+            "重複除去後の読取 ID": sorted(read_ids),
+            "既存の起点と重複する ID": sorted(read_ids & anchor_ids_before),
+            "範囲外で除外した ID": sorted(scoped_out),
+            "文脈への採用 Chunk 数": len(adopted),
+            "採用 ID": sorted(adopted),
+            "前方の採用 Chunk 数": len(adopted & before_ids) if adopted <= before_ids | after_ids else None,
+            "後方の採用 Chunk 数": len(adopted & after_ids) if adopted <= before_ids | after_ids else None,
+            "前後の両方に対応する採用 Chunk 数": len(adopted & before_ids & after_ids) if adopted <= before_ids | after_ids else None,
+            "最終採用の意味": "この工程後の回答文脈への採用。モデルによる引用数ではありません。",
+            "選択時の除外": list(bundle.excluded_evidence),
+            "隣接候補の選択記録": receipt.selection,
+        }
+        if not selected:
+            step.skip("起点根拠がありません。")
+            output["実行状態"] = "起点なし"
+        elif neighbor_child_count <= 0:
+            step.skip("前後の Chunk を加える設定が 0 です。親本文の復元は別に実行します。")
+            output["実行状態"] = "設定無効"
+        elif receipt.reads and all(read["state"] == "reused" for read in receipt.reads):
+            step.skip("読み取り済みの内容を再利用しました。")
+            output["実行状態"] = "既読を再利用"
+        else:
+            output["実行状態"] = "実行済み"
+            step.result(f"前後の文脈 {len(adopted)} Chunk を回答文脈に採用しました。")
+        if loaded is None or not receipt.reads:
+            output["読み取り詳細"] = "未記録"
+        step.output(output)
     record_retrieval_stage(
         {
             "stage": "answer_context",
@@ -6449,7 +6507,21 @@ def _expand_context_by_sections(
     ports = section_dependencies()
     if state is None:
         state = {}
+
+    def record_skip(reason: str) -> None:
+        with _execution_step("章節の拡張", "起点根拠の章節から回答の文脈を広げます。") as step:
+            step.input(
+                {
+                    "有効": bool(getattr(settings, "section_expansion_enabled", True)),
+                    "広げる段の上限": sections.SectionExpansionLimits.from_settings(settings).max_levels,
+                    "起点根拠 ID": list(sections.seed_chunk_ids(context)),
+                }
+            )
+            step.skip(reason)
+            step.output({"実行状態": reason, "新規読取 Chunk 数": 0, "重複除去後の新規採用 Chunk 数": 0})
+
     if not context.records or not context.text.strip():
+        record_skip("起点根拠がありません。")
         return context, state.get("result")
     if ports is None or not getattr(settings, "section_expansion_enabled", True):
         reason = "disabled" if not getattr(settings, "section_expansion_enabled", True) else "not_configured"
@@ -6458,6 +6530,7 @@ def _expand_context_by_sections(
             stop_reason=reason,
             trace={"enabled": reason != "disabled", "stop_reason": reason, "applied": False, "minimum_scope_complete": False},
         )
+        record_skip("設定が無効です。" if reason == "disabled" else "章節の読み取りが設定されていません。")
         state["result"] = result
         return context, result
 
@@ -6469,6 +6542,7 @@ def _expand_context_by_sections(
 
     signature = signature_of(context)
     if signature == state.get("signature"):
+        record_skip("読み取り済みの同じ文脈を再利用しました。")
         return context, state.get("result")
     last = attempts[-1] if attempts and not state.get("result") else None
     graded: list[CragRetrievalAttempt] = []
@@ -6519,6 +6593,16 @@ def _expand_context_by_sections(
             state["outlines"][uid] = ports[0](**kwargs)
         return state["outlines"][uid]
 
+    reader = state["reader"]
+    event_start = len(reader.read_events)
+    completed_before = set(reader.read_sections)
+    before_ids = {retrieval_record_id(child.record) for parent in context.evidence_tree for child in parent.children}
+    neighbor_ids = {
+        retrieval_record_id(child.record)
+        for parent in context.evidence_tree
+        for child in parent.children
+        if child.role == "neighbor_context"
+    }
     with _execution_step("章節の拡張", "当たった根拠の章節から親の章節へ段階的に広げ、足りるかを確かめながら根拠に加えます。") as step:
         result = sections.expand_sections(
             question,
@@ -6555,14 +6639,69 @@ def _expand_context_by_sections(
                 "calls": extractor.calls,
                 "part_tokens": extractor.limits.part_tokens,
             }
-        if result.stop_reason in {sections.STOP_SUFFICIENT, sections.STOP_DISABLED} and not result.applied:
-            step.hide()
-        added = len(result.context.records) - len(context.records)
-        step.result(
-            f"{result.levels} 段広げ、章節の根拠 {max(0, added)} 件を加えました"
-            f"（{_SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason)}）",
-            *(f"  {label}" for level in result.trace.get("levels", []) for label in level.get("labels", [])),
+        events = reader.read_events[event_start:]
+        read_ids = {uid for event in events if event["state"] == "read" for uid in event["child_ids"]}
+        all_ids = {uid for event in events for uid in event["child_ids"]}
+        after_ids = {retrieval_record_id(child.record) for parent in result.context.evidence_tree for child in parent.children}
+        new_ids = after_ids - before_ids
+        completed_now = reader.read_sections - completed_before
+        routes = result.trace.get("expansion_routes", [])
+        relations = [
+            {
+                **event,
+                "seed_ids": [
+                    route["seed_id"]
+                    for route in routes
+                    if (route["document_id"], route["chunk_set_id"], route["origin_section_id"])
+                    == (event["document_id"], event["chunk_set_id"], event["origin_section_id"])
+                ],
+                "adopted_child_ids": sorted(set(event["child_ids"]) & after_ids),
+                "newly_adopted_child_ids": sorted(set(event["child_ids"]) & new_ids),
+                "already_in_context_ids": sorted(set(event["child_ids"]) & before_ids),
+            }
+            for event in events
+        ]
+        step.input(
+            {
+                "有効": result.trace.get("enabled"),
+                "広げる段の上限": result.trace.get("max_levels"),
+                "根拠入力の上限 token": result.trace.get("input_token_limit"),
+                "根拠入力の上限（%）": getattr(settings, "section_expansion_input_token_percent", None),
+                "予約 token": result.trace.get("reserved_tokens", 0),
+                "起点根拠数": len(sections.seed_chunk_ids(context)),
+                "準備した章節範囲": routes,
+                "実行段階": phase,
+            }
         )
+        output = {
+            "読取章節数": len(
+                {(event["document_id"], event["chunk_set_id"], event["section_id"]) for event in events if event["state"] == "read"}
+            ),
+            "読了した章節数": len(completed_now),
+            "新規読取 Chunk 数": len(read_ids),
+            "読み取り候補のうち既存文脈と重複する ID": sorted(all_ids & before_ids),
+            "前後文脈と重複する ID": sorted(all_ids & neighbor_ids),
+            "重複除去後の新規採用 Chunk 数": len(new_ids),
+            "新規採用 ID": sorted(new_ids),
+            "実際に内容を補充した章節数": len(
+                {
+                    (event["document_id"], event["chunk_set_id"], event["section_id"])
+                    for event in relations
+                    if event["newly_adopted_child_ids"]
+                }
+            ),
+            "起点と章節・内容の対応": relations,
+            "読取結果": result.trace.get("levels", []),
+            "停止理由": _SECTION_STOP_LABELS.get(result.stop_reason, result.stop_reason),
+            "未読": [item.to_payload() for item in result.unread],
+            "最終採用の意味": "この工程後の回答文脈への採用。モデルによる引用数ではありません。",
+        }
+        result.trace["expansion_receipt"] = output
+        step.output(output)
+        if result.stop_reason == sections.STOP_DISABLED:
+            step.skip("章節を広げる設定が無効です。")
+        else:
+            step.result(f"章節 {len(completed_now)} 件を読み終え、新規 {len(new_ids)} Chunk を回答文脈に採用しました。")
         if extractor.calls:
             step.add(f"長い章節は、質問に関係する原文を抜き出してから根拠にしました（抜き出しの呼び出し {extractor.calls} 回）。")
         # 広げた段・判定の回数・止めた理由・読めなかった章節（#2341）。
