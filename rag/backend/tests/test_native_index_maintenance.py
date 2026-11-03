@@ -70,10 +70,18 @@ def test_semantic_cleanup_restores_current_vectors_without_full_or_rebuild() -> 
     assert not any("REBUILD" in sql for sql in connection.calls)
 
 
-def test_semantic_that_leaves_debt_falls_back_to_full() -> None:
+def test_semantic_that_leaves_debt_stays_pending_without_starting_full() -> None:
+    """FULL は間隔の内に始めない。要求を残し、間隔が過ぎた FULL で片付ける(#4214)。"""
+    connection = IndexConnection([(12, 2), (12, 2)])
+    with pytest.raises(NativeIndexMaintenanceIncomplete):
+        maintain_native_vectors(connection, plan="semantic")
+    assert connection.optimizers() == ["semantic"]
+
+
+def test_full_that_clears_semantic_debt_is_not_bounded_by_maxtime() -> None:
     """Oracle Free では semantic が正常終了しても件数が減らない(#4021)。"""
     connection = IndexConnection([(12, 2), (12, 2), (2, 2)])
-    result = maintain_native_vectors(connection)
+    result = maintain_native_vectors(connection, plan="semantic_then_full")
     assert connection.optimizers() == ["semantic", "full"]
     assert result.strategy == "semantic_then_full"
     assert result.full_completed
@@ -84,7 +92,7 @@ def test_semantic_that_leaves_debt_falls_back_to_full() -> None:
 def test_remaining_debt_is_retryable_and_not_reported_as_complete() -> None:
     connection = IndexConnection([(12, 2), (8, 2), (8, 2)])
     with pytest.raises(NativeIndexMaintenanceIncomplete):
-        maintain_native_vectors(connection)
+        maintain_native_vectors(connection, plan="semantic_then_full")
 
 
 def test_database_failure_does_not_start_another_optimizer() -> None:
