@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from rag_engine.generation.citation_wire import bind_wire_range
-from rag_engine.resources.structured_failures import failure_summary_fields, structured_failure_details
+from rag_engine.resources.structured_failures import failure_summary_fields, longest_validation_errors, structured_failure_details
 
 RANGE_INVALID_CODE = "batch_range_invalid"
 _PROTOCOL_CODES = {RANGE_INVALID_CODE}
@@ -120,6 +120,22 @@ def batch_failure_summary(receipt: Mapping[str, Any], error: Exception) -> dict[
         "input_chars": receipt["input_chars"],
         "invalid_attempts": len(attempts),
         **({"unmatched_count": mismatch["unmatched_count"], "unmatched_reasons": mismatch["reasons"]} if mismatch else {}),
+    }
+
+
+def repair_feedback_upper_bound(unit_counts: Mapping[str, int]) -> dict[str, Any]:
+    """``batch_repair_prompt`` の指摘が最も長くなる診断。組を分けるときに、この指摘の入る余裕を確保する（#4229）。"""
+    return {
+        "validation_errors": [
+            *({**row, "protocol_code": RANGE_INVALID_CODE} for row in longest_validation_errors()),
+            {
+                "range_mismatch": {
+                    "unit_counts": dict(unit_counts),
+                    "input_count": len(unit_counts),
+                    "reasons": {"evidence_id_unknown": 1},
+                }
+            },
+        ]
     }
 
 

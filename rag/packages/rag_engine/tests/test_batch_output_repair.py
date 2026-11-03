@@ -2,17 +2,24 @@
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from threading import Barrier
 
 import pytest
 from pydantic import ValidationError
-from test_batched_evidence import config, finding, prepare, span
+from test_batched_evidence import block, config, finding, prepare, span
 
 from rag_engine.adapters import oci
 from rag_engine.generation import batched_evidence
-from rag_engine.generation.batch_output_repair import batch_failure_summary, batch_validation_detail
-from rag_engine.generation.batched_evidence import _reading_model
-from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
+from rag_engine.generation.answering import _invalid_structured_output
+from rag_engine.generation.batch_output_repair import (
+    batch_failure_summary,
+    batch_repair_prompt,
+    batch_validation_detail,
+    repair_feedback_upper_bound,
+)
+from rag_engine.generation.batched_evidence import BatchReading, _reading_model, reading_unit_counts
+from rag_engine.generation.input_budget import model_input_measurement
 from rag_engine.resources.deadline import Deadline, DeadlineExceeded, bind_deadline
 from rag_engine.resources.structured_output_retry import bind_structured_output_repair, structured_output_prompt
 
@@ -91,9 +98,9 @@ def test_two_invalid_outputs_do_not_add_a_third_call_and_restore_context(monkeyp
     monkeypatch.setattr(batched_evidence, "record_retrieval_stage", diagnostics.append)
     with pytest.raises(ValidationError):
         prepare([span(0, "合成の条件A。" * 600)], reader)
-    assert len(calls) == 2
-    assert len(diagnostics[0]["validation_failures"]) == 2
-    assert diagnostics[0]["status"] == "failed"
+    assert len(calls) == 2 * len(diagnostics)
+    assert all(len(row["validation_failures"]) == 2 for row in diagnostics)
+    assert all(row["status"] == "failed" for row in diagnostics)
     assert structured_output_prompt("ordinary") == "ordinary"
 
 
@@ -128,25 +135,63 @@ def test_unknown_validator_context_is_not_serialized():
     assert "protocol_code" not in detail["validation_errors"][0]
 
 
-def test_feedback_over_input_budget_stops_before_retry(monkeypatch):
-    calls = []
-    original_measure = batched_evidence.model_input_measurement
+def test_a_batch_packed_to_the_limit_still_has_room_for_the_repair_feedback(monkeypatch):
+    """#4229: 上限の近くまで詰めた組でも、修復の指摘の分が入力の予算に入り、回答全体を退避させない。"""
+    settings = replace(config(answer_max_input_tokens=3000), evidence_budget_chars=200_000)
+    delivered = []
 
-    def measurement(settings, system, prompt, schema, **kwargs):
-        measured = original_measure(settings, system, prompt, schema, **kwargs)
-        return {**measured, "fits": False} if "## Step 4:" in prompt else measured
+    def provider(system, prompt, ignored_settings, schema, ignored):
+        delivered.append((system, prompt))
+        result = output(prompt)
+        if "## Step 4:" not in prompt:
+            result["findings"][0]["start_line"] = result["findings"][0]["end_line"] = "B1-9999"
+        else:
+            result["findings"] = []
+        return schema.model_validate(result)
 
-    def provider(system, prompt, settings, schema, ignored):
-        calls.append(prompt)
-        return schema.model_validate({})
-
-    monkeypatch.setattr(batched_evidence, "model_input_measurement", measurement)
     monkeypatch.setattr(oci, "_parse_text_once", provider)
-    with pytest.raises(GenerationInputBudgetExceeded) as caught:
-        prepare([span(0, "合成の条件A。" * 600)], reader)
-    assert len(calls) == 1
-    assert caught.value.diagnostic["reason"] == "batch_repair_input_budget_exceeded"
-    assert caught.value.diagnostic["batches"][0]["repair_input"]["status"] == "input_budget_exceeded"
+    _, _, diagnostic = batched_evidence.prepare_batched_evidence(
+        [span(index, f"合成の条件{index}。" * 4) for index in range(200)],
+        settings,
+        question="合成の質問",
+        render=block,
+        evidence_text=block,
+        system="指示",
+        schema={"type": "object"},
+        read=reader,
+        unusable_output=_invalid_structured_output,
+    )
+    repairs = [(system, prompt) for system, prompt in delivered if "## Step 4:" in prompt]
+    assert len(repairs) == diagnostic["batch_count"] > 1
+    schema = BatchReading.model_json_schema()
+    assert all(model_input_measurement(settings, system, prompt, schema)["fits"] for system, prompt in repairs)
+    assert all(row["repair_input"]["retry_prompt_chars"] > row["repair_input"]["original_prompt_chars"] for row in diagnostic["batches"])
+
+
+def _rejected(model, payload):
+    with pytest.raises(ValidationError) as caught:
+        model.model_validate(payload)
+    return caught.value
+
+
+def test_the_reserved_feedback_is_not_shorter_than_any_real_repair():
+    """#4229: 組を分けるときに確保する指摘の上限は、実際の不合格の指摘のどの形より短くならない。"""
+    values = [span(index, "合成の条件。" * 20) for index in range(5)]
+    model = _reading_model(values)
+    schema = model.model_json_schema()
+    bad_field = {"start_line": 1, "end_line": 2, "answer": 3, "unknown": 4}
+    failures = {
+        "many_schema_errors": _rejected(model, {"findings": [bad_field] * 50, "unknown": 1}),
+        "wrong_root_type": _rejected(model, {"findings": "合成の不正な値"}),
+        "every_input_out_of_range": _rejected(
+            model, {"findings": [{"start_line": f"B{n}-999", "end_line": f"B{n}-999", "answer": "合成"} for n in range(1, 6)]}
+        ),
+        "unknown_input": _rejected(model, {"findings": [{"start_line": "B9-1", "end_line": "B9-1", "answer": "合成"}]}),
+    }
+    upper_bound = batch_repair_prompt("合成の入力", repair_feedback_upper_bound(reading_unit_counts(values)))
+    for name, failure in failures.items():
+        real = batch_repair_prompt("合成の入力", batch_validation_detail(failure, schema))
+        assert len(json.dumps(real, ensure_ascii=False)) <= len(json.dumps(upper_bound, ensure_ascii=False)), name
 
 
 def test_cancellation_after_first_rejection_prevents_retry(monkeypatch):
@@ -384,6 +429,7 @@ def test_when_every_range_is_rejected_and_the_inputs_do_not_fit_the_failure_is_t
             system="指示",
             schema={"type": "object"},
             read=reader,
+            unusable_output=_invalid_structured_output,
             failed_batches=failed,
         )
     assert batch_failure_summary(failed[-1], raised.value)["category"] == "batch_range_invalid"

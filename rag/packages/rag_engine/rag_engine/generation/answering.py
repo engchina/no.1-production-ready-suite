@@ -2819,6 +2819,7 @@ def synthesize_grounded_answer(
                     read=lambda system, user, schema: grounded.call_with_model_purpose(
                         "answer.generate", parse_text_response, system, user, generation_settings, schema, provider_id=provider
                     ),
+                    unusable_output=_invalid_structured_output,
                     tag=lambda values: grounded.tag_spans(question, values),
                     render=render_generation,
                     evidence_text=grounded.evidence_block_text,
