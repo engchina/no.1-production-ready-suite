@@ -3572,6 +3572,8 @@ def test_answering_settings_round_trip_to_env(monkeypatch: MonkeyPatch, tmp_path
         "hybrid_search_backend": "oracle_native",
         "rrf_method_ratio": [10.0, 1.0],
         "rrf_source_ratio": [7.0, 3.0],
+        "retrieval_query_limit": settings.rag_retrieval_query_limit,
+        "rerank_top_n": settings.rag_rerank_top_n,
         "min_similarity": settings.rag_min_similarity,
         "rerank_min_relevance_score": settings.rag_rerank_min_relevance_score,
         "runtime_terms_search_enabled": False,
@@ -4056,3 +4058,53 @@ def test_retrieval_thresholds_reject_invalid_without_persisting(
     response = client.patch("/api/settings/answering", json={field: value})
     assert response.status_code == 422, response.text
     assert (env_file.read_text() if env_file.exists() else "") == before
+
+
+@pytest.mark.parametrize("values", [(1, 0), (600, 50), (2000, 2000)])
+def test_retrieval_counts_save_reload_and_reach_engine(
+    values: tuple[int, int], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.rag.answer_engine import build_engine_settings
+
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = client.get("/api/settings/answering").json()["data"]
+    response = client.patch(
+        "/api/settings/answering",
+        json={"retrieval_query_limit": values[0], "rerank_top_n": values[1]},
+    )
+    assert response.status_code == 200, response.text
+    saved = Settings(_env_file=env_file)
+    assert saved.rag_retrieval_query_limit == values[0]
+    assert saved.rag_rerank_top_n == values[1]
+    assert build_engine_settings(saved, output_dir=tmp_path).rerank_top_n == values[1]
+    after = client.get("/api/settings/answering").json()["data"]
+    assert after["retrieval_query_limit"] == values[0]
+    assert after["rerank_top_n"] == values[1]
+    for name in before.keys() - {"retrieval_query_limit", "rerank_top_n"}:
+        assert after[name] == before[name]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("retrieval_query_limit", 0),
+        ("retrieval_query_limit", 2001),
+        ("rerank_top_n", -1),
+        ("rerank_top_n", 2001),
+        ("rerank_top_n", 1.5),
+        ("retrieval_query_limit", True),
+    ],
+)
+def test_retrieval_counts_reject_invalid_without_persisting(
+    field: str, value: object, monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = env_file.read_text() if env_file.exists() else ""
+    response = client.patch("/api/settings/answering", json={field: value})
+    assert response.status_code == 422, response.text
+    assert (env_file.read_text() if env_file.exists() else "") == before
+
+
+def test_confirmation_and_rerank_selection_are_disabled_by_default() -> None:
+    assert Settings().rag_runtime_rules_confirmation_enabled is False
+    assert Settings().rag_rerank_top_n == 0

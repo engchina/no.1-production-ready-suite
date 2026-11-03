@@ -61,6 +61,8 @@ type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_ter
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
+    retrieval_query_limit: settings.retrieval_query_limit ?? 600,
+    rerank_top_n: settings.rerank_top_n ?? 0,
     min_similarity: settings.min_similarity ?? 0.05,
     rerank_min_relevance_score: settings.rerank_min_relevance_score ?? 0.4,
     hybrid_search_backend: settings.hybrid_search_backend ?? "oracle_native",
@@ -150,6 +152,8 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   const invalidThreshold = [form.min_similarity, form.rerank_min_relevance_score].some(
     (value) => value == null || !Number.isFinite(value) || value < 0 || value > 1
   );
+  const invalidCount = !Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 1 || (form.retrieval_query_limit ?? 0) > 2000
+    || !Number.isInteger(form.rerank_top_n) || (form.rerank_top_n ?? -1) < 0 || (form.rerank_top_n ?? 0) > 2000;
   const invalidRatio = [form.rrf_method_ratio, form.rrf_source_ratio].some((ratio) => !ratio || ratio.some((v) => !Number.isFinite(v) || v < 0) || ratio[0] + ratio[1] <= 0);
 
   function update(patch: Partial<AnsweringDraft>) {
@@ -163,7 +167,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
   }
 
   function submit() {
-    if (save.isPending || invalidRatio || invalidThreshold) return;
+    if (save.isPending || invalidRatio || invalidThreshold || invalidCount) return;
     // 保存の成功は Toast、失敗は操作の行の FormStatus（messaging.md §10.2）。
     save.mutate(form, { onSuccess: () => toast.success(t("settings.answering.saved")) });
   }
@@ -206,7 +210,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
       </FormGrid>
       </SettingsGroup>
       <SettingsGroup id="search-execution-title" title={t("settings.answering.searchExecutionTitle")}>
-      <FormGrid>
+      <FormGrid className="@[57.5rem]:grid-cols-[var(--field-width-lg)_minmax(0,1fr)_minmax(0,1fr)]">
         <SelectField id="answering-hybrid-backend" width="lg" disabled={disabled}
           label={t("settings.answering.hybridBackend")}
           helper={t("settings.answering.hybridBackendHint")}
@@ -222,6 +226,15 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           error={form.min_similarity == null || !Number.isFinite(form.min_similarity) || form.min_similarity < 0 || form.min_similarity > 1 ? t("settings.answering.thresholdInvalid") : undefined}
           disabled={disabled}
           onChange={(event) => update({ min_similarity: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
+        />
+        <TextField
+          id="answering-retrieval-query-limit" type="number" min={1} max={2000} step={1} width="sm"
+          label={t("settings.answering.retrievalQueryLimit")}
+          helper={t("settings.answering.retrievalQueryLimitHint")}
+          value={Number.isFinite(form.retrieval_query_limit) ? String(form.retrieval_query_limit) : ""}
+          error={!Number.isInteger(form.retrieval_query_limit) || (form.retrieval_query_limit ?? 0) < 1 || (form.retrieval_query_limit ?? 0) > 2000 ? t("settings.answering.retrievalQueryLimitInvalid") : undefined}
+          disabled={disabled}
+          onChange={(event) => update({ retrieval_query_limit: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />
       </FormGrid>
       </SettingsGroup>
@@ -343,6 +356,15 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
           disabled={disabled || !form.rerank_enabled}
           onChange={(event) => update({ rerank_min_relevance_score: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
         />
+        <TextField
+          id="answering-rerank-top-n" type="number" min={0} max={2000} step={1} width="sm"
+          label={t("settings.answering.rerankTopN")}
+          helper={t("settings.answering.rerankTopNHint")}
+          value={Number.isFinite(form.rerank_top_n) ? String(form.rerank_top_n) : ""}
+          error={!Number.isInteger(form.rerank_top_n) || (form.rerank_top_n ?? -1) < 0 || (form.rerank_top_n ?? 0) > 2000 ? t("settings.answering.rerankTopNInvalid") : undefined}
+          disabled={disabled || !form.rerank_enabled}
+          onChange={(event) => update({ rerank_top_n: event.target.value === "" ? Number.NaN : Number(event.target.value) })}
+        />
         </FormGrid>
         </div>
         <div>
@@ -404,7 +426,7 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
             label: t("settings.answering.save"),
             icon: Save,
             loading: save.isPending,
-            disabled: !dirty || invalidRatio || invalidThreshold,
+            disabled: !dirty || invalidRatio || invalidThreshold || invalidCount,
             onClick: submit,
           },
         ]}

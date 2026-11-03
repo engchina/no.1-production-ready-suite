@@ -1305,6 +1305,12 @@ class Settings(
             "選別は rerank の点数で行うので、融合の順位では費用を抑える上限としてだけ切る(#4114)。"
         ),
     )
+    rag_rerank_top_n: int = Field(
+        default=0,
+        ge=0,
+        le=2000,
+        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付・条目録と参照先は別枠で保持する。",
+    )
     rag_rerank_candidate_limit: int = Field(
         default=0,
         ge=0,

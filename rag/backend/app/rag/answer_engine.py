@@ -630,6 +630,7 @@ def build_engine_settings(
         "RAG_ENGINE_OUTPUT_DIR": str(output_dir),
         "RAG_ENGINE_RETRIEVAL_CANDIDATE_LIMIT": str(settings.rag_retrieval_candidate_limit),
         "RAG_ENGINE_RERANK_CANDIDATE_LIMIT": str(settings.rag_rerank_candidate_limit),
+        "RAG_ENGINE_RERANK_TOP_N": str(settings.rag_rerank_top_n),
         "RAG_ENGINE_RETRIEVAL_STAGE_LIMITS": json.dumps(
             {
                 "fusion": settings.rag_retrieval_candidate_limit,
