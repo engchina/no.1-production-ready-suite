@@ -555,7 +555,8 @@ def test_select_ai_feedback_read_failure_is_flagged() -> None:
     from unittest.mock import MagicMock
 
     from app.features.nl2sql.models import SelectAiFeedbackEntriesData
-    from app.features.nl2sql.service import Nl2SqlService, OracleAdapterError
+    from app.features.nl2sql.oracle_adapter import OracleAdapterError
+    from app.features.nl2sql.service import Nl2SqlService
 
     service = MagicMock()
     service._use_oracle_runtime.return_value = True

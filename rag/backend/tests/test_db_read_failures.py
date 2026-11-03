@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
+import httpx
 import pytest
 
 from app.api.errors import (
@@ -59,7 +60,7 @@ LIST_ROUTES = [
 ]
 
 
-def _assert_failure(response, *, status: int, code: str) -> None:
+def _assert_failure(response: httpx.Response, *, status: int, code: str) -> None:
     assert response.status_code == status
     body = response.json()
     assert body["error_code"] == code

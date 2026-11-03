@@ -11105,7 +11105,9 @@ test("feedback management keeps utility actions usable in empty and load error s
   await page.goto("/feedback-management?tab=entries");
 
   await expect(page.getByRole("alert")).toContainText("Feedback 類似検索設定を取得できません。");
-  await expect(page.getByText("Select AI feedback はありません")).toBeVisible();
+  // 読み取れなかったので 0 件とは言わない（#4217）。
+  await expect(page.getByTestId("feedback-entries-load-failed")).toBeVisible();
+  await expect(page.getByText("Select AI feedback はありません")).toHaveCount(0);
   await expect(page.getByTestId("feedback-management-entry-detail-empty")).toBeVisible();
   await expect(page.getByTestId("feedback-management-entry-sql")).toHaveCount(0);
   // 失敗の通知は「再試行」、ヘッダーは「最新情報を取得」で、名前で区別できる（#1868）。
