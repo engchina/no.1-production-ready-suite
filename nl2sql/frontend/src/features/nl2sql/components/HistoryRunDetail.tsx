@@ -190,6 +190,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
             // 処理の経過は実行の span の木（#3226）。span の無い古い形式の記録は案内の文、書けなかった span がある
             // 記録は一部だけの記録の案内を出す（処理の経過の中。成功と見なさない）。
             <RunTimelineSection
+              status={status}
               traceId={progress.traceId}
               title={t("history.detail.timeline")}
               steps={progress.legacy ? [] : timelineSteps}

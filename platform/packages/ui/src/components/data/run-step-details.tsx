@@ -233,7 +233,7 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
               <dt className={cn("min-w-0 break-words text-fg-muted [overflow-wrap:anywhere]", "flex items-center")}>{field.label}</dt>
               <dd
                 className={cn(
-                  "flex min-h-[var(--control-height-sm)] min-w-0 flex-wrap items-center gap-2 whitespace-pre-wrap break-words text-fg [overflow-wrap:anywhere]",
+                  "flex min-w-0 flex-wrap items-center gap-2 whitespace-pre-wrap break-words text-fg [overflow-wrap:anywhere]",
                   field.mono && "font-mono",
                   field.copyValue && "flex flex-wrap items-center gap-2"
                 )}

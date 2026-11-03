@@ -585,6 +585,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
       }
       timeline={
         <RunTimelineSection
+          status={toRunStatus(run.status)}
           traceId={timeline.traceId}
           title={t("history.process.title")}
           steps={timeline.steps}

@@ -494,12 +494,12 @@ export function RunProcessDetails({
       defaultOpen={defaultOpen}
       summaryProps={{ "data-testid": summaryTestId }}
       summaryClassName="text-fg-muted"
-      contentClassName="grid min-w-0 grid-cols-1 gap-3"
+      contentClassName="grid min-w-0 grid-cols-1 gap-1"
       className={className}
       data-run-process-details=""
       data-testid={testId}
     >
-      <section aria-label={typeof title === "string" ? title : DEFAULT_RUN_DETAIL_LABELS.processDetails} className="grid min-w-0 gap-3">
+      <section aria-label={typeof title === "string" ? title : DEFAULT_RUN_DETAIL_LABELS.processDetails} className="grid min-w-0 gap-1">
       {description ? <p className="text-xs text-fg-muted">{description}</p> : null}
       {metadata ? <>
         <ProcessIdentifierRow label="Trace ID" value={traceId ?? null} trace />
@@ -972,6 +972,8 @@ export function RunTimeline({
 // 処理の経過の節
 
 export interface RunTimelineSectionProps {
+  /** 実行全体の確定状態。途中の試行の失敗より優先する。未指定の旧記録は工程から判定する。 */
+  status?: RunStatus;
   traceSummary?: unknown;
   /** 処理の経過が trace の投影のときの trace id（「処理の詳細」に出す。#3226）。 */
   traceId?: string;
@@ -1013,6 +1015,7 @@ export interface RunTimelineSectionProps {
  * 3 製品の実行の詳細はこの部品を使い、節の中の並びを自分で組まない。
  */
 export function RunTimelineSection({
+  status,
   traceSummary,
   traceId,
   title,
@@ -1043,7 +1046,8 @@ export function RunTimelineSection({
     </p>
   ) : null;
   const total = totalDurationMs ?? runTimelineDuration(steps);
-  const failed = steps.some((step) => step.status === "failed");
+  const failed = status ? status === "failed" : !active && steps.some((step) => step.status === "failed");
+  const succeeded = status === "succeeded";
   return (
     <RunDetailSection title={title} testId={testId}>
       {steps.length ? (
@@ -1066,12 +1070,12 @@ export function RunTimelineSection({
               />
             ) : undefined
           }
-          // 失敗した段がある実行は、色だけでなく失敗のアイコンでも伝える（チャットの処理の経過と同じ）。
-          icon={failed ? XCircle : undefined}
+          // 全体の結果と途中の試行を分け、再試行で成功した実行は完了の印にする。
+          icon={succeeded ? CheckCircle2 : failed ? XCircle : undefined}
           open={open}
           onOpenChange={setOpen}
-          summaryClassName={failed ? "text-danger-fg [&>span:first-child]:text-danger-fg" : undefined}
-          summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined, "data-run-progress-summary": "" }}
+          summaryClassName={failed ? "text-danger-fg [&>span:first-child]:text-danger-fg" : succeeded ? "text-success-fg [&>span:first-child]:text-success-fg" : undefined}
+          summaryProps={{ "data-testid": testId ? `${testId}-summary` : undefined, "data-run-progress-summary": "", "data-run-status": status }}
           contentClassName="grid min-w-0 grid-cols-1 gap-3 pt-2"
           data-run-timeline-section=""
         >
@@ -1264,7 +1268,7 @@ export function RunDetailSkeleton({ testId }: { testId?: string }) {
 /** 識別子は全文を表示し、コピーの対象はラベルを含まない ID だけにする。 */
 function ProcessIdentifierRow({ label, value, trace = false }: { label: string; value: string | null; trace?: boolean }) {
   const labels = useTraceDetailsLabels().processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!;
-  return <div className="flex min-w-0 items-center gap-2 text-xs" data-process-identifier={label} data-trace-id-row={trace ? "" : undefined}>
+  return <div className="flex min-w-0 items-center gap-2 text-xs leading-5" data-process-identifier={label} data-trace-id-row={trace ? "" : undefined}>
     <span className="shrink-0 text-fg-muted">{label}:{" "}</span>
     <span className="min-w-0 break-all font-mono text-fg">{value || "—"}</span>
     {value ? <CopyButton type="button" variant="ghost" size="sm" iconOnly className="shrink-0" text={value}
@@ -1283,9 +1287,9 @@ export function RunUsedModels({ models, events = [] }: { models: readonly { labe
   });
   const used: readonly { label: string; value: string; title?: string }[] = [...models, ...recorded].filter((model, index, all) => all.findIndex(other => other.value === model.value) === index);
   const labels = useTraceDetailsLabels().processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!;
-  return <div className="grid min-w-0 gap-2 text-xs" data-testid="answer-models" data-run-used-models="">
+  return <div className="grid min-w-0 gap-1 text-xs leading-5" data-testid="answer-models" data-run-used-models="">
     <span className="font-medium text-fg-muted">{labels.models}</span>
-    {used.length ? <dl className="flex min-w-0 flex-wrap gap-x-4 gap-y-2">{used.map((model, index) =>
+    {used.length ? <dl className="flex min-w-0 flex-wrap gap-x-4 gap-y-1">{used.map((model, index) =>
       <div key={`${model.label}-${index}`} className="flex min-w-0 flex-wrap items-baseline gap-1.5">
         {model.label ? <dt className="text-fg-muted">{model.label}</dt> : null}
         <dd className="min-w-0 break-all font-medium text-fg" title={"title" in model ? model.title : undefined}>{model.value}</dd>
