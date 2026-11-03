@@ -1360,7 +1360,12 @@ async def _answer_turn(
                     "trace_id": trace.run_id,
                     **({"reason": failure.reason} if failure.reason else {}),
                     "message": _chat_error_message(exc),
-                    "error_type": failure.error_type if failure.incomplete else type(exc).__name__,
+                    "error_type": failure.error_type,
+                    **(
+                        {"network_failure_cause": failure.network_failure_cause}
+                        if failure.network_failure_cause
+                        else {}
+                    ),
                     # 画面の「詳細」のエラーコード（ORA-03146 など。例外の本文は送らない。#2342）。
                     **({"error_code": failure.error_code} if failure.error_code else {}),
                     "occurred_at": datetime.now(UTC).isoformat(),
