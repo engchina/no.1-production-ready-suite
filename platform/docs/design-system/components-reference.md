@@ -1433,12 +1433,12 @@ INFORMATION_TABLE_FIXED_VISIBLE_ROWS // 5 — 幅によらず 5 行の一覧
 INFORMATION_TABLE_ROW_CLASS          // "h-[3.5rem]" — DataTable の rowProps の className（行の最小高さ）
 INFORMATION_LIST_ROW_CLASS           // "min-h-[3.5rem]" — 表ではない行リストの行
 INFORMATION_LIST_SCROLL_CLASS        // "max-h-[17.5rem] overflow-auto md:max-h-[28rem]" — 表ではない行リストの 5 / 8 行
-INFORMATION_CARD_LIST_SCROLL_CLASS   // "bounded-scroll-area-lg" — 本文を含む高いカード（引用・構造化要素）
+INFORMATION_CARD_LIST_SCROLL_CLASS   // 通常の一覧の1.5倍（md 未満26.25rem・md 以上42rem）
 INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS // "h-56 max-h-56 overflow-auto"
 INFORMATION_TABLE_FOCUS_CLASS        // Tab で到達できるスクロール領域のフォーカスの表示（outline）
 ```
 
-一覧の高さは内容に合わせて使い分けます。短い行は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）、本文を含む引用・構造化要素のカードは `INFORMATION_CARD_LIST_SCROLL_CLASS`（通常 `min(34rem, 68vh)`、640px 以下 `min(28rem, 60vh)`）を使用します。後者は既存の共有 CSS `bounded-scroll-area-lg` に集約し、短い内容の高さは固定しません。カードごとには縦の上限を重ねず、一覧全体を 1 つのスクロール領域にします。領域に `tabIndex={0}`・内容を表す `aria-label` と `INFORMATION_TABLE_FOCUS_CLASS` を付け、キーボードでも末尾まで読めるようにします。
+一覧の高さは内容に合わせて使い分けます。短い行は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）、本文を含む引用・構造化要素のカードは `INFORMATION_CARD_LIST_SCROLL_CLASS`（md 未満26.25rem・md 以上42rem）を使用します。後者は通常の一覧の上限の1.5倍とし、画面の高さでは縮めず、短い内容の高さは固定しません。親のペインに収まらない内容は親のスクロールで閲覧します。カードごとには縦の上限を重ねず、一覧全体を 1 つのスクロール領域にします。領域に `tabIndex={0}`・内容を表す `aria-label` と `INFORMATION_TABLE_FOCUS_CLASS` を付け、キーボードでも末尾まで読めるようにします。
 
 ```tsx
 /** 見た目は 1 つ: 地は --color-surface-hover、prefers-reduced-motion では点滅しない。 */
