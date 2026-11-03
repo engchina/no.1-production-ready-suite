@@ -29,7 +29,7 @@ function StructureSettings({ kb, editable }: { kb: KnowledgeBaseDetail; editable
   return <div className="grid min-w-0 grid-cols-1 gap-3">
     <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.help")}</p>
     <p className="text-sm text-fg-muted">{t("knowledgeBases.structure.global", { value: t(kb.structure_index_global_enabled ? "knowledgeBases.structure.on" : "knowledgeBases.structure.off") })}</p>
-    <SelectField id="knowledge-base-structure-enabled" label={t("knowledgeBases.structure.title")} value={value} width="md" onValueChange={setValue}
+    <SelectField id="knowledge-base-structure-enabled" label={t("knowledgeBases.structure.title")} value={value} width="lg" wrapOptions onValueChange={setValue}
       options={[{ value: "inherit", label: t("knowledgeBases.structure.inherit") }, { value: "on", label: t("knowledgeBases.structure.on") }, { value: "off", label: t("knowledgeBases.structure.off") }]} disabled={!editable || save.isPending} />
     <p className="text-xs text-fg-muted">{t("knowledgeBases.structure.existing")}</p>
     <SaveErrorBanner message={save.isError ? t("knowledgeBases.structure.saveError") : null} attemptKey={save.submittedAt} />
