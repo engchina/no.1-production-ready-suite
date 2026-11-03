@@ -694,7 +694,7 @@ test("実行の詳細のモデルの呼び出しの行を開くと、入力の�
   await page.screenshot({path: testInfo.outputPath("history-model-call-context.png"), fullPage: true});
 });
 
-test("呼び出しの詳細で入力・結果・思考・入出力仕様・計時を確認できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+test("全工程の詳細を五つのタブで確認できる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
   const { run, progress: log } = seedRunningRun(mockApi);
   log.step("chat-1", "done", { kind: "plan", details: { call: syntheticCallDetails } }).step("chat-2", "running");
   log.step("synthetic-stage", "done", { name: "agent.prepare", parent: "chat-1", details: syntheticStageDetails });

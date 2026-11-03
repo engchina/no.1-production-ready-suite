@@ -171,3 +171,109 @@ def test_handled_engine_failure_is_not_marked_done(status: str) -> None:
         assert stage.status == "failed"
     finally:
         shutdown_tracing()
+
+
+def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from pr_backend_core.observability.model_purpose import model_call_purpose
+    from rag_engine.adapters import oci
+    from rag_engine.config import LlmProviderSettings
+    from rag_engine.config import get_settings as engine_settings
+    from rag_engine.generation.batched_evidence import _reading_model
+    from rag_engine.resources.call_context import call_context, update_call_context
+    from rag_engine.resources.structured_output_retry import bind_structured_output_repair
+
+    schema = _reading_model([{"text": "合成の本文。", "source_id": "source-a"}])
+    sent: list[dict[str, Any]] = []
+
+    class Response(SimpleNamespace):
+        def model_dump(self) -> dict[str, Any]:
+            return vars(self)
+
+    class Client:
+        def __init__(self) -> None:
+            self.responses = SimpleNamespace(parse=self.parse)
+
+        def with_options(self, **kwargs: Any) -> "Client":
+            return self
+
+        def parse(self, **kwargs: Any) -> Any:
+            import json
+
+            sent.append(kwargs)
+            last = "B1-2" if len(sent) == 1 else "B1-1"
+            return Response(
+                status="completed",
+                output_text=json.dumps(
+                    {"findings": [{"start_line": "B1-1", "end_line": last, "answer": "合成の回答"}]}
+                ),
+                usage=None,
+            )
+
+    def repair(error: Exception, will_retry: bool) -> str | None:
+        update_call_context(
+            {"pr.call.role": "batch_range_repair", "pr.retry.reason": "citation_range_invalid"}
+        )
+        return "合成の修正入力" if will_retry else None
+
+    monkeypatch.setattr(oci, "_openai_client_for_provider", lambda *args: Client())
+    provider = LlmProviderSettings(
+        provider_id="synthetic",
+        label="synthetic",
+        region="",
+        project_id="",
+        api_key="",
+        model="synthetic-model",
+    )
+    settings = replace(engine_settings(environ={}, dotenv_path=None), llm_retries=0)
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            operation_trace("rag.search", operation_id="synthetic") as summary,
+            bind_trace_observer(_observe_engine_call),
+            model_call_purpose("evidence.read_batch"),
+            call_context(
+                {
+                    "pr.call.role": "batch_read",
+                    "pr.batch.index": 2,
+                    "pr.batch.count": 2,
+                    "pr.batch.pass": 1,
+                }
+            ),
+            bind_structured_output_repair(repair),
+        ):
+            result: Any = oci._parse_with_retry(
+                lambda: oci._openai_parsed([], settings, schema, provider),
+                "synthetic",
+                settings,
+            )
+        assert result.findings[0].end_line == "B1-1"
+        calls = [span for span in summary.spans if span.operation_name == "gen_ai.chat"]
+        assert len(sent) == len(calls) == 2
+        assert [span.status for span in calls] == ["failed", "done"]
+        assert [span.attributes["pr.attempt"] for span in calls] == [1, 2]
+        assert [span.attributes["pr.gen_ai.purpose"] for span in calls] == [
+            "evidence.read_batch",
+            "evidence.repair_batch_range",
+        ]
+        assert all(span.attributes["pr.call.transport_status"] == "returned" for span in calls)
+        assert [span.attributes["pr.call.validation_status"] for span in calls] == [
+            "rejected",
+            "accepted",
+        ]
+        assert all(span.attributes["pr.batch.index"] == 2 for span in calls)
+        assert calls[0].display and calls[0].display.details and calls[0].display.details.call
+        import json
+
+        recorded = json.loads(calls[0].display.details.call.output.text)
+        assert json.loads(recorded["output_text"])["findings"][0]["end_line"] == "B1-2"
+        assert (
+            next(span for span in summary.spans if span.operation_name == "rag.search").status
+            == "done"
+        )
+    finally:
+        shutdown_tracing()

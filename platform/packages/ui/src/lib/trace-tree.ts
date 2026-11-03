@@ -50,7 +50,13 @@ export function traceSpanDisplayName(span: TraceSpanNameInput, labels: TraceDeta
     const target = technical.target?.map((key) => textAttribute(span.attributes, key)).find(Boolean);
     const purpose = ["gen_ai.chat", "gen_ai.embeddings", "gen_ai.rerank", "oracle.select_ai"].includes(span.operationName) ? textAttribute(span.attributes, "pr.gen_ai.purpose") : undefined;
     const purposeName = purpose ? labels.modelPurposes?.[purpose] : undefined;
-    name = purposeName || (span.operationName === "gen_ai.chat" ? names.chat : target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name]);
+    const legacyGeneration = purpose === "answer.generate" && span.attributes["pr.call.role"] !== "draft_generation";
+    name = (!legacyGeneration && purposeName) || (span.operationName === "gen_ai.chat" ? names.chat : target ? `${names[technical.name]} · ${target.slice(0, 128)}` : names[technical.name]);
+  }
+  const batchIndex = span.attributes["pr.batch.index"];
+  const batchCount = span.attributes["pr.batch.count"];
+  if (typeof batchIndex === "number" && typeof batchCount === "number" && Number.isInteger(batchIndex) && Number.isInteger(batchCount) && batchIndex >= 1 && batchIndex <= batchCount) {
+    name = `${name}（${batchIndex}/${batchCount}）`;
   }
   const attempt = span.attributes["pr.attempt"];
   return typeof attempt === "number" && Number.isInteger(attempt) && attempt > 1 ? names.attempt(name, attempt) : name;
@@ -96,7 +102,10 @@ export function traceSpanFields(
   for (const key of TECHNICAL_FIELDS) {
     const v = attributes[key];
     const label = technicalFieldLabel(key, labels);
-    if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v))) fields.push({ label, value: String(v).slice(0, 128), mono: true });
+    if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v))) {
+      const translated = ["pr.retry.reason", "pr.call.transport_status", "pr.call.validation_status"].includes(key) ? labels.valueNames?.[String(v)] : undefined;
+      fields.push({ label, value: translated ?? String(v).slice(0, 128), mono: !translated });
+    }
     else if (chat && v == null && (key === "gen_ai.usage.input_tokens" || key === "gen_ai.usage.output_tokens")) fields.push({ label, value: labels.unknown, mono: false });
     // 利用量そのものが無い呼び出しは「未計測」にそろえ、利用量はあるのにキャッシュの値が無いときだけ「不明」。
     else if (chat && v == null && key === CACHE_READ_FIELD) fields.push({ label, value: attributes["gen_ai.usage.input_tokens"] == null ? labels.unknown : labels.notReported, mono: false });

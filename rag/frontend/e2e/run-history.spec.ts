@@ -1105,7 +1105,7 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.getByTestId("run-history-timeline-summary").click();
     await inspectTraceStep(page, timeline, spanStepId("empty"));
     const inspector = page.locator("[data-trace-inspector]");
-    await expect(inspector.locator("[data-trace-processing-content]")).toHaveCount(0);
+    await expect(inspector.getByRole("tab")).toHaveCount(5);
     const rows = await inspector.locator("dd").evaluateAll(nodes => nodes.map(node => {
       const button = node.querySelector("button");
       const value = node.querySelector("span, time");
@@ -1589,7 +1589,7 @@ test("資料照合の実行状態は未照合にまとめず、一覧と詳細�
   await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
 });
 
-test("呼び出しの詳細で入力・結果・思考・入出力仕様・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("全工程の詳細を五つのタブで確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockLocalAuth(page);
   const row = run(1);
   await mockRuns(page, [row]);

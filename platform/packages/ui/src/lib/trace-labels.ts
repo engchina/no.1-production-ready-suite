@@ -18,6 +18,25 @@ export const TRACE_DETAILS_JA = {
   "trace.details.unknown": "未計測",
   "trace.details.notReported": "不明",
   "trace.details.legacy": "この実行は古い形式の記録のため、処理の経過を表示できません。",
+  "trace.field.batchIndex": "バッチ番号",
+  "trace.field.batchCount": "今回のバッチ数",
+  "trace.field.batchPass": "読取の巡回",
+  "trace.field.retryReason": "再試行の理由",
+  "trace.field.transportStatus": "モデルの応答",
+  "trace.field.validationStatus": "結果の検証",
+  "trace.value.returned": "応答を受信",
+  "trace.value.failed": "通信に失敗",
+  "trace.value.rejected": "検証で不合格",
+  "trace.value.accepted": "検証に合格",
+  "trace.value.incomplete": "応答が未完了",
+  "trace.value.citation_range_invalid": "引用範囲が不正",
+  "trace.value.invalid_structured_output": "返却形式が不正",
+  "trace.value.transport_retry": "通信の再試行",
+  "trace.value.runaway_output": "出力の反復",
+  "trace.value.stream_failed": "受信の失敗",
+  "trace.value.stream_stalled": "受信の停滞",
+  "trace.value.incomplete_output": "出力が未完了",
+
   "trace.purpose.guide.draft": "回答の過程からガイドの下書きを作る",
   "trace.purpose.answer.validate": "回答の段落を取得した資料と照合する",
   "trace.purpose.answer.recheck": "未確認の段落を根拠と照合し直す",
@@ -29,6 +48,8 @@ export const TRACE_DETAILS_JA = {
   "trace.purpose.answer.repair": "根拠に合わせて回答を直す",
   "trace.purpose.answer.scope": "要求と根拠の対応を計画する",
   "trace.purpose.answer.resolve_conflicts": "表の値の食い違いを照合する",
+  "trace.purpose.evidence.read_batch": "根拠を分割して読む",
+  "trace.purpose.evidence.repair_batch_range": "読取結果の引用範囲を修正する（再試行）",
   "trace.purpose.evidence.grade": "要求に答える根拠があるか判定する",
   "trace.purpose.evidence.select_screen": "質問に関係する画面を選ぶ",
   "trace.purpose.evidence.select_article": "目録から根拠に使う条を選ぶ",
@@ -113,6 +134,8 @@ const MODEL_PURPOSE_LABEL_KEYS = {
   "answer.repair": "trace.purpose.answer.repair",
   "answer.scope": "trace.purpose.answer.scope",
   "answer.resolve_conflicts": "trace.purpose.answer.resolve_conflicts",
+  "evidence.read_batch": "trace.purpose.evidence.read_batch",
+  "evidence.repair_batch_range": "trace.purpose.evidence.repair_batch_range",
   "evidence.grade": "trace.purpose.evidence.grade",
   "evidence.select_screen": "trace.purpose.evidence.select_screen",
   "evidence.select_article": "trace.purpose.evidence.select_article",
@@ -165,6 +188,12 @@ export interface TraceSpanNames {
  */
 export const TRACE_FIELD_LABEL_KEYS = {
   "pr.gen_ai.purpose": "trace.field.modelPurpose",
+  "pr.batch.index": "trace.field.batchIndex",
+  "pr.batch.count": "trace.field.batchCount",
+  "pr.batch.pass": "trace.field.batchPass",
+  "pr.retry.reason": "trace.field.retryReason",
+  "pr.call.transport_status": "trace.field.transportStatus",
+  "pr.call.validation_status": "trace.field.validationStatus",
   "gen_ai.usage.input_tokens": "trace.field.usage.input",
   "gen_ai.usage.output_tokens": "trace.field.usage.output",
   "gen_ai.usage.cache_read.input_tokens": "trace.field.usage.cacheRead",
@@ -198,6 +227,7 @@ export interface TraceDetailsLabels {
   notReported: string;
   /** 利用量と入力の文脈の記録の行の見出し（`TRACE_FIELD_LABEL_KEYS`）。 */
   fieldNames: Readonly<Record<TraceFieldName, string>>;
+  valueNames?: Readonly<Record<string, string>>;
   cancelled: string; stopped: string; reconstructed: string;
   spanNames: TraceSpanNames;
   modelPurposes?: Readonly<Record<string, string>>;
@@ -219,6 +249,7 @@ export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, opti
     title: t("trace.details.title"), empty: t("trace.details.empty"), partial: t("trace.details.partial"), measured: t("trace.details.measured"),
     copy: t("trace.details.copy"), copied: t("trace.details.copied"), copyFailed: t("trace.details.copyFailed"), unknown: t("trace.details.unknown"),
     notReported: t("trace.details.notReported"),
+    valueNames: Object.fromEntries(["returned", "failed", "rejected", "accepted", "incomplete", "citation_range_invalid", "invalid_structured_output", "transport_retry", "runaway_output", "stream_failed", "stream_stalled", "incomplete_output"].map(value => [value, t(`trace.value.${value}` as TraceLabelKey)])),
     fieldNames: Object.fromEntries(Object.entries(TRACE_FIELD_LABEL_KEYS).map(([name, key]) => [name, t(key)])) as Record<TraceFieldName, string>,
     cancelled: t("trace.status.cancelled"), stopped: t("trace.status.stopped"), reconstructed: t("trace.timing.reconstructed"),
     modelPurposes: Object.fromEntries(Object.entries(MODEL_PURPOSE_LABEL_KEYS).map(([id, key]) => [id, t(key)])),
