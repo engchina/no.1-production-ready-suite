@@ -50,6 +50,11 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "trace_store_flush_seconds",
         "trace_store_batch_size",
         "trace_store_queue_size",
+        "trace_body_buffer_size",
+        "trace_body_buffer_bytes",
+        "trace_body_queue_size",
+        "trace_body_queue_bytes",
+        "trace_body_part_characters",
         # OCI 認証
         "oci_config_file",
         "oci_config_profile",

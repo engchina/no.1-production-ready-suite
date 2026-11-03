@@ -31,7 +31,12 @@ class TraceBodyBuffer:
             return len(self._bodies), self._bytes
 
     def handoff_registered(
-        self, references: Iterable[BodyReference], *, owner: BodyOwner, writer: TraceBodyWriter
+        self,
+        references: Iterable[BodyReference],
+        *,
+        owner: BodyOwner,
+        writer: TraceBodyWriter,
+        retain_until_commit: bool = False,
     ) -> tuple[BodySubmission, ...]:
         """正本保存→所属attachの取引内で呼ぶ。未取得の旧参照から本文を作らない。
 
@@ -49,11 +54,26 @@ class TraceBodyBuffer:
                 if body.reference != reference:
                     raise ValueError("buffered trace body reference mismatch")
                 result = writer.submit(BodyWriteJob(body, (owner,)))
+                if not retain_until_commit:
+                    self._bodies.pop(reference.body_id)
+                    session._ids.discard(reference.body_id)
+                    self._bytes -= body.reference.byte_count
+                submissions.append(result)
+        return tuple(submissions)
+
+    def confirm_registered(self, references: Iterable[BodyReference]) -> None:
+        """正本取引のcommit成功後だけ解放する。rollback後の再試行に原文を残す。"""
+        with self._lock:
+            for reference in references:
+                entry = self._bodies.get(reference.body_id)
+                if entry is None:
+                    continue
+                body, session = entry
+                if body.reference != reference:
+                    raise ValueError("buffered trace body reference mismatch")
                 self._bodies.pop(reference.body_id)
                 session._ids.discard(reference.body_id)
                 self._bytes -= body.reference.byte_count
-                submissions.append(result)
-        return tuple(submissions)
 
 
 @dataclass(slots=True)

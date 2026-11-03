@@ -31,6 +31,27 @@ def call_body_references(span_details: Mapping[str, Any]) -> tuple[BodyReference
     return tuple(sorted(references.values(), key=lambda value: value.body_id))
 
 
+def call_body_failures(span_details: Mapping[str, Any]) -> dict[str, BodyFailure]:
+    """捕獲時点で実際に返された障害だけを引き継ぐ。pendingから障害を推定しない。"""
+    faults: dict[str, BodyFailure] = {}
+    for value in span_details.values():
+        details = (
+            value
+            if isinstance(value, ChatProgressStepDetails)
+            else ChatProgressStepDetails.model_validate(value)
+        )
+        if details.call is None:
+            continue
+        for content in (details.call.input, details.call.output, details.call.schema_):
+            if (
+                content.status == "incomplete"
+                and content.body_reference is not None
+                and content.failure_code is not None
+            ):
+                faults[content.body_reference.body_id] = content.failure_code
+    return faults
+
+
 def _registered(cursor: Any, reference: BodyReference) -> bool:
     # 正本保存取引がattachしたmanifestだけをロックする。writerは箱も所属も作らない。
     cursor.execute(
