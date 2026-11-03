@@ -57,7 +57,7 @@ const NEIGHBOR_OPTIONS: SelectFieldOption<string>[] = Array.from({ length: 21 },
   label: String(n),
 }));
 
-type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_confirmation_enabled" | "runtime_rules_answer_enabled">;
+type AnsweringDraft = Omit<AnsweringSettingsData, "config_source" | "runtime_terms_answer_enabled" | "runtime_rules_answer_enabled">;
 
 function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
   return {
@@ -67,6 +67,7 @@ function formFromSettings(settings: AnsweringSettingsData): AnsweringDraft {
     rrf_method_ratio: settings.rrf_method_ratio ?? [10, 1],
     rrf_source_ratio: settings.rrf_source_ratio ?? [7, 3],
     runtime_terms_search_enabled: settings.runtime_terms_search_enabled ?? false,
+    runtime_rules_confirmation_enabled: settings.runtime_rules_confirmation_enabled ?? false,
     query_strategy: settings.query_strategy,
     answer_flow: settings.answer_flow,
     answer_audit_mode: settings.answer_audit_mode,
@@ -171,6 +172,16 @@ function AnsweringForm({ saved }: { saved: AnsweringSettingsData }) {
     <div className="space-y-4">
       {/* 長い選択肢の名前で 375px の横幅を押し広げないよう、各欄に min-w-0 を付ける。
           選択肢の名前が長い（20 字ほど）質問の拡張・回答の生成方式は lg、数は xs（#1891）。 */}
+      <SettingsGroup id="answer-confirmation-title" title={t("settings.answering.confirmationTitle")}>
+        <SwitchRow
+          id="answering-runtime-rules-confirmation"
+          label={t("settings.answering.runtimeRulesConfirmation")}
+          description={t("settings.answering.runtimeRulesConfirmationHint")}
+          checked={form.runtime_rules_confirmation_enabled ?? false}
+          disabled={disabled}
+          onChange={(checked) => update({ runtime_rules_confirmation_enabled: checked })}
+        />
+      </SettingsGroup>
       <SettingsGroup id="search-expression-title" title={t("settings.answering.searchExpressionTitle")}>
       <FormGrid>
         <SelectField

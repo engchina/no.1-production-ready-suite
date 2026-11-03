@@ -4295,6 +4295,7 @@ export const ja = {
   "settings.answerRecords.title": "回答の記録の保存期間",
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
+  "settings.answering.confirmationTitle": "回答前の確認",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
     "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各処理は有効な設定・対象資料・呼び出し方に応じて実行され、省略や繰り返しがあります。",
