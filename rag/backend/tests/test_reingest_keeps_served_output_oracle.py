@@ -54,7 +54,10 @@ async def test_candidate_stays_hidden_until_switch_and_old_extraction_is_collect
 
     await _chunk_set(client, document.id, recipe_id, old_set, old_extraction)
     await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=old_set, extraction_recipe_id=old_extraction
+        recipe_id=recipe_id,
+        chunk_set_id=old_set,
+        expected_base_chunk_set_id=None,
+        extraction_recipe_id=old_extraction,
     )
     activated = await client.get_document(document.id)
     assert activated is not None and activated.status == FileStatus.INDEXED
@@ -76,7 +79,10 @@ async def test_candidate_stays_hidden_until_switch_and_old_extraction_is_collect
 
     # 切替: 新版だけになり、旧版だけが使っていた抽出も消える。
     await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=new_set, extraction_recipe_id=new_extraction
+        recipe_id=recipe_id,
+        chunk_set_id=new_set,
+        expected_base_chunk_set_id=old_set,
+        extraction_recipe_id=new_extraction,
     )
     assert await client.retrievable_chunk(document.id, new_chunk.chunk_id) is not None
     assert await client.retrievable_chunk(document.id, old_chunk.chunk_id) is None
@@ -141,7 +147,9 @@ async def test_native_search_finds_new_version_when_switch_commits_after_scope_r
         )
 
     await chunk_set(old_set)
-    await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=old_set)
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id, chunk_set_id=old_set, expected_base_chunk_set_id=None
+    )
     await client.update_document_status(document.id, FileStatus.INDEXED)
     await chunk_set(new_set)
 
@@ -153,7 +161,9 @@ async def test_native_search_finds_new_version_when_switch_commits_after_scope_r
         scope = await resolve(filters)
         if not switched:
             switched = True
-            await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=new_set)
+            await client.activate_recipe_chunk_set(
+                recipe_id=recipe_id, chunk_set_id=new_set, expected_base_chunk_set_id=old_set
+            )
         return scope
 
     client._resolve_native_scope = resolve_then_switch  # type: ignore[method-assign]

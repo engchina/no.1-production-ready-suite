@@ -190,6 +190,8 @@ import {
   withBboxPageRotation,
 } from "@production-ready/ui";
 import {
+  INGESTION_SKIP_REASON_SUPERSEDED,
+  ingestionSkipReasonLabel,
   isSameParserBackend,
   parserBackendLabel,
   parserProfileKey,
@@ -1434,11 +1436,13 @@ export function DocumentWorkspace({
           <FormStatus
             tone={submittedIngestionJob.status === "SKIPPED" ? "warning" : "success"}
             message={
-              submittedIngestionJob.status === "SKIPPED"
-                ? t("flow.phase.skipped", {
-                    phase: t(phaseLabelKey(submittedIngestionJob.phase)),
-                  })
-                : t(phaseStartedMessageKey(submittedIngestionJob.phase))
+              submittedIngestionJob.skip_reason === INGESTION_SKIP_REASON_SUPERSEDED
+                ? ingestionSkipReasonLabel(submittedIngestionJob.skip_reason)
+                : submittedIngestionJob.status === "SKIPPED"
+                  ? t("flow.phase.skipped", {
+                      phase: t(phaseLabelKey(submittedIngestionJob.phase)),
+                    })
+                  : t(phaseStartedMessageKey(submittedIngestionJob.phase))
             }
           />
         ) : null}
@@ -2357,6 +2361,11 @@ function PhaseJobRow({
       </dl>
       {active ? (
         <p className="mt-2 text-xs leading-relaxed text-info-fg">{t("flow.jobs.activeHint")}</p>
+      ) : null}
+      {job.skip_reason === INGESTION_SKIP_REASON_SUPERSEDED ? (
+        <p className="mt-2 text-xs leading-relaxed text-warning-fg">
+          {ingestionSkipReasonLabel(job.skip_reason)}
+        </p>
       ) : null}
       {progressSummary ? (
         <IngestionProgressSummaryView summary={progressSummary} strip={segmentStrip} />

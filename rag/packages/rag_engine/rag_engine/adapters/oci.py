@@ -9,6 +9,7 @@ import mimetypes
 import re
 import threading
 import time
+import traceback
 from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
@@ -1243,6 +1244,25 @@ class LlmStreamFailed(ConnectionError):
         self.timing = timing
 
 
+class LlmStreamAssemblyFailed(LlmStreamFailed):
+    """SDK が stream の event から応答を組み立てられなかった（送り直す。送り直しても失敗なら出力の不合格と同じに退避する）。"""
+
+    def __init__(self, message: str, timing: _StreamTiming, sdk_stream_location: str) -> None:
+        super().__init__(message, timing)
+        self.sdk_stream_location = sdk_stream_location
+
+
+def _sdk_stream_location(exc: BaseException) -> str:
+    """例外が起きた SDK の stream の組み立ての位置（ファイル名:行）。SDK の外で起きたなら空。"""
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return ""
+    path = Path(frames[-1].filename)
+    if "openai" in path.parts and "streaming" in path.parts:
+        return f"{path.name}:{frames[-1].lineno}"
+    return ""
+
+
 def _stall_detection_enabled(settings: Settings) -> bool:
     """停滞の検出をするか（回答の期限がある文脈だけ。取込などの期限の無い呼び出しは従来どおり）。"""
     return bool(getattr(settings, "llm_stall_detection", False)) and current_deadline() is not None
@@ -1360,10 +1380,15 @@ def _stream_parsed(
         if _is_stream_error_event(exc):
             # OpenAI SDK は stream の error の event を event として返さず APIError として送出する（#2814）。
             raise LlmStreamFailed(f"LLM の応答が失敗の event で終わりました: {str(exc)[:300]}", timing) from exc
-        if isinstance(exc, AssertionError):
-            # OpenAI SDK は event から応答を組み立てるとき、delta が指す出力の種類を assert で確かめる。provider が種類の
-            # 合わない出力を指す event を送ると AssertionError になる（#3000）。provider の一時的な失敗として送り直す。
-            raise LlmStreamFailed(f"LLM の応答の stream の event を組み立てられませんでした（{type(exc).__name__}）。", timing) from exc
+        location = _sdk_stream_location(exc)
+        if isinstance(exc, AssertionError) or (isinstance(exc, IndexError) and location):
+            # OpenAI SDK は event から応答を組み立てるとき、delta が指す出力の種類を assert で確かめ、番号の項目を確かめずに
+            # 読む。provider が合わない出力や未到着の項目を指す event を送ると、AssertionError（#3000）か IndexError（#4182）
+            # になる。provider の一時的な失敗として送り直す。SDK の外の IndexError は実装の不具合なのでそのまま送出する。
+            _logger.warning("LLM stream assembly failed: error=%s location=%s", type(exc).__name__, location or "unknown")
+            raise LlmStreamAssemblyFailed(
+                f"LLM の応答の stream の event を組み立てられませんでした（{type(exc).__name__}）。", timing, location
+            ) from exc
         with suppress(AttributeError):
             exc.timing = timing  # type: ignore[attr-defined]
         raise

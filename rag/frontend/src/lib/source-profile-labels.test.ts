@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   documentFileTypeLabel,
+  ingestionSkipReasonLabel,
   isSameParserBackend,
   parserProfileKey,
   parserBackendLabel,
@@ -105,5 +106,13 @@ describe("documentFileTypeLabel", () => {
     ["text/plain", "テキスト"], ["application/octet-stream", "不明"], [null, "不明"],
   ])("拡張子もないときは MIME %s で表示する", (content_type, expected) => {
     expect(documentFileTypeLabel({file_name: "source", source_profile: null, content_type})).toBe(expected);
+  });
+});
+
+describe("ingestionSkipReasonLabel", () => {
+  it("新しい版があって適用しなかった job は、その理由を文で返す", () => {
+    expect(ingestionSkipReasonLabel("superseded_by_newer_version")).toBe(
+      t("flow.jobs.skipReason.superseded")
+    );
   });
 });

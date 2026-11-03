@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record, run
 
-from rag_engine.adapters.oci import InvalidStructuredOutput, LlmRunawayOutput
+from rag_engine.adapters.oci import InvalidStructuredOutput, LlmRunawayOutput, LlmStreamAssemblyFailed
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
@@ -119,8 +119,9 @@ def test_duplicated_plan_answer_keeps_one_plan_and_records_the_collapse():
         _oversized_items_error,
         lambda: LlmRunawayOutput("合成の反復", "runaway_repetition", None),
         lambda: InvalidStructuredOutput("生成文に入力にはない Unicode の置換文字が含まれています（欄: items[0].text）。"),
+        lambda: LlmStreamAssemblyFailed("合成の組み立ての失敗", None, "_responses.py:1"),
     ],
-    ids=["oversized_items", "runaway_repetition", "replacement_character"],
+    ids=["oversized_items", "runaway_repetition", "replacement_character", "stream_assembly"],
 )
 def test_invalid_first_generation_shows_related_quotes_instead_of_failing(failure):
     ctx, _eid = _context()

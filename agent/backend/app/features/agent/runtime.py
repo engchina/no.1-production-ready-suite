@@ -3821,28 +3821,45 @@ class AgentRuntimeRepository:
     ) -> AgentProfile:
         """下書きを新しい版として公開する（#770）。"""
         with self._lock:
-            agent = self._agents.get(agent_id)
-            if agent is None:
-                raise KeyError(agent_id)
-            self._validate_agent_skills(agent.skill_ids)
-            version = max((item.version for item in agent.versions), default=0) + 1
-            agent.versions.append(
-                AgentVersion(
-                    version=version,
-                    note=note.strip(),
-                    published_by=published_by,
-                    # 使うスキルの今の中身を版に固定する（#1855）。
-                    skills=pin_skills(agent.skill_ids),
-                    **{field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS},
-                )
+            return self._publish_agent_locked(agent_id, note=note, published_by=published_by)
+
+    def _publish_agent_locked(
+        self, agent_id: str, *, note: str, published_by: str | None
+    ) -> AgentProfile:
+        agent = self._agents.get(agent_id)
+        if agent is None:
+            raise KeyError(agent_id)
+        self._validate_agent_skills(agent.skill_ids)
+        version = max((item.version for item in agent.versions), default=0) + 1
+        agent.versions.append(
+            AgentVersion(
+                version=version,
+                note=note.strip(),
+                published_by=published_by,
+                # 使うスキルの今の中身を版に固定する（#1855）。
+                skills=pin_skills(agent.skill_ids),
+                **{field: getattr(agent, field) for field in AGENT_VERSIONED_FIELDS},
             )
-            agent.published_version = version
-            agent.versioned = True
-            _prune_agent_versions(agent)
-            agent.updated_at = _now()
-            self._mark_agent_changed(agent.id)
-            self._persist_locked()
-            return agent.model_copy(deep=True)
+        )
+        agent.published_version = version
+        agent.versioned = True
+        _prune_agent_versions(agent, keep=self._versions_in_use_locked(agent.id))
+        agent.updated_at = _now()
+        self._mark_agent_changed(agent.id)
+        self._persist_locked()
+        return agent.model_copy(deep=True)
+
+    def _versions_in_use_locked(self, agent_id: str) -> tuple[int, ...]:
+        """未完了の Run が使う公開の版（上限で消さない。下書きの Run は版を使わない。#4172）。"""
+        return tuple(
+            {
+                run.metadata["agent_version"]
+                for run in self._runs.values()
+                if run.agent_id == agent_id
+                and not _is_terminal(run.status)
+                and isinstance(run.metadata.get("agent_version"), int)
+            }
+        )
 
     def publish_skill_updates(
         self, agent_id: str, *, note: str = "", published_by: str | None = None
@@ -3854,36 +3871,43 @@ class AgentRuntimeRepository:
         戻り値は（業務 Agent、前の公開中の版の番号）。取り込む更新が無ければ ValueError。
         """
         with self._lock:
-            agent = self._agents.get(agent_id)
-            if agent is None:
-                raise KeyError(agent_id)
-            published = agent.published()
-            if published is None:
-                raise ValueError("公開した版がありません。")
-            if not agent.skill_updates:
-                raise ValueError("取り込むスキルの更新がありません。")
-            self._validate_agent_skills(published.skill_ids)
-            previous = published.version
-            version = max((item.version for item in agent.versions), default=0) + 1
-            agent.versions.append(
-                published.model_copy(
-                    deep=True,
-                    update={
-                        "version": version,
-                        "note": note.strip() or f"スキルの更新を取り込む（v{previous} から）",
-                        "published_at": _now(),
-                        "published_by": published_by,
-                        "skills": pin_skills(published.skill_ids),
-                    },
-                )
+            return self._publish_skill_updates_locked(
+                agent_id, note=note, published_by=published_by
             )
-            agent.published_version = version
-            # 前の公開中の版も残す（Toast の「取り消す」で戻す。#1867）。
-            _prune_agent_versions(agent, keep=(previous,))
-            agent.updated_at = _now()
-            self._mark_agent_changed(agent.id)
-            self._persist_locked()
-            return agent.model_copy(deep=True), previous
+
+    def _publish_skill_updates_locked(
+        self, agent_id: str, *, note: str, published_by: str | None
+    ) -> tuple[AgentProfile, int]:
+        agent = self._agents.get(agent_id)
+        if agent is None:
+            raise KeyError(agent_id)
+        published = agent.published()
+        if published is None:
+            raise ValueError("公開した版がありません。")
+        if not agent.skill_updates:
+            raise ValueError("取り込むスキルの更新がありません。")
+        self._validate_agent_skills(published.skill_ids)
+        previous = published.version
+        version = max((item.version for item in agent.versions), default=0) + 1
+        agent.versions.append(
+            published.model_copy(
+                deep=True,
+                update={
+                    "version": version,
+                    "note": note.strip() or f"スキルの更新を取り込む（v{previous} から）",
+                    "published_at": _now(),
+                    "published_by": published_by,
+                    "skills": pin_skills(published.skill_ids),
+                },
+            )
+        )
+        agent.published_version = version
+        # 前の公開中の版も残す（Toast の「取り消す」で戻す。#1867）。
+        _prune_agent_versions(agent, keep=(previous, *self._versions_in_use_locked(agent.id)))
+        agent.updated_at = _now()
+        self._mark_agent_changed(agent.id)
+        self._persist_locked()
+        return agent.model_copy(deep=True), previous
 
     def set_published_version(self, agent_id: str, version: int) -> AgentProfile:
         """公開中の版だけを前の版にする（まとめての再公開を戻す。下書きは変えない。#1867）。"""
@@ -4428,6 +4452,24 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
         if claim is None:
             return super().begin_builtin_resume(run_id)
         return self._storage_transition(lambda: self._begin_builtin_resume_locked(run_id, claim))
+
+    def publish_agent(
+        self, agent_id: str, *, note: str = "", published_by: str | None = None
+    ) -> AgentProfile:
+        """別のプロセスの Run をそろえてから公開する（使われている版を消さない。#4172）。"""
+        return self._storage_transition(
+            lambda: self._publish_agent_locked(agent_id, note=note, published_by=published_by)
+        )
+
+    def publish_skill_updates(
+        self, agent_id: str, *, note: str = "", published_by: str | None = None
+    ) -> tuple[AgentProfile, int]:
+        """別のプロセスの Run をそろえてから公開する（使われている版を消さない。#4172）。"""
+        return self._storage_transition(
+            lambda: self._publish_skill_updates_locked(
+                agent_id, note=note, published_by=published_by
+            )
+        )
 
     def _storage_transition(self, mutate: Callable[[], _T]) -> _T:
         """head の行を lock し、別のプロセスの変更をそろえてから `mutate`（判定と変更）を行い、
@@ -6314,8 +6356,8 @@ def max_published_versions() -> int:
 def _prune_agent_versions(agent: AgentProfile, *, keep: tuple[int, ...] = ()) -> None:
     """上限を超えた古い版を消す（公開中の版と ``keep`` は残す。番号は振り直さない。#2356）。
 
-    版を参照する記録（Run の ``metadata.agent_version``・品質評価の ``agent_version``）は番号だけを
-    持つので、版を消しても消えない。
+    未完了の Run が使う版は呼び出し側が ``keep`` に渡す（#4172）。完了した Run・品質評価の
+    ``agent_version`` は番号だけを持つので、版を消しても消えない。
     """
     pruned = set(
         versions_to_prune(
@@ -6331,8 +6373,8 @@ def _prune_agent_versions(agent: AgentProfile, *, keep: tuple[int, ...] = ()) ->
 def agent_for_run(agent: AgentProfile, run: RunState) -> AgentProfile:
     """Run が使う版の内容を重ねた Agent（下書きの Run・版の無い古い Run は現在の内容）。
 
-    版の履歴の上限で消えた版を使う Run（承認を待つ間に公開が続いたときなど。#2356）は、下書きでは
-    なく公開中の版で続ける（利用者の Run に公開していない下書きを使わない）。
+    未完了の Run が使う版は上限で消さない（#4172）。それでも版が無い Run（旧データなど。#2356）は、
+    下書きではなく公開中の版で続ける（利用者の Run に公開していない下書きを使わない）。
     """
     version = run.metadata.get("agent_version")
     target = next(

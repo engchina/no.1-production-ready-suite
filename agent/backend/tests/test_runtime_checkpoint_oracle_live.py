@@ -208,6 +208,39 @@ def test_stale_dispatcher_cannot_start_a_reclaimed_run_in_oracle(
     assert worker_a.claim_control_plane_run("worker-a", lease_seconds=1) is None
 
 
+def test_publish_keeps_the_version_of_a_run_in_another_process_in_oracle(
+    checkpoint_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """別のプロセスの未完了の Run の版を消さず、Run の完了の後の公開で消す（#4172）。"""
+    monkeypatch.setattr(runtime, "max_published_versions", lambda: 1)
+    agent_id = "agent_live_versions"
+    publisher = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    publisher.create_agent(AgentProfile(id=agent_id, name="Agent A", instructions="v1"))
+    # 公開した後に読み込んだ別のプロセスが Run を作る（公開するプロセスのメモリには無い）。
+    other = AgentRuntimeOracleCheckpointRepository(checkpoint_key=checkpoint_key)
+    run = other.create_builtin_run(RunCreateRequest(goal="合成の質問", agent_id=agent_id))
+    assert run.metadata["agent_version"] == 1
+    assert run.id not in {item.id for item in publisher.list_runs()}
+
+    def stored_versions() -> list[int]:
+        row = json.loads(_entities(checkpoint_key)[("agent", agent_id)][0] or "{}")
+        return [item["version"] for item in row["versions"]]
+
+    agent = publisher.publish_agent(agent_id)
+    assert [item.version for item in agent.versions] == [1, 2]
+    assert stored_versions() == [1, 2]
+
+    # 別のプロセスの次の開始は、保存先の版 1 の内容で動く。
+    started = other.begin_builtin_run(run.id)
+    assert started is not None
+    assert started[1].instructions == "v1"
+    other.complete_builtin_run(run.id, "合成の回答")
+
+    agent = publisher.publish_agent(agent_id)
+    assert [item.version for item in agent.versions] == [3]
+    assert stored_versions() == [3]
+
+
 def _legacy_run(run_id: str) -> dict[str, Any]:
     run = RunState(
         id=run_id,

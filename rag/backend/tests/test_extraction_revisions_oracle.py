@@ -268,7 +268,10 @@ async def check_serving_chunk_set_keeps_its_extraction(client: OracleClient) -> 
     )
     await client.mark_chunk_set_indexed(chunk_set_id=chunk_set_id, chunk_count=0, vector_count=0)
     await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=chunk_set_id, extraction_recipe_id=served_id
+        recipe_id=recipe_id,
+        chunk_set_id=chunk_set_id,
+        expected_base_chunk_set_id=None,
+        extraction_recipe_id=served_id,
     )
     await client.update_document_recipe_status(recipe_id=recipe_id, status=FileStatus.REVIEW)
 

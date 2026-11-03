@@ -62,6 +62,7 @@ from app.clients.oracle import (
     oracle_vector_schema_sql,
 )
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
+from app.clients.recipe_version_log import recipe_version_log_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
 from app.clients.section_revision_store import oracle_section_revision_schema_sql
 from app.clients.structure_index_store import structure_index_schema_sql
@@ -360,6 +361,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="section_map",
             table_name="rag_chunk_set_sections",
             sql=oracle_section_map_schema_sql(),
+        ),
+        # 切替の履歴（#4167）。文書とレシピを参照する。
+        OracleSchemaSection(
+            name="recipe_version_log",
+            table_name="rag_recipe_version_log",
+            sql=recipe_version_log_schema_sql(),
         ),
         OracleSchemaSection(
             name="citation_feedback",
@@ -715,7 +722,14 @@ END;
     )
     sections.append(
         OracleSchemaSection(
-            name="20261102_006_document_extraction_revisions",
+            name="20261102_006_recipe_version_log",
+            table_name="rag_recipe_version_log",
+            sql=_create_missing_objects_sql(recipe_version_log_schema_sql(), "版の切替の履歴"),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_008_document_extraction_revisions",
             table_name="rag_document_extraction_revisions",
             sql=_create_missing_objects_sql(
                 oracle_extraction_revision_schema_sql(), "抽出の修訂の版"

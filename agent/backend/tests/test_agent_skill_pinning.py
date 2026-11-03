@@ -24,6 +24,7 @@ from app.features.agent.runtime import (
     AgentVersion,
     RunCreateRequest,
     RunStatus,
+    agent_for_run,
     runtime_repository,
 )
 from app.features.agent.skill_references import skill_reference_keys
@@ -282,6 +283,24 @@ def test_latest_policy_runs_the_current_skill_without_update_marks(
     # 方針は版の項目（変えたら公開で反映する）。
     runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(skill_policy="pinned"))
     assert _agent().draft_changed is True
+
+
+def test_publish_skill_updates_keeps_the_version_of_an_unfinished_run(agent: None) -> None:
+    """スキルの更新の取り込みが続いても、未完了の Run の版と固定した中身は残る（#4172）。"""
+    del agent
+    runtime_repository.publish_agent(AGENT_ID)
+    run = runtime_repository.create_builtin_run(
+        RunCreateRequest(goal="合成の質問", agent_id=AGENT_ID)
+    )
+    for number in range(2, 8):
+        skill_registry.upsert_custom(_skill(f"スキルの指示 {number}", [LOOKUP]))
+        updated, previous = runtime_repository.publish_skill_updates(AGENT_ID)
+        assert previous == number - 1
+    # 公開中の版 7・前の公開中の版 6・Run の版 1・直近の版で計 5 版。
+    assert [item.version for item in updated.versions] == [1, 4, 5, 6, 7]
+    used = agent_for_run(updated, run)
+    assert used.pinned_skills is not None
+    assert used.pinned_skills[0].instructions == OLD_INSTRUCTIONS
 
 
 def test_publish_skill_updates_keeps_the_draft_and_can_be_rolled_back(agent: None) -> None:
