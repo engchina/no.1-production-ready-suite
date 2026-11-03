@@ -296,3 +296,95 @@ async def test_chunk_set_source_derivation_reads_the_file_of_the_version() -> No
     assert artifact.derivation_id == derivation.derivation_id
     with pytest.raises(VersionSourceUnknownError):
         await chunk_set_prepared_artifact(client, detail, document_id, without_lineage)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_section_first_chunk_obeys_page_and_classification_scope() -> None:
+    """章節冒頭が範囲外でも範囲内の最初を読み、範囲不明と分類違いを除く。"""
+    from app.schemas.document import DocumentClassification
+
+    client = OracleClient()
+    document_id, recipe_id = await _new_document(client, "section-scope")
+    suffix = uuid4().hex[:12]
+    chunk_set_id = f"scope_{suffix}"
+    await client.upsert_chunk_set(
+        chunk_set_id=chunk_set_id,
+        document_id=document_id,
+        recipe_id=recipe_id,
+    )
+    await client.save_chunk_preview(
+        document_id,
+        StructuredExtraction(raw_text="合成の本文"),
+        [
+            Chunk(
+                index=i,
+                text=f"合成の本文{i}",
+                start_offset=i * 10,
+                end_offset=i * 10 + 6,
+                metadata={"page_start": page, "page_end": page},
+            )
+            for i, page in enumerate([5, 12, 30, None])
+        ],
+        chunk_set_id=chunk_set_id,
+    )
+    await client.mark_chunk_set_indexed(chunk_set_id=chunk_set_id, chunk_count=4, vector_count=0)
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id,
+        chunk_set_id=chunk_set_id,
+        expected_base_chunk_set_id=None,
+    )
+    await client.save_document_classification(
+        document_id, DocumentClassification(large_category="分類A")
+    )
+    chunks = await client.list_chunk_set_chunks(chunk_set_id)
+    chunks.sort(key=lambda row: row.chunk_index)
+    # 根の章節へ全 Chunk を原文順で対応させる。
+    mapping = build_section_chunk_map(
+        chunk_set_id,
+        [],
+        [
+            MapChunk(
+                chunk_id=c.chunk_id,
+                chunk_index=i,
+                page_start=page,
+                page_end=page,
+                element_ids=(),
+                section_path=(),
+                head="合成の本文",
+                chars=6,
+            )
+            for i, (c, page) in enumerate(zip(chunks, [5, 12, 30, None], strict=True))
+        ],
+        anchors={},
+        root_title="合成の文書",
+    )
+    store = SectionMapStore(client)
+    await store.replace_chunk_set_section_maps(document_id, [mapping])
+    section_id = mapping.sections[0].section_id
+    scope = {"page_number_min": "10", "page_number_max": "20", "large_category": "分類A"}
+    found = await store.section_first_chunks(
+        document_id, chunk_set_id=chunk_set_id, section_ids=[section_id], filters=scope
+    )
+    assert found[section_id].chunk_id == chunks[1].chunk_id
+    assert (
+        await store.section_first_chunks(
+            document_id,
+            chunk_set_id=chunk_set_id,
+            section_ids=[section_id],
+            filters={**scope, "large_category": "分類B"},
+        )
+        == {}
+    )
+    assert (
+        await store.section_first_chunks(
+            document_id,
+            chunk_set_id=chunk_set_id,
+            section_ids=[section_id],
+            filters={**scope, "page_number_min": "40", "page_number_max": "50"},
+        )
+        == {}
+    )
+    original = await store.section_first_chunks(
+        document_id, chunk_set_id=chunk_set_id, section_ids=[section_id]
+    )
+    assert original[section_id].chunk_id == chunks[0].chunk_id

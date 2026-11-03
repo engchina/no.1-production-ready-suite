@@ -136,7 +136,12 @@ async def test_article_chunks_mark_the_first_child_of_each_selected_article(
             pass
 
         async def section_first_chunks(
-            self, document_id: str, *, chunk_set_id: str, section_ids: list[str]
+            self,
+            document_id: str,
+            *,
+            chunk_set_id: str,
+            section_ids: list[str],
+            filters: Any = None,
         ) -> dict[str, RetrievedChunk]:
             requested.append((document_id, chunk_set_id, list(section_ids)))
             return {"s2": first}
@@ -202,7 +207,12 @@ async def test_article_leads_return_the_body_lead_without_the_title(
             pass
 
         async def section_first_chunks(
-            self, document_id: str, *, chunk_set_id: str, section_ids: list[str]
+            self,
+            document_id: str,
+            *,
+            chunk_set_id: str,
+            section_ids: list[str],
+            filters: Any = None,
         ) -> dict[str, RetrievedChunk]:
             assert (document_id, chunk_set_id, section_ids) == ("doc-law", "cs-law", ["s5", "s6"])
             return {"s5": first}
@@ -319,3 +329,90 @@ async def test_article_documents_are_read_once_per_scope_and_index_state(
 
     assert first == second == [("doc-law", _FILE)]
     assert calls == [{"knowledge_base_id": "kb-1"}]
+
+
+async def test_article_catalog_scope_filters_titles_previews_and_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients import section_map_store
+    from app.rag import section_map_service
+
+    requested: list[dict[str, str]] = []
+
+    async def outline(document_id: str, **kwargs: Any) -> SectionOutline:
+        return OUTLINE
+
+    class Store:
+        def __init__(self, oracle: Any) -> None:
+            pass
+
+        async def section_first_chunks(
+            self,
+            document_id: str,
+            *,
+            chunk_set_id: str,
+            section_ids: list[str],
+            filters: Any = None,
+        ) -> dict[str, RetrievedChunk]:
+            requested.append(dict(filters))
+            key = "s1" if filters["page_number_min"] == "10" else "s2"
+            return {key: _article_chunk(key, "第1条", "範囲内の本文")}
+
+    monkeypatch.setattr(section_map_service, "section_outline", outline)
+    monkeypatch.setattr(section_map_store, "SectionMapStore", Store)
+    engine = _engine(FakeOracle())
+    state = _SearchState()
+    article = _article_chunk("law:c1", "第1条", "合成本文")
+    state.chunks[article.chunk_id] = article
+    first_scope = {"large_category": "分類A", "page_number_min": "10", "page_number_max": "20"}
+    second_scope = {**first_scope, "page_number_min": "30", "page_number_max": "40"}
+    first = await engine._article_catalogs(state, ["doc-law"], 3, filters=first_scope)
+    again = await engine._article_catalogs(state, ["doc-law"], 3, filters=dict(first_scope))
+    second = await engine._article_catalogs(state, ["doc-law"], 3, filters=second_scope)
+    assert first == again
+    assert first[0].section_ids == ("s1",)
+    assert first[0].lines == ("第一条（目的）",)
+    assert second[0].section_ids == ("s2",)
+    assert second[0].lines == ("第二条（届出）",)
+    assert requested == [first_scope, second_scope]
+
+
+async def test_article_scope_reaches_read_leads_and_final_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.clients import section_map_store
+
+    scope = {"large_category": "分類A", "page_number_min": "10", "page_number_max": "20"}
+    calls: list[dict[str, str]] = []
+    chunk = _article_chunk("law:c2", "第2条", "範囲内の本文")
+
+    class Store:
+        def __init__(self, oracle: Any) -> None:
+            pass
+
+        async def section_first_chunks(
+            self,
+            document_id: str,
+            *,
+            chunk_set_id: str,
+            section_ids: list[str],
+            filters: Any = None,
+        ) -> dict[str, RetrievedChunk]:
+            calls.append(dict(filters))
+            return {"s2": chunk}
+
+    monkeypatch.setattr(section_map_store, "SectionMapStore", Store)
+    oracle = FakeOracle()
+    engine = _engine(oracle)
+    leads = await engine._article_leads("doc-law", "cs-law", {"s2": "第二条"}, filters=scope)
+    stored = await engine._article_chunks(
+        SearchRequest(query="q", filters=scope),
+        _SearchState(),
+        [
+            SelectedArticle("doc-law", _FILE, "cs-law", "s2", "第二条", 0),
+        ],
+    )
+    assert leads == {"s2": "範囲内の本文"}
+    assert calls == [scope, scope]
+    assert [item.chunk_uid for item in stored] == ["law:c2"]
+    assert oracle.first_page_calls == []
