@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import pytest
+from citation_unit_support import generated_fixture, without_unit_annotations
 from pydantic import ValidationError
 
 from rag_engine.config import get_settings
@@ -83,15 +84,15 @@ def test_subquestions_are_planned_before_generation_with_original_context() -> N
 
     def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
         calls.append(schema)
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             inputs = json.loads(prompt)
             assert inputs["question"] == QUESTION
-            assert [row["text"] for row in inputs["evidence"]] == [f"1| {text}" for text in TEXTS]
+            assert [without_unit_annotations(row["text"]) for row in inputs["evidence"]] == [f"1| {text}" for text in TEXTS]
             return RequestScopePlan.model_validate(planned)
-        assert calls[0] is RequestScopePlan
+        assert issubclass(calls[0], RequestScopePlan)
         assert "request_coverage" not in schema.model_json_schema()["properties"]
         assert QUESTION in prompt and all(text in prompt for text in TEXTS)
-        return schema.model_validate(draft(["Q1", "Q1"]))
+        return generated_fixture(schema, prompt, draft(["Q1", "Q1"]))
 
     result = run(QUESTION, parse)
     assert len(calls) == 2 and result.audit_calls == 0
@@ -108,7 +109,7 @@ def test_a_simple_question_keeps_one_generation_call() -> None:
         return generation_draft_wire_model().model_validate({"summary": "", "confidence": "low", "items": []})
 
     run("項目Aの意味は？", parse)
-    assert calls == [generation_draft_wire_model()]
+    assert len(calls) == 1 and issubclass(calls[0], generation_draft_wire_model())
 
 
 @pytest.mark.parametrize("question", ["項目Aの意味は？", QUESTION], ids=["single-call", "separate-plan"])
@@ -118,7 +119,7 @@ def test_generation_keeps_source_coverage_after_planning(question: str) -> None:
 
     def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
         nonlocal generation_calls
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             return RequestScopePlan.model_validate(plan())
         generation_calls += 1
         assert system.count("### 出典の網羅") == 1
@@ -157,13 +158,13 @@ def test_an_invalid_plan_does_not_start_generation(bad_plan: dict[str, Any]) -> 
 
     def parse(system: str, prompt: str, settings: Any, schema: type, **kwargs: Any) -> Any:
         calls.append(schema)
-        assert schema is RequestScopePlan
+        assert issubclass(schema, RequestScopePlan)
         return RequestScopePlan.model_validate(bad_plan)
 
     with pytest.raises(grounded.DraftGenerationInvalid):
         run(QUESTION, parse)
     # 作り直しても検査に落ちれば生成へ進まない（作り直しは 1 回だけ。#4098）。
-    assert calls == [RequestScopePlan, RequestScopePlan]
+    assert len(calls) == 2 and all(issubclass(value, RequestScopePlan) for value in calls)
 
 
 def test_each_generation_stage_uses_its_saved_prompt() -> None:
@@ -209,13 +210,13 @@ def test_a_valid_plan_with_long_evidence_reaches_generation() -> None:
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema)
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             return RequestScopePlan.model_validate(plan())
         assert "項目Cは処理の条件を定めます。" in prompt and "要求ごとの根拠計画" in prompt
-        return schema.model_validate(draft(["Q1", "Q1"]))
+        return generated_fixture(schema, prompt, draft(["Q1", "Q1"]))
 
     result = run_long(parse)
-    assert calls[0] is RequestScopePlan
+    assert issubclass(calls[0], RequestScopePlan)
     assert len(calls) == 2
     assert result.timing["generation_calls"] == 2
 
@@ -265,13 +266,13 @@ def _scope_failures(parse_plans: list[Any]) -> tuple[Any, list[dict[str, Any]]]:
     plans = iter(parse_plans)
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             prompts.append(json.loads(prompt))
             value = next(plans)
             if isinstance(value, Exception):
                 raise value
             return RequestScopePlan.model_validate(value)
-        return schema.model_validate(draft(["Q1", "Q1"]))
+        return generated_fixture(schema, prompt, draft(["Q1", "Q1"]))
 
     return parse, prompts
 
@@ -361,14 +362,14 @@ def test_code_cuts_the_link_quote_from_the_numbered_range_and_the_input_is_numbe
     generated: list[str] = []
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             prompts.append(json.loads(prompt))
             return RequestScopePlan.model_validate(_linked_plan({"evidence_id": "E2", "line_start": 1, "line_end": 1}))
         generated.append(prompt)
-        return schema.model_validate(draft(["Q1", "Q1"]))
+        return generated_fixture(schema, prompt, draft(["Q1", "Q1"]))
 
     current = run(QUESTION, parse)
-    assert [row["text"] for row in prompts[0]["evidence"]] == [f"1| {text}" for text in TEXTS]
+    assert [without_unit_annotations(row["text"]) for row in prompts[0]["evidence"]] == [f"1| {text}" for text in TEXTS]
     assert "link_quote" not in json.dumps(RequestScopePlan.model_json_schema())
     scope = current.draft.request_coverage[0].evidence_scope[0]
     assert (scope.relation, scope.link_quote) == ("linked", TEXTS[1])
@@ -406,11 +407,11 @@ def test_unrelated_evidence_in_the_plan_is_a_finding_and_the_repaired_plan_is_us
     plans = iter([wrong, right])
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             prompts.append(json.loads(prompt))
             return RequestScopePlan.model_validate(next(plans))
         generated.append(prompt)
-        return schema.model_validate(draft(["Q1", "Q1"]))
+        return generated_fixture(schema, prompt, draft(["Q1", "Q1"]))
 
     result = run_long(parse)
     assert result.timing["request_scope_repair"]["initial_issues"]["plan_error_count"] == 1
@@ -443,7 +444,7 @@ def _run_direct(*outputs: dict[str, Any]) -> tuple[Any, list[Any]]:
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append((schema, prompt))
-        return schema.model_validate(next(values))
+        return generation_draft_wire_model().model_validate(next(values))  # 旧記録の範囲検証を維持。
 
     return run(TEXTS[0] + "について教えてください。", parse), calls
 

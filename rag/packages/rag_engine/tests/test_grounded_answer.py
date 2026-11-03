@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 from audit_fixtures import legacy_audit_result
+from citation_unit_support import without_unit_annotations
 from fictional_examples import DECISION_SCREEN, ERROR_HEADING_15, ERROR_QUESTION_15, ERROR_UNIT_7, ERROR_UNIT_15, STEP_3, STEP_4
 
 from rag_engine.config import get_settings
@@ -63,7 +64,7 @@ class FakeModel:
         observed = schema.canonical_schema if is_audit_wire(schema) else schema
         self.prompts.append((observed.__name__, prompt))
         self.captured_system_prompts.append((observed.__name__, system))
-        if schema is RequestScopePlan and self.scope_plan is not None:
+        if issubclass(schema, RequestScopePlan) and self.scope_plan is not None:
             return schema.model_validate(self.scope_plan)
         is_generation = issubclass(schema, generation_draft_wire_model()) or schema is GroundedDraft
         source = self.drafts if is_generation else self.audits
@@ -1161,7 +1162,10 @@ class GroundedAnswerTest(unittest.TestCase):
         block = grounded.format_functions(spans)
         # 補助情報は原文照合の対象外。E1 の本文の続きに見える位置へ置かない。
         self.assertLess(block.index("[E2]"), block.index("文書種別: 操作説明書"))
-        self.assertIn(f"{grounded.CONTEXT_NOTE_BEGIN}\n文書種別: 操作説明書\n{grounded.CONTEXT_NOTE_END}\n1| 二つ目の本文。", block)
+        self.assertIn(
+            f"{grounded.CONTEXT_NOTE_BEGIN}\n文書種別: 操作説明書\n{grounded.CONTEXT_NOTE_END}\n1| 二つ目の本文。",
+            without_unit_annotations(block),
+        )
         self.assertIn(grounded.CONTEXT_NOTE_BEGIN, grounded.GENERATE_SYSTEM_PROMPT)
 
     def test_prompts_account_for_every_applies_and_applicability_value(self):

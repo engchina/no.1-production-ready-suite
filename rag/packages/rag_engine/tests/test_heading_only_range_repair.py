@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from citation_unit_support import generated_output, repair_output
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -75,12 +76,12 @@ def ranges(*rows: tuple[int, int, str, int, int]) -> CitationRangeRepair:
     )
 
 
-def run(spans: list[dict[str, Any]], parser: Any, *, first: grounded.Round | None = None) -> grounded.Round:
+def run(spans: list[dict[str, Any]], parser: Any, *, first: grounded.Round | None = None, prompt: str = "合成入力") -> grounded.Round:
     return grounded.run_round(
         QUESTION,
         spans,
         get_settings(environ={}, dotenv_path=None),
-        prompt="合成入力",
+        prompt=prompt,
         image_paths=(),
         provider_id=None,
         parse_text=parser,
@@ -94,7 +95,7 @@ def run(spans: list[dict[str, Any]], parser: Any, *, first: grounded.Round | Non
 
 def run_first(spans: list[dict[str, Any]], draft: GroundedDraft | None = None) -> grounded.Round:
     def generation(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
-        assert schema is generation_draft_wire_model()
+        assert issubclass(schema, generation_draft_wire_model())
         return draft if draft is not None else proposal()
 
     return run(spans, generation)
@@ -118,6 +119,7 @@ def test_heading_only_citation_becomes_a_range_repair_target_with_a_hint() -> No
             "citation_index": 0,
             "evidence_id": "E1",
             "unit_count": 2,
+            "snapshot_id": grounded.generation_unit_catalog(spans).snapshots[0].snapshot_id,
             "numbered": True,
             "reason_code": "citation_heading_only",
             "hint": grounded.HEADING_ONLY_REASON,
@@ -135,9 +137,9 @@ def test_repaired_range_in_the_same_block_is_verified_and_the_mark_is_removed(re
     calls: list[dict[str, Any]] = []
 
     def repair(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> CitationRangeRepair:
-        assert schema is CitationRangeRepair
+        assert issubclass(schema, CitationRangeRepair)
         calls.append(json.loads(prompt.split("\n", 1)[1]))
-        return ranges((0, 0, "E1", *repaired_range))
+        return repair_output(schema, prompt, (0, 0, "E1", *repaired_range))
 
     second = run(spans, repair, first=first)
     assert len(calls) == 1 and second.audit_calls == 0
@@ -252,10 +254,10 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema is generation_draft_wire_model():
-            return proposal()
-        assert schema is CitationRangeRepair
-        return ranges((0, 0, "E1", 1, 2))
+        if issubclass(schema, generation_draft_wire_model()):
+            return generated_output(schema, prompt, text=CLAIM)
+        assert issubclass(schema, CitationRangeRepair)
+        return repair_output(schema, prompt, (0, 0, None, 1, 2))
 
     config = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none")
     with bind_dependencies(AnswerDependencies(unused, unused, parser, unused, unused)):
@@ -267,3 +269,44 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
     assert [round_["accepted"] for round_ in rounds] == [True, True]
     assert rounds[1]["timing"]["citation_range_repair"]["status"] == "completed"
     assert CLAIM in result.response.answer_text
+
+
+def test_unit_repair_uses_original_snapshot_after_same_label_points_elsewhere() -> None:
+    original = evidence()
+
+    def generation(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        payload = generated_output(schema, prompt, text=CLAIM).model_dump(exclude_unset=True)
+        payload["request_coverage"] = [
+            {
+                "request_id": "Q1",
+                "evidence_scope": [
+                    {"evidence_id": "E1", "target": "合成の対象", "relation": "direct", "link": None},
+                ],
+            }
+        ]
+        return schema.model_validate(payload)
+
+    first = run(original, generation, prompt=grounded.format_functions(original))
+    assert codes(first) == ["citation_heading_only"]
+    original_id = first.draft.items[0].citations[0]._unit_binding.snapshot.snapshot_id
+    changed = [span(OTHER, identity="stable-other", label="E1", heading="別の節")]
+    changed_prompt = grounded.format_functions(changed)
+    calls = []
+
+    def repair(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
+        payload = json.loads(prompt.split("\n", 1)[1])
+        calls.append(payload)
+        assert payload["citation_sources"][0]["snapshot_id"] == original_id
+        assert BODY in payload["citation_sources"][0]["text"]
+        assert OTHER not in payload["citation_sources"][0]["text"]
+        return repair_output(schema, prompt, (0, 0, None, 2, 2))
+
+    second = run(changed, repair, first=first, prompt=changed_prompt)
+    assert len(calls) == 1
+    assert second.timing["citation_range_repair"]["status"] == "completed"
+    assert codes(second) == []
+    checked = second.checked[0]
+    assert checked.item.quote == BODY
+    assert checked.span["source_id"] == original[0]["source_id"]
+    assert checked.citation_resolution["snapshot_id"] == original_id
+    assert checked.citation_resolution["range_contract"] == "stable_unit_ids"

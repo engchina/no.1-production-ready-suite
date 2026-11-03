@@ -1,6 +1,7 @@
 """任意の根拠縮小を実際の生成入力境界で確認する。外部モデルは呼ばない。"""
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import httpx
 import pytest
 from audit_fixtures import legacy_audit_result
+from citation_unit_support import generated_fixture
 from openai import OpenAI
 from test_bound_audit_transport import response_bytes
 
@@ -59,15 +61,15 @@ class Parser:
 
     def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
         assert issubclass(schema, generation_draft_wire_model()), "none で追加の監査を呼ばない"
-        self.calls.append({"system": system, "prompt": prompt, "schema": schema})
+        self.calls.append({"system": system, "prompt": prompt, "schema": schema.model_json_schema()})
         if self.responses:
             value = self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
             if isinstance(value, Exception):
                 raise value
             if callable(value):
-                return schema.model_validate(value(prompt))
-            return schema.model_validate(value)
-        return schema.model_validate(payload())
+                return generated_fixture(schema, prompt, value(prompt))
+            return generated_fixture(schema, prompt, value)
+        return generated_fixture(schema, prompt, payload())
 
 
 def payload(*, gap: bool = False) -> dict[str, Any]:
@@ -214,11 +216,12 @@ def test_shorter_gap_does_not_replace_useful_initial_operation() -> None:
 @pytest.mark.parametrize("streamed", [False, True])
 def test_sdk_serializes_only_selected_second_round_sources(monkeypatch: pytest.MonkeyPatch, streamed: bool) -> None:
     sent: list[dict[str, Any]] = []
-    schema = generation_draft_wire_model()
-    raw = json.dumps(schema.model_validate(payload()).model_dump())
+    schemas: list[Any] = []
 
     def transport(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
+        actual_prompt = next(row["content"] for row in sent[-1]["input"] if row["role"] == "user")
+        raw = json.dumps(generated_fixture(schemas[-1], actual_prompt, payload()).model_dump())
         data, headers = response_bytes(raw, streamed)
         return httpx.Response(200, content=data, headers=headers)
 
@@ -244,6 +247,7 @@ def test_sdk_serializes_only_selected_second_round_sources(monkeypatch: pytest.M
         def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
             assert issubclass(schema, generation_draft_wire_model())
             self.calls.append({"prompt": prompt, "system": system})
+            schemas.append(schema)
             return oci._parse_text_once(system, prompt, sdk_settings, schema, sdk_settings.llm_providers[sdk_settings.default_answer_llm])
 
     parser = SdkParser()
@@ -259,11 +263,14 @@ def test_sdk_serializes_only_selected_second_round_sources(monkeypatch: pytest.M
     assert "[E1]" in refined and "[E2]" not in refined and "[E3]" not in refined
     assert all(body["text"]["format"]["strict"] is True for body in sent)
     assert all(body.get("stream", False) is streamed for body in sent)
-    assert sent[0]["text"]["format"] == sent[1]["text"]["format"]
+    # 各送信の schema は、その回に実際に送った単位だけを選べる。
+    first_units = set(re.findall(r"U[0-9a-f]{24}", json.dumps(sent[0]["text"]["format"])))
+    second_units = set(re.findall(r"U[0-9a-f]{24}", json.dumps(sent[1]["text"]["format"])))
+    assert second_units and second_units < first_units
     assert result.response.generation_trace["evidence_refinement"]["additional_generation_calls"] == 1
 
 
-def test_kept_nonconsecutive_label_id_and_numeric_range_are_not_rebound(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_kept_nonconsecutive_label_and_stable_units_are_not_rebound(monkeypatch: pytest.MonkeyPatch) -> None:
     original_context = context()
     expanded = OPEN + "\n" + "補足の表示項目を確認します。" * 20
     changed = replace(original_context.records[0], text=expanded)
@@ -289,7 +296,8 @@ def test_kept_nonconsecutive_label_id_and_numeric_range_are_not_rebound(monkeypa
     for key in ("requested_evidence_id", "requested_lines", "source_id", "resolved_quote", "content_sha256"):
         assert proofs[0][key] == proofs[1][key]
     assert proofs[1]["requested_lines"] == "1"
-    assert proofs[1]["requested_evidence_id"] == "E2"
+    assert proofs[1]["snapshot_id"] == proofs[0]["snapshot_id"]
+    assert proofs[1]["selected_unit_ids"] == proofs[0]["selected_unit_ids"]
     assert proofs[1]["authenticity"] == "verified"
 
 

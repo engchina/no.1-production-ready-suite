@@ -8,6 +8,7 @@
 import json
 
 import pytest
+from citation_unit_support import generated_fixture
 from pydantic import ValidationError
 from test_grounded_answer import LIST_TEXT, QUESTION, FakeModel, audit, context, draft, ids, item, record, run
 
@@ -280,10 +281,12 @@ def test_compound_question_with_long_evidence_is_answered_without_a_generation_f
 
     def model(system, prompt, settings, schema, **options):
         calls.append(schema)
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             assert "evidence" in json.loads(prompt)
             return schema.model_validate({"request_coverage": [_plan(label)]})
-        return schema.model_validate(
+        return generated_fixture(
+            schema,
+            prompt,
             {
                 "summary": "",
                 "confidence": "high",
@@ -295,13 +298,13 @@ def test_compound_question_with_long_evidence_is_answered_without_a_generation_f
                         "citations": [{"evidence_id": label, "line_start": 1, "line_end": 1}],
                     }
                 ],
-            }
+            },
         )
 
     result = run(model, ctx, question=COMPOUND_QUESTION).response
 
     assert "generation_failure" not in result.generation_trace
-    assert calls[0] is RequestScopePlan
+    assert issubclass(calls[0], RequestScopePlan)
     assert len(calls) >= 2
     assert answer in result.answer_text
 
@@ -311,7 +314,7 @@ def test_invalid_plan_output_at_the_first_round_reaches_the_quote_fallback():
     ctx = context(record(0, LONG_RECORD, "合成の項目"))
 
     def model(system, prompt, settings, schema, **options):
-        assert schema is RequestScopePlan
+        assert issubclass(schema, RequestScopePlan)
         schema.model_validate({})
 
     result = run(model, ctx, question=COMPOUND_QUESTION).response

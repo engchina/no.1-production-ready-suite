@@ -49,7 +49,7 @@ def run(relation: str | None, *, guide_candidate: bool = False) -> tuple[Any, li
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> GroundedDraft:
         calls.append(schema.__name__)
-        assert schema is generation_draft_wire_model()
+        assert issubclass(schema, generation_draft_wire_model())
         # 保存済み canonical fixture の再生。wire の伝送・意味判定を装わない。
         return draft
 

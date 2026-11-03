@@ -83,7 +83,7 @@ def test_run_round_calls_the_audit_with_the_audit_settings():
 
     def parse_text(system, prompt, settings, schema, **options):
         calls.append((schema.canonical_schema if is_audit_wire(schema) else schema, settings))
-        if schema in (GroundedDraft, generation_draft_wire_model()):
+        if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             return GroundedDraft(summary="", confidence="low", items=[])
         result = GroundedAudit(
             reviews=[],

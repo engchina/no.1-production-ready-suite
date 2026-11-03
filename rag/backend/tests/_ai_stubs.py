@@ -159,6 +159,7 @@ _NUMBERED_LINE = re.compile(r"^([0-9]+)\| (.*)$")
 def _first_evidence(prompt: str) -> tuple[str, str] | None:
     """prompt の最初の根拠の番号と、その本文の最初の行（原文どおりの引用）を返す。"""
     from rag_engine.generation.grounded import CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END
+    from rag_engine.retrieval.character_forms import fold_width
 
     match = _EVIDENCE_HEADER.search(prompt)
     if match is None:
@@ -166,9 +167,9 @@ def _first_evidence(prompt: str) -> tuple[str, str] | None:
     in_note = False
     for line in prompt[match.end() :].splitlines():
         text = line.strip()
-        if text == CONTEXT_NOTE_BEGIN:
+        if text in {CONTEXT_NOTE_BEGIN, fold_width(CONTEXT_NOTE_BEGIN)}:
             in_note = True
-        elif text == CONTEXT_NOTE_END:
+        elif text in {CONTEXT_NOTE_END, fold_width(CONTEXT_NOTE_END)}:
             in_note = False
         elif text and not in_note:
             return match.group(1), text
@@ -219,21 +220,24 @@ def deterministic_parse_text_response(
         return GroundedDraft.model_validate(
             {"summary": "決定論スタブの回答", "items": items, "confidence": "high"}
         )
-    # 回答の生成は、引用の範囲を整数の行番号で受ける生成専用の schema で呼ぶ（#3685）。
-    if text_format is generation_draft_wire_model():
+    # 生成は実際に提示された単位 ID を返す。旧整数 schema の直接検証も残す。
+    if issubclass(text_format, generation_draft_wire_model()):
         evidence = _first_evidence(prompt)
         items = []
         if evidence:
             evidence_id, line = evidence
             numbered = _NUMBERED_LINE.match(line)
             number = int(numbered.group(1)) if numbered else None
+            unit = re.match(r"\[(U[0-9a-f]{24})\] (.*)", numbered.group(2)) if numbered else None
+            if getattr(text_format, "_uses_unit_ids", False):
+                assert unit is not None
             items = [
                 {
                     "kind": "rule",
-                    "text": numbered.group(2) if numbered else line,
-                    "citations": [
-                        {"evidence_id": evidence_id, "line_start": number, "line_end": number}
-                    ],
+                    "text": unit.group(2) if unit else numbered.group(2) if numbered else line,
+                    "citations": [{"unit_ids": [unit.group(1)]}]
+                    if unit
+                    else [{"evidence_id": evidence_id, "line_start": number, "line_end": number}],
                 }
             ]
         return text_format.model_validate(

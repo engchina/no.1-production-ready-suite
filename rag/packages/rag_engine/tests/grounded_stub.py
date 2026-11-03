@@ -9,6 +9,7 @@ import re
 from unittest.mock import patch
 
 from audit_fixtures import legacy_audit_result
+from citation_unit_support import without_unit_annotations
 from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
@@ -87,6 +88,7 @@ def echo_model(system, prompt, settings, schema, **options):
     """最初の根拠の先頭行をそのまま引用する。実際の生成経路で prompt の内容を確認する用途。"""
     if schema is GroundedDraft or issubclass(schema, generation_draft_wire_model()):
         # 既存fixtureの自由引用をcanonicalで再生する。生成wireの構造検証は専用テストで行う。
+        prompt = without_unit_annotations(prompt)
         source_prompt = re.sub(r"<補助情報[（(]quote 不可[）)]>.*?</補助情報>\n?", "", prompt, flags=re.S)
         match = re.search(r"\[(E[0-9]+)\][^\n]*\n([^\n]+)", source_prompt)
         # 長い根拠の行には行番号（`1| `）が付く（#2830）。番号を外した原文を引く。

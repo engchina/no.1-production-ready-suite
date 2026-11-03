@@ -2149,7 +2149,7 @@ def _section_answer_llm(
             if candidate
             else [],
         )
-    if schema in (GroundedDraft, generation_draft_wire_model()):
+    if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
         # CRAGの判定に含まれる引用ではなく、番号付き根拠ブロックから出典を選ぶ。
         parts = re.split(r"\[(E[0-9]+)\]", prompt)
         ids = [

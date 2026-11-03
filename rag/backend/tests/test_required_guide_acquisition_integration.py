@@ -130,7 +130,15 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
                         "request_id": "Q1",
                         "kind": "operation",
                         "text": BODY,
-                        "citations": [{"evidence_id": evidence_id, "line_start": 1, "line_end": 1}],
+                        "citations": [
+                            {
+                                "unit_ids": [
+                                    re.findall(
+                                        r"\[(U[0-9a-f]{24})\]", prompt[: prompt.index(BODY)]
+                                    )[-1]
+                                ]
+                            }
+                        ],
                     }
                 ],
                 "summary": "",
@@ -211,10 +219,9 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert outputs[0]["parsed_output_representation"] == "generation_wire"
     citation = outputs[0]["parsed_output"]["items"][0]["citations"][0]
     assert citation == {
-        "evidence_id": operation["display_id"],
-        "line_start": 1,
-        "line_end": 1,
+        "unit_ids": re.findall(r"\[(U[0-9a-f]{24})\]", calls[0][1][: calls[0][1].index(BODY)])[-1:]
     }
+    assert review["items"][0]["citation_resolution"]["resolved_quote"] in operation["text"]
 
     # 保存の正規化も実処理を通し、DB の書き込みだけをメモリに置き換える。
     pipeline = RagPipeline(

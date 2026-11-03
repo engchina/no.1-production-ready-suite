@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -93,7 +94,7 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
         prompts.append(prompt)
-        return schema.model_validate(next(values))
+        return generated_fixture(schema, prompt, next(values))
 
     def unused(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("追加の外部呼び出しは不可")

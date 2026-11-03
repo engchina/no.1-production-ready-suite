@@ -83,7 +83,7 @@ def run(*, omit_methods: bool = False, unconditional: bool = False, unknown_c: b
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema is RequestScopePlan:
+        if issubclass(schema, RequestScopePlan):
             return schema.model_validate(
                 {
                     "request_coverage": [

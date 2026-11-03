@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from citation_unit_support import repair_output
 from pydantic import ValidationError
 from test_cite_lines import LONG, SHORT
 
@@ -235,7 +236,7 @@ def test_missing_unknown_or_rebound_target_does_not_modify_the_original_citation
 
 def run_first(spans: list[dict[str, Any]], draft: GroundedDraft | None = None) -> grounded.Round:
     def generation(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
-        assert schema is generation_draft_wire_model()
+        assert issubclass(schema, generation_draft_wire_model())
         return draft if draft is not None else proposal()
 
     return grounded.run_round(
@@ -265,10 +266,10 @@ def test_existing_correction_round_uses_one_range_only_call_and_does_not_run_dis
     calls: list[dict[str, Any]] = []
 
     def repair(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> CitationRangeRepair:
-        assert schema is CitationRangeRepair
+        assert issubclass(schema, CitationRangeRepair)
         assert system == configured_system
         calls.append(json.loads(prompt.split("\n", 1)[1]))
-        return response(3, 3)
+        return repair_output(schema, prompt, (0, 0, "E1", 3, 3))
 
     repaired = grounded.run_round(
         QUESTION,
@@ -297,7 +298,8 @@ def test_existing_correction_round_uses_one_range_only_call_and_does_not_run_dis
     assert captured["parsed_output_representation"] == "citation_range_repair"
     assert captured["input_system_prompt"] == configured_system
     assert captured["raw_output_status"] == "not_recorded"
-    assert captured["parsed_output"]["ranges"][0]["line_start"] == 3
+    assert len(captured["parsed_output"]["ranges"][0]["unit_ids"]) == 1
+    assert "line_start" not in captured["parsed_output"]["ranges"][0]
 
 
 @pytest.mark.parametrize("change", ["identity", "text"])
@@ -354,14 +356,14 @@ def test_outer_budget_allows_only_one_repair_instead_of_another_full_generation(
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema is generation_draft_wire_model():
+        if issubclass(schema, generation_draft_wire_model()):
             return proposal()
-        assert schema is CitationRangeRepair
+        assert issubclass(schema, CitationRangeRepair)
         if reject_body_change:
-            raw = response(3, 3).model_dump()
+            raw = repair_output(schema, prompt, (0, 0, "E1", 3, 3)).model_dump()
             raw["ranges"][0]["text"] = "修復時に創作した別操作"
-            return CitationRangeRepair.model_validate(raw)
-        return response(3, 3)
+            return schema.model_validate(raw)
+        return repair_output(schema, prompt, (0, 0, "E1", 3, 3))
 
     config = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=1)
     with bind_dependencies(AnswerDependencies(unused, unused, parser, unused, unused)):
@@ -393,9 +395,9 @@ def test_all_invalid_multiple_citations_can_repair_from_dropped_proofs_without_l
     calls = []
 
     def repair(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> CitationRangeRepair:
-        assert schema is CitationRangeRepair
+        assert issubclass(schema, CitationRangeRepair)
         calls.append(schema)
-        return CitationRangeRepair(ranges=[response(3, 3).ranges[0], response(3, 3, index=1, identity="E2").ranges[0]])
+        return repair_output(schema, prompt, (0, 0, "E1", 3, 3), (0, 1, "E2", 3, 3))
 
     second = grounded.run_round(
         QUESTION,
@@ -453,9 +455,9 @@ def test_range_repair_preserves_content_correction_within_configured_rounds(limi
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema is CitationRangeRepair:
-            return response(3, 3)
-        assert schema is generation_draft_wire_model()
+        if issubclass(schema, CitationRangeRepair):
+            return repair_output(schema, prompt, (0, 0, "E1", 3, 3))
+        assert issubclass(schema, generation_draft_wire_model())
         draft = proposal(0, 0) if len(calls) == 1 else proposal(3, 3)
         draft.items[0].text = incorrect if len(calls) == 1 or not fix_content else CLAIM
         return draft

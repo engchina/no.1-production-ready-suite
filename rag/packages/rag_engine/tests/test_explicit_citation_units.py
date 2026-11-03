@@ -3,6 +3,7 @@
 from typing import Any
 
 import pytest
+from citation_unit_support import without_unit_annotations
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_range_repair import CitationRangeRepair, apply_range_repair
@@ -53,8 +54,8 @@ def test_short_multiline_block_numbers_each_physical_line_and_quotes_the_origina
     assert len(view.units) == 2
     assert view.numbered is True
     assert view.contract_version == "explicit_units_v5"
-    assert "1| 開く\n2| 保存" in prompt
-    assert "3|" not in prompt
+    assert "1| 開く\n2| 保存" in without_unit_annotations(prompt)
+    assert "3|" not in without_unit_annotations(prompt)
     cited, error = extract(draft(1, 2), evidence)
     assert not error and cited.quote == "開く\n保存"
     assert cited.citations[0]._extraction["sent_view_status"] == "prepared"
@@ -66,7 +67,9 @@ def test_short_multiline_block_numbers_each_physical_line_and_quotes_the_origina
 def test_short_button_number_and_table_remain_numbered_original_content(text: str) -> None:
     evidence = [span(1, text)]
     lines = text.split("\n")
-    assert "\n".join(f"{number}| {line}" for number, line in enumerate(lines, 1)) in grounded.format_functions(evidence)
+    assert "\n".join(f"{number}| {line}" for number, line in enumerate(lines, 1)) in without_unit_annotations(
+        grounded.format_functions(evidence)
+    )
     cited, error = extract(draft(1, len(lines)), evidence)
     assert not error and cited.quote == text
 

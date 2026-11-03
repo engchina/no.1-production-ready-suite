@@ -135,7 +135,7 @@ def _settings(**overrides: Any) -> Settings:
 
 def _llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
     """渡された根拠に必要な原文があるときだけ、その原文を引いて答える（無ければ推測しない）。"""
-    if schema not in (GroundedDraft, generation_draft_wire_model()):
+    if not issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
         return _fake_llm(system, prompt, settings, schema, **options)
     match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(NEEDED_TEXT), prompt, re.DOTALL)
     items = (

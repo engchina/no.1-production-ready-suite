@@ -13,9 +13,12 @@ from rag_engine.adapters import oci
 from rag_engine.generation import batched_evidence
 from rag_engine.generation.answering import _invalid_structured_output
 from rag_engine.generation.batch_output_repair import (
+    BatchRangeInvalid,
     batch_failure_summary,
     batch_repair_prompt,
     batch_validation_detail,
+    range_error_reason,
+    range_mismatch_diagnostic,
     repair_feedback_upper_bound,
 )
 from rag_engine.generation.batched_evidence import BatchReading, _reading_model, reading_unit_counts
@@ -47,10 +50,10 @@ def test_one_existing_retry_receives_targeted_feedback_and_keeps_all_inputs(monk
             if failure == "schema":
                 result.pop("findings")
             else:
-                result["findings"][0]["start_line"] = result["findings"][0]["end_line"] = "B1-9999"
+                result["findings"][0]["unit_ids"] = ["unknown-unit"]
         elif len(calls) == 2:
             assert "validation_errors" in prompt
-            assert ("findings" if failure == "schema" else "batch_range_invalid") in prompt
+            assert ("findings" if failure == "schema" else "batch_unit_invalid") in prompt
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -144,7 +147,7 @@ def test_a_batch_packed_to_the_limit_still_has_room_for_the_repair_feedback(monk
         delivered.append((system, prompt))
         result = output(prompt)
         if "## Step 4:" not in prompt:
-            result["findings"][0]["start_line"] = result["findings"][0]["end_line"] = "B1-9999"
+            result["findings"][0]["unit_ids"] = ["unknown-unit"]
         else:
             result["findings"] = []
         return schema.model_validate(result)
@@ -234,19 +237,41 @@ def findings_of(*rows: tuple[str, str]) -> dict:
     return {"findings": [{"start_line": start, "end_line": end, "answer": "合成の回答"} for start, end in rows]}
 
 
+def legacy_range_error(*rows: tuple[str, str]) -> ValidationError:
+    """旧記録の匿名診断は、旧構造の例外を使って保持する。新 producer は整数を返さない。"""
+    counts = {"B1": 3, "B2": 1}
+    invalid = [row for row in rows if range_error_reason(*row, counts) is not None]
+    assert invalid
+    return ValidationError.from_exception_data(
+        "BatchReading",
+        [
+            {
+                "type": "value_error",
+                "loc": (),
+                "input": {},
+                "ctx": {"error": BatchRangeInvalid(range_mismatch_diagnostic(invalid, counts))},
+            }
+        ],
+    )
+
+
 def mismatch_detail(*rows: tuple[str, str]) -> dict:
-    model = reading_model()
-    with pytest.raises(ValidationError) as raised:
-        model.model_validate(findings_of(*rows))
-    detail = batch_validation_detail(raised.value, model.model_json_schema())
+    detail = batch_validation_detail(legacy_range_error(*rows), reading_model().model_json_schema())
     assert json.dumps(detail, ensure_ascii=False).count("合成") == 0
     row = detail["validation_errors"][0]
     assert row["protocol_code"] == "batch_range_invalid"
     return row["range_mismatch"]
 
 
-def test_valid_ranges_pass_the_check():
-    reading_model().model_validate(findings_of(("B1-1", "B1-3"), ("B2-1", "B2-1"), (" B1-2 ", "B1-2")))
+def test_legacy_valid_ranges_pass_the_check():
+    assert all(
+        range_error_reason(start, end, {"B1": 3, "B2": 1}) is None
+        for start, end in [
+            ("B1-1", "B1-3"),
+            ("B2-1", "B2-1"),
+            (" B1-2 ", "B1-2"),
+        ]
+    )
 
 
 @pytest.mark.parametrize(
@@ -290,9 +315,8 @@ def test_range_mismatch_keeps_counts_for_all_findings_and_a_bounded_sample():
 )
 def test_each_contract_violation_keeps_its_own_class(payload, code):
     model = reading_model()
-    with pytest.raises(ValidationError) as raised:
-        model.model_validate(payload)
-    detail = batch_validation_detail(raised.value, model.model_json_schema())
+    failure = legacy_range_error(("B1-9", "B1-9")) if code == "batch_range_invalid" else _rejected(model, payload)
+    detail = batch_validation_detail(failure, model.model_json_schema())
     assert detail["category"] == "schema_field"
     assert [row.get("protocol_code") for row in detail["validation_errors"]][0] == code
 
@@ -311,30 +335,31 @@ def test_retry_prompt_names_the_valid_lines_without_the_diagnostic(monkeypatch):
         calls.append(prompt)
         result = output(prompt)
         if len(calls) == 1:
-            result["findings"][0]["start_line"] = result["findings"][0]["end_line"] = "B1-9999"
+            result["findings"][0]["unit_ids"] = ["unknown-unit"]
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
     _, _, diagnostic = prepare([span(0, "合成の条件A。" * 600)], reader)
     feedback = calls[1].split("## Step 4:", 1)[1]
-    assert "batch_range_invalid" in feedback
-    assert "B1 の行は B1-1〜B1-" in feedback
+    assert "batch_unit_invalid" in feedback
+    assert "引用単位 ID だけ" in feedback
+    assert "start_line" not in feedback
+    assert "end_line" not in feedback
     assert "range_mismatch" not in feedback
     assert "unmatched_count" not in feedback
     assert "合成" not in feedback
     failure = diagnostic["batches"][0]["validation_failures"][0]["validation_errors"][0]
-    assert failure["range_mismatch"]["reasons"] == {"range_out_of_bounds": 1}
+    assert failure["protocol_code"] == "batch_unit_invalid"
 
 
 def test_failed_batch_summary_has_only_class_counts_and_capacity():
     """#4090: 回答の診断には、失敗の類別・件数・容量だけを渡す（質問・原文を渡さない）。"""
     model = reading_model()
-    with pytest.raises(ValidationError) as raised:
-        model.model_validate(findings_of(("B1-9", "B1-9")))
-    detail = batch_validation_detail(raised.value, model.model_json_schema())
+    failure = legacy_range_error(("B1-9", "B1-9"))
+    detail = batch_validation_detail(failure, model.model_json_schema())
     receipt = {"index": 1, "input_count": 2, "input_chars": 120, "validation_failures": [detail, detail]}
 
-    assert batch_failure_summary(receipt, raised.value) == {
+    assert batch_failure_summary(receipt, failure) == {
         "category": "batch_range_invalid",
         "batch_index": 1,
         "input_count": 2,
@@ -345,53 +370,29 @@ def test_failed_batch_summary_has_only_class_counts_and_capacity():
     }
 
 
-def _contained(monkeypatch, bad_rows, inputs):
-    """2 回とも ``bad_rows`` を返す読取で分割読取を動かす。"""
-    prompts = []
+@pytest.mark.parametrize("bad_id", ["unknown-unit", "U" + "0" * 24])
+def test_unknown_unit_after_retry_keeps_input_without_adopting_unbound_answer(monkeypatch, bad_id):
+    """新契約の未知IDは組の失敗とし、その入力全体を残す。他の組の有効な結果は使う。"""
+    inputs = [span(0, "未確認の合成本文。" * 240), span(1, "有効な合成本文。" * 200)]
+    calls = []
 
     def provider(system, prompt, settings, schema, ignored):
-        prompts.append(prompt)
+        calls.append(prompt)
         result = output(prompt)
-        result["findings"] = [*result["findings"], *bad_rows]
+        if "未確認の合成本文" in json.loads(prompt.split("\n\n## Step 4:", 1)[0])["evidence"][0]["text"]:
+            result["findings"] = [{"unit_ids": [bad_id], "answer": "採らない合成の回答"}]
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
-    return (*prepare(inputs, reader), prompts)
-
-
-def test_invalid_range_after_the_retry_keeps_valid_findings_and_the_whole_input(monkeypatch):
-    """#4090: 再試行の後も無効な範囲は採らず、有効な findings と、その入力の原文の全体で最終生成へ進む。"""
-    inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
-    rows = [{"start_line": "B2-9999", "end_line": "B2-9999", "answer": "採らない合成の回答"}]
-
-    selected, prompt, diagnostic, prompts = _contained(monkeypatch, rows, inputs)
-
-    first_batch = diagnostic["batches"][0]
-    assert first_batch["status"] == "completed"
-    assert len(first_batch["validation_failures"]) == 2
-    assert first_batch["range_unverified"] == {"unmatched_count": 1, "reasons": {"range_out_of_bounds": 1}, "retained_input_count": 1}
-    # 組ごとの再試行は既存の 1 回だけ（モデルの呼び出しを増やさない。どの組にも番号 B2 の不合格がある）。
-    assert len(prompts) == 2 * diagnostic["batch_count"]
+    selected, prompt, diagnostic = prepare(inputs, reader)
+    failed = [row for row in diagnostic["batches"] if row["status"] == "failed"]
+    assert len(failed) == 1 and len(failed[0]["validation_failures"]) == 2
+    assert failed[0]["retained_input_count"] == 1
+    assert diagnostic["read_source_count"] == 1
+    assert len(calls) == diagnostic["batch_count"] + 1
     assert "採らない合成の回答" not in prompt
-    whole = [value for value in selected if value["text"] == inputs[1]["text"]]
-    assert len(whole) == 1
-    # 有効な findings の回答候補は、残した入力でも保つ。
-    assert whole[0]["batch_answer"] == "合成の回答"
-
-
-def test_unknown_input_after_the_retry_adds_no_source(monkeypatch):
-    """#4090: 入力に無い番号の範囲は、残す原文も無いので捨てる。"""
-    inputs = [span(index, f"合成の条件{index}。" + "補足本文。" * 200) for index in range(5)]
-    rows = [{"start_line": "B99-1", "end_line": "B99-1", "answer": "採らない合成の回答"}]
-
-    _, prompt, diagnostic, _ = _contained(monkeypatch, rows, inputs)
-
-    assert diagnostic["batches"][0]["range_unverified"] == {
-        "unmatched_count": 1,
-        "reasons": {"evidence_id_unknown": 1},
-        "retained_input_count": 0,
-    }
-    assert "採らない合成の回答" not in prompt
+    assert [value["text"] for value in selected if value["source_id"] == "p0"] == [inputs[0]["text"]]
+    assert all(value["source_id"] in {"p0", "p1"} for value in selected)
 
 
 def test_a_schema_violation_is_not_contained_and_still_fails(monkeypatch):
@@ -414,7 +415,7 @@ def test_when_every_range_is_rejected_and_the_inputs_do_not_fit_the_failure_is_t
     def provider(system, prompt, settings, schema, ignored):
         result = output(prompt)
         for row in result["findings"]:
-            row["end_line"] = row["start_line"].split("-")[0] + "-9999"
+            row["unit_ids"] = ["unknown-unit"]
         return schema.model_validate(result)
 
     monkeypatch.setattr(oci, "_parse_text_once", provider)
@@ -432,7 +433,7 @@ def test_when_every_range_is_rejected_and_the_inputs_do_not_fit_the_failure_is_t
             unusable_output=_invalid_structured_output,
             failed_batches=failed,
         )
-    assert batch_failure_summary(failed[-1], raised.value)["category"] == "batch_range_invalid"
+    assert batch_failure_summary(failed[-1], raised.value)["category"] == "batch_unit_invalid"
 
 
 def test_a_failure_without_validation_detail_still_has_a_class():

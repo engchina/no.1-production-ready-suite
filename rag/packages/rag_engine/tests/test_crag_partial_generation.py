@@ -59,7 +59,7 @@ def run_answer(text, grade_output, generation):
         calls.append((schema.__name__, prompt))
         if schema is CragRetrievalGradeOutput:
             return grade_output
-        assert schema is generation_draft_wire_model()
+        assert issubclass(schema, generation_draft_wire_model())
         # 既存のquote/lines応答はcanonical再生であり、wire検証ではない。
         return GroundedDraft.model_validate(generation(context))
 

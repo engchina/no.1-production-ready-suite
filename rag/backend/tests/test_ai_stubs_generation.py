@@ -38,9 +38,13 @@ def _spans() -> list[dict[str, Any]]:
     return _grounded_spans(QUESTION, AnswerContext(records=[record], text=TEXT), (), None)
 
 
+@pytest.mark.parametrize("model_view", [False, True])
 @pytest.mark.parametrize("audit_mode", [grounded.AUDIT_MODE_NONE, grounded.AUDIT_MODE_DETAILED])
-def test_stub_completes_a_generation_round_with_a_verified_citation(audit_mode: str) -> None:
+def test_stub_completes_a_generation_round_with_a_verified_citation(
+    audit_mode: str, model_view: bool
+) -> None:
     spans = _spans()
+    spans[0]["answer_context"] = "合成の補助情報。引用の対象外。"
     schemas: list[str] = []
 
     def stub(
@@ -55,7 +59,7 @@ def test_stub_completes_a_generation_round_with_a_verified_citation(audit_mode: 
         QUESTION,
         spans,
         get_settings(environ={}, dotenv_path=None),
-        prompt=grounded.format_functions(spans),
+        prompt=grounded.format_functions(spans, model_view=model_view),
         image_paths=(),
         provider_id=None,
         parse_text=stub,

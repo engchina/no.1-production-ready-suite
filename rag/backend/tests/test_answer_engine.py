@@ -155,7 +155,7 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-    if schema is RequestScopePlan:
+    if issubclass(schema, RequestScopePlan):
         data = json.loads(prompt)
         ids = [item["evidence_id"] for item in data["evidence"]]
         return RequestScopePlan.model_validate(
@@ -203,7 +203,9 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
                 dict(aspect="procedure", kind="operation", claim=body, evidence=evidence)
             ],
         )
-    if schema in (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model()):
+    if issubclass(
+        schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
+    ):
         # 既存quote fixtureを履歴互換の草稿として返す。生成wireの検証は行わない。
         body = "受注番号を入力し、登録ボタンを押します。"
         match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
@@ -3178,7 +3180,10 @@ async def _answer_with_coverage(
             return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)
         if (
-            schema in (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
+            issubclass(
+                schema,
+                (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model()),
+            )
             and _INVOICE_TEXT not in prompt
         ):
             data = result.model_dump(exclude_unset=True)

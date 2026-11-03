@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
+from citation_unit_support import without_unit_annotations
 from grounded_stub import AnswerOutput
 
 from rag_engine.chunking.service import ChunkingService
@@ -79,11 +80,11 @@ class GeneratorEvidenceTests(TestCase):
         with TemporaryDirectory() as directory, create_oracle_application(directory) as app:
             with patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model) as parse:
                 app.generator.generate(GenerationRequest("question", evidence))
-            prompts = [call.args[1] for call in parse.call_args_list if call.args[3] is generation_draft_wire_model()]
+            prompts = [call.args[1] for call in parse.call_args_list if issubclass(call.args[3], generation_draft_wire_model())]
             self.assertEqual(len(prompts), 1)
             for item in evidence:
                 # 長い根拠は行番号を付けて示す（#2830）。番号の付いた全文が 1 回の prompt に入る。
-                self.assertIn(numbered_text(item.text), prompts[0], item.id)
+                self.assertIn(numbered_text(item.text), without_unit_annotations(prompts[0]), item.id)
 
     def test_parent_larger_than_old_gate_reaches_generation(self):
         from grounded_stub import echo_model
@@ -98,7 +99,7 @@ class GeneratorEvidenceTests(TestCase):
             with self.subTest(count=len(evidence)), TemporaryDirectory() as directory, create_oracle_application(directory) as app:
                 with patch("rag_engine.generation.answering.parse_text_response", side_effect=echo_model) as parse:
                     app.generator.generate(GenerationRequest("question", evidence))
-                prompts = [call.args[1] for call in parse.call_args_list if call.args[3] is generation_draft_wire_model()]
+                prompts = [call.args[1] for call in parse.call_args_list if issubclass(call.args[3], generation_draft_wire_model())]
                 self.assertEqual(len(prompts), 1)
                 for item in evidence:
                     self.assertIn(numbered_text(item.text), prompts[0])

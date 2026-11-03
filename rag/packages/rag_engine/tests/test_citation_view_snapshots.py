@@ -56,8 +56,15 @@ def wire_value(evidence_id: str = "E1") -> dict[str, Any]:
 
 def run_round(spans: list[dict[str, Any]], prompt: str, parse: Any = None) -> grounded.Round:
     def fake(*args: Any, **kwargs: Any) -> Any:
-        assert args[3] is generation_draft_wire_model()
-        return args[3].model_validate(wire_value(spans[0]["label"]))
+        assert issubclass(args[3], generation_draft_wire_model())
+        data = wire_value(spans[0]["label"])
+        catalog = grounded.generation_unit_catalog(spans, sent_only=True)
+        if not catalog.unit_ids:
+            # 未送達の旧引用の再生を検査する。新 producer の空集合契約は別の回帰で検査する。
+            return generation_draft_wire_model().model_validate(data)
+        if getattr(args[3], "_uses_unit_ids", False):
+            data["items"][0]["citations"] = [{"unit_ids": [catalog.snapshots[0].unit_ids[1]]}]
+        return args[3].model_validate(data)
 
     return grounded.run_round(
         "対象の操作方法は？",
@@ -163,8 +170,13 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
 ) -> None:
     from test_bound_audit_transport import response_bytes
 
-    schema = generation_draft_wire_model()
-    raw = json.dumps(schema.model_validate(wire_value()).model_dump(), ensure_ascii=False, indent=2) + "\n"
+    prepared = span()
+    grounded.format_functions([prepared])
+    catalog = grounded.generation_unit_catalog([prepared])
+    schema = grounded.generation_output_model("対象の操作方法は？", unit_catalog=catalog)
+    data = wire_value()
+    data["items"][0]["citations"] = [{"unit_ids": [catalog.snapshots[0].unit_ids[1]]}]
+    raw = json.dumps(schema.model_validate(data).model_dump(), ensure_ascii=False, indent=2) + "\n"
     sent: list[dict[str, Any]] = []
     telemetry: list[Any] = []
     private_requests: list[Any] = []
@@ -233,7 +245,7 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
     output = result.citation_trace["outputs"][0]
     assert output["provider_output_text"] == raw and output["raw_output_status"] == "recorded"
     assert output["provider_capture_scope"] == "returned_response_only"
-    assert output["parsed_output"]["items"][0]["citations"][0]["line_start"] == 2
+    assert output["parsed_output"]["items"][0]["citations"][0]["unit_ids"] == [catalog.snapshots[0].unit_ids[1]]
     assert output["canonical_output"]["items"][0]["citations"][0]["lines"] == "2"
     assert "line_start" not in output["canonical_output"]["items"][0]["citations"][0]
     assert result.draft._provider_output_text == raw

@@ -1,6 +1,7 @@
 """Guide識別子は要求のIDであり、文書の事実根拠IDにしない。"""
 
 import pytest
+from pydantic import ValidationError
 
 from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
@@ -67,20 +68,22 @@ def test_run_round_passes_current_guide_identity_to_basic_citation_check():
 
     def generate(system, prompt, settings, schema, **kwargs):
         calls.append(schema)
-        assert schema is generation_draft_wire_model()
-        return schema.model_validate(
-            {
-                "items": [
-                    {
-                        "kind": "operation",
-                        "text": "合成の操作を行います。",
-                        "citations": [{"evidence_id": "guide-step-a", "line_start": None, "line_end": None}],
-                    }
-                ],
-                "summary": "",
-                "confidence": "low",
-            }
-        )
+        assert issubclass(schema, generation_draft_wire_model())
+        payload = {
+            "items": [
+                {
+                    "kind": "operation",
+                    "text": "合成の操作を行います。",
+                    "citations": [{"evidence_id": "guide-step-a", "line_start": None, "line_end": None}],
+                }
+            ],
+            "summary": "",
+            "confidence": "low",
+        }
+        # 新 producer はガイドの番号を引用として返せない。旧記録の検査への受渡しも残す。
+        with pytest.raises(ValidationError):
+            schema.model_validate(payload)
+        return generation_draft_wire_model().model_validate(payload)
 
     result = grounded.run_round(
         "操作方法は？",
