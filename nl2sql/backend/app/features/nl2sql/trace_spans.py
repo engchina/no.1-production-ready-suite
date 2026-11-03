@@ -24,6 +24,7 @@ from typing import Any, Literal
 
 from opentelemetry import trace
 from pr_backend_core.chat_progress import parse_chat_progress_events
+from pr_backend_core.observability.call_details import withhold_call_details
 from pr_backend_core.observability.mcp_trace import traceparent_links
 from pr_backend_core.observability.trace_store import (
     ConnectionFactory,
@@ -298,7 +299,14 @@ def read_trace_progress(
         for span in spans
         if span.product == TRACE_PRODUCT and span.operation_id == operation_id
     ]
-    events = trace_progress_events(own, target_id=target_id, terminal=terminal, details=details)
+    events = trace_progress_events(
+        own,
+        target_id=target_id,
+        terminal=terminal,
+        details=withhold_call_details(dict(details), allow_restricted=viewer_is_admin)
+        if details is not None
+        else None,
+    )
     return TraceProgressData(
         events=parse_chat_progress_events(events), dropped_spans=max(0, dropped_spans)
     )

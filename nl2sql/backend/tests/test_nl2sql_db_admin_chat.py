@@ -888,6 +888,15 @@ def test_generate_records_the_generation_and_check_as_span_tree(
     assert check.status == "done"
     assert check.params == {"statements": 2, "read_only": 1, "change": 0, "blocked": 1}
     assert check.details is not None
+    assert generate.details.call and check.details.call
+    assert generate.details.call.visibility == check.details.call.visibility == "system_admin"
+    assert generate.details.call.input.status == generate.details.call.output.status == "recorded"
+    assert check.details.call.input.status == check.details.call.output.status == "recorded"
+    assert json.loads(generate.details.call.input.text)["質問"] == "合成の質問"
+    generated_sql = json.loads(generate.details.call.output.text)["生成したSQL"]
+    assert generated_sql == json.loads(check.details.call.input.text)["生成したSQL"]
+    assert json.loads(check.details.call.output.text)["計画"] == data.plan.model_dump(mode="json")
+    assert "unsupported value" not in check.details.call.output.text
     fields = {field.label: field.value for field in check.details.fields}
     assert fields["文の数"] == "2" and fields["実行できない文"] == "#2"
     # 2 つの段は同じ実行の全体（root）の子。

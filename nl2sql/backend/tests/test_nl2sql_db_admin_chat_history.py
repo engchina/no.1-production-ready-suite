@@ -151,7 +151,12 @@ def test_first_question_starts_a_conversation_and_is_reopened(
     steps = [event for event in progress.events if event.type == "step" and event.kind]
     assert [event.kind for event in steps] == ["generate_sql", "db_admin_check"]
     # 既定では軌跡の本文を保存せず、会話の SQL と説明は上の検証どおり残る。
-    assert all(event.details is None for event in steps)
+    for event in steps:
+        assert event.details and event.details.call
+        assert not event.details.call.capture_enabled
+        assert event.details.call.input.text == event.details.call.output.text == ""
+        assert event.details.call.schema_.text == ""
+        assert not event.details.code and not event.details.fields and not event.details.lines
     # 他の利用者の会話のターンは 404。
     with pytest.raises(HTTPException) as missing:
         router.get_db_admin_chat_turn_trace(turn_id, turn_id, _http(BOB))
