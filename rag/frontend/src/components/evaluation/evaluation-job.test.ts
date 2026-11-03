@@ -34,6 +34,7 @@ function job(overrides: Partial<EvaluationJob> = {}): EvaluationJob {
     heartbeat_at: "2026-09-28T00:00:10Z",
     run_result: null,
     partial_result: null,
+    source_workbook_id: null,
     ...overrides,
   };
 }

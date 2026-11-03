@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
@@ -26,6 +27,11 @@ from app.rag.evaluation_excel import (
     parse_evaluation_workbook,
     parse_evidence_line,
     template_xlsx,
+)
+from app.rag.evaluation_source_workbooks import (
+    EvaluationSourceWorkbookService,
+    MemoryEvaluationSourceWorkbookStore,
+    set_evaluation_source_workbook_service,
 )
 from app.schemas.document import DocumentSummary
 from app.schemas.evaluation import EvaluationEvidence
@@ -614,6 +620,37 @@ class _FakeOracle:
         ]
 
 
+class _WorkbookStorage:
+    """元の Excel の保存先の代わり（#4212）。"""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.fail = False
+
+    async def put(self, key: str, data: bytes, content_type: str) -> str:
+        if self.fail:
+            raise RuntimeError("保存先の障害")
+        self.objects[key] = data
+        return f"local://{key}"
+
+    async def get(self, key: str) -> bytes:
+        return self.objects[key.removeprefix("local://")]
+
+    async def delete(self, key: str) -> bool:
+        return self.objects.pop(key.removeprefix("local://"), None) is not None
+
+
+@pytest.fixture(autouse=True)
+def workbook_storage() -> Iterator[_WorkbookStorage]:
+    """検証の API が元の Excel を実際の保存先へ書かないようにする。"""
+    storage = _WorkbookStorage()
+    set_evaluation_source_workbook_service(
+        EvaluationSourceWorkbookService(MemoryEvaluationSourceWorkbookStore(), storage=storage)
+    )
+    yield storage
+    set_evaluation_source_workbook_service(None)
+
+
 def _upload(
     data: bytes, *, name: str = "cases.xlsx", knowledge_base_ids: list[str] | None = None
 ) -> Any:
@@ -630,6 +667,45 @@ def _upload(
             "knowledge_base_ids": knowledge_base_ids if knowledge_base_ids is not None else ["kb-1"]
         },
     )
+
+
+def test_import_stores_a_valid_file_and_returns_its_id(
+    monkeypatch: pytest.MonkeyPatch, workbook_storage: _WorkbookStorage
+) -> None:
+    monkeypatch.setattr(evaluation_route, "OracleClient", _FakeOracle)
+    content = _workbook([["合成の質問", None, None]])
+
+    data = _upload(content).json()["data"]
+
+    assert data["source_workbook_id"]
+    assert list(workbook_storage.objects.values()) == [content]
+    # 同じ内容の検証のやり直しは、同じ ID のまま増やさない。
+    assert _upload(content).json()["data"]["source_workbook_id"] == data["source_workbook_id"]
+    assert len(workbook_storage.objects) == 1
+
+
+def test_import_does_not_store_a_file_with_errors(
+    monkeypatch: pytest.MonkeyPatch, workbook_storage: _WorkbookStorage
+) -> None:
+    monkeypatch.setattr(evaluation_route, "OracleClient", _FakeOracle)
+
+    data = _upload(_workbook([["合成の質問", "無い文書.pdf", None]])).json()["data"]
+
+    assert data["errors"]
+    assert data["source_workbook_id"] is None
+    assert workbook_storage.objects == {}
+
+
+def test_import_still_returns_cases_when_the_file_cannot_be_stored(
+    monkeypatch: pytest.MonkeyPatch, workbook_storage: _WorkbookStorage
+) -> None:
+    monkeypatch.setattr(evaluation_route, "OracleClient", _FakeOracle)
+    workbook_storage.fail = True
+
+    data = _upload(_workbook([["合成の質問", None, None]])).json()["data"]
+
+    assert [case["id"] for case in data["cases"]] == ["row-2"]
+    assert data["source_workbook_id"] is None
 
 
 def test_import_api_returns_cases_preview_and_document_names(

@@ -268,6 +268,11 @@ function EvaluationImportSummary({ result }: { result: EvaluationImportResult })
           message={t("evaluation.import.ready", { file: result.file_name, total: counts.total })}
         />
         <p className="tnum text-xs text-fg-muted">{t("evaluation.import.readyDetail", counts)}</p>
+        {result.source_workbook_id ? (
+          <p className="text-xs text-fg-muted" data-testid="evaluation-import-stored">
+            {t("evaluation.import.storedNotice")}
+          </p>
+        ) : null}
       </div>
       {warningCount > 0 ? (
         <div className="grid min-w-0 gap-2" data-testid="evaluation-import-warnings">
