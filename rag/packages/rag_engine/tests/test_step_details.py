@@ -151,7 +151,7 @@ class StandardFlowStepDetailsTest(unittest.TestCase):
         self.assertIn("結果", answer)
         self.assertIn("監査した説明", answer)
         self.assertIn("要求の充足（監査）", answer)
-        self.assertNotIn("採否", answer)  # 1 組目は比べる相手が無い
+        self.assertEqual(answer["採否"], "採用")
 
     def test_answer_round_without_audit_does_not_describe_an_audit(self):
         """監査の型が none なら、目的・推論の量・要求の充足に、行っていない監査を書かない（#2966）。

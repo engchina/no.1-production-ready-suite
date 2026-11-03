@@ -87,3 +87,18 @@ describe("CHAT_PROGRESS_DEFINITIONS", () => {
     expect(onAllDone).toHaveBeenCalledTimes(1);
   });
 });
+
+
+it("回答ラウンドの採否を完了状態と分け、古い記録では補造しない", () => {
+  const events = [
+    step("1".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と根拠確認（1回目）", accepted: true, round: 1}}),
+    step("2".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と根拠確認（2回目）", accepted: false, round: 2}}),
+    step("3".repeat(16), "done", {kind: "answer_step", name: "rag.engine.stage", params: {name: "回答文の生成と根拠確認（3回目）"}}),
+  ];
+  const rows = chatProgressStepsFromEvents(events, CHAT_PROGRESS_DEFINITIONS);
+  expect(rows[0].status).toBe("done");
+  expect(rows[0].outcome).toBe("採用");
+  expect(rows[1].status).toBe("done");
+  expect(rows[1].outcome).toBe("不採用");
+  expect(rows[2].outcome).toBeUndefined();
+});

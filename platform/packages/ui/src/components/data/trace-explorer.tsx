@@ -141,6 +141,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
                         }}>
                         <span className={cn("flex min-w-0 items-start gap-2 leading-5", runTimelineNameClass(size))}><span className="pr-icon-line"><RunStepStatusIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={isLeaf(step)} /></span><span data-trace-record-label="" className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.label}</span></span>
                         <span className="flex items-center justify-between gap-2 text-xs text-fg-muted"><span data-trace-step-status-duration="">{runLabels.stepStatus[step.status]}{stepDurationMs(step) !== null ? ` · ${formatRunDuration(stepDurationMs(step), runLabels.notRecorded)}` : ""}</span></span>
+                        {step.meta ? <span className="text-xs leading-5 text-fg-muted">{step.meta}</span> : null}
                         {runStepResultSummary(step.details, step.detail) ? <span data-trace-result-summary="" className="text-xs leading-5 text-fg-muted">{runStepResultSummary(step.details, step.detail)}</span> : null}
                         {bar ? <span className={cn(RUN_TIME_TRACK, "overflow-hidden")} data-trace-time-bar="" aria-hidden="true"><span className={cn(RUN_TIME_FILL, RUN_TIME_COLOR[step.status])} style={{left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%`}} /></span> : null}
                       </button>
