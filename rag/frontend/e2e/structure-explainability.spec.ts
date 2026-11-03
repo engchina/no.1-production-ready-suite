@@ -1399,10 +1399,21 @@ test("表示範囲の全部を読むとき、長い要素と多セルの表は�
   await page.goto("/documents/doc-1");
   const inspector = page.getByTestId("document-inspector-pane");
   await expect(inspector).toContainText("合成の本文の末尾");
-  await expectNoHorizontalOverflow(page);
-  await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
   const heightLimit = () => parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5;
   const limit = await page.evaluate(heightLimit);
+  const rawText = inspector.getByTestId("document-raw-text-scroll");
+  const rawSize = await rawText.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight}));
+  expect(Math.abs(rawSize.height - limit)).toBeLessThanOrEqual(1);
+  expect(rawSize.content).toBeGreaterThan(rawSize.height);
+  await rawText.scrollIntoViewIfNeeded();
+  await rawText.focus();
+  await rawText.press("End");
+  await expect.poll(() => rawText.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => rawText.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThanOrEqual(1);
+  await expect(inspector.getByRole("button", {name: "本文をコピー", exact: true})).toBeVisible();
+  await rawText.screenshot({path: test.info().outputPath("document-raw-text-scroll.png")});
+  await expectNoHorizontalOverflow(page);
+  await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
   for (const [testId, last] of [["structured-elements-scroll", "合成の短い要素 3"], ["extraction-table-cells-scroll", "合成セル 295"]] as const) {
     const region = inspector.getByTestId(testId);
     await region.scrollIntoViewIfNeeded();
