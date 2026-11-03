@@ -491,6 +491,7 @@ class SectionReader:
     # 章節ごとの親（読み順。文脈にあるかに関係なく全部）。同じ章節を 2 回読まない。
     _groups: dict[tuple[str, str, str], list[ContextParentEvidence]] = field(default_factory=dict)
     failures: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    read_events: list[dict[str, Any]] = field(default_factory=list)
     # 前の呼び出しで起点にした章節（文書・chunk_set・所有の章節）。後の呼び出しは新しい起点を先に広げる（#2816）。
     seeded_owners: set[tuple[str, str, str]] = field(default_factory=set)
 
@@ -511,6 +512,16 @@ class SectionReader:
         """章節の chunk を読み、親ごとにまとめて章節の中の読み順で返す（文脈にある親も含む。child は章節の中の順）。"""
         key = self.section_key(outline, section)
         if key in self._groups:
+            self.read_events.append(
+                {
+                    "document_id": key[0],
+                    "chunk_set_id": key[1],
+                    "section_id": key[2],
+                    "origin_section_id": outline.owner_section_id,
+                    "state": "reused",
+                    "child_ids": sorted({_record_key(child.record) for group in self._groups[key] for child in group.children}),
+                }
+            )
             return self._groups[key]
         try:
             response = self.read_chunks(document_id=outline.document_id, chunk_set_id=outline.chunk_set_id, section_id=section.section_id)
@@ -549,6 +560,20 @@ class SectionReader:
             )
             for group_key, children in grouped.items()
         ]
+        self.read_events.append(
+            {
+                "document_id": key[0],
+                "chunk_set_id": key[1],
+                "section_id": key[2],
+                "origin_section_id": outline.owner_section_id,
+                "page_start": section.page_start,
+                "page_end": section.page_end,
+                "state": "read",
+                "child_ids": sorted({_record_key(child.record) for group in tree for child in group.children}),
+                "reason": self.failures.get(key),
+                "expected_chunk_count": section.chunk_count,
+            }
+        )
         self._groups[key] = tree
         return tree
 
@@ -769,6 +794,17 @@ def expand_sections(
             continue
         key = (outline.document_id, outline.chunk_set_id, outline.owner_section_id)
         sections = outline.chain()
+        trace.setdefault("expansion_routes", []).append(
+            {
+                "seed_id": uid,
+                "document_id": outline.document_id,
+                "chunk_set_id": outline.chunk_set_id,
+                "origin_section_id": outline.owner_section_id,
+                "sections": [
+                    {"section_id": item.section_id, "page_start": item.page_start, "page_end": item.page_end} for item in sections
+                ],
+            }
+        )
         if key in owners or not sections:
             continue
         owners.add(key)
