@@ -32,7 +32,7 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
@@ -1127,23 +1127,48 @@ class AnswerEngine:
         diagnostic_only = semantic_audit_is_diagnostic_only(outcome.diagnostics)
         # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
         with _answer_step_span(name) as span:
+            references = [
+                EvidenceRef(chunk.document_id, chunk.chunk_id) for chunk in outcome.citations
+            ]
+            span.set_call_input(
+                lambda: {
+                    "質問": request.original_question or request.query,
+                    "回答": outcome.answer,
+                    "根拠 ID": [asdict(item) for item in references],
+                    "監査モード": self._settings.rag_answer_audit_mode,
+                },
+                restricted=True,
+            )
+            recorded_result: AnswerValidation | None = None
+            recorded_error: str | None = None
+            validator_called = False
             try:
                 premises = _confirmed_validation_premises(self._settings, self._scope)
+                span.set_call_input(
+                    lambda: {
+                        "質問": request.original_question or request.query,
+                        "回答": outcome.answer,
+                        "根拠 ID": [asdict(item) for item in references],
+                        "監査モード": self._settings.rag_answer_audit_mode,
+                        "確認前提": premises,
+                        "確認前提の上限": MAX_PREMISES,
+                    },
+                    restricted=True,
+                )
                 if len(premises) > MAX_PREMISES:
                     # 一部の確定条件を黙って省いて「確認済み」にしない。
                     result = AnswerValidation(status="input_too_large", valid=False)
                 else:
+                    validator_called = True
                     result = await validate_answer(
                         request.original_question or request.query,
                         outcome.answer,
-                        [
-                            EvidenceRef(chunk.document_id, chunk.chunk_id)
-                            for chunk in outcome.citations
-                        ],
+                        references,
                         self._settings,
                         oracle=self._oracle,
                         premises=premises,
                     )
+                recorded_result = result
                 llm_usage = dict(result.llm_usage)
                 validation: dict[str, Any] = {
                     "status": result.status,
@@ -1166,6 +1191,7 @@ class AnswerEngine:
                 ):
                     raise
                 logger.warning("answer final validation failed", exc_info=True)
+                recorded_error = type(exc).__name__
                 validation = {
                     "status": "timed_out"
                     if isinstance(exc, (TimeoutError, httpx.TimeoutException, APITimeoutError))
@@ -1176,6 +1202,16 @@ class AnswerEngine:
                 span.set_status("failed")
             if diagnostic_only:
                 validation = _diagnostic_validation(validation)
+            span.set_call_output(
+                lambda: {
+                    "照合関数を呼び出した": validator_called,
+                    "返却された検証結果": asdict(recorded_result)
+                    if recorded_result is not None
+                    else None,
+                    "適用した検証結果": validation,
+                    "例外の型": recorded_error,
+                }
+            )
             span.set_display(
                 params=answer_step_params({"llm_calls": int(llm_usage.get("calls") or 0)}),
                 details=answer_step_details(_validation_details(validation)),
@@ -1233,6 +1269,16 @@ class AnswerEngine:
         status = "success"
         # 回答フローの工程と同じ工程の span にする（処理の経過の行。#3226）。
         with _answer_step_span(name) as span, bind_llm_usage() as usage:
+            span.set_call_input(
+                lambda: {
+                    "質問": request.query,
+                    "選択した FAQ の質問": faq_question,
+                    "選択した FAQ の回答": faq_answer,
+                    "指定モデル": self._answer_model_id,
+                    "既定テキストモデル": enterprise_ai_default_model_id(self._settings),
+                },
+                restricted=True,
+            )
             try:
                 with tempfile.TemporaryDirectory(prefix="rag-engine-faq-") as work:
                     engine_settings = build_engine_settings(
@@ -1248,6 +1294,7 @@ class AnswerEngine:
                         faq_answer,
                         engine_settings,
                     )
+                    span.set_call_output(lambda: {"返却された回答": answer})
             except BaseException:
                 status = "error"
                 raise
