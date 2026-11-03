@@ -3895,11 +3895,14 @@ export const api = {
     options: {
       variant?: "original" | "prepared";
       disposition?: "inline" | "attachment";
+      /** 引用の版（処理後のファイルをその版のものにする。#4168）。 */
+      chunkSetId?: string | null;
     } = {},
   ) => {
     const search = new URLSearchParams();
     if (options.variant) search.set("variant", options.variant);
     if (options.disposition) search.set("disposition", options.disposition);
+    if (options.chunkSetId) search.set("chunk_set_id", options.chunkSetId);
     const qs = search.toString();
     return appPath(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
@@ -3910,21 +3913,34 @@ export const api = {
   /** PDF をページ画像で表示するためのページ一覧（bbox の強調を重ねる。#349）。 */
   getDocumentPreviewPages: (
     id: string,
-    options: { recipeId?: string | null; variant?: "original" | "prepared" } = {},
-  ) =>
-    request<DocumentPreviewPages>(
-      `${documentPreviewPagesBase(id, options.recipeId)}${
-        options.variant ? `?variant=${options.variant}` : ""
-      }`,
-    ),
+    options: {
+      recipeId?: string | null;
+      variant?: "original" | "prepared";
+      chunkSetId?: string | null;
+    } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (options.variant) search.set("variant", options.variant);
+    if (options.recipeId && options.chunkSetId) search.set("chunk_set_id", options.chunkSetId);
+    const qs = search.toString();
+    return request<DocumentPreviewPages>(
+      `${documentPreviewPagesBase(id, options.recipeId)}${qs ? `?${qs}` : ""}`,
+    );
+  },
   documentPreviewPageImageUrl: (
     id: string,
     pageNumber: number,
-    options: { recipeId?: string | null; variant?: "original" | "prepared"; dpi?: number } = {},
+    options: {
+      recipeId?: string | null;
+      variant?: "original" | "prepared";
+      dpi?: number;
+      chunkSetId?: string | null;
+    } = {},
   ) => {
     const search = new URLSearchParams();
     if (options.variant) search.set("variant", options.variant);
     if (options.dpi) search.set("dpi", String(options.dpi));
+    if (options.recipeId && options.chunkSetId) search.set("chunk_set_id", options.chunkSetId);
     const qs = search.toString();
     return appPath(`${documentPreviewPagesBase(id, options.recipeId)}/${pageNumber}${qs ? `?${qs}` : ""}`);
   },

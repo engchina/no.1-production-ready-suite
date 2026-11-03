@@ -68,6 +68,8 @@ LeaseHeartbeat = Callable[[], Awaitable[int]]
 LeasedJobRequeuer = Callable[[], Awaitable[Sequence[IngestionJob]]]
 # 文書の削除の後始末の残りをやり直し、すべて消せた記録の数を返す(#2452)。
 DocumentCleanupSweeper = Callable[[], Awaitable[int]]
+# 保持を超えた旧版を消し、消した版の数を返す(#4168)。
+RetiredVersionSweeper = Callable[[], Awaitable[int]]
 Clock = Callable[[], datetime]
 
 # lease_owner 列(VARCHAR2(128))に収める。
@@ -120,6 +122,12 @@ async def _default_sweep_document_cleanups() -> int:
         limit=DOCUMENT_CLEANUP_SWEEP_LIMIT,
         min_age_seconds=DOCUMENT_CLEANUP_MIN_AGE_SECONDS,
     )
+
+
+async def _default_sweep_retired_versions() -> int:
+    from app.rag.chunk_set_retention import expire_retired_chunk_sets
+
+    return await expire_retired_chunk_sets()
 
 
 class IngestionJobSubprocessError(RuntimeError):
@@ -470,6 +478,7 @@ class IngestionQueueWorker:
         clock: Clock | None = None,
         sweep_document_cleanups: DocumentCleanupSweeper | None = None,
         monotonic_clock: MonotonicClock | None = None,
+        sweep_retired_versions: RetiredVersionSweeper | None = None,
     ) -> None:
         self._settings = settings
         self.worker_id = worker_id or new_worker_id()
@@ -481,6 +490,7 @@ class IngestionQueueWorker:
         self._heartbeat = heartbeat or self._default_heartbeat
         self._requeue_leased = requeue_leased or self._default_requeue_leased
         self._sweep_document_cleanups = sweep_document_cleanups or _default_sweep_document_cleanups
+        self._sweep_retired_versions = sweep_retired_versions or _default_sweep_retired_versions
         self._schema_ready = schema_ready or _default_schema_ready
         self._clock = clock or _utc_now
         self._monotonic = monotonic_clock or (lambda: asyncio.get_running_loop().time())
@@ -681,7 +691,30 @@ class IngestionQueueWorker:
         """
         if self._cleanup_task is not None and not self._cleanup_task.done():
             return
-        self._cleanup_task = asyncio.create_task(self._sweep_document_cleanups_safely())
+        self._cleanup_task = asyncio.create_task(self._sweep_cleanups_safely())
+
+    async def _sweep_cleanups_safely(self) -> None:
+        """旧版の清掃の後に、残っている後始末をやり直す(清掃が残した記録も同じ流れで消える)。"""
+        await self._sweep_retired_versions_safely()
+        await self._sweep_document_cleanups_safely()
+
+    async def _sweep_retired_versions_safely(self) -> None:
+        """保持を超えた旧版を消す(#4168)。失敗しても取込を止めず、次の回にやり直す。"""
+        try:
+            expired = await self._sweep_retired_versions()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "ingestion_worker_retired_version_sweep_failed",
+                extra=oracle_error_log_fields(exc),
+            )
+            return
+        if expired:
+            logger.info(
+                "ingestion_worker_retired_versions_expired",
+                extra={"chunk_set_count": expired},
+            )
 
     async def _sweep_document_cleanups_safely(self) -> None:
         """文書の削除で保存先から消せなかった原本・成果物を消し直す(#2452)。"""

@@ -60,9 +60,11 @@ Search Answer Profile は **検索・回答に使う設定だけ**を持つ。
 
 レシピ追加・削除は親文書行をロックして **最少 1 件・最大 3 件**を保証する。活動中ジョブのあるレシピは編集・削除できない。成功時だけ新 chunk_set を active に原子切替し、失敗時は他レシピと旧 active 出力を変更しない。文書単位の再取込も同じで、検索に出している版は切替まで残し、処理の進み具合はレシピの status で示す（文書の status は `INDEXED` のまま。#4115）。
 
-版に属するデータは chunk_set から辿る（#4166）。章節の対応は chunk_set ごとに置き換え、ほかの版の行を消さない（chunk_set の行を消す処理が一緒に消す）。解析したファイルは抽出の `parser_artifacts.source_derivation` が正本で、根拠の読み取りはレシピの行の `preprocess_artifact`（最後のファイル準備の結果。確認の画面が見る）ではなくここを読む。
+版に属するデータは chunk_set から辿る（#4166）。章節の対応は chunk_set ごとに置き換え、ほかの版の行を消さない（chunk_set の行を消す処理が一緒に消す）。解析したファイルは抽出の `parser_artifacts.source_derivation` が正本で、根拠の読み取りはレシピの行の `preprocess_artifact`（最後のファイル準備の結果。確認の画面が見る）ではなくここを読む。記録の無い版は別のファイルで代用せず、ファイルが無いエラーにする。
 
 切替は「job の開始時の active が今も active で、その実行が今も job を持っている」ときだけ行う（`activate_recipe_chunk_set` の transaction の中で確かめる。#4167）。active が変わっていたら候補を捨て、job は失敗ではなく `SKIPPED`（`skip_reason` = `superseded_by_newer_version`）にする。再解析は高価なので自動でやり直さない。切替のたびに `rag_recipe_version_log` へ 1 行を足す（親の版・原本の hash・抽出の ID・分割までの入力の ID・言語資源の公開版・chunk の数・job）。この表は chunk_set に FK を持たず、旧版の行を消しても残り、文書・レシピの削除で消える。本文・質問は入れない。
+
+切替（commit）と旧版の削除（expire）は分ける（#4168）。切替は旧版に `retired_at` を付けるだけで行を消さない（一度も active にならなかった候補だけは切替で消す）。検索・回答・件数・回答の監査は今までどおり active だけを見る。根拠を ID で読む経路（`readable_version_chunk`・`rag_read_source`・`rag_read_section` の版の指定と cursor・定位子・引用のプレビュー）だけが退役した版を読む。権限・テナントの条件は同じ。旧版の抽出も上書きしない（`served_extraction_ids`）。清掃（`chunk_set_retention`）はレシピの行を lock して、退役の新しい順に `RAG_CHUNK_SET_RETAINED_VERSIONS` を超えた版と `RAG_CHUNK_SET_RETENTION_DAYS` を超えた版を `_delete_chunk_set_outputs` で消し、どこからも参照されなくなった `artifacts/canonical/…` のファイルを文書の削除と同じ後始末の記録で消す。同じレシピに QUEUED / RUNNING の取込 job があれば待つ。何度実行しても同じ結果になる。清掃の後の根拠は `source_stale` の案内になる。既定は直前の 1 版を 7 日。
 
 抽出の確認の修正は文書レシピの層で版にする（#2644。`rag_document_extraction_revisions`）。保存と復元のたびに新しい ID の抽出と不変の版を作り、親の版と基にした解析の版を記録する。過去の版の行は書き換えない。解析の結果は最初の保存のときに版にする（修正しない文書に写しを持たない）。解析をやり直した後は修正の前提が変わったことを画面で示し、自動で取り込まない。原本か解析の設定が今と違う版は復元しない。復元は確認待ちのレシピだけで、検索に出している版は次の切替まで変わらない。版の数の上限は `RAG_EXTRACTION_MAX_REVISIONS`（今の版・基の解析の版・検索に出している版は残す）。
 

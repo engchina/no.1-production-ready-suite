@@ -214,6 +214,16 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4168 切替と旧版の削除の分離）
+
+システムテーブルを更新する（migration `20261102_007_chunk_set_retired_at`。`rag_chunk_sets` に `retired_at` 列と索引
+`rag_chunk_sets_retired_idx` を足すだけで、既存の行は変えない）。更新の前の非 active の行は `retired_at` が NULL のままで、
+候補として次の切替で消える。
+
+設定（`rag/backend/.env`）: `RAG_CHUNK_SET_RETENTION_DAYS`（既定 7）と `RAG_CHUNK_SET_RETAINED_VERSIONS`（既定 1）。
+清掃は取込ワーカーの定期の処理で動く。切替の後に `rag_chunks` と原生索引の行が
+旧版の分だけ残るので、保持の間は保存量が増える。
+
 ## 既存環境の更新手順（#4167 active の切替の基線の照合と履歴）
 
 システムテーブルを更新する（migration `20261102_006_recipe_version_log`。表 `rag_recipe_version_log` と索引 2 つを足すだけで、

@@ -115,7 +115,7 @@ def test_saved_string_element_ids_and_version_pin() -> None:
     from app.services.source_reader import read_source_context
 
     oracle = SimpleNamespace(
-        retrievable_chunk=AsyncMock(
+        readable_version_chunk=AsyncMock(
             return_value=SimpleNamespace(
                 metadata={"chunk_set_id": "v1", "element_ids": "e35,e36"}, text="段落35:"
             )

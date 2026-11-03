@@ -4,6 +4,7 @@ import asyncio
 import sys
 from collections.abc import Collection, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -1023,6 +1024,7 @@ async def test_worker_sweeps_document_cleanups_without_blocking_dispatch() -> No
         schema_ready=_schema_ready,
         poll_interval_seconds=0.01,
         sweep_document_cleanups=sweep,
+        sweep_retired_versions=AsyncMock(return_value=0),
     )
     task = asyncio.create_task(worker.run_forever(stop_event=stop))
     for _ in range(100):
@@ -1039,3 +1041,26 @@ async def test_worker_sweeps_document_cleanups_without_blocking_dispatch() -> No
     stop.set()
     ingestion_worker.request_ingestion_worker_wakeup()
     await asyncio.wait_for(task, timeout=5)
+
+
+async def test_retired_version_sweep_failure_does_not_stop_document_cleanup() -> None:
+    """旧版の清掃(#4168)が失敗しても、文書の削除の後始末は続ける。"""
+    cleanups: list[str] = []
+
+    async def failing_retired_sweep() -> int:
+        raise RuntimeError("synthetic failure")
+
+    async def cleanup_sweep() -> int:
+        cleanups.append("cleanup")
+        return 0
+
+    worker = IngestionQueueWorker(
+        settings=get_settings(),
+        schema_ready=_schema_ready,
+        sweep_document_cleanups=cleanup_sweep,
+        sweep_retired_versions=failing_retired_sweep,
+    )
+
+    await worker._sweep_cleanups_safely()
+
+    assert cleanups == ["cleanup"]

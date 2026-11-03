@@ -729,6 +729,13 @@ END;
     )
     sections.append(
         OracleSchemaSection(
+            name="20261102_007_chunk_set_retired_at",
+            table_name="rag_chunk_sets",
+            sql=chunk_set_retired_at_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
             name="20261102_008_document_extraction_revisions",
             table_name="rag_document_extraction_revisions",
             sql=_create_missing_objects_sql(
@@ -745,6 +752,30 @@ END;
         )
     )
     return sections
+
+
+def chunk_set_retired_at_migration_sql() -> str:
+    """旧版を残すための退役の時刻の列と索引を無ければ足す（#4168）。
+
+    列を足すだけで既存の行は変えない。既存の非 active の行は NULL のまま（版ではなく候補の扱い）。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'RETIRED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunk_sets ADD (retired_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_CHUNK_SETS_RETIRED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_chunk_sets_retired_idx ON rag_chunk_sets (retired_at)';
+    END IF;
+END;
+/"""
 
 
 def retire_query_history_sql() -> str:

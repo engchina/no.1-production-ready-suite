@@ -2647,6 +2647,24 @@ class Settings(
         default=True,
         description="取込 segment checkpoint を Oracle に永続化し、失敗 segment の再試行に使う。",
     )
+    rag_chunk_set_retention_days: int = Field(
+        default=7,
+        ge=0,
+        le=3650,
+        description=(
+            "切替で退役した版（chunk_set）を残す日数(#4168)。"
+            "切替の前に検索された根拠をこの間は開ける。0 は次の清掃で消す。"
+        ),
+    )
+    rag_chunk_set_retained_versions: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        description=(
+            "レシピごとに残す退役した版の数(#4168)。新しい順に数え、超えた版は日数に関わらず次の"
+            "清掃で消す。"
+        ),
+    )
     rag_extraction_artifact_cache_enabled: bool = Field(
         default=True,
         description="構造化抽出 JSON artifact を chunk/embedding 前に Object Storage へ保存する。",

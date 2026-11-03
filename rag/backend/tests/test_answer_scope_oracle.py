@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.clients.chunk_set_retention_store import ChunkSetRetentionStore
 from app.clients.oracle import OracleClient, _oracle_retrieval_where
 from app.rag.chunking import Chunk
 from app.schemas.document import DocumentClassification, FileStatus
@@ -319,8 +320,14 @@ async def test_element_locator_follows_rechunking_on_real_oracle() -> None:
     assert again.metadata["chunk_set_id"] == second_set
     assert again.chunk_id != found.chunk_id
 
-    # 解析をやり直した（別の解析の結果）後は、古い定位子では読めず、古い版と分かる。
+    # 解析をやり直した（別の解析の結果）後も、保持の間は古い定位子で旧版を読める（#4168）。
     await rechunk([_element_chunk(0, "再解析後", "docling-p1-1")], f"er_new_{token}")
+    retired = await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2")
+    assert retired is not None and retired.metadata["chunk_set_id"] == second_set
+    # 清掃の後は読めず、古い版と分かる。
+    await ChunkSetRetentionStore(client).expire_recipe(
+        recipe_id, retention_days=0, retained_versions=0, canonical_prefix="artifacts/canonical"
+    )
     assert (
         await client.retrievable_element_chunk(document_id, extraction_id, "docling-p1-2") is None
     )
