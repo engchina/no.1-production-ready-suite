@@ -379,7 +379,7 @@ CURSOR_INVALID_CODE = "cursor_invalid"
 # 続きの位置（next_cursor）。モデルが書き写して次の呼び出しに渡す文字列なので、短い平文にする
 # （#2499）: rag_read_section は「<chunk_set の先頭>:<章節の id>:<章節の中の順>:<文字の位置>」、
 # rag_read_document は「<chunk_set の先頭>:<chunk の順>:<文字の位置>」。chunk_set は先頭の字から
-# 文書の chunk_set を引き直し、作り直された後（引けない）は source_stale にする。
+# 文書の chunk_set を引き直し、その版が消えた後（引けない）は source_stale にする。
 CURSOR_CHUNK_SET_CHARS = 12
 CURSOR_MAX_LENGTH = 256
 SECTION_NOT_FOUND_CODE = "section_not_found"
@@ -419,7 +419,7 @@ MCP_ERROR_CODES: dict[str, str] = {
     ),
     ANSWER_API_FAILED_ERROR_CODE: "回答の生成の AI の呼び出しが失敗した。",
     SOURCE_NOT_FOUND_CODE: "根拠・文書・頁・処理レシピが見つからない（定位子の形の誤りを含む）。",
-    SOURCE_STALE_CODE: "文書の版（chunk_set）が作り直され、根拠の id・定位子・続きの位置が古い。",
+    SOURCE_STALE_CODE: "文書の古い版（chunk_set）が消え、根拠の id・定位子・続きの位置を読めない。",
     SECTION_NOT_FOUND_CODE: "章節が無いか、本文が無い。",
     CURSOR_INVALID_CODE: "続きの位置（next_cursor）の形が違う（message に直し方）。",
     IMAGE_NOT_AVAILABLE_CODE: "根拠に図の画像が無い（図の根拠でない・領域が分からない）。",
@@ -963,7 +963,7 @@ class ReadSourceInput(BaseModel):
         description=(
             "根拠の要素の定位子（evidence の locator.element_locator）。文書分割の設定を"
             "変えて chunk を作り直しても、同じ解析の結果の同じ要素を含む今の chunk を返す。"
-            "解析をやり直した後の古い定位子は source_stale のエラー。"
+            "古い版が消えた後の定位子は source_stale のエラー。"
             "chunk_id とどちらか一方を渡す。"
         ),
     )
@@ -1481,7 +1481,7 @@ class EvidenceImageRef(BaseModel):
 
     場所を示すだけで、読む権限は持たない。画像は rag_read_source に document_id・chunk_id と
     include_image=true を渡して読む（読むたびに今の権限・版で確かめ、領域はサーバーが保存した
-    場所から決める）。文書の版（chunk_set）が変わると source_stale になる。
+    場所から決める）。文書の古い版（chunk_set）が消えると source_stale になる。
     """
 
     document_id: str
@@ -3988,7 +3988,7 @@ async def read_document(arguments: ReadDocumentInput) -> ReadDocumentOutput:
     """文書の本文を、読み始めの位置から chunk の順に max_chars まで返す（#1332）。
 
     頁が変わる所に「--- p.N ---」の行を入れ、返した本文に含まれる chunk（chunk_id・定位子・位置）を
-    添える。続きは next_cursor で読む（cursor は chunk_set に縛り、作り直された後は source_stale）。
+    添える。続きは next_cursor で読む（cursor は chunk_set に縛り、版が消えた後は source_stale）。
     """
     oracle = OracleClient()
     chunk_set_id, index, offset, from_position = await _read_start(oracle, arguments)
