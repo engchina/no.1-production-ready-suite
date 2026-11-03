@@ -426,14 +426,14 @@ for (const viewport of [
     await expect(page.getByTestId(`search-run-progress-step-${spanStepId("answer")}`)).toContainText(
       "質問の条件を整理して回答を作る"
     );
-    // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。計測値も実行中から出す。
+    // 終わった工程の詳細は、後の工程の実行中から開ける（回答の完了を待たない。#2373）。結果の説明は実行中から出す。
     await expect(current).toContainText("検索文から根拠の候補を集める");
-    // 送り直しで API への送信が多いときは送信の回数も示す（#2966）。
+    // 回数は経過の展開に出さず、実際の結果の説明は残す（#4253）。
     await expect(understand).not.toContainText("LLM 1 回・送信 2 回");
     const liveToggle = page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-toggle`);
     await liveToggle.click();
     await expect(liveToggle).toHaveAttribute("aria-expanded", "true");
-    await expect(understand).toContainText("LLM 1 回・送信 2 回");
+    await expect(understand).not.toContainText("LLM 1 回・送信 2 回");
     await expect(page.getByTestId(`search-run-progress-step-${spanStepId("understand")}-details`)).toContainText(
       "答える要求"
     );
