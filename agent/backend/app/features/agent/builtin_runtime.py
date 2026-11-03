@@ -3837,6 +3837,7 @@ def record_skipped_tool(
             result=result,
             run_step=step_id,
             rejected=rejected,
+            include_call=True,
         ),
     )
 

@@ -429,6 +429,12 @@ def test_approval_wait_is_recorded_when_the_run_resumes(monkeypatch: MonkeyPatch
     [wait] = [step for step in fold.step_list() if (step.span or {}).get("name") == APPROVAL]
     assert wait.span is not None and wait.span["parent_id"] == resume.step_id
     assert (wait.started_at, wait.finished_at) == (approval.created_at, approval.decided_at)
+    assert wait.details and wait.details.call
+    assert (
+        json.loads(wait.details.call.input.text)["承認要求"][0]["引数"]
+        == approval.tool_call.arguments
+    )
+    assert json.loads(wait.details.call.output.text)["判断"][0]["状態"] == "approved"
 
 
 _INCOMING_TRACE = "1" * 32
@@ -518,6 +524,12 @@ def test_rejected_tool_is_a_skipped_tool_span(monkeypatch: MonkeyPatch) -> None:
         (TOOL, "tool", "skipped", {"tool": WRITE, "rejected": True}),
     ]
     assert _terminal(run) == "done"
+    fold = fold_chat_progress_events(run_progress_events(run))
+    skipped = next(item for item in fold.step_list() if (item.span or {}).get("name") == TOOL)
+    assert skipped.details and skipped.details.call
+    assert json.loads(skipped.details.call.input.text)["引数"] == {"query": "登録"}
+    assert json.loads(skipped.details.call.output.text)["状態"] == "未実行"
+    assert json.loads(skipped.details.call.output.text)["却下"] is True
 
 
 def test_second_approval_round_is_its_own_wait(monkeypatch: MonkeyPatch) -> None:

@@ -119,9 +119,9 @@ def _image_reader(
                 "gen_ai.request.model": model_id,
             },
         ) as span:
-            response = await client.responses.create(
-                model=model_id,
-                input=[
+            request: dict[str, Any] = {
+                "model": model_id,
+                "input": [
                     {
                         "role": "user",
                         "content": [
@@ -130,10 +130,17 @@ def _image_reader(
                         ],
                     }
                 ],
-                max_output_tokens=enterprise_ai_output_token_budget(settings, model_id),
-                store=False,
+                "max_output_tokens": enterprise_ai_output_token_budget(settings, model_id),
+                "store": False,
                 **extra,
-            )
+            }
+            span.set_call_input(request)
+            try:
+                response = await client.responses.create(**request)
+            except Exception as exc:
+                span.set_call_output({"状態": "呼出失敗", "エラーの種類": type(exc).__name__})
+                raise
+            span.set_call_output(response)
             usage = getattr(response, "usage", None)
             if usage is not None:
                 record_genai_usage(
