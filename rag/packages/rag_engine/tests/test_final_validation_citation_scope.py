@@ -57,7 +57,6 @@ def test_two_actual_citations_can_jointly_support_operation_and_condition(suppor
             return schema(checks=[])
         docs = [row for row in payload["evidence_items"] if row["id"] in {FIRST, SECOND}]
         passage = payload["answer_passages"][0]
-        assert set(payload["passage_citations"][passage["id"]]) == {row["evidence_id"] for row in docs}
         return schema(
             claim_checks=[
                 {
@@ -146,10 +145,10 @@ def test_caller_citations_are_the_citation_of_a_passage_without_one():
         cited = validate_answer_claims("設定手順は？", OPERATION, evidence, None, caller_citations=citations)
     assert without["claim_checks"][0]["status"] == "unassessed"
     assert without["claim_checks"][0]["support_check"] == "uncited_evidence"
-    assert seen[0]["passage_citations"][seen[0]["answer_passages"][0]["id"]] == []
     assert cited["counts"] == {"supported": 1}
-    first = next(row["evidence_id"] for row in seen[-1]["evidence_items"] if row["id"] == FIRST)
-    assert seen[-1]["passage_citations"][seen[-1]["answer_passages"][0]["id"]] == [first]
+    # 出典の有無はモデルに見せない（監査の入力は同じ。出典の制限はコードだけが行う）。
+    assert seen[0] == seen[-1]
+    assert "passage_citations" not in seen[0]
 
 
 def test_caller_citations_do_not_widen_the_citation_the_answer_wrote():
@@ -176,3 +175,77 @@ def test_caller_citations_outside_the_evidence_or_the_passage_are_ignored(citati
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_supported_by(FIRST, [])):
         result = validate_answer_claims("設定手順は？", OPERATION, evidence, None, caller_citations=[citation])
     assert result["claim_checks"][0]["status"] == "unassessed"
+
+
+DATA_VALUE = "対象Aの件数は 12 件です。"
+DATA_RESULT = {"source": "照会 A", "question": "対象Aの件数は？", "sql": "select 1 from dual", "result": "CNT\n12"}
+
+
+def _audit_returning(status: str, chosen: str, seen_systems: list[str], seen_inputs: list[dict]):
+    """段落を ``status`` で返す合成の監査。``chosen`` は根拠の ``id`` か、その接頭辞。"""
+
+    def parse(system, inputs, settings, schema, provider_id=None):
+        payload = json.loads(inputs)
+        if schema is not ClaimAuditOutput:
+            return schema(checks=[])
+        seen_systems.append(system)
+        seen_inputs.append(payload)
+        passage = payload["answer_passages"][0]
+        row = next(item for item in payload["evidence_items"] if str(item["id"]).startswith(chosen))
+        return schema(
+            claim_checks=[
+                {
+                    "answer_quote": passage["text"],
+                    "answer_passage_id": passage["id"],
+                    "status": status,
+                    "evidence_id": row["evidence_id"],
+                    "evidence_quote": "",
+                    "source_id": "",
+                    "applicability": "matched",
+                    "reason": "合成の判定",
+                }
+            ]
+        )
+
+    return parse
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [DATA_VALUE, f"{DATA_VALUE}【証拠 ID {FIRST}】"],
+    ids=["no-citation", "cites-another-document"],
+)
+def test_a_value_of_the_data_result_is_supported_whatever_the_passage_cites(answer):
+    # 出典の制限は資料の主張だけに掛かる。段落の出典が無くても、別の資料を引いていても、照会の結果の値は supported。
+    evidence = [{"id": FIRST, "source": "a.pdf", "text": RELATED}]
+    systems: list[str] = []
+    inputs: list[dict] = []
+    parse = _audit_returning("supported", "data:", systems, inputs)
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("件数は？", answer, evidence, None, data_results=[DATA_RESULT])
+    assert result["counts"] == {"supported": 1}
+    assert not result["claim_checks"][0]["support_check"]
+
+
+def test_the_audit_is_not_given_the_citations_of_the_passages():
+    # 出典の有無を判定の材料にしない: 入力にも指示にも段落の出典の集合が無い（#4195）。
+    answer = f"{OPERATION}【証拠 ID {FIRST}】\n\n{RELATED}"
+    evidence = [{"id": FIRST, "source": "a.pdf", "text": OPERATION}, {"id": SECOND, "source": "b.pdf", "text": RELATED}]
+    citations = [{"start": len(answer) - len(RELATED), "end": len(answer), "chunk_ids": [SECOND]}]
+    systems: list[str] = []
+    inputs: list[dict] = []
+    parse = _audit_returning("supported", FIRST, systems, inputs)
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        validate_answer_claims("設定手順は？", answer, evidence, None, caller_citations=citations)
+    assert inputs and all("passage_citations" not in payload for payload in inputs)
+    assert all("passage_citations" not in system for system in systems)
+
+
+def test_an_unsupported_verdict_is_not_changed_by_the_citation_scope():
+    # 否定の判定は出典の制限の対象外（内容で裏付けられないものを unassessed に変えない）。
+    systems: list[str] = []
+    inputs: list[dict] = []
+    parse = _audit_returning("unsupported", FIRST, systems, inputs)
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = validate_answer_claims("設定手順は？", OPERATION, [{"id": FIRST, "source": "a.pdf", "text": RELATED}], None)
+    assert result["counts"] == {"unsupported": 1}

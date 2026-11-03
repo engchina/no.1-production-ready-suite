@@ -95,7 +95,9 @@ from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests,
 # 18: 制約が実行・提案のどちらを禁止するかを区別し、比較の採否を独立記録する（#3800）。
 # 19: 監査が supported としたのに、監査の応答の参照（写した原文・返した ID）を根拠に結び付けられなかった段落を、
 #     誤りと直し方を差し戻してその段落だけで 1 回監査し直す（最初の監査の指示は変えていない。#112）。
-VALIDATION_RUBRIC_VERSION = 19
+# 20: 段落の出典の集合（passage_citations）を監査の入力と指示から外した。出典の有無は判定の材料にせず、資料の主張の
+#     出典の制限はコード（`_limit_citation_scope`）だけで決める（出典の欠如が unsupported の理由になっていた。#4195）。
+VALIDATION_RUBRIC_VERSION = 20
 
 # 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
 # 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
@@ -168,8 +170,7 @@ VALIDATION_SYSTEM_PROMPT = (
 - 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った根拠の evidence_id をすべて「,」で区切って evidence_id に書く。
 - evidence_id は evidence_items の evidence_id の値（E で始まる値）を省かず・短くせずにそのまま書く。id（chunk の id）や回答に書かれた ID を evidence_id に書かない。
 - 回答に書かれた根拠の ID（【証拠 ID …】など）は evidence_items の id に当たる。ID の照合はシステムが行うので、ID の書き方ではなく裏付けの有無で判定する。
-- passage_citations は段落に実際に付いた出典の evidence_id の集合。資料の主張は、この集合だけで対象・操作・条件・順序を裏付ける。複数の出典を共同で使ってよいが、未引用の資料を代わりに選ばない。
-- 出典が無い、出典の対応が未確認、対象との一致が unknown の資料の主張は unassessed。質問・利用者の答え・照会結果は資料の内容の裏付けに使わない。
+- 対象との一致が unknown の資料の主張は unassessed。質問・利用者の答え・照会結果は資料の内容の裏付けに使わない。
 - citation_error は、段落が書いた根拠の ID が evidence_items に無いときだけに使う。段落に ID が無いことを citation_error にしない。
 
 ## Step 4: 矛盾・支持不足・未確認を区別する
@@ -1596,7 +1597,8 @@ def validate_answer_claims(
 
     ``caller_citations`` は呼び出し側が回答の段落に結び付けた根拠（``{start, end, chunk_ids}``。位置は
     ``answer_passage_ranges`` と同じ数え方。#104）。本文に出典（根拠の ID・出典の行）が無い段落だけ、その根拠を
-    段落の出典（``passage_citations``）にする。本文が出典を書いた段落は本文の出典を使う。
+    段落の出典にする。本文が出典を書いた段落は本文の出典を使う。出典はモデルに渡さず、監査の後に
+    `_limit_citation_scope` で適用する（#4195）。
 
     ``batch_passages`` は 1 回の監査に渡す段落の数（None は分けない）、``max_concurrency`` は同時に監査する組の数
     （#2700）。文脈に期限（`rag_engine.resources.deadline`）があれば、期限までに返らなかった組の段落は unassessed
@@ -1656,7 +1658,6 @@ def validate_answer_claims(
     reaudited: list[str] = []
     timed_out: list[Mapping[str, str]] = []
     catalog = {item["evidence_id"]: item for item in evidence}
-    fixed["passage_citations"] = _actual_citation_ids(answer_text, catalog, caller_citations)
     if remaining:
         batches = passage_batches(remaining, batch_passages)
 
