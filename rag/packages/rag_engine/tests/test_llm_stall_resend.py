@@ -24,21 +24,6 @@ PROVIDER = SimpleNamespace(model="stub-model", label="stub", reasoning_effort=""
 USAGE = SimpleNamespace(input_tokens=100, output_tokens=300, input_tokens_details=None, output_tokens_details=None)
 
 
-def _completed_response_stub():
-    from openai.types.responses import Response
-
-    return Response(
-        id="resp",
-        created_at=0,
-        model="stub-model",
-        object="response",
-        output=[],
-        parallel_tool_calls=False,
-        tool_choice="auto",
-        tools=[],
-    )
-
-
 class _Clock:
     def __init__(self) -> None:
         self.now = 1000.0
@@ -48,7 +33,7 @@ class _Clock:
 
 
 def _completed(text: str = "ok"):
-    return SimpleNamespace(status="completed", output_parsed=TextOutput(text=text), usage=USAGE)
+    return SimpleNamespace(status="completed", output_text=TextOutput(text=text).model_dump_json(), usage=USAGE)
 
 
 def _script(deltas: int, rate: float, *, start: float = 0.1, final=None, raise_at: int | None = None):
@@ -83,20 +68,24 @@ class _Stream:
 
 
 class _Client:
-    """`responses.stream` が順に event の列を返す。送信ごとの read timeout と stream を記録する。"""
+    """`responses.create(stream=True)` が順に event の列を返す。送信ごとの read timeout と stream を記録する。"""
 
     def __init__(self, clock: _Clock, scripts) -> None:
         self.clock, self.scripts = clock, list(scripts)
         self.read_timeouts: list[float] = []
         self.streams: list[_Stream] = []
         self.parse_calls = 0
-        self.responses = SimpleNamespace(stream=self._stream, parse=self._parse)
+        self.responses = SimpleNamespace(create=self._create, parse=self._parse)
 
     def with_options(self, **options):
         timeout = options.get("timeout")
         if isinstance(timeout, httpx.Timeout):
             self.read_timeouts.append(timeout.read)
         return self
+
+    def _create(self, **kwargs):
+        assert kwargs["stream"] is True
+        return self._stream(**kwargs)
 
     def _stream(self, **_kwargs):
         stream = _Stream(self.clock, self.clock.now, self.scripts.pop(0))
@@ -252,75 +241,13 @@ class StallResendTest(unittest.TestCase):
         self.assertEqual((result.text, len(client.streams)), ("ok", 2))
         self.assertEqual(usage["incomplete_reasons"], {"stream_error": 1})
 
-    @staticmethod
-    def _sdk_index_error() -> IndexError:
-        """対応する項目の前に delta が来た event を、実際の SDK の組み立てに渡して起きる例外（#4182）。"""
-        from openai.lib.streaming.responses._responses import ResponseStreamState
-        from openai.types.responses import ResponseCreatedEvent, ResponseTextDeltaEvent
-
-        state = ResponseStreamState(input_tools=[], text_format=TextOutput)
-        response = _completed_response_stub()
-        state.handle_event(ResponseCreatedEvent(type="response.created", sequence_number=0, response=response))
-        delta = ResponseTextDeltaEvent(
-            type="response.output_text.delta",
-            sequence_number=1,
-            item_id="item",
-            output_index=0,
-            content_index=0,
-            delta="x",
-            logprobs=[],
-        )
-        try:
-            state.handle_event(delta)
-        except IndexError as exc:
-            return exc
-        raise AssertionError("SDK が IndexError を送出しなかった")
-
-    def test_sdk_index_error_is_resent_once(self):
-        """SDK の組み立ての IndexError は送り直し、起きた位置を残す（#4182）。"""
-        error = self._sdk_index_error()
-        client = _Client(self.clock, [[(0.1, SimpleNamespace(type="response.created")), (None, error)], _script(10, 200.0)])
-        result, usage, records = self.call(client)
-        self.assertEqual((result.text, len(client.streams)), ("ok", 2))
-        self.assertEqual(usage["incomplete_reasons"], {"stream_error": 1})
-        messages = "\n".join(record.getMessage() for record in records)
-        self.assertRegex(messages, r"error=IndexError location=_responses\.py:\d+")
-
-    def test_exhausted_sdk_index_error_keeps_location_and_counts_as_no_output(self):
-        """送り直しても組み立てられなければ、出力の不合格と同じ扱いにし、類別と位置を残す（#4182）。"""
-        from rag_engine.generation.answering import _invalid_structured_output
-        from rag_engine.generation.grounded import generation_failure_detail
-
-        scripts = [[(None, self._sdk_index_error())] for _ in range(oci.STREAM_FAILED_RESENDS + 1)]
-        client = _Client(self.clock, scripts)
-        with self.assertRaises(oci.LlmStreamAssemblyFailed) as raised:
-            self.call(client)
-        self.assertEqual(len(client.streams), oci.STREAM_FAILED_RESENDS + 1)
-        self.assertTrue(_invalid_structured_output(raised.exception))
-        detail = generation_failure_detail(raised.exception)
-        self.assertEqual(detail["category"], "stream_assembly")
-        self.assertRegex(detail["stream_location"], r"^_responses\.py:\d+$")
-
-    def test_index_error_outside_the_sdk_is_not_hidden(self):
-        """SDK の外の IndexError は実装の不具合なので、送り直さずそのまま送出する（#4182）。"""
-        client = _Client(self.clock, [[(None, IndexError("ours"))], _script(10, 200.0)])
-        with self.assertRaises(IndexError):
-            self.call(client)
-        self.assertEqual(len(client.streams), 1)
-
-    def test_sdk_stream_assembly_error_is_resent_once(self):
-        """SDK が event から応答を組み立てられない stream（delta が message でない出力を指す）も送り直す（#3000）。"""
-        client = _Client(self.clock, [[(0.1, SimpleNamespace(type="response.created")), (None, AssertionError())], _script(10, 200.0)])
-        result, usage, _records = self.call(client)
-        self.assertEqual((result.text, len(client.streams)), ("ok", 2))
-        self.assertEqual(usage["incomplete_reasons"], {"stream_error": 1})
-
-    def test_sdk_stream_assembly_error_resends_are_bounded(self):
-        broken = [(0.1, SimpleNamespace(type="response.created")), (None, AssertionError())]
-        client = _Client(self.clock, [list(broken) for _ in range(1 + oci.STREAM_FAILED_RESENDS)])
-        with self.assertRaises(oci.LlmStreamFailed):
-            self.call(client)
-        self.assertEqual(len(client.streams), 1 + oci.STREAM_FAILED_RESENDS)
+    def test_errors_while_reading_events_are_not_hidden(self):
+        """event を読む途中の IndexError・AssertionError は実装の不具合なので、送り直さずそのまま送出する（#4197）。"""
+        for error in (IndexError("ours"), AssertionError("ours")):
+            client = _Client(self.clock, [[(None, error)], _script(10, 200.0)])
+            with self.assertRaises(type(error)):
+                self.call(client)
+            self.assertEqual(len(client.streams), 1)
 
     def test_without_a_deadline_the_call_is_not_streamed(self):
         """回答の期限が無い文脈（取込など）は従来どおり `responses.parse` で受ける。"""
