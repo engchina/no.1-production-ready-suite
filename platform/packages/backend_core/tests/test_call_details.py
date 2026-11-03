@@ -50,6 +50,62 @@ def test_snapshot_is_copied_bounded_and_redacted_before_clipping() -> None:
     assert ChatProgressStepDetails.model_validate(value).model_dump() == value
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_summary_updates_retain_call_in_final_span(enabled: bool) -> None:
+    from pr_backend_core.chat_progress import ChatProgressDetailField
+    from pr_backend_core.observability.call_policy import call_content_policy
+    from pr_backend_core.observability.tracing import SpanSummary
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            call_content_policy(lambda: enabled),
+            operation_trace("run", operation_id="synthetic") as result,
+            observed_span("synthetic.stage") as span,
+        ):
+            span.set_call_input({"input": "synthetic-input", "api_key": "private-key"})
+            span.set_call_output({"output": "synthetic-output"})
+            for value in ["first", "final"]:
+                span.set_display(
+                    details=ChatProgressStepDetails(
+                        fields=[ChatProgressDetailField(label="result", value=value)]
+                    )
+                )
+        saved = next(item for item in result.spans if item.operation_name == "synthetic.stage")
+        restored = SpanSummary.model_validate_json(saved.model_dump_json())
+        assert restored.display and restored.display.details and restored.display.details.call
+        details = restored.display.details
+        if enabled:
+            assert details.fields and details.fields[0].value == "final"
+        else:
+            assert not details.fields
+        assert details.call and details.call.capture_enabled is enabled
+        text = details.call.model_dump_json()
+        assert "private-key" not in text
+        assert ("synthetic-input" in text) is enabled
+        assert ("synthetic-output" in text) is enabled
+    finally:
+        shutdown_tracing()
+
+
+@pytest.mark.parametrize("replacement", ["new", "disabled", "withheld"])
+def test_explicit_new_call_wins_over_previous_snapshot(replacement: str) -> None:
+    from pr_backend_core.chat_progress import CallContent, CallDetails
+    from pr_backend_core.observability.tracing import SpanDisplay
+
+    previous = SpanDisplay(details=ChatProgressStepDetails(call=call_input("old-private-input")))
+    call = (
+        call_input("new-input")
+        if replacement == "new"
+        else CallDetails(capture_enabled=False)
+        if replacement == "disabled"
+        else CallDetails(input=CallContent(status="withheld"))
+    )
+    result = previous.merged(details=ChatProgressStepDetails(call=call))
+    assert result.details and result.details.call == call
+    assert "old-private-input" not in result.model_dump_json()
+
+
 def test_call_payload_is_in_product_details_but_never_exported() -> None:
     exporter = InMemorySpanExporter()
     configure_tracing(TracingSettings(), service_name="synthetic", exporter=exporter)

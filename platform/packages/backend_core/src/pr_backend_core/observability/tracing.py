@@ -193,6 +193,9 @@ class SpanDisplay(BaseModel):
         params: Mapping[str, object] | None = None,
         details: ChatProgressStepDetails | None = None,
     ) -> SpanDisplay:
+        # 概要の置換と呼出本文の更新は別の責務。同じ span の本文は明示された時だけ置き換える。
+        if details is not None and details.call is None and self.details is not None:
+            details = details.model_copy(update={"call": self.details.call})
         return SpanDisplay.model_validate(
             {
                 "kind": kind if kind is not None else self.kind,
