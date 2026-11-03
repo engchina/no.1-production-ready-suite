@@ -4402,6 +4402,17 @@ def _record_rule_usage(runtime: RuntimeKnowledgeContext, *, confirmation: bool) 
     stage = "confirmation" if confirmation else "generation"
     enabled = runtime.rules_confirmation_enabled if confirmation else runtime.rules_answer_enabled
     with _execution_step(name) as step:
+        step.input({"原質問": runtime.original_question, "用途": stage, "有効": enabled})
+        step.output(
+            {
+                "状態": "設定オフ" if not enabled else "読込失敗" if runtime.error else "選択完了",
+                "読込エラー": runtime.error,
+                "選択した登録ルール": [asdict(rule) for rule in runtime.rules_for_stage(stage) if "pinned" not in rule.tags]
+                if enabled and not runtime.error
+                else [],
+                "選択の判断": [dict(item) for item in runtime.rule_applications if item["stage"] == stage] if enabled else [],
+            }
+        )
         if not enabled:
             step.skip(f"設定がオフのため、{name}をスキップしました。")
             return
@@ -4440,6 +4451,24 @@ def _describe_term_usage(
 ) -> None:
     name = TERM_ANSWER_STEP if answer else TERM_SEARCH_STEP
     enabled = runtime is not None and (runtime.terms_answer_enabled if answer else runtime.terms_search_enabled)
+    step.input(
+        {
+            "原質問": runtime.original_question if runtime is not None else None,
+            "用途": "回答" if answer else "検索",
+            "検索への使用": runtime.terms_search_enabled if runtime is not None else False,
+            "回答への使用": runtime.terms_answer_enabled if runtime is not None else False,
+        }
+    )
+    step.output(
+        {
+            "状態": "設定オフ" if not enabled else "読込失敗" if runtime is not None and runtime.error else "照合完了",
+            "読込エラー": runtime.error if runtime is not None else "",
+            "一致した用語": [term.to_payload() for term in runtime.matched_terms]
+            if enabled and runtime is not None and not runtime.error
+            else [],
+            "追加検索文": list(queries) if enabled and not answer and runtime is not None and not runtime.error else [],
+        }
+    )
     if not enabled:
         step.skip(f"設定がオフのため、{name}をスキップしました。")
         return
@@ -4478,6 +4507,13 @@ def _record_term_usage(runtime: RuntimeKnowledgeContext | None, *, answer: bool,
 def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) -> RuntimeKnowledgeContext:
     """独立した兄弟工程。完全な原質問だけを照合し、モデルの言い換えを再入力しない。"""
     with _execution_step(TERM_SEARCH_STEP) as step:
+        step.input(
+            {
+                "原質問": runtime.original_question,
+                "検索への使用": settings.runtime_terms_search_enabled,
+                "回答への使用": settings.runtime_terms_answer_enabled,
+            }
+        )
         if not (settings.runtime_terms_search_enabled or settings.runtime_terms_answer_enabled):
             _describe_term_usage(step, runtime, answer=False)
             return runtime
@@ -4499,6 +4535,7 @@ def _prepare_term_context(runtime: RuntimeKnowledgeContext, settings: Settings) 
                 step.status = "補助情報なしで続行"
                 step.add(f"読込エラー: {terms.error}")
                 step.result(f"用語の照合に失敗したため、用語の追加なしで続行します（{terms.error}）。")
+                step.output({"状態": "読込失敗", "読込エラー": terms.error, "一致した用語": [], "追加検索文": []})
                 return runtime
             result = replace(runtime, matched_terms=terms.matched_terms).with_term_usage(
                 search=settings.runtime_terms_search_enabled,
@@ -5783,6 +5820,14 @@ def answer_question_result(
     term_context = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-search-terms") as search_pool:
         with _execution_step("質問の言い換え・分解", "質問を言い換えたり分解したりして、資料を探す検索文を作ります。") as step:
+            step.input(
+                {
+                    "原質問": normalized_question,
+                    "設定": query_strategy_value,
+                    "呼び出し元の検索文を使用": caller_planned,
+                    "呼び出し元の検索文": list(trusted_queries),
+                }
+            )
             terms_future = search_pool.submit(term_context.run, _prepare_term_context, runtime_knowledge, settings)
             if query_strategy_id(query_strategy_value) == SIMPLE_RETRIEVAL_STRATEGY and not caller_planned:
                 step.skip("原質問のみ（言い換え・分解なし）が選択されているため、言い換え・分解をスキップしました。")
@@ -5826,6 +5871,8 @@ def answer_question_result(
                     note := llm_reasoning_effort_note(settings, LLM_PURPOSE_STRATEGY, answer_llm_provider)
                 ):
                     step.add(note)
+
+            step.output({"実際の質問拡張": asdict(expansion), "実行状態": step.status or "完了"})
 
         runtime_knowledge = terms_future.result()
 
@@ -5878,6 +5925,16 @@ def answer_question_result(
             if term_query and _dedupe_query_key(term_query) == key:
                 labels.append(TERMS_ONLY_SOURCE_LABEL)
             query_sources[query] = tuple(dict.fromkeys(labels))
+        step.input(
+            {
+                "原質問": normalized_question,
+                "候補検索文": [
+                    {"本文": query, "出どころ": sources.get(_dedupe_query_key(query), "追加検索文")} for query in candidate_queries
+                ],
+                "一致した用語": [term.to_payload() for term in runtime_knowledge.retrieval_terms],
+                "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
+            }
+        )
         settings = replace(settings, retrieval_query_sources=query_sources)
         text_search_info = build_question_text_search_info(
             normalized_question,
@@ -5910,6 +5967,14 @@ def answer_question_result(
             step.status = "検索語の抽出に失敗"
         elif any(trace.get("fallback_reason") for trace in text_search_info.tokenization_traces):
             step.status = "文字種による分割で続行"
+        step.output(
+            {
+                "採用した検索文": [{"本文": query, "出どころ": list(query_sources[query])} for query in retrieval_queries],
+                "除外した検索文": list(rejected),
+                "原質問だけで検索": bool(getattr(settings, "original_query_only", False)),
+                "全文検索の入力": asdict(text_search_info),
+            }
+        )
 
     # 根拠を集める流れは回答を作るか否かで分けない（RAG 検索とチャットで同じ工程・入れ子・LLM の呼び出し。#3506）。
     # 回答を作らないときは同じ流れの、回答に添付する画像と回答の生成の手前（業務 Agent の根拠の取得は主の文書の検索の
