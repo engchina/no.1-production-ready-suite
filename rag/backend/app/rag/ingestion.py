@@ -273,6 +273,10 @@ class IngestionCancelledError(IngestionUserError):
     """cooperative cancellation により取込を中断した。"""
 
 
+class IngestionSupersededError(Exception):
+    """有効な版が job の開始時から変わっていたので、結果を適用しなかった(#4167)。失敗ではない。"""
+
+
 @dataclass(frozen=True)
 class _SegmentExtraction:
     """PDF segment とその抽出結果。"""

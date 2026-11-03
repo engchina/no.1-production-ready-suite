@@ -641,7 +641,14 @@
     },
     {
       "destructive": false,
-      "name": "20261102_006_document_extraction_revisions",
+      "name": "20261102_006_recipe_version_log",
+      "sha256": "43623c070076b71e936771fdcdf03dddf69614cf08ae1eaf938163a0ac5eadb2",
+      "statement_count": 1,
+      "table_name": "rag_recipe_version_log"
+    },
+    {
+      "destructive": false,
+      "name": "20261102_008_document_extraction_revisions",
       "sha256": "ea98fe8784dd7a612dc9184d06441831829250859a07b384015fc104c64a6c9f",
       "statement_count": 1,
       "table_name": "rag_document_extraction_revisions"
@@ -649,6 +656,6 @@
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "098e2753da8f2517a7a99af4d15fb83f717e0b68390a0ff4712fc7c6302c345e",
-  "statement_count": 147
+  "sha256": "017761c17ba8cc1718ec98c6a977d9b717a267e4947277388763d107bd1f78c1",
+  "statement_count": 148
 }

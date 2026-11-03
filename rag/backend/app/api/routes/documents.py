@@ -43,7 +43,10 @@ from app.clients.oracle import (
     DocumentReviewEditConflictError,
     DocumentSectionsConflictError,
     DocumentSupersessionError,
+    IngestionJobFence,
     OracleClient,
+    RecipeActivationConflictError,
+    RecipeActivationFencedError,
     ReviewedExtractionWrite,
     is_transient_oracle_error,
     oracle_error_log_fields,
@@ -83,6 +86,7 @@ from app.rag.ingestion import (
     IngestionCancelledError,
     IngestionPipeline,
     IngestionSuccessOutcome,
+    IngestionSupersededError,
     IngestionTimeoutError,
     IngestionUserError,
     document_artifact_prefixes,
@@ -218,6 +222,8 @@ logger = logging.getLogger(__name__)
 SOURCE_SIZE_MISMATCH_MESSAGE = "原本ファイルのサイズがアップロード時と一致しません。"
 SOURCE_HASH_MISMATCH_MESSAGE = "原本ファイルの SHA-256 がアップロード時と一致しません。"
 INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされました。"
+# 有効な版が変わっていて結果を適用しなかった job の skip_reason(#4167)。画面が文に直す。
+INGESTION_SKIP_REASON_SUPERSEDED = "superseded_by_newer_version"
 UPLOAD_STORAGE_FAILED_MESSAGE = (
     "原本を保存先に保存できませんでした。システム設定 > アップロード保存先 の設定を確認してから、"
     "もう一度アップロードしてください。"
@@ -2582,6 +2588,7 @@ async def _materialize_experiment_candidate(
     job: IngestionJob,
     *,
     cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+    lease_owner: str | None = None,
 ) -> _RecipeJobResult:
     """文書レシピの job で、設定 snapshot から新しい chunk_set を隔離構築する。
 
@@ -2621,6 +2628,10 @@ async def _materialize_experiment_candidate(
         f"{base_chunk_set_id}:{recipe_id}:{job.recipe_revision}:{job.id}:{job.attempt_count}".encode()
     ).hexdigest()
     await _raise_if_job_cancelled(cancel_checker)
+    # 切替の基線。候補を作り始める前の active を読み、切替で今も同じかを確かめる(#4167)。
+    recipe_at_start = await oracle.get_document_recipe(job.document_id, recipe_id)
+    active_at_start = recipe_at_start.get("active_chunk_set_id") if recipe_at_start else None
+    expected_base_chunk_set_id = str(active_at_start) if active_at_start else None
     await oracle.update_document_recipe_status(
         recipe_id=recipe_id,
         status=_PHASE_TO_RUNNING_STATUS[job.phase],
@@ -2854,12 +2865,28 @@ async def _materialize_experiment_candidate(
         extraction_recipe_id=extraction_recipe_id,
         settings=candidate_settings,
     )
-    await oracle.activate_recipe_chunk_set(
-        recipe_id=recipe_id,
-        chunk_set_id=candidate_chunk_set_id,
-        extraction_recipe_id=extraction_recipe_id,
-        materialized_revision=job.recipe_revision,
-    )
+    try:
+        await oracle.activate_recipe_chunk_set(
+            recipe_id=recipe_id,
+            chunk_set_id=candidate_chunk_set_id,
+            expected_base_chunk_set_id=expected_base_chunk_set_id,
+            extraction_recipe_id=extraction_recipe_id,
+            materialized_revision=job.recipe_revision,
+            job_fence=IngestionJobFence(
+                job_id=job.id, attempt_count=job.attempt_count, lease_owner=lease_owner
+            ),
+            chunk_set_input_id=base_chunk_set_id,
+        )
+    except RecipeActivationFencedError as exc:
+        # 手前の確認の後に取り消し・lease の喪失・claim し直しが起きた。後始末は取り消しと同じ
+        # (lease を失っていれば何も戻さない)。候補は次の切替の掃除で消える。
+        raise IngestionCancelledError(INGESTION_JOB_CANCELLED_MESSAGE) from exc
+    except RecipeActivationConflictError as exc:
+        # 再解析は高価なので、自動でやり直さず候補を捨てる(#4165)。
+        await oracle.discard_recipe_candidate_chunk_set(
+            recipe_id=recipe_id, chunk_set_id=candidate_chunk_set_id
+        )
+        raise IngestionSupersededError(str(exc)) from exc
     # INDEX まで到達した経路は自動進行の追加投入不要(CHUNK→INDEX はここで完結)。
     # 成功の監査・metric はここでは記録せず、呼び出し側が job を SUCCEEDED にできた後に記録する。
     # この後の status の更新の失敗や SUCCEEDED を書く直前の取り消しで、成功しなかった job の
@@ -5365,7 +5392,7 @@ async def _run_pinned_ingestion_job(
             # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
             # 止める（#486）。
             recipe_result = await _materialize_experiment_candidate(
-                oracle, job, cancel_checker=is_cancelled
+                oracle, job, cancel_checker=is_cancelled, lease_owner=lease_owner
             )
             next_recipe_phase = recipe_result.next_phase
             recipe_success_outcome = recipe_result.success_outcome
@@ -5389,6 +5416,12 @@ async def _run_pinned_ingestion_job(
         )
         if propagate_errors:
             raise
+    except IngestionSupersededError:
+        await _skip_superseded_ingestion_job(oracle, job, lease_owner=lease_owner)
+        logger.info(
+            "ingestion_job_superseded",
+            extra={"job_id": job_id, "document_id": job.document_id, "recipe_id": job.recipe_id},
+        )
     except IngestionTimeoutError as exc:
         await _fail_ingestion_job(oracle, job, str(exc), lease_owner=lease_owner)
         logger.info(
@@ -5595,6 +5628,29 @@ async def _fail_ingestion_job(
         return False
     await _mark_recipe_job_failed(oracle, job, error_message)
     return True
+
+
+async def _skip_superseded_ingestion_job(
+    oracle: OracleClient,
+    job: IngestionJob,
+    *,
+    lease_owner: str | None = None,
+) -> None:
+    """結果を適用しなかった job を SKIPPED にし、レシピ行を今の active の状態へ戻す(#4167)。"""
+    skipped = await oracle.transition_ingestion_job(
+        job.id,
+        from_statuses=(IngestionJobStatus.RUNNING,),
+        to_status=IngestionJobStatus.SKIPPED,
+        finished_at=datetime.now(UTC),
+        lease_owner=lease_owner,
+        skip_reason=INGESTION_SKIP_REASON_SUPERSEDED,
+    )
+    if skipped is None:
+        await _restore_statuses_after_cancel(
+            oracle, job, lease_owner=lease_owner, discarded_status=IngestionJobStatus.SKIPPED
+        )
+        return
+    await _restore_recipe_status_after_cancel(oracle, job)
 
 
 async def _restore_statuses_after_cancel(

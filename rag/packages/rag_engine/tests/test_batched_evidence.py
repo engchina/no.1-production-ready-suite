@@ -450,6 +450,46 @@ def test_invalid_batch_reading_returns_unverified_source_material_without_an_ans
     assert all(item["applies"] == "quote_only" for item in result.envelope["items"])
 
 
+def test_stream_assembly_failure_in_batch_read_falls_back_to_quotes() -> None:
+    """分割読取で SDK が stream を組み立てられなくても、問の全体を失敗にせず原文の提示へ退避する（#4182）。"""
+    from rag_engine.adapters.oci import LlmStreamAssemblyFailed
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation import answering, grounded
+
+    records = [
+        answering.AnswerRecord(
+            id=f"p{i}",
+            engine="synthetic",
+            engine_label="Synthetic",
+            page=1,
+            seq_no=1,
+            category="Chunk",
+            text=f"条件{i}は値{i}です。\n" + "補足。" * 9000,
+            source=f"document-{i}.txt",
+        )
+        for i in range(2)
+    ]
+
+    def model(system, prompt, settings, schema, **kwargs):
+        assert issubclass(schema, BatchReading)
+        raise LlmStreamAssemblyFailed("合成の組み立ての失敗", None, "_responses.py:1")
+
+    def unused(*args, **kwargs):
+        pytest.fail("不要な呼出し")
+
+    settings = replace(config(), evidence_budget_chars=12000, answer_audit_mode="none", answer_max_correction_rounds=0)
+    with bind_dependencies(AnswerDependencies(unused, unused, model, unused, unused)):
+        result = answering.synthesize_grounded_answer(
+            "各資料の条件を教えてください。", answering.AnswerContext(records=records, text=""), settings, image_prompt_mode="text_only"
+        ).response
+    assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
+    assert result.envelope["outcome"] == "conditional"
+    failure = result.generation_trace["generation_failure"]
+    assert failure["error"] == "LlmStreamAssemblyFailed"
+    assert failure["stage"] == "evidence.batch_read"
+    assert failure["category"] == "stream_assembly"
+
+
 def test_batch_local_ids_preserve_original_sources_and_coordinates():
     original = {**span(0, "固有の条件。\n" + "補足。" * 2000), "evidence_id": "E" + "0123456789abcdef" * 4, "start": 700}
     original["end"] = original["start"] + len(original["text"])

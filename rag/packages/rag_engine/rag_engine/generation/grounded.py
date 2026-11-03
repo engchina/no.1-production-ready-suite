@@ -8309,7 +8309,7 @@ def generation_failure_detail(exc: Exception) -> dict[str, Any]:
     invalid = exc if isinstance(exc, DraftGenerationInvalid) else None
     source = invalid.__cause__ if invalid is not None and invalid.__cause__ is not None else exc
     result: dict[str, Any] = {"category": str(invalid) if invalid is not None and source is invalid else details["category"]}
-    for key in ("provider_status", "incomplete_reason", "cutoff_reason", "contract_code"):
+    for key in ("provider_status", "incomplete_reason", "cutoff_reason", "contract_code", "stream_location"):
         if key in details:
             result[key] = details[key]
     if isinstance(source, ValidationError):

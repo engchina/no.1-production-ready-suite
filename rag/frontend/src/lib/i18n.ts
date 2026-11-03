@@ -3014,6 +3014,8 @@ export const ja = {
   "flow.jobs.elapsedMinutes": "{minutes} 分",
   "flow.jobs.elapsedMinutesSeconds": "{minutes} 分 {seconds} 秒",
   "flow.jobs.activeHint": "この job が完了するまで文書状態・segment・抽出結果を自動更新します。",
+  "flow.jobs.skipReason.superseded":
+    "処理の間に新しい版が有効になったため、この結果は適用しませんでした。検索には新しい版を使います。",
   "flow.jobs.errorReason": "原因",
   "flow.progress.determinate": "抽出: {completed} / {total} {unit}完了",
   "flow.progress.failed": "抽出: 完了 {completed} / 失敗 {failed} / 全 {total} {unit}",

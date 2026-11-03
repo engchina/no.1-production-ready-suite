@@ -648,6 +648,7 @@ async def _materialize_with_fake(
     job: IngestionJob,
     *,
     cancel_checker: Any = None,
+    lease_owner: str | None = None,
 ) -> documents_route._RecipeJobResult:
     """レシピの隔離構築の代わり: fake の pipeline で文書を進める（worker の前後を確かめる）。"""
     detail = await oracle.get_document(job.document_id)
@@ -2613,7 +2614,11 @@ def test_running_ingestion_job_does_not_overwrite_cancelled_status(
     fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
 
     async def cancel_during_ingest(
-        oracle: object, job: IngestionJob, *, cancel_checker: object | None = None
+        oracle: object,
+        job: IngestionJob,
+        *,
+        cancel_checker: object | None = None,
+        lease_owner: str | None = None,
     ) -> documents_route._RecipeJobResult:
         _ = oracle, job, cancel_checker
         current = fake_document_dependencies.ingestion_jobs[queued_job.id]
@@ -2750,7 +2755,11 @@ def test_cancel_during_finish_keeps_cancelled_and_skips_auto_advance(
     )
 
     async def ingest_to_review(
-        oracle: object, job: IngestionJob, *, cancel_checker: object | None = None
+        oracle: object,
+        job: IngestionJob,
+        *,
+        cancel_checker: object | None = None,
+        lease_owner: str | None = None,
     ) -> documents_route._RecipeJobResult:
         _ = oracle, cancel_checker
         await fake_document_dependencies.update_document_status(job.document_id, FileStatus.REVIEW)

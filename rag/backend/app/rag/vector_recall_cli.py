@@ -40,7 +40,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from app.clients.oracle import (
     OracleClient,
@@ -272,6 +272,7 @@ async def _activate(client: OracleClient, document: SeededDocument, chunk_set_id
     await client.activate_recipe_chunk_set(
         recipe_id=document.recipe_id,
         chunk_set_id=chunk_set_id,
+        expected_base_chunk_set_id=cast(str | None, recipes[0].get("active_chunk_set_id")),
         materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
     )
 
