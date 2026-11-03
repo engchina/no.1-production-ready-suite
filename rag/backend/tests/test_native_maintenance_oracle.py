@@ -16,6 +16,7 @@ from app.clients.native_index_maintenance import (
 )
 from app.clients.native_maintenance_schema import (
     FULL_STATE_KEY,
+    STATE_KEY,
     native_maintenance_activation_sql,
     native_maintenance_tables_sql,
 )
@@ -141,7 +142,8 @@ async def test_delete_reinsert_queue_restores_native_candidates(
         await store.fail(lease, "SyntheticFailure")
         assert await store.claim("worker-b") is None
         await execute(
-            f"UPDATE {names['RAG_NATIVE_INDEX_MAINTENANCE']} SET next_attempt_at=SYSTIMESTAMP"
+            f"UPDATE {names['RAG_NATIVE_INDEX_MAINTENANCE']} SET next_attempt_at=SYSTIMESTAMP "
+            f"WHERE state_key='{STATE_KEY}'"
         )
         replacement = await store.claim("worker-b")
         assert replacement is not None and replacement.token != lease.token
