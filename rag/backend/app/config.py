@@ -1309,7 +1309,7 @@ class Settings(
         default=0,
         ge=0,
         le=2000,
-        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付は別枠で保持する。",
+        description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付・条目録と参照先は別枠で保持する。",
     )
     rag_rerank_candidate_limit: int = Field(
         default=0,

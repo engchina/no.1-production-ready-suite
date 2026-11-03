@@ -55,7 +55,7 @@ def test_cycles_and_reference_before_source_do_not_split_groups():
     assert select_reranked_candidates([a, b, c], 0)[0] == [a, b, c]
 
 
-@pytest.mark.parametrize("mode", ["off", "unconfigured", "failed", "success", "unlimited"])
+@pytest.mark.parametrize("mode", ["off", "unconfigured", "failed", "unscored", "success", "unlimited"])
 def test_selection_only_applies_after_successful_rerank(monkeypatch, mode):
     records = [child(i) for i in range(4)]
     settings = SimpleNamespace(
@@ -68,7 +68,7 @@ def test_selection_only_applies_after_successful_rerank(monkeypatch, mode):
         requests.append(top_n)
         if mode == "failed":
             raise RuntimeError("synthetic failure")
-        return [SimpleNamespace(index=i, relevance_score=1 - i / 10) for i in range(len(documents))]
+        return [SimpleNamespace(index=i, relevance_score=None if mode == "unscored" else 1 - i / 10) for i in range(len(documents))]
 
     monkeypatch.setattr(answering, "rerank_text_with_scores", rank)
     result = rerank_records("合成の質問", records, settings, enabled=mode != "off")
@@ -121,3 +121,13 @@ def test_each_followup_rerank_selects_from_its_own_candidates(monkeypatch):
     next_round = rerank_records("合成の追加質問", [child(2), child(3)], settings, enabled=True)
     assert [record.id for record in first] == ["0"]
     assert [record.id for record in next_round] == ["2"]
+
+
+def test_catalog_context_keeps_its_existing_separate_budget():
+    from dataclasses import replace
+
+    records = [child(0), replace(child(1), metadata={"article_catalog": {}}), child(2, source=1), child(3)]
+    selected, detail = select_reranked_candidates(records, 1)
+    assert [record.id for record in selected] == ["0", "1", "2"]
+    assert detail["ordinary_selected_count"] == 1
+    assert detail["catalog_related_count"] == 2

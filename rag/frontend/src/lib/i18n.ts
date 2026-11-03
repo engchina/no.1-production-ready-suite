@@ -4299,7 +4299,7 @@ export const ja = {
   "settings.answering.retrievalQueryLimitHint": "1～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。",
   "settings.answering.retrievalQueryLimitInvalid": "1～2000 の整数を入力してください。",
   "settings.answering.rerankTopN": "再ランキング後の採用件数（Top-N）",
-  "settings.answering.rerankTopNHint": "0 は追加制限なし（既定）です。1～2000 を指定すると、採点と関連度による選別後の普通候補を最大 N 件に制限します。引用元と参照先は組で選び、収まらない組は採用しません。明示添付とその参照先は別枠で保持します。Rerank が無効・未実行・失敗のときは適用しません。回答で補う親章節・隣接原文の総数は制限しません。",
+  "settings.answering.rerankTopNHint": "0 は追加制限なし（既定）です。1～2000 を指定すると、採点と関連度による選別後の普通候補を最大 N 件に制限します。引用元と参照先は組で選び、収まらない組は採用しません。明示添付・条目録で選んだ根拠とその参照先は別枠で保持します。Rerank が無効・未実行・失敗、または有効な採点がないときは適用しません。回答で補う親章節・隣接原文の総数は制限しません。",
   "settings.answering.rerankTopNInvalid": "0～2000 の整数を入力してください。",
   "settings.answering.confirmationTitle": "回答前の確認",
   "settings.answering.title": "回答の検索と生成",

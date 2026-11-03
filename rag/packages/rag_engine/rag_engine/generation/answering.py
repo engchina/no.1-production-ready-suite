@@ -632,13 +632,19 @@ def _rerank_records(
     # 関連度が下限以上の実体の拡張の根拠は、backend が置いた候補の位置へ戻す（#1362・#1390）。
     protected_candidates, reranked_candidates = _keep_entity_expansion_positions(protected_candidates, reranked_candidates)
     merged = _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
+    if not any(row["adopted_score"] is not None for row in threshold_rows):
+        if int(getattr(settings, "rerank_top_n", 0) or 0) > 0:
+            step.add("有効な採点がないため、採用件数の上限を適用せず候補を保持します。")
+            record_retrieval_stage({"stage": "rerank_selection", "phase": rerank_phase, "applied": False, "stop_reason": "no_scores"})
+        return merged
     selected, selection = select_reranked_candidates(merged, int(getattr(settings, "rerank_top_n", 0) or 0))
     if selection["applied"]:
         step.field("再ランキング後の採用上限", str(selection["limit"]))
         step.field(
             "件数による選別",
             f"普通候補 {selection['ordinary_selected_count']} 件 / "
-            f"明示添付と参照先 {selection['attachment_related_count']} 件 / 除外 {selection['excluded_count']} 件",
+            f"明示添付と参照先 {selection['attachment_related_count']} 件 / "
+            f"条目録と参照先 {selection['catalog_related_count']} 件 / 除外 {selection['excluded_count']} 件",
         )
         step.add("引用元と参照先は組で選び、上限に収まらない組は採用しません。")
         record_retrieval_stage(
