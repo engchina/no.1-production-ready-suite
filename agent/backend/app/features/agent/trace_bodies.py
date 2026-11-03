@@ -13,12 +13,11 @@ from pr_backend_core.config.tracing import TracingSettings
 from pr_backend_core.observability.trace_bodies import (
     BodyOwner,
     BodyPage,
-    read_body_page,
     release_body_owner,
 )
 from pr_backend_core.observability.trace_body_lifecycle import captured_body_call
 from pr_backend_core.observability.trace_body_persistence import TraceBodyPersistence
-from pr_backend_core.observability.trace_body_reader import CallBodySlot, saved_call_body_content
+from pr_backend_core.observability.trace_body_reader import CallBodySlot, fetch_saved_call_body_page
 from pr_backend_core.observability.trace_body_registry import mark_call_body_failures
 
 logger = logging.getLogger(__name__)
@@ -115,29 +114,14 @@ def read_saved_run_body(
     allow_restricted: bool,
 ) -> BodyPage | None:
     """routeでRunと現在の根拠権限を確認した後、正式なspan欄だけを読む。"""
-    content = saved_call_body_content(
-        span_details, span_id=span_id, slot=slot, allow_restricted=allow_restricted
-    )
-    if content is None or content.body_reference is None:
-        return None
-    if checkpoint_key is None:
-        return BodyPage(content.body_reference, "incomplete", "storage_unavailable", (), None)
     from app.oracle_connection import platform_oracle_connection
 
-    try:
-        with platform_oracle_connection() as connection, connection.cursor() as cursor:
-            page = read_body_page(
-                cursor,
-                run_body_owner(checkpoint_key, run_id),
-                content.body_reference,
-                first_part=first_part,
-                allow_restricted=allow_restricted,
-            )
-        if page is not None:
-            return page
-    except Exception:
-        logger.warning("trace_body_read_failed")
-        return BodyPage(content.body_reference, "incomplete", "storage_unavailable", (), None)
-    return BodyPage(
-        content.body_reference, "incomplete", content.failure_code or "body_unavailable", (), None
+    return fetch_saved_call_body_page(
+        platform_oracle_connection if checkpoint_key is not None else None,
+        run_body_owner(checkpoint_key, run_id) if checkpoint_key is not None else None,
+        span_details,
+        span_id=span_id,
+        slot=slot,
+        first_part=first_part,
+        allow_restricted=allow_restricted,
     )

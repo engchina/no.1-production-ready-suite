@@ -13,7 +13,6 @@ from pr_backend_core.observability.trace_bodies import (
     BodyFailure,
     BodyOwner,
     BodyPage,
-    read_body_page,
     release_body_owners,
 )
 from pr_backend_core.observability.trace_body_lifecycle import (
@@ -21,7 +20,7 @@ from pr_backend_core.observability.trace_body_lifecycle import (
     captured_body_call,
 )
 from pr_backend_core.observability.trace_body_persistence import TraceBodyPersistence
-from pr_backend_core.observability.trace_body_reader import CallBodySlot, saved_call_body_content
+from pr_backend_core.observability.trace_body_reader import CallBodySlot, fetch_saved_call_body_page
 from pr_backend_core.observability.trace_body_registry import (
     call_body_references,
     mark_call_body_failures,
@@ -164,26 +163,12 @@ def read_saved_trace_body(
 ) -> BodyPage | None:
     """routeが正本を認可して渡す。本文IDの指定や実行中bufferへのアクセスは認めない。"""
     allow_restricted = current_audit_request_context().all_users_visible
-    content = saved_call_body_content(
-        trace_body_details(trace), span_id=span_id, slot=slot, allow_restricted=allow_restricted
-    )
-    if content is None or content.body_reference is None:
-        return None
-    try:
-        with _connection() as connection, contextlib.closing(connection.cursor()) as cursor:
-            page = read_body_page(
-                cursor,
-                BodyOwner("rag", kind, record_id),
-                content.body_reference,
-                first_part=first_part,
-                allow_restricted=allow_restricted,
-            )
-        if page is not None:
-            return page
-    except Exception:
-        logger.warning("trace_body_read_failed")
-        return BodyPage(content.body_reference, "incomplete", "storage_unavailable", (), None)
-    # 正本は存在するが本文の登録が成功していない。空の全文を完了として返さない。
-    return BodyPage(
-        content.body_reference, "incomplete", content.failure_code or "body_unavailable", (), None
+    return fetch_saved_call_body_page(
+        _connection,
+        BodyOwner("rag", kind, record_id),
+        trace_body_details(trace),
+        span_id=span_id,
+        slot=slot,
+        first_part=first_part,
+        allow_restricted=allow_restricted,
     )

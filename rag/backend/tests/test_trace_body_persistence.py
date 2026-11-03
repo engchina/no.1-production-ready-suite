@@ -237,6 +237,7 @@ def test_saved_body_read_checks_visibility_before_opening_database(
     from contextlib import contextmanager
     from types import SimpleNamespace
 
+    from pr_backend_core.observability import trace_body_reader
     from pr_backend_core.observability.trace_bodies import BodyPage
 
     saved = record()
@@ -256,7 +257,7 @@ def test_saved_body_read_checks_visibility_before_opening_database(
         yield SimpleNamespace(cursor=lambda: SimpleNamespace(close=lambda: None))
 
     monkeypatch.setattr(trace_bodies, "_connection", connection)
-    monkeypatch.setattr(trace_bodies, "read_body_page", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(trace_body_reader, "read_body_page", lambda *_args, **_kwargs: None)
     page = trace_bodies.read_saved_trace_body(
         saved, "message", "record-a", span_id="span-a", slot="input", first_part=0
     )
