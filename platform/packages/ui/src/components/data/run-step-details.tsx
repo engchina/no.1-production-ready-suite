@@ -167,6 +167,7 @@ export interface RunStepDetailsLabels {
   input: string;
   output: string;
   schema: string;
+  schemaDescription: string;
   notRecorded: string;
   callDetails: string;
   withheld: string;
@@ -181,7 +182,7 @@ export interface RunStepDetailsLabels {
 }
 
 export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
-  disabled: "本文の記録は設定で無効です。この呼び出しの入力・結果・思考・Schema は保存していません。",
+  disabled: "本文の記録は設定で無効です。この呼び出しの入力・結果・思考・入出力仕様は保存していません。",
   partial: "完了前に記録された応答です。受信済みの内容を表示しています。", requestedDimensions: "要求した次元数", inputType: "入力の用途", topN: "要求した上位件数",
   vectors: "記録されたベクトル", dimensions: "記録された次元数", partialVector: "一部のみ記録", rank: "順位", score: "関連度", document: "文書", sourceIndex: "元の index",
   reasoning: "思考", reasoningSummary: "思考の要約",
@@ -200,7 +201,8 @@ export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
   overview: "概要",
   input: "入力",
   output: "結果",
-  schema: "Schema",
+  schema: "入出力仕様",
+  schemaDescription: "入力・出力の項目、型、必須条件を確認します。",
   notRecorded: "この内容は記録されていません。",
   callDetails: "呼び出しの詳細",
   withheld: "現在の権限では、この内容を表示できません。",
@@ -309,6 +311,7 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
       ...(props.showTiming === false ? [] : [{ id: "timing", label: labels.timing }]),
     ]} />
     <TabPanel idPrefix={id} id={tab} value={tab}>
+      {tab === "schema" ? <p className="mb-2 text-xs text-fg-muted">{labels.schemaDescription}</p> : null}
       {tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
         tab === "timing" ? <RunStepDetailsBody details={{ fields: [
           { label: labels.startedAt, value: props.timing?.startedAt ? formatRunDateTime(props.timing.startedAt, { seconds: true, timeZone: true }) : labels.notRecorded },

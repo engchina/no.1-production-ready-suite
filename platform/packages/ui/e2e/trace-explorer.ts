@@ -132,7 +132,8 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
     await page.evaluate(value => { document.documentElement.classList.remove("light", "dark"); document.documentElement.dataset.theme = value; }, theme);
     await inspector.screenshot({path: testInfo.outputPath(`trace-thinking-${theme}.png`)});
   }
-  await inspector.getByRole("tab", {name: "Schema", exact: true}).click();
+  await inspector.getByRole("tab", {name: "入出力仕様", exact: true}).click();
+  await check(inspector).toContainText("入力・出力の項目、型、必須条件を確認します。");
   await check(inspector).toContainText("synthetic-call-schema");
   await check(inspector.locator("[data-trace-timing]")).toContainText("開始時刻");
   check(await page.evaluate(() => {
