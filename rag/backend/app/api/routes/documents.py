@@ -68,6 +68,7 @@ from app.rag.chunking_strategy import resolve_small_to_big_params
 from app.rag.document_cleanup import DocumentCleanupOutcome, run_document_cleanup
 from app.rag.document_crop import (
     DocumentSourceNotFoundError,
+    VersionSourceUnknownError,
     chunk_set_prepared_artifact,
     crop_png,
     load_parsed_source,
@@ -1508,6 +1509,16 @@ async def list_document_recipe_chunks(
     )
 
 
+def _extraction_file_artifact(
+    detail: Any, payload: Mapping[str, Any]
+) -> DocumentPreprocessArtifact:
+    """抽出が解析したファイル。記録が無ければファイルが無いエラーにする(別のファイルで代用しない)。"""
+    try:
+        return prepared_artifact_from_extraction(detail, payload)
+    except VersionSourceUnknownError as exc:
+        raise DocumentFileMissingError(str(exc)) from exc
+
+
 async def _inspector_source_scope(
     document_id: str,
     recipe_id: str,
@@ -1519,8 +1530,8 @@ async def _inspector_source_scope(
 ) -> dict[str, Any]:
     from app.services.inspection_scope import source_inspection
 
-    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
-    artifact = prepared_artifact_from_extraction(detail, payload) or artifact
+    detail, _ = await _recipe_detail_and_artifact(document_id, recipe_id)
+    artifact = _extraction_file_artifact(detail, payload)
     data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
     return await asyncio.to_thread(
         source_inspection, payload, data, offset=offset, limit=8192, expected_revision=revision
@@ -1667,15 +1678,10 @@ async def document_source_map(
     chunk, _, _, payload = await resolve_source_context(
         oracle, document_id, chunk_id, expected_revision=expected_revision
     )
-    recipe_id = chunk.metadata.get("recipe_id")
-    if isinstance(recipe_id, str) and recipe_id:
-        detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
-    else:
-        found = await oracle.get_document(document_id)
-        if found is None:
-            raise HTTPException(404, "文書が見つかりません。")
-        detail, artifact = found, found.preprocess_artifact
-    artifact = prepared_artifact_from_extraction(detail, payload) or artifact
+    detail = await oracle.get_document(document_id)
+    if detail is None:
+        raise HTTPException(404, "文書が見つかりません。")
+    artifact = _extraction_file_artifact(detail, payload)
 
     async def load(variant: Literal["original", "prepared"]) -> bytes:
         data, _, _ = await load_document_content(
@@ -1709,7 +1715,7 @@ async def document_recipe_source_map(
     from app.services.json_source_window import load_source_map_window
 
     oracle = OracleClient()
-    detail, artifact = await _recipe_detail_and_artifact(document_id, recipe_id)
+    detail, _ = await _recipe_detail_and_artifact(document_id, recipe_id)
     row = await oracle.get_document_recipe(document_id, recipe_id)
     if row is None or row.get("active_extraction_recipe_id") != expected_revision:
         raise HTTPException(409, "資料の解析版が変わりました。開き直してください。")
@@ -1718,7 +1724,7 @@ async def document_recipe_source_map(
     )
     payload = saved.get("extraction_json") if saved else {}
     payload = payload if isinstance(payload, Mapping) else {}
-    artifact = prepared_artifact_from_extraction(detail, payload) or artifact
+    artifact = _extraction_file_artifact(detail, payload)
 
     async def load(variant: Literal["original", "prepared"]) -> bytes:
         data, _, _ = await load_document_content(
@@ -2012,7 +2018,7 @@ async def _recipe_detail_and_artifact(
     """レシピの今のファイル。``chunk_set_id`` を渡すとその版が解析したファイル(#4168)。
 
     版を渡すのは引用の表示で、ファイル準備の確認の画面は渡さない(新しいファイルを見る)。
-    消えた版は新しいファイルに置き換えず、版の失効にする。系譜の無い版はレシピの行を読む(#4166)。
+    消えた版は新しいファイルに置き換えず、版の失効にする。記録の無い版はファイルが無いエラーにする。
     """
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
@@ -2024,11 +2030,12 @@ async def _recipe_detail_and_artifact(
             document_id=document_id, recipe_id=recipe_id, chunk_set_id=chunk_set_id
         ):
             raise SourceVersionStaleError("資料の版が変わりました。")
-        version_artifact = await chunk_set_prepared_artifact(
-            oracle, detail, document_id, chunk_set_id
-        )
-        if version_artifact is not None:
-            return detail, version_artifact
+        try:
+            return detail, await chunk_set_prepared_artifact(
+                oracle, detail, document_id, chunk_set_id
+            )
+        except VersionSourceUnknownError as exc:
+            raise DocumentFileMissingError(str(exc)) from exc
     artifact = (
         DocumentPreprocessArtifact.model_validate(row["preprocess_artifact"])
         if row.get("preprocess_artifact")
@@ -5716,7 +5723,8 @@ async def document_recipe_text_window(
         if extraction and extraction.get("extraction_json"):
             raw_payload = extraction["extraction_json"]
             payload = dict(raw_payload) if isinstance(raw_payload, Mapping) else {}
-        artifact = prepared_artifact_from_extraction(detail, payload) or artifact
+            # 解析の後は抽出が解析したファイルを読む。解析の前（抽出が無い）はレシピの今のファイル。
+            artifact = _extraction_file_artifact(detail, payload)
     data, _, _ = await load_document_content(detail, variant=variant, preprocess_artifact=artifact)
 
     def build() -> dict[str, Any]:

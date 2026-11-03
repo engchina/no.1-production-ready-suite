@@ -3149,12 +3149,28 @@ class _FigureSourceOracle(_SourceOracle):
         self, *, document_id: str, chunk_set_id: str
     ) -> dict[str, object] | None:
         del document_id, chunk_set_id
-        return None
+        return {
+            "derivation_id": "dv-1",
+            "preprocess_profile": "office_to_pdf",
+            "converted": True,
+            "converter_name": "stub",
+            "source_content_type": "application/octet-stream",
+            "source_sha256": "0" * 64,
+            "derived_object_path": "docs/d1/r-1/prepared.pdf",
+            "derived_content_type": "application/pdf",
+            "derived_sha256": "1" * 64,
+            "page_map": {"1": 1},
+        }
 
     async def get_document(self, document_id: str) -> object | None:
         if document_id != "d1":
             return None
-        return SimpleNamespace(object_storage_path="docs/d1/source.pdf", preprocess_artifact=None)
+        return SimpleNamespace(
+            object_storage_path="docs/d1/source.pdf",
+            preprocess_artifact=None,
+            file_name="source.pdf",
+            content_type="application/pdf",
+        )
 
     async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
         del document_id

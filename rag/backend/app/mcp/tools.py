@@ -149,6 +149,7 @@ from app.rag.document_crop import (
     BoundedCrop,
     CropTooLargeError,
     DocumentSourceNotFoundError,
+    VersionSourceUnknownError,
     chunk_set_prepared_artifact,
     crop_png_bounded,
     load_parsed_source,
@@ -4167,8 +4168,8 @@ async def preview_document(
     *,
     chunk_set_id: str | None = None,
 ) -> tuple[Any, DocumentPreprocessArtifact | None]:
-    """プレビューする文書と、処理後のファイル（根拠の版が解析したファイル。版の系譜が無ければ
-    処理レシピの今のファイル）。
+    """プレビューする文書と、処理後のファイル（根拠の版が解析したファイル。版を渡さなければ
+    処理レシピの今のファイル）。記録の無い版は別のファイルで代用せず、ファイルが無いエラーにする。
 
     呼ぶ前に、根拠の chunk が検索と同じ見え方の条件で見えることを確かめておく
     （``readable_chunk``）。
@@ -4176,6 +4177,13 @@ async def preview_document(
     detail = await oracle.get_document(document_id)
     if detail is None or getattr(detail, "object_storage_path", None) is None:
         raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の文書が見つかりません。")
+    if chunk_set_id:
+        try:
+            return detail, await chunk_set_prepared_artifact(
+                oracle, detail, document_id, chunk_set_id
+            )
+        except VersionSourceUnknownError as exc:
+            raise McpToolError(PREVIEW_FILE_MISSING_CODE, str(exc), status=404) from exc
     artifact: DocumentPreprocessArtifact | None = detail.preprocess_artifact
     if recipe_id:
         row = await oracle.get_document_recipe(document_id, recipe_id)
@@ -4183,8 +4191,7 @@ async def preview_document(
             raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の処理レシピが見つかりません。")
         raw = row.get("preprocess_artifact")
         artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
-    versioned = await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id)
-    return detail, versioned or artifact
+    return detail, artifact
 
 
 async def preview_file(
