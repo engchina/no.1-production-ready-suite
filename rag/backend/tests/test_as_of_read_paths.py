@@ -222,3 +222,46 @@ def test_context_siblings_do_not_filter_by_effective_period(chunk_set_id: str | 
         assert "effective_to" not in sql
         assert "filter_as_of" not in binds
         assert "d.status = 'INDEXED'" in sql
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {
+            "page_number_min": "10",
+            "page_number_max": "20",
+            "large_category": "分類A",
+            "as_of": "2025-04-01",
+        },
+        {"page_ranges": '[{"document_id":"doc-1","page_start":10,"page_end":20}]'},
+    ],
+)
+def test_section_first_chunks_applies_search_scope_before_selecting_first(
+    filters: dict[str, str],
+) -> None:
+    client = _CapturingClient.__new__(_CapturingClient)
+    client.captured = []
+    asyncio.run(
+        SectionMapStore(client).section_first_chunks(
+            "doc-1",
+            chunk_set_id="cs-1",
+            section_ids=["s-1"],
+            filters=filters,
+        )
+    )
+    assert len(client.captured) == 1
+    sql, binds = client.captured[0]
+    assert "ROW_NUMBER() OVER" in sql
+    assert "PARTITION BY sc.section_id ORDER BY sc.chunk_order" in sql
+    assert "WHERE lead_rank = 1" in sql
+    assert "sc.chunk_order = 0" not in sql
+    assert "filter_as_of" in binds
+    assert binds["lead_chunk_set_id"] == "cs-1"
+    if "large_category" in filters:
+        assert binds["filter_large_category"] == "分類A"
+        assert binds["filter_page_number_min"] == 10
+        assert binds["filter_page_number_max"] == 20
+        assert binds["filter_as_of"] == "2025-04-01"
+    else:
+        assert binds["filter_pr_start_0"] == 10
+        assert binds["filter_pr_end_0"] == 20

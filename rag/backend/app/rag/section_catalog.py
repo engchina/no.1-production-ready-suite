@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.clients.oracle import OracleClient
 from app.clients.section_map_store import SectionMapStore
@@ -48,11 +48,12 @@ async def compact_section_lines(
     lead_chars: int,
     *,
     max_chars: int,
+    first_chunks: Mapping[str, RetrievedChunk] | None = None,
 ) -> tuple[list[str], int]:
     """目録の行（文字数の上限まで。``nodes`` の先頭から順に対応）と、省いた章節の数（#2252）。"""
-    leads: dict[str, RetrievedChunk] = {}
+    leads: Mapping[str, RetrievedChunk] = first_chunks if first_chunks is not None else {}
     bare = [node.section_id for node in nodes if lead_chars and numbering_only(node.title)]
-    if bare:
+    if bare and first_chunks is None:
         leads = await SectionMapStore(oracle).section_first_chunks(
             outline.chunk_set.document_id,
             chunk_set_id=outline.chunk_set.chunk_set_id,
@@ -63,7 +64,7 @@ async def compact_section_lines(
     used = 0
     for node in nodes:
         line = "  " * max(0, node.level - base) + node.title
-        lead = leads.get(node.section_id)
+        lead = leads.get(node.section_id) if lead_chars and numbering_only(node.title) else None
         if lead is not None:
             text = section_lead(node.title, lead.text, lead_chars)
             if text:
