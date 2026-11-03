@@ -134,24 +134,34 @@ async def test_followup_semantic_query_does_not_become_another_original() -> Non
 
 
 @pytest.mark.parametrize("native", [True, False])
-async def test_only_native_original_result_skips_extra_fusion(native, monkeypatch):
+async def test_only_native_original_result_skips_extra_fusion(
+    native: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from collections.abc import Iterator
     from contextlib import contextmanager
     from unittest.mock import Mock
 
     from app.rag import answer_engine
     from tests.test_answer_engine import FakeGenAi
 
-    observations = {}
+    observations: dict[str, Mock] = {}
 
     @contextmanager
-    def observe(operation, name):
+    def observe(operation: str, name: str) -> Iterator[Mock]:
         observation = Mock()
         observations[name] = observation
         yield observation
 
     class Oracle(_OneHitPerQueryOracle):
-        async def hybrid_search(self, *args, **kwargs):
-            hits = await super().hybrid_search(*args, **kwargs)
+        async def hybrid_search(
+            self,
+            query: str,
+            embedding: list[float],
+            top_k: int,
+            mode: SearchMode = SearchMode.HYBRID,
+            filters: dict[str, str] | None = None,
+        ) -> list[RetrievedChunk]:
+            hits = await super().hybrid_search(query, embedding, top_k, mode, filters)
             if native:
                 hits[0].metadata["native_rrf_contribution"] = 0.012
             return hits
