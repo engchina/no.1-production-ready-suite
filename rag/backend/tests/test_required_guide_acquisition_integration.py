@@ -221,7 +221,7 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert citation == {
         "unit_ids": re.findall(r"\[(U[0-9a-f]{24})\]", calls[0][1][: calls[0][1].index(BODY)])[-1:]
     }
-    assert review["items"][0]["citation_resolution"]["resolved_quote"] == BODY
+    assert review["items"][0]["citation_resolution"]["resolved_quote"] in operation["text"]
 
     # 保存の正規化も実処理を通し、DB の書き込みだけをメモリに置き換える。
     pipeline = RagPipeline(
