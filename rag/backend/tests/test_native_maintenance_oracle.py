@@ -2,7 +2,7 @@
 
 import json
 from array import array
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from uuid import uuid4
 
 import pytest
@@ -15,6 +15,7 @@ from app.clients.native_index_maintenance import (
     maintain_native_vectors,
 )
 from app.clients.native_maintenance_schema import (
+    FULL_STATE_KEY,
     native_maintenance_activation_sql,
     native_maintenance_tables_sql,
 )
@@ -39,8 +40,9 @@ async def test_delete_reinsert_queue_restores_native_candidates(
     table, index = names["rag_chunks"], prefix + "_H"
     monkeypatch.setattr(store_module, "STATE_TABLE", names["RAG_NATIVE_INDEX_MAINTENANCE"])
     monkeypatch.setattr(store_module, "EVENTS_TABLE", names["RAG_NATIVE_INDEX_EVENTS"])
-    store = store_module.NativeMaintenanceStore(oracle)
+    store = store_module.NativeMaintenanceStore(oracle, full_interval_hours=24)
     made: list[str] = []
+    plans: list[str] = []
     results: list[NativeMaintenanceResult] = []
 
     def scoped(sql: str) -> str:
@@ -58,25 +60,23 @@ async def test_delete_reinsert_queue_restores_native_candidates(
 
         await oracle._run_transaction(operation)
 
-    async def optimize(lease: MaintenanceLease) -> None:
-        def operation() -> None:
-            connection = cast(store_module.TimedMaintenanceConnection, oracle.acquire_connection())
-            try:
-                connection.call_timeout = 180_000
-                results.append(
-                    maintain_native_vectors(
-                        cast(MaintenanceConnection, connection),
-                        index_name=index,
-                        plan="semantic_then_full",
-                    )
-                )
-            finally:
-                connection.close()
+    def maintain_synthetic_index(
+        connection: MaintenanceConnection, **kwargs: Any
+    ) -> NativeMaintenanceResult:
+        plans.append(kwargs["plan"])
+        result = maintain_native_vectors(connection, index_name=index, **kwargs)
+        results.append(result)
+        return result
 
-        await oracle._db_call_runner(operation)
-
-    monkeypatch.setattr(store, "optimize", optimize)
+    monkeypatch.setattr(store_module, "maintain_native_vectors", maintain_synthetic_index)
     vector = [0.1] * 1536
+
+    async def set_next_full(offset: str) -> None:
+        await execute(
+            f"UPDATE {names['RAG_NATIVE_INDEX_MAINTENANCE']} "
+            f"SET next_attempt_at=SYSTIMESTAMP{offset} WHERE state_key=:state_key",
+            {"state_key": FULL_STATE_KEY},
+        )
 
     async def search_count(channel: Literal["vector", "hybrid", "keyword"]) -> int:
         spec = native_search_request(
@@ -151,23 +151,26 @@ async def test_delete_reinsert_queue_restores_native_candidates(
         assert await store.complete(replacement)
         assert await store.claim("worker-c") is None
 
-        def plan(interval_hours: float) -> str:
-            store.full_interval_hours = interval_hours
+        def plan(attempt: int = 1) -> str:
             connection = oracle.acquire_connection()
             try:
                 cursor = connection.cursor()
                 try:
-                    return store._plan(cursor, MaintenanceLease("worker-d", "token-d", ()))
+                    return store._plan(
+                        cursor, MaintenanceLease("worker-d", "token-d", ("event-d",), attempt)
+                    )
                 finally:
                     cursor.close()
             finally:
                 connection.close()
 
-        assert await oracle._db_call_runner(lambda: plan(24)) == "semantic_then_full"
-        await store._record_full_completed()
-        await store._record_full_completed()
-        assert await oracle._db_call_runner(lambda: plan(24)) == "semantic"
-        assert await oracle._db_call_runner(lambda: plan(0)) == "semantic_then_full"
+        # 最初の FULL の開始から数えるので、間隔の内は再試行でも FULL を始めない(#4214)。
+        assert await oracle._db_call_runner(plan) == "semantic"
+        assert await oracle._db_call_runner(lambda: plan(2)) == "semantic"
+        await set_next_full("")
+        assert await oracle._db_call_runner(plan) == "semantic_then_full"
+        assert await oracle._db_call_runner(lambda: plan(2)) == "full"
+        await set_next_full("+INTERVAL '1' DAY")
         for _generation in range(8):
             await execute(f"DELETE FROM {table}")
             for item in (24, 99):
@@ -184,11 +187,26 @@ async def test_delete_reinsert_queue_restores_native_candidates(
                 )
             if _generation == 0:
                 assert await search_count("vector") == 2, "initial-vector-baseline"
+        # 間隔の内は semantic だけ。残骸が残れば要求を残すだけで、FULL を始めない(#4214)。
+        plans.clear()
+        semantic_outcome = await run_maintenance_once(store, "synthetic-worker")
+        assert semantic_outcome in {"complete", "failed"}
+        assert plans == ["semantic"]
+        assert await run_maintenance_once(store, "synthetic-worker") == "idle"
+        assert plans == ["semantic"]
+        # 間隔が過ぎたら、新しい要求が無くても FULL で収束する。
+        await execute(
+            f"UPDATE {names['RAG_NATIVE_INDEX_MAINTENANCE']} SET next_attempt_at=SYSTIMESTAMP"
+        )
         assert await run_maintenance_once(store, "synthetic-worker") == "complete"
+        assert plans == ["semantic", "full"]
         # 件数の一致では検索の回復を保証しない(#4097)ので、FULL を終えた後で判定する。
-        assert results[-1].strategy == "semantic_then_full"
+        assert results[-1].strategy == "full"
         assert results[-1].before.stored >= results[-1].before.visible
         assert results[-1].after.stored == results[-1].after.visible == 2
+        # FULL の借りは片付き、次の FULL の時刻も先へ進んだ。
+        assert await run_maintenance_once(store, "synthetic-worker") == "idle"
+        await set_next_full("")
         assert await run_maintenance_once(store, "synthetic-worker") == "idle"
         channel_counts: list[tuple[Literal["vector", "hybrid", "keyword"], int]] = [
             ("vector", 2),

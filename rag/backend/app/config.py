@@ -1264,13 +1264,13 @@ class Settings(
         ),
     )
     rag_native_index_full_optimize_interval_hours: float = Field(
-        default=0,
+        default=6,
         ge=0,
         allow_inf_nan=False,
         description=(
-            "原生索引の整理で、semantic の後に FULL も行う最小の間隔(時間。#4097)。"
-            "0 は要求ごとに semantic と FULL を行う。semantic で件数が合っても SEARCH が"
-            "戻らないことがあるので、実索引で確かめるまでは 0 のまま広げない。"
+            "原生索引の FULL の整理を始める最小の間隔(時間。#4214)。成功・失敗・時間切れを"
+            "問わず、開始から数える。間隔の内は semantic だけを行い、FULL の借りは間隔が"
+            "過ぎた後に要求が無くても片付ける。0 は間隔なし。"
         ),
     )
     rag_rrf_method_ratio: tuple[float, float] = (10.0, 1.0)

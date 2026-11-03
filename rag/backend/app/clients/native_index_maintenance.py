@@ -13,9 +13,9 @@ from rag_engine.adapters.oracle.native_hybrid import NATIVE_HYBRID_INDEX
 
 logger = logging.getLogger(__name__)
 
-# semantic: $VR だけを整理する。残れば FULL へ進む。FULL の間隔を広げたときだけ使う。
-# semantic_then_full: 既定。続けて FULL も行う。$VR の件数が合えば FULL の失敗で要求を残さない。
-# full: 前回の失敗の後。semantic を飛ばして、続きから再開できる FULL だけを実行する。
+# semantic: FULL を始めない間隔の内。$VR だけを整理し、残れば要求を残す。
+# semantic_then_full: FULL を始めてよいとき。$VR の件数が合えば FULL の失敗で要求を残さない。
+# full: 前回の失敗の後か要求の無い回。続きから再開できる FULL だけを実行する。
 MaintenancePlan = Literal["semantic", "semantic_then_full", "full"]
 _SEMANTIC_OPTIMIZE_SQL = """BEGIN CTX_DDL.OPTIMIZE_INDEX(:index_name, CTX_DDL.OPTLEVEL_TOKEN_TYPE,
     section_type => CTX_DDL.SECTION_SEMANTIC_INDEX); END;"""
@@ -124,9 +124,10 @@ def maintain_native_vectors(
     workerだけが呼ぶ。件数検査もそのworkerに限定する。
 
     検索の候補の不足を起こす $VR の残骸を先に片付ける(#4097)。呼出しの成功では完了とせず、
-    件数が残れば FULL へ進む(Oracle Free では semantic で残骸が減らないことがある。#4021)。
+    件数が残れば要求を残す(Oracle Free では semantic で残骸が減らないことがある。#4021)。
     件数が合っても SEARCH が足りないことがある(Oracle Free の小さい索引で確認。#4097)ので、
-    件数の一致を検索の回復として扱わず、既定では要求ごとに続けて FULL も行う。
+    件数の一致を検索の回復として扱わない。どちらも FULL で片付けるが、FULL を始めてよいかは
+    呼出元が最小間隔で決める(#4214)。ここで plan を超えて FULL へ進まない。
 
     ``before_call`` は整理を始めるまでの呼出しの前に、``before_verify`` は整理が返った後の
     件数検査の呼出しの前に呼ぶ。整理の時間で後の検査を失敗させない（#4097）。
@@ -142,7 +143,7 @@ def maintain_native_vectors(
             _optimize(cursor, _SEMANTIC_OPTIMIZE_SQL, "semantic", index_name, before_call)
             after = _verified_counts(cursor, index_name, before_verify)
             strategy = "semantic"
-        if plan != "semantic" or after.has_deleted_vectors:
+        if plan != "semantic":
             # maxtimeで部分完了を正常終了させると、要求を誤って消すため指定しない。
             # 専用接続のcall_timeoutで時間を制限する。
             try:
@@ -150,7 +151,7 @@ def maintain_native_vectors(
             except Exception as exc:
                 if plan != "semantic_then_full" or after.has_deleted_vectors:
                     raise
-                # 再試行の繰り返しを避けて要求は完了にし、次の要求の FULL に任せる。
+                # 再試行の繰り返しを避けて要求は完了にし、FULL の借りは次の間隔に任せる。
                 # 件数は合っていても検索の回復は確かめていない(#4097)ので warning に残す。
                 logger.warning(
                     "native_index_maintenance_full_deferred",
