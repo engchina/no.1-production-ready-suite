@@ -14,7 +14,7 @@ from app.clients.oracle import OracleClient
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY
 from app.rag.ingestion import _coerce_extraction_payload, _validate_structured_extraction_payload
-from app.schemas.document import DocumentProcessingConfig
+from app.schemas.document import DocumentProcessingConfig, FileStatus
 from app.schemas.extraction import StructuredExtraction
 
 _EMBEDDING = [0.1] * 1536
@@ -416,6 +416,7 @@ async def test_literal_first_chunk_does_not_move_to_first_in_page_scope() -> Non
     """先頭番号が0でなくても原本の先頭を読み、範囲外なら別Chunkへ代えない。"""
     client = OracleClient()
     document_id = await _new_document(client)
+    await client.update_document_status(document_id, FileStatus.INDEXED)
     cs = _unique_id("cs_literal_first")
     chunks = [
         Chunk(
