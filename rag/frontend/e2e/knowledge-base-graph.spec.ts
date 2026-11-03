@@ -469,6 +469,39 @@ test("構造索引の保存失敗を保持し、操作の再試行で要求を�
   await page.screenshot({ path: testInfo.outputPath("04-partial-failure.png") });
 });
 
+// 構造索引の構築の選択欄は、既定の長い文言「個別設定なし（…に従う）」を、選択中の値も一覧の選択肢も省略せず読める幅にする（#4227）。
+test("構造索引の構築の選択欄は選択中の値と選択肢を省略せずに出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKb(page, { status: "empty", nodes: [], edges: [], truncated: false });
+  await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, structure_index_enabled: null, structure_index_global_enabled: false }) }));
+  await page.goto("/knowledge-bases/kb-1");
+  const settings = page.getByTestId("knowledge-base-structure-settings");
+  const select = settings.getByRole("combobox");
+  await select.scrollIntoViewIfNeeded();
+  await expect(select).toContainText("個別設定なし（文書レシピ・全体設定に従う）");
+
+  // 文言が省略（text-overflow: ellipsis）で切れていない = 内容の幅が表示の幅に収まる。
+  const clipped = (root: string) => page.evaluate((selector) => {
+    return [...document.querySelectorAll<HTMLElement>(`${selector} .truncate`)]
+      .filter((element) => element.scrollWidth > element.clientWidth + 1)
+      .map((element) => element.textContent);
+  }, root);
+  // 375px はカードの内側（約 310px）が文言より狭く、閉じた状態の値は共有部品の既定どおり省略になる。全文は開いた一覧で折り返して読める。
+  const mobile = page.viewportSize()!.width < 640;
+  if (!mobile) expect(await clipped('[data-testid="knowledge-base-structure-settings"] [role="combobox"]')).toEqual([]);
+
+  await select.click();
+  const listbox = page.getByRole("listbox", { name: "文書構造索引の構築" });
+  await expect(listbox.getByRole("option")).toHaveCount(3);
+  await expect(listbox.getByRole("option", { name: "個別設定なし（文書レシピ・全体設定に従う）" })).toBeVisible();
+  expect(await clipped('[role="listbox"]')).toEqual([]);
+  const viewportWidth = page.viewportSize()!.width;
+  const box = (await listbox.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewportWidth);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("structure-select-open.png") });
+});
+
 for (const width of [1280, 1920, 375]) {
   for (const theme of ["light", "dark"] as const) {
     test(`共通の文書構造画布で階層・検索・選択と種類切替を操作する ${width}px ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
