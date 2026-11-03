@@ -139,7 +139,7 @@ it("経過は処理内容だけを描き、軌跡は同じ内容の後に時刻�
     expect(content.querySelector("[data-trace-processing-content]")?.textContent).toContain("合成の引用資料");
     expect(content.querySelector("[data-trace-technical]")?.textContent).toContain("Span name");
     expect(content.querySelector("time")?.getAttribute("datetime")).toBe(steps[0].startedAt);
-    expect(host.querySelector('button[aria-label="開始時刻: 元の ISO 時刻をコピー"]')).not.toBeNull();
+    expect(content.querySelector("[data-trace-timing] button")).toBeNull();
   } finally { act(() => root.unmount()); host.remove(); }
 });
 

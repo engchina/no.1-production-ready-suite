@@ -153,10 +153,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
       return value !== null && field.getBoundingClientRect().height <= value.getBoundingClientRect().height + 1;
     });
   }, undefined)).toBe(true);
-  const raw = await page.evaluate(() => document.querySelector("[data-trace-timing] time")?.getAttribute("datetime"), undefined);
-  await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", {configurable: true, value: {writeText: async (text: string) => {document.documentElement.dataset.copiedIso = text;}}}); }, undefined);
-  await inspector.getByRole("button", {name: "開始時刻: 元の ISO 時刻をコピー", exact: true}).click();
-  check(await page.evaluate(() => document.documentElement.dataset.copiedIso, undefined)).toEqual(raw);
+  await check(inspector.locator("[data-trace-timing] button")).toHaveCount(0);
   check(await page.evaluate(() => {
     const content = document.querySelector("[data-trace-inspector-content]");
     const text = content?.querySelector("[data-trace-timing] time")?.textContent ?? "";

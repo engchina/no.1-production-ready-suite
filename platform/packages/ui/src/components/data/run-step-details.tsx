@@ -37,6 +37,8 @@ export interface RunStepDetailField {
   copyValue?: string;
   /** 識別子のコピーは時刻として描画しない。未指定は既存の時刻コピー。 */
   copyLabel?: string;
+  /** 表示時刻の元の ISO 値。コピー操作とは別に保持する。 */
+  dateTime?: string;
 }
 
 /** 表示順を変えず、経過と軌跡が同じ内容を使う。 */
@@ -238,7 +240,7 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
                   field.copyValue && "flex flex-wrap items-center gap-2"
                 )}
               >
-                {field.copyValue && !field.copyLabel ? <time dateTime={field.copyValue} title={field.copyValue}>{field.value}</time> : <span>{field.value}</span>}
+                {field.dateTime || (field.copyValue && !field.copyLabel) ? <time dateTime={field.dateTime ?? field.copyValue} title={field.dateTime ?? field.copyValue}>{field.value}</time> : <span>{field.value}</span>}
                 {field.copyValue ? <CopyButton inline text={field.copyValue} label={field.copyLabel ?? `${field.label}: ${labels.copyOriginalTime}`} copiedMessage={field.copyLabel ? labels.copied : labels.copiedTime} failedMessage={labels.copyFailed} size="sm" iconOnly variant="ghost" /> : null}
               </dd>
             </div>
@@ -284,8 +286,8 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
 export function RunStepTiming({startedAt, finishedAt, labels: input}: {startedAt?: string | null; finishedAt?: string | null; labels?: Partial<RunStepDetailsLabels>}) {
   const labels = {...DEFAULT_RUN_STEP_DETAILS_LABELS, ...input};
   return <RunStepDetailsBody details={{fields: [
-    {label: labels.startedAt, value: startedAt ? formatRunDateTime(startedAt, {seconds: true, timeZone: true}) : labels.notRecorded, copyValue: startedAt ?? undefined},
-    {label: labels.finishedAt, value: finishedAt ? formatRunDateTime(finishedAt, {seconds: true, timeZone: true}) : labels.notRecorded, copyValue: finishedAt ?? undefined},
+    {label: labels.startedAt, value: startedAt ? formatRunDateTime(startedAt, {seconds: true, timeZone: true}) : labels.notRecorded, dateTime: startedAt ?? undefined},
+    {label: labels.finishedAt, value: finishedAt ? formatRunDateTime(finishedAt, {seconds: true, timeZone: true}) : labels.notRecorded, dateTime: finishedAt ?? undefined},
   ]}} labels={labels} className="[&_dl]:grid-cols-[4rem_minmax(0,1fr)] @md:[&_dl]:grid-cols-[10rem_minmax(0,1fr)]" />;
 }
 
