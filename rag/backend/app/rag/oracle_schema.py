@@ -61,6 +61,7 @@ from app.clients.oracle import (
     oracle_vector_schema_sql,
 )
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
+from app.clients.recipe_version_log import recipe_version_log_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
 from app.clients.structure_index_store import structure_index_schema_sql
 from app.clients.support_guide_store import (
@@ -348,6 +349,12 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="section_map",
             table_name="rag_chunk_set_sections",
             sql=oracle_section_map_schema_sql(),
+        ),
+        # 切替の履歴（#4167）。文書とレシピを参照する。
+        OracleSchemaSection(
+            name="recipe_version_log",
+            table_name="rag_recipe_version_log",
+            sql=recipe_version_log_schema_sql(),
         ),
         OracleSchemaSection(
             name="citation_feedback",
@@ -699,6 +706,13 @@ END;
             name="20261102_005_graph_references",
             table_name="rag_graph_references",
             sql=_create_missing_objects_sql(graph_reference_schema_sql(), "明示参照"),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_006_recipe_version_log",
+            table_name="rag_recipe_version_log",
+            sql=_create_missing_objects_sql(recipe_version_log_schema_sql(), "版の切替の履歴"),
         )
     )
     return sections

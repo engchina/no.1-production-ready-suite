@@ -937,7 +937,12 @@ class _Pipeline:
         self.dispatched: list[str] = []
 
     async def __call__(
-        self, oracle: object, job: IngestionJob, *, cancel_checker: object = None
+        self,
+        oracle: object,
+        job: IngestionJob,
+        *,
+        cancel_checker: object = None,
+        lease_owner: str | None = None,
     ) -> documents._RecipeJobResult:
         _ = oracle
         self.started.set()

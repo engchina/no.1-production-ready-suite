@@ -214,6 +214,11 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4167 active の切替の基線の照合と履歴）
+
+システムテーブルを更新する（migration `20261102_006_recipe_version_log`。表 `rag_recipe_version_log` と索引 2 つを足すだけで、
+既存の行は変えない。既存の版の履歴は遡って作らず、更新の後の切替から残る）。設定の変更は無い。
+
 ## 既存環境の更新手順（#3343 PDF の処理を PyMuPDF から pypdfium2 に置き換え）
 
 backend の PDF の処理（文書のプレビューの頁の画像・bbox の切り出し・dots.ocr へ渡す頁の画像・頁の境目の段落の続きの判定の

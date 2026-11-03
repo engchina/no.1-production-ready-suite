@@ -52,6 +52,10 @@ from app.clients.oracle_read_stats import (
     read_rows_per_round_trip,
     rows_per_round_trip,
 )
+from app.clients.recipe_version_log import (
+    INSERT_RECIPE_VERSION_LOG_SQL,
+    RecipeVersionOperation,
+)
 from app.config import Settings, get_settings, settings_today
 from app.rag.chunking import Chunk
 from app.rag.chunking_small_to_big import FIRST_PAGE_CONTEXT_KEY, engine_search_text
@@ -415,6 +419,34 @@ DEFAULT_ONLY_MEMBERSHIP_REMOVE_MESSAGE = (
 ARCHIVED_SEARCH_ANSWER_PROFILE_UPDATE_MESSAGE = (
     "アーカイブ済みの検索・回答プロファイルは変更できません。"
 )
+
+
+class RecipeActivationConflictError(RuntimeError):
+    """active の chunk_set が基線から変わっていたので切り替えなかった（#4167）。"""
+
+    def __init__(self, *, expected: str | None, current: str | None) -> None:
+        super().__init__("レシピの有効な版が job の開始時から変わっています。")
+        self.expected = expected
+        self.current = current
+
+
+class RecipeActivationFencedError(RuntimeError):
+    """切替を要求した実行がもう job を持っていないので切り替えなかった（#4167）。"""
+
+    def __init__(self) -> None:
+        super().__init__("切替を要求した実行は、この job の現在の実行ではありません。")
+
+
+@dataclass(frozen=True)
+class IngestionJobFence:
+    """切替を要求する実行の識別子。取り消し・lease の喪失・claim し直しを切替の中で確かめる。
+
+    lease_owner は worker ごとの値で、同じ worker が claim し直すと区別できない。試行の回数も見る。
+    """
+
+    job_id: str
+    attempt_count: int
+    lease_owner: str | None
 
 
 class DocumentSectionsConflictError(ValueError):
@@ -3117,10 +3149,19 @@ class OracleClient:
         *,
         recipe_id: str,
         chunk_set_id: str,
+        expected_base_chunk_set_id: str | None,
         extraction_recipe_id: str | None = None,
         materialized_revision: int | None = None,
+        job_fence: IngestionJobFence | None = None,
+        chunk_set_input_id: str | None = None,
     ) -> None:
-        """成功出力を active に原子切替し、同レシピの旧出力を GC する。"""
+        """基線が今も active なら成功出力へ原子切替し、履歴を残し、同レシピの旧出力を GC する。
+
+        ``expected_base_chunk_set_id`` は呼び出し側が作り始める前に読んだ active（無ければ None）。
+        違えば ``RecipeActivationConflictError``（#4167。Iceberg の check-and-put）。
+        ``job_fence`` は job の実行の切替で渡す。その実行が job を持っていなければ
+        ``RecipeActivationFencedError``。どちらも何も変えない。
+        """
 
         def operation(connection: OracleConnectionProtocol) -> None:
             locked_recipe = _fetch_one(
@@ -3135,6 +3176,23 @@ class OracleClient:
             if locked_recipe is None:
                 raise KeyError("レシピが見つかりません。")
             document_id = str(locked_recipe["document_id"])
+            if job_fence is not None:
+                _raise_if_job_fence_lost(connection, job_fence)
+            current_row = _fetch_one(
+                connection,
+                """
+                SELECT chunk_set_id FROM rag_chunk_sets
+                WHERE recipe_id = :recipe_id AND is_active = 1
+                """,
+                {"recipe_id": recipe_id},
+            )
+            current_chunk_set_id = (
+                _optional_str(current_row["chunk_set_id"]) if current_row else None
+            )
+            if current_chunk_set_id != expected_base_chunk_set_id:
+                raise RecipeActivationConflictError(
+                    expected=expected_base_chunk_set_id, current=current_chunk_set_id
+                )
             selected = _fetch_one(
                 connection,
                 """
@@ -3200,6 +3258,26 @@ class OracleClient:
                 """,
                 {"document_id": document_id},
             )
+            # 切替が起きたときだけ履歴を足す。旧版の GC と同じ transaction で書く（#4167）。
+            if current_chunk_set_id != chunk_set_id:
+                _execute(
+                    connection,
+                    INSERT_RECIPE_VERSION_LOG_SQL,
+                    {
+                        "log_id": uuid4().hex,
+                        "recipe_id": recipe_id,
+                        "chunk_set_id": chunk_set_id,
+                        "parent_chunk_set_id": current_chunk_set_id,
+                        "operation": (
+                            RecipeVersionOperation.INITIAL
+                            if current_chunk_set_id is None
+                            else RecipeVersionOperation.REPROCESS
+                        ).value,
+                        "extraction_recipe_id": extraction_recipe_id,
+                        "chunk_set_input_id": chunk_set_input_id,
+                        "job_id": job_fence.job_id if job_fence is not None else None,
+                    },
+                )
             stale_sets = _fetch_all(
                 connection,
                 """
@@ -3208,75 +3286,86 @@ class OracleClient:
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
             )
-            for stale_set in stale_sets:
-                stale_chunk_set_id = str(stale_set["chunk_set_id"])
-                entity_rows = _fetch_all(
-                    connection,
-                    "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
-                    {"chunk_set_id": stale_chunk_set_id},
-                )
-                _delete_graph_rows_for_chunk_set(
-                    connection,
-                    chunk_set_id=stale_chunk_set_id,
-                    entity_ids=[str(row["entity_id"]) for row in entity_rows],
-                )
-            # 章節の対応は作り直しでは消えない。消す chunk_set の分はここで一緒に消す（#4166）。
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunk_set_sections
-                WHERE chunk_set_id IN (
-                    SELECT chunk_set_id FROM rag_chunk_sets
-                    WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
-                )
-                """,
-                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
-            )
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunks
-                WHERE chunk_set_id IN (
-                    SELECT chunk_set_id FROM rag_chunk_sets
-                    WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
-                )
-                """,
-                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
-            )
-            _execute(
-                connection,
-                """
-                DELETE FROM rag_chunk_sets
-                WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
-                """,
-                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
-            )
-            # 旧版だけが使っていた抽出を消す。どの chunk_set・レシピからも参照されないものに限る。
-            stale_extractions = {
-                str(row["extraction_recipe_id"])
-                for row in stale_sets
-                if row.get("extraction_recipe_id")
-            }
-            for stale_extraction in sorted(stale_extractions):
-                _execute(
-                    connection,
-                    """
-                    DELETE FROM rag_document_extractions e
-                    WHERE e.document_id = :document_id
-                      AND e.extraction_recipe_id = :extraction_recipe_id
-                      AND NOT EXISTS (
-                          SELECT 1 FROM rag_chunk_sets cs
-                          WHERE cs.extraction_recipe_id = e.extraction_recipe_id
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1 FROM rag_document_recipes r
-                          WHERE r.active_extraction_recipe_id = e.extraction_recipe_id
-                      )
-                    """,
-                    {"document_id": document_id, "extraction_recipe_id": stale_extraction},
-                )
+            _delete_chunk_set_outputs(connection, document_id=document_id, chunk_sets=stale_sets)
 
         await self._run_transaction(operation)
+
+    async def discard_recipe_candidate_chunk_set(
+        self, *, recipe_id: str, chunk_set_id: str
+    ) -> bool:
+        """切り替えなかった候補を捨て、レシピの抽出の指す先を active の版へ戻す（#4167）。
+
+        active の版は消さない。消せたら True。
+        """
+
+        def operation(connection: OracleConnectionProtocol) -> bool:
+            locked_recipe = _fetch_one(
+                connection,
+                """
+                SELECT document_id FROM rag_document_recipes
+                WHERE recipe_id = :recipe_id
+                FOR UPDATE
+                """,
+                {"recipe_id": recipe_id},
+            )
+            if locked_recipe is None:
+                return False
+            candidate = _fetch_one(
+                connection,
+                """
+                SELECT chunk_set_id, extraction_recipe_id FROM rag_chunk_sets
+                WHERE chunk_set_id = :chunk_set_id AND recipe_id = :recipe_id AND is_active = 0
+                """,
+                {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
+            )
+            if candidate is None:
+                return False
+            # 候補の解析がレシピの抽出の指す先を進めている。先に戻さないと抽出を消せない。
+            _execute(
+                connection,
+                """
+                UPDATE rag_document_recipes r
+                SET active_extraction_recipe_id = (
+                        SELECT cs.extraction_recipe_id FROM rag_chunk_sets cs
+                        WHERE cs.recipe_id = r.recipe_id AND cs.is_active = 1
+                    ),
+                    updated_at = SYSTIMESTAMP
+                WHERE r.recipe_id = :recipe_id
+                  AND EXISTS (
+                      SELECT 1 FROM rag_chunk_sets cs
+                      WHERE cs.recipe_id = r.recipe_id AND cs.is_active = 1
+                        AND cs.extraction_recipe_id IS NOT NULL
+                  )
+                """,
+                {"recipe_id": recipe_id},
+            )
+            _delete_chunk_set_outputs(
+                connection,
+                document_id=str(locked_recipe["document_id"]),
+                chunk_sets=[candidate],
+            )
+            return True
+
+        return await self._run_transaction(operation)
+
+    async def list_recipe_version_log(
+        self, document_id: str, recipe_id: str
+    ) -> list[dict[str, object]]:
+        """レシピの切替の履歴を新しい順に返す（#4167）。文書の利用範囲の中だけを読む。"""
+        return await self._fetch_all(
+            """
+            SELECT l.log_id, l.document_id, l.recipe_id, l.chunk_set_id, l.parent_chunk_set_id,
+                l.operation, l.source_sha256, l.extraction_recipe_id, l.chunk_set_input_id,
+                l.recipe_revision, l.language_pack_release_id, l.language_pack_ingest_hash,
+                l.chunk_count, l.job_id, l.activated_at
+            FROM rag_recipe_version_log l
+            JOIN rag_documents d ON d.document_id = l.document_id
+            WHERE l.document_id = :document_id AND l.recipe_id = :recipe_id
+              AND {document_access_sql}
+            ORDER BY l.activated_at DESC, l.log_id DESC
+            """.format(document_access_sql=_oracle_access_predicate_sql(alias="d")),
+            _with_tenant_bind({"document_id": document_id, "recipe_id": recipe_id}),
+        )
 
     async def document_has_served_output(self, document_id: str) -> bool:
         """検索に出している版（active かつ索引済みの chunk_set）が文書にあるか（#4115）。"""
@@ -5691,6 +5780,7 @@ class OracleClient:
         error_message: str | None = None,
         finished_at: datetime | None = None,
         lease_owner: str | None = None,
+        skip_reason: str | None = None,
     ) -> IngestionJob | None:
         """job が ``from_statuses`` のときだけ ``to_status`` へ遷移する(compare-and-set)。
 
@@ -5710,6 +5800,7 @@ class OracleClient:
             error_message=error_message,
             finished_at=finished_at,
             lease_owner=lease_owner,
+            skip_reason=skip_reason,
         )
 
     async def get_ingestion_job_lease(self, job_id: str) -> IngestionJobLease | None:
@@ -10649,6 +10740,7 @@ class OracleClient:
         error_message: str | None,
         finished_at: datetime | None,
         lease_owner: str | None = None,
+        skip_reason: str | None = None,
     ) -> IngestionJob | None:
         """遷移元の status(と lease の持ち主)を WHERE に入れた UPDATE で job の状態を遷移する。"""
         statuses = list(dict.fromkeys(from_statuses))
@@ -10663,6 +10755,7 @@ class OracleClient:
             "to_status": to_status.value,
             "error_message": error_message,
             "finished_at": finished_at,
+            "skip_reason": skip_reason,
             **status_binds,
         }
         lease_sql = ""
@@ -10679,7 +10772,8 @@ class OracleClient:
                 UPDATE rag_ingestion_jobs
                 SET status = :to_status,
                     error_message = :error_message,
-                    finished_at = :finished_at
+                    finished_at = :finished_at,
+                    skip_reason = :skip_reason
                 WHERE job_id = :job_id
                   AND status IN ({status_placeholders})
                   {lease_sql}
@@ -12576,6 +12670,82 @@ def _delete_scoped_graph_entities(
             connection,
             f"DELETE FROM {table} WHERE {predicate} AND {_oracle_tenant_predicate()}",
             _with_tenant_bind(binds),
+        )
+
+
+def _raise_if_job_fence_lost(
+    connection: OracleConnectionProtocol, fence: IngestionJobFence
+) -> None:
+    """切替を要求した実行が job の現在の実行でなければ止める（#4167）。
+
+    job の行は lock しない。読んだ直後に回復や取り消しが commit されても、切替が先に済んだのと同じ
+    順になる。次の実行が基線を読むのが切替の commit より前なら、基線の照合で止まる。
+    """
+    row = _fetch_one(
+        connection,
+        """
+        SELECT status, attempt_count, lease_owner FROM rag_ingestion_jobs
+        WHERE job_id = :job_id
+        """,
+        {"job_id": fence.job_id},
+    )
+    if (
+        row is None
+        or row["status"] != IngestionJobStatus.RUNNING.value
+        or _int_value(row["attempt_count"]) != fence.attempt_count
+        or _optional_str(row["lease_owner"]) != fence.lease_owner
+    ):
+        raise RecipeActivationFencedError()
+
+
+def _delete_chunk_set_outputs(
+    connection: OracleConnectionProtocol,
+    *,
+    document_id: str,
+    chunk_sets: Sequence[Mapping[str, object]],
+) -> None:
+    """chunk_set の行と版に属する行を消し、どこからも参照されなくなった抽出も消す。"""
+    for chunk_set in chunk_sets:
+        chunk_set_id = str(chunk_set["chunk_set_id"])
+        entity_rows = _fetch_all(
+            connection,
+            "SELECT entity_id FROM rag_graph_entities WHERE chunk_set_id = :chunk_set_id",
+            {"chunk_set_id": chunk_set_id},
+        )
+        _delete_graph_rows_for_chunk_set(
+            connection,
+            chunk_set_id=chunk_set_id,
+            entity_ids=[str(row["entity_id"]) for row in entity_rows],
+        )
+        # 章節の対応は作り直しでは消えない。消す chunk_set の分はここで一緒に消す（#4166）。
+        for table in ("rag_chunk_set_sections", "rag_chunks", "rag_chunk_sets"):
+            _execute(
+                connection,
+                f"DELETE FROM {table} WHERE chunk_set_id = :chunk_set_id",
+                {"chunk_set_id": chunk_set_id},
+            )
+    stale_extractions = {
+        str(chunk_set["extraction_recipe_id"])
+        for chunk_set in chunk_sets
+        if chunk_set.get("extraction_recipe_id")
+    }
+    for stale_extraction in sorted(stale_extractions):
+        _execute(
+            connection,
+            """
+            DELETE FROM rag_document_extractions e
+            WHERE e.document_id = :document_id
+              AND e.extraction_recipe_id = :extraction_recipe_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM rag_chunk_sets cs
+                  WHERE cs.extraction_recipe_id = e.extraction_recipe_id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM rag_document_recipes r
+                  WHERE r.active_extraction_recipe_id = e.extraction_recipe_id
+              )
+            """,
+            {"document_id": document_id, "extraction_recipe_id": stale_extraction},
         )
 
 
