@@ -65,6 +65,7 @@ export type WorkspaceField =
   | "supportGuides.listPaging"
   | "supportGuides.revisionsPaging"
   | "documents.extractionRevisionsPaging"
+  | "documents.sectionRevisionsPaging"
   | "runtimeKnowledge.listPaging"
   | "approvedFaqs.listPaging"
   | "documentCategories.searchPaging";

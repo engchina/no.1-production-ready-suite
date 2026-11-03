@@ -64,6 +64,7 @@ from app.clients.oracle import (
 from app.clients.oracle_run_history import oracle_run_history_schema_sql
 from app.clients.recipe_version_log import recipe_version_log_schema_sql
 from app.clients.section_map_store import oracle_section_map_schema_sql
+from app.clients.section_revision_store import oracle_section_revision_schema_sql
 from app.clients.structure_index_store import structure_index_schema_sql
 from app.clients.support_guide_store import (
     oracle_support_guide_embedding_schema_sql,
@@ -274,6 +275,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             name="document_sections",
             table_name="rag_document_sections",
             sql=oracle_document_sections_schema_sql(),
+        ),
+        OracleSchemaSection(
+            name="document_section_revisions",
+            table_name="rag_document_section_revisions",
+            sql=oracle_section_revision_schema_sql(),
         ),
         OracleSchemaSection(
             name="conversations",
@@ -728,6 +734,14 @@ END;
             sql=_create_missing_objects_sql(
                 oracle_extraction_revision_schema_sql(), "抽出の修訂の版"
             ),
+        )
+    )
+    # 番号は Issue の番号。並行の PR の連番（20261102_006 など）と重ならない。
+    sections.append(
+        OracleSchemaSection(
+            name="20261102_4171_document_section_revisions",
+            table_name="rag_document_section_revisions",
+            sql=_create_missing_objects_sql(oracle_section_revision_schema_sql(), "章節の修正の版"),
         )
     )
     return sections

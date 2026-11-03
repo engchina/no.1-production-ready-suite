@@ -1009,6 +1009,10 @@ class DocumentSectionsData(BaseModel):
     # 人の修正の版(未保存は None)。保存のときに base_revision として返す。
     revision: int | None = None
     updated_at: datetime | None = None
+    # 人の修正の基にした抽出と今の抽出が違う(#4171)。文の修正・再解析で変わる。
+    base_changed: bool = False
+    # そのうち、抽出の章節まで変わった(修正の前提が変わった)。
+    base_outline_changed: bool = False
 
 
 class DocumentSectionsSaveRequest(BaseModel):
@@ -1018,6 +1022,74 @@ class DocumentSectionsSaveRequest(BaseModel):
 
     sections: list[DocumentSection] = Field(max_length=MAX_DOCUMENT_SECTIONS)
     base_revision: int | None = None
+    # ページの上限の確認に使う抽出結果のレシピ(省略は既定のレシピ)。
+    recipe_id: str | None = Field(default=None, max_length=128)
+
+
+class DocumentSectionRevisionSummary(BaseModel):
+    """人が修正した章節の版 1 件(本文は持たない。#4171)。"""
+
+    revision_no: int = Field(ge=1)
+    parent_revision_no: int | None = None
+    restored_from_revision_no: int | None = None
+    # extracted は修正の前の抽出の章節、reset は抽出結果へ戻した版。
+    kind: Literal["extracted", "edited", "restored", "reset"]
+    # 基にした抽出(履歴の前の修正は不明で null)。
+    base_extraction_recipe_id: str | None = None
+    changed_section_count: int = Field(default=0, ge=0)
+    created_at: datetime
+    is_current: bool = False
+    # 基にした抽出が今の抽出と違う。
+    base_changed: bool = False
+    # 基にした抽出の章節が今の抽出の章節と違う。
+    base_outline_changed: bool = False
+
+
+class DocumentSectionRevisionHistory(BaseModel):
+    """文書の章節の修正の履歴(#4171)。"""
+
+    revisions: list[DocumentSectionRevisionSummary]
+    current_revision_no: int | None = None
+    max_revisions: int = Field(ge=1)
+
+
+class DocumentSectionRevisionSnapshot(BaseModel):
+    """差分に出す章節の内容(#4171)。"""
+
+    title: str
+    level: int
+    page_start: int | None = None
+    page_end: int | None = None
+
+
+class DocumentSectionRevisionChange(BaseModel):
+    """版の間で変わった章節 1 件(#4171)。"""
+
+    section_id: str
+    change: Literal["added", "removed", "changed", "moved"]
+    before: DocumentSectionRevisionSnapshot | None = None
+    after: DocumentSectionRevisionSnapshot | None = None
+
+
+class DocumentSectionRevisionDiff(BaseModel):
+    """章節の 2 つの版の差分(#4171)。"""
+
+    revision_no: int
+    # 比べた版(比べる版が無ければ null)。
+    against_revision_no: int | None = None
+    total: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    changes: list[DocumentSectionRevisionChange]
+
+
+class DocumentSectionRevisionRestoreRequest(BaseModel):
+    """章節の旧版の復元(#4171)。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 画面が読んだ今の版(修正が無ければ null)。違えばほかの保存が先に入っているので 409。
+    expected_revision: int | None
     # ページの上限の確認に使う抽出結果のレシピ(省略は既定のレシピ)。
     recipe_id: str | None = Field(default=None, max_length=128)
 

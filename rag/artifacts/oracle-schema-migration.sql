@@ -4297,3 +4297,31 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261102_4171_document_section_revisions
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_DOCUMENT_SECTION_REVISIONS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_document_section_revisions ( '
+            || 'document_id                VARCHAR2(64) NOT NULL, '
+            || 'revision_no                NUMBER(19) NOT NULL, '
+            || 'parent_revision_no         NUMBER(19), '
+            || 'restored_from_revision_no  NUMBER(19), '
+            || 'revision_kind              VARCHAR2(16) NOT NULL, '
+            || 'base_extraction_recipe_id  VARCHAR2(64), '
+            || 'base_outline_sha256        VARCHAR2(64), '
+            || 'changed_section_count      NUMBER(10) DEFAULT 0 NOT NULL, '
+            || 'sections_json              JSON NOT NULL, '
+            || 'created_at                 TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_doc_sec_rev_pk PRIMARY KEY (document_id, revision_no), '
+            || 'CONSTRAINT rag_doc_sec_rev_document_fk FOREIGN KEY (document_id) '
+            || 'REFERENCES rag_documents (document_id) ON DELETE CASCADE, '
+            || 'CONSTRAINT rag_doc_sec_rev_kind_ck '
+            || 'CHECK (revision_kind IN (''EXTRACTED'', ''EDITED'', ''RESTORED'', ''RESET'')) '
+            || ')';
+    END IF;
+END;
+/
