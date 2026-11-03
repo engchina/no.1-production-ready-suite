@@ -29,6 +29,49 @@
   "absent_fields": "omitted",
   "event": {
     "$defs": {
+      "BodyReference": {
+        "additionalProperties": false,
+        "properties": {
+          "body_id": {
+            "title": "Body Id",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "character_count": {
+            "title": "Character Count",
+            "type": "integer"
+          },
+          "byte_count": {
+            "title": "Byte Count",
+            "type": "integer"
+          },
+          "part_count": {
+            "title": "Part Count",
+            "type": "integer"
+          },
+          "visibility": {
+            "enum": [
+              "owner",
+              "system_admin"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body_id",
+          "sha256",
+          "character_count",
+          "byte_count",
+          "part_count",
+          "visibility"
+        ],
+        "title": "BodyReference",
+        "type": "object"
+      },
       "CallContent": {
         "additionalProperties": false,
         "description": "呼び出し時点の内容。未記録と空の応答を区別する。",
@@ -39,10 +82,47 @@
               "recorded",
               "truncated",
               "not_recorded",
-              "withheld"
+              "withheld",
+              "incomplete"
             ],
             "title": "Status",
             "type": "string"
+          },
+          "body_reference": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BodyReference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "preview_only": {
+            "default": false,
+            "title": "Preview Only",
+            "type": "boolean"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "storage_unavailable",
+                  "queue_full",
+                  "write_failed",
+                  "capture_failed",
+                  "writer_stopped",
+                  "invalid_encoding"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Failure Code"
           },
           "text": {
             "default": "",
@@ -593,6 +673,49 @@
   },
   "page": {
     "$defs": {
+      "BodyReference": {
+        "additionalProperties": false,
+        "properties": {
+          "body_id": {
+            "title": "Body Id",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "character_count": {
+            "title": "Character Count",
+            "type": "integer"
+          },
+          "byte_count": {
+            "title": "Byte Count",
+            "type": "integer"
+          },
+          "part_count": {
+            "title": "Part Count",
+            "type": "integer"
+          },
+          "visibility": {
+            "enum": [
+              "owner",
+              "system_admin"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body_id",
+          "sha256",
+          "character_count",
+          "byte_count",
+          "part_count",
+          "visibility"
+        ],
+        "title": "BodyReference",
+        "type": "object"
+      },
       "CallContent": {
         "additionalProperties": false,
         "description": "呼び出し時点の内容。未記録と空の応答を区別する。",
@@ -603,10 +726,47 @@
               "recorded",
               "truncated",
               "not_recorded",
-              "withheld"
+              "withheld",
+              "incomplete"
             ],
             "title": "Status",
             "type": "string"
+          },
+          "body_reference": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/BodyReference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "preview_only": {
+            "default": false,
+            "title": "Preview Only",
+            "type": "boolean"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "storage_unavailable",
+                  "queue_full",
+                  "write_failed",
+                  "capture_failed",
+                  "writer_stopped",
+                  "invalid_encoding"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Failure Code"
           },
           "text": {
             "default": "",

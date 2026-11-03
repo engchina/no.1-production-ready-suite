@@ -59,6 +59,8 @@ from pydantic import (
 )
 from starlette.responses import Response, StreamingResponse
 
+from .observability.trace_bodies import BodyFailure, BodyReference
+
 CHAT_PROGRESS_SCHEMA_VERSION = 1
 # SSE のイベントの名前（`event:`）。段階のイベントと、イベントの無い間の heartbeat。
 CHAT_PROGRESS_SSE_EVENT = "chat_progress"
@@ -178,15 +180,15 @@ _MASKED = "***"
 # 伏せる値: `password=…` / `"api_key": "…"` などの代入、`Bearer …`、API キー（`prak_…`）、
 # URL の資格情報。
 _SENSITIVE_NAME = (
-    r"[A-Za-z_\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|credential)[A-Za-z_\-]*"
+    r"[A-Za-z0-9_\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|credential)[A-Za-z0-9_\-]*"
 )
 _SECRET_JSON_RE = re.compile(rf'(?i)("{_SENSITIVE_NAME}"\s*:\s*)"(?:[^"\\]|\\.)*"')
 _SECRET_ASSIGNMENT_RE = re.compile(
-    rf"(?i)\b({_SENSITIVE_NAME})(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;)\"'}}]+)"
+    rf"(?i)(?<![\w-])({_SENSITIVE_NAME})(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;)\"'}}]+)"
 )
 _BEARER_RE = re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]+")
 _API_KEY_RE = re.compile(r"\bprak_[A-Za-z0-9_-]+")
-_URL_CREDENTIAL_RE = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^\s/@]+@", re.IGNORECASE)
+_URL_CREDENTIAL_RE = re.compile(r"((?<![\w+.-])[a-z][a-z0-9+.-]*://)[^\s/@]+@", re.IGNORECASE)
 
 
 def redact_chat_progress_text(text: str) -> str:
@@ -238,7 +240,12 @@ CALL_CONTENT_MAX = 64000
 class CallContent(_DetailsBase):
     """呼び出し時点の内容。未記録と空の応答を区別する。"""
 
-    status: Literal["recorded", "truncated", "not_recorded", "withheld"] = "not_recorded"
+    status: Literal["recorded", "truncated", "not_recorded", "withheld", "incomplete"] = (
+        "not_recorded"
+    )
+    body_reference: BodyReference | None = None
+    preview_only: bool = False
+    failure_code: BodyFailure | None = None
     text: str = Field(default="", max_length=CALL_CONTENT_MAX + 1)
 
     @model_validator(mode="before")

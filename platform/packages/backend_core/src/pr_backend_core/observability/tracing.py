@@ -536,8 +536,8 @@ class ObservedSpan:
             details=ChatProgressStepDetails.model_validate(
                 {
                     **data,
-                    "call": call_input(value, schema).model_copy(
-                        update={"visibility": "system_admin" if restricted else "owner"}
+                    "call": call_input(
+                        value, schema, visibility="system_admin" if restricted else "owner"
                     ),
                 }
             )
@@ -557,7 +557,9 @@ class ObservedSpan:
         if callable(value):
             value = value()
         data = self.display.details.model_dump(by_alias=True)
-        data["call"]["output"] = call_content(value).model_dump()
+        data["call"]["output"] = call_content(
+            value, visibility=self.display.details.call.visibility
+        ).model_dump()
         self.set_display(details=ChatProgressStepDetails.model_validate(data))
 
     def finish(self) -> None:
