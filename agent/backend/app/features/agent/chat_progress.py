@@ -32,14 +32,17 @@ process の書き手（`trace_spans`）が表に書く。Run には表に入れ�
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from pr_backend_core.chat_progress import (
+    CallDetails,
     ChatProgressParamValue,
     ChatProgressStepDetails,
     chat_progress_details,
 )
+from pr_backend_core.observability.call_details import call_content, call_input
+from pr_backend_core.observability.call_policy import capture_call_content
 from pr_backend_core.observability.trace_store import StoredTraceSpan, trace_progress_events
 from pr_backend_core.observability.tracing import SpanDisplay, SpanUpdate
 
@@ -175,13 +178,40 @@ def tool_display(
     result: ToolResult | None = None,
     run_step: str | None = None,
     rejected: bool = False,
+    include_call: bool = False,
 ) -> SpanDisplay:
     """ツールの span の表示用のデータ（kind `tool`・名前の値・開いて見る詳細）。"""
     return SpanDisplay(
         kind=KIND_TOOL,
         params=tool_params(call.name, titles, run_step=run_step, rejected=rejected),
-        details=tool_details(call, result),
+        details=(
+            _recorded_details(
+                lambda: {"ツール": call.name, "引数": call.arguments},
+                lambda: {
+                    "状態": "未実行",
+                    "却下": rejected,
+                    "結果": result.model_dump(mode="json") if result is not None else None,
+                },
+                tool_details(call, result),
+            )
+            if include_call
+            else tool_details(call, result)
+        ),
     )
+
+
+def _recorded_details(
+    request: Callable[[], object],
+    response: Callable[[], object],
+    details: ChatProgressStepDetails | None = None,
+) -> ChatProgressStepDetails:
+    """待ち・未実行の実値を、本文記録の設定と共通の脱敏規則に従って保存する。"""
+    call = (
+        call_input(request()).model_copy(update={"output": call_content(response())})
+        if capture_call_content()
+        else CallDetails(capture_enabled=False)
+    )
+    return (details or ChatProgressStepDetails()).model_copy(update={"call": call})
 
 
 def tool_attributes(name: str, call_id: str | None) -> dict[str, object]:
@@ -238,13 +268,56 @@ def approval_wait_display(
 ) -> SpanDisplay:
     """承認の待ちの span の表示用のデータ（承認を待ったツールの名前と、何回目の承認か）。"""
     return SpanDisplay(
-        kind=KIND_APPROVAL, params={"tools": _tool_names(round_, titles), "round": index + 1}
+        kind=KIND_APPROVAL,
+        params={"tools": _tool_names(round_, titles), "round": index + 1},
+        details=_recorded_details(
+            lambda: {
+                "回": index + 1,
+                "承認要求": [
+                    {
+                        "ID": item.id,
+                        "ツール": item.tool_call.name,
+                        "引数": item.tool_call.arguments,
+                        "理由": item.reason,
+                    }
+                    for item in round_
+                ],
+            },
+            lambda: {
+                "回": index + 1,
+                "判断": [
+                    {
+                        "ID": item.id,
+                        "状態": item.status.value,
+                        "判断時刻": item.decided_at.isoformat() if item.decided_at else None,
+                    }
+                    for item in round_
+                ],
+            },
+        ),
     )
 
 
 def confirmation_wait_display(confirmation: ConfirmationRequest) -> SpanDisplay:
     """Agent 自身の回答前の確認の待ちの span の表示用のデータ（何回目の確認か）。"""
-    return SpanDisplay(kind=KIND_CONFIRMATION, params={"round": max(1, confirmation.round)})
+    return SpanDisplay(
+        kind=KIND_CONFIRMATION,
+        params={"round": max(1, confirmation.round)},
+        details=_recorded_details(
+            lambda: {
+                "ID": confirmation.id,
+                "回": max(1, confirmation.round),
+                "確認事項": [item.model_dump(mode="json") for item in confirmation.items],
+            },
+            lambda: {
+                "状態": confirmation.status,
+                "回答": [item.model_dump(mode="json") for item in confirmation.answers],
+                "判断時刻": confirmation.decided_at.isoformat()
+                if confirmation.decided_at
+                else None,
+            },
+        ),
+    )
 
 
 def recorded_wait_rounds(run: RunState, kind: str) -> set[int]:

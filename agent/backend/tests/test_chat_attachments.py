@@ -532,17 +532,28 @@ def test_image_without_any_image_model_is_reported_as_not_read(
 
 
 @pytest.mark.asyncio
-async def test_image_reader_records_document_read_purpose_without_source_content(
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("failed", [False, True])
+async def test_image_reader_records_document_read_purpose_and_respects_content_policy(
     monkeypatch: MonkeyPatch,
+    enabled: bool,
+    failed: bool,
 ) -> None:
     import openai
+    from pr_backend_core.observability.call_policy import call_content_policy
     from pr_backend_core.observability.tracing import operation_trace
 
     calls: list[dict[str, Any]] = []
 
     async def create(**kwargs: Any) -> Any:
         calls.append(kwargs)
-        return SimpleNamespace(output_text="合成の読み取り結果", usage=None)
+        if failed:
+            raise RuntimeError("synthetic")
+        return SimpleNamespace(
+            output_text="合成の読み取り結果",
+            usage=None,
+            model_dump=lambda: {"output_text": "合成の読み取り結果"},
+        )
 
     monkeypatch.setattr(attachment_module, "get_settings", lambda: SimpleNamespace())
     monkeypatch.setattr(attachment_module, "_image_model_id", lambda: "vision-model-a")
@@ -561,12 +572,29 @@ async def test_image_reader_records_document_read_purpose_without_source_content
     )
     reader = attachment_module._image_reader("合成の指示")
     assert reader is not None
-    with operation_trace("agent.execute", operation_id="synthetic-image-purpose") as summary:
-        assert await reader(b"synthetic-image", "image/png") == "合成の読み取り結果"
+    with (
+        call_content_policy(lambda: enabled),
+        operation_trace("agent.execute", operation_id="synthetic-document-read") as summary,
+    ):
+        if failed:
+            with pytest.raises(RuntimeError, match="synthetic"):
+                await reader(b"synthetic-image", "image/png")
+        else:
+            assert await reader(b"synthetic-image", "image/png") == "合成の読み取り結果"
     chat = next(span for span in summary.spans if span.operation_name == "gen_ai.chat")
     assert chat.attributes["pr.gen_ai.purpose"] == "document.read"
     assert chat.attributes["gen_ai.request.model"] == "vision-model-a"
     assert len(calls) == 1 and calls[0]["store"] is False
     assert calls[0]["input"][0]["content"][0]["text"] == "合成の指示"
-    assert "合成の指示" not in summary.model_dump_json()
-    assert "synthetic-image" not in json.dumps(chat.attributes)
+    assert chat.status == ("failed" if failed else "done")
+    assert chat.display and chat.display.details and chat.display.details.call
+    call = chat.display.details.call
+    assert call.capture_enabled is enabled
+    assert ("合成の指示" in call.input.text) is enabled
+    assert ("RuntimeError" in call.output.text) is (enabled and failed)
+    assert ("合成の読み取り結果" in call.output.text) is (enabled and not failed)
+    if enabled:
+        assert "media omitted" in call.input.text
+    assert "synthetic-image" not in summary.model_dump_json()
+    assert base64.b64encode(b"synthetic-image").decode() not in summary.model_dump_json()
+    assert "合成の指示" not in json.dumps(chat.attributes)
