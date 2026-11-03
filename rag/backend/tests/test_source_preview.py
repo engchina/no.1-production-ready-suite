@@ -106,6 +106,8 @@ class _PreviewOracle:
             return None
         return self.visible.get((document_id, chunk_id))
 
+    readable_version_chunk = retrievable_chunk
+
     async def accessible_document_exists(self, document_id: str) -> bool:
         """見られる文書か（chunk が今も見えるか、古い版の chunk だけが残っている文書）。"""
         allowed = current_audit_request_context().allowed_knowledge_base_ids
@@ -119,7 +121,18 @@ class _PreviewOracle:
     async def chunk_set_source_derivation(
         self, *, document_id: str, chunk_set_id: str
     ) -> dict[str, object] | None:
-        return self.derivations.get((document_id, chunk_set_id))
+        return self.derivations.get((document_id, chunk_set_id)) or {
+            "derivation_id": "dv-1",
+            "preprocess_profile": "office_to_pdf",
+            "converted": True,
+            "converter_name": "stub",
+            "source_content_type": "application/octet-stream",
+            "source_sha256": "0" * 64,
+            "derived_object_path": _PREPARED_PATH,
+            "derived_content_type": "application/pdf",
+            "derived_sha256": "1" * 64,
+            "page_map": {"1": 1},
+        }
 
     async def get_document(self, document_id: str) -> Any:
         return self.documents.get(document_id)

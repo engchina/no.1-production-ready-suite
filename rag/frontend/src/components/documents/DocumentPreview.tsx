@@ -13,6 +13,8 @@ import { t } from "@/lib/i18n";
 import { useDocumentPreviewPages } from "@/lib/queries";
 import {
   DocumentPreview as SharedDocumentPreview,
+  SourceVersionStaleNotice,
+  isSourceVersionStale,
   documentPreviewLabels,
   type BboxCoordinateMode,
   type BboxOverlayUnit,
@@ -74,6 +76,7 @@ export function isPreparedPdfArtifact(
 export function DocumentPreview({
   documentId,
   recipeId = null,
+  chunkSetId = null,
   fileName,
   variant = "original",
   sourceProfile = null,
@@ -96,6 +99,8 @@ export function DocumentPreview({
 }: {
   documentId: string;
   recipeId?: string | null;
+  /** 引用の版。渡すと処理後のファイルをその版のものにし、消えた版は版の失効の案内にする（#4168）。 */
+  chunkSetId?: string | null;
   fileName: string;
   variant?: DocumentContentVariant;
   sourceProfile?: SourceProfile | null;
@@ -122,7 +127,7 @@ export function DocumentPreview({
     options: { variant?: DocumentContentVariant; disposition?: "inline" | "attachment" } = {}
   ) =>
     recipeId
-      ? api.documentRecipeContentUrl(documentId, recipeId, options)
+      ? api.documentRecipeContentUrl(documentId, recipeId, { ...options, chunkSetId })
       : api.documentContentUrl(documentId, options);
   const url = variant === "prepared" ? contentUrl({ variant }) : contentUrl();
   const downloadUrl = contentUrl({
@@ -143,11 +148,20 @@ export function DocumentPreview({
         : kind === "text" || kind === "html" || kind === "email"
           ? "text"
           : "unsupported";
-  const pages = useDocumentPdfPages(documentId, recipeId, pdfVariant, sharedKind === "pdf");
+  const { pages, versionStale } = useDocumentPdfPages(
+    documentId,
+    recipeId,
+    chunkSetId,
+    pdfVariant,
+    sharedKind === "pdf",
+  );
   const loadTextRange = useCallback((offset: number, signal: AbortSignal) =>
     api.documentTextWindow(documentId, recipeId, { offset, limit: 8192, variant,
       focus: offset === 0 ? focusText : null,
       element_id: offset === 0 ? focusElementId : null, section_id: offset === 0 ? focusSectionId : null }, signal), [documentId, recipeId, variant, focusText, focusElementId, focusSectionId]);
+
+  // やり直しても開けないので、再試行の案内や iframe の表示に戻さない。
+  if (versionStale) return <SourceVersionStaleNotice />;
 
   return (
     <SharedDocumentPreview
@@ -183,28 +197,38 @@ export function DocumentPreview({
 function useDocumentPdfPages(
   documentId: string,
   recipeId: string | null,
+  chunkSetId: string | null,
   variant: DocumentContentVariant,
   enabled: boolean
-): DocumentPreviewPagesState {
-  const pagesQuery = useDocumentPreviewPages(documentId, { recipeId, variant, enabled });
+): { pages: DocumentPreviewPagesState; versionStale: boolean } {
+  const pagesQuery = useDocumentPreviewPages(documentId, { recipeId, chunkSetId, variant, enabled });
   const pages = useMemo<PreviewViewerPage[]>(
     () =>
       (pagesQuery.data?.pages ?? []).map((page) => ({
         pageNumber: page.page_number,
         points: { width: page.width, height: page.height },
         imageUrl: (dpi: number) =>
-          api.documentPreviewPageImageUrl(documentId, page.page_number, { recipeId, variant, dpi }),
+          api.documentPreviewPageImageUrl(documentId, page.page_number, {
+            recipeId,
+            chunkSetId,
+            variant,
+            dpi,
+          }),
       })),
-    [documentId, pagesQuery.data?.pages, recipeId, variant]
+    [documentId, pagesQuery.data?.pages, recipeId, chunkSetId, variant]
   );
-  if (pagesQuery.isPending) return { status: "loading" };
+  const versionStale = isSourceVersionStale(pagesQuery.error);
+  if (pagesQuery.isPending) return { pages: { status: "loading" }, versionStale };
   if (isMissingFileError(pagesQuery.error)) {
     // ファイルが保存先に無いときは、iframe に 404 の本文を出さず、理由と対処を出す（#1210）。
-    return { status: "error", error: pagesQuery.error, onRetry: () => void pagesQuery.refetch() };
+    return {
+      pages: { status: "error", error: pagesQuery.error, onRetry: () => void pagesQuery.refetch() },
+      versionStale,
+    };
   }
   // ほかの失敗（描けないファイル・古い backend）は iframe の表示に戻す。
-  if (pagesQuery.isError) return { status: "fallback" };
-  return { status: "ready", pages };
+  if (pagesQuery.isError) return { pages: { status: "fallback" }, versionStale };
+  return { pages: { status: "ready", pages }, versionStale };
 }
 
 /** 文書のファイルが保存先に無い（backend の `error_code`。#1210）。 */

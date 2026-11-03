@@ -648,6 +648,13 @@
     },
     {
       "destructive": false,
+      "name": "20261102_007_chunk_set_retired_at",
+      "sha256": "3b342d316d73d5857652c7f28e91a684470f51225125d4f12b75d53d359f6f75",
+      "statement_count": 1,
+      "table_name": "rag_chunk_sets"
+    },
+    {
+      "destructive": false,
       "name": "20261102_008_document_extraction_revisions",
       "sha256": "ea98fe8784dd7a612dc9184d06441831829250859a07b384015fc104c64a6c9f",
       "statement_count": 1,
@@ -677,6 +684,6 @@
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "b826e14203b934129d184b44cc5e151c12b30b94c0fa53c4085350635cc13948",
-  "statement_count": 152
+  "sha256": "693ab4bc7d21476b886c42779d0f55375a0a074cb5ff06f91b7a830ead6dd718",
+  "statement_count": 153
 }

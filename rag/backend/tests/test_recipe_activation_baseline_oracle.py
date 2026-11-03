@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.clients.chunk_set_retention_store import ChunkSetRetentionStore
 from app.clients.oracle import (
     IngestionJobFence,
     OracleClient,
@@ -162,7 +163,11 @@ async def test_log_keeps_one_row_per_switch_after_old_version_is_gone() -> None:
         extraction_recipe_id=f"ex_s_{suffix}",
     )
 
-    # 旧版の行は消え、履歴は残る。
+    # 旧版は清掃で消えても、履歴は残る（#4168）。
+    assert await client.get_chunk_set(first) is not None
+    await ChunkSetRetentionStore(client).expire_recipe(
+        recipe_id, retention_days=0, retained_versions=0, canonical_prefix="artifacts/canonical"
+    )
     assert await client.get_chunk_set(first) is None
     latest, oldest = await client.list_recipe_version_log(document_id, recipe_id)
     assert (latest["operation"], latest["chunk_set_id"], latest["parent_chunk_set_id"]) == (

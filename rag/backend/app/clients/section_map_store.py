@@ -36,6 +36,7 @@ from app.clients.oracle import (
     _oracle_retrieval_where,
     _render_sql,
     _retrieved_chunk_from_row,
+    _version_read_where,
 )
 from app.rag.element_locator import chunk_element_ids
 from app.rag.section_chunk_map import MapChunk, SectionChunkMap, SectionNode
@@ -407,8 +408,13 @@ class SectionMapStore:
         """利用者が読める文書の chunk_set（``chunk_set_id`` が無ければ、有効な chunk_set のうち
         レシピの番号が最も小さいもの）。読めなければ None。"""
         # ID で読むので有効期間では絞らない（検索で選んだ根拠を今日の日付で読めなくしない。#3268）。
-        where_sql, binds = _oracle_retrieval_where(
-            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+        # 版を指定したときは退役した版も読む(#4168)。指定が無ければ active だけを見る。
+        where_sql, binds = (
+            _version_read_where()
+            if chunk_set_id is not None
+            else _oracle_retrieval_where(
+                {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+            )
         )
         chunk_set_sql = (
             ":read_chunk_set_id"
@@ -476,10 +482,8 @@ class SectionMapStore:
         self, document_id: str, chunk_id: str
     ) -> tuple[str, str] | None:
         """利用者が読める chunk の (chunk_set_id, 所有の章節の id)。無ければ None。"""
-        # ID で読むので有効期間では絞らない（検索で選んだ根拠を今日の日付で読めなくしない。#3268）。
-        where_sql, binds = _oracle_retrieval_where(
-            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
-        )
+        # ID で読むので有効期間では絞らず、退役した版も読む（#3268・#4168）。
+        where_sql, binds = _version_read_where()
         row = await self._oracle._fetch_one(
             _render_sql(
                 f"""
@@ -519,9 +523,12 @@ class SectionMapStore:
         問わない）。有効期間は ``filters`` を渡したときだけ、その基準日で絞る（MCP の
         ``rag_read_section`` のように ``filters`` の無い ID の読み取りは絞らない。#3268）。
         """
+        # filters の無い ID の読み取りは、読んでいる版が退役していても続ける(#4168)。
+        # 回答の検索の条件を渡したときは active だけを読む。
         where_sql, binds = _oracle_retrieval_where(
             {**(filters or {}), INCLUDE_SUPERSEDED_FILTER_KEY: "true"},
             effective_period=filters is not None,
+            include_retired=filters is None,
         )
         rows = await self._oracle._fetch_all(
             _render_sql(

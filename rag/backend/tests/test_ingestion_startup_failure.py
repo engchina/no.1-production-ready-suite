@@ -271,6 +271,7 @@ async def test_restart_preserves_failure_limit_and_run_loop_progresses(
         schema_ready=AsyncMock(return_value=True),
         recover_stale=AsyncMock(return_value=[]),
         sweep_document_cleanups=AsyncMock(return_value=0),
+        sweep_retired_versions=AsyncMock(return_value=0),
         poll_interval_seconds=60,
     )
     await asyncio.wait_for(worker.run_forever(stop_event=stop), timeout=2)

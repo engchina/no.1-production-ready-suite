@@ -1718,6 +1718,8 @@ def test_retrieve_evidence_appends_catalog_articles_outside_the_limit(
             loaded.append((document_id, chunk_id))
             return None if chunk_id == "art-gone" else _chunk(chunk_id, text="第二条 本文")
 
+        readable_version_chunk = retrievable_chunk
+
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
         articles = [
@@ -1765,6 +1767,8 @@ def test_retrieve_evidence_caps_the_catalog_articles(
     class _ArticleOracle:
         async def retrievable_chunk(self, document_id: str, chunk_id: str) -> Any:
             return _chunk(chunk_id, text="第二条 本文")
+
+        readable_version_chunk = retrievable_chunk
 
     async def fake_run(request: SearchRequest, **_: Any) -> SearchResponse:
         del request
@@ -2144,6 +2148,8 @@ class _SourceOracle:
         self.contexts.append(current_audit_request_context())
         return self.visible.get((document_id, chunk_id))
 
+    readable_version_chunk = retrievable_chunk
+
     async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
         return (document_id, chunk_id) in self.stale
 
@@ -2487,6 +2493,8 @@ class _DocumentOracle:
         if document_id != "d1":
             return None
         return next((chunk for chunk in self.chunks if chunk.chunk_id == chunk_id), None)
+
+    readable_version_chunk = retrievable_chunk
 
     async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
         return document_id == "d1" and chunk_id.startswith("d1:cs-old:")
@@ -3141,12 +3149,28 @@ class _FigureSourceOracle(_SourceOracle):
         self, *, document_id: str, chunk_set_id: str
     ) -> dict[str, object] | None:
         del document_id, chunk_set_id
-        return None
+        return {
+            "derivation_id": "dv-1",
+            "preprocess_profile": "office_to_pdf",
+            "converted": True,
+            "converter_name": "stub",
+            "source_content_type": "application/octet-stream",
+            "source_sha256": "0" * 64,
+            "derived_object_path": "docs/d1/r-1/prepared.pdf",
+            "derived_content_type": "application/pdf",
+            "derived_sha256": "1" * 64,
+            "page_map": {"1": 1},
+        }
 
     async def get_document(self, document_id: str) -> object | None:
         if document_id != "d1":
             return None
-        return SimpleNamespace(object_storage_path="docs/d1/source.pdf", preprocess_artifact=None)
+        return SimpleNamespace(
+            object_storage_path="docs/d1/source.pdf",
+            preprocess_artifact=None,
+            file_name="source.pdf",
+            content_type="application/pdf",
+        )
 
     async def get_document_recipe(self, document_id: str, recipe_id: str) -> object | None:
         del document_id

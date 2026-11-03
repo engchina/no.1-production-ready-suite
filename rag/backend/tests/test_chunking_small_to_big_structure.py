@@ -307,22 +307,92 @@ def test_heading_chain_is_kept_within_child_target() -> None:
         assert chunk.metadata["chunk_size_compliance"] == expected
 
 
-def test_compliance_records_length_after_attaching_heading() -> None:
-    params = SmallToBigParams(child_target_chars=200)
-    line = "合成の見出し" * 4
-    long_body = "合成の本文です。" * 24  # 192 文字。見出しを足すと目標を超える。
-    extraction = StructuredExtraction(
-        raw_text=f"{line}\n\n{long_body}",
-        elements=[
-            DocumentElement(kind="title", text=line, order=0, element_id="h", section_path=[line]),
-            DocumentElement(
-                kind="text", text=long_body, order=1, element_id="b", section_path=[line]
-            ),
-        ],
+def _heading_and_body(heading: str, *bodies: tuple[str, str]) -> StructuredExtraction:
+    elements = [
+        DocumentElement(kind="title", text=heading, order=0, element_id="h", section_path=[heading])
+    ]
+    elements += [
+        DocumentElement(
+            kind=kind,
+            text=body,
+            order=index,
+            element_id=f"b{index}",
+            section_path=[heading],
+        )
+        for index, (kind, body) in enumerate(bodies, start=1)
+    ]
+    raw_text = "\n\n".join(element.text for element in elements)
+    return StructuredExtraction(raw_text=raw_text, elements=elements)
+
+
+def test_heading_and_body_share_the_limit() -> None:
+    heading = "合成の見出し" * 4
+    sentence = "合成の本文です。"
+    extraction = _heading_and_body(heading, ("text", sentence * 24))  # 192 文字
+    chunks = build_structure_parent_child_chunks(
+        extraction, params=SmallToBigParams(child_target_chars=200)
     )
-    chunk = build_structure_parent_child_chunks(extraction, params=params)[0]
-    assert len(chunk.text) > 200
-    assert chunk.metadata["chunk_size_compliance"] == "overflow"
+    assert [len(chunk.text) <= 200 for chunk in chunks] == [True, True]
+    assert all(chunk.metadata["chunk_size_compliance"] == "within_limit" for chunk in chunks)
+    first, rest = chunks
+    assert first.text == f"{heading}\n" + sentence * 21  # 文の途中で切らない
+    assert rest.text == sentence * 3  # 残りに見出しは付けない
+    assert rest.metadata["section_path"] == first.metadata["section_path"]
+    assert first.metadata["element_ids"] == "h,b1"
+    assert rest.metadata["element_ids"] == "b1"
+    assert rest.metadata["text_chars"] == len(rest.text)
+    assert rest.start_offset - first.start_offset >= len(sentence) * 21
+    assert first.metadata["chunk_group_id"] == rest.metadata["chunk_group_id"]
+
+
+def test_heading_and_body_within_the_limit_are_unchanged() -> None:
+    extraction = _heading_and_body("合成の見出し", ("text", "合成の本文です。" * 10))
+    chunks = build_structure_parent_child_chunks(
+        extraction, params=SmallToBigParams(child_target_chars=200)
+    )
+    assert [chunk.text for chunk in chunks] == ["合成の見出し\n" + "合成の本文です。" * 10]
+
+
+def test_body_without_boundary_is_cut_at_the_room() -> None:
+    body = "合" * 195
+    extraction = _heading_and_body("合成の見出し", ("text", body))
+    first, rest = build_structure_parent_child_chunks(
+        extraction, params=SmallToBigParams(child_target_chars=200)
+    )
+    assert len(first.text) == 200
+    assert first.text.removeprefix("合成の見出し\n") + rest.text == body
+
+
+def test_rest_of_joined_elements_keeps_only_its_elements() -> None:
+    one, two, three = "合成の一。" * 12, "合成の二。" * 12, "合成の三。" * 12  # 60 文字ずつ
+    extraction = _heading_and_body("見" * 30, ("text", one), ("text", two), ("text", three))
+    first, rest = build_structure_parent_child_chunks(
+        extraction, params=SmallToBigParams(child_target_chars=190)
+    )
+    assert len(first.text) <= 190
+    assert rest.text == three
+    assert first.metadata["element_ids"] == "h,b1,b2"
+    assert rest.metadata["element_ids"] == "b3"
+
+
+def test_no_room_keeps_heading_alone_and_body_whole() -> None:
+    heading = "見" * 150
+    body = "合" * 195
+    extraction = _heading_and_body(heading, ("text", body))
+    chunks = build_structure_parent_child_chunks(
+        extraction, params=SmallToBigParams(child_target_chars=200)
+    )
+    assert [chunk.text for chunk in chunks] == [heading, body]
+
+
+def test_atomic_body_is_not_split_and_records_overflow() -> None:
+    code = "x = 1\n" * 33  # 198 文字
+    extraction = _heading_and_body("合成の見出し", ("code", code))
+    chunks = build_structure_parent_child_chunks(
+        extraction, params=SmallToBigParams(child_target_chars=200)
+    )
+    assert len(chunks) == 1
+    assert chunks[0].metadata["chunk_size_compliance"] == "overflow"
 
 
 def _heading(text: str) -> Chunk:

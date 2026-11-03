@@ -125,8 +125,12 @@ export const queryKeys = {
   documentCategories: ["document-categories"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
-  documentPreviewPages: (id: string, recipeId: string | null, variant: string) =>
-    ["documents", id, "preview-pages", recipeId ?? "", variant] as const,
+  documentPreviewPages: (
+    id: string,
+    recipeId: string | null,
+    variant: string,
+    chunkSetId: string | null = null,
+  ) => ["documents", id, "preview-pages", recipeId ?? "", variant, chunkSetId ?? ""] as const,
   documentRecipeChunks: (id: string, recipeId: string) =>
     ["documents", id, "recipes", recipeId, "chunks"] as const,
   documentRecipeExtractionRevisions: (id: string, recipeId: string) =>
@@ -599,13 +603,19 @@ export function useResetSectionRulesSettings() {
 /** PDF のページ画像プレビュー用のページ一覧。描けないファイル（422）は再試行せず iframe に戻す。 */
 export function useDocumentPreviewPages(
   id: string | null,
-  options: { recipeId?: string | null; variant?: "original" | "prepared"; enabled?: boolean } = {},
+  options: {
+    recipeId?: string | null;
+    variant?: "original" | "prepared";
+    enabled?: boolean;
+    chunkSetId?: string | null;
+  } = {},
 ) {
   const variant = options.variant ?? "original";
+  const chunkSetId = options.chunkSetId ?? null;
   return useQuery({
-    queryKey: queryKeys.documentPreviewPages(id ?? "", options.recipeId ?? null, variant),
+    queryKey: queryKeys.documentPreviewPages(id ?? "", options.recipeId ?? null, variant, chunkSetId),
     queryFn: () =>
-      api.getDocumentPreviewPages(id as string, { recipeId: options.recipeId, variant }),
+      api.getDocumentPreviewPages(id as string, { recipeId: options.recipeId, variant, chunkSetId }),
     enabled: id != null && (options.enabled ?? true),
     retry: false,
     staleTime: 5 * 60_000,
