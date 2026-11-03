@@ -124,7 +124,7 @@ def test_each_item_has_its_own_citation_line_even_when_reusing_same_page_or_chil
     assert result[2].metadata.get(ANSWER_CITATION_PROVENANCE_KEY) is None
 
 
-def test_citation_page_ranges_are_stored_per_exact_line():
+def test_citation_page_ranges_are_stored_per_exact_line() -> None:
     citations = [_chunk("c1", 3, 4)]
     refs = [
         {"source_id": "p", "scope_source_ids": ["c1"], "page": 3, "page_end": 4},

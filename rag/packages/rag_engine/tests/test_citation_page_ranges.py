@@ -8,16 +8,16 @@ from rag_engine.generation.grounded import _citation
 
 
 @pytest.mark.parametrize(("end", "label"), [(None, "p.3"), (3, "p.3"), (4, "p.3-4")])
-def test_citation_formats_the_actual_page_range(end, label):
+def test_citation_formats_the_actual_page_range(end: int | None, label: str) -> None:
     assert _citation({"source": "sample.pdf", "page": 3, "page_end": end}).endswith(label)
 
 
-def test_sheet_location_keeps_priority_over_pages():
+def test_sheet_location_keeps_priority_over_pages() -> None:
     assert _citation({"source": "sample.xlsx", "page": 3, "page_end": 4, "location": "シート A A1:B2"}).endswith("シート A A1:B2")
 
 
 @pytest.mark.parametrize(("start", "end", "expected"), [(3, 4, (3, 4)), (4, 4, (4, 4))])
-def test_public_reference_only_narrows_a_confirmed_single_page(start, end, expected):
+def test_public_reference_only_narrows_a_confirmed_single_page(start: int, end: int, expected: tuple[int, int]) -> None:
     record = AnswerRecord(
         id="a",
         engine="synthetic",
@@ -36,5 +36,5 @@ def test_public_reference_only_narrows_a_confirmed_single_page(start, end, expec
     }
     result = _published_reference_records([record], trace)[0]
     assert (result.page, result.page_end) == expected
-    assert [item["page"] for item in result.source_seq_ranges] == list(range(*[expected[0], expected[1] + 1]))
+    assert [item["page"] for item in result.source_seq_ranges] == list(range(expected[0], expected[1] + 1))
     assert (record.page, record.page_end, record.text) == (3, 4, "合成の本文")
