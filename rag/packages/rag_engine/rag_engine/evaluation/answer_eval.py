@@ -987,8 +987,10 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
     """
     bound = []
     for claim in output.claim_checks:
-        # 診断はシステムが付ける（モデルの出力の値は使わない）。
-        claim = claim.model_copy(update={"audit_status": claim.status, "reference_check": "", "classification_check": ""})
+        # 根拠の本文と診断はシステムが付ける（モデルの出力の値は使わない）。
+        claim = claim.model_copy(
+            update={"evidence_quote": "", "audit_status": claim.status, "reference_check": "", "classification_check": ""}
+        )
         if passage_citations and claim.status == "citation_error":
             if _spans_for_ids(claim, catalog) or _spans_for_passage_citations(claim, catalog):
                 claim = claim.model_copy(

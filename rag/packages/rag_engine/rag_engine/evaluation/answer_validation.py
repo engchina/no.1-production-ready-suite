@@ -527,12 +527,8 @@ def _bind_validation(
     catalog: Mapping[str, Mapping[str, Any]],
     passages: Sequence[Mapping[str, str]],
 ):
-    """監査の判定を根拠へ結び付ける（``_bind_claims``。``evidence_quote`` は結び付けた片段の本文になる）。
-
-    根拠はモデルが返した ID だけで決める（応答に本文の写しがあっても読まない。#4152）。
-    """
-    without_copies = [claim.model_copy(update={"evidence_quote": ""}) for claim in output.claim_checks]
-    bound = _bind_claims(output.model_copy(update={"claim_checks": without_copies}), catalog, passages, passage_citations=True)
+    """監査の判定を、モデルが返した ID で根拠へ結び付ける（``_bind_claims``。``evidence_quote`` は結び付けた片段の本文になる）。"""
+    bound = _bind_claims(output, catalog, passages, passage_citations=True)
     claims = [
         claim.model_copy(
             update={

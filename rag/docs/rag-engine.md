@@ -373,9 +373,7 @@ ID（200 字まで）と「ID は evidence_items の evidence_id を書く」差
 呼び出しの失敗）は最初の `citation_error` のまま（`rejected`）。結果の `reference_reaudit` に状態と対象・採った段落を残す。MCP の
 claims は、監査の応答の ID の誤りの判定に、返した ID（`audit_evidence_id`）を 200 字まで返す。
 
-モデルが原文を写さないので、写しを返すモデルでの `quote_unmatched` の検出は最終の検証には無く、裏付けの位置の粒度は片段（2,000 字）まで
-（`reference_check`・`support_check` の `quote_unmatched` は無い。回答の生成の印の `quote_unmatched` は別の経路で残る）。根拠の記載の
-真正性は、ID が決まった片段の本文をコードが読むこと（`evidence_quote` に残す）で保つ。
+裏付けの原文は、ID が決まった片段の本文をコードが読む（`evidence_quote`）。位置の粒度は片段（2,000 字）まで。
 
 **表の値に直す（#3005）**: 段落・説明が根拠の表の別の行・列の値を結び付けたとき（`value_unbound`）、表の正しい値に直して残す（研究と改訂。RARR と同じ考え方）。`generation/table_revision.py` が LLM に段落と表の正しい対応（`table_mismatch_notes`）だけを渡し、誤った値だけを最小限に直させ（構造化出力 `TableRevision`）、直した文を決定的に確かめる（表の照合で取り違えが無い・正しい値をすべて述べる・元の段落との近さ 0.6 以上・長さ 1.6 倍以内）。確かめに通らない・LLM が失敗したら、今どおり矛盾として外す。回答の生成は `grounded.revise_table_conflicts`（印 `table_corrected`。理由に直した前後）、最終の検証は `rag_validate_answer` の claims の `revised_text`（`support_check=table_corrected`。status は `contradicted` のまま。Agent は段落を直した文に置き換えて `table_corrected` の印を付ける）。LLM の呼び出しは取り違えがある段落だけ。
 
