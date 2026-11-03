@@ -16,7 +16,7 @@ from rag_engine.generation.answer_models import QUESTION_DISPLAY_METADATA_SEPARA
 from rag_engine.resources.deadline import check_cancelled
 from rag_engine.resources.llm_usage import LlmUsage, usage_delta, usage_snapshot
 from rag_engine.resources.llm_usage import llm_usage as _llm_usage
-from rag_engine.resources.tracing import observe_call
+from rag_engine.resources.tracing import CallObservation, observe_call
 
 
 @dataclass
@@ -38,6 +38,17 @@ class _ExecutionStep:
     fields: list[tuple[str, str]] = field(default_factory=list)
     # 上限で切った（行・値の一部だけを残した）。
     truncated: bool = False
+    observation: CallObservation | None = field(default=None, repr=False)
+
+    def input(self, value: Mapping[str, Any]) -> None:
+        """実入力を本文記録の設定に従う保存口へ渡す。"""
+        if self.observation is not None:
+            self.observation.request(value)
+
+    def output(self, value: Mapping[str, Any]) -> None:
+        """実出力を本文記録の設定に従う保存口へ渡す。"""
+        if self.observation is not None:
+            self.observation.response(value)
 
     def add(self, *details: str) -> None:
         """詳細をその場で追加し、入れ子工程との前後関係を保持する。"""
@@ -271,6 +282,7 @@ def _execution_step(name: str, purpose: str = ""):
 
     try:
         with observe_call("stage", name) as observation:
+            step.observation = observation
             # 工程の span の表示用のデータ（種類と工程名。#3226）。終わったときに LLM の回数・結果の説明・詳細を足す。
             observation.display("answer_step", {"name": name})
             try:

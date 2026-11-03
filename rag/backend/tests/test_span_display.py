@@ -67,3 +67,13 @@ def test_plain_status_is_not_a_result_note(status: str) -> None:
 
 def test_meaningful_result_note_is_preserved() -> None:
     assert answer_step_params({"status": "該当なし"}) == {"note": "該当なし"}
+
+
+def test_adoption_is_preserved_independently_of_call_completion() -> None:
+    assert answer_step_params(
+        {"name": "合成の工程", "status": "complete", "accepted": False, "round": 2}
+    ) == {
+        "name": "合成の工程",
+        "accepted": False,
+        "round": 2,
+    }

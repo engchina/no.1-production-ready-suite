@@ -50,6 +50,8 @@ export interface ChatProgressStep {
   finishedAt?: string;
   /** 任意の短い補足（対象の表の名前・使ったツール名・件数など）。SQL 全文・ORA コードなど技術的な詳細は入れない。 */
   detail?: string;
+  /** 呼び出し成否と独立した採用などの判定（記録された場合だけ表示）。 */
+  outcome?: string;
   /**
    * 所要時間（ミリ秒）。時刻を持たない記録（工程の秒だけを残す記録）で使う。渡すと `startedAt` / `finishedAt`
    * より優先する。
@@ -281,6 +283,7 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);
   if (detail) result.detail = detail;
   if (step.meta) result.traceMeta = step.meta;
+  if (step.outcome) result.meta = step.outcome;
   if (step.level) result.level = step.level;
   if (step.parentId) result.parentId = step.parentId;
   if (step.product) result.product = step.product;

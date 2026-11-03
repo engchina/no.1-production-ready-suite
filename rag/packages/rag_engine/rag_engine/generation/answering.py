@@ -2462,13 +2462,11 @@ def _stop_without_improvement(budget: Any, rounds: list[dict[str, Any]], reason:
     """是正を改善が見込めないので止めた理由を、時間の配分・round の記録・工程に残す（#1527）。"""
     budget.stop_without_improvement(reason, number, feedback)
     rounds[-1]["improvement_stop"] = reason
-    with _execution_step("是正の打ち切り") as stop_step:
-        stop_step.result(_NO_IMPROVEMENT_RESULTS[reason])
-        if labels := budget.stop.get("feedback"):
-            stop_step.add(f"残った指摘: {'・'.join(labels)}")
 
 
-def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, first: bool, audited: bool = True) -> None:
+def _record_round_audit(
+    step: _ExecutionStep, current: Any, *, accepted: bool, first: bool, audited: bool = True, round_number: int = 1
+) -> None:
     """回答の作成と根拠の確認の 1 組の結果（監査の判定の件数・残った指摘・採否）を見出しと値で書く（#2341）。
 
     ``audited`` が False（監査の型が none。#2800）なら、要求の充足は決定的な照合の結果として書き、行っていない監査の
@@ -2516,8 +2514,9 @@ def _record_round_audit(step: _ExecutionStep, current: Any, *, accepted: bool, f
             + (f"・検索を打ち切り {counts[grounded.GUIDE_STEP_NOT_SEARCHED]}" if counts[grounded.GUIDE_STEP_NOT_SEARCHED] else ""),
         )
     step.field("残った指摘", join_values(grounded.pending_feedback_labels(current.feedback())))
-    if not first:
-        step.field("採否", "この回の回答を採用" if accepted else "前の回の回答を残す（良くならなかった）")
+    step.field("採否", "採用" if accepted else "不採用（前の回の回答を維持）")
+    if step.observation is not None:
+        step.observation.display(params={"accepted": accepted, "round": round_number})
 
 
 def _public_span(span: dict[str, Any]) -> dict[str, Any]:
@@ -2966,7 +2965,14 @@ def synthesize_grounded_answer(
                     "回答の時間の上限までに監査が終わらなかったため、原文との照合だけを済ませた説明を示し、条件つきの回答にします。"
                 )
             accepted = best is None or grounded.better(current, best[0])
-            _record_round_audit(step, current, accepted=accepted, first=best is None, audited=audit_mode != grounded.AUDIT_MODE_NONE)
+            _record_round_audit(
+                step,
+                current,
+                accepted=accepted,
+                first=best is None,
+                audited=audit_mode != grounded.AUDIT_MODE_NONE,
+                round_number=number + 1,
+            )
         if accepted:
             best = (current, context, spans, images, mode)
             best_number = number
@@ -3064,6 +3070,14 @@ def synthesize_grounded_answer(
                 decision["execution"] = "not_run"
                 decision["stop_reason"] = "unverified"
         budget.note(current, feedback, accepted=accepted)
+        with _execution_step("回答の修正が必要か確認する") as check_step:
+            issues = grounded.pending_feedback_labels(feedback)
+            check_step.input({"round": number + 1, "adopted_round": best_number + 1, "issues": issues})
+            check_step.result("修正が必要です" if feedback else "修正は不要です")
+            check_step.field("確認した回答", f"{best_number + 1} 回目")
+            if feedback:
+                check_step.field("指摘", join_values(issues))
+            check_step.output({"correction_required": bool(feedback), "issues": issues})
         if not feedback or number == max_rounds - 1:
             if feedback:
                 # 設定の上限で是正を止めた（#1912）。時間の上限ではないので本文の「回答時間の上限により省略した処理」には出さない。
@@ -3072,6 +3086,9 @@ def synthesize_grounded_answer(
                     "round": number + 2,
                     "feedback": grounded.pending_feedback_labels(feedback),
                 }
+                with _execution_step("回答の修正") as skipped_step:
+                    skipped_step.skip("修正回数の上限に達したため、次の回答は生成しません。")
+                    skipped_step.output({"executed": False, "reason": "max_correction_rounds", "next_round": number + 2})
             break
         needs_content = any(feedback.get(key) for key in ("unanswered_requests", "unused_evidence_ids", "goal_alignment"))
         if correction_ids and retrieval_remedy is None:
@@ -3103,6 +3120,9 @@ def synthesize_grounded_answer(
                     "round": number + 2,
                     "feedback": grounded.pending_feedback_labels(feedback),
                 }
+                with _execution_step("回答の修正") as skipped_step:
+                    skipped_step.skip("修正回数の上限に達したため、次の回答は生成しません。")
+                    skipped_step.output({"executed": False, "reason": "max_correction_rounds", "next_round": number + 2})
                 break
             remedy = {"remedy": "correction"}
         # 次の組を始める前に、改善が見込めるかを確かめる（#1527）。作り直した組が採用されない・指摘が前の組と
@@ -3136,16 +3156,19 @@ def synthesize_grounded_answer(
             # 次の round の見積もり（直前の組の実測）が回答の期限の残りに入らない（#1516）。是正をせず、それまでの
             # 最良の round で確定し、直していない不足を「回答時間の上限により省略した処理」に出す。
             rounds[-1]["deadline_stop"] = dict(budget.stop)
-            with _execution_step("是正の打ち切り") as stop_step:
-                stop_step.result(
+            with _execution_step("回答の修正") as stop_step:
+                stop_step.skip(
                     f"回答の時間の残り {budget.stop['remaining_seconds']:.0f} 秒から確定の分 "
                     f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
                     f"{budget.stop['estimate_seconds']:.0f} 秒に足りないため、作り直しをせずに確定します"
                 )
+                stop_step.output({"executed": False, "reason": "time_budget", "budget": dict(budget.stop)})
                 stop_step.impact("直していない不足を「回答時間の上限により省略した処理」に示し、条件つきの回答にします。")
             break
         rounds[-1]["remedy"] = remedy
         with _execution_step("是正") as remedy_step:
+            remedy_step.input({"round": number + 1, "issues": grounded.pending_feedback_labels(feedback)})
+            remedy_step.output({"next_round": number + 2, "plan": remedy})
             remedy_step.result(
                 {
                     "context": "答えていない要求があるため、取得済みの資料から同じ機能の根拠を追加して作り直します",
@@ -3219,6 +3242,29 @@ def synthesize_grounded_answer(
 
     assert best is not None
     current, context, spans, images, mode = best
+    with _execution_step("是正の打ち切り") as final_step:
+        reason = str(budget.stop.get("reason", "correction_not_needed"))
+        if reason.startswith("no_improvement"):
+            explanation = "改善が確認できないため"
+        elif reason == MAX_CORRECTION_ROUNDS_STOP:
+            explanation = "修正回数の上限に達したため"
+        elif rounds and rounds[-1].get("deadline_stop"):
+            explanation = "修正に必要な時間が残っていないため"
+        else:
+            explanation = "修正処理の判断を終えたため"
+        final_step.field("終了理由", explanation)
+        if len(rounds) > 1 and not rounds[-1]["accepted"]:
+            final_step.result(f"改善が確認できないため、{best_number + 1}回目の回答を採用しました。")
+        else:
+            final_step.result(f"{explanation}、{best_number + 1}回目の回答を採用しました。")
+        final_step.field("最終採用", f"{best_number + 1} 回目")
+        final_step.output(
+            {
+                "reason": reason,
+                "adopted_round": best_number + 1,
+                "rounds": [{"round": index + 1, "accepted": row["accepted"]} for index, row in enumerate(rounds)],
+            }
+        )
     unread_sections = best_unread_sections
     # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
     field_kinds = form_field_kinds.question_field_kinds(question, context)
