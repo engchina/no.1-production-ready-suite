@@ -1822,7 +1822,30 @@ class AnswerEngine:
         source_ids = {chunk.chunk_id for chunk in anchors[:_REFERENCE_SOURCE_ANCHORS]}
         references: dict[str, list[RetrievedChunk]] = {}
         if expand_references and self._settings.rag_reference_expansion_enabled:
-            with _search_stage(REFERENCE_EXPANSION_STAGE, active=bool(anchors)):
+            with _search_stage(REFERENCE_EXPANSION_STAGE) as observation:
+                source_start = len(state.reference_sources)
+                if observation is not None:
+                    observation.request(
+                        lambda: {
+                            "質問": request.query,
+                            "範囲": _reference_scope(request.filters),
+                            "起点候補": _trace_chunks(anchors),
+                            "既存の起点 ID": sorted(source_ids),
+                            "起点検査範囲の上限": max(
+                                _REFERENCE_SOURCE_ANCHORS,
+                                min(int(request.top_k), _REFERENCE_EXTENDED_ANCHORS),
+                            ),
+                            "上位の起点数": _REFERENCE_SOURCE_ANCHORS,
+                            "上位以外の参照先試行の上限": _REFERENCE_EXTENDED_TARGETS,
+                            "参照先あたりの Chunk 上限": _REFERENCE_CHUNKS_PER_TARGET,
+                            "総補充 Chunk 上限": self._settings.rag_reference_expansion_max_chunks,
+                            "参照の深さ": 1,
+                            "検索文による文書参照の検索": queries[0]
+                            if queries[0] in embeddings
+                            else None,
+                            "起点の融合スコア": fused,
+                        }
+                    )
                 references = await self._reference_expansion(
                     request,
                     state,
@@ -1833,30 +1856,88 @@ class AnswerEngine:
                     else None,
                     scores=fused,
                 )
+                if observation is not None:
+                    observation.response(
+                        lambda: {
+                            "起点と返した Chunk": {
+                                key: _trace_chunks(rows) for key, rows in references.items()
+                            },
+                            "返した固有 Chunk 数": len(
+                                {item.chunk_id for rows in references.values() for item in rows}
+                            ),
+                            "今回の探索判断": state.reference_sources[source_start:],
+                            "探索判断の記録範囲": (
+                                "既存の診断上限内です。全参照の検査完了は保証しません。"
+                            ),
+                            "回答内の縮退記録（累計）": state.degraded_steps(),
+                            "最終採用": "返却候補です。回答文脈への採用は後段で決まります。",
+                        }
+                    )
         referenced = [chunk for chunks in references.values() for chunk in chunks]
         promoted = {chunk.chunk_id for chunk in referenced}
         # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
         entity_chunks: list[RetrievedChunk] = []
         if expand_references and self._settings.rag_entity_expansion_enabled:
-            with _search_stage(ENTITY_EXPANSION_STAGE, active=bool(anchors)):
+            with _search_stage(ENTITY_EXPANSION_STAGE) as observation:
+                if observation is not None:
+                    observation.request(
+                        lambda: {
+                            "質問": request.query,
+                            "範囲": _expansion_scope(request.filters),
+                            "起点": _trace_chunks(anchors[:ENTITY_SEED_ANCHORS]),
+                            "最大追加 Chunk 数": self._settings.rag_entity_expansion_max_chunks,
+                        }
+                    )
                 entity_chunks = await self._entity_expansion(request, state, anchors)
+                if observation is not None:
+                    observation.response(
+                        lambda: {
+                            "返した候補": _trace_chunks(entity_chunks),
+                            "返した固有 Chunk 数": len({item.chunk_id for item in entity_chunks}),
+                            "回答内の縮退記録（累計）": state.degraded_steps(),
+                            "最終採用": "返却候補です。回答文脈への採用は後段で決まります。",
+                        }
+                    )
         entity_ids = {chunk.chunk_id for chunk in entity_chunks}
         # 関係情報(#2055)で、上位の候補と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
         # 章節の chunk を足す。候補・前後の文脈・参照先・実体の拡張にある chunk は足さない。
         graph_chunks: list[RetrievedChunk] = []
         if expand_references and self._settings.rag_graph_expansion_enabled:
-            with _search_stage(GRAPH_EXPANSION_STAGE, active=bool(anchors)):
+            with _search_stage(GRAPH_EXPANSION_STAGE) as observation:
+                graph_exclude = {
+                    *ranked,
+                    *(chunk.chunk_id for chunk in siblings),
+                    *promoted,
+                    *entity_ids,
+                }
+                if observation is not None:
+                    observation.request(
+                        lambda: {
+                            "質問": request.query,
+                            "範囲": _expansion_scope(request.filters),
+                            "起点": _trace_chunks(anchors[:GRAPH_SEED_ANCHORS]),
+                            "除外 ID": sorted(graph_exclude),
+                            "最大追加 Chunk 数": self._settings.rag_graph_expansion_max_chunks,
+                        }
+                    )
                 graph_chunks = await self._graph_expansion(
                     request,
                     state,
                     anchors,
-                    exclude={
-                        *ranked,
-                        *(chunk.chunk_id for chunk in siblings),
-                        *promoted,
-                        *entity_ids,
-                    },
+                    exclude=graph_exclude,
                 )
+                if observation is not None:
+                    observation.response(
+                        lambda: {
+                            "返した候補": _trace_chunks(graph_chunks),
+                            "返した固有 Chunk 数": len({item.chunk_id for item in graph_chunks}),
+                            "回答内の関係情報の探索記録（累計）": list(
+                                state.graph_attempts.values()
+                            ),
+                            "回答内の縮退記録（累計）": state.degraded_steps(),
+                            "最終採用": "返却候補です。回答文脈への採用は後段で決まります。",
+                        }
+                    )
         if self._attach_images and not defer_context:
             evidence = [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]
             with _search_stage(
@@ -2162,8 +2243,29 @@ class AnswerEngine:
         if not any(is_derived_chunk(chunk) for chunk in anchors):
             return list(anchors)
         # 派生の chunk の原文を読む工程(処理の経過の段。#3464)。
-        with _search_stage(DERIVED_SOURCE_STAGE):
-            return await self._resolve_original_anchors(state, anchors, fused, filters=filters)
+        with _search_stage(DERIVED_SOURCE_STAGE) as observation:
+            if observation is not None:
+                observation.request(
+                    lambda: {
+                        "範囲": dict(filters),
+                        "検索候補": _trace_chunks(anchors),
+                        "融合スコア": dict(fused),
+                    }
+                )
+            result = await self._resolve_original_anchors(state, anchors, fused, filters=filters)
+            if observation is not None:
+                observation.response(
+                    lambda: {
+                        "置換後の候補": _trace_chunks(result),
+                        "派生候補と原文の対応": [
+                            state.derived_hits[chunk.chunk_id]
+                            for chunk in anchors
+                            if chunk.chunk_id in state.derived_hits
+                        ],
+                        "置換後の融合スコア": dict(fused),
+                    }
+                )
+            return result
 
     async def _resolve_original_anchors(
         self,
@@ -3539,6 +3641,34 @@ def _json_list(value: object) -> list[Any]:
             return []
         return decoded if isinstance(decoded, list) else []
     return list(value) if isinstance(value, list) else []
+
+
+def _trace_chunks(chunks: Sequence[RetrievedChunk]) -> list[dict[str, object]]:
+    """工程の実際の順序と本文・版・参照を、媒体実体やローカルの保存先なしで記録する。"""
+    return [
+        {
+            "chunk_id": chunk.chunk_id,
+            "document_id": chunk.document_id,
+            "file_name": chunk.file_name,
+            "text": chunk.text,
+            "score": chunk.score,
+            "rerank_score": chunk.rerank_score,
+            "source": {
+                key: chunk.metadata[key]
+                for key in (
+                    "chunk_set_id",
+                    "recipe_id",
+                    "page_start",
+                    "page_end",
+                    "section_path",
+                    "source_record_refs_json",
+                    REFERENCE_TARGETS_KEY,
+                )
+                if key in chunk.metadata
+            },
+        }
+        for chunk in chunks
+    ]
 
 
 def _search_stage(
