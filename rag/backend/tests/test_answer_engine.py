@@ -3705,3 +3705,16 @@ def test_context_parent_uses_only_stored_parent_text_and_artifact_scope() -> Non
     parents = _stored_parents([_stored_child(c, rrf_score=0.9) for c in versions], state)
     assert len(parents) == 2
     assert parents[0].chunk_uid != parents[1].chunk_uid
+
+
+def test_coverage_review_setting_reaches_the_engine(tmp_path, monkeypatch) -> None:
+    """読み直しの設定が engine へ届き、既定は有効（#4231。テストの環境だけ無効にしている）。"""
+    from app.config import Settings
+    from app.rag.answer_engine import build_engine_settings
+
+    monkeypatch.delenv("RAG_ANSWER_COVERAGE_REVIEW_ENABLED", raising=False)
+    assert Settings.model_fields["rag_answer_coverage_review_enabled"].default is True
+    enabled = Settings(rag_answer_coverage_review_enabled=True)
+    assert build_engine_settings(enabled, output_dir=tmp_path).answer_coverage_review is True
+    disabled = Settings(rag_answer_coverage_review_enabled=False)
+    assert build_engine_settings(disabled, output_dir=tmp_path).answer_coverage_review is False

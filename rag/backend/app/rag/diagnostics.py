@@ -168,6 +168,7 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         "article_catalog_output_token_cap": resolved_settings.rag_article_catalog_output_token_cap,
         "article_catalog_review_enabled": resolved_settings.rag_article_catalog_review_enabled,
+        "answer_coverage_review_enabled": resolved_settings.rag_answer_coverage_review_enabled,
         # 用語・回答ルール・業務ガイドの使い方(#4141。内容の版は manifest の profiles に残す)。
         "runtime_rules_confirmation_enabled": (
             resolved_settings.rag_runtime_rules_confirmation_enabled

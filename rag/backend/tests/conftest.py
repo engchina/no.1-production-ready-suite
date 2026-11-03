@@ -23,6 +23,8 @@ from pr_backend_core.config import isolate_env_files_for_tests
 
 # 手元の `.env`（共通・製品）を読ませない。`app` の import の前に呼ぶ（3 製品で同じ。#1972）。
 isolate_env_files_for_tests("RAG_")
+# テストの LLM のスタブは生成と監査の schema だけを返す（読み直しの確かめは #4231 のテスト）。
+os.environ.setdefault("RAG_ANSWER_COVERAGE_REVIEW_ENABLED", "false")
 
 os.environ["PLATFORM_ENVIRONMENT"] = "local"
 os.environ["PLATFORM_AUTH_MODE"] = "local"

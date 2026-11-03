@@ -4944,13 +4944,8 @@ def _model_evidence_span(span: Mapping[str, Any], rendered: str, units: Sequence
     return neutralize_boundary_markers(displayed)
 
 
-def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
-    """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
-    originals = spans
-    snapshots = {id(span): (span, _citation_view(span, explicit_units=True)) for span in originals}
-    _CITATION_VIEWS.set(snapshots)
-    spans = _retrieved_heading_context(originals)
-    displayed_views = {id(shown): snapshots[id(original)][1] for original, shown in zip(originals, spans, strict=True)}
+def function_reading_groups(spans: Sequence[dict]) -> list[list[dict]]:
+    """根拠を機能ごとの組にして読む順に並べる。"""
     groups: dict[tuple, list[dict]] = {}
     for span in spans:
         groups.setdefault(span["function"], []).append(span)
@@ -4959,11 +4954,22 @@ def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
     for span in spans:
         documents.setdefault(_document_key(span), len(documents))
     ordered = sorted(groups.values(), key=lambda members: documents[_document_key(members[0])])
+    # 選択順位と表示 ID を保ち、原文位置の分かる同じ機能の本文だけを読み順へ戻す。
+    return [
+        sorted(members, key=lambda span: span["source_order"]) if all(span.get("source_order") is not None for span in members) else members
+        for members in ordered
+    ]
+
+
+def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
+    """根拠を機能ごとの見出しで分けて提示し、別機能の混合を入力の時点で防ぐ。"""
+    originals = spans
+    snapshots = {id(span): (span, _citation_view(span, explicit_units=True)) for span in originals}
+    _CITATION_VIEWS.set(snapshots)
+    spans = _retrieved_heading_context(originals)
+    displayed_views = {id(shown): snapshots[id(original)][1] for original, shown in zip(originals, spans, strict=True)}
     blocks = []
-    for number, members in enumerate(ordered, 1):
-        # 選択順位と表示 ID を保ち、原文位置の分かる同じ機能の本文だけを読み順へ戻す。
-        if all(span.get("source_order") is not None for span in members):
-            members = sorted(members, key=lambda span: span["source_order"])
+    for number, members in enumerate(function_reading_groups(spans), 1):
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
@@ -7200,6 +7206,83 @@ def run_round(
     plan_unsettled = list(dict.fromkeys([*plan_unsettled, *_plan_undecided_errors(draft, spans)]))
     # 計画だけの出力（answer.scope）で立てた計画には guide_coverage の欄が無く、作り直しも計画を変えない（#3827）。
     plan_ignored = _unknown_plan_label_errors(draft, spans, scope_plan=scope_plan is not None or plan_recovery == "planned")
+    coverage_record: dict[str, Any] = {}
+    if (
+        getattr(settings, "answer_coverage_review", False)
+        and not range_only
+        and previous_draft is None
+        # 計画を分けた質問と業務ガイドの質問は、要求の範囲が入力で決まっている。
+        and scope_plan is None
+        and not guide_steps
+        and not guide_task_scope
+        and any(item.kind != "gap" for item in draft.items)
+    ):
+        from rag_engine.generation.coverage_review import (
+            COVERAGE_REVIEW_SYSTEM_PROMPT,
+            coverage_review_input,
+            coverage_review_model,
+            coverage_review_targets,
+            merge_coverage_review,
+        )
+
+        # 計画が別の対象と判断した根拠は読み直さない（判断を覆さない）。
+        coverage_targets = coverage_review_targets(
+            presentation,
+            excluded_labels=[
+                scope.evidence_id for plan in draft.request_coverage for scope in plan.evidence_scope if scope.relation == "unrelated"
+            ],
+        )
+        if coverage_targets:
+            coverage_system = resolve_prompt("generation.coverageReview", COVERAGE_REVIEW_SYSTEM_PROMPT)
+            coverage_input = coverage_review_input(
+                question,
+                draft,
+                function_reading_groups(coverage_targets),
+                numbered_text=scope_evidence_text,
+                section_label=_function_label,
+            )
+            generation_calls += 1
+            try:
+                coverage_output = call_with_model_purpose(
+                    "answer.coverage",
+                    parse_text,
+                    coverage_system,
+                    coverage_input,
+                    settings,
+                    coverage_review_model([str(span["label"]) for span in coverage_targets]),
+                    provider_id=provider_id,
+                )
+            except Exception as exc:
+                if invalid_output is None or not (invalid_output(exc) or isinstance(exc, GenerationInputBudgetExceeded)):
+                    raise
+                # 読み直せなくても、生成の草稿は残す。
+                coverage_record = {"error": type(exc).__name__}
+            else:
+                draft, coverage_record = merge_coverage_review(
+                    draft,
+                    coverage_output,
+                    coverage_targets,
+                    units=lambda span: citation_units(str(span.get("text") or ""), image_text=_image_text(span)),
+                    section_label=_function_label,
+                    request_id=next((item.request_id for item in draft.items if item.request_id), ""),
+                )
+                draft, covered_rows = plan_rows_from_citations(draft, spans)
+                plan_rows_added.extend(covered_rows)
+                generation_outputs.append(
+                    {
+                        "purpose": "answer.coverage",
+                        "input_system_prompt": coverage_system,
+                        "input_prompt": coverage_input,
+                        "input_prompt_sha256": hashlib.sha256(coverage_input.encode()).hexdigest(),
+                        "raw_output_status": "not_recorded",
+                        "raw_output_representation": None,
+                        "provider_capture_scope": "returned_response_only",
+                        "provider_output_text": None,
+                        "parsed_output_representation": "coverage_review",
+                        "parsed_output": coverage_output.model_dump(mode="json"),
+                        "canonical_output": draft.model_dump(mode="json", exclude_unset=True),
+                    }
+                )
     catalog_review: dict[str, Any] = {}
     if getattr(settings, "article_catalog_review", False) and audit_mode == AUDIT_MODE_NONE:
         catalog_review = {"execution": "not_run", "skipped": "audit_disabled", "reviewed": 0}
@@ -7274,6 +7357,9 @@ def run_round(
         timing["guide_task_scope"] = list(guide_task_scope)
     if plan_errors:
         timing["request_plan_errors"] = plan_errors
+    if coverage_record:
+        # 上位の根拠の読み直し（#4231）: 読んだ根拠の数・説明を足した根拠・コードが外した数・質問の観点。
+        timing["coverage_review"] = coverage_record
     if catalog_review:
         # 目録の条の検討（#3526）: 検討した条の数・出典に足した条・支える説明が無かった条・判定が返らなかった条・時間。
         timing["catalog_review"] = catalog_review

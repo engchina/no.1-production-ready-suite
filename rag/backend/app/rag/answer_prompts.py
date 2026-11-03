@@ -233,6 +233,11 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ),
             # 目録で選んだ条を生成が引かなかったときだけ、支える説明を検討する（#3526）。
             ("catalogReview", "rag_engine.generation.grounded:CATALOG_REVIEW_SYSTEM_PROMPT"),
+            # 生成の後に上位の根拠を読み直し、足りない説明を足す（#4231）。
+            (
+                "coverageReview",
+                "rag_engine.generation.coverage_review:COVERAGE_REVIEW_SYSTEM_PROMPT",
+            ),
         ),
     ),
     PromptStage(

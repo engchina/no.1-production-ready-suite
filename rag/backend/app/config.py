@@ -1519,6 +1519,14 @@ class Settings(
             "0 は 2 段目を行わない。"
         ),
     )
+    rag_answer_coverage_review_enabled: bool = Field(
+        default=True,
+        description=(
+            "回答の生成の後に、順位の高い根拠を 1 つずつ読み直す LLM の呼び出しを 1 回足し、"
+            "複数の対象の片方・例外・適用条件など、草稿に足りない説明を足す(#4231)。"
+            "足した説明も生成の説明と同じ検査に掛ける。無効なら呼び出しをしない。"
+        ),
+    )
     rag_article_catalog_review_enabled: bool = Field(
         default=False,
         description=(
