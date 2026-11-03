@@ -9,7 +9,7 @@ rag_poc の ``answer_question_result``(質問ルーティング / CRAG / 親子�
   複数の検索文は原質問主軸の重み付き RRF で融合し、同じ親の兄弟 chunk と
   親本文(``parent_text``)で親子を復元する。
   質問の語から検索条件・候補の除外・加点は推定しない。利用者の明示した範囲と認可を保つ。
-  1 ページ目の本文は document.first_page_context に載せる。
+  1 ページ目の本文と先頭Chunkは、正式生成の根拠の選択後に同じ版と範囲で読む。
 - 画面目録の連携(``RAG_SCREEN_LINKING_ENABLED``。#554): 目録は検索範囲の全文書の
   ``section_path`` から DB で作り(範囲と索引の状態ごとに cache)、選ばれた画面の chunk も DB から
   読んで rag_engine へ注入する(検索結果に出なかった画面も候補に加える)。
@@ -53,7 +53,6 @@ from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.search_stages import (
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
-    DOCUMENT_INFO_STAGE,
     ENTITY_EXPANSION_STAGE,
     GRAPH_EXPANSION_STAGE,
     IMAGE_EVIDENCE_STAGE,
@@ -362,9 +361,10 @@ class _SearchState:
     relaxed: list[str] = field(default_factory=list)
     # 検索ごとの検索文の数・候補の件数・効いていた自動の条件・外した段(#2401。根拠 0 件の診断)。
     search_log: list[dict[str, object]] = field(default_factory=list)
-    # 文書の 1 ページ目の本文(rag_chunk_sets.first_page_context)を chunk_set_id ごとに持つ(#557)。
-    first_page_contexts: dict[str, dict[str, object]] = field(default_factory=dict)
-    loaded_first_page_chunk_set_ids: set[str] = field(default_factory=set)
+    # 正式生成へ追加する文書背景の既読。版と検索範囲が同じ場合だけ再利用する。
+    document_backgrounds: dict[tuple[str, str, tuple[tuple[str, str], ...]], dict[str, Any]] = (
+        field(default_factory=dict)
+    )
     # 交差参照(#1280)の参照先の chunk(参照先ごと。CRAG の各回で同じ参照先を読み直さない)と、
     # 足した chunk の記録(診断に出す。chunk_id → 起点・表記・参照先)。
     reference_chunks: dict[tuple[str, ...], list[RetrievedChunk]] = field(default_factory=dict)
@@ -1416,6 +1416,9 @@ class AnswerEngine:
             context_chunks=lambda **kwargs: run_async(
                 lambda: self._context_chunks(state, **kwargs)
             ),
+            document_background=lambda *, spans, **kwargs: run_async(
+                lambda: self._selected_document_backgrounds(request, state, spans)
+            ),
             record_retrieval=lambda stage: state.retrieval_stages.append(dict(stage)),
             check_ready=lambda **kwargs: None,
             parse_text=parse_text_response,
@@ -2003,12 +2006,6 @@ class AnswerEngine:
             graph_chunks = [state.chunks.get(chunk.chunk_id, chunk) for chunk in graph_chunks]
         added = [*referenced, *entity_chunks, *graph_chunks]
         evidence = [*anchors, *siblings, *added]
-        # 文書の背景(1 ページ目の本文)を読む。未取得のものが無ければ段を出さない。
-        with _search_stage(
-            DOCUMENT_INFO_STAGE,
-            active=bool(_missing_first_page_contexts(evidence, state)),
-        ):
-            await self._load_first_page_contexts(evidence, state)
         children = []
         for chunk in anchors:
             if chunk.chunk_id in entity_ids:
@@ -2021,7 +2018,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=fused.get(chunk.chunk_id, 0.0),
-                    first_page_context=_first_page_context(chunk, state),
                     retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
             )
@@ -2029,7 +2025,6 @@ class AnswerEngine:
                 _stored_child(
                     reference,
                     rrf_score=fused.get(chunk.chunk_id, 0.0) * _REFERENCE_SCORE_DECAY,
-                    first_page_context=_first_page_context(reference, state),
                     retrieval_channels=state.retrieval_channels.get(reference.chunk_id),
                 )
                 for reference in references.get(chunk.chunk_id, ())
@@ -2042,7 +2037,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=base_score * _ENTITY_SCORE_DECAY,
-                    first_page_context=_first_page_context(chunk, state),
                     retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in entity_chunks
@@ -2054,7 +2048,6 @@ class AnswerEngine:
                 _stored_child(
                     chunk,
                     rrf_score=base_score * _GRAPH_SCORE_DECAY,
-                    first_page_context=_first_page_context(chunk, state),
                     retrieval_channels=state.retrieval_channels.get(chunk.chunk_id),
                 )
                 for chunk in graph_chunks
@@ -2079,7 +2072,6 @@ class AnswerEngine:
                 _stored_child(
                     sibling,
                     rrf_score=0.0,
-                    first_page_context=_first_page_context(sibling, state),
                     retrieval_channels=state.retrieval_channels.get(sibling.chunk_id),
                 ),
             )
@@ -2251,9 +2243,6 @@ class AnswerEngine:
                     (item.chunk_id, item) for item in state.context_reads.get(cache_key(anchor), ())
                 )
             originals = list(chunks.values())
-            # 範囲外の1ページ目を文書背景としても渡さない。
-            if not scope:
-                await self._load_first_page_contexts(originals, state)
             if self._attach_images:
                 for item in originals:
                     await self._materialize_image_evidence(item, state)
@@ -2262,7 +2251,6 @@ class AnswerEngine:
                     _stored_child(
                         state.chunks.get(item.chunk_id, item),
                         rrf_score=0.0,
-                        first_page_context=_first_page_context(item, state) if not scope else None,
                         retrieval_channels=state.retrieval_channels.get(item.chunk_id),
                     ),
                     scope,
@@ -3167,8 +3155,6 @@ class AnswerEngine:
         if not added:
             return []
         chunks = list(added.values())
-        # 1 ページ目の本文は、未取得の chunk set の分だけをまとめて読む。
-        await self._load_first_page_contexts(chunks, state)
         if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
@@ -3177,7 +3163,6 @@ class AnswerEngine:
             _stored_child(
                 chunk,
                 rrf_score=0.0,
-                first_page_context=_first_page_context(chunk, state),
             )
             for chunk in chunks
         ]
@@ -3288,7 +3273,6 @@ class AnswerEngine:
             if text.complete and text.section.chunk_count == 0:
                 return SectionRead(complete=True)
             return SectionRead(complete=False, reason="partial_read")
-        await self._load_first_page_contexts(chunks, state)
         if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
@@ -3297,7 +3281,6 @@ class AnswerEngine:
             _stored_child(
                 chunk,
                 rrf_score=0.0,
-                first_page_context=_first_page_context(chunk, state),
             )
             for chunk in chunks
         ]
@@ -3507,8 +3490,6 @@ class AnswerEngine:
         if not found:
             return []
         chunks = [state.chunks.setdefault(chunk.chunk_id, chunk) for chunk, _ in found]
-        if not bounded_pages:
-            await self._load_first_page_contexts(chunks, state)
         if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
@@ -3518,7 +3499,6 @@ class AnswerEngine:
             child = _stored_child(
                 chunk,
                 rrf_score=0.0,
-                first_page_context=_first_page_context(chunk, state) if not bounded_pages else None,
             )
             child.metadata[ARTICLE_CATALOG_KEY] = {
                 "order": article.order,
@@ -3529,15 +3509,23 @@ class AnswerEngine:
         # 頁指定のある追加根拠から、範囲を確かめられない親本文や先頭頁を復元しない。
         return children if bounded_pages else [*children, *_stored_parents(children, state)]
 
-    async def _load_first_page_contexts(
-        self, chunks: Sequence[RetrievedChunk], state: _SearchState
-    ) -> None:
-        """まだ読んでいない chunk set の 1 ページ目の本文を、まとめて 1 回で読む(#557)。"""
-        missing = _missing_first_page_contexts(chunks, state)
-        if not missing:
-            return
-        state.first_page_contexts.update(await self._oracle.chunk_set_first_page_contexts(missing))
-        state.loaded_first_page_chunk_set_ids.update(missing)
+    async def _selected_document_backgrounds(
+        self, request: SearchRequest, state: _SearchState, spans: Sequence[Mapping[str, Any]]
+    ) -> list[Mapping[str, Any]]:
+        from app.rag.document_background import selected_document_backgrounds
+
+        rows = await selected_document_backgrounds(
+            self._oracle, state, _screen_filters(request, state), spans
+        )
+        return [
+            {
+                **row,
+                "first_chunk": _stored_child(row["first_chunk"], rrf_score=0.0)
+                if row["first_chunk"] is not None
+                else None,
+            }
+            for row in rows
+        ]
 
     async def _materialize_image_evidence(self, chunk: RetrievedChunk, state: _SearchState) -> None:
         """根拠 chunk の image_evidence を作業ディレクトリへ切り出し、crop_path を差し替える。
@@ -3727,14 +3715,6 @@ def _search_stage(
     (「文書の検索」)の子の段になる。行うことの無い工程(``active`` が偽)は段を出さない。
     """
     return observe_call("stage", name) if active else nullcontext()
-
-
-def _missing_first_page_contexts(
-    chunks: Sequence[RetrievedChunk], state: _SearchState
-) -> list[str]:
-    """まだ 1 ページ目の本文を読んでいない chunk set の id(``_load_first_page_contexts``)。"""
-    chunk_set_ids = {str(chunk.metadata.get("chunk_set_id") or "") for chunk in chunks}
-    return sorted(chunk_set_ids - {""} - state.loaded_first_page_chunk_set_ids)
 
 
 def _needs_image_materialization(chunk: RetrievedChunk, state: _SearchState) -> bool:
@@ -3946,10 +3926,6 @@ def _diverse_candidates(
     return extra
 
 
-def _first_page_context(chunk: RetrievedChunk, state: _SearchState) -> Mapping[str, object] | None:
-    return state.first_page_contexts.get(str(chunk.metadata.get("chunk_set_id") or ""))
-
-
 def _section_citing_chunks(
     candidates: Sequence[RetrievedChunk],
     selected: Sequence[RetrievedChunk],
@@ -4012,15 +3988,11 @@ def _stored_child(
     chunk: RetrievedChunk,
     *,
     rrf_score: float,
-    first_page_context: Mapping[str, object] | None = None,
     retrieval_channels: Collection[str] | None = None,
 ) -> Any:
     """backend の chunk を rag_engine の子 chunk にする。
 
-    ``first_page_context`` は chunk set の文書の 1 ページ目の本文。rag_engine は
-    ``metadata["document"]["first_page_context"]`` を回答の「文書の背景」にする(#557)。
-    chunk 自身が持つ値(#557 より前に保存した chunk)があれば、そちらを使う。
-    1 ページ目の本文は chunk の保存内容(埋め込み・検索文)には入れず、回答のときにだけ付ける。
+    先頭頁本文は最終選択後の専用入力にするため、候補metadataから外す。
     ``retrieval_channels`` は検索で当たった経路(``_hit_channels``)。rag_engine の検索の実装と同じ
     ``adb_hybrid.retrieval_channels`` に書く(根拠の記録と、文書の検索の工程の候補の経路。#3443)。
     ``adb_hybrid`` には経路だけを書き、並べ替え・文脈の選択に効く値(``rrf_score`` など)は書かない。
@@ -4028,6 +4000,10 @@ def _stored_child(
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
+    if isinstance(document := metadata.get("document"), dict) and "first_page_context" in document:
+        metadata["document"] = {
+            key: value for key, value in document.items() if key != "first_page_context"
+        }
     metadata["rrf_score"] = rrf_score
     if retrieval_channels:
         metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
@@ -4035,11 +4011,6 @@ def _stored_child(
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
     for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
         metadata[key] = chunk.metadata.get(key, "")
-    if first_page_context:
-        document = metadata.get("document")
-        document = document if isinstance(document, dict) else {}
-        if "first_page_context" not in document:
-            metadata["document"] = {**document, "first_page_context": dict(first_page_context)}
     if location := _sheet_location(chunk.metadata):
         # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
         metadata["sheet_location"] = location

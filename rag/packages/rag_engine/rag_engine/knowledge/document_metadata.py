@@ -113,8 +113,10 @@ def document_context_text(metadata: Mapping[str, Any]) -> str:
 def normalize_first_page_context(value: Any) -> dict[str, Any]:
     """回答専用の物理第1ページ情報を検証する。検索テキストには追加しない。"""
     keys = {"page", "status", "text", "engine", "record_ids", "truncated"}
-    if not isinstance(value, dict) or set(value) != keys:
+    if not isinstance(value, dict) or not keys <= set(value) or set(value) - keys - {"source_units", "reconstructed_from"}:
         raise ValueError("first_page_context の項目が不正です。")
+    if "reconstructed_from" in value and value["reconstructed_from"] != "immutable_extraction_revision":
+        raise ValueError("first_page_context の復元元が不正です。")
     if (
         type(value["page"]) is not int
         or value["page"] != 1
@@ -123,18 +125,34 @@ def normalize_first_page_context(value: Any) -> dict[str, Any]:
         raise ValueError("first_page_context の取得状態・物理ページが不正です。")
     if (
         not isinstance(value["text"], str)
-        or len(value["text"]) > 8000
         or not isinstance(value["engine"], str)
         or len(value["engine"]) > 128
         or not isinstance(value["truncated"], bool)
         or not isinstance(value["record_ids"], list)
-        or len(value["record_ids"]) > 128
         or not all(isinstance(v, str) and len(v) <= 256 for v in value["record_ids"])
     ):
         raise ValueError("first_page_context の本文・出典が不正です。")
     if bool(value["text"].strip()) != (value["status"] == "available"):
         raise ValueError("first_page_context の本文と取得状態が一致しません。")
-    return {**value, "record_ids": list(value["record_ids"])}
+    units = value.get("source_units")
+    if units is not None and (
+        not isinstance(units, list)
+        or any(
+            not isinstance(unit, dict)
+            or set(unit) != {"record_id", "start", "end"}
+            or not isinstance(unit["record_id"], str)
+            or type(unit["start"]) is not int
+            or type(unit["end"]) is not int
+            or not 0 <= unit["start"] <= unit["end"] <= len(value["text"])
+            for unit in units
+        )
+    ):
+        raise ValueError("first_page_context の原文位置が不正です。")
+    return {
+        **value,
+        "record_ids": list(value["record_ids"]),
+        **({"source_units": [dict(unit) for unit in units]} if units is not None else {}),
+    }
 
 
 def extract_first_page_context(
@@ -144,18 +162,29 @@ def extract_first_page_context(
 
     Picture の生成説明と OCR（picture_ocr_text）は本文に含めず、文字レイヤーから抽出されたレコードだけを使う。
     1 ページ目が画面キャプチャ中心の説明書では、OCR の項目名の羅列が「文書背景」の先頭 800 字を占めていた (#812)。
-    保存上限8000文字、参照128件。取得できない場合も理由を保存する。
+    本文と原文参照を完全に保存する。容量に応じた分割は生成入力の段で行う。取得できない場合も理由を保存する。
     """
     selected = sorted((r for r in records if r.get("page") == 1), key=lambda r: int(r.get("seq_no") or 0)) if paginated else []
     native = [r for r in selected if r.get("category") != "Picture"]
-    texts = list(dict.fromkeys(str(r.get("text") or "").strip() for r in native if str(r.get("text") or "").strip()))
+    texts, source_units = [], []
+    offset = 0
+    for record in native:
+        body = str(record.get("text") or "").strip()
+        if not body:
+            continue
+        if texts:
+            offset += 1
+        source_units.append({"record_id": str(record.get("id") or record.get("seq_no") or ""), "start": offset, "end": offset + len(body)})
+        texts.append(body)
+        offset += len(body)
     text = "\n".join(texts)
     status = "available" if text else "not_paginated" if not paginated else "empty" if selected or 1 in analyzed_pages else "not_analyzed"
     return dict(
         page=1,
         status=status,
-        text=text[:8000],
+        text=text,
         engine=engine,
-        record_ids=[str(r.get("id") or r.get("seq_no") or "")[:256] for r in native][:128],
-        truncated=len(text) > 8000,
+        record_ids=[str(r.get("id") or r.get("seq_no") or "") for r in native],
+        source_units=source_units,
+        truncated=False,
     )

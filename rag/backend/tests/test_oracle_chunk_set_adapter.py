@@ -409,3 +409,61 @@ async def test_json_source_mapping_survives_oracle_and_extraction_validation() -
     assert window["status"] == "exact" and window["pointer"] == "/1"
     assert window["offset"] == 9
     assert window["text"] == "same"
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_literal_first_chunk_does_not_move_to_first_in_page_scope() -> None:
+    """先頭番号が0でなくても原本の先頭を読み、範囲外なら別Chunkへ代えない。"""
+    client = OracleClient()
+    document_id = await _new_document(client)
+    cs = _unique_id("cs_literal_first")
+    chunks = [
+        Chunk(
+            index=7,
+            text="合成の先頭本文",
+            start_offset=0,
+            end_offset=8,
+            metadata={"page_number": 1, "page_start": 1, "page_end": 1},
+        ),
+        Chunk(
+            index=11,
+            text="合成の後続本文",
+            start_offset=9,
+            end_offset=17,
+            metadata={"page_number": 2, "page_start": 2, "page_end": 2},
+        ),
+    ]
+    page = {
+        "page": 1,
+        "status": "available",
+        "text": "合成の先頭本文" * 1500,
+        "engine": "native",
+        "record_ids": ["unit-a"],
+        "truncated": False,
+    }
+    chunks[0].metadata[FIRST_PAGE_CONTEXT_KEY] = json.dumps(page, ensure_ascii=False)
+    await client.save_index(
+        document_id,
+        StructuredExtraction(raw_text="合成本文"),
+        chunks,
+        [_EMBEDDING] * 2,
+        chunk_set_id=cs,
+    )
+    filters = {"chunk_set_id": cs}
+    first = await client.retrieval_document_first_chunk(
+        filters, document_id=document_id, chunk_set_id=cs
+    )
+    assert first is not None and first.text == "合成の先頭本文"
+    assert (
+        await client.retrieval_document_first_chunk(
+            {**filters, "page_number_min": "2"}, document_id=document_id, chunk_set_id=cs
+        )
+        is None
+    )
+    assert await client.chunk_set_first_page_contexts([cs], filters=filters) == {cs: page}
+    assert (
+        await client.chunk_set_first_page_contexts(
+            [cs], filters={**filters, "page_number_min": "2"}
+        )
+        == {}
+    )

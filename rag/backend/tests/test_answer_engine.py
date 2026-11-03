@@ -113,8 +113,21 @@ class FakeOracle:
         self.classification_calls.append(list(document_ids))
         raise AssertionError("回答候補の分類を別途読み取らない")
 
+    async def retrieval_document_first_chunk(self, filters, *, document_id, chunk_set_id):
+        values = [
+            chunk
+            for chunk in self.chunks
+            if chunk.document_id == document_id
+            and str(chunk.metadata.get("chunk_set_id") or "") == chunk_set_id
+        ]
+        return (
+            min(values, key=lambda chunk: int(chunk.metadata.get("chunk_index") or 0))
+            if values
+            else None
+        )
+
     async def chunk_set_first_page_contexts(
-        self, chunk_set_ids: list[str]
+        self, chunk_set_ids: list[str], *, filters=None
     ) -> dict[str, dict[str, object]]:
         self.first_page_calls.append(list(chunk_set_ids))
         return {
@@ -1812,16 +1825,16 @@ async def test_answer_record_passes_first_page_context_as_document_background(
     assert oracle.first_page_calls == [["cs-1"]]
     background = [prompt for prompt in prompts if FIRST_PAGE_TEXT in prompt]
     assert background
-    assert all("First-page background" in prompt for prompt in background)
+    assert all("先頭ページ背景" in prompt for prompt in background)
     # 検索の文(embedding・全文検索の入力)には入れない。
     assert genai.embedded
     assert all(FIRST_PAGE_TEXT not in text for text in genai.embedded)
 
 
-async def test_answer_engine_search_puts_first_page_context_on_child_and_parent() -> None:
-    """子・親の chunk の document に first_page_context を載せ、検索用テキストには入れない(#557)。
+async def test_answer_engine_search_defers_first_page_context_until_final_selection() -> None:
+    """候補検索は子・親の補助metadataへ先頭頁を載せず、最終選択後の読取へ集約する。
 
-    #557 より前に保存した chunk(自身が持つ値)は、そちらを使う。
+    旧い chunk 内の値も候補の補助metadataには載せない。
     """
     from app.rag.answer_engine import _SearchState
 
@@ -1848,19 +1861,19 @@ async def test_answer_engine_search_puts_first_page_context_on_child_and_parent(
     await engine._search(SearchRequest(query="q"), state, retrieval_queries=["受注の登録"])
 
     documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in result.all_chunks}
-    assert documents["doc-1:c1"] == {"first_page_context": _first_page_context()}
-    assert documents["doc-1:cs-1:chunk-docling-p000001"] == documents["doc-1:c1"]
-    assert documents["doc-1:c2"] == {"first_page_context": _first_page_context("旧い表紙")}
+    assert "first_page_context" not in (documents["doc-1:c1"] or {})
+    assert "first_page_context" not in (documents["doc-1:cs-1:chunk-docling-p000001"] or {})
+    assert "first_page_context" not in (documents["doc-1:c2"] or {})
     child = next(chunk for chunk in result.child_chunks if chunk.chunk_uid == "doc-1:c1")
     assert FIRST_PAGE_TEXT not in child.retrieval_text
-    # CRAG の 2 回目の検索でも、読んだ chunk set は読み直さない。
-    assert oracle.first_page_calls == [["cs-1"]]
+    # 最終根拠を選ぶ前の候補検索では、先頭頁を読まない。
+    assert oracle.first_page_calls == []
 
 
 async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """1 ページ目の本文はヒットした chunk set の IN で 1 回だけ読む(#557)。"""
+    """保存済み先頭頁は一括取得し、欠損分だけ同じ版の不変解析を調べる。"""
     from app.clients.oracle import OracleClient
 
     client = OracleClient(settings=Settings())
@@ -1870,6 +1883,8 @@ async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
         statement: str, binds: dict[str, object] | None = None
     ) -> list[dict[str, object]]:
         calls.append((statement, dict(binds or {})))
+        if "rag_document_extraction_revisions" in statement:
+            return []
         return [
             {"chunk_set_id": "cs-a", "first_page_context": json.dumps(_first_page_context())},
             {"chunk_set_id": "cs-b", "first_page_context": None},
@@ -1882,7 +1897,7 @@ async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
     result = await client.chunk_set_first_page_contexts(["cs-a", "cs-b", "cs-a"])
 
     assert result == {"cs-a": _first_page_context()}
-    assert len(calls) == 1
+    assert len(calls) == 2
     statement, binds = calls[0]
     assert "FROM rag_chunk_sets cs" in statement
     # 文書の参照範囲(tenant・許可された文書)で絞る。
@@ -1891,6 +1906,7 @@ async def test_oracle_chunk_set_first_page_contexts_reads_hit_chunk_sets_once(
         value for key, value in binds.items() if key.startswith("first_page_chunk_set")
     ]
     assert chunk_set_binds == ["cs-a", "cs-b"]
+    assert calls[1][1]["recover_first_page_0"] == "cs-b"
 
 
 async def _search_filters(
@@ -2173,8 +2189,8 @@ async def test_screen_linking_reads_catalog_with_the_auto_field_conditions(
         assert json.loads(filters["extraction_fields"]) == [condition.model_dump()]
 
 
-async def test_screen_chunks_keep_first_page_context_without_classification_read() -> None:
-    """画面目録の追加候補では分類を読まず、先頭ページは保持する。"""
+async def test_screen_chunks_defer_first_page_without_classification_read() -> None:
+    """画面目録の追加候補は分類も先頭頁も先読みしない。"""
     from app.rag.answer_engine import _SearchState
 
     oracle = ScreenOracle()
@@ -2188,12 +2204,11 @@ async def test_screen_chunks_keep_first_page_context_without_classification_read
     )
 
     documents = {chunk.chunk_uid: chunk.metadata.get("document") for chunk in stored}
-    expected = {"first_page_context": _first_page_context()}
-    assert documents["setting:c1"] == expected
-    assert documents["doc-setting:cs-setting:setting-p1"] == expected
+    assert "first_page_context" not in (documents["setting:c1"] or {})
+    assert "first_page_context" not in (documents["doc-setting:cs-setting:setting-p1"] or {})
     assert "setting:c2" not in documents
     assert oracle.classification_calls == []
-    assert oracle.first_page_calls == [["cs-setting"]]
+    assert oracle.first_page_calls == []
     # 引用に戻せるよう、検索結果に無かった chunk も state に入れる。
     assert "setting:c1" in state.chunks
 

@@ -24,7 +24,7 @@ from rag_engine.generation.batch_output_repair import (
     repair_feedback_upper_bound,
 )
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
-from rag_engine.generation.document_inputs import document_groups, document_key, order_document_spans
+from rag_engine.generation.document_inputs import document_groups, document_key, document_priority, order_document_spans
 from rag_engine.generation.grounded import _image_text, citation_units
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.call_context import call_context, update_call_context
@@ -153,7 +153,7 @@ def prepare_batched_evidence(
     ``source_scores`` は出典の ID ごとの原質問への rerank の点数。読取で選ばれなかった原文を予算まで補う順に使う（#4113）。
     """
     reading_system = resolve_prompt("generation.batchReading", BATCH_READING_PROMPT)
-    document_order = {document_key(group[0]): index for index, group in enumerate(document_groups(spans))}
+    document_order = document_priority(spans, source_scores)
     selected = order_document_spans(spans, priority=document_order)
     batches: list[dict[str, Any]] = []
     read_sources: set[str] = set()
@@ -181,7 +181,7 @@ def prepare_batched_evidence(
 
     def read_prompt(values: Sequence[dict[str, Any]]) -> str:
         # 出典の ID・原文の座標はコードが組立時に復元するので、モデルへ渡さない。
-        fields = ("source", "page", "page_end", "section_path", "source_context", "batch_answer")
+        fields = ("source", "page", "page_end", "section_path", "source_context", "batch_answer", "document_background_only")
         return json.dumps(
             {
                 "question": question,

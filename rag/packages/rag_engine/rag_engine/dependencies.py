@@ -76,6 +76,8 @@ class AnswerDependencies:
     # 精排・起点選択の後に親/近傍を読む。未指定の SDK は取得済みの原文だけで構築する。
     context_chunks: Callable[..., Sequence[Any]] | None = None
     record_retrieval: Callable[[Mapping[str, Any]], None] | None = None
+    # 正式生成に選んだ文書だけを、その版と検索範囲で読む。
+    document_background: Callable[..., Sequence[Mapping[str, Any]]] | None = None
 
 
 _active: ContextVar[AnswerDependencies | None] = ContextVar("rag_engine_answer_dependencies", default=None)
@@ -222,3 +224,10 @@ def record_retrieval_stage(stage: Mapping[str, Any]) -> None:
     current = _active.get()
     if current is not None and current.record_retrieval is not None:
         current.record_retrieval(stage)
+
+
+def injected_document_background(**kwargs: Any) -> list[Mapping[str, Any]] | None:
+    current = _active.get()
+    if current is None or current.document_background is None:
+        return None
+    return list(current.document_background(**kwargs))

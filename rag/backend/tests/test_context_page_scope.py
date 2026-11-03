@@ -157,9 +157,10 @@ def test_disjoint_ranges_do_not_authorize_the_gap() -> None:
 
 def test_scope_removes_first_page_background() -> None:
     value = chunk("chunk-2", 2)
-    child = _stored_child(
-        value, rrf_score=1, first_page_context={"status": "available", "text": "範囲外の背景"}
-    )
+    child = _stored_child(value, rrf_score=1)
+    child.metadata["document"] = {
+        "first_page_context": {"status": "available", "text": "範囲外の背景"}
+    }
     assert "first_page_context" in child.metadata["document"]
     scoped = _with_context_scope(child, scope())
     assert "first_page_context" not in scoped.metadata["document"]

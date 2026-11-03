@@ -2846,9 +2846,12 @@ def synthesize_grounded_answer(
     from rag_engine.generation.batch_output_repair import batch_failure_summary
     from rag_engine.generation.batched_evidence import prepare_batched_evidence
     from rag_engine.generation.citation_wire import generation_draft_wire_model
+    from rag_engine.generation.document_background import DocumentBackgroundReader, without_embedded_background
     from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
     from rag_engine.models.llm import GroundedItem
+    from rag_engine.retrieval.search_stages import DOCUMENT_INFO_STAGE
 
+    document_background_reader = DocumentBackgroundReader()
     best_input_budget: dict[str, Any] = {}
     input_diagnostic: dict[str, Any] = {}
     if crag_assessment is not None:
@@ -2981,6 +2984,8 @@ def synthesize_grounded_answer(
     # 用語の照合結果は 1 回の回答の中で変わらない。プロンプトの組み立ての回数によらず 1 回だけ残す（#4095）。
     _record_term_usage(base_knowledge, answer=True)
     for number in range(max_rounds):
+        document_background_reader.remember(context)
+        context = without_embedded_background(context)
         # 質問に名前が出た画面の図の項目の種類と、それで決まる業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
         field_kinds = form_field_kinds.question_field_kinds(question, context)
         resolved_conditions = form_field_kinds.resolve_conditions(field_kinds, settings.evidence_conditions)
@@ -2996,6 +3001,18 @@ def synthesize_grounded_answer(
             preserve_records=True,
             crag_assessment=crag_assessment,
         )
+        with _execution_step(DOCUMENT_INFO_STAGE) as background_step:
+            background_step.input(
+                lambda number=number, spans=spans: {
+                    "round": number + 1,
+                    "selected_source_ids": [value["source_id"] for value in spans],
+                    "selected_documents": [list(key) for key in dict.fromkeys(tuple(value["document_scope"]) for value in spans)],
+                    "timing": "正式生成の根拠を選択した後",
+                }
+            )
+            context, spans, background_detail = document_background_reader.append(question, context, spans)
+            background_step.output(background_detail)
+            background_step.field("選択した文書数", background_detail["selected_documents"])
         crag_view = crag_generation.generation_view(
             crag_assessment, spans, context, budget_chars=evidence_budget_chars or getattr(settings, "evidence_budget_chars", None)
         )
@@ -3991,6 +4008,9 @@ def synthesize_grounded_answer(
             ),
             generation_trace=trace,
         )
+    )
+    response = replace(
+        response, generation_trace={**(response.generation_trace or {}), "document_background": document_background_reader.rounds}
     )
     return GroundedAnswer(response, context, tuple(images), mode)
 
