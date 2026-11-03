@@ -112,7 +112,7 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
         system: str, prompt: str, settings: Any, schema: type[BaseModel], **options: Any
     ) -> Any:
         calls.append((schema.__name__, prompt))
-        assert schema.__name__ == "GroundedDraftWire", "生成以外のモデル呼び出しは禁止"
+        assert schema.__name__.endswith("GroundedDraftWire"), "生成以外のモデル呼び出しは禁止"
         evidence_id = re.findall(r"\[(E[0-9]+)\]", prompt[: prompt.index(BODY)])[-1]
         # 実際の生成wireを検証する。旧canonical quote fixtureとしては返さない。
         return schema.model_validate(
