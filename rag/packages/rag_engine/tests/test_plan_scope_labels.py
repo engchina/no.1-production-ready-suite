@@ -100,11 +100,11 @@ def test_a_scope_row_that_names_no_sent_evidence_authorizes_nothing():
     assert not outside(draft, "E1")
 
 
-def test_the_ignored_label_record_of_a_scope_only_plan_does_not_point_to_guide_coverage():
+def test_the_unknown_label_errors_do_not_point_to_guide_coverage():
     draft = plan_draft(GUIDE_IDS, [scope("E1")], [cited(OPEN, "E1")])
     for error in _unknown_plan_label_errors(draft, SPANS, scope_plan=True):
         assert "は Evidence の ID ではありません。" in error and "guide_coverage" not in error
-    assert all("guide_coverage" in error for error in _unknown_plan_label_errors(draft, SPANS))
+    assert not any("guide_coverage" in error for error in _unknown_plan_label_errors(draft, SPANS))
 
 
 def test_a_recovered_plan_with_only_scope_decisions_keeps_the_explanations_unmarked():

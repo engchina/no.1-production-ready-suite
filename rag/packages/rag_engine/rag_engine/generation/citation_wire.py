@@ -59,7 +59,14 @@ def bind_wire_range(line_start: int | None, line_end: int | None, *, unit_count:
 @lru_cache(maxsize=1)
 def generation_draft_wire_model() -> type[BaseModel]:
     """既存の項目・草稿のFieldInfoを保ち、生成時だけ引用を整数の契約へ置き換える。"""
-    from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem, RequestCoverageRange, _StrictModel
+    from rag_engine.models.llm import (
+        GroundedCitation,
+        GroundedDraft,
+        GroundedItem,
+        GuideRequirementCoverage,
+        RequestCoverageRange,
+        _StrictModel,
+    )
 
     citation = create_model(
         "GroundedCitationWire",
@@ -73,18 +80,31 @@ def generation_draft_wire_model() -> type[BaseModel]:
     draft_fields: dict[str, Any] = {
         "request_coverage": (GenericAlias(list, RequestCoverageRange), deepcopy(GroundedDraft.model_fields["request_coverage"])),
         "items": (GenericAlias(list, item), deepcopy(GroundedDraft.model_fields["items"])),
+        # 業務ガイドの要件が無い生成には用途が無い。schema に残すとモデルが埋めようとして空白の暴走の起点になる（#4236）。
+        "guide_coverage": (SkipJsonSchema[list[GuideRequirementCoverage]], Field(default_factory=list, exclude=True)),
     }
     return create_model("GroundedDraftWire", __base__=GroundedDraft, **draft_fields)
 
 
 @lru_cache(maxsize=1)
-def planned_generation_wire_model() -> type[BaseModel]:
+def guided_generation_wire_model() -> type[BaseModel]:
+    """業務ガイドの要件を入力で渡す生成だけ、要件ごとの根拠の計画を出力に含める。"""
+    from rag_engine.models.llm import GroundedDraft, GuideRequirementCoverage
+
+    fields: dict[str, Any] = {
+        "guide_coverage": (GenericAlias(list, GuideRequirementCoverage), deepcopy(GroundedDraft.model_fields["guide_coverage"]))
+    }
+    return create_model("GuidedGroundedDraftWire", __base__=generation_draft_wire_model(), **fields)
+
+
+@lru_cache(maxsize=2)
+def planned_generation_wire_model(*, guided: bool = False) -> type[BaseModel]:
     """根拠計画を入力で受け取る生成では、その計画を出力 schema から除く。"""
     from rag_engine.models.llm import RequestCoverageRange
 
     return create_model(
         "PlannedGroundedDraftWire",
-        __base__=generation_draft_wire_model(),
+        __base__=guided_generation_wire_model() if guided else generation_draft_wire_model(),
         request_coverage=(SkipJsonSchema[list[RequestCoverageRange]], Field(default_factory=list, exclude=True)),
     )
 

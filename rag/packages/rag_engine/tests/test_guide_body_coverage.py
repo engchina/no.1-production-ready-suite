@@ -149,7 +149,7 @@ def test_final_envelope_keeps_body_and_distinguishes_execution_from_guide_comple
     assert FIRST in response.answer_text and SECOND in response.answer_text
     guide_requests = {row["id"]: row["status"] for row in response.envelope["requests"] if row["id"].startswith("guide:")}
     if mode == "none":
-        assert [schema for schema, _prompt in model.prompts] == ["GroundedDraftWire"]
+        assert [schema for schema, _prompt in model.prompts] == ["GuidedGroundedDraftWire"]
         assert guide_requests == {"guide:s1": "unknown", "guide:s2": "unknown"}
         assert response.envelope["outcome"] == "conditional"
         assert grounded.answer_labels().marked_section in response.answer_text
@@ -157,7 +157,7 @@ def test_final_envelope_keeps_body_and_distinguishes_execution_from_guide_comple
         assert "unverified_requests" in response.envelope["handoff_reasons"]
         assert all(row["validation"]["body_coverage"]["execution"] == "not_run" for row in response.generation_trace["guide_step_coverage"])
     else:
-        assert [schema for schema, _prompt in model.prompts] == ["GroundedDraftWire", "GroundedAudit"]
+        assert [schema for schema, _prompt in model.prompts] == ["GuidedGroundedDraftWire", "GroundedAudit"]
         assert guide_requests == {"guide:s1": "unknown", "guide:s2": "unknown"}
         assert response.envelope["outcome"] == "conditional"
         assert all(row["status"] == "unknown" for row in response.generation_trace["guide_step_coverage"])

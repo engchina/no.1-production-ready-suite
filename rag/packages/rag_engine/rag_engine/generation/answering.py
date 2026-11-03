@@ -2824,7 +2824,9 @@ def synthesize_grounded_answer(
                     render=render_generation,
                     evidence_text=grounded.evidence_block_text,
                     system=generation_system,
-                    schema=grounded.generation_output_model(question).model_json_schema(),
+                    schema=grounded.generation_output_model(
+                        question, guided=bool(runtime_knowledge is not None and runtime_knowledge.guide_step_contracts)
+                    ).model_json_schema(),
                     provider_id=provider,
                     failed_batches=failed_batches,
                     source_scores=_source_question_scores(context),

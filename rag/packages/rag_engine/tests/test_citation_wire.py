@@ -7,7 +7,13 @@ from pydantic import ValidationError
 from test_cite_lines import SHORT
 
 from rag_engine.generation import grounded
-from rag_engine.generation.citation_wire import bind_wire_range, canonical_generation_draft, generation_draft_wire_model
+from rag_engine.generation.citation_wire import (
+    bind_wire_range,
+    canonical_generation_draft,
+    generation_draft_wire_model,
+    guided_generation_wire_model,
+    planned_generation_wire_model,
+)
 from rag_engine.models.llm import GroundedCitation, GroundedDraft, GroundedItem
 
 
@@ -62,7 +68,7 @@ def test_wire_does_not_allow_free_locator_or_quote(key):
 def test_factory_preserves_other_fields_and_constraints():
     wire = generation_draft_wire_model()
     for key, field in GroundedDraft.model_fields.items():
-        if key not in {"items", "request_coverage"}:
+        if key not in {"items", "request_coverage", "guide_coverage"}:
             assert wire.model_fields[key].asdict() == field.asdict()
     item_model = wire.model_fields["items"].annotation.__args__[0]
     for key, field in GroundedItem.model_fields.items():
@@ -292,3 +298,21 @@ def test_unnumbered_single_unit_block_extracts_the_whole_text_for_one_and_null(s
     assert not error and cited.quote == SHORT
     assert extraction["status"] == "extracted" and extraction.get("reason_code") is None
     assert (extraction["quote_origin"], extraction["requested_range_status"]) == ("whole_text", "not_required")
+
+
+def test_guide_coverage_is_in_the_output_schema_only_when_guide_requirements_are_given():
+    """#4236: 用途の無い欄を見せない。業務ガイドの要件を渡す生成だけ、計画の後・items の前に欄がある。"""
+    assert "guide_coverage" not in generation_draft_wire_model().model_json_schema()["properties"]
+    assert "guide_coverage" not in planned_generation_wire_model().model_json_schema()["properties"]
+    guided = list(guided_generation_wire_model().model_json_schema()["properties"])
+    assert guided.index("request_coverage") < guided.index("guide_coverage") < guided.index("items")
+    planned = list(planned_generation_wire_model(guided=True).model_json_schema()["properties"])
+    assert "request_coverage" not in planned
+    assert planned.index("guide_coverage") < planned.index("items")
+
+
+def test_guided_output_keeps_guide_coverage_in_the_canonical_draft():
+    row = {"requirement_id": "s1:0", "evidence_ids": ["E1"], "gap": ""}
+    draft = canonical_generation_draft(guided_generation_wire_model().model_validate({**payload(), "guide_coverage": [row]}))
+    assert [plan.requirement_id for plan in draft.guide_coverage] == ["s1:0"]
+    assert canonical_generation_draft(generation_draft_wire_model().model_validate(payload())).guide_coverage == []
