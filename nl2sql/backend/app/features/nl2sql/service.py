@@ -25,7 +25,7 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager, nullcontext, suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -18261,7 +18261,18 @@ class Nl2SqlService:
                     params={"engine": Nl2SqlEngine.ENTERPRISE_AI_DIRECT.value},
                 ),
             ) as stage_trace:
+                stage_trace.set_call_input(
+                    lambda: {"質問": question, "前の往復": list(history)}, restricted=True
+                )
                 generated = self._generate_db_admin_chat_output(question, history)
+                stage_trace.set_call_output(
+                    lambda: {
+                        "生成したSQL": generated.sql,
+                        "説明": generated.explanation,
+                        "参照した表": generated.context_tables,
+                        "注意事項": generated.warnings,
+                    }
+                )
                 stage_trace.set_display(
                     details=chat_progress_details(code=[("生成した SQL", generated.sql, "sql")])
                 )
@@ -18272,6 +18283,9 @@ class Nl2SqlService:
             ) as stage_trace:
                 # 参照する object の実際の列で確かめ、存在しない列・object を参照する文は 1 回
                 # だけ直させる（#2352）。直らなければ文は残し、理由を添えてその文の実行を止める。
+                stage_trace.set_call_input(
+                    lambda: {"生成したSQL": generated.sql, "修正の質問": question}, restricted=True
+                )
                 plan, checks = self._db_admin_chat_checked_plan(generated.sql)
                 repaired_sql = self._repair_db_admin_chat_sql(question, plan, checks)
                 if repaired_sql:
@@ -18283,6 +18297,14 @@ class Nl2SqlService:
                 stage_trace.set_display(
                     params=_db_admin_chat_check_params(plan),
                     details=_db_admin_chat_check_details(plan, plan_warnings, bool(repaired_sql)),
+                )
+                stage_trace.set_call_output(
+                    lambda: {
+                        "計画": plan,
+                        "確認結果": {str(index): asdict(check) for index, check in checks.items()},
+                        "修正したSQL": repaired_sql,
+                        "注意事項": plan_warnings,
+                    }
                 )
         trace_id = summary.telemetry_trace_id or ""
         # 同期の要求なので、応答の前に span を書いておく（画面は応答の直後にターンの処理の
@@ -24155,6 +24177,17 @@ class Nl2SqlService:
             self._persist_job(job_id)
             _log_job_stage_started(job_id, _NL2SQL_JOB_STAGES[0], attempt=attempt)
 
+            stage_trace.set_call_input(
+                lambda: {
+                    "原質問": request.generation_question,
+                    "プロファイルID": request.profile_id,
+                    "用語の使用": request.use_glossary,
+                    "要求した対象": request.allowed_objects,
+                    "要求した行数上限": request.row_limit,
+                    "オントロジーの使用": request.use_ontology_context,
+                },
+                restricted=True,
+            )
             stage_timings: list[StageTiming] = []
             profile = self.get_profile(request.profile_id)
             self._raise_if_job_cancelled(job_id)
@@ -24198,6 +24231,15 @@ class Nl2SqlService:
                     request.generation_question, rewritten, row_limit
                 )
             )
+            stage_trace.set_call_output(
+                lambda: {
+                    "適用後の質問": rewritten,
+                    "実際の対象": allowed,
+                    "実際の行数上限": row_limit,
+                    "公開版ID": business_release_id,
+                    "オントロジーの本文": ontology_context,
+                }
+            )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="prepare_context", elapsed_ms=stage_elapsed))
 
@@ -24216,14 +24258,29 @@ class Nl2SqlService:
             )
             self._raise_if_job_cancelled(job_id)
             stage_started = time.monotonic()
+            generation_question = self._chat_generation_question(
+                request,
+                job.actor_user_uuid,
+                conversation_id=job.conversation_id,
+                # 会話の前のターンを読む（足せるかは投入のときに確かめた。#3244）。
+                all_users=job.actor_is_system_admin,
+            )
+            stage_trace.set_call_input(
+                lambda: {
+                    "実際の質問": generation_question,
+                    "生成方法": request.engine.value,
+                    "プロファイル": profile,
+                    "対象": allowed,
+                    "行数上限": row_limit,
+                    "Select AIの指定": request.select_ai_overrides,
+                    "オントロジーの本文": ontology_context,
+                    "用語の使用": request.use_glossary,
+                    "SQLの要件": request.sql_requirement,
+                },
+                restricted=True,
+            )
             generated = self._generate_selected_engine(
-                question=self._chat_generation_question(
-                    request,
-                    job.actor_user_uuid,
-                    conversation_id=job.conversation_id,
-                    # 会話の前のターンを読む（足せるかは投入のときに確かめた。#3244）。
-                    all_users=job.actor_is_system_admin,
-                ),
+                question=generation_question,
                 engine=request.engine,
                 profile=profile,
                 allowed=allowed,
@@ -24234,6 +24291,16 @@ class Nl2SqlService:
                 sql_requirement=request.sql_requirement,
             )
             stage_trace.set_display(details=_job_progress_generate_details(generated))
+            stage_trace.set_call_output(
+                lambda: {
+                    "生成したSQL": generated.generated_sql,
+                    "説明": generated.explanation,
+                    "生成方法": generated.engine.value,
+                    "生成の情報": generated.engine_meta,
+                    "縮退理由": generated.fallback_reason,
+                    "使用したカタログ": generated.schema_catalog,
+                }
+            )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="generate_sql", elapsed_ms=stage_elapsed))
 
@@ -24251,6 +24318,17 @@ class Nl2SqlService:
             )
             self._raise_if_job_cancelled(job_id)
             stage_started = time.monotonic()
+            stage_trace.set_call_input(
+                lambda: {
+                    "生成したSQL": generated.generated_sql,
+                    "対象": allowed,
+                    "行数上限": row_limit,
+                    "使用したカタログ": generated.schema_catalog,
+                    "生成方法": generated.engine.value,
+                    "空の条件を確認する質問": rewritten,
+                },
+                restricted=True,
+            )
             analysis = self.analyze_sql(
                 generated.generated_sql,
                 allowed,
@@ -24269,6 +24347,15 @@ class Nl2SqlService:
                 if analysis.safety.is_safe
                 else None,
                 details=_job_progress_safety_details(analysis.safety),
+            )
+            stage_trace.set_call_output(
+                lambda: {
+                    "安全性": analysis.safety,
+                    "実行可能なSQL": analysis.executable_sql,
+                    "修正したSQL": analysis.repaired_sql,
+                    "推奨事項": analysis.recommendations,
+                    "最適化の情報": analysis.optimization_hints,
+                }
             )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="safety_check", elapsed_ms=stage_elapsed))

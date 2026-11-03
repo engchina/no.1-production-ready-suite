@@ -197,6 +197,24 @@ def test_done_chat_turn_writes_the_span_tree_to_the_table(
     assert queue.started_at == datetime.fromisoformat(job.created_at)
     assert queue.finished_at == datetime.fromisoformat(job.started_at or "")
     assert isinstance(events[-1], ChatProgressTerminalEvent)
+    admin = service.get_job_trace(job.job_id, actor_user_uuid="user-1", actor_can_manage=True)
+    assert admin is not None
+    recorded = stages(admin.trace.events)
+    for name in ["prepare_context", "generate_sql", "safety_check"]:
+        detail = recorded[name].details
+        assert detail and detail.call and detail.call.visibility == "system_admin"
+        assert detail.call.input.status == detail.call.output.status == "recorded"
+        hidden = found[name].details
+        assert hidden and hidden.call and hidden.call.input.status == "withheld"
+    generate_detail = recorded["generate_sql"].details
+    safety_detail = recorded["safety_check"].details
+    assert generate_detail and generate_detail.call
+    assert safety_detail and safety_detail.call
+    generate_call = generate_detail.call
+    safety_call = safety_detail.call
+    assert json.loads(generate_call.output.text)["生成したSQL"] == job.result.generated_sql
+    assert json.loads(safety_call.input.text)["生成したSQL"] == job.result.generated_sql
+    assert json.loads(safety_call.output.text)["実行可能なSQL"] == job.result.executable_sql
 
     # 実行履歴の行も同じ実行（ジョブ）の span を指す。
     [history] = repository.list_documents("history", limit=100)
@@ -557,4 +575,45 @@ def test_body_off_preserves_business_result_and_progress_metadata(
     events = events_of(service, trace_table, job.job_id)
     assert stages(events)
     assert all(not step.details or not step.details.code for step in stages(events).values())
+    for name in ["prepare_context", "generate_sql", "safety_check"]:
+        detail = stages(events)[name].details
+        assert detail and detail.call and not detail.call.capture_enabled
+        assert detail.call.input.text == detail.call.output.text == ""
     assert repository.get_document("jobs", job.job_id) is not None
+
+
+def test_failed_generation_keeps_actual_input_without_inventing_output(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = jobs
+    job_id = start(service)
+    questions: list[str] = []
+    original = service._chat_generation_question
+
+    def question(*args: Any, **kwargs: Any) -> str:
+        result = original(*args, **kwargs)
+        questions.append(result)
+        return result
+
+    def fail(**kwargs: Any) -> Any:
+        assert kwargs["question"] == questions[-1]
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(service, "_chat_generation_question", question)
+    monkeypatch.setattr(service, "_generate_selected_engine", fail)
+    job = run(service, job_id)
+    assert job.status == JobStatus.ERROR
+    assert len(questions) == 1
+    trace_table.flush()
+    trace = service.get_job_trace(job.job_id, actor_user_uuid="user-1", actor_can_manage=True)
+    assert trace is not None
+    generation = stages(trace.trace.events)["generate_sql"]
+    assert generation.status == "failed"
+    assert generation.details and generation.details.call
+    call = generation.details.call
+    assert call.input.status == "recorded"
+    assert json.loads(call.input.text)["実際の質問"] == questions[0]
+    assert call.output.status == "recorded"
+    assert json.loads(call.output.text) == {"error_type": "RuntimeError"}
