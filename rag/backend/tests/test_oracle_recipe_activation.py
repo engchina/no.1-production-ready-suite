@@ -63,6 +63,7 @@ async def test_activate_recipe_chunk_set_casts_materialized_revision_bind(
     await client.activate_recipe_chunk_set(
         recipe_id="recipe-1",
         chunk_set_id="cs-1",
+        expected_base_chunk_set_id=None,
         materialized_revision=materialized_revision,
     )
 
@@ -103,6 +104,7 @@ async def test_activate_recipe_chunk_set_records_materialized_revision(
     await client.activate_recipe_chunk_set(
         recipe_id=recipe_id,
         chunk_set_id=chunk_set_id,
+        expected_base_chunk_set_id=None,
         materialized_revision=materialized_revision,
     )
 
@@ -147,7 +149,9 @@ async def test_clone_active_recipe_chunks_preserves_metadata_and_keeps_old_activ
         chunk_set_id=source,
     )
     await client.mark_chunk_set_indexed(chunk_set_id=source, chunk_count=1, vector_count=0)
-    await client.activate_recipe_chunk_set(recipe_id=recipe_id, chunk_set_id=source)
+    await client.activate_recipe_chunk_set(
+        recipe_id=recipe_id, chunk_set_id=source, expected_base_chunk_set_id=None
+    )
     await client.upsert_chunk_set(chunk_set_id=target, document_id=document.id, recipe_id=recipe_id)
     await client.clone_recipe_chunk_set_chunks(
         recipe_id=recipe_id,

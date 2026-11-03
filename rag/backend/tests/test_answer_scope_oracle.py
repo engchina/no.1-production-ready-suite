@@ -55,6 +55,7 @@ async def _indexed_document(
     await client.activate_recipe_chunk_set(
         recipe_id=recipe_id,
         chunk_set_id=chunk_set_id,
+        expected_base_chunk_set_id=None,
         materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
     )
     await client.update_document_status(document_id, FileStatus.INDEXED)
@@ -225,6 +226,7 @@ async def test_retrievable_chunk_follows_search_visibility_on_real_oracle() -> N
     await client.activate_recipe_chunk_set(
         recipe_id=recipe_id,
         chunk_set_id=new_chunk_set_id,
+        expected_base_chunk_set_id=str(recipes[0]["active_chunk_set_id"]),
         materialized_revision=int(str(recipes[0].get("config_revision") or 1)),
     )
     assert await client.retrievable_chunk(document_id, old.chunk_id) is None
@@ -262,8 +264,10 @@ async def test_element_locator_follows_rechunking_on_real_oracle() -> None:
     recipes = await client.list_document_recipes(document_id)
     recipe_id = str(recipes[0]["recipe_id"])
     revision = int(str(recipes[0].get("config_revision") or 1))
+    active_set = str(recipes[0]["active_chunk_set_id"])
 
     async def rechunk(chunks: list[Chunk], extraction_recipe_id: str) -> str:
+        nonlocal active_set
         chunk_set_id = f"cs_loc_{uuid4().hex[:16]}"
         await client.upsert_chunk_set(
             chunk_set_id=chunk_set_id,
@@ -282,8 +286,12 @@ async def test_element_locator_follows_rechunking_on_real_oracle() -> None:
             chunk_set_id=chunk_set_id, chunk_count=len(chunks), vector_count=len(chunks)
         )
         await client.activate_recipe_chunk_set(
-            recipe_id=recipe_id, chunk_set_id=chunk_set_id, materialized_revision=revision
+            recipe_id=recipe_id,
+            chunk_set_id=chunk_set_id,
+            expected_base_chunk_set_id=active_set,
+            materialized_revision=revision,
         )
+        active_set = chunk_set_id
         return chunk_set_id
 
     first_set = await rechunk(
