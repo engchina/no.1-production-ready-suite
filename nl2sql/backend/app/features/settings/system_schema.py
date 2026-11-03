@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from pr_system_settings.auth.migrations import TRACE_BODY_TABLES
 from pr_system_settings.system_schema import (
     IGNORED_APPLY_CODES,
     IGNORED_DROP_CODES,
@@ -245,6 +246,7 @@ PRESERVED_TABLES = frozenset(
         "PLATFORM_CHAT_ATTACHMENT_SETTINGS",
         # 処理の経過の span の表（#3226）。
         "PLATFORM_TRACE_SPANS",
+        *TRACE_BODY_TABLES,
         "NL2SQL_APP_ROLE_PERMISSIONS",
         "NL2SQL_APP_ROLE_PROFILES",
         "NL2SQL_APP_DATA_ENTITLEMENTS",

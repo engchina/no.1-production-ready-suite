@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pr_backend_core.observability.trace_bodies import BODY_DDL, BODY_TABLES
+
 # 既に存在する table / index / constraint は正常として読み飛ばす。
 PLATFORM_AUTH_DDL_IGNORED_ERRORS = frozenset(
     {
@@ -27,6 +29,7 @@ PLATFORM_AUTH_DDL_IGNORED_ERRORS = frozenset(
 # （各製品の PRESERVED_TABLES）。
 # 認証の準備の判定（`PLATFORM_AUTH_TABLES`）には入れない（表が無くても認証は動く）。
 TRACE_SPAN_TABLES: tuple[str, ...] = ("PLATFORM_TRACE_SPANS",)
+TRACE_BODY_TABLES: tuple[str, ...] = BODY_TABLES
 
 PLATFORM_AUTH_DDL: tuple[str, ...] = (
     """
@@ -241,6 +244,7 @@ PLATFORM_AUTH_DDL: tuple[str, ...] = (
     """,
     "CREATE INDEX IX_PLATFORM_TRACE_SPANS_OP ON PLATFORM_TRACE_SPANS (PRODUCT, OPERATION_ID)",
     "CREATE INDEX IX_PLATFORM_TRACE_SPANS_STARTED ON PLATFORM_TRACE_SPANS (STARTED_AT)",
+    *BODY_DDL,
 )
 
 

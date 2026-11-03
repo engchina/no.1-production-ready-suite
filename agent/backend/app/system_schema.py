@@ -30,7 +30,11 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from pr_system_settings.auth.migrations import TRACE_SPAN_TABLES, apply_platform_auth_schema
+from pr_system_settings.auth.migrations import (
+    TRACE_BODY_TABLES,
+    TRACE_SPAN_TABLES,
+    apply_platform_auth_schema,
+)
 from pr_system_settings.auth.store import PLATFORM_AUTH_TABLES, OracleAuthStore
 from pr_system_settings.chat_attachments import CHAT_ATTACHMENT_TABLES
 from pr_system_settings.system_schema import (
@@ -747,6 +751,7 @@ PRESERVED_TABLES: tuple[str, ...] = (
     "PLATFORM_TRACE_RECORDING_SETTINGS",
     *CHAT_ATTACHMENT_TABLES,
     *TRACE_SPAN_TABLES,
+    *TRACE_BODY_TABLES,
 )
 
 MANAGED_FOREIGN_KEYS: tuple[ForeignKeySpec, ...] = tuple(
