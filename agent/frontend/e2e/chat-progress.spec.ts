@@ -1,5 +1,5 @@
 import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
-import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
+import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
 import type { Page } from "@playwright/test";
 
@@ -739,4 +739,46 @@ test("途中の試行失敗があっても保存された成功終端を表示�
   await page.keyboard.press("Enter");
   await expect(progress.locator("details").first()).toHaveAttribute("open", "");
   await expectNoHorizontalOverflow(page);
+});
+
+test("保存済みの全文を分段取得して末尾まで確認する", {tag: "@responsive"}, async ({page, mockApi}, testInfo) => {
+  if (testInfo.project.name === "desktop") await page.setViewportSize({width: 1280, height: 900});
+  const {run, progress: log} = seedRunningRun(mockApi);
+  const body = syntheticFullCallBody();
+  log.step("chat-1", "done", {kind: "plan", details: {call: body.call}}).terminal("done");
+  run.status = "completed";
+  const reads: number[] = [];
+  await page.route(`**/api/runs/${RUN_ID}/trace/spans/*/input/body?*`, route => {
+    const first = Number(new URL(route.request().url()).searchParams.get("first_part")); reads.push(first);
+    return route.fulfill({json: {data: body.page(first)}});
+  });
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await page.getByTestId("run-timeline-section-summary").click();
+  await page.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
+  const back = page.locator("[data-trace-inspector]").getByRole("button", {name: "一覧に戻る", exact: true});
+  if (await back.isVisible()) await back.click();
+  await page.locator('[data-trace-record="chat-1"] button').click();
+  const inspector = page.locator("[data-trace-inspector]");
+  await inspector.getByRole("tab", {name: "入力", exact: true}).click();
+  expect(reads).toEqual([]);
+  await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();
+  await inspector.getByRole("button", {name: "続きを読む", exact: true}).click();
+  await expect(inspector.locator("[data-call-readable]")).toContainText("全文の末尾");
+  expect(reads).toEqual([0, 8]);
+  await expectNoHorizontalOverflow(page);
+  const inputTab = inspector.getByRole("tab", {name: "入力", exact: true});
+  await inputTab.focus();
+  await inputTab.press("Home");
+  await expect(inspector.getByRole("tab", {name: "概要", exact: true})).toHaveAttribute("aria-selected", "true");
+  await inspector.getByRole("tab", {name: "概要", exact: true}).press("End");
+  await expect(inspector.getByRole("tab", {name: "入出力仕様", exact: true})).toHaveAttribute("aria-selected", "true");
+  await inputTab.click();
+  await inspector.locator("[data-call-readable]").evaluate(node => {node.scrollTop = node.scrollHeight;});
+  await page.screenshot({path: testInfo.outputPath("agent-full-trace.png")});
+  await page.evaluate(() => {document.documentElement.dataset.theme = "dark";});
+  await page.screenshot({path: testInfo.outputPath("agent-full-trace-dark.png")});
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({width: 1920, height: 900});
+    await page.screenshot({path: testInfo.outputPath("agent-full-trace-1920.png")});
+  }
 });

@@ -84,6 +84,7 @@ export function OperationStatusStrip({
       </div>
     ) : (
       <ChatProgress
+              loadCallBody={progress.loadCallBody}
         active={active}
         activityIndicator={!cancelRequesting}
         // 仮の行から span の木に替わったら一覧を作り直す（仮の行を残さない）。

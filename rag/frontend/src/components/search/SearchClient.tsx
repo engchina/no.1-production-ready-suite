@@ -459,6 +459,7 @@ export function SearchClient() {
   // 行を止めた・失敗した状態にする。
   const trace = useRagTraceProgress({
     key: run?.runId ?? null,
+    bodyPath: run?.runId ? `/api/search/runs/${encodeURIComponent(run.runId)}/trace` : null,
     active: phase === "streaming",
     fetchSnapshot: (signal) => api.getSearchRunTrace(run?.runId ?? "", signal),
   });
@@ -470,6 +471,7 @@ export function SearchClient() {
   const running = phase === "streaming";
   const processView = run ? (
     <AnswerProcess
+      loadCallBody={trace.loadCallBody}
       // 最初の工程が届くまでは「検索の準備」を今の工程にする（止まって見えない。#1176）。
       steps={
         !running || processSteps.length > 0
