@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
-from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.generation.citation_wire import generation_draft_wire_model, guided_generation_wire_model
 from rag_engine.models.llm import RequestScopePlan
 from rag_engine.resources.runtime import bind_prompt_overrides
 
@@ -452,7 +452,8 @@ def test_generation_output_has_no_copied_plan_fields_and_code_cuts_the_link_quot
     """#4117: 生成の出力の計画に写しの欄が無く、linked の原文はコードが番号の範囲から切り出す。"""
     schema = json.dumps(generation_draft_wire_model().model_json_schema(), ensure_ascii=False)
     assert "link_quote" not in schema
-    assert '"evidence_ids"' in schema  # guide_coverage の欄だけに残る
+    assert '"evidence_ids"' not in schema
+    assert '"evidence_ids"' in json.dumps(guided_generation_wire_model().model_json_schema())  # guide_coverage の欄だけに残る
     plan_schema = generation_draft_wire_model().model_json_schema()["$defs"]["RequestCoverageRange"]["properties"]
     assert set(plan_schema) == {"request_id", "evidence_scope"}
     result, calls = _run_direct(
@@ -545,3 +546,11 @@ def test_an_unknown_cited_label_gets_no_plan_row() -> None:
     result, _calls = _run_direct(output)
     assert "request_plan_rows_from_citations" not in result.timing
     assert [scope.evidence_id for scope in result.draft.request_coverage[0].evidence_scope] == ["E1"]
+
+
+def test_generation_without_guide_requirements_never_shows_guide_coverage() -> None:
+    """#4236: 指示にも schema にも、業務ガイドの要件が無い生成には guide_coverage が出ない。"""
+    for question in (QUESTION, TEXTS[0] + "について教えてください。"):
+        assert "guide_coverage" not in grounded.generation_system_prompt(question)
+        assert "guide_coverage" not in json.dumps(grounded.generation_output_model(question).model_json_schema())
+        assert "guide_coverage" in grounded.generation_output_model(question, guided=True).model_json_schema()["properties"]

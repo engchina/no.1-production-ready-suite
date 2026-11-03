@@ -24,7 +24,7 @@ def run(*, request_case="valid", omit_requirement=False, retry_case=None, use_al
 
     def parser(system, prompt, settings, schema, **kwargs):
         calls.append(schema)
-        if schema is generation_draft_wire_model():
+        if issubclass(schema, generation_draft_wire_model()):
             return GroundedDraft(
                 items=[
                     GroundedItem(kind="operation", request_id="Q1", text=claim, citations=[GroundedCitation(evidence_id="E1", lines="1")])

@@ -66,7 +66,7 @@ class Model:
 
     def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         self.calls.append(schema.__name__)
-        if schema is generation_draft_wire_model():
+        if issubclass(schema, generation_draft_wire_model()):
             return draft(self.summary)
         assert is_audit_wire(schema)
         self.audits.append(json.loads(prompt))

@@ -67,6 +67,7 @@ from rag_engine.generation.citation_wire import (
     canonical_generation_draft,
     canonical_request_coverage,
     generation_draft_wire_model,
+    guided_generation_wire_model,
     planned_generation_wire_model,
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
@@ -195,7 +196,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。
 - 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。
 - 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。
-- 各項目の意味は応答 schema の説明に従う。まず request_coverage と guide_coverage に使う根拠を挙げ、その後に items を書く。
+- 各項目の意味は応答 schema の説明に従う。schema にある根拠の計画の欄を先に書き、その後に items を書く。
 
 ## Step 3: 主張と引用を対応させて回答項目を作る
 ### 出典の網羅
@@ -298,8 +299,11 @@ def generation_system_prompt(question: str) -> str:
     return resolve_prompt("generation.system", GENERATE_SYSTEM_PROMPT)
 
 
-def generation_output_model(question: str) -> type[BaseModel]:
-    return planned_generation_wire_model() if uses_separate_scope_plan(question) else generation_draft_wire_model()
+def generation_output_model(question: str, *, guided: bool = False) -> type[BaseModel]:
+    """``guided`` は業務ガイドの要件（guide_contracts）を入力で渡す生成か。"""
+    if uses_separate_scope_plan(question):
+        return planned_generation_wire_model(guided=guided)
+    return guided_generation_wire_model() if guided else generation_draft_wire_model()
 
 
 # 監査の判断順を Step で示す。UI の読み取り専用表示と実行はこの定数を共有する。
@@ -1722,10 +1726,11 @@ def _unknown_plan_label_errors(draft: GroundedDraft, spans: Sequence[dict], *, s
     ``scope_plan`` は計画を回答の草稿ではなく計画だけの出力（``RequestScopePlan``。guide_coverage の欄が無い）で
     立てたか。その計画は作り直さないので、直し方ではなく計画の根拠として扱わないことを書く（#3827）。
     """
+    # guide_coverage の欄があるかは生成ごとに違う（#4236）ので、欄の名前は書かない。欄の使い方は schema の説明にある。
     advice = (
         "計画の根拠として扱いません（evidence_id に使えるのは [E1] 形式の根拠の番号だけです）。"
         if scope_plan
-        else "evidence_scope の evidence_id には [E1] 形式の根拠の番号だけを書き、業務ガイドの要件は guide_coverage の requirement_id に書いてください。"
+        else "evidence_scope の evidence_id には [E1] 形式の根拠の番号だけを書いてください。"
     )
     return list(
         dict.fromkeys(
@@ -6960,7 +6965,7 @@ def run_round(
         generation_system += continue_prompt_steps(
             generation_system, resolve_prompt("generation.assumptionSystem", ASSUMPTION_SYSTEM_PROMPT)
         )
-    generation_model = generation_output_model(question)
+    generation_model = generation_output_model(question, guided=bool(guide_step_contracts))
     generation_outputs: list[dict[str, Any]] = []
     cached_views = _CITATION_VIEWS.get() or {}
     input_views = tuple(cached[1] for span in spans if (cached := cached_views.get(id(span))) is not None and cached[0] is span)

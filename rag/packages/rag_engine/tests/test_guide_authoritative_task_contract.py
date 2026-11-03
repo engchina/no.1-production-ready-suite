@@ -143,7 +143,7 @@ def test_actual_round_audit_primary_question_uses_compiled_task_without_more_cal
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema is generation_draft_wire_model():
+        if issubclass(schema, generation_draft_wire_model()):
             return GroundedDraft(
                 items=[
                     GroundedItem(kind="operation", request_id="Q1", text=OPEN, citations=[GroundedCitation(evidence_id="E1", quote=OPEN)])

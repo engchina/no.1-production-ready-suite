@@ -58,7 +58,7 @@ class Parser:
         self.calls: list[dict[str, Any]] = []
 
     def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-        assert schema is generation_draft_wire_model(), "none で追加の監査を呼ばない"
+        assert issubclass(schema, generation_draft_wire_model()), "none で追加の監査を呼ばない"
         self.calls.append({"system": system, "prompt": prompt, "schema": schema})
         if self.responses:
             value = self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
@@ -242,7 +242,7 @@ def test_sdk_serializes_only_selected_second_round_sources(monkeypatch: pytest.M
 
     class SdkParser(Parser):
         def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-            assert schema is generation_draft_wire_model()
+            assert issubclass(schema, generation_draft_wire_model())
             self.calls.append({"prompt": prompt, "system": system})
             return oci._parse_text_once(system, prompt, sdk_settings, schema, sdk_settings.llm_providers[sdk_settings.default_answer_llm])
 
@@ -360,7 +360,7 @@ def test_audited_modes_share_generation_budget_without_selection_audit(mode: str
             self.audit_calls: list[str] = []
 
         def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-            if schema is generation_draft_wire_model():
+            if issubclass(schema, generation_draft_wire_model()):
                 return super().__call__(system, prompt, settings, schema, **options)
             assert is_audit_wire(schema)
             self.audit_calls.append(prompt)

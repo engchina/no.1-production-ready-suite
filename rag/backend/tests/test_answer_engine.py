@@ -7,7 +7,10 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
-from rag_engine.generation.citation_wire import generation_draft_wire_model
+from rag_engine.generation.citation_wire import (
+    generation_draft_wire_model,
+    guided_generation_wire_model,
+)
 from rag_engine.models.llm import (
     CragRetrievalGradeOutput,
     GroundedDraft,
@@ -204,7 +207,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
                 dict(aspect="procedure", kind="operation", claim=body, evidence=evidence)
             ],
         )
-    if schema in (GroundedDraft, generation_draft_wire_model()):
+    if schema in (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model()):
         # 既存quote fixtureを履歴互換の草稿として返す。生成wireの検証は行わない。
         body = "受注番号を入力し、登録ボタンを押します。"
         match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
@@ -3220,7 +3223,10 @@ async def _answer_with_coverage(
         if schema is QueryExpansionOutput:
             return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)
-        if schema in (GroundedDraft, generation_draft_wire_model()) and _INVOICE_TEXT not in prompt:
+        if (
+            schema in (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
+            and _INVOICE_TEXT not in prompt
+        ):
             data = result.model_dump(exclude_unset=True)
             data["items"].append(
                 {

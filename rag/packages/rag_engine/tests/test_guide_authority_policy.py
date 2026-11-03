@@ -209,7 +209,7 @@ def test_run_round_delivers_authoritative_scope_and_keeps_supported_operation_as
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
-        if schema is generation_draft_wire_model():
+        if issubclass(schema, generation_draft_wire_model()):
             return GroundedDraft(
                 items=[
                     GroundedItem(
@@ -372,7 +372,7 @@ def test_generation_and_observation_preserve_confirmed_values_and_origins_withou
         raise AssertionError("外部I/Oは不要")
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
-        if schema is generation_draft_wire_model():
+        if issubclass(schema, generation_draft_wire_model()):
             generated.append(prompt)
             identity = "E1"
             claim = SWAPPED if mode == "standard" and len(generated) == 1 else CORRECT
