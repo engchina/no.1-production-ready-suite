@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from typing import Any
 
-from rag_engine.generation.answer_models import AnswerRecord
+from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.retrieval.candidate_budget import record_id
 
 
@@ -25,3 +25,28 @@ def candidate_snapshot(records: Sequence[AnswerRecord]) -> list[dict[str, Any]]:
         }
         for record in records
     ]
+
+
+def context_snapshot(context: AnswerContext, **fields: Any) -> dict[str, Any]:
+    """工程へ渡した文脈と親子・候補の関係を、記録時に写す。採否理由は推測しない。"""
+    return {
+        **fields,
+        "根拠レコード": candidate_snapshot(context.records),
+        "文脈テキスト": context.text,
+        "文脈状態": context.status,
+        "不足理由": context.insufficient_reason,
+        "優先ID": list(context.preferred_child_ids),
+        "検索候補": candidate_snapshot(context.ranked_candidates),
+        "後回し候補": candidate_snapshot(context.deferred_records),
+        "展開用候補": candidate_snapshot(context.expansion_records),
+        "文書選択": dict(context.document_selection),
+        "根拠の親子関係": [
+            {
+                "親": candidate_snapshot([parent.record]),
+                "role": parent.role,
+                "reason": parent.reason,
+                "子": [{"根拠": candidate_snapshot([child.record]), "role": child.role} for child in parent.children],
+            }
+            for parent in context.evidence_tree
+        ],
+    }

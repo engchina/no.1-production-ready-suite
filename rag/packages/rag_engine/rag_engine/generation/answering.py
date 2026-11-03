@@ -11,6 +11,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -165,7 +166,7 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
-from rag_engine.generation.candidate_trace import candidate_snapshot
+from rag_engine.generation.candidate_trace import candidate_snapshot, context_snapshot
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.crag_support import (
     MAX_GENERATED_QUERY_CHARS,
@@ -1092,28 +1093,48 @@ def _restore_deferred_context(
     question: str, context: AnswerContext, settings: Settings, *, top_k: int, neighbor_child_count: int, max_records: int, max_chars: int
 ) -> AnswerContext:
     """後回しにした文書を戻し、全候補から context を作り直す（護欄: 覆盖度による回退。#1028）。"""
-    bundle = _bundle_context(
-        question,
-        cap_anchors_per_document(context.ranked_candidates, settings, top_k=top_k),
-        context.expansion_records,
-        settings,
-        top_k=top_k,
-        neighbor_child_count=neighbor_child_count,
-        max_records=max_records,
-        max_chars=max_chars,
-    )
-    return AnswerContext(
-        records=list(bundle.records),
-        text=bundle.text,
-        evidence=bundle.evidence,
-        evidence_tree=bundle.evidence_tree,
-        status=bundle.status,
-        insufficient_reason=bundle.insufficient_reason,
-        expansion_records=context.expansion_records,
-        ranked_candidates=context.ranked_candidates,
-        deferred_records=(),
-        document_selection={**context.document_selection, "restored": True},
-    )
+    with _execution_step("文書の選択の解除", "根拠が不足したため、後回しにした文書を戻して再評価します。") as step:
+        step.input(
+            partial(
+                context_snapshot,
+                context,
+                **{
+                    "質問": question,
+                    "起点数": top_k,
+                    "前後それぞれのChunk数": neighbor_child_count,
+                    "根拠数上限": max_records,
+                    "文脈文字数上限": max_chars,
+                    "文書ごとの起点数上限": settings.max_anchors_per_document,
+                },
+            )
+        )
+        bundle = _bundle_context(
+            question,
+            cap_anchors_per_document(context.ranked_candidates, settings, top_k=top_k),
+            context.expansion_records,
+            settings,
+            top_k=top_k,
+            neighbor_child_count=neighbor_child_count,
+            max_records=max_records,
+            max_chars=max_chars,
+        )
+        restored = AnswerContext(
+            records=list(bundle.records),
+            text=bundle.text,
+            evidence=bundle.evidence,
+            evidence_tree=bundle.evidence_tree,
+            status=bundle.status,
+            insufficient_reason=bundle.insufficient_reason,
+            expansion_records=context.expansion_records,
+            ranked_candidates=context.ranked_candidates,
+            deferred_records=(),
+            document_selection={**context.document_selection, "restored": True},
+        )
+
+        step.output(partial(context_snapshot, restored, **{"新規の根拠がある": _adds_new_records(context, restored)}))
+        step.result(f"後回しの候補 {len(context.deferred_records)} 件から文脈を作り直しました")
+        step.field("作り直した根拠", evidence_summary(restored.records))
+        return restored
 
 
 def build_adb_hybrid_answer_context(
@@ -1317,6 +1338,7 @@ def build_adb_hybrid_answer_context(
 
 def _record_search_result(step: _ExecutionStep, context: AnswerContext, *, title: str = "回答に渡す根拠", note: str = "") -> None:
     """文書の検索の結果（候補の件数と経路ごとの件数、根拠の件数と上位の根拠）を工程の詳細に書く（#2341）。"""
+    step.output(partial(context_snapshot, context))
     record_search_candidates(step, context.ranked_candidates)
     if context.deferred_records:
         step.field("後回しにした候補", f"{len(context.deferred_records)} 件")
@@ -1409,6 +1431,21 @@ def build_crag_answer_context(
                     step.add(*(f"  {number}. {_display_query(query)}" for number, query in enumerate(added, 1)))
                     if attempt_number == 1:
                         _record_search_conditions(step, classification_filter, search_notice)
+                    step.input(
+                        {
+                            "質問": question,
+                            "検索文": tuple(search_queries),
+                            "回": attempt_number,
+                            "検索範囲": retrieval_scope,
+                            "分類条件": asdict(classification_filter) if classification_filter is not None else None,
+                            "起点数": top_k,
+                            "前後それぞれのChunk数": neighbor_child_count,
+                            "根拠数上限": max_records,
+                            "文脈文字数上限": max_chars,
+                            "再ランキング": rerank_enabled,
+                            "ベクトル専用の検索文": tuple(vector_only_queries),
+                        }
+                    )
                     context = build_adb_hybrid_answer_context(
                         question,
                         run_id,
@@ -1493,7 +1530,9 @@ def build_crag_answer_context(
         if skip is not None:
             # 規則の信号が強いときは LLM の評価を飛ばして生成へ進む (#1499。既定 off)。生成後の監査は飛ばさない。
             with _execution_step("根拠確認（1回目）", "集めた根拠で質問に答えられるかを LLM が判定します。") as step:
-                step.status = "省略"
+                step.input(partial(context_snapshot, context, **{"質問": question, "回": attempt_number, "省略判断": skip_check}))
+                step.output(partial(context_snapshot, context, **{"モデル評価実行": False, "省略判断": skip_check}))
+                step.skip("規則の信号が強いため、LLM の評価を省略しました")
                 step.result("規則の信号が強いため、LLM の評価を省略しました", *skip["lines"])
                 step.impact("取得した根拠をそのまま回答の生成に渡します。生成後の監査は通常どおり行います。")
             attempts.append(
@@ -1516,6 +1555,22 @@ def build_crag_answer_context(
         with _execution_step(
             f"根拠確認（{attempt_number}回目）", "集めた根拠で質問に答えられるかを LLM が判定します。" if attempt_number == 1 else ""
         ) as step:
+            step.input(
+                partial(
+                    context_snapshot,
+                    context,
+                    **{
+                        "質問": question,
+                        "現在の検索文": active_query,
+                        "検索文": tuple(retrieval_queries),
+                        "回": attempt_number,
+                        "評価候補数上限": max_records,
+                        "省略判断": skip_check,
+                        "詰めた入力": bool(getattr(settings, "crag_compact_input", False)),
+                        "短い候補ID": bool(getattr(settings, "crag_short_candidate_ids", False)),
+                    },
+                )
+            )
             if attempt_number == 1 and (note := llm_reasoning_effort_note(settings, LLM_PURPOSE_JUDGE, answer_llm_provider)):
                 step.add(note)
             if skip_check.get("reason") and skip_check["reason"] != "disabled":
@@ -1558,7 +1613,9 @@ def build_crag_answer_context(
                     new_evidence_count=new_evidence_count,
                     recovery_cause=CRAG_CAUSE_GRADE_ERROR,
                 )
-                step.status = "評価に失敗"
+                step.output(attempt.to_payload)
+                step.status = "failed"
+                step.field("評価の実行", "評価に失敗")
                 step.add("根拠確認に失敗したため、取得済みの根拠を使います。")
                 attempts.append(attempt)
                 if context.records and context.text.strip():
@@ -1574,6 +1631,7 @@ def build_crag_answer_context(
             )
             attempt = replace(attempt, recovery_cause=crag_recovery_cause(attempt))
             attempts.append(attempt)
+            step.output(attempt.to_payload)
 
             status = (
                 "生成に利用可能"
@@ -1715,11 +1773,7 @@ def build_crag_answer_context(
         if restored is not None and _adds_new_records(best_context, restored):
             # 護欄: 覆盖度による回退 (#1028)。話題違いで改写検索へ進む前に、文書の選択で後回しにした文書を戻して
             # 同じ検索文で再評価する。答えが後回しの文書にあった場合の漏答を、評価枠の中で防ぐ。
-            with _execution_step("文書の選択の解除", "根拠が不足したため、後回しにした文書を戻して再評価します。") as step:
-                pending_context = restored
-                step.result(f"後回しにした {len(best_context.deferred_records)} 件の候補を戻しました")
-                step.field("作り直した根拠", evidence_summary(pending_context.records))
-                add_evidence_lines(step, pending_context.records, title="作り直した根拠")
+            pending_context = restored
             attempts[-1] = replace(attempts[-1], stop_reason=attempts[-1].stop_reason or "deferred_documents_restored")
             continue
         if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS and (not attempt.sufficient or attempt.missing_aspects):
@@ -1736,7 +1790,19 @@ def build_crag_answer_context(
         if attempt_number >= CRAG_MAX_RETRIEVAL_ATTEMPTS or not rewrite:
             break
         with _execution_step("補正検索の準備", "根拠が不足したため、検索文を書き換えて探し直します。") as step:
+            step.input(
+                partial(
+                    context_snapshot,
+                    best_context,
+                    **{
+                        "原質問": question,
+                        "評価結果": attempt.to_payload(),
+                        "既存の補正検索文": tuple(rewrites),
+                    },
+                )
+            )
             rewrites.append(rewrite)
+            step.output({"追加する検索文": rewrite, "補正検索文": tuple(rewrites), "次の回": attempt_number + 1})
             step.result(f"追加する検索文: {_display_query(rewrite)}")
             step.field("探し直しの回数", f"{len(rewrites)} 回目（上限 {CRAG_MAX_RETRIEVAL_ATTEMPTS - 1} 回）")
             step.field("足りない観点", aspect_labels(attempt.missing_aspects))
@@ -1752,6 +1818,10 @@ def build_crag_answer_context(
             attempts[-1] = replace(attempts[-1], stop_reason=attempts[-1].stop_reason or "all_candidates_rejected")
     if attempts and not attempts[-1].sufficient and best_context.records:
         with _execution_step("根拠確認の結論") as step:
+            step.input(
+                partial(context_snapshot, best_context, **{"評価の各回": [item.to_payload() for item in attempts], "除外ID": rejected})
+            )
+            step.output(partial(context_snapshot, best_context, **{"最終評価": attempts[-1].to_payload()}))
             last = attempts[-1]
             if (
                 last.grade_error
@@ -1764,6 +1834,10 @@ def build_crag_answer_context(
             step.impact("回答では、根拠で確認できた範囲と確認できない点を分けて示します。")
     elif attempts and not best_context.records and rejected:
         with _execution_step("根拠確認の結論") as step:
+            step.input(
+                partial(context_snapshot, best_context, **{"評価の各回": [item.to_payload() for item in attempts], "除外ID": rejected})
+            )
+            step.output(partial(context_snapshot, best_context, **{"最終評価": attempts[-1].to_payload()}))
             step.result("取得した候補はすべて質問と別の話題・機能と判定されたため、回答に使える根拠がありません。")
             step.impact("回答は根拠不足の案内になります。")
     return best_context, tuple(rewrites), tuple(attempts)
@@ -1863,58 +1937,87 @@ def _recover_crag_context(
     fallback_trigger: str = "rewrite_no_new_evidence",
 ) -> tuple[AnswerContext | None, dict[str, Any]]:
     """不足評価の起点を検証して文脈を追加する。空振り時は最小の近傍から試す。"""
-    visible = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
-    anchors = attempt.recovery_anchor_ids
-    actions: tuple[str, ...] = (attempt.recovery_action,)
-    if fallback:
-        anchors = tuple(dict.fromkeys((*attempt.relevant_chunk_ids, *(r.chunk_uid for r in visible[:8] if r.chunk_uid))))[:8]
-        actions = ("neighbor_children", "parent", "neighbor_parents")
-    trace: dict[str, Any] = {
-        "trigger": fallback_trigger if fallback else "grader_feedback",
-        "action": attempt.recovery_action,
-        "anchor_ids": [],
-        "added_chunk_ids": [],
-        "reason": "no_new_compatible_evidence",
-    }
-    context = _hydrate_recovery_context(
-        context,
-        [record for record in context.expansion_records if record.chunk_uid in anchors or record.parent_chunk_uid in anchors],
-        min(6, max_records),
-    )
-    for action in actions:
-        recovery = recover_context_records(
-            visible, context.expansion_records, anchors, action, max_records=min(6, max_records), max_chars=max_chars
-        )
-        trace.update(action=action, anchor_ids=list(recovery.anchor_ids), reason=recovery.reason)
-        if not recovery.records:
-            continue
-        tree = tuple(
-            ContextParentEvidence(
-                record=r, role="synthesis_parent" if r.chunk_level == "parent" else "child_fallback", reason="crag_" + action
+    with _execution_step("文脈の追加", "取得済みの資料から不足した文脈を補います。") as step:
+        step.input(
+            partial(
+                context_snapshot,
+                context,
+                **{
+                    "評価結果": attempt.to_payload(),
+                    "根拠数上限": max_records,
+                    "文脈文字数上限": max_chars,
+                    "代替の試行": fallback,
+                    "代替の契機": fallback_trigger,
+                },
             )
-            for r in recovery.records
         )
-        bundle = context_bundle_from_parent_evidence(tree, max_chars=max_chars)
-        trace["added_chunk_ids"] = [r.chunk_uid for r in bundle.records]
-        if not bundle.records or not bundle.text.strip():
-            trace["reason"] = "context_budget_exhausted"
-            continue
-        with _execution_step("文脈の追加", "根拠が不足したため、取得済みの資料から同じ機能の前後を追加します。") as step:
+        checks: list[tuple[str, Any]] = []
+
+        def output(returned: AnswerContext | None) -> dict[str, Any]:
+            return {
+                "試行結果": [
+                    {"動作": mode, "起点ID": list(check.anchor_ids), "理由": check.reason, "候補": candidate_snapshot(check.records)}
+                    for mode, check in checks
+                ],
+                "診断": dict(trace),
+                "返す文脈": context_snapshot(returned) if returned is not None else None,
+            }
+
+        visible = list(_records_for_prompt_injection_scan(context.records, context.evidence_tree))
+        anchors = attempt.recovery_anchor_ids
+        actions: tuple[str, ...] = (attempt.recovery_action,)
+        if fallback:
+            anchors = tuple(dict.fromkeys((*attempt.relevant_chunk_ids, *(r.chunk_uid for r in visible[:8] if r.chunk_uid))))[:8]
+            actions = ("neighbor_children", "parent", "neighbor_parents")
+        trace: dict[str, Any] = {
+            "trigger": fallback_trigger if fallback else "grader_feedback",
+            "action": attempt.recovery_action,
+            "anchor_ids": [],
+            "added_chunk_ids": [],
+            "reason": "no_new_compatible_evidence",
+        }
+        context = _hydrate_recovery_context(
+            context,
+            [record for record in context.expansion_records if record.chunk_uid in anchors or record.parent_chunk_uid in anchors],
+            min(6, max_records),
+        )
+        for action in actions:
+            recovery = recover_context_records(
+                visible, context.expansion_records, anchors, action, max_records=min(6, max_records), max_chars=max_chars
+            )
+            checks.append((action, recovery))
+            trace.update(action=action, anchor_ids=list(recovery.anchor_ids), reason=recovery.reason)
+            if not recovery.records:
+                continue
+            tree = tuple(
+                ContextParentEvidence(
+                    record=r, role="synthesis_parent" if r.chunk_level == "parent" else "child_fallback", reason="crag_" + action
+                )
+                for r in recovery.records
+            )
+            bundle = context_bundle_from_parent_evidence(tree, max_chars=max_chars)
+            trace["added_chunk_ids"] = [r.chunk_uid for r in bundle.records]
+            if not bundle.records or not bundle.text.strip():
+                trace["reason"] = "context_budget_exhausted"
+                continue
             labels = {"neighbor_children": "前後の段落", "parent": "上位のまとまり", "neighbor_parents": "隣接するまとまり"}
             step.result(f"{labels.get(action, action)}を {len(bundle.records)} 件追加")
             step.field("起点にした根拠", f"{len(recovery.anchor_ids)} 件")
-            add_evidence_lines(step, bundle.records, title="追加した根拠")
-        return AnswerContext(
-            records=list(bundle.records),
-            text=bundle.text,
-            evidence=bundle.evidence,
-            evidence_tree=bundle.evidence_tree,
-            expansion_records=context.expansion_records,
-            ranked_candidates=context.ranked_candidates,
-            deferred_records=context.deferred_records,
-            document_selection=context.document_selection,
-        ), trace
-    return None, trace
+            recovered = AnswerContext(
+                records=list(bundle.records),
+                text=bundle.text,
+                evidence=bundle.evidence,
+                evidence_tree=bundle.evidence_tree,
+                expansion_records=context.expansion_records,
+                ranked_candidates=context.ranked_candidates,
+                deferred_records=context.deferred_records,
+                document_selection=context.document_selection,
+            )
+            step.output(partial(output, recovered))
+            return recovered, trace
+        step.result("追加できる文脈がありませんでした")
+        step.output(partial(output, None))
+        return None, trace
 
 
 def _candidate_unit_text(uid: str, context: AnswerContext, all_records: Sequence[AnswerRecord]) -> str:
@@ -6262,6 +6365,19 @@ def answer_question_result(
                             keyword_step.status = "検索語の抽出に失敗"
             else:
                 with _execution_step("文書検索", _SEARCH_PURPOSE) as retrieval_step:
+                    retrieval_step.input(
+                        {
+                            "質問": normalized_question,
+                            "検索文": tuple(retrieval_queries),
+                            "検索範囲": selected_retrieval_scope,
+                            "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
+                            "起点数": chunk_top_k,
+                            "前後それぞれのChunk数": chunk_neighbor_count,
+                            "再ランキング": effective_rerank_enabled,
+                            "ベクトル専用の検索文": tuple(expansion.vector_only_queries),
+                            "呼出側の検索文": tuple(trusted_queries),
+                        }
+                    )
                     context = build_adb_hybrid_answer_context(
                         normalized_question,
                         run_id,
