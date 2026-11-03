@@ -59,7 +59,8 @@ describe("記録した値だけを使う軌跡", () => {
       expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("synthetic-input");
       expect(host.textContent).not.toContain("private-hidden");
       click('button[aria-label="前の呼び出し"]');
-      expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("synthetic-error");
+      expect(host.querySelector('[data-trace-inspector] [role="tab"][aria-selected="true"]')?.textContent).toBe("入力");
+      expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("記録されていません");
       click('button[aria-label="次の呼び出し"]');
       expect(host.querySelector('[data-trace-inspector]')?.textContent).toContain("synthetic-input");
     } finally { act(() => root.unmount()); host.remove(); }
@@ -153,5 +154,27 @@ it.each(["確認を省略", "設定がオフのため省略しました"])("収�
     act(() => host.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
     expect(host.textContent?.split(reason).length).toBe(2);
     expect(host.querySelector("[data-run-timeline-details]")?.textContent).toContain(result);
+  } finally { act(() => root.unmount()); host.remove(); }
+});
+
+it("通常・記録なし・スキップ間で五つのタブを維持し状態を区別する", () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  try {
+    const normal = {...steps[0], id: "normal", details: {fields: [{label: "目的", value: "合成の目的"}]}};
+    const empty = {...steps[0], id: "empty", details: undefined};
+    const skipped = {...steps[0], id: "skipped", status: "skipped" as const, details: undefined};
+    act(() => root.render(<TraceExplorer steps={[normal, empty, skipped]} onClose={() => {}} />));
+    const inspector = () => host.querySelector('[data-trace-inspector]')!;
+    const clickTab = (name: string) => act(() => Array.from(inspector().querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(node => node.textContent === name)!.click());
+    const select = (id: string) => act(() => host.querySelector<HTMLButtonElement>(`[data-trace-record="${id}"] button`)!.click());
+    expect(inspector().querySelectorAll('[role="tab"]')).toHaveLength(5);
+    expect(inspector().querySelector('[aria-selected="true"]')?.textContent).toBe("概要");
+    clickTab("入力"); select("empty");
+    expect(inspector().querySelector('[aria-selected="true"]')?.textContent).toBe("入力");
+    expect(inspector().textContent).toContain("記録されていません");
+    select("skipped");
+    expect(inspector().textContent).toContain("スキップされたため");
+    select("normal"); clickTab("思考");
+    expect(inspector().textContent).toContain("この工程には適用されません");
   } finally { act(() => root.unmount()); host.remove(); }
 });

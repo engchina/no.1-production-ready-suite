@@ -450,42 +450,47 @@ def _parse_with_retry[StructuredOutputT: BaseModel](
     initial_wait_seconds: float | None = None,
     max_wait_seconds: float | None = None,
 ) -> StructuredOutputT:
-    retry_count = max(0, settings.llm_retries if retries is None else int(retries))
-    initial_wait = max(
-        0.0,
-        settings.llm_retry_initial_wait_seconds if initial_wait_seconds is None else float(initial_wait_seconds),
-    )
-    max_wait = max(
-        0.0,
-        settings.llm_retry_max_wait_seconds if max_wait_seconds is None else float(max_wait_seconds),
-    )
-    # 構造化出力の検証エラー（JSON を最後まで返さない・必須項目欠落）は通信系とは別に、同じ入力で 1 回だけ
-    # やり直す (#663)。モデルが空白行を延々と出力して JSON が閉じないことがあり、再実行では再現しない。
-    invalid_output_retries = 0
-    attempt = 0
-    while True:
-        # 回答の期限を過ぎた・取り消された後は、次の呼び出し・やり直しをしない (#1422)。
-        check_deadline()
-        try:
-            return operation()
-        except DeadlineExceeded:
-            raise
-        except Exception as exc:
-            if is_invalid_structured_output(exc):
-                will_retry = invalid_output_retries < INVALID_OUTPUT_RETRIES
-                notify_invalid_output(exc, will_retry)
-                if will_retry:
-                    invalid_output_retries += 1  # 通信系の再試行回数は消費しない
-                    continue
-            if attempt >= retry_count or not _is_retryable_error(exc):
+    from rag_engine.resources.call_context import call_context, update_call_context
+
+    with call_context():
+        retry_count = max(0, settings.llm_retries if retries is None else int(retries))
+        initial_wait = max(
+            0.0,
+            settings.llm_retry_initial_wait_seconds if initial_wait_seconds is None else float(initial_wait_seconds),
+        )
+        max_wait = max(
+            0.0,
+            settings.llm_retry_max_wait_seconds if max_wait_seconds is None else float(max_wait_seconds),
+        )
+        # 構造化出力の検証エラー（JSON を最後まで返さない・必須項目欠落）は通信系とは別に、同じ入力で 1 回だけ
+        # やり直す (#663)。モデルが空白行を延々と出力して JSON が閉じないことがあり、再実行では再現しない。
+        invalid_output_retries = 0
+        attempt = 0
+        while True:
+            # 回答の期限を過ぎた・取り消された後は、次の呼び出し・やり直しをしない (#1422)。
+            check_deadline()
+            try:
+                return operation()
+            except DeadlineExceeded:
                 raise
-            wait = min(initial_wait * (2**attempt), max_wait)
-            remaining = remaining_seconds()
-            if remaining is not None and remaining <= wait:
-                # 待つと期限を過ぎる。送り直さずに期限切れにする。
-                raise DeadlineExceeded("回答の期限までに LLM を再試行できません。") from exc
-            time.sleep(wait)
-            attempt += 1
+            except Exception as exc:
+                if is_invalid_structured_output(exc):
+                    will_retry = invalid_output_retries < INVALID_OUTPUT_RETRIES
+                    update_call_context({"pr.retry.reason": "invalid_structured_output"})
+                    notify_invalid_output(exc, will_retry)
+                    if will_retry:
+                        invalid_output_retries += 1  # 通信系の再試行回数は消費しない
+                        continue
+                if attempt >= retry_count or not _is_retryable_error(exc):
+                    raise
+                wait = min(initial_wait * (2**attempt), max_wait)
+                remaining = remaining_seconds()
+                if remaining is not None and remaining <= wait:
+                    # 待つと期限を過ぎる。送り直さずに期限切れにする。
+                    raise DeadlineExceeded("回答の期限までに LLM を再試行できません。") from exc
+                time.sleep(wait)
+                update_call_context({"pr.retry.reason": "transport_retry"})
+                attempt += 1
 
 
 # 構造化出力の検証エラーで同じ入力をやり直す回数（通信系の再試行回数とは別）。
@@ -812,6 +817,8 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     effort = str(provider.reasoning_effort or "")
     widened = False
     lowered = False
+    from rag_engine.resources.call_context import observation_attributes, update_call_context
+
     streamed = _stall_detection_enabled(settings)
     attempt = 0
     stall_resends = 0
@@ -822,27 +829,27 @@ def _openai_parsed[StructuredOutputT: BaseModel](
     detect_runaway = bool(getattr(settings, "llm_runaway_detection", False))
     runaway = streamed and detect_runaway
     while True:
-        check_deadline()
-        reasoning: dict[str, Any] = {"reasoning": {"effort": effort}} if effort else {}
-        send_budget, time_capped = deadline_output_budget(budget, provider)
-        # 追加の入力は UTF-8 の byte 数を上限として出力予約から引く。予約に入らなければ元の入力で再送する。
-        send_messages = input_messages
-        if retry_messages is not input_messages and retry_input_reserve < send_budget:
-            send_messages = retry_messages
-            send_budget -= retry_input_reserve
-        limits = _stall_limits(provider, settings) if streamed and stall_resends < settings.llm_stall_resends else None
-        request: dict[str, Any] = {
-            "model": provider.model,
-            "input": send_messages,
-            "text_format": text_format,
-            "max_output_tokens": send_budget,
-            "temperature": LLM_TEMPERATURE,
-            **reasoning,
-        }
-        timing: _StreamTiming | None = None
-        started = time.monotonic()
-        try:
-            with observe_call("chat", provider.model) as observation:
+        with observe_call("chat", provider.model) as observation:
+            check_deadline()
+            reasoning: dict[str, Any] = {"reasoning": {"effort": effort}} if effort else {}
+            send_budget, time_capped = deadline_output_budget(budget, provider)
+            # 追加の入力は UTF-8 の byte 数を上限として出力予約から引く。予約に入らなければ元の入力で再送する。
+            send_messages = input_messages
+            if retry_messages is not input_messages and retry_input_reserve < send_budget:
+                send_messages = retry_messages
+                send_budget -= retry_input_reserve
+            limits = _stall_limits(provider, settings) if streamed and stall_resends < settings.llm_stall_resends else None
+            request: dict[str, Any] = {
+                "model": provider.model,
+                "input": send_messages,
+                "text_format": text_format,
+                "max_output_tokens": send_budget,
+                "temperature": LLM_TEMPERATURE,
+                **reasoning,
+            }
+            timing: _StreamTiming | None = None
+            started = time.monotonic()
+            try:
                 # SDK に本文を検証させない（応答の状態を確かめてからコードで検証する。#4145・#4197）。schema だけを送る。
                 wire_request = _response_wire_request(request)
                 if getattr(observation, "capture_enabled", True):
@@ -871,123 +878,141 @@ def _openai_parsed[StructuredOutputT: BaseModel](
                     )
                 if capture is None or not capture.has_terminal:
                     observation.response(response)
+                observation_attributes(observation, {"pr.call.transport_status": "returned"})
                 usage = _value(response, "usage")
                 observation.usage(usage.model_dump() if hasattr(usage, "model_dump") else usage)
                 if detect_runaway and not streamed and (cutoff := _runaway_response_reason(response)):
                     # streaming しない呼び出しは途中で打ち切れない。出力の上限まで出た暴走を streaming と同じ送り直しにする（#3835）。
                     raise LlmRunawayOutput(_runaway_message(cutoff), cutoff, None, response=response)
-        except Exception as exc:
-            if isinstance(exc, LlmRunawayOutput) and exc.response is not None:
-                # 応答（token の数）は返っているので、使った token と打ち切りの理由を残す。
-                _record_usage(
-                    exc.response,
-                    provider,
-                    text_format,
-                    time.monotonic() - started,
-                    max_output_tokens=send_budget,
-                    attempt=attempt,
-                    deadline_capped=time_capped,
-                    cutoff_reason=exc.reason,
+            except Exception as exc:
+                observation_attributes(
+                    observation,
+                    {
+                        "pr.call.transport_status": "returned"
+                        if isinstance(exc, LlmRunawayOutput) and exc.response is not None
+                        else "failed",
+                        **({"pr.call.validation_status": "rejected"} if isinstance(exc, LlmRunawayOutput) else {}),
+                    },
                 )
-            else:
-                _record_failed_call(
-                    exc,
-                    provider,
-                    text_format,
-                    time.monotonic() - started,
-                    max_output_tokens=send_budget,
-                    attempt=attempt,
-                    deadline_capped=time_capped,
-                    timing=getattr(exc, "timing", None),
-                )
-            if isinstance(exc, LlmRunawayOutput):
-                if runaway_resends >= RUNAWAY_RESENDS:
+                if isinstance(exc, LlmRunawayOutput) and exc.response is not None:
+                    # 応答（token の数）は返っているので、使った token と打ち切りの理由を残す。
+                    _record_usage(
+                        exc.response,
+                        provider,
+                        text_format,
+                        time.monotonic() - started,
+                        max_output_tokens=send_budget,
+                        attempt=attempt,
+                        deadline_capped=time_capped,
+                        cutoff_reason=exc.reason,
+                    )
+                else:
+                    _record_failed_call(
+                        exc,
+                        provider,
+                        text_format,
+                        time.monotonic() - started,
+                        max_output_tokens=send_budget,
+                        attempt=attempt,
+                        deadline_capped=time_capped,
+                        timing=getattr(exc, "timing", None),
+                    )
+                if isinstance(exc, LlmRunawayOutput):
+                    if runaway_resends >= RUNAWAY_RESENDS:
+                        raise
+                    # 出力が暴走した（#2966）。推論の量を下げられれば 1 段下げ、送り直しの回数を工程の記録に残して送り直す
+                    # （出力の上限で未完了の送り直しと同じく、推論の量の下げは 1 回だけ）。
+                    runaway_resends += 1
+                    retry_messages = _runaway_retry_messages(input_messages, text_format, exc.reason)
+                    extra = retry_messages[len(input_messages) :]
+                    retry_input_reserve = len(json.dumps(extra, ensure_ascii=False).encode("utf-8")) if extra else 0
+                    lower = "" if lowered else lower_reasoning_effort(effort)
+                    if lower:
+                        effort, lowered = lower, True
+                    record_llm_runaway_resend()
+                    update_call_context({"pr.retry.reason": "runaway_output"})
+                    attempt += 1
+                    continue
+                if isinstance(exc, LlmStreamFailed) and failed_resends < STREAM_FAILED_RESENDS:
+                    # 失敗の event で終わった（#2814。provider の一時的な失敗）。同じ要求を送り直す。期限は次の送信の前に確かめる。
+                    failed_resends += 1
+                    update_call_context({"pr.retry.reason": "stream_failed"})
+                    continue
+                if not isinstance(exc, LlmStreamStalled):
                     raise
-                # 出力が暴走した（#2966）。推論の量を下げられれば 1 段下げ、送り直しの回数を工程の記録に残して送り直す
-                # （出力の上限で未完了の送り直しと同じく、推論の量の下げは 1 回だけ）。
-                runaway_resends += 1
-                retry_messages = _runaway_retry_messages(input_messages, text_format, exc.reason)
-                extra = retry_messages[len(input_messages) :]
-                retry_input_reserve = len(json.dumps(extra, ensure_ascii=False).encode("utf-8")) if extra else 0
-                lower = "" if lowered else lower_reasoning_effort(effort)
-                if lower:
+                # 停滞で打ち切った。回数を工程の記録（execution_steps の llm_usage）に残して同じ要求を送り直す（#1926）。
+                record_llm_stall_resend()
+                stall_resends += 1
+                update_call_context({"pr.retry.reason": "stream_stalled"})
+                continue
+            seconds = time.monotonic() - started
+            record_usage = partial(
+                _record_usage,
+                response,
+                provider,
+                text_format,
+                seconds,
+                max_output_tokens=send_budget,
+                attempt=attempt,
+                deadline_capped=time_capped,
+                timing=timing,
+            )
+            try:
+                parsed = _parsed_response(response, text_format, provider)
+            except IncompleteResponse as exc:
+                observation_attributes(observation, {"pr.call.validation_status": "incomplete"})
+                record_usage()
+                if time_capped and exc.reason == INCOMPLETE_OUTPUT_REASON:
+                    # 残りの時間で出せる分を出し切っても終わらなかった。送り直しても期限に間に合わない。
+                    expire_deadline()
+                    raise DeadlineExceeded(
+                        f"回答の期限までに LLM の出力が終わりません（出力の上限 {send_budget} tokens に届きました）。"
+                    ) from exc
+                # 出力の上限で未完了なら、まず上限を広げて 1 回、それでも未完了（広げられないときを含む）なら推論の量を
+                # 1 段下げて 1 回だけ送り直す（#987・#1719・#2023）。ほかの理由（content_filter など）は送り直さない。
+                next_action = "fail"
+                wider = None
+                lower = ""
+                if exc.reason == INCOMPLETE_OUTPUT_REASON:
+                    wider = None if widened or cap is not None else _retry_output_budget(send_budget, provider)
+                    lower = "" if lowered or wider is not None else lower_reasoning_effort(effort)
+                    next_action = "widen" if wider is not None else ("lower_effort" if lower else "fail")
+                _log_incomplete(exc, response, provider, max_output_tokens=send_budget, reasoning_effort=effort, next_action=next_action)
+                if next_action == "fail":
+                    raise _incomplete_error(
+                        exc, response, provider, send_budget, retried=widened, lowered_effort=lowered, reasoning_effort=effort
+                    ) from exc
+                if wider is not None:
+                    budget, widened = wider, True
+                    # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
+                    # ぶれが送り直しによるかを確かめる）。
+                    record_llm_output_retry()
+                else:
                     effort, lowered = lower, True
-                record_llm_runaway_resend()
+                    record_llm_effort_retry()
+                update_call_context({"pr.retry.reason": "incomplete_output"})
                 attempt += 1
                 continue
-            if isinstance(exc, LlmStreamFailed) and failed_resends < STREAM_FAILED_RESENDS:
-                # 失敗の event で終わった（#2814。provider の一時的な失敗）。同じ要求を送り直す。期限は次の送信の前に確かめる。
-                failed_resends += 1
-                continue
-            if not isinstance(exc, LlmStreamStalled):
+            except Exception as exc:
+                observation_attributes(observation, {"pr.call.validation_status": "rejected"})
+                record_usage(rejected=exc)
                 raise
-            # 停滞で打ち切った。回数を工程の記録（execution_steps の llm_usage）に残して同じ要求を送り直す（#1926）。
-            record_llm_stall_resend()
-            stall_resends += 1
-            continue
-        seconds = time.monotonic() - started
-        record_usage = partial(
-            _record_usage,
-            response,
-            provider,
-            text_format,
-            seconds,
-            max_output_tokens=send_budget,
-            attempt=attempt,
-            deadline_capped=time_capped,
-            timing=timing,
-        )
-        try:
-            parsed = _parsed_response(response, text_format, provider)
-        except IncompleteResponse as exc:
             record_usage()
-            if time_capped and exc.reason == INCOMPLETE_OUTPUT_REASON:
-                # 残りの時間で出せる分を出し切っても終わらなかった。送り直しても期限に間に合わない。
-                expire_deadline()
-                raise DeadlineExceeded(
-                    f"回答の期限までに LLM の出力が終わりません（出力の上限 {send_budget} tokens に届きました）。"
-                ) from exc
-            # 出力の上限で未完了なら、まず上限を広げて 1 回、それでも未完了（広げられないときを含む）なら推論の量を
-            # 1 段下げて 1 回だけ送り直す（#987・#1719・#2023）。ほかの理由（content_filter など）は送り直さない。
-            next_action = "fail"
-            wider = None
-            lower = ""
-            if exc.reason == INCOMPLETE_OUTPUT_REASON:
-                wider = None if widened or cap is not None else _retry_output_budget(send_budget, provider)
-                lower = "" if lowered or wider is not None else lower_reasoning_effort(effort)
-                next_action = "widen" if wider is not None else ("lower_effort" if lower else "fail")
-            _log_incomplete(exc, response, provider, max_output_tokens=send_budget, reasoning_effort=effort, next_action=next_action)
-            if next_action == "fail":
-                raise _incomplete_error(
-                    exc, response, provider, send_budget, retried=widened, lowered_effort=lowered, reasoning_effort=effort
-                ) from exc
-            if wider is not None:
-                budget, widened = wider, True
-                # 送り直しの回数を工程の記録（execution_steps の llm_usage）に残す（#1527。同じ問の 1 組の所要の
-                # ぶれが送り直しによるかを確かめる）。
-                record_llm_output_retry()
-            else:
-                effort, lowered = lower, True
-                record_llm_effort_retry()
-            attempt += 1
-            continue
-        except Exception as exc:
-            record_usage(rejected=exc)
-            raise
-        record_usage()
-        _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
-        if timing is not None:
-            _note_stream_timing(provider, timing)
-        # 入力に無い置換文字を含む生成文は、破損した構造化出力として既存の上限内で再取得する。
-        # 原文に元からある文字は改変しない。削除や推測による文字の補完もしない。
-        if "\ufffd" not in json.dumps(input_messages, ensure_ascii=False) and "\ufffd" in parsed.model_dump_json():
-            # どの欄に出たか（JSON の path。本文は残さない）を例外と log に残す（#3849。退けた出力の原文は残らない）。
-            paths = replacement_char_paths(parsed.model_dump(mode="json"))
-            _log_rejected_output(provider, text_format, response, reason="replacement_character", paths=paths)
-            raise InvalidStructuredOutput(
-                f"生成文に入力にはない Unicode の置換文字が含まれています（欄: {', '.join(paths) or '不明'}）。再生成してください。"
-            )
-        return parsed
+            _note_output_rate(provider, response_usage(response)["output_tokens"], seconds)
+            if timing is not None:
+                _note_stream_timing(provider, timing)
+            # 入力に無い置換文字を含む生成文は、破損した構造化出力として既存の上限内で再取得する。
+            # 原文に元からある文字は改変しない。削除や推測による文字の補完もしない。
+            if "\ufffd" not in json.dumps(input_messages, ensure_ascii=False) and "\ufffd" in parsed.model_dump_json():
+                # どの欄に出たか（JSON の path。本文は残さない）を例外と log に残す（#3849。退けた出力の原文は残らない）。
+                observation_attributes(observation, {"pr.call.validation_status": "rejected"})
+                paths = replacement_char_paths(parsed.model_dump(mode="json"))
+                _log_rejected_output(provider, text_format, response, reason="replacement_character", paths=paths)
+                raise InvalidStructuredOutput(
+                    f"生成文に入力にはない Unicode の置換文字が含まれています（欄: {', '.join(paths) or '不明'}）。再生成してください。"
+                )
+            observation_attributes(observation, {"pr.call.validation_status": "accepted"})
+            return parsed
 
 
 # 退けた出力の欄の path を残す数の上限（#3849）。

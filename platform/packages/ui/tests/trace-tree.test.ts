@@ -209,3 +209,20 @@ it.each(["rag", "agent", "nl2sql"])("%s の無効な添付は同じ名前とス�
   expect(result.label).toBe("会話の添付から根拠を選ぶ");
   expect(result.status).toBe("skipped");
 });
+
+
+it("分割読取・範囲修正・草稿生成を実際の属性で区別する", () => {
+  const attrs = {"pr.batch.index": 2, "pr.batch.count": 2};
+  const rows = traceTimeline({spans: [
+    {...span("1", "0"), operation_name: "gen_ai.chat", attributes: {...attrs, "pr.gen_ai.purpose": "evidence.read_batch", "pr.call.transport_status": "returned", "pr.call.validation_status": "rejected"}},
+    {...span("2", "0"), operation_name: "gen_ai.chat", attributes: {...attrs, "pr.gen_ai.purpose": "evidence.repair_batch_range", "pr.attempt": 2}},
+    {...span("3", "0"), operation_name: "gen_ai.chat", attributes: {"pr.gen_ai.purpose": "answer.generate", "pr.call.role": "draft_generation"}},
+    {...span("4", "0"), operation_name: "gen_ai.chat", attributes: {"pr.gen_ai.purpose": "answer.generate"}},
+  ]}).steps;
+  expect(rows[0].label).toBe("根拠を分割して読む（2/2）");
+  expect(rows[1].label).toContain("読取結果の引用範囲を修正する（再試行）（2/2）");
+  expect(rows[2].label).toBe("根拠から回答文を作る");
+  expect(rows[3].label).toBe("モデルを呼び出す（用途の記録なし）");
+  expect(rows[0].details?.fields).toContainEqual({label: "モデルの応答", value: "応答を受信", mono: false, technical: true});
+  expect(rows[0].details?.fields).toContainEqual({label: "結果の検証", value: "検証で不合格", mono: false, technical: true});
+});
