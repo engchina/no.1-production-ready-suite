@@ -4,7 +4,9 @@ EVENTS_TABLE = "RAG_NATIVE_INDEX_EVENTS"
 STATE_TABLE = "RAG_NATIVE_INDEX_MAINTENANCE"
 MAINTENANCE_TRIGGER = "RAG_CHUNKS_NATIVE_MAINT"
 STATE_KEY = "hybrid_vectors"
-# FULL の整理を最後に終えた時刻の行(``last_completed_at``)。要求の lease とは別に持つ。
+# FULL の整理の行。要求の lease とは別に持つ。``next_attempt_at`` は次に FULL を始めてよい時刻、
+# ``attempt_count`` は前回の FULL の完了の後に受けた要求の取得の回数(FULL の借り。0 なら不要)、
+# ``last_completed_at`` は FULL を最後に終えた時刻(#4214)。
 FULL_STATE_KEY = "hybrid_vectors_full"
 
 

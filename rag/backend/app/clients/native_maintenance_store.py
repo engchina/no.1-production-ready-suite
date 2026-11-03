@@ -73,7 +73,16 @@ class NativeMaintenanceStore:
                 )
                 ids = tuple(str(row[0]) for row in cursor.fetchall())
                 if not ids:
-                    return None
+                    # 要求が無くても、間隔が過ぎた FULL の借りは片付ける。最後の要求の後も
+                    # $N・$I と SEARCH の不足を残さない(#4214)。
+                    cursor.execute(
+                        f"""SELECT 1 FROM {STATE_TABLE}
+                        WHERE state_key=:state_key AND attempt_count>0
+                        AND next_attempt_at<=SYSTIMESTAMP""",
+                        {"state_key": FULL_STATE_KEY},
+                    )
+                    if cursor.fetchone() is None:
+                        return None
                 cursor.execute(
                     f"""UPDATE {STATE_TABLE} SET lease_owner=:owner, lease_token=:token,
                     lease_until=SYSTIMESTAMP+NUMTODSINTERVAL(:lease_seconds, 'SECOND'),
@@ -175,29 +184,55 @@ class NativeMaintenanceStore:
         await self.oracle._run_transaction(operation)
 
     def _plan(self, cursor: OracleCursorProtocol, lease: MaintenanceLease) -> MaintenancePlan:
-        """失敗の次は FULL に戻す。FULL の間隔が過ぎていれば semantic の後に FULL も行う。"""
-        if lease.attempt > 1:
-            return "full"
+        """FULL を始めてよいのは開始の記録の時刻が過ぎたときだけ(#4214)。
+
+        再試行でも残骸があっても、この判定を飛ばさない。FULL を始めてよいときの失敗の次は、
+        再開できない semantic を飛ばす。要求の無い回は FULL の借りだけを片付ける。
+        """
         cursor.execute(
-            f"""SELECT CASE WHEN last_completed_at>SYSTIMESTAMP
-                    -NUMTODSINTERVAL(:interval_hours, 'HOUR') THEN 0 ELSE 1 END
+            f"""SELECT CASE WHEN next_attempt_at<=SYSTIMESTAMP THEN 1 ELSE 0 END
             FROM {STATE_TABLE} WHERE state_key=:state_key""",
-            {"interval_hours": self.full_interval_hours, "state_key": FULL_STATE_KEY},
+            {"state_key": FULL_STATE_KEY},
         )
         row = cursor.fetchone()
-        return "semantic_then_full" if row is None or int(str(row[0])) == 1 else "semantic"
+        if row is not None and int(str(row[0])) == 0:
+            return "semantic"
+        return "semantic_then_full" if lease.attempt == 1 and lease.event_ids else "full"
+
+    def _record_plan(
+        self, cursor: OracleCursorProtocol, lease: MaintenanceLease, plan: MaintenancePlan
+    ) -> None:
+        """整理を始める前に、FULL の開始の時刻と FULL の借りを記録する。
+
+        時間切れ・失敗・再起動でも次の FULL を間隔まで待たせる。FULL を終えるまで借りは残る。
+        """
+        cursor.execute(
+            f"""MERGE INTO {STATE_TABLE} s
+            USING (SELECT :state_key state_key FROM dual) v ON (s.state_key=v.state_key)
+            WHEN MATCHED THEN UPDATE SET attempt_count=s.attempt_count+:waiting,
+                next_attempt_at=CASE WHEN :start_full=1
+                    THEN SYSTIMESTAMP+NUMTODSINTERVAL(:interval_hours, 'HOUR')
+                    ELSE s.next_attempt_at END,
+                updated_at=SYSTIMESTAMP
+            WHEN NOT MATCHED THEN INSERT (state_key, attempt_count, next_attempt_at)
+                VALUES (v.state_key, :waiting,
+                    SYSTIMESTAMP+NUMTODSINTERVAL(:interval_hours, 'HOUR'))""",
+            {
+                "state_key": FULL_STATE_KEY,
+                "waiting": 1 if lease.event_ids else 0,
+                "start_full": 0 if plan == "semantic" else 1,
+                "interval_hours": self.full_interval_hours,
+            },
+        )
 
     async def _record_full_completed(self) -> None:
         def operation(connection: OracleConnectionProtocol) -> None:
             cursor = connection.cursor()
             try:
                 cursor.execute(
-                    f"""MERGE INTO {STATE_TABLE} s
-                    USING (SELECT :state_key state_key FROM dual) v ON (s.state_key=v.state_key)
-                    WHEN MATCHED THEN UPDATE SET
-                        last_completed_at=SYSTIMESTAMP, updated_at=SYSTIMESTAMP
-                    WHEN NOT MATCHED THEN INSERT (state_key, last_completed_at)
-                        VALUES (v.state_key, SYSTIMESTAMP)""",
+                    f"""UPDATE {STATE_TABLE} SET attempt_count=0,
+                    last_completed_at=SYSTIMESTAMP, updated_at=SYSTIMESTAMP
+                    WHERE state_key=:state_key""",
                     {"state_key": FULL_STATE_KEY},
                 )
             finally:
@@ -246,6 +281,10 @@ class NativeMaintenanceStore:
                         raise RuntimeError("索引整理のleaseが失効しています。")
                     before_call()
                     plan = self._plan(cursor, lease)
+                    before_call()
+                    self._record_plan(cursor, lease, plan)
+                    # OPTIMIZE_INDEX より先に確定する。この接続は業務transactionを持たない。
+                    connection.commit()
                 finally:
                     cursor.close()
                 result = maintain_native_vectors(
@@ -285,7 +324,7 @@ class NativeMaintenanceStore:
                 await asyncio.shield(task)
             raise
         if results and results[0].full_completed:
-            # 記録に失敗しても整理は終わっている。次の要求で FULL がもう一度走るだけ。
+            # 記録に失敗しても整理は終わっている。次の間隔で FULL がもう一度走るだけ。
             try:
                 await self._record_full_completed()
             except Exception as exc:

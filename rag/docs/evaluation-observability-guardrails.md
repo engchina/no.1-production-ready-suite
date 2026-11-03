@@ -35,6 +35,7 @@
 - 回答の過程からの下書きは、利用者が確認した必須要点・条件・期待する判断・根拠を追加します。
 - `POST /api/evaluation/jobs/run`: 非同期実行。job の取得・取消は `/api/evaluation/jobs/{id}` と `/cancel`。同期は `/api/evaluation/run`。
 - 結果は `six_metrics_v1`、六指標と対象件数、ケース詳細、分類・区分・質問の種類・段数・期待する判断別の内訳を返します。比較も同じ順序です。
+- 結果の Excel（`POST /api/evaluation/jobs/{id}/results.xlsx`）は、アップロードした Excel がある評価ならそのファイルのケースの行の右に結果の列を足します（元のシート・セル・書式は変えません。行はケースの ID の行番号で決めます。#4212）。失敗・取り消しの評価は終わったケースまでを出し、残りの行は「未実行」にします（#4208）。Excel の無い評価は結果だけのファイルです。
 - 正確性・網羅性・忠実性の評価は「品質評価」で実行します。検索・チャットの回答詳細には標準回答による評価操作を置きません。
 - CLI (`app.rag.evaluation_cli`) の出力と、業務 Agent との比較（製品横断の評価 `suite/evaluation` の `suite-evaluation`。#3240）も同じ六指標です。照合・順位・判断の部品は platform の `pr_evaluation_scoring` を共有します。
 

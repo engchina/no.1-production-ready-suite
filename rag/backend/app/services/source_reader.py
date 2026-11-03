@@ -295,9 +295,9 @@ async def resolve_source_context(
     expected_revision: str | None = None,
 ) -> tuple[RetrievedChunk, str, str, Mapping[str, Any]]:
     """現在の権限と chunk の版から、同一解析版の保存済み成果を解決する。"""
-    chunk = await oracle.retrievable_chunk(document_id, chunk_id)
+    chunk = await oracle.readable_version_chunk(document_id, chunk_id)
     if chunk is None:
-        # 再索引で chunk の行ごと消えることがあるので、文書が見られるかで分ける（#4092）。
+        # 清掃で chunk の行ごと消えた版は、文書が見られるかで分ける（#4092・#4168）。
         # 見られない文書は 404 のままにし、文書・chunk の有無を明かさない。
         if await oracle.accessible_document_exists(document_id):
             raise SourceVersionStaleError("資料の版が変わりました。")

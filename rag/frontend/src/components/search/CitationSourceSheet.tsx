@@ -89,6 +89,8 @@ function CitationSourcePreview({
   const loadOriginal = useCallback((input: OriginalSourceInput, signal: AbortSignal) => api.documentSourceMap(chunk.document_id, chunk.chunk_id, input, signal), [chunk.document_id, chunk.chunk_id]);
   const previewFileName = chunk.file_name ?? chunk.document_id;
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
+  // 切替の後も、引用した版のファイルの頁を出す（bbox はその版のファイルの座標。#4168）。
+  const chunkSetId = firstMetadataToken(chunk.metadata.chunk_set_id);
   // パネルを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
   const previewDoc = useDocument(open ? chunk.document_id : null);
   const previewRecipes = useDocumentRecipes(open ? chunk.document_id : null);
@@ -101,6 +103,7 @@ function CitationSourcePreview({
     <DocumentPreview
       documentId={chunk.document_id}
       recipeId={recipeId}
+      chunkSetId={chunkSetId}
       fileName={previewFileName}
       preparedArtifact={
         recipeId

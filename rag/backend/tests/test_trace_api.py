@@ -595,6 +595,8 @@ async def test_mcp_validate_answer_records_its_steps_and_model_calls(
                 document_id=document_id, chunk_id=chunk_id, text="合成の本文。", score=0.5
             )
 
+        readable_version_chunk = retrievable_chunk
+
     def fake_claims(question: str, answer: str, items: Any, settings: Any, **_: Any) -> Any:
         # 監査の thread の中のモデルの呼び出し（rag_engine の OCI の呼び出しと同じ観測）。
         with observe_call("chat", "synthetic-model"):

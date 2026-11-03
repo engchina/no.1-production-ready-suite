@@ -4269,6 +4269,25 @@ BEGIN
 END;
 /
 
+-- migration: 20261102_007_chunk_set_retired_at
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'RETIRED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunk_sets ADD (retired_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_CHUNK_SETS_RETIRED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_chunk_sets_retired_idx ON rag_chunk_sets (retired_at)';
+    END IF;
+END;
+/
+
 -- migration: 20261102_008_document_extraction_revisions
 DECLARE
     v_count NUMBER;
@@ -4322,6 +4341,85 @@ BEGIN
             || 'CONSTRAINT rag_doc_sec_rev_kind_ck '
             || 'CHECK (revision_kind IN (''EXTRACTED'', ''EDITED'', ''RESTORED'', ''RESET'')) '
             || ')';
+    END IF;
+END;
+/
+
+-- migration: 20261103_4208_evaluation_job_case_results
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOB_CASE_RESULTS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_job_case_results ( '
+            || 'job_id                   VARCHAR2(64) NOT NULL, '
+            || 'pass_index               NUMBER(1) NOT NULL, '
+            || 'case_index               NUMBER(10) NOT NULL, '
+            || 'case_id                  VARCHAR2(200 CHAR) NOT NULL, '
+            || 'search_answer_profile_id VARCHAR2(128), '
+            || 'result_json              JSON NOT NULL, '
+            || 'created_at               TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_evaluation_job_case_results_pk PRIMARY KEY (job_id, pass_index, case_index), '
+            || 'CONSTRAINT rag_evaluation_job_case_results_job_fk FOREIGN KEY (job_id) '
+            || 'REFERENCES rag_evaluation_jobs (job_id) ON DELETE CASCADE '
+            || ')';
+    END IF;
+END;
+/
+
+-- migration: 20261103_4212_evaluation_source_workbooks
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_SOURCE_WORKBOOKS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_source_workbooks ( '
+            || 'workbook_id         VARCHAR2(64) PRIMARY KEY, '
+            || 'tenant_id_hash      VARCHAR2(64), '
+            || 'user_id_hash        VARCHAR2(64), '
+            || 'file_name           VARCHAR2(512 CHAR) NOT NULL, '
+            || 'content_sha256      VARCHAR2(64) NOT NULL, '
+            || 'byte_size           NUMBER(12) NOT NULL, '
+            || 'object_storage_path VARCHAR2(1024 CHAR) NOT NULL, '
+            || 'created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_SOURCE_WORKBOOKS_OWNER_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_source_workbooks_owner_idx '
+            || 'ON rag_evaluation_source_workbooks (tenant_id_hash, user_id_hash, content_sha256)';
+    END IF;
+END;
+/
+
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'SOURCE_WORKBOOK_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (source_workbook_id VARCHAR2(64))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND constraint_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_FK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs '
+            || 'ADD CONSTRAINT rag_evaluation_jobs_source_workbook_fk '
+            || 'FOREIGN KEY (source_workbook_id) '
+            || 'REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_evaluation_jobs_source_workbook_idx '
+            || 'ON rag_evaluation_jobs (source_workbook_id)';
     END IF;
 END;
 /

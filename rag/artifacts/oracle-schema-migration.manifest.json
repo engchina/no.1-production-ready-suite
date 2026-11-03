@@ -648,6 +648,13 @@
     },
     {
       "destructive": false,
+      "name": "20261102_007_chunk_set_retired_at",
+      "sha256": "3b342d316d73d5857652c7f28e91a684470f51225125d4f12b75d53d359f6f75",
+      "statement_count": 1,
+      "table_name": "rag_chunk_sets"
+    },
+    {
+      "destructive": false,
       "name": "20261102_008_document_extraction_revisions",
       "sha256": "ea98fe8784dd7a612dc9184d06441831829250859a07b384015fc104c64a6c9f",
       "statement_count": 1,
@@ -659,10 +666,24 @@
       "sha256": "d9ab78cf843ff353d5ef0cabe53e479d18f9470efc67d4454740af95e0926594",
       "statement_count": 1,
       "table_name": "rag_document_section_revisions"
+    },
+    {
+      "destructive": false,
+      "name": "20261103_4208_evaluation_job_case_results",
+      "sha256": "3e7ea59e63a0daf220cfbe7e32043489fb383f91b8e01bf3f9a4c938e95f63fd",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_job_case_results"
+    },
+    {
+      "destructive": false,
+      "name": "20261103_4212_evaluation_source_workbooks",
+      "sha256": "be77eb533a6617a49791599ddda6fb6f6570ad14a884e2e0fe0d7123fb68933e",
+      "statement_count": 2,
+      "table_name": "rag_evaluation_source_workbooks"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "5f1c6898b79f6e8176e4816421abd76b47e8f7d8ee2e7262a87c076be7d53b7a",
-  "statement_count": 149
+  "sha256": "693ab4bc7d21476b886c42779d0f55375a0a074cb5ff06f91b7a830ead6dd718",
+  "statement_count": 153
 }

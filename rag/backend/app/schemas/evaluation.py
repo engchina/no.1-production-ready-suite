@@ -833,6 +833,9 @@ class EvaluationRunRequest(BaseModel):
     search_answer_profile_id: str | None = Field(default=None, max_length=128)
     # 同じケースを別の検索・回答プロファイルでも評価する。
     compare_search_answer_profile_id: str | None = Field(default=None, max_length=128)
+    # アップロードした Excel（`POST /cases/import` が返す ID。#4212）。結果をこのファイルに足して
+    # ダウンロードする。ケースの id はこのファイルの行（`row-<行番号>`）でなければならない。
+    source_workbook_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("filters")
     @classmethod
@@ -905,6 +908,8 @@ class EvaluationJob(BaseModel):
 
     進捗は、終わったケースの数と今のケースで示す。結果は、成功（`SUCCEEDED`）のときだけ
     `run_result` で返す。
+    失敗・取り消し（`FAILED` / `CANCELLED`）のときは、それまでに保存したケースの結果を
+    `partial_result` で返す（#4208。閾値の判定はせず、実行条件も持たない）。
     時間の上限に達して打ち切ったケースは、結果の中で失敗のケースとして返す。質問・回答・根拠の
     本文は持たない（#4107）。
     """
@@ -924,6 +929,9 @@ class EvaluationJob(BaseModel):
     finished_at: datetime | None = None
     heartbeat_at: datetime | None = None
     run_result: EvaluationMetrics | None = None
+    partial_result: EvaluationMetrics | None = None
+    # アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。
+    source_workbook_id: str | None = None
 
 
 class EvaluationImportIssue(BaseModel):
@@ -1013,7 +1021,10 @@ class EvaluationProcessDraftData(BaseModel):
 
 
 class EvaluationImportResult(BaseModel):
-    """評価リクエストの Excel の検証の結果（#2065。保存しない）。
+    """評価リクエストの Excel の検証の結果（#2065）。
+
+    ケースは保存しない（投入のときに渡す）。元のファイルは `source_workbook_id` で参照する
+    （#4212）。
 
     誤り（`errors`）が 1 つでもあれば `cases` は空で、評価を実行できない。`error_count` は誤りの
     総数（`errors` は先頭の一部）。警告（`warnings`）があっても評価は実行できる。`document_names` は
@@ -1032,6 +1043,8 @@ class EvaluationImportResult(BaseModel):
     search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] = Field(default_factory=list)
     document_names: dict[str, str] = Field(default_factory=dict)
+    # 保存した元のファイルの ID（#4212。誤りがある・保存できないときは None）。
+    source_workbook_id: str | None = None
     max_rows: int
     max_bytes: int
 

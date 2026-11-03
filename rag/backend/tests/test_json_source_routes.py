@@ -17,7 +17,12 @@ def test_recipe_source_map_pins_extraction_version_and_refuses_missing_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw, payload = fixture()
-    detail = SimpleNamespace(object_storage_path="synthetic.json", preprocess_artifact=None)
+    detail = SimpleNamespace(
+        object_storage_path="synthetic.json",
+        preprocess_artifact=None,
+        file_name="synthetic.json",
+        content_type="application/json",
+    )
     oracle = SimpleNamespace(
         get_document=AsyncMock(return_value=detail),
         get_document_recipe=AsyncMock(return_value={"active_extraction_recipe_id": "ex1"}),
@@ -44,7 +49,12 @@ def test_citation_source_map_pins_chunk_and_does_not_replace_stale_chunk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw, payload = fixture()
-    detail = SimpleNamespace(object_storage_path="synthetic.json", preprocess_artifact=None)
+    detail = SimpleNamespace(
+        object_storage_path="synthetic.json",
+        preprocess_artifact=None,
+        file_name="synthetic.json",
+        content_type="application/json",
+    )
     chunk = RetrievedChunk(
         document_id="d1",
         chunk_id="c1",
@@ -53,7 +63,7 @@ def test_citation_source_map_pins_chunk_and_does_not_replace_stale_chunk(
         metadata={"chunk_set_id": "cs1", "element_ids": "e1"},
     )
     oracle = SimpleNamespace(
-        retrievable_chunk=AsyncMock(return_value=chunk),
+        readable_version_chunk=AsyncMock(return_value=chunk),
         accessible_document_exists=AsyncMock(return_value=True),
         get_document=AsyncMock(return_value=detail),
         chunk_set_extraction_recipe_ids=AsyncMock(return_value={"cs1": "ex1"}),
@@ -69,7 +79,7 @@ def test_citation_source_map_pins_chunk_and_does_not_replace_stale_chunk(
     assert result.json()["data"]["status"] == "exact"
     load.reset_mock()
     assert client.get(path.replace("cs1", "cs0")).status_code == 409
-    oracle.retrievable_chunk.return_value = None
+    oracle.readable_version_chunk.return_value = None
     # 見られる文書の今は無い chunk: 画面が案内に切り替えられる code を返す（#4092）。
     stale = client.get(path)
     assert stale.status_code == 409

@@ -4,7 +4,12 @@
 
 import type { StatusVariant } from "@production-ready/ui";
 
-import type { EvaluationCaseResult, EvaluationJob, EvaluationJobStatus } from "@/lib/api";
+import type {
+  EvaluationCaseResult,
+  EvaluationJob,
+  EvaluationJobStatus,
+  EvaluationMetrics,
+} from "@/lib/api";
 import { answerStageLabel } from "@/lib/answer-progress";
 import { t, type I18nKey } from "@/lib/i18n";
 
@@ -62,6 +67,25 @@ export function evaluationJobTimeLimitLabel(job: Pick<EvaluationJob, "time_limit
 /** workspace に保存した job id の検証（空文字は「job なし」）。 */
 export function isEvaluationJobId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{0,64}$/.test(value);
+}
+
+/** 結果の領域に出す結果（成功の結果か、失敗・取り消しの途中までの結果。#4208）。 */
+export function evaluationJobShownResult(
+  job: Pick<EvaluationJob, "run_result" | "partial_result">
+): EvaluationMetrics | null {
+  return job.run_result ?? job.partial_result ?? null;
+}
+
+/** 途中までの結果の範囲の文言（比べるプロファイルの分も数える）。途中までの結果が無ければ null。 */
+export function evaluationJobPartialLabel(
+  job: Pick<EvaluationJob, "partial_result" | "total_cases">
+): string | null {
+  const partial = job.partial_result;
+  if (!partial) return null;
+  return t("evaluation.job.partialResult", {
+    saved: partial.case_count + (partial.comparison?.metrics.case_count ?? 0),
+    total: job.total_cases,
+  });
 }
 
 export interface EvaluationCaseErrorSummary {

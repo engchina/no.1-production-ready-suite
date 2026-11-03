@@ -85,6 +85,12 @@ describe("配信の base（Issue 1316）", () => {
       "/rag/api/documents/d1/content?disposition=attachment"
     );
     expect(mod.api.documentRecipeContentUrl("d1", "r1")).toBe("/rag/api/documents/d1/recipes/r1/content");
+    expect(
+      mod.api.documentRecipeContentUrl("d1", "r1", { variant: "prepared", chunkSetId: "cs1" })
+    ).toBe("/rag/api/documents/d1/recipes/r1/content?variant=prepared&chunk_set_id=cs1");
+    expect(
+      mod.api.documentPreviewPageImageUrl("d1", 2, { recipeId: "r1", dpi: 144, chunkSetId: "cs1" })
+    ).toBe("/rag/api/documents/d1/recipes/r1/preview-pages/2?dpi=144&chunk_set_id=cs1");
     expect(mod.api.documentPreviewPageImageUrl("d1", 2, { dpi: 144 })).toBe(
       "/rag/api/documents/d1/preview-pages/2?dpi=144"
     );

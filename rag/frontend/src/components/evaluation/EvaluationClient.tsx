@@ -70,6 +70,7 @@ import { toast } from "@/lib/toast";
 
 import {
   evaluationCaseErrorSummary,
+  evaluationJobShownResult,
   isEvaluationJobActive,
   isEvaluationJobId,
 } from "./evaluation-job";
@@ -119,6 +120,7 @@ import {
 
 const ResultExportContext = createContext<{
   jobId: string;
+  hasSourceWorkbook: boolean;
   input: EvaluationImportResult | null;
   profileName: string | null;
   compareProfileName: string | null;
@@ -346,6 +348,7 @@ export function EvaluationClient() {
       const job = await runMutation.mutateAsync({
         cases: runInput.cases,
         search_answer_profile_id: profileId,
+        ...(runInput.source_workbook_id ? { source_workbook_id: runInput.source_workbook_id } : {}),
         ...(compareId ? { compare_search_answer_profile_id: compareId } : {}),
       });
       setRunCaseLabels(buildEvaluationCaseLabels(runInput));
@@ -501,23 +504,21 @@ export function EvaluationClient() {
         {runJob.jobId ? (
           <EvaluationJobSection
             state={runJob}
-            renderResult={(job) =>
-              job.run_result ? (
-                <ResultExportContext.Provider value={{jobId:job.job_id,input:runInputSnapshot,
-                  profileName:runProfileName,compareProfileName:runCompareName}}>
-                {job.run_result.comparison ? (
-                  <EvaluationComparisonResult
-                    metrics={job.run_result}
-                    baseName={runProfileName}
-                    comparedName={runCompareName}
-                    caseLabels={runCaseLabels}
-                  />
-                ) : (
-                  <EvaluationResult metrics={job.run_result} caseLabels={runCaseLabels} />
-                )}
-                </ResultExportContext.Provider>
-              ) : null
-            }
+            renderResult={(job, metrics) => (
+              <ResultExportContext.Provider value={{jobId:job.job_id,hasSourceWorkbook:Boolean(job.source_workbook_id),input:runInputSnapshot,
+                profileName:runProfileName,compareProfileName:runCompareName}}>
+              {metrics.comparison ? (
+                <EvaluationComparisonResult
+                  metrics={metrics}
+                  baseName={runProfileName}
+                  comparedName={runCompareName}
+                  caseLabels={runCaseLabels}
+                />
+              ) : (
+                <EvaluationResult metrics={metrics} caseLabels={runCaseLabels} />
+              )}
+              </ResultExportContext.Provider>
+            )}
           />
         ) : runMutation.isPending ? (
           <EvaluationResultSkeleton />
@@ -649,13 +650,13 @@ function useEvaluationJobState(): EvaluationJobState {
   };
 }
 
-/** job の実行状況と、実行中は結果の Skeleton、成功したら結果を出す。 */
+/** job の実行状況と、実行中は結果の Skeleton、結果（成功か途中までの結果。#4208）があれば結果を出す。 */
 function EvaluationJobSection({
   state,
   renderResult,
 }: {
   state: EvaluationJobState;
-  renderResult: (job: EvaluationJob) => ReactNode;
+  renderResult: (job: EvaluationJob, metrics: EvaluationMetrics) => ReactNode;
 }) {
   const { job, query } = state;
   if (!job) {
@@ -674,6 +675,7 @@ function EvaluationJobSection({
   // 実行中に状態の取得が失敗したとき（再起動・通信断など）。取得は自動で続けるので、最後に分かっている
   // 状態のまま、パネルの直下に取得できていないことを出す（取得できたら消える。#977）。
   const pollError = query.isError && job.status === "RUNNING" ? query.error : null;
+  const shownResult = evaluationJobShownResult(job);
   return (
     <>
       <EvaluationJobPanel
@@ -689,7 +691,7 @@ function EvaluationJobSection({
         </Banner>
       ) : null}
       {job.status === "RUNNING" ? <EvaluationResultSkeleton /> : null}
-      {job.status === "SUCCEEDED" ? renderResult(job) : null}
+      {shownResult ? renderResult(job, shownResult) : null}
     </>
   );
 }
@@ -1135,11 +1137,16 @@ function CaseTable({
         question: label.question, evidence: label.evidence.map(item => item.label),
         standard_answer_preview: null, has_standard_answer: false,
       }));
-      saveDownloadedFile(await api.downloadEvaluationResults(exportContext.jobId, {
+      const file = await api.downloadEvaluationResults(exportContext.jobId, {
         rows: input?.rows ?? fallbackRows, cases: input?.cases ?? [],
         profile_name: exportContext.profileName, compare_profile_name: exportContext.compareProfileName,
-      }));
-      toast.success(t("evaluation.export.done"));
+      });
+      saveDownloadedFile(file);
+      if (exportContext.hasSourceWorkbook && file.resultsSource !== "uploaded") {
+        toast.warning(t("evaluation.export.fallback"));
+      } else {
+        toast.success(t("evaluation.export.done"));
+      }
     } catch (error) {
       setDownloadError(error instanceof ApiError ? error.message : t("evaluation.export.error"));
     } finally { setDownloading(false); }
@@ -1171,6 +1178,15 @@ function CaseTable({
           </Button>
         ) : null}
       </div>
+      {exportContext ? (
+        <p className="mb-2 text-xs text-fg-muted" data-testid="evaluation-export-helper">
+          {t(
+            exportContext.hasSourceWorkbook
+              ? "evaluation.export.helperUploaded"
+              : "evaluation.export.helperGenerated"
+          )}
+        </p>
+      ) : null}
       {downloadError ? <Banner severity="danger">{downloadError}</Banner> : null}
       <PagedDataTable<EvaluationCaseResult>
         viewport="bounded"

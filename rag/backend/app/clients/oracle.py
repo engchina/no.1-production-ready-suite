@@ -1890,6 +1890,41 @@ class OracleClient:
             )
         return versions
 
+    async def readable_version_chunk(
+        self, document_id: str, chunk_id: str
+    ) -> RetrievedChunk | None:
+        """引用した根拠を ID で読む。``retrievable_chunk`` と同じ条件に、退役した版を加える(#4168)。
+
+        切替の前に検索された根拠を保持の間は開ける。権限・テナント・文書の状態の条件は同じ。
+        回答の監査は ``retrievable_chunk`` のまま(旧版の根拠を今の根拠として確かめない)。
+        """
+        where_sql, binds = _version_read_where()
+        row = await self._fetch_one(
+            _render_sql(
+                """
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.chunk_text,
+                c.metadata_json,
+                c.chunk_index,
+                c.chunk_set_id,
+                d.file_name,
+                d.category_name,
+                d.superseded_by_document_id,
+                0 AS score
+            FROM rag_chunks c
+            JOIN rag_documents d ON d.document_id = c.document_id
+            WHERE {where_sql}
+              AND c.document_id = :read_document_id
+              AND c.chunk_id = :read_chunk_id
+            """,
+                where_sql=where_sql,
+            ),
+            {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
+        )
+        return _retrieved_chunk_from_row(row) if row is not None else None
+
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> RetrievedChunk | None:
         """検索と同じ見え方の条件で 1 件の chunk を返す（MCP の ``rag_read_source``。#1219）。
 
@@ -1976,16 +2011,14 @@ class OracleClient:
     async def retrievable_element_chunk(
         self, document_id: str, extraction_recipe_id: str, element_id: str
     ) -> RetrievedChunk | None:
-        """要素の定位子が指す要素を含む、今の有効な chunk を返す（#1330）。
+        """要素の定位子が指す要素を含む chunk を返す（#1330）。
 
-        ``retrievable_chunk`` と同じ見え方の条件（tenant・ナレッジベース・INDEXED・
-        有効な chunk_set）に、同じ解析の結果（``extraction_recipe_id``）の chunk_set を加える。
-        文書分割の設定を変えて chunk を作り直しても、同じ要素を含む chunk を返す。
+        ``readable_version_chunk`` と同じ見え方の条件に、同じ解析の結果
+        （``extraction_recipe_id``）の chunk_set を加える。文書分割の設定を変えて chunk を作り直して
+        も、同じ要素を含む chunk を返す。有効な版を先に見て、無ければ保持の間の旧版を見る（#4168）。
         1 つの要素が複数の chunk に分かれたときは、文書の中で最初の chunk を返す。
         """
-        where_sql, binds = _oracle_retrieval_where(
-            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
-        )
+        where_sql, binds = _version_read_where()
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -2010,7 +2043,8 @@ class OracleClient:
               AND DBMS_LOB.INSTR(
                   JSON_VALUE(c.metadata_json, '$.element_ids' RETURNING CLOB), :read_element_id
               ) > 0
-            ORDER BY c.chunk_index
+            ORDER BY locator_cs.is_active DESC, locator_cs.retired_at DESC NULLS LAST,
+                c.chunk_index
             FETCH FIRST 50 ROWS ONLY
             """,
                 where_sql=where_sql,
@@ -2269,11 +2303,10 @@ class OracleClient:
     ) -> list[RetrievedChunk]:
         """文書の 1 つの chunk_set の chunk を、``from_index`` から chunk の順に読む（#1332）。
 
-        見え方の条件は ``document_reading_index`` と同じ。chunk_set が有効でなくなっていれば空。
+        見え方の条件は ``document_reading_index`` に、退役した版を加えたもの（読んでいる途中の
+        cursor を切替の後も続ける。#4168）。chunk_set が消えていれば空。
         """
-        where_sql, binds = _oracle_retrieval_where(
-            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
-        )
+        where_sql, binds = _version_read_where()
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -3159,7 +3192,11 @@ class OracleClient:
         job_fence: IngestionJobFence | None = None,
         chunk_set_input_id: str | None = None,
     ) -> None:
-        """基線が今も active なら成功出力へ原子切替し、履歴を残し、同レシピの旧出力を GC する。
+        """基線が今も active なら成功出力へ原子切替し、履歴を残し、旧版に退役の時刻を付ける。
+
+        旧版の行は消さない。保持を超えた版は清掃（``chunk_set_retention``）が消す（#4168）。
+        一度も active にならなかった候補は、切替で読み手がいなくなるのでここで消す。
+        戻す操作（#4170）で退役した版を選ぶと、その版の退役の時刻を消す。
 
         ``expected_base_chunk_set_id`` は呼び出し側が作り始める前に読んだ active（無ければ None）。
         違えば ``RecipeActivationConflictError``（#4167。Iceberg の check-and-put）。
@@ -3221,6 +3258,11 @@ class OracleClient:
                 """
                 UPDATE rag_chunk_sets
                 SET is_active = CASE WHEN chunk_set_id = :chunk_set_id THEN 1 ELSE 0 END,
+                    retired_at = CASE
+                        WHEN chunk_set_id = :chunk_set_id THEN NULL
+                        WHEN is_active = 1 THEN SYSTIMESTAMP
+                        ELSE retired_at
+                    END,
                     updated_at = SYSTIMESTAMP
                 WHERE recipe_id = :recipe_id
                 """,
@@ -3262,7 +3304,7 @@ class OracleClient:
                 """,
                 {"document_id": document_id},
             )
-            # 切替が起きたときだけ履歴を足す。旧版の GC と同じ transaction で書く（#4167）。
+            # 切替が起きたときだけ履歴を足す（#4167）。
             if current_chunk_set_id != chunk_set_id:
                 _execute(
                     connection,
@@ -3282,15 +3324,18 @@ class OracleClient:
                         "job_id": job_fence.job_id if job_fence is not None else None,
                     },
                 )
-            stale_sets = _fetch_all(
+            never_served = _fetch_all(
                 connection,
                 """
                 SELECT chunk_set_id, extraction_recipe_id FROM rag_chunk_sets
-                WHERE recipe_id = :recipe_id AND chunk_set_id <> :chunk_set_id
+                WHERE recipe_id = :recipe_id
+                  AND chunk_set_id <> :chunk_set_id
+                  AND is_active = 0
+                  AND retired_at IS NULL
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
             )
-            _delete_chunk_set_outputs(connection, document_id=document_id, chunk_sets=stale_sets)
+            _delete_chunk_set_outputs(connection, document_id=document_id, chunk_sets=never_served)
 
         await self._run_transaction(operation)
 
@@ -3299,7 +3344,7 @@ class OracleClient:
     ) -> bool:
         """切り替えなかった候補を捨て、レシピの抽出の指す先を active の版へ戻す（#4167）。
 
-        active の版は消さない。消せたら True。
+        active の版と退役した版は消さない（退役した版は清掃だけが消す。#4168）。消せたら True。
         """
 
         def operation(connection: OracleConnectionProtocol) -> bool:
@@ -3319,6 +3364,7 @@ class OracleClient:
                 """
                 SELECT chunk_set_id, extraction_recipe_id FROM rag_chunk_sets
                 WHERE chunk_set_id = :chunk_set_id AND recipe_id = :recipe_id AND is_active = 0
+                  AND retired_at IS NULL
                 """,
                 {"recipe_id": recipe_id, "chunk_set_id": chunk_set_id},
             )
@@ -3384,11 +3430,13 @@ class OracleClient:
         return row is not None
 
     async def served_extraction_ids(self, document_id: str) -> set[str]:
-        """検索に出している版が読む抽出の ID（再構築で上書きしない。#4115）。"""
+        """検索に出している版と退役した版が読む抽出の ID（再構築で上書きしない。#4115・#4168）。"""
         rows = await self._fetch_all(
             """
             SELECT DISTINCT extraction_recipe_id FROM rag_chunk_sets
-            WHERE document_id = :document_id AND is_active = 1 AND status = 'INDEXED'
+            WHERE document_id = :document_id
+              AND (is_active = 1 OR retired_at IS NOT NULL)
+              AND status = 'INDEXED'
               AND extraction_recipe_id IS NOT NULL
             """,
             {"document_id": document_id},
@@ -3616,6 +3664,23 @@ class OracleClient:
             )
 
         await self._run_transaction(operation)
+
+    async def recipe_version_exists(
+        self, *, document_id: str, recipe_id: str, chunk_set_id: str
+    ) -> bool:
+        """検索に出している版か退役した版か（候補と消えた版は False。#4168）。"""
+        row = await self._fetch_one(
+            """
+            SELECT 1 AS found FROM rag_chunk_sets
+            WHERE chunk_set_id = :chunk_set_id
+              AND document_id = :document_id
+              AND recipe_id = :recipe_id
+              AND status = 'INDEXED'
+              AND (is_active = 1 OR retired_at IS NOT NULL)
+            """,
+            {"chunk_set_id": chunk_set_id, "document_id": document_id, "recipe_id": recipe_id},
+        )
+        return row is not None
 
     async def chunk_set_source_derivation(
         self, *, document_id: str, chunk_set_id: str
@@ -4510,6 +4575,29 @@ class OracleClient:
             binds,
         )
         return _row_count_value(row)
+
+    async def evaluation_answers_by_trace_ids(self, trace_ids: Sequence[str]) -> dict[str, str]:
+        """品質評価の結果の Excel に出す回答の本文を返す（#4212。回答の記録の範囲で絞る）。"""
+        unique = list(dict.fromkeys(trace_id for trace_id in trace_ids if trace_id))
+        answers: dict[str, str] = {}
+        for start in range(0, len(unique), _EVALUATION_ANSWER_BATCH):
+            batch = unique[start : start + _EVALUATION_ANSWER_BATCH]
+            names = [f"trace_id_{index}" for index in range(len(batch))]
+            rows = await self._fetch_all(
+                _render_sql(
+                    """
+                SELECT trace_id, answer
+                FROM rag_answer_records
+                WHERE trace_id IN ({placeholders})
+                  AND {scope_sql}
+                """,
+                    placeholders=", ".join(f":{name}" for name in names),
+                    scope_sql=_answer_record_scope_sql(),
+                ),
+                _with_answer_record_scope_bind(dict(zip(names, batch, strict=True))),
+            )
+            answers.update({str(row["trace_id"]): str(row.get("answer") or "") for row in rows})
+        return answers
 
     async def get_answer_record(self, trace_id: str) -> dict[str, object] | None:
         """保存済み回答を 1 件返す（利用できる検索・回答プロファイルの回答だけ。#214）。"""
@@ -7393,6 +7481,7 @@ class OracleClient:
                     lease_owner,
                     heartbeat_at,
                     time_limit_seconds,
+                    source_workbook_id,
                     created_at,
                     started_at,
                     updated_at
@@ -7407,6 +7496,7 @@ class OracleClient:
                     :lease_owner,
                     SYSTIMESTAMP,
                     :time_limit_seconds,
+                    :source_workbook_id,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP,
                     SYSTIMESTAMP
@@ -7420,6 +7510,7 @@ class OracleClient:
                     "total_cases": job["total_cases"],
                     "lease_owner": job["lease_owner"],
                     "time_limit_seconds": job["time_limit_seconds"],
+                    "source_workbook_id": job.get("source_workbook_id"),
                 },
             )
         )
@@ -7446,6 +7537,7 @@ class OracleClient:
                 error_message,
                 result_json,
                 evaluation_run_id,
+                source_workbook_id,
                 created_at,
                 started_at,
                 finished_at,
@@ -7564,6 +7656,85 @@ class OracleClient:
             return cursor_count
 
         return await self._run_transaction(operation) > 0
+
+    async def save_evaluation_job_case_result(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        pass_index: int,
+        case_index: int,
+        case_id: str,
+        search_answer_profile_id: str | None,
+        result: Mapping[str, object],
+    ) -> bool:
+        """自分の lease の RUNNING job に 1 ケースの結果を保存する（#4208）。書けなければ False。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count_with_input_sizes(
+                connection,
+                """
+                INSERT INTO rag_evaluation_job_case_results (
+                    job_id,
+                    pass_index,
+                    case_index,
+                    case_id,
+                    search_answer_profile_id,
+                    result_json,
+                    created_at
+                )
+                SELECT
+                    job_id,
+                    :pass_index,
+                    :case_index,
+                    :case_id,
+                    :search_answer_profile_id,
+                    JSON(:result_json),
+                    SYSTIMESTAMP
+                FROM rag_evaluation_jobs
+                WHERE job_id = :job_id
+                  AND status = 'RUNNING'
+                  AND lease_owner = :lease_owner
+                """,
+                {
+                    "job_id": job_id,
+                    "lease_owner": lease_owner,
+                    "pass_index": pass_index,
+                    "case_index": case_index,
+                    "case_id": case_id,
+                    "search_answer_profile_id": search_answer_profile_id,
+                    "result_json": _json_bind(dict(result)),
+                },
+                input_sizes=_json_input_sizes("result_json"),
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def list_evaluation_job_case_results(
+        self,
+        job_id: str,
+        *,
+        tenant_id_hash: str | None,
+        user_id_hash: str | None,
+    ) -> list[dict[str, object]]:
+        """投入した利用者の job の、保存したケースの結果をケースの順に返す（#4208）。"""
+        rows = await self._fetch_all(
+            f"""
+            SELECT
+                r.pass_index,
+                r.case_index,
+                r.case_id,
+                r.search_answer_profile_id,
+                r.result_json
+            FROM rag_evaluation_job_case_results r
+            JOIN rag_evaluation_jobs j ON j.job_id = r.job_id
+            WHERE r.job_id = :job_id
+              AND {_EVALUATION_JOB_OWNER_SQL}
+            ORDER BY r.pass_index, r.case_index
+            """,
+            {"job_id": job_id, "tenant_id_hash": tenant_id_hash, "user_id_hash": user_id_hash},
+        )
+        return [{**row, "result_json": _json_loads(row.get("result_json"))} for row in rows]
 
     async def cancel_evaluation_job(
         self,
@@ -12491,6 +12662,8 @@ def _record_db_execute(started: float, *, rows: int = 0) -> None:
 
 # 品質評価の job を、投入した利用者（tenant と user の hash）だけが見られるようにする条件（#390）。
 # hash が無い（認証なしの開発環境など）場合は、hash の無い job だけを対象にする。
+# 回答の本文を 1 回に読む trace の数（`IN` の上限は 1000。評価は 1 job で最大 400 ケース）。
+_EVALUATION_ANSWER_BATCH = 500
 _EVALUATION_JOB_OWNER_SQL = (
     "(tenant_id_hash = :tenant_id_hash OR (tenant_id_hash IS NULL AND :tenant_id_hash IS NULL)) "
     "AND (user_id_hash = :user_id_hash OR (user_id_hash IS NULL AND :user_id_hash IS NULL))"
@@ -14930,13 +15103,14 @@ def _duplicate_reuses_canonical_sql(*, include_superseded: bool) -> str:
 
 
 def _oracle_retrieval_where(
-    filters: dict[str, str], *, effective_period: bool = True
+    filters: dict[str, str], *, effective_period: bool = True, include_retired: bool = False
 ) -> tuple[str, dict[str, object]]:
     """検索と同じ見え方の条件(``c`` = chunk と ``d`` = 文書を join した SQL の WHERE)。
 
     ``effective_period=False`` は有効期間で絞らない(ID で読む入口。#3249)。検索で有効期間を当てて
     選んだ根拠を、ID で読み直すときに今日の日付で変えない。tenant・認可の範囲・INDEXED・有効な
-    chunk_set の条件は同じに当てる。
+    chunk_set の条件は同じに当てる。``include_retired=True`` は有効な chunk_set に退役した版を
+    加える(``_version_read_where`` だけが使う。#4168)。
 
     文書の側の条件で文書の集合を副問い合わせで先に決め(``c.document_id IN (...)``)、
     chunk の側の条件を並べる(#2800)。両方を 1 つの WHERE に並べると、ナレッジベースの
@@ -14944,7 +15118,7 @@ def _oracle_retrieval_where(
     範囲の chunk を読むだけの SQL が 1 回 9 秒かかった(分けると 0.7 秒。読む行は同じ)。
     """
     document_sql, chunk_sql, binds = _oracle_retrieval_where_split(
-        filters, effective_period=effective_period
+        filters, effective_period=effective_period, include_retired=include_retired
     )
     return (
         f"c.document_id IN (SELECT d.document_id FROM rag_documents d WHERE {document_sql})"
@@ -14957,8 +15131,19 @@ def _oracle_retrieval_where(
 _CHUNK_SIDE_CLAUSE = re.compile(r"(?<![\w.$])(?:c|cs|r)\.")
 
 
+def _version_read_where() -> tuple[str, dict[str, object]]:
+    """ID で根拠を読む経路の条件: 旧版の文書も、有効期間の外も、退役した版も読む(#4168)。"""
+    return _oracle_retrieval_where(
+        {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False, include_retired=True
+    )
+
+
 def _oracle_retrieval_where_split(
-    filters: dict[str, str], *, effective_period: bool = True, vector_prefilter: bool = False
+    filters: dict[str, str],
+    *,
+    effective_period: bool = True,
+    vector_prefilter: bool = False,
+    include_retired: bool = False,
 ) -> tuple[str, str, dict[str, object]]:
     """``_oracle_retrieval_where`` と同じ条件を、文書の側（``d`` だけ）と chunk の側に
     分ける(#2800)。
@@ -14973,7 +15158,10 @@ def _oracle_retrieval_where_split(
     (``_ACTIVE_CHUNK_PREFILTER_SQL``)にする(vector の検索だけ。#2592)。
     """
     clauses, binds = _oracle_retrieval_clauses(
-        filters, effective_period=effective_period, vector_prefilter=vector_prefilter
+        filters,
+        effective_period=effective_period,
+        vector_prefilter=vector_prefilter,
+        include_retired=include_retired,
     )
     chunk = [clause for clause in clauses if _CHUNK_SIDE_CLAUSE.search(clause)]
     document = [clause for clause in clauses if not _CHUNK_SIDE_CLAUSE.search(clause)]
@@ -15014,7 +15202,11 @@ _ACTIVE_CHUNK_PREFILTER_SQL = f"""
 
 
 def _oracle_retrieval_clauses(
-    filters: dict[str, str], *, effective_period: bool = True, vector_prefilter: bool = False
+    filters: dict[str, str],
+    *,
+    effective_period: bool = True,
+    vector_prefilter: bool = False,
+    include_retired: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     clauses = ["d.status = 'INDEXED'", *_oracle_access_predicates(alias="d")]
     binds = _with_tenant_bind({}, alias="d")
@@ -15025,7 +15217,14 @@ def _oracle_retrieval_clauses(
     elif not explicit_chunk_set_id:
         # 1 文書 1〜3 レシピ: 各レシピの直近成功出力だけを常に融合検索する。
         # 旧 schema の未タグ chunk はレシピ行がまだ無い文書に限り後方互換で採用する。
-        clauses.append("""
+        # include_retired は ID で根拠を読む経路だけ。退役した版は検索・回答・件数に出さない
+        # (#4168)。
+        served_sql = (
+            "(active_cs.is_active = 1 OR active_cs.retired_at IS NOT NULL)"
+            if include_retired
+            else "active_cs.is_active = 1"
+        )
+        clauses.append(f"""
             (
                 EXISTS (
                     SELECT 1
@@ -15033,7 +15232,7 @@ def _oracle_retrieval_clauses(
                     JOIN rag_document_recipes active_r
                       ON active_r.recipe_id = active_cs.recipe_id
                     WHERE active_cs.chunk_set_id = c.chunk_set_id
-                      AND active_cs.is_active = 1
+                      AND {served_sql}
                       AND active_cs.status = 'INDEXED'
                 )
                 OR (
@@ -17939,6 +18138,7 @@ CREATE TABLE rag_chunk_sets (
     vector_count    NUMBER(10) DEFAULT 0 NOT NULL,
     is_serving      NUMBER(1) DEFAULT 1 NOT NULL,
     is_active       NUMBER(1) DEFAULT 0 NOT NULL,
+    retired_at      TIMESTAMP WITH TIME ZONE,
     metrics_json    JSON,
     first_page_context JSON,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
@@ -17969,6 +18169,9 @@ CREATE UNIQUE INDEX rag_chunk_sets_recipe_active_uidx
 
 CREATE INDEX rag_chunk_sets_extraction_idx
     ON rag_chunk_sets (document_id, extraction_recipe_id);
+
+CREATE INDEX rag_chunk_sets_retired_idx
+    ON rag_chunk_sets (retired_at);
 
 CREATE TABLE rag_document_extractions (
     document_id          VARCHAR2(64) NOT NULL,
@@ -18417,7 +18620,7 @@ def oracle_evaluation_job_schema_sql(
 
     質問・回答・根拠の本文は保存しない（結果の回答の診断は外す。#4107）。job は投入を受けた
     backend のプロセスで動き、そのプロセスが止まったら heartbeat が途絶えて失敗になる（別の
-    プロセスは引き継がない）。
+    プロセスは引き継がない）。終わったケースの結果は別の表に残す（#4208）。
     """
     return f"""
 CREATE TABLE {table_name} (
@@ -18436,10 +18639,13 @@ CREATE TABLE {table_name} (
     error_message           VARCHAR2(2000 CHAR),
     result_json             JSON,
     evaluation_run_id       VARCHAR2(64),
+    source_workbook_id      VARCHAR2(64),
     created_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     started_at              TIMESTAMP WITH TIME ZONE,
     finished_at             TIMESTAMP WITH TIME ZONE,
     updated_at              TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_source_workbook_fk FOREIGN KEY (source_workbook_id)
+        REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL,
     CONSTRAINT {table_name}_kind_ck CHECK (kind IN ('run', 'calibration')),
     CONSTRAINT {table_name}_status_ck
         CHECK (status IN ('RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'))
@@ -18449,7 +18655,38 @@ CREATE INDEX {table_name}_status_idx
     ON {table_name} (status, heartbeat_at);
 
 CREATE INDEX {table_name}_owner_created_idx
-    ON {table_name} (tenant_id_hash, user_id_hash, created_at DESC)
+    ON {table_name} (tenant_id_hash, user_id_hash, created_at DESC);
+
+CREATE INDEX {table_name}_source_workbook_idx
+    ON {table_name} (source_workbook_id)
+""".strip()
+
+
+def oracle_evaluation_job_case_result_schema_sql(
+    table_name: str = "rag_evaluation_job_case_results",
+    job_table_name: str = "rag_evaluation_jobs",
+) -> str:
+    """品質評価の job のケースごとの結果（#4208）の table DDL を返す。
+
+    ケースが終わるたびに 1 行を書き、最後の保存の失敗・プロセスの停止でも終わったケースを残す。
+    `pass_index` は同じケースを流す回（0 は主条件、1 は比べる検索・回答プロファイル）、
+    `case_index` は評価のケースの位置。回答の診断は外すので、質問・回答・根拠の本文は
+    保存しない（#4107）。
+    job を消せば行も消える。
+    """
+    return f"""
+CREATE TABLE {table_name} (
+    job_id                   VARCHAR2(64) NOT NULL,
+    pass_index               NUMBER(1) NOT NULL,
+    case_index               NUMBER(10) NOT NULL,
+    case_id                  VARCHAR2(200 CHAR) NOT NULL,
+    search_answer_profile_id VARCHAR2(128),
+    result_json              JSON NOT NULL,
+    created_at               TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_pk PRIMARY KEY (job_id, pass_index, case_index),
+    CONSTRAINT {table_name}_job_fk FOREIGN KEY (job_id)
+        REFERENCES {job_table_name} (job_id) ON DELETE CASCADE
+)
 """.strip()
 
 

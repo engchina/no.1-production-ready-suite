@@ -21,6 +21,8 @@ dependencies = [
     "prometheus-client>=0.24",
     "charset-normalizer>=3.4,<4",
     "pypdf>=6.4,<7",
+    # 品質評価の結果の列を、元の xlsx の XML に足す（名前空間の宣言を保つ。#4212）。
+    "lxml>=6.1,<7",
     "rag-parser-core",
     "rag-pipeline-core",
     # rag_poc 由来の Small-to-Big 分割・検索・根拠付き回答・FAQ/ドメインキーワード。

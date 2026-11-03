@@ -4,11 +4,13 @@ import asyncio
 import hashlib
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import date
 from pathlib import PurePath
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -44,7 +46,11 @@ from app.config import (
     settings_today,
 )
 from app.rag.answer_engine import AS_OF_FILTER_KEY
-from app.rag.evaluation import EvaluationProgressCallback, EvaluationRunner
+from app.rag.evaluation import (
+    EvaluationCaseResultCallback,
+    EvaluationProgressCallback,
+    EvaluationRunner,
+)
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
 from app.rag.evaluation_excel import (
     EVALUATION_EXCEL_MAX_BYTES,
@@ -55,11 +61,13 @@ from app.rag.evaluation_excel import (
     EvaluationDocumentRef,
     EvaluationExcelRow,
     build_evaluation_cases,
+    evaluation_case_id,
     normalize_file_name,
     parse_evaluation_workbook,
     template_xlsx,
 )
 from app.rag.evaluation_jobs import (
+    EVALUATION_COMPARE_PASS_INDEX,
     EvaluationJobExecutor,
     EvaluationJobLimitError,
     EvaluationJobNotFoundError,
@@ -73,7 +81,14 @@ from app.rag.evaluation_manifest import build_run_manifest, with_run_check
 from app.rag.evaluation_paired import compare_paired
 from app.rag.evaluation_process import guide_process_row, process_draft
 from app.rag.evaluation_result_storage import without_answer_diagnostics
-from app.rag.evaluation_results_excel import evaluation_results_xlsx
+from app.rag.evaluation_results_excel import (
+    evaluation_results_xlsx,
+    evaluation_workbook_with_results,
+)
+from app.rag.evaluation_source_workbooks import (
+    EvaluationSourceWorkbookNotFoundError,
+    get_evaluation_source_workbook_service,
+)
 from app.rag.rate_limit import enforce_rate_limit
 from app.rag.support_guide_process_import import (
     GuideDraftLlm,
@@ -84,6 +99,7 @@ from app.rag.support_guide_process_import import (
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import (
     EvaluationCase,
+    EvaluationCaseResult,
     EvaluationComparison,
     EvaluationImportIssue,
     EvaluationImportResult,
@@ -154,15 +170,30 @@ async def submit_run_evaluation_job(
 ) -> ApiResponse[EvaluationJob]:
     """golden set の評価を job として投入する（#390）。進捗は `GET /jobs/{job_id}` で取得する。"""
     enforce_rate_limit("evaluation", http_request)
+    source_workbook_id = await _usable_source_workbook_id(request)
     # 比べる検索・回答プロファイルがあれば、同じケースを 2 回流す（#2402）。
     passes = 2 if request.compare_search_answer_profile_id else 1
     time_limit = evaluation_job_time_limit_seconds(
         get_settings(), answer_runs=evaluation_answer_runs(request.cases) * passes
     )
 
+    job_id = uuid.uuid4().hex
+
+    def case_saver(pass_index: int, profile_id: str | None) -> EvaluationCaseResultCallback:
+        async def save(*, case_index: int, result: EvaluationCaseResult) -> None:
+            await get_evaluation_job_service().save_case_result(
+                job_id,
+                pass_index=pass_index,
+                case_index=case_index,
+                search_answer_profile_id=profile_id,
+                result=result,
+            )
+
+        return save
+
     async def execute(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
         metrics, evaluation_run_id = await _execute_run(
-            request, time_budget_seconds=time_limit, progress=progress
+            request, time_budget_seconds=time_limit, progress=progress, case_saver=case_saver
         )
         return EvaluationJobOutcome(
             result=metrics.model_dump(mode="json"), evaluation_run_id=evaluation_run_id
@@ -173,8 +204,36 @@ async def submit_run_evaluation_job(
         total_cases=len(request.cases) * passes,
         time_limit=time_limit,
         executor=execute,
+        job_id=job_id,
+        source_workbook_id=source_workbook_id,
     )
     return ApiResponse(data=job)
+
+
+async def _usable_source_workbook_id(request: EvaluationRunRequest) -> str | None:
+    """投入で指定した元の Excel を確かめて ID を返す（#4212）。
+
+    持ち主の無いファイルは 404、行に戻せないケースは 422。保存先の障害で読めないときは、評価を
+    止めずに結びつけない（結果だけのファイルになる）。
+    """
+    workbook_id = request.source_workbook_id
+    if not workbook_id:
+        return None
+    try:
+        workbook = await get_evaluation_source_workbook_service().load(workbook_id)
+    except EvaluationSourceWorkbookNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - 評価は止めない
+        logger.warning("evaluation_source_workbook_read_failed", extra=oracle_error_log_fields(exc))
+        return None
+    parsed = await asyncio.to_thread(parse_evaluation_workbook, workbook.content)
+    rows = {evaluation_case_id(row.row) for row in parsed.rows}
+    if any(case.id not in rows for case in request.cases):
+        raise HTTPException(
+            status_code=422,
+            detail="ケースがアップロードした Excel の行と合いません。もう一度検証してください。",
+        )
+    return workbook_id
 
 
 async def _evaluation_profile_knowledge_bases(profile_id: str) -> list[str]:
@@ -226,7 +285,9 @@ async def import_evaluation_cases(
     knowledge_base_ids: Annotated[list[str] | None, Form()] = None,
     search_answer_profile_id: Annotated[str | None, Form(min_length=1, max_length=128)] = None,
 ) -> ApiResponse[EvaluationImportResult]:
-    """評価リクエストの Excel を検証し、評価のケースにする（#2065。保存しない）。
+    """評価リクエストの Excel を検証し、評価のケースにする（#2065）。
+
+    誤りの無いファイルは、結果を足してダウンロードするために持ち主の範囲で保存する（#4212）。
 
     構造（見出し・必須・長さ・行数・根拠の書き方）を検証し、根拠のファイル名を選んだプロファイルの
     参照 KB（プロファイルの指定が無ければ明示の KB）の文書の ID にする。
@@ -282,6 +343,10 @@ async def import_evaluation_cases(
         return ApiResponse(data=_with_issues(result, issues))
     used = {doc_id for case in cases for doc_id in case.relevant_document_ids}
     result.cases = cases
+    # 結果を足してダウンロードするため、誤りの無いファイルだけを保存する（#4212）。
+    result.source_workbook_id = await get_evaluation_source_workbook_service().save(
+        file_name, content
+    )
     result.document_names = {
         document.document_id: document.file_name
         for document in documents
@@ -447,16 +512,83 @@ async def get_evaluation_job(job_id: str) -> ApiResponse[EvaluationJob]:
 
 @router.post("/jobs/{job_id}/results.xlsx")
 async def export_evaluation_results(job_id: str, body: EvaluationResultExportRequest) -> Response:
-    """投入した利用者の完了した結果を、画面の実行時の入力と合わせて出力する。"""
+    """投入した利用者の結果を出力する。
+
+    アップロードした Excel がある job は、そのファイルに結果の列を足す（#4212）。無い job・読めない
+    ときは、画面の実行時の入力と合わせた結果だけのファイルにする（`X-Evaluation-Results-Source` で
+    区別する）。失敗・取り消しの job は、終わったケースまでを出す（#4208）。実行中と結果の無い
+    job は 409。
+    """
     job = (await get_evaluation_job(job_id)).data
-    if job is None or job.status != "SUCCEEDED" or job.run_result is None:
-        raise HTTPException(status_code=409, detail="完了した品質評価の結果だけを書き出せます。")
-    content = await asyncio.to_thread(evaluation_results_xlsx, job.run_result, body)
+    metrics = (job.run_result or job.partial_result) if job is not None else None
+    if job is None or metrics is None:
+        raise HTTPException(
+            status_code=409, detail="結果のある品質評価（終わったもの）だけを書き出せます。"
+        )
+    uploaded = await _results_on_source_workbook(job, metrics)
+    if uploaded is not None:
+        content, file_name = uploaded
+        return Response(
+            content,
+            media_type=XLSX_MEDIA_TYPE,
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="evaluation_results.xlsx"; '
+                    f"filename*=UTF-8''{quote(file_name)}"
+                ),
+                "X-Evaluation-Results-Source": "uploaded",
+            },
+        )
+    content = await asyncio.to_thread(
+        evaluation_results_xlsx,
+        metrics,
+        body,
+        partial_of_total=job.total_cases if job.run_result is None else None,
+    )
     return Response(
         content,
         media_type=XLSX_MEDIA_TYPE,
-        headers={"Content-Disposition": 'attachment; filename="evaluation_results.xlsx"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="evaluation_results.xlsx"',
+            "X-Evaluation-Results-Source": "generated",
+        },
     )
+
+
+async def _results_on_source_workbook(
+    job: EvaluationJob, metrics: EvaluationMetrics
+) -> tuple[bytes, str] | None:
+    """元の Excel に結果の列を足す。元の Excel が無い・足せないときは None（ログだけ）。"""
+    if not job.source_workbook_id:
+        return None
+    try:
+        workbook = await get_evaluation_source_workbook_service().load(job.source_workbook_id)
+        answers = await _case_answers(metrics)
+        content = await asyncio.to_thread(
+            evaluation_workbook_with_results, workbook.content, metrics, answers
+        )
+    except Exception as exc:  # noqa: BLE001 - 結果だけのファイルを返す
+        logger.warning(
+            "evaluation_results_source_workbook_unavailable",
+            extra={"job_id": job.job_id, **oracle_error_log_fields(exc)},
+        )
+        return None
+    stem = PurePath(workbook.file_name).stem or "evaluation"
+    return content, f"{stem}_results.xlsx"
+
+
+async def _case_answers(metrics: EvaluationMetrics) -> dict[str, str]:
+    """結果のケースの回答の本文。読めなければ空（回答の列だけが空になる）。"""
+    results = [*metrics.case_results]
+    if metrics.comparison:
+        results.extend(metrics.comparison.metrics.case_results)
+    try:
+        return await OracleClient().evaluation_answers_by_trace_ids(
+            [result.trace_id for result in results]
+        )
+    except Exception as exc:  # noqa: BLE001 - 指標は出す
+        logger.warning("evaluation_results_answers_unavailable", extra=oracle_error_log_fields(exc))
+        return {}
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[EvaluationJob])
@@ -478,6 +610,8 @@ async def _submit_job(
     total_cases: int,
     time_limit: int,
     executor: EvaluationJobExecutor,
+    job_id: str | None = None,
+    source_workbook_id: str | None = None,
 ) -> EvaluationJob:
     try:
         return await get_evaluation_job_service().submit(
@@ -485,6 +619,8 @@ async def _submit_job(
             total_cases=total_cases,
             time_limit_seconds=time_limit,
             executor=executor,
+            job_id=job_id,
+            source_workbook_id=source_workbook_id,
         )
     except EvaluationJobLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -495,8 +631,12 @@ async def _execute_run(
     *,
     time_budget_seconds: float,
     progress: EvaluationProgressCallback | None = None,
+    case_saver: Callable[[int, str | None], EvaluationCaseResultCallback] | None = None,
 ) -> tuple[EvaluationMetrics, str | None]:
-    """評価を実行し、評価 artifact を保存する。artifact の id（保存できなければ None）も返す。"""
+    """評価を実行し、評価 artifact を保存する。artifact の id（保存できなければ None）も返す。
+
+    `case_saver` は pass の番号とプロファイルの ID から、ケースごとの結果の保存先を作る（#4208）。
+    """
     suite_name = await _resolve_evaluation_suite_name(request.suite, request.knowledge_base_ids)
     effective_thresholds = (
         request.thresholds
@@ -534,6 +674,7 @@ async def _execute_run(
             progress=_offset_progress(progress, offset=0, final=False)
             if request.compare_search_answer_profile_id
             else progress,
+            on_case_result=case_saver(0, request.search_answer_profile_id) if case_saver else None,
         )
         metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
         if request.compare_search_answer_profile_id:
@@ -553,6 +694,11 @@ async def _execute_run(
                 search_answer_profile_id=request.compare_search_answer_profile_id,
                 time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
                 progress=_offset_progress(progress, offset=len(request.cases), final=True),
+                on_case_result=case_saver(
+                    EVALUATION_COMPARE_PASS_INDEX, request.compare_search_answer_profile_id
+                )
+                if case_saver
+                else None,
             )
             metrics = metrics.model_copy(
                 update={

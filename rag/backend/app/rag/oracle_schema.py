@@ -18,6 +18,7 @@ from app.clients.document_category_store import oracle_document_category_schema_
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
+from app.clients.evaluation_workbook_store import oracle_evaluation_source_workbook_schema_sql
 from app.clients.extraction_revision_store import oracle_extraction_revision_schema_sql
 from app.clients.graph_reference_store import graph_reference_schema_sql
 from app.clients.language_pack_release_store import language_pack_release_statements
@@ -44,6 +45,7 @@ from app.clients.oracle import (
     oracle_document_schema_sql,
     oracle_document_sections_schema_sql,
     oracle_evaluation_artifact_schema_sql,
+    oracle_evaluation_job_case_result_schema_sql,
     oracle_evaluation_job_schema_sql,
     oracle_feedback_details_schema_sql,
     oracle_feedback_schema_sql,
@@ -383,11 +385,23 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_evaluation_runs",
             sql=oracle_evaluation_artifact_schema_sql(),
         ),
+        # 品質評価にアップロードした Excel（#4212）。job が参照するので先に作る。
+        OracleSchemaSection(
+            name="evaluation_source_workbooks",
+            table_name="rag_evaluation_source_workbooks",
+            sql=oracle_evaluation_source_workbook_schema_sql(),
+        ),
         # 品質評価の job（非同期の実行・進捗・取り消し。#390）。
         OracleSchemaSection(
             name="evaluation_jobs",
             table_name="rag_evaluation_jobs",
             sql=oracle_evaluation_job_schema_sql(),
+        ),
+        # 品質評価の job のケースごとの結果（#4208）。
+        OracleSchemaSection(
+            name="evaluation_job_case_results",
+            table_name="rag_evaluation_job_case_results",
+            sql=oracle_evaluation_job_case_result_schema_sql(),
         ),
         # 品質評価の判定の校正（記入の集合・項目・判定・校正の結果。#3578）。
         OracleSchemaSection(
@@ -729,6 +743,13 @@ END;
     )
     sections.append(
         OracleSchemaSection(
+            name="20261102_007_chunk_set_retired_at",
+            table_name="rag_chunk_sets",
+            sql=chunk_set_retired_at_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
             name="20261102_008_document_extraction_revisions",
             table_name="rag_document_extraction_revisions",
             sql=_create_missing_objects_sql(
@@ -744,7 +765,45 @@ END;
             sql=_create_missing_objects_sql(oracle_section_revision_schema_sql(), "章節の修正の版"),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261103_4208_evaluation_job_case_results",
+            table_name="rag_evaluation_job_case_results",
+            sql=evaluation_job_case_results_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261103_4212_evaluation_source_workbooks",
+            table_name="rag_evaluation_source_workbooks",
+            sql=evaluation_source_workbooks_migration_sql(),
+        )
+    )
     return sections
+
+
+def chunk_set_retired_at_migration_sql() -> str:
+    """旧版を残すための退役の時刻の列と索引を無ければ足す（#4168）。
+
+    列を足すだけで既存の行は変えない。既存の非 active の行は NULL のまま（版ではなく候補の扱い）。
+    """
+    return """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_CHUNK_SETS' AND column_name = 'RETIRED_AT';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_chunk_sets ADD (retired_at TIMESTAMP WITH TIME ZONE)';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_CHUNK_SETS_RETIRED_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_chunk_sets_retired_idx ON rag_chunk_sets (retired_at)';
+    END IF;
+END;
+/"""
 
 
 def retire_query_history_sql() -> str:
@@ -800,6 +859,56 @@ def evaluation_calibration_migration_sql() -> str:
     （``oracle_evaluation_calibration_schema_sql``）から作る。
     """
     return _create_missing_objects_sql(oracle_evaluation_calibration_schema_sql(), "判定の校正")
+
+
+def evaluation_job_case_results_migration_sql() -> str:
+    """品質評価の job のケースごとの結果の表を無ければ作る（#4208）。
+
+    表を足すだけでデータは変えない。DDL は正本
+    （``oracle_evaluation_job_case_result_schema_sql``）から作る。
+    """
+    return _create_missing_objects_sql(
+        oracle_evaluation_job_case_result_schema_sql(), "品質評価のケースごとの結果"
+    )
+
+
+def evaluation_source_workbooks_migration_sql() -> str:
+    """品質評価にアップロードした Excel の表と、job からの参照の列を無ければ足す（#4212）。
+
+    表・列・制約・索引を足すだけで、既存の行は変えない（既存の job の列は NULL）。
+    """
+    objects = _create_missing_objects_sql(
+        oracle_evaluation_source_workbook_schema_sql(), "品質評価にアップロードした Excel"
+    )
+    column = """DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM user_tab_columns
+    WHERE table_name = 'RAG_EVALUATION_JOBS' AND column_name = 'SOURCE_WORKBOOK_ID';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs ADD (source_workbook_id VARCHAR2(64))';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_constraints
+    WHERE table_name = 'RAG_EVALUATION_JOBS'
+      AND constraint_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_FK';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_evaluation_jobs '
+            || 'ADD CONSTRAINT rag_evaluation_jobs_source_workbook_fk '
+            || 'FOREIGN KEY (source_workbook_id) '
+            || 'REFERENCES rag_evaluation_source_workbooks (workbook_id) ON DELETE SET NULL';
+    END IF;
+    SELECT COUNT(*) INTO v_count
+    FROM user_indexes
+    WHERE index_name = 'RAG_EVALUATION_JOBS_SOURCE_WORKBOOK_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE INDEX rag_evaluation_jobs_source_workbook_idx '
+            || 'ON rag_evaluation_jobs (source_workbook_id)';
+    END IF;
+END;
+/"""
+    return f"{objects}\n\n{column}"
 
 
 def evaluation_job_calibration_kind_migration_sql() -> str:

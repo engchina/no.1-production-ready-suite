@@ -1992,6 +1992,8 @@ export interface EvaluationImportResult {
   search_answer_profile_id?: string | null;
   knowledge_base_ids: string[];
   document_names: Record<string, string>;
+  /** 保存した元のファイルの ID（#4212。結果をこのファイルに足してダウンロードする）。 */
+  source_workbook_id?: string | null;
   max_rows: number;
   max_bytes: number;
 }
@@ -1999,6 +2001,8 @@ export interface EvaluationImportResult {
 /** ダウンロードしたファイル（Excel のテンプレートなど）。 */
 export interface DownloadedFile {
   blob: Blob;
+  /** 品質評価の結果の Excel の作り方（`uploaded` / `generated`。#4212）。 */
+  resultsSource?: string | null;
   fileName: string;
 }
 
@@ -2013,6 +2017,8 @@ export interface EvaluationRunRequestBody {
   search_answer_profile_id: string;
   /** 比べる検索・回答プロファイル（#2402）。同じケースをプロファイルの範囲でも流す。 */
   compare_search_answer_profile_id?: string | null;
+  /** アップロードした Excel（#4212）。 */
+  source_workbook_id?: string | null;
 }
 
 /** 標準回答による LLM の評価の要約（詳細は回答の記録）。 */
@@ -2110,6 +2116,7 @@ export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLE
 
 /**
  * 品質評価の job（#390）。進捗は終わったケースの数と今のケース。結果は成功のときだけ（`run_result`）。
+ * 失敗・取り消しのときは、それまでに保存したケースの結果を `partial_result` で返す（#4208）。
  */
 export interface EvaluationJob {
   job_id: string;
@@ -2126,6 +2133,9 @@ export interface EvaluationJob {
   finished_at: string | null;
   heartbeat_at: string | null;
   run_result: EvaluationMetrics | null;
+  partial_result: EvaluationMetrics | null;
+  /** アップロードした Excel（#4212）。無い job の結果のファイルは、結果だけのファイルになる。 */
+  source_workbook_id: string | null;
 }
 
 // --- 品質評価: 判定の校正（#3578） ---
@@ -3413,7 +3423,11 @@ async function requestFile(
     notifyAuthStatus(res.status, error.requestId, error.errorCode);
     throw error;
   }
-  return { blob: await res.blob(), fileName: contentDispositionFileName(res) ?? fallbackName };
+  return {
+    blob: await res.blob(),
+    fileName: contentDispositionFileName(res) ?? fallbackName,
+    resultsSource: res.headers.get("X-Evaluation-Results-Source"),
+  };
 }
 
 /** Content-Disposition の filename（無ければ null）。 */
@@ -3891,11 +3905,14 @@ export const api = {
     options: {
       variant?: "original" | "prepared";
       disposition?: "inline" | "attachment";
+      /** 引用の版（処理後のファイルをその版のものにする。#4168）。 */
+      chunkSetId?: string | null;
     } = {},
   ) => {
     const search = new URLSearchParams();
     if (options.variant) search.set("variant", options.variant);
     if (options.disposition) search.set("disposition", options.disposition);
+    if (options.chunkSetId) search.set("chunk_set_id", options.chunkSetId);
     const qs = search.toString();
     return appPath(
       `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(
@@ -3906,21 +3923,34 @@ export const api = {
   /** PDF をページ画像で表示するためのページ一覧（bbox の強調を重ねる。#349）。 */
   getDocumentPreviewPages: (
     id: string,
-    options: { recipeId?: string | null; variant?: "original" | "prepared" } = {},
-  ) =>
-    request<DocumentPreviewPages>(
-      `${documentPreviewPagesBase(id, options.recipeId)}${
-        options.variant ? `?variant=${options.variant}` : ""
-      }`,
-    ),
+    options: {
+      recipeId?: string | null;
+      variant?: "original" | "prepared";
+      chunkSetId?: string | null;
+    } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (options.variant) search.set("variant", options.variant);
+    if (options.recipeId && options.chunkSetId) search.set("chunk_set_id", options.chunkSetId);
+    const qs = search.toString();
+    return request<DocumentPreviewPages>(
+      `${documentPreviewPagesBase(id, options.recipeId)}${qs ? `?${qs}` : ""}`,
+    );
+  },
   documentPreviewPageImageUrl: (
     id: string,
     pageNumber: number,
-    options: { recipeId?: string | null; variant?: "original" | "prepared"; dpi?: number } = {},
+    options: {
+      recipeId?: string | null;
+      variant?: "original" | "prepared";
+      dpi?: number;
+      chunkSetId?: string | null;
+    } = {},
   ) => {
     const search = new URLSearchParams();
     if (options.variant) search.set("variant", options.variant);
     if (options.dpi) search.set("dpi", String(options.dpi));
+    if (options.recipeId && options.chunkSetId) search.set("chunk_set_id", options.chunkSetId);
     const qs = search.toString();
     return appPath(`${documentPreviewPagesBase(id, options.recipeId)}/${pageNumber}${qs ? `?${qs}` : ""}`);
   },

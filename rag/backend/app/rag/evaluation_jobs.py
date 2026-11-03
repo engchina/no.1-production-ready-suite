@@ -7,7 +7,8 @@ golden set の評価（`/run`）は、ケースごとに回答生成（最長
 実行と保存:
 - job は投入を受けた backend のプロセスの中で `asyncio` の task として動く（取込 job のような
   別の worker には渡さない）。評価は request の文脈（利用者・対象範囲。監査にも使う）で検索する
-  ため、投入した request の文脈をそのまま使う。質問・回答・根拠の本文は保存しない（#4107）。
+  ため、投入した request の文脈をそのまま使う。job の表に質問・回答・根拠の本文は保存しない
+  （#4107）。アップロードした Excel の本体は別に保存する（#4212。`evaluation_source_workbooks`）。
 - 状態は Oracle の `rag_evaluation_jobs` に保存する（Gunicorn の複数の worker のどれに状態の取得・
   取り消しが届いても同じ結果にするため）。Oracle の接続設定が無い開発環境では、プロセスの中の
   memory に保存する。
@@ -25,6 +26,9 @@ golden set の評価（`/run`）は、ケースごとに回答生成（最長
 - 結果は回答の診断を外して保存する（`app.rag.evaluation_result_storage`。#4107）。保存に失敗したら、
   heartbeat を続けたまま書き直し、それでも書けなければ理由を job の失敗として残す（#4103）。
   全ケースが終わった評価を、heartbeat の途絶（プロセスの停止）に見せない。
+- ケースが終わるたびに結果を `rag_evaluation_job_case_results` に 1 行ずつ保存する（#4208）。最後の
+  保存の失敗・致命的な失敗・取り消し・プロセスの停止でも、終わったケースは残り、`partial_result` で
+  返す。ケースの保存の失敗は評価を止めない（最後の結果には入る）。
 """
 
 from __future__ import annotations
@@ -39,17 +43,20 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from pr_backend_core.bounded_calls import BoundedCallAborted
 
 from app.clients.oracle import OracleClient, oracle_error_log_fields
 from app.config import RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS, Settings
-from app.rag.evaluation import EvaluationProgressCallback
-from app.rag.evaluation_result_storage import without_answer_diagnostics
+from app.rag.evaluation import EvaluationProgressCallback, summarize_case_results
+from app.rag.evaluation_paired import compare_paired
+from app.rag.evaluation_result_storage import case_result_for_storage, without_answer_diagnostics
 from app.rag.request_context import current_audit_request_context
 from app.schemas.evaluation import (
     EvaluationCase,
+    EvaluationCaseResult,
+    EvaluationComparison,
     EvaluationJob,
     EvaluationJobKind,
     EvaluationJobStatus,
@@ -171,6 +178,17 @@ class EvaluationJobOutcome:
 EvaluationJobExecutor = Callable[[EvaluationProgressCallback], Awaitable[EvaluationJobOutcome]]
 
 
+@dataclass(frozen=True)
+class EvaluationJobCaseRow:
+    """保存した 1 ケースの結果（#4208。回答の診断は外してある）。"""
+
+    pass_index: int
+    case_index: int
+    case_id: str
+    search_answer_profile_id: str | None
+    result: Mapping[str, Any]
+
+
 @dataclass
 class EvaluationJobRecord:
     """保存する job の状態（query の本文は持たない）。"""
@@ -193,6 +211,10 @@ class EvaluationJobRecord:
     evaluation_run_id: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # アップロードした Excel（#4212）。
+    source_workbook_id: str | None = None
+    # 終わった job を読むときだけ入れる、保存したケースの結果（#4208）。
+    case_rows: list[EvaluationJobCaseRow] = field(default_factory=list, repr=False)
 
 
 class EvaluationJobStore(Protocol):
@@ -225,6 +247,22 @@ class EvaluationJobStore(Protocol):
         error_message: str | None,
         evaluation_run_id: str | None,
     ) -> bool: ...
+
+    async def save_case_result(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        pass_index: int,
+        case_index: int,
+        case_id: str,
+        search_answer_profile_id: str | None,
+        result: Mapping[str, Any],
+    ) -> bool: ...
+
+    async def list_case_results(
+        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
+    ) -> list[EvaluationJobCaseRow]: ...
 
     async def cancel(
         self,
@@ -260,6 +298,7 @@ class MemoryEvaluationJobStore:
     def __init__(self, clock: Callable[[], datetime] = _utc_now) -> None:
         self._clock = clock
         self._jobs: dict[str, EvaluationJobRecord] = {}
+        self._case_rows: dict[str, list[EvaluationJobCaseRow]] = {}
 
     async def create(self, record: EvaluationJobRecord) -> None:
         now = self._clock()
@@ -336,6 +375,40 @@ class MemoryEvaluationJobStore:
             record.completed_cases = record.total_cases
         return True
 
+    async def save_case_result(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        pass_index: int,
+        case_index: int,
+        case_id: str,
+        search_answer_profile_id: str | None,
+        result: Mapping[str, Any],
+    ) -> bool:
+        if self._leased(job_id, lease_owner) is None:
+            return False
+        self._case_rows.setdefault(job_id, []).append(
+            EvaluationJobCaseRow(
+                pass_index=pass_index,
+                case_index=case_index,
+                case_id=case_id,
+                search_answer_profile_id=search_answer_profile_id,
+                result=dict(result),
+            )
+        )
+        return True
+
+    async def list_case_results(
+        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
+    ) -> list[EvaluationJobCaseRow]:
+        record = self._jobs.get(job_id)
+        if record is None or not _owned(record, tenant_id_hash, user_id_hash):
+            return []
+        return sorted(
+            self._case_rows.get(job_id, []), key=lambda row: (row.pass_index, row.case_index)
+        )
+
     async def cancel(
         self,
         job_id: str,
@@ -385,6 +458,7 @@ class MemoryEvaluationJobStore:
         ]
         for job_id in expired:
             del self._jobs[job_id]
+            self._case_rows.pop(job_id, None)
         return len(expired)
 
 
@@ -404,6 +478,7 @@ class OracleEvaluationJobStore:
                 "total_cases": record.total_cases,
                 "lease_owner": record.lease_owner,
                 "time_limit_seconds": record.time_limit_seconds,
+                "source_workbook_id": record.source_workbook_id,
             }
         )
 
@@ -453,6 +528,44 @@ class OracleEvaluationJobStore:
             error_message=error_message,
             evaluation_run_id=evaluation_run_id,
         )
+
+    async def save_case_result(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        pass_index: int,
+        case_index: int,
+        case_id: str,
+        search_answer_profile_id: str | None,
+        result: Mapping[str, Any],
+    ) -> bool:
+        return await self._client.save_evaluation_job_case_result(
+            job_id,
+            lease_owner=lease_owner,
+            pass_index=pass_index,
+            case_index=case_index,
+            case_id=case_id,
+            search_answer_profile_id=search_answer_profile_id,
+            result=result,
+        )
+
+    async def list_case_results(
+        self, job_id: str, *, tenant_id_hash: str | None, user_id_hash: str | None
+    ) -> list[EvaluationJobCaseRow]:
+        rows = await self._client.list_evaluation_job_case_results(
+            job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
+        )
+        return [
+            EvaluationJobCaseRow(
+                pass_index=int(str(row["pass_index"])),
+                case_index=int(str(row["case_index"])),
+                case_id=str(row["case_id"]),
+                search_answer_profile_id=_optional_str(row.get("search_answer_profile_id")),
+                result=cast(Mapping[str, Any], row["result_json"]),
+            )
+            for row in rows
+        ]
 
     async def cancel(
         self,
@@ -522,16 +635,56 @@ def _record_from_row(
         error_message=_optional_str(row.get("error_message")),
         result=dict(result) if isinstance(result, Mapping) else None,
         evaluation_run_id=_optional_str(row.get("evaluation_run_id")),
+        source_workbook_id=_optional_str(row.get("source_workbook_id")),
         started_at=_optional_datetime(row.get("started_at")),
         finished_at=_optional_datetime(row.get("finished_at")),
     )
 
 
+# 比べる検索・回答プロファイルの pass（`rag_evaluation_job_case_results.pass_index`）。
+EVALUATION_COMPARE_PASS_INDEX = 1
+
+
+def _partial_summary(rows: Iterable[EvaluationJobCaseRow]) -> EvaluationMetrics:
+    return summarize_case_results(
+        [EvaluationCaseResult.model_validate(row.result) for row in rows]
+    ).model_copy(update={"passed": None, "answer_diagnostics_omitted": True})
+
+
+def partial_evaluation_result(rows: Iterable[EvaluationJobCaseRow]) -> EvaluationMetrics | None:
+    """保存したケースの結果から、途中までの結果を組み立てる（#4208）。
+
+    閾値は渡さない（途中までの結果を合格・不合格にしない）。実行条件（`run_manifest`）も無いので、
+    比べる pass の対応のある比較は比較不能になる。主条件の行が 1 つも無ければ None。
+    """
+    saved = list(rows)
+    base_rows = [row for row in saved if row.pass_index != EVALUATION_COMPARE_PASS_INDEX]
+    if not base_rows:
+        return None
+    metrics = _partial_summary(base_rows)
+    compare_rows = [row for row in saved if row.pass_index == EVALUATION_COMPARE_PASS_INDEX]
+    if not compare_rows:
+        return metrics
+    compared = _partial_summary(compare_rows)
+    return metrics.model_copy(
+        update={
+            "comparison": EvaluationComparison(
+                search_answer_profile_id=compare_rows[0].search_answer_profile_id or "",
+                metrics=compared,
+                paired=compare_paired(metrics, compared),
+            )
+        }
+    )
+
+
 def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
-    """API の応答に変換する。結果は成功のときだけ返す。"""
+    """API の応答に変換する。結果は成功のときだけ、途中までの結果は失敗・取り消しのときだけ返す。"""
     run_result: EvaluationMetrics | None = None
     if record.kind == "run" and record.status == "SUCCEEDED" and record.result is not None:
         run_result = EvaluationMetrics.model_validate(record.result)
+    partial_result: EvaluationMetrics | None = None
+    if record.kind == "run" and record.status in ("FAILED", "CANCELLED"):
+        partial_result = partial_evaluation_result(record.case_rows)
     return EvaluationJob(
         job_id=record.job_id,
         kind=record.kind,
@@ -547,6 +700,8 @@ def evaluation_job_response(record: EvaluationJobRecord) -> EvaluationJob:
         finished_at=record.finished_at,
         heartbeat_at=record.heartbeat_at,
         run_result=run_result,
+        partial_result=partial_result,
+        source_workbook_id=record.source_workbook_id,
     )
 
 
@@ -622,6 +777,7 @@ class EvaluationJobService:
         time_limit_seconds: int,
         executor: EvaluationJobExecutor,
         job_id: str | None = None,
+        source_workbook_id: str | None = None,
     ) -> EvaluationJob:
         """job を作り、このプロセスの task で実行を始める。
 
@@ -651,6 +807,7 @@ class EvaluationJobService:
             tenant_id_hash=tenant_id_hash,
             user_id_hash=user_id_hash,
             lease_owner=self.worker_id,
+            source_workbook_id=source_workbook_id,
         )
         await store.create(record)
         logger.info(
@@ -682,7 +839,9 @@ class EvaluationJobService:
                 job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
             )
             record = refreshed or record
-        return evaluation_job_response(record)
+        return evaluation_job_response(
+            await self._with_case_rows(store, record, tenant_id_hash, user_id_hash)
+        )
 
     async def cancel(self, job_id: str) -> EvaluationJob:
         """投入した利用者の実行中の job を取り消す。取り消し済みならそのまま返す。"""
@@ -705,7 +864,66 @@ class EvaluationJobService:
             task.cancel()
         if cancelled:
             logger.info("evaluation_job_cancelled", extra={"job_id": job_id})
-        return evaluation_job_response(record)
+        return evaluation_job_response(
+            await self._with_case_rows(store, record, tenant_id_hash, user_id_hash)
+        )
+
+    @staticmethod
+    async def _with_case_rows(
+        store: EvaluationJobStore,
+        record: EvaluationJobRecord,
+        tenant_id_hash: str | None,
+        user_id_hash: str | None,
+    ) -> EvaluationJobRecord:
+        """失敗・取り消しの job に、保存したケースの結果を足す。読めなくても job の状態は返す。"""
+        if record.kind != "run" or record.status not in ("FAILED", "CANCELLED"):
+            return record
+        try:
+            rows = await store.list_case_results(
+                record.job_id, tenant_id_hash=tenant_id_hash, user_id_hash=user_id_hash
+            )
+        except Exception as exc:  # noqa: BLE001 - 途中までの結果は補助。状態は返す
+            logger.warning(
+                "evaluation_job_case_results_read_failed",
+                extra={"job_id": record.job_id, **oracle_error_log_fields(exc)},
+            )
+            return record
+        return replace(record, case_rows=rows)
+
+    async def save_case_result(
+        self,
+        job_id: str,
+        *,
+        pass_index: int,
+        case_index: int,
+        search_answer_profile_id: str | None,
+        result: EvaluationCaseResult,
+    ) -> None:
+        """終わった 1 ケースの結果を保存する（#4208）。失敗しても評価は止めない（ログだけ）。
+
+        回答の診断は外す（#4107）。自分の lease の RUNNING の job にだけ書く。
+        """
+        payload = case_result_for_storage(result.model_dump(mode="json"))
+        try:
+            await self._resolve_store().save_case_result(
+                job_id,
+                lease_owner=self.worker_id,
+                pass_index=pass_index,
+                case_index=case_index,
+                case_id=_truncate(result.case_id, _CASE_ID_MAX_CHARS) or "",
+                search_answer_profile_id=search_answer_profile_id,
+                result=payload,
+            )
+        except Exception as exc:  # noqa: BLE001 - 最後の結果には入るので、評価は続ける
+            logger.warning(
+                "evaluation_job_case_result_save_failed",
+                extra={
+                    "job_id": job_id,
+                    "pass_index": pass_index,
+                    "case_index": case_index,
+                    **oracle_error_log_fields(exc),
+                },
+            )
 
     async def shutdown(self) -> None:
         """backend の停止で、このプロセスの実行中の job を打ち切り、失敗にする。"""
