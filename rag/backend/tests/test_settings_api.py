@@ -4060,7 +4060,7 @@ def test_retrieval_thresholds_reject_invalid_without_persisting(
     assert (env_file.read_text() if env_file.exists() else "") == before
 
 
-@pytest.mark.parametrize("values", [(1, 0), (600, 50), (2000, 2000)])
+@pytest.mark.parametrize("values", [(0, 0), (1, 0), (600, 50), (2000, 2000)])
 def test_retrieval_counts_save_reload_and_reach_engine(
     values: tuple[int, int], monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4087,7 +4087,7 @@ def test_retrieval_counts_save_reload_and_reach_engine(
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("retrieval_query_limit", 0),
+        ("retrieval_query_limit", -1),
         ("retrieval_query_limit", 2001),
         ("rerank_top_n", -1),
         ("rerank_top_n", 2001),
@@ -4105,6 +4105,36 @@ def test_retrieval_counts_reject_invalid_without_persisting(
     assert (env_file.read_text() if env_file.exists() else "") == before
 
 
-def test_confirmation_and_rerank_selection_are_disabled_by_default() -> None:
-    assert Settings().rag_runtime_rules_confirmation_enabled is False
-    assert Settings().rag_rerank_top_n == 0
+def test_retrieval_defaults_and_explicit_values(tmp_path: Path) -> None:
+    from app.rag.answer_engine import build_engine_settings
+    from app.schemas.settings import AnsweringSettingsData
+
+    settings = Settings()
+    assert settings.rag_runtime_rules_confirmation_enabled is False
+    assert (
+        settings.rag_min_similarity,
+        settings.rag_retrieval_query_limit,
+        settings.rag_rerank_min_relevance_score,
+        settings.rag_rerank_top_n,
+    ) == (0.2, 300, 0.2, 300)
+    fields = AnsweringSettingsData.model_fields
+    assert tuple(
+        fields[name].default
+        for name in (
+            "min_similarity",
+            "retrieval_query_limit",
+            "rerank_min_relevance_score",
+            "rerank_top_n",
+        )
+    ) == (0.2, 300, 0.2, 300)
+    custom = settings.model_copy(
+        update={
+            "rag_min_similarity": 0.35,
+            "rag_retrieval_query_limit": 120,
+            "rag_rerank_min_relevance_score": 0.45,
+            "rag_rerank_top_n": 0,
+        }
+    )
+    assert (custom.rag_min_similarity, custom.rag_retrieval_query_limit) == (0.35, 120)
+    engine = build_engine_settings(custom, output_dir=tmp_path)
+    assert (engine.rerank_min_relevance_score, engine.rerank_top_n) == (0.45, 0)

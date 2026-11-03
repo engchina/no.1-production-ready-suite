@@ -112,3 +112,11 @@ class EvidenceBudgetTraceTest(unittest.TestCase):
         trace = answering._evidence_budget_trace(settings, None, [])
         self.assertEqual((trace["configured_chars"], trace["effective_chars"], trace["span_count"]), (72000, 72000, 0))
         self.assertEqual(trace["evidence_block_chars"], 0)
+
+
+def test_rerank_defaults_and_explicit_unlimited():
+    defaults = get_settings(environ={}, dotenv_path=None)
+    assert defaults.rerank_min_relevance_score == 0.2
+    assert defaults.rerank_top_n == 300
+    explicit = get_settings(environ={"RERANK_MIN_RELEVANCE_SCORE": "0.4", "RAG_ENGINE_RERANK_TOP_N": "0"}, dotenv_path=None)
+    assert (explicit.rerank_min_relevance_score, explicit.rerank_top_n) == (0.4, 0)

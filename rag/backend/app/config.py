@@ -1252,8 +1252,8 @@ class Settings(
             "token の見積もりの誤差（まれな漢字が続く本文は見積もりより多い）の余裕に使う。"
         ),
     )
-    rag_min_similarity: float = Field(default=0.05, ge=0.0, le=1.0, allow_inf_nan=False)
-    rag_rerank_min_relevance_score: float = Field(default=0.4, ge=0.0, le=1.0, allow_inf_nan=False)
+    rag_min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
+    rag_rerank_min_relevance_score: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rag_hybrid_search_backend: Literal["oracle_native", "sudachi"] = "oracle_native"
     rag_native_vector_exact_max_chunks: int = Field(
         default=50000,
@@ -1291,8 +1291,8 @@ class Settings(
         description="Hybrid retrieval の Reciprocal Rank Fusion 定数。",
     )
     rag_retrieval_query_limit: int = Field(
-        default=600,
-        ge=1,
+        default=300,
+        ge=0,
         le=2000,
         description="検索文ごとに各検索経路から取得する上限。起点数・多様化の有無とは独立。",
     )
@@ -1306,7 +1306,7 @@ class Settings(
         ),
     )
     rag_rerank_top_n: int = Field(
-        default=0,
+        default=300,
         ge=0,
         le=2000,
         description="再ランキング成功後の普通候補の採用上限。0は追加制限なし。明示添付・条目録と参照先は別枠で保持する。",
