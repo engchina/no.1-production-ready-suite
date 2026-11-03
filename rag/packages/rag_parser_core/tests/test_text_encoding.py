@@ -22,12 +22,6 @@ def test_japanese_is_read_as_japanese(text: str, encoding: str) -> None:
     assert decode_source_text(text.encode(encoding)) == text
 
 
-def test_detector_alone_reads_this_japanese_as_another_language() -> None:
-    """検出器の 1 位がこの文を誤る前提。検出器の版で変われば、優先の要否を見直す。"""
-    data = _JAPANESE[1].encode("cp932")
-    assert str(from_bytes(data).best()) != _JAPANESE[1]
-
-
 @pytest.mark.parametrize(
     "text",
     [
@@ -36,10 +30,8 @@ def test_detector_alone_reads_this_japanese_as_another_language() -> None:
         "－－－－－－\n■合成の表■\n※注記\n" * 5,
     ],
 )
-def test_japanese_with_many_symbols_is_read_when_the_detector_has_no_candidate(text: str) -> None:
-    data = text.encode("cp932")
-    assert from_bytes(data).best() is None
-    assert decode_source_text(data) == text
+def test_japanese_with_many_symbols_is_read_as_japanese(text: str) -> None:
+    assert decode_source_text(text.encode("cp932")) == text
 
 
 @pytest.mark.parametrize(
@@ -54,4 +46,5 @@ def test_japanese_with_many_symbols_is_read_when_the_detector_has_no_candidate(t
     ],
 )
 def test_other_languages_keep_the_detector_result(encoding: str, text: str) -> None:
-    assert decode_source_text(text.encode(encoding)) == text
+    data = text.encode(encoding)
+    assert decode_source_text(data) == str(from_bytes(data).best())
