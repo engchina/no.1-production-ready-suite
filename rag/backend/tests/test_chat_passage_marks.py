@@ -73,3 +73,33 @@ def test_chat_message_carries_the_number_of_attached_images() -> None:
         _stored_message_from_row({**row, "status": "STREAMING"})
     )
     assert streaming.answer_attached_images == 0
+
+
+def test_chat_answer_format_uses_saved_generation_values() -> None:
+    """現在の表示設定に依存せず、読出・完了時の応答に同じ形式を渡す。"""
+    from dataclasses import replace
+
+    from app.rag.stored_answer import answer_format_record
+
+    format_record = {"rules_section": "確認済みの節 A", "unsourced_section": "未確認の節 B"}
+    row: dict[str, object] = {
+        "message_id": "m1",
+        "conversation_id": "c1",
+        "role": "ASSISTANT",
+        "status": "COMPLETE",
+        "created_at": datetime.now(UTC),
+        "answer_format_json": json.dumps(format_record, ensure_ascii=False),
+    }
+    stored = _stored_message_from_row(row)
+    assert stored.answer_format == format_record
+    assert chat_route._to_chat_message(stored).answer_format == format_record
+    assert chat_route._to_chat_message(replace(stored, status="STREAMING")).answer_format is None
+    immediate = replace(
+        _message("COMPLETE", None), answer_format=answer_format_record(format_record)
+    )
+    assert chat_route._to_chat_message(immediate).answer_format == format_record
+    assert _stored_message_from_row({**row, "answer_format_json": None}).answer_format is None
+    assert _stored_message_from_row({**row, "answer_format_json": "{壊れた"}).answer_format is None
+    assert _stored_message_from_row({**row, "answer_format_json": "[]"}).answer_format is None
+    assert answer_format_record({"rules_section": "節", "bad": 1}) == {"rules_section": "節"}
+    assert answer_format_record([]) is None

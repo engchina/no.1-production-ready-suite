@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { RetrievedChunk } from "./api";
 import {
+  answerFormat,
   citationLocation,
   displayCitationLine,
   matchCitation,
@@ -419,4 +420,27 @@ describe("引用ラベルの頁範囲", () => {
     const specific = "根拠：sample.pdf p.4";
     expect(displayCitationLine(specific, parseCitationLine(specific), item, 1)).toBe(specific);
   });
+});
+
+
+describe("保存した回答の節の所属", () => {
+  for (const saved of [false, true]) {
+    it(`出典を確かめられない説明を独立した節にする（形式記録: ${saved}）`, () => {
+      const format = saved ? { rules_section: "確認済みの節 A", unsourced_section: "未確認の節 B" } : undefined;
+      const titles = format ?? { rules_section: "資料により確認できた事項", unsourced_section: "資料の出典を確かめられない説明" };
+      const blocks = parseAnswerText([
+        titles.rules_section, "・合成の確認済み説明。", titles.unsourced_section,
+        "原文と照合できない説明です。", "・合成の未確認説明。",
+      ].join("\n"), answerFormat({ answer_format: format }));
+      expect(blocks).toEqual([
+        { kind: "section", title: titles.rules_section, ordered: false, entries: [
+          { kind: "item", text: "合成の確認済み説明。", citations: [], citationLines: [] },
+        ] },
+        { kind: "section", title: titles.unsourced_section, ordered: false, entries: [
+          { kind: "text", text: "原文と照合できない説明です。" },
+          { kind: "item", text: "合成の未確認説明。", citations: [], citationLines: [] },
+        ] },
+      ]);
+    });
+  }
 });

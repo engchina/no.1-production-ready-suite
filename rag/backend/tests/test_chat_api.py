@@ -276,6 +276,8 @@ class FakeChatOracle:
         current.status = message.status
         current.elapsed_ms = message.elapsed_ms
         current.progress = message.progress
+        current.passage_record = message.passage_record
+        current.answer_format = message.answer_format
         current.heartbeat_at = datetime.now(UTC)
         return True
 
@@ -734,6 +736,34 @@ def test_stream_message_single_model_persists_and_streams(monkeypatch: MonkeyPat
     # 引用は画面が使う項目だけを保存する（親の本文・索引の内部の項目を持たない。#1371）。
     assert [citation["metadata"] for citation in assistant.citations] == [{"page_start": 1}]
     assert assistant.citations[0]["text"] == "根拠"
+
+
+def test_generated_answer_format_reaches_saved_chat_response(monkeypatch: MonkeyPatch) -> None:
+    """生成結果から完了時の記録を経て、開き直した会話へ形式を渡す。"""
+    answer_format = {"rules_section": "合成の確認済みの節", "unsourced_section": "合成の未確認の節"}
+
+    class FormatPipeline(_FakePipeline):
+        def _response(self, request: Any, trace_id: str | None) -> SearchResponse:
+            response = super()._response(request, trace_id)
+            response.diagnostics.answer = {
+                "answer_format": {key: value for key, value in answer_format.items()}
+            }
+            return response
+
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-format")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    monkeypatch.setattr(chat_route, "RagPipeline", FormatPipeline)
+    response = client.post(
+        "/api/chat/conversations/conv-format/messages/stream", json={"content": "合成の質問"}
+    )
+    assert response.status_code == 200
+    assert "event: done" in response.text
+    stored = fake.messages["conv-format"][-1]
+    assert stored.status == "COMPLETE"
+    assert stored.answer_format == answer_format
+    detail = client.get("/api/chat/conversations/conv-format").json()["data"]
+    assert detail["messages"][-1]["answer_format"] == answer_format
 
 
 def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:

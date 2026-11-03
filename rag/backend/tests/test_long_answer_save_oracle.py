@@ -87,7 +87,23 @@ async def test_long_chat_answer_saves_on_real_oracle() -> None:
     profile = await client.ensure_default_search_answer_profile()
     conversation = await client.create_conversation(search_answer_profile_id=profile.id)
     message_id = uuid4().hex
+    trace_id = uuid4().hex
+    answer_format = {"rules_section": "合成の確認済みの節", "unsourced_section": "合成の未確認の節"}
     try:
+        await client.save_answer_record(
+            {
+                "trace_id": trace_id,
+                "search_answer_profile_id": profile.id,
+                "surface": "chat",
+                "answer_engine": "test",
+                "question": "合成の質問",
+                "rewritten_question": "合成の質問",
+                "answer": LONG_ANSWER,
+                "citations": CITATIONS,
+                "diagnostics": {"answer_format": answer_format},
+                "evaluation_input": None,
+            }
+        )
         await client.append_message(
             StoredMessage(
                 id=message_id,
@@ -106,7 +122,7 @@ async def test_long_chat_answer_saves_on_real_oracle() -> None:
                 role="ASSISTANT",
                 content=LONG_ANSWER,
                 citations=CITATIONS,
-                trace_id=uuid4().hex,
+                trace_id=trace_id,
                 status="COMPLETE",
                 elapsed_ms=1234.5,
                 created_at=datetime.now(UTC),
@@ -116,8 +132,17 @@ async def test_long_chat_answer_saves_on_real_oracle() -> None:
         messages = await client.list_messages(conversation.id)
     finally:
         await client.delete_conversation(conversation.id)
+        await client._run_transaction(
+            lambda connection: _execute(
+                connection,
+                "DELETE FROM rag_answer_records WHERE trace_id = :trace_id",
+                {"trace_id": trace_id},
+            )
+        )
     assert saved is True
     (message,) = [item for item in messages if item.id == message_id]
     assert message.status == "COMPLETE"
     assert message.content == LONG_ANSWER
     assert len(message.citations) == len(CITATIONS)
+
+    assert message.answer_format == answer_format

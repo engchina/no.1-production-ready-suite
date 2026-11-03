@@ -1532,6 +1532,8 @@ export interface ChatMessage {
   passage_marks?: AnswerPassageMarkData[];
   removed_passages?: AnswerRemovedPassageData[];
   answer_warnings?: AnswerPassageReasonData[];
+  /** 生成時の表示形式。未完了・古い回答は null / 未指定。 */
+  answer_format?: Record<string, string> | null;
   /**
    * 回答モデルへ添付した根拠の画像の件数（ASSISTANT の完了した回答。回答の記録の診断の `models.attached_images`。
    * #3444）。画像を添付しなかった回答・記録の無い回答は 0 / 未指定。
