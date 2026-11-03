@@ -4741,6 +4741,8 @@ export const ja = {
     "実行中のケースを止めます。終わったケースの結果も残りません。",
   "evaluation.job.cancelConfirm.confirm": "取り消す",
   "evaluation.job.cancelledTitle": "評価を取り消しました。",
+  "evaluation.job.partialResult": "終わった {saved} 件の結果を下に出しています（全 {total} 件）。Excel でもダウンロードできます。",
+  "evaluation.job.partialResultHint": "途中までの結果なので、合否は判定していません。",
   "evaluation.job.failedTitle": "評価を最後まで実行できませんでした。",
   "evaluation.job.failedDetails": "詳細",
   "evaluation.job.errorType": "エラー種別",

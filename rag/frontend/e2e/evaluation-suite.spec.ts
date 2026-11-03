@@ -476,6 +476,46 @@ test("再読込しても検証した Excel と実行中の評価の job の状�
   await expect(details).toContainText("RuntimeError");
 });
 
+// #4208: 全ケースの後や途中で失敗しても、保存したケースの結果を画面と Excel で読める。
+test("失敗した評価でも、終わったケースの結果を表示してダウンロードできる", async ({ page }) => {
+  const partial = { ...evaluationMetrics("standard"), passed: null };
+  const jobs = await mockEvaluationJobs(page, { partialResult: () => partial });
+  await page.goto("/evaluation");
+  await prepareEvaluationRun(page);
+  await page.getByRole("button", { name: "評価実行", exact: true }).click();
+  await expect(page.getByTestId("evaluation-run-job-count")).toHaveText("0 / 2 件（0%）");
+
+  jobs.fail(
+    "品質評価は最後まで実行しましたが、結果をデータベースに保存できませんでした。サーバーのログを確認して、もう一度実行してください。 エラー種別: ORA-40604"
+  );
+  const panel = page.getByTestId("evaluation-run-job");
+  await expect(panel.locator("[data-status-variant]")).toHaveText("失敗");
+  const saved = partial.case_count;
+  await expect(
+    panel.getByText(`終わった ${saved} 件の結果を下に出しています（全 2 件）。`, { exact: false })
+  ).toBeVisible();
+  await expect(panel.getByText("途中までの結果なので、合否は判定していません。")).toBeVisible();
+  await expect(page.getByTestId("evaluation-case-scroll-region")).toBeVisible();
+  await expectNoPageOverflow(page);
+
+  const exportRequests: string[] = [];
+  await page.route("**/api/evaluation/jobs/*/results.xlsx", async (route) => {
+    exportRequests.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": 'attachment; filename="evaluation_results.xlsx"',
+      },
+      body: "xlsx",
+    });
+  });
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Excel をダウンロード", exact: true }).click();
+  expect((await downloaded).suggestedFilename()).toBe("evaluation_results.xlsx");
+  expect(exportRequests).toHaveLength(1);
+});
+
 // #977: 状態の取得が retry を使い切って失敗しても、実行中の job の状態の取得を止めない（止めると「実行中」のまま）。
 test("実行中の評価の状態の取得が一時的に失敗しても、取得を続けて完了を出す", async ({ page }) => {
   test.setTimeout(60_000);

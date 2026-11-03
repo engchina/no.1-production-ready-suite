@@ -173,6 +173,15 @@ class EvaluationProgressCallback(Protocol):
         """進捗を受け取る。"""
 
 
+class EvaluationCaseResultCallback(Protocol):
+    """1 ケースの結果の通知先（評価 job のケースごとの保存に使う。#4208）。
+
+    `case_index` は評価のケースの位置（並行で実行すると、終わる順はケースの順と違う）。
+    """
+
+    async def __call__(self, *, case_index: int, result: EvaluationCaseResult) -> None: ...
+
+
 async def judge_answer_with_standard(
     *,
     trace_id: str,
@@ -309,6 +318,7 @@ class EvaluationRunner:
         search_answer_profile_id: str | None = None,
         time_budget_seconds: float | None = None,
         progress: EvaluationProgressCallback | None = None,
+        on_case_result: EvaluationCaseResultCallback | None = None,
     ) -> EvaluationMetrics:
         """評価ケースを実行し、集計指標を返す。
 
@@ -316,7 +326,8 @@ class EvaluationRunner:
         ケースの結果に残して次のケースへ進む（#383）。`time_budget_seconds` を渡すと、評価全体を
         その秒数で打ち切る（同期の HTTP の待ちを超えないため）。上限に達したら実行中のケースを
         打ち切り、残りのケースは実行せずに失敗として記録する。`progress` には、ケースを始める
-        前と最後のケースの後に進捗を渡す（評価 job。#390）。
+        前と最後のケースの後に進捗を渡す（評価 job。#390）。`on_case_result` には、ケースが終わる
+        たびに（失敗のケースも）結果を渡す（途中で止まっても終わったケースを残すため。#4208）。
 
         `search_answer_profile_id` を渡すと、ケースごとに検索・回答と同じ解決（参照 KB・回答の
         設定・用語・同義語・回答ルール・業務ガイド）をしてから回答する（#1249）。渡さなければ全体の既定（#301）。
@@ -337,6 +348,7 @@ class EvaluationRunner:
                 search_answer_profile_id=search_answer_profile_id,
                 time_budget_seconds=time_budget_seconds,
                 progress=progress,
+                on_case_result=on_case_result,
             )
 
     async def _run(
@@ -351,6 +363,7 @@ class EvaluationRunner:
         search_answer_profile_id: str | None,
         time_budget_seconds: float | None,
         progress: EvaluationProgressCallback | None,
+        on_case_result: EvaluationCaseResultCallback | None,
     ) -> EvaluationMetrics:
         deadline = _deadline(time_budget_seconds)
         effective_settings = evaluation_settings(self._settings, rag_overrides)
@@ -374,7 +387,7 @@ class EvaluationRunner:
                     except asyncio.CancelledError:
                         # 取り消し・中断（job の行が RUNNING でなくなった）。ほかのケースも止める。
                         raise _EvaluationStopped from None
-                results[case_index] = await self._run_case(
+                case_result = await self._run_case(
                     case,
                     caller=caller,
                     pipeline=pipeline,
@@ -385,6 +398,9 @@ class EvaluationRunner:
                     knowledge_base_ids=knowledge_base_ids,
                     search_answer_profile_id=search_answer_profile_id,
                 )
+                results[case_index] = case_result
+                if on_case_result is not None:
+                    await on_case_result(case_index=case_index, result=case_result)
                 finished += 1
 
         # ケースは上限つきの並行（`RAG_EVALUATION_CONCURRENCY`。#2004）で、評価ケースの順に

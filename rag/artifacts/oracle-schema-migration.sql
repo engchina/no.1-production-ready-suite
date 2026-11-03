@@ -4344,3 +4344,26 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261103_4208_evaluation_job_case_results
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_JOB_CASE_RESULTS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_job_case_results ( '
+            || 'job_id                   VARCHAR2(64) NOT NULL, '
+            || 'pass_index               NUMBER(1) NOT NULL, '
+            || 'case_index               NUMBER(10) NOT NULL, '
+            || 'case_id                  VARCHAR2(200 CHAR) NOT NULL, '
+            || 'search_answer_profile_id VARCHAR2(128), '
+            || 'result_json              JSON NOT NULL, '
+            || 'created_at               TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'CONSTRAINT rag_evaluation_job_case_results_pk PRIMARY KEY (job_id, pass_index, case_index), '
+            || 'CONSTRAINT rag_evaluation_job_case_results_job_fk FOREIGN KEY (job_id) '
+            || 'REFERENCES rag_evaluation_jobs (job_id) ON DELETE CASCADE '
+            || ')';
+    END IF;
+END;
+/

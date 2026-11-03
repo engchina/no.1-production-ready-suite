@@ -175,6 +175,8 @@ MANAGED_TABLES: tuple[str, ...] = (
     "RAG_EVALUATION_RUNS",
     # 品質評価の job（#390）。
     "RAG_EVALUATION_JOBS",
+    # 品質評価の job のケースごとの結果（#4208）。RAG_EVALUATION_JOBS を参照する。
+    "RAG_EVALUATION_JOB_CASE_RESULTS",
     # 品質評価の判定の校正（#3578）。項目・判定・結果は記入の集合を参照する。
     "RAG_EVALUATION_LABEL_SETS",
     "RAG_EVALUATION_LABEL_ITEMS",

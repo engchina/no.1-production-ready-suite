@@ -2110,6 +2110,7 @@ export type EvaluationJobStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLE
 
 /**
  * 品質評価の job（#390）。進捗は終わったケースの数と今のケース。結果は成功のときだけ（`run_result`）。
+ * 失敗・取り消しのときは、それまでに保存したケースの結果を `partial_result` で返す（#4208）。
  */
 export interface EvaluationJob {
   job_id: string;
@@ -2126,6 +2127,7 @@ export interface EvaluationJob {
   finished_at: string | null;
   heartbeat_at: string | null;
   run_result: EvaluationMetrics | null;
+  partial_result: EvaluationMetrics | null;
 }
 
 // --- 品質評価: 判定の校正（#3578） ---

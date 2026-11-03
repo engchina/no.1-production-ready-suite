@@ -905,6 +905,8 @@ class EvaluationJob(BaseModel):
 
     進捗は、終わったケースの数と今のケースで示す。結果は、成功（`SUCCEEDED`）のときだけ
     `run_result` で返す。
+    失敗・取り消し（`FAILED` / `CANCELLED`）のときは、それまでに保存したケースの結果を
+    `partial_result` で返す（#4208。閾値の判定はせず、実行条件も持たない）。
     時間の上限に達して打ち切ったケースは、結果の中で失敗のケースとして返す。質問・回答・根拠の
     本文は持たない（#4107）。
     """
@@ -924,6 +926,7 @@ class EvaluationJob(BaseModel):
     finished_at: datetime | None = None
     heartbeat_at: datetime | None = None
     run_result: EvaluationMetrics | None = None
+    partial_result: EvaluationMetrics | None = None
 
 
 class EvaluationImportIssue(BaseModel):

@@ -7630,6 +7630,85 @@ class OracleClient:
 
         return await self._run_transaction(operation) > 0
 
+    async def save_evaluation_job_case_result(
+        self,
+        job_id: str,
+        *,
+        lease_owner: str,
+        pass_index: int,
+        case_index: int,
+        case_id: str,
+        search_answer_profile_id: str | None,
+        result: Mapping[str, object],
+    ) -> bool:
+        """自分の lease の RUNNING job に 1 ケースの結果を保存する（#4208）。書けなければ False。"""
+
+        def operation(connection: OracleConnectionProtocol) -> int:
+            return _execute_count_with_input_sizes(
+                connection,
+                """
+                INSERT INTO rag_evaluation_job_case_results (
+                    job_id,
+                    pass_index,
+                    case_index,
+                    case_id,
+                    search_answer_profile_id,
+                    result_json,
+                    created_at
+                )
+                SELECT
+                    job_id,
+                    :pass_index,
+                    :case_index,
+                    :case_id,
+                    :search_answer_profile_id,
+                    JSON(:result_json),
+                    SYSTIMESTAMP
+                FROM rag_evaluation_jobs
+                WHERE job_id = :job_id
+                  AND status = 'RUNNING'
+                  AND lease_owner = :lease_owner
+                """,
+                {
+                    "job_id": job_id,
+                    "lease_owner": lease_owner,
+                    "pass_index": pass_index,
+                    "case_index": case_index,
+                    "case_id": case_id,
+                    "search_answer_profile_id": search_answer_profile_id,
+                    "result_json": _json_bind(dict(result)),
+                },
+                input_sizes=_json_input_sizes("result_json"),
+            )
+
+        return await self._run_transaction(operation) > 0
+
+    async def list_evaluation_job_case_results(
+        self,
+        job_id: str,
+        *,
+        tenant_id_hash: str | None,
+        user_id_hash: str | None,
+    ) -> list[dict[str, object]]:
+        """投入した利用者の job の、保存したケースの結果をケースの順に返す（#4208）。"""
+        rows = await self._fetch_all(
+            f"""
+            SELECT
+                r.pass_index,
+                r.case_index,
+                r.case_id,
+                r.search_answer_profile_id,
+                r.result_json
+            FROM rag_evaluation_job_case_results r
+            JOIN rag_evaluation_jobs j ON j.job_id = r.job_id
+            WHERE r.job_id = :job_id
+              AND {_EVALUATION_JOB_OWNER_SQL}
+            ORDER BY r.pass_index, r.case_index
+            """,
+            {"job_id": job_id, "tenant_id_hash": tenant_id_hash, "user_id_hash": user_id_hash},
+        )
+        return [{**row, "result_json": _json_loads(row.get("result_json"))} for row in rows]
+
     async def cancel_evaluation_job(
         self,
         job_id: str,
@@ -18512,7 +18591,7 @@ def oracle_evaluation_job_schema_sql(
 
     質問・回答・根拠の本文は保存しない（結果の回答の診断は外す。#4107）。job は投入を受けた
     backend のプロセスで動き、そのプロセスが止まったら heartbeat が途絶えて失敗になる（別の
-    プロセスは引き継がない）。
+    プロセスは引き継がない）。終わったケースの結果は別の表に残す（#4208）。
     """
     return f"""
 CREATE TABLE {table_name} (
@@ -18545,6 +18624,34 @@ CREATE INDEX {table_name}_status_idx
 
 CREATE INDEX {table_name}_owner_created_idx
     ON {table_name} (tenant_id_hash, user_id_hash, created_at DESC)
+""".strip()
+
+
+def oracle_evaluation_job_case_result_schema_sql(
+    table_name: str = "rag_evaluation_job_case_results",
+    job_table_name: str = "rag_evaluation_jobs",
+) -> str:
+    """品質評価の job のケースごとの結果（#4208）の table DDL を返す。
+
+    ケースが終わるたびに 1 行を書き、最後の保存の失敗・プロセスの停止でも終わったケースを残す。
+    `pass_index` は同じケースを流す回（0 は主条件、1 は比べる検索・回答プロファイル）、
+    `case_index` は評価のケースの位置。回答の診断は外すので、質問・回答・根拠の本文は
+    保存しない（#4107）。
+    job を消せば行も消える。
+    """
+    return f"""
+CREATE TABLE {table_name} (
+    job_id                   VARCHAR2(64) NOT NULL,
+    pass_index               NUMBER(1) NOT NULL,
+    case_index               NUMBER(10) NOT NULL,
+    case_id                  VARCHAR2(200 CHAR) NOT NULL,
+    search_answer_profile_id VARCHAR2(128),
+    result_json              JSON NOT NULL,
+    created_at               TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
+    CONSTRAINT {table_name}_pk PRIMARY KEY (job_id, pass_index, case_index),
+    CONSTRAINT {table_name}_job_fk FOREIGN KEY (job_id)
+        REFERENCES {job_table_name} (job_id) ON DELETE CASCADE
+)
 """.strip()
 
 

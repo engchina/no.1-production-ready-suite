@@ -1,6 +1,7 @@
 """品質評価の結果の保存の内容（#4103・#4107）。
 
-`rag_evaluation_jobs.result_json` と `rag_evaluation_runs.result_json` には、各ケースの回答の診断
+`rag_evaluation_jobs.result_json`・`rag_evaluation_runs.result_json`・
+`rag_evaluation_job_case_results.result_json` には、各ケースの回答の診断
 （`case_results[].diagnostics.answer`）を入れない。診断は質問・回答・根拠の文を、固定の項目だけで
 なく工程の表示の文の中にも持つため、項目を選んで外す方法では原文を保存しないことを保証できない。
 結果の大半を占める診断を外すので、JSON 型の列の上限（1 つの値は OSON で 32MiB）にも収まる。
@@ -32,6 +33,11 @@ def without_answer_diagnostics(result: Mapping[str, Any]) -> dict[str, Any]:
             "metrics": without_answer_diagnostics(comparison["metrics"]),
         }
     return compact
+
+
+def case_result_for_storage(case: Mapping[str, Any]) -> dict[str, Any]:
+    """1 ケースの結果から回答の診断を外す（ケースごとの保存。#4208。元の値は変えない）。"""
+    return dict(_case_without_answer_diagnostics(case))
 
 
 def _case_without_answer_diagnostics(case: Any) -> Any:

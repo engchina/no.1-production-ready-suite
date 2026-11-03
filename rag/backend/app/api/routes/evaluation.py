@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import date
@@ -44,7 +45,11 @@ from app.config import (
     settings_today,
 )
 from app.rag.answer_engine import AS_OF_FILTER_KEY
-from app.rag.evaluation import EvaluationProgressCallback, EvaluationRunner
+from app.rag.evaluation import (
+    EvaluationCaseResultCallback,
+    EvaluationProgressCallback,
+    EvaluationRunner,
+)
 from app.rag.evaluation_adapter import normalize_evaluation_suite, resolve_evaluation_suite
 from app.rag.evaluation_excel import (
     EVALUATION_EXCEL_MAX_BYTES,
@@ -60,6 +65,7 @@ from app.rag.evaluation_excel import (
     template_xlsx,
 )
 from app.rag.evaluation_jobs import (
+    EVALUATION_COMPARE_PASS_INDEX,
     EvaluationJobExecutor,
     EvaluationJobLimitError,
     EvaluationJobNotFoundError,
@@ -84,6 +90,7 @@ from app.rag.support_guide_process_import import (
 from app.schemas.common import ApiResponse
 from app.schemas.evaluation import (
     EvaluationCase,
+    EvaluationCaseResult,
     EvaluationComparison,
     EvaluationImportIssue,
     EvaluationImportResult,
@@ -160,9 +167,23 @@ async def submit_run_evaluation_job(
         get_settings(), answer_runs=evaluation_answer_runs(request.cases) * passes
     )
 
+    job_id = uuid.uuid4().hex
+
+    def case_saver(pass_index: int, profile_id: str | None) -> EvaluationCaseResultCallback:
+        async def save(*, case_index: int, result: EvaluationCaseResult) -> None:
+            await get_evaluation_job_service().save_case_result(
+                job_id,
+                pass_index=pass_index,
+                case_index=case_index,
+                search_answer_profile_id=profile_id,
+                result=result,
+            )
+
+        return save
+
     async def execute(progress: EvaluationProgressCallback) -> EvaluationJobOutcome:
         metrics, evaluation_run_id = await _execute_run(
-            request, time_budget_seconds=time_limit, progress=progress
+            request, time_budget_seconds=time_limit, progress=progress, case_saver=case_saver
         )
         return EvaluationJobOutcome(
             result=metrics.model_dump(mode="json"), evaluation_run_id=evaluation_run_id
@@ -173,6 +194,7 @@ async def submit_run_evaluation_job(
         total_cases=len(request.cases) * passes,
         time_limit=time_limit,
         executor=execute,
+        job_id=job_id,
     )
     return ApiResponse(data=job)
 
@@ -447,11 +469,22 @@ async def get_evaluation_job(job_id: str) -> ApiResponse[EvaluationJob]:
 
 @router.post("/jobs/{job_id}/results.xlsx")
 async def export_evaluation_results(job_id: str, body: EvaluationResultExportRequest) -> Response:
-    """投入した利用者の完了した結果を、画面の実行時の入力と合わせて出力する。"""
+    """投入した利用者の結果を、画面の実行時の入力と合わせて出力する。
+
+    失敗・取り消しの job は、終わったケースまでを出す（#4208）。実行中と結果の無い job は 409。
+    """
     job = (await get_evaluation_job(job_id)).data
-    if job is None or job.status != "SUCCEEDED" or job.run_result is None:
-        raise HTTPException(status_code=409, detail="完了した品質評価の結果だけを書き出せます。")
-    content = await asyncio.to_thread(evaluation_results_xlsx, job.run_result, body)
+    metrics = (job.run_result or job.partial_result) if job is not None else None
+    if job is None or metrics is None:
+        raise HTTPException(
+            status_code=409, detail="結果のある品質評価（終わったもの）だけを書き出せます。"
+        )
+    content = await asyncio.to_thread(
+        evaluation_results_xlsx,
+        metrics,
+        body,
+        partial_of_total=job.total_cases if job.run_result is None else None,
+    )
     return Response(
         content,
         media_type=XLSX_MEDIA_TYPE,
@@ -478,6 +511,7 @@ async def _submit_job(
     total_cases: int,
     time_limit: int,
     executor: EvaluationJobExecutor,
+    job_id: str | None = None,
 ) -> EvaluationJob:
     try:
         return await get_evaluation_job_service().submit(
@@ -485,6 +519,7 @@ async def _submit_job(
             total_cases=total_cases,
             time_limit_seconds=time_limit,
             executor=executor,
+            job_id=job_id,
         )
     except EvaluationJobLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -495,8 +530,12 @@ async def _execute_run(
     *,
     time_budget_seconds: float,
     progress: EvaluationProgressCallback | None = None,
+    case_saver: Callable[[int, str | None], EvaluationCaseResultCallback] | None = None,
 ) -> tuple[EvaluationMetrics, str | None]:
-    """評価を実行し、評価 artifact を保存する。artifact の id（保存できなければ None）も返す。"""
+    """評価を実行し、評価 artifact を保存する。artifact の id（保存できなければ None）も返す。
+
+    `case_saver` は pass の番号とプロファイルの ID から、ケースごとの結果の保存先を作る（#4208）。
+    """
     suite_name = await _resolve_evaluation_suite_name(request.suite, request.knowledge_base_ids)
     effective_thresholds = (
         request.thresholds
@@ -534,6 +573,7 @@ async def _execute_run(
             progress=_offset_progress(progress, offset=0, final=False)
             if request.compare_search_answer_profile_id
             else progress,
+            on_case_result=case_saver(0, request.search_answer_profile_id) if case_saver else None,
         )
         metrics = metrics.model_copy(update={"evaluation_suite": suite_name})
         if request.compare_search_answer_profile_id:
@@ -553,6 +593,11 @@ async def _execute_run(
                 search_answer_profile_id=request.compare_search_answer_profile_id,
                 time_budget_seconds=max(0.0, time_budget_seconds - (time.monotonic() - started)),
                 progress=_offset_progress(progress, offset=len(request.cases), final=True),
+                on_case_result=case_saver(
+                    EVALUATION_COMPARE_PASS_INDEX, request.compare_search_answer_profile_id
+                )
+                if case_saver
+                else None,
             )
             metrics = metrics.model_copy(
                 update={

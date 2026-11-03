@@ -666,10 +666,17 @@
       "sha256": "d9ab78cf843ff353d5ef0cabe53e479d18f9470efc67d4454740af95e0926594",
       "statement_count": 1,
       "table_name": "rag_document_section_revisions"
+    },
+    {
+      "destructive": false,
+      "name": "20261103_4208_evaluation_job_case_results",
+      "sha256": "3e7ea59e63a0daf220cfbe7e32043489fb383f91b8e01bf3f9a4c938e95f63fd",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_job_case_results"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "f063c814cce0aa118a4d0089efe44eac7a48792506a96c7f53395ecef0a82fb7",
-  "statement_count": 150
+  "sha256": "1172fa1f4fed31806cbf407512038df4f2bba4fd74b171dd4493c5fb052574e9",
+  "statement_count": 151
 }

@@ -22,6 +22,7 @@ export async function mockEvaluationJobs(
   page: Page,
   options: {
     runResult?: (payload: Record<string, unknown>) => unknown;
+    partialResult?: (payload: Record<string, unknown>) => unknown;
     autoComplete?: boolean;
   }
 ) {
@@ -47,6 +48,10 @@ export async function mockEvaluationJobs(
       finished_at: job.finished_at,
       heartbeat_at: job.started_at,
       run_result: succeeded ? options.runResult?.(job.payload) ?? null : null,
+      partial_result:
+        !succeeded && job.status !== "RUNNING"
+          ? options.partialResult?.(job.payload) ?? null
+          : null,
     };
   };
   const finish = (job: MockJob, status: JobStatus, message: string | null = null) => {
