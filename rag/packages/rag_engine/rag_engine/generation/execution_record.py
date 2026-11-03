@@ -18,6 +18,8 @@ from rag_engine.resources.llm_usage import LlmUsage, usage_delta, usage_snapshot
 from rag_engine.resources.llm_usage import llm_usage as _llm_usage
 from rag_engine.resources.tracing import CallObservation, observe_call
 
+_StepPayload = Mapping[str, Any] | Callable[[], Mapping[str, Any]]
+
 
 @dataclass
 class _ExecutionStep:
@@ -40,15 +42,21 @@ class _ExecutionStep:
     truncated: bool = False
     observation: CallObservation | None = field(default=None, repr=False)
 
-    def input(self, value: Mapping[str, Any]) -> None:
+    def input(self, value: _StepPayload) -> None:
         """実入力を本文記録の設定に従う保存口へ渡す。"""
         if self.observation is not None:
-            self.observation.request(value)
+            self.observation.request(self._payload(value))
 
-    def output(self, value: Mapping[str, Any]) -> None:
+    def output(self, value: _StepPayload) -> None:
         """実出力を本文記録の設定に従う保存口へ渡す。"""
         if self.observation is not None:
-            self.observation.response(value)
+            self.observation.response(self._payload(value))
+
+    def _payload(self, value: _StepPayload) -> Mapping[str, Any]:
+        """遅延する本文は記録が有効なときだけ構築し、外部 observer には実値を渡す。"""
+        if not getattr(self.observation, "capture_enabled", True):
+            return {}
+        return value() if callable(value) else value
 
     def add(self, *details: str) -> None:
         """詳細をその場で追加し、入れ子工程との前後関係を保持する。"""

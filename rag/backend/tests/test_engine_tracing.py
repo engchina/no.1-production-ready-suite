@@ -324,3 +324,38 @@ def test_batch_validation_retry_is_a_separate_send_and_keeps_the_response(
         )
     finally:
         shutdown_tracing()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_catalog_skip_keeps_real_io_through_final_span_summary(enabled: bool) -> None:
+    from pr_backend_core.observability.call_policy import call_content_policy
+    from pr_backend_core.observability.tracing import TraceSummary
+    from rag_engine.config import get_settings as engine_settings
+    from rag_engine.generation.answering import _catalog_article_children
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            call_content_policy(lambda: enabled),
+            operation_trace("rag.search", operation_id="synthetic") as summary,
+            bind_trace_observer(_observe_engine_call),
+        ):
+            assert _catalog_article_children(
+                "合成の質問", [], engine_settings(environ={}, dotenv_path=None)
+            ) == ([], [])
+        saved = TraceSummary.model_validate_json(summary.model_dump_json())
+        stage = next(span for span in saved.spans if span.attributes.get("pr.stage") == "条の選択")
+        assert stage.status == "skipped"
+        assert stage.display and stage.display.details and stage.display.details.call
+        call = stage.display.details.call
+        assert call.capture_enabled is enabled
+        if enabled:
+            import json
+
+            assert call.visibility == "system_admin"
+            assert json.loads(call.input.text)["受け取った質問"] == "合成の質問"
+            assert json.loads(call.output.text)["理由"] == "dependencies_unavailable"
+        else:
+            assert call.input.text == call.output.text == ""
+    finally:
+        shutdown_tracing()
