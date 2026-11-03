@@ -157,7 +157,12 @@ def _section_store(monkeypatch: pytest.MonkeyPatch, *, fail: bool) -> None:
             pass
 
         async def section_first_chunks(
-            self, document_id: str, *, chunk_set_id: str, section_ids: list[str]
+            self,
+            document_id: str,
+            *,
+            chunk_set_id: str,
+            section_ids: list[str],
+            filters: Any = None,
         ) -> dict[str, RetrievedChunk]:
             if fail:
                 raise Boom(SECRET)

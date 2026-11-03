@@ -42,6 +42,11 @@ it("思考と回答を JSON に隠さず本文として別に描く", () => {
     expect(host.querySelector('[data-call-readable] pre')).toBeNull();
     expect(host.querySelector('[data-call-readable] details[open]')?.textContent).toContain("合成の思考");
     click("結果"); expect(host.querySelector('[data-call-readable]')?.textContent).toContain("合成の回答");
+    const raw = Array.from(host.querySelectorAll("summary")).find(summary => summary.textContent === "原始 JSON")!;
+    act(() => raw.click());
+    expect(raw.parentElement?.textContent?.match(/原始 JSON/g)).toHaveLength(1);
+    expect(raw.parentElement?.querySelector('pre[aria-label="原始 JSON"]')?.textContent).toContain("合成の回答");
+    expect(host.querySelector('[data-call-snapshot-notice] svg[aria-hidden="true"]')).not.toBeNull();
   } finally { act(() => root.unmount()); host.remove(); }
 });
 

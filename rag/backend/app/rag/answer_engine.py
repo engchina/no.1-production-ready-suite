@@ -406,7 +406,7 @@ class _SearchState:
     section_outlines: dict[tuple[str, str], Any] = field(default_factory=dict)
     # 条の目録(#2254。document_id ごと。条で構成された文書でなければ None)。1 回の回答で 1 回だけ
     # 作る。
-    article_catalogs: dict[str, Any] = field(default_factory=dict)
+    article_catalogs: dict[tuple[str, str], Any] = field(default_factory=dict)
     # 検索の範囲の条で構成された文書の一覧(#2254。1 回の回答で 1 回だけ読む)。
     article_documents: list[tuple[str, str]] | None = None
     # 目録で選んだ条(#2254。chunk_id か section_id ごと。診断の article_catalog に残す)。
@@ -1407,7 +1407,9 @@ class AnswerEngine:
             ),
             # 条の目録から根拠の条を選ぶ段(#2254)。章節と chunk の対応(#1438)を読む。
             article_catalogs=lambda *, document_ids, limit, **kwargs: run_async(
-                lambda: self._article_catalogs(state, document_ids, limit)
+                lambda: self._article_catalogs(
+                    state, document_ids, limit, filters=_screen_filters(request, state)
+                )
             ),
             article_chunks=lambda *, articles, **kwargs: run_async(
                 lambda: self._article_chunks(request, state, articles)
@@ -1418,7 +1420,13 @@ class AnswerEngine:
             # 条の選択の 2 段目で見せる、同じ章の条と別の章の条（選んだ条の名指しを探す）の
             # 本文の書き出し。
             article_leads=lambda *, document_id, chunk_set_id, sections, **kwargs: run_async(
-                lambda: self._article_leads(document_id, chunk_set_id, sections, state=state)
+                lambda: self._article_leads(
+                    document_id,
+                    chunk_set_id,
+                    sections,
+                    state=state,
+                    filters=_screen_filters(request, state),
+                )
             ),
             # 呼び出し元が検索文を短く言い換えたときの元の質問(#2261)。条の選択に使う(回答の要求の
             # 単位には answer_question_result の request_question で使う。#2665)。
@@ -3051,7 +3059,12 @@ class AnswerEngine:
         )
 
     async def _article_catalogs(
-        self, state: _SearchState, document_ids: Sequence[str], limit: int
+        self,
+        state: _SearchState,
+        document_ids: Sequence[str],
+        limit: int,
+        *,
+        filters: Mapping[str, str] | None = None,
     ) -> list[Any]:
         """候補の文書のうち、条で構成された文書の章節の目録を順位の順に limit 件まで返す(#2254)。
 
@@ -3061,6 +3074,7 @@ class AnswerEngine:
         """
         from rag_engine.retrieval.article_catalog import ArticleCatalog
 
+        from app.clients.section_map_store import SectionMapStore
         from app.rag.section_catalog import compact_section_lines
         from app.rag.section_chunk_map import ROOT_SECTION_ID
         from app.rag.section_map_service import section_outline
@@ -3076,7 +3090,8 @@ class AnswerEngine:
                 break
             if document_id not in article_documents:
                 continue
-            if document_id not in state.article_catalogs:
+            cache_key = (document_id, json.dumps(filters, sort_keys=True, ensure_ascii=False))
+            if cache_key not in state.article_catalogs:
                 catalog = None
                 try:
                     outline = await section_outline(document_id, oracle=self._oracle)
@@ -3084,12 +3099,27 @@ class AnswerEngine:
                         nodes = [
                             node for node in outline.sections if node.section_id != ROOT_SECTION_ID
                         ]
+                        firsts = None
+                        if filters is not None:
+                            firsts = await SectionMapStore(self._oracle).section_first_chunks(
+                                document_id,
+                                chunk_set_id=outline.chunk_set.chunk_set_id,
+                                section_ids=[node.section_id for node in nodes],
+                                filters=filters,
+                            )
+                            nodes = [
+                                node
+                                for node in nodes
+                                if node.section_id in firsts
+                                and not is_derived_chunk(firsts[node.section_id])
+                            ]
                         lines, _omitted = await compact_section_lines(
                             self._oracle,
                             outline,
                             nodes,
                             _ARTICLE_CATALOG_LEAD_CHARS,
                             max_chars=_ARTICLE_CATALOG_MAX_CHARS,
+                            **({"first_chunks": firsts} if firsts is not None else {}),
                         )
                         if lines:
                             catalog = ArticleCatalog(
@@ -3102,9 +3132,9 @@ class AnswerEngine:
                 except Exception as exc:  # noqa: BLE001 - 条の選択は補助。この文書を飛ばして続ける。
                     logger.warning("article catalog load failed", exc_info=True)
                     state.record_degraded("article_catalog", exc)
-                state.article_catalogs[document_id] = catalog
-            if state.article_catalogs[document_id] is not None:
-                catalogs.append(state.article_catalogs[document_id])
+                state.article_catalogs[cache_key] = catalog
+            if state.article_catalogs[cache_key] is not None:
+                catalogs.append(state.article_catalogs[cache_key])
         return catalogs
 
     async def _article_leads(
@@ -3114,6 +3144,7 @@ class AnswerEngine:
         sections: Mapping[str, str],
         *,
         state: _SearchState | None = None,
+        filters: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
         """章節の本文の書き出し(条の選択の 2 段目)。
 
@@ -3127,7 +3158,10 @@ class AnswerEngine:
             return {}
         try:
             chunks = await SectionMapStore(self._oracle).section_first_chunks(
-                document_id, chunk_set_id=chunk_set_id, section_ids=list(sections)
+                document_id,
+                chunk_set_id=chunk_set_id,
+                section_ids=list(sections),
+                **({"filters": filters} if filters is not None else {}),
             )
         except Exception as exc:  # noqa: BLE001 - 2 段目は補助。書き出し無しで続ける。
             logger.warning("article lead load failed", exc_info=True)
@@ -3182,6 +3216,12 @@ class AnswerEngine:
 
         from app.clients.section_map_store import SectionMapStore
 
+        filters = _screen_filters(request, state)
+        bounded_pages = bool(
+            filters.get(PAGE_RANGES_FILTER_KEY)
+            or filters.get("page_number_min")
+            or filters.get("page_number_max")
+        )
         groups: dict[tuple[str, str], list[Any]] = {}
         for article in articles:
             groups.setdefault((article.document_id, article.chunk_set_id), []).append(article)
@@ -3192,6 +3232,7 @@ class AnswerEngine:
                     document_id,
                     chunk_set_id=chunk_set_id,
                     section_ids=[item.section_id for item in items],
+                    filters=filters,
                 )
             except Exception as exc:  # noqa: BLE001 - 条の根拠は補助。この文書の条を足さずに続ける。
                 logger.warning("article chunks load failed", exc_info=True)
@@ -3218,7 +3259,8 @@ class AnswerEngine:
         if not found:
             return []
         chunks = [state.chunks.setdefault(chunk.chunk_id, chunk) for chunk, _ in found]
-        await self._load_first_page_contexts(chunks, state)
+        if not bounded_pages:
+            await self._load_first_page_contexts(chunks, state)
         if self._attach_images:
             for chunk in chunks:
                 await self._materialize_image_evidence(chunk, state)
@@ -3228,7 +3270,7 @@ class AnswerEngine:
             child = _stored_child(
                 chunk,
                 rrf_score=0.0,
-                first_page_context=_first_page_context(chunk, state),
+                first_page_context=_first_page_context(chunk, state) if not bounded_pages else None,
             )
             child.metadata[ARTICLE_CATALOG_KEY] = {
                 "order": article.order,
@@ -3236,7 +3278,8 @@ class AnswerEngine:
                 "title": article.title,
             }
             children.append(child)
-        return [*children, *_stored_parents(children, state)]
+        # 頁指定のある追加根拠から、範囲を確かめられない親本文や先頭頁を復元しない。
+        return children if bounded_pages else [*children, *_stored_parents(children, state)]
 
     async def _load_first_page_contexts(
         self, chunks: Sequence[RetrievedChunk], state: _SearchState

@@ -567,25 +567,36 @@ class SectionMapStore:
         ]
 
     async def section_first_chunks(
-        self, document_id: str, *, chunk_set_id: str, section_ids: Sequence[str]
+        self,
+        document_id: str,
+        *,
+        chunk_set_id: str,
+        section_ids: Sequence[str],
+        filters: Mapping[str, str] | None = None,
     ) -> dict[str, RetrievedChunk]:
-        """章節ごとの最初の chunk（章節の中の順 0。検索と同じ見え方の条件。#2252）。
+        """検索条件に合う章節ごとの最初の Chunk。条件なしの ID 読取は元の先頭を返す。
 
-        目録の本文の書き出しに使う。見えない chunk の章節は含めない。
+        目録と本文は同じ範囲で選ぶ。範囲内に読める Chunk のない章節は含めない。
         """
         found: dict[str, RetrievedChunk] = {}
         ids = list(dict.fromkeys(section_ids))
-        # ID で読むので有効期間では絞らない（検索で選んだ根拠を今日の日付で読めなくしない。#3268）。
         where_sql, binds = _oracle_retrieval_where(
-            {INCLUDE_SUPERSEDED_FILTER_KEY: "true"}, effective_period=False
+            {**(filters or {}), INCLUDE_SUPERSEDED_FILTER_KEY: "true"},
+            effective_period=filters is not None,
         )
+        # 条件のない ID 読取では「章節そのものの先頭」という既存の意味を維持する。
+        order_sql = "AND sc.chunk_order = 0" if filters is None else ""
         for start in range(0, len(ids), _SECTION_FIRST_CHUNK_BATCH):
             batch = ids[start : start + _SECTION_FIRST_CHUNK_BATCH]
             names = {f"lead_section_{index}": section_id for index, section_id in enumerate(batch)}
             rows = await self._oracle._fetch_all(
                 _render_sql(
                     f"""
-                SELECT sc.section_id AS lead_section_id, {{chunk_columns}}
+                SELECT * FROM (
+                SELECT sc.section_id AS lead_section_id, {{chunk_columns}},
+                       ROW_NUMBER() OVER (
+                           PARTITION BY sc.section_id ORDER BY sc.chunk_order, c.chunk_id
+                       ) AS lead_rank
                 FROM {SECTION_CHUNKS_TABLE} sc
                 JOIN rag_chunks c ON c.chunk_id = sc.chunk_id
                 JOIN rag_documents d ON d.document_id = c.document_id
@@ -593,8 +604,9 @@ class SectionMapStore:
                   AND sc.chunk_set_id = :lead_chunk_set_id
                   AND sc.document_id = :lead_document_id
                   AND c.document_id = :lead_document_id
-                  AND sc.chunk_order = 0
+                  {order_sql}
                   AND sc.section_id IN ({{section_binds}})
+                ) WHERE lead_rank = 1
                 """,
                     where_sql=where_sql,
                     chunk_columns=_CHUNK_COLUMNS,
