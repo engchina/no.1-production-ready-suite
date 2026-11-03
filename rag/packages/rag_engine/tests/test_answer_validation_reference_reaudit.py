@@ -211,6 +211,18 @@ def test_reaudit_is_not_called_after_the_deadline() -> None:
     assert not any(str(call.get("validation_feedback") or "").startswith(REFERENCE_REAUDIT_FEEDBACK) for call in calls)
 
 
+def test_reaudit_input_has_neither_the_citations_nor_a_copied_quote() -> None:
+    """監査し直しの入力にも段落の出典の集合と原文の写しの欄を渡さない（#4195・#4152）。出典の制限はコードが適用する。"""
+    calls: list[dict] = []
+    first = {text: ("supported", FILE_NAME) for text in (STAFF, MANAGER)}
+    reaudit = {text: ("supported", TABLE) for text in (STAFF, MANAGER)}
+    result = _validate(first, reaudit, calls=calls)
+    assert result["reference_reaudit"]["adopted_passage_ids"] == ["A1", "A2"]
+    reaudits = [call for call in calls if str(call.get("validation_feedback") or "").startswith(REFERENCE_REAUDIT_FEEDBACK)]
+    assert reaudits
+    assert all("passage_citations" not in call and "evidence_quote" not in json.dumps(call, ensure_ascii=False) for call in reaudits)
+
+
 def test_reference_reaudit_diagnostics_are_not_in_the_audit_schema() -> None:
     """監査が返した ID・監査し直しの結果はシステムが付ける診断で、監査モデルの schema に出さない（#112）。"""
     schema = json.dumps(ClaimAuditOutput.model_json_schema())
