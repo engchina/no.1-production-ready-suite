@@ -450,9 +450,17 @@ def test_invalid_batch_reading_returns_unverified_source_material_without_an_ans
     assert all(item["applies"] == "quote_only" for item in result.envelope["items"])
 
 
-def test_stream_assembly_failure_in_batch_read_falls_back_to_quotes() -> None:
-    """分割読取で SDK が stream を組み立てられなくても、問の全体を失敗にせず原文の提示へ退避する（#4182）。"""
-    from rag_engine.adapters.oci import LlmStreamAssemblyFailed
+def _validation_error() -> ValidationError:
+    try:
+        BatchReading.model_validate({"findings": "合成の不正な値"})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("合成の入力は型違反になる")
+
+
+def test_stream_output_missing_in_batch_read_falls_back_to_quotes_and_keeps_trace() -> None:
+    """分割読取の完了の event に本文が無くても問の全体を失敗にせず、理由と event の並びを診断へ残す（#4197）。"""
+    from rag_engine.adapters.oci import LlmStreamOutputMissing
     from rag_engine.dependencies import AnswerDependencies, bind_dependencies
     from rag_engine.generation import answering, grounded
 
@@ -470,9 +478,11 @@ def test_stream_assembly_failure_in_batch_read_falls_back_to_quotes() -> None:
         for i in range(2)
     ]
 
+    trace = {"events": [{"type": "response.completed", "output_index": None, "content_index": None}], "final_output_types": []}
+
     def model(system, prompt, settings, schema, **kwargs):
         assert issubclass(schema, BatchReading)
-        raise LlmStreamAssemblyFailed("合成の組み立ての失敗", None, "_responses.py:1")
+        raise LlmStreamOutputMissing("合成の本文の無い応答", None, trace)
 
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
@@ -485,9 +495,31 @@ def test_stream_assembly_failure_in_batch_read_falls_back_to_quotes() -> None:
     assert result.answer_text.startswith(grounded.answer_labels().neutral_summary)
     assert result.envelope["outcome"] == "conditional"
     failure = result.generation_trace["generation_failure"]
-    assert failure["error"] == "LlmStreamAssemblyFailed"
+    assert failure["error"] == "LlmStreamOutputMissing"
     assert failure["stage"] == "evidence.batch_read"
-    assert failure["category"] == "stream_assembly"
+    assert failure["category"] == "stream_output_missing"
+    assert failure["stream_trace"] == trace
+    assert failure["batch_index"] == 1
+    assert failure["invalid_attempts"] == 0
+
+
+def test_batch_failure_summary_keeps_the_last_reason_and_shared_fields() -> None:
+    """検証の失敗の後に別の理由で終わった組は最後の理由を残し、概要の項目は生成の経路と同じにする（#4197）。"""
+    from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamOutputMissing
+    from rag_engine.generation.batch_output_repair import batch_failure_summary
+    from rag_engine.generation.grounded import generation_failure_detail
+
+    receipt = {"index": 2, "input_count": 3, "input_chars": 40, "validation_failures": [{"category": "invalid_json"}]}
+    missing = batch_failure_summary(receipt, LlmStreamOutputMissing("合成", None, {"events": []}))
+    assert (missing["category"], missing["stream_trace"], missing["invalid_attempts"]) == ("stream_output_missing", {"events": []}, 1)
+
+    runaway = LlmRunawayOutput("合成", "runaway_repetition", None)
+    summary = batch_failure_summary({"index": 1, "input_count": 1, "input_chars": 1}, runaway)
+    assert summary["cutoff_reason"] == generation_failure_detail(runaway)["cutoff_reason"] == "runaway_repetition"
+
+    invalid = _validation_error()
+    with_attempt = {"index": 1, "input_count": 1, "input_chars": 1, "validation_failures": [{"category": "schema_field"}]}
+    assert batch_failure_summary(with_attempt, invalid)["category"] == "schema_field"
 
 
 def test_batch_local_ids_preserve_original_sources_and_coordinates():

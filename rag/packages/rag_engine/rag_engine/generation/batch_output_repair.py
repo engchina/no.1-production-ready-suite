@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from rag_engine.generation.citation_wire import bind_wire_range
-from rag_engine.resources.structured_failures import structured_failure_details
+from rag_engine.resources.structured_failures import failure_summary_fields, structured_failure_details
 
 RANGE_INVALID_CODE = "batch_range_invalid"
 _PROTOCOL_CODES = {RANGE_INVALID_CODE}
@@ -107,12 +107,14 @@ def batch_validation_detail(error: Exception, schema: Mapping[str, Any]) -> dict
 def batch_failure_summary(receipt: Mapping[str, Any], error: Exception) -> dict[str, Any]:
     """失敗した組の類別・件数・容量（質問・原文を持たない）。詳しい記録は検索の工程の ``generation_evidence_batch``。"""
     attempts = receipt.get("validation_failures") or []
-    last = attempts[-1] if attempts else structured_failure_details(error)
+    # 前の試行の検証の失敗の後に別の理由（stream の失敗など）で終わったなら、最後の失敗の理由を残す。
+    last = attempts[-1] if attempts and isinstance(error, ValidationError) else structured_failure_details(error)
     errors = last.get("validation_errors", ())
     code = next((row["protocol_code"] for row in errors if row.get("protocol_code")), None)
     mismatch = next((row["range_mismatch"] for row in errors if row.get("range_mismatch")), None)
     return {
         "category": code or last["category"],
+        **failure_summary_fields(last),
         "batch_index": receipt["index"],
         "input_count": receipt["input_count"],
         "input_chars": receipt["input_chars"],

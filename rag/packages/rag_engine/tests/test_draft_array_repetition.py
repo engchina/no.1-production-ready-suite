@@ -47,7 +47,9 @@ def test_streaming_retries_only_when_existing_guard_is_enabled(enabled):
     chunks = ['{"request_coverage":['] + [json.dumps(row, ensure_ascii=False) + "," for row in entries()]
     final = SimpleNamespace(
         type="response.completed",
-        response=SimpleNamespace(status="completed", output_parsed=GroundedDraft(items=[], summary="", confidence="low"), usage=USAGE),
+        response=SimpleNamespace(
+            status="completed", output_text=GroundedDraft(items=[], summary="", confidence="low").model_dump_json(), usage=USAGE
+        ),
     )
     scripts = [_text_script(chunks, final=final)]
     if enabled:
@@ -76,7 +78,9 @@ def test_repetition_resend_receives_feedback_and_preserves_original_question(rec
     schema = generation_draft_wire_model()
     valid = SimpleNamespace(
         type="response.completed",
-        response=SimpleNamespace(status="completed", output_parsed=schema(items=[], summary="", confidence="low"), usage=USAGE),
+        response=SimpleNamespace(
+            status="completed", output_text=schema(items=[], summary="", confidence="low").model_dump_json(), usage=USAGE
+        ),
     )
 
     class RespondsToFeedback(_RecordingClient):
@@ -145,7 +149,9 @@ def test_nonstreaming_draft_repetition_resend_uses_the_same_feedback(small_budge
             if len(kwargs["input"]) == 1:
                 return _runaway_incomplete('{"summary":"' + "、同じ説明" * 2000)
             return SimpleNamespace(
-                status="completed", output_parsed=GroundedDraft(items=[], summary="", confidence="low"), usage=_NO_STREAM_USAGE
+                status="completed",
+                output_text=GroundedDraft(items=[], summary="", confidence="low").model_dump_json(),
+                usage=_NO_STREAM_USAGE,
             )
 
     client = Client()
