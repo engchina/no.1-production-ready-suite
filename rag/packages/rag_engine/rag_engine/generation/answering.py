@@ -165,6 +165,7 @@ from rag_engine.generation.answer_records import (
     rank_records_with_rrf,
     validate_run_id,
 )
+from rag_engine.generation.candidate_trace import candidate_snapshot
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.crag_support import (
     MAX_GENERATED_QUERY_CHARS,
@@ -377,6 +378,19 @@ def rerank_records(
     残り、context の起点が先頭 top_k 件で埋まるため質問に合致していても context に入らない (#1084)。
     """
     with _execution_step("Rerank", "検索の候補を、質問との関連度（並べ替えのモデル）の高い順に並べ替えます。") as step:
+        step.input(
+            {
+                "原質問": question,
+                "追加候補検索文": list(extra_queries),
+                "有効": enabled,
+                "採点候補数の指定": candidate_limit,
+                "用途": rerank_phase,
+                "関連度スコアの下限": getattr(settings, "rerank_min_relevance_score", None),
+                "採用件数の上限": getattr(settings, "rerank_top_n", 0),
+                "候補": candidate_snapshot(records),
+            }
+        )
+        receipt: dict[str, Any] = {}
         ranked = _rerank_records(
             question,
             records,
@@ -386,6 +400,7 @@ def rerank_records(
             candidate_limit=candidate_limit,
             extra_queries=extra_queries,
             rerank_phase=rerank_phase,
+            receipt=receipt,
         )
         record_retrieval_stage(
             {
@@ -405,6 +420,7 @@ def rerank_records(
         ranked = follow_reference_sources(ranked, step)
         # 並べ替えた後の上位と関連度（処理の経過の段を開いて見る。#2341）。
         record_rerank_top(step, ranked)
+        step.output({"判定": receipt, "処理後の候補": candidate_snapshot(ranked)})
         return ranked
 
 
@@ -421,6 +437,7 @@ def _best_rerank_ranks(
     *,
     rerank_phase: str = "other",
     candidate_ids: Sequence[str] = (),
+    receipt: dict[str, Any] | None = None,
 ) -> list[RerankTextRank]:
     """原質問と検索文ごとに rerank し、候補ごとの関連度の最高値で並べた順位（#2161）。
 
@@ -428,6 +445,8 @@ def _best_rerank_ranks(
     """
     batch_id = uuid4().hex
     query_receipts: list[dict[str, Any]] = []
+    if receipt is not None:
+        receipt["実際の採点呼出"] = query_receipts
 
     def run_query(query: str, index: int) -> list[RerankTextRank]:
         started = monotonic()
@@ -490,6 +509,9 @@ def _best_rerank_ranks(
     ]
     if not queries:
         merged = list(ranks)
+    if receipt is not None:
+        receipt["原質問の順位"] = [{"index": rank.index, "score": rank.relevance_score} for rank in ranks]
+        receipt["最高値による順位"] = [{"index": rank.index, "score": rank.relevance_score} for rank in merged]
     record_retrieval_stage(
         {
             "stage": "rerank_score_comparison",
@@ -541,6 +563,7 @@ def _rerank_records(
     candidate_limit: int | None,
     extra_queries: Sequence[str] = (),
     rerank_phase: str = "other",
+    receipt: dict[str, Any] | None = None,
 ) -> list[AnswerRecord]:
     """rerank 本体。無効・未設定・失敗時は取得順を保持する。
 
@@ -550,8 +573,10 @@ def _rerank_records(
     実行しなかったときは、実行記録の状態に理由を付ける（「未実行: 無効の設定」など）。画面は状態をそのまま出すため、
     実行した（complete）と実行しなかった理由を見分けられる。
     """
+    receipt = receipt if receipt is not None else {}
     skip_reason = _rerank_skip_reason(records, settings, enabled=enabled)
     if skip_reason:
+        receipt.update({"状態": "未実行", "理由": skip_reason})
         step.status = f"未実行: {skip_reason}"
         step.add(f"rerank を実行せず、取得順を保持します（{skip_reason}）。")
         return list(records)
@@ -561,12 +586,20 @@ def _rerank_records(
     remainder = list(records[candidate_count:])
     protected_candidates, rerankable_candidates, rerankable_indices = _split_text_rerank_candidates(candidates)
     if not rerankable_candidates:
+        receipt.update({"状態": "未実行", "理由": "並べ替える本文なし"})
         step.status = "未実行: 並べ替える本文なし"
         step.add("並べ替え対象のテキストがありません。")
         return [protected_candidates[index] for index in sorted(protected_candidates)] + remainder
     step.field("並べ替える候補", f"{len(rerankable_candidates)} 件" + (f"（ほか {len(remainder)} 件は取得順のまま）" if remainder else ""))
     documents = [_rerank_document(record) for record in rerankable_candidates]
     ranking_queries, search_only_queries = _ranking_extra_queries(extra_queries, settings)
+    receipt.update(
+        {
+            "状態": "採点完了",
+            "採点候補ID": [retrieval_record_id(record) for record in rerankable_candidates],
+            "検索専用のため採点しない検索文": list(search_only_queries),
+        }
+    )
     record_retrieval_stage(
         {
             "stage": "rerank_query_selection",
@@ -585,10 +618,12 @@ def _rerank_records(
             step,
             rerank_phase=rerank_phase,
             candidate_ids=[retrieval_record_id(record) for record in rerankable_candidates],
+            receipt=receipt,
         )
     except Exception as exc:
         # 取得の順で続けたことを、呼び出し元の診断に残す（工程の文言だけでは縮退が分からない。#3286）。
         report_degraded("rerank", exc)
+        receipt.update({"状態": "取得順を保持", "理由": "採点失敗", "エラーの種類": type(exc).__name__})
         step.status = "失敗・取得順を保持"
         step.add("並べ替えに失敗したため、取得順の根拠を使います。")
         return list(records)
@@ -600,6 +635,7 @@ def _rerank_records(
         candidate_indices=rerankable_indices,
         decisions=threshold_rows,
     )
+    receipt["関連度下限の判断"] = threshold_rows
     excluded = sum(row["status"] == "excluded" for row in threshold_rows)
     unscored = sum(row["status"] == "kept_unscored" for row in threshold_rows)
     attachments = sum(row["status"] == "kept_attachment" for row in threshold_rows)
@@ -634,11 +670,13 @@ def _rerank_records(
     protected_candidates, reranked_candidates = _keep_entity_expansion_positions(protected_candidates, reranked_candidates)
     merged = _merge_text_rerank_candidates(candidates, protected_candidates, reranked_candidates) + remainder
     if not any(row["adopted_score"] is not None for row in threshold_rows):
+        receipt["採用件数の判断"] = {"applied": False, "stop_reason": "no_scores"}
         if int(getattr(settings, "rerank_top_n", 0) or 0) > 0:
             step.add("有効な採点がないため、採用件数の上限を適用せず候補を保持します。")
             record_retrieval_stage({"stage": "rerank_selection", "phase": rerank_phase, "applied": False, "stop_reason": "no_scores"})
         return merged
     selected, selection = select_reranked_candidates(merged, int(getattr(settings, "rerank_top_n", 0) or 0))
+    receipt["採用件数の判断"] = selection
     if selection["applied"]:
         step.field("再ランキング後の採用上限", str(selection["limit"]))
         step.field(
@@ -1208,12 +1246,14 @@ def build_adb_hybrid_answer_context(
             else replace(record, metadata={**record.metadata, "retrieval_admission_stage": "article"})
             for record in ranked_children
         ]
-    ranked_children, candidate_trace = select_candidates(
-        ranked_children,
-        max(0, int(getattr(settings, "rerank_candidate_limit", 0))),
-        stage_limits=stage_limits(settings, ranked_children),
-    )
-    record_retrieval_stage({"stage": "rerank_input", **candidate_trace})
+    with _execution_step("再ランキング候補の選択", "既存の順位を保ち、重複と各経路・総量の上限を適用します。") as step:
+        limits = stage_limits(settings, ranked_children)
+        configured_limit = max(0, int(getattr(settings, "rerank_candidate_limit", 0)))
+        step.input({"総量の指定": configured_limit, "経路ごとの上限": limits, "候補": candidate_snapshot(ranked_children)})
+        ranked_children, candidate_trace = select_candidates(ranked_children, configured_limit, stage_limits=limits)
+        record_retrieval_stage({"stage": "rerank_input", **candidate_trace})
+        step.output({"判断": candidate_trace, "採用候補": candidate_snapshot(ranked_children)})
+        step.result(f"再ランキングへ渡す候補 {len(ranked_children)} 件")
     ranked_children = rerank_records(
         question,
         ranked_children,
@@ -1233,7 +1273,13 @@ def build_adb_hybrid_answer_context(
         with _execution_step(
             "文書の選択", "候補を文書ごとに集約し、元の質問との並べ替え（rerank）の点数が明らかに低い文書を後回しにします。"
         ) as step:
+            step.input(
+                {"候補": candidate_snapshot(ranked_children), "起点数": top_k, "文書の点数比率": settings.document_selection_score_ratio}
+            )
             kept_children, deferred_children, selection = select_documents(ranked_children, settings, step, top_k=top_k)
+            step.output(
+                {"判断": selection, "残す候補": candidate_snapshot(kept_children), "後回しの候補": candidate_snapshot(deferred_children)}
+            )
             step.result(
                 f"{len(selection['selected'])} 文書を起点にします"
                 + (f"、{len(selection['deferred'])} 文書は後回し" if selection["deferred"] else "")
@@ -1242,7 +1288,9 @@ def build_adb_hybrid_answer_context(
         kept_children, deferred_children, selection = select_documents(ranked_children, settings, top_k=top_k)
     if int(getattr(settings, "max_anchors_per_document", 0) or 0) > 0:
         with _execution_step("文書ごとの起点の上限", "同じ文書の候補が起点を占めないよう、超えた候補を後ろへ回します。") as step:
+            step.input({"候補": candidate_snapshot(kept_children), "起点数": top_k, "文書ごとの上限": settings.max_anchors_per_document})
             kept_children = cap_anchors_per_document(kept_children, settings, top_k=top_k, step=step)
+            step.output({"処理後の候補": candidate_snapshot(kept_children)})
     bundle = _bundle_context(
         question,
         kept_children,
