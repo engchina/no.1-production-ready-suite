@@ -67,6 +67,8 @@ export function runStepTechnicalFields(details: RunStepDetails | null | undefine
 export interface RunStepDetailCode {
   /** 箱の見出し（翻訳済み。例「引数」「結果」「SQL」）。 */
   label?: string;
+  /** 可視見出しを省く場合も、コード領域の読み上げ名を保つ。 */
+  ariaLabel?: string;
   /** 中身の種類（読み上げと等幅の表示。色分けはしない）。 */
   language?: "json" | "sql" | "text";
   text: string;
@@ -265,7 +267,7 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
           <pre
             className="max-h-64 w-full min-w-0 max-w-full overflow-auto rounded-md border border-border bg-surface p-2 font-mono text-xs leading-5 text-fg"
             tabIndex={0}
-            aria-label={block.label}
+            aria-label={block.ariaLabel ?? block.label}
             data-language={block.language ?? "text"}
           >
             {block.text}
@@ -335,10 +337,10 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
           </div> : blocks?.length ? <CallTextBlocks key={tab} blocks={blocks} labels={labels} /> : tab === "reasoning" ? <p className="text-xs text-fg-muted">{labels.noReasoning}</p> :
             <RunStepDetailsBody details={{ code: [{ text: content.text === "" ? '""' : content.text, language: "json", label: labels[tab as "input" | "output" | "schema"] }] }} labels={labels} />}
           {content.status === "truncated" ? <p className="text-xs text-fg-muted">{labels.truncated}</p> : null}
-          {semanticOutput || blocks?.length || tab === "reasoning" ? <Disclosure summary={labels.raw} size="sm" variant="plain"><RunStepDetailsBody details={{ code: [{ text: content.text, language: "json", label: labels.raw }] }} /></Disclosure> : null}
+          {semanticOutput || blocks?.length || tab === "reasoning" ? <Disclosure summary={labels.raw} size="sm" variant="plain"><RunStepDetailsBody details={{ code: [{ text: content.text, language: "json", ariaLabel: labels.raw }] }} /></Disclosure> : null}
         </div>}
     </TabPanel>
-    <p className="text-xs text-fg-muted">{labels.snapshotNotice}</p>
+    <p className="flex min-w-0 items-start gap-1.5 text-xs text-fg-muted" data-call-snapshot-notice=""><span className="pr-icon-line"><Info size={TEXT_ICON_SIZE.xs} aria-hidden="true" /></span><span className="min-w-0">{labels.snapshotNotice}</span></p>
   </div>;
 }
 
