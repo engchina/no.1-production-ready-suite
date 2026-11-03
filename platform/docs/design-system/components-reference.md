@@ -1438,7 +1438,7 @@ INFORMATION_COMPACT_LIST_FIVE_ROW_SCROLL_CLASS // "h-56 max-h-56 overflow-auto"
 INFORMATION_TABLE_FOCUS_CLASS        // Tab で到達できるスクロール領域のフォーカスの表示（outline）
 ```
 
-一覧の高さは内容に合わせて使い分けます。短い行は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）、本文テキスト・章節ナビゲーション・構造化要素・Chunk の閲覧領域は `INFORMATION_CARD_LIST_SCROLL_CLASS`（md 未満26.25rem・md 以上42rem）を使用します。後者は通常の一覧の上限の1.5倍とし、画面の高さでは縮めず、短い内容の高さは固定しません。親のペインに収まらない内容は親のスクロールで閲覧します。カードごとには縦の上限を重ねず、一覧全体を 1 つのスクロール領域にします。領域に `tabIndex={0}`・内容を表す `aria-label` と `INFORMATION_TABLE_FOCUS_CLASS` を付け、キーボードでも末尾まで読めるようにします。
+一覧の高さは内容に合わせて使い分けます。短い行は `INFORMATION_LIST_SCROLL_CLASS`（md 未満 17.5rem・md 以上 28rem）、原本プレビュー・本文テキスト・章節ナビゲーション・構造化要素・Chunk の閲覧領域は `INFORMATION_CARD_LIST_SCROLL_CLASS`（md 未満26.25rem・md 以上42rem）を使用します。後者は共有 CSS `information-card-list-scroll` に高さを集約し、通常の一覧の上限の1.5倍とし、画面の高さでは縮めず、短い内容の高さは固定しません。親のペインに収まらない内容は親のスクロールで閲覧します。カードごとには縦の上限を重ねず、一覧全体を 1 つのスクロール領域にします。領域に `tabIndex={0}`・内容を表す `aria-label` と `INFORMATION_TABLE_FOCUS_CLASS` を付け、キーボードでも末尾まで読めるようにします。
 
 ```tsx
 /** 見た目は 1 つ: 地は --color-surface-hover、prefers-reduced-motion では点滅しない。 */
@@ -3981,7 +3981,7 @@ const focus = evidencePreviewFocus(chunkMetadata);   // 最初のページ・bbo
   unsupportedMessage={message}                        // 製品だけの案内（Agent の根拠のダウンロードの案内など）
   {...focus}
   labels={documentPreviewLabels({ retry: t("common.retry") })}
-  sizing="fill"                                       // fill（根拠のパネル）/ page（文書の詳細。1 ページ全体が入る高さ）
+  sizing="fill"                                       // fill（親に合わせる）/ page（ページの縦横比）/ bounded（高い一覧と同じ共通上限）
 />
 ```
 

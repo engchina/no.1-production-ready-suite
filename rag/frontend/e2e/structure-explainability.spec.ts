@@ -1396,11 +1396,18 @@ test("表示範囲の全部を読むとき、長い要素と多セルの表は�
   const cells = Array.from({ length: 300 }, (_, i) => ({row: Math.floor(i / 6), col: i % 6, row_span: 1, col_span: 1, text: `合成セル ${i + 1}`}));
   await mockDocumentDetail(page, { extraction: { raw_text: `${unbroken}合成の本文の末尾`, elements, pages: [], fields: [], assets: [],
     tables: [{table_id: "table-many", caption: "合成の表", page_number: 1, element_id: "long-element", cells}] } });
+  await page.route("**/text-window", route => fulfillDocumentInspection(route, {json: {data: {text: unbroken, offset: 0, total: unbroken.length, limit: 8192, revision: "synthetic-revision", scope_status: "exact"}, error_messages: [], warning_messages: []}}));
   await page.goto("/documents/doc-1");
   const inspector = page.getByTestId("document-inspector-pane");
   await expect(inspector).toContainText("合成の本文の末尾");
   const heightLimit = () => parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5;
   const limit = await page.evaluate(heightLimit);
+  const previewText = page.getByTestId("preview-text");
+  await expect.poll(() => previewText.evaluate(node => node.getBoundingClientRect().height)).toBeCloseTo(limit, 0);
+  await previewText.scrollIntoViewIfNeeded();
+  await previewText.focus();
+  await previewText.press("End");
+  await expect.poll(() => previewText.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
   const rawText = inspector.getByTestId("document-raw-text-scroll");
   const rawSize = await rawText.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight}));
   expect(Math.abs(rawSize.height - limit)).toBeLessThanOrEqual(1);

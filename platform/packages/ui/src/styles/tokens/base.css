@@ -90,6 +90,21 @@ body {
   scrollbar-gutter: stable;
 }
 
+/* 高い一覧と原本の閲覧領域は通常の一覧の1.5倍。短い一覧は引き伸ばさない。 */
+.information-card-list-scroll {
+  --information-card-list-height: 26.25rem;
+  position: relative;
+  max-height: var(--information-card-list-height);
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+@media (min-width: 48rem) {
+  .information-card-list-scroll {
+    --information-card-list-height: 42rem;
+  }
+}
+
 .bounded-scroll-area {
   max-height: min(22rem, 56vh);
 }

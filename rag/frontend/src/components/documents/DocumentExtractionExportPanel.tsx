@@ -11,7 +11,7 @@ import {
   TimedLoadingState,
 } from "@production-ready/ui";
 import { EmptyState } from "@/components/StateViews";
-import { api, type DocumentExtractionExportFormat } from "@/lib/api";
+import { api } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -24,12 +24,14 @@ const FORMAT_LABEL_KEYS: Record<ExtractionExportFileFormat, I18nKey> = {
   markdown: "flow.extractionExport.markdown",
   html: "flow.extractionExport.html",
   json: "flow.extractionExport.json",
+  chunks: "flow.extractionExport.chunks",
 };
 
 const FORMAT_DESCRIPTION_KEYS: Record<ExtractionExportFileFormat, I18nKey> = {
   markdown: "flow.extractionExport.markdownDescription",
   html: "flow.extractionExport.htmlDescription",
   json: "flow.extractionExport.jsonDescription",
+  chunks: "flow.extractionExport.chunksDescription",
 };
 
 /** 共有 Button の secondary / sm と同じ見た目のダウンロードのリンク（原本プレビューの「ダウンロード」と同じ作り）。 */
@@ -41,8 +43,8 @@ const DOWNLOAD_LINK_CLASS = cn(
 /**
  * 文書の詳細の「抽出エクスポート」タブ。
  *
- * 抽出結果を Markdown / HTML / JSON のファイルにダウンロードするか、クリップボードへコピーする（#561）。
- * 内容の確認は「本文テキスト」「構造化要素」タブに任せ、ここでは本文を表示しない。
+ * 抽出結果と索引済み Chunk をファイルにダウンロードするか、クリップボードへコピーする。
+ * 内容は「本文テキスト」「構造化要素」「Chunk / Citation」タブで確認する。
  * 読み込み中・エラーは、画面が構造化要素のために取得している JSON の抽出結果の状態を使う
  * （抽出結果が取得できない＝どの形式も持ち出せない）。
  */
@@ -50,6 +52,7 @@ export function DocumentExtractionExportPanel({
   documentId,
   recipeId,
   hasExtraction,
+  hasChunks,
   loading,
   error,
 }: {
@@ -57,9 +60,11 @@ export function DocumentExtractionExportPanel({
   recipeId: string | null;
   /** 選んだレシピに抽出結果があるか。 */
   hasExtraction: boolean;
+  hasChunks: boolean;
   loading: boolean;
   error: boolean;
 }) {
+  const formats = EXTRACTION_EXPORT_FORMATS.filter(({ format }) => format !== "chunks" || hasChunks);
   // コピーの失敗は操作した行の直下に残す（messaging §4.2。固定面があるので Toast にしない）。
   const [copyFailedFormat, setCopyFailedFormat] = useState<ExtractionExportFileFormat | null>(
     null
@@ -92,7 +97,7 @@ export function DocumentExtractionExportPanel({
             framed={false}
             testId="document-extraction-export-loading"
           >
-            <ListSkeleton rows={EXTRACTION_EXPORT_FORMATS.length} rowClassName="h-[6rem]" />
+            <ListSkeleton rows={formats.length} rowClassName="h-[6rem]" />
           </TimedLoadingState>
         ) : error ? (
           <Banner severity="warning" title={t("flow.extractionExport.loadError")}>
@@ -100,7 +105,7 @@ export function DocumentExtractionExportPanel({
           </Banner>
         ) : (
           <ul className="divide-y divide-border rounded-md border border-border bg-surface">
-            {EXTRACTION_EXPORT_FORMATS.map(({ format, extension }) => {
+            {formats.map(({ format, extension }) => {
               const label = t(FORMAT_LABEL_KEYS[format]);
               return (
                 <li key={format} className="p-3" data-testid={`document-extraction-export-${format}`}>
@@ -149,32 +154,5 @@ export function DocumentExtractionExportPanel({
         )}
       </div>
     </section>
-  );
-}
-
-/**
- * 「Chunk / Citation」タブの、保存済みの chunk の JSON のダウンロード（抽出エクスポートの Chunks 形式の置き換え。#561）。
- */
-export function DocumentChunksJsonDownload({
-  documentId,
-  recipeId,
-}: {
-  documentId: string;
-  recipeId: string;
-}) {
-  const format: DocumentExtractionExportFormat = "chunks";
-  return (
-    <ContentActionBar ariaLabel={t("flow.chunks.title")}>
-      <a
-        href={api.documentRecipeExtractionExportUrl(documentId, recipeId, format)}
-        download
-        aria-label={t("flow.chunks.downloadJsonAria")}
-        className={DOWNLOAD_LINK_CLASS}
-        data-testid="document-chunks-download-json"
-      >
-        <Download size={14} aria-hidden />
-        {t("flow.chunks.downloadJson")}
-      </a>
-    </ContentActionBar>
   );
 }

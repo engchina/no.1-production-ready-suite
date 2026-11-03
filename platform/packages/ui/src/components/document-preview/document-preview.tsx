@@ -15,7 +15,7 @@ import {
 import { resolveContentLang } from "../../lib/content-lang";
 import { excerptPlainText } from "../../lib/excerpt-text";
 import { findTextQuote } from "../../lib/text-quote";
-import { INFORMATION_TABLE_FOCUS_CLASS } from "../../lib/list-density";
+import { INFORMATION_CARD_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
@@ -98,8 +98,8 @@ export interface DocumentPreviewProps extends DocumentPreviewFocus {
   /** 強調する領域（要素の表示領域など）。省略時は focusBbox 1 つを強調する。 */
   highlights?: PreviewHighlight[] | null;
   /**
-   * 高さの決め方（#559）。`fill`（既定）は親に合わせる（根拠のパネル）。`page` は 1 ページ全体が幅に合わせて入る高さ
-   * （文書の詳細）。ページの寸法が分からない表示（読み込み中・iframe・テキスト）は A4 縦の縦横比で領域を取る。
+   * 高さの決め方（#559）。`fill`（既定）は親に合わせる（根拠のパネル）。`page` は 1 ページ全体が幅に合わせて入る高さ。
+   * `bounded` は高い一覧と同じ共通の高さに収める。`page` でページの寸法が分からない表示は A4 縦の縦横比で領域を取る。
    */
   sizing?: PreviewSizing;
   className?: string;
@@ -139,7 +139,7 @@ export function DocumentPreview({
   labels = DEFAULT_DOCUMENT_PREVIEW_LABELS,
 }: DocumentPreviewProps) {
   const focus = { focusBbox, focusBboxMode, focusBboxUnit, focusPage, focusPageSize };
-  const viewerClassName = cn(sizing === "page" ? "flex-auto" : "h-full min-h-80", className);
+  const viewerClassName = cn(sizing === "fill" ? "h-full min-h-80" : "flex-auto", className);
   const effectiveHighlights =
     highlights ?? buildPreviewHighlights({ focusPage, focusBbox, focusBboxMode, focusBboxUnit, focusPageSize });
 
@@ -169,10 +169,10 @@ export function DocumentPreview({
           label={labels.loading}
           placement="panel"
           testId="preview-loading"
-          className={cn(sizing === "page" ? "flex-auto" : "h-full min-h-80", "grid-rows-[auto_minmax(0,1fr)]", className)}
+          className={cn(sizing === "fill" ? "h-full min-h-80" : "flex-auto", "grid-rows-[auto_minmax(0,1fr)]", className)}
         >
           {/* `page` はページの寸法が届く前なので A4 縦で領域を取る（届いた後のビューアとほぼ同じ高さ。#559）。 */}
-          <Skeleton className={cn("w-full", sizing === "page" ? PAGE_SIZED_FRAME_CLASS : "h-full min-h-60")} />
+          <Skeleton className={cn("w-full", sizing === "page" ? PAGE_SIZED_FRAME_CLASS : sizing === "bounded" ? [INFORMATION_CARD_LIST_SCROLL_CLASS, "h-[var(--information-card-list-height)]"] : "h-full min-h-60")} />
         </TimedLoadingState>
       );
     }
@@ -204,7 +204,7 @@ export function DocumentPreview({
           <iframe
             src={iframeUrl}
             title={fileName}
-            className="h-full min-h-80 w-full rounded-md border border-border bg-surface"
+            className={cn("w-full rounded-md border border-border bg-surface", sizing === "bounded" ? [INFORMATION_CARD_LIST_SCROLL_CLASS, "h-[var(--information-card-list-height)]"] : "h-full min-h-80")}
           />
         </PreviewFrame>
       );
@@ -217,6 +217,7 @@ export function DocumentPreview({
       <PreviewFrame className={className} sizing={sizing} labels={labels} {...focus}>
         <TextPreview
           key={`${textKey ?? ""}:${focusRequestKey ?? ""}`}
+          sizing={sizing}
           loadText={loadText}
           loadTextRange={loadTextRange}
           onTextRangeChange={onTextRangeChange}
@@ -264,7 +265,7 @@ function PreviewFrame({
 }) {
   const overlayRect = normalizeBboxForPreview(focusBbox, focusPageSize, focusBboxMode, focusBboxUnit);
   return (
-    <div className={cn("flex flex-col gap-2", sizing === "page" ? "flex-auto" : "h-full min-h-0", className)}>
+    <div className={cn("flex flex-col gap-2", sizing === "fill" ? "h-full min-h-0" : "flex-auto", className)}>
       {focusBbox && overlayRect ? (
         <BboxLocator overlayRect={overlayRect} focusPage={focusPage} focusPageSize={focusPageSize} labels={labels} />
       ) : null}
@@ -277,7 +278,7 @@ function PreviewFrame({
           <div className="absolute inset-0 flex flex-col">{children}</div>
         </div>
       ) : (
-        <div className="relative min-h-0 flex-1">{children}</div>
+        <div className={cn("relative min-h-0", sizing !== "bounded" && "flex-1")}>{children}</div>
       )}
     </div>
   );
@@ -368,7 +369,8 @@ function BboxLocator({
  * 本文の表示（読み込み・失敗と再試行・中でスクロール）。読み方は製品の `loadText`。`focusText`（引用した箇所）が
  * 本文の中で見つかれば強調し、本文の領域の中だけをその位置へスクロールする（パネル全体は動かさない。#2512）。
  */
-function TextPreview({ loadText, loadTextRange, onTextRangeChange, fileName, focusText, textLang, labels }: {
+function TextPreview({ sizing, loadText, loadTextRange, onTextRangeChange, fileName, focusText, textLang, labels }: {
+  sizing: PreviewSizing;
   loadText: DocumentPreviewProps["loadText"];
   loadTextRange: DocumentPreviewProps["loadTextRange"];
   onTextRangeChange: DocumentPreviewProps["onTextRangeChange"];
@@ -396,23 +398,25 @@ function TextPreview({ loadText, loadTextRange, onTextRangeChange, fileName, foc
   useEffect(() => { if (current && !current.error) onTextRangeChange?.(current); }, [current, onTextRangeChange]);
   if (current?.error != null) return <ApiErrorState error={current.error} fallback={labels.fetchError} onRetry={() => setAttempt(v => v + 1)} retryLabel={labels.retry} />;
   if (!current) return <TimedLoadingState label={labels.textLoading} operationKey="preview-text-load" framed={false} testId="preview-text-loading"><Skeleton className="h-40 w-full" /></TimedLoadingState>;
-  return <div className="flex h-full min-h-0 flex-col gap-2">
+  return <div className={cn("flex min-h-0 flex-col gap-2", sizing !== "bounded" && "h-full")}>
     {current.total > current.limit ? <div className="flex flex-wrap items-center justify-between gap-2" aria-label={labels.toolbar}>
       <Button size="sm" variant="secondary" icon={ArrowLeft} disabled={current.offset === 0} onClick={() => setOffset(current.previous_offset ?? Math.max(0, current.offset - current.limit))}>{labels.previousPage}</Button>
       <span className="text-xs text-fg-muted">{labels.textRange(current.offset + 1, Math.min(current.total, current.offset + [...current.text].length), current.total)}</span>
       <Button size="sm" variant="secondary" icon={ArrowRight} disabled={current.next_offset === null || (current.next_offset === undefined && current.offset + current.limit >= current.total)} onClick={() => setOffset(current.next_offset ?? current.offset + current.limit)}>{labels.nextPage}</Button>
     </div> : null}
-    <div className="min-h-0 flex-1"><TextPreviewBody text={current.text} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} /></div>
+    <div className={cn("min-h-0", sizing !== "bounded" && "flex-1")}><TextPreviewBody sizing={sizing} text={current.text} fileName={fileName} focusText={focusText} textLang={textLang} labels={labels} /></div>
   </div>;
 }
 
 function TextPreviewBody({
+  sizing,
   text,
   fileName,
   focusText,
   textLang,
   labels,
 }: {
+  sizing: PreviewSizing;
   text: string;
   fileName: string;
   focusText: string | null;
@@ -436,7 +440,7 @@ function TextPreviewBody({
   }, [range, scrollToQuote]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
+    <div className={cn("flex min-h-0 flex-col gap-2", sizing !== "bounded" && "h-full")}>
       {range ? (
         <div className="flex shrink-0 items-center justify-between gap-2" data-testid="preview-text-highlight">
           <p role="status" className="min-w-0 text-xs text-fg-muted">
@@ -455,7 +459,8 @@ function TextPreviewBody({
         tabIndex={0}
         className={cn(
           "relative min-h-40 flex-1 overflow-auto rounded-md border border-border bg-surface p-4 text-sm leading-relaxed whitespace-pre-wrap break-words text-fg",
-          INFORMATION_TABLE_FOCUS_CLASS
+          INFORMATION_TABLE_FOCUS_CLASS,
+          sizing === "bounded" && INFORMATION_CARD_LIST_SCROLL_CLASS
         )}
         data-testid="preview-text"
       >

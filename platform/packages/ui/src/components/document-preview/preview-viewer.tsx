@@ -44,6 +44,7 @@ import {
   previewLayout,
   steppedZoom,
 } from "../../lib/preview-viewer";
+import { INFORMATION_CARD_LIST_SCROLL_CLASS } from "../../lib/list-density";
 import { cn } from "../../lib/utils";
 import { ProcessingIndicator } from "../feedback/processing-state";
 import { Button } from "../ui/button";
@@ -72,9 +73,10 @@ type Anchor = {
  *
  * - `fill`: 親が与える高さに合わせる（引用のダイアログなど。ページは内部でスクロールする）。
  * - `page`: 表示領域（ビューポート）の高さを、幅と文書のページの縦横比から決める。幅に合わせたときに
- *   1 ページ全体が縦スクロールなしで入る（文書詳細）。ツールバーと強調の状態の行は、その上に足される。
+ *   1 ページ全体が縦スクロールなしで入る。ツールバーと強調の状態の行は、その上に足される。
+ * - `bounded`: 高い一覧と同じ共通上限で表示する（文書詳細）。ツールバーは領域の外に置く。
  */
-export type PreviewSizing = "fill" | "page";
+export type PreviewSizing = "fill" | "page" | "bounded";
 
 /**
  * `page` のビューポートの高さ（#559）。CSS だけで決める（幅が変わっても JS の計測を待たずに追従し、
@@ -630,7 +632,7 @@ export function PreviewViewer({
         }
         className={cn(
           "relative overflow-auto bg-surface-sunken focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring",
-          sizing === "page" ? PAGE_SIZED_VIEWPORT_CLASS : "min-h-0 flex-1",
+          sizing === "page" ? PAGE_SIZED_VIEWPORT_CLASS : sizing === "bounded" ? [INFORMATION_CARD_LIST_SCROLL_CLASS, "h-[var(--information-card-list-height)] shrink-0"] : "min-h-0 flex-1",
           overflow && (dragging ? "cursor-grabbing select-none" : "cursor-grab")
         )}
         onKeyDown={onKeyDown}
