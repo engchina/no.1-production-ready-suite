@@ -95,8 +95,25 @@ class FusionResult:
     raw_count: int
     unique_count: int
 
+    def execution(self, sources: Mapping[str, float]) -> str:
+        """実際に寄与する一覧から、既存点数の利用と外側の融合を区別する。"""
+        active = [entry for entry in self.lists if entry.status == "completed" and entry.weight > 0]
+        original = query_key(next(iter(sources), ""))
+        if not active:
+            return "empty"
+        if (
+            len(active) == 1
+            and active[0].ranking.channel == "hybrid"
+            and active[0].ranking.native_scores
+            and query_key(active[0].ranking.query) == original
+        ):
+            return "native_only"
+        return "additional_to_native" if any(entry.ranking.native_scores for entry in active) else "outer_rrf"
+
     def diagnostics(self, weights: RrfWeights, sources: Mapping[str, float], k: float) -> dict[str, object]:
         return {
+            "fusion_execution": self.execution(sources),
+            "oracle_internal_fusion": any(entry.status == "completed" and bool(entry.ranking.native_scores) for entry in self.lists),
             "method_ratio": [weights.vector, weights.keyword],
             "source_ratio": [weights.original, weights.additional],
             "rank_constant": k,
@@ -180,7 +197,11 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
     for i, entry in enumerate(result.lists, 1):
         r = entry.ranking
         state = {"failed": "失敗", "empty": "該当なし", "completed": "完了"}[entry.status]
-        channel_label = {"vector": "ベクトル検索", "keyword": "全文検索", "hybrid": "Oracle hybrid（WRRF）"}[r.channel]
+        channel_label = {
+            "vector": "ベクトル検索",
+            "keyword": "全文検索",
+            "hybrid": "Oracle 内部融合（WRRF）" if r.native_scores else "混合検索のランキング",
+        }[r.channel]
         lines.append(
             f"一覧 {i}: {r.query} / {channel_label} {r.variant} / "
             f"出所: {'・'.join(r.sources) or '追加検索文'} / 重み {entry.weight:.9g} / "
@@ -192,10 +213,13 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
     ]
     return {
         "fields": [
+            *([{"label": "追加統合", "value": "原質問の検索内で統合済み"}] if result.execution(sources) == "native_only" else []),
             {
                 "label": "目的",
-                "value": "原質問の Oracle WRRF と追加検索の順位寄与を出所の比重で合算します。融合済み順位への再 RRF は行いません。"
-                if any(r.ranking.channel == "hybrid" for r in result.lists)
+                "value": "原質問の検索内で統合済みです。追加の検索結果統合は不要です。"
+                if result.execution(sources) == "native_only"
+                else "原質問の Oracle WRRF と追加検索の順位寄与を出所の比重で合算します。融合済み順位への再 RRF は行いません。"
+                if any(r.status == "completed" and r.ranking.native_scores for r in result.lists)
                 else "各ランキングの順位と設定した比重を使い、一度の RRF で検索結果を統合します。",
             },
             {

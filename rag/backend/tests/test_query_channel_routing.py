@@ -130,3 +130,52 @@ async def test_followup_semantic_query_does_not_become_another_original() -> Non
     await engine._search(request, state, retrieval_queries=["原"], expand_references=False)
     await engine._search(request, state, retrieval_queries=["再検索"], expand_references=False)
     assert calls == [("原", SearchMode.HYBRID), ("再検索", SearchMode.VECTOR)]
+
+
+@pytest.mark.parametrize("native", [True, False])
+async def test_only_native_original_result_skips_extra_fusion(native, monkeypatch):
+    from contextlib import contextmanager
+    from unittest.mock import Mock
+
+    from app.rag import answer_engine
+    from tests.test_answer_engine import FakeGenAi
+
+    observations = {}
+
+    @contextmanager
+    def observe(operation, name):
+        observation = Mock()
+        observations[name] = observation
+        yield observation
+
+    class Oracle(_OneHitPerQueryOracle):
+        async def hybrid_search(self, *args, **kwargs):
+            hits = await super().hybrid_search(*args, **kwargs)
+            if native:
+                hits[0].metadata["native_rrf_contribution"] = 0.012
+            return hits
+
+    monkeypatch.setattr(answer_engine, "observe_call", observe)
+    state = _SearchState()
+    engine = AnswerEngine(
+        Settings(), oracle=cast(Any, Oracle({"合成": "c-0"})), genai=cast(Any, FakeGenAi())
+    )
+    await engine._search(
+        SearchRequest(query="合成"),
+        state,
+        retrieval_queries=["合成"],
+        expand_references=False,
+        defer_context=True,
+    )
+    observation = observations["検索結果の統合（RRF）"]
+    assert observation.request.called
+    assert (
+        any(
+            call.kwargs.get("params", {}).get("status") == "skipped"
+            for call in observation.display.call_args_list
+        )
+        is native
+    )
+    diagnostic = observation.response.call_args.args[0]
+    assert diagnostic["fusion_execution"] == ("native_only" if native else "outer_rrf")
+    assert state.chunks["c-0"].metadata["rrf_score"] == pytest.approx(0.012 if native else 1 / 61)

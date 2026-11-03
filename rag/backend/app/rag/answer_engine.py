@@ -1642,7 +1642,19 @@ class AnswerEngine:
                     state.chunks[chunk_id] = chunk.model_copy(
                         update={"metadata": {**chunk.metadata, "rrf_score": score, "rrf_k": k}}
                     )
-                observation.display(details=fusion_details(fusion, weights, budgets, k))
+                details = fusion_details(fusion, weights, budgets, k)
+                execution = fusion.execution(budgets)
+                if execution == "native_only":
+                    observation.display(params={"name": "追加の検索結果統合", "status": "skipped"})
+                observation.request(
+                    {
+                        "source_weights": budgets,
+                        "channel_weights": {"vector": weights.vector, "keyword": weights.keyword},
+                        "rank_constant": k,
+                        "lists": fusion.diagnostics(weights, budgets, k)["lists"],
+                    }
+                )
+                observation.display(details=details)
                 observation.response(fusion.diagnostics(weights, budgets, k))
                 if raw_lists and all(r.status == "failed" for r in raw_lists):
                     observation.display(params={"status": "failed"})
