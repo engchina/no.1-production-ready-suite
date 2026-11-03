@@ -4061,7 +4061,9 @@ def test_retrieval_thresholds_reject_invalid_without_persisting(
 
 
 @pytest.mark.parametrize("values", [(1, 0), (600, 50), (2000, 2000)])
-def test_retrieval_counts_save_reload_and_reach_engine(values, monkeypatch, tmp_path):
+def test_retrieval_counts_save_reload_and_reach_engine(
+    values: tuple[int, int], monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     from app.rag.answer_engine import build_engine_settings
 
     env_file = _settings_env_file(monkeypatch, tmp_path)
@@ -4093,7 +4095,9 @@ def test_retrieval_counts_save_reload_and_reach_engine(values, monkeypatch, tmp_
         ("retrieval_query_limit", True),
     ],
 )
-def test_retrieval_counts_reject_invalid_without_persisting(field, value, monkeypatch, tmp_path):
+def test_retrieval_counts_reject_invalid_without_persisting(
+    field: str, value: object, monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
     env_file = _settings_env_file(monkeypatch, tmp_path)
     before = env_file.read_text() if env_file.exists() else ""
     response = client.patch("/api/settings/answering", json={field: value})
@@ -4101,6 +4105,6 @@ def test_retrieval_counts_reject_invalid_without_persisting(field, value, monkey
     assert (env_file.read_text() if env_file.exists() else "") == before
 
 
-def test_confirmation_and_rerank_selection_are_disabled_by_default():
+def test_confirmation_and_rerank_selection_are_disabled_by_default() -> None:
     assert Settings().rag_runtime_rules_confirmation_enabled is False
     assert Settings().rag_rerank_top_n == 0
