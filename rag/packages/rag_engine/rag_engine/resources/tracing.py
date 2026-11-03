@@ -29,6 +29,8 @@ class CallObservation(Protocol):
 
 
 class _NoObservation:
+    capture_enabled = False
+
     def request(self, value: object, *, schema: object = None) -> None:
         pass
 

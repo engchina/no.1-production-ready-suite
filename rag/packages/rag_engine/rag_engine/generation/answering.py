@@ -5006,25 +5006,40 @@ def _linked_screen_children(
     context の展開（親・兄弟）に使えるよう 3 つ目で返す（`pool` から作るときは `pool` に含まれるので空）。
     """
     from rag_engine.dependencies import injected_screen_catalog, injected_screen_chunks
-    from rag_engine.retrieval.screen_catalog import build_screen_catalog, link_screens, screen_candidates
+    from rag_engine.retrieval.screen_catalog import MAX_CHILDREN_PER_SCREEN, build_screen_catalog, link_screens, screen_candidates
 
     with _execution_step("画面の選択", "画面目録から質問を解決する画面を選び、その画面の根拠を検索候補に加えます。") as step:
+        step.input(lambda: {"質問": question, "既存の候補": candidate_snapshot(ranked_children), "目録": None})
         catalog = injected_screen_catalog(settings=settings)
         if catalog is not None:
+            catalog_source = "injected"
             digest = hashlib.sha256(json.dumps(catalog, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
             link_key: tuple[object, ...] = (question, "catalog", digest)
         else:
             pool_key = (id(pool), len(pool))
             catalog = _SCREEN_CATALOG_CACHE.get(pool_key)
+            catalog_source = "process" if catalog is not None else "pool"
             if catalog is None:
                 if len(_SCREEN_CATALOG_CACHE) >= 4:
                     _SCREEN_CATALOG_CACHE.clear()
                 catalog = _SCREEN_CATALOG_CACHE[pool_key] = build_screen_catalog(pool)
             link_key = (question, *pool_key)
+        step.input(
+            lambda: {
+                "質問": question,
+                "目録": catalog,
+                "目録の取得元": catalog_source,
+                "既存の候補": candidate_snapshot(ranked_children),
+                "利用可能なプール ID": [getattr(item, "chunk_uid", "") for item in pool],
+                "画面ごとの最大 Child 数": MAX_CHILDREN_PER_SCREEN,
+            }
+        )
         links = _SCREEN_LINK_CACHE.get(link_key)
+        reused_selection = links is not None
         if links is None:
             links = link_screens(question, catalog, parse_text_response, settings)
             if links is None:
+                step.output({"選択状態": "failed", "選択結果の再利用": False, "選択した画面": None, "追加候補": [], "展開用の候補": []})
                 step.status = "画面の選択に失敗"
                 step.add(f"画面目録（{len(catalog)} 文書）からの画面の選択に失敗したため、画面の根拠を加えずに続けます。")
                 return [], [], []
@@ -5032,6 +5047,9 @@ def _linked_screen_children(
                 _SCREEN_LINK_CACHE.clear()
             _SCREEN_LINK_CACHE[link_key] = links
         if not links:
+            step.output(
+                {"選択状態": "no_match", "選択結果の再利用": reused_selection, "選択した画面": [], "追加候補": [], "展開用の候補": []}
+            )
             step.status = "該当なし"
             step.add(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
             return [], [], []
@@ -5048,7 +5066,20 @@ def _linked_screen_children(
         step.field("選んだ画面", f"{len(links)} 件")
         step.add("選んだ画面:", *numbered([f"{Path(source).name or source} {heading}" for source, heading in links], limit=8))
         step.result(f"候補に加えた根拠 {len(added)} 件")
-        return [_stored_chunk_answer_record(chunk) for chunk in added], links, expansion
+        added_records = [_stored_chunk_answer_record(chunk) for chunk in added]
+        step.output(
+            lambda: {
+                "選択状態": "selected",
+                "選択結果の再利用": reused_selection,
+                "選択した画面": list(links),
+                "候補の取得元": "injected" if loaded is not None else "pool",
+                "追加候補": candidate_snapshot(added_records),
+                "展開用の候補": candidate_snapshot(expansion),
+                "追加候補数": len(added_records),
+                "最終採用": "この工程の返却候補です。回答文脈への採用は後段で決まります。",
+            }
+        )
+        return added_records, links, expansion
 
 
 # 目録での条の選択（質問・文書・chunk_set・目録の内容・上限・モデル → 選んだ (section_id, 行)）。CRAG の各回と要求ごとの
@@ -5496,19 +5527,74 @@ def _catalog_article_children(
     from rag_engine.dependencies import article_catalog_dependencies
     from rag_engine.retrieval.article_catalog import ARTICLE_CATALOG_KEY, catalog_article_info
 
-    injected = article_catalog_dependencies()
-    max_documents = int(getattr(settings, "article_catalog_max_documents", 0) or 0)
-    if injected is None or max_documents <= 0 or int(getattr(settings, "article_catalog_max_articles", 0) or 0) <= 0:
-        return list(ranked_children), []
-    load_catalogs, load_chunks = injected
-    question = _catalog_question(question)
-    # 文書の順位は検索文の候補と、元の質問の候補（`document_records`。文書の順位だけに使う）を合わせて決める。
-    document_ids = _catalog_document_ids(ranked_children, document_records)
-    catalogs = list(load_catalogs(document_ids=document_ids, limit=max_documents, settings=settings))
-    if not catalogs:
-        # 候補に条で構成された文書が無い質問は、範囲の文書の一覧も読まない（LLM・DB を呼ばない）。
-        return list(ranked_children), []
     with _execution_step("条の選択", "候補の文書の条の目録から、質問の根拠になる条を選び、その条の根拠を候補に加えます。") as step:
+        original_question = question
+
+        def inputs(catalogs: Sequence[Any] = (), terms: Sequence[Any] = ()) -> dict[str, Any]:
+            return {
+                "受け取った質問": original_question,
+                "選択に使う質問": question,
+                "既存の候補": candidate_snapshot(ranked_children),
+                "文書順位用の候補": candidate_snapshot(document_records),
+                "目録": [asdict(item) for item in catalogs],
+                "用語": [asdict(item) for item in terms],
+                "選択設定": {
+                    key: getattr(settings, key, None)
+                    for key in (
+                        "article_catalog_max_documents",
+                        "article_catalog_max_articles",
+                        "article_catalog_context_records",
+                        "article_catalog_scope_documents",
+                        "article_catalog_refine_articles",
+                        "article_catalog_refine_candidates",
+                        "article_catalog_output_token_cap",
+                        "article_catalog_call_timeout_seconds",
+                    )
+                },
+            }
+
+        step.input(inputs)
+        injected = article_catalog_dependencies()
+        max_documents = int(getattr(settings, "article_catalog_max_documents", 0) or 0)
+        if injected is None or max_documents <= 0 or int(getattr(settings, "article_catalog_max_articles", 0) or 0) <= 0:
+            reason = (
+                "dependencies_unavailable" if injected is None else "document_limit_zero" if max_documents <= 0 else "article_limit_zero"
+            )
+            step.skip(
+                {
+                    "dependencies_unavailable": "条の目録の読み込みが提供されていません。",
+                    "document_limit_zero": "文書数の上限が0です。",
+                    "article_limit_zero": "条の数の上限が0です。",
+                }[reason]
+            )
+            step.output(
+                lambda: {
+                    "選択状態": "skipped",
+                    "理由": reason,
+                    "目録を読み込んだ": False,
+                    "返す候補": candidate_snapshot(ranked_children),
+                    "展開用の候補": [],
+                }
+            )
+            return list(ranked_children), []
+        load_catalogs, load_chunks = injected
+        question = _catalog_question(question)
+        # 文書の順位は検索文の候補と、元の質問の候補（`document_records`。文書の順位だけに使う）を合わせて決める。
+        document_ids = _catalog_document_ids(ranked_children, document_records)
+        catalogs = list(load_catalogs(document_ids=document_ids, limit=max_documents, settings=settings))
+        if not catalogs:
+            # 候補に条で構成された文書が無い質問は、範囲の文書の一覧も読まない（LLM・DB を呼ばない）。
+            step.skip("候補の文書に利用できる条の目録がありません。")
+            step.output(
+                lambda: {
+                    "選択状態": "skipped",
+                    "理由": "no_catalog",
+                    "目録を読み込んだ": True,
+                    "返す候補": candidate_snapshot(ranked_children),
+                    "展開用の候補": [],
+                }
+            )
+            return list(ranked_children), []
         # 検索の候補に出ない文書（手続の一般的な規則の文書など）は、範囲の文書の一覧から LLM が選んで足す。文書の選択の
         # LLM と目録の読み込みはこの工程の中で行う（処理の経過で条の選択の子にする。#3475）。
         known = {catalog.document_id for catalog in catalogs}
@@ -5518,6 +5604,7 @@ def _catalog_article_children(
         if extra:
             catalogs += list(load_catalogs(document_ids=extra, limit=len(extra), settings=settings))
         terms = _catalog_terms(question, settings)
+        step.input(lambda: inputs(catalogs, terms))
         sources: dict[str, int] = {}
         selected, failed, refined, refine_failed, referenced = _select_catalog_articles(
             question, catalogs, settings, terms=terms, sources=sources
@@ -5567,6 +5654,26 @@ def _catalog_article_children(
             )
         if scope_failed:
             step.add("範囲の条で構成された文書の一覧からの文書の選択に失敗したため、候補の文書だけで続けました。")
+
+        def output() -> dict[str, Any]:
+            return {
+                "選択状態": "selected" if selected else "failed" if failed or scope_failed else "no_match",
+                "選んだ条": [asdict(item) for item in selected],
+                "選択に失敗した文書": failed,
+                "2段目で追加した条数": refined,
+                "2段目の失敗": refine_failed,
+                "参照元の候補": [asdict(item) for item in referenced],
+                "範囲から選んだ追加文書 ID": extra,
+                "範囲の文書選択の失敗": scope_failed,
+                "選択の取得元": dict(sources),
+                "範囲の文書選択の取得元": scope_source,
+                "目録": [asdict(item) for item in catalogs],
+                "返す候補": candidate_snapshot(ranked_children),
+                "展開用の候補": [],
+                "Chunkを読み込んだ": False,
+            }
+
+        step.output(output)
         if not selected:
             if failed or scope_failed:
                 # 選択の失敗を「該当なし」と分ける（#3285）。
@@ -5598,6 +5705,19 @@ def _catalog_article_children(
         step.field("選んだ条", f"{len(selected)} 件")
         step.add("選んだ条:", *numbered([f"{article.file_name} {article.title}" for article in selected], limit=8))
         step.result(f"候補に加えた根拠: {len(added)} 件（候補にあった条 {len(info) - len(added)} 件）")
+        step.output(
+            lambda: {
+                **output(),
+                "Chunkを読み込んだ": True,
+                "読み込んだ候補": candidate_snapshot(loaded),
+                "既存候補と重複する読取 ID": sorted({record.chunk_uid for record in loaded} & existing),
+                "追加候補": candidate_snapshot(added),
+                "返す候補": candidate_snapshot([*marked, *added]),
+                "読取数": len(loaded),
+                "追加候補数": len(added),
+                "最終採用": "この工程の返却候補です。回答文脈への採用は後段で決まります。",
+            }
+        )
         return [*marked, *added], loaded
 
 

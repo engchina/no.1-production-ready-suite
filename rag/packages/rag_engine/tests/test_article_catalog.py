@@ -362,8 +362,8 @@ def test_catalog_article_children_adds_documents_chosen_from_the_scope_list():
 
     assert stages_at["select_documents"] == ["条の選択"]
     assert stages_at["catalogs:doc-g"] == ["条の選択"]
-    # 候補の文書の目録の有無は段を開く前に確かめる（条で構成された文書が無ければ段を出さない）。
-    assert stages_at["catalogs:doc-a"] == []
+    # 目録が無い場合の実際の skip 理由も残せるよう、最初の目録の確認から同じ工程で記録する。
+    assert stages_at["catalogs:doc-a"] == ["条の選択"]
     # 一覧から選んだ doc-g・doc-a のうち、候補の文書（doc-a）に無い doc-g だけを足して読む。
     assert calls[0] == ("catalogs", ["doc-a"], settings.article_catalog_max_documents)
     assert calls[1] == ("catalogs", ["doc-g"], 1)
