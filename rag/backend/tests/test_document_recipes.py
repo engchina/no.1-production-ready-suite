@@ -304,7 +304,7 @@ def test_recipe_steps_show_queued_overlay_for_newest_job() -> None:
         (
             IngestionJobPhase.CHUNK,
             IngestionJobPhase.PREPROCESS,
-            [DocumentRecipeStepStatus.QUEUED, _S, _P, _P],
+            [DocumentRecipeStepStatus.QUEUED, _P, _P, _P],
         ),
     ],
 )
@@ -331,6 +331,38 @@ def test_recipe_steps_hide_previous_failure_while_reprocess_is_queued(
     )
     assert [step.status for step in steps] == expected
     assert all(step.error_message is None for step in steps)
+
+
+@pytest.mark.parametrize(
+    "recipe_status", [FileStatus.INDEXED, FileStatus.REVIEW, FileStatus.CHUNKED]
+)
+@pytest.mark.parametrize("queued_phase", list(IngestionJobPhase))
+def test_recipe_steps_reset_downstream_states_while_reprocess_is_queued(
+    recipe_status: FileStatus, queued_phase: IngestionJobPhase
+) -> None:
+    """再処理の順番待ちでは、後続工程の前回の完了・確認待ちを残さない。"""
+    phases = list(IngestionJobPhase)
+    now = datetime.now(UTC)
+    jobs = [
+        _recipe_job(queued_phase, IngestionJobStatus.QUEUED, queued_at=now),
+        *[
+            _recipe_job(
+                phase,
+                IngestionJobStatus.SUCCEEDED,
+                job_id=f"old-{phase.value}",
+                queued_at=now - timedelta(minutes=5),
+            )
+            for phase in phases
+        ],
+    ]
+    steps = _recipe_steps({"status": recipe_status.value}, jobs)
+    queued_index = phases.index(queued_phase)
+    assert steps[queued_index].status == DocumentRecipeStepStatus.QUEUED
+    assert all(step.status == _P for step in steps[queued_index + 1 :])
+    previous_steps = _recipe_steps({"status": recipe_status.value}, [])
+    assert [step.status for step in steps[:queued_index]] == [
+        _S if step.status == _NR else step.status for step in previous_steps[:queued_index]
+    ]
 
 
 def test_recipe_steps_show_new_failure_after_reprocess_fails() -> None:

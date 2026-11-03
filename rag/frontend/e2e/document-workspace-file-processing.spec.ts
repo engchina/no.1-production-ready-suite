@@ -2082,6 +2082,26 @@ test("Embedding / 索引の失敗は保存済みの Chunk から索引を再実�
   });
 });
 
+test("索引済みレシピの再処理待ちでは後続3工程が灰色になり完了数が0に戻る", { tag: "@responsive" }, async ({ page }) => {
+  await mockDocumentWorkspace(page, { reprocessQueued: true });
+  await page.goto("/documents/doc-1");
+  const recipes = page.locator('section[aria-label="処理レシピ"]');
+  const steps = recipes.getByRole("list");
+  await expect(steps.locator(".bg-success-emphasis")).toHaveCount(4);
+  await recipes.getByRole("button", { name: "再処理", exact: true }).click();
+  await expect(recipes.getByText("ファイル準備の順番待ち", { exact: true }).filter({ visible: true }).first()).toBeVisible();
+  await expect(steps.locator(".bg-success-emphasis")).toHaveCount(0);
+  const items = steps.getByRole("listitem");
+  for (const index of [1, 2, 3]) {
+    await expect(items.nth(index).locator(".border-border")).toHaveCount(1);
+    await expect(items.nth(index).locator(".lucide-check")).toHaveCount(0);
+  }
+  const card = recipes.getByRole("button", { name: /レシピ1.*0\/4/, includeHidden: true });
+  await expect(card).toHaveCount(1);
+  await expect(card.locator(".bg-success-emphasis")).toHaveCount(0);
+  await expectNoPageOverflow(page);
+});
+
 // 失敗したレシピを再処理すると、レシピは worker が claim するまで前回の ERROR と本文を持つ。見出しが
 // 「〈工程〉の順番待ち」の間は本文にも前回の失敗を出さず、新しい job が失敗したら新しい本文を出す（#2687）。
 test("再処理の job が順番待ちの間は前回の失敗を出さず、また失敗したら新しい原因を出す", { tag: "@responsive" }, async ({
@@ -2355,6 +2375,7 @@ async function mockDocumentWorkspace(
     /** 4工程すべての成功ジョブを返す(工程別サマリ表示の検証用)。 */
     jobsForAllPhases?: boolean;
     autoRefreshAfterEnqueue?: boolean;
+    reprocessQueued?: boolean;
     backgroundFailureAfterEnqueue?: boolean;
     documentStatus?: string;
     duplicate?: boolean;
@@ -2454,7 +2475,16 @@ async function mockDocumentWorkspace(
                 ? (options.sharedErrorMessage ??
                   (options.segmentError ? segmentFailureMessage : "取込処理に失敗しました。"))
                 : null,
-            steps: recipeSteps(status, options.recipeFailedPhase ?? options.latestJobPhase),
+            steps: options.reprocessQueued && state.enqueued
+              ? recipeSteps("UPLOADED", undefined).map((step, index) => ({
+                  ...step,
+                  status: index === 0 ? "QUEUED" : "PENDING",
+                  queue_wait: index === 0 ? {
+                    phase: "PREPROCESS", job_id: "job-1",
+                    queued_at: "2026-06-15T00:01:00Z", jobs_ahead: 0, concurrency: 2,
+                  } : null,
+                }))
+              : recipeSteps(status, options.recipeFailedPhase ?? options.latestJobPhase),
             created_at: "2026-06-15T00:00:00Z",
             updated_at: "2026-06-15T00:00:20Z",
             started_at: null,
@@ -2924,6 +2954,7 @@ function currentDocumentStatus(
     documentStatus?: string;
     segmentError?: boolean;
     autoRefreshAfterEnqueue?: boolean;
+    reprocessQueued?: boolean;
   },
   state: { backgroundFailed: boolean; enqueued: boolean }
 ) {
