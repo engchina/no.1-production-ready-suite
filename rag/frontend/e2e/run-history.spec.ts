@@ -1573,7 +1573,7 @@ test("資料照合の実行状態は未照合にまとめず、一覧と詳細�
   await page.screenshot({ path: testInfo.outputPath("validation-execution-history.png") });
 });
 
-test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("呼び出しの詳細で入力・結果・思考・入出力仕様・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   await mockLocalAuth(page);
   const row = run(1);
   await mockRuns(page, [row]);

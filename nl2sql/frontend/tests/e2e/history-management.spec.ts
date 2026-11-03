@@ -977,7 +977,7 @@ for (const [id, text] of [
   });
 }
 
-test("呼び出しの詳細で入力・結果・思考・Schema・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("呼び出しの詳細で入力・結果・思考・入出力仕様・計時を確認できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const id = "synthetic-call";
   const row = { ...historyItems[0], id, progress_events: jobProgressEvents(id, { at: "2026-01-01T00:00:01Z", terminal: "done", steps: {
     prepare_context: { status: "done", startedAt: "2026-01-01T00:00:02Z", finishedAt: "2026-01-01T00:00:03Z", details: syntheticStageDetails, children: [{name: "nl2sql.attachment_evidence", status: "skipped"}] },
