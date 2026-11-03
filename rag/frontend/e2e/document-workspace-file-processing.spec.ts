@@ -42,7 +42,7 @@ test("文書 workspace で chunk と構造化 block を相互に確認できる"
 
   // エクスポートタブ: 内容は表示せず、ダウンロード・コピーの操作だけを出す（詳細は下の #561 のテスト）。
   await page.getByRole("tab", { name: "抽出エクスポート" }).click();
-  await expect(page.getByRole("link", { name: "Markdown をダウンロード" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "抽出結果（Markdown） をダウンロード" })).toBeVisible();
 
   // Chunk タブ: chunk を選ぶとプレビューに bbox がハイライトされる。
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
@@ -126,7 +126,7 @@ test("成果物の無い recipe は文書レベルの抽出・処理後ファイ
   await expect.poll(() => state.extractionExportRequests).toBe(0);
 });
 
-test("desktop の空の右ペイン上でも主ページをスクロールできる", async ({ page }) => {
+test("desktop の空の右ペイン上でも主ページをスクロールできる", { tag: "@responsive" }, async ({ page }) => {
   await mockDocumentWorkspace(page, { documentStatus: "UPLOADED", pdfPreview: true });
 
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -152,7 +152,7 @@ test("desktop の空の右ペイン上でも主ページをスクロールでき
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(mainScrollTop);
 });
 
-test("desktop の右ペインは高さを保ち、境界で主ページへスクロールを引き継ぐ", async ({
+test("desktop の閲覧領域は共通上限で止まり、境界で主ページへスクロールを引き継ぐ", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   // マウスホイールでのスクロール引き継ぎはデスクトップの操作。タッチ端末プロジェクトでは入力方式が前提と一致しない。
@@ -164,17 +164,14 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
   await page.setViewportSize({ width: 1280, height: 640 });
   await page.goto("/documents/doc-1");
 
-  // 右ペイン（タブ + 内容）は左のプレビューと同じ高さにそろえる（#349 / #559）。
-  // ページ画像が無い（iframe の）PDF は A4 縦の縦横比で高さを取るので、1 画面分（下限）より高い。
-  const previewPane = page.getByTestId("document-preview-pane");
-  const inspectorPane = page.getByTestId("document-inspector-pane");
-  await expect(page.locator('iframe[title="policy.pdf"]')).toBeVisible();
-  const previewPaneBox = await previewPane.boundingBox();
-  expect((await inspectorPane.boundingBox())!.height).toBeCloseTo(previewPaneBox!.height, 0);
-  expect(previewPaneBox!.height).toBeGreaterThan(640 - 28);
+  // iframe と右の一覧は共通の高い標準を使い、短い内容は引き伸ばさない。
+  const previewFrame = page.locator('iframe[title="policy.pdf"]');
+  await expect(previewFrame).toBeVisible();
+  const standardHeight = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize) * 42);
+  expect((await previewFrame.boundingBox())!.height).toBeCloseTo(standardHeight, 0);
   const textPanel = page.getByTestId("document-inspector-pane").getByRole("tabpanel");
   const previewHeight = await textPanel.evaluate((element) => element.clientHeight);
-  expect(previewHeight).toBeGreaterThan(400);
+  expect(previewHeight).toBeGreaterThan(0);
   const textPanelMetrics = await textPanel.evaluate((element) => {
     const style = getComputedStyle(element);
     return {
@@ -201,7 +198,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
       overscrollBehaviorY: style.overscrollBehaviorY,
     };
   });
-  expect(panelMetrics.clientHeight).toBeCloseTo(previewHeight, 0);
+  expect(panelMetrics.clientHeight).toBeGreaterThan(0);
   // 高い引用カードは一覧自身がスクロールし、外側のペインを伸ばさない。
   expect(panelMetrics.scrollHeight).toBeLessThanOrEqual(panelMetrics.clientHeight + 1);
   expect(panelMetrics.overflowY).toBe("auto");
@@ -225,7 +222,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
     element.scrollTop = element.scrollHeight;
   });
   const mainScrollTop = await main.evaluate((element) => element.scrollTop);
-  // ペインの高さは A4 縦の縦横比（#559）で小数になる。scrollTop = scrollHeight で送った下端には 1px 未満の
+  // scrollTop = scrollHeight で送った下端には 1px 未満の
   // 余りが残り、Chromium は最初のホイールでその余りをペインで送って、同じ操作の間はペインに留まる。
   // 利用者がホイールで下端まで送ったときと同じく、次のホイールから主ページへ引き継ぐことを確かめる（#656）。
   await expect
@@ -251,7 +248,7 @@ test("desktop の右ペインは高さを保ち、境界で主ページへスク
           overscrollBehaviorY: style.overscrollBehaviorY,
         };
       });
-    expect(tabPanelMetrics.clientHeight).toBeCloseTo(previewHeight, 0);
+    expect(tabPanelMetrics.clientHeight).toBeGreaterThan(0);
     expect(tabPanelMetrics.overflowY).toBe("auto");
     expect(tabPanelMetrics.overscrollBehaviorY).toBe("auto");
   }
@@ -546,7 +543,7 @@ test("処理前/処理後は共有の Tabs で、選択が読み上げられ矢�
   await expectNoPageOverflow(page);
 });
 
-test("抽出エクスポートは Markdown / HTML / JSON をダウンロード・コピーでき、Chunk は Chunk / Citation からダウンロードする", async ({
+test("抽出エクスポートに抽出結果と Chunk の書き出しをまとめ、対象を名前と説明で区別する", { tag: "@responsive" }, async ({
   page,
 }) => {
   // #561: 画面の中で 4 形式を切り替えて見せるだけで持ち出せず、件数の Chunks が常に 0 だった。
@@ -562,9 +559,10 @@ test("抽出エクスポートは Markdown / HTML / JSON をダウンロード�
   await expect(exportPanel.getByText("Chunks")).toHaveCount(0);
 
   for (const [format, label, extension] of [
-    ["markdown", "Markdown", ".md"],
-    ["html", "HTML", ".html"],
-    ["json", "JSON", ".json"],
+    ["markdown", "抽出結果（Markdown）", ".md"],
+    ["html", "抽出結果（HTML）", ".html"],
+    ["json", "抽出結果（JSON）", ".json"],
+    ["chunks", "Chunk / Citation（JSON）", ".json"],
   ] as const) {
     const group = exportPanel.getByRole("group", { name: `${label} の操作` });
     await expect(exportPanel.getByTestId(`document-extraction-export-${format}`)).toContainText(
@@ -580,26 +578,26 @@ test("抽出エクスポートは Markdown / HTML / JSON をダウンロード�
   // ダウンロードは原本プレビューの「ダウンロード」と同じく、backend の添付の応答へのリンク。
   // ファイル名（文書名 + レシピ）と content type は backend が決める（pytest で検証）。
   // `<a download>` の遷移は page.route で横取りできないため、ここでは属性だけを見る。
-  await expect(exportPanel.getByRole("link", { name: "Markdown をダウンロード" })).toHaveAttribute(
+  await expect(exportPanel.getByRole("link", { name: "抽出結果（Markdown） をダウンロード" })).toHaveAttribute(
     "download",
     ""
   );
 
   // キーボード: コピーを Enter で実行し、Tab で同じ行のダウンロードへ進む。
-  const copyMarkdown = exportPanel.getByRole("button", { name: "Markdown をコピー" });
+  const copyMarkdown = exportPanel.getByRole("button", { name: "抽出結果（Markdown） をコピー" });
   await copyMarkdown.focus();
   await page.keyboard.press("Enter");
   await expect(copyMarkdown).toHaveAttribute("data-copy-state", "copied");
-  await expect(exportPanel.getByRole("status").filter({ hasText: "Markdown をコピーしました" })).toHaveCount(1);
+  await expect(exportPanel.getByRole("status").filter({ hasText: "抽出結果（Markdown） をコピーしました" })).toHaveCount(1);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "<!-- page: 1 -->\n# 経費申請\n\n交通費は1000円です。"
   );
   await page.keyboard.press("Tab");
-  await expect(exportPanel.getByRole("link", { name: "Markdown をダウンロード" })).toBeFocused();
+  await expect(exportPanel.getByRole("link", { name: "抽出結果（Markdown） をダウンロード" })).toBeFocused();
 
-  await exportPanel.getByRole("button", { name: "JSON をコピー" }).click();
-  await expect(exportPanel.getByRole("button", { name: "JSON をコピー" })).toHaveAttribute("data-copy-state", "copied");
-  await expect(exportPanel.getByRole("status").filter({ hasText: "JSON をコピーしました" })).toHaveCount(1);
+  await exportPanel.getByRole("button", { name: "抽出結果（JSON） をコピー" }).click();
+  await expect(exportPanel.getByRole("button", { name: "抽出結果（JSON） をコピー" })).toHaveAttribute("data-copy-state", "copied");
+  await expect(exportPanel.getByRole("status").filter({ hasText: "抽出結果（JSON） をコピーしました" })).toHaveCount(1);
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
     '"document_type": "規程"'
   );
@@ -611,19 +609,23 @@ test("抽出エクスポートは Markdown / HTML / JSON をダウンロード�
       json: { data: null, error_messages: ["抽出結果が見つかりません。"], warning_messages: [] },
     })
   );
-  await exportPanel.getByRole("button", { name: "HTML をコピー" }).click();
+  await exportPanel.getByRole("button", { name: "抽出結果（HTML） をコピー" }).click();
   await expect(exportPanel.getByTestId("document-extraction-export-html")).toContainText(
-    "HTML をコピーできませんでした。"
+    "抽出結果（HTML） をコピーできませんでした。"
   );
 
-  // Chunk は「Chunk / Citation」タブから JSON でダウンロードする。
+  await expect(exportPanel.getByTestId("document-extraction-export-json")).toContainText("抽出した本文・構造化要素・表・図");
+  await expect(exportPanel.getByTestId("document-extraction-export-chunks")).toContainText("検索・引用に使う索引済み Chunk");
+  await expect(exportPanel).toContainText("左の表示範囲にかかわらず全体を出力");
+  const copyChunks = exportPanel.getByRole("button", { name: "Chunk / Citation（JSON） をコピー" });
+  await copyChunks.click();
+  await expect(copyChunks).toHaveAttribute("data-copy-state", "copied");
+  const copiedChunks = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+  expect(Object.keys(copiedChunks)).toEqual(["chunks"]);
+  expect(copiedChunks.chunks.length).toBeGreaterThan(0);
+  await exportPanel.screenshot({path: test.info().outputPath("document-export-formats.png")});
   await page.getByRole("tab", { name: /Chunk \/ Citation/ }).click();
-  const chunksLink = page.getByRole("link", { name: "保存済みの Chunk の JSON をダウンロード" });
-  await expect(chunksLink).toHaveAttribute(
-    "href",
-    "/api/documents/doc-1/recipes/recipe-1/extraction-export?format=chunks&download=true"
-  );
-  await expect(chunksLink).toHaveAttribute("download", "");
+  await expect(page.getByTestId("document-inspector-pane").getByRole("link", {name: /ダウンロード/})).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -652,13 +654,13 @@ test("抽出エクスポートは抽出結果の読み込み中・取得失敗�
     "抽出結果を読み込んでいます"
   );
   releaseExport();
-  await expect(page.getByRole("link", { name: "JSON をダウンロード" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "抽出結果（JSON） をダウンロード" })).toBeVisible();
 
   failExport = true;
   await page.reload();
   await page.getByRole("tab", { name: "抽出エクスポート" }).click();
   await expect(page.getByText("抽出結果を取得できません")).toBeVisible();
-  await expect(page.getByRole("link", { name: "JSON をダウンロード" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "抽出結果（JSON） をダウンロード" })).toHaveCount(0);
 });
 
 test("変換なしでも REVIEW では抽出確認を促す", async ({
@@ -998,7 +1000,7 @@ test("プレビューの回転・拡大の後も強調が同じ位置に重な�
   await expectNoHorizontalOverflow(page);
 });
 
-// 文書詳細のプレビューは、幅に合わせたときに 1 ページ全体が縦スクロールなしで入る高さにする（#559）。
+// 文書詳細のプレビューは高い一覧と同じ標準で高さを制限する。
 // desktop（1280 / 1920）と 375px、light / dark で、開いた直後の状態・拡大・ページ送りを確かめる。
 for (const viewportCase of [
   { name: "1280 light", width: 1280, height: 800, theme: "light" },
@@ -1007,7 +1009,7 @@ for (const viewportCase of [
   { name: "375 dark", width: 375, height: 812, theme: "dark" },
   { name: "375 light", width: 375, height: 812, theme: "light" },
 ] as const) {
-  test(`プレビューは開いた直後に 1 ページ全体を縦スクロールなしで表示する (${viewportCase.name})`, async ({
+  test(`原本プレビューも高い一覧と同じ高さで表示し、拡大とページ送りができる (${viewportCase.name})`, { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     // 幅は setViewportSize で決めるので、desktop のプロジェクトだけで実行する（mobile と同じ内容を 2 回走らせない）。
@@ -1027,7 +1029,7 @@ for (const viewportCase of [
     const inspectorPane = page.getByTestId("document-inspector-pane");
     const viewport = page.getByTestId("preview-viewport");
     const frame = page.getByTestId("preview-page-frame");
-    await expect(page.getByTestId("preview-viewer")).toHaveAttribute("data-sizing", "page");
+    await expect(page.getByTestId("preview-viewer")).toHaveAttribute("data-sizing", "bounded");
     await expect(viewport.getByRole("img", { name: "policy.pdf p.1" })).toBeVisible();
     await expect(viewport).toHaveAttribute("data-fit-mode", "fit-width");
 
@@ -1038,21 +1040,19 @@ for (const viewportCase of [
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
     }));
-    expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight);
+    const expectedHeight = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 42 : 26.25));
+    expect(Math.abs(metrics.clientHeight - expectedHeight)).toBeLessThanOrEqual(1);
     expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
     const viewportBox = (await viewport.boundingBox())!;
     const frameBox = (await frame.boundingBox())!;
     expect(frameBox.y).toBeGreaterThanOrEqual(viewportBox.y);
-    expect(frameBox.y + frameBox.height).toBeLessThanOrEqual(viewportBox.y + viewportBox.height);
+    // 幅に合わせたページが高いときは、共通上限の内側で縦スクロールする。
     // 幅に合わせた表示（ページの幅 ≒ ビューポートの幅）。
-    expect(frameBox.width).toBeGreaterThan(viewportBox.width - 32);
+    expect(frameBox.width).toBeGreaterThan(metrics.clientWidth - 32);
 
-    const screenHeight = viewportCase.height;
     const paneBox = (await pane.boundingBox())!;
     if (viewportCase.width >= 1280) {
-      // xl 以上: 右ペインは左と同じ高さ。下限は今までの 1 画面分（上下 1rem ずつの余白を除く）。
-      expect((await inspectorPane.boundingBox())!.height).toBeCloseTo(paneBox.height, 0);
-      expect(paneBox.height).toBeGreaterThanOrEqual(screenHeight - 28 - 1);
+      // 左右の内容はそれぞれの共通上限を使い、短い側を引き伸ばさない。
       const inspectorWidth = (await inspectorPane.boundingBox())!.width;
       if (viewportCase.width >= 1536) {
         // 2xl 以上はプレビュー 2 : 右 1 で、右は 35rem（14px ルートで 490px）を下限にする（#579）。
@@ -1062,13 +1062,6 @@ for (const viewportCase of [
         // xl（1280px〜1535px）は今までどおりほぼ半分ずつ。
         expect(paneBox.width / inspectorWidth).toBeCloseTo(1.05, 1);
       }
-    } else {
-      // xl 未満の縦積み: 1 画面分の枠に小さなページが浮かないよう、ページの形の高さに詰める。
-      expect(paneBox.height).toBeLessThan(screenHeight - 28);
-    }
-    if (viewportCase.width !== 1280) {
-      // 下限にかからないときは、ビューポートはページの高さ + ステージの余白（と数 px の遊び）だけ。
-      expect(viewportBox.height - frameBox.height).toBeLessThan(32);
     }
     // 目視の記録: ペインの下端（ページの下端とビューアの枠）が見える位置までスクロールして撮る。
     await pane.evaluate((element) => element.scrollIntoView({ block: "end" }));
@@ -1091,14 +1084,12 @@ for (const viewportCase of [
     await expect(page.getByTestId("preview-page-status")).toHaveText("2 / 2");
     await expect(viewport.getByRole("img", { name: "policy.pdf p.2" })).toBeVisible();
     expect((await pane.boundingBox())!.height).toBeCloseTo(paneBox.height, 0);
-    await expect
-      .poll(() => viewport.evaluate((element) => element.scrollHeight <= element.clientHeight))
-      .toBe(true);
+    expect(Math.abs(await viewport.evaluate(element => element.clientHeight) - expectedHeight)).toBeLessThanOrEqual(1);
     await expectNoHorizontalOverflow(page);
   });
 }
 
-test("ページ画像の寸法が届く前は A4 縦で領域を取り、届いた後も高さがほとんど変わらない", async ({
+test("ページ画像の取得中も取得後も共通の閲覧高さを保つ", { tag: "@responsive" }, async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "desktop の幅で確かめる");
@@ -1124,7 +1115,7 @@ test("ページ画像の寸法が届く前は A4 縦で領域を取り、届い�
   releasePages();
   await expect(page.getByTestId("preview-viewport").getByRole("img")).toBeVisible();
   const loadedHeight = (await pane.boundingBox())!.height;
-  // A4 縦（1 : 1.414）と、このページ（US Letter 1 : 1.294）の違いの分だけ変わる（1 割未満）。
+  // 取得中も共有の閲覧高さを確保し、ページの縦横比で領域を伸ばさない。
   expect(Math.abs(loadedHeight - loadingHeight) / loadedHeight).toBeLessThan(0.1);
 });
 
@@ -1979,7 +1970,7 @@ test("ファイル準備の開始 message を操作欄に表示し、本文 expo
   await expect(actionStatus).toHaveCount(1);
 
   // 取込後、エクスポート(現在のタブ)が自動更新され、ダウンロードできるようになる。
-  await expect(page.getByRole("link", { name: "Markdown をダウンロード" })).toBeVisible({
+  await expect(page.getByRole("link", { name: "抽出結果（Markdown） をダウンロード" })).toBeVisible({
     timeout: 9_000,
   });
   // Chunk タブにも反映される。
@@ -2291,7 +2282,7 @@ test("chunk が多い場合は高カード用の上限で中をスクロール�
   await expect(list.getByRole("button")).toHaveCount(25);
   const metrics = await list.evaluate((element) => ({
     maxHeight: Number.parseFloat(getComputedStyle(element).maxHeight),
-    expected: Math.min(Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68)),
+    expected: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5,
     scrollable: element.scrollHeight > element.clientHeight + 1,
   }));
   expect(Math.abs(metrics.maxHeight - metrics.expected)).toBeLessThanOrEqual(1);

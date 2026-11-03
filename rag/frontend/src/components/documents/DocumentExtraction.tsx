@@ -76,7 +76,15 @@ export function DocumentRawText({ extraction, emptyMessage }: { extraction: Reco
         </h4>
         <CopyRawTextButton text={displayText} />
       </div>
-      <ExtractedText text={displayText} />
+      <div
+        className={cn(INFORMATION_CARD_LIST_SCROLL_CLASS, INFORMATION_TABLE_FOCUS_CLASS)}
+        tabIndex={0}
+        role="region"
+        aria-label={t("flow.extraction.rawText")}
+        data-testid="document-raw-text-scroll"
+      >
+        <ExtractedText text={displayText} />
+      </div>
     </section>
   );
 }

@@ -1260,7 +1260,7 @@ for (const { summarized, ruleSummary, staleRules } of [{ summarized: false, rule
 }
 
 
-test("長い章節ナビゲーションは共通の高い上限で止まり、続きの操作なしで全章節の要約を出し、編集も内部スクロールできる", { tag: "@responsive" }, async ({ page }) => {
+test("長い章節ナビゲーションは通常の一覧の1.5倍の上限で止まり、続きの操作なしで全章節の要約を出し、編集も内部スクロールできる", { tag: "@responsive" }, async ({ page }) => {
   const elements = Array.from({ length: 30 }, (_, i) => ({ element_id: `long-${i}`, kind: "text", text: `合成要素 ${i + 1}`, order: i, page_number: 1 }));
   await mockDocumentDetail(page, { extraction: { raw_text: "合成の本文", elements, pages: [], tables: [], fields: [], assets: [] } });
   const extractionViews: URLSearchParams[] = [];
@@ -1277,9 +1277,9 @@ test("長い章節ナビゲーションは共通の高い上限で止まり、�
   const panel = await openSections(page);
   const list = panel.getByTestId("sections-navigation-scroll");
   await expect(list).toBeVisible();
-  // 共通の高い上限（構造化要素と同じ bounded-scroll-area-lg）。手書きの高さにしない。
+  // 共通の高い上限は通常の一覧の1.5倍。構造化要素と同じ標準を使う。
   const dimensions = await list.evaluate(node => ({ height: node.clientHeight, content: node.scrollHeight,
-    expected: Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68)),
+    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5,
     overflowY: getComputedStyle(node).overflowY, gutter: getComputedStyle(node).scrollbarGutter }));
   expect(Math.abs(dimensions.height - dimensions.expected)).toBeLessThanOrEqual(1);
   expect(dimensions.content).toBeGreaterThan(dimensions.height);
@@ -1372,7 +1372,7 @@ test("構造化要素は共通の最大高さで内部スクロールする", { 
   const list = page.getByTestId("structured-elements-scroll");
   await expect(list).toBeVisible();
   const dimensions = await list.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight,
-    expected: Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68))}));
+    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5}));
   expect(Math.abs(dimensions.height - dimensions.expected)).toBeLessThanOrEqual(1);
   expect(dimensions.content).toBeGreaterThan(dimensions.height);
   await list.focus(); await list.press("End");
@@ -1396,13 +1396,31 @@ test("表示範囲の全部を読むとき、長い要素と多セルの表は�
   const cells = Array.from({ length: 300 }, (_, i) => ({row: Math.floor(i / 6), col: i % 6, row_span: 1, col_span: 1, text: `合成セル ${i + 1}`}));
   await mockDocumentDetail(page, { extraction: { raw_text: `${unbroken}合成の本文の末尾`, elements, pages: [], fields: [], assets: [],
     tables: [{table_id: "table-many", caption: "合成の表", page_number: 1, element_id: "long-element", cells}] } });
+  await page.route("**/text-window", route => fulfillDocumentInspection(route, {json: {data: {text: unbroken, offset: 0, total: unbroken.length, limit: 8192, revision: "synthetic-revision", scope_status: "exact"}, error_messages: [], warning_messages: []}}));
   await page.goto("/documents/doc-1");
   const inspector = page.getByTestId("document-inspector-pane");
   await expect(inspector).toContainText("合成の本文の末尾");
+  const heightLimit = () => parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5;
+  const limit = await page.evaluate(heightLimit);
+  const previewText = page.getByTestId("preview-text");
+  await expect.poll(() => previewText.evaluate(node => node.getBoundingClientRect().height)).toBeCloseTo(limit, 0);
+  await previewText.scrollIntoViewIfNeeded();
+  await previewText.focus();
+  await previewText.press("End");
+  await expect.poll(() => previewText.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  const rawText = inspector.getByTestId("document-raw-text-scroll");
+  const rawSize = await rawText.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight}));
+  expect(Math.abs(rawSize.height - limit)).toBeLessThanOrEqual(1);
+  expect(rawSize.content).toBeGreaterThan(rawSize.height);
+  await rawText.scrollIntoViewIfNeeded();
+  await rawText.focus();
+  await rawText.press("End");
+  await expect.poll(() => rawText.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => rawText.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThanOrEqual(1);
+  await expect(inspector.getByRole("button", {name: "本文をコピー", exact: true})).toBeVisible();
+  await rawText.screenshot({path: test.info().outputPath("document-raw-text-scroll.png")});
   await expectNoHorizontalOverflow(page);
   await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
-  const heightLimit = () => Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68));
-  const limit = await page.evaluate(heightLimit);
   for (const [testId, last] of [["structured-elements-scroll", "合成の短い要素 3"], ["extraction-table-cells-scroll", "合成セル 295"]] as const) {
     const region = inspector.getByTestId(testId);
     await region.scrollIntoViewIfNeeded();
@@ -1444,7 +1462,7 @@ test("Citation の高カード一覧は共通の大きい上限で止まり、�
   const list = page.getByTestId("document-chunk-list");
   await expect(list).toBeVisible();
   const size = await list.evaluate(node => ({height: node.clientHeight, content: node.scrollHeight,
-    expected: Math.min(parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(max-width: 640px)").matches ? 28 : 34), innerHeight * (matchMedia("(max-width: 640px)").matches ? .60 : .68))}));
+    expected: parseFloat(getComputedStyle(document.documentElement).fontSize) * (matchMedia("(min-width: 48rem)").matches ? 28 : 17.5) * 1.5}));
   expect(Math.abs(size.height - size.expected)).toBeLessThanOrEqual(2);
   expect(size.content).toBeGreaterThan(size.height);
   await list.focus(); await list.press("End");

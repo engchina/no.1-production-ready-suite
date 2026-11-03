@@ -1,12 +1,13 @@
 import type { DocumentExtractionExportFormat } from "@/lib/api";
 
-/** 抽出エクスポートでファイルとコピーを出す形式（Chunk は「Chunk / Citation」タブで扱う。#561）。 */
+/** 選択中のレシピの抽出結果と索引済み Chunk を書き出す形式。 */
 export const EXTRACTION_EXPORT_FORMATS = [
   { format: "markdown", extension: ".md" },
   { format: "html", extension: ".html" },
   { format: "json", extension: ".json" },
+  { format: "chunks", extension: ".json" },
 ] as const satisfies ReadonlyArray<{
-  format: Exclude<DocumentExtractionExportFormat, "chunks">;
+  format: DocumentExtractionExportFormat;
   extension: string;
 }>;
 
