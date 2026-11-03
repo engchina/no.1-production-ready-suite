@@ -24,6 +24,7 @@ import {
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
   type ChatProgressStep,
+  type ChatProgressTerminalStatus,
   useChatAutoScroll,
   useChatHistoryPanel,
   chatAttachmentItems,
@@ -247,6 +248,7 @@ function buildTurns(messages: ChatMessage[]): Turn[] {
  * 作成中は読み直し、終わったら 1 回だけ読む。`start` の前（回答のメッセージが無い）は読まない。
  */
 interface ColumnProgressSource {
+  terminalStatus?: ChatProgressTerminalStatus | null;
   conversationId: string | null;
   messageId: string | null;
   /** 作成中か（snapshot を読み直す）。 */
@@ -261,6 +263,7 @@ interface ColumnProgressSource {
  * 記録（工程の行の代わりに案内を出す）、`partial` は書けなかった span がある記録。
  */
 interface ColumnProgress {
+  terminalStatus?: ChatProgressTerminalStatus | null;
   steps: ChatProgressStep[];
   startedAtMs: number;
   reconnecting?: boolean;
@@ -283,6 +286,7 @@ function useColumnProgress(source: ColumnProgressSource | null): ColumnProgress 
   if (source === null) return null;
   return {
     steps: snapshot.steps,
+    terminalStatus: source.terminalStatus ?? snapshot.terminal,
     startedAtMs: source.startedAtMs,
     // 配信が途絶えた・読み直しに失敗している間は「接続を確認しています」（#1160）。
     reconnecting: active && (Boolean(source.reconnecting) || snapshot.failed),
@@ -397,6 +401,8 @@ function AssistantColumn({
         // 原因は段階ではなく下の Banner に出す。
         <AnswerProcess
           steps={progress.steps.length > 0 ? progress.steps : chatSubmitProgressSteps(progress.startedAtMs)}
+          active={progressSource?.active}
+          terminalStatus={progress.terminalStatus}
           // 送信の段階から回答の段階に移ったら一覧を作り直す。回答の段階の間は、一度出した段階を消さない（#1358）。
           progressKey={progress.steps.length > 0 ? "answer" : "submit"}
           // 経過時間は送信から数え続ける（段階ごとに 0 に戻さない。#1176）。
@@ -413,6 +419,8 @@ function AssistantColumn({
         // 「処理の経過」1 つで、回答の下に出し直さない（#2096 / #2115 / #2118。RAG 検索と同じ部品）。
         <AnswerProcess
           steps={progress?.steps ?? []}
+          active={false}
+          terminalStatus={progress?.terminalStatus}
           testId="chat-answer-progress"
           traceId={progress?.traceId}
           conversationId={progressSource?.conversationId ?? null}
@@ -1493,6 +1501,7 @@ export function ChatClient() {
           conversationId: activeId,
           messageId: column.messageId,
           active: column.status === "streaming",
+          terminalStatus: column.status === "done" ? "done" as const : column.status === "error" ? "failed" as const : column.status === "stopped" ? "cancelled" as const : null,
           startedAtMs: column.startedAtMs,
           // 配信が途絶え、接続を張り直している間は「接続を確認しています」（#1160）。
           reconnecting: streamReconnecting && column.status === "streaming",
@@ -1812,6 +1821,7 @@ export function ChatClient() {
                           conversationId: activeId,
                           messageId: reply.message_id,
                           active: streaming,
+                          terminalStatus: reply.status === "COMPLETE" ? "done" : reply.status === "ERROR" ? "failed" : reply.status === "CANCELLED" ? "cancelled" : null,
                           startedAtMs: Date.parse(reply.created_at) || Date.now(),
                         },
                       };

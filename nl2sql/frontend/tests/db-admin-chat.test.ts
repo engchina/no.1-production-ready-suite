@@ -180,9 +180,10 @@ test("ターンの処理の経過: span の無い古いターンは古い形式�
   assert.equal(partial.legacy, false);
   assert.equal(partial.partial, true);
   // まだ読めていないターンは何も出さない（古い形式とも出さない）。
-  assert.deepEqual(dbAdminChatTraceProgress("turn-1", undefined), { steps: [], legacy: false, partial: false });
+  assert.deepEqual(dbAdminChatTraceProgress("turn-1", undefined), { steps: [], terminal: null, legacy: false, partial: false });
   const done = dbAdminChatTraceProgress("turn-1", { events: generationSnapshot("done"), droppedSpans: 0 });
   assert.equal(done.legacy, false);
+  assert.equal(done.terminal, "done");
   assert.equal(done.traceId, "c".repeat(32));
   assert.equal(done.steps.length, 2);
 });

@@ -20456,6 +20456,7 @@ for (const scenario of ["正常", "プレビュー", "安全性の確認の省�
     await page.getByRole("button", {name: "SQL を生成して実行", exact: true}).click();
     await expect(page.getByTestId("nl2sql-job-progress")).toHaveAttribute("data-job-status", job.status);
     const progress = page.getByTestId("nl2sql-job");
+    await expect(progress).toHaveAttribute("data-chat-progress-state", cancelled ? "cancelled" : blocked ? "failed" : "done");
     const rows = progress.locator("[data-run-timeline-step]");
     // 終端の一覧（見出しは nl2sql-job-summary）に切り替わってから読む。終端の状態の属性が変わった瞬間は、実行中の
     // 一覧のままか、段階の失敗の反映の前のことがある（#3329）。既定の開閉は、失敗は開いたまま・それ以外は閉じる。

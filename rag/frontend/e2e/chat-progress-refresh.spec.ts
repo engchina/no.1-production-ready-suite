@@ -535,3 +535,41 @@ for (const colorScheme of ["light", "dark"] as const) {
     });
   });
 }
+
+
+test("途中の試行失敗があっても保存された成功終端を表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockChatPage(page, null, { reply: "complete", existingUserId: "synthetic-user" });
+  const log = spanProgressRecorder("a1");
+  const events = [
+    ...log.start("root", ragSpan.root()),
+    ...log.start("attempt", ragSpan.step("合成の試行", "root")),
+    ...log.finish("attempt", "failed"),
+    ...log.start("retry", ragSpan.step("合成の再試行", "root")),
+    ...log.finish("retry"), ...log.finish("root"), ...log.terminal("done"),
+  ];
+  await page.route("**/api/chat/conversations/conv-1/messages/a1/trace", (route) => route.fulfill({ json: { data: { events, dropped_spans: 0 } } }));
+  await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
+  const progress = page.getByTestId("chat-answer-progress");
+  await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+  await expect(progress.locator("details").first()).not.toHaveAttribute("open", "");
+  await progress.getByTestId("chat-answer-progress-summary").click();
+  await expect(progress.locator('[data-status="failed"]')).toHaveCount(1);
+  const originalViewport = page.viewportSize()!;
+  for (const width of originalViewport.width > 375 ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: originalViewport.height });
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+      await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+      await expect(progress.locator('[data-status="failed"]')).toHaveCount(1);
+      await progress.screenshot({ path: testInfo.outputPath(`terminal-success-${width}-${theme}.png`) });
+    }
+  }
+  const summary = progress.locator("summary").first();
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(progress.locator("details").first()).not.toHaveAttribute("open", "");
+  await page.keyboard.press("Enter");
+  await expect(progress.locator("details").first()).toHaveAttribute("open", "");
+  await expectNoPageOverflow(page);
+});

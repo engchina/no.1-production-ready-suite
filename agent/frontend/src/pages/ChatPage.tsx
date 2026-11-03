@@ -1110,6 +1110,7 @@ function RunChatTurn({
             active={stoppable && progressTerminal === null}
             reconnecting={stoppable && progress.failed}
             cancelled={run.status === "cancelled"}
+            terminalStatus={run.status === "completed" ? "done" : run.status === "failed" ? "failed" : run.status === "cancelled" ? "cancelled" : progressTerminal}
             // 処理の経過と同じ記録を詳細で繰り返さない。
             traceId={progress.traceId}
             processDetailsProps={{ metadata: { conversationId: run.thread_id ?? null, messageId: run.id } }}

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
 import { confirmChatRequirement, mockChatRequirement } from "./_helpers/chat-requirement";
-import { withJobProgress } from "./_helpers/job-progress";
+import { jobProgressEvents, recordMockTrace, withJobProgress } from "./_helpers/job-progress";
 
 // #1160: チャットの回答の作成中に、処理の経過と回答が自動で更新されなくなる不具合の回帰テスト。
 // 2 回目の質問のジョブを、段階が進む・取り直しが失敗する・DB の状態の確認が応答しない、の各条件で追い、
@@ -251,3 +251,40 @@ for (const colorScheme of ["light", "dark"] as const) {
     });
   });
 }
+
+
+test("途中の試行失敗があっても保存された成功終端を表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const state = await setup(page);
+  const turn = await openSecondQuestion(page);
+  const events = jobProgressEvents("chat-2", {
+    at: iso(-2), terminal: "done",
+    steps: { generate_sql: { status: "done", children: [
+      { name: "gen_ai.chat", status: "failed" },
+      { name: "gen_ai.chat", status: "done" },
+    ] } },
+  });
+  recordMockTrace("chat-2", events, { pinned: true });
+  state.phase = "done";
+  const progress = turn.getByTestId("sql-chat-progress");
+  await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+  await expect(progress.locator("details").first()).not.toHaveAttribute("open", "");
+  await progress.getByTestId("sql-chat-progress-summary").click();
+  await expect(progress.locator('[data-status="failed"]')).toHaveCount(1);
+  const originalViewport = page.viewportSize()!;
+  for (const width of originalViewport.width > 375 ? [1280, 1920] : [375]) {
+    await page.setViewportSize({ width, height: originalViewport.height });
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
+      await expect(progress).toHaveAttribute("data-chat-progress-state", "done");
+      await expect(progress.locator('[data-status="failed"]')).toHaveCount(1);
+      await progress.screenshot({ path: testInfo.outputPath(`terminal-success-${width}-${theme}.png`) });
+    }
+  }
+  const summary = progress.locator("summary").first();
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(progress.locator("details").first()).not.toHaveAttribute("open", "");
+  await page.keyboard.press("Enter");
+  await expect(progress.locator("details").first()).toHaveAttribute("open", "");
+});

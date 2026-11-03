@@ -1075,6 +1075,7 @@ function SqlChatTurn({
           ) : (
             <ChatProgress
               cancelled={turn.error_code === "JOB_CANCELLED"}
+              terminalStatus={turn.error_code === "JOB_CANCELLED" ? "cancelled" : turn.status === "done" ? "done" : turn.status === "error" ? "failed" : progress.terminal}
               traceId={progress.traceId}
               processDetailsProps={{ metadata: { conversationId: turn.conversation_id ?? null, messageId: turn.job_id } }}
               footer={<RunUsedModels models={[]} events={progress.events} />}
