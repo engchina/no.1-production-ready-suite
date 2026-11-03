@@ -55,6 +55,9 @@ def prompt_injection_warnings_for_records(
         from rag_engine.retrieval.metadata_context import answer_metadata_context
 
         text += "\n" + answer_metadata_context(record)
+        document = (getattr(record, "metadata", {}) or {}).get("document") or {}
+        first_page = document.get("first_page_context") or {}
+        text += "\n" + str(first_page.get("text") or "")
         if not text:
             continue
         source = str(getattr(record, "chunk_id", "") or getattr(record, "id", "") or record.citation)

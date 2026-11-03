@@ -21,7 +21,7 @@ from rag_engine.retrieval.article_catalog import is_added_catalog_article, is_ca
 from rag_engine.retrieval.attachment_evidence import is_attachment_evidence
 from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.retrieval.evidence_cues import evidence_cues
-from rag_engine.retrieval.metadata_context import answer_metadata_context, document_context_key, with_child_contexts
+from rag_engine.retrieval.metadata_context import answer_metadata_context, with_child_contexts
 from rag_engine.retrieval.operation_context import operation_labels
 from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
 
@@ -732,13 +732,8 @@ def _context_bundle_from_parent_evidence(
         )
     excluded: tuple[dict[str, Any], ...] = ()
     sections = []
-    seen_documents = set()
     for item in evidence_tree:
-        key = document_context_key(item.record)
-        sections.append(
-            _parent_context_section(item, include_first_page=key not in seen_documents, metadata_max_chars=min(1200, max_chars // 10))
-        )
-        seen_documents.add(key)
+        sections.append(_parent_context_section(item, metadata_max_chars=min(1200, max_chars // 10)))
     text = "\n\n".join(sections).strip()
     if not text:
         return ContextBundle(
@@ -769,10 +764,10 @@ def _context_bundle_from_parent_evidence(
     )
 
 
-def _parent_context_section(item: ContextParentEvidence, *, include_first_page: bool = True, metadata_max_chars: int = 1200) -> str:
+def _parent_context_section(item: ContextParentEvidence, *, metadata_max_chars: int = 1200) -> str:
     record = with_child_contexts(item.record, [child.record for child in item.children])
     lines = [
-        _context_prefix(record, include_first_page=include_first_page, metadata_max_chars=metadata_max_chars).rstrip(),
+        _context_prefix(record, metadata_max_chars=metadata_max_chars).rstrip(),
         f"Context role: {item.reason}",
     ]
     anchor_ids = item.anchor_child_ids
@@ -815,10 +810,8 @@ def context_bundle_from_records(
     selected: list[Any] = []
     lines: list[str] = []
     used_chars = 0
-    seen_documents = set()
     for record in records:
-        key = document_context_key(record)
-        prefix = _context_prefix(record, include_first_page=key not in seen_documents, metadata_max_chars=min(1200, max_chars // 10))
+        prefix = _context_prefix(record, metadata_max_chars=min(1200, max_chars // 10))
         remaining = max_chars - used_chars - len(prefix) - 1
         if remaining <= DEFAULT_MIN_SNIPPET_CHARS and lines:
             break
@@ -830,7 +823,6 @@ def context_bundle_from_records(
         if lines and used_chars + len(line) + 1 > max_chars:
             break
         selected.append(record)
-        seen_documents.add(key)
         lines.append(line)
         used_chars += len(line) + 1
 
@@ -904,7 +896,7 @@ def trim_context_text(value: str, max_length: int) -> str:
     return normalized[: max(0, max_length - 3)] + "..."
 
 
-def _context_prefix(record: Any, *, include_first_page: bool = True, metadata_max_chars: int = 1200) -> str:
+def _context_prefix(record: Any, *, metadata_max_chars: int = 1200) -> str:
     citation = str(getattr(record, "citation", "") or "")
     engine_label = str(getattr(record, "engine_label", "") or "")
     category = str(getattr(record, "category", "") or "")
@@ -918,7 +910,7 @@ def _context_prefix(record: Any, *, include_first_page: bool = True, metadata_ma
         if len(details) + len(source) + 3 <= 700:
             details = " / ".join(part for part in (details, source) if part)
     suffix = f"\nDocument: {details}\n" if details else " "
-    context = answer_metadata_context(record, max_chars=metadata_max_chars, include_first_page=include_first_page, include_document=False)
+    context = answer_metadata_context(record, max_chars=metadata_max_chars, include_document=False)
     return f"[{citation} / {engine_label} / {category}]" + suffix + (context + "\n" if context else "")
 
 

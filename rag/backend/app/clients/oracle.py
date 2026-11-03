@@ -2317,18 +2317,80 @@ class OracleClient:
         )
         return [_retrieved_chunk_from_row(row) for row in rows]
 
+    async def retrieval_document_first_chunk(
+        self, filters: dict[str, str], *, document_id: str, chunk_set_id: str
+    ) -> RetrievedChunk | None:
+        """正確な版の先頭を先に決め、検索条件に適合する場合だけ返す。範囲内の別の先頭へ代えない。"""
+        where, binds = _oracle_retrieval_where(filters)
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+                SELECT c.document_id, c.chunk_id, c.chunk_text, c.metadata_json,
+                       c.chunk_index, c.chunk_set_id, d.file_name, d.category_name,
+                       d.superseded_by_document_id, 0 AS score
+                FROM rag_chunks c JOIN rag_documents d ON d.document_id = c.document_id
+                WHERE {where_sql}
+                  AND c.document_id = :background_document_id
+                  AND NVL(c.chunk_set_id, '#untagged') = :background_chunk_set_id
+                  AND c.chunk_index = (
+                      SELECT MIN(first_c.chunk_index) FROM rag_chunks first_c
+                      WHERE first_c.document_id = :background_document_id
+                        AND NVL(first_c.chunk_set_id, '#untagged') = :background_chunk_set_id
+                  )
+                ORDER BY c.chunk_id
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                where_sql=where,
+            ),
+            {
+                **binds,
+                "background_document_id": document_id,
+                "background_chunk_set_id": chunk_set_id or "#untagged",
+            },
+        )
+        return _retrieved_chunk_from_row(rows[0]) if rows else None
+
     async def chunk_set_first_page_contexts(
-        self, chunk_set_ids: Sequence[str]
+        self, chunk_set_ids: Sequence[str], *, filters: dict[str, str] | None = None
     ) -> dict[str, dict[str, object]]:
         """chunk set の文書の 1 ページ目の本文(first_page_context)を chunk_set_id ごとに返す。
 
         回答の「文書の背景」に使う。ヒットした chunk set の分を IN で 1 回だけ読む。値の無い
         chunk set は含めない(#557)。
         """
+        from app.rag.document_background import first_page_global_scope_reason
+
+        if filters is not None and first_page_global_scope_reason(filters):
+            return {}
         ids = _unique_optional_sequence(list(chunk_set_ids))
         if not ids:
             return {}
         in_sql, binds = _oracle_in_predicate("cs.chunk_set_id", "first_page_chunk_set", ids)
+        page_sql = "1 = 1"
+        page_binds: dict[str, object] = {}
+        scope_binds: dict[str, object] = {}
+        if filters is not None and (ranges := filters.get(PAGE_RANGES_FILTER_KEY)):
+            allowed_documents = [
+                item.document_id
+                for item in parse_page_ranges(ranges)
+                if item.sheet_name is None
+                and (item.page_start is None or item.page_start <= 1)
+                and (item.page_end is None or item.page_end >= 1)
+            ]
+            if not allowed_documents:
+                return {}
+            page_sql, page_binds = _oracle_in_predicate(
+                "cs.document_id", "first_page_document", allowed_documents
+            )
+            binds.update(page_binds)
+        scope_sql = "1 = 1"
+        if filters is not None:
+            where, scope_binds = _oracle_retrieval_where(filters)
+            binds.update(scope_binds)
+            scope_sql = (
+                "EXISTS (SELECT 1 FROM rag_chunks c WHERE c.document_id = cs.document_id "
+                "AND c.chunk_set_id = cs.chunk_set_id AND " + where + ")"
+            )
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -2337,9 +2399,13 @@ class OracleClient:
             JOIN rag_documents d ON d.document_id = cs.document_id
             WHERE {in_sql}
               AND cs.first_page_context IS NOT NULL
+              AND {scope_sql}
+              AND {page_sql}
               AND {access_sql}
             """,
                 in_sql=in_sql,
+                scope_sql=scope_sql,
+                page_sql=page_sql,
                 access_sql=_oracle_access_predicate_sql(alias="d"),
             ),
             _with_tenant_bind(binds, alias="d"),
@@ -2349,6 +2415,48 @@ class OracleClient:
             context = _json_loads(row.get("first_page_context"))
             if context:
                 contexts[str(row["chunk_set_id"])] = context
+        incomplete = [
+            key
+            for key in ids
+            if contexts.get(key, {}).get("status") != "available"
+            or contexts[key].get("truncated") is not False
+        ]
+        if incomplete:
+            # 可変の最新解析ではなく、選択した索引と結び付く不変の修訂だけから復元する。
+            recovery_sql, recovery_binds = _oracle_in_predicate(
+                "cs.chunk_set_id", "recover_first_page", incomplete
+            )
+            recovered = await self._fetch_all(
+                _render_sql(
+                    """
+                    SELECT cs.chunk_set_id, revision.extraction_json
+                    FROM rag_chunk_sets cs
+                    JOIN rag_documents d ON d.document_id = cs.document_id
+                    JOIN rag_document_extraction_revisions revision
+                      ON revision.recipe_id = cs.recipe_id
+                     AND revision.extraction_recipe_id = cs.extraction_recipe_id
+                    WHERE {recovery_sql} AND {scope_sql} AND {page_sql} AND {access_sql}
+                    """,
+                    recovery_sql=recovery_sql,
+                    scope_sql=scope_sql,
+                    page_sql=page_sql,
+                    access_sql=_oracle_access_predicate_sql(alias="d"),
+                ),
+                _with_tenant_bind({**scope_binds, **page_binds, **recovery_binds}, alias="d"),
+            )
+            from app.rag.document_background import first_page_for_index
+
+            for row in recovered:
+                payload = _json_loads(row.get("extraction_json"))
+                try:
+                    page = first_page_for_index(StructuredExtraction.model_validate(payload))
+                except (ValueError, TypeError):
+                    continue
+                if page.get("status") == "available":
+                    contexts[str(row["chunk_set_id"])] = {
+                        **page,
+                        "reconstructed_from": "immutable_extraction_revision",
+                    }
         return contexts
 
     async def create_document(
@@ -11976,6 +12084,8 @@ class OracleClient:
         chunk set に 1 つだけ保存する(#557)。親集合は chunk の挿入前に保証し、
         数値の検索範囲を同じ transaction で割り当てる。状態などは後の upsert / mark が書く。
         """
+        from app.rag.document_background import first_page_for_index
+
         first_page_context = (
             next(
                 (
@@ -11988,6 +12098,10 @@ class OracleClient:
             if chunk_set_id is not None
             else None
         )
+        first_page_can_replace = first_page_context is not None
+        if chunk_set_id is not None and first_page_context is None:
+            first_page_context = first_page_for_index(extraction)
+            first_page_can_replace = first_page_context.get("status") == "available"
         release = active_release()
 
         def operation(connection: OracleConnectionProtocol) -> list[RetrievedChunk]:
@@ -12095,6 +12209,7 @@ class OracleClient:
                     ON (t.chunk_set_id = s.chunk_set_id)
                     WHEN MATCHED THEN UPDATE SET
                         t.first_page_context = :first_page_context
+                        WHERE t.first_page_context IS NULL OR :first_page_can_replace = 1
                     WHEN NOT MATCHED THEN INSERT
                         (chunk_set_id, document_id, tenant_id_hash, first_page_context)
                         VALUES (
@@ -12106,6 +12221,7 @@ class OracleClient:
                         "document_id": document_id,
                         "tenant_id_hash": document.tenant_id_hash,
                         "first_page_context": _json_bind(first_page_context),
+                        "first_page_can_replace": int(first_page_can_replace),
                     },
                     input_sizes=_json_input_sizes("first_page_context"),
                 )

@@ -153,8 +153,8 @@ def test_small_to_big_builds_parents_without_docling_layout() -> None:
     assert chunks[0].metadata["parent_text"] == "本文"
 
 
-def test_small_to_big_first_page_context_is_kept_once_without_picture_ocr_and_truncated() -> None:
-    """1 ページ目の本文だけを、Picture・OCR を除き上限 8000 文字で、先頭の chunk に 1 つだけ載せる。
+def test_small_to_big_first_page_context_keeps_full_text_once_without_picture_ocr() -> None:
+    """1 ページ目の全文を、Picture・OCR を除き先頭の chunk に 1 つだけ載せる。
 
     chunk ごとの metadata(engine_metadata_json)と検索の文には入れない(#557)。
     """
@@ -197,8 +197,9 @@ def test_small_to_big_first_page_context_is_kept_once_without_picture_ocr_and_tr
     assert first_page["text"].startswith(cover)
     assert "OCR抽出テキスト" not in first_page["text"]
     assert "登録ボタン" not in first_page["text"]
-    assert len(first_page["text"]) == 8000
-    assert first_page["truncated"] is True
+    assert first_page["text"] == cover + "\n" + long_text
+    assert len(first_page["text"]) > 8000
+    assert first_page["truncated"] is False
     assert "docling-p1-2" not in first_page["record_ids"]
     assert all(FIRST_PAGE_CONTEXT_KEY not in chunk.metadata for chunk in chunks[1:])
     for chunk in chunks:

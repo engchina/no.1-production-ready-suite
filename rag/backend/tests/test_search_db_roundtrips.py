@@ -21,7 +21,6 @@ from rag_engine.resources.tracing import bind_trace_observer
 from rag_engine.retrieval.search_stages import (
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
-    DOCUMENT_INFO_STAGE,
     ENTITY_EXPANSION_STAGE,
     GRAPH_EXPANSION_STAGE,
     IMAGE_EVIDENCE_STAGE,
@@ -966,10 +965,11 @@ async def test_injected_search_reports_db_search_stages_and_channels(
     result = await asyncio.to_thread(in_answer_thread)
 
     # vector と keyword の検索は並行に読み、それぞれ 1 つの段になる(段は重なる)。続く前後の文脈・
-    # 文書の先頭ページも段になる(#3464)。参照先・実体・関係情報は広げない検索なので段を出さない。
+    # 文書の先頭頁は最終根拠の選択後に読み、候補検索には出さない。
+    # 参照先・実体・関係情報もここでは広げない。
     started = [entry[2] for entry in observed if entry[0] == "start"]
     assert sorted(started[:2]) == sorted([VECTOR_SEARCH_STAGE, TEXT_SEARCH_STAGE])
-    assert started[2:] == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE, DOCUMENT_INFO_STAGE]
+    assert started[2:] == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE]
     assert sorted(entry[2] for entry in observed if entry[0] == "end") == sorted(started)
     assert {entry[1] for entry in observed} == {"stage"}
 
@@ -1075,7 +1075,6 @@ async def test_injected_search_reports_stages_after_db_search(
         ENTITY_EXPANSION_STAGE,
         GRAPH_EXPANSION_STAGE,
         IMAGE_EVIDENCE_STAGE,
-        DOCUMENT_INFO_STAGE,
     ]
     # 段は順に開いて閉じる(重ならない)。
     assert observed == [(event, name) for name in expected for event in ("start", "end")]
@@ -1086,7 +1085,6 @@ async def test_injected_search_reports_stages_after_db_search(
         "entities": ENTITY_EXPANSION_STAGE,
         "graph": GRAPH_EXPANSION_STAGE,
         "images": IMAGE_EVIDENCE_STAGE,
-        "first_pages": DOCUMENT_INFO_STAGE,
     }
     assert {name for name, _stages in ran} == set(stage_of)
     assert all(stages == (stage_of[name],) for name, stages in ran)
