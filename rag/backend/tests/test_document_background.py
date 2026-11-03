@@ -62,6 +62,23 @@ async def test_background_reads_selected_versions_and_reuses_identical_scope() -
     )
 
 
+async def test_rereading_selected_first_chunk_preserves_retrieval_provenance() -> None:
+    first = _chunk()
+    selected = first.model_copy(
+        update={
+            "score": 0.75,
+            "metadata": {**first.metadata, "retrieval_mode": "hybrid", "rrf_score": 0.12},
+        }
+    )
+    state = _state(selected)
+    result = await selected_document_backgrounds(_oracle(first), state, {}, [_span()])
+    assert result[0]["first_chunk"] is first
+    assert state.chunks[first.chunk_id] is selected
+    assert state.chunks[first.chunk_id].metadata["retrieval_mode"] == "hybrid"
+    assert state.chunks[first.chunk_id].metadata["rrf_score"] == 0.12
+    assert state.chunks[first.chunk_id].score == 0.75
+
+
 @pytest.mark.parametrize("first", [_chunk(document="other"), _chunk(version="other")])
 async def test_wrong_document_or_version_is_never_admitted(first: RetrievedChunk) -> None:
     selected = _chunk(page=3)

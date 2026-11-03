@@ -130,7 +130,8 @@ async def selected_document_backgrounds(
             ):
                 result["first_chunk_status"] = "version_mismatch"
             elif _fully_inside(document_id, first.metadata, scoped, page_scope):
-                state.chunks[first.chunk_id] = first
+                # 同じChunkを再読しても、検索時の経路・融合得点を消さない。
+                state.chunks.setdefault(first.chunk_id, first)
                 result.update(first_chunk=first, first_chunk_status="available")
         if not _fully_inside(document_id, {"page_start": 1, "page_end": 1}, scoped, page_scope):
             result["first_page_status"] = "outside_page_scope"
