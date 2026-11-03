@@ -159,6 +159,7 @@ _NUMBERED_LINE = re.compile(r"^([0-9]+)\| (.*)$")
 def _first_evidence(prompt: str) -> tuple[str, str] | None:
     """prompt の最初の根拠の番号と、その本文の最初の行（原文どおりの引用）を返す。"""
     from rag_engine.generation.grounded import CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END
+    from rag_engine.retrieval.character_forms import fold_width
 
     match = _EVIDENCE_HEADER.search(prompt)
     if match is None:
@@ -166,9 +167,9 @@ def _first_evidence(prompt: str) -> tuple[str, str] | None:
     in_note = False
     for line in prompt[match.end() :].splitlines():
         text = line.strip()
-        if text == CONTEXT_NOTE_BEGIN:
+        if text in {CONTEXT_NOTE_BEGIN, fold_width(CONTEXT_NOTE_BEGIN)}:
             in_note = True
-        elif text == CONTEXT_NOTE_END:
+        elif text in {CONTEXT_NOTE_END, fold_width(CONTEXT_NOTE_END)}:
             in_note = False
         elif text and not in_note:
             return match.group(1), text
