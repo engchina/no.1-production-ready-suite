@@ -494,8 +494,8 @@ def test_backend_threshold_defaults_and_explicit_saved_values(
     monkeypatch.delenv("RAG_MIN_SIMILARITY", raising=False)
     monkeypatch.delenv("RAG_RERANK_MIN_RELEVANCE_SCORE", raising=False)
     default = Settings(_env_file=None)
-    assert default.rag_min_similarity == 0.05
-    assert default.rag_rerank_min_relevance_score == 0.4
+    assert default.rag_min_similarity == 0.2
+    assert default.rag_rerank_min_relevance_score == 0.2
     monkeypatch.setenv("RAG_MIN_SIMILARITY", "0.18")
     monkeypatch.setenv("RAG_RERANK_MIN_RELEVANCE_SCORE", "0.0")
     saved = Settings(_env_file=None)
@@ -1076,3 +1076,67 @@ async def test_one_failed_batch_fails_the_search_instead_of_returning_part_of_th
     assert getattr(results[0], "status", "") == "failed"
     assert isinstance(getattr(results[0], "failure", None), NativeHybridUnavailable)
     assert list(results[0]) == []
+
+
+@pytest.mark.parametrize("exact", [False, True])
+def test_unlimited_vector_sql_keeps_scope_and_threshold_without_fetch(exact: bool) -> None:
+    from app.clients.oracle import vector_search_statement
+
+    sql, binds = vector_search_statement(Settings(), [1.0, 0.0], top_k=0, filters={}, exact=exact)
+    assert "FETCH" not in sql
+    assert "min_similarity" in sql
+    assert binds["min_similarity"] == 0.2
+
+
+def test_unlimited_exact_and_batch_merge_keep_all_rows() -> None:
+    from app.clients.oracle import (
+        _native_exact_vector_statement,
+        _native_vector_retrieval,
+        _NativeScope,
+    )
+
+    scope = _NativeScope(
+        allowed_ids=[], complete_scopes=[1], scope_ranges=[], vector_chunks=3100, total_chunks=3300
+    )
+    sql, _ = _native_exact_vector_statement(where="1 = 1", scope=scope, top_k=0)
+    assert "FETCH" not in sql
+    assert "exact_scope_ids" in sql
+    diagnostic = _native_vector_retrieval(
+        method="exact_scope", scope=scope, top_k=0, exact_max_chunks=50000, returned=3100
+    )
+    assert diagnostic["expected"] == 3100
+    assert diagnostic["shortage"] is False
+    rows = [
+        {"chunk_id": str(i), "native_vector_score": 1.0, "native_text_score": 1.0}
+        for i in range(3001)
+    ]
+    assert len(_merge_native_filter_batches([rows[:1500], rows[1500:]], "hybrid", 0)) == 3001
+
+
+@pytest.mark.asyncio
+async def test_unlimited_native_request_uses_actual_authorized_cardinality() -> None:
+    from app.clients.oracle import _NativeScope
+
+    class Capture(OracleClient):
+        def __init__(self) -> None:
+            super().__init__(Settings(rag_native_vector_exact_max_chunks=1))
+            self.requests: list[dict[str, Any]] = []
+
+        async def _fetch_all(
+            self, sql: str, binds: Mapping[str, object] | None = None
+        ) -> list[dict[str, object]]:
+            assert binds is not None
+            self.requests.append(json.loads(str(binds["native_spec"])))
+            return []
+
+    client = Capture()
+    scope = _NativeScope(
+        allowed_ids=[], complete_scopes=[1], scope_ranges=[], vector_chunks=3100, total_chunks=3300
+    )
+    await client._native_rows(
+        "hybrid", "合成の質問", [1.0, 0.0], top_k=0, filters={}, native_scope=scope
+    )
+    spec = client.requests[0]
+    assert spec["vector"]["result_max"] == 3300
+    assert spec["text"]["result_max"] == 3300
+    assert spec["return"]["topN"] == 6600
