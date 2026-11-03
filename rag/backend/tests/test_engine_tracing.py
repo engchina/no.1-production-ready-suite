@@ -19,6 +19,48 @@ from app.config import Settings
 from app.rag.pipeline import _observe_engine_call
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("outcome", ["complete", "skipped", "failed"])
+def test_engine_stage_keeps_io_after_final_summary(enabled: bool, outcome: str) -> None:
+    from pr_backend_core.observability.call_details import withhold_call_details
+    from pr_backend_core.observability.call_policy import call_content_policy
+    from pr_backend_core.observability.tracing import SpanSummary
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            call_content_policy(lambda: enabled),
+            operation_trace("rag.search", operation_id="synthetic") as summary,
+            bind_trace_observer(_observe_engine_call),
+            _execution_step("合成の工程", "合成の目的") as step,
+        ):
+            step.input({"候補": ["synthetic-source"], "authorization": "private-key"})
+            step.output({"採用": ["synthetic-source"]})
+            step.result("合成の結果")
+            if outcome == "skipped":
+                step.skip("合成の無効設定")
+            elif outcome == "failed":
+                step.status = "failed"
+        stage = next(span for span in summary.spans if span.operation_name == "rag.engine.stage")
+        restored = SpanSummary.model_validate_json(stage.model_dump_json())
+        assert restored.status == ("done" if outcome == "complete" else outcome)
+        assert restored.display and restored.display.details and restored.display.details.call
+        call = restored.display.details.call
+        assert call.capture_enabled is enabled
+        payload = call.model_dump_json()
+        assert "private-key" not in payload
+        assert ("synthetic-source" in payload) is enabled
+        if enabled:
+            assert call.input.status == call.output.status == "recorded"
+            assert call.visibility == "system_admin"
+            hidden = withhold_call_details(restored.model_dump(), allow_restricted=False)
+            assert "synthetic-source" not in str(hidden)
+            assert hidden["display"]["details"]["call"]["input"]["status"] == "withheld"
+            assert restored.display.details.fields
+    finally:
+        shutdown_tracing()
+
+
 @pytest.mark.asyncio
 async def test_engine_stage_and_client_keep_parent_across_thread() -> None:
     def run_engine() -> None:
