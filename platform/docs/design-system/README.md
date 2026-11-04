@@ -1178,29 +1178,29 @@ body { line-break: strict; word-break: normal; overflow-wrap: normal; }
 ### 書体の並び（#3292）
 
 ```
---font-sans: "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", system-ui, …, sans-serif
---font-mono: "Google Sans Code", "Google Sans Code Fallback", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", "Roboto", monospace
+--font-sans: "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Roboto", "Google Sans Code", system-ui, …, sans-serif
+--font-mono: "Google Sans Code", "Google Sans Code Fallback", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Roboto", monospace
 ```
 
 （`lang="ja"`・既定の並び。内容の言語ごとの並びは下の「内容の言語の字形」、`… Fallback` は「寸法を合わせた代わりの書体」。）
 
-- 日本語の字形を優先するため Noto Sans JP を先頭に置き、JP に無い字（簡体字・繁体字・香港の字）だけを Noto Sans SC → Noto Sans TC → Noto Sans HK の順で補う。JP にある字（同じ符号の漢字）は JP の字形のまま。
-- 4 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。4 書体とも unicode-range で分けた CSS を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
+- 日本語の字形を優先するため Noto Sans JP を先頭に置き、JP に無い字（簡体字・繁体字・香港の字）だけを Noto Sans SC → Noto Sans TC の順で補う。JP にある字（同じ符号の漢字）は JP の字形のまま。
+- 3 書体とも 3 製品が `@fontsource` で自前ホストする（外部の CDN を使わない）。太さは Noto Sans JP と同じ。3 書体とも unicode-range で分けた CSS を読み、画面に出た字を含む分だけを取得する。preload はせず、`font-display` は `@fontsource` の既定（`swap`）のまま。
 - Noto Sans JP（主の CSS）も可変書体（`@fontsource-variable/noto-sans-jp` の `wght.css`。書体名は `Noto Sans JP Variable`。#3333）にし、`@font-face` を slice の数（124）に抑える。静的な書体は NL2SQL が slice × 4 太さ（496）、RAG・Agent が slice に分けない subset × 3 太さ（9。1 つの太さの日本語の woff2 が約 1.1 MB で、最初の画面で約 3.4 MB を読んだ）だった。可変書体は 1 つの face が太さ 100〜900 を持つので、tokens の 400 / 500 / 600 / 700 はどれも本物の字形で出る（RAG・Agent の 600 は、静的な書体に無く 700 で出ていた。§7 #163）。
-- SC / TC / HK は可変書体（`@fontsource-variable/noto-sans-{sc,tc,hk}` の `wght.css`。1 つの face が太さ 100〜900 を持ち、書体名は `Noto Sans SC Variable` など）にし、`@font-face` を slice の数（3 書体で 318）に抑える。静的な書体の `<weight>.css` は slice × 太さ（4 太さで 1272）の `@font-face` になり、Chromium がページの読み込み・離脱のたびに face ごとの処理を main thread に積んで、画面の描画が数秒止まった（#3328）。デザインモック（`css/tokens/`。Google Fonts）の書体名は `Noto Sans SC` などのまま。
-- SC / TC / HK の `@font-face`（約 100 の slice × 太さ）は主の CSS（描画を止める）に入れず、製品の `src/fonts-cjk.css` を `main.tsx` が共有の `loadStylesAfterFirstRender`（最初の commit の後の次の frame の後）で `import()` し、Vite が別の CSS の chunk にする（#3305）。読み込む前の中国語の字は JP・端末の書体で出て、読み込んだ後に置き換わる。Noto Sans JP・Roboto・Google Sans Code は主の CSS のまま。
-- e2e は共通の `platform/packages/ui/e2e/font-checks.ts`（JP に無い合成の字で SC / TC / HK の読み込みと、実際に使われた書体を確かめる。最初の描画の時点の CSS と index.html が読む CSS に SC / TC / HK の `@font-face` が無いことも確かめる）。
+- SC / TC は可変書体（`@fontsource-variable/noto-sans-{sc,tc}` の `wght.css`。1 つの face が太さ 100〜900 を持ち、書体名は `Noto Sans SC Variable` など）にし、`@font-face` を slice の数（2 書体で 209）に抑える。静的な書体の `<weight>.css` は slice × 太さ（4 太さで 836）の `@font-face` になり、Chromium がページの読み込み・離脱のたびに face ごとの処理を main thread に積んで、画面の描画が数秒止まった（#3328）。デザインモック（`css/tokens/`。Google Fonts）の書体名は `Noto Sans SC` などのまま。
+- SC / TC の `@font-face`（各書体を約 100 の slice に分割）は主の CSS（描画を止める）に入れず、製品の `src/fonts-cjk.css` を `main.tsx` が共有の `loadStylesAfterFirstRender`（最初の commit の後の次の frame の後）で `import()` し、Vite が別の CSS の chunk にする（#3305）。読み込む前の中国語の字は JP・端末の書体で出て、読み込んだ後に置き換わる。Noto Sans JP・Roboto・Google Sans Code は主の CSS のまま。
+- e2e は共通の `platform/packages/ui/e2e/font-checks.ts`（JP に無い合成の字で SC / TC の読み込みと、実際に使われた書体を確かめる。最初の描画の時点の CSS と index.html が読む CSS に SC / TC の `@font-face` が無いことも確かめる）。
 
 ### 内容の言語の字形（`lang` と `:lang()`。#3335）
 
 同じ符号の漢字（Han unification。例: 骨・直・角）は、日本・中国（簡体）・台湾・香港で字形が違う。画面の文言は `<html lang="ja">` のまま JP の字形にし、利用者の内容（回答・根拠の抜粋・質問・文書のプレビューの本文）は内容の言語の書体を先頭にする。
 
 ```
---font-han（lang="ja"・既定） "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable"
---font-han（lang="zh-Hans"）  "Noto Sans SC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans TC Variable", "Noto Sans HK Variable"
---font-han（lang="zh-Hant"）  "Noto Sans TC Variable", "Noto Sans HK Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable"
---font-han（lang="zh-HK"）    "Noto Sans HK Variable", "Noto Sans TC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable"
---font-sans = var(--font-han), "Roboto", system-ui, …   --font-mono = "Google Sans Code", "Google Sans Code Fallback", var(--font-han), "Roboto", monospace
+--font-han（lang="ja"・既定） "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable"
+--font-han（lang="zh-Hans"）  "Noto Sans SC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans TC Variable"
+--font-han（lang="zh-Hant"）  "Noto Sans TC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable"
+--font-han（lang="zh-HK"）    "Noto Sans TC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable"
+--font-sans = var(--font-han), "Roboto", "Google Sans Code", system-ui, …   --font-mono = "Google Sans Code", "Google Sans Code Fallback", var(--font-han), "Roboto", monospace
 ```
 
 - 正本は `tokens/fonts.css`。`:where([lang]:lang(…))` が `--font-han` を替え、`:where([lang])` が `--font-sans` / `--font-mono`（と Tailwind の preflight の `--default-font-family` / `--default-mono-font-family`）を `lang` を付けた要素で組み直す（`var()` は宣言した要素で解決されるため）。書体の指定（`font-family: var(--font-sans)`）は Tailwind の `base` の層に置き、`code` / `pre` の等幅と `font-mono` などの utility を上書きしない。入れ子の `lang="ja"` は JP に戻る。
@@ -1240,7 +1240,7 @@ RAG の指示の編集欄では、保存・破棄と並んでいた既定への�
 
 品質評価の長い根拠・Excel 入力・ケース別結果は、共通のリスト上限（17.5 / 28rem）で止めて内部スクロールします。表は `PagedDataTable viewport="bounded"` を使い、表頭とページ送りを保ちます。Excel のプレビューはカードの幅を使い、六つの入力列を省略せず、狭い画面では表の中で横スクロールします（#3595）。
 
-QA に事前共有してください。**175点あります。**
+QA に事前共有してください。**182点あります。**
 
 | # | 変更 | 旧 → 新 | 理由 |
 |---|---|---|---|
@@ -1425,6 +1425,7 @@ QA に事前共有してください。**175点あります。**
 | 178 | **再索引で引用の版が無くなった根拠を、赤いエラーと再試行ではなく案内で出す**（#4092） | RAG と Agent の根拠のパネルで `SourceVersionStaleNotice`（info の `Banner`）だけを出し、本文の操作を出さない。500・通信の失敗・本当の 404 はエラーと再試行のまま | 再索引の後に起こる通常の状態で、取り直しても結果が変わらない |
 | 179 | **高い一覧の上限を通常の一覧の1.5倍にする**（#4241） | 通常の一覧はmd未満17.5rem・md以上28remを維持し、高い一覧は26.25rem・42remとする。画面の高さによる縮小をせず、原本プレビューと、章節の表示・編集・本文テキスト・構造化要素・Chunkは同じ共通上限を使う。短い内容は伸ばさず、長い内容は内部でスクロールする | 利用者が指定した2種類の高さと倍率を共通の仕様にする |
 | 180 | **文書の書き出しを抽出エクスポートにまとめる**（#4243） | 抽出結果（Markdown / HTML / JSON）とChunk / Citation（JSON）を同じ一覧に並べ、含む内容の説明・コピー・ダウンロードをそろえる。Chunkのタブの書き出し操作は除去する | JSONの対象を区別し、書き出しの場所を1か所にする |
+| 181 | **Noto Sans HK を削除し、本文は JP → SC → TC → Roboto → Google Sans Code、等幅は Google Sans Code を優先する**（#4368） | HK の依存・読み込み・書体指定を削除し、`zh-HK` の内容は TC の字形で描く。ID・ログ・SQL の `font-mono` は Google Sans Code を先頭に維持する | 利用者が指定した書体順を3製品で統一し、等幅表示の整列を保つ |
 
 確認カードの質問見出しは、青い外枠を表示しない。読み上げのための自動フォーカスと操作部品のキーボードフォーカス表示は維持する（#3118）。
 

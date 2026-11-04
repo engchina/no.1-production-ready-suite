@@ -8,18 +8,18 @@
  *   合成の日本語の字を各太さの本文（`--font-sans`）と等幅（`code`）で描き、Chromium が実際に使った書体を CDP で返す
  *   （可変書体の書体の名前は太さによらず既定の instance の名前。例: `Noto Sans JP Thin`）。`japaneseInkByWeight` は各太さで
  *   描いた字の墨の量を返す（太さごとに別の字形なら、太いほど多い。近い太さの face で代わりに描くと同じ量になる）
- * - `CJK_FALLBACK_SAMPLES`: Noto Sans JP に無く、Noto Sans SC・TC・HK のそれぞれだけにある合成の字。SC・TC・HK は
+ * - `CJK_FALLBACK_SAMPLES`: Noto Sans JP に無く、Noto Sans SC・TC のそれぞれだけにある合成の字。SC・TC は
  *   可変書体（`@fontsource-variable`）で、CSS の書体名（`family`）は `Noto Sans SC Variable` など、Chromium が描画に
  *   使った書体の名前（`renderedFamily`）は `Noto Sans SC` で始まる（#3328）
- * - `loadCjkFallbackFonts`: Noto Sans SC / TC / HK の各太さを、合成の字で `document.fonts.load` する
+ * - `loadCjkFallbackFonts`: Noto Sans SC / TC の各太さを、合成の字で `document.fonts.load` する
  * - `renderedCjkFallbackFonts`: 合成の字を本文の書体（`--font-sans`）と等幅（`code`）で描き、Chromium が実際に使った
- *   書体の名前を CDP（`CSS.getPlatformFontsForNode`）で返す。JP が先頭のまま、JP に無い字だけが SC → TC → HK で補われるか
- * - SC / TC / HK の `@font-face` は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305。
+ *   書体の名前を CDP（`CSS.getPlatformFontsForNode`）で返す。JP が先頭のまま、JP に無い字だけが SC → TC で補われるか
+ * - SC / TC の `@font-face` は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305。
  *   `loadStylesAfterFirstRender`）。`recordFirstRenderFontFaces`（`page.goto` の前）が最初の描画の時点の `@font-face` の
  *   書体を記録し、`firstRenderFontFaces` で読む。`initialStylesheetFontFaces` は index.html が読む（preload を含む）CSS の
  *   `@font-face` の書体、`waitForCjkFallbackFaces` は後から読む face が登録されるまで待つ
  *
- * - `renderedLangFonts`: 内容の言語（`lang`）ごとに、共通の漢字が JP / SC / TC / HK のどれで描かれるか（#3335）。
+ * - `renderedLangFonts`: 内容の言語（`lang`）ごとに、共通の漢字が JP / SC / TC のどれで描かれるか（#3335）。
  *   `renderedFontsForSelector` は画面の部品（回答など）の文字を描いた書体
  *
  * 製品の spec は相対パスで import し（RAG・Agent `../../../platform/packages/ui/e2e/font-checks`、NL2SQL
@@ -38,24 +38,23 @@ export const UI_FONT_WEIGHTS = [400, 500, 600, 700] as const;
 export const JAPANESE_FONT = { family: "Noto Sans JP Variable", renderedFamily: "Noto Sans JP", text: "表示の確認ひらがなカタカナ" } as const;
 
 /**
- * 本文の書体（`--font-sans`）の計算値の先頭。日本語の字形を優先し、JP に無い字だけを SC → TC → HK で補う。
+ * 本文の書体（`--font-sans`）の計算値の先頭。日本語の字形を優先し、JP に無い字だけを SC → TC で補う。
  * Web の書体の直後に、寸法を合わせた代わりの書体（`Noto Sans JP Fallback`。端末の書体の local()。#3335）を置く。
  */
 export const FONT_SANS_PREFIX =
-  '"Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto,';
+  '"Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", Roboto, "Google Sans Code", "Google Sans Code Fallback",';
 
 /** 等幅書体（`--font-mono`）の計算値。Google Sans Code に無い字は本文と同じ順で補う。 */
 export const FONT_MONO_FAMILY =
-  '"Google Sans Code", "Google Sans Code Fallback", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable", Roboto, monospace';
+  '"Google Sans Code", "Google Sans Code Fallback", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", Roboto, monospace';
 
 /**
  * Noto Sans JP に無い合成の字（業務の内容ではなく、字の収録の違いだけで選ぶ）。
- * 「们」は SC だけ、「亷」は TC と HK（TC が先）、「乪」は HK だけに収録される（JP には無い）。
+ * 「们」は SC だけ、「亷」は TC に収録される（JP には無い）。
  */
 export const CJK_FALLBACK_SAMPLES = [
   { id: "simplified", family: "Noto Sans SC Variable", renderedFamily: "Noto Sans SC", text: "们" },
   { id: "traditional", family: "Noto Sans TC Variable", renderedFamily: "Noto Sans TC", text: "亷" },
-  { id: "hongkong", family: "Noto Sans HK Variable", renderedFamily: "Noto Sans HK", text: "乪" },
 ] as const;
 
 export type CjkFallbackSampleId = (typeof CJK_FALLBACK_SAMPLES)[number]["id"];
@@ -167,7 +166,7 @@ export async function initialStylesheetFontFaces(page: EvaluatePage): Promise<{ 
   }, undefined);
 }
 
-/** 最初の描画の後に読む Noto Sans SC / TC / HK の face が `document.fonts` に登録されるまで待つ。 */
+/** 最初の描画の後に読む Noto Sans SC / TC の face が `document.fonts` に登録されるまで待つ。 */
 export async function waitForCjkFallbackFaces(page: EvaluatePage, timeoutMs = 10_000): Promise<void> {
   await page.evaluate(
     async ({ families, timeoutMs }) => {
@@ -186,7 +185,7 @@ export async function waitForCjkFallbackFaces(page: EvaluatePage, timeoutMs = 10
 }
 
 /**
- * Noto Sans SC / TC / HK の各太さを、それぞれの合成の字で読み込む。unicode-range の分割のうち、その字の分だけを取る。
+ * Noto Sans SC / TC の各太さを、それぞれの合成の字で読み込む。unicode-range の分割のうち、その字の分だけを取る。
  * face は最初の描画の後に登録されるので、先に `waitForCjkFallbackFaces` で待つ。
  */
 export async function loadCjkFallbackFonts(page: EvaluatePage, weights: readonly number[]): Promise<LoadedFont[]> {
@@ -232,18 +231,18 @@ export async function renderedFontsForSelector(cdp: CdpSessionLike, selector: st
 }
 
 /**
- * 内容の言語（`lang`）ごとの漢字の書体（#3335）。JP・SC・TC・HK のすべてにある共通の漢字（合成の例）を、
+ * 内容の言語（`lang`）ごとの漢字の書体（#3335）。JP・SC・TC のすべてにある共通の漢字（合成の例）を、
  * `lang` を付けた要素の本文（`span`）と等幅（`code`）で描き、`renderedFamily` で始まる書体だけで描かれるかを確かめる。
- * 画面の文言（`<html lang="ja">`）と `lang="ja"` の内容は JP、`zh-Hans` は SC、`zh-Hant` は TC、`zh-HK` は HK。
+ * 画面の文言（`<html lang="ja">`）と `lang="ja"` の内容は JP、`zh-Hans` は SC、`zh-Hant` は TC、`zh-HK` は TC。
  */
 export const LANG_FONT_SAMPLES = [
   { lang: "ja", family: "Noto Sans JP Variable", renderedFamily: "Noto Sans JP" },
   { lang: "zh-Hans", family: "Noto Sans SC Variable", renderedFamily: "Noto Sans SC" },
   { lang: "zh-Hant", family: "Noto Sans TC Variable", renderedFamily: "Noto Sans TC" },
-  { lang: "zh-HK", family: "Noto Sans HK Variable", renderedFamily: "Noto Sans HK" },
+  { lang: "zh-HK", family: "Noto Sans TC Variable", renderedFamily: "Noto Sans TC" },
 ] as const;
 
-/** 4 書体のすべてにある共通の漢字（同じ符号で地域ごとに字形が違う例。業務の内容ではない）。 */
+/** 3 書体のすべてにある共通の漢字（同じ符号で地域ごとに字形が違う例。業務の内容ではない）。 */
 export const SHARED_HAN_SAMPLE = "骨直角";
 
 export type RenderedLangFonts = Record<`${(typeof LANG_FONT_SAMPLES)[number]["lang"]}-${"sans" | "mono"}`, string[]>;

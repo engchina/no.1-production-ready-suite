@@ -21,7 +21,7 @@ import {
   renderedLangFonts,
 } from "../../../platform/packages/ui/e2e/font-checks";
 
-/** 共有 tokens の太さ（400 / 500 / 600 / 700）。JP・SC・TC・HK は可変書体で、どの太さも本物の字形で出す。 */
+/** 共有 tokens の太さ（400 / 500 / 600 / 700）。JP・SC・TC は可変書体で、どの太さも本物の字形で出す。 */
 const WEIGHTS = UI_FONT_WEIGHTS;
 
 /** 等幅書体（--font-mono）が Google Sans Code で、code / .font-mono に効くことを確かめる。 */
@@ -100,8 +100,8 @@ test("Noto Sans JP と等幅書体 Google Sans Code を自前ホストで適用�
 });
 
 /**
- * Noto Sans JP に無い字だけを、自前ホストの Noto Sans SC → TC → HK で補う（#3292）。字は合成の例。
- * SC・TC・HK の @font-face は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305）。
+ * Noto Sans JP に無い字だけを、自前ホストの Noto Sans SC → TC で補う（#3292）。字は合成の例。
+ * SC・TC の @font-face は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305）。
  */
 async function checkDeferredCjkFallbackFonts(page: Page) {
   const external: string[] = [];
@@ -110,7 +110,7 @@ async function checkDeferredCjkFallbackFonts(page: Page) {
   });
   await recordFirstRenderFontFaces(page);
   await page.goto("/");
-  // 最初の描画の時点の CSS（dev の <style> を含む）と、index.html が読む CSS（build の成果物）に SC・TC・HK は無い。
+  // 最初の描画の時点の CSS（dev の <style> を含む）と、index.html が読む CSS（build の成果物）に SC・TC は無い。
   const firstRender = await firstRenderFontFaces(page);
   expect(firstRender.families).toContain(JAPANESE_FONT.family);
   const initial = await initialStylesheetFontFaces(page);
@@ -142,7 +142,7 @@ async function checkDeferredCjkFallbackFonts(page: Page) {
   expect(external, "外部フォント CDN への通信").toEqual([]);
 }
 
-test("JP に無い簡体字・繁体字・香港の字を、最初の描画の後に読む Noto Sans SC・TC・HK で補う", async ({ page }) => {
+test("JP に無い簡体字・繁体字・香港の字を、最初の描画の後に読む Noto Sans SC・TC で補う", async ({ page }) => {
   await checkDeferredCjkFallbackFonts(page);
 });
 
@@ -165,7 +165,7 @@ async function checkLangFonts(page: Page) {
 }
 
 // 利用者の内容は lang を付けた要素で、言語の字形の書体を先頭にする（#3335）。画面の文言（html の ja）は JP のまま。
-test("内容の言語（lang）で共通の漢字を JP・SC・TC・HK の字形で描き分ける", async ({ page }) => {
+test("内容の言語（lang）で共通の漢字を JP・SC・TC の字形で描き分ける", async ({ page }) => {
   await checkLangFonts(page);
 });
 
@@ -174,7 +174,7 @@ test("内容の言語（lang）で共通の漢字を JP・SC・TC・HK の字形
 test.describe("375px", () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
-  test("JP に無い字を最初の描画の後に読む Noto Sans SC・TC・HK で補う（375px）", async ({ page }) => {
+  test("JP に無い字を最初の描画の後に読む Noto Sans SC・TC で補う（375px）", async ({ page }) => {
     await checkDeferredCjkFallbackFonts(page);
   });
 
@@ -182,7 +182,7 @@ test.describe("375px", () => {
     await checkSelfHostedFonts(page);
   });
 
-  test("内容の言語（lang）で共通の漢字を JP・SC・TC・HK の字形で描き分ける（375px）", async ({ page }) => {
+  test("内容の言語（lang）で共通の漢字を JP・SC・TC の字形で描き分ける（375px）", async ({ page }) => {
     await checkLangFonts(page);
   });
 });

@@ -2,12 +2,12 @@
    FONT STACKS（書体の並び）と、寸法を合わせた代わりの書体（#3292・#3328・#3335）
 
    本文の書体（--font-sans）は、日本語の字形を優先して Noto Sans JP を先頭に置き、JP に無い簡体字・繁体字・
-   香港の字だけを Noto Sans SC → Noto Sans TC → Noto Sans HK で補う（3 製品とも @fontsource で自前ホストする）。
-   4 書体とも可変書体（@fontsource-variable。書体名に Variable が付く）で、@font-face を slice の数に抑える（#3333）。
+   香港の字だけを Noto Sans SC → Noto Sans TC で補う（3 製品とも @fontsource で自前ホストする）。
+   3 書体とも可変書体（@fontsource-variable。書体名に Variable が付く）で、@font-face を slice の数に抑える（#3333）。
 
    内容の言語（lang）で漢字の字形を切り替える（Han unification。#3335）:
      画面の文言は <html lang="ja"> のまま JP の字形。利用者の内容（回答・根拠の抜粋・質問・文書のプレビュー）は
-     共有の部品が lang を付け（`resolveContentLang`）、lang="zh-Hans" は SC、"zh-Hant" は TC、"zh-HK" は HK を
+     共有の部品が lang を付け（`resolveContentLang`）、lang="zh-Hans" は SC、"zh-Hant" は TC、"zh-HK" は TC を
      先頭にした並びにする。--font-han（漢字の書体の並び）だけを言語で替え、--font-sans / --font-mono は lang を
      付けた要素で組み直す（var() は宣言した要素で解決されるため）。
 
@@ -26,10 +26,10 @@
    ───────────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* 漢字（とかな）の書体の並び。既定（日本語）は JP → 代わりの書体 → SC → TC → HK。 */
-  --font-han: "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable";
+  /* 漢字（とかな）の書体の並び。既定（日本語）は JP → 代わりの書体 → SC → TC。 */
+  --font-han: "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable";
   /* 漢字の並びの後ろ（ラテン文字の予備と総称の書体）。 */
-  --font-sans-tail: "Roboto", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-sans-tail: "Roboto", "Google Sans Code", "Google Sans Code Fallback", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-sans: var(--font-han), var(--font-sans-tail);
   /* 等幅書体。3製品とも Google Sans Code を @fontsource で自前ホストする（#75）。無い字は本文と同じ漢字の並びで補う。 */
   --font-mono: "Google Sans Code", "Google Sans Code Fallback", var(--font-han), "Roboto", monospace;
@@ -38,16 +38,16 @@
 /* 内容の言語ごとの漢字の並び。lang を付けた要素だけに当て（:where で詳細度 0）、子は継承する。
    入れ子の lang="ja" は JP に戻す。 */
 :where([lang]:lang(ja)) {
-  --font-han: "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable", "Noto Sans HK Variable";
+  --font-han: "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable", "Noto Sans TC Variable";
 }
 :where([lang]:lang(zh-Hans)) {
-  --font-han: "Noto Sans SC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans TC Variable", "Noto Sans HK Variable";
+  --font-han: "Noto Sans SC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans TC Variable";
 }
 :where([lang]:lang(zh-Hant)) {
-  --font-han: "Noto Sans TC Variable", "Noto Sans HK Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable";
+  --font-han: "Noto Sans TC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable";
 }
 :where([lang]:lang(zh-HK)) {
-  --font-han: "Noto Sans HK Variable", "Noto Sans TC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable";
+  --font-han: "Noto Sans TC Variable", "Noto Sans JP Variable", "Noto Sans JP Fallback", "Noto Sans SC Variable";
 }
 :where([lang]) {
   --font-sans: var(--font-han), var(--font-sans-tail);
