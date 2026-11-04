@@ -5477,6 +5477,7 @@ export interface RunSummary {
   elapsed_ms: number | null;
   error_stage: string | null;
   model_id: string | null;
+  models?: string[];
   conversation_id: string | null;
   message_id: string | null;
   created_at: string;
