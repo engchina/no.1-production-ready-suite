@@ -165,7 +165,7 @@ def canonical_answer_parts(
         texts.append(text)
         part_sources.append(indexes if kind != "answer" else [])
         part_applications.append(app_indexes)
-    chosen = list(dict.fromkeys(index for index in summary_indexes if 0 <= index < len(parts)))
+    chosen = list(dict.fromkeys(index for index in summary_indexes if 0 <= index < len(parts) and parts[index]["result_kind"] != "gap"))
     raw.update(
         items=items,
         applications=applications,

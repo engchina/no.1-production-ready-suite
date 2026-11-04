@@ -824,6 +824,15 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
                 and "変更後に確認を実行します。" not in prompt
             ):
                 data = result.model_dump(exclude_unset=True)
+                if getattr(schema, "_uses_typed_answer_parts", False):
+                    data["answer_parts"].append(
+                        {
+                            "request_id": "Q1",
+                            "requirement": "追加の合成要求",
+                            "answer": {"kind": "gap", "text": "確認の根拠がありません。"},
+                        }
+                    )
+                    return schema.model_validate(data)
                 data["items"].append(
                     {
                         "kind": "gap",

@@ -18,6 +18,7 @@ from app.rag.answer_engine import AnswerEngine, AnswerOutcome, build_engine_sett
 from app.rag.answer_validation import AnswerValidation
 from app.schemas.search import SearchRequest
 from tests.audit_fixtures import is_audit_schema, legacy_audit_result
+from tests.generation_fixtures import generation_result
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _fake_llm
 
 
@@ -243,7 +244,9 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
                 text: uid
                 for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)
             }
-            return schema.model_validate(
+            return generation_result(
+                schema,
+                prompt,
                 {
                     "summary": "",
                     "confidence": "high",
@@ -269,7 +272,7 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
                         }
                         for index, operation in enumerate(operations[:generations])
                     ],
-                }
+                },
             )
         if is_audit_schema(schema):
             audits += 1

@@ -136,6 +136,8 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
             )
         result = _fake_llm(system, prompt, config, schema, **options)
         if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
+            if getattr(schema, "_uses_typed_answer_parts", False):
+                return result  # 共通桩が同じ送達IDに対応する要求計画も返す。
             # 実際に送った単位 ID の所属から、同次の要求計画を返す。
             data = result.model_dump()
             catalog = grounded.generation_unit_catalog(

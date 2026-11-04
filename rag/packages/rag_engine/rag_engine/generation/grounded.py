@@ -4793,8 +4793,11 @@ class Round:
     @property
     def problems(self) -> int:
         """問題の数: 印の付いた・矛盾で外した説明、原文のまま示した記載、公開しなかった指摘（#2738。印の数で数える）。"""
-        return sum(1 for d in self.dropped if not d.get("ignored") and not d.get("kept")) + sum(
-            1 for entry in self.checked if entry.quote_only or entry.removed or entry.state
+        return (
+            sum(1 for d in self.dropped if not d.get("ignored") and not d.get("kept"))
+            + sum(1 for entry in self.checked if entry.quote_only or entry.removed or entry.state)
+            # 自由文をapplicationsへ移しても、従来の内部番号・年の形式是正を改善として数える。
+            + sum(bool(entry.internal_label_issues or entry.date_value_issues) for entry in self.applications)
         )
 
     @property
@@ -4880,6 +4883,16 @@ class Round:
                     }
                     for e in self.checked
                     if e.date_value_issues and not e.removed
+                ),
+                *(
+                    {
+                        "text": entry.application.result,
+                        "method": entry.application.reasoning,
+                        "absent_years": entry.date_value_issues,
+                        "hint": "質問と選択した原文に無い年を追加せず、質問の年と原文の期間を保ってください。",
+                    }
+                    for entry in self.applications
+                    if entry.date_value_issues
                 ),
                 *(
                     [
@@ -7831,6 +7844,7 @@ NO_IMPROVEMENT_REASONS = frozenset(
 REGENERATION_FEEDBACK_KEYS = (
     "button_name_issues",
     "internal_label_issues",
+    "date_value_issues",
     "citation_range_issues",
     "dropped_items",
     "downgraded_items",

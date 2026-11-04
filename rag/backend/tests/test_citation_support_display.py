@@ -7,6 +7,7 @@ import pytest
 
 from app.rag.answer_engine import _outcome_from_result, _SearchState
 from app.rag.citation_status import citation_support_display
+from tests.generation_fixtures import generation_result
 from tests.test_answer_use import _chunk, _EngineResult
 
 
@@ -115,7 +116,9 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
 
     def generate(*args: Any, **kwargs: Any) -> Any:
         calls.append(args[3])
-        return args[3].model_validate(
+        return generation_result(
+            args[3],
+            args[1],
             {
                 "items": [
                     {
@@ -128,7 +131,7 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
                 ],
                 "summary": "",
                 "confidence": "low",
-            }
+            },
         )
 
     actual = grounded.run_round(
@@ -142,7 +145,8 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
         parse_images=lambda *args, **kwargs: pytest.fail("画像の呼出しは不要"),
         audit_mode="none",
     )
-    entry = next(row for row in actual.checked if row.item.text == claim)
+    entry = actual.checked[0]
+    assert actual.applications[0].application.result == claim
     assert len(calls) == 1 and actual.review_execution == "not_run"
     assert entry.quote_match == "exact" and entry.citation_resolution["authenticity"] == "verified"
     assert not entry.marks
@@ -153,7 +157,9 @@ def test_actual_none_generation_keeps_opposite_claims_unverified_for_display(cla
     result = _EngineResult(
         [{"chunk_id": "c", "is_model_used": True, "answer_use": grounded.answer_use(entry)}]
     )
-    result.answer_text = grounded.render_answer("", actual.checked).text
+    result.answer_text = grounded.render_answer(
+        "", actual.checked, applications=actual.applications
+    ).text
     result.generation_trace = {"rounds": [{**actual.trace(), "accepted": True}]}
     state = _SearchState()
     state.chunks = {"c": _chunk("c")}

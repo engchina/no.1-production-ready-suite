@@ -15,7 +15,7 @@ from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerQuestionResult, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.models.llm import GroundedItem
+from rag_engine.models.llm import GroundedApplication
 
 from app.rag.answer_engine import _outcome_from_result, _SearchState
 from app.rag.evaluation import EvaluationRunner
@@ -34,7 +34,7 @@ def _case() -> EvaluationCase:
 def _implementation_validation_error() -> ValidationError:
     """説明の字数の上限を超えた型の検証の例外（#4091 の実装の誤りと同じ形）。"""
     with pytest.raises(ValidationError) as raised:
-        GroundedItem(kind="rule", text="合" * 601)
+        GroundedApplication(reasoning="合" * 601, result="合成の結果")
     return raised.value
 
 
@@ -116,7 +116,7 @@ async def test_validation_error_from_the_final_generation_is_a_fallback_not_a_ca
     answer = _engine_failure(_implementation_validation_error(), monkeypatch)
     assert answer["generation_failure"]["error"] == "ValidationError"
     assert answer["generation_failure"]["stage"] == "answer.generate"
-    assert answer["generation_failure"]["model"] == "GroundedItem"
+    assert answer["generation_failure"]["model"] == "GroundedApplication"
 
     metrics, result = await _result(_Pipeline(answer=answer))
 
@@ -126,7 +126,7 @@ async def test_validation_error_from_the_final_generation_is_a_fallback_not_a_ca
     assert "case_error" not in result.failure_reasons
     assert metrics.error_count == 0
     assert metrics.failure_reason_counts["answer_generation_fallback"] == 1
-    assert result.diagnostics.answer["generation_failure"]["model"] == "GroundedItem"
+    assert result.diagnostics.answer["generation_failure"]["model"] == "GroundedApplication"
 
 
 async def test_a_plan_failure_is_counted_as_the_same_fallback(monkeypatch: MonkeyPatch) -> None:
@@ -169,7 +169,7 @@ async def test_an_internal_error_that_reaches_the_evaluation_is_not_a_success() 
 async def test_a_validation_error_that_reaches_the_evaluation_stays_a_case_error() -> None:
     """#4104: 回答エンジンの外へ抜けた検証の例外は、case_error のまま区別できる。"""
     with pytest.raises(ValidationError) as raised:
-        GroundedItem(kind="rule", text="合" * 601)
+        GroundedApplication(reasoning="合" * 601, result="合成の結果")
     metrics, result = await _result(_Pipeline(error=raised.value))
 
     assert result.status == "error"

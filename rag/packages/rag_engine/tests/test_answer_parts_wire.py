@@ -83,7 +83,7 @@ def test_invalid_declared_derived_or_free_direct_fact_cannot_parse(change):
 def test_gap_and_summary_have_no_fabricated_source():
     raw, schema, catalog = case()
     raw["answer_parts"] = [{"request_id": "Q1", "requirement": "不足の値", "answer": {"kind": "gap", "text": "値が必要です。"}}]
-    raw["summary_part_indexes"] = []
+    raw["summary_part_indexes"] = [0]
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert draft.items[0].kind == "gap"
     assert not draft.items[0].citations

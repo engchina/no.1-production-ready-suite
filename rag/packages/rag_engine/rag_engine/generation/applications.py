@@ -54,6 +54,7 @@ class CheckedApplication:
     source: str = "draft"
     warnings: list[str] = field(default_factory=list)
     internal_label_issues: list[str] = field(default_factory=list)
+    date_value_issues: list[str] = field(default_factory=list)
 
     def reject(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -142,6 +143,7 @@ def check_applications(
             entry.reject(f"内部の番号『{label.group(0)}』を利用者向けの文に書いている")
         sources = [text for rule in entry.entries for text in span_texts(rule.span)]
         if years := absent_years(f"{application.reasoning}\n{application.result}", question, sources):
+            entry.date_value_issues = years
             entry.warn(f"質問と規則の原文に無い年: {'、'.join(years)}")
         checked.append(entry)
     return checked
