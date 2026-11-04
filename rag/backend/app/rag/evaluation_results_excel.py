@@ -34,6 +34,7 @@ METRICS = (
     ("requirement_coverage", "requirement_coverage", "回答の網羅性"),
     ("claim_support_rate", "claim_support_rate", "根拠への忠実性"),
     ("response_decision_accuracy", "response_decision_accuracy", "回答・確認・保留の判断の正しさ"),
+    ("evidence_coverage", "evidence_coverage", "根拠の網羅率（参考）"),
 )
 DECISIONS = {"answer": "回答", "clarify": "確認", "hold": "保留"}
 # 画面（`evaluation.outcome.*`・`evaluation.failureReason.*`）と同じ文言。無い値は値のまま出す。

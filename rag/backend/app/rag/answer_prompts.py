@@ -276,6 +276,7 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ("coverage", "rag_engine.evaluation.answer_eval:COVERAGE_PROMPT"),
             ("claim", "rag_engine.evaluation.answer_eval:CLAIM_PROMPT"),
             ("correctness", "rag_engine.evaluation.answer_eval:CORRECTNESS_PROMPT"),
+            ("evidenceCoverage", "rag_engine.evaluation.answer_eval:EVIDENCE_COVERAGE_PROMPT"),
         ),
     ),
 )

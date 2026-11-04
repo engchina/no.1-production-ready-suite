@@ -84,7 +84,7 @@ def test_export_keeps_full_inputs_scores_unassessed_and_comparison() -> None:
     assert sheet["I2"].value == 0.5
     assert sheet["I2"].number_format == "0.0%"
     assert sheet["J2"].value == "未評価"
-    assert sheet["P2"].value == "trace-a"
+    assert sheet["Q2"].value == "trace-a"
     assert sheet.freeze_panes == "B2"
     assert book["概要"]["C1"].value == "比較対象: プロファイル B"
 
