@@ -373,10 +373,7 @@ variable "adb_is_mtls_connection_required" {
   default     = true
 }
 
-# アプリ用の DB ユーザーの名前とパスワード（adb_app_user_enabled のとき。フォームでは ADB の新規 / 既存の入力の後の
-# 「アプリ用の DB ユーザー」の group）。ADMIN のパスワードは新規なら adb_password、既存なら existing_adb_admin_password。
-variable "adb_app_user_name" {
-  description = "Application database user (schema) name. Every product connects with it and creates its tables in this schema."
+# アプリ用の DB ユーザーの名前とパスワード（adb_app_user_enabled のとき。フォームでは「アプリ用の DB ユーザーを使う」の直下の group）。
   type        = string
   default     = "ADB_APP_USER"
 
