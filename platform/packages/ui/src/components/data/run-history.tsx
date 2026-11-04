@@ -460,6 +460,8 @@ export interface RunHistoryItem {
   statusLabel?: string;
   /** 種類（RAG の「チャット / RAG 検索」、NL2SQL の「チャット / SQL 生成」、Agent の「チャット / API / 自動実行」）。 */
   kind?: string | null;
+  /** 実行時に記録したモデル。現在の設定から補わない。 */
+  models?: readonly string[];
   /** 実行者（#1954）。`isSelf` は「自分」と出す。 */
   executor?: { name: string; isSelf?: boolean } | null;
   /** 開始日時（ISO 8601）。 */
@@ -482,6 +484,7 @@ export interface RunHistoryLabels {
     title: string;
     status: string;
     kind: string;
+    models: string;
     executor: string;
     startedAt: string;
     duration: string;
@@ -492,6 +495,8 @@ export interface RunHistoryLabels {
   self: string;
   /** 記録が無い値。 */
   notRecorded: string;
+  /** モデルの名前が記録されていない実行の文言。 */
+  modelNotRecorded: string;
   /** 題名のリンクの読み上げ名（見える文字を含める。WCAG 2.5.3）。 */
   openDetail: (title: string) => string;
   /** 行の操作のメニューの読み上げ名。 */
@@ -505,14 +510,16 @@ export const DEFAULT_RUN_HISTORY_LABELS: RunHistoryLabels = {
     title: "質問",
     status: "状態",
     kind: "種類",
+    models: "モデル",
     executor: "実行者",
     startedAt: "開始日時",
     duration: "所要時間",
-    usage: "token / 費用",
+    usage: "トークン数",
     actions: "操作",
   },
   self: "自分",
   notRecorded: "—",
+  modelNotRecorded: "未記録",
   openDetail: (title) => `${title}（詳細を開く）`,
   rowActions: (title) => `${title}の操作`,
   status: DEFAULT_RUN_STATUS_LABELS,
@@ -543,6 +550,8 @@ export interface RunHistoryTableProps<T> {
   onOpen: (row: T) => void;
   /** 「種類」の列を出す（既定 true。種類が 1 つしかない一覧は false）。 */
   showKind?: boolean;
+  /** 記録済みモデルの列を出す。狭い画面では質問の下に表示する。 */
+  showModels?: boolean;
   /** 「実行者」の列を出す（他の人の実行が見える利用者のとき。#1954）。 */
   showExecutor?: boolean;
   /** 「token / 費用」の列を出す（利用量を記録している製品）。 */
@@ -574,7 +583,7 @@ const WIDE_ONLY = "hidden @4xl:table-cell";
  * 実行履歴の表（#1955）。
  *
  * ```text
- * | 質問（リンク・2 行）/ 対象 | 状態 | 種類 | 実行者 | 開始日時 | 所要時間 | (token / 費用) | (製品の列) | 操作 |
+ * | 質問（リンク・2 行）/ 対象 | 状態 | 種類 | (モデル | トークン数) | 実行者 | 開始日時 | 所要時間 | (製品の列) | 操作 |
  * ```
  *
  * - 列の順は 3 製品で同じ（run-history.md「一覧」）。先頭の題名は `RowTitleButton`（`href` 付きのリンク）で、
@@ -590,6 +599,7 @@ export function RunHistoryTable<T>({
   toItem,
   onOpen,
   showKind = true,
+  showModels = false,
   showExecutor = false,
   showUsage = false,
   extraColumns = [],
@@ -633,13 +643,14 @@ export function RunHistoryTable<T>({
               data-run-history-compact-meta=""
             >
               <RunStatusBadge status={item.status} label={item.statusLabel} labels={labels.status} />
-              <span className="min-w-0 tnum">
+              <span className="min-w-0 break-words [overflow-wrap:anywhere] tnum">
                 {joinMeta([
                   <time key="startedAt" dateTime={item.startedAt}>
                     {formatDateTime(item.startedAt)}
                   </time>,
                   formatRunDuration(item.durationMs, labels.notRecorded),
                   showKind ? item.kind : null,
+                  showModels ? `${labels.columns.models}：${item.models?.length ? item.models.join("、") : labels.modelNotRecorded}` : null,
                   showExecutor && item.executor ? executorText(item) : null,
                 ])}
               </span>
@@ -666,6 +677,18 @@ export function RunHistoryTable<T>({
       className: cn(WIDE_ONLY, "whitespace-nowrap text-fg"),
       headerClassName: WIDE_ONLY,
       render: (row) => toItem(row).kind || labels.notRecorded,
+    });
+  }
+  if (showModels) {
+    columns.push({
+      key: "models",
+      header: labels.columns.models,
+      className: cn(WIDE_ONLY, "min-w-[10rem] max-w-[18rem] break-words text-fg [overflow-wrap:anywhere]"),
+      headerClassName: WIDE_ONLY,
+      render: (row) => {
+        const models = toItem(row).models;
+        return models?.length ? <span className="grid gap-1">{models.map((model, index) => <span key={`${index}-${model}`} className="line-clamp-2" title={model}>{model}</span>)}</span> : labels.modelNotRecorded;
+      },
     });
   }
   if (showExecutor) {
@@ -711,7 +734,7 @@ export function RunHistoryTable<T>({
         if (usage.tokens == null && !usage.cost) return <span data-run-usage-note="">{usage.note}</span>;
         return (
           <span className="grid justify-items-end">
-            <span>{formatRunTokens(usage.tokens, labels.notRecorded)}</span>
+            <span>{usage.tokens == null || !Number.isFinite(usage.tokens) ? labels.notRecorded : formatPaginationNumber(usage.tokens)}</span>
             {usage.note ? (
               <span className="text-xs" data-run-usage-note="">
                 {usage.note}
@@ -722,6 +745,12 @@ export function RunHistoryTable<T>({
         );
       },
     });
+  }
+  if (showModels && showUsage) {
+    const usageIndex = columns.findIndex((column) => column.key === "usage");
+    const [usageColumn] = columns.splice(usageIndex, 1);
+    const modelIndex = columns.findIndex((column) => column.key === "models");
+    columns.splice(modelIndex + 1, 0, usageColumn);
   }
   for (const column of extraColumns) {
     columns.push({

@@ -1046,6 +1046,7 @@ class RunSummary(BaseModel):
     finished_at: datetime | None = None
     duration_ms: int | None = None
     total_tokens: int | None = None
+    models: list[str] = Field(default_factory=list)
     # 見ている利用者から見た事実（一覧の応答で付ける。#1954）。`RunViewer` と同じ意味。
     executed_by_me: bool = True
     executor_display_name: str = ""
@@ -1102,6 +1103,7 @@ def run_summary(run: RunState) -> RunSummary:
             else None
         ),
         total_tokens=run.usage.total_tokens if run.usage is not None else None,
+        models=[run.usage.model] if run.usage is not None and run.usage.model else [],
     )
 
 

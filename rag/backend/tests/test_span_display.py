@@ -57,7 +57,9 @@ def test_search_readiness_step_is_not_known() -> None:
     assert answer_step_display_name("検索の準備確認") == "検索の準備確認"
 
 
-@pytest.mark.parametrize("status", ["complete", "skipped", "エラーで中断"])
+@pytest.mark.parametrize(
+    "status", ["complete", "completed", "done", "ok", "skipped", "failed", "エラーで中断"]
+)
 def test_plain_status_is_not_a_result_note(status: str) -> None:
     assert answer_step_params({"name": "合成の工程", "status": status, "llm_calls": 1}) == {
         "name": "合成の工程",

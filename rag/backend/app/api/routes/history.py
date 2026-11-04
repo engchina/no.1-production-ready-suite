@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -55,6 +56,7 @@ _INTERNAL_FIELDS = {
     "conversation_owner_hash",
     "usage_total_tokens",
     "usage_measurement",
+    "usage_models",
 }
 
 
@@ -63,6 +65,20 @@ def _summary_fields(row: dict[str, Any], names: dict[str, str]) -> dict[str, Any
     context = current_audit_request_context()
     user_uuid = row.get("user_uuid")
     fields = {key: value for key, value in row.items() if key not in _INTERNAL_FIELDS}
+    models = row.get("usage_models")
+    if isinstance(models, str):
+        try:
+            models = json.loads(models)
+        except json.JSONDecodeError:
+            models = None
+    recorded = (
+        [value for value in models if isinstance(value, str) and value]
+        if isinstance(models, list)
+        else []
+    )
+    fields["models"] = list(dict.fromkeys(recorded)) or (
+        [row["model_id"]] if row.get("model_id") else []
+    )
     fields["answer_generated"] = bool(row.get("answer_generated"))
     fields["validation_execution"] = row.get("validation_execution")
     if fields["validation_execution"] is None and fields.get("verification") is not None:
@@ -149,6 +165,8 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
     }
     # 詳細は利用量の全体を読むので、一覧の 2 つの値もそこから決める（概要と食い違わせない）。
     detail["total_tokens"], detail["usage_measurement"] = run_usage_summary_fields(detail["usage"])
+    if detail["usage"] is not None and detail["usage"].models:
+        detail["models"] = detail["usage"].models
     if detail["answer_generated"]:
         # 回答・引用・診断は回答の記録が正本（保持期間で消えていれば出さない）。
         record = await oracle.get_answer_record(run_id)

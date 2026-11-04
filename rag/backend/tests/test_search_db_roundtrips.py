@@ -19,6 +19,7 @@ from rag_engine.generation import step_details
 from rag_engine.generation.answer_records import _stored_chunk_answer_record
 from rag_engine.resources.tracing import bind_trace_observer
 from rag_engine.retrieval.search_stages import (
+    CANDIDATE_DIVERSITY_STAGE,
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
     ENTITY_EXPANSION_STAGE,
@@ -969,7 +970,11 @@ async def test_injected_search_reports_db_search_stages_and_channels(
     # 参照先・実体・関係情報もここでは広げない。
     started = [entry[2] for entry in observed if entry[0] == "start"]
     assert sorted(started[:2]) == sorted([VECTOR_SEARCH_STAGE, TEXT_SEARCH_STAGE])
-    assert started[2:] == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE]
+    assert started[2:] == [
+        "検索結果の統合（RRF）",
+        CANDIDATE_DIVERSITY_STAGE,
+        CONTEXT_SIBLINGS_STAGE,
+    ]
     assert sorted(entry[2] for entry in observed if entry[0] == "end") == sorted(started)
     assert {entry[1] for entry in observed} == {"stage"}
 
@@ -1070,6 +1075,7 @@ async def test_injected_search_reports_stages_after_db_search(
 
     expected = [
         "検索結果の統合（RRF）",
+        CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
         REFERENCE_EXPANSION_STAGE,
         ENTITY_EXPANSION_STAGE,
@@ -1116,8 +1122,8 @@ async def test_search_stages_are_skipped_when_there_is_nothing_to_do() -> None:
         await engine._search(request, state, retrieval_queries=["検索文 1"], candidate_limit=4)
 
     # 候補の chunk は chunk_set を持たず(文書の背景を読まない)、足した根拠も無い。
-    assert first == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE]
-    assert observed == ["検索結果の統合（RRF）", CONTEXT_SIBLINGS_STAGE]
+    assert first == ["検索結果の統合（RRF）", CANDIDATE_DIVERSITY_STAGE, CONTEXT_SIBLINGS_STAGE]
+    assert observed == ["検索結果の統合（RRF）", CANDIDATE_DIVERSITY_STAGE, CONTEXT_SIBLINGS_STAGE]
 
 
 async def test_original_anchors_stage_only_for_derived_candidates(
@@ -1283,7 +1289,8 @@ async def test_raw_search_list_failure_keeps_other_list_weight(
     assert keyword.status == "empty"
 
 
-def test_rrf_detail_record_uses_shared_safe_display_contract() -> None:
+@pytest.mark.parametrize("native", [False, True])
+def test_rrf_detail_record_uses_shared_safe_display_contract(native: bool) -> None:
     import json
 
     from pr_backend_core.chat_progress import ChatProgressStepDetails
@@ -1297,8 +1304,23 @@ def test_rrf_detail_record_uses_shared_safe_display_contract() -> None:
 
     weights = RrfWeights()
     sources = source_weights(["q"], weights)
-    result = fuse_rankings([RankedList("q", "vector", ("synthetic-id",))], sources, weights, k=60)
-    model = ChatProgressStepDetails.model_validate(fusion_details(result, weights, sources, 60))
+    ranking = RankedList(
+        "q",
+        "hybrid" if native else "vector",
+        ("synthetic-id",),
+        native_scores=(0.016,) if native else (),
+        sources=("原質問",),
+    )
+    result = fuse_rankings([ranking], sources, weights, k=60)
+    details = fusion_details(result, weights, sources, 60)
+    model = ChatProgressStepDetails.model_validate(details)
+    if native:
+        from pathlib import Path
+
+        fixture = (
+            Path(__file__).resolve().parents[2] / "frontend/e2e/fixtures/native-only-rrf-trace.json"
+        )
+        assert details == json.loads(fixture.read_text(encoding="utf-8"))
     assert (
         json.loads(model.code[0].text)["contributions"][0]["fused_score"]
         == result.scores["synthetic-id"]

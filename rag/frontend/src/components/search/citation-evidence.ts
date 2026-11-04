@@ -20,15 +20,6 @@ export const EVIDENCE_LABELS = evidenceLabels();
 export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
   const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
   const tags: EvidenceTag[] = [];
-  const support = chunk.metadata.evidence_claim_support;
-  if (citationModelUsed(chunk) === true && support != null && typeof support === "object" && !Array.isArray(support)) {
-    const observation = support as Record<string, unknown>;
-    if (observation.status !== "supported") {
-      if (observation.policy === "diagnostic_only") tags.push({ id: "claim-support-policy", value: t("search.citation.supportDiagnostic"), tone: "neutral" });
-      const key = observation.execution === "not_run" ? "search.citation.supportNotRun" : observation.execution === "error" ? "search.citation.supportError" : ["timeout", "timed_out"].includes(String(observation.execution)) ? "search.citation.supportTimeout" : observation.execution === "completed" ? "search.citation.supportCompletedUnknown" : observation.execution === "partial" ? "search.citation.supportPartial" : "search.citation.supportUnknown";
-      tags.push({ id: "claim-support", value: t(key), tone: "neutral" });
-    }
-  }
   if (recipeSlot) tags.push({ id: "recipe", value: t("documents.recipes.name", { slot: recipeSlot }), icon: Layers });
   if (chunk.category_name) tags.push({ id: "category", value: chunk.category_name, tone: "info" });
   // チャットの添付の根拠（#2517）。文書の表に無いので、原文のプレビューは開かない。
@@ -48,7 +39,7 @@ export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
     routeBadges: citationRetrievalBadges(chunk),
     score: chunk.score,
     rerankScore: chunk.rerank_score,
-    chips: citationMetadataChips(chunk.metadata).map((chip) => ({
+    chips: citationMetadataChips(chunk.metadata).filter((chip) => chip.id !== "context_header_enabled").map((chip) => ({
       id: chip.id,
       label: chipLabel(chip),
       value: chipValue(chip),
@@ -70,13 +61,9 @@ function citationRetrievalBadges(chunk: RetrievedChunk): string[] {
   const keywordRank = integerMetadataValue(chunk.metadata.keyword_rank);
   const rerankRank = integerMetadataValue(chunk.metadata.rerank_rank);
   const badges: string[] = [];
-  if (vectorRank != null && keywordRank != null) badges.push(t("search.citation.badge.both"));
   if (vectorRank != null) badges.push(t("search.citation.badge.vector", { rank: vectorRank }));
   if (keywordRank != null) badges.push(t("search.citation.badge.keyword", { rank: keywordRank }));
   if (rerankRank != null) badges.push(t("search.citation.badge.rerank", { rank: rerankRank }));
-  if (chunk.metadata.context_role === "evidence" || badges.length > 0) {
-    badges.push(EVIDENCE_LABELS.evidenceBadge);
-  }
   return badges;
 }
 function chipValue(chip: CitationMetadataChip): string {

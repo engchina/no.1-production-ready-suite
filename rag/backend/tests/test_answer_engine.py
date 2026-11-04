@@ -3192,6 +3192,10 @@ async def _answer_with_coverage(
     import rag_engine.adapters.oci as engine_oci
 
     def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
+        if issubclass(schema, QueryRoutingOutput) and schema is not QueryRoutingOutput:
+            return schema(
+                strategy="hyde", reason="合成の選択理由", queries=["請求書の再発行方法は？"]
+            )
         if schema is QueryExpansionOutput:
             return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)
@@ -3232,7 +3236,7 @@ async def _answer_with_coverage(
 async def test_request_coverage_re_retrieves_only_missing_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """根拠の無い要求だけを仮説文で 1 回検索し、その根拠を回答の材料と診断に足す(#1279・#4114)。"""
+    """根拠の無い要求だけを自動選択の検索文で探し、その根拠を回答の材料と診断に足す(#1279・#4114)。"""
     oracle = CoverageOracle()
 
     outcome = await _answer_with_coverage(
@@ -3400,7 +3404,7 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
         output_dir=tmp_path,
     )
 
-    assert default.request_coverage_retrieval_enabled is True
+    assert default.request_coverage_retrieval_enabled is False
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
     assert default.request_coverage_deadline_seconds == 10.0
     assert custom.request_coverage_retrieval_enabled is True
@@ -3435,7 +3439,7 @@ def test_search_answer_profile_ignores_legacy_request_coverage() -> None:
     )
 
     assert settings.rag_request_coverage_retrieval_enabled is False
-    assert Settings().rag_request_coverage_retrieval_enabled is True
+    assert Settings().rag_request_coverage_retrieval_enabled is False
 
 
 async def test_guide_preview_is_recorded_without_extra_model_calls(
@@ -3686,3 +3690,104 @@ def test_context_parent_uses_only_stored_parent_text_and_artifact_scope() -> Non
     parents = _stored_parents([_stored_child(c, rrf_score=0.9) for c in versions], state)
     assert len(parents) == 2
     assert parents[0].chunk_uid != parents[1].chunk_uid
+
+
+@pytest.mark.parametrize(
+    "depth,max_extra,new_document,present_document,expected,status,reason",
+    [
+        (0, 3, 2, 1, [], "skipped", "depth_disabled"),
+        (5, 0, 2, 1, [], "skipped", "extra_limit_zero"),
+        (5, 3, 0, 0, [], "skipped", "document_limits_zero"),
+        (1, 3, 2, 1, [], "completed", "no_match"),
+        (5, 2, 2, 1, ["a2", "b1"], "completed", "added"),
+        (5, 5, 2, 1, ["a2", "b1", "b2"], "completed", "added"),
+    ],
+)
+def test_diversity_stage_records_configuration_and_actual_result(
+    monkeypatch: pytest.MonkeyPatch,
+    depth: int,
+    max_extra: int,
+    new_document: int,
+    present_document: int,
+    expected: list[str],
+    status: str,
+    reason: str,
+) -> None:
+    from contextlib import contextmanager
+
+    from rag_engine.retrieval.search_stages import CANDIDATE_DIVERSITY_STAGE
+
+    import app.rag.answer_engine as module
+
+    record: dict[str, Any] = {}
+
+    class Observation:
+        def request(self, value: Any, **kwargs: Any) -> None:
+            record["request"] = value() if callable(value) else value
+
+        def response(self, value: Any) -> None:
+            record["response"] = value() if callable(value) else value
+
+        def display(self, **kwargs: Any) -> None:
+            record.update(kwargs)
+
+    @contextmanager
+    def observe(operation: str, name: str) -> Any:
+        assert (operation, name) == ("stage", CANDIDATE_DIVERSITY_STAGE)
+        yield Observation()
+
+    monkeypatch.setattr(module, "observe_call", observe)
+    actual = module._observed_diverse_candidates(
+        ["a1", "a2", "b1", "b2", "b3"],
+        1,
+        lambda value: value[0],
+        depth=depth,
+        max_extra=max_extra,
+        new_document=new_document,
+        present_document=present_document,
+    )
+    assert actual == expected
+    assert record["params"]["status"] == status
+    assert record["params"]["reason_code"] == reason
+    assert record["response"]["added_ids"] == expected
+    assert record["response"]["added_count"] == len(expected)
+    assert record["response"]["after_count"] == 1 + len(expected)
+    assert record["response"]["max_extra"] == max_extra
+    assert record["response"]["limit_reached"] is (reason == "added" and max_extra == 2)
+    if not expected:
+        assert record["response"]["added_document_count"] == 0
+
+
+def test_diversity_without_capture_does_not_build_trace_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import contextmanager
+
+    import app.rag.answer_engine as module
+
+    class Observation:
+        capture_enabled = False
+
+        def display(self, **kwargs: Any) -> None:
+            assert "details" not in kwargs
+            assert kwargs["params"]["added_count"] == 1
+
+    @contextmanager
+    def observe(operation: str, name: str) -> Any:
+        yield Observation()
+
+    monkeypatch.setattr(module, "observe_call", observe)
+    monkeypatch.setattr(module, "_diverse_candidates", lambda *args, **kwargs: ["a2"])
+
+    def document_of(value: str) -> str:
+        return value[0]
+
+    assert module._observed_diverse_candidates(
+        ["a1", "a2"],
+        1,
+        document_of,
+        depth=2,
+        max_extra=1,
+        new_document=1,
+        present_document=1,
+    ) == ["a2"]

@@ -220,14 +220,19 @@ def test_main_answer_flow_wires_recovery_and_respects_disabled_setting(monkeypat
         assert result.generation_trace["request_coverage"]["re_retrieval"]["skipped"] == "disabled"
 
 
-def _hypothesis_expansion(monkeypatch, generated):
+def _hypothesis_expansion(monkeypatch, generated, effective_strategy="hyde"):
     """質問の拡張の代役。呼ばれた (文, 方式) を記録する。"""
     asked = []
 
     def fake(question, strategy, config, **kwargs):
         asked.append((question, strategy))
+        assert a.SIMPLE_RETRIEVAL_STRATEGY not in kwargs["allowed_strategies"]
+        kwargs["on_model_call"]()
         return QueryExpansionResult(
-            original_question=question, selected_strategy=strategy, effective_strategy=strategy, generated_queries=tuple(generated)
+            original_question=question,
+            selected_strategy=strategy,
+            effective_strategy=effective_strategy,
+            generated_queries=tuple(generated),
         )
 
     monkeypatch.setattr(a, "build_query_expansion", fake)
@@ -254,7 +259,8 @@ def _cover_same_query(ctx, **kwargs):
     )
 
 
-def test_same_query_gap_searches_with_hypotheses_once_and_keeps_original_as_rerank_question(monkeypatch):
+@pytest.mark.parametrize("effective_strategy", ["hyde", "rag_fusion", "query_decomposition", "step_back_prompting"])
+def test_same_query_gap_auto_selects_expansion_and_keeps_original_as_rerank_question(monkeypatch, effective_strategy):
     hypotheses = ("対象Aの設定は設定画面の保存ボタンで変更する。", "設定の変更は項目を選んで保存する。")
     received = {}
 
@@ -264,17 +270,19 @@ def test_same_query_gap_searches_with_hypotheses_once_and_keeps_original_as_rera
 
     monkeypatch.setattr(a, "build_adb_hybrid_answer_context", fake_build)
     monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [text])
-    asked = _hypothesis_expansion(monkeypatch, hypotheses)
+    asked = _hypothesis_expansion(monkeypatch, hypotheses, effective_strategy)
 
     merged, trace = _cover_same_query(context(parent("old", OLD_TEXT)))
 
-    assert asked == [(QUESTION, a.HYDE_STRATEGY)]
+    assert asked == [(QUESTION, a.AUTO_ROUTING_STRATEGY)]
     assert trace["llm_calls"] == 1
     # rerank の基準は要求の原文。仮説文は検索と比較にだけ使い、全文検索と検索文の選別には掛けない。
     assert received["question"] == QUESTION
     assert received["retrieval_queries"] == hypotheses
-    assert received["vector_only_queries"] == hypotheses
-    assert received["trusted_queries"] == hypotheses
+    expected_vector = hypotheses if effective_strategy == "hyde" else ()
+    assert received["vector_only_queries"] == expected_vector
+    assert received["trusted_queries"] == expected_vector
+    assert trace["query_expansions"][0]["effective_strategy"] == effective_strategy
     # 仮説文は根拠に入らない。足すのは検索で取れた原文だけ。
     assert {r.text for r in merged.records} == {OLD_TEXT, NEW_TEXT}
     assert not any(query in r.text for query in hypotheses for r in merged.records)
@@ -334,6 +342,7 @@ def test_search_widens_past_read_parents_but_adds_within_the_chunk_budget(monkey
 
 
 def test_same_focused_query_is_not_repeated_across_phases(monkeypatch):
+    _hypothesis_expansion(monkeypatch, ())
     calls = _patch_search(monkeypatch, {})
     monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [term for term in ("対象A", "設定", "変更") if term in text])
     usage = CoverageUsage()
@@ -672,3 +681,123 @@ def test_two_stage_switch_matrix_uses_existing_generation_and_optional_grading(m
     assert len(searches) == 1 + int(coverage_enabled)
     assert len(model.prompts) == 1 + int(coverage_enabled)
     assert result.answer
+
+
+def _routing_candidates():
+    return tuple(value for value, _ in a.QUERY_STRATEGIES if value in a._ROUTABLE_QUERY_STRATEGIES and value != a.SIMPLE_RETRIEVAL_STRATEGY)
+
+
+@pytest.mark.parametrize("strategy", ["rag_fusion", "query_decomposition", "step_back_prompting", "hyde"])
+def test_recovery_routing_schema_prompt_and_actual_selection_use_the_same_candidates(monkeypatch, strategy):
+    from pydantic import ValidationError
+
+    from rag_engine.models.llm import QueryRoutingOutput
+
+    observed = []
+    calls = []
+
+    def parse(system, prompt, config, schema, **kwargs):
+        choices = set(schema.model_json_schema()["properties"]["strategy"]["enum"])
+        assert choices == set(_routing_candidates())
+        assert a.SIMPLE_RETRIEVAL_STRATEGY not in choices
+        assert '"strategy": "simple_retrieval"' not in prompt
+        assert "原質問のみ" not in prompt and "単純検索" not in prompt
+        with pytest.raises(ValidationError):
+            schema(strategy=a.SIMPLE_RETRIEVAL_STRATEGY, reason="合成の理由")
+        observed.append(schema)
+        return schema(strategy=strategy, reason="合成の選択理由", queries=["対象A 設定 変更 手順"])
+
+    monkeypatch.setattr(a, "parse_text_response", parse)
+    expansion = a.build_query_expansion(
+        QUESTION, a.AUTO_ROUTING_STRATEGY, settings(), allowed_strategies=_routing_candidates(), on_model_call=lambda: calls.append(1)
+    )
+    assert expansion.effective_strategy == strategy
+    assert expansion.generated_queries == ("対象A 設定 変更 手順",)
+    assert expansion.routing_reason == "合成の選択理由"
+    assert len(calls) == len(observed) == 1
+    # 通常の初回ルーティングの契約は変更しない。
+    assert QueryRoutingOutput(strategy=a.SIMPLE_RETRIEVAL_STRATEGY, reason="合成の理由").strategy == a.SIMPLE_RETRIEVAL_STRATEGY
+
+
+@pytest.mark.parametrize("strategy", ["simple_retrieval", "unknown"])
+def test_recovery_rejects_a_candidate_even_when_the_provider_bypasses_the_schema(monkeypatch, strategy):
+    from pydantic import ValidationError
+
+    from rag_engine.models.llm import QueryRoutingOutput
+
+    monkeypatch.setattr(
+        a, "parse_text_response", lambda *args, **kwargs: QueryRoutingOutput.model_construct(strategy=strategy, reason="合成")
+    )
+    with pytest.raises(ValidationError):
+        a.build_query_expansion(QUESTION, a.AUTO_ROUTING_STRATEGY, settings(), allowed_strategies=_routing_candidates())
+
+
+@pytest.mark.parametrize("allowed", [(), ("unknown",)])
+def test_invalid_routing_candidates_are_rejected_before_calling_a_model(monkeypatch, allowed):
+    monkeypatch.setattr(a, "parse_text_response", lambda *args, **kwargs: pytest.fail("モデルを呼ばない"))
+    with pytest.raises(ValueError):
+        a.build_query_expansion(QUESTION, a.AUTO_ROUTING_STRATEGY, settings(), allowed_strategies=allowed)
+
+
+@pytest.mark.parametrize("stage", ["route", "expand"])
+def test_failed_recovery_selection_is_recorded_without_search_or_budget_consumption(monkeypatch, stage):
+    from rag_engine.models.llm import QueryRoutingOutput
+
+    def parse(system, prompt, config, schema, **kwargs):
+        if stage == "expand" and issubclass(schema, QueryRoutingOutput):
+            return schema(strategy="rag_fusion", reason="合成の理由", queries=[])
+        raise TimeoutError("合成の失敗")
+
+    monkeypatch.setattr(a, "parse_text_response", parse)
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", lambda *args, **kwargs: pytest.fail("失敗後は検索しない"))
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [text])
+    old = context(parent("old", OLD_TEXT))
+    usage = CoverageUsage()
+    extra = ExtraRetrievalBudget(4)
+    merged, trace = _cover_same_query(old, usage=usage, extra_budget=extra)
+    assert merged is old
+    assert usage.queries == 0 and extra.remaining == 4
+    assert trace["llm_calls"] == (1 if stage == "route" else 2)
+    assert trace["re_retrieval"]["stop_reason"] == "query_expansion_failed"
+    assert trace["re_retrieval"]["queries"][0]["error"] == "TimeoutError"
+    assert trace["query_expansions"][0]["status"] == "failed"
+    assert trace["requests"][0]["retrieval_status"] == "not_executed"
+
+
+def test_recovery_checks_the_deadline_again_after_routing(monkeypatch):
+    now = [0.0]
+
+    def parse(system, prompt, config, schema, **kwargs):
+        now[0] = 11.0
+        return schema(strategy="rag_fusion", reason="合成の理由", queries=["対象A 設定 変更 手順"])
+
+    monkeypatch.setattr(a, "parse_text_response", parse)
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", lambda *args, **kwargs: pytest.fail("期限後は検索しない"))
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [text])
+    old = context(parent("old", OLD_TEXT))
+    merged, trace = _cover_same_query(old, clock=lambda: now[0])
+    assert merged is old
+    assert trace["llm_calls"] == 1
+    assert trace["re_retrieval"]["stop_reason"] == "deadline"
+    assert not trace["re_retrieval"]["queries"]
+
+
+def test_recovery_does_not_change_strategy_when_all_generated_queries_are_duplicates(monkeypatch):
+    from rag_engine.models.llm import QueryRoutingOutput
+
+    calls = []
+
+    def parse(system, prompt, config, schema, **kwargs):
+        calls.append(schema)
+        if issubclass(schema, QueryRoutingOutput):
+            return schema(strategy="query_decomposition", reason="合成の理由", queries=[QUESTION])
+        return schema(queries=[QUESTION])
+
+    monkeypatch.setattr(a, "parse_text_response", parse)
+    monkeypatch.setattr(a, "build_adb_hybrid_answer_context", lambda *args, **kwargs: pytest.fail("同じ文で再検索しない"))
+    monkeypatch.setattr(a, "_coverage_tokenizer", lambda _: lambda text: [text])
+    old = context(parent("old", OLD_TEXT))
+    merged, trace = _cover_same_query(old)
+    assert merged is old and len(calls) == trace["llm_calls"] == 2
+    assert trace["re_retrieval"] == {"applied": False, "skipped": "same_query"}
+    assert trace["query_expansions"][0]["effective_strategy"] == "query_decomposition"

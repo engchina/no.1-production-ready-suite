@@ -1254,7 +1254,12 @@ def test_list_api_returns_the_usage_totals_without_reading_the_stages(
     auth = enable_production_auth(monkeypatch)
     auth.user_with_permissions("viewer", ["menu.history"])
     rows = [
-        _row("run-new", usage_total_tokens=12345, usage_measurement="complete"),
+        _row(
+            "run-new",
+            usage_total_tokens=12345,
+            usage_measurement="complete",
+            usage_models='["model-a", "model-b"]',
+        ),
         _row("run-partial", usage_total_tokens=330, usage_measurement="partial"),
         _row("run-no-llm", usage_total_tokens=0, usage_measurement="complete"),
         # 計測の状態だけがあって合計の無い記録は 0（`RunModelUsage` の既定と同じ）。
@@ -1280,12 +1285,14 @@ def test_list_api_returns_the_usage_totals_without_reading_the_stages(
     ]
     for item in items:
         assert not {"usage_total_tokens", "usage"} & item.keys()
+    assert items[0]["models"] == ["model-a", "model-b"]
     list_sql = pool.connection.calls[0].statement
     assert "JSON_VALUE(r.stages_json, '$.usage.total_tokens'" in list_sql
     assert "JSON_VALUE(r.stages_json, '$.usage.measurement'" in list_sql
     # 処理の段・trace 全体を読まず、利用量2値と照合実行状態だけを取り出す。
     assert "JSON_VALUE(r.stages_json, '$.validation_execution'" in list_sql
-    assert list_sql.count("stages_json") == 3
+    assert "JSON_QUERY(r.stages_json, '$.usage.models'" in list_sql
+    assert list_sql.count("stages_json") == 4
     # ページ（並べ替えと件数の切り出し）は run_id だけで決め、列はページの行だけで読む。
     assert "WITH run_page AS ( SELECT r.run_id FROM rag_run_history r WHERE" in list_sql
     assert "JOIN run_page pg ON pg.run_id = r.run_id" in list_sql
@@ -1359,3 +1366,20 @@ def test_only_completed_validation_can_establish_verification(
     validation: dict[str, object],
 ) -> None:
     assert answer_verification({"answer_validation": validation}) == "unverified"
+
+
+@pytest.mark.parametrize(
+    ("models", "model_id", "expected"),
+    [
+        ('["model-a", "model-b", "model-a"]', "saved-default", ["model-a", "model-b"]),
+        (None, "saved-model", ["saved-model"]),
+        ("[]", None, []),
+        ("invalid-json", None, []),
+    ],
+)
+def test_summary_uses_only_recorded_models(
+    models: object, model_id: str | None, expected: list[str]
+) -> None:
+    result = history_route._summary_fields({"usage_models": models, "model_id": model_id}, {})
+    assert result["models"] == expected
+    assert "usage_models" not in result

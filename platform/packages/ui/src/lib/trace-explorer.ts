@@ -13,7 +13,7 @@ export function traceCategory(step: RunTimelineStep): TraceCategory {
 
 export function traceSearchText(step: RunTimelineStep): string {
   const call = step.details?.call;
-  return [step.id, step.label, step.detail, step.operationName, step.product,
+  return [step.id, step.label, step.detail, step.outcome, step.operationName, step.product,
     ...(step.details?.fields ?? []).flatMap(field => [field.label, field.value]),
     ...(step.details?.lines ?? []), ...(step.details?.code ?? []).map(block => block.text),
     ...[call?.input, call?.output, call?.schema].map(content =>

@@ -43,6 +43,7 @@ class RunSummary(BaseModel):
     elapsed_ms: float | None = None
     error_stage: str | None = None
     model_id: str | None = None
+    models: list[str] = Field(default_factory=list)
     conversation_id: str | None = None
     message_id: str | None = None
     created_at: datetime
