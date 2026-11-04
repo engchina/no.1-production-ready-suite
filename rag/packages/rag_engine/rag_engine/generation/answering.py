@@ -3052,6 +3052,18 @@ def synthesize_grounded_answer(
                 else "",
             ) as step,
         ):
+            step.input(
+                lambda number=number, spans=spans, feedback=feedback: {
+                    "round": number + 1,
+                    "質問": question,
+                    "根拠": [
+                        {"evidence_id": span.get("evidence_id"), "source_id": span.get("source_id"), "label": span.get("label")}
+                        for span in spans
+                    ],
+                    "監査の方式": audit_mode,
+                    "修正の指摘": feedback,
+                }
+            )
             preparing_evidence = False
             failed_batches: list[dict[str, Any]] = []
             try:
@@ -3187,6 +3199,16 @@ def synthesize_grounded_answer(
                     step.result(f"是正の生成に失敗したため、直前に採用した回答を公開します（{error_name}）")
                     # 作り直しの失敗は根拠の不足と区別し、回答全体の警告に残す（#2729）。
                     correction_failure = error_name
+                step.output(
+                    {
+                        "round": number + 1,
+                        "accepted": False,
+                        "error_type": type(exc).__name__,
+                        "deadline_cut": cut,
+                        "fallback_available": best is not None,
+                        "input_budget": input_diagnostic,
+                    }
+                )
                 break
             quote_only = sum(e.quote_only for e in current.checked)
             step.result(
@@ -3210,6 +3232,13 @@ def synthesize_grounded_answer(
                 first=best is None,
                 audited=audit_mode != grounded.AUDIT_MODE_NONE,
                 round_number=number + 1,
+            )
+            step.output(
+                lambda number=number, accepted=accepted, current=current: {
+                    "round": number + 1,
+                    "accepted": accepted,
+                    "result": current.trace(),
+                }
             )
         if accepted:
             best = (current, context, spans, images, mode)
@@ -4587,9 +4616,11 @@ def _legacy_schema_notice(document_count: int) -> str:
 def _record_search_not_ready(classification_filter: ClassificationFilter, reason: str) -> None:
     """検索の前提が無く検索せずに中止したことを、「文書検索」の工程に残す（#3495）。"""
     with _execution_step("文書検索", _SEARCH_PURPOSE) as step:
+        step.input(lambda: {"分類条件": asdict(classification_filter)})
         step.status = "中止"
         _record_search_conditions(step, classification_filter)
         step.result(reason + "質問拡張戦略・回答生成フローは未実行です。")
+        step.output({"executed": False, "reason": reason, "query_expansion_executed": False, "generation_executed": False})
 
 
 def _record_search_conditions(step: _ExecutionStep, classification_filter: ClassificationFilter | None, notice: str = "") -> None:
