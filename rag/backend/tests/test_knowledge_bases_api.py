@@ -10,6 +10,7 @@ import pytest
 from app.api.routes import documents as documents_route
 from app.api.routes import knowledge_bases as knowledge_bases_route
 from app.clients.oracle import KnowledgeBaseNameConflictError
+from app.clients.structure_graph_store import StructureGraphStore
 from app.main import app
 from app.rag import extraction_field_adapter as fields_mod
 from app.rag.extraction_field_adapter import FieldDefinition
@@ -42,7 +43,6 @@ class FakeKnowledgeBaseOracle:
             )
         }
         self.memberships: set[tuple[str, str]] = set()
-        self.subgraphs: dict[str, tuple[list[dict[str, object]], list[dict[str, object]]]] = {}
         self.extraction_fields: dict[str, list[FieldDefinition]] = {}
 
     async def create_knowledge_base(
@@ -135,12 +135,6 @@ class FakeKnowledgeBaseOracle:
     async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
         assert "rag_graph_references" in sql
         return []
-
-    async def fetch_knowledge_base_subgraph(
-        self, knowledge_base_id: str, *, limit: int
-    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-        nodes, edges = self.subgraphs.get(knowledge_base_id, ([], []))
-        return nodes[:limit], edges[:limit]
 
     async def update_knowledge_base(
         self,
@@ -452,33 +446,54 @@ def test_knowledge_base_without_description_still_loads(
     assert updated.json()["data"]["description"] == "旧の就業規則"
 
 
-def test_knowledge_base_graph_endpoint(fake_oracle: FakeKnowledgeBaseOracle) -> None:
-    """文書構造グラフ endpoint が空/データ/404 を返す。"""
-    detail = client.post(
-        "/api/knowledge-bases", json={"name": "社内規程", "description": "説明"}
-    ).json()["data"]
-    kb_id = detail["id"]
+def test_structure_graph_overview_endpoint(
+    fake_oracle: FakeKnowledgeBaseOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """総覧の endpoint が空/データ/404 を返す。"""
+    kb_id = client.post(
+        "/api/knowledge-bases", json={"name": "合成の KB", "description": "説明"}
+    ).json()["data"]["id"]
+    result: dict[str, object] = {"status": "empty", "documents": [], "edges": []}
 
-    empty = client.get(f"/api/knowledge-bases/{kb_id}/graph")
+    async def overview(_store: StructureGraphStore, _kb: str) -> dict[str, object]:
+        return result
+
+    monkeypatch.setattr(StructureGraphStore, "overview", overview)
+    empty = client.get(f"/api/knowledge-bases/{kb_id}/graph/overview")
     assert empty.status_code == 200
     assert empty.json()["data"]["status"] == "empty"
-    assert empty.json()["data"]["nodes"] == []
-
-    fake_oracle.subgraphs[kb_id] = (
-        [
-            {"id": "e1", "name": "就業規則", "type": "concept", "confidence": 0.9},
-            {"id": "e2", "name": "有給休暇", "type": "concept", "confidence": 0.8},
+    result = {
+        "status": "ok",
+        "documents": [
+            {"id": "e1", "document_id": "d1", "chunk_set_id": "s1", "name": "合成A.pdf"},
+            {"id": "e2", "document_id": "d2", "chunk_set_id": "s2", "name": "合成B.pdf"},
         ],
-        [{"id": "r1", "source": "e1", "target": "e2", "type": "relates_to", "confidence": 0.7}],
-    )
-    resp = client.get(f"/api/knowledge-bases/{kb_id}/graph")
-    data = resp.json()["data"]
-    assert data["status"] == "ok"
-    assert [node["name"] for node in data["nodes"]] == ["就業規則", "有給休暇"]
-    assert data["edges"][0]["source"] == "e1"
-    assert data["edges"][0]["target"] == "e2"
+        "edges": [{"id": "e1:e2", "source": "e1", "target": "e2", "count": 3}],
+    }
+    data = client.get(f"/api/knowledge-bases/{kb_id}/graph/overview").json()["data"]
+    assert [item["name"] for item in data["documents"]] == ["合成A.pdf", "合成B.pdf"]
+    assert data["edges"][0]["count"] == 3
+    assert client.get("/api/knowledge-bases/does-not-exist/graph/overview").status_code == 404
 
-    assert client.get("/api/knowledge-bases/does-not-exist/graph").status_code == 404
+
+def test_structure_graph_hidden_document_is_404(
+    fake_oracle: FakeKnowledgeBaseOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """権限の外・KB の外の文書と、木に無い節点は同じ 404 にする。"""
+    kb_id = client.post(
+        "/api/knowledge-bases", json={"name": "合成の KB", "description": "説明"}
+    ).json()["data"]["id"]
+
+    async def hidden(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise KeyError("hidden")
+
+    monkeypatch.setattr(StructureGraphStore, "children", hidden)
+    monkeypatch.setattr(StructureGraphStore, "locate", hidden)
+    monkeypatch.setattr(StructureGraphStore, "assert_document", hidden)
+    base = f"/api/knowledge-bases/{kb_id}/graph/documents/d1"
+    assert client.get(f"{base}/tree?chunk_set_id=s1").status_code == 404
+    assert client.get(f"{base}/locate?chunk_set_id=s1&node={'a' * 64}").status_code == 404
+    assert client.get(f"{base}/references?chunk_set_id=s1").status_code == 404
 
 
 def test_update_and_archive_knowledge_base(fake_oracle: FakeKnowledgeBaseOracle) -> None:

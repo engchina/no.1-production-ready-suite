@@ -7,9 +7,18 @@ import pytest
 
 from app.clients.graph_reference_store import GraphReferenceStore
 from app.clients.oracle import OracleClient
+from app.clients.structure_graph_store import StructureGraphStore
 from app.rag.graph_index import _clean_label, _graph_id, graph_section_node_id
 from app.rag.structure_index import rebuild_document_structure_index
 from tests.test_graph_expansion_oracle import _chunks, _indexed_document
+
+
+async def _reference_pairs(
+    store: StructureGraphStore, kb_id: str, chunk_set_id: str
+) -> list[tuple[str, str]]:
+    """図の参照の、端の節点の組。"""
+    items = (await store.references(kb_id, chunk_set_id))["items"]
+    return [(item["source_chain"][-1], item["target_chain"][-1]) for item in items]
 
 
 @pytest.mark.usefixtures("oracle_db")
@@ -67,7 +76,26 @@ async def test_cross_document_reference_rebuild_and_directional_pages() -> None:
         "has_more": False,
         "direction": "outgoing",
     }
-    assert len(await store.visible_edges(kb.id, [source_node, target_node], limit=25)) == 1
+    graph = StructureGraphStore(client)
+    overview = await graph.overview(kb.id)
+    by_set = {item["chunk_set_id"]: item for item in overview["documents"]}
+    assert [(edge["source"], edge["target"], edge["count"]) for edge in overview["edges"]] == [
+        (by_set[source_set]["id"], by_set[target_set]["id"], 1)
+    ]
+    assert by_set[source_set]["outgoing_count"] == 1
+    assert by_set[target_set]["incoming_count"] == 1
+    assert await _reference_pairs(graph, kb.id, source_set) == [(source_node, target_node)]
+    assert await _reference_pairs(graph, kb.id, target_set) == [(source_node, target_node)]
+    # 100 件の章節の木は段ごとに読め、位置から開くページが分かる。
+    first_page = await graph.children(
+        kb.id, _target_id, target_set, parent_id=None, offset=0, limit=25
+    )
+    assert first_page["total"] == 100 and len(first_page["items"]) == 25
+    assert (await graph.locate(kb.id, _target_id, target_set, target_node))["path"] == [
+        {"id": target_node, "index": 99}
+    ]
+    found = await graph.search(kb.id, "第100条", offset=0, limit=25)
+    assert [item["id"] for item in found["items"]] == [target_node]
     # 別のKBの図・参照元をIDの直接指定で読めない。
     other = await client.create_knowledge_base(name=f"synthetic-other-{uuid4().hex[:8]}")
     with pytest.raises(KeyError):
@@ -105,8 +133,9 @@ async def test_long_section_paths_keep_distinct_nodes_and_references() -> None:
     assert names[second_node] == _clean_label(second)
 
     store = GraphReferenceStore(client)
-    edges = await store.visible_edges(kb.id, [first_node, second_node], limit=25)
-    assert [(edge["source"], edge["target"]) for edge in edges] == [(first_node, second_node)]
+    assert await _reference_pairs(StructureGraphStore(client), kb.id, chunk_set_id) == [
+        (first_node, second_node)
+    ]
     outgoing = await store.page(kb.id, first_node, direction="outgoing", offset=0, limit=25)
     assert [item["target"]["id"] for item in outgoing["items"]] == [second_node]
     incoming = await store.page(kb.id, second_node, direction="incoming", offset=0, limit=25)
@@ -170,8 +199,9 @@ async def test_same_document_reference_over_the_column_limit_does_not_fail_the_b
     first_node = graph_section_node_id(chunk_set_id, kb.id, first)
     second_node = graph_section_node_id(chunk_set_id, kb.id, second)
     store = GraphReferenceStore(client)
-    edges = await store.visible_edges(kb.id, [first_node, second_node], limit=25)
-    assert [(edge["source"], edge["target"]) for edge in edges] == [(first_node, second_node)]
+    assert await _reference_pairs(StructureGraphStore(client), kb.id, chunk_set_id) == [
+        (first_node, second_node)
+    ]
     outgoing = await store.page(kb.id, first_node, direction="outgoing", offset=0, limit=25)
     assert [item["status"] for item in outgoing["items"]] == ["resolved"]
     item = outgoing["items"][0]
@@ -257,8 +287,9 @@ async def test_cross_document_reference_resolves_a_section_over_the_column_limit
     assert [item["status"] for item in page["items"]] == ["resolved"]
     assert page["items"][0]["target"]["id"] == target_node
     assert page["items"][0]["target"]["name"] == _clean_label(wanted)
-    edges = await store.visible_edges(kb.id, [source_node, target_node], limit=25)
-    assert [(edge["source"], edge["target"]) for edge in edges] == [(source_node, target_node)]
+    assert await _reference_pairs(StructureGraphStore(client), kb.id, source_set) == [
+        (source_node, target_node)
+    ]
     incoming = await store.page(kb.id, target_node, direction="incoming", offset=0, limit=25)
     assert [item["source"]["id"] for item in incoming["items"]] == [source_node]
 

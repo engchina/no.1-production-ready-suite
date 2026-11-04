@@ -244,6 +244,10 @@ class GraphReferenceStore:
                     '[[:space:]]+', ' ')),1,512)=:node_path)"""
         if direction == "incoming":
             where += " AND t.document_id IS NOT NULL AND ts.chunk_set_id IS NOT NULL"
+        # 図と一覧に出すのは解決済みと候補が複数の参照だけ。KB の外の参照は表示しない。
+        # 件数がページごとにずれないよう、読み取りで状態を下げる条件も SQL で絞る。
+        where += """ AND (r.resolution_status='ambiguous' OR (r.resolution_status='resolved'
+            AND t.document_id IS NOT NULL AND ts.chunk_set_id IS NOT NULL))"""
         location_binds: dict[str, Any] = {}
         if ":node_path" in where:
             location_binds["node_path"] = path
@@ -322,56 +326,3 @@ class GraphReferenceStore:
             "source": endpoint("source"),
             "target": endpoint("target") if status == "resolved" else None,
         }
-
-    async def visible_edges(
-        self, kb_id: str, node_ids: list[str], *, limit: int
-    ) -> list[dict[str, Any]]:
-        """取得済みノード間だけの参照辺。対象版と両端の権限を毎回検査する。"""
-        from app.clients.oracle import (
-            _oracle_access_predicate_sql,
-            _oracle_in_predicate,
-            _with_tenant_bind,
-        )
-
-        if not node_ids:
-            return []
-        source_sql, source_binds = _oracle_in_predicate("se.entity_id", "refs_source", node_ids)
-        target_sql, target_binds = _oracle_in_predicate("te.entity_id", "refs_target", node_ids)
-        rows = await self.oracle._fetch_all(
-            f"""SELECT MIN(r.reference_id) AS reference_id,se.entity_id AS source_id,
-            te.entity_id AS target_id
-            FROM rag_graph_references r
-            JOIN rag_chunk_sets ss ON ss.chunk_set_id=r.source_chunk_set_id AND ss.is_active=1
-            JOIN rag_chunk_sets ts ON ts.chunk_set_id=r.target_chunk_set_id AND ts.is_active=1
-            JOIN rag_documents s ON s.document_id=r.source_document_id
-            JOIN rag_documents t ON t.document_id=r.target_document_id
-            JOIN rag_graph_entities se ON se.chunk_set_id=ss.chunk_set_id
-                AND se.knowledge_base_id=r.knowledge_base_id
-                AND (se.canonical_name={graph_display_name_sql("r.source_section_path")}
-                    OR (r.source_section_path IS NULL AND se.entity_type='document'))
-            JOIN rag_graph_entities te ON te.chunk_set_id=ts.chunk_set_id
-                AND te.knowledge_base_id=r.knowledge_base_id
-                AND (te.canonical_name={graph_display_name_sql("r.target_section_path")}
-                    OR (r.target_section_path IS NULL AND te.entity_type='document'))
-            WHERE r.knowledge_base_id=:kb AND r.resolution_status='resolved'
-            AND {source_sql} AND {target_sql}
-            AND {_oracle_access_predicate_sql(alias="s")}
-            AND {_oracle_access_predicate_sql(alias="t")}
-            AND EXISTS (SELECT 1 FROM rag_document_knowledge_bases sm
-                WHERE sm.document_id=s.document_id AND sm.knowledge_base_id=:kb)
-            AND EXISTS (SELECT 1 FROM rag_document_knowledge_bases tm
-                WHERE tm.document_id=t.document_id AND tm.knowledge_base_id=:kb)
-            GROUP BY se.entity_id,te.entity_id ORDER BY source_id,target_id
-            FETCH NEXT :take ROWS ONLY""",
-            _with_tenant_bind({"kb": kb_id, "take": limit, **source_binds, **target_binds}),
-        )
-        return [
-            {
-                "id": str(row["reference_id"]),
-                "source": str(row["source_id"]),
-                "target": str(row["target_id"]),
-                "type": "references",
-                "confidence": 1.0,
-            }
-            for row in rows
-        ]

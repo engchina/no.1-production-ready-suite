@@ -15,6 +15,7 @@ import pytest
 
 from app.clients.oracle import OracleClient
 from app.clients.oracle_graph_store import OracleGraphStore
+from app.clients.structure_graph_store import StructureGraphStore
 from app.rag.chunking import Chunk
 from app.rag.graph_expansion import GRAPH_KIND_NAME, GRAPH_KIND_NEIGHBOR, plan_graph_expansion
 from app.rag.graph_index import GraphIndex, build_graph_index
@@ -61,14 +62,14 @@ async def test_subgraph_hides_documents_outside_access_scope() -> None:
         knowledge_base_id=kb.id,
     )
     hidden_name = f"graph-access-hidden-{token_suffix}.pdf"
-    hidden_document, _ = await _indexed_document(
+    hidden_document, hidden_set = await _indexed_document(
         client,
         file_name=hidden_name,
         chunks=_chunks([("hidden-section", 1)]),
         knowledge_base_id=kb.id,
     )
     try:
-        everything, _ = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
+        everything, _ = await _visible_graph(client, kb.id)
         assert any(hidden_name in str(node["name"]) for node in everything)
 
         context = replace(
@@ -76,19 +77,44 @@ async def test_subgraph_hides_documents_outside_access_scope() -> None:
         )
         token = set_audit_request_context(context)
         try:
-            nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
+            nodes, _edges = await _visible_graph(client, kb.id)
+            found = await StructureGraphStore(client).search(kb.id, "section", offset=0, limit=25)
+            with pytest.raises(KeyError):
+                await StructureGraphStore(client).assert_document(
+                    kb.id, hidden_document, hidden_set
+                )
         finally:
             reset_audit_request_context(token)
         names = {str(node["name"]) for node in nodes}
-        assert names
         assert "allowed-section" in names
         assert not any("hidden" in name for name in names)
-        node_ids = {node["id"] for node in nodes}
-        assert edges
-        assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in edges)
+        assert {item["name"] for item in found["items"]} == {"allowed-section"}
     finally:
         await client.delete_document(allowed_document)
         await client.delete_document(hidden_document)
+
+
+async def _visible_graph(
+    client: OracleClient, kb_id: str
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """図の総覧と各文書の全段（画面が開いて読む範囲をまとめて読む）。"""
+    store = StructureGraphStore(client)
+    overview = await store.overview(kb_id)
+    nodes: list[dict[str, object]] = list(overview["documents"])
+    for document in overview["documents"]:
+        parents: list[str | None] = [None]
+        while parents:
+            page = await store.children(
+                kb_id,
+                document["document_id"],
+                document["chunk_set_id"],
+                parent_id=parents.pop(),
+                offset=0,
+                limit=1000,
+            )
+            nodes.extend(page["items"])
+            parents.extend(item["id"] for item in page["items"] if item["child_count"])
+    return nodes, overview["edges"]
 
 
 def _chunks(sections: list[tuple[str, int]]) -> list[Chunk]:
@@ -237,7 +263,7 @@ async def test_subgraph_hides_pending_graph_until_activation() -> None:
         activate=False,
     )
     try:
-        nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
+        nodes, edges = await _visible_graph(client, kb.id)
         assert nodes == []
         assert edges == []
 
@@ -247,11 +273,8 @@ async def test_subgraph_hides_pending_graph_until_activation() -> None:
             chunk_set_id=chunk_set_id,
             expected_base_chunk_set_id=None,
         )
-        nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
-        assert nodes
-        assert edges
-        node_ids = {node["id"] for node in nodes}
-        assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in edges)
+        nodes, _edges = await _visible_graph(client, kb.id)
+        assert {str(node["name"]) for node in nodes} >= {"section-a"}
     finally:
         await client.delete_document(document_id)
 
@@ -288,7 +311,7 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
     await client.set_knowledge_base_structure_index(a.id, False)
     await client.set_knowledge_base_structure_index(b.id, True)
     assert await structure_index_targets(client, doc, default=False) == [b.id]
-    before_a = await client.fetch_knowledge_base_subgraph(a.id, limit=100)
+    before_a = await _visible_graph(client, a.id)
     before = await client._fetch_all(
         "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
     )
@@ -302,12 +325,12 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
     plan = await structure_index_plan(client, b.id)
     assert len(plan) == 1 and plan[0]["status"] == "CURRENT"
     assert plan[0]["quality"] == "COMPLETE"
-    unchanged_graph = await client.fetch_knowledge_base_subgraph(b.id, limit=100)
+    unchanged_graph = await _visible_graph(client, b.id)
     with pytest.raises(ValueError, match="source_changed"):
         await StructureIndexStore(client).publish(
             b.id, doc, source_fingerprint(["old"]), ["old"], {}, "COMPLETE", {}
         )
-    assert await client.fetch_knowledge_base_subgraph(b.id, limit=100) == unchanged_graph
+    assert await _visible_graph(client, b.id) == unchanged_graph
     from app.rag.request_context import current_audit_request_context
 
     async def synthetic_actor() -> object:
@@ -325,8 +348,8 @@ async def test_kb_structure_override_and_rebuild_preserve_shared_document(
     await __import__("asyncio").gather(*service.tasks)
     published = await StructureIndexStore(client).get(b.id)
     assert published and published["items"][0]["status"] == "SUCCEEDED"
-    assert await client.fetch_knowledge_base_subgraph(a.id, limit=100) == before_a
-    assert (await client.fetch_knowledge_base_subgraph(b.id, limit=100))[0]
+    assert await _visible_graph(client, a.id) == before_a
+    assert (await _visible_graph(client, b.id))[0]
     after = await client._fetch_all(
         "SELECT chunk_id,chunk_text,embedding FROM rag_chunks WHERE chunk_set_id=:id", {"id": cs}
     )
@@ -348,37 +371,15 @@ async def test_bounded_structure_graph_keeps_document_parents_and_connections() 
     documents = []
     try:
         for number in range(2):
-            doc = await client.create_document(
+            document_id, _chunk_set = await _indexed_document(
+                client,
                 file_name=f"synthetic-graph-{token}-{number}.txt",
-                object_storage_path=f"local://synthetic-{token}-{number}.txt",
-                content_type="text/plain",
-                knowledge_base_ids=[kb.id],
+                chunks=_chunks([(f"合成節 {number}-{index:03}", 1) for index in range(60)]),
+                knowledge_base_id=kb.id,
             )
-            documents.append(doc.id)
-            chunks = [
-                Chunk(
-                    text="",
-                    index=index,
-                    start_offset=0,
-                    end_offset=0,
-                    metadata={"section_title": f"合成節 {number}-{index:03}"},
-                )
-                for index in range(60)
-            ]
-            graph = build_graph_index(
-                document_id=doc.id,
-                knowledge_base_ids=[kb.id],
-                extraction=StructuredExtraction(),
-                chunks=chunks,
-            )
-            await client.replace_document_graph_index(
-                doc.id, GraphIndex(entities=graph.entities, relationships=graph.relationships)
-            )
-        nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=80)
-        assert len(nodes) == 80 and edges
-        assert any(node["type"] == "document" for node in nodes)
-        ids = {node["id"] for node in nodes}
-        assert all(edge["source"] in ids and edge["target"] in ids for edge in edges)
+            documents.append(document_id)
+        overview = await StructureGraphStore(client).overview(kb.id)
+        assert {item["document_id"] for item in overview["documents"]} == set(documents)
     finally:
         for document_id in documents:
             await client.delete_document(document_id)
