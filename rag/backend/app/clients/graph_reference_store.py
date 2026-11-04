@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
-from collections.abc import Mapping
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.rag.graph_index import _clean_label, graph_display_name_sql
 from app.rag.reference_records import GraphReferenceRecord
-from app.rag.reference_resolution import ReferenceDocument
+from app.rag.reference_resolution import ReferenceDocument, document_title_from_paths
+
+
+def graph_reference_status_counts(records: Iterable[GraphReferenceRecord]) -> dict[str, int]:
+    """参照の状態ごとの件数（構築の結果に出す。KB の外と区別できない未解決の数も見える）。"""
+    return dict(Counter(record.status for record in records))
 
 
 def graph_reference_schema_sql() -> str:
@@ -147,7 +152,7 @@ class GraphReferenceStore:
                 (str(row["document_id"]), str(row.get("chunk_set_id") or ""), str(row["file_name"]))
             ][_catalog_section_path(row)] = None
         return tuple(
-            ReferenceDocument(did, cs or None, name, tuple(paths))
+            ReferenceDocument(did, cs or None, name, tuple(paths), document_title_from_paths(paths))
             for (did, cs, name), paths in grouped.items()
         )
 

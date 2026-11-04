@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import Literal
@@ -14,23 +16,37 @@ from app.rag.cross_references import (
     document_name_rank,
     same_document_title,
     split_section_path,
+    title_heading,
     title_key,
 )
 
 
+def document_title_from_paths(section_paths: Iterable[str]) -> str | None:
+    """文書の題名。見出しの過半の先頭の段で、章・条などの番号が無いもの。無ければ None。"""
+    heads = Counter(parts[0] for path in section_paths if (parts := split_section_path(path)))
+    if not heads:
+        return None
+    head, count = heads.most_common(1)[0]
+    return head if count * 2 > sum(heads.values()) and title_heading(head) else None
+
+
 @dataclass(frozen=True)
 class ReferenceDocument:
-    """権限と明示範囲で絞った一つの成果物。異なる版を混ぜない。"""
+    """権限と明示範囲で絞った一つの成果物。異なる版を混ぜない。
+
+    ``title`` は本文の題名。ファイル名（番号の接頭辞を含むことがある）と別に照合に使う。
+    """
 
     document_id: str
     chunk_set_id: str | None
     name: str
     section_paths: tuple[str, ...]
+    title: str | None = None
 
     # 参照の数だけ全文書の見出しを解析し直さないよう、同じsnapshotの解析結果を使い回す。
     @cached_property
     def name_keys(self) -> tuple[frozenset[str], str]:
-        return document_name_keys(self.name, self.section_paths)
+        return document_name_keys(self.name, (self.title,) if self.title else self.section_paths)
 
     @cached_property
     def section_index(self) -> SectionIndex:
@@ -63,14 +79,18 @@ def resolve_scoped_reference(
     if not source.chunk_set_id:
         return ReferenceResolution("version_unconfirmed")
 
+    stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", source.name)
+    # 略称は取込の参照の解決（``_citing_title``）と同じく、本文の題名を優先して展開する。
     if spec.document_title and (
         expanded := current_grammar().vocabulary.abbreviation_title(
-            spec.document_title, re.sub(r"\.[A-Za-z0-9]{1,5}$", "", source.name)
+            spec.document_title, source.title or stem
         )
     ):
         spec = replace(spec, document_title=expanded)
-    if not spec.document_title or same_document_title(
-        spec.document_title, re.sub(r"\.[A-Za-z0-9]{1,5}$", "", source.name)
+    if (
+        not spec.document_title
+        or same_document_title(spec.document_title, stem)
+        or (source.title and same_document_title(spec.document_title, source.title))
     ):
         candidates = [source]
     else:

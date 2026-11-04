@@ -191,7 +191,10 @@ async def rebuild_document_structure_index(
         raise ValueError("no_chunks")
     if expected_source is not None and source != sorted(expected_source):
         raise ValueError("source_changed")
-    from app.clients.graph_reference_store import GraphReferenceStore
+    from app.clients.graph_reference_store import (
+        GraphReferenceStore,
+        graph_reference_status_counts,
+    )
     from app.rag.request_context import current_audit_request_context
 
     # 同じjobの文書ごとにKB全体の目録を読み直さない。権限変更時は再取得する。
@@ -207,6 +210,7 @@ async def rebuild_document_structure_index(
         "entities": 0,
         "relationships": 0,
         "links": 0,
+        "references": {},
         "quality": "COMPLETE",
     }
     for chunk_set_id, group in groups.items():
@@ -275,6 +279,8 @@ async def rebuild_document_structure_index(
         counts["entities"] += len(graph.entities)
         counts["relationships"] += len(graph.relationships)
         counts["links"] += len(graph.entity_chunk_links)
+        for status, count in graph_reference_status_counts(graph.references).items():
+            counts["references"][status] = counts["references"].get(status, 0) + count
     if not graphs:
         raise ValueError("disabled")
     counts["chunk_sets"] = len(graphs)

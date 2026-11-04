@@ -23,7 +23,11 @@ from app.rag.cross_references import (
     split_section_path,
 )
 from app.rag.reference_records import GraphReferenceRecord, build_reference_records
-from app.rag.reference_resolution import ReferenceDocument, resolve_scoped_reference
+from app.rag.reference_resolution import (
+    ReferenceDocument,
+    document_title_from_paths,
+    resolve_scoped_reference,
+)
 from app.schemas.extraction import StructuredExtraction
 
 # 表示名の上限（rag_graph_entities.canonical_name の列の大きさ）。同一性には使わない。
@@ -183,11 +187,13 @@ def _build_graph_index_for_kb(
             )
 
     # 参照は包含と別に構築する。旧metadataの推測済みパスをそのまま確定辺へ転用しない。
+    section_paths = tuple(_metadata_str(chunk, "section_path") or "" for chunk in chunks)
     reference_source = ReferenceDocument(
         document_id=document_id,
         chunk_set_id=chunk_set_id,
         name=document_name or "",
-        section_paths=tuple(_metadata_str(chunk, "section_path") or "" for chunk in chunks),
+        section_paths=section_paths,
+        title=document_title_from_paths(section_paths),
     )
     entity_by_path = {split_section_path(name): entity for name, entity in entity_by_name.items()}
     for chunk in chunks:

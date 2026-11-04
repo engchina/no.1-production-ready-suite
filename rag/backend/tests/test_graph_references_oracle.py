@@ -330,3 +330,37 @@ async def test_reference_catalog_keeps_string_and_array_paths_over_4000_bytes() 
     assert catalog[string_id] == sorted([f"{parent} > 第1条", "第2条"])
     assert catalog[array_id] == [f"{parent} > 第3条"]
     assert catalog[short_id] == ["第4条"]
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_refresh_resolves_references_after_target_document_is_added() -> None:
+    """起点の後に取り込んだ文書への参照が、解決のやり直しで図に出る（#4310）。"""
+    from app.rag.reference_refresh import refresh_knowledge_base_references
+
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-refresh-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    chunks = _chunks([("第1条", 1)])
+    chunks[0].text = "合成後続規程の第2条を参照する。"
+    source_id, source_set = await _indexed_document(
+        client, file_name="A001_合成の起点.pdf", chunks=chunks, knowledge_base_id=kb.id
+    )
+    await rebuild_document_structure_index(client, kb.id, source_id)
+    store = StructureGraphStore(client)
+    assert (await store.overview(kb.id))["edges"] == []
+
+    target_chunks = _chunks([("合成後続規程 > 第2条", 1), ("合成後続規程 > 第3条", 1)])
+    for chunk in target_chunks:
+        chunk.text = "合成の本文。"
+    _target_id, target_set = await _indexed_document(
+        client, file_name="B002_題名と違う名前.pdf", chunks=target_chunks, knowledge_base_id=kb.id
+    )
+    first = await refresh_knowledge_base_references(client, kb.id)
+    assert first["updated"] == 1
+    overview = await store.overview(kb.id)
+    assert [edge["count"] for edge in overview["edges"]] == [1]
+    assert (await _reference_pairs(store, kb.id, source_set))[0][1] == graph_section_node_id(
+        target_set, kb.id, "合成後続規程 > 第2条"
+    )
+    # 同じ目録なら何も変わらない。
+    assert (await refresh_knowledge_base_references(client, kb.id))["updated"] == 0
