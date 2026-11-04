@@ -1158,6 +1158,7 @@ def build_adb_hybrid_answer_context(
     vector_only_queries: Sequence[str] = (),
     page_ranges: Sequence[Mapping[str, Any]] = (),
     trusted_queries: Sequence[str] = (),
+    catalog_skip_reasons: Mapping[str, str] | None = None,
 ) -> AnswerContext:
     """ADB hybrid search で回答用 context を構築する。
 
@@ -1250,6 +1251,8 @@ def build_adb_hybrid_answer_context(
         ]
         known = {record.chunk_uid for record in active_records}
         active_records.extend(record for record in expansion if record.chunk_uid not in known)
+    else:
+        _record_catalog_skip("画面の選択", (catalog_skip_reasons or {}).get("screen", "configuration_disabled"))
     if getattr(settings, "article_catalog_enabled", False):
         before_catalog = {retrieval_record_id(record) for record in ranked_children}
         ranked_children, expansion = _catalog_article_children(
@@ -1260,6 +1263,8 @@ def build_adb_hybrid_answer_context(
         )
         known = {record.chunk_uid for record in active_records}
         active_records.extend(record for record in expansion if record.chunk_uid not in known)
+    else:
+        _record_catalog_skip("条の選択", (catalog_skip_reasons or {}).get("article", "configuration_disabled"))
     if getattr(settings, "article_catalog_enabled", False):
         ranked_children = [
             record
@@ -4183,6 +4188,7 @@ def _cover_missing_requests(
         return context, trace
 
     # 欠けた要求の検索では、文書の選択（後回し）と画面目録（LLM を呼ぶ）を使わない。
+    catalog_policy = _catalog_skip_policy(settings, "missing_requirement", screen_only=True)
     search_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False)
     # 上位が読取済みの親だけでも新しい親を選べるよう、読取済みの数だけ広げる（足す数は下の select_new_parents の上限のまま）。
     per_query = max(1, min(int(top_k), max(budget.max_chunks, budget.chunks_per_subquestion) + len(context.records)))
@@ -4208,6 +4214,7 @@ def _cover_missing_requests(
             max_records=per_query,
             retrieval_queries=queries,
             rerank_phase="missing_requirement",
+            catalog_skip_reasons=catalog_policy,
             rerank_enabled=rerank_enabled,
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
@@ -4364,6 +4371,7 @@ def _cover_guide_steps(
         )
         return context, trace, tuple((step.step_id, step.title, ()) for step in plan.steps)
 
+    catalog_policy = _catalog_skip_policy(settings, "guide_step")
     search_settings = replace(
         settings,
         document_selection_enabled=False,
@@ -4385,6 +4393,7 @@ def _cover_guide_steps(
             max_records=per_query,
             retrieval_queries=queries,
             rerank_phase="guide_step",
+            catalog_skip_reasons=catalog_policy,
             rerank_enabled=rerank_enabled,
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
@@ -5197,6 +5206,30 @@ _SCREEN_CATALOG_CACHE: dict[tuple[int, int], dict[str, list[str]]] = {}
 _SCREEN_LINK_CACHE: dict[tuple[object, ...], list[tuple[str, str]]] = {}
 
 
+def _catalog_skip_policy(settings: Settings, reason: str, *, screen_only: bool = False) -> dict[str, str]:
+    kinds = ("screen",) if screen_only else ("screen", "article")
+    return {
+        kind: reason
+        if getattr(settings, "screen_linking_enabled" if kind == "screen" else "article_catalog_enabled", False)
+        else "configuration_disabled"
+        for kind in kinds
+    }
+
+
+def _record_catalog_skip(name: str, reason: str) -> None:
+    message = {
+        "configuration_disabled": "設定がオフのため実行しません。",
+        "missing_requirement": "未回答の要求の補助検索では画面目録の選択を行いません。",
+        "guide_step": "参照先の検索では目録の選択を行いません。",
+        "caller_queries": "呼び出し元が検索文を指定したため目録の選択を行いません。",
+        "overflow": "上限外の検索文の補助検索では目録の選択を行いません。",
+    }[reason]
+    with _execution_step(name) as step:
+        step.skip(message)
+        step.input({"選択設定": "disabled", "理由": reason})
+        step.output({"選択状態": "skipped", "理由": reason, "モデルを呼び出した": False})
+
+
 def _linked_screen_children(
     question: str,
     pool: Sequence[Any],
@@ -5238,13 +5271,26 @@ def _linked_screen_children(
                 "画面ごとの最大 Child 数": MAX_CHILDREN_PER_SCREEN,
             }
         )
+        if not catalog:
+            step.skip("検索範囲に画面目録がありません。")
+            step.output(
+                {
+                    "選択状態": "skipped",
+                    "理由": "catalog_empty",
+                    "選択結果の再利用": False,
+                    "選択した画面": [],
+                    "追加候補": [],
+                    "展開用の候補": [],
+                }
+            )
+            return [], [], []
         links = _SCREEN_LINK_CACHE.get(link_key)
         reused_selection = links is not None
         if links is None:
             links = link_screens(question, catalog, parse_text_response, settings)
             if links is None:
                 step.output({"選択状態": "failed", "選択結果の再利用": False, "選択した画面": None, "追加候補": [], "展開用の候補": []})
-                step.status = "画面の選択に失敗"
+                step.fail("画面の選択に失敗したため、既存の候補で続けます。")
                 step.add(f"画面目録（{len(catalog)} 文書）からの画面の選択に失敗したため、画面の根拠を加えずに続けます。")
                 return [], [], []
             if len(_SCREEN_LINK_CACHE) >= 256:
@@ -5255,7 +5301,7 @@ def _linked_screen_children(
                 {"選択状態": "no_match", "選択結果の再利用": reused_selection, "選択した画面": [], "追加候補": [], "展開用の候補": []}
             )
             step.status = "該当なし"
-            step.add(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
+            step.result(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
             return [], [], []
         existing = {r.chunk_uid for r in ranked_children if r.chunk_uid}
         loaded = injected_screen_chunks(links=links, existing=existing, settings=settings)
@@ -5901,11 +5947,11 @@ def _catalog_article_children(
         if not selected:
             if failed or scope_failed:
                 # 選択の失敗を「該当なし」と分ける（#3285）。
-                step.status = "条の選択に失敗"
+                step.fail("条の選択に失敗したため、既存の候補で続けます。")
                 step.add("条の選択に失敗したため、目録の条を加えずに続けます。")
             else:
                 step.status = "該当なし"
-                step.add("目録から根拠になる条を選べませんでした。")
+                step.result("目録から根拠になる条を選べませんでした。")
             return list(ranked_children), []
         loaded = [_stored_chunk_answer_record(chunk) for chunk in load_chunks(articles=selected, settings=settings)]
         # 読み込みは選んだ条の章節の最初の child に印（選んだ順・文書・目録の行）を付けて返す。
@@ -6104,6 +6150,7 @@ def answer_question_result(
     if generate_answer and not complete_evidence:
         raise ValueError("根拠の補いを省く検索（complete_evidence=False）は回答を作らない検索だけに使います。")
     trusted_queries: tuple[str, ...] = ()
+    caller_catalog_policy = _catalog_skip_policy(settings, "caller_queries") if caller_planned else {}
     if caller_planned:
         question_key = _dedupe_query_key(normalized_question)
         trusted_queries = _dedupe_queries(
@@ -6523,6 +6570,7 @@ def answer_question_result(
                         runtime_knowledge=runtime_knowledge,
                         vector_only_queries=expansion.vector_only_queries,
                         trusted_queries=trusted_queries,
+                        catalog_skip_reasons=caller_catalog_policy,
                     )
                     retrieval_step.field("検索文", f"{len(retrieval_queries)} 本")
                     _record_search_conditions(retrieval_step, selected_classification_filter, legacy_notice)
@@ -6573,6 +6621,7 @@ def answer_question_result(
             )
 
         # 超限した検索文は原要求ごとに補い、以後の補查と同じ枠・期限・既検索文を使う。
+        overflow_catalog_policy = _catalog_skip_policy(settings, "overflow")
         overflow_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False, article_catalog_enabled=False)
         overflow_config = normalize_text_search_tokenizer_config(_question_text_search_tokenizer_config(settings))
         overflow_keywords = (
@@ -6591,6 +6640,7 @@ def answer_question_result(
                 neighbor_child_count=chunk_neighbor_count,
                 retrieval_queries=(query,),
                 rerank_phase="missing_requirement",
+                catalog_skip_reasons=overflow_catalog_policy,
                 rerank_enabled=effective_rerank_enabled,
                 retrieval_scope=selected_retrieval_scope,
                 classification_filter=selected_classification_filter,

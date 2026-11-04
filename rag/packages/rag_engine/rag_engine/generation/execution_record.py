@@ -127,6 +127,11 @@ class _ExecutionStep:
         self.status = "skipped"
         self.result(reason)
 
+    def fail(self, reason: str) -> None:
+        """補助処理の失敗後も継続する場合に、工程を成功と区別する。"""
+        self.status = "failed"
+        self.result(reason)
+
     def impact(self, text: str) -> None:
         """この結果が後続の処理をどう変えるか。変えない場合は書かない。"""
         if not text:
@@ -314,7 +319,7 @@ def _execution_step(name: str, purpose: str = ""):
         # 終わった工程の詳細・LLM の回数・結果の説明を、終わったときの通知で渡す（回答の完了を待たない。#2373）。
         _notify_step(
             name,
-            "error" if failed else "skipped" if step.status == "skipped" else "success",
+            "error" if failed or step.status == "failed" else "skipped" if step.status == "skipped" else "success",
             elapsed,
             {"details": step.structured_details(), "llm_calls": llm_calls, **sends, "status": step.status or "complete"},
         )
