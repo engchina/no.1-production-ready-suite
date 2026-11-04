@@ -1,0 +1,98 @@
+{
+  "fields": [
+    {
+      "label": "追加統合",
+      "value": "原質問の検索内で統合済み"
+    },
+    {
+      "label": "目的",
+      "value": "原質問の検索内で統合済みです。追加の検索結果統合は不要です。"
+    },
+    {
+      "label": "引き継いだ検索結果",
+      "value": "重複除去前 1 件 / 重複除去後 1 件 / 正の寄与がある候補 1 件"
+    },
+    {
+      "label": "ベクトル検索と全文検索の比重",
+      "value": "10：1"
+    },
+    {
+      "label": "原質問と追加検索文の比重",
+      "value": "7：3"
+    },
+    {
+      "label": "検索文",
+      "value": "原質問 1 本 / 追加 0 本"
+    },
+    {
+      "label": "順位定数",
+      "value": "60"
+    },
+    {
+      "label": "指標",
+      "value": "原質問の検索から引き継いだ融合スコア（大きい順）。この段で追加の統合は行っていません。確率や回答の信頼度ではありません。"
+    }
+  ],
+  "lines": [
+    "参照した検索一覧 1: q / Oracle 内部融合（WRRF）  / 出所: 原質問 / 重み 1 / 1 件 / 検索時の状態: 完了",
+    "synthetic-id: 一覧 1・引継元の一覧内順位 1 / 引継元の寄与 0.016 / 引き継いだ融合スコア 0.016"
+  ],
+  "code": [
+    {
+      "label": "原質問の検索から引き継いだ融合記録",
+      "language": "json",
+      "text": "{\n  \"fusion_execution\": \"native_only\",\n  \"oracle_internal_fusion\": true,\n  \"method_ratio\": [\n    10,\n    1\n  ],\n  \"source_ratio\": [\n    7,\n    3\n  ],\n  \"rank_constant\": 60,\n  \"expressions\": [\n    {\n      \"query\": \"q\",\n      \"weight\": 1.0,\n      \"original\": true\n    }\n  ],\n  \"lists\": [\n    {\n      \"query\": \"q\",\n      \"channel\": \"hybrid\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"weight\": 1.0,\n      \"count\": 1,\n      \"raw_count\": 1,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"oracle_wrrf\",\n      \"native_scores\": [\n        0.016\n      ]\n    }\n  ],\n  \"contributions\": [\n    {\n      \"chunk_id\": \"synthetic-id\",\n      \"list_index\": 0,\n      \"rank\": 1,\n      \"contribution\": 0.016,\n      \"fused_score\": 0.016\n    }\n  ],\n  \"raw_count\": 1,\n  \"unique_count\": 1,\n  \"candidate_count\": 1\n}"
+    }
+  ],
+  "rrf": {
+    "fusion_execution": "native_only",
+    "oracle_internal_fusion": true,
+    "method_ratio": [
+      10,
+      1
+    ],
+    "source_ratio": [
+      7,
+      3
+    ],
+    "rank_constant": 60,
+    "expressions": [
+      {
+        "query": "q",
+        "weight": 1.0,
+        "original": true
+      }
+    ],
+    "lists": [
+      {
+        "query": "q",
+        "channel": "hybrid",
+        "variant": "",
+        "sources": [
+          "原質問"
+        ],
+        "weight": 1.0,
+        "count": 1,
+        "raw_count": 1,
+        "status": "completed",
+        "error": "",
+        "score_source": "oracle_wrrf",
+        "native_scores": [
+          0.016
+        ]
+      }
+    ],
+    "contributions": [
+      {
+        "chunk_id": "synthetic-id",
+        "list_index": 0,
+        "rank": 1,
+        "contribution": 0.016,
+        "fused_score": 0.016
+      }
+    ],
+    "raw_count": 1,
+    "unique_count": 1,
+    "candidate_count": 1
+  }
+}
