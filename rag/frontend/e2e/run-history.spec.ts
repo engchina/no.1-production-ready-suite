@@ -1,3 +1,4 @@
+import stageOutcomes from "./fixtures/stage-outcomes.json";
 import diversityStages from "./fixtures/diversity-stage-trace.json";
 import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
 import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
@@ -1889,4 +1890,40 @@ test("多様性補充の設定上限と実績を履歴の経過と軌跡で区�
     await inspector.screenshot({path: testInfo.outputPath(`diversity-${stage.key}.png`)});
     await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
   }
+});
+
+
+test("補助工程の省略・0件・失敗・再利用を同じ履歴snapshotから経過と軌跡に表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1, {question: "合成の質問", answer: "合成の回答", search_answer_profile_name: "プロファイル A", citations: []});
+  await mockRuns(page, [row]);
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+    {key: "root", spec: ragSpan.root(), at: [0, 8]},
+    ...stageOutcomes.map((stage, index) => ({key: stage.key, spec: ragSpan.step(stage.name, "root"),
+      at: [index, index + .1] as [number, number], params: stage.params,
+      status: stage.status === "skipped" ? "skipped" as const : stage.status === "failed" ? "failed" as const : "done" as const,
+    })),
+  ])});
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  for (const stage of stageOutcomes) {
+    const step = timeline.locator(`[data-run-timeline-step="${spanStepId(stage.key)}"]`);
+    await expect(step).toHaveAttribute("data-status", stage.status);
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(stage.expected);
+    await inspectTraceStep(page, timeline, spanStepId(stage.key));
+    const inspector = page.locator("[data-trace-inspector]");
+    await expect(inspector).toContainText(stage.expected);
+    if (stage.status === "skipped") await expect(inspector).toContainText("選択処理の実行可否を判断した時間です。");
+    await expectNoPageOverflow(page);
+    await inspector.screenshot({path: testInfo.outputPath(`outcome-${stage.key}.png`)});
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  }
+  await expect(timeline).not.toContainText("LLM 1 回");
+  // 実行判断が存在しない旧記録へ、現在設定を使ったスキップを補わない。
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [{key: "root", spec: ragSpan.root(), at: [0, .1]}])});
+  await page.reload();
+  await expect(page.getByText("記録された段はありません。", {exact: true})).toBeVisible();
+  await expect(page.locator("[data-run-timeline-step]")).toHaveCount(0);
+  await expect(page.getByText("設定がオフのため実行しません。", {exact: true})).toHaveCount(0);
 });

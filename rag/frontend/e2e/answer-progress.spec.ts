@@ -1,3 +1,4 @@
+import stageOutcomes from "./fixtures/stage-outcomes.json";
 import diversityStages from "./fixtures/diversity-stage-trace.json";
 import { inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { expect, type Page, test } from "./fixtures/test";
@@ -1163,4 +1164,35 @@ test("多様性補充の実績と未実行理由を検索の経過と軌跡で�
     await inspector.screenshot({path: testInfo.outputPath(`search-diversity-${stage.key}.png`)});
     await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
   }
+});
+
+
+test("補助工程の実行判断は検索の経過と軌跡で状態・理由・件数を共有する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const recorder = spanProgressRecorder("trace-outcomes");
+  const events = [...recorder.start("root", ragSpan.root()), ...recorder.start("answer", ragSpan.stage("answer"))];
+  for (const stage of stageOutcomes) {
+    events.push(...recorder.start(stage.key, ragSpan.step(stage.name)));
+    events.push(...recorder.finish(stage.key, stage.status === "skipped" ? "skipped" : stage.status === "failed" ? "failed" : "done", {params: stage.params}));
+  }
+  events.push(...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"));
+  const content = "合成の回答です。";
+  await mockSearchPage(page, [[{afterMs: 0, text: sse("run", {trace_id: "trace-outcomes"}) + traceSse(events) + sse("metadata", {trace_id: "trace-outcomes", elapsed_ms: 100, guardrail_warnings: [], diagnostics: {}}) + sse("delta", {text: content}) + sse("done", {answer: content, citations: []})}]]);
+  await enableSearchAnswer(page);
+  await page.getByRole("textbox", {name: "RAG 検索"}).fill("合成の質問");
+  await page.getByRole("button", {name: "検索", exact: true}).click();
+  await expect(page.getByText(content, {exact: true})).toBeVisible();
+  await page.getByTestId("search-run-progress-summary").click();
+  const progress = page.getByTestId("search-run-progress");
+  for (const stage of stageOutcomes) {
+    const step = page.getByTestId(`search-run-progress-step-${spanStepId(stage.key)}`);
+    await expect(step).toHaveAttribute("data-status", stage.status);
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(stage.expected);
+    await inspectTraceStep(page, progress, spanStepId(stage.key));
+    const inspector = page.locator("[data-trace-inspector]");
+    await expect(inspector).toContainText(stage.expected);
+    await expectNoPageOverflow(page);
+    await inspector.screenshot({path: testInfo.outputPath(`search-outcome-${stage.key}.png`)});
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  }
+  await expect(progress).not.toContainText("LLM 1 回");
 });

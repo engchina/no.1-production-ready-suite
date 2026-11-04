@@ -382,6 +382,7 @@ class _SearchState:
     # 同じ起点での計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
     entity_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
     entity_plans: dict[tuple[str, ...], list[Any]] = field(default_factory=dict)
+    entity_attempts: dict[tuple[str, ...], dict[str, object]] = field(default_factory=dict)
     # 関係情報(#2055)で足した chunk の記録(診断に出す。chunk_id → entity・理由)と、同じ起点での
     # 計画(CRAG の各回で同じ起点なら SQL を読み直さない)。
     graph_expansions: dict[str, dict[str, object]] = field(default_factory=dict)
@@ -1939,8 +1940,21 @@ class AnswerEngine:
         promoted = {chunk.chunk_id for chunk in referenced}
         # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
         entity_chunks: list[RetrievedChunk] = []
-        if expand_references and self._settings.rag_entity_expansion_enabled:
-            with _search_stage(ENTITY_EXPANSION_STAGE) as observation:
+        with _search_stage(ENTITY_EXPANSION_STAGE) as observation:
+            skip_reason = (
+                "configuration_disabled"
+                if not self._settings.rag_entity_expansion_enabled
+                else "page_scope"
+                if not expand_references and (page_ranges or context_scope)
+                else "caller_scope"
+                if not expand_references
+                else ""
+            )
+            if skip_reason:
+                _expansion_stage_outcome(observation, reason=skip_reason)
+            else:
+                attempt_key = _expansion_attempt_key(request, anchors[:ENTITY_SEED_ANCHORS])
+                reused = attempt_key in state.entity_plans
                 if observation is not None:
                     observation.request(
                         lambda: {
@@ -1951,6 +1965,12 @@ class AnswerEngine:
                         }
                     )
                 entity_chunks = await self._entity_expansion(request, state, anchors)
+                _expansion_stage_outcome(
+                    observation,
+                    chunks=entity_chunks,
+                    reused=reused,
+                    failed=state.entity_attempts.get(attempt_key, {}).get("status") == "error",
+                )
                 if observation is not None:
                     observation.response(
                         lambda: {
@@ -1964,8 +1984,21 @@ class AnswerEngine:
         # 関係情報(#2055)で、上位の候補と同じ狭い章節・表の chunk と、質問に見出しの語が含まれる
         # 章節の chunk を足す。候補・前後の文脈・参照先・実体の拡張にある chunk は足さない。
         graph_chunks: list[RetrievedChunk] = []
-        if expand_references and self._settings.rag_graph_expansion_enabled:
-            with _search_stage(GRAPH_EXPANSION_STAGE) as observation:
+        with _search_stage(GRAPH_EXPANSION_STAGE) as observation:
+            skip_reason = (
+                "configuration_disabled"
+                if not self._settings.rag_graph_expansion_enabled
+                else "page_scope"
+                if not expand_references and (page_ranges or context_scope)
+                else "caller_scope"
+                if not expand_references
+                else ""
+            )
+            if skip_reason:
+                _expansion_stage_outcome(observation, reason=skip_reason)
+            else:
+                attempt_key = _expansion_attempt_key(request, anchors[:GRAPH_SEED_ANCHORS])
+                reused = attempt_key in state.graph_plans
                 graph_exclude = {
                     *ranked,
                     *(chunk.chunk_id for chunk in siblings),
@@ -1987,6 +2020,12 @@ class AnswerEngine:
                     state,
                     anchors,
                     exclude=graph_exclude,
+                )
+                _expansion_stage_outcome(
+                    observation,
+                    chunks=graph_chunks,
+                    reused=reused,
+                    failed=state.graph_attempts.get(attempt_key, {}).get("status") == "error",
                 )
                 if observation is not None:
                     observation.response(
@@ -2516,13 +2555,10 @@ class AnswerEngine:
             return []
         scope = _expansion_scope(request.filters)
         seeds = list(anchors[:ENTITY_SEED_ANCHORS])
-        key = (
-            request.query,
-            json.dumps(scope, ensure_ascii=False, sort_keys=True),
-            *(chunk.chunk_id for chunk in seeds),
-        )
+        key = _expansion_attempt_key(request, seeds)
         plan = state.entity_plans.get(key)
         if plan is None:
+            state.entity_attempts[key] = {"status": "completed"}
             try:
                 plan = await plan_entity_expansion(
                     self._entity_store_or_default(),
@@ -2535,6 +2571,7 @@ class AnswerEngine:
             except Exception as exc:  # noqa: BLE001 - 実体の拡張は補助。足さずに回答を続ける。
                 logger.warning("entity expansion failed", exc_info=True)
                 state.record_degraded("entity_expansion", exc)
+                state.entity_attempts[key] = {"status": "error", "error_type": type(exc).__name__}
                 plan = []
             state.entity_plans[key] = plan
         added: list[RetrievedChunk] = []
@@ -2577,11 +2614,7 @@ class AnswerEngine:
             return []
         scope = _expansion_scope(request.filters)
         seeds = list(anchors[:GRAPH_SEED_ANCHORS])
-        key = (
-            request.query,
-            json.dumps(scope, ensure_ascii=False, sort_keys=True),
-            *(chunk.chunk_id for chunk in seeds),
-        )
+        key = _expansion_attempt_key(request, seeds)
         plan = state.graph_plans.get(key)
         if plan is None:
             try:
@@ -2599,7 +2632,7 @@ class AnswerEngine:
             except Exception as exc:  # noqa: BLE001 - 関係情報の拡張は補助。足さずに回答を続ける。
                 logger.warning("graph expansion failed", exc_info=True)
                 state.record_degraded("graph_expansion", exc)
-                state.graph_attempts[key] = {"status": "error"}
+                state.graph_attempts[key] = {"status": "error", "error_type": type(exc).__name__}
                 plan = []
             state.graph_plans[key] = plan
         added: list[RetrievedChunk] = []
@@ -3989,6 +4022,55 @@ def _reference_target_cache_key(
     )
 
 
+def _expansion_attempt_key(
+    request: SearchRequest, seeds: Sequence[RetrievedChunk]
+) -> tuple[str, ...]:
+    return (
+        request.query,
+        json.dumps(_expansion_scope(request.filters), ensure_ascii=False, sort_keys=True),
+        *(chunk.chunk_id for chunk in seeds),
+    )
+
+
+def _expansion_stage_outcome(
+    observation: CallObservation | None,
+    *,
+    reason: str = "",
+    chunks: Sequence[RetrievedChunk] = (),
+    reused: bool = False,
+    failed: bool = False,
+) -> None:
+    if observation is None:
+        return
+    status = "skipped" if reason else "failed" if failed else "completed"
+    reason_code = reason or (
+        "selection_failed" if failed else "candidates_found" if chunks else "no_match"
+    )
+    message = {
+        "configuration_disabled": "設定がオフのため実行しません。",
+        "page_scope": "指定されたページ範囲を広げないため実行しません。",
+        "caller_scope": "呼び出し元が関連根拠の補充を省略しています。",
+        "selection_failed": "取得に失敗したため、既存の候補を保持して続けます。",
+        "no_match": "該当する候補はありません。",
+    }.get(reason_code, f"候補 {len(chunks)} 件を取得しました。")
+    if reused:
+        message = f"既存の検索結果を再利用しました。{message}"
+    observation.display(
+        params={
+            "status": status,
+            "execution_kind": "decision" if reason else "processing",
+            "enabled": reason != "configuration_disabled",
+            **({"condition_met": not bool(reason)} if reason != "configuration_disabled" else {}),
+            "reason_code": reason_code,
+            "result_count": len(chunks),
+            "reused": reused,
+        },
+        details={"fields": [{"label": "結果", "value": message}]},
+    )
+    if reason:
+        observation.response({"status": status, "reason_code": reason_code, "result_count": 0})
+
+
 def _search_stage(
     name: str, *, active: bool = True
 ) -> AbstractContextManager[CallObservation | None]:
@@ -4977,6 +5059,20 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         {
             "name": str(step.get("name") or ""),
             "status": str(step.get("status") or ""),
+            # 保存する工程にも、実行時に確定した判断と結果だけを残す。
+            **{
+                key: value
+                for key, value in step.items()
+                if (
+                    key in {"reason_code", "execution_kind"}
+                    and isinstance(value, str)
+                    or key == "result_count"
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    or key == "reused"
+                    and isinstance(value, bool)
+                )
+            },
             "elapsed_seconds": step.get("elapsed_seconds"),
             "llm_calls": step.get("llm_calls"),
             # API への実際の送信の回数（送り直しで呼び出しの回数より多いときだけ。#2966）。

@@ -974,6 +974,8 @@ async def test_injected_search_reports_db_search_stages_and_channels(
         "検索結果の統合（RRF）",
         CANDIDATE_DIVERSITY_STAGE,
         CONTEXT_SIBLINGS_STAGE,
+        ENTITY_EXPANSION_STAGE,
+        GRAPH_EXPANSION_STAGE,
     ]
     assert sorted(entry[2] for entry in observed if entry[0] == "end") == sorted(started)
     assert {entry[1] for entry in observed} == {"stage"}
@@ -1122,8 +1124,20 @@ async def test_search_stages_are_skipped_when_there_is_nothing_to_do() -> None:
         await engine._search(request, state, retrieval_queries=["検索文 1"], candidate_limit=4)
 
     # 候補の chunk は chunk_set を持たず(文書の背景を読まない)、足した根拠も無い。
-    assert first == ["検索結果の統合（RRF）", CANDIDATE_DIVERSITY_STAGE, CONTEXT_SIBLINGS_STAGE]
-    assert observed == ["検索結果の統合（RRF）", CANDIDATE_DIVERSITY_STAGE, CONTEXT_SIBLINGS_STAGE]
+    assert first == [
+        "検索結果の統合（RRF）",
+        CANDIDATE_DIVERSITY_STAGE,
+        CONTEXT_SIBLINGS_STAGE,
+        ENTITY_EXPANSION_STAGE,
+        GRAPH_EXPANSION_STAGE,
+    ]
+    assert observed == [
+        "検索結果の統合（RRF）",
+        CANDIDATE_DIVERSITY_STAGE,
+        CONTEXT_SIBLINGS_STAGE,
+        ENTITY_EXPANSION_STAGE,
+        GRAPH_EXPANSION_STAGE,
+    ]
 
 
 async def test_original_anchors_stage_only_for_derived_candidates(
@@ -1393,3 +1407,64 @@ async def test_keyword_list_without_a_search_expression_is_not_executed(
     assert isinstance(hits, SearchHits)
     assert hits.status == "not_executed"
     assert not hits
+
+
+@pytest.mark.parametrize("kind", ["entity", "graph"])
+@pytest.mark.parametrize("mode", ["disabled", "caller_scope", "no_match", "failed"])
+async def test_expansion_records_actual_skip_empty_failure_and_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    mode: str,
+) -> None:
+    import app.rag.answer_engine as module
+
+    calls = []
+    records: list[dict[str, Any]] = []
+
+    async def plan(*args: Any, **kwargs: Any) -> list[Any]:
+        calls.append(kwargs)
+        if mode == "failed":
+            raise RuntimeError("synthetic")
+        return []
+
+    monkeypatch.setattr(module, f"plan_{kind}_expansion", plan)
+    target = ENTITY_EXPANSION_STAGE if kind == "entity" else GRAPH_EXPANSION_STAGE
+
+    class Observation(_Observation):
+        def display(self, *args: object, **kwargs: Any) -> None:
+            if params := kwargs.get("params"):
+                records.append(params)
+
+    @contextmanager
+    def observer(operation: str, name: str) -> Iterator[_Observation]:
+        yield Observation() if name == target else _Observation()
+
+    settings = Settings(
+        rag_entity_expansion_enabled=kind == "entity" and mode != "disabled",
+        rag_graph_expansion_enabled=kind == "graph" and mode != "disabled",
+        rag_entity_expansion_max_chunks=3,
+        rag_graph_expansion_max_chunks=3,
+    )
+    engine = AnswerEngine(settings, oracle=_SearchOracle(), genai=_GenAi())  # type: ignore[arg-type]
+    request = SearchRequest(query="検索文 1", filters={"knowledge_base_id": "kb-1"})
+    state = _SearchState()
+    with bind_trace_observer(observer):
+        for _ in range(2):
+            await engine._search(
+                request,
+                state,
+                retrieval_queries=["検索文 1"],
+                expand_references=mode != "caller_scope",
+            )
+    assert len(records) == 2
+    assert len(calls) == (1 if mode in {"no_match", "failed"} else 0)
+    expected_status = (
+        "failed" if mode == "failed" else "completed" if mode == "no_match" else "skipped"
+    )
+    assert [record["status"] for record in records] == [expected_status] * 2
+    assert [record["result_count"] for record in records] == [0, 0]
+    assert [record["reused"] for record in records] == [False, mode in {"no_match", "failed"}]
+    if mode == "failed":
+        assert all(record["reason_code"] == "selection_failed" for record in records)
+    if mode == "no_match":
+        assert all(record["reason_code"] == "no_match" for record in records)

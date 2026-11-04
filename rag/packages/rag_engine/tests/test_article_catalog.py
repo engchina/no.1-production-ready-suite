@@ -1018,7 +1018,8 @@ def test_catalog_step_tells_a_selection_failure_apart_from_no_match():
         return _articles([])
 
     step, reported = _catalog_step(scope_broken, scope_documents=[("doc-g", "架空手続通則.json")])
-    assert step["status"] == "条の選択に失敗"
+    assert step["status"] == "failed"
+    assert step["reason_code"] == "selection_failed"
     assert reported == ["article_document_selection"]
     assert any("文書の選択に失敗" in line for line in step["details"]["lines"])
     assert "provider unavailable" not in json.dumps(step, ensure_ascii=False)
