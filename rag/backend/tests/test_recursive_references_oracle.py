@@ -70,10 +70,13 @@ async def test_recursive_numbered_reference_sql_adds_once(other_document: bool) 
     assert len(targets) == 1
     assert targets[0].document_id == target_id
     assert targets[0].metadata["section_path"] == "第5章 準備"
-    assert (
-        "added"
-        in cast(list[dict[str, Any]], state.reference_sources[-1]["sources"])[0]["target_outcomes"]
-    )
+    receipt = state.reference_sources[-1]
+    source = cast(list[dict[str, Any]], receipt["sources"])[0]
+    assert source["target_outcomes"] == ["available"]
+    assert source["outcome"] == "added"
+    assert source["dependency_status"] == "satisfied"
+    assert source["selected_dependency_chunk_ids"] == [targets[0].chunk_id]
+    assert receipt["added_count"] == 1
     state = _SearchState(chunks={c.chunk_id: c for c in [*anchors, *targets]})
     assert not await engine._reference_expansion(
         request,
@@ -81,7 +84,10 @@ async def test_recursive_numbered_reference_sql_adds_once(other_document: bool) 
         anchors,
         existing={c.chunk_id for c in [*anchors, *targets]},
     )
-    assert (
-        "present"
-        in cast(list[dict[str, Any]], state.reference_sources[-1]["sources"])[0]["target_outcomes"]
-    )
+    receipt = state.reference_sources[-1]
+    source = cast(list[dict[str, Any]], receipt["sources"])[0]
+    assert source["target_outcomes"] == ["available"]
+    assert source["outcome"] == "none"
+    assert source["dependency_status"] == "satisfied"
+    assert source["selected_dependency_chunk_ids"] == [targets[0].chunk_id]
+    assert receipt["added_count"] == 0
