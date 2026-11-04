@@ -3161,3 +3161,29 @@ for (const savedFormat of [false, true]) {
     await page.getByTestId("answer-text").screenshot({ path: testInfo.outputPath("saved-answer-sections.png") });
   });
 }
+
+
+for (const withWarning of [false, true]) {
+  test(`保存した導出結論と本文だけの注意を保持する (warning-${withWarning})`, { tag: "@responsive" }, async ({page}, testInfo) => {
+    const text = ["合成の回答。", "資料により確認できた事項", "・合成の単価は 3。", "根拠：合成 A.pdf p.1", "", "資料をもとに導いた結論", "・合成の結果は 6。", "前提：2 回使用", "当てはめ：3 × 2 = 6", "根拠：合成 A.pdf p.1", "", "確認が必要な点", "", "・合成の未確認事項", ...(withWarning ? ["・合成警告: 合成詳細"] : [])].join("\n");
+    const diagnostics = {passage_marks:[], removed_passages:[], answer_warnings:withWarning ? [{code:"off_goal",label:"合成警告",detail:"合成詳細"}] : []};
+    const response = {...assistantMessage, content:text, citations:[{...citationChunk,file_name:"合成 A.pdf",metadata:{page:1}}], ...diagnostics};
+    await mockChat(page,"ready",[{...userMessage,content:"合成の質問。"},response]);
+    await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
+    for (const reload of [false,true]) {
+      if (reload) await page.reload();
+      const answer = page.getByTestId("answer-text");
+      const derived = answer.getByTestId("answer-section").filter({has:page.getByRole("heading",{name:"資料をもとに導いた結論",exact:true})});
+      await expect(derived.locator("h4")).toHaveText("資料をもとに導いた結論");
+      await expect(derived.getByRole("listitem")).toHaveCount(1);
+      await expect(derived).toContainText("前提：2 回使用");
+      await expect(derived.getByTestId("answer-citation-link")).toHaveCount(1);
+      const notes = answer.getByTestId("answer-marked-passages");
+      await expect(notes).toHaveCount(1);
+      await expect(notes.getByText("合成の未確認事項",{exact:true})).toHaveCount(1);
+      if (withWarning) await expect(answer.getByTestId("answer-passage-warnings")).toContainText("合成警告");
+      await expectNoPageOverflow(page);
+    }
+    await page.getByTestId("answer-text").screenshot({path:testInfo.outputPath("derived-notes-chat.png")});
+  });
+}

@@ -183,6 +183,7 @@ class LanguagePackEngineTest(unittest.TestCase):
         custom = _custom(
             answer_labels={
                 "rules_section": "確かめた事項",
+                "applications_section": "合成の導出結論",
                 "citation_prefix": "出典: ",
                 "page_location": "{page} 頁",
                 "condition_suffix": "とき",
@@ -191,6 +192,8 @@ class LanguagePackEngineTest(unittest.TestCase):
         )
         with bind_pack(custom):
             self.assertTrue(is_structural_line("確かめた事項"))
+            self.assertTrue(is_structural_line("合成の導出結論"))
+            self.assertEqual(answer_labels().applications_section, "合成の導出結論")
             self.assertFalse(is_structural_line("資料により確認できた事項"))
             self.assertEqual(answer_labels().page(3), "3 頁")
             self.assertEqual(_condition_phrase("管理者"), "管理者のとき")

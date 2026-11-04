@@ -444,3 +444,30 @@ describe("保存した回答の節の所属", () => {
     });
   }
 });
+
+
+describe("推導結論の節", () => {
+  const formats: (Readonly<Record<string, string>> | undefined)[] = [undefined, { rules_section: "資料により確認できた事項" }, { applications_section: "合成の導出" }];
+  it.each(formats)("保存形式の欠けでも節と説明後の引用番号を保持する: %s", (format) => {
+    const title = format?.applications_section ?? "資料をもとに導いた結論";
+    const blocks = parseAnswerText([
+      "資料により確認できた事項", "・合成の値は 3。", "根拠：合成 A.pdf p.1", "",
+      title, "・合成の結果は 6。", "前提：2 回使用", "当てはめ：3 × 2 = 6", "根拠：合成 A.pdf p.1", "",
+      "・次の合成結果。", "前提：合成条件 B", "", "当てはめ：合成規則 B", "根拠：合成 B.pdf p.2",
+    ].join("\n"), format);
+    expect(blocks).toHaveLength(2);
+    expect(blocks?.[1]).toEqual({ kind: "section", title, ordered: false, entries: [
+      { kind: "item", text: "合成の結果は 6。", details: ["前提：2 回使用\n当てはめ：3 × 2 = 6"], citations: ["根拠：合成 A.pdf p.1"], citationLines: [2] },
+      { kind: "item", text: "次の合成結果。", details: ["前提：合成条件 B", "当てはめ：合成規則 B"], citations: ["根拠：合成 B.pdf p.2"], citationLines: [3] },
+    ] });
+  });
+  it("旧見出しも節として保存された文言で読む", () => {
+    expect(parseAnswerText("質問の条件への当てはめ\n・合成結果")?.[0]).toMatchObject({kind: "section", title: "質問の条件への当てはめ"});
+  });
+});
+
+
+it("旧記録の業務ガイド・小問・注意の見出しも同じ節として読む", () => {
+  const blocks = parseAnswerText("業務ガイドの案内\n・合成の案内\n質問A：合成の小問\n・合成の説明\n確認が必要な点\n・合成の注意");
+  expect(blocks?.filter(block => block.kind === "section").map(block => block.title)).toEqual(["業務ガイドの案内","質問A：合成の小問","確認が必要な点"]);
+});

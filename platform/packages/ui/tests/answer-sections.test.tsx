@@ -139,3 +139,10 @@ describe("AnswerSections", () => {
     expect(paragraph.querySelectorAll("br")).toHaveLength(1);
   });
 });
+
+
+it("診断が空でも保存本文だけの注意を同じ節に1回表示する", () => {
+  act(() => root.render(<AnswerSections blocks={[]} passages={{marks:[],removed:[],warnings:[]}} passageNotes={{marks:["合成の未確認事項"]}} />));
+  expect(host.querySelectorAll('[data-testid="answer-marked-passages"]')).toHaveLength(1);
+  expect(host.textContent?.match(/合成の未確認事項/g)).toHaveLength(1);
+});

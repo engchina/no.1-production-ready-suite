@@ -36,7 +36,7 @@ from pydantic.json_schema import SkipJsonSchema
 from rag_engine.config import get_llm_provider
 from rag_engine.dependencies import parse_text_response
 from rag_engine.generation.answer_labels import answer_labels
-from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE, PREMISES_LABEL
+from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE, LEGACY_APPLICATIONS_SECTION_TITLES, PREMISES_LABEL
 from rag_engine.generation.grounded import (
     generated_section_lines,
     is_structural_line,
@@ -1299,7 +1299,7 @@ def _summary_body_candidates(
     """既知の本文の節より前の要約を、出典のある本文の段落へ関連付ける。支持の確定には使わない。"""
     labels = answer_labels()
     titles = {str(getattr(labels, field, "") or "").strip() for field, _kind in _SECTION_KINDS}
-    titles.add(APPLICATIONS_SECTION_TITLE)
+    titles.update((labels.applications_section, APPLICATIONS_SECTION_TITLE, *LEGACY_APPLICATIONS_SECTION_TITLES))
     ranges = list(answer_passage_ranges(answer_text))
     boundary = next((start for _pid, start, end in ranges if answer_text[start:end].strip() in titles), None)
     if boundary is None:
@@ -1364,7 +1364,7 @@ def _system_passage_kinds(answer_text: str) -> dict[str, str]:
         title = str(getattr(labels, field, "") or "").strip()
         if title:
             sections[title] = kind
-    sections[APPLICATIONS_SECTION_TITLE] = ""
+    sections.update({title: "" for title in (labels.applications_section, APPLICATIONS_SECTION_TITLE, *LEGACY_APPLICATIONS_SECTION_TITLES)})
     notes = set()
     for field in _NOTE_LABELS:
         note = str(getattr(labels, field, "") or "").strip()

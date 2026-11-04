@@ -216,6 +216,8 @@ export interface AnswerSectionsProps {
    */
   passages?: AnswerPassageRecords | null;
   passageLabels?: AnswerPassageLabels;
+  /** 構造化した記録から復元できない、保存済み本文の補足。信頼状態の判定には使わない。 */
+  passageNotes?: { removed?: readonly string[]; marks?: readonly string[] };
   /**
    * 回答の言語（BCP 47。#3335。`resolveContentLang`）。渡さなければ段落・項目の文（文字列の `content` と
    * `passageText`）から判定して段落・項目の文に `lang` を付け、`null` なら付けない。
@@ -315,6 +317,7 @@ export function AnswerSections({
   labels = DEFAULT_ANSWER_SECTIONS_LABELS,
   passages: rawPassages = null,
   passageLabels = DEFAULT_ANSWER_PASSAGE_LABELS,
+  passageNotes,
   lang,
 }: AnswerSectionsProps) {
   const passages = useMemo(() => rawPassages ? visibleAnswerPassageRecords(rawPassages) : null, [rawPassages]);
@@ -349,7 +352,7 @@ export function AnswerSections({
     };
   }, [blocks, passages, baseId]);
 
-  const extraSections = passages ? passageSections(passages, anchors, passageLabels, contentLang) : [];
+  const extraSections = passages ? passageSections(passages, anchors, passageLabels, contentLang, passageNotes) : [];
   return (
     <div
       className={cn("space-y-3 text-sm leading-relaxed text-fg", className)}
@@ -452,10 +455,11 @@ function passageSections(
   anchors: readonly string[],
   labels: AnswerPassageLabels,
   answerLang: string | undefined,
+  notes?: AnswerSectionsProps["passageNotes"],
 ): Extract<AnswerSectionsBlock, { kind: "section" }>[] {
   // 節の見出し・説明・理由は部品の文言（画面の言語）。引用だけが回答の言語（#3349）。
   const sections: Extract<AnswerSectionsBlock, { kind: "section" }>[] = [];
-  if (passages.removed.length) {
+  if (passages.removed.length || notes?.removed?.length) {
     sections.push({
       kind: "section",
       key: "passage-removed",
@@ -464,6 +468,7 @@ function passageSections(
       testId: "answer-removed-passages",
       entries: [
         { key: "note", content: labels.removedNote, muted: true, lang: null },
+        ...(notes?.removed ?? []).map((content, index) => ({ key: `body-removed-${index}`, content })),
         ...passages.removed.map((item, index) => ({
           key: `removed-${index}`,
           lang: null,
@@ -483,7 +488,7 @@ function passageSections(
       ],
     });
   }
-  if (passages.marks.length) {
+  if (passages.marks.length || notes?.marks?.length) {
     sections.push({
       kind: "section",
       key: "passage-marks",
@@ -491,7 +496,8 @@ function passageSections(
       collapsible: true,
       testId: "answer-marked-passages",
       entries: [
-        { key: "note", content: labels.marksNote, muted: true, lang: null },
+        ...(notes?.marks ?? []).map((content, index) => ({ key: `body-mark-${index}`, content })),
+        ...(passages.marks.length ? [{ key: "note", content: labels.marksNote, muted: true, lang: null }] : []),
         ...passages.marks.map((mark, index) => {
           const Icon = ANSWER_PASSAGE_STATE_ICON[mark.state];
           const quote = answerPassageQuote(mark.text);

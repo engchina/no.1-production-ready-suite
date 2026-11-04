@@ -478,3 +478,9 @@ def test_published_release_without_the_unconfirmed_gap_label_is_readable() -> No
     raw = builtin_pack().to_dict()
     del raw["answer_labels"]["subject_unconfirmed_gap"]
     assert "{names}" in build_pack(raw).text("answer_labels", "subject_unconfirmed_gap")
+
+
+def test_published_release_without_applications_section_is_readable() -> None:
+    raw = builtin_pack().to_dict()
+    del raw["answer_labels"]["applications_section"]
+    assert build_pack(raw).text("answer_labels", "applications_section") == "資料をもとに導いた結論"
