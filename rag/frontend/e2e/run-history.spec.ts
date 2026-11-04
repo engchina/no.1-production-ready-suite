@@ -836,7 +836,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(fact("modelCalls")).toHaveText("未計測");
   });
 
-  test("一覧: token の列に合計の token を右寄せ・桁区切りで出し、不明は未計測・一部計測と出す。375px は列を出さない（Issue 3466）", async ({
+  test("一覧: トークン数の列に合計を右寄せ・桁区切りで出し、不明は未計測・一部計測と出す。375px は列を出さない（Issue 3466）", { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {
     await mockLocalAuth(page);
@@ -864,10 +864,10 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.goto("/history");
     const table = page.getByRole("table", { name: "実行履歴" });
     await expect(page.getByTestId("run-history-row-run-1")).toBeVisible();
-    const header = table.getByRole("columnheader", { name: "token", exact: true });
+    const header = table.getByRole("columnheader", { name: "トークン数", exact: true });
     const headers = await table.locator("thead th").allTextContents();
-    const usageIndex = headers.indexOf("token");
-    // 列の順は 3 製品で同じ: 所要時間 → token →（製品の列）。見出しは Agent と同じ「token」。
+    const usageIndex = headers.indexOf("トークン数");
+    // 列の順は 3 製品で同じ: 所要時間 → トークン数 →（製品の列）。見出しは Agent と同じ「トークン数」。
     expect(usageIndex).toBe(headers.indexOf("所要時間") + 1);
     expect(headers.indexOf("回答の対応")).toBeGreaterThan(usageIndex);
     // 行の見出し（題名）は th、ほかは td。
@@ -882,10 +882,10 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
       );
     } else {
       await expect(header).toBeVisible();
-      await expect(usageCell("run-1")).toHaveText("1,234,567 token");
-      await expect(usageCell("run-2")).toHaveText("9,000 token一部計測");
+      await expect(usageCell("run-1")).toHaveText("1,234,567");
+      await expect(usageCell("run-2")).toHaveText("9,000一部計測");
       await expect(usageCell("run-2").locator("[data-run-usage-note]")).toHaveText("一部計測");
-      await expect(usageCell("run-4")).toHaveText("0 token");
+      await expect(usageCell("run-4")).toHaveText("0");
       await expect(usageCell("run-6")).toHaveText("未計測");
       // 数は右寄せ・等幅数字（所要時間の列と同じ）。
       for (const cell of [header, usageCell("run-1"), usageCell("run-6")]) {

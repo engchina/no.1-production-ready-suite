@@ -93,7 +93,7 @@ test("一覧は共通の列の順で、状態は共通の値と Agent の言い�
     "実行者",
     "開始日時",
     "所要時間",
-    "token",
+    "トークン数",
     "操作",
   ]);
   const waiting = page.getByTestId("run-row-run-waiting");

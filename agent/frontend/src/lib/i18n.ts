@@ -1271,7 +1271,7 @@ const agentJa = {
   "run.column.executor": "実行者",
   "run.column.startedAt": "開始日時",
   "run.column.duration": "所要時間",
-  "run.column.usage": "token",
+  "run.column.usage": "トークン数",
   "run.self": "自分",
   "run.openDetail": "{title}（詳細を開く）",
   // 状態の絞り込みの「応答待ち」（承認待ち・確認待ち）と、期間の絞り込み（#1955）。
