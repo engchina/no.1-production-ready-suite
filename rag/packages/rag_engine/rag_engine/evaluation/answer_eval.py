@@ -1131,7 +1131,7 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
 # 12: 主張を段落ごとにその段落の出典の根拠だけで判定し、網羅を別の呼び出しにし、指示を判定の基準だけにした（#3576）。
 # 13: 根拠不足の定型の説明・確認案内を言語資源と照合し、事実の主張に数えない（#3131）。
 # 14: 要約を本文の原文候補へ関連付け、参照不足は意味を未評価とする（#3920）。
-RUBRIC_VERSION = 17
+RUBRIC_VERSION = 18
 # 1 件の評価で同時に行う判定の呼び出しの数（網羅・正確性・段落ごとの主張）。
 JUDGE_MAX_CONCURRENCY = 4
 # 網羅を比較項目ごとに 1 回ずつ判定するか（偽は全項目を 1 回で判定する）。実モデルで同じ比較範囲を 2 回ずつ判定すると、
@@ -1603,14 +1603,33 @@ def _judge_claim(
     return bound.claim_checks[0], [item for item in inputs["evidence_items"] if item["evidence_id"] != QUESTION_EVIDENCE_ID]
 
 
-def _checked_question_names(claims: Sequence[ClaimCheck], question: str, cited_nodes: Iterable[Mapping[str, Any]]) -> list[ClaimCheck]:
+def _gap_passages(answer_text: str) -> list[str]:
+    """回答の「資料から確認できなかった事項」の節の段落。"""
+    labels = answer_labels()
+    gap_title = labels.gaps_section.strip()
+    titles = {str(getattr(labels, field, "") or "").strip() for field, _ in _SECTION_KINDS} | {APPLICATIONS_SECTION_TITLE}
+    passages: list[str] = []
+    inside = False
+    for _, start, end in answer_passage_ranges(answer_text):
+        text = answer_text[start:end].strip()
+        if text in titles:
+            inside = text == gap_title
+        elif inside:
+            passages.append(text)
+    return passages
+
+
+def _checked_question_names(
+    claims: Sequence[ClaimCheck], question: str, cited_nodes: Iterable[Mapping[str, Any]], *, gaps: Sequence[str] = ()
+) -> list[ClaimCheck]:
     """質問が問うた対象の名前を書いた supported を、回答が引用した根拠に照らす（#4327・#4343）。
 
     一般の条件だけを述べる根拠から「対象がその条件を満たす」とする飛躍は、モデルが前提を補うと supported になる。
     名前の有無はコードで確かめる（モデルの出力に頼らない）。多段の質問では別の段落の根拠で確かめていることがあるので、
-    回答全体の根拠に照らす。
+    回答全体の根拠に照らす。回答が確認できないと書いた名前は確かめない（生成の要約の検査と同じ。#4347）。
     """
     sources = [text for node in cited_nodes for text in (str(node.get("text") or ""), str(node.get("source") or ""))]
+    sources.extend(gaps)
 
     def checked(claim: ClaimCheck) -> ClaimCheck:
         names = absent_question_names(claim.answer_quote, question, sources) if claim.status == "supported" else []
@@ -1844,7 +1863,9 @@ def evaluate_answer_payload(
             claim, fragments = result
             catalog.update((item["evidence_id"], item) for item in fragments)
             claim_checks.append(claim)
-        claim_checks = _checked_question_names(claim_checks, question, (node for nodes in nodes_by_id.values() for node in nodes))
+        claim_checks = _checked_question_names(
+            claim_checks, question, (node for nodes in nodes_by_id.values() for node in nodes), gaps=_gap_passages(answer_text)
+        )
         base["evidence_catalog"] = list(catalog.values())
         checks = sorted((check for slot in coverage_slots for check in results[slot]), key=lambda item: item.requirement_index)
 
