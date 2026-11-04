@@ -4685,6 +4685,7 @@ export const ja = {
   "answer.step.textSearch": "検索語を含む文書の箇所を探す",
   "answer.step.loadChunkPool": "検索対象の文書片を読み込む",
   "answer.step.loadDerivedSource": "要約と抽出値の出典の原文を読む",
+  "answer.step.candidateDiversity": "文書の偏りを補う候補を加える",
   "answer.step.loadSiblings": "根拠の前後の文脈を読み込む",
   "answer.step.expandReferences": "文書が参照する箇所の根拠を加える",
   "answer.step.expandEntities": "対象の名前と別名で関連する根拠を探す",
