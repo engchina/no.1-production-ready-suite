@@ -5059,6 +5059,20 @@ def _outcome_from_result(result: Any, state: _SearchState) -> AnswerOutcome:
         {
             "name": str(step.get("name") or ""),
             "status": str(step.get("status") or ""),
+            # 保存する工程にも、実行時に確定した判断と結果だけを残す。
+            **{
+                key: value
+                for key, value in step.items()
+                if (
+                    key in {"reason_code", "execution_kind"}
+                    and isinstance(value, str)
+                    or key == "result_count"
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                    or key == "reused"
+                    and isinstance(value, bool)
+                )
+            },
             "elapsed_seconds": step.get("elapsed_seconds"),
             "llm_calls": step.get("llm_calls"),
             # API への実際の送信の回数（送り直しで呼び出しの回数より多いときだけ。#2966）。
