@@ -1224,7 +1224,40 @@ def build_mcp_server(request: Request) -> McpServer:
             attributes={"pr.stage": REQUIREMENT_STAGE},
             display=SpanDisplay(kind=REQUIREMENT_STAGE),
         ) as requirement_trace:
-            decided = await confirm_requirement(requirement_trace)
+            requirement_trace.set_call_input(
+                lambda: {
+                    "question": arguments.question,
+                    "profile_id": profile_id,
+                    "row_limit": arguments.row_limit,
+                    "requirement_session_id": arguments.requirement_session_id,
+                    "clarification_answer": arguments.answer.model_dump(mode="json")
+                    if arguments.answer is not None
+                    else None,
+                    "skip_clarification": arguments.skip_clarification,
+                }
+            )
+            try:
+                decided = await confirm_requirement(requirement_trace)
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                requirement_trace.set_call_output(
+                    lambda: {"returned": False, "error_type": error_type}
+                )
+                raise
+            requirement_trace.set_call_output(
+                lambda: (
+                    {
+                        "next_step": "return_confirmation_result",
+                        "result": decided.model_dump(mode="json"),
+                    }
+                    if isinstance(decided, Nl2SqlJobResult)
+                    else {
+                        "next_step": "create_generation_job",
+                        "job_request": decided[0].model_dump(mode="json"),
+                        "requirement": decided[1].model_dump(mode="json"),
+                    }
+                )
+            )
         if isinstance(decided, Nl2SqlJobResult):
             return decided
         job_request, requirement = decided

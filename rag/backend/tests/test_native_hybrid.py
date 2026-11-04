@@ -761,6 +761,12 @@ async def test_vector_search_trace_shows_how_the_vector_branch_was_read() -> Non
     details: list[dict[str, Any]] = []
 
     class _Observation:
+        def request(self, value: object, *, schema: object = None) -> None:
+            pass
+
+        def response(self, value: object) -> None:
+            pass
+
         def display(self, *, details: object = None, params: object = None) -> None:
             if isinstance(details, dict):
                 captured.append(details)

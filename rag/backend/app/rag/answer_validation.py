@@ -37,8 +37,9 @@ import json
 import logging
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +47,7 @@ from rag_engine.evaluation.answer_validation import MAX_DATA_RESULTS, MAX_PREMIS
 from rag_engine.generation.table_records import TABLE_RECORD_KEY
 from rag_engine.resources.deadline import remaining_seconds
 from rag_engine.resources.runtime import bind_prompt_overrides, saved_prompt_overrides
-from rag_engine.resources.tracing import bind_trace_observer, observe_call
+from rag_engine.resources.tracing import CallObservation, bind_trace_observer, observe_call
 from rag_parser_core.sheet_records import (
     ROW_BASIS_CSV,
     ROW_BASIS_KEY,
@@ -454,6 +455,29 @@ EVIDENCE_LOAD_STAGE = "根拠の本文の読み込み"
 CLAIM_AUDIT_STAGE = "回答の段落の監査"
 
 
+@contextmanager
+def _validation_stage(
+    name: str, inputs: Callable[[], object], outputs: Callable[[], object]
+) -> Iterator[CallObservation]:
+    """実際に通った工程へ遅延IOを保存し、例外時は返却なしと部分結果を区別する。"""
+    with observe_call("stage", name) as observation:
+        observation.request(inputs)
+        try:
+            yield observation
+        except BaseException as exc:
+            error_type = type(exc).__name__
+            observation.response(
+                lambda: {
+                    "返却なし": True,
+                    "例外の型": error_type,
+                    "得られた部分結果": outputs(),
+                }
+            )
+            raise
+        else:
+            observation.response(outputs)
+
+
 async def validate_answer(
     question: str,
     answer: str,
@@ -521,7 +545,20 @@ async def _validate_answer(
         checks.append("requests")
     guide_content: SupportGuideContent | None = None
     if guide is not None:
-        with observe_call("stage", GUIDE_LOAD_STAGE):
+        guide_items: list[AnswerFinding] = []
+        guide_checks: list[str] = []
+        with _validation_stage(
+            GUIDE_LOAD_STAGE,
+            lambda: {"回答": answer, "参照した業務ガイド": asdict(guide)},
+            lambda: {
+                "指摘": [asdict(item) for item in guide_items],
+                "確認項目": guide_checks,
+                "公開版": guide_revision,
+                "読んだ内容": guide_content.model_dump(mode="json")
+                if guide_content is not None
+                else None,
+            },
+        ):
             guide_items, guide_checks, guide_revision, guide_content = await _guide_findings(
                 oracle, answer, guide
             )
@@ -540,7 +577,21 @@ async def _validate_answer(
     reuse_context = ""
     missing: list[EvidenceRef] = []
     stale: list[EvidenceRef] = []
-    with observe_call("stage", EVIDENCE_LOAD_STAGE):
+    audited: dict[str, list[str]] = {}
+    with _validation_stage(
+        EVIDENCE_LOAD_STAGE,
+        lambda: {
+            "根拠参照": [asdict(ref) for ref in refs],
+            "既存の監査参照": list(answer_trace_ids),
+        },
+        lambda: {
+            "読んだ根拠": items,
+            "根拠の版": evidence_versions,
+            "現在読めない根拠": [asdict(ref) for ref in missing],
+            "既存の旧版根拠": [asdict(ref) for ref in stale],
+            "再利用した照合": audited,
+        },
+    ):
         for ref in dict.fromkeys(refs):
             chunk = await oracle.retrievable_chunk(ref.document_id, ref.chunk_id)
             if chunk is None:
@@ -676,9 +727,30 @@ async def _validate_answer(
     left = limit - (time.monotonic() - started)
     result: dict[str, Any] = {"status": STATUS_TIMED_OUT}
     if left > 0:
+        audit_completed = False
+        audit_timed_out = False
         # モデルの呼び出し（段落のまとまりごとの監査）はこの段の子の span になる（thread は文脈を
         # 引き継ぐ。#3470）。
-        with observe_call("stage", CLAIM_AUDIT_STAGE):
+        with _validation_stage(
+            CLAIM_AUDIT_STAGE,
+            lambda: {
+                "質問": question,
+                "回答": answer,
+                "読み直した根拠": items,
+                "再利用した照合": audited,
+                "確認した前提": list(premises)[:MAX_PREMISES],
+                "データの照会結果": list(data_results)[:MAX_DATA_RESULTS],
+                "段落と引用": list(passage_citations),
+                "残り時間秒": left,
+                "段落の分割数": settings.rag_answer_validation_batch_passages,
+                "同時実行数": settings.rag_answer_validation_concurrency,
+            },
+            lambda: {
+                "監査の返却結果": result if audit_completed else None,
+                "時間切れ": audit_timed_out,
+                "使用量": usage,
+            },
+        ) as audit_observation:
             try:
                 # 検証の専用の thread で動かし、呼び出し側の打ち切り・取り消しを thread に
                 # 伝える(#1422・#2700)。
@@ -688,9 +760,12 @@ async def _validate_answer(
                     result = await run_answer_in_thread(
                         run, timeout_seconds=left, executor=validation_executor()
                     )
+                    audit_completed = True
             except TimeoutError:
                 # thread が期限の後に確かめ終わった分をまとめられなかった（期限は取り消し済み）。
                 result = {"status": STATUS_TIMED_OUT}
+                audit_timed_out = True
+                audit_observation.display(params={"status": "failed"})
     counts = {str(key): int(value) for key, value in (result.get("counts") or {}).items()}
     status = str(result.get("status") or "error")
     if "guide_step_results" not in result and guide_content is not None:
