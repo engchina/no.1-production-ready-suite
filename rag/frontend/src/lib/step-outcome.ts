@@ -20,6 +20,7 @@ const REASONS: Readonly<Record<string, I18nKey>> = {
 
 /** 実行時の判断記録だけを日本語へ投影する。旧記録に工程や判断を補わない。 */
 export function executionStepDetails(status: ChatProgressStepStatus, params: ChatProgressParams, details: RunStepDetails | undefined): RunStepDetails | undefined {
+  if (params.execution_kind !== "decision" && params.execution_kind !== "processing") return details;
   const reason = params.reason_code;
   if (typeof reason !== "string" || !Object.prototype.hasOwnProperty.call(REASONS, reason)) return details;
   const count = typeof params.result_count === "number" ? params.result_count : undefined;

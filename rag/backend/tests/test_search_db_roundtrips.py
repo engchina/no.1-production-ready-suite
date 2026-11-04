@@ -1440,10 +1440,10 @@ async def test_expansion_records_actual_skip_empty_failure_and_reuse(
         yield Observation() if name == target else _Observation()
 
     settings = Settings(
-        **{
-            f"rag_{kind}_expansion_enabled": mode != "disabled",
-            f"rag_{kind}_expansion_max_chunks": 3,
-        }
+        rag_entity_expansion_enabled=kind == "entity" and mode != "disabled",
+        rag_graph_expansion_enabled=kind == "graph" and mode != "disabled",
+        rag_entity_expansion_max_chunks=3,
+        rag_graph_expansion_max_chunks=3,
     )
     engine = AnswerEngine(settings, oracle=_SearchOracle(), genai=_GenAi())  # type: ignore[arg-type]
     request = SearchRequest(query="検索文 1", filters={"knowledge_base_id": "kb-1"})
