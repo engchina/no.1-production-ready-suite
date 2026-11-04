@@ -110,17 +110,17 @@ def test_zero_verified_parts_leave_the_answer_unchanged():
     assert all(not entry.marks for entry in entries)
 
 
-def test_claim_citing_a_verified_quote_stays_unmarked_and_the_uncited_quote_is_added_as_direct_source():
+def test_a_cited_source_is_not_researched_to_append_a_differently_written_quote():
     # 写しの一部だけを引く説明・別の出典で確かめた写しを引く説明も、確かめた写しに結び付く（幅と空白だけを同一視）。
     partial_quote = claim("手順Aを行う（一部）。", SPANS[0], "手順Ａを 行います")
     other_source = claim("手順Bを行う。", SPANS[0], "続けて手順Bを行います。")
     other_source.also.append(claim("手順Bを行う。", SPANS[1], "項目Cを入力します。"))
     out, record = project(2, entries=[partial_quote, other_source])
     assert mark_codes(out) == {"手順Aを行う（一部）。": [], "手順Bを行う。": []}
-    # 写しの全体を引く説明が無い写し（E1）だけを、確かめた直接の原文として足す（説明は外さない）。
+    # 出典が既に引用されていれば、評価の写しから別範囲を検索して原文を足さない。
     added = [entry for entry in out.checked if entry.quote_only]
-    assert [(entry.span["evidence_id"], entry.item.quote) for entry in added] == [("E1", "手順Aを行います。")]
-    assert (record["bound_claims"], record["marked_claims"], record["added_quotes"]) == (2, 0, 1)
+    assert added == []
+    assert (record["bound_claims"], record["marked_claims"], record["added_quotes"]) == (2, 0, 0)
 
 
 def test_claim_that_already_has_an_unverified_mark_is_not_marked_twice():

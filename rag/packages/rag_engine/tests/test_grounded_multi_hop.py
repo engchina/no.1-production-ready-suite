@@ -9,7 +9,7 @@
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, observed_supports, record, run
 
 from rag_engine.generation import grounded
-from rag_engine.models.llm import GroundedCitation, GroundedItem
+from rag_engine.models.llm import GroundedItem
 
 QUESTION = "人事給与システムの変更の承認者と、承認の期限を教えてください。"
 LEDGER = "システムID: SYS-111 / 正式名: 人事給与システム / 略称・別表記: HRP / 担当部署: 労 / 重要度: A / 機密区分: 社外秘"
@@ -150,8 +150,8 @@ def test_missing_hop_observation_keeps_generated_gap_and_summary():
     assert "人事給与システムの担当部署は取得した資料に記載がありません。" in text
 
 
-def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction_feedback():
-    """略号の表の隣の行の語を写し誤った引用は従来どおり落とし、是正には原文の続きを示す (#1383)。"""
+def test_invalid_table_citation_does_not_get_a_guessed_replacement_in_feedback():
+    """不正範囲は未確認のまま残し、別の行を写し直す候補を作らない。"""
     ctx = _context()
     by_text = ids(ctx, QUESTION)
     # 説明が写し誤った文の語（管理本部）を使うので、逐語の先頭の文にも結び付けない。
@@ -167,47 +167,10 @@ def test_miscopied_sentence_of_a_repeated_table_is_pointed_out_in_the_correction
     result = run(model, ctx, QUESTION).response
 
     dropped = result.generation_trace["rounds"][0]["dropped"]
-    assert dropped[0]["miscopied"] == {
-        "quoted": "管理本部に属します。",
-        "original": "生産本部に属します。",
-        "verbatim_quote": "略号「製」: 製造部。生産本部に属します。",
-    }
-    feedback = next(prompt for name, prompt in model.prompts[2:] if name == "GroundedDraftWire")
-    assert '"original": "生産本部に属します。"' in feedback
-
-
-def test_supported_audit_does_not_recover_a_miscopied_citation():
-    """未校正の支持原文で写し誤りを解消しない。低層の引用候補抽出の既存境界も維持する。"""
-    ctx = _context()
-    by_text = ids(ctx, QUESTION)
-    hops = list(_hops(by_text))
-    hops[1] = item(by_text[CODES], "略号「労」は労務部です。", "略号「労」: 労務部。研究本部に属します。", kind="rule", request_id="Q1")
-    supported = _supported(4)
-    # 元の引用には写し誤りがあるため、支持の判定と合わせて監査の支持原文を返す。
-    model = FakeModel([draft(*hops, summary=CONCLUSION)], [supported])
-
-    result = run(model, ctx, QUESTION).response
-
-    assert result.answer_text.startswith(CONCLUSION)
-    assert "研究本部" not in result.answer_text
-    mark = next(mark for mark in result.envelope["passage_marks"] if mark["text"] != CONCLUSION)
-    assert [reason["code"] for reason in mark["reasons"]] == ["quote_unmatched"]
-    assert result.generation_trace["finalization"]["summary"]["status"] == "unverified"
-    assert result.generation_trace["finalization"]["summary"]["citations"]["status"] == "unresolved"
-    assert result.generation_trace["rounds"][0]["items"][1]["review_assessment"]["effective_support"] == "unknown"
-    spans = [{"evidence_id": "E1", "label": "E1", "text": CODES}]
-
-    def bound(kind, text):
-        return grounded.resolve_evidence(
-            GroundedItem(
-                kind=kind, text=text, citations=[GroundedCitation(evidence_id="E1", quote="略号「労」: 労務部。研究本部に属します。")]
-            ),
-            spans,
-        )
-
-    assert bound("rule", "略号「労」は労務部です。") == (spans[0], "略号「労」: 労務部。")
-    assert bound("rule", "略号「労」は労務部で、研究本部に属します。")[0] is None  # 写し誤った語を説明に使う
-    assert bound("operation", "略号「労」は労務部です。")[0] is None  # 手順は従来どおり
+    assert "miscopied" not in dropped[0]
+    assert "nearest_quote" not in dropped[0]
+    assert dropped[0]["citation_resolution"]["reason_code"] == "citation_range_out_of_bounds"
+    assert dropped[0]["citation_resolution"]["requested_quote"] == miscopied["citations"][0]["quote"]
 
 
 def test_miscopied_trailing_sentence_keeps_the_claim_unconfirmed():
@@ -226,27 +189,8 @@ def test_miscopied_trailing_sentence_keeps_the_claim_unconfirmed():
         assert hop["text"] in result.answer_text
     mark = next(mark for mark in result.envelope["passage_marks"] if mark["text"] != CONCLUSION)
     assert mark["state"] == "unverified"
-    assert [reason["code"] for reason in mark["reasons"]] == ["quote_unmatched"]
+    assert [reason["code"] for reason in mark["reasons"]] == ["citation_range_out_of_bounds"]
     assert not result.envelope["removed_passages"]
-
-
-def test_miscopied_sentence_needs_a_verbatim_first_sentence_in_the_named_evidence():
-    spans = [{"evidence_id": "E1", "label": "E1", "text": CODES}, {"evidence_id": "E2", "label": "E2", "text": APPROVERS}]
-
-    def miscopied(evidence_id, quote):
-        return grounded.miscopied_sentence(
-            GroundedItem(kind="rule", text="t", citations=[GroundedCitation(evidence_id=evidence_id, quote=quote)]), spans
-        )
-
-    assert miscopied("E1", "略号「労」: 労務部。生産本部に属します。") == {
-        "quoted": "生産本部に属します。",
-        "original": "管理本部に属します。",
-        "verbatim_quote": "略号「労」: 労務部。管理本部に属します。",
-    }
-    assert miscopied("E1", "略号「労」: 総務部。管理本部に属します。") == {}  # 先頭の文から違う
-    assert miscopied("E2", "略号「労」: 労務部。生産本部に属します。") == {}  # 指した根拠に無い
-    assert miscopied("", "略号「労」: 労務部。生産本部に属します。") == {}  # 根拠を指していない
-    assert miscopied("E1", "略号「労」: 労務部。") == {}  # 1 文だけ
 
 
 def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
@@ -264,7 +208,7 @@ def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
 
 def test_generation_asks_for_every_supporting_document_and_keeps_scope_checks():
     """同じ内容を述べた規則の原文と手順書の両方を出典にし、出典を 1 つに絞る言い方を残さない（#3526）。"""
-    from rag_engine.models.llm import GroundedItem, RequestCoverageRange, RequestEvidenceScopeRange
+    from rag_engine.models.llm import RequestCoverageRange, RequestEvidenceScopeRange
 
     generate = grounded.GENERATE_SYSTEM_PROMPT
     section = generate.split("### 出典の網羅", 1)[1].split("## Step 3:", 1)[0]

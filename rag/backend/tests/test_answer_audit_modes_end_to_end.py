@@ -239,14 +239,17 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
             label = re.search(r"\[(E[0-9]+)\]", prompt)
             assert label is not None
             key = label.group(1)
-            return GroundedDraft.model_validate(
+            units = {
+                text: uid
+                for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)
+            }
+            return schema.model_validate(
                 {
                     "summary": "",
                     "confidence": "high",
                     "request_coverage": [
                         {
                             "request_id": "Q1",
-                            "evidence_ids": [key],
                             "evidence_scope": [
                                 {"evidence_id": key, "target": "操作", "relation": "direct"}
                             ],
@@ -260,8 +263,7 @@ async def test_formal_entry_does_not_spend_budget_on_uncalibrated_material_obser
                             "text": operation,
                             "citations": [
                                 {
-                                    "evidence_id": key,
-                                    "quote": operation,
+                                    "unit_ids": [units[operation]],
                                 }
                             ],
                         }

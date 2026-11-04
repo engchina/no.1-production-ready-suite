@@ -43,7 +43,7 @@ def test_mixed_body_keeps_summary_with_semantic_support_unverified(quote, suppor
     assert GOOD in result.answer_text
     assert CLAIM in result.answer_text
     if quote == "存在しない引用":
-        assert "quote_unmatched" in marks(result)[CLAIM]
+        assert "citation_range_out_of_bounds" in marks(result)[CLAIM]
     else:
         assert CLAIM not in marks(result)
     assert len(model.prompts) == 2

@@ -214,7 +214,7 @@ class SynthesizeRoundStopTest(unittest.TestCase):
         """写し誤り（原文と一致せず除いた説明）があれば、同じ根拠のまま作り直す。"""
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
-        wrong = draft(item(eid, GOOD, GOOD), item(eid, "CSVを保存先へ出力します。", "CSVを C:\\temp へ出力します。"))
+        wrong = draft(item(eid, GOOD, GOOD), item("E-unknown", "CSVを保存先へ出力します。", "CSVを C:\\temp へ出力します。"))
         fixed = draft(item(eid, GOOD, GOOD), item(eid, "実行ボタンを押して完了します。", "実行ボタンを押して完了します。"))
         model = FakeModel([wrong, fixed], [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))])
         result = run(model, ctx).response

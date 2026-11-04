@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from audit_fixtures import legacy_audit_result
+from citation_unit_support import canonical_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -674,7 +675,7 @@ def test_unread_sections_make_the_answer_conditional():
     def model(system, prompt, settings, schema, **options):
         if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
-            return GroundedDraft.model_validate(draft)
+            return canonical_fixture(draft)
         if is_audit_wire(schema):
             return legacy_audit_result(audit, schema)
         return schema.model_validate(audit)
@@ -983,7 +984,7 @@ def test_answer_hides_unread_sections_of_documents_it_does_not_cite():
     def model(system, prompt, settings, schema, **options):
         if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
             # 既存quote fixtureのcanonical再生。wire出力の検証とは別。
-            return GroundedDraft.model_validate(draft)
+            return canonical_fixture(draft)
         if is_audit_wire(schema):
             return legacy_audit_result(audit, schema)
         return schema.model_validate(audit)

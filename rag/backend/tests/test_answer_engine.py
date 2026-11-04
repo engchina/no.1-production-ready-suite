@@ -221,27 +221,26 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
     if issubclass(
         schema, (GroundedDraft, generation_draft_wire_model(), guided_generation_wire_model())
     ):
-        # 既存quote fixtureを履歴互換の草稿として返す。生成wireの検証は行わない。
         body = "受注番号を入力し、登録ボタンを押します。"
-        match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
-        items = (
-            [
-                {
-                    "kind": "rule",
-                    "text": body,
-                    "citations": [{"evidence_id": match.group(1), "quote": body}],
-                }
-            ]
-            if match
-            else []
-        )
-        return GroundedDraft.model_validate(
-            {
-                "summary": "手順",
-                "summary_item_indexes": list(range(len(items))),
-                "items": items,
-                "confidence": "high",
-            }
+        if getattr(schema, "_uses_unit_ids", False):
+            # 実際の送信にある引用単位だけを、生成の返却 schema で選択する。
+            units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)
+            selected = [uid for uid, original in units if body in original]
+            assert len(selected) <= 1
+            citations: list[dict[str, Any]] = [{"unit_ids": selected}] if selected else []
+        else:
+            match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
+            citations = [{"evidence_id": match.group(1), "lines": "1"}] if match else []
+        payload = {
+            "summary": "手順",
+            "summary_item_indexes": [0] if citations else [],
+            "items": [{"kind": "rule", "text": body, "citations": citations}] if citations else [],
+            "confidence": "high",
+        }
+        return (
+            schema.model_validate(payload)
+            if getattr(schema, "_uses_unit_ids", False)
+            else GroundedDraft.model_validate(payload)
         )
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
     if is_audit_schema(schema):
@@ -3222,7 +3221,7 @@ async def _answer_with_coverage(
                     "citations": [],
                 }
             )
-            return GroundedDraft.model_validate(data)
+            return schema.model_validate(data)
         return result
 
     monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)

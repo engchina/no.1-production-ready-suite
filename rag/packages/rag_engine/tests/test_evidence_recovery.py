@@ -1,4 +1,4 @@
-"""言い換えた引用の再照合と本文の根拠ラベル（#3064・#3065）。"""
+"""引用の ID・範囲の検証と、本文の内部根拠ラベルの除去。"""
 
 import json
 
@@ -22,7 +22,9 @@ def _spans():
 
 def _run(*, support="supported", mode="standard", suffix="", evidence_id="E1", complete_guide=False):
     spans = _spans()
-    generated = draft(item(evidence_id, PARAPHRASE + suffix, "対象を決めて提出してください。"), summary="操作の説明（E1）")
+    invalid = item(evidence_id, PARAPHRASE + suffix, "対象を決めて提出してください。")
+    invalid["citations"][0]["lines"] = "999999"
+    generated = draft(invalid, summary="操作の説明（E1）")
     response = audit((0, support, "matched", ""), requests=[("Q1", "addressed", "")])
     if mode == "standard":
         response.pop("unused_evidence_ids")
@@ -60,15 +62,16 @@ def test_uncalibrated_original_does_not_replace_the_actual_quote_or_complete_the
     result, model, spans = _run(mode=mode, suffix="（E1）", evidence_id="", complete_guide=True)
     entry = next(e for e in result.checked if e.draft_index == 0)
     assert not entry.confirmed
-    assert entry.item.quote == "対象を決めて提出してください。"
+    assert entry.item.quote == ""
+    assert entry.citation_resolution["requested_quote"] == "対象を決めて提出してください。"
     assert entry.item.text == PARAPHRASE
-    # 引用原文の不一致という基本検査は残り、語義の完了判定は未知のまま。
-    assert result.guide_steps[0]["status"] == "reference_only"
+    # 無効な ID から引用文や本文のラベルで出典を復元せず、完了判定も未知のまま。
+    assert result.guide_steps[0]["status"] == "unknown"
     assert result.guide_steps[0]["requirements"][0]["status"] == "unknown"
-    assert any(mark["code"] == "quote_unmatched" for mark in entry.marks)
-    assert grounded.detach_unsourced(result.checked) == 1
+    assert any(mark["code"] == "citation_id_invalid" for mark in entry.marks)
+    assert grounded.detach_unsourced(result.checked) == 0
     inputs = json.loads(model.prompts[-1][1])
-    assert inputs["items"][0]["quote_unmatched"] is True
+    assert inputs["items"] == []  # 出典に結べない説明を引用付きの監査対象へ混ぜない。
     assert "当該 item が実際に引用した citations の原文集合と照合する" in grounded.audit_system_prompt(detailed=mode == "detailed")
     assert not result.dropped[0].get("ignored", False)
     observed = result.timing["semantic_audit_observation"]["audit"]
@@ -77,7 +80,7 @@ def test_uncalibrated_original_does_not_replace_the_actual_quote_or_complete_the
     assert "E1" not in result.summary
     assert len(model.prompts) == 2
     assert entry.span is None
-    assert result.dropped[0]["evidence_id"] == spans[0]["label"]
+    assert result.dropped[0]["evidence_id"] == ""
 
 
 @pytest.mark.parametrize("support", ["unsupported", "supported"])
@@ -85,7 +88,7 @@ def test_unverified_claim_or_invalid_original_keeps_marks(support):
     result, _, _ = _run(support=support)
     entry = next(e for e in result.checked if e.draft_index == 0)
     assert not entry.confirmed
-    assert any(mark["code"] == "quote_unmatched" for mark in entry.marks)
+    assert any(mark["code"] == "citation_range_out_of_bounds" for mark in entry.marks)
     assert result.guide_steps[0]["status"] != "explained"
 
 
@@ -128,7 +131,7 @@ def test_mixed_bracketed_codes_keep_real_codes_and_resolve_only_internal_labels(
         GroundedDraft.model_validate(draft(item("", "コード（E6、E1）を確認します。", ""))).items[0], spans
     )
     assert cleaned.text == "コード（E6）を確認します。"
-    assert cleaned.evidence_id == "E1"
+    assert cleaned.evidence_id == ""
 
 
 @pytest.mark.parametrize("mode", ["standard", "detailed"])
@@ -224,4 +227,4 @@ def test_observed_recovery_keeps_body_without_promoting_an_invalid_quote_to_a_so
     assert PARAPHRASE in result.answer_text
     assert "E1" not in result.answer_text
     assert result.generation_trace["citation_lines"] == []
-    assert any(reason["code"] == "quote_unmatched" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])
+    assert any(reason["code"] == "citation_id_invalid" for mark in result.envelope["passage_marks"] for reason in mark["reasons"])

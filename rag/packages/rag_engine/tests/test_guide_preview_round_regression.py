@@ -23,7 +23,7 @@ def test_shared_source_with_unsearched_step_survives_two_draft_audit_rounds(shar
     knowledge = replace(_knowledge(guide, terms=SHARED_TERMS), guide_unsearched_steps=("s2",))
     eid = next(iter(_ids(ctx, knowledge).values()))
     common = item(eid, SHARED_END, SHARED_END, request_id="Q1")
-    invalid = item(eid, "合成の追加説明。", "原文に存在しない合成の引用。", request_id="Q1")
+    invalid = item("E-unknown", "合成の追加説明。", "原文に存在しない合成の引用。", request_id="Q1")
     model = FakeModel(
         [draft(common, invalid), draft(common)], [audit((0, "supported", applicability, ""), requests=[("Q1", "addressed")])] * 3
     )
