@@ -131,12 +131,6 @@ variableGroups:
     variables:
       - app_admin_login_user_password
 
-  - title: RAG
-    visible: deploy_rag
-    variables:
-      - rag_enable_parser_unstructured
-      - rag_enable_oci_cloud_parsers
-
   - title: "NL2SQL Deep Data Security"
     visible: deploy_nl2sql
     variables:
@@ -166,6 +160,8 @@ variableGroups:
       - adb_resource_pool_size
       - adb_resource_pool_storage_size_in_tbs
       - timezone
+      - rag_enable_parser_unstructured
+      - rag_enable_oci_cloud_parsers
 
 variables:
   region:
@@ -851,7 +847,7 @@ variables:
   rag_enable_parser_unstructured:
     type: boolean
     required: true
-    visible: deploy_rag
+    visible: false
     title: "Unstructured parser (CPU)"
     description: "The Docling parser (CPU, PDF and images) is always installed as the default document parser. This option also installs and starts parser-unstructured as a systemd service and enables it in the document parsing settings, to ingest text, Markdown, CSV, JSON, XML, HTML, Office, and e-mail files; select Unstructured in the document's processing recipe."
     default: true

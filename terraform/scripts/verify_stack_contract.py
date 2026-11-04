@@ -78,7 +78,6 @@ BASTION_DEFAULTS = {
 BASTION_VNC_PORT = "5901"
 # 製品ごとの入力は、その製品を選んだときだけフォームに出す（group の visible と、group 内の変数の接頭辞）。
 PRODUCT_GROUPS = {
-    "RAG": "rag",
     "NL2SQL Deep Data Security": "nl2sql",
 }
 # 1 台の Compute（#1316）で廃止した入力・resource。製品ごとの Compute の大きさ、公開 port（80 / 443 に固定）、
@@ -575,7 +574,7 @@ def _verify_schema(schema: str, variables: str) -> None:
         "配備先", "Autonomous AI Database", "Existing Autonomous AI Database",
         "New Autonomous AI Database", "ADB のネットワーク", "アプリ用の DB ユーザー",
         "主 Compute の構成", "主 Compute のネットワークと SSH", "HTTPS", "Bastion", "bastion の構成",
-        "bastion のネットワークと接続", "アプリケーション管理者", "RAG",
+        "bastion のネットワークと接続", "アプリケーション管理者",
         "NL2SQL Deep Data Security", "配備する製品", "Hidden",
     ]
     if list(groups) != expected_groups:
@@ -1668,6 +1667,17 @@ DEFAULT_TIMEZONE = "UTC"
 
 def _verify_rag_roadmap_inputs(schema: str, variables: str) -> None:
     """準備中（ロードマップ）の parser の入力は、既定 false で画面に出さない（#3374。変数は残す）。"""
+    # Unstructured は既定で配備し、画面で選ばせない（#4331）。
+    _require_all(
+        _schema_variable(schema, "rag_enable_parser_unstructured"),
+        ["type: boolean", "visible: false", "default: true"],
+        context="rag_enable_parser_unstructured schema",
+    )
+    _require_all(
+        _terraform_variable(variables, "rag_enable_parser_unstructured"),
+        ["default     = true"],
+        context="Terraform variable rag_enable_parser_unstructured",
+    )
     for variable_name in RAG_ROADMAP_SERVICES.values():
         _require_all(
             _schema_variable(schema, variable_name),
