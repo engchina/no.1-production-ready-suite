@@ -189,3 +189,25 @@ class ApplicationStepTest(unittest.TestCase):
         self.assertEqual(result.generation_trace["application_step"], {"ran": False})
         self.assertFalse(observed_audit(result)["summary_supported"])
         self.assertEqual(result.generation_trace["finalization"]["summary"]["status"], "kept")
+
+
+def test_document_only_derivation_needs_sources_but_no_question_premise():
+    from rag_engine.generation.applications import check_applications
+    from rag_engine.generation.grounded import CheckedItem
+    from rag_engine.models.llm import GroundedApplication, GroundedItem
+
+    facts = [
+        CheckedItem(GroundedItem(kind="rule", text="項目Aは12です。"), span={"evidence_id": "E1"}),
+        CheckedItem(GroundedItem(kind="rule", text="項目Bは8です。"), span={"evidence_id": "E2"}),
+    ]
+    application = GroundedApplication(item_indexes=[0, 1], reasoning="12＋8＝20", result="合計は20です。")
+    (checked,) = check_applications("合計を教えてください。", [application], dict(enumerate(facts)))
+    assert checked.published
+    assert checked.entries == facts
+    assert not checked.reasons
+    invalid = application.model_copy(update={"item_indexes": []})
+    (checked,) = check_applications("合計を教えてください。", [invalid], dict(enumerate(facts)))
+    assert not checked.published
+    invalid = application.model_copy(update={"reasoning": "12＋8＝21", "result": "21"})
+    (checked,) = check_applications("合計を教えてください。", [invalid], dict(enumerate(facts)))
+    assert not checked.published

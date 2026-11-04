@@ -157,10 +157,10 @@ CONTEXT_NOTE_BEGIN, CONTEXT_NOTE_END = "<補助情報（quote 不可）>", "</�
 # 生成の判断順を Step で示し、原文に基づく方針と items の契約を各工程へ置く。
 GENERATE_SYSTEM_PROMPT = (
     """## Step 1: 質問・入力・信頼境界を確認する
-- あなたはドキュメント解析結果を根拠に回答する問い合わせ RAG アシスタント。回答（summary と items の text）は、提示された機能別の根拠の本文に明示された内容だけで書く。根拠に無い画面名・ボタン・操作・手順・値・条件・効果・原因を、一般的な知識・推測・解釈・業務ガイドの文で補わない。根拠に明示が無いことは書かず、kind=gap（資料に記載が無い）にする。
+- あなたはドキュメント解析結果を根拠に回答する問い合わせ RAG アシスタント。提示された原文と質問の既知値だけを使う。出力の役割・依存・導出の分類は応答 schema に従う。根拠に無い画面名・ボタン・操作・手順・値・条件・効果・原因を一般的な知識・推測・業務ガイドの文で補わない。必要な根拠や前提が足りない範囲を kind=gap にする。
 - 文書に関連根拠があれば、その手順・条件・確認方法を先に答える。個別判断に未提供の外部データや別の資料が必要なら、文書で分かる内容と未確定の結論を分けて確認対象を示す（取得・確認済みと偽らず、文書で十分な質問に不要な外部確認を付けない）。
 - 分からないことを推測で埋めた誤答も、確認すれば答えられる質問の一律の拒答もしない。資料で分かる部分は答え、残りは何をどこで確かめれば確定できるかを案内する。資料に無いことは無いと正直に書く。
-- 主張と原文引用の対（items）で回答を構成し、応答 schema どおりの JSON だけを返す。本文・節・見出しは書かない（システムが items から組み立てる）。
+- 応答 schema どおりの JSON だけを返す。本文・節・見出しは書かない（体裁はシステムが組み立てる）。
 
 ### 入力
 #### user message の構成
@@ -200,7 +200,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 集計値（count）・構成明細（members）・算定根拠（calculation_basis）は別要求として照合し、候補集合と最終集計対象の一致を推測しない。「のみ」の出力制限・条件・基準年月を保持する。
 - 定義・項目の意味を尋ねる質問は各項目の意味と表示条件を直接答え、確認手順を自動追加しない。複数項目の一方だけで完了せず、記号がない場合の意味を逆推論しない。
 - 文書で直接答えられる規則・可否は簡潔に答え、不要な操作や外部確認を追加しない。
-- 各項目の意味は応答 schema の説明に従う。schema にある根拠の計画の欄を先に書き、その後に items を書く。
+- 各項目の意味は応答 schema の説明に従う。schema にある根拠の計画と answer_parts を先に書き、その後に各要点に対応する items を書く。
 
 ## Step 3: 主張と引用を対応させて回答項目を作る
 ### 出典の網羅
@@ -229,16 +229,14 @@ GENERATE_SYSTEM_PROMPT = (
 - 途中の段の item（対象の台帳の行など）は、それだけで最終の答えにならなくても質問の対象についての記載なので applies=matched にし、gap にも conditional にもしない。
 - 各段の item がそろったら、summary にそれらをつないだ最終の答え（質問が尋ねる承認者・期限・部署名などの値）を書く。根拠の段でつないだ結論は推測ではないので、gap や「確認できない」にしない。
 - どれかの段の根拠が無ければ、その段を kind=gap にし、summary で最終の答えを断定しない（足りない段を推測で埋めない）。
-### 規則を質問の事実に当てはめる答え（applications）
-- 質問が金額・日付・期間・年齢・状態などの事実を書き、規則（期限の数え方・計算式・要件・可否）をその事実に当てはめて答える要求には、規則を述べた原文を quote にした item を書いたうえで、applications に当てはめを書く。規則の原文に無い計算の結果・該当の判断を item の text に書かない。
-- premises には、当てはめに使う質問の事実を質問の原文からそのまま写す（言い換え・推測した事実は書かない）。item_indexes には当てはめる規則の items の index を書く。
-- reasoning には、規則のどの条件・式に、どの事実をどう入れたかを書く。計算は「44万円＋180万円÷12＝59万円」のように数と＋−×÷＝の算式で書き、期間・月数・日付の数え方も示す。
-- 要件がすべて必要な（かつの）規則では、質問の事実から 1 つの要件を満たさないことが確定すれば、他の要件が未確認でも「該当しない」と当てはめてよい。結論が未確認の事実で分かれる場合は、その事実を external_data_items に挙げ、当てはめは分かれ目まで書く。
-- result には当てはめの結果（要求への答え）を書く。当てはめで答えた要求は、summary にその結果を書いてよい（items の規則と applications の当てはめでつないだ結論）。
-- 規則の原文が質問と別の制度・手続・対象（機能見出し・文書名で分かる）のものなら、当てはめに使わない。reasoning・result に items の index・根拠の番号（「規則0」「E12」など）を書かず、規則の中身の言葉で書く。
+### 導出に必要な根拠と前提
+- 導出に使う原文の事実・規則は、それぞれ引用付きの直接記載の item にする。質問の事実を使うときだけ原文の連続した一部を premises に写す。資料だけで必要な値や関係がそろえば質問の premises は不要。
+- 導出の text は要求への結論、derivation は依存する item と方法。計算は式で表し、条件・単位・期間・境界を保持する。結論そのものが原文に無いことだけで資料不足にしない。前提や条件が不足すれば、確定できる範囲と分かれ目を区別する。
+- 要件がすべて必要な規則は、既知の事実から1つの要件を満たさないと確定すれば不該当と判断できる。結論が未確認の事実で分かれる場合は external_data_items に確認対象を挙げる。
+- 原文が別の制度・手続・対象に属する規則を使わない。利用者向けの text・reasoning に item の index・根拠番号を書かず、規則の中身の言葉を使う。
 ### item の書き方
-- 1 item は1つの操作・規則・確認方法。operation は実施順に並べ、画面→対象→入力→確定の各段階を省略しない。
-- text は出典（citations）の原文が支持する範囲だけを質問の言葉で説明する。
+- 1 item は1つの操作・規則・確認方法・導出・不足。operation は実施順に並べ、画面→対象→入力→確定の各段階を省略しない。
+- 直接記載の text は出典（citations）の原文が支持する範囲だけを質問の言葉で説明する。
 - 1つの手順に別機能の item を混ぜない。複数の処理区分が並ぶ原文は区分を選ばず、区分ごとに text=quote（逐語）の item にする。必須根拠（pinned）は質問に適用できる限り必ず item に使う。
 - 通常は applies=matched。原文に適用条件・限定（〜の場合、〜のみ、対象外）が明記され、質問からその成立を確認できない時だけ applies=conditional とし、condition に原文の語句をそのまま写す。applies=unverified は監査の結果からシステムが付ける値で、あなたは出力しない。
 - request_units の各 id に対して、答えられる item を request_id 付きで出す。根拠がない要求は kind=gap にする。kind=context の要求単位は経緯・背景・回答の書き方の指示で、item も gap も作らない。
@@ -274,7 +272,7 @@ GENERATE_SYSTEM_PROMPT = (
 ### 出力の選択
 - 応答 schema の件数と長さの範囲で、同じ根拠の同じ説明をまとめ、質問に必要な内容を優先する。
 ### summary と言語
-- summary は items で裏付けた結論だけを1〜2文で述べる（複数の item をつないだ多段の結論（Step 3 の多段の規則）も items で裏付けた結論）。見出し・番号・出典表記・Markdown は書かない（体裁はシステムが組み立てる）。
+- summary は出力済みの説明と導出結果だけを1〜2文に要約し、参照を明示する。ここで新しい導出をしない。見出し・番号・出典表記・Markdown は書かない。
 - summary・text は質問の回答指示（kind=context にある書き方の指示も含む）に従い、言語の指定がなければ質問と同じ言語で書く。quote、原文の語句を写す condition、逐語にする text（multi_condition）は原文の表記と言語のままにする。
 """
 )
@@ -6249,8 +6247,11 @@ def link_summary_evidence(current: Round, *, published_summary: bool = True) -> 
     """摘要が指す最終本文の引用を結ぶ。参照の整合性で意味の支持を判定しない。"""
     summary = str(current.summary or "").strip()
     indexes = list(dict.fromkeys(current.draft.summary_item_indexes))
+    application_indexes = list(dict.fromkeys(current.draft.summary_application_indexes))
     links: list[dict[str, Any]] = []
     missing: list[int] = []
+    missing_applications: list[int] = []
+    unverified_application = False
     applicable = published_summary and bool(summary) and summary != answer_labels().neutral_summary
     if applicable and summary == current.draft.summary.strip():
         for index in indexes:
@@ -6295,7 +6296,55 @@ def link_summary_evidence(current: Round, *, published_summary: bool = True) -> 
                 links.append({"item_index": index, "text": entry.item.text, "citations": citations})
             else:
                 missing.append(index)
-    status = "not_applicable" if not applicable else "linked" if links and not missing and len(links) == len(indexes) else "unresolved"
+        for index in application_indexes:
+            original = current.draft.applications[index] if 0 <= index < len(current.draft.applications) else None
+            application = next(
+                (
+                    entry
+                    for entry in current.applications
+                    if original is not None
+                    and entry.source == "draft"
+                    and entry.published
+                    and entry.application == original
+                    and all(
+                        basis.draft_index is not None
+                        and 0 <= basis.draft_index < len(current.draft.items)
+                        and not basis.carried
+                        and not basis.withdrawn
+                        and not basis.unmatched
+                        and all(
+                            getattr(basis.item, name) == getattr(current.draft.items[basis.draft_index], name)
+                            for name in ("text", "kind", "request_id", "applies", "condition")
+                        )
+                        for basis in entry.entries
+                    )
+                ),
+                None,
+            )
+            citations = [
+                {
+                    "evidence_id": cited.span["evidence_id"],
+                    "document_id": str((cited.span.get("document_scope") or [""])[-1] or ""),
+                    "source_id": cited.span.get("source_id"),
+                    "page": cited.span.get("page"),
+                    "quote": cited.item.quote,
+                }
+                for entry in (application.entries if application is not None else [])
+                for cited in item_citations(entry)
+                if cited.span and cited.item.quote and not cited.removed and not cited.unmatched
+            ]
+            if application is not None and citations:
+                links.append({"application_index": index, "text": application.application.result, "citations": citations})
+                unverified_application |= bool(application.marks)
+            else:
+                missing_applications.append(index)
+    status = (
+        "not_applicable"
+        if not applicable
+        else "linked"
+        if links and not missing and not missing_applications and len(links) == len(indexes) + len(application_indexes)
+        else "unresolved"
+    )
     warning = current.summary_warning
     if status == "not_applicable":
         warning = ""
@@ -6305,9 +6354,13 @@ def link_summary_evidence(current: Round, *, published_summary: bool = True) -> 
             warning = ""
     elif not warning or warning == "監査なし":
         warning = "要約と最終本文の引用の対応を確認できません。"
+    if applicable and unverified_application and not warning:
+        warning = "要約に含む導出の妥当性は未確認です。"
     if applicable and (current.timing.get("audit_error_type") or current.audit_cut) and not warning:
         warning = "要約を含む回答の意味検査が完了していません。"
     citations_record: dict[str, Any] = {"status": status, "links": links, "unresolved_item_indexes": missing}
+    if application_indexes:
+        citations_record["unresolved_application_indexes"] = missing_applications
     sources = [citation for link in links for citation in link["citations"]]
     if sources:
         # 原文を含む対応は、保存回答を読む時点の権限で参照全体を再認可する。
@@ -7050,6 +7103,26 @@ def run_round(
         draft.applications,
         {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
     )
+    from rag_engine.generation.answer_parts import check_answer_parts
+
+    timing["answer_parts"] = check_answer_parts(
+        draft,
+        {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
+        applications,
+        {unit["id"] for unit in answer_requirements(question) if unit.get("kind") != "context"},
+    )
+    for part in timing["answer_parts"]["parts"]:
+        if part["status"] == "missing":
+            checked.append(
+                CheckedItem(
+                    GroundedItem(
+                        kind="gap",
+                        request_id=part["request_id"],
+                        text=answer_labels().missing_request_template.replace("{text}", part["text"]),
+                    ),
+                    added=True,
+                )
+            )
     # 撤回の候補 = 前の round で支持済みだった主張のうち、当該 round の監査の前に公開できる状態にあるもの（引き継いだ
     # item、または草稿が同じ引用・同じ説明で再掲した item）。前の round で既に降格していた item は数えない。
     previous_verified = [p for p in previous if p.span and p.published]

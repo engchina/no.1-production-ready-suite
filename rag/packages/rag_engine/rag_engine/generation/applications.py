@@ -121,8 +121,6 @@ def check_applications(
     for application in applications:
         entry = CheckedApplication(application)
         premises = [premise for premise in application.premises if premise.strip()]
-        if not premises:
-            entry.reject("前提が無い")
         for premise in premises:
             if _compact(premise) not in asked:
                 entry.warn(f"前提『{premise}』は質問に無い")
