@@ -234,7 +234,7 @@ from rag_engine.knowledge.runtime_knowledge import (
     runtime_rules_status,
     runtime_terms_status,
 )
-from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank
+from rag_engine.models.llm import CragRetrievalGradeOutput, QueryExpansionOutput, QueryRoutingOutput, RerankTextRank, query_routing_schema
 from rag_engine.models.storage import AdbHybridSearchUnavailable
 from rag_engine.resources.context_expansion_trace import bind_context_read_receipt
 from rag_engine.resources.rerank_diagnostics import bind_rerank_context
@@ -4136,8 +4136,8 @@ def _cover_missing_requests(
     """生成・実行済み監査が示した不足を、元の要求 ID と原文に解決して予算内で探し直す。
 
     原資料の文字上の一致は判定しない。補助検索は既存の権限・範囲・予算を維持し、既存根拠を追い出さない。
-    違う検索文をプログラムで作れない要求は、既存の質問の拡張（仮説文）で資料の書き方に寄せる（#4114）。仮説文は
-    検索と rerank の比較にだけ使い、根拠にも回答の入力にもしない。rerank の基準の文は要求の原文のまま。
+    違う検索文をプログラムで作れない要求は、原質問のみを除く既存の自動選択で検索文を作る。
+    生成文は検索と rerank の比較にだけ使い、根拠にも回答の入力にもしない。rerank の基準の文は要求の原文のまま。
     """
     tokenize = _coverage_tokenizer(settings)
     targets = coverage_targets(question, tokenize)
@@ -4186,18 +4186,42 @@ def _cover_missing_requests(
     search_settings = replace(settings, document_selection_enabled=False, screen_linking_enabled=False)
     # 上位が読取済みの親だけでも新しい親を選べるよう、読取済みの数だけ広げる（足す数は下の select_new_parents の上限のまま）。
     per_query = max(1, min(int(top_k), max(budget.max_chunks, budget.chunks_per_subquestion) + len(context.records)))
-    hypotheses: dict[str, str] = {}
+    vector_only: set[str] = set()
+    allowed = tuple(
+        strategy for strategy, _ in QUERY_STRATEGIES if strategy in _ROUTABLE_QUERY_STRATEGIES and strategy != SIMPLE_RETRIEVAL_STRATEGY
+    )
+
+    def count_model_call() -> None:
+        trace["llm_calls"] += 1
 
     def expand(target: RequestTarget) -> Sequence[str]:
-        trace["llm_calls"] += 1
-        generated = build_query_expansion(
-            target.query or target.text, HYDE_STRATEGY, settings, answer_llm_provider=answer_llm_provider
-        ).generated_queries
-        hypotheses.update({_dedupe_query_key(query): query for query in generated})
+        entry: dict[str, Any] = {"request_id": target.id, "selected_strategy": AUTO_ROUTING_STRATEGY}
+        trace.setdefault("query_expansions", []).append(entry)
+        try:
+            expansion = build_query_expansion(
+                target.query or target.text,
+                AUTO_ROUTING_STRATEGY,
+                settings,
+                answer_llm_provider=answer_llm_provider,
+                allowed_strategies=allowed,
+                on_model_call=count_model_call,
+            )
+        except Exception as exc:
+            entry.update(status="failed", error=type(exc).__name__)
+            raise
+        generated = tuple(dict.fromkeys((*expansion.generated_queries, *expansion.provision_queries)))
+        entry.update(
+            status="generated" if generated else "no_queries",
+            effective_strategy=expansion.effective_strategy,
+            routing_reason=expansion.routing_reason,
+            queries=list(generated),
+            rejected_queries=list(expansion.rejected_queries),
+        )
+        vector_only.update(_dedupe_query_key(query) for query in expansion.vector_only_queries)
         return generated
 
     def retrieve(text: str, queries: tuple[str, ...]) -> AnswerContext:
-        generated = tuple(query for query in queries if _dedupe_query_key(query) in hypotheses)
+        hypotheses = tuple(query for query in queries if _dedupe_query_key(query) in vector_only)
         return build_adb_hybrid_answer_context(
             text,
             run_id,
@@ -4212,8 +4236,8 @@ def _cover_missing_requests(
             retrieval_scope=retrieval_scope,
             classification_filter=classification_filter,
             runtime_knowledge=runtime_knowledge,
-            vector_only_queries=generated,
-            trusted_queries=generated,
+            vector_only_queries=hypotheses,
+            trusted_queries=hypotheses,
         )
 
     started = clock()
@@ -4231,15 +4255,15 @@ def _cover_missing_requests(
     elapsed = max(0.0, clock() - started)
     if usage is not None:
         subquestion_ids = {target.id for target in targets if target.subquestion}
-        usage.subquestions += sum(result.request_id in subquestion_ids and not result.reused for result in results)
-        usage.queries += sum(result.request_id not in subquestion_ids and not result.reused for result in results)
+        usage.subquestions += sum(result.request_id in subquestion_ids and not result.reused and bool(result.queries) for result in results)
+        usage.queries += sum(result.request_id not in subquestion_ids and not result.reused and bool(result.queries) for result in results)
         usage.elapsed_seconds += elapsed
         usage.searched_queries.extend(query for result in results for query in result.queries)
     if not results and stop == "same_query":
         trace["re_retrieval"] = {"applied": False, "skipped": stop}
         return context, trace
     if extra_budget is not None:
-        extra_budget.take(REQUEST_COVERAGE_KIND, sum(not result.reused for result in results))
+        extra_budget.take(REQUEST_COVERAGE_KIND, sum(not result.reused and bool(result.queries) for result in results))
     existing = {r.chunk_uid or r.id for r in context.records} | {p.record.chunk_uid or p.record.id for p in context.evidence_tree}
     selected = select_new_parents(results, existing, budget.max_chunks)
     added_ids: list[str] = []
@@ -4300,7 +4324,17 @@ def _cover_missing_requests(
     by_request = {result.request_id: result for result in results}
     for row in rows:
         if result := by_request.get(row["id"]):
-            row["retrieval_status"] = "failed" if result.error else "candidates_found" if result.parents else "no_candidates"
+            row["retrieval_status"] = (
+                "not_executed"
+                if not result.queries
+                else "failed"
+                if result.error
+                else "candidates_found"
+                if result.parents
+                else "no_candidates"
+            )
+            if not result.queries and result.error:
+                row["skip_reason"] = "query_expansion_failed"
             row["evidence_ids"] = [p.record.chunk_uid or p.record.id for p in result.parents]
         elif row.get("answer_status"):
             row["retrieval_status"] = "not_executed"
@@ -4871,14 +4905,25 @@ def _retrieval_query_plan_payload(
     return payload
 
 
+def _query_model_response(*args: Any, on_model_call: Callable[[], None] | None = None, **kwargs: Any) -> Any:
+    """実際に応答を要求する呼出だけを数え、準備段階の失敗は呼出数に含めない。"""
+    if on_model_call is not None:
+        on_model_call()
+    reader: Callable[..., Any] = parse_text_response
+    return reader(*args, **kwargs)
+
+
 def build_query_expansion(
     question: str,
     query_strategy: str,
     settings: Settings,
     *,
     answer_llm_provider: str | None = None,
+    allowed_strategies: tuple[str, ...] | None = None,
+    on_model_call: Callable[[], None] | None = None,
 ) -> QueryExpansionResult:
     """選択 strategy に従って検索 query の追加候補を生成します。"""
+    query_routing_schema(allowed_strategies)
     original_question = extract_original_question(question)
     selected_strategy = query_strategy_id(query_strategy)
     effective_strategy = selected_strategy
@@ -4894,9 +4939,13 @@ def build_query_expansion(
                 original_question,
                 settings,
                 answer_llm_provider=answer_llm_provider,
+                allowed_strategies=allowed_strategies,
+                on_model_call=on_model_call,
             )
         except Exception as exc:
-            return _degraded_query_expansion(original_question, selected_strategy, "検索戦略の判定", exc)
+            return _degraded_query_expansion(
+                original_question, selected_strategy, "検索戦略の判定", exc, allowed_strategies=allowed_strategies
+            )
         effective_strategy = routing.strategy
         routing_reason = routing.reason
         routing_data_items = tuple(_string_list(routing.routing_data_items))
@@ -4931,12 +4980,13 @@ def build_query_expansion(
         try:
             output = call_with_model_purpose(
                 "query.expand",
-                parse_text_response,
+                _query_model_response,
                 resolve_prompt("expansion.system", QUERY_EXPANSION_SYSTEM_PROMPT),
                 prompt,
                 settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
                 QueryExpansionOutput,
                 provider_id=answer_llm_provider,
+                on_model_call=on_model_call,
             )
         except Exception as exc:
             return _degraded_query_expansion(
@@ -4944,6 +4994,7 @@ def build_query_expansion(
                 selected_strategy,
                 "検索文の生成",
                 exc,
+                allowed_strategies=allowed_strategies,
                 routing_data_required=routing_data_required,
                 routing_data_items=routing_data_items,
                 provision_queries=provision_queries,
@@ -5013,6 +5064,7 @@ def _degraded_query_expansion(
     stage: str,
     exc: Exception,
     *,
+    allowed_strategies: tuple[str, ...] | None = None,
     routing_data_required: bool | None = None,
     routing_data_items: tuple[str, ...] = (),
     provision_queries: tuple[str, ...] = (),
@@ -5023,6 +5075,8 @@ def _degraded_query_expansion(
     中断せず、単純検索（拡張なし）として続行し、理由を routing_reason に残して実行記録と payload に
     表示する (#905)。利用者が選んだ selected_strategy は保つ。
     """
+    if allowed_strategies is not None and SIMPLE_RETRIEVAL_STRATEGY not in allowed_strategies:
+        raise exc
     error = type(exc).__name__  # 例外の型の名前だけ（本文は残さない。#3259）
     report_degraded("query_expansion", exc)
     return QueryExpansionResult(
@@ -7403,22 +7457,28 @@ def _route_query_strategy(
     settings: Settings,
     *,
     answer_llm_provider: str | None = None,
+    allowed_strategies: tuple[str, ...] | None = None,
+    on_model_call: Callable[[], None] | None = None,
 ) -> QueryRoutingOutput:
     """LLM で検索戦略と暫定確認観点を独立判定します。
 
     strategy は schema の enum で戦略 ID に制約される (#919)。ID の正規化と routable 判定は、schema を
     強制しない差し替え実装やテストの出力に対する防御として残す。
     """
+    schema = query_routing_schema(allowed_strategies)
     output = call_with_model_purpose(
         "query.route",
-        parse_text_response,
+        _query_model_response,
         resolve_prompt("routing.system", QUERY_ROUTING_SYSTEM_PROMPT),
-        _build_query_routing_prompt(question),
+        _build_query_routing_prompt(question, allowed_strategies),
         # 戦略の判定と検索文の生成は、根拠の評価と別の推論の量で呼ぶ (#1499。low では戦略の選択がぶれた)。
         settings_for_llm_purpose(settings, LLM_PURPOSE_STRATEGY),
-        QueryRoutingOutput,
+        schema,
         provider_id=answer_llm_provider,
+        on_model_call=on_model_call,
     )
+    if allowed_strategies is not None:
+        output = schema.model_validate(output.model_dump())
     strategy = query_strategy_id(output.strategy)
     if strategy not in _ROUTABLE_QUERY_STRATEGIES:
         strategy = SIMPLE_RETRIEVAL_STRATEGY

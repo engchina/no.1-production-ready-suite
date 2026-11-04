@@ -3193,6 +3193,10 @@ async def _answer_with_coverage(
     import rag_engine.adapters.oci as engine_oci
 
     def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
+        if issubclass(schema, QueryRoutingOutput) and schema is not QueryRoutingOutput:
+            return schema(
+                strategy="hyde", reason="合成の選択理由", queries=["請求書の再発行方法は？"]
+            )
         if schema is QueryExpansionOutput:
             return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)
@@ -3233,7 +3237,7 @@ async def _answer_with_coverage(
 async def test_request_coverage_re_retrieves_only_missing_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """根拠の無い要求だけを仮説文で 1 回検索し、その根拠を回答の材料と診断に足す(#1279・#4114)。"""
+    """根拠の無い要求だけを自動選択の検索文で探し、その根拠を回答の材料と診断に足す(#1279・#4114)。"""
     oracle = CoverageOracle()
 
     outcome = await _answer_with_coverage(

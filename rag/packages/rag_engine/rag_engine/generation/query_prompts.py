@@ -6,7 +6,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, get_args
 
 from rag_engine.config import Settings
 from rag_engine.generation.answer_images import _trim_generated_text
@@ -31,6 +31,7 @@ from rag_engine.generation.crag_support import MAX_GENERATED_QUERY_CHARS
 from rag_engine.knowledge.classification import ClassificationFilter
 from rag_engine.knowledge.prompt_files import render_prompt_template
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext
+from rag_engine.models.llm import query_routing_schema
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.task_contract import task_contract
 
@@ -187,6 +188,8 @@ _ROUTING_STRATEGIES = [
 ]
 
 # 静的な指示は Step 形式のテンプレートに置き、実行時の値は {{...}} で差し込む。UI はこの定数を読み取り専用で示す (#934)。
+_ROUTING_GUIDANCE = "戦略は選択肢の use_when で判断し、実データ確認とは独立に決める。エラーコードや完全なメッセージが1つだけなら単純検索、エラー文・対象・論点が2つ以上あれば質問分解。質問が明確・具体的というだけでは単純検索を選ばず、主要な語が文書の正式な用語と一致しているかで判断し、迷ったら RAG フュージョンを選ぶ。"
+
 QUERY_ROUTING_PROMPT_TEMPLATE = (
     """## Step 1: 原質問と保持する条件を読む
 原質問:
@@ -200,13 +203,13 @@ QUERY_ROUTING_PROMPT_TEMPLATE = (
 
 選択肢:
 """
-    f"{json.dumps(_ROUTING_STRATEGIES, ensure_ascii=False, indent=2)}"
+    "{{routing_strategies}}"
     """
 
 ## Step 3: 戦略と実データの要否を別々に点検する
-- 戦略は選択肢の use_when で判断し、実データ確認とは独立に決める。エラーコードや完全なメッセージが1つだけなら単純検索、エラー文・対象・論点が2つ以上あれば質問分解。質問が明確・具体的というだけでは単純検索を選ばず、主要な語が文書の正式な用語と一致しているかで判断し、迷ったら RAG フュージョンを選ぶ。
+- {{strategy_guidance}}
 - routing_data_required は、個案の原因・値・処理分岐の確定に実際の日付・設定・CSV・ログ・履歴などの照合が必要かの暫定判定。必要なら routing_data_items に確認するフィールドと目的を列挙し、値や原因は推測しない。操作方法・出力方法・エラーの意味・規則の説明、関連文書の不足、質問内に全必要値がある場合は false と空配列（検索後に回答生成で再判定する）。
-- 単純検索以外では、その選択肢の generate の指示に従って検索文を queries に返す（単純検索では空配列）。
+- {{query_generation_rule}}
 - 戦略とは別に、根拠が規定（法令・規程の条文）にありそうな質問のときだけ、根拠になる条文そのものを想定して、その条文の一文の形（「〜の場合において、〜は、〜とする。」「〜は、〜しなければならない。」のような規定の用語と文体）で書いた検索文を provision_queries に返す。質問の判断に効く論点（定義・要件・期限・効果）ごとに 1 つ、最大 3 つ。1 つの検索文に別の論点を混ぜず、その論点の要件の語（資格・権利・状態・期間など）を落とさない。「〜に関する条文」「〜の規定」のような条文を探す言い方にしない。規定に無関係な質問では空配列。
 """
     + _EXPANSION_CONSTRAINTS
@@ -250,13 +253,25 @@ QUERY_EXPANSION_PROMPT_TEMPLATE = (
 )
 
 
-def _build_query_routing_prompt(question: str) -> str:
+def _build_query_routing_prompt(question: str, allowed_strategies: tuple[str, ...] | None = None) -> str:
     """検索方法と実データ依存を混同しない二軸のルーティング指示を作成します。"""
+    schema = query_routing_schema(allowed_strategies)
+    available = set(get_args(schema.model_fields["strategy"].annotation))
+    simple_allowed = SIMPLE_RETRIEVAL_STRATEGY in available
     return render_prompt_template(
         resolve_prompt("routing.template", QUERY_ROUTING_PROMPT_TEMPLATE),
         {
             "question": question.strip(),
             "task_contract": _prompt_task_contract(question),
+            "routing_strategies": json.dumps(
+                [entry for entry in _ROUTING_STRATEGIES if entry["strategy"] in available], ensure_ascii=False, indent=2
+            ),
+            "strategy_guidance": _ROUTING_GUIDANCE
+            if simple_allowed
+            else "戦略は選択肢の use_when で判断し、実データ確認とは独立に決める。",
+            "query_generation_rule": "単純検索以外では、その選択肢の generate の指示に従って検索文を queries に返す（単純検索では空配列）。"
+            if simple_allowed
+            else "選んだ選択肢の generate の指示に従って検索文を queries に返す。",
         },
     )
 
