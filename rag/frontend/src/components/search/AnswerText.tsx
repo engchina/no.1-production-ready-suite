@@ -11,7 +11,7 @@ import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import type { RetrievedChunk } from "@/lib/api";
-import { answerPassageLabels, answerPassages, withoutPassageRecordSections } from "@/lib/answer-passages";
+import { answerPassageLabels, answerPassages, projectAnswerPassageSections } from "@/lib/answer-passages";
 import {
   answerFormat,
   citationLocation,
@@ -73,8 +73,9 @@ export function AnswerText({
   const source = useEvidenceSource<CitationTarget>();
   const format = answerFormat(diagnostics);
   const passages = streaming ? null : answerPassages(diagnostics);
-  // 本文の末尾の「根拠と矛盾し除いた内容」「確認が必要な点」は記録から共有の部品が作るので、本文の節は描かない（#3488）。
-  const body = passages ? withoutPassageRecordSections(text, format) : text;
+  // 記録から復元できる行と、本文だけに残る補足を同じ節へ投影する。本文だけの注意も失わない。
+  const projection = passages ? projectAnswerPassageSections(text, passages, format) : null;
+  const body = projection?.body ?? text;
   const blocks = streaming ? null : (parseAnswerText(body, format) ?? (passages ? plainParagraphs(body) : null));
   // 回答エンジンの決まった文言（保存した表示形式の値と同じ段落・説明）は画面の言語で描く（回答の言語の lang を付けない。#3349）。
   const fixedTexts = new Set(Object.values(format ?? {}));
@@ -92,6 +93,7 @@ export function AnswerText({
     <AnswerSections
       live={live}
       passages={passages}
+      passageNotes={projection?.notes}
       passageLabels={answerPassageLabels()}
       blocks={blocks.map((block, index): AnswerSectionsBlock =>
         block.kind === "paragraph"
@@ -168,7 +170,11 @@ export function AnswerText({
     }
     return {
       key: String(index),
-      content: entry.text,
+      content: entry.details?.length ? <>
+        {entry.text}
+        {entry.details.map((detail, position) => <span key={position} className="block whitespace-pre-line text-fg-muted">{detail}</span>)}
+      </> : entry.text,
+      passageText: [entry.text, ...(entry.details ?? [])].join("\n"),
       citations: entry.citations.flatMap((citation, position) => toCitations(citation, entry.citationLines[position])),
       extra: renderSectionLink(entry.text, title),
     };

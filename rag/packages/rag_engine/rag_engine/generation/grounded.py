@@ -54,7 +54,6 @@ from rag_engine.generation.answer_models import (
 )
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
-    APPLICATIONS_SECTION_TITLE,
     CheckedApplication,
     check_applications,
 )
@@ -3843,7 +3842,7 @@ def _body_sections(
         sections.append((labels.marked_rules_section, [labels.marked_rules_section_note, *lines(marked_rules, False)]))
     # 規則を質問の事実に当てはめた結果（#2155）。確かめきれないものは警告つき（#2738）。出典は当てはめた規則の根拠。
     if applied := application_lines(applications, _citation, add_citation, mark_application):
-        sections.append((APPLICATIONS_SECTION_TITLE, applied))
+        sections.append((answer_labels().applications_section, applied))
     # 操作の順序は草稿のまま保持し、同じ文書・機能の連続する操作だけを同じ節にする。
     # 別文書を挟んで戻る操作を文書ごとに集約すると、後続操作が先へ移ってしまう。
     groups: list[tuple[Any, list[CheckedItem]]] = []

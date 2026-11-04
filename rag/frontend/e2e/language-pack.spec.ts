@@ -395,8 +395,9 @@ test("入力上限で省略した根拠の案内を名前と説明で編集で�
 });
 
 
-test("根拠不足の定型文はラベルと説明で編集でき、草稿に保存される", { tag: "@responsive" }, async ({ page }) => {
+test("導出結論の見出しと根拠不足の定型文はラベルと説明で編集でき、草稿に保存される", { tag: "@responsive" }, async ({ page }) => {
   const values = {
+    applications_section: "資料をもとに導いた結論",
     insufficient_evidence_summary: "合成の根拠不足の案内です。",
     empty_search_guidance: "合成の検索範囲の確認案内です。",
     abstention_guidance: "合成の質問条件の確認案内です。",
@@ -411,6 +412,8 @@ test("根拠不足の定型文はラベルと説明で編集でき、草稿に�
     await expect(field).toHaveValue(value);
     await expect(field).toHaveAccessibleDescription(t(`settings.language.field.${key}.help`));
   }
+  await page.getByLabel("導いた結論の見出し", { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("applications-section-setting.png"), fullPage: true });
   const summary = page.getByLabel(t("settings.language.field.insufficient_evidence_summary"), { exact: true });
   await summary.fill("合成の変更した案内です。");
   await page.getByRole("button", { name: "草稿を保存", exact: true }).click();
