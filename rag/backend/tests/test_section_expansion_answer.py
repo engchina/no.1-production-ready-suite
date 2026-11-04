@@ -832,7 +832,7 @@ async def test_supplemental_searches_complete_new_sections_before_generation(
                         "citations": [],
                     }
                 )
-                return GroundedDraft.model_validate(data)
+                return schema.model_validate(data)
             return result
 
         monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)

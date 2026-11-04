@@ -3,6 +3,7 @@
 import unittest
 
 from audit_fixtures import legacy_audit_result
+from citation_unit_support import canonical_fixture
 from test_grounded_answer import FakeModel, audit, context, draft, ids, observed_audit, observed_supports, record, run
 
 from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE, arithmetic_mismatch
@@ -134,7 +135,7 @@ class SchemaModel:
         canonical_schema = GroundedDraft if schema.__name__ == "GroundedDraftWire" else schema
         if is_audit_wire(schema):
             return legacy_audit_result(value, schema)
-        return canonical_schema.model_validate(value)
+        return canonical_fixture(value) if canonical_schema is GroundedDraft else canonical_schema.model_validate(value)
 
 
 def neutral_answer(question, step_draft, step_audit):

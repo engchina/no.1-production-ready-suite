@@ -9,7 +9,7 @@ import re
 from unittest.mock import patch
 
 from audit_fixtures import legacy_audit_result
-from citation_unit_support import without_unit_annotations
+from citation_unit_support import canonical_fixture, without_unit_annotations
 from pydantic import BaseModel, ConfigDict
 
 from rag_engine.generation import answering, grounded
@@ -94,7 +94,7 @@ def echo_model(system, prompt, settings, schema, **options):
         # 長い根拠の行には行番号（`1| `）が付く（#2830）。番号を外した原文を引く。
         line = re.sub(r"^[0-9]+\| ", "", match.group(2)) if match else ""
         items = [{"kind": "rule", "text": line, "citations": [{"evidence_id": match.group(1), "quote": line}]}] if match else []
-        return GroundedDraft.model_validate({"summary": "answer", "items": items, "confidence": "high"})
+        return canonical_fixture({"summary": "answer", "items": items, "confidence": "high"})
     # 通常の回答の監査（#2795）は事実の監査の schema で呼ぶ。
     if is_audit_wire(schema) or schema in (GroundedAudit, GroundedFactAudit):
         parse_fixture = (lambda value: legacy_audit_result(value, schema)) if is_audit_wire(schema) else schema.model_validate

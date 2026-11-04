@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from audit_fixtures import legacy_audit_to_wire_fixture
+from citation_unit_support import canonical_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -67,7 +68,7 @@ class Model:
     def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         self.calls.append(schema.__name__)
         if issubclass(schema, generation_draft_wire_model()):
-            return draft(self.summary)
+            return canonical_fixture(draft(self.summary).model_dump(exclude_unset=True))
         assert is_audit_wire(schema)
         self.audits.append(json.loads(prompt))
         payload = {

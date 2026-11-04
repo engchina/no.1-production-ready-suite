@@ -416,7 +416,7 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
                     "citations": [],
                 }
             )
-            return GroundedDraft.model_validate(data)
+            return schema.model_validate(data)
         return result
 
     monkeypatch.setattr(engine_oci, "parse_text_response", explicit_gap)

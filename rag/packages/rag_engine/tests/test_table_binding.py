@@ -173,7 +173,7 @@ def test_grounded_item_with_a_value_from_another_row_is_removed_with_the_right_v
     assert entry.removed and not entry.published
     assert [mark["code"] for mark in entry.marks] == ["contradicted"]
     assert entry.marks[0]["detail"].startswith("根拠の表では『区分Ⅱ』の値は『02』（『01』は別の行の値）です。")
-    assert "原文「区分Ⅱ | 02」" in entry.marks[0]["detail"]
+    assert "原文「区分 | 選択肢の値 / 区分Ⅰ | 01 / 区分Ⅱ | 02 / 区分Ⅲ | 03」" in entry.marks[0]["detail"]
     kept = checked(right)
     assert not kept.removed and kept.reasons == [] and kept.state == ""
 

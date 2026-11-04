@@ -161,7 +161,10 @@ def _parent_span() -> dict:
 def test_each_item_citation_line_keeps_only_its_supporting_child() -> None:
     """同じ出典・頁でも項目ごとの出典行へ分け、その説明を支える子だけを残す。"""
     span = _parent_span()
-    entries = [_entry("合成の注意書きです。", span), _entry("右の枠に結果 C が出ます。", dict(span, evidence_id="E-b"))]
+    entries = [
+        grounded._quote_item(span, 0, len(HEADING), "合成の原文"),
+        grounded._quote_item(dict(span, evidence_id="E-b"), len(HEADING) + 1, len(span["text"]), "合成の原文"),
+    ]
     body, refs = grounded.render_with_citations("", entries)
     assert body.count(grounded.answer_labels().citation_prefix) == 2
     assert [ref["scope_source_ids"] for ref in refs] == [["doc:c-h"], ["doc:c-f"]]
@@ -171,16 +174,21 @@ def test_each_item_citation_line_keeps_only_its_supporting_child() -> None:
 def test_unlocated_quote_leaves_candidates_instead_of_the_first_child() -> None:
     """引用の位置が決まらず、根拠が 2 つの子にまたがれば、どちらも確定にせず候補に残す。"""
     span = _parent_span()
-    exact, candidates = grounded.citation_children(span, "根拠に無い文")
+    exact, candidates = grounded.citation_children(span)
     assert (exact, candidates) == ([], ["doc:c-h", "doc:c-f"])
     _body, refs = grounded.render_with_citations("", [_entry("根拠に無い文", span)])
     assert refs[0]["scope_source_ids"] == []
     assert refs[0]["candidate_source_ids"] == ["doc:c-h", "doc:c-f"]
 
 
-def test_quote_in_one_child_with_normalized_spacing_is_still_located() -> None:
+def test_selected_coordinates_locate_the_child_without_searching_the_display_quote() -> None:
     span = _parent_span()
-    assert grounded.citation_children(span, "右の枠に 結果C が出ます。") == (["doc:c-f"], [])
+    entry = grounded._quote_item(span, len(HEADING) + 1, len(span["text"]), "合成の原文")
+    entry.item = entry.item.model_copy(update={"text": "同じ原文が別の子にもある表示", "citations": []})
+    assert grounded.citation_children(span, citation_resolution=entry.citation_resolution) == (["doc:c-f"], [])
+    assert grounded.citation_children(span) == ([], ["doc:c-h", "doc:c-f"])
+    changed = dict(span, text=span["text"] + "改版")
+    assert grounded.citation_children(changed, citation_resolution=entry.citation_resolution) == ([], ["doc:c-h", "doc:c-f"])
 
 
 def test_parent_only_reference_marks_children_as_parent_context_not_as_cited() -> None:

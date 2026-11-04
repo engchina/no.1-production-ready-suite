@@ -117,7 +117,7 @@ def test_untrusted_audit_does_not_recover_legacy_free_quote_from_other_text():
     assert entry.item.text == SAVE and entry.published and not entry.confirmed
     assert entry.item.quote != SECOND and entry.item.lines == ""
     assert entry.unmatched
-    assert any(mark["code"] == "quote_unmatched" for mark in entry.marks)
+    assert any(mark["code"] == "citation_range_missing" for mark in entry.marks)
     assert entry.review_assessment["observed_support"] == "supported"
     assert entry.review_assessment["effective_support"] == "unknown"
 

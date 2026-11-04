@@ -235,18 +235,18 @@ def _add_verified_quotes(kept: list[Any], allowed: Sequence[Mapping[str, Any]], 
     """評価が確かめた写しのうち、説明が引いていないものを直接の原文（quote_only）として足す。足した件数を返す。"""
     from rag_engine.generation import grounded
 
-    seen = {
-        (candidate.span["evidence_id"], candidate.item.quote)
-        for entry in kept
-        for candidate in (entry, *(getattr(entry, "also", None) or ()))
-        if candidate.span
-    }
+    seen = {candidate.span["evidence_id"] for entry in kept for candidate in grounded.item_citations(entry) if candidate.span}
     added = 0
     for value in allowed:
-        span = next((span for span in spans if span["evidence_id"] in value["evidence_ids"]), None)
-        if span is not None and (span["evidence_id"], value["quote"]) not in seen:
-            kept.append(grounded._quote_item(span, value["quote"], answer_labels().crag_quote_only_note))
-            seen.add((span["evidence_id"], value["quote"]))
+        # 評価の写しから位置や別の出典を探さず、一意な source ID の原文範囲だけを補う。
+        source = str(value.get("source_id") or "")
+        candidates = [span for span in spans if source and source in {span.get("source_id"), *(span.get("source_aliases") or ())}]
+        if len(candidates) != 1:
+            continue
+        span = candidates[0]
+        if span["evidence_id"] not in seen and span["text"].strip():
+            kept.append(grounded._quote_item(span, 0, min(600, len(span["text"])), answer_labels().crag_quote_only_note))
+            seen.add(span["evidence_id"])
             added += 1
     return added
 

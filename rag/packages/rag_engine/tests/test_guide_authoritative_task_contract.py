@@ -5,6 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from audit_fixtures import legacy_audit_to_wire_fixture
+from citation_unit_support import canonical_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
@@ -144,12 +145,16 @@ def test_actual_round_audit_primary_question_uses_compiled_task_without_more_cal
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
         if issubclass(schema, generation_draft_wire_model()):
-            return GroundedDraft(
-                items=[
-                    GroundedItem(kind="operation", request_id="Q1", text=OPEN, citations=[GroundedCitation(evidence_id="E1", quote=OPEN)])
-                ],
-                summary="",
-                confidence="low",
+            return canonical_fixture(
+                GroundedDraft(
+                    items=[
+                        GroundedItem(
+                            kind="operation", request_id="Q1", text=OPEN, citations=[GroundedCitation(evidence_id="E1", quote=OPEN)]
+                        )
+                    ],
+                    summary="",
+                    confidence="low",
+                ).model_dump(exclude_unset=True)
             )
         assert is_audit_wire(schema)
         inputs.append(json.loads(prompt))

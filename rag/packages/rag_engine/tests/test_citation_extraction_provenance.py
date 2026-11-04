@@ -28,7 +28,7 @@ def test_valid_range_binds_the_exact_span_without_a_second_text_match(monkeypatc
     evidence = spans()
     displayed = grounded.format_functions(evidence)
     assert "2| " in displayed
-    monkeypatch.setattr(grounded, "resolve_evidence", lambda *args, **kwargs: pytest.fail("提取済み原文を再照合しない"))
+    assert not hasattr(grounded, "resolve_evidence")
     entry, dropped = check(item(evidence[0]["label"], "2-3"), evidence)
     units = grounded.citation_units(evidence[0]["text"])
     assert entry.item.quote == evidence[0]["text"][units[1][0] : units[2][1]]
@@ -128,17 +128,13 @@ def test_display_snapshot_does_not_enter_span_json_or_model_schema():
     assert "_extraction" not in item(evidence[0]["label"], "1").model_dump_json()
 
 
-@pytest.mark.parametrize(
-    "lines,origin,original_status", [("", "claim_inferred", "missing"), ("抽出条件を入力して抽出", "line_text", "invalid")]
-)
-def test_legacy_range_recovery_does_not_claim_the_original_range_was_valid(lines, origin, original_status):
+@pytest.mark.parametrize("lines,code", [("", "citation_range_missing"), ("抽出条件を入力して抽出", "citation_range_invalid")])
+def test_legacy_text_cannot_recover_a_missing_or_invalid_range(lines, code):
     evidence = spans()
-    proposal = item(evidence[0]["label"], lines).model_copy(update={"text": "抽出条件を入力して抽出ボタンを押します。"})
+    proposal = item(evidence[0]["label"], lines)
     cited, error = grounded.cited_quote(proposal, evidence)
-    assert error == "" and cited.quote in LONG
-    proof = grounded._citation_extraction(cited)
-    assert proof["quote_origin"] == origin and proof["requested_range_status"] == original_status
-    assert proof["authenticity"] == "verified"
+    assert error and not cited.quote
+    assert grounded._citation_extraction(cited)["reason_code"] == code
 
 
 def test_real_heading_quote_is_distinguished_from_missing_source():
@@ -208,20 +204,15 @@ def test_a_recorded_view_cannot_restore_a_source_outside_the_current_scope():
     assert entry.span is None
 
 
-def test_old_private_proof_cannot_bypass_the_legacy_quote_match(monkeypatch):
+def test_old_private_proof_cannot_bypass_required_range():
     evidence = spans()
     proposal = item(evidence[0]["label"], quote="原文にない引用")
     proposal.citations[0]._extraction = {"status": "extracted", "authenticity": "verified"}
-    called = []
-
-    def resolve(*args, **kwargs):
-        called.append(True)
-        return None, "旧形式の引用を照合できません。"
-
-    monkeypatch.setattr(grounded, "resolve_evidence", resolve)
     entry, _ = check(proposal, evidence)
-    assert called and entry.unmatched
-    assert entry.citation_resolution == {}
+    assert entry.unmatched
+    assert entry.citation_resolution["status"] == "failed"
+    assert entry.citation_resolution["reason_code"] == "citation_range_missing"
+    assert entry.citation_resolution["requested_quote"] == proposal.quote
 
 
 def test_width_normalization_in_the_display_does_not_change_raw_source_authenticity():

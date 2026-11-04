@@ -11,6 +11,7 @@ import json
 from dataclasses import replace
 
 from audit_fixtures import legacy_audit_result
+from citation_unit_support import canonical_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
@@ -105,7 +106,7 @@ class _Model:
         payload = value(prompt) if callable(value) else value
         if is_audit_wire(schema):
             return legacy_audit_result(payload, schema)
-        return canonical_schema.model_validate(payload)
+        return canonical_fixture(payload) if canonical_schema is GroundedDraft else canonical_schema.model_validate(payload)
 
     def names(self) -> list[str]:
         return [name for name, _prompt in self.prompts]
@@ -130,7 +131,7 @@ def _draft(items: list[dict], scope: list[tuple[str, str]], evidence_ids: list[s
 
 
 def _claim(*evidence_ids: str, text: str = CLAIM) -> dict:
-    return {"kind": "rule", "request_id": "Q1", "text": text, "citations": [{"evidence_id": eid} for eid in evidence_ids]}
+    return {"kind": "rule", "request_id": "Q1", "text": text, "citations": [{"evidence_id": eid, "lines": "2"} for eid in evidence_ids]}
 
 
 def _timing(result) -> dict:

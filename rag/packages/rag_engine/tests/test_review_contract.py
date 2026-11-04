@@ -13,7 +13,7 @@ from rag_engine.models.llm import GroundedAudit, GroundedDraft, GroundedItem, Gr
 
 
 def span(text: str) -> dict:
-    return {"evidence_id": "e1", "text": text, "source_id": "c1", "source": "source.pdf", "page": 1, "tags": []}
+    return {"evidence_id": "e1", "label": "E1", "text": text, "source_id": "c1", "source": "source.pdf", "page": 1, "tags": []}
 
 
 def audit(applicability: str, support: str = "supported") -> GroundedAudit:
@@ -67,20 +67,23 @@ def test_policy_is_not_part_of_the_model_response_contract() -> None:
     assert not {"applicability_action", "observed_applicability", "applicability_policy_reason"} & properties.keys()
 
 
-def test_near_quote_stays_a_candidate_after_a_supported_audit() -> None:
+def test_invalid_range_is_not_promoted_by_a_supported_audit() -> None:
     original = "入力した情報を確認してから、画面の保存ボタンを押してください。"
     misquoted = "入力した情報を確認してから、画面の保存ボタンを押してくださいます。"
     draft = GroundedDraft(
-        items=[GroundedItem(kind="rule", text="入力後に保存します。", citations=[{"evidence_id": "e1", "quote": misquoted}])],
+        items=[
+            GroundedItem(kind="rule", text="入力後に保存します。", citations=[{"evidence_id": "e1", "quote": misquoted, "lines": "999999"}])
+        ],
         summary="",
         confidence="low",
     )
     checked, _ = verify("操作を教えてください。", draft, [span(original)])
     entry = checked[0]
-    assert entry.quote_match == "fuzzy"
+    assert entry.quote_match == "unmatched"
     assert entry.unmatched and not entry.confirmed
     assert entry.citation_resolution["requested_quote"] == misquoted
-    assert entry.citation_resolution["resolved_quote"] == original
+    assert entry.citation_resolution["reason_code"] == "citation_range_out_of_bounds"
+    assert not entry.item.quote
     policy = applicability_policy(audit("matched"))
     # 支持の判定だけでは引用一致を昇格しない。
     apply_audit(checked, policy)
