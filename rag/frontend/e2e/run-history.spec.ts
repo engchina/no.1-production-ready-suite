@@ -1,5 +1,6 @@
 import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
 import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
+import nativeOnlyRrfDetails from "./fixtures/native-only-rrf-trace.json";
 import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
@@ -1721,9 +1722,9 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
     {key: "root", spec: ragSpan.root(), at: [0, 2]},
     {key: "native-only", spec: ragSpan.step("追加の検索結果統合", "root"), at: [0, .1], status: "skipped",
-      details: {fields: [{label: "追加統合", value: "原質問の検索内で統合済み"}]}},
+      details: nativeOnlyRrfDetails},
     {key: "outer", spec: ragSpan.step("検索結果の統合（RRF）", "root"), at: [.1, 2],
-      details: {fields: [{label: "結果", value: "検索結果を統合しました"}]}},
+      details: weightedRrfDetails},
   ])});
   await page.goto(`/history/${row.run_id}`);
   await page.getByTestId("run-history-timeline-summary").click();
@@ -1735,9 +1736,24 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await expect(outer).toHaveAttribute("data-status", "done");
   await timeline.screenshot({path: testInfo.outputPath("fusion-execution-status.png")});
   await inspectTraceStep(page, timeline, spanStepId("native-only"));
-  await expect(page.locator("[data-trace-inspector]")).toContainText("原質問の検索内で統合済み");
+  const inspector = page.locator("[data-trace-inspector]");
+  await expect(inspector).toContainText("原質問の検索内で統合済み");
+  await expect(inspector.locator("dt")).toContainText(["引き継いだ検索結果"]);
+  await expect(inspector.locator("dt").getByText("結果", {exact: true})).toHaveCount(0);
+  await expect(inspector).toContainText("重複除去前 1 件 / 重複除去後 1 件 / 正の寄与がある候補 1 件");
+  await expect(inspector).toContainText("引継元の一覧内順位 1 / 引継元の寄与 0.016 / 引き継いだ融合スコア 0.016");
+  await expect(inspector).toContainText("この段で追加の統合は行っていません");
+  const inheritedRecord = inspector.locator('pre[aria-label="原質問の検索から引き継いだ融合記録"]');
+  await expect(inheritedRecord).toHaveText(nativeOnlyRrfDetails.code[0].text);
+  await expect(inspector.getByText("RRF の計算記録", {exact: true})).toHaveCount(0);
   await expectNoPageOverflow(page);
-  await page.locator("[data-trace-inspector]").screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+  await inspector.screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+  await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  await inspectTraceStep(page, timeline, spanStepId("outer"));
+  await expect(inspector.locator("dt").getByText("結果", {exact: true})).toBeVisible();
+  await expect(inspector.locator('pre[aria-label="RRF の計算記録"]')).toHaveText(weightedRrfDetails.code[0].text);
+  await expect(inspector.getByText("引き継いだ検索結果", {exact: true})).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });
 
 test("保存済みの全文を分段取得して末尾まで確認する", {tag: "@responsive"}, async ({page}, testInfo) => {
