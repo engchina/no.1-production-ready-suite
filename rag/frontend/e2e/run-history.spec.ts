@@ -1,3 +1,4 @@
+import diversityStages from "./fixtures/diversity-stage-trace.json";
 import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
 import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
 import nativeOnlyRrfDetails from "./fixtures/native-only-rrf-trace.json";
@@ -1838,4 +1839,35 @@ test("入力の安全確認を五Tabで開き、実行結果と再利用を区�
   await expect(inspector).toContainText("false");
   await expectNoPageOverflow(page);
   await inspector.screenshot({path: testInfo.outputPath("input-guardrail-reused.png")});
+});
+
+
+test("多様性補充の設定上限と実績を履歴の経過と軌跡で区別する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+  await mockRuns(page, [row]);
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+    {key: "root", spec: ragSpan.root(), at: [0, 4]},
+    ...diversityStages.map((stage, index) => ({ key: stage.key,
+      spec: ragSpan.step("文書の多様性を補う候補の追加", "root"),
+      at: [index, index + .1] as [number, number],
+      status: stage.params.status === "skipped" ? "skipped" as const : "done" as const,
+      params: stage.params, details: stage.details,
+    })),
+  ])});
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  for (const stage of diversityStages) {
+    const step = timeline.locator(`[data-run-timeline-step="${spanStepId(stage.key)}"]`);
+    await expect(step).toContainText("文書の偏りを補う候補を加える");
+    await expect(step).toHaveAttribute("data-status", stage.params.status === "skipped" ? "skipped" : "done");
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(stage.details.fields[0].value);
+    await inspectTraceStep(page, timeline, spanStepId(stage.key));
+    const inspector = page.locator("[data-trace-inspector]");
+    for (const field of stage.details.fields) await expect(inspector).toContainText(field.value);
+    await expectNoPageOverflow(page);
+    await inspector.screenshot({path: testInfo.outputPath(`diversity-${stage.key}.png`)});
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  }
 });

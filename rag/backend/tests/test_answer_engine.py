@@ -3687,3 +3687,103 @@ def test_context_parent_uses_only_stored_parent_text_and_artifact_scope() -> Non
     parents = _stored_parents([_stored_child(c, rrf_score=0.9) for c in versions], state)
     assert len(parents) == 2
     assert parents[0].chunk_uid != parents[1].chunk_uid
+
+
+@pytest.mark.parametrize(
+    "depth,max_extra,new_document,present_document,expected,status,reason",
+    [
+        (0, 3, 2, 1, [], "skipped", "depth_disabled"),
+        (5, 0, 2, 1, [], "skipped", "extra_limit_zero"),
+        (5, 3, 0, 0, [], "skipped", "document_limits_zero"),
+        (1, 3, 2, 1, [], "completed", "no_match"),
+        (5, 2, 2, 1, ["a2", "b1"], "completed", "added"),
+        (5, 5, 2, 1, ["a2", "b1", "b2"], "completed", "added"),
+    ],
+)
+def test_diversity_stage_records_configuration_and_actual_result(
+    monkeypatch: pytest.MonkeyPatch,
+    depth: int,
+    max_extra: int,
+    new_document: int,
+    present_document: int,
+    expected: list[str],
+    status: str,
+    reason: str,
+) -> None:
+    from contextlib import contextmanager
+
+    from rag_engine.retrieval.search_stages import CANDIDATE_DIVERSITY_STAGE
+
+    import app.rag.answer_engine as module
+
+    record: dict[str, Any] = {}
+
+    class Observation:
+        def request(self, value: Any, **kwargs: Any) -> None:
+            record["request"] = value() if callable(value) else value
+
+        def response(self, value: Any) -> None:
+            record["response"] = value() if callable(value) else value
+
+        def display(self, **kwargs: Any) -> None:
+            record.update(kwargs)
+
+    @contextmanager
+    def observe(operation: str, name: str) -> Any:
+        assert (operation, name) == ("stage", CANDIDATE_DIVERSITY_STAGE)
+        yield Observation()
+
+    monkeypatch.setattr(module, "observe_call", observe)
+    actual = module._observed_diverse_candidates(
+        ["a1", "a2", "b1", "b2", "b3"],
+        1,
+        lambda value: value[0],
+        depth=depth,
+        max_extra=max_extra,
+        new_document=new_document,
+        present_document=present_document,
+    )
+    assert actual == expected
+    assert record["params"]["status"] == status
+    assert record["params"]["reason_code"] == reason
+    assert record["response"]["added_ids"] == expected
+    assert record["response"]["added_count"] == len(expected)
+    assert record["response"]["after_count"] == 1 + len(expected)
+    assert record["response"]["max_extra"] == max_extra
+    assert record["response"]["limit_reached"] is (reason == "added" and max_extra == 2)
+    if not expected:
+        assert record["response"]["added_document_count"] == 0
+
+
+def test_diversity_without_capture_does_not_build_trace_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import contextmanager
+
+    import app.rag.answer_engine as module
+
+    class Observation:
+        capture_enabled = False
+
+        def display(self, **kwargs: Any) -> None:
+            raise AssertionError("観測停止中に表示詳細を作成しました")
+
+    @contextmanager
+    def observe(operation: str, name: str) -> Any:
+        yield Observation()
+
+    monkeypatch.setattr(module, "observe_call", observe)
+    monkeypatch.setattr(module, "_diverse_candidates", lambda *args, **kwargs: ["a2"])
+
+    def document_of(value: str) -> str:
+        raise AssertionError("観測停止中に文書の集計を行いました")
+
+    assert module._observed_diverse_candidates(
+        ["a1", "a2"],
+        1,
+        document_of,
+        depth=2,
+        max_extra=1,
+        new_document=1,
+        present_document=1,
+    ) == ["a2"]

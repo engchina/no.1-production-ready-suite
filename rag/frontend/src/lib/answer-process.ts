@@ -79,6 +79,7 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "全文検索": "answer.step.textSearch",
   "検索対象のチャンクの読み込み": "answer.step.loadChunkPool",
   "要約・抽出値の原文の読み込み": "answer.step.loadDerivedSource",
+  "文書の多様性を補う候補の追加": "answer.step.candidateDiversity",
   "前後の文脈の読み込み": "answer.step.loadSiblings",
   "参照先の根拠の追加": "answer.step.expandReferences",
   "実体・別名による検索拡張": "answer.step.expandEntities",
