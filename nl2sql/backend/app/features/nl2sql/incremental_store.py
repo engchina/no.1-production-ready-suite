@@ -56,6 +56,7 @@ from .object_visibility import (
     user_visible_object_sql_predicate,
 )
 from .oracle_lob import configure_clob_fetch_as_text
+from .trace_bodies import confirm_saved_body, register_state_document, release_deleted_bodies
 
 PROFILE_NAMESPACE = "profiles"
 SCHEMA_NAMESPACE = "schema"
@@ -439,6 +440,8 @@ def _write_state_document(
             "payload": payload_json,
         },
     )
+
+    register_state_document(cursor, collection, entity_id, payload)
 
 
 def _claimed_state_document(
@@ -2769,7 +2772,15 @@ class OracleIncrementalNl2SqlRepository:
                     _write_state_document(
                         cursor, item_collection, item_id, payload, profile_id, item_status
                     )
+                for item_collection, _item_id in deletes:
+                    if item_collection in {"jobs", "history"}:
+                        release_deleted_bodies(
+                            cursor, "jobs" if item_collection == "jobs" else "history"
+                        )
                 self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
+                confirm_saved_body(collection, updated)
+                for item_collection, _item_id, item, _profile, _status in upserts:
+                    confirm_saved_body(item_collection, item)
                 return updated
             except Exception:
                 connection.rollback()
@@ -2806,7 +2817,9 @@ class OracleIncrementalNl2SqlRepository:
                     "payload": payload_json,
                 },
             )
+            register_state_document(cursor, collection, entity_id, payload)
             self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
+            confirm_saved_body(collection, payload)
 
     def patch_document(
         self,
@@ -2852,7 +2865,9 @@ class OracleIncrementalNl2SqlRepository:
                         "payload": payload_json,
                     },
                 )
+                register_state_document(cursor, collection, entity_id, current_payload)
                 self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
+                confirm_saved_body(collection, current_payload)
                 return current_payload
             except Exception:
                 connection.rollback()
@@ -2887,7 +2902,12 @@ class OracleIncrementalNl2SqlRepository:
                             "payload": payload_json,
                         },
                     )
+                    register_state_document(cursor, collection, entity_id, payload)
+                if collection in {"jobs", "history"}:
+                    release_deleted_bodies(cursor, "jobs" if collection == "jobs" else "history")
                 self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
+                for _identity, payload, _profile, _status in documents:
+                    confirm_saved_body(collection, payload)
             except Exception:
                 connection.rollback()
                 raise
@@ -2946,12 +2966,23 @@ class OracleIncrementalNl2SqlRepository:
                 "AND ENTITY_ID = :entity_id",
                 {"collection": collection, "entity_id": entity_id},
             )
+            if collection in {"jobs", "history"}:
+                release_deleted_bodies(cursor, "jobs" if collection == "jobs" else "history")
             self._bump_token_and_commit(connection, cursor, STATE_NAMESPACE)
 
     def delete_documents_older_than(self, collection: str, *, seconds: int) -> None:
         # 一時の文書（チャットの実行の結果の行など）は他の画面のキャッシュに関わらないので、
         # change token を進めない。期限は DB の時刻で判断する（アプリの時計のずれに左右されない）。
         with self._connection_factory() as connection, connection.cursor() as cursor:
+            if collection in {"jobs", "history"}:
+                cursor.execute(
+                    "DELETE FROM NL2SQL_STATE_DOCUMENTS WHERE COLLECTION = :collection "
+                    "AND UPDATED_AT < SYSTIMESTAMP - NUMTODSINTERVAL(:seconds, 'SECOND')",
+                    {"collection": collection, "seconds": seconds},
+                )
+                release_deleted_bodies(cursor, "jobs" if collection == "jobs" else "history")
+                connection.commit()
+                return
             _execute_committing(
                 connection,
                 lambda: cursor.execute(

@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 
-import { useTraceProgressSnapshot, type TraceProgressSnapshot } from "@production-ready/ui";
+import { useTraceProgressSnapshot, callBodyPath, type CallBodyLoader, type TraceProgressSnapshot } from "@production-ready/ui";
 
 import { apiGet } from "@/lib/api";
 import { API_TIMEOUT_MS } from "@/lib/requestPolicy";
@@ -22,16 +22,18 @@ export function useNl2SqlTraceProgress({
   targetId: string;
   path: string | null;
   active: boolean;
-}): TraceProgressSnapshot {
+}): TraceProgressSnapshot & {loadCallBody?: CallBodyLoader} {
   const fetchSnapshot = useCallback(
     (signal: AbortSignal) => (path ? apiGet<unknown>(path, { signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail }) : Promise.resolve([])),
     [path],
   );
-  return useTraceProgressSnapshot({
+  const loadCallBody = useCallback<CallBodyLoader>(body => apiGet<unknown>(callBodyPath(path ?? "", body), {signal: body.signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail}), [path]);
+  const snapshot = useTraceProgressSnapshot({
     key: path ? targetId : null,
     active,
     fetchSnapshot,
     definitions: CHAT_PROGRESS_STEP_DEFINITIONS,
     timeoutMs: API_TIMEOUT_MS.interactiveDetail,
   });
+  return {...snapshot, loadCallBody: path ? loadCallBody : undefined};
 }

@@ -21,6 +21,7 @@ from typing import Any, cast
 import pytest
 from opentelemetry import trace as otel_trace
 from pr_backend_core.config.tracing import TracingSettings
+from pr_backend_core.observability.trace_bodies import BodyPage, prepare_body
 from pr_backend_core.observability.tracing import (
     SpanDisplay,
     configure_tracing,
@@ -390,6 +391,91 @@ def test_trace_endpoints_are_registered_with_the_record_permissions() -> None:
     assert permission_for_route("GET", "/search/answers/{trace_id}/trace") == permission_for_route(
         "GET", "/search/answers/{trace_id}"
     )
+    for path in (
+        "/chat/conversations/{conversation_id}/messages/{assistant_message_id}/trace",
+        "/history/runs/{run_id}/trace",
+        "/search/runs/{run_id}/trace",
+        "/search/answers/{trace_id}/trace",
+    ):
+        assert permission_for_route("GET", path + "/spans/{span_id}/{slot}/body") == (
+            permission_for_route("GET", path)
+        )
+
+
+@pytest.mark.parametrize("surface", ["chat", "history", "search", "answer"])
+def test_body_page_requires_readable_primary_record_before_loading(
+    chat_fake: FakeChatOracle, monkeypatch: MonkeyPatch, surface: str
+) -> None:
+    body = prepare_body("合成の全文末尾。", part_characters=4)
+    page = BodyPage(body.reference, "complete", None, (list(body.parts())[1],), 2)
+    saved = _record()
+    oracle = _Oracle(answer={"trace_id": "record-a", "diagnostics_json": {"trace": saved}})
+    monkeypatch.setattr(
+        _RunStore, "rows", {"record-a": _run_row("record-a", stages_json={"trace": saved})}
+    )
+    calls: list[tuple[object, str, str, dict[str, Any]]] = []
+
+    def read(trace: object, kind: str, record_id: str, **kwargs: Any) -> BodyPage:
+        calls.append((trace, kind, record_id, kwargs))
+        return page
+
+    if surface == "chat":
+        route: Any = chat_route
+        _answer(chat_fake, status="COMPLETE", progress=saved)
+        path, kind, record_id = CHAT_TRACE, "message", ANSWER_ID
+    elif surface == "answer":
+        route = search_route
+        monkeypatch.setattr(route, "OracleClient", lambda *a, **k: oracle)
+        path, kind, record_id = "/api/search/answers/record-a/trace", "answer_record", "record-a"
+    else:
+        route = history_route if surface == "history" else search_route
+        monkeypatch.setattr(route, "RunHistoryStore", _RunStore)
+        monkeypatch.setattr(route, "OracleClient", lambda *a, **k: oracle)
+        path, kind, record_id = f"/api/{surface}/runs/record-a/trace", "history", "record-a"
+    monkeypatch.setattr(route, "read_saved_trace_body", read)
+    response = client.get(path + f"/spans/{STEP}/input/body?first_part=1")
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["parts"][0]["text"] == list(body.parts())[1].text
+    assert response.json()["data"]["next_part"] == 2
+    assert calls == [(saved, kind, record_id, {"span_id": STEP, "slot": "input", "first_part": 1})]
+    if surface == "chat":
+        chat_fake.messages["conv-t"] = []
+    elif surface == "answer":
+        oracle.answer = None
+    else:
+        monkeypatch.setattr(_RunStore, "rows", {})
+    assert client.get(path + f"/spans/{STEP}/input/body").status_code == 404
+    assert len(calls) == 1
+
+
+def test_history_body_uses_same_saved_source_as_trace_snapshot(monkeypatch: MonkeyPatch) -> None:
+    saved = _record()
+    message = StoredMessage(
+        id=ANSWER_ID,
+        conversation_id="conv-t",
+        role="ASSISTANT",
+        content="",
+        created_at=datetime.now(UTC),
+        progress=saved,
+    )
+    monkeypatch.setattr(history_route, "OracleClient", lambda *a, **k: _Oracle(message))
+    monkeypatch.setattr(history_route, "RunHistoryStore", _RunStore)
+    monkeypatch.setattr(
+        _RunStore,
+        "rows",
+        {"record-a": _run_row("record-a", conversation_id="conv-t", message_id=ANSWER_ID)},
+    )
+    calls: list[tuple[object, str, str]] = []
+
+    def read(trace: object, kind: str, record_id: str, **_: Any) -> BodyPage:
+        calls.append((trace, kind, record_id))
+        body = prepare_body("合成本文", part_characters=10)
+        return BodyPage(body.reference, "complete", None, tuple(body.parts()), None)
+
+    monkeypatch.setattr(history_route, "read_saved_trace_body", read)
+    response = client.get(f"/api/history/runs/record-a/trace/spans/{STEP}/input/body")
+    assert response.status_code == 200
+    assert calls == [(saved, "message", ANSWER_ID)]
 
 
 # --------------------------------------------------------------------------- #

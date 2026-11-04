@@ -23,6 +23,7 @@ from typing import Any
 from pr_backend_core.chat_history_window import chat_history_cutoff, within_chat_history
 
 from .models import DbAdminChatSummary, DbAdminChatTurn
+from .trace_bodies import confirm_saved_body, register_turn_body, release_deleted_bodies
 
 # 会話の名前の列の長さ（migration 024 の VARCHAR2(400 CHAR)）。
 TITLE_MAX_CHARS = 400
@@ -213,6 +214,7 @@ class DbAdminChatStore:
                 {"conversation_id": conversation_id},
             )
             deleted = int(getattr(cursor, "rowcount", 0) or 0)
+            release_deleted_bodies(cursor, "db_admin_turn")
             conn.commit()
         return deleted > 0
 
@@ -277,12 +279,14 @@ class DbAdminChatStore:
                     "turn_json": _turn_json(turn),
                 },
             )
+            register_turn_body(cursor, conversation_id, turn.turn_id, _turn_json(turn))
             cursor.execute(
                 "UPDATE NL2SQL_DB_ADMIN_CHATS SET UPDATED_AT = SYSTIMESTAMP "
                 "WHERE CONVERSATION_ID = :conversation_id",
                 {"conversation_id": conversation_id},
             )
             conn.commit()
+            confirm_saved_body("db_admin_turn", turn.model_dump(mode="json"))
 
     def update_turn(self, conversation_id: str, turn: DbAdminChatTurn) -> None:
         """ターンの内容（SQL の置き換え・最後の実行の要約）を書き換える。"""
@@ -313,7 +317,11 @@ class DbAdminChatStore:
                 },
             )
             updated = int(getattr(cursor, "rowcount", 0) or 0)
+            if updated:
+                register_turn_body(cursor, conversation_id, turn.turn_id, _turn_json(turn))
             conn.commit()
+            if updated:
+                confirm_saved_body("db_admin_turn", turn.model_dump(mode="json"))
         if updated == 0:
             raise LookupError(turn.turn_id)
 

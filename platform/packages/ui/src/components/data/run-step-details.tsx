@@ -1,3 +1,5 @@
+import { useCallBodyContent, type CallBodyLabels } from "./call-body-reader";
+import type { CallContent, CallBodyLoader } from "../../lib/call-body";
 import { useId, useMemo, useState } from "react";
 import { Tabs, TabPanel } from "../ui/tabs";
 import { formatRunDateTime, formatRunDuration } from "./run-history";
@@ -74,10 +76,7 @@ export interface RunStepDetailCode {
   text: string;
 }
 
-export interface CallContent {
-  status: "recorded" | "truncated" | "not_recorded" | "withheld";
-  text: string;
-}
+export type { CallContent } from "../../lib/call-body";
 
 export interface CallDetails {
   capture_enabled?: boolean;
@@ -112,11 +111,11 @@ export function sameRunStepDetails(a: RunStepDetails | undefined, b: RunStepDeta
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** 画面で整形するときの JSON の上限（文字数）。backend の上限と同じ。 */
-export const RUN_STEP_DETAILS_CODE_MAX_CHARS = 4000;
+/** 既定では本文を切り捨てない。閲覧領域の寸法はスクロールで制限する。 */
+export const RUN_STEP_DETAILS_CODE_MAX_CHARS = Number.POSITIVE_INFINITY;
 
 /**
- * 値を整形した JSON にし、上限を超えたら先頭だけにする（Agent のツールの結果など、画面が持っている値を写すとき）。
+ * 画面が持つ値をJSONに整形する。明示したpreview上限だけを適用し、既定は全文を保持する。
  */
 export function runStepDetailsJson(
   value: unknown,
@@ -216,6 +215,9 @@ export const DEFAULT_RUN_STEP_DETAILS_LABELS: RunStepDetailsLabels = {
 };
 
 export interface RunStepDetailsViewProps {
+  spanId?: string;
+  loadCallBody?: CallBodyLoader;
+  bodyLabels?: Partial<CallBodyLabels>;
   details: RunStepDetails;
   labels?: Partial<RunStepDetailsLabels>;
   className?: string;
@@ -312,10 +314,14 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
   const id = useId();
   const labels = { ...DEFAULT_RUN_STEP_DETAILS_LABELS, ...props.labels };
   const call = props.details.call;
-  const presentation = useMemo(() => call ? callPresentation(call) : null, [call]);
-  if (!call && !props.forceTabs) return <RunStepDetailsBody {...props} />;
+
   const empty: CallContent = {status: "not_recorded", text: ""};
-  const content = (tab === "input" ? call?.input : tab === "output" || tab === "reasoning" ? call?.output : call?.schema) ?? empty;
+  const slot = tab === "input" ? "input" : tab === "output" || tab === "reasoning" ? "output" : "schema";
+  const source = call?.[slot] ?? empty;
+  const body = useCallBodyContent(source, props.spanId, slot, props.loadCallBody, props.bodyLabels);
+  const content = body.content;
+  const presentation = useMemo(() => call ? callPresentation({...call, [slot]: content}) : null, [call, slot, content]);
+  if (!call && !props.forceTabs) return <RunStepDetailsBody {...props} />;
   const overviewEmpty = !hasRunStepDetails({...props.details, call: undefined}) && (call?.capture_enabled === false || !Object.values(presentation?.stats ?? {}).some(value => typeof value === "string" || typeof value === "number"));
   const blocks = tab === "input" ? presentation?.input : tab === "output" ? presentation?.output : tab === "reasoning" ? presentation?.reasoning : [];
   const semanticOutput = tab === "output" && Boolean(presentation?.embeddings.length || presentation?.ranks.length);
@@ -339,6 +345,7 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
         call?.capture_enabled === false ? <p className="text-xs text-fg-muted">{labels.disabled}</p> :
         content.status === "not_recorded" ? <p className="text-xs text-fg-muted">{labels.notRecorded}</p> :
         <div className="grid min-w-0 gap-3">
+          {body.controls}
           {(tab === "output" || tab === "reasoning") && presentation?.partial ? <p className="text-xs text-fg-muted">{labels.partial}</p> : null}
           {semanticOutput && presentation ? <div className="grid min-w-0 gap-3" data-call-semantic="">
             {presentation.embeddings.length ? <>
@@ -351,7 +358,6 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
             ]} /> : null}
           </div> : blocks?.length ? <CallTextBlocks key={tab} blocks={blocks} labels={labels} /> : tab === "reasoning" ? <p className="text-xs text-fg-muted">{labels.noReasoning}</p> :
             <RunStepDetailsBody details={{ code: [{ text: content.text === "" ? '""' : content.text, language: "json", label: labels[tab as "input" | "output" | "schema"] }] }} labels={labels} />}
-          {content.status === "truncated" ? <p className="text-xs text-fg-muted">{labels.truncated}</p> : null}
           {semanticOutput || blocks?.length || tab === "reasoning" ? <Disclosure summary={labels.raw} size="sm" variant="plain"><RunStepDetailsBody details={{ code: [{ text: content.text, language: "json", ariaLabel: labels.raw }] }} /></Disclosure> : null}
         </div>}
     </TabPanel>

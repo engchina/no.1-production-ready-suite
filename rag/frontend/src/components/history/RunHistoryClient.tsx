@@ -493,6 +493,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // 処理の経過は共通の span の表の snapshot（実行の trace の API。#3226）。終わった実行なので 1 回だけ読む。
   const trace = useRagTraceProgress({
     key: run.run_id,
+    bodyPath: `/api/history/runs/${encodeURIComponent(run.run_id)}/trace`,
     active: false,
     fetchSnapshot: (signal) => api.getRunTrace(run.run_id, signal),
   });
@@ -585,6 +586,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
       }
       timeline={
         <RunTimelineSection
+          loadCallBody={trace.loadCallBody}
           status={toRunStatus(run.status)}
           traceId={timeline.traceId}
           title={t("history.process.title")}

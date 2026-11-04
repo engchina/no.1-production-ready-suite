@@ -1,3 +1,4 @@
+import type { CallBodyLoader } from "../../lib/call-body";
 import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
 import { ArrowLeft, ArrowDown, ArrowUp, Bot, Layers, Wrench } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -33,7 +34,8 @@ export type TraceExplorerLabels = typeof DEFAULT_TRACE_EXPLORER_LABELS;
 
 
 
-export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLabels, size = "md" }: {
+export function TraceExplorer({ steps, onClose, loadCallBody, labels: detailLabels, explorerLabels, size = "md" }: {
+  loadCallBody?: CallBodyLoader;
   size?: "sm" | "md";
   steps: readonly RunTimelineStep[];
   onClose: () => void;
@@ -162,7 +164,7 @@ export function TraceExplorer({ steps, onClose, labels: detailLabels, explorerLa
               <p className="my-2 flex min-w-0 items-center gap-2 text-xs leading-5 text-fg-muted"><RunStepStatusIcon status={selected.status} spin={isLeaf(selected)} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />{runLabels.stepStatus[selected.status]} · {formatRunDuration(stepDurationMs(selected), runLabels.notRecorded)}</p>
               <div className="grid min-w-0 gap-1" data-trace-inspector-content="">
                 <div data-trace-processing-content="" className="grid min-w-0 gap-2">
-                  <RunStepDetailsView forceTabs activeTab={detailTab} onTabChange={setDetailTab}
+                  <RunStepDetailsView spanId={selected.id} loadCallBody={loadCallBody} forceTabs activeTab={detailTab} onTabChange={setDetailTab}
                     stepStatus={selected.status} reasoningApplicable={selected.details?.call ? undefined : traceCategory(selected) === "model"}
                     showStatistics={false} showTiming={false}
                     details={{...runStepContent(selected.details, [selected.detail, selected.traceMeta].filter(Boolean).join(" · ") || undefined), call: selected.details?.call}}

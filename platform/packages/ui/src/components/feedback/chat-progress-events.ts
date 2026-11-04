@@ -1,4 +1,5 @@
-import type { CallContent, CallDetails, RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
+import { parseCallContent } from "../../lib/call-body";
+import type { CallDetails, RunStepDetailCode, RunStepDetailField, RunStepDetails } from "../data/run-step-details";
 import { DEFAULT_TRACE_DETAILS_LABELS, type TraceDetailsLabels } from "../../lib/trace-labels";
 import { isMcpProtocolSpan, traceSpanDisplayName, traceSpanFields } from "../../lib/trace-tree";
 import type { ChatProgressStep, ChatProgressStepStatus } from "./chat-progress";
@@ -155,14 +156,7 @@ export function parseChatProgressStepDetails(value: unknown): RunStepDetails | u
     return [result];
   });
   const rawCall = record(source.call);
-  const readContent = (value: unknown): CallContent => {
-    const item = record(value);
-    const status = item?.status;
-    return status === "recorded" || status === "truncated"
-      ? { status, text: typeof item?.text === "string" ? item.text : "" }
-      : { status: status === "withheld" ? "withheld" : "not_recorded", text: "" };
-  };
-  const call: CallDetails | undefined = rawCall ? { ...(rawCall.capture_enabled === false ? {capture_enabled: false} : {}), input: readContent(rawCall.input), output: readContent(rawCall.output), schema: readContent(rawCall.schema) } : undefined;
+  const call: CallDetails | undefined = rawCall ? { ...(rawCall.capture_enabled === false ? {capture_enabled: false} : {}), input: parseCallContent(rawCall.input), output: parseCallContent(rawCall.output), schema: parseCallContent(rawCall.schema) } : undefined;
   if (!fields.length && !lines.length && !code.length && !call) return undefined;
   const details: RunStepDetails = {};
   if (call) details.call = call;

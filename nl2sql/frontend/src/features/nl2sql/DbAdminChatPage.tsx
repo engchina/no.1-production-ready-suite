@@ -1,3 +1,4 @@
+import { callBodyPath } from "@production-ready/ui";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
@@ -679,6 +680,7 @@ function DbAdminChatTurn({
           </>
         ) : (
           <ChatProgress
+            loadCallBody={body => apiGet<unknown>(callBodyPath(dbAdminChatTurnTracePath(conversationId, turn.turn_id), body), {signal: body.signal, timeoutMs: API_TIMEOUT_MS.interactiveDetail})}
             // 生成したときの span の木（実行は経過に足さない。実行の表示は文の区画。#3226）。
             steps={progress.steps}
             terminalStatus={progress.terminal}

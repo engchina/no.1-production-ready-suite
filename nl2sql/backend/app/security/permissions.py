@@ -827,6 +827,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/nl2sql/jobs/{job_id}"): _QUERY_HISTORY_READ,
     # 処理の段階のイベント（polling・SSE。#1359）。ジョブの取得と同じ権限。
     ("GET", "/nl2sql/jobs/{job_id}/trace"): _QUERY_HISTORY_READ,
+    ("GET", "/nl2sql/jobs/{job_id}/trace/spans/{span_id}/{slot}/body"): _QUERY_HISTORY_READ,
     ("POST", "/nl2sql/jobs/{job_id}/cancel"): _QUERY_HISTORY_READ,
     # チャットのターンの SQL の実行（#1154）。SQL 生成のジョブ・SELECT SQL の実行と同じ実行の権限。
     ("POST", "/nl2sql/jobs/{job_id}/execute"): _SQL_EXECUTE,
@@ -852,6 +853,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/nl2sql/history"): _QUERY_HISTORY_READ,
     ("GET", "/nl2sql/history/{history_id}"): _QUERY_HISTORY_READ,
     ("GET", "/nl2sql/history/{history_id}/trace"): _QUERY_HISTORY_READ,
+    ("GET", "/nl2sql/history/{history_id}/trace/spans/{span_id}/{slot}/body"): _QUERY_HISTORY_READ,
     # ---- フィードバック（一覧は管理、登録は利用者も） ----
     ("GET", "/nl2sql/feedback"): _FEEDBACK_MANAGE,
     ("POST", "/nl2sql/feedback"): _FEEDBACK_WRITE,
@@ -878,6 +880,11 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     (
         "GET",
         "/nl2sql/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/trace",
+    ): _DB_ADMIN_CHAT,
+    (
+        "GET",
+        "/nl2sql/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}"
+        "/trace/spans/{span_id}/{slot}/body",
     ): _DB_ADMIN_CHAT,
     ("PATCH", "/nl2sql/db-admin-chat/conversations/{conversation_id}"): _DB_ADMIN_CHAT,
     ("DELETE", "/nl2sql/db-admin-chat/conversations/{conversation_id}"): _DB_ADMIN_CHAT,

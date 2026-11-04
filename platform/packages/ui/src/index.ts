@@ -1024,3 +1024,7 @@ export { EvidenceReader, type EvidenceReadingInput, type EvidenceReadingWindow }
 export { SourceVersionStaleNotice } from "./components/document-preview/source-version-stale-notice";
 
 export { OriginalSourcePanel, type OriginalSourceInput, type OriginalSourceWindow, type OriginalSourceLoader } from "./components/document-preview/original-source-panel";
+
+export type { CallBodyReference, CallBodyRequest, CallBodySlot, CallBodyPage, CallBodyLoader } from "./lib/call-body";
+export { parseCallContent, parseCallBodyPage } from "./lib/call-body";
+export { callBodyPath } from "./lib/call-body";

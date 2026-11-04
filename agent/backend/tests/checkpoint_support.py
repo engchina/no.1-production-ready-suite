@@ -112,6 +112,10 @@ class CheckpointTable:
         """保存先の SQL なら実行した結果、それ以外は None。"""
         normalized = " ".join(statement.upper().split())
         key = str(params.get("checkpoint_key"))
+        if normalized.startswith("SELECT BODY_ID FROM PLATFORM_TRACE_BODY_OWNERS"):
+            # このfixtureには外部本文を保存していない。Runの実削除時の所属確認には空を返す。
+            self.calls.append("trace_body_owner_select")
+            return CheckpointResult()
         if normalized.startswith("SELECT CASE WHEN JSON_VALUE(SNAPSHOT_JSON"):
             self.calls.append("head_select")
             if not self.versioned:
@@ -216,7 +220,12 @@ class CheckpointCursor:
     def setinputsizes(self, **_sizes: Any) -> None:
         return None
 
-    def execute(self, statement: str, **params: Any) -> None:
+    def execute(
+        self, statement: str, parameters: dict[str, Any] | None = None, **params: Any
+    ) -> None:
+        if parameters is not None:
+            assert not params
+            params = parameters
         result = self._table.execute(statement, params)
         if result is None:  # pragma: no cover - 想定外の SQL を見逃さない
             raise AssertionError(statement)

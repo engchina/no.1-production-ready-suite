@@ -59,6 +59,8 @@ from pydantic import (
 )
 from starlette.responses import Response, StreamingResponse
 
+from .observability.trace_bodies import BodyFailure, BodyReference
+
 CHAT_PROGRESS_SCHEMA_VERSION = 1
 # SSE のイベントの名前（`event:`）。段階のイベントと、イベントの無い間の heartbeat。
 CHAT_PROGRESS_SSE_EVENT = "chat_progress"
@@ -238,7 +240,12 @@ CALL_CONTENT_MAX = 64000
 class CallContent(_DetailsBase):
     """呼び出し時点の内容。未記録と空の応答を区別する。"""
 
-    status: Literal["recorded", "truncated", "not_recorded", "withheld"] = "not_recorded"
+    status: Literal["recorded", "truncated", "not_recorded", "withheld", "incomplete"] = (
+        "not_recorded"
+    )
+    body_reference: BodyReference | None = None
+    preview_only: bool = False
+    failure_code: BodyFailure | None = None
     text: str = Field(default="", max_length=CALL_CONTENT_MAX + 1)
 
     @model_validator(mode="before")

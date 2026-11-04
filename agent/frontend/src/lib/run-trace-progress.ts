@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useTraceProgressSnapshot, type TraceProgressSnapshot } from "@production-ready/ui";
+import { useTraceProgressSnapshot, type CallBodyLoader, type TraceProgressSnapshot } from "@production-ready/ui";
 
 import { agentApi, type RunState } from "@/lib/api";
 import { agentProgressDefinitions, runProgressIsLegacy } from "@/lib/run-history";
@@ -17,13 +17,14 @@ import { agentProgressDefinitions, runProgressIsLegacy } from "@/lib/run-history
 export function useRunTraceProgress(
   run: Pick<RunState, "id" | "steps" | "trace_store" | "trace_id" | "trace_dropped_spans" | "status">,
   { active }: { active: boolean }
-): TraceProgressSnapshot {
+): TraceProgressSnapshot & {loadCallBody: CallBodyLoader} {
   const legacy = runProgressIsLegacy(run);
   const runId = run.id;
+  const loadCallBody = useCallback<CallBodyLoader>(body => agentApi.getRunTraceBody(runId, body), [runId]);
   const fetchSnapshot = useCallback((signal: AbortSignal) => agentApi.getRunTrace(runId, { signal }), [runId]);
   // ツールの span の詳細に、Run の step のデータの範囲の記録・取り直した結果を足す（チャットと実行の詳細で同じ。#2294）。
   const definitions = useMemo(() => agentProgressDefinitions(run.steps), [run.steps]);
   const snapshot = useTraceProgressSnapshot({ key: legacy ? null : runId, active: !legacy && active, fetchSnapshot, definitions });
   const droppedSpans = Math.max(snapshot.droppedSpans, run.trace_dropped_spans ?? 0);
-  return { ...snapshot, legacy, droppedSpans, partial: !legacy && droppedSpans > 0 };
+  return { ...snapshot, loadCallBody, legacy, droppedSpans, partial: !legacy && droppedSpans > 0 };
 }

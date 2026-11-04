@@ -50,6 +50,11 @@ from pydantic import BaseModel, Field, ValidationError
 from app.config import Settings
 from app.rag.request_context import current_audit_request_context
 from app.rag.span_display import span_display_name
+from app.rag.trace_bodies import (
+    RagBodyOwnerKind,
+    start_trace_body_persistence,
+    stop_trace_body_persistence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +101,7 @@ def start_trace_span_writer(settings: Settings) -> TraceSpanWriter | None:
         )
         writer.start()
         _WRITER = writer
+        start_trace_body_persistence(settings)
         return writer
 
 
@@ -106,6 +112,7 @@ def stop_trace_span_writer() -> None:
         writer, _WRITER = _WRITER, None
     if writer is not None:
         writer.stop()
+    stop_trace_body_persistence()
 
 
 def trace_span_writer() -> TraceSpanWriter | None:
@@ -456,6 +463,18 @@ async def run_trace_snapshot(oracle: Any, row: Mapping[str, Any]) -> TraceSnapsh
     チャットの実行は、会話の回答の記録（同じ trace。実行の記録の後の工程の詳細まで持つ）を優先する。
     終端は実行の状態（正本）。
     """
+    saved, _, _ = await run_trace_source(oracle, row)
+    return await trace_snapshot(
+        saved,
+        target_id=str(row.get("run_id") or ""),
+        terminal=_RUN_TERMINAL.get(str(row.get("status") or ""), "done"),
+    )
+
+
+async def run_trace_source(
+    oracle: Any, row: Mapping[str, Any]
+) -> tuple[object, RagBodyOwnerKind, str]:
+    """snapshotと全文読取で、同じ認可済みの保存元・版を使う。"""
     raw_stages = row.get("stages_json")
     stages = raw_stages if isinstance(raw_stages, Mapping) else {}
     saved: object = stages.get("trace")
@@ -470,12 +489,8 @@ async def run_trace_snapshot(oracle: Any, row: Mapping[str, Any]) -> TraceSnapsh
             and from_message.trace_id is not None
             and (from_run is None or from_run.trace_id in (None, from_message.trace_id))
         ):
-            saved = message.progress
-    return await trace_snapshot(
-        saved,
-        target_id=str(row.get("run_id") or ""),
-        terminal=_RUN_TERMINAL.get(str(row.get("status") or ""), "done"),
-    )
+            return message.progress, "message", str(message_id)
+    return saved, "history", str(row.get("run_id") or "")
 
 
 __all__ = [

@@ -103,6 +103,7 @@ from app.features.agent.tools import (
     mcp_base_tool_name,
     set_run_finished_check,
 )
+from app.features.agent.trace_bodies import confirm_run_bodies
 from app.observability import record_runtime_event
 from app.oracle_connection import connect_platform_oracle
 from app.settings import get_settings
@@ -1395,6 +1396,7 @@ class RuntimeToolCallAuditData(Page[RuntimeToolCallAuditRecord]):
 
 
 class AgentRuntimeRepositoryContract(Protocol):
+    def trace_body_namespace(self) -> str | None: ...
     def claim_control_plane_run(self, worker_id: str, *, lease_seconds: int) -> RunState | None: ...
     def persist_control_plane_state(self) -> None: ...
     def flush_writes(self, ticket: int | None = None) -> None: ...
@@ -1676,6 +1678,9 @@ def _on_event_loop_thread() -> bool:
 
 
 class AgentRuntimeRepository:
+    def trace_body_namespace(self) -> str | None:
+        return None
+
     def __init__(self, snapshot_path: str | Path | None = None) -> None:
         self._lock = _RepositoryLock(self._flush_after_release, self._on_lock_entered)
         self._condition = Condition(self._lock)  # type: ignore[arg-type]
@@ -4260,6 +4265,9 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     def _stores_changes(self) -> bool:
         return True
 
+    def trace_body_namespace(self) -> str | None:
+        return self._oracle_checkpoint_key
+
     def _migration_required(self, detail: str) -> AgentRuntimeMigrationRequiredError:
         return AgentRuntimeMigrationRequiredError(
             "Agent の保存先（Run・業務 Agent）が、Run ごとの行に移す前の形です。運用設定 > "
@@ -4524,6 +4532,8 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
                         )
                         self._write_projection_cursor(cursor, batch)
                     connection.commit()
+                    if batch is not None:
+                        confirm_run_bodies(batch.entities)
             except Exception:
                 self._lock.acquire()
                 try:
@@ -4661,6 +4671,7 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
             checkpoint_store.update_head(cursor, table, key, version=version, text=header)
             self._write_projection_cursor(cursor, batch)
             connection.commit()
+            confirm_run_bodies(batch.entities)
         self._lock.acquire()
         try:
             self._apply_storage_changes_locked(

@@ -259,14 +259,15 @@ describe("処理の経過（span の木。Issue 3226）", () => {
     expect(runTimelineSteps(state, SPAN_EVENTS)).toEqual(live.map(chatProgressTimelineStep));
   });
 
-  it("長い結果は先頭だけにして省略の印を付け、ツールの呼び出しでなければ詳細を付けない", () => {
+  it("長い結果も全文を保持し、ツールの呼び出しでなければ詳細を付けない", () => {
     const long = toolStep("s1", "nl2sql__query", {
       tool_call: { name: "nl2sql__query", arguments: {} },
       tool_result: { name: "nl2sql__query", success: true, output: { text: "x".repeat(10_000) } } as never,
     });
     const details = toolStepDetails(long);
-    expect(details?.truncated).toBe(true);
+    expect(details?.truncated).not.toBe(true);
     expect(details?.code).toHaveLength(1);
+    expect(JSON.parse(details!.code![0].text)).toEqual({text: "x".repeat(10_000)});
     // 引数も結果も無いツールの段も、内部名だけは詳細に出す。
     expect(toolStepDetails(toolStep("s2", "a", { tool_call: { name: "a", arguments: {} } }))).toEqual({
       fields: [{ label: "ツール", value: "a", mono: true }],

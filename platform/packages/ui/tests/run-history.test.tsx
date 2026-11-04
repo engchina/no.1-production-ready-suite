@@ -995,7 +995,11 @@ describe("RunTimeline の段の詳細（#2294）", () => {
     expect(region?.textContent).toContain("一部だけ");
   });
 
-  it("JSON の整形は上限で切り、印を返す。中身の判定は空の値を数えない", () => {
+  it("JSONは既定で全文を保持し、明示previewだけ省略を示す。空の値は詳細と数えない", () => {
+    const complete = {text: "x".repeat(10_000) + "synthetic-end"};
+    const saved = runStepDetailsJson(complete);
+    expect(saved.truncated).toBe(false);
+    expect(JSON.parse(saved.text)).toEqual(complete);
     expect(runStepDetailsJson({ a: 1 })).toEqual({ text: '{\n  "a": 1\n}', truncated: false });
     const long = runStepDetailsJson({ text: "x".repeat(50) }, 10);
     expect(long.truncated).toBe(true);

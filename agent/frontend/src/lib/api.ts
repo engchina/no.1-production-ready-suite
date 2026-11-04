@@ -1,3 +1,4 @@
+import { callBodyPath, type CallBodyRequest } from "@production-ready/ui";
 import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
 import {
   DEFAULT_API_ERROR_DETAIL_LABELS,
@@ -2127,6 +2128,8 @@ export const agentApi = {
     }),
   getRun: (runId: string) => requestRun(`/api/runs/${runId}`),
   /** Run の処理の経過（共通の span の表の snapshot。実行中は画面が読み直す。#3226 の案 A）。 */
+  getRunTraceBody: (runId: string, body: CallBodyRequest) =>
+    request<unknown>(callBodyPath(`/api/runs/${encodeURIComponent(runId)}/trace`, body), {signal: body.signal}),
   getRunTrace: (runId: string, options: { signal?: AbortSignal } = {}) =>
     request<RunTraceData>(`/api/runs/${encodeURIComponent(runId)}/trace`, { signal: options.signal }),
   /** Run の RAG の根拠の原文のプレビュー（#2389。画面を見ている利用者として RAG が作る）。 */

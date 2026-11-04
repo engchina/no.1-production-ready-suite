@@ -15,6 +15,8 @@ from pr_backend_core.observability.trace_bodies import (
     prepare_body,
     read_body_page,
     release_body_owner,
+    release_body_owners,
+    replace_body_owner,
     write_body,
 )
 
@@ -42,6 +44,56 @@ def test_recorded_empty_body_has_one_empty_part() -> None:
 def test_record_owners_are_distinct_even_for_same_product() -> None:
     assert BodyOwner("rag", "message", "record-a") != BodyOwner("rag", "history", "record-a")
     assert BodyOwner("rag", "history", "record-a") != BodyOwner("agent", "history", "record-a")
+
+
+def test_batch_owner_release_preserves_surviving_record_and_locks_in_body_order() -> None:
+    class LockCursor(OwnerCursor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.locks: list[str] = []
+
+        def execute(self, sql: str, binds: dict[str, Any]) -> None:
+            if sql.startswith("SELECT BODY_ID FROM PLATFORM_TRACE_BODIES"):
+                self.locks.append(str(binds["body_id"]))
+            super().execute(sql, binds)
+
+    cursor = LockCursor()
+    first = prepare_body("合成本文A", part_characters=2)
+    second = prepare_body("合成本文B", part_characters=2)
+    chat = BodyOwner("rag", "message", "message-a")
+    history = BodyOwner("rag", "history", "history-a")
+    retained = BodyOwner("rag", "answer_record", "answer-a")
+    attach_body_owner(cursor, chat, [first.reference, second.reference])
+    attach_body_owner(cursor, history, [second.reference])
+    attach_body_owner(cursor, retained, [first.reference])
+    write_body(cursor, first, clob_type=object())
+    write_body(cursor, second, clob_type=object())
+    release_body_owners(cursor, [history, chat, chat])
+    assert cursor.locks == sorted([first.reference.body_id, second.reference.body_id])
+    assert cursor.manifests[first.reference.body_id][5] == "complete"
+    assert cursor.manifests[second.reference.body_id][5] == "deleted"
+    assert "".join(cursor.parts[first.reference.body_id]) == first.text
+    assert cursor.owners == {("rag", "answer_record", "answer-a", first.reference.body_id)}
+
+
+def test_record_update_releases_only_removed_references_and_keeps_shared_full_text() -> None:
+    cursor = OwnerCursor()
+    first = prepare_body("古い合成本文", part_characters=2)
+    second = prepare_body("新しい合成本文", part_characters=2)
+    message = BodyOwner("rag", "message", "record-a")
+    history = BodyOwner("rag", "history", "record-a")
+    attach_body_owner(cursor, message, [first.reference])
+    attach_body_owner(cursor, history, [first.reference])
+    write_body(cursor, first, clob_type=object())
+    replace_body_owner(cursor, message, [second.reference])
+    assert cursor.manifests[first.reference.body_id][5] == "complete"
+    assert ("rag", "message", "record-a", first.reference.body_id) not in cursor.owners
+    assert ("rag", "message", "record-a", second.reference.body_id) in cursor.owners
+    replace_body_owner(cursor, history, [])
+    assert cursor.manifests[first.reference.body_id][5] == "deleted"
+    assert first.reference.body_id not in cursor.parts
+    replace_body_owner(cursor, message, [])
+    assert not cursor.owners and cursor.manifests[second.reference.body_id][5] == "deleted"
 
 
 @pytest.mark.parametrize("part_size", [0, -1])
