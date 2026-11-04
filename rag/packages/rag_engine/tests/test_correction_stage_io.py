@@ -2,7 +2,8 @@
 
 import pytest
 from test_completion_stage_io import PolicyRecorder
-from test_correction_trace import fixture, run_recorded, test_correction_time_limit_is_skipped_without_changing_budget as check_time_limit
+from test_correction_trace import fixture, run_recorded
+from test_correction_trace import test_correction_time_limit_is_skipped_without_changing_budget as check_time_limit
 from test_evidence_refinement_flow import Parser, run
 from test_grounded_answer import FakeModel
 
