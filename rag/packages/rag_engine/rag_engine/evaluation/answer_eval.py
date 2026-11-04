@@ -53,6 +53,7 @@ from rag_engine.generation.operation_audit import (
     standard_answer_unit_ranges,
     table_header_lines,
 )
+from rag_engine.generation.question_names import question_statements
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import fold_text_with_positions, fold_width
@@ -344,10 +345,6 @@ _FUZZY_QUOTE_COVERAGE = 0.9
 _FUZZY_SPAN_PRECISION = 0.85
 # 数の並び（算用数字・漢数字）。近似で結び付けるときも、引用と原文の範囲で数の並びが同じことを求める。
 _NUMBER_RUN = re.compile(r"[0-9〇一二三四五六七八九十百千万億兆]+")
-
-
-_QUESTION_SENTENCE_SPLIT = re.compile(r"(?<=[。．？?！!])|\n")
-_QUESTION_SENTENCE_END = re.compile(r"(?:か|ください|下さい|[?？])[。．.!！]?$")
 
 
 def _quote_form(text: str) -> tuple[str, list[int]]:
@@ -1581,12 +1578,6 @@ def _judge_claim(
     ]
 
 
-def _question_statements(question: str) -> list[str]:
-    """質問の文のうち、問い・依頼でない文（利用者が事実として述べた文）の照合の形。"""
-    sentences = (item.strip() for item in _QUESTION_SENTENCE_SPLIT.split(question))
-    return [_quote_form(item)[0] for item in sentences if item and not _QUESTION_SENTENCE_END.search(item)]
-
-
 def _checked_subject(claim: ClaimCheck, output: ClaimJudgement, catalog: Mapping[str, Mapping[str, Any]]) -> ClaimCheck:
     """対象を名指しした supported を、引用した根拠と質問の事実で確かめる。
 
@@ -1605,7 +1596,8 @@ def _checked_subject(claim: ClaimCheck, output: ClaimJudgement, catalog: Mapping
         return claim
     fact = _quote_form(output.question_fact)[0]
     question = catalog.get(QUESTION_EVIDENCE_ID)
-    statements = _question_statements(str(question.get("text") or "")) if question is not None else []
+    text = str(question.get("text") or "") if question is not None else ""
+    statements = [_quote_form(statement)[0] for statement in question_statements(text)]
     if len(fact) > len(subject) and any(fact in statement for statement in statements):
         return claim
     return claim.model_copy(
