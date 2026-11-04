@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 from audit_fixtures import legacy_audit_to_wire_fixture
+from citation_unit_support import canonical_fixture
 from openai.lib._parsing._responses import type_to_text_format_param
 
 from rag_engine.config import get_settings
@@ -210,18 +211,20 @@ def test_run_round_delivers_authoritative_scope_and_keeps_supported_operation_as
     def parse(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
         if issubclass(schema, generation_draft_wire_model()):
-            return GroundedDraft(
-                items=[
-                    GroundedItem(
-                        kind="operation",
-                        request_id="Q1",
-                        text=CORRECT,
-                        applies="matched",
-                        citations=[GroundedCitation(evidence_id="E1", quote=CORRECT)],
-                    )
-                ],
-                summary="",
-                confidence="low",
+            return canonical_fixture(
+                GroundedDraft(
+                    items=[
+                        GroundedItem(
+                            kind="operation",
+                            request_id="Q1",
+                            text=CORRECT,
+                            applies="matched",
+                            citations=[GroundedCitation(evidence_id="E1", quote=CORRECT)],
+                        )
+                    ],
+                    summary="",
+                    confidence="low",
+                ).model_dump(exclude_unset=True)
             )
         assert is_audit_wire(schema)
         audit_inputs.append(json.loads(prompt))
@@ -376,18 +379,20 @@ def test_generation_and_observation_preserve_confirmed_values_and_origins_withou
             generated.append(prompt)
             identity = "E1"
             claim = SWAPPED if mode == "standard" and len(generated) == 1 else CORRECT
-            return GroundedDraft(
-                items=[
-                    GroundedItem(
-                        kind="operation",
-                        text=claim,
-                        request_id="Q1",
-                        applies="matched",
-                        citations=[GroundedCitation(evidence_id=identity, quote=CORRECT)],
-                    )
-                ],
-                summary="",
-                confidence="low",
+            return canonical_fixture(
+                GroundedDraft(
+                    items=[
+                        GroundedItem(
+                            kind="operation",
+                            text=claim,
+                            request_id="Q1",
+                            applies="matched",
+                            citations=[GroundedCitation(evidence_id=identity, quote=CORRECT)],
+                        )
+                    ],
+                    summary="",
+                    confidence="low",
+                ).model_dump(exclude_unset=True)
             )
         assert is_audit_wire(schema)
         audited.append(json.loads(prompt))

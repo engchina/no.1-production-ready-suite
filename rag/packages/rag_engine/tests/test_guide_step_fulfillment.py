@@ -116,11 +116,11 @@ class GuideStepCoverageUnitTest(unittest.TestCase):
         gap = self._entry(spans[1], kind="gap")
         self.assertEqual(grounded.guide_step_coverage(steps[1:2], [gap], spans)[0]["status"], "unused")
 
-    def test_same_text_in_another_chunk_counts_as_the_step_evidence(self):
+    def test_same_text_in_another_chunk_is_not_the_step_source(self):
         spans = self._spans()
         steps = (("s2", "B", ("run:b",)),)
         other = self._entry(spans[2], quote=STEP_B)
-        self.assertEqual(grounded.guide_step_coverage(steps, [other], spans)[0]["status"], "unknown")
+        self.assertEqual(grounded.guide_step_coverage(steps, [other], spans)[0]["status"], "unused")
         # 短い引用（どの本文にも当たる語句）は数えない。
         short = self._entry(spans[2], quote="反映ボタン")
         self.assertEqual(grounded.guide_step_coverage(steps, [short], spans)[0]["status"], "unused")
@@ -502,14 +502,14 @@ class GuideStepSharedEvidenceTest(unittest.TestCase):
         spans = [self._span("run:a", SHARED_A + SHARED_END), self._span("run:b", SHARED_B + SHARED_END, "E2")]
         steps = (("s1", "設定 A を入力する", ("run:a",)), ("s2", "反映ボタンで反映する", ("run:b",)))
         common = self._candidate_statuses(steps, [self._entry(spans[0], SHARED_END)], spans)[0]
-        self.assertEqual(common, {"s1": "unmatched", "s2": "unmatched"})
+        self.assertEqual(common, {"s1": "matched", "s2": "unmatched"})
         both = [self._entry(spans[0], SHARED_A), self._entry(spans[1], SHARED_B), self._entry(spans[0], SHARED_END)]
         self.assertEqual(self._candidate_statuses(steps, both, spans)[0], {"s1": "matched", "s2": "matched"})
-        # 手順 1 の根拠（全体の概要の chunk）にある手順 2 の主の操作の原文は、手順 2 の説明にだけ数える。
+        # 同文でも手順 2 の出典へ付け替えず、明示された手順 1 の出典候補だけに対応する。本文の全充足は別に判定する。
         overview = [self._span("run:o", SHARED_A + SHARED_B), self._span("run:b", SHARED_B, "E2")]
         steps = (("s1", "設定 A を入力する", ("run:o",)), ("s2", "反映ボタンで反映する", ("run:b",)))
         self.assertEqual(
-            self._candidate_statuses(steps, [self._entry(overview[0], SHARED_B)], overview)[0], {"s1": "unmatched", "s2": "matched"}
+            self._candidate_statuses(steps, [self._entry(overview[0], SHARED_B)], overview)[0], {"s1": "matched", "s2": "unmatched"}
         )
 
     def test_optional_branch_step_does_not_take_the_required_steps_item(self):

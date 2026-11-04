@@ -29,7 +29,7 @@ def _context():
 
 def _draft_with_dropped(eid):
     """公開できる説明 1 件と、原文と一致しない引用 1 件（是正の指摘が残る）。"""
-    return draft(item(eid, GOOD, GOOD), item(eid, "CSVを保存先へ出力します。", "CSVを C:\\temp へ出力します。"))
+    return draft(item(eid, GOOD, GOOD), item("E-unknown", "CSVを保存先へ出力します。", "CSVを C:\\temp へ出力します。"))
 
 
 class _Clock:
@@ -162,7 +162,7 @@ class SynthesizeRoundBudgetTest(unittest.TestCase):
         # 確かめ終わった説明は公開し、直していない不足を「回答時間の上限により省略した処理」に出して条件つきにする。
         self.assertIn(GOOD, result.answer_text)
         # 原文と一致しない引用の説明は削除せず印を付ける（#2738）。
-        self.assertEqual(marks(result)["CSVを保存先へ出力します。"], ["quote_unmatched"])
+        self.assertEqual(marks(result)["CSVを保存先へ出力します。"], ["citation_id_invalid"])
         self.assertIn(grounded.answer_labels().deadline_section + "\n\n・回答の時間の上限が近いため", result.answer_text)
         # 章節の節とは分ける（#2040）。
         self.assertNotIn(grounded.answer_labels().unverified_section, result.answer_text)

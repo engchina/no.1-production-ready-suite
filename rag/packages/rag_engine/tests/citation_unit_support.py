@@ -68,3 +68,40 @@ def generated_fixture(schema: type[BaseModel], prompt: str, payload: dict[str, A
         if "citations" in item:
             item["citations"] = selected
     return schema.model_validate(result)
+
+
+def canonical_fixture(payload: dict[str, Any]) -> Any:
+    """意味判定の既存 fixture を、指名した根拠内の明示的な単位選択へ移す。
+
+    本番の引用解決では使わない。存在しない原文を指定した fixture は不正範囲を返すモデル桩として再生する。
+    """
+    from rag_engine.generation import grounded
+    from rag_engine.generation.citation_unit_ids import BoundUnitRange, EvidenceUnitSnapshot
+    from rag_engine.models.llm import GroundedDraft
+
+    result = GroundedDraft.model_validate(payload)
+    spans = [span for span, _view in (grounded._CITATION_VIEWS.get() or {}).values()]
+    for item in result.items:
+        for citation in item.citations:
+            if not citation.quote or citation.lines:
+                continue
+            candidates = grounded._line_citation_spans(item.model_copy(update={"citations": [citation]}), spans)
+            if len(candidates) != 1:
+                continue
+            span = candidates[0]
+            view = grounded._sent_view(span)
+            needle, _ = grounded._canonical(citation.quote)
+            haystack, positions = grounded._canonical(view.text)
+            start = haystack.find(needle) if needle else -1
+            if start < 0:
+                citation.lines = "999999"
+                citation._wire_range = (999999, 999999)
+                continue
+            begin, end = positions[start], positions[start + len(needle) - 1] + 1
+            selected = [i for i, (a, b) in enumerate(view.units) if a < end and begin < b]
+            assert selected
+            snapshot = EvidenceUnitSnapshot.create(span, view.units, view.contract_version)
+            citation._unit_binding = BoundUnitRange(snapshot, selected[0], selected[-1])
+            citation._wire_range = (selected[0] + 1, selected[-1] + 1)
+            citation.lines = str(selected[0] + 1) if selected[0] == selected[-1] else f"{selected[0] + 1}-{selected[-1] + 1}"
+    return result

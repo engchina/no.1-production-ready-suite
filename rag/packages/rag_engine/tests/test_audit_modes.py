@@ -15,6 +15,7 @@ from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import synthesize_grounded_answer
+from rag_engine.generation.citation_range_repair import CitationRangeRepair
 from rag_engine.models.llm import GroundedAudit, GroundedCitation, GroundedFactAudit, GroundedItem, GuideRequirementReview
 
 STEP = "一覧表を選択し、処理を選択します。"
@@ -190,16 +191,22 @@ def test_none_mode_calls_no_audit_and_does_not_regenerate():
     assert result.envelope["removed_passages"] == []
 
 
-def test_none_mode_still_marks_a_quote_that_is_not_in_the_document():
+def test_none_mode_still_checks_an_invalid_range_without_semantic_audit():
     ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
     eid = ids(ctx)[LIST_TEXT]
     invented = "一覧表を選択すると自動で集計が完了します。"
     model = FakeModel([draft(item(eid, invented, invented))], [_fact(audit())])
 
-    result = _run(model, ctx, grounded.AUDIT_MODE_NONE).response
+    def parse(system, prompt, settings, schema, **options):
+        if issubclass(schema, CitationRangeRepair):
+            model.prompts.append((schema.__name__, prompt))
+            return schema.model_validate({"ranges": []})
+        return model(system, prompt, settings, schema, **options)
 
-    assert [name for name, _prompt in model.prompts] == ["GroundedDraftWire"]
-    assert marks(result)[invented] == ["quote_unmatched"]
+    result = _run(parse, ctx, grounded.AUDIT_MODE_NONE).response
+
+    assert [name for name, _prompt in model.prompts] == ["GroundedDraftWire", "CitationRangeRepair"]
+    assert marks(result)[invented] == ["citation_range_out_of_bounds"]
     # 資料の出典の行を付けない（#2792）。
     following = result.answer_text.split("・" + invented + "\n", 1)[1]
     assert not following.startswith(grounded.answer_labels().citation_prefix)

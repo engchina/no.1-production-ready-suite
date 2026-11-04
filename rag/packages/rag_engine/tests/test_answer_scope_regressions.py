@@ -56,6 +56,7 @@ def test_unplanned_operations_are_excluded_even_when_their_quotes_are_real():
     spans = [
         dict(
             evidence_id=eid,
+            label=eid,
             text=text,
             source="operations.txt",
             tags=[],

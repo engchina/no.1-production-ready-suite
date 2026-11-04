@@ -139,7 +139,7 @@ class MaxCorrectionRoundsTest(unittest.TestCase):
     def _miscopied(self):
         ctx = context(record(0, LIST_TEXT, "売上-(3)年次集計明細作成"))
         eid = ids(ctx)[LIST_TEXT]
-        wrong = draft(item(eid, GOOD, GOOD), item(eid, "CSVを保存先へ出力します。", "CSVを C:\\temp へ出力します。"))
+        wrong = draft(item(eid, GOOD, GOOD), item("E-unknown", "CSVを保存先へ出力します。", "CSVを C:\\temp へ出力します。"))
         fixed = draft(item(eid, GOOD, GOOD), item(eid, DONE, DONE))
         return ctx, FakeModel([wrong, fixed], [audit((0, "supported", "matched", ""), (1, "supported", "matched", ""))])
 

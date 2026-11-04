@@ -198,12 +198,14 @@ def test_no_range_repair_call_without_a_heading_only_target(case: str) -> None:
         )
     first = run_first(spans, draft)
     if case == "legacy_quote":
-        # 整数範囲でない旧形式の引用は範囲だけを直せないので、草稿の作り直しの指摘（dropped_items）に残す。
-        assert codes(first) == ["citation_heading_only"]
+        # 原文だけの旧引用を位置指定として採用せず、範囲の欠落として残す。
+        assert codes(first) == ["citation_range_missing"]
         assert first.feedback()["dropped_items"]
     else:
         assert codes(first) == []
-    assert grounded.citation_range_issues(first.checked, first.dropped) == []
+    assert grounded.citation_range_issues(first.checked, first.dropped) == (
+        [{"item_index": 0, "evidence_id": "E1", "reason_code": "citation_range_missing"}] if case == "legacy_quote" else []
+    )
     assert grounded.citation_range_targets(first.draft, spans, first.checked, first.dropped) == []
 
 

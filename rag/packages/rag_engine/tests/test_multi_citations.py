@@ -148,7 +148,7 @@ def test_when_no_citation_checks_out_the_first_is_kept_with_its_mark():
     result = _run(model, ctx)
 
     assert result.answer_text.split(grounded.answer_labels().marked_section)[0].count(CLAIM) == 1
-    assert marks(result)[CLAIM] == ["quote_unmatched"]
+    assert marks(result)[CLAIM] == ["citation_range_out_of_bounds"]
     dropped = result.generation_trace["rounds"][0]["dropped"]
     assert [bool(entry.get("citation_dropped")) for entry in dropped] == [False, True]
 

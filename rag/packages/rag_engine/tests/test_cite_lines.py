@@ -84,9 +84,11 @@ def test_lines_copied_in_the_numbered_display_form_use_the_leading_range():
         assert error
 
 
-def test_copied_quote_and_gap_are_left_to_the_existing_matching():
-    copied = item("E2", quote="実行ボタンを押します。")
-    assert grounded.cited_quote(copied, spans()) == (copied, "")
+def test_a_stored_quote_does_not_override_the_id_selected_original():
+    copied = item("E2", quote="原文にない文字列")
+    cited, error = grounded.cited_quote(copied, spans())
+    assert error == "" and cited.quote == SHORT
+    assert grounded._citation_extraction(cited)["requested_quote"] == copied.quote
     gap = GroundedItem(kind="gap", text="資料に記載が無い")
     assert grounded.cited_quote(gap, spans()) == (gap, "")
 
@@ -117,13 +119,11 @@ def test_generation_instructions_name_only_the_public_citation_fields():
     assert "quote は、citations が選択した引用単位 ID の原文" in grounded.GENERATE_SYSTEM_PROMPT
 
 
-def test_lines_holding_the_quote_text_use_the_line_that_contains_it():
-    """モデルが行番号の代わりに引用の書き出しを lines に写しても、指した根拠に 1 か所だけあればその行を引く（#3534）。"""
-    units = grounded.citation_units(LONG)
-    for lines, number in (("抽出条件を入力して抽出", 2), ("入力欄に 値を直接入力", 4), ("実行ボタンを押して登録", 5)):
+def test_lines_holding_text_are_not_resolved_by_searching_the_original():
+    for lines in ("抽出条件を入力して抽出", "入力欄に 値を直接入力", "実行ボタンを押して登録"):
         cited, error = grounded.cited_quote(item("E1", lines), spans())
-        assert error == ""
-        assert cited.quote == LONG[units[number - 1][0] : units[number - 1][1]]
+        assert error and not cited.quote
+        assert grounded._citation_extraction(cited)["reason_code"] == "citation_range_invalid"
 
 
 def test_lines_text_that_is_short_missing_or_ambiguous_is_still_reported():
@@ -141,10 +141,8 @@ def test_lines_written_as_a_list_use_the_first_to_last_line():
         assert cited.quote == LONG[units[first - 1][0] : units[last - 1][1]]
 
 
-def test_missing_lines_on_long_evidence_cite_the_lines_the_claim_overlaps():
-    """行番号の付いた根拠で lines が空なら、説明の文に最もよく重なる行を引く（#3534）。"""
-    units = grounded.citation_units(LONG)
+def test_missing_lines_are_not_inferred_from_the_claim():
     claim = GroundedItem(kind="operation", text="抽出条件を入力して抽出ボタンを押す", citations=[GroundedCitation(evidence_id="E1")])
     cited, error = grounded.cited_quote(claim, spans())
-    assert error == ""
-    assert cited.quote == LONG[units[1][0] : units[1][1]]
+    assert error and not cited.quote
+    assert grounded._citation_extraction(cited)["reason_code"] == "citation_range_missing"

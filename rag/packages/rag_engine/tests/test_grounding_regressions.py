@@ -196,12 +196,13 @@ def test_heading_path_without_confirmed_origin_does_not_invalidate_a_verbatim_qu
     from rag_engine.models.llm import GroundedItem
 
     text = "モードAの待機時間は45秒です。"
-    span = {"evidence_id": "E1", "text": text, "section_path": [text]}
+    span = {"evidence_id": "E1", "label": "E1", "text": text, "section_path": [text]}
     if sources is not None:
         span["section_path_sources"] = sources
     item = GroundedItem.model_validate({"kind": "rule", "text": text, "citations": [{"evidence_id": "E1", "quote": text}]})
-    found, quote = grounded.resolve_evidence(item, [span])
-    assert found is span and quote == text
+    cited, error = grounded.cited_quote(item, [span])
+    assert not error and cited.quote == text
+    quote = cited.quote
     assert not grounded.heading_only_quote(quote, span)
 
 

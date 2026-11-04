@@ -73,8 +73,11 @@ def test_answer_context_folds_widths_and_keeps_the_original_evidence():
 
 def test_verify_binds_a_folded_quote_and_checks_in_the_same_form():
     spans = _grounded_spans(QUESTION, _plan_context(), (), None)
+    grounded.format_functions(spans)
     eid = spans[0]["evidence_id"]
-    checked, dropped = grounded.verify(QUESTION, GroundedDraft.model_validate(draft(item(eid, TEXT, QUOTE, kind="rule"))), spans)
+    proposal = item(eid, TEXT, QUOTE, kind="rule")
+    proposal["citations"][0]["lines"] = "2"
+    checked, dropped = grounded.verify(QUESTION, GroundedDraft.model_validate(draft(proposal)), spans)
     assert dropped == []
     entry = next(e for e in checked if e.item.text == TEXT)
     assert entry.span is not None and entry.span["evidence_id"] == eid

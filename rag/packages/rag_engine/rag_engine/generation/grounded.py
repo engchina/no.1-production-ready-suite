@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from itertools import groupby
@@ -820,7 +821,7 @@ def _trusted_section_path(span: Mapping[str, Any], *, trust_legacy: bool = True)
 
     柱の初出（running_head）・本文の再出現（promoted_text）・画面経路 caption（route_caption）は chunking の
     昇格・推定で、同じページで手順を別機能に割ることがある。出所が無い旧データ（v3 以前の ADB 行）は
-    全要素を Docling 由来として扱う。原文照合や表示（_heading_matches など）は元の section_path を使う。
+    全要素を Docling 由来として扱う。表示には元の section_path を使う。
     出典を除外する判断では trust_legacy=False とし、出所の無い道筋を確定した見出しとして扱わない。
     """
     path = [str(h) for h in span.get("section_path") or ()]
@@ -1550,7 +1551,7 @@ class CheckedItem:
     quote_only: bool = False
     reasons: list[str] = field(default_factory=list)
     added: bool = False  # モデルの草稿ではなく、必須根拠・確定操作としてシステムが補った原文
-    quote_match: str = "exact"  # 引用の結び付け方。"fuzzy" は文単位の近似一致（#711）。trace 用
+    quote_match: str = "exact"  # ID・範囲による抽出の成否。trace 用。
     citation_resolution: dict[str, str] = field(default_factory=dict)
     review_assessment: dict[str, Any] = field(default_factory=dict)
     hints: list[str] = field(default_factory=list)  # ITEM_HINTS の該当。印は付けず監査へ渡す手がかり (#1090)
@@ -2086,6 +2087,18 @@ def _supports(entry: CheckedItem | None) -> bool:
     return entry is not None and entry.confirmed
 
 
+def _citation_range_key(entry: CheckedItem) -> tuple[str, ...]:
+    """同じ出典・版・座標だけを重複とし、離れた選択範囲を落とさない。"""
+    proof = entry.citation_resolution
+    return (
+        str((entry.span or {}).get("evidence_id", "")),
+        proof.get("source_id", ""),
+        proof.get("snapshot_id", proof.get("content_sha256", "")),
+        proof.get("char_start", ""),
+        proof.get("char_end", ""),
+    )
+
+
 def merge_citations(
     index: int, item: GroundedItem, results: Sequence[CitationCheck]
 ) -> tuple[list[CheckedItem], list[dict], dict[str, str]]:
@@ -2095,7 +2108,7 @@ def merge_citations(
     照合できない・計画の外・検査の印が付いた出典と、引用が節の見出しだけの出典は外し、指摘は trace にだけ残す
     （根拠の無い出典を公開しない）。
     確かめた出典が無ければ、根拠に結べた最初の出典だけで今までどおり扱う（印を付けて残す・計画の外なら外す）。
-    同じ根拠を指す出典は 1 つにする。
+    同じ出典・版の同じ範囲を指す引用だけを 1 つにする。
     """
     if len(results) <= 1:
         entry, notes, subs = results[0] if results else (None, [], {})
@@ -2104,13 +2117,13 @@ def merge_citations(
     if confirmed:
         primary, primary_notes, primary_subs = confirmed[0]
         assert primary is not None
-        seen = {primary.span["evidence_id"]} if primary.span else set()
+        seen = {_citation_range_key(primary)} if primary.span else set()
         notes = list(primary_notes)
         for entry, own_notes, _subs in results:
             if entry is primary:
                 continue
-            if _supports(entry) and entry is not None and entry.span and entry.span["evidence_id"] not in seen:
-                seen.add(entry.span["evidence_id"])
+            if _supports(entry) and entry is not None and entry.span and _citation_range_key(entry) not in seen:
+                seen.add(_citation_range_key(entry))
                 primary.also.append(entry)
                 notes.extend(own_notes)
                 continue
@@ -2123,7 +2136,7 @@ def merge_citations(
                             "evidence_id": entry.span["evidence_id"] if entry.span else "",
                             "text": item.text,
                             "quote": entry.item.quote,
-                            "reason": "; ".join(entry.reasons) or "同じ根拠を指す出典",
+                            "reason": "; ".join(entry.reasons) or "同じ出典・版の同じ引用範囲",
                         }
                     )
                 )
@@ -2155,13 +2168,11 @@ def verify(
     guide_ids: Sequence[str] = (),
     plan_unsettled: Sequence[str] = (),
 ) -> tuple[list[CheckedItem], list[dict]]:
-    """原文照合と規則の検査で段落の印を付ける。必須根拠と確定操作の欠落は原文で補う。
+    """ID・版・範囲を検証して原文を抽出し、規則の検査で段落に印を付ける。
 
-    原文と照合できない引用の item は本文に残して印（引用元が近い原文・指した根拠に決まれば quote_unmatched、
-    決まらなければ citation_error）を付け、是正の指摘には dropped で写し方を示す。規則の検査の不合格は
-    警告を付ける（#2738）。複数の文書の item を混ぜた回答では、制限・禁止の規則をその文書の業務の条件付きに
-    する (#1012)。引用は原文の span と照合して原文の範囲を残し、説明と根拠の語を比べる検査は ``check_view`` の
-    形で行う (#1350)。
+    引用を抽出できない説明は本文に残して原因の印を付け、是正へ ID・範囲の診断を渡す。
+    システムの原文補完は、選択元の出典と座標を記録する。説明の語の検査には ``check_view`` を使い、
+    表示と保存には指定した範囲の原文を使う。
 
     ``plan_unsettled`` は、作り直しても残った要求の根拠計画の不整合（#3228）。計画が決まらなかったので、
     計画の外の説明を外さずに本文に残して ``unassessed`` の印を付ける（根拠と矛盾した説明ではない。#2738）。
@@ -2181,33 +2192,16 @@ def verify(
         # 行の範囲で指した引用は、その原文を quote にする（#2830）。
         item, cite_error = cited_quote(item, spans, guide_ids=guide_ids)
         provenance = _citation_extraction(item)
-        match: dict = {}
         if provenance.get("status") == "extracted":
             span, quote = _line_citation_spans(item, spans)[0], item.quote
-        elif cite_error:
-            span, quote = None, cite_error
         else:
-            span, quote = resolve_evidence(item, spans, match=match)
+            span, quote = None, cite_error
         if span is None:
             # 次の生成は前回の草稿を見られないため、どの item への指摘かを本文で示す。
             entry = {"index": index, "evidence_id": item.evidence_id, "reason": cite_error or quote, "text": item.text, "quote": item.quote}
             if provenance:
                 entry["citation_resolution"] = dict(provenance)
-            miscopied = miscopied_sentence(item, spans)
-            if miscopied:
-                entry["miscopied"] = miscopied
-            nearest = match.get("nearest")
-            if nearest:
-                # 結び付けるほど似ていないが近い原文がある。feedback には最も近い原文を示し、次の生成がそのまま
-                # 写せるようにする (#716)。
-                entry["nearest_quote"] = {
-                    "evidence_id": nearest["span"]["evidence_id"],
-                    "label": nearest["span"].get("label", ""),
-                    "quote": nearest["quote"],
-                    "ratio": nearest["ratio"],
-                }
-            # 言い換えは削除せず本文に残して印を付ける（#2738。以前は削除し、近い原文を原文のみ提示にしていた）。
-            if kept := _unmatched_item(item, index, spans, match, cite_error or quote):
+            if kept := _unmatched_item(item, index, spans, cite_error or quote):
                 result = kept
                 entry["kept"] = True
             notes.append(entry)
@@ -2239,7 +2233,7 @@ def verify(
             entry = CheckedItem(
                 _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
                 span,
-                quote_match=match.get("kind", "exact"),
+                quote_match="exact",
                 draft_index=index,
                 unmatched=not unusable_content,
             )
@@ -2250,7 +2244,7 @@ def verify(
                 "authenticity": "verified",
                 "resolved_evidence_id": span["evidence_id"],
                 "resolved_quote": quote,
-                "method": match.get("kind", "exact"),
+                "method": "id_range",
             }
             entry.mark(code, detail, reason=reason)
             notes.append(
@@ -2268,7 +2262,7 @@ def verify(
         candidate = CheckedItem(
             _normalized(item.with_citation(evidence_id=span["evidence_id"], quote=quote), view),
             span,
-            quote_match=match.get("kind", "exact"),
+            quote_match="exact",
             draft_index=index,
             citation_resolution={
                 **provenance,
@@ -2276,12 +2270,9 @@ def verify(
                 "requested_quote": item.quote,
                 "resolved_evidence_id": span["evidence_id"],
                 "resolved_quote": quote,
-                "method": match.get("kind", "exact"),
+                "method": "id_range",
             },
         )
-        if candidate.quote_match in {"fuzzy", "prefix"}:
-            candidate.unmatched = True
-            candidate.mark("quote_unmatched", "引用元の候補はありますが、元の引用の逐語一致は確認できていません。")
         if scope_unsettled:
             candidate.mark("unassessed", "質問の対象と根拠の対応を確かめられなかった")
         entry = candidate
@@ -2344,20 +2335,20 @@ def verify(
             CheckedItem(GroundedItem(kind="gap", text="取得した根拠に同じ文書の異なる版が含まれます。適用する版を確認してください。"))
         )
     for entry in list(checked):
-        proviso = _following_proviso(entry) if entry.span and not entry.added else ""
-        if proviso and not any(e.span and _compact(proviso) in _compact(e.item.quote) for e in checked):
-            checked.append(_quote_item(entry.span, proviso, "引用直後の但し書き"))
+        proviso = _following_proviso(entry) if entry.span and not entry.added else None
+        if proviso and not any(e.span and _compact(entry.span["text"][proviso[0] : proviso[1]]) in _compact(e.item.quote) for e in checked):
+            checked.append(_quote_item(entry.span, *proviso, "引用直後の但し書き"))
     used = {entry.span["evidence_id"] for entry in cited_entries(checked) if entry.span}
     texts = "\n".join(entry.item.text + entry.item.quote for entry in cited_entries(checked))
     for span in spans:
         # 採用した操作と同じ根拠にある確定操作が落ちた場合は、原文のまま補う。
         match = check_cues().completion.search(span["text"]) if span["evidence_id"] in used else None
         if match and match.group(1) not in texts and not re.match(check_cues().alt["completion_negations"], span["text"][match.end() :]):
-            checked.append(_quote_item(span, match.group(), "同じ根拠にある確定操作"))
+            checked.append(_quote_item(span, match.start(), match.end(), "同じ根拠にある確定操作"))
         elif (
             span.get("pinned") and span["evidence_id"] not in used and not _bare_title(span["text"]) and not _label_list_like(span["text"])
         ):
-            checked.append(_quote_item(span, span["text"][:600], "必須根拠が未使用"))
+            checked.append(_quote_item(span, 0, min(600, len(span["text"])), "必須根拠が未使用"))
     return without_redundant_quotes(checked), dropped
 
 
@@ -2440,38 +2431,22 @@ def _named_spans(item: GroundedItem, spans: Sequence[dict]) -> list[dict]:
     return _label_spans(item.evidence_id, spans)
 
 
-def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], match: dict, reason: str) -> CheckedItem | None:
-    """引用が原文と照合できなかった item を、言い換えを残した印つきの item にする（#2738）。
-
-    evidence_id が一意に指す根拠を優先し、無ければ近い原文の根拠に結び付けて
-    quote_unmatched の印を付ける。どちらでも決まらなければ（未知の Evidence ID・複数の根拠に一致）、根拠を
-    結び付けずに citation_error の印を付ける。
-    """
+def _unmatched_item(item: GroundedItem, index: int, spans: Sequence[dict], reason: str) -> CheckedItem | None:
+    """抽出できなかった引用と説明を、原文を推定せず未確認の記録として残す。"""
     if not item.text.strip():
         return None
-    nearest = match.get("nearest")
-    named = _named_spans(item, spans)
-    span: dict | None
-    if len(named) == 1:
-        span, quote, code = named[0], item.quote, "quote_unmatched"
-    elif nearest:
-        span, quote, code = nearest["span"], nearest["quote"], "quote_unmatched"
-    else:
-        span, quote, code = None, item.quote, "citation_error"
-    copied = item.with_citation(quote=quote, evidence_id=span["evidence_id"] if span else "")
+    named = _line_citation_spans(item, spans)
+    span = named[0] if len(named) == 1 else None
     entry = CheckedItem(
-        _normalized(copied, check_view(span)) if span else copied.model_copy(update={"applies": "matched", "condition": ""}),
+        item.model_copy(update={"applies": "matched", "condition": ""}),
         span,
         quote_match="unmatched",
         draft_index=index,
         unmatched=True,
+        citation_resolution=_citation_extraction(item),
     )
-    entry.citation_resolution = _citation_extraction(item)
-    code = entry.citation_resolution.get("reason_code") or code
-    note = _quote_note(entry)
-    # 引用元が決まらなければ照合の理由、近い原文に結んだならその原文を理由に添える。
-    detail = reason if span is None or entry.citation_resolution else (f"最も近い{note}" if nearest and note else "")
-    entry.mark(code, detail, reason=reason)
+    code = entry.citation_resolution.get("reason_code", "citation_error")
+    entry.mark(code, reason, reason=reason)
     return entry
 
 
@@ -2484,8 +2459,6 @@ def _inline_evidence(item: GroundedItem, spans: Sequence[dict]) -> tuple[Grounde
         source_text="\n".join(str(span.get("text") or "") for span in spans),
     )
     item = item.model_copy(update={"text": cleaned.text})
-    if not _named_spans(item, spans) and len(cleaned.labels) == 1:
-        item = item.with_citation(evidence_id=cleaned.labels[0])
     return item, cleaned.residual
 
 
@@ -2682,293 +2655,6 @@ def _generated_values_absent_from_document_text(question: str, entry: CheckedIte
     return sorted(_numbers(text) - _numbers(corpus) - _numbers(question))
 
 
-def _one_of_same_function(matches: Sequence[tuple[dict, str]]) -> tuple[dict | None, str]:
-    """複数の根拠に一致した引用を、同じ文書・同じ機能なら 1 つに決めます。
-
-    引用が複数箇所に逐語であることは内容が複数回確認されたということで、不確かなのは表示する出典だけ。
-    同じ機能の中ならどれを出典にしても案内は変わらないので、先に現れたものへ決定的に結び付ける (#1077)。
-    文書または機能が分かれる場合は、出典の取り違えが起きうるので従来どおり結び付けない。
-    """
-    first = matches[0][0]
-    # `function` は tag_spans が付ける。付いていない呼び出し（検査の単体利用）では同一性を判定できないので、
-    # 従来どおり結び付けない。
-    if all("function" in span for span, _quote in matches) and all(
-        _document_key(span) == _document_key(first) and _same_function_scope(first, span) for span, _quote in matches[1:]
-    ):
-        return matches[0]
-    return None, "quote が複数の Evidence に一致し、引用元を特定できない"
-
-
-def resolve_evidence(item: GroundedItem, spans: Sequence[dict], *, match: dict | None = None) -> tuple[dict | None, str]:
-    """引用元を決める。IDが誤っていても、引用がちょうど1つの根拠の連続原文なら結び直す。
-
-    モデルは表示ID・出典ID・レコードIDを取り違えることがある。原文照合は決定的なので、
-    IDの誤記だけで正しい引用を捨てない。複数の根拠に一致する引用は推測で選ばない。
-    完全一致の規則で結び付かない引用は最後に文単位の近似一致（#711）を試し、`match["kind"]` に "fuzzy" を残す。
-    規則の item で続く文だけを写し誤った引用は、逐語の先頭の文に結び付け、`match["kind"]` に "prefix" を残す (#1383)。
-    """
-    named = _named_spans(item, spans)
-    for candidates in (named, spans):
-        matches = [(s, q) for s in candidates if (q := _original_quote(item.quote, s["text"]))]
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            return _one_of_same_function(matches)
-    joined = _adjacent_span_matches(item.quote, spans)
-    if len(joined) == 1:
-        return joined[0]
-    if len(joined) > 1:
-        return _one_of_same_function(joined)
-    for candidates in (named, spans):
-        headed = _heading_matches(item.quote, candidates, spans)
-        if len(headed) == 1:
-            return headed[0]
-        if len(headed) > 1:
-            return _one_of_same_function(headed)
-    # 近似一致 (#711, #716)。閾値は根拠の種類と id の指名で変える。id が指す span は 2 つ目の独立した
-    # 証拠があるので低め、画像の生成説明は文書の原文ではないので低め、それ以外は高め。
-    nearest = [(s, q, r) for s in spans if (q := (found := _nearest_quote(item.quote, s["text"]))[0]) and (r := found[1])]
-    for candidates in (named, spans):
-        bound = [(s, q) for s, q, r in nearest if s in candidates and r >= _quote_bind_ratio(s, named=s in named)]
-        if len(bound) == 1:
-            if match is not None:
-                match["kind"] = "fuzzy"
-            return bound[0]
-        if len(bound) > 1:
-            span, quote = _one_of_same_function(bound)
-            if span is not None and match is not None:
-                match["kind"] = "fuzzy"
-            return span, quote
-    span, quote = _prefix_bound_quote(item, spans)
-    if span is not None:
-        if match is not None:
-            match["kind"] = "prefix"
-        return span, quote
-    if nearest and match is not None:
-        # 結び付けるほど似ていないが近い原文がある。言い換えは印を付けてその原文に結び、是正の feedback にも示す（#2738）。
-        span, quote, ratio = max(nearest, key=lambda entry: entry[2])
-        match["nearest"] = {"span": span, "quote": quote, "ratio": round(ratio, 2)}
-        return None, f"引用が原文と一致せず、最も近い原文（{span.get('label', span['evidence_id'])}、類似度 {ratio:.2f}）がある"
-    # 文ごとの近似一致が 1 文でも届かないと上の救済は働かない。最長の連続断片で引用元が定まれば、その原文に
-    # 印つきで結び、是正の feedback にも写す原文として示す (#1092)。確かめた説明としては結び付けない:
-    # 内容語の置き換え・手順の順序の入れ替え・離れた箇所の継ぎ合わせも断片は一致するため、結び付けて公開すると
-    # 原文を歪めた引用が通る（それらを結び付けない既存の規則 #716 / #678 と両立させる）。
-    span, quote, share = _fragment_match(item.quote, spans, named)
-    if span is not None and match is not None:
-        match["nearest"] = {"span": span, "quote": quote, "ratio": round(share, 2)}
-        return (
-            None,
-            f"引用が原文と一致せず、引用元と定まる原文（{span.get('label', span['evidence_id'])}、連続断片 {share:.0%}）がある",
-        )
-    return None, "quote がどの Evidence の原文とも一致しない"
-
-
-def _verbatim_prefix(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict, list[str], int, int, int, list[int]] | None:
-    """引用の先頭の文（1 文以上）が、指した根拠の 1 か所に逐語であり、続く文が原文と違う引用の一致を返す (#1383)。
-
-    戻り値は (根拠, 引用の文, 一致した文の数, 照合用文字列での開始・終了, 位置の対応)。指した根拠が 1 つに
-    決まらない・2 文未満・先頭の文から違う・先頭の文が根拠の中で 1 か所に決まらない場合は None。
-    """
-    named = [s for s in spans if item.evidence_id and item.evidence_id in {s["evidence_id"], s.get("label"), s.get("source_id")}]
-    sentences = [part.strip() for part in check_cues().quote_sentence_split.split(item.quote or "") if part.strip()]
-    if len(named) != 1 or len(sentences) < 2:
-        return None
-    canonical_text, positions = _canonical(named[0]["text"])
-    for count in range(len(sentences) - 1, 0, -1):
-        prefix = _canonical("".join(sentences[:count]))[0]
-        if len(prefix) < _QUOTE_SENTENCE_MIN_CHARS:
-            return None
-        start = canonical_text.find(prefix)
-        if start < 0:
-            continue
-        if canonical_text.find(prefix, start + 1) >= 0:
-            return None
-        return named[0], sentences, count, start, start + len(prefix), positions
-    return None
-
-
-def miscopied_sentence(item: GroundedItem, spans: Sequence[dict]) -> dict[str, str]:
-    """引用の先頭の文は指した根拠に逐語であるのに、続く文が原文と違うとき、その文と原文の続きを返す (#1383)。
-
-    繰り返しの多い表（「略号「製」: 製造部。生産本部に属します。」が並ぶ略号の表）で、モデルは隣の行の語
-    （「管理本部」）を写し誤る。理由の「一致しない」だけでは是正の回も同じ誤りを繰り返したので、どの文を
-    どう写し誤ったかと、写し直す引用の候補（一致した先頭の文と原文の続き）を示す。
-    """
-    found = _verbatim_prefix(item, spans)
-    if found is None:
-        return {}
-    span, sentences, count, start, end, positions = found
-    text = span["text"]
-    rest = text[positions[end - 1] + 1 :].lstrip().lstrip("。．")  # 照合で無視した句点は前の文に属する
-    ends = check_cues().chars("quote_sentence_end_chars")
-    following = re.match(rf"\s*([^{ends}\n]*[{ends}]?)", rest)
-    original = following.group(1).strip() if following else ""
-    if not original:
-        return {}
-    verbatim = (_original_range_at(text, positions, start, end) + original).strip()
-    return {"quoted": sentences[count], "original": original, "verbatim_quote": verbatim}
-
-
-def _prefix_bound_quote(item: GroundedItem, spans: Sequence[dict]) -> tuple[dict | None, str]:
-    """規則の item で、引用の先頭の文が指した根拠に逐語で、続く文だけを写し誤り、説明がその続きの語を使っていなければ、
-    逐語の先頭の文だけを引用として結び付ける (#1383)。
-
-    略号の表（「略号「購」: 購買部。生産本部に属します。」）の続きの文を隣の行の語（「管理本部」）で写し誤ると、
-    説明（「略号「購」は購買部」）を裏付ける先頭の文まで落ち、多段の結論が 1 段欠けていた。結び付けるのは
-    逐語の範囲だけで、写し誤った文は表示にも監査にも渡さない。説明が写し誤った文の語（先頭の文にない語）を
-    使っていれば結び付けない（原文にない内容を説明で公開しない）。操作の手順は対象にしない: 原文にない手順を
-    含む引用は従来どおり落とす (#678)。
-    """
-    if item.kind != "rule":
-        return None, ""
-    found = _verbatim_prefix(item, spans)
-    if found is None:
-        return None, ""
-    span, sentences, count, start, end, positions = found
-    prefix_words = set(check_cues().claim_word.findall(fold_width("".join(sentences[:count]))))
-    rest_words = set(check_cues().claim_word.findall(fold_width("".join(sentences[count:])))) - prefix_words
-    text = fold_width(item.text)
-    if any(word in text for word in rest_words):
-        return None, ""
-    return span, _original_range_at(span["text"], positions, start, end)
-
-
-# 最長の連続断片で引用元を決めるときの下限（照合用文字列の字数と、引用に占める割合）(#1092)。短い定型句
-# （「実行ボタンを押します」）は多くの根拠に現れ、引用元を決める手がかりにならない。
-_FRAGMENT_MIN_CHARS = 16
-_FRAGMENT_MIN_SHARE = 0.5
-
-
-def _fragment_match(quote: str, spans: Sequence[dict], named: Sequence[dict]) -> tuple[dict | None, str, float]:
-    """引用の最長の連続断片で引用元を決め、(根拠, 断片に対応する原文の範囲, 断片が引用に占める割合) を返す。
-    決まらなければ (None, "", 0.0)。
-
-    引用の役割は item をどの根拠に結び付けるかを決めること。モデルが原文を少し言い換えても、原文の長い連続
-    断片が含まれていれば引用元は分かる。言い換えを公開してよいかは item 単位の監査が引用元の本文（#1086）を
-    見て判定する。ここで決めるのは原文のみ提示に使う引用元だけで、表示する引用は原文そのものの範囲にする (#1092)。
-
-    結び付けてよいのは、解析に依らない事実で引用元が定まる場合だけ。
-    - モデルが指した根拠がこの断片を含む → その根拠
-    - モデルが指した根拠が存在し、同じ文書で頁差 1 以内の根拠のうち 1 つだけが最長の断片を含む → その根拠
-      （モデルは頁を取り違えることがある）
-    - モデルが指した根拠が存在しない → 最長の断片を含む根拠が 1 つだけのとき、その根拠
-    別の文書の根拠には結び付けない。似た文を持つ別の説明書に結び付けると、尋ねられていない文書で答えることになる。
-    """
-    canonical_quote, _ = _canonical(quote)
-    if len(canonical_quote) < _FRAGMENT_MIN_CHARS:
-        return None, "", 0.0
-    floor = max(_FRAGMENT_MIN_CHARS, _FRAGMENT_MIN_SHARE * len(canonical_quote))
-    found: list[tuple[int, dict, int, int, list[int]]] = []
-    for span in spans:
-        canonical_text, positions = _canonical(span["text"])
-        longest = SequenceMatcher(None, canonical_quote, canonical_text, autojunk=False).find_longest_match(
-            0, len(canonical_quote), 0, len(canonical_text)
-        )
-        if longest.size >= floor:
-            found.append((longest.size, span, longest.b, longest.b + longest.size, positions))
-    if not found:
-        return None, "", 0.0
-    best = max(entry[0] for entry in found)
-    top = [entry for entry in found if entry[0] == best]
-    if named:
-        chosen = next((entry for entry in found if any(entry[1] is n for n in named)), None)
-        if chosen is None:
-            near = [entry for entry in top if any(_near_page(n, entry[1]) for n in named)]
-            chosen = near[0] if len(near) == 1 else None
-    else:
-        chosen = top[0] if len(top) == 1 else None
-    if chosen is None:
-        return None, "", 0.0
-    size, span, start, end, positions = chosen
-    return span, _original_range_at(span["text"], positions, start, end), size / len(canonical_quote)
-
-
-# 文単位の近似一致で結び付ける類似度。id が指さない文書の原文は 0.9、id が指す span は 0.8、画像の生成説明は 0.85。
-# 0.7 以上 閾値未満は結び付けずに「最も近い原文」として原文のみ提示する (#716)。
-_QUOTE_MATCH_RATIO = 0.9
-_QUOTE_MATCH_RATIO_NAMED = 0.8
-_QUOTE_MATCH_RATIO_GENERATED = 0.85
-_QUOTE_NEAR_RATIO = 0.7
-
-
-def _quote_bind_ratio(span: dict, *, named: bool) -> float:
-    base = _QUOTE_MATCH_RATIO_GENERATED if "image_generated" in span.get("tags", ()) else _QUOTE_MATCH_RATIO
-    return min(base, _QUOTE_MATCH_RATIO_NAMED) if named else base
-
-
-_QUOTE_SENTENCE_MIN_CHARS = 6
-
-
-def _fuzzy_range(needle: str, haystack: str, cursor: int, ratio: float) -> tuple[int, int, float] | None:
-    """haystack[cursor:] に needle と ratio 以上似た連続範囲があれば (start, end, 類似度) を返す (#711)。
-
-    窓は needle と同じ長さ ±2 で、`_fuzzy_contains`（#694）と同じ `SequenceMatcher.ratio` で判定する。
-    最も似た窓を返す。
-    """
-    width = len(needle)
-    best: tuple[float, int, int] | None = None
-    matcher = SequenceMatcher(None, needle, "")
-    # 原文の方が数語長い（「メニュー経路は」に対する「メニュー」）ことがあるので、窓は needle の 1/4 まで長くする。
-    lengths = [width, *range(width + 1, width + max(2, width // 4) + 1), width - 1, width - 2]
-    for start in range(cursor, max(cursor, len(haystack) - width + 3)):
-        for length in lengths:
-            if length <= 0 or start + length > len(haystack):
-                continue
-            window = haystack[start : start + length]
-            matcher.set_seq2(window)
-            if matcher.quick_ratio() < ratio:
-                continue
-            score = matcher.ratio()
-            if score >= ratio and (best is None or score > best[0]) and _content_preserved(matcher):
-                best = (score, start, start + length)
-    return None if best is None else (best[1], best[2], best[0])
-
-
-_HIRAGANA = re.compile(r"^[\u3040-\u309f]*$")
-
-
-def _content_preserved(matcher: SequenceMatcher) -> bool:
-    """近似一致で許す差を、助詞・活用（ひらがな）の違いと原文側の語の省略に限る (#716)。
-
-    類似度だけでは「保存ボタンを押します」と「実行ボタンを押します」が 8 割以上似てしまう。引用側だけにある字
-    （delete / replace の引用側）が内容語（漢字・カタカナ・英数字）を含めば拒む。原文にあって引用にない字
-    （引用側の省略。「メニュー経路は」→「メニュー」、「選択して」→「選び」）は類似度の範囲で許す。
-    """
-    return all(tag in ("equal", "insert") or _HIRAGANA.match(matcher.a[a1:a2]) for tag, a1, a2, b1, b2 in matcher.get_opcodes())
-
-
-def _nearest_quote(quote: str, text: str) -> tuple[str, float]:
-    """quote を「。」で文に分け、各文が同じ原文に 0.7 以上似た連続範囲として読み順にあれば
-    (原文の該当範囲, 文ごとの類似度の最小値) を返す。なければ ("", 0.0) (#711, #716)。
-
-    モデルは生成説明（Vision）の長文を、助詞 1 文字の違い（「選択して」→「選択し」）や 2 文の連結で引用する
-    ことがあり、完全一致では item が丸ごと落ちて別機能の item だけが残る。表示・検査には原文の範囲だけを使い、
-    モデルの文言は使わない。短い文（照合用 6 文字未満）は照合しない。結び付けるかどうかの閾値は呼び出し側
-    （`_quote_bind_ratio`）が決める。
-    """
-    sentences = [
-        part for part in check_cues().quote_sentence_split.split(quote or "") if len(_canonical(part)[0]) >= _QUOTE_SENTENCE_MIN_CHARS
-    ]
-    if not sentences:
-        return "", 0.0
-    canonical_text, positions = _canonical(text)
-    cursor = 0
-    matched: list[str] = []
-    lowest = 1.0
-    for sentence in sentences:
-        found = _fuzzy_range(_canonical(sentence)[0], canonical_text, cursor, _QUOTE_NEAR_RATIO)
-        if found is None:
-            return "", 0.0
-        start, end, score = found
-        # 最も似た窓は活用語尾（「押します」の「します」）の手前で切れることがある。続くひらがなは範囲に含める。
-        while end < len(canonical_text) and _HIRAGANA.match(canonical_text[end]):
-            end += 1
-        matched.append(_original_range_at(text, positions, start, end))
-        lowest = min(lowest, score)
-        cursor = end
-    return " … ".join(matched), lowest
-
-
 def _original_range_at(text: str, positions: list[int], start: int, end: int) -> str:
     """照合用文字列の [start, end) に対応する原文の範囲を、表の tag を区切りに置き換えて返す。
 
@@ -2979,69 +2665,6 @@ def _original_range_at(text: str, positions: list[int], start: int, end: int) ->
         stop += 1
     original = text[positions[start] : stop]
     return re.sub(r"\s*\|\s*(?:\|\s*)*", " | ", _MARKUP_TAG.sub(" | ", original)).strip(" |")
-
-
-def _heading_matches(quote: str, candidates: Sequence[dict], spans: Sequence[dict]) -> list[tuple[dict, str]]:
-    """根拠の見出し（section_path の要素、または `>` でつないだ末尾）そのものを引用した item を、
-    その見出しに属する最初の span に結び付ける (#672)。
-
-    見出しは prompt に出典情報の section_path として渡す推定の文脈で、モデルは節全体を指す引用に使う。
-    照合は `_canonical`（空白・全角半角だけ無視）の完全一致。同じ見出しが別の根拠（source_id）にも
-    あれば引用元を推測しない。candidates は指名された span → 全 span の順で渡す。
-    """
-    canonical_quote, _ = _canonical(quote or "")
-    if not canonical_quote:
-        return []
-
-    def matched_heading(span: dict) -> str:
-        path = [str(h) for h in span.get("section_path") or () if str(h).strip()]
-        candidates_ = [*path, *(" > ".join(path[-count:]) for count in range(2, len(path) + 1))]
-        for heading in candidates_:
-            if _canonical(heading)[0] == canonical_quote:
-                return heading
-        return ""
-
-    firsts: dict[str, tuple[dict, str]] = {}
-    for span in sorted((s for s in spans if s.get("source_id")), key=lambda s: (s["source_id"], s.get("start", 0))):
-        heading = matched_heading(span)
-        if heading and span["source_id"] not in firsts:
-            firsts[span["source_id"]] = (span, heading)
-    allowed = {s.get("source_id") for s in candidates}
-    return [value for source_id, value in firsts.items() if source_id in allowed]
-
-
-# 隣接 span の連結に照合するときの窓の大きさと、span 間に許す原文の隙間（改行など）。
-_ADJACENT_SPAN_WINDOW = 3
-_ADJACENT_SPAN_GAP = 2
-
-
-def _adjacent_span_matches(quote: str, spans: Sequence[dict]) -> list[tuple[dict, str]]:
-    """同じ根拠で読み順に隣接する span の連結に一致する引用を、先頭の span に結び付けて返す (#662)。
-
-    手順は record 単位（「③…」「④…」）で別 span になるため、モデルが隣り合う 2 手順を 1 つの引用に
-    すると単独の span には一致しない。連結は同じ source_id で原文位置が連続する span に限り、
-    照合の基準（文字・数字の並びの完全一致）は変えない。
-    """
-    if not str(quote or "").strip():
-        return []
-    ordered = sorted(
-        (s for s in spans if s.get("source_id") and isinstance(s.get("start"), int)), key=lambda s: (s["source_id"], s["start"])
-    )
-    matches: list[tuple[dict, str]] = []
-    for index, first in enumerate(ordered):
-        run = [first]
-        for nxt in ordered[index + 1 : index + _ADJACENT_SPAN_WINDOW]:
-            prev = run[-1]
-            if nxt["source_id"] != prev["source_id"] or not (prev["end"] <= nxt["start"] <= prev["end"] + _ADJACENT_SPAN_GAP):
-                break
-            run.append(nxt)
-            matched = _original_quote(quote, "\n".join(s["text"] for s in run))
-            if matched:
-                # 先頭の span を使わずに一致する連結は、先頭を進めた別の窓で同じ一致を数えるので除く。
-                if not _original_quote(quote, "\n".join(s["text"] for s in run[1:])):
-                    matches.append((first, matched))
-                break
-    return matches
 
 
 _CONDITION_MAX = 40
@@ -3135,6 +2758,22 @@ def _same_claim(entry: CheckedItem, other: CheckedItem) -> bool:
     )
 
 
+def _merge_citation_provenance(target: CheckedItem, other: CheckedItem) -> None:
+    """同じ表示をまとめても、明示された別の出典・版・範囲の記録を保持する。"""
+    seen = {_citation_range_key(own) for own in item_citations(target) if own.span}
+    for own in item_citations(other):
+        # 抽出できても利用不能と判定した旧範囲は、修復済みの引用へ戻さない。
+        # 意味支持の印とは分け、有効な明示出典は参考の状態でも保持する。
+        if (
+            own.span
+            and own.citation_resolution.get("status") == "extracted"
+            and not own.citation_resolution.get("reason_code")
+            and _citation_range_key(own) not in seen
+        ):
+            seen.add(_citation_range_key(own))
+            target.also.append(replace(deepcopy(own), also=[]))
+
+
 def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem]:
     """言い換えで説明済みの原文を、原文のみの欄へ重ねて表示しない。
 
@@ -3152,7 +2791,9 @@ def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem
         if entry.quote_only:
             # 原文のみ提示どうしも同じ原文は 1 つにする。引き継いだ item が降格していると、同じ根拠から補った
             # 確定操作の引用（短い方）と並ぶため、長い引用を残す (#1011)。
-            if any(k.quote_only and (_covers(k, entry) or _same_quote(k, entry)) for k in kept):
+            same = next((k for k in kept if k.quote_only and (_covers(k, entry) or _same_quote(k, entry))), None)
+            if same is not None:
+                _merge_citation_provenance(same, entry)
                 continue
             kept = [k for k in kept if not (k.quote_only and _covers(entry, k))]
         # 同じ原文から異なる操作・値を説明できるため、引用の一致だけでは主張を落とさない。
@@ -3166,7 +2807,10 @@ def without_redundant_quotes(checked: Sequence[CheckedItem]) -> list[CheckedItem
                 if (duplicate.state and not entry.state) or (
                     bool(duplicate.state) == bool(entry.state) and _prefers_document_text(entry, duplicate)
                 ):
+                    _merge_citation_provenance(entry, duplicate)
                     kept[kept.index(duplicate)] = entry
+                else:
+                    _merge_citation_provenance(duplicate, entry)
                 continue
         kept.append(entry)
     return kept
@@ -3239,11 +2883,17 @@ def carry_over(candidate: Sequence[CheckedItem], previous: Sequence[CheckedItem]
                     entry,
                     reasons=list(entry.reasons),
                     marks=[dict(mark) for mark in entry.marks],
+                    citation_resolution=dict(entry.citation_resolution),
+                    item=entry.item.model_copy(deep=True),
                     carried=True,
                     withdrawn=False,
-                    also=list(entry.also),
+                    also=deepcopy(entry.also),
                 )
             )
+        else:
+            target = next((current for current in kept if _same_claim(current, entry)), None)
+            if target is not None:
+                _merge_citation_provenance(target, entry)
     return kept
 
 
@@ -3287,30 +2937,53 @@ def _bare_title(text: str) -> bool:
     return len(lines) <= 1 and len(_compact(text)) <= 24 and not check_cues().bare_title_marks.search(text)
 
 
-def _following_proviso(entry: CheckedItem) -> str:
-    """採用した引用の直後に続く但し書き（例外・注意）。本則だけを答えて例外を落とさないために保持する。"""
+def _following_proviso(entry: CheckedItem) -> tuple[int, int] | None:
+    """抽出済みの終端座標から、直後の但し書きの範囲を返す。"""
+    if entry.citation_resolution.get("status") != "extracted":
+        return None
     text = entry.span["text"]
-    position = text.find(entry.item.quote)
-    if position < 0:
-        return ""
-    rest = text[position + len(entry.item.quote) :]
-    # 引用が文の途中で終わっていれば、その文の終わりまで進める。
+    position = int(entry.citation_resolution["char_end"])
+    rest = text[position:]
     ends = "".join(current_pack().words("question_cues", "sentence_split_chars"))
     sentence_end = (
         re.match(rf"[^{re.escape(ends)}\n]*[{re.escape(ends)}\n]", rest) if not entry.item.quote.rstrip().endswith((*ends, "\n")) else None
     )
-    match = check_cues().proviso.match(rest[sentence_end.end() :] if sentence_end else rest)
-    return match.group(1).strip()[:600] if match else ""
+    offset = sentence_end.end() if sentence_end else 0
+    match = check_cues().proviso.match(rest[offset:])
+    if match is None:
+        return None
+    start = position + offset + match.start(1)
+    return start, min(position + offset + match.end(1), start + 600)
 
 
-def _quote_item(span: dict, quote: str, reason: str) -> CheckedItem:
+def _quote_item(span: dict, start: int, end: int, reason: str) -> CheckedItem:
+    """システムが選んだ原文座標を、本文を検索し直さずに出典へ記録する。"""
+    snapshot = EvidenceUnitSnapshot.create(span, [(start, end)], "system_char_range_v1")
+    quote = str(span["text"])[start:end]
+    proof = {
+        "status": "extracted",
+        "authenticity": "verified",
+        "method": "system_char_range",
+        "quote_origin": "system_range",
+        "range_contract": "system_char_range_v1",
+        "requested_evidence_id": span["evidence_id"],
+        "resolved_evidence_id": span["evidence_id"],
+        "source_id": str(span.get("source_id", "")),
+        "source": str(span.get("source", "")),
+        "snapshot_id": snapshot.snapshot_id,
+        "content_sha256": hashlib.sha256(str(span["text"]).encode()).hexdigest(),
+        "char_start": str(start),
+        "char_end": str(end),
+    }
+    citation = GroundedCitation(evidence_id=span["evidence_id"]).model_copy(update={"quote": quote})
+    citation._extraction = dict(proof)
     item = GroundedItem(
         kind="rule" if "definition" in span.get("tags", ()) else "operation",
-        text=quote,
-        citations=[GroundedCitation(evidence_id=span["evidence_id"], quote=quote)],
+        text=quote[:600],
+        citations=[citation],
         applies="unverified",
     )
-    return CheckedItem(item, span, quote_only=True, reasons=[reason], added=True)
+    return CheckedItem(item, snapshot.span(), quote_only=True, reasons=[reason], added=True, citation_resolution=proof)
 
 
 def _audit_is_empty(audit: GroundedAudit) -> bool:
@@ -3670,7 +3343,7 @@ def audit_needed_quotes(
             continue
         if question is not None and _question_term_hits(terms, span) < min(2, len(terms)):
             continue
-        items.append(_quote_item(span, span["text"][:600], "監査が回答に必要とした根拠"))
+        items.append(_quote_item(span, 0, min(600, len(span["text"])), "監査が回答に必要とした根拠"))
         if len(items) >= limit:
             break
     return items
@@ -3699,7 +3372,7 @@ def related_document_quotes(question: str, spans: Sequence[dict], *, limit: int 
         if hits >= min(2, len(terms)):
             scored.append((-hits, order, span))
     scored.sort(key=lambda entry: entry[:2])
-    return [_quote_item(span, span["text"][:600], "拒答時の関連原文") for _, _, span in scored[:limit]]
+    return [_quote_item(span, 0, min(600, len(span["text"])), "拒答時の関連原文") for _, _, span in scored[:limit]]
 
 
 def deadline_document_quotes(
@@ -3731,7 +3404,7 @@ def deadline_document_quotes(
         ):
             continue
         shown.add(span["evidence_id"])
-        quotes.append(_quote_item(span, span["text"][:600], note))
+        quotes.append(_quote_item(span, 0, min(600, len(span["text"])), note))
     return quotes
 
 
@@ -3878,35 +3551,29 @@ def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[st
     return render_with_citations(summary, checked, unanswered, confirmations)[0]
 
 
-def _quote_ranges(quote: str, span: dict) -> list[tuple[int, int]]:
-    """引用の各片（``_original_quote`` が「 … 」でつないだ片）の、親の本文の中の範囲（#2710）。
-
-    片が根拠の本文に見つからないか、2 か所以上に当たれば位置は決まらないので空を返す。
-    """
+def _citation_coordinate_ranges(span: Mapping[str, Any], proof: Mapping[str, Any]) -> list[tuple[int, int]]:
+    """抽出時の同じ原版の座標だけを親文書の位置へ変換し、引用文は検索しない。"""
     text = str(span.get("text") or "")
     base = span.get("start")
-    if not isinstance(base, int) or not text:
+    if (
+        not isinstance(base, int)
+        or isinstance(base, bool)
+        or proof.get("status") != "extracted"
+        or proof.get("source_id") != str(span.get("source_id") or "")
+        or proof.get("resolved_evidence_id") != str(span.get("evidence_id") or "")
+        or proof.get("content_sha256") != hashlib.sha256(text.encode()).hexdigest()
+    ):
         return []
-    canonical: tuple[str, list[int]] | None = None
-    ranges: list[tuple[int, int]] = []
-    for piece in (part for part in str(quote or "").split(" … ") if part.strip()):
-        at = text.find(piece)
-        if at >= 0:
-            if text.find(piece, at + 1) >= 0:
-                return []
-            ranges.append((base + at, base + at + len(piece)))
-            continue
-        canonical = canonical or _canonical(text)
-        canonical_piece, _ = _canonical(piece)
-        at = canonical[0].find(canonical_piece) if canonical_piece else -1
-        if at < 0 or canonical[0].find(canonical_piece, at + 1) >= 0:
-            return []
-        positions = canonical[1]
-        ranges.append((base + positions[at], base + positions[at + len(canonical_piece) - 1] + 1))
-    return ranges
+    if isinstance(proof.get("char_start"), bool) or isinstance(proof.get("char_end"), bool):
+        return []
+    try:
+        start, end = int(proof["char_start"]), int(proof["char_end"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    return [(base + start, base + end)] if 0 <= start < end <= len(text) else []
 
 
-def citation_children(span: dict | None, quote: str = "") -> tuple[list[str], list[str]]:
+def citation_children(span: dict | None, *, citation_resolution: Mapping[str, Any] | None = None) -> tuple[list[str], list[str]]:
     """出典の根拠（span）のうち、引用を支える子の chunk の ID と、決まらないときの候補の子の ID（#2710）。
 
     根拠は親の範囲（``source_id``）で、親の中の子は ``child_ranges``（子の ID と親の本文の中の範囲）に持つ。
@@ -3920,7 +3587,7 @@ def citation_children(span: dict | None, quote: str = "") -> tuple[list[str], li
     ranges = [item for item in span.get("child_ranges") or () if isinstance(item, Mapping) and item.get("id")]
     if not ranges:
         return scoped, []
-    if located := _quote_ranges(quote, span):
+    if located := _citation_coordinate_ranges(span, citation_resolution or {}):
         hits = [str(item["id"]) for item in ranges if any(item["start"] < end and start < item["end"] for start, end in located)]
         # 引用が子の外（親だけにある前置きなど）にあれば、親の範囲の参照のまま（候補も無い）。
         return (list(dict.fromkeys(hits)), []) if hits else (scoped, [])
@@ -3948,7 +3615,7 @@ def citation_line_ref(entries: Sequence[CheckedItem]) -> dict[str, Any]:
     exact: list[str] = []
     candidates: list[str] = []
     for entry in entries:
-        ids, options = citation_children(entry.span, entry.item.quote)
+        ids, options = citation_children(entry.span, citation_resolution=entry.citation_resolution)
         exact.extend(ids)
         candidates.extend(options)
     exact = list(dict.fromkeys(exact))
@@ -4279,8 +3946,6 @@ _CITE_RANGE = re.compile(r"^\s*(\d+)\s*(?:[-~〜–]\s*(\d+))?\s*(?:\|.*)?$", re
 # lines を番号の列（`[1,2,3]`・`2, 4`）で書いたときは、最初から最後までの行を引く。
 _CITE_LIST = re.compile(r"^\s*(?:\[\s*\d+(?:\s*[,、]\s*\d+)*\s*\]|\d+(?:\s*[,、]\s*\d+)+)\s*$")
 # lines が空のとき、説明の文に最もよく重なる連続した行を引用にする窓の行数と、説明の文字の 2-gram の重なりの下限。
-_CLAIM_UNIT_WINDOW = 3
-_CLAIM_UNIT_MIN_SHARE = 0.5
 
 
 # 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824・#3847）。
@@ -4411,48 +4076,6 @@ def _numbered_text(text: str, units: Sequence[tuple[int, int]], *, numbered: boo
     if not (_numbered(text, units) if numbered is None else numbered):
         return text
     return "\n".join(f"{number}| {text[start:end]}" for number, (start, end) in enumerate(units, 1))
-
-
-def _lines_text_units(lines: str, text: str, units: Sequence[tuple[int, int]]) -> tuple[int, int] | None:
-    """lines に行番号ではなく原文の書き出しが入ったとき、その書き出しを含む行の範囲（1 始まり）。
-
-    モデルが行の番号の代わりに引用の原文を写すことがある（応答の schema の長さの上限で途中まで）。指した根拠の本文に
-    照合の形（``_canonical``）で 1 か所だけ見つかるときだけ、その位置に重なる行を引用にする。短すぎる・見つからない・
-    複数の位置に見つかるときは None（推測で行を選ばない）。
-    """
-    needle, _ = _canonical(lines or "")
-    if len(needle) < _QUOTE_SENTENCE_MIN_CHARS:
-        return None
-    haystack, positions = _canonical(text)
-    start = haystack.find(needle)
-    if start < 0 or haystack.find(needle, start + 1) >= 0:
-        return None
-    begin, end = positions[start], positions[start + len(needle) - 1] + 1
-    hits = [number for number, (a, b) in enumerate(units, 1) if a < end and begin < b]
-    return (hits[0], hits[-1]) if hits else None
-
-
-def _claim_units(claim: str, text: str, units: Sequence[tuple[int, int]]) -> tuple[int, int] | None:
-    """lines が空のとき、説明（text）に最もよく重なる連続した行の範囲（1 始まり。最大 ``_CLAIM_UNIT_WINDOW`` 行）。
-
-    説明の文字の 2-gram のうち行に含まれる割合で選び（同じ割合なら短い・前の範囲）、``_CLAIM_UNIT_MIN_SHARE`` に
-    届かなければ None（行を推測で選ばない）。引用は指した根拠の原文の範囲なので、説明との照合は従来の検査に任せる。
-    """
-
-    def grams(value: str) -> set[str]:
-        canonical, _ = _canonical(value)
-        return {canonical[index : index + 2] for index in range(len(canonical) - 1)}
-
-    wanted = grams(claim)
-    if not wanted:
-        return None
-    windows = [
-        (len(wanted & grams(text[units[first][0] : units[last][1]])) / len(wanted), first + 1, last + 1)
-        for first in range(len(units))
-        for last in range(first, min(len(units), first + _CLAIM_UNIT_WINDOW))
-    ]
-    share, first, last = max(windows, key=lambda window: (round(window[0], 9), window[1] - window[2], -window[1]))
-    return (first, last) if share >= _CLAIM_UNIT_MIN_SHARE else None
 
 
 @dataclass(frozen=True)
@@ -4763,6 +4386,8 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     metadata = {
         "requested_evidence_id": item.evidence_id,
         "requested_lines": item.lines,
+        "requested_quote": item.quote,
+        "method": "id_range",
         "status": "failed",
         "authenticity": "unverified",
         "sent_view_status": "not_recorded",
@@ -4776,8 +4401,8 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
     if item.kind != "gap" and item.evidence_id and not named and item.evidence_id in guide_ids:
         metadata.update(requested_id_namespace="business_guide", expected_id_namespace="document_evidence")
         return fail("citation_id_namespace", passage_marks.reason("citation_id_namespace")["label"])
-    if item.kind == "gap" or (item.quote.strip() and not item.lines.strip()):
-        return item, ""  # システムの補写・旧形式の自由引用は従来の原文照合に進む。
+    if item.kind == "gap":
+        return item, ""
     if not named:
         return fail("citation_id_invalid", "引用の ID が今回の根拠にありません。今回の根拠に表示された ID を指定してください。")
     if len(named) != 1:
@@ -4856,10 +4481,6 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             numbers = [int(value) for value in re.findall(r"\d+", listed.group(0))]
             first, last, origin = min(numbers), max(numbers), "line_list"
             metadata["requested_range_status"] = "valid_list"
-        elif located := _lines_text_units(item.lines, text, units) if item.lines.strip() else _claim_units(item.text, text, units):
-            first, last = located
-            origin = "line_text" if item.lines.strip() else "claim_inferred"
-            metadata["requested_range_status"] = "invalid" if item.lines.strip() else "missing"
         else:
             metadata["requested_range_status"] = "invalid" if item.lines.strip() else "missing"
             code = "citation_range_invalid" if item.lines.strip() else "citation_range_missing"
@@ -5214,14 +4835,7 @@ class Round:
         audit = self.audit
         result = {
             "citation_range_issues": citation_range_issues(self.checked, self.dropped),
-            # 原文と照合できず削除した引用には、写し方を添える。理由だけでは同じ形の引用が返ってくる (#1076)。
-            "dropped_items": [
-                {**d, "hint": _VERBATIM_HINT + (_MISCOPIED_HINT if d.get("miscopied") else "")}
-                if "原文とも一致しない" in str(d.get("reason"))
-                else d
-                for d in self.dropped
-                if not d.get("ignored")
-            ],
+            "dropped_items": [d for d in self.dropped if not d.get("ignored")],
             # 印を付けた・矛盾で外した説明（#2738。原文と照合できなかった説明は dropped_items に写し方と出す）。
             "downgraded_items": [
                 {"text": e.item.text, "reasons": e.reasons, **_operation_hint(e)}
@@ -5348,21 +4962,13 @@ class Round:
             # 「保持する」対象は前回の草稿にしかない。指摘がある時だけ、公開できた item を添える。
             result["supported_items"] = [
                 {
-                    "evidence_ref": {"evidence_id": e.span["evidence_id"], "text": e.span["text"][:80]},
+                    "evidence_ref": _source_reference(e.span) if e.span else None,
                     "request_id": e.item.request_id,
                     "kind": e.item.kind,
                     "text": e.item.text,
                     "quote": e.item.quote,
                     # 同じ主張の別の出典（#3526）。
-                    **(
-                        {
-                            "other_evidence_refs": [
-                                {"evidence_id": o.span["evidence_id"], "text": o.span["text"][:80]} for o in e.also if o.span
-                            ]
-                        }
-                        if e.also
-                        else {}
-                    ),
+                    **({"other_evidence_refs": [_source_reference(o.span) for o in e.also if o.span]} if e.also else {}),
                 }
                 for e in self.checked
                 if e.confirmed
@@ -5618,18 +5224,6 @@ _GUIDE_STEP_HINT = (
     "原文が質問の対象の手順ではないと確かめたときだけ、その手順を kind=gap にして理由を書く。"
 )
 
-_VERBATIM_HINT = (
-    "quote は 1 つの Evidence の連続した原文をそのまま写す。離れた箇所を繋いだり、"
-    "要約・言い換えをしたりすると照合できず削除される。写せる範囲が短いなら、"
-    "その範囲だけを述べる item にする。"
-)
-
-_MISCOPIED_HINT = (
-    "miscopied.quoted の文は、指した Evidence の原文のその位置では miscopied.original と続いている"
-    "（隣の行の語の写し誤りか、離れた行のつなぎ合わせ）。写し直すなら miscopied.verbatim_quote をそのまま quote にする。"
-    "離れた行は別の item にするか、その文を quote から外す。"
-)
-
 
 def _operation_hint(entry: CheckedItem) -> dict:
     """降格した item に、次の生成が直せる具体的な指示を添える。
@@ -5664,18 +5258,27 @@ def _operation_hint(entry: CheckedItem) -> dict:
     return result
 
 
+def _source_reference(span: dict) -> dict[str, str]:
+    """出典と版を、表示番号や原文の断片に依存しない参照へ固定する。"""
+    snapshot = EvidenceUnitSnapshot.create(span, (), "source_identity_v1")
+    return {"evidence_id": span["evidence_id"], "snapshot_id": snapshot.snapshot_id}
+
+
 def _evidence_ref(label: str, spans: Sequence[dict]) -> dict | None:
     """表示ID（E1…）を、根拠の並びが変わっても同じ原文を指せる参照へ変換する。"""
     span = next((s for s in spans if s["label"] == label.strip().strip("[]")), None)
-    return {"evidence_id": span["evidence_id"], "text": span["text"][:80]} if span else None
+    return _source_reference(span) if span else None
 
 
 def _current_label(ref: dict, spans: Sequence[dict]) -> str:
-    """参照が指す原文の、現在の表示ID。抜粋範囲が変わった場合は原文の先頭で照合し、無ければ空。"""
-    span = next((s for s in spans if s["evidence_id"] == ref["evidence_id"]), None) or next(
-        (s for s in spans if _compact(ref["text"]) in _compact(s["text"])), None
-    )
-    return span["label"] if span else ""
+    """同じ根拠 ID の一意な表示 ID だけを返し、原文で別の出典を探さない。"""
+    matched = [
+        span
+        for span in spans
+        if span["evidence_id"] == ref["evidence_id"]
+        and (not ref.get("snapshot_id") or _source_reference(span)["snapshot_id"] == ref["snapshot_id"])
+    ]
+    return matched[0]["label"] if len(matched) == 1 else ""
 
 
 def _relabeled_feedback(feedback: dict, spans: Sequence[dict]) -> dict:
@@ -5708,20 +5311,11 @@ def _relabeled_feedback(feedback: dict, spans: Sequence[dict]) -> dict:
 
 
 def _relabeled_item(item: dict, spans: Sequence[dict]) -> dict:
-    """feedback の 1 item の表示 ID を今回の根拠へ付け替える。nearest_quote の label も同じく引き直す (#834)。
-
-    nearest_quote は「最も近い原文はこれ。そのまま写す」という誘導なので、旧 ID のまま渡すと文脈拡張後の
-    round では別の原文を指し、再び dropped になる。今回の根拠に無ければ label を外す。
-    """
-    relabeled = {
+    """feedback の表示 ID を今回の根拠へ付け替える。"""
+    return {
         **{k: v for k, v in item.items() if k != "evidence_ref"},
         "evidence_id": _current_label(item["evidence_ref"], spans) if item.get("evidence_ref") else item["evidence_id"],
     }
-    nearest = item.get("nearest_quote")
-    if isinstance(nearest, dict) and nearest.get("evidence_id"):
-        label = _current_label({"evidence_id": nearest["evidence_id"], "text": str(nearest.get("text") or "")}, spans)
-        relabeled["nearest_quote"] = {**nearest, "label": label} if label else {k: v for k, v in nearest.items() if k != "label"}
-    return relabeled
 
 
 # CRAG 評価器の missing_aspects（task_contract.required_aspects の観点名）を利用者向けの語に写す (#986)。語は言語資源。
@@ -5757,7 +5351,6 @@ GUIDE_STEP_NOT_SEARCHED = "not_searched"
 # 同じ根拠のまま作り直せば直せる手順の状態（根拠が材料にある）。
 GUIDE_STEP_REGENERABLE = frozenset({GUIDE_STEP_REFERENCE_ONLY, GUIDE_STEP_UNUSED, GUIDE_STEP_PARTIAL})
 # 手順の根拠と同じ原文を別の根拠から引いた説明を数える、引用の最短の長さ（短い語句はどの本文にも当たる）。
-_GUIDE_STEP_QUOTE_MIN_CHARS = 12
 
 
 def _guide_words(value: str) -> set[str]:
@@ -5977,7 +5570,7 @@ def guide_step_assignment(
 ) -> tuple[list[dict[str, Any]], dict[int, str]]:
     """手順の資料と回答itemの候補対応を記録する。全充足はapply_guide_contractsで別に確かめる。
 
-    source IDと、同一の原文を持つ別chunkへの引用で候補を集める。共有候補の語・embeddingは操作範囲の
+    明示された source ID と alias で候補を集める。共有候補の語・embeddingは操作範囲の
     対応付けにだけ用い、広い原文引用やsourceの一致を本文の全充足へ昇格させない。独立した候補は
     一つのitemを複数手順へ、一つの手順を複数itemへ保持できる。戻り値のindex→step IDは互換の代表値。
 
@@ -6002,15 +5595,8 @@ def guide_step_assignment(
             for index, entry in enumerate(checked)
             if entry.span
             and entry.item.kind != "gap"
-            and (
-                bool(
-                    source_ids
-                    & {str(source) for source in (entry.span.get("source_id"), *(entry.span.get("source_aliases") or ())) if source}
-                )
-                or (
-                    len(_compact(entry.item.quote)) >= _GUIDE_STEP_QUOTE_MIN_CHARS
-                    and any(quote_in_text(entry.item.quote, str(span.get("text") or "")) for span in step_spans[step_id])
-                )
+            and bool(
+                source_ids & {str(source) for source in (entry.span.get("source_id"), *(entry.span.get("source_aliases") or ())) if source}
             )
         ]
     citing: dict[int, list[str]] = {}
@@ -6111,9 +5697,7 @@ def guide_step_assignment(
                 "title": title,
                 "required": step_id not in optional_ids,
                 "status": status,
-                "evidence_refs": [
-                    {"evidence_id": span["evidence_id"], "text": str(span.get("text") or "")[:80]} for span in step_spans[step_id]
-                ],
+                "evidence_refs": [_source_reference(span) for span in step_spans[step_id]],
                 "evidence_flow": {
                     "linked_source_count": len(set(_sources)),
                     "context_evidence_ids": list(dict.fromkeys(span["evidence_id"] for span in step_spans[step_id])),
