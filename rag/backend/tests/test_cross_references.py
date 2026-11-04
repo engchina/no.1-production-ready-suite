@@ -901,7 +901,9 @@ async def test_search_reference_expansion_respects_budget_and_caches_targets() -
         for child in result.child_chunks
         if child.chunk_uid not in {a.chunk_id for a in anchors}
     ]
-    assert referenced == ["doc-1:cs-1:s0", "doc-1:cs-1:s1", "doc-1:cs-1:x0"]
+    # 4件の必要引用を3件に切り詰めず、起点を残して依存未充足を記録する。
+    assert referenced == []
+    assert state.reference_sources[0]["unsatisfied_sources"] == 3
     # 同じ参照先は 1 回の回答で 1 回だけ読む(CRAG の各回でも読み直さない)。
     assert [call["section_path"] for call in oracle.reference_calls] == [
         "第3章 承認",
@@ -1092,13 +1094,12 @@ async def test_search_resolves_references_of_chunks_without_ingest_targets() -> 
     )
 
     order = [child.chunk_uid for child in result.child_chunks]
-    # 2 つ目の候補は同じ参照先の残り(足した chunk は重ねない)。
+    # 共有参照先は同じ2件を再利用し、起点ごとに別の残りを補充しない。
     assert order == [
         "doc-1:a",
         "doc-1:cs-1:s0",
         "doc-1:cs-1:s1",
         "doc-1:b",
-        "doc-1:cs-1:s2",
         "doc-1:c",
         "doc-1:d",
     ]
@@ -1666,7 +1667,7 @@ async def test_document_name_reference_outside_top_five_is_followed(
         # 参照先の文書の質問に関連の高い 2 件を、起点の直後に置く(上位 5 件の起点と同じ)。
         assert order[7:] == [window.chunk_id, "doc-plan:cs-plan:1", "doc-plan:cs-plan:0"]
         assert source["outcome"] == "added"
-        assert "added" in source["target_outcomes"]
+        assert "available" in source["target_outcomes"]
         assert search["added_count"] == 2
         assert {item["from_fused_rank"] for item in state.reference_expansions.values()} == {8}
         assert state.chunks["doc-plan:cs-plan:1"].metadata[REFERENCE_FROM_KEY] == window.chunk_id
@@ -1768,10 +1769,9 @@ async def test_document_name_reference_adds_sentence_citing_selected_section() -
         limited,
         retrieval_queries=[case["query"]],
     )
-    assert [child.chunk_uid for child in result.child_chunks][1:] == [
-        "doc-plan:cs-plan:1",
-        "doc-plan:cs-plan:2",
-    ]
+    # 条件文も必要な依存なので、2件の予算で切り離さない。
+    assert [child.chunk_uid for child in result.child_chunks] == [window.chunk_id]
+    assert limited.reference_sources[0]["unsatisfied_sources"] == 1
 
 
 async def test_extended_reference_sources_follow_one_hop_without_moving_sources() -> None:
@@ -1803,7 +1803,6 @@ async def test_extended_reference_sources_follow_one_hop_without_moving_sources(
         "doc-1:cs-1:x1",
         "doc-1:f",
         "doc-1:cs-1:s1",
-        "doc-1:cs-1:s2",
     ]
     (search,) = state.reference_sources
     assert [(item["fused_rank"], item["outcome"]) for item in _sources(search)] == [
@@ -2351,6 +2350,11 @@ def test_reference_expansion_settings_and_evaluation_override() -> None:
     settings = Settings()
     assert settings.rag_reference_expansion_enabled is True
     assert settings.rag_reference_expansion_max_chunks == 4
+    assert settings.rag_reference_expansion_max_targets == 20
+    with pytest.raises(ValueError):
+        Settings(rag_reference_expansion_max_targets=0)
+    with pytest.raises(ValueError):
+        Settings(rag_reference_expansion_max_targets=121)
     with pytest.raises(ValueError):
         Settings(rag_reference_expansion_max_chunks=0)
 

@@ -28,6 +28,18 @@ def reference_source_uid(record: Any) -> str:
     return str(marker.get("from_chunk_uid") or "") if isinstance(marker, dict) else ""
 
 
+def reference_source_uids(record: Any) -> tuple[str, ...]:
+    """共有する参照先の全参照元。単一の旧markerも同じ依存群として扱う。"""
+    metadata = getattr(record, "metadata", None)
+    marker = metadata.get(REFERENCE_EXPANSION_KEY) if isinstance(metadata, dict) else None
+    values = marker.get("from_chunk_uids") if isinstance(marker, dict) else None
+    primary = reference_source_uid(record)
+    result = [primary] if primary else []
+    if isinstance(values, list):
+        result.extend(value for value in values if isinstance(value, str) and value)
+    return tuple(dict.fromkeys(result))
+
+
 def is_followed_reference(record: Any) -> bool:
     """rerank の後に参照元の直後へ移した参照先の根拠か（文書の選択で後回しにしない。#1549）。"""
     metadata = getattr(record, "metadata", None)
@@ -45,10 +57,16 @@ def follow_reference_sources(records: Sequence[Any], step: Any | None = None) ->
     """参照元より下にある参照先の根拠を、参照元の直後へ移す（#1549）。ほかの候補の順は変えない。"""
     positions = {str(getattr(record, "chunk_uid", "") or ""): index for index, record in enumerate(records)}
     followers: dict[str, list[Any]] = {}
+    active_sources: dict[int, str] = {}
     for index, record in enumerate(records):
-        source = reference_source_uid(record)
-        if source and source in positions and positions[source] < index:
+        marker = record.metadata.get(REFERENCE_EXPANSION_KEY)
+        if isinstance(marker, dict) and marker.get("keep_source_position"):
+            continue
+        available = [source for source in reference_source_uids(record) if source in positions and positions[source] < index]
+        if available:
+            source = min(available, key=lambda uid: positions[uid])
             followers.setdefault(source, []).append(record)
+            active_sources[id(record)] = source
     if not followers:
         return list(records)
     moved = {id(record) for items in followers.values() for record in items}
@@ -63,7 +81,15 @@ def follow_reference_sources(records: Sequence[Any], step: Any | None = None) ->
         uid = str(getattr(record, "chunk_uid", "") or "")
         for follower in sorted(followers.get(uid, ()), key=_reference_rank):
             marker = dict(follower.metadata.get(REFERENCE_EXPANSION_KEY) or {})
-            emit(replace(follower, metadata={**follower.metadata, REFERENCE_EXPANSION_KEY: {**marker, "followed": True}}))
+            emit(
+                replace(
+                    follower,
+                    metadata={
+                        **follower.metadata,
+                        REFERENCE_EXPANSION_KEY: {**marker, "from_chunk_uid": active_sources[id(follower)], "followed": True},
+                    },
+                )
+            )
             emitted.add(id(follower))
 
     for record in records:
@@ -79,4 +105,5 @@ __all__ = [
     "follow_reference_sources",
     "is_followed_reference",
     "reference_source_uid",
+    "reference_source_uids",
 ]

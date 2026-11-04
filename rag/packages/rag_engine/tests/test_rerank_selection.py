@@ -131,3 +131,12 @@ def test_catalog_context_keeps_its_existing_separate_budget():
     assert [record.id for record in selected] == ["0", "1", "2"]
     assert detail["ordinary_selected_count"] == 1
     assert detail["catalog_related_count"] == 2
+
+
+def test_shared_reference_keeps_all_source_dependencies_in_one_group():
+    from dataclasses import replace
+
+    a, b, reference, other = child(0), child(1), child(2, source=0), child(3)
+    reference = replace(reference, metadata={"reference_expansion": {"from_chunk_uid": "uid:0", "from_chunk_uids": ["uid:0", "uid:1"]}})
+    assert select_reranked_candidates([a, b, reference, other], 2)[0] == [other]
+    assert select_reranked_candidates([a, b, reference, other], 3)[0] == [a, b, reference]

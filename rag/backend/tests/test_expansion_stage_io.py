@@ -193,9 +193,7 @@ async def test_returned_expansions_keep_their_actual_origin_and_exclusions(
 
     async def reference(self: Any, request: Any, state: Any, anchors: Any, **kwargs: Any) -> Any:
         assert kwargs["existing"] == {"seed-a"}
-        state.reference_sources.append(
-            {"sources": [{"source_chunk_id": "seed-a", "status": "followed"}]}
-        )
+        kwargs["receipt"].update({"sources": [{"source_chunk_id": "seed-a", "status": "followed"}]})
         return {"seed-a": [row("reference-a")]}
 
     async def entity(*args: Any, **kwargs: Any) -> list[Any]:
@@ -222,7 +220,7 @@ async def test_returned_expansions_keep_their_actual_origin_and_exclusions(
     captured = calls(summary)
     ref = json.loads(captured[REFERENCE_EXPANSION_STAGE].output.text)
     assert ref["起点と返した Chunk"]["seed-a"][0]["chunk_id"] == "reference-a"
-    assert ref["今回の探索判断"][0]["sources"][0]["source_chunk_id"] == "seed-a"
+    assert ref["今回の探索判断"]["sources"][0]["source_chunk_id"] == "seed-a"
     graph_input = json.loads(captured[GRAPH_EXPANSION_STAGE].input.text)
     assert set(graph_input["除外 ID"]) == {"seed-a", "reference-a", "entity-a"}
     graph_output = json.loads(captured[GRAPH_EXPANSION_STAGE].output.text)
