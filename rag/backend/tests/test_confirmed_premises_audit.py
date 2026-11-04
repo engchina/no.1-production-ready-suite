@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from rag_engine.config import LLM_PURPOSE_AUDIT, settings_for_llm_purpose
+from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.models.llm import GroundedDraft
 
@@ -135,13 +136,22 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
             )
         result = _fake_llm(system, prompt, config, schema, **options)
         if issubclass(schema, (GroundedDraft, generation_draft_wire_model())):
-            # この回帰は履歴互換の草稿を返し、引用wire自体の検証とは分ける。
+            # 実際に送った単位 ID の所属から、同次の要求計画を返す。
             data = result.model_dump()
-            ids = list(dict.fromkeys(row["citations"][0]["evidence_id"] for row in data["items"]))
+            catalog = grounded.generation_unit_catalog(
+                [span for span, _view in (grounded._CITATION_VIEWS.get() or {}).values()]
+            )
+            ids = list(
+                dict.fromkeys(
+                    str(binding.snapshot.span()["evidence_id"])
+                    for row in data["items"]
+                    for citation in row["citations"]
+                    for binding in catalog.bind(citation["unit_ids"])
+                )
+            )
             data["request_coverage"] = [
                 {
                     "request_id": "Q1",
-                    "evidence_ids": ids,
                     "evidence_scope": [
                         {"evidence_id": identity, "target": "登録", "relation": "direct"}
                         for identity in ids
@@ -150,7 +160,7 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
             ]
             for row in data["items"]:
                 row["request_id"] = "Q1"
-            return GroundedDraft.model_validate(data)
+            return schema.model_validate(data)
         return result
 
     monkeypatch.setattr("rag_engine.adapters.oci.parse_text_response", parser)
