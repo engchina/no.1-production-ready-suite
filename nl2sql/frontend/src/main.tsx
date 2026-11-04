@@ -21,7 +21,7 @@ import { NL2SQL_TRACE_DETAILS_LABELS } from "@/features/nl2sql/chatProgress";
 // Noto Sans JP は可変書体（1 つの face が太さ 100〜900 を持つ。書体名は Noto Sans JP Variable）。@font-face を slice の数に
 // 抑える（静的な書体の slice × 太さの @font-face は描画を止めた。#3328・#3333）。
 import "@fontsource-variable/noto-sans-jp/wght.css";
-// Noto Sans SC / TC / HK は主の CSS に入れず、fonts-cjk.css を最初の描画の後に読む（末尾の loadStylesAfterFirstRender。#3305）。
+// Noto Sans SC / TC は主の CSS に入れず、fonts-cjk.css を最初の描画の後に読む（末尾の loadStylesAfterFirstRender。#3305）。
 import "@fontsource/roboto/400.css";
 import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/600.css";
@@ -94,5 +94,5 @@ createRoot(root).render(
   </StrictMode>
 );
 
-// Noto Sans JP に無い字を補う Noto Sans SC・TC・HK の @font-face は別の CSS の chunk にし、最初の描画の後に読む（#3305）。
+// Noto Sans JP に無い字を補う Noto Sans SC・TC の @font-face は別の CSS の chunk にし、最初の描画の後に読む（#3305）。
 loadStylesAfterFirstRender(root, () => import("./fonts-cjk.css"), { serviceName: "production-ready-nl2sql" });

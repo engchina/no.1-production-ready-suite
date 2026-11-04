@@ -78,6 +78,7 @@
 - 生の hex・色の関数・生の px、共有部品の再実装、`<table>` の手書き（`DataTable`）、余白コンテナの手書き（`PageBody`）、操作部品の高さ・幅の手書き（`size` / `width`）、`Spinner` 以外の回転するアイコン、絵文字と手描き SVG（アイコンは `lucide-react`）を使わない。
 - 画面は `AppShell` → `PageHeader`（`actions` は配列）→ `PageBody` → `Section` の構成にする。単位の境界: 文字サイズとコントロール高さは px、余白とレイアウト寸法は rem。
 - 読み込み中は `TimedLoadingState` と内容の形の `Skeleton`、一覧は `DataTable` と共通の `Pagination`（既定 25 件）と `ListToolbar` の件数。
+- **ID・ログ・SQL など、文字幅の整列が必要な表示は、共有の `--font-mono`（`font-mono`）を使い、Google Sans Code を先頭にする。** 通常の UI・本文の書体の順序とは分け、製品で独自の書体指定を重ねない。
 - **UI/UX の作業は必ず `ui-ux-pro-max` skill を使い、変更ごとに Playwright で desktop と 375px の実画面を確かめる。** 画面のコードを変えたら、その画面の既存の spec も同じ PR で直す。画面幅で結果が変わる test には `{ tag: "@responsive" }` を付ける。
 
 ## 共通の技術方針

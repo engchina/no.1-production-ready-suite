@@ -45,7 +45,7 @@ Unstructured parser のセキュリティ更新（#3957）では、`pyasn1` 0.6.
 | `pikepdf` | PyPI | MPL-2.0。wheel の `pikepdf.libs` に qpdf（Apache-2.0）と libjpeg（IJG）を同梱 | `rag/services/parsers/unstructured`、`rag/backend` の extra `unstructured` | MPL-2.0 はファイル単位の copyleft。改変しない |
 | `certifi` | PyPI | MPL-2.0 | すべての backend・サービス | Mozilla の CA の bundle。改変しない |
 | `tqdm` | PyPI | MPL-2.0 AND MIT | `rag/` のすべての venv | 改変しない |
-| `@fontsource-variable/noto-sans-jp`・`@fontsource-variable/noto-sans-sc`・`@fontsource-variable/noto-sans-tc`・`@fontsource-variable/noto-sans-hk`・`@fontsource/roboto`・`@fontsource/google-sans-code` | npm | OFL-1.1 | 3 製品の `frontend/` | 下の「書体」 |
+| `@fontsource-variable/noto-sans-jp`・`@fontsource-variable/noto-sans-sc`・`@fontsource-variable/noto-sans-tc`・`@fontsource/roboto`・`@fontsource/google-sans-code` | npm | OFL-1.1 | 3 製品の `frontend/` | 下の「書体」 |
 
 ## build・test だけで使う部品（成果物に含まない）
 
@@ -94,7 +94,7 @@ Playwright（Apache-2.0。NOTICE あり）も e2e だけで使い、成果物に
 | 書体 | package | 使い方 |
 |---|---|---|
 | Noto Sans JP（可変） | `@fontsource-variable/noto-sans-jp` | 本文（日本語・ラテン文字） |
-| Noto Sans SC / TC / HK（可変） | `@fontsource-variable/noto-sans-sc`・`-tc`・`-hk` | Noto Sans JP に無い簡体字・繁体字・香港の字 |
+| Noto Sans SC / TC（可変） | `@fontsource-variable/noto-sans-sc`・`-tc` | Noto Sans JP に無い簡体字・繁体字 |
 | Roboto | `@fontsource/roboto` | ラテン文字の fallback |
 | Google Sans Code | `@fontsource/google-sans-code` | 等幅（ID・ログ・SQL） |
 

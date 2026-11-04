@@ -500,7 +500,7 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   await page.goto("/profiles");
   const grid = page.getByTestId("profile-management-grid");
   await expect(grid).toBeVisible();
-  // SC・TC・HK の @font-face は主の CSS に入れず、最初の描画の後に読む（#3305）。
+  // SC・TC の @font-face は主の CSS に入れず、最初の描画の後に読む（#3305）。
   await expectDeferredCjkFontFaces(page);
   // check() だけでは未登録フォントの fallback を見逃すため、実際にロードした face も検証する。
   const fonts = await page.evaluate(async () => {
@@ -549,12 +549,12 @@ test("ローカルフォントで全体と並べ替え列名を描画しキー�
   }
   // Noto Sans JP（可変書体）の各太さは本物の字形で描く（合成の太字にしない。#3333）。
   await expectLocalJapaneseFonts(page);
-  // Noto Sans JP に無い字（合成の例）は Noto Sans SC → TC → HK で補う（#3292）。
+  // Noto Sans JP に無い字（合成の例）は Noto Sans SC → TC で補う（#3292）。
   await expectLocalCjkFallbackFonts(page);
   // 内容の言語（lang）で共通の漢字の字形を切り替える（#3335）。
   await expectLangFonts(page);
   expect(fontResponses.some(({ url }) => url.includes("noto-sans-jp"))).toBe(true);
-  for (const family of ["noto-sans-sc", "noto-sans-tc", "noto-sans-hk"]) {
+  for (const family of ["noto-sans-sc", "noto-sans-tc"]) {
     expect(fontResponses.some(({ url }) => url.includes(family)), family).toBe(true);
   }
   expect(fontResponses.some(({ url }) => url.includes("roboto"))).toBe(true);

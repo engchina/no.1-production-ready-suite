@@ -20,11 +20,11 @@ import {
 
 export { recordFirstRenderFontFaces } from "../../../../../platform/packages/ui/e2e/font-checks";
 
-/** 自前ホストの書体の太さ（共有 tokens の太さ。JP・SC・TC・HK は可変書体で、どの太さも本物の字形で出す）。 */
+/** 自前ホストの書体の太さ（共有 tokens の太さ。JP・SC・TC は可変書体で、どの太さも本物の字形で出す）。 */
 export const LOCAL_FONT_WEIGHTS = [400, 500, 600, 700] as const;
 
 /**
- * Noto Sans SC・TC・HK の @font-face が主の CSS に無く、最初の描画の後に読まれることを確かめる（#3305）。
+ * Noto Sans SC・TC の @font-face が主の CSS に無く、最初の描画の後に読まれることを確かめる（#3305）。
  * `recordFirstRenderFontFaces(page)` を `page.goto` の前に呼んでおく。
  */
 export async function expectDeferredCjkFontFaces(page: Page) {
@@ -104,7 +104,7 @@ export async function expectLocalJapaneseFonts(page: Page) {
 }
 
 /**
- * Noto Sans JP に無い字（合成の例）だけを、自前ホストの Noto Sans SC → TC → HK で補うことを確かめる（#3292）。
+ * Noto Sans JP に無い字（合成の例）だけを、自前ホストの Noto Sans SC → TC で補うことを確かめる（#3292）。
  * 各太さの読み込みと、本文・等幅で Chromium が実際に使った書体を見る。
  */
 export async function expectLocalCjkFallbackFonts(page: Page) {
@@ -130,8 +130,8 @@ export async function expectLocalCjkFallbackFonts(page: Page) {
 }
 
 /**
- * 内容の言語（`lang`）ごとに、JP・SC・TC・HK のすべてにある共通の漢字（合成の例）が、その言語の書体で描かれることを
- * 確かめる（#3335）。`lang="zh-Hans"` は SC、`zh-Hant` は TC、`zh-HK` は HK、`ja` は JP。本文と等幅の両方。
+ * 内容の言語（`lang`）ごとに、JP・SC・TC のすべてにある共通の漢字（合成の例）が、その言語の書体で描かれることを
+ * 確かめる（#3335）。`lang="zh-Hans"` は SC、`zh-Hant` は TC、`zh-HK` は TC、`ja` は JP。本文と等幅の両方。
  */
 export async function expectLangFonts(page: Page) {
   const cdp = await page.context().newCDPSession(page);
