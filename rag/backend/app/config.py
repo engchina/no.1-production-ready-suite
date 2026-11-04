@@ -1644,7 +1644,7 @@ class Settings(
         ),
     )
     rag_request_coverage_retrieval_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "生成が根拠の無い要求を明示したとき(または実行済みの監査が材料の不足と判定したとき)だけ、"
             "その要求を探し直す(#1279・#4114)。違う検索文を作れない要求は、質問の拡張の"

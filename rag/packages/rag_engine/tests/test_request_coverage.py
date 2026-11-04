@@ -386,7 +386,15 @@ def test_engine_settings_default_and_env() -> None:
         dotenv_path=None,
     )
 
-    assert default.request_coverage_retrieval_enabled is True
+    from dataclasses import MISSING, fields
+
+    from rag_engine.config import Settings
+
+    required = {
+        item.name: getattr(default, item.name) for item in fields(Settings) if item.default is MISSING and item.default_factory is MISSING
+    }
+    assert Settings(**required).request_coverage_retrieval_enabled is False
+    assert default.request_coverage_retrieval_enabled is False
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
     assert default.request_coverage_deadline_seconds == 10.0
     assert custom.request_coverage_retrieval_enabled is True

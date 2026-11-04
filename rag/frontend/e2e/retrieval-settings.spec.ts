@@ -24,6 +24,8 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
+    await expect(page.getByText("既定は 300 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
+    await page.locator('[id^="answering-retrieval-query-limit-"][id$="-hint"]').screenshot({ path: testInfo.outputPath("retrieval-query-limit-hint.png") });
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "保存期間を保存" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "質問履歴の設定を保存" })).toHaveCount(0);

@@ -1103,6 +1103,8 @@ def test_platform_and_product_env_examples_load(monkeypatch: pytest.MonkeyPatch)
     assert all(origin.startswith("http://") for origin in settings.cors_origins)
     assert settings.oci_enterprise_ai_models == []
     assert settings.oracle_password in ("", None)
+    assert settings.rag_request_coverage_retrieval_enabled is False
+    assert Settings.model_fields["rag_request_coverage_retrieval_enabled"].default is False
 
 
 def test_history_rewrite_env_example_matches_default_and_precedes_query_strategy() -> None:

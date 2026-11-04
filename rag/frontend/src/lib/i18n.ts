@@ -4308,7 +4308,7 @@ export const ja = {
   "settings.answerRecords.description":
     "回答した質問・回答・根拠・実行記録と、チャット・RAG 検索の実行履歴を保存する期間です。既定は無期限で、自動では削除しません。期間を決めたときは、期限を過ぎた記録を次の回答の保存時とこの設定の保存時に削除します。",
   "settings.answering.retrievalQueryLimit": "検索候補数の上限",
-  "settings.answering.retrievalQueryLimitHint": "0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。0 は追加制限なしです。融合後の合計件数や、回答に使う根拠数とは異なります。",
+  "settings.answering.retrievalQueryLimitHint": "既定は 300 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。",
   "settings.answering.retrievalQueryLimitInvalid": "0～2000 の整数を入力してください。",
   "settings.answering.rerankTopN": "再ランキング後の採用件数（Top-N）",
   "settings.answering.rerankTopNHint": "既定は 300 件です。0 は追加制限なしです。1～2000 を指定すると、採点と関連度による選別後の普通候補を最大 N 件に制限します。引用元と参照先は組で選び、収まらない組は採用しません。明示添付・条目録で選んだ根拠とその参照先は別枠で保持します。Rerank が無効・未実行・失敗、または有効な採点がないときは適用しません。回答で補う親章節・隣接原文の総数は制限しません。",
