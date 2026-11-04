@@ -22,6 +22,8 @@ from app.features.agent.runtime import (
     ApprovalDecisionRequest,
     RunCreateRequest,
     RunState,
+    RunUsage,
+    run_summary,
     runtime_repository,
 )
 from app.features.agent.tools import ToolCall
@@ -215,3 +217,17 @@ def test_approval_list_and_detail(paging_data: PagingData) -> None:
     assert missing.status_code == 404
     assert missing.json()["error_messages"] == ["承認の依頼が見つかりません。"]
     assert client.get("/api/approvals", params={"status": "all"}).status_code == 422
+
+
+@pytest.mark.parametrize("model", ["saved-model", ""])
+def test_summary_projects_saved_model_without_current_configuration(model: str) -> None:
+    run = RunState(
+        id="synthetic-model-run",
+        goal="合成の質問",
+        agent_id="synthetic-agent",
+        status="completed",
+        usage=RunUsage(model=model),
+    )
+    assert run_summary(run).models == ([model] if model else [])
+    run.usage = None
+    assert run_summary(run).models == []

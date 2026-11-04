@@ -1283,7 +1283,8 @@ async def test_raw_search_list_failure_keeps_other_list_weight(
     assert keyword.status == "empty"
 
 
-def test_rrf_detail_record_uses_shared_safe_display_contract() -> None:
+@pytest.mark.parametrize("native", [False, True])
+def test_rrf_detail_record_uses_shared_safe_display_contract(native: bool) -> None:
     import json
 
     from pr_backend_core.chat_progress import ChatProgressStepDetails
@@ -1297,8 +1298,23 @@ def test_rrf_detail_record_uses_shared_safe_display_contract() -> None:
 
     weights = RrfWeights()
     sources = source_weights(["q"], weights)
-    result = fuse_rankings([RankedList("q", "vector", ("synthetic-id",))], sources, weights, k=60)
-    model = ChatProgressStepDetails.model_validate(fusion_details(result, weights, sources, 60))
+    ranking = RankedList(
+        "q",
+        "hybrid" if native else "vector",
+        ("synthetic-id",),
+        native_scores=(0.016,) if native else (),
+        sources=("原質問",),
+    )
+    result = fuse_rankings([ranking], sources, weights, k=60)
+    details = fusion_details(result, weights, sources, 60)
+    model = ChatProgressStepDetails.model_validate(details)
+    if native:
+        from pathlib import Path
+
+        fixture = (
+            Path(__file__).resolve().parents[2] / "frontend/e2e/fixtures/native-only-rrf-trace.json"
+        )
+        assert details == json.loads(fixture.read_text(encoding="utf-8"))
     assert (
         json.loads(model.code[0].text)["contributions"][0]["fused_score"]
         == result.scores["synthetic-id"]

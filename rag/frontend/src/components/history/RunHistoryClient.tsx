@@ -155,6 +155,7 @@ function toItem(run: RunSummary): RunHistoryItem {
     href: runDetailPath(run.run_id),
     status: toRunStatus(run.status),
     kind: runSurfaceLabel(run.surface),
+    models: run.models ?? (run.model_id ? [run.model_id] : []),
     executor: { name: runExecutorLabel(run), isSelf: run.executed_by_me },
     startedAt: runStartedAt(run),
     durationMs: run.elapsed_ms,
@@ -305,6 +306,7 @@ export function RunHistoryClient() {
               onOpen={open}
               showExecutor={showExecutor}
               // 実行ごとのモデルの利用量（合計の token。#3466）。見出しは Agent と同じ「token」。
+              showModels
               showUsage
               extraColumns={runExtraColumns()}
               selectedRunId={view.selected}
@@ -312,7 +314,8 @@ export function RunHistoryClient() {
               loading={items.length === 0}
               labels={{
                 table: t("history.list.aria"),
-                columns: { usage: t("history.col.usage") },
+                columns: { models: t("history.col.model"), usage: t("history.col.usage") },
+                modelNotRecorded: t("history.modelNotRecorded"),
                 status: statusLabels,
               }}
               testId="run-history"

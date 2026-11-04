@@ -1,5 +1,6 @@
 import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
 import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
+import nativeOnlyRrfDetails from "./fixtures/native-only-rrf-trace.json";
 import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
@@ -261,6 +262,7 @@ async function mockRuns(page: Page, rows: RunRow[], { gated = false } = {}) {
         items: matched.slice(offset, offset + limit).map(({ usage, ...item }) => ({
           ...item,
           total_tokens: usage ? usage.total_tokens : null,
+          models: usage?.models.length ? usage.models : item.model_id ? [item.model_id] : [],
           usage_measurement: usage ? usage.measurement : null,
         })),
         total: matched.length,
@@ -648,7 +650,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件を整理して回答を作る");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-result-summary]")).toHaveCount(0);
+    await expect(timeline.locator("[data-run-result-summary]")).toHaveText(["回答に渡す根拠 4 件（2 文書）", "問題なし"]);
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答に安全上の問題がないか検査する");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
@@ -841,7 +843,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
   }, testInfo) => {
     await mockLocalAuth(page);
     const usage = {
-      models: ["model-a"],
+      models: ["synthetic-model-" + "long-".repeat(20), "model-b"],
       requests: 4,
       input_tokens: 1200000,
       output_tokens: 34567,
@@ -867,8 +869,10 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     const header = table.getByRole("columnheader", { name: "トークン数", exact: true });
     const headers = await table.locator("thead th").allTextContents();
     const usageIndex = headers.indexOf("トークン数");
+    const modelIndex = headers.indexOf("モデル");
+    const modelCell = page.getByTestId("run-history-row-run-1").locator(":scope > th, :scope > td").nth(modelIndex);
     // 列の順は 3 製品で同じ: 所要時間 → トークン数 →（製品の列）。見出しは Agent と同じ「トークン数」。
-    expect(usageIndex).toBe(headers.indexOf("所要時間") + 1);
+    expect(usageIndex).toBe(headers.indexOf("モデル") + 1);
     expect(headers.indexOf("回答の対応")).toBeGreaterThan(usageIndex);
     // 行の見出し（題名）は th、ほかは td。
     const usageCell = (id: string) => page.getByTestId(`run-history-row-${id}`).locator(":scope > th, :scope > td").nth(usageIndex);
@@ -876,12 +880,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     if (isNarrow(page)) {
       // 375px: 題名と操作の 2 列にまとめ、token の列は出さない（詳細の概要で見る）。横にあふれない。
       await expect(header).toBeHidden();
+      await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).toContainText("model-b");
       await expect(usageCell("run-1")).toBeHidden();
       await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).not.toContainText(
         "token"
       );
     } else {
       await expect(header).toBeVisible();
+      await expect(modelCell).toContainText("model-b");
       await expect(usageCell("run-1")).toHaveText("1,234,567");
       await expect(usageCell("run-2")).toHaveText("9,000一部計測");
       await expect(usageCell("run-2").locator("[data-run-usage-note]")).toHaveText("一部計測");
@@ -1074,7 +1080,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 });
 
 test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {
-  test("経過の説明は展開内だけに表示する", async ({page}, testInfo) => {
+  test("記録済みの結果は摘要行と展開内に表示する", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});
     await mockRuns(page, [row]);
@@ -1086,12 +1092,13 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.goto(`/history/${row.run_id}`);
     const timeline = page.getByTestId("run-history-timeline");
     await page.getByTestId("run-history-timeline-summary").click();
-    await expect(timeline.locator("[data-run-result-summary]")).toHaveCount(0);
-    await expect(timeline.getByText(result, {exact: true})).toHaveCount(0);
+    await expect(timeline.locator("[data-run-result-summary]")).toHaveText(result);
+    await expect(timeline.getByText(result, {exact: true})).toHaveCount(1);
     const step = timeline.locator(`[data-run-timeline-step="${spanStepId("skip")}"]`);
     await step.getByRole("button", {name: /用語・同義語による検索文の追加/}).click();
-    await expect(step.getByText(result, {exact: true})).toHaveCount(1);
-    await timeline.screenshot({path: testInfo.outputPath("timeline-no-duplicate-summary.png")});
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(result);
+    await expect(step.locator("[data-run-step-details]")).toContainText(result);
+    await timeline.screenshot({path: testInfo.outputPath("timeline-result-summary.png")});
   });
   test("軌跡の識別子は行内コピーの寸法、時刻と文字属性は本文の行高に揃う", async ({page}, testInfo) => {
     await mockLocalAuth(page);
@@ -1715,9 +1722,9 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
     {key: "root", spec: ragSpan.root(), at: [0, 2]},
     {key: "native-only", spec: ragSpan.step("追加の検索結果統合", "root"), at: [0, .1], status: "skipped",
-      details: {fields: [{label: "追加統合", value: "原質問の検索内で統合済み"}]}},
+      details: nativeOnlyRrfDetails},
     {key: "outer", spec: ragSpan.step("検索結果の統合（RRF）", "root"), at: [.1, 2],
-      details: {fields: [{label: "結果", value: "検索結果を統合しました"}]}},
+      details: weightedRrfDetails},
   ])});
   await page.goto(`/history/${row.run_id}`);
   await page.getByTestId("run-history-timeline-summary").click();
@@ -1729,9 +1736,24 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await expect(outer).toHaveAttribute("data-status", "done");
   await timeline.screenshot({path: testInfo.outputPath("fusion-execution-status.png")});
   await inspectTraceStep(page, timeline, spanStepId("native-only"));
-  await expect(page.locator("[data-trace-inspector]")).toContainText("原質問の検索内で統合済み");
+  const inspector = page.locator("[data-trace-inspector]");
+  await expect(inspector).toContainText("原質問の検索内で統合済み");
+  await expect(inspector.locator("dt")).toContainText(["引き継いだ検索結果"]);
+  await expect(inspector.locator("dt").getByText("結果", {exact: true})).toHaveCount(0);
+  await expect(inspector).toContainText("重複除去前 1 件 / 重複除去後 1 件 / 正の寄与がある候補 1 件");
+  await expect(inspector).toContainText("引継元の一覧内順位 1 / 引継元の寄与 0.016 / 引き継いだ融合スコア 0.016");
+  await expect(inspector).toContainText("この段で追加の統合は行っていません");
+  const inheritedRecord = inspector.locator('pre[aria-label="原質問の検索から引き継いだ融合記録"]');
+  await expect(inheritedRecord).toHaveText(nativeOnlyRrfDetails.code[0].text);
+  await expect(inspector.getByText("RRF の計算記録", {exact: true})).toHaveCount(0);
   await expectNoPageOverflow(page);
-  await page.locator("[data-trace-inspector]").screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+  await inspector.screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+  await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  await inspectTraceStep(page, timeline, spanStepId("outer"));
+  await expect(inspector.locator("dt").getByText("結果", {exact: true})).toBeVisible();
+  await expect(inspector.locator('pre[aria-label="RRF の計算記録"]')).toHaveText(weightedRrfDetails.code[0].text);
+  await expect(inspector.getByText("引き継いだ検索結果", {exact: true})).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });
 
 test("保存済みの全文を分段取得して末尾まで確認する", {tag: "@responsive"}, async ({page}, testInfo) => {
