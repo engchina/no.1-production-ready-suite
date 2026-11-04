@@ -1,0 +1,21 @@
+[
+  {
+    "id": "documents",
+    "answer": "20\n\n資料により確認できた事項\n\n・項目Aは12です。\n根拠：synthetic-0.txt p.1\n・項目Bは8です。\n根拠：synthetic-1.txt p.1\n\n資料をもとに導いた結論\n\n・20\n当てはめ：根拠に「項目Aは12です。」、根拠に「項目Bは8です。」と記載されている。これらの数値を足すと 12 + 8 = 20 になる。\n根拠：synthetic-0.txt p.1\n根拠：synthetic-1.txt p.1",
+    "fact": "項目Aは12です。",
+    "result": "20",
+    "sources": [
+      "synthetic-0.txt",
+      "synthetic-1.txt"
+    ]
+  },
+  {
+    "id": "quantity",
+    "answer": "2400円\n利用日の前営業日の17時\n\n資料により確認できた事項\n\n・区分Aの料金は1時間800円です。\n根拠：synthetic-0.txt p.1\n・申込期限は利用日の前営業日の17時です。\n根拠：synthetic-0.txt p.1\n\n資料をもとに導いた結論\n\n・2400円\n当てはめ：区分Aの料金は1時間800円と記載されているため、3時間利用の料金は 800円 × 3 = 2400円 となります。\n根拠：synthetic-0.txt p.1\n・利用日の前営業日の17時\n当てはめ：申込期限は利用日の前営業日の17時と記載されているため、利用日の前営業日の17:00までに申し込む必要があります。\n根拠：synthetic-0.txt p.1",
+    "fact": "区分Aの料金は1時間800円です。",
+    "result": "2400円",
+    "sources": [
+      "synthetic-0.txt"
+    ]
+  }
+]
