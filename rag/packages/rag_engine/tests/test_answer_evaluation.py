@@ -22,6 +22,7 @@ from rag_engine.evaluation.answer_eval import (
     MAX_EVALUATION_INPUT_BYTES,
     QUESTION_EVIDENCE_ID,
     QUESTION_SOURCE_ID,
+    REFERENCE_SUBJECT_UNSUPPORTED,
     REFERENCE_UNCITED,
     RUBRIC_VERSION,
     SCOPE_PROMPT,
@@ -35,6 +36,7 @@ from rag_engine.evaluation.answer_eval import (
     EvaluationContractError,
     StandardAnswerScope,
     StandardRequirement,
+    _checked_subject,
     _prepare_standard_scope,
     evaluate_answer_payload,
     grounded_quote,
@@ -123,7 +125,7 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
     for call in parse.call_args_list:
         assert call.args[0] == expected_systems[call.args[3]]
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 14
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 15
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
     assert not {"scores", "total_score", "passed", "max_score", "pass_threshold"} & set(result)
@@ -1343,3 +1345,120 @@ def test_summary_candidates_include_each_cited_body_original_without_word_matchi
     inputs = next(item for item in calls_of(calls, ClaimJudgement) if item["passage"]["text"] == summary)
     assert [node["id"] for node in inputs["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p3", "doc:p9"]
     assert len(result["judge_diagnostics"]["summary_citation_candidates"][0]["body_passage_ids"]) == 2
+
+
+GENERAL_RULE = "承認された項目だけを利用できる。"
+SUBJECT_CLAIM = "項目Aは承認された項目なので利用できます。"
+
+
+def _subject_judgement(**values):
+    """対象を名指しした段落に、モデルが supported を返したときの判定。"""
+    return ClaimJudgement(reason="前提として承認済みとみなした", status="supported", **values)
+
+
+def _subject_catalog(document=GENERAL_RULE, question="項目Aは利用できますか。"):
+    return {
+        "E1": dict(evidence_id="E1", id="doc:p1", source="rule.pdf", text=document),
+        QUESTION_EVIDENCE_ID: dict(evidence_id=QUESTION_EVIDENCE_ID, id=QUESTION_SOURCE_ID, source="q", text=question),
+    }
+
+
+def _subject_claim(evidence_id="E1", text=SUBJECT_CLAIM):
+    return ClaimCheck(answer_quote=text, status="supported", evidence_id=evidence_id, source_id="doc:p1", evidence_quote="x", reason="理由")
+
+
+def test_general_rule_does_not_support_a_named_subject():
+    """#4327: 一般の条件だけの根拠から、対象が条件を満たすとする段落を supported にしない。"""
+    claim = _checked_subject(_subject_claim(), _subject_judgement(subject="項目A"), _subject_catalog())
+    assert claim.status == "unsupported"
+    assert claim.reference_check == REFERENCE_SUBJECT_UNSUPPORTED
+    assert (claim.source_id, claim.evidence_quote) == ("", "")
+    assert "項目A" in claim.reason
+
+
+def test_subject_quote_in_cited_document_stays_supported():
+    catalog = _subject_catalog(document="項目Aは承認された項目である。")
+    judged = _subject_judgement(subject="項 目 Ａ".replace("Ａ", "A"), subject_quote="項目A")
+    assert _checked_subject(_subject_claim(), judged, catalog).status == "supported"
+
+
+def test_subject_name_in_cited_document_stays_supported_without_quote():
+    catalog = _subject_catalog(document="項目Aは承認された項目である。")
+    assert _checked_subject(_subject_claim(), _subject_judgement(subject="項目A"), catalog).status == "supported"
+
+
+def test_subject_written_differently_in_the_document_stays_supported():
+    """#4327: 段落と資料で対象の表記が違っても、資料から写した語句で確かめる。"""
+    catalog = _subject_catalog(document="区分A、B、Cの項目は承認された項目である。")
+    judged = _subject_judgement(subject="区分Bの項目", subject_quote="区分A、B、Cの項目")
+    claim = _checked_subject(_subject_claim(text="区分Bの項目は利用できます。"), judged, catalog)
+    assert claim.status == "supported"
+
+
+@pytest.mark.parametrize(
+    "quote",
+    ["", "項目A"],
+    ids=["no-quote", "quote-not-in-document"],
+)
+def test_subject_without_quote_from_the_document_is_unsupported(quote):
+    judged = _subject_judgement(subject="項目A", subject_quote=quote)
+    assert _checked_subject(_subject_claim(), judged, _subject_catalog()).status == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "evidence_id",
+    ["E1", f"E1,{QUESTION_EVIDENCE_ID}"],
+    ids=["document-only", "question-cited"],
+)
+def test_fact_stated_in_the_question_can_support_an_application(evidence_id):
+    """質問が述べた事実への当てはめは支持する。段落と質問で対象の表記が違ってよい。"""
+    catalog = _subject_catalog(question="部門で項目Aを新規に作りました。承認は必要ですか。")
+    judged = _subject_judgement(subject="新規の項目", question_fact="部門で項目Aを新規に作りました。")
+    claim = _checked_subject(_subject_claim(evidence_id, text="新規の項目は承認が必要です。"), judged, catalog)
+    assert claim.status == "supported"
+
+
+@pytest.mark.parametrize(
+    ("fact", "question"),
+    [
+        ("", "項目Aは利用できますか。"),  # 質問の事実の写しが無い
+        ("項目A", "項目Aは承認済みです。利用できますか。"),  # 対象の名前だけで、事実を述べていない
+        ("項目Aは承認済みです。", "項目Aは利用できますか。"),  # 質問に無い文
+        ("項目Aは利用できますか。", "項目Aは利用できますか。"),  # 問いの文
+        ("項目Aの利用可否を教えてください。", "項目Aの利用可否を教えてください。"),  # 依頼の文
+    ],
+    ids=["no-fact", "name-only", "not-in-question", "interrogative", "request"],
+)
+def test_question_mention_alone_does_not_support_the_subject(fact, question):
+    judged = _subject_judgement(subject="項目A", question_fact=fact)
+    claim = _checked_subject(_subject_claim(f"E1,{QUESTION_EVIDENCE_ID}"), judged, _subject_catalog(question=question))
+    assert claim.status == "unsupported"
+
+
+def test_general_claim_and_copied_subject_mistake_keep_the_verdict():
+    """対象が無い段落・段落に無い対象を返した判定は、コードで変えない。"""
+    assert _checked_subject(_subject_claim(text=GENERAL_RULE), _subject_judgement(), _subject_catalog()).status == "supported"
+    judged = _subject_judgement(subject="項目B")
+    assert _checked_subject(_subject_claim(), judged, _subject_catalog()).status == "supported"
+
+
+def test_subject_check_lowers_claim_support_through_the_evaluation():
+    data = cited_payload() | dict(
+        answer_text=SUBJECT_CLAIM + "\n根拠：manual.pdf p.3",
+        evidence_items=[dict(id="doc:p3", source="manual.pdf", page_start=3, page_end=3, text=GENERAL_RULE)],
+    )
+    base = judge()
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        if schema is ClaimJudgement:
+            inputs = json.loads(prompt)
+            document = next(i for i in inputs["evidence_items"] if i["evidence_id"] != QUESTION_EVIDENCE_ID)
+            return _subject_judgement(subject="項目A", evidence_id=document["evidence_id"])
+        return base(system, prompt, settings, schema, **kwargs)
+
+    with patch(PARSE, side_effect=parse):
+        result = evaluate_answer_payload(data, object())
+    claim = result["claim_checks"][0]
+    assert claim["status"] == "unsupported"
+    assert claim["audit_status"] == "supported"
+    assert claim["reference_check"] == REFERENCE_SUBJECT_UNSUPPORTED
