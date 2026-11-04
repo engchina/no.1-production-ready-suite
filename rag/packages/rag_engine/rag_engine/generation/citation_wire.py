@@ -78,8 +78,15 @@ def generation_draft_wire_model() -> type[BaseModel]:
         line_start=(StrictInt | None, Field(description=LINE_START_DESCRIPTION)),
         line_end=(StrictInt | None, Field(description=LINE_END_DESCRIPTION)),
     )
+    citation_info = deepcopy(GroundedItem.model_fields["citations"])
+    citation_info.description = "直接記載の text を支える原文の出典。derived と gap は空配列。"
+    text_info = deepcopy(GroundedItem.model_fields["text"])
+    text_info.description = "利用者へ返す説明または導出結果。kind に対応する根拠と依存を付け、見出しや内部番号は書かない。"
+    items_info = deepcopy(GroundedDraft.model_fields["items"])
+    items_info.description = "直接記載・導出・不足を分類した回答単位。各要点の出力を指す順序を保つ。"
     item_fields: dict[str, Any] = {
-        "citations": (GenericAlias(list, citation), deepcopy(GroundedItem.model_fields["citations"])),
+        "citations": (GenericAlias(list, citation), citation_info),
+        "text": (str, text_info),
         "kind": (
             Literal["operation", "rule", "confirmation", "gap", "derived"],
             Field(
@@ -107,7 +114,7 @@ def generation_draft_wire_model() -> type[BaseModel]:
             ),
         ),
         "request_coverage": (GenericAlias(list, RequestCoverageRange), deepcopy(GroundedDraft.model_fields["request_coverage"])),
-        "items": (GenericAlias(list, item), deepcopy(GroundedDraft.model_fields["items"])),
+        "items": (GenericAlias(list, item), items_info),
         "applications": (SkipJsonSchema[list[GroundedApplication]], Field(default_factory=list, exclude=True)),
         "summary_application_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         # 業務ガイドの要件が無い生成には用途が無い。schema に残すとモデルが埋めようとして空白の暴走の起点になる（#4236）。

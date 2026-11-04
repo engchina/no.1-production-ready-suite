@@ -80,3 +80,56 @@ def test_derived_dependency_is_not_redirected_to_another_source():
     raw["items"][1]["derivation"]["item_indexes"] = [1]
     result = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert result.applications[0].item_indexes[0] >= len(result.items)
+
+
+def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
+    import re
+    from dataclasses import replace
+
+    from test_grounded_answer import context, record
+
+    from rag_engine.config import get_settings
+    from rag_engine.dependencies import AnswerDependencies, bind_dependencies
+    from rag_engine.generation.answering import synthesize_grounded_answer
+
+    calls = []
+
+    def generated(system, prompt, settings, schema, **options):
+        calls.append(schema.__name__)
+        assert getattr(schema, "_uses_unit_ids", False)
+        units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
+        return schema.model_validate(
+            {
+                "answer_parts": [{"id": "P1", "request_id": "Q1", "text": "合計", "result_kind": "derived", "item_indexes": [2]}],
+                "items": [
+                    {"kind": "rule", "request_id": "Q1", "text": text, "citations": [{"unit_ids": [units[text]]}]}
+                    for text in ("項目Aは12です。", "項目Bは8です。")
+                ]
+                + [
+                    {
+                        "kind": "derived",
+                        "request_id": "Q1",
+                        "text": "合計は20です。",
+                        "citations": [],
+                        "derivation": {"premises": [], "item_indexes": [0, 1], "reasoning": "12＋8＝20"},
+                    }
+                ],
+                "summary": "合計は20です。",
+                "summary_item_indexes": [2],
+                "confidence": "high",
+            }
+        )
+
+    def unused(*args, **kwargs):
+        raise AssertionError("不要な外部呼出")
+
+    ctx = context(record(0, "項目Aは12です。\n項目Bは8です。", "合成の値", source="synthetic.txt"))
+    settings = replace(get_settings(), answer_audit_mode="none", answer_max_correction_rounds=0)
+    with bind_dependencies(AnswerDependencies(unused, unused, generated, unused, unused)):
+        result = synthesize_grounded_answer("項目Aと項目Bの合計を教えてください。", ctx, settings, image_prompt_mode="text_only").response
+    assert len(calls) == 1
+    assert result.answer_text.startswith("合計は20です。")
+    assert result.generation_trace["applications"][0]["published"]
+    assert result.generation_trace["applications"][0]["result"] == "合計は20です。"
+    assert result.generation_trace["finalization"]["summary"]["citations"]["links"][0]["application_index"] == 0
+    assert result.generation_trace["rounds"][0]["timing"]["answer_parts"]["status"] == "linked"

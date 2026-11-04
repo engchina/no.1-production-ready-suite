@@ -81,7 +81,7 @@ def test_factory_preserves_other_fields_and_constraints():
             assert wire.model_fields[key].asdict() == field.asdict()
     item_model = wire.model_fields["items"].annotation.__args__[0]
     for key, field in GroundedItem.model_fields.items():
-        if key not in {"citations", "kind"}:
+        if key not in {"citations", "kind", "text"}:
             assert item_model.model_fields[key].asdict() == field.asdict()
     raw = payload()
     raw["items"][0]["text"] = ""

@@ -905,7 +905,9 @@ class GroundedFactAudit(_StrictModel):
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
     summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
-    summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
+    summary_supported: bool = Field(
+        description="summary が出力済みの items と妥当な applications の結果を超える断定をしていなければ true。"
+    )
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
     )
@@ -933,7 +935,9 @@ class GroundedAudit(_StrictModel):
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
     summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
-    summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
+    summary_supported: bool = Field(
+        description="summary が出力済みの items と妥当な applications の結果を超える断定をしていなければ true。"
+    )
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
     )
