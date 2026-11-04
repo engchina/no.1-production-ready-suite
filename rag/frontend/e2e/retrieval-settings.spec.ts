@@ -193,8 +193,8 @@ for (const viewport of [
       const requestCoverage = page.getByRole("switch", { name: "根拠の無い要求を探し直す" });
       await expect(requestCoverage).not.toBeChecked();
       await expect(requestCoverage).toHaveAccessibleDescription(/回答生成が明示した根拠不足.*回数・時間の予算内/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/既にある根拠で説明が抜けた場合.*材料不足として検索し直す設定ではありません/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/未校正の意味監査の結果だけでは、追加検索や再生成を行いません/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/既にある根拠での説明漏れを材料不足とは扱わず/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/未校正の意味監査の結果だけでは追加検索や再生成を行いません/);
       await requestCoverage.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`settings-${viewport.name}-${theme}.png`) });
       await expect(answerFlow).toHaveAccessibleDescription(/初回を含め最大 3 段.*書き換えは最大 2 回/);

@@ -177,6 +177,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `rerank_extra_query` | 追加の検索文の rerank（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_best_rerank_ranks` |
 | `crag_retrieval` | CRAG の追加検索。失敗時は取得済み根拠を維持 | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
 | `crag_grade` | CRAG の根拠確認の評価器（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
+| `request_coverage_expansion` | 補助検索の戦略判定・検索文生成に失敗し既存の根拠を保持 |
 | `request_coverage_retrieval` | 要求ごとの根拠の探し直しの検索（rag_engine） | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::run_targeted_retrievals` |
 | `unanswered_request_retrieval` | 生成後の未回答要求の検索・章節補完。失敗時は採用済みの回答を維持 | `rag/packages/rag_engine/rag_engine/generation/answering.py::synthesize_grounded_answer` |
 | `section_child_rerank` | 章節の拡張の子の章節の並べ替え（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/section_expansion.py::_rank_children` |
