@@ -937,6 +937,7 @@ _COMPATIBLE_FIELDS: frozenset[tuple[str, str]] = frozenset(
         ("answer_labels", "crag_definition_aspect_template"),
         ("answer_labels", "guide_acquisition_incomplete_template"),
         ("grounding_cues", "citation_unit_words"),
+        ("answer_labels", "subject_unconfirmed_gap"),
     }
 )
 

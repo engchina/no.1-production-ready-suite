@@ -471,3 +471,10 @@ def test_field_changes_keep_published_releases_readable() -> None:
     assert current - published <= COMPATIBLE_FIELDS, "足した項目は既存の公開版に無いので補う"
     ingest = {(spec.section, spec.key) for spec in FIELD_SPECS if spec.ingest}
     assert not ingest & COMPATIBLE_FIELDS, "取込に使う項目を補うと、保存時の索引と食い違う"
+
+
+def test_published_release_without_the_unconfirmed_gap_label_is_readable() -> None:
+    """#4345: 項目を足す前の公開版を読むと、組み込みの文言で補う。"""
+    raw = builtin_pack().to_dict()
+    del raw["answer_labels"]["subject_unconfirmed_gap"]
+    assert "{names}" in build_pack(raw).text("answer_labels", "subject_unconfirmed_gap")
