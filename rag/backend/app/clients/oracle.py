@@ -1049,6 +1049,27 @@ class OracleClient:
             _observed_reads(
                 VECTOR_SEARCH_STAGE,
                 vector_reads,
+                request=lambda: {
+                    "top_k": top_k,
+                    "filters": filters,
+                    "branches": [
+                        {
+                            "branch_index": n,
+                            "query": query,
+                            "embedding": list(cast(Sequence[float], binds[f"embedding_{n}"]))
+                            if kind == "vector"
+                            else None,
+                            "text_expression": binds.get(f"query_{n}"),
+                        }
+                        for n, (kind, query) in enumerate(
+                            zip(branch_kinds, branch_queries, strict=True)
+                        )
+                        if kind == "vector"
+                    ],
+                },
+                response=lambda: self._branch_call_result(
+                    "vector", branch_kinds, branch_queries, branch_rows, branch_errors
+                ),
                 details=lambda: self._branch_diagnostics(
                     VECTOR_SEARCH_STAGE,
                     "vector",
@@ -1064,6 +1085,27 @@ class OracleClient:
             _observed_reads(
                 TEXT_SEARCH_STAGE,
                 keyword_reads,
+                request=lambda: {
+                    "top_k": top_k,
+                    "filters": filters,
+                    "branches": [
+                        {
+                            "branch_index": n,
+                            "query": query,
+                            "embedding": list(cast(Sequence[float], binds[f"embedding_{n}"]))
+                            if kind == "vector"
+                            else None,
+                            "text_expression": binds.get(f"query_{n}"),
+                        }
+                        for n, (kind, query) in enumerate(
+                            zip(branch_kinds, branch_queries, strict=True)
+                        )
+                        if kind == "keyword"
+                    ],
+                },
+                response=lambda: self._branch_call_result(
+                    "keyword", branch_kinds, branch_queries, branch_rows, branch_errors
+                ),
                 details=lambda: self._branch_diagnostics(
                     TEXT_SEARCH_STAGE,
                     "keyword",
@@ -7976,6 +8018,42 @@ class OracleClient:
 
         return await self._run_transaction(operation)
 
+    def _branch_call_result(
+        self,
+        kind: str,
+        kinds: Sequence[str],
+        queries: Sequence[str],
+        rows: Sequence[Sequence[tuple[int, dict[str, object]]]],
+        errors: Mapping[int, Exception],
+    ) -> dict[str, object]:
+        branches = []
+        for index, branch_kind in enumerate(kinds):
+            if branch_kind != kind:
+                continue
+            ordered = [row for _, row in sorted(rows[index], key=lambda item: item[0])]
+            branches.append(
+                {
+                    "branch_index": index,
+                    "query": queries[index],
+                    "status": "failed" if index in errors else "completed",
+                    "error_type": type(errors[index]).__name__ if index in errors else "",
+                    "raw_count": len(ordered),
+                    "results": [
+                        {"chunk": hit.model_dump(mode="json"), "score": row.get("score")}
+                        for hit, row in _distinct_text_hits(ordered)
+                    ],
+                }
+            )
+        failures = sum(item["status"] == "failed" for item in branches)
+        return {
+            "status": "failed"
+            if failures == len(branches)
+            else "partial"
+            if failures
+            else "completed",
+            "branches": branches,
+        }
+
     def _branch_diagnostics(
         self,
         stage: str,
@@ -8110,7 +8188,31 @@ class OracleClient:
         }[channel]
         result = SearchHits()
         rows: list[dict[str, object]] = []
-        with observe_call("stage", title) as observation:
+        with (
+            observe_call("stage", title) as observation,
+            _search_call_io(
+                observation,
+                lambda: {
+                    "query": query,
+                    "embedding": embedding,
+                    "top_k": top_k,
+                    "filters": filters,
+                    "mode": channel,
+                    "min_similarity": self._settings.rag_min_similarity,
+                },
+                lambda: {
+                    **_search_hits_snapshot(result),
+                    "raw_count": len(rows),
+                    "threshold": rows.threshold if isinstance(rows, NativeSearchRows) else {},
+                    "vector_retrieval": rows.vector_retrieval
+                    if isinstance(rows, NativeSearchRows)
+                    else {},
+                    "filter_batches": rows.filter_batches
+                    if isinstance(rows, NativeSearchRows)
+                    else None,
+                },
+            ),
+        ):
             try:
                 rows = await self._native_rows(
                     channel,
@@ -8560,29 +8662,36 @@ class OracleClient:
         query: str = "",
     ) -> list[RetrievedChunk]:
         """Oracle AI Vector Search で近傍 chunk を取得する。"""
-        rows = await self._vector_rows(_to_vector_bind(embedding), top_k=top_k, filters=filters)
-        if observation is not None:
-            observation.display(
-                details=self._branch_diagnostics(
-                    VECTOR_SEARCH_STAGE,
-                    "vector",
-                    ["vector"],
-                    [query],
-                    [list(enumerate(rows, 1))],
-                    {},
-                    top_k,
-                    filters,
+        result: list[RetrievedChunk] = []
+        with _search_call_io(
+            observation,
+            lambda: {"query": query, "embedding": embedding, "top_k": top_k, "filters": filters},
+            lambda: _search_hits_snapshot(result),
+        ):
+            rows = await self._vector_rows(_to_vector_bind(embedding), top_k=top_k, filters=filters)
+            if observation is not None:
+                observation.display(
+                    details=self._branch_diagnostics(
+                        VECTOR_SEARCH_STAGE,
+                        "vector",
+                        ["vector"],
+                        [query],
+                        [list(enumerate(rows, 1))],
+                        {},
+                        top_k,
+                        filters,
+                    )
                 )
-            )
-        return [
-            _with_retrieval_metadata(
-                chunk,
-                retrieval_mode="vector",
-                vector_rank=rank,
-                vector_score=round(_float_value(row.get("score", 0.0)), 6),
-            )
-            for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
-        ]
+            result = [
+                _with_retrieval_metadata(
+                    chunk,
+                    retrieval_mode="vector",
+                    vector_rank=rank,
+                    vector_score=round(_float_value(row.get("score", 0.0)), 6),
+                )
+                for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
+            ]
+        return result
 
     async def _keyword_rows(
         self, text_query: str, *, top_k: int, filters: dict[str, str]
@@ -8631,33 +8740,45 @@ class OracleClient:
             if self._settings.rag_hybrid_search_backend == "oracle_native"
             else _oracle_text_query(query, settings=self._settings)
         )
-        rows = (
-            await self._keyword_rows(text_query, top_k=top_k, filters=filters)
-            if text_query is not None
-            else []
-        )
-        if observation is not None:
-            observation.display(
-                details=self._branch_diagnostics(
-                    TEXT_SEARCH_STAGE,
-                    "keyword",
-                    ["keyword"],
-                    [query],
-                    [list(enumerate(rows, 1))],
-                    {"query_0": text_query},
-                    top_k,
-                    filters,
+        result: list[RetrievedChunk] = []
+        with _search_call_io(
+            observation,
+            lambda: {
+                "query": query,
+                "text_expression": text_query,
+                "top_k": top_k,
+                "filters": filters,
+            },
+            lambda: _search_hits_snapshot(result),
+        ):
+            rows = (
+                await self._keyword_rows(text_query, top_k=top_k, filters=filters)
+                if text_query is not None
+                else []
+            )
+            if observation is not None:
+                observation.display(
+                    details=self._branch_diagnostics(
+                        TEXT_SEARCH_STAGE,
+                        "keyword",
+                        ["keyword"],
+                        [query],
+                        [list(enumerate(rows, 1))],
+                        {"query_0": text_query},
+                        top_k,
+                        filters,
+                    )
                 )
-            )
-        return [
-            _with_retrieval_metadata(
-                chunk,
-                retrieval_mode="keyword",
-                keyword_rank=rank,
-                keyword_score=round(_float_value(row.get("score", 0.0)), 6),
-            )
-            for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
-        ]
+            result = [
+                _with_retrieval_metadata(
+                    chunk,
+                    retrieval_mode="keyword",
+                    keyword_rank=rank,
+                    keyword_score=round(_float_value(row.get("score", 0.0)), 6),
+                )
+                for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), start=1)
+            ]
+        return result
 
     async def _context_group_siblings_with_oracle(
         self,
@@ -18895,11 +19016,46 @@ async def _no_citation_hits() -> list[RetrievedChunk]:
     return []
 
 
+@contextmanager
+def _search_call_io(
+    observation: CallObservation | None,
+    request: Callable[[], object],
+    response: Callable[[], object],
+) -> Iterator[None]:
+    """既存検索の実IOを本文保存方針に従って記録し、検索の例外を変えない。"""
+    if observation is not None:
+        observation.request(request)
+    try:
+        yield
+    except BaseException as exc:
+        if observation is not None:
+            error_type = type(exc).__name__
+            observation.response(
+                lambda: {"returned": False, "error_type": error_type, "partial": response()}
+            )
+        raise
+    else:
+        if observation is not None:
+            observation.response(response)
+
+
+def _search_hits_snapshot(hits: Sequence[RetrievedChunk]) -> dict[str, object]:
+    """診断用の短縮一覧とは別に、実際に返す候補を保存する。"""
+    return {
+        "status": hits.status if isinstance(hits, SearchHits) else "completed",
+        "error_type": hits.error if isinstance(hits, SearchHits) else "",
+        "count": len(hits),
+        "chunks": [hit.model_dump(mode="json") for hit in hits],
+    }
+
+
 async def _observed_reads(
     stage: str,
     reads: Sequence[Awaitable[None]],
     *,
     details: Callable[[], Mapping[str, object]] | None = None,
+    request: Callable[[], object] | None = None,
+    response: Callable[[], object] | None = None,
 ) -> None:
     """読み取りを並行に読み、全体を 1 つの処理の経過の段(``observe_call("stage", stage)``)にする。
 
@@ -18907,7 +19063,10 @@ async def _observed_reads(
     """
     if not reads:
         return
-    with observe_call("stage", stage) as observation:
+    with (
+        observe_call("stage", stage) as observation,
+        _search_call_io(observation, request or (lambda: None), response or (lambda: None)),
+    ):
         await asyncio.gather(*reads)
         if details is not None:
             observation.display(details=details())
