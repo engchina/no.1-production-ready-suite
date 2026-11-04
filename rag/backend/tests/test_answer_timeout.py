@@ -85,6 +85,7 @@ def test_stage_labels_cover_answer_stages() -> None:
         "answer",
         # 回答を作らない RAG 検索の全体（#3506）。
         "evidence",
+        "query_guardrail",
         "answer_guardrail",
         "answer_record_save",
         "chat_message_save",
