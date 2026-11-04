@@ -404,3 +404,56 @@ def test_diversity_stage_preserves_actual_status_and_counts_without_call_bodies(
         )
     finally:
         shutdown_tracing()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(
+    "reason,status",
+    [
+        ("configuration_disabled", "skipped"),
+        ("no_match", "done"),
+        ("selection_failed", "failed"),
+        ("caller_queries", "skipped"),
+    ],
+)
+def test_recorded_execution_decisions_keep_status_and_reason_without_client_calls(
+    enabled: bool,
+    reason: str,
+    status: str,
+) -> None:
+    from pr_backend_core.observability.call_policy import call_content_policy
+    from rag_engine.generation.answering import _record_catalog_skip
+
+    from app.rag.answer_engine import _expansion_stage_outcome
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            call_content_policy(lambda: enabled),
+            operation_trace("rag.search", operation_id="synthetic") as summary,
+            bind_trace_observer(_observe_engine_call),
+        ):
+            if reason == "caller_queries":
+                _record_catalog_skip("条の選択", reason)
+            elif reason == "selection_failed":
+                with _execution_step("画面の選択") as step:
+                    step.fail("取得に失敗したため、既存の候補で続けます。")
+            else:
+                with _observe_engine_call("stage", "実体・別名による検索拡張") as observation:
+                    _expansion_stage_outcome(
+                        observation, reason=reason if status == "skipped" else ""
+                    )
+        stages = [span for span in summary.spans if span.operation_name == "rag.engine.stage"]
+        assert len(stages) == 1
+        stage = stages[0]
+        assert stage.status == status
+        assert stage.display is not None and stage.display.params is not None
+        assert stage.display.params["reason_code"] == reason
+        assert stage.display.params["result_count"] == 0
+        assert stage.display.params["execution_kind"] == (
+            "decision" if status == "skipped" else "processing"
+        )
+        assert "note" not in stage.display.params
+        assert not any(span.operation_name.startswith("gen_ai.") for span in summary.spans)
+    finally:
+        shutdown_tracing()
