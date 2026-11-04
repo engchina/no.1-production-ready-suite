@@ -108,7 +108,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | CRAG の補正検索 | 任意（設定・追加検索予算） | 追加検索の失敗 → 取得済みの根拠を維持して生成へ進む。初回検索の失敗は従来どおりエラー | `DS`（`crag_retrieval`）・`ST`（追加検索のエラー）・`RT`（`stop_reason=retrieval_error`・例外の型） | 取得済み資料だけを使い、未確認の不足を確定しない | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
 | CRAG の根拠確認（`RAG_ANSWER_FLOW=crag`） | 任意（設定） | 評価器の失敗 → 取得済みの根拠で生成へ進む（足りるとはしない） | `DS`（`crag_grade`）・`ST`（status「評価に失敗」）・`RT`（`CragRetrievalAttempt.grade_error`） | 見せない（生成の監査・最終の検証は通常どおり） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_grade_crag_retrieval`・`rag/packages/rag_engine/rag_engine/generation/answer_models.py::CragRetrievalAttempt` |
 | 要求ごとの根拠の探し直し（#1279） | 既定で無効（`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED`。#4114） | 再検索の失敗 → 既存の根拠で回答する | `DS`（`request_coverage_retrieval`）・`DX`（`request_coverage.re_retrieval.queries[].error`。例外の型の名前だけ。#3284） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::run_targeted_retrievals` |
-| 生成後の未回答の要求の探し直し（#2730・#4114） | 既定で無効（`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED`。生成前と予算を共有。違う検索文を作れない要求だけ仮説文で LLM 1 回） | 検索・章節補完の失敗 → 採用済みの回答を維持 | `DS`（`unanswered_request_retrieval`）・`DX`（`request_coverage.after_generation`、round の `request_retrieval`。例外は型だけ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::synthesize_grounded_answer` |
+| 生成後の未回答の要求の探し直し（#2730・#4114） | 既定で無効（`RAG_REQUEST_COVERAGE_RETRIEVAL_ENABLED`。生成前と予算を共有。違う検索文を作れない要求だけ原質問のみを除く自動選択で LLM を呼ぶ） | 検索・章節補完の失敗 → 採用済みの回答を維持 | `DS`（`unanswered_request_retrieval`）・`DX`（`request_coverage.after_generation`、round の `request_retrieval`。例外は型だけ） | 見せない | `rag/packages/rag_engine/rag_engine/generation/answering.py::synthesize_grounded_answer` |
 | 要求の分かち書き | 任意 | 失敗 → その要求を判定しない（unassessed） | なし（判定の結果が unassessed になる） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::coverage_targets` |
 | 業務ガイドの手順ごとの検索（#2395） | 任意（`RAG_GUIDE_STEP_RETRIEVAL_ENABLED`） | 失敗 → 既存の根拠で回答する | `DX`（`guide_step_retrieval` の `error`。型の名前だけ） | 見せない | `rag/packages/rag_engine/rag_engine/retrieval/guide_steps.py::run_step_searches` |
 | 業務ガイドの手順の充足の embedding（#2649） | 任意 | 失敗 → 語の判定（安全側）に戻る | `DX`（業務ガイドの記録の embedding の `failed`） | 見せない | `rag/packages/rag_engine/rag_engine/generation/grounded.py::GuideStepSemantics.lookup` |
@@ -177,6 +177,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `rerank_extra_query` | 追加の検索文の rerank（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::_best_rerank_ranks` |
 | `crag_retrieval` | CRAG の追加検索。失敗時は取得済み根拠を維持 | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
 | `crag_grade` | CRAG の根拠確認の評価器（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/answering.py::build_crag_answer_context` |
+| `request_coverage_expansion` | 補助検索の戦略判定・検索文生成に失敗し既存の根拠を保持 |
 | `request_coverage_retrieval` | 要求ごとの根拠の探し直しの検索（rag_engine） | `rag/packages/rag_engine/rag_engine/retrieval/request_coverage.py::run_targeted_retrievals` |
 | `unanswered_request_retrieval` | 生成後の未回答要求の検索・章節補完。失敗時は採用済みの回答を維持 | `rag/packages/rag_engine/rag_engine/generation/answering.py::synthesize_grounded_answer` |
 | `section_child_rerank` | 章節の拡張の子の章節の並べ替え（rag_engine） | `rag/packages/rag_engine/rag_engine/generation/section_expansion.py::_rank_children` |
