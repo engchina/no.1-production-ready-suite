@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -23,8 +24,19 @@ from app.main import app
 from app.rag import chat_answer_runs
 from app.rag.chat_answer_runs import (
     CHAT_ANSWER_CANCELLED_MESSAGE,
-    CHAT_ANSWER_INTERRUPTED_MESSAGE,
+    CHAT_ANSWER_FAILED,
+    CHAT_ANSWER_HEARTBEAT_LOST,
+    CHAT_ANSWER_NOT_SAVED,
+    CHAT_ANSWER_SERVICE_STOPPED,
+    CHAT_ANSWER_TASK_CANCELLED,
+    CHAT_ANSWER_TIMED_OUT,
+    CHAT_ANSWER_UNKNOWN_MESSAGE,
+    CHAT_ANSWER_USER_CANCELLED,
+    ChatAnswerExecutor,
+    ChatAnswerRun,
     ChatAnswerRunService,
+    ChatAnswerTermination,
+    chat_answer_display_content,
 )
 from tests.span_progress_support import answer_step, answer_trace
 from tests.support import TEST_REQUEST_HEADERS
@@ -505,7 +517,10 @@ async def test_interrupted_streaming_answers_become_errors_on_get(
         detail = (await client.get("/api/chat/conversations/conv-r")).json()["data"]
     by_id = {message["message_id"]: message for message in detail["messages"]}
     assert by_id["a-own"]["status"] == "ERROR"
-    assert by_id["a-own"]["content"] == CHAT_ANSWER_INTERRUPTED_MESSAGE
+    assert by_id["a-own"]["content"] == CHAT_ANSWER_HEARTBEAT_LOST.message
+    saved = {message.id: message for message in fake.messages["conv-r"]}
+    assert saved["a-own"].progress is not None
+    assert saved["a-own"].progress["termination_reason"] == "heartbeat_lost"
     assert by_id["a-stale"]["status"] == "ERROR"
     assert by_id["a-live"]["status"] == "STREAMING"
     # 会話の取得は処理の経過を返さない（画面は回答ごとの trace の API で読む。#3226）。
@@ -606,9 +621,13 @@ async def test_shutdown_marks_running_answers_interrupted(
     await asyncio.wait_for(gated.started.wait(), timeout=5)
     await service.shutdown()
     assistant = _assistant(fake)
-    assert (assistant.status, assistant.content) == ("ERROR", CHAT_ANSWER_INTERRUPTED_MESSAGE)
+    assert (assistant.status, assistant.content) == (
+        "ERROR",
+        CHAT_ANSWER_SERVICE_STOPPED.message,
+    )
     # 処理の経過の記録（trace id）も保存し、終端は回答の状態（中断の失敗。#3226）。
     assert assistant.progress is not None
+    assert assistant.progress["termination_reason"] == "service_stopped"
     assert assistant.progress["trace_id"] == trace_db.spans()[0]["trace_id"]
     events = await _trace_events(assistant.id)
     assert events[-1] == {**events[-1], "type": "terminal", "status": "failed"}
@@ -731,3 +750,173 @@ def test_close_streaming_sql_saves_the_trace_record(monkeypatch: MonkeyPatch) ->
     assert "m.progress_json = :progress_json" in with_record
     assert json.loads(str(with_record_binds["progress_json"])) == record
     assert "progress_json" not in without_record
+
+
+class _TerminationStore:
+    """終端の保存だけを記録する保存先（合成。Oracle は呼ばない）。"""
+
+    def __init__(self) -> None:
+        self.closed: list[dict[str, Any]] = []
+
+    async def update_chat_message_progress(
+        self, message_id: str, *, lease_owner: str, progress: dict[str, Any]
+    ) -> bool:
+        return True
+
+    async def heartbeat_chat_message(self, message_id: str, *, lease_owner: str) -> bool:
+        return True
+
+    async def close_streaming_chat_message(self, message_id: str, **fields: Any) -> bool:
+        self.closed.append({"message_id": message_id, **fields})
+        return True
+
+
+def _termination_run(store: _TerminationStore) -> ChatAnswerRun:
+    return ChatAnswerRun(
+        run_id="synthetic-run",
+        conversation_id="synthetic-conversation",
+        tenant_id_hash=None,
+        user_id_hash=None,
+        store=store,
+        message_ids={"synthetic-model": "synthetic-message"},
+    )
+
+
+def _assert_terminated(
+    run: ChatAnswerRun,
+    store: _TerminationStore,
+    termination: ChatAnswerTermination,
+    *,
+    status: str = "ERROR",
+) -> None:
+    """保存した本文・原因のコードと、配信した原因が一致する。"""
+    assert len(store.closed) == 1
+    closed = store.closed[0]
+    assert (closed["status"], closed["content"]) == (status, termination.message)
+    assert closed["progress"]["termination_reason"] == termination.reason
+    assert closed["progress"]["termination_error_type"] == termination.error_type
+    errors = [event.payload for event in run.events if event.name == "error"]
+    assert len(errors) == 1
+    assert (errors[0]["message"], errors[0]["error_type"]) == (
+        termination.message,
+        termination.error_type,
+    )
+    assert errors[0]["cancelled"] is (status == "CANCELLED")
+    assert run.done
+
+
+async def _raise_value_error(_run: ChatAnswerRun) -> None:
+    raise ValueError("合成の本文（保存しない）")
+
+
+async def _raise_inner_timeout(_run: ChatAnswerRun) -> None:
+    raise TimeoutError
+
+
+async def _sleep_past_deadline(_run: ChatAnswerRun) -> None:
+    await asyncio.sleep(5)
+
+
+async def _return_without_saving(_run: ChatAnswerRun) -> None:
+    return None
+
+
+@pytest.mark.parametrize(
+    ("executor", "termination"),
+    [
+        (_raise_value_error, replace(CHAT_ANSWER_FAILED, error_type="ValueError")),
+        (_raise_inner_timeout, replace(CHAT_ANSWER_FAILED, error_type="TimeoutError")),
+        (_sleep_past_deadline, CHAT_ANSWER_TIMED_OUT),
+        (_return_without_saving, CHAT_ANSWER_NOT_SAVED),
+    ],
+    ids=["exception", "inner-timeout", "deadline", "not-saved"],
+)
+async def test_termination_reason_matches_how_the_run_ended(
+    executor: ChatAnswerExecutor, termination: ChatAnswerTermination
+) -> None:
+    """通常の例外・時間切れ・最終の保存なしを、サービスの停止と断定しない（#4319）。"""
+    store = _TerminationStore()
+    service = ChatAnswerRunService(worker_id="synthetic-worker")
+    run = _termination_run(store)
+    await service._run(run, executor, 0.01)
+    _assert_terminated(run, store, termination)
+    assert "再起動" not in store.closed[0]["content"]
+    assert "合成の本文" not in str(store.closed[0])
+
+
+async def test_saved_answer_is_not_terminated() -> None:
+    """最終の保存を済ませた回答は閉じ直さず、失敗も配信しない。"""
+    store = _TerminationStore()
+    service = ChatAnswerRunService(worker_id="synthetic-worker")
+    run = _termination_run(store)
+
+    async def save(current: ChatAnswerRun) -> None:
+        current.mark_closed("synthetic-message")
+
+    await service._run(run, save, 1)
+    assert store.closed == []
+    assert [event.name for event in run.events] == ["all_done"]
+
+
+async def _start_gated_termination_run(
+    service: ChatAnswerRunService, store: _TerminationStore
+) -> ChatAnswerRun:
+    run = _termination_run(store)
+    started = asyncio.Event()
+
+    async def wait_forever(_run: ChatAnswerRun) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    service.register(
+        run_id=run.run_id,
+        conversation_id=run.conversation_id,
+        tenant_id_hash=None,
+        user_id_hash=None,
+        store=store,
+    )
+    run = service._runs[run.run_id]
+    run.message_ids["synthetic-model"] = "synthetic-message"
+    service.start(run, wait_forever, timeout_seconds=5)
+    await asyncio.wait_for(started.wait(), timeout=1)
+    return run
+
+
+async def test_user_cancel_is_saved_as_cancelled() -> None:
+    store = _TerminationStore()
+    service = ChatAnswerRunService(worker_id="synthetic-worker")
+    run = await _start_gated_termination_run(service, store)
+    await service.cancel(run)
+    assert CHAT_ANSWER_USER_CANCELLED.message == CHAT_ANSWER_CANCELLED_MESSAGE
+    _assert_terminated(run, store, CHAT_ANSWER_USER_CANCELLED, status="CANCELLED")
+
+
+async def test_service_shutdown_is_saved_as_service_stopped() -> None:
+    store = _TerminationStore()
+    service = ChatAnswerRunService(worker_id="synthetic-worker")
+    run = await _start_gated_termination_run(service, store)
+    await service.shutdown()
+    _assert_terminated(run, store, CHAT_ANSWER_SERVICE_STOPPED)
+
+
+async def test_cancel_from_outside_does_not_claim_service_stop() -> None:
+    """利用者の取消でも backend の停止でもない打ち切りは、サービスの停止と断定しない。"""
+    store = _TerminationStore()
+    service = ChatAnswerRunService(worker_id="synthetic-worker")
+    run = await _start_gated_termination_run(service, store)
+    assert run.task is not None
+    run.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run.task
+    _assert_terminated(run, store, CHAT_ANSWER_TASK_CANCELLED)
+
+
+def test_unclassified_interrupted_record_is_shown_as_unknown() -> None:
+    """原因を分ける前の記録は、再起動と断定せず原因不明として表示する。"""
+    legacy = (
+        "回答を作成していたサービスが停止・再起動したため、回答の作成を中断しました。"
+        "もう一度送信してください。"
+    )
+    assert chat_answer_display_content("ERROR", legacy) == CHAT_ANSWER_UNKNOWN_MESSAGE
+    assert chat_answer_display_content("COMPLETE", legacy) == legacy
+    assert chat_answer_display_content("ERROR", "他の本文") == "他の本文"
