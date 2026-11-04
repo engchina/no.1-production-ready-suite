@@ -303,6 +303,17 @@ describe("RunHistoryTable", () => {
     expect(onOpen).toHaveBeenLastCalledWith(ROWS[1]);
   });
 
+  it("記録済みモデルの直後にトークン数を置き、複数と未記録を区別する", () => {
+    render(<RunHistoryTable rows={ROWS} toItem={(row) => ({ ...toItem(row), models: row.status === "ok" ? ["model-a", "model-b"] : [], usage: {tokens: 12345} })} onOpen={() => undefined} showModels showUsage showExecutor />);
+    const headers = [...container.querySelectorAll("thead th")].map((node) => node.textContent);
+    expect(headers.slice(0, 8)).toEqual(["質問", "状態", "種類", "モデル", "トークン数", "実行者", "開始日時", "所要時間"]);
+    const rows = container.querySelectorAll("tbody tr");
+    expect(rows[0].children[3].textContent).toBe("model-amodel-b");
+    expect(rows[1].children[3].textContent).toBe("未記録");
+    expect(rows[0].children[4].textContent).toBe("12,345");
+    expect(rows[0].querySelector("[data-run-history-compact-meta]")?.textContent).toContain("モデル：model-a、model-b");
+  });
+
   it("利用量の列は token と費用、記録が無ければ「—」", () => {
     render(
       <RunHistoryTable

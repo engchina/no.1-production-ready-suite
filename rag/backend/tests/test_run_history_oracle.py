@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -147,6 +148,7 @@ async def test_run_history_round_trip_on_real_oracle() -> None:
         # 一覧は利用量の合計と計測の状態だけを JSON_VALUE で読む（#3466）。記録の無い実行は NULL。
         own_row = next(row for row in rows if row["run_id"] == run_ids[0])
         assert (own_row["usage_total_tokens"], own_row["usage_measurement"]) == (12345, "partial")
+        assert json.loads(str(own_row["usage_models"])) == ["model-a"]
         admin_row = next(row for row in admin_rows if row["run_id"] == run_ids[1])
         assert (admin_row["usage_total_tokens"], admin_row["usage_measurement"]) == (None, None)
         assert [row["run_id"] for row in admin_rows if row["run_id"] in run_ids] == [run_ids[1]]

@@ -815,6 +815,7 @@ function RunHistoryList({
     status: commonRunStatus(run.status),
     statusLabel: runStatusLabel(run.status),
     kind: runSourceLabel(run.source, run.api_key_name),
+    models: run.models ?? [],
     executor: { name: executorNameOf(run), isSelf: run.executed_by_me !== false },
     startedAt: run.created_at,
     durationMs: run.duration_ms ?? null,
@@ -837,6 +838,7 @@ function RunHistoryList({
             toItem={toItem}
             onOpen={(run) => onSelect(run.id)}
             showExecutor={showExecutor}
+            showModels
             showUsage
             actionsFor={actionsFor}
             selectedRunId={selectedRunId}
