@@ -5421,8 +5421,28 @@ def _original_question_children(
     options.update(retrieval_queries=[original], vector_only_queries=(original,))
     try:
         # 文書の検索の中の段（処理の経過。#3475）。検索の埋め込み・DB の検索はこの段の子になる。
-        with observe_call("stage", ORIGINAL_QUESTION_SEARCH_STAGE):
-            result = search_adb_hybrid_chunks(**options)
+        with observe_call("stage", ORIGINAL_QUESTION_SEARCH_STAGE) as observation:
+            observation.request(
+                lambda: {
+                    "原質問": original,
+                    "検索文": list(options["retrieval_queries"]),
+                    "ベクトルだけの検索文": list(options["vector_only_queries"]),
+                    "検索範囲": {key: options[key] for key in ("chunk_run_id", "filters", "top_k") if key in options},
+                    "用途": "条目録の文書順位のみ。回答根拠には直接追加しません。",
+                }
+            )
+            try:
+                result = search_adb_hybrid_chunks(**options)
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                observation.response(lambda: {"返却なし": True, "例外の型": error_type})
+                raise
+            observation.response(
+                lambda: {
+                    "用途": "条目録の文書順位",
+                    "読取候補": candidate_snapshot([_stored_chunk_answer_record(chunk) for chunk in result.child_chunks]),
+                }
+            )
     except Exception as exc:
         logger.warning("article catalog original question search failed", exc_info=True)
         # 元の質問の候補を足さずに続けたことを、呼び出し元の診断に残す（#3286）。

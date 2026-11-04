@@ -2170,25 +2170,65 @@ class AnswerEngine:
 
             pending = [item for item in selected if cache_key(item) not in state.context_reads]
             if pending:
-                with _search_stage(CONTEXT_SIBLINGS_STAGE, active=receipt is None):
-                    siblings = original_chunks(
-                        await self._oracle.context_group_siblings(
-                            [
-                                item
-                                for item in pending
-                                if item.metadata.get("chunk_strategy") == "small_to_big"
-                                or self._settings.rag_neighbor_child_count > 0
-                            ],
-                            max_chunks_per_group=max(
-                                1, self._settings.rag_context_group_max_chunks
-                            ),
-                            neighbor_child_count=self._settings.rag_neighbor_child_count,
+                with _search_stage(CONTEXT_SIBLINGS_STAGE, active=receipt is None) as observation:
+                    read_anchors = [
+                        item
+                        for item in pending
+                        if item.metadata.get("chunk_strategy") == "small_to_big"
+                        or self._settings.rag_neighbor_child_count > 0
+                    ]
+                    if observation is not None:
+                        observation.request(
+                            lambda pending=pending, read_anchors=read_anchors, scope=scope: {
+                                "起点根拠 ID": [item.chunk_id for item in pending],
+                                "読取関数へ渡した起点 ID": [item.chunk_id for item in read_anchors],
+                                "前後それぞれの最大 Chunk 数": (
+                                    self._settings.rag_neighbor_child_count
+                                ),
+                                "グループあたりの上限": max(
+                                    1, self._settings.rag_context_group_max_chunks
+                                ),
+                                "ページ範囲": scope,
+                            }
                         )
-                    )
-                read_siblings = siblings
-                siblings = [
-                    item for item in siblings if contained(item.document_id, item.metadata, scope)
-                ]
+                    try:
+                        siblings = original_chunks(
+                            await self._oracle.context_group_siblings(
+                                read_anchors,
+                                max_chunks_per_group=max(
+                                    1, self._settings.rag_context_group_max_chunks
+                                ),
+                                neighbor_child_count=self._settings.rag_neighbor_child_count,
+                            )
+                        )
+                    except BaseException as exc:
+                        error_type = type(exc).__name__
+                        if observation is not None:
+                            observation.response(
+                                lambda error_type=error_type: {
+                                    "返却なし": True,
+                                    "例外の型": error_type,
+                                }
+                            )
+                        raise
+                    read_siblings = siblings
+                    siblings = [
+                        item
+                        for item in siblings
+                        if contained(item.document_id, item.metadata, scope)
+                    ]
+                    if observation is not None:
+                        observation.response(
+                            lambda read_siblings=read_siblings, siblings=siblings, scope=scope: {
+                                "読取 Chunk": _trace_chunks(read_siblings),
+                                "範囲内の返却 Chunk": _trace_chunks(siblings),
+                                "範囲外で除外した ID": [
+                                    item.chunk_id
+                                    for item in read_siblings
+                                    if not contained(item.document_id, item.metadata, scope)
+                                ],
+                            }
+                        )
                 if receipt is not None:
                     receipt.reads.append(
                         {
