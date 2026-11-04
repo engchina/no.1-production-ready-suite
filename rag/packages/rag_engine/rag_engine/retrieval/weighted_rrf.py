@@ -193,6 +193,10 @@ def fuse_rankings(rankings: Sequence[RankedList], sources: Mapping[str, float], 
 def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[str, float], k: float) -> dict[str, object]:
     """表示用の先頭と完全な計算記録を同じ結果から作る。"""
     data = result.diagnostics(weights, sources, k)
+    inherited = result.execution(sources) == "native_only"
+    rank_label = "引継元の一覧内順位" if inherited else "順位"
+    contribution_label = "引継元の寄与" if inherited else "寄与"
+    score_label = "引き継いだ融合スコア" if inherited else "融合スコア"
     lines = []
     for i, entry in enumerate(result.lists, 1):
         r = entry.ranking
@@ -203,27 +207,28 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
             "hybrid": "Oracle 内部融合（WRRF）" if r.native_scores else "混合検索のランキング",
         }[r.channel]
         lines.append(
-            f"一覧 {i}: {r.query} / {channel_label} {r.variant} / "
+            f"{'参照した検索一覧' if inherited else '一覧'} {i}: {r.query} / {channel_label} {r.variant} / "
             f"出所: {'・'.join(r.sources) or '追加検索文'} / 重み {entry.weight:.9g} / "
-            f"{len(dict.fromkeys(r.chunk_ids))} 件 / {state}" + (f"（{r.error}）" if r.error else "")
+            f"{len(dict.fromkeys(r.chunk_ids))} 件 / {'検索時の状態: ' if inherited else ''}{state}" + (f"（{r.error}）" if r.error else "")
         )
     lines += [
-        f"{c.chunk_id}: 一覧 {c.list_index + 1}・順位 {c.rank} / 寄与 {c.value:.12g} / 融合スコア {result.scores[c.chunk_id]:.12g}"
+        f"{c.chunk_id}: 一覧 {c.list_index + 1}・{rank_label} {c.rank} / "
+        f"{contribution_label} {c.value:.12g} / {score_label} {result.scores[c.chunk_id]:.12g}"
         for c in result.contributions
     ]
     return {
         "fields": [
-            *([{"label": "追加統合", "value": "原質問の検索内で統合済み"}] if result.execution(sources) == "native_only" else []),
+            *([{"label": "追加統合", "value": "原質問の検索内で統合済み"}] if inherited else []),
             {
                 "label": "目的",
                 "value": "原質問の検索内で統合済みです。追加の検索結果統合は不要です。"
-                if result.execution(sources) == "native_only"
+                if inherited
                 else "原質問の Oracle WRRF と追加検索の順位寄与を出所の比重で合算します。融合済み順位への再 RRF は行いません。"
                 if any(r.status == "completed" and r.ranking.native_scores for r in result.lists)
                 else "各ランキングの順位と設定した比重を使い、一度の RRF で検索結果を統合します。",
             },
             {
-                "label": "結果",
+                "label": "引き継いだ検索結果" if inherited else "結果",
                 "value": f"重複除去前 {result.raw_count} 件 / 重複除去後 {result.unique_count} 件 / "
                 f"正の寄与がある候補 {len(result.scores)} 件",
             },
@@ -231,9 +236,23 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
             {"label": "原質問と追加検索文の比重", "value": f"{weights.original:g}：{weights.additional:g}"},
             {"label": "検索文", "value": f"原質問 {min(1, len(sources))} 本 / 追加 {max(0, len(sources) - 1)} 本"},
             {"label": "順位定数", "value": str(k)},
-            {"label": "指標", "value": "RRF の融合スコア（大きい順）。確率や回答の信頼度ではありません。"},
+            {
+                "label": "指標",
+                "value": (
+                    "原質問の検索から引き継いだ融合スコア（大きい順）。"
+                    "この段で追加の統合は行っていません。確率や回答の信頼度ではありません。"
+                )
+                if inherited
+                else "RRF の融合スコア（大きい順）。確率や回答の信頼度ではありません。",
+            },
         ],
         "lines": lines,
-        "code": [{"label": "RRF の計算記録", "language": "json", "text": json.dumps(data, ensure_ascii=False, indent=2)}],
+        "code": [
+            {
+                "label": "原質問の検索から引き継いだ融合記録" if inherited else "RRF の計算記録",
+                "language": "json",
+                "text": json.dumps(data, ensure_ascii=False, indent=2),
+            }
+        ],
         "rrf": data,
     }

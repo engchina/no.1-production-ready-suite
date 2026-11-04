@@ -1,5 +1,7 @@
+import diversityStages from "./fixtures/diversity-stage-trace.json";
 import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
 import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
+import nativeOnlyRrfDetails from "./fixtures/native-only-rrf-trace.json";
 import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
@@ -42,6 +44,7 @@ function sinceAgeMs(since: string | null | undefined) {
 }
 
 interface RunRow {
+  answer_diagnostics?: unknown;
   run_id: string;
   surface: "search" | "chat";
   search_answer_profile_id: string | null;
@@ -143,7 +146,7 @@ function detail(row: RunRow) {
     answer_available: row.answer_generated,
     citations: row.citations ?? [CITATION],
     withheld_evidence_count: row.withheld_evidence_count ?? 0,
-    answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [], query_understanding: { original_question: "合成の質問", active_profiles: ["operation_steps"] }, inquiry_conditions: { metadata_filter: { source_file_terms: ["A.pdf"], page_numbers: [2] } } } : null,
+    answer_diagnostics: row.answer_diagnostics !== undefined ? row.answer_diagnostics : row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [], query_understanding: { original_question: "合成の質問", active_profiles: ["operation_steps"] }, inquiry_conditions: { metadata_filter: { source_file_terms: ["A.pdf"], page_numbers: [2] } } } : null,
     // 処理の経過は実行の trace の API が返す span の段（共通の span の表。#3226。実行の詳細の応答には入れない）。
     // 回答を作った実行は回答の段の中に工程の span、回答を作らない検索は検索の段。
     // 対象は実行（trace の API は実行の id を対象にする）。
@@ -261,6 +264,7 @@ async function mockRuns(page: Page, rows: RunRow[], { gated = false } = {}) {
         items: matched.slice(offset, offset + limit).map(({ usage, ...item }) => ({
           ...item,
           total_tokens: usage ? usage.total_tokens : null,
+          models: usage?.models.length ? usage.models : item.model_id ? [item.model_id] : [],
           usage_measurement: usage ? usage.measurement : null,
         })),
         total: matched.length,
@@ -648,7 +652,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件を整理して回答を作る");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-result-summary]")).toHaveCount(0);
+    await expect(timeline.locator("[data-run-result-summary]")).toHaveText(["回答に渡す根拠 4 件（2 文書）", "問題なし"]);
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答に安全上の問題がないか検査する");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
@@ -765,6 +769,24 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(page.getByText("実行が見つかりません。")).toBeVisible();
   });
 
+  test("詳細: 使用モデルは記録した表示名を使い同じIDを重複表示しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    await mockRuns(page, [run(1, {
+      question: "合成の質問", search_answer_profile_name: "プロファイル A",
+      answer: "合成の回答", citations: [], model_id: "provider.synthetic",
+      usage: { models: ["provider.synthetic", "provider.other"], requests: 2, input_tokens: 10, output_tokens: 5, total_tokens: 15, cached_input_tokens: null, reasoning_output_tokens: null, measurement: "complete", measured_requests: 2 },
+      answer_diagnostics: { models: { llm: { model_id: "provider.synthetic", label: "合成モデル" }, embedding: "synthetic-embedding", rerank: "synthetic-rerank" } },
+    })]);
+    await page.goto("/history/run-1");
+    await page.getByTestId("run-history-timeline-summary").click();
+    await page.getByTestId("run-history-process-details").click();
+    const models = page.getByTestId("answer-models");
+    await expect(models.locator("dd")).toHaveText(["合成モデル", "synthetic-embedding", "synthetic-rerank", "provider.other"]);
+    await expect(models.locator("dd").first()).toHaveAttribute("title", "provider.synthetic");
+    await expectNoPageOverflow(page);
+    await models.screenshot({ path: testInfo.outputPath("recorded-model-display.png") });
+  });
+
   test("詳細: 概要にモデル・token・モデルの呼び出しを Agent と同じ形で出し、不明は未計測・一部計測と出す（Issue 3419）", async ({
     page,
   }, testInfo) => {
@@ -841,7 +863,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
   }, testInfo) => {
     await mockLocalAuth(page);
     const usage = {
-      models: ["model-a"],
+      models: ["synthetic-model-" + "long-".repeat(20), "model-b"],
       requests: 4,
       input_tokens: 1200000,
       output_tokens: 34567,
@@ -867,8 +889,10 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     const header = table.getByRole("columnheader", { name: "トークン数", exact: true });
     const headers = await table.locator("thead th").allTextContents();
     const usageIndex = headers.indexOf("トークン数");
+    const modelIndex = headers.indexOf("モデル");
+    const modelCell = page.getByTestId("run-history-row-run-1").locator(":scope > th, :scope > td").nth(modelIndex);
     // 列の順は 3 製品で同じ: 所要時間 → トークン数 →（製品の列）。見出しは Agent と同じ「トークン数」。
-    expect(usageIndex).toBe(headers.indexOf("所要時間") + 1);
+    expect(usageIndex).toBe(headers.indexOf("モデル") + 1);
     expect(headers.indexOf("回答の対応")).toBeGreaterThan(usageIndex);
     // 行の見出し（題名）は th、ほかは td。
     const usageCell = (id: string) => page.getByTestId(`run-history-row-${id}`).locator(":scope > th, :scope > td").nth(usageIndex);
@@ -876,12 +900,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     if (isNarrow(page)) {
       // 375px: 題名と操作の 2 列にまとめ、token の列は出さない（詳細の概要で見る）。横にあふれない。
       await expect(header).toBeHidden();
+      await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).toContainText("model-b");
       await expect(usageCell("run-1")).toBeHidden();
       await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).not.toContainText(
         "token"
       );
     } else {
       await expect(header).toBeVisible();
+      await expect(modelCell).toContainText("model-b");
       await expect(usageCell("run-1")).toHaveText("1,234,567");
       await expect(usageCell("run-2")).toHaveText("9,000一部計測");
       await expect(usageCell("run-2").locator("[data-run-usage-note]")).toHaveText("一部計測");
@@ -1074,7 +1100,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 });
 
 test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {
-  test("経過の説明は展開内だけに表示する", async ({page}, testInfo) => {
+  test("記録済みの結果は摘要行と展開内に表示する", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});
     await mockRuns(page, [row]);
@@ -1086,12 +1112,13 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.goto(`/history/${row.run_id}`);
     const timeline = page.getByTestId("run-history-timeline");
     await page.getByTestId("run-history-timeline-summary").click();
-    await expect(timeline.locator("[data-run-result-summary]")).toHaveCount(0);
-    await expect(timeline.getByText(result, {exact: true})).toHaveCount(0);
+    await expect(timeline.locator("[data-run-result-summary]")).toHaveText(result);
+    await expect(timeline.getByText(result, {exact: true})).toHaveCount(1);
     const step = timeline.locator(`[data-run-timeline-step="${spanStepId("skip")}"]`);
     await step.getByRole("button", {name: /用語・同義語による検索文の追加/}).click();
-    await expect(step.getByText(result, {exact: true})).toHaveCount(1);
-    await timeline.screenshot({path: testInfo.outputPath("timeline-no-duplicate-summary.png")});
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(result);
+    await expect(step.locator("[data-run-step-details]")).toContainText(result);
+    await timeline.screenshot({path: testInfo.outputPath("timeline-result-summary.png")});
   });
   test("軌跡の識別子は行内コピーの寸法、時刻と文字属性は本文の行高に揃う", async ({page}, testInfo) => {
     await mockLocalAuth(page);
@@ -1715,9 +1742,9 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
     {key: "root", spec: ragSpan.root(), at: [0, 2]},
     {key: "native-only", spec: ragSpan.step("追加の検索結果統合", "root"), at: [0, .1], status: "skipped",
-      details: {fields: [{label: "追加統合", value: "原質問の検索内で統合済み"}]}},
+      details: nativeOnlyRrfDetails},
     {key: "outer", spec: ragSpan.step("検索結果の統合（RRF）", "root"), at: [.1, 2],
-      details: {fields: [{label: "結果", value: "検索結果を統合しました"}]}},
+      details: weightedRrfDetails},
   ])});
   await page.goto(`/history/${row.run_id}`);
   await page.getByTestId("run-history-timeline-summary").click();
@@ -1729,9 +1756,24 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await expect(outer).toHaveAttribute("data-status", "done");
   await timeline.screenshot({path: testInfo.outputPath("fusion-execution-status.png")});
   await inspectTraceStep(page, timeline, spanStepId("native-only"));
-  await expect(page.locator("[data-trace-inspector]")).toContainText("原質問の検索内で統合済み");
+  const inspector = page.locator("[data-trace-inspector]");
+  await expect(inspector).toContainText("原質問の検索内で統合済み");
+  await expect(inspector.locator("dt")).toContainText(["引き継いだ検索結果"]);
+  await expect(inspector.locator("dt").getByText("結果", {exact: true})).toHaveCount(0);
+  await expect(inspector).toContainText("重複除去前 1 件 / 重複除去後 1 件 / 正の寄与がある候補 1 件");
+  await expect(inspector).toContainText("引継元の一覧内順位 1 / 引継元の寄与 0.016 / 引き継いだ融合スコア 0.016");
+  await expect(inspector).toContainText("この段で追加の統合は行っていません");
+  const inheritedRecord = inspector.locator('pre[aria-label="原質問の検索から引き継いだ融合記録"]');
+  await expect(inheritedRecord).toHaveText(nativeOnlyRrfDetails.code[0].text);
+  await expect(inspector.getByText("RRF の計算記録", {exact: true})).toHaveCount(0);
   await expectNoPageOverflow(page);
-  await page.locator("[data-trace-inspector]").screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+  await inspector.screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+  await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  await inspectTraceStep(page, timeline, spanStepId("outer"));
+  await expect(inspector.locator("dt").getByText("結果", {exact: true})).toBeVisible();
+  await expect(inspector.locator('pre[aria-label="RRF の計算記録"]')).toHaveText(weightedRrfDetails.code[0].text);
+  await expect(inspector.getByText("引き継いだ検索結果", {exact: true})).toHaveCount(0);
+  await expectNoPageOverflow(page);
 });
 
 test("保存済みの全文を分段取得して末尾まで確認する", {tag: "@responsive"}, async ({page}, testInfo) => {
@@ -1816,4 +1858,35 @@ test("入力の安全確認を五Tabで開き、実行結果と再利用を区�
   await expect(inspector).toContainText("false");
   await expectNoPageOverflow(page);
   await inspector.screenshot({path: testInfo.outputPath("input-guardrail-reused.png")});
+});
+
+
+test("多様性補充の設定上限と実績を履歴の経過と軌跡で区別する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+  await mockRuns(page, [row]);
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+    {key: "root", spec: ragSpan.root(), at: [0, 4]},
+    ...diversityStages.map((stage, index) => ({ key: stage.key,
+      spec: ragSpan.step("文書の多様性を補う候補の追加", "root"),
+      at: [index, index + .1] as [number, number],
+      status: stage.params.status === "skipped" ? "skipped" as const : "done" as const,
+      params: stage.params, details: stage.details,
+    })),
+  ])});
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  for (const stage of diversityStages) {
+    const step = timeline.locator(`[data-run-timeline-step="${spanStepId(stage.key)}"]`);
+    await expect(step).toContainText("文書の偏りを補う候補を加える");
+    await expect(step).toHaveAttribute("data-status", stage.params.status === "skipped" ? "skipped" : "done");
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(stage.details.fields[0].value);
+    await inspectTraceStep(page, timeline, spanStepId(stage.key));
+    const inspector = page.locator("[data-trace-inspector]");
+    for (const field of stage.details.fields) await expect(inspector).toContainText(field.value);
+    await expectNoPageOverflow(page);
+    await inspector.screenshot({path: testInfo.outputPath(`diversity-${stage.key}.png`)});
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  }
 });

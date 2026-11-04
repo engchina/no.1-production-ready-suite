@@ -303,6 +303,17 @@ describe("RunHistoryTable", () => {
     expect(onOpen).toHaveBeenLastCalledWith(ROWS[1]);
   });
 
+  it("記録済みモデルの直後にトークン数を置き、複数と未記録を区別する", () => {
+    render(<RunHistoryTable rows={ROWS} toItem={(row) => ({ ...toItem(row), models: row.status === "ok" ? ["model-a", "model-b"] : [], usage: {tokens: 12345} })} onOpen={() => undefined} showModels showUsage showExecutor />);
+    const headers = [...container.querySelectorAll("thead th")].map((node) => node.textContent);
+    expect(headers.slice(0, 8)).toEqual(["質問", "状態", "種類", "モデル", "トークン数", "実行者", "開始日時", "所要時間"]);
+    const rows = container.querySelectorAll("tbody tr");
+    expect(rows[0].children[3].textContent).toBe("model-amodel-b");
+    expect(rows[1].children[3].textContent).toBe("未記録");
+    expect(rows[0].children[4].textContent).toBe("12,345");
+    expect(rows[0].querySelector("[data-run-history-compact-meta]")?.textContent).toContain("モデル：model-a、model-b");
+  });
+
   it("利用量の列は token と費用、記録が無ければ「—」", () => {
     render(
       <RunHistoryTable
@@ -1079,6 +1090,24 @@ describe("RunDetailLayout / RunDetailSection", () => {
       {type: "step", attributes: {"gen_ai.request.model": "synthetic-embed", "gen_ai.operation.name": "embeddings"}},
     ]} />);
     expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["synthetic-model", "synthetic-embed"]);
+  });
+
+  it("同じモデルIDの表示名と呼び出し記録は表示名を一度だけ出す", () => {
+    render(<RunUsedModels models={[
+      {label: "LLM", value: "合成モデル", modelId: "provider.synthetic", title: "provider.synthetic"},
+      {label: "LLM", value: "provider.synthetic"},
+    ]} events={[{type: "step", attributes: {"gen_ai.request.model": "provider.synthetic"}}]} />);
+    expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["合成モデル"]);
+    expect(container.querySelector("dd")?.title).toBe("provider.synthetic");
+  });
+
+  it("表示名が同じでも異なるモデルIDの記録を消さない", () => {
+    render(<RunUsedModels models={[
+      {label: "LLM", value: "合成モデル", modelId: "provider.synthetic-a"},
+      {label: "LLM", value: "合成モデル", modelId: "provider.synthetic-b"},
+      {label: "LLM", value: "provider.unknown"},
+    ]} />);
+    expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["合成モデル", "合成モデル", "provider.unknown"]);
   });
 
   it("開閉できる節は既定で閉じた Disclosure、通常の節はカード", () => {

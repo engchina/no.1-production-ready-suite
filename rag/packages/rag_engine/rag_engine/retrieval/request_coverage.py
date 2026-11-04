@@ -331,7 +331,18 @@ def run_targeted_retrievals(
                 results.append(replace(previous, request_id=target.id, reused=True, chunk_cap=planned.chunk_cap))
                 continue
             if expand is not None:
-                queries = targeted_queries(target, (), searched=searched, expansions=tuple(expand(target)))
+                began = clock()
+                try:
+                    queries = targeted_queries(target, (), searched=searched, expansions=tuple(expand(target)))
+                except Exception as exc:  # noqa: BLE001 - 補助検索文の失敗は要求ごとに記録し、既存根拠を保持する。
+                    report_degraded("request_coverage_expansion", exc)
+                    results.append(
+                        TargetedRetrieval(target.id, (), (), (), int((clock() - began) * 1000), type(exc).__name__, planned.chunk_cap)
+                    )
+                    continue
+                if clock() - start >= budget.deadline_seconds:
+                    stop = "deadline"
+                    break
             if not queries:
                 same_query += 1
                 continue
@@ -366,6 +377,8 @@ def run_targeted_retrievals(
         )
     if plan and same_query == len(plan):
         stop = stop or "same_query"
+    if results and all(not result.queries and result.error for result in results):
+        stop = stop or "query_expansion_failed"
     return results, stop
 
 

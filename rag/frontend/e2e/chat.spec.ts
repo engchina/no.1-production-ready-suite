@@ -1288,9 +1288,9 @@ for (const theme of ["light", "dark"] as const) {
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");
     await expect(nested).toContainText("検索文から根拠の候補を集める");
-    // 収縮行は名前・状態・所要時間だけ。結果の補足は展開先に保持する。
+    // 記録済みの結果は共通の摘要行に出し、補足の note は展開先に保持する。
     await expect(nested).not.toContainText("該当なし");
-    await expect(process.locator("[data-run-result-summary]")).toHaveCount(0);
+    await expect(process.locator("[data-run-result-summary]")).toHaveText(["回答に渡す根拠 0 件"]);
     await expect(nested).toContainText("0.1 秒未満");
     const understood = page.getByTestId("chat-answer-progress-step-s2");
     await expect(understood).not.toContainText("LLM 1 回");
@@ -1543,7 +1543,8 @@ test("回答フローの回答ではチャットにも根拠パネルと会話�
   await expect(page.getByRole("heading", { name: "回答モデル: MODEL 1（画像も参照）", exact: true })).toBeVisible();
   const models = panel.getByTestId("answer-models");
   await expect(models).toContainText("使用したモデル");
-  await expect(models).toContainText("MODEL 1");
+  await expect(models.locator("dd").filter({ hasText: /^MODEL 1$/ })).toHaveCount(1);
+  await expect(models.locator('dd[title="m1"]')).toHaveText("MODEL 1");
   await expect(models).not.toContainText("添付した画像");
   await expect(panel.locator("[data-process-identifier]")).toHaveCount(3);
   await expect(models).toContainText("cohere.embed-v4.0");

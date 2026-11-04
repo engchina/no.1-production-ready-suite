@@ -114,6 +114,7 @@ export function agentRunHistoryLabels(): RunHistoryLabelsInput {
       title: t("run.column.question"),
       status: t("common.status"),
       kind: t("run.column.kind"),
+      models: t("run.column.model"),
       executor: t("run.column.executor"),
       startedAt: t("run.column.startedAt"),
       duration: t("run.column.duration"),
@@ -121,6 +122,7 @@ export function agentRunHistoryLabels(): RunHistoryLabelsInput {
       actions: t("run.actions"),
     },
     self: t("run.self"),
+    modelNotRecorded: t("run.modelNotRecorded"),
     openDetail: (title) => t("run.openDetail", { title }),
     rowActions: (title) => t("common.entityActions", { name: title }),
   };

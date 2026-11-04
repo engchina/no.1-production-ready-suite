@@ -51,6 +51,7 @@ from rag_engine.resources.tracing import CallObservation, observe_call
 from rag_engine.retrieval.article_catalog import ARTICLE_UNIT_KEY
 from rag_engine.retrieval.attachment_evidence import ATTACHMENT_EVIDENCE_KEY
 from rag_engine.retrieval.search_stages import (
+    CANDIDATE_DIVERSITY_STAGE,
     CONTEXT_SIBLINGS_STAGE,
     DERIVED_SOURCE_STAGE,
     ENTITY_EXPANSION_STAGE,
@@ -1781,14 +1782,15 @@ class AnswerEngine:
             unique.append(chunk_id)
         ordered = unique
         ranked = ordered[:candidate_limit]
-        if self._settings.rag_candidate_diversity_depth > 0:
-            ranked += _diverse_candidates(
-                ordered[: self._settings.rag_candidate_diversity_depth],
-                candidate_limit,
-                lambda chunk_id: state.chunks[chunk_id].document_id,
-                new_document=self._settings.rag_candidate_diversity_new_document,
-                present_document=self._settings.rag_candidate_diversity_present_document,
-            )[: self._settings.rag_candidate_diversity_max_extra]
+        ranked += _observed_diverse_candidates(
+            ordered,
+            candidate_limit,
+            lambda chunk_id: state.chunks[chunk_id].document_id,
+            depth=self._settings.rag_candidate_diversity_depth,
+            max_extra=self._settings.rag_candidate_diversity_max_extra,
+            new_document=self._settings.rag_candidate_diversity_new_document,
+            present_document=self._settings.rag_candidate_diversity_present_document,
+        )
         selected_fused_ids = set(ranked)
         # 当たった派生の chunk(要約・項目抽出の値)は検索の手がかり。回答の根拠には、その chunk が
         # 指す原文の chunk を同じ位置に置く(原文が読めなければ根拠に渡さない。#2641)。
@@ -4205,6 +4207,113 @@ def _int(value: object, default: int = 0) -> int:
 
 def _group_id(chunk: RetrievedChunk) -> str:
     return str(chunk.metadata.get("chunk_group_id") or chunk.chunk_id)
+
+
+def _observed_diverse_candidates(
+    ordered: Sequence[str],
+    head_size: int,
+    document_of: Callable[[str], str],
+    *,
+    depth: int,
+    max_extra: int,
+    new_document: int,
+    present_document: int,
+) -> list[str]:
+    """融合の上位を保持したまま追加する候補と、その時点の実行結果を記録する。"""
+    with observe_call("stage", CANDIDATE_DIVERSITY_STAGE) as observation:
+        reason = (
+            "depth_disabled"
+            if depth <= 0
+            else "extra_limit_zero"
+            if max_extra <= 0
+            else "document_limits_zero"
+            if new_document <= 0 and present_document <= 0
+            else ""
+        )
+        eligible = (
+            []
+            if reason
+            else _diverse_candidates(
+                ordered[:depth],
+                head_size,
+                document_of,
+                new_document=new_document,
+                present_document=present_document,
+            )
+        )
+        added = eligible[:max_extra] if not reason else []
+        before = len(ordered[:head_size])
+        present = {document_of(chunk_id) for chunk_id in ordered[:head_size]}
+        added_documents = {document_of(chunk_id) for chunk_id in added}
+        reason_text = {
+            "depth_disabled": "調査する順位の上限が 0 のため実行しません",
+            "extra_limit_zero": "追加候補の上限が 0 のため実行しません",
+            "document_limits_zero": "文書ごとの追加上限がすべて 0 のため実行しません",
+        }.get(
+            reason, "追加候補はありません" if not added else f"候補 {len(added)} 件を追加しました"
+        )
+        counts = {
+            "depth": depth,
+            "max_extra": max_extra,
+            "new_document_limit": new_document,
+            "present_document_limit": present_document,
+            "inspected_count": len(ordered[:depth][head_size:]) if not reason else 0,
+            "eligible_count": len(eligible),
+            "added_count": len(added),
+            "added_document_count": len(added_documents),
+            "new_document_count": len(added_documents - present),
+            "present_document_count": len(added_documents & present),
+            "before_count": before,
+            "after_count": before + len(added),
+            "limit_reached": len(eligible) > max_extra,
+        }
+        observation.display(
+            params={
+                "status": "skipped" if reason else "completed",
+                "reason_code": reason or ("added" if added else "no_match"),
+                **counts,
+            },
+        )
+        if not getattr(observation, "capture_enabled", True):
+            return added
+        observation.display(
+            details={
+                "fields": [
+                    {"label": "結果", "value": reason_text},
+                    {"label": "調査する順位の設定上限", "value": str(depth)},
+                    {"label": "実際に調べた上位外の候補", "value": str(counts["inspected_count"])},
+                    {"label": "追加候補の設定上限", "value": str(max_extra)},
+                    {"label": "実際に追加した候補", "value": str(len(added))},
+                    {"label": "追加した文書", "value": str(len(added_documents))},
+                    {
+                        "label": "記録の対象",
+                        "value": "原文の読み込み・根拠数の制限を適用する前の検索候補",
+                    },
+                ]
+            },
+        )
+        observation.request(
+            lambda: {
+                "head_size": head_size,
+                "candidate_ids": list(ordered),
+                "depth": depth,
+                "max_extra": max_extra,
+                "new_document": new_document,
+                "present_document": present_document,
+            }
+        )
+        observation.response(
+            lambda: {
+                **counts,
+                "reason_code": reason or ("added" if added else "no_match"),
+                "added_ids": added,
+                "added_candidates": [
+                    {"chunk_id": chunk_id, "document_id": document_of(chunk_id)}
+                    for chunk_id in added
+                ],
+            }
+        )
+        return added
 
 
 def _diverse_candidates(

@@ -1297,6 +1297,7 @@ function runSummaryOf(run: Json): Json {
       return Number.isFinite(ms) ? Math.max(0, ms) : null;
     })(),
     total_tokens: typeof (run.usage as Json | undefined)?.total_tokens === "number" ? (run.usage as Json).total_tokens : null,
+    models: typeof (run.usage as Json | undefined)?.model === "string" && (run.usage as Json).model ? [(run.usage as Json).model] : [],
   };
 }
 

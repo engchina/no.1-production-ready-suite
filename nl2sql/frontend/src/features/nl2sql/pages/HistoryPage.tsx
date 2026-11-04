@@ -92,6 +92,7 @@ function toRunItem(item: HistoryItem): RunHistoryItem {
     durationMs: item.elapsed_ms ?? null,
     // 実行ごとのモデルの利用量（合計の token と計測の状態。RAG と同じ規則・文言。#3543）。
     usage: historyListUsage(item),
+    models: item.usage?.models ?? [],
   };
 }
 
@@ -414,6 +415,7 @@ function HistoryList({
                   onOpen={onOpen}
                   showExecutor={othersVisible}
                   // 実行ごとのモデルの利用量（合計の token。#3543）。見出しは RAG・Agent と同じ「token」。
+                  showModels
                   showUsage
                   selectedRunId={selectedRunId}
                   // 再実行は一覧の行にも置かない（3 製品の実行の詳細・一覧を RAG にそろえる。#2343）。
@@ -448,7 +450,8 @@ function HistoryList({
                   ]}
                   labels={{
                     table: t("history.list.title"),
-                    columns: { usage: t("history.column.usage") },
+                    columns: { models: t("history.column.model"), usage: t("history.column.usage") },
+                    modelNotRecorded: t("history.modelNotRecorded"),
                     self: t("history.self"),
                     openDetail: (title) => t("history.openDetail", { title }),
                     rowActions: (title) => t("history.rowActions", { title }),

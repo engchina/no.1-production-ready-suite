@@ -394,9 +394,12 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
 ) -> None:
     """自動の条件を外した後の、根拠の無い要求だけの再検索も、利用者の条件・基準日・認可で検索する。"""
     import rag_engine.adapters.oci as engine_oci
-    from rag_engine.models.llm import GroundedDraft, QueryExpansionOutput
+    from rag_engine.models.llm import GroundedDraft, QueryExpansionOutput, QueryRoutingOutput
 
     def explicit_gap(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
+        if issubclass(schema, QueryRoutingOutput):
+            expansion = explicit_gap(system, prompt, config, QueryExpansionOutput, **options)
+            return schema(strategy="hyde", reason="合成の検索文を選択", queries=expansion.queries)
         if schema is QueryExpansionOutput:
             return QueryExpansionOutput(queries=["請求書の再発行方法は？"])
         result = _fake_llm(system, prompt, config, schema, **options)

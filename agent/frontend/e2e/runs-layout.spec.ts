@@ -83,6 +83,7 @@ test("一覧の種類で MCP の Run とキーの名前が分かる", { tag: "@r
 // #1955: 列は 3 製品で同じ順（質問 → 状態 → 種類 → 実行者 → 開始日時 → 所要時間 → token → 操作）。状態は共通の値。
 test("一覧は共通の列の順で、状態は共通の値と Agent の言い方で出す (desktop)", async ({ page, mockApi }) => {
   seedRun(mockApi);
+  mockApi.state.runs.at(-1)!.usage = { model: "saved-model", total_tokens: 12345, input_tokens: 12000, output_tokens: 345, requests: 1 };
   seedRun(mockApi, "run-waiting", "waiting_approval");
   await page.goto("/runs");
   const table = page.getByRole("table", { name: "実行履歴" });
@@ -90,16 +91,19 @@ test("一覧は共通の列の順で、状態は共通の値と Agent の言い�
     "質問",
     "状態",
     "種類",
+    "モデル",
+    "トークン数",
     "実行者",
     "開始日時",
     "所要時間",
-    "トークン数",
     "操作",
   ]);
   const waiting = page.getByTestId("run-row-run-waiting");
   await expect(waiting.locator("td [data-run-status]").first()).toHaveAttribute("data-run-status", "waiting");
   await expect(waiting.locator("td [data-run-status]").first()).toHaveText("承認待ち");
   const done = page.getByTestId("run-row-run-layout");
+  await expect(done.locator(":scope > th, :scope > td").nth(3)).toHaveText("saved-model");
+  await expect(done.locator(":scope > th, :scope > td").nth(4)).toHaveText("12,345");
   await expect(done.locator("td [data-run-status]").first()).toHaveAttribute("data-run-status", "succeeded");
   // 開始日時は絶対時刻、所要時間は終わった実行だけ（実行中・待ちは「—」）。
   await expect(done.locator("time").last()).toHaveAttribute("datetime", MOCK_NOW);
