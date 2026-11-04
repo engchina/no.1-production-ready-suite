@@ -571,8 +571,8 @@ def _verify_schema(schema: str, variables: str) -> None:
         raise AssertionError(f"shared Compute group must hold only shared inputs: {compute}")
 
     expected_groups = [
-        "配備先", "Autonomous AI Database", "Existing Autonomous AI Database",
-        "New Autonomous AI Database", "ADB のネットワーク", "アプリ用の DB ユーザー",
+        "配備先", "Autonomous AI Database", "アプリ用の DB ユーザー", "Existing Autonomous AI Database",
+        "New Autonomous AI Database", "ADB のネットワーク",
         "主 Compute の構成", "主 Compute のネットワークと SSH", "HTTPS", "Bastion", "bastion の構成",
         "bastion のネットワークと接続", "アプリケーション管理者",
         "NL2SQL Deep Data Security", "配備する製品", "Hidden",
@@ -1014,8 +1014,8 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
         ["length(var.adb_app_user_password) >= 12", "length(var.adb_app_user_password) <= 30"],
         context="adb_app_user_password",
     )
-    # フォームの並び（#1675）: 使うかどうかは ADB の利用方法の直後、名前とパスワードは新規 / 既存の ADB の入力
-    # （ADMIN のパスワード）とADB のネットワークの後の「アプリ用の DB ユーザー」の group。
+    # フォームの並び（#1675・#4333）: 使うかどうかは ADB の利用方法の直後、名前とパスワードはその直下の
+    # 「アプリ用の DB ユーザー」の group。
     groups = _schema_groups(schema)
     _, adb_members = groups.get("Autonomous AI Database", ("", []))
     if adb_members[-2:] != ["adb_deployment_mode", "adb_app_user_enabled"]:
@@ -1024,7 +1024,7 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
     if visible != "adb_app_user_enabled" or members != ["adb_app_user_name", "adb_app_user_password"]:
         raise AssertionError(f"the application database user group must show the name and password when enabled: {members}")
     titles = list(groups)
-    order = ["Autonomous AI Database", "Existing Autonomous AI Database", "New Autonomous AI Database", "ADB のネットワーク", "アプリ用の DB ユーザー"]
+    order = ["Autonomous AI Database", "アプリ用の DB ユーザー", "Existing Autonomous AI Database", "New Autonomous AI Database", "ADB のネットワーク"]
     if [title for title in titles if title in order] != order:
         raise AssertionError(f"ADB groups must be ordered as {order}: {titles}")
     _, existing = groups.get("Existing Autonomous AI Database", ("", []))

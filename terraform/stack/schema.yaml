@@ -17,6 +17,12 @@ variableGroups:
       - adb_deployment_mode
       - adb_app_user_enabled
 
+  - title: "アプリ用の DB ユーザー"
+    visible: adb_app_user_enabled
+    variables:
+      - adb_app_user_name
+      - adb_app_user_password
+
   - title: Existing Autonomous AI Database
     visible:
       eq:
@@ -64,12 +70,6 @@ variableGroups:
       - adb_acl_subnet_compartment_id
       - adb_acl_subnet_id
       - adb_acl_cidr_blocks
-
-  - title: "アプリ用の DB ユーザー"
-    visible: adb_app_user_enabled
-    variables:
-      - adb_app_user_name
-      - adb_app_user_password
 
   - title: "主 Compute の構成"
     visible: true
