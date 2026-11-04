@@ -773,7 +773,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await mockRuns(page, [run(1, {
       question: "合成の質問", search_answer_profile_name: "プロファイル A",
       answer: "合成の回答", citations: [], model_id: "provider.synthetic",
-      usage: { models: ["provider.synthetic", "provider.other"], requests: 2, input_tokens: 10, output_tokens: 5, total_tokens: 15, measurement: "complete", measured_requests: 2 },
+      usage: { models: ["provider.synthetic", "provider.other"], requests: 2, input_tokens: 10, output_tokens: 5, total_tokens: 15, cached_input_tokens: null, reasoning_output_tokens: null, measurement: "complete", measured_requests: 2 },
       answer_diagnostics: { models: { llm: { model_id: "provider.synthetic", label: "合成モデル" }, embedding: "synthetic-embedding", rerank: "synthetic-rerank" } },
     })]);
     await page.goto("/history/run-1");
