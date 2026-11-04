@@ -43,7 +43,13 @@ from app.clients.oci_snapshot import oci_call_snapshot
 from app.clients.oracle import OracleClient
 from app.clients.oracle_read_stats import track_db_calls
 from app.config import Settings, get_settings
-from app.rag.answer_engine import ANSWER_ENGINE, AnswerEngine, AnswerScope, answer_step_stage
+from app.rag.answer_engine import (
+    ANSWER_ENGINE,
+    AnswerEngine,
+    AnswerScope,
+    _trace_chunks,
+    answer_step_stage,
+)
 from app.rag.answer_notice import AnswerNoticeSource, compose_rag_answer_notice
 from app.rag.answer_route import answer_route
 from app.rag.audit import AuditOutcome, record_rag_search_audit
@@ -684,6 +690,17 @@ class RagPipeline:
                 ),
                 progress_callback=stage_callback,
                 result_details=lambda rewritten: history_rewrite_details(rewritten, history),
+                request_snapshot=lambda: {
+                    "質問": original_query,
+                    "渡した会話履歴": [asdict(turn) for turn in history],
+                },
+                result_snapshot=lambda rewritten: {
+                    "返却された補完質問": rewritten,
+                    "採用した確認回答": [
+                        item.model_dump(mode="json") for item in self._selected_history_facts
+                    ],
+                    "縮退の記録（累計）": degraded.steps(),
+                },
             )
             if rewritten_query:
                 request = request.model_copy(
@@ -710,6 +727,15 @@ class RagPipeline:
                 self._read_field_conditions(request, report_degraded=degraded.record_degraded),
                 progress_callback=stage_callback,
                 result_details=field_filter_details,
+                request_snapshot=lambda: {
+                    "質問": request.query,
+                    "検索・回答プロファイル ID": request.search_answer_profile_id,
+                    "除外する項目": request.auto_field_filter_excluded,
+                },
+                result_snapshot=lambda conditions: {
+                    "返却した条件": [item.model_dump(mode="json") for item in conditions],
+                    "縮退の記録（累計）": degraded.steps(),
+                },
             )
         guide = dict(self._settings.rag_support_guide or {})
         attachment_chunks = []
@@ -728,6 +754,17 @@ class RagPipeline:
                     report_degraded=degraded.record_degraded,
                 ),
                 progress_callback=stage_callback,
+                request_snapshot=lambda: {
+                    "質問": request.query,
+                    "会話 ID": self._attachment_conversation_id,
+                    "Rerank 有効": self._settings.rag_rerank_enabled,
+                    "読取状態": attachment_status,
+                },
+                result_snapshot=lambda chunks: {
+                    "返却した根拠": _trace_chunks(chunks),
+                    "返却件数": len(chunks),
+                    "縮退の記録（累計）": degraded.steps(),
+                },
                 result_outcome=lambda _result: (
                     "success"
                     if attachment_status == "done"
@@ -784,6 +821,21 @@ class RagPipeline:
                     request, step_callback=emit_step if progress_callback is not None else None
                 ),
                 progress_callback=stage_callback,
+                request_snapshot=lambda: {
+                    "検索要求": request.model_dump(mode="json"),
+                    "添付の根拠": _trace_chunks(attachment_chunks),
+                    "読取済みの項目条件": [
+                        item.model_dump(mode="json") for item in auto_field_conditions
+                    ],
+                    "呼出元の検索文": caller_queries,
+                    "根拠補完有効": self._complete_evidence,
+                },
+                result_snapshot=lambda result: {
+                    "回答": result.answer,
+                    "返却した根拠": _trace_chunks(result.citations),
+                    "根拠本文": result.context_text,
+                    "診断": result.diagnostics,
+                },
             )
             if guide and request.generate_answer:
                 # 回答の根拠（画面の図の項目の種類）で決まった条件を、分かっている条件にする
@@ -918,6 +970,19 @@ class RagPipeline:
                         answer_notice=notice,
                     ),
                     progress_callback=stage_callback,
+                    request_snapshot=lambda: {
+                        "記録 ID": trace_id,
+                        "検索・回答プロファイル ID": request.search_answer_profile_id,
+                        "質問": original_query,
+                        "補完質問": rewritten_query,
+                        "回答": final_answer,
+                        "保存対象の引用": stored_citations(outcome.citations),
+                        "保存面": "search" if history is None else "chat",
+                    },
+                    result_snapshot=lambda _result: {
+                        "保存関数から正常に戻った": True,
+                        "記録 ID": trace_id,
+                    },
                 )
             except Exception as exc:  # 保存は補助。回答の返却を止めない。
                 logger.warning(
@@ -973,6 +1038,11 @@ class RagPipeline:
             engine.retrieve(request),
             result_attributes=lambda chunks: {"retrieved_count": len(chunks)},
             progress_callback=progress_callback,
+            request_snapshot=lambda: {"検索要求": request.model_dump(mode="json")},
+            result_snapshot=lambda chunks: {
+                "返却した根拠": _trace_chunks(chunks),
+                "返却件数": len(chunks),
+            },
         )
         diagnostics = build_search_diagnostics(
             request,
@@ -1344,6 +1414,15 @@ async def _observe_stage[T](
                     if db_stats.execute_count or db_stats.lob_read_count:
                         base_attributes.update(db_stats.snapshot())
         except asyncio.CancelledError as exc:
+            if result_snapshot is not None:
+                failure_type = type(exc).__name__
+                span.set_call_output(
+                    lambda: {
+                        "実行状態": "cancelled",
+                        "返却結果": None,
+                        "例外の型": failure_type,
+                    }
+                )
             elapsed = perf_counter() - started_at
             record_rag_stage(SEARCH_METRIC_MODE, stage, "cancelled", elapsed)
             record_trace_span(
@@ -1364,6 +1443,17 @@ async def _observe_stage[T](
             )
             raise
         except Exception as exc:
+            if result_snapshot is not None:
+                failure_type = type(exc).__name__
+                failure_code = safe_error_code(exc)
+                span.set_call_output(
+                    lambda: {
+                        "実行状態": "error",
+                        "返却結果": None,
+                        "例外の型": failure_type,
+                        "エラーコード": failure_code,
+                    }
+                )
             elapsed = perf_counter() - started_at
             error_attributes = {**base_attributes, "error_type": type(exc).__name__}
             error_code = safe_error_code(exc)
