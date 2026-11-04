@@ -79,7 +79,7 @@ from rag_engine.generation.guide_authority import authoritative_guide_inputs, bi
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
-from rag_engine.generation.question_names import absent_question_names
+from rag_engine.generation.question_names import absent_question_names, unconfirmed_question_phrases
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
@@ -7846,6 +7846,19 @@ def run_round(
         summary_reason = summary_reason or f"引いた原文に無い対象を要約が述べている: {'、'.join(summary_names)}"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
+    cited_texts = [text for entry in published for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
+    # 質問が問うた対象が引いた原文に無ければ、モデルが gap を書かなくても確認できないことを本文で伝える（#4345）。
+    unconfirmed = (
+        unconfirmed_question_phrases(question, cited_texts, [entry.item.text for entry in checked if entry.item.kind == "gap"])
+        if cited_texts
+        else []
+    )
+    if unconfirmed:
+        before_gap = list(checked)
+        gap_text = answer_labels().subject_unconfirmed_gap.format(names="、".join(unconfirmed))
+        checked.append(CheckedItem(GroundedItem(kind="gap", text=gap_text)))
+        if audit is not None:
+            audit = reindex_audit_items(before_gap, checked, audit, len(guide_notices))
     if (
         not diagnostic_only(timing)
         and task_contract(question)["asks_cause"]

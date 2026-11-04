@@ -1080,6 +1080,8 @@ export const ja = {
   "settings.language.field.off_goal_gap.help": "取得した手順が質問の対象に当てはまると確かめられなかったときの説明です。",
   "settings.language.field.cause_gap": "原因が無いときの説明",
   "settings.language.field.cause_gap.help": "原因を尋ねる質問で、資料に原因の記載が無いときの説明です。",
+  "settings.language.field.subject_unconfirmed_gap": "対象を確認できない記載",
+  "settings.language.field.subject_unconfirmed_gap.help": "質問が問うた対象の名前が引用した資料に無いとき、回答に足す文です。{names} に対象の名前が入ります。",
   "settings.language.field.crag_refusal_summary": "CRAG の根拠未確認の前置き",
   "settings.language.field.crag_refusal_summary.help": "直接回答できる部分がない場合に示す前置きです。",
   "settings.language.field.crag_missing_aspect_template": "CRAG の不足した観点の案内",

@@ -14,7 +14,7 @@ from rag_engine.generation import grounded
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
-from rag_engine.generation.question_names import absent_question_names, question_statements
+from rag_engine.generation.question_names import absent_question_names, question_statements, unconfirmed_question_phrases
 
 RULE = "利用者が外部サービスを使う場合、管理部が承認したものに限る。"
 QUESTION = "業務でServiceXは使ってよいですか？"
@@ -146,3 +146,38 @@ def test_the_correction_is_part_of_the_audit_none_feedback() -> None:
     assert grounded.correction_feedback(feedback, grounded.AUDIT_MODE_NONE) == feedback
     assert grounded.feedback_signature(feedback)["subject_name_issues"] == 1
     assert grounded.pending_feedback_labels(feedback) == ["引用原文に無い対象の名前 1 件"]
+
+
+UNCONFIRMED = answer_labels().subject_unconfirmed_gap.format(names="ServiceX")
+
+
+@pytest.mark.parametrize(
+    ("question", "sources", "gaps", "expected"),
+    [
+        (QUESTION, [RULE], [], ["ServiceX"]),
+        ("Acme ServiceXは使えますか？", [RULE], [], ["Acme ServiceX"]),
+        ("ServiceXとToolYは使えますか？", [RULE], [], ["ServiceX", "ToolY"]),
+        (QUESTION, ["ServiceXは承認済みである。"], [], []),
+        (QUESTION, [RULE], [GAP], []),
+        ("ServiceXを導入しました。利用条件は？", [RULE], [], []),
+        ("ServiceXなどの外部サービスは使えますか？", [RULE], [], []),
+    ],
+    ids=["one", "adjacent-merged", "two", "in-source", "already-in-gap", "stated", "example"],
+)
+def test_unconfirmed_question_phrases(question: str, sources: list[str], gaps: list[str], expected: list[str]) -> None:
+    assert unconfirmed_question_phrases(question, sources, gaps) == expected
+
+
+def test_answer_says_the_name_is_unconfirmed_even_when_the_model_writes_no_gap() -> None:
+    """#4345: モデルの出力に関わらず、確認できないことを本文で伝える。規則の説明も残す。"""
+    result, prompts = answer(draft(GENERAL))
+    assert len(prompts) == 1
+    assert GENERAL in result.answer_text
+    assert UNCONFIRMED in result.answer_text
+    assert answer_labels().gaps_section in result.answer_text
+
+
+def test_gap_written_by_the_model_is_not_repeated() -> None:
+    result, _ = answer(draft(GENERAL, gap=GAP))
+    assert GAP in result.answer_text
+    assert UNCONFIRMED not in result.answer_text

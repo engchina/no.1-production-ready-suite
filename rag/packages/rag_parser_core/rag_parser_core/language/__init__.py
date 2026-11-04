@@ -557,6 +557,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "deadline_summary",
         "off_goal_gap",
         "cause_gap",
+        "subject_unconfirmed_gap",
         "crag_refusal_summary",
         "crag_missing_aspect_template",
         "crag_unknown_aspect_template",
@@ -936,6 +937,7 @@ _COMPATIBLE_FIELDS: frozenset[tuple[str, str]] = frozenset(
         ("answer_labels", "crag_definition_aspect_template"),
         ("answer_labels", "guide_acquisition_incomplete_template"),
         ("grounding_cues", "citation_unit_words"),
+        ("answer_labels", "subject_unconfirmed_gap"),
     }
 )
 
