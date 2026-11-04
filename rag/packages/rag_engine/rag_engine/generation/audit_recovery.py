@@ -79,9 +79,9 @@ def merge_audit_retry(first: GroundedAudit, second: GroundedAudit) -> GroundedAu
     for field, (identity, binding) in _ROW_FIELDS.items():
         rows = _rows(first, field, identity, binding)
         sources = {key: 1 for key in rows}
-        limit = next(meta.max_length for meta in GroundedAudit.model_fields[field].metadata if hasattr(meta, "max_length"))
+        limit = next((meta.max_length for meta in GroundedAudit.model_fields[field].metadata if hasattr(meta, "max_length")), None)
         for key, row in _rows(second, field, identity, binding).items():
-            if key not in rows and len(rows) >= limit:
+            if limit is not None and key not in rows and len(rows) >= limit:
                 limited.setdefault(field, []).append(key)
                 continue
             rows[key], sources[key] = row, 2

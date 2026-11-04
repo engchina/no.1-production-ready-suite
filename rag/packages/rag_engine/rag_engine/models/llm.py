@@ -411,9 +411,9 @@ class GroundedApplication(_StrictModel):
         max_length=8,
         description="導出に使う質問の事実。使う場合だけ質問の原文の連続した一部を写す。資料だけから導く場合は空。質問に無い前提は書かない。",
     )
+    # 選択原文の参照はコードが組み立てる。生成する結論数とは別で、実在はcheck_applicationsで検査する。
     item_indexes: list[int] = Field(
         default_factory=list,
-        max_length=6,
         description="導出の根拠となる資料の事実・規則・操作の items の index（0 始まり）。引用のある item を1件以上指す。",
     )
     reasoning: str = Field(
@@ -584,7 +584,7 @@ class AnswerPart(_StrictModel):
         description="質問が求める要点。requested_granularity に必要な範囲だけを分け、任意の補足は必須にしない。",
     )
     result_kind: Literal["direct", "derived", "gap"] = Field(description="この要点の答えが直接記載、導出、不足のいずれか。")
-    item_indexes: list[Annotated[int, Field(strict=True, ge=0, le=39)]] = Field(
+    item_indexes: list[Annotated[int, Field(strict=True, ge=0)]] = Field(
         default_factory=list, max_length=40, description="この要点に答える items の index。"
     )
     application_indexes: list[Annotated[int, Field(strict=True, ge=0, lt=MAX_ANSWER_PARTS)]] = Field(
@@ -617,7 +617,7 @@ class GroundedDraft(_StrictModel):
         max_length=64,
         description="各要求の必要な要点を先に分け、直接記載・導出・不足の出力をそれぞれ参照する。同じ要求IDだけで複合要求を完了にしない。",
     )
-    items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
+    items: list[GroundedItem] = Field(description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
     applications: list[GroundedApplication] = Field(
         default_factory=list,
         max_length=MAX_ANSWER_PARTS,
@@ -641,7 +641,7 @@ class GroundedDraft(_StrictModel):
     summary: str = Field(
         description="出力済みの items と applications の結果だけを1〜2文に要約する。依存先をそれぞれの index 欄で明示し、新たな導出を加えない。根拠が無ければ空文字。見出し・番号・出典・Markdown は書かない。"
     )
-    summary_item_indexes: list[Annotated[int, Field(strict=True, ge=0, le=39)]] = Field(
+    summary_item_indexes: list[Annotated[int, Field(strict=True, ge=0)]] = Field(
         default_factory=list,
         max_length=40,
         description="summary の全事実を支える items の 0 始まりの index。条件・否定・例外を保ち、本文にない事実を加えない。summary が空なら空配列。",
@@ -897,7 +897,7 @@ class GroundedFactAudit(_StrictModel):
     （判定しない項目は空）。
     """
 
-    reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    reviews: list[GroundedItemReview] = Field(description="各 item の局所監査。")
     guide_requirement_reviews: list[GuideRequirementReview] = Field(
         default_factory=list,
         max_length=200,
@@ -910,7 +910,7 @@ class GroundedFactAudit(_StrictModel):
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
-    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
+    summary_basis: list[str] = Field(default_factory=list, description="summary を支える items の text 全文。")
     summary_supported: bool = Field(
         description="summary が出力済みの items と妥当な applications の結果を超える断定をしていなければ true。"
     )
@@ -924,7 +924,7 @@ class GroundedAudit(_StrictModel):
 
     _wire_validation: dict[str, Any] = PrivateAttr(default_factory=dict)
 
-    reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    reviews: list[GroundedItemReview] = Field(description="各 item の局所監査。")
     guide_requirement_reviews: list[GuideRequirementReview] = Field(
         default_factory=list,
         max_length=200,
@@ -940,7 +940,7 @@ class GroundedAudit(_StrictModel):
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
-    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
+    summary_basis: list[str] = Field(default_factory=list, description="summary を支える items の text 全文。")
     summary_supported: bool = Field(
         description="summary が出力済みの items と妥当な applications の結果を超える断定をしていなければ true。"
     )

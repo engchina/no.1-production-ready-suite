@@ -84,6 +84,7 @@ def generation_draft_wire_model() -> type[BaseModel]:
     text_info.metadata.extend(Field(max_length=600).metadata)
     text_info.description = "利用者へ返す説明または導出結果。kind に対応する根拠と依存を付け、見出しや内部番号は書かない。"
     items_info = deepcopy(GroundedDraft.model_fields["items"])
+    items_info.metadata.extend(Field(max_length=40).metadata)
     items_info.description = "直接記載・導出・不足を分類した回答単位。各要点の出力を指す順序を保つ。"
     item_fields: dict[str, Any] = {
         "citations": (GenericAlias(list, citation), citation_info),

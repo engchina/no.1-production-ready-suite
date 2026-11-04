@@ -293,3 +293,36 @@ def test_locator_uses_display_label_while_source_keeps_immutable_evidence_identi
     draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
     assert draft.applications[1].reasoning == "根拠に記載された値から導く。"
     assert draft.items[0].citations[0].evidence_id == "immutable-evidence-identity"
+
+
+@pytest.mark.parametrize("request_count,source_count", [(1, 7), (40, 2)])
+def test_selected_facts_are_not_limited_by_the_number_of_generated_parts(request_count, source_count):
+    from copy import deepcopy
+
+    sources = [snapshot(evidence_id=f"source-{index}", label=f"E{index + 1}", source_id=f"source-{index}") for index in range(source_count)]
+    catalog = SentUnitCatalog(sources)
+    schema = answer_parts_model(generation_draft_wire_model(), catalog)
+    raw, _, _ = case()
+    part = raw["answer_parts"][0]
+    part["answer"]["basis"]["unit_ids"] = [source.unit_ids[0] for source in sources]
+    raw["answer_parts"] = []
+    for index in range(request_count):
+        current = deepcopy(part)
+        current["request_id"] = f"Q{index + 1}"
+        current["requirement"] = f"合成の要点{index + 1}"
+        raw["answer_parts"].append(current)
+    raw["summary_part_indexes"] = [request_count - 1]
+    draft = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
+    assert len(draft.items) == request_count * source_count
+    assert len(draft.applications) == request_count
+    assert len(draft.applications[-1].item_indexes) == source_count
+    assert draft.applications[-1].item_indexes[-1] == len(draft.items) - 1
+    assert draft.summary_application_indexes == [request_count - 1]
+
+
+def test_review_contract_accepts_all_code_selected_sources():
+    from rag_engine.models.llm import GroundedFactAudit, GroundedItemReview
+
+    reviews = [GroundedItemReview(index=index, support="supported", applicability="matched", reason="原文") for index in range(80)]
+    audit = GroundedFactAudit(reviews=reviews, goal_alignment="aligned", summary_supported=True)
+    assert len(audit.reviews) == 80
