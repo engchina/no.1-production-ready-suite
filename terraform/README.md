@@ -48,7 +48,7 @@
 2. ADB の利用方法、新規 / 既存 ADB、ADB のネットワーク、アプリ用の DB ユーザー
 3. 主 Compute の構成、ネットワークと SSH、HTTPS
 4. bastion の作成、専用の構成、ネットワークと接続（コンパートメントは 1 の配備先を継承）
-5. アプリケーション管理者、RAG の追加 parser、NL2SQL Deep Data Security
+5. アプリケーション管理者、NL2SQL Deep Data Security
 
 非表示の内部設定と製品の選択は表示しません。主 Compute と bastion の image 候補は大阪・東京・Chicago の順で、既定はどちらも大阪です。
 配備後の output は、アプリケーションの入口、接続、ADB 情報の順に表示します。
@@ -291,7 +291,7 @@ RAG は NL2SQL / Agent と同じく、Docker を使わずネイティブ（uv �
   | service | 既定 | 入力 |
   |---|---|---|
   | `parser-docling` | 常に配備 | 既定の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=docling`。PDF と画像。#286） |
-  | `parser-unstructured` | 配備する（#1559。文書解析の設定でも有効にする: `RAG_PARSER_UNSTRUCTURED_ENABLED`） | `rag_enable_parser_unstructured`（テキスト・HTML・Office・メールなど Docling が扱えない形式を、処理レシピで Unstructured を選んで取り込む場合） |
+  | `parser-unstructured` | 配備する（#1559。文書解析の設定でも有効にする: `RAG_PARSER_UNSTRUCTURED_ENABLED`） | なし（入力 `rag_enable_parser_unstructured` は既定 true のまま画面に出しません。テキスト・HTML・Office・メールなど Docling が扱えない形式を、処理レシピで Unstructured を選んで取り込みます） |
   | `parser-structured-records-jsonl` | 常に配備（#2457） | 構造化レコード JSONL の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=structured_records_jsonl`。ファイル準備の CSV→JSON・Excel→JSON が作る構造化レコードの JSONL）。文書解析の既定か処理レシピの使用エンジンで選んだときだけ使います。CSV / Excel の前処理と同じく、初めて配備したときに起動します |
   | `parser-xml-tree-json` | 常に配備・既定は停止（#2453） | XML ツリー JSON の解析エンジン（`RAG_PARSER_ADAPTER_BACKEND=xml_tree_json`。対応する形の `.json`）。文書解析の既定か処理レシピの使用エンジンで選んだときだけ使います（#2042）。初めて配備しても起動しないので、使うときは「運用設定 > サービス管理」で起動します |
   | `parser-oci-document-understanding` | 配備しない（準備中〔ロードマップ〕。#3374） | なし（入力 `rag_enable_oci_cloud_parsers` は既定 false のまま画面に出さず、値に関わらず配備しません） |

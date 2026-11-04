@@ -42,7 +42,7 @@ locals {
   # parser-structured-records-jsonl は CSV / Excel の前処理と同じく、初めて配備したときに起動する。
   # parser-xml-tree-json は既定は停止で、初めて配備しても起動しない（サービス管理画面で起動する。
   # rag/scripts/rag-systemd.sh の RAG_DEFAULT_STOPPED_SERVICES。#2453）。
-  # parser-unstructured は Docling が扱えない形式を取り込むための parser で、入力で外せる（既定は配備する）。
+  # parser-unstructured は Docling が扱えない形式を取り込むための parser で、既定で配備する（入力は画面に出さない）。
   # 並びはサービス管理画面と同じ（rag/scripts/rag-systemd.sh の RAG_MICROSERVICES。port は変えない）。
   rag_services = concat(
     [
