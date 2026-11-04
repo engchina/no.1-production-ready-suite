@@ -1288,9 +1288,9 @@ for (const theme of ["light", "dark"] as const) {
     const nested = page.getByTestId("chat-answer-progress-step-s4");
     await expect(nested).toHaveAttribute("data-level", "1");
     await expect(nested).toContainText("検索文から根拠の候補を集める");
-    // 収縮行は名前・状態・所要時間だけ。結果の補足は展開先に保持する。
+    // 記録済みの結果は共通の摘要行に出し、補足の note は展開先に保持する。
     await expect(nested).not.toContainText("該当なし");
-    await expect(process.locator("[data-run-result-summary]")).toHaveCount(0);
+    await expect(process.locator("[data-run-result-summary]")).toHaveText(["回答に渡す根拠 0 件"]);
     await expect(nested).toContainText("0.1 秒未満");
     const understood = page.getByTestId("chat-answer-progress-step-s2");
     await expect(understood).not.toContainText("LLM 1 回");

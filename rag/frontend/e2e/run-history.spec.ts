@@ -649,7 +649,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await expect(timeline.locator("[data-run-timeline-step]").nth(0)).toContainText("質問の条件を整理して回答を作る");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toHaveAttribute("data-level", "1");
     await expect(timeline.locator("[data-run-timeline-step]").nth(1)).toContainText("0.3 秒");
-    await expect(timeline.locator("[data-run-result-summary]")).toHaveCount(0);
+    await expect(timeline.locator("[data-run-result-summary]")).toHaveText(["回答に渡す根拠 4 件（2 文書）", "問題なし"]);
     await expect(timeline.locator("[data-run-timeline-step]").nth(3)).toContainText("回答に安全上の問題がないか検査する");
     if (!isNarrow(page)) await expect(timeline.locator("[data-run-timeline-bar]").first()).toBeVisible();
     // 段の詳細（#2341）: 行を開くと工程の詳細と技術の値（span の名前）を出す（既定で閉じる）。
@@ -1079,7 +1079,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 });
 
 test.describe("実行履歴の処理の経過（共通の span の表。#3226）", { tag: "@responsive" }, () => {
-  test("経過の説明は展開内だけに表示する", async ({page}, testInfo) => {
+  test("記録済みの結果は摘要行と展開内に表示する", async ({page}, testInfo) => {
     await mockLocalAuth(page);
     const row = run(1, {question: "合成の質問", answer: "合成の回答"});
     await mockRuns(page, [row]);
@@ -1091,12 +1091,13 @@ test.describe("実行履歴の処理の経過（共通の span の表。#3226）
     await page.goto(`/history/${row.run_id}`);
     const timeline = page.getByTestId("run-history-timeline");
     await page.getByTestId("run-history-timeline-summary").click();
-    await expect(timeline.locator("[data-run-result-summary]")).toHaveCount(0);
-    await expect(timeline.getByText(result, {exact: true})).toHaveCount(0);
+    await expect(timeline.locator("[data-run-result-summary]")).toHaveText(result);
+    await expect(timeline.getByText(result, {exact: true})).toHaveCount(1);
     const step = timeline.locator(`[data-run-timeline-step="${spanStepId("skip")}"]`);
     await step.getByRole("button", {name: /用語・同義語による検索文の追加/}).click();
-    await expect(step.getByText(result, {exact: true})).toHaveCount(1);
-    await timeline.screenshot({path: testInfo.outputPath("timeline-no-duplicate-summary.png")});
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(result);
+    await expect(step.locator("[data-run-step-details]")).toContainText(result);
+    await timeline.screenshot({path: testInfo.outputPath("timeline-result-summary.png")});
   });
   test("軌跡の識別子は行内コピーの寸法、時刻と文字属性は本文の行高に揃う", async ({page}, testInfo) => {
     await mockLocalAuth(page);
