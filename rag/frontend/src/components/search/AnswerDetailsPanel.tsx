@@ -6,7 +6,7 @@ import { t } from "@/lib/i18n";
 export function AnswerDetailsPanel({ diagnostics, recordedModels = [] }: { diagnostics: unknown; recordedModels?: readonly string[] }) {
   const data = parseAnswerDiagnostics(diagnostics);
   const models = [
-    ...(data?.models.llm ? [{ label: t("search.answerDetails.model.llm"), value: data.models.llm.label, title: data.models.llm.modelId }] : []),
+    ...(data?.models.llm ? [{ label: t("search.answerDetails.model.llm"), value: data.models.llm.label, title: data.models.llm.modelId, modelId: data.models.llm.modelId }] : []),
     ...(data?.models.embedding ? [{ label: t("search.answerDetails.model.embedding"), value: data.models.embedding }] : []),
     ...(data?.models.rerank ? [{ label: t("search.answerDetails.model.rerank"), value: data.models.rerank }] : []),
   ];

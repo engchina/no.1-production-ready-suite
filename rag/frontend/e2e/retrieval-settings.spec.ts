@@ -24,6 +24,12 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
+    const recoveryHint = page.getByText(/^回答生成が明示した根拠不足の要求を/);
+    await expect(recoveryHint).toContainText("初回検索の「質問の言い換え・分解」とは別の処理です");
+    await expect(recoveryHint).toContainText("自動ルーティング（自動選択）");
+    await expect(recoveryHint).toContainText("「原質問のみ（言い換え・分解なし）」を含めない");
+    await expect(recoveryHint).toContainText("AI の呼び出しが増えることがあります");
+    await recoveryHint.screenshot({ path: testInfo.outputPath("request-coverage-help.png") });
     await expect(page.getByText("既定は 300 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
     await page.locator('[id^="answering-retrieval-query-limit-"][id$="-hint"]').screenshot({ path: testInfo.outputPath("retrieval-query-limit-hint.png") });
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();
@@ -187,8 +193,8 @@ for (const viewport of [
       const requestCoverage = page.getByRole("switch", { name: "根拠の無い要求を探し直す" });
       await expect(requestCoverage).not.toBeChecked();
       await expect(requestCoverage).toHaveAccessibleDescription(/回答生成が明示した根拠不足.*回数・時間の予算内/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/既にある根拠で説明が抜けた場合.*材料不足として検索し直す設定ではありません/);
-      await expect(requestCoverage).toHaveAccessibleDescription(/未校正の意味監査の結果だけでは、追加検索や再生成を行いません/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/既にある根拠での説明漏れを材料不足とは扱わず/);
+      await expect(requestCoverage).toHaveAccessibleDescription(/未校正の意味監査の結果だけでは追加検索や再生成を行いません/);
       await requestCoverage.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`settings-${viewport.name}-${theme}.png`) });
       await expect(answerFlow).toHaveAccessibleDescription(/初回を含め最大 3 段.*書き換えは最大 2 回/);
@@ -284,8 +290,8 @@ for (const viewport of [
     const discard = card.getByRole("button", { name: "変更を破棄", exact: true });
     await expect(card.getByRole("heading", { name: "生成後の回答確認", exact: true })).toBeVisible();
     await expect(page.getByTestId("answering-audit-mode")).toContainText("引用ID・引用範囲の基本確認は、設定に関わらず実行します。");
-    await expect(card).toContainText("回答生成が明示した根拠不足の要求は、回数・時間の予算内");
-    await expect(card).toContainText("未校正の意味監査の結果だけでは、追加検索や再生成を行いません。");
+    await expect(card).toContainText("回答生成が明示した根拠不足の要求を、回数・時間の予算内");
+    await expect(card).toContainText("未校正の意味監査の結果だけでは追加検索や再生成を行いません。");
     await expect(audit).toContainText("実行しない");
     await expect(audit).toHaveAccessibleDescription(/自動の生成後の LLM 監査.*行いません.*引用の ID・行範囲・原文との照合/);
     const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
