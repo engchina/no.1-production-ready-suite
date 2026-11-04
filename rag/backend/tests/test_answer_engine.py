@@ -2141,7 +2141,13 @@ async def test_screen_linking_disabled_does_not_call_llm_or_catalog(
     assert "ScreenLinks" not in calls
     assert oracle.state_calls == [] and oracle.section_calls == [] and oracle.screen_calls == []
     assert "setting:c1" not in _evidence_ids(outcome)
-    assert all(step["name"] != "画面の選択" for step in outcome.diagnostics["execution_steps"])
+    steps = [
+        step for step in outcome.diagnostics["execution_steps"] if step["name"] == "画面の選択"
+    ]
+    assert len(steps) == 1
+    assert steps[0]["status"] == "skipped"
+    assert steps[0]["reason_code"] == "configuration_disabled"
+    assert steps[0]["execution_kind"] == "decision"
 
 
 async def test_screen_linking_adds_screen_missing_from_search_results(

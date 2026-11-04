@@ -243,3 +243,51 @@ def test_payload_factory_is_not_called_without_an_observer():
     with _execution_step("合成の工程") as step:
         step.input(unused)
         step.output(unused)
+
+
+def test_empty_screen_catalog_is_skipped_without_a_model_call():
+    deps = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=unused,
+        screen_catalog=lambda **kwargs: {},
+    )
+    recorder = Recorder()
+    events = []
+    with (
+        bind_dependencies(deps),
+        bind_trace_observer(recorder.observe),
+        bind_step_listener(lambda name, state, elapsed, record: events.append((state, record))),
+    ):
+        assert a._linked_screen_children("合成の質問", [], [], settings()) == ([], [], [])
+    assert events[-1][0] == "skipped"
+    assert events[-1][1]["llm_calls"] == 0
+    assert recorder.stage("画面の選択")["output"]["理由"] == "catalog_empty"
+
+
+@pytest.mark.parametrize("kind", ["screen", "article"])
+def test_catalog_selection_failure_notifies_failed_instead_of_success(kind):
+    def parse(*args, **kwargs):
+        raise RuntimeError("synthetic")
+
+    deps = AnswerDependencies(
+        search=unused,
+        check_ready=unused,
+        rerank=unused,
+        parse_images=unused,
+        parse_text=parse,
+        screen_catalog=lambda **kwargs: {"synthetic.txt": ["（1）合成"]},
+        article_catalogs=lambda **kwargs: [CATALOG],
+        article_chunks=unused,
+    )
+    events = []
+    with bind_dependencies(deps), bind_step_listener(lambda name, state, elapsed, record: events.append((name, state, record))):
+        if kind == "screen":
+            assert a._linked_screen_children("合成の質問", [], [], settings()) == ([], [], [])
+        else:
+            assert a._catalog_article_children("合成の質問", [], settings()) == ([], [])
+    final = [event for event in events if event[0] == ("画面の選択" if kind == "screen" else "条の選択")][-1]
+    assert final[1] == "error"
+    assert final[2]["status"] == "failed"

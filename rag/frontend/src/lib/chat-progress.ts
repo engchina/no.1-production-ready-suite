@@ -15,6 +15,7 @@
  * 工程の名前と補足（i18n）だけを持つ。工程の名前は状態で変えない（アイコンと読み上げの文言が状態を示す）。
  */
 
+import { executionStepDetails } from "./step-outcome";
 import {
   type ChatProgressParams,
   type ChatProgressStep,
@@ -42,6 +43,7 @@ const PIPELINE_DEFINITIONS: ChatProgressStepDefinitions = Object.fromEntries(
 /** RAG の工程の定義（工程の種類 → 名前・補足）。 */
 export const CHAT_PROGRESS_DEFINITIONS: ChatProgressStepDefinitions = {
   [ANSWER_STEP_KIND]: {
+    details: executionStepDetails,
     label: (_status, params) => answerStepDisplayName(text(params, "name")),
     detail: (_status, params) => answerStepMeta({ note: text(params, "note") }),
     outcome: (_status, params) => typeof params.accepted === "boolean" ? t(params.accepted ? "answer.step.adopted" : "answer.step.notAdopted") : undefined,
