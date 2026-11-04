@@ -141,7 +141,7 @@ class AdbVectorStoreTests(unittest.TestCase):
         @contextmanager
         def observer(operation: str, name: str):
             observed.append(("start", operation, name))
-            yield SimpleNamespace(response=lambda _: None, display=lambda **kwargs: None)
+            yield SimpleNamespace(request=lambda *args, **kwargs: None, response=lambda _: None, display=lambda **kwargs: None)
             observed.append(("end", operation, name))
 
         settings = replace(get_settings(), hybrid_search_backend="sudachi", embedding_output_dimensions=1536, image_embedding_enabled=False)
@@ -182,12 +182,12 @@ class AdbVectorStoreTests(unittest.TestCase):
             )
             self.assertEqual(text.call_count, 1)
             self.assertEqual(load.call_count, 1)
-            # 読み込み済み（cache）の検索対象は読み込みの工程を出さない。全文検索に使う検索文が無ければ全文検索の工程も出さない。
+            # 読み込み済みの対象は再利用として記録し、DBは読み直さない。全文検索の入力が無ければその工程は出さない。
             observed.clear()
             search(retrieval_queries=["仮説文 出力"], vector_only_queries=["仮説文 出力"])
             self.assertEqual(
                 [entry[2] for entry in observed if entry[0] == "start"],
-                [adb_vector_store.VECTOR_SEARCH_STAGE, "検索結果の統合（RRF）"],
+                [adb_vector_store.CHUNK_POOL_LOAD_STAGE, adb_vector_store.VECTOR_SEARCH_STAGE, "検索結果の統合（RRF）"],
             )
             self.assertEqual(load.call_count, 1)
 
@@ -2081,6 +2081,7 @@ def test_weighted_rrf_keeps_failed_vector_distinct_from_empty_and_uses_text_budg
     @contextmanager
     def observer(operation, name):
         yield SimpleNamespace(
+            request=lambda *args, **kwargs: None,
             response=lambda _: None,
             display=lambda **kwargs: (
                 captured.append(kwargs.get("details")) if name == "検索結果の統合（RRF）" and kwargs.get("details") else None

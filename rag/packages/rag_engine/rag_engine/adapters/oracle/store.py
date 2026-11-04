@@ -11,7 +11,7 @@ import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -868,8 +868,19 @@ def search_adb_hybrid_chunks(
                     "No ADB embeddings were found for the selected retrieval scope. Run Embedding/ADB save first."
                 )
 
-            if all_chunks is None:
-                with observe_call("stage", CHUNK_POOL_LOAD_STAGE):
+            pool_reused = all_chunks is not None
+            with observe_call("stage", CHUNK_POOL_LOAD_STAGE) as pool_observation:
+                if getattr(pool_observation, "capture_enabled", True):
+                    pool_observation.request(
+                        {
+                            "chunk_run_id": chunk_run_id,
+                            "preferred_engine_ids": preferred_engine_ids,
+                            "retrieval_scope": scope,
+                            "classification_filter": asdict(category_filter),
+                            "reuse_cached_pool": pool_reused,
+                        }
+                    )
+                if all_chunks is None:
                     all_chunks = _load_chunk_run_chunks(
                         connection,
                         chunk_run_id,
@@ -877,6 +888,10 @@ def search_adb_hybrid_chunks(
                         retrieval_scope=scope,
                         classification_filter=category_filter,
                     )
+                if getattr(pool_observation, "capture_enabled", True):
+                    pool_observation.response({"reused": pool_reused, "chunks": [asdict(chunk) for chunk in all_chunks]})
+                pool_observation.display(params={"reused": pool_reused})
+            if not pool_reused:
                 if len(_pool_cache) >= 8:
                     _pool_cache.clear()
                 _pool_cache[pool_key] = (time.monotonic(), all_chunks)
@@ -909,6 +924,18 @@ def search_adb_hybrid_chunks(
             vector_inputs = [q for q in queries if channels[q] != ("keyword",)]
             vectors = dict(zip(vector_inputs, _query_vectors(vector_inputs, settings, query_embedder), strict=True))
             with observe_call("stage", VECTOR_SEARCH_STAGE) as vector_observation:
+                if getattr(vector_observation, "capture_enabled", True):
+                    vector_observation.request(
+                        {
+                            "queries": vector_inputs,
+                            "query_vectors": vectors,
+                            "candidate_limit": limit,
+                            "retrieval_scope": scope,
+                            "classification_filter": asdict(category_filter),
+                            "metadata_filter": metadata_filter.to_payload() if metadata_filter is not None else None,
+                            "image_search_enabled": _image_embedding_enabled(settings),
+                        }
+                    )
                 for query in queries:
                     if query not in vectors:
                         rankings.append([])
@@ -950,6 +977,19 @@ def search_adb_hybrid_chunks(
                                 embedding_modality=EMBEDDING_MODALITY_IMAGE,
                             )
                         )
+                if getattr(vector_observation, "capture_enabled", True):
+                    vector_observation.response(
+                        {
+                            "queries": queries,
+                            "rankings": rankings,
+                            "image_rankings": image_rankings,
+                            "failures": [
+                                {"channel": channel, "query": query, "variant": variant, "error_type": error}
+                                for (channel, query, variant), error in failures.items()
+                                if channel == "vector"
+                            ],
+                        }
+                    )
                 vector_observation.display(
                     details=_search_ranking_details(
                         VECTOR_SEARCH_STAGE,
@@ -981,6 +1021,19 @@ def search_adb_hybrid_chunks(
             text_inputs: list[str] = []
             text_expressions: list[str] = []
             with observe_call("stage", TEXT_SEARCH_STAGE) if text_variants or extra_text_queries else nullcontext() as text_observation:
+                if text_observation is not None and getattr(text_observation, "capture_enabled", True):
+                    text_observation.request(
+                        {
+                            "query_variants": text_variants,
+                            "extra_text_queries": extra_text_queries,
+                            "domain_keywords": domain_keywords,
+                            "tokenizer": asdict(tokenizer_config),
+                            "candidate_limit": limit,
+                            "retrieval_scope": scope,
+                            "classification_filter": asdict(category_filter),
+                            "metadata_filter": metadata_filter.to_payload() if metadata_filter is not None else None,
+                        }
+                    )
                 for _query_index, query in text_variants:
                     text_query = oracle_text_query(
                         query,
@@ -1031,6 +1084,19 @@ def search_adb_hybrid_chunks(
                         )
                     )
                 if text_observation is not None:
+                    if getattr(text_observation, "capture_enabled", True):
+                        text_observation.response(
+                            {
+                                "queries": text_inputs,
+                                "expressions": text_expressions,
+                                "rankings": text_rankings,
+                                "failures": [
+                                    {"channel": channel, "query": query, "variant": variant, "error_type": error}
+                                    for (channel, query, variant), error in failures.items()
+                                    if channel == "keyword"
+                                ],
+                            }
+                        )
                     text_observation.display(
                         details=_search_ranking_details(
                             TEXT_SEARCH_STAGE,
@@ -1086,6 +1152,10 @@ def search_adb_hybrid_chunks(
                 for r in raw_lists
             ]
             with observe_call("stage", "検索結果の統合（RRF）") as fusion_observation:
+                if getattr(fusion_observation, "capture_enabled", True):
+                    fusion_observation.request(
+                        {"rankings": [asdict(row) for row in raw_lists], "source_weights": budgets, "weights": asdict(weights), "k": RRF_K}
+                    )
                 fusion = fuse_rankings(raw_lists, budgets, weights, k=RRF_K)
                 scores = _combine_hybrid_scores(
                     rankings,
@@ -1095,7 +1165,8 @@ def search_adb_hybrid_chunks(
                     fusion_scores=fusion.scores,
                 )
                 fusion_observation.display(details=fusion_details(fusion, weights, budgets, RRF_K))
-                fusion_observation.response(fusion.diagnostics(weights, budgets, RRF_K))
+                if getattr(fusion_observation, "capture_enabled", True):
+                    fusion_observation.response(fusion.diagnostics(weights, budgets, RRF_K))
                 if raw_lists and all(r.status == "failed" for r in raw_lists):
                     fusion_observation.display(params={"status": "failed"})
                     raise RuntimeError("すべての検索一覧の取得に失敗しました。")

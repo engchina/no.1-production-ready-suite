@@ -2314,6 +2314,16 @@ def _rerank_text_with_retry(
             return _rerank_text_once(query, documents, settings, top_n=top_n)
 
     with use_rerank_receipt(receipt), observe_call("stage", "rerank.request") as observation:
+        if getattr(observation, "capture_enabled", True):
+            observation.request(
+                {
+                    "query": query,
+                    "documents": documents,
+                    "model": settings.rerank_model,
+                    "top_n": top_n if top_n is not None else len(documents),
+                    "retries": settings.rerank_retries,
+                }
+            )
         try:
             result = _parse_with_retry(
                 operation,
@@ -2324,10 +2334,14 @@ def _rerank_text_with_retry(
                 max_wait_seconds=settings.rerank_retry_max_wait_seconds,
             )
             receipt.status = "completed"
+            if getattr(observation, "capture_enabled", True):
+                observation.response({"rankings": [vars(rank) for rank in result], "receipt": receipt.to_dict()})
             return result
         except BaseException as exc:
             receipt.status = "cancelled" if type(exc).__name__ == "CancelledError" else "error"
             receipt.error_type = type(exc).__name__
+            if getattr(observation, "capture_enabled", True):
+                observation.response({"rankings": None, "receipt": receipt.to_dict()})
             raise
         finally:
             observation.display(
