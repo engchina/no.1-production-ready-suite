@@ -181,6 +181,7 @@ def answer_step_params(values: Mapping[str, object]) -> DisplayParams:
         params["round"] = round_number
     # 本文を保存しない場合も、工程の設定上限と実績を保持する。
     for key in (
+        "result_count",
         "depth",
         "max_extra",
         "new_document_limit",
@@ -197,8 +198,18 @@ def answer_step_params(values: Mapping[str, object]) -> DisplayParams:
         value = values.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             params[key] = value
+    for key in ("enabled", "condition_met"):
+        if isinstance(value := values.get(key), bool):
+            params[key] = value
+    if isinstance(reused := values.get("reused"), bool):
+        params["reused"] = reused
     if isinstance(limit_reached := values.get("limit_reached"), bool):
         params["limit_reached"] = limit_reached
+    if isinstance(execution_kind := values.get("execution_kind"), str) and execution_kind in {
+        "decision",
+        "processing",
+    }:
+        params["execution_kind"] = execution_kind
     if isinstance(reason := values.get("reason_code"), str) and reason:
         params["reason_code"] = reason
     note = str(values.get("status") or "").strip()

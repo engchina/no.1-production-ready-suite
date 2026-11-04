@@ -34,6 +34,18 @@ class StepListenerTests(unittest.TestCase):
             raise ValueError("boom")
         self.assertEqual(events, [("文書検索", "started"), ("文書検索", "error")])
 
+    def test_degraded_failure_is_reported_as_error_without_raising(self):
+        events = []
+        with (
+            bind_step_listener(lambda name, outcome, elapsed, record: events.append((outcome, record))),
+            _execution_step("合成の補助処理") as step,
+        ):
+            step.fail("取得に失敗したため既存の候補を保持します。")
+        self.assertEqual([event[0] for event in events], ["started", "error"])
+        self.assertEqual(events[-1][1]["status"], "failed")
+        self.assertEqual(events[-1][1]["llm_calls"], 0)
+        self.assertIn("既存の候補", events[-1][1]["details"]["fields"][0]["value"])
+
     def test_listener_failure_does_not_stop_the_step(self):
         def broken(name, outcome, elapsed, record):
             raise RuntimeError("listener down")

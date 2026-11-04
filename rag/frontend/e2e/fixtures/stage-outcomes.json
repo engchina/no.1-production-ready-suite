@@ -1,0 +1,80 @@
+[
+  {
+    "key": "disabled",
+    "name": "実体・別名による検索拡張",
+    "status": "skipped",
+    "params": {
+      "name": "実体・別名による検索拡張",
+      "result_count": 0,
+      "reused": false,
+      "execution_kind": "decision",
+      "reason_code": "configuration_disabled"
+    },
+    "expected": "設定がオフのため実行しません。"
+  },
+  {
+    "key": "empty",
+    "name": "文書構造による検索拡張",
+    "status": "done",
+    "params": {
+      "name": "文書構造による検索拡張",
+      "result_count": 0,
+      "reused": false,
+      "execution_kind": "processing",
+      "reason_code": "no_match"
+    },
+    "expected": "該当する候補はありません。"
+  },
+  {
+    "key": "failed",
+    "name": "画面の選択",
+    "status": "failed",
+    "params": {
+      "name": "画面の選択",
+      "result_count": 0,
+      "reused": false,
+      "execution_kind": "processing",
+      "reason_code": "selection_failed"
+    },
+    "expected": "取得に失敗したため、既存の候補を保持して続けます。"
+  },
+  {
+    "key": "caller",
+    "name": "条の選択",
+    "status": "skipped",
+    "params": {
+      "name": "条の選択",
+      "result_count": 0,
+      "reused": false,
+      "execution_kind": "decision",
+      "reason_code": "caller_queries"
+    },
+    "expected": "呼び出し元が検索文を指定したため目録の選択を行いません。"
+  },
+  {
+    "key": "reused",
+    "name": "実体・別名による検索拡張",
+    "status": "done",
+    "params": {
+      "name": "実体・別名による検索拡張",
+      "result_count": 0,
+      "reused": true,
+      "execution_kind": "processing",
+      "reason_code": "no_match"
+    },
+    "expected": "既存の結果を再利用しました。該当する候補はありません。"
+  },
+  {
+    "key": "success",
+    "name": "条の選択",
+    "status": "done",
+    "params": {
+      "name": "条の選択",
+      "result_count": 2,
+      "reused": false,
+      "execution_kind": "processing",
+      "reason_code": "candidates_found"
+    },
+    "expected": "返した候補 2 件。"
+  }
+]
