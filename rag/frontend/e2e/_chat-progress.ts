@@ -65,7 +65,7 @@ export interface SpanSpec {
   root?: boolean;
 }
 
-const PIPELINE_STEP_KINDS = new Set(["history_rewrite", "field_filter", "answer_guardrail", "answer_record_save"]);
+const PIPELINE_STEP_KINDS = new Set(["query_guardrail", "history_rewrite", "field_filter", "answer_guardrail", "answer_record_save"]);
 
 /** RAG の span（backend の pipeline と同じ名前・種類・属性）。 */
 export const ragSpan = {

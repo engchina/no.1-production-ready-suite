@@ -184,7 +184,7 @@ describe("RAG_TRACE_DETAILS_LABELS（トレースの span の名前）", () => {
   });
 
   it("処理の経過の段の名前と trace の段の名前は同じ関数から作る", () => {
-    for (const stage of ["history_rewrite", "field_filter", "answer", "evidence", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠検索フロー", "根拠確認（2回目）"]) {
+    for (const stage of ["query_guardrail", "history_rewrite", "field_filter", "answer", "evidence", "retrieval", "answer_guardrail", "answer_record_save", "質問の理解", "根拠検索フロー", "根拠確認（2回目）"]) {
       expect(RAG_TRACE_DETAILS_LABELS.stageName?.(stage, "done")).toBe(answerStageName(stage));
     }
     expect(answerStageName("evidence")).toBe("質問の条件を整理して根拠を探す");
@@ -211,4 +211,9 @@ it("リランクの論理要求とSDK試行をstageの有無に関わらず同�
   ]);
   expect(steps[1].details?.fields).toContainEqual({ label: "Span name", value: "rerank.request", mono: true, technical: true });
   expect(traceTimeline({ spans: events.filter(event => event.type === "step").map(event => ({ span_id: event.step_id, trace_id: event.trace_id, parent_span_id: event.parent_id, operation_name: event.name, status: event.status, started_at: event.started_at, finished_at: event.finished_at, attributes: event.attributes })), root_span_id: "1".repeat(16) }, RAG_TRACE_DETAILS_LABELS).steps[2].label).toBe("候補の並べ替えを要求する");
+});
+
+
+it("入力検査は表示名と保存済み工程の種類を同じ名前へ解決する", () => {
+  expect(answerStageName("query_guardrail")).toBe("質問に安全上の問題がないか検査する");
 });

@@ -73,3 +73,26 @@ it("設定で止めた本文を未記録と区別する", () => {
     expect(host.textContent).not.toContain("private-synthetic-disabled");
   } finally {act(()=>root.unmount());}
 });
+
+
+it("スキップ工程でも保存済み入出力を表示し、権限と記録OFFを優先する", () => {
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const empty = {status: "not_recorded" as const, text: ""};
+  try {
+    for (const tab of ["input", "output"] as const) {
+      act(() => root.render(<RunStepDetailsView stepStatus="skipped" activeTab={tab} forceTabs details={{call: {
+        input: {status: "recorded", text: "synthetic-skip-input"}, output: {status: "recorded", text: "synthetic-skip-output"}, schema: empty,
+      }}} />));
+      expect(host.textContent).toContain(`synthetic-skip-${tab}`);
+      expect(host.textContent).not.toContain("入力・結果はありません");
+    }
+    act(() => root.render(<RunStepDetailsView stepStatus="skipped" activeTab="output" forceTabs details={{call: {input: empty, output: {status: "withheld", text: "private-output"}, schema: empty}}} />));
+    expect(host.textContent).not.toContain("private-output");
+    expect(host.textContent).toContain("現在の権限では、この内容を表示できません。");
+    act(() => root.render(<RunStepDetailsView stepStatus="skipped" activeTab="output" forceTabs details={{call: {capture_enabled: false, input: empty, output: empty, schema: empty}}} />));
+    expect(host.textContent).toContain("設定で無効");
+    act(() => root.render(<RunStepDetailsView stepStatus="skipped" activeTab="input" forceTabs details={{}} />));
+    expect(host.textContent).toContain("スキップされたため");
+  } finally { act(() => root.unmount()); host.remove(); }
+});
