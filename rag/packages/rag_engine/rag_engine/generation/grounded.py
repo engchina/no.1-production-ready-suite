@@ -6321,15 +6321,15 @@ def link_summary_evidence(current: Round, *, published_summary: bool = True) -> 
             else:
                 missing.append(index)
         for index in application_indexes:
-            original = current.draft.applications[index] if 0 <= index < len(current.draft.applications) else None
+            original_application = current.draft.applications[index] if 0 <= index < len(current.draft.applications) else None
             application = next(
                 (
                     entry
                     for entry in current.applications
-                    if original is not None
+                    if original_application is not None
                     and entry.source == "draft"
                     and entry.published
-                    and entry.application == original
+                    and entry.application == original_application
                     and all(
                         basis.draft_index is not None
                         and 0 <= basis.draft_index < len(current.draft.items)
