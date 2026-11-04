@@ -333,13 +333,13 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
     ]} />
     <TabPanel idPrefix={id} id={tab} value={tab}>
       {tab === "schema" ? <p className="mb-2 text-xs text-fg-muted">{labels.schemaDescription}</p> : null}
-      {tab === "overview" && overviewEmpty ? <p className="text-xs text-fg-muted">{props.stepStatus === "skipped" ? labels.skipped : call?.capture_enabled === false ? labels.disabled : labels.notRecorded}</p> : tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
+      {tab === "overview" && overviewEmpty ? <p className="text-xs text-fg-muted">{props.stepStatus === "skipped" && !call ? labels.skipped : call?.capture_enabled === false ? labels.disabled : labels.notRecorded}</p> : tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
         tab === "timing" ? <RunStepDetailsBody details={{ fields: [
           { label: labels.startedAt, value: props.timing?.startedAt ? formatRunDateTime(props.timing.startedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
           { label: labels.finishedAt, value: props.timing?.finishedAt ? formatRunDateTime(props.timing.finishedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
           { label: labels.duration, value: formatRunDuration(props.timing?.durationMs, labels.notRecorded) },
         ] }} labels={labels} /> :
-        props.stepStatus === "skipped" ? <p className="text-xs text-fg-muted">{labels.skipped}</p> :
+        props.stepStatus === "skipped" && content.status === "not_recorded" && call?.capture_enabled !== false ? <p className="text-xs text-fg-muted">{labels.skipped}</p> :
         tab === "reasoning" && props.reasoningApplicable === false ? <p className="text-xs text-fg-muted">{labels.notApplicable}</p> :
         content.status === "withheld" ? <p className="text-xs text-fg-muted">{labels.withheld}</p> :
         call?.capture_enabled === false ? <p className="text-xs text-fg-muted">{labels.disabled}</p> :

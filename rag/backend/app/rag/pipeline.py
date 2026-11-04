@@ -543,20 +543,15 @@ class RagPipeline:
             raise ValueError(
                 "呼び出し元の検索文は、会話の履歴の無い、回答を作らない検索だけに使います。"
             )
-        if query_guardrail_result is None:
-            query_guardrail = await asyncio.to_thread(
-                self._guardrails.validate_query, request.query
-            )
-        else:
-            query_guardrail = query_guardrail_result
+        query_guardrail = await self._check_query(
+            request.query, purpose="search_question", prechecked=query_guardrail_result
+        )
         # 回答対象の原文も外部入力。検索文の検査済み結果だけでは原文を信用しない。
         if query_guardrail.allowed and request.original_question is not None:
             original_guardrail = (
                 query_guardrail
                 if request.original_question == request.query
-                else await asyncio.to_thread(
-                    self._guardrails.validate_query, request.original_question
-                )
+                else await self._check_query(request.original_question, purpose="original_question")
             )
             request = request.model_copy(
                 update={"original_question": original_guardrail.sanitized_text}
@@ -1061,6 +1056,54 @@ class RagPipeline:
                     extra={"trace_id": trace_id, **safe_exception_fields(exc)},
                 )
 
+    async def _check_query(
+        self, query: str, *, purpose: str, prechecked: GuardrailResult | None = None
+    ) -> GuardrailResult:
+        """実際の入力検査と既存結果の再利用を分け、追加検査を発生させず記録する。"""
+        invoked = False
+
+        def inspect() -> GuardrailResult:
+            nonlocal invoked
+            invoked = True
+            return self._guardrails.validate_query(query)
+
+        result: GuardrailResult | None = None
+        error_type: str | None = None
+        with observed_span(
+            "rag.query_guardrail",
+            attributes={"pr.stage": "query_guardrail"},
+            display=SpanDisplay(kind="query_guardrail"),
+        ) as span:
+            span.set_call_input(
+                lambda: {
+                    "確認対象": purpose,
+                    "質問": query,
+                    "入力検査の設定": self._settings.rag_guardrails_input_enabled,
+                    "既存結果の再利用": prechecked is not None,
+                },
+                restricted=True,
+            )
+            try:
+                result = prechecked if prechecked is not None else await asyncio.to_thread(inspect)
+                outcome = "skipped" if prechecked is not None else guardrail_stage_outcome(result)
+                if outcome == "skipped":
+                    span.set_status("skipped")
+                elif outcome == "error":
+                    span.set_status("failed")
+                return result
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                raise
+            finally:
+                span.set_call_output(
+                    lambda: {
+                        "実際に検査関数を呼んだ": invoked,
+                        "既存結果の再利用": prechecked is not None,
+                        "適用した結果": asdict(result) if result is not None else None,
+                        "例外の型": error_type,
+                    }
+                )
+
     async def _checked_caller_queries(self, queries: Sequence[str]) -> list[str]:
         """呼び出し元の検索文に、質問と同じ安全チェックを当てる(#2651)。
 
@@ -1068,7 +1111,7 @@ class RagPipeline:
         """
         checked: list[str] = []
         for query in queries:
-            result = await asyncio.to_thread(self._guardrails.validate_query, query)
+            result = await self._check_query(query, purpose="caller_search")
             record_guardrail_findings(
                 "query", result.findings, "blocked" if not result.allowed else "warning"
             )
@@ -1132,7 +1175,7 @@ class RagPipeline:
         )
         if not rewritten:
             return ""
-        checked = await asyncio.to_thread(self._guardrails.validate_query, rewritten)
+        checked = await self._check_query(rewritten, purpose="history_rewrite")
         if not checked.allowed:
             self._selected_history_facts = ()
             logger.warning(
@@ -1169,8 +1212,8 @@ class RagPipeline:
         facts = history_confirmation_facts(fact_history)
         current_facts: list[dict[str, str]] = []
         for question, answer in self._scope.confirmed_premises if self._scope is not None else ():
-            prompt_check = await asyncio.to_thread(self._guardrails.validate_query, question)
-            value_check = await asyncio.to_thread(self._guardrails.validate_query, answer)
+            prompt_check = await self._check_query(question, purpose="confirmed_question")
+            value_check = await self._check_query(answer, purpose="confirmed_answer")
             if not prompt_check.allowed or not value_check.allowed:
                 return ""
             current_facts.append(

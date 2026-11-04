@@ -21,6 +21,7 @@ export const ANSWER_STEP_STAGE_PREFIX = "answer_step:";
 export const PIPELINE_STEP_LABEL: Readonly<Record<string, I18nKey>> = {
   history_rewrite: "search.stage.historyRewrite",
   field_filter: "search.stage.fieldFilter",
+  query_guardrail: "search.stage.queryGuardrail",
   answer_guardrail: "search.stage.answerGuardrail",
   answer_record_save: "search.stage.answerRecordSave",
 };

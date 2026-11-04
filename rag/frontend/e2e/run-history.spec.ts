@@ -1778,3 +1778,42 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
     await page.screenshot({path: testInfo.outputPath("rag-full-trace-1920.png")});
   }
 });
+
+
+test("入力の安全確認を五Tabで開き、実行結果と再利用を区別する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+  await mockRuns(page, [row]);
+  const detail = (reused: boolean) => ({call: {
+    visibility: "owner", capture_enabled: true,
+    input: {status: "recorded", text: JSON.stringify({"確認対象": "search_question", "質問": "合成の質問", "既存結果の再利用": reused})},
+    output: {status: "recorded", text: JSON.stringify({"実際に検査関数を呼んだ": !reused, "適用した結果": {allowed: true, sanitized_text: "合成の質問"}})},
+    schema: {status: "not_applicable"},
+  }});
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+    {key: "root", spec: ragSpan.root(), at: [0, 2]},
+    {key: "checked", spec: ragSpan.stage("query_guardrail"), at: [0, 1], details: detail(false)},
+    {key: "reused", spec: ragSpan.stage("query_guardrail"), at: [1, 2], status: "skipped", details: detail(true)},
+  ])});
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  await expect(timeline).toContainText("質問に安全上の問題がないか検査する");
+  await inspectTraceStep(page, timeline, spanStepId("checked"));
+  const inspector = page.locator("[data-trace-inspector]");
+  await expect(inspector.getByRole("tab")).toHaveCount(5);
+  await inspector.getByRole("tab", {name: "入力", exact: true}).click();
+  await expect(inspector).toContainText("確認対象");
+  await inspector.getByRole("tab", {name: "結果", exact: true}).click();
+  await expect(inspector).toContainText("実際に検査関数を呼んだ");
+  await inspector.screenshot({path: testInfo.outputPath("input-guardrail-result.png")});
+  const back = inspector.getByRole("button", {name: "一覧に戻る", exact: true});
+  if (await back.isVisible()) await back.click();
+  const explorer = page.locator("[data-trace-explorer]");
+  await explorer.getByRole("searchbox", {name: "呼び出しを検索"}).fill(spanStepId("reused"));
+  await explorer.locator("[data-trace-record] button").first().click();
+  await expect(inspector.getByRole("tab", {name: "結果", exact: true})).toHaveAttribute("aria-selected", "true");
+  await expect(inspector).toContainText("false");
+  await expectNoPageOverflow(page);
+  await inspector.screenshot({path: testInfo.outputPath("input-guardrail-reused.png")});
+});

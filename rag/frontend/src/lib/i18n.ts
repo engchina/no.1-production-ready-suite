@@ -4627,6 +4627,7 @@ export const ja = {
   "search.stage.answer": "質問の条件を整理して回答を作る",
   // 回答を作らない RAG 検索（チャットと同じ流れを回答の生成の手前で止める。#3506）
   "search.stage.evidence": "質問の条件を整理して根拠を探す",
+  "search.stage.queryGuardrail": "質問に安全上の問題がないか検査する",
   "search.stage.answerGuardrail": "回答に安全上の問題がないか検査する",
   "search.stage.retrieval": "文書から根拠の候補を検索する",
   "search.stage.answerRecordSave": "質問と回答と根拠の記録を保存する",
