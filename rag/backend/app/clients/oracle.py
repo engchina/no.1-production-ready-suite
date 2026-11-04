@@ -1262,17 +1262,17 @@ class OracleClient:
                     NVL(e.confidence, 1) AS confidence
                 FROM rag_graph_entities e
                 WHERE e.knowledge_base_id = :kb
-                  AND {membership_sql}
+                  AND {visible_sql}
                   AND {active_sql}
                 ORDER BY COALESCE(e.chunk_set_id, JSON_VALUE(e.source_document_ids, '$[0]')),
                     CASE WHEN e.entity_type = 'document' THEN 0 ELSE 1 END,
                     e.canonical_name ASC, e.entity_id ASC
             ) WHERE ROWNUM <= :limit
             """,
-                membership_sql=_graph_current_membership_predicate("e"),
+                visible_sql=_graph_visible_document_predicate("e"),
                 active_sql=_graph_active_chunk_set_predicate("e"),
             ),
-            {"kb": knowledge_base_id, "limit": limit},
+            _with_tenant_bind({"kb": knowledge_base_id, "limit": limit}),
         )
         nodes: list[dict[str, object]] = [
             {
@@ -1305,17 +1305,19 @@ class OracleClient:
                 FROM rag_graph_relationships r
                 WHERE r.knowledge_base_id = :kb
                   AND {source_sql} AND {target_sql}
-                  AND {membership_sql}
+                  AND {visible_sql}
                   AND {active_sql}
                 ORDER BY NVL(r.confidence, 1) DESC, r.relationship_id ASC
             ) WHERE ROWNUM <= :limit
             """,
-                membership_sql=_graph_current_membership_predicate("r"),
+                visible_sql=_graph_visible_document_predicate("r"),
                 active_sql=_graph_active_chunk_set_predicate("r"),
                 source_sql=source_sql,
                 target_sql=target_sql,
             ),
-            {"kb": knowledge_base_id, "limit": limit, **source_binds, **target_binds},
+            _with_tenant_bind(
+                {"kb": knowledge_base_id, "limit": limit, **source_binds, **target_binds}
+            ),
         )
         edges: list[dict[str, object]] = [
             {
@@ -16127,6 +16129,21 @@ def _graph_current_membership_predicate(alias: str) -> str:
         "'$[*]?(@ == $member_document_id)' "
         'PASSING member_dkb.document_id AS "member_document_id")'
         "))"
+    )
+
+
+def _graph_visible_document_predicate(alias: str) -> str:
+    """graph 行の元文書が今も KB に所属し、利用者の文書の権限の範囲にあるかの predicate(#4308)。"""
+    return (
+        "EXISTS ("
+        "SELECT 1 FROM rag_document_knowledge_bases visible_dkb "
+        "JOIN rag_documents visible_doc ON visible_doc.document_id = visible_dkb.document_id "
+        f"WHERE visible_dkb.knowledge_base_id = {alias}.knowledge_base_id "
+        f"AND JSON_EXISTS({alias}.source_document_ids, "
+        "'$[*]?(@ == $visible_document_id)' "
+        'PASSING visible_dkb.document_id AS "visible_document_id") '
+        f"AND {_oracle_access_predicate_sql(alias='visible_doc')}"
+        ")"
     )
 
 
