@@ -176,6 +176,11 @@ class CragFlowStepDetailsTest(unittest.TestCase):
     """補正の回答フロー: 根拠の確認の判定・理由・次の対処、探し直しの検索文を詳細に残す。"""
 
     def test_grade_and_rewrite_steps(self):
+        from test_completion_stage_io import PolicyRecorder
+
+        from rag_engine.resources.tracing import bind_trace_observer
+
+        recorder = PolicyRecorder()
         grades = [
             _crag_grade(sufficient=False, confidence=0.1, reason="根拠が話題違い", rewritten_query="合成の探し直しの検索文"),
             _crag_grade(
@@ -193,6 +198,7 @@ class CragFlowStepDetailsTest(unittest.TestCase):
         initial = _answer_context([_chunk_record("chunk-bad", "child", 1, "", "合成の別の話題")])
         corrected = _answer_context([_chunk_record("chunk-good", "child", 2, "", "設定画面を開いて保存ボタンを押します。")])
         with (
+            bind_trace_observer(recorder.observe),
             patch("rag_engine.generation.answering.load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
             patch("rag_engine.generation.answering.check_adb_hybrid_search_ready"),
             patch("rag_engine.generation.answering.build_adb_hybrid_answer_context", side_effect=[initial, corrected]),
@@ -225,6 +231,10 @@ class CragFlowStepDetailsTest(unittest.TestCase):
         self.assertEqual(second["関係あり / なし"], "1 件 / 0 件")
         self.assertNotIn("次の対処", second)
         self.assertIn("検索文", _fields(steps["検索語の再確定（書き換え後）"]))
+        reprepare = recorder.stage("検索語の再確定（書き換え後）")
+        self.assertEqual(reprepare["input"]["補正検索文"], ("合成の探し直しの検索文",))
+        self.assertIn("合成の探し直しの検索文", reprepare["input"]["検索文"])
+        self.assertEqual(reprepare["output"]["全文検索の入力"]["oracle_text_queries"], result.text_search_queries)
 
 
 class StepDetailsHelpersTest(unittest.TestCase):

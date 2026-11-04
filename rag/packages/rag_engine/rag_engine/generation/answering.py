@@ -3356,6 +3356,7 @@ def synthesize_grounded_answer(
                     "feedback": grounded.pending_feedback_labels(feedback),
                 }
                 with _execution_step("回答の修正") as skipped_step:
+                    skipped_step.input({"round": number + 1, "issues": issues, "max_rounds": max_rounds})
                     skipped_step.skip("修正回数の上限に達したため、次の回答は生成しません。")
                     skipped_step.output({"executed": False, "reason": "max_correction_rounds", "next_round": number + 2})
             break
@@ -3390,6 +3391,7 @@ def synthesize_grounded_answer(
                     "feedback": grounded.pending_feedback_labels(feedback),
                 }
                 with _execution_step("回答の修正") as skipped_step:
+                    skipped_step.input({"round": number + 1, "issues": issues, "content_correction_attempted": corrected})
                     skipped_step.skip("修正回数の上限に達したため、次の回答は生成しません。")
                     skipped_step.output({"executed": False, "reason": "max_correction_rounds", "next_round": number + 2})
                 break
@@ -3426,6 +3428,7 @@ def synthesize_grounded_answer(
             # 最良の round で確定し、直していない不足を「回答時間の上限により省略した処理」に出す。
             rounds[-1]["deadline_stop"] = dict(budget.stop)
             with _execution_step("回答の修正") as stop_step:
+                stop_step.input({"round": number + 1, "issues": issues, "plan": remedy, "budget": dict(budget.stop)})
                 stop_step.skip(
                     f"回答の時間の残り {budget.stop['remaining_seconds']:.0f} 秒から確定の分 "
                     f"{budget.reserve_seconds:.0f} 秒を引くと、生成と根拠確認の 1 組の見積もり "
@@ -3487,8 +3490,17 @@ def synthesize_grounded_answer(
             confirmed_premises=confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources),
         )
         with _execution_step("選別した根拠で回答を作り直す") as refinement_step:
+            refinement_step.input(
+                lambda: {
+                    "質問": question,
+                    "選別した根拠": list(selected_spans),
+                    "生成への入力": selected_prompt,
+                    "選別前の指摘": draft_review,
+                }
+            )
             result = generate_round(selected_spans, selected_prompt, round_knowledge=selected_knowledge)
             refinement_step.field("根拠の数", len(selected_spans))
+            refinement_step.output(result.trace)
             return result
 
     refinement = refine_answer(
@@ -3512,6 +3524,13 @@ def synthesize_grounded_answer(
     assert best is not None
     current, context, spans, images, mode = best
     with _execution_step("是正の打ち切り") as final_step:
+        final_step.input(
+            lambda: {
+                "rounds": [{"round": index + 1, "accepted": row["accepted"]} for index, row in enumerate(rounds)],
+                "stop": dict(budget.stop),
+                "evidence_refinement": refinement.diagnostics,
+            }
+        )
         reason = str(budget.stop.get("reason", "correction_not_needed"))
         if reason.startswith("no_improvement"):
             explanation = "改善が確認できないため"
@@ -6362,6 +6381,14 @@ def answer_question_result(
                 )
                 if crag_attempts:
                     with _execution_step("検索語の再確定（書き換え後）") as keyword_step:
+                        keyword_step.input(
+                            lambda: {
+                                "原質問": normalized_question,
+                                "補正検索文": tuple(crag_rewrites),
+                                "検索文": tuple(crag_attempts[-1].retrieval_queries),
+                                "全文検索の入力（再確定前）": asdict(text_search_info),
+                            }
+                        )
                         text_search_info = build_question_text_search_info(
                             normalized_question,
                             settings,
@@ -6383,6 +6410,7 @@ def answer_question_result(
                             keyword_step.result("全文検索のキーワードは書き換える前と同じです")
                         if text_search_info.error:
                             keyword_step.status = "検索語の抽出に失敗"
+                        keyword_step.output(lambda: {"全文検索の入力": asdict(text_search_info)})
             else:
                 with _execution_step("文書検索", _SEARCH_PURPOSE) as retrieval_step:
                     retrieval_step.input(
