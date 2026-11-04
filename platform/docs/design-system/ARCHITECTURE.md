@@ -187,7 +187,7 @@ const FILE_STATUS: Record<FileStatus, StatusBadgeProps["variant"]> = {
 - 文字サイズ・行間・字間・角丸の任意値（`text-[10px]` / `rounded-[3px]`）→ `text-xs` / `rounded-md` 等のトークン
 - 旧トークン名（`bg-card` / `var(--primary)` 等。§5 の表の左列）→ 新名
 - `@production-ready/ui/dist/**` など内部パスへの直 import → パッケージのルート、または公開の `@production-ready/ui/graph` 入口から import する
-- `@production-ready/ui/graph` は React Flow を使う RAG／NL2SQL の共通画布・図の操作・ノードの面を提供する。React Flow は任意の peer dependency とし、図を使わない製品の root 入口には混ぜない。レイアウト・種類名・詳細のデータは各製品が渡す。階層のパスを名前に持つノードは `graphPathLabel` と `GraphNodeLabel` で末尾の段を主な表示にし、完全な名前は `title` と選択の詳細に出す。共通スタイルは `packages/ui` に置き、帰属表示を保持する。利用する製品は Vite の `resolve.dedupe` に `@xyflow/react` を含め、正式 build でも provider と hook を1つの context に集約する。
+- `@production-ready/ui/graph` は React Flow を使う RAG／NL2SQL の共通画布・図の操作・ノードの面を提供する。React Flow は任意の peer dependency とし、図を使わない製品の root 入口には混ぜない。ノードは `GraphNodeCard`、辺は `graphEdgeStyle`・`GRAPH_EDGE_LABEL_PROPS`・`GRAPH_EDGE_MARKER`・`selectGraphEdgeHandles`・`GraphParallelEdge`、凡例の色は `GraphLegendSwatch` を使い、製品に描画を置かない。レイアウト・種類と色の対応・詳細のデータは各製品が渡す。階層のパスを名前に持つノードは `graphPathLabel` で末尾の段を主な表示にし、完全な名前は `title` と選択の詳細に出す。共通スタイルは `packages/ui` に置き、帰属表示を保持する。利用する製品は Vite の `resolve.dedupe` に `@xyflow/react` を含め、正式 build でも provider と hook を1つの context に集約する。
 - `loading` 中に `Button` のラベルを差し替える → ラベルは固定する
 - アイコン付きの入力欄（検索欄）の手書き（アイコンの分の `pl-*` を持つ `<input>`）→ `TextField` の `leadingIcon` / `trailing` / `onClear`
 - 検索して選ぶ選択欄（`SearchableSelectField`）の `leadingIcon` に虫眼鏡（`Search` 系）を渡す → 渡さない。閉じたボタンは選んだ値と開閉の印だけで、虫眼鏡は開いたパネルの中の検索欄だけ（README §4「`SearchableSelectField` の閉じたボタン」、#1771）
@@ -223,8 +223,7 @@ prop の妥当性（`Button` に存在しない prop を渡す等）は lint で
 
 **残すもの（ドメイン固有）**
 - `WorkflowProgressStrip`
-- オントロジー / 関係グラフ → `tokens/colors-graph.css` を `@import` して
-  `--color-graph-*` を使う（種別 = 塗り / 状態 = 線）
+- 図（文書構造・オントロジー） → `--color-graph-*` を使う（種別 = 塗り / 状態 = 線）
 
 ### RAG / Agent — 受け取るだけ
 
