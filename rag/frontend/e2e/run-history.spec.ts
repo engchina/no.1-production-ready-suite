@@ -261,6 +261,7 @@ async function mockRuns(page: Page, rows: RunRow[], { gated = false } = {}) {
         items: matched.slice(offset, offset + limit).map(({ usage, ...item }) => ({
           ...item,
           total_tokens: usage ? usage.total_tokens : null,
+          models: usage?.models.length ? usage.models : item.model_id ? [item.model_id] : [],
           usage_measurement: usage ? usage.measurement : null,
         })),
         total: matched.length,
@@ -841,7 +842,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
   }, testInfo) => {
     await mockLocalAuth(page);
     const usage = {
-      models: ["model-a"],
+      models: ["synthetic-model-" + "long-".repeat(20), "model-b"],
       requests: 4,
       input_tokens: 1200000,
       output_tokens: 34567,
@@ -867,8 +868,10 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     const header = table.getByRole("columnheader", { name: "トークン数", exact: true });
     const headers = await table.locator("thead th").allTextContents();
     const usageIndex = headers.indexOf("トークン数");
+    const modelIndex = headers.indexOf("モデル");
+    const modelCell = page.getByTestId("run-history-row-run-1").locator(":scope > th, :scope > td").nth(modelIndex);
     // 列の順は 3 製品で同じ: 所要時間 → トークン数 →（製品の列）。見出しは Agent と同じ「トークン数」。
-    expect(usageIndex).toBe(headers.indexOf("所要時間") + 1);
+    expect(usageIndex).toBe(headers.indexOf("モデル") + 1);
     expect(headers.indexOf("回答の対応")).toBeGreaterThan(usageIndex);
     // 行の見出し（題名）は th、ほかは td。
     const usageCell = (id: string) => page.getByTestId(`run-history-row-${id}`).locator(":scope > th, :scope > td").nth(usageIndex);
@@ -876,12 +879,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     if (isNarrow(page)) {
       // 375px: 題名と操作の 2 列にまとめ、token の列は出さない（詳細の概要で見る）。横にあふれない。
       await expect(header).toBeHidden();
+      await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).toContainText("model-b");
       await expect(usageCell("run-1")).toBeHidden();
       await expect(page.getByTestId("run-history-row-run-1").locator("[data-run-history-compact-meta]")).not.toContainText(
         "token"
       );
     } else {
       await expect(header).toBeVisible();
+      await expect(modelCell).toContainText("model-b");
       await expect(usageCell("run-1")).toHaveText("1,234,567");
       await expect(usageCell("run-2")).toHaveText("9,000一部計測");
       await expect(usageCell("run-2").locator("[data-run-usage-note]")).toHaveText("一部計測");
