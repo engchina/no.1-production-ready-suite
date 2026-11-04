@@ -13,6 +13,7 @@ from rag_engine.resources.tracing import bind_trace_observer
 
 def test_direct_sdk_retry_keeps_request_and_actual_attempts(monkeypatch):
     requests, recorded, private_requests, private_responses = [], [], [], []
+    parent_requests, parent_responses = [], []
 
     def rerank_text(request, **kwargs):
         requests.append(request)
@@ -46,8 +47,8 @@ def test_direct_sdk_retry_keeps_request_and_actual_attempts(monkeypatch):
     def observer(operation, model):
         yield SimpleNamespace(
             display=lambda **kwargs: recorded.append(kwargs),
-            request=lambda value, **kwargs: private_requests.append(value),
-            response=lambda value: private_responses.append(value),
+            request=lambda value, **kwargs: (parent_requests if operation == "stage" else private_requests).append(value),
+            response=lambda value: (parent_responses if operation == "stage" else private_responses).append(value),
         )
 
     with (
@@ -58,6 +59,8 @@ def test_direct_sdk_retry_keeps_request_and_actual_attempts(monkeypatch):
     assert private_requests == requests
     assert len(private_responses) == 1 and private_responses[0].document_ranks[0].index == 0
     assert ranks[0].index == 0
+    assert parent_requests == [{"query": "Ａ  B", "documents": ["private document"], "model": "model-a", "top_n": 1, "retries": 1}]
+    assert parent_responses[0]["rankings"][0]["index"] == ranks[0].index
     data = receipt.to_dict()
     assert data["candidate_count"] == 1 and data["phase"] == "crag_recovery"
     assert data["sdk_attempt_count"] == 2 and data["http_attempt_count"] is None
@@ -66,6 +69,7 @@ def test_direct_sdk_retry_keeps_request_and_actual_attempts(monkeypatch):
         {"attempt_number": 2, "retry_number": 1, "status": "completed"},
     ]
     assert data["status"] == "completed" and data["cache_state"] == "disabled"
+    assert parent_responses[0]["receipt"] == data
     snapshots = [json.loads(row["details"]["code"][0]["text"]) for row in recorded]
     assert [row["status"] for row in snapshots] == ["error", "completed", "completed"]
     assert snapshots[0]["status_scope"] == snapshots[1]["status_scope"] == "sdk_attempt"
