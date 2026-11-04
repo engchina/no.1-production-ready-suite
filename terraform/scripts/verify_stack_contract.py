@@ -461,7 +461,23 @@ def _verify_package_entries(archive: zipfile.ZipFile) -> None:
         raise AssertionError("extract_wallet.sh is not executable in package")
 
 
+# OCI Resource Manager の stack の説明の上限（超えると作成画面で入力できない）。
+STACK_DESCRIPTION_MAX_CHARS = 400
+
+
+def _verify_stack_description(schema: str) -> None:
+    match = re.search(r'^stackDescription: "(.*)"$', schema, re.MULTILINE)
+    if match is None:
+        raise AssertionError("schema.yaml に stackDescription がありません。")
+    length = len(match.group(1))
+    if length > STACK_DESCRIPTION_MAX_CHARS:
+        raise AssertionError(
+            f"stackDescription が {length} 文字で、OCI の上限 {STACK_DESCRIPTION_MAX_CHARS} 文字を超えています。"
+        )
+
+
 def _verify_schema(schema: str, variables: str) -> None:
+    _verify_stack_description(schema)
     _require_all(
         schema,
         ["schemaVersion: 1.1.0", "Production Ready Suite"],

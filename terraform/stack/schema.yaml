@@ -1,5 +1,5 @@
 title: "Deploy Production Ready Suite on Oracle Cloud Infrastructure"
-stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. One Oracle Autonomous AI Database (new or existing) and one Compute instance are shared by every selected product; Nginx serves them under /rag/, /nl2sql/ and /agent/ (HTTPS on port 443 with a private CA by default). 対応リージョンは大阪（ap-osaka-1）、東京（ap-tokyo-1）、Chicago（us-chicago-1）です。Suite と Bastion の image は配備先リージョンに合わせて選択します。 Configure AI runtime settings after startup from each application's System Settings."
+stackDescription: "Deploy the selected Production Ready products (RAG / NL2SQL / Agent Control Plane) on OCI. They share one Oracle Autonomous AI Database and one Compute instance, served by Nginx under /rag/, /nl2sql/ and /agent/. 対応リージョンは大阪（ap-osaka-1）、東京（ap-tokyo-1）、Chicago（us-chicago-1）です。"
 schemaVersion: 1.1.0
 version: "20261008.1"
 locale: "en"

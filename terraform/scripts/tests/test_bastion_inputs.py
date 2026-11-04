@@ -15,11 +15,27 @@ from typing import ClassVar
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from verify_stack_contract import (
     ORACLE_LINUX_IMAGES,
+    STACK_DESCRIPTION_MAX_CHARS,
     _schema_variable,
     _terraform_variable,
+    _verify_stack_description,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+class StackDescriptionTests(unittest.TestCase):
+    def test_description_fits_resource_manager_limit(self) -> None:
+        schema = (ROOT / "terraform/stack/schema.yaml").read_text()
+        _verify_stack_description(schema)
+        for region in ("ap-osaka-1", "ap-tokyo-1", "us-chicago-1"):
+            self.assertIn(region, schema.splitlines()[1])
+
+    def test_description_over_limit_is_rejected(self) -> None:
+        over = "x" * (STACK_DESCRIPTION_MAX_CHARS + 1)
+        with self.assertRaises(AssertionError):
+            _verify_stack_description(f'stackDescription: "{over}"')
+        _verify_stack_description(f'stackDescription: "{over[1:]}"')
 
 
 class BastionFormTests(unittest.TestCase):
