@@ -1025,16 +1025,22 @@ async def run_worker_process() -> None:
         with contextlib.suppress(NotImplementedError):  # pragma: no cover - Windows 等
             loop.add_signal_handler(sig, stop_event.set)
     worker = IngestionQueueWorker(settings=settings)
+    from app.clients.oracle import OracleClient
     from app.rag.native_index_maintenance import run_native_maintenance_loop
+    from app.rag.reference_refresh import run_reference_refresh_loop
 
-    maintenance_task = asyncio.create_task(run_native_maintenance_loop(stop_event))
+    background_tasks = [
+        asyncio.create_task(run_native_maintenance_loop(stop_event)),
+        asyncio.create_task(run_reference_refresh_loop(OracleClient(), stop_event)),
+    ]
     try:
         await worker.run_forever(stop_event=stop_event)
     finally:
         stop_event.set()
-        maintenance_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await maintenance_task
+        for task in background_tasks:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         close_oracle_pool()
 
 
