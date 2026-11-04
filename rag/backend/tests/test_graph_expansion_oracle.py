@@ -8,6 +8,7 @@ fixture が skip し、作成行は後始末する（AI は使わない）。
 
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -17,6 +18,11 @@ from app.clients.oracle_graph_store import OracleGraphStore
 from app.rag.chunking import Chunk
 from app.rag.graph_expansion import GRAPH_KIND_NAME, GRAPH_KIND_NEIGHBOR, plan_graph_expansion
 from app.rag.graph_index import GraphIndex, build_graph_index
+from app.rag.request_context import (
+    current_audit_request_context,
+    reset_audit_request_context,
+    set_audit_request_context,
+)
 from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
 from app.schemas.search import RetrievedChunk
@@ -40,6 +46,49 @@ async def test_multibyte_structure_heading_is_saved_without_byte_truncation() ->
         {"id": chunk_set_id},
     )
     assert heading in [row["canonical_name"] for row in rows]
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_subgraph_hides_documents_outside_access_scope() -> None:
+    """KB を使えても、権限の外の文書のノードと関係を返さない(#4308)。"""
+    client = OracleClient()
+    token_suffix = uuid4().hex[:8]
+    kb = await client.create_knowledge_base(name=f"graph-access-{token_suffix}")
+    allowed_document, _ = await _indexed_document(
+        client,
+        file_name=f"graph-access-allowed-{token_suffix}.pdf",
+        chunks=_chunks([("allowed-section", 1)]),
+        knowledge_base_id=kb.id,
+    )
+    hidden_name = f"graph-access-hidden-{token_suffix}.pdf"
+    hidden_document, _ = await _indexed_document(
+        client,
+        file_name=hidden_name,
+        chunks=_chunks([("hidden-section", 1)]),
+        knowledge_base_id=kb.id,
+    )
+    try:
+        everything, _ = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
+        assert any(hidden_name in str(node["name"]) for node in everything)
+
+        context = replace(
+            current_audit_request_context(), allowed_document_ids=frozenset({allowed_document})
+        )
+        token = set_audit_request_context(context)
+        try:
+            nodes, edges = await client.fetch_knowledge_base_subgraph(kb.id, limit=100)
+        finally:
+            reset_audit_request_context(token)
+        names = {str(node["name"]) for node in nodes}
+        assert names
+        assert "allowed-section" in names
+        assert not any("hidden" in name for name in names)
+        node_ids = {node["id"] for node in nodes}
+        assert edges
+        assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in edges)
+    finally:
+        await client.delete_document(allowed_document)
+        await client.delete_document(hidden_document)
 
 
 def _chunks(sections: list[tuple[str, int]]) -> list[Chunk]:

@@ -2049,10 +2049,39 @@ async def test_oracle_knowledge_base_subgraph_requires_current_kb_membership() -
     assert edges == []
     node_sql, edge_sql = (" ".join(call.statement.split()) for call in pool.connection.calls[:2])
     assert "{membership_sql}" not in node_sql
-    assert "member_dkb.knowledge_base_id = e.knowledge_base_id" in node_sql
+    assert "visible_dkb.knowledge_base_id = e.knowledge_base_id" in node_sql
     assert "JSON_EXISTS(e.source_document_ids," in node_sql
-    assert "member_dkb.knowledge_base_id = r.knowledge_base_id" in edge_sql
+    assert "visible_dkb.knowledge_base_id = r.knowledge_base_id" in edge_sql
     assert "JSON_EXISTS(r.source_document_ids," in edge_sql
+
+
+async def test_oracle_knowledge_base_subgraph_applies_document_access_scope() -> None:
+    """KB を使えても、文書・分類の権限の外の entity / relationship を読まない(#4308)。"""
+    pool = FakeOraclePool(
+        execute_results=[[{"entity_id": "ent-1", "canonical_name": "合成の節"}], []]
+    )
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    token = set_audit_request_context(
+        AuditRequestContext(
+            request_id="request-4308",
+            tenant_id_hash="synthetic-tenant",
+            allowed_document_ids=frozenset({"doc-allowed"}),
+            allowed_category_names=frozenset({"合成の分類"}),
+        )
+    )
+    try:
+        await client.fetch_knowledge_base_subgraph("kb-1", limit=10)
+    finally:
+        reset_audit_request_context(token)
+
+    for call in pool.connection.calls[:2]:
+        sql = " ".join(call.statement.split())
+        assert "visible_doc.tenant_id_hash = :tenant_id_hash" in sql
+        assert "visible_doc.document_id IN (:access_document_id_0)" in sql
+        assert "LOWER(visible_doc.category_name) IN (:access_category_name_0)" in sql
+        assert call.parameters["tenant_id_hash"] == "synthetic-tenant"
+        assert call.parameters["access_document_id_0"] == "doc-allowed"
+        assert call.parameters["access_category_name_0"] == "合成の分類"
 
 
 async def test_oracle_knowledge_base_subgraph_requires_active_chunk_sets() -> None:
