@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from rag_engine.adapters.oci import LlmRunawayOutput, LlmStreamOutputMissing
 from rag_engine.config import get_settings
 from rag_engine.generation.answering import _invalid_structured_output
-from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence
+from rag_engine.generation.batched_evidence import BatchReading, prepare_batched_evidence, verified_candidate
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded
 
 
@@ -48,7 +48,11 @@ def body(value):
     return "".join(re.sub(r"^\[U[0-9a-f]{24}\] ", "", line.split("| ", 1)[1]) for line in value["text"].split("\n"))
 
 
-def finding(value, answer="合成の回答", first=1, last=None):
+# 内容語の無い文。原文の照合に関係しないテストの回答候補に使う。
+NO_TERM_ANSWER = "そのとおりです。"
+
+
+def finding(value, answer=NO_TERM_ANSWER, first=1, last=None):
     ids = re.findall(r"(?m)^B\d+-\d+\| \[(U[0-9a-f]{24})\] ", value["text"])
     if ids:
         selected = ids[first - 1 : first if last is None else last]
@@ -352,7 +356,7 @@ def test_code_cuts_the_verbatim_original_from_the_selected_lines():
     assert selected[0]["text"] == "第二の条件です。\n第三の条件です。"
     assert selected[0]["start"] == 300 + text.index("第二")
     assert selected[0]["end"] == selected[0]["start"] + len(selected[0]["text"])
-    assert selected[0]["batch_answer"] == "合成の回答"
+    assert selected[0]["batch_answer"] == NO_TERM_ANSWER
     assert diagnostic["batches"][0]["selected_range_chars"] == [len(selected[0]["text"])]
 
 
@@ -537,12 +541,12 @@ def test_one_unreadable_batch_keeps_its_inputs_and_the_other_batches_are_used(un
         values = json.loads(prompt)["evidence"]
         if UNREADABLE in values[0]["text"]:
             unreadable(schema)
-        return schema(findings=[finding(values[0], answer="合成の回答")])
+        return schema(findings=[finding(values[0])])
 
     selected, _, diagnostic = prepare(inputs, read)
 
     assert [value["text"] for value in selected if value["source_id"] == "p0"] == [inputs[0]["text"]]
-    assert [value["batch_answer"] for value in selected if value["source_id"] == "p1"] == ["合成の回答"]
+    assert [value["batch_answer"] for value in selected if value["source_id"] == "p1"] == [NO_TERM_ANSWER]
     failed, completed = diagnostic["batches"]
     assert (failed["status"], failed["retained_input_count"]) == ("failed", 1)
     assert completed["status"] == "completed"
@@ -727,12 +731,12 @@ def test_an_oversized_source_is_skipped_and_the_next_rank_is_filled():
 def test_filled_source_keeps_the_reading_answer_and_does_not_duplicate_the_excerpt():
     selected, prompt, diagnostic = prepare(
         [span(index, f"合成の条件{index}。\n" + "補足本文。" * 200) for index in range(5)],
-        lambda system, payload, schema: schema(findings=[finding(json.loads(payload)["evidence"][0], answer="残す回答")]),
+        lambda system, payload, schema: schema(findings=[finding(json.loads(payload)["evidence"][0], answer="合成の条件です。")]),
     )
-    assert "残す回答" in prompt
+    assert "合成の条件です。" in prompt
     assert diagnostic["reduction"]["program_added"]["count"] >= 1
     assert len({value["source_id"] for value in selected}) == len(selected)
-    assert any(value.get("batch_answer") == "残す回答" and value["text"].startswith("合成の条件") for value in selected)
+    assert any(value.get("batch_answer") == "合成の条件です。" and value["text"].startswith("合成の条件") for value in selected)
 
 
 def test_truly_missing_evidence_stays_a_gap():
@@ -751,3 +755,32 @@ def test_short_input_is_not_filled_and_has_no_reduction_record():
     selected, prompt, diagnostic = prepare(inputs, lambda *args: pytest.fail("短い入力に読取を追加しない"))
     assert selected == inputs
     assert "reduction" not in diagnostic
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("条件Aは30日です。", "条件Aは30日です。"),
+        ("条件Ａは３０日です。", "条件Ａは３０日です。"),
+        ("条件Aは60日です。", ""),
+        ("条件Aは例外です。", ""),
+        ("条件Aは30日です。ただし特例は除きます。", "条件Aは30日です。"),
+        ("ただし特例は除きます。\n条件Aは30日です。", "条件Aは30日です。"),
+    ],
+    ids=["all-terms", "width-variant", "other-number", "other-word", "drops-only-the-sentence", "drops-the-first-line"],
+)
+def test_verified_candidate_keeps_only_sentences_whose_terms_are_in_the_source(answer, expected):
+    assert verified_candidate(answer, "条件Aは30日です。") == expected
+
+
+def test_candidate_sentence_missing_from_the_source_does_not_reach_the_final_input():
+    """#4234: 選んだ原文に無い例外の文を最終生成の入力へ渡さない。原文に有る文と原文の範囲は残す。"""
+    selected, prompt, _ = prepare(
+        [span(index, f"合成の条件{index}。\n" + "補足本文。" * 200) for index in range(5)],
+        lambda system, payload, schema: schema(
+            findings=[finding(json.loads(payload)["evidence"][0], answer="合成の条件です。ただし特例は除外する。")]
+        ),
+    )
+    assert "合成の条件です。" in prompt
+    assert "特例" not in prompt
+    assert all("特例" not in str(value.get("batch_answer") or "") for value in selected)

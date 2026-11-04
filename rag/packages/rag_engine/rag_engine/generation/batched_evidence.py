@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from types import GenericAlias
 from typing import Any, cast
@@ -60,6 +62,27 @@ class BatchFinding(BaseModel):
 class BatchReading(BaseModel):
     model_config = ConfigDict(extra="forbid")
     findings: list[BatchFinding] = Field(description="原文で裏付けた回答候補。該当がなければ空。")
+
+
+# 回答候補の文の内容語（漢字・カタカナの連なりと、英数字の連なり）。
+_CANDIDATE_TERM = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff々]+|[\u30a1-\u30ff]{2,}|[0-9A-Za-z]+(?:[.,][0-9]+)*")
+_CANDIDATE_SENTENCE_END = re.compile(r"(?<=[。！？!?])|\n")
+
+
+def _candidate_form(text: str) -> str:
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def verified_candidate(answer: str, source: str) -> str:
+    """読取の回答候補のうち、内容語がすべて選んだ原文の範囲にある文だけを返す（#4234）。
+
+    モデルの回答候補の文は原文を保証しない。原文に無い語を含む文は、最終生成が原文と同じ強さで読まないように落とす。
+    """
+    form = _candidate_form(source)
+    sentences = (item.strip() for item in _CANDIDATE_SENTENCE_END.split(answer))
+    return "".join(
+        sentence for sentence in sentences if sentence and all(term in form for term in _CANDIDATE_TERM.findall(_candidate_form(sentence)))
+    )
 
 
 def reading_units(value: Mapping[str, Any]) -> list[tuple[int, int]]:
@@ -217,7 +240,7 @@ def prepare_batched_evidence(
             whole = _slice(value, 0, len(value["text"]))
             start, end = whole.get("start", 0), whole.get("end", len(whole["text"]))
             inside = [key for key in reduced if key[0] == whole["source_id"] and start <= key[1] and key[2] <= end]
-            answers = [reduced.pop(key)["batch_answer"] for key in inside]
+            answers = [answer for answer in (reduced.pop(key).get("batch_answer") for key in inside) if answer]
             if answers:
                 whole["batch_answer"] = "\n".join(answers)
             reduced[(whole["source_id"], start, end)] = whole
@@ -468,10 +491,10 @@ def prepare_batched_evidence(
                         # 原文と座標は番号からコードが切り出す。モデルの文字列を原文として受け取らない。
                         excerpt = _slice(original, units[first - 1][0], units[last - 1][1])
                         key = (excerpt["source_id"], excerpt["start"], excerpt["end"])
-                        if key in reduced:
-                            excerpt["batch_answer"] = reduced[key]["batch_answer"] + "\n" + finding.answer
-                        else:
-                            excerpt["batch_answer"] = finding.answer
+                        answers = (reduced.get(key, {}).get("batch_answer"), verified_candidate(finding.answer, excerpt["text"]))
+                        answer = "\n".join(item for item in answers if item)
+                        if answer:
+                            excerpt["batch_answer"] = answer
                         reduced[key] = excerpt
                         receipt.setdefault("selected_range_chars", []).append(len(excerpt["text"]))
                     if mismatch is not None:
