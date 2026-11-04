@@ -1046,6 +1046,8 @@ export const ja = {
   "settings.language.field.step_action_words.help": "手順の行とみなす操作の語です（例: 入力、選択、クリック）。",
   "settings.language.section.answer_labels": "回答の表示",
   "settings.language.section.answer_labels.help": "回答の本文の節の見出し・定型文・出典・引用と条件の表示です。回答の検査・評価・指標も同じ語で本文を読み分けます。保存するとすぐ次の回答から反映します（保存済みの回答の本文は変わりません）。",
+  "settings.language.field.applications_section": "導いた結論の見出し",
+  "settings.language.field.applications_section.help": "資料の事実や規則から、質問の条件への適用・計算などで導いた結論の節の見出しです。",
   "settings.language.field.rules_section": "確認できた事項の見出し",
   "settings.language.field.rules_section.help": "資料で確認できた事項の節の見出しです。",
   "settings.language.field.quote_only_section": "参考情報の見出し",
