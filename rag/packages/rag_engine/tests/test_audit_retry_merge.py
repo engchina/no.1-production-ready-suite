@@ -115,15 +115,24 @@ def test_duplicate_second_index_does_not_override_a_valid_first_review():
     assert len(merged.reviews) == 1 and merged.reviews[0].support == "contradicted"
 
 
-def test_existing_row_limit_is_preserved_without_dropping_first_observations():
+def test_existing_application_limit_is_preserved_without_dropping_first_observations():
     prior = audit()
-    prior.reviews = [prior.reviews[0].model_copy(update={"index": index}) for index in range(40)]
+    prior.application_reviews = [prior.application_reviews[0].model_copy(update={"index": index}) for index in range(40)]
     later = audit()
-    later.reviews = [later.reviews[0].model_copy(update={"index": 40})]
+    later.application_reviews = [later.application_reviews[0].model_copy(update={"index": 40})]
     first, second = wire(prior), wire(later)
     merged = merge_audit_retry(first, second)
-    assert [row.index for row in merged.reviews] == list(range(40))
-    assert merged._wire_validation["retry_merge"]["limited_rows"] == {"reviews": [40]}
+    assert [row.index for row in merged.application_reviews] == list(range(40))
+    assert merged._wire_validation["retry_merge"]["limited_rows"] == {"application_reviews": [40]}
+
+
+def test_all_code_selected_source_reviews_survive_partial_retry():
+    prior, later = audit(), audit()
+    prior.reviews = [prior.reviews[0].model_copy(update={"index": index}) for index in range(40)]
+    later.reviews = [later.reviews[0].model_copy(update={"index": index}) for index in range(40, 80)]
+    merged = merge_audit_retry(wire(prior), wire(later))
+    assert [row.index for row in merged.reviews] == list(range(80))
+    assert merged._wire_validation["retry_merge"]["limited_rows"] == {}
 
 
 def test_two_unverified_scalars_keep_unknown_provenance_and_safe_attempt_snapshots():

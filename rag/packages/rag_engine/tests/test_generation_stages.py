@@ -127,7 +127,7 @@ def test_generation_keeps_source_coverage_after_planning(question: str) -> None:
         assert "request_coverage" in citation_phase
         assert "文書ごと" in citation_phase
         assert "支えない原文" in citation_phase
-        return schema.model_validate({"summary": "", "confidence": "low", "items": []})
+        return generated_fixture(schema, prompt, {"summary": "", "confidence": "low", "items": []})
 
     run(question, parse)
     assert generation_calls == 1

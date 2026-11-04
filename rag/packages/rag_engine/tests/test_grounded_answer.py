@@ -924,12 +924,12 @@ class GroundedAnswerTest(unittest.TestCase):
         for value in ("aligned", "partial", "off_target"):
             self.assertIn(value, grounded.AUDIT_SYSTEM_PROMPT.split("goal_alignment:", 1)[1])
 
-    def test_generation_prompt_maps_shared_layout_policy_onto_item_fields(self):
+    def test_generation_prompt_maps_shared_layout_policy_onto_answer_fields(self):
         prompt = grounded.GENERATE_SYSTEM_PROMPT
         # 方針は items 向けに書く (#960)。本文の構成を述べる「別の節にする」は残さず、未確認事項・条件・実データの行き先だけ対応付ける。
         self.assertNotIn("別の節にする", prompt)
-        mapping = prompt.split("### 方針と items の対応\n", 1)[1].split("### 根拠が無い場合", 1)[0]
-        for field in ("kind=gap", "condition", "external_data_items"):
+        mapping = prompt.split("### 方針と回答の対応\n", 1)[1].split("### 根拠が無い場合", 1)[0]
+        for field in ("kind=gap", "結果にも条件", "external_data_items"):
             self.assertIn(field, mapping)
 
     def test_generation_prompt_names_only_fields_the_model_can_write_or_read(self):
@@ -955,6 +955,10 @@ class GroundedAnswerTest(unittest.TestCase):
             | {"guide_task_scope"}  # 生成入力で読む、出力欄ではないガイドの確定範囲。
             | {"guide_condition_notices"}  # 生成入力で読む、確定した条件で選んだ分岐の補足。
         )
+        generated_schema = grounded.generation_output_model(QUESTION).model_json_schema()
+        known.update(generated_schema["properties"])
+        for definition in generated_schema.get("$defs", {}).values():
+            known.update(definition.get("properties", {}))
         named = set(re.findall(r"[a-z]+(?:_[a-z]+)+", grounded.GENERATE_SYSTEM_PROMPT))
         values = {
             "document_text",
@@ -968,14 +972,19 @@ class GroundedAnswerTest(unittest.TestCase):
         self.assertEqual(named - known - values, set())
 
     def test_generation_limits_are_advertised_by_the_response_schema(self):
-        from rag_engine.models.llm import GroundedItem
+        from test_citation_unit_ids import snapshot
 
-        schema = generation_draft_wire_model().model_json_schema()
-        item_schema = schema["$defs"]["GroundedItemWire"]
-        item_limit = next(m.max_length for m in GroundedDraft.model_fields["items"].metadata if hasattr(m, "max_length"))
-        text_limit = next(m.max_length for m in GroundedItem.model_fields["text"].metadata if hasattr(m, "max_length"))
-        self.assertEqual(schema["properties"]["items"]["maxItems"], item_limit)
-        self.assertEqual(item_schema["properties"]["text"]["maxLength"], text_limit)
+        from rag_engine.generation.citation_unit_ids import SentUnitCatalog
+        from rag_engine.models.llm import MAX_ANSWER_PARTS, GroundedApplication
+
+        schema = grounded.generation_output_model(QUESTION, unit_catalog=SentUnitCatalog([snapshot()])).model_json_schema()
+        self.assertEqual(schema["properties"]["answer_parts"]["maxItems"], MAX_ANSWER_PARTS)
+        generated = schema["$defs"]["SupportedAnswerPart"]["properties"]
+        for field in ("result", "reasoning"):
+            limit = next(m.max_length for m in GroundedApplication.model_fields[field].metadata if hasattr(m, "max_length"))
+            self.assertEqual(generated[field]["maxLength"], limit)
+        self.assertNotIn("items", schema["properties"])
+        self.assertNotIn("summary", schema["properties"])
         self.assertNotIn("items は最大", grounded.GENERATE_SYSTEM_PROMPT)
         self.assertNotIn("全体が破棄される", grounded.GENERATE_SYSTEM_PROMPT)
 
@@ -1010,11 +1019,11 @@ class GroundedAnswerTest(unittest.TestCase):
     def test_prompts_account_for_every_applies_and_applicability_value(self):
         from typing import get_args
 
-        from rag_engine.models.llm import GroundedItem, GroundedItemReview
+        from rag_engine.models.llm import GroundedItemReview
 
-        # スキーマが許す値のうち、prompt が説明しない値をモデルに選ばせない。
-        for value in get_args(GroundedItem.model_fields["applies"].annotation):
-            self.assertIn(f"applies={value}", grounded.GENERATE_SYSTEM_PROMPT)
+        # 原文のappliesはコードが持ち、モデルは条件を結果と確認事項に書く。
+        self.assertNotIn("applies", grounded.generation_output_model(QUESTION).model_json_schema()["properties"])
+        self.assertIn("結果にも条件を残す", grounded.GENERATE_SYSTEM_PROMPT)
         for value in get_args(GroundedItemReview.model_fields["applicability"].annotation):
             self.assertIn(value, grounded.AUDIT_SYSTEM_PROMPT)
 
@@ -1028,7 +1037,7 @@ class GroundedAnswerTest(unittest.TestCase):
         refusal = draft({"kind": "gap", "text": "削除の手順は資料から確認できません。"}, summary="", confidence="low")
         result = run(FakeModel([refusal], [audit()]), ctx).response
         # prompt は「根拠が無ければ summary は空、不足は gap に書く」と指示する。公開される本文もその形になる。
-        self.assertIn("summary を空文字にする", grounded.GENERATE_SYSTEM_PROMPT)
+        self.assertIn("冒頭の選択を空にする", grounded.GENERATE_SYSTEM_PROMPT)
         self.assertTrue(result.answer_text.startswith("検索された資料に回答を裏付ける十分な根拠がない"))
         self.assertIn("削除の手順は資料から確認できません。", result.answer_text)
 

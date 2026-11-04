@@ -68,6 +68,9 @@ def test_stub_completes_a_generation_round_with_a_verified_citation(
     )
 
     assert schemas[0] == "GroundedDraftWire"
+    assert result.draft.answer_parts
+    assert result.applications[0].published
+    assert result.timing["answer_parts"]["status"] == "linked"
     assert len(result.checked) == 1
     citation = result.checked[0].item.citations[0]
     assert citation.evidence_id == spans[0]["evidence_id"]

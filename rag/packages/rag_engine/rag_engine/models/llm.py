@@ -21,6 +21,8 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+MAX_ANSWER_PARTS = 40
+
 
 @dataclass(frozen=True)
 class RerankTextRank:
@@ -330,7 +332,7 @@ class GroundedCitation(_StrictModel):
     )
     # 引用の原文。モデルには出力させず（応答の schema に出さない）、evidence_id と lines からシステムが取り出す（#2830）。
     quote: SkipJsonSchema[str] = Field(
-        default="", max_length=600, description="引用の原文（システムが evidence_id と lines から取り出す。応答の schema には出さない）。"
+        default="", description="引用の原文（システムが evidence_id と lines から取り出す。応答の schema には出さない）。"
     )
 
 
@@ -351,9 +353,9 @@ class GroundedItem(_StrictModel):
     kind: Literal["operation", "rule", "confirmation", "gap"] = Field(
         description="operation=利用者が行う操作（実施順）。rule=規則・可否・原因の説明。confirmation=照合・閲覧の案内。gap=資料から確認できない点（何が確認できないか、閲覧する資料・データと目的）。"
     )
+    # コードが選択原文を入れる欄でもある。生成文の長さは生成wireで制限し、原文は切らない。
     text: str = Field(
         min_length=1,
-        max_length=600,
         description="出典の原文が支持する範囲だけを質問の言葉で説明する。原文にない画面名・ボタン・値・効果・原因・成功保証を足さない。",
     )
     citations: list[GroundedCitation] = Field(
@@ -397,7 +399,7 @@ class GroundedItem(_StrictModel):
 
 
 class GroundedApplication(_StrictModel):
-    """質問に書かれた事実（前提）に、支持された規則の item を当てはめた結果（#2155）。
+    """資料の事実・規則から導く結論（計算・条件適用・資料間の組み合わせ）。
 
     前提は質問の原文の一部、規則は items の index で指し、計算は算式で書く。システムが前提の照合・規則の
     支持・算式の計算を確かめ、監査が当てはめの正しさを判定してから公開する。
@@ -407,19 +409,19 @@ class GroundedApplication(_StrictModel):
     premises: list[str] = Field(
         default_factory=list,
         max_length=8,
-        description="当てはめに使う質問の事実（金額・日付・期間・年齢・状態）。質問の原文の連続した一部をそのまま写す。質問に無い前提は書かない。",
+        description="導出に使う質問の事実。使う場合だけ質問の原文の連続した一部を写す。資料だけから導く場合は空。質問に無い前提は書かない。",
     )
+    # 選択原文の参照はコードが組み立てる。生成する結論数とは別で、実在はcheck_applicationsで検査する。
     item_indexes: list[int] = Field(
         default_factory=list,
-        max_length=6,
-        description="当てはめる規則の items の index（0 始まり）。quote のある kind=rule / operation の item だけ。",
+        description="導出の根拠となる資料の事実・規則・操作の items の index（0 始まり）。引用のある item を1件以上指す。",
     )
     reasoning: str = Field(
         min_length=1,
         max_length=600,
         description="規則を前提にどう当てはめたか。計算は「44万円＋180万円÷12＝59万円」のように数と＋−×÷＝の算式で書く。規則と前提に無い値・条件を足さない。",
     )
-    result: str = Field(min_length=1, max_length=300, description="当てはめの結果（要求への答え）。1〜2 文。")
+    result: str = Field(min_length=1, max_length=600, description="当てはめの結果（要求への答え）。1〜2 文。")
 
 
 class RequestEvidenceScope(_StrictModel):
@@ -571,6 +573,25 @@ class GuideRequirementCoverage(_StrictModel):
     gap: str = Field(description="根拠が不足するとき、確認できない操作・条件と確認先。根拠があれば空文字。")
 
 
+class AnswerPart(_StrictModel):
+    """質問契約の要求が含む個別の要点と、その出力への参照。"""
+
+    id: str = Field(min_length=1, max_length=80, description="この回答内で一意の要点ID。")
+    request_id: str = Field(description="元の request_units の id。背景の要求は含めない。")
+    text: str = Field(
+        min_length=1,
+        max_length=600,
+        description="質問が求める要点。requested_granularity に必要な範囲だけを分け、任意の補足は必須にしない。",
+    )
+    result_kind: Literal["direct", "derived", "gap"] = Field(description="この要点の答えが直接記載、導出、不足のいずれか。")
+    item_indexes: list[Annotated[int, Field(strict=True, ge=0)]] = Field(
+        default_factory=list, max_length=40, description="この要点に答える items の index。"
+    )
+    application_indexes: list[Annotated[int, Field(strict=True, ge=0, lt=MAX_ANSWER_PARTS)]] = Field(
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="この要点に答える applications の index。"
+    )
+
+
 class GroundedDraft(_StrictModel):
     """主張と引用の対で構成する回答草稿。本文の体裁は render が決定的に組み立てる。"""
 
@@ -580,6 +601,8 @@ class GroundedDraft(_StrictModel):
     _collapsed_duplicates: dict[str, int] = PrivateAttr(default_factory=dict)
     # 同じ回答の修正では、要求計画の表示番号も送達時の版へ結ぶ（公開の JSON へは含めない）。
     _citation_snapshots: tuple[Any, ...] = PrivateAttr(default=())
+    # 新wireの摘要は既出出力の選択だけ。依存が非公開になれば機械的に保留する。
+    _composed_summary: bool = PrivateAttr(default=False)
 
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
@@ -589,11 +612,16 @@ class GroundedDraft(_StrictModel):
         max_length=200,
         description="guide_contracts の各要件に使う根拠の計画。全 id を1回ずつ、前提の手順から並べる。kind=evidence は引用元と主張の対応を検査する要件で、その指示の復唱は不要。kind=completion は items で説明する操作・条件・除外・確認先。どちらも足りなければ gap に残す。",
     )
-    items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
+    answer_parts: list[AnswerPart] = Field(
+        default_factory=list,
+        max_length=64,
+        description="各要求の必要な要点を先に分け、直接記載・導出・不足の出力をそれぞれ参照する。同じ要求IDだけで複合要求を完了にしない。",
+    )
+    items: list[GroundedItem] = Field(description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
     applications: list[GroundedApplication] = Field(
         default_factory=list,
-        max_length=6,
-        description="質問に書かれた事実（金額・日付・期間・条件）に items の規則を当てはめて答える要求の当てはめ。規則と、規則が要る質問の事実がそろうときだけ書く。",
+        max_length=MAX_ANSWER_PARTS,
+        description="計算・条件の適用・複数資料の組み合わせで導く結論をすべて置く。items は資料の直接記載。必要な根拠と前提がそろえば、結果そのものが原文に無くてもここで答える。",
     )
     external_data_required: bool = Field(
         default=False,
@@ -611,12 +639,17 @@ class GroundedDraft(_StrictModel):
     )
     question_type: list[str] = Field(default_factory=list, description="質問の種類の分類語（任意）。")
     summary: str = Field(
-        description="items で裏付けた結論だけを1〜2文で。引用できる根拠が無ければ空文字。見出し・番号・出典・Markdown は書かない。"
+        description="出力済みの items と applications の結果だけを1〜2文に要約する。依存先をそれぞれの index 欄で明示し、新たな導出を加えない。根拠が無ければ空文字。見出し・番号・出典・Markdown は書かない。"
     )
-    summary_item_indexes: list[Annotated[int, Field(strict=True, ge=0, le=39)]] = Field(
+    summary_item_indexes: list[Annotated[int, Field(strict=True, ge=0)]] = Field(
         default_factory=list,
         max_length=40,
         description="summary の全事実を支える items の 0 始まりの index。条件・否定・例外を保ち、本文にない事実を加えない。summary が空なら空配列。",
+    )
+    summary_application_indexes: list[Annotated[int, Field(strict=True, ge=0, lt=MAX_ANSWER_PARTS)]] = Field(
+        default_factory=list,
+        max_length=MAX_ANSWER_PARTS,
+        description="summary が要約する applications の0始まりの index。導出結果への依存は items の代わりにこちらへ書く。summary が空なら空配列。",
     )
     confidence: Literal["high", "medium", "low"] = Field(
         description="high=主要な説明と適用条件に直接の根拠がある。medium=一部に不確実性がある。low=案内自体に根拠が乏しい。"
@@ -646,6 +679,8 @@ class GroundedDraft(_StrictModel):
                 collapsed["items"] = removed
                 if "applications" in data:
                     data["applications"] = _reindex_applications(data["applications"], index)
+                if "answer_parts" in data:
+                    data["answer_parts"] = _reindex_applications(data["answer_parts"], index)
                 indexes = data.get("summary_item_indexes")
                 if isinstance(indexes, list) and all(type(value) is int for value in indexes):
                     data["summary_item_indexes"] = list(dict.fromkeys(index.get(value, value) for value in indexes))
@@ -778,7 +813,7 @@ class ApplicationDraft(_StrictModel):
 
     applications: list[GroundedApplication] = Field(
         default_factory=list,
-        max_length=6,
+        max_length=MAX_ANSWER_PARTS,
         description="質問に書かれた事実に、items の規則を当てはめた結果。当てはめられる規則と事実が無ければ空。",
     )
     summary: str = Field(
@@ -789,7 +824,9 @@ class ApplicationDraft(_StrictModel):
 class ApplicationAudit(_StrictModel):
     """当てはめの段の監査（#2159）。"""
 
-    application_reviews: list[GroundedApplicationReview] = Field(default_factory=list, max_length=6, description="各 application の監査。")
+    application_reviews: list[GroundedApplicationReview] = Field(
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application の監査。"
+    )
     summary_supported: bool = Field(
         description="summary が items の規則と valid な application の結果の範囲を超える断定をしていなければ true。"
     )
@@ -854,21 +891,23 @@ class GroundedFactAudit(_StrictModel):
     （判定しない項目は空）。
     """
 
-    reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    reviews: list[GroundedItemReview] = Field(description="各 item の局所監査。")
     guide_requirement_reviews: list[GuideRequirementReview] = Field(
         default_factory=list,
         max_length=200,
         description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
     )
     application_reviews: list[GroundedApplicationReview] = Field(
-        default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application（当てはめ）の監査。"
     )
     request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
-    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
-    summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
+    summary_basis: list[str] = Field(default_factory=list, description="summary を支える items の text 全文。")
+    summary_supported: bool = Field(
+        description="summary が出力済みの items と妥当な applications の結果を超える断定をしていなければ true。"
+    )
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
     )
@@ -879,14 +918,14 @@ class GroundedAudit(_StrictModel):
 
     _wire_validation: dict[str, Any] = PrivateAttr(default_factory=dict)
 
-    reviews: list[GroundedItemReview] = Field(max_length=40, description="各 item の局所監査。")
+    reviews: list[GroundedItemReview] = Field(description="各 item の局所監査。")
     guide_requirement_reviews: list[GuideRequirementReview] = Field(
         default_factory=list,
         max_length=200,
         description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
     )
     application_reviews: list[GroundedApplicationReview] = Field(
-        default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application（当てはめ）の監査。"
     )
     request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
     unused_evidence_ids: list[str] = Field(
@@ -895,8 +934,10 @@ class GroundedAudit(_StrictModel):
     summary_output_fields: OutputFieldEvidence | None = Field(
         default=None, description="要約の出力項目について、定義の原文引用と対象の一致を返す。"
     )
-    summary_basis: list[str] = Field(default_factory=list, max_length=40, description="summary を支える items の text 全文。")
-    summary_supported: bool = Field(description="summary が items の範囲を超える断定をしていなければ true。")
+    summary_basis: list[str] = Field(default_factory=list, description="summary を支える items の text 全文。")
+    summary_supported: bool = Field(
+        description="summary が出力済みの items と妥当な applications の結果を超える断定をしていなければ true。"
+    )
     goal_alignment: Literal["aligned", "partial", "off_target"] = Field(
         description="aligned=items 全体が目的に答えている。partial=一部だけ。off_target=別の対象・業務・目的に答えている。"
     )

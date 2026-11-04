@@ -86,7 +86,8 @@ class PromptFileTests(unittest.TestCase):
         # モデルへの指示として読まれるため、UI の info と README に置く (#477)。
         for note in ("ここには", "書いてください", "体裁の指示は不要"):
             self.assertNotIn(note, DEFAULT_VLM_ANSWER_PROMPT)
-        self.assertIn("summary と items", DEFAULT_VLM_ANSWER_PROMPT)
+        self.assertIn("応答 schema の構造・役割・依存", DEFAULT_VLM_ANSWER_PROMPT)
+        self.assertNotIn("summary と items", DEFAULT_VLM_ANSWER_PROMPT)
 
     def test_render_does_not_expand_placeholders_inside_inserted_values(self):
         # 逐次置換だと、質問や metadata の中の {{answer_context}} に根拠ブロックが複製される (#478)。

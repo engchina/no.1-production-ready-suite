@@ -92,6 +92,12 @@ def apply_range_repair(
         # 私有の抽出証明は再利用せず、通常の原文・提示版の検証へ戻す。
         citation.lines = binding.lines
         if unit_binding is not None:
+            source_item = repaired.items[row.item_index]
+            original_binding = citation._unit_binding
+            if draft._composed_summary and original_binding is not None and source_item.text == original_binding.text:
+                # 新wireのitemsは原文の写し。選択範囲を直したら写しも同じ版の原文へ追従させる。
+                # 自由な回答はapplicationsにあり、ここでは書き換えない。
+                source_item.text = unit_binding.text
             citation._wire_range = unit_binding.first + 1, unit_binding.last + 1
             citation._unit_binding = unit_binding
         else:

@@ -17,6 +17,7 @@ from app.rag.pipeline import RagPipeline
 from app.rag.support_guide_runtime import guide_step_plan, match_guide
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from app.schemas.support_guide import SupportGuideContent
+from tests.generation_fixtures import generation_result
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _doc_chunk
 
 BODY = "合成パネルを開き、保存ボタンを押します。"
@@ -115,7 +116,9 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
         assert schema.__name__.endswith("GroundedDraftWire"), "生成以外のモデル呼び出しは禁止"
         evidence_id = re.findall(r"\[(E[0-9]+)\]", prompt[: prompt.index(BODY)])[-1]
         # 実際の生成wireを検証する。旧canonical quote fixtureとしては返さない。
-        return schema.model_validate(
+        return generation_result(
+            schema,
+            prompt,
             {
                 "request_coverage": [
                     {
@@ -143,7 +146,7 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
                 ],
                 "summary": "",
                 "confidence": "high",
-            }
+            },
         )
 
     monkeypatch.setattr(engine_oci, "parse_text_response", model)
@@ -217,7 +220,7 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     assert outputs[0]["raw_output_status"] == "not_recorded"
     assert outputs[0]["provider_output_text"] is None
     assert outputs[0]["parsed_output_representation"] == "generation_wire"
-    citation = outputs[0]["parsed_output"]["items"][0]["citations"][0]
+    citation = outputs[0]["parsed_output"]["answer_parts"][0]["answer"]["basis"]
     assert citation == {
         "unit_ids": re.findall(r"\[(U[0-9a-f]{24})\]", calls[0][1][: calls[0][1].index(BODY)])[-1:]
     }

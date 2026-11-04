@@ -1,3 +1,4 @@
+import generatedAnswers from "./fixtures/derived-answer-generated.json";
 import stageOutcomes from "./fixtures/stage-outcomes.json";
 import diversityStages from "./fixtures/diversity-stage-trace.json";
 import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
@@ -1950,3 +1951,24 @@ test("補助工程の省略・0件・失敗・再利用を同じ履歴snapshot�
   await expect(page.locator("[data-run-timeline-step]")).toHaveCount(0);
   await expect(page.getByText("設定がオフのため実行しません。", {exact: true})).toHaveCount(0);
 });
+
+for (const generated of generatedAnswers) {
+  test(`生成契約の原文と導出結果を履歴で分けて表示する (${generated.id})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    const citations = generated.sources.map((file_name, index) => ({ ...CITATION, document_id: `doc-${index + 1}`, chunk_id: `doc-${index + 1}:c1`, file_name, metadata: { page: 1 } }));
+    await mockRuns(page, [run(1, { question: "合成の質問", answer: generated.answer, citations, answer_diagnostics: { passage_marks: [], removed_passages: [], answer_warnings: [] } })]);
+    await page.goto("/history/run-1");
+    for (const reload of [false, true]) {
+      if (reload) await page.reload();
+      const answer = page.getByTestId("run-history-answer");
+      const facts = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料により確認できた事項", exact: true }) });
+      const derived = answer.getByTestId("answer-section").filter({ has: page.getByRole("heading", { name: "資料をもとに導いた結論", exact: true }) });
+      await expect(facts).toContainText(generated.fact);
+      await expect(derived).toContainText(generated.result);
+      await expect(derived.getByTestId("answer-citation-link")).toHaveCount(2);
+      await expect(answer.getByRole("heading", { name: "資料から確認できなかった事項", exact: true })).toHaveCount(0);
+      await expectNoPageOverflow(page);
+    }
+    await page.getByTestId("run-history-answer").screenshot({ path: testInfo.outputPath(`generated-${generated.id}-history.png`) });
+  });
+}

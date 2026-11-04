@@ -68,11 +68,20 @@ def test_wire_does_not_allow_free_locator_or_quote(key):
 def test_factory_preserves_other_fields_and_constraints():
     wire = generation_draft_wire_model()
     for key, field in GroundedDraft.model_fields.items():
-        if key not in {"items", "request_coverage", "guide_coverage"}:
+        if key not in {
+            "items",
+            "request_coverage",
+            "guide_coverage",
+            "applications",
+            "summary_application_indexes",
+            "summary",
+            "summary_item_indexes",
+            "answer_parts",
+        }:
             assert wire.model_fields[key].asdict() == field.asdict()
     item_model = wire.model_fields["items"].annotation.__args__[0]
     for key, field in GroundedItem.model_fields.items():
-        if key != "citations":
+        if key not in {"citations", "text"}:
             assert item_model.model_fields[key].asdict() == field.asdict()
     raw = payload()
     raw["items"][0]["text"] = ""

@@ -408,6 +408,15 @@ async def test_request_coverage_re_search_keeps_user_conditions_after_relaxation
             and "請求書の再発行は、請求一覧" not in prompt
         ):
             data = result.model_dump(exclude_unset=True)
+            if getattr(schema, "_uses_typed_answer_parts", False):
+                data["answer_parts"].append(
+                    {
+                        "request_id": "Q1",
+                        "requirement": "追加の合成要求",
+                        "answer": {"kind": "gap", "text": "請求書の再発行方法は？"},
+                    }
+                )
+                return schema.model_validate(data)
             data["items"].append(
                 {
                     "kind": "gap",

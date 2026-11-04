@@ -190,7 +190,10 @@ async def test_final_answer_generation_receives_assumptions(
             if policy == "assume":
                 assert str(PENDING["question"]).replace("？", "?") in prompt
                 assert "対象 A" in prompt and "対象 B" in prompt
-                output.summary = "前提: 設定の対象は未確定です。"
+                if getattr(schema, "_uses_typed_answer_parts", False):
+                    output.answer_parts[0].answer.result = "前提: 設定の対象は未確定です。"
+                else:
+                    output.summary = "前提: 設定の対象は未確定です。"
         return output
 
     monkeypatch.setattr(engine_oci, "parse_text_response", llm)

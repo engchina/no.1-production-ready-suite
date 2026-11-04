@@ -53,6 +53,8 @@ class CheckedApplication:
     # どこで作ったか（draft = 回答の草稿、step = 当てはめだけを作り直す段。#2159）。
     source: str = "draft"
     warnings: list[str] = field(default_factory=list)
+    internal_label_issues: list[str] = field(default_factory=list)
+    date_value_issues: list[str] = field(default_factory=list)
 
     def reject(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -122,8 +124,6 @@ def check_applications(
     for application in applications:
         entry = CheckedApplication(application)
         premises = [premise for premise in application.premises if premise.strip()]
-        if not premises:
-            entry.reject("前提が無い")
         for premise in premises:
             if _compact(premise) not in asked:
                 entry.warn(f"前提『{premise}』は質問に無い")
@@ -139,9 +139,11 @@ def check_applications(
         if mismatch := arithmetic_mismatch(f"{application.reasoning}\n{application.result}"):
             entry.reject(f"算式が合わない: {mismatch}")
         if label := _internal_label().search(f"{application.reasoning}\n{application.result}"):
+            entry.internal_label_issues.append(label.group(0))
             entry.reject(f"内部の番号『{label.group(0)}』を利用者向けの文に書いている")
         sources = [text for rule in entry.entries for text in span_texts(rule.span)]
         if years := absent_years(f"{application.reasoning}\n{application.result}", question, sources):
+            entry.date_value_issues = years
             entry.warn(f"質問と規則の原文に無い年: {'、'.join(years)}")
         checked.append(entry)
     return checked

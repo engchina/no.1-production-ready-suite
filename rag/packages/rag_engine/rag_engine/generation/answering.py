@@ -4081,6 +4081,7 @@ def draft_structure(draft: Any, settled: Any, *, superseded: Sequence[str] | set
         "reference_materials": _string_list(draft.reference_materials),
         "request_coverage": [plan.model_dump(mode="json") for plan in draft.request_coverage],
         "summary_item_indexes": list(draft.summary_item_indexes),
+        "summary_application_indexes": list(draft.summary_application_indexes),
         "items": [
             {
                 "kind": item.kind,

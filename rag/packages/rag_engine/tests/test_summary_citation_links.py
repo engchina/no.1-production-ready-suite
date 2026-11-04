@@ -120,3 +120,59 @@ def test_audit_failure_is_distinct_from_disabling_audit():
     assert result.timing["summary_citations"]["status"] == "linked"
     assert result.review_execution == "error"
     assert result.summary_warning
+
+
+@pytest.mark.parametrize("change", [None, "missing", "removed", "changed", "source", "basis"])
+def test_summary_links_to_published_derivation_and_its_sources(change):
+    from rag_engine.generation.applications import apply_application_audit, check_applications
+    from rag_engine.models.llm import GroundedApplication
+
+    _, value = _case([])
+    value["summary_application_indexes"] = [5 if change == "missing" else 0]
+    model = GroundedDraft.model_validate(value)
+    application = GroundedApplication(item_indexes=[0], reasoning="資料の記載を組み合わせます。", result=model.summary)
+    model.applications = [application]
+    entry = grounded.CheckedItem(model.items[0], span={"evidence_id": "E1", "source_id": "S1"}, draft_index=0)
+    applications = check_applications("合成の質問", [application], {0: entry})
+    apply_application_audit(applications, None)
+    if change == "basis":
+        entry.item = entry.item.model_copy(update={"text": "後から変えた資料の説明。"})
+    elif change == "removed":
+        applications[0].reject("根拠が撤回された")
+    elif change == "changed":
+        applications[0].application = application.model_copy(update={"result": "変更された結論"})
+    elif change == "source":
+        entry.unmatched = True
+    current = grounded.Round(model.summary, model, [entry], [], None, applications=applications)
+    linked = grounded.link_summary_evidence(current)
+    result = linked.timing["summary_citations"]
+    if change is None:
+        assert result["status"] == "linked"
+        assert result["links"][0]["application_index"] == 0
+        assert result["links"][0]["text"] == model.summary
+        assert result["links"][0]["citations"][0]["source_id"] == "S1"
+        assert linked.summary_warning  # 原文の参照を意味検証の成功へ昇格させない。
+    else:
+        assert result["status"] == "unresolved"
+        assert result["unresolved_application_indexes"]
+
+
+def test_composed_summary_with_unpublished_derivation_is_withheld_deterministically():
+    from rag_engine.generation.applications import check_applications
+    from rag_engine.models.llm import GroundedApplication
+
+    _, value = _case([])
+    value["summary_application_indexes"] = [0]
+    model = GroundedDraft.model_validate(value)
+    model._composed_summary = True
+    application = GroundedApplication(item_indexes=[0], reasoning="1＋1＝3", result=model.summary)
+    model.applications = [application]
+    entry = grounded.CheckedItem(model.items[0], span={"evidence_id": "E1"}, draft_index=0)
+    applications = check_applications("合成の質問", [application], {0: entry})
+    assert not applications[0].published
+    current = grounded.Round(model.summary, model, [entry], [], None, applications=applications)
+    result = grounded.link_summary_evidence(current)
+    assert result.summary == grounded.answer_labels().neutral_summary
+    assert result.summary_reason
+    assert result.timing["summary_citations"]["withheld"]
+    assert result.review_execution == "not_run"

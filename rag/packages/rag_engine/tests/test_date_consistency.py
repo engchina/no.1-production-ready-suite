@@ -11,7 +11,6 @@ from citation_unit_support import generated_fixture
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import applications, grounded
-from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.date_consistency import absent_years
@@ -125,16 +124,15 @@ def test_a_year_that_stays_wrong_is_kept_with_a_mark_and_is_not_rewritten() -> N
     # 本文を推測の値へ書き換えず、段落の印で利用者に示す。確かめた説明として扱わない。
     assert WRONG in result.answer_text
     marks = [mark for row in result.envelope["passage_marks"] for mark in row["reasons"]]
-    assert any(mark["code"] == "item_check" and "2021年" in mark["detail"] for mark in marks)
+    assert any(mark["code"] == "application_unaudited" and "2021年" in mark["detail"] for mark in marks)
     assert result.envelope.get("outcome") != "answered" or result.needs_human_review
 
 
-def test_a_summary_with_an_absent_year_is_withheld_and_the_body_stays() -> None:
-    result, prompts = answer(draft(RIGHT, summary=WRONG), draft(RIGHT, summary=WRONG))
-    assert len(prompts) == 2
-    assert "date_value_issues" in prompts[1]
+def test_summary_selection_cannot_add_a_year_absent_from_the_existing_result() -> None:
+    result, prompts = answer(draft(RIGHT, summary=WRONG))
+    assert len(prompts) == 1
     assert WRONG not in result.answer_text and RIGHT in result.answer_text
-    assert answer_labels().neutral_summary in result.answer_text
+    assert result.answer_text.startswith(RIGHT)
 
 
 def test_the_correction_is_part_of_the_audit_none_feedback() -> None:

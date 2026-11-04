@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
+from citation_unit_support import selected_answer_payload
 from openai import OpenAI
 
 from rag_engine.adapters import oci
@@ -63,7 +64,7 @@ def run_round(spans: list[dict[str, Any]], prompt: str, parse: Any = None) -> gr
             # 未送達の旧引用の再生を検査する。新 producer の空集合契約は別の回帰で検査する。
             return generation_draft_wire_model().model_validate(data)
         if getattr(args[3], "_uses_unit_ids", False):
-            data["items"][0]["citations"] = [{"unit_ids": [catalog.snapshots[0].unit_ids[1]]}]
+            data = {**selected_answer_payload([catalog.snapshots[0].unit_ids[1]]), "request_coverage": data["request_coverage"]}
         return args[3].model_validate(data)
 
     return grounded.run_round(
@@ -175,7 +176,7 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
     catalog = grounded.generation_unit_catalog([prepared])
     schema = grounded.generation_output_model("対象の操作方法は？", unit_catalog=catalog)
     data = wire_value()
-    data["items"][0]["citations"] = [{"unit_ids": [catalog.snapshots[0].unit_ids[1]]}]
+    data = {**selected_answer_payload([catalog.snapshots[0].unit_ids[1]]), "request_coverage": data["request_coverage"]}
     raw = json.dumps(schema.model_validate(data).model_dump(), ensure_ascii=False, indent=2) + "\n"
     sent: list[dict[str, Any]] = []
     telemetry: list[Any] = []
@@ -245,7 +246,7 @@ def test_sdk_raw_wire_is_private_and_separate_from_canonical_and_telemetry(
     output = result.citation_trace["outputs"][0]
     assert output["provider_output_text"] == raw and output["raw_output_status"] == "recorded"
     assert output["provider_capture_scope"] == "returned_response_only"
-    assert output["parsed_output"]["items"][0]["citations"][0]["unit_ids"] == [catalog.snapshots[0].unit_ids[1]]
+    assert output["parsed_output"]["answer_parts"][0]["answer"]["basis"]["unit_ids"] == [catalog.snapshots[0].unit_ids[1]]
     assert output["canonical_output"]["items"][0]["citations"][0]["lines"] == "2"
     assert "line_start" not in output["canonical_output"]["items"][0]["citations"][0]
     assert result.draft._provider_output_text == raw

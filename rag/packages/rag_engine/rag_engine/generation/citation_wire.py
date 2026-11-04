@@ -76,10 +76,15 @@ def generation_draft_wire_model() -> type[BaseModel]:
         line_end=(StrictInt | None, Field(description=LINE_END_DESCRIPTION)),
     )
     item_fields: dict[str, Any] = {"citations": (GenericAlias(list, citation), deepcopy(GroundedItem.model_fields["citations"]))}
+    text_info = deepcopy(GroundedItem.model_fields["text"])
+    text_info.metadata.extend(Field(max_length=600).metadata)
+    item_fields["text"] = (str, text_info)
     item = create_model("GroundedItemWire", __base__=GroundedItem, **item_fields)
+    items_info = deepcopy(GroundedDraft.model_fields["items"])
+    items_info.metadata.extend(Field(max_length=40).metadata)
     draft_fields: dict[str, Any] = {
         "request_coverage": (GenericAlias(list, RequestCoverageRange), deepcopy(GroundedDraft.model_fields["request_coverage"])),
-        "items": (GenericAlias(list, item), deepcopy(GroundedDraft.model_fields["items"])),
+        "items": (GenericAlias(list, item), items_info),
         # 業務ガイドの要件が無い生成には用途が無い。schema に残すとモデルが埋めようとして空白の暴走の起点になる（#4236）。
         "guide_coverage": (SkipJsonSchema[list[GuideRequirementCoverage]], Field(default_factory=list, exclude=True)),
     }
@@ -149,13 +154,25 @@ def canonical_request_coverage(
 
 
 def canonical_generation_draft(
-    value: BaseModel, link_text: Callable[[RequestLinkRange], str] = lambda _link: "", *, unit_catalog: Any = None
+    value: BaseModel,
+    link_text: Callable[[RequestLinkRange], str] = lambda _link: "",
+    *,
+    unit_catalog: Any = None,
+    question: str | None = None,
 ) -> GroundedDraft:
     """新wireは整数の指定を私有属性へ残す。既存の草稿・履歴のlinesは変更しない。
 
     ``link_text`` は計画の linked の番号の範囲から原文を切り出す（呼び出し側が送った根拠を知っている）。
     """
     from rag_engine.models.llm import GroundedCitation, GroundedDraft
+
+    if getattr(type(value), "_uses_typed_answer_parts", False):
+        from rag_engine.generation.answer_parts_wire import canonical_answer_parts
+
+        if unit_catalog is None:
+            raise ValueError("送達した引用単位の対応がありません。")
+        coverage = canonical_request_coverage(cast(Any, value).request_coverage, link_text, unit_catalog=unit_catalog)
+        return canonical_answer_parts(value, unit_catalog, [row.model_dump() for row in coverage], question=question)
 
     if getattr(type(value), "_uses_unit_ids", False):
         if unit_catalog is None:
