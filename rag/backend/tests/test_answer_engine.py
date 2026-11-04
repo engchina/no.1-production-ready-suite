@@ -3401,7 +3401,7 @@ def test_build_engine_settings_passes_request_coverage(tmp_path: Any) -> None:
         output_dir=tmp_path,
     )
 
-    assert default.request_coverage_retrieval_enabled is True
+    assert default.request_coverage_retrieval_enabled is False
     assert (default.request_coverage_max_queries, default.request_coverage_max_chunks) == (2, 4)
     assert default.request_coverage_deadline_seconds == 10.0
     assert custom.request_coverage_retrieval_enabled is True
@@ -3436,7 +3436,7 @@ def test_search_answer_profile_ignores_legacy_request_coverage() -> None:
     )
 
     assert settings.rag_request_coverage_retrieval_enabled is False
-    assert Settings().rag_request_coverage_retrieval_enabled is True
+    assert Settings().rag_request_coverage_retrieval_enabled is False
 
 
 async def test_guide_preview_is_recorded_without_extra_model_calls(
