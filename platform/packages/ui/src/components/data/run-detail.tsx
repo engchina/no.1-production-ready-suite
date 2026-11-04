@@ -1296,15 +1296,15 @@ function ProcessIdentifierRow({ label, value, trace = false }: { label: string; 
 }
 
 /** 使用したモデルの記録。識別子の後ろに置く共通の表示。 */
-export function RunUsedModels({ models, events = [] }: { models: readonly { label: string; value: string; title?: string }[]; events?: readonly { type: string; attributes?: Record<string, unknown> }[] }) {
+export function RunUsedModels({ models, events = [] }: { models: readonly { label: string; value: string; title?: string; modelId?: string }[]; events?: readonly { type: string; attributes?: Record<string, unknown> }[] }) {
   const recorded = events.flatMap(event => {
     if (event.type !== "step") return [];
     const value = event.attributes?.["gen_ai.request.model"];
     if (typeof value !== "string" || !value.trim()) return [];
     const operation = event.attributes?.["gen_ai.operation.name"];
-    return [{ label: operation === "embeddings" ? "Embedding" : operation === "rerank" ? "Rerank" : "LLM", value }];
+    return [{ label: operation === "embeddings" ? "Embedding" : operation === "rerank" ? "Rerank" : "LLM", value, modelId: value }];
   });
-  const used: readonly { label: string; value: string; title?: string }[] = [...models, ...recorded].filter((model, index, all) => all.findIndex(other => other.value === model.value) === index);
+  const used = [...models, ...recorded].filter((model, index, all) => all.findIndex(other => (other.modelId ?? other.value) === (model.modelId ?? model.value)) === index);
   const labels = useTraceDetailsLabels().processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!;
   return <div className="grid min-w-0 gap-1 text-xs leading-5" data-testid="answer-models" data-run-used-models="">
     <span className="font-medium text-fg-muted">{labels.models}</span>
