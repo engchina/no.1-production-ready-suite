@@ -40,6 +40,7 @@ from rag_engine.evaluation.answer_eval import (
     StandardAnswerScope,
     StandardRequirement,
     _checked_question_names,
+    _gap_passages,
     _prepare_standard_scope,
     evaluate_answer_payload,
     grounded_quote,
@@ -128,7 +129,7 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
     for call in parse.call_args_list:
         assert call.args[0] == expected_systems[call.args[3]]
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 17
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 18
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
     assert not {"scores", "total_score", "passed", "max_score", "pass_threshold"} & set(result)
@@ -1401,6 +1402,22 @@ def test_question_name_check_keeps_the_verdict(text, question, documents):
 def test_question_name_check_ignores_claims_not_supported():
     claim = _supported_claim().model_copy(update={"status": "contradicted"})
     assert _checked_question_names([claim], "ServiceXは利用できますか。", [dict(text=GENERAL_RULE)])[0].status == "contradicted"
+
+
+def test_passage_saying_a_gap_name_is_unconfirmed_stays_supported():
+    """#4347: 回答が確認できないと書いた名前は、断定の検査の対象にしない。"""
+    claim = _supported_claim("ServiceXが対象かは資料に記載がなく判断できません。")
+    gap = "ServiceXは引用した資料で確認できません。"
+    question = "ServiceXは利用できますか。"
+    nodes = [dict(text=GENERAL_RULE, source="rule.pdf")]
+    assert _checked_question_names([claim], question, nodes, gaps=[gap])[0].status == "supported"
+    assert _checked_question_names([claim], question, nodes)[0].status == "unsupported"
+
+
+def test_gap_passages_reads_only_the_gap_section():
+    labels = answer_labels()
+    answer = f"結論です。\n\n{labels.rules_section}\n\n・規則です。\n\n{labels.gaps_section}\n\n・確認できない点です。"
+    assert [text.lstrip("・") for text in _gap_passages(answer)] == ["確認できない点です。"]
 
 
 def test_claim_judgement_has_no_subject_fields():
