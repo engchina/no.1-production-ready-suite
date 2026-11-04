@@ -22,7 +22,6 @@ from rag_engine.evaluation.answer_eval import (
     MAX_EVALUATION_INPUT_BYTES,
     QUESTION_EVIDENCE_ID,
     QUESTION_SOURCE_ID,
-    REFERENCE_SUBJECT_UNSUPPORTED,
     REFERENCE_UNCITED,
     RUBRIC_VERSION,
     SCOPE_PROMPT,
@@ -39,8 +38,6 @@ from rag_engine.evaluation.answer_eval import (
     EvidenceCoverageOutput,
     StandardAnswerScope,
     StandardRequirement,
-    _checked_question_names,
-    _gap_passages,
     _prepare_standard_scope,
     evaluate_answer_payload,
     grounded_quote,
@@ -129,7 +126,7 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
     for call in parse.call_args_list:
         assert call.args[0] == expected_systems[call.args[3]]
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 18
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 19
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
     assert not {"scores", "total_score", "passed", "max_score", "pass_threshold"} & set(result)
@@ -1349,104 +1346,6 @@ def test_summary_candidates_include_each_cited_body_original_without_word_matchi
     inputs = next(item for item in calls_of(calls, ClaimJudgement) if item["passage"]["text"] == summary)
     assert [node["id"] for node in inputs["evidence_items"]] == [QUESTION_SOURCE_ID, "doc:p3", "doc:p9"]
     assert len(result["judge_diagnostics"]["summary_citation_candidates"][0]["body_passage_ids"]) == 2
-
-
-GENERAL_RULE = "承認された項目だけを利用できる。"
-SUBJECT_CLAIM = "ServiceXは承認された項目なので利用できます。"
-
-
-def _supported_claim(text=SUBJECT_CLAIM):
-    return ClaimCheck(answer_quote=text, status="supported", source_id="doc:p1", evidence_quote="x", reason="理由")
-
-
-def _question_name_status(text=SUBJECT_CLAIM, question="ServiceXは利用できますか。", documents=(GENERAL_RULE,)):
-    nodes = [dict(text=document, source="rule.pdf") for document in documents]
-    return _checked_question_names([_supported_claim(text)], question, nodes)[0]
-
-
-def test_general_rule_does_not_support_a_name_the_question_asked():
-    """#4327: 一般の条件だけの根拠から、質問が問うた対象が条件を満たすとする段落を supported にしない。"""
-    claim = _question_name_status()
-    assert claim.status == "unsupported"
-    assert claim.reference_check == REFERENCE_SUBJECT_UNSUPPORTED
-    assert (claim.source_id, claim.evidence_quote) == ("", "")
-    assert "ServiceX" in claim.reason
-
-
-@pytest.mark.parametrize(
-    ("text", "question", "documents"),
-    [
-        (SUBJECT_CLAIM, "ServiceXは利用できますか。", ["ServiceXは承認された項目である。"]),
-        (SUBJECT_CLAIM, "ServiceXは利用できますか。", [GENERAL_RULE, "ServiceXの担当は管理部である。"]),
-        (SUBJECT_CLAIM, "部門でServiceXを導入しました。利用できますか。", [GENERAL_RULE]),
-        (GENERAL_RULE, "ServiceXは利用できますか。", [GENERAL_RULE]),
-        # #4343: 資料と 1 字違う対象・質問が定義した対象・指示語は、コードの照合の対象にしない。
-        ("電子証明書で特定する社外システムは年1回解析する。", "社外システムの解析の頻度は？", ["社外のシステムは年1回解析する。"]),
-        ("基幹システムの保存期間は5年である。", "基幹システムの保存期間を教えてください。", ["非公開の情報を扱うシステムは5年保存する。"]),
-        ("本システムの重要度は3である。", "本システムの重要度は？", ["平均を四捨五入すると3である。"]),
-    ],
-    ids=[
-        "in-document",
-        "in-another-passage-document",
-        "stated-fact",
-        "name-not-written",
-        "one-char-difference",
-        "defined-by-question",
-        "deictic",
-    ],
-)
-def test_question_name_check_keeps_the_verdict(text, question, documents):
-    assert _question_name_status(text, question, documents).status == "supported"
-
-
-def test_question_name_check_ignores_claims_not_supported():
-    claim = _supported_claim().model_copy(update={"status": "contradicted"})
-    assert _checked_question_names([claim], "ServiceXは利用できますか。", [dict(text=GENERAL_RULE)])[0].status == "contradicted"
-
-
-def test_passage_saying_a_gap_name_is_unconfirmed_stays_supported():
-    """#4347: 回答が確認できないと書いた名前は、断定の検査の対象にしない。"""
-    claim = _supported_claim("ServiceXが対象かは資料に記載がなく判断できません。")
-    gap = "ServiceXは引用した資料で確認できません。"
-    question = "ServiceXは利用できますか。"
-    nodes = [dict(text=GENERAL_RULE, source="rule.pdf")]
-    assert _checked_question_names([claim], question, nodes, gaps=[gap])[0].status == "supported"
-    assert _checked_question_names([claim], question, nodes)[0].status == "unsupported"
-
-
-def test_gap_passages_reads_only_the_gap_section():
-    labels = answer_labels()
-    answer = f"結論です。\n\n{labels.rules_section}\n\n・規則です。\n\n{labels.gaps_section}\n\n・確認できない点です。"
-    assert [text.lstrip("・") for text in _gap_passages(answer)] == ["確認できない点です。"]
-
-
-def test_claim_judgement_has_no_subject_fields():
-    """対象の照合はコードが行う。モデルの出力に頼らない（#4343）。"""
-    assert set(ClaimJudgement.model_fields) == {"reason", "status", "evidence_id"}
-    assert "subject" not in CLAIM_PROMPT and "question_fact" not in CLAIM_PROMPT
-
-
-def test_question_name_check_lowers_claim_support_through_the_evaluation():
-    data = cited_payload() | dict(
-        question="ServiceXは利用できますか。",
-        answer_text=SUBJECT_CLAIM + "\n根拠：manual.pdf p.3",
-        evidence_items=[dict(id="doc:p3", source="manual.pdf", page_start=3, page_end=3, text=GENERAL_RULE)],
-    )
-    base = judge()
-
-    def parse(system, prompt, settings, schema, **kwargs):
-        if schema is ClaimJudgement:
-            inputs = json.loads(prompt)
-            document = next(i for i in inputs["evidence_items"] if i["evidence_id"] != QUESTION_EVIDENCE_ID)
-            return ClaimJudgement(reason="前提として承認済みとみなした", status="supported", evidence_id=document["evidence_id"])
-        return base(system, prompt, settings, schema, **kwargs)
-
-    with patch(PARSE, side_effect=parse):
-        result = evaluate_answer_payload(data, object())
-    claim = result["claim_checks"][0]
-    assert claim["status"] == "unsupported"
-    assert claim["audit_status"] == "supported"
-    assert claim["reference_check"] == REFERENCE_SUBJECT_UNSUPPORTED
 
 
 def _evidence_check(status, *lines, index=1):
