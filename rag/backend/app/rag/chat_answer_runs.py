@@ -19,6 +19,8 @@
 - 実行中のプロセスは `CHAT_ANSWER_HEARTBEAT_SECONDS` ごとに heartbeat を DB の時刻で書く。
   プロセスが止まって heartbeat が `CHAT_ANSWER_STALE_SECONDS` を超えて途絶えた `STREAMING`
   のメッセージは、会話の取得のときに失敗（中断）にする（別のプロセスは引き継がない）。
+- 正常に保存されなかった回答は、取消・停止・時間切れ・例外・最終の保存なし・heartbeat の途絶えを
+  分けて、原因のコードを処理の経過の記録に保存する（確かめていない原因を断定しない。#4319）。
 - 停止は明示の取消（`cancel`）だけ。同じプロセスなら task をすぐ止めてメッセージを
   `CANCELLED` にする。別のプロセスの task は、メッセージが `STREAMING` でなくなったことを
   次の heartbeat で知って止まる。接続の切断は取消ではない。
@@ -36,7 +38,7 @@ import socket
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -55,7 +57,12 @@ CHAT_ANSWER_TIMEOUT_MARGIN_SECONDS = 60.0
 _WORKER_ID_HOST_MAX_CHARS = 80
 
 CHAT_ANSWER_CANCELLED_MESSAGE = "回答の作成を停止しました。"
-CHAT_ANSWER_INTERRUPTED_MESSAGE = (
+CHAT_ANSWER_UNKNOWN_MESSAGE = (
+    "回答が正常に終了しませんでした。原因の記録はありません。もう一度送信してください。"
+)
+# 原因を分ける前の記録の本文。実際の原因を問わず保存されていたので、原因不明として表示する
+# （#4319）。
+_UNCLASSIFIED_INTERRUPTED_MESSAGE = (
     "回答を作成していたサービスが停止・再起動したため、回答の作成を中断しました。"
     "もう一度送信してください。"
 )
@@ -63,6 +70,68 @@ CHAT_ANSWER_LIMIT_MESSAGE = (
     "回答を作成中の質問が上限の {limit} 件に達しています。"
     "作成中の回答が終わってから、もう一度送信してください。"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ChatAnswerTermination:
+    """回答が正常に保存されなかった終わり方。``reason`` は処理の経過の記録に保存する（#4319）。"""
+
+    reason: str
+    error_type: str
+    message: str
+
+
+CHAT_ANSWER_SERVICE_STOPPED = ChatAnswerTermination(
+    "service_stopped",
+    "ServiceStopped",
+    "回答を作成していたサービスが停止したため、回答の作成を中断しました。もう一度送信してください。",
+)
+CHAT_ANSWER_TASK_CANCELLED = ChatAnswerTermination(
+    "task_cancelled",
+    "TaskCancelled",
+    "回答の作成が途中で打ち切られました。もう一度送信してください。",
+)
+CHAT_ANSWER_TIMED_OUT = ChatAnswerTermination(
+    "timed_out",
+    "TimedOut",
+    "回答の作成が時間の上限を超えたため、中断しました。もう一度送信してください。",
+)
+CHAT_ANSWER_FAILED = ChatAnswerTermination(
+    "failed",
+    "AnswerFailed",
+    "回答の作成中にエラーが発生しました。もう一度送信してください。",
+)
+CHAT_ANSWER_NOT_SAVED = ChatAnswerTermination(
+    "not_saved",
+    "AnswerNotSaved",
+    "回答の作成が最終の保存の前に終わりました。もう一度送信してください。",
+)
+CHAT_ANSWER_HEARTBEAT_LOST = ChatAnswerTermination(
+    "heartbeat_lost",
+    "HeartbeatLost",
+    "回答を作成している処理の応答が途絶えたため、中断として扱いました。もう一度送信してください。",
+)
+CHAT_ANSWER_USER_CANCELLED = ChatAnswerTermination(
+    "cancelled", "Cancelled", CHAT_ANSWER_CANCELLED_MESSAGE
+)
+
+
+def chat_answer_termination_progress(
+    progress: dict[str, Any] | None, termination: ChatAnswerTermination
+) -> dict[str, Any]:
+    """処理の経過の記録に、終わり方の原因を足す。例外の本文は入れない。"""
+    return {
+        **(progress or {}),
+        "termination_reason": termination.reason,
+        "termination_error_type": termination.error_type,
+    }
+
+
+def chat_answer_display_content(status: str, content: str) -> str:
+    """保存した回答の本文の表示。原因を分ける前の中断の記録は、原因を推測しない（#4319）。"""
+    if status == "ERROR" and content == _UNCLASSIFIED_INTERRUPTED_MESSAGE:
+        return CHAT_ANSWER_UNKNOWN_MESSAGE
+    return content
 
 
 class ChatAnswerProgress(Protocol):
@@ -206,6 +275,7 @@ class ChatAnswerRunService:
         self._worker_id: str | None = None
         self._worker_pid: int | None = None
         self._runs: dict[str, ChatAnswerRun] = {}
+        self._stopping = False
         # 開始の前に届いた取消（(run_id, 会話) → 届いた時刻）。会話に結び付け、別の会話の
         # 質問の ID を混ぜた取消をその会話の回答に当てない（#3302）。
         self._early_cancels: dict[tuple[str, str], float] = {}
@@ -325,6 +395,7 @@ class ChatAnswerRunService:
 
     async def shutdown(self) -> None:
         """backend の停止で、このプロセスの作成を打ち切り、中断として保存する。"""
+        self._stopping = True
         tasks = [run.task for run in self._runs.values() if run.task is not None and not run.done]
         for task in tasks:
             task.cancel()
@@ -344,18 +415,30 @@ class ChatAnswerRunService:
         run_task = asyncio.current_task()
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(run, run_task))
         cancelled = False
+        deadline = asyncio.timeout(timeout_seconds)
+        # executor が例外なしに戻ったのに開いたままのメッセージは、最終の保存が無かったもの。
+        termination = CHAT_ANSWER_NOT_SAVED
         try:
             if not run.cancel_requested:
-                async with asyncio.timeout(timeout_seconds):
+                async with deadline:
                     await executor(run)
         except asyncio.CancelledError:
             # 利用者の取消（`cancel`）・別のプロセスの取消（heartbeat で知る）・backend の停止。
             cancelled = True
+            termination = (
+                CHAT_ANSWER_SERVICE_STOPPED if self._stopping else CHAT_ANSWER_TASK_CANCELLED
+            )
             logger.info(
                 "chat_answer_stopped",
                 extra={"run_id": run.run_id, "cancel_requested": run.cancel_requested},
             )
-        except Exception as exc:  # noqa: BLE001 - 作成中のメッセージを中断として保存する
+        except Exception as exc:  # noqa: BLE001 - 作成中のメッセージを失敗として保存する
+            # 回答の処理の中の TimeoutError は、task 全体の時間切れと分ける。
+            termination = (
+                CHAT_ANSWER_TIMED_OUT
+                if isinstance(exc, TimeoutError) and deadline.expired()
+                else replace(CHAT_ANSWER_FAILED, error_type=type(exc).__name__)
+            )
             logger.warning(
                 "chat_answer_failed",
                 extra={"run_id": run.run_id, "error_type": type(exc).__name__},
@@ -367,21 +450,32 @@ class ChatAnswerRunService:
                 await heartbeat_task
             # 最終の状態を保存していないメッセージ（取消・停止・時間切れ・予期しない失敗）を閉じる。
             stopped = run.cancel_requested
-            message = CHAT_ANSWER_CANCELLED_MESSAGE if stopped else CHAT_ANSWER_INTERRUPTED_MESSAGE
+            if stopped:
+                termination = CHAT_ANSWER_USER_CANCELLED
             for model_id, message_id in run.open_message_ids().items():
                 run.mark_closed(message_id)
                 # 処理の経過の記録（trace id・工程の詳細・書けなかった数）も一緒に保存する（
                 # #3226）。
                 progress = run.progress.get(message_id)
+                logger.info(
+                    "chat_answer_terminated",
+                    extra={
+                        "run_id": run.run_id,
+                        "termination_reason": termination.reason,
+                        "error_type": termination.error_type,
+                    },
+                )
                 with contextlib.suppress(Exception):
                     await asyncio.shield(
                         run.store.close_streaming_chat_message(
                             message_id,
                             status="CANCELLED" if stopped else "ERROR",
-                            content=message,
+                            content=termination.message,
                             lease_owner=self.worker_id,
                             scoped=False,
-                            progress=progress.record() if progress is not None else None,
+                            progress=chat_answer_termination_progress(
+                                progress.record() if progress is not None else None, termination
+                            ),
                         )
                     )
                 run.publish(
@@ -389,8 +483,8 @@ class ChatAnswerRunService:
                     {
                         "model_id": model_id,
                         "message_id": message_id,
-                        "message": message,
-                        "error_type": "Cancelled" if stopped else "Interrupted",
+                        "message": termination.message,
+                        "error_type": termination.error_type,
                         "cancelled": stopped,
                         "stage": None,
                     },

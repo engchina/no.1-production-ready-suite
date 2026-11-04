@@ -61,10 +61,12 @@ from app.rag.answer_notice import current_answer_notice
 from app.rag.answer_timeout import AnswerTimeoutError, run_answer_with_timeout
 from app.rag.chat_answer_runs import (
     CHAT_ANSWER_CANCELLED_MESSAGE,
-    CHAT_ANSWER_INTERRUPTED_MESSAGE,
+    CHAT_ANSWER_HEARTBEAT_LOST,
     CHAT_ANSWER_TIMEOUT_MARGIN_SECONDS,
     ChatAnswerLimitError,
     ChatAnswerRun,
+    chat_answer_display_content,
+    chat_answer_termination_progress,
     get_chat_answer_run_service,
 )
 from app.rag.chat_attachments import attach_to_conversation, delete_conversation_attachments
@@ -257,7 +259,7 @@ def _to_chat_message(
         message_id=message.id,
         conversation_id=message.conversation_id,
         role=MessageRole(message.role),
-        content=message.content,
+        content=chat_answer_display_content(message.status, message.content),
         model=message.model,
         citations=citations,
         withheld_evidence_count=withheld,
@@ -1523,7 +1525,7 @@ async def _close_interrupted_answers(oracle: OracleClient, messages: list[Stored
     """作成していたプロセスが止まった作成中の回答を、中断の失敗にする(#1175)。
 
     このプロセスで作成中のものは除く。このプロセスが作っていたのに動いていないもの（task が後始末
-    の前に終わった）と、heartbeat が途絶えたもの（別のプロセスの停止・再起動）だけを、DB の時刻で
+    の前に終わった）と、heartbeat が途絶えたものだけを、DB の時刻で
     判定して閉じる（永遠に作成中にしない）。処理の経過の終端はメッセージの状態で出す。閉じたら
     True。
     """
@@ -1539,9 +1541,12 @@ async def _close_interrupted_answers(oracle: OracleClient, messages: list[Stored
                 await oracle.close_streaming_chat_message(
                     message.id,
                     status="ERROR",
-                    content=CHAT_ANSWER_INTERRUPTED_MESSAGE,
+                    content=CHAT_ANSWER_HEARTBEAT_LOST.message,
                     lease_owner=service.worker_id,
                     stale_seconds=service.stale_seconds,
+                    progress=chat_answer_termination_progress(
+                        message.progress, CHAT_ANSWER_HEARTBEAT_LOST
+                    ),
                 )
                 or closed
             )

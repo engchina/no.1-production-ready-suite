@@ -149,6 +149,9 @@ class TraceRecord(BaseModel):
     trace_dropped_spans: int = Field(default=0, ge=0)
     # span id → 工程の詳細（`ChatProgressStepDetails` の JSON。表には入れない）。
     span_details: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # 正常に保存されなかった回答の終わり方（`ChatAnswerTermination`。#4319）。
+    termination_reason: str | None = None
+    termination_error_type: str | None = None
 
 
 def parse_trace_record(value: object) -> TraceRecord | None:
