@@ -41,6 +41,7 @@ from trace_span_fake import TraceTable, trace_table  # noqa: F401 - fixture
 from app.features.nl2sql import router as nl2sql_router
 from app.features.nl2sql.incremental_store import MemoryIncrementalNl2SqlRepository
 from app.features.nl2sql.models import JobCreateRequest, JobData, JobStatus
+from app.features.nl2sql.oracle_adapter import OracleAdapterError
 from app.features.nl2sql.service import (
     JOB_CANCELLED_ERROR_CODE,
     Nl2SqlService,
@@ -200,7 +201,13 @@ def test_done_chat_turn_writes_the_span_tree_to_the_table(
     admin = service.get_job_trace(job.job_id, actor_user_uuid="user-1", actor_can_manage=True)
     assert admin is not None
     recorded = stages(admin.trace.events)
-    for name in ["prepare_context", "generate_sql", "safety_check"]:
+    for name in [
+        "prepare_context",
+        "generate_sql",
+        "safety_check",
+        "execute_sql",
+        "format_results",
+    ]:
         detail = recorded[name].details
         assert detail and detail.call and detail.call.visibility == "system_admin"
         assert detail.call.input.status == detail.call.output.status == "recorded"
@@ -561,13 +568,114 @@ def enable_trace_content_for_existing_detail_tests() -> Any:
         yield
 
 
+@pytest.mark.parametrize("mode", ["chat", "job", "generation_only", "blocked", "error"])
+def test_execution_metadata_never_persists_result_rows(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    service, repository = jobs
+    if mode == "blocked":
+        service = _worker(
+            repository,
+            _FakeEnterpriseAiClient('{"sql":"DELETE FROM APP.ORDERS","explanation":"合成の遮断"}'),
+        )
+    original = service.execute_sql
+    calls: list[str] = []
+    marker = "synthetic-row-value-not-for-trace"
+
+    def execute(*args: Any, **kwargs: Any) -> Any:
+        calls.append(str(args[0]))
+        if mode == "error":
+            raise OracleAdapterError("合成の実行失敗 ORA-00942")
+        safety, sql, results = original(*args, **kwargs)
+        column = results.columns[0] if results.columns else "synthetic_value"
+        return (
+            safety,
+            sql,
+            results.model_copy(
+                update={"columns": [column], "rows": [{column: marker}], "total": 1}
+            ),
+        )
+
+    monkeypatch.setattr(service, "execute_sql", execute)
+    request = _request() if mode == "job" else chat_turn(generation_only=mode == "generation_only")
+    job = run(service, start(service, request))
+    assert job.result is not None
+    trace_table.flush()
+    seen = service.get_job_trace(job.job_id, actor_user_uuid="user-1", actor_can_manage=True)
+    assert seen is not None
+    found = stages(seen.trace.events)
+    values = {}
+    for name in ("execute_sql", "format_results"):
+        detail = found[name].details
+        assert detail and detail.call and detail.call.visibility == "system_admin"
+        assert detail.call.input.status == detail.call.output.status == "recorded"
+        values[name] = (json.loads(detail.call.input.text), json.loads(detail.call.output.text))
+        assert marker not in detail.call.model_dump_json()
+    execute_input, execute_output = values["execute_sql"]
+    format_input, format_output = values["format_results"]
+    assert execute_input["generated_sql"] == job.result.generated_sql
+    assert (
+        execute_output["rows_recorded"]
+        is format_input["rows_recorded"]
+        is format_output["rows_recorded"]
+        is False
+    )
+    assert format_output["history_id"] == job.result.history_id
+    assert format_output["status"] == "prepared"
+    assert format_output["executable_sql"] == job.result.executable_sql
+    history = repository.get_document("history", job.result.history_id)
+    assert history is not None
+    if mode in {"generation_only", "blocked"}:
+        assert not calls
+        assert execute_input["execution_requested"] is False
+        assert execute_input["skip_reason"] == (
+            "generation_only" if mode == "generation_only" else "unsafe_sql"
+        )
+        assert execute_output["status"] == "skipped"
+        assert execute_output["result_metadata"] is format_output["result_metadata"] is None
+        assert execute_output["result_reference"] is None
+        assert found["execute_sql"].started_at == found["execute_sql"].finished_at
+    else:
+        assert len(calls) == 1
+        assert execute_input["execution_requested"] is True
+        assert execute_output["status"] == ("error" if mode == "error" else "done")
+        assert execute_output["result_metadata"]["total"] == history["result_row_count"]
+        assert (
+            execute_output["result_metadata"]
+            == format_input["result_metadata"]
+            == format_output["result_metadata"]
+        )
+        assert execute_output["result_reference"] == {
+            "kind": "jobs" if mode == "job" else "chat_results",
+            "id": job.job_id,
+        }
+    document = repository.get_document("jobs", job.job_id)
+    assert document is not None
+    assert marker not in json.dumps(document["span_details"])
+    assert marker not in json.dumps(history["span_details"])
+    if mode == "chat":
+        received = service.take_chat_execution_result(job.job_id, actor_user_uuid="user-1")
+        assert marker in str(received.results.rows)
+        assert repository.get_document("chat_results", job.job_id) is None
+        with pytest.raises(LookupError):
+            service.take_chat_execution_result(job.job_id, actor_user_uuid="user-1")
+
+
 def test_body_off_preserves_business_result_and_progress_metadata(
     jobs: Fixture,
     trace_table: TraceTable,  # noqa: F811 - fixture
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from pr_backend_core.observability.call_policy import call_content_policy
 
     service, repository = jobs
+    monkeypatch.setattr(
+        "app.features.nl2sql.service._query_results_trace_metadata",
+        lambda _results: pytest.fail("本文記録OFF時に結果snapshotを構築しました"),
+    )
     with call_content_policy(lambda: False):
         job = run(service, start(service))
     assert job.status == JobStatus.DONE and job.result and job.result.generated_sql
@@ -575,7 +683,13 @@ def test_body_off_preserves_business_result_and_progress_metadata(
     events = events_of(service, trace_table, job.job_id)
     assert stages(events)
     assert all(not step.details or not step.details.code for step in stages(events).values())
-    for name in ["prepare_context", "generate_sql", "safety_check"]:
+    for name in [
+        "prepare_context",
+        "generate_sql",
+        "safety_check",
+        "execute_sql",
+        "format_results",
+    ]:
         detail = stages(events)[name].details
         assert detail and detail.call and not detail.call.capture_enabled
         assert detail.call.input.text == detail.call.output.text == ""

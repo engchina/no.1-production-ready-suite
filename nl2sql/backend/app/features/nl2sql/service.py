@@ -4246,6 +4246,20 @@ def _job_progress_safety_details(safety: SafetyReport) -> ChatProgressStepDetail
     )
 
 
+def _query_results_trace_metadata(results: QueryResults) -> dict[str, Any]:
+    """結果行を複製せず、実行時の列・件数・接続の状態だけを返す。"""
+    return {
+        "columns": list(results.columns),
+        "total": results.total,
+        "returned_count": results.returned_count,
+        "materialized_row_count": len(results.rows),
+        "has_more": results.has_more,
+        "truncated": results.truncated,
+        "execution_context": results.execution_context,
+        "vpd_context_enforced": results.vpd_context_enforced,
+    }
+
+
 def _job_progress_execute_details(results: QueryResults) -> ChatProgressStepDetails | None:
     """SQL の実行の段階の詳細: 取得した行数・列数と、上限で打ち切ったか。"""
 
@@ -24393,8 +24407,23 @@ class Nl2SqlService:
         execute_planned = analysis.safety.is_safe and not request.generation_only
         safety_status = _job_safety_check_status(analysis.safety)
         safety_elapsed = stage_elapsed
+
+        def execution_input_snapshot() -> dict[str, Any]:
+            return {
+                "generated_sql": generated.generated_sql,
+                "analyzed_sql": analysis.executable_sql,
+                "execution_requested": execute_planned,
+                "skip_reason": "generation_only"
+                if request.generation_only
+                else "unsafe_sql"
+                if not analysis.safety.is_safe
+                else None,
+                "chat": request.is_chat_turn,
+                "row_limit": None if request.is_chat_turn else row_limit,
+                "safety": analysis.safety.model_dump(mode="json"),
+            }
+
         if not execute_planned:
-            # 実行しない SQL（遮断・生成だけ）も、実行の段を未実行の span として残す（#3226）。
             skipped_at = datetime.now(UTC)
             record_span(
                 "nl2sql.execute_sql",
@@ -24403,6 +24432,14 @@ class Nl2SqlService:
                 status="skipped",
                 attributes={"pr.stage": "execute_sql"},
                 display=SpanDisplay(kind="execute_sql"),
+                input_snapshot=execution_input_snapshot,
+                output_snapshot=lambda: {
+                    "status": "skipped",
+                    "result_metadata": None,
+                    "result_reference": None,
+                    "rows_recorded": False,
+                },
+                restricted_call=True,
             )
         with (
             observed_span(
@@ -24413,7 +24450,9 @@ class Nl2SqlService:
             )
             if execute_planned
             else nullcontext()
-        ) as stage_trace:
+        ) as execution_span:
+            if execution_span is not None:
+                execution_span.set_call_input(execution_input_snapshot, restricted=True)
             self._transition_job_steps(
                 job_id,
                 completed_stage="safety_check",
@@ -24472,16 +24511,47 @@ class Nl2SqlService:
                 safety = analysis.safety
                 executable = analysis.executable_sql
                 results = QueryResults(columns=[], rows=[], total=0)
-            if stage_trace is not None and (
+            if execution_span is not None and (
                 execution_error or (chat_execution is not None and chat_execution.status == "error")
             ):
-                stage_trace.set_status("failed")
-            elif stage_trace is not None:
+                execution_span.set_status("failed")
+            elif execution_span is not None:
                 executed_results = chat_execution.results if chat_execution is not None else results
                 # 実行の段階の補足は取得した行数。
-                stage_trace.set_display(
+                execution_span.set_display(
                     params={"rows": executed_results.total},
                     details=_job_progress_execute_details(executed_results),
+                )
+            if execution_span is not None:
+                execution_span.set_call_output(
+                    lambda: {
+                        "status": chat_execution.status
+                        if chat_execution is not None
+                        else "skipped"
+                        if not execute_planned
+                        else "error"
+                        if execution_error
+                        else "done",
+                        "executable_sql": executable,
+                        "result_metadata": _query_results_trace_metadata(
+                            chat_execution.results if chat_execution is not None else results
+                        )
+                        if execute_planned
+                        else None,
+                        "row_limit": chat_execution.row_limit
+                        if chat_execution is not None
+                        else row_limit,
+                        "error_code": chat_execution.error_code
+                        if chat_execution is not None
+                        else execution_error_code,
+                        "result_reference": {
+                            "kind": "chat_results" if request.is_chat_turn else "jobs",
+                            "id": job_id,
+                        }
+                        if execute_planned
+                        else None,
+                        "rows_recorded": False,
+                    }
                 )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="execute_sql", elapsed_ms=stage_elapsed))
@@ -24502,6 +24572,21 @@ class Nl2SqlService:
             display=SpanDisplay(kind="format_results"),
             cancellation_check=cancelled,
         ) as stage_trace:
+            stage_trace.set_call_input(
+                lambda: {
+                    "executable_sql": executable,
+                    "result_metadata": _query_results_trace_metadata(
+                        chat_execution.results if chat_execution is not None else results
+                    )
+                    if execute_planned
+                    else None,
+                    "include_interpretation": request.include_interpretation,
+                    "ontology_grounding_requested": request.ontology_grounding_requested,
+                    "include_show_prompt": request.include_show_prompt,
+                    "rows_recorded": False,
+                },
+                restricted=True,
+            )
             self._transition_job_steps(
                 job_id,
                 completed_stage="execute_sql",
@@ -24618,6 +24703,27 @@ class Nl2SqlService:
                 timing=timing,
                 interpretation=interpretation,
                 show_prompt=show_prompt,
+            )
+            stage_trace.set_call_output(
+                lambda: {
+                    "status": "prepared",
+                    "job_id": job_id,
+                    "history_id": history_id,
+                    "engine": result.engine.value,
+                    "executable_sql": result.executable_sql,
+                    "result_metadata": _query_results_trace_metadata(
+                        chat_execution.results if chat_execution is not None else result.results
+                    )
+                    if execute_planned
+                    else None,
+                    "interpretation_available": interpretation.available
+                    if interpretation is not None
+                    else None,
+                    "show_prompt_available": show_prompt.available
+                    if show_prompt is not None
+                    else None,
+                    "rows_recorded": False,
+                }
             )
         stage_elapsed = _elapsed_ms(stage_started)
         stage_timings.append(StageTiming(stage="format_results", elapsed_ms=stage_elapsed))
