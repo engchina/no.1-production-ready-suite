@@ -54,7 +54,7 @@ LIST_ROUTES = [
     ("/api/documents", documents_route),
     ("/api/documents/ingestion-jobs", documents_route),
     ("/api/knowledge-bases", knowledge_bases_route),
-    ("/api/knowledge-bases/kb-a/graph", knowledge_bases_route),
+    ("/api/knowledge-bases/kb-a/graph/overview", knowledge_bases_route),
     ("/api/search-answer-profiles", search_answer_profiles_route),
     ("/api/chat/conversations?search_answer_profile_id=profile-a", chat_route),
 ]

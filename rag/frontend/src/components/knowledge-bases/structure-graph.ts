@@ -107,7 +107,7 @@ const BLOCK_ROW_GAP = GRAPH_NODE_CARD_SIZE.height;
 
 /**
  * 配置の戦略。文書の中は親を左・子を右の階層にして 1 つのまとまりにし、
- * 参照のある文書は参照の向きで段に並べ、参照の無い文書はその下に格子で置く。
+ * 参照のある文書は参照の向きで段に並べ、参照の無い文書はその右に格子で置く（横長の画布に収める）。
  */
 export function layoutStructure(
   nodes: readonly StructureViewNode[],
@@ -137,7 +137,7 @@ export function layoutStructure(
   const edges = documentEdges.filter((edge) => edge.source !== edge.target && blocks.has(edge.source) && blocks.has(edge.target));
   for (const edge of edges) { linked.add(edge.source); linked.add(edge.target); }
   const origins = new Map<string, GraphPoint>();
-  let bottom = 0;
+  let left = 0;
   if (linked.size) {
     const placed = layoutGraphHierarchy({
       nodes: [...blocks].filter(([id]) => linked.has(id)).map(([id, block]) => ({ id, width: block.width, height: block.height })),
@@ -145,15 +145,15 @@ export function layoutStructure(
     });
     for (const [id, origin] of placed.positions) {
       origins.set(id, origin);
-      bottom = Math.max(bottom, origin.y + blocks.get(id)!.height);
+      left = Math.max(left, origin.x + blocks.get(id)!.width);
     }
-    bottom += BLOCK_ROW_GAP * 2;
+    left += BLOCK_COLUMN_GAP;
   }
   const isolated = [...blocks.keys()].filter((id) => !linked.has(id));
-  const columns = Math.max(4, Math.ceil(Math.sqrt(isolated.length)));
-  let x = 0, y = bottom, rowHeight = 0;
+  const columns = Math.max(4, Math.ceil(Math.sqrt(isolated.length * 2)));
+  let x = left, y = 0, rowHeight = 0;
   isolated.forEach((id, index) => {
-    if (index && index % columns === 0) { x = 0; y += rowHeight + BLOCK_ROW_GAP; rowHeight = 0; }
+    if (index && index % columns === 0) { x = left; y += rowHeight + BLOCK_ROW_GAP; rowHeight = 0; }
     const block = blocks.get(id)!;
     origins.set(id, { x, y });
     x += block.width + BLOCK_ROW_GAP;

@@ -239,7 +239,10 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const nodeName = (id: string) => viewById.get(id)?.name || id;
   const edges: Edge[] = allEdges.map((edge) => {
     const selected = selection?.type === "edge" && selection.id === edge.id;
-    const { sourceHandle, targetHandle, orientation } = selectGraphEdgeHandles(positionOf(edge.source), positionOf(edge.target));
+    // 包含は親が左・子が右の配置なので、常に横につなぐ（縦に回すと兄弟の節点を貫通する）。
+    const { sourceHandle, targetHandle, orientation } = edge.isReference
+      ? selectGraphEdgeHandles(positionOf(edge.source), positionOf(edge.target))
+      : ({ sourceHandle: "s-right", targetHandle: "t-left", orientation: "horizontal" } as const);
     const key = pairKey(edge);
     const parallelCount = pairCounts.get(key) ?? 1;
     const parallelIndex = pairSeen.get(key) ?? 0;

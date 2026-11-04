@@ -452,6 +452,7 @@ jobs:
               - "rag/backend/app/clients/document_category_store.py"
               - "rag/backend/app/clients/document_cleanup_store.py"
               - "rag/backend/app/clients/section_map_store.py"
+              - "rag/backend/app/clients/structure_graph_store.py"
               - "rag/backend/app/rag/section_map_service.py"
               - "rag/backend/app/rag/document_crop.py"
               - "rag/backend/tests/test_chunk_set_bound_artifacts_oracle.py"

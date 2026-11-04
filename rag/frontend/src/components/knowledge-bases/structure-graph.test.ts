@@ -57,11 +57,11 @@ describe("structureReferenceChains", () => {
 });
 
 describe("layoutStructure", () => {
-  it("参照のある文書は向きの順に、参照の無い文書はその下に置く", () => {
+  it("参照のある文書は向きの順に、参照の無い文書はその右に置く", () => {
     const nodes = visibleStructureNodes(overview, emptyStructureTree(), all);
     const positions = layoutStructure(nodes, [{ source: "a", target: "b" }], new Map());
     expect(positions.get("a")!.x).toBeLessThan(positions.get("b")!.x);
-    expect(positions.get("c")!.y).toBeGreaterThan(Math.max(positions.get("a")!.y, positions.get("b")!.y));
+    expect(positions.get("c")!.x).toBeGreaterThan(positions.get("b")!.x + GRAPH_NODE_CARD_SIZE.width);
   });
 
   it("開いた子は親の右に置き、他の文書と重ねない", () => {
