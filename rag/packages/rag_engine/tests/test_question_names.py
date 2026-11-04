@@ -38,10 +38,12 @@ GAP = "ServiceXが管理部の承認を受けたかは資料で確認できま�
         ("PCは利用できます。", "PCは使えますか？", [RULE], []),
         # 依頼の文も問いと同じ。
         (LEAP, "ServiceXの利用可否を教えてください。", [RULE], ["ServiceX"]),
+        # 分類の例として挙げた名前は確かめない（#4343）。
+        ("ServiceX等の外部サービスは利用できません。", "ServiceXなどの外部サービスは使えますか？", [RULE], []),
         # 説明に書かなければ確かめない。
         (GENERAL, "ServiceXは使えますか？", [RULE], []),
     ],
-    ids=["leap", "general", "in-source", "width-case", "stated", "katakana", "short-name", "request", "not-written"],
+    ids=["leap", "general", "in-source", "width-case", "stated", "katakana", "short-name", "request", "example", "not-written"],
 )
 def test_absent_question_names(text: str, question: str, sources: list[str], expected: list[str]) -> None:
     assert absent_question_names(text, question, sources) == expected
