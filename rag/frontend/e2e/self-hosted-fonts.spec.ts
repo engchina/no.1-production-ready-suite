@@ -165,7 +165,7 @@ test.describe("自前ホストフォント", () => {
   // Noto Sans JP に無い字だけを、自前ホストの Noto Sans SC → TC で補う（#3292）。字は合成の例。
   // SC・TC の @font-face は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305）。
   // 端末の幅によらず同じ読み方であることを 375px でも確かめる。
-  test("JP に無い簡体字・繁体字・香港の字を、最初の描画の後に読む Noto Sans SC・TC で補う", { tag: "@responsive" }, async ({ page }) => {
+  test("JP に無い簡体字・繁体字を、最初の描画の後に読む Noto Sans SC・TC で補う", { tag: "@responsive" }, async ({ page }) => {
     const external: string[] = [];
     page.on("request", (request) => {
       if (/fonts\.(googleapis|gstatic)\.com|fonts\.bunny\.net/u.test(request.url())) external.push(request.url());

@@ -142,7 +142,7 @@ async function checkDeferredCjkFallbackFonts(page: Page) {
   expect(external, "外部フォント CDN への通信").toEqual([]);
 }
 
-test("JP に無い簡体字・繁体字・香港の字を、最初の描画の後に読む Noto Sans SC・TC で補う", async ({ page }) => {
+test("JP に無い簡体字・繁体字を、最初の描画の後に読む Noto Sans SC・TC で補う", async ({ page }) => {
   await checkDeferredCjkFallbackFonts(page);
 });
 
