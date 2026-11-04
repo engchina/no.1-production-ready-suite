@@ -55,7 +55,9 @@ async def test_discovers_entire_range_before_selecting_and_keeps_full_receipt() 
     assert receipt["checked_sources"] == receipt["unique_targets"] == receipt["read_targets"] == 12
     assert receipt["added_count"] == 2
     assert len(receipt["sources"]) == len(receipt["targets"]) == 12
-    assert len(state.reference_sources[0]["sources"]) == 10
+    diagnostic_sources = state.reference_sources[0]["sources"]
+    assert isinstance(diagnostic_sources, list)
+    assert len(diagnostic_sources) == 10
     assert receipt["stop_reasons"] == ["chunk_budget"]
 
 
@@ -181,7 +183,9 @@ async def test_resolution_failure_is_not_reported_as_complete(monkeypatch: Any) 
     )
     assert receipt["resolution_errors"] == receipt["unsatisfied_sources"] == 1
     assert receipt["stop_reasons"] == ["resolution_error"]
-    assert state.reference_sources[0]["sources"][0]["outcome"] == "resolve_error"
+    diagnostic_sources = state.reference_sources[0]["sources"]
+    assert isinstance(diagnostic_sources, list)
+    assert diagnostic_sources[0]["outcome"] == "resolve_error"
 
 
 async def test_document_reference_without_search_input_is_not_counted_as_read() -> None:
