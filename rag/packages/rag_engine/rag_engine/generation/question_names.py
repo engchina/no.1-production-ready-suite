@@ -35,13 +35,37 @@ def _form(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
 
 
-def absent_question_names(text: str, question: str, sources: Sequence[str]) -> list[str]:
-    """``text`` に書いた質問の問いの文の名前のうち、根拠（``sources``）にも質問が述べた事実にも無い名前（出てきた順）。"""
+def _unconfirmed_names(question: str, sources: Sequence[str]) -> list[tuple[str, str]]:
+    """質問の問いの文の名前のうち、根拠にも質問が述べた事実にも無いもの（名前と、その名前のある文。出てきた順）。"""
     statements = question_statements(question)
-    asked = [sentence for sentence in _sentences(question) if sentence not in statements]
-    written, known = _form(text), _form("\n".join((*statements, *sources)))
-    normalized = [unicodedata.normalize("NFKC", sentence) for sentence in asked]
-    names = dict.fromkeys(
-        match.group(0) for sentence in normalized for match in _NAME.finditer(sentence) if not _EXAMPLE.match(sentence, match.end())
-    )
-    return [name for name in names if _form(name) in written and _form(name) not in known]
+    known = _form("\n".join((*statements, *sources)))
+    found: dict[str, tuple[str, str]] = {}
+    for sentence in _sentences(question):
+        if sentence in statements:
+            continue
+        normalized = unicodedata.normalize("NFKC", sentence)
+        for match in _NAME.finditer(normalized):
+            if not _EXAMPLE.match(normalized, match.end()) and _form(match.group(0)) not in known:
+                found.setdefault(match.group(0), (match.group(0), normalized))
+    return list(found.values())
+
+
+def absent_question_names(text: str, question: str, sources: Sequence[str]) -> list[str]:
+    """``text`` に書いた質問の対象の名前のうち、根拠にも質問が述べた事実にも無い名前（出てきた順）。"""
+    written = _form(text)
+    return [name for name, _ in _unconfirmed_names(question, sources) if _form(name) in written]
+
+
+def unconfirmed_question_phrases(question: str, sources: Sequence[str], gaps: Sequence[str] = ()) -> list[str]:
+    """回答で確認できないと伝える質問の対象の名前。``gaps`` に書いた名前は除く。空白だけで続く名前は 1 つにまとめる。"""
+    written = _form("\n".join(gaps))
+    names = [item for item in _unconfirmed_names(question, sources) if _form(item[0]) not in written]
+    phrases: list[str] = []
+    previous = ("", "")
+    for name, sentence in names:
+        if phrases and sentence == previous[1] and re.search(re.escape(previous[0]) + r"\s+" + re.escape(name), sentence):
+            phrases[-1] += " " + name
+        else:
+            phrases.append(name)
+        previous = (name, sentence)
+    return phrases

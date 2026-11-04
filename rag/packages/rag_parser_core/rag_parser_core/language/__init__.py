@@ -557,6 +557,7 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "deadline_summary",
         "off_goal_gap",
         "cause_gap",
+        "subject_unconfirmed_gap",
         "crag_refusal_summary",
         "crag_missing_aspect_template",
         "crag_unknown_aspect_template",

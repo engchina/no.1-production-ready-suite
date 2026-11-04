@@ -32,6 +32,7 @@ class AnswerLabels:
     deadline_summary: str
     off_goal_gap: str
     cause_gap: str
+    subject_unconfirmed_gap: str
     crag_refusal_summary: str
     crag_missing_aspect_template: str
     crag_unknown_aspect_template: str
@@ -171,6 +172,7 @@ def _build(pack: LanguagePack) -> AnswerLabels:
         deadline_summary=text("deadline_summary"),
         off_goal_gap=text("off_goal_gap"),
         cause_gap=text("cause_gap"),
+        subject_unconfirmed_gap=text("subject_unconfirmed_gap"),
         crag_refusal_summary=text("crag_refusal_summary"),
         crag_missing_aspect_template=text("crag_missing_aspect_template"),
         crag_unknown_aspect_template=text("crag_unknown_aspect_template"),
