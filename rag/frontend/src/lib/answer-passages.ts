@@ -18,33 +18,6 @@ export function answerPassages(diagnostics: unknown): AnswerPassageRecords | nul
   return parseAnswerPassageRecords(raw) ?? parseAnswerPassageRecords(raw.envelope);
 }
 
-/**
- * 段落の印の記録のある回答の本文から、回答エンジンが本文の末尾に足した「根拠と矛盾し除いた内容」「確認が必要な点」の
- * 節（見出しの段落と、続く項目の段落）を除く（#3488）。画面はこの 2 つの節を記録から共有の `AnswerSections` で作るので、
- * 本文の節も描くと 2 回出る（Agent の `markedAnswer` と同じ扱い）。見出しは保存した表示形式（`removed_section`・
- * `marked_section`）と画面の文言で探す。本文だけを読む利用者（MCP など）向けの本文そのものは変えない。
- */
-export function withoutPassageRecordSections(text: string, format?: Readonly<Record<string, string>>): string {
-  const labels = answerPassageLabels();
-  const titles = new Set(
-    [format?.removed_section, format?.marked_section, labels.removedTitle, labels.marksTitle].filter(
-      (title): title is string => Boolean(title)
-    )
-  );
-  const parts = text.split(/\n{2,}/);
-  const kept: string[] = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index].trim();
-    if (titles.has(part)) {
-      index += 1; // 見出しの段落と、続く項目の段落を除く。
-      continue;
-    }
-    if (titles.has(part.split("\n", 1)[0].trim())) continue; // 見出しと項目が同じ段落の形。
-    kept.push(parts[index]);
-  }
-  return kept.join("\n\n");
-}
-
 /** 段落の印の文言（RAG のチャット・RAG 検索・実行履歴で同じ。Agent の同じ表示と同じ文言）。 */
 export function answerPassageLabels(): AnswerPassageLabels {
   return {
@@ -61,4 +34,66 @@ export function answerPassageLabels(): AnswerPassageLabels {
     jumpLabel: (quote) => t("search.answerText.passage.jump", { quote }),
     warningsTitle: t("search.answerText.passage.warningsTitle"),
   };
+}
+
+
+/** 保存本文の注意節を投影する。記録と完全に同じ形式の行だけ重複として除き、残りは原文の補足にする。 */
+export function projectAnswerPassageSections(text: string, records: AnswerPassageRecords, format?: Readonly<Record<string, string>>) {
+  const labels = answerPassageLabels();
+  const bullet = format?.item_bullet ?? "・";
+  const compact = (value: string) => value.replace(/\s+/gu, " ").trim();
+  const short = (value: string, limit: number) => {
+    const chars = Array.from(compact(value));
+    return chars.length > limit ? chars.slice(0, limit).join("") + "…" : chars.join("");
+  };
+  const template = (value: string, args: Record<string, string>) => value.replace(/\{(\w+)\}/g, (match, key: string) => args[key] ?? match);
+  const passageLine = (item: AnswerPassageRecords["removed"][number]) => {
+    const body = item.text.trim();
+    const quote = short((body.startsWith(bullet) ? body.slice(bullet.length) : body.replace(/^\d+\.\s/, "")), 80);
+    return bullet + template(format?.passage_note_template ?? "{reasons}: 「{text}」", {
+      text: quote, reasons: [...new Set(item.reasons.map(reason => reason.label || reason.code))].join("・"),
+    });
+  };
+  const known = {
+    removed: new Set(records.removed.map(passageLine)),
+    marks: new Set([
+      ...records.marks.map(passageLine),
+      ...records.warnings.map(warning => {
+        const detail = short(warning.detail, 160);
+        const label = warning.label || warning.code;
+        return bullet + template(format?.answer_warning_template ?? "{reasons}", { reasons: detail ? `${label}: ${detail}` : label });
+      }),
+    ]),
+  };
+  const titles = new Map<string, "removed" | "marks">([
+    [format?.removed_section ?? labels.removedTitle, "removed"], [format?.marked_section ?? labels.marksTitle, "marks"],
+  ]);
+  const notes = new Set([
+    format?.removed_section_note ?? labels.removedNote,
+    format?.marked_section_note ?? labels.marksNote,
+    "次の点は根拠で確かめきれていないか、注意が必要です。",
+    "次の点は根拠で確かめきれていないか、注意が必要です（内容は回答に載せています）。",
+    "次の内容は根拠と矛盾するため、回答から除きました。",
+  ]);
+  const remaining: { removed: string[]; marks: string[] } = { removed: [], marks: [] };
+  const parts = text.split(/\n{2,}/);
+  const kept: string[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const lines = parts[index].trim().split("\n");
+    const kind = titles.get(lines[0].trim());
+    if (!kind) { kept.push(parts[index]); continue; }
+    let content = lines.slice(1);
+    if (!content.length && index + 1 < parts.length) {
+      const next = parts[index + 1].trim().split("\n");
+      const first = next[0].trim();
+      if (notes.has(first) || first.startsWith(bullet)) { content = next; index += 1; }
+    }
+    for (const raw of content) {
+      const line = raw.trim();
+      if (!line || notes.has(line) || known[kind].has(line)) continue;
+      const value = line.startsWith(bullet) ? line.slice(bullet.length) : line;
+      if (!remaining[kind].includes(value)) remaining[kind].push(value);
+    }
+  }
+  return { body: kept.join("\n\n"), notes: remaining };
 }

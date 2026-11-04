@@ -1890,3 +1890,28 @@ test("多様性補充の設定上限と実績を履歴の経過と軌跡で区�
     await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
   }
 });
+
+
+for (const withWarning of [false, true]) {
+  test(`履歴の導出結論と本文だけの注意を保持する (warning-${withWarning})`, { tag: "@responsive" }, async ({page}, testInfo) => {
+    await mockLocalAuth(page);
+    const answer = ["合成の回答。", "資料により確認できた事項", "・合成の単価は 3。", "根拠：合成 A.pdf p.1", "", "資料をもとに導いた結論", "・合成の結果は 6。", "前提：2 回使用", "当てはめ：3 × 2 = 6", "根拠：合成 A.pdf p.1", "", "確認が必要な点", "", "・合成の未確認事項", ...(withWarning ? ["・合成警告: 合成詳細"] : [])].join("\n");
+    const answer_diagnostics = {passage_marks:[],removed_passages:[],answer_warnings:withWarning ? [{code:"off_goal",label:"合成警告",detail:"合成詳細"}] : []};
+    await mockRuns(page,[run(1,{answer,citations:[{...CITATION,file_name:"合成 A.pdf",metadata:{page:1}}],answer_diagnostics})]);
+    await page.goto("/history/run-1");
+    for (const reload of [false,true]) {
+      if (reload) await page.reload();
+      const card = page.getByTestId("run-history-answer");
+      const derived = card.getByTestId("answer-section").filter({has:page.getByRole("heading",{name:"資料をもとに導いた結論",exact:true})});
+      await expect(derived.locator("h4")).toHaveText("資料をもとに導いた結論");
+      await expect(derived.getByRole("listitem")).toHaveCount(1);
+      await expect(derived).toContainText("当てはめ：3 × 2 = 6");
+      await expect(derived.getByTestId("answer-citation-link")).toHaveCount(1);
+      const notes = card.getByTestId("answer-marked-passages");
+      await expect(notes).toHaveCount(1);
+      await expect(notes.getByText("合成の未確認事項",{exact:true})).toHaveCount(1);
+      await expectNoPageOverflow(page);
+    }
+    await page.getByTestId("run-history-answer").screenshot({path:testInfo.outputPath("derived-notes-history.png")});
+  });
+}

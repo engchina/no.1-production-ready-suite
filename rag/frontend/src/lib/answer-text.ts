@@ -10,7 +10,7 @@ import { integerMetadataValue } from "./table-cell-focus";
 
 export type AnswerTextEntry =
   /** `citationLines` は各根拠の行が本文の何番目（1 始まり）の「根拠：」の行か（#1330）。 */
-  | { kind: "item"; text: string; citations: string[]; citationLines: number[] }
+  | { kind: "item"; text: string; citations: string[]; citationLines: number[]; details?: string[] }
   | { kind: "text"; text: string };
 
 export type AnswerTextBlock =
@@ -25,6 +25,12 @@ const SECTION_TITLE = new RegExp(
   "^(?:" +
     [
       "資料により確認できた事項",
+      "資料をもとに導いた結論",
+      "質問の条件への当てはめ",
+      "業務ガイドの案内",
+      "質問.{1,12}?：.+",
+      "根拠と矛盾し除いた内容",
+      "確認が必要な点",
       "根拠で確かめきれていない事項",
       "資料の出典を確かめられない説明",
       "参考情報",
@@ -67,7 +73,8 @@ function templatePattern(template: string, values: Record<string, string>): stri
 }
 
 function sectionTitle(line: string, format?: AnswerFormat): boolean {
-  if (!format) return SECTION_TITLE.test(line);
+  if (SECTION_TITLE.test(line)) return true;
+  if (!format) return false;
   if (Object.entries(format).some(([key, value]) => key.endsWith("_section") && value === line)) return true;
   return [format.operation_steps_heading, format.confirmation_steps_heading].some((heading) =>
     heading && (line === heading || new RegExp("^" + templatePattern(
@@ -88,11 +95,14 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
   let paragraph: string[] = [];
   // 本文の「根拠：」の行の順番（1 始まり）。回答エンジンが出典行ごとの根拠に付ける番号と同じ数え方（#1330）。
   let citationOrdinal = 0;
+  const isApplication = () => Boolean(section && [format?.applications_section, "資料をもとに導いた結論", "質問の条件への当てはめ"].includes(section.title));
   const flushParagraph = () => {
     const joined = paragraph.join("\n").trim();
     paragraph = [];
     if (!joined) return;
-    if (section) section.entries.push({ kind: "text", text: joined });
+    const last = section?.entries[section.entries.length - 1];
+    if (isApplication() && last?.kind === "item") (last.details ??= []).push(joined);
+    else if (section) section.entries.push({ kind: "text", text: joined });
     else blocks.push({ kind: "paragraph", text: joined });
   };
   for (const raw of lines) {
@@ -119,6 +129,7 @@ export function parseAnswerText(text: string, format?: AnswerFormat): AnswerText
       });
       continue;
     }
+    if (citation.test(line) && isApplication()) flushParagraph();
     const last = section?.entries[section.entries.length - 1];
     if (citation.test(line) && last?.kind === "item" && paragraph.length === 0) {
       last.citations.push(line);

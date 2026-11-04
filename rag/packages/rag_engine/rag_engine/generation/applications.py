@@ -34,7 +34,8 @@ from rag_engine.models.llm import ApplicationAudit, ApplicationDraft, GroundedAp
 from rag_engine.resources.runtime import resolve_prompt
 
 # 回答の本文の節の見出し。
-APPLICATIONS_SECTION_TITLE = "質問の条件への当てはめ"
+APPLICATIONS_SECTION_TITLE = "資料をもとに導いた結論"
+LEGACY_APPLICATIONS_SECTION_TITLES = ("質問の条件への当てはめ",)
 PREMISES_LABEL = "前提："
 REASONING_LABEL = "当てはめ："
 
