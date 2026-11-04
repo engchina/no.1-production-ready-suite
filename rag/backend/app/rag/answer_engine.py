@@ -1990,12 +1990,7 @@ class AnswerEngine:
                     )
         if self._attach_images and not defer_context:
             evidence = [*anchors, *siblings, *referenced, *entity_chunks, *graph_chunks]
-            with _search_stage(
-                IMAGE_EVIDENCE_STAGE,
-                active=any(_needs_image_materialization(chunk, state) for chunk in evidence),
-            ):
-                for chunk in evidence:
-                    await self._materialize_image_evidence(chunk, state)
+            await self._materialize_images(evidence, state)
             anchors = [state.chunks[chunk.chunk_id] for chunk in anchors]
             siblings = [state.chunks.get(chunk.chunk_id, chunk) for chunk in siblings]
             references = {
@@ -2244,8 +2239,7 @@ class AnswerEngine:
                 )
             originals = list(chunks.values())
             if self._attach_images:
-                for item in originals:
-                    await self._materialize_image_evidence(item, state)
+                await self._materialize_images(originals, state)
             children = [
                 _with_context_scope(
                     _stored_child(
@@ -3156,8 +3150,7 @@ class AnswerEngine:
             return []
         chunks = list(added.values())
         if self._attach_images:
-            for chunk in chunks:
-                await self._materialize_image_evidence(chunk, state)
+            await self._materialize_images(chunks, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
         children = [
             _stored_child(
@@ -3274,8 +3267,7 @@ class AnswerEngine:
                 return SectionRead(complete=True)
             return SectionRead(complete=False, reason="partial_read")
         if self._attach_images:
-            for chunk in chunks:
-                await self._materialize_image_evidence(chunk, state)
+            await self._materialize_images(chunks, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
         children = [
             _stored_child(
@@ -3491,8 +3483,7 @@ class AnswerEngine:
             return []
         chunks = [state.chunks.setdefault(chunk.chunk_id, chunk) for chunk, _ in found]
         if self._attach_images:
-            for chunk in chunks:
-                await self._materialize_image_evidence(chunk, state)
+            await self._materialize_images(chunks, state)
             chunks = [state.chunks[chunk.chunk_id] for chunk in chunks]
         children = []
         for chunk, (_, article) in zip(chunks, found, strict=True):
@@ -3527,7 +3518,61 @@ class AnswerEngine:
             for row in rows
         ]
 
-    async def _materialize_image_evidence(self, chunk: RetrievedChunk, state: _SearchState) -> None:
+    async def _materialize_images(
+        self, chunks: Sequence[RetrievedChunk], state: _SearchState
+    ) -> None:
+        """切出しの全経路を同じ実測と入出力へつなぐ。媒体実体・作業pathは記録しない。"""
+        active = any(
+            _has_image_evidence(chunk) or state.materialized_images.get(chunk.chunk_id) is not None
+            for chunk in chunks
+        )
+        with _search_stage(IMAGE_EVIDENCE_STAGE, active=active) as observation:
+            capture = observation is not None and getattr(observation, "capture_enabled", True)
+            if observation is not None:
+                observation.request(
+                    lambda: {
+                        "chunks": [_image_materialization_input(chunk, state) for chunk in chunks]
+                    }
+                )
+            receipts: list[dict[str, Any]] = []
+            error_type: str | None = None
+            try:
+                for chunk in chunks:
+                    if capture:
+                        receipt: dict[str, Any] = {}
+                        receipts.append(receipt)
+                        await self._materialize_image_evidence(chunk, state, receipt=receipt)
+                    else:
+                        await self._materialize_image_evidence(chunk, state)
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                raise
+            finally:
+                if observation is not None:
+                    observation.response(
+                        lambda: {
+                            "status": "error" if error_type else "completed",
+                            "error_type": error_type,
+                            "chunks": receipts,
+                            "cropped_count": sum(
+                                image.get("status") == "cropped"
+                                for row in receipts
+                                for image in row.get("images", ())
+                            ),
+                            "file_reused_count": sum(
+                                image.get("status") == "file_reused"
+                                for row in receipts
+                                for image in row.get("images", ())
+                            ),
+                            "cache_reused_count": sum(
+                                row.get("status") == "cache_reused" for row in receipts
+                            ),
+                        }
+                    )
+
+    async def _materialize_image_evidence(
+        self, chunk: RetrievedChunk, state: _SearchState, *, receipt: dict[str, Any] | None = None
+    ) -> None:
         """根拠 chunk の image_evidence を作業ディレクトリへ切り出し、crop_path を差し替える。
 
         rag_poc の answer_images は ``output_dir / source_run_id / crop_path`` を読むため、
@@ -3535,17 +3580,23 @@ class AnswerEngine:
         切り出せない画像は添付しない(回答は続ける)。同じ chunk は 1 回だけ切り出し、2 回目からは
         その結果の metadata を当てる(#2805)。
         """
+        if receipt is not None:
+            receipt.update(chunk_id=chunk.chunk_id, metadata_applied=False)
         if chunk.chunk_id in state.materialized_images:
             cached = state.materialized_images[chunk.chunk_id]
             if cached is not None:
                 state.chunks[chunk.chunk_id] = chunk.model_copy(
                     update={"metadata": {**chunk.metadata, "engine_metadata_json": cached}}
                 )
+            if receipt is not None:
+                receipt.update(status="cache_reused", metadata_applied=cached is not None)
             return
         raw = chunk.metadata.get("engine_metadata_json")
         if isinstance(raw, str) and "image_evidence" not in raw:
             # 画像の根拠の無い chunk は metadata を読まない(本文の JSON を解かない)。
             state.materialized_images[chunk.chunk_id] = None
+            if receipt is not None:
+                receipt.update(status="no_images")
             return
         metadata = _engine_metadata(chunk)
         images = metadata.get("image_evidence")
@@ -3553,18 +3604,32 @@ class AnswerEngine:
         height = chunk.metadata.get("page_height")
         if not isinstance(images, list) or not images or state.work_dir is None:
             state.materialized_images[chunk.chunk_id] = None
+            if receipt is not None:
+                receipt.update(
+                    status="work_directory_unavailable"
+                    if isinstance(images, list) and images
+                    else "no_images"
+                )
             return
         if not isinstance(width, int | float) or not isinstance(height, int | float):
             state.materialized_images[chunk.chunk_id] = None
+            if receipt is not None:
+                receipt.update(status="page_dimensions_unavailable")
             return
         run_id = _document_run_id(chunk.document_id)
         crop_dir = state.work_dir / run_id / "crops"
-        for image in images:
+        for index, image in enumerate(images):
+            image_receipt: dict[str, Any] | None = None
+            if receipt is not None:
+                image_receipt = {"index": index, "status": "invalid_reference"}
+                receipt.setdefault("images", []).append(image_receipt)
             if not isinstance(image, dict):
                 continue
             bbox = image.get("bbox")
             page = _int(image.get("page"))
             image_id = str(image.get("image_id") or image.get("record_id") or "").strip()
+            if image_receipt is not None:
+                image_receipt.update(image_id=image_id, page=page)
             if not image_id or page < 1 or not isinstance(bbox, list) or len(bbox) != 4:
                 continue
             name = f"{_safe_name(image_id)}.png"
@@ -3572,6 +3637,10 @@ class AnswerEngine:
             if not target.is_file():
                 source = await self._parsed_source(chunk, state)
                 if source is None:
+                    if receipt is not None:
+                        receipt.update(status="source_unavailable")
+                    if image_receipt is not None:
+                        image_receipt.update(status="source_unavailable")
                     return
                 try:
                     png = await asyncio.to_thread(
@@ -3582,9 +3651,15 @@ class AnswerEngine:
                         (float(width), float(height)),
                     )
                 except ValueError:
+                    if image_receipt is not None:
+                        image_receipt.update(status="crop_unavailable", error_type="ValueError")
                     continue
                 crop_dir.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(png)
+                if image_receipt is not None:
+                    image_receipt.update(status="cropped")
+            elif image_receipt is not None:
+                image_receipt.update(status="file_reused")
             image["source_run_id"] = run_id
             image["crop_path"] = f"crops/{name}"
         encoded = json.dumps(metadata, ensure_ascii=False, default=str)
@@ -3592,6 +3667,8 @@ class AnswerEngine:
         state.chunks[chunk.chunk_id] = chunk.model_copy(
             update={"metadata": {**chunk.metadata, "engine_metadata_json": encoded}}
         )
+        if receipt is not None:
+            receipt.update(status="completed", metadata_applied=True)
 
     async def _parsed_source(self, chunk: RetrievedChunk, state: _SearchState) -> bytes | None:
         """根拠の版が解析したファイル（同じ文書でもレシピごとに違う）。"""
@@ -3717,12 +3794,38 @@ def _search_stage(
     return observe_call("stage", name) if active else nullcontext()
 
 
-def _needs_image_materialization(chunk: RetrievedChunk, state: _SearchState) -> bool:
-    """根拠の図を切り出す(まだ切り出していない、図の根拠を持つ)chunk か。"""
-    if chunk.chunk_id in state.materialized_images or state.work_dir is None:
-        return False
+def _has_image_evidence(chunk: RetrievedChunk) -> bool:
+    """図の無い本文 JSON は観測のために解析しない。"""
     raw = chunk.metadata.get("engine_metadata_json")
     return isinstance(raw, str) and "image_evidence" in raw
+
+
+def _image_materialization_input(chunk: RetrievedChunk, state: _SearchState) -> dict[str, Any]:
+    """切出しに使う位置と版だけを記録し、媒体・保存pathは複製しない。"""
+    images = _engine_metadata(chunk).get("image_evidence") if _has_image_evidence(chunk) else None
+    return {
+        "chunk_id": chunk.chunk_id,
+        "document_id": chunk.document_id,
+        "chunk_set_id": chunk.metadata.get("chunk_set_id"),
+        "recipe_id": chunk.metadata.get("recipe_id"),
+        "page_width": chunk.metadata.get("page_width"),
+        "page_height": chunk.metadata.get("page_height"),
+        "work_directory_available": state.work_dir is not None,
+        "cache_present": chunk.chunk_id in state.materialized_images,
+        "images": [
+            {
+                "index": index,
+                **{
+                    key: image[key]
+                    for key in ("image_id", "record_id", "page", "bbox")
+                    if key in image
+                },
+            }
+            if isinstance(image, dict)
+            else {"index": index, "invalid_reference": True}
+            for index, image in enumerate(images if isinstance(images, list) else ())
+        ],
+    }
 
 
 def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
