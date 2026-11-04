@@ -200,8 +200,8 @@ def run_history_list_where(
 
 
 # 一覧の列。利用量（#3419）は `stages_json` の全体（処理の段・trace の記録）を読まず、
-# 合計の token と計測の状態の 2 つの値だけを `JSON_VALUE` で取り出す（#3466。DDL・索引は
-# 足さない）。
+# 合計の token・計測の状態を `JSON_VALUE`、記録したモデルの配列を `JSON_QUERY` で取り出す。
+# 処理の段や trace 全体は読まず、DDL・索引も足さない。
 _LIST_COLUMNS = f"""
     r.run_id, r.surface, r.search_answer_profile_id, p.name AS search_answer_profile_name,
     r.user_id_hash, r.user_uuid,
@@ -215,7 +215,9 @@ _LIST_COLUMNS = f"""
     JSON_VALUE(r.stages_json, '$.usage.total_tokens' RETURNING NUMBER(19) NULL ON ERROR)
         AS usage_total_tokens,
     JSON_VALUE(r.stages_json, '$.usage.measurement' RETURNING VARCHAR2(16) NULL ON ERROR)
-        AS usage_measurement
+        AS usage_measurement,
+    JSON_QUERY(r.stages_json, '$.usage.models' RETURNING CLOB NULL ON ERROR)
+        AS usage_models
 """
 
 # 会話の持ち主（実行の詳細の「会話の持ち主」・会話を開ける人の判定。#1954）。削除された会話は NULL。

@@ -1055,6 +1055,8 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
     ...recorder.finish("legacy-skip", "skipped", { params: { note: "skipped" }, details: { fields: [{ label: "結果", value: "設定がオフのため、登録ルールによる確認の使用をスキップしました。" }] } }),
     ...recorder.start("new-skip", ragSpan.step("用語・同義語による検索文の追加")),
     ...recorder.finish("new-skip", "skipped", { details: { fields: [{ label: "結果", value: "設定がオフのため、検索文の追加をスキップしました。" }] } }),
+    ...recorder.start("candidate-result", ragSpan.step("根拠から回答を作る")),
+    ...recorder.finish("candidate-result", "done", {params: {accepted: false}}),
     ...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"),
   ];
   const content = "合成の回答です。";
@@ -1072,13 +1074,16 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
   await page.getByTestId("search-run-progress-summary").click();
 
   async function checkRows(prefix: string) {
+    const candidate = page.getByTestId(`${prefix}-step-${spanStepId("candidate-result")}`);
+    await expect(candidate).toHaveAttribute("data-status", "done");
+    await expect(candidate.locator("[data-run-result-summary]")).toHaveText("不採用");
     const reason = "設定がオフのため、登録ルールによる確認の使用をスキップしました。";
     const skipped = page.getByTestId(`${prefix}-step-${spanStepId("legacy-skip")}`);
     await expect(skipped).toHaveAttribute("data-status", "skipped");
     await expect(skipped.locator("[data-run-step-status-duration]")).toContainText("スキップ");
-    await expect(skipped.locator("[data-run-result-summary]")).toHaveCount(0);
+    await expect(skipped.locator("[data-run-result-summary]")).toHaveText(reason);
     await expect(page.getByTestId(prefix)).not.toContainText("skipped");
-    await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveCount(0);
+    await expect(page.getByTestId(`${prefix}-step-${spanStepId("new-skip")}`).locator("[data-run-result-summary]")).toHaveText("設定がオフのため、検索文の追加をスキップしました。");
     await skipped.scrollIntoViewIfNeeded();
     await screenshotBothThemes(page, theme => testInfo.outputPath(`${prefix}-skip-${theme}.png`));
     await inspectTraceStep(page, page.getByTestId(prefix), spanStepId("legacy-skip"));

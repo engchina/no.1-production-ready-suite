@@ -1271,6 +1271,8 @@ const agentJa = {
   "run.column.executor": "実行者",
   "run.column.startedAt": "開始日時",
   "run.column.duration": "所要時間",
+  "run.column.model": "モデル",
+  "run.modelNotRecorded": "未記録",
   "run.column.usage": "トークン数",
   "run.self": "自分",
   "run.openDetail": "{title}（詳細を開く）",

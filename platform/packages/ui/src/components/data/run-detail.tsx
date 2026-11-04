@@ -22,7 +22,7 @@ import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { formatRunDateTime, formatRunDuration, formatRunTokens } from "./run-history";
-import { hasRunStepDetails, RunStepDetailsView, runStepContent, type RunStepDetails } from "./run-step-details";
+import { hasRunStepDetails, RunStepDetailsView, runStepContent, runStepResultSummary, type RunStepDetails } from "./run-step-details";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
 
 /*
@@ -556,6 +556,8 @@ export interface RunTimelineStep {
   traceMeta?: string;
   /** 段の右に並べるバッジ（token・試行の回数など）。 */
   meta?: ReactNode;
+  /** 実行の成否とは独立した、記録済みの採否などの結果。 */
+  outcome?: string;
   /**
    * 開いて見る詳細（見出しと値・行・SQL や JSON の箱・省略の印。#2294）。中身があれば行に開閉のボタンが付く。
    * 製品は記録をこの形に写すだけにし、描き方は部品が持つ（チャットの処理の経過と実行の詳細で同じ形）。
@@ -575,6 +577,12 @@ export interface RunTimelineStep {
   level?: number;
   /** 記録にある実際の親 ID。親不在でも推測で置き換えない。 */
   parentId?: string;
+}
+
+/** 経過と軌跡で同じ記録済みの結果を表示する。 */
+export function runTimelineResultSummary(step: RunTimelineStep): string | undefined {
+  const values = [step.outcome, runStepResultSummary(step.details)].filter((value): value is string => Boolean(value));
+  return values.length ? [...new Set(values)].join(" · ") : undefined;
 }
 
 const STEP_ICON: Record<Exclude<RunTimelineStepStatus, "running">, { icon: LucideIcon; className: string }> = {
@@ -946,6 +954,9 @@ export function RunTimeline({
                   {duration !== null ? formatDuration(duration) : visibleStatus ? null : labels.notRecorded}
                 </span>
               </div>
+              {runTimelineResultSummary(step) ? (
+                <p data-run-result-summary="" className="ml-6 text-xs leading-5 text-fg-muted" style={runTimelineStepIndentStyle(level)}>{runTimelineResultSummary(step)}</p>
+              ) : null}
               {hasDetails ? (
                 <div
                   id={regionId}

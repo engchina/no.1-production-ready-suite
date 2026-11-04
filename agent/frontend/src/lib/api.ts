@@ -1573,6 +1573,7 @@ export interface RunSummary {
   finished_at?: string | null;
   duration_ms?: number | null;
   total_tokens?: number | null;
+  models?: string[];
 }
 
 /** 実行履歴の状態の絞り込み（`active` は実行中・待機中、`waiting` は承認待ち・確認待ち。#1955）。 */

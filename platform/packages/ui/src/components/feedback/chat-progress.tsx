@@ -288,7 +288,7 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
   if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) result.durationMs = Math.max(0, step.durationMs);
   if (detail) result.detail = detail;
   if (step.meta) result.traceMeta = step.meta;
-  if (step.outcome) result.meta = step.outcome;
+  if (step.outcome) result.outcome = step.outcome;
   if (step.level) result.level = step.level;
   if (step.parentId) result.parentId = step.parentId;
   if (step.product) result.product = step.product;

@@ -16,6 +16,23 @@ const steps: RunTimelineStep[] = [
   { id: "tool-a", parentId: "root", level: 1, label: "合成のツール", status: "failed", operationName: "gen_ai.execute_tool", startedAt: "2026-01-01T00:00:01Z", finishedAt: "2026-01-01T00:00:04Z", details: {lines: ["synthetic-error"]} },
 ];
 describe("記録した値だけを使う軌跡", () => {
+  it("採否と結果は状態から独立した共通の摘要行で表示する", () => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    const rows: RunTimelineStep[] = [
+      {id: "candidate", label: "合成の回答候補", status: "done", outcome: "不採用", meta: "計測値", details: {fields: [{label: "結果", value: "合成の結果"}]}},
+      {id: "empty", label: "結果の無い段", status: "done"},
+    ];
+    act(() => root.render(<RunTimeline steps={rows} />));
+    const row = host.querySelector('[data-run-timeline-step="candidate"]')!;
+    expect(row.getAttribute("data-status")).toBe("done");
+    expect(row.querySelector("[data-run-result-summary]")?.textContent).toBe("不採用 · 合成の結果");
+    expect(row.querySelector("[data-run-step-status-duration]")?.textContent).not.toContain("不採用");
+    expect(host.querySelector('[data-run-timeline-step="empty"] [data-run-result-summary]')).toBeNull();
+    act(() => root.render(<TraceExplorer steps={rows} onClose={() => undefined} />));
+    expect(host.querySelector('[data-trace-record="candidate"] [data-trace-result-summary]')?.textContent).toBe("不採用 · 合成の結果");
+    act(() => root.unmount()); host.remove();
+  });
+
   it("詳細に親の位置や経路を表示せず、識別子と時刻を連続して配置する", () => {
     const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
     try {
@@ -144,15 +161,14 @@ it("経過は処理内容だけを描き、軌跡は同じ内容の後に時刻�
   } finally { act(() => root.unmount()); host.remove(); }
 });
 
-it.each(["確認を省略", "設定がオフのため省略しました"])("収縮行に補足を出さず、展開先で理由を一度だけ保持する: %s", result => {
+it.each(["確認を省略", "設定がオフのため省略しました"])("収縮行は記録済み結果を摘要し、展開先で補足理由を保持する: %s", result => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
   const reason = "設定がオフのため省略しました";
   try {
     act(() => root.render(<RunTimeline steps={[{...steps[0], status: "skipped", detail: reason, details: {fields: [{label: "結果", value: result}]}}]} />));
-    expect(host.textContent).not.toContain(reason);
-    expect(host.querySelector("[data-run-result-summary]")).toBeNull();
+    expect(host.querySelector("[data-run-result-summary]")?.textContent).toBe(result);
     act(() => host.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
-    expect(host.textContent?.split(reason).length).toBe(2);
+    expect(host.querySelector("[data-run-timeline-details]")?.textContent?.split(reason).length).toBe(2);
     expect(host.querySelector("[data-run-timeline-details]")?.textContent).toContain(result);
   } finally { act(() => root.unmount()); host.remove(); }
 });

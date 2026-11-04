@@ -5466,6 +5466,8 @@ export const ja = {
   "history.list.aria": "実行履歴",
   "history.col.outcome": "回答の対応",
   "history.col.verification": "資料との照合",
+  "history.col.model": "モデル",
+  "history.modelNotRecorded": "未記録",
   "history.col.usage": "トークン数",
   "history.col.createdAt": "日時",
   "history.question.withheld": "（安全チェックで止めた質問は保存しません）",
