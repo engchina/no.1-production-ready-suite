@@ -21,9 +21,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  Handle,
-  MarkerType,
-  Position,
   ViewportPortal,
   useReactFlow,
   type Edge,
@@ -33,8 +30,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button, StatusBadge, fieldControlClassName } from "@production-ready/ui";
-import { GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, GraphSearchNavigation, GraphNodeFrame, GraphLegend, normalizeGraphSearch } from "@production-ready/ui/graph";
+import { Button, fieldControlClassName } from "@production-ready/ui";
+import { applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphParallelEdge, GraphSearchNavigation, normalizeGraphSearch, selectGraphEdgeHandles, type GraphEdgeHandleSelection, type GraphNodeDimensions } from "@production-ready/ui/graph";
 import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
 
@@ -48,8 +45,6 @@ import {
 } from "./graphLayout";
 import { cssVar, edgeStroke, nodeFill, nodeFillVar, nodeStroke } from "./graphPalette";
 import {
-  applyOntologyNodeDimensionChanges,
-  applyOntologyNodePositionChanges,
   cardinalityShortLabel,
   isOntologyContainmentEdge,
   isOntologyDetailNodeKind,
@@ -57,13 +52,9 @@ import {
   isOntologyMappingEdge,
   ontologyGraphForViewMode,
   ontologyGraphWithDetailVisibility,
-  selectOntologyEdgeHandles,
-  type OntologyEdgeHandleSelection,
   type OntologyGraphViewMode,
-  type OntologyNodeDimensions,
 } from "./graphView";
 import { ontologyNodeDisplay, ontologyNodeSearchValues } from "./nodeDisplay";
-import OntologyParallelEdge from "./ParallelEdge";
 import type { OntologyGraph, OntologyNode } from "./types";
 
 interface OntologyGraphCanvasProps {
@@ -81,8 +72,8 @@ interface OntologyGraphCanvasProps {
   onViewModeChange?: (mode: OntologyGraphViewMode) => void;
 }
 
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 76;
+const NODE_WIDTH = GRAPH_NODE_CARD_SIZE.width;
+const NODE_HEIGHT = GRAPH_NODE_CARD_SIZE.height;
 const GRAPH_VIEW_MODES: Array<{ id: OntologyGraphViewMode; labelKey: string; icon: LucideIcon }> = [
   { id: "grounding", labelKey: "nl2sql.ontology.graphMode.grounding", icon: Route },
   { id: "all", labelKey: "nl2sql.ontology.graphMode.all", icon: Network },
@@ -111,8 +102,6 @@ const KIND_ICONS: Record<string, LucideIcon> = {
   question_intent: MessageSquare,
   validation_finding: AlertTriangle,
 };
-
-const HIDDEN_HANDLE_STYLE = { visibility: "hidden" } as const;
 
 function nodeShape(node: OntologyNode): string {
   if (node.kind === "metric") return "18px";
@@ -199,102 +188,35 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
     .filter(Boolean)
     .join("\n");
   return (
-    <GraphNodeFrame selected={selected}
-      className="grid h-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2"
+    <GraphNodeCard
+      icon={Icon}
+      kindLabel={display.kindLabel}
+      primary={display.primaryLabel}
+      secondary={display.secondaryLabel}
+      stats={showStats ? [
+        t("nl2sql.ontology.nodeStats.columns", { count: stats?.columnCount ?? 0 }),
+        ...(stats?.joinCount ? [t("nl2sql.ontology.nodeStats.joins", { count: stats.joinCount })] : []),
+      ] : []}
+      fill={nodeFill(node)}
+      stroke={highlighted ? cssVar("--color-accent-fg") : nodeStroke(node, false)}
+      emphasized={emphasizedBorder}
+      radius={nodeShape(node)}
+      selected={selected}
+      matched={searchMatched}
+      dimmed={dimmed}
+      kindLabelTestId="ontology-node-kind-label"
       data-testid={`ontology-node-card-${node.id}`}
       data-ontology-node-kind={node.kind}
       // 接地(ハイライト)は枠色と opacity で表すため、テストから検証できる印を残す。
       data-ontology-node-grounded={highlighted ? "true" : "false"}
       title={hoverTitle}
-      style={{
-        width: NODE_WIDTH,
-        minHeight: NODE_HEIGHT,
-        border: `${emphasizedBorder ? 2 : 1}px solid ${
-          highlighted ? cssVar("--color-accent-fg") : nodeStroke(node, Boolean(selected))
-        }`,
-        borderRadius: nodeShape(node),
-        background: nodeFill(node),
-        color: cssVar("--color-graph-fg"),
-        opacity: dimmed ? 0.35 : 1,
-        // 検索一致は接地ハイライト(枠)と区別できるリングで示す
-        boxShadow: searchMatched
-          ? // グラフ座標系のリング幅（ズームに追従する幾何値）なので px で指定する。
-            // oxlint-disable-next-line design-system/restricted-syntax
-            `0 0 0 3px color-mix(in srgb, ${cssVar("--color-warning-fg")} 65%, transparent)`
-          : undefined,
-      }}
-    >
-      {/* 4 方向 × source/target の隠しハンドル。エッジ側が相対位置で接続方向を選ぶ
-          (固定 Left/Right だけだと直下ノードへのエッジが自己ループ状になるため)。 */}
-      <Handle id="t-left" type="target" position={Position.Left} style={HIDDEN_HANDLE_STYLE} />
-      <Handle id="t-top" type="target" position={Position.Top} style={HIDDEN_HANDLE_STYLE} />
-      <Handle id="t-right" type="target" position={Position.Right} style={HIDDEN_HANDLE_STYLE} />
-      <Handle id="t-bottom" type="target" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} />
-      <Handle id="s-left" type="source" position={Position.Left} style={HIDDEN_HANDLE_STYLE} />
-      <Handle id="s-top" type="source" position={Position.Top} style={HIDDEN_HANDLE_STYLE} />
-      {/* グラフの節点の印の箱（名前と種類の 2 行のまとまりの中央。文字の 1 行目にそろえる規則の例外。#2371）。 */}
-      <span
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
-        style={{ background: "color-mix(in srgb, currentColor 12%, transparent)" }}
-        data-icon-align-skip=""
-      >
-        <Icon size={16} aria-hidden="true" />
-      </span>
-      <span className="grid min-w-0 gap-0.5">
-        <span
-          className="min-w-0 justify-self-start"
-          data-testid="ontology-node-kind-label"
-        >
-          <StatusBadge
-            variant="info"
-            icon={false}
-            label={display.kindLabel}
-            className="max-w-full whitespace-normal text-left"
-          />
-        </span>
-        <span className="block truncate text-sm font-semibold leading-5">
-          {display.primaryLabel}
-        </span>
-        {display.secondaryLabel ? (
-          <span
-            className="block truncate text-xs leading-4 opacity-70"
-            title={display.secondaryLabel}
-          >
-            {display.secondaryLabel}
-          </span>
-        ) : null}
-        {showStats ? (
-          <span className="mt-0.5 flex min-w-0 flex-wrap gap-1 text-xs leading-3">
-            <span className="rounded border border-current/15 px-1 py-0.5 opacity-75">
-              {t("nl2sql.ontology.nodeStats.columns", { count: stats?.columnCount ?? 0 })}
-            </span>
-            {stats?.joinCount ? (
-              <span className="rounded border border-current/15 px-1 py-0.5 opacity-75">
-                {t("nl2sql.ontology.nodeStats.joins", { count: stats.joinCount })}
-              </span>
-            ) : null}
-          </span>
-        ) : null}
-      </span>
-      <Handle id="s-right" type="source" position={Position.Right} style={HIDDEN_HANDLE_STYLE} />
-      <Handle id="s-bottom" type="source" position={Position.Bottom} style={HIDDEN_HANDLE_STYLE} />
-    </GraphNodeFrame>
+    />
   );
 });
 
 // 型マップはモジュールレベル定数にする(インライン定義だと毎レンダで全要素が再マウントされる)
 const NODE_TYPES = { ontology: OntologyNodeCard };
-const EDGE_TYPES = { ontologyParallel: OntologyParallelEdge };
-
-function LegendSwatch({ kind }: { kind: string }) {
-  return (
-    <span
-      className="h-2.5 w-2.5 shrink-0 rounded-sm border border-current/20"
-      style={{ background: cssVar(nodeFillVar(kind)) }}
-      aria-hidden="true"
-    />
-  );
-}
+const EDGE_TYPES = { ontologyParallel: GraphParallelEdge };
 
 /**
  * 凡例: 表示中グラフに存在する種別グループのみを表示し、クリックで種別フィルタを
@@ -314,7 +236,7 @@ function OntologyGraphLegend({
   return (
     <GraphLegend
       label={t("nl2sql.ontology.legendLabel")}
-      items={groups.map((group) => ({ id: group.id, label: t(group.labelKey), marker: <LegendSwatch kind={group.swatchKind} />, hint: t("nl2sql.ontology.legendToggleHint") }))}
+      items={groups.map((group) => ({ id: group.id, label: t(group.labelKey), marker: <GraphLegendSwatch fill={cssVar(nodeFillVar(group.swatchKind))} />, hint: t("nl2sql.ontology.legendToggleHint") }))}
       disabledIds={disabledGroupIds} onToggle={onToggleGroup} testId="ontology-graph-legend"
     >
         <span className="inline-flex items-center gap-1 whitespace-normal px-1">
@@ -465,7 +387,7 @@ function OntologyFlow({
   );
   // React Flow が実測したノードサイズ。`measured` として返さないと配列再生成のたびに
   // handleBounds がリセットされ、全エッジが 1 フレーム消えて点滅する(controlled flow の契約)
-  const [measuredById, setMeasuredById] = useState<Map<string, OntologyNodeDimensions>>(
+  const [measuredById, setMeasuredById] = useState<Map<string, GraphNodeDimensions>>(
     () => new Map()
   );
   const [internalViewMode, setInternalViewMode] = useState<OntologyGraphViewMode>(
@@ -562,8 +484,8 @@ function OntologyFlow({
   const statsByObject = useMemo(() => objectNodeStats(graph), [graph]);
 
   const onNodesChange = useCallback((changes: NodeChange<Node<OntologyNodeData>>[]) => {
-    setPositionOverrides((current) => applyOntologyNodePositionChanges(current, changes));
-    setMeasuredById((current) => applyOntologyNodeDimensionChanges(current, changes));
+    setPositionOverrides((current) => applyGraphNodePositionChanges(current, changes));
+    setMeasuredById((current) => applyGraphNodeDimensionChanges(current, changes));
   }, []);
   // レイアウトの意味が変わるビューモード切替をまたいだ上書きの持ち越しは混乱の元なので破棄
   const lastViewModeRef = useRef(currentViewMode);
@@ -600,15 +522,10 @@ function OntologyFlow({
   };
 
   // ホバー中は隣接ノード・エッジを残して他を減光する(接地/検索の強調中は無効)
-  const hoverNeighborIds = useMemo(() => {
-    if (!hoveredNodeId) return null;
-    const neighbors = new Set([hoveredNodeId]);
-    for (const edge of visibleGraph.edges) {
-      if (edge.source_node_id === hoveredNodeId) neighbors.add(edge.target_node_id);
-      else if (edge.target_node_id === hoveredNodeId) neighbors.add(edge.source_node_id);
-    }
-    return neighbors;
-  }, [hoveredNodeId, visibleGraph.edges]);
+  const hoverNeighborIds = useMemo(
+    () => graphNeighborIds(hoveredNodeId, visibleGraph.edges.map((edge) => ({ source: edge.source_node_id, target: edge.target_node_id }))),
+    [hoveredNodeId, visibleGraph.edges]
+  );
 
   // 強調は 2 チャネルを合成する: 接地ハイライト(枠・塗り)と検索一致(リング)。
   // 以前は接地表示中に検索が無反応だったため、両者を独立チャネルとして常に効かせる。
@@ -810,7 +727,7 @@ function OntologyFlow({
     const prepared = visibleGraph.edges.map((edge) => {
       const sourcePosition = effectivePositions.get(edge.source_node_id);
       const targetPosition = effectivePositions.get(edge.target_node_id);
-      let handles: OntologyEdgeHandleSelection | null = null;
+      let handles: GraphEdgeHandleSelection | null = null;
       if (sourcePosition && targetPosition) {
         const sameLane =
           semanticLayout.laneByNodeId.get(edge.source_node_id) ===
@@ -820,7 +737,7 @@ function OntologyFlow({
           kindById.get(edge.target_node_id) === "schema" ||
           isOntologyContainmentEdge(edge) ||
           (sameLane && Math.abs(targetPosition.y - sourcePosition.y) >= NODE_HEIGHT);
-        handles = selectOntologyEdgeHandles(sourcePosition, targetPosition, { preferVertical });
+        handles = selectGraphEdgeHandles(sourcePosition, targetPosition, { preferVertical });
       }
       return { edge, targetPosition, handles };
     });
@@ -913,27 +830,18 @@ function OntologyFlow({
         ariaLabel: `${edge.relationship_name_ja}${
           emphasis.highlightEdges.has(edge.id) ? t("nl2sql.ontology.edgeGroundedSuffix") : ""
         }`,
-        markerEnd: { type: MarkerType.ArrowClosed, color: cssVar("--color-graph-line") },
+        markerEnd: GRAPH_EDGE_MARKER,
         // hover/選択中のエッジラベルは他エッジより前面に出す
         ...(showFullLabel ? { zIndex: 1000 } : {}),
-        style: {
-          stroke: highlighted || selected ? cssVar("--color-accent-fg") : edgeStroke(edge),
-          strokeWidth: highlighted || selected
-            ? 2.5
-            : edge.validation_status === "blocked"
-              ? 2
-              : mappingEdge
-                ? 1
-                : 1.25,
+        style: graphEdgeStyle({
+          stroke: edgeStroke(edge),
+          emphasized: highlighted || selected,
+          width: edge.validation_status === "blocked" ? 2 : mappingEdge ? 1 : 1.25,
           // 「対応」(maps_to)は点線で FK join の実線と区別。proposed の点線は従来どおり優先
-          strokeDasharray:
-            edge.review_status === "proposed" ? "5 4" : mappingEdge ? "4 3" : undefined,
+          dash: edge.review_status === "proposed" ? "5 4" : mappingEdge ? "4 3" : undefined,
           opacity: emphasis.active && !highlighted ? 0.3 : hoverDimmed ? 0.35 : 1,
-        },
-        labelStyle: { fill: cssVar("--color-fg-muted"), fontSize: cssVar("--font-size-xs"), fontWeight: 600 },
-        labelBgStyle: { fill: cssVar("--color-surface"), fillOpacity: 0.92 },
-        labelBgPadding: [6, 3] as [number, number],
-        labelBgBorderRadius: 4,
+        }),
+        ...GRAPH_EDGE_LABEL_PROPS,
       };
     });
   }, [

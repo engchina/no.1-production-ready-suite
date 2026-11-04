@@ -97,12 +97,16 @@ test("文書構造グラフを展開して entity ノードを表示する", asy
   await expect(graph.getByText("就業規則")).toBeVisible();
   await expect(graph.getByText("有給休暇")).toBeVisible();
 
+  // ホイールは NL2SQL の図と同じく図の拡大・縮小で、ページを動かさない。
   const main = page.locator("main");
   await graph.scrollIntoViewIfNeeded();
   const mainScrollTop = await main.evaluate((element) => element.scrollTop);
+  const viewport = graph.locator(".react-flow__viewport");
+  const before = await viewport.getAttribute("style");
   await graph.hover();
-  await page.mouse.wheel(0, -600);
-  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeLessThan(mainScrollTop);
+  await page.mouse.wheel(0, 600);
+  await expect.poll(() => viewport.getAttribute("style")).not.toBe(before);
+  expect(await main.evaluate((element) => element.scrollTop)).toBe(mainScrollTop);
 });
 
 test("関係情報が無い KB は空状態を出す", async ({ page }) => {
@@ -273,7 +277,9 @@ for (const theme of ["light", "dark"] as const) {
     if (colors.edgeLabelBackground !== null) {
       expect(colors.edgeLabelBackground).toBe(colors.tokens.surface);
     }
-    // 文書構造グラフには辺のラベル（relates_to）がある。
+    // 包含以外の辺のラベルは選択すると出る（参照は常に出す）。
+    await region.locator(".react-flow__edge").first().focus();
+    await page.keyboard.press("Enter");
     await expect(region.locator(".react-flow__edge-textbg")).toHaveCount(1);
     await expectNoPageOverflow(page);
   });
@@ -306,6 +312,10 @@ for (const count of [30, 80]) {
     await expect.poll(fits).toBe(true);
     await graph.getByRole("button", { name: "全体表示", exact: true }).click();
     await expect.poll(fits).toBe(true);
+    // 包含の辺は多いので、ラベルは選択したときだけ出す（英語の内部名を出さない。#3028）。
+    await expect(graph.locator(".react-flow__edge-text")).toHaveCount(0);
+    await graph.locator(".react-flow__edge").first().focus();
+    await page.keyboard.press("Enter");
     await expect(graph.locator(".react-flow__edge-text").first()).toHaveText("含む");
     // 小地図の viewBox は有限の値で、ノードが描かれる（#4078）。375px は小地図を出さない。
     const minimap = graph.locator(".react-flow__minimap svg");
@@ -343,19 +353,19 @@ test("長い共通の接頭辞を持つ章節は末尾の見出しで区別で�
   await expect(node(0)).toBeVisible();
 
   const label = async (index: number) => (await node(index).innerText()).split("\n").slice(1).join(" / ");
-  expect(await label(0)).toBe("… > 第1章 / 第1条");
-  expect(await label(1)).toBe("… > 第1章 / 第2条");
-  expect(await label(2)).toBe("… > 第2章 / 第1条");
+  expect(await label(0)).toBe("第1条 / … > 第1章");
+  expect(await label(1)).toBe("第2条 / … > 第1章");
+  expect(await label(2)).toBe("第1条 / … > 第2章");
 
   // 完全な名前は title（ポインター）と選択の詳細（タッチ・キーボード）で読める。
-  await expect(node(1).locator("[title]")).toHaveAttribute("title", paths[1]!);
+  await expect(node(1).locator("[title]").first()).toHaveAttribute("title", paths[1]!);
   await expect(node(1)).toHaveAttribute("aria-label", `章・節：${paths[1]}`);
   await node(1).focus();
   await page.keyboard.press("Enter");
   await expect(graph.getByRole("region", { name: "選択したノード" }).getByText(paths[1]!, { exact: true })).toBeVisible();
 
   // 文書の節点はファイル名で、階層のパスとして分けない。
-  await expect(graph.locator('.react-flow__node[data-id="doc"] .line-clamp-2')).toHaveText(`文書全体: ${common}`);
+  await expect(graph.locator('.react-flow__node[data-id="doc"] .font-semibold')).toHaveText(`文書全体: ${common}`);
   await expectNoPageOverflow(page);
 });
 

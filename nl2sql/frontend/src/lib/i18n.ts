@@ -998,8 +998,6 @@ const nl2sqlJa = {
   "ontologyWorkspace.rollbackVersion": "公開済みの版を選択",
   "ontologyWorkspace.action.rollback": "公開版を切り戻す",
   "ontologyWorkspace.workTitle": "構築結果・レビュー・公開",
-  "ontologyWorkspace.graph": "同一版の概念グラフ（Concept Graph）",
-  "ontologyWorkspace.graphKeyboard": "Tab キーで概念と依存関係を確認できます。",
   "ontologyWorkspace.tabs": "業務モデル作業領域（Ontology Workspace）",
   "ontologyWorkspace.tab.capabilities": "能力の利用（Capabilities）",
   "ontologyCapability.enabled": "利用を有効にする",
