@@ -130,7 +130,13 @@ def install_trace_span_store(
         previous, _STORE = _STORE, store
     if previous is not None:
         previous.writer.stop()
+        from .trace_bodies import stop_trace_body_persistence
+
+        stop_trace_body_persistence()
     if start:
+        from .trace_bodies import start_trace_body_persistence
+
+        start_trace_body_persistence(connection_factory)
         store.writer.start()
     return store
 
@@ -138,6 +144,9 @@ def install_trace_span_store(
 def reset_trace_span_store() -> None:
     """書き手を止めて外す（テスト）。"""
 
+    from .trace_bodies import stop_trace_body_persistence
+
+    stop_trace_body_persistence()
     global _STORE
     with _STORE_LOCK:
         previous, _STORE = _STORE, None
@@ -157,6 +166,9 @@ def start_trace_span_store() -> None:
         return
     store = current_trace_span_store()
     if store is not None:
+        from .trace_bodies import start_trace_body_persistence
+
+        start_trace_body_persistence(store.connection_factory)
         store.writer.start()
         return
     install_trace_span_store(_oracle_connection)
@@ -165,6 +177,9 @@ def start_trace_span_store() -> None:
 def stop_trace_span_store() -> None:
     """process の終了で、待っている span を書いてから書き手を止める。"""
 
+    from .trace_bodies import stop_trace_body_persistence
+
+    stop_trace_body_persistence()
     store = current_trace_span_store()
     if store is not None:
         store.writer.stop()

@@ -2,7 +2,7 @@ import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
 import nativeRrfDetails from "./fixtures/native-rrf-trace.json";
 import weightedRrfDetails from "./fixtures/weighted-rrf-trace.json";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
-import { syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
+import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Locator, type Page, test } from "./fixtures/test";
 import { mockTraceApi, ragSpan, savedSpanProgress, spanStepId, SPAN_TRACE_ID, traceSnapshotJson } from "./_chat-progress";
@@ -1732,4 +1732,49 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await expect(page.locator("[data-trace-inspector]")).toContainText("原質問の検索内で統合済み");
   await expectNoPageOverflow(page);
   await page.locator("[data-trace-inspector]").screenshot({path: testInfo.outputPath("native-fusion-no-additional.png")});
+});
+
+test("保存済みの全文を分段取得して末尾まで確認する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  if (testInfo.project.name === "desktop") await page.setViewportSize({width: 1280, height: 900});
+  await mockLocalAuth(page);
+  const row = run(1, {question: "合成の質問", answer: "合成の回答"});
+  await mockRuns(page, [row]);
+  const body = syntheticFullCallBody();
+  await mockTraceApi(page, {[row.run_id]: savedSpanProgress(row.run_id, [
+    {key: "root", spec: ragSpan.root(), at: [0, 2]},
+    {key: "full", spec: ragSpan.technical("gen_ai.chat", "root"), at: [0, 1], details: {call: body.call}},
+  ])});
+  const reads: number[] = [];
+  await page.route(`**/api/history/runs/${row.run_id}/trace/spans/*/input/body?*`, route => {
+    const first = Number(new URL(route.request().url()).searchParams.get("first_part")); reads.push(first);
+    return route.fulfill({json: {data: body.page(first)}});
+  });
+  await page.goto(`/history/${row.run_id}`);
+  const timeline = page.getByTestId("run-history-timeline");
+  await page.getByTestId("run-history-timeline-summary").click();
+  await inspectTraceStep(page, timeline, spanStepId("full"));
+  const inspector = page.locator("[data-trace-inspector]");
+  await inspector.getByRole("tab", {name: "入力", exact: true}).click();
+  expect(reads).toEqual([]);
+  await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();
+  await inspector.getByRole("button", {name: "続きを読む", exact: true}).click();
+  await expect(inspector.locator("[data-call-readable]")).toContainText("全文の末尾");
+  await expect(inspector.getByRole("button", {name: "続きを読む", exact: true})).toHaveCount(0);
+  expect(reads).toEqual([0, 8]);
+  await expectNoPageOverflow(page);
+  const inputTab = inspector.getByRole("tab", {name: "入力", exact: true});
+  await inputTab.focus();
+  await inputTab.press("Home");
+  await expect(inspector.getByRole("tab", {name: "概要", exact: true})).toHaveAttribute("aria-selected", "true");
+  await inspector.getByRole("tab", {name: "概要", exact: true}).press("End");
+  await expect(inspector.getByRole("tab", {name: "入出力仕様", exact: true})).toHaveAttribute("aria-selected", "true");
+  await inputTab.click();
+  await inspector.locator("[data-call-readable]").evaluate(node => {node.scrollTop = node.scrollHeight;});
+  await page.screenshot({path: testInfo.outputPath("rag-full-trace.png")});
+  await page.evaluate(() => {document.documentElement.dataset.theme = "dark";});
+  await page.screenshot({path: testInfo.outputPath("rag-full-trace-dark.png")});
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({width: 1920, height: 900});
+    await page.screenshot({path: testInfo.outputPath("rag-full-trace-1920.png")});
+  }
 });

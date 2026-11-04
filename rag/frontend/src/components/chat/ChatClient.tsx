@@ -23,6 +23,7 @@ import {
   withOptimisticChatStatus,
   type ChatUserMessageStatus,
   type OptimisticChatMessage,
+  type CallBodyLoader,
   type ChatProgressStep,
   type ChatProgressTerminalStatus,
   useChatAutoScroll,
@@ -263,6 +264,7 @@ interface ColumnProgressSource {
  * 記録（工程の行の代わりに案内を出す）、`partial` は書けなかった span がある記録。
  */
 interface ColumnProgress {
+  loadCallBody?: CallBodyLoader;
   terminalStatus?: ChatProgressTerminalStatus | null;
   steps: ChatProgressStep[];
   startedAtMs: number;
@@ -280,12 +282,14 @@ function useColumnProgress(source: ColumnProgressSource | null): ColumnProgress 
   const snapshot = useRagTraceProgress({
     // 対象は回答のメッセージ（snapshot のイベントの `target_id`）。会話が決まるまでは読まない。
     key: conversationId && messageId ? messageId : null,
+    bodyPath: conversationId && messageId ? `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/trace` : null,
     active,
     fetchSnapshot: (signal) => api.getChatAnswerTrace(conversationId ?? "", messageId ?? "", signal),
   });
   if (source === null) return null;
   return {
     steps: snapshot.steps,
+    loadCallBody: snapshot.loadCallBody,
     terminalStatus: source.terminalStatus ?? snapshot.terminal,
     startedAtMs: source.startedAtMs,
     // 配信が途絶えた・読み直しに失敗している間は「接続を確認しています」（#1160）。
@@ -400,6 +404,7 @@ function AssistantColumn({
         // まとめて届くので、それまでは回答の場所に工程の一覧（行が増える）と今の工程・経過時間を出す。失敗の
         // 原因は段階ではなく下の Banner に出す。
         <AnswerProcess
+          loadCallBody={progress?.loadCallBody}
           steps={progress.steps.length > 0 ? progress.steps : chatSubmitProgressSteps(progress.startedAtMs)}
           active={progressSource?.active}
           terminalStatus={progress.terminalStatus}
@@ -418,6 +423,7 @@ function AssistantColumn({
         // 閉じる）と、その中の末尾の「処理の詳細」（回答の記録の詳細。技術的な詳細は畳む。messaging.md §10。#2325）を出す。名前は
         // 「処理の経過」1 つで、回答の下に出し直さない（#2096 / #2115 / #2118。RAG 検索と同じ部品）。
         <AnswerProcess
+          loadCallBody={progress?.loadCallBody}
           steps={progress?.steps ?? []}
           active={false}
           terminalStatus={progress?.terminalStatus}

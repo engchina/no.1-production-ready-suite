@@ -1106,6 +1106,7 @@ function RunChatTurn({
           </>
         ) : (
           <ChatProgress
+              loadCallBody={progress.loadCallBody}
             progressKey={run.id}
             active={stoppable && progressTerminal === null}
             reconnecting={stoppable && progress.failed}

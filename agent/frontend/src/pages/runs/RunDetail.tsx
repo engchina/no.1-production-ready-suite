@@ -330,6 +330,7 @@ export function RunDetail({
         timeline={
           <>
             <RunTimelineSection
+              loadCallBody={progress.loadCallBody}
               status={commonRunStatus(run.status)}
               // 処理の経過と同じ記録を詳細で繰り返さない。
               traceId={progress.traceId}

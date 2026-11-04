@@ -38,6 +38,27 @@ def test_env_names_split_platform_and_product(tmp_path: Path) -> None:
     assert names["log_level"] == "RAG_LOG_LEVEL"
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "trace_body_buffer_size",
+        "trace_body_buffer_bytes",
+        "trace_body_queue_size",
+        "trace_body_queue_bytes",
+        "trace_body_part_characters",
+    ],
+)
+def test_body_storage_capacity_uses_shared_environment_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    settings_cls = _settings_class(tmp_path)
+    name = "PLATFORM_" + field.upper()
+    assert settings_env_names(settings_cls)[field] == name
+    monkeypatch.setenv(name, "17")
+    monkeypatch.setenv("RAG_" + field.upper(), "99")
+    assert getattr(settings_cls(), field) == 17
+
+
 def test_reads_platform_then_product_env_and_ignores_old_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

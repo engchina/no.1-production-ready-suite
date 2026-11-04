@@ -34,6 +34,8 @@ from pr_backend_core.api import (
 )
 from pr_backend_core.chat_history_window import chat_history_days
 from pr_backend_core.observability.model_usage import run_usage_summary_fields
+from pr_backend_core.observability.trace_bodies import BodyPage
+from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.auth.errors import ROUTE_FORBIDDEN_CODE, SecurityApiError
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
@@ -265,6 +267,7 @@ from .service import (
     is_select_only as _is_select_only,
 )
 from .tabular_files import TabularFileReadError
+from .trace_bodies import read_saved_body
 from .trace_spans import TraceSpanReadError
 
 logger = logging.getLogger(__name__)
@@ -1044,6 +1047,47 @@ def get_job_trace(job_id: str, request: Request) -> ApiResponse[TraceProgressDat
     まで読める。画面は実行中に 1 秒ごとに読み直す。最終の状態はジョブの状態（正本）で決める。
     """
     return ApiResponse(data=_job_trace_for_request(job_id, request).trace)
+
+
+def _body_page_or_not_found(page: BodyPage | None) -> ApiResponse[BodyPage]:
+    if page is None:
+        raise HTTPException(status_code=404, detail="指定された記録が見つかりません。")
+    return ApiResponse(data=page)
+
+
+@router.get(
+    "/jobs/{job_id}/trace/spans/{span_id}/{slot}/body", response_model=ApiResponse[BodyPage]
+)
+def get_job_trace_body(
+    job_id: str,
+    span_id: str,
+    slot: CallBodySlot,
+    request: Request,
+    first_part: Annotated[int, Query(ge=0)] = 0,
+) -> ApiResponse[BodyPage]:
+    access = _ai_use_access(request)
+    try:
+        source = nl2sql_service.job_trace_body_source(
+            job_id, actor_user_uuid=access.actor_user_uuid, actor_can_manage=access.actor_can_manage
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL) from exc
+    if source is None:
+        raise HTTPException(status_code=404, detail=_JOB_PROGRESS_NOT_FOUND_DETAIL)
+    details, profile_id, chat = source
+    if chat:
+        _assert_profile_access(request, profile_id)
+    return _body_page_or_not_found(
+        read_saved_body(
+            "jobs",
+            job_id,
+            details,
+            span_id=span_id,
+            slot=slot,
+            first_part=first_part,
+            allow_restricted=access.actor_can_manage,
+        )
+    )
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[JobData])
@@ -2030,6 +2074,40 @@ def history_item(request: Request, history_id: str) -> ApiResponse[HistoryItem]:
             resolve_names=principal is not None,
             principal=principal,
         )[0]
+    )
+
+
+@router.get(
+    "/history/{history_id}/trace/spans/{span_id}/{slot}/body", response_model=ApiResponse[BodyPage]
+)
+def history_item_trace_body(
+    request: Request,
+    history_id: str,
+    span_id: str,
+    slot: CallBodySlot,
+    first_part: Annotated[int, Query(ge=0)] = 0,
+) -> ApiResponse[BodyPage]:
+    principal = getattr(request.state, "principal", None)
+    item = nl2sql_service.get_history_item(history_id)
+    if item is None or (
+        principal is not None
+        and not can_access_run(
+            principal,
+            executor_user_uuid=item.actor_user_uuid,
+            owner_user_uuid=item.conversation_owner_user_uuid or None,
+        )
+    ):
+        raise HTTPException(status_code=OWNER_NOT_FOUND_STATUS, detail=_HISTORY_NOT_FOUND_DETAIL)
+    return _body_page_or_not_found(
+        read_saved_body(
+            "history",
+            history_id,
+            item.span_details,
+            span_id=span_id,
+            slot=slot,
+            first_part=first_part,
+            allow_restricted=principal is None or can_view_all_users_data(principal),
+        )
     )
 
 
@@ -3267,6 +3345,38 @@ def get_db_admin_chat_turn_trace(
     except TraceSpanReadError as exc:
         raise _trace_read_unavailable(exc) from exc
     return ApiResponse(data=progress)
+
+
+@router.get(
+    "/db-admin-chat/conversations/{conversation_id}/turns/{turn_id}/trace/spans/{span_id}/{slot}/body",
+    response_model=ApiResponse[BodyPage],
+)
+def get_db_admin_chat_turn_trace_body(
+    conversation_id: str,
+    turn_id: str,
+    span_id: str,
+    slot: CallBodySlot,
+    request: Request,
+    first_part: Annotated[int, Query(ge=0)] = 0,
+) -> ApiResponse[BodyPage]:
+    actor, all_users = _db_admin_chat_actor(request)
+    try:
+        details = nl2sql_service.db_admin_chat_turn_body_source(
+            conversation_id, turn_id, actor=actor, all_users=all_users
+        )
+    except (PermissionError, LookupError) as exc:
+        raise _chat_not_found() from exc
+    return _body_page_or_not_found(
+        read_saved_body(
+            "db_admin_turn",
+            turn_id,
+            details,
+            span_id=span_id,
+            slot=slot,
+            first_part=first_part,
+            allow_restricted=all_users,
+        )
+    )
 
 
 @router.get(

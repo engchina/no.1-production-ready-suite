@@ -18,6 +18,8 @@ from pr_backend_core.observability.model_usage import (
     run_usage_summary_fields,
     run_usage_totals,
 )
+from pr_backend_core.observability.trace_bodies import BodyPage
+from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.auth.visibility import DEFAULT_RUN_EXECUTOR_FILTER, RunExecutorFilter
 from starlette.concurrency import run_in_threadpool
 
@@ -27,7 +29,8 @@ from app.clients.oracle_run_history import RunHistoryStore, owner_user_uuids
 from app.rag.request_context import current_audit_request_context
 from app.rag.run_history import answer_validation_execution, answer_verification
 from app.rag.saved_evidence import withhold_saved_answer
-from app.rag.trace_store import TraceSnapshot, run_trace_snapshot
+from app.rag.trace_bodies import read_saved_trace_body
+from app.rag.trace_store import TraceSnapshot, run_trace_snapshot, run_trace_source
 from app.schemas.common import ApiResponse, Page
 from app.schemas.history import (
     RunDetail,
@@ -180,6 +183,31 @@ async def get_run_trace(run_id: str) -> ApiResponse[TraceSnapshot]:
     if row is None:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE)
     return ApiResponse(data=await run_trace_snapshot(oracle, row))
+
+
+@router.get(
+    "/runs/{run_id}/trace/spans/{span_id}/{slot}/body", response_model=ApiResponse[BodyPage]
+)
+async def get_run_trace_body(
+    run_id: str, span_id: str, slot: CallBodySlot, first_part: int = Query(default=0, ge=0)
+) -> ApiResponse[BodyPage]:
+    oracle = OracleClient()
+    row = await RunHistoryStore(oracle).get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE)
+    saved, kind, record_id = await run_trace_source(oracle, row)
+    page = await run_in_threadpool(
+        read_saved_trace_body,
+        saved,
+        kind,
+        record_id,
+        span_id=span_id,
+        slot=slot,
+        first_part=first_part,
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="記録本文が見つかりません。")
+    return ApiResponse(data=page)
 
 
 async def _conversation_owner_fields(row: dict[str, Any]) -> dict[str, Any]:

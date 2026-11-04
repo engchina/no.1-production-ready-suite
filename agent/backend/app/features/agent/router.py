@@ -54,6 +54,8 @@ from pr_backend_core.chat_history_window import (
 from pr_backend_core.chat_progress import CHAT_PROGRESS_SSE_HEADERS
 from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.trace_bodies import BodyPage
+from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
@@ -322,6 +324,7 @@ from app.features.agent.tools import (
     mcp_tool_definition,
     tool_registry,
 )
+from app.features.agent.trace_bodies import read_saved_run_body
 from app.features.agent.trace_spans import trace_spans
 from app.features.agent.usage import (
     USAGE_PERIOD_DAYS,
@@ -3492,6 +3495,35 @@ async def get_run_trace(
             dropped_spans=run.trace_dropped_spans,
         )
     )
+
+
+@router.get(
+    "/runs/{run_id}/trace/spans/{span_id}/{slot}/body", response_model=ApiResponse[BodyPage]
+)
+async def get_run_trace_body(
+    run_id: str,
+    span_id: str,
+    slot: CallBodySlot,
+    request: Request,
+    first_part: int = Query(default=0, ge=0),
+    _: None = Depends(require_viewer),
+) -> ApiResponse[BodyPage]:
+    run = await run_in_threadpool(_readable_run, request, run_id)
+    run, _withheld = await _evidence_checked_run(request, run)
+    namespace = await run_in_threadpool(runtime_repository.trace_body_namespace)
+    page = await run_in_threadpool(
+        read_saved_run_body,
+        namespace,
+        run.id,
+        run.span_details,
+        span_id=span_id,
+        slot=slot,
+        first_part=first_part,
+        allow_restricted=_sees_all_users(request),
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="記録本文が見つかりません。")
+    return ApiResponse(data=page)
 
 
 @router.post("/runs/{run_id}/cancel", response_model=ApiResponse[RunState])

@@ -267,27 +267,70 @@ def attach_body_owner(cursor: Any, owner: BodyOwner, references: Iterable[BodyRe
 
 def release_body_owner(cursor: Any, owner: BodyOwner) -> None:
     """実際の所属記録を消す取引内で呼ぶ。投影の期限切れには使わない。"""
-    binds = _owner_binds(owner)
+    release_body_owners(cursor, (owner,))
+
+
+def replace_body_owner(cursor: Any, owner: BodyOwner, references: Iterable[BodyReference]) -> None:
+    """正本の更新に合わせて所属参照を置き換え、もう参照しない旧本文を保持し続けない。"""
+    incoming: dict[str, BodyReference] = {}
+    for reference in references:
+        if reference.body_id in incoming and incoming[reference.body_id] != reference:
+            raise ValueError("conflicting trace body references")
+        incoming[reference.body_id] = reference
     cursor.execute(
         """SELECT BODY_ID FROM PLATFORM_TRACE_BODY_OWNERS
         WHERE PRODUCT = :product AND OWNER_KIND = :kind AND OWNER_ID = :record_id
         ORDER BY BODY_ID""",
-        binds,
+        _owner_binds(owner),
     )
-    ids = [str(row[0]) for row in cursor.fetchall()]
-    for body_id in ids:
+    previous = {str(row[0]) for row in cursor.fetchall()}
+    # 新旧すべてを同じ順にロックする。新規manifestの作成もこの順序に含める。
+    for body_id in sorted(previous | incoming.keys()):
+        incoming_reference = incoming.get(body_id)
+        if incoming_reference is not None:
+            lock_body_manifest(cursor, incoming_reference)
+        else:
+            cursor.execute(
+                "SELECT BODY_ID FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id FOR UPDATE",
+                {"body_id": body_id},
+            )
+            cursor.fetchone()
+    attach_body_owner(cursor, owner, incoming.values())
+    _release_affected_bodies(
+        cursor, {body_id: [owner] for body_id in previous if body_id not in incoming}
+    )
+
+
+def release_body_owners(cursor: Any, owners: Iterable[BodyOwner]) -> None:
+    """複数記録の削除でも本文IDの順にロックし、共有本文の最後の所属だけを消す。"""
+    affected: dict[str, list[BodyOwner]] = {}
+    for owner in dict.fromkeys(owners):
+        cursor.execute(
+            """SELECT BODY_ID FROM PLATFORM_TRACE_BODY_OWNERS
+            WHERE PRODUCT = :product AND OWNER_KIND = :kind AND OWNER_ID = :record_id
+            ORDER BY BODY_ID""",
+            _owner_binds(owner),
+        )
+        for row in cursor.fetchall():
+            affected.setdefault(str(row[0]), []).append(owner)
+    _release_affected_bodies(cursor, affected)
+
+
+def _release_affected_bodies(cursor: Any, affected: dict[str, list[BodyOwner]]) -> None:
+    for body_id in sorted(affected):
         cursor.execute(
             "SELECT BODY_ID FROM PLATFORM_TRACE_BODIES WHERE BODY_ID = :body_id FOR UPDATE",
             {"body_id": body_id},
         )
         if cursor.fetchone() is None:
             continue
-        cursor.execute(
-            """DELETE FROM PLATFORM_TRACE_BODY_OWNERS
-            WHERE PRODUCT = :product AND OWNER_KIND = :kind AND OWNER_ID = :record_id
-            AND BODY_ID = :body_id""",
-            {**binds, "body_id": body_id},
-        )
+        for owner in affected[body_id]:
+            cursor.execute(
+                """DELETE FROM PLATFORM_TRACE_BODY_OWNERS
+                WHERE PRODUCT = :product AND OWNER_KIND = :kind AND OWNER_ID = :record_id
+                AND BODY_ID = :body_id""",
+                {**_owner_binds(owner), "body_id": body_id},
+            )
         cursor.execute(
             "SELECT COUNT(*) FROM PLATFORM_TRACE_BODY_OWNERS WHERE BODY_ID = :body_id",
             {"body_id": body_id},

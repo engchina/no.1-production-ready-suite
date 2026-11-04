@@ -1074,6 +1074,7 @@ function SqlChatTurn({
             </>
           ) : (
             <ChatProgress
+              loadCallBody={progress.loadCallBody}
               cancelled={turn.error_code === "JOB_CANCELLED"}
               terminalStatus={turn.error_code === "JOB_CANCELLED" ? "cancelled" : turn.status === "done" ? "done" : turn.status === "error" ? "failed" : progress.terminal}
               traceId={progress.traceId}

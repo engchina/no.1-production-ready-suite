@@ -1,3 +1,4 @@
+import type { CallBodyLoader } from "../../lib/call-body";
 import { CircleStop, Clock3, ListChecks, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -126,6 +127,7 @@ export const DEFAULT_CHAT_PROGRESS_LABELS: ChatProgressLabels = {
 };
 
 export interface ChatProgressProps {
+  loadCallBody?: CallBodyLoader;
   processDetailsProps?: Omit<RunProcessDetailsProps, "traceSummary" | "traceId" | "children">;
   traceSummary?: unknown;
   /** 処理の経過が trace の投影のときの trace id（「処理の詳細」に出す。#3226）。 */
@@ -300,12 +302,14 @@ export function chatProgressTimelineStep(step: ChatProgressStep): RunTimelineSte
  * 行の形をそろえる）。完了後は時間の線を出し、実行中は出さない（全体の長さが伸び続け、線が毎回伸び縮みする）。
  */
 function StepList({
+  loadCallBody,
   steps,
   bars,
   renderRunningStep,
   labels,
   testId,
 }: {
+  loadCallBody?: CallBodyLoader;
   steps: ChatProgressStep[];
   bars: boolean;
   renderRunningStep?: (step: RunTimelineStep) => ReactNode;
@@ -314,6 +318,7 @@ function StepList({
 }) {
   return (
     <RunTimeline
+      loadCallBody={loadCallBody}
       steps={steps.map(chatProgressTimelineStep)}
       showSummary={false}
       showBars={bars}
@@ -506,6 +511,7 @@ function CurrentStepRow({
 
 
 export function ChatProgress({
+  loadCallBody,
   steps: incomingSteps,
   active: activeProp,
   elapsedMs,
@@ -618,7 +624,7 @@ export function ChatProgress({
         >
           {/* 1 本のタイムライン: 始まった段階を開始順に並べ、今の段階の行をその位置に出す（#2309 / #2840）。 */}
           <div className="grid min-w-0 gap-1.5">
-            <StepList steps={started} bars={false} labels={labels} testId={testId}
+            <StepList loadCallBody={loadCallBody} steps={started} bars={false} labels={labels} testId={testId}
               renderRunningStep={(timelineStep) => {
                 const step = started.find((item) => item.id === timelineStep.id)!;
                 return <CurrentStepRow activityIndicator={activityIndicator} primary={step === current} step={step}
@@ -643,11 +649,11 @@ export function ChatProgress({
         >
           {footer ? (
             <div className="grid min-w-0 gap-1.5">
-              <StepList steps={steps} bars labels={labels} testId={testId} />
+              <StepList loadCallBody={loadCallBody} steps={steps} bars labels={labels} testId={testId} />
               {footer}
             </div>
           ) : (
-            <StepList steps={steps} bars labels={labels} testId={testId} />
+            <StepList loadCallBody={loadCallBody} steps={steps} bars labels={labels} testId={testId} />
           )}
         </Disclosure>
       )}

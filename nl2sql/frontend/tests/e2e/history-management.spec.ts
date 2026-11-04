@@ -1,5 +1,5 @@
 import { confirmTraceExplorer, inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
-import { syntheticCallDetails, syntheticStageDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
+import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
 // 実行履歴（#1955。UX 契約 run-history.md §7）: 共通の一覧（RunHistoryToolbar → RunHistoryTable → OffsetPagination）と
 // `?id=<run_id>` の全幅の詳細。状態は `[data-run-status]` の値で確かめる（文言・色に頼らない）。
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
@@ -989,4 +989,46 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
   await confirmTraceExplorer(page, testInfo, expect);
+});
+
+test("保存済みの全文を分段取得して末尾まで確認する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  if (testInfo.project.name === "desktop") await page.setViewportSize({width: 1280, height: 900});
+  const id = "synthetic-full-trace";
+  const body = syntheticFullCallBody();
+  const row = {...historyItems[0], id, progress_events: jobProgressEvents(id, {at: "2026-01-01T00:00:01Z", terminal: "done", steps: {
+    generate_sql: {status: "done", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:00:01Z", details: {call: body.call}},
+  }})};
+  await mockHistory(page, {items: [row]});
+  const reads: number[] = [];
+  await page.route(`**/api/nl2sql/history/${id}/trace/spans/*/input/body?*`, route => {
+    const first = Number(new URL(route.request().url()).searchParams.get("first_part")); reads.push(first);
+    return route.fulfill({json: {data: body.page(first)}});
+  });
+  await page.goto(`/history?id=${id}`);
+  await page.getByTestId("history-detail-timeline-summary").click();
+  const timeline = page.getByTestId("history-detail-timeline");
+  await inspectTraceStep(page, timeline, "generate_sql");
+  const inspector = page.locator("[data-trace-inspector]");
+  await inspector.getByRole("tab", {name: "入力", exact: true}).click();
+  expect(reads).toEqual([]);
+  await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();
+  await inspector.getByRole("button", {name: "続きを読む", exact: true}).click();
+  await expect(inspector.locator("[data-call-readable]")).toContainText("全文の末尾");
+  expect(reads).toEqual([0, 8]);
+  expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
+  const inputTab = inspector.getByRole("tab", {name: "入力", exact: true});
+  await inputTab.focus();
+  await inputTab.press("Home");
+  await expect(inspector.getByRole("tab", {name: "概要", exact: true})).toHaveAttribute("aria-selected", "true");
+  await inspector.getByRole("tab", {name: "概要", exact: true}).press("End");
+  await expect(inspector.getByRole("tab", {name: "入出力仕様", exact: true})).toHaveAttribute("aria-selected", "true");
+  await inputTab.click();
+  await inspector.locator("[data-call-readable]").evaluate(node => {node.scrollTop = node.scrollHeight;});
+  await page.screenshot({path: testInfo.outputPath("nl2sql-full-trace.png")});
+  await page.evaluate(() => {document.documentElement.dataset.theme = "dark";});
+  await page.screenshot({path: testInfo.outputPath("nl2sql-full-trace-dark.png")});
+  if (testInfo.project.name === "desktop") {
+    await page.setViewportSize({width: 1920, height: 900});
+    await page.screenshot({path: testInfo.outputPath("nl2sql-full-trace-1920.png")});
+  }
 });

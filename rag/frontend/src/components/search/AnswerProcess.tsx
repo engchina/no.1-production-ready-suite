@@ -1,4 +1,4 @@
-import { ChatProgress, RunProcessDetails, useTraceDetailsLabels, type ChatProgressStep, type ChatProgressTerminalStatus } from "@production-ready/ui";
+import { ChatProgress, RunProcessDetails, useTraceDetailsLabels, type CallBodyLoader, type ChatProgressStep, type ChatProgressTerminalStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -26,6 +26,7 @@ import { SavedAnswerRecord } from "./SavedAnswerRecord";
  */
 export function AnswerProcess({
   steps,
+  loadCallBody,
   active,
   terminalStatus,
   startedAt,
@@ -45,6 +46,7 @@ export function AnswerProcess({
   conversationId?: string | null;
   messageId?: string | null;
   steps: ChatProgressStep[];
+  loadCallBody?: CallBodyLoader;
   /** 処理中か。省略時は段階から決める。 */
   active?: boolean;
   terminalStatus?: ChatProgressTerminalStatus | null;
@@ -103,6 +105,7 @@ export function AnswerProcess({
     >
       {rows.length > 0 ? (
         <ChatProgress
+          loadCallBody={loadCallBody}
           steps={rows}
           active={active}
           terminalStatus={terminalStatus}

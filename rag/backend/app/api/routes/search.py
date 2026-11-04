@@ -12,7 +12,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
 from pr_backend_core.mcp import report_tool_progress
+from pr_backend_core.observability.trace_bodies import BodyPage
+from pr_backend_core.observability.trace_body_reader import CallBodySlot
 from pr_system_settings.auth.errors import SecurityApiError
+from starlette.concurrency import run_in_threadpool
 
 from app.clients.oracle import OracleClient
 from app.clients.oracle_run_history import RunHistoryStore
@@ -99,7 +102,14 @@ from app.rag.support_guide_runtime import (
     with_draft,
     with_guide_rule,
 )
-from app.rag.trace_store import AnswerTrace, TraceSnapshot, run_trace_snapshot, trace_snapshot
+from app.rag.trace_bodies import capture_trace_bodies, read_saved_trace_body
+from app.rag.trace_store import (
+    AnswerTrace,
+    TraceSnapshot,
+    run_trace_snapshot,
+    run_trace_source,
+    trace_snapshot,
+)
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import (
     AnswerRecordDetail,
@@ -785,6 +795,7 @@ async def _report_tool_progress(progress: SearchStageProgress) -> None:
         report_tool_progress(answer_stage_label(progress.stage))
 
 
+@capture_trace_bodies
 async def _run_search_with_timeout(
     request: SearchRequest,
     *,
@@ -1025,6 +1036,7 @@ async def _stream_search_events_with_timeout(
             )
         )
 
+    @capture_trace_bodies
     async def produce() -> None:
         try:
             # 回答を LLM で生成するため、回答生成の上限で打ち切る（#375）。
@@ -1282,6 +1294,31 @@ async def get_saved_answer_trace(trace_id: str) -> ApiResponse[TraceSnapshot]:
     return ApiResponse(data=await trace_snapshot(saved, target_id=trace_id, terminal="done"))
 
 
+@router.get(
+    "/answers/{trace_id}/trace/spans/{span_id}/{slot}/body", response_model=ApiResponse[BodyPage]
+)
+async def get_saved_answer_trace_body(
+    trace_id: str, span_id: str, slot: CallBodySlot, first_part: int = Query(default=0, ge=0)
+) -> ApiResponse[BodyPage]:
+    row = await OracleClient().get_answer_record(trace_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="回答が見つかりません。")
+    diagnostics = row.get("diagnostics_json")
+    saved = diagnostics.get("trace") if isinstance(diagnostics, Mapping) else None
+    page = await run_in_threadpool(
+        read_saved_trace_body,
+        saved,
+        "answer_record",
+        trace_id,
+        span_id=span_id,
+        slot=slot,
+        first_part=first_part,
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="記録本文が見つかりません。")
+    return ApiResponse(data=page)
+
+
 @router.get("/runs/{run_id}/trace", response_model=ApiResponse[TraceSnapshot])
 async def get_search_run_trace(run_id: str) -> ApiResponse[TraceSnapshot]:
     """RAG 検索の実行（`POST /search/stream` の `run` の trace_id）の処理の経過（#3226）。
@@ -1297,6 +1334,31 @@ async def get_search_run_trace(run_id: str) -> ApiResponse[TraceSnapshot]:
     return ApiResponse(
         data=await trace_snapshot(None, target_id=run_id, terminal=None, lookup_operation_id=run_id)
     )
+
+
+@router.get(
+    "/runs/{run_id}/trace/spans/{span_id}/{slot}/body", response_model=ApiResponse[BodyPage]
+)
+async def get_search_run_trace_body(
+    run_id: str, span_id: str, slot: CallBodySlot, first_part: int = Query(default=0, ge=0)
+) -> ApiResponse[BodyPage]:
+    oracle = OracleClient()
+    row = await RunHistoryStore(oracle).get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="実行が見つかりません。")
+    saved, kind, record_id = await run_trace_source(oracle, row)
+    page = await run_in_threadpool(
+        read_saved_trace_body,
+        saved,
+        kind,
+        record_id,
+        span_id=span_id,
+        slot=slot,
+        first_part=first_part,
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="記録本文が見つかりません。")
+    return ApiResponse(data=page)
 
 
 def _answer_record_detail(row: dict[str, object]) -> AnswerRecordDetail:

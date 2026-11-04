@@ -30,6 +30,11 @@ from pr_backend_core.observability.trace_store import (
 )
 from pr_backend_core.observability.tracing import SpanUpdate
 
+from app.features.agent.trace_bodies import (
+    start_trace_body_persistence,
+    stop_trace_body_persistence,
+)
+
 logger = logging.getLogger(__name__)
 
 # 表の製品の名前（`PRODUCT` 列）。
@@ -135,6 +140,7 @@ class AgentTraceSpans:
             )
             writer.start()
             self._writer = writer
+            start_trace_body_persistence(settings)
 
     def stop(self, timeout: float = 5.0) -> None:
         """待っている span を書いてから終える（終了の処理）。"""
@@ -142,6 +148,7 @@ class AgentTraceSpans:
             writer, self._writer = self._writer, None
         if writer is not None:
             writer.stop(timeout)
+        stop_trace_body_persistence()
 
     def use_writer(self, writer: TraceSpanWriter | None) -> None:
         """書き手を差し替える（テスト）。"""

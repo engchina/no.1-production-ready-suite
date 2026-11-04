@@ -1,3 +1,4 @@
+import type { CallBodyLoader } from "../../lib/call-body";
 import { traceOrderedSteps } from "../../lib/trace-explorer";
 import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
 import { DEFAULT_TRACE_DETAILS_LABELS } from "../../lib/trace-labels";
@@ -746,6 +747,7 @@ export function runTimelineDuration(steps: readonly RunTimelineStep[]): number |
 }
 
 export interface RunTimelineProps {
+  loadCallBody?: CallBodyLoader;
   explorerLabels?: Partial<TraceExplorerLabels>;
   steps: readonly RunTimelineStep[];
   /** 処理全体の所要時間（ミリ秒）。要約の行に出す（無ければ段の合計の範囲）。 */
@@ -793,6 +795,7 @@ export interface RunTimelineProps {
  * - 状態はアイコンの形と読み上げの文言で伝え、失敗・スキップ・応答待ちは画面にも文字で出す（色だけにしない）。
  */
 export function RunTimeline({
+  loadCallBody,
   steps: inputSteps,
   explorerLabels,
   totalDurationMs,
@@ -825,7 +828,7 @@ export function RunTimeline({
   const total = totalDurationMs ?? runTimelineDuration(steps);
   const nameText = runTimelineNameClass(size);
 
-  if (exploring) return <TraceExplorer steps={steps} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
+  if (exploring) return <TraceExplorer loadCallBody={loadCallBody} steps={steps} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
 
   return (
     <div
@@ -954,7 +957,7 @@ export function RunTimeline({
                   {open ? (
                     <>
                       {details ? (
-                        <RunStepDetailsView details={details} labels={{ truncated: labels.stepDetailsTruncated }} timing={{ startedAt: step.startedAt, finishedAt: step.finishedAt, durationMs: duration }} />
+                        <RunStepDetailsView spanId={step.id} loadCallBody={loadCallBody} details={details} labels={{ truncated: labels.stepDetailsTruncated }} timing={{ startedAt: step.startedAt, finishedAt: step.finishedAt, durationMs: duration }} />
                       ) : null}
                       {step.children}
                     </>
@@ -974,6 +977,7 @@ export function RunTimeline({
 // 処理の経過の節
 
 export interface RunTimelineSectionProps {
+  loadCallBody?: CallBodyLoader;
   /** 実行全体の確定状態。途中の試行の失敗より優先する。未指定の旧記録は工程から判定する。 */
   status?: RunStatus;
   traceSummary?: unknown;
@@ -1017,6 +1021,7 @@ export interface RunTimelineSectionProps {
  * 3 製品の実行の詳細はこの部品を使い、節の中の並びを自分で組まない。
  */
 export function RunTimelineSection({
+  loadCallBody,
   status,
   traceSummary,
   traceId,
@@ -1082,6 +1087,7 @@ export function RunTimelineSection({
           data-run-timeline-section=""
         >
           <RunTimeline
+            loadCallBody={loadCallBody}
             steps={steps}
             totalDurationMs={totalDurationMs}
             showSummary={false}

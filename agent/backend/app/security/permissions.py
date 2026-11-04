@@ -454,6 +454,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # チャットと実行の詳細の処理の経過（共通の span の表の snapshot。#1359・#3226）。チャットと、
     # Run を見る画面が読む（handler が Run の判定で絞る）。
     ("GET", f"{_RUN}/trace"): _RUN_PROGRESS,
+    ("GET", f"{_RUN}/trace/spans/{{span_id}}/{{slot}}/body"): _RUN_PROGRESS,
     ("POST", f"{_RUN}/cancel"): _OPERATE,
     # 回答前の確認（#1839）に答える・やめる。Run を作った利用者だけ（handler が確かめる）。
     ("POST", f"{_RUN}/confirmations/{{confirmation_id}}"): _OPERATE,

@@ -33,6 +33,8 @@ from importlib import import_module
 from typing import Any
 from uuid import uuid4
 
+from app.features.agent.trace_bodies import register_run_bodies
+
 # このプロセスを表す ID（`WRITER_ID`。ホスト・pid・起動ごとの乱数）。
 WRITER_ID = f"{socket.gethostname()[:120]}:{os.getpid()}:{uuid4().hex[:8]}"
 
@@ -308,6 +310,9 @@ def write_entities(
             for (kind, entity_id), text in rows.items()
         ],
     )
+    for (kind, entity_id), text in rows.items():
+        if kind == RUN:
+            register_run_bodies(cursor, checkpoint_key, entity_id, text)
 
 
 def entity_keys(kind: str, ids: Iterable[str]) -> list[EntityKey]:

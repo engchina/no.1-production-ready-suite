@@ -346,6 +346,7 @@ from app.features.agent.tools import (
     tool_title_scope,
     with_tool_result_images,
 )
+from app.features.agent.trace_bodies import capture_trace_bodies
 from app.features.agent.trace_spans import run_trace_owner, trace_spans
 from app.observability import (
     CONTEXT_COMPACTIONS_TOTAL,
@@ -3891,6 +3892,7 @@ def _record_wait_spans(run: Any) -> None:
         )
 
 
+@capture_trace_bodies
 async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
     """Run を最初から実行する（作成直後・dispatcher から呼ぶ）。
 
@@ -3991,6 +3993,7 @@ async def execute_run(run_id: str, *, claim: RunClaim | None = None) -> None:
                 run_claim.release_execution(execution)
 
 
+@capture_trace_bodies
 async def resume_run(run_id: str, *, claim: RunClaim | None = None) -> None:
     """承認がすべて決まった Run を、保存した SDK の状態から再開する（`claim` は `execute_run`）。"""
     with bind_log_context(run_id=run_id):

@@ -22,6 +22,12 @@ class TracingSettings(BaseModel):
     trace_store_flush_seconds: float = Field(default=0.5, gt=0, le=60)
     trace_store_batch_size: int = Field(default=100, ge=1, le=10000)
     trace_store_queue_size: int = Field(default=5000, ge=1, le=1000000)
+    # 全文を捨てる上限ではなく、保存前・書込待ちの受付容量と分割片の大きさ。
+    trace_body_buffer_size: int = Field(default=128, ge=1)
+    trace_body_buffer_bytes: int = Field(default=67108864, ge=1)
+    trace_body_queue_size: int = Field(default=128, ge=1)
+    trace_body_queue_bytes: int = Field(default=67108864, ge=1)
+    trace_body_part_characters: int = Field(default=8192, ge=1, le=65536)
 
     @model_validator(mode="after")
     def validate_trace_batch(self) -> TracingSettings:
