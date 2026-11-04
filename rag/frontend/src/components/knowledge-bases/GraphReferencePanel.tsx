@@ -3,24 +3,24 @@ import { useQuery } from "@tanstack/react-query";
 import { LocateFixed } from "lucide-react";
 import { Button, CursorPagination, DataTable, Skeleton, TabPanel, Tabs, TimedLoadingState, type DataTableColumn } from "@production-ready/ui";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
-import { api, type GraphReferenceItem, type KnowledgeBaseGraphNode } from "@/lib/api";
+import { api, type GraphReferenceEndpoint, type GraphReferenceItem } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 
 /** 選択した章節の参照関係だけを取得し、図の未表示部分を必要時に開く。 */
-export function GraphReferencePanel({ kbId, nodeId, referenceId, onLocate }: {
-  kbId: string; nodeId: string; referenceId?: string; onLocate: (item: GraphReferenceItem, target: KnowledgeBaseGraphNode) => void;
+export function GraphReferencePanel({ kbId, nodeId, onLocate }: {
+  kbId: string; nodeId: string; onLocate: (target: GraphReferenceEndpoint) => void;
 }) {
   const [direction, setDirection] = useState<"outgoing" | "incoming">("outgoing");
   const [offset, setOffset] = useState(0);
-  const query = useQuery({ retry: false, queryKey: ["graph-references", kbId, nodeId, referenceId, direction, offset], queryFn: () => api.getKnowledgeBaseGraphReferences(kbId, nodeId, direction, offset, referenceId) });
+  const query = useQuery({ retry: false, queryKey: ["graph-references", kbId, nodeId, direction, offset], queryFn: () => api.getKnowledgeBaseGraphReferences(kbId, nodeId, direction, offset) });
   const columns: DataTableColumn<GraphReferenceItem>[] = [
     { key: "label", header: t("knowledgeBases.graph.references"), render: (item) => <span className="break-words">{item.label}</span> },
     { key: "target", header: t(`knowledgeBases.graph.${direction}`), render: (item) => <div className="grid gap-1 break-words"><span className="text-xs text-fg-muted">{(direction === "incoming" ? item.source : item.target)?.document_name}</span><span>{(direction === "incoming" ? item.source : item.target)?.name ?? "—"}</span></div> },
     { key: "status", header: t("knowledgeBases.structure.build.status"), render: (item) => t(`knowledgeBases.graph.referenceStatus.${item.status}`) },
     { key: "locate", header: t("knowledgeBases.graph.referenceLocate"), render: (item) => {
       const target = direction === "incoming" ? item.source : item.target;
-      return target ? <Button icon={LocateFixed} size="sm" variant="ghost" onClick={() => onLocate(item, target)}>{t("knowledgeBases.graph.referenceLocate")}</Button> : null;
+      return target ? <Button icon={LocateFixed} size="sm" variant="ghost" onClick={() => onLocate(target)}>{t("knowledgeBases.graph.referenceLocate")}</Button> : null;
     } },
   ];
   return <div className="grid min-w-0 gap-3" data-testid="graph-references">

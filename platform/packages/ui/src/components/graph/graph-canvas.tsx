@@ -146,6 +146,7 @@ export function GraphSearchNavigation({
   onPrevious,
   onNext,
   scopeHintHidden = false,
+  debounceMs = 0,
   testId,
 }: {
   labels: GraphSearchLabels;
@@ -156,6 +157,8 @@ export function GraphSearchNavigation({
   onPrevious: () => void;
   onNext: () => void;
   scopeHintHidden?: boolean;
+  /** サーバーで検索するときの待ち（読み込み済みの範囲の検索は 0）。 */
+  debounceMs?: number;
   testId?: string;
 }) {
   const searchId = useId();
@@ -165,7 +168,7 @@ export function GraphSearchNavigation({
     <div className="grid w-full min-w-0 max-w-full gap-1 sm:w-auto">
       <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1">
         <div className="w-full min-w-0 max-w-full sm:w-auto" data-testid={testId ? `${testId}-field` : undefined}>
-          <SearchField id={searchId} label={labels.search} labelHidden size="lg" width="md" value={value} onSearch={onChange} debounceMs={0}
+          <SearchField id={searchId} label={labels.search} labelHidden size="lg" width="md" value={value} onSearch={onChange} debounceMs={debounceMs}
             aria-label={labels.search} placeholder={labels.search} clearLabel={labels.clear}
             aria-describedby={scopeId} data-testid={testId} />
         </div>

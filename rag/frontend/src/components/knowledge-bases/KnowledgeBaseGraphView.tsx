@@ -7,7 +7,7 @@ import { DataLoadFailure } from "@/components/DataLoadStates";
 import { EmptyState } from "@/components/StateViews";
 import { Disclosure, Skeleton, TimedLoadingState } from "@production-ready/ui";
 import { KnowledgeBaseGraphCanvas } from "./KnowledgeBaseGraphCanvas";
-import { useKnowledgeBaseGraph } from "@/lib/queries";
+import { useStructureGraphOverview } from "@/lib/queries";
 import { t } from "@/lib/i18n";
 
 /**
@@ -16,8 +16,8 @@ import { t } from "@/lib/i18n";
  */
 export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const [open, setOpen] = useState(false);
-  const query = useKnowledgeBaseGraph(open ? knowledgeBaseId : null);
-  const isEmpty = query.data && (query.data.status === "empty" || query.data.nodes.length === 0);
+  const query = useStructureGraphOverview(open ? knowledgeBaseId : null);
+  const isEmpty = query.data && (query.data.status === "empty" || query.data.documents.length === 0);
 
   return (
     // 共有の Disclosure（card）。見出しの高さは 40px・タッチ端末 44px（#1135）。関係情報は開いたときだけ取得して描く。
@@ -52,10 +52,7 @@ export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: s
             />
           ) : (
             <>
-              {query.data ? <KnowledgeBaseGraphCanvas data={query.data} knowledgeBaseId={knowledgeBaseId} /> : null}
-              {query.data?.truncated ? (
-                <p className="text-xs text-fg-muted">{t("knowledgeBases.graph.truncated")}</p>
-              ) : null}
+              {query.data ? <KnowledgeBaseGraphCanvas overview={query.data} knowledgeBaseId={knowledgeBaseId} /> : null}
             </>
           )}
         </div>

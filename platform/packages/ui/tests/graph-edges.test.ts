@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregateGraphEdges,
   applyGraphNodePositionChanges,
   graphEdgeStyle,
   graphNeighborIds,
@@ -67,5 +68,30 @@ describe("graphEdgeStyle", () => {
   it("強調は色と太さで示し、破線と透明度を保つ", () => {
     expect(graphEdgeStyle({ dash: "4 3", opacity: 0.35 })).toMatchObject({ stroke: "var(--color-graph-line)", strokeWidth: 1.25, strokeDasharray: "4 3", opacity: 0.35 });
     expect(graphEdgeStyle({ stroke: "var(--x)", emphasized: true })).toMatchObject({ stroke: "var(--color-accent-fg)", strokeWidth: 2.5 });
+  });
+});
+
+describe("aggregateGraphEdges", () => {
+  const edges = [
+    { source: ["doc-a", "a1", "a11"], target: ["doc-b", "b1"], count: 2 },
+    { source: ["doc-a", "a1", "a12"], target: ["doc-b", "b2"], count: 3 },
+    { source: ["doc-a", "a1"], target: ["doc-a", "a2"], count: 4 },
+  ];
+
+  it("閉じた文書の辺は文書の組へまとめ、同じ節点に閉じる辺を線にしない", () => {
+    expect(aggregateGraphEdges(edges, new Set(["doc-a", "doc-b"]))).toEqual([{ id: "doc-a:doc-b", source: "doc-a", target: "doc-b", count: 5 }]);
+  });
+
+  it("開くと見えている段へ移り、件数を保つ", () => {
+    const visible = new Set(["doc-a", "a1", "a2", "doc-b", "b1", "b2"]);
+    expect(aggregateGraphEdges(edges, visible)).toEqual([
+      { id: "a1:b1", source: "a1", target: "b1", count: 2 },
+      { id: "a1:b2", source: "a1", target: "b2", count: 3 },
+      { id: "a1:a2", source: "a1", target: "a2", count: 4 },
+    ]);
+  });
+
+  it("見えている祖先が無い辺は出さない", () => {
+    expect(aggregateGraphEdges(edges, new Set(["doc-a"]))).toEqual([]);
   });
 });
