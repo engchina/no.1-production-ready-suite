@@ -79,7 +79,6 @@ from rag_engine.generation.guide_authority import authoritative_guide_inputs, bi
 from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
-from rag_engine.generation.question_names import absent_question_names, unconfirmed_question_phrases
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
@@ -2339,13 +2338,6 @@ def verify(
                 _mark_check(entry, INTERNAL_LABEL_CHECK, "説明の文に内部の番号が混ざっていた")
         checked.extend(kept_entries)
         dropped.extend(notes)
-    # 多段の質問では、対象の名前を別の説明が引いた原文で確かめていることがあるので、回答全体の原文に照らす。
-    answer_sources = [text for entry in checked for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
-    for entry in checked:
-        if names := _item_absent_names(question, entry, answer_sources):
-            # 一般の規則を対象へ当てはめた飛躍かもしれない。本文は変えず印を付け、是正で作り直す（直らなければ印のまま）。
-            entry.subject_name_issues = names
-            _mark_check(entry, SUBJECT_NAME_CHECK, "引いた原文に無い対象の名前: " + "、".join(names))
     # 別機能の操作は render が手順を分けて示す。同じ文書の版違いだけは利用者に確認を求める。
     if evidence_scope_error([e.span for e in checked if e.span and e.item.kind == "operation"]).startswith("同一文書の異なる版"):
         checked.append(
@@ -2428,13 +2420,6 @@ def _item_absent_years(question: str, entry: CheckedItem) -> list[str]:
         return []
     sources = [text for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
     return absent_years(entry.item.text, question, sources) if sources else []
-
-
-def _item_absent_names(question: str, entry: CheckedItem, sources: Sequence[str]) -> list[str]:
-    """説明に書いた質問の対象の名前のうち、質問が述べた事実と回答が引いた原文に無い名前（#4327）。"""
-    if not entry.published or entry.added or entry.item.kind == "gap" or not sources:
-        return []
-    return absent_question_names(entry.item.text, question, sources)
 
 
 def _mark_check(entry: CheckedItem, name: str, reason: str, *, code: str = "item_check") -> None:
@@ -7833,32 +7818,8 @@ def run_round(
     )
     if summary_absent:
         summary_reason = summary_reason or f"質問と引いた原文に無い年を要約が述べている: {'、'.join(summary_absent)}"
-    # 確かめられないと gap に書いた名前は、要約が同じことを述べてよい（#4327）。
-    summary_names = absent_question_names(
-        str(draft.summary),
-        question,
-        [
-            *(text for entry in published for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)),
-            *(entry.item.text for entry in checked if entry.item.kind == "gap"),
-        ],
-    )
-    if summary_names:
-        summary_reason = summary_reason or f"引いた原文に無い対象を要約が述べている: {'、'.join(summary_names)}"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
-    cited_texts = [text for entry in published for cited in item_citations(entry) if cited.span for text in span_texts(cited.span)]
-    # 質問が問うた対象が引いた原文に無ければ、モデルが gap を書かなくても確認できないことを本文で伝える（#4345）。
-    unconfirmed = (
-        unconfirmed_question_phrases(question, cited_texts, [entry.item.text for entry in checked if entry.item.kind == "gap"])
-        if cited_texts
-        else []
-    )
-    if unconfirmed:
-        before_gap = list(checked)
-        gap_text = answer_labels().subject_unconfirmed_gap.format(names="、".join(unconfirmed))
-        checked.append(CheckedItem(GroundedItem(kind="gap", text=gap_text)))
-        if audit is not None:
-            audit = reindex_audit_items(before_gap, checked, audit, len(guide_notices))
     if (
         not diagnostic_only(timing)
         and task_contract(question)["asks_cause"]
@@ -7887,7 +7848,6 @@ def run_round(
         summary_reason=summary_reason,
         summary_warning=summary_warning,
         summary_absent_years=summary_absent,
-        summary_absent_names=summary_names,
         audit_cut=audit_cut,
         timing=timing,
         citation_trace=citation_trace,
