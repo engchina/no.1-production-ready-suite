@@ -6,6 +6,7 @@
 
 利用者が質問で事実として述べた文の名前は、確かめる対象にしない（当てはめの前提は利用者が述べている）。
 一般の語や言い換えを誤って疑わないよう、英字で始まる 3 字以上の語だけを名前とみなす。カタカナ・漢字の名前は確かめない。
+「X など」のように分類の例として挙げた名前も確かめない。
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import unicodedata
 from collections.abc import Sequence
 
 _NAME = re.compile(r"[A-Za-z][0-9A-Za-z._+-]{2,}")
+# 「X など」の X は分類の例で、確かめる対象ではない（質問が問うているのは分類）。
+_EXAMPLE = re.compile(r"\s*(?:など|等|といった|のような)")
 _SENTENCE_SPLIT = re.compile(r"(?<=[。．？?！!])|\n")
 _ASKING_END = re.compile(r"(?:か|ください|下さい|[?？])[。．.!！]?$")
 
@@ -37,5 +40,8 @@ def absent_question_names(text: str, question: str, sources: Sequence[str]) -> l
     statements = question_statements(question)
     asked = [sentence for sentence in _sentences(question) if sentence not in statements]
     written, known = _form(text), _form("\n".join((*statements, *sources)))
-    names = dict.fromkeys(name for sentence in asked for name in _NAME.findall(unicodedata.normalize("NFKC", sentence)))
+    normalized = [unicodedata.normalize("NFKC", sentence) for sentence in asked]
+    names = dict.fromkeys(
+        match.group(0) for sentence in normalized for match in _NAME.finditer(sentence) if not _EXAMPLE.match(sentence, match.end())
+    )
     return [name for name in names if _form(name) in written and _form(name) not in known]

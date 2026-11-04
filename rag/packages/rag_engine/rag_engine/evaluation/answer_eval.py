@@ -22,7 +22,7 @@ import logging
 import re
 import threading
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -54,7 +54,7 @@ from rag_engine.generation.operation_audit import (
     standard_answer_unit_ranges,
     table_header_lines,
 )
-from rag_engine.generation.question_names import question_statements
+from rag_engine.generation.question_names import absent_question_names
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.retrieval.character_forms import fold_text_with_positions, fold_width
@@ -323,9 +323,6 @@ CLAIM_PROMPT = (
     "## Step 3: 判定理由と使用した根拠を返す\n"
     "- reason に判断の理由を書いてから status を決める。\n"
     "- supported / contradicted は、evidence_id に判定に使った evidence_items の evidence_id をそのまま書く（複数は「,」で区切る）。それ以外は空でよい。\n"
-    "- subject: 段落が特定の対象（製品・制度・人物・文書などの固有の名前）について述べるなら、その名前を段落からそのまま写す。一般の規則だけを述べるなら空。\n"
-    "- subject_quote: subject を書いたら、その対象を指す語句を evidence_id に書いた資料の根拠からそのまま写す（段落と表記が違ってよい）。条件や区分を述べる語句は対象を指す語句ではない。資料に対象を指す語句が無ければ空。\n"
-    "- question_fact: 質問が対象についての事実を述べているなら、その文をそのまま写す。それ以外は空。\n"
 )
 
 
@@ -353,9 +350,6 @@ class ClaimJudgement(BaseModel):
     reason: str = Field(min_length=1)
     status: Literal["supported", "unsupported", "contradicted", "data_confirmation"]
     evidence_id: str = ""
-    subject: str = ""
-    subject_quote: str = ""
-    question_fact: str = ""
 
 
 def _json(value: Any) -> str:
@@ -1005,7 +999,7 @@ REFERENCE_ANSWER_ID_INVALID = "answer_id_invalid"  # 段落が書いた ID が�
 REFERENCE_AUDIT_ID_INVALID = "audit_id_invalid"  # 監査が返した ID が根拠に無い（監査の応答だけの誤り）
 REFERENCE_AMBIGUOUS_ID = "ambiguous_id"  # 省いて書いた ID が複数の chunk に当たり、1 つに決まらない
 REFERENCE_AUDIT_ID_MISSING = "audit_id_missing"  # 監査が ID を返さず、段落も ID を書いていない
-REFERENCE_SUBJECT_UNSUPPORTED = "subject_unsupported"  # 段落の対象が、引用した根拠にも質問の事実にも無い
+REFERENCE_SUBJECT_UNSUPPORTED = "subject_unsupported"  # 質問が問うた対象の名前が、回答が引用した根拠にも質問の事実にも無い
 REFERENCE_QUOTE_UNMATCHED = "quote_unmatched"  # ID は決まるが、監査が返した引用がその根拠に無い
 # 段落の分類の照合の結果（ClaimCheck.classification_check。#2625）。
 CLASSIFICATION_NON_CLAIM_MISMATCH = "non_claim_mismatch"  # モデルは not_a_claim、コードは見出し・出典の行と認めない
@@ -1137,7 +1131,7 @@ def _bind_claims(output, catalog, passages, *, passage_citations: bool = False, 
 # 12: 主張を段落ごとにその段落の出典の根拠だけで判定し、網羅を別の呼び出しにし、指示を判定の基準だけにした（#3576）。
 # 13: 根拠不足の定型の説明・確認案内を言語資源と照合し、事実の主張に数えない（#3131）。
 # 14: 要約を本文の原文候補へ関連付け、参照不足は意味を未評価とする（#3920）。
-RUBRIC_VERSION = 16
+RUBRIC_VERSION = 17
 # 1 件の評価で同時に行う判定の呼び出しの数（網羅・正確性・段落ごとの主張）。
 JUDGE_MAX_CONCURRENCY = 4
 # 網羅を比較項目ごとに 1 回ずつ判定するか（偽は全項目を 1 回で判定する）。実モデルで同じ比較範囲を 2 回ずつ判定すると、
@@ -1606,42 +1600,33 @@ def _judge_claim(
             raise
         output = last[-1]
     bound = _bind_claims(AnswerEvaluationOutput(claim_checks=[as_claim(output)]), catalog, [dict(passage)], heading_lines=heading_lines)
-    return _checked_subject(bound.claim_checks[0], output, catalog), [
-        item for item in inputs["evidence_items"] if item["evidence_id"] != QUESTION_EVIDENCE_ID
-    ]
+    return bound.claim_checks[0], [item for item in inputs["evidence_items"] if item["evidence_id"] != QUESTION_EVIDENCE_ID]
 
 
-def _checked_subject(claim: ClaimCheck, output: ClaimJudgement, catalog: Mapping[str, Mapping[str, Any]]) -> ClaimCheck:
-    """対象を名指しした supported を、引用した根拠と質問の事実で確かめる。
+def _checked_question_names(claims: Sequence[ClaimCheck], question: str, cited_nodes: Iterable[Mapping[str, Any]]) -> list[ClaimCheck]:
+    """質問が問うた対象の名前を書いた supported を、回答が引用した根拠に照らす（#4327・#4343）。
 
     一般の条件だけを述べる根拠から「対象がその条件を満たす」とする飛躍は、モデルが前提を補うと supported になる。
-    対象を指す語句の写しが引用した資料に無く、利用者が質問で述べた事実でも確かめられなければ、コードが unsupported に
-    する。問いの文は対象の名前を含んでも事実ではない。
-    段落と資料で表記が違うことがあるので、対象の名前に加えてモデルが資料から写した語句も照合する（#4327）。
+    名前の有無はコードで確かめる（モデルの出力に頼らない）。多段の質問では別の段落の根拠で確かめていることがあるので、
+    回答全体の根拠に照らす。
     """
-    subject = _quote_form(output.subject)[0]
-    if claim.status != "supported" or not subject or subject not in _quote_form(claim.answer_quote)[0]:
-        return claim
-    cited = [catalog[key] for key in claim.evidence_id.split(",") if key in catalog] or _spans_for_ids(claim, catalog) or []
-    documents = [item for item in cited if item.get("evidence_id") != QUESTION_EVIDENCE_ID]
-    words = [word for word in (subject, _quote_form(output.subject_quote)[0]) if word]
-    if any(word in _quote_form(str(item.get("text") or ""))[0] for item in documents for word in words):
-        return claim
-    fact = _quote_form(output.question_fact)[0]
-    question = catalog.get(QUESTION_EVIDENCE_ID)
-    text = str(question.get("text") or "") if question is not None else ""
-    statements = [_quote_form(statement)[0] for statement in question_statements(text)]
-    if len(fact) > len(subject) and any(fact in statement for statement in statements):
-        return claim
-    return claim.model_copy(
-        update={
-            "status": "unsupported",
-            "source_id": "",
-            "evidence_quote": "",
-            "reference_check": REFERENCE_SUBJECT_UNSUPPORTED,
-            "reason": f"段落の対象「{output.subject}」を引用した根拠で確かめられません。{claim.reason}",
-        }
-    )
+    sources = [text for node in cited_nodes for text in (str(node.get("text") or ""), str(node.get("source") or ""))]
+
+    def checked(claim: ClaimCheck) -> ClaimCheck:
+        names = absent_question_names(claim.answer_quote, question, sources) if claim.status == "supported" else []
+        if not names:
+            return claim
+        return claim.model_copy(
+            update={
+                "status": "unsupported",
+                "source_id": "",
+                "evidence_quote": "",
+                "reference_check": REFERENCE_SUBJECT_UNSUPPORTED,
+                "reason": f"質問の対象「{'、'.join(names)}」は回答が引用した根拠にありません。{claim.reason}",
+            }
+        )
+
+    return [checked(claim) for claim in claims]
 
 
 def _decided_claim(passage: Mapping[str, str], status: str, reason: str, reference_check: str = "") -> ClaimCheck:
@@ -1859,6 +1844,7 @@ def evaluate_answer_payload(
             claim, fragments = result
             catalog.update((item["evidence_id"], item) for item in fragments)
             claim_checks.append(claim)
+        claim_checks = _checked_question_names(claim_checks, question, (node for nodes in nodes_by_id.values() for node in nodes))
         base["evidence_catalog"] = list(catalog.values())
         checks = sorted((check for slot in coverage_slots for check in results[slot]), key=lambda item: item.requirement_index)
 
