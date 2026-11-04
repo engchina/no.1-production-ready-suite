@@ -355,6 +355,7 @@ def test_failed_case_shows_reason_and_unassessed_metrics() -> None:
     assert sheet.cell(2, columns["評価結果: 状態"]).value == "失敗"
     assert sheet.cell(2, columns["評価結果: 回答"]).value is None
     assert sheet.cell(2, columns["評価結果: 回答の正確性"]).value == "未評価"
+    assert sheet.cell(2, columns["評価結果: 根拠の網羅率（参考）"]).value == "未評価"
     assert sheet.cell(2, columns["評価結果: 失敗理由"]).value == "ケースの実行に失敗"
     assert sheet.cell(2, columns["評価結果: エラー"]).value == "合成の失敗"
 

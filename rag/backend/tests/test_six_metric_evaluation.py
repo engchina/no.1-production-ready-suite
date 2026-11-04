@@ -9,6 +9,7 @@ from app.config import Settings
 from app.rag.evaluation import EvaluationRunner, score_case_answers, summarize_case_results
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
+    EVALUATION_REPORT_ONLY_METRIC_NAMES,
     EvaluationAnswerJudgement,
     EvaluationCase,
     EvaluationCaseResult,
@@ -46,7 +47,10 @@ def test_required_fragments_and_document_ranks_are_independent() -> None:
     assert scored.required_evidence_recall == scored.mrr == 0.5
     assert scored.missing_evidence == ["e2"]
     metrics = summarize_case_results([scored])
-    assert set(metrics.metric_case_counts) == set(EVALUATION_METRIC_NAMES)
+    assert set(metrics.metric_case_counts) == {
+        *EVALUATION_METRIC_NAMES,
+        *EVALUATION_REPORT_ONLY_METRIC_NAMES,
+    }
     assert len(EVALUATION_METRIC_NAMES) == 6
 
 

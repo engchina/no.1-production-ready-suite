@@ -464,6 +464,7 @@ def judge_prompt_sha256() -> str:
         "COVERAGE_PROMPT": "coverage",
         "CLAIM_PROMPT": "claim",
         "CORRECTNESS_PROMPT": "correctness",
+        "EVIDENCE_COVERAGE_PROMPT": "evidenceCoverage",
     }
     prompts = sorted(
         (name, resolve_prompt(f"evaluation.{keys[name]}", value) if name in keys else value)

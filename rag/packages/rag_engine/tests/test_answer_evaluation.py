@@ -34,6 +34,9 @@ from rag_engine.evaluation.answer_eval import (
     CoverageJudgement,
     CoverageOutput,
     EvaluationContractError,
+    EvaluationInputTooLarge,
+    EvidenceCoverageCheck,
+    EvidenceCoverageOutput,
     StandardAnswerScope,
     StandardRequirement,
     _checked_subject,
@@ -125,7 +128,7 @@ def test_completed_returns_checks_without_scores_and_judges_claims_with_cited_ev
     for call in parse.call_args_list:
         assert call.args[0] == expected_systems[call.args[3]]
         assert call.args[0].startswith("## Step 1:")
-    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 15
+    assert result["status"] == "completed" and result["rubric_version"] == RUBRIC_VERSION == 16
     assert result["requirement_coverage"] == 1.0
     # 点数・合否は付けない。評価の基準の閾値による合否は backend が計算する(#680)。
     assert not {"scores", "total_score", "passed", "max_score", "pass_threshold"} & set(result)
@@ -239,8 +242,8 @@ def test_output_keeps_the_previous_contract_shape():
     diagnostics = result["judge_diagnostics"]
     for key in ("standard_scope_reused", "standard_scope_retries", "standard_scope_dropped", "judge_retries", "retry_reasons"):
         assert key in diagnostics
-    # 網羅・正確性・主張の 3 回。
-    assert (diagnostics["judge_calls"], diagnostics["claim_calls"]) == (3, 1)
+    # 網羅・正確性・根拠の網羅・主張の 4 回。
+    assert (diagnostics["judge_calls"], diagnostics["claim_calls"]) == (4, 1)
     assert result["answer_correctness"] == 1.0
 
 
@@ -1462,3 +1465,139 @@ def test_subject_check_lowers_claim_support_through_the_evaluation():
     assert claim["status"] == "unsupported"
     assert claim["audit_status"] == "supported"
     assert claim["reference_check"] == REFERENCE_SUBJECT_UNSUPPORTED
+
+
+def _evidence_check(status, *lines, index=1):
+    return EvidenceCoverageCheck(requirement_index=index, reason="理由", status=status, lines=list(lines))
+
+
+def _with_evidence_coverage(output_or_error):
+    """根拠の網羅の判定だけを差し替えた判定のモデル。"""
+    base = judge()
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        if schema is EvidenceCoverageOutput:
+            if isinstance(output_or_error, Exception):
+                raise output_or_error
+            return EvidenceCoverageOutput(checks=output_or_error)
+        return base(system, prompt, settings, schema, **kwargs)
+
+    return parse
+
+
+@pytest.mark.parametrize(
+    ("checks", "expected", "status", "quote"),
+    [
+        ([_evidence_check("found", "E1-1")], 1.0, "found", "障害の原因はログを確認して特定する。"),
+        ([_evidence_check("partial", "E1-1")], 0.5, "partial", "障害の原因はログを確認して特定する。"),
+        ([_evidence_check("missing")], 0.0, "missing", ""),
+        ([_evidence_check("found", "E9-9")], 0.0, "missing", ""),
+        ([_evidence_check("found")], 0.0, "missing", ""),
+        ([_evidence_check("found", "E9-9", "E2-1")], 1.0, "found", "無関係の頁の本文。"),
+    ],
+    ids=["found", "partial", "missing", "unknown-line", "no-line", "one-known-line"],
+)
+def test_evidence_coverage_counts_only_lines_in_the_evidence(checks, expected, status, quote):
+    with patch(PARSE, side_effect=_with_evidence_coverage(checks)):
+        result = evaluate_answer_payload(cited_payload() | dict(six_metrics=True), object())
+    assert result["status"] == "completed"
+    assert result["evidence_coverage"] == expected
+    assert result["evidence_coverage_checks"][0]["status"] == status
+    assert result["evidence_coverage_checks"][0]["quote"] == quote
+
+
+def test_evidence_coverage_sees_only_requirements_and_evidence():
+    with patch(PARSE, side_effect=_with_evidence_coverage([_evidence_check("missing")])) as parse:
+        evaluate_answer_payload(cited_payload() | dict(six_metrics=True), object())
+    inputs = next(json.loads(call.args[1]) for call in parse.call_args_list if call.args[3] is EvidenceCoverageOutput)
+    assert set(inputs) == {"requirements", "evidence_items"}
+    assert [item["evidence_id"] for item in inputs["evidence_items"]] == ["E1", "E2"]
+    assert inputs["evidence_items"][0]["text"] == "E1-1| 障害の原因はログを確認して特定する。"
+    assert "原因を特定します" not in json.dumps(inputs, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [EvaluationInputTooLarge(), RuntimeError("synthetic")],
+    ids=["too-large", "model-failure"],
+)
+def test_evidence_coverage_failure_does_not_fail_the_evaluation(error):
+    with patch(PARSE, side_effect=_with_evidence_coverage(error)):
+        result = evaluate_answer_payload(cited_payload() | dict(six_metrics=True), object())
+    assert result["status"] == "completed"
+    assert result.get("evidence_coverage") is None
+    assert result["judge_diagnostics"]["evidence_coverage_failure"] == type(error).__name__
+    assert result["requirement_coverage"] == 1.0
+
+
+def test_evidence_coverage_requires_every_requirement_once():
+    with patch(PARSE, side_effect=_with_evidence_coverage([])):
+        result = evaluate_answer_payload(cited_payload() | dict(six_metrics=True), object())
+    assert result["status"] == "completed"
+    assert result.get("evidence_coverage") is None
+    assert result["judge_diagnostics"]["evidence_coverage_failure"] == "EvaluationContractError"
+
+
+def test_correctness_input_has_no_citation_lines():
+    with patch(PARSE, side_effect=judge()) as parse:
+        evaluate_answer_payload(cited_payload() | dict(six_metrics=True), object())
+    inputs = next(json.loads(call.args[1]) for call in parse.call_args_list if call.args[3] is AnswerCorrectnessOutput)
+    assert inputs["answer_text"] == "ログを確認して原因を特定します。"
+
+
+def test_evidence_coverage_reads_all_evidence_in_batches_and_takes_the_best():
+    """入力の上限を超える根拠は組に分けて全部読む。項目はどれかの組で確かめられれば根拠にある。"""
+    filler = "補足本文。" * 100
+    data = cited_payload() | dict(
+        six_metrics=True,
+        evidence_items=[
+            dict(id="doc:p3", source="manual.pdf", page_start=3, page_end=3, text="障害の原因はログを確認して特定する。" + filler),
+            dict(id="doc:p4", source="manual.pdf", page_start=4, page_end=4, text="第二の本文。" + filler),
+            dict(id="doc:p5", source="manual.pdf", page_start=5, page_end=5, text="第三の本文。" + filler),
+        ],
+    )
+    base = judge()
+    seen = []
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        if schema is not EvidenceCoverageOutput:
+            return base(system, prompt, settings, schema, **kwargs)
+        evidence = json.loads(prompt)["evidence_items"]
+        seen.append([row["evidence_id"] for row in evidence])
+        hit = next((row for row in evidence if "第三の本文" in row["text"]), None)
+        return EvidenceCoverageOutput(checks=[_evidence_check("found", f"{hit['evidence_id']}-1") if hit else _evidence_check("missing")])
+
+    with patch(PARSE, side_effect=parse), patch("rag_engine.evaluation.answer_eval.evaluation_input_budget", return_value=8000):
+        result = evaluate_answer_payload(data, object())
+    assert result["status"] == "completed"
+    assert len(seen) > 1
+    assert sorted(key for batch in seen for key in batch) == ["E1", "E2", "E3"]
+    assert result["evidence_coverage"] == 1.0
+    assert result["evidence_coverage_checks"][0]["status"] == "found"
+
+
+def test_evidence_coverage_is_not_measured_when_one_batch_fails():
+    filler = "補足本文。" * 100
+    data = cited_payload() | dict(
+        six_metrics=True,
+        evidence_items=[
+            dict(id=f"doc:p{i}", source="manual.pdf", page_start=i, page_end=i, text=f"本文{i}。" + filler) for i in range(3, 6)
+        ],
+    )
+    base = judge()
+    calls = []
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        if schema is not EvidenceCoverageOutput:
+            return base(system, prompt, settings, schema, **kwargs)
+        calls.append(prompt)
+        evidence = json.loads(prompt)["evidence_items"]
+        if any(row["evidence_id"] == "E3" for row in evidence):
+            raise RuntimeError("synthetic")
+        return EvidenceCoverageOutput(checks=[_evidence_check("found", f"{evidence[0]['evidence_id']}-1")])
+
+    with patch(PARSE, side_effect=parse), patch("rag_engine.evaluation.answer_eval.evaluation_input_budget", return_value=8000):
+        result = evaluate_answer_payload(data, object())
+    assert result["status"] == "completed"
+    assert result.get("evidence_coverage") is None
+    assert result["judge_diagnostics"]["evidence_coverage_failure"] == "RuntimeError"

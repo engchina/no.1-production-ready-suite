@@ -151,7 +151,8 @@ EVALUATION_METRIC_NAMES: tuple[EvaluationMetricName, ...] = (
     "claim_support_rate",
     "response_decision_accuracy",
 )
-EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = ()
+# 合否と閾値には使わない参考の指標（#4341）。
+EVALUATION_REPORT_ONLY_METRIC_NAMES: tuple[str, ...] = ("evidence_coverage",)
 
 
 # 期待する手順の別解の上限（列の数）。
@@ -516,6 +517,8 @@ class EvaluationAnswerJudgement(BaseModel):
     answer_correctness: float | None = Field(default=None, ge=0, le=1)
     claim_support_rate: float | None = Field(default=None, ge=0, le=1)
     requirement_coverage: float | None = None
+    # 標準回答の要点が取得した根拠にある割合（参考値。合否に使わない。#4341）。
+    evidence_coverage: float | None = None
     # 原質問に必要な項目のうち、説明の無い項目があったか(rag_poc の「必要内容欠落」)。
     missing_content: bool | None = None
     # 追加相談の項目（follow_up）のうち、説明の無い項目があったか。
@@ -560,6 +563,7 @@ class EvaluationCaseResult(BaseModel):
     requirement_coverage: float | None = None
     claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
+    evidence_coverage: float | None = None
     expected_decisions: list[str] = Field(default_factory=list)
     observed_outcome: EvaluationOutcome | None = None
     outcome_source: str | None = None
@@ -639,6 +643,7 @@ class EvaluationMetrics(BaseModel):
     requirement_coverage: float | None = None
     claim_support_rate: float | None = None
     response_decision_accuracy: float | None = None
+    evidence_coverage: float | None = None
     metric_case_counts: dict[str, int] = Field(default_factory=dict)
     passed: bool | None = None
     applied_thresholds: dict[str, float] = Field(default_factory=dict)

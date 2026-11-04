@@ -10,6 +10,8 @@ from rag_engine.evaluation.answer_eval import (
     ClaimJudgement,
     CoverageJudgement,
     CoverageOutput,
+    EvidenceCoverageCheck,
+    EvidenceCoverageOutput,
     StandardAnswerScope,
 )
 
@@ -81,6 +83,14 @@ def judge(evaluated: AnswerEvaluationOutput, *, scope=None, correctness="correct
             return coverage(inputs)
         if schema is ClaimJudgement:
             return claim(inputs)
+        if schema is EvidenceCoverageOutput:
+            first = inputs["evidence_items"][0]["text"].split("|", 1)[0]
+            return EvidenceCoverageOutput(
+                checks=[
+                    EvidenceCoverageCheck(requirement_index=item["requirement_index"], reason="理由", status="found", lines=[first])
+                    for item in inputs["requirements"]
+                ]
+            )
         raise AssertionError(schema)
 
     return parse

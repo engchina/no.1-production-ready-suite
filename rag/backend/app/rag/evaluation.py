@@ -839,6 +839,7 @@ def summarize_answer_judgement(evaluation: Mapping[str, object]) -> EvaluationAn
         claims_supported=claims_supported(claims),
         answer_correctness=_optional_float(evaluation.get("answer_correctness")),
         claim_support_rate=_optional_float(evaluation.get("claim_support_rate")),
+        evidence_coverage=_optional_float(evaluation.get("evidence_coverage")),
         requirement_coverage=(
             round(min(1.0, max(0.0, coverage)), 4) if coverage is not None else None
         ),
@@ -1080,6 +1081,7 @@ def _case_result(
         mrr=rank,
         requirement_coverage=judgement.requirement_coverage if judgement else None,
         claim_support_rate=judgement.claim_support_rate if judgement else None,
+        evidence_coverage=judgement.evidence_coverage if judgement else None,
         answer_correctness=judgement.answer_correctness if judgement else None,
         response_decision_accuracy=_bool_value(all(decisions)) if decisions else None,
         expected_decisions=sorted(case_decisions),
@@ -1176,6 +1178,7 @@ def _accumulate_case_metrics(aggregate: MetricAggregate, result: EvaluationCaseR
     if judgement is not None and judgement.status == "completed":
         aggregate.add("claim_support_rate", judgement.claim_support_rate)
         aggregate.add("requirement_coverage", judgement.requirement_coverage)
+        aggregate.add("evidence_coverage", judgement.evidence_coverage)
 
 
 def _deadline(time_budget_seconds: float | None) -> float | None:

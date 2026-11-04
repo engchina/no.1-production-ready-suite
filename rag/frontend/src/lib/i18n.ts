@@ -4277,6 +4277,7 @@ export const ja = {
   "settings.answerPrompts.part.system": "システムプロンプト",
   "settings.answerPrompts.part.template": "入力テンプレート",
   "settings.answerPrompts.part.correctness": "回答の正確性の判定",
+  "settings.answerPrompts.part.evidenceCoverage": "根拠の網羅の判定",
   "settings.answerPrompts.part.scope": "評価範囲の固定",
   "settings.answerPrompts.part.coverage": "標準回答の比較項目の網羅の判定",
   "settings.answerPrompts.part.claim": "回答の段落ごとの、出典の根拠による裏付けの判定",

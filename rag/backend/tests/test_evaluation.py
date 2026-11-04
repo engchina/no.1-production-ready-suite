@@ -25,6 +25,7 @@ from app.rag.pipeline import (
 )
 from app.schemas.evaluation import (
     EVALUATION_METRIC_NAMES,
+    EVALUATION_REPORT_ONLY_METRIC_NAMES,
     EvaluationCase,
     EvaluationEvidence,
     EvaluationMetrics,
@@ -168,6 +169,7 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
     assert metrics.requirement_coverage == 1.0
     assert metrics.response_decision_accuracy == 1.0
     assert metrics.metric_case_counts == {
+        "evidence_coverage": 0,
         "required_evidence_recall": 1,
         "mrr": 1,
         "claim_support_rate": 1,
@@ -175,7 +177,10 @@ async def test_evaluation_runner_computes_metrics_by_perspective() -> None:
         "requirement_coverage": 1,
         "response_decision_accuracy": 1,
     }
-    assert set(metrics.metric_case_counts) == set(EVALUATION_METRIC_NAMES)
+    assert set(metrics.metric_case_counts) == {
+        *EVALUATION_METRIC_NAMES,
+        *EVALUATION_REPORT_ONLY_METRIC_NAMES,
+    }
     assert metrics.reasoning_type_breakdown == {}
     assert metrics.hops_breakdown == {}
     assert metrics.split_breakdown == {}
@@ -489,7 +494,10 @@ async def test_category_breakdown_summarizes_results_per_category() -> None:
         metrics.category_breakdown["knowledge_missing"].metrics["response_decision_accuracy"] == 0
     )
     assert metrics.category_breakdown["uncategorized"].metrics["response_decision_accuracy"] is None
-    assert set(metrics.category_breakdown["uncategorized"].metrics) == set(EVALUATION_METRIC_NAMES)
+    assert set(metrics.category_breakdown["uncategorized"].metrics) == {
+        *EVALUATION_METRIC_NAMES,
+        *EVALUATION_REPORT_ONLY_METRIC_NAMES,
+    }
 
 
 async def test_category_breakdown_is_empty_without_categories() -> None:
