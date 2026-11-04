@@ -227,7 +227,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)
             selected = [uid for uid, original in units if body in original]
             assert len(selected) <= 1
-            citations = [{"unit_ids": selected}] if selected else []
+            citations: list[dict[str, Any]] = [{"unit_ids": selected}] if selected else []
         else:
             match = re.search(r"\[(E[0-9]+)\].*?" + re.escape(body), prompt, re.DOTALL)
             citations = [{"evidence_id": match.group(1), "lines": "1"}] if match else []

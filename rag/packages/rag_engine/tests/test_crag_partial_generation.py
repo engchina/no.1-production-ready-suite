@@ -4,6 +4,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
+from citation_unit_support import canonical_fixture
 from test_answer_generation import _chunk_run_stub
 from test_crag_context_recovery import record
 from test_grounded_answer import draft, ids
@@ -12,7 +13,7 @@ from rag_engine.config import get_settings
 from rag_engine.generation import answering as a
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.generation.crag_support import _crag_task_contract
-from rag_engine.models.llm import CragRetrievalGradeOutput, GroundedDraft
+from rag_engine.models.llm import CragRetrievalGradeOutput
 
 QUESTION = "設定画面を開いてから、設定を保存する手順は？"
 OPEN = "設定画面を開きます。"
@@ -61,7 +62,7 @@ def run_answer(text, grade_output, generation):
             return grade_output
         assert issubclass(schema, generation_draft_wire_model())
         # 既存のquote/lines応答はcanonical再生であり、wire検証ではない。
-        return GroundedDraft.model_validate(generation(context))
+        return canonical_fixture(generation(context))
 
     with (
         patch.object(a, "load_latest_or_source_chunk_run", return_value=_chunk_run_stub()),
@@ -221,9 +222,11 @@ def test_crag_user_messages_follow_the_active_language_pack():
             Partial(),
             {
                 "required_aspect_coverage": "partial",
-                "answerable_parts": [{"status": "supported", "evidence": [{"evidence_ids": ["e1"], "quote": OPEN}]}],
+                "answerable_parts": [
+                    {"status": "supported", "evidence": [{"source_id": "source-a", "evidence_ids": ["e1"], "quote": OPEN}]}
+                ],
             },
-            [{"evidence_id": "e1", "text": OPEN}],
+            [{"evidence_id": "e1", "source_id": "source-a", "text": OPEN}],
             audited=False,
         )
         assert projected.checked[0].reasons == ["資料の記載をそのまま表示します。"]
