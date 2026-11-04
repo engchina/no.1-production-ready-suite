@@ -30,7 +30,7 @@ describe("tokens CSS", () => {
       ["ja", "Noto Sans JP Variable"],
       ["zh-Hans", "Noto Sans SC Variable"],
       ["zh-Hant", "Noto Sans TC Variable"],
-      ["zh-HK", "Noto Sans HK Variable"],
+      ["zh-HK", "Noto Sans TC Variable"],
     ]) {
       expect(fonts).toMatch(new RegExp(`:where\\(\\[lang\\]:lang\\(${lang}\\)\\) \\{\\s*--font-han: "${first}",`));
     }
@@ -53,6 +53,8 @@ describe("tokens CSS", () => {
     }
     expect(fonts).toMatch(/--font-han: "Noto Sans JP Variable", "Noto Sans JP Fallback",/);
     expect(fonts).toMatch(/--font-mono: "Google Sans Code", "Google Sans Code Fallback",/);
+    expect(fonts).toMatch(/--font-sans-tail: "Roboto", "Google Sans Code", "Google Sans Code Fallback",/);
+    expect(fonts).not.toContain("Noto Sans HK");
   });
 
   it("テーマ class（.light / .dark）はルート要素でだけ効く（外部ライブラリの同名 class に反応しない）", () => {

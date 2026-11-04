@@ -4018,7 +4018,7 @@ NL2SQL のチャット・DB 管理チャットと、Agent のチャット・実�
 
 ## 内容の言語: resolveContentLang / detectContentLang / normalizeContentLang — **新規**（#3335）
 
-利用者の内容（回答・根拠の抜粋・質問・文書のプレビューの本文）の要素に内容の言語の `lang` を付け、共有の tokens（`tokens/fonts.css`）の `:lang()` で漢字の字形を切り替える（`zh-Hans` は Noto Sans SC、`zh-Hant` は TC、`zh-HK` は HK を先頭にした並び。画面の文言は `<html lang="ja">` のまま）。決めたことと理由は README §2「内容の言語の字形」。
+利用者の内容（回答・根拠の抜粋・質問・文書のプレビューの本文）の要素に内容の言語の `lang` を付け、共有の tokens（`tokens/fonts.css`）の `:lang()` で漢字の字形を切り替える（`zh-Hans` は Noto Sans SC、`zh-Hant` は TC、`zh-HK` は TC を先頭にした並び。画面の文言は `<html lang="ja">` のまま）。決めたことと理由は README §2「内容の言語の字形」。
 
 | 部品・関数 | `lang` の渡し方 | 付ける要素 |
 |---|---|---|

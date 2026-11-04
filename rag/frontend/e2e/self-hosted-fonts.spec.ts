@@ -21,7 +21,7 @@ import {
   renderedLangFonts,
 } from "../../../platform/packages/ui/e2e/font-checks";
 
-/** 共有 tokens の太さ（400 / 500 / 600 / 700）。JP・SC・TC・HK は可変書体で、どの太さも本物の字形で出す。 */
+/** 共有 tokens の太さ（400 / 500 / 600 / 700）。JP・SC・TC は可変書体で、どの太さも本物の字形で出す。 */
 const WEIGHTS = UI_FONT_WEIGHTS;
 
 /** 等幅書体（--font-mono）が Google Sans Code で、code / .font-mono に効くことを確かめる。 */
@@ -162,10 +162,10 @@ test.describe("自前ホストフォント", () => {
     await checkMonoFont(page);
   });
 
-  // Noto Sans JP に無い字だけを、自前ホストの Noto Sans SC → TC → HK で補う（#3292）。字は合成の例。
-  // SC・TC・HK の @font-face は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305）。
+  // Noto Sans JP に無い字だけを、自前ホストの Noto Sans SC → TC で補う（#3292）。字は合成の例。
+  // SC・TC の @font-face は主の CSS に入れず、最初の描画の後に別の CSS の chunk で読む（#3305）。
   // 端末の幅によらず同じ読み方であることを 375px でも確かめる。
-  test("JP に無い簡体字・繁体字・香港の字を、最初の描画の後に読む Noto Sans SC・TC・HK で補う", { tag: "@responsive" }, async ({ page }) => {
+  test("JP に無い簡体字・繁体字を、最初の描画の後に読む Noto Sans SC・TC で補う", { tag: "@responsive" }, async ({ page }) => {
     const external: string[] = [];
     page.on("request", (request) => {
       if (/fonts\.(googleapis|gstatic)\.com|fonts\.bunny\.net/u.test(request.url())) external.push(request.url());
@@ -173,7 +173,7 @@ test.describe("自前ホストフォント", () => {
     await mockDatabaseReady(page);
     await recordFirstRenderFontFaces(page);
     await page.goto("/");
-    // 最初の描画の時点の CSS（dev の <style> を含む）と、index.html が読む CSS（build の成果物）に SC・TC・HK は無い。
+    // 最初の描画の時点の CSS（dev の <style> を含む）と、index.html が読む CSS（build の成果物）に SC・TC は無い。
     const firstRender = await firstRenderFontFaces(page);
     expect(firstRender.families).toContain(JAPANESE_FONT.family);
     const initial = await initialStylesheetFontFaces(page);
@@ -206,7 +206,7 @@ test.describe("自前ホストフォント", () => {
   });
 
   // 利用者の内容は lang を付けた要素で、言語の字形の書体を先頭にする（#3335）。画面の文言（html の ja）は JP のまま。
-  test("内容の言語（lang）で共通の漢字を JP・SC・TC・HK の字形で描き分ける", { tag: "@responsive" }, async ({ page }) => {
+  test("内容の言語（lang）で共通の漢字を JP・SC・TC の字形で描き分ける", { tag: "@responsive" }, async ({ page }) => {
     await mockDatabaseReady(page);
     await page.goto("/");
     await checkLangFonts(page);
