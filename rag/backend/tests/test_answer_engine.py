@@ -3766,7 +3766,8 @@ def test_diversity_without_capture_does_not_build_trace_details(
         capture_enabled = False
 
         def display(self, **kwargs: Any) -> None:
-            raise AssertionError("観測停止中に表示詳細を作成しました")
+            assert "details" not in kwargs
+            assert kwargs["params"]["added_count"] == 1
 
     @contextmanager
     def observe(operation: str, name: str) -> Any:
@@ -3776,7 +3777,7 @@ def test_diversity_without_capture_does_not_build_trace_details(
     monkeypatch.setattr(module, "_diverse_candidates", lambda *args, **kwargs: ["a2"])
 
     def document_of(value: str) -> str:
-        raise AssertionError("観測停止中に文書の集計を行いました")
+        return value[0]
 
     assert module._observed_diverse_candidates(
         ["a1", "a2"],

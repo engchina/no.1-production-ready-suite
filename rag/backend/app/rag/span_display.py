@@ -46,7 +46,9 @@ _STEP_FAILURE_SUMMARY: Mapping[str, str] = {
 _STEP_FAILURE_DEFAULT = "この工程でエラーが発生しました。"
 
 # 回答の記録の工程の状態のうち、結果の説明ではないもの（完了・例外で中断）。
-_PLAIN_STEP_STATUSES: frozenset[str] = frozenset({"", "complete", "skipped", "エラーで中断"})
+_PLAIN_STEP_STATUSES: frozenset[str] = frozenset(
+    {"", "complete", "completed", "done", "ok", "skipped", "failed", "エラーで中断"}
+)
 # 例外で止まった工程の状態（`rag_engine` の `_execution_step`）。
 ANSWER_STEP_FAILED_STATUS = "エラーで中断"
 
@@ -177,6 +179,28 @@ def answer_step_params(values: Mapping[str, object]) -> DisplayParams:
     round_number = values.get("round")
     if isinstance(round_number, int) and not isinstance(round_number, bool) and round_number > 0:
         params["round"] = round_number
+    # 本文を保存しない場合も、工程の設定上限と実績を保持する。
+    for key in (
+        "depth",
+        "max_extra",
+        "new_document_limit",
+        "present_document_limit",
+        "inspected_count",
+        "eligible_count",
+        "added_count",
+        "added_document_count",
+        "new_document_count",
+        "present_document_count",
+        "before_count",
+        "after_count",
+    ):
+        value = values.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            params[key] = value
+    if isinstance(limit_reached := values.get("limit_reached"), bool):
+        params["limit_reached"] = limit_reached
+    if isinstance(reason := values.get("reason_code"), str) and reason:
+        params["reason_code"] = reason
     note = str(values.get("status") or "").strip()
     if note not in _PLAIN_STEP_STATUSES:
         params["note"] = note

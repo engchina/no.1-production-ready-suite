@@ -4242,8 +4242,6 @@ def _observed_diverse_candidates(
             )
         )
         added = eligible[:max_extra] if not reason else []
-        if not getattr(observation, "capture_enabled", True):
-            return added
         before = len(ordered[:head_size])
         present = {document_of(chunk_id) for chunk_id in ordered[:head_size]}
         added_documents = {document_of(chunk_id) for chunk_id in added}
@@ -4275,6 +4273,10 @@ def _observed_diverse_candidates(
                 "reason_code": reason or ("added" if added else "no_match"),
                 **counts,
             },
+        )
+        if not getattr(observation, "capture_enabled", True):
+            return added
+        observation.display(
             details={
                 "fields": [
                     {"label": "結果", "value": reason_text},
