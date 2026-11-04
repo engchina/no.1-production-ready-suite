@@ -237,6 +237,32 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             "items": [{"kind": "rule", "text": body, "citations": citations}] if citations else [],
             "confidence": "high",
         }
+        if getattr(schema, "_uses_typed_answer_parts", False):
+            scopes = [
+                {"evidence_id": label, "target": "合成の操作", "relation": "direct", "link": None}
+                for label, block in re.findall(r"(?ms)^\[(E\d+)\][^\n]*\n(.*?)^\[/\1\]", prompt)
+                if any(uid in block for uid in selected)
+            ]
+            answer = (
+                {
+                    "kind": "answer",
+                    "basis": {"unit_ids": selected},
+                    "reasoning": "選択した原文の操作を示す。",
+                    "result": body,
+                }
+                if selected
+                else {"kind": "gap", "text": "合成の操作の資料がありません。"}
+            )
+            return schema.model_validate(
+                {
+                    "request_coverage": [{"request_id": "Q1", "evidence_scope": scopes}],
+                    "answer_parts": [
+                        {"request_id": "Q1", "requirement": "合成の操作", "answer": answer}
+                    ],
+                    "summary_part_indexes": [0] if selected else [],
+                    "confidence": "high",
+                }
+            )
         return (
             schema.model_validate(payload)
             if getattr(schema, "_uses_unit_ids", False)
@@ -3213,6 +3239,15 @@ async def _answer_with_coverage(
             and _INVOICE_TEXT not in prompt
         ):
             data = result.model_dump(exclude_unset=True)
+            if getattr(schema, "_uses_typed_answer_parts", False):
+                data["answer_parts"].append(
+                    {
+                        "request_id": "Q1",
+                        "requirement": "追加の合成要求",
+                        "answer": {"kind": "gap", "text": "請求書の再発行方法は？"},
+                    }
+                )
+                return schema.model_validate(data)
             data["items"].append(
                 {
                     "kind": "gap",

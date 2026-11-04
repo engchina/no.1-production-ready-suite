@@ -68,3 +68,21 @@ def test_wire_part_reference_is_split_with_derived_output():
     result = canonical_generation_draft(schema.model_validate(deepcopy(raw)), unit_catalog=catalog)
     assert result.answer_parts[0].item_indexes == []
     assert result.answer_parts[0].application_indexes == [0]
+
+
+def test_verified_gap_keeps_index_so_the_declared_part_is_not_duplicated():
+    from rag_engine.generation.grounded import verify
+
+    gap = GroundedItem(kind="gap", request_id="Q1", text="利用時間を確認してください。")
+    draft = GroundedDraft(
+        items=[gap],
+        summary="",
+        confidence="low",
+        answer_parts=[
+            AnswerPart(id="P1", request_id="Q1", text="利用時間", result_kind="gap", item_indexes=[0]),
+        ],
+    )
+    checked, _ = verify("料金を教えてください。", draft, [])
+    assert checked[0].draft_index == 0
+    result = check_answer_parts(draft, {entry.draft_index: entry for entry in checked}, [], {"Q1"})
+    assert result["parts"][0]["status"] == "present"

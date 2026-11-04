@@ -155,3 +155,24 @@ def test_summary_links_to_published_derivation_and_its_sources(change):
     else:
         assert result["status"] == "unresolved"
         assert result["unresolved_application_indexes"]
+
+
+def test_composed_summary_with_unpublished_derivation_is_withheld_deterministically():
+    from rag_engine.generation.applications import check_applications
+    from rag_engine.models.llm import GroundedApplication
+
+    _, value = _case([])
+    value["summary_application_indexes"] = [0]
+    model = GroundedDraft.model_validate(value)
+    model._composed_summary = True
+    application = GroundedApplication(item_indexes=[0], reasoning="1＋1＝3", result=model.summary)
+    model.applications = [application]
+    entry = grounded.CheckedItem(model.items[0], span={"evidence_id": "E1"}, draft_index=0)
+    applications = check_applications("合成の質問", [application], {0: entry})
+    assert not applications[0].published
+    current = grounded.Round(model.summary, model, [entry], [], None, applications=applications)
+    result = grounded.link_summary_evidence(current)
+    assert result.summary == grounded.answer_labels().neutral_summary
+    assert result.summary_reason
+    assert result.timing["summary_citations"]["withheld"]
+    assert result.review_execution == "not_run"

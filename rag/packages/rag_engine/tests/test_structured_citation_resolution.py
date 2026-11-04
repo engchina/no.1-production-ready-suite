@@ -1,6 +1,7 @@
 """回答の引用元は ID と範囲だけで決まり、引用文から別の原文を探さない。"""
 
 import pytest
+from citation_unit_support import selected_answer_payload
 
 from rag_engine.generation import grounded
 from rag_engine.generation.citation_wire import canonical_generation_draft
@@ -69,18 +70,10 @@ def test_discontinuous_units_are_extracted_separately_without_the_gap():
     catalog = grounded.generation_unit_catalog(evidence)
     assert len(catalog.unit_ids) == 3
     schema = grounded.generation_output_model("合成の設定は？", unit_catalog=catalog)
-    output = schema.model_validate(
-        {
-            "items": [
-                {"kind": "rule", "text": "合成の説明です。", "citations": [{"unit_ids": [catalog.unit_ids[0], catalog.unit_ids[2]]}]}
-            ],
-            "summary": "",
-            "confidence": "low",
-        }
-    )
+    output = schema.model_validate(selected_answer_payload([catalog.unit_ids[0], catalog.unit_ids[2]]))
     draft = canonical_generation_draft(output, unit_catalog=catalog)
     checked, dropped = grounded.verify("合成の設定は？", draft, evidence)
-    own = list(grounded.item_citations(checked[0]))
+    own = [citation for entry in checked for citation in grounded.item_citations(entry)]
     assert not dropped
     assert [row.item.quote for row in own] == ["最初の原文です。", "最後の原文です。"]
     assert all("未選択" not in row.item.quote for row in own)
@@ -154,9 +147,7 @@ def test_real_generation_schema_selects_one_of_identical_sources_by_unit_id(sele
     catalog = grounded.generation_unit_catalog(evidence)
     schema = grounded.generation_output_model("合成の設定は？", unit_catalog=catalog)
     chosen = catalog.snapshots[selected].unit_ids[0]
-    output = schema.model_validate(
-        {"items": [{"kind": "rule", "text": "合成の説明です。", "citations": [{"unit_ids": [chosen]}]}], "summary": "", "confidence": "low"}
-    )
+    output = schema.model_validate(selected_answer_payload([chosen], evidence_ids=(evidence[selected]["label"],)))
     draft = canonical_generation_draft(output, unit_catalog=catalog)
     checked, dropped = grounded.verify("合成の設定は？", draft, evidence)
     assert not dropped

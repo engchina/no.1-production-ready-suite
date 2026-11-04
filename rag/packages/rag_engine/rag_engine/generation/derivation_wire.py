@@ -67,10 +67,11 @@ def split_derivations(raw: dict[str, Any]) -> tuple[dict[str, Any], list[int]]:
     result["answer_parts"] = [
         {
             **part,
+            "id": f"P{number + 1}",
             "item_indexes": [direct_indexes.get(index, index) for index in part.get("item_indexes", []) if index not in derived_indexes],
             "application_indexes": [derived_indexes[index] for index in part.get("item_indexes", []) if index in derived_indexes],
         }
-        for part in raw.get("answer_parts", [])
+        for number, part in enumerate(raw.get("answer_parts", []))
     ]
     summary_indexes = raw.get("summary_item_indexes", [])
     result["summary_item_indexes"] = list(

@@ -21,6 +21,8 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+MAX_ANSWER_PARTS = 40
+
 
 @dataclass(frozen=True)
 class RerankTextRank:
@@ -330,7 +332,7 @@ class GroundedCitation(_StrictModel):
     )
     # 引用の原文。モデルには出力させず（応答の schema に出さない）、evidence_id と lines からシステムが取り出す（#2830）。
     quote: SkipJsonSchema[str] = Field(
-        default="", max_length=600, description="引用の原文（システムが evidence_id と lines から取り出す。応答の schema には出さない）。"
+        default="", description="引用の原文（システムが evidence_id と lines から取り出す。応答の schema には出さない）。"
     )
 
 
@@ -351,9 +353,9 @@ class GroundedItem(_StrictModel):
     kind: Literal["operation", "rule", "confirmation", "gap"] = Field(
         description="operation=利用者が行う操作（実施順）。rule=規則・可否・原因の説明。confirmation=照合・閲覧の案内。gap=資料から確認できない点（何が確認できないか、閲覧する資料・データと目的）。"
     )
+    # コードが選択原文を入れる欄でもある。生成文の長さは生成wireで制限し、原文は切らない。
     text: str = Field(
         min_length=1,
-        max_length=600,
         description="出典の原文が支持する範囲だけを質問の言葉で説明する。原文にない画面名・ボタン・値・効果・原因・成功保証を足さない。",
     )
     citations: list[GroundedCitation] = Field(
@@ -585,8 +587,8 @@ class AnswerPart(_StrictModel):
     item_indexes: list[Annotated[int, Field(strict=True, ge=0, le=39)]] = Field(
         default_factory=list, max_length=40, description="この要点に答える items の index。"
     )
-    application_indexes: list[Annotated[int, Field(strict=True, ge=0, le=5)]] = Field(
-        default_factory=list, max_length=6, description="この要点に答える applications の index。"
+    application_indexes: list[Annotated[int, Field(strict=True, ge=0, lt=MAX_ANSWER_PARTS)]] = Field(
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="この要点に答える applications の index。"
     )
 
 
@@ -599,6 +601,8 @@ class GroundedDraft(_StrictModel):
     _collapsed_duplicates: dict[str, int] = PrivateAttr(default_factory=dict)
     # 同じ回答の修正では、要求計画の表示番号も送達時の版へ結ぶ（公開の JSON へは含めない）。
     _citation_snapshots: tuple[Any, ...] = PrivateAttr(default=())
+    # 新wireの摘要は既出出力の選択だけ。依存が非公開になれば機械的に保留する。
+    _composed_summary: bool = PrivateAttr(default=False)
 
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
@@ -616,7 +620,7 @@ class GroundedDraft(_StrictModel):
     items: list[GroundedItem] = Field(max_length=40, description="主張と原文引用の対。機能・前提ごとに分け、見出しは書かない。")
     applications: list[GroundedApplication] = Field(
         default_factory=list,
-        max_length=6,
+        max_length=MAX_ANSWER_PARTS,
         description="計算・条件の適用・複数資料の組み合わせで導く結論をすべて置く。items は資料の直接記載。必要な根拠と前提がそろえば、結果そのものが原文に無くてもここで答える。",
     )
     external_data_required: bool = Field(
@@ -642,9 +646,9 @@ class GroundedDraft(_StrictModel):
         max_length=40,
         description="summary の全事実を支える items の 0 始まりの index。条件・否定・例外を保ち、本文にない事実を加えない。summary が空なら空配列。",
     )
-    summary_application_indexes: list[Annotated[int, Field(strict=True, ge=0, le=5)]] = Field(
+    summary_application_indexes: list[Annotated[int, Field(strict=True, ge=0, lt=MAX_ANSWER_PARTS)]] = Field(
         default_factory=list,
-        max_length=6,
+        max_length=MAX_ANSWER_PARTS,
         description="summary が要約する applications の0始まりの index。導出結果への依存は items の代わりにこちらへ書く。summary が空なら空配列。",
     )
     confidence: Literal["high", "medium", "low"] = Field(
@@ -815,7 +819,7 @@ class ApplicationDraft(_StrictModel):
 
     applications: list[GroundedApplication] = Field(
         default_factory=list,
-        max_length=6,
+        max_length=MAX_ANSWER_PARTS,
         description="質問に書かれた事実に、items の規則を当てはめた結果。当てはめられる規則と事実が無ければ空。",
     )
     summary: str = Field(
@@ -826,7 +830,9 @@ class ApplicationDraft(_StrictModel):
 class ApplicationAudit(_StrictModel):
     """当てはめの段の監査（#2159）。"""
 
-    application_reviews: list[GroundedApplicationReview] = Field(default_factory=list, max_length=6, description="各 application の監査。")
+    application_reviews: list[GroundedApplicationReview] = Field(
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application の監査。"
+    )
     summary_supported: bool = Field(
         description="summary が items の規則と valid な application の結果の範囲を超える断定をしていなければ true。"
     )
@@ -898,7 +904,7 @@ class GroundedFactAudit(_StrictModel):
         description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
     )
     application_reviews: list[GroundedApplicationReview] = Field(
-        default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application（当てはめ）の監査。"
     )
     request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
     summary_output_fields: OutputFieldEvidence | None = Field(
@@ -925,7 +931,7 @@ class GroundedAudit(_StrictModel):
         description="guide_contracts の要件ごとの充足。全 id を1回ずつ判定する。設定の要件は回答の評価基準であり、文書の仕様の根拠ではない。",
     )
     application_reviews: list[GroundedApplicationReview] = Field(
-        default_factory=list, max_length=6, description="各 application（当てはめ）の監査。"
+        default_factory=list, max_length=MAX_ANSWER_PARTS, description="各 application（当てはめ）の監査。"
     )
     request_reviews: list[GroundedRequestReview] = Field(default_factory=list, max_length=64, description="request_units の各 id の充足。")
     unused_evidence_ids: list[str] = Field(

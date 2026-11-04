@@ -240,6 +240,41 @@ def deterministic_parse_text_response(
                     else [{"evidence_id": evidence_id, "line_start": number, "line_end": number}],
                 }
             ]
+        if getattr(text_format, "_uses_typed_answer_parts", False):
+            answer = (
+                {
+                    "kind": "answer",
+                    "basis": {"unit_ids": [unit.group(1)]},
+                    "reasoning": "選択した原文を示す。",
+                    "result": items[0]["text"],
+                }
+                if evidence and unit
+                else {"kind": "gap", "text": "合成の資料が不足しています。"}
+            )
+            return text_format.model_validate(
+                {
+                    "request_coverage": [
+                        {
+                            "request_id": "Q1",
+                            "evidence_scope": [
+                                {
+                                    "evidence_id": evidence[0],
+                                    "target": "合成の要求",
+                                    "relation": "direct",
+                                    "link": None,
+                                }
+                            ],
+                        }
+                    ]
+                    if evidence
+                    else [],
+                    "answer_parts": [
+                        {"request_id": "Q1", "requirement": "合成の要求", "answer": answer}
+                    ],
+                    "summary_part_indexes": [0] if evidence else [],
+                    "confidence": "high",
+                }
+            )
         return text_format.model_validate(
             {"summary": "決定論スタブの回答", "items": items, "confidence": "high"}
         )

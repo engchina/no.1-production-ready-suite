@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Union, cast
 
 from pydantic import BaseModel, Field, StrictInt, create_model
 from pydantic.json_schema import SkipJsonSchema
@@ -59,7 +59,7 @@ def bind_wire_range(line_start: int | None, line_end: int | None, *, unit_count:
 @lru_cache(maxsize=1)
 def generation_draft_wire_model() -> type[BaseModel]:
     """既存の項目・草稿のFieldInfoを保ち、生成時だけ引用を整数の契約へ置き換える。"""
-    from rag_engine.generation.derivation_wire import GenerationItem
+    from rag_engine.generation.derivation_wire import DerivationBasis, GenerationItem
     from rag_engine.models.llm import (
         AnswerPart,
         GroundedApplication,
@@ -81,6 +81,7 @@ def generation_draft_wire_model() -> type[BaseModel]:
     citation_info = deepcopy(GroundedItem.model_fields["citations"])
     citation_info.description = "直接記載の text を支える原文の出典。derived と gap は空配列。"
     text_info = deepcopy(GroundedItem.model_fields["text"])
+    text_info.metadata.extend(Field(max_length=600).metadata)
     text_info.description = "利用者へ返す説明または導出結果。kind に対応する根拠と依存を付け、見出しや内部番号は書かない。"
     items_info = deepcopy(GroundedDraft.model_fields["items"])
     items_info.description = "直接記載・導出・不足を分類した回答単位。各要点の出力を指す順序を保つ。"
@@ -95,9 +96,44 @@ def generation_draft_wire_model() -> type[BaseModel]:
             ),
         ),
     }
-    item = create_model("GroundedItemWire", __base__=GenerationItem, **item_fields)
+    direct_info = deepcopy(citation_info)
+    direct_info.metadata.extend(Field(min_length=1).metadata)
+    direct = create_model(
+        "DirectGroundedItemWire",
+        __base__=GenerationItem,
+        **{
+            **item_fields,
+            "kind": (Literal["operation", "rule", "confirmation"], Field(description="原文が直接述べる事実・規則・操作。")),
+            "citations": (GenericAlias(list, citation), direct_info),
+            "derivation": (None, Field(default=None)),
+        },
+    )
+    derived = create_model(
+        "DerivedGroundedItemWire",
+        __base__=GenerationItem,
+        **{
+            **item_fields,
+            "kind": (Literal["derived"], Field(description="計算・条件適用・資料間の組み合わせによる結論。")),
+            "citations": (GenericAlias(list, citation), Field(default_factory=list, max_length=0)),
+            "derivation": (DerivationBasis, Field()),
+        },
+    )
+    gap = create_model(
+        "GapGroundedItemWire",
+        __base__=GenerationItem,
+        **{
+            **item_fields,
+            "kind": (Literal["gap"], Field(description="必要な根拠や前提の不足。")),
+            "citations": (GenericAlias(list, citation), Field(default_factory=list, max_length=0)),
+            "derivation": (None, Field(default=None)),
+        },
+    )
+    item = Union.__getitem__((direct, derived, gap))
     part = create_model(
-        "AnswerPartWire", __base__=AnswerPart, application_indexes=(SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True))
+        "AnswerPartWire",
+        __base__=AnswerPart,
+        id=(SkipJsonSchema[str], Field(default="", exclude=True)),
+        application_indexes=(SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
     )
     draft_fields: dict[str, Any] = {
         "answer_parts": (GenericAlias(list, part), deepcopy(GroundedDraft.model_fields["answer_parts"])),
@@ -186,13 +222,25 @@ def canonical_request_coverage(
 
 
 def canonical_generation_draft(
-    value: BaseModel, link_text: Callable[[RequestLinkRange], str] = lambda _link: "", *, unit_catalog: Any = None
+    value: BaseModel,
+    link_text: Callable[[RequestLinkRange], str] = lambda _link: "",
+    *,
+    unit_catalog: Any = None,
+    question: str | None = None,
 ) -> GroundedDraft:
     """新wireは整数の指定を私有属性へ残す。既存の草稿・履歴のlinesは変更しない。
 
     ``link_text`` は計画の linked の番号の範囲から原文を切り出す（呼び出し側が送った根拠を知っている）。
     """
     from rag_engine.models.llm import GroundedCitation, GroundedDraft
+
+    if getattr(type(value), "_uses_typed_answer_parts", False):
+        from rag_engine.generation.answer_parts_wire import canonical_answer_parts
+
+        if unit_catalog is None:
+            raise ValueError("送達した引用単位の対応がありません。")
+        coverage = canonical_request_coverage(cast(Any, value).request_coverage, link_text, unit_catalog=unit_catalog)
+        return canonical_answer_parts(value, unit_catalog, [row.model_dump() for row in coverage], question=question)
 
     if getattr(type(value), "_uses_unit_ids", False):
         if unit_catalog is None:
@@ -213,7 +261,13 @@ def canonical_generation_draft(
                 }
                 for binding in unit_bindings
             ]
+            if item.get("kind") not in {"derived", "gap"}:
+                item["text"] = "\n".join(binding.text for binding in unit_bindings)
             bindings.append(unit_bindings)
+        # 摘要は出力済みの本文・導出結果の選択。ここで新しい自由文を受け取らない。
+        raw["summary"] = "\n".join(
+            raw["items"][index]["text"] for index in raw.get("summary_item_indexes", []) if 0 <= index < len(raw["items"])
+        )
         from rag_engine.generation.derivation_wire import split_derivations
 
         raw, positions = split_derivations(raw)

@@ -170,8 +170,7 @@ DEFAULT_IMAGE_RETRIEVAL_PROMPT = refine_image_retrieval_prompt(DEFAULT_IMAGE_RET
 # （説明は UI の VLM_ANSWER_PROMPT_EDITOR_INFO と README に置く）。方針は system prompt 側にある。
 DEFAULT_VLM_ANSWER_PROMPT = (
     "## Step 1: 指示\n"
-    "提示された根拠だけを使い、システム指示と応答 schema の役割・依存に沿って、summary と i"
-    "tems の JSON で回答してください。\n"
+    "提示された根拠だけを使い、システム指示と応答 schema の構造・役割・依存に沿って JSON で回答してください。\n"
     "\n"
     "## Step 2: 信頼境界\n"
     "- `BEGIN_UNTRUSTED_RETRIEVED_CONTE"

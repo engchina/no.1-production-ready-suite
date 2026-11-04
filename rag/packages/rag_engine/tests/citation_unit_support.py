@@ -23,10 +23,42 @@ def repair_output(schema: type[BaseModel], prompt: str, *ranges: tuple[int, int,
     return schema.model_validate({"ranges": updates})
 
 
+def selected_answer_payload(
+    unit_ids: list[str], *, text: str = "合成の回答です。", evidence_ids: tuple[str, ...] = ("E1",)
+) -> dict[str, Any]:
+    """新規の送達ID契約を直接使う、1要点の合成応答。"""
+    return {
+        "request_coverage": [
+            {
+                "request_id": "Q1",
+                "evidence_scope": [
+                    {"evidence_id": label, "target": "合成の対象", "relation": "direct", "link": None} for label in evidence_ids
+                ],
+            }
+        ],
+        "answer_parts": [
+            {
+                "request_id": "Q1",
+                "requirement": "合成の要求",
+                "answer": {
+                    "kind": "answer",
+                    "basis": {"unit_ids": unit_ids},
+                    "reasoning": "選択した原文の記載を示す。",
+                    "result": text,
+                },
+            }
+        ],
+        "summary_part_indexes": [],
+        "confidence": "low",
+    }
+
+
 def generated_output(schema: type[BaseModel], prompt: str, *, text: str, first: int = 1, last: int = 1) -> Any:
     """単一根拠の合成応答。本文の unit ID をそのまま使い、自由な原文位置を返さない。"""
     units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
     assert 1 <= first <= last <= len(units)
+    if getattr(schema, "_uses_typed_answer_parts", False):
+        return schema.model_validate(selected_answer_payload(units[first - 1 : last], text=text))
     return schema.model_validate(
         {
             "items": [{"kind": "operation", "request_id": "Q1", "text": text, "citations": [{"unit_ids": units[first - 1 : last]}]}],
@@ -67,6 +99,34 @@ def generated_fixture(schema: type[BaseModel], prompt: str, payload: dict[str, A
             selected.append({"unit_ids": candidates})
         if "citations" in item:
             item["citations"] = selected
+    if getattr(schema, "_uses_typed_answer_parts", False):
+        parts = []
+        original_items = result.pop("items", [])
+        for position, item in enumerate(original_items):
+            if item["kind"] == "gap":
+                answer = {"kind": "gap", "text": item["text"]}
+            else:
+                basis = item.get("derivation") or {}
+                sources = [original_items[index] for index in basis.get("item_indexes", [])] if basis else [item]
+                ids = list(
+                    dict.fromkeys(uid for source in sources for citation in source.get("citations", []) for uid in citation["unit_ids"])
+                )
+                assert ids, "回答可能な要点のfixtureには明示した出典が必要です。"
+                answer = {
+                    "kind": "answer",
+                    "basis": {"unit_ids": ids},
+                    "reasoning": basis.get("reasoning") or "選択した原文の記載を示す。",
+                    "result": item["text"],
+                }
+            parts.append({"request_id": item.get("request_id", "Q1"), "requirement": f"合成の要点{position + 1}", "answer": answer})
+        if not parts:
+            parts = [{"request_id": "Q1", "requirement": "合成の要求", "answer": {"kind": "gap", "text": "資料が不足しています。"}}]
+        selected = result.pop("summary_item_indexes", [])
+        summary = result.pop("summary", "")
+        result.pop("applications", None)
+        result.pop("summary_application_indexes", None)
+        result["answer_parts"] = parts
+        result["summary_part_indexes"] = selected[:2] if selected else [0] if summary else []
     return schema.model_validate(result)
 
 

@@ -29,7 +29,8 @@ def case():
 def test_derived_result_has_one_destination_and_summary_references_it():
     raw, schema, catalog = case()
     result = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
-    assert [item.text for item in result.items] == [raw["items"][0]["text"]]
+    assert [item.text for item in result.items] == ["単位A"]
+    assert raw["items"][0]["text"] not in result.items[0].text
     assert result.applications[0].result == raw["items"][1]["text"]
     assert result.applications[0].item_indexes == [0]
     assert not result.summary_item_indexes
@@ -133,3 +134,20 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
     assert result.generation_trace["applications"][0]["result"] == "合計は20です。"
     assert result.generation_trace["finalization"]["summary"]["citations"]["links"][0]["application_index"] == 0
     assert result.generation_trace["rounds"][0]["timing"]["answer_parts"]["status"] == "linked"
+
+
+def test_production_schema_has_no_free_direct_fact_or_summary_text():
+    raw, schema, catalog = case()
+    document = schema.model_json_schema()
+    assert "summary" not in document["properties"]
+    alternatives = schema.model_fields["items"].annotation.__args__[0].__args__
+    for alternative in alternatives:
+        kind = alternative.model_fields["kind"].annotation.__args__
+        properties = alternative.model_json_schema()["properties"]
+        if "derived" not in kind and "gap" not in kind:
+            assert "text" not in properties
+        else:
+            assert "text" in properties
+    raw["summary"] = "出力にない新しい結論"
+    result = canonical_generation_draft(schema.model_validate(raw), unit_catalog=catalog)
+    assert result.summary == raw["items"][1]["text"]

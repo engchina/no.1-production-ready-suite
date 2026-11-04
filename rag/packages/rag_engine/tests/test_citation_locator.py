@@ -214,9 +214,11 @@ def test_a_mixed_id_is_regenerated_once() -> None:
     assert f"{SENTENCE}。" in result.answer_text
 
 
-def test_a_mixed_id_that_stays_keeps_a_mark() -> None:
+def test_unrepaired_mixed_id_withholds_result_and_preserves_original_source() -> None:
     result, prompts = answer(output(f"E1 によると{SENTENCE}。"), output(f"E1 によると{SENTENCE}。"))
     assert len(prompts) == 2
     assert "E1" not in result.answer_text
-    marks = [mark for row in result.envelope["passage_marks"] for mark in row["reasons"]]
-    assert any(mark["code"] == "item_check" and grounded.INTERNAL_LABEL_CHECK in mark["detail"] for mark in marks)
+    assert SENTENCE in result.answer_text
+    assert result.generation_trace["applications"][0]["published"] is False
+    assert result.generation_trace["applications"][0]["reasons"]
+    assert result.generation_trace["rounds"][-1]["timing"]["answer_parts"]["status"] == "incomplete"
