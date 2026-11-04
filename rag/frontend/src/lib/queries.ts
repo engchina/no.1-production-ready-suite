@@ -1149,10 +1149,10 @@ export function useSearchExtractionFields(searchAnswerProfileId: string | null, 
   });
 }
 
-export function useKnowledgeBaseGraph(id: string | null) {
+export function useStructureGraphOverview(id: string | null) {
   return useQuery({
     queryKey: queryKeys.knowledgeBaseGraph(id ?? ""),
-    queryFn: () => api.getKnowledgeBaseGraph(id as string),
+    queryFn: () => api.getStructureGraphOverview(id as string),
     enabled: id != null,
   });
 }

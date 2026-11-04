@@ -114,3 +114,42 @@ export const GRAPH_EDGE_LABEL_PROPS = {
   labelBgPadding: [6, 3] as [number, number],
   labelBgBorderRadius: 4,
 };
+
+export interface GraphChainEdge {
+  /** 根から端の節点までの id の列。 */
+  source: readonly string[];
+  target: readonly string[];
+  count: number;
+}
+
+export interface GraphAggregatedEdge {
+  id: string;
+  source: string;
+  target: string;
+  count: number;
+}
+
+const deepestVisible = (chain: readonly string[], visible: ReadonlySet<string>): string | undefined => {
+  for (let index = chain.length - 1; index >= 0; index -= 1) {
+    if (visible.has(chain[index]!)) return chain[index];
+  }
+  return undefined;
+};
+
+/**
+ * 階層の中の辺を、いま見えている最も近い祖先へまとめて件数を足す。
+ * 同じ節点に閉じる辺と、見えている祖先が無い辺は線にしない。
+ */
+export function aggregateGraphEdges(edges: ReadonlyArray<GraphChainEdge>, visible: ReadonlySet<string>): GraphAggregatedEdge[] {
+  const merged = new Map<string, GraphAggregatedEdge>();
+  for (const edge of edges) {
+    const source = deepestVisible(edge.source, visible);
+    const target = deepestVisible(edge.target, visible);
+    if (!source || !target || source === target) continue;
+    const id = `${source}:${target}`;
+    const current = merged.get(id);
+    if (current) current.count += edge.count;
+    else merged.set(id, { id, source, target, count: edge.count });
+  }
+  return [...merged.values()];
+}

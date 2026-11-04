@@ -1,11 +1,13 @@
 """ナレッジベース API。作成・一覧・詳細・membership 管理。"""
 
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pr_backend_core.api import OffsetParams, offset_params, paginate
 
 from app.clients.oracle import OracleClient
+from app.clients.structure_graph_store import StructureGraphStore
 from app.config import get_settings
 from app.db_read_failures import read_or_raise
 from app.rag.extraction_field_adapter import (
@@ -18,14 +20,16 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseDetail,
     KnowledgeBaseDocumentAssignmentRequest,
-    KnowledgeBaseGraphData,
-    KnowledgeBaseGraphEdge,
-    KnowledgeBaseGraphNode,
     KnowledgeBaseStatus,
     KnowledgeBaseStructureIndexData,
     KnowledgeBaseStructureIndexUpdate,
     KnowledgeBaseSummary,
     KnowledgeBaseUpdateRequest,
+    StructureGraphLocation,
+    StructureGraphOverview,
+    StructureGraphReferences,
+    StructureGraphSearchPage,
+    StructureGraphTreePage,
     StructureIndexStartRequest,
 )
 from app.schemas.settings import (
@@ -134,48 +138,126 @@ async def get_knowledge_base(
     return ApiResponse(data=detail)
 
 
-@router.get(
-    "/{knowledge_base_id}/graph",
-    response_model=ApiResponse[KnowledgeBaseGraphData],
-)
-async def get_knowledge_base_graph(
+async def _read_structure_graph(
     knowledge_base_id: str,
-    limit: int = Query(default=80, ge=1, le=300),
-) -> ApiResponse[KnowledgeBaseGraphData]:
-    """KB の関係情報(GraphRAG)を可視化用 subgraph で返す。読み取りの失敗は API の失敗にする。"""
+    log_label: str,
+    read: Callable[[StructureGraphStore], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    """KB の確認と読み取り。読み取りの失敗は API の失敗にし、見えない対象は 404。"""
     oracle = OracleClient()
-    settings = get_settings()
 
-    async def _load() -> KnowledgeBaseGraphData:
+    async def _load() -> dict[str, Any]:
         if await oracle.get_knowledge_base(knowledge_base_id) is None:
             raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
-        nodes, edges = await oracle.fetch_knowledge_base_subgraph(knowledge_base_id, limit=limit)
-        from app.clients.graph_reference_store import GraphReferenceStore
+        try:
+            return await read(StructureGraphStore(oracle))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="対象が見つかりません。") from exc
 
-        references = await GraphReferenceStore(oracle).visible_edges(
-            knowledge_base_id, [str(node["id"]) for node in nodes], limit=limit
-        )
-        # 同文書の旧graph辺と新しい参照記録を二重に表示しない。
-        pairs = {(edge["source"], edge["target"]) for edge in references}
-        edges = [
-            edge
-            for edge in edges
-            if edge.get("type") != "references" or (edge["source"], edge["target"]) not in pairs
-        ]
-        edges.extend(references)
-        return KnowledgeBaseGraphData(
-            status="ok" if nodes else "empty",
-            nodes=[KnowledgeBaseGraphNode(**node) for node in nodes],
-            edges=[KnowledgeBaseGraphEdge(**edge) for edge in edges],
-            truncated=len(nodes) >= limit,
-        )
-
-    data = await read_or_raise(
-        _load,
-        timeout_seconds=settings.db_read_timeout_seconds,
-        log_label="knowledge_base_graph",
+    return await read_or_raise(
+        _load, timeout_seconds=get_settings().db_read_timeout_seconds, log_label=log_label
     )
-    return ApiResponse(data=data)
+
+
+@router.get(
+    "/{knowledge_base_id}/graph/overview",
+    response_model=ApiResponse[StructureGraphOverview],
+)
+async def get_structure_graph_overview(
+    knowledge_base_id: str,
+) -> ApiResponse[StructureGraphOverview]:
+    """KB の全文書と、文書の組ごとの解決済みの参照の件数を返す。"""
+    data = await _read_structure_graph(
+        knowledge_base_id,
+        "structure_graph_overview",
+        lambda store: store.overview(knowledge_base_id),
+    )
+    return ApiResponse(data=StructureGraphOverview(**data))
+
+
+@router.get(
+    "/{knowledge_base_id}/graph/documents/{document_id}/tree",
+    response_model=ApiResponse[StructureGraphTreePage],
+)
+async def get_structure_graph_tree(
+    knowledge_base_id: str,
+    document_id: str,
+    chunk_set_id: str = Query(min_length=1, max_length=64),
+    parent: str | None = Query(default=None, min_length=64, max_length=64),
+    offset: int = Query(default=0, ge=0, le=100000),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> ApiResponse[StructureGraphTreePage]:
+    """章節の木の 1 段を返す（文書の順）。``parent`` が無ければ文書の直下。"""
+    data = await _read_structure_graph(
+        knowledge_base_id,
+        "structure_graph_tree",
+        lambda store: store.children(
+            knowledge_base_id,
+            document_id,
+            chunk_set_id,
+            parent_id=parent,
+            offset=offset,
+            limit=limit,
+        ),
+    )
+    return ApiResponse(data=StructureGraphTreePage(**data))
+
+
+@router.get(
+    "/{knowledge_base_id}/graph/documents/{document_id}/locate",
+    response_model=ApiResponse[StructureGraphLocation],
+)
+async def locate_structure_graph_node(
+    knowledge_base_id: str,
+    document_id: str,
+    chunk_set_id: str = Query(min_length=1, max_length=64),
+    node: str = Query(min_length=64, max_length=64),
+) -> ApiResponse[StructureGraphLocation]:
+    """節点までの段と各段の位置を返す（検索・参照から図の位置へ開く）。"""
+    data = await _read_structure_graph(
+        knowledge_base_id,
+        "structure_graph_locate",
+        lambda store: store.locate(knowledge_base_id, document_id, chunk_set_id, node),
+    )
+    return ApiResponse(data=StructureGraphLocation(**data))
+
+
+@router.get(
+    "/{knowledge_base_id}/graph/documents/{document_id}/references",
+    response_model=ApiResponse[StructureGraphReferences],
+)
+async def get_structure_graph_document_references(
+    knowledge_base_id: str,
+    document_id: str,
+    chunk_set_id: str = Query(min_length=1, max_length=64),
+) -> ApiResponse[StructureGraphReferences]:
+    """開いた文書が端にある、章節の間の解決済みの参照を返す。"""
+
+    async def read(store: StructureGraphStore) -> dict[str, Any]:
+        await store.assert_document(knowledge_base_id, document_id, chunk_set_id)
+        return await store.references(knowledge_base_id, chunk_set_id)
+
+    data = await _read_structure_graph(knowledge_base_id, "structure_graph_references", read)
+    return ApiResponse(data=StructureGraphReferences(**data))
+
+
+@router.get(
+    "/{knowledge_base_id}/graph/search",
+    response_model=ApiResponse[StructureGraphSearchPage],
+)
+async def search_structure_graph(
+    knowledge_base_id: str,
+    q: str = Query(default="", max_length=200),
+    offset: int = Query(default=0, ge=0, le=100000),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> ApiResponse[StructureGraphSearchPage]:
+    """KB の全体から文書名と章節名を検索する。"""
+    data = await _read_structure_graph(
+        knowledge_base_id,
+        "structure_graph_search",
+        lambda store: store.search(knowledge_base_id, q, offset=offset, limit=limit),
+    )
+    return ApiResponse(data=StructureGraphSearchPage(**data))
 
 
 @router.get("/{knowledge_base_id}/graph/references")

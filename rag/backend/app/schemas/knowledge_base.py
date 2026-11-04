@@ -180,32 +180,94 @@ def _unique_clean_ids(values: list[str]) -> list[str]:
     return cleaned_values
 
 
-class KnowledgeBaseGraphNode(BaseModel):
-    """文書構造グラフのノード(KG entity)。"""
+class StructureGraphDocument(BaseModel):
+    """文書構造グラフの総覧の文書（文書の entity）。"""
 
     id: str
+    document_id: str
+    chunk_set_id: str
     name: str
-    type: str | None = None
-    confidence: float = 1.0
+    has_sections: bool = False
+    outgoing_count: int = 0
+    incoming_count: int = 0
 
 
-class KnowledgeBaseGraphEdge(BaseModel):
-    """文書構造グラフのエッジ(KG relationship)。"""
+class StructureGraphDocumentEdge(BaseModel):
+    """文書の組の間の、解決済みの参照の件数。"""
 
     id: str
     source: str
     target: str
-    type: str | None = None
-    confidence: float = 1.0
+    count: int
 
 
-class KnowledgeBaseGraphData(BaseModel):
-    """KB の文書構造グラフ可視化用 subgraph。"""
+class StructureGraphOverview(BaseModel):
+    """KB の全文書と、文書の間の参照。"""
 
     status: Literal["ok", "empty"] = "empty"
-    nodes: list[KnowledgeBaseGraphNode] = Field(default_factory=list)
-    edges: list[KnowledgeBaseGraphEdge] = Field(default_factory=list)
-    truncated: bool = False
+    documents: list[StructureGraphDocument] = Field(default_factory=list)
+    edges: list[StructureGraphDocumentEdge] = Field(default_factory=list)
+
+
+class StructureGraphTreeNode(BaseModel):
+    """章節の木の 1 節点。``virtual`` はパスの途中の段で、構造索引に実体が無い。"""
+
+    id: str
+    name: str
+    label: str
+    type: str
+    document_id: str
+    document_name: str
+    chunk_set_id: str
+    parent_id: str | None = None
+    virtual: bool = False
+    child_count: int = 0
+
+
+class StructureGraphTreePage(BaseModel):
+    items: list[StructureGraphTreeNode] = Field(default_factory=list)
+    total: int = 0
+    offset: int = 0
+
+
+class StructureGraphLocatedStep(BaseModel):
+    id: str
+    index: int
+
+
+class StructureGraphLocation(BaseModel):
+    """根から節点までの段と、各段の中の位置。"""
+
+    path: list[StructureGraphLocatedStep] = Field(default_factory=list)
+
+
+class StructureGraphReference(BaseModel):
+    """章節の組の参照。祖先の列（根 → 節点）で、見えている段へ画面がまとめる。"""
+
+    source_set: str
+    target_set: str
+    source_chain: list[str] = Field(default_factory=list)
+    target_chain: list[str] = Field(default_factory=list)
+    count: int = 1
+
+
+class StructureGraphReferences(BaseModel):
+    items: list[StructureGraphReference] = Field(default_factory=list)
+
+
+class StructureGraphSearchItem(BaseModel):
+    id: str
+    name: str
+    type: str
+    document_id: str
+    document_name: str
+    chunk_set_id: str
+
+
+class StructureGraphSearchPage(BaseModel):
+    items: list[StructureGraphSearchItem] = Field(default_factory=list)
+    total: int = 0
+    offset: int = 0
 
 
 class KnowledgeBaseStructureIndexUpdate(BaseModel):

@@ -35,6 +35,7 @@ from app.clients.oracle import (
     oracle_text_terms,
     oracle_vector_schema_sql,
 )
+from app.clients.structure_graph_store import StructureGraphStore
 from app.config import Settings
 from app.rag.chunking import Chunk
 from app.rag.graph_index import (
@@ -2033,33 +2034,35 @@ async def test_oci_vector_search_applies_chunk_metadata_filters() -> None:
     assert call.parameters["filter_section_path"] == "%経費申請%"
 
 
-async def test_oracle_knowledge_base_subgraph_requires_current_kb_membership() -> None:
-    """KB のグラフ表示も、KB から外した文書の entity / relationship を出さない(#274)。"""
-    pool = FakeOraclePool(
-        execute_results=[
-            [{"entity_id": "ent-1", "canonical_name": "承認条件", "confidence": 0.9}],
-            [],
-        ]
-    )
+_OVERVIEW_DOCUMENT = {
+    "entity_id": "ent-1",
+    "chunk_set_id": "set-1",
+    "document_id": "doc-1",
+    "file_name": "合成の文書.pdf",
+    "section_entities": 2,
+}
+
+
+async def test_structure_graph_overview_requires_membership_and_active_set() -> None:
+    """文書構造グラフは KB から外した文書と、有効でない版の文書を出さない(#274)。"""
+    pool = FakeOraclePool(execute_results=[[_OVERVIEW_DOCUMENT], []])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
-    nodes, edges = await client.fetch_knowledge_base_subgraph("kb-1", limit=10)
+    overview = await StructureGraphStore(client).overview("kb-1")
 
-    assert [node["id"] for node in nodes] == ["ent-1"]
-    assert edges == []
+    assert [item["id"] for item in overview["documents"]] == ["ent-1"]
+    assert overview["edges"] == []
     node_sql, edge_sql = (" ".join(call.statement.split()) for call in pool.connection.calls[:2])
-    assert "{membership_sql}" not in node_sql
     assert "visible_dkb.knowledge_base_id = e.knowledge_base_id" in node_sql
     assert "JSON_EXISTS(e.source_document_ids," in node_sql
-    assert "visible_dkb.knowledge_base_id = r.knowledge_base_id" in edge_sql
-    assert "JSON_EXISTS(r.source_document_ids," in edge_sql
+    assert "cs.is_active=1" in node_sql
+    assert "ss.is_active=1" in edge_sql and "ts.is_active=1" in edge_sql
+    assert "r.resolution_status='resolved'" in edge_sql
 
 
-async def test_oracle_knowledge_base_subgraph_applies_document_access_scope() -> None:
-    """KB を使えても、文書・分類の権限の外の entity / relationship を読まない(#4308)。"""
-    pool = FakeOraclePool(
-        execute_results=[[{"entity_id": "ent-1", "canonical_name": "合成の節"}], []]
-    )
+async def test_structure_graph_applies_document_access_scope() -> None:
+    """KB を使えても、文書・分類の権限の外の文書を読まない(#4308)。"""
+    pool = FakeOraclePool(execute_results=[[_OVERVIEW_DOCUMENT], [], []])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     token = set_audit_request_context(
         AuditRequestContext(
@@ -2070,34 +2073,24 @@ async def test_oracle_knowledge_base_subgraph_applies_document_access_scope() ->
         )
     )
     try:
-        await client.fetch_knowledge_base_subgraph("kb-1", limit=10)
+        store = StructureGraphStore(client)
+        await store.overview("kb-1")
+        await store.search("kb-1", "合成", offset=0, limit=25)
     finally:
         reset_audit_request_context(token)
 
-    for call in pool.connection.calls[:2]:
-        sql = " ".join(call.statement.split())
-        assert "visible_doc.tenant_id_hash = :tenant_id_hash" in sql
-        assert "visible_doc.document_id IN (:access_document_id_0)" in sql
-        assert "LOWER(visible_doc.category_name) IN (:access_category_name_0)" in sql
+    node_sql, edge_sql, search_sql = (
+        " ".join(call.statement.split()) for call in pool.connection.calls[:3]
+    )
+    for sql, alias in ((node_sql, "visible_doc"), (search_sql, "visible_doc"), (edge_sql, "s")):
+        assert f"{alias}.tenant_id_hash = :tenant_id_hash" in sql
+        assert f"{alias}.document_id IN (:access_document_id_0)" in sql
+        assert f"LOWER({alias}.category_name) IN (:access_category_name_0)" in sql
+    assert "t.document_id IN (:access_document_id_0)" in edge_sql
+    for call in pool.connection.calls[:3]:
         assert call.parameters["tenant_id_hash"] == "synthetic-tenant"
         assert call.parameters["access_document_id_0"] == "doc-allowed"
         assert call.parameters["access_category_name_0"] == "合成の分類"
-
-
-async def test_oracle_knowledge_base_subgraph_requires_active_chunk_sets() -> None:
-    """成功前の処理結果を node / edge のどちらにも表示しない。"""
-    pool = FakeOraclePool(
-        execute_results=[[{"entity_id": "entity-active", "canonical_name": "section"}], []]
-    )
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    await client.fetch_knowledge_base_subgraph("kb-active", limit=10)
-
-    for call, alias in zip(pool.connection.calls, ("e", "r"), strict=True):
-        sql = " ".join(call.statement.split())
-        assert f"{alias}.chunk_set_id IS NULL OR EXISTS" in sql
-        assert f"graph_cs.chunk_set_id = {alias}.chunk_set_id" in sql
-        assert "graph_cs.is_active = 1" in sql
 
 
 async def test_upsert_extraction_artifact_preserves_existing_payload_when_omitted() -> None:

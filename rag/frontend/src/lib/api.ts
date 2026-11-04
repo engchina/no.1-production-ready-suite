@@ -1252,29 +1252,23 @@ export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
 
 export const DEFAULT_KNOWLEDGE_BASE_NAME = "DEFAULT";
 
-export interface KnowledgeBaseGraphNode {
+/** 参照の一覧の端（図の節点。文書の中の位置を開く値を持つ）。 */
+export interface GraphReferenceEndpoint {
   id: string;
   name: string;
   type: string | null;
-  confidence: number;
-  reference_id?: string;
-  document_name?: string;
-}
-
-export interface KnowledgeBaseGraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  type: string | null;
-  confidence: number;
+  document_name: string;
+  document_id: string;
+  chunk_set_id: string;
+  section_path: string | null;
 }
 
 export interface GraphReferenceItem {
   id: string;
   label: string;
-  status: "resolved" | "not_found" | "ambiguous" | "version_unconfirmed";
-  source: KnowledgeBaseGraphNode;
-  target: KnowledgeBaseGraphNode | null;
+  status: "resolved" | "ambiguous";
+  source: GraphReferenceEndpoint;
+  target: GraphReferenceEndpoint | null;
 }
 export interface GraphReferencePage {
   items: GraphReferenceItem[];
@@ -1283,11 +1277,59 @@ export interface GraphReferencePage {
   direction: "outgoing" | "incoming";
 }
 
-export interface KnowledgeBaseGraphData {
+export interface StructureGraphDocument {
+  id: string;
+  document_id: string;
+  chunk_set_id: string;
+  name: string;
+  has_sections: boolean;
+  outgoing_count: number;
+  incoming_count: number;
+}
+export interface StructureGraphOverview {
   status: "ok" | "empty";
-  nodes: KnowledgeBaseGraphNode[];
-  edges: KnowledgeBaseGraphEdge[];
-  truncated: boolean;
+  documents: StructureGraphDocument[];
+  edges: { id: string; source: string; target: string; count: number }[];
+}
+export interface StructureGraphTreeNode {
+  id: string;
+  name: string;
+  label: string;
+  type: string;
+  document_id: string;
+  document_name: string;
+  chunk_set_id: string;
+  parent_id: string | null;
+  virtual: boolean;
+  child_count: number;
+}
+export interface StructureGraphTreePage {
+  items: StructureGraphTreeNode[];
+  total: number;
+  offset: number;
+}
+export interface StructureGraphLocation {
+  path: { id: string; index: number }[];
+}
+export interface StructureGraphReference {
+  source_set: string;
+  target_set: string;
+  source_chain: string[];
+  target_chain: string[];
+  count: number;
+}
+export interface StructureGraphSearchItem {
+  id: string;
+  name: string;
+  type: string;
+  document_id: string;
+  document_name: string;
+  chunk_set_id: string;
+}
+export interface StructureGraphSearchPage {
+  items: StructureGraphSearchItem[];
+  total: number;
+  offset: number;
 }
 
 export interface KnowledgeBaseCreateRequest {
@@ -3994,12 +4036,18 @@ export const api = {
   getStructureBuildJob: (id: string, offset = 0, limit = 25) => request<StructureBuildJob | null>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job?offset=${offset}&limit=${limit}`),
   startStructureBuild: (id: string, mode: StructureBuildMode) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }),
   stopStructureBuild: (id: string) => request<StructureBuildJob>(`/api/knowledge-bases/${encodeURIComponent(id)}/structure-index/job/stop`, { method: "POST" }),
-  getKnowledgeBaseGraphReferences: (id: string, nodeId: string, direction: "outgoing" | "incoming", offset = 0, referenceId?: string) =>
-    request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}${referenceId ? `&reference_id=${encodeURIComponent(referenceId)}` : ""}`),
-  getKnowledgeBaseGraph: (id: string, limit = 80) =>
-    request<KnowledgeBaseGraphData>(
-      `/api/knowledge-bases/${encodeURIComponent(id)}/graph?limit=${limit}`,
-    ),
+  getKnowledgeBaseGraphReferences: (id: string, nodeId: string, direction: "outgoing" | "incoming", offset = 0) =>
+    request<GraphReferencePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/references?node_id=${encodeURIComponent(nodeId)}&direction=${direction}&offset=${offset}`),
+  getStructureGraphOverview: (id: string) =>
+    request<StructureGraphOverview>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/overview`),
+  getStructureGraphTree: (id: string, documentId: string, chunkSetId: string, parent: string | null, offset: number, limit: number) =>
+    request<StructureGraphTreePage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/documents/${encodeURIComponent(documentId)}/tree?chunk_set_id=${encodeURIComponent(chunkSetId)}&offset=${offset}&limit=${limit}${parent ? `&parent=${encodeURIComponent(parent)}` : ""}`),
+  locateStructureGraphNode: (id: string, documentId: string, chunkSetId: string, node: string) =>
+    request<StructureGraphLocation>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/documents/${encodeURIComponent(documentId)}/locate?chunk_set_id=${encodeURIComponent(chunkSetId)}&node=${encodeURIComponent(node)}`),
+  getStructureGraphReferences: (id: string, documentId: string, chunkSetId: string) =>
+    request<{ items: StructureGraphReference[] }>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/documents/${encodeURIComponent(documentId)}/references?chunk_set_id=${encodeURIComponent(chunkSetId)}`),
+  searchStructureGraph: (id: string, q: string, offset: number) =>
+    request<StructureGraphSearchPage>(`/api/knowledge-bases/${encodeURIComponent(id)}/graph/search?q=${encodeURIComponent(q)}&offset=${offset}`),
   // KB ごとの項目抽出の定義（#548）。fields: null で全体の既定に戻す。
   getKnowledgeBaseExtractionFields: (id: string) =>
     request<KnowledgeBaseExtractionFieldsData>(
