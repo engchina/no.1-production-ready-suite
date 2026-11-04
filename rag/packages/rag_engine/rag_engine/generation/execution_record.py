@@ -34,6 +34,7 @@ class _ExecutionStep:
     name: str
     status: str = ""
     hidden: bool = False
+    outcome_params: dict[str, object] = field(default_factory=dict)
     # この工程だけの詳細の行（入れ子の工程の行は含めない）。
     details: list[str] = field(default_factory=list)
     # この工程だけの見出しと値（(見出し, 値)。入れ子の工程の値は含めない）。
@@ -122,14 +123,27 @@ class _ExecutionStep:
         for value in values[1:]:
             self._keep(value)
 
-    def skip(self, reason: str) -> None:
+    def record_outcome(self, reason_code: str, *, count: int = 0, reused: bool = False) -> None:
+        """本文とは独立した、実行時の判断と件数を保持する。"""
+        self.outcome_params.update(
+            reason_code=reason_code,
+            result_count=count,
+            reused=reused,
+            execution_kind="decision" if self.status == "skipped" else "processing",
+        )
+
+    def skip(self, reason: str, *, reason_code: str | None = None) -> None:
         """実行しなかった工程を、完了と区別して記録する。"""
         self.status = "skipped"
+        if reason_code:
+            self.record_outcome(reason_code)
+            self.outcome_params["execution_kind"] = "decision"
         self.result(reason)
 
-    def fail(self, reason: str) -> None:
+    def fail(self, reason: str, *, reason_code: str = "selection_failed") -> None:
         """補助処理の失敗後も継続する場合に、工程を成功と区別する。"""
         self.status = "failed"
+        self.record_outcome(reason_code)
         self.result(reason)
 
     def impact(self, text: str) -> None:
@@ -308,7 +322,7 @@ def _execution_step(name: str, purpose: str = ""):
                 measure()
                 observation.display(
                     "answer_step",
-                    {"llm_calls": llm_calls, **sends, "status": step.status or "complete"},
+                    {"llm_calls": llm_calls, **sends, "status": step.status or "complete", **step.outcome_params},
                     step.structured_details() or None,
                 )
     finally:
@@ -321,13 +335,20 @@ def _execution_step(name: str, purpose: str = ""):
             name,
             "error" if failed or step.status == "failed" else "skipped" if step.status == "skipped" else "success",
             elapsed,
-            {"details": step.structured_details(), "llm_calls": llm_calls, **sends, "status": step.status or "complete"},
+            {
+                "details": step.structured_details(),
+                "llm_calls": llm_calls,
+                **sends,
+                "status": step.status or "complete",
+                **step.outcome_params,
+            },
         )
         if steps is not None:
             steps[index] = {
                 "name": name,
                 "depth": depth,
                 "status": step.status or "complete",
+                **step.outcome_params,
                 "elapsed_seconds": elapsed,
                 "llm_calls": llm_calls,
                 **sends,

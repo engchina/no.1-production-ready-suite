@@ -4058,6 +4058,9 @@ def _expansion_stage_outcome(
     observation.display(
         params={
             "status": status,
+            "execution_kind": "decision" if reason else "processing",
+            "enabled": reason != "configuration_disabled",
+            **({"condition_met": not bool(reason)} if reason != "configuration_disabled" else {}),
             "reason_code": reason_code,
             "result_count": len(chunks),
             "reused": reused,

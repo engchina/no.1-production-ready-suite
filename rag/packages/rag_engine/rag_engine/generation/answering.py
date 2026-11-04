@@ -5279,8 +5279,8 @@ def _record_catalog_skip(name: str, reason: str) -> None:
         "overflow": "上限外の検索文の補助検索では目録の選択を行いません。",
     }[reason]
     with _execution_step(name) as step:
-        step.skip(message)
-        step.input({"選択設定": "disabled", "理由": reason})
+        step.skip(message, reason_code=reason)
+        step.input({"実効設定": {"enabled": False}, "理由": reason})
         step.output({"選択状態": "skipped", "理由": reason, "モデルを呼び出した": False})
 
 
@@ -5326,7 +5326,7 @@ def _linked_screen_children(
             }
         )
         if not catalog:
-            step.skip("検索範囲に画面目録がありません。")
+            step.skip("検索範囲に画面目録がありません。", reason_code="catalog_empty")
             step.output(
                 {
                     "選択状態": "skipped",
@@ -5354,6 +5354,7 @@ def _linked_screen_children(
             step.output(
                 {"選択状態": "no_match", "選択結果の再利用": reused_selection, "選択した画面": [], "追加候補": [], "展開用の候補": []}
             )
+            step.record_outcome("no_match", reused=reused_selection)
             step.status = "該当なし"
             step.result(f"画面目録（{len(catalog)} 文書）から該当する画面を選べませんでした。")
             return [], [], []
@@ -5369,6 +5370,7 @@ def _linked_screen_children(
         step.field("画面目録", f"{len(catalog)} 文書")
         step.field("選んだ画面", f"{len(links)} 件")
         step.add("選んだ画面:", *numbered([f"{Path(source).name or source} {heading}" for source, heading in links], limit=8))
+        step.record_outcome("candidates_found", count=len(added), reused=reused_selection)
         step.result(f"候補に加えた根拠 {len(added)} 件")
         added_records = [_stored_chunk_answer_record(chunk) for chunk in added]
         step.output(
@@ -5891,6 +5893,7 @@ def _catalog_article_children(
                     "article_limit_zero": "条の数の上限が0です。",
                 }[reason]
             )
+            step.record_outcome(reason)
             step.output(
                 lambda: {
                     "選択状態": "skipped",
@@ -5908,7 +5911,7 @@ def _catalog_article_children(
         catalogs = list(load_catalogs(document_ids=document_ids, limit=max_documents, settings=settings))
         if not catalogs:
             # 候補に条で構成された文書が無い質問は、範囲の文書の一覧も読まない（LLM・DB を呼ばない）。
-            step.skip("候補の文書に利用できる条の目録がありません。")
+            step.skip("候補の文書に利用できる条の目録がありません。", reason_code="catalog_empty")
             step.output(
                 lambda: {
                     "選択状態": "skipped",
@@ -5981,7 +5984,13 @@ def _catalog_article_children(
 
         def output() -> dict[str, Any]:
             return {
-                "選択状態": "selected" if selected else "failed" if failed or scope_failed else "no_match",
+                "選択状態": "degraded"
+                if selected and (failed or scope_failed or refine_failed)
+                else "selected"
+                if selected
+                else "failed"
+                if failed or scope_failed
+                else "no_match",
                 "選んだ条": [asdict(item) for item in selected],
                 "選択に失敗した文書": failed,
                 "2段目で追加した条数": refined,
@@ -5998,6 +6007,10 @@ def _catalog_article_children(
             }
 
         step.output(output)
+        reused_selection = bool(sources) and not sources.get(ARTICLE_SOURCE_LLM, 0) and scope_source != ARTICLE_SOURCE_LLM
+        step.record_outcome("candidates_found" if selected else "no_match", count=0, reused=reused_selection)
+        if selected and (failed or scope_failed or refine_failed):
+            step.fail("一部の選択に失敗したため、取得できた候補で続けます。")
         if not selected:
             if failed or scope_failed:
                 # 選択の失敗を「該当なし」と分ける（#3285）。
@@ -6028,6 +6041,9 @@ def _catalog_article_children(
         ]
         step.field("選んだ条", f"{len(selected)} 件")
         step.add("選んだ条:", *numbered([f"{article.file_name} {article.title}" for article in selected], limit=8))
+        step.record_outcome(
+            "selection_failed" if step.status == "failed" else "candidates_found", count=len(added), reused=reused_selection
+        )
         step.result(f"候補に加えた根拠: {len(added)} 件（候補にあった条 {len(info) - len(added)} 件）")
         step.output(
             lambda: {
