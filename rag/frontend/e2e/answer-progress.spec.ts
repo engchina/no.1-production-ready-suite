@@ -1,3 +1,4 @@
+import diversityStages from "./fixtures/diversity-stage-trace.json";
 import { inspectTraceStep } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { expect, type Page, test } from "./fixtures/test";
 
@@ -1131,4 +1132,35 @@ test("新規配信と保存したtraceでリランクの階層とスキップ理
   await page.getByTestId("chat-answer-progress-summary").click();
   await checkRows("chat-answer-progress");
   await screenshotBothThemes(page, (theme) => testInfo.outputPath(`rerank-saved-${theme}.png`));
+});
+
+
+test("多様性補充の実績と未実行理由を検索の経過と軌跡で保つ", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const recorder = spanProgressRecorder("trace-diversity");
+  const events = [...recorder.start("root", ragSpan.root()), ...recorder.start("answer", ragSpan.stage("answer"))];
+  for (const stage of diversityStages) {
+    events.push(...recorder.start(stage.key, ragSpan.step("文書の多様性を補う候補の追加")));
+    events.push(...recorder.finish(stage.key, stage.params.status === "skipped" ? "skipped" : "done", {params: stage.params, details: stage.details}));
+  }
+  events.push(...recorder.finish("answer"), ...recorder.finish("root"), ...recorder.terminal("done"));
+  const content = "合成の回答です。";
+  await mockSearchPage(page, [[{afterMs: 0, text: sse("run", {trace_id: "trace-diversity"}) + traceSse(events) + sse("metadata", {trace_id: "trace-diversity", elapsed_ms: 100, guardrail_warnings: [], diagnostics: {}}) + sse("delta", {text: content}) + sse("done", {answer: content, citations: []})}]]);
+  await enableSearchAnswer(page);
+  await page.getByRole("textbox", {name: "RAG 検索"}).fill("合成の質問");
+  await page.getByRole("button", {name: "検索", exact: true}).click();
+  await expect(page.getByText(content, {exact: true})).toBeVisible();
+  await page.getByTestId("search-run-progress-summary").click();
+  const progress = page.getByTestId("search-run-progress");
+  for (const stage of diversityStages) {
+    const step = page.getByTestId(`search-run-progress-step-${spanStepId(stage.key)}`);
+    await expect(step).toHaveAttribute("data-status", stage.params.status === "skipped" ? "skipped" : "done");
+    await expect(step.locator("[data-run-result-summary]")).toHaveText(stage.details.fields[0].value);
+    await inspectTraceStep(page, progress, spanStepId(stage.key));
+    const inspector = page.locator("[data-trace-inspector]");
+    await expect(inspector).toContainText(stage.details.fields[0].value);
+    await expect(inspector).toContainText("原文の読み込み・根拠数の制限を適用する前の検索候補");
+    await expectNoPageOverflow(page);
+    await inspector.screenshot({path: testInfo.outputPath(`search-diversity-${stage.key}.png`)});
+    await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+  }
 });

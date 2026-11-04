@@ -359,3 +359,48 @@ def test_catalog_skip_keeps_real_io_through_final_span_summary(enabled: bool) ->
             assert call.input.text == call.output.text == ""
     finally:
         shutdown_tracing()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(
+    "depth,expected_count,status", [(0, 0, "skipped"), (1, 0, "done"), (4, 3, "done")]
+)
+def test_diversity_stage_preserves_actual_status_and_counts_without_call_bodies(
+    enabled: bool,
+    depth: int,
+    expected_count: int,
+    status: str,
+) -> None:
+    from pr_backend_core.observability.call_policy import call_content_policy
+
+    from app.rag.answer_engine import _observed_diverse_candidates
+
+    configure_tracing(TracingSettings(), service_name="synthetic")
+    try:
+        with (
+            call_content_policy(lambda: enabled),
+            operation_trace("rag.search", operation_id="synthetic") as summary,
+            bind_trace_observer(_observe_engine_call),
+        ):
+            result = _observed_diverse_candidates(
+                ["a1", "a2", "b1", "b2"],
+                1,
+                lambda value: value[0],
+                depth=depth,
+                max_extra=100,
+                new_document=2,
+                present_document=1,
+            )
+        stage = next(span for span in summary.spans if span.operation_name == "rag.engine.stage")
+        assert len(result) == expected_count
+        assert stage.status == status
+        assert stage.display is not None
+        assert stage.display.params is not None
+        assert stage.display.params["max_extra"] == 100
+        assert stage.display.params["added_count"] == expected_count
+        assert "note" not in stage.display.params
+        assert stage.display.params["reason_code"] == (
+            "depth_disabled" if depth == 0 else "no_match" if depth == 1 else "added"
+        )
+    finally:
+        shutdown_tracing()

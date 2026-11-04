@@ -1,0 +1,158 @@
+[
+  {
+    "key": "disabled",
+    "params": {
+      "status": "skipped",
+      "reason_code": "depth_disabled",
+      "depth": 0,
+      "max_extra": 100,
+      "new_document_limit": 2,
+      "present_document_limit": 1,
+      "inspected_count": 0,
+      "eligible_count": 0,
+      "added_count": 0,
+      "added_document_count": 0,
+      "new_document_count": 0,
+      "present_document_count": 0,
+      "before_count": 1,
+      "after_count": 1,
+      "limit_reached": false
+    },
+    "details": {
+      "fields": [
+        {
+          "label": "結果",
+          "value": "調査する順位の上限が 0 のため実行しません"
+        },
+        {
+          "label": "調査する順位の設定上限",
+          "value": "0"
+        },
+        {
+          "label": "実際に調べた上位外の候補",
+          "value": "0"
+        },
+        {
+          "label": "追加候補の設定上限",
+          "value": "100"
+        },
+        {
+          "label": "実際に追加した候補",
+          "value": "0"
+        },
+        {
+          "label": "追加した文書",
+          "value": "0"
+        },
+        {
+          "label": "記録の対象",
+          "value": "原文の読み込み・根拠数の制限を適用する前の検索候補"
+        }
+      ]
+    }
+  },
+  {
+    "key": "no-match",
+    "params": {
+      "status": "completed",
+      "reason_code": "no_match",
+      "depth": 1,
+      "max_extra": 100,
+      "new_document_limit": 2,
+      "present_document_limit": 1,
+      "inspected_count": 0,
+      "eligible_count": 0,
+      "added_count": 0,
+      "added_document_count": 0,
+      "new_document_count": 0,
+      "present_document_count": 0,
+      "before_count": 1,
+      "after_count": 1,
+      "limit_reached": false
+    },
+    "details": {
+      "fields": [
+        {
+          "label": "結果",
+          "value": "追加候補はありません"
+        },
+        {
+          "label": "調査する順位の設定上限",
+          "value": "1"
+        },
+        {
+          "label": "実際に調べた上位外の候補",
+          "value": "0"
+        },
+        {
+          "label": "追加候補の設定上限",
+          "value": "100"
+        },
+        {
+          "label": "実際に追加した候補",
+          "value": "0"
+        },
+        {
+          "label": "追加した文書",
+          "value": "0"
+        },
+        {
+          "label": "記録の対象",
+          "value": "原文の読み込み・根拠数の制限を適用する前の検索候補"
+        }
+      ]
+    }
+  },
+  {
+    "key": "added",
+    "params": {
+      "status": "completed",
+      "reason_code": "added",
+      "depth": 4,
+      "max_extra": 100,
+      "new_document_limit": 2,
+      "present_document_limit": 1,
+      "inspected_count": 3,
+      "eligible_count": 3,
+      "added_count": 3,
+      "added_document_count": 2,
+      "new_document_count": 1,
+      "present_document_count": 1,
+      "before_count": 1,
+      "after_count": 4,
+      "limit_reached": false
+    },
+    "details": {
+      "fields": [
+        {
+          "label": "結果",
+          "value": "候補 3 件を追加しました"
+        },
+        {
+          "label": "調査する順位の設定上限",
+          "value": "4"
+        },
+        {
+          "label": "実際に調べた上位外の候補",
+          "value": "3"
+        },
+        {
+          "label": "追加候補の設定上限",
+          "value": "100"
+        },
+        {
+          "label": "実際に追加した候補",
+          "value": "3"
+        },
+        {
+          "label": "追加した文書",
+          "value": "2"
+        },
+        {
+          "label": "記録の対象",
+          "value": "原文の読み込み・根拠数の制限を適用する前の検索候補"
+        }
+      ]
+    }
+  }
+]
