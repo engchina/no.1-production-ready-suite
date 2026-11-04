@@ -778,12 +778,16 @@ def record_span(
     kind: str = "internal",
     attributes: Mapping[str, object] | None = None,
     display: SpanDisplay | None = None,
+    input_snapshot: Callable[[], object] | None = None,
+    output_snapshot: Callable[[], object] | None = None,
+    restricted_call: bool = False,
 ) -> None:
     """終わった区間を後から span として記録する（#3226）。
 
     待機・承認の待ちなど、実行の外で過ぎた時間に使う。
 
     今の span の子にし、表示用の記録と export の両方に入れる。時刻は呼んだ側が測った値。
+    未実行の判断にもsnapshotを付けられる。本文記録OFF時はfactoryを呼ばず、指定された時刻と状態を保つ。
     """
     start = int(started_at.timestamp() * 1e9)
     end = max(start, int(finished_at.timestamp() * 1e9))
@@ -793,6 +797,10 @@ def record_span(
     observed = ObservedSpan(sdk_span)
     if display is not None:
         observed.set_display(kind=display.kind, params=display.params, details=display.details)
+    if input_snapshot is not None:
+        observed.set_call_input(input_snapshot, restricted=restricted_call)
+    if output_snapshot is not None:
+        observed.set_call_output(output_snapshot)
     observed.set_attributes(attributes or {})
     observed.set_status(status)
     parent = trace.get_current_span().get_span_context()
