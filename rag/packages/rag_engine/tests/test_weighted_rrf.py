@@ -138,3 +138,22 @@ def test_fusion_execution_is_based_on_real_contributions(rankings, sources, weig
     assert result.execution(sources) == expected
     assert result.diagnostics(weights, sources, 60)["fusion_execution"] == expected
     assert result.scores == original_scores
+
+    import json
+
+    from rag_engine.retrieval.weighted_rrf import fusion_details
+
+    diagnostics = result.diagnostics(weights, sources, 60)
+    details = fusion_details(result, weights, sources, 60)
+    fields = {field["label"]: field["value"] for field in details["fields"]}
+    if expected == "native_only":
+        assert "引き継いだ検索結果" in fields and "結果" not in fields
+        assert "この段で追加の統合は行っていません" in fields["指標"]
+        assert details["code"][0]["label"] == "原質問の検索から引き継いだ融合記録"
+        assert any("引き継いだ融合スコア" in line and "引継元の一覧内順位" in line for line in details["lines"])
+    else:
+        assert "結果" in fields and "引き継いだ検索結果" not in fields
+        assert details["code"][0]["label"] == "RRF の計算記録"
+    assert json.loads(details["code"][0]["text"]) == diagnostics
+    assert details["rrf"] == diagnostics
+    assert result.scores == original_scores
