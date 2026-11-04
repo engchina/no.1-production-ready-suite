@@ -1092,6 +1092,24 @@ describe("RunDetailLayout / RunDetailSection", () => {
     expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["synthetic-model", "synthetic-embed"]);
   });
 
+  it("同じモデルIDの表示名と呼び出し記録は表示名を一度だけ出す", () => {
+    render(<RunUsedModels models={[
+      {label: "LLM", value: "合成モデル", modelId: "provider.synthetic", title: "provider.synthetic"},
+      {label: "LLM", value: "provider.synthetic"},
+    ]} events={[{type: "step", attributes: {"gen_ai.request.model": "provider.synthetic"}}]} />);
+    expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["合成モデル"]);
+    expect(container.querySelector("dd")?.title).toBe("provider.synthetic");
+  });
+
+  it("表示名が同じでも異なるモデルIDの記録を消さない", () => {
+    render(<RunUsedModels models={[
+      {label: "LLM", value: "合成モデル", modelId: "provider.synthetic-a"},
+      {label: "LLM", value: "合成モデル", modelId: "provider.synthetic-b"},
+      {label: "LLM", value: "provider.unknown"},
+    ]} />);
+    expect(Array.from(container.querySelectorAll("dd")).map(node => node.textContent)).toEqual(["合成モデル", "合成モデル", "provider.unknown"]);
+  });
+
   it("開閉できる節は既定で閉じた Disclosure、通常の節はカード", () => {
     render(
       <>

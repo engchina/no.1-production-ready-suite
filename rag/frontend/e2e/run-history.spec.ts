@@ -43,6 +43,7 @@ function sinceAgeMs(since: string | null | undefined) {
 }
 
 interface RunRow {
+  answer_diagnostics?: unknown;
   run_id: string;
   surface: "search" | "chat";
   search_answer_profile_id: string | null;
@@ -144,7 +145,7 @@ function detail(row: RunRow) {
     answer_available: row.answer_generated,
     citations: row.citations ?? [CITATION],
     withheld_evidence_count: row.withheld_evidence_count ?? 0,
-    answer_diagnostics: row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [], query_understanding: { original_question: "合成の質問", active_profiles: ["operation_steps"] }, inquiry_conditions: { metadata_filter: { source_file_terms: ["A.pdf"], page_numbers: [2] } } } : null,
+    answer_diagnostics: row.answer_diagnostics !== undefined ? row.answer_diagnostics : row.answer_generated ? { outcome: "answered", confidence: "high", execution_steps: [], query_understanding: { original_question: "合成の質問", active_profiles: ["operation_steps"] }, inquiry_conditions: { metadata_filter: { source_file_terms: ["A.pdf"], page_numbers: [2] } } } : null,
     // 処理の経過は実行の trace の API が返す span の段（共通の span の表。#3226。実行の詳細の応答には入れない）。
     // 回答を作った実行は回答の段の中に工程の span、回答を作らない検索は検索の段。
     // 対象は実行（trace の API は実行の id を対象にする）。
@@ -765,6 +766,24 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
     await page.goto("/history/run-missing");
     await expect(page.getByText("実行が見つかりません。")).toBeVisible();
+  });
+
+  test("詳細: 使用モデルは記録した表示名を使い同じIDを重複表示しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    await mockRuns(page, [run(1, {
+      question: "合成の質問", search_answer_profile_name: "プロファイル A",
+      answer: "合成の回答", citations: [], model_id: "provider.synthetic",
+      usage: { models: ["provider.synthetic", "provider.other"], requests: 2, input_tokens: 10, output_tokens: 5, total_tokens: 15, measurement: "complete", measured_requests: 2 },
+      answer_diagnostics: { models: { llm: { model_id: "provider.synthetic", label: "合成モデル" }, embedding: "synthetic-embedding", rerank: "synthetic-rerank" } },
+    })]);
+    await page.goto("/history/run-1");
+    await page.getByTestId("run-history-timeline-summary").click();
+    await page.getByTestId("run-history-process-details").click();
+    const models = page.getByTestId("answer-models");
+    await expect(models.locator("dd")).toHaveText(["合成モデル", "synthetic-embedding", "synthetic-rerank", "provider.other"]);
+    await expect(models.locator("dd").first()).toHaveAttribute("title", "provider.synthetic");
+    await expectNoPageOverflow(page);
+    await models.screenshot({ path: testInfo.outputPath("recorded-model-display.png") });
   });
 
   test("詳細: 概要にモデル・token・モデルの呼び出しを Agent と同じ形で出し、不明は未計測・一部計測と出す（Issue 3419）", async ({
