@@ -508,7 +508,7 @@ export const DEFAULT_RUN_HISTORY_LABELS: RunHistoryLabels = {
     executor: "実行者",
     startedAt: "開始日時",
     duration: "所要時間",
-    usage: "token / 費用",
+    usage: "トークン数",
     actions: "操作",
   },
   self: "自分",
@@ -711,7 +711,7 @@ export function RunHistoryTable<T>({
         if (usage.tokens == null && !usage.cost) return <span data-run-usage-note="">{usage.note}</span>;
         return (
           <span className="grid justify-items-end">
-            <span>{formatRunTokens(usage.tokens, labels.notRecorded)}</span>
+            <span>{usage.tokens == null || !Number.isFinite(usage.tokens) ? labels.notRecorded : formatPaginationNumber(usage.tokens)}</span>
             {usage.note ? (
               <span className="text-xs" data-run-usage-note="">
                 {usage.note}

@@ -158,14 +158,15 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
   await expect(page.getByRole("meter", { name: /取得スコア/ })).toHaveCount(0);
   const rerankMeter = page.getByRole("meter", { name: "Rerank スコア: 0.869" });
   await expect(rerankMeter).toBeVisible();
-  await expect(page.getByText("Both")).toBeVisible();
+  await expect(page.getByText("Both", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Evidence", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Vector #1")).toBeVisible();
   await expect(page.getByText("Keyword #1")).toBeVisible();
   await expect(page.getByText("Rerank #1")).toBeVisible();
   // レシピバッジ(recipe_slot_no)が引用カードに表示される。
   await expect(page.getByText("レシピ1")).toBeVisible();
   await expect(page.getByText("文書 A > 分類 A > 機能 A > 説明", {exact:true})).toBeVisible();
-  await expect(page.getByText("有効", {exact:true})).toBeVisible();
+  await expect(page.getByText("有効", {exact:true})).toHaveCount(0);
 
   const citationText = page.getByTestId("citation-text");
   const citation = citationText.locator("xpath=ancestor::li[1]");

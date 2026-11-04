@@ -776,13 +776,14 @@ test("一覧の token の列と詳細の概要は、記録した利用量・一�
   await mockHistory(page);
   await page.goto("/history");
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
-  const usageHeader = table(page).getByRole("columnheader", { name: "token", exact: true });
+  const usageHeader = table(page).getByRole("columnheader", { name: "トークン数", exact: true });
   if (isMobile) {
     // 狭い画面では token の列を出さない（共通の一覧と同じ。詳細の概要で読む）。
     await expect(usageHeader).toBeHidden();
   } else {
     await expect(usageHeader).toBeVisible();
-    await expect(row(page, "history-new")).toContainText("12,345 token");
+    await expect(row(page, "history-new")).toContainText("12,345");
+    await expect(row(page, "history-new")).not.toContainText("token");
     await expect(row(page, "history-new").locator("[data-run-usage-note]")).toHaveText("一部計測");
     // Select AI だけの実行と、記録の無い行は数を作らず未計測（0 token と出さない）。
     for (const id of ["history-middle", "history-old"]) {

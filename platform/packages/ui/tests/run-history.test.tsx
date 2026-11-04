@@ -287,7 +287,7 @@ describe("RunHistoryTable", () => {
     const headers = Array.from(container.querySelectorAll("thead th")).map((th) => th.textContent?.trim());
     expect(headers).not.toContain("実行者");
     expect(headers).not.toContain("操作");
-    expect(headers).not.toContain("token / 費用");
+    expect(headers).not.toContain("トークン数");
   });
 
   it("題名のクリック（修飾キーなし）と行のクリックで onOpen を呼ぶ", () => {
@@ -313,7 +313,7 @@ describe("RunHistoryTable", () => {
       />
     );
     const cells = Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.lastElementChild?.textContent);
-    expect(cells[0]).toBe("1,500 token$0.01");
+    expect(cells[0]).toBe("1,500$0.01");
     expect(cells[1]).toBe("—");
   });
 
@@ -338,7 +338,7 @@ describe("RunHistoryTable", () => {
       />
     );
     const cells = Array.from(container.querySelectorAll("tbody tr")).map((tr) => tr.lastElementChild);
-    expect(cells.map((cell) => cell?.textContent)).toEqual(["12,345 token一部計測", "未計測", "0 token"]);
+    expect(cells.map((cell) => cell?.textContent)).toEqual(["12,345一部計測", "未計測", "0"]);
     expect(cells[0]?.querySelector("[data-run-usage-note]")?.textContent).toBe("一部計測");
     expect(cells[1]?.querySelector("[data-run-usage-note]")?.textContent).toBe("未計測");
     // 右寄せ・等幅数字で、狭い置き場所（56rem 未満）では出さない列。

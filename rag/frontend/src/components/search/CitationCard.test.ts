@@ -48,8 +48,8 @@ describe("citationEvidenceItem", () => {
       rerankScore: 0.42,
       sourceUrl: "https://example.com/a",
     });
-    expect(item.routeBadges).toEqual(["Both", "Vector #1", "Keyword #2", "Evidence"]);
-    expect(item.chips).toEqual([{ id: "page", label: "ページ", value: "p.3" }, { id: "context_header_enabled", label: "文脈ヘッダの索引への追加", value: "未記録" }]);
+    expect(item.routeBadges).toEqual(["Vector #1", "Keyword #2"]);
+    expect(item.chips).toEqual([{ id: "page", label: "ページ", value: "p.3" }]);
     expect(item.tags?.map((tag) => [tag.id, tag.tone ?? "neutral"])).toEqual([
       ["recipe", "neutral"],
       ["category", "info"],
@@ -57,15 +57,18 @@ describe("citationEvidenceItem", () => {
   });
 });
 
-it.each([
-  ["not_run", "内容の裏付け確認は未実施"],
-  ["error", "内容確認で実行エラー・裏付け未確定"],
-  ["timed_out", "内容確認が時間切れ・裏付け未確定"],
-  ["completed", "内容確認実行済み・裏付け未確定"],
-  ["partial", "内容確認は一部のみ・裏付け未確定"],
-])("意味支持がunknownなら%sの実行状態を独立表示する", (execution, label) => {
-  const item = citationEvidenceItem({ document_id: "d", chunk_id: "c", text: "原文", score: 1, rerank_score: null, file_name: null, category_name: null, metadata: { evidence_model_used: true, evidence_answer_use: "confirmed", evidence_claim_support: { scope: "answer", execution, status: "unknown", policy: "diagnostic_only" } } });
+it.each(["not_run", "error", "timeout", "timed_out", "completed", "partial", "unknown"])("内容確認の%s状態は根拠のタグに表示せず、元の記録を保持する", (execution) => {
+  const metadata = { evidence_model_used: true, evidence_answer_use: "confirmed", evidence_claim_support: { scope: "answer", execution, status: "unknown", policy: "diagnostic_only" } };
+  const before = structuredClone(metadata);
+  const item = citationEvidenceItem({ document_id: "d", chunk_id: "c", text: "原文", score: 1, rerank_score: null, file_name: null, category_name: null, metadata });
   expect(item.usedInAnswer).toBe(true);
   expect(item.answerUse).toBeNull();
-  expect(item.tags?.map((tag) => tag.value)).toEqual(["内容の裏付け確認は診断のみ", label]);
+  expect(item.tags).toEqual([]);
+  expect(metadata).toEqual(before);
+});
+
+it.each([true, false, undefined])("文脈ヘッダの状態%sは表示せず、ヘッダ本文を残す", (enabled) => {
+  const item = citationEvidenceItem({ document_id: "d", chunk_id: "c", text: "原文", score: 1, rerank_score: null, file_name: null, category_name: null, metadata: { context_header: "文書 A > 節 A", ...(enabled === undefined ? {} : { context_header_enabled: enabled }) } });
+  expect(item.chips).toContainEqual({ id: "context_header", label: "検索用の文脈ヘッダ", value: "文書 A > 節 A" });
+  expect(item.chips?.some((chip) => chip.id === "context_header_enabled")).toBe(false);
 });

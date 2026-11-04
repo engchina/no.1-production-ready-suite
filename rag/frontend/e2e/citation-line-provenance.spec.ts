@@ -376,7 +376,10 @@ test("意味確認未実施の操作は本文と引用を保ち、該当確認�
   const source = citation("doc-a:c-o", OPERATION, {
     evidence_model_used: true,
     evidence_answer_use: "confirmed",
-    evidence_claim_support: { scope: "answer", execution: "not_run", status: "unknown", policy: "recorded" },
+    evidence_claim_support: { scope: "answer", execution: "not_run", status: "unknown", policy: "diagnostic_only" },
+    context_header_enabled: true,
+    vector_rank: 1,
+    keyword_rank: 1,
     answer_citation_lines: [1],
     answer_citation_provenance: "child",
   });
@@ -388,13 +391,19 @@ test("意味確認未実施の操作は本文と引用を保ち、該当確認�
   await expect(summary).not.toContainText("該当確認済み");
   await expect(summary).not.toContainText("参考");
   await summary.click();
-  await expect(page.getByText("内容の裏付け確認は未実施", { exact: true })).toBeVisible();
+  for (const label of ["Both", "Evidence", "有効", "内容の裏付け確認は診断のみ", "内容の裏付け確認は未実施"]) {
+    await expect(page.getByTestId("evidence-card").getByText(label, { exact: true })).toHaveCount(0);
+  }
   await expectNoPageOverflow(page);
-  await page.getByText("内容の裏付け確認は未実施", { exact: true }).scrollIntoViewIfNeeded();
+  await page.getByTestId("evidence-card").scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("citation-support-not-run.png") });
   await page.getByTestId("evidence-card").getByRole("button", { name: "文書 A.pdf の根拠を表示" }).click();
   const opened = await openedSheet(page);
   expect(opened.excerpt).toBe(OPERATION);
+  for (const label of ["Both", "Evidence", "有効", "内容の裏付け確認は診断のみ", "内容の裏付け確認は未実施"]) {
+    await expect(opened.sheet.getByText(label, { exact: true })).toHaveCount(0);
+  }
+  await page.screenshot({ path: testInfo.outputPath("citation-support-hidden-source.png") });
   await closeSheet(page);
   await expect(answer.getByText(body, { exact: true })).toBeVisible();
 });
