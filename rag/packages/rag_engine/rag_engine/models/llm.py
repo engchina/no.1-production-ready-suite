@@ -421,7 +421,7 @@ class GroundedApplication(_StrictModel):
         max_length=600,
         description="規則を前提にどう当てはめたか。計算は「44万円＋180万円÷12＝59万円」のように数と＋−×÷＝の算式で書く。規則と前提に無い値・条件を足さない。",
     )
-    result: str = Field(min_length=1, max_length=300, description="当てはめの結果（要求への答え）。1〜2 文。")
+    result: str = Field(min_length=1, max_length=600, description="当てはめの結果（要求への答え）。1〜2 文。")
 
 
 class RequestEvidenceScope(_StrictModel):
@@ -677,12 +677,6 @@ class GroundedDraft(_StrictModel):
             if removed:
                 data["items"] = kept
                 collapsed["items"] = removed
-                data["items"] = [
-                    {**row, "derivation": _reindex_applications([row["derivation"]], index)[0]}
-                    if isinstance(row, Mapping) and isinstance(row.get("derivation"), Mapping)
-                    else row
-                    for row in kept
-                ]
                 if "applications" in data:
                     data["applications"] = _reindex_applications(data["applications"], index)
                 if "answer_parts" in data:

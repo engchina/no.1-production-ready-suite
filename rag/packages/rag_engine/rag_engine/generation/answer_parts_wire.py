@@ -50,7 +50,7 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[
                 min_length=1, max_length=600, description="この要点で答える質問の要求。必要な粒度で複合要求を分け、任意補足を必須にしない。"
             ),
         ),
-        answer=(Union.__getitem__((derived, gap)), Field()),
+        answer=(Union.__getitem__((derived, gap)) if catalog.unit_ids else gap, Field()),
     )
     fields: dict[str, Any] = {
         "answer_parts": (GenericAlias(list, part), Field(min_length=1, max_length=MAX_ANSWER_PARTS)),

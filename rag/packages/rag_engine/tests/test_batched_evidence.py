@@ -405,7 +405,13 @@ def test_rejected_unit_selection_keeps_its_batch_input_and_other_readings_reach_
             )
         assert issubclass(schema, generation_draft_wire_model())
         generated.append(prompt)
-        return schema.model_validate({"summary": "", "confidence": "low", "items": [{"kind": "gap", "text": "合成の不足"}]})
+        return schema.model_validate(
+            {
+                "answer_parts": [{"request_id": "Q1", "requirement": "合成の要求", "answer": {"kind": "gap", "text": "合成の不足"}}],
+                "summary_part_indexes": [],
+                "confidence": "low",
+            }
+        )
 
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")
@@ -637,7 +643,13 @@ def _synthesize(records, read_findings, *, budget=12000):
             return schema(findings=read_findings(json.loads(prompt)["evidence"]))
         assert issubclass(schema, generation_draft_wire_model())
         generated.append(prompt)
-        return schema.model_validate({"summary": "", "confidence": "low", "items": [{"kind": "gap", "text": "合成の不足"}]})
+        return schema.model_validate(
+            {
+                "answer_parts": [{"request_id": "Q1", "requirement": "合成の要求", "answer": {"kind": "gap", "text": "合成の不足"}}],
+                "summary_part_indexes": [],
+                "confidence": "low",
+            }
+        )
 
     def unused(*args, **kwargs):
         pytest.fail("不要な呼出し")

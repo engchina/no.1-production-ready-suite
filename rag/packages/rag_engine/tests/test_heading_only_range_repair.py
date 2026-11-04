@@ -289,7 +289,7 @@ def test_unit_repair_uses_original_snapshot_after_same_label_points_elsewhere() 
         return schema.model_validate(payload)
 
     first = run(original, generation, prompt=grounded.format_functions(original))
-    assert codes(first) == ["citation_heading_only"]
+    assert codes(first, text=f"【{HEADING}】") == ["citation_heading_only"]
     original_id = first.draft.items[0].citations[0]._unit_binding.snapshot.snapshot_id
     changed = [span(OTHER, identity="stable-other", label="E1", heading="別の節")]
     changed_prompt = grounded.format_functions(changed)
@@ -306,9 +306,11 @@ def test_unit_repair_uses_original_snapshot_after_same_label_points_elsewhere() 
     second = run(changed, repair, first=first, prompt=changed_prompt)
     assert len(calls) == 1
     assert second.timing["citation_range_repair"]["status"] == "completed"
-    assert codes(second) == []
+    assert codes(second, text=BODY) == []
     checked = second.checked[0]
+    assert checked.item.text == BODY
     assert checked.item.quote == BODY
+    assert second.applications[0].application.result == first.applications[0].application.result == CLAIM
     assert checked.span["source_id"] == original[0]["source_id"]
     assert checked.citation_resolution["snapshot_id"] == original_id
     assert checked.citation_resolution["range_contract"] == "stable_unit_ids"

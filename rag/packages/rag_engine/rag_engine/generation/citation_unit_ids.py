@@ -174,34 +174,15 @@ def unit_scope_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[Ba
 def unit_generation_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[BaseModel]:
     """この送信の生成型だけ、引用の選択を実提示単位の ID にする。"""
     from copy import deepcopy
-    from typing import Union, get_args
+    from typing import get_args
 
-    from pydantic.json_schema import SkipJsonSchema
-
-    item_type = get_args(base.model_fields["items"].annotation)[0]
-    variants = get_args(item_type) or (item_type,)
-    models = []
-    for item_base in variants:
-        citation_info = deepcopy(item_base.model_fields["citations"])
-        if not catalog.unit_ids:
-            citation_info = Field(default_factory=list, max_length=0, description=citation_info.description)
-        item_fields: dict[str, Any] = {"citations": (GenericAlias(list, catalog.selection_model()), citation_info)}
-        kinds = get_args(item_base.model_fields["kind"].annotation)
-        if "derived" not in kinds and "gap" not in kinds:
-            # 直接記載の本文は、選択した送達原文からコードで作る。
-            item_fields["text"] = (SkipJsonSchema[str], Field(default="", exclude=True))
-        models.append(create_model("Unit" + item_base.__name__, __base__=item_base, **item_fields))
-    item = models[0] if len(models) == 1 else Union.__getitem__(tuple(models))
+    item_base = get_args(base.model_fields["items"].annotation)[0]
+    citation_info = deepcopy(item_base.model_fields["citations"])
+    if not catalog.unit_ids:
+        citation_info = Field(default_factory=list, max_length=0, description=citation_info.description)
+    item_fields: dict[str, Any] = {"citations": (GenericAlias(list, catalog.selection_model()), citation_info)}
+    item = create_model("UnitGroundedItemWire", __base__=item_base, **item_fields)
     fields: dict[str, Any] = {
-        "summary": (SkipJsonSchema[str], Field(default="", exclude=True)),
-        "summary_item_indexes": (
-            base.model_fields["summary_item_indexes"].annotation,
-            Field(
-                default_factory=list,
-                max_length=2,
-                description="回答の冒頭に示す既存項目を最大2つ、その index で選ぶ。新しい文章は作らない。",
-            ),
-        ),
         "items": (GenericAlias(list, item), deepcopy(base.model_fields["items"])),
         "request_coverage": (GenericAlias(list, _unit_coverage_type(catalog)), deepcopy(base.model_fields["request_coverage"])),
     }

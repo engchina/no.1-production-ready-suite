@@ -196,7 +196,8 @@ def test_miscopied_trailing_sentence_keeps_the_claim_unconfirmed():
 def test_prompts_tell_generation_and_audit_how_to_treat_intermediate_hops():
     generate, audit_prompt = grounded.GENERATE_SYSTEM_PROMPT, grounded.AUDIT_SYSTEM_PROMPT
     assert "### 複数の根拠をつなぐ答え（多段）" in generate
-    assert "1 段 1 item" in generate
+    assert "各段を述べる原文の単位を basis に選ぶ" in generate
+    assert "方法を reasoning に、最終の答えを result" in generate
     assert "足りない段を推測で埋めない" in generate
     assert "その item だけで最終の答えにならないこと" in audit_prompt
     assert "「この item だけでは質問に直接答えていない」は not_applicable の理由にならない" in audit_prompt

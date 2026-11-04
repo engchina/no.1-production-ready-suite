@@ -16,7 +16,7 @@ from rag_engine.adapters.oci import InvalidStructuredOutput, LlmRunawayOutput, L
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import GroundedDraft, GroundedItem, RequestScopePlan
+from rag_engine.models.llm import GroundedDraft, RequestScopePlan
 
 GOOD = "一覧表を選択し、処理を選択します。"
 PLAN_LIMIT = 64
@@ -260,11 +260,11 @@ def test_validation_failure_detail_names_the_failed_model_without_contents():
     """#4091: 型の名前と検査の種類で、モデルの出力の不合格か実装の不具合かを切り分けられる。本文は残さない。"""
     secret = "合成の根拠の本文"
     with pytest.raises(ValidationError) as raised:
-        GroundedItem(kind="rule", text=secret * 100)
+        GroundedDraft.model_validate({"items": [], "summary": "", "confidence": secret * 100})
 
     detail = grounded.generation_failure_detail(raised.value)
 
-    assert detail == {"category": "schema_field", "model": "GroundedItem", "validation_error_types": {"string_too_long": 1}}
+    assert detail == {"category": "schema_enum", "model": "GroundedDraft", "validation_error_types": {"literal_error": 1}}
     assert secret not in json.dumps(detail, ensure_ascii=False)
 
 

@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, Literal, Union, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, Field, StrictInt, create_model
 from pydantic.json_schema import SkipJsonSchema
@@ -59,10 +59,7 @@ def bind_wire_range(line_start: int | None, line_end: int | None, *, unit_count:
 @lru_cache(maxsize=1)
 def generation_draft_wire_model() -> type[BaseModel]:
     """既存の項目・草稿のFieldInfoを保ち、生成時だけ引用を整数の契約へ置き換える。"""
-    from rag_engine.generation.derivation_wire import DerivationBasis, GenerationItem
     from rag_engine.models.llm import (
-        AnswerPart,
-        GroundedApplication,
         GroundedCitation,
         GroundedDraft,
         GroundedItem,
@@ -78,82 +75,16 @@ def generation_draft_wire_model() -> type[BaseModel]:
         line_start=(StrictInt | None, Field(description=LINE_START_DESCRIPTION)),
         line_end=(StrictInt | None, Field(description=LINE_END_DESCRIPTION)),
     )
-    citation_info = deepcopy(GroundedItem.model_fields["citations"])
-    citation_info.description = "直接記載の text を支える原文の出典。derived と gap は空配列。"
+    item_fields: dict[str, Any] = {"citations": (GenericAlias(list, citation), deepcopy(GroundedItem.model_fields["citations"]))}
     text_info = deepcopy(GroundedItem.model_fields["text"])
     text_info.metadata.extend(Field(max_length=600).metadata)
-    text_info.description = "利用者へ返す説明または導出結果。kind に対応する根拠と依存を付け、見出しや内部番号は書かない。"
+    item_fields["text"] = (str, text_info)
+    item = create_model("GroundedItemWire", __base__=GroundedItem, **item_fields)
     items_info = deepcopy(GroundedDraft.model_fields["items"])
     items_info.metadata.extend(Field(max_length=40).metadata)
-    items_info.description = "直接記載・導出・不足を分類した回答単位。各要点の出力を指す順序を保つ。"
-    item_fields: dict[str, Any] = {
-        "citations": (GenericAlias(list, citation), citation_info),
-        "text": (str, text_info),
-        "kind": (
-            Literal["operation", "rule", "confirmation", "gap", "derived"],
-            Field(
-                description="原文の直接記載は operation / rule / confirmation、不足は gap。"
-                "計算・条件適用・資料間の組み合わせによる結論は derived。"
-            ),
-        ),
-    }
-    direct_info = deepcopy(citation_info)
-    direct_info.metadata.extend(Field(min_length=1).metadata)
-    direct = create_model(
-        "DirectGroundedItemWire",
-        __base__=GenerationItem,
-        **{
-            **item_fields,
-            "kind": (Literal["operation", "rule", "confirmation"], Field(description="原文が直接述べる事実・規則・操作。")),
-            "citations": (GenericAlias(list, citation), direct_info),
-            "derivation": (None, Field(default=None)),
-        },
-    )
-    derived = create_model(
-        "DerivedGroundedItemWire",
-        __base__=GenerationItem,
-        **{
-            **item_fields,
-            "kind": (Literal["derived"], Field(description="計算・条件適用・資料間の組み合わせによる結論。")),
-            "citations": (GenericAlias(list, citation), Field(default_factory=list, max_length=0)),
-            "derivation": (DerivationBasis, Field()),
-        },
-    )
-    gap = create_model(
-        "GapGroundedItemWire",
-        __base__=GenerationItem,
-        **{
-            **item_fields,
-            "kind": (Literal["gap"], Field(description="必要な根拠や前提の不足。")),
-            "citations": (GenericAlias(list, citation), Field(default_factory=list, max_length=0)),
-            "derivation": (None, Field(default=None)),
-        },
-    )
-    item = Union.__getitem__((direct, derived, gap))
-    part = create_model(
-        "AnswerPartWire",
-        __base__=AnswerPart,
-        id=(SkipJsonSchema[str], Field(default="", exclude=True)),
-        application_indexes=(SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
-    )
     draft_fields: dict[str, Any] = {
-        "answer_parts": (GenericAlias(list, part), deepcopy(GroundedDraft.model_fields["answer_parts"])),
-        "summary": (
-            str,
-            Field(description="出力した items の text だけを1〜2文に要約する。新しい結論を加えず、参照を summary_item_indexes に書く。"),
-        ),
-        "summary_item_indexes": (
-            GroundedDraft.model_fields["summary_item_indexes"].annotation,
-            Field(
-                default_factory=list,
-                max_length=40,
-                description="summary が要約する items の0始まりの index。直接記載・derived の両方を指せる。",
-            ),
-        ),
         "request_coverage": (GenericAlias(list, RequestCoverageRange), deepcopy(GroundedDraft.model_fields["request_coverage"])),
         "items": (GenericAlias(list, item), items_info),
-        "applications": (SkipJsonSchema[list[GroundedApplication]], Field(default_factory=list, exclude=True)),
-        "summary_application_indexes": (SkipJsonSchema[list[int]], Field(default_factory=list, exclude=True)),
         # 業務ガイドの要件が無い生成には用途が無い。schema に残すとモデルが埋めようとして空白の暴走の起点になる（#4236）。
         "guide_coverage": (SkipJsonSchema[list[GuideRequirementCoverage]], Field(default_factory=list, exclude=True)),
     }
@@ -262,17 +193,7 @@ def canonical_generation_draft(
                 }
                 for binding in unit_bindings
             ]
-            if item.get("kind") not in {"derived", "gap"}:
-                item["text"] = "\n".join(binding.text for binding in unit_bindings)
             bindings.append(unit_bindings)
-        # 摘要は出力済みの本文・導出結果の選択。ここで新しい自由文を受け取らない。
-        raw["summary"] = "\n".join(
-            raw["items"][index]["text"] for index in raw.get("summary_item_indexes", []) if 0 <= index < len(raw["items"])
-        )
-        from rag_engine.generation.derivation_wire import split_derivations
-
-        raw, positions = split_derivations(raw)
-        bindings = [bindings[index] for index in positions]
         draft = GroundedDraft.model_validate(raw)
         draft._citation_snapshots = unit_catalog.snapshots
         if isinstance(value, GroundedDraft):
@@ -313,10 +234,6 @@ def canonical_generation_draft(
         ranges.append(own)
         if "citations" in item:
             item["citations"] = converted
-    from rag_engine.generation.derivation_wire import split_derivations
-
-    raw, positions = split_derivations(raw)
-    ranges = [ranges[index] for index in positions]
     draft = GroundedDraft.model_validate(raw)
     if isinstance(value, GroundedDraft):
         draft._provider_output_text = value._provider_output_text
