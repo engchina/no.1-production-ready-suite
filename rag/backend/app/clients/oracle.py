@@ -8202,7 +8202,9 @@ class OracleClient:
                 },
                 lambda: {
                     **_search_hits_snapshot(result),
-                    "raw_count": len(rows),
+                    "raw_count": rows.threshold.get("raw_count", len(rows))
+                    if isinstance(rows, NativeSearchRows)
+                    else len(rows),
                     "threshold": rows.threshold if isinstance(rows, NativeSearchRows) else {},
                     "vector_retrieval": rows.vector_retrieval
                     if isinstance(rows, NativeSearchRows)

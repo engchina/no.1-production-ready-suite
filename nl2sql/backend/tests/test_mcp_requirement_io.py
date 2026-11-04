@@ -8,12 +8,7 @@ import pytest
 from pr_backend_core.config.tracing import TracingSettings
 from pr_backend_core.observability.call_policy import call_content_policy
 from pr_backend_core.observability.tracing import configure_tracing, observed_span, shutdown_tracing
-
-from app.features.mcp import tools as module
-from app.features.nl2sql import ontology_router
-from app.features.nl2sql.ontology_models import RequirementPhase, RequirementState
-from app.features.nl2sql.sql_requirement import RequirementAiUnavailableError
-from tests.test_mcp import (
+from test_mcp import (
     _call,
     _FakeNl2SqlService,
     _run,
@@ -23,6 +18,11 @@ from tests.test_mcp import (
     fake_service,  # noqa: F401 - fixture
     users,  # noqa: F401 - fixtures
 )
+
+from app.features.mcp import tools as module
+from app.features.nl2sql import ontology_router
+from app.features.nl2sql.ontology_models import RequirementPhase, RequirementState
+from app.features.nl2sql.sql_requirement import RequirementAiUnavailableError
 
 
 @pytest.mark.parametrize("enabled", [True, False])

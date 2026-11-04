@@ -97,6 +97,8 @@ async def test_native_search_records_effective_scope_and_actual_return(
             assert result["error_type"] == "RuntimeError"
         else:
             assert result["chunks"][0]["chunk_id"] == "chunk-a"
+            assert result["raw_count"] == rows.threshold["raw_count"] == 3
+            assert result["count"] == 1
             assert result["threshold"] == rows.threshold
             assert result["vector_retrieval"] == rows.vector_retrieval
     else:
