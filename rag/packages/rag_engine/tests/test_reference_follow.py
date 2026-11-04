@@ -169,3 +169,55 @@ def test_context_reserves_parent_slots_for_followed_reference():
     # 4 枠のうち半分（2）までを参照先の親に入れ替える。参照元の無い印（orphan）は確保しない。
     assert set(ids) == {"window-p", "a0-p", "plan2-p", "plan1-p"}
     assert ids[0] == "window-p"
+
+
+def test_shared_reference_follows_remaining_source_when_primary_is_filtered_out():
+    from rag_engine.retrieval.context_builder import ContextBuildRequest, build_chunk_context_bundle
+
+    secondary = _child("secondary", source="sample-a.pdf", score=0.9)
+    reference = _child("reference", source="sample-b.pdf", ref_from="filtered", score=0.1)
+    reference = replace(
+        reference,
+        metadata={
+            **reference.metadata,
+            "reference_expansion": {"from_chunk_uid": "uid:filtered", "from_chunk_uids": ["uid:filtered", "uid:secondary"]},
+        },
+    )
+    hits = [_child(f"other-{index}", source="sample-c.pdf", score=0.8 - index / 10) for index in range(3)]
+    records = follow_reference_sources([secondary, *hits, reference])
+    assert _ids(records) == ["secondary", "reference", *[record.id for record in hits]]
+    assert is_followed_reference(records[1])
+    assert reference_source_uid(records[1]) == "uid:secondary"
+    bundle = build_chunk_context_bundle(
+        ContextBuildRequest(
+            question="合成の質問",
+            ranked_children=records,
+            active_records=[*records, *[replace(_parent(record.id), source=record.source) for record in records]],
+            top_k=10,
+            neighbor_child_count=0,
+            max_records=2,
+            max_chars=5000,
+        )
+    )
+    assert {record.id for record in bundle.records} == {"secondary-p", "reference-p"}
+
+
+def test_existing_source_dependency_keeps_its_original_position():
+    a, hit, b = _child("a", source="sample.pdf"), _child("hit", source="sample.pdf"), _child("b", source="sample.pdf")
+    b = replace(b, metadata={"reference_expansion": {"from_chunk_uids": ["uid:a"], "keep_source_position": True}})
+    assert _ids(follow_reference_sources([a, hit, b])) == ["a", "hit", "b"]
+
+
+def test_shared_reference_parent_can_follow_any_source_in_selected_context():
+    from rag_engine.retrieval.context_builder import _group_follows_reference
+
+    reference = _child("reference", source="sample.pdf", ref_from="primary")
+    reference = replace(
+        reference,
+        metadata={
+            "reference_expansion": {"from_chunk_uid": "uid:primary", "from_chunk_uids": ["uid:primary", "uid:secondary"], "followed": True}
+        },
+    )
+    group = SimpleNamespace(children={"reference": SimpleNamespace(role="retrieved_anchor", record=reference)})
+    assert _group_follows_reference(group, {"uid:secondary"})
+    assert not _group_follows_reference(group, {"uid:unrelated"})

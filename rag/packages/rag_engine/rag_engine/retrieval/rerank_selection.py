@@ -6,12 +6,12 @@ from collections.abc import Sequence
 from typing import Any
 
 from .attachment_evidence import is_attachment_evidence
-from .reference_follow import reference_source_uid
+from .reference_follow import reference_source_uids
 from .rerank_scores import keeps_original_order
 
 
 def select_reranked_candidates[T](records: Sequence[T], limit: int) -> tuple[list[T], dict[str, Any]]:
-    """既存の単一参照元 marker から組を作る。候補順は変更しない。"""
+    """参照元 marker から組を作る。共有参照も一群とし、候補順は変更しない。"""
     if limit <= 0:
         return list(records), {"limit": 0, "applied": False}
     parents = list(range(len(records)))
@@ -25,9 +25,10 @@ def select_reranked_candidates[T](records: Sequence[T], limit: int) -> tuple[lis
     positions = {str(getattr(record, "chunk_uid", "") or ""): index for index, record in enumerate(records)}
     positions.pop("", None)
     for index, record in enumerate(records):
-        source = positions.get(reference_source_uid(record))
-        if source is not None:
-            parents[root(index)] = root(source)
+        for source_id in reference_source_uids(record):
+            source = positions.get(source_id)
+            if source is not None:
+                parents[root(index)] = root(source)
     groups: dict[int, list[int]] = {}
     for index in range(len(records)):
         groups.setdefault(root(index), []).append(index)

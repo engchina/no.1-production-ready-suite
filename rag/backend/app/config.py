@@ -1067,6 +1067,12 @@ class Settings(
             "LLM の呼び出しは増えない。参照の無い候補だけなら SQL も増えない。"
         ),
     )
+    rag_reference_expansion_max_targets: int = Field(
+        default=20,
+        ge=1,
+        le=120,
+        description="交差参照で1回の検索に新規読取する固有対象数。発見範囲・補充Chunk予算とは独立。既読cacheは消費しない。",
+    )
     rag_reference_expansion_max_chunks: int = Field(
         default=4,
         ge=1,

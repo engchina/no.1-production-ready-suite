@@ -23,7 +23,7 @@ from rag_engine.retrieval.entity_expansion import is_reserved_entity_expansion
 from rag_engine.retrieval.evidence_cues import evidence_cues
 from rag_engine.retrieval.metadata_context import answer_metadata_context, with_child_contexts
 from rag_engine.retrieval.operation_context import operation_labels
-from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uid
+from rag_engine.retrieval.reference_follow import is_followed_reference, reference_source_uids
 
 DEFAULT_MAX_RECORD_TEXT_CHARS = 1200
 DEFAULT_MIN_SNIPPET_CHARS = 80
@@ -462,7 +462,9 @@ def _group_has_entity_expansion(group: _ParentEvidenceBuilder) -> bool:
 def _group_follows_reference(group: _ParentEvidenceBuilder, sources: set[str]) -> bool:
     """参照元の直後へ置いた交差参照の参照先（#1549）を起点に持ち、その参照元が枠の内の起点の親か。"""
     return any(
-        child.role == "retrieved_anchor" and is_followed_reference(child.record) and reference_source_uid(child.record) in sources
+        child.role == "retrieved_anchor"
+        and is_followed_reference(child.record)
+        and bool(sources.intersection(reference_source_uids(child.record)))
         for child in group.children.values()
     )
 

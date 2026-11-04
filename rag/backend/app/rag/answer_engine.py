@@ -173,7 +173,6 @@ _REFERENCE_SOURCE_ANCHORS = 5
 # 持つ chunk の統合の順位は回ごとに 2 位にも 8 位にもなり、上位 5 件だけでは辿るかどうかが揺れる。
 _REFERENCE_EXTENDED_ANCHORS = 20
 # 交差参照(#1549): 上位 5 件の外の起点で試す参照先の数の上限(解決できない参照の SQL を抑える)。
-_REFERENCE_EXTENDED_TARGETS = 6
 # 交差参照: 1 つの参照先の節から足す chunk の数の上限(節の先頭から。親子階層では親本文も入る)。
 _REFERENCE_CHUNKS_PER_TARGET = 2
 # 検索の基準日の条件の名前(文書の有効期間をこの日で判定する。YYYY-MM-DD)。
@@ -1873,7 +1872,11 @@ class AnswerEngine:
         references: dict[str, list[RetrievedChunk]] = {}
         if expand_references and self._settings.rag_reference_expansion_enabled:
             with _search_stage(REFERENCE_EXPANSION_STAGE) as observation:
-                source_start = len(state.reference_sources)
+                receipt: dict[str, object] | None = (
+                    {}
+                    if observation is not None and getattr(observation, "capture_enabled", True)
+                    else None
+                )
                 if observation is not None:
                     observation.request(
                         lambda: {
@@ -1886,8 +1889,11 @@ class AnswerEngine:
                                 min(int(request.top_k), _REFERENCE_EXTENDED_ANCHORS),
                             ),
                             "上位の起点数": _REFERENCE_SOURCE_ANCHORS,
-                            "上位以外の参照先試行の上限": _REFERENCE_EXTENDED_TARGETS,
-                            "参照先あたりの Chunk 上限": _REFERENCE_CHUNKS_PER_TARGET,
+                            "参照先の独立読取上限": (
+                                self._settings.rag_reference_expansion_max_targets
+                            ),
+                            "参照先あたりの通常追加 Chunk 上限": _REFERENCE_CHUNKS_PER_TARGET,
+                            "条件文": "文書名参照の選択節を指す条件文は、同じ依存群に追加します。",
                             "総補充 Chunk 上限": self._settings.rag_reference_expansion_max_chunks,
                             "参照の深さ": 1,
                             "検索文による文書参照の検索": queries[0]
@@ -1905,6 +1911,7 @@ class AnswerEngine:
                     if queries[0] in embeddings
                     else None,
                     scores=fused,
+                    receipt=receipt,
                 )
                 if observation is not None:
                     observation.response(
@@ -1915,14 +1922,17 @@ class AnswerEngine:
                             "返した固有 Chunk 数": len(
                                 {item.chunk_id for rows in references.values() for item in rows}
                             ),
-                            "今回の探索判断": state.reference_sources[source_start:],
-                            "探索判断の記録範囲": (
-                                "既存の診断上限内です。全参照の検査完了は保証しません。"
+                            "今回の探索判断": receipt,
+                            "選択方法": (
+                                "起点の融合関連度を追加 Chunk 数で割り、"
+                                "優先度の高い依存群から選択。"
+                                "同点は検索順位です。"
                             ),
                             "回答内の縮退記録（累計）": state.degraded_steps(),
                             "最終採用": "返却候補です。回答文脈への採用は後段で決まります。",
                         }
                     )
+        anchors = [state.chunks.get(chunk.chunk_id, chunk) for chunk in anchors]
         referenced = [chunk for chunks in references.values() for chunk in chunks]
         promoted = {chunk.chunk_id for chunk in referenced}
         # 質問と上位の候補の実体から、実体の表との join で関連する chunk を 1 段だけ足す(#1362)。
@@ -2592,161 +2602,287 @@ class AnswerEngine:
         existing: set[str],
         question: tuple[str, list[float]] | None = None,
         scores: Mapping[str, float] | None = None,
+        receipt: dict[str, object] | None = None,
     ) -> dict[str, list[RetrievedChunk]]:
-        """上位の候補が本文で参照する節の chunk を、上限まで集める(起点の chunk_id ごと。#1280)。
+        """発見、対象の読取、依存群の選択を分ける。参照の補充は既存起点から一段だけ。
 
-        起点は統合(RRF)の上位 ``_REFERENCE_SOURCE_ANCHORS`` 件と、その外で回答の文脈に入りうる上位
-        (``request.top_k``。``_REFERENCE_EXTENDED_ANCHORS`` 件まで)の参照を持つ候補(#1549)。上位の
-        起点から順に辿り、上位 5 件の外の起点では試す参照先を ``_REFERENCE_EXTENDED_TARGETS``
-        件までに抑える。他の起点の参照先として足した候補は起点にしない(参照は 1 段)。起点として
-        参照先を足した候補は、他の起点の参照先として移さない(移すと、その候補の参照先が根拠に
-        並ばない)。
-
-        ``existing`` の chunk(上位の起点)は足さない。それより下位の候補・前後の文脈にある参照先は
-        足す(呼び出し側が起点の直後へ移す。#1400)。
-
-        参照先は取込時に chunk の metadata(``reference_targets_json``)へ解決してある。参照の無い
-        候補だけなら DB を読まない。足す chunk は 1 回の検索で合計
-        ``rag_reference_expansion_max_chunks`` 件まで、参照先 1 つにつき節の先頭から
-        ``_REFERENCE_CHUNKS_PER_TARGET`` 件まで。順位は rag_engine の rerank が決める(LLM は
-        呼ばない)。参照先の範囲は検索範囲のナレッジベース(と利用者の権限・旧版の扱い・基準日)で、
-        文書名・ページ・分類・項目の明示条件も維持する。範囲外・読めない参照先は足さない
-        (回答は続ける)。
-
-        文書名だけの参照(「時間帯は定期保守計画で確かめます」。#1400)は、参照先の文書の中を
-        ``question``(検索文とその埋め込み)で検索し、rerank で質問に関連の高い chunk を選ぶ
-        (``_document_reference_chunks``)。
-
-        参照を持つ候補の統合の順位と、辿った結果・辿らなかった理由は ``state.reference_sources`` に
-        残す(診断。#1549)。``scores`` は統合の点(chunk_id → 点)。
+        起点範囲内を先に走査する。対象の読取数と補充する固有 Chunk 数は独立した予算で、
+        共有対象は一度読み、未読・失敗・予算不足を満たされた依存として扱わない。
         """
         if not self._settings.rag_reference_expansion_enabled:
             return {}
+        from app.rag.reference_selection import ReferenceGroup, select_reference_groups
+
         budget = self._settings.rag_reference_expansion_max_chunks
+        target_budget = self._settings.rag_reference_expansion_max_targets
         scope = _reference_scope(request.filters)
         limit = max(_REFERENCE_SOURCE_ANCHORS, min(int(request.top_k), _REFERENCE_EXTENDED_ANCHORS))
-        seen = set(existing)
-        added: dict[str, list[RetrievedChunk]] = {}
-        promoted: set[str] = set()
-        count = 0
-        extended_targets = 0
         sources: list[dict[str, object]] = []
+        all_sources: list[dict[str, object]] = []
         record: dict[str, object] = {
             "candidates": len(anchors),
             "top_sources": _REFERENCE_SOURCE_ANCHORS,
             "source_limit": limit,
+            "checked_sources": min(len(anchors), limit),
+            "outside_sources": max(0, len(anchors) - limit),
+            "target_limit": target_budget,
+            "chunk_limit": budget,
             "added_count": 0,
             "sources": sources,
         }
         if len(state.reference_sources) < _REFERENCE_DIAGNOSTICS_SEARCHES:
             state.reference_sources.append(record)
+        # 起点ごとに対象の鍵を保存する。ラベルの表記違いを同じ対象としてまとめる。
+        plans: list[tuple[RetrievedChunk, int, dict[str, object], list[tuple[str, ...]]]] = []
+        targets: dict[tuple[str, ...], tuple[RetrievedChunk, ReferenceTarget]] = {}
+        target_sources: dict[tuple[str, ...], list[str]] = {}
+        discovered = 0
+        resolution_errors = 0
         await self._prefetch_reference_documents(scope, state, anchors[:limit])
         for position, anchor in enumerate(anchors, start=1):
-            if position > limit or count >= budget:
-                # 起点の外・上限の後の参照を持つ候補(取込で解決した印のあるものだけ。DB は
-                # 読まない)。
+            if position > limit:
                 stored = reference_targets(anchor.metadata)
                 if stored and len(sources) < _REFERENCE_DIAGNOSTICS_LIMIT:
-                    outcome = "outside_sources" if position > limit else "budget"
                     sources.append(
-                        _reference_source_entry(anchor, position, scores, stored, outcome)
+                        _reference_source_entry(anchor, position, scores, stored, "outside_sources")
                     )
                 continue
             try:
-                targets = await self._anchor_reference_targets(scope, state, anchor)
-            except Exception as exc:  # noqa: BLE001 - 参照先は補助。この候補の参照を辿らずに続ける。
-                logger.warning("reference target resolution failed", exc_info=True)
+                found = await self._anchor_reference_targets(scope, state, anchor)
+            except Exception as exc:  # noqa: BLE001 - この起点の未解決を記録して続ける。
                 state.record_degraded("reference_resolve", exc)
+                resolution_errors += 1
+                failed: dict[str, object] = {
+                    "chunk_id": anchor.chunk_id,
+                    "fused_rank": position,
+                    "outcome": "resolve_error",
+                    "dependency_status": "unsatisfied",
+                    "dependency_reasons": ["resolve_error"],
+                }
+                all_sources.append(failed)
+                if len(sources) < _REFERENCE_DIAGNOSTICS_LIMIT:
+                    sources.append(failed)
                 continue
-            if not targets:
+            entry = _reference_source_entry(anchor, position, scores, found, "none")
+            all_sources.append(entry)
+            if not found:
+                entry["outcome"] = "no_references"
                 continue
-            entry = _reference_source_entry(anchor, position, scores, targets, "none")
             if len(sources) < _REFERENCE_DIAGNOSTICS_LIMIT:
                 sources.append(entry)
-            if anchor.chunk_id in promoted:
-                # 他の起点の参照先として足した候補(参照は 1 段)。
-                entry["outcome"] = "referenced"
-                continue
-            extended = position > _REFERENCE_SOURCE_ANCHORS
-            outcomes: list[str] = []
-            entry["target_outcomes"] = outcomes
-            for target in targets:
-                if count >= budget:
-                    outcomes.append("budget")
-                    break
-                if extended and extended_targets >= _REFERENCE_EXTENDED_TARGETS:
-                    outcomes.append("target_limit")
-                    break
-                if extended:
-                    extended_targets += 1
+            keys = []
+            for target in found:
+                discovered += 1
+                key = _reference_target_cache_key(scope, anchor, target, request, question)
+                if key not in keys:
+                    keys.append(key)
+                targets.setdefault(key, (anchor, target))
+                target_sources.setdefault(key, []).append(anchor.chunk_id)
+            plans.append((anchor, position, entry, keys))
+
+        # 対象の確認と原文の読取は、補充 Chunk の予算を消費しない。範囲と版は既存の
+        # 読取関数で適用する。空の結果だけでは権限・範囲・未登録のどれが原因か断定しない。
+        loaded: dict[tuple[str, ...], list[RetrievedChunk]] = {}
+        statuses: dict[tuple[str, ...], str] = {}
+        target_receipts: list[dict[str, object]] = []
+        read_count = cache_count = 0
+        for key, (anchor, target) in targets.items():
+            cached = key in state.reference_chunks
+            if target.kind == "document" and (request is None or question is None):
+                statuses[key] = "missing_search_input"
+                chunks: list[RetrievedChunk] = []
+            elif target.document_title is None and target.section_path is None:
+                statuses[key] = "unresolved_section"
+                chunks = []
+            elif not cached and read_count >= target_budget:
+                statuses[key] = "target_limit"
+                chunks = []
+            else:
+                if cached:
+                    cache_count += 1
+                else:
+                    read_count += 1
                 try:
                     chunks = await self._reference_target_chunks(
                         scope, state, anchor, target, request=request, question=question
                     )
-                except Exception as exc:  # noqa: BLE001 - 参照先は補助。この参照先を足さずに続ける。
-                    logger.warning("reference target load failed", exc_info=True)
+                    loaded[key] = chunks
+                    statuses[key] = "available" if chunks else "no_available_content"
+                except Exception as exc:  # noqa: BLE001 - この参照の未充足を記録して続ける。
                     state.record_degraded("reference_load", exc)
-                    outcomes.append("error")
+                    chunks = []
+                    statuses[key] = "read_error"
+            if receipt is not None:
+                target_receipts.append(
+                    {
+                        "target": target.to_dict(),
+                        "source_ids": list(dict.fromkeys(target_sources[key])),
+                        "status": statuses[key],
+                        "cache_reused": cached,
+                        "read_chunk_ids": [chunk.chunk_id for chunk in chunks],
+                    }
+                )
+
+        groups: list[ReferenceGroup] = []
+        dependencies: dict[str, dict[str, tuple[RetrievedChunk, ReferenceTarget, int]]] = {}
+        for anchor, position, entry, keys in plans:
+            rows: dict[str, tuple[RetrievedChunk, ReferenceTarget, int]] = {}
+            reasons: list[str] = []
+            for key in keys:
+                if statuses[key] != "available":
+                    reasons.append(statuses[key])
                     continue
-                fresh = [chunk for chunk in chunks if chunk.chunk_id not in seen | added.keys()]
-                selected = fresh[: min(_REFERENCE_CHUNKS_PER_TARGET, budget - count)]
+                _, target = targets[key]
+                already_present = [chunk for chunk in loaded[key] if chunk.chunk_id in existing]
+                fresh = [chunk for chunk in loaded[key] if chunk.chunk_id not in existing]
+                selected = [*already_present, *fresh[:_REFERENCE_CHUNKS_PER_TARGET]]
                 if target.kind == "document":
-                    # 文書名の参照で選んだ節を、同じ文書の中で参照する文(適用の条件。#1549)。
-                    selected.extend(
-                        _section_citing_chunks(
-                            fresh, selected, limit=budget - count - len(selected)
-                        )
-                    )
-                # 足した / 参照先がすでに上位の起点にある / 参照先が見つからない。
-                outcomes.append("added" if selected else ("present" if chunks else "not_found"))
+                    # 選択した節を指す条件文も同じ依存群とし、予算で切り離さない。
+                    selected.extend(_section_citing_chunks(fresh, selected, limit=len(fresh)))
                 for rank, chunk in enumerate(selected, start=1):
-                    seen.add(chunk.chunk_id)
-                    promoted.add(chunk.chunk_id)
-                    # 下位の候補・前後の文脈として読んだ chunk にも、参照の起点の印を付ける。
-                    marked = state.chunks.get(chunk.chunk_id, chunk)
-                    if REFERENCE_FROM_KEY not in marked.metadata:
-                        marked = marked.model_copy(
-                            update={
-                                "metadata": {
-                                    **marked.metadata,
-                                    REFERENCE_FROM_KEY: anchor.chunk_id,
-                                    REFERENCE_LABEL_KEY: target.label,
-                                    # 文書名だけの参照は、参照先の文書の中の関連の順(#1400)。
-                                    **(
-                                        {REFERENCE_RANK_KEY: rank}
-                                        if target.kind == "document"
-                                        else {}
-                                    ),
-                                }
-                            }
-                        )
-                        state.chunks[chunk.chunk_id] = marked
-                    added.setdefault(anchor.chunk_id, []).append(marked)
-                    state.reference_expansions.setdefault(
-                        chunk.chunk_id,
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "document_id": chunk.document_id,
-                            "from_chunk_id": anchor.chunk_id,
-                            # 起点の統合の順位(#1549)。
-                            "from_fused_rank": position,
-                            "label": target.label,
-                            "kind": target.kind,
-                            "document_title": target.document_title,
-                            "section_path": str(chunk.metadata.get("section_path") or ""),
-                            "resolved_at": (
-                                "query"
-                                if anchor.chunk_id in state.query_reference_targets
-                                else "ingest"
+                    rows.setdefault(chunk.chunk_id, (chunk, target, rank))
+            entry["target_outcomes"] = [statuses[key] for key in keys]
+            entry["dependency_reasons"] = list(dict.fromkeys(reasons))
+            entry["dependency_chunk_ids"] = list(rows)
+            dependencies[anchor.chunk_id] = rows
+            groups.append(
+                ReferenceGroup(
+                    anchor.chunk_id,
+                    position,
+                    scores.get(anchor.chunk_id) if scores else None,
+                    tuple(rows),
+                    unavailable=bool(reasons),
+                )
+            )
+        selection = select_reference_groups(groups, existing=existing, budget=budget)
+        by_id = {anchor.chunk_id: (anchor, position, entry) for anchor, position, entry, _ in plans}
+        added: dict[str, list[RetrievedChunk]] = {}
+        emitted: set[str] = set()
+        protected = existing | set(selection.sources)
+        for source_id in selection.sources:
+            anchor, position, entry = by_id[source_id]
+            entry["dependency_status"] = "satisfied"
+            for chunk_id, (chunk, target, rank) in dependencies[source_id].items():
+                if chunk_id in protected or chunk_id in emitted:
+                    continue
+                emitted.add(chunk_id)
+                marked = state.chunks.get(chunk_id, chunk)
+                marked = marked.model_copy(
+                    update={
+                        "metadata": {
+                            **marked.metadata,
+                            REFERENCE_FROM_KEY: source_id,
+                            "reference_from_chunk_ids": [
+                                candidate
+                                for candidate in selection.sources
+                                if chunk_id in dependencies[candidate]
+                            ],
+                            REFERENCE_LABEL_KEY: target.label,
+                            **({REFERENCE_RANK_KEY: rank} if target.kind == "document" else {}),
+                        }
+                    }
+                )
+                state.chunks[chunk_id] = marked
+                added.setdefault(source_id, []).append(marked)
+                state.reference_expansions.setdefault(
+                    chunk_id,
+                    {
+                        "chunk_id": chunk_id,
+                        "document_id": chunk.document_id,
+                        "from_chunk_id": source_id,
+                        "from_fused_rank": position,
+                        "label": target.label,
+                        "kind": target.kind,
+                        "document_title": target.document_title,
+                        "section_path": str(chunk.metadata.get("section_path") or ""),
+                        "resolved_at": "query"
+                        if source_id in state.query_reference_targets
+                        else "ingest",
+                    },
+                )
+        for chunk_id in protected:
+            source_ids = [
+                source
+                for source in selection.sources
+                if source != chunk_id and chunk_id in dependencies[source]
+            ]
+            if not source_ids or chunk_id not in state.chunks:
+                continue
+            current = state.chunks[chunk_id]
+            metadata: dict[str, Any] = dict(current.metadata)
+            metadata.pop(REFERENCE_FROM_KEY, None)
+            metadata["reference_from_chunk_ids"] = source_ids
+            state.chunks[chunk_id] = current.model_copy(update={"metadata": metadata})
+        for source_id, outcome in selection.outcomes.items():
+            _, _, entry = by_id[source_id]
+            entry["outcome"] = (
+                "added" if source_id in added else "none" if outcome == "selected" else outcome
+            )
+            if outcome != "selected":
+                entry["dependency_status"] = (
+                    "not_expanded" if outcome == "referenced" else "unsatisfied"
+                )
+                if outcome == "budget":
+                    entry["dependency_reasons"] = ["chunk_budget"]
+            entry["selected_dependency_chunk_ids"] = [
+                chunk_id
+                for chunk_id in dependencies[source_id]
+                if chunk_id in emitted or chunk_id in protected
+            ]
+        record.update(
+            {
+                "discovered_targets": discovered,
+                "unique_targets": len(targets),
+                "duplicate_targets": discovered - len(targets),
+                "checked_targets": len(loaded),
+                "read_targets": read_count,
+                "reused_targets": cache_count,
+                "unread_targets": sum(
+                    status in {"target_limit", "missing_search_input", "unresolved_section"}
+                    for status in statuses.values()
+                ),
+                "failed_targets": sum(status == "read_error" for status in statuses.values()),
+                "resolution_errors": resolution_errors,
+                "read_chunk_count": len(
+                    {chunk.chunk_id for chunks in loaded.values() for chunk in chunks}
+                ),
+                "added_count": len(emitted),
+                "unsatisfied_sources": sum(
+                    entry.get("dependency_status") == "unsatisfied" for entry in all_sources
+                ),
+                "stop_reasons": list(
+                    dict.fromkeys(
+                        [
+                            *(
+                                "target_read_limit"
+                                for status in statuses.values()
+                                if status == "target_limit"
                             ),
-                        },
+                            *(
+                                "chunk_budget"
+                                for outcome in selection.outcomes.values()
+                                if outcome == "budget"
+                            ),
+                            *("resolution_error" for _ in range(resolution_errors)),
+                            *(
+                                status
+                                for status in statuses.values()
+                                if status
+                                in {
+                                    "read_error",
+                                    "no_available_content",
+                                    "missing_search_input",
+                                    "unresolved_section",
+                                }
+                            ),
+                        ]
                     )
-                    count += 1
-            if anchor.chunk_id in added:
-                entry["outcome"] = "added"
-            elif outcomes and outcomes[-1] in {"budget", "target_limit"}:
-                entry["outcome"] = outcomes[-1]
-        record["added_count"] = count
+                )
+                or ["declared_source_range_complete"],
+            }
+        )
+        if receipt is not None:
+            receipt.update({**record, "sources": all_sources, "targets": target_receipts})
         return added
 
     async def _prefetch_reference_documents(
@@ -2859,11 +2995,11 @@ class AnswerEngine:
         文書全体への参照(文書名だけ。#1400)は、参照先の文書の質問に関連の高い順。
         """
         limit = _REFERENCE_CHUNKS_PER_TARGET + _REFERENCE_SOURCE_ANCHORS
+        key = _reference_target_cache_key(scope, anchor, target, request, question)
         if target.document_title is None:
             if target.section_path is None:
                 return []
             chunk_set_id = str(anchor.metadata.get("chunk_set_id") or "")
-            key = ("same", anchor.document_id, chunk_set_id, target.section_path)
             if key not in state.reference_chunks:
                 rows = await self._oracle.retrieval_reference_chunks(
                     scope,
@@ -2883,13 +3019,11 @@ class AnswerEngine:
             # 文書全体への参照は、参照先の文書の中で質問に関連の高い chunk に限る(#1400)。
             if request is None or question is None:
                 return []
-            key = ("document-name", title_key(target.document_title), request.query, question[0])
             if key not in state.reference_chunks:
                 state.reference_chunks[key] = await self._document_reference_chunks(
                     scope, state, anchor, target, request=request, question=question
                 )
             return state.reference_chunks[key]
-        key = ("document", title_key(target.document_title), target.kind, target.key)
         if key not in state.reference_chunks:
             state.reference_chunks[key] = await self._other_document_reference_chunks(
                 scope, state, anchor, target, limit=limit
@@ -3783,6 +3917,36 @@ def _trace_chunks(chunks: Sequence[RetrievedChunk]) -> list[dict[str, object]]:
     ]
 
 
+def _reference_target_cache_key(
+    scope: Mapping[str, str],
+    anchor: RetrievedChunk,
+    target: ReferenceTarget,
+    request: SearchRequest | None,
+    question: tuple[str, list[float]] | None,
+) -> tuple[str, ...]:
+    """対象の解決に影響する範囲・版・参照元・検索文をすべて鍵に含める。"""
+    scope_key = json.dumps(scope, ensure_ascii=False, sort_keys=True)
+    if target.document_title is None:
+        return (
+            "same",
+            scope_key,
+            anchor.document_id,
+            str(anchor.metadata.get("chunk_set_id") or ""),
+            target.section_path or "",
+        )
+    return (
+        "document-name" if target.kind == "document" else "document",
+        scope_key,
+        anchor.document_id,
+        str(anchor.metadata.get("chunk_set_id") or ""),
+        title_key(target.document_title),
+        target.kind,
+        target.key,
+        request.query if request is not None and target.kind == "document" else "",
+        question[0] if question is not None and target.kind == "document" else "",
+    )
+
+
 def _search_stage(
     name: str, *, active: bool = True
 ) -> AbstractContextManager[CallObservation | None]:
@@ -4143,10 +4307,21 @@ def _stored_child(
         # 文書の選択で後回しにしない(質問で並べると橋渡しの参照先が下がり、文脈に入らなかった。
         # #1549)。
         rank = chunk.metadata.get(REFERENCE_RANK_KEY)
+        source_ids = chunk.metadata.get("reference_from_chunk_ids")
         metadata["reference_expansion"] = {
             "from_chunk_uid": source,
+            **(
+                {"from_chunk_uids": source_ids}
+                if isinstance(source_ids, list) and len(source_ids) > 1
+                else {}
+            ),
             "label": str(chunk.metadata.get(REFERENCE_LABEL_KEY) or ""),
             **({"rank": rank} if isinstance(rank, int) else {}),
+        }
+    elif isinstance(chunk.metadata.get("reference_from_chunk_ids"), list):
+        metadata["reference_expansion"] = {
+            "from_chunk_uids": chunk.metadata["reference_from_chunk_ids"],
+            "keep_source_position": True,
         }
     if is_attachment_chunk(chunk.metadata):
         # 会話の添付から選んだ箇所(#2517)。rag_engine は文書の選択で後回しにせず、文書ごとの
