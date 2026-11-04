@@ -6359,30 +6359,61 @@ def answer_question_result(
 
     def evidence_result(context: AnswerContext, *, trace: Mapping[str, Any] | None = None) -> AnswerQuestionResult:
         """回答を作らずに、集めた根拠を返す（本文は空）。根拠の補いの記録は回答と同じ generation_trace に残す。"""
-        return _answer_question_result(
-            settings=settings,
-            expansion=expansion,
-            answer="",
-            response=AnswerResponse(answer_text="", generation_trace=dict(trace or {})),
-            records=context.records,
-            evidence_tree=context.evidence_tree,
-            text_search_info=text_search_info,
-            answer_flow=selected_answer_flow,
-            crag_attempts=crag_attempts,
-            question_plan=question_plan,
-            runtime_knowledge=runtime_knowledge,
-            retrieval_scope=selected_retrieval_scope,
-            classification_filter=selected_classification_filter,
-            retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
-            crag_rewrites=crag_rewrites,
-            retrieval_top_k=chunk_top_k,
-            request_question=request_text,
+        return record_flow_result(
+            _answer_question_result(
+                settings=settings,
+                expansion=expansion,
+                answer="",
+                response=AnswerResponse(answer_text="", generation_trace=dict(trace or {})),
+                records=context.records,
+                evidence_tree=context.evidence_tree,
+                text_search_info=text_search_info,
+                answer_flow=selected_answer_flow,
+                crag_attempts=crag_attempts,
+                question_plan=question_plan,
+                runtime_knowledge=runtime_knowledge,
+                retrieval_scope=selected_retrieval_scope,
+                classification_filter=selected_classification_filter,
+                retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+                crag_rewrites=crag_rewrites,
+                retrieval_top_k=chunk_top_k,
+                request_question=request_text,
+            )
         )
 
     # 根拠の件数の見出し（回答を作らないときに「回答に渡す」と示さない）。
     evidence_title = "回答に渡す根拠" if generate_answer else EVIDENCE_RESULT_TITLE
 
+    def record_flow_result(result: AnswerQuestionResult) -> AnswerQuestionResult:
+        flow_step.output(
+            lambda: {
+                "回答本文": result.answer_text,
+                "回答の構造": result.envelope,
+                "返却する根拠": result.evidence_items,
+                "引用した根拠ID": result.cited_evidence_ids,
+                "検索計画": result.retrieval_query_plan,
+                "生成の記録": result.generation_trace,
+                "不足理由": result.insufficient_reason,
+            }
+        )
+        return result
+
     with _execution_step(flow_name, flow_purpose) as flow_step:
+        flow_step.input(
+            lambda: {
+                "回答対象の質問": request_text,
+                "検索対象の質問": normalized_question,
+                "検索文": tuple(retrieval_queries),
+                "検索範囲": selected_retrieval_scope,
+                "分類条件": asdict(selected_classification_filter) if selected_classification_filter is not None else None,
+                "回答生成の要求": generate_answer,
+                "根拠補完の要求": complete_evidence,
+                "回答フロー": selected_answer_flow,
+                "起点数": chunk_top_k,
+                "前後それぞれのChunk数": chunk_neighbor_count,
+                "再ランキング": effective_rerank_enabled,
+            }
+        )
         flow_step.field("設定", answer_flow_label(selected_answer_flow))
         crag_attempts: tuple[CragRetrievalAttempt, ...] = ()
         crag_rewrites: tuple[str, ...] = ()
@@ -6479,20 +6510,22 @@ def answer_question_result(
         except AdbHybridSearchUnavailable as exc:
             flow_step.status = "中止"
             flow_step.add("文書検索を続行できません。" + ("回答文の生成は未実行です。" if generate_answer else ""))
-            return _answer_question_result(
-                settings=settings,
-                expansion=expansion,
-                answer=f"ADB hybrid search を使用できません: {exc}",
-                text_search_info=text_search_info,
-                answer_flow=selected_answer_flow,
-                crag_attempts=crag_attempts,
-                question_plan=question_plan,
-                runtime_knowledge=runtime_knowledge,
-                retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
-                retrieval_queries=retrieval_queries,
-                crag_rewrites=crag_rewrites,
-                retrieval_top_k=chunk_top_k,
+            return record_flow_result(
+                _answer_question_result(
+                    settings=settings,
+                    expansion=expansion,
+                    answer=f"ADB hybrid search を使用できません: {exc}",
+                    text_search_info=text_search_info,
+                    answer_flow=selected_answer_flow,
+                    crag_attempts=crag_attempts,
+                    question_plan=question_plan,
+                    runtime_knowledge=runtime_knowledge,
+                    retrieval_scope=selected_retrieval_scope,
+                    classification_filter=selected_classification_filter,
+                    retrieval_queries=retrieval_queries,
+                    crag_rewrites=crag_rewrites,
+                    retrieval_top_k=chunk_top_k,
+                )
             )
         if not complete_evidence:
             # 業務 Agent の根拠の取得: 主の文書の検索の後で止める（根拠の補いは呼び出し元がする）。
@@ -6769,22 +6802,24 @@ def answer_question_result(
             response = _with_guide_acquisition_notices(response, runtime_knowledge)
             if legacy_notice:
                 response = replace(response, answer_text=f"{response.answer_text}\n\n{legacy_notice}")
-            return _answer_question_result(
-                settings=settings,
-                expansion=expansion,
-                answer=_format_answer_response(response),
-                response=response,
-                text_search_info=text_search_info,
-                answer_flow=selected_answer_flow,
-                crag_attempts=crag_attempts,
-                question_plan=question_plan,
-                runtime_knowledge=runtime_knowledge,
-                retrieval_scope=selected_retrieval_scope,
-                classification_filter=selected_classification_filter,
-                retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
-                crag_rewrites=crag_rewrites,
-                retrieval_top_k=chunk_top_k,
-                request_question=request_text,
+            return record_flow_result(
+                _answer_question_result(
+                    settings=settings,
+                    expansion=expansion,
+                    answer=_format_answer_response(response),
+                    response=response,
+                    text_search_info=text_search_info,
+                    answer_flow=selected_answer_flow,
+                    crag_attempts=crag_attempts,
+                    question_plan=question_plan,
+                    runtime_knowledge=runtime_knowledge,
+                    retrieval_scope=selected_retrieval_scope,
+                    classification_filter=selected_classification_filter,
+                    retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+                    crag_rewrites=crag_rewrites,
+                    retrieval_top_k=chunk_top_k,
+                    request_question=request_text,
+                )
             )
 
         # 生成前は要求 ID だけを登録し、本文の文字上の一致から追加検索を決めない。
@@ -6974,26 +7009,28 @@ def answer_question_result(
         )
         if references:
             answer = f"{answer}\n\n参照:\n{references}"
-        return _answer_question_result(
-            settings=settings,
-            expansion=expansion,
-            answer=answer,
-            response=response,
-            records=context.records,
-            text_search_info=text_search_info,
-            answer_flow=selected_answer_flow,
-            crag_attempts=crag_attempts,
-            question_plan=question_plan,
-            runtime_knowledge=runtime_knowledge,
-            retrieval_scope=selected_retrieval_scope,
-            classification_filter=selected_classification_filter,
-            image_evidence=image_evidence,
-            image_prompt_mode=image_prompt_mode,
-            evidence_tree=context.evidence_tree,
-            retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
-            crag_rewrites=crag_rewrites,
-            retrieval_top_k=chunk_top_k,
-            request_question=request_text,
+        return record_flow_result(
+            _answer_question_result(
+                settings=settings,
+                expansion=expansion,
+                answer=answer,
+                response=response,
+                records=context.records,
+                text_search_info=text_search_info,
+                answer_flow=selected_answer_flow,
+                crag_attempts=crag_attempts,
+                question_plan=question_plan,
+                runtime_knowledge=runtime_knowledge,
+                retrieval_scope=selected_retrieval_scope,
+                classification_filter=selected_classification_filter,
+                image_evidence=image_evidence,
+                image_prompt_mode=image_prompt_mode,
+                evidence_tree=context.evidence_tree,
+                retrieval_queries=crag_attempts[-1].retrieval_queries if crag_attempts else retrieval_queries,
+                crag_rewrites=crag_rewrites,
+                retrieval_top_k=chunk_top_k,
+                request_question=request_text,
+            )
         )
 
 

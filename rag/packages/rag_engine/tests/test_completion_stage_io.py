@@ -32,7 +32,7 @@ class PolicyRecorder(Recorder):
         return observe()
 
 
-def run(monkeypatch, recorder, *, question="合成の質問", guide=None, generate=False, settings=None, search=None):
+def run(monkeypatch, recorder, *, question="合成の質問", guide=None, generate=False, complete=True, settings=None, search=None):
     original = context(parent("old", "合成本文"))
     monkeypatch.setattr(a, "load_latest_or_source_chunk_run", lambda *args, **kwargs: _chunk_run_stub())
     monkeypatch.setattr(a, "check_adb_hybrid_search_ready", lambda *args, **kwargs: None)
@@ -48,6 +48,7 @@ def run(monkeypatch, recorder, *, question="合成の質問", guide=None, genera
             answer_flow=a.STANDARD_ANSWER_FLOW_LABEL,
             guide_plan=guide,
             generate_answer=generate,
+            complete_evidence=complete,
             classification_filter=ClassificationFilter(large_category="synthetic-category"),
         )
 
