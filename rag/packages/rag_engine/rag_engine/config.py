@@ -286,8 +286,8 @@ class Settings:
     retrieval_stage_limits: dict[str, int] = field(default_factory=dict)
     max_context_records: int = DEFAULT_MAX_CONTEXT_RECORDS
     evidence_budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS
-    # 要求ごとの根拠の覆域を判定し、根拠の無い要求だけを 1 回ずつ再検索する (#1279)。LLM は呼ばない
-    # （embedding・hybrid 検索・rerank だけ）。回数・足す根拠の数・期限で抑える。
+    # 明示された材料不足の要求だけを再検索する。未実行の検索文を作れなければ、原質問のみを除く
+    # 自動選択で検索文を作る。回数・足す根拠の数・期限で抑える。
     request_coverage_retrieval_enabled: bool = False
     request_coverage_max_queries: int = 2
     request_coverage_max_chunks: int = 4

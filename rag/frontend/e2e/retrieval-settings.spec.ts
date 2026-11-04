@@ -24,6 +24,12 @@ for (const viewport of [
 
     await expect(page.getByRole("heading", { name: "検索方法", exact: true, level: 1 })).toBeVisible();
     await expect(page.getByTestId("answering-settings-card")).toBeVisible();
+    const recoveryHint = page.getByText(/^回答生成が明示した根拠不足の要求を/);
+    await expect(recoveryHint).toContainText("初回検索の「質問の言い換え・分解」とは別の処理です");
+    await expect(recoveryHint).toContainText("自動ルーティング（自動選択）");
+    await expect(recoveryHint).toContainText("「原質問のみ（言い換え・分解なし）」を含めない");
+    await expect(recoveryHint).toContainText("AI の呼び出しが増えることがあります");
+    await recoveryHint.screenshot({ path: testInfo.outputPath("request-coverage-help.png") });
     await expect(page.getByText("既定は 300 件です。0 は追加制限なしです。0～2000 件で指定します。検索文・検索経路ごとに取得する候補数の上限です。融合後の合計件数や、回答に使う根拠数とは異なります。", { exact: true })).toBeVisible();
     await page.locator('[id^="answering-retrieval-query-limit-"][id$="-hint"]').screenshot({ path: testInfo.outputPath("retrieval-query-limit-hint.png") });
     await expect(page.getByRole("button", { name: "回答の設定を保存", exact: true })).toBeVisible();

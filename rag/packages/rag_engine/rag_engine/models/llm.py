@@ -5,9 +5,20 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from functools import lru_cache
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, ModelWrapValidatorHandler, PrivateAttr, StrictInt, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    PrivateAttr,
+    StrictInt,
+    create_model,
+    field_validator,
+    model_validator,
+)
 from pydantic.json_schema import SkipJsonSchema
 
 
@@ -146,6 +157,18 @@ class QueryExpansionOutput(_StrictModel):
     """LLM が生成した検索 query バリエーションを保持します。"""
 
     queries: list[str]
+
+
+@lru_cache(maxsize=32)
+def query_routing_schema(allowed_strategies: tuple[str, ...] | None = None) -> type[QueryRoutingOutput]:
+    """呼出の用途に応じて、既存のルーティングの候補を schema で制限する。"""
+    if allowed_strategies is None:
+        return QueryRoutingOutput
+    known = set(get_args(QueryRoutingOutput.model_fields["strategy"].annotation))
+    if not allowed_strategies or not set(allowed_strategies) <= known:
+        raise ValueError("ルーティングの候補には既知の戦略 ID を一つ以上指定してください。")
+    fields: dict[str, Any] = {"strategy": (Literal.__getitem__(allowed_strategies), ...)}
+    return create_model("RestrictedQueryRoutingOutput", __base__=QueryRoutingOutput, **fields)
 
 
 # CRAG 評価の出力契約は Field(description) に置く。構造化出力の JSON schema としてモデルへ渡るため、prompt に
