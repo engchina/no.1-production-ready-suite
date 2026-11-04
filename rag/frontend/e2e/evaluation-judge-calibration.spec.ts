@@ -144,6 +144,39 @@ function answerMetrics() {
 }
 
 for (const viewport of VIEWPORTS) {
+  test("元にする品質評価の一覧は標準の高さで止まり、表の中でスクロールする (" + viewport.name + ")", { tag: "@responsive" }, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockEvaluationBasics(page);
+    await mockEvaluationJobs(page, { runResult: () => answerMetrics(), autoComplete: true });
+    await mockJudgeCalibration(page, { withSet: true });
+    const jobs = Array.from({ length: 30 }, (_, index) => ({
+      job_id: `job-${index}`,
+      kind: "run",
+      created_at: "2026-06-15T00:00:00Z",
+      finished_at: `2026-06-15T00:${String(index).padStart(2, "0")}:00Z`,
+      total_cases: 5,
+      compare: false,
+    }));
+    await page.route("**/sources**", (route) => route.fulfill({ json: { data: { jobs }, error_messages: [], warning_messages: [] } }));
+    await page.goto("/evaluation?tab=calibration");
+    await page.getByRole("button", { name: "記入の集合を作る" }).click();
+    const table = page.getByTestId("calibration-sources");
+    const checkboxes = table.getByRole("checkbox");
+    await expect(checkboxes).toHaveCount(30);
+    const region = await table.evaluate((element) => {
+      const scrolling = element.closest("[class*=overflow-auto]") ?? element.querySelector("[class*=overflow-auto]") ?? element;
+      return { client: scrolling.clientHeight, scroll: scrolling.scrollHeight };
+    });
+    expect(region.scroll).toBeGreaterThan(region.client);
+    // 低い方の段（md 以上は 28rem、md 未満は 17.5rem。14px ルート）を超えない。
+    expect(region.client).toBeLessThanOrEqual((viewport.width >= 768 ? 28 : 17.5) * 14);
+    // 最後の行は表の中をスクロールして選べる。
+    await checkboxes.last().check();
+    await expect(checkboxes.last()).toBeChecked();
+    await expect(checkboxes.last()).toBeInViewport();
+    await expectNoPageOverflow(page);
+  });
+
   test("判定の校正は集合を作り、blind で記入し、裁定し、校正して結果に校正済みを出す (" + viewport.name + ")", { tag: "@responsive" }, async ({
     page,
   }, testInfo) => {

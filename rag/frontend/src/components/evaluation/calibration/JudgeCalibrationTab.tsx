@@ -8,6 +8,7 @@ import {
   CardTitle,
   DataTable,
   FormActionBar,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   ListToolbar,
   PagedDataTable,
   PAGE_SIZE_OPTIONS,
@@ -539,6 +540,8 @@ function SourceJobTable({
       getRowKey={(row) => row.job_id}
       isRowSelected={(row) => selected.includes(row.job_id)}
       dense
+      stickyHeader
+      visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
       empty={
         <EmptyState title={t("evaluation.calibration.create.jobsEmpty")} />
       }
