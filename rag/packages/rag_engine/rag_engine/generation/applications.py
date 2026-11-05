@@ -375,7 +375,7 @@ APPLICATION_SYSTEM_PROMPT = (
 
 APPLICATION_PRESENTATION_INSTRUCTIONS = (
     "### 推導説明の表示\n"
-    "- 最初にoutput_languageを決める。言語の指定はschemaに従う。\n"
+    "- response_languageは検証済みの回答言語契約。output_languageはschemaの固定値を返し、言語を再選択しない。\n"
     "- application_presentationsのdisplay_reasoningに、output_languageで元の推導と同義の利用者向け説明を書く。\n"
     "- display_reasoningは原reasoningをそのまま再掲する欄ではなく、利用者に表示する説明の本体である。\n"
     "- 引用原文・SQL・コード・識別子・固有名詞・数値・式は翻訳しない。\n"
@@ -456,13 +456,15 @@ def run_application_step(
 ) -> tuple[list[CheckedApplication], str]:
     """当てはめだけを作り、検査と監査を通す。公開できる当てはめと、監査が支持した結論の文（無ければ空）を返す。"""
     inputs, supported = application_step_inputs(question, checked, request_units)
+    from rag_engine.generation.response_language import generation_language_schema
+
     draft = call_with_model_purpose(
         "answer.generate",
         parse_text,
         resolve_prompt("application.system", APPLICATION_SYSTEM_PROMPT),
         render_prompt(inputs),
         settings,
-        ApplicationDraft,
+        generation_language_schema(ApplicationDraft, question),
         provider_id=provider_id,
     )
     applications = check_applications(question, draft.applications, supported)
@@ -473,16 +475,34 @@ def run_application_step(
         return applications, ""
     from rag_engine.generation.application_review import application_documents
     from rag_engine.generation.input_budget import ensure_model_input
+    from rag_engine.generation.response_language import response_language_contract
 
-    schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in candidates))
+    inputs["response_language"] = response_language_contract(question, draft.response_language)
+    schema = audit_wire_schema(
+        ApplicationAudit,
+        (),
+        application_indexes=tuple(row["index"] for row in candidates),
+        output_language=inputs["response_language"]["language"],
+    )
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = render_prompt(
         {**inputs, "documents": application_documents(evidence_spans), "applications": candidates, "summary": draft.summary}
     )
     ensure_model_input(audit_settings, system, prompt, schema.model_json_schema(), provider_id=provider_id)
-    audit = canonical_audit_result(call_with_model_purpose(
-        "answer.audit", parse_text, system, prompt, audit_settings, schema, provider_id=provider_id,
-    ), schema).audit
+    audit = canonical_audit_result(
+        call_with_model_purpose(
+            "answer.audit",
+            parse_text,
+            system,
+            prompt,
+            audit_settings,
+            schema,
+            provider_id=provider_id,
+        ),
+        schema,
+    ).audit
+    if inputs["response_language"]["language"] is None:
+        audit = audit.model_copy(update={"output_language": None})
     apply_application_audit(applications, audit, require_complete=True)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""

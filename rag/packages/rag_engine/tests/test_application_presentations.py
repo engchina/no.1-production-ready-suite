@@ -31,7 +31,7 @@ def payload(base=ApplicationAudit, *, indexes=(0,)):
         if base is ApplicationAudit
         else legacy_audit_to_wire_fixture(GroundedAudit(reviews=[], summary_supported=True, goal_alignment="aligned"), schema)
     )
-    value["output_language"] = "日本語"
+    value["output_language"] = "ja"
     value["application_reviews"] = {f"A{i}": {"valid": True, "reason": "規則と一致"} for i in indexes}
     value["application_presentations"] = {f"A{i}": {"display_reasoning": DISPLAY, "equivalent": True} for i in indexes}
     return schema, value
@@ -130,6 +130,7 @@ def test_existing_audit_reuses_display_without_model_call():
     trace = review_applications(
         "合計を日本語で説明してください。",
         [checked],
+        evidence_spans=[{"evidence_id": "E1", "text": SOURCE}],
         existing_audit=decode_audit_wire(json.dumps(raw), schema).audit,
         audit_requested=True,
         parse_text=unused,
@@ -139,8 +140,9 @@ def test_existing_audit_reuses_display_without_model_call():
     assert trace["calls"] == 0 and checked.presentation["reasoning"] == DISPLAY
 
 
-@pytest.mark.parametrize("display_state", ["confirmed", "missing", "not_equivalent"])
-def test_generation_keeps_valid_result_and_source_while_english_never_falls_back(display_state):
+@pytest.mark.parametrize("audit_mode", ["none", "standard", "detailed"])
+@pytest.mark.parametrize("display_state", ["confirmed", "missing", "not_equivalent", "invalid_language"])
+def test_generation_keeps_valid_result_and_source_while_english_never_falls_back(display_state, audit_mode):
     import re
     from dataclasses import replace
 
@@ -157,15 +159,39 @@ def test_generation_keeps_valid_result_and_source_while_english_never_falls_back
         calls.append(schema)
         if is_audit_wire(schema):
             _, raw = payload()
+            if schema.canonical_schema is not ApplicationAudit:
+                source = GroundedAudit(
+                    reviews=[
+                        {
+                            "index": 0,
+                            "support": "supported",
+                            "applicability": "matched",
+                            "source_applicability": "matched",
+                            "reason": "原文対応",
+                        }
+                    ],
+                    request_reviews=[
+                        {"request_id": key, "status": "addressed", "reason": "要求に回答"} for key in schema.expected_request_ids
+                    ],
+                    application_reviews=[{"index": 0, "valid": True, "reason": "推導対応"}],
+                    application_presentations=[{"index": 0, "display_reasoning": DISPLAY, "equivalent": True}],
+                    output_language="ja",
+                    summary_supported=True,
+                    goal_alignment="aligned",
+                )
+                raw = legacy_audit_to_wire_fixture(source, schema)
             if display_state == "missing":
                 raw["application_presentations"] = {}
             elif display_state == "not_equivalent":
                 raw["application_presentations"]["A0"]["equivalent"] = False
-            return decode_audit_wire(json.dumps(raw), schema)
+            result = decode_audit_wire(json.dumps(raw), schema)
+            return result
         units = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
         value = selected_answer_payload(units, text="3400円")
         value["answer_parts"][0]["answer"]["reasoning"] = ORIGINAL
         value["summary_part_indexes"] = [0]
+        if display_state == "invalid_language":
+            value["response_language"] = {"selection": {"kind": "explicit", "quote": "invented language"}}
         return schema.model_validate(value)
 
     def unused(*a, **kw):
@@ -184,7 +210,7 @@ def test_generation_keeps_valid_result_and_source_while_english_never_falls_back
         chunk_id="a",
         source_run_id="synthetic",
     )
-    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode="none", answer_max_correction_rounds=0)
+    settings = replace(get_settings(environ={}, dotenv_path=None), answer_audit_mode=audit_mode, answer_max_correction_rounds=0)
     with bind_dependencies(AnswerDependencies(unused, unused, parse, unused, unused)):
         response = synthesize_grounded_answer(
             "項目Aを3個、項目Bを2個利用する合計額を教えてください。",
@@ -193,6 +219,9 @@ def test_generation_keeps_valid_result_and_source_while_english_never_falls_back
             image_prompt_mode="text_only",
         ).response
     assert len(calls) == 2
+    assert response.generation_trace["applications"][0]["published"], json.dumps(
+        response.generation_trace["applications"], ensure_ascii=False
+    )
     assert response.answer_text.startswith("3400円") and SOURCE in response.answer_text
     assert ORIGINAL not in response.answer_text
     assert (DISPLAY in response.answer_text) == (display_state == "confirmed")

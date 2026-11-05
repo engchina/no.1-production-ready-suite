@@ -120,7 +120,7 @@ def test_source_method_and_result_precede_global_coverage_without_dropping_guard
     raw, schema, catalog = case()
     document = schema.model_json_schema()
     fields = list(document["properties"])
-    assert fields[0] == "answer_parts"
+    assert fields[:2] == ["response_language", "answer_parts"]
     assert fields[-1] == "request_coverage"
     supported = document["$defs"]["SupportedAnswerPart"]
     assert list(supported["properties"]) == ["kind", "basis", "reasoning", "result"]

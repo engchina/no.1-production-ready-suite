@@ -3598,6 +3598,7 @@ def synthesize_grounded_answer(
             diagnostic = review_applications(
                 question,
                 current.applications,
+                response_language=current.draft.response_language,
                 evidence_spans=spans,
                 existing_audit=None,
                 audit_requested=False,

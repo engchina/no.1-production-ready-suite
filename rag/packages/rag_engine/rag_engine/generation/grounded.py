@@ -82,6 +82,7 @@ from rag_engine.generation.guide_context import audit_guide_candidates
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
+from rag_engine.generation.response_language import generation_language_schema, response_language_contract
 from rag_engine.generation.semantic_observation import diagnostic_only, observation_policy, unverified_projection
 from rag_engine.generation.table_binding import table_mismatch_notes, unbound_table_values
 from rag_engine.generation.table_revision import ParseText, revise_table_passage
@@ -269,7 +270,7 @@ GENERATE_SYSTEM_PROMPT = (
 - 応答 schema の件数と長さの範囲で、同じ根拠の同じ説明をまとめ、質問に必要な内容を優先する。
 ### summary と言語
 - 回答の冒頭へ示す要点を summary_part_indexes で選ぶ。新しい摘要の自由文は書かない。
-- result・reasoning・requirement・text は質問の回答指示（kind=context にある書き方の指示も含む）に従い、言語の指定がなければ質問と同じ言語で書く。引用原文と逐語で示す語句は原文の表記と言語のままにする。
+- result・reasoning・requirement・text は response_language の回答言語契約に従う。引用原文と逐語で示す語句は原文の表記と言語のままにする。
 """
 )
 
@@ -6787,7 +6788,7 @@ def run_round(
     )
     unit_catalog = generation_unit_catalog(spans, sent_only=True)
     generation_base = _generation_base_model(question, guided=bool(guide_step_contracts))
-    generation_model = unit_generation_model(generation_base, unit_catalog)
+    generation_model = generation_language_schema(unit_generation_model(generation_base, unit_catalog), question)
     input_snapshot = {
         "capture_scope": "application_evidence_blocks",
         "transport_capture": "not_recorded",
@@ -6946,6 +6947,8 @@ def run_round(
         if scope_plan is not None:
             draft = draft.model_copy(update={"request_coverage": scope_plan.request_coverage})
         generation_calls = 1 + int(scope_plan is not None) + int(bool(scope_plan_repair))
+    if previous_draft is not None:
+        draft = draft.model_copy(update={"response_language": previous_draft.response_language})
     plan_errors = _request_plan_errors(draft, spans)
     plan_unsettled: list[str] = []
     plan_recovery = ""
@@ -7211,6 +7214,7 @@ def run_round(
             "question": effective_contract.get("current_request", question) if guide_task_scope else question,
             **({"original_question": question} if guide_task_scope else {}),
             "task_contract": effective_contract,
+            "response_language": response_language_contract(question, draft.response_language),
             "summary": str(draft.summary),
             "items": [
                 {
@@ -7426,6 +7430,7 @@ def run_round(
         review_applications(
             question,
             applications,
+            response_language=draft.response_language,
             evidence_spans=spans,
             existing_audit=application_audit,
             audit_requested=True,
@@ -7689,6 +7694,7 @@ def _parse_audit(
         request_ids,
         requirement_ids,
         application_indexes=tuple(row["index"] for row in inputs.get("applications", [])),
+        output_language=inputs.get("response_language", {}).get("language") if inputs.get("applications") else None,
     )
     result = canonical_audit_result(
         call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
@@ -7696,6 +7702,8 @@ def _parse_audit(
     if not isinstance(result.audit, GroundedAudit):
         raise TypeError("通常監査のcanonical型が一致しません。")
     audit = result.audit
+    if inputs.get("response_language", {}).get("status") == "unconfirmed":
+        audit = audit.model_copy(update={"output_language": None})
     audit._wire_validation = result.validation
     return audit
 

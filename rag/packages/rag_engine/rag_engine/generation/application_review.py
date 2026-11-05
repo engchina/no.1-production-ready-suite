@@ -21,8 +21,9 @@ from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.document_background import background_label
 from rag_engine.generation.document_inputs import document_groups, document_key
 from rag_engine.generation.input_budget import ensure_model_input
+from rag_engine.generation.response_language import response_language_contract
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
-from rag_engine.models.llm import ApplicationAudit, GroundedAudit
+from rag_engine.models.llm import ApplicationAudit, GroundedAudit, ResponseLanguage
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, deadline_cut_short
 from rag_engine.resources.runtime import resolve_prompt
 
@@ -71,6 +72,7 @@ def review_applications(
     checked: Sequence[CheckedApplication],
     *,
     evidence_spans: Sequence[dict[str, Any]] | None = None,
+    response_language: ResponseLanguage | None = None,
     existing_audit: GroundedAudit | None,
     audit_requested: bool,
     parse_text: Callable[..., Any],
@@ -109,6 +111,7 @@ def review_applications(
     index = {id(item): position for position, item in enumerate(items)}
     inputs: dict[str, Any] = {
         "question": question,
+        "response_language": response_language_contract(question, response_language or ResponseLanguage()),
         "documents": application_documents(evidence_spans),
         "items": [
             {"index": position, "text": item.item.text, "quote": item.item.quote or item.item.text, "source": _source_label(item.span)}
@@ -119,7 +122,12 @@ def review_applications(
     }
     if premises := confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources):
         inputs["confirmed_premises"] = premises
-    schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in inputs["applications"]))
+    schema = audit_wire_schema(
+        ApplicationAudit,
+        (),
+        application_indexes=tuple(row["index"] for row in inputs["applications"]),
+        output_language=inputs["response_language"]["language"],
+    )
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = json.dumps(inputs, ensure_ascii=False)
     started = monotonic()
@@ -127,6 +135,7 @@ def review_applications(
         "status": "completed",
         "calls": 0,
         "prompt_chars": len(system) + len(prompt),
+        "response_language": inputs["response_language"],
         "evidence_spans": len(evidence_spans),
         "evidence_scope": "generation_selected_originals",
     }
@@ -138,6 +147,8 @@ def review_applications(
             call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
         )
         audit = result.audit
+        if inputs["response_language"]["language"] is None:
+            audit = audit.model_copy(update={"output_language": None})
         diagnostic["contract"] = result.validation
         if any(row.index not in range(len(candidates)) for row in audit.application_reviews):
             diagnostic["status"] = "invalid_contract"

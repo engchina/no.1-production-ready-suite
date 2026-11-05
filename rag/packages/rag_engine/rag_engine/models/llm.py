@@ -15,6 +15,7 @@ from pydantic import (
     ModelWrapValidatorHandler,
     PrivateAttr,
     StrictInt,
+    ValidationError,
     create_model,
     field_validator,
     model_validator,
@@ -592,6 +593,39 @@ class AnswerPart(_StrictModel):
     )
 
 
+class DefaultResponseLanguage(_StrictModel):
+    kind: Literal["default"] = Field(default="default", description="原質問に回答言語の明示指定が無い。")
+
+
+class ExplicitResponseLanguage(_StrictModel):
+    kind: Literal["explicit"] = Field(default="explicit", description="原質問に回答言語の明示指定がある。")
+    quote: str = Field(
+        min_length=1,
+        description="原質問で回答言語を指定している語句だけを、連続した原文のまま写す。言語コードへの変換や、原質問に無い言語名の追加はしない。",
+    )
+
+
+class ResponseLanguage(_StrictModel):
+    """回答言語の指定原文または指定なしを、一度だけ次段へ渡す。"""
+
+    invalid: SkipJsonSchema[bool] = False
+
+    selection: DefaultResponseLanguage | ExplicitResponseLanguage = Field(
+        default_factory=DefaultResponseLanguage,
+        discriminator="kind",
+        description="回答言語の明示指定だけを原質問から選ぶ。質問本文・引用原文・SQLが何語で書かれたかの分類ではない。",
+    )
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _isolate_language_error(cls, data: Any, handler: ModelWrapValidatorHandler[ResponseLanguage]) -> ResponseLanguage:
+        """表示言語の不正だけで、生成済みの事実や推導を捨てない。"""
+        try:
+            return handler(data)
+        except ValidationError:
+            return cls.model_construct(selection=DefaultResponseLanguage(), invalid=True)
+
+
 class GroundedDraft(_StrictModel):
     """主張と引用の対で構成する回答草稿。本文の体裁は render が決定的に組み立てる。"""
 
@@ -603,6 +637,10 @@ class GroundedDraft(_StrictModel):
     _citation_snapshots: tuple[Any, ...] = PrivateAttr(default=())
     # 新wireの摘要は既出出力の選択だけ。依存が非公開になれば機械的に保留する。
     _composed_summary: bool = PrivateAttr(default=False)
+
+    response_language: ResponseLanguage = Field(
+        default_factory=ResponseLanguage, description="最初に決めた回答言語。次段はこの契約を保持する。"
+    )
 
     request_coverage: list[RequestCoverage] = Field(
         default_factory=list, max_length=64, description="要求単位ごとに使う根拠の計画。items より先に書く。"
@@ -820,12 +858,14 @@ class GroundedApplicationPresentation(_StrictModel):
 
 class _PresentationAudit(_StrictModel):
     output_language: str | None = Field(
-        default=None, min_length=1, description="利用者への説明に用いる言語。利用者の明示指定に従い、指定がなければ日本語。"
+        default=None, min_length=1, description="固定されたresponse_language.languageの写し。言語を再選択しない。"
     )
 
 
 class ApplicationDraft(_StrictModel):
     """規則の当てはめだけを作る段の出力（#2159）。結論の文は当てはめと規則でつないだものだけ。"""
+
+    response_language: ResponseLanguage = Field(default_factory=ResponseLanguage)
 
     applications: list[GroundedApplication] = Field(
         default_factory=list,
