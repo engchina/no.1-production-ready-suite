@@ -85,7 +85,7 @@ async def test_saved_resume_never_reconstructs_a_missing_quality_report(
     pipeline._recipe_id = "synthetic-recipe" if recipe else None
     pipeline._oracle = cast(Any, oracle)
     report_builds: list[str] = []
-    original_builder = module.build_ingestion_quality_report
+    original_builder = build_ingestion_quality_report
 
     def traced_builder(*args: Any, **kwargs: Any) -> Any:
         report_builds.append("rebuilt")
