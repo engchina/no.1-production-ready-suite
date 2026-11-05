@@ -4590,13 +4590,15 @@ async def _enqueue_ingestion_job_for_document(
             skip_reason="already_indexed",
             phase=phase,
         )
-    if phase == IngestionJobPhase.EXTRACT and (
-        detail.preprocess_artifact is None or not detail.preprocess_artifact.object_storage_path
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
-        )
+    if phase == IngestionJobPhase.EXTRACT:
+        recipe = await oracle.ensure_default_document_recipe(document_id)
+        raw_artifact = recipe.get("preprocess_artifact")
+        artifact = DocumentPreprocessArtifact.model_validate(raw_artifact) if raw_artifact else None
+        if artifact is None or not artifact.object_storage_path:
+            raise HTTPException(
+                status_code=409,
+                detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+            )
     if await _has_served_output(oracle, document_id):
         # 検索に出している版は切替まで残す。解析はやり直すので区間の checkpoint だけ消す（#4115）。
         recipe = await oracle.ensure_default_document_recipe(document_id)
@@ -6268,9 +6270,11 @@ async def _document_preview_page_image_response(
     )
 
 
-@router.get("/{document_id}/crop")
+@router.get("/{document_id}/recipes/{recipe_id}/crop")
 async def document_crop(
     document_id: str,
+    recipe_id: str,
+    revision: Annotated[str, Query(min_length=1, max_length=64)],
     page: Annotated[int, Query(ge=1, le=10000)],
     x0: Annotated[float, Query(ge=0)],
     y0: Annotated[float, Query(ge=0)],
@@ -6283,12 +6287,14 @@ async def document_crop(
     """解析に使ったファイルから bbox の領域を PNG で切り出す(解析結果プレビュー用)。
 
     bbox は解析結果のページ画像 px 座標(page_width / page_height 基準)。ファイル準備後の
-    artifact があればそれ(解析対象)を、無ければ原本を開く。画像ファイルは 1 ページとして扱う。
+    指定した抽出版の系譜から読み、現在のレシピのファイルで代用しない。画像は1ページとして扱う。
     """
     if x1 <= x0 or y1 <= y0 or x1 > page_width * 1.001 or y1 > page_height * 1.001:
         raise HTTPException(status_code=422, detail="切り出し範囲が不正です。")
     try:
-        data = await load_parsed_source(OracleClient(), document_id)
+        data = await load_parsed_source(
+            OracleClient(), document_id, recipe_id, extraction_recipe_id=revision
+        )
     except DocumentSourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
