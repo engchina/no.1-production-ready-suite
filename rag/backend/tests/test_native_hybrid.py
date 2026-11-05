@@ -101,12 +101,10 @@ class NativeOracle(OracleClient):
 
 
 @pytest.mark.asyncio
-async def test_both_entry_points_execute_native_and_never_sudachi() -> None:
+async def test_both_entry_points_execute_native_and_never_legacy_sql() -> None:
     client = NativeOracle()
     vector = [1.0] * 1536
-    with patch(
-        "app.clients.oracle._oracle_text_query", side_effect=AssertionError("Sudachi呼出し禁止")
-    ):
+    with patch("app.clients.oracle._oracle_text_query", return_value="{合成}"):
         one = await client.hybrid_search("合成の質問", vector, 4)
         many = await client.search_many(
             [("合成の質問", vector, SearchMode.VECTOR), ("合成の質問", vector, SearchMode.KEYWORD)],
@@ -1146,3 +1144,63 @@ async def test_unlimited_native_request_uses_actual_authorized_cardinality() -> 
     assert spec["vector"]["result_max"] == 3300
     assert spec["text"]["result_max"] == 3300
     assert spec["return"]["topN"] == 6600
+
+
+@pytest.mark.parametrize("channel", ["keyword", "hybrid"])
+def test_native_contains_request_preserves_non_text_contract(channel: str) -> None:
+    before = native_search_request(
+        query="合成質問", vector=[1, 0], channel=channel, allowed_ids=["a"], limit=10
+    )
+    after = native_search_request(
+        query="合成質問",
+        vector=[1, 0],
+        channel=channel,
+        allowed_ids=["a"],
+        limit=10,
+        text_contains="{合成} ACCUM {質問}",
+    )
+    assert after["text"].pop("contains") == "{合成} ACCUM {質問}"
+    assert before["text"].pop("search_text") == "合成質問"
+    assert after == before
+
+
+@pytest.mark.parametrize("channel", ["keyword", "hybrid", "vector"])
+@pytest.mark.asyncio
+async def test_native_contains_is_built_once_for_all_filter_batches(channel: str) -> None:
+    client = LongScopeOracle()
+    client._settings = client._settings.model_copy(update={"rag_domain_keywords": ["合成識別語"]})
+    with patch("app.clients.oracle._oracle_text_query", return_value="{合成識別語}*2") as tokenize:
+        await client._native_rows(channel, "合成識別語の質問", [1.0] * 1536, top_k=50, filters={})
+    assert len(client.searches) == 6
+    if channel == "vector":
+        tokenize.assert_not_called()
+        assert all("text" not in spec for spec in client.searches)
+    else:
+        tokenize.assert_called_once_with("合成識別語の質問", settings=client._settings)
+        assert all(spec["text"]["contains"] == "{合成識別語}*2" for spec in client.searches)
+        assert all("search_text" not in spec["text"] for spec in client.searches)
+    assert all(
+        spec["return"]["topN"] == (100 if channel == "hybrid" else 50) for spec in client.searches
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_contains_without_terms_preserves_full_query() -> None:
+    client = CompleteScopeOracle()
+    specs: list[dict[str, Any]] = []
+    original = client._fetch_all
+
+    async def capture(
+        sql: str, binds: Mapping[str, object] | None = None
+    ) -> list[dict[str, object]]:
+        if "DBMS_HYBRID_VECTOR.SEARCH" in sql:
+            specs.append(json.loads(str((binds or {})["native_spec"])))
+        return await original(sql, binds)
+
+    with (
+        patch.object(client, "_fetch_all", capture),
+        patch("app.clients.oracle._oracle_text_query", return_value=None),
+    ):
+        await client._native_rows("keyword", "。", [], top_k=10, filters={})
+    assert specs[0]["text"]["search_text"] == "。"
+    assert "contains" not in specs[0]["text"]
