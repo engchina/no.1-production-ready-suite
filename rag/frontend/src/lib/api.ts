@@ -1,3 +1,4 @@
+import type { FailureDiagnosis } from "@production-ready/ui";
 import type { EvidenceReadingInput, EvidenceReadingWindow, OriginalSourceInput, OriginalSourceWindow } from "@production-ready/ui";
 import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
 /**
@@ -5515,6 +5516,8 @@ export interface StorageFailure {
 }
 
 export interface RunDetail extends RunSummary {
+  /** 安全な失敗分類。古い記録では未記録。例外本文は含まない。 */
+  failure_diagnosis?: FailureDiagnosis | null;
   error_type: string | null;
   /** 失敗のエラーコード（ORA-03146 など。#2342）。古い記録には無い。 */
   error_code?: string | null;
