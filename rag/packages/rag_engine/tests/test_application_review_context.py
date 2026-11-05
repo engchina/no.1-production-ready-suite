@@ -126,3 +126,20 @@ def test_document_groups_preserve_versions_and_source_order_without_truncation()
     assert [doc["document_scope"] for doc in documents] == [["doc-a", "v1"], ["doc-b", "v1"], ["doc-a", "v2"]]
     assert [value["text"] for value in documents[0]["evidence"]] == [first["text"], last["text"]]
     assert documents[0]["evidence"][1]["source_id"] == "s1"
+
+
+def test_document_background_keeps_its_non_citable_role_and_completeness() -> None:
+    background = {
+        **spans()[0],
+        "origin": "document_background",
+        "document_background_only": True,
+        "background_ref": {"truncated": True},
+    }
+    value = application_documents([background])[0]["evidence"][0]
+    assert value["text"] == TABLE
+    assert value["origin"] == "document_background"
+    assert value["document_background_only"] is True
+    assert value["background_ref"] == {"truncated": True}
+    assert "先頭ページ背景" in value["role"]
+    assert "引用対象外" in value["role"]
+    assert "欠落のある旧記録" in value["role"]

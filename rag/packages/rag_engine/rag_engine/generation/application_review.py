@@ -18,6 +18,7 @@ from rag_engine.generation.applications import (
     audit_view,
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
+from rag_engine.generation.document_background import background_label
 from rag_engine.generation.document_inputs import document_groups, document_key
 from rag_engine.generation.input_budget import ensure_model_input
 from rag_engine.models.llm import ApplicationAudit, GroundedAudit
@@ -33,22 +34,29 @@ def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any
             "source": str(members[0].get("source") or ""),
             "evidence": [
                 {
-                    key: span[key]
-                    for key in (
-                        "evidence_id",
-                        "source_id",
-                        "source",
-                        "page",
-                        "page_end",
-                        "section_path",
-                        "source_order",
-                        "start",
-                        "end",
-                        "text",
-                        "excerpt_only",
-                        "limits",
-                    )
-                    if key in span
+                    **{
+                        key: span[key]
+                        for key in (
+                            "evidence_id",
+                            "source_id",
+                            "source",
+                            "page",
+                            "page_end",
+                            "section_path",
+                            "source_order",
+                            "start",
+                            "end",
+                            "text",
+                            "excerpt_only",
+                            "limits",
+                            "origin",
+                            "tags",
+                            "document_background_only",
+                            "background_ref",
+                        )
+                        if key in span
+                    },
+                    **({"role": background_label(span)} if span.get("document_background_only") else {}),
                 }
                 for span in members
             ],
