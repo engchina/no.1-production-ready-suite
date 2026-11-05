@@ -1101,7 +1101,7 @@ function RunChatTurn({
           <>
             <p className="text-xs text-fg-muted" data-testid="chat-progress-legacy">{traceLabels.legacy}</p>
             <RunProcessDetails traceId={progress.traceId} metadata={{ conversationId: run.thread_id ?? null, messageId: run.id }}>
-              <RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model }] : []} />
+              <RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model, valueKind: "identifier" as const }] : []} />
             </RunProcessDetails>
           </>
         ) : (
@@ -1115,7 +1115,7 @@ function RunChatTurn({
             // 処理の経過と同じ記録を詳細で繰り返さない。
             traceId={progress.traceId}
             processDetailsProps={{ metadata: { conversationId: run.thread_id ?? null, messageId: run.id } }}
-            footer={<RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model }] : []} events={progress.events} />}
+            footer={<RunUsedModels models={run.usage?.model ? [{ label: "LLM", value: run.usage.model, valueKind: "identifier" as const }] : []} events={progress.events} />}
             steps={stepsWithDetails}
             startedAt={run.created_at}
             slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}

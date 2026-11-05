@@ -676,7 +676,7 @@ function DbAdminChatTurn({
       <ChatAnswer>
         {progress.legacy ? (
           <><ProgressLegacyNotice testId={`${TEST_ID}-progress-legacy`} />
-            <RunProcessDetails metadata={{ conversationId, messageId: turn.turn_id }}><RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model }] : []} /></RunProcessDetails>
+            <RunProcessDetails metadata={{ conversationId, messageId: turn.turn_id }}><RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model, valueKind: "identifier" as const }] : []} /></RunProcessDetails>
           </>
         ) : (
           <ChatProgress
@@ -686,7 +686,7 @@ function DbAdminChatTurn({
             terminalStatus={progress.terminal}
             traceId={progress.traceId}
             processDetailsProps={{ metadata: { conversationId, messageId: turn.turn_id } }}
-            footer={<RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model }] : []} />}
+            footer={<RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model, valueKind: "identifier" as const }] : []} />}
             labels={CHAT_PROGRESS_LABELS}
             partial={progress.partial}
             testId={`${TEST_ID}-progress`}

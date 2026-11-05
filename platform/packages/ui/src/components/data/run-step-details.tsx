@@ -34,6 +34,8 @@ export interface RunStepDetailField {
   value: string;
   /** 識別子・SQL の断片などを等幅で出す。 */
   mono?: boolean;
+  /** 比較する数値は本文の書体のまま等幅数字にする。 */
+  tabular?: boolean;
   /** 共通の span 投影が付ける技術属性。経過では省略し、軌跡に残す。 */
   technical?: boolean;
   copyValue?: string;
@@ -53,14 +55,22 @@ export function runStepResultSummary(details: RunStepDetails | null | undefined,
   return [...new Set([fallback, result].filter(Boolean))].join(" · ") || undefined;
 }
 
+/** 記録の型と固定された統計キーから表示意味を付ける。表示文字列から意味を推測しない。 */
+function callStatisticField(key: string, value: unknown, labels: RunStepDetailsLabels): RunStepDetailField | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const label = labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"];
+  if (!label) return null;
+  return { label, value: String(value), mono: key === "model", tabular: typeof value === "number" && Number.isFinite(value) };
+}
+
 export function runStepTechnicalFields(details: RunStepDetails | null | undefined): readonly RunStepDetailField[] {
   const fields = [...(details?.fields?.filter(field => field.technical) ?? [])];
   if (details?.call) {
     const labels = DEFAULT_RUN_STEP_DETAILS_LABELS;
     for (const [key, value] of Object.entries(callPresentation(details.call).stats)) {
       if ((typeof value !== "string" && typeof value !== "number") || (key === "model" && fields.some(field => field.label === "gen_ai.request.model"))) continue;
-      const label = labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"];
-      if (label && !fields.some(field => field.label === label && field.value === String(value))) fields.push({label, value: String(value), technical: true});
+      const field = callStatisticField(key, value, labels);
+      if (field && !fields.some(other => other.label === field.label && other.value === field.value)) fields.push({...field, technical: true});
     }
   }
   return fields;
@@ -252,6 +262,7 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
                 className={cn(
                   "flex min-w-0 flex-wrap items-center gap-2 whitespace-pre-wrap break-words text-fg [overflow-wrap:anywhere]",
                   field.mono && "font-mono",
+                  field.tabular && "tnum",
                   field.copyValue && "flex flex-wrap items-center gap-2"
                 )}
               >
@@ -301,8 +312,8 @@ function RunStepDetailsBody({ details, labels: labelsInput, className, testId }:
 export function RunStepTiming({startedAt, finishedAt, labels: input}: {startedAt?: string | null; finishedAt?: string | null; labels?: Partial<RunStepDetailsLabels>}) {
   const labels = {...DEFAULT_RUN_STEP_DETAILS_LABELS, ...input};
   return <RunStepDetailsBody details={{fields: [
-    {label: labels.startedAt, value: startedAt ? formatRunDateTime(startedAt, {seconds: true, timeZone: true}) : labels.notRecorded, dateTime: startedAt ?? undefined},
-    {label: labels.finishedAt, value: finishedAt ? formatRunDateTime(finishedAt, {seconds: true, timeZone: true}) : labels.notRecorded, dateTime: finishedAt ?? undefined},
+    {label: labels.startedAt, value: startedAt ? formatRunDateTime(startedAt, {seconds: true, timeZone: true}) : labels.notRecorded, dateTime: startedAt ?? undefined, mono: Boolean(startedAt)},
+    {label: labels.finishedAt, value: finishedAt ? formatRunDateTime(finishedAt, {seconds: true, timeZone: true}) : labels.notRecorded, dateTime: finishedAt ?? undefined, mono: Boolean(finishedAt)},
   ]}} labels={labels} className="[&_dl]:grid-cols-[4rem_minmax(0,1fr)] @md:[&_dl]:grid-cols-[10rem_minmax(0,1fr)]" />;
 }
 
@@ -333,11 +344,11 @@ export function RunStepDetailsView(props: RunStepDetailsViewProps) {
     ]} />
     <TabPanel idPrefix={id} id={tab} value={tab}>
       {tab === "schema" ? <p className="mb-2 text-xs text-fg-muted">{labels.schemaDescription}</p> : null}
-      {tab === "overview" && overviewEmpty ? <p className="text-xs text-fg-muted">{props.stepStatus === "skipped" && !call ? labels.skipped : call?.capture_enabled === false ? labels.disabled : labels.notRecorded}</p> : tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => typeof value === "string" || typeof value === "number" ? [{ label: labels[key as "model" | "inputTokens" | "outputTokens" | "reasoningTokens" | "maxOutput" | "temperature" | "effort" | "requestedDimensions" | "inputType" | "topN"], value: String(value) }] : [])] }} testId={undefined} /> :
+      {tab === "overview" && overviewEmpty ? <p className="text-xs text-fg-muted">{props.stepStatus === "skipped" && !call ? labels.skipped : call?.capture_enabled === false ? labels.disabled : labels.notRecorded}</p> : tab === "overview" ? <RunStepDetailsBody {...props} details={{ ...props.details, fields: [...(props.details.fields ?? []), ...Object.entries(props.showStatistics === false ? {} : presentation?.stats ?? {}).flatMap(([key, value]) => callStatisticField(key, value, labels) ?? [])] }} testId={undefined} /> :
         tab === "timing" ? <RunStepDetailsBody details={{ fields: [
-          { label: labels.startedAt, value: props.timing?.startedAt ? formatRunDateTime(props.timing.startedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
-          { label: labels.finishedAt, value: props.timing?.finishedAt ? formatRunDateTime(props.timing.finishedAt, { seconds: true, timeZone: true }) : labels.notRecorded },
-          { label: labels.duration, value: formatRunDuration(props.timing?.durationMs, labels.notRecorded) },
+          { label: labels.startedAt, value: props.timing?.startedAt ? formatRunDateTime(props.timing.startedAt, { seconds: true, timeZone: true }) : labels.notRecorded, mono: Boolean(props.timing?.startedAt) },
+          { label: labels.finishedAt, value: props.timing?.finishedAt ? formatRunDateTime(props.timing.finishedAt, { seconds: true, timeZone: true }) : labels.notRecorded, mono: Boolean(props.timing?.finishedAt) },
+          { label: labels.duration, value: formatRunDuration(props.timing?.durationMs, labels.notRecorded), tabular: typeof props.timing?.durationMs === "number" && Number.isFinite(props.timing.durationMs) },
         ] }} labels={labels} /> :
         props.stepStatus === "skipped" && content.status === "not_recorded" && call?.capture_enabled !== false ? <p className="text-xs text-fg-muted">{labels.skipped}</p> :
         tab === "reasoning" && props.reasoningApplicable === false ? <p className="text-xs text-fg-muted">{labels.notApplicable}</p> :
@@ -380,7 +391,7 @@ function CallTextBlocks({ blocks, labels }: { blocks: readonly CallTextBlock[]; 
 
 function CallBody({ text }: { text: string }) {
   let json: string | null = null;
-  if (/^\s*[\[{]/.test(text)) {
+  if (/^\s*[[{]/.test(text)) {
     try { json = JSON.stringify(JSON.parse(text), null, 2); } catch { /* 不完全な記録は本文のまま表示する。 */ }
   }
   return json ? <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-fg [overflow-wrap:anywhere]">{json}</pre> :

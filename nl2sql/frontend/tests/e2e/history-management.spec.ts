@@ -1,3 +1,4 @@
+import { expectRunValueTypography } from "../../../../platform/packages/ui/e2e/run-value-typography";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
 // 実行履歴（#1955。UX 契約 run-history.md §7）: 共通の一覧（RunHistoryToolbar → RunHistoryTable → OffsetPagination）と
@@ -1014,6 +1015,12 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
   const timeline = page.getByTestId("history-detail-timeline");
   await inspectTraceStep(page, timeline, "generate_sql");
   const inspector = page.locator("[data-trace-inspector]");
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expectRunValueTypography(inspector);
+    await inspector.screenshot({path: testInfo.outputPath(`run-value-typography-${theme}.png`)});
+  }
+
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();
   expect(reads).toEqual([]);
   await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();
