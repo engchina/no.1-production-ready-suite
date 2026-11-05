@@ -3209,3 +3209,31 @@ for (const generated of generatedAnswers) {
     await page.getByTestId("answer-text").screenshot({ path: testInfo.outputPath(`generated-${generated.id}-chat.png`) });
   });
 }
+
+test("保存済みチャットの0spanでも書込欠落を隠さない", {tag:"@responsive"}, async ({page}, testInfo) => {
+  await mockChat(page, "ready", [
+    {...userMessage, content:"合成の質問"},
+    {...assistantMessage, content:"合成の回答", trace_id:SPAN_TRACE_ID},
+  ]);
+  await mockTraceApi(page, { [assistantMessage.message_id]: {events:[], droppedSpans:7} });
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, searchAnswerProfile.name);
+  const history = await openChatHistory(page);
+  await history.getByRole("list", {name:"会話の履歴"}).getByRole("button").filter({hasText:"件・"}).click();
+  const partial = page.locator('[data-testid$="-partial-write-dropped"]');
+  await expect(partial).toHaveText("一部の処理だけを記録しています。");
+  await expect(page.getByText("合成の回答", {exact:true})).toBeVisible();
+  for (const theme of ["light","dark"]) {
+    await page.evaluate(value => {document.documentElement.dataset.theme=value;}, theme);
+    await partial.evaluate(element => element.scrollIntoView({block:"center"}));
+    for (const notice of await partial.locator("p").all()) {
+      await expect(notice).toBeInViewport();
+      expect(await notice.evaluate(element => {
+        const rect=element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2));
+      })).toBe(true);
+    }
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath(`zero-span-chat-${theme}.png`)});
+  }
+});

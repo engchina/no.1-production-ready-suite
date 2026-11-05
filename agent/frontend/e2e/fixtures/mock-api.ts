@@ -3122,7 +3122,8 @@ function traceSnapshot(run: Json): Json {
       status: terminal,
     });
   }
-  return { target_id: run.id, trace_id: traceId, events, dropped_spans: Number(run.trace_dropped_spans ?? 0) };
+  // 読取打切りは保存Runの属性ではなく、合成trace API応答だけに使う試験入力。
+  return { target_id: run.id, trace_id: traceId, events, dropped_spans: Number(run.trace_dropped_spans ?? 0), read_truncated: run.trace_read_truncated === true };
 }
 
 /** Run の trace id（spec が入れていなければ、span の記録があれば mock の trace id）。 */

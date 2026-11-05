@@ -200,6 +200,8 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
               empty={progress.legacy && !progress.partial ? <ProgressLegacyNotice testId="history-detail-timeline-legacy" /> : undefined}
               // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
               partial={progress.partial}
+              readTruncated={progress.readTruncated}
+              droppedSpans={progress.droppedSpans}
               labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
               processDetailsProps={{ metadata: { conversationId: item.kind === "chat" ? item.session_id ?? null : null, messageId: item.id }, title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}

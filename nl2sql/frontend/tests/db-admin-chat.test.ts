@@ -180,7 +180,7 @@ test("ターンの処理の経過: span の無い古いターンは古い形式�
   assert.equal(partial.legacy, false);
   assert.equal(partial.partial, true);
   // まだ読めていないターンは何も出さない（古い形式とも出さない）。
-  assert.deepEqual(dbAdminChatTraceProgress("turn-1", undefined), { steps: [], terminal: null, legacy: false, partial: false });
+  assert.deepEqual(dbAdminChatTraceProgress("turn-1", undefined), { steps: [], terminal: null, legacy: false, partial: false, readTruncated: false, droppedSpans: 0 });
   const done = dbAdminChatTraceProgress("turn-1", { events: generationSnapshot("done"), droppedSpans: 0 });
   assert.equal(done.legacy, false);
   assert.equal(done.terminal, "done");
@@ -321,4 +321,16 @@ test("開き直したターンは、保存した文ごとの最後の実行と�
   assert.equal(executions.runAll?.saved?.stopped_at, 2);
   const empty = dbAdminChatSavedExecutions(savedTurn({ statement_executions: [], last_run_all: null }));
   assert.deepEqual(empty, { statements: {}, runAll: null });
+});
+
+
+test("DB管理の読取上限をwriter欠落と区別し、0spanも不完全として残す", () => {
+  const reader = dbAdminChatTraceProgress("turn-1", {events: [], droppedSpans: 0, readTruncated: true});
+  assert.equal(reader.partial, true);
+  assert.equal(reader.readTruncated, true);
+  assert.equal(reader.droppedSpans, 0);
+  assert.equal(reader.legacy, false);
+  const both = dbAdminChatTraceProgress("turn-1", {events: [], droppedSpans: 7, readTruncated: true});
+  assert.equal(both.readTruncated, true);
+  assert.equal(both.droppedSpans, 7);
 });

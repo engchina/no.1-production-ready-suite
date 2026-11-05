@@ -1,3 +1,4 @@
+import { TracePartialNotice } from "./trace-partial-notice";
 import { RunStepSummary } from "../data/run-step-summary";
 import { measuredRunTiming } from "../../lib/run-step-presentation";
 import type { CallBodyLoader } from "../../lib/call-body";
@@ -178,6 +179,9 @@ export interface ChatProgressProps {
    * 製品は `useTraceProgressSnapshot` の `partial` をそのまま渡す。
    */
   partial?: boolean;
+  /** 読取上限により保存済みのspanを一部省略した。 */
+  readTruncated?: boolean;
+  droppedSpans?: number;
   className?: string;
   testId?: string;
 }
@@ -484,6 +488,8 @@ export function ChatProgress({
   labels: labelOverrides,
   footer: footerInput,
   partial = false,
+  readTruncated = false,
+  droppedSpans = 0,
   traceSummary,
   traceId,
   processDetailsProps,
@@ -496,11 +502,10 @@ export function ChatProgress({
   const traceLabels = useTraceDetailsLabels();
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
   const details = traceSummary != null || traceId || processDetailsProps ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
-  const footer = partial ? (
+  const incomplete = partial || readTruncated || droppedSpans > 0;
+  const footer = incomplete ? (
     <>
-      <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
-        {traceLabels.partial}
-      </p>
+      <TracePartialNotice partial={partial} readTruncated={readTruncated} droppedSpans={droppedSpans} testId={testId ? `${testId}-partial` : undefined} />
       {details}
     </>
   ) : (
@@ -555,7 +560,7 @@ export function ChatProgress({
   const slow = useLatchedSlow(currentTiming.slow, { active: slowEnabled, resetKey: progressKey });
   const announcement = currentLabel && reconnecting ? `${currentLabel} ${labels.reconnecting}` : currentLabel;
 
-  if (steps.length === 0 && !active) return null;
+  if (steps.length === 0 && !active) return incomplete ? <>{footer}</> : null;
 
   return (
     <div

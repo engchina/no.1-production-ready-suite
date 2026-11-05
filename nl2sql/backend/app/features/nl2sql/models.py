@@ -2058,6 +2058,7 @@ class TraceProgressData(BaseModel):
 
     events: list[ChatProgressEvent] = Field(default_factory=list)
     dropped_spans: int = 0
+    read_truncated: bool = False
 
 
 # 実行履歴の行の状態（#3348）。空は SQL を実行した行、`cancelled` は停止で終わったジョブの行。

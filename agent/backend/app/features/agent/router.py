@@ -3450,6 +3450,7 @@ class RunTraceData(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
     # 表に書けなかった span の数（1 以上なら画面は「一部の処理だけを記録しています。」）。
     dropped_spans: int = 0
+    read_truncated: bool = False
 
 
 def _run_trace_viewer(request: Request, run: RunState) -> str | None:
@@ -3481,11 +3482,15 @@ async def get_run_trace(
     run = await run_in_threadpool(_readable_run, request, run_id)
     run, _withheld = await _evidence_checked_run(request, run)
     spans: list[Any] = []
+    read_truncated = False
     if run.trace_id is not None:
         try:
-            spans = await run_in_threadpool(
-                trace_spans.fetch, run.trace_id, viewer_user_uuid=_run_trace_viewer(request, run)
+            page = await run_in_threadpool(
+                trace_spans.fetch_page,
+                run.trace_id,
+                viewer_user_uuid=_run_trace_viewer(request, run),
             )
+            spans, read_truncated = page.spans, page.truncated
         except Exception as exc:
             logger.warning(
                 "agent_run_trace_read_failed",
@@ -3498,6 +3503,7 @@ async def get_run_trace(
             trace_id=run.trace_id,
             events=run_trace_events(run, spans),
             dropped_spans=run.trace_dropped_spans,
+            read_truncated=read_truncated,
         )
     )
 

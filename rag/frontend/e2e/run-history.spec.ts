@@ -2096,3 +2096,49 @@ test("不足から3拡張を補搜した実編排の記録が経過と軌跡で�
   await explorer.screenshot({path: testInfo.outputPath("actual-recovery-trace.png")});
   await expectNoPageOverflow(page);
 });
+
+
+test("読取省略と保存欠落を空の記録も含めて履歴の経過と軌跡で区別する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  await mockLocalAuth(page);
+  const variants = [
+    {key: "reader", row: run(1), readTruncated: true, droppedSpans: 0, empty: false},
+    {key: "writer-empty", row: run(2), readTruncated: false, droppedSpans: 7, empty: true},
+    {key: "both", row: run(3), readTruncated: true, droppedSpans: 7, empty: false},
+  ];
+  await mockRuns(page, variants.map(item => item.row));
+  await mockTraceApi(page, Object.fromEntries(variants.map(item => [item.row.run_id, {
+    events: item.empty ? [] : detail(item.row).progress_events,
+    droppedSpans: item.droppedSpans,
+    readTruncated: item.readTruncated,
+  }])));
+  const readerText = "取得件数の上限に達したため、一部の処理だけを表示しています。保存済みの記録がすべて表示されているとは限りません。";
+  const writerText = "一部の処理だけを記録しています。";
+  for (const item of variants) {
+    await page.goto(`/history/${item.row.run_id}`);
+    const timeline = page.getByTestId("run-history-timeline");
+    if (!item.empty) await page.getByTestId("run-history-timeline-summary").click();
+    const notice = page.getByTestId("run-history-timeline-partial");
+    await expect(notice).toBeVisible();
+    await expect(notice.getByText(readerText, {exact: true})).toHaveCount(item.readTruncated ? 1 : 0);
+    await expect(notice.getByText(writerText, {exact: true})).toHaveCount(item.droppedSpans > 0 ? 1 : 0);
+    await expect(page.getByText("この実行は古い形式の記録のため、処理の経過を表示できません。", {exact: true})).toHaveCount(0);
+    if (item.empty) await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(0);
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(value => {document.documentElement.dataset.theme = value;}, theme);
+      await notice.scrollIntoViewIfNeeded();
+      await expectNoPageOverflow(page);
+      await timeline.screenshot({path: testInfo.outputPath(`completeness-${item.key}-process-${theme}.png`)});
+      if (!item.empty) {
+        await page.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
+        await expect(page.locator("[data-trace-explorer]")).toBeVisible();
+        await expect(notice).toBeVisible();
+        await expect(notice.getByText(readerText, {exact: true})).toHaveCount(1);
+        await expect(notice.getByText(writerText, {exact: true})).toHaveCount(item.droppedSpans > 0 ? 1 : 0);
+        await expectNoPageOverflow(page);
+        await timeline.screenshot({path: testInfo.outputPath(`completeness-${item.key}-trace-${theme}.png`)});
+        await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+      }
+    }
+  }
+});

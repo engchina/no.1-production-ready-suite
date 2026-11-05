@@ -20400,6 +20400,7 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
     execute_sql: { status: "done", params: { rows: 1 } },
     format_results: "done",
   } });
+  await page.context().route("**/api/nl2sql/jobs/job-default-001/trace", route => route.fulfill({json: {data: {events: api.progressEvents, read_truncated: true, dropped_spans: 7}}}));
   await page.goto("/query");
   await fillQuestionWhenReady(page, "合成データの件数");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();
@@ -20407,6 +20408,8 @@ test("SQL 生成の処理の経過は span の木で、段の中のモデルの�
   await expect(page.getByTestId("nl2sql-job-summary")).toHaveText(/^処理の経過（7 ステップ・/);
   await page.getByTestId("nl2sql-job-summary").click();
   const progress = page.getByTestId("nl2sql-job");
+  await expect(page.getByTestId("nl2sql-job-partial-read-truncated")).toBeVisible();
+  await expect(page.getByTestId("nl2sql-job-partial-write-dropped")).toBeVisible();
   await expect(progress.getByTestId("nl2sql-job-step-generate_sql.1")).toContainText("モデルを呼び出す（用途の記録なし）");
   await inspectTraceStep(page, progress, "generate_sql.1");
   await expect(page.locator("[data-trace-technical]")).toContainText("synthetic-model");

@@ -117,6 +117,20 @@ class _FakeCursor:
             if row["trace_id"] == binds["trace_id"]
             and ("viewer" not in binds or row["owner_user_uuid"] == binds["viewer"])
         ]
+        if "product" in binds:
+            rows = [row for row in rows if row["product"] == binds["product"]]
+        if "operation_id" in binds:
+            rows = [row for row in rows if row["operation_id"] == binds["operation_id"]]
+        if "MAX(ATTEMPT)" in sql:
+            latest: dict[tuple[str, str], int] = {}
+            for row in rows:
+                key = (row["product"], row["operation_id"])
+                latest[key] = max(latest.get(key, 0), row["attempt"])
+            rows = [
+                row
+                for row in rows
+                if row["attempt"] == latest[(row["product"], row["operation_id"])]
+            ]
         rows.sort(key=lambda row: (row["started_at"], row["span_id"]))
         self._result = [
             tuple(_aware(row[column]) for column in _COLUMNS) for row in rows[: binds["limit"]]

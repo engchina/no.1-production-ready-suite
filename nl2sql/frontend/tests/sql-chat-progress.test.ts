@@ -301,10 +301,11 @@ test("処理の経過の API は記録ごと（#3226 の案 A）で、応答の�
   assert.deepEqual(parseTraceProgressResponse({ events: snapshot, dropped_spans: 2 }), {
     events: snapshot,
     droppedSpans: 2,
+    readTruncated: false,
   });
   // 形の違う値は空・0 にする（未検証の入力）。
-  assert.deepEqual(parseTraceProgressResponse({ events: "x", dropped_spans: -1 }), { events: [], droppedSpans: 0 });
-  assert.deepEqual(parseTraceProgressResponse(null), { events: [], droppedSpans: 0 });
+  assert.deepEqual(parseTraceProgressResponse({ events: "x", dropped_spans: -1 }), { events: [], droppedSpans: 0, readTruncated: false });
+  assert.deepEqual(parseTraceProgressResponse(null), { events: [], droppedSpans: 0, readTruncated: false });
 });
 
 test("全体の所要時間はジョブの作成から終了まで（終わっていなければ出さない）", () => {
@@ -342,4 +343,11 @@ test("backend の工程の名前（STAGE_DISPLAY_NAMES）は画面の工程の�
     STEPS,
   );
   for (const [stage, name] of pairs) assert.equal(chatStageName(stage, "skipped"), name, stage);
+});
+
+
+test("trace snapshotの読取上限はbool trueだけで認識する", () => {
+  assert.equal(parseTraceProgressResponse({events: [], read_truncated: true}).readTruncated, true);
+  assert.equal(parseTraceProgressResponse({events: [], read_truncated: "true"}).readTruncated, false);
+  assert.equal(parseTraceProgressResponse({events: []}).readTruncated, false);
 });

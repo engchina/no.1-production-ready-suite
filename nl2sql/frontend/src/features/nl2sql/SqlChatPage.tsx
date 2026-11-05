@@ -1087,6 +1087,8 @@ function SqlChatTurn({
               startedAt={sentAtMs}
               labels={CHAT_PROGRESS_LABELS}
               partial={progress.partial}
+              readTruncated={progress.readTruncated}
+              droppedSpans={progress.droppedSpans}
               testId="sql-chat-progress"
             />
           )}

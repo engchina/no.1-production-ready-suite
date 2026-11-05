@@ -345,6 +345,8 @@ export function RunDetail({
               labels={labels}
               // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
               partial={progress.partial}
+              readTruncated={progress.readTruncated}
+              droppedSpans={progress.droppedSpans}
               empty={
                 legacyProgress ? (
                   // span の無い古い形式の記録（空白にしない。#3226）。

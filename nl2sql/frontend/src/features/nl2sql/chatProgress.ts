@@ -231,6 +231,7 @@ export const dbAdminChatTurnTracePath = (conversationId: string, turnId: string)
 /** 処理の経過の API の応答（未検証の入力）。イベントは共有の検証（`parseChatProgressEvents`）に渡す。 */
 export interface TraceProgressResponse {
   events: unknown;
+  readTruncated?: boolean;
   /** 書けなかった span の数（1 以上なら「一部の処理だけを記録しています」）。 */
   droppedSpans: number;
 }
@@ -241,6 +242,7 @@ export function parseTraceProgressResponse(value: unknown): TraceProgressRespons
   return {
     events: Array.isArray(source.events) ? source.events : [],
     droppedSpans: typeof dropped === "number" && Number.isInteger(dropped) && dropped > 0 ? dropped : 0,
+    readTruncated: source.read_truncated === true,
   };
 }
 

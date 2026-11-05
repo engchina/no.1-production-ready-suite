@@ -608,6 +608,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
           processDetails={processDetails}
           // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
           partial={trace.partial}
+          readTruncated={trace.readTruncated}
+          droppedSpans={trace.droppedSpans}
           testId="run-history-timeline"
         />
       }

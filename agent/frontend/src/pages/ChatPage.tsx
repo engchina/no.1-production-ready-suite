@@ -1121,6 +1121,8 @@ function RunChatTurn({
             slowAfterMs={WAITING_STATUSES.has(run.status) ? Number.POSITIVE_INFINITY : undefined}
             // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
             partial={progress.partial}
+            readTruncated={progress.readTruncated}
+            droppedSpans={progress.droppedSpans}
             testId="chat-progress"
           />
         )}

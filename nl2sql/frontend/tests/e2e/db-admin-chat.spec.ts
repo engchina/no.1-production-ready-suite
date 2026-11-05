@@ -1199,3 +1199,34 @@ for (const count of [14, 26]) {
     await sheet.screenshot({ path: testInfo.outputPath(`result-pages-${count}.png`) });
   });
 }
+
+
+test("DB 管理チャットも読取省略と保存欠落の両理由を表示する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const value = generated(plan("SELECT 1 FROM DUAL"));
+  const saved = storedTurn("turn-completeness", "合成の質問", value);
+  await setup(page, {conversations: [savedConversation("conversation-completeness", "合成の会話", [saved])]});
+  const reads: string[] = [];
+  await page.context().route("**/api/nl2sql/db-admin-chat/conversations/conversation-completeness/turns/turn-completeness/trace", route => {
+    reads.push(route.request().method());
+    return route.fulfill({json: {data: {
+      events: dbAdminChatProgressEvents(saved.turn_id, value.plan, {createdAt: "2026-10-18T00:00:00Z", generatedAt: "2026-10-18T00:00:02Z"}),
+      dropped_spans: 7,
+      read_truncated: true,
+    }}});
+  });
+  await page.goto("/db-admin-chat");
+  await openFromHistory(page, "合成の会話");
+  const turn = page.getByTestId("db-admin-chat-turn").first();
+  await turn.getByTestId("db-admin-chat-progress-summary").click();
+  const notice = turn.getByTestId("db-admin-chat-progress-partial");
+  await expect(notice.getByText("取得件数の上限に達したため、一部の処理だけを表示しています。保存済みの記録がすべて表示されているとは限りません。", {exact: true})).toBeVisible();
+  await expect(notice.getByText("一部の処理だけを記録しています。", {exact: true})).toBeVisible();
+  expect(reads.length).toBeGreaterThan(0);
+  expect(reads.every(method => method === "GET")).toBe(true);
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(value => {document.documentElement.dataset.theme = value;}, theme);
+    await notice.scrollIntoViewIfNeeded();
+    await expectNoHorizontalOverflow(page);
+    await turn.screenshot({path: testInfo.outputPath(`db-admin-completeness-${theme}.png`)});
+  }
+});

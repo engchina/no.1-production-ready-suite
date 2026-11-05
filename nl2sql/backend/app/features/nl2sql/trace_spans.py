@@ -30,7 +30,7 @@ from pr_backend_core.observability.trace_store import (
     ConnectionFactory,
     TraceSpanOwner,
     TraceSpanWriter,
-    fetch_trace_spans,
+    fetch_trace_span_page,
     trace_progress_events,
 )
 from pr_backend_core.observability.tracing import (
@@ -292,17 +292,21 @@ def read_trace_progress(
         )
         return TraceProgressData(events=parse_chat_progress_events(events))
     spans = []
+    read_truncated = False
     store = current_trace_span_store()
     if store is not None:
         try:
             with store.connection_factory() as connection:
-                spans = fetch_trace_spans(
+                page = fetch_trace_span_page(
                     connection,
                     trace_id,
                     viewer_user_uuid=None
                     if viewer_is_admin
                     else (owner_user_uuid or ANONYMOUS_TRACE_OWNER),
+                    product=TRACE_PRODUCT,
+                    operation_id=operation_id,
                 )
+                spans, read_truncated = page.spans, page.truncated
         except Exception as exc:
             logger.warning(
                 "nl2sql_trace_spans_read_failed",
@@ -323,7 +327,9 @@ def read_trace_progress(
         else None,
     )
     return TraceProgressData(
-        events=parse_chat_progress_events(events), dropped_spans=max(0, dropped_spans)
+        events=parse_chat_progress_events(events),
+        dropped_spans=max(0, dropped_spans),
+        read_truncated=read_truncated,
     )
 
 
