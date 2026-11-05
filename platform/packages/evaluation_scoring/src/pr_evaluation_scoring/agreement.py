@@ -132,10 +132,10 @@ class CalibrationThresholds:
 def calibration_failures(result: Agreement | None, thresholds: CalibrationThresholds) -> list[str]:
     """holdout の一致の集計が閾値に届かない理由（空なら合格）。集計が無ければ不合格。"""
     if result is None:
-        return ["holdout の項目がありません"]
+        return ["検証用データの項目がありません"]
     failures: list[str] = []
     if result.total < thresholds.min_items:
-        failures.append(f"holdout の件数 {result.total} < {thresholds.min_items}")
+        failures.append(f"検証用データの件数 {result.total} < {thresholds.min_items}")
     # 測れない値（None）は不合格にし、比較の形ではなく測れない理由を書く（出力に None を出さない）。
     if result.coverage is None:
         failures.append("判定率 —（項目がありません）")

@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, type Locator, type Page, test, type TestInfo } from "./fixtures/test";
@@ -215,6 +215,21 @@ for (const viewport of VIEWPORTS) {
     await expect(annotator.getByTestId("calibration-criterion")).toBeVisible();
     await expectOneLine(page.getByTestId("calibration-my-progress").getByRole("rowheader", { name: "正確性" }));
     await expect(annotator).not.toContainText("a2");
+    await expect(annotator.getByTestId("calibration-annotate-label-pass")).toHaveText("合格");
+    await expect(annotator.getByTestId("calibration-annotate-label-fail")).toHaveText("不合格");
+    await expect(page.getByTestId("calibration-detail")).toContainText("検証用データ");
+    await expect(page.getByTestId("calibration-detail")).toContainText("回答品質 第1版");
+    const errorType = annotator.getByRole("combobox", { name: "誤りの型・対照", exact: true });
+    await errorType.click();
+    const partial = page.getByRole("option", { name: /対照: 正しい部分回答/ });
+    const refusal = page.getByRole("option", { name: /対照: 正しい拒答・確認/ });
+    await expect(partial).toContainText("合格");
+    await expect(partial).not.toContainText(/partial_answer|\bpass\b|\bfail\b/);
+    expect(await partial.locator("span > span").count()).toEqual(await refusal.locator("span > span").count());
+    await partial.click();
+    await expect(errorType).toHaveText(/対照: 正しい部分回答/);
+    await expect(errorType).not.toHaveText(/partial_answer/);
+    await errorType.screenshot({ path: testInfo.outputPath("partial-answer-selected.png") });
     const judgement = annotator.getByTestId("calibration-annotate-label-pass").locator("xpath=ancestor::fieldset");
     const spacing = await judgement.evaluate(element => {
       const legend = element.querySelector("legend")!;
@@ -317,11 +332,11 @@ test("判定の校正の管理の権限が無い記入者には、記入だけ�
   );
   await page.goto("/evaluation?tab=calibration");
   await expect(page.getByRole("button", { name: "記入の集合を作る" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "JSON を取り込む" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "記入データを読み込む" })).toHaveCount(0);
   await page.getByTestId("calibration-label-sets").getByRole("button", { name: "校正の集合 A" }).click();
   await expect(page.getByTestId("calibration-annotator")).toBeVisible();
   await expect(page.getByRole("tab", { name: "2. 一致と裁定" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "JSON を書き出す" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "記入データを書き出す" })).toHaveCount(0);
 });
 
 test("記入の集合を削除しても、消した集合の詳細と行を取り直さない (#3587)", async ({ page }) => {
@@ -442,4 +457,61 @@ test("合成の対照は共通の最大表示行数を超えると表内スク�
   await expect(table.getByRole("switch").last()).toBeChecked();
   await expectNoPageOverflow(page);
   await page.getByTestId("calibration-synthetic").screenshot({path:testInfo.outputPath("synthetic-scroll.png")});
+});
+
+
+test("裁定一覧は標準の高さで止まり、最後の行を内部スクロールで選択できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockEvaluationBasics(page);
+  await mockJudgeCalibration(page, { withSet: true });
+  await page.goto("/evaluation?tab=calibration");
+  await page.getByTestId("calibration-label-sets").getByRole("button", { name: "校正の集合 A", exact: true }).click();
+  const detail = page.getByTestId("calibration-detail");
+  await detail.getByRole("tab", { name: "2. 一致と裁定" }).click();
+  await page.getByRole("button", { name: "すべて", exact: true }).click();
+  const table = page.getByTestId("calibration-agreement-rows");
+  const scroll = page.getByTestId("calibration-agreement-scroll");
+  await expect(table.getByRole("row")).toHaveCount(JUDGE_CALIBRATION_ROWS + 1);
+  await scroll.scrollIntoViewIfNeeded();
+  await expect.poll(() => scroll.evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
+  const metrics = await scroll.evaluate(node => {
+    const count = window.matchMedia("(min-width: 768px)").matches ? 8 : 5;
+    const header = node.querySelector("thead")!.getBoundingClientRect().height;
+    const rows = Array.from(node.querySelectorAll("tbody tr")).slice(0, count);
+    return { height: node.clientHeight, expected: header + rows.reduce((sum, row) => sum + row.getBoundingClientRect().height, 0) };
+  });
+  expect(Math.abs(metrics.height - metrics.expected)).toBeLessThanOrEqual(2);
+  await expect(table.locator("thead")).toHaveCSS("position", "sticky");
+  await scroll.evaluate(node => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => scroll.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  const last = table.getByRole("row").last();
+  const item = (await last.getByRole("button").innerText()).trim();
+  await last.getByRole("button").click();
+  await expect(last).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("calibration-adjudication-editor")).toContainText(item!);
+  await expectNoPageOverflow(page);
+  await scroll.screenshot({ path: testInfo.outputPath("agreement-scroll.png") });
+});
+
+
+test("記入データの書き出しは日本語形式を要求する", async ({ page }) => {
+  await mockEvaluationBasics(page);
+  await mockJudgeCalibration(page, { withSet: true });
+  let requestedLanguage: string | null = null;
+  const document = { "形式": "判定の記入データ", "形式の版": 1, "項目": [] };
+  await page.route("**/label-sets/*/export?*", async route => {
+    requestedLanguage = new URL(route.request().url()).searchParams.get("language");
+    await route.fulfill({
+      contentType: "application/json",
+      headers: { "Content-Disposition": 'attachment; filename="labels.json"' },
+      body: JSON.stringify(document),
+    });
+  });
+  await page.goto("/evaluation?tab=calibration");
+  await page.getByTestId("calibration-label-sets").getByRole("button", { name: "校正の集合 A", exact: true }).click();
+  const downloadEvent = page.waitForEvent("download");
+  await page.getByRole("button", { name: "記入データを書き出す", exact: true }).click();
+  const download = await downloadEvent;
+  const file = await download.path();
+  expect(requestedLanguage).toBe("ja");
+  expect(JSON.parse(readFileSync(file!, "utf8"))).toEqual(document);
 });

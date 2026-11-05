@@ -67,6 +67,23 @@ export function rowStatusLabel(status: CalibrationRowStatus): string {
   return t(`evaluation.calibration.rowStatus.${status}` as I18nKey);
 }
 
+/** システムの基準・診断文に含まれる固定の識別子だけを表示名にする。原文には使わない。 */
+export function calibrationDescription(text: string): string {
+  const keys: Record<string, I18nKey> = {
+    pass: "evaluation.calibration.label.pass",
+    fail: "evaluation.calibration.label.fail",
+    cannot_judge: "evaluation.calibration.label.cannot_judge",
+    dev: "evaluation.calibration.split.dev",
+    holdout: "evaluation.calibration.split.holdout",
+    answer_quality: "evaluation.calibration.rubric.answerQuality",
+    requirement_coverage: "evaluation.calibration.aspect.requirement_coverage",
+    answer_correctness: "evaluation.calibration.aspect.answer_correctness",
+    claim_support: "evaluation.calibration.aspect.claim_support",
+  };
+  return text.replace(/\b(pass|fail|cannot_judge|dev|holdout|answer_quality|requirement_coverage|answer_correctness|claim_support)\b/g,
+    (token) => t(keys[token]));
+}
+
 /** κ の表示（小数 2 桁。測れなければ「—」）。 */
 export function formatKappa(value: number | null | undefined): string {
   return value === null || value === undefined || Number.isNaN(value)

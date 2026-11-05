@@ -30,6 +30,7 @@ from typing import Any, Literal, Protocol
 
 from pr_backend_core.bounded_calls import Attempt
 from pr_evaluation_scoring import CalibrationThresholds
+from pr_evaluation_scoring.label_file import load_label_file
 from pr_evaluation_scoring.labeling import (
     ANNOTATOR_ID,
     ASPECT_HOLDOUT_TARGET,
@@ -805,7 +806,7 @@ def build_label_set_document(
             )
         )
     if not labeled:
-        raise UnresolvedLabelsError("pass / fail の判定のある項目がありません。")
+        raise UnresolvedLabelsError("合格または不合格の判定がある項目がありません。")
     codes = annotator_codes(labels)
     adjudicator_codes = sorted(
         set(label.annotator_code for label in labels if label.role == "adjudication")
@@ -970,13 +971,18 @@ def import_label_set(document: LabelSetDocument) -> ImportedLabelSet:
 def parse_label_set(content: bytes) -> LabelSetDocument:
     """取り込む JSON を読む（形が違えば `CalibrationError`。本文は返さない）。"""
     try:
-        return LabelSetDocument.model_validate_json(content)
+        return LabelSetDocument.model_validate(load_label_file(content))
     except ValidationError as exc:
         errors = exc.errors()
         location = ".".join(str(part) for part in errors[0]["loc"]) if errors else ""
 
         raise CalibrationError(
-            "人手の判定の JSON（LabelSet）の形が違います（" + location + "）。"
+            "記入データの項目または値が正しくありません（" + location + "）。"
+        ) from exc
+
+    except (ValueError, UnicodeError) as exc:
+        raise CalibrationError(
+            "記入データの形式を確認してください。対応する形式のファイルを読み込んでください。"
         ) from exc
 
 

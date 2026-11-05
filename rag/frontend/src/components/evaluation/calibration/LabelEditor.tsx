@@ -11,7 +11,7 @@ import { useState } from "react";
 import type { CalibrationErrorType, CalibrationLabel } from "@/lib/api";
 import { type I18nKey, t } from "@/lib/i18n";
 
-import { CALIBRATION_LABELS } from "./calibration-format";
+import { CALIBRATION_LABELS, calibrationDescription } from "./calibration-format";
 
 const LABEL_ICON = { pass: Check, fail: X, cannot_judge: CircleHelp } as const;
 
@@ -47,7 +47,7 @@ export function LabelEditor({
   const options = errorTypes.map((item) => ({
     value: item.id,
     label: t(`evaluation.calibration.errorType.${item.id}` as I18nKey),
-    description: item.title,
+    description: calibrationDescription(item.title),
   }));
   return (
     <form

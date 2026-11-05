@@ -6,6 +6,8 @@ import {
   aspectLabel,
   aspectTargetReached,
   calibrationBadgeLabel,
+  calibrationDescription,
+  splitLabel,
   calibrationResultRows,
   formatKappa,
   formatRate,
@@ -42,6 +44,12 @@ describe("calibration-format", () => {
     expect(aspectLabel("unknown")).toBe("unknown");
     expect(labelText("cannot_judge")).toBe("判定できない");
     expect(labelText(null)).toBe("未記入");
+    expect(labelText("pass")).toBe("合格");
+    expect(labelText("fail")).toBe("不合格");
+    expect(splitLabel("holdout")).toBe("検証用データ");
+    expect(splitLabel("dev")).toBe("調整用データ");
+    expect(calibrationDescription("holdout の件数。fail と cannot_judge。passageは識別子と異なる。")).toBe(
+      "検証用データ の件数。不合格 と 判定できない。passageは識別子と異なる。");
   });
 
   it("κ と率を測れないときは「—」にする", () => {
