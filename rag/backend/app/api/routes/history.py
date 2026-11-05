@@ -14,6 +14,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
+from pr_backend_core.observability.failure_diagnosis import read_failure_diagnosis
 from pr_backend_core.observability.model_usage import (
     parse_run_usage,
     run_usage_summary_fields,
@@ -154,6 +155,7 @@ async def get_run(run_id: str) -> ApiResponse[RunDetail]:
     detail: dict[str, Any] = {
         **{key: value for key, value in fields.items() if not key.endswith("_json")},
         "error_code": _text_or_none(stages.get("error_code")),
+        "failure_diagnosis": read_failure_diagnosis(stages.get("failure_diagnosis")),
         "storage_failures": [
             item for item in stages.get("storage_failures") or [] if isinstance(item, dict)
         ],

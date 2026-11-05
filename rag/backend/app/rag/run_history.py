@@ -21,11 +21,12 @@ from time import monotonic
 from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.logging import safe_exception_fields
+from pr_backend_core.observability.failure_diagnosis import diagnose_failure
 from pr_backend_core.observability.model_usage import RunModelUsage
 from pr_backend_core.observability.tracing import finish_operation_trace
 
 from app.config import Settings
-from app.rag.answer_failure import answer_error_identity
+from app.rag.answer_failure import answer_error_identity, failed_stage
 from app.rag.semantic_audit_policy import semantic_audit_is_diagnostic_only
 from app.rag.stored_answer import stored_citations
 from app.schemas.history import ValidationExecution
@@ -257,6 +258,15 @@ class RunRecorder:
                 ),
                 # 失敗のエラーコードと保存できなかった記録（処理の段と一緒に持つ。#2342）。
                 **({"error_code": str(error_code)} if error_code is not None else {}),
+                **(
+                    {
+                        "failure_diagnosis": diagnose_failure(
+                            error, stage=failed_stage(error)
+                        ).model_dump(mode="json")
+                    }
+                    if error is not None
+                    else {}
+                ),
                 **(
                     {"storage_failures": [item.model_dump() for item in failures]}
                     if failures
