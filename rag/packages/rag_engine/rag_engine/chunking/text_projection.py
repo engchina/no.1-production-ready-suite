@@ -26,7 +26,7 @@ def source_text(
     purpose_source: dict[str, Any] | None = None,
 ) -> RecordTextProjection:
     record_id = str(owner.get("id") or owner.get("record_id") or owner.get("image_id") or "")
-    if not text or not record_id:
+    if not text or not record_id or role == "unclassified":
         return RecordTextProjection(text)
     row: dict[str, Any] = {
         "source_record_id": record_id,

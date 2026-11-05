@@ -2074,7 +2074,7 @@ class ChunkingTests(unittest.TestCase):
         self.assertEqual(source_map["source_run_id"], child.source_run_id)
         self.assertEqual(source_map["source_engine_id"], child.source_engine_id)
         self.assertEqual(source_map["text_sha256"], child.metadata["content_hash"])
-        self.assertTrue(all(item["role"] == "unclassified" for item in source_map["ranges"]))
+        self.assertEqual(source_map["ranges"], [])
         self.assertEqual(child.metadata["section_path_sources"], ["section_header"] * len(child.metadata["section_path"]))
 
     def test_section_path_sources_record_where_each_heading_came_from(self):

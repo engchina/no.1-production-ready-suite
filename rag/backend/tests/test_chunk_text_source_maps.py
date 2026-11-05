@@ -92,13 +92,12 @@ def test_duplicate_text_keeps_own_purpose_and_native_unclassified() -> None:
     source_map = child_chunk(FIXTURES[0]).metadata["layout"]["text_source_map"]
     rows = source_map["ranges"]
     assert [item.get("vision_image_purpose") for item in rows] == [
-        None,
         "record",
         "example",
         "unknown",
     ]
-    assert rows[0]["role"] == "unclassified"
-    assert len({item["start"] for item in rows}) == 4
+    assert all(item["role"].startswith("image_") for item in rows)
+    assert len({item["start"] for item in rows}) == 3
 
 
 @pytest.mark.parametrize(
@@ -134,8 +133,7 @@ def test_old_chunk_has_no_invented_source_map() -> None:
 def test_enhanced_html_and_preview_do_not_gain_purpose() -> None:
     enhanced = child_chunk(next(row for row in FIXTURES if row["case"] == "enhanced-html"))
     rows = enhanced.metadata["layout"]["text_source_map"]["ranges"]
-    assert rows[0]["role"] == "unclassified"
-    assert "vision_image_purpose" not in rows[0]
+    assert rows == []
     preview = child_chunk(next(row for row in FIXTURES if row["case"] == "preview-only"))
     assert all(
         item["vision_image_purpose"] == "unknown"
@@ -222,8 +220,7 @@ def test_unverified_ocr_and_form_text_are_unclassified() -> None:
         },
     ]:
         projection = records.record_text_projection(item)
-        assert projection.ranges[0]["role"] == "unclassified"
-        assert "vision_image_purpose" not in projection.ranges[0]
+        assert projection.ranges == ()
 
 
 @pytest.mark.parametrize(
@@ -254,9 +251,17 @@ def test_ambiguous_table_crops_do_not_attribute_supplement_to_first(
         for item in projection.ranges
         if projection.text[item["start"] : item["end"]] == supplement
     ]
-    assert len(rows) == 1
-    assert rows[0]["role"] == "unclassified"
-    assert "vision_image_purpose" not in rows[0]
-    assert "image_id" not in rows[0]
+    assert rows == []
     # cropを増やしても説明/OCRが無い自身cropの本文は増えず、元本文を保つ。
     assert projection.text == row["expected_record_text"]
+
+
+def test_source_map_does_not_store_ordinary_unclassified_ranges() -> None:
+    child = child_chunk(FIXTURES[0])
+    rows = child.metadata["layout"]["text_source_map"]["ranges"]
+    assert len(rows) == 3
+    assert all(item["role"].startswith("image_") for item in rows)
+    assert child.text == FIXTURES[0]["expected_text"]
+    assert (
+        child.metadata["layout"]["native_text_ranges"] == FIXTURES[0]["expected_native_text_ranges"]
+    )
