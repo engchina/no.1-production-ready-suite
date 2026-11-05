@@ -3,11 +3,12 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 from rag_engine.parsing.vision_checkpoints import VisionCheckpoints
-from rag_parser_core.image_purpose import recorded_image_purpose
+from rag_parser_core.image_purpose import ImagePurpose, RecordedImagePurpose, recorded_image_purpose
 
 from app.config import Settings, get_settings
 from app.rag.kb_adapter_config import (
@@ -21,6 +22,15 @@ from app.schemas.extraction import DocumentElement, ExtractionAsset, StructuredE
 from app.schemas.settings import ParserAdapterSettingsUpdate
 
 
+def _layout_records(extraction: StructuredExtraction) -> list[dict[str, Any]]:
+    layout = extraction.parser_artifacts["layout_records"]
+    assert isinstance(layout, dict)
+    records = layout["records"]
+    assert isinstance(records, list)
+    assert all(isinstance(record, dict) for record in records)
+    return cast(list[dict[str, Any]], records)
+
+
 @pytest.mark.parametrize(
     "global_purpose,override,expected",
     [
@@ -32,7 +42,9 @@ from app.schemas.settings import ParserAdapterSettingsUpdate
         ("example", "example", "example"),
     ],
 )
-def test_image_purpose_recipe_priority(global_purpose, override, expected):
+def test_image_purpose_recipe_priority(
+    global_purpose: ImagePurpose, override: ImagePurpose | None, expected: ImagePurpose
+) -> None:
     global_settings = get_settings().model_copy(update={"rag_vision_image_purpose": global_purpose})
     recipe = KnowledgeBaseAdapterConfig(
         ingestion=KnowledgeBaseIngestionConfig(vision_image_purpose=override)
@@ -43,18 +55,18 @@ def test_image_purpose_recipe_priority(global_purpose, override, expected):
 
 
 @pytest.mark.parametrize("value", ["unknown", "invalid", None, True, 0])
-def test_global_image_purpose_is_strict(value):
+def test_global_image_purpose_is_strict(value: Any) -> None:
     with pytest.raises(ValidationError):
         Settings(rag_vision_image_purpose=value)
 
 
 @pytest.mark.parametrize("value", ["unknown", "invalid", True, 0])
-def test_recipe_image_purpose_is_strict(value):
+def test_recipe_image_purpose_is_strict(value: Any) -> None:
     with pytest.raises(ValidationError):
         KnowledgeBaseIngestionConfig(vision_image_purpose=value)
 
 
-def test_new_default_and_global_update_null():
+def test_new_default_and_global_update_null() -> None:
     assert Settings.model_fields["rag_vision_image_purpose"].default == "record"
     assert KnowledgeBaseIngestionConfig().vision_image_purpose is None
     assert ParserAdapterSettingsUpdate().vision_image_purpose is None
@@ -71,13 +83,15 @@ def test_new_default_and_global_update_null():
         ({"vision_image_purpose": "example"}, "example"),
     ],
 )
-def test_historical_purpose_reader_does_not_rewrite(metadata, expected):
+def test_historical_purpose_reader_does_not_rewrite(
+    metadata: dict[str, object], expected: RecordedImagePurpose
+) -> None:
     before = json.dumps(metadata)
     assert recorded_image_purpose(metadata) == expected
     assert json.dumps(metadata) == before
 
 
-def test_new_parse_snapshot_is_not_reinterpreted_by_global_changes():
+def test_new_parse_snapshot_is_not_reinterpreted_by_global_changes() -> None:
     settings = get_settings().model_copy(update={"rag_vision_image_purpose": "record"})
     extraction = stamp_image_purpose(StructuredExtraction(), settings.rag_vision_image_purpose)
     changed = settings.model_copy(update={"rag_vision_image_purpose": "example"})
@@ -86,7 +100,7 @@ def test_new_parse_snapshot_is_not_reinterpreted_by_global_changes():
     assert recorded_image_purpose(next_extraction.parser_artifacts) == "example"
 
 
-def test_effective_purpose_separates_extraction_and_checkpoint(tmp_path: Path):
+def test_effective_purpose_separates_extraction_and_checkpoint(tmp_path: Path) -> None:
     image = tmp_path / "image"
     image.write_bytes(b"synthetic-image-source")
     provider = SimpleNamespace(
@@ -94,7 +108,8 @@ def test_effective_purpose_separates_extraction_and_checkpoint(tmp_path: Path):
     )
     extraction_keys = []
     checkpoint_keys = []
-    for purpose in ("record", "record", "example"):
+    purposes: tuple[ImagePurpose, ...] = ("record", "record", "example")
+    for purpose in purposes:
         settings = get_settings().model_copy(update={"rag_vision_image_purpose": purpose})
         extraction_keys.append(compute_extraction_recipe_id("a" * 64, settings))
         checkpoint_keys.append(
@@ -113,7 +128,7 @@ def test_effective_purpose_separates_extraction_and_checkpoint(tmp_path: Path):
     assert checkpoint_keys[0] == checkpoint_keys[1] != checkpoint_keys[2]
 
 
-def test_trusted_image_purpose_overwrites_model_claim_without_mutation():
+def test_trusted_image_purpose_overwrites_model_claim_without_mutation() -> None:
     extraction = StructuredExtraction(
         elements=[
             DocumentElement(
@@ -145,15 +160,12 @@ def test_trusted_image_purpose_overwrites_model_claim_without_mutation():
     assert recorded_image_purpose(result.parser_artifacts) == "record"
     assert result.elements[0].metadata["vision_image_purpose"] == "record"
     assert result.assets[0].metadata["vision_image_purpose"] == "record"
-    assert (
-        result.parser_artifacts["layout_records"]["records"][0]["raw"]["vision_image_purpose"]
-        == "record"
-    )
+    assert _layout_records(result)[0]["raw"]["vision_image_purpose"] == "record"
     assert extraction.model_dump_json() == before
 
 
 @pytest.mark.parametrize("purpose", ["record", "example"])
-def test_image_purpose_reaches_plain_chunks_and_image_evidence(purpose):
+def test_image_purpose_reaches_plain_chunks_and_image_evidence(purpose: ImagePurpose) -> None:
     from rag_engine.chunking.evidence import _image_evidence, _source_record_ref
     from rag_pipeline_core.chunking import chunk_extraction
 
@@ -189,7 +201,7 @@ def test_image_purpose_reaches_plain_chunks_and_image_evidence(purpose):
     assert evidence[0]["vision_image_purpose"] == purpose
 
 
-def test_old_image_evidence_is_unknown_without_modifying_source():
+def test_old_image_evidence_is_unknown_without_modifying_source() -> None:
     from rag_engine.chunking.evidence import _image_evidence
 
     ref = {
@@ -207,19 +219,20 @@ def test_old_image_evidence_is_unknown_without_modifying_source():
     assert json.dumps(ref) == before
 
 
-async def test_actual_pipeline_freezes_purpose_at_start():
+async def test_actual_pipeline_freezes_purpose_at_start() -> None:
     from app.rag.ingestion import IngestionPipeline
 
     settings = get_settings().model_copy(
         update={"rag_vision_enabled": False, "rag_vision_image_purpose": "record"}
     )
+    unused_client: Any = object()
     pipeline = IngestionPipeline(
         settings=settings,
-        vlm=object(),
-        genai=object(),
-        oracle=object(),
-        object_storage=object(),
-        document_understanding=object(),
+        vlm=unused_client,
+        genai=unused_client,
+        oracle=unused_client,
+        object_storage=unused_client,
+        document_understanding=unused_client,
     )
     started_key = pipeline._segment_parse_key(b"synthetic-image-source")
     settings.rag_vision_image_purpose = "example"
@@ -236,17 +249,17 @@ async def test_actual_pipeline_freezes_purpose_at_start():
     assert pipeline._segment_parse_key(b"synthetic-image-source") == started_key
     next_pipeline = IngestionPipeline(
         settings=settings,
-        vlm=object(),
-        genai=object(),
-        oracle=object(),
-        object_storage=object(),
-        document_understanding=object(),
+        vlm=unused_client,
+        genai=unused_client,
+        oracle=unused_client,
+        object_storage=unused_client,
+        document_understanding=unused_client,
     )
     assert next_pipeline._settings.rag_vision_image_purpose == "example"
     assert next_pipeline._segment_parse_key(b"synthetic-image-source") != started_key
 
 
-def test_image_source_ocr_inherits_purpose_but_native_document_text_does_not():
+def test_image_source_ocr_inherits_purpose_but_native_document_text_does_not() -> None:
     extraction = StructuredExtraction(
         elements=[DocumentElement(element_id="text-a", kind="text", text="合成OCR本文")]
     )
@@ -257,7 +270,7 @@ def test_image_source_ocr_inherits_purpose_but_native_document_text_does_not():
     assert extraction.elements[0].metadata == {}
 
 
-def test_recipe_snapshot_stores_effective_purpose_and_requires_reparse_for_drift():
+def test_recipe_snapshot_stores_effective_purpose_and_requires_reparse_for_drift() -> None:
     from app.api.routes.documents import (
         _merge_document_processing_config,
         _processing_config_drift_groups,
@@ -269,8 +282,12 @@ def test_recipe_snapshot_stores_effective_purpose_and_requires_reparse_for_drift
     recipe = DocumentProcessingConfig(vision_image_purpose=None)
     _, effective = _merge_document_processing_config(recipe, global_settings)
     snapshot = _processing_recipe_snapshot(recipe, effective)
-    assert "vision_image_purpose" not in snapshot["processing_config"]
-    assert snapshot["effective_processing_config"]["vision_image_purpose"] == "example"
+    processing = snapshot["processing_config"]
+    effective_snapshot = snapshot["effective_processing_config"]
+    assert isinstance(processing, dict)
+    assert isinstance(effective_snapshot, dict)
+    assert "vision_image_purpose" not in processing
+    assert effective_snapshot["vision_image_purpose"] == "example"
     observed = effective.model_dump(mode="json")
     current = {**observed, "vision_image_purpose": "record"}
     assert _processing_config_drift_groups(observed, current) == ["parser_adapter_backend"]
@@ -280,11 +297,11 @@ def test_recipe_snapshot_stores_effective_purpose_and_requires_reparse_for_drift
 
 
 @pytest.mark.parametrize("claimed_purpose", [None, "record"])
-def test_native_table_is_not_reclassified_as_image_content(claimed_purpose):
+def test_native_table_is_not_reclassified_as_image_content(claimed_purpose: str | None) -> None:
     from rag_engine.chunking.evidence import _source_record_ref
     from rag_pipeline_core.chunking import chunk_extraction
 
-    native = {
+    native: dict[str, Any] = {
         "id": "table-a",
         "category": "Table",
         "page": 1,
@@ -304,7 +321,7 @@ def test_native_table_is_not_reclassified_as_image_content(claimed_purpose):
     )
     result = stamp_image_purpose(extraction, "example")
     assert recorded_image_purpose(result.parser_artifacts) == "example"
-    saved = result.parser_artifacts["layout_records"]["records"][0]
+    saved = _layout_records(result)[0]
     assert "vision_image_purpose" not in saved["raw"]
     assert "vision_image_purpose" not in _source_record_ref(saved)
     assert "vision_image_purpose" not in result.elements[0].metadata
@@ -321,14 +338,11 @@ def test_native_table_is_not_reclassified_as_image_content(claimed_purpose):
         {"table_vision_text": "合成の画像補足"},
     ],
 )
-def test_table_with_actual_visual_supplement_retains_image_purpose(raw):
+def test_table_with_actual_visual_supplement_retains_image_purpose(raw: dict[str, Any]) -> None:
     extraction = StructuredExtraction(
         parser_artifacts={
             "layout_records": {"records": [{"id": "table-a", "category": "Table", "raw": raw}]}
         }
     )
     result = stamp_image_purpose(extraction, "example")
-    assert (
-        result.parser_artifacts["layout_records"]["records"][0]["raw"]["vision_image_purpose"]
-        == "example"
-    )
+    assert _layout_records(result)[0]["raw"]["vision_image_purpose"] == "example"
