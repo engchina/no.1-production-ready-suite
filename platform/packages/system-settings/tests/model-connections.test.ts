@@ -256,3 +256,14 @@ describe("接続（#533 / #542）", () => {
     expect(normalized.enterprise_ai.connections).toEqual([primary, secondary]);
   });
 });
+
+
+describe("モデルとOCI認証のリージョンの境界", () => {
+  it("モデルの新しい候補は大阪とシカゴだけで、認証の東京は残す", async () => {
+    const { GENERATIVE_AI_REGION_OPTIONS, isSelectableGenerativeAiRegion } = await import("../src/model/regions");
+    const { OCI_REGION_OPTIONS } = await import("../src/oci/regions");
+    expect(GENERATIVE_AI_REGION_OPTIONS.map((option) => option.value)).toEqual(["ap-osaka-1", "us-chicago-1"]);
+    expect(OCI_REGION_OPTIONS.map((option) => option.value)).toEqual(["ap-tokyo-1", "ap-osaka-1", "us-chicago-1"]);
+    expect(isSelectableGenerativeAiRegion("ap-tokyo-1")).toBe(false);
+  });
+});

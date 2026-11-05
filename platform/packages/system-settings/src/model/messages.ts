@@ -142,6 +142,7 @@ export const MODEL_MESSAGES = {
   "settings.model.genai.embeddingDim": "Embedding 次元",
   "settings.model.genai.embeddingDimHelp":
     "固定値です。Cohere Embed v4 と Oracle AI Database のベクトル列に合わせます。",
+  "settings.model.genai.regionReselect": "保存済みのリージョンは新しく選択できません。ap-osaka-1 または us-chicago-1 を選び直してから保存してください。既存の接続先は変更していません。",
   "settings.model.genai.embeddingRegion": "埋め込みモデルのリージョン",
   "settings.model.genai.rerankRegion": "リランクモデルのリージョン",
   "settings.model.genai.embeddingModel": "埋め込みモデル ID",
