@@ -14,7 +14,7 @@ from rag_engine.generation import applications, grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.date_consistency import absent_years
-from rag_engine.models.llm import GroundedApplication, GroundedCitation, GroundedItem
+from rag_engine.models.llm import ApplicationAudit, GroundedApplication, GroundedCitation, GroundedItem
 
 RULE = "受付の日を含め14暦日なので4月14日まで有効で、4月15日に停止する。"
 QUESTION = "対象Xを2031年4月1日に受け付けました。いつまで有効ですか？"
@@ -92,6 +92,8 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
     values = iter(outputs)
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
+        if schema is ApplicationAudit:
+            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の適用判定"}], summary_supported=True)
         prompts.append(prompt)
         return generated_fixture(schema, prompt, next(values))
 
@@ -118,7 +120,7 @@ def test_a_year_absent_from_the_question_and_the_evidence_is_regenerated_once() 
     assert RIGHT in result.answer_text and WRONG not in result.answer_text
 
 
-def test_a_year_that_stays_wrong_is_kept_with_a_mark_and_is_not_rewritten() -> None:
+def test_a_year_that_stays_wrong_remains_warned_when_the_stub_review_accepts_it() -> None:
     result, prompts = answer(draft(WRONG), draft(WRONG))
     assert len(prompts) == 2
     # 本文を推測の値へ書き換えず、段落の印で利用者に示す。確かめた説明として扱わない。

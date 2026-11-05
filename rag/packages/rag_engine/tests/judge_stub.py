@@ -64,7 +64,12 @@ def judge(evaluated: AnswerEvaluationOutput, *, scope=None, correctness="correct
         evidence_id = found.evidence_id if found and found.evidence_id else ""
         if not evidence_id and status in ("supported", "contradicted") and documents:
             evidence_id = documents[0]
-        return ClaimJudgement(reason=found.reason if found else "理由", status=status, evidence_id=evidence_id)
+        return ClaimJudgement(
+            claim_kind=found.claim_kind if found else "ordinary",
+            reason=found.reason if found else "理由",
+            status=status,
+            evidence_id=evidence_id,
+        )
 
     def parse(system, prompt, settings, schema, **kwargs):
         inputs = json.loads(prompt)

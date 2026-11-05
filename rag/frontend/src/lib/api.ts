@@ -1060,7 +1060,8 @@ export interface KnowledgeBaseSummary extends KnowledgeBaseRef {
   document_count: number;
   indexed_document_count: number;
   error_document_count: number;
-  searchable_chunk_count: number;
+  /** 一覧では未集計のため null。詳細は正確な件数。 */
+  searchable_chunk_count: number | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -1242,6 +1243,7 @@ export interface StructureBuildPlan { items: StructureBuildItem[]; total: number
 export interface StructureBuildJob extends StructureBuildPlan { job_id: string; status: string; partial_visibility?: boolean; started_at: string; finished_at: string | null }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
+  searchable_chunk_count: number;
   structure_index_enabled?: boolean | null;
   structure_index_global_enabled?: boolean;
   retrieval_config: Record<string, unknown>;
@@ -4023,6 +4025,7 @@ export const api = {
       `/api/knowledge-bases${qs ? `?${qs}` : ""}`,
     );
   },
+  countKnowledgeBases: () => request<number>("/api/knowledge-bases/count"),
   getKnowledgeBase: (id: string) =>
     request<KnowledgeBaseDetail>(
       `/api/knowledge-bases/${encodeURIComponent(id)}`,

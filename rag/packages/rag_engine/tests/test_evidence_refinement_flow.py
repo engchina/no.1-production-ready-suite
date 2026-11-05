@@ -21,6 +21,7 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.citation_wire import generation_draft_wire_model
 from rag_engine.knowledge.runtime_knowledge import RuntimeKnowledgeContext, RuntimeRule
 from rag_engine.models.audit_wire import is_audit_wire
+from rag_engine.models.llm import ApplicationAudit
 
 QUESTION = "対象Aを開く方法を教えてください。"
 OPEN = "対象Aの一覧から対象を選んで詳細画面を開きます。"
@@ -58,9 +59,19 @@ class Parser:
     def __init__(self, responses: list[Any] | None = None) -> None:
         self.responses = responses or []
         self.calls: list[dict[str, Any]] = []
+        self.application_reviews: list[dict[str, Any]] = []
 
     def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-        assert issubclass(schema, generation_draft_wire_model()), "none で追加の監査を呼ばない"
+        if schema is ApplicationAudit:
+            inputs = json.loads(prompt)
+            self.application_reviews.append(inputs)
+            return ApplicationAudit(
+                application_reviews=[
+                    {"index": row["index"], "valid": True, "reason": "合成の対応した規則"} for row in inputs["applications"]
+                ],
+                summary_supported=True,
+            )
+        assert issubclass(schema, generation_draft_wire_model()), "期待する生成/推導検査以外は呼ばない"
         self.calls.append({"system": system, "prompt": prompt, "schema": schema.model_json_schema()})
         if self.responses:
             value = self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
@@ -145,6 +156,7 @@ def test_none_opt_in_sends_only_selected_evidence_and_never_audits(monkeypatch: 
     assert trace["evidence_refinement"]["additional_generation_calls"] == 1
     assert trace["evidence_refinement"]["semantic_verification"] == "not_performed_by_selection"
     assert all(row["review_execution"] == "not_run" for row in trace["rounds"])
+    assert len(parser.application_reviews) == 1
     assert prepared
 
 

@@ -87,6 +87,35 @@ def _client(pool: FakeOraclePool) -> OracleClient:
 
 
 @pytest.mark.anyio
+async def test_knowledge_base_page_and_count_keep_the_same_allowed_scope() -> None:
+    pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}]])
+    oracle = _client(pool)
+    with _scope(knowledge_base_ids={"kb-2", "kb-1"}):
+        assert (
+            await oracle.list_knowledge_bases(
+                query="synthetic", knowledge_base_ids=["kb-2"], limit=1, offset=2
+            )
+            == []
+        )
+        assert (
+            await oracle.count_knowledge_bases(query="synthetic", knowledge_base_ids=["kb-2"]) == 0
+        )
+    listing, counting = pool.connection.calls
+    for call in (listing, counting):
+        assert (
+            "kb.knowledge_base_id IN (:access_knowledge_base_id_0, :access_knowledge_base_id_1)"
+            in call.statement
+        )
+        assert call.parameters["access_knowledge_base_id_0"] == "kb-1"
+        assert call.parameters["access_knowledge_base_id_1"] == "kb-2"
+        assert call.parameters["filter_kb_id_0"] == "kb-2"
+        assert call.parameters["knowledge_base_query"] == "%synthetic%"
+        assert "rag_chunks" not in call.statement
+    assert listing.statement.index("OFFSET") < listing.statement.index("document_counts AS")
+    assert "rag_documents" not in counting.statement
+
+
+@pytest.mark.anyio
 async def test_search_answer_profile_list_count_and_get_are_scoped() -> None:
     pool = FakeOraclePool(execute_results=[[], [{"count_value": 0}], []])
     oracle = _client(pool)

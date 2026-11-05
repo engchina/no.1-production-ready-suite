@@ -330,3 +330,16 @@ def test_item_citation_ordinals_and_body_survive_saved_message_round_trip(legacy
     assert all(
         chunk.metadata["answer_citation_provenance"] == "child" for chunk in restored.citations
     )
+
+
+def test_stored_evaluation_input_preserves_provided_scope_proof() -> None:
+    """根拠の圧縮は送達範囲を検索候補から作り直さない。"""
+    scope = {
+        "status": "partial",
+        "evidence_items": [{"id": "sent", "text": "送達した本文"}],
+        "sha256": "proof",
+    }
+    full = {"question": "合成の質問", "evidence_items": [], "provided_evidence_scope": scope}
+    compact = stored_evaluation_input(full)
+    assert compact is not None
+    assert compact["provided_evidence_scope"] == scope

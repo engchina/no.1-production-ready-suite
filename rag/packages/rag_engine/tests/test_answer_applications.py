@@ -68,10 +68,11 @@ class ApplicationTest(unittest.TestCase):
         self.assertEqual(mark["state"], "warning")
         self.assertEqual([r["code"] for r in mark["reasons"]], ["application_unaudited"])
 
-    def test_application_rejected_by_uncalibrated_audit_is_retained(self):
+    def test_rejected_application_is_withheld_from_body_and_summary(self):
         result = answer([application()], application_reviews=((0, False),))
-        self.assertIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
-        self.assertTrue(result.generation_trace["applications"][0]["published"])
+        self.assertNotIn(APPLICATIONS_SECTION_TITLE, result.answer_text)
+        self.assertFalse(result.generation_trace["applications"][0]["published"])
+        self.assertFalse(result.answer_text.startswith("延滞料は1200円です。"))
         self.assertFalse(observed_audit(result)["application_reviews"][0]["valid"])
         self.assertFalse(result.envelope["removed_passages"])
 

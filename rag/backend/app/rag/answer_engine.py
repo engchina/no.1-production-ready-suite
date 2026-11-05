@@ -322,6 +322,7 @@ EVALUATION_INPUT_KEYS = (
     "external_data_required",
     "external_data_items",
     "evidence_items",
+    "provided_evidence_scope",
 )
 
 

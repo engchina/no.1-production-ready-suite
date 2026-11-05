@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
+from rag_engine.models.llm import ApplicationAudit
 
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine
@@ -112,6 +113,11 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     def model(
         system: str, prompt: str, settings: Any, schema: type[BaseModel], **options: Any
     ) -> Any:
+        if schema is ApplicationAudit:
+            return schema(
+                application_reviews=[{"index": 0, "valid": True, "reason": "合成の原文対応"}],
+                summary_supported=True,
+            )
         calls.append((schema.__name__, prompt))
         assert schema.__name__.endswith("GroundedDraftWire"), "生成以外のモデル呼び出しは禁止"
         evidence_id = re.findall(r"\[(E[0-9]+)\]", prompt[: prompt.index(BODY)])[-1]
