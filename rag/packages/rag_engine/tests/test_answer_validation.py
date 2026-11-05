@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from validation_unit_support import unit_audit_output, wire_text
 
 from rag_engine.evaluation.answer_validation import (
     QUESTION_ID,
@@ -42,10 +43,12 @@ def _passages(inputs: str) -> list[str]:
 def test_claims_are_bound_to_passages_and_evidence() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         ids, evidence_id = _passages(inputs)
-        assert schema is ClaimAuditOutput
+        assert schema.__name__ == "FinalValidationUnitAudit"
         assert system == VALIDATION_SYSTEM_PROMPT and system.startswith("## Step 1:")
         assert "standard_answer" not in inputs  # 標準回答は使わない
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -67,7 +70,7 @@ def test_claims_are_bound_to_passages_and_evidence() -> None:
                         "reason": "延長の記載が無い",
                     },
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -88,14 +91,16 @@ def test_claims_violating_the_contract_on_the_last_attempt_are_dropped_not_faile
         ids, _ = _passages(inputs)
         calls.append(inputs)
         claim = {"status": "unsupported", "evidence_id": "", "source_id": "", "evidence_quote": "", "reason": "記載が無い"}
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {**claim, "answer_quote": "段落", "answer_passage_id": ids[1]},
                     {**claim, "answer_quote": "段落", "answer_passage_id": "P999"},
                     {**claim, "answer_quote": "回答に無い文", "answer_passage_id": ""},
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -109,7 +114,9 @@ def test_claims_violating_the_contract_on_the_last_attempt_are_dropped_not_faile
 def test_missing_passages_are_unassessed_and_empty_answers_are_not_audited() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         ids, _ = _passages(inputs)
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -122,7 +129,7 @@ def test_missing_passages_are_unassessed_and_empty_answers_are_not_audited() -> 
                         "reason": "実データの確認",
                     },
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -155,11 +162,13 @@ def test_headings_citations_and_questions_are_not_audited() -> None:
         import json
 
         payload = json.loads(inputs)
-        seen.append([item["text"] for item in payload["answer_passages"]])
+        seen.append([wire_text(item) for item in payload["answer_passages"]])
         evidence_id = _documents(payload)[0]["evidence_id"]
         ids = [item["id"] for item in payload["answer_passages"]]
         assert "reason も日本語で書く" in system
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -181,7 +190,7 @@ def test_headings_citations_and_questions_are_not_audited() -> None:
                         "reason": "延長の記載が無い",
                     },
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -235,9 +244,11 @@ def test_location_lines_evidence_ids_and_table_structure_are_not_audited() -> No
         import json
 
         payload = json.loads(inputs)
-        seen.append([item["text"] for item in payload["answer_passages"]])
+        seen.append([wire_text(item) for item in payload["answer_passages"]])
         evidence_id = _documents(payload)[0]["evidence_id"]
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -251,7 +262,7 @@ def test_location_lines_evidence_ids_and_table_structure_are_not_audited() -> No
                     }
                     for item in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -310,8 +321,10 @@ def _bridge_validation(evidence_id: str, *, evidence_quote: str = "") -> dict:
 
         payload = json.loads(inputs)
         ids = {item["id"]: item["evidence_id"] for item in _documents(payload)}
-        assert "「,」で区切って evidence_id に書く" in system
-        return ClaimAuditOutput.model_validate(
+        assert "evidence_unit_ids" in system
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -324,41 +337,28 @@ def _bridge_validation(evidence_id: str, *, evidence_quote: str = "") -> dict:
                         "reason": "台帳で極秘、規程で極秘は 10 年と確かめられる。",
                     },
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         return validate_answer_claims("人事評価システムのデータの保管期間は？", BRIDGE_ANSWER, [LEDGER, RETENTION], settings=None)
 
 
-def test_claim_supported_by_two_evidence_ids_is_not_a_citation_error() -> None:
-    """複数根拠の ID は結び付けるが、実際の出典を持たない結論は支持済みにしない。"""
-    for written in (
-        "{ledger},{retention}",
-        "{ledger}, {retention}",
-        "{ledger}、{retention}",
-        "[{ledger} / {retention}]",
-        # chunk の id（MCP の evidence_id）を並べたもの・括弧で囲んだ 1 つの ID も同じ。
-        "doc-ledger:set:3, doc-retention:set:1",
-        "【{ledger}】",
-    ):
-        result = _bridge_validation(written)
-        [claim] = result["claim_checks"]
-        assert claim["status"] == "unassessed", written
-        assert claim["source_id"] in {LEDGER["id"], RETENTION["id"]}
-        assert result["counts"] == {"unassessed": 1}
-    # 結び付けた片段の ID をすべて残す（最初の根拠を出典にする）。
-    [claim] = _bridge_validation("{ledger}, {retention}")["claim_checks"]
-    assert claim["source_id"] == LEDGER["id"] and claim["evidence_quote"] == LEDGER["text"]
-    assert len(claim["evidence_id"].split(",")) == 2
+def test_units_selected_from_two_sources_preserve_both_without_actual_citation_promotion():
+    for written in ("{ledger},{retention}", "{ledger}, {retention}"):
+        [claim] = _bridge_validation(written)["claim_checks"]
+        assert claim["status"] == "unassessed"
+        assert claim["source_id"] == LEDGER["id"]
+        assert len(claim["evidence_id"].split(",")) == 2
+        assert claim["support_quote"] == ""
 
 
-def test_unknown_or_unquoted_ids_in_a_list_stay_citation_errors() -> None:
-    """並べた ID の 1 つでも根拠に無い・引用がどの根拠にも無いときは、今までどおり引用エラー (#1364)。"""
-    for written, quote in (("{ledger}, E0000000000000000000", ""), ("{ledger} {retention}", "根拠に無い文"), ("E0000000000000000000", "")):
-        [claim] = _bridge_validation(written, evidence_quote=quote)["claim_checks"]
-        assert claim["status"] == "citation_error", written
-        assert claim["reason"].startswith("未登録の原文ID。")
+def test_unknown_or_formatted_unit_choices_do_not_recover_a_partial_source_set():
+    for written in ("{ledger}, E0000000000000000000", "{ledger} {retention}", "E0000000000000000000", "【{ledger}】"):
+        [claim] = _bridge_validation(written)["claim_checks"]
+        assert claim["status"] == "citation_error"
+        assert claim["source_id"] == "" and claim["evidence_quote"] == ""
+        assert claim["reference_check"] == "audit_id_invalid"
 
 
 # 出典の行の事例（RAG と Agent の両方のテストが読む。#1370）。
@@ -415,9 +415,11 @@ def test_citation_lines_of_the_evaluation_answers_are_not_audited(case: dict) ->
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        seen.append([item["text"] for item in payload["answer_passages"]])
+        seen.append([wire_text(item) for item in payload["answer_passages"]])
         evidence_id = _documents(payload)[0]["evidence_id"]
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -431,7 +433,7 @@ def test_citation_lines_of_the_evaluation_answers_are_not_audited(case: dict) ->
                     }
                     for item in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -451,7 +453,7 @@ def test_citation_line_marked_not_a_claim_is_not_unassessed() -> None:
         {
             "claim_checks": [
                 {
-                    "answer_quote": item["text"],
+                    "answer_quote": wire_text(item),
                     "answer_passage_id": item["id"],
                     "status": "not_a_claim",
                     "evidence_id": "",
@@ -486,7 +488,7 @@ def test_location_line_and_closing_marked_not_a_claim_are_not_unassessed() -> No
         {
             "claim_checks": [
                 {
-                    "answer_quote": item["text"],
+                    "answer_quote": wire_text(item),
                     "answer_passage_id": item["id"],
                     "status": "not_a_claim",
                     "evidence_id": "",
@@ -578,9 +580,11 @@ def test_headings_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        seen.append([item["text"] for item in payload["answer_passages"]])
+        seen.append([wire_text(item) for item in payload["answer_passages"]])
         evidence_id = _documents(payload)[0]["evidence_id"]
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -594,7 +598,7 @@ def test_headings_of_the_evaluation_answers_are_not_audited(case: dict) -> None:
                     }
                     for item in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -660,7 +664,7 @@ def test_heading_phrase_marked_not_a_claim_is_not_unassessed() -> None:
         {
             "claim_checks": [
                 {
-                    "answer_quote": item["text"],
+                    "answer_quote": wire_text(item),
                     "answer_passage_id": item["id"],
                     "status": "not_a_claim",
                     "evidence_id": "",
@@ -764,8 +768,10 @@ def _portal_validation(written: list[str]) -> dict:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         ids = [item["evidence_id"] for item in _documents(payload)]
-        assert "省かず・短くせずにそのまま書く" in system
-        return ClaimAuditOutput.model_validate(
+        assert "unit_id" in system
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -779,7 +785,7 @@ def _portal_validation(written: list[str]) -> dict:
                     }
                     for passage, evidence_id in zip(payload["answer_passages"], written, strict=True)
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -788,29 +794,24 @@ def _portal_validation(written: list[str]) -> dict:
         )
 
 
-def test_span_ids_shortened_by_the_model_are_bound_to_their_evidence() -> None:
-    """モデルが片段の ID の後ろを切って書いても（「E0d7d982」）、根拠の 1 つに決まれば「未登録の原文ID」にしない (#1391)。
-
-    #1362 の評価の da-trial-account-setup を流し直すと、モデルは 21 文字の ID を 8〜10 文字に切って返し、
-    手順の段落が引用エラーで外され、回答の本文が空になった。
-    """
-    result = _portal_validation(["{0:.8}", "{1:.10}", "{2:.12}", "{0:.8}, {1}, {2:.9}"])
+def test_shortened_unit_choices_do_not_recover_sources_but_exact_selections_bind():
+    for written in (
+        ["{0:.8}", "{1:.10}", "{2:.12}", "{0:.8}, {1}, {2:.9}"],
+        ["{0:.10}".upper(), "evidence_id: {1:.9}", "evidence_id {2:.8}…", "{0:.8}..."],
+    ):
+        result = _portal_validation(written)
+        assert result["counts"] == {"citation_error": 4}
+        assert all(not c["source_id"] for c in result["claim_checks"])
+    result = _portal_validation(["{0}", "{1}", "{2}", "{0},{1},{2}"])
     assert result["counts"] == {"unassessed": 4}
-    claims = result["claim_checks"]
-    assert [claim["source_id"] for claim in claims] == [f"{PORTAL}:2", f"{PORTAL}:3", f"{PORTAL}:4", f"{PORTAL}:2"]
-    # 結び付けた片段の完全な ID を残す（監査の記録から根拠を引ける）。
-    assert all(len(token) == 21 for claim in claims for token in claim["evidence_id"].split(","))
-    assert len(claims[3]["evidence_id"].split(",")) == 3
-    # 大文字で書いた ID・ラベルを付けた ID・「…」「...」で省いた ID も同じ。
-    result = _portal_validation(["{0:.10}".upper(), "evidence_id: {1:.9}", "evidence_id {2:.8}…", "{0:.8}..."])
-    assert result["counts"] == {"unassessed": 4}
+    assert [c["source_id"] for c in result["claim_checks"]] == [f"{PORTAL}:2", f"{PORTAL}:3", f"{PORTAL}:4", f"{PORTAL}:2"]
 
 
 def test_shortened_ids_that_do_not_point_to_one_evidence_stay_citation_errors() -> None:
     """根拠に無い ID・短すぎて根拠を決められない ID は、今までどおり引用エラー (#1391)。"""
     result = _portal_validation(["E0000000", "{0:.4}", "{1:.6}…", "{0:.8}, E0000000"])
     assert result["counts"] == {"citation_error": 4}
-    assert all(claim["reason"].startswith("未登録の原文ID。") for claim in result["claim_checks"])
+    assert all(claim["reference_check"] == "audit_id_invalid" for claim in result["claim_checks"])
 
 
 # 多段の br-document-portal-retention: 回答が根拠の ID を途中で省いて書き（「…fffa…:1」）、検証のモデルがそれを写した。
@@ -870,7 +871,9 @@ def _retention_validation(written: list[str], rechecks: list[dict] | None = None
             answers = written if len(calls) == 1 else [""] * len(payload["answer_passages"])
             if len(calls) == 1:
                 first.update(zip((passage["id"] for passage in payload["answer_passages"]), written, strict=True))
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -884,7 +887,7 @@ def _retention_validation(written: list[str], rechecks: list[dict] | None = None
                     }
                     for passage, evidence_id in zip(payload["answer_passages"], answers, strict=True)
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -896,33 +899,15 @@ def _retention_validation(written: list[str], rechecks: list[dict] | None = None
     return result
 
 
-def test_chunk_ids_abbreviated_in_the_answer_are_bound_when_copied_by_the_model() -> None:
-    """回答に書かれた途中を省いた chunk の id をモデルが写しても、1 つの chunk に決まれば結び付ける (#1391)。"""
-    both = f"{PORTAL_LEDGER['id']},{ABBREVIATED_CHUNK_ID}"
-    result = _retention_validation([both, f"evidence_id {ABBREVIATED_CHUNK_ID}", both])
-    assert result["counts"] == {"supported": 1, "unassessed": 2}
-    assert [claim["source_id"] for claim in result["claim_checks"]] == [PORTAL_LEDGER["id"], f"{RETENTION_SET}:1", PORTAL_LEDGER["id"]]
-    # 実サービスで流し直すと、モデルは「…」を落として写した（「…fffa:1」）。部分ごとに照合して結び付ける。
-    dropped = ABBREVIATED_CHUNK_ID.replace("…", "")
-    result = _retention_validation([f"{PORTAL_LEDGER['id']},{dropped}", dropped, f"{PORTAL_LEDGER['id'][:20]}…:5"])
+def test_answer_abbreviations_do_not_replace_explicit_unit_selection():
+    both = f"{PORTAL_LEDGER['id']},{RETENTION_SET}:1"
+    result = _retention_validation([both, f"{RETENTION_SET}:1", both])
     assert result["counts"] == {"supported": 1, "unassessed": 2}
     assert result["claim_checks"][1]["source_id"] == f"{RETENTION_SET}:1"
-    assert result["claim_checks"][2]["source_id"] == PORTAL_LEDGER["id"]
-    # 省いた所の後ろ（番号）が違えば根拠に無い chunk、番号まで省けば 2 つの chunk のどちらか決まらない。
-    # 回答に書かれた ID でない語（「record_codes.values[1]」）も、今までどおり引用エラー。
-    # ただし 2 つ目の段落は段落そのものが根拠の ID（「…fffa…:1」）を書いているので、その根拠に結び付ける（#1404）。
-    # ID を書かない 1・3 つ目の段落は、2 つ目の段落が引いた根拠だけで確かめ直し、出典が決まらなければそのまま（#1412）。
-    rechecks: list[dict] = []
-    result = _retention_validation([ABBREVIATED_CHUNK_ID.replace(":1", ":9"), f"{RETENTION_SET[:40]}…", "record_codes.values[1]"], rechecks)
-    assert [claim["status"] for claim in result["claim_checks"]] == ["citation_error", "supported", "citation_error"]
-    assert result["claim_checks"][1]["source_id"] == f"{RETENTION_SET}:1"
-    [recheck] = rechecks
-    assert [passage["id"] for passage in recheck["answer_passages"]] == ["A1", "A3"]
-    assert [item["id"] for item in _documents(recheck)] == [f"{RETENTION_SET}:1"]
-    assert result["rechecked_passage_ids"] == []
-    # 「…」を落とした ID も、番号が違う・残した部分が短い・部分の数が違うものは結び付けない。
-    result = _retention_validation([dropped.replace(":1", ":9"), f"{RETENTION_SET.split(':')[0]}:16f112:1", f"{RETENTION_SET}:extra:1"])
-    assert [claim["status"] for claim in result["claim_checks"]] == ["citation_error", "supported", "citation_error"]
+    invalid = f"{PORTAL_LEDGER['id']},{ABBREVIATED_CHUNK_ID}"
+    result = _retention_validation([invalid, f"evidence_id {ABBREVIATED_CHUNK_ID}", invalid])
+    assert result["counts"] == {"citation_error": 3}
+    assert all(not c["source_id"] for c in result["claim_checks"])
 
 
 # #1362 の再評価の Run run_f45cb461c85946459d604dd08561d626（cmp-mes-vs-qms-deadline）の形（#1404。ID は合成した値）。
@@ -995,7 +980,9 @@ def _deadline_validation(
             assert recheck is not None, "確かめ直しを想定していない"
             ids = [item["evidence_id"] for item in _documents(payload)]
             answers = [(status, evidence_id.format(*ids)) for status, evidence_id in recheck]
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1009,7 +996,7 @@ def _deadline_validation(
                     }
                     for passage, (status, evidence_id) in zip(payload["answer_passages"], answers, strict=True)
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -1018,56 +1005,24 @@ def _deadline_validation(
         )
 
 
-def test_full_chunk_ids_written_in_the_answer_are_not_citation_errors() -> None:
-    """根拠の id と完全に一致する ID を引用した段落を「未登録の原文ID」にしない (#1404)。
-
-    モデルは evidence_id に回答の「【証拠 ID …】」をラベルごと写したり、片段の ID を写し損ねたりする。
-    ラベル・ID でない語は除いて照合し、それでも決まらなければ段落そのものが書いた ID で根拠に結び付ける。
-    """
-    result = _deadline_validation(
-        [
-            ("supported", f"【証拠 ID {MES}】"),
-            ("supported", "E9f9f9f9f9f9f9f9f9f9f"),  # 根拠に無い片段の ID: 段落の ID（QMS）で結び付ける。
-            ("supported", f"【証拠 ID {MES}】、【証拠ID: {QMS}】"),
-            ("supported", f"{MES}（第 3 章）, {QMS}"),
-        ]
-    )
+def test_actual_answer_citations_and_explicit_unit_choices_are_independent():
+    result = _deadline_validation([("supported", MES), ("supported", QMS), ("supported", f"{MES},{QMS}"), ("supported", f"{MES},{QMS}")])
     assert result["counts"] == {"supported": 3, "unassessed": 1}
-    assert [claim["source_id"] for claim in result["claim_checks"]] == [MES, QMS, MES, MES]
-    # 結び付けた片段の完全な ID を残す。
-    assert all(
-        token.startswith("E") and len(token) == 21 for claim in result["claim_checks"][1:] for token in claim["evidence_id"].split(",")
-    )
-    # evidence_id を空で返しても、段落が書いた ID（完全一致・途中を省いた形・部分ごとの前方一致）で結び付ける。
-    mes_document, mes_set, _ = MES.split(":")
-    answer = DEADLINE_ANSWER.replace(f"【証拠 ID {QMS}】。", f"【証拠 ID {QMS[:40]}…:3】。", 1).replace(
-        f"【証拠 ID {MES}】【", f"【証拠 ID {mes_document}:{mes_set[:12]}:2】【", 1
-    )
-    result = _deadline_validation(
-        [("supported", ""), ("supported", ""), ("supported", ""), ("supported", f"【証拠 ID {MES}】")], answer=answer
-    )
-    assert result["counts"] == {"supported": 3, "unassessed": 1}
-    assert [claim["source_id"] for claim in result["claim_checks"]] == [MES, QMS, MES, MES]
+    assert [c["source_id"] for c in result["claim_checks"]] == [MES, QMS, MES, MES]
+    invalid = _deadline_validation([("supported", "")] * 4)
+    assert invalid["counts"] == {"citation_error": 4}
+    assert all(not c["source_id"] for c in invalid["claim_checks"])
 
 
-def test_model_citation_errors_with_resolved_ids_are_not_kept() -> None:
-    """モデルが citation_error を返しても、引用した ID がすべて根拠に決まれば出典の誤りにしない (#1404)。
-
-    裏付けの判定はモデルから返っていないので、supported にはせず unassessed（確かめが終わっていない）にする。
-    """
-    first = [("citation_error", ""), ("citation_error", f"【証拠 ID {QMS}】"), ("supported", MES), ("citation_error", "")]
-    # 4 つ目の段落は ID を書いておらず、モデルの evidence_id も空なので出典を照合できない。他の段落が引いた根拠
-    # （MES・QMS）で確かめ直しても出典が決まらなければ、citation_error のまま（#1412）。
+def test_model_citation_errors_with_valid_units_do_not_become_supported():
+    first = [("citation_error", MES), ("citation_error", QMS), ("supported", MES), ("citation_error", "")]
     result = _deadline_validation(first, recheck=[("citation_error", "")])
-    statuses = [claim["status"] for claim in result["claim_checks"]]
-    assert statuses == ["unassessed", "unassessed", "supported", "citation_error"]
-    assert result["claim_checks"][0]["reason"].startswith("引用した ID は根拠に一致しますが")
-    # モデルが候補で supported と判定しても、実際の出典を付けていない結論は unassessed。
-    calls: list[dict] = []
+    assert [c["status"] for c in result["claim_checks"]] == ["unassessed", "unassessed", "supported", "citation_error"]
+    assert result["claim_checks"][0]["audit_status"] == "citation_error"
+    calls = []
     result = _deadline_validation(first, recheck=[("supported", "{0},{1}")], calls=calls)
-    assert [claim["status"] for claim in result["claim_checks"]] == ["unassessed", "unassessed", "supported", "unassessed"]
-    assert result["claim_checks"][3]["source_id"] == MES and result["rechecked_passage_ids"] == ["A4"]
-    assert [item["id"] for item in _documents(calls[1])] == [MES, QMS]
+    assert [c["status"] for c in result["claim_checks"]] == ["unassessed", "unassessed", "supported", "unassessed"]
+    assert result["rechecked_passage_ids"] == ["A4"]
 
 
 def test_unresolved_ids_in_the_answer_stay_citation_errors() -> None:
@@ -1092,7 +1047,7 @@ def test_unresolved_ids_in_the_answer_stay_citation_errors() -> None:
         reaudits=reaudits,
     )
     assert result["counts"] == {"citation_error": 4} and len(calls) == 1
-    assert all(claim["reason"].startswith("未登録の原文ID。") for claim in result["claim_checks"][:3])
+    assert all(claim["reference_check"] in {"audit_id_invalid", "answer_id_invalid"} for claim in result["claim_checks"][:3])
     # 段落が書いた ID が根拠に無い段落（回答の引用の誤り）は監査し直さず、監査が返した ID だけの誤りの 3 つ目の
     # 段落だけを 1 回監査し直す（#112。同じ ID を返したので citation_error のまま）。
     assert [[passage["id"] for passage in call["answer_passages"]] for call in reaudits] == [["A3"]]
@@ -1149,7 +1104,12 @@ WINDOW_ANSWER = (
     "以上の資料に基づき、Customer Portal の本番変更は上記の保守時間帯に行うことが規定されています。"
 )
 # 実サービスの最初の判定の形: 結論（A2）は supported で evidence_id が空、まとめ（A6）は citation_error。
-WINDOW_FIRST = {"A2": ("supported", ""), "A4": ("supported", f"{PLAN}:1"), "A5": ("supported", f"{CHANGE}:4"), "A6": ("citation_error", "")}
+WINDOW_FIRST = {
+    "A2": ("citation_error", ""),
+    "A4": ("supported", f"{PLAN}:1"),
+    "A5": ("supported", f"{CHANGE}:4"),
+    "A6": ("citation_error", ""),
+}
 
 
 def _window_validation(
@@ -1181,7 +1141,9 @@ def _window_validation(
                 text = text.replace("@" + chunk_id, evidence_id)
             return text
 
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1195,7 +1157,7 @@ def _window_validation(
                     }
                     for passage in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -1219,7 +1181,7 @@ def test_unreferenced_conclusions_are_rechecked_with_evidence_cited_by_other_pas
     # 確かめ直しには ID を書かない 2 段落と、他の段落が引いた 2 つの根拠だけを渡す（質問・回答の全文は同じ）。
     (system, first), (_, recheck) = calls
     assert "段落に ID が無いことを citation_error にしない" in system
-    assert "未引用の資料を代わりに選ばない" in system
+    assert "passage_citations" not in first and "passage_citations" not in recheck
     assert [passage["id"] for passage in first["answer_passages"]] == ["A2", "A4", "A5", "A6"]
     assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
     assert [item["id"] for item in _documents(recheck)] == [f"{PLAN}:1", f"{CHANGE}:4"]
@@ -1240,7 +1202,7 @@ def test_recheck_keeps_the_first_result_unless_it_finds_support() -> None:
         assert [claim["status"] for claim in result["claim_checks"]] == ["citation_error", "supported", "supported", "citation_error"], (
             recheck
         )
-        assert result["claim_checks"][0]["reason"].startswith("未登録の原文ID。")
+        assert result["claim_checks"][0]["reference_check"] == "audit_id_missing"
         assert result["rechecked_passage_ids"] == [] and len(calls) == 2
     # 片方だけ裏付けられれば、その段落だけ替える。
     result, _ = _window_validation(WINDOW_FIRST, {"A2": ("supported", _cite(f"{PLAN}:1")), "A6": ("unsupported", "")})
@@ -1257,7 +1219,7 @@ def test_written_ids_missing_from_the_evidence_stay_citation_errors_and_are_not_
         first, {"A2": ("supported", _cite(f"{CHANGE}:4")), "A6": ("supported", _cite(f"{CHANGE}:4"))}, answer=answer
     )
     assert [claim["status"] for claim in result["claim_checks"]] == ["unassessed", "citation_error", "supported", "unassessed"]
-    assert result["claim_checks"][1]["reason"].startswith("未登録の原文ID。")
+    assert result["claim_checks"][1]["reference_check"] == "answer_id_invalid"
     # 確かめ直しの段落に A4（ID を書いた段落）は入らず、候補は A5 が引いた根拠だけ。
     recheck = calls[1][1]
     assert [passage["id"] for passage in recheck["answer_passages"]] == ["A2", "A6"]
@@ -1319,10 +1281,12 @@ def _oms_validation(answer: str, verdict) -> tuple[dict, str]:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        seen.append((system, [passage["text"] for passage in payload["answer_passages"]]))
+        seen.append((system, [wire_text(passage) for passage in payload["answer_passages"]]))
         ids = {item["id"]: item["evidence_id"] for item in _documents(payload)}
         status, chunk_id = verdict(system)
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1336,7 +1300,7 @@ def _oms_validation(answer: str, verdict) -> tuple[dict, str]:
                     }
                     for passage in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -1436,7 +1400,9 @@ def test_paragraphs_that_only_write_the_location_differently_are_not_unsupported
         [item] = _documents(payload)
         seen["system"] = system
         located = item.get("row_start") == 23 and item.get("sheet_name") == "システム台帳"
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1449,7 +1415,7 @@ def test_paragraphs_that_only_write_the_location_differently_are_not_unsupported
                         "reason": "内容と行が根拠と一致" if located else "行23 という位置情報は根拠に含まれない",
                     },
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -1473,7 +1439,7 @@ def test_passages_are_not_split_inside_brackets(case: dict) -> None:
     """括弧の中の「。」で段落を分けず、太字の印・閉じ括弧だけの断片を作らない（#1455）。"""
     from rag_engine.generation.operation_audit import answer_passages
 
-    assert [item["text"] for item in answer_passages(case["line"])] == case["passages"]
+    assert [wire_text(item) for item in answer_passages(case["line"])] == case["passages"]
 
 
 def test_unverified_section_titles_match_the_builtin_language_pack() -> None:
@@ -1509,7 +1475,7 @@ def test_passage_ranges_locate_each_passage_in_the_answer() -> None:
     ranges = answer_passage_ranges(answer)
 
     assert [passage_id for passage_id, _start, _end in ranges] == [item["id"] for item in passages]
-    assert [answer[start:end] for _id, start, end in ranges] == [item["text"] for item in passages]
+    assert [answer[start:end] for _id, start, end in ranges] == [wire_text(item) for item in passages]
     assert [answer[start:end] for _id, start, end in ranges][-4:] == [
         "あ" * 600,
         "あ" * 50 + "。",
@@ -1525,8 +1491,10 @@ def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        seen.append([item["text"] for item in payload["answer_passages"]])
-        return ClaimAuditOutput.model_validate(
+        seen.append([wire_text(item) for item in payload["answer_passages"]])
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1540,7 +1508,7 @@ def test_quoted_ledger_header_is_audited_as_one_passage() -> None:
                     }
                     for item in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -1604,14 +1572,16 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
                 "reason": "判定",
             }
 
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     check(ids[0], "supported", premise["evidence_id"]),
                     check(ids[1], "supported", f"{premise['evidence_id']},{document['evidence_id']}"),
                     check(ids[2], "unsupported", ""),
                 ]
-            }
+            },
         )
 
     premises = [{"question": "所属部署の部門長の承認は得ていますか？", "answer": " いいえ "}, {"question": "空", "answer": ""}]
@@ -1621,8 +1591,8 @@ def test_premises_support_the_user_answer_and_the_conclusion_drawn_from_it() -> 
     premise = _documents(seen["payload"])[0]
     assert (premise["id"], premise["source"]) == (f"{PREMISE_ID_PREFIX}1", PREMISE_SOURCE)
     # モデルには根拠の本文の文字の形をそろえて渡す（「？」は半角になる。#1350）。
-    assert premise["text"].endswith("\n利用者の答え: いいえ")
-    assert premise_items(premises)[0]["text"] == "確認の質問: 所属部署の部門長の承認は得ていますか？\n利用者の答え: いいえ"
+    assert wire_text(premise).endswith("\n利用者の答え: いいえ")
+    assert wire_text(premise_items(premises)[0]) == "確認の質問: 所属部署の部門長の承認は得ていますか？\n利用者の答え: いいえ"
     assert PREMISE_SOURCE in seen["system"]
     assert result["counts"] == {"supported": 1, "unassessed": 1, "unsupported": 1}
     stated, concluded, other = result["claim_checks"]
@@ -1681,7 +1651,7 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
                             "constraint_scope": "content",
                             "passage_mode": "execution",
                             "constraint_quote": "項目 A だけ。グループは変えない",
-                            "passage_quote": payload["answer_passages"][0]["text"],
+                            "passage_quote": wire_text(payload["answer_passages"][0]),
                         },
                         {
                             "answer_passage_id": ids[1],
@@ -1706,8 +1676,10 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
                 "reason": "判定",
             }
 
-        return ClaimAuditOutput.model_validate(
-            {"claim_checks": [check(ids[0], "supported", document["evidence_id"]), check(ids[1], "unsupported", "")]}
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
+            {"claim_checks": [check(ids[0], "supported", document["evidence_id"]), check(ids[1], "unsupported", "")]},
         )
 
     premises = [{"question": "変更するのは個別の項目ですか、共有グループ全体ですか？", "answer": "項目 A だけ。グループは変えない"}]
@@ -1719,7 +1691,7 @@ def test_paragraph_broader_than_the_users_scope_is_contradicted_by_the_premise()
     assert scope["user_answers"] == [
         "確認の質問: 変更するのは個別の項目ですか、共有グループ全体ですか？\n利用者の答え: 項目 A だけ。グループは変えない"
     ]
-    assert [item["text"] for item in scope["answer_passages"]] == SCOPE_ANSWER.split("\n\n")
+    assert [wire_text(item) for item in scope["answer_passages"]] == SCOPE_ANSWER.split("\n\n")
     broader, narrow = result["claim_checks"]
     assert (broader["status"], broader["support_check"], broader["audit_status"]) == ("contradicted", SUPPORT_PREMISE_CONFLICT, "supported")
     assert claim_mark_code(broader["status"], broader["support_check"]) == "contradicted"
@@ -1740,7 +1712,9 @@ def test_premise_consistency_check_failure_keeps_the_audit_verdicts() -> None:
             raise RuntimeError("synthetic failure")
         payload = json.loads(inputs)
         document = _documents(payload)[-1]
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1754,7 +1728,7 @@ def test_premise_consistency_check_failure_keeps_the_audit_verdicts() -> None:
                     }
                     for item in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     premises = [{"question": "範囲は？", "answer": "項目 A だけ"}]
@@ -1770,7 +1744,7 @@ def test_premises_are_not_truncated_by_the_evidence_budget() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.append(_documents(payload))
-        return ClaimAuditOutput.model_validate({"claim_checks": []})
+        return unit_audit_output(schema, json.loads(inputs), {"claim_checks": []})
 
     long_evidence = [{"id": f"c{i}", "source": "m.pdf", "page_start": 1, "page_end": 1, "text": "あ" * 4000} for i in range(200)]
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -1801,7 +1775,9 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
         seen.update(payload=payload, system=system)
         data, document = _documents(payload)
         ids = [item["id"] for item in payload["answer_passages"]]
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1823,7 +1799,7 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
                         "reason": "規則を結果に当てはめた",
                     },
                 ]
-            }
+            },
         )
 
     data_results = [
@@ -1840,7 +1816,7 @@ def test_data_results_support_values_and_conclusions_drawn_from_them() -> None:
 
     data = _documents(seen["payload"])[0]
     assert (data["id"], data["source"]) == (f"{DATA_RESULT_ID_PREFIX}1", DATA_RESULT_SOURCE)
-    assert "実行した SQL: SELECT COUNT(*)" in data["text"]
+    assert "実行した SQL: SELECT COUNT(*)" in wire_text(data)
     assert DATA_RESULT_SOURCE in seen["system"]
     stated, concluded = result["claim_checks"]
     assert (stated["status"], stated["source_id"]) == ("supported", "data:1")
@@ -1888,21 +1864,23 @@ def test_question_facts_support_stated_facts_and_rules_applied_to_them() -> None
                 "reason": "判定",
             }
 
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     check(ids[0], "supported", question["evidence_id"]),
                     check(ids[1], "supported", f"{document['evidence_id']},{question['evidence_id']}"),
                     check(ids[2], "unsupported", ""),
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims(QUESTION_TEXT, QUESTION_ANSWER, QUESTION_EVIDENCE, settings=None)
 
     question = seen["payload"]["evidence_items"][0]
-    assert (question["id"], question["source"], question["text"]) == (QUESTION_ID, QUESTION_SOURCE, QUESTION_TEXT)
+    assert (question["id"], question["source"], wire_text(question)) == (QUESTION_ID, QUESTION_SOURCE, QUESTION_TEXT)
     assert QUESTION_SOURCE in seen["system"]
     stated, applied, other = result["claim_checks"]
     assert (stated["status"], stated["source_id"]) == ("supported", QUESTION_ID)
@@ -1921,7 +1899,7 @@ def test_validation_budget_comes_from_the_settings_and_keeps_the_question() -> N
 
     def parse(system, inputs, settings, schema, provider_id=None):
         seen.append(json.loads(inputs)["evidence_items"])
-        return ClaimAuditOutput.model_validate({"claim_checks": []})
+        return unit_audit_output(schema, json.loads(inputs), {"claim_checks": []})
 
     evidence = [{"id": f"c{i}", "source": "m.pdf", "page_start": 1, "page_end": 1, "text": "あ" * 1500} for i in range(40)]
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -1985,7 +1963,9 @@ def test_contradiction_with_an_unknown_audit_id_stays_contradicted() -> None:
         payload = json.loads(inputs)
         calls.append(payload)
         assert [item["id"] for item in _documents(payload)] == [SETTING_OFF, SETTING_NOTE]
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            json.loads(inputs),
             {
                 "claim_checks": [
                     {
@@ -1998,7 +1978,7 @@ def test_contradiction_with_an_unknown_audit_id_stays_contradicted() -> None:
                         "reason": "合成資料は設定Aが無効と記載している。",
                     }
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -2008,7 +1988,8 @@ def test_contradiction_with_an_unknown_audit_id_stays_contradicted() -> None:
     assert claim["status"] == claim["audit_status"] == "contradicted"
     assert claim["reference_check"] == "audit_id_invalid"
     # 出典は決めず、監査が返した ID はそのまま残す（変換前の応答を追える）。
-    assert (claim["source_id"], claim["evidence_quote"], claim["evidence_id"]) == ("", "", UNKNOWN_SPAN_ID)
+    assert (claim["source_id"], claim["evidence_quote"], claim["evidence_id"]) == ("", "", "")
+    assert claim["audit_evidence_id"] == "invalid-unit:" + UNKNOWN_SPAN_ID
     assert claim["reason"].endswith("合成資料は設定Aが無効と記載している。")
     # 否定の判定は確かめ直さない（根拠を絞った確かめ直しで判定を替えない）。
     assert len(calls) == 1 and result["rechecked_passage_ids"] == []
@@ -2152,25 +2133,27 @@ def _limit_answer(form: str) -> str:
     return f"{text}\n\n{LIMIT_OWNER}"
 
 
-def _claim_output(payload: dict, statuses: dict[str, str]) -> ClaimAuditOutput:
+def _claim_output(payload: dict, statuses: dict[str, str], *, schema) -> ClaimAuditOutput:
     """段落の原文 → 判定（無い段落は返さない）。裏付け・矛盾は最初の根拠の evidence_id を付ける。"""
     evidence_id = _documents(payload)[0]["evidence_id"]
-    return ClaimAuditOutput.model_validate(
+    return unit_audit_output(
+        schema,
+        payload,
         {
             "claim_checks": [
                 {
                     "answer_quote": "段落",
                     "answer_passage_id": item["id"],
-                    "status": statuses[item["text"]],
-                    "evidence_id": evidence_id if statuses[item["text"]] in {"supported", "contradicted"} else "",
+                    "status": statuses[wire_text(item)],
+                    "evidence_id": evidence_id if statuses[wire_text(item)] in {"supported", "contradicted"} else "",
                     "source_id": "",
                     "evidence_quote": "",
                     "reason": "合成の理由。",
                 }
                 for item in payload["answer_passages"]
-                if item["text"] in statuses
+                if wire_text(item) in statuses
             ]
-        }
+        },
     )
 
 
@@ -2181,8 +2164,8 @@ def test_content_rewritten_as_headings_tables_or_examples_is_still_audited(form:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        seen.append([item["text"] for item in payload["answer_passages"]])
-        return _claim_output(payload, {text: "supported" for text in seen[-1]})
+        seen.append([wire_text(item) for item in payload["answer_passages"]])
+        return _claim_output(payload, {text: "supported" for text in seen[-1]}, schema=schema)
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("上限は？", _limit_answer(form), LIMIT_EVIDENCE, settings=None)
@@ -2204,8 +2187,8 @@ def test_passages_the_model_calls_non_claims_are_reaudited() -> None:
         payload = json.loads(inputs)
         calls.append(payload)
         if len(calls) == 1:
-            return _claim_output(payload, {bold: "not_a_claim", example: "not_a_claim", LIMIT_OWNER: "unsupported"})
-        return _claim_output(payload, {bold: "supported", example: "unsupported"})
+            return _claim_output(payload, {bold: "not_a_claim", example: "not_a_claim", LIMIT_OWNER: "unsupported"}, schema=schema)
+        return _claim_output(payload, {bold: "supported", example: "unsupported"}, schema=schema)
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("上限は？", answer, LIMIT_EVIDENCE, settings=None)
@@ -2213,7 +2196,7 @@ def test_passages_the_model_calls_non_claims_are_reaudited() -> None:
     assert len(calls) == 2
     assert "validation_feedback" not in calls[0]
     assert calls[1]["validation_feedback"] == REAUDIT_FEEDBACK
-    assert [item["text"] for item in calls[1]["answer_passages"]] == [bold, example]
+    assert [wire_text(item) for item in calls[1]["answer_passages"]] == [bold, example]
     assert _documents(calls[1]) == _documents(calls[0])
     claims = {claim["answer_quote"]: claim for claim in result["claim_checks"]}
     assert {quote: claim["status"] for quote, claim in claims.items()} == {
@@ -2241,8 +2224,8 @@ def test_unresolved_classification_mismatch_stays_unassessed_and_is_traceable() 
         payload = json.loads(inputs)
         calls.append(payload)
         if len(calls) == 1:
-            return _claim_output(payload, {bold: "not_a_claim", LIMIT_OWNER: "supported"})
-        return _claim_output(payload, {bold: "not_a_claim"})
+            return _claim_output(payload, {bold: "not_a_claim", LIMIT_OWNER: "supported"}, schema=schema)
+        return _claim_output(payload, {bold: "not_a_claim"}, schema=schema)
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("上限は？", answer, LIMIT_EVIDENCE, settings=None)
@@ -2259,7 +2242,7 @@ def test_unresolved_classification_mismatch_stays_unassessed_and_is_traceable() 
         payload = json.loads(inputs)
         if "validation_feedback" in payload:
             raise RuntimeError("合成の失敗")
-        return _claim_output(payload, {bold: "not_a_claim", LIMIT_OWNER: "supported"})
+        return _claim_output(payload, {bold: "not_a_claim", LIMIT_OWNER: "supported"}, schema=schema)
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=failing):
         failed = validate_answer_claims("上限は？", answer, LIMIT_EVIDENCE, settings=None)
@@ -2276,7 +2259,7 @@ def test_quality_evaluation_records_the_classification_mismatch() -> None:
         {
             "claim_checks": [
                 {
-                    "answer_quote": item["text"],
+                    "answer_quote": wire_text(item),
                     "answer_passage_id": item["id"],
                     "status": "not_a_claim",
                     "evidence_id": "",
@@ -2328,7 +2311,7 @@ def _figure_validation(statuses: dict[int, tuple[str, str]], recheck: dict[int, 
     ``recheck`` は図の項目だけの supported を確かめ直す呼び出しへの、段落の番号 → 判定（図の項目を根拠にする）。
     """
     seen: dict = {"calls": []}
-    texts = {"t1": FLOW_TEXT["text"], "f1": FLOW_FIGURE["text"]}
+    texts = {"t1": wire_text(FLOW_TEXT), "f1": wire_text(FLOW_FIGURE)}
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
@@ -2358,7 +2341,7 @@ def _figure_validation(statuses: dict[int, tuple[str, str]], recheck: dict[int, 
                     "reason": "合成の理由。",
                 }
             )
-        return ClaimAuditOutput.model_validate({"claim_checks": checks})
+        return unit_audit_output(schema, json.loads(inputs), {"claim_checks": checks})
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("判定の後は？", FLOW_ANSWER, evidence or [FLOW_TEXT, FLOW_FIGURE], settings=None)
@@ -2387,19 +2370,18 @@ def test_figure_only_claims_that_do_not_point_to_a_figure_are_unsupported() -> N
     claims = result["claim_checks"]
     assert [(claim["status"], claim["audit_status"]) for claim in claims[1:]] == [
         ("unsupported", "figure_only"),
-        ("unsupported", "figure_only"),
+        ("unassessed", "figure_only"),
     ]
     assert claims[1]["reference_check"] == "not_figure" and claims[1]["source_id"] == ""
     assert claims[2]["reference_check"] == "audit_id_missing"
 
 
-def test_figure_only_claims_with_unresolved_ids_take_the_only_figure() -> None:
-    """渡した根拠に図が 1 つだけなら、ID を写し損ねた figure_only もその図に結び付ける (#2678)。"""
+def test_typed_unit_selection_does_not_infer_the_only_figure():
     result, _seen = _figure_validation({0: ("supported", "t"), 1: ("figure_only", "t"), 2: ("figure_only", "")})
     claims = result["claim_checks"]
-    assert [(claim["status"], claim["source_id"], claim["reference_check"]) for claim in claims[1:]] == [
-        ("figure_only", "f1", "single_figure"),
-        ("figure_only", "f1", "single_figure"),
+    assert [(c["status"], c["source_id"], c["reference_check"]) for c in claims[1:]] == [
+        ("unsupported", "", "not_figure"),
+        ("unassessed", "", "audit_id_missing"),
     ]
 
 
@@ -2462,7 +2444,7 @@ def test_figure_only_is_only_in_the_validation_schema() -> None:
 def test_nested_item_label_and_extra_citation_do_not_pollute_counts() -> None:
     """父ラベルと、監査が余分に返した出典の行は判定の集計に入れない。"""
     label = "- 照合すべき項目"
-    fact = EVIDENCE[0]["text"]
+    fact = wire_text(EVIDENCE[0])
     citation = "出典: manual.pdf p.1"
     answer = f"{label}\n  - {fact}\n{citation}"
     calls = []
@@ -2470,7 +2452,7 @@ def test_nested_item_label_and_extra_citation_do_not_pollute_counts() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         calls.append(payload)
-        output = _claim_output(payload, {f"- {fact}": "supported", label: "not_a_claim"})
+        output = _claim_output(payload, {f"- {fact}": "supported", label: "not_a_claim"}, schema=schema)
         output.claim_checks.append(
             output.claim_checks[0].model_copy(
                 update={
@@ -2485,7 +2467,7 @@ def test_nested_item_label_and_extra_citation_do_not_pollute_counts() -> None:
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims("有効期限は？", answer, EVIDENCE, settings=None)
     assert len(calls) == 1
-    assert [p["text"] for p in calls[0]["answer_passages"]] == [f"- {fact}"]
+    assert [wire_text(p) for p in calls[0]["answer_passages"]] == [f"- {fact}"]
     assert result["counts"] == {"supported": 1}
     assert result["reaudited_passage_ids"] == []
     assert [c["answer_quote"] for c in result["claim_checks"]] == [f"- {fact}"]
@@ -2493,23 +2475,30 @@ def test_nested_item_label_and_extra_citation_do_not_pollute_counts() -> None:
 
 @pytest.mark.parametrize("quote", ["対象の状 態を確認します。", "**対象の状態**を確認します。", "対象の`状態`を確認します。"])
 def test_support_quote_accepts_pdf_spaces_and_balanced_markdown(quote: str) -> None:
+    from rag_engine.evaluation.answer_eval import _evidence_fragments
+    from rag_engine.evaluation.answer_validation import ValidationClaimCheck, _bind_validation, _enforce_support
+
     fact = "対象の状態を確認します。"
-
-    def parse(system, inputs, settings, schema, provider_id=None):
-        payload = json.loads(inputs)
-        output = _claim_output(payload, {fact: "supported"})
-        output.claim_checks[0].evidence_quote = quote
-        return output
-
-    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
-        result = validate_answer_claims(
-            "対象は？",
-            fact + "\n根拠：manual.pdf p.1",
-            [{"id": "c1", "source": "manual.pdf", "page_start": 1, "text": "対象の状 態を確認します。"}],
-            settings=None,
-        )
-    assert result["counts"] == {"supported": 1}
-    assert result["claim_checks"][0]["support_check"] == ""
+    text = "対象の状 態を確認します。"
+    fragments = list(_evidence_fragments([{"id": "c1", "text": text}]))
+    catalog = {row["evidence_id"]: row for row in fragments}
+    output = ClaimAuditOutput(
+        claim_checks=[
+            ValidationClaimCheck(
+                answer_quote=fact,
+                answer_passage_id="A1",
+                evidence_id=fragments[0]["evidence_id"],
+                evidence_quote=quote,
+                source_id="",
+                status="supported",
+                applicability="matched",
+                reason="保存済みのコピー診断です。",
+            )
+        ]
+    )
+    bound = _bind_validation(output, catalog, [{"id": "A1", "text": fact}])
+    claims = _enforce_support(bound.claim_checks, [], catalog, {"c1": text}, [])
+    assert claims[0].status == "supported" and claims[0].support_check == ""
 
 
 @pytest.mark.parametrize(
@@ -2534,7 +2523,7 @@ def test_other_chapter_table_is_not_supported_when_scope_does_not_apply() -> Non
         payload = json.loads(inputs)
         document = _documents(payload)[0]
         assert document["section_path"] == ["第2章 範囲 B", "集計"]
-        output = _claim_output(payload, {fact: "supported"})
+        output = _claim_output(payload, {fact: "supported"}, schema=schema)
         output.claim_checks[0].applicability = "not_applicable"
         return output
 

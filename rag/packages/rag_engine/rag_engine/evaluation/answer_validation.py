@@ -46,6 +46,7 @@ from rag_engine.evaluation.answer_eval import (
     _unresolved_reference,
     model_request,
 )
+from rag_engine.evaluation.final_validation_units import final_unit_schema, prepare_unit_request, restore_unit_claims
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY, RELATION_SUPPORT_POLICY
 from rag_engine.generation.check_cues import check_cues
@@ -95,7 +96,8 @@ from rag_engine.retrieval.task_contract import STEPS_REQUEST, explicit_requests,
 # 18: 制約が実行・提案のどちらを禁止するかを区別し、比較の採否を独立記録する（#3800）。
 # 19: 監査が supported としたのに、監査の応答の参照（写した原文・返した ID）を根拠に結び付けられなかった段落を、
 #     誤りと直し方を差し戻してその段落だけで 1 回監査し直す（最初の監査の指示は変えていない。#112）。
-VALIDATION_RUBRIC_VERSION = 19
+# 20: 最終検証だけを送達原文単位のID選択へ変え、原文・位置はコードで復元する（#4152）。
+VALIDATION_RUBRIC_VERSION = 20
 
 # 図の見た目だけで決まる主張（要素の配置・矢印の向き・つながり・分岐への所属など、図の本文が明示しない内容）の判定。
 # 根拠の本文では確かめられず、図の画像を読んだかどうかで扱いが決まる（#2678。検証に通さない判定に数える）。
@@ -154,49 +156,46 @@ VALIDATION_SYSTEM_PROMPT = (
         "の段落の判定が分かれるときは最も厳しいものを記録する。\n"
         "- supported: evidence_items がその主張を"
         "明確に裏付ける。矛盾がないだけでは supported にしない。e"
-        "vidence_id に evidence_items の evid"
-        "ence_id を指定する。\n"
+        "vidence_unit_ids に使った原文単位のIDを指定する。\n"
         "- evidence_items の先頭の、source が「"
     )
     + QUESTION_SOURCE
     + """」の項目（id が """
     + QUESTION_ID
     + """）は質問の文で、資料ではない。質問が述べる状況（人物・金額・日付・期間・経緯など）は確かめた事実として扱い、「質問の情報なので根拠に無い」を unsupported の理由にしない。
-- 段落が質問の事実をそのまま述べるなら、質問の項目の evidence_id で supported にする。
-- 資料の規則・条件・算式を質問の事実に当てはめた結論・計算（「年収 120 万円は 130 万円未満なので収入の要件を満たす」など）は、規則の根拠と質問の項目の evidence_id を「,」で区切って書き、規則が資料の根拠で裏付けられ、結論・計算がその規則と質問の事実から直接に従う（計算・期間・日付の数え方が正しい）ときだけ supported にする。質問にも資料にも無い事実・値を使った結論は unsupported にする。
+- 段落が質問の事実をそのまま述べるなら、質問の項目の原文単位IDで supported にする。
+- 資料の規則・条件・算式を質問の事実に当てはめた結論・計算（「年収 120 万円は 130 万円未満なので収入の要件を満たす」など）は、規則の根拠と質問の項目の原文単位IDを evidence_unit_ids に選び、規則が資料の根拠で裏付けられ、結論・計算がその規則と質問の事実から直接に従う（計算・期間・日付の数え方が正しい）ときだけ supported にする。質問にも資料にも無い事実・値を使った結論は unsupported にする。
 - 質問の文は、資料・規程・条文・手順・数値の基準の内容の裏付けには使わない。
-- 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った根拠の evidence_id をすべて「,」で区切って evidence_id に書く。
-- evidence_id は evidence_items の evidence_id の値（E で始まる値）を省かず・短くせずにそのまま書く。id（chunk の id）や回答に書かれた ID を evidence_id に書かない。
+- 2 つ以上の根拠を合わせて裏付ける主張（ある根拠で対象の区分・担当を確かめ、別の根拠でその区分・担当の規則を確かめる多段の結論など）は、使った原文単位のIDをすべて evidence_unit_ids に選ぶ。
+- evidence_items.units は原文の単位と unit_id。evidence_unit_ids は提示された unit_id の選択だけを返す。原文や出典IDを写さない。
 - 回答に書かれた根拠の ID（【証拠 ID …】など）は evidence_items の id に当たる。ID の照合はシステムが行うので、ID の書き方ではなく裏付けの有無で判定する。
-- passage_citations は段落に実際に付いた出典の evidence_id の集合。資料の主張は、この集合だけで対象・操作・条件・順序を裏付ける。複数の出典を共同で使ってよいが、未引用の資料を代わりに選ばない。
-- 出典が無い、出典の対応が未確認、対象との一致が unknown の資料の主張は unassessed。質問・利用者の答え・照会結果は資料の内容の裏付けに使わない。
+- 対象との一致が unknown の資料の主張は unassessed。質問・利用者の答え・照会結果は資料の内容の裏付けに使わない。
 - citation_error は、段落が書いた根拠の ID が evidence_items に無いときだけに使う。段落に ID が無いことを citation_error にしない。
 
 ## Step 4: 矛盾・支持不足・未確認を区別する
-- contradicted: 根拠と矛盾する。evidence_id を指定する。
+- contradicted: 根拠と矛盾する。使った原文単位IDを選ぶ。
 - 質問・回答が対象（会社・台帳・版・年度・部署など）を限定しているときは、その限定を主張の条件として読み、範囲の中の根拠で判定する。その範囲の外の根拠（別の会社の台帳の同じ略称の行など）との違いを contradicted にしない。範囲の中の根拠と食い違うときだけ contradicted にする。
 - 同じ略称・名前が範囲の外で別のものを指していても、範囲を限定した主張とは矛盾しない（主張は範囲の外のものについて述べていない）。主張が「唯一」「すべて」と述べていない限り、ほかに同じ略称があることを矛盾や断定できない理由にしない。
 - 例: 質問が「A 社のシステム台帳で、略称が X のシステムの正式名は？」で、A 社の台帳の行が「略称 X = 甲システム」、B 社の台帳の行が「略称 X = 乙システム」なら、「A 社の台帳で略称 X のシステムは甲システム」は A 社の行で supported。B 社の行を理由に contradicted にしない。
 - unsupported: 渡した根拠では確認できない。誤りとは区別する。
-- figure_only: 段落が図の見た目でしか決まらない内容（要素の配置・矢印の向き・線のつながり・どの分岐や枠に属するか）を述べ、図の項目（evidence_type が figure_description / ocr）の本文がそれを明示していない。evidence_id にその図の項目の evidence_id を書く。図の本文の語の並び・近さから推した構造を supported にしない（語の並びは図の配置を表さない）。図の本文が明示する内容（説明の文が述べる関係・図の中の語そのもの）は、ほかの根拠と同じく判定する。図の項目の対象はその図（配置・矢印を含む）なので、その図について述べた段落（図の本文から決められないと述べる段落を含む）との applicability は matched。
+- figure_only: 段落が図の見た目でしか決まらない内容（要素の配置・矢印の向き・線のつながり・どの分岐や枠に属するか）を述べ、図の項目（evidence_type が figure_description / ocr）の本文がそれを明示していない。evidence_unit_ids にその図の原文単位IDを選ぶ。図の本文の語の並び・近さから推した構造を supported にしない（語の並びは図の配置を表さない）。図の本文が明示する内容（説明の文が述べる関係・図の中の語そのもの）は、ほかの根拠と同じく判定する。図の項目の対象はその図（配置・矢印を含む）なので、その図について述べた段落（図の本文から決められないと述べる段落を含む）との applicability は matched。
 - data_confirmation: 未確認の実データ（設定値・ログ・個案の状態・件数など）の確認を促すだけの段落。資料の内容の断定や操作の説明をここへ逃がさない。
 - not_a_claim: 見出しだけの行。本文の文には使わない。
-- source_id は空文字でよい（evidence_id から出典を取る）。
 - evidence_items のうち source が「"""
     + PREMISE_SOURCE
     + """」のもの（id が """
     + PREMISE_ID_PREFIX
     + """ で始まる）は、利用者が回答の前の確認の質問に答えた内容（利用者の状況の申告）で、資料ではない。
-- 段落が利用者の答えをそのまま述べる（「利用者の回答では、部門長の承認は得ていない」など）なら、その evidence_id で supported にする。
-- 資料の規則・条件を利用者の答えに当てはめた結論（「承認が得られていないため、削除できない」など）は、規則の根拠と利用者の答えの evidence_id を「,」で区切って書き、規則が資料の根拠で裏付けられ、結論がその規則と答えから直接に従うときだけ supported にする。
+- 段落が利用者の答えをそのまま述べる（「利用者の回答では、部門長の承認は得ていない」など）なら、その原文単位IDで supported にする。
+- 資料の規則・条件を利用者の答えに当てはめた結論（「承認が得られていないため、削除できない」など）は、規則の根拠と利用者の答えの原文単位IDを evidence_unit_ids に選び、規則が資料の根拠で裏付けられ、結論がその規則と答えから直接に従うときだけ supported にする。
 - 利用者の答えは、資料・規程・手順・画面・数値の内容の裏付けには使わない（利用者の答えにそうした内容が書かれていても、それだけで supported にしない）。
 - evidence_items のうち source が「"""
     + DATA_RESULT_SOURCE
     + """」のもの（id が """
     + DATA_RESULT_ID_PREFIX
     + """ で始まる）は、業務データを SQL で照会した結果（照会の質問・SQL・結果の列と行）で、資料ではない。
-- 段落が照会の結果の値（件数・合計・平均・一覧の名前・日付など）をそのまま、または結果から直接に計算できる形（比・差・該当の有無など）で述べるなら、その evidence_id で supported にする。結果に無い値・結果と違う値は unsupported / contradicted にする。
-- 資料の規則・条件を照会の結果の値に当てはめた結論（「受注金額は 6 万〜24 万円なので、6 件すべてが部長の承認の範囲に入る」など）は、規則の根拠と照会の結果の evidence_id を「,」で区切って書き、規則が資料の根拠で裏付けられ、結論が規則と結果から直接に従うときだけ supported にする。
+- 段落が照会の結果の値（件数・合計・平均・一覧の名前・日付など）をそのまま、または結果から直接に計算できる形（比・差・該当の有無など）で述べるなら、その原文単位IDで supported にする。結果に無い値・結果と違う値は unsupported / contradicted にする。
+- 資料の規則・条件を照会の結果の値に当てはめた結論（「受注金額は 6 万〜24 万円なので、6 件すべてが部長の承認の範囲に入る」など）は、規則の根拠と照会の結果の原文単位IDを evidence_unit_ids に選び、規則が資料の根拠で裏付けられ、結論が規則と結果から直接に従うときだけ supported にする。
 - 照会の結果は、資料・規程・手順の内容の裏付けには使わない。
 - ボタンの役割、操作の順序、項目が属する画面、パラメータの条件、影響範囲（個別 / グループ / 全体）は個別に確認する。
 - 段落の一部だけが裏付けられるときは段落全体を supported にしない。適用する版・施行日が違う根拠を、今の手順の裏付けに使わない。
@@ -389,6 +388,9 @@ class ValidationClaimCheck(BaseModel):
     # 監査が裏付けとして写した原文（evidence_quote は結び付けた根拠の本文に置き換わるので、ここに残す）と、
     # supported を採らなかった理由（SUPPORT_CHECKS）。
     support_quote: SkipJsonSchema[str] = ""
+    # 最終検証内部とguide専用。公開claim/MCP/モデルschemaへは出さない。
+    unit_selection: SkipJsonSchema[list[dict[str, Any]] | None] = Field(default=None, exclude=True)
+    unit_selection_invalid: SkipJsonSchema[bool] = Field(default=False, exclude=True)
     support_check: SkipJsonSchema[str] = ""
     # 根拠の表の対応の取り違えを、表の正しい値に直した段落（#3005。support_check が table_corrected のとき）。
     revised_text: SkipJsonSchema[str] = ""
@@ -420,6 +422,9 @@ def _bind_figure_claims(claims: Sequence[ValidationClaimCheck], catalog: Mapping
             figures_by_id.setdefault(str(item.get("id") or ""), item)
     bound: list[ValidationClaimCheck] = []
     for claim in claims:
+        if claim.unit_selection is not None and not claim.unit_selection:
+            bound.append(claim.model_copy(update={"status": "unassessed"}) if claim.status == FIGURE_ONLY else claim)
+            continue
         if claim.status != FIGURE_ONLY:
             bound.append(claim)
             continue
@@ -431,7 +436,7 @@ def _bind_figure_claims(claims: Sequence[ValidationClaimCheck], catalog: Mapping
             cited = list(_spans_for_passage_citations(claim, catalog) or [])
             figures = [item for item in cited if item.get("evidence_type") in FIGURE_EVIDENCE_TYPES]
             reference = REFERENCE_RESOLVED_BY_ANSWER
-        if not figures and len(figures_by_id) == 1:
+        if not figures and len(figures_by_id) == 1 and claim.unit_selection is None:
             figures = list(figures_by_id.values())
             reference = REFERENCE_SINGLE_FIGURE
         if figures:
@@ -461,18 +466,28 @@ def _bind_figure_claims(claims: Sequence[ValidationClaimCheck], catalog: Mapping
     return bound
 
 
+def _parse_unit_checked(system, inputs, settings, schema, provider_id, check, **kwargs):
+    """既存の各監査呼出でだけ、実送達単位のwireを構築しexact束縛する。"""
+    prepared = prepare_unit_request(inputs)
+    wire = final_unit_schema(ValidationClaimCheck, prepared)
+    final_check = kwargs.pop("final_check", None)
+    output = _parse_checked(system, prepared.inputs, settings, wire, provider_id, check, final_check=final_check, **kwargs)
+    return restore_unit_claims(output, prepared, ValidationClaimCheck, ClaimAuditOutput)
+
+
 def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]], max_input_bytes: int) -> tuple[list[dict[str, Any]], bool]:
     """予算に収まるだけの根拠（先頭から）と、切り詰めたかどうか。"""
-    schema = _json(ClaimAuditOutput.model_json_schema())
     chosen: list[dict[str, Any]] = []
     for fragment in fragments:
         candidate = {**fixed, "evidence_items": [*chosen, fragment]}
-        # 予算はモデルに渡す形（根拠の本文の文字の形をそろえた後。#1350）で測る。
+        prepared = prepare_unit_request(candidate)
+        schema = _json(final_unit_schema(ValidationClaimCheck, prepared).model_json_schema())
+        # 単位表示と動的enumを含む、実際の送信形式で予算を測る。
         size = (
             len(
-                (resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT) + _json(model_request(candidate)) + schema).encode(
-                    "utf-8"
-                )
+                (
+                    resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT) + _json(model_request(prepared.inputs)) + schema
+                ).encode("utf-8")
             )
             + 1024
         )
@@ -540,6 +555,21 @@ def _bind_validation(
     結び付けで ``evidence_quote`` は根拠の本文に置き換わるので、監査が裏付けとして写した原文は先に取っておき、
     ``_enforce_support`` が根拠の本文と照らす（#2659）。
     """
+    if all(claim.unit_selection is not None for claim in output.claim_checks):
+        # 分類だけは共有の既存規則を使う。参照の再照合・回復は新wireへ適用しない。
+        claims = [
+            _bind_claims(output.model_copy(update={"claim_checks": [claim]}), catalog, passages, passage_citations=True).claim_checks[0]
+            if claim.status == "not_a_claim"
+            else claim
+            for claim in output.claim_checks
+        ]
+        claims = [
+            claim.model_copy(update={"reference_check": "answer_id_invalid"})
+            if claim.status == "citation_error" and _unresolved_reference(claim, catalog, passage_citations=True) == "answer_id_invalid"
+            else claim
+            for claim in claims
+        ]
+        return output.model_copy(update={"claim_checks": claims})
     binding_claims = []
     for claim in output.claim_checks:
         # 複数の実際の引用に分かれた原文を、単一の片段に無いだけで引用エラーにしない。
@@ -670,6 +700,8 @@ def _not_supported(claim: ValidationClaimCheck, status: str, check: str, reason:
 
 def _support_texts(claim: ValidationClaimCheck, catalog: Mapping[str, Mapping[str, Any]], texts: Mapping[str, str]) -> list[str]:
     """判定を結び付けた根拠の本文（分割する前の全文。結び付けた片段の chunk ごと）。"""
+    if claim.unit_selection is not None:
+        return [str(row["text"]) for row in claim.unit_selection]
     chunk_ids = [claim.source_id]
     for token in str(claim.evidence_id or "").split(","):
         span = catalog.get(token.strip())
@@ -974,6 +1006,8 @@ def _recheck_unreferenced_passages(
     今の判定のまま。段落が書いた ID が根拠に無い citation_error は確かめ直さない。
     戻り値は判定と、確かめ直して判定を替えた段落の ID。
     """
+    if _deadline_passed():
+        return claims, []
     by_passage: dict[str, list[ValidationClaimCheck]] = {}
     for claim in claims:
         by_passage.setdefault(claim.answer_passage_id, []).append(claim)
@@ -982,6 +1016,12 @@ def _recheck_unreferenced_passages(
         for passage in passages
         if (group := by_passage.get(passage["id"]))
         and any(claim.status == "citation_error" for claim in group)
+        # typed選択の形式障害は後続の参照再審へ渡し、未引用の意味再審で重複処理しない。
+        and not any(
+            claim.unit_selection is not None
+            and (claim.unit_selection_invalid or (claim.audit_status == "supported" and not claim.unit_selection))
+            for claim in group
+        )
         and not any(claim.status in {"unsupported", "contradicted"} for claim in group)
         and all(_writes_no_id(claim) for claim in group)
     ]
@@ -996,7 +1036,7 @@ def _recheck_unreferenced_passages(
     candidates = [*(item for item in evidence if is_premise_id(item.get("id"))), *candidates]
     inputs = {**fixed, "answer_passages": list(targets), "evidence_items": candidates}
     try:
-        output = _parse_checked(
+        output = _parse_unit_checked(
             resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
             inputs,
             settings,
@@ -1063,7 +1103,7 @@ def _reaudit_misclassified_passages(
         return claims, []
     inputs = {**fixed, "answer_passages": targets, "evidence_items": list(evidence), "validation_feedback": REAUDIT_FEEDBACK}
     try:
-        output = _parse_checked(
+        output = _parse_unit_checked(
             resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
             inputs,
             settings,
@@ -1114,13 +1154,9 @@ REFERENCE_REAUDIT_REJECTED = "rejected"
 _REAUDIT_QUOTE_CHARS = 200
 # 監査し直しの差し戻しの文の先頭（入力の validation_feedback。違反と直し方だけを書く）。
 REFERENCE_REAUDIT_FEEDBACK = (
-    "## Step 1: 根拠の ID と原文の写しを直す\n"
-    "answer_passages の段落は、前回の監査が supported と判定しましたが、返した evidence_quote が evidence_items の text に"
-    "見つからない、または evidence_id が evidence_items の evidence_id に決まらなかった段落です。根拠に照らして判定し直して"
-    "ください。supported / contradicted の evidence_quote は evidence_items の text から 1 字も変えずにそのまま写し"
-    "（言い換え・要約・表の書き直し・記号や括弧の付け替えをしない。離れた 2 か所は「…」でつなぐ）、evidence_id は "
-    "evidence_items の evidence_id（E で始まる値）を省かずにそのまま書いてください。ファイル名・chunk の id・回答の文を "
-    "evidence_id・source_id に書かないでください。\n前回の誤り:"
+    "## Step 1: 選択した原文単位を確認する\n"
+    "answer_passagesの段落を原文で判定し直し、今回のevidence_items.unitsにあるunit_idだけを選んでください。"
+    "根拠が確認できなければ支持へ変えません。\n前回の参照の誤り:"
 )
 
 
@@ -1136,10 +1172,13 @@ def _reference_failure_feedback(targets: Sequence[Mapping[str, str]], claims: Se
     for claim in claims:
         if claim.answer_passage_id in target_ids and _is_audit_reference_failure(claim):
             evidence_id = (claim.audit_evidence_id or claim.evidence_id)[:_REAUDIT_QUOTE_CHARS]
-            quote = " ".join(claim.support_quote.split())[:_REAUDIT_QUOTE_CHARS]
-            lines.append(
-                f"- {claim.answer_passage_id}: {claim.reference_check}（evidence_id: {evidence_id or '（空）'}、evidence_quote: 「{quote}」）"
-            )
+            if claim.unit_selection is not None:
+                lines.append(f"- {claim.answer_passage_id}: {claim.reference_check}（evidence_unit_ids: {evidence_id or '（空）'}）")
+            else:
+                quote = " ".join(claim.support_quote.split())[:_REAUDIT_QUOTE_CHARS]
+                lines.append(
+                    f"- {claim.answer_passage_id}: {claim.reference_check}（evidence_id: {evidence_id or '（空）'}、evidence_quote: 「{quote}」）"
+                )
     return "\n".join(lines)
 
 
@@ -1195,7 +1234,7 @@ def _reaudit_reference_failures(
         "validation_feedback": _reference_failure_feedback(targets, claims),
     }
     try:
-        output = _parse_checked(
+        output = _parse_unit_checked(
             resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
             inputs,
             settings,
@@ -1302,7 +1341,7 @@ def _audit_batch(
     inputs = {**fixed, "answer_passages": list(batch), "evidence_items": list(evidence)}
     with bind_deadline(child):
         try:
-            output = _parse_checked(
+            output = _parse_unit_checked(
                 resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
                 inputs,
                 settings,
@@ -1408,7 +1447,7 @@ def _recheck_figure_supported(
     items = [*(item for item in evidence if is_premise_id(item.get("id"))), *spans.values()]
     inputs = {**fixed, "answer_passages": targets, "evidence_items": items, "validation_feedback": FIGURE_RECHECK_FEEDBACK}
     try:
-        output = _parse_checked(
+        output = _parse_unit_checked(
             resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
             inputs,
             settings,
@@ -1547,6 +1586,11 @@ def _prefer_document_source(claim: ValidationClaimCheck, catalog: Mapping[str, M
     """利用者の前提と資料の根拠を合わせて裏付けた段落の出典を、資料の根拠にする（#1898）。"""
     if not is_premise_id(claim.source_id):
         return claim
+    if claim.unit_selection is not None:
+        for row in claim.unit_selection:
+            if not is_premise_id(row["source_id"]):
+                return claim.model_copy(update={"source_id": row["source_id"], "evidence_quote": row["text"]})
+        return claim
     for span in _spans_for_ids(claim, catalog) or []:
         if not is_premise_id(span.get("id")):
             return claim.model_copy(update={"source_id": span["id"], "evidence_quote": span["text"]})
@@ -1656,7 +1700,6 @@ def validate_answer_claims(
     reaudited: list[str] = []
     timed_out: list[Mapping[str, str]] = []
     catalog = {item["evidence_id"]: item for item in evidence}
-    fixed["passage_citations"] = _actual_citation_ids(answer_text, catalog, caller_citations)
     if remaining:
         batches = passage_batches(remaining, batch_passages)
 
@@ -1741,6 +1784,7 @@ def validate_answer_claims(
         **base,
         "status": STATUS_PARTIAL if timed_out_ids else "completed",
         "claim_checks": [claim.model_dump() for claim in claims],
+        "_selected_evidence": {index: claim.unit_selection for index, claim in enumerate(claims) if claim.unit_selection is not None},
         "counts": counts,
         "evidence_truncated": truncated,
         "premise_consistency_checks": premise_diagnostics,

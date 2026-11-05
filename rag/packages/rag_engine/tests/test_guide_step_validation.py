@@ -59,27 +59,27 @@ def _plan(steps: list[dict[str, Any]] = STEPS) -> GuidePlan:
 
 
 def _audit(quotes: list[str]) -> Callable[..., ClaimAuditOutput]:
-    """段落の順に、裏付けとして写した原文（quote）を返す監査のスタブ（すべて supported）。"""
+    """固定の原文箇所を含む実送達unit IDを選ぶ監査スタブ（すべて supported）。"""
 
     def parse(system: str, inputs: str, settings: Any, schema: Any, provider_id: str | None = None) -> ClaimAuditOutput:
         payload = json.loads(inputs)
         evidence = [item for item in payload["evidence_items"] if item["id"] != QUESTION_ID]
         claims = []
         for passage, quote in zip(payload["answer_passages"], quotes, strict=True):
-            chunk = next(item for item in evidence if all(part in item["text"] for part in quote.split("…")))
+            parts = quote.split("…")
+            chunk = next(item for item in evidence if all(any(part in unit["text"] for unit in item["units"]) for part in parts))
+            selected = [unit["unit_id"] for unit in chunk["units"] if any(part in unit["text"] for part in parts)]
             claims.append(
                 {
                     "answer_quote": "段落",
                     "answer_passage_id": passage["id"],
-                    "evidence_id": chunk["evidence_id"],
-                    "evidence_quote": quote,
+                    "evidence_unit_ids": selected,
                     "applicability": "matched",
                     "status": "supported",
-                    "source_id": "",
                     "reason": "資料に記載されている",
                 }
             )
-        return ClaimAuditOutput.model_validate({"claim_checks": claims})
+        return schema.model_validate({"claim_checks": claims})
 
     return parse
 
@@ -90,7 +90,9 @@ def _statuses(answer: str, quotes: list[str], *, embed: Any = None, steps: list[
     answer = "\n\n".join(part if part.startswith("#") else part + "\n根拠：manual.pdf p.3" for part in answer.split("\n\n"))
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=_audit(quotes)):
         claims = validate_answer_claims("質問", answer, items, settings=None)
-    result = validate_guide_steps(_plan(steps), claims["claim_checks"], EVIDENCE, embed=embed)
+    result = validate_guide_steps(
+        _plan(steps), claims["claim_checks"], EVIDENCE, embed=embed, selected_evidence=claims["_selected_evidence"]
+    )
     return {step["step_id"]: step["status"] for step in result["steps"]}
 
 
