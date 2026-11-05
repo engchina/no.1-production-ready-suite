@@ -24,12 +24,18 @@ def _answer_before_coverage(schema: dict[str, Any]) -> None:
 
 
 def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[BaseModel]:
-    """原文の選択と方法・結果を要点ごとに組にし、根拠不足はgapで受ける。"""
+    """要点の直接原文・導出の方法と結果・根拠不足を別の役割で受ける。"""
     source = catalog.selection_model()
+    direct = create_model(
+        "SourceAnswerPart",
+        __config__=ConfigDict(extra="forbid"),
+        kind=(cast(Any, Literal["source"]), Field(description="原文に直接記載された事実・規則・手順の提示。導出結果はanswer。")),
+        basis=(source, Field(description="そのまま提示する事実・規則・手順の原文。")),
+    )
     derived = create_model(
         "SupportedAnswerPart",
         __config__=ConfigDict(extra="forbid"),
-        kind=(Literal["answer"], Field(description="引用の根拠に基づく答え。")),
+        kind=(cast(Any, Literal["answer"]), Field(description="原文と既知値から計算・条件適用・組合せで導く答え。")),
         basis=(source, Field(description="導出に使う資料の事実・規則の原文。")),
         reasoning=(str, Field(min_length=1, max_length=600, description="依存する原文と既知値から導く方法。計算は算式で表す。")),
         result=(str, Field(min_length=1, max_length=600, description="reasoning から導いた、この要点への最終的な答え。途中の値ではない。")),
@@ -37,7 +43,7 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[
     gap = create_model(
         "GapAnswerPart",
         __config__=ConfigDict(extra="forbid"),
-        kind=(Literal["gap"], Field()),
+        kind=(cast(Any, Literal["gap"]), Field()),
         text=(str, Field(min_length=1, max_length=600, description="必要な資料・値・前提のうち不足するもの。")),
     )
     part = create_model(
@@ -50,7 +56,7 @@ def answer_parts_model(base: type[BaseModel], catalog: SentUnitCatalog) -> type[
                 min_length=1, max_length=600, description="この要点で答える質問の要求。必要な粒度で複合要求を分け、任意補足を必須にしない。"
             ),
         ),
-        answer=(Union.__getitem__((derived, gap)) if catalog.unit_ids else gap, Field()),
+        answer=(cast(Any, Union.__getitem__((direct, derived, gap)) if catalog.unit_ids else gap), Field()),
     )
     fields: dict[str, Any] = {
         "answer_parts": (GenericAlias(list, part), Field(min_length=1, max_length=MAX_ANSWER_PARTS)),
@@ -93,7 +99,7 @@ def _without_bound_locators(text: str, selected: list[BoundUnitRange]) -> str:
 def canonical_answer_parts(
     value: BaseModel, catalog: SentUnitCatalog, coverage: list[dict[str, Any]], *, question: str | None = None
 ) -> GroundedDraft:
-    """選択原文とinlineの導出から、既存APIの草稿と全indexを生成する。"""
+    """直接選択した原文とinlineの導出から、既存APIの草稿と全indexを生成する。"""
     raw = value.model_dump(exclude_unset=True)
     wire_parts = raw.pop("answer_parts", [])
     summary_indexes = raw.pop("summary_part_indexes", [])
@@ -108,6 +114,8 @@ def canonical_answer_parts(
     for position, part in enumerate(wire_parts):
         answer = part["answer"]
         kind = answer["kind"]
+        if kind not in {"source", "answer", "gap"}:
+            raise ValueError("回答要点の役割を確認できません。")
         selected = [] if kind == "gap" else list(catalog.bind(answer["basis"]["unit_ids"]))
         indexes = []
         for binding in selected:
@@ -117,7 +125,7 @@ def canonical_answer_parts(
                 source_indexes[key] = index
                 items.append(
                     {
-                        "kind": kind if kind != "answer" else "rule",
+                        "kind": "rule",
                         "text": binding.text,
                         "request_id": part["request_id"],
                         "citations": [
@@ -150,14 +158,14 @@ def canonical_answer_parts(
             items.append({"kind": "gap", "request_id": part["request_id"], "text": answer["text"], "citations": []})
             bindings.append(None)
             text = answer["text"]
-        else:
+        else:  # source は選んだ原文だけを直接提示する。
             text = "\n".join(items[index]["text"] for index in indexes)
         parts.append(
             {
                 "id": f"P{position + 1}",
                 "request_id": part["request_id"],
                 "text": part["requirement"],
-                "result_kind": "derived" if kind == "answer" else "gap",
+                "result_kind": "direct" if kind == "source" else "derived" if kind == "answer" else "gap",
                 "item_indexes": [] if kind == "answer" else indexes,
                 "application_indexes": app_indexes,
             }
