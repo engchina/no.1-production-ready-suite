@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from rag_parser_core.image_purpose import recorded_image_purpose
+
 from rag_engine.config import Settings, answer_model_reads_images
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answer_payload import _evidence_id_key, _int_value, _metadata_image_evidence, _records_for_prompt_injection_scan
@@ -165,6 +167,7 @@ def answer_image_evidence(
                         context_bbox = ref.get("vision_context_bbox") or []
             entry = {
                 "image_id": image_id,
+                "vision_image_purpose": recorded_image_purpose(raw),
                 "source": record.source,
                 "source_run_id": str(raw.get("source_run_id") or record.source_run_id),
                 "chunk_id": record.chunk_id,
@@ -229,21 +232,24 @@ def _answer_image_metadata(
         # 全metadataには表HTML・vision説明・周辺本文が重複して入る。本文はcontextから渡す。
         "prompt_images": [
             {
-                key: item.get(key)
-                for key in (
-                    "image_id",
-                    "source",
-                    "source_run_id",
-                    "page",
-                    "chunk_id",
-                    "bbox",
-                    "context_bbox",
-                    "target_highlight",
-                    "asset_kind",
-                    "visual_kind",
-                    "table_id",
-                    "embedding_modality",
-                )
+                **{
+                    key: item.get(key)
+                    for key in (
+                        "image_id",
+                        "source",
+                        "source_run_id",
+                        "page",
+                        "chunk_id",
+                        "bbox",
+                        "context_bbox",
+                        "target_highlight",
+                        "asset_kind",
+                        "visual_kind",
+                        "table_id",
+                        "embedding_modality",
+                    )
+                },
+                "vision_image_purpose": recorded_image_purpose(item),
             }
             for item in image_evidence
         ],

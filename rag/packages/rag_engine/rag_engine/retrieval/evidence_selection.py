@@ -9,6 +9,7 @@ import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
+from rag_parser_core.image_purpose import recorded_image_purpose
 from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import range_class
 
@@ -735,6 +736,8 @@ def evidence_spans(
                     # 抽出方法とデータの用途は別軸。正確なOCRでも文書の表示例を
                     # 今回の業務レコードの実値へ昇格させない。
                     "value_context": "reference_document",
+                    # 保存された根拠の用途だけを写し、現在設定や他の画像から補完しない。
+                    "vision_image_purpose": recorded_image_purpose(getattr(record, "metadata", None)),
                     "origin": _span_origin(record, start, end, image_ranges),
                 }
             )
