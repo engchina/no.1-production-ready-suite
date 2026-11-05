@@ -655,9 +655,13 @@ test("明示参照の方向を分け、未表示の参照先を取得して位�
   await expect(destination).toBeInViewport();
   await expect(destination).toHaveClass(/selected/);
   await expect(page.locator(`.react-flow__edge[data-id="${sourceDocument.id}:${target.id}"]`)).toHaveCount(1);
+  await expect(page.locator(`.react-flow__edge[data-id="contains:${target.id}"]`)).toHaveCount(1);
   await expect(page.locator(".react-flow__edge-text")).toHaveText("参照 1 件");
   await expectNoPageOverflow(page);
-  await page.screenshot({ path: testInfo.outputPath("reference-navigation.png"), fullPage: true });
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => {document.documentElement.dataset.theme=value;}, theme);
+    await page.screenshot({ path: testInfo.outputPath(`reference-navigation-${theme}.png`), fullPage: true });
+  }
 });
 
 test("1 段の 100 件を超える章節は続きを読み、読み込みの失敗は再試行できる", { tag: "@responsive" }, async ({ page }) => {

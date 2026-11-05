@@ -9,6 +9,7 @@ import "@xyflow/react/dist/style.css";
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { api, type GraphReferenceEndpoint, type StructureGraphDocument, type StructureGraphOverview } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { useStructureNodeMeasurements } from "./use-structure-node-measurements";
 import { GraphReferencePanel } from "./GraphReferencePanel";
 import { emptyStructureTree, layoutStructure, STRUCTURE_PAGE_SIZE, structureReferenceChains, visibleStructureNodes, type StructureTreeState, type StructureViewNode } from "./structure-graph";
 
@@ -201,6 +202,7 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
   const viewNodes = useMemo(() => visibleStructureNodes(overview, tree, (value) => (!kind || value === kind) && !disabledKinds.has(value)), [overview, tree, kind, disabledKinds]);
   const viewById = useMemo(() => new Map(viewNodes.map((node) => [node.id, node])), [viewNodes]);
   const visibleIds = useMemo(() => new Set(viewNodes.map((node) => node.id)), [viewNodes]);
+  useStructureNodeMeasurements(sizes, visibleIds);
   const referenceEdges = useMemo(() => aggregateGraphEdges(structureReferenceChains(overview, tree), visibleIds), [overview, tree, visibleIds]);
   const containsEdges = useMemo(() => viewNodes.flatMap((node) => (node.parent && visibleIds.has(node.parent) ? [{ id: `contains:${node.id}`, source: node.parent, target: node.id }] : [])), [viewNodes, visibleIds]);
   const documentEdges = useMemo(() => referenceEdges.map((edge) => ({ source: viewById.get(edge.source)!.documentNode, target: viewById.get(edge.target)!.documentNode })), [referenceEdges, viewById]);
