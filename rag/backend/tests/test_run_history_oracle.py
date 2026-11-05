@@ -271,3 +271,107 @@ async def test_run_history_shows_runs_to_the_executor_and_the_conversation_owner
     assert owner_detail["conversation_owner_hash"] == "a" * 64
     assert hidden_search is None
     assert bob_detail is None
+
+
+@pytest.mark.usefixtures("oracle_db")
+@pytest.mark.parametrize("cause_name", ["dns", "refused", "unknown"])
+async def test_failure_cause_survives_recorder_oracle_and_authenticated_get(
+    monkeypatch: pytest.MonkeyPatch, cause_name: str
+) -> None:
+    """同じ合成例外を実 Recorder・Oracle・認証済 GET まで通す（外部通信なし）。"""
+    import socket
+    from uuid import uuid4
+
+    import httpx
+    from rag_engine.generation.execution_record import AnswerExecutionError
+
+    from app.clients.oracle import _execute_count
+    from app.config import get_settings
+    from app.main import app
+    from app.rag.request_context import audit_request_context_for_principal
+    from app.rag.run_history import RunRecorder
+    from tests.security_support import USER_PASSWORD, enable_production_auth, session_headers
+
+    auth = enable_production_auth(monkeypatch)
+    user = auth.create_user("synthetic-history-admin", system_admin=True)
+    # Recorder の定期削除をこの試験に混ぜず、自分の行だけを finally で削除する。
+    monkeypatch.setattr(get_settings(), "rag_answer_record_retention_days", 0)
+    oracle = OracleClient()
+    store = RunHistoryStore(oracle)
+    run_id = f"pytest-diagnosis-{uuid4().hex}"
+    private_marker = "synthetic-private-exception-marker"
+    causes: dict[str, Exception] = {
+        "dns": socket.gaierror(-2, private_marker),
+        "refused": ConnectionRefusedError(111, private_marker),
+        "unknown": ValueError(private_marker),
+    }
+    error = AnswerExecutionError(private_marker, private_marker)
+    error.__cause__ = causes[cause_name]
+    error.__dict__["execution_steps"] = (
+        {"name": "根拠の選択", "status": "完了"},
+        {"name": "回答の生成", "status": "エラーで中断"},
+    )
+    expected = {
+        "kind": "unknown" if cause_name == "unknown" else "network",
+        "network_failure_cause": None if cause_name == "unknown" else cause_name,
+        "stage": "回答の生成",
+    }
+    context = audit_request_context_for_principal(
+        {},
+        request_id=run_id,
+        user_uuid=user.user_uuid,
+        allowed_search_answer_profile_ids=None,
+        allowed_knowledge_base_ids=None,
+    )
+    try:
+        token = set_audit_request_context(context)
+        try:
+            await RunRecorder(surface="search", settings=get_settings(), store=store).record(
+                run_id=run_id,
+                question=None,
+                search_answer_profile_id=None,
+                answer_generated=False,
+                status="error",
+                elapsed_ms=1,
+                error=error,
+            )
+            # 新しい Store で読み直す。Recorder のメモリ上の _last_record は使わない。
+            saved = await RunHistoryStore(OracleClient()).get_run(run_id)
+            assert saved is not None
+            stages = saved["stages_json"]
+            assert isinstance(stages, dict)
+            assert stages["failure_diagnosis"] == expected
+            assert stages["error_wrapper_type"] == "AnswerExecutionError"
+            assert saved["error_type"] == type(causes[cause_name]).__name__
+            assert saved["question"] is None
+            assert private_marker not in json.dumps(saved, default=str, ensure_ascii=False)
+        finally:
+            reset_audit_request_context(token)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            login = await client.post(
+                "/api/auth/login",
+                json={"login_user_id": user.login_user_id, "password": USER_PASSWORD},
+            )
+            assert login.status_code == 200, login.text
+            response = await client.get(
+                f"/api/history/runs/{run_id}", headers=session_headers(login)
+            )
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["run_id"] == run_id
+        assert data["status"] == "error"
+        assert data["failure_diagnosis"] == expected
+        assert data["error_type"] == type(causes[cause_name]).__name__
+        assert data["question"] is None
+        assert private_marker not in response.text
+    finally:
+        await oracle._run_transaction(  # noqa: SLF001 - 自分の合成行だけを削除する。
+            lambda connection: _execute_count(
+                connection,
+                "DELETE FROM rag_run_history WHERE run_id = :run_id",
+                {"run_id": run_id},
+            )
+        )
