@@ -467,3 +467,25 @@ test("旧草稿の追加表示文言は補完して試せるが公開版を書�
     await page.screenshot({ path: test.info().outputPath(`legacy-draft-preview-${theme}.png`) });
   }
 });
+
+
+test("画像原文の用途注記は日本語の項目名と説明で編集できる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const values = {
+    image_example_source_note: "画面例・説明用の原文を含みます",
+    image_unknown_source_note: "画像の用途が未記録の原文を含みます",
+  };
+  const fields = Object.keys(values).map(key => ({ section: "answer_labels", key, kind: "text", choices: [], ingest: false, max_chars: 1000 }));
+  await mockLanguagePack(page, { ...BUILTIN, answer_labels: values }, [...FIELDS, ...fields]);
+  await page.goto("/settings/language-pack");
+  await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "回答を確かめて表す" }).click();
+  for (const key of Object.keys(values) as (keyof typeof values)[]) {
+    const value = values[key];
+    const field = page.getByLabel(t(`settings.language.field.${key}`), { exact: true });
+    await expect(field).toHaveValue(value);
+    await expect(field).toHaveAccessibleDescription(t(`settings.language.field.${key}.help`));
+  }
+  await expect(page.locator("main")).not.toContainText("settings.language.field.image_");
+  await expectNoPageOverflow(page);
+  await page.getByLabel(t("settings.language.field.image_example_source_note"), { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("image-source-note-settings.png") });
+});
