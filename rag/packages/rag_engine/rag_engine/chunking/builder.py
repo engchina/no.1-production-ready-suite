@@ -71,6 +71,7 @@ from rag_engine.chunking.records import (
     _record_text_for_chunk,
     _record_visual_role,
     _records_char_count,
+    join_record_projections,
 )
 from rag_engine.chunking.search_text import _child_search_text, _without_screen_examples
 from rag_engine.chunking.tables import (
@@ -79,6 +80,7 @@ from rag_engine.chunking.tables import (
     _table_row_group_records,
     _table_supplements_by_table,
 )
+from rag_engine.chunking.text_projection import RecordTextProjection, bound_text_source_map, join_projections, make_text_source_map
 from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import extract_first_page_context, normalize_document_metadata
 from rag_engine.parsing.decorative_pictures import (
@@ -556,12 +558,14 @@ def _child_chunk(
     section_path_sources: Sequence[str] = (),
 ) -> DocumentChunk:
     ordered_records = sorted(records, key=lambda item: (int(item.get("page") or 0), int(item.get("seq_no") or 0)))
-    text = _join_records_text(ordered_records)
+    projection = join_record_projections(ordered_records)
+    text = projection.text
     # 検索文の土台。Vision 成功時の図の OCR を外した本文で、_apply_contextual_child_search_text が
     # これに文脈を足して retrieval_text を確定する (#900)。回答用の text には OCR を残す。
     retrieval_body = _join_records_text(ordered_records, for_retrieval=True) or text
     if not text:
         text = retrieval_body = _image_fallback_text(ordered_records, source_file_name)
+        projection = RecordTextProjection(text)
     refs = [_source_record_ref(record) for record in ordered_records]
     pages = [ref["page"] for ref in refs]
     page_start = min(pages)
@@ -589,6 +593,12 @@ def _child_chunk(
         if record.get("category") in {"Text", "List-item"} and start >= 0 and text.find(body, start + 1) < 0:
             native_ranges.append(dict(record_id=record.get("id"), page=record.get("page"), start=start, end=start + len(body)))
     metadata.setdefault("layout", {})["native_text_ranges"] = native_ranges
+    metadata["layout"]["text_source_map"] = make_text_source_map(
+        projection,
+        source_run_id=source_run_id,
+        source_file_name=source_file_name,
+        source_engine_id=source_engine_id,
+    )
     return DocumentChunk(
         chunk_id=f"chunk-{source_engine_id}-c{chunk_seq:06d}",
         chunk_level=CHILD_CHUNK_LEVEL,
@@ -622,7 +632,38 @@ def _parent_chunk(
     source_engine_label: str,
     classification: DocumentClassification | None = None,
 ) -> DocumentChunk:
-    text = "\n\n".join(child.text for child in children if child.text)
+    parts = []
+    unknown_sources = []
+    for child in children:
+        if not child.text:
+            continue
+        value = (child.metadata.get("layout") or {}).get("text_source_map")
+        bound = (
+            bound_text_source_map(
+                value,
+                child.text,
+                source_run_id=source_run_id,
+                source_file_name=source_file_name,
+                source_engine_id=source_engine_id,
+            )
+            if (child.source_run_id, child.source_file_name, child.source_engine_id)
+            == (
+                source_run_id,
+                source_file_name,
+                source_engine_id,
+            )
+            else None
+        )
+        if bound is None:
+            unknown_sources.append(child.chunk_id)
+        parts.append(
+            RecordTextProjection(
+                child.text,
+                tuple({**row, "child_chunk_id": child.chunk_id} for row in bound["ranges"]) if bound else (),
+            )
+        )
+    projection = join_projections(parts, "\n\n")
+    text = projection.text
     refs = _unique_refs(ref for child in children for ref in child.source_record_refs)
     page_start = min(child.page_start for child in children)
     page_end = max(child.page_end for child in children)
@@ -653,6 +694,13 @@ def _parent_chunk(
             native_ranges.append({**item, "start": offset + item["start"], "end": offset + item["end"]})
         cursor = offset + len(child.text)
     metadata.setdefault("layout", {})["native_text_ranges"] = native_ranges
+    metadata["layout"]["text_source_map"] = make_text_source_map(
+        projection,
+        source_run_id=source_run_id,
+        source_file_name=source_file_name,
+        source_engine_id=source_engine_id,
+        unknown_sources=unknown_sources,
+    )
     return DocumentChunk(
         chunk_id=chunk_id,
         chunk_level=PARENT_CHUNK_LEVEL,
@@ -902,6 +950,19 @@ def _normalize_chunk_metadata(metadata: dict[str, Any], payload: dict[str, Any])
     normalized = _validate_chunk_metadata_v4(metadata)
     if normalized["content_hash"] != _text_sha256(str(payload.get("text") or "")):
         raise ValueError("chunk metadata v3 の content_hash が本文と一致しません。再チャンキングしてください。")
+    source_map = (normalized.get("layout") or {}).get("text_source_map")
+    if (
+        source_map is not None
+        and bound_text_source_map(
+            source_map,
+            str(payload.get("text") or ""),
+            source_run_id=str(payload.get("source_run_id") or ""),
+            source_file_name=str(payload.get("source_file_name") or ""),
+            source_engine_id=str(payload.get("source_engine_id") or ""),
+        )
+        is None
+    ):
+        raise ValueError("本文の出所位置が保存本文または解析版と一致しません。再チャンキングしてください。")
     return normalized
 
 

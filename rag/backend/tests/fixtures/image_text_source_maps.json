@@ -1,0 +1,791 @@
+[
+  {
+    "case": "mixed-repeat",
+    "records": [
+      {
+        "id": "native-0",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 0,
+        "category": "Text",
+        "text": "同一の表示文字 123",
+        "raw_type": "text",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "vision_image_purpose": "record"
+        }
+      },
+      {
+        "id": "picture-1",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 1,
+        "category": "Picture",
+        "text": "同一の表示文字 123",
+        "raw_type": "picture",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "vision_image_purpose": "record"
+        }
+      },
+      {
+        "id": "picture-2",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 2,
+        "category": "Picture",
+        "text": "同一の表示文字 123",
+        "raw_type": "picture",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "vision_image_purpose": "example"
+        }
+      },
+      {
+        "id": "picture-3",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 3,
+        "category": "Picture",
+        "text": "同一の表示文字 123",
+        "raw_type": "picture",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {}
+      }
+    ],
+    "expected_text": "同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123",
+    "expected_retrieval_text": "同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123",
+    "expected_record_text": "同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123",
+    "expected_retrieval_record_text": "同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123\n同一の表示文字 123",
+    "expected_native_text_ranges": []
+  },
+  {
+    "case": "picture-ocr",
+    "records": [
+      {
+        "id": "picture-1",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 1,
+        "category": "Picture",
+        "text": "図の説明",
+        "raw_type": "picture",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "vision_description": {
+            "main_topic": "図の説明"
+          },
+          "vision_image_purpose": "example"
+        }
+      },
+      {
+        "id": "ocr-2",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 2,
+        "category": "Text",
+        "text": "行1\n行2",
+        "raw_type": "picture_ocr_text",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "picture_record_id": "picture-1",
+          "picture_bbox": [
+            0,
+            0,
+            10,
+            10
+          ],
+          "vision_image_purpose": "example"
+        }
+      }
+    ],
+    "expected_text": "図の説明\nOCR抽出テキスト:\n行1\n行2",
+    "expected_retrieval_text": "図の説明",
+    "expected_record_text": "図の説明\nOCR抽出テキスト:\n行1\n行2",
+    "expected_retrieval_record_text": "図の説明",
+    "expected_native_text_ranges": [
+      {
+        "record_id": "ocr-2",
+        "page": 1,
+        "start": 5,
+        "end": 21
+      }
+    ]
+  },
+  {
+    "case": "table-mixed",
+    "records": [
+      {
+        "id": "table-0",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 0,
+        "category": "Table",
+        "text": "<table><tr><td>900</td></tr></table>",
+        "raw_type": "table",
+        "bbox": [
+          0,
+          0,
+          100,
+          100
+        ],
+        "raw": {
+          "crop_path": "not-read.png",
+          "table_vision_text": "表全体の画像補足",
+          "vision_image_purpose": "record",
+          "table_structure": {
+            "format": "html_table",
+            "caption": "",
+            "row_count": 1,
+            "column_count": 1,
+            "header_row_count": 0,
+            "column_headers": [],
+            "rows": [
+              {
+                "row_index": 1,
+                "cells": [
+                  {
+                    "row_index": 1,
+                    "column_index": 1,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "is_header": false,
+                    "text": "900"
+                  }
+                ]
+              }
+            ]
+          },
+          "table_chunking_strategy": "structured_table",
+          "table_visual_evidence": [
+            {
+              "image_id": "table-0",
+              "record_id": "table-0",
+              "page": 1,
+              "seq_no": 0,
+              "bbox": [
+                0,
+                0,
+                100,
+                100
+              ],
+              "raw_type": "table",
+              "relationship": "source_table_crop",
+              "vision_image_purpose": "record",
+              "text_preview": "<table><tr><td>900</td></tr></table>",
+              "ocr_text": "",
+              "crop_path": "not-read.png",
+              "context_crop_path": "",
+              "visual_kind": "table",
+              "visual_role": "content"
+            },
+            {
+              "image_id": "picture-1",
+              "record_id": "picture-1",
+              "page": 1,
+              "seq_no": 1,
+              "bbox": [
+                5,
+                5,
+                15,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "example",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            },
+            {
+              "image_id": "picture-2",
+              "record_id": "picture-2",
+              "page": 1,
+              "seq_no": 2,
+              "bbox": [
+                20,
+                5,
+                30,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "unknown",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            }
+          ],
+          "table_visual_texts": {
+            "picture-1": "同一の表示文字 123",
+            "picture-2": "同一の表示文字 123"
+          }
+        }
+      }
+    ],
+    "expected_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_retrieval_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_record_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_retrieval_record_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_native_text_ranges": []
+  },
+  {
+    "case": "table-nested",
+    "records": [
+      {
+        "id": "table-0",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 0,
+        "category": "Table",
+        "text": "<table><tr><td>900</td></tr></table>",
+        "raw_type": "table",
+        "bbox": [
+          0,
+          0,
+          100,
+          100
+        ],
+        "raw": {
+          "crop_path": "not-read.png",
+          "table_vision_text": "表全体の画像補足",
+          "vision_image_purpose": "record",
+          "table_structure": {
+            "format": "html_table",
+            "caption": "",
+            "row_count": 1,
+            "column_count": 1,
+            "header_row_count": 0,
+            "column_headers": [],
+            "rows": [
+              {
+                "row_index": 1,
+                "cells": [
+                  {
+                    "row_index": 1,
+                    "column_index": 1,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "is_header": false,
+                    "text": "900"
+                  }
+                ]
+              }
+            ]
+          },
+          "table_chunking_strategy": "structured_table",
+          "table_visual_evidence": [
+            {
+              "image_id": "table-0",
+              "record_id": "table-0",
+              "page": 1,
+              "seq_no": 0,
+              "bbox": [
+                0,
+                0,
+                100,
+                100
+              ],
+              "raw_type": "table",
+              "relationship": "source_table_crop",
+              "vision_image_purpose": "record",
+              "text_preview": "<table><tr><td>900</td></tr></table>",
+              "ocr_text": "",
+              "crop_path": "not-read.png",
+              "context_crop_path": "",
+              "visual_kind": "table",
+              "visual_role": "content"
+            },
+            {
+              "image_id": "picture-1",
+              "record_id": "picture-1",
+              "page": 1,
+              "seq_no": 1,
+              "bbox": [
+                5,
+                5,
+                15,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "example",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            },
+            {
+              "image_id": "picture-2",
+              "record_id": "picture-2",
+              "page": 1,
+              "seq_no": 2,
+              "bbox": [
+                20,
+                5,
+                30,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "unknown",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            }
+          ],
+          "table_visual_texts": {
+            "picture-1": "同一の表示文字 123",
+            "picture-2": "同一の表示文字 123"
+          }
+        }
+      },
+      {
+        "id": "table-3",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 3,
+        "category": "Table",
+        "text": "<table><tr><td><table><tr><td>901</td></tr></table></td></tr></table>",
+        "raw_type": "table",
+        "bbox": [
+          0,
+          0,
+          50,
+          50
+        ],
+        "raw": {
+          "vision_image_purpose": "example",
+          "table_structure": {
+            "format": "html_table",
+            "caption": "",
+            "row_count": 1,
+            "column_count": 1,
+            "header_row_count": 0,
+            "column_headers": [],
+            "rows": [
+              {
+                "row_index": 1,
+                "cells": [
+                  {
+                    "row_index": 1,
+                    "column_index": 1,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "is_header": false,
+                    "text": "901"
+                  }
+                ]
+              }
+            ]
+          },
+          "table_chunking_strategy": "structured_table",
+          "table_visual_evidence": [
+            {
+              "image_id": "picture-1",
+              "record_id": "picture-1",
+              "page": 1,
+              "seq_no": 1,
+              "bbox": [
+                5,
+                5,
+                15,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "example",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            },
+            {
+              "image_id": "picture-2",
+              "record_id": "picture-2",
+              "page": 1,
+              "seq_no": 2,
+              "bbox": [
+                20,
+                5,
+                30,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "unknown",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            }
+          ],
+          "table_visual_texts": {
+            "picture-1": "同一の表示文字 123",
+            "picture-2": "同一の表示文字 123"
+          }
+        }
+      }
+    ],
+    "expected_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123\n<table><tr><td><table><tr><td>901</td></tr></table></td></tr></table>\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_retrieval_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123\n<table><tr><td><table><tr><td>901</td></tr></table></td></tr></table>\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_record_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123\n<table><tr><td><table><tr><td>901</td></tr></table></td></tr></table>\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_retrieval_record_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123\n<table><tr><td><table><tr><td>901</td></tr></table></td></tr></table>\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_native_text_ranges": []
+  },
+  {
+    "case": "preview-only",
+    "records": [
+      {
+        "id": "table-0",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 0,
+        "category": "Table",
+        "text": "<table><tr><td>900</td></tr></table>",
+        "raw_type": "table",
+        "bbox": [
+          0,
+          0,
+          100,
+          100
+        ],
+        "raw": {
+          "crop_path": "not-read.png",
+          "table_vision_text": "表全体の画像補足",
+          "vision_image_purpose": "record",
+          "table_structure": {
+            "format": "html_table",
+            "caption": "",
+            "row_count": 1,
+            "column_count": 1,
+            "header_row_count": 0,
+            "column_headers": [],
+            "rows": [
+              {
+                "row_index": 1,
+                "cells": [
+                  {
+                    "row_index": 1,
+                    "column_index": 1,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "is_header": false,
+                    "text": "900"
+                  }
+                ]
+              }
+            ]
+          },
+          "table_chunking_strategy": "structured_table",
+          "table_visual_evidence": [
+            {
+              "image_id": "table-0",
+              "record_id": "table-0",
+              "page": 1,
+              "seq_no": 0,
+              "bbox": [
+                0,
+                0,
+                100,
+                100
+              ],
+              "raw_type": "table",
+              "relationship": "source_table_crop",
+              "vision_image_purpose": "record",
+              "text_preview": "<table><tr><td>900</td></tr></table>",
+              "ocr_text": "",
+              "crop_path": "not-read.png",
+              "context_crop_path": "",
+              "visual_kind": "table",
+              "visual_role": "content"
+            },
+            {
+              "image_id": "picture-1",
+              "record_id": "picture-1",
+              "page": 1,
+              "seq_no": 1,
+              "bbox": [
+                5,
+                5,
+                15,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "example",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            },
+            {
+              "image_id": "picture-2",
+              "record_id": "picture-2",
+              "page": 1,
+              "seq_no": 2,
+              "bbox": [
+                20,
+                5,
+                30,
+                15
+              ],
+              "raw_type": "picture",
+              "relationship": "contained_in_table",
+              "text_preview": "同一の表示文字 123",
+              "ocr_text": "",
+              "vision_crop": "",
+              "vision_context_crop": "",
+              "crop_path": "",
+              "context_crop_path": "",
+              "vision_input_mode": "",
+              "vision_provider": "",
+              "vision_model": "",
+              "vision_image_purpose": "unknown",
+              "vision_error": "",
+              "visual_kind": "",
+              "visual_structure": {},
+              "visual_role": ""
+            }
+          ],
+          "table_visual_texts": {}
+        }
+      }
+    ],
+    "expected_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_retrieval_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_record_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_retrieval_record_text": "<table><tr><td>900</td></tr></table>\n表内画像の補足:\n表全体の画像補足\n表内画像:\n- picture-1 / p.1 #1\n  画像説明: 同一の表示文字 123\n- picture-2 / p.1 #2\n  画像説明: 同一の表示文字 123",
+    "expected_native_text_ranges": []
+  },
+  {
+    "case": "enhanced-html",
+    "records": [
+      {
+        "id": "table-0",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 0,
+        "category": "Table",
+        "text": "<table><tr><td>123</td></tr></table>",
+        "raw_type": "table",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "table_enhanced_html": "<table><tr><td>123</td></tr></table>",
+          "vision_image_purpose": "record",
+          "table_structure": {
+            "format": "html_table",
+            "caption": "",
+            "row_count": 1,
+            "column_count": 1,
+            "header_row_count": 0,
+            "column_headers": [],
+            "rows": [
+              {
+                "row_index": 1,
+                "cells": [
+                  {
+                    "row_index": 1,
+                    "column_index": 1,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "is_header": false,
+                    "text": "123"
+                  }
+                ]
+              }
+            ]
+          },
+          "table_chunking_strategy": "structured_table",
+          "table_visual_evidence": [],
+          "table_visual_texts": {}
+        }
+      }
+    ],
+    "expected_text": "<table><tr><td>123</td></tr></table>",
+    "expected_retrieval_text": "<table><tr><td>123</td></tr></table>",
+    "expected_record_text": "<table><tr><td>123</td></tr></table>",
+    "expected_retrieval_record_text": "<table><tr><td>123</td></tr></table>",
+    "expected_native_text_ranges": []
+  },
+  {
+    "case": "whitespace",
+    "records": [
+      {
+        "id": "text-0",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 0,
+        "category": "Text",
+        "text": "  \n前文  \n ",
+        "raw_type": "text",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {}
+      },
+      {
+        "id": "picture-1",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 1,
+        "category": "Picture",
+        "text": "  同一\n 文字  ",
+        "raw_type": "picture",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "vision_image_purpose": "invalid"
+        }
+      }
+    ],
+    "expected_text": "前文\n同一\n 文字",
+    "expected_retrieval_text": "前文\n同一\n 文字",
+    "expected_record_text": "前文\n同一\n 文字",
+    "expected_retrieval_record_text": "前文\n同一\n 文字",
+    "expected_native_text_ranges": [
+      {
+        "record_id": "text-0",
+        "page": 1,
+        "start": 0,
+        "end": 2
+      }
+    ]
+  },
+  {
+    "case": "empty-fallback",
+    "records": [
+      {
+        "id": "picture-1",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": 1,
+        "category": "Picture",
+        "text": "  ",
+        "raw_type": "picture",
+        "bbox": [
+          0,
+          0,
+          10,
+          10
+        ],
+        "raw": {
+          "vision_image_purpose": "record"
+        }
+      }
+    ],
+    "expected_text": "Image evidence | id=picture-1 | file=synthetic.pdf | page=1 | bbox=[0, 0, 10, 10]",
+    "expected_retrieval_text": "Image evidence | id=picture-1 | file=synthetic.pdf | page=1 | bbox=[0, 0, 10, 10]",
+    "expected_record_text": "",
+    "expected_retrieval_record_text": "",
+    "expected_native_text_ranges": []
+  }
+]

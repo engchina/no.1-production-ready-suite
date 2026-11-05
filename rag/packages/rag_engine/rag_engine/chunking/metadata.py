@@ -29,6 +29,7 @@ from rag_engine.chunking.evidence import (
     _table_image_evidence,
 )
 from rag_engine.chunking.tables import _table_context
+from rag_engine.chunking.text_projection import validate_text_source_map
 from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_first_page_context
 
@@ -183,6 +184,7 @@ _CHUNK_LAYOUT_KEYS = frozenset(
         "display_regions",
         "logical_page_labels",
         "native_text_ranges",
+        "text_source_map",
         "caption_context",
         "footnote_context",
         "list_context",
@@ -267,7 +269,9 @@ def _validate_chunk_metadata_v4(metadata: Any) -> dict[str, Any]:
         for key, value in layout.items():
             if not value:
                 raise ValueError(f"chunk metadata v4 の空の layout.{key} は保存できません。")
-            if key == "logical_page_labels":
+            if key == "text_source_map":
+                validate_text_source_map(value)
+            elif key == "logical_page_labels":
                 if not isinstance(value, dict):
                     raise ValueError("chunk metadata v4 の layout.logical_page_labels が不正です。")
             elif not isinstance(value, list):

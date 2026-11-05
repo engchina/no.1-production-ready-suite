@@ -21,6 +21,7 @@ from rag_engine.chunking.constants import (
     _bool_value,
     _int_value,
 )
+from rag_engine.chunking.text_projection import RecordTextProjection, join_projections, source_text
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.parsing.picture_text import format_docling_picture_ocr_text, is_picture_ocr_text
@@ -303,49 +304,81 @@ def _picture_vision_described(record: dict[str, Any]) -> bool:
 
 
 def _join_records_text(records: Sequence[dict[str, Any]], *, for_retrieval: bool = False) -> str:
-    """record の本文を改行で連結します。
+    """本文連結は位置記録と同じ正本を使う。検索文では既存の OCR 除外を保つ。"""
+    return join_record_projections(records, for_retrieval=for_retrieval).text
 
-    `for_retrieval=True` は検索文（retrieval_text）の土台用で、Vision 説明が本文になっている図の
-    `picture_ocr_text` を含めません。Vision は OCR を読み取り補助として受け取り、意味のある語を
-    項目・操作・検索語の field に取り込んでいるため、OCR 原文は検索文では重複語と UI ラベルの羅列・
-    誤読のノイズになります (#900)。Vision 失敗・未実施の図は OCR が唯一の文字情報なので残します。
-    回答・表示用の text は変えません。
-    """
+
+def join_record_projections(records: Sequence[dict[str, Any]], *, for_retrieval: bool = False) -> RecordTextProjection:
     described_groups = {_visual_group_key(record) for record in records if for_retrieval and _picture_vision_described(record)}
-    pieces = []
-    for record in records:
-        if str(record.get("raw_type") or "") == "picture_ocr_text" and _visual_group_key(record) in described_groups:
-            continue
-        text = _record_text_for_chunk(record, for_retrieval=for_retrieval)
-        if text:
-            pieces.append(text)
-    return "\n".join(pieces).strip()
+    return join_projections(
+        [
+            record_text_projection(record, for_retrieval=for_retrieval)
+            for record in records
+            if not (str(record.get("raw_type") or "") == "picture_ocr_text" and _visual_group_key(record) in described_groups)
+        ],
+        "\n",
+        strip=True,
+    )
 
 
 def _record_text_for_chunk(record: dict[str, Any], *, for_retrieval: bool = False) -> str:
-    """chunk 本文に載せる record の text。`for_retrieval` は表内画像の OCR を検索文から外します (#900)。"""
+    return record_text_projection(record, for_retrieval=for_retrieval).text
+
+
+def record_text_projection(record: dict[str, Any], *, for_retrieval: bool = False) -> RecordTextProjection:
+    """画像の説明・OCR・補足を append 時点で区分し、その他の本文の由来は推定しない。"""
     text = _record_text(record)
+    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    record_id = str(record.get("id") or record.get("record_id") or "")
     if str(record.get("raw_type") or "") == "picture_ocr_text":
-        return format_docling_picture_ocr_text(text)
-    if str(record.get("category") or "") == "Table":
-        raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
-        supplement = str(raw.get("table_vision_text") or "").strip()
-        table_visual_text = "\n".join(
-            filter(
-                None,
-                [
-                    f"{content_labels().text('table_picture_supplement')}:\n{supplement}" if supplement else "",
-                    _table_visual_evidence_text(record, for_retrieval=for_retrieval),
-                ],
-            )
+        image_id = str(raw.get("picture_record_id") or "")
+        return source_text(
+            format_docling_picture_ocr_text(text),
+            record,
+            image_id=image_id,
+            role="image_ocr" if image_id else "unclassified",
+            purpose_source=raw,
         )
-        if text and table_visual_text:
-            return f"{text}\n{table_visual_text}"
-        if table_visual_text:
-            return table_visual_text
+    if str(record.get("category") or "") == "Table":
+        supplement = str(raw.get("table_vision_text") or "").strip()
+        own_crop = next(
+            (
+                visual
+                for visual in _filter_image_evidence(raw.get("table_visual_evidence") or [])
+                if visual.get("relationship") == SOURCE_TABLE_CROP_RELATIONSHIP
+            ),
+            None,
+        )
+        image_id = str((own_crop or {}).get("image_id") or "")
+        extra = (
+            join_projections(
+                [
+                    RecordTextProjection(f"{content_labels().text('table_picture_supplement')}:\n"),
+                    source_text(
+                        supplement,
+                        record,
+                        image_id=image_id,
+                        role="image_table_supplement" if image_id else "unclassified",
+                        container_record_id=record_id,
+                        purpose_source=own_crop,
+                    ),
+                ],
+                "",
+            )
+            if supplement
+            else RecordTextProjection()
+        )
+        # 補完 HTML のセルは原生本文と画像値が混在し得る。表全体を画像用途へ昇格しない。
+        projection = join_projections(
+            [source_text(text, record), extra, _table_visual_evidence_projection(record, for_retrieval=for_retrieval)], "\n"
+        )
+        if projection.text:
+            return projection
     if not text:
-        return _form_record_text(record)
-    return text
+        return source_text(_form_record_text(record), record)
+    if _record_can_supply_image_evidence(record) and record_id:
+        return source_text(text, record, image_id=record_id, role="image_description", purpose_source=raw)
+    return source_text(text, record)
 
 
 def _image_fallback_text(records: Sequence[dict[str, Any]], source_file_name: str) -> str:
@@ -371,22 +404,22 @@ def _image_fallback_text(records: Sequence[dict[str, Any]], source_file_name: st
 
 
 def _table_visual_evidence_text(record: dict[str, Any], *, for_retrieval: bool = False) -> str:
-    """表内 Picture の説明と OCR を `表内画像:` の箇条書きにします。
+    return _table_visual_evidence_projection(record, for_retrieval=for_retrieval).text
 
-    `for_retrieval=True` では、Vision の画像説明があり `vision_error` のない項目の OCR 行を
-    載せません（図の child の `picture_ocr_text` と同じ理由。#900）。
-    """
+
+def _table_visual_evidence_projection(record: dict[str, Any], *, for_retrieval: bool = False) -> RecordTextProjection:
+    """表内画像ごとに説明と OCR の位置を残す。表示ラベルは出所範囲に含めない。"""
     raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
     visual_evidence = raw.get("table_visual_evidence")
     visuals = _filter_image_evidence(visual_evidence if isinstance(visual_evidence, list) else [])
     full_texts = raw.get("table_visual_texts") if isinstance(raw.get("table_visual_texts"), dict) else {}
     labels = content_labels()
-    lines: list[str] = []
+    lines: list[RecordTextProjection] = []
     for visual in visuals:
+        image_id = str(visual.get("image_id") or "")
         own_crop = str(visual.get("relationship") or "") == SOURCE_TABLE_CROP_RELATIONSHIP
-        # 表自身の切り出し画像の text_preview は表 HTML の先頭で、本文の複製にしかならない。
-        # Vision 説明や OCR 本文があるときだけ載せる。
-        description = full_texts.get(str(visual.get("image_id") or "")) or ("" if own_crop else visual.get("text_preview"))
+        supplied = full_texts.get(image_id)
+        description = supplied or ("" if own_crop else visual.get("text_preview"))
         text_preview = re.sub(r"\s+", " ", str(description or "")).strip()
         ocr_text = format_docling_picture_ocr_text(str(visual.get("ocr_text") or "").strip())
         if for_retrieval and text_preview and not str(visual.get("vision_error") or "").strip():
@@ -394,12 +427,49 @@ def _table_visual_evidence_text(record: dict[str, Any], *, for_retrieval: bool =
         if not text_preview and not ocr_text:
             continue
         label = _table_visual_evidence_label(visual)
-        lines.append(f"- {label or labels.text('table_pictures')}")
+        lines.append(RecordTextProjection(f"- {label or labels.text('table_pictures')}"))
+        container_id = str(record.get("id") or record.get("record_id") or "")
         if text_preview:
-            lines.append(f"  {labels.text('picture_description')}: {text_preview}")
+            lines.append(
+                join_projections(
+                    [
+                        RecordTextProjection(f"  {labels.text('picture_description')}: "),
+                        source_text(
+                            text_preview,
+                            visual,
+                            image_id=image_id,
+                            role="image_description" if image_id else "unclassified",
+                            purpose_source=visual if supplied else None,
+                            container_record_id=container_id,
+                        ),
+                    ],
+                    "",
+                )
+            )
         if ocr_text:
-            lines.extend(f"  {line}" for line in ocr_text.splitlines() if line.strip())
-    return f"{labels.text('table_pictures')}:\n" + "\n".join(lines) if lines else ""
+            for line in ocr_text.splitlines():
+                if line.strip():
+                    lines.append(
+                        join_projections(
+                            [
+                                RecordTextProjection("  "),
+                                source_text(
+                                    line,
+                                    visual,
+                                    image_id=image_id,
+                                    role="image_ocr" if image_id else "unclassified",
+                                    purpose_source=visual,
+                                    container_record_id=container_id,
+                                ),
+                            ],
+                            "",
+                        )
+                    )
+    return (
+        join_projections([RecordTextProjection(f"{labels.text('table_pictures')}:"), join_projections(lines, "\n")], "\n")
+        if lines
+        else RecordTextProjection()
+    )
 
 
 def _table_visual_evidence_label(visual: dict[str, Any]) -> str:
