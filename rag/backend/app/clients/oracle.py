@@ -9906,7 +9906,7 @@ class OracleClient:
                 )
                 if active is not None:
                     raise ValueError("このレシピは処理中または待機中です。")
-            _execute_ingestion_job_insert(
+            _execute(
                 connection,
                 INGESTION_JOB_INSERT_SQL,
                 _ingestion_job_binds(job),
@@ -9940,7 +9940,7 @@ class OracleClient:
 
     async def _get_ingestion_job_with_oracle(self, job_id: str) -> IngestionJob | None:
         """Oracle ingestion job table から job を取得する。"""
-        rows = await self._fetch_ingestion_job_rows(
+        rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT
@@ -10018,7 +10018,7 @@ class OracleClient:
             if oldest_first
             else "ORDER BY j.queued_at DESC, j.job_id DESC"
         )
-        rows = await self._fetch_ingestion_job_rows(
+        rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT
@@ -10070,7 +10070,7 @@ class OracleClient:
         if status is not None:
             binds["ingestion_job_status"] = status.value
             status_clause = "AND j.status = :ingestion_job_status"
-        rows = await self._fetch_ingestion_job_rows(
+        rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT
@@ -10403,7 +10403,7 @@ class OracleClient:
         orphan_error_message = "取込処理が中断されたため停止しました。再実行してください。"
 
         def operation(connection: OracleConnectionProtocol) -> list[IngestionJob]:
-            rows = _fetch_ingestion_job_rows(
+            rows = _fetch_all(
                 connection,
                 _render_sql(
                     """
@@ -10440,7 +10440,6 @@ class OracleClient:
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind({**stale_binds, "limit": limit}),
-                default_max_attempts=self._settings.ingestion_job_max_attempts,
             )
             stale_jobs: list[IngestionJob] = []
             for job in (_ingestion_job_from_row(row) for row in rows):
@@ -10751,7 +10750,7 @@ class OracleClient:
                 """,
                 {"document_id": queued["document_id"]},
             )
-            rows = _fetch_ingestion_job_rows(
+            rows = _fetch_all(
                 connection,
                 _render_sql(
                     """
@@ -10790,7 +10789,6 @@ class OracleClient:
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind({"job_id": job_id}),
-                default_max_attempts=self._settings.ingestion_job_max_attempts,
             )
             if not rows:
                 return None
@@ -10904,7 +10902,7 @@ class OracleClient:
         """自分の lease の RUNNING job を QUEUED に戻し、文書・レシピも工程の前へ戻す。"""
 
         def operation(connection: OracleConnectionProtocol) -> list[IngestionJob]:
-            rows = _fetch_ingestion_job_rows(
+            rows = _fetch_all(
                 connection,
                 _render_sql(
                     """
@@ -10937,7 +10935,6 @@ class OracleClient:
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind({"lease_owner": lease_owner}),
-                default_max_attempts=self._settings.ingestion_job_max_attempts,
             )
             requeued: list[IngestionJob] = []
             for job in (_ingestion_job_from_row(row) for row in rows):
@@ -11013,7 +11010,7 @@ class OracleClient:
             in_sql, in_binds = _oracle_in_predicate("j.phase", "exclude_phase", excluded_phases)
             exclude_clause += f" AND NOT ({in_sql})"
             binds.update(in_binds)
-        rows = await self._fetch_ingestion_job_rows(
+        rows = await self._fetch_all(
             _render_sql(
                 """
             SELECT
@@ -11208,7 +11205,7 @@ class OracleClient:
             )
             if updated_count == 0:
                 return None
-            rows = _fetch_ingestion_job_rows(
+            rows = _fetch_all(
                 connection,
                 _render_sql(
                     """
@@ -11239,7 +11236,6 @@ class OracleClient:
                     document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 ),
                 _with_tenant_bind({"job_id": job_id}),
-                default_max_attempts=self._settings.ingestion_job_max_attempts,
             )
             return None if not rows else _ingestion_job_from_row(rows[0])
 
@@ -12358,24 +12354,6 @@ class OracleClient:
                 raise
             logger.warning("oracle_read_retry", extra=oracle_error_log_fields(exc))
             return cast(list[dict[str, object]], await self._db_call_runner(fetch))
-
-    async def _fetch_ingestion_job_rows(
-        self, statement: str, binds: Mapping[str, object] | None = None
-    ) -> list[dict[str, object]]:
-        """max_attempts 列が未適用の旧 queue table でも ingestion job 行を取得する。"""
-        try:
-            return await self._fetch_all(statement, binds)
-        except Exception as exc:
-            if not _is_missing_ingestion_job_max_attempts_error(exc):
-                raise
-            legacy_binds = _with_default_max_attempts_bind(
-                binds or {},
-                self._settings.ingestion_job_max_attempts,
-            )
-            return await self._fetch_all(
-                _legacy_ingestion_job_max_attempts_select_sql(statement),
-                legacy_binds,
-            )
 
     async def _run_transaction(
         self, operation: Callable[[OracleConnectionProtocol], T], *, retry_deadlocks: bool = False
@@ -13678,26 +13656,6 @@ def _stale_running_ingestion_job_predicate_sql(
     return predicate
 
 
-def _fetch_ingestion_job_rows(
-    connection: OracleConnectionProtocol,
-    statement: str,
-    binds: Mapping[str, object],
-    *,
-    default_max_attempts: int,
-) -> list[dict[str, object]]:
-    """max_attempts 列がない旧 ingestion job table では既定値列として読み替える。"""
-    try:
-        return _fetch_all(connection, statement, binds)
-    except Exception as exc:
-        if not _is_missing_ingestion_job_max_attempts_error(exc):
-            raise
-        return _fetch_all(
-            connection,
-            _legacy_ingestion_job_max_attempts_select_sql(statement),
-            _with_default_max_attempts_bind(binds, default_max_attempts),
-        )
-
-
 # 取込 job の INSERT。1 件の投入と一括の投入(#2674)で共通。
 INGESTION_JOB_INSERT_SQL = """
                 INSERT INTO rag_ingestion_jobs (
@@ -13742,24 +13700,6 @@ INGESTION_JOB_INSERT_SQL = """
                 """
 
 
-def _execute_ingestion_job_insert(
-    connection: OracleConnectionProtocol,
-    statement: str,
-    binds: Mapping[str, object],
-) -> None:
-    """max_attempts 列がない旧 ingestion job table では該当列を省いて INSERT する。"""
-    try:
-        _execute(connection, statement, binds)
-    except Exception as exc:
-        if not _is_missing_ingestion_job_max_attempts_error(exc):
-            raise
-        _execute(
-            connection,
-            _legacy_ingestion_job_max_attempts_insert_sql(statement),
-            binds,
-        )
-
-
 def _is_unique_constraint_violation(exc: Exception) -> bool:
     """一意制約違反（ORA-00001）かどうか。"""
     return "ORA-00001" in str(exc).upper()
@@ -13774,46 +13714,6 @@ def _knowledge_base_name_conflict_guard() -> Iterator[None]:
         if _is_unique_constraint_violation(exc):
             raise KnowledgeBaseNameConflictError() from exc
         raise
-
-
-def _is_missing_ingestion_job_max_attempts_error(exc: Exception) -> bool:
-    message = str(exc).upper()
-    return "ORA-00904" in message and "MAX_ATTEMPTS" in message
-
-
-def _legacy_ingestion_job_max_attempts_select_sql(statement: str) -> str:
-    return _replace_exact_sql_line(
-        statement,
-        "j.max_attempts,",
-        ":default_max_attempts AS max_attempts,",
-    )
-
-
-def _legacy_ingestion_job_max_attempts_insert_sql(statement: str) -> str:
-    return _remove_exact_sql_lines(statement, {"max_attempts,", ":max_attempts,"})
-
-
-def _with_default_max_attempts_bind(
-    binds: Mapping[str, object],
-    default_max_attempts: int,
-) -> dict[str, object]:
-    return {**binds, "default_max_attempts": default_max_attempts}
-
-
-def _replace_exact_sql_line(statement: str, old: str, new: str) -> str:
-    lines = []
-    for line in statement.splitlines():
-        if line.strip() == old:
-            indent = line[: len(line) - len(line.lstrip())]
-            lines.append(f"{indent}{new}")
-            continue
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _remove_exact_sql_lines(statement: str, stripped_lines: set[str]) -> str:
-    lines = [line for line in statement.splitlines() if line.strip() not in stripped_lines]
-    return "\n".join(lines)
 
 
 def _select_document(
