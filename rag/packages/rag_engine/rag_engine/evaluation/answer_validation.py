@@ -46,6 +46,7 @@ from rag_engine.evaluation.answer_eval import (
     _unresolved_reference,
     model_request,
 )
+from rag_engine.evaluation.image_text_sources import validation_image_system
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.answer_policy import OPERATION_BINDING_POLICY, OPERATION_GUIDANCE_POLICY, RELATION_SUPPORT_POLICY
 from rag_engine.generation.check_cues import check_cues
@@ -470,9 +471,11 @@ def _fit_evidence(fixed: dict[str, Any], fragments: list[dict[str, Any]], max_in
         # 予算はモデルに渡す形（根拠の本文の文字の形をそろえた後。#1350）で測る。
         size = (
             len(
-                (resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT) + _json(model_request(candidate)) + schema).encode(
-                    "utf-8"
-                )
+                (
+                    validation_image_system(resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT), [*chosen, fragment])
+                    + _json(model_request(candidate))
+                    + schema
+                ).encode("utf-8")
             )
             + 1024
         )
@@ -997,7 +1000,7 @@ def _recheck_unreferenced_passages(
     inputs = {**fixed, "answer_passages": list(targets), "evidence_items": candidates}
     try:
         output = _parse_checked(
-            resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
+            validation_image_system(resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT), candidates),
             inputs,
             settings,
             ClaimAuditOutput,
@@ -1064,7 +1067,7 @@ def _reaudit_misclassified_passages(
     inputs = {**fixed, "answer_passages": targets, "evidence_items": list(evidence), "validation_feedback": REAUDIT_FEEDBACK}
     try:
         output = _parse_checked(
-            resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
+            validation_image_system(resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT), evidence),
             inputs,
             settings,
             ClaimAuditOutput,
@@ -1196,7 +1199,7 @@ def _reaudit_reference_failures(
     }
     try:
         output = _parse_checked(
-            resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
+            validation_image_system(resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT), evidence),
             inputs,
             settings,
             ClaimAuditOutput,
@@ -1303,7 +1306,7 @@ def _audit_batch(
     with bind_deadline(child):
         try:
             output = _parse_checked(
-                resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
+                validation_image_system(resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT), evidence),
                 inputs,
                 settings,
                 ClaimAuditOutput,
@@ -1409,7 +1412,7 @@ def _recheck_figure_supported(
     inputs = {**fixed, "answer_passages": targets, "evidence_items": items, "validation_feedback": FIGURE_RECHECK_FEEDBACK}
     try:
         output = _parse_checked(
-            resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT),
+            validation_image_system(resolve_prompt("answer_validation.system", VALIDATION_SYSTEM_PROMPT), items),
             inputs,
             settings,
             ClaimAuditOutput,

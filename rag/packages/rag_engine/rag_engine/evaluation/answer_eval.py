@@ -36,6 +36,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from rag_engine.config import get_llm_provider
 from rag_engine.dependencies import parse_text_response
+from rag_engine.evaluation.image_text_sources import fragment_image_context, has_scoped_image_ranges, model_image_item
 from rag_engine.generation.answer_labels import answer_labels
 from rag_engine.generation.applications import APPLICATIONS_SECTION_TITLE, LEGACY_APPLICATIONS_SECTION_TITLES, PREMISES_LABEL
 from rag_engine.generation.grounded import (
@@ -482,7 +483,7 @@ def model_request(inputs: dict[str, Any]) -> dict[str, Any]:
         return inputs
     return {
         **inputs,
-        "evidence_items": [{**item, "text": fold_width(item.get("text") or "")} if isinstance(item, dict) else item for item in items],
+        "evidence_items": [model_image_item(item, fold_width) if isinstance(item, dict) else item for item in items],
     }
 
 
@@ -497,7 +498,7 @@ def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
     """親子の出典を残して全文を分割する。preview は全文として代用しない。"""
     for item in items:
         text = item.get("text") or ""
-        if text and text in ancestor_text:
+        if text and text in ancestor_text and not has_scoped_image_ranges(item):
             yield from _evidence_fragments(item.get("children") or [], str(item.get("id") or ""), ancestor_text)
             continue
         metadata = {key: item.get(key) for key in ("id", "source", "source_run_id", "page_start", "page_end")}
@@ -510,6 +511,7 @@ def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
         for start in range(0, max(1, len(text)), EVIDENCE_FRAGMENT_CHARS):
             part = text[start : start + EVIDENCE_FRAGMENT_CHARS]
             fragment = {**metadata, "text": part, "fragment_start": start, "fragment_end": start + len(part)}
+            fragment.update(fragment_image_context(item, start, start + len(part)))
             yield {**fragment, "evidence_id": _span_id(fragment)}
         yield from _evidence_fragments(item.get("children") or [], str(item.get("id") or ""), ancestor_text + "\n" + text)
 

@@ -518,6 +518,35 @@ async def validate_answer(
         )
 
 
+def validation_image_context(chunk: Any) -> dict[str, Any]:
+    """ACL読回後の正式scopeと本文を再検査し、一時投影だけを返す。"""
+    from types import SimpleNamespace
+
+    from rag_engine.generation.image_text_sources import span_image_source_context
+
+    from app.rag.image_text_sources import verified_source
+
+    value = verified_source(chunk)
+    if value is None:
+        return {}
+    scope = {
+        "document_id": chunk.document_id,
+        "recipe_id": chunk.metadata.get("recipe_id"),
+        "chunk_set_id": chunk.metadata.get("chunk_set_id"),
+    }
+    metadata = {
+        **scope,
+        "answer_image_text_source_map": {
+            "version": 1,
+            "scope": scope,
+            "completeness": "partial" if value.get("unknown_sources") else "complete",
+            "source_map": value,
+        },
+    }
+    record = SimpleNamespace(text=chunk.text, chunk_id=chunk.chunk_id, metadata=metadata)
+    return span_image_source_context(record, 0, len(chunk.text), chunk.text)
+
+
 async def _validate_answer(
     question: str,
     answer: str,
@@ -625,6 +654,7 @@ async def _validate_answer(
                     **({"evidence_type": figure} if figure else {}),
                     **({TABLE_RECORD_KEY: record} if record else {}),
                     "text": chunk.text,
+                    **validation_image_context(chunk),
                 }
             )
         # 指示の版を読めなければ再利用しない。旧記録も版が無いため再監査する。
