@@ -139,6 +139,21 @@ def test_missing_existing_review_is_unknown_in_diagnostic_and_withheld():
     assert not entry.published
 
 
+def test_existing_audit_with_foreign_application_is_not_adopted():
+    entry = candidate()
+    existing = GroundedAudit(
+        reviews=[],
+        summary_supported=True,
+        goal_alignment="aligned",
+        application_reviews=[{"index": index, "valid": True, "reason": "合成判定"} for index in (0, 99)],
+    )
+    trace = review([entry], lambda *a, **kw: pytest.fail("不正な既存監査で追加呼出しない"), existing=existing, requested=True)
+    assert trace["status"] == "invalid_contract"
+    assert trace["calls"] == 0
+    assert entry.assessment["status"] == "unknown"
+    assert not entry.published
+
+
 def test_authorization_failure_is_not_converted_to_an_answer():
     def denied(*a, **kw):
         raise PermissionError("synthetic")

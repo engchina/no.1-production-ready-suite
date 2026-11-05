@@ -38,10 +38,15 @@ def review_applications(
     if not checked:
         return {"status": "not_applicable", "calls": 0}
     if audit_requested:
+        invalid_contract = existing_audit is not None and any(
+            row.index not in range(len(checked)) for row in existing_audit.application_reviews
+        )
+        if invalid_contract:
+            existing_audit = None
         apply_application_audit(checked, existing_audit, require_complete=True)
         complete = all(entry.assessment.get("status") != "unknown" for entry in checked)
         return {
-            "status": "reused" if existing_audit is not None and complete else "incomplete",
+            "status": "invalid_contract" if invalid_contract else "reused" if existing_audit is not None and complete else "incomplete",
             "calls": 0,
             "results": [dict(entry.assessment) for entry in checked],
         }
