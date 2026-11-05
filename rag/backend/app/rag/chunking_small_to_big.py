@@ -847,6 +847,18 @@ def _backend_chunk(
     page_sizes: Mapping[int, tuple[object, object]],
     tables: Mapping[str, LayoutTable] | None = None,
 ) -> Chunk:
+    from rag_engine.chunking.text_projection import bound_text_source_map
+
+    from app.rag.image_text_sources import PLACEMENT_KEY, READY_KEY, parent_placement
+
+    placement = parent_placement(child, parent) if parent is not None else None
+    source_map = bound_text_source_map(
+        (child.metadata.get("layout") or {}).get("text_source_map"),
+        child.text,
+        source_run_id=child.source_run_id,
+        source_file_name=child.source_file_name,
+        source_engine_id=child.source_engine_id,
+    )
     metadata = child.metadata
     section_path = [str(part) for part in metadata.get("section_path") or [] if str(part)]
     element_ids = [
@@ -864,6 +876,12 @@ def _backend_chunk(
         start_offset=0,
         end_offset=len(child.text),
         metadata={
+            **({READY_KEY: True} if source_map is not None else {}),
+            **(
+                {PLACEMENT_KEY: json.dumps(placement, ensure_ascii=False)}
+                if placement is not None
+                else {}
+            ),
             # 図の本文の出どころ（根拠の種類。#1282）。図の chunk だけに付ける。
             **(
                 {FIGURE_TEXT_SOURCE_KEY: _figure_text_source(child.source_record_refs)}

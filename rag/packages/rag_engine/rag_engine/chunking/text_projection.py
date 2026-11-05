@@ -71,6 +71,7 @@ def make_text_source_map(
     source_file_name: str,
     source_engine_id: str,
     unknown_sources: Sequence[str] = (),
+    children: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     value = {
         "version": 1,
@@ -80,6 +81,8 @@ def make_text_source_map(
         "text_sha256": hashlib.sha256(projection.text.encode("utf-8")).hexdigest(),
         "ranges": list(projection.ranges),
     }
+    if children is not None:
+        value["children"] = list(children)
     if unknown_sources:
         value["unknown_sources"] = list(unknown_sources)
     return value
@@ -88,7 +91,7 @@ def make_text_source_map(
 def validate_text_source_map(value: Any) -> dict[str, Any]:
     """保存形式のみを検証する。本文・解析版への結合は読み出し時に別途照合する。"""
     required = {"version", "source_run_id", "source_file_name", "source_engine_id", "text_sha256", "ranges"}
-    if not isinstance(value, dict) or not required <= value.keys() or value.keys() - required - {"unknown_sources"}:
+    if not isinstance(value, dict) or not required <= value.keys() or value.keys() - required - {"unknown_sources", "children"}:
         raise ValueError("本文の出所位置の形式が不正です。再チャンキングしてください。")
     if type(value["version"]) is not int or value["version"] != 1:
         raise ValueError("本文の出所位置の版に対応していません。")
@@ -133,6 +136,25 @@ def validate_text_source_map(value: Any) -> dict[str, Any]:
         not isinstance(value["unknown_sources"], list) or not all(isinstance(item, str) and item for item in value["unknown_sources"])
     ):
         raise ValueError("未確定の子段識別子が不正です。")
+    if "children" in value:
+        if not isinstance(value["children"], list):
+            raise ValueError("本文の子段位置が配列ではありません。")
+        for item in value["children"]:
+            if not isinstance(item, dict) or set(item) != {"chunk_id", "start", "end", "text_sha256", "ordinal"}:
+                raise ValueError("本文の子段位置が不正です。")
+            if (
+                not isinstance(item["chunk_id"], str)
+                or not item["chunk_id"]
+                or type(item["start"]) is not int
+                or type(item["end"]) is not int
+                or not 0 <= item["start"] < item["end"]
+                or type(item["ordinal"]) is not int
+                or item["ordinal"] < 0
+                or not isinstance(item["text_sha256"], str)
+                or len(item["text_sha256"]) != 64
+                or any(c not in "0123456789abcdef" for c in item["text_sha256"])
+            ):
+                raise ValueError("本文の子段位置の識別子または範囲が不正です。")
     return value
 
 
@@ -150,6 +172,7 @@ def bound_text_source_map(
         or checked["source_engine_id"] != source_engine_id
         or checked["text_sha256"] != hashlib.sha256(text.encode("utf-8")).hexdigest()
         or any(row["end"] > len(text) for row in checked["ranges"])
+        or any(row["end"] > len(text) for row in checked.get("children", []))
     ):
         return None
     return checked

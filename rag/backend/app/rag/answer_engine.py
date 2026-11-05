@@ -4512,7 +4512,13 @@ def _stored_child(
         metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}
     metadata["document_id"] = chunk.document_id
     # 現在の設定でなく、命中した成果物の方式・版を文脈組み立てへ渡す。
-    for key in ("chunk_strategy", "recipe_id", "chunk_set_id"):
+    for key in (
+        "chunk_strategy",
+        "recipe_id",
+        "chunk_set_id",
+        "image_text_source_scope_json",
+        "parent_text_placement_json",
+    ):
         metadata[key] = chunk.metadata.get(key, "")
     if location := _sheet_location(chunk.metadata):
         # 表計算の根拠の場所(#1221)。回答の本文の出典を「シート・セル範囲」にする(#1224)。
@@ -4753,6 +4759,9 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
         metadata = dict(members[0].metadata)
         _merge_member_metadata(metadata, members)
         _restore_parent_native_ranges(text, metadata, members, state)
+        from app.rag.image_text_sources import restore_parent_map
+
+        restore_parent_map(text, metadata, members, state.chunks)
         metadata.pop("rrf_score", None)
         if element_ids := list(
             dict.fromkeys(

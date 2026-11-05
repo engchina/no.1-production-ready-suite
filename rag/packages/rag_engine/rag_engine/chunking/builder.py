@@ -634,9 +634,23 @@ def _parent_chunk(
 ) -> DocumentChunk:
     parts = []
     unknown_sources = []
+    placements = []
+    cursor = 0
     for child in children:
         if not child.text:
             continue
+        if parts:
+            cursor += 2
+        placements.append(
+            {
+                "chunk_id": child.chunk_id,
+                "start": cursor,
+                "end": cursor + len(child.text),
+                "text_sha256": _text_sha256(child.text),
+                "ordinal": len(placements),
+            }
+        )
+        cursor += len(child.text)
         value = (child.metadata.get("layout") or {}).get("text_source_map")
         bound = (
             bound_text_source_map(
@@ -700,6 +714,7 @@ def _parent_chunk(
         source_file_name=source_file_name,
         source_engine_id=source_engine_id,
         unknown_sources=unknown_sources,
+        children=placements,
     )
     return DocumentChunk(
         chunk_id=chunk_id,

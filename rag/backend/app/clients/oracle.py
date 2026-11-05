@@ -4203,7 +4203,9 @@ class OracleClient:
                     JSON_MERGEPATCH(c.metadata_json, JSON_OBJECT(
                         'chunk_id' VALUE c.document_id || ':' || :target || ':'
                             || TO_CHAR(c.chunk_index),
-                        'chunk_set_id' VALUE :target RETURNING CLOB
+                        'chunk_set_id' VALUE :target,
+                        'image_text_source_scope_json' VALUE NULL,
+                        'image_text_source_ready' VALUE NULL RETURNING CLOB
                     ) RETURNING CLOB), NULL, :target
                 FROM rag_chunks c
                 JOIN rag_chunk_sets src ON src.chunk_set_id = c.chunk_set_id
@@ -11470,24 +11472,36 @@ class OracleClient:
                 chunk.metadata.get("chunk_id") or f"{document_id}:{chunk_set_id}:{chunk.index}"
             )
 
-        rows = [
-            {
-                "chunk_id": chunk_id_for(chunk),
-                "chunk_set_id": chunk_set_id,
-                "embedding": _to_vector_bind(embedding),
-                "search_text": _chunk_search_text(chunk),
-                "metadata_json": _json_dumps(
-                    {
-                        **chunk.metadata,
-                        "chunk_id": chunk_id_for(chunk),
-                        "chunk_index": chunk.index,
-                    }
-                ),
-            }
-            for chunk, embedding in zip(chunks, embeddings, strict=True)
-        ]
-
         def operation(connection: OracleConnectionProtocol) -> None:
+            source_scope = _image_text_scope_for_chunk_set(connection, chunk_set_id)
+            if source_scope is None:
+                raise KeyError("分割結果が見つかりません。")
+            from app.rag.image_text_sources import scoped_metadata
+
+            rows = [
+                {
+                    "chunk_id": chunk_id_for(chunk),
+                    "chunk_set_id": chunk_set_id,
+                    "embedding": _to_vector_bind(embedding),
+                    "search_text": _chunk_search_text(chunk),
+                    "metadata_json": _json_dumps(
+                        {
+                            **scoped_metadata(
+                                chunk.text,
+                                chunk.metadata,
+                                document_id=(source_scope or {}).get("document_id", ""),
+                                recipe_id=(source_scope or {}).get("recipe_id", ""),
+                                chunk_set_id=(source_scope or {}).get("chunk_set_id", ""),
+                                chunk_id=chunk_id_for(chunk),
+                                fresh=False,
+                            ),
+                            "chunk_id": chunk_id_for(chunk),
+                            "chunk_index": chunk.index,
+                        }
+                    ),
+                }
+                for chunk, embedding in zip(chunks, embeddings, strict=True)
+            ]
             if rows:
                 _executemany(
                     connection,
@@ -12086,6 +12100,7 @@ class OracleClient:
         chunks: list[Chunk],
         embeddings: Sequence[Sequence[float] | None],
         chunk_set_id: str | None = None,
+        source_scope: Mapping[str, str] | None = None,
     ) -> list[dict[str, object]]:
         """rag_chunks へ挿入する bind row を構築する。chunk_set_id=None は未タグ(後方互換)。
 
@@ -12097,6 +12112,8 @@ class OracleClient:
             if chunk_set_id is not None:
                 return f"{document_id}:{chunk_set_id}:{index}"
             return f"{document_id}:{index}"
+
+        from app.rag.image_text_sources import scoped_metadata
 
         return [
             {
@@ -12116,7 +12133,16 @@ class OracleClient:
                         # 1 ページ目の本文は chunk の行に入れず chunk set に保存する(#557)。
                         **{
                             key: value
-                            for key, value in chunk.metadata.items()
+                            for key, value in scoped_metadata(
+                                chunk.text,
+                                chunk.metadata,
+                                document_id=document_id,
+                                recipe_id=(source_scope or {}).get("recipe_id", ""),
+                                chunk_set_id=(source_scope or {}).get("chunk_set_id", ""),
+                                chunk_id=chunk_id_for(chunk.index),
+                                fresh=True,
+                                source_file_name=document.file_name,
+                            ).items()
                             if key != FIRST_PAGE_CONTEXT_KEY
                         },
                     }
@@ -12189,6 +12215,9 @@ class OracleClient:
             document = _select_document_state(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
+            source_scope = _image_text_scope_for_chunk_set(
+                connection, chunk_set_id, document_id=document_id
+            )
             _execute(
                 connection,
                 _render_sql(
@@ -12250,7 +12279,12 @@ class OracleClient:
                     },
                 )
             rows = self._chunk_insert_rows(
-                document_id, document, chunks, embeddings, chunk_set_id=chunk_set_id
+                document_id,
+                document,
+                chunks,
+                embeddings,
+                chunk_set_id=chunk_set_id,
+                source_scope=source_scope,
             )
             if rows:
                 _executemany(
@@ -19453,3 +19487,45 @@ def _executemany_graph(
     """永続化の件数は画面上限で切らず、有界のバッチで同じtransactionへ書く。"""
     for offset in range(0, len(rows), 250):
         _executemany(connection, statement, rows[offset : offset + 250], input_sizes=input_sizes)
+
+
+def _image_text_scope_for_chunk_set(
+    connection: OracleConnectionProtocol,
+    chunk_set_id: str | None,
+    *,
+    document_id: str | None = None,
+) -> dict[str, str] | None:
+    """正式な成果物行を一度読む。拒否と存在しない初回保存を区別する。"""
+    if not chunk_set_id:
+        return None
+    rows = _fetch_all(
+        connection,
+        _render_sql(
+            """SELECT cs.chunk_set_id,
+        CASE WHEN {access_predicate} THEN cs.document_id END AS document_id,
+        CASE WHEN {access_predicate} THEN cs.recipe_id END AS recipe_id,
+        CASE WHEN {access_predicate} THEN 1 ELSE 0 END AS scope_accessible
+        FROM rag_chunk_sets cs JOIN rag_documents d ON d.document_id = cs.document_id
+        WHERE cs.chunk_set_id = :chunk_set_id""",
+            access_predicate=_oracle_access_predicate_sql(alias="d"),
+        ),
+        _with_tenant_bind({"chunk_set_id": chunk_set_id}),
+    )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise KeyError("分割結果が見つかりません。")
+    row = {str(key).lower(): value for key, value in rows[0].items()}
+    actual_document = str(row.get("document_id") or "")
+    if (
+        str(row.get("scope_accessible")) != "1"
+        or not actual_document
+        or str(row.get("chunk_set_id") or "") != chunk_set_id
+        or (document_id is not None and actual_document != document_id)
+    ):
+        raise KeyError("分割結果が見つかりません。")
+    return {
+        "document_id": actual_document,
+        "recipe_id": str(row.get("recipe_id") or ""),
+        "chunk_set_id": chunk_set_id,
+    }

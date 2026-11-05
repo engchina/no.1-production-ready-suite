@@ -432,6 +432,8 @@ jobs:
               - "platform/packages/system_settings_backend/src/pr_system_settings/auth/store.py"
               - "platform/packages/system_settings_backend/src/pr_system_settings/trace_recording.py"
             rag_oracle:
+              - "rag/backend/app/rag/image_text_sources.py"
+              - "rag/backend/tests/test_image_text_source_storage.py"
               - "rag/backend/app/clients/evaluation_testset_store.py"
               - "rag/backend/tests/test_evaluation_testsets_oracle.py"
               - "rag/artifacts/oracle-schema-migration.*"
