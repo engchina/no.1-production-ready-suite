@@ -633,6 +633,10 @@ CHAPTER3 = ReferenceTarget("第3章", "chapter", "3", None, "第3章 承認")
 class ReferenceOracle:
     """回答の検索が読む OracleClient の部分集合(交差参照の参照先を返す)。"""
 
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        """交差参照の試験では保存指示は未編集。"""
+        return {}
+
     def __init__(
         self,
         hits: list[RetrievedChunk],

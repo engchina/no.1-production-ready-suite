@@ -41,7 +41,7 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | 会話の履歴での質問の書き換え | 任意（設定 `RAG_HISTORY_REWRITE_ENABLED`） | LLM の失敗・書き換えの安全チェックの拒否 → 元の質問で続ける | LLM の失敗: `DS`（`history_rewrite`）。安全チェックの拒否は `LOG` だけ（例外ではないので `DS` に入れない）。`SP` の `history_rewrite` は成功のまま | 見せない（元の質問で答える） | `rag/backend/app/rag/pipeline.py::_rewrite_query_with_history`・`_safe_rewritten_query` |
 | 抽出項目の条件の読み取り（Metadata Filter Extraction。#652） | 任意（設定 `RAG_AUTO_FIELD_FILTER_ENABLED`） | 定義の読み込み・LLM の失敗 → 条件なしで検索する。LLM の出力が JSON として読めない → 条件なし | 読み込み・LLM の失敗: `DS`（`field_filter`）。工程の詳細は条件が無いときと同じ「なし」。読めない出力は記録しない（例外ではない） | 見せない（絞らない） | `rag/backend/app/rag/pipeline.py::_read_field_conditions`・`rag/backend/app/rag/field_filter_reader.py::read_field_conditions` |
 | 会話の添付の根拠（#2517） | 任意 | 添付を読めない → 根拠に入れない。rerank の失敗 → 語の一致で選ぶ | `DS`（`chat_attachments`・`chat_attachment_rerank`）。添付が無いときは記録しない | 見せない | `rag/backend/app/rag/chat_attachments.py::attachment_evidence`・`attachment_units`・`select_attachment_units` |
-| 編集した回答のプロンプト（#1276） | 任意 | 読めない → コードの既定のプロンプトで続ける | `DS`（`prompt_overrides`）。`provenance.prompt_version` は既定のプロンプトの版になる | 見せない（版は実際に使った既定のもの） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
+| 保存した回答の指示の読み取り（#1276） | 必須（未編集の空設定は有効） | 読めない → 通常回答の生成前に例外で停止。固定済みの要求snapshotは再読しない | 例外を呼び出し元へ伝播し、`DS` にしない | 見せない（生成前に停止） | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
 
 ### 主の検索（`answer_engine.py::AnswerEngine._search`）
 
@@ -148,7 +148,6 @@ RAG の検索・回答の経路（`POST /api/search`・チャット・MCP の `r
 | `query_expansion` | 言い換え・分解に失敗し原質問で続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_degraded_query_expansion` |
 | `runtime_terms` | 登録用語の照合に失敗し、その追加検索文なしで続行 | `rag/packages/rag_engine/rag_engine/generation/answering.py::_prepare_term_context` |
 | `query_overflow` | 全文検索の超限補完に使う語の抽出（失敗は未検索として保存し、既存根拠を維持する） | `rag/packages/rag_engine/rag_engine/retrieval/query_overflow.py::search_overflow_requests` |
-| `prompt_overrides` | 編集した回答のプロンプトの読み込み | `rag/backend/app/rag/answer_engine.py::AnswerEngine._run` |
 | `entity_expansion` | 実体の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._entity_expansion` |
 | `graph_expansion` | 関係情報の拡張 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._graph_expansion` |
 | `reference_resolve` | 参照先の解決 | `rag/backend/app/rag/answer_engine.py::AnswerEngine._reference_expansion` |

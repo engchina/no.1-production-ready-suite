@@ -194,13 +194,14 @@ class PromptFakeOracle(FakeOracle):
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        ({VLM_ANSWER_PROMPT_KEY: CUSTOM_ANSWER}, CUSTOM_ANSWER),
-        # 読み込みに失敗しても既定値で回答する。
-        (RuntimeError("db down"), default_prompt(VLM_ANSWER_PROMPT_KEY)),
+        ({VLM_ANSWER_PROMPT_KEY: CUSTOM_ANSWER}, [CUSTOM_ANSWER]),
+        ({}, [default_prompt(VLM_ANSWER_PROMPT_KEY)]),
+        # 読み込み失敗を未編集と見なして生成へ進まない。
+        (RuntimeError("db down"), []),
     ],
 )
 async def test_answer_uses_saved_answer_template(
-    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str] | Exception, expected: str
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str] | Exception, expected: list[str]
 ) -> None:
     import rag_engine.generation.answering as answering
 
@@ -217,10 +218,12 @@ async def test_answer_uses_saved_answer_template(
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
 
-    with pytest.raises(RuntimeError, match="stop"):
-        await engine.run(SearchRequest(query="受注の登録方法は？"))
+    with pytest.raises(
+        RuntimeError, match="db down" if isinstance(overrides, Exception) else "stop"
+    ):
+        await engine.run(SearchRequest(query="操作 A の手順は？"))
 
-    assert seen == [expected]
+    assert seen == expected
     assert read_prompt(VLM_ANSWER_PROMPT_KEY) == default_prompt(VLM_ANSWER_PROMPT_KEY)
 
 
