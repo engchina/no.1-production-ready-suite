@@ -2,6 +2,8 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
+import unfinishedFixture from "./fixtures/run-step-unfinished-timing.json";
+import { ChatProgress, type ChatProgressStep } from "../src/components/feedback/chat-progress";
 import fixture from "./fixtures/run-step-timing.json";
 import { RunTimeline, runTimelineBars, stepDurationMs, type RunTimelineStep } from "../src/components/data/run-detail";
 import { TraceExplorer } from "../src/components/data/trace-explorer";
@@ -39,5 +41,25 @@ describe("同じ記録からの共通表示", () => {
       expect(rows[3].finishedAt).toBeUndefined();
       expect(host.textContent).toContain("4 / 4 件を表示");
     } finally { act(() => root.unmount()); host.remove(); vi.useRealTimers(); }
+  });
+});
+
+describe("終了時刻が全て欠測の合計", () => {
+  const unfinished: ChatProgressStep[] = unfinishedFixture.map(step => ({...step, status: "done"}));
+  it.each([1, 2])("%i段の開始だけでは確定した合計を作らず、開始位置の記録は保つ", count => {
+    const view = traceMeasuredTiming(unfinished.slice(0, count));
+    expect(view.duration).toBeNull();
+    expect(view.bars).toHaveLength(count);
+    expect(view.bars.every(bar => bar?.width === null)).toBe(true);
+    expect(view.bars[0]?.offset).toBe(0);
+  });
+  it("履歴の合計と完了したチャットも0秒/開始間隔を所要時間として表示しない", () => {
+    const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+    try {
+      act(() => root.render(<RunTimeline steps={unfinished} showSummary />));
+      expect(host.textContent).toContain("合計 —");
+      act(() => root.render(<ChatProgress steps={unfinished} active={false} />));
+      expect(host.textContent).toContain("2 ステップ・-");
+    } finally { act(() => root.unmount()); host.remove(); }
   });
 });

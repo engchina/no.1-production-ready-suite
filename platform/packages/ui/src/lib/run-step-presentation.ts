@@ -33,10 +33,12 @@ export function measuredRunTiming(steps: readonly RunTimelineStep[]) {
   const ends = times.flatMap(t => t.end == null ? [] : [t.end]);
   const origin = starts.length ? Math.min(...starts) : null;
   const last = starts.length ? Math.max(...ends, ...starts) : null;
-  const duration = origin != null && last != null ? Math.max(0, last - origin) : null;
+  const coordinateRange = origin != null && last != null ? Math.max(0, last - origin) : null;
+  // 開始の位置は分かっていても、終了が1件も無ければ確定した合計は未記録。
+  const duration = ends.length ? coordinateRange : null;
   return { duration, bars: times.map(t => {
-    if (origin == null || duration == null || t.start == null) return null;
-    return { offset: duration > 0 ? (t.start - origin) / duration * 100 : 0,
-      width: t.end == null ? null : duration > 0 ? Math.max(0, (t.end - t.start) / duration * 100) : 0 };
+    if (origin == null || coordinateRange == null || t.start == null) return null;
+    return { offset: coordinateRange > 0 ? (t.start - origin) / coordinateRange * 100 : 0,
+      width: t.end == null ? null : coordinateRange > 0 ? Math.max(0, (t.end - t.start) / coordinateRange * 100) : 0 };
   }) };
 }
