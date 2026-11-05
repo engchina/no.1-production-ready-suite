@@ -371,15 +371,21 @@ def test_crop_png_bounded_rejects_too_large_and_invalid_regions() -> None:
         )
 
 
+@pytest.mark.parametrize("document_artifact_path", [None, "docs/doc-1/legacy.pdf"])
 async def test_load_parsed_source_uses_recipe_prepared_artifact(
     monkeypatch: pytest.MonkeyPatch,
+    document_artifact_path: str | None,
 ) -> None:
     """図の bbox はレシピが解析したファイルの座標なので、そのレシピの artifact を読む。"""
     detail = SimpleNamespace(
         id="doc-1",
         content_sha256="synthetic-source",
         object_storage_path="docs/doc-1/source.docx",
-        preprocess_artifact=None,
+        preprocess_artifact=(
+            SimpleNamespace(object_storage_path=document_artifact_path)
+            if document_artifact_path is not None
+            else None
+        ),
     )
     read: list[str] = []
 
@@ -410,13 +416,14 @@ async def test_load_parsed_source_uses_recipe_prepared_artifact(
     oracle = cast(Any, FakeOracle())
 
     await document_crop.load_parsed_source(oracle, "doc-1", "recipe-1")
-    # レシピが無ければ文書のファイル(ここでは原本)。
-    await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
+    # 指定したレシピが無ければ原本を開かない。
+    with pytest.raises(document_crop.DocumentSourceNotFoundError, match="処理レシピ"):
+        await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
+    assert read == ["docs/doc-1/recipe-1/prepared.pdf"]
     await document_crop.load_parsed_source(oracle, "doc-1")
     assert read == [
         "docs/doc-1/recipe-1/prepared.pdf",
-        "docs/doc-1/source.docx",
-        "docs/doc-1/source.docx",
+        document_artifact_path or "docs/doc-1/source.docx",
     ]
     with pytest.raises(document_crop.DocumentSourceNotFoundError):
         await document_crop.load_parsed_source(oracle, "doc-2", "recipe-1")

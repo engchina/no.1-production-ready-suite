@@ -89,7 +89,8 @@ async def load_parsed_source(
     ``chunk_set_id`` を渡すと、その版が解析したファイルを読む（#4166）。記録が無い版は
     ``VersionSourceUnknownError`` で、ほかのファイルで代用しない。``chunk_set_id`` が無いときは
     ``recipe_id`` の処理レシピの artifact を使う(レシピごとに解析したファイルが違うため、bbox は
-    そのファイルの座標。#1282)。レシピが無ければ文書の artifact を使う。参照パスが不正な場合は
+    そのファイルの座標。#1282)。指定したレシピが無ければ失敗する。レシピを省略した場合は
+    文書の artifact を使う。参照パスが不正な場合は
     ValueError(ObjectStorageClient の契約)。
     """
     detail = await oracle.get_document(document_id)
@@ -109,9 +110,10 @@ async def load_parsed_source(
         artifact = await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id)
     elif recipe_id:
         recipe = await oracle.get_document_recipe(document_id, recipe_id)
-        if recipe is not None:
-            raw = recipe.get("preprocess_artifact")
-            artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
+        if recipe is None:
+            raise DocumentSourceNotFoundError("処理レシピが見つかりません。")
+        raw = recipe.get("preprocess_artifact")
+        artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
     path = (
         artifact.object_storage_path
         if artifact is not None and artifact.object_storage_path
