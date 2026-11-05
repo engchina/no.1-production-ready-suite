@@ -3341,6 +3341,8 @@ export const ja = {
   "flow.extraction.vision.field.exception_or_cautions": "注意・例外",
   "flow.extraction.vision.field.correction_notes": "補正メモ",
   "flow.extraction.vision.status": "画像の読み取り: {status}",
+  "flow.extraction.vision.running": "読み取り中",
+  "flow.extraction.vision.unknown": "不明",
   "flow.extraction.vision.succeeded": "説明済み",
   "flow.extraction.vision.failed": "失敗",
   "flow.extraction.vision.skipped": "対象外",

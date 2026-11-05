@@ -17,6 +17,37 @@ const PNG_PIXEL =
 // 分割で生じた prefix 無し base64 断片の模擬。
 const BASE64_FRAGMENT = "A".repeat(300);
 
+test("画像の読み取り状態は処理中と未知の値も日本語で表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const states = [
+    ["running", "読み取り中"], ["succeeded", "説明済み"],
+    ["failed", "失敗"], ["skipped", "対象外"], ["synthetic_future_status", "不明"],
+  ];
+  await mockDocumentDetail(page, { extraction: {
+    raw_text: "合成の状態一覧", pages: [], tables: [], assets: [], parser_artifacts: {},
+    elements: states.map(([status], order) => ({
+      kind: "figure", element_id: `status-${order}`, order, text: `合成画像 ${order + 1}`,
+      page_number: 1, metadata: { vision_status: status },
+    })),
+  } });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
+  const pane = page.getByTestId("document-inspector-pane");
+  for (const [raw, label] of states) {
+    await expect(pane.getByText(`画像の読み取り: ${label}`, { exact: true })).toHaveCount(1);
+    await expect(pane.getByText(`画像の読み取り: ${raw}`, { exact: true })).toHaveCount(0);
+  }
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => document.documentElement.classList.toggle("dark", value === "dark"), theme);
+    await pane.getByText("画像の読み取り: 読み取り中", { exact: true }).scrollIntoViewIfNeeded();
+    await expectNoHorizontalOverflow(page);
+    await pane.screenshot({ path: testInfo.outputPath(`vision-status-${theme}.png`) });
+    const unknown = pane.getByText("画像の読み取り: 不明", { exact: true });
+    await unknown.scrollIntoViewIfNeeded();
+    await expect(unknown).toBeInViewport();
+    await pane.screenshot({ path: testInfo.outputPath(`vision-status-unknown-${theme}.png`) });
+  }
+});
+
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
