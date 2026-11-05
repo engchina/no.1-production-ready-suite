@@ -3598,6 +3598,7 @@ def synthesize_grounded_answer(
             diagnostic = review_applications(
                 question,
                 current.applications,
+                evidence_spans=spans,
                 existing_audit=None,
                 audit_requested=False,
                 parse_text=parse_text_response,
@@ -3683,6 +3684,7 @@ def synthesize_grounded_answer(
                 question,
                 current.checked,
                 current.requests,
+                evidence_spans=spans,
                 parse_text=parse_text_response,
                 settings=generation_settings,
                 audit_settings=audit_settings,
