@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from rag_engine.chunking import builder, records
-from rag_engine.chunking.constants import DocumentChunk
+from rag_engine.chunking.constants import SOURCE_TABLE_CROP_RELATIONSHIP, DocumentChunk
 from rag_engine.chunking.metadata import _project_chunk_metadata
 
 from app.rag.chunking_small_to_big import _backend_chunk
@@ -224,3 +224,39 @@ def test_unverified_ocr_and_form_text_are_unclassified() -> None:
         projection = records.record_text_projection(item)
         assert projection.ranges[0]["role"] == "unclassified"
         assert "vision_image_purpose" not in projection.ranges[0]
+
+
+@pytest.mark.parametrize(
+    "same_id,second_purpose", [(False, "example"), (False, "record"), (True, "record")]
+)
+def test_ambiguous_table_crops_do_not_attribute_supplement_to_first(
+    same_id: bool, second_purpose: str
+) -> None:
+    row = copy.deepcopy(next(item for item in FIXTURES if item["case"] == "table-mixed"))
+    table = row["records"][0]
+    raw = table["raw"]
+    crops = [
+        item
+        for item in raw["table_visual_evidence"]
+        if item["relationship"] == SOURCE_TABLE_CROP_RELATIONSHIP
+    ]
+    assert len(crops) == 1
+    another = copy.deepcopy(crops[0])
+    if not same_id:
+        another["image_id"] = "another-table-crop"
+        another["record_id"] = "another-table-crop"
+    another["vision_image_purpose"] = second_purpose
+    raw["table_visual_evidence"].append(another)
+    projection = records.record_text_projection(table)
+    supplement = raw["table_vision_text"]
+    rows = [
+        item
+        for item in projection.ranges
+        if projection.text[item["start"] : item["end"]] == supplement
+    ]
+    assert len(rows) == 1
+    assert rows[0]["role"] == "unclassified"
+    assert "vision_image_purpose" not in rows[0]
+    assert "image_id" not in rows[0]
+    # cropを増やしても説明/OCRが無い自身cropの本文は増えず、元本文を保つ。
+    assert projection.text == row["expected_record_text"]

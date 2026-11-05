@@ -341,14 +341,13 @@ def record_text_projection(record: dict[str, Any], *, for_retrieval: bool = Fals
         )
     if str(record.get("category") or "") == "Table":
         supplement = str(raw.get("table_vision_text") or "").strip()
-        own_crop = next(
-            (
-                visual
-                for visual in _filter_image_evidence(raw.get("table_visual_evidence") or [])
-                if visual.get("relationship") == SOURCE_TABLE_CROP_RELATIONSHIP
-            ),
-            None,
-        )
+        own_crops = [
+            visual
+            for visual in _filter_image_evidence(raw.get("table_visual_evidence") or [])
+            if visual.get("relationship") == SOURCE_TABLE_CROP_RELATIONSHIP
+        ]
+        # 補足本文に明示的なcrop IDが無いため、一意な場合だけ対応させる。
+        own_crop = own_crops[0] if len(own_crops) == 1 else None
         image_id = str((own_crop or {}).get("image_id") or "")
         extra = (
             join_projections(
