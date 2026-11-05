@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pr_evaluation_scoring.label_file import decode_label_file
 from pr_evaluation_scoring.labeling import (
     DEFAULT_SPLIT_SALT,
     LABEL_SET_FIELDS,
@@ -114,10 +115,16 @@ class FakeReader:
 
 
 @pytest.fixture
-def store() -> Iterator[MemoryEvaluationCalibrationStore]:
+def store(monkeypatch: pytest.MonkeyPatch) -> Iterator[MemoryEvaluationCalibrationStore]:
     # 履歴の内部契約を残す。公開 API が書込不可なことは test_evaluation_testsets で別検証。
     from app.api.routes.evaluation_calibration import legacy_read_only
+
     app.dependency_overrides[legacy_read_only] = lambda: None
+
+    async def prompt_overrides(_self: Any) -> dict[str, str]:
+        return {}
+
+    monkeypatch.setattr("app.clients.oracle.OracleClient.answer_prompt_overrides", prompt_overrides)
     memory = MemoryEvaluationCalibrationStore()
     set_calibration_store(memory)
     set_source_reader(FakeReader())
@@ -311,8 +318,10 @@ async def test_agreement_and_adjudication_make_final_labels(
     )
 
 
+@pytest.mark.parametrize("language", ["en", "ja"])
 async def test_label_set_round_trips_through_json(
     clients: tuple[httpx.AsyncClient, httpx.AsyncClient],
+    language: str,
 ) -> None:
     """書き出した LabelSet を取り込むと、同じ最終の判定・記入者の判定の LabelSet に戻る。"""
     first, _ = clients
@@ -324,7 +333,13 @@ async def test_label_set_round_trips_through_json(
         _set(label_set_id, "/adjudications"),
         json=dict(item_id=row["item_id"], aspect=row["aspect"], label="pass"),
     )
-    exported = json.loads((await first.get(_set(label_set_id, "/export"))).text)
+    exported = json.loads(
+        (await first.get(_set(label_set_id, f"/export?language={language}"))).text
+    )
+    if language == "ja":
+        assert exported["形式"] == "判定の記入データ"
+        assert exported["評価基準"] == "回答品質"
+        assert all("判定" in item and "labels" not in item for item in exported["項目"])
     content = json.dumps(exported).encode("utf-8")
     imported = await first.post(
         BASE + "/label-sets/import",
@@ -341,7 +356,7 @@ async def test_label_set_round_trips_through_json(
             for item in document["items"]
         )
 
-    assert comparable(again) == comparable(exported)
+    assert comparable(again) == comparable(decode_label_file(exported))
     wrong = await first.post(
         BASE + "/label-sets/import",
         files=dict(file=("bad.json", b"[]", "application/json")),
@@ -408,7 +423,7 @@ async def test_calibration_job_records_results(
     assert holdout["accuracy"] == 1.0
     # 件数が 50 に届かないので合否は不合格（閾値は suite と同じ）。
     assert aspects["claim_support"]["passed"] is False
-    assert any("holdout の件数" in failure for failure in aspects["claim_support"]["failures"])
+    assert any("検証用データの件数" in failure for failure in aspects["claim_support"]["failures"])
     assert aspects["claim_support"]["variance"]["runs"] == 2
     assert aspects["claim_support"]["variance"]["unstable"] == 0
     status = (await first.get(BASE + "/status")).json()["data"]

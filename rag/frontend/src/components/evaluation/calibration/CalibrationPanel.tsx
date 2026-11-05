@@ -36,6 +36,7 @@ import { isEvaluationJobActive, isEvaluationJobId } from "../evaluation-job";
 import { EvaluationJobPanel } from "../EvaluationJobPanel";
 import {
   aspectLabel,
+  calibrationDescription,
   calibrationResultRows,
   formatKappa,
   formatRate,
@@ -405,7 +406,7 @@ function CalibrationResult({
             <ul className="grid gap-0.5 text-fg-muted">
               {failures.map((aspect) => (
                 <li key={aspect.aspect} className="break-words">
-                  {aspectLabel(aspect.aspect)}: {aspect.failures.join(" / ")}
+                  {aspectLabel(aspect.aspect)}: {aspect.failures.map(calibrationDescription).join(" / ")}
                 </li>
               ))}
             </ul>

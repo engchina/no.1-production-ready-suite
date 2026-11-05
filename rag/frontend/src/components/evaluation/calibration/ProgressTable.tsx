@@ -3,7 +3,7 @@ import { DataTable, StatusBadge } from "@production-ready/ui";
 import type { CalibrationErrorType, CalibrationProgress } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
-import { aspectLabel, aspectTargetReached } from "./calibration-format";
+import { aspectLabel, aspectTargetReached, calibrationDescription } from "./calibration-format";
 
 /**
  * 観点ごとの記入の進み具合（holdout の pass / fail の数と目標）と、誤りの型・対照の holdout の件数。
@@ -106,7 +106,7 @@ export function ProgressTable({
             return (
               <li
                 key={item.id}
-                title={item.title}
+                title={calibrationDescription(item.title)}
                 className="inline-flex min-h-6 items-center gap-1 rounded-md bg-surface px-2 text-xs text-fg ring-1 ring-border"
               >
                 <span>

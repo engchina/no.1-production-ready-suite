@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from openpyxl import load_workbook
+from pr_evaluation_scoring.label_file import encode_label_file
 from pr_evaluation_scoring.perturbation import (
     PERTURBATIONS,
     add_unsupported_claim,
@@ -490,3 +491,29 @@ def test_label_set_fields_match_shared_contract() -> None:
 
     assert tuple(LabelSet.model_fields) == LABEL_SET_FIELDS
     assert tuple(LabeledItem.model_fields) == LABEL_SET_ITEM_FIELDS
+
+
+def test_japanese_label_file_is_read_without_changing_ids_text_or_labels(tmp_path: Path) -> None:
+    original = LabelSet.model_validate(
+        {
+            "rubric_id": "answer_quality",
+            "provenance": {"custom": "原値"},
+            "items": [
+                {
+                    "id": "item-a",
+                    "split": "holdout",
+                    "question": "合成の質問",
+                    "answer": "passは元の文章",
+                    "labels": {"claim_support": "pass"},
+                }
+            ],
+        }
+    )
+    path = tmp_path / "labels-ja.json"
+    path.write_text(
+        json.dumps(encode_label_file(original.model_dump(mode="json")), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    restored = load_labels(path)
+    assert restored.model_dump(mode="json") == original.model_dump(mode="json")
+    assert restored.sha256 == original.sha256
