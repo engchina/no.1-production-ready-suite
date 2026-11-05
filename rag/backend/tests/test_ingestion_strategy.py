@@ -1635,7 +1635,10 @@ class _ResumeOracle(FakeOracle):
 class _ResumePipeline(IngestionPipeline):
     async def _load_reviewed_extraction(self, detail: DocumentDetail) -> StructuredExtraction:
         _ = detail
-        return StructuredExtraction(raw_text="本文です。")
+        extraction = StructuredExtraction(raw_text="本文です。")
+        return extraction.model_copy(
+            update={"quality_report": build_ingestion_quality_report(extraction)}
+        )
 
 
 async def test_index_chunked_rebuilds_context_header_without_document_lookup() -> None:
