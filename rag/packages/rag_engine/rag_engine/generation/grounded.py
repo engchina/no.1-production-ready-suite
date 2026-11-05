@@ -6794,6 +6794,7 @@ def run_round(
         "image_payload_capture": "not_recorded" if image_paths else "not_applicable",
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "evidence": input_rows,
+        "expected_evidence_count": len(spans),
         "snapshot_status": "partial"
         if input_views and (unrecorded_input_ids or any(not row["present_in_prompt"] for row in input_rows))
         else "recorded"

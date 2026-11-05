@@ -3908,7 +3908,10 @@ def synthesize_grounded_answer(
     unverified = any(e.item.applies == "unverified" for e in unsettled)
     # 印・外した段落の数（#2738。評価と比較に使う）。
     mark_counts = passage_marks.mark_counts(passage_record)
+    from rag_engine.generation.provided_scope import capture_provided_scope
+
     trace: dict[str, Any] = {
+        "provided_evidence_scope": capture_provided_scope(current.citation_trace),
         "pipeline": "grounded",
         **({"crag_assessment": crag_view, "crag_partial_projection": crag_projection} if crag_view is not None else {}),
         "audit_mode": audit_mode,
