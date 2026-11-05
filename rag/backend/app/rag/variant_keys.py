@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from rag_engine.parsing.content_labels import VISION_TEXT_FORMAT_VERSION
 from rag_parser_core.language import current_pack
 from rag_parser_core.result import UNSTRUCTURED_TEXT_CONTRACT
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
@@ -153,6 +154,8 @@ def extraction_recipe_subset(settings: Settings) -> dict[str, object]:
         **_fields(settings, _COMMON_EXTRACTION_RECIPE_FIELDS),
         **_fields(settings, _BACKEND_EXTRACTION_RECIPE_FIELDS.get(backend, ())),
     }
+    if getattr(settings, "rag_vision_enabled", False):
+        subset["vision_text_format_version"] = VISION_TEXT_FORMAT_VERSION
     # 前処理 excel_to_jsonl の選択肢は抽出結果を変える(#1221)。excel_to_jsonl のときだけ加え、
     # 他の前処理の ID は変えない。成果物の形式(#2457 で構造化レコードの JSONL)を変えたときは
     # csv_to_jsonl / excel_to_jsonl の形式の値を変え、その文書の抽出を作り直しにする。
