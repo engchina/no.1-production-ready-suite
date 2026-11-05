@@ -26,6 +26,18 @@ from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, de
 from rag_engine.resources.runtime import resolve_prompt
 
 
+def _image_purposes(span: dict[str, Any]) -> dict[str, Any]:
+    """監査の全文と同じ版の引用単位へ、検証済み画像用途だけを結ぶ。"""
+    if not span.get("image_text_source_context") or span.get("document_background_only"):
+        return {}
+    from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot
+    from rag_engine.generation.grounded import evidence_citation_units, evidence_unit_contract
+
+    snapshot = EvidenceUnitSnapshot.create(span, evidence_citation_units(span), evidence_unit_contract(span))
+    record = snapshot.prompt_record()
+    return {"text": record["text"], "image_purposes": record["image_purposes"]} if record.get("image_purposes") else {}
+
+
 def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """生成へ選んだ原文全体を文書・版ごとに保持し、引用抜粋へ縮めない。"""
     return [
@@ -57,6 +69,7 @@ def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any
                         if key in span
                     },
                     **({"role": background_label(span)} if span.get("document_background_only") else {}),
+                    **_image_purposes(span),
                 }
                 for span in members
             ],
@@ -105,7 +118,7 @@ def review_applications(
         return {"status": "not_applicable", "calls": 0}
     items = list({id(item): item for entry in candidates for item in entry.entries}.values())
     index = {id(item): position for position, item in enumerate(items)}
-    inputs = {
+    inputs: dict[str, Any] = {
         "question": question,
         "documents": application_documents(evidence_spans),
         "items": [
@@ -118,6 +131,10 @@ def review_applications(
     if premises := confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources):
         inputs["confirmed_premises"] = premises
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
+    if any(evidence.get("image_purposes") for document in inputs["documents"] for evidence in document["evidence"]):
+        from rag_engine.generation.image_text_sources import with_image_purpose_policy
+
+        system = with_image_purpose_policy(system)
     prompt = json.dumps(inputs, ensure_ascii=False)
     started = monotonic()
     diagnostic: dict[str, Any] = {

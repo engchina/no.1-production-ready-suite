@@ -78,6 +78,13 @@ from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.document_inputs import document_key, order_document_spans
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
+from rag_engine.generation.image_text_sources import (
+    IMAGE_CITATION_UNIT_CONTRACT,
+    IMAGE_PURPOSE_POLICY,
+    image_purpose_sidecar,
+    image_purpose_system,
+    with_image_purpose_policy,
+)
 from rag_engine.generation.interaction_grounding import interaction_binding_error
 from rag_engine.generation.operation_audit import button_names_absent, deletion_target_supported, missing_operation_terms
 from rag_engine.generation.request_recovery import relabel_recovery_reviews
@@ -182,7 +189,7 @@ GENERATE_SYSTEM_PROMPT = (
   - completion: 確定・完了の操作を含む（手順の最後まで答える）。
   - constraint: 適用条件・限定を含む（質問から成立を確認できなければ結果に条件を残す）。
   - multi_condition: 複数の処理区分が並ぶ（選ぶ原文と答えの条件を省略しない）。
-  - image_generated: 画像からの生成説明・OCR（origin=image_extraction と同じ扱いで、必須根拠にはならない）。
+  - image_generated: 画像からの生成説明・OCR（origin=image_extraction と同じ由来。値の扱いは「例示値と実データ」に従う）。
   - aggregate_only: 集計値だけの原文（id が .M1 で終わる構成明細の要求の根拠にしない）。
 - """
     f"{CONTEXT_NOTE_BEGIN} から {CONTEXT_NOTE_END}"
@@ -207,8 +214,9 @@ GENERATE_SYSTEM_PROMPT = (
 - 根拠の計画（request_coverage）に挙げた文書ごとに、その文書の原文を basis に選ぶ。規則・要件・定義を定めた原文（規程・法令の条項など）は、手順書・解説が同じ内容を言い換えていても省かず、規則の出典にする。
 - 説明の内容を支えない原文は、質問に関係していても出典にしない。
 ### 例示値と実データ
-- 画面キャプチャ・Vision 生成説明に見える値（年月・金額・氏名・番号・コード・選択状態）は文書の例示で、今回の実データではない。表示されているだけで現在値・既定値・必須値・許容範囲・登録済み状態と断定しない。
-- 値に触れるときは「画面例では〇〇」と書く。実際の値として案内できるのは、本文が「〜と入力します」のように指定している場合か、利用者が質問で明示した場合だけ。例示か指定値かを画像だけで判断できなければ例示として扱う。
+"""
+    + IMAGE_PURPOSE_POLICY
+    + """
 - 本文で明示された既定値・入力形式・許容範囲・条件付き規則は根拠として使う。例示値があることを理由に操作説明を拒否しない。
 - 表の列名の後の［資料の既定値］［例示の値］［資料の推奨値］［設定できる範囲］［記載時点の設定値］は列の種類を示す。どれも資料に書かれた値で、利用者の環境の今の設定値ではない（［記載時点の設定値］も資料を作った時点の記録）。表示が無くても、列名が既定値・初期値・記入例・設定例・推奨値の値は同じに扱う。今の値・この環境の値を尋ねる質問には、資料の値を種類とともに示し（例: 「資料の既定値は 30 分」）、実際の値は external_data_items（who_can_answer=system）で確認対象にする。資料の値を今の値として断定しない。
 ### 対象・項目・機能の一致
@@ -1791,6 +1799,14 @@ def scope_evidence_text(span: Mapping[str, Any]) -> str:
     )
 
 
+def _scope_image_purposes(span: Mapping[str, Any]) -> dict[str, Any]:
+    if "image_text_source_context" not in span:
+        return {}
+    snapshot = EvidenceUnitSnapshot.create(span, evidence_citation_units(span), evidence_unit_contract(span))
+    purposes = image_purpose_sidecar(snapshot)
+    return {"image_purposes": purposes} if purposes else {}
+
+
 def _scope_range_text(link: RequestLinkRange, spans: Sequence[dict], *, numbered: bool | None = None) -> str:
     """指定した番号の範囲の連続した原文。根拠が 1 つに決まらない・範囲が無効なら空文字（推測で切り詰めない）。
 
@@ -3226,15 +3242,36 @@ def _shown_as_quote(entry: CheckedItem) -> bool:
     return entry.published and bool(entry.span) and entry.item.applies == "unverified" and not entry.state
 
 
+def _selected_record_image_quote(entry: CheckedItem) -> bool:
+    """今回送達した単位すべてが記録画像である引用だけを表示値の除去から外す。"""
+    citations = getattr(entry.item, "citations", ())
+    if len(citations) != 1:
+        return False
+    binding = citations[0]._unit_binding
+    if binding is None or binding.text.strip() != entry.item.quote:
+        return False
+    original = binding.snapshot.span()
+    if not entry.span or any(
+        original.get(key) != entry.span.get(key) for key in ("text", "image_text_source_context", "source_id", "label")
+    ):
+        return False
+    try:
+        purposes = image_purpose_sidecar(binding.snapshot)
+    except ValueError:
+        return False
+    records = {uid for row in purposes if row["purpose"] == "record" for uid in row["unit_ids"]}
+    return bool(binding.unit_ids) and set(binding.unit_ids).issubset(records)
+
+
 def _displayed_quote(entry: CheckedItem) -> str:
     """原文のみ提示で表示する引用。生成説明の `値:` 欄（画面の表示例の値）は除く (#1114)。
 
-    `値:` 欄はスクリーンショットに表示されている例の値で、利用者の実値ではない。画面名・ボタン・項目などの欄は
-    画面の案内に要るので残す。表示だけに使い、引用照合・検査・監査は元の引用で行う。除いて空なら元の引用。
+    用途不明・例示画像では画面名・ボタン・項目を残す。送達した原文単位が記録画像だけを指す場合は原文を保つ。
+    表示だけに使い、引用照合・検査・監査は元の引用で行う。
     """
     # 表の chunk の HTML は、chunk の要約と同じく ` | ` / ` / ` の平文にする（本文はプレーンテキスト。#2214）。
     quote = _flatten_table_html(entry.item.quote)
-    if "image_generated" not in (entry.span or {}).get("tags", ()):
+    if "image_generated" not in (entry.span or {}).get("tags", ()) or _selected_record_image_quote(entry):
         return quote
     text = _without_screen_examples(quote)
     # 値欄の一部だけの引用（「受付年月=H30.04 / 処理年月=H30.03」）や、値を省略記号でつないだ断片も除く。
@@ -3943,7 +3980,6 @@ _CITE_LIST = re.compile(r"^\s*(?:\[\s*\d+(?:\s*[,、]\s*\d+)*\s*\]|\d+(?:\s*[,�
 
 # 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824・#3847）。
 CITATION_UNIT_CONTRACT = "explicit_units_v5"
-IMAGE_CITATION_UNIT_CONTRACT = "explicit_image_units_v1"
 # ``citation_units`` で単位を作る版（v2 は ``_legacy_citation_units`` の単位に番号を付けた版）。
 _VERSIONED_UNIT_CONTRACTS = frozenset({"explicit_units_v3", "explicit_units_v4", CITATION_UNIT_CONTRACT})
 _EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", IMAGE_CITATION_UNIT_CONTRACT, *_VERSIONED_UNIT_CONTRACTS})
@@ -4582,7 +4618,7 @@ def _retrieved_heading_context(spans: Sequence[dict]) -> list[dict]:
     return [{**span, "function": functions.get(span.get("evidence_id"), span["function"])} for span in spans]
 
 
-def _source_note(span: dict) -> str:
+def _source_note(span: dict, units: Sequence[tuple[int, int]] | None = None) -> str:
     """根拠の補助情報。出典情報は機能の見出しと同じ文書名・索引用のヘッダ・子の uid を除いた形で示す（#3831）。
 
     span の値だけで決まる（同じ根拠は、どの入力でも同じブロックになる。引用の版の照合が前提にする）。
@@ -4596,6 +4632,11 @@ def _source_note(span: dict) -> str:
         parts.append(shown)
     if span.get("answer_context"):
         parts.append(span["answer_context"])
+    if "image_text_source_context" in span:
+        selected = units if units is not None else evidence_citation_units(span)
+        snapshot = EvidenceUnitSnapshot.create(span, selected, evidence_unit_contract(span))
+        if purposes := image_purpose_sidecar(snapshot):
+            parts.append("image_purposes=" + json.dumps(purposes, ensure_ascii=False, separators=(",", ":")))
     return f"\n{CONTEXT_NOTE_BEGIN}\n" + "\n".join(parts) + f"\n{CONTEXT_NOTE_END}" if parts else ""
 
 
@@ -4626,7 +4667,7 @@ def _rendered_evidence_span(
         + (f" tags={','.join(span['tags'])}" if span.get("tags") else "")
         + (" pinned" if span.get("pinned") else "")
         + (" catalog" if span.get(ARTICLE_CATALOG_KEY) else "")
-        + _source_note(dict(span))
+        + _source_note(dict(span), selected_units)
         + "\n"
         + body.rstrip("\n")
         + f"\n[/{span['label']}]"
@@ -4657,7 +4698,7 @@ def _original_character_forms(span: Mapping[str, Any], units: Sequence[tuple[int
 
 
 def _model_source_note(span: Mapping[str, Any], units: Sequence[tuple[int, int]]) -> str:
-    note = fold_width(_source_note(dict(span)))
+    note = fold_width(_source_note(dict(span), units))
     originals = _original_character_forms(span, units)
     if not originals:
         return note
@@ -4669,7 +4710,7 @@ def _model_source_note(span: Mapping[str, Any], units: Sequence[tuple[int, int]]
 
 def _model_evidence_span(span: Mapping[str, Any], rendered: str, units: Sequence[tuple[int, int]]) -> str:
     displayed = fold_width(rendered)
-    original_note = fold_width(_source_note(dict(span)))
+    original_note = fold_width(_source_note(dict(span), units))
     model_note = _model_source_note(span, units)
     if original_note:
         displayed = displayed.replace(original_note, model_note, 1)
@@ -6648,7 +6689,7 @@ def run_round(
         plan = call_with_model_purpose(
             "answer.scope",
             parse_text,
-            resolve_prompt("generation.instruction", SCOPE_PLAN_SYSTEM_PROMPT),
+            image_purpose_system(resolve_prompt("generation.instruction", SCOPE_PLAN_SYSTEM_PROMPT), evidence),
             json.dumps(
                 {
                     "question": question,
@@ -6664,6 +6705,7 @@ def run_round(
                             "source": span.get("source", ""),
                             "section": _function_title(span),
                             "text": scope_evidence_text(span),
+                            **_scope_image_purposes(span),
                             **({"catalog": True} if span.get(ARTICLE_CATALOG_KEY) else {}),
                         }
                         for span in evidence
@@ -6907,6 +6949,8 @@ def run_round(
                 ensure_ascii=False,
             )
             repair_system = resolve_prompt("generation.citationRepair", CITATION_RANGE_REPAIR_SYSTEM_PROMPT)
+            if any(record.get("image_purposes") for record in source_inputs):
+                repair_system = with_image_purpose_policy(repair_system)
             response = call_with_model_purpose(
                 "answer.repair",
                 parse_text,
@@ -7200,6 +7244,7 @@ def run_round(
     also_base = len(checked) + len(guide_notices)
     also_audited = [(also_base + offset, entry, other) for offset, (entry, other) in enumerate((e, o) for _, e in audited for o in e.also)]
     if spans and audit_mode != AUDIT_MODE_NONE:
+        audit_system = image_purpose_system(audit_system, spans)
         # 未使用根拠の基準は草稿の items。システムが補った原文のみ提示（必須根拠・確定操作・但し書き）は草稿が
         # 使っていないので未使用に含め、gap だけの草稿でも見落とした根拠を監査に見せる (#1014)。
         used = {entry.span["evidence_id"] for entry in cited_entries(checked) if entry.span and not entry.added}

@@ -28,7 +28,14 @@ from rag_engine.generation.batch_output_repair import (
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.document_inputs import document_groups, document_key, document_priority, order_document_spans
 from rag_engine.generation.grounded import IMAGE_CITATION_UNIT_CONTRACT, evidence_citation_units, evidence_unit_contract
-from rag_engine.generation.image_text_sources import SPAN_IMAGE_SOURCE_KEY, slice_span_image_context, span_source_context
+from rag_engine.generation.image_text_sources import (
+    IMAGE_READING_UNIT_CONTRACT,
+    SPAN_IMAGE_SOURCE_KEY,
+    image_purpose_sidecar,
+    image_purpose_system,
+    slice_span_image_context,
+    span_source_context,
+)
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.call_context import call_context, update_call_context
 from rag_engine.resources.runtime import resolve_prompt
@@ -87,7 +94,7 @@ def verified_candidate(answer: str, source: str) -> str:
 
 
 def _reading_unit_contract(value: Mapping[str, Any]) -> str:
-    return "batch_image_read_units_v1" if evidence_unit_contract(value) == IMAGE_CITATION_UNIT_CONTRACT else "batch_read_units_v1"
+    return IMAGE_READING_UNIT_CONTRACT if evidence_unit_contract(value) == IMAGE_CITATION_UNIT_CONTRACT else "batch_read_units_v1"
 
 
 def reading_units(value: Mapping[str, Any]) -> list[tuple[int, int]]:
@@ -116,10 +123,12 @@ def _labeled_text(label: str, value: Mapping[str, Any]) -> str:
     """引用単位の ID を、選択する原文の隣へ示す。"""
     text = str(value["text"])
     snapshot = EvidenceUnitSnapshot.create({**value, "label": label}, reading_units(value), _reading_unit_contract(value))
-    return "\n".join(
+    body = "\n".join(
         f"{label}-{number}| [{unit_id}] {text[start:end]}"
         for number, ((start, end), unit_id) in enumerate(zip(snapshot.units, snapshot.unit_ids, strict=True), 1)
     )
+    purposes = image_purpose_sidecar(snapshot)
+    return ("image_purposes=" + json.dumps(purposes, ensure_ascii=False, separators=(",", ":")) + "\n" if purposes else "") + body
 
 
 def _reading_model(values: Sequence[Mapping[str, Any]]) -> type[BatchReading]:
@@ -186,7 +195,7 @@ def prepare_batched_evidence(
     ``failed_batches`` には失敗した組の記録を足す（例外で返せない診断を呼び出し側へ渡す。#4090）。
     ``source_scores`` は出典の ID ごとの原質問への rerank の点数。読取で選ばれなかった原文を予算まで補う順に使う（#4113）。
     """
-    reading_system = resolve_prompt("generation.batchReading", BATCH_READING_PROMPT)
+    reading_system = image_purpose_system(resolve_prompt("generation.batchReading", BATCH_READING_PROMPT), spans)
     document_order = document_priority(spans, source_scores)
     selected = order_document_spans(spans, priority=document_order)
     batches: list[dict[str, Any]] = []

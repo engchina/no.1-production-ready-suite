@@ -4,10 +4,41 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from rag_engine.chunking.text_projection import IMAGE_TEXT_SOURCE_ROLES, bound_text_source_map
+
+if TYPE_CHECKING:
+    from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot
+
+IMAGE_CITATION_UNIT_CONTRACT = "explicit_image_units_v1"
+IMAGE_READING_UNIT_CONTRACT = "batch_image_read_units_v1"
+
+IMAGE_PURPOSE_POLICY = (
+    "- image_purposes は指定の引用単位だけの画像用途。record は資料の記録値として使い、今回の対象・時点との一致は別に確かめる。"
+    "example は操作説明に使えるが、表示値・選択状態を今回の実値・既定値・必須値・許容範囲としない。\n"
+    "- unknown・用途未記録の画像は実値と断定しない。例示値は「画面例では」と示す。"
+    "本文の指定値や質問の明示値と区別し、用途を他の原文へ広げない。"
+)
+
+
+def with_image_purpose_policy(system: str) -> str:
+    """用途のデータ契約を既存の判断Stepに一度だけ含める。"""
+    if IMAGE_PURPOSE_POLICY in system:
+        return system
+    before, marker, after = system.partition("\n## Step 3:")
+    return before.rstrip() + "\n" + IMAGE_PURPOSE_POLICY + ("\n" + marker + after if marker else "\n")
+
+
+def image_purpose_system(system: str, spans: Sequence[Mapping[str, Any]]) -> str:
+    """用途データのある呼び出しだけに解釈を添え、原生だけの入力は維持する。"""
+    if any(
+        (context := span_source_context(span)) is not None and context["ranges"] for span in spans if "image_text_source_context" in span
+    ):
+        return with_image_purpose_policy(system)
+    return system
+
 
 ANSWER_IMAGE_SOURCE_KEY = "answer_image_text_source_map"
 SPAN_IMAGE_SOURCE_KEY = "image_text_source_context"
@@ -250,3 +281,36 @@ def slice_span_image_context(span: Mapping[str, Any], start: int, end: int) -> d
             if row["start"] < end and start < row["end"]
         ]
     return {SPAN_IMAGE_SOURCE_KEY: result}
+
+
+def image_purpose_sidecar(snapshot: EvidenceUnitSnapshot) -> list[dict[str, Any]]:
+    """実提示snapshotのUへ用途だけを結び、内部scopeや画像IDは送らない。"""
+    from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot
+
+    span = snapshot.span()
+    context = span_source_context(span)
+    if context is None:
+        return []
+    if snapshot.contract not in {IMAGE_CITATION_UNIT_CONTRACT, IMAGE_READING_UNIT_CONTRACT}:
+        raise ValueError("画像用途の引用単位の版が一致しません。")
+    expected = EvidenceUnitSnapshot.create(span, snapshot.units, snapshot.contract)
+    if expected.snapshot_id != snapshot.snapshot_id or expected.unit_ids != snapshot.unit_ids:
+        raise ValueError("画像用途の引用単位が送信記録と一致しません。")
+    result: list[dict[str, Any]] = []
+    previous_key: tuple[Any, ...] | None = None
+    previous_index = -2
+    for index, ((start, end), unit_id) in enumerate(zip(snapshot.units, snapshot.unit_ids, strict=True)):
+        rows = [row for row in context["ranges"] if row["start"] < end and start < row["end"]]
+        if not rows:
+            previous_key = None
+            continue
+        if len(rows) != 1 or not rows[0]["start"] <= start < end <= rows[0]["end"]:
+            raise ValueError("画像用途の境界をまたぐ引用単位は扱えません。")
+        row = rows[0]
+        key = tuple(row.get(field) for field in ("image_id", "source_record_id", "container_record_id", "role", "vision_image_purpose"))
+        if result and previous_key == key and previous_index + 1 == index:
+            result[-1]["unit_ids"].append(unit_id)
+        else:
+            result.append({"unit_ids": [unit_id], "purpose": row["vision_image_purpose"]})
+        previous_key, previous_index = key, index
+    return result

@@ -69,15 +69,21 @@ class EvidenceUnitSnapshot:
     def span(self) -> dict[str, Any]:
         return json.loads(self.span_json)
 
-    def prompt_record(self) -> dict[str, str]:
-        """原文の復号は一度だけ行い、修正で選べる単位を入力へ出す。"""
+    def prompt_record(self) -> dict[str, Any]:
+        """同じ版の原文と画像用途を、修正で選べる単位に結んで入力へ出す。"""
         original = self.span()
         text = str(original.get("text") or "")
-        return {
+        record: dict[str, Any] = {
             "snapshot_id": self.snapshot_id,
             "source": str(original.get("source") or ""),
             "text": "\n".join(f"[{uid}] {text[start:end]}" for (start, end), uid in zip(self.units, self.unit_ids, strict=True)),
         }
+        if original.get("image_text_source_context"):
+            from rag_engine.generation.image_text_sources import image_purpose_sidecar
+
+            if purposes := image_purpose_sidecar(self):
+                record["image_purposes"] = purposes
+        return record
 
 
 @dataclass(frozen=True)
