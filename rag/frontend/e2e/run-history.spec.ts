@@ -2019,7 +2019,10 @@ for (const fusionStatus of ["done", "skipped", "failed"] as const) {
 
 test("不足から3拡張を補搜した実編排の記録が経過と軌跡で一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
   await mockLocalAuth(page);
-  const row = run(1, {run_id: "synthetic-recovery", question: "合成対象Bの値を教えてください。", answer: "合成対象Bの値は42です。", elapsed_ms: 2000});
+  const root = recoveryGeneratedTrace.events[0];
+  const startedAt = String("started_at" in root ? root.started_at : "");
+  const finishedAt = String("finished_at" in root ? root.finished_at : "");
+  const row = run(1, {run_id: "synthetic-recovery", question: "合成対象Bの値を教えてください。", answer: "合成対象Bの値は42です。", created_at: finishedAt, elapsed_ms: Date.parse(finishedAt) - Date.parse(startedAt)});
   await mockRuns(page, [row]);
   await page.route("**/api/history/runs/synthetic-recovery/trace", route => route.fulfill({json: apiEnvelope(recoveryGeneratedTrace)}));
   await page.goto(`/history/${row.run_id}`);
