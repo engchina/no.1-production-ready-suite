@@ -33,6 +33,7 @@ def review(checked, parse, *, existing=None, requested=False, settings=None):
     return review_applications(
         QUESTION,
         checked,
+        evidence_spans=[entry.span for application in checked for entry in application.entries],
         existing_audit=existing,
         audit_requested=requested,
         parse_text=parse,

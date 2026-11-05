@@ -391,6 +391,8 @@ APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "- 前提が質問の原文にあることと、算式の計算はシステムが確かめ済み。\n"
     "\n"
     "## Step 2: 規則と事実の対応を判定する\n"
+    "- documents は生成へ渡した原文を文書と版ごとにまとめたもの。選択引用の外にある条件・未確定の行・分類規則も確認する。"
+    "引用抜粋だけで未確認条件を不成立や0とみなさず、必要な規則を確認できなければ valid=false。\n"
     "- valid=true は、premises が質問または confirmed_premises の確認済みの事実で、ite"
     "m_indexes の items の quote の規則（条件・式・"
     "数え方）を正しく当てはめ、計算・期間・日付の数え方と result が"
@@ -445,6 +447,7 @@ def run_application_step(
     checked: Sequence[Any],
     request_units: Sequence[dict],
     *,
+    evidence_spans: Sequence[dict[str, Any]],
     parse_text: Callable[..., Any],
     settings: Any,
     audit_settings: Any,
@@ -468,19 +471,18 @@ def run_application_step(
     candidates = audit_view(applications, lambda item: next((i for i, e in supported.items() if e is item), None))
     if not candidates:
         return applications, ""
+    from rag_engine.generation.application_review import application_documents
+    from rag_engine.generation.input_budget import ensure_model_input
+
     schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in candidates))
-    audit = canonical_audit_result(
-        call_with_model_purpose(
-            "answer.audit",
-            parse_text,
-            resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT),
-            render_prompt({**inputs, "applications": candidates, "summary": draft.summary}),
-            audit_settings,
-            schema,
-            provider_id=provider_id,
-        ),
-        schema,
-    ).audit
+    system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
+    prompt = render_prompt(
+        {**inputs, "documents": application_documents(evidence_spans), "applications": candidates, "summary": draft.summary}
+    )
+    ensure_model_input(audit_settings, system, prompt, schema.model_json_schema(), provider_id=provider_id)
+    audit = canonical_audit_result(call_with_model_purpose(
+        "answer.audit", parse_text, system, prompt, audit_settings, schema, provider_id=provider_id,
+    ), schema).audit
     apply_application_audit(applications, audit, require_complete=True)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""
