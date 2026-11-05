@@ -1,5 +1,5 @@
 import {
-  AnswerPlainText, Banner, Button, ContentActionBar, Disclosure, FormActionBar, FormGrid, SaveErrorBanner, apiErrorMessage,
+  AnswerPlainText, Banner, Button, ContentActionBar, Disclosure, FormActionBar, FormGrid, FormStatus, SaveErrorBanner, apiErrorMessage,
   ListToolbar, PagedDataTable, RowTitleButton,
   Section, SelectField, Skeleton, StatusBadge, TextareaField, TextField, TimedLoadingState,
 } from "@production-ready/ui";
@@ -170,7 +170,12 @@ function DraftEditor({ initial, onClose }: { initial: TestSetDraft; onClose: () 
         <ContentActionBar ariaLabel={t("evaluation.testsets.confirmItem")} actionsClassName="justify-start"><Button variant="secondary" icon={Check} loading={save.isPending} disabled={item.confirmed || !item.question.trim() || (item.response_decision === "answer" && !item.standard_answer.trim())} onClick={() => void confirm()}>{t("evaluation.testsets.confirmItem")}</Button></ContentActionBar>
       </FormGrid> : null}
       <SaveErrorBanner message={save.isError ? apiErrorMessage(save.error, t("evaluation.testsets.saveError")) : null} attemptKey={save.submittedAt} testId="testset-save-error" />
-      <FormActionBar ariaLabel={t("evaluation.testsets.save")} primaryActions={[{ id: "save", label: t("evaluation.testsets.save"), icon: Save, loading: save.isPending, disabled: !dirty || !draft.name.trim(), onClick: () => save.mutate(draft) }]}
+      <FormActionBar ariaLabel={t("evaluation.testsets.save")} status={save.isPending
+        ? <FormStatus tone="info" message={t("evaluation.testsets.saveState.saving")} />
+        : save.isError ? <FormStatus tone="danger" message={t("evaluation.testsets.saveState.failed")} />
+        : dirty ? <FormStatus tone="warning" message={t("evaluation.testsets.saveState.unsaved")} />
+        : <FormStatus tone="success" message={t("evaluation.testsets.saveState.saved")} />}
+        primaryActions={[{ id: "save", label: t("evaluation.testsets.save"), icon: Save, loading: save.isPending, disabled: !dirty || !draft.name.trim(), onClick: () => save.mutate(draft) }]}
         secondaryActions={[{ id: "cancel", label: t("evaluation.testsets.back"), onClick: async () => { if (await guard()) onClose(); } }]} />
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <Button variant="secondary" icon={Download} loading={downloading} disabled={dirty || save.isPending || !baseline.items.some(value => value.confirmed)} onClick={() => void download()}>{t("evaluation.testsets.download")}</Button>

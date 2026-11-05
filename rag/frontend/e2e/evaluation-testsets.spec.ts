@@ -209,9 +209,78 @@ test("内容保存後に確認だけ失敗しても未確認を保ち再試行�
   await expect(page.getByTestId("testset-save-error").getByRole("alert")).toBeVisible();
   expect(state.getSaved()?.items[0].standard_answer).toBe("保存は成功する合成標準回答");
   expect(state.getSaved()?.items[0].confirmed).toBe(false);
+  await expect(page.getByTestId("testset-editor").getByRole("group",{name:"下書きを保存",exact:true}).getByRole("alert")).toHaveText("保存に失敗しました。");
   await expect(page.getByRole("button", { name: "テストデータをダウンロード" })).toBeDisabled();
   await expect(confirm).toBeEnabled();
   await confirm.click();
   await expect.poll(() => state.getSaved()?.items[0].confirmed).toBe(true);
   await expect(page.getByRole("button", { name: "テストデータをダウンロード" })).toBeEnabled();
+  await expect(page.getByTestId("testset-editor").getByRole("group",{name:"下書きを保存",exact:true}).getByRole("status")).toHaveText("保存済みです。");
 });
+
+for (const theme of ["light", "dark"] as const) {
+  test(`下書きの保存状態を常設し失敗から再試行まで示す (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const state = await mockTestSetPage(page);
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release=resolve; });
+    let failSave=true;
+    await page.route("**/api/evaluation/testsets/draft-a", async route => {
+      if (route.request().method()==="PUT" && failSave) {
+        failSave=false;
+        await pending;
+        return route.fulfill({status:500,json:{data:null,error_messages:[{message:"合成の保存失敗です。再試行してください。"}],warning_messages:[]}});
+      }
+      return route.fallback();
+    });
+    await page.goto("/evaluation?tab=calibration");
+    await page.evaluate(value => {document.documentElement.dataset.theme=value;},theme);
+    await page.getByRole("button",{name:"新しい下書きを作る"}).click();
+    await page.locator("#testset-name").fill("保存状態の合成下書き");
+    await page.getByTestId("testset-sources").getByRole("checkbox").first().check();
+    await page.getByRole("button",{name:"評価の項目を表示する"}).click();
+    await page.getByRole("button",{name:"すべて選択",exact:true}).click();
+    await page.getByRole("button",{name:"選んだ項目で下書きを保存"}).click();
+    const editor=page.getByTestId("testset-editor");
+    const actions=editor.getByRole("group",{name:"下書きを保存",exact:true});
+    const save=actions.getByRole("button",{name:"下書きを保存",exact:true});
+    const capture=async (stage:string) => {
+      await actions.evaluate(element => element.scrollIntoView({block:"center"}));
+      await expectNoPageOverflow(page);
+      await page.screenshot({path:testInfo.outputPath(`save-status-${stage}-${theme}.png`),animations:"disabled",style:"[data-toast-placement] { visibility: hidden !important; }"});
+    };
+    await expect(actions.getByRole("status")).toHaveText("保存済みです。");
+    await expect(save).toBeDisabled();
+    await capture("saved");
+    await page.locator("#testset-standard").fill("保存状態を確認する合成回答");
+    await expect(actions.getByRole("status")).toHaveText("未保存の変更があります。");
+    await expect(page.getByRole("button",{name:"テストデータをダウンロード"})).toBeDisabled();
+    await capture("unsaved");
+    const requested=page.waitForRequest(req => req.method()==="PUT" && req.url().endsWith("/testsets/draft-a"));
+    await save.click();await requested;
+    try {
+      await expect(actions.getByRole("status")).toHaveText("保存しています。");
+      await expect(page.locator("#testset-standard")).toBeDisabled();
+      await capture("saving");
+    } finally {release();}
+    await expect(actions.getByRole("alert")).toHaveText("保存に失敗しました。");
+    await expect(page.getByTestId("testset-save-error").getByRole("alert")).toBeVisible();
+    await expect(page.locator("#testset-standard")).toHaveValue("保存状態を確認する合成回答");
+    expect(state.getSaved()?.items[0].standard_answer).toBe("");
+    await capture("failed");
+    await save.click();
+    await expect(actions.getByRole("status")).toHaveText("保存済みです。");
+    await expect(page.getByTestId("testset-save-error")).toHaveCount(0);
+    expect(state.getSaved()?.items[0].standard_answer).toBe("保存状態を確認する合成回答");
+    expect(state.getSaved()?.items[0].confirmed).toBe(false);
+    await expect(save).toBeDisabled();
+    await capture("retry-saved");
+    await page.getByRole("button",{name:"この項目の収録を確認する"}).click();
+    await expect.poll(() => state.getSaved()?.items[0].confirmed).toBe(true);
+    await expect(page.getByRole("button",{name:"テストデータをダウンロード"})).toBeEnabled();
+    await page.reload();
+    await page.getByRole("button",{name:"保存状態の合成下書き",exact:true}).click();
+    await expect(actions.getByRole("status")).toHaveText("保存済みです。");
+    await expect(page.locator("#testset-standard")).toHaveValue("保存状態を確認する合成回答");
+    await capture("reopened");
+  });
+}
