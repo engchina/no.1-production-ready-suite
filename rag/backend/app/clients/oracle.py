@@ -3739,6 +3739,22 @@ class OracleClient:
         )
         return (_json_loads(row.get("source_derivation")) or None) if row else None
 
+    async def extraction_source_derivation(
+        self, *, document_id: str, extraction_recipe_id: str
+    ) -> dict[str, object] | None:
+        """抽出版のファイル系譜だけを読む（抽出本文は読み込まない）。"""
+        row = await self._fetch_one(
+            """
+            SELECT JSON_QUERY(
+                       extraction_json, '$.parser_artifacts.source_derivation' RETURNING CLOB
+                   ) AS source_derivation
+            FROM rag_document_extractions
+            WHERE document_id = :document_id AND extraction_recipe_id = :extraction_recipe_id
+            """,
+            {"document_id": document_id, "extraction_recipe_id": extraction_recipe_id},
+        )
+        return (_json_loads(row.get("source_derivation")) or None) if row else None
+
     async def get_document_extraction_artifact(
         self,
         *,

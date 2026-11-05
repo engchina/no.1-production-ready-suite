@@ -280,6 +280,21 @@ async def test_chunk_set_source_derivation_reads_the_file_of_the_version() -> No
     assert raw is not None
     assert raw["derived_object_path"] == derivation.derived_object_path
     assert raw["page_map"] == {"1": 3}
+    extraction_source = await client.extraction_source_derivation(
+        document_id=document_id, extraction_recipe_id=f"ex_l_{suffix}"
+    )
+    assert extraction_source == raw
+    for doc_id, extraction_id in (
+        (document_id, f"ex_p_{suffix}"),
+        (document_id, f"missing_{suffix}"),
+        (f"other_{suffix}", f"ex_l_{suffix}"),
+    ):
+        assert (
+            await client.extraction_source_derivation(
+                document_id=doc_id, extraction_recipe_id=extraction_id
+            )
+            is None
+        )
     for chunk_set_id in (without_lineage, no_extraction, f"missing_{suffix}"):
         assert (
             await client.chunk_set_source_derivation(
