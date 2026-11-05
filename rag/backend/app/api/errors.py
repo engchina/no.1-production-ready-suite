@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from fastapi import HTTPException
 
@@ -25,6 +25,22 @@ class CodedApiError(HTTPException):
     """応答の envelope に `error_code` を付ける失敗（`app.main` の共通の handler が返す）。"""
 
     code: str
+
+
+class DocumentRecipeConfigInvalidError(CodedApiError):
+    """保存済みの処理レシピ設定が現在の入力契約に合わない（422）。"""
+
+    code = "DOCUMENT_RECIPE_CONFIG_INVALID"
+
+    def __init__(self, fields: Sequence[str] = ()) -> None:
+        suffix = f"（項目: {', '.join(fields)}）" if fields else ""
+        super().__init__(
+            status_code=422,
+            detail=(
+                "保存済みの処理レシピ設定が現在の形式に合いません。"
+                "処理レシピの設定を現在の選択肢で保存し直してください。" + suffix
+            ),
+        )
 
 
 class DocumentFileMissingError(CodedApiError):
