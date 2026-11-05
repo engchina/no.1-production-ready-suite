@@ -534,7 +534,7 @@ describe("ChatProgress", () => {
     expect(host.querySelectorAll("svg.animate-spin")).toHaveLength(1);
     const search = q("p-step-search")!;
     expect(search.dataset.level).toBe("1");
-    expect(search.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
+    expect(search.querySelector<HTMLElement>("[data-run-timeline-label]")?.closest<HTMLElement>("[data-run-step-name]")?.style.paddingInlineStart).toBe("1rem");
     expect(search.textContent).toContain("1.6 秒");
     expect(q("p-step-understand")!.textContent).toContain("質問の理解");
     expect(q("p-step-understand")!.querySelector("[data-run-result-summary]")).toBeNull();
@@ -554,11 +554,11 @@ describe("ChatProgress", () => {
         testId="p"
       />
     );
-    expect(q("p-summary")!.textContent).toBe("処理の経過（3 ステップ・3.0 秒）");
-    // 時刻の無い記録の線は所要時間を積み、入れ子の段は親の段の始まりから積む（子の線が親の線の中に入る）。
+    expect(q("p-summary")!.textContent).toBe("処理の経過（3 ステップ・-）");
+    // 時刻が無ければ全体の範囲や位置を推定せず、記録された各行の所要時間だけを保つ。
     act(() => q("p-summary")!.click());
     const lefts = [...host.querySelectorAll<HTMLElement>("[data-run-timeline-bar] span")].map((bar) => bar.style.left);
-    expect(lefts).toEqual(["0%", `${(1000 / 3000) * 100}%`, `${(1000 / 3000) * 100}%`]);
+    expect(lefts).toEqual([]);
   });
 
   it("実行中の段階は始まった時点で開始順の位置に出し、親の工程が実行中・完了しても行の順は変わらない（#2840）", () => {

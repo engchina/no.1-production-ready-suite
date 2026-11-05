@@ -116,7 +116,7 @@ export const TRACE_DETAILS_JA = {
   "trace.field.tools.count": "ツール定義の数",
   "trace.status.cancelled": "停止",
   "trace.status.stopped": "処理を停止しました",
-  "trace.timing.reconstructed": "時刻の記録がない処理は、所要時間から順番を再構成しています。",
+  "trace.timing.reconstructed": "開始時刻が未記録の処理は、時間の線に表示していません。",
   "trace.product.rag": "RAG",
   "trace.product.nl2sql": "NL2SQL",
   "trace.product.agent": "Agent",

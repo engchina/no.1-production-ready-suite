@@ -60,6 +60,7 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   await page.locator("[data-run-timeline-section]").first().screenshot({path: testInfo.outputPath("recovered-run-summary.png")});
   const normalRows = await page.evaluate(() => Array.from(document.querySelectorAll("[data-run-timeline-step]")).map(row => ({
     id: row.getAttribute("data-run-timeline-step"), name: row.querySelector("[data-run-timeline-label]")?.textContent,
+    color: row.querySelector("[data-run-timeline-label]") ? getComputedStyle(row.querySelector("[data-run-timeline-label]")!).color : undefined,
     level: row.getAttribute("data-level") ?? "0", parent: row.getAttribute("data-parent-id"),
     status: row.getAttribute("data-status"), duration: row.querySelector("[data-run-step-status-duration]")?.textContent, summary: row.querySelector("[data-run-result-summary]")?.textContent ?? "",
   })), undefined);
@@ -76,8 +77,8 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
   check(await page.evaluate(expected => {
     const labels = Array.from(document.querySelectorAll("[data-trace-record-label]"));
     const bars = Array.from(document.querySelectorAll("[data-trace-time-bar]"));
-    return labels.length > 0 && bars.length > 0 && labels.every(label => { const style = getComputedStyle(label); return !expected.font || (style.fontSize === expected.font && style.fontFamily === expected.family && style.fontWeight === expected.weight && style.lineHeight === expected.line && style.color === expected.color); }) && bars.every(bar => (!expected.height || getComputedStyle(bar).height === expected.height) && (!expected.radius || getComputedStyle(bar).borderRadius === expected.radius));
-  }, normalStyle)).toBe(true);
+    return labels.length > 0 && bars.length > 0 && labels.every(label => { const style = getComputedStyle(label); const rowId = label.closest("[data-trace-record]")?.getAttribute("data-trace-record"); const color = rowId ? expected.colors[rowId] : expected.color; return !expected.font || (style.fontSize === expected.font && style.fontFamily === expected.family && style.fontWeight === expected.weight && style.lineHeight === expected.line && style.color === color); }) && bars.every(bar => (!expected.height || getComputedStyle(bar).height === expected.height) && (!expected.radius || getComputedStyle(bar).borderRadius === expected.radius));
+  }, {...normalStyle, colors: Object.fromEntries(normalRows.map(row => [row.id, row.color]))})).toBe(true);
   check(await page.evaluate(expected => {
     const rows = Array.from(document.querySelectorAll("[data-trace-record]"));
     const ids = new Set(rows.map(row => row.getAttribute("data-trace-record")));
@@ -185,10 +186,13 @@ export async function confirmTraceExplorer(page: ExplorerPage, testInfo: {output
     const original = page.viewportSize();
     await page.emulateMedia({reducedMotion: "reduce"});
     const sizes = original && original.width >= 1000 ? [{width: 1280, height: 900}, {width: 1920, height: 1080}] : [{width: 812, height: 375}];
-    for (const size of sizes) {
-      await page.setViewportSize(size);
-      check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth, undefined)).toBe(true);
-      await explorer.screenshot({path: testInfo.outputPath(`trace-explorer-${size.width}-reduced-motion.png`)});
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.classList.remove("light", "dark"); document.documentElement.dataset.theme = value; }, theme);
+      for (const size of sizes) {
+        await page.setViewportSize(size);
+        check(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth, undefined)).toBe(true);
+        await explorer.screenshot({path: testInfo.outputPath(`trace-explorer-${size.width}-${theme}-reduced-motion.png`)});
+      }
     }
     if (original) await page.setViewportSize(original);
   }
