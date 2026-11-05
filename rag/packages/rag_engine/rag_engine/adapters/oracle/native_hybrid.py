@@ -260,6 +260,7 @@ def native_search_request(
     rank_constant: int = 60,
     accuracy: int = 100,
     method_ratio: tuple[float, float] = (10, 1),
+    text_contains: str | None = None,
 ) -> dict[str, Any]:
     """許可されたchunkの集合を検索前に制限する。空の集合では実行しない。"""
     if id_column not in {"CHUNK_ID", "CHUNK_UID"}:
@@ -306,7 +307,7 @@ def native_search_request(
         }
     if channel in {"keyword", "hybrid"}:
         request["text"] = {
-            "search_text": query,
+            **({"contains": text_contains} if text_contains else {"search_text": query}),
             "inpath": ["$.text"],
             "result_max": limit,
             "rank_penalty": rank_constant,

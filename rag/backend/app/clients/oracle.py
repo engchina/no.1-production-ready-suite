@@ -8479,6 +8479,10 @@ class OracleClient:
                 raise NativeHybridUnavailable(
                     "範囲の行を距離順に読めませんでした。管理CLIで索引と同期状態を確認してください。"
                 ) from exc
+        # 同じ全文式を許可範囲の各batchで再利用する。語が無い場合は原質問を保つ。
+        text_contains = (
+            _oracle_text_query(query, settings=self._settings) if channel != "vector" else None
+        )
         specs = [
             request_json(
                 query=query,
@@ -8492,6 +8496,7 @@ class OracleClient:
                 rank_constant=self._settings.rag_rrf_k,
                 accuracy=resolve_vector_index_adapter(self._settings).target_accuracy,
                 method_ratio=self._settings.rag_rrf_method_ratio,
+                text_contains=text_contains,
             )
             for batch in native_filter_batches(
                 allowed_ids=scope.allowed_ids,
