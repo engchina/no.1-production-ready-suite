@@ -936,12 +936,16 @@ class GroundedAnswerTest(unittest.TestCase):
         import re
         from typing import get_args
 
+        from test_image_purpose_consumers import mixed_span, snapshot
+
         from rag_engine.generation.answering import _answer_image_metadata
         from rag_engine.models.llm import ExternalDataItem, GroundedApplication, GroundedCitation, GroundedItem
         from rag_engine.retrieval.task_contract import task_contract
 
         # extra="forbid" のため、スキーマに無い欄を指示どおり出力すると検証エラーになる。
         external_kinds = set(get_args(ExternalDataItem.model_fields["who_can_answer"].annotation))
+        image_input = snapshot(mixed_span()).prompt_record()
+        self.assertIn("image_purposes", image_input)
         known = (
             set(GroundedDraft.model_fields)
             | set(GroundedItem.model_fields)
@@ -952,6 +956,7 @@ class GroundedAnswerTest(unittest.TestCase):
             | external_kinds
             | {"bbox", "context_bbox", "target_highlight", "asset_kind"}
             | set(_answer_image_metadata([]))
+            | set(image_input)  # 出力欄ではなく、送達した引用単位へ結ぶ画像用途の入力。
             | {"guide_task_scope"}  # 生成入力で読む、出力欄ではないガイドの確定範囲。
             | {"guide_condition_notices"}  # 生成入力で読む、確定した条件で選んだ分岐の補足。
         )
