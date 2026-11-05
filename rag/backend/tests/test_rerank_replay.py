@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pytest import MonkeyPatch
@@ -85,7 +85,8 @@ def _client(sdk: object | None = None, *, cache: bool = True) -> OciGenAiClient:
     )
     if sdk is None:
 
-        def no_client() -> Any:
+        def no_client(target: Literal["embedding", "rerank"] = "embedding") -> Any:
+            assert target in {"embedding", "rerank"}
             raise AssertionError("再生で SDK の client を作りました")
 
         client._client = no_client  # type: ignore[method-assign]
