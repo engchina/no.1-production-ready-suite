@@ -1,5 +1,6 @@
 """既存の公開版があるときは、旧ファイルから実行設定を変えない。"""
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, Mock
@@ -9,7 +10,17 @@ from rag_parser_core.language import builtin_pack
 
 from app.clients.oracle import OracleClient
 from app.rag import published_language
+from app.rag.language_pack_contract import LanguagePackNotInitializedError
 from app.rag.language_pack_store import LANGUAGE_PACK_STORE
+
+
+@pytest.fixture(autouse=True)
+def isolated_legacy_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        published_language,
+        "resolve_language_pack_file",
+        lambda _settings: tmp_path / "synthetic-language-pack.json",
+    )
 
 
 async def test_existing_publication_does_not_read_changed_or_unreadable_legacy_file(
@@ -31,7 +42,8 @@ async def test_first_bootstrap_uses_builtin_without_reading_legacy_file(
     monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
     store = SimpleNamespace(
-        current=AsyncMock(side_effect=LookupError()), ensure_initialized=AsyncMock()
+        current=AsyncMock(side_effect=LanguagePackNotInitializedError()),
+        ensure_initialized=AsyncMock(),
     )
     monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
     legacy = Mock(side_effect=error)
@@ -41,11 +53,12 @@ async def test_first_bootstrap_uses_builtin_without_reading_legacy_file(
     legacy.assert_not_called()
 
 
-async def test_first_bootstrap_does_not_copy_existing_file_values(
+async def test_fresh_bootstrap_never_uses_legacy_override_reader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = SimpleNamespace(
-        current=AsyncMock(side_effect=LookupError()), ensure_initialized=AsyncMock()
+        current=AsyncMock(side_effect=LanguagePackNotInitializedError()),
+        ensure_initialized=AsyncMock(),
     )
     monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
     legacy = Mock(return_value={"answer_labels": {"cause_gap": "合成の旧ファイル値"}})

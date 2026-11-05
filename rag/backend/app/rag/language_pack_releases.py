@@ -11,7 +11,7 @@ from rag_parser_core.language import (
     build_pack,
 )
 
-from app.clients.language_pack_release_store import LanguagePackSnapshotError
+from app.rag.language_pack_contract import LanguagePackSnapshotError
 from app.schemas.language_pack_release import (
     LanguagePackFieldDifference,
     LanguagePackIndexRelation,

@@ -246,7 +246,7 @@ def create_app() -> FastAPI:
             request_id=_response_request_id(request),
         )
 
-    from app.clients.language_pack_release_store import LanguagePackSnapshotError
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
 
     @app.exception_handler(LanguagePackSnapshotError)
     async def language_pack_snapshot_handler(

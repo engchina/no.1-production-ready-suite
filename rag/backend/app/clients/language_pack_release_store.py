@@ -12,6 +12,10 @@ from rag_parser_core.language import (
     build_pack,
 )
 
+from app.rag.language_pack_contract import (
+    LanguagePackNotInitializedError,
+    LanguagePackSnapshotError,
+)
 from app.schemas.language_pack_release import (
     LanguagePackRelease,
     LanguagePackReleaseList,
@@ -23,10 +27,6 @@ if TYPE_CHECKING:
 
 STATE_TABLE = "rag_language_pack_state"
 RELEASE_TABLE = "rag_language_pack_releases"
-
-
-class LanguagePackSnapshotError(ValueError):
-    """保存済みの言語資源が現在の完全なスナップショット契約に合わない。"""
 
 
 class LanguagePackReleaseConflict(ValueError):
@@ -116,11 +116,25 @@ def _state(connection: OracleConnectionProtocol, *, lock: bool = False) -> Langu
         f"SELECT * FROM {STATE_TABLE} WHERE singleton_id=1" + (" FOR UPDATE" if lock else ""),
         {},
     )
-    if row is None or not row.get("current_release_id"):
-        raise LookupError("言語資源の公開版がまだありません。")
+    if row is None:
+        historical = _fetch_one(
+            connection, f"SELECT release_id FROM {RELEASE_TABLE} FETCH FIRST 1 ROWS ONLY", {}
+        )
+        if historical is None:
+            raise LanguagePackNotInitializedError("言語資源は未初期化です。")
+        # 別transactionの初期化が2つのSELECTの間に完了した場合だけ、確定した状態を読み直す。
+        row = _fetch_one(
+            connection,
+            f"SELECT * FROM {STATE_TABLE} WHERE singleton_id=1" + (" FOR UPDATE" if lock else ""),
+            {},
+        )
+        if row is None:
+            raise LanguagePackSnapshotError("公開履歴に対応する言語資源の状態行がありません。")
+    if not row.get("current_release_id"):
+        raise LanguagePackSnapshotError("言語資源の現在版ポインタがありません。")
     current = _get(connection, str(row["current_release_id"]))
     if current is None:
-        raise LookupError("言語資源の現在の公開版が見つかりません。")
+        raise LanguagePackSnapshotError("言語資源の現在の公開版が見つかりません。")
     draft = _json_loads(row["draft_effective_json"])
     validated_draft = _validated(draft).to_dict()
     return LanguagePackReleaseState(
@@ -167,6 +181,11 @@ class LanguagePackReleaseStore:
 
         def operation(connection: OracleConnectionProtocol) -> LanguagePackReleaseState:
             from app.clients.oracle import _execute, _fetch_one, _json_bind, _json_input_sizes
+
+            try:
+                return _state(connection, lock=True)
+            except LanguagePackNotInitializedError:
+                pass
 
             # 一意な行の作成とロックを同一 transaction にし、同時 bootstrap も一度だけにする。
             _execute(
