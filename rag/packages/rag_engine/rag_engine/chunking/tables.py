@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.image_purpose import recorded_image_purpose
+
 from rag_engine.chunking.constants import (
     SOURCE_TABLE_CROP_RELATIONSHIP,
     ChunkingConfig,
@@ -327,6 +329,7 @@ def _contained_table_visual_evidence(
                 "vision_input_mode": str(raw.get("vision_input_mode") or ""),
                 "vision_provider": str(raw.get("vision_provider") or ""),
                 "vision_model": str(raw.get("vision_model") or ""),
+                "vision_image_purpose": recorded_image_purpose(raw),
                 "vision_error": str(raw.get("vision_error") or ""),
                 "visual_kind": str(raw.get("visual_kind") or raw.get("picture_kind") or raw.get("visual_artifact_type") or ""),
                 "visual_structure": (dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}),
@@ -353,6 +356,7 @@ def _source_table_crop_evidence(table_record: dict[str, Any]) -> list[dict[str, 
             "bbox": table_record.get("bbox") if isinstance(table_record.get("bbox"), list) else [],
             "raw_type": str(table_record.get("raw_type") or "table"),
             "relationship": SOURCE_TABLE_CROP_RELATIONSHIP,
+            "vision_image_purpose": recorded_image_purpose(raw),
             "text_preview": _preview(_record_text(table_record), 240),
             "ocr_text": "",
             "crop_path": crop_path,

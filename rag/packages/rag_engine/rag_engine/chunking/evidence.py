@@ -200,6 +200,7 @@ def _table_image_evidence(
                     "vision_input_mode": str(raw.get("vision_input_mode") or ""),
                     "vision_provider": str(raw.get("vision_provider") or ""),
                     "vision_model": str(raw.get("vision_model") or ""),
+                    "vision_image_purpose": recorded_image_purpose(raw),
                     "vision_error": str(raw.get("vision_error") or ""),
                     "visual_kind": str(
                         raw.get("visual_kind")
@@ -249,6 +250,7 @@ def _form_image_evidence(
             seq_no = int(region.get("seq_no") or 0)
             bbox = region.get("bbox") if isinstance(region.get("bbox"), list) else []
             asset_kind = "crop"
+            image_purpose = recorded_image_purpose(region)
         else:
             image_id = f"{source_run_id or 'run'}-form-page-{page}"
             record_id = ""
@@ -257,6 +259,8 @@ def _form_image_evidence(
             crop_path = ""
             context_crop_path = ""
             asset_kind = "page"
+            purposes = {recorded_image_purpose(field) for field in page_fields}
+            image_purpose = next(iter(purposes)) if len(purposes) == 1 else "unknown"
         images.append(
             {
                 "image_id": image_id,
@@ -267,6 +271,7 @@ def _form_image_evidence(
                 "seq_no": seq_no,
                 "bbox": bbox,
                 "raw_type": "form" if region is not None else "form_page",
+                "vision_image_purpose": image_purpose,
                 "asset_kind": asset_kind,
                 "crop_path": crop_path,
                 "context_crop_path": context_crop_path,
@@ -403,6 +408,7 @@ def _form_context(refs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
             "seq_no": int(ref.get("seq_no") or 0),
             "bbox": ref.get("bbox") if isinstance(ref.get("bbox"), list) else [],
             "raw_type": str(form_field.get("raw_type") or ref.get("raw_type") or ""),
+            "vision_image_purpose": recorded_image_purpose(ref),
             "category": str(form_field.get("category") or ref.get("category") or ""),
         }
         for key in ("key", "value", "selection_status"):
