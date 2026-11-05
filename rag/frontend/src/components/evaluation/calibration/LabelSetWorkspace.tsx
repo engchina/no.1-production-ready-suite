@@ -192,7 +192,10 @@ function LabelSetHeader({
                 synthetic: summary.synthetic_item_count,
                 rows: summary.row_count,
                 ratio: Math.round((detail.holdout_ratio ?? 0.7) * 100),
-                rubric: `${detail.rubric_id} v${detail.rubric_version ?? "—"}`,
+                rubric: t("evaluation.calibration.rubric.version", {
+                  name: t(detail.rubric_id === "answer_quality" ? "evaluation.calibration.rubric.answerQuality" : "evaluation.calibration.rubric.other"),
+                  version: detail.rubric_version ?? "—",
+                }),
               })}
             </CardDescription>
           </div>

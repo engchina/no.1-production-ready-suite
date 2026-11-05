@@ -188,6 +188,10 @@ export function AgreementPanel({ detail }: { detail: LabelSetDetail }) {
           </div>
           <DataTable<AgreementRow>
             testId="calibration-agreement-rows"
+            scrollTestId="calibration-agreement-scroll"
+            scrollAriaLabel={t("evaluation.calibration.adjudicate.title")}
+            stickyHeader
+            visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
             ariaLabel={t("evaluation.calibration.adjudicate.title")}
             rows={rows}
             loading={query.isPending}

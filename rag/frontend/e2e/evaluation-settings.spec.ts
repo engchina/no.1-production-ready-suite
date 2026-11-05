@@ -203,7 +203,9 @@ async function expectNoHorizontalOverflow(page: Page) {
 test("回答の品質評価だけを評価の基準で読み取れる", { tag: "@responsive" }, async ({ page }) => {
   await mockEvaluation(page, "standard");
   await page.route("**/api/settings/answer-prompts**", (route) => route.fulfill({
-    json: { data: { prompts: [], stages: FLOW_STAGES }, error_messages: [], warning_messages: [] },
+    json: { data: { prompts: [], stages: FLOW_STAGES.map(stage => stage.id === "evaluation"
+      ? { ...stage, prompts: [...stage.prompts, { id: "absenceScope", content: "## Step 1: 提供範囲の未記載報告を確認する" }] }
+      : stage) }, error_messages: [], warning_messages: [] },
   }));
   await page.goto("/settings/evaluation");
   const stage = page.getByTestId("answer-prompt-stage-evaluation");
@@ -214,11 +216,12 @@ test("回答の品質評価だけを評価の基準で読み取れる", { tag: "
   await expect(page.getByTestId("answer-prompt-stage-answer_validation")).toHaveCount(0);
   await stage.locator("summary").click();
   const fields = stage.getByRole("textbox");
-  await expect(fields).toHaveCount(3);
+  await expect(fields).toHaveCount(4);
   for (const field of await fields.all()) await expect(field).not.toBeEditable();
   expect(await fields.evaluateAll((elements) => elements.map((element) => (element as HTMLTextAreaElement).value)))
-    .toEqual(["範囲の指示", "網羅性・忠実性の指示", "正確性の指示"]);
-  await stage.getByRole("textbox").first().scrollIntoViewIfNeeded();
+    .toEqual(["範囲の指示", "網羅性・忠実性の指示", "正確性の指示", "## Step 1: 提供範囲の未記載報告を確認する"]);
+  await expect(stage).toContainText("資料の未記載報告の全範囲判定");
+  await stage.getByRole("textbox").last().scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("quality-evaluation-prompt.png") });
   await expectNoPageOverflow(page);
 });

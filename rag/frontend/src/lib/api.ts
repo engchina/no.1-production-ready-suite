@@ -4603,7 +4603,7 @@ export const api = {
       jsonBody({ repeats })
     ),
   downloadLabelSet: (labelSetId: string) =>
-    requestFile(`${labelSetPath(labelSetId)}/export`, `labels-${labelSetId.slice(0, 8)}.json`),
+    requestFile(`${labelSetPath(labelSetId)}/export?language=ja`, `labels-${labelSetId.slice(0, 8)}.json`),
 
   // 設定: モデル
   getModelSettings: (options: SettingsRequestOptions = {}) =>

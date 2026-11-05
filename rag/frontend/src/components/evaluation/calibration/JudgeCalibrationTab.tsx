@@ -94,6 +94,7 @@ export function JudgeCalibrationTab() {
     <div className="grid min-w-0 gap-6" data-testid="judge-calibration">
       <CalibrationSteps />
       <Section
+        className="[&>div:first-child]:flex-wrap"
         title={t("evaluation.calibration.sets.title")}
         description={t("evaluation.calibration.sets.description")}
         actions={

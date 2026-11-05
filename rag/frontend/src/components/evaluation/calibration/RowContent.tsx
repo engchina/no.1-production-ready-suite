@@ -15,7 +15,7 @@ import type {
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
-import { aspectLabel, shortItemId, splitLabel } from "./calibration-format";
+import { aspectLabel, calibrationDescription, shortItemId, splitLabel } from "./calibration-format";
 
 /**
  * 記入・裁定の 1 行（項目 × 観点）の内容: 観点の基準・質問・回答・標準回答・根拠（評価器に渡したもの）。
@@ -63,7 +63,7 @@ export function RowContent({
             <BookOpenCheck size={14} aria-hidden />
             {t("evaluation.calibration.row.criterion")}
           </p>
-          <p className="mt-1 text-fg">{criterion.criteria}</p>
+          <p className="mt-1 text-fg">{calibrationDescription(criterion.criteria)}</p>
         </div>
       ) : null}
       <Field label={t("evaluation.calibration.row.question")}>

@@ -463,6 +463,7 @@ def judge_prompt_sha256() -> str:
         "SCOPE_PROMPT": "scope",
         "COVERAGE_PROMPT": "coverage",
         "CLAIM_PROMPT": "claim",
+        "ABSENCE_SCOPE_PROMPT": "absenceScope",
         "CORRECTNESS_PROMPT": "correctness",
         "EVIDENCE_COVERAGE_PROMPT": "evidenceCoverage",
     }

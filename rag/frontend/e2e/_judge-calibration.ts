@@ -59,6 +59,7 @@ const ERROR_TYPES = [
   { id: "unsupported_claim", group: "誤りの型", title: "根拠に無い主張", aspects: "", holdout_target: 5 },
   { id: "partial_omission", group: "誤りの型", title: "必要な論点の一部の不足", aspects: "", holdout_target: 5 },
   { id: "correct_paraphrase", group: "対照", title: "正しい言い換え", aspects: "", holdout_target: 10 },
+  { id: "partial_answer", group: "対照", title: "部分回答（答えられる部分だけ答え、残りは資料に無いと明示する。答えた範囲が正しければ pass）", aspects: "", holdout_target: 5 },
   { id: "correct_refusal", group: "対照", title: "正しい拒答・利用者への確認", aspects: "", holdout_target: 5 },
 ];
 
