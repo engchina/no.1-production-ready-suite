@@ -1214,8 +1214,6 @@ def _location_aware_model(
     入るときだけ supported。根拠に行の範囲が無ければ、実環境のモデルと同じく
     「位置情報が根拠に無い」で unsupported にする。
     """
-    from rag_engine.evaluation.answer_validation import ClaimAuditOutput
-
     payload = json.loads(inputs)
     evidence = payload["evidence_items"]
     checks = []
@@ -1230,7 +1228,9 @@ def _location_aware_model(
             located = [
                 item
                 for item in evidence
-                if any(token in item["text"] for token in tokens)
+                if any(
+                    token in "\n".join(unit["text"] for unit in item["units"]) for token in tokens
+                )
                 and isinstance(item.get("row_start"), int)
                 and item["row_start"] <= first
                 and last <= int(item.get("row_end") or item["row_start"])
@@ -1245,13 +1245,16 @@ def _location_aware_model(
                 "answer_quote": text,
                 "answer_passage_id": passage["id"],
                 "status": status,
-                "evidence_id": evidence_id,
-                "source_id": "",
-                "evidence_quote": "",
+                "evidence_unit_ids": [
+                    unit["unit_id"]
+                    for item in evidence
+                    if item["evidence_id"] == evidence_id
+                    for unit in item["units"]
+                ],
                 "reason": reason,
             }
         )
-    return ClaimAuditOutput.model_validate({"claim_checks": checks})
+    return schema.model_validate({"claim_checks": checks})
 
 
 @pytest.mark.parametrize("with_location", [True, False], ids=["location", "no-location"])
@@ -1960,3 +1963,112 @@ def test_mcp_validate_answer_returns_the_premise_checks(
         (None, "unknown_passage_id", None),
         (None, "check_failed", "failed"),
     ]
+
+
+def test_final_unit_contract_and_schema_change_invalidates_review_reuse(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from rag_engine.evaluation import final_validation_units
+
+    arguments = dict(
+        question="合成質問",
+        answer="合成回答",
+        settings=get_settings(),
+        prompt_version="same-prompt",
+        evidence=[{"id": "chunk-a", "text": "同じ原文"}],
+        premises=[],
+        data_results=[],
+        guide=None,
+        requests=None,
+        gaps=[],
+    )
+    original = validation_reuse_context(**arguments)
+    monkeypatch.setattr(final_validation_units, "UNIT_CONTRACT", "different-unit-contract")
+    assert validation_reuse_context(**arguments) != original
+
+
+@pytest.mark.parametrize("mode", ["no-guide", "guide", "guide-error", "mixed-reuse"])
+async def test_selected_unit_sidecar_is_guide_only_and_absent_from_saved_trace(
+    mode: str, monkeypatch: MonkeyPatch
+) -> None:
+    import copy
+    from contextlib import contextmanager
+
+    import rag_engine.evaluation.answer_validation as engine_validation
+
+    import app.rag.answer_validation as validation
+
+    private = {0: [{"unit_id": "U-synthetic", "source_id": "c2", "text": "PRIVATE_UNIT_SENTINEL"}]}
+    claims = [
+        {
+            "answer_quote": "合成回答です。",
+            "status": "supported",
+            "source_id": "c2",
+            "reason": "固定判定",
+        }
+    ]
+    if mode == "mixed-reuse":
+        claims.insert(
+            0,
+            {
+                "answer_quote": "再利用した合成回答です。",
+                "status": "supported",
+                "source_id": "c2",
+                "reason": "再利用",
+            },
+        )
+        private = {1: private[0]}
+    raw = {
+        "status": "completed",
+        "counts": {"supported": len(claims)},
+        "claim_checks": claims,
+        "_selected_evidence": copy.deepcopy(private),
+    }
+    traces = []
+    guide_seen = []
+
+    class Observation:
+        def request(self, value):
+            pass
+
+        def response(self, value):
+            traces.append(copy.deepcopy(value() if callable(value) else value))
+
+        def display(self, **kwargs):
+            pass
+
+    @contextmanager
+    def observe(*args, **kwargs):
+        yield Observation()
+
+    async def contents(self, profile_id):
+        return [("guide-1", 2, _shared_guide())]
+
+    def guide_findings(*args, **kwargs):
+        guide_seen.append(copy.deepcopy(kwargs.get("selected_evidence")))
+        if mode == "guide-error":
+            raise RuntimeError("合成guide失敗")
+        return [], [], None
+
+    monkeypatch.setattr(validation, "observe_call", observe)
+    monkeypatch.setattr(support_guide_store.SupportGuideStore, "published_contents", contents)
+    monkeypatch.setattr(engine_validation, "validate_answer_claims", lambda *args, **kwargs: raw)
+    monkeypatch.setattr(validation, "guide_step_findings", guide_findings)
+    options = dict(
+        oracle=cast(Any, _SharedOracle()),
+        guide=None if mode == "no-guide" else GuideCheckRef("sap-1", "guide-1", 2),
+    )
+    if mode == "guide-error":
+        with pytest.raises(RuntimeError, match="合成guide失敗"):
+            await validate_answer(
+                "合成質問", "合成回答です。", [EvidenceRef("d2", "c2")], get_settings(), **options
+            )
+    else:
+        result = await validate_answer(
+            "合成質問", "合成回答です。", [EvidenceRef("d2", "c2")], get_settings(), **options
+        )
+        assert "unit_selection" not in json.dumps(result.claim_checks)
+    assert "_selected_evidence" not in raw
+    assert "PRIVATE_UNIT_SENTINEL" not in json.dumps(traces)
+    assert "_selected_evidence" not in json.dumps(traces)
+    assert guide_seen == ([] if mode == "no-guide" else [private])
