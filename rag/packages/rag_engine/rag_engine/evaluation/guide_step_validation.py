@@ -22,6 +22,7 @@ import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from rag_engine.evaluation.answer_eval import _evidence_fragments
 from rag_engine.generation import grounded
 from rag_engine.models.llm import GroundedCitation, GroundedItem
 from rag_engine.retrieval.guide_steps import GuidePlan, GuideStep
@@ -84,8 +85,35 @@ def _quotes(claim: Mapping[str, Any]) -> list[str]:
     return [part for part in parts if part] or [str(claim.get("answer_quote") or "").strip()]
 
 
-def _items(claims: Sequence[Mapping[str, Any]], spans: Sequence[dict]) -> tuple[list[grounded.CheckedItem], list[str]]:
-    """裏付けた段落の手順の説明の item（引用の片ごと）と、item ごとの段落の本文。"""
+def _source_catalog(evidence: Sequence[Mapping[str, Any]], spans: Sequence[dict]) -> dict[str, tuple[dict, str]]:
+    """正本の片段IDと、明示したsource IDを元の出典・本文範囲へ結び付ける。"""
+    catalog: dict[str, tuple[dict, str]] = {}
+    ambiguous: set[str] = set()
+
+    def add(key: str, span: dict, text: str) -> None:
+        if key in ambiguous:
+            return
+        pair = (span, text)
+        if key in catalog and catalog[key] != pair:
+            catalog.pop(key)
+            ambiguous.add(key)
+        else:
+            catalog[key] = pair
+
+    for item, span in zip((item for item in evidence if item.get("id")), spans, strict=True):
+        source = str(item.get("chunk_uid") or item["id"])
+        add(str(item["id"]), span, span["text"])
+        add(source, span, span["text"])
+        # ガイドへ渡された独立した行だけを投影する。子のIDを親へ代用しない。
+        for fragment in _evidence_fragments([{**item, "children": []}]):
+            add(str(fragment["evidence_id"]), span, str(fragment["text"]))
+    return catalog
+
+
+def _items(
+    claims: Sequence[Mapping[str, Any]], spans: Sequence[dict], bound_sources: Mapping[str, tuple[dict, str]]
+) -> tuple[list[grounded.CheckedItem], list[str]]:
+    """支持された段落の引用を選択済み出典に限定し、本文の一致から別資料へ付け替えない。"""
     by_id = {span["source_id"]: span for span in spans}
     checked: list[grounded.CheckedItem] = []
     paragraphs: list[str] = []
@@ -93,26 +121,41 @@ def _items(claims: Sequence[Mapping[str, Any]], spans: Sequence[dict]) -> tuple[
         if claim.get("status") != "supported":
             continue
         paragraph = str(claim.get("answer_quote") or "").strip()
-        own = by_id.get(str(claim.get("source_id") or ""))
+        tokens = [token.strip() for token in str(claim.get("evidence_id") or "").split(",") if token.strip()]
+        if tokens:
+            # 一部でも不明なIDがあれば集合全体を未対応に保つ。省略IDや同文からは推定しない。
+            if any(token not in bound_sources for token in tokens):
+                continue
+            selected = [bound_sources[token] for token in tokens]
+        else:
+            # 監査済み説明の再利用は原文IDを持たない。明示された単一sourceだけを使う。
+            source = str(claim.get("source_id") or "")
+            own = bound_sources.get(source) if source in by_id else None
+            selected = [own] if own is not None else []
         for quote in _quotes(claim):
             if not quote or not paragraph:
                 continue
-            # 引用の原文がある根拠（段落を結び付けた根拠を先に見る）。無ければ段落を結び付けた根拠。
-            ordered = [own, *spans] if own is not None else list(spans)
-            span = next((item for item in ordered if item is not None and grounded.quote_in_text(quote, item["text"])), own)
-            if span is None:
-                continue
-            checked.append(
-                grounded.CheckedItem(
-                    GroundedItem(
-                        kind="operation",
-                        text=paragraph[:_MAX_ITEM_CHARS],
-                        citations=[GroundedCitation(evidence_id="", quote=quote[:_MAX_ITEM_CHARS])],
-                    ),
-                    span=span,
+            matches = [(span, text) for span, text in selected if grounded.quote_in_text(quote, text)]
+            if not matches and not tokens:
+                matches = selected
+            # 同文の複数選択はそれぞれ候補として保持し、資料順による代表の推定はしない。
+            seen: set[str] = set()
+            for span, _text in matches:
+                identity = str(span["source_id"])
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                checked.append(
+                    grounded.CheckedItem(
+                        GroundedItem(
+                            kind="operation",
+                            text=paragraph[:_MAX_ITEM_CHARS],
+                            citations=[GroundedCitation(evidence_id="", quote=quote[:_MAX_ITEM_CHARS])],
+                        ),
+                        span=span,
+                    )
                 )
-            )
-            paragraphs.append(paragraph)
+                paragraphs.append(paragraph)
     return checked, paragraphs
 
 
@@ -137,7 +180,7 @@ def validate_guide_steps(
         for item in evidence
         if item.get("id")
     ]
-    checked, paragraphs = _items(claim_checks, spans)
+    checked, paragraphs = _items(claim_checks, spans, _source_catalog(evidence, spans))
     guide_steps = [(step.step_id, step.title, tuple(sources.get(step.step_id, ()))) for step in plan.steps]
     # 渡した根拠に根拠の無い手順は、呼び出し側が根拠を集めていない（根拠の共有が分からない）手順として照らす（#2706）。
     missing = [step_id for step_id, _title, keys in guide_steps if not keys]
