@@ -108,7 +108,7 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
     audit_inputs: list[dict[str, Any]] = []
 
     def parser(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
-        calls.append(schema.__name__)
+        calls.append(getattr(schema, "canonical_schema", schema).__name__)
         if is_audit_schema(schema):
             data = json.loads(prompt)
             audit_inputs.append(data)

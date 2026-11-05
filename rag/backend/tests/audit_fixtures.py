@@ -8,7 +8,9 @@ from rag_engine.models.llm import ApplicationAudit, GroundedAudit, GroundedFactA
 
 
 def is_audit_schema(schema: type) -> bool:
-    return schema in (GroundedAudit, GroundedFactAudit) or is_audit_wire(schema)
+    return schema in (GroundedAudit, GroundedFactAudit) or (
+        is_audit_wire(schema) and getattr(schema, "canonical_schema", None) is not ApplicationAudit
+    )
 
 
 def legacy_audit_result(schema: type, data: dict[str, Any]) -> Any:
