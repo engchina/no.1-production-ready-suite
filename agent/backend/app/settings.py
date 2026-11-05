@@ -27,6 +27,7 @@ from pr_backend_core.config import (
     product_env_file,
     product_settings_config,
 )
+from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.chat_attachments.limits import (
     CHAT_ATTACHMENT_DEFAULT_MAX_BYTES,
@@ -169,6 +170,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
         ge=CHAT_ATTACHMENT_MAX_FILES_MIN,
         le=CHAT_ATTACHMENT_MAX_FILES_MAX,
     )
+    oci_genai_embedding_region: GenAiRegion = DEFAULT_GENAI_REGION
+    oci_genai_rerank_region: GenAiRegion = DEFAULT_GENAI_REGION
     oci_genai_embedding_model: str = "cohere.embed-v4.0"
     oci_genai_embedding_dim: int = 1536
     oci_genai_rerank_model: str = "cohere.rerank-v4.0-fast"

@@ -70,7 +70,7 @@ def _settings(*, auth_mode: str = "config_file") -> Settings:
         oci_config_file="/tmp/oci-config",
         oci_config_profile="DEFAULT",
         oci_auth_mode=auth_mode,
-        oci_genai_endpoint="https://inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+        oci_genai_embedding_region="ap-osaka-1",
         oci_genai_embed_model_id="cohere.embed-v4.0",
         nl2sql_feedback_embedding_enabled=True,
     )
@@ -97,7 +97,7 @@ def test_oci_genai_embedding_client_config_auth_does_not_pass_none_signer(
     assert _FakeInference.calls[0]["config"] == {
         "config_file": "/tmp/oci-config",
         "profile": "DEFAULT",
-        "region": "us-chicago-1",
+        "region": "ap-osaka-1",
     }
     assert "signer" not in _FakeInference.calls[0]
 
@@ -128,7 +128,7 @@ def test_oci_genai_embedding_client_principal_auth_passes_signer(
     OciGenAiEmbeddingClient(_settings(auth_mode="instance_principal"))._get_client()
 
     assert _FakeInference.calls
-    assert _FakeInference.calls[0]["config"] == {}
+    assert _FakeInference.calls[0]["config"] == {"region": "ap-osaka-1"}
     assert _FakeInference.calls[0]["signer"] is signer
 
 

@@ -3282,7 +3282,7 @@ async def test_reverse_comments_and_diagnostics() -> None:
             "PLATFORM_OCI_ENTERPRISE_AI_ENDPOINT",
             "PLATFORM_OCI_ENTERPRISE_AI_API_KEY",
             "PLATFORM_OCI_ENTERPRISE_AI_DEFAULT_TEXT_MODEL",
-            "PLATFORM_OCI_GENAI_ENDPOINT",
+            "PLATFORM_OCI_GENAI_EMBEDDING_REGION",
             "PLATFORM_OCI_GENAI_EMBED_MODEL_ID",
             "NL2SQL_SELECT_AI_PROFILE_REFRESHED",
             "NL2SQL_SELECT_AI_AGENT_ASSETS_REFRESHED",
@@ -3332,7 +3332,7 @@ async def test_reverse_comments_and_diagnostics() -> None:
         required_feedback_env = {item["name"] for item in feedback_guide["required_env_vars"]}
         assert {
             "NL2SQL_FEEDBACK_EMBEDDING_ENABLED",
-            "PLATFORM_OCI_GENAI_ENDPOINT",
+            "PLATFORM_OCI_GENAI_EMBEDDING_REGION",
             "PLATFORM_OCI_GENAI_EMBED_MODEL_ID",
         } <= required_feedback_env
 

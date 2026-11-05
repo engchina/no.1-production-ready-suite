@@ -1,3 +1,5 @@
+import type { OciRegion } from "../oci/regions";
+
 /** モデル設定 API の型（backend の pr_system_settings.model と同じ形。#103）。 */
 export type EnterpriseAiVlmInputMode = "auto" | "files_api" | "inline_image";
 export type ModelSettingsSecretSource =
@@ -114,6 +116,8 @@ export interface EnterpriseAiModelSettings {
 }
 
 export interface GenerativeAiModelSettings {
+  embedding_region: OciRegion;
+  rerank_region: OciRegion;
   embedding_model: string;
   embedding_dim: number;
   rerank_model: string;

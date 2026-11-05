@@ -10,7 +10,9 @@ import asyncio
 import importlib
 from collections.abc import Awaitable, Callable, Sequence
 from numbers import Real
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
+
+from pr_backend_core.oci_genai_regions import genai_config, genai_endpoint
 
 from app.clients.oci_auth import load_oci_config_without_prompt
 from app.settings import Settings, get_settings
@@ -43,6 +45,7 @@ class OciGenAiClient:
     ) -> None:
         self._settings = settings or get_settings()
         self._inference_client = inference_client
+        self._regional_clients: dict[tuple[str, str, str], GenerativeAiInferenceClientProtocol] = {}
         self._sdk_call_runner = sdk_call_runner or _run_sdk_call_in_thread
 
     async def embed(
@@ -91,7 +94,9 @@ class OciGenAiClient:
             input_type=input_type,
             output_dimensions=self._settings.oci_genai_embedding_dim,
         )
-        response = await self._sdk_call_runner(lambda: self._client().embed_text(details))
+        response = await self._sdk_call_runner(
+            lambda: self._client("embedding").embed_text(details)
+        )
         embeddings = getattr(getattr(response, "data", response), "embeddings", None)
         if not isinstance(embeddings, list):
             raise ValueError("OCI embedding response に embeddings がありません。")
@@ -110,7 +115,7 @@ class OciGenAiClient:
             compartment_id=self._settings.oci_compartment_id,
             top_n=top_n,
         )
-        response = await self._sdk_call_runner(lambda: self._client().rerank_text(details))
+        response = await self._sdk_call_runner(lambda: self._client("rerank").rerank_text(details))
         document_ranks = getattr(getattr(response, "data", response), "document_ranks", None)
         if not isinstance(document_ranks, list):
             raise ValueError("OCI rerank response に document_ranks がありません。")
@@ -119,10 +124,21 @@ class OciGenAiClient:
             for rank in document_ranks
         ]
 
-    def _client(self) -> GenerativeAiInferenceClientProtocol:
+    def _client(
+        self, target: Literal["embedding", "rerank"] = "embedding"
+    ) -> GenerativeAiInferenceClientProtocol:
         """OCI Generative AI Inference client を遅延初期化する。"""
         if self._inference_client is not None:
             return self._inference_client
+        region = (
+            self._settings.oci_genai_embedding_region
+            if target == "embedding"
+            else self._settings.oci_genai_rerank_region
+        )
+        profile = self._settings.resolved_oci_config_profile
+        key = (region, self._settings.oci_config_file, profile)
+        if key in self._regional_clients:
+            return self._regional_clients[key]
 
         oci_config = importlib.import_module("oci.config")
         genai = importlib.import_module("oci.generative_ai_inference")
@@ -131,14 +147,10 @@ class OciGenAiClient:
             self._settings.oci_config_file,
             self._settings.resolved_oci_config_profile,
         )
-        endpoint = self._settings.oci_genai_endpoint.strip()
-        if endpoint:
-            self._inference_client = genai.GenerativeAiInferenceClient(
-                config, service_endpoint=endpoint
-            )
-        else:
-            self._inference_client = genai.GenerativeAiInferenceClient(config)
-        return self._inference_client
+        config = genai_config(config, region)
+        client = genai.GenerativeAiInferenceClient(config, service_endpoint=genai_endpoint(region))
+        self._regional_clients[key] = cast(GenerativeAiInferenceClientProtocol, client)
+        return self._regional_clients[key]
 
 
 async def _run_sdk_call_in_thread(operation: Callable[[], Any]) -> Any:

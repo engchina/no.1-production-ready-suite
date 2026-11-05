@@ -41,6 +41,7 @@ import httpx
 from fastapi import HTTPException
 from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
+from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
@@ -606,6 +607,9 @@ def build_engine_settings(
         # 常に「未実行」になる(#275)。
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
+        "EMBEDDING_REGION": settings.oci_genai_embedding_region,
+        "EMBEDDING_ENDPOINT": genai_endpoint(settings.oci_genai_embedding_region),
+        "OCI_RERANK_ENDPOINT": genai_endpoint(settings.oci_genai_rerank_region),
         "RERANK_MIN_RELEVANCE_SCORE": str(settings.rag_rerank_min_relevance_score),
         "RUNTIME_RULES_CONFIRMATION_ENABLED": "1"
         if settings.rag_runtime_rules_confirmation_enabled
