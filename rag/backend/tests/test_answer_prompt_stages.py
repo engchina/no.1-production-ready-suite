@@ -211,6 +211,7 @@ def test_evaluation_catalog_exposes_only_current_evaluation_stages() -> None:
         "claim",
         "correctness",
         "evidenceCoverage",
+        "absenceScope",
     }
 
 
@@ -224,6 +225,7 @@ def test_catalog_separates_independent_preparation_and_orders_evaluation_calls()
         "claim",
         "correctness",
         "evidenceCoverage",
+        "absenceScope",
     ]
     assert [part for part, _ in stages["audit"].parts] == [
         "detailedSystem",

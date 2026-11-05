@@ -4092,6 +4092,7 @@ class CitationView:
     view_sha256: str
     # 描画から導く送信用の文字列。原文・引用単位・hashで版を比較し、派生値は比較しない。
     model_rendered: str = field(default="", compare=False)
+    group_heading: str = field(default="", compare=False)
     present_in_prompt: bool | None = field(default=None, compare=False)
     # 引用先は表示時の全文・属性へ結び、後続の可変辞書から作り直さない。
     span_json: str = field(default="", compare=False)
@@ -4664,14 +4665,19 @@ def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
     ordered = order_document_spans(spans)
     groups = [list(members) for _, members in groupby(ordered, key=lambda span: (document_key(span), span["function"]))]
     blocks = []
+    group_headings = {}
     for number, members in enumerate(groups, 1):
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
+        shown_header = fold_width(header) if model_view else header
+        for member in members:
+            group_headings[id(displayed_views[id(member)])] = shown_header
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
         body = "\n\n".join(
             displayed_views[id(span)].model_rendered if model_view else displayed_views[id(span)].rendered for span in members
         )
         blocks.append((fold_width(header) if model_view else header) + "\n" + body)
+    _CITATION_VIEWS.set({key: (span, replace(view, group_heading=group_headings[id(view)])) for key, (span, view) in snapshots.items()})
     return "\n\n".join(blocks)
 
 
@@ -6767,6 +6773,7 @@ def run_round(
             "contract_version": view.contract_version,
             "provenance": json.loads(view.provenance_json),
             "prompt_block": prompt_block,
+            "group_heading": view.group_heading,
             "prompt_block_sha256": hashlib.sha256(prompt_block.encode()).hexdigest() if prompt_block is not None else None,
             "view_sha256": view.view_sha256,
             "present_in_prompt": prompt_block is not None,
@@ -6794,6 +6801,7 @@ def run_round(
         "image_payload_capture": "not_recorded" if image_paths else "not_applicable",
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "evidence": input_rows,
+        "expected_evidence_count": len(spans),
         "snapshot_status": "partial"
         if input_views and (unrecorded_input_ids or any(not row["present_in_prompt"] for row in input_rows))
         else "recorded"
