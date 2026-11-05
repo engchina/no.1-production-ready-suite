@@ -2,6 +2,7 @@ import { expectRunValueTypography } from "../../../platform/packages/ui/e2e/run-
 import recoveryGeneratedTrace from "./fixtures/recovery-generated-trace.json";
 import searchTraceParity from "./fixtures/search-trace-parity.json";
 import generatedAnswers from "./fixtures/derived-answer-generated.json";
+import imageSourceAnswers from "./fixtures/image-source-display-generated.json";
 import stageOutcomes from "./fixtures/stage-outcomes.json";
 import diversityStages from "./fixtures/diversity-stage-trace.json";
 import contextExpansionTrace from "./fixtures/context-expansion-trace.json";
@@ -2162,3 +2163,33 @@ test("読取省略と保存欠落を空の記録も含めて履歴の経過と�
     }
   }
 });
+
+
+for (const generated of imageSourceAnswers) {
+  test(`画像の原文と画面例の帰属を履歴で区別する (${generated.id})`, {tag: "@responsive"}, async ({page}, testInfo) => {
+    await mockLocalAuth(page);
+    await mockRuns(page, [run(1, {
+      question: "合成画像の記録値と説明用の値を確認してください。",
+      search_answer_profile_name: "合成の検証設定",
+      answer: generated.answer,
+      citations: [{...CITATION, file_name: generated.source, text: generated.originals.join("\n"), metadata: {page: 1}}],
+      answer_diagnostics: {passage_marks: [], removed_passages: [], answer_warnings: []},
+    })]);
+    await page.goto("/history/run-1");
+    const answer = page.getByTestId("run-history-answer");
+    await expect(answer).toContainText("画面例・説明用の原文を含みます");
+    for (const original of generated.originals) {
+      for (const line of original.split("\n").filter(Boolean)) await expect(answer).toContainText(line);
+    }
+    if (generated.id === "mixed-parent") {
+      const derived = answer.getByTestId("answer-section").filter({has: page.getByRole("heading", {name: "資料をもとに導いた結論", exact: true})});
+      await expect(derived).not.toContainText("900");
+      await expect(derived).toContainText("42");
+    }
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => {document.documentElement.dataset.theme = value;}, theme);
+      await expectNoPageOverflow(page);
+      await answer.screenshot({path: testInfo.outputPath(`image-source-${generated.id}-${theme}.png`)});
+    }
+  });
+}

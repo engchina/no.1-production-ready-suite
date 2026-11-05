@@ -541,6 +541,8 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
         "answer_labels",
         _T,
         "rules_section",
+        "image_example_source_note",
+        "image_unknown_source_note",
         "applications_section",
         "quote_only_section",
         "quote_only_note",

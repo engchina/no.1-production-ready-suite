@@ -459,16 +459,21 @@ def test_citation_unit_words_explicit_null_is_not_defaulted() -> None:
 
 
 def test_field_changes_keep_published_releases_readable() -> None:
-    """公開版は不変なので、項目を足すなら読み取りで補い、消すなら移行を決める。
+    """既存補完と、公開前の資源準備を要する追加項目を区別する。
 
-    固定の一覧は「この時点の公開版が持つ項目」。項目を足すときは一覧を変えず
-    ``_COMPATIBLE_FIELDS`` に足す。取込に使う項目は補えないので、再索引の扱いを決める。
+    #4435 の用途表示は保存資源の準備後に公開する。旧資源への補完は行わず、
+    欠落時の拒否は用途表示の契約テストで検証する。
     """
     path = Path(__file__).parent / "fixtures" / "language_pack_published_fields.json"
     published = {tuple(item.split(".", 1)) for item in json.loads(path.read_text("utf-8"))}
     current = {(spec.section, spec.key) for spec in FIELD_SPECS}
     assert published <= current, "公開版が持つ項目を消すと、その公開版を読めなくなる"
-    assert current - published <= COMPATIBLE_FIELDS, "足した項目は既存の公開版に無いので補う"
+    preparation_required = {
+        ("answer_labels", "image_example_source_note"),
+        ("answer_labels", "image_unknown_source_note"),
+    }
+    assert not preparation_required & COMPATIBLE_FIELDS
+    assert current - published <= COMPATIBLE_FIELDS | preparation_required
     ingest = {(spec.section, spec.key) for spec in FIELD_SPECS if spec.ingest}
     assert not ingest & COMPATIBLE_FIELDS, "取込に使う項目を補うと、保存時の索引と食い違う"
 

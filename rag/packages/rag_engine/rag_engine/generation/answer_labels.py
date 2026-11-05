@@ -17,6 +17,8 @@ class AnswerLabels:
     """回答の本文の見出し・定型文・出典の表示。"""
 
     rules_section: str
+    image_example_source_note: str
+    image_unknown_source_note: str
     applications_section: str
     quote_only_section: str
     quote_only_note: str
@@ -140,6 +142,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
     guide_note = re.escape(text("guide_notes_note_template")).replace(re.escape("{title}"), r".+")
     titles = (
         text("rules_section"),
+        text("image_example_source_note"),
+        text("image_unknown_source_note"),
         text("applications_section"),
         text("quote_only_section"),
         note,
@@ -159,6 +163,8 @@ def _build(pack: LanguagePack) -> AnswerLabels:
     )
     return AnswerLabels(
         rules_section=text("rules_section"),
+        image_example_source_note=text("image_example_source_note"),
+        image_unknown_source_note=text("image_unknown_source_note"),
         applications_section=text("applications_section"),
         quote_only_section=text("quote_only_section"),
         quote_only_note=note,

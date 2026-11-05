@@ -78,6 +78,7 @@ from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.document_inputs import document_key, order_document_spans
 from rag_engine.generation.guide_authority import authoritative_guide_inputs, bind_guide_authority, compile_guide_task_contract
 from rag_engine.generation.guide_context import audit_guide_candidates
+from rag_engine.generation.image_source_display import image_source_display_parts
 from rag_engine.generation.image_text_sources import (
     IMAGE_CITATION_UNIT_CONTRACT,
     IMAGE_PURPOSE_POLICY,
@@ -3753,12 +3754,20 @@ def render_answer(
             # 原文の改行（OCR・表題）を残すと1つの引用が複数行に割れる。引用は1行で示す。
             labels = answer_labels()
             text = labels.quote(" ".join(_displayed_quote(entry).split())) if _shown_as_quote(entry) else item.text
-            if not entry.quote_only and item.applies == "conditional" and item.condition:
-                text = labels.condition(_condition_phrase(item.condition)) + text
-            line = (f"{number}. " if numbered else labels.item_bullet) + text
-            out.append(line)
-            if entry.state and (mark := passage_marks.passage_mark(line, entry.marks)):
-                marks.append(mark)
+            binding = item.citations[0]._unit_binding if len(item.citations) == 1 else None
+            parts = image_source_display_parts(binding, text, entry.span)
+            for index, part in enumerate(parts):
+                if "example" in part.purposes:
+                    out.append(labels.image_example_source_note)
+                if "unknown" in part.purposes:
+                    out.append(labels.image_unknown_source_note)
+                shown = part.text.strip() if len(parts) > 1 else part.text
+                if index == 0 and not entry.quote_only and item.applies == "conditional" and item.condition:
+                    shown = labels.condition(_condition_phrase(item.condition)) + shown
+                line = (f"{number}. " if numbered and index == 0 else labels.item_bullet) + shown
+                out.append(line)
+                if entry.state and (mark := passage_marks.passage_mark(line, entry.marks)):
+                    marks.append(mark)
             # 同じ文書・頁・chunk を再利用しても、各説明の直下に出典を付ける。
             for key in _citation_keys(entry):
                 out.append(key)
