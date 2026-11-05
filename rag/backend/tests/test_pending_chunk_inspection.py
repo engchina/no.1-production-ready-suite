@@ -1,6 +1,6 @@
 """分割確認は候補と対応抽出を使い、検索の配信版を切り替えない。"""
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException
@@ -22,7 +22,9 @@ from app.services.recipe_inspection import inspection_chunk_set_id
         ("INDEXED", None, "active"),
     ],
 )
-def test_inspection_version_state_matrix(status: str, failed_phase: str | None, expected: str):
+def test_inspection_version_state_matrix(
+    status: str, failed_phase: str | None, expected: str
+) -> None:
     assert (
         inspection_chunk_set_id(
             dict(
@@ -43,8 +45,8 @@ class Store:
         active: str | None = "active",
         status: str = "CHUNKED",
         failed_phase: str | None = None,
-    ):
-        self.row = dict(
+    ) -> None:
+        self.row: dict[str, Any] = dict(
             status=status,
             failed_phase=failed_phase,
             pending_chunk_set_id="pending",
@@ -59,19 +61,21 @@ class Store:
             "extraction_json": {"elements": [{"element_id": "new", "text": "新方式の本文"}]}
         }
 
-    async def get_document_recipe(self, *args: Any):
+    async def get_document_recipe(self, *args: Any) -> dict[str, Any]:
         return self.row
 
-    async def get_chunk_set(self, value: str):
+    async def get_chunk_set(self, value: str) -> dict[str, Any] | None:
         self.calls.append(("version", {"id": value}))
         return self.metadata
 
-    async def get_document_extraction_artifact(self, **kwargs: Any):
+    async def get_document_extraction_artifact(self, **kwargs: Any) -> dict[str, Any] | None:
         assert kwargs == {"document_id": "doc", "extraction_recipe_id": "bound-extraction"}
         self.calls.append(("extraction", kwargs))
         return self.artifact
 
-    async def list_chunk_set_chunk_window(self, value: str, **kwargs: Any):
+    async def list_chunk_set_chunk_window(
+        self, value: str, **kwargs: Any
+    ) -> tuple[list[DocumentChunkView], int]:
         assert value == "pending"
         assert kwargs["extraction_recipe_id"] == "bound-extraction"
         self.calls.append(("window", kwargs))
@@ -86,11 +90,13 @@ class Store:
             )
         ], 1
 
-    async def count_chunk_set_inspection_locations(self, value: str, **kwargs: Any):
+    async def count_chunk_set_inspection_locations(
+        self, value: str, **kwargs: Any
+    ) -> tuple[int, int]:
         assert value == "pending" and kwargs["extraction_recipe_id"] == "bound-extraction"
         return 1, 0
 
-    async def list_chunk_set_chunks(self, value: str):
+    async def list_chunk_set_chunks(self, value: str) -> list[DocumentChunkView]:
         assert value == "pending"
         return [
             DocumentChunkView(
@@ -102,17 +108,18 @@ class Store:
 @pytest.mark.parametrize("active", [None, "active"])
 @pytest.mark.parametrize("scope", ["unscoped", "page", "source", "focus"])
 async def test_first_and_repeated_chunked_inspection_uses_pending_and_bound_extraction(
-    monkeypatch, active, scope
-):
+    monkeypatch: pytest.MonkeyPatch, active: str | None, scope: str
+) -> None:
     store = Store(active=active)
     monkeypatch.setattr(routes, "OracleClient", lambda: store)
 
-    async def source(*args: Any, **kwargs: Any):
+    async def source(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert store.artifact is not None
         assert args[2] == store.artifact["extraction_json"]
         return {"scope_status": "exact", "element_ids": ["new"]}
 
     monkeypatch.setattr(routes, "_inspector_source_scope", source)
-    options = (
+    options: dict[str, Any] = (
         {"page": 2}
         if scope == "page"
         else {"source_offset": 0, "source_revision": "source"}
@@ -122,6 +129,7 @@ async def test_first_and_repeated_chunked_inspection_uses_pending_and_bound_extr
         else {}
     )
     response = await routes.document_recipe_chunk_window("doc", "recipe", **options)
+    assert response.data is not None
     assert response.data["revision"] == "pending"
     assert response.data["extraction_revision"] == "bound-extraction"
     assert response.data["inspection_mode"] == "pending"
@@ -130,10 +138,13 @@ async def test_first_and_repeated_chunked_inspection_uses_pending_and_bound_extr
     assert [entry[0] for entry in store.calls].count("extraction") == 1
 
 
-async def test_recipe_chunk_list_selects_same_pending_revision(monkeypatch):
+async def test_recipe_chunk_list_selects_same_pending_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = Store()
     monkeypatch.setattr(routes, "OracleClient", lambda: store)
     response = await routes.list_document_recipe_chunks("doc", "recipe")
+    assert response.data is not None
     assert response.data[0].chunk_id == "new-chunk"
     assert store.row["active_chunk_set_id"] == "active"
 
@@ -150,8 +161,11 @@ async def test_recipe_chunk_list_selects_same_pending_revision(monkeypatch):
         "wrong_recipe",
     ],
 )
-async def test_missing_pending_binding_never_falls_back_to_active_or_latest(monkeypatch, missing):
+async def test_missing_pending_binding_never_falls_back_to_active_or_latest(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
     store = Store()
+    assert store.metadata is not None
     if missing == "pending":
         store.row["pending_chunk_set_id"] = None
     elif missing == "metadata":
@@ -185,8 +199,8 @@ async def test_missing_pending_binding_never_falls_back_to_active_or_latest(monk
     ],
 )
 async def test_saved_candidates_for_changed_strategy_size_overlap_are_the_inspected_results(
-    monkeypatch, strategy, size, overlap
-):
+    monkeypatch: pytest.MonkeyPatch, strategy: str, size: int, overlap: int
+) -> None:
     from app.rag.chunking import chunk_extraction_with_strategy
     from app.schemas.extraction import DocumentElement, StructuredExtraction
 
@@ -211,18 +225,22 @@ async def test_saved_candidates_for_changed_strategy_size_overlap_are_the_inspec
             chunk_index=chunk.index,
             text=chunk.text,
             metadata=dict(chunk.metadata),
-            element_ids=list(chunk.metadata.get("element_ids") or []),
+            element_ids=cast(list[str], chunk.metadata.get("element_ids") or []),
         )
         for chunk in built
     ]
 
     class GeneratedStore(Store):
-        async def list_chunk_set_chunk_window(self, value, **kwargs):
+        async def list_chunk_set_chunk_window(
+            self, value: str, **kwargs: Any
+        ) -> tuple[list[DocumentChunkView], int]:
             assert value == "pending"
             assert kwargs["extraction_recipe_id"] == "bound-extraction"
             return expected[kwargs["offset"] : kwargs["offset"] + kwargs["limit"]], len(expected)
 
-        async def count_chunk_set_inspection_locations(self, value, **kwargs):
+        async def count_chunk_set_inspection_locations(
+            self, value: str, **kwargs: Any
+        ) -> tuple[int, int]:
             return len(expected), 0
 
     store = GeneratedStore()
@@ -234,6 +252,7 @@ async def test_saved_candidates_for_changed_strategy_size_overlap_are_the_inspec
     store.artifact = {"extraction_json": extraction.to_document_payload()}
     monkeypatch.setattr(routes, "OracleClient", lambda: store)
     response = await routes.document_recipe_chunk_window("doc", "recipe")
+    assert response.data is not None
     assert response.data["revision"] == "pending"
     assert response.data["total"] == len(built)
     assert response.data["items"] == expected[:25]
@@ -241,10 +260,13 @@ async def test_saved_candidates_for_changed_strategy_size_overlap_are_the_inspec
     assert store.row["active_chunk_set_id"] == "active"
 
 
-async def test_index_failure_keeps_pending_inspection_separate_from_search_active(monkeypatch):
+async def test_index_failure_keeps_pending_inspection_separate_from_search_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = Store(status="ERROR", failed_phase="INDEX")
     monkeypatch.setattr(routes, "OracleClient", lambda: store)
     response = await routes.document_recipe_chunk_window("doc", "recipe", page=2)
+    assert response.data is not None
     assert response.data["revision"] == "pending"
     assert response.data["inspection_mode"] == "pending"
     assert store.row["active_chunk_set_id"] == "active"
@@ -252,8 +274,8 @@ async def test_index_failure_keeps_pending_inspection_separate_from_search_activ
 
 @pytest.mark.parametrize("endpoint", ["window", "chunks"])
 async def test_inspection_revision_changed_during_request_is_not_cached_under_an_old_version(
-    monkeypatch, endpoint
-):
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
     store = Store()
     monkeypatch.setattr(routes, "OracleClient", lambda: store)
     call = (
