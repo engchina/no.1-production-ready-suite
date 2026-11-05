@@ -1876,12 +1876,15 @@ class OracleClient:
                 c.metadata_json,
                 c.chunk_index,
                 c.chunk_set_id,
+                cs.recipe_id,
                 d.file_name,
                 d.category_name,
                 d.superseded_by_document_id,
                 0 AS score
             FROM rag_chunks c
             JOIN rag_documents d ON d.document_id = c.document_id
+            LEFT JOIN rag_chunk_sets cs
+              ON cs.chunk_set_id = c.chunk_set_id AND cs.document_id = c.document_id
             WHERE {where_sql}
               AND c.document_id = :read_document_id
               AND c.chunk_id = :read_chunk_id
@@ -1890,7 +1893,18 @@ class OracleClient:
             ),
             {**binds, "read_document_id": document_id, "read_chunk_id": chunk_id},
         )
-        return _retrieved_chunk_from_row(row) if row is not None else None
+        if row is None:
+            return None
+        hit = _retrieved_chunk_from_row(row)
+        # 単件の検証用読取では正式列を正本とし、保存metadataの旧scopeへ戻さない。
+        hit.metadata["document_id"] = hit.document_id
+        for key in ("chunk_set_id", "recipe_id"):
+            value = _optional_str(row.get(key))
+            if not value:
+                hit.metadata.pop(key, None)
+            else:
+                hit.metadata[key] = value
+        return hit
 
     async def accessible_chunk_exists(self, document_id: str, chunk_id: str) -> bool:
         """利用者が見られる文書に、その chunk の行が（古い版を含めて）残っているか（#1219）。
