@@ -535,6 +535,7 @@ def trace_progress_events(
     span（書けなかった・process が落ちた）は、終端に合わせて閉じる。`details`
     は製品の記録にある工程の詳細
     （span id → 詳細。製品の span の分だけ）。
+    終端への状態補正で未記録の終了時刻は作らない。閲覧時刻は配信の時刻だけに使う。
     """
     now = emitted_at or datetime.now(UTC)
     events: list[dict[str, Any]] = []
@@ -546,7 +547,6 @@ def trace_progress_events(
         if status == "running" and terminal is not None:
             status = closing[terminal]
             cancelled = terminal == "cancelled"
-            finished = finished or now
         event: dict[str, Any] = {
             "schema_version": 1,
             "seq": index,
