@@ -223,16 +223,16 @@ def test_numeric_mapping_metadata_exposes_minimum() -> None:
     assert minimums["roman_digits"] == minimums["kanji_multipliers"] == 1
 
 
-def test_old_draft_api_returns_complete_editable_copy_without_writes(
+def test_incomplete_draft_api_is_rejected_without_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from copy import deepcopy
 
-    from app.clients.language_pack_release_store import LanguagePackReleaseStore, _validated
-    from tests.test_language_pack_release_store import legacy_release_row
+    from app.clients.language_pack_release_store import LanguagePackReleaseStore
+    from tests.test_language_pack_release_store import release_row
     from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
 
-    row = legacy_release_row()
+    row = release_row()
     draft = deepcopy(row["effective_json"])
     assert isinstance(draft, dict)
     for key in (
@@ -262,11 +262,11 @@ def test_old_draft_api_returns_complete_editable_copy_without_writes(
 
     monkeypatch.setattr(language_pack, "release_store", initialized)
     response = client.get("/api/settings/language-pack/draft")
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["draft_revision"] == 7
-    assert data["draft_effective"] == _validated(draft, allow_legacy=True).to_dict()
-    assert data["current"]["effective"] == row["effective_json"]
-    assert data["current"]["hash"] == row["content_hash"]
+    assert response.status_code == 409
+    data = response.json()
+    assert data["data"] is None
+    assert data["error_messages"] == [
+        "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"
+    ]
     assert draft == before
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)

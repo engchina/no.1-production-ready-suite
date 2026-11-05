@@ -9,10 +9,9 @@ from rag_parser_core.language import (
     LanguagePack,
     bind_pack,
     build_pack,
-    stored_pack_hash,
-    stored_pack_ingest_hash,
 )
 
+from app.clients.language_pack_release_store import LanguagePackSnapshotError
 from app.schemas.language_pack_release import (
     LanguagePackFieldDifference,
     LanguagePackIndexRelation,
@@ -49,13 +48,17 @@ _STAGE_ORDER = ("PREPROCESS", "EXTRACT", "CHUNK", "INDEX")
 
 
 def pack_from_release(release: LanguagePackRelease) -> LanguagePack:
-    """保存時の hash を検証し、追加表示文言だけを実行用に補う。"""
-    pack = build_pack(release.effective)
+    """完全な現行スナップショットと保存時の hash を検証する。"""
+    try:
+        pack = build_pack(release.effective)
+    except ValueError as exc:
+        raise LanguagePackSnapshotError("保存済み言語資源の項目が現在の契約に合いません。") from exc
     if (
-        stored_pack_hash(release.effective, pack) != release.hash
-        or stored_pack_ingest_hash(release.effective, pack) != release.ingest_hash
+        pack.to_dict() != release.effective
+        or pack.hash != release.hash
+        or pack.ingest_hash != release.ingest_hash
     ):
-        raise ValueError("言語資源の公開版と保存した内容の照合に失敗しました。")
+        raise LanguagePackSnapshotError("言語資源の公開版と保存した内容の照合に失敗しました。")
     return pack
 
 

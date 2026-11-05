@@ -10,9 +10,6 @@ from pr_backend_core.oracle_errors import oracle_error_codes
 from rag_parser_core.language import (
     LanguagePack,
     build_pack,
-    complete_compatible_pack,
-    stored_pack_hash,
-    stored_pack_ingest_hash,
 )
 
 from app.schemas.language_pack_release import (
@@ -26,6 +23,10 @@ if TYPE_CHECKING:
 
 STATE_TABLE = "rag_language_pack_state"
 RELEASE_TABLE = "rag_language_pack_releases"
+
+
+class LanguagePackSnapshotError(ValueError):
+    """保存済みの言語資源が現在の完全なスナップショット契約に合わない。"""
 
 
 class LanguagePackReleaseConflict(ValueError):
@@ -68,11 +69,13 @@ CREATE INDEX rag_lang_state_current_idx ON {STATE_TABLE} (current_release_id);
 """.strip()
 
 
-def _validated(effective: dict[str, Any], *, allow_legacy: bool = False) -> LanguagePack:
-    pack = build_pack(effective)
-    expected = complete_compatible_pack(effective) if allow_legacy else effective
-    if pack.to_dict() != expected:
-        raise ValueError("言語資源は全項目を含む完全な設定で保存してください。")
+def _validated(effective: dict[str, Any]) -> LanguagePack:
+    try:
+        pack = build_pack(effective)
+    except ValueError as exc:
+        raise LanguagePackSnapshotError("保存済み言語資源の項目が現在の契約に合いません。") from exc
+    if pack.to_dict() != effective:
+        raise LanguagePackSnapshotError("言語資源は全項目を含む完全な設定で保存してください。")
     return pack
 
 
@@ -93,15 +96,15 @@ def _release(row: dict[str, object]) -> LanguagePackRelease:
             "change_note": row.get("change_note") or "",
         }
     )
-    pack = _validated(release.effective, allow_legacy=True)
+    pack = _validated(release.effective)
     if (
-        stored_pack_hash(release.effective, pack),
-        stored_pack_ingest_hash(release.effective, pack),
+        pack.hash,
+        pack.ingest_hash,
     ) != (
         release.hash,
         release.ingest_hash,
     ):
-        raise ValueError("言語資源の保存内容と公開版の照合に失敗しました。")
+        raise LanguagePackSnapshotError("言語資源の保存内容と公開版の照合に失敗しました。")
     return release
 
 
@@ -119,10 +122,10 @@ def _state(connection: OracleConnectionProtocol, *, lock: bool = False) -> Langu
     if current is None:
         raise LookupError("言語資源の現在の公開版が見つかりません。")
     draft = _json_loads(row["draft_effective_json"])
-    compatible_draft = _validated(draft, allow_legacy=True).to_dict()
+    validated_draft = _validated(draft).to_dict()
     return LanguagePackReleaseState(
         draft_revision=int(str(row["draft_revision"])),
-        draft_effective=compatible_draft,
+        draft_effective=validated_draft,
         current=current,
     )
 
@@ -320,9 +323,7 @@ class LanguagePackReleaseStore:
             source = _get(connection, restored_from) if restored_from else None
             if restored_from and source is None:
                 raise LookupError("復元する言語資源の公開版が見つかりません。")
-            effective = complete_compatible_pack(
-                source.effective if source else state.draft_effective
-            )
+            effective = source.effective if source else state.draft_effective
             pack = _validated(effective)
             release = LanguagePackRelease(
                 id=uuid4().hex,

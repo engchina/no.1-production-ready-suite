@@ -94,7 +94,7 @@ def _data(pack: LanguagePack) -> LanguagePackData:
 
 
 async def release_store() -> LanguagePackReleaseStore:
-    """初回だけ既存の有効設定を完全な公開版として取り込む。既存索引へは付けない。"""
+    """未初期化の新環境だけ組み込みの完全な公開版を作る。既存索引へは付けない。"""
     return await initialized_release_store()
 
 

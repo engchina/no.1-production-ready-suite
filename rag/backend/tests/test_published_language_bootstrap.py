@@ -27,13 +27,42 @@ async def test_existing_publication_does_not_read_changed_or_unreadable_legacy_f
 
 
 @pytest.mark.parametrize("error", [ValueError("broken"), OSError("unreadable")])
-async def test_first_bootstrap_uses_builtin_when_legacy_is_not_readable(
+async def test_first_bootstrap_uses_builtin_without_reading_legacy_file(
     monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
     store = SimpleNamespace(
         current=AsyncMock(side_effect=LookupError()), ensure_initialized=AsyncMock()
     )
     monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
-    monkeypatch.setattr(LANGUAGE_PACK_STORE, "overrides", Mock(side_effect=error))
+    legacy = Mock(side_effect=error)
+    monkeypatch.setattr(LANGUAGE_PACK_STORE, "overrides", legacy)
     assert cast(object, await published_language.initialized_release_store(OracleClient())) is store
     store.ensure_initialized.assert_awaited_once_with(builtin_pack().to_dict())
+    legacy.assert_not_called()
+
+
+async def test_first_bootstrap_does_not_copy_existing_file_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SimpleNamespace(
+        current=AsyncMock(side_effect=LookupError()), ensure_initialized=AsyncMock()
+    )
+    monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
+    legacy = Mock(return_value={"answer_labels": {"cause_gap": "合成の旧ファイル値"}})
+    monkeypatch.setattr(LANGUAGE_PACK_STORE, "overrides", legacy)
+    await published_language.initialized_release_store(OracleClient())
+    legacy.assert_not_called()
+    store.ensure_initialized.assert_awaited_once_with(builtin_pack().to_dict())
+
+
+async def test_invalid_existing_publication_never_bootstraps_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SimpleNamespace(
+        current=AsyncMock(side_effect=ValueError("保存済み契約が不正")),
+        ensure_initialized=AsyncMock(),
+    )
+    monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
+    with pytest.raises(ValueError):
+        await published_language.initialized_release_store(OracleClient())
+    store.ensure_initialized.assert_not_awaited()
