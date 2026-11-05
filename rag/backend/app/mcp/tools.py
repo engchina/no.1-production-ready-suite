@@ -3502,12 +3502,19 @@ async def crop_figure(
             IMAGE_NOT_AVAILABLE_CODE,
             "この根拠には元の図の画像がありません（図ではないか、図の場所が分かりません）。",
         )
+    chunk_set_id = _metadata_str(metadata, "chunk_set_id")
+    if chunk_set_id is None:
+        raise McpToolError(
+            IMAGE_SOURCE_MISSING_CODE,
+            "図の原本に対応する版の記録がありません。文書を再処理してください。",
+            status=404,
+        )
     try:
         source = await load_parsed_source(
             oracle,
             chunk.document_id,
             _metadata_str(metadata, "recipe_id"),
-            chunk_set_id=_metadata_str(metadata, "chunk_set_id"),
+            chunk_set_id=chunk_set_id,
         )
     except (DocumentSourceNotFoundError, ValueError) as exc:
         raise McpToolError(
@@ -4168,30 +4175,26 @@ async def preview_document(
     *,
     chunk_set_id: str | None = None,
 ) -> tuple[Any, DocumentPreprocessArtifact | None]:
-    """プレビューする文書と、処理後のファイル（根拠の版が解析したファイル。版を渡さなければ
-    処理レシピの今のファイル）。記録の無い版は別のファイルで代用せず、ファイルが無いエラーにする。
+    """根拠の版が解析した原本を返す。版の欠測を現在のレシピや文書のファイルで代用しない。
 
     呼ぶ前に、根拠の chunk が検索と同じ見え方の条件で見えることを確かめておく
-    （``readable_chunk``）。
+    （``readable_chunk``）。レシピ作業画面の現在ファイル読取とは別の入口。
     """
+    if not isinstance(chunk_set_id, str) or not chunk_set_id.strip():
+        raise McpToolError(
+            PREVIEW_FILE_MISSING_CODE,
+            "原文に対応する版の記録がありません。文書を再処理してください。",
+            status=404,
+        )
     detail = await oracle.get_document(document_id)
     if detail is None or getattr(detail, "object_storage_path", None) is None:
         raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の文書が見つかりません。")
-    if chunk_set_id:
-        try:
-            return detail, await chunk_set_prepared_artifact(
-                oracle, detail, document_id, chunk_set_id
-            )
-        except VersionSourceUnknownError as exc:
-            raise McpToolError(PREVIEW_FILE_MISSING_CODE, str(exc), status=404) from exc
-    artifact: DocumentPreprocessArtifact | None = detail.preprocess_artifact
-    if recipe_id:
-        row = await oracle.get_document_recipe(document_id, recipe_id)
-        if row is None:
-            raise McpToolError(SOURCE_NOT_FOUND_CODE, "根拠の処理レシピが見つかりません。")
-        raw = row.get("preprocess_artifact")
-        artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
-    return detail, artifact
+    try:
+        return detail, await chunk_set_prepared_artifact(
+            oracle, detail, document_id, chunk_set_id.strip()
+        )
+    except VersionSourceUnknownError as exc:
+        raise McpToolError(PREVIEW_FILE_MISSING_CODE, str(exc), status=404) from exc
 
 
 async def preview_file(
