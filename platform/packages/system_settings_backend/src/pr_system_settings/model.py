@@ -2043,6 +2043,21 @@ def save_model_settings(
             store.reload_if_changed(settings)
             if base_revision is not None and base_revision != model_settings_revision(settings):
                 raise HTTPException(status_code=409, detail=MODEL_SETTINGS_CONFLICT_MESSAGE)
+            # 保存済みの東京を保つ他節の保存は許可し、東京への新規変更だけを拒否する。
+            current_regions = model_payload(settings).generative_ai
+            for field in ("embedding_region", "rerank_region"):
+                selected = getattr(payload.generative_ai, field)
+                if selected not in ("ap-osaka-1", "us-chicago-1") and selected != getattr(
+                    current_regions, field
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "モデルのリージョンは ap-osaka-1 または us-chicago-1 を"
+                            "選び直してください。"
+                            "既存の接続先は変更していません。"
+                        ),
+                    )
             keys = resolve_api_keys(settings, payload)
             store.save(
                 settings,

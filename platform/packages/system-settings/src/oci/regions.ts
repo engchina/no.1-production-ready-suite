@@ -1,6 +1,6 @@
 import type { SelectFieldOption } from "@production-ready/ui";
 
-/** OCI 認証と Generative AI の接続先に使うリージョン。 */
+/** OCI 認証のリージョン。既存のモデル設定の読取型にも使う。 */
 export const OCI_REGION_OPTIONS = [
   { value: "ap-tokyo-1", label: "ap-tokyo-1" },
   { value: "ap-osaka-1", label: "ap-osaka-1" },
