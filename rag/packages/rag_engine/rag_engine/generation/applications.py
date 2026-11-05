@@ -234,9 +234,10 @@ def _unit() -> str:
 
 
 def _equation() -> re.Pattern[str]:
-    """「A＋B÷C＝D」: 演算子を 1 つ以上含む左辺と、数 1 つの右辺。"""
-    term = rf"\(*\s*{_NUMBER}\s*{_unit()}?\s*\)*"
-    return re.compile(rf"(?P<left>{term}(?:\s*{_OPERATOR}\s*{term})+)\s*=\s*(?P<right>{_NUMBER}\s*{_unit()}?)")
+    """等号で結ばれた数式全体。右辺の演算と連鎖した等号も切り落とさない。"""
+    term = rf"\(*\s*[+\-]?{_NUMBER}\s*{_unit()}?\s*\)*"
+    expression = rf"{term}(?:\s*{_OPERATOR}\s*{term})*"
+    return re.compile(rf"{expression}(?:\s*=\s*{expression})+")
 
 
 def _date_like() -> re.Pattern[str]:
@@ -298,14 +299,15 @@ def arithmetic_mismatch(text: str) -> str:
     normalized = _normalize_expression(text)
     date_like = _date_like()
     for match in _equation().finditer(normalized):
-        left, right = match.group("left"), match.group("right")
-        if date_like.search(left):
+        expressions = [expression.strip() for expression in match.group(0).split("=")]
+        if not any(re.search(_OPERATOR, expression) for expression in expressions):
             continue
-        expected, actual = _evaluate(left), _evaluate(right)
-        if expected is None or actual is None:
+        if any(date_like.search(expression) for expression in expressions):
             continue
-        if not math.isclose(expected, actual, rel_tol=0.01, abs_tol=0.01):
-            return match.group(0).strip()
+        values = [_evaluate(expression) for expression in expressions]
+        for expected, actual in zip(values, values[1:], strict=False):
+            if expected is not None and actual is not None and not math.isclose(expected, actual, rel_tol=0.01, abs_tol=0.01):
+                return match.group(0).strip()
     return ""
 
 
@@ -362,6 +364,8 @@ APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "- 前提が質問の原文にあることと、算式の計算はシステムが確かめ済み。\n"
     "\n"
     "## Step 2: 規則と事実の対応を判定する\n"
+    "- documents は生成へ渡した原文を文書と版ごとにまとめたもの。選択引用の外にある条件・未確定の行・分類規則も確認する。"
+    "引用抜粋だけで未確認条件を不成立や0とみなさず、必要な規則を確認できなければ valid=false。\n"
     "- valid=true は、premises が質問または confirmed_premises の確認済みの事実で、ite"
     "m_indexes の items の quote の規則（条件・式・"
     "数え方）を正しく当てはめ、計算・期間・日付の数え方と result が"
@@ -417,6 +421,7 @@ def run_application_step(
     checked: Sequence[Any],
     request_units: Sequence[dict],
     *,
+    evidence_spans: Sequence[dict[str, Any]],
     parse_text: Callable[..., Any],
     settings: Any,
     audit_settings: Any,
@@ -440,11 +445,19 @@ def run_application_step(
     candidates = audit_view(applications, lambda item: next((i for i, e in supported.items() if e is item), None))
     if not candidates:
         return applications, ""
+    from rag_engine.generation.application_review import application_documents
+    from rag_engine.generation.input_budget import ensure_model_input
+
+    system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
+    prompt = render_prompt(
+        {**inputs, "documents": application_documents(evidence_spans), "applications": candidates, "summary": draft.summary}
+    )
+    ensure_model_input(audit_settings, system, prompt, ApplicationAudit.model_json_schema(), provider_id=provider_id)
     audit = call_with_model_purpose(
         "answer.audit",
         parse_text,
-        resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT),
-        render_prompt({**inputs, "applications": candidates, "summary": draft.summary}),
+        system,
+        prompt,
         audit_settings,
         ApplicationAudit,
         provider_id=provider_id,

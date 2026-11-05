@@ -9,6 +9,13 @@ from app.api.routes import documents as routes
 
 
 class ScopedOracle:
+    async def get_chunk_set(self, _chunk_set_id: str) -> dict[str, Any]:
+        return {
+            "document_id": "doc-a",
+            "recipe_id": "recipe-a",
+            "extraction_recipe_id": "extraction-a",
+        }
+
     async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, Any]:
         assert (document_id, recipe_id) == ("doc-a", "recipe-a")
         return {"active_extraction_recipe_id": "extraction-a", "active_chunk_set_id": "chunks-a"}

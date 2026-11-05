@@ -110,7 +110,7 @@ import {
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
 import { JudgeCalibrationBadge } from "./calibration/JudgeCalibrationBadge";
-import { JudgeCalibrationTab } from "./calibration/JudgeCalibrationTab";
+import { TestSetTab } from "./testsets/TestSetTab";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
@@ -140,7 +140,7 @@ type PageTab = "run" | "calibration";
  * 表示だけする。評価は job で動き（#390）、結果は Excel の行（質問・期待する根拠）に合わせて出す。
  */
 export function EvaluationClient() {
-  // 評価の実行と判定の校正（#3578）のタブ。`?tab=calibration` で判定の校正を直接開ける。
+  // 既存 URL は保ち、テストセットの作成を直接開ける（#4396）。
   const [searchParams, setSearchParams] = useSearchParams();
   const pageTab: PageTab = searchParams.get("tab") === "calibration" ? "calibration" : "run";
   const changePageTab = (value: string) => {
@@ -385,7 +385,7 @@ export function EvaluationClient() {
       />
       <PageBody wide>
         <TabPanel id="calibration" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
-          <JudgeCalibrationTab />
+          <TestSetTab />
         </TabPanel>
         <TabPanel id="run" value={pageTab} idPrefix={PAGE_TABS_PREFIX} className="grid min-w-0 gap-6">
         {/* 評価の基準を先に読み、条件を選んで実行する順に、縦に全幅で並べる（#3295。間隔は PageBody の gap）。 */}

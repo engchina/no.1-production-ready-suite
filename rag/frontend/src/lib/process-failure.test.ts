@@ -50,3 +50,32 @@ describe("RAG の失敗を共通の失敗の表示に写す（Issue 2342）", ()
     ).toMatchObject({ summary: "「文書から根拠の候補を検索する」で処理が止まりました。", errorCode: "ORA-03146", failedStep: "文書から根拠の候補を検索する" });
   });
 });
+
+
+describe("安全な実行の失敗分類（Issue 4412）", () => {
+  const base = { status: "error" as const, error_stage: "retrieval", error_type: "RuntimeError", error_code: null };
+  it("古い記録と分類できなかった記録を区別する", () => {
+    expect(runFailure(base)?.cause).toBe("原因の詳細は記録されていません。");
+    expect(runFailure({ ...base, failure_diagnosis: { kind: "unknown" } })?.cause).toContain("特定できませんでした");
+  });
+  it.each([
+    ["dns", "名前を解決"], ["refused", "接続を拒否"], ["unreachable", "通信経路"], ["reset", "途中で切断"],
+  ] as const)("記録された %s だけを説明する", (cause, expected) => {
+    expect(runFailure({ ...base, failure_diagnosis: { kind: "network", network_failure_cause: cause } })?.cause).toContain(expected);
+  });
+  it.each([
+    "rate_limited", "quota_exhausted", "unavailable", "server_error", "not_supported", "network", "tls", "timeout",
+    "authentication", "permission", "not_found", "bad_request", "too_large", "safety", "invalid_output", "truncated", "unknown",
+  ] as const)("分類 %s に原因と次の操作が用意されている", (kind) => {
+    const result = runFailure({ ...base, failure_diagnosis: { kind } });
+    expect(result?.cause).toBeTruthy();
+    expect(result?.nextAction).toBeTruthy();
+    expect(result?.cause).not.toContain("failure.diagnosis.");
+    expect(result?.nextAction).not.toContain("failure.diagnosis.");
+    expect(result?.errorType).toBe("RuntimeError");
+  });
+  it("型だけで原因を推定せず、TLS とネットワーク原因を混同しない", () => {
+    expect(runFailure({ ...base, error_type: "ConnectError" })?.cause).toContain("記録されていません");
+    expect(runFailure({ ...base, failure_diagnosis: { kind: "tls", network_failure_cause: "dns" } })?.cause).toContain("TLS");
+  });
+});

@@ -59,6 +59,10 @@ export type WorkspaceField =
   | "history.view"
   | "language-releases.paging"
   // クライアント側で全件を持つ一覧のページと表示件数（#1891。lib/list-paging.ts の useClientListPaging）
+  | "evaluation.testsets.paging"
+  | "evaluation.testsets.sourcesPaging"
+  | "evaluation.testsets.candidatesPaging"
+  | "evaluation.testsets.itemsPaging"
   | "evaluation.casesPaging"
   | "evaluation.previewPaging"
   | "supportGuides.includeArchived"
