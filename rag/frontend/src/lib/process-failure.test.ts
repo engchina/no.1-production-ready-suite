@@ -79,3 +79,18 @@ describe("安全な実行の失敗分類（Issue 4412）", () => {
     expect(runFailure({ ...base, failure_diagnosis: { kind: "tls", network_failure_cause: "dns" } })?.cause).toContain("TLS");
   });
 });
+
+
+describe("履歴の停止工程の優先順（Issue 4436）", () => {
+  it.each([
+    [{ kind: "network", stage: "回答の生成" }, "retrieval", "回答の生成"],
+    [{ kind: "network", stage: null }, "retrieval", "文書から根拠の候補を検索する"],
+    [null, "retrieval", "文書から根拠の候補を検索する"],
+    [null, null, null],
+    [{ kind: "network", stage: null }, null, null],
+  ] as const)("診断の工程→旧工程の順で一つに解決し、欠測は補完しない", (diagnosis, outer, expected) => {
+    const result = runFailure({ status: "error", error_stage: outer, error_type: "RuntimeError", error_code: null, failure_diagnosis: diagnosis });
+    expect(result?.failedStep).toBe(expected);
+    expect(result?.summary).toBe(expected ? `「${expected}」で処理が止まりました。` : "回答を作成できませんでした。");
+  });
+});
