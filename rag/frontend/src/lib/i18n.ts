@@ -5574,6 +5574,7 @@ export const ja = {
   "history.detail.usageUnmeasured": "未計測",
   "history.detail.usagePartial": "一部計測",
   "history.detail.errorStage": "止まった段",
+  "history.detail.errorStageNotRecorded": "未記録",
   "history.detail.openChat": "会話を開く",
   "history.detail.openChatLabel": "この実行の会話をチャットで開く",
   "history.detail.openSearch": "RAG 検索で開く",

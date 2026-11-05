@@ -67,7 +67,7 @@ import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
-import { failedStageLabel, processFailureLabels, runFailure, storageFailureNotice } from "@/lib/process-failure";
+import { processFailureLabels, runFailure, storageFailureNotice } from "@/lib/process-failure";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { useListTotal, useRunHistory, useRunHistoryDetail } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -487,7 +487,7 @@ function RunDetailView({ run }: { run: RunDetail }) {
     extraFacts.push({
       id: "errorStage",
       label: t("history.detail.errorStage"),
-      value: run.error_stage ? failedStageLabel(run.error_stage) : t("history.notRecorded"),
+      value: failure?.failedStep ?? t("history.detail.errorStageNotRecorded"),
     });
   }
 
