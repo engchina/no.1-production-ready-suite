@@ -70,3 +70,19 @@ def test_span_does_not_take_purpose_from_first_image_or_other_record() -> None:
     mixed = _record({"image_evidence": [{"vision_image_purpose": "record"}, {"vision_image_purpose": "example"}]})
     [span] = evidence_spans("合成画像 A の表示値", [mixed], preserve_records=True)
     assert span["vision_image_purpose"] == "unknown"
+
+
+def test_mixed_images_keep_individual_purpose_through_both_projections(tmp_path: Path) -> None:
+    images = [
+        {"image_id": "image-record", "vision_image_purpose": "record"},
+        {"image_id": "image-example", "vision_image_purpose": "example"},
+        {"image_id": "image-old"},
+    ]
+    metadata = {"vision_image_purpose": "record", "image_evidence": images}
+    before = deepcopy(metadata)
+    selected = answer_image_evidence([_record(metadata)], tmp_path)
+    prompt_images = _answer_image_metadata([], image_evidence=selected)["prompt_images"]
+    expected = {"image-record": "record", "image-example": "example", "image-old": "unknown"}
+    assert {image["image_id"]: image["vision_image_purpose"] for image in selected} == expected
+    assert {image["image_id"]: image["vision_image_purpose"] for image in prompt_images} == expected
+    assert metadata == before
