@@ -1,5 +1,6 @@
 """図の切出しの実測・再利用・失敗を保存形式で確かめる。"""
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -81,7 +82,15 @@ async def test_image_stage_records_actual_outcome_without_media(
     if mode == "cache":
         state.materialized_images[figure.chunk_id] = str(figure.metadata["engine_metadata_json"])
     if mode == "file":
-        path = tmp_path / module._document_run_id(figure.document_id) / "crops" / "docling-p1-5.png"
+        chunk_set_id = figure.metadata["chunk_set_id"]
+        assert isinstance(chunk_set_id, str)
+        source_key = hashlib.sha256(chunk_set_id.encode()).hexdigest()
+        path = (
+            tmp_path
+            / module._document_run_id(figure.document_id)
+            / "crops"
+            / f"{source_key}-docling-p1-5.png"
+        )
         path.parent.mkdir(parents=True)
         path.write_bytes(b"private-png-marker")
     with (
@@ -190,4 +199,7 @@ async def test_repeated_image_stage_reuses_actual_result(
         assert output["chunks"][0]["metadata_applied"] is True
     assert count == [1]
     updated = json.loads(str(state.chunks[figure.chunk_id].metadata["engine_metadata_json"]))
-    assert updated["image_evidence"][0]["crop_path"] == "crops/docling-p1-5.png"
+    chunk_set_id = figure.metadata["chunk_set_id"]
+    assert isinstance(chunk_set_id, str)
+    source_key = hashlib.sha256(chunk_set_id.encode()).hexdigest()
+    assert updated["image_evidence"][0]["crop_path"] == f"crops/{source_key}-docling-p1-5.png"
