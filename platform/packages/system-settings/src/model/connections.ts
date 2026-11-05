@@ -5,6 +5,8 @@
  */
 import type { SelectFieldOption } from "@production-ready/ui";
 
+import { DEFAULT_GENERATIVE_AI_REGION } from "../oci/regions";
+
 import { t } from "./messages";
 import {
   DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS,
@@ -370,6 +372,10 @@ export function normalizeModelSettings(
         };
       }),
     },
-    generative_ai: { ...settings.generative_ai },
+    generative_ai: {
+      ...settings.generative_ai,
+      embedding_region: settings.generative_ai.embedding_region ?? DEFAULT_GENERATIVE_AI_REGION,
+      rerank_region: settings.generative_ai.rerank_region ?? DEFAULT_GENERATIVE_AI_REGION,
+    },
   };
 }

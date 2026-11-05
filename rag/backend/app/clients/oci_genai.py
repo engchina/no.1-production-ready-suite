@@ -14,7 +14,7 @@ import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from numbers import Real
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from pr_backend_core.bounded_calls import (
     KIND_LABELS,
@@ -26,6 +26,7 @@ from pr_backend_core.bounded_calls import (
 from pr_backend_core.chat_progress import chat_progress_details
 from pr_backend_core.observability.model_purpose import model_purpose_attributes
 from pr_backend_core.observability.tracing import observed_span
+from pr_backend_core.oci_genai_regions import genai_config, genai_endpoint
 from rag_engine.resources.external_calls import builtin_external_error, external_call
 from rag_engine.resources.rerank_diagnostics import (
     RerankCallReceipt,
@@ -102,6 +103,7 @@ class OciGenAiClient:
     ) -> None:
         self._settings = settings or get_settings()
         self._inference_client = inference_client
+        self._regional_clients: dict[tuple[str, str, str], GenerativeAiInferenceClientProtocol] = {}
         self._sdk_call_runner = sdk_call_runner or _run_sdk_call_in_thread
         self._embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._rerank_cache: OrderedDict[str, list[tuple[int, float]]] = OrderedDict()
@@ -153,6 +155,7 @@ class OciGenAiClient:
                 input_type=input_type,
                 model_id=self._settings.oci_genai_embedding_model,
                 dimension=self._settings.oci_genai_embedding_dim,
+                region=self._settings.oci_genai_embedding_region,
             )
             cached = self._get_cached_embedding(key)
             if cached is not None:
@@ -258,6 +261,7 @@ class OciGenAiClient:
                         documents=documents,
                         top_n=top_n,
                         model_id=self._settings.oci_genai_rerank_model,
+                        region=self._settings.oci_genai_rerank_region,
                     )
                     cached = self._get_cached_rerank(cache_key)
                     if cached is not None:
@@ -362,7 +366,7 @@ class OciGenAiClient:
 
     def _embed_text_vectors(self, details: object, span: Any) -> list[list[float]]:
         """OCI の embedding を 1 回呼び、埋め込みの値だけを返す（#2574 の記録の単位）。"""
-        response = self._client().embed_text(details)
+        response = self._client("embedding").embed_text(details)
         span.set_call_output(lambda: oci_call_snapshot(response.data))
         vectors = getattr(response.data, "embeddings", None)
         if not isinstance(vectors, list):
@@ -406,7 +410,7 @@ class OciGenAiClient:
 
         def invoke_sdk() -> list[dict[str, object]]:
             nonlocal attempt
-            client = self._client()
+            client = self._client("rerank")
             attempt = receipt.begin_sdk(attempt_number) if receipt is not None else None
             try:
                 response = client.rerank_text(details)
@@ -467,10 +471,21 @@ class OciGenAiClient:
                     )
         return [(rank["index"], rank["relevance_score"]) for rank in ranks]
 
-    def _client(self) -> GenerativeAiInferenceClientProtocol:
+    def _client(
+        self, target: Literal["embedding", "rerank"] = "embedding"
+    ) -> GenerativeAiInferenceClientProtocol:
         """OCI Generative AI Inference client を遅延初期化する。"""
         if self._inference_client is not None:
             return self._inference_client
+        region = (
+            self._settings.oci_genai_embedding_region
+            if target == "embedding"
+            else self._settings.oci_genai_rerank_region
+        )
+        profile = self._settings.oci_config_profile
+        key = (region, self._settings.oci_config_file, profile)
+        if key in self._regional_clients:
+            return self._regional_clients[key]
 
         oci_config = importlib.import_module("oci.config")
         genai = importlib.import_module("oci.generative_ai_inference")
@@ -479,6 +494,7 @@ class OciGenAiClient:
             self._settings.oci_config_file,
             self._settings.oci_config_profile,
         )
+        config = genai_config(config, region)
         # 再試行は共通の上限つきの並行の実行器が受け持つ(#2002)。SDK の既定の再試行
         # (DEFAULT_RETRY_STRATEGY)を残すと、全体の待ち・並行の数の調整・予算を通らずに再試行する。
         # SDK の既定の circuit breaker も切る。429 が 10 回続くと先に開き、実行器の知らない
@@ -486,8 +502,9 @@ class OciGenAiClient:
         oci_retry = importlib.import_module("oci.retry")
         oci_breaker = importlib.import_module("oci.circuit_breaker")
         try:
-            self._inference_client = genai.GenerativeAiInferenceClient(
+            client = genai.GenerativeAiInferenceClient(
                 config,
+                service_endpoint=genai_endpoint(region),
                 retry_strategy=oci_retry.NoneRetryStrategy(),
                 circuit_breaker_strategy=oci_breaker.NoCircuitBreakerStrategy(),
             )
@@ -495,7 +512,8 @@ class OciGenAiClient:
             if type(exc).__name__ == "InvalidConfig":
                 raise OciGenAiConfigError(_oci_invalid_config_message(exc)) from exc
             raise
-        return self._inference_client
+        self._regional_clients[key] = cast(GenerativeAiInferenceClientProtocol, client)
+        return self._regional_clients[key]
 
     def _embedding_cache_disabled(self) -> bool:
         return not getattr(self._settings, "rag_embedding_cache_enabled", True) or (
@@ -589,11 +607,13 @@ def _embedding_cache_key(
     input_type: EmbeddingInputType,
     model_id: str,
     dimension: int,
+    region: str = "ap-osaka-1",
 ) -> str:
     """embedding cache key を原文なしの安定 hash で作る。"""
     return _cache_key(
         {
             "kind": "embedding",
+            "region": region,
             "model_id": model_id,
             "dimension": dimension,
             "input_type": input_type,
@@ -608,11 +628,13 @@ def _rerank_cache_key(
     documents: list[str],
     top_n: int,
     model_id: str,
+    region: str = "ap-osaka-1",
 ) -> str:
     """rerank cache key を query/document 原文なしの安定 hash で作る。"""
     return _cache_key(
         {
             "kind": "rerank",
+            "region": region,
             "model_id": model_id,
             "top_n": top_n,
             "query_sha256": _sha256_text(normalized_query_key(query)),

@@ -51,6 +51,7 @@ import {
   useSettingsDraftGuard,
   type DraftGuardMessages,
 } from "../guards/useSettingsDraftGuard";
+import { OCI_REGION_OPTIONS } from "../oci/regions";
 import { InputActionField } from "../oci/InputActionField";
 import { useFocusAfterCommit } from "../users-roles/shared";
 import {
@@ -917,6 +918,15 @@ export function ModelSettingsPage({
               {/* 値の長さの段（モデル ID は md、次元数は xs）で FormGrid に並べる（#1891）。テストの結果は、操作した欄の
                   行のすぐ下にカードの全幅で出す（messaging.md §10。#705）。Embedding の結果を Rerank の欄の下に出さない。 */}
               <FormGrid>
+                <SelectField
+                  id="genai-embedding-region"
+                  label={t("settings.model.genai.embeddingRegion")}
+                  value={draft.generative_ai.embedding_region}
+                  options={OCI_REGION_OPTIONS}
+                  width="md"
+                  disabled={operationBusy}
+                  onValueChange={(value) => updateGenerative("embedding_region", value)}
+                />
                 <TestableTextField
                   id="genai-embedding-model"
                   label={t("settings.model.genai.embeddingModel")}
@@ -956,6 +966,15 @@ export function ModelSettingsPage({
                 }
               />
               <FormGrid>
+                <SelectField
+                  id="genai-rerank-region"
+                  label={t("settings.model.genai.rerankRegion")}
+                  value={draft.generative_ai.rerank_region}
+                  options={OCI_REGION_OPTIONS}
+                  width="md"
+                  disabled={operationBusy}
+                  onValueChange={(value) => updateGenerative("rerank_region", value)}
+                />
                 <TestableTextField
                   id="genai-rerank-model"
                   label={t("settings.model.genai.rerankModel")}

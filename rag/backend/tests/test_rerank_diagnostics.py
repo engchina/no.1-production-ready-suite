@@ -178,7 +178,8 @@ async def test_client_initialization_error_is_not_sdk_start(
 ) -> None:
     adapter = client(Sdk())
 
-    def fail_client() -> Any:
+    def fail_client(target: str = "embedding") -> Any:
+        assert target == "rerank"
         raise ValueError("private configuration")
 
     monkeypatch.setattr(adapter, "_client", fail_client)

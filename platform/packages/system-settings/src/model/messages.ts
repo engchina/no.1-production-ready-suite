@@ -142,6 +142,8 @@ export const MODEL_MESSAGES = {
   "settings.model.genai.embeddingDim": "Embedding 次元",
   "settings.model.genai.embeddingDimHelp":
     "固定値です。Cohere Embed v4 と Oracle AI Database のベクトル列に合わせます。",
+  "settings.model.genai.embeddingRegion": "埋め込みモデルのリージョン",
+  "settings.model.genai.rerankRegion": "リランクモデルのリージョン",
   "settings.model.genai.embeddingModel": "埋め込みモデル ID",
   "settings.model.genai.rerankModel": "リランクモデル ID",
   "settings.model.genai.saved": "OCI Generative AI 設定を保存しました。",

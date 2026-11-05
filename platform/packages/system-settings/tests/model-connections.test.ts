@@ -228,6 +228,14 @@ describe("接続（#533 / #542）", () => {
       },
     ]);
     expect(normalized.enterprise_ai.models[0]?.connection_id).toBe("primary");
+    expect(normalized.generative_ai.embedding_region).toBe("ap-osaka-1");
+    expect(normalized.generative_ai.rerank_region).toBe("ap-osaka-1");
+    const independent = normalizeModelSettings({
+      ...legacy,
+      generative_ai: { ...legacy.generative_ai, embedding_region: "ap-tokyo-1", rerank_region: "us-chicago-1" },
+    });
+    expect(independent.generative_ai.embedding_region).toBe("ap-tokyo-1");
+    expect(independent.generative_ai.rerank_region).toBe("us-chicago-1");
     expect("endpoint" in normalized.enterprise_ai).toBe(false);
   });
 

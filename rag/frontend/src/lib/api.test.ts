@@ -581,6 +581,8 @@ describe("api.request envelope", () => {
         max_retries: 2,
       },
       generative_ai: {
+        embedding_region: "ap-osaka-1" as const,
+        rerank_region: "ap-osaka-1" as const,
         embedding_model: "cohere.embed-v4.0",
         embedding_dim: 1536,
         rerank_model: "cohere.rerank-v4.0-fast",
@@ -640,6 +642,8 @@ describe("api.request envelope", () => {
           max_retries: 2,
         },
         generative_ai: {
+          embedding_region: "ap-osaka-1" as const,
+          rerank_region: "ap-osaka-1" as const,
           embedding_model: "cohere.embed-v4.0",
           embedding_dim: 1536,
           rerank_model: "cohere.rerank-v4.0-fast",

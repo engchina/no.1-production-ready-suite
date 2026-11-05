@@ -26,11 +26,11 @@ import {
   SelectField,
   StatusBadge,
   TimedLoadingState,
-  type SelectFieldOption,
 } from "@production-ready/ui";
 
 import { useSettingsDraftGuard } from "../guards/useSettingsDraftGuard";
 import type { UploadStorageSettingsData } from "../upload-storage/types";
+import { OCI_REGION_OPTIONS } from "./regions";
 import { FileDropzone } from "./FileDropzone";
 import { InputActionField } from "./InputActionField";
 import { t, type OciMessageKey } from "./messages";
@@ -63,12 +63,6 @@ type ConfigTestState =
   | { phase: "loading" }
   | { phase: "success"; data: OciConfigTestResult }
   | { phase: "error"; message: string };
-
-const OCI_REGION_OPTIONS = [
-  { value: "ap-tokyo-1", label: "ap-tokyo-1" },
-  { value: "ap-osaka-1", label: "ap-osaka-1" },
-  { value: "us-chicago-1", label: "us-chicago-1" },
-] as const satisfies readonly SelectFieldOption<string>[];
 
 const AUTH_PROFILE_FIELDS = [
   "configFile",

@@ -814,6 +814,9 @@ def test_build_engine_settings_configures_rerank(tmp_path: Any) -> None:
         Settings(
             oci_compartment_id="ocid1.compartment.oc1..example",
             oci_genai_rerank_model="cohere.rerank-v4.0-fast",
+            oci_genai_embedding_region="ap-tokyo-1",
+            oci_genai_rerank_region="us-chicago-1",
+            oci_region="eu-frankfurt-1",
             rag_rerank_min_relevance_score=0.4,
         ),
         output_dir=tmp_path,
@@ -822,6 +825,15 @@ def test_build_engine_settings_configures_rerank(tmp_path: Any) -> None:
     assert engine_settings.oci_compartment_id == "ocid1.compartment.oc1..example"
     assert engine_settings.rerank_model == "cohere.rerank-v4.0-fast"
     assert engine_settings.rerank_min_relevance_score == 0.4
+    assert engine_settings.embedding_region == "ap-tokyo-1"
+    assert (
+        engine_settings.embedding_endpoint
+        == "https://inference.generativeai.ap-tokyo-1.oci.oraclecloud.com"
+    )
+    assert (
+        engine_settings.oci_rerank_endpoint
+        == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+    )
     assert _rerank_configured(engine_settings) is True
 
 

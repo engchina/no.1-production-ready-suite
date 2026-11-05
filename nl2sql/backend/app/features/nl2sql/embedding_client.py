@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pr_backend_core.bounded_calls import Attempt, BoundedCallAborted
+from pr_backend_core.oci_genai_regions import genai_config, genai_endpoint
 
 from app.settings import Settings
 
@@ -156,7 +157,7 @@ class OciGenAiEmbeddingClient:
             config_file,
             settings.resolved_oci_config_profile,
             settings.oci_region,
-            settings.oci_genai_endpoint,
+            settings.oci_genai_embedding_region,
             config_state,
         )
 
@@ -166,9 +167,7 @@ class OciGenAiEmbeddingClient:
             return self._client
         oci = self._load_oci()
         inference = importlib.import_module("oci.generative_ai_inference")
-        endpoint = self.settings.oci_genai_endpoint or (
-            f"https://inference.generativeai.{self.settings.oci_region}.oci.oraclecloud.com"
-        )
+        endpoint = genai_endpoint(self.settings.oci_genai_embedding_region)
         auth_mode = self.settings.oci_auth_mode.strip().lower()
         signer = None
         config: dict[str, Any] = {}
@@ -184,6 +183,7 @@ class OciGenAiEmbeddingClient:
             )
         # 再試行は共通の上限つきの並行の実行器が受け持つ（#2004）。SDK の既定の再試行
         # （DEFAULT_RETRY_STRATEGY）を残すと、全体の待ち・並行の数の調整を通らずに再試行する。
+        config = genai_config(config, self.settings.oci_genai_embedding_region)
         client_kwargs: dict[str, Any] = {"config": config, "service_endpoint": endpoint}
         retry = getattr(oci, "retry", None)
         if retry is not None:
