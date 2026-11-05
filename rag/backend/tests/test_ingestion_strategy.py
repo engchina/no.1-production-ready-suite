@@ -44,9 +44,10 @@ from app.schemas.extraction import (
     StructuredExtraction,
 )
 from app.schemas.knowledge_base import KnowledgeBaseRef
+from tests.prompt_support import UneditedPromptOracle
 
 
-class FakeOracle:
+class FakeOracle(UneditedPromptOracle):
     """IngestionPipeline に必要な OracleClient subset。"""
 
     def __init__(self) -> None:
