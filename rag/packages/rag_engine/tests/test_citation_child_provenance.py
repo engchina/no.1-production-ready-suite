@@ -84,7 +84,14 @@ def _run(items: list[dict]):
     reviews = [{"index": i, "support": "supported", "applicability": "matched", "condition": "", "reason": "r"} for i in range(len(items))]
     model = _Model(
         {"summary": "結果 C は右の枠に出ます。", "items": items, "confidence": "high"},
-        {"goal_alignment": "aligned", "summary_supported": True, "reviews": reviews, "request_reviews": [], "unused_evidence_ids": []},
+        {
+            "goal_alignment": "aligned",
+            "summary_supported": True,
+            "reviews": reviews,
+            "request_reviews": [],
+            "unused_evidence_ids": [],
+            "application_reviews": [{"index": i, "valid": True, "reason": "合成の原文対応"} for i in range(len(items))],
+        },
     )
 
     def unused(*a, **k):

@@ -1,13 +1,9 @@
 """回答の「当てはめ」: 支持された規則の item を、質問に書かれた事実に当てはめた結果の検査（#2155）。
 
 原文の引用で支える item（``grounded.GroundedItem``）は、規則を質問の事実に当てはめた結果（計算の結果・
-該当するか）を書けない。当てはめは次の検査で、出さないもの（reasons）と警告を付けて出すもの（warnings）を分ける（#2738）:
-
-- 出さない: 算式（数と ＋−×÷ と ＝）を計算し直して合わない、監査（``GroundedAudit.application_reviews``）が誤りと
-  判定した（valid=false）、指した規則の item が根拠と矛盾して外れた、規則の item を指していない・前提が無い、
-  内部の番号を利用者向けの文に書いている。
-- 警告（application_unaudited）を付けて出す: 前提（premises）が質問の原文の連続した一部と照合できない、監査が無い・
-  判定が無い、指した規則の item に印が付いている（未確認・要注意）。
+該当するか）を書けない。当てはめは、参照・算式などの構造検査と、規則・質問・結論の意味検査を分ける。
+推導結果の公開時は判定の欠落・重複・失敗も保留し、選んだ原文は残す。
+原文だけの表示を確認済みの推導とみなさない。
 
 特定の業務・文書の知識は持たない（規則は根拠の原文、事実は質問から取る）。
 """
@@ -55,6 +51,7 @@ class CheckedApplication:
     warnings: list[str] = field(default_factory=list)
     internal_label_issues: list[str] = field(default_factory=list)
     date_value_issues: list[str] = field(default_factory=list)
+    assessment: dict[str, Any] = field(default_factory=dict)
 
     def reject(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -82,6 +79,7 @@ class CheckedApplication:
             "reasons": list(self.reasons),
             "warnings": list(self.warnings),
             "source": self.source,
+            "assessment": dict(self.assessment),
         }
 
 
@@ -149,15 +147,24 @@ def check_applications(
     return checked
 
 
-def apply_application_audit(checked: Sequence[CheckedApplication], audit: GroundedAudit | ApplicationAudit | None) -> None:
-    """監査が誤りと判定した当てはめは出さない。監査が無い・判定が無いものは警告を付けて出す（#2738）。"""
-    reviews = {review.index: review for review in (audit.application_reviews if audit else [])}
+def apply_application_audit(
+    checked: Sequence[CheckedApplication], audit: GroundedAudit | ApplicationAudit | None, *, require_complete: bool = False
+) -> None:
+    """推導の採否を記録する。公開門では欠落・重複した判定も未確認として保留する。"""
+    rows = list(audit.application_reviews if audit else [])
     for index, entry in enumerate(checked):
-        review = reviews.get(index)
-        if audit is None:
-            entry.warn("監査なし")
-        elif review is None:
-            entry.warn("監査の判定なし")
+        reviews = [review for review in rows if review.index == index]
+        review = reviews[0] if len(reviews) == 1 else None
+        if require_complete:
+            entry.assessment = {
+                "status": "unknown" if review is None else "valid" if review.valid else "invalid",
+                "reason": review.reason if review is not None else "推導の判定が未完了、欠落または重複している",
+            }
+        if review is None:
+            if require_complete:
+                entry.reject("推導の条件と結論を確認できない")
+            else:
+                entry.warn("監査なし" if audit is None else "監査の判定なし")
         elif not review.valid:
             entry.reject(f"監査: {review.reason}")
 
@@ -355,7 +362,7 @@ APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "- 前提が質問の原文にあることと、算式の計算はシステムが確かめ済み。\n"
     "\n"
     "## Step 2: 規則と事実の対応を判定する\n"
-    "- valid=true は、premises が質問の事実で、ite"
+    "- valid=true は、premises が質問または confirmed_premises の確認済みの事実で、ite"
     "m_indexes の items の quote の規則（条件・式・"
     "数え方）を正しく当てはめ、計算・期間・日付の数え方と result が"
     "正しい場合だけ。\n"
@@ -442,7 +449,7 @@ def run_application_step(
         ApplicationAudit,
         provider_id=provider_id,
     )
-    apply_application_audit(applications, audit)
+    apply_application_audit(applications, audit, require_complete=True)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""
     if _internal_label().search(summary):
