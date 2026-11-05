@@ -29,7 +29,6 @@ RAG の検索の評価器の校正（`rag_engine.evaluation.crag_grader_eval`。
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +42,7 @@ from pr_evaluation_scoring import (
     calibration_failures,
     label_variance,
 )
+from pr_evaluation_scoring.label_file import load_label_file
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pr_suite_evaluation.dataset import canonical_sha256
@@ -163,7 +163,7 @@ class LabelSet(BaseModel):
 
 
 def load_labels(path: Path) -> LabelSet:
-    return LabelSet.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    return LabelSet.model_validate(load_label_file(path.read_text(encoding="utf-8")))
 
 
 class AgreementSummary(BaseModel):

@@ -142,7 +142,7 @@ def test_holdout_less_aspect_is_not_passed() -> None:
         thresholds=CalibrationThresholds(min_items=1),
     )
 
-    assert report["aspects"]["answer_points"]["failures"] == ["holdout の項目がありません"]
+    assert report["aspects"]["answer_points"]["failures"] == ["検証用データの項目がありません"]
     assert report["passed"] is False
 
 

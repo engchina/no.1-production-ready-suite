@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import uuid
 from collections.abc import Sequence
@@ -16,6 +17,7 @@ from pathlib import PurePath
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
+from pr_evaluation_scoring.label_file import encode_label_file
 from pr_evaluation_scoring.labeling import ERROR_TYPE_IDS
 
 from app.clients.evaluation_calibration_store import (
@@ -724,7 +726,9 @@ async def start_calibration(
 
 
 @router.get("/label-sets/{label_set_id}/export")
-async def export_label_set(label_set_id: str) -> Response:
+async def export_label_set(
+    label_set_id: str, language: Annotated[Literal["ja", "en"], Query()] = "en"
+) -> Response:
     """最終の判定を LabelSet の JSON で書き出す（suite の `calibrate` がそのまま読む）。"""
     store = get_calibration_store()
     record = await _label_set(store, label_set_id)
@@ -737,7 +741,14 @@ async def export_label_set(label_set_id: str) -> Response:
     disposition = 'attachment; filename="labels-' + label_set_id[:8] + '.json"'
     headers = dict([("Content-Disposition", disposition)])
     return Response(
-        content=document.model_dump_json(indent=2) + "\n",
+        content=(
+            json.dumps(
+                encode_label_file(document.model_dump(mode="json")), ensure_ascii=False, indent=2
+            )
+            if language == "ja"
+            else document.model_dump_json(indent=2)
+        )
+        + "\n",
         media_type="application/json",
         headers=headers,
     )
