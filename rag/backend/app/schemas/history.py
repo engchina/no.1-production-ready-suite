@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from pr_backend_core.observability.failure_diagnosis import FailureDiagnosis
 from pr_backend_core.observability.model_usage import RunModelUsage, UsageMeasurement
 from pydantic import BaseModel, Field
 
@@ -88,6 +89,7 @@ class RunDetail(RunSummary):
     error_type: str | None = None
     # 失敗のエラーコード（ORA-03146 など。例外の本文は持たない。#2342）。
     error_code: str | None = None
+    failure_diagnosis: FailureDiagnosis | None = None
     # 回答を作ったが保存できなかった記録（回答の記録・会話の回答。#2342）。
     storage_failures: list[StorageFailure] = Field(default_factory=list)
     # 会話の持ち主の表示名（#1954）。会話の無い実行（RAG 検索）・会話が削除された実行は None、
