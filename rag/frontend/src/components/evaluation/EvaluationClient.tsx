@@ -140,7 +140,7 @@ type PageTab = "run" | "calibration";
  * 表示だけする。評価は job で動き（#390）、結果は Excel の行（質問・期待する根拠）に合わせて出す。
  */
 export function EvaluationClient() {
-  // 評価の実行と判定の校正（#3578）のタブ。`?tab=calibration` で判定の校正を直接開ける。
+  // 既存 URL は保ち、テストセットの作成を直接開ける（#4396）。
   const [searchParams, setSearchParams] = useSearchParams();
   const pageTab: PageTab = searchParams.get("tab") === "calibration" ? "calibration" : "run";
   const changePageTab = (value: string) => {

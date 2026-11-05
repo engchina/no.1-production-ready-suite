@@ -1,15 +1,17 @@
 """本人の下書き、明示確認、テンプレート六列往復（合成データ）。"""
 
 from io import BytesIO
+from typing import Any
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import load_workbook  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 from app.clients.evaluation_testset_store import MemoryTestSetStore
 from app.rag.evaluation_excel import (
     HEADERS,
     EvaluationDocumentRef,
+    EvaluationExcelRow,
     EvaluationTemplateRow,
     build_evaluation_cases,
     evaluation_cases_xlsx,
@@ -25,6 +27,9 @@ from app.rag.evaluation_testsets import (
     source_items,
 )
 from app.schemas.evaluation_testsets import (
+    TestSetDraft as Draft,
+)
+from app.schemas.evaluation_testsets import (
     TestSetEdit as DraftEdit,
 )
 from app.schemas.evaluation_testsets import (
@@ -38,7 +43,7 @@ from app.schemas.evaluation_testsets import (
 )
 
 
-def item(**changes):
+def item(**changes: Any) -> DraftItem:
     fields = DraftFields(question="合成の質問", standard_answer="合成の標準回答")
     values = dict(
         fields.model_dump(),
@@ -51,13 +56,13 @@ def item(**changes):
     return DraftItem(**values)
 
 
-def body(draft, **changes):
+def body(draft: Draft, **changes: Any) -> DraftSaveRequest:
     values = [entry.model_dump(include=set(DraftEdit.model_fields)) for entry in draft.items]
     values[0].update(changes)
     return DraftSaveRequest(name=draft.name, revision=draft.revision, items=values)
 
 
-def test_confirm_edit_revokes_and_reference_is_never_promoted():
+def test_confirm_edit_revokes_and_reference_is_never_promoted() -> None:
     draft = new_draft("合成の下書き", [item(reference_answer="参考の回答")])
     assert not draft.items[0].confirmed
     confirmed = edited_draft(draft, body(draft, confirmed=True))
@@ -72,7 +77,7 @@ def test_confirm_edit_revokes_and_reference_is_never_promoted():
 
 
 @pytest.mark.parametrize("decision", ["clarify", "hold"])
-def test_clarification_hold_allow_empty_standard(decision):
+def test_clarification_hold_allow_empty_standard(decision: str) -> None:
     draft = new_draft("合成", [item()])
     updated = edited_draft(draft, body(draft, standard_answer="", response_decision=decision))
     confirmed = edited_draft(updated, body(updated, confirmed=True))
@@ -80,7 +85,7 @@ def test_clarification_hold_allow_empty_standard(decision):
     assert row.standard_answer is None and row.response_decision == decision
 
 
-def test_answer_requires_standard_and_unconfirmed_cannot_export():
+def test_answer_requires_standard_and_unconfirmed_cannot_export() -> None:
     draft = new_draft("合成", [item()])
     with pytest.raises(ValidationError):
         body(draft, standard_answer=" ", confirmed=True)
@@ -88,7 +93,7 @@ def test_answer_requires_standard_and_unconfirmed_cannot_export():
         export_draft(draft)
 
 
-def test_all_columns_locations_and_literal_text_roundtrip():
+def test_all_columns_locations_and_literal_text_roundtrip() -> None:
     evidence = "合成資料.pdf | 文書ID: doc-a | p.2-4 | 章節: 合成章 | 抜粋: 合成の本文"
     table = "合成表.xlsx | 文書ID: doc-b | シート: 合成シート | 行: 10-12 | 抜粋: 合成の値"
     content = evaluation_cases_xlsx(
@@ -128,7 +133,7 @@ def test_all_columns_locations_and_literal_text_roundtrip():
     )
 
 
-def test_only_confirmed_export_preserves_unfinished_snapshot():
+def test_only_confirmed_export_preserves_unfinished_snapshot() -> None:
     first = item(confirmed=True)
     draft = new_draft(
         "合成", [first, first.model_copy(update={"item_id": "i2", "confirmed": False})]
@@ -138,22 +143,28 @@ def test_only_confirmed_export_preserves_unfinished_snapshot():
 
 
 class Reader:
-    async def job(self, job_id):
+    async def list_jobs(self) -> list[dict[str, Any]]:
+        return []
+
+    async def rows(self, workbook_id: str) -> list[EvaluationExcelRow]:
+        return []
+
+    async def job(self, job_id: str) -> dict[str, Any]:
         return {"result": {"case_results": [{"case_id": "row-2", "trace_id": "trace"}]}}
 
-    async def answer(self, trace_id):
+    async def answer(self, trace_id: str) -> dict[str, Any]:
         return {"question": "同じ合成の質問", "answer": "未確認の生成回答"}
 
 
 @pytest.mark.asyncio
-async def test_duplicates_independent_and_generated_never_standard():
+async def test_duplicates_independent_and_generated_never_standard() -> None:
     values = await source_items(Reader(), ["job-one", "job-two"])
     assert len(values) == 2 and values[0].item_id != values[1].item_id
     assert all(not entry.standard_answer and not entry.confirmed for entry in values)
     assert all(entry.source_notice for entry in values)
 
 
-def test_invalid_evidence_rejects_confirmation():
+def test_invalid_evidence_rejects_confirmation() -> None:
     draft = new_draft("合成", [item()])
     draft = edited_draft(draft, body(draft, evidence=["合成.pdf | p.4-2"]))
     with pytest.raises(DraftError):
@@ -161,20 +172,20 @@ def test_invalid_evidence_rejects_confirmation():
 
 
 @pytest.mark.asyncio
-async def test_store_optimistic_revision_and_snapshot_copy():
+async def test_store_optimistic_revision_and_snapshot_copy() -> None:
     store = MemoryTestSetStore()
     draft = new_draft("合成", [item()])
     await store.create(draft)
     draft.name = "外側の変更"
     saved = await store.get(draft.draft_id)
-    assert saved.name == "合成"
+    assert saved is not None and saved.name == "合成"
     changed = edited_draft(saved, body(saved, confirmed=True))
     assert await store.save(changed, 1)
     assert not await store.save(changed, 1)
 
 
 @pytest.mark.asyncio
-async def test_api_owner_save_reopen_export_and_conflict(monkeypatch):
+async def test_api_owner_save_reopen_export_and_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
     import httpx
 
     from app.main import app
@@ -183,10 +194,6 @@ async def test_api_owner_save_reopen_export_and_conflict(monkeypatch):
 
     reader = Reader()
 
-    async def jobs():
-        return []
-
-    reader.list_jobs = jobs
     monkeypatch.setattr(service, "_STORE", MemoryTestSetStore())
     monkeypatch.setattr(service, "_READER", reader)
     transport = httpx.ASGITransport(app=app)
@@ -254,7 +261,7 @@ async def test_api_owner_save_reopen_export_and_conflict(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_previous_calibration_write_api_is_read_only():
+async def test_previous_calibration_write_api_is_read_only() -> None:
     import httpx
 
     from app.main import app

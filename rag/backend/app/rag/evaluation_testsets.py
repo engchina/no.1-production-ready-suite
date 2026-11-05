@@ -1,5 +1,6 @@
 """本人の完了評価から入力と参考を写し、確認済みの六列だけを書き出す。LLM は使わない。"""
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -76,7 +77,7 @@ class OracleTestSetSourceReader:
 
     async def rows(self, workbook_id: str) -> Sequence[EvaluationExcelRow]:
         workbook = await get_evaluation_source_workbook_service().load(workbook_id)
-        parsed = parse_evaluation_workbook(workbook.content)
+        parsed = await asyncio.to_thread(parse_evaluation_workbook, workbook.content)
         if parsed.issues:
             raise TestSetError("元の評価リクエストを読めません。入力を確認してください。")
         return parsed.rows
@@ -96,7 +97,13 @@ def _fields(row: EvaluationExcelRow) -> TestSetFields:
     )
 
 
-async def source_items(reader: TestSetSourceReader, job_ids: Sequence[str]) -> list[TestSetItem]:
+async def source_items(
+    reader: TestSetSourceReader,
+    job_ids: Sequence[str],
+    *,
+    include_references: bool = True,
+    item_ids: set[str] | None = None,
+) -> list[TestSetItem]:
     items: list[TestSetItem] = []
     for job_id in dict.fromkeys(job_ids):
         job = await reader.job(job_id)
@@ -131,8 +138,13 @@ async def source_items(reader: TestSetSourceReader, job_ids: Sequence[str]) -> l
                 if case_id in seen:
                     continue
                 seen.add(case_id)
+                item_id = uuid5(NAMESPACE_URL, f"evaluation:{job_id}:{pass_index}:{case_id}").hex
+                if item_ids is not None and item_id not in item_ids:
+                    continue
                 trace_id = str(case.get("trace_id") or "")
-                record = await reader.answer(trace_id) if trace_id else None
+                # 選択一覧は元の入力だけで足りる。選んだ項目の参考だけを下書き作成時に読む。
+                read_answer = include_references or case_id not in rows
+                record = await reader.answer(trace_id) if trace_id and read_answer else None
                 record = record or {}
                 original = (
                     _fields(rows[case_id])
@@ -150,9 +162,7 @@ async def source_items(reader: TestSetSourceReader, job_ids: Sequence[str]) -> l
                 items.append(
                     TestSetItem(
                         **original.model_dump(),
-                        item_id=uuid5(
-                            NAMESPACE_URL, f"evaluation:{job_id}:{pass_index}:{case_id}"
-                        ).hex,
+                        item_id=item_id,
                         source_job_id=job_id,
                         source_case_id=case_id,
                         source_pass=pass_index,
@@ -190,9 +200,9 @@ def edited_draft(previous: TestSetDraft, body: TestSetSaveRequest) -> TestSetDra
             old.model_dump(include=set(TestSetFields.model_fields))
         )
         confirmed = edit.confirmed and not changed
-        if confirmed:
-            validate_template(fields)
         items.append(old.model_copy(update={**fields.model_dump(), "confirmed": confirmed}))
+    if confirmed_items := [item for item in items if item.confirmed]:
+        validate_templates(confirmed_items)
     updated = previous.model_copy(
         update=dict(
             name=body.name,
@@ -216,19 +226,19 @@ def template_row(item: TestSetFields) -> EvaluationTemplateRow:
     )
 
 
-def validate_template(item: TestSetFields) -> None:
-    parsed = parse_evaluation_workbook(evaluation_cases_xlsx([template_row(item)]))
+def validate_templates(items: Sequence[TestSetFields]) -> bytes:
+    content = evaluation_cases_xlsx([template_row(item) for item in items])
+    parsed = parse_evaluation_workbook(content)
     if parsed.issues:
         raise TestSetError(" / ".join(issue.message for issue in parsed.issues))
+    return content
 
 
 def export_draft(draft: TestSetDraft) -> bytes:
     confirmed = [item for item in draft.items if item.confirmed]
     if not confirmed:
         raise TestSetError("収録を確認した項目がありません。")
-    for item in confirmed:
-        validate_template(item)
-    return evaluation_cases_xlsx([template_row(item) for item in confirmed])
+    return validate_templates(confirmed)
 
 
 _STORE: TestSetStore | None = None

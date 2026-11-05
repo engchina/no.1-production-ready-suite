@@ -45,7 +45,11 @@ async def sources() -> ApiResponse[list[dict[str, object]]]:
 async def candidates(body: TestSetSourcesRequest) -> ApiResponse[list[TestSetItem]]:
     _owner()
     try:
-        return ApiResponse(data=await service.source_items(service.get_reader(), body.job_ids))
+        return ApiResponse(
+            data=await service.source_items(
+                service.get_reader(), body.job_ids, include_references=False
+            )
+        )
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -65,7 +69,9 @@ async def drafts() -> ApiResponse[list[TestSetSummary]]:
 async def create(body: TestSetCreateRequest) -> ApiResponse[TestSetDraft]:
     _owner()
     try:
-        items = await service.source_items(service.get_reader(), body.job_ids)
+        items = await service.source_items(
+            service.get_reader(), body.job_ids, item_ids=set(body.item_ids)
+        )
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,

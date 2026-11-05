@@ -28,7 +28,7 @@ export function TestSetTab() {
   const open = useMutation({ mutationFn: testsetApi.get, onSuccess: (value) => { setDraft(value); setCreating(false); } });
   const paging = useClientListPaging("evaluation.testsets.paging", "drafts");
   return <div className="grid min-w-0 gap-6" data-testid="testset-creation">
-    {!draft && !creating ? <Section title={t("evaluation.testsets.title")} description={t("evaluation.testsets.description")}
+    {!draft && !creating ? <Section className="[&>div:first-child]:flex-wrap" title={t("evaluation.testsets.title")} description={t("evaluation.testsets.description")}
       actions={<Button icon={Plus} onClick={() => setCreating(true)}>{t("evaluation.testsets.new")}</Button>}>
       {query.isPending ? <Loading /> : query.isError ? <ApiErrorState fallback={t("common.apiError")} error={query.error} onRetry={() => void query.refetch()} /> : <>
         <ListToolbar count={listCountProps({ matchedTotal: query.data.length, filtered: false })} />

@@ -788,7 +788,12 @@ async def export_previous_calibration(label_set_id: str) -> Response:
     record = await _label_set(store, label_set_id)
     items = await store.list_items(label_set_id)
     labels = await store.list_labels(label_set_id)
-    calibrations = await store.list_calibrations(label_set_id=label_set_id)
+    listed = await store.list_calibrations(label_set_id=label_set_id)
+    calibrations = [
+        full
+        for value in listed
+        if (full := await store.get_calibration(value.calibration_id)) is not None
+    ]
     payload = {
         "形式": "以前の校正データ",
         "形式の版": 1,
