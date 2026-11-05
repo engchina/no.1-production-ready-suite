@@ -1,11 +1,12 @@
 """分割確認は候補と対応抽出を使い、検索の配信版を切り替えない。"""
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
 
 from app.api.routes import documents as routes
+from app.rag.element_locator import chunk_element_ids
 from app.schemas.document import DocumentChunkView
 from app.services.recipe_inspection import inspection_chunk_set_id
 
@@ -225,7 +226,7 @@ async def test_saved_candidates_for_changed_strategy_size_overlap_are_the_inspec
             chunk_index=chunk.index,
             text=chunk.text,
             metadata=dict(chunk.metadata),
-            element_ids=cast(list[str], chunk.metadata.get("element_ids") or []),
+            element_ids=chunk_element_ids(chunk.metadata),
         )
         for chunk in built
     ]
