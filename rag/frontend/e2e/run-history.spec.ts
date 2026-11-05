@@ -778,29 +778,49 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
   test("詳細: 記録された失敗の原因と未記録を区別し、生の例外本文を表示しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
     await mockLocalAuth(page);
+    const outerStage = "文書から根拠の候補を検索する";
     const cases = [
-      { diagnosis: { kind: "invalid_output", stage: "retrieval" }, expected: "必要な形式として読み取れませんでした" },
-      { diagnosis: { kind: "network", network_failure_cause: "dns" }, expected: "名前を解決できませんでした" },
-      { diagnosis: { kind: "network", network_failure_cause: "refused" }, expected: "接続を拒否されました" },
-      { diagnosis: { kind: "tls" }, expected: "TLS 接続または証明書" },
-      { diagnosis: { kind: "unknown" }, expected: "原因を特定できませんでした" },
-      { diagnosis: null, expected: "原因の詳細は記録されていません" },
+      { diagnosis: { kind: "invalid_output", stage: "回答の生成" }, errorStage: "retrieval", stage: "回答の生成", expected: "必要な形式として読み取れませんでした" },
+      { diagnosis: { kind: "network", network_failure_cause: "dns", stage: null }, errorStage: "retrieval", stage: outerStage, expected: "名前を解決できませんでした" },
+      { diagnosis: { kind: "network", network_failure_cause: "refused" }, errorStage: "retrieval", stage: outerStage, expected: "接続を拒否されました" },
+      { diagnosis: { kind: "tls" }, errorStage: "retrieval", stage: outerStage, expected: "TLS 接続または証明書" },
+      { diagnosis: { kind: "unknown" }, errorStage: "retrieval", stage: outerStage, expected: "原因を特定できませんでした" },
+      { diagnosis: null, errorStage: "retrieval", stage: outerStage, expected: "原因の詳細は記録されていません" },
+      { diagnosis: null, errorStage: null, stage: null, expected: "原因の詳細は記録されていません" },
+      { diagnosis: { kind: "network", network_failure_cause: "dns", stage: null }, errorStage: null, stage: null, expected: "名前を解決できませんでした" },
     ];
     await mockRuns(page, cases.map((item, index) => run(index + 20, {
       question: "合成の質問", search_answer_profile_name: "プロファイル A", citations: [], answer: null,
-      status: "error", answer_generated: false, error_type: "RuntimeError", error_stage: "retrieval",
+      status: "error", answer_generated: false, error_type: "RuntimeError", error_stage: item.errorStage,
       // 許可されない追加項目は表示に渡さない。
       failure_diagnosis: item.diagnosis ? { ...item.diagnosis, ...{ message: "synthetic-private-token", url: "https://synthetic.invalid/private" } } : null,
     })));
-    for (const [index, item] of cases.entries()) {
-      await page.goto(`/history/run-${index + 20}`);
-      const failure = page.getByTestId("run-history-failure");
-      await expect(failure).toContainText(item.expected);
-      await expect(failure).toContainText("実行 ID");
-      await expect(failure).not.toContainText("synthetic-private-token");
-      await expect(failure).not.toContainText("synthetic.invalid");
-      await expectNoPageOverflow(page);
-      await failure.screenshot({ path: testInfo.outputPath(`failure-diagnosis-${index}.png`) });
+    for (const theme of ["light", "dark"]) {
+      for (const [index, item] of cases.entries()) {
+        await page.goto(`/history/run-${index + 20}`);
+        await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+        const summary = page.getByTestId("run-history-summary");
+        const failure = page.getByTestId("run-history-failure");
+        await expect(failure).toContainText(item.expected);
+        await expect(failure).toContainText("実行 ID");
+        await expect(failure).not.toContainText("synthetic-private-token");
+        await expect(failure).not.toContainText("synthetic.invalid");
+        await expectNoPageOverflow(page);
+        await summary.screenshot({ path: testInfo.outputPath(`failure-diagnosis-${index}-${theme}.png`) });
+        // 原因カードと概要は同じ保存済み工程を表示し、欠測を他の工程から推測しない。
+        await expect(summary.locator('[data-run-fact="errorStage"] dd')).toHaveText(item.stage ?? "未記録");
+        const panelStage = failure.locator("dt").filter({ hasText: /^止まった段$/ });
+        if (item.stage) {
+          await expect(panelStage.locator("+ dd")).toHaveText(item.stage);
+        } else {
+          await expect(panelStage).toHaveCount(0);
+          await expect(failure).toContainText("回答を作成できませんでした");
+        }
+        const stageFact = summary.locator('[data-run-fact="errorStage"]');
+        await stageFact.scrollIntoViewIfNeeded();
+        await expect(stageFact).toBeInViewport();
+        await page.screenshot({ path: testInfo.outputPath(`failure-stage-${index}-${theme}.png`) });
+      }
     }
   });
 
