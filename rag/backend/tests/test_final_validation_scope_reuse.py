@@ -1,5 +1,7 @@
 """最終検証の指示変更を回答の来歴と再利用依存へ反映する。"""
 
+from typing import Any
+
 import pytest
 from rag_engine.evaluation import answer_validation
 from rag_engine.resources.runtime import bind_prompt_overrides, resolve_prompt
@@ -10,8 +12,10 @@ from app.rag.answer_validation import validation_reuse_context
 
 
 @pytest.mark.parametrize("saved_override", [False, True], ids=["default", "saved-override"])
-def test_final_validation_system_change_invalidates_reuse_context(monkeypatch, saved_override):
-    arguments = {
+def test_final_validation_system_change_invalidates_reuse_context(
+    monkeypatch: pytest.MonkeyPatch, saved_override: bool
+) -> None:
+    arguments: dict[str, Any] = {
         "question": "項目Aの値は何ですか。",
         "answer": "項目Aの値は42です。",
         "settings": get_settings(),
