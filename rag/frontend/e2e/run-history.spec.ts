@@ -75,6 +75,7 @@ interface RunRow {
   /** 詳細だけの項目（失敗の種類・コードと保存できなかった記録。#2342）。 */
   error_type?: string | null;
   error_code?: string | null;
+  failure_diagnosis?: { kind: string; network_failure_cause?: string | null; stage?: string | null } | null;
   storage_failures?: { step: string; error_type: string; error_code: string | null }[];
   /** 詳細だけの項目（見えている根拠と、今の権限で見られない根拠の数。#3252）。 */
   citations?: (typeof CITATION)[];
@@ -752,7 +753,8 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 失敗は共通の失敗のカード: 止まった段を含む 1 文目・次の操作・開いた「詳細」（#2342）。
     const failure = summary.getByTestId("run-history-failure");
     await expect(failure.getByRole("alert")).toContainText("「文書から根拠の候補を検索する」で処理が止まりました。");
-    await expect(failure).toContainText("実行 ID を添えて管理者に連絡してください");
+    await expect(failure).toContainText("管理者への連絡には実行 ID を添えてください");
+    await expect(failure).toContainText("原因の詳細は記録されていません");
     await expect(failure).toContainText("ORA-03146");
     await expect(summary.locator('[data-run-fact="errorStage"]')).toContainText("検索");
     // 技術的な詳細（処理の経過の中の処理の詳細に畳む）にも同じ名前でエラーコードを出す。
@@ -770,6 +772,34 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
     await page.goto("/history/run-missing");
     await expect(page.getByText("実行が見つかりません。")).toBeVisible();
+  });
+
+  test("詳細: 記録された失敗の原因と未記録を区別し、生の例外本文を表示しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockLocalAuth(page);
+    const cases = [
+      { diagnosis: { kind: "invalid_output", stage: "retrieval" }, expected: "必要な形式として読み取れませんでした" },
+      { diagnosis: { kind: "network", network_failure_cause: "dns" }, expected: "名前を解決できませんでした" },
+      { diagnosis: { kind: "network", network_failure_cause: "refused" }, expected: "接続を拒否されました" },
+      { diagnosis: { kind: "tls" }, expected: "TLS 接続または証明書" },
+      { diagnosis: { kind: "unknown" }, expected: "原因を特定できませんでした" },
+      { diagnosis: null, expected: "原因の詳細は記録されていません" },
+    ];
+    await mockRuns(page, cases.map((item, index) => run(index + 20, {
+      question: "合成の質問", search_answer_profile_name: "プロファイル A", citations: [], answer: null,
+      status: "error", answer_generated: false, error_type: "RuntimeError", error_stage: "retrieval",
+      // 許可されない追加項目は表示に渡さない。
+      failure_diagnosis: item.diagnosis ? { ...item.diagnosis, ...{ message: "synthetic-private-token", url: "https://synthetic.invalid/private" } } : null,
+    })));
+    for (const [index, item] of cases.entries()) {
+      await page.goto(`/history/run-${index + 20}`);
+      const failure = page.getByTestId("run-history-failure");
+      await expect(failure).toContainText(item.expected);
+      await expect(failure).toContainText("実行 ID");
+      await expect(failure).not.toContainText("synthetic-private-token");
+      await expect(failure).not.toContainText("synthetic.invalid");
+      await expectNoPageOverflow(page);
+      await failure.screenshot({ path: testInfo.outputPath(`failure-diagnosis-${index}.png`) });
+    }
   });
 
   test("詳細: 使用モデルは記録した表示名を使い同じIDを重複表示しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
