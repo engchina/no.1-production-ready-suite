@@ -3459,7 +3459,7 @@ function requestUpload<T>(
  * ファイルを取得する（Excel のテンプレートなど。#2065）。失敗は JSON の envelope を ApiError にする。
  * 認証の通知・CSRF・配信の base は requestEnvelope と同じ。ファイル名は Content-Disposition から取る。
  */
-async function requestFile(
+export async function requestFile(
   path: string,
   fallbackName: string,
   options: RequestInit = {},

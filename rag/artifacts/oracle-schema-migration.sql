@@ -4423,3 +4423,32 @@ BEGIN
     END IF;
 END;
 /
+
+-- migration: 20261105_4396_evaluation_testsets
+DECLARE
+    v_count NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_count FROM user_tables WHERE table_name = 'RAG_EVALUATION_TESTSETS';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE rag_evaluation_testsets ( '
+            || 'draft_id VARCHAR2(64) PRIMARY KEY, '
+            || 'tenant_id_hash VARCHAR2(64), '
+            || 'user_id_hash VARCHAR2(64) NOT NULL, '
+            || 'name VARCHAR2(200 CHAR) NOT NULL, '
+            || 'revision NUMBER(10) NOT NULL, '
+            || 'item_count NUMBER(10) NOT NULL, '
+            || 'confirmed_count NUMBER(10) NOT NULL, '
+            || 'draft_json JSON NOT NULL, '
+            || 'created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL, '
+            || 'updated_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL '
+            || ')';
+    END IF;
+    SELECT COUNT(*) INTO v_count FROM user_indexes WHERE index_name = 'RAG_EVALUATION_TESTSETS_OWNER_IDX';
+    IF v_count = 0 THEN
+        EXECUTE IMMEDIATE
+            'CREATE INDEX rag_evaluation_testsets_owner_idx '
+            || 'ON rag_evaluation_testsets (tenant_id_hash, user_id_hash, updated_at DESC)';
+    END IF;
+END;
+/

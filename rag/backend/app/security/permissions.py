@@ -567,6 +567,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 判定の校正（#3578）。記入（自分の判定だけ）は品質評価の権限、全員の判定・一致・裁定・校正・
     # 書き出し・取り込みは判定の校正の管理。校正の進捗・取り消しは上の job の API。
     ("GET", "/evaluation/calibration/status"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/testsets"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets/sources"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/testsets/sources/items"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets/{draft_id}"): _any(MENU_EVALUATION),
+    ("PUT", "/evaluation/testsets/{draft_id}"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets/{draft_id}/export.xlsx"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/calibration/label-sets"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/calibration/label-sets/{label_set_id}"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/calibration/label-sets/{label_set_id}/rows"): _any(MENU_EVALUATION),
@@ -593,6 +600,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         EVALUATION_CALIBRATION_MANAGE
     ),
     ("POST", "/evaluation/calibration/label-sets/{label_set_id}/calibrations"): _any(
+        EVALUATION_CALIBRATION_MANAGE
+    ),
+    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/archive"): _any(
         EVALUATION_CALIBRATION_MANAGE
     ),
     ("GET", "/evaluation/calibration/label-sets/{label_set_id}/export"): _any(
