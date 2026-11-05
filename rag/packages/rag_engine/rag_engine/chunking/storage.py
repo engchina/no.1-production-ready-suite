@@ -6,6 +6,7 @@ import hashlib
 import json
 import tempfile
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,73 @@ from rag_engine.chunking import (
 )
 from rag_engine.knowledge.classification import DocumentClassification, classification_from_metadata
 from rag_engine.knowledge.document_metadata import normalize_document_metadata
+
+
+@dataclass(frozen=True)
+class ChunkRunSourceIdentity:
+    """削除対象の照合だけに使う保存済み識別情報。本文の契約は受理しない。"""
+
+    source_run_id: str
+    chunk_run_id: str
+    source_file_name: str
+    source_file_sha256: str
+    source_page_count: int
+    source_document_id: str
+    active: bool
+
+
+class ChunkContractsError(ValueError):
+    """保存済み本文の契約を読み込めない。"""
+
+
+def _source_identity(payload: Any, path: Path) -> ChunkRunSourceIdentity:
+    message = "保存済みチャンクの識別情報を確認できません。"
+    if (
+        not isinstance(payload, dict)
+        or type(payload.get("schema_version")) is not int
+        or payload.get("schema_version") != CHUNK_SCHEMA_VERSION
+        or payload.get("strategy") != CHUNK_STRATEGY
+    ):
+        raise ValueError(message)
+    fields = ("source_run_id", "chunk_run_id", "source_file_name", "source_file_sha256", "source_document_id")
+    if any(not isinstance(payload.get(key), str) for key in fields):
+        raise ValueError(message)
+    source_run_id, chunk_run_id, name, checksum, document_id = (payload[key] for key in fields)
+    pages = payload.get("source_page_count")
+    if (
+        not RUN_ID_PATTERN.fullmatch(source_run_id)
+        or not RUN_ID_PATTERN.fullmatch(chunk_run_id)
+        or source_run_id != path.parents[2].name
+        or chunk_run_id != path.parent.name
+        or not name.strip()
+        or type(payload.get("active")) is not bool
+        or type(pages) is not int
+        or pages < 1
+        or (checksum and (len(checksum) != 64 or any(char not in "0123456789abcdef" for char in checksum)))
+        or (not checksum and not document_id.strip())
+    ):
+        raise ValueError(message)
+    return ChunkRunSourceIdentity(source_run_id, chunk_run_id, name, checksum, pages, document_id, payload["active"])
+
+
+def load_chunk_run_source_identity(output_dir: str | Path, chunk_run_id: str) -> ChunkRunSourceIdentity | None:
+    """保存runの識別情報のみを読む。重複・欠損・失配を削除対象に変換しない。"""
+    if not RUN_ID_PATTERN.fullmatch(chunk_run_id):
+        raise ValueError("保存済みチャンクの識別情報を確認できません。")
+    root = Path(output_dir).resolve()
+    paths = list(root.glob(f"*/{CHUNKS_DIRECTORY}/{chunk_run_id}/chunks.json"))
+    if len(paths) > 1:
+        raise ValueError("保存済みチャンクの識別情報が複数あります。")
+    if not paths:
+        return None
+    path = paths[0]
+    if not path.resolve().is_relative_to(root) or path.parents[2].resolve().parent != root:
+        raise ValueError("保存済みチャンクの識別情報が一致しません。")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("保存済みチャンクの識別情報を確認できません。") from exc
+    return _source_identity(payload, path)
 
 
 def create_chunk_run(
@@ -258,6 +326,7 @@ def _load_latest_chunk_run_for_source_identity(
     source_file_name: str,
 ) -> ChunkingResult | None:
     candidates: list[ChunkingResult] = []
+    incompatible_source: ChunkContractsError | None = None
     try:
         run_directories = Path(output_dir).iterdir()
     except OSError:
@@ -272,6 +341,24 @@ def _load_latest_chunk_run_for_source_identity(
             continue
         try:
             result = load_latest_chunk_run(output_dir, run_dir.name)
+        except ChunkContractsError as exc:
+            latest_path = run_dir / CHUNKS_DIRECTORY / LATEST_CHUNKS_FILE
+            try:
+                latest = json.loads(latest_path.read_text(encoding="utf-8"))
+                identity = load_chunk_run_source_identity(output_dir, _required_string(latest, "chunk_run_id"))
+            except (OSError, UnicodeError, ValueError):
+                continue
+            if (
+                identity is not None
+                and identity.active
+                and (
+                    identity.source_file_sha256 == source_sha256
+                    and identity.source_page_count == source_page_count
+                    and identity.source_file_name == source_file_name
+                )
+            ):
+                incompatible_source = exc
+            continue
         except ValueError:
             continue
         if result is None or not result.active:
@@ -283,6 +370,8 @@ def _load_latest_chunk_run_for_source_identity(
         ):
             candidates.append(result)
     if not candidates:
+        if incompatible_source is not None:
+            raise incompatible_source
         return None
     return max(candidates, key=lambda result: result.created_at_utc)
 
@@ -394,20 +483,9 @@ def _chunk_contracts() -> dict[str, Any]:
 
 
 def _validate_chunk_contracts(value: Any) -> None:
-    """現在の契約を検証し、廃止した推定情報だけが余分な旧契約も署名と現行の版を確認して読みます。"""
-    current = _chunk_contracts()
-    if value == current:
-        return
-    retired = {"inquiry_chunk_metadata_schema_version", "inquiry_profile_contract_hash"}
-    if isinstance(value, dict) and set(value) == set(current) | retired:
-        contents = {key: item for key, item in value.items() if key != "fingerprint"}
-        fingerprint = hashlib.sha256(
-            json.dumps(contents, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        if value.get("fingerprint") == fingerprint and all(value.get(key) == current[key] for key in current if key != "fingerprint"):
-            return
-    if value != current:
-        raise ValueError("対応していない chunk contracts です。再チャンキングしてください。")
+    """保存済み本文は現在の契約に完全一致する場合だけ読む。"""
+    if value != _chunk_contracts():
+        raise ChunkContractsError("対応していない chunk contracts です。再チャンキングしてください。")
 
 
 def _load_viewer_payload(output_dir: str | Path, run_id: str) -> dict[str, Any]:
