@@ -23,6 +23,7 @@ from app.rag.ingestion import IngestionPipeline
 from app.rag.ingestion_prompts import HEADING_LEVEL_PROMPT
 from app.rag.variant_keys import compute_extraction_recipe_id
 from app.schemas.extraction import DocumentElement, StructuredExtraction
+from tests.prompt_support import UneditedPromptOracle
 
 # 番号の無い見出し(番号の体系では深さを決められない)。
 HEADINGS = ["はじめに", "背景", "目的", "まとめ"]
@@ -212,7 +213,14 @@ class _FakeVlm:
 
 
 async def _attach(settings: Settings, vlm: _FakeVlm) -> StructuredExtraction:
-    pipeline = IngestionPipeline(settings=settings, vlm=cast(Any, vlm), oracle=cast(Any, object()))
+    pipeline = IngestionPipeline(
+        settings=settings,
+        vlm=cast(Any, vlm),
+        oracle=cast(
+            Any,
+            UneditedPromptOracle() if settings.rag_heading_level_inference_enabled else object(),
+        ),
+    )
     attach = IngestionPipeline._attach_heading_levels
     return await attach(pipeline, "trace", _extraction(_records(HEADINGS)))
 

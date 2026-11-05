@@ -1222,23 +1222,22 @@ class IngestionPipeline:
                 await self._safe_update_ingestion_segment(segment.segment_id, status="RUNNING")
 
     async def _image_retrieval_prompt(self) -> str | None:
-        """画面で編集した画像検索のプロンプト(Vision 用)。未編集・読込失敗は None(既定値)。"""
+        """画面で編集した画像検索のプロンプト(Vision 用)。未編集なら None(既定値)。"""
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
 
         return await self._saved_prompt(IMAGE_RETRIEVAL_PROMPT_KEY)
 
     async def _saved_prompt_snapshot(self) -> dict[str, str]:
-        """保存済み指示を一度に読み、同じ図の処理で新旧の設定を混ぜない。"""
-        if not hasattr(self._oracle, "answer_prompt_overrides"):
-            return {}
-        try:
-            return await self._oracle.answer_prompt_overrides()
-        except Exception:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で解析を続ける。
-            logger.warning("ingestion prompt load failed", exc_info=True)
-            return {}
+        """固定済みの保存指示を再利用し、未読なら読み取る。失敗は伝播する。"""
+        from rag_engine.resources.runtime import saved_prompt_overrides
+
+        saved = saved_prompt_overrides()
+        if saved is not None:
+            return saved
+        return await self._oracle.answer_prompt_overrides()
 
     async def _saved_prompt(self, key: str, fallback: str | None = None) -> str | None:
-        """各段の保存済み指示を読む。未編集・読込失敗は既定を使う。"""
+        """各段の保存済み指示を読む。正常な未編集のときだけ既定を使う。"""
         return (await self._saved_prompt_snapshot()).get(key, fallback)
 
     async def _stage_prompt(self, key: str, fallback: str) -> str:
