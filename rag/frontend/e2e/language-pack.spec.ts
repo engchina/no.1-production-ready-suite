@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "./fixtures/test";
-import { expectNoPageOverflow, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 import { t } from "../src/lib/i18n";
 
 // 言語資源（#2181）。項目の定義と組み込みの値は backend の一部（画面の確認に足りる分）。
@@ -337,14 +337,34 @@ test("公開版の履歴はサーバーのページ条件で読み、表示件�
 });
 
 
-test("差分と版未記録の件数から現在版に固定した対象一覧へ移る", { tag: "@responsive" }, async ({ page }) => {
-  await mockLanguagePack(page); await page.goto("/settings/language-pack");
-  const links = page.getByRole("link", { name: "対象文書を確認する" });
-  await expect(links.nth(0)).toHaveAttribute("href", "/file-list?language_pack_relation=different&current_release_id=v2");
-  await expect(links.nth(1)).toHaveAttribute("href", "/file-list?language_pack_relation=unrecorded&current_release_id=v2");
-  await expect(page.getByText("使用版が未記録の文書 2 件")).toBeVisible();
-  await expectNoPageOverflow(page);
-});
+for (const [index, relation] of ["different", "unrecorded"].entries()) {
+  test(`差分と版未記録の件数から現在版に固定した対象一覧へ移る (${relation})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const basePath = (process.env.RAG_E2E_BASE_PATH ?? "").replace(/\/$/, "");
+    const requests: URL[] = [];
+    await mockLanguagePack(page);
+    await mockDatabaseReady(page);
+    await page.route("**/api/knowledge-bases**", route => route.fulfill({ json: envelope({items: [], total: 0, limit: 100, offset: 0, has_next: false}) }));
+    await page.route("**/api/documents?*", route => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      const item = { id: `doc-${relation}`, file_name: `synthetic-${relation}.txt`, status: "INDEXED", category_name: null, content_type: "text/plain", file_size_bytes: 100, content_sha256: "a".repeat(64), duplicate_of_document_id: null, uploaded_at: "2026-10-17T09:00:00Z", indexed_at: "2026-10-17T09:00:00Z", knowledge_bases: [], source_profile: null };
+      return route.fulfill({json: envelope({items: [item], total: 1, limit: Number(url.searchParams.get("limit")), offset: 0, has_next: false})});
+    });
+    await page.goto(`${basePath}/settings/language-pack`);
+    const links = page.getByRole("link", { name: "対象文書を確認する" });
+    await expect(links).toHaveCount(2);
+    await expect(links.nth(index)).toHaveAttribute("href", `${basePath}/file-list?language_pack_relation=${relation}&current_release_id=v2`);
+    await expect(page.getByText("使用版が未記録の文書 2 件")).toBeVisible();
+    await links.nth(index).click();
+    const expected = `${basePath}/file-list?language_pack_relation=${relation}&current_release_id=v2`;
+    await expect.poll(() => { const url = new URL(page.url()); return url.pathname + url.search; }).toBe(expected);
+    await expect.poll(() => requests.some(url => url.pathname === `${basePath}/api/documents` && url.searchParams.get("language_pack_relation") === relation && url.searchParams.get("current_release_id") === "v2")).toBe(true);
+    await expect(page.getByRole("link", {name: `synthetic-${relation}.txt`, exact: true})).toBeVisible();
+    await expectNoPageOverflow(page);
+    await page.screenshot({path: testInfo.outputPath(`language-target-${relation}.png`), fullPage: true});
+  });
+}
+
 
 
 test("草稿の競合後は変更の破棄を確認して最新の草稿を読み、古い内容を新revisionで再送しない", { tag: "@responsive" }, async ({ page }) => {

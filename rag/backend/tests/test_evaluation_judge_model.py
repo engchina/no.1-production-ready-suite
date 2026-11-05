@@ -253,7 +253,9 @@ def _fake_evaluation_llm(calls: list[LlmCall]) -> Callable[..., Any]:
                 }
             )
         if schema is ClaimJudgement:
-            return ClaimJudgement(reason="手順の確認の案内", status="data_confirmation")
+            return ClaimJudgement(
+                reason="手順の確認の案内", claim_kind="ordinary", status="data_confirmation"
+            )
         raise AssertionError(f"unexpected schema: {schema.__name__}")
 
     return fake

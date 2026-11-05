@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +27,34 @@ from app.schemas.search import SearchMode
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
+
+
+def test_count_only_has_the_same_filters_without_loading_statistics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    async def count(**filters: Any) -> int:
+        calls.append(filters)
+        return 7
+
+    monkeypatch.setattr(
+        knowledge_bases_route, "OracleClient", lambda: SimpleNamespace(count_knowledge_bases=count)
+    )
+    response = client.get("/api/knowledge-bases/count?status=ACTIVE&q=synthetic&ids=kb-a")
+    assert response.status_code == 200
+    assert response.json()["data"] == 7
+    assert calls == [
+        {"status": KnowledgeBaseStatus.ACTIVE, "query": "synthetic", "knowledge_base_ids": ["kb-a"]}
+    ]
+
+
+def test_count_only_uses_the_list_read_permission() -> None:
+    from app.security.permissions import permission_for_route
+
+    assert permission_for_route("GET", "/knowledge-bases/count") == permission_for_route(
+        "GET", "/knowledge-bases"
+    )
 
 
 class FakeKnowledgeBaseOracle:

@@ -20,6 +20,7 @@ import {
 import { FlaskConical, Languages, RotateCcw, Save } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { ApiErrorState } from "@/components/StateViews";
 import { LanguagePackFieldsPanel, useLanguagePackPanelState } from "@/components/settings/LanguagePackFieldsPanel";
@@ -134,11 +135,11 @@ export function LanguagePackSettingsClient() {
       {data.current_release ? <div className="space-y-3">
         {data.outdated_documents ? <Banner severity="warning" title={t("settings.language.release.differentCount", { count: data.outdated_documents })}>
           <p>{t("settings.language.release.differentHelp")}</p>
-          <ButtonLink className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=different&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
+          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=different&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
         </Banner> : null}
         {data.unrecorded_documents ? <Banner severity="info" title={t("settings.language.release.unrecordedCount", { count: data.unrecorded_documents })}>
           <p>{t("settings.language.release.unrecordedHelp")}</p>
-          <ButtonLink className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=unrecorded&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
+          <ButtonLink linkComponent={Link} className="mt-3" variant="secondary" to={`${APP_ROUTES.fileList}?language_pack_relation=unrecorded&current_release_id=${encodeURIComponent(data.current_release.id)}`}>{t("settings.language.release.documents")}</ButtonLink>
         </Banner> : null}
       </div> : null}
       <Card>

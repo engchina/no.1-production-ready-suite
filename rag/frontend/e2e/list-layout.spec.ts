@@ -40,6 +40,10 @@ async function mockPagedList<T>(
 ) {
   await page.route(pattern, async (route) => {
     const url = new URL(route.request().url());
+    if (route.request().method() === "GET" && url.pathname === `${path}/count`) {
+      await route.fulfill(envelope(items.length + archived.length));
+      return;
+    }
     if (route.request().method() !== "GET" || url.pathname !== path) {
       await route.fallback();
       return;

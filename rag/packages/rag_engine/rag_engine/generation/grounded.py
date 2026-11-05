@@ -472,6 +472,7 @@ AUDIT_SYSTEM_PROMPT = (
         "rted（末尾で留保していても同じ）。summary が同じ保証をし"
         "ていれば summary_supported=false。\n"
         "### applications（当てはめ）\n"
+        "- documents は生成へ渡した原文を文書と版ごとにまとめたもの。選択引用の外にある条件・未確定の行・分類規則も確認する。引用抜粋だけで未確認条件を不成立や0とみなさず、必要な規則を確認できなければ valid=false。\n"
         "- valid=true は、item_indexes の items の原文の事実・規則から reasoning と result を導ける場合だけ。"
         "premises を使う場合は質問の事実に限る。資料だけで導く場合は空でよい。"
         "計算・条件・期間・日付の数え方と結果を確かめる。\n"
@@ -4092,6 +4093,7 @@ class CitationView:
     view_sha256: str
     # 描画から導く送信用の文字列。原文・引用単位・hashで版を比較し、派生値は比較しない。
     model_rendered: str = field(default="", compare=False)
+    group_heading: str = field(default="", compare=False)
     present_in_prompt: bool | None = field(default=None, compare=False)
     # 引用先は表示時の全文・属性へ結び、後続の可変辞書から作り直さない。
     span_json: str = field(default="", compare=False)
@@ -4577,15 +4579,9 @@ def _rendered_evidence_span(
     """
     text = str(span.get("text") or "")
     if span.get("document_background_only"):
-        truncated = (span.get("background_ref") or {}).get("truncated")
-        completeness = (
-            "保存時に欠落のある旧記録"
-            if truncated is True
-            else "完全性が記録されていない旧記録"
-            if truncated is not False
-            else "原文の補助情報"
-        )
-        return f"文書の先頭ページ背景（{completeness}・Chunkの引用対象外、参照 {span['source_id']}）\n" + text
+        from rag_engine.generation.document_background import background_label
+
+        return background_label(span) + "\n" + text
     selected_units = tuple(units if units is not None else citation_units(text, image_text=_image_text(span)))
     snapshot = EvidenceUnitSnapshot.create(span, selected_units, CITATION_UNIT_CONTRACT)
     if numbered is True or numbered is None and _numbered(text, selected_units):
@@ -4664,14 +4660,19 @@ def format_functions(spans: Sequence[dict], *, model_view: bool = False) -> str:
     ordered = order_document_spans(spans)
     groups = [list(members) for _, members in groupby(ordered, key=lambda span: (document_key(span), span["function"]))]
     blocks = []
+    group_headings = {}
     for number, members in enumerate(groups, 1):
         header = f"=== 機能 F{number}: {_function_label(members[0])} ==="
+        shown_header = fold_width(header) if model_view else header
+        for member in members:
+            group_headings[id(displayed_views[id(member)])] = shown_header
         # 文書の補助情報は原文照合の対象外。表示IDの行より前に置くと直前の Evidence の本文に見え、
         # そこからの引用は「原文と一致しない」として削除されるため、IDの後ろに範囲を明示して置く。
         body = "\n\n".join(
             displayed_views[id(span)].model_rendered if model_view else displayed_views[id(span)].rendered for span in members
         )
         blocks.append((fold_width(header) if model_view else header) + "\n" + body)
+    _CITATION_VIEWS.set({key: (span, replace(view, group_heading=group_headings[id(view)])) for key, (span, view) in snapshots.items()})
     return "\n\n".join(blocks)
 
 
@@ -6767,6 +6768,7 @@ def run_round(
             "contract_version": view.contract_version,
             "provenance": json.loads(view.provenance_json),
             "prompt_block": prompt_block,
+            "group_heading": view.group_heading,
             "prompt_block_sha256": hashlib.sha256(prompt_block.encode()).hexdigest() if prompt_block is not None else None,
             "view_sha256": view.view_sha256,
             "present_in_prompt": prompt_block is not None,
@@ -6794,6 +6796,7 @@ def run_round(
         "image_payload_capture": "not_recorded" if image_paths else "not_applicable",
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "evidence": input_rows,
+        "expected_evidence_count": len(spans),
         "snapshot_status": "partial"
         if input_views and (unrecorded_input_ids or any(not row["present_in_prompt"] for row in input_rows))
         else "recorded"
@@ -7138,26 +7141,6 @@ def run_round(
         draft.applications,
         {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
     )
-    from rag_engine.generation.answer_parts import check_answer_parts
-
-    timing["answer_parts"] = check_answer_parts(
-        draft,
-        {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
-        applications,
-        {unit["id"] for unit in answer_requirements(question) if unit.get("kind") != "context"},
-    )
-    for part in timing["answer_parts"]["parts"]:
-        if part["status"] == "missing":
-            checked.append(
-                CheckedItem(
-                    GroundedItem(
-                        kind="gap",
-                        request_id=part["request_id"],
-                        text=answer_labels().missing_request_template.replace("{text}", part["text"]),
-                    ),
-                    added=True,
-                )
-            )
     # 撤回の候補 = 前の round で支持済みだった主張のうち、当該 round の監査の前に公開できる状態にあるもの（引き継いだ
     # item、または草稿が同じ引用・同じ説明で再掲した item）。前の round で既に降格していた item は数えない。
     previous_verified = [p for p in previous if p.span and p.published]
@@ -7174,6 +7157,7 @@ def run_round(
             )
         )
     }
+    application_audit = None
     audit, audit_calls, audit_cut = None, 0, False
     audit_fallback = None
     duplicate_request_ids: tuple[str, ...] = ()
@@ -7220,7 +7204,10 @@ def run_round(
         if guide_task_scope:
             question_contract["original_question"] = question
         effective_contract = compile_guide_task_contract(question_contract, guide_task_scope)
+        from rag_engine.generation.application_review import application_documents
+
         inputs = {
+            "documents": application_documents(spans),
             "question": effective_contract.get("current_request", question) if guide_task_scope else question,
             **({"original_question": question} if guide_task_scope else {}),
             "task_contract": effective_contract,
@@ -7416,6 +7403,7 @@ def run_round(
                 "audit": audit.model_dump(mode="json"),
                 "contract": dict(audit._wire_validation),
                 "adopted": False,
+                "application_review_policy": "withhold_unconfirmed_derivations",
                 "attempts": timing.pop("semantic_audit_attempts", []),
             }
             observed_reviews = {review.index: review for review in audit.reviews}
@@ -7430,7 +7418,44 @@ def run_round(
                     "applicability_action": "record_only",
                     "semantic_audit_policy": observation_policy(),
                 }
+            application_audit = audit
             audit = unverified_projection(audit)
+    from rag_engine.generation.application_review import review_applications
+
+    timing["application_review"] = (
+        review_applications(
+            question,
+            applications,
+            evidence_spans=spans,
+            existing_audit=application_audit,
+            audit_requested=True,
+            parse_text=parse_text,
+            settings=audit_settings,
+            provider_id=provider_id,
+        )
+        if audit_mode != AUDIT_MODE_NONE
+        else {"status": "deferred", "calls": 0}
+    )
+    from rag_engine.generation.answer_parts import check_answer_parts
+
+    timing["answer_parts"] = check_answer_parts(
+        draft,
+        {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
+        applications,
+        {unit["id"] for unit in answer_requirements(question) if unit.get("kind") != "context"},
+    )
+    for part in timing["answer_parts"]["parts"]:
+        if part["status"] == "missing":
+            checked.append(
+                CheckedItem(
+                    GroundedItem(
+                        kind="gap",
+                        request_id=part["request_id"],
+                        text=answer_labels().missing_request_template.replace("{text}", part["text"]),
+                    ),
+                    added=True,
+                )
+            )
     procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
     timing["procedure_quotes"] = {
         "original": sum(e.span is not None and quote_in_text(e.item.text, e.span["text"]) for e in procedures),
@@ -7510,6 +7535,9 @@ def run_round(
     )
     if summary_absent:
         summary_reason = summary_reason or f"質問と引いた原文に無い年を要約が述べている: {'、'.join(summary_absent)}"
+    withheld_applications = {index for index, entry in enumerate(applications) if not entry.published}
+    if withheld_applications and (not draft._composed_summary or withheld_applications.intersection(draft.summary_application_indexes)):
+        summary_reason = summary_reason or "推導の条件と結論を確認できないため摘要を保留"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (

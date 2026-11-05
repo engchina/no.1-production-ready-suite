@@ -3587,6 +3587,53 @@ def synthesize_grounded_answer(
                 "rounds": [{"round": index + 1, "accepted": row["accepted"]} for index, row in enumerate(rounds)],
             }
         )
+    if audit_mode == grounded.AUDIT_MODE_NONE:
+        from rag_engine.generation.answer_parts import check_answer_parts
+        from rag_engine.generation.application_review import review_applications
+
+        with _execution_step(
+            "資料をもとに導いた結論を確認する", "選択した原文と質問の条件から、その結論が導けるかを確認します。"
+        ) as review_step:
+            review_step.input({"question": question, "applications": [entry.to_payload() for entry in current.applications]})
+            diagnostic = review_applications(
+                question,
+                current.applications,
+                evidence_spans=spans,
+                existing_audit=None,
+                audit_requested=False,
+                parse_text=parse_text_response,
+                settings=audit_settings,
+                provider_id=provider,
+            )
+            current.timing["application_review"] = diagnostic
+            review_step.output(diagnostic)
+            if diagnostic["status"] == "not_applicable":
+                review_step.skip("確認対象の導出結論がありません。", reason_code="no_derivations")
+            elif diagnostic.get("error_type"):
+                review_step.fail("確認を完了できなかったため、未確認の結論を保留します。", reason_code="application_review_failed")
+            else:
+                review_step.result(
+                    f"導出結論 {len(current.applications)} 件、公開 {sum(entry.published for entry in current.applications)} 件"
+                )
+        current.timing["answer_parts"] = check_answer_parts(
+            current.draft,
+            {entry.draft_index: entry for entry in current.checked if entry.draft_index is not None and not entry.carried},
+            current.applications,
+            {unit["id"] for unit in current.requests if unit.get("kind") != "context"},
+        )
+        for part in current.timing["answer_parts"]["parts"]:
+            text = grounded.answer_labels().missing_request_template.replace("{text}", part["text"])
+            if part["status"] == "missing" and not any(entry.item.kind == "gap" and entry.item.text == text for entry in current.checked):
+                current.checked.append(grounded.CheckedItem(GroundedItem(kind="gap", request_id=part["request_id"], text=text), added=True))
+        withheld = {index for index, entry in enumerate(current.applications) if not entry.published}
+        if withheld and (not current.draft._composed_summary or withheld.intersection(current.draft.summary_application_indexes)):
+            current = replace(
+                current,
+                summary=grounded.answer_labels().neutral_summary,
+                summary_warning="",
+                summary_reason="推導の条件と結論を確認できないため摘要を保留",
+            )
+        rounds[best_number] = {**rounds[best_number], **current.trace()}
     unread_sections = best_unread_sections
     # 採用した回の根拠で決まる項目の種類と業務ガイドの条件（#2404）と、その条件の手順の計画（#2689）。
     field_kinds = form_field_kinds.question_field_kinds(question, context)
@@ -3637,6 +3684,7 @@ def synthesize_grounded_answer(
                 question,
                 current.checked,
                 current.requests,
+                evidence_spans=spans,
                 parse_text=parse_text_response,
                 settings=generation_settings,
                 audit_settings=audit_settings,
@@ -3908,7 +3956,10 @@ def synthesize_grounded_answer(
     unverified = any(e.item.applies == "unverified" for e in unsettled)
     # 印・外した段落の数（#2738。評価と比較に使う）。
     mark_counts = passage_marks.mark_counts(passage_record)
+    from rag_engine.generation.provided_scope import capture_provided_scope
+
     trace: dict[str, Any] = {
+        "provided_evidence_scope": capture_provided_scope(current.citation_trace),
         "pipeline": "grounded",
         **({"crag_assessment": crag_view, "crag_partial_projection": crag_projection} if crag_view is not None else {}),
         "audit_mode": audit_mode,
@@ -3933,7 +3984,12 @@ def synthesize_grounded_answer(
             if generation_failure
             else {}
         ),
-        "llm_calls": sum(r.get("timing", {}).get("generation_calls", 1) + r.get("audit_calls", int(bool(r.get("audit")))) for r in rounds),
+        "llm_calls": sum(
+            r.get("timing", {}).get("generation_calls", 1)
+            + r.get("audit_calls", int(bool(r.get("audit"))))
+            + r.get("timing", {}).get("application_review", {}).get("calls", 0)
+            for r in rounds
+        ),
         "image_fallback": image_decision,
         "final_fact_count": len(published),
         "procedure_quotes": dict(current.timing.get("procedure_quotes") or {}),

@@ -52,7 +52,7 @@ async function mockApi(page: Page) {
     route.fulfill({ json: { data: null, error_messages: [], warning_messages: [] } })
   );
   await mockDatabaseReady(page);
-  await page.route("**/api/knowledge-bases**", (route) => route.fulfill({ json: page1([KNOWLEDGE_BASE]) }));
+  await page.route("**/api/knowledge-bases**", (route) => route.fulfill({ json: new URL(route.request().url()).pathname === "/api/knowledge-bases/count" ? { data: 1, error_messages: [], warning_messages: [] } : page1([KNOWLEDGE_BASE]) }));
   await page.route("**/api/search-answer-profiles**", (route) => route.fulfill({ json: page1([SEARCH_ANSWER_PROFILE]) }));
 }
 

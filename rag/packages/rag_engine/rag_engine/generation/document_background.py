@@ -17,6 +17,19 @@ from rag_engine.retrieval.metadata_context import document_context_key
 BACKGROUND_ONLY = "document_background_only"
 
 
+def background_label(span: Mapping[str, Any]) -> str:
+    """生成と校正で背景の役割・保存時の完全性を同じ表記にする。"""
+    truncated = (span.get("background_ref") or {}).get("truncated")
+    completeness = (
+        "保存時に欠落のある旧記録"
+        if truncated is True
+        else "完全性が記録されていない旧記録"
+        if truncated is not False
+        else "原文の補助情報"
+    )
+    return f"文書の先頭ページ背景（{completeness}・Chunkの引用対象外、参照 {span['source_id']}）"
+
+
 def without_embedded_background(context: AnswerContext) -> AnswerContext:
     """文字予算で切られる補助metadataから先頭頁を外し、生成専用入力に集約する。"""
     copies: dict[int, AnswerRecord] = {}

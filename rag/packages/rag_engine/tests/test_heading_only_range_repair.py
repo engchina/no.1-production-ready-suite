@@ -16,7 +16,7 @@ from rag_engine.generation import answering, grounded
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.citation_range_repair import CitationRangeRepair
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import GroundedDraft
+from rag_engine.models.llm import ApplicationAudit, GroundedDraft
 
 QUESTION = "対象を選択して確定する方法は？"
 HEADING = "合成手続の場合"
@@ -256,6 +256,8 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
         calls.append(schema.__name__)
+        if schema is ApplicationAudit:
+            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の修復原文対応"}], summary_supported=True)
         if issubclass(schema, generation_draft_wire_model()):
             return generated_output(schema, prompt, text=CLAIM)
         assert issubclass(schema, CitationRangeRepair)
@@ -266,7 +268,7 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
         result = answering.synthesize_grounded_answer(
             QUESTION, AnswerContext(records=[record], text=TEXT), config, image_prompt_mode="text_only"
         )
-    assert calls == ["GroundedDraftWire", "CitationRangeRepair"]
+    assert calls == ["GroundedDraftWire", "CitationRangeRepair", "ApplicationAudit"]
     rounds = result.response.generation_trace["rounds"]
     assert [round_["accepted"] for round_ in rounds] == [True, True]
     assert rounds[1]["timing"]["citation_range_repair"]["status"] == "completed"
