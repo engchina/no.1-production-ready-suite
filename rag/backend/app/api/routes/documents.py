@@ -30,10 +30,15 @@ from fastapi import (
 )
 from pr_backend_core.api import OffsetParams, offset_params, paginate
 from pr_backend_core.oracle_errors import oracle_error_codes
+from pydantic import ValidationError
 from rag_parser_core.structured_records import RecordBoundaryError, record_boundary_plain_text
 from rag_parser_core.text_encoding import detect_text_match
 
-from app.api.errors import DocumentFileMissingError, SourceVersionStaleError
+from app.api.errors import (
+    DocumentFileMissingError,
+    DocumentRecipeConfigInvalidError,
+    SourceVersionStaleError,
+)
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
 from app.clients.extraction_revision_store import max_extraction_revisions
 from app.clients.object_storage import ObjectStorageClient, describe_upload_storage_error
@@ -1280,7 +1285,21 @@ async def _document_recipe_view(
     document_jobs: Sequence[IngestionJob] | None = None,
     queue_positions: Mapping[str, int] | None = None,
 ) -> DocumentRecipeView:
-    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+    try:
+        raw_config = row.get("processing_config")
+        config = DocumentProcessingConfig.model_validate({} if raw_config is None else raw_config)
+    except ValidationError as exc:
+        # 不明な追加キーや保存値は返さず、現行 schema に存在する先頭フィールドだけを案内する。
+        fields = tuple(
+            dict.fromkeys(
+                str(error["loc"][0])
+                for error in exc.errors(
+                    include_input=False, include_context=False, include_url=False
+                )
+                if error["loc"] and error["loc"][0] in DocumentProcessingConfig.model_fields
+            )
+        )
+        raise DocumentRecipeConfigInvalidError(fields) from exc
     recipe_settings, effective = _merge_document_processing_config(config)
     recipe_id = str(row["recipe_id"])
     all_jobs = (
