@@ -258,7 +258,7 @@ export function DocumentExtraction({
                 }
                 onSelect={onElementSelect}
                 visionDetails={layoutVisionDetails(extraction, elementKey(element))}
-                cropUrl={documentId ? elementCropUrl(documentId, element) : null}
+                cropUrl={documentId && recipeId && extractionRevision ? elementCropUrl(documentId, recipeId, extractionRevision, element) : null}
                 originalSource={(element.source_parser === "xml_tree_json" || typeof element.metadata?.xml_tree_unit_kind === "string") && documentId && recipeId && extractionRevision && elementKey(element) === selectedElementId
                   ? <OriginalSourcePanel key={`${recipeId}:${extractionRevision}:${elementKey(element)}`} readingKey={`${documentId}:${recipeId}`} elementId={elementKey(element)} revision={extractionRevision} loadWindow={loadOriginal} /> : null}
               />

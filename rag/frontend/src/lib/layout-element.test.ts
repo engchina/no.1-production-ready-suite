@@ -65,7 +65,7 @@ describe("layoutVisionDetails", () => {
 
 describe("elementCropUrl", () => {
   it("bbox とページ寸法から crop API の URL を作る", () => {
-    const url = elementCropUrl("doc 1", {
+    const url = elementCropUrl("doc 1", "recipe 1", "extraction-old", {
       kind: "figure",
       text: "",
       order: 0,
@@ -74,13 +74,13 @@ describe("elementCropUrl", () => {
       metadata: { page_width: 1000, page_height: 1400 },
     } as DocumentElement);
     expect(url).toBe(
-      "/api/documents/doc%201/crop?page=2&x0=10&y0=20&x1=110&y1=70&page_width=1000&page_height=1400"
+      "/api/documents/doc%201/recipes/recipe%201/crop?revision=extraction-old&page=2&x0=10&y0=20&x1=110&y1=70&page_width=1000&page_height=1400"
     );
   });
 
   it("位置情報が足りなければ null", () => {
     expect(
-      elementCropUrl("doc-1", { kind: "figure", text: "", order: 0 } as DocumentElement)
+      elementCropUrl("doc-1", "recipe-1", "extraction-1", { kind: "figure", text: "", order: 0 } as DocumentElement)
     ).toBeNull();
   });
 });

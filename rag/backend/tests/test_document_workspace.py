@@ -792,6 +792,15 @@ def _seed_recipe(
     return recipe_id
 
 
+def _install_default_recipe_reader(
+    fake: FakeWorkspaceOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def default_recipe(_document_id: str) -> dict[str, object]:
+        return fake.recipes["recipe-1"]
+
+    monkeypatch.setattr(fake, "ensure_default_document_recipe", default_recipe, raising=False)
+
+
 def _upload(file_name: str, body: bytes, content_type: str) -> str:
     resp = client.post(
         "/api/documents/upload",
@@ -2308,6 +2317,7 @@ def test_preprocess_reprocess_clears_prepared_artifact_and_outputs(
 
 def test_extract_reprocess_keeps_existing_prepared_artifact(
     fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """EXTRACT の再投入は保存済みの処理後ファイルの情報を消さない。"""
     document_id = _upload("policy.txt", b"original-body", "text/plain")
@@ -2337,6 +2347,13 @@ def test_extract_reprocess_keeps_existing_prepared_artifact(
         }
     )
 
+    _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=artifact,
+    )
+    _install_default_recipe_reader(fake_document_dependencies, monkeypatch)
     resp = client.post(
         f"/api/documents/{document_id}/ingestion-jobs",
         params={"force": "true", "phase": "EXTRACT"},
@@ -2348,10 +2365,14 @@ def test_extract_reprocess_keeps_existing_prepared_artifact(
     assert fake_document_dependencies.documents[document_id].preprocess_artifact == artifact
 
 
-def test_extract_reprocess_requires_prepared_artifact() -> None:
+def test_extract_reprocess_requires_prepared_artifact(
+    fake_document_dependencies: FakeWorkspaceOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """処理後ファイルが欠けている EXTRACT 再処理は原本へ黙って戻らない。"""
     document_id = _upload("policy.txt", b"original-body", "text/plain")
 
+    _seed_recipe(fake_document_dependencies, document_id, status=FileStatus.UPLOADED)
+    _install_default_recipe_reader(fake_document_dependencies, monkeypatch)
     resp = client.post(
         f"/api/documents/{document_id}/ingestion-jobs",
         params={"force": "true", "phase": "EXTRACT"},
@@ -4394,3 +4415,38 @@ def test_first_ingest_without_served_output_still_resets_outputs(
 
     assert resp.status_code == 200
     assert reset_calls == [document_id]
+
+
+def test_document_extract_accepts_default_recipe_prepared_file_without_document_copy(
+    fake_document_dependencies: FakeWorkspaceOracle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """既定レシピに変換成果物があれば、文書の旧列が空でもEXTRACTを受け付ける。"""
+    document_id = _upload("synthetic.txt", b"original", "text/plain")
+    detail = fake_document_dependencies.documents[document_id]
+    fake_document_dependencies.documents[document_id] = detail.model_copy(
+        update={"status": FileStatus.PREPROCESSED}
+    )
+    _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.PREPROCESSED,
+        preprocess_artifact=DocumentPreprocessArtifact(
+            derivation_id="synthetic-derived",
+            profile="text_normalize",
+            converted=True,
+            object_storage_path="synthetic/prepared.txt",
+            content_type="text/plain",
+            file_name="prepared.txt",
+        ),
+    )
+
+    async def default_recipe(_document_id: str) -> dict[str, object]:
+        return fake_document_dependencies.recipes["recipe-1"]
+
+    monkeypatch.setattr(
+        fake_document_dependencies, "ensure_default_document_recipe", default_recipe, raising=False
+    )
+    monkeypatch.setattr(documents_route, "_dispatch_ingestion_job", lambda _job_id, **_kwargs: None)
+    response = client.post(f"/api/documents/{document_id}/ingestion-jobs?phase=EXTRACT")
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["phase"] == "EXTRACT"
