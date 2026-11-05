@@ -14,6 +14,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 
+from rag_parser_core.image_purpose import IMAGE_PURPOSE_METADATA_KEY, ImagePurpose
+
 from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT, _image_retrieval_template, _render_prompt, describe_picture
 from rag_engine.config import Settings, get_llm_provider, llm_output_token_limit
 from rag_engine.models.layout import LayoutRecord, PageImage
@@ -494,6 +496,7 @@ def describe_layout_pictures(
     prompt_template: str | None = None,
     cancel_check: Callable[[], None] | None = None,
     progress_callback: Callable[[dict], None] | None = None,
+    image_purpose: ImagePurpose | None = None,
 ) -> VisionDescriptionStats:
     """``engine`` の LayoutRecord の Picture と画像入り Table を ``describer`` で読み取る。
 
@@ -515,6 +518,7 @@ def describe_layout_pictures(
             prompt_template=prompt_template,
             cancel_check=cancel_check,
             progress_callback=progress_callback,
+            image_purpose=image_purpose,
         )
 
 
@@ -530,6 +534,7 @@ def _describe_layout_pictures(
     prompt_template: str | None = None,
     cancel_check: Callable[[], None] | None = None,
     progress_callback: Callable[[dict], None] | None = None,
+    image_purpose: ImagePurpose | None = None,
 ) -> VisionDescriptionStats:
     """Picture と未抽出画像を含む Table に Vision 説明を追加します。
 
@@ -547,7 +552,7 @@ def _describe_layout_pictures(
             }
         )
     )
-    ledger = VisionCheckpoints(run_dir / engine / "vision", source_hash, listener=progress_callback)
+    ledger = VisionCheckpoints(run_dir / engine / "vision", source_hash, listener=progress_callback, image_purpose=image_purpose)
     vlm_targets: list[LayoutRecord] = []
     for record in records:
         if not (record.engine == engine and record.category == "Picture" and record.raw_type == "picture" and not record.text.strip()):
@@ -615,6 +620,8 @@ def _describe_layout_pictures(
     def prepare(work: _VisionWork) -> bool:
         """入力画像・prompt・checkpoint の key を作る。Vision の呼び出しが要るなら True。"""
         record = work.record
+        if image_purpose is not None:
+            record.raw[IMAGE_PURPOSE_METADATA_KEY] = image_purpose
         work.provider = describer.provider()
         page = page_lookup.get(record.page)
         if page is None:
@@ -638,6 +645,8 @@ def _describe_layout_pictures(
             records=records,
             pdf_path=pdf_path,
         )
+        if image_purpose is not None:
+            metadata[IMAGE_PURPOSE_METADATA_KEY] = image_purpose
         if record.category == "Table":
             metadata["existing_table_html"] = record.text
             metadata["missing_picture_regions"] = record.raw["table_missing_picture_regions"]

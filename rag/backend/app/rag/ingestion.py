@@ -618,7 +618,8 @@ class IngestionPipeline:
         recipe_revision: int | None = None,
         build_id: str | None = None,
     ) -> None:
-        self._settings = settings or get_settings()
+        # 実行中に全体の既定が保存されても、この解析の用途・IDを変えない。
+        self._settings = (settings or get_settings()).model_copy()
         self._recipe_id = recipe_id
         self._recipe_revision = recipe_revision
         # 再構築の識別子（job と試行）。検索に出している版の抽出を上書きしないために使う（#4115）。
@@ -2912,6 +2913,13 @@ class IngestionPipeline:
         その応答は作業ディレクトリの checkpoint に残り、全体の読み取り(``segment`` なし)はそれを
         使うため、同じ図の VLM を呼び直さない。``stop`` は先読みを途中で止める印。
         """
+        from app.rag.vision import stamp_image_purpose
+
+        extraction = stamp_image_purpose(
+            extraction,
+            self._settings.rag_vision_image_purpose,
+            source_is_image=content_type.split(";", 1)[0].strip().startswith("image/"),
+        )
         if not self._settings.rag_vision_enabled:
             return extraction
         from rag_engine.knowledge.prompt_files import IMAGE_RETRIEVAL_PROMPT_KEY
@@ -2985,6 +2993,7 @@ class IngestionPipeline:
                     parser_backend=parser_backend,
                     describer=describer,
                     prompt_template=template,
+                    image_purpose=self._settings.rag_vision_image_purpose,
                     cancel_check=(
                         cancel_check if cancel_checker is not None or stop is not None else None
                     ),

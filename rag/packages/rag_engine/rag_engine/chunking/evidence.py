@@ -6,6 +6,8 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.image_purpose import recorded_image_purpose
+
 from rag_engine.chunking.constants import FORM_VISUAL_RAW_TYPES, _bool_value, _int_value, _preview
 from rag_engine.chunking.records import (
     _bbox_contains,
@@ -40,6 +42,7 @@ def _source_record_ref(record: dict[str, Any]) -> dict[str, Any]:
         "vision_input_mode",
         "vision_provider",
         "vision_model",
+        "vision_image_purpose",
         "vision_error",
         "visual_artifact_type",
         "visual_kind",
@@ -116,6 +119,7 @@ def _image_evidence(
                 "vision_input_mode": str(ref.get("vision_input_mode") or ""),
                 "vision_provider": str(ref.get("vision_provider") or ""),
                 "vision_model": str(ref.get("vision_model") or ""),
+                "vision_image_purpose": recorded_image_purpose(ref),
                 "vision_error": str(ref.get("vision_error") or ""),
                 "visual_kind": str(ref.get("visual_kind") or ref.get("picture_kind") or ref.get("visual_artifact_type") or ""),
                 "visual_structure": (dict(ref.get("visual_structure")) if isinstance(ref.get("visual_structure"), dict) else {}),

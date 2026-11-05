@@ -192,6 +192,7 @@ BBOX_UNIT_KEYS = ("bbox_unit", "coordinate_unit")
 # 同じ key で chunk に引き継ぎ、由来の違う要素を 1 つの chunk に結合しない（#2590。章節の本文・
 # 引用の根拠は ``rag_parser_core.extraction.is_derived_content`` で派生を除く）。
 ELEMENT_PROVENANCE_METADATA_KEYS: tuple[str, ...] = (
+    "vision_image_purpose",
     NAV_SUMMARY_KEY,
     "html_region_role",
     "section_id",

@@ -1198,6 +1198,7 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
         source_routes=route_data,
         backend_source_kind_matrix=_parser_adapter_backend_source_matrix(route_data),
         capabilities=_parser_backend_capabilities_data(),
+        vision_image_purpose=settings.rag_vision_image_purpose,
         vision_enabled=settings.rag_vision_enabled,
         heading_level_inference_enabled=settings.rag_heading_level_inference_enabled,
         field_extraction_enabled=settings.rag_field_extraction_enabled,
@@ -1212,9 +1213,9 @@ def _parser_adapter_settings_data(settings: Settings) -> ParserAdapterSettingsDa
 
 def _post_parse_settings_updates(
     payload: ParserAdapterSettingsUpdate,
-) -> dict[str, bool | int]:
+) -> dict[str, bool | int | str]:
     """「解析後の処理」の更新（Settings の属性名 → 値）。省略・null の項目は変えない。"""
-    updates: dict[str, bool | int] = {}
+    updates: dict[str, bool | int | str] = {}
     for name in POST_PARSE_SETTING_FIELDS:
         value = getattr(payload, name)
         if value is not None:
@@ -1228,6 +1229,7 @@ def _persist_post_parse_settings(settings: Settings) -> None:
         BACKEND_ENV_FILE,
         {
             "RAG_VISION_ENABLED": _format_env_bool(settings.rag_vision_enabled),
+            "RAG_VISION_IMAGE_PURPOSE": settings.rag_vision_image_purpose,
             "RAG_HEADING_LEVEL_INFERENCE_ENABLED": _format_env_bool(
                 settings.rag_heading_level_inference_enabled
             ),

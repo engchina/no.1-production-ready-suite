@@ -848,7 +848,10 @@ async def test_ingestion_vision_disabled_keeps_extraction() -> None:
 
     result = await _attach(_pipeline(enabled=False, reader=reader), extraction, "mineru")
 
-    assert result is extraction
+    assert result.raw_text == extraction.raw_text
+    assert result.parser_artifacts["vision_image_purpose"] == "record"
+    assert result.elements[1].metadata["vision_image_purpose"] == "record"
+    assert extraction.elements[1].metadata.get("vision_image_purpose") is None
     assert reader.calls == []
 
 
@@ -884,7 +887,10 @@ async def test_ingestion_vision_stage_failure_keeps_extraction(
 
     result = await _attach(_pipeline(enabled=True), extraction, "mineru")
 
-    assert result.elements == extraction.elements
+    assert [element.text for element in result.elements] == [
+        element.text for element in extraction.elements
+    ]
+    assert result.parser_artifacts["vision_image_purpose"] == "record"
     assert "vision_failed" in result.warnings
 
 

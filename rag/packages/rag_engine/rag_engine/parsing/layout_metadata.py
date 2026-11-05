@@ -13,6 +13,7 @@ from rag_engine.models.layout import LayoutRecord
 # element metadata へ写す raw のスカラー値(プレビューと診断に使う)。
 RAW_SCALAR_KEYS = (
     "vision_status",
+    "vision_image_purpose",
     "vision_error",
     "vision_model",
     "vision_skipped",

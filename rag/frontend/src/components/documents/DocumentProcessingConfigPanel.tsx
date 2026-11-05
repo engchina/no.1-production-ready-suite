@@ -51,6 +51,7 @@ import {
   type RecipeConfigItem,
 } from "./DocumentProcessingConfigPanel.logic";
 import {
+  IMAGE_PURPOSE_OPTIONS,
   CHUNKING_OPTIONS,
   GRAPH_OPTIONS,
   SECTION_RULES_OPTIONS,
@@ -77,6 +78,7 @@ function emptyConfig(): DocumentProcessingConfig {
     parser_structured_records_jsonl_enabled: null,
     parser_xml_tree_json_enabled: null,
     vision_enabled: null,
+    vision_image_purpose: null,
     heading_level_inference_enabled: null,
     chunking_strategy: null,
     chunk_size: null,
@@ -106,6 +108,7 @@ const EDITOR_ID_SUFFIX: Record<RecipeConfigField, string> = {
   auto_parse_after_preprocess_enabled: "auto-parse",
   parser_adapter_backend: "parser",
   vision_enabled: "vision",
+  vision_image_purpose: "image-purpose",
   heading_level_inference_enabled: "heading-levels",
   field_extraction_enabled: "field",
   navigation_summary_enabled: "navigation",
@@ -241,6 +244,17 @@ export function DocumentProcessingConfigPanel({
         ? globalSettingsHref(item)
         : null;
     switch (item.field) {
+      case "vision_image_purpose":
+        return (
+          <SelectRow
+            key={item.field} field={item.field} id={id} label={label} globalHref={globalHref}
+            value={form.vision_image_purpose ?? null}
+            effectiveValue={configs.effective.vision_image_purpose ?? null}
+            options={IMAGE_PURPOSE_OPTIONS} defaultValue="record" disabled={disabled}
+            onChange={(value) => update({vision_image_purpose: value})}
+            hint={t("imagePurpose.hint")}
+          />
+        );
       case "preprocess_profile":
         return (
           <SelectRow

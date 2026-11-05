@@ -309,6 +309,10 @@ export const ja = {
   "settings.parserAdapters.postParse.description":
     "文書解析の後に、次の順で処理します。ここで選ぶのは全体の既定です。文書のレシピで上書きできます。取込時の処理の変更は次の取込から、章節の抽出規則の変更は次に章節を表示するときから使います。",
   "settings.parserAdapters.postParse.step": "{index}. {name}",
+  "imagePurpose.label": "画像の用途",
+  "imagePurpose.record": "実データ・記録",
+  "imagePurpose.example": "画面例・説明用",
+  "imagePurpose.hint": "画像の値や状態を実際の記録として扱うか、説明用の例として扱うかを指定します。変更は再解析で反映されます。過去の解析版の用途は変更されません。実データ・記録の指定は、読み取りの正確さや質問への適用を保証しません。",
   "settings.parserAdapters.postParse.vision.concurrency": "同時に説明する図・表の数",
   "settings.parserAdapters.postParse.vision.concurrencyHint":
     "{min}〜{max}。API の制限（429）を受けると自動で減らし、成功が続くとこの数まで戻します。同じページの図・表は順番に説明します。",

@@ -367,3 +367,28 @@ def test_raptor_setting_is_saved_by_post_parse_api(settings: Settings, enabled: 
     assert response.json()["data"]["raptor_enabled"] is enabled
     assert settings.rag_raptor_enabled is enabled
     assert dotenv_values(_env_file())["RAG_RAPTOR_ENABLED"] == str(enabled).lower()
+
+
+def test_image_purpose_api_persists_known_values_and_null_keeps_current(
+    settings: Settings, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "rag_vision_image_purpose", "record")
+    assert (
+        client.get("/api/settings/parser-adapters").json()["data"]["vision_image_purpose"]
+        == "record"
+    )
+    response = client.patch(
+        "/api/settings/parser-adapters", json={"vision_image_purpose": "example"}
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["vision_image_purpose"] == "example"
+    assert dotenv_values(_env_file())["RAG_VISION_IMAGE_PURPOSE"] == "example"
+    response = client.patch("/api/settings/parser-adapters", json={"vision_image_purpose": None})
+    assert response.status_code == 200
+    assert response.json()["data"]["vision_image_purpose"] == "example"
+    assert (
+        client.patch(
+            "/api/settings/parser-adapters", json={"vision_image_purpose": "unknown"}
+        ).status_code
+        == 422
+    )
