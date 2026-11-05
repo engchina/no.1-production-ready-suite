@@ -182,6 +182,7 @@ from app.schemas.document import (
     DocumentPreprocessArtifact,
     DocumentPreviewPage,
     DocumentPreviewPages,
+    DocumentPreviewSource,
     DocumentProcessingConfig,
     DocumentProcessingConfigInput,
     DocumentRecipeCreateRequest,
@@ -2094,6 +2095,34 @@ async def _recipe_detail_and_artifact(
         else None
     )
     return detail, artifact
+
+
+@router.get(
+    "/{document_id}/recipes/{recipe_id}/preview-source",
+    response_model=ApiResponse[DocumentPreviewSource],
+)
+async def document_recipe_preview_source(
+    document_id: str,
+    recipe_id: str,
+    chunk_set_id: Annotated[str, Query(min_length=1, max_length=64)],
+) -> ApiResponse[DocumentPreviewSource]:
+    """引用版と配信ファイルの表示属性を同じ系譜から取得する。"""
+    if not chunk_set_id.strip():
+        raise HTTPException(status_code=422, detail="資料の版を指定してください。")
+    _, artifact = await _recipe_detail_and_artifact(document_id, recipe_id, chunk_set_id)
+    if artifact is None:
+        raise DocumentFileMissingError("この版が解析したファイルの記録がありません。")
+    content_type = (artifact.content_type or "").split(";", 1)[0].strip().lower()
+    is_pdf = (
+        content_type == "application/pdf"
+        if content_type
+        else artifact.file_name.lower().endswith(".pdf")
+    )
+    return ApiResponse(
+        data=DocumentPreviewSource(
+            file_name=artifact.file_name, content_type=artifact.content_type, is_pdf=is_pdf
+        )
+    )
 
 
 @router.get(

@@ -125,6 +125,8 @@ export const queryKeys = {
   documentCategories: ["document-categories"] as const,
   documentChunkSets: (id: string) => ["documents", id, "chunk-sets"] as const,
   documentRecipes: (id: string) => ["documents", id, "recipes"] as const,
+  documentPreviewSource: (id: string | null, recipeId: string | null, chunkSetId: string | null) =>
+    ["documents", id, "preview-source", recipeId, chunkSetId] as const,
   documentPreviewPages: (
     id: string,
     recipeId: string | null,
@@ -622,6 +624,16 @@ export function useDocumentPreviewPages(
     queryFn: () =>
       api.getDocumentPreviewPages(id as string, { recipeId: options.recipeId, variant, chunkSetId }),
     enabled: id != null && (options.enabled ?? true),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useDocumentPreviewSource(id: string | null, recipeId: string | null, chunkSetId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.documentPreviewSource(id, recipeId, chunkSetId),
+    queryFn: () => api.getDocumentPreviewSource(id as string, recipeId as string, chunkSetId as string),
+    enabled: id != null && recipeId != null && chunkSetId != null,
     retry: false,
     staleTime: 5 * 60_000,
   });
