@@ -5642,6 +5642,7 @@ export const ja = {
   "evaluation.testsets.title": "テストセットの作成",
   "evaluation.testsets.description": "本人が実行した評価結果から、標準回答を確認・修正して評価用のデータを作ります。1 件から利用できます。",
   "evaluation.testsets.new": "新しい下書きを作る",
+  "evaluation.testsets.saveError": "下書きを保存できませんでした。入力内容を残したまま、接続を確認してもう一度保存してください。",
   "evaluation.testsets.name": "下書きの名前",
   "evaluation.testsets.confirmed": "収録の確認",
   "evaluation.testsets.updated": "更新日時",
