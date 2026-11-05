@@ -1257,8 +1257,20 @@ def template_xlsx(documents: Sequence[EvaluationDocumentRef] = ()) -> bytes:
     return evaluation_cases_xlsx([], documents=documents)
 
 
+@dataclass(frozen=True)
+class EvaluationTemplateRow:
+    """既存テンプレート六列。位置のある根拠は reader が受け付ける原文行のまま保持する。"""
+
+    question: str
+    evidence: Sequence[str] = ()
+    standard_answer: str | None = None
+    required_answer_points: Sequence[str] = ()
+    response_decision: Literal["answer", "clarify", "hold"] | None = None
+    answer_process: str = ""
+
+
 def evaluation_cases_xlsx(
-    rows: Sequence[tuple[str, Sequence[str], str | None]],
+    rows: Sequence[tuple[str, Sequence[str], str | None] | EvaluationTemplateRow],
     *,
     documents: Sequence[EvaluationDocumentRef] = (),
 ) -> bytes:
@@ -1267,8 +1279,22 @@ def evaluation_cases_xlsx(
     sheet = book.active or book.create_sheet()
     sheet.title = CASES_SHEET_TITLE
     _write_header(sheet, HEADERS, notes=_HEADER_NOTES)
-    for question, evidence, standard_answer in rows:
-        _append_text_row(sheet, [question, "\n".join(evidence), standard_answer or "", "", "", ""])
+    for value in rows:
+        row = value if isinstance(value, EvaluationTemplateRow) else EvaluationTemplateRow(*value)
+        decision = {"answer": "回答", "clarify": "確認", "hold": "保留"}.get(
+            row.response_decision or "", ""
+        )
+        _append_text_row(
+            sheet,
+            [
+                row.question,
+                "\n".join(row.evidence),
+                row.standard_answer or "",
+                "\n".join(row.required_answer_points),
+                decision,
+                row.answer_process,
+            ],
+        )
     _set_widths(sheet, _COLUMN_WIDTHS)
     _wrap(sheet, min_row=2)
     sheet.freeze_panes = "A2"

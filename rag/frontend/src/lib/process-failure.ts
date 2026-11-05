@@ -8,7 +8,7 @@
  * - 実行の詳細の失敗: チャットと同じ 1 文目・次の操作、技術的な詳細は同じ項目。
  * 並べ方・「詳細」の項目は共通の部品が持ち、ここは値と文言（i18n）を渡すだけ。
  */
-import type { ProcessFailure, ProcessFailureLabels } from "@production-ready/ui";
+import { failureDiagnosisReason, type ProcessFailure, type ProcessFailureLabels } from "@production-ready/ui";
 
 import { ANSWER_STAGE_LABEL, ANSWER_STEP_STAGE_PREFIX, answerStageLabel } from "./answer-progress";
 import { answerStepDisplayName } from "./answer-process";
@@ -95,12 +95,15 @@ export function storageFailureNotice(
 }
 
 /** 実行の詳細の失敗（失敗した実行だけ）。トレース ID は概要の実行 ID と同じなので入れない。 */
-export function runFailure(run: Pick<RunDetail, "status" | "error_stage" | "error_type" | "error_code">): ProcessFailure | null {
+export function runFailure(run: Pick<RunDetail, "status" | "error_stage" | "error_type" | "error_code" | "failure_diagnosis">): ProcessFailure | null {
   if (run.status !== "error") return null;
+  const reason = failureDiagnosisReason(run.failure_diagnosis);
+  const stage = run.failure_diagnosis?.stage ?? run.error_stage;
   return {
-    summary: failureSummary(run.error_stage),
-    nextAction: t("failure.run.next"),
-    failedStep: run.error_stage ? failedStageLabel(run.error_stage) : null,
+    summary: failureSummary(stage),
+    cause: t(`failure.diagnosis.${reason}.cause`),
+    nextAction: `${t(`failure.diagnosis.${reason}.next`)} ${t("failure.diagnosis.contact")}`,
+    failedStep: stage ? failedStageLabel(stage) : null,
     errorType: run.error_type,
     errorCode: run.error_code ?? null,
   };

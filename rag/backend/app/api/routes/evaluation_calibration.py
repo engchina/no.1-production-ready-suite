@@ -13,10 +13,21 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import PurePath
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from pr_evaluation_scoring.label_file import encode_label_file
 from pr_evaluation_scoring.labeling import ERROR_TYPE_IDS
 
@@ -97,7 +108,14 @@ from app.schemas.evaluation_calibration import (
 from app.security.dependencies import current_principal
 from app.security.permissions import EVALUATION_CALIBRATION_MANAGE
 
-router = APIRouter()
+
+def legacy_read_only(request: Request) -> None:
+    """以前の校正データは閲覧と出力だけにする。suite の校正 CLI は変更しない。"""
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        raise HTTPException(status_code=410, detail="以前の校正データは閲覧と書き出し専用です。")
+
+
+router = APIRouter(dependencies=[Depends(legacy_read_only)])
 logger = logging.getLogger(__name__)
 
 LABEL_SET_IMPORT_MAX_BYTES = 20 * 1024 * 1024
@@ -761,3 +779,47 @@ async def delete_label_set(label_set_id: str) -> ApiResponse[dict[str, bool]]:
     if not await store.delete_label_set(label_set_id):
         raise HTTPException(status_code=404, detail=LABEL_SET_NOT_FOUND)
     return ApiResponse(data=dict(deleted=True))
+
+
+@router.get("/label-sets/{label_set_id}/archive")
+async def export_previous_calibration(label_set_id: str) -> Response:
+    """未確定の記入も含む旧データの保管用出力。新しい正解データへ変換しない。"""
+    store = get_calibration_store()
+    record = await _label_set(store, label_set_id)
+    items = await store.list_items(label_set_id)
+    labels = await store.list_labels(label_set_id)
+    listed = await store.list_calibrations(label_set_id=label_set_id)
+    calibrations = [
+        full
+        for value in listed
+        if (full := await store.get_calibration(value.calibration_id)) is not None
+    ]
+    payload = {
+        "形式": "以前の校正データ",
+        "形式の版": 1,
+        "名前": record.name,
+        "項目": [
+            {
+                "質問": item.payload.get("question", ""),
+                "回答": item.payload.get("answer", ""),
+                "標準回答": item.payload.get("standard_answer"),
+                "根拠": [
+                    {"原文": value.get("text", ""), "管理用情報": value}
+                    for value in item.payload.get("evidence", [])
+                    if isinstance(value, dict)
+                ],
+                "管理用情報": asdict(item),
+            }
+            for item in items
+        ],
+        "管理用情報": {
+            "集合": asdict(record),
+            "記入": [asdict(value) for value in labels],
+            "校正": [asdict(value) for value in calibrations],
+        },
+    }
+    return Response(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="previous_calibration.json"'},
+    )

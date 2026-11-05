@@ -1,3 +1,4 @@
+import type { FailureDiagnosis } from "@production-ready/ui";
 import type { EvidenceReadingInput, EvidenceReadingWindow, OriginalSourceInput, OriginalSourceWindow } from "@production-ready/ui";
 import type { TraceRecordingSettingsData } from "@production-ready/system-settings";
 /**
@@ -3458,7 +3459,7 @@ function requestUpload<T>(
  * ファイルを取得する（Excel のテンプレートなど。#2065）。失敗は JSON の envelope を ApiError にする。
  * 認証の通知・CSRF・配信の base は requestEnvelope と同じ。ファイル名は Content-Disposition から取る。
  */
-async function requestFile(
+export async function requestFile(
   path: string,
   fallbackName: string,
   options: RequestInit = {},
@@ -5515,6 +5516,8 @@ export interface StorageFailure {
 }
 
 export interface RunDetail extends RunSummary {
+  /** 安全な失敗分類。古い記録では未記録。例外本文は含まない。 */
+  failure_diagnosis?: FailureDiagnosis | null;
   error_type: string | null;
   /** 失敗のエラーコード（ORA-03146 など。#2342）。古い記録には無い。 */
   error_code?: string | null;
