@@ -156,6 +156,9 @@ def test_mcp_validate_answer_returns_figure_only_claims(
 
 
 class _Oracle:
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        return {}
+
     def __init__(self) -> None:
         self.chunks = {
             ("d1", "c1"): RetrievedChunk(

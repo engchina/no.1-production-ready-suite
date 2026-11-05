@@ -59,6 +59,9 @@ def _csv_chunks(document_id: str, chunk_set_id: str) -> list[RetrievedChunk]:
 
 
 class _Oracle:
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        return {}
+
     def __init__(self, chunks: list[RetrievedChunk]) -> None:
         self.chunks = {(chunk.document_id, chunk.chunk_id): chunk for chunk in chunks}
 

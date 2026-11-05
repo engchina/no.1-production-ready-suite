@@ -627,11 +627,11 @@ async def _validate_answer(
                     "text": chunk.text,
                 }
             )
-        # 指示の版を読めなければ再利用しない。旧記録も版が無いため再監査する。
+        # 指示の読取失敗は伝播し、再利用の失効だけ通常の監査へ進める。
         overrides = saved_prompt_overrides()
+        if overrides is None:
+            overrides = await oracle.answer_prompt_overrides()
         try:
-            if overrides is None:
-                overrides = await oracle.answer_prompt_overrides()
             reuse_context = validation_reuse_context(
                 question,
                 answer,
@@ -647,7 +647,6 @@ async def _validate_answer(
                 gaps=gaps,
             )
         except Exception:  # noqa: BLE001 - 再利用できなくても通常の監査を続ける。
-            overrides = {}
             reuse_context = ""
 
         audited = (
@@ -684,7 +683,7 @@ async def _validate_answer(
         with (
             tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work,
             bind_llm_usage() as calls,
-            bind_prompt_overrides(overrides or {}),
+            bind_prompt_overrides(overrides),
         ):
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
             try:
