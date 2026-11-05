@@ -19,6 +19,7 @@ import {
   resolvePhaseRows,
   resolveStatusMessageSlot,
   selectDocumentRecipe,
+  inspectionChunkSetId,
   shouldShowProcessingWatchBanner,
   shouldStopLocalProcessingWatch,
 } from "./DocumentWorkspace.logic";
@@ -1007,5 +1008,19 @@ describe("classificationPeriodIsValid", () => {
   it("どちらかが未入力なら比べない", () => {
     expect(classificationPeriodIsValid({ effective_from: null, effective_to: "2026-01-01" })).toBe(true);
     expect(classificationPeriodIsValid({ effective_from: "2026-01-01", effective_to: null })).toBe(true);
+  });
+});
+
+
+describe("inspectionChunkSetId", () => {
+  it.each([
+    ["CHUNKED", null, "pending"], ["INDEXING", null, "pending"], ["ERROR", "INDEX", "pending"],
+    ["INDEXED", null, "active"], ["REVIEW", null, "active"], ["CHUNKING", null, "active"], ["ERROR", "CHUNK", "active"],
+  ] as const)("%s/%s の確認版は %s", (status, failed_phase, expected) => {
+    expect(inspectionChunkSetId({status, failed_phase, pending_chunk_set_id: "pending", active_chunk_set_id: "active"})).toBe(expected);
+  });
+  it("分割完了の候補が未記録でも古い配信版を確認対象にしない", () => {
+    expect(inspectionChunkSetId({status: "CHUNKED", failed_phase: null, pending_chunk_set_id: null, active_chunk_set_id: "active"})).toBeNull();
+    expect(inspectionChunkSetId(null)).toBeNull();
   });
 });
