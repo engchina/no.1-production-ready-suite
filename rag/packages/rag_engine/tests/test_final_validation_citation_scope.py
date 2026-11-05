@@ -57,7 +57,7 @@ def test_two_actual_citations_can_jointly_support_operation_and_condition(suppor
             return schema(checks=[])
         docs = [row for row in payload["evidence_items"] if row["id"] in {FIRST, SECOND}]
         passage = payload["answer_passages"][0]
-        assert set(payload["passage_citations"][passage["id"]]) == {row["evidence_id"] for row in docs}
+        assert "passage_citations" not in payload
         return schema(
             claim_checks=[
                 {
@@ -146,10 +146,9 @@ def test_caller_citations_are_the_citation_of_a_passage_without_one():
         cited = validate_answer_claims("設定手順は？", OPERATION, evidence, None, caller_citations=citations)
     assert without["claim_checks"][0]["status"] == "unassessed"
     assert without["claim_checks"][0]["support_check"] == "uncited_evidence"
-    assert seen[0]["passage_citations"][seen[0]["answer_passages"][0]["id"]] == []
+    assert "passage_citations" not in seen[0]
     assert cited["counts"] == {"supported": 1}
-    first = next(row["evidence_id"] for row in seen[-1]["evidence_items"] if row["id"] == FIRST)
-    assert seen[-1]["passage_citations"][seen[-1]["answer_passages"][0]["id"]] == [first]
+    assert "passage_citations" not in seen[-1]
 
 
 def test_caller_citations_do_not_widen_the_citation_the_answer_wrote():
