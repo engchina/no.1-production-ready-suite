@@ -3591,7 +3591,10 @@ def synthesize_grounded_answer(
         from rag_engine.generation.answer_parts import check_answer_parts
         from rag_engine.generation.application_review import review_applications
 
-        with _execution_step("資料をもとに導いた結論を確認する") as review_step:
+        with _execution_step(
+            "資料をもとに導いた結論を確認する", "選択した原文と質問の条件から、その結論が導けるかを確認します。"
+        ) as review_step:
+            review_step.input({"question": question, "applications": [entry.to_payload() for entry in current.applications]})
             diagnostic = review_applications(
                 question,
                 current.applications,
@@ -3603,6 +3606,14 @@ def synthesize_grounded_answer(
             )
             current.timing["application_review"] = diagnostic
             review_step.output(diagnostic)
+            if diagnostic["status"] == "not_applicable":
+                review_step.skip("確認対象の導出結論がありません。", reason_code="no_derivations")
+            elif diagnostic.get("error_type"):
+                review_step.fail("確認を完了できなかったため、未確認の結論を保留します。", reason_code="application_review_failed")
+            else:
+                review_step.result(
+                    f"導出結論 {len(current.applications)} 件、公開 {sum(entry.published for entry in current.applications)} 件"
+                )
         current.timing["answer_parts"] = check_answer_parts(
             current.draft,
             {entry.draft_index: entry for entry in current.checked if entry.draft_index is not None and not entry.carried},

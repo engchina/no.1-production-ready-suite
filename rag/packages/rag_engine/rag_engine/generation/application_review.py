@@ -17,6 +17,7 @@ from rag_engine.generation.applications import (
     apply_application_audit,
     audit_view,
 )
+from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.input_budget import ensure_model_input
 from rag_engine.models.llm import ApplicationAudit, GroundedAudit
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, deadline_cut_short
@@ -58,6 +59,8 @@ def review_applications(
         "applications": audit_view(candidates, lambda item: index.get(id(item))),
         "summary": "",
     }
+    if premises := confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources):
+        inputs["confirmed_premises"] = premises
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = json.dumps(inputs, ensure_ascii=False)
     started = monotonic()

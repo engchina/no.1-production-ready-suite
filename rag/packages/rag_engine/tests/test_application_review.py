@@ -113,6 +113,22 @@ def test_no_derived_conclusion_adds_no_model_call():
     assert trace == {"status": "not_applicable", "calls": 0}
 
 
+def test_gate_receives_only_confirmed_context_and_preserves_its_origin():
+    def parse(system, prompt, settings, schema, **options):
+        data = json.loads(prompt)
+        assert data["confirmed_premises"] == [{"question": "区分", "answer": "A", "source": "user"}]
+        return schema(application_reviews=[{"index": 0, "valid": True, "reason": "確認済み条件"}], summary_supported=True)
+
+    config = replace(
+        get_settings(environ={}, dotenv_path=None),
+        confirmed_premises=(("区分", "A"), ("未確認", "B")),
+        confirmed_premise_sources=(("区分", "A", "user"), ("未確認", "B", "assumption")),
+    )
+    entry = candidate()
+    assert review([entry], parse, settings=config)["status"] == "completed"
+    assert entry.published
+
+
 def test_missing_existing_review_is_unknown_in_diagnostic_and_withheld():
     entry = candidate()
     existing = GroundedAudit(reviews=[], summary_supported=True, goal_alignment="aligned", application_reviews=[])

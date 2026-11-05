@@ -362,7 +362,7 @@ APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "- 前提が質問の原文にあることと、算式の計算はシステムが確かめ済み。\n"
     "\n"
     "## Step 2: 規則と事実の対応を判定する\n"
-    "- valid=true は、premises が質問の事実で、ite"
+    "- valid=true は、premises が質問または confirmed_premises の確認済みの事実で、ite"
     "m_indexes の items の quote の規則（条件・式・"
     "数え方）を正しく当てはめ、計算・期間・日付の数え方と result が"
     "正しい場合だけ。\n"

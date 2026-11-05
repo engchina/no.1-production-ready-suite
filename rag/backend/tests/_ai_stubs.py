@@ -8,6 +8,7 @@ OCI クライアントを決定論スタブへ差し替える。embedding は全
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Any, cast
@@ -183,6 +184,7 @@ def deterministic_parse_text_response(
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.audit_wire import is_audit_wire
     from rag_engine.models.llm import (
+        ApplicationAudit,
         CragRetrievalGradeOutput,
         GroundedAudit,
         GroundedDraft,
@@ -193,6 +195,15 @@ def deterministic_parse_text_response(
         TextOutput,
     )
 
+    if text_format is ApplicationAudit:
+        data = json.loads(prompt)
+        return text_format(
+            application_reviews=[
+                {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
+                for row in data["applications"]
+            ],
+            summary_supported=True,
+        )
     if text_format is QueryRoutingOutput:
         return QueryRoutingOutput(strategy="simple_retrieval", reason="決定論スタブ", queries=[])
     if text_format is QueryExpansionOutput:
@@ -298,6 +309,7 @@ def deterministic_parse_text_response(
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,
+                "application_reviews": [{"index": 0, "valid": True, "reason": "合成の原文対応"}],
                 "reviews": reviews,
                 "request_reviews": dict.fromkeys(wire.expected_request_ids, request),
                 "guide_requirement_reviews": dict.fromkeys(
@@ -314,6 +326,11 @@ def deterministic_parse_text_response(
             else []
         )
         return text_format.model_validate(
-            {"goal_alignment": "aligned", "summary_supported": True, "reviews": reviews}
+            {
+                "goal_alignment": "aligned",
+                "summary_supported": True,
+                "reviews": reviews,
+                "application_reviews": [{"index": 0, "valid": True, "reason": "合成の原文対応"}],
+            }
         )
     raise AssertionError(f"決定論スタブが扱わない出力の型です: {text_format.__name__}")

@@ -12,6 +12,7 @@ from rag_engine.generation.citation_wire import (
     guided_generation_wire_model,
 )
 from rag_engine.models.llm import (
+    ApplicationAudit,
     CragRetrievalGradeOutput,
     GroundedDraft,
     QueryExpansionOutput,
@@ -170,6 +171,15 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
+    if schema is ApplicationAudit:
+        data = json.loads(prompt)
+        return schema(
+            application_reviews=[
+                {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
+                for row in data["applications"]
+            ],
+            summary_supported=True,
+        )
     if issubclass(schema, RequestScopePlan):
         data = json.loads(prompt)
         ids = [item["evidence_id"] for item in data["evidence"]]
@@ -275,6 +285,7 @@ def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: 
             {
                 "goal_alignment": "aligned",
                 "summary_supported": True,
+                "application_reviews": [{"index": 0, "valid": True, "reason": "合成の原文対応"}],
                 "reviews": [
                     {
                         "index": 0,

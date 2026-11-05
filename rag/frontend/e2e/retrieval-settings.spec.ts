@@ -293,7 +293,7 @@ for (const viewport of [
     await expect(card).toContainText("回答生成が明示した根拠不足の要求を、回数・時間の予算内");
     await expect(card).toContainText("未校正の意味監査の結果だけでは追加検索や再生成を行いません。");
     await expect(audit).toContainText("実行しない");
-    await expect(audit).toHaveAccessibleDescription(/自動の生成後の LLM 監査.*行いません.*引用の ID・行範囲・原文との照合/);
+    await expect(audit).toHaveAccessibleDescription(/全回答の診断.*行いません.*最終候補の結論だけをまとめて AI で確認.*引用の ID・行範囲・原文との照合/);
     const options = card.getByRole("group", { name: "回答の検索のオプション", exact: true });
     expect(await options.locator("button[role=switch],button[role=combobox]").evaluateAll((elements) =>
       elements.map((element) => element.getAttribute("id") || element.getAttribute("aria-label"))
