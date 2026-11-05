@@ -2861,10 +2861,9 @@ export interface LanguagePackPreviewData {
   draft: LanguagePackPreviewResult;
 }
 
-export interface LanguagePackRelease {
+export interface LanguagePackReleaseSummary {
   id: string;
   version: number;
-  effective: LanguagePackSections;
   hash: string;
   ingest_hash: string;
   published_at: string;
@@ -2874,6 +2873,10 @@ export interface LanguagePackRelease {
   change_note: string;
 }
 
+export interface LanguagePackRelease extends LanguagePackReleaseSummary {
+  effective: LanguagePackSections;
+}
+
 export interface LanguagePackReleaseState {
   draft_revision: number;
   draft_effective: LanguagePackSections;
@@ -2881,7 +2884,7 @@ export interface LanguagePackReleaseState {
 }
 
 export interface LanguagePackReleaseList {
-  releases: LanguagePackRelease[];
+  releases: LanguagePackReleaseSummary[];
   total: number;
 }
 

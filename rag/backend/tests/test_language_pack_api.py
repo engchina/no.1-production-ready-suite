@@ -304,3 +304,54 @@ def test_uninitialized_database_with_legacy_file_is_409_without_writes(
         "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"
     ]
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
+
+
+def test_metadata_history_keeps_unsupported_release_read_and_restore_strict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有効な現在/草稿と同居する旧版は履歴だけ表示し、内容実行を許可しない。"""
+    from copy import deepcopy
+
+    from app.clients.language_pack_release_store import LanguagePackReleaseStore
+    from tests.test_language_pack_release_store import release_row
+    from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
+
+    current = {**release_row(), "release_id": "synthetic-current", "version": 2}
+    old = {**release_row(), "release_id": "synthetic-old"}
+    effective = deepcopy(old["effective_json"])
+    assert isinstance(effective, dict)
+    del effective["answer_labels"]["crag_refusal_summary"]
+    old["effective_json"] = effective
+    original = deepcopy(old)
+    state = {
+        "draft_revision": 1,
+        "draft_effective_json": builtin_pack().to_dict(),
+        "current_release_id": current["release_id"],
+    }
+    pool = FakeOraclePool(
+        execute_results=[[state], [current], [{"total": 2}], [current, old], [old], [old]]
+    )
+    store = LanguagePackReleaseStore(
+        OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    )
+
+    async def initialized() -> LanguagePackReleaseStore:
+        return store
+
+    monkeypatch.setattr(language_pack, "release_store", initialized)
+    assert client.get("/api/settings/language-pack/draft").status_code == 200
+    listing = client.get("/api/settings/language-pack/releases")
+    assert listing.status_code == 200
+    summaries = listing.json()["data"]["releases"]
+    assert [item["id"] for item in summaries] == ["synthetic-current", "synthetic-old"]
+    assert all("effective" not in item and "validated" not in item for item in summaries)
+    assert client.get("/api/settings/language-pack/releases/synthetic-old").status_code == 409
+    assert (
+        client.post(
+            "/api/settings/language-pack/releases/synthetic-old/restore",
+            json={"expected_revision": 1, "expected_current_id": "synthetic-current"},
+        ).status_code
+        == 409
+    )
+    assert old == original
+    assert all(call.statement.startswith("SELECT") for call in pool.connection.calls)

@@ -4,7 +4,8 @@
 - 草稿の保存は実行設定を変えず、公開・回退だけが現在版を切り替える。
 - ``POST /api/settings/language-pack/preview``: 例の文を、保存した言語資源と編集中の上書きの
   それぞれで読む。
-- ``GET /api/settings/language-pack/releases``: 不変の完全な公開版をページングで返す。
+- ``GET /api/settings/language-pack/releases``: 公開履歴のメタデータをページングで返す。
+  内容は個別取得で検証する。
 """
 
 from __future__ import annotations

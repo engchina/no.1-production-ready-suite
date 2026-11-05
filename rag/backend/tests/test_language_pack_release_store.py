@@ -341,3 +341,28 @@ def test_retired_inquiry_release_keeps_integrity_checks(mutation: str) -> None:
         row["ingest_hash"] = "invalid"
     with pytest.raises(ValueError):
         _release(row)
+
+
+async def test_history_metadata_lists_unsupported_snapshot_without_executing_it() -> None:
+    """現在版とは別の旧保存物を一覧で解釈せず、個別取得は拒否する。"""
+    old = release_row()
+    effective = deepcopy(old["effective_json"])
+    assert isinstance(effective, dict)
+    del effective["answer_labels"]["crag_refusal_summary"]
+    old["effective_json"] = effective
+    untouched = deepcopy(old)
+    pool = FakeOraclePool(execute_results=[[{"total": 1}], [old]])
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    page = await LanguagePackReleaseStore(oracle).list()
+    assert page.total == 1
+    assert page.releases[0].id == old["release_id"]
+    assert "effective" not in page.releases[0].model_dump()
+    assert "effective" not in pool.connection.calls[1].statement.lower()
+    assert old == untouched
+    pool = FakeOraclePool(execute_results=[[old]])
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    with pytest.raises(LanguagePackSnapshotError):
+        await LanguagePackReleaseStore(oracle).get(str(old["release_id"]))
+    assert all(call.statement.startswith("SELECT") for call in pool.connection.calls)

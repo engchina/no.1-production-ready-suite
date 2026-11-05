@@ -20,6 +20,7 @@ from app.schemas.language_pack_release import (
     LanguagePackRelease,
     LanguagePackReleaseList,
     LanguagePackReleaseState,
+    LanguagePackReleaseSummary,
 )
 
 if TYPE_CHECKING:
@@ -77,6 +78,22 @@ def _validated(effective: dict[str, Any]) -> LanguagePack:
     if pack.to_dict() != effective:
         raise LanguagePackSnapshotError("言語資源は全項目を含む完全な設定で保存してください。")
     return pack
+
+
+def _release_summary(row: dict[str, object]) -> LanguagePackReleaseSummary:
+    return LanguagePackReleaseSummary.model_validate(
+        {
+            "id": row["release_id"],
+            "version": row["version"],
+            "hash": row["content_hash"],
+            "ingest_hash": row["ingest_hash"],
+            "published_at": row["published_at"],
+            "published_by": row.get("published_by"),
+            "previous_id": row.get("previous_id"),
+            "restored_from": row.get("restored_from"),
+            "change_note": row.get("change_note") or "",
+        }
+    )
 
 
 def _release(row: dict[str, object]) -> LanguagePackRelease:
@@ -248,12 +265,14 @@ class LanguagePackReleaseStore:
             row = _fetch_one(connection, f"SELECT COUNT(*) total FROM {RELEASE_TABLE}", {})
             rows = _fetch_all(
                 connection,
-                f"SELECT * FROM {RELEASE_TABLE} ORDER BY version DESC "
+                f"SELECT release_id, version, content_hash, ingest_hash, published_at, "
+                f"published_by, previous_id, restored_from, change_note FROM {RELEASE_TABLE} "
+                "ORDER BY version DESC "
                 "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY",
                 {"offset": offset, "limit": limit},
             )
             return LanguagePackReleaseList(
-                releases=[_release(item) for item in rows],
+                releases=[_release_summary(item) for item in rows],
                 total=int(str(row["total"])) if row else 0,
             )
 

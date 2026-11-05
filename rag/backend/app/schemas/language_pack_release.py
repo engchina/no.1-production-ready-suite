@@ -7,12 +7,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class LanguagePackRelease(BaseModel):
+class LanguagePackReleaseSummary(BaseModel):
+    """履歴のメタデータ。内容の検証・実行可否は表さない。"""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str
     version: int = Field(ge=1)
-    effective: dict[str, Any]
     hash: str
     ingest_hash: str
     published_at: datetime
@@ -20,6 +21,10 @@ class LanguagePackRelease(BaseModel):
     previous_id: str | None = None
     restored_from: str | None = None
     change_note: str = ""
+
+
+class LanguagePackRelease(LanguagePackReleaseSummary):
+    effective: dict[str, Any]
 
 
 class LanguagePackReleaseState(BaseModel):
@@ -73,7 +78,7 @@ class LanguagePackReleaseComparison(BaseModel):
 
 
 class LanguagePackReleaseList(BaseModel):
-    releases: list[LanguagePackRelease]
+    releases: list[LanguagePackReleaseSummary]
     total: int = Field(ge=0)
 
 
