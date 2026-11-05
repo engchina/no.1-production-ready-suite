@@ -222,6 +222,10 @@ KB が持つのは所属（スコープ）と名前・説明だけとする。�
 > 3 層モデル（`rag/AGENTS.md`「RAG 設定責務」）以降、文書レシピの既定は global から解決し、KB の
 > `adapter_config.ingestion` も取込では使わない（保存値の読み取り互換だけ）。
 
+一覧はKBを絞り込み・並べ替え・ページングしてから、そのページの文書数を集計する。`searchable_chunk_count` は一覧では未集計の `null` を返し、0件とみなさない。正確な検索対象Chunk数は詳細APIで取得する。公開フィールドは保持するが、一覧の値を数値と仮定した外部クライアントは `null` に対応する必要がある。
+
+`GET /api/knowledge-bases/count` は一覧と同じ閲覧範囲・`status`/`q`/`ids`条件で総数だけを返す（`data` は整数）。文書・Chunkの統計は集計しない。
+
 レスポンス summary:
 
 ```json
@@ -234,7 +238,7 @@ KB が持つのは所属（スコープ）と名前・説明だけとする。�
   "document_count": 42,
   "indexed_document_count": 38,
   "error_document_count": 2,
-  "searchable_chunk_count": 1280,
+  "searchable_chunk_count": null,
   "created_at": "2026-06-15T00:00:00Z",
   "updated_at": "2026-06-15T00:00:00Z",
   "archived_at": null

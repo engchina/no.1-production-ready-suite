@@ -1838,7 +1838,11 @@ async def test_oracle_client_persists_knowledge_bases_through_pool() -> None:
 
 async def test_oracle_client_lists_knowledge_bases_with_counts() -> None:
     """knowledge base 一覧は集計列を含む SQL で取得する。"""
-    pool = FakeOraclePool(execute_results=[[_oracle_knowledge_base_row(document_count=3)]])
+    pool = FakeOraclePool(
+        execute_results=[
+            [dict(_oracle_knowledge_base_row(document_count=3), searchable_chunk_count=None)]
+        ]
+    )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
     items = await client.list_knowledge_bases(status=KnowledgeBaseStatus.ACTIVE, query="規程")
@@ -1846,9 +1850,14 @@ async def test_oracle_client_lists_knowledge_bases_with_counts() -> None:
     assert len(items) == 1
     assert items[0].id == "kb-1"
     assert items[0].document_count == 3
+    assert items[0].searchable_chunk_count is None
     call = pool.connection.calls[0]
     assert "FROM rag_knowledge_bases kb" in call.statement
     assert "LEFT JOIN rag_document_knowledge_bases dkb" in call.statement
+    assert "rag_chunks" not in call.statement
+    assert "rag_chunk_sets" not in call.statement
+    assert call.statement.index("OFFSET") < call.statement.index("document_counts AS")
+    assert "FROM selected_kbs kb" in call.statement
     assert "CASE WHEN UPPER(kb.name) = 'DEFAULT' THEN 0 ELSE 1 END" in call.statement
     order = call.statement.split("ORDER BY", 1)[1]
     assert "kb.updated_at DESC" not in order

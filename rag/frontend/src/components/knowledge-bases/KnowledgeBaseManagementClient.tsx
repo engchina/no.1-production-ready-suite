@@ -126,12 +126,12 @@ function KnowledgeBaseList({
 
   const status = filter === "ALL" ? undefined : filter;
   const query = useKnowledgeBases({ status, q: q || undefined, limit, offset });
-  // 件数の「N 件（全 M 件）」の M（状態・検索語を外した全件）。絞り込み中だけ 1 件ぶんの取得で数える（#1891）。
+  // 件数の「N 件（全 M 件）」の M（状態・検索語を外した全件）。絞り込み中だけ、統計を含まない件数専用 API で数える。
   const filtered = q !== "" || filter !== "ALL";
   const allTotal = useListTotal(
     "knowledge-bases",
     {},
-    async () => (await api.listKnowledgeBases({ limit: 1, offset: 0 })).total,
+    async () => api.countKnowledgeBases(),
     filtered
   );
   const page = query.data;

@@ -308,7 +308,7 @@ class StoredKnowledgeBase:
     document_count: int = 0
     indexed_document_count: int = 0
     error_document_count: int = 0
-    searchable_chunk_count: int = 0
+    searchable_chunk_count: int | None = 0
 
 
 @dataclass
@@ -8998,61 +8998,48 @@ class OracleClient:
         rows = await self._fetch_all(
             _render_sql(
                 """
-            SELECT
-                kb.knowledge_base_id,
-                kb.tenant_id_hash,
-                kb.name,
-                kb.description,
-                kb.status,
-                kb.default_search_mode,
-                kb.retrieval_config,
-                kb.created_at,
-                kb.updated_at,
-                kb.archived_at,
-                COUNT(DISTINCT dkb.document_id) AS document_count,
-                COUNT(DISTINCT CASE WHEN d.status = 'INDEXED' THEN d.document_id END)
-                    AS indexed_document_count,
-                COUNT(DISTINCT CASE WHEN d.status = 'ERROR' THEN d.document_id END)
-                    AS error_document_count,
-                COUNT(c.chunk_id) AS searchable_chunk_count
-            FROM rag_knowledge_bases kb
-            LEFT JOIN rag_document_knowledge_bases dkb
-                ON dkb.knowledge_base_id = kb.knowledge_base_id
-            LEFT JOIN rag_documents d
-                ON d.document_id = dkb.document_id
-               AND {document_access_sql}
-            LEFT JOIN rag_chunks c
-                ON c.document_id = d.document_id
-               AND d.status = 'INDEXED'
-               AND (
-                   c.chunk_set_id IS NULL
-                   OR c.chunk_set_id IN (
-                       SELECT cs.chunk_set_id FROM rag_chunk_sets cs
-                       WHERE {_SERVED_CHUNK_SET_SQL}
-                   )
-               )
-            WHERE {where_sql}
-            GROUP BY
-                kb.knowledge_base_id,
-                kb.tenant_id_hash,
-                kb.name,
-                kb.description,
-                kb.status,
-                kb.default_search_mode,
-                kb.retrieval_config,
-                kb.created_at,
-                kb.updated_at,
-                kb.archived_at
+            WITH selected_kbs AS (
+                SELECT kb.*
+                FROM rag_knowledge_bases kb
+                WHERE {where_sql}
+                ORDER BY
+                    CASE WHEN UPPER(kb.name) = 'DEFAULT' THEN 0 ELSE 1 END,
+                    {name_order_sql},
+                    NLSSORT(kb.name, 'NLS_SORT=JAPANESE_M'),
+                    kb.name ASC,
+                    kb.knowledge_base_id ASC
+                {paging_sql}
+            ), document_counts AS (
+                SELECT
+                    kb.knowledge_base_id,
+                    COUNT(DISTINCT dkb.document_id) AS document_count,
+                    COUNT(DISTINCT CASE WHEN d.status = 'INDEXED' THEN d.document_id END)
+                        AS indexed_document_count,
+                    COUNT(DISTINCT CASE WHEN d.status = 'ERROR' THEN d.document_id END)
+                        AS error_document_count
+                FROM selected_kbs kb
+                LEFT JOIN rag_document_knowledge_bases dkb
+                    ON dkb.knowledge_base_id = kb.knowledge_base_id
+                LEFT JOIN rag_documents d
+                    ON d.document_id = dkb.document_id
+                   AND {document_access_sql}
+                GROUP BY kb.knowledge_base_id
+            )
+            SELECT kb.knowledge_base_id, kb.tenant_id_hash, kb.name, kb.description,
+                kb.status, kb.default_search_mode, kb.retrieval_config,
+                kb.created_at, kb.updated_at, kb.archived_at,
+                dc.document_count, dc.indexed_document_count, dc.error_document_count,
+                CAST(NULL AS NUMBER) AS searchable_chunk_count
+            FROM selected_kbs kb
+            LEFT JOIN document_counts dc ON dc.knowledge_base_id = kb.knowledge_base_id
             ORDER BY
                 CASE WHEN UPPER(kb.name) = 'DEFAULT' THEN 0 ELSE 1 END,
                 {name_order_sql},
                 NLSSORT(kb.name, 'NLS_SORT=JAPANESE_M'),
                 kb.name ASC,
                 kb.knowledge_base_id ASC
-            {paging_sql}
             """,
                 where_sql=where_sql,
-                _SERVED_CHUNK_SET_SQL=_SERVED_CHUNK_SET_SQL,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 paging_sql=paging_sql,
                 name_order_sql=_oracle_natural_name_order_sql("kb.name"),
@@ -16774,7 +16761,9 @@ def _stored_knowledge_base_from_row(row: Mapping[str, object]) -> StoredKnowledg
         document_count=_int_value(row.get("document_count")),
         indexed_document_count=_int_value(row.get("indexed_document_count")),
         error_document_count=_int_value(row.get("error_document_count")),
-        searchable_chunk_count=_int_value(row.get("searchable_chunk_count")),
+        searchable_chunk_count=_int_value(row["searchable_chunk_count"])
+        if row.get("searchable_chunk_count") is not None
+        else None,
     )
 
 

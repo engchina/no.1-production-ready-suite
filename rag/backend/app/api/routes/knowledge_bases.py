@@ -109,6 +109,22 @@ async def list_knowledge_bases(
     )
 
 
+@router.get("/count", response_model=ApiResponse[int])
+async def count_knowledge_bases(
+    status: KnowledgeBaseStatus | None = None,
+    q: str | None = Query(default=None, min_length=1, max_length=200),
+    ids: Annotated[list[str] | None, Query(max_length=MAX_KNOWLEDGE_BASE_ID_FILTER)] = None,
+) -> ApiResponse[int]:
+    """一覧と同じ閲覧範囲でKBの総数だけを返し、文書/Chunk統計を取得しない。"""
+    oracle = OracleClient()
+    total = await read_or_raise(
+        lambda: oracle.count_knowledge_bases(status=status, query=q, knowledge_base_ids=ids),
+        timeout_seconds=get_settings().db_read_timeout_seconds,
+        log_label="knowledge_bases_count",
+    )
+    return ApiResponse(data=total)
+
+
 @router.post("", response_model=ApiResponse[KnowledgeBaseDetail])
 async def create_knowledge_base(
     request: KnowledgeBaseCreateRequest,

@@ -48,6 +48,10 @@ async function mockList(
   const queries: string[] = [];
   await page.route(pattern, async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/api/knowledge-bases/count") {
+      await route.fulfill(envelope(items.length));
+      return;
+    }
     const q = url.searchParams.get("q") ?? "";
     queries.push(q);
     const matched = items.filter((item) => !q || `${item.name} ${item.description ?? ""}`.includes(q));

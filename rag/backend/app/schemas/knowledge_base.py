@@ -40,7 +40,10 @@ class KnowledgeBaseSummary(KnowledgeBaseRef):
     document_count: int = 0
     indexed_document_count: int = 0
     error_document_count: int = 0
-    searchable_chunk_count: int = 0
+    searchable_chunk_count: int | None = Field(
+        default=None,
+        description="検索対象Chunk数。一覧では集計せずnull。正確な値は詳細で取得する。",
+    )
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None = None
@@ -49,6 +52,7 @@ class KnowledgeBaseSummary(KnowledgeBaseRef):
 class KnowledgeBaseDetail(KnowledgeBaseSummary):
     """詳細表示用のナレッジベース情報。"""
 
+    searchable_chunk_count: int = 0
     retrieval_config: dict[str, object] = Field(default_factory=dict)
     structure_index_enabled: bool | None = None
     structure_index_global_enabled: bool = False
