@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
-from audit_fixtures import legacy_audit_result
+from audit_fixtures import legacy_application_audit_result, legacy_audit_result
 from citation_unit_support import generated_fixture
 from openai import OpenAI
 from test_bound_audit_transport import response_bytes
@@ -62,14 +62,17 @@ class Parser:
         self.application_reviews: list[dict[str, Any]] = []
 
     def __call__(self, system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-        if schema is ApplicationAudit:
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
             inputs = json.loads(prompt)
             self.application_reviews.append(inputs)
-            return ApplicationAudit(
-                application_reviews=[
-                    {"index": row["index"], "valid": True, "reason": "合成の対応した規則"} for row in inputs["applications"]
-                ],
-                summary_supported=True,
+            return legacy_application_audit_result(
+                ApplicationAudit(
+                    application_reviews=[
+                        {"index": row["index"], "valid": True, "reason": "合成の対応した規則"} for row in inputs["applications"]
+                    ],
+                    summary_supported=True,
+                ),
+                schema,
             )
         assert issubclass(schema, generation_draft_wire_model()), "期待する生成/推導検査以外は呼ばない"
         self.calls.append({"system": system, "prompt": prompt, "schema": schema.model_json_schema()})

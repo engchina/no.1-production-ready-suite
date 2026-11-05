@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from audit_fixtures import legacy_application_audit_result
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -92,8 +93,11 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
     values = iter(outputs)
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の適用判定"}], summary_supported=True)
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
+            return legacy_application_audit_result(
+                ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "合成の適用判定"}], summary_supported=True),
+                schema,
+            )
         prompts.append(prompt)
         return generated_fixture(schema, prompt, next(values))
 

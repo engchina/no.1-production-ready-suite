@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from audit_fixtures import legacy_application_audit_result
 from citation_unit_support import generated_output, repair_output
 
 from rag_engine.config import get_settings
@@ -255,9 +256,12 @@ def test_answer_without_audit_repairs_a_heading_only_range_with_one_extra_call()
         raise AssertionError("外部I/Oは不要")
 
     def parser(system: str, prompt: str, settings: Any, schema: Any, **kwargs: Any) -> Any:
-        calls.append(schema.__name__)
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の修復原文対応"}], summary_supported=True)
+        calls.append(getattr(schema, "canonical_schema", schema).__name__)
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
+            return legacy_application_audit_result(
+                ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "合成の修復原文対応"}], summary_supported=True),
+                schema,
+            )
         if issubclass(schema, generation_draft_wire_model()):
             return generated_output(schema, prompt, text=CLAIM)
         assert issubclass(schema, CitationRangeRepair)
