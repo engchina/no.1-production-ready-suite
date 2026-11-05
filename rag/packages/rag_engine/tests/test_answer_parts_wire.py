@@ -1,6 +1,7 @@
 """要点と結果のinline契約に、モデルによる重複分類・内部番号を要求しない。"""
 
 import pytest
+from audit_fixtures import legacy_application_audit_result
 from pydantic import ValidationError
 from test_citation_unit_ids import snapshot
 
@@ -233,8 +234,10 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
 
     def generate(system, prompt, config, schema, **options):
         calls.append(schema)
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の対応"}], summary_supported=True)
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
+            return legacy_application_audit_result(
+                ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "合成の対応"}], summary_supported=True), schema
+            )
         assert schema._uses_typed_answer_parts
         assert "summary_part_indexes" in schema.model_json_schema()["properties"]
         unit_ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
@@ -293,7 +296,7 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
         response = synthesize_grounded_answer(
             "項目Aの値を教えてください。", AnswerContext(records=[record], text=source_text), config, image_prompt_mode="text_only"
         ).response
-    assert len(calls) == 2 and calls[-1] is ApplicationAudit
+    assert len(calls) == 2 and getattr(calls[-1], "canonical_schema", None) is ApplicationAudit
     assert "合成の回答です。" in response.answer_text
     assert source_text in response.answer_text
     trace = response.generation_trace
@@ -367,9 +370,12 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
     calls = []
 
     def generated(system, prompt, settings, schema, **options):
-        calls.append(schema.__name__)
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "計算の合成判定"}], summary_supported=True)
+        calls.append(getattr(schema, "canonical_schema", schema).__name__)
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
+            return legacy_application_audit_result(
+                ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "計算の合成判定"}], summary_supported=True),
+                schema,
+            )
         assert getattr(schema, "_uses_unit_ids", False)
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
         return schema.model_validate(

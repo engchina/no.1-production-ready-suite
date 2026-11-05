@@ -171,14 +171,17 @@ class FakeGenAi:
 
 
 def _fake_llm(system: str, prompt: str, settings: Any, schema: type, **options: Any) -> Any:
-    if schema is ApplicationAudit:
+    if getattr(schema, "canonical_schema", None) is ApplicationAudit:
         data = json.loads(prompt)
-        return schema(
-            application_reviews=[
-                {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
-                for row in data["applications"]
-            ],
-            summary_supported=True,
+        return legacy_audit_result(
+            schema,
+            dict(
+                application_reviews=[
+                    {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
+                    for row in data["applications"]
+                ],
+                summary_supported=True,
+            ),
         )
     if issubclass(schema, RequestScopePlan):
         data = json.loads(prompt)

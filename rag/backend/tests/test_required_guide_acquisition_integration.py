@@ -18,6 +18,7 @@ from app.rag.pipeline import RagPipeline
 from app.rag.support_guide_runtime import guide_step_plan, match_guide
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
 from app.schemas.support_guide import SupportGuideContent
+from tests.audit_fixtures import legacy_audit_result
 from tests.generation_fixtures import generation_result
 from tests.test_answer_engine import FakeGenAi, FakeOracle, _doc_chunk
 
@@ -113,10 +114,13 @@ async def test_branch_required_acquisition_reaches_none_generation_and_saved_ans
     def model(
         system: str, prompt: str, settings: Any, schema: type[BaseModel], **options: Any
     ) -> Any:
-        if schema is ApplicationAudit:
-            return schema(
-                application_reviews=[{"index": 0, "valid": True, "reason": "合成の原文対応"}],
-                summary_supported=True,
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
+            return legacy_audit_result(
+                schema,
+                dict(
+                    application_reviews=[{"index": 0, "valid": True, "reason": "合成の原文対応"}],
+                    summary_supported=True,
+                ),
             )
         calls.append((schema.__name__, prompt))
         assert schema.__name__.endswith("GroundedDraftWire"), "生成以外のモデル呼び出しは禁止"

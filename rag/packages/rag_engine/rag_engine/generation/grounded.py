@@ -55,6 +55,7 @@ from rag_engine.generation.answer_models import (
 from rag_engine.generation.answer_parts_wire import answer_parts_model as unit_generation_model
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_RULES
 from rag_engine.generation.applications import (
+    APPLICATION_PRESENTATION_INSTRUCTIONS,
     CheckedApplication,
     check_applications,
 )
@@ -470,8 +471,7 @@ AUDIT_SYSTEM_PROMPT = (
         "いない』『未確認』『のみ適用』と限定している事項を、text が『確"
         "認できる』『一致する』『出力できる』と保証していれば unsuppo"
         "rted（末尾で留保していても同じ）。summary が同じ保証をし"
-        "ていれば summary_supported=false。\n"
-        "### applications（当てはめ）\n"
+        "ていれば summary_supported=false。\n" + APPLICATION_PRESENTATION_INSTRUCTIONS + "### applications（当てはめ）\n"
         "- valid=true は、item_indexes の items の原文の事実・規則から reasoning と result を導ける場合だけ。"
         "premises を使う場合は質問の事実に限る。資料だけで導く場合は空でよい。"
         "計算・条件・期間・日付の数え方と結果を確かめる。\n"
@@ -506,7 +506,7 @@ AUDIT_SYSTEM_PROMPT = (
         "ceとfunction_contextが示す根拠の役割と成果物の一致"
         "を先に判定する。\n"
         "- application_reviews: 各 applicati"
-        "on の index、valid、reason。\n"
+        "on の論理判定。application_presentations は表示説明の独立した判定。\n"
         "- request_reviews: task_contract.request_units の各 id をそのまま1回ずつ返し、新規・改変・重複した id を作らない。"
         "原質問のすべての小問・条件・否定・例外を確認する。一部だけの回答は partial とし、要求 ID の数や説明の有無だけで完了としない。"
         "各要求について、items（valid な applicatio"
@@ -7685,10 +7685,17 @@ def _parse_audit(
     inputs = json.loads(prompt)
     request_ids = tuple(row["id"] for row in inputs.get("task_contract", {}).get("request_units", []))
     requirement_ids = tuple(row["id"] for contract in inputs.get("guide_contracts", []) for row in contract.get("requirements", []))
-    schema = audit_wire_schema(GroundedAudit if detailed else GroundedFactAudit, request_ids, requirement_ids)
+    schema = audit_wire_schema(
+        GroundedAudit if detailed else GroundedFactAudit,
+        request_ids,
+        requirement_ids,
+        application_indexes=tuple(row["index"] for row in inputs.get("applications", [])),
+    )
     result = canonical_audit_result(
         call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
     )
+    if not isinstance(result.audit, GroundedAudit):
+        raise TypeError("通常監査のcanonical型が一致しません。")
     audit = result.audit
     audit._wire_validation = result.validation
     return audit

@@ -26,6 +26,7 @@ from rag_parser_core.language.text import text_patterns
 from rag_engine.generation import passage_marks
 from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.grounding_cues import grounding_cues
+from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import ApplicationAudit, ApplicationDraft, GroundedApplication, GroundedAudit
 from rag_engine.resources.runtime import resolve_prompt
 
@@ -52,6 +53,7 @@ class CheckedApplication:
     internal_label_issues: list[str] = field(default_factory=list)
     date_value_issues: list[str] = field(default_factory=list)
     assessment: dict[str, Any] = field(default_factory=dict)
+    presentation: dict[str, Any] = field(default_factory=dict)
 
     def reject(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -80,6 +82,7 @@ class CheckedApplication:
             "warnings": list(self.warnings),
             "source": self.source,
             "assessment": dict(self.assessment),
+            "presentation": dict(self.presentation),
         }
 
 
@@ -152,7 +155,20 @@ def apply_application_audit(
 ) -> None:
     """推導の採否を記録する。公開門では欠落・重複した判定も未確認として保留する。"""
     rows = list(audit.application_reviews if audit else [])
+    displays = list(audit.application_presentations if audit else [])
     for index, entry in enumerate(checked):
+        matching = [display for display in displays if display.index == index]
+        display = matching[0] if len(matching) == 1 else None
+        entry.presentation = (
+            {"status": "confirmed", "reasoning": display.display_reasoning, "language": audit.output_language}
+            if display is not None
+            and display.equivalent
+            and display.display_reasoning.strip()
+            and audit is not None
+            and audit.output_language
+            and audit.output_language.strip()
+            else {"status": "unconfirmed" if display is not None else "unrecorded"}
+        )
         reviews = [review for review in rows if review.index == index]
         review = reviews[0] if len(reviews) == 1 else None
         if require_complete:
@@ -210,7 +226,8 @@ def render_lines(
         premises = "".join(f"「{premise.strip()}」" for premise in application.premises if premise.strip())
         if premises:
             lines.append(PREMISES_LABEL + premises)
-        lines.append(REASONING_LABEL + " ".join(application.reasoning.split()))
+        if entry.presentation.get("status") == "confirmed":
+            lines.append(REASONING_LABEL + str(entry.presentation["reasoning"]).strip())
         shown: dict[str, list[Any]] = {}
         for item in entry.entries:
             if item.span:
@@ -256,7 +273,7 @@ _OPERATORS: dict[type, Callable[[float, float], float]] = {
 
 def _normalize_expression(text: str) -> str:
     folded = unicodedata.normalize("NFKC", text)
-    return folded.translate(str.maketrans({"×": "*", "÷": "/", "−": "-", "–": "-"}))
+    return folded.translate(str.maketrans("×÷−–", "*/--"))
 
 
 def _number_value(match: re.Match[str]) -> str:
@@ -354,6 +371,16 @@ APPLICATION_SYSTEM_PROMPT = (
     "かず、規則の中身の言葉で書く。\n"
 )
 
+APPLICATION_PRESENTATION_INSTRUCTIONS = (
+    "### 推導説明の表示\n"
+    "- 最初にoutput_languageを決める。言語の指定はschemaに従う。\n"
+    "- application_presentationsのdisplay_reasoningに、output_languageで元の推導と同義の利用者向け説明を書く。\n"
+    "- display_reasoningは原reasoningをそのまま再掲する欄ではなく、利用者に表示する説明の本体である。\n"
+    "- 引用原文・SQL・コード・識別子・固有名詞・数値・式は翻訳しない。\n"
+    "- 原reasoning・result・前提・引用は変更しない。表示説明の条件・否定・期間・値・式・順序が元と同じかを equivalent で返す。\n"
+    "- valid は元の推導の論理だけで判定する。表示説明の作成に失敗しても、元の推導が正しいことを無効にしない。\n"
+)
+
 APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "## Step 1: 当てはめの監査対象を確認する\n"
     "- あなたは独立した監査担当です。各 application が、it"
@@ -374,8 +401,7 @@ APPLICATION_AUDIT_SYSTEM_PROMPT = (
     "。\n"
     "- 当てはめた items の source（文書名 / 見出し）が質"
     "問と別の制度・手続・対象のものなら valid=false。\n"
-    "\n"
-    "## Step 3: 要約の裏付けを判定する\n"
+    "\n" + APPLICATION_PRESENTATION_INSTRUCTIONS + "\n## Step 3: 要約の裏付けを判定する\n"
     "- summary_supported は、summary が ite"
     "ms の規則と valid な application の結果の範囲を"
     "超える断定をしていなければ true。\n"
@@ -440,15 +466,19 @@ def run_application_step(
     candidates = audit_view(applications, lambda item: next((i for i, e in supported.items() if e is item), None))
     if not candidates:
         return applications, ""
-    audit = call_with_model_purpose(
-        "answer.audit",
-        parse_text,
-        resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT),
-        render_prompt({**inputs, "applications": candidates, "summary": draft.summary}),
-        audit_settings,
-        ApplicationAudit,
-        provider_id=provider_id,
-    )
+    schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in candidates))
+    audit = canonical_audit_result(
+        call_with_model_purpose(
+            "answer.audit",
+            parse_text,
+            resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT),
+            render_prompt({**inputs, "applications": candidates, "summary": draft.summary}),
+            audit_settings,
+            schema,
+            provider_id=provider_id,
+        ),
+        schema,
+    ).audit
     apply_application_audit(applications, audit, require_complete=True)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""

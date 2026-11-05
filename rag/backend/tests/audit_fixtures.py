@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 from rag_engine.models.audit_wire import AuditWireResult, is_audit_wire
-from rag_engine.models.llm import GroundedAudit, GroundedFactAudit
+from rag_engine.models.llm import ApplicationAudit, GroundedAudit, GroundedFactAudit
 
 
 def is_audit_schema(schema: type) -> bool:
@@ -18,7 +18,9 @@ def legacy_audit_result(schema: type, data: dict[str, Any]) -> Any:
     canonical_schema = cast(type[BaseModel], cast(Any, schema).canonical_schema)
     canonical = canonical_schema.model_validate(data)
     return AuditWireResult(
-        audit=GroundedAudit.model_validate(canonical.model_dump(mode="json")),
+        audit=canonical
+        if isinstance(canonical, ApplicationAudit)
+        else GroundedAudit.model_validate(canonical.model_dump(mode="json")),
         validation={
             "source": "legacy_fixture",
             "strict_wire_validation": "not_observed",

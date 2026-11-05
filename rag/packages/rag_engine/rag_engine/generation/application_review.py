@@ -19,6 +19,7 @@ from rag_engine.generation.applications import (
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.input_budget import ensure_model_input
+from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import ApplicationAudit, GroundedAudit
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, deadline_cut_short
 from rag_engine.resources.runtime import resolve_prompt
@@ -49,13 +50,14 @@ def review_applications(
             "status": "invalid_contract" if invalid_contract else "reused" if existing_audit is not None and complete else "incomplete",
             "calls": 0,
             "results": [dict(entry.assessment) for entry in checked],
+            "presentations": [dict(entry.presentation) for entry in checked],
         }
     candidates = [entry for entry in checked if not entry.reasons]
     if not candidates:
         return {"status": "not_applicable", "calls": 0}
     items = list({id(item): item for entry in candidates for item in entry.entries}.values())
     index = {id(item): position for position, item in enumerate(items)}
-    inputs = {
+    inputs: dict[str, Any] = {
         "question": question,
         "items": [
             {"index": position, "text": item.item.text, "quote": item.item.quote or item.item.text, "source": _source_label(item.span)}
@@ -66,15 +68,20 @@ def review_applications(
     }
     if premises := confirmed_premise_records(settings.confirmed_premises, settings.confirmed_premise_sources):
         inputs["confirmed_premises"] = premises
+    schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in inputs["applications"]))
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = json.dumps(inputs, ensure_ascii=False)
     started = monotonic()
     diagnostic: dict[str, Any] = {"status": "completed", "calls": 0, "prompt_chars": len(system) + len(prompt)}
     audit = None
     try:
-        ensure_model_input(settings, system, prompt, ApplicationAudit.model_json_schema(), provider_id=provider_id)
+        ensure_model_input(settings, system, prompt, schema.model_json_schema(), provider_id=provider_id)
         diagnostic["calls"] = 1
-        audit = call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, ApplicationAudit, provider_id=provider_id)
+        result = canonical_audit_result(
+            call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, schema, provider_id=provider_id), schema
+        )
+        audit = result.audit
+        diagnostic["contract"] = result.validation
         if any(row.index not in range(len(candidates)) for row in audit.application_reviews):
             diagnostic["status"] = "invalid_contract"
             audit = None
@@ -90,7 +97,11 @@ def review_applications(
             raise
         diagnostic.update(status="incomplete", error_type=type(exc).__name__)
     apply_application_audit(candidates, audit, require_complete=True)
-    diagnostic.update(seconds=round(monotonic() - started, 3), results=[dict(entry.assessment) for entry in candidates])
+    diagnostic.update(
+        seconds=round(monotonic() - started, 3),
+        results=[dict(entry.assessment) for entry in candidates],
+        presentations=[dict(entry.presentation) for entry in candidates],
+    )
     if any(entry.assessment.get("status") == "unknown" for entry in candidates) and diagnostic["status"] == "completed":
         diagnostic["status"] = "incomplete"
     return diagnostic

@@ -6,6 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from audit_fixtures import legacy_application_audit_result
 from citation_unit_support import selected_answer_payload
 
 from rag_engine.config import get_settings
@@ -47,7 +48,12 @@ def test_many_applications_are_checked_in_one_call_with_selected_originals():
         data = json.loads(prompt)
         calls.append(data)
         assert data["items"][0]["quote"] == SOURCE
-        return schema(application_reviews=[{"index": i, "valid": True, "reason": "原文の期限後"} for i in range(2)], summary_supported=True)
+        return legacy_application_audit_result(
+            ApplicationAudit(
+                application_reviews=[{"index": i, "valid": True, "reason": "原文の期限後"} for i in range(2)], summary_supported=True
+            ),
+            schema,
+        )
 
     checked = [candidate(), candidate()]
     trace = review(checked, parse)
@@ -71,7 +77,7 @@ def test_bad_or_incomplete_judgements_cannot_publish(outcome):
             if outcome == "foreign"
             else [row]
         )
-        return ApplicationAudit(application_reviews=rows, summary_supported=True)
+        return legacy_application_audit_result(ApplicationAudit(application_reviews=rows, summary_supported=True), args[3])
 
     entry = candidate()
     trace = review([entry], parse)
@@ -117,7 +123,9 @@ def test_gate_receives_only_confirmed_context_and_preserves_its_origin():
     def parse(system, prompt, settings, schema, **options):
         data = json.loads(prompt)
         assert data["confirmed_premises"] == [{"question": "区分", "answer": "A", "source": "user"}]
-        return schema(application_reviews=[{"index": 0, "valid": True, "reason": "確認済み条件"}], summary_supported=True)
+        return legacy_application_audit_result(
+            ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "確認済み条件"}], summary_supported=True), schema
+        )
 
     config = replace(
         get_settings(environ={}, dotenv_path=None),
@@ -168,10 +176,13 @@ def test_actual_generation_boundary_keeps_source_and_synchronizes_body_summary(v
 
     def parse(system, prompt, settings, schema, **options):
         calls.append(schema)
-        if schema is ApplicationAudit:
-            return schema(
-                application_reviews=[] if valid is None else [{"index": 0, "valid": valid, "reason": "期間の合成判定"}],
-                summary_supported=True,
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
+            return legacy_application_audit_result(
+                ApplicationAudit(
+                    application_reviews=[] if valid is None else [{"index": 0, "valid": valid, "reason": "期間の合成判定"}],
+                    summary_supported=True,
+                ),
+                schema,
             )
         unit = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)[0]
         value = selected_answer_payload([unit], text="割合は50%です。" if valid else "割合は0%です。")
@@ -201,7 +212,7 @@ def test_actual_generation_boundary_keeps_source_and_synchronizes_body_summary(v
         result = answering.synthesize_grounded_answer(
             QUESTION, AnswerContext(records=[row], text=SOURCE), config, image_prompt_mode="text_only"
         ).response
-    assert calls.count(ApplicationAudit) == 1
+    assert sum(getattr(schema, "canonical_schema", None) is ApplicationAudit for schema in calls) == 1
     assert result.generation_trace["llm_calls"] == 2
     assert SOURCE in result.answer_text
     assert result.generation_trace["applications"][0]["published"] == bool(valid)

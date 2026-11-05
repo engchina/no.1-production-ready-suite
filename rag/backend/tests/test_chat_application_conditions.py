@@ -14,6 +14,7 @@ from rag_engine.models.llm import ApplicationAudit
 
 from app.api.routes import chat as chat_route
 from app.schemas.search import SearchResponse
+from tests.audit_fixtures import legacy_audit_result
 from tests.test_chat_api import FakeChatOracle, _FakePipeline, _stub_stream, client
 
 SOURCE_A = "操作Aは2営業日前の17時までなら0%、その期限後は50%です。"
@@ -28,12 +29,15 @@ def test_followup_gate_preserves_original_and_saves_only_supported_conclusion(
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
         calls.append(schema)
-        if schema is ApplicationAudit:
-            return schema(
-                application_reviews=[
-                    {"index": 0, "valid": valid, "reason": "期間と操作の合成判定"}
-                ],
-                summary_supported=valid,
+        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
+            return legacy_audit_result(
+                schema,
+                dict(
+                    application_reviews=[
+                        {"index": 0, "valid": valid, "reason": "期間と操作の合成判定"}
+                    ],
+                    summary_supported=valid,
+                ),
             )
         unit = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)[0]
         return schema.model_validate(
@@ -134,7 +138,9 @@ def test_followup_gate_preserves_original_and_saves_only_supported_conclusion(
     )
     assert followup.status_code == 200 and "event: all_done" in followup.text
     saved = client.get(f"/api/chat/conversations/{conversation}").json()["data"]["messages"][-1]
-    assert calls.count(ApplicationAudit) == 1
+    assert (
+        sum(getattr(schema, "canonical_schema", None) is ApplicationAudit for schema in calls) == 1
+    )
     assert SOURCE_A in saved["content"]
     assert saved["citations"][0]["text"] == SOURCE_A
     if valid:

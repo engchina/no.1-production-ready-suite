@@ -35,6 +35,10 @@ def answer(applications, *, rule_review=("supported", "matched"), application_re
     value["applications"] = list(applications)
     review = audit((0, *rule_review, ""), requests=[("Q1", "addressed")])
     review["application_reviews"] = [{"index": i, "valid": v, "reason": "r"} for i, v in application_reviews]
+    review["output_language"] = "日本語"
+    review["application_presentations"] = [
+        {"index": i, "display_reasoning": app["reasoning"], "equivalent": True} for i, app in enumerate(applications)
+    ]
     return run(FakeModel([value], [review]), ctx, QUESTION).response
 
 
