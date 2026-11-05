@@ -429,6 +429,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_D}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     # ---- ナレッジ構築: ナレッジベース ----
     ("GET", "/knowledge-bases"): _KNOWLEDGE_BASE_READ,
+    ("GET", "/knowledge-bases/count"): _KNOWLEDGE_BASE_READ,
     ("POST", "/knowledge-bases"): _any(KNOWLEDGE_BASES_MANAGE),
     ("GET", _KB): _KNOWLEDGE_BASE_READ,
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),

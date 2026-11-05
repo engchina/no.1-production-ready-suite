@@ -355,6 +355,13 @@ describe("api.request envelope", () => {
     });
   });
 
+  it("ナレッジベースの全件数は統計のない専用エンドポイントで取得する", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: 7, error_messages: [], warning_messages: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(api.countKnowledgeBases()).resolves.toBe(7);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/knowledge-bases/count");
+  });
+
   it("knowledge base API は CRUD endpoint を呼び分ける", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       jsonResponse({

@@ -271,10 +271,14 @@ async function mockKnowledgeBaseApi(
     const parts = url.pathname.split("/").filter(Boolean);
     const id = parts[2];
 
+    if (request.method() === "GET" && url.pathname === "/api/knowledge-bases/count") {
+      await route.fulfill({ json: { data: state.knowledgeBases.length, error_messages: [], warning_messages: [] } });
+      return;
+    }
     if (request.method() === "GET" && url.pathname === "/api/knowledge-bases") {
       await route.fulfill({
         json: {
-          data: pageKnowledgeBases(state.knowledgeBases, url),
+          data: { ...pageKnowledgeBases(state.knowledgeBases, url), items: pageKnowledgeBases(state.knowledgeBases, url).items.map((item) => ({ ...item, searchable_chunk_count: null })) },
           error_messages: [],
           warning_messages: [],
         },

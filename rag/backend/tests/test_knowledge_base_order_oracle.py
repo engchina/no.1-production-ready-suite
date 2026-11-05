@@ -26,6 +26,8 @@ async def test_knowledge_base_list_uses_natural_name_order_before_paging() -> No
     actual: list[str] = []
     for offset in range(0, len(expected), 3):
         page = await client.list_knowledge_bases(knowledge_base_ids=ids, limit=3, offset=offset)
+        assert all(item.searchable_chunk_count is None for item in page)
+        assert all(item.document_count == 0 for item in page if item.id != default.id)
         actual.extend(item.id for item in page)
     assert actual == expected
     assert len(set(actual)) == len(expected)

@@ -49,8 +49,8 @@ function failureBody(failure: Failure) {
 /** 一覧の API を差し替える。`respond` が null なら 1 件の一覧を返す。 */
 async function routeList(page: Page, respond: () => Failure | null, items: unknown[] = [SUMMARY]) {
   await page.route("**/api/knowledge-bases**", (route) => {
-    // 件数の補助（limit=1）は数えない（一覧の読み取りの回数だけを確かめる）。
-    if (isTotalRequest(route.request().url())) return route.fulfill({ json: okPage(items) });
+    // 件数専用APIは数えない（一覧の読み取りの回数だけを確かめる）。
+    if (isTotalRequest(route.request().url())) return route.fulfill({ json: { data: items.length, error_messages: [], warning_messages: [] } });
     const failure = respond();
     return failure
       ? route.fulfill({ status: failure.status, json: failureBody(failure) })
@@ -59,7 +59,8 @@ async function routeList(page: Page, respond: () => Failure | null, items: unkno
 }
 
 function isTotalRequest(url: string) {
-  return new URL(url).searchParams.get("limit") === "1";
+  const parsed = new URL(url);
+  return parsed.pathname === "/api/knowledge-bases/count" || parsed.searchParams.get("limit") === "1";
 }
 
 /** 自動の再試行（5 秒・15 秒の間隔で 2 回）を進める。 */
