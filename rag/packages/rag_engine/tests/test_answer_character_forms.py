@@ -8,8 +8,9 @@ import json
 from unittest.mock import patch
 
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, record, run
+from validation_unit_support import wire_text
 
-from rag_engine.evaluation.answer_validation import ClaimAuditOutput, validate_answer_claims
+from rag_engine.evaluation.answer_validation import validate_answer_claims
 from rag_engine.generation import grounded
 from rag_engine.generation.answering import _grounded_spans
 from rag_engine.models.llm import GroundedDraft
@@ -137,25 +138,25 @@ def test_answer_validation_reads_folded_evidence_and_keeps_the_original_quote():
         payload = json.loads(inputs)
         seen["payload"] = payload
         passage = payload["answer_passages"][0]["id"]
-        return ClaimAuditOutput.model_validate(
+        document = next(i for i in payload["evidence_items"] if i.get("id") != "question:1")
+        selected = next(unit["unit_id"] for unit in document["units"] if unit["text"] == QUOTE)
+        return schema.model_validate(
             {
                 "claim_checks": [
                     {
                         "answer_quote": "段落",
                         "answer_passage_id": passage,
                         "status": "supported",
-                        "evidence_id": [i for i in payload["evidence_items"] if i.get("id") != "question:1"][0]["evidence_id"],
-                        "source_id": "",
-                        "evidence_quote": "",
+                        "evidence_unit_ids": [selected],
                         "reason": "根拠に記載",
                     }
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
         result = validate_answer_claims(QUESTION, answer, evidence, settings=None)
-    assert "HRM:第2水曜" in [i for i in seen["payload"]["evidence_items"] if i.get("id") != "question:1"][0]["text"]
+    assert "HRM:第2水曜" in wire_text([i for i in seen["payload"]["evidence_items"] if i.get("id") != "question:1"][0])
     assert "ＨＲＭ" not in json.dumps(seen["payload"], ensure_ascii=False)
     assert seen["payload"]["answer_text"] == answer
     assert result["status"] == "completed" and result["counts"] == {"supported": 1}

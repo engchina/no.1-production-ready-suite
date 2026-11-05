@@ -305,3 +305,27 @@ def test_saved_legacy_prompt_override_is_not_silently_rewritten():
     assert "evidence_unit_ids" in json.dumps(calls[0]["schema"])
     assert "evidence_quote" not in json.dumps(calls[0]["schema"])
     # スタブの成功は旧指示の意味的な適合を証明しない。保存資源の更新は別の受入条件。
+
+
+@pytest.mark.parametrize("text, folded", [("ｶﾞＸ１２", "ガX12"), ("ﾊﾟ９", "パ9"), ("①Ⅴ㈱１２", "①Ⅴ㈱12")])
+def test_wire_folds_width_while_bound_original_and_purpose_offsets_stay_exact(text, folded):
+    from rag_engine.evaluation.final_validation_units import prepare_unit_request
+
+    request = prepare_unit_request(
+        {
+            "evidence_items": [
+                {
+                    "id": "synthetic-image",
+                    "evidence_id": "E-synthetic",
+                    "text": text,
+                    "image_purposes": [{"start": 0, "end": len(text), "purpose": "record"}],
+                }
+            ]
+        }
+    )
+    unit = request.inputs["evidence_items"][0]["units"][0]
+    assert unit["text"] == folded
+    assert unit["image_purposes"] == [{"start": 0, "end": len(folded), "purpose": "record"}]
+    bound = request.bind([unit["unit_id"]])[0]
+    assert bound["text"] == text and (bound["start"], bound["end"]) == (0, len(text))
+    assert bound["image_purposes"] == [{"start": 0, "end": len(text), "purpose": "record"}]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -1970,7 +1971,7 @@ def test_final_unit_contract_and_schema_change_invalidates_review_reuse(
 ) -> None:
     from rag_engine.evaluation import final_validation_units
 
-    arguments = dict(
+    arguments: dict[str, Any] = dict(
         question="合成質問",
         answer="合成回答",
         settings=get_settings(),
@@ -2028,23 +2029,23 @@ async def test_selected_unit_sidecar_is_guide_only_and_absent_from_saved_trace(
     guide_seen = []
 
     class Observation:
-        def request(self, value):
+        def request(self, value: Any) -> None:
             pass
 
-        def response(self, value):
+        def response(self, value: Any) -> None:
             traces.append(copy.deepcopy(value() if callable(value) else value))
 
-        def display(self, **kwargs):
+        def display(self, **kwargs: Any) -> None:
             pass
 
     @contextmanager
-    def observe(*args, **kwargs):
+    def observe(*args: Any, **kwargs: Any) -> Iterator[Observation]:
         yield Observation()
 
-    async def contents(self, profile_id):
+    async def contents(self: Any, profile_id: str) -> list[tuple[str, int, SupportGuideContent]]:
         return [("guide-1", 2, _shared_guide())]
 
-    def guide_findings(*args, **kwargs):
+    def guide_findings(*args: Any, **kwargs: Any) -> tuple[list[Any], list[Any], None]:
         guide_seen.append(copy.deepcopy(kwargs.get("selected_evidence")))
         if mode == "guide-error":
             raise RuntimeError("合成guide失敗")

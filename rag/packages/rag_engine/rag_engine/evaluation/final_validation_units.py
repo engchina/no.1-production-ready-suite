@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot
 from rag_engine.generation.grounded import CITATION_UNIT_CONTRACT, citation_units
+from rag_engine.retrieval.character_forms import fold_width
 
 UNIT_CONTRACT = "final_validation_units_v1"
 
@@ -81,14 +82,21 @@ def prepare_unit_request(inputs: Mapping[str, Any]) -> FinalUnitRequest:
             if uid in units:
                 raise ValueError("実送達する単位IDが重複しています。")
             units[uid] = row
-            unit = {"unit_id": uid, "text": row["text"]}
+            unit: dict[str, Any] = {"unit_id": uid, "text": fold_width(row["text"])}
             selected_purposes = [
                 {"start": max(start, r["start"]) - start, "end": min(end, r["end"]) - start, "purpose": r["purpose"]}
                 for r in purposes
                 if r["start"] < end and start < r["end"]
             ]
             if selected_purposes:
-                unit["image_purposes"] = selected_purposes
+                unit["image_purposes"] = [
+                    {
+                        "start": len(fold_width(row["text"][: purpose["start"]])),
+                        "end": len(fold_width(row["text"][: purpose["end"]])),
+                        "purpose": purpose["purpose"],
+                    }
+                    for purpose in selected_purposes
+                ]
                 row["image_purposes"] = selected_purposes
             shown.append(unit)
         # 元の最終検証が提示する場所・種類だけを残し、内部scope/hashを送信しない。
