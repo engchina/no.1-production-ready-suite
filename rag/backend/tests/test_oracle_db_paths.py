@@ -682,7 +682,19 @@ async def test_embedding_save_commit_failure_keeps_original_and_does_not_return_
     from app.rag.ingestion import IngestionPipeline
     from app.schemas.extraction import StructuredExtraction
 
-    pool = FakeOraclePool(execute_results=[[{"cnt": 1}]])
+    pool = FakeOraclePool(
+        execute_results=[
+            [
+                {
+                    "chunk_set_id": "set-a",
+                    "document_id": "doc-a",
+                    "recipe_id": "recipe-a",
+                    "scope_accessible": 1,
+                }
+            ],
+            [{"cnt": 1}],
+        ]
+    )
     error = _text_commit_error()
 
     def fail_commit() -> None:

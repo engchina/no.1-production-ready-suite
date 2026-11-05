@@ -279,7 +279,8 @@ def restore_parent_map(
     metadata.pop(PLACEMENT_KEY, None)
     layout = dict(metadata.get("layout") or {})
     layout.pop("text_source_map", None)
-    metadata["layout"] = layout
+    if layout or "layout" in metadata:
+        metadata["layout"] = layout
     # 同じ位置の重複や異なる解析系統を一つの完全mapとして扱わない。
     ordered = sorted(intervals)
     nonoverlapping = all(
@@ -299,6 +300,7 @@ def restore_parent_map(
             source_engine_id=engine,
             unknown_sources=unknown,
         )
+        metadata["layout"] = layout
         metadata["image_text_source_map_status"] = (
             "complete" if not unknown and len(positions) == next(iter(counts)) else "partial"
         )
