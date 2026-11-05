@@ -1,3 +1,4 @@
+import searchTraceParity from "./fixtures/search-trace-parity.json";
 import generatedAnswers from "./fixtures/derived-answer-generated.json";
 import stageOutcomes from "./fixtures/stage-outcomes.json";
 import diversityStages from "./fixtures/diversity-stage-trace.json";
@@ -1970,5 +1971,46 @@ for (const generated of generatedAnswers) {
       await expectNoPageOverflow(page);
     }
     await page.getByTestId("run-history-answer").screenshot({ path: testInfo.outputPath(`generated-${generated.id}-history.png`) });
+  });
+}
+
+for (const fusionStatus of ["done", "skipped", "failed"] as const) {
+  test(`同じsnapshotのhybridと3回のvector検索と追加融合が経過と軌跡で一致する（${fusionStatus}）`, {tag: "@responsive"}, async ({page}, testInfo) => {
+    const fixture = searchTraceParity;
+    await mockLocalAuth(page);
+    const row = run(1, {question: "合成の質問", answer: "合成の回答", elapsed_ms: 2000});
+    await mockRuns(page, [row]);
+    const events = savedSpanProgress(row.run_id, [
+      {key: "root", spec: ragSpan.root(), at: [0, 2]},
+      {key: "search", spec: ragSpan.step("文書検索", "root"), at: [0, 1.5]},
+      ...fixture.spans.map(span => ({key: span.key, spec: ragSpan.step(span.stage, "search"), at: span.at as [number, number], status: span.key === "fusion" ? fusionStatus : span.status as "done"})),
+    ], {base: fixture.base, terminal: "done"});
+    await mockTraceApi(page, {[row.run_id]: events});
+    await page.goto(`/history/${row.run_id}`);
+    await page.getByTestId("run-history-timeline-summary").click();
+    const timeline = page.getByTestId("run-history-timeline");
+    const normal = [];
+    for (const span of fixture.spans) {
+      const record = timeline.locator(`[data-run-timeline-step="${spanStepId(span.key)}"]`);
+      await expect(record).toBeVisible();
+      const expectedStatus = span.key === "fusion" ? fusionStatus : span.status;
+      await expect(record).toHaveAttribute("data-status", expectedStatus);
+      normal.push({id: spanStepId(span.key), label: await record.locator("[data-run-timeline-label]").textContent(), status: expectedStatus, parent: await record.getAttribute("data-parent-id"), level: await record.getAttribute("data-level"), duration: await record.locator("[data-run-step-status-duration]").textContent()});
+    }
+    await timeline.screenshot({path: testInfo.outputPath("same-snapshot-process.png")});
+    await page.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
+    const explorer = page.locator("[data-trace-explorer]");
+    for (const expected of normal) {
+      const record = explorer.locator(`[data-trace-record="${expected.id}"]`);
+      await expect(record).toBeVisible();
+      await expect(record).toHaveAttribute("data-status", expected.status);
+      await expect(record).toHaveAttribute("data-parent-id", expected.parent ?? "");
+      await expect(record).toHaveAttribute("data-level", expected.level ?? "0");
+      await expect(record.locator("[data-trace-step-status-duration]")).toHaveText(expected.duration ?? "");
+      await expect(record.locator("[data-trace-record-label]")).toHaveText(expected.label ?? "");
+    }
+    await expect(explorer.locator("[data-trace-record]")).toHaveCount(6);
+    await explorer.screenshot({path: testInfo.outputPath("same-snapshot-trace.png")});
+    await expectNoPageOverflow(page);
   });
 }
