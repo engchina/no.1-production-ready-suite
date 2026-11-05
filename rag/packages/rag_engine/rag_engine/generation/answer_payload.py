@@ -274,6 +274,7 @@ def answer_result_payload(
         "image_prompt_mode": result.image_prompt_mode,
         "evidence_facts": list(result.evidence_facts),
         "generation_trace": result.generation_trace,
+        "provided_evidence_scope": (result.generation_trace or {}).get("provided_evidence_scope"),
         "task_contract": result.task_contract,
         # 回答の構造（AnswerEnvelope。#1235）。
         "envelope": result.envelope,

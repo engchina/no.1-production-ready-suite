@@ -265,3 +265,17 @@ def test_wire_conversion_preserves_private_raw_but_does_not_invent_missing_raw()
     canonical = canonical_generation_draft(value)
     assert canonical._provider_output_text == value._provider_output_text
     assert "合成の原始応答" not in canonical.model_dump_json()
+
+
+def test_provided_scope_keeps_actual_group_heading_and_auxiliary_context() -> None:
+    from rag_engine.generation.provided_scope import capture_provided_scope
+
+    evidence = span()
+    evidence["answer_context"] = "補助原文には項目Cの値20という情報があります。"
+    prompt = grounded.format_functions([evidence], model_view=True)
+    result = run_round([evidence], prompt)
+    captured = capture_provided_scope(result.citation_trace)
+    assert captured["status"] == "complete"
+    assert "対象操作" in captured["evidence_items"][0]["text"]
+    assert evidence["answer_context"] in captured["evidence_items"][0]["text"]
+    assert result.citation_trace["input"]["evidence"][0]["group_heading"] in prompt
