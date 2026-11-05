@@ -3701,7 +3701,7 @@ for (const initialActive of [null, "old-active"] as const) {
     await expect(list).toContainText("先頭の合成本文。");
     await expect(page.getByRole("combobox", {name: "分割方式", exact: true})).toContainText("固定長");
     await expect(page.getByRole("spinbutton", {name: "chunk サイズ(文字)", exact: true})).toHaveValue("500");
-    await expect(page.getByRole("status").filter({hasText: "この版はまだ検索に使われていません"})).toContainText("まだ検索に使われていません");
+    await expect(page.getByRole("status").filter({hasText: "この版はまだ検索に使われていません"})).toContainText("検索に使う前の分割結果を確認しています。");
     await list.getByRole("button").first().click();
     await expect.poll(() => reads.some(read => read.phase === 0 && read.focus === "pending-0:0")).toBe(true);
     expect(reads.some(read => read.source === "source-revision")).toBe(true);

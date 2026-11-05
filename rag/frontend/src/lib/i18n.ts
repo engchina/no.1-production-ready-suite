@@ -3403,7 +3403,7 @@ export const ja = {
   "flow.inspector.details": "処理の詳細(診断)",
   "flow.chunks.title": "Chunk / Citation",
   "flow.chunks.loading": "Chunk を読み込んでいます",
-  "flow.chunks.pendingVersion": "索引作成前の分割結果を確認しています。この版はまだ検索に使われていません。検索には索引作成に成功した配信中の版を使います。",
+  "flow.chunks.pendingVersion": "検索に使う前の分割結果を確認しています。この版はまだ検索に使われていません。検索には索引作成に成功した配信中の版を使います。",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
   "flow.chunks.scopeEmpty": "現在の原本表示範囲に対応する Chunk はありません。",
   "flow.chunks.unlocatedRange": "位置未確認の Chunk: {start}–{end} / {total}",
