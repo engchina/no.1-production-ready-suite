@@ -24,7 +24,7 @@ class BoundedCursor(FakeTraceCursor):
                 rows = [r for r in rows if r["product"] == binds["product"]]
             if binds.get("operation_id") is not None:
                 rows = [r for r in rows if r["operation_id"] == binds["operation_id"]]
-            latest = {}
+            latest: dict[tuple[str, str], int] = {}
             for row in rows:
                 key = row["product"], row["operation_id"]
                 latest[key] = max(latest.get(key, 0), row["attempt"])

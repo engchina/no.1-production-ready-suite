@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import { ChatProgress, RunTimelineSection, TracePartialNotice } from "../src";
+import { DEFAULT_TRACE_DETAILS_LABELS } from "../src/lib/trace-labels";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 function check(node: ReactNode, assertions: (host: HTMLDivElement) => void) {
@@ -22,7 +23,7 @@ describe("処理記録の不完全の原因", () => {
   it("完了済みでspanがなくてもチャットの書込欠落を表示する", () => check(<ChatProgress steps={[]} active={false} partial droppedSpans={7} testId="chat" />, host => {
     expect(host.querySelector('[data-testid="chat-partial"]')?.textContent).toBe("一部の処理だけを記録しています。");
   }));
-  it("空の実行履歴にも欠落を表示し、工程を作らない", () => check(<RunTimelineSection steps={[]} empty="処理の記録がありません。" defaultOpen partial droppedSpans={7} testId="run" />, host => {
+  it("空の実行履歴にも欠落を表示し、工程を作らない", () => check(<RunTimelineSection title="処理の経過" steps={[]} empty="処理の記録がありません。" defaultOpen partial droppedSpans={7} testId="run" />, host => {
     expect(host.querySelector('[data-testid="run-partial"]')?.textContent).toBe("一部の処理だけを記録しています。");
     expect(host.querySelectorAll("[data-run-step-summary]")).toHaveLength(0);
   }));
@@ -38,7 +39,7 @@ it("読取と書込の明示値だけでも、union partialを要求せず案内
 });
 
 it("旧ラベルproviderにreader文言がなくてもwriter理由へ読み替えない", async () => {
-  const { DEFAULT_TRACE_DETAILS_LABELS, TraceDetailsLabelsProvider } = await import("../src");
+  const { TraceDetailsLabelsProvider } = await import("../src");
   check(<TraceDetailsLabelsProvider labels={{...DEFAULT_TRACE_DETAILS_LABELS, readTruncated:undefined}}><TracePartialNotice readTruncated testId="reader" /></TraceDetailsLabelsProvider>, host => {
     expect(host.querySelector('[data-testid="reader"]')?.textContent).toContain("取得件数の上限");
     expect(host.textContent).not.toContain("一部の処理だけを記録しています。");
