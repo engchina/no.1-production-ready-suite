@@ -3,13 +3,13 @@ import type { TestSetDraft, TestSetItem } from "../src/lib/testset-api";
 import { mockLocalAuth } from "./_helpers";
 import { mockEvaluationProfiles } from "./_evaluation-jobs";
 
-export async function mockTestSetPage(page: Page) {
+export async function mockTestSetPage(page: Page, itemCount = 2) {
   await mockLocalAuth(page);
   await mockEvaluationProfiles(page);
   await page.route("**/api/settings/evaluation-suite", route => route.fulfill({ json: { data: { suite: "standard", thresholds: {}, suites: [], config_source: "runtime" }, error_messages: [], warning_messages: [] } }));
   let saved: TestSetDraft | null = null;
-  const inputs: TestSetItem[] = ["job-one", "job-two"].map((source_job_id, index) => ({
-    item_id: `item-${index}`, source_job_id, source_case_id: "row-2", source_pass: 0,
+  const inputs: TestSetItem[] = Array.from({ length: itemCount }, (_, index) => ({
+    item_id: `item-${index}`, source_job_id: index % 2 ? "job-two" : "job-one", source_case_id: "row-2", source_pass: 0,
     question: "合成の同じ質問", standard_answer: "", evidence: [], required_answer_points: [],
     response_decision: "answer", answer_process: "", confirmed: false, source_notice: null,
     original: { question: "合成の同じ質問", standard_answer: "", evidence: [], required_answer_points: [], response_decision: "answer", answer_process: "" },
@@ -19,8 +19,8 @@ export async function mockTestSetPage(page: Page) {
     const path = new URL(route.request().url()).pathname.split("/testsets")[1] ?? "";
     const method = route.request().method();
     const reply = (data: unknown, status = 200) => route.fulfill({ status, json: { data, error_messages: [], warning_messages: [] } });
-    if (path === "/sources") return reply(["job-one", "job-two"].map(job_id => ({ job_id, created_at: "2026-11-01T00:00:00Z", finished_at: "2026-11-01T00:01:00Z", total_cases: 1 })));
-    if (path === "/sources/items") return reply(inputs);
+    if (path === "/sources") return reply(["job-one", "job-two"].map(job_id => ({ job_id, created_at: "2026-11-01T00:00:00Z", finished_at: "2026-11-01T00:01:00Z", total_cases: inputs.filter(item => item.source_job_id === job_id).length })));
+    if (path === "/sources/items") return reply(inputs.filter(item => route.request().postDataJSON().job_ids.includes(item.source_job_id)));
     if (!path && method === "GET") return reply(saved ? [{ draft_id: saved.draft_id, name: saved.name, revision: saved.revision, updated_at: saved.updated_at, item_count: saved.items.length, confirmed_count: saved.items.filter(value => value.confirmed).length }] : []);
     if (!path && method === "POST") {
       const body = route.request().postDataJSON();
