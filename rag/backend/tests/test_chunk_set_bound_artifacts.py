@@ -145,7 +145,7 @@ async def test_preview_document_binds_to_the_evidence_version(
     assert old.object_storage_path == paths["a"]
     assert old.page_map == {"1": 2}
     assert old.file_name == "synthetic__prepared.pdf"
-    _detail, current = await mcp_tools.preview_document(read, "d1", "r1")
+    _detail, current = await mcp_tools.preview_document(read, "d1", "r1", chunk_set_id="cs-new")
     assert current is not None
     assert current.object_storage_path == paths["b"]
 
