@@ -1043,7 +1043,7 @@ def _native_ranges(record: Any) -> list[tuple[int, int]]:
 
 
 def _span_origin(record: Any, start: int, end: int, image_ranges: Sequence[tuple[int, int, Any]]) -> str:
-    """解析原文の範囲に完全に収まる抜粋だけを文書本文と分類する。"""
+    """既存の原生/anchorを優先し、同座標の正式画像位置でだけ由来を補う。"""
     cursor = start
     for a, b in _native_ranges(record):
         if b <= cursor or a >= end:
@@ -1055,7 +1055,9 @@ def _span_origin(record: Any, start: int, end: int, image_ranges: Sequence[tuple
         return "document_text"
     if any(a <= start and end <= b for a, b, _ in image_ranges):
         return "image_extraction"
-    return "unclassified"
+    from rag_engine.generation.image_text_sources import span_has_mapped_image_source
+
+    return "image_extraction" if span_has_mapped_image_source(record, start, end) else "unclassified"
 
 
 def _child_ranges(

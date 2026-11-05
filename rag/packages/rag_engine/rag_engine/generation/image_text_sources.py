@@ -122,6 +122,24 @@ def _has_image_source(record: Any, metadata: Mapping[str, Any]) -> bool:
     )
 
 
+def span_has_mapped_image_source(record: Any, start: int, end: int) -> bool:
+    """同じ本文座標の非空白文字がすべて検証済み画像部位にあるかを返す。"""
+    text = str(getattr(record, "text", "") or "")
+    if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text) or not text[start:end].strip():
+        return False
+    value = admitted_record_map(record)
+    if value is None or value["text_sha256"] != _hash(text):
+        return False
+    cursor = start
+    for row in sorted(value["ranges"], key=lambda row: (row["start"], row["end"])):
+        if row["role"] not in IMAGE_TEXT_SOURCE_ROLES or row["end"] <= cursor or row["start"] >= end:
+            continue
+        if text[cursor : max(cursor, row["start"])].strip():
+            return False
+        cursor = max(cursor, min(end, row["end"]))
+    return cursor > start and not text[cursor:end].strip()
+
+
 def image_source_signature(record: Any) -> str | None:
     """通常本文は従来どおり、未証明の画像はrecord単位に分離する。"""
     metadata = getattr(record, "metadata", {}) or {}
