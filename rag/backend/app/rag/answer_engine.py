@@ -3796,6 +3796,19 @@ class AnswerEngine:
         """
         if receipt is not None:
             receipt.update(chunk_id=chunk.chunk_id, metadata_applied=False)
+        chunk_set_id = chunk.metadata.get("chunk_set_id")
+        if not isinstance(chunk_set_id, str) or not chunk_set_id.strip():
+            if receipt is not None:
+                images = _engine_metadata(chunk).get("image_evidence")
+                receipt.update(
+                    status="source_unavailable",
+                    images=[
+                        {"index": index, "status": "source_unavailable"}
+                        for index, image in enumerate(images if isinstance(images, list) else [])
+                        if isinstance(image, dict)
+                    ],
+                )
+            return
         if chunk.chunk_id in state.materialized_images:
             cached = state.materialized_images[chunk.chunk_id]
             if cached is not None:
@@ -3846,7 +3859,8 @@ class AnswerEngine:
                 image_receipt.update(image_id=image_id, page=page)
             if not image_id or page < 1 or not isinstance(bbox, list) or len(bbox) != 4:
                 continue
-            name = f"{_safe_name(image_id)}.png"
+            source_key = hashlib.sha256(chunk_set_id.encode()).hexdigest()
+            name = f"{source_key}-{_safe_name(image_id)}.png"
             target = crop_dir / name
             if not target.is_file():
                 source = await self._parsed_source(chunk, state)
@@ -3888,6 +3902,9 @@ class AnswerEngine:
         """根拠の版が解析したファイル（同じ文書でもレシピごとに違う）。"""
         recipe_id = chunk.metadata.get("recipe_id")
         chunk_set_id = chunk.metadata.get("chunk_set_id")
+        if not isinstance(chunk_set_id, str) or not chunk_set_id.strip():
+            # 座標の版が未記録なら、現在のレシピや文書の原本で代用しない。
+            return None
         key = f"{chunk.document_id}:{chunk_set_id}"
         if key not in state.sources:
             try:
