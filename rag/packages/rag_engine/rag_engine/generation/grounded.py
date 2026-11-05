@@ -472,6 +472,7 @@ AUDIT_SYSTEM_PROMPT = (
         "rted（末尾で留保していても同じ）。summary が同じ保証をし"
         "ていれば summary_supported=false。\n"
         "### applications（当てはめ）\n"
+        "- documents は生成へ渡した原文を文書と版ごとにまとめたもの。選択引用の外にある条件・未確定の行・分類規則も確認する。引用抜粋だけで未確認条件を不成立や0とみなさず、必要な規則を確認できなければ valid=false。\n"
         "- valid=true は、item_indexes の items の原文の事実・規則から reasoning と result を導ける場合だけ。"
         "premises を使う場合は質問の事実に限る。資料だけで導く場合は空でよい。"
         "計算・条件・期間・日付の数え方と結果を確かめる。\n"
@@ -7209,7 +7210,10 @@ def run_round(
         if guide_task_scope:
             question_contract["original_question"] = question
         effective_contract = compile_guide_task_contract(question_contract, guide_task_scope)
+        from rag_engine.generation.application_review import application_documents
+
         inputs = {
+            "documents": application_documents(spans),
             "question": effective_contract.get("current_request", question) if guide_task_scope else question,
             **({"original_question": question} if guide_task_scope else {}),
             "task_contract": effective_contract,
@@ -7428,6 +7432,7 @@ def run_round(
         review_applications(
             question,
             applications,
+            evidence_spans=spans,
             existing_audit=application_audit,
             audit_requested=True,
             parse_text=parse_text,

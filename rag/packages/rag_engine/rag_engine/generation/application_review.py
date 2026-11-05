@@ -18,16 +18,50 @@ from rag_engine.generation.applications import (
     audit_view,
 )
 from rag_engine.generation.confirmed_context import confirmed_premise_records
+from rag_engine.generation.document_inputs import document_groups, document_key
 from rag_engine.generation.input_budget import ensure_model_input
 from rag_engine.models.llm import ApplicationAudit, GroundedAudit
 from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, deadline_cut_short
 from rag_engine.resources.runtime import resolve_prompt
 
 
+def application_documents(spans: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """生成へ選んだ原文全体を文書・版ごとに保持し、引用抜粋へ縮めない。"""
+    return [
+        {
+            "document_scope": list(document_key(members[0])),
+            "source": str(members[0].get("source") or ""),
+            "evidence": [
+                {
+                    key: span[key]
+                    for key in (
+                        "evidence_id",
+                        "source_id",
+                        "source",
+                        "page",
+                        "page_end",
+                        "section_path",
+                        "source_order",
+                        "start",
+                        "end",
+                        "text",
+                        "excerpt_only",
+                        "limits",
+                    )
+                    if key in span
+                }
+                for span in members
+            ],
+        }
+        for members in document_groups(spans)
+    ]
+
+
 def review_applications(
     question: str,
     checked: Sequence[CheckedApplication],
     *,
+    evidence_spans: Sequence[dict[str, Any]] | None = None,
     existing_audit: GroundedAudit | None,
     audit_requested: bool,
     parse_text: Callable[..., Any],
@@ -37,6 +71,14 @@ def review_applications(
     """既存監査を再利用し、監査なしの推導群にだけ1回まとめて問い合わせる。"""
     if not checked:
         return {"status": "not_applicable", "calls": 0}
+    if evidence_spans is None or not evidence_spans:
+        apply_application_audit(checked, None, require_complete=True)
+        return {
+            "status": "incomplete",
+            "calls": 0,
+            "reason": "evidence_context_missing",
+            "results": [dict(entry.assessment) for entry in checked],
+        }
     if audit_requested:
         invalid_contract = existing_audit is not None and any(
             row.index not in range(len(checked)) for row in existing_audit.application_reviews
@@ -57,6 +99,7 @@ def review_applications(
     index = {id(item): position for position, item in enumerate(items)}
     inputs = {
         "question": question,
+        "documents": application_documents(evidence_spans),
         "items": [
             {"index": position, "text": item.item.text, "quote": item.item.quote or item.item.text, "source": _source_label(item.span)}
             for position, item in enumerate(items)
@@ -69,7 +112,13 @@ def review_applications(
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = json.dumps(inputs, ensure_ascii=False)
     started = monotonic()
-    diagnostic: dict[str, Any] = {"status": "completed", "calls": 0, "prompt_chars": len(system) + len(prompt)}
+    diagnostic: dict[str, Any] = {
+        "status": "completed",
+        "calls": 0,
+        "prompt_chars": len(system) + len(prompt),
+        "evidence_spans": len(evidence_spans),
+        "evidence_scope": "generation_selected_originals",
+    }
     audit = None
     try:
         ensure_model_input(settings, system, prompt, ApplicationAudit.model_json_schema(), provider_id=provider_id)
