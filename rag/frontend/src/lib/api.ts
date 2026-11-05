@@ -899,6 +899,12 @@ export interface DocumentPreviewPage {
   height: number;
 }
 
+export interface DocumentPreviewSource {
+  file_name: string;
+  content_type: string | null;
+  is_pdf: boolean;
+}
+
 export interface DocumentPreviewPages {
   page_count: number;
   pages: DocumentPreviewPage[];
@@ -3969,6 +3975,10 @@ export const api = {
       )}/content${qs ? `?${qs}` : ""}`,
     );
   },
+  getDocumentPreviewSource: (id: string, recipeId: string, chunkSetId: string) =>
+    request<DocumentPreviewSource>(
+      `/api/documents/${encodeURIComponent(id)}/recipes/${encodeURIComponent(recipeId)}/preview-source?${new URLSearchParams({ chunk_set_id: chunkSetId })}`,
+    ),
   /** PDF をページ画像で表示するためのページ一覧（bbox の強調を重ねる。#349）。 */
   getDocumentPreviewPages: (
     id: string,

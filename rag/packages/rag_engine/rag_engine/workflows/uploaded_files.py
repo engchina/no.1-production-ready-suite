@@ -19,7 +19,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from rag_engine.chunking.storage import CHUNKS_DIRECTORY, load_chunk_run_by_id
+from rag_engine.chunking.storage import CHUNKS_DIRECTORY, load_chunk_run_source_identity
 from rag_engine.config import Settings
 from rag_engine.generation.answer_records import RUN_ID_PATTERN
 from rag_engine.parsing.parse_inputs import PARSE_INPUT_DIRECTORY, file_sha256, filename_key
@@ -257,15 +257,26 @@ def delete_uploaded_file(
 
 
 def _document_ids(output_dir: Path, uploaded: UploadedFile) -> list[str]:
-    """ローカルの chunk run から ADB の document_id を求めます。読めない chunk run は飛ばします。"""
+    """照合済み原本に結び付く保存identityだけから削除IDを求める。本文は復元しない。"""
     from rag_engine.adapters.oracle.store import document_id_for_chunk_run
 
     ids: list[str] = []
     for chunk_run_id in uploaded.chunk_run_ids:
-        try:
-            chunk_run = load_chunk_run_by_id(output_dir, chunk_run_id)
-        except (OSError, ValueError):
+        identity = load_chunk_run_source_identity(output_dir, chunk_run_id)
+        if identity is None:
+            # DB削除後にrunの一部だけ消えた同snapshotの再試行を許す。残存runのmanifest欠損は拒否する。
+            if any((output_dir / run_id / CHUNKS_DIRECTORY / chunk_run_id).exists() for run_id in uploaded.run_ids):
+                raise ValueError("保存済みチャンクの識別情報を確認できません。")
             continue
-        if chunk_run is not None:
-            ids.append(document_id_for_chunk_run(chunk_run))
+        source = output_dir / identity.source_run_id / SOURCE_FILE_NAME
+        if (
+            identity.source_run_id not in uploaded.run_ids
+            or identity.source_file_name != uploaded.file_name
+            or identity.source_page_count != uploaded.page_count
+            or (identity.source_file_sha256 and identity.source_file_sha256 != uploaded.sha256)
+            or not source.is_file()
+            or file_sha256(source) != uploaded.sha256
+        ):
+            raise ValueError("削除対象と保存済みチャンクの識別情報が一致しません。")
+        ids.append(document_id_for_chunk_run(identity))
     return list(dict.fromkeys(ids))

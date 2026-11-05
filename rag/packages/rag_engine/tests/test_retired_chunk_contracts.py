@@ -1,4 +1,4 @@
-"""廃止した推定メタデータを含む履歴だけを互換で読み、破損した契約は拒否する。"""
+"""現行契約だけを読み、廃止した推定メタデータ付き契約と破損を拒否する。"""
 
 import hashlib
 import json
@@ -20,9 +20,10 @@ def legacy() -> dict:
     return signed({**_chunk_contracts(), "inquiry_chunk_metadata_schema_version": 1, "inquiry_profile_contract_hash": "synthetic-retired"})
 
 
-def test_retired_only_legacy_contract_is_readable() -> None:
+def test_retired_only_legacy_contract_requires_rechunking() -> None:
     _validate_chunk_contracts(_chunk_contracts())
-    _validate_chunk_contracts(legacy())
+    with pytest.raises(ValueError, match="再チャンキング"):
+        _validate_chunk_contracts(legacy())
 
 
 @pytest.mark.parametrize("change", ["signature", "known_version", "extra_field"])

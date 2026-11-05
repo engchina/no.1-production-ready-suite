@@ -81,6 +81,7 @@ export function DocumentPreview({
   variant = "original",
   sourceProfile = null,
   preparedArtifact = null,
+  preparedPdf,
   showFallbackDownload = true,
   focusPage = null,
   onPageChange,
@@ -105,6 +106,8 @@ export function DocumentPreview({
   variant?: DocumentContentVariant;
   sourceProfile?: SourceProfile | null;
   preparedArtifact?: DocumentPreprocessArtifact | null;
+  /** 引用CSの原本metadataから確認したPDF種別。現在のレシピは代用しない。 */
+  preparedPdf?: boolean;
   showFallbackDownload?: boolean;
   focusPage?: number | null;
   onPageChange?: (page: number) => void;
@@ -137,7 +140,7 @@ export function DocumentPreview({
   const kind = kindOf(fileName, sourceProfile);
   // Office の原本（docx / pptx / xlsx 等）はブラウザで描けないので、preprocess が作った変換済み PDF があれば
   // それを表示する（抽出 bbox も変換済み PDF の座標系で合う）。
-  const officeAsPdf = kind === "office" && isPreparedPdfArtifact(preparedArtifact) && variant !== "prepared";
+  const officeAsPdf = kind === "office" && (preparedPdf ?? isPreparedPdfArtifact(preparedArtifact)) && variant !== "prepared";
   const pdfVariant: DocumentContentVariant = officeAsPdf ? "prepared" : variant;
   const pdfUrl = officeAsPdf ? contentUrl({ variant: "prepared" }) : url;
   const sharedKind: DocumentPreviewKind =

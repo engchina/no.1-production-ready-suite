@@ -265,6 +265,13 @@ class IngestionUserError(ValueError):
     safe_for_user = True
 
 
+def _require_saved_quality_report(extraction: StructuredExtraction) -> IngestionQualityReport:
+    """保存済み抽出の続行では、当時の品質報告を推定で補わない。"""
+    if extraction.quality_report is None:
+        raise IngestionUserError("保存された品質レポートがありません。文書を再解析してください。")
+    return extraction.quality_report
+
+
 class IngestionTimeoutError(IngestionUserError):
     """上流 AI 処理の timeout により再実行または設定変更が必要な取込エラー。"""
 
@@ -1850,7 +1857,7 @@ class IngestionPipeline:
         source_sha256 = detail.content_sha256
         source_size = detail.file_size_bytes
         extraction = await self._load_reviewed_extraction(detail)
-        quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        quality_report = _require_saved_quality_report(extraction)
         # 開始時の status も cancel を確かめてから書く(#305)。
         await _raise_if_cancelled(cancel_checker)
         if self._recipe_id is not None:
@@ -1935,7 +1942,7 @@ class IngestionPipeline:
         source_sha256 = detail.content_sha256
         source_size = detail.file_size_bytes
         extraction = await self._load_reviewed_extraction(detail)
-        quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        quality_report = _require_saved_quality_report(extraction)
         # 開始時の status も cancel を確かめてから書く(#305)。
         await _raise_if_cancelled(cancel_checker)
         if self._recipe_id is not None:
@@ -2060,7 +2067,7 @@ class IngestionPipeline:
         source_sha256 = detail.content_sha256
         source_size = detail.file_size_bytes
         extraction = await self._load_reviewed_extraction(detail)
-        quality_report = extraction.quality_report or build_ingestion_quality_report(extraction)
+        quality_report = _require_saved_quality_report(extraction)
         # 開始時の status も cancel を確かめてから書く(#305)。
         await _raise_if_cancelled(cancel_checker)
         if self._recipe_id is not None:

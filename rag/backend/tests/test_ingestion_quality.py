@@ -1,8 +1,10 @@
 """取込品質レポートの構造カウントを検証する。"""
 
+import pytest
+
 from app.rag.ingestion_quality import (
     build_ingestion_quality_report,
-    summarize_ingestion_quality,
+    requires_review,
 )
 from app.schemas.extraction import (
     DocumentElement,
@@ -73,57 +75,52 @@ def test_quality_report_counts_first_class_structure_and_parser_artifacts() -> N
     ]
 
 
-def test_legacy_quality_summary_infers_first_class_tables_assets_and_artifacts() -> None:
-    """quality_report が無い旧 extraction JSON も構造 metadata から集計する。"""
-    summary = summarize_ingestion_quality(
-        [
-            {
-                "elements": [
-                    {
-                        "kind": "text",
-                        "text": "本文",
-                        "page_number": 1,
-                        "confidence": 0.6,
-                    }
-                ],
-                "pages": [
-                    {"page_number": 1, "element_ids": ["el-1"]},
-                    {"page_number": 2, "element_ids": []},
-                ],
-                "tables": [
-                    {
-                        "table_id": "tbl-1",
-                        "page_number": 2,
-                        "cells": [{"row": 0, "col": 0, "text": "A", "confidence": 0.4}],
-                    }
-                ],
-                "assets": [{"asset_id": "chart-1", "kind": "chart", "page_number": 2}],
-                "parser_artifacts": {
-                    "page_count": "4",
-                    "adapter_table_count": 2,
-                    "formula_count": 1,
-                    "failed_segment_count": 1,
-                },
-            }
-        ]
+@pytest.mark.parametrize("confidence,expected_risk", [(0.1, "high"), (0.95, "low")])
+def test_new_quality_report_preserves_measured_risk_without_saved_report(
+    confidence: float, expected_risk: str
+) -> None:
+    """保存報告のない新しい解析結果から、実測の信頼度を品質に反映する。"""
+    extraction = StructuredExtraction(
+        raw_text="合成の本文",
+        confidence=confidence,
+        elements=[DocumentElement(kind="text", text="合成の本文", page_number=1)],
+        pages=[ExtractionPage(page_number=1, element_ids=["el-synthetic"])],
+    )
+    assert extraction.quality_report is None
+
+    report = build_ingestion_quality_report(
+        extraction,
+        parser_profile="synthetic",
+        parser_backend="synthetic",
+        parser_version="synthetic-v1",
     )
 
-    assert summary["document_count"] == 1
-    assert summary["table_document_count"] == 1
-    assert summary["figure_document_count"] == 1
-    assert summary["formula_document_count"] == 1
-    assert summary["low_confidence_document_count"] == 1
-    assert summary["failed_segment_document_count"] == 1
-    assert summary["average_page_coverage"] == 0.5
-    assert summary["warning_counts"] == {
-        "table_structure_review": 1,
-        "figure_ocr_review": 1,
-        "formula_review": 1,
-        "low_confidence_elements": 1,
-        "failed_segments": 1,
-    }
-    assert summary["risk_counts"] == {"low": 0, "medium": 1, "high": 0}
-    assert summary["parser_profile_counts"] == {"legacy": 1}
+    assert report.risk_level == expected_risk
+    assert report.page_coverage == 1.0
+    assert report.element_count == 1
+    assert report.parser_profile == "synthetic"
+    assert report.parser_backend == "synthetic"
+    assert report.parser_version == "synthetic-v1"
+    assert ("low_extraction_confidence" in report.quality_warnings) == (confidence < 0.65)
+    saved = extraction.model_copy(update={"quality_report": report})
+    restored = StructuredExtraction.model_validate(saved.model_dump(mode="json"))
+    assert restored.quality_report == report
+
+
+@pytest.mark.parametrize(
+    "warning,expected_review", [("excel_header_low_confidence", True), ("", False)]
+)
+def test_new_quality_report_preserves_review_required_warning(
+    warning: str, expected_review: bool
+) -> None:
+    """新規レポートでも、既存の確認必須warningを失わない。"""
+    extraction = StructuredExtraction(
+        raw_text="合成の本文",
+        elements=[DocumentElement(kind="text", text="合成の本文")],
+        warnings=[warning] if warning else [],
+    )
+    report = build_ingestion_quality_report(extraction)
+    assert requires_review(report) is expected_review
 
 
 def test_risk_level_ignores_exception_type_suffix_on_warning_codes() -> None:

@@ -3337,6 +3337,8 @@ export const ja = {
   "flow.extraction.vision.field.exception_or_cautions": "注意・例外",
   "flow.extraction.vision.field.correction_notes": "補正メモ",
   "flow.extraction.vision.status": "画像の読み取り: {status}",
+  "flow.extraction.vision.running": "読み取り中",
+  "flow.extraction.vision.unknown": "不明",
   "flow.extraction.vision.succeeded": "説明済み",
   "flow.extraction.vision.failed": "失敗",
   "flow.extraction.vision.skipped": "対象外",
@@ -4187,6 +4189,9 @@ export const ja = {
   "search.answerDetails.faqSource.note":
     "回答は、この登録された回答だけをもとに作成しました。表示は回答した時点の内容です。",
   "search.history.loadError": "保存された回答を読み込めませんでした。",
+  "search.previewSource.loading": "引用した版のファイルを確認しています",
+  "search.previewSource.error": "引用した版のファイルを確認できませんでした。",
+  "search.previewSource.missing": "引用した版のファイルの記録がありません。",
   "search.history.detailLoading": "回答の詳細を読み込んでいます",
   "search.history.question": "質問: {question}",
   "search.history.savedAt": "保存日時: {value}",
