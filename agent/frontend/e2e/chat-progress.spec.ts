@@ -1,3 +1,4 @@
+import { expectRunValueTypography } from "../../../platform/packages/ui/e2e/run-value-typography";
 import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
@@ -759,6 +760,12 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
   if (await back.isVisible()) await back.click();
   await page.locator('[data-trace-record="chat-1"] button').click();
   const inspector = page.locator("[data-trace-inspector]");
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expectRunValueTypography(inspector);
+    await inspector.screenshot({path: testInfo.outputPath(`run-value-typography-${theme}.png`)});
+  }
+
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();
   expect(reads).toEqual([]);
   await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();

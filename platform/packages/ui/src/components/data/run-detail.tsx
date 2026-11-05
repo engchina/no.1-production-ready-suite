@@ -203,8 +203,10 @@ export interface RunFact {
   /** 見出し（翻訳済み）。 */
   label: string;
   value: ReactNode;
-  /** 識別子（実行 ID・モデル名）を等幅で出す。 */
+  /** 識別子（実行 ID・モデルの実ID）を等幅で出す。 */
   mono?: boolean;
+  /** 比較する数値。通常の文字や欠測の代替文は指定しない。 */
+  tabular?: boolean;
   /** 長い値（対象の名前・エラーの要約など）を 1 行の全幅に置く。 */
   wide?: boolean;
 }
@@ -226,7 +228,8 @@ export function RunFactList({ facts, className, testId }: { facts: readonly RunF
           <dd
             className={cn(
               "mt-0.5 break-words text-fg [overflow-wrap:anywhere]",
-              fact.mono ? "font-mono text-xs leading-5" : "tnum"
+              fact.mono && "font-mono text-xs leading-5",
+              fact.tabular && "tnum"
             )}
           >
             {fact.value}
@@ -267,6 +270,7 @@ export interface RunSummaryProps {
    * 利用量。`note` は計測の状態の注記（「一部計測」「未計測」など。翻訳済み）で、`tokens` があれば数の後ろに括弧で、
    * 無ければ単独で出す（不明を 0 と出さない。#3419）。
    */
+  /** costは記録した金額の書式化済み表示。欠測は代替文でなくnull/未指定にする。 */
   usage?: { tokens?: number | null; note?: string | null; cost?: string | null } | null;
   runId: string;
   /** 製品に固有の事実（NL2SQL の実行エンジン・行数など）。共通の事実の後、実行 ID の前に並べる。 */
@@ -311,12 +315,12 @@ export function RunSummary({
   const labels = resolveRunDetailLabels(labelsInput);
   const person = (value: { name: string; isSelf?: boolean }) => (value.isSelf ? labels.self : value.name);
   const facts: RunFact[] = [
-    { id: "startedAt", label: labels.facts.startedAt, value: <time dateTime={startedAt}>{formatDateTime(startedAt)}</time> },
+    { id: "startedAt", label: labels.facts.startedAt, value: <time dateTime={startedAt}>{formatDateTime(startedAt)}</time>, mono: Boolean(startedAt) },
   ];
   if (finishedAt) {
-    facts.push({ id: "finishedAt", label: labels.facts.finishedAt, value: <time dateTime={finishedAt}>{formatDateTime(finishedAt)}</time> });
+    facts.push({ id: "finishedAt", label: labels.facts.finishedAt, value: <time dateTime={finishedAt}>{formatDateTime(finishedAt)}</time>, mono: true });
   }
-  facts.push({ id: "duration", label: labels.facts.duration, value: formatRunDuration(durationMs, labels.notRecorded) });
+  facts.push({ id: "duration", label: labels.facts.duration, value: formatRunDuration(durationMs, labels.notRecorded), tabular: typeof durationMs === "number" && Number.isFinite(durationMs) });
   if (kind) facts.push({ id: "kind", label: labels.facts.kind, value: kind });
   if (executor) facts.push({ id: "executor", label: labels.facts.executor, value: person(executor) });
   if (owner) facts.push({ id: "owner", label: labels.facts.owner, value: person(owner) });
@@ -332,9 +336,9 @@ export function RunSummary({
   if (usage?.tokens != null || usage?.note) {
     const tokens = usage.tokens != null ? formatRunTokens(usage.tokens) : null;
     const value = tokens && usage.note ? `${tokens}（${usage.note}）` : (tokens ?? usage.note);
-    facts.push({ id: "tokens", label: labels.facts.tokens, value });
+    facts.push({ id: "tokens", label: labels.facts.tokens, value, tabular: typeof usage.tokens === "number" && Number.isFinite(usage.tokens) });
   }
-  if (usage?.cost) facts.push({ id: "cost", label: labels.facts.cost, value: usage.cost });
+  if (usage?.cost) facts.push({ id: "cost", label: labels.facts.cost, value: usage.cost, tabular: true });
   facts.push(...extraFacts);
   facts.push({ id: "runId", label: labels.facts.runId, value: runId, mono: true });
 
@@ -1179,14 +1183,14 @@ function ProcessIdentifierRow({ label, value, trace = false }: { label: string; 
   </div>;
 }
 
-/** 使用したモデルの記録。識別子の後ろに置く共通の表示。 */
-export function RunUsedModels({ models, events = [] }: { models: readonly { label: string; value: string; title?: string; modelId?: string }[]; events?: readonly { type: string; attributes?: Record<string, unknown> }[] }) {
+/** 使用したモデルの記録。valueKind未指定は通常書体。modelIdと同一の値だけ既存ID記録として扱う。 */
+export function RunUsedModels({ models, events = [] }: { models: readonly { label: string; value: string; title?: string; modelId?: string; valueKind?: "identifier" | "displayName" }[]; events?: readonly { type: string; attributes?: Record<string, unknown> }[] }) {
   const recorded = events.flatMap(event => {
     if (event.type !== "step") return [];
     const value = event.attributes?.["gen_ai.request.model"];
     if (typeof value !== "string" || !value.trim()) return [];
     const operation = event.attributes?.["gen_ai.operation.name"];
-    return [{ label: operation === "embeddings" ? "Embedding" : operation === "rerank" ? "Rerank" : "LLM", value, modelId: value }];
+    return [{ label: operation === "embeddings" ? "Embedding" : operation === "rerank" ? "Rerank" : "LLM", value, modelId: value, valueKind: "identifier" as const }];
   });
   const used = [...models, ...recorded].filter((model, index, all) => all.findIndex(other => (other.modelId ?? other.value) === (model.modelId ?? model.value)) === index);
   const labels = useTraceDetailsLabels().processMetadata ?? DEFAULT_TRACE_DETAILS_LABELS.processMetadata!;
@@ -1195,7 +1199,7 @@ export function RunUsedModels({ models, events = [] }: { models: readonly { labe
     {used.length ? <dl className="flex min-w-0 flex-wrap gap-x-4 gap-y-1">{used.map((model, index) =>
       <div key={`${model.label}-${index}`} className="flex min-w-0 flex-wrap items-baseline gap-1.5">
         {model.label ? <dt className="text-fg-muted">{model.label}</dt> : null}
-        <dd className="min-w-0 break-all font-medium text-fg" title={"title" in model ? model.title : undefined}>{model.value}</dd>
+        <dd className={cn("min-w-0 break-all font-medium text-fg", (model.valueKind === "identifier" || (!model.valueKind && model.modelId === model.value)) && "font-mono")} title={"title" in model ? model.title : undefined}>{model.value}</dd>
       </div>)}</dl> : <span className="text-fg-muted">—</span>}
   </div>;
 }

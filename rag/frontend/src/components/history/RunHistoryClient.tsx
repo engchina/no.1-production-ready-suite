@@ -480,8 +480,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // モデル・token・モデルの呼び出し（実行のときに記録した値。Agent の実行の詳細と同じ形。#3419）。
   const usageView = runUsageView(run);
   const extraFacts: RunFact[] = [
-    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls },
-    { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count) },
+    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls, tabular: Boolean(run.usage && run.usage.measurement !== "unmeasured" && Number.isFinite(run.usage.requests)) },
+    { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count), tabular: Number.isFinite(run.citation_count) },
   ];
   if (run.status === "error") {
     extraFacts.push({
