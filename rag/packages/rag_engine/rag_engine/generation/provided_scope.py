@@ -20,8 +20,11 @@ def capture_provided_scope(citation_trace: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(rows, list):
         return {"status": "unknown", "reason": "generation_evidence_not_recorded", "evidence_items": []}
     items = []
+    prompt = captured.get("prompt")
     complete = (
-        captured.get("snapshot_status") == "recorded"
+        isinstance(prompt, str)
+        and hashlib.sha256(prompt.encode()).hexdigest() == captured.get("prompt_sha256")
+        and captured.get("snapshot_status") == "recorded"
         and captured.get("image_payload_capture") == "not_applicable"
         and not captured.get("unrecorded_evidence_ids")
         and type(captured.get("expected_evidence_count")) is int
@@ -56,11 +59,26 @@ def capture_provided_scope(citation_trace: Mapping[str, Any]) -> dict[str, Any]:
         ):
             complete = False
             continue
+        block = row.get("prompt_block")
+        heading = row.get("group_heading")
+        if (
+            not isinstance(block, str)
+            or not block
+            or not isinstance(heading, str)
+            or not heading
+            or not isinstance(prompt, str)
+            or block not in prompt
+            or heading not in prompt
+            or hashlib.sha256(block.encode()).hexdigest() != row.get("prompt_block_sha256")
+        ):
+            complete = False
+            continue
+        # 引用可能な本文だけでは、見出しや補助情報の意味が欠ける。実際の入力ブロックをそのまま残す。
         items.append(
             {
                 "id": str(row.get("view_sha256") or f"input-{index}"),
                 "source": str(row.get("source") or ""),
-                "text": "\n".join(text[start:end] for start, end in units) if row.get("numbered") is True else text,
+                "text": heading + "\n" + block,
             }
         )
     return {

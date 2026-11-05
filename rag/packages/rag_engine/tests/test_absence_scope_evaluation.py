@@ -182,3 +182,49 @@ def test_complete_scope_over_budget_is_not_truncated():
     assert result["claim_checks"][0]["status"] == "unassessed"
     assert result["judge_diagnostics"]["absence_scope_failure"] == "input_too_large"
     assert calls == []
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "missing", "unknown_reference", "duplicate_reference", "extra_id"])
+def test_invalid_output_ids_only_withhold_affected_report(defect):
+    import json
+
+    from rag_engine.evaluation.answer_eval import ClaimJudgement
+
+    value = payload()
+    value["answer_text"] += "\n資料では項目Dも確認できません。\n根拠：synthetic-0.txt p.1"
+
+    def parse(system, prompt, settings, schema, **kwargs):
+        inputs = json.loads(prompt)
+        if schema is ClaimJudgement:
+            return ClaimJudgement(reason="未記載報告", claim_kind="absence_report", status="unsupported")
+        assert schema is AbsenceScopeOutput
+        first, second = [
+            AbsenceScopeCheck(answer_passage_id=p["id"], reason="全範囲で未記載", status="absent", evidence_ids=[])
+            for p in inputs["passages"]
+        ]
+        checks = [first, second]
+        if defect == "duplicate":
+            checks.append(first)
+        elif defect == "missing":
+            checks = [second]
+        elif defect in {"unknown_reference", "duplicate_reference"}:
+            checks[0] = first.model_copy(
+                update=dict(status="present", evidence_ids=["unknown"] if defect == "unknown_reference" else ["doc:0", "doc:0"])
+            )
+        elif defect == "extra_id":
+            checks.append(first.model_copy(update=dict(answer_passage_id="not-requested")))
+        return AbsenceScopeOutput(checks=checks)
+
+    with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
+        result = evaluate_answer_payload(value, get_settings())
+    first, second = result["claim_checks"]
+    assert second["status"] == "supported"
+    assert first["status"] == ("supported" if defect == "extra_id" else "unassessed")
+    assert result["judge_diagnostics"]["absence_scope_calls"] == 1
+
+
+def test_claim_classification_is_required_and_has_executed_instructions():
+    from rag_engine.evaluation.answer_eval import CLAIM_PROMPT, ClaimJudgement
+
+    assert "claim_kind" in ClaimJudgement.model_json_schema()["required"]
+    assert all(value in CLAIM_PROMPT for value in ("claim_kind", "absence_report", "ordinary"))

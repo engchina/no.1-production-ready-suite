@@ -2102,6 +2102,7 @@ def _review_absence_reports(claims, payload, settings, provider_id, budget, diag
     )
     system = resolve_prompt("evaluation.absenceScope", ABSENCE_SCOPE_PROMPT)
     outputs = {}
+    item_failures = {}
     failure = "scope_unavailable"
     if valid and _request_bytes(system, inputs, AbsenceScopeOutput) > budget:
         failure = "input_too_large"
@@ -2110,24 +2111,31 @@ def _review_absence_reports(claims, payload, settings, provider_id, budget, diag
         expected = {claim.answer_passage_id for claim in reports}
         evidence_ids = {item["id"] for item in items}
 
-        def check(output):
-            ids = [item.answer_passage_id for item in output.checks]
-            if len(ids) != len(expected) or set(ids) != expected:
-                raise EvaluationContractError("未記載報告の段落 ID を各一回指定してください。")
-            for item in output.checks:
-                if not set(item.evidence_ids).issubset(evidence_ids):
-                    raise EvaluationContractError("資料にある ID だけを指定してください。")
-                if item.status == "present" and not item.evidence_ids:
-                    raise EvaluationContractError("記載ありの根拠 ID を指定してください。")
-                if item.status == "absent" and item.evidence_ids:
-                    raise EvaluationContractError("未記載の判定に引用を付けないでください。")
-
         try:
             diagnostics["judge_calls"] += 1
             diagnostics["absence_scope_calls"] = 1
-            output = _parse_checked(system, inputs, settings, AbsenceScopeOutput, provider_id, check, max_input_bytes=budget, attempts=1)
-            outputs = {item.answer_passage_id: item for item in output.checks}
-            failure = ""
+            output = _parse_checked(
+                system, inputs, settings, AbsenceScopeOutput, provider_id, lambda output: None, max_input_bytes=budget, attempts=1
+            )
+            counts = {}
+            for item in output.checks:
+                counts[item.answer_passage_id] = counts.get(item.answer_passage_id, 0) + 1
+            for item in output.checks:
+                key = item.answer_passage_id
+                if key not in expected:
+                    continue
+                if counts[key] != 1:
+                    item_failures[key] = "duplicate_passage_id"
+                elif len(item.evidence_ids) != len(set(item.evidence_ids)) or not set(item.evidence_ids).issubset(evidence_ids):
+                    item_failures[key] = "invalid_evidence_ids"
+                elif item.status == "present" and not item.evidence_ids or item.status == "absent" and item.evidence_ids:
+                    item_failures[key] = "invalid_evidence_reference"
+                else:
+                    outputs[key] = item
+            for key in expected - set(counts):
+                item_failures[key] = "missing_passage_id"
+            diagnostics["absence_scope_unexpected_ids"] = len(set(counts) - expected)
+            failure = "partial_output" if item_failures else ""
         except Exception as exc:
             failure = type(exc).__name__
             reason = "全範囲の検査を完了できなかったため、未記載報告は未評価です。"
@@ -2139,19 +2147,26 @@ def _review_absence_reports(claims, payload, settings, provider_id, budget, diag
             reviewed.append(claim)
             continue
         result = outputs.get(claim.answer_passage_id)
+        item_failure = item_failures.get(claim.answer_passage_id, failure)
         status = {"absent": "supported", "present": "contradicted"}.get(result.status, "unassessed") if result else "unassessed"
         evidence_id = result.evidence_ids[0] if result and result.evidence_ids else ""
         reviewed.append(
             claim.model_copy(
                 update=dict(
                     status=status,
-                    reason=result.reason if result else reason,
+                    reason=result.reason
+                    if result
+                    else (
+                        "段落または根拠の ID を検証できないため、未記載報告は未評価です。"
+                        if claim.answer_passage_id in item_failures
+                        else reason
+                    ),
                     source_id=evidence_id,
                     evidence_id=",".join(result.evidence_ids) if result else "",
                     evidence_quote=by_id[evidence_id]["text"] if evidence_id else "",
-                    reference_check="provided_scope_verified" if result else failure,
+                    reference_check="provided_scope_verified" if result else item_failure,
                     scope_check=dict(
-                        status="verified" if result else failure,
+                        status="verified" if result else item_failure,
                         sha256=scope["sha256"] if valid else "",
                         evidence_count=len(items) if valid else 0,
                     ),
