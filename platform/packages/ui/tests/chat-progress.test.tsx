@@ -708,6 +708,9 @@ it("並行の実工程を同時に回し、子が終わっても架空の処理�
   ];
   render(<ChatProgress steps={steps} active testId="parallel" />);
   expect(q("parallel-step-one")?.querySelector(".pr-spinner")).not.toBeNull();
+  expect(q("parallel-step-one")?.dataset.parentId).toBe("parent");
+  expect(q("parallel-step-two")?.dataset.parentId).toBe("parent");
+  expect(q("parallel-step-two")?.dataset.level).toBe("1");
   expect(q("parallel-step-two")?.querySelector(".pr-spinner")).not.toBeNull();
   render(<ChatProgress steps={steps.map((step) => step.level ? { ...step, status: "done", finishedAt: at(3) } : step)} active testId="parallel" />);
   expect(host.textContent).not.toContain("処理を続けています");

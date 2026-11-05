@@ -436,11 +436,11 @@ function CurrentStepRow({
       data-reconnecting={reconnecting ? "true" : "false"}
     >
       <div className="min-w-0" data-testid={testId ? `${testId}-step-${step.id}` : undefined}
-        data-status="running" aria-current="step" data-level={step.level ?? 0}>
+        data-status="running" aria-current="step" data-level={step.level || undefined} data-parent-id={step.parentId}>
         <RunStepSummary step={chatProgressTimelineStep(step)} size="sm" statusLabel={labels.status.running}
           bar={null} showBars={false} spin={activityIndicator} surface="timeline" formatDuration={labels.formatDuration}
-          durationTestId={testId ? primary ? `${testId}-current-elapsed` : `${testId}-elapsed-${step.id}` : undefined} />
-        {step.detail ? <span className="text-xs text-fg-muted">{`（${step.detail}）`}</span> : null}
+          durationTestId={testId ? primary ? `${testId}-current-elapsed` : `${testId}-elapsed-${step.id}` : undefined}
+          renderName={step.detail ? name => <span className="min-w-0">{name}<span className="text-fg-muted">{`（${step.detail}）`}</span></span> : undefined} />
       </div>
     </div>
   );
