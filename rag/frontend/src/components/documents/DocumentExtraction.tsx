@@ -702,10 +702,11 @@ function VisionDetails({
 }
 
 function visionStatusLabel(status: string): string {
+  if (status === "running") return t("flow.extraction.vision.running");
   if (status === "succeeded") return t("flow.extraction.vision.succeeded");
   if (status === "failed") return t("flow.extraction.vision.failed");
   if (status === "skipped") return t("flow.extraction.vision.skipped");
-  return status;
+  return t("flow.extraction.vision.unknown");
 }
 
 function elementKindLabel(kind: string): string {
