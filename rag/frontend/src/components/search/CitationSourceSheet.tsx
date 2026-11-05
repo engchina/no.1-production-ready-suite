@@ -1,11 +1,12 @@
 import { useCallback, type ReactNode } from "react";
-import { EvidenceSourceSheet, EvidenceReader, evidencePreviewFocus, type OriginalSourceInput, type EvidenceReadingInput } from "@production-ready/ui";
+import { EvidenceSourceSheet, EvidenceReader, Skeleton, TimedLoadingState, FormStatus, SourceVersionStaleNotice, isSourceVersionStale, evidencePreviewFocus, type OriginalSourceInput, type EvidenceReadingInput } from "@production-ready/ui";
 
+import { ApiErrorState } from "@/components/StateViews";
 import { DocumentPreview } from "@/components/documents/DocumentPreview";
 import type { CitationPosition } from "@/lib/answer-text";
 import { api, type RetrievedChunk } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { useDocument, useDocumentRecipes } from "@/lib/queries";
+import { useDocumentPreviewSource } from "@/lib/queries";
 import { firstMetadataToken } from "@/lib/table-cell-focus";
 
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
@@ -91,13 +92,19 @@ function CitationSourcePreview({
   const recipeId = firstMetadataToken(chunk.metadata.recipe_id);
   // 切替の後も、引用した版のファイルの頁を出す（bbox はその版のファイルの座標。#4168）。
   const chunkSetId = firstMetadataToken(chunk.metadata.chunk_set_id);
-  // パネルを開いたときだけ文書詳細を取得し、Office 原本でも変換済 PDF を表示する。
-  const previewDoc = useDocument(open ? chunk.document_id : null);
-  const previewRecipes = useDocumentRecipes(open ? chunk.document_id : null);
-  const previewRecipe = previewRecipes.data?.find((recipe) => recipe.recipe_id === recipeId);
+  const office = /\.(?:docx?|pptx?|xlsx?)$/i.test(previewFileName);
+  const source = useDocumentPreviewSource(open && office ? chunk.document_id : null, recipeId, chunkSetId);
   const focus = evidencePreviewFocus(chunk.metadata);
   if (/\.(?:txt|csv|tsv|md|json|jsonl|xml|html?|eml|log)$/i.test(previewFileName)) {
     return <EvidenceReader key={`${chunk.document_id}:${chunk.chunk_id}`} readingKey={`${chunk.document_id}:${chunk.chunk_id}`} loadWindow={loadWindow} loadOriginal={/\.json$/i.test(previewFileName) ? loadOriginal : undefined} enabled={open} highlight={highlight} downloadUrl={recipeId ? api.documentRecipeContentUrl(chunk.document_id, recipeId) : api.documentContentUrl(chunk.document_id)} />;
+  }
+  if (office) {
+    if (!recipeId || !chunkSetId) return <FormStatus tone="warning" message={t("search.previewSource.missing")} />;
+    if (source.isPending) return <TimedLoadingState label={t("search.previewSource.loading")} operationKey={`citation-source-${chunk.chunk_id}`} framed={false}><Skeleton className="h-24 w-full" /></TimedLoadingState>;
+    if (source.isError) {
+      if (isSourceVersionStale(source.error)) return <SourceVersionStaleNotice />;
+      return <ApiErrorState error={source.error} fallback={t("search.previewSource.error")} onRetry={() => { void source.refetch(); }} />;
+    }
   }
   return (
     <DocumentPreview
@@ -105,11 +112,7 @@ function CitationSourcePreview({
       recipeId={recipeId}
       chunkSetId={chunkSetId}
       fileName={previewFileName}
-      preparedArtifact={
-        recipeId
-          ? (previewRecipe?.preprocess_artifact ?? null)
-          : (previewDoc.data?.preprocess_artifact ?? null)
-      }
+      preparedPdf={source.data?.is_pdf}
       focusPage={focus.focusPage}
       focusBbox={highlight ? focus.focusBbox : null}
       focusBboxMode={focus.focusBboxMode}

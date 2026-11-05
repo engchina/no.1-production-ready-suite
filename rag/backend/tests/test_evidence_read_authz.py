@@ -784,3 +784,57 @@ def test_document_preview_pages_follow_the_viewer_scope(
     pages = client.get("/api/documents/d1/preview-pages", headers=headers)
     page = client.get("/api/documents/d1/preview-pages/1?dpi=72", headers=headers)
     assert (pages.status_code, page.status_code) == (status, status), pages.text
+
+
+@pytest.mark.parametrize(
+    ("knowledge_bases", "permissions", "status"),
+    [
+        (["kb-1"], ["menu.search"], 200),
+        (["kb-2"], ["menu.search"], 404),
+        (["kb-1"], ["menu.upload"], 200),
+        (["kb-1"], [], 403),
+    ],
+)
+def test_citation_source_metadata_follows_viewer_scope(
+    auth: ProductionAuth,
+    monkeypatch: MonkeyPatch,
+    knowledge_bases: list[str],
+    permissions: list[str],
+    status: int,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from app.schemas.document import DocumentPreprocessArtifact
+
+    class SourceOracle(_ScopedDocumentOracle):
+        async def get_document_recipe(self, document_id: str, recipe_id: str) -> Any:
+            return {"recipe_id": recipe_id}
+
+        async def recipe_version_exists(self, **kwargs: Any) -> bool:
+            return True
+
+    monkeypatch.setattr(documents_route, "OracleClient", SourceOracle)
+    reader = AsyncMock(
+        return_value=DocumentPreprocessArtifact(
+            derivation_id="source-a",
+            profile="passthrough",
+            file_name="sample.pdf",
+            content_type="application/pdf",
+            object_storage_path="private/source-a",
+        )
+    )
+    monkeypatch.setattr(documents_route, "chunk_set_prepared_artifact", reader)
+    auth.user_with_permissions("source-viewer", permissions, knowledge_base_ids=knowledge_bases)
+    response = client.get(
+        "/api/documents/d1/recipes/r1/preview-source?chunk_set_id=cs-a",
+        headers=login(client, "source-viewer"),
+    )
+    assert response.status_code == status, response.text
+    if status == 200:
+        assert response.json()["data"] == {
+            "file_name": "sample.pdf",
+            "content_type": "application/pdf",
+            "is_pdf": True,
+        }
+    else:
+        reader.assert_not_awaited()
