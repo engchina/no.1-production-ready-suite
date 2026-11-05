@@ -2030,7 +2030,8 @@ test("不足から3拡張を補搜した実編排の記録が経過と軌跡で�
   expect(vector).toHaveLength(3);
   for (const event of vector) {
     const record = timeline.locator(`[data-run-timeline-step="${event.step_id}"]`);
-    await expect(record).toBeVisible();
+    await record.scrollIntoViewIfNeeded();
+    await expect(record).toBeInViewport();
     await expect(record).toHaveAttribute("data-parent-id", recovery?.step_id ?? "");
     await expect(record).toHaveAttribute("data-status", "done");
   }
@@ -2042,7 +2043,7 @@ test("不足から3拡張を補搜した実編排の記録が経過と軌跡で�
     status: row.getAttribute("data-status"), parent: row.getAttribute("data-parent-id"), level: row.getAttribute("data-level") ?? "0",
     timing: row.querySelector("[data-run-step-status-duration]")?.textContent,
   })));
-  await timeline.screenshot({path: testInfo.outputPath("actual-recovery-process.png")});
+  await page.screenshot({path: testInfo.outputPath("actual-recovery-process.png"), fullPage: false});
   await page.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
   const explorer = page.locator("[data-trace-explorer]");
   await explorer.getByRole("button", {name: "さらに表示", exact: true}).click();
