@@ -43,6 +43,7 @@ from app.rag.field_extraction_units import (
 )
 from app.rag.ingestion import IngestionPipeline, IngestionUserError
 from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
+from tests.prompt_support import UneditedPromptOracle
 
 _DEFS = [
     FieldDefinition(name="試験番号", description="合成の試験の番号", value_type="string"),
@@ -455,7 +456,7 @@ class _MemoryStorage:
             raise FileNotFoundError(key) from exc
 
 
-class _NoKbOracle:
+class _NoKbOracle(UneditedPromptOracle):
     async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
         _ = document_id
         return []

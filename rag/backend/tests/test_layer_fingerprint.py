@@ -26,6 +26,7 @@ from app.rag.layer_fingerprint import (
     recorded_layer_fingerprint,
 )
 from app.schemas.extraction import StructuredExtraction
+from tests.prompt_support import UneditedPromptOracle
 
 _DEFS = [
     FieldDefinition(name="請求書番号", description="invoice no"),
@@ -147,7 +148,7 @@ class _FakeVlm:
         return self.response
 
 
-class _NoOracle:
+class _NoOracle(UneditedPromptOracle):
     """文書は KB の定義を持たない(全体の既定で抽出する)。"""
 
     async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
@@ -261,7 +262,7 @@ def test_knowledge_base_definition_change_marks_rebuild_only_for_its_documents()
 async def test_field_extraction_stamps_knowledge_base_definitions_it_used() -> None:
     """抽出の刻みは、実際に使った KB の定義の hash にする。"""
 
-    class _KbOracle:
+    class _KbOracle(UneditedPromptOracle):
         async def list_document_extraction_field_sets(self, document_id: str) -> list[object]:
             _ = document_id
             return [_KB_DEFS]

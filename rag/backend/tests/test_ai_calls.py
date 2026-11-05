@@ -29,6 +29,7 @@ from app.config import Settings
 from app.rag.ingestion_progress import IngestionProgressReporter, track_ingestion_progress
 from app.rag.navigation import summarize_navigation_nodes
 from app.schemas.extraction import DocumentElement, DocumentNavigationNode, StructuredExtraction
+from tests.prompt_support import UneditedPromptOracle
 
 
 class HttpError(Exception):
@@ -427,7 +428,7 @@ async def test_navigation_summary_runs_concurrently_in_pipeline(
     nodes, extraction = _nav_inputs(9)
     pipeline = IngestionPipeline(
         vlm=Llm(),  # type: ignore[arg-type]
-        oracle=SimpleNamespace(),  # type: ignore[arg-type]
+        oracle=UneditedPromptOracle(),  # type: ignore[arg-type]
         settings=Settings(
             rag_navigation_summary_enabled=True,
             rag_navigation_summary_concurrency=3,
@@ -453,7 +454,7 @@ async def test_navigation_summary_abort_stops_ingestion(monkeypatch: pytest.Monk
     nodes, extraction = _nav_inputs(5)
     pipeline = IngestionPipeline(
         vlm=Llm(),  # type: ignore[arg-type]
-        oracle=SimpleNamespace(),  # type: ignore[arg-type]
+        oracle=UneditedPromptOracle(),  # type: ignore[arg-type]
         settings=Settings(
             rag_navigation_summary_enabled=True, rag_navigation_summary_concurrency=1
         ),
@@ -509,7 +510,7 @@ def _raptor_pipeline(llm: _RaptorLlm, **settings: Any) -> Any:
 
     return IngestionPipeline(
         vlm=llm,  # type: ignore[arg-type]
-        oracle=SimpleNamespace(),  # type: ignore[arg-type]
+        oracle=UneditedPromptOracle(),  # type: ignore[arg-type]
         settings=_settings(
             rag_raptor_enabled=True,
             rag_raptor_cluster_size=2,
@@ -832,7 +833,7 @@ async def test_field_extraction_retries_rate_limit_and_stops_on_quota(
     if not field_defs:
         pytest.skip("既定の項目の定義がありません")
 
-    class Oracle:
+    class Oracle(UneditedPromptOracle):
         async def list_document_extraction_field_sets(self, document_id: str) -> list[Any]:
             return []
 

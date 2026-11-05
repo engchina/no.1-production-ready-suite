@@ -27,6 +27,7 @@ from app.rag.answer_prompts import (
 )
 from app.schemas.search import SearchRequest
 from app.security.permissions import ANSWER_PROMPT_EDIT_PERMISSIONS
+from tests.prompt_support import UneditedPromptOracle
 from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, FakeOracle
@@ -266,7 +267,8 @@ async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.Monkey
     unsaved = IngestionPipeline(oracle=Oracle({}), settings=Settings())  # type: ignore[arg-type]
 
     assert await saved._image_retrieval_prompt() == "独自 {{image_metadata}}"
-    assert await failing._image_retrieval_prompt() is None
+    with pytest.raises(RuntimeError, match="down"):
+        await failing._image_retrieval_prompt()
     assert await unsaved._image_retrieval_prompt() is None
 
 
@@ -427,7 +429,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
     assert len(summaries) > len(chunks)
     assert calls[0] == ("独自の章節指示", None)
     assert all(call == ("", "独自の共通指示\n独自の階層指示") for call in calls[1:])
-    unsaved = IngestionPipeline(oracle=cast(Any, object()), settings=Settings())
+    unsaved = IngestionPipeline(oracle=cast(Any, UneditedPromptOracle()), settings=Settings())
     assert await unsaved._stage_prompt("navigation_summary", "既定") == "既定"
 
 

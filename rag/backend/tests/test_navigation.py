@@ -27,6 +27,7 @@ from app.schemas.extraction import (
     DocumentNavigationNode,
     StructuredExtraction,
 )
+from tests.prompt_support import UneditedPromptOracle
 
 
 def test_navigation_summary_elements_are_searchable_and_link_to_section() -> None:
@@ -456,7 +457,7 @@ async def test_section_rules_work_independently_of_navigation_summaries(enabled:
     )
     pipeline = IngestionPipeline(
         vlm=cast(Any, Summarizer()),
-        oracle=cast(Any, object()),
+        oracle=cast(Any, UneditedPromptOracle() if enabled else object()),
         settings=Settings(rag_navigation_summary_enabled=enabled),
     )
     result = await pipeline._attach_navigation_tree("trace-3011", extraction)
@@ -512,7 +513,7 @@ async def test_rule_summaries_match_visible_sections_and_keep_parser_tree(
     )
     pipeline = IngestionPipeline(
         vlm=cast(Any, Model()),
-        oracle=cast(Any, object()),
+        oracle=cast(Any, UneditedPromptOracle() if enabled else object()),
         settings=Settings(rag_navigation_summary_enabled=enabled),
     )
     result = await pipeline._attach_navigation_tree("trace", extraction)
