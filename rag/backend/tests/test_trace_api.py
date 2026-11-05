@@ -218,7 +218,11 @@ def test_chat_trace_before_root_span_is_empty(
         status="STREAMING",
         progress={"trace_id": None, "trace_dropped_spans": 0, "span_details": {}},
     )
-    assert client.get(CHAT_TRACE).json()["data"] == {"events": [], "dropped_spans": None}
+    assert client.get(CHAT_TRACE).json()["data"] == {
+        "events": [],
+        "dropped_spans": None,
+        "read_truncated": False,
+    }
 
 
 def test_chat_trace_is_404_outside_the_conversation(
@@ -724,3 +728,18 @@ async def test_mcp_validate_answer_records_its_steps_and_model_calls(
     )
     model = next(row for row in rows if row["name"] == "gen_ai.chat")
     assert parent(model) == CLAIM_AUDIT_STAGE
+
+
+@pytest.mark.parametrize("dropped", [0, 7])
+def test_chat_trace_with_zero_spans_keeps_known_writer_drops(
+    chat_fake: FakeChatOracle, trace_db: FakeTraceDb, dropped: int
+) -> None:
+    """認可済みの回答の欠落数は、span表が空でも消さない。"""
+    _answer(chat_fake, status="COMPLETED", progress=_record(dropped=dropped))
+    response = client.get(CHAT_TRACE)
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "events": [],
+        "dropped_spans": dropped or None,
+        "read_truncated": False,
+    }

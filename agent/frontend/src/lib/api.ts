@@ -1989,6 +1989,7 @@ export interface RunTraceData {
   events: unknown;
   /** 表に書けなかった span の数（1 以上なら「一部の処理だけを記録しています。」）。 */
   dropped_spans: number;
+  read_truncated?: boolean;
 }
 
 function auditQuery(filters: ToolCallAuditFilters): string {

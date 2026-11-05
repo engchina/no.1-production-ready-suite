@@ -270,3 +270,61 @@ def test_partial_trace_body_write_rolls_back_and_failure_does_not_downgrade_comp
                 {"body_id": body.reference.body_id},
             )
             connection.commit()
+
+
+def test_page_read_scopes_latest_attempt_before_limit(trace_id: str) -> None:
+    """新しい page SQL を実 Oracle で通し、2件と追加1件の境界を確認する。"""
+    from pr_backend_core.observability.trace_store import fetch_trace_span_page
+
+    spans = AgentTraceSpans()
+    spans.use_writer(
+        TraceSpanWriter(connection_factory=platform_oracle_connection, flush_seconds=60)
+    )
+    owner = TraceSpanOwner(
+        product="agent", operation_id="synthetic-run", owner_user_uuid=RUN_USER, attempt=2
+    )
+    old = TraceSpanOwner(
+        product="agent", operation_id="synthetic-run", owner_user_uuid=RUN_USER, attempt=1
+    )
+    hidden = TraceSpanOwner(
+        product="agent", operation_id="synthetic-run", owner_user_uuid=OTHER_USER, attempt=3
+    )
+    other_product = TraceSpanOwner(
+        product="rag", operation_id="synthetic-run", owner_user_uuid=RUN_USER
+    )
+    other_operation = TraceSpanOwner(
+        product="agent", operation_id="other-run", owner_user_uuid=RUN_USER
+    )
+    for index, current in enumerate(
+        (old, old, old, hidden, other_product, other_operation), start=1
+    ):
+        spans.submit(_update(trace_id, f"{index:016x}", "done"), current)
+    for index in (20, 21):
+        spans.submit(_update(trace_id, f"{index:016x}", "done"), owner)
+    assert spans._writer is not None  # noqa: SLF001 - 試験では同期 flush する。
+    spans._writer.flush()  # noqa: SLF001
+    with platform_oracle_connection() as connection:
+        page = fetch_trace_span_page(
+            connection,
+            trace_id,
+            viewer_user_uuid=RUN_USER,
+            limit=2,
+            product="agent",
+            operation_id="synthetic-run",
+        )
+    assert [span.span_id for span in page.spans] == [f"{index:016x}" for index in (20, 21)]
+    assert page.truncated is False
+    # Agent の全製品の木では、自分が実行した呼び先を含めて2件を超える。
+    assert spans.fetch_page(trace_id, viewer_user_uuid=RUN_USER, limit=2).truncated is True
+    spans.submit(_update(trace_id, f"{22:016x}", "done"), owner)
+    spans._writer.flush()  # noqa: SLF001
+    with platform_oracle_connection() as connection:
+        page = fetch_trace_span_page(
+            connection,
+            trace_id,
+            viewer_user_uuid=RUN_USER,
+            limit=2,
+            product="agent",
+            operation_id="synthetic-run",
+        )
+    assert len(page.spans) == 2 and page.truncated is True

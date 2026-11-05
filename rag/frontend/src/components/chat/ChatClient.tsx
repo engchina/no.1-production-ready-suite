@@ -272,6 +272,8 @@ interface ColumnProgress {
   traceId?: string;
   legacy?: boolean;
   partial?: boolean;
+  readTruncated?: boolean;
+  droppedSpans?: number;
 }
 
 /** 列の処理の経過を回答の trace の API で読む（回答ごとに 1 つ。比較の列もそれぞれ読む）。 */
@@ -298,6 +300,8 @@ function useColumnProgress(source: ColumnProgressSource | null): ColumnProgress 
     // 作成中の列は古い形式にしない（span が書かれる前）。
     legacy: !active && snapshot.legacy,
     partial: snapshot.partial,
+    readTruncated: snapshot.readTruncated,
+    droppedSpans: snapshot.droppedSpans,
   };
 }
 
@@ -416,6 +420,8 @@ function AssistantColumn({
           // 保存した失敗・停止の回答の、span の無い古い形式の記録（作成中は古い形式にしない）。
           legacy={progress.legacy}
           partial={progress.partial}
+          readTruncated={progress.readTruncated}
+          droppedSpans={progress.droppedSpans}
           testId="chat-answer-progress"
         />
       ) : finished && (progress || answerDiagnostics || (savedAnswer && traceId)) ? (
@@ -433,6 +439,8 @@ function AssistantColumn({
           messageId={messageId}
           legacy={progress?.legacy ?? Boolean(savedAnswer && traceId)}
           partial={progress?.partial}
+          readTruncated={progress?.readTruncated}
+          droppedSpans={progress?.droppedSpans}
           diagnostics={answerDiagnostics}
           savedRecord={savedAnswer && traceId ? { traceId, searchAnswerProfileId } : null}
         />

@@ -179,6 +179,7 @@ export function traceSnapshot(events: readonly Record<string, unknown>[]): Recor
 interface MockTrace {
   events: Record<string, unknown>[];
   droppedSpans: number;
+  readTruncated: boolean;
   /** テストが直接書いた span（worker が書いた span の代わり）。記録の応答（`withJobProgress`）で上書きしない。 */
   pinned: boolean;
 }
@@ -197,9 +198,9 @@ export function resetMockTraces(): void {
 export function recordMockTrace(
   targetId: string,
   events: readonly Record<string, unknown>[],
-  { droppedSpans = 0, pinned = false }: { droppedSpans?: number; pinned?: boolean } = {},
+  { droppedSpans = 0, readTruncated = false, pinned = false }: { droppedSpans?: number; readTruncated?: boolean; pinned?: boolean } = {},
 ): void {
-  mockTraces.set(targetId, { events: traceSnapshot(events), droppedSpans, pinned });
+  mockTraces.set(targetId, { events: traceSnapshot(events), droppedSpans, readTruncated, pinned });
 }
 
 const TRACE_ROUTE =
@@ -212,7 +213,7 @@ async function fulfillMockTrace(route: Route): Promise<void> {
   // span の無い終わった記録（実行履歴の行・DB 管理チャットのターン）は、backend と同じく終端だけ（古い形式）。
   const legacy = [{ schema_version: 1, seq: 1, target_id: id, attempt: 0, emitted_at: "2026-01-01T00:00:00Z", type: "terminal", status: "done" }];
   const events = trace?.events ?? (match?.[1] ? [] : legacy);
-  await route.fulfill({ json: { data: { events, dropped_spans: trace?.droppedSpans ?? 0 } } });
+  await route.fulfill({ json: { data: { events, dropped_spans: trace?.droppedSpans ?? 0, read_truncated: trace?.readTruncated ?? false } } });
 }
 
 /**
@@ -364,7 +365,7 @@ export function withJobProgress<T extends object>(turn: T): T {
 /** mock の記録（実行履歴の行・DB 管理チャットのターン）の `progress_events` を span の表に書き、応答から外す。 */
 export function withRecordedTrace<T extends object>(id: string, record: T): T {
   const { progress_events: events, ...rest } = record as T & { progress_events?: unknown };
-  if (Array.isArray(events)) recordMockTrace(id, events as Record<string, unknown>[]);
+  if (Array.isArray(events) && !mockTraces.get(id)?.pinned) recordMockTrace(id, events as Record<string, unknown>[]);
   return rest as unknown as T;
 }
 

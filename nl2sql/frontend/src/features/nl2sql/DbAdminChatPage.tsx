@@ -689,6 +689,8 @@ function DbAdminChatTurn({
             footer={<RunUsedModels models={turn.model ? [{ label: "LLM", value: turn.model, valueKind: "identifier" as const }] : []} />}
             labels={CHAT_PROGRESS_LABELS}
             partial={progress.partial}
+            readTruncated={progress.readTruncated}
+            droppedSpans={progress.droppedSpans}
             testId={`${TEST_ID}-progress`}
           />
         )}

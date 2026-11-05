@@ -59,6 +59,8 @@ export interface TraceProgressSnapshot {
   loaded: boolean;
   /** 表に書けなかった span の数。 */
   droppedSpans: number;
+  /** 保存済みspanの一部を読取上限で省略した。書込時の欠落数とは別。 */
+  readTruncated?: boolean;
   /** 表に書けなかった span がある（一部だけの記録）。 */
   partial: boolean;
   /** 終わった記録を、書き終わるのを待って読み直している。 */
@@ -76,16 +78,19 @@ interface SnapshotState {
   key: string | null;
   events: ChatProgressEvent[];
   droppedSpans: number;
+  /** 保存済みspanの一部を読取上限で省略した。書込時の欠落数とは別。 */
+  readTruncated?: boolean;
   failed: boolean;
   loaded: boolean;
 }
 
-function parseSnapshot(raw: unknown): { events: ChatProgressEvent[]; droppedSpans: number } {
-  if (Array.isArray(raw)) return { events: parseChatProgressEvents(raw), droppedSpans: 0 };
+function parseSnapshot(raw: unknown): { events: ChatProgressEvent[]; droppedSpans: number; readTruncated: boolean } {
+  if (Array.isArray(raw)) return { events: parseChatProgressEvents(raw), droppedSpans: 0, readTruncated: false };
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const dropped = record.dropped_spans;
   return {
     events: parseChatProgressEvents(record.events),
+    readTruncated: record.read_truncated === true,
     droppedSpans: typeof dropped === "number" && Number.isFinite(dropped) && dropped > 0 ? Math.floor(dropped) : 0,
   };
 }
@@ -188,7 +193,8 @@ export function useTraceProgressSnapshot({
   }, [settling, attempts, key, settleDelayMs, refresh]);
 
   const droppedSpans = current?.droppedSpans ?? 0;
-  const partial = droppedSpans > 0;
+  const readTruncated = current?.readTruncated === true;
+  const partial = droppedSpans > 0 || readTruncated;
   return {
     events,
     steps,
@@ -198,6 +204,7 @@ export function useTraceProgressSnapshot({
     failed,
     loaded,
     droppedSpans,
+    readTruncated,
     partial,
     settling,
     refresh,

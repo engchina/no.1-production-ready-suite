@@ -168,6 +168,8 @@ export interface DbAdminChatProgress {
   legacy: boolean;
   /** 書けなかった span がある（「一部の処理だけを記録しています。」を出す）。 */
   partial: boolean;
+  readTruncated: boolean;
+  droppedSpans: number;
 }
 
 /**
@@ -183,13 +185,17 @@ export function dbAdminChatTraceProgress(
   const events = parseChatProgressEvents(trace?.events);
   const steps = chatProgressStepsFromEvents(events, CHAT_PROGRESS_STEP_DEFINITIONS, turnId, { traceLabels });
   const traceId = chatProgressTraceIdOf(events);
-  const partial = (trace?.droppedSpans ?? 0) > 0;
+  const droppedSpans = trace?.droppedSpans ?? 0;
+  const readTruncated = trace?.readTruncated === true;
+  const partial = droppedSpans > 0 || readTruncated;
   return {
     steps,
     terminal: chatProgressTerminalOf(events, turnId),
     ...(traceId ? { traceId } : {}),
     legacy: events.length > 0 && !chatProgressHasSpans(events) && !partial,
     partial,
+    readTruncated,
+    droppedSpans,
   };
 }
 

@@ -110,3 +110,29 @@ describe("useTraceProgressSnapshot", () => {
     expect(latest?.legacy).toBe(false);
   });
 });
+
+it("読取上限と書込時欠落を別々に保持し、旧形式・文字列trueを欠落扱いしない", async () => {
+  let sample = 0;
+  for (const raw of [
+    {events: [span(1, "r", "done"), terminal(2)], read_truncated: true, dropped_spans: 0},
+    {events: [], dropped_spans: 7},
+    {events: [span(1, "r", "done"), terminal(2)], read_truncated: "true"},
+    {events: [span(1, "r", "done"), terminal(2)]},
+  ]) {
+    const fetchSnapshot = vi.fn(async () => raw);
+    await act(async () => root.render(<Probe key={sample++} active={false} fetchSnapshot={fetchSnapshot} />));
+    if (raw.read_truncated === true) {
+      expect(latest?.partial).toBe(true);
+      expect(latest?.readTruncated).toBe(true);
+      expect(latest?.droppedSpans).toBe(0);
+    } else if (raw.dropped_spans === 7) {
+      expect(latest?.partial).toBe(true);
+      expect(latest?.readTruncated).toBe(false);
+      expect(latest?.droppedSpans).toBe(7);
+      expect(latest?.legacy).toBe(false);
+    } else {
+      expect(latest?.partial).toBe(false);
+      expect(latest?.readTruncated).toBe(false);
+    }
+  }
+});

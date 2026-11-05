@@ -240,8 +240,8 @@ export function answerSpans(steps: string[], options: { guardrail?: boolean } = 
 }
 
 /** trace の API の応答（snapshot。`droppedSpans` は書けなかった span の数）。 */
-export function traceSnapshotJson(events: ChatProgressEventJson[], droppedSpans: number | null = null) {
-  return { data: { events, dropped_spans: droppedSpans }, error_messages: [], warning_messages: [] };
+export function traceSnapshotJson(events: ChatProgressEventJson[], droppedSpans: number | null = null, readTruncated = false) {
+  return { data: { events, dropped_spans: droppedSpans, read_truncated: readTruncated }, error_messages: [], warning_messages: [] };
 }
 
 /** 記録の trace の API の path（`/trace` の前の id）。 */
@@ -249,7 +249,7 @@ const TRACE_PATH = /\/api\/(?:chat\/conversations\/[^/]+\/messages|history\/runs
 
 export type TraceSnapshotSource =
   | ChatProgressEventJson[]
-  | { events: ChatProgressEventJson[]; droppedSpans?: number | null };
+  | { events: ChatProgressEventJson[]; droppedSpans?: number | null; readTruncated?: boolean };
 
 /**
  * 記録ごとの trace の API を返す（id → イベント。関数なら読むたびに呼ぶ）。無い id は空の snapshot。
@@ -267,7 +267,7 @@ export async function mockTraceApi(
     const value = source === undefined ? [] : source;
     const json = Array.isArray(value)
       ? traceSnapshotJson(value)
-      : traceSnapshotJson(value.events, value.droppedSpans ?? null);
+      : traceSnapshotJson(value.events, value.droppedSpans ?? null, value.readTruncated ?? false);
     await route.fulfill({ json });
   });
   return { requests };

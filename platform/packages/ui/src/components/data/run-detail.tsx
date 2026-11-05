@@ -1,3 +1,4 @@
+import { TracePartialNotice } from "../feedback/trace-partial-notice";
 import { measuredRunTiming, recordedStepDuration, recordedStepResult } from "../../lib/run-step-presentation";
 import { RunStepSummary } from "./run-step-summary";
 import type { CallBodyLoader } from "../../lib/call-body";
@@ -908,6 +909,9 @@ export interface RunTimelineSectionProps {
    * 出す。製品は `useTraceProgressSnapshot` の `partial` をそのまま渡す。
    */
   partial?: boolean;
+  /** 読取上限により保存済みのspanを一部省略した。 */
+  readTruncated?: boolean;
+  droppedSpans?: number;
   labels?: RunDetailLabelsInput;
   /** 節の `data-testid`。開閉の見出しは `<testId>-summary`、一部だけの記録の案内は `<testId>-partial`。 */
   testId?: string;
@@ -934,11 +938,12 @@ export function RunTimelineSection({
   active = false,
   startedAt,
   partial = false,
+  readTruncated = false,
+  droppedSpans = 0,
   labels: labelsInput,
   testId,
 }: RunTimelineSectionProps) {
   const labels = resolveRunDetailLabels(labelsInput);
-  const traceLabels = useTraceDetailsLabels();
   const [open, setOpen] = useState(defaultOpen);
   // 開いた一覧が今の段を回している間は、同じ実行の概要の進行表示（`RunJobProgress`）を回さない（#3445）。
   const timelineSpins = open && steps.length > 0 && runTimelineCurrentStepIndex(steps) >= 0;
@@ -946,11 +951,7 @@ export function RunTimelineSection({
   // 同じ実行の経過時間は 1 か所（messaging.md §3.7「同じ timer を複数のパネルに重ねない」）。概要の進行表示が出して
   // いれば、見出しには出さない。
   const jobProgress = useContext(RunDetailActivityContext)?.jobProgress ?? false;
-  const partialNote = partial ? (
-    <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
-      {traceLabels.partial}
-    </p>
-  ) : null;
+  const partialNote = <TracePartialNotice partial={partial} readTruncated={readTruncated} droppedSpans={droppedSpans} testId={testId ? `${testId}-partial` : undefined} />;
   const total = totalDurationMs ?? runTimelineDuration(steps);
   const failed = status ? status === "failed" : !active && steps.some((step) => step.status === "failed");
   const succeeded = status === "succeeded";

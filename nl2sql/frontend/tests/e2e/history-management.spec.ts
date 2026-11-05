@@ -1010,9 +1010,12 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
     const first = Number(new URL(route.request().url()).searchParams.get("first_part")); reads.push(first);
     return route.fulfill({json: {data: body.page(first)}});
   });
+  await page.context().route(`**/api/nl2sql/history/${id}/trace`, route => route.fulfill({json: {data: {events: row.progress_events, dropped_spans: 7, read_truncated: true}}}));
   await page.goto(`/history?id=${id}`);
   await page.getByTestId("history-detail-timeline-summary").click();
   const timeline = page.getByTestId("history-detail-timeline");
+  await expect(page.getByTestId("history-detail-timeline-partial-read-truncated")).toBeVisible();
+  await expect(page.getByTestId("history-detail-timeline-partial-write-dropped")).toBeVisible();
   await inspectTraceStep(page, timeline, "generate_sql");
   const inspector = page.locator("[data-trace-inspector]");
   for (const theme of ["light", "dark"] as const) {

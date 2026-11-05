@@ -10,6 +10,7 @@ export const TRACE_DETAILS_JA = {
   "trace.details.title": "トレースの詳細",
   "trace.details.empty": "実測の記録はありません。",
   "trace.details.partial": "一部の処理だけを記録しています。",
+  "trace.details.readTruncated": "取得件数の上限に達したため、一部の処理だけを表示しています。保存済みの記録がすべて表示されているとは限りません。",
   "trace.details.measured": "実測した処理の親子関係と所要時間です。",
   "trace.details.copy": "Trace ID をコピー",
   "trace.details.copied": "Trace ID をコピーしました。",
@@ -220,7 +221,7 @@ export type TraceFieldName = keyof typeof TRACE_FIELD_LABEL_KEYS;
 export interface TraceDetailsLabels {
   processMetadata?: { conversationId: string; messageId: string; models: string; copy: string; copied: string; copyFailed: string };
   segment: (index: number, total: number) => string;
-  title: string; empty: string; partial: string; measured: string;
+  title: string; empty: string; partial: string; readTruncated?: string; measured: string;
   notSampled: string; legacy: string;
   copy: string; copied: string; copyFailed: string; unknown: string;
   /** プロバイダが返さなかった値（`gen_ai.usage.cache_read.input_tokens` が無い。0 と区別する）。 */
@@ -246,7 +247,7 @@ export function createTraceDetailsLabels(t: (key: TraceLabelKey) => string, opti
     processMetadata: { conversationId: t("trace.details.conversationId"), messageId: t("trace.details.messageId"), models: t("trace.details.models"), copy: t("trace.details.copyIdentifier"), copied: t("trace.details.identifierCopied"), copyFailed: t("trace.details.identifierCopyFailed") },
     segment: (index, total) => t("trace.details.segment").replace("{index}", String(index)).replace("{total}", String(total)),
     notSampled: t("trace.details.notSampled"), legacy: t("trace.details.legacy"),
-    title: t("trace.details.title"), empty: t("trace.details.empty"), partial: t("trace.details.partial"), measured: t("trace.details.measured"),
+    title: t("trace.details.title"), empty: t("trace.details.empty"), partial: t("trace.details.partial"), readTruncated: t("trace.details.readTruncated"), measured: t("trace.details.measured"),
     copy: t("trace.details.copy"), copied: t("trace.details.copied"), copyFailed: t("trace.details.copyFailed"), unknown: t("trace.details.unknown"),
     notReported: t("trace.details.notReported"),
     valueNames: Object.fromEntries(["returned", "failed", "rejected", "accepted", "incomplete", "citation_range_invalid", "invalid_structured_output", "transport_retry", "runaway_output", "stream_failed", "stream_stalled", "incomplete_output"].map(value => [value, t(`trace.value.${value}` as TraceLabelKey)])),

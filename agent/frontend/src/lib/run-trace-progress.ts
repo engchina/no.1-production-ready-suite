@@ -26,5 +26,5 @@ export function useRunTraceProgress(
   const definitions = useMemo(() => agentProgressDefinitions(run.steps), [run.steps]);
   const snapshot = useTraceProgressSnapshot({ key: legacy ? null : runId, active: !legacy && active, fetchSnapshot, definitions });
   const droppedSpans = Math.max(snapshot.droppedSpans, run.trace_dropped_spans ?? 0);
-  return { ...snapshot, loadCallBody, legacy, droppedSpans, partial: !legacy && droppedSpans > 0 };
+  return { ...snapshot, loadCallBody, legacy, droppedSpans, partial: !legacy && (droppedSpans > 0 || snapshot.readTruncated === true) };
 }

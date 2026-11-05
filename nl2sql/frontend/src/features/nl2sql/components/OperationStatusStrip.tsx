@@ -100,6 +100,8 @@ export function OperationStatusStrip({
         testId="nl2sql-job"
         labels={CHAT_PROGRESS_LABELS}
         partial={progress.partial}
+        readTruncated={progress.readTruncated}
+        droppedSpans={progress.droppedSpans}
         steps={steps}
       />
     )}

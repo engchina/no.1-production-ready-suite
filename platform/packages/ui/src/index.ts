@@ -1030,3 +1030,5 @@ export { parseCallContent, parseCallBodyPage } from "./lib/call-body";
 export { callBodyPath } from "./lib/call-body";
 
 export { failureDiagnosisReason, type FailureDiagnosis, type FailureDiagnosisReason } from "./lib/failure-diagnosis";
+
+export { TracePartialNotice } from "./components/feedback/trace-partial-notice";

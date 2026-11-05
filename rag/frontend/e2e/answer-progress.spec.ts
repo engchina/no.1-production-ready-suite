@@ -1196,3 +1196,31 @@ test("補助工程の実行判断は検索の経過と軌跡で状態・理由�
   }
   await expect(progress).not.toContainText("LLM 1 回");
 });
+
+test("検索の読取上限と書込欠落を別々に表示する", {tag:"@responsive"}, async ({page}, testInfo) => {
+  const recorder = spanProgressRecorder("synthetic-read-limit");
+  const events = [...recorder.start("root",ragSpan.root()), ...recorder.start("answer",ragSpan.stage("answer")), ...recorder.finish("answer"), ...recorder.finish("root"),...recorder.terminal("done")];
+  const stream: TimedChunk[] = [{afterMs:0,text:sse("run",{trace_id:"synthetic-read-limit"})+sse("delta",{text:"合成の回答"})+sse("done",{answer:"合成の回答",citations:[]})}];
+  await mockSearchPage(page,[stream]);
+  await mockTraceApi(page,{"synthetic-read-limit":{events,readTruncated:true,droppedSpans:7}});
+  await enableSearchAnswer(page);
+  await page.getByRole("textbox",{name:"RAG 検索"}).fill("合成の質問");
+  await page.getByRole("button",{name:"検索",exact:true}).click();
+  await page.getByTestId("search-run-progress-summary").click();
+  const partial=page.getByTestId("search-run-progress-partial");
+  await expect(partial.locator('[data-testid$="-read-truncated"]')).toBeVisible();
+  await expect(partial.locator('[data-testid$="-write-dropped"]')).toBeVisible();
+  for(const theme of ["light","dark"]){
+    await page.evaluate(value=>{document.documentElement.dataset.theme=value;},theme);
+    await partial.evaluate(element => element.scrollIntoView({block:"center"}));
+    for (const notice of await partial.locator("p").all()) {
+      await expect(notice).toBeInViewport();
+      expect(await notice.evaluate(element => {
+        const rect=element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2));
+      })).toBe(true);
+    }
+    await expectNoPageOverflow(page);
+    await page.screenshot({path:testInfo.outputPath(`search-partial-${theme}.png`)});
+  }
+});

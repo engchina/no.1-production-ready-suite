@@ -40,7 +40,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ..chat_progress import ChatProgressParamValue
 from .tracing import SpanListener, SpanUpdate
@@ -474,16 +474,90 @@ def fetch_trace_spans(
     画面から任意の trace id を受け取らない。製品は自分の記録を今の判定で開き、その記録の trace id
     を渡す。
     """
+    return _decode_trace_spans(
+        _fetch_trace_rows(connection, trace_id, viewer_user_uuid=viewer_user_uuid, limit=limit)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class TraceSpanPage:
+    """保存済みspanの有界読取。truncatedは書込時の欠落数とは別。"""
+
+    spans: list[StoredTraceSpan]
+    truncated: bool
+
+
+def fetch_trace_span_page(
+    connection: Any,
+    trace_id: str,
+    *,
+    viewer_user_uuid: str | None,
+    limit: int = 1000,
+    product: TraceProduct | None = None,
+    operation_id: str | None = None,
+) -> TraceSpanPage:
+    """認可・実行範囲・最新試行を先に適用し、上限超過の1行だけを追加確認する。"""
+    if not 1 <= limit <= 1000:
+        raise ValueError("traceの読取上限は1〜1000件で指定してください。")
+    rows = _fetch_trace_rows(
+        connection,
+        trace_id,
+        viewer_user_uuid=viewer_user_uuid,
+        limit=limit + 1,
+        latest_attempts=True,
+        product=product,
+        operation_id=operation_id,
+    )
+    return TraceSpanPage(spans=_decode_trace_spans(rows[:limit]), truncated=len(rows) > limit)
+
+
+def _fetch_trace_rows(
+    connection: Any,
+    trace_id: str,
+    *,
+    viewer_user_uuid: str | None,
+    limit: int,
+    latest_attempts: bool = False,
+    product: TraceProduct | None = None,
+    operation_id: str | None = None,
+) -> list[tuple[Any, ...]]:
     sql = _SELECT_SQL
     binds: dict[str, Any] = {"trace_id": trace_id, "limit": limit}
     if viewer_user_uuid is not None:
         sql += " AND OWNER_USER_UUID = :viewer"
         binds["viewer"] = viewer_user_uuid
+    if product is not None:
+        sql += " AND PRODUCT = :product"
+        binds["product"] = product
+    if operation_id is not None:
+        sql += " AND OPERATION_ID = :operation_id"
+        binds["operation_id"] = operation_id
+    if latest_attempts:
+        # 読めない利用者の新しい試行で、読める試行を消さない。
+        latest = (
+            "SELECT PRODUCT, OPERATION_ID, MAX(ATTEMPT) FROM PLATFORM_TRACE_SPANS "
+            "WHERE TRACE_ID = :trace_id"
+        )
+        if viewer_user_uuid is not None:
+            latest += " AND OWNER_USER_UUID = :viewer"
+        if product is not None:
+            latest += " AND PRODUCT = :product"
+        if operation_id is not None:
+            latest += " AND OPERATION_ID = :operation_id"
+        sql += (
+            " AND (PRODUCT, OPERATION_ID, ATTEMPT) IN ("
+            + latest
+            + " GROUP BY PRODUCT, OPERATION_ID)"
+        )
     sql += " ORDER BY STARTED_AT, SPAN_ID FETCH FIRST :limit ROWS ONLY"
     cursor = connection.cursor()
     cursor.execute(sql, binds)
+    return cast(list[tuple[Any, ...]], cursor.fetchall())
+
+
+def _decode_trace_spans(rows: Sequence[Sequence[Any]]) -> list[StoredTraceSpan]:
     spans: list[StoredTraceSpan] = []
-    for row in cursor.fetchall():
+    for row in rows:
         started = _aware(row[11])
         if started is None:
             continue
@@ -605,9 +679,11 @@ __all__ = [
     "SpanDisplayNamer",
     "StoredTraceSpan",
     "TraceProduct",
+    "TraceSpanPage",
     "TraceSpanOwner",
     "TraceSpanWriter",
     "fetch_trace_spans",
+    "fetch_trace_span_page",
     "is_boundary_span",
     "latest_attempt_spans",
     "purge_trace_spans",

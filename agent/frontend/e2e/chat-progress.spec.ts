@@ -789,3 +789,33 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
     await page.screenshot({path: testInfo.outputPath("agent-full-trace-1920.png")});
   }
 });
+
+
+test("読取打切りと書込欠落がある場合は、チャットと履歴で両方の原因を表示する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const { run, progress } = seedRunningRun(mockApi);
+  progress.step("chat-1", "done", { kind: "respond" });
+  run.status = "completed";
+  run.trace_dropped_spans = 2;
+  run.trace_read_truncated = true;
+  run.artifacts = [{ id: "answer-completeness", kind: "answer", name: "回答", content: { text: "合成の回答です。" } }];
+  run.events = [{ id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: iso(0) }];
+  await page.goto("/chat");
+  await openThread(page);
+  const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+  await expect(turn.getByText("合成の回答です。")).toBeVisible();
+  await turn.getByTestId("chat-progress-summary").click();
+  await expect(turn.getByTestId("chat-progress-partial-read-truncated")).toContainText("取得件数の上限に達したため");
+  await expect(turn.getByTestId("chat-progress-partial-write-dropped")).toHaveText("一部の処理だけを記録しています。");
+  await expect(turn.getByTestId("chat-progress-legacy")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await turn.getByTestId("chat-progress").screenshot({ path: testInfo.outputPath("chat-read-and-write.png") });
+
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary")).toBeVisible();
+  await page.getByTestId("run-timeline-section-summary").click();
+  await expect(page.getByTestId("run-timeline-section-partial-read-truncated")).toContainText("保存済みの記録がすべて表示されているとは限りません");
+  await expect(page.getByTestId("run-timeline-section-partial-write-dropped")).toHaveText("一部の処理だけを記録しています。");
+  await expect(page.getByTestId("run-timeline-legacy")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await page.getByTestId("run-timeline-section").screenshot({ path: testInfo.outputPath("history-read-and-write.png") });
+});

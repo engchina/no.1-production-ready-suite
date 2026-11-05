@@ -5562,6 +5562,7 @@ export interface RunSearchConditions {
 export interface TraceSnapshotData {
   events: unknown[];
   dropped_spans?: number | null;
+  read_truncated?: boolean;
 }
 
 // --- 保存された回答(rag_poc の answer JSON 相当) ---
