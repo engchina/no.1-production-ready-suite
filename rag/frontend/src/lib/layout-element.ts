@@ -3,18 +3,22 @@ import { appPath } from "@/lib/base-path";
 
 /** Docling の要素の Vision 図説明の表示用情報。該当しなければ null。 */
 export type ElementVision = {
-  status: string;
+  status: string | null;
   retrievalText: string;
   excluded: boolean;
 };
 
 export function elementVision(element: DocumentElement): ElementVision | null {
   const metadata = element.metadata ?? {};
-  const status = typeof metadata.vision_status === "string" ? metadata.vision_status : "";
+  const status = typeof metadata.vision_status === "string" && metadata.vision_status.trim()
+    ? metadata.vision_status
+    : null;
   const retrievalText =
     typeof metadata.vision_retrieval_text === "string" ? metadata.vision_retrieval_text : "";
-  const excluded = metadata.rag_excluded === true || metadata.visual_role === "decorative";
-  if (!status && !retrievalText && !excluded) return null;
+  const excluded = metadata.rag_excluded === true
+    || metadata.visual_role === "decorative" || metadata.visual_role === "inline_icon";
+  const readingTarget = element.kind === "figure" && !excluded;
+  if (!status && !retrievalText && !excluded && !readingTarget) return null;
   return { status, retrievalText, excluded };
 }
 

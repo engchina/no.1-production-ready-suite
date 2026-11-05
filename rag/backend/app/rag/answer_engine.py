@@ -971,14 +971,9 @@ class AnswerEngine:
             requested_as_of=requested.filters.get(AS_OF_FILTER_KEY, ""),
             degraded=self._degraded if self._degraded is not None else DegradedSteps(),
         )
-        try:
-            overrides = saved_prompt_overrides()
-            if overrides is None:
-                overrides = await self._oracle.answer_prompt_overrides()
-        except Exception as exc:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
-            logger.warning("answer prompt overrides load failed", exc_info=True)
-            state.record_degraded("prompt_overrides", exc)
-            overrides = {}
+        overrides = saved_prompt_overrides()
+        if overrides is None:
+            overrides = await self._oracle.answer_prompt_overrides()
         with tempfile.TemporaryDirectory(prefix="rag-engine-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir

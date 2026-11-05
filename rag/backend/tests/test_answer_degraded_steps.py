@@ -454,21 +454,20 @@ async def _run(monkeypatch: pytest.MonkeyPatch, oracle: FakeOracle) -> Any:
 async def test_zero_evidence_separates_read_failure_from_no_hit(
     monkeypatch: pytest.MonkeyPatch, fail: bool
 ) -> None:
-    """根拠 0 件のとき、補助の処理が失敗していれば 0 件の診断から失敗した処理が分かる。"""
+    """設定の読取失敗は回答前に停止し、正常な検索0件とは区別する。"""
     oracle = _OverridesOracle("knowledge_base_id", fail_overrides=fail)
 
+    if fail:
+        with pytest.raises(Boom):
+            await _run(monkeypatch, oracle)
+        return
     outcome = await _run(monkeypatch, oracle)
 
     assert outcome.citations == []
     zero = outcome.diagnostics["zero_evidence"]
     assert zero["stage"] == "retrieval"
-    if fail:
-        expected = [{"kind": "prompt_overrides", "count": 1, "exc_type": "Boom"}]
-        assert zero["degraded_steps"] == expected
-        assert outcome.diagnostics["degraded_steps"] == expected
-    else:
-        assert zero["degraded_steps"] == []
-        assert "degraded_steps" not in outcome.diagnostics
+    assert zero["degraded_steps"] == []
+    assert "degraded_steps" not in outcome.diagnostics
     assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
 
 
@@ -495,20 +494,13 @@ async def test_shared_fake_oracle_answers_without_degraded_steps(
     assert "degraded_steps" not in outcome.diagnostics
 
 
-async def test_answer_continues_and_records_degraded_steps(
+async def test_prompt_read_failure_is_not_an_auxiliary_degradation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """補助の処理が失敗しても回答を続け(拒答にしない)、回答の診断に処理の種類を残す。"""
+    """保存指示を読めないときは、補助処理の縮退として回答を続けない。"""
     oracle = _OverridesOracle(fail_overrides=True)
-
-    outcome = await _run(monkeypatch, oracle)
-
-    assert outcome.citations
-    assert "zero_evidence" not in outcome.diagnostics
-    assert outcome.diagnostics["degraded_steps"] == [
-        {"kind": "prompt_overrides", "count": 1, "exc_type": "Boom"}
-    ]
-    assert SECRET not in json.dumps(outcome.diagnostics, ensure_ascii=False, default=str)
+    with pytest.raises(Boom):
+        await _run(monkeypatch, oracle)
 
 
 async def test_screen_link_failure_in_rag_engine_is_recorded(
