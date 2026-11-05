@@ -680,10 +680,17 @@
       "sha256": "be77eb533a6617a49791599ddda6fb6f6570ad14a884e2e0fe0d7123fb68933e",
       "statement_count": 2,
       "table_name": "rag_evaluation_source_workbooks"
+    },
+    {
+      "destructive": false,
+      "name": "20261105_4396_evaluation_testsets",
+      "sha256": "06907956cbe26125b50e41f4fccfe7c422a95507de873850ac60784c5460f87b",
+      "statement_count": 1,
+      "table_name": "rag_evaluation_testsets"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "693ab4bc7d21476b886c42779d0f55375a0a074cb5ff06f91b7a830ead6dd718",
-  "statement_count": 153
+  "sha256": "2d90414e0963910fb92bc6a936c7229d879eb8c5d7e14726b653fab71f28f5ce",
+  "statement_count": 154
 }

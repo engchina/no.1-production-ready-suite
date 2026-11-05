@@ -115,6 +115,9 @@ class FakeReader:
 
 @pytest.fixture
 def store() -> Iterator[MemoryEvaluationCalibrationStore]:
+    # 履歴の内部契約を残す。公開 API が書込不可なことは test_evaluation_testsets で別検証。
+    from app.api.routes.evaluation_calibration import legacy_read_only
+    app.dependency_overrides[legacy_read_only] = lambda: None
     memory = MemoryEvaluationCalibrationStore()
     set_calibration_store(memory)
     set_source_reader(FakeReader())
@@ -122,6 +125,7 @@ def store() -> Iterator[MemoryEvaluationCalibrationStore]:
         EvaluationJobService(MemoryEvaluationJobStore(), heartbeat_seconds=0.01)
     )
     yield memory
+    app.dependency_overrides.pop(legacy_read_only, None)
     set_calibration_store(None)
     set_source_reader(None)
     set_evaluation_job_service(None)

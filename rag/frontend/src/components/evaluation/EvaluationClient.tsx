@@ -110,7 +110,7 @@ import {
   EvaluationResultSkeleton,
 } from "./EvaluationJobPanel";
 import { JudgeCalibrationBadge } from "./calibration/JudgeCalibrationBadge";
-import { JudgeCalibrationTab } from "./calibration/JudgeCalibrationTab";
+import { TestSetTab } from "./testsets/TestSetTab";
 import { EvaluationProcessDrafts } from "./EvaluationProcessDrafts";
 import {
   EVALUATION_UPLOAD_ID,
@@ -385,7 +385,7 @@ export function EvaluationClient() {
       />
       <PageBody wide>
         <TabPanel id="calibration" value={pageTab} idPrefix={PAGE_TABS_PREFIX}>
-          <JudgeCalibrationTab />
+          <TestSetTab />
         </TabPanel>
         <TabPanel id="run" value={pageTab} idPrefix={PAGE_TABS_PREFIX} className="grid min-w-0 gap-6">
         {/* 評価の基準を先に読み、条件を選んで実行する順に、縦に全幅で並べる（#3295。間隔は PageBody の gap）。 */}

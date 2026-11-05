@@ -18,6 +18,7 @@ from app.clients.document_category_store import oracle_document_category_schema_
 from app.clients.document_cleanup_store import oracle_document_cleanup_schema_sql
 from app.clients.entity_store import oracle_entity_schema_sql
 from app.clients.evaluation_calibration_store import oracle_evaluation_calibration_schema_sql
+from app.clients.evaluation_testset_store import oracle_evaluation_testset_schema_sql
 from app.clients.evaluation_workbook_store import oracle_evaluation_source_workbook_schema_sql
 from app.clients.extraction_revision_store import oracle_extraction_revision_schema_sql
 from app.clients.graph_reference_store import graph_reference_schema_sql
@@ -409,6 +410,11 @@ def oracle_schema_sections() -> list[OracleSchemaSection]:
             table_name="rag_evaluation_label_sets",
             sql=oracle_evaluation_calibration_schema_sql(),
         ),
+        OracleSchemaSection(
+            name="evaluation_testsets",
+            table_name="rag_evaluation_testsets",
+            sql=oracle_evaluation_testset_schema_sql(),
+        ),
         # ロールの RAG 権限と対象範囲（#214）。
         # PLATFORM_ROLES と検索・回答プロファイル・KB を参照する。
         OracleSchemaSection(
@@ -777,6 +783,15 @@ END;
             name="20261103_4212_evaluation_source_workbooks",
             table_name="rag_evaluation_source_workbooks",
             sql=evaluation_source_workbooks_migration_sql(),
+        )
+    )
+    sections.append(
+        OracleSchemaSection(
+            name="20261105_4396_evaluation_testsets",
+            table_name="rag_evaluation_testsets",
+            sql=_create_missing_objects_sql(
+                oracle_evaluation_testset_schema_sql(), "テストセットの下書き"
+            ),
         )
     )
     return sections
