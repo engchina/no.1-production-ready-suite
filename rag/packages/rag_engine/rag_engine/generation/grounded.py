@@ -7138,26 +7138,6 @@ def run_round(
         draft.applications,
         {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
     )
-    from rag_engine.generation.answer_parts import check_answer_parts
-
-    timing["answer_parts"] = check_answer_parts(
-        draft,
-        {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
-        applications,
-        {unit["id"] for unit in answer_requirements(question) if unit.get("kind") != "context"},
-    )
-    for part in timing["answer_parts"]["parts"]:
-        if part["status"] == "missing":
-            checked.append(
-                CheckedItem(
-                    GroundedItem(
-                        kind="gap",
-                        request_id=part["request_id"],
-                        text=answer_labels().missing_request_template.replace("{text}", part["text"]),
-                    ),
-                    added=True,
-                )
-            )
     # 撤回の候補 = 前の round で支持済みだった主張のうち、当該 round の監査の前に公開できる状態にあるもの（引き継いだ
     # item、または草稿が同じ引用・同じ説明で再掲した item）。前の round で既に降格していた item は数えない。
     previous_verified = [p for p in previous if p.span and p.published]
@@ -7174,6 +7154,7 @@ def run_round(
             )
         )
     }
+    application_audit = None
     audit, audit_calls, audit_cut = None, 0, False
     audit_fallback = None
     duplicate_request_ids: tuple[str, ...] = ()
@@ -7416,6 +7397,7 @@ def run_round(
                 "audit": audit.model_dump(mode="json"),
                 "contract": dict(audit._wire_validation),
                 "adopted": False,
+                "application_review_policy": "withhold_unconfirmed_derivations",
                 "attempts": timing.pop("semantic_audit_attempts", []),
             }
             observed_reviews = {review.index: review for review in audit.reviews}
@@ -7430,7 +7412,43 @@ def run_round(
                     "applicability_action": "record_only",
                     "semantic_audit_policy": observation_policy(),
                 }
+            application_audit = audit
             audit = unverified_projection(audit)
+    from rag_engine.generation.application_review import review_applications
+
+    timing["application_review"] = (
+        review_applications(
+            question,
+            applications,
+            existing_audit=application_audit,
+            audit_requested=True,
+            parse_text=parse_text,
+            settings=audit_settings,
+            provider_id=provider_id,
+        )
+        if audit_mode != AUDIT_MODE_NONE
+        else {"status": "deferred", "calls": 0}
+    )
+    from rag_engine.generation.answer_parts import check_answer_parts
+
+    timing["answer_parts"] = check_answer_parts(
+        draft,
+        {entry.draft_index: entry for entry in checked if entry.draft_index is not None and not entry.carried},
+        applications,
+        {unit["id"] for unit in answer_requirements(question) if unit.get("kind") != "context"},
+    )
+    for part in timing["answer_parts"]["parts"]:
+        if part["status"] == "missing":
+            checked.append(
+                CheckedItem(
+                    GroundedItem(
+                        kind="gap",
+                        request_id=part["request_id"],
+                        text=answer_labels().missing_request_template.replace("{text}", part["text"]),
+                    ),
+                    added=True,
+                )
+            )
     procedures = [e for e in checked if e.item.kind in _PROCEDURE_KINDS and not e.added]
     timing["procedure_quotes"] = {
         "original": sum(e.span is not None and quote_in_text(e.item.text, e.span["text"]) for e in procedures),
@@ -7510,6 +7528,9 @@ def run_round(
     )
     if summary_absent:
         summary_reason = summary_reason or f"質問と引いた原文に無い年を要約が述べている: {'、'.join(summary_absent)}"
+    withheld_applications = {index for index, entry in enumerate(applications) if not entry.published}
+    if withheld_applications and (not draft._composed_summary or withheld_applications.intersection(draft.summary_application_indexes)):
+        summary_reason = summary_reason or "推導の条件と結論を確認できないため摘要を保留"
     summary = answer_labels().neutral_summary if summary_reason else draft.summary
     summary_warning = "" if summary_reason or not str(summary or "").strip() else summary_warning
     if (
