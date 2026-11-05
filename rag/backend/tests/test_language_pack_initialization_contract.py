@@ -9,18 +9,19 @@ from rag_parser_core.language import builtin_pack
 
 from app.clients.language_pack_release_store import (
     LanguagePackReleaseStore,
-    LanguagePackSnapshotError,
     _state,
 )
 from app.clients.oracle import OracleClient
 from app.rag import published_language
+from app.rag.language_pack_contract import LanguagePackSnapshotError
+from app.schemas.language_pack_release import LanguagePackRelease
 from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
 
 
-def invalid_rows(kind):
+def invalid_rows(kind: str) -> list[list[dict[str, object]]]:
     if kind == "orphan_release":
         return [[], [{"release_id": "synthetic-orphan"}]]
-    state = {
+    state: dict[str, object] = {
         "draft_revision": 7,
         "draft_effective_json": builtin_pack().to_dict(),
         "current_release_id": None,
@@ -32,7 +33,7 @@ def invalid_rows(kind):
 
 
 @pytest.mark.parametrize("kind", ["orphan_release", "missing_head", "missing_release"])
-def test_invalid_existing_state_is_never_uninitialized(kind):
+def test_invalid_existing_state_is_never_uninitialized(kind: str) -> None:
     pool = FakeOraclePool(execute_results=invalid_rows(kind))
     with pytest.raises(LanguagePackSnapshotError):
         _state(pool.connection)
@@ -40,7 +41,7 @@ def test_invalid_existing_state_is_never_uninitialized(kind):
 
 
 @pytest.mark.parametrize("kind", ["orphan_release", "missing_head", "missing_release"])
-async def test_direct_initializer_never_writes_over_invalid_existing_state(kind):
+async def test_direct_initializer_never_writes_over_invalid_existing_state(kind: str) -> None:
     pool = FakeOraclePool(execute_results=invalid_rows(kind))
     oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     with pytest.raises(LanguagePackSnapshotError):
@@ -50,8 +51,8 @@ async def test_direct_initializer_never_writes_over_invalid_existing_state(kind)
 
 @pytest.mark.parametrize("existing", [None, "configuration", "history"])
 async def test_empty_database_only_bootstraps_when_no_legacy_files_exist(
-    tmp_path: Path, monkeypatch, existing
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: str | None
+) -> None:
     path = tmp_path / "synthetic-language-pack.json"
     if existing == "configuration":
         path.write_text('{"overrides":{"answer_labels":{"cause_gap":"合成の独自値"}}}')
@@ -59,8 +60,8 @@ async def test_empty_database_only_bootstraps_when_no_legacy_files_exist(
         path.with_name("synthetic-language-pack.history.json").write_text('{"versions":[]}')
     pool = FakeOraclePool(execute_results=[[], []])
 
-    async def current():
-        return _state(pool.connection)
+    async def current() -> LanguagePackRelease:
+        return _state(pool.connection).current
 
     store = SimpleNamespace(current=current, ensure_initialized=AsyncMock())
     monkeypatch.setattr(published_language, "LanguagePackReleaseStore", lambda _oracle: store)
@@ -77,7 +78,7 @@ async def test_empty_database_only_bootstraps_when_no_legacy_files_exist(
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
 
 
-def test_completed_concurrent_bootstrap_is_read_as_current_state():
+def test_completed_concurrent_bootstrap_is_read_as_current_state() -> None:
     from tests.test_language_pack_release_store import release_row
 
     row = release_row()

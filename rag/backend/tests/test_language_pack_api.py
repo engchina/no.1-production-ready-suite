@@ -276,8 +276,8 @@ def test_incomplete_draft_api_is_rejected_without_writes(
     "filename", ["synthetic-language-pack.json", "synthetic-language-pack.history.json"]
 )
 def test_uninitialized_database_with_legacy_file_is_409_without_writes(
-    tmp_path, monkeypatch, filename
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
     from app.clients.language_pack_release_store import LanguagePackReleaseStore
     from app.rag import published_language
     from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
@@ -293,7 +293,7 @@ def test_uninitialized_database_with_legacy_file_is_409_without_writes(
         lambda _oracle: LanguagePackReleaseStore(oracle),
     )
 
-    async def initialized():
+    async def initialized() -> LanguagePackReleaseStore:
         return await published_language.initialized_release_store(oracle)
 
     monkeypatch.setattr(language_pack, "release_store", initialized)
