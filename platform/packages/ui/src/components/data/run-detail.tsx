@@ -1,6 +1,7 @@
+import { measuredRunTiming, recordedStepDuration, recordedStepResult } from "../../lib/run-step-presentation";
+import { RunStepSummary } from "./run-step-summary";
 import type { CallBodyLoader } from "../../lib/call-body";
 import { traceOrderedSteps } from "../../lib/trace-explorer";
-import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
 import { DEFAULT_TRACE_DETAILS_LABELS } from "../../lib/trace-labels";
 import { CheckCircle2, Circle, CirclePause, CirclePlay, Clock3, MinusCircle, Waypoints, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode, type CSSProperties } from "react";
@@ -22,7 +23,7 @@ import { TEXT_ICON_SIZE } from "../ui/text-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
 import { formatRunDateTime, formatRunDuration, formatRunTokens } from "./run-history";
-import { hasRunStepDetails, RunStepDetailsView, runStepContent, runStepResultSummary, type RunStepDetails } from "./run-step-details";
+import { hasRunStepDetails, RunStepDetailsView, runStepContent, type RunStepDetails } from "./run-step-details";
 import { DEFAULT_RUN_STATUS_LABELS, RunStatusBadge, type RunStatus, type RunStatusLabels } from "./run-status";
 
 /*
@@ -548,7 +549,7 @@ export interface RunTimelineStep {
   /** ISO 8601。開始と終了があれば時間の線を実際の位置に描く。 */
   startedAt?: string | null;
   finishedAt?: string | null;
-  /** 所要時間（ミリ秒）。無ければ開始と終了から求める。開始が無い段は前の段の後ろに続けて描く。 */
+  /** 所要時間（ミリ秒）。有効な開始と終了があればその差を優先する。開始位置が無い段は時間の線を描かない。 */
   durationMs?: number | null;
   /** 短い補足（対象の表・ツール名・件数・LLM の回数）。名前の後ろの括弧に出す。SQL 全文・エラーの全文は `children` に入れる。 */
   detail?: string;
@@ -580,10 +581,7 @@ export interface RunTimelineStep {
 }
 
 /** 経過と軌跡で同じ記録済みの結果を表示する。 */
-export function runTimelineResultSummary(step: RunTimelineStep): string | undefined {
-  const values = [step.outcome, runStepResultSummary(step.details)].filter((value): value is string => Boolean(value));
-  return values.length ? [...new Set(values)].join(" · ") : undefined;
-}
+export const runTimelineResultSummary = recordedStepResult;
 
 const STEP_ICON: Record<Exclude<RunTimelineStepStatus, "running">, { icon: LucideIcon; className: string }> = {
   done: { icon: CheckCircle2, className: "text-success-fg" },
@@ -681,56 +679,18 @@ export function RunStepStatusIcon({
 export interface RunTimelineBar {
   /** 線の始まり（全体に対する %）。 */
   offset: number;
-  /** 線の長さ（%。0.5% 未満は 0.5% にして見えるようにする）。 */
-  width: number;
+  /** 実測の長さ（%）。終了未記録はnull。視認用の最小幅は描画側のCSSだけが持つ。 */
+  width: number | null;
 }
 
 /**
- * 段ごとの時間の線の位置（%）を求める。開始・終了の時刻がある段はその位置、無い段は所要時間を前の段の後ろに積む
- * （入れ子の段は親の段の始まりから積む。時刻を持たない記録でも、子の線が親の線の中に入る）。
- * 全体の長さが分からない（どの段にも所要時間が無い）ときは null（線を描かない）。
+ * 段ごとの時間の線の位置（%）を記録された時刻だけから求める。開始が無ければ null、終了が無ければ開始位置だけを返す。
  */
-export function runTimelineBars(steps: readonly RunTimelineStep[]): (RunTimelineBar | null)[] {
-  const spans = steps.map((step) => {
-    const start = operationTimestampMs(step.startedAt ?? undefined);
-    const end = operationTimestampMs(step.finishedAt ?? undefined);
-    const duration = step.durationMs ?? (start !== null && end !== null ? Math.max(0, end - start) : null);
-    return { start, duration, level: stepLevel(step.level) };
-  });
-  const starts = spans.map((span) => span.start).filter((value): value is number => value !== null);
-  const origin = starts.length ? Math.min(...starts) : null;
-  // 深さごとの、直前の段の始まり（子の起点）と、同じ親の中で次の段を置く位置。
-  const levelStart: (number | undefined)[] = [];
-  const levelCursor: (number | undefined)[] = [];
-  const placed = spans.map((span) => {
-    const { level } = span;
-    const parentStart = level > 0 ? (levelStart[level - 1] ?? 0) : 0;
-    const offset =
-      span.start !== null && origin !== null ? span.start - origin : (levelCursor[level] ?? parentStart);
-    // 新しい段を置いたら、より深い段の起点を作り直す（次の子はこの段の始まりから積む）。
-    levelStart.length = level;
-    levelCursor.length = level + 1;
-    levelStart[level] = offset;
-    if (span.duration === null) return null;
-    levelCursor[level] = Math.max(levelCursor[level] ?? 0, offset + span.duration);
-    return { offset, duration: span.duration };
-  });
-  const total = Math.max(0, ...placed.map((item) => (item ? item.offset + item.duration : 0)));
-  if (total <= 0) return placed.map(() => null);
-  return placed.map((item) => {
-    if (!item) return null;
-    const offset = Math.min(100, (item.offset / total) * 100);
-    const width = Math.max(0.5, Math.min(100 - offset, (item.duration / total) * 100));
-    return { offset, width };
-  });
+export function runTimelineBars(steps: readonly RunTimelineStep[]) {
+  return measuredRunTiming(steps).bars;
 }
 
-export function stepDurationMs(step: RunTimelineStep): number | null {
-  if (step.durationMs != null) return step.durationMs;
-  const start = operationTimestampMs(step.startedAt ?? undefined);
-  const end = operationTimestampMs(step.finishedAt ?? undefined);
-  return start !== null && end !== null ? Math.max(0, end - start) : null;
-}
+export const stepDurationMs = recordedStepDuration;
 
 /**
  * 段の開閉の印（`DisclosureChevron`）の大きさ（px）。行の名前の文字の大きさにそろえる（#2338）: `sm` は
@@ -745,13 +705,7 @@ export const RUN_TIMELINE_CHEVRON_SIZE = {
 
 /** 並列の段は経過の範囲で数え、呼び出し時間を足し合わせない。 */
 export function runTimelineDuration(steps: readonly RunTimelineStep[]): number | null {
-  const roots = steps.filter(step => !step.level);
-  const intervals = roots.map(step => [operationTimestampMs(step.startedAt), operationTimestampMs(step.finishedAt)]);
-  if (intervals.length && intervals.every(([start, end]) => start != null && end != null && end >= start)) {
-    return Math.max(...intervals.map(([, end]) => end!)) - Math.min(...intervals.map(([start]) => start!));
-  }
-  const sum = roots.reduce((total, step) => total + (stepDurationMs(step) ?? 0), 0);
-  return sum > 0 ? sum : null;
+  return measuredRunTiming(steps).duration;
 }
 
 export interface RunTimelineProps {
@@ -818,7 +772,7 @@ export function RunTimeline({
   labels: labelsInput,
   testId,
 }: RunTimelineProps) {
-  const steps = traceOrderedSteps(inputSteps, "hierarchy");
+  const steps = useMemo(() => traceOrderedSteps(inputSteps, "hierarchy"), [inputSteps]);
   const traceLabels = useTraceDetailsLabels();
   const [exploring, setExploring] = useState(false);
   const labels = resolveRunDetailLabels(labelsInput);
@@ -834,9 +788,8 @@ export function RunTimeline({
     )
   );
   const total = totalDurationMs ?? runTimelineDuration(steps);
-  const nameText = runTimelineNameClass(size);
 
-  if (exploring) return <TraceExplorer loadCallBody={loadCallBody} steps={steps} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
+  if (exploring) return <TraceExplorer loadCallBody={loadCallBody} steps={steps} hierarchyOrdered formatDuration={formatDuration} onClose={() => { setExploring(false); requestAnimationFrame(() => document.getElementById(`${idPrefix}-explore`)?.focus()); }} labels={labelsInput} explorerLabels={explorerLabels} size={size} />;
 
   return (
     <div
@@ -846,7 +799,7 @@ export function RunTimeline({
       data-testid={testId}
     >
       {steps.length ? <div className="flex justify-end"><Button id={`${idPrefix}-explore`} variant="secondary" size="sm" icon={Waypoints} onClick={() => setExploring(true)}>{explorerLabels?.open ?? DEFAULT_TRACE_EXPLORER_LABELS.open}</Button></div> : null}
-      {showBars && steps.some(step => stepDurationMs(step) != null && (!step.startedAt || !step.finishedAt)) ? (
+      {showBars && steps.some(step => !step.startedAt) ? (
         <p className="text-xs text-fg-muted">{traceLabels.reconstructed}</p>
       ) : null}
       {showSummary ? (
@@ -867,23 +820,8 @@ export function RunTimeline({
           const open = hasDetails && Boolean(expanded[step.id]);
           const regionId = `${idPrefix}-step-${index}`;
           // 失敗・スキップ・応答待ち・未実行（失敗の後に実行しなかった段。#2342）は状態を文字でも出す。
-          const visibleStatus = true;
           const level = stepLevel(step.level);
-          const name = (
-            <span className={cn("min-w-0 break-words [overflow-wrap:anywhere]", !hasDetails && "flex-1")}>
-              <span
-                className={
-                  step.status === "failed" ? "text-danger-fg" : step.status === "pending" ? "text-fg-muted" : "text-fg"
-                }
-                data-run-timeline-label=""
-              >
-                {step.label}
-              </span>
-              {step.product ? <RunTimelineProduct product={step.product} /> : null}
 
-              {visibleStatus ? null : <span className="sr-only">{` ${labels.stepStatus[step.status]}`}</span>}
-            </span>
-          );
           return (
             <li
               key={step.id}
@@ -894,69 +832,15 @@ export function RunTimeline({
               data-run-timeline-step={step.id}
               data-testid={stepTestId}
             >
-              {/* 線の列と時間の列の幅を全行で同じにし、線の始まりをそろえる（字下げは名前の列の中だけ）。 */}
-              <div
-                className={cn(
-                  "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3",
-                  showBars && "@xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_7rem] @xl:items-center"
-                )}
-              >
-                <div className={cn("flex min-w-0 items-start gap-2 leading-5", nameText)} style={runTimelineStepIndentStyle(level)}>
-                  <span className="pr-icon-line">
-                    <RunStepStatusIcon
-                      status={step.status}
-                      size={RUN_TIMELINE_CHEVRON_SIZE[size]}
-                      // 子の実処理がある親は静的にし、並行する末端だけをそれぞれ回す。
-                      spin={spinRunning && !hasChildren[index]}
-                    />
-                  </span>
-                  {hasDetails ? (
-                    <button
-                      type="button"
-                      className="pr-touch-target relative inline-flex min-w-0 max-w-full cursor-pointer items-start gap-1 rounded-sm text-left hover:underline hover:underline-offset-2"
-                      aria-expanded={open}
-                      aria-controls={regionId}
-                      data-run-timeline-toggle=""
-                      data-testid={stepTestId ? `${stepTestId}-toggle` : undefined}
-                      onClick={() => setExpanded((current) => ({ ...current, [step.id]: !current[step.id] }))}
-                    >
-                      {name}
-                      <span className="pr-icon-line text-fg-muted">
-                        <DisclosureChevron expanded={open} size={RUN_TIMELINE_CHEVRON_SIZE[size]} />
-                      </span>
-                    </button>
-                  ) : (
-                    name
-                  )}
-                  {step.meta ? <span className="flex shrink-0 flex-wrap items-center gap-1">{step.meta}</span> : null}
-                </div>
-                {/* 時間の線（飾り）。広い置き場所だけ。 */}
-                {showBars ? (
-                  <div
-                    className={cn(RUN_TIME_TRACK, "hidden overflow-hidden @xl:block")}
-                    aria-hidden="true"
-                    data-run-timeline-bar=""
-                  >
-                    {bar ? (
-                      <span
-                        className={cn(
-                          RUN_TIME_FILL,
-                          RUN_TIME_COLOR[step.status]
-                        )}
-                        style={{ left: `${bar.offset}%`, width: `${bar.width}%` }}
-                      />
-                    ) : null}
-                  </div>
-                ) : null}
-                <span data-run-step-status-duration="" className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tnum">
-                  {visibleStatus ? labels.stepStatus[step.status] : null}
-                  {visibleStatus && duration !== null ? " · " : null}
-                  {duration !== null ? formatDuration(duration) : visibleStatus ? null : labels.notRecorded}
-                </span>
-              </div>
-              {runTimelineResultSummary(step) ? (
-                <p data-run-result-summary="" className="ml-6 text-xs leading-5 text-fg-muted" style={runTimelineStepIndentStyle(level)}>{runTimelineResultSummary(step)}</p>
-              ) : null}
+              <RunStepSummary step={step} size={size} statusLabel={labels.stepStatus[step.status]} bar={bar} showBars={showBars}
+                spin={spinRunning && !hasChildren[index]} surface="timeline" formatDuration={formatDuration}
+                renderName={hasDetails ? name => <button type="button" aria-expanded={open} aria-controls={regionId}
+                  className="pr-touch-target relative inline-flex min-w-0 max-w-full flex-1 cursor-pointer items-start gap-1 rounded-sm text-left hover:underline hover:underline-offset-2"
+                  data-run-timeline-toggle=""
+                  data-testid={stepTestId ? `${stepTestId}-toggle` : undefined}
+                  onClick={() => setExpanded(current => ({...current, [step.id]: !current[step.id]}))}>
+                  {name}<span className="pr-icon-line text-fg-muted"><DisclosureChevron expanded={open} size={RUN_TIMELINE_CHEVRON_SIZE[size]} /></span>
+                </button> : undefined} />
               {hasDetails ? (
                 <div
                   id={regionId}

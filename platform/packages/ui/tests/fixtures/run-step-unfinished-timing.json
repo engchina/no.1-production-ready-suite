@@ -1,0 +1,4 @@
+[
+  {"id":"first","label":"終了時刻のない完了段1","status":"done","startedAt":"2026-01-01T00:00:00Z"},
+  {"id":"second","label":"終了時刻のない完了段2","status":"done","startedAt":"2026-01-01T00:00:10Z"}
+]

@@ -706,7 +706,7 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await page.getByTestId("run-timeline-section-summary").click();
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
-  await confirmTraceExplorer(page, testInfo, expect);
+  await confirmTraceExplorer(page, testInfo, expect, true);
 });
 
 

@@ -1,3 +1,4 @@
+import { RunStepSummary } from "./run-step-summary";
 import type { CallBodyLoader } from "../../lib/call-body";
 import { RUN_TIME_TRACK, RUN_TIME_FILL, RUN_TIME_COLOR, runTimelineNameClass } from "./run-timeline-style";
 import { ArrowLeft, ArrowDown, ArrowUp, Bot, Layers, Wrench } from "lucide-react";
@@ -13,7 +14,7 @@ import { FilterSelect } from "./list-filters";
 import { ListToolbar } from "./list-toolbar";
 import { LoadMoreFooter } from "./load-more-footer";
 import { formatRunDuration } from "./run-history";
-import { RUN_TIMELINE_CHEVRON_SIZE, runTimelineHasChildren, runTimelineResultSummary, resolveRunDetailLabels, RunStepStatusIcon, stepDurationMs, RunTimelineViewport, runTimelineStepIndentStyle, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
+import { RUN_TIMELINE_CHEVRON_SIZE, runTimelineHasChildren, resolveRunDetailLabels, RunStepStatusIcon, stepDurationMs, RunTimelineViewport, type RunDetailLabelsInput, type RunTimelineStep } from "./run-detail";
 import { RunStepDetailsView, RunStepTiming, runStepContent, runStepTechnicalFields } from "./run-step-details";
 
 
@@ -34,16 +35,19 @@ export type TraceExplorerLabels = typeof DEFAULT_TRACE_EXPLORER_LABELS;
 
 
 
-export function TraceExplorer({ steps, onClose, loadCallBody, labels: detailLabels, explorerLabels, size = "md" }: {
+export function TraceExplorer({ steps: inputSteps, hierarchyOrdered = false, formatDuration = formatRunDuration, onClose, loadCallBody, labels: detailLabels, explorerLabels, size = "md" }: {
   loadCallBody?: CallBodyLoader;
   size?: "sm" | "md";
   steps: readonly RunTimelineStep[];
+  hierarchyOrdered?: boolean;
+  formatDuration?: (ms: number) => string;
   onClose: () => void;
   labels?: RunDetailLabelsInput;
   explorerLabels?: Partial<TraceExplorerLabels>;
 }) {
   const labels = { ...DEFAULT_TRACE_EXPLORER_LABELS, ...explorerLabels };
-  const hierarchicalSteps = traceOrderedSteps(steps, "hierarchy");
+  const steps = useMemo(() => hierarchyOrdered ? inputSteps : traceOrderedSteps(inputSteps, "hierarchy"), [inputSteps, hierarchyOrdered]);
+  const hierarchicalSteps = steps;
   const childFlags = runTimelineHasChildren(hierarchicalSteps);
   const isLeaf = (step: RunTimelineStep) => !childFlags[hierarchicalSteps.findIndex(item => item.id === step.id)];
   const runLabels = resolveRunDetailLabels(detailLabels);
@@ -62,7 +66,7 @@ export function TraceExplorer({ steps, onClose, loadCallBody, labels: detailLabe
   const titleRef = useRef<HTMLHeadingElement>(null);
   const searchIndex = useMemo(() => new Map(steps.map(step => [step.id, traceSearchText(step)])), [steps]);
   const timing = useMemo(() => traceMeasuredTiming(steps), [steps]);
-  const filtered = traceOrderedSteps(steps, order).filter(step =>
+  const filtered = (order === "hierarchy" ? steps : traceOrderedSteps(steps, order)).filter(step =>
     (category === "all" || traceCategory(step) === category) &&
     (status === "all" || (status === "active" ? step.status === "running" || step.status === "waiting" : step.status === "failed")) &&
     (!query || searchIndex.get(step.id)?.includes(query.toLocaleLowerCase())));
@@ -131,7 +135,7 @@ export function TraceExplorer({ steps, onClose, loadCallBody, labels: detailLabe
                 <ol ref={listRef} aria-label={labels.list} className="grid min-w-0 divide-y divide-border">
                   {list.map(step => {
                     const index = steps.indexOf(step); const bar = timing.bars[index];
-                    return <li key={step.id} data-trace-record={step.id} data-trace-category={traceCategory(step)} data-level={step.level ?? 0} data-parent-id={step.parentId} data-status={step.status} style={order === "hierarchy" ? runTimelineStepIndentStyle(step.level) : undefined}>
+                    return <li key={step.id} data-trace-record={step.id} data-trace-category={traceCategory(step)} data-level={step.level ?? 0} data-parent-id={step.parentId} data-status={step.status}>
                       <button type="button" data-surface-tint={selected?.id === step.id ? "accent" : undefined} aria-pressed={selected?.id === step.id} onClick={() => select(step)}
                         className={cn("relative grid min-h-[var(--control-height-touch)] w-full min-w-0 cursor-pointer gap-1 border-l-2 p-2 text-left hover:bg-surface-hover", selected?.id === step.id ? "border-l-accent-fg bg-accent-muted" : "border-l-transparent")}
                         onKeyDown={event => {
@@ -141,18 +145,15 @@ export function TraceExplorer({ steps, onClose, loadCallBody, labels: detailLabe
                           const next = buttons?.[list.indexOf(step) + offset];
                           if (next) { event.preventDefault(); next.focus(); }
                         }}>
-                        <span className={cn("flex min-w-0 items-start gap-2 leading-5", runTimelineNameClass(size))}><span className="pr-icon-line"><RunStepStatusIcon status={step.status} size={RUN_TIMELINE_CHEVRON_SIZE[size]} spin={isLeaf(step)} /></span><span data-trace-record-label="" className="min-w-0 flex-1 break-words text-fg [overflow-wrap:anywhere]">{step.label}</span></span>
-                        <span className="flex items-center justify-between gap-2 text-xs text-fg-muted"><span data-trace-step-status-duration="">{runLabels.stepStatus[step.status]}{stepDurationMs(step) !== null ? ` · ${formatRunDuration(stepDurationMs(step), runLabels.notRecorded)}` : ""}</span></span>
-                        {step.meta ? <span className="text-xs leading-5 text-fg-muted">{step.meta}</span> : null}
-                        {runTimelineResultSummary(step) ? <span data-trace-result-summary="" className="text-xs leading-5 text-fg-muted">{runTimelineResultSummary(step)}</span> : null}
-                        {bar ? <span className={cn(RUN_TIME_TRACK, "overflow-hidden")} data-trace-time-bar="" aria-hidden="true"><span className={cn(RUN_TIME_FILL, RUN_TIME_COLOR[step.status])} style={{left: `${bar.offset}%`, width: bar.width == null ? "0%" : `${bar.width}%`}} /></span> : null}
+                        <RunStepSummary step={order === "time" ? {...step, level: 0} : step} size={size} statusLabel={runLabels.stepStatus[step.status]}
+                          bar={bar} spin={isLeaf(step)} surface="trace" formatDuration={formatDuration} />
                       </button>
                     </li>;
                   })}
                 </ol>
               </RunTimelineViewport>
             </div>
-            {list.length < filtered.length ? <LoadMoreFooter summary={labels.loaded(list.length, filtered.length)} hasMore onLoadMore={() => setLimit(visibleLimit + 50)} loadMoreLabel={labels.more} retryLabel={labels.retry} /> : null}
+            <LoadMoreFooter summary={labels.loaded(list.length, filtered.length)} hasMore={list.length < filtered.length} onLoadMore={() => setLimit(visibleLimit + 50)} loadMoreLabel={labels.more} retryLabel={labels.retry} />
           </div>
           <section className={cn("min-w-0 rounded-md border border-border bg-surface p-3 @4xl:sticky @4xl:top-3", mobileDetail ? "block" : "hidden @4xl:block")} aria-labelledby={`${id}-selected`} data-trace-inspector="">
             <div className="mb-3 flex flex-wrap justify-between gap-2">

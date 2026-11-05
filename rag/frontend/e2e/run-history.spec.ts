@@ -1,3 +1,4 @@
+import recoveryGeneratedTrace from "./fixtures/recovery-generated-trace.json";
 import searchTraceParity from "./fixtures/search-trace-parity.json";
 import generatedAnswers from "./fixtures/derived-answer-generated.json";
 import stageOutcomes from "./fixtures/stage-outcomes.json";
@@ -2044,3 +2045,47 @@ for (const fusionStatus of ["done", "skipped", "failed"] as const) {
     await expectNoPageOverflow(page);
   });
 }
+
+
+test("不足から3拡張を補搜した実編排の記録が経過と軌跡で一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const root = recoveryGeneratedTrace.events[0];
+  const startedAt = String("started_at" in root ? root.started_at : "");
+  const finishedAt = String("finished_at" in root ? root.finished_at : "");
+  const row = run(1, {run_id: "synthetic-recovery", question: "合成対象Bの値を教えてください。", answer: "合成対象Bの値は42です。", created_at: finishedAt, elapsed_ms: Date.parse(finishedAt) - Date.parse(startedAt)});
+  await mockRuns(page, [row]);
+  await page.route("**/api/history/runs/synthetic-recovery/trace", route => route.fulfill({json: apiEnvelope(recoveryGeneratedTrace)}));
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  const vector = recoveryGeneratedTrace.events.filter(event => event.type === "step" && "params" in event && event.params?.name === "ベクトル検索");
+  const recovery = recoveryGeneratedTrace.events.find(event => event.type === "step" && "params" in event && event.params?.name === "未回答の要求の探し直し");
+  expect(vector).toHaveLength(3);
+  for (const event of vector) {
+    const record = timeline.locator(`[data-run-timeline-step="${event.step_id}"]`);
+    await record.scrollIntoViewIfNeeded();
+    await expect(record).toBeInViewport();
+    await expect(record).toHaveAttribute("data-parent-id", recovery?.step_id ?? "");
+    await expect(record).toHaveAttribute("data-status", "done");
+  }
+  const fusion = recoveryGeneratedTrace.events.filter(event => event.type === "step" && "params" in event && event.params?.name === "追加の検索結果統合");
+  expect(fusion.map(event => event.status)).toEqual(["skipped", "done"]);
+  for (const event of fusion) await expect(timeline.locator(`[data-run-timeline-step="${event.step_id}"]`)).toHaveAttribute("data-status", event.status);
+  const normal = await timeline.locator("[data-run-timeline-step]").evaluateAll(rows => rows.map(row => ({
+    id: row.getAttribute("data-run-timeline-step"), label: row.querySelector("[data-run-timeline-label]")?.textContent,
+    status: row.getAttribute("data-status"), parent: row.getAttribute("data-parent-id"), level: row.getAttribute("data-level") ?? "0",
+    timing: row.querySelector("[data-run-step-status-duration]")?.textContent,
+  })));
+  await page.screenshot({path: testInfo.outputPath("actual-recovery-process.png"), fullPage: false});
+  await page.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
+  const explorer = page.locator("[data-trace-explorer]");
+  await explorer.getByRole("button", {name: "さらに表示", exact: true}).click();
+  const traced = await explorer.locator("[data-trace-record]").evaluateAll(rows => rows.map(row => ({
+    id: row.getAttribute("data-trace-record"), label: row.querySelector("[data-trace-record-label]")?.textContent,
+    status: row.getAttribute("data-status"), parent: row.getAttribute("data-parent-id"), level: row.getAttribute("data-level") ?? "0",
+    timing: row.querySelector("[data-trace-step-status-duration]")?.textContent,
+  })));
+  expect(traced).toEqual(normal);
+  await explorer.screenshot({path: testInfo.outputPath("actual-recovery-trace.png")});
+  await expectNoPageOverflow(page);
+});
