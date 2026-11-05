@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import patch
 
 import pytest
@@ -1147,7 +1147,9 @@ async def test_unlimited_native_request_uses_actual_authorized_cardinality() -> 
 
 
 @pytest.mark.parametrize("channel", ["keyword", "hybrid"])
-def test_native_contains_request_preserves_non_text_contract(channel: str) -> None:
+def test_native_contains_request_preserves_non_text_contract(
+    channel: Literal["keyword", "hybrid"],
+) -> None:
     before = native_search_request(
         query="合成質問", vector=[1, 0], channel=channel, allowed_ids=["a"], limit=10
     )
