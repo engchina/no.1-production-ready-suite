@@ -3403,11 +3403,12 @@ export const ja = {
   "flow.inspector.details": "処理の詳細(診断)",
   "flow.chunks.title": "Chunk / Citation",
   "flow.chunks.loading": "Chunk を読み込んでいます",
+  "flow.chunks.pendingVersion": "索引作成前の分割結果を確認しています。この版はまだ検索に使われていません。検索には索引作成に成功した配信中の版を使います。",
   "flow.chunks.empty": "chunk はまだ作成されていません。",
   "flow.chunks.scopeEmpty": "現在の原本表示範囲に対応する Chunk はありません。",
   "flow.chunks.unlocatedRange": "位置未確認の Chunk: {start}–{end} / {total}",
   "flow.chunks.unlocatedTitle": "原本上の位置を確認できない Chunk",
-  "flow.chunks.unlocatedDescription": "索引済みですが、原本上の位置を確認できません。現在表示している原本の範囲に対応するとは限りません。",
+  "flow.chunks.unlocatedDescription": "原本上の位置を確認できません。現在表示している原本の範囲に対応するとは限りません。",
   "flow.chunks.listLabel": "chunk の一覧（{count} 件）。一覧の中で縦にスクロールできます。",
   "flow.chunks.smallToBigFallbackTitle": "親子階層で分割されていない Chunk です",
   "flow.chunks.smallToBigFallback":

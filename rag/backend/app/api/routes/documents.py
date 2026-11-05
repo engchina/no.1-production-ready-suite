@@ -235,6 +235,7 @@ from app.schemas.language_pack_release import LanguagePackIndexRelation
 from app.schemas.search import RetrievedChunk, normalize_search_id_list
 from app.services.document_inspection import extraction_window, text_window
 from app.services.document_preview_cache import DocumentPreviewCache
+from app.services.recipe_inspection import chunk_inspection_version
 
 router = APIRouter()
 
@@ -1516,13 +1517,18 @@ async def _enqueue_ingestion_job_for_recipe(
     response_model=ApiResponse[list[DocumentChunkView]],
 )
 async def list_document_recipe_chunks(
-    document_id: str, recipe_id: str
+    document_id: str,
+    recipe_id: str,
+    expected_revision: Annotated[str | None, Query(max_length=64)] = None,
 ) -> ApiResponse[list[DocumentChunkView]]:
     oracle = OracleClient()
     row = await oracle.get_document_recipe(document_id, recipe_id)
     if row is None:
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
-    chunk_set_id = row.get("active_chunk_set_id")
+    version = await chunk_inspection_version(
+        oracle, document_id, recipe_id, row, expected_revision=expected_revision
+    )
+    chunk_set_id = version.chunk_set_id
     return ApiResponse(
         data=(await oracle.list_chunk_set_chunks(str(chunk_set_id)) if chunk_set_id else [])
     )
@@ -1561,6 +1567,7 @@ async def _inspector_source_scope(
 async def document_recipe_chunk_window(
     document_id: str,
     recipe_id: str,
+    expected_revision: Annotated[str | None, Query(max_length=64)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     unlocated_offset: Annotated[int, Query(ge=0)] = 0,
@@ -1574,14 +1581,19 @@ async def document_recipe_chunk_window(
     row = await oracle.get_document_recipe(document_id, recipe_id)
     if row is None:
         raise HTTPException(status_code=404, detail="レシピが見つかりません。")
-    chunk_set = row.get("active_chunk_set_id")
+    version = await chunk_inspection_version(
+        oracle, document_id, recipe_id, row, expected_revision=expected_revision
+    )
+    chunk_set = version.chunk_set_id
     scope = None
-    if source_offset is not None and page is None:
-        artifact = await oracle.get_document_extraction_artifact(
-            document_id=document_id,
-            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
-        )
-        payload = artifact.get("extraction_json") if artifact else {}
+    if chunk_set and source_offset is not None and page is None:
+        payload = version.payload
+        if payload is None:
+            artifact = await oracle.get_document_extraction_artifact(
+                document_id=document_id, extraction_recipe_id=version.extraction_id or ""
+            )
+            saved_payload = artifact.get("extraction_json") if artifact else {}
+            payload = saved_payload if isinstance(saved_payload, Mapping) else {}
         scope = await _inspector_source_scope(
             document_id,
             recipe_id,
@@ -1609,7 +1621,7 @@ async def document_recipe_chunk_window(
             scope_rows=scope.get("chunk_rows") if scope is not None else None,
             chunk_id=chunk_id,
             location_unavailable=location_unavailable,
-            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+            extraction_recipe_id=version.extraction_id or "",
             full_text=complete,
         )
 
@@ -1622,7 +1634,7 @@ async def document_recipe_chunk_window(
     if chunk_set:
         document_total, unlocated_count = await oracle.count_chunk_set_inspection_locations(
             str(chunk_set),
-            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+            extraction_recipe_id=version.extraction_id or "",
             location_unavailable=location_unavailable,
         )
     if chunk_set and scope is not None:
@@ -1635,7 +1647,7 @@ async def document_recipe_chunk_window(
             chunk_id=chunk_id,
             unlocated_only=True,
             location_unavailable=location_unavailable,
-            extraction_recipe_id=str(row.get("active_extraction_recipe_id") or ""),
+            extraction_recipe_id=version.extraction_id or "",
         )
     return ApiResponse(
         data={
@@ -1649,6 +1661,8 @@ async def document_recipe_chunk_window(
             "limit": max(total, limit) if complete else limit,
             "complete": complete,
             "revision": chunk_set,
+            "extraction_revision": version.extraction_id,
+            "inspection_mode": "pending" if version.pending else "active",
             "scope_status": scope["scope_status"]
             if scope is not None
             else "page"

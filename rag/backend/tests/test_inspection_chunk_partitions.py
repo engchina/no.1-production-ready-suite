@@ -19,6 +19,13 @@ async def test_raw_scope_has_independent_unlocated_page(
     chunk = DocumentChunkView(document_id="doc", chunk_id="chunk", chunk_index=1, text="本文")
 
     class Store:
+        async def get_chunk_set(self, _chunk_set_id: str) -> dict[str, str]:
+            return {
+                "document_id": "doc",
+                "recipe_id": "recipe",
+                "extraction_recipe_id": "extraction",
+            }
+
         async def get_document_recipe(self, *args: Any) -> dict[str, str]:
             return {"active_chunk_set_id": "set", "active_extraction_recipe_id": "extraction"}
 
@@ -76,6 +83,13 @@ async def test_unscoped_and_page_views_do_not_duplicate_unlocated(
     monkeypatch: pytest.MonkeyPatch, page: int | None
 ) -> None:
     class Store:
+        async def get_chunk_set(self, _chunk_set_id: str) -> dict[str, str]:
+            return {
+                "document_id": "doc",
+                "recipe_id": "recipe",
+                "extraction_recipe_id": "extraction",
+            }
+
         async def get_document_recipe(self, *args: Any) -> dict[str, str]:
             return {"active_chunk_set_id": "set", "active_extraction_recipe_id": "extraction"}
 
@@ -103,6 +117,13 @@ async def test_unscoped_and_page_views_do_not_duplicate_unlocated(
 
 async def test_missing_recipe_stops_before_chunk_read(monkeypatch: pytest.MonkeyPatch) -> None:
     class Store:
+        async def get_chunk_set(self, _chunk_set_id: str) -> dict[str, str]:
+            return {
+                "document_id": "doc",
+                "recipe_id": "recipe",
+                "extraction_recipe_id": "extraction",
+            }
+
         async def get_document_recipe(self, *args: Any) -> None:
             return None
 
@@ -201,6 +222,13 @@ async def test_left_range_returns_every_chunk_without_a_continuation(
     calls: list[dict[str, Any]] = []
 
     class Oracle:
+        async def get_chunk_set(self, _chunk_set_id: str) -> dict[str, str]:
+            return {
+                "document_id": "doc",
+                "recipe_id": "recipe",
+                "extraction_recipe_id": "extraction",
+            }
+
         async def get_document_recipe(self, document_id: str, recipe_id: str) -> dict[str, str]:
             return {"active_chunk_set_id": "set", "active_extraction_recipe_id": "extraction"}
 

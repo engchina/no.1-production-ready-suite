@@ -59,6 +59,7 @@ import {
   resolvePhaseRows,
   resolveStatusMessageSlot,
   selectDocumentRecipe,
+  inspectionChunkSetId,
   shouldShowProcessingWatchBanner,
   shouldStopLocalProcessingWatch,
 } from "./DocumentWorkspace.logic";
@@ -463,12 +464,13 @@ export function DocumentWorkspace({
   const [sectionFocus, setSectionFocus] = useState<{id: string; key: string} | null>(null);
   const inspectorPanelRef = useRef<HTMLDivElement>(null);
 
+  const inspectionChunkSet = inspectionChunkSetId(selectedRecipe);
   const [viewOffset, setViewOffset] = useState(0);
   const [elementTextOffset, setElementTextOffset] = useState(0);
   const [cellOffset, setCellOffset] = useState(0);
   const [chunkOffset, setChunkOffset] = useState(0);
   const [unlocatedOffset, setUnlocatedOffset] = useState(0);
-  const windowChanged = useValuesChanged([documentId, selectedRecipeId, inspectorTab, currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision]);
+  const windowChanged = useValuesChanged([documentId, selectedRecipeId, inspectorTab, currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, inspectionChunkSet]);
   if (windowChanged) { setViewOffset(0); setChunkOffset(0); setUnlocatedOffset(0); setElementTextOffset(0); setCellOffset(0); setShowChunkDetails(false); }
   // 章節ナビゲーションの一覧と要約は GET /sections が全件を返す。このタブでは解析エンジンの表示などに使う概要だけを読み、
   // プレビューのページ・表示範囲が動いても読み直さない。
@@ -486,17 +488,17 @@ export function DocumentWorkspace({
   });
   const chunkWindowQuery = useQuery({
     queryKey: ["documents", documentId, "recipes", selectedRecipeId, "chunk-window", chunkOffset, unlocatedOffset,
-      currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, selectedRecipe?.active_chunk_set_id],
+      currentInspectorPage, currentTextRange?.offset, currentTextRange?.revision, inspectionChunkSet],
     queryFn: ({signal}) => api.documentChunkWindow(documentId, selectedRecipeId!, {
-      offset: chunkOffset, unlocated_offset: unlocatedOffset, limit: 25, ...sourceScope, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
+      offset: chunkOffset, unlocated_offset: unlocatedOffset, limit: 25, ...(inspectionChunkSet ? {expected_revision: inspectionChunkSet} : {}), ...sourceScope, ...(currentInspectorPage ? {page: currentInspectorPage} : {}),
     }, signal),
     enabled: Boolean(selectedRecipeId) && inspectorTab === "chunks",
     retry: 1,
   });
   const focusedChunkQuery = useQuery({
     queryKey: ["documents", documentId, "recipes", selectedRecipeId, "chunk-window", "focus", requestedChunkId ?? selectedChunkId,
-      selectedRecipe?.active_chunk_set_id],
-    queryFn: ({signal}) => api.documentChunkWindow(documentId, selectedRecipeId!, {chunk_id: (requestedChunkId ?? selectedChunkId)!, limit: 1}, signal),
+      inspectionChunkSet],
+    queryFn: ({signal}) => api.documentChunkWindow(documentId, selectedRecipeId!, {chunk_id: (requestedChunkId ?? selectedChunkId)!, limit: 1, ...(inspectionChunkSet ? {expected_revision: inspectionChunkSet} : {})}, signal),
     enabled: Boolean(selectedRecipeId && (requestedChunkId || showChunkDetails && inspectorTab === "chunks" && selectedChunkId)), retry: 1,
   });
   const chunksQuery = { ...chunkWindowQuery, data: useMemo(() => {
@@ -1882,6 +1884,7 @@ export function DocumentWorkspace({
                 className="relative xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pr-1 xl:[scrollbar-gutter:stable]"
               >
                 <div className="space-y-3">
+                  {inspectionChunkSet && inspectionChunkSet !== selectedRecipe?.active_chunk_set_id ? <Banner severity="info">{t("flow.chunks.pendingVersion")}</Banner> : null}
                   {selectedRecipeId && (status === "REVIEW" || status === "CHUNKED") ? (
                     <ChunkPreviewControls
                       form={chunkPreviewSettings}

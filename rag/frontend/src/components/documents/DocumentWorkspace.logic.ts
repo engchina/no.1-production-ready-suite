@@ -1054,3 +1054,12 @@ export function classificationPeriodIsValid(
   // date の入力は YYYY-MM-DD なので文字列で比べられる。
   return !from || !to || from < to;
 }
+
+/** 分割確認の取得キャッシュを、確認対象の保存済み版に固定する。検索の配信版は変えない。 */
+export function inspectionChunkSetId(recipe: Pick<DocumentRecipeView, "status" | "failed_phase" | "pending_chunk_set_id" | "active_chunk_set_id"> | null): string | null {
+  if (!recipe) return null;
+  const pending = recipe.pending_chunk_set_id;
+  const candidatePhase = ["CHUNKED", "INDEXING"].includes(recipe.status) ||
+    recipe.status === "ERROR" && recipe.failed_phase === "INDEX";
+  return candidatePhase ? pending ?? null : recipe.active_chunk_set_id;
+}
