@@ -4507,6 +4507,22 @@ def _stored_child(
         metadata["document"] = {
             key: value for key, value in document.items() if key != "first_page_context"
         }
+    from rag_engine.generation.image_text_sources import ANSWER_IMAGE_SOURCE_KEY, has_image_ranges
+
+    from app.rag.image_text_sources import verified_source
+
+    metadata.pop(ANSWER_IMAGE_SOURCE_KEY, None)
+    if (value := verified_source(chunk)) is not None and has_image_ranges(value):
+        metadata[ANSWER_IMAGE_SOURCE_KEY] = {
+            "version": 1,
+            "scope": {
+                "document_id": chunk.document_id,
+                "recipe_id": str(chunk.metadata.get("recipe_id") or ""),
+                "chunk_set_id": str(chunk.metadata.get("chunk_set_id") or ""),
+            },
+            "completeness": "partial" if value.get("unknown_sources") else "complete",
+            "source_map": value,
+        }
     metadata["rrf_score"] = rrf_score
     if retrieval_channels:
         metadata["adb_hybrid"] = {"retrieval_channels": sorted(retrieval_channels)}

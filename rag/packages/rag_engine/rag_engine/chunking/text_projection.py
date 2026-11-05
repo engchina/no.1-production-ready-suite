@@ -9,6 +9,8 @@ from typing import Any
 
 from rag_parser_core.image_purpose import recorded_image_purpose
 
+IMAGE_TEXT_SOURCE_ROLES = frozenset({"image_description", "image_ocr", "image_table_supplement"})
+
 
 @dataclass(frozen=True)
 class RecordTextProjection:
@@ -122,7 +124,7 @@ def validate_text_source_map(value: Any) -> dict[str, Any]:
         if row["role"] == "unclassified":
             if "vision_image_purpose" in row or "image_id" in row:
                 raise ValueError("出所未確定の本文に画像用途は付けられません。")
-        elif row["role"] in {"image_description", "image_ocr", "image_table_supplement"}:
+        elif row["role"] in IMAGE_TEXT_SOURCE_ROLES:
             if (
                 not isinstance(row.get("image_id"), str)
                 or not row["image_id"]

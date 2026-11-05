@@ -301,6 +301,8 @@ def _chunk_answer_record(chunk: DocumentChunk, *, chunk_run_id: str = "") -> Ans
 
 
 def _stored_chunk_answer_record(chunk: StoredChunk) -> AnswerRecord:
+    from rag_engine.generation.image_text_sources import admitted_record_map
+
     first_seq = _first_source_seq(chunk.source_seq_ranges) or chunk.chunk_seq
     return AnswerRecord(
         id=chunk.chunk_id,
@@ -309,7 +311,9 @@ def _stored_chunk_answer_record(chunk: StoredChunk) -> AnswerRecord:
         page=chunk.page_start,
         seq_no=first_seq,
         category="ParentChunk" if chunk.chunk_level == PARENT_CHUNK_LEVEL else "ChildChunk",
-        text=chunk.text if chunk.chunk_level == PARENT_CHUNK_LEVEL else (chunk.retrieval_text or chunk.text),
+        text=chunk.text
+        if chunk.chunk_level == PARENT_CHUNK_LEVEL or admitted_record_map(chunk) is not None
+        else (chunk.retrieval_text or chunk.text),
         body_text=chunk.text,
         source=chunk.source_file_name,
         source_run_id=chunk.source_run_id,

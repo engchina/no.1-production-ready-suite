@@ -50,6 +50,7 @@ class EvidenceUnitSnapshot:
                     "source_run_id",
                     "chunk_uid",
                     "origin",
+                    "image_text_source_context",
                 )
                 if key in span
             },

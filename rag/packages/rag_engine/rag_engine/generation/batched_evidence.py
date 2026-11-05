@@ -27,7 +27,8 @@ from rag_engine.generation.batch_output_repair import (
 )
 from rag_engine.generation.citation_unit_ids import EvidenceUnitSnapshot, SentUnitCatalog
 from rag_engine.generation.document_inputs import document_groups, document_key, document_priority, order_document_spans
-from rag_engine.generation.grounded import _image_text, citation_units
+from rag_engine.generation.grounded import IMAGE_CITATION_UNIT_CONTRACT, evidence_citation_units, evidence_unit_contract
+from rag_engine.generation.image_text_sources import SPAN_IMAGE_SOURCE_KEY, slice_span_image_context, span_source_context
 from rag_engine.generation.input_budget import GenerationInputBudgetExceeded, model_input_measurement
 from rag_engine.resources.call_context import call_context, update_call_context
 from rag_engine.resources.runtime import resolve_prompt
@@ -85,10 +86,14 @@ def verified_candidate(answer: str, source: str) -> str:
     )
 
 
+def _reading_unit_contract(value: Mapping[str, Any]) -> str:
+    return "batch_image_read_units_v1" if evidence_unit_contract(value) == IMAGE_CITATION_UNIT_CONTRACT else "batch_read_units_v1"
+
+
 def reading_units(value: Mapping[str, Any]) -> list[tuple[int, int]]:
     """読取の入力の番号の単位。引用単位（句点・改行・表の行）を使い、長すぎる単位だけ上限で分ける。"""
     units: list[tuple[int, int]] = []
-    for start, end in citation_units(str(value["text"]), image_text=_image_text(value)):
+    for start, end in evidence_citation_units(value):
         units.extend((position, min(position + READING_UNIT_MAX_CHARS, end)) for position in range(start, end, READING_UNIT_MAX_CHARS))
     return units
 
@@ -101,7 +106,7 @@ def reading_unit_counts(values: Sequence[Mapping[str, Any]]) -> dict[str, int]:
 def reading_unit_catalog(values: Sequence[Mapping[str, Any]]) -> SentUnitCatalog:
     return SentUnitCatalog(
         [
-            EvidenceUnitSnapshot.create({**value, "label": f"B{index}"}, reading_units(value), "batch_read_units_v1")
+            EvidenceUnitSnapshot.create({**value, "label": f"B{index}"}, reading_units(value), _reading_unit_contract(value))
             for index, value in enumerate(values, 1)
         ]
     )
@@ -110,7 +115,7 @@ def reading_unit_catalog(values: Sequence[Mapping[str, Any]]) -> SentUnitCatalog
 def _labeled_text(label: str, value: Mapping[str, Any]) -> str:
     """引用単位の ID を、選択する原文の隣へ示す。"""
     text = str(value["text"])
-    snapshot = EvidenceUnitSnapshot.create({**value, "label": label}, reading_units(value), "batch_read_units_v1")
+    snapshot = EvidenceUnitSnapshot.create({**value, "label": label}, reading_units(value), _reading_unit_contract(value))
     return "\n".join(
         f"{label}-{number}| [{unit_id}] {text[start:end]}"
         for number, ((start, end), unit_id) in enumerate(zip(snapshot.units, snapshot.unit_ids, strict=True), 1)
@@ -148,8 +153,14 @@ def _slice(span: Mapping[str, Any], start: int, end: int) -> dict[str, Any]:
         return dict(span)
     absolute = int(span.get("start", 0)) + start
     text = span["text"][start:end]
-    uid = "E" + hashlib.sha256(f"{span['source_id']}:{absolute}:{absolute + len(text)}:{text}".encode()).hexdigest()[:20]
-    return {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
+    identity = f"{span['source_id']}:{absolute}:{absolute + len(text)}:{text}"
+    if context := span_source_context(span):
+        identity += ":" + context["source_signature"]
+    uid = "E" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+    result = {**span, "evidence_id": uid, "label": uid, "text": text, "start": absolute, "end": absolute + len(text), "excerpt_only": True}
+    result.pop(SPAN_IMAGE_SOURCE_KEY, None)
+    result.update(slice_span_image_context(span, start, end))
+    return result
 
 
 def prepare_batched_evidence(

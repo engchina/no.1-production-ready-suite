@@ -275,6 +275,9 @@ def restore_parent_map(
             }
             for row in value["ranges"]
         )
+    from rag_engine.generation.image_text_sources import ANSWER_IMAGE_SOURCE_KEY, has_image_ranges
+
+    metadata.pop(ANSWER_IMAGE_SOURCE_KEY, None)
     metadata.pop(SCOPE_KEY, None)
     metadata.pop(PLACEMENT_KEY, None)
     layout = dict(metadata.get("layout") or {})
@@ -304,5 +307,15 @@ def restore_parent_map(
         metadata["image_text_source_map_status"] = (
             "complete" if not unknown and len(positions) == next(iter(counts)) else "partial"
         )
+        if has_image_ranges(layout["text_source_map"]):
+            metadata[ANSWER_IMAGE_SOURCE_KEY] = {
+                "version": 1,
+                "scope": {
+                    key: str(metadata.get(key) or "")
+                    for key in ("document_id", "recipe_id", "chunk_set_id")
+                },
+                "completeness": metadata["image_text_source_map_status"],
+                "source_map": layout["text_source_map"],
+            }
     else:
         metadata["image_text_source_map_status"] = "unknown"

@@ -1784,8 +1784,8 @@ def _request_plan_errors(draft: GroundedDraft, spans: Sequence[dict], *, unknown
 def scope_evidence_text(span: Mapping[str, Any]) -> str:
     """計画の入力の本文。行頭の番号は生成の根拠ブロックの引用単位と同じ。"""
     text = str(span.get("text") or "")
-    units = citation_units(text, image_text=_image_text(span))
-    snapshot = EvidenceUnitSnapshot.create(span, units, CITATION_UNIT_CONTRACT)
+    units = evidence_citation_units(span)
+    snapshot = EvidenceUnitSnapshot.create(span, units, evidence_unit_contract(span))
     return "\n".join(
         f"{index}| [{uid}] {text[start:end]}" for index, ((start, end), uid) in enumerate(zip(units, snapshot.unit_ids, strict=True), 1)
     )
@@ -1825,19 +1825,14 @@ def resolve_scope_plan(plan: RequestScopePlan, spans: Sequence[dict]) -> list[Re
         if len(named) != 1:
             return ""
         text = str(named[0].get("text") or "")
-        units = citation_units(text, image_text=_image_text(named[0]))
+        units = evidence_citation_units(named[0])
         binding = bind_wire_range(link.line_start, link.line_end, unit_count=len(units), numbered=True)
         if binding.reason_code is not None or link.line_start is None or link.line_end is None:
             return ""
         return text[units[link.line_start - 1][0] : units[link.line_end - 1][1]].strip()
 
     catalog = SentUnitCatalog(
-        [
-            EvidenceUnitSnapshot.create(
-                span, citation_units(str(span.get("text") or ""), image_text=_image_text(span)), CITATION_UNIT_CONTRACT
-            )
-            for span in spans
-        ]
+        [EvidenceUnitSnapshot.create(span, evidence_citation_units(span), evidence_unit_contract(span)) for span in spans]
     )
     return canonical_request_coverage(plan.request_coverage, link_text, unit_catalog=catalog)
 
@@ -3948,9 +3943,10 @@ _CITE_LIST = re.compile(r"^\s*(?:\[\s*\d+(?:\s*[,、]\s*\d+)*\s*\]|\d+(?:\s*[,�
 
 # 今の生成が根拠に付ける引用単位の契約。保存・送信済みの視図は記録した版の単位で読み直す（#3685・#3824・#3847）。
 CITATION_UNIT_CONTRACT = "explicit_units_v5"
+IMAGE_CITATION_UNIT_CONTRACT = "explicit_image_units_v1"
 # ``citation_units`` で単位を作る版（v2 は ``_legacy_citation_units`` の単位に番号を付けた版）。
 _VERSIONED_UNIT_CONTRACTS = frozenset({"explicit_units_v3", "explicit_units_v4", CITATION_UNIT_CONTRACT})
-_EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", *_VERSIONED_UNIT_CONTRACTS})
+_EXPLICIT_UNIT_CONTRACTS = frozenset({"explicit_units_v2", IMAGE_CITATION_UNIT_CONTRACT, *_VERSIONED_UNIT_CONTRACTS})
 # explicit_units_v5 で短い行のまとめを残す、OCR・表の断片が続くブロックの形: 空行を除く物理行の数の下限と、
 # 行の字数（前後の空白を除く）の中央値の上限。これに当たるブロックは番号で入力を膨らませない。
 CITE_FRAGMENT_MIN_LINES = 8
@@ -4019,6 +4015,37 @@ def citation_units(text: str, *, contract_version: str = CITATION_UNIT_CONTRACT,
                 units[-1] = (before_start, end)
                 continue
         units.append((start, end))
+    return units
+
+
+def evidence_unit_contract(span: Mapping[str, Any]) -> str:
+    from rag_engine.generation.image_text_sources import span_source_context
+
+    return IMAGE_CITATION_UNIT_CONTRACT if span_source_context(span) is not None else CITATION_UNIT_CONTRACT
+
+
+def evidence_citation_units(span: Mapping[str, Any], *, contract_version: str | None = None) -> list[tuple[int, int]]:
+    """用途位置が確かな根拠だけを境界で分け、表示と解決へ同じ単位を返す。"""
+    from rag_engine.generation.image_text_sources import span_source_context
+
+    text = str(span.get("text") or "")
+    contract = contract_version or evidence_unit_contract(span)
+    if contract != IMAGE_CITATION_UNIT_CONTRACT:
+        return citation_units(text, contract_version=contract, image_text=_image_text(span))
+    context = span_source_context(span)
+    if context is None:
+        raise ValueError("画像位置付き引用単位の記録を確認できません。")
+    boundaries = sorted(
+        {
+            0,
+            len(text),
+            *(position for key in ("ranges", "native_text_ranges") for row in context[key] for position in (row["start"], row["end"])),
+        }
+    )
+    units = []
+    for left, right in zip(boundaries, boundaries[1:], strict=False):
+        image = any(row["start"] <= left and right <= row["end"] for row in context["ranges"])
+        units.extend((left + a, left + b) for a, b in citation_units(text[left:right], image_text=image))
     return units
 
 
@@ -4105,15 +4132,18 @@ _CITATION_VIEWS: ContextVar[dict[int, tuple[dict, CitationView]] | None] = Conte
 
 def _citation_view(span: Mapping[str, Any], *, explicit_units: bool | None = None) -> CitationView:
     text = str(span.get("text") or "")
-    contract_version = CITATION_UNIT_CONTRACT if explicit_units else "legacy_threshold_v1"
+    current_contract = evidence_unit_contract(span)
+    contract_version = current_contract if explicit_units or current_contract == IMAGE_CITATION_UNIT_CONTRACT else "legacy_threshold_v1"
     if explicit_units is None:
         cached = (_CITATION_VIEWS.get() or {}).get(id(span))
         if cached is not None and cached[0] is span:
             contract_version = cached[1].contract_version
         explicit_units = contract_version in _EXPLICIT_UNIT_CONTRACTS
+    if contract_version == IMAGE_CITATION_UNIT_CONTRACT:
+        explicit_units = True
     units = tuple(
-        citation_units(text, contract_version=contract_version, image_text=_image_text(span))
-        if contract_version in _VERSIONED_UNIT_CONTRACTS
+        evidence_citation_units(span, contract_version=contract_version)
+        if contract_version in {*_VERSIONED_UNIT_CONTRACTS, IMAGE_CITATION_UNIT_CONTRACT}
         else _legacy_citation_units(text)
     )
     numbered = bool(units) if explicit_units else _numbered(text, units)
@@ -4582,8 +4612,8 @@ def _rendered_evidence_span(
         from rag_engine.generation.document_background import background_label
 
         return background_label(span) + "\n" + text
-    selected_units = tuple(units if units is not None else citation_units(text, image_text=_image_text(span)))
-    snapshot = EvidenceUnitSnapshot.create(span, selected_units, CITATION_UNIT_CONTRACT)
+    selected_units = tuple(units if units is not None else evidence_citation_units(span))
+    snapshot = EvidenceUnitSnapshot.create(span, selected_units, evidence_unit_contract(span))
     if numbered is True or numbered is None and _numbered(text, selected_units):
         body = "\n".join(
             f"{index}| [{unit_id}] {text[start:end]}"
@@ -6612,12 +6642,7 @@ def run_round(
     def plan_scope(evidence: Sequence[dict], correction: Mapping[str, Any] | None = None) -> _ScopePlan:
         """本文の生成と分けて、要求ごとに根拠の対象を照合する計画を立てる。``correction`` は前の計画の指摘（作り直しのときだけ）。"""
         catalog = SentUnitCatalog(
-            [
-                EvidenceUnitSnapshot.create(
-                    span, citation_units(str(span.get("text") or ""), image_text=_image_text(span)), CITATION_UNIT_CONTRACT
-                )
-                for span in evidence
-            ]
+            [EvidenceUnitSnapshot.create(span, evidence_citation_units(span), evidence_unit_contract(span)) for span in evidence]
         )
         plan_model = unit_scope_model(RequestScopePlan, catalog)
         plan = call_with_model_purpose(

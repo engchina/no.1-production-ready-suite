@@ -17,14 +17,15 @@ from app.schemas.document import FileStatus
 from app.schemas.extraction import StructuredExtraction
 
 
-def synthetic_chunks() -> tuple[list[Any], Any]:
+def synthetic_chunks(*, repetitions: int = 1) -> tuple[list[Any], Any]:
     children = []
     for index, (category, text, purpose) in enumerate(
         [
             ("Text", "合成の本文 900。", None),
             ("Picture", "合成画像の値 123。", "record"),
             ("Picture", "合成画像の値 123。", "example"),
-        ],
+        ]
+        * repetitions,
         1,
     ):
         raw = {"vision_image_purpose": purpose} if purpose else {}

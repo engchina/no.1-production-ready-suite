@@ -191,7 +191,17 @@ def evidence_excerpt(
     return "\n[…]\n".join(text[a:b] for a, b in selected)[:budget]
 
 
-def record_fingerprint(record: Any) -> str:
+def _image_signature(record: Any, cache: dict[int, str | None]) -> str | None:
+    """一回の選択内だけで検証済み署名を再利用する。保存metadataには書かない。"""
+    from rag_engine.generation.image_text_sources import image_source_signature
+
+    key = id(record)
+    if key not in cache:
+        cache[key] = image_source_signature(record)
+    return cache[key]
+
+
+def record_fingerprint(record: Any, *, _image_signatures: dict[int, str | None] | None = None) -> str:
     """同じ文書・ページ・節・全文の重複だけを識別する。版の異なる本文・別の文書の同じ本文は統合しない。"""
     metadata = getattr(record, "metadata", {}) or {}
     record_id = getattr(record, "chunk_uid", "") or record.id
@@ -208,6 +218,8 @@ def record_fingerprint(record: Any) -> str:
         metadata.get("section_path"),
         str(getattr(record, "text", "")),
     ]
+    if signature := _image_signature(record, {} if _image_signatures is None else _image_signatures):
+        value.append(signature)
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
@@ -270,6 +282,15 @@ def source_span_relation(kept: Any, other: Any, cache: dict[int, frozenset[str]]
     ``SOURCE_SPAN_TEXT_CONTAINMENT_MIN`` 以上がもう一方に含まれるときだけまとめる。要素の ID が無い根拠は
     判定しない（本文が同じ根拠を統合する ``record_fingerprint`` の規則だけが働く）。
     """
+    from rag_engine.generation.image_text_sources import image_source_signature
+
+    if image_source_signature(kept) != image_source_signature(other):
+        return None
+    return _source_span_relation(kept, other, cache)
+
+
+def _source_span_relation(kept: Any, other: Any, cache: dict[int, frozenset[str]] | None = None) -> str | None:
+    """同じ画像署名を確認した根拠だけの範囲・本文比較。"""
     left_ids, right_ids = record_element_ids(kept), record_element_ids(other)
     if not left_ids or not right_ids or not _same_source_document(kept, other):
         return None
@@ -290,7 +311,7 @@ def source_span_relation(kept: Any, other: Any, cache: dict[int, frozenset[str]]
     return None
 
 
-def collapse_source_spans(records: Sequence[Any]) -> list[tuple[Any, list[Any]]]:
+def collapse_source_spans(records: Sequence[Any], *, _image_signatures: dict[int, str | None] | None = None) -> list[tuple[Any, list[Any]]]:
     """順位順の根拠を、元の文書の範囲が同じものごとに 1 つにまとめる（#1331）。
 
     返り値は (残す根拠, まとめた根拠の順位順の list) を、まとめた中で最も順位の高い根拠の位置に並べたもの。
@@ -298,10 +319,14 @@ def collapse_source_spans(records: Sequence[Any]) -> list[tuple[Any, list[Any]]]
     残す（狭いほうを残すと、広いほうにだけある本文を落とす）。
     """
     cache: dict[int, frozenset[str]] = {}
-    groups: list[tuple[list[Any], list[Any]]] = []
+    image_signatures = {} if _image_signatures is None else _image_signatures
+    groups: list[tuple[list[Any], list[Any], str | None]] = []
     for record in records:
-        for kept, members in groups:
-            relation = source_span_relation(kept[0], record, cache)
+        signature = _image_signature(record, image_signatures)
+        for kept, members, kept_signature in groups:
+            if signature != kept_signature:
+                continue
+            relation = _source_span_relation(kept[0], record, cache)
             if relation is None:
                 continue
             members.append(record)
@@ -309,22 +334,24 @@ def collapse_source_spans(records: Sequence[Any]) -> list[tuple[Any, list[Any]]]
                 kept[0] = record
             break
         else:
-            groups.append(([record], [record]))
-    return [(kept[0], members) for kept, members in groups]
+            groups.append(([record], [record], signature))
+    return [(kept[0], members) for kept, members, _signature in groups]
 
 
 def new_evidence_count(records: Sequence[Any], seen: Sequence[Any]) -> int:
     """seen に無い根拠の数。本文が同じ根拠と、元の文書の範囲が同じ根拠（#1331）は新しいと数えない。"""
     cache: dict[int, frozenset[str]] = {}
-    keys = {record_fingerprint(record) for record in seen}
-    known = list(seen)
+    image_signatures: dict[int, str | None] = {}
+    keys = {record_fingerprint(record, _image_signatures=image_signatures) for record in seen}
+    known = [(item, _image_signature(item, image_signatures)) for item in seen]
     count = 0
     for record in records:
-        key = record_fingerprint(record)
-        if key in keys or any(source_span_relation(item, record, cache) for item in known):
+        key = record_fingerprint(record, _image_signatures=image_signatures)
+        signature = _image_signature(record, image_signatures)
+        if key in keys or any(signature == item_signature and _source_span_relation(item, record, cache) for item, item_signature in known):
             continue
         keys.add(key)
-        known.append(record)
+        known.append((record, signature))
         count += 1
     return count
 
@@ -385,6 +412,7 @@ def evidence_spans(
     """
     # 本文が同じ根拠（record_fingerprint）を先にまとめる。
     same_text: dict[str, list[Any]] = {}
+    image_signatures: dict[int, str | None] = {}
     for record in records:
         if structural_only(record.text):
             if diagnostics is not None:
@@ -398,13 +426,13 @@ def evidence_spans(
                     }
                 )
             continue
-        same_text.setdefault(record_fingerprint(record), []).append(record)
+        same_text.setdefault(record_fingerprint(record, _image_signatures=image_signatures), []).append(record)
     first_keys = {id(members[0]): key for key, members in same_text.items()}
     # 複数レシピ融合で元の文書の範囲が同じ根拠を 1 つにまとめ、まとめた根拠の ID は別名に残す (#1331)。
     unique: dict[str, Any] = {}
     aliases: dict[str, list[str]] = {}
     member_keys: dict[str, set[str]] = {}
-    for kept, members in collapse_source_spans([members[0] for members in same_text.values()]):
+    for kept, members in collapse_source_spans([members[0] for members in same_text.values()], _image_signatures=image_signatures):
         key = first_keys[id(kept)]
         grouped = [item for member in members for item in same_text[first_keys[id(member)]]]
         unique[key] = kept
@@ -687,7 +715,10 @@ def evidence_spans(
                     )
                 continue
             source_id = getattr(record, "chunk_uid", "") or record.id
-            span_id = "E" + hashlib.sha256(f"{source_id}:{start}:{end}:{part}".encode()).hexdigest()[:20]
+            span_key = f"{source_id}:{start}:{end}:{part}"
+            if image_signature := _image_signature(record, image_signatures):
+                span_key += ":" + image_signature
+            span_id = "E" + hashlib.sha256(span_key.encode()).hexdigest()[:20]
             pages = {page for a, b, page in located if a <= start and end <= b}
             child_ranges = _overlapping_child_ranges(provenance, start, end)
             # 親の前置きと連結した窓も、含まれるchildが単一頁の場合だけ頁を確定する。
@@ -741,6 +772,9 @@ def evidence_spans(
                     "origin": _span_origin(record, start, end, image_ranges),
                 }
             )
+            from rag_engine.generation.image_text_sources import span_image_source_context
+
+            result[-1].update(span_image_source_context(record, start, end, part))
             if prefix:
                 result[-1]["answer_context"] = prefix
                 prefix = ""
@@ -909,7 +943,19 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for index, span in enumerate(spans):
         previous = merged[-1] if merged else None
         if previous is not None and (joinable(previous, span) or glue(index, previous)):
+            from rag_engine.generation.image_text_sources import SPAN_IMAGE_SOURCE_KEY, merge_span_image_context
+
+            image_context: dict[str, Any] = {}
+            if SPAN_IMAGE_SOURCE_KEY in previous or SPAN_IMAGE_SOURCE_KEY in span:
+                projected = merge_span_image_context(previous, span)
+                if projected is None:
+                    merged.append(dict(span))
+                    continue
+                image_context = projected
             text = previous["text"] + span["text"]
+            span_key = f"{previous['source_id']}:{previous['start']}:{span['end']}:{text}"
+            if signature := image_context.get(SPAN_IMAGE_SOURCE_KEY, {}).get("source_signature"):
+                span_key += ":" + signature
             if ranges := _merged_child_ranges(previous.get("child_ranges"), span.get("child_ranges")):
                 previous["child_ranges"] = ranges
             if span.get(ARTICLE_CATALOG_KEY):
@@ -917,8 +963,8 @@ def _merge_adjacent_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
             previous.update(
                 text=text,
                 end=span["end"],
-                evidence_id="E"
-                + hashlib.sha256(f"{previous['source_id']}:{previous['start']}:{span['end']}:{text}".encode()).hexdigest()[:20],
+                evidence_id="E" + hashlib.sha256(span_key.encode()).hexdigest()[:20],
+                **image_context,
             )
         else:
             merged.append(dict(span))
