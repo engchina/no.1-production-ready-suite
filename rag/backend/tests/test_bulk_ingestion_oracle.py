@@ -132,17 +132,15 @@ async def test_insert_queued_jobs_locks_recipes_and_rechecks_active_jobs() -> No
         ]
     )
 
-    def draft(document_id: str, *, has_recipe: bool = True) -> BulkJobDraft:
+    def draft(document_id: str) -> BulkJobDraft:
         return BulkJobDraft(
             document_id=document_id,
             parser_profile="local_text_structure",
             quality_warnings=("w1",),
-            has_default_recipe=has_recipe,
-            recipe_seed={"document_id": document_id, "status": "UPLOADED", "uploaded_at": NOW},
         )
 
     result = await OracleBulkIngestionStore(_client(pool)).insert_queued_jobs(
-        [draft("doc-a", has_recipe=False), draft("doc-b"), draft("doc-c"), draft("doc-gone")],
+        [draft("doc-a"), draft("doc-b"), draft("doc-c"), draft("doc-gone")],
         queued_at=NOW,
         max_attempts=3,
     )
@@ -177,8 +175,6 @@ async def test_insert_queued_jobs_refuses_batches_over_the_in_limit() -> None:
             document_id=f"doc-{index}",
             parser_profile="p",
             quality_warnings=(),
-            has_default_recipe=True,
-            recipe_seed={},
         )
         for index in range(501)
     ]
