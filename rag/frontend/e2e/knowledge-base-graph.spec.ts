@@ -433,6 +433,7 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   await page.getByRole("alertdialog").getByRole("button", { name: "残りを続ける", exact: true }).click();
   await expect(settings.getByText("処理終了。文書ごとの結果を確認してください。")).toBeVisible();
   await expect(settings.getByRole("cell", { name: "部分構築", exact: true })).toBeVisible();
+  await expect(settings.getByText("作成済みの章節情報をすべて表示します。章節情報がない箇所や、構築していない処理レシピの構造は表示されません。")).toBeVisible();
   await expectNoPageOverflow(page);
   await settings.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("structure-build-completed.png"), fullPage: false });
