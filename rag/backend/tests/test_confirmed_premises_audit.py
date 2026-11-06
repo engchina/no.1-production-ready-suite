@@ -108,7 +108,7 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
     audit_inputs: list[dict[str, Any]] = []
 
     def parser(system: str, prompt: str, config: Any, schema: type, **options: Any) -> Any:
-        calls.append(schema.__name__)
+        calls.append(getattr(schema, "canonical_schema", schema).__name__)
         if is_audit_schema(schema):
             data = json.loads(prompt)
             audit_inputs.append(data)
@@ -190,9 +190,9 @@ async def test_formal_answer_forwards_confirmed_premises_and_does_not_leak_to_ne
     if mode == "none":
         assert not audit_inputs
         # 共通桩は原文の写しを返すので、要点は選んだ ID の原文の直接の記載になり、
-        # 導出の独立の監査（判定・理由）は呼ばない。生成だけを各要求で 1 回ずつ。
+        # 導出の独立の監査（判定・理由）と推導の説明の段は呼ばない。生成だけを各要求で 1 回ずつ。
         assert len(calls) == 2
-        assert "ApplicationVerdictAudit" not in calls and "AuditReason" not in calls
+        assert not {"ApplicationVerdictAudit", "AuditReason", "ApplicationExplanation"} & set(calls)
         validator.assert_not_awaited()
     else:
         assert len(audit_inputs) == 2

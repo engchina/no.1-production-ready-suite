@@ -7,12 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 from application_verdict_stub import APPLICATION_SCHEMAS, SYNTHETIC_REASON, audit_reply
+from audit_fixtures import synthetic_explanation
 from citation_unit_support import selected_answer_payload
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation import answering
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
+from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.application_reason import AuditReason
 from rag_engine.generation.application_review import review_applications
 from rag_engine.generation.applications import CheckedApplication
@@ -179,6 +181,8 @@ def test_actual_generation_boundary_keeps_source_and_synchronizes_body_summary(v
 
     def parse(system, prompt, settings, schema, **options):
         calls.append(schema)
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
         if schema in APPLICATION_SCHEMAS:
             return audit_reply(schema, [] if valid is None else [{"index": 0, "valid": valid}], prompt=prompt)
         unit = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)[0]
@@ -210,9 +214,10 @@ def test_actual_generation_boundary_keeps_source_and_synchronizes_body_summary(v
             QUESTION, AnswerContext(records=[row], text=SOURCE), config, image_prompt_mode="text_only"
         ).response
     assert calls.count(ApplicationVerdictAudit) == 1
-    # 判定が確定したときだけ理由の段を 1 回足す。
+    # 判定が確定したときだけ理由の段を 1 回足す。説明の段（#4393）は論理が valid な推導だけに 1 回。
     assert calls.count(AuditReason) == (0 if valid is None else 1)
-    assert result.generation_trace["llm_calls"] == (2 if valid is None else 3)
+    assert sum(is_explanation_schema(schema) for schema in calls) == (1 if valid else 0)
+    assert result.generation_trace["llm_calls"] == len(calls) == (2 if valid is None else 4 if valid else 3)
     assert SOURCE in result.answer_text
     assert result.generation_trace["applications"][0]["published"] == bool(valid)
     if valid:

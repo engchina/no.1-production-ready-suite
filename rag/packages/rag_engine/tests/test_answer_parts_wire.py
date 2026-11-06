@@ -1,11 +1,13 @@
 """要点と結果のinline契約に、モデルによる重複分類・内部番号を要求しない。"""
 
 import pytest
-from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
+from application_verdict_stub import audit_reply, is_application_schema
+from audit_fixtures import synthetic_explanation
 from pydantic import ValidationError
 from test_citation_unit_ids import snapshot
 
 from rag_engine.generation.answer_parts_wire import answer_parts_model
+from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.application_reason import AuditReason
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
@@ -126,7 +128,7 @@ def test_source_method_and_result_precede_global_coverage_without_dropping_guard
     raw, schema, catalog = case()
     document = schema.model_json_schema()
     fields = list(document["properties"])
-    assert fields[0] == "answer_parts"
+    assert fields[:2] == ["response_language", "answer_parts"]
     assert fields[-1] == "request_coverage"
     supported = document["$defs"]["SupportedAnswerPart"]
     assert list(supported["properties"]) == ["kind", "basis", "reasoning", "result"]
@@ -240,7 +242,9 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
 
     def generate(system, prompt, config, schema, **options):
         calls.append(schema)
-        if schema in APPLICATION_SCHEMAS:
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
+        if is_application_schema(schema):
             return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         assert schema._uses_typed_answer_parts
         assert "summary_part_indexes" in schema.model_json_schema()["properties"]
@@ -300,8 +304,9 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
         response = synthesize_grounded_answer(
             "項目Aの値を教えてください。", AnswerContext(records=[record], text=source_text), config, image_prompt_mode="text_only"
         ).response
-    # 生成 1 回と、独立の監査の判定・理由の各 1 回。
-    assert len(calls) == 3 and calls[1:] == [ApplicationVerdictAudit, AuditReason]
+    # 生成 1 回と、独立の監査の判定・理由の各 1 回の後に、valid な推導 1 件の説明の段を 1 回呼ぶ。
+    assert len(calls) == 4 and calls[1:3] == [ApplicationVerdictAudit, AuditReason]
+    assert is_explanation_schema(calls[3])
     assert "合成の回答です。" in response.answer_text
     assert source_text in response.answer_text
     trace = response.generation_trace
@@ -376,7 +381,9 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
 
     def generated(system, prompt, settings, schema, **options):
         calls.append(schema.__name__)
-        if schema in APPLICATION_SCHEMAS:
+        if is_explanation_schema(schema):
+            return synthetic_explanation(schema, prompt)
+        if is_application_schema(schema):
             return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         assert getattr(schema, "_uses_unit_ids", False)
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
@@ -419,7 +426,7 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
     settings = replace(get_settings(), answer_audit_mode="none", answer_max_correction_rounds=0)
     with bind_dependencies(AnswerDependencies(unused, unused, generated, unused, unused)):
         result = synthesize_grounded_answer("項目Aと項目Bの合計を教えてください。", ctx, settings, image_prompt_mode="text_only").response
-    assert calls == ["GroundedDraftWire", "ApplicationVerdictAudit", "AuditReason"]
+    assert calls == ["GroundedDraftWire", "ApplicationVerdictAudit", "AuditReason", "ApplicationExplanation"]
     assert result.answer_text.startswith("合計は20です。")
     assert result.generation_trace["applications"][0]["published"]
     assert result.generation_trace["applications"][0]["result"] == "合計は20です。"

@@ -27,6 +27,7 @@ from rag_engine.generation import passage_marks
 from rag_engine.generation.application_reason import HIDDEN_REASON
 from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.grounding_cues import grounding_cues
+from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
 from rag_engine.models.llm import (
     ApplicationAudit,
     ApplicationDraft,
@@ -61,6 +62,7 @@ class CheckedApplication:
     internal_label_issues: list[str] = field(default_factory=list)
     date_value_issues: list[str] = field(default_factory=list)
     assessment: dict[str, Any] = field(default_factory=dict)
+    presentation: dict[str, Any] = field(default_factory=dict)
 
     def reject(self, reason: str) -> None:
         self.reasons.append(reason)
@@ -89,6 +91,7 @@ class CheckedApplication:
             "warnings": list(self.warnings),
             "source": self.source,
             "assessment": dict(self.assessment),
+            "presentation": dict(self.presentation),
         }
 
 
@@ -236,7 +239,8 @@ def render_lines(
         premises = "".join(f"「{premise.strip()}」" for premise in application.premises if premise.strip())
         if premises:
             lines.append(PREMISES_LABEL + premises)
-        lines.append(REASONING_LABEL + " ".join(application.reasoning.split()))
+        if entry.presentation.get("status") == "confirmed":
+            lines.append(REASONING_LABEL + str(entry.presentation["reasoning"]).strip())
         shown: dict[str, list[Any]] = {}
         for item in entry.entries:
             if item.span:
@@ -283,7 +287,7 @@ _OPERATORS: dict[type, Callable[[float, float], float]] = {
 
 def _normalize_expression(text: str) -> str:
     folded = unicodedata.normalize("NFKC", text)
-    return folded.translate(str.maketrans({"×": "*", "÷": "/", "−": "-", "–": "-"}))
+    return folded.translate(str.maketrans("×÷−–", "*/--"))
 
 
 def _number_value(match: re.Match[str]) -> str:
@@ -456,13 +460,15 @@ def run_application_step(
 ) -> tuple[list[CheckedApplication], str]:
     """当てはめだけを作り、検査と監査を通す。公開できる当てはめと、監査が支持した結論の文（無ければ空）を返す。"""
     inputs, supported = application_step_inputs(question, checked, request_units)
+    from rag_engine.generation.response_language import generation_language_schema
+
     draft = call_with_model_purpose(
         "answer.generate",
         parse_text,
         resolve_prompt("application.system", APPLICATION_SYSTEM_PROMPT),
         render_prompt(inputs),
         settings,
-        ApplicationDraft,
+        generation_language_schema(ApplicationDraft, question),
         provider_id=provider_id,
     )
     applications = check_applications(question, draft.applications, supported)
@@ -474,20 +480,24 @@ def run_application_step(
     from rag_engine.generation.application_review import application_documents
     from rag_engine.generation.input_budget import ensure_model_input
 
+    schema = audit_wire_schema(ApplicationAudit, (), application_indexes=tuple(row["index"] for row in candidates))
     system = resolve_prompt("application.auditSystem", APPLICATION_AUDIT_SYSTEM_PROMPT)
     prompt = render_prompt(
         {**inputs, "documents": application_documents(evidence_spans), "applications": candidates, "summary": draft.summary}
     )
-    ensure_model_input(audit_settings, system, prompt, ApplicationAudit.model_json_schema(), provider_id=provider_id)
-    audit = call_with_model_purpose(
-        "answer.audit",
-        parse_text,
-        system,
-        prompt,
-        audit_settings,
-        ApplicationAudit,
-        provider_id=provider_id,
-    )
+    ensure_model_input(audit_settings, system, prompt, schema.model_json_schema(), provider_id=provider_id)
+    audit = canonical_audit_result(
+        call_with_model_purpose(
+            "answer.audit",
+            parse_text,
+            system,
+            prompt,
+            audit_settings,
+            schema,
+            provider_id=provider_id,
+        ),
+        schema,
+    ).audit
     apply_application_audit(applications, audit, require_complete=True)
     published = any(application.published for application in applications)
     summary = str(draft.summary or "").strip() if published and audit.summary_supported else ""

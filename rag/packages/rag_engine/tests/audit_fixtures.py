@@ -1,5 +1,6 @@
 """旧監査の決定論fixtureを明示的に移す。本番のraw wire検証成功にはしない。"""
 
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -53,13 +54,39 @@ def legacy_audit_to_wire_fixture(value: Mapping[str, Any] | BaseModel, schema: t
         if row.get("source_applicability") is None:
             row["source_applicability"] = row["applicability"]
             row["source_condition"] = row["condition"]
-    for field, identity in [("request_reviews", "request_id"), ("guide_requirement_reviews", "requirement_id")]:
+    bound_fields = [("request_reviews", "request_id"), ("guide_requirement_reviews", "requirement_id")]
+    if getattr(schema, "expected_application_ids", None) is not None:
+        bound_fields.append(("application_reviews", "index"))
+    for field, identity in bound_fields:
         rows = result[field]
         ids = [row[identity] for row in rows]
         if len(set(ids)) != len(ids):
             raise AuditWireContractError("duplicate_legacy_ids")
-        result[field] = {row[identity]: {key: val for key, val in row.items() if key != identity} for row in rows}
+        result[field] = {
+            (f"A{row[identity]}" if identity == "index" else row[identity]): {key: val for key, val in row.items() if key != identity}
+            for row in rows
+        }
     if "unused_evidence_ids" not in schema.model_fields:
         result.pop("unused_evidence_ids", None)
     node = schema.model_json_schema()
     return cast(dict[str, Any], _schema_view(result, node, node.get("$defs", {})))
+
+
+def legacy_application_audit_result(value: Mapping[str, Any] | BaseModel, schema: type[BaseModel]) -> AuditWireResult:
+    """旧部品fixtureを明示移行する。実transportの固定キー検証成功とは扱わない。"""
+    from rag_engine.models.llm import ApplicationAudit
+
+    if not is_audit_wire(schema) or cast(Any, schema).canonical_schema is not ApplicationAudit:
+        raise TypeError("application audit wire schema required")
+    return AuditWireResult(
+        audit=ApplicationAudit.model_validate(value.model_dump() if isinstance(value, BaseModel) else value),
+        validation={"source": "legacy_fixture", "transport_not_observed": True, "strict_wire_validation": "not_observed"},
+    )
+
+
+def synthetic_explanation(schema: type[BaseModel], prompt: str) -> BaseModel:
+    """説明の段の決定論スタブ。入力の資料の原文だけから日本語の説明を作る（結論は入力に無い）。"""
+    from rag_engine.generation.application_explanation import KEY_SOURCES
+
+    sources = json.loads(prompt)[KEY_SOURCES]
+    return schema.model_validate({"explanation": "資料の原文によると、" + " ".join(sources)})

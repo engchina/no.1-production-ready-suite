@@ -10,6 +10,7 @@ from rag_engine.config import get_settings as engine_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
+from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.application_reason import AuditReason
 from rag_engine.models.llm import ApplicationVerdictAudit
 
@@ -134,6 +135,8 @@ def test_followup_gate_preserves_original_and_saves_only_supported_conclusion(
     assert followup.status_code == 200 and "event: all_done" in followup.text
     saved = client.get(f"/api/chat/conversations/{conversation}").json()["data"]["messages"][-1]
     assert calls.count(ApplicationVerdictAudit) == 1 and calls.count(AuditReason) == 1
+    # 推導の説明の段（#4393）は論理が valid な推導だけに 1 回。
+    assert sum(is_explanation_schema(schema) for schema in calls) == (1 if valid else 0)
     assert SOURCE_A in saved["content"]
     assert saved["citations"][0]["text"] == SOURCE_A
     if valid:
