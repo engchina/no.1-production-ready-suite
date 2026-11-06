@@ -326,15 +326,17 @@ function EvidenceSummaryBody({
   index,
   labels,
   excerpt,
+  showScores = true,
 }: {
   item: EvidenceListItem;
   index: number;
   labels: EvidenceLabels;
   excerpt: "card" | "collapsed" | "full";
+  showScores?: boolean;
 }) {
   const badges = item.routeBadges ?? [];
   return (
-    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start">
+    <div className={cn("grid gap-3", showScores && "sm:grid-cols-[minmax(0,1fr)_176px] sm:items-start")}>
       <div data-testid="citation-main" className="min-w-0">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
           <span
@@ -401,7 +403,7 @@ function EvidenceSummaryBody({
           </>
         )}
       </div>
-      <EvidenceScores score={item.score} rerankScore={item.rerankScore} labels={labels} />
+      {showScores ? <EvidenceScores score={item.score} rerankScore={item.rerankScore} labels={labels} /> : null}
     </div>
   );
 }
@@ -755,6 +757,8 @@ export interface EvidenceSourceSheetProps {
   /** 根拠の番号（0 始まり。一覧・本文の根拠の行と同じ番号）。 */
   index: number;
   labels?: EvidenceLabels;
+  /** 検索を行わない原文閲覧では false。測定済みの0を含む既存表示は既定で維持する。 */
+  showScores?: boolean;
   /**
    * 開く元。`answer`（既定）は回答の根拠（見出し「回答の根拠」）、`search` は回答を作らない検索の結果の箇所
    * （見出し「検索で見つかった箇所」）。
@@ -790,6 +794,7 @@ export function EvidenceSourceSheet({
   index,
   labels = DEFAULT_EVIDENCE_LABELS,
   kind = "answer",
+  showScores = true,
   children,
   notice,
   returnFocusRef,
@@ -838,6 +843,7 @@ export function EvidenceSourceSheet({
               index={index}
               labels={labels}
               excerpt={hasPreview ? "collapsed" : "full"}
+              showScores={showScores}
             />
           </section>
           {hasPreview ? (
