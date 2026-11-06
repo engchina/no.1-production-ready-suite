@@ -16,7 +16,7 @@ export function GraphBodyPanel({ kbId, documentId, chunkSetId }: {kbId: string; 
   const query = useQuery({ queryKey: ["graph-body", kbId, documentId, chunkSetId, offset], queryFn: () => api.getStructureGraphBodyChunks(kbId, documentId, chunkSetId, offset), retry: false });
   const source = useQuery({ queryKey: ["graph-body-source", documentId, chunkSetId, selected?.chunk_id], queryFn: () => api.getDocumentCitationChunk(documentId, selected!.chunk_id), enabled: Boolean(selected), retry: false });
   return <div className="grid min-w-0 gap-3" data-testid="graph-body">
-    {query.isPending ? <TimedLoadingState label={t("knowledgeBases.graph.bodyLoading")} operationKey={`${chunkSetId}:${offset}`}><Skeleton className="h-24 w-full" /></TimedLoadingState> : query.isError ? <ApiErrorState error={query.error} fallback={t("knowledgeBases.graph.bodyError")} onRetry={() => void query.refetch()} /> : query.data.items.length ? <>
+    {query.isPending ? <TimedLoadingState label={t("knowledgeBases.graph.bodyLoading")} operationKey={`${chunkSetId}:${offset}`}><Skeleton className="h-24 w-full" /></TimedLoadingState> : query.isError ? <ApiErrorState error={query.error} fallback={t("knowledgeBases.graph.bodyError")} onRetry={() => void query.refetch()} /> : query.data.total > 0 ? <>
       <ListToolbar count={listCountProps({matchedTotal: query.data.total, filtered: false})} labels={listToolbarLabels()} />
       <DataTable columns={[
         { key: "position", header: t("knowledgeBases.graph.body"), render: (item) => t("knowledgeBases.graph.bodyPart", {index: item.chunk_index + 1}) },

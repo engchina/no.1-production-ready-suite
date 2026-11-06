@@ -900,3 +900,31 @@ for (const state of ["empty", "error"] as const) {
     await expect(panel.getByRole("button",{name:"原文を表示",exact:true})).toHaveCount(0);
   });
 }
+
+
+test("本文の件数が減って末頁が空になったら有効なページへ戻る", {tag:"@responsive"}, async ({page}) => {
+  const body=treeNode(ID("body"),"本文",null,"doc",{type:"body"});
+  const all=Array.from({length:26},(_,index)=>({chunk_id:`doc-doc:set-doc:${index}`,chunk_index:index,page_number:null}));
+  const offsets:number[]=[];
+  let changed=false;
+  await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
+  await mockTree(page,{"root:set-doc":[body]});
+  await page.route("**/graph/documents/doc-doc/body-chunks?**",route=>{
+    const offset=Number(new URL(route.request().url()).searchParams.get("offset"));
+    offsets.push(offset);
+    if (offset>0) changed=true;
+    const rows=changed ? all.slice(0,5) : all;
+    return route.fulfill({json:ok({items:rows.slice(offset,offset+25),total:rows.length,offset})});
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page,"文書構造グラフを表示").click();
+  const graph=page.locator("#knowledge-base-graph");
+  await graph.locator('.react-flow__node[data-id="doc"]').click();
+  await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
+  const panel=page.getByTestId("graph-body");
+  await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+  await panel.getByRole("button",{name:"次へ",exact:true}).click();
+  await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+  await expect(panel.getByText("本文 6",{exact:true})).toHaveCount(0);
+  await expect.poll(()=>offsets).toEqual([0,25,0]);
+});

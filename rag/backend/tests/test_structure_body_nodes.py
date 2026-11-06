@@ -1,5 +1,7 @@
 """見出しなしの保存済み本文を、推測した章節から分離して表示する合成回帰。"""
 
+from typing import Any
+
 import pytest
 from rag_parser_core.language import current_pack
 
@@ -10,7 +12,7 @@ from app.schemas.extraction import StructuredExtraction
 
 
 @pytest.mark.parametrize("paths", [[None, None], ["合成見出し", None], ["本文", None]])
-def test_body_tree_has_dedicated_identity_in_saved_order(paths):
+def test_body_tree_has_dedicated_identity_in_saved_order(paths: list[str | None]) -> None:
     tree = build_structure_tree(
         [StructureChunkRow(path) for path in paths], chunk_set_id="set", knowledge_base_id="kb"
     )
@@ -26,7 +28,9 @@ def test_body_tree_has_dedicated_identity_in_saved_order(paths):
 
 
 @pytest.mark.parametrize("kind", [None, "text", "table", "figure"])
-def test_graph_links_only_actual_unheaded_chunks_without_changing_positions(kind):
+def test_graph_links_only_actual_unheaded_chunks_without_changing_positions(
+    kind: str | None,
+) -> None:
     chunks = [
         Chunk(
             text=f"合成本文{i}",
@@ -63,16 +67,17 @@ def test_graph_links_only_actual_unheaded_chunks_without_changing_positions(kind
     assert before == [(c.text, c.start_offset, c.end_offset, dict(c.metadata)) for c in chunks]
 
 
-def test_empty_is_not_fabricated_body():
+def test_empty_is_not_fabricated_body() -> None:
     assert not build_structure_tree([], chunk_set_id="set", knowledge_base_id="kb").nodes
 
 
 @pytest.mark.parametrize("headed", [False, True])
-async def test_saved_body_build_is_complete_and_disabled_is_preserved(monkeypatch, headed):
-    from test_structure_index_settings import SavedOracle
-
+async def test_saved_body_build_is_complete_and_disabled_is_preserved(
+    monkeypatch: pytest.MonkeyPatch, headed: bool
+) -> None:
     from app.clients.structure_index_store import StructureIndexStore
     from app.rag.structure_index import rebuild_document_structure_index
+    from tests.test_structure_index_settings import SavedOracle
 
     oracle = SavedOracle()
     if not headed:
@@ -88,7 +93,16 @@ async def test_saved_body_build_is_complete_and_disabled_is_preserved(monkeypatc
             }
         )
 
-    async def publish(store, kb, doc, fp, source, graphs, quality, counts):
+    async def publish(
+        store: Any,
+        kb: str,
+        doc: str,
+        fp: str,
+        source: list[str],
+        graphs: dict[str, Any],
+        quality: str,
+        counts: Any,
+    ) -> None:
         assert source == ["cs"] and quality == "COMPLETE"
         store.oracle.saved.extend(graphs.values())
 
@@ -102,13 +116,13 @@ async def test_saved_body_build_is_complete_and_disabled_is_preserved(monkeypatc
         await rebuild_document_structure_index(oracle, "a", "doc")
 
 
-async def test_body_chunk_reader_scopes_actual_links_and_keeps_order():
+async def test_body_chunk_reader_scopes_actual_links_and_keeps_order() -> None:
     from app.clients.structure_graph_store import StructureGraphStore
 
-    calls = []
+    calls: list[tuple[str, dict[str, Any]]] = []
 
     class Oracle:
-        async def _fetch_all(self, sql, binds):
+        async def _fetch_all(self, sql: str, binds: dict[str, Any]) -> list[dict[str, Any]]:
             calls.append((sql, binds))
             if "SELECT d.file_name" in sql:
                 return [{"file_name": "synthetic.pdf"}]
@@ -132,13 +146,13 @@ async def test_body_chunk_reader_scopes_actual_links_and_keeps_order():
     assert "cs.is_active=1" in calls[0][0]
 
 
-async def test_body_chunk_reader_does_not_read_links_for_invisible_or_expired_document():
+async def test_body_chunk_reader_does_not_read_links_for_invisible_or_expired_document() -> None:
     from app.clients.structure_graph_store import StructureGraphStore
 
-    calls = []
+    calls: list[str] = []
 
     class Oracle:
-        async def _fetch_all(self, sql, binds):
+        async def _fetch_all(self, sql: str, binds: dict[str, Any]) -> list[dict[str, Any]]:
             calls.append(sql)
             return []
 
@@ -147,24 +161,28 @@ async def test_body_chunk_reader_does_not_read_links_for_invisible_or_expired_do
     assert len(calls) == 1
 
 
-def test_body_api_validates_page_and_uses_visible_scope(monkeypatch):
+def test_body_api_validates_page_and_uses_visible_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.api.routes import knowledge_bases as routes
     from app.clients.structure_graph_store import StructureGraphStore
     from app.main import app
     from tests.support import AsgiTestClient
 
-    calls = []
+    calls: list[tuple[str, str, str, int, int]] = []
 
     class Oracle:
-        async def knowledge_base_is_visible(self, kb):
+        async def knowledge_base_is_visible(self, kb: str) -> bool:
             return kb == "kb"
 
-    async def read(store, kb, document, chunk_set, *, offset, limit):
+    async def read(
+        store: Any, kb: str, document: str, chunk_set: str, *, offset: int, limit: int
+    ) -> dict[str, Any]:
         calls.append((kb, document, chunk_set, offset, limit))
         if chunk_set != "set":
             raise KeyError(chunk_set)
         return {
-            "items": [{"chunk_id": "doc:set:0", "chunk_index": 0, "page_number": None}],
+            "items": [{"chunk_id": "doc:set:0", "chunk_index": 0, "page_number": None}]
+            if offset == 0
+            else [],
             "total": 1,
             "offset": offset,
         }
@@ -175,21 +193,25 @@ def test_body_api_validates_page_and_uses_visible_scope(monkeypatch):
     path = "/api/knowledge-bases/kb/graph/documents/doc/body-chunks"
     assert client.get(path + "?chunk_set_id=set").status_code == 200
     assert calls == [("kb", "doc", "set", 0, 25)]
+    beyond = client.get(path + "?chunk_set_id=set&offset=1000001")
+    assert beyond.status_code == 200
+    assert beyond.json()["data"] == {"items": [], "total": 1, "offset": 1000001}
     assert client.get(path + "?chunk_set_id=set&limit=101").status_code == 422
     assert client.get(path + "?chunk_set_id=set&offset=-1").status_code == 422
     assert client.get(path + "?chunk_set_id=old").status_code == 404
     assert client.get(path.replace("/kb/", "/missing/") + "?chunk_set_id=set").status_code == 404
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 @pytest.mark.parametrize("total", [0, 27])
-async def test_body_empty_page_keeps_actual_total_with_same_scope(total):
+@pytest.mark.parametrize("offset", [100, 100001, 1000001])
+async def test_body_empty_page_keeps_actual_total_with_same_scope(total: int, offset: int) -> None:
     from app.clients.structure_graph_store import StructureGraphStore
 
-    calls = []
+    calls: list[tuple[str, dict[str, Any]]] = []
 
     class Oracle:
-        async def _fetch_all(self, sql, binds):
+        async def _fetch_all(self, sql: str, binds: dict[str, Any]) -> list[dict[str, Any]]:
             calls.append((sql, binds))
             if "SELECT d.file_name" in sql:
                 return [{"file_name": "synthetic.pdf"}]
@@ -198,9 +220,9 @@ async def test_body_empty_page_keeps_actual_total_with_same_scope(total):
             return []
 
     result = await StructureGraphStore(Oracle()).body_chunks(
-        "kb", "doc", "set", offset=100, limit=25
+        "kb", "doc", "set", offset=offset, limit=25
     )
-    assert result == {"items": [], "total": total, "offset": 100}
+    assert result == {"items": [], "total": total, "offset": offset}
     page, count = calls[1:]
     assert (
         page[0][page[0].index("FROM rag_graph_entity_chunks") :].split("ORDER BY")[0].strip()
