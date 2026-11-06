@@ -124,8 +124,8 @@ async def test_reader_uses_receipt_and_never_current_same_recipe_segments() -> N
     receipt = accepted_segment_receipt("d1", "r1", [row], {(1, 2): "accepted-key"})
 
     class Oracle:
-        async def ensure_default_document_recipe(self, *args: Any) -> Any:
-            return {"recipe_id": "r1"}
+        async def list_document_recipes(self, *args: Any) -> Any:
+            return [{"recipe_id": "r1", "slot_no": 1}]
 
         async def get_document_recipe(self, *args: Any) -> Any:
             return {"recipe_id": "r1", "status": "INDEXED", "active_chunk_set_id": "cs1"}

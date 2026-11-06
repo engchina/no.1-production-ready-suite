@@ -34,6 +34,9 @@ class FormalOracle(_CompletingRecipeOracle, ParserOracle):
     async def update_document_status(self, *args: Any, **kwargs: Any) -> Any:
         return await ParserOracle.update_document_status(self, *args, **kwargs)
 
+    async def list_document_recipes(self, document_id: str) -> list[dict[str, Any]]:
+        return [{**await self.get_document_recipe(document_id, "recipe-1"), "slot_no": 1}]
+
     async def ensure_default_document_recipe(self, document_id: str) -> dict[str, Any]:
         return await self.get_document_recipe(document_id, "recipe-1")
 

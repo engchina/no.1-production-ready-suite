@@ -8,8 +8,8 @@ from app.rag.staging_recipes import read_staging_recipe
 
 async def test_failed_recipe_does_not_use_old_active_extraction() -> None:
     class Oracle:
-        async def ensure_default_document_recipe(self, document_id: str) -> Any:
-            return {"recipe_id": "r1"}
+        async def list_document_recipes(self, document_id: str) -> Any:
+            return [{"recipe_id": "r1", "slot_no": 1}]
 
         async def get_document_recipe(self, *args: Any) -> Any:
             return {
@@ -32,8 +32,8 @@ async def test_failed_recipe_does_not_use_old_active_extraction() -> None:
 
 async def test_same_recipe_unbound_segments_are_not_version_evidence() -> None:
     class Oracle:
-        async def ensure_default_document_recipe(self, document_id: str) -> Any:
-            return {"recipe_id": "r1"}
+        async def list_document_recipes(self, document_id: str) -> Any:
+            return [{"recipe_id": "r1", "slot_no": 1}]
 
         async def get_document_recipe(self, *args: Any) -> Any:
             return {"recipe_id": "r1", "status": "INDEXED", "active_chunk_set_id": "new-cs"}
