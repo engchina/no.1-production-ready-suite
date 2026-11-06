@@ -87,6 +87,7 @@ def guide_step_findings(
     evidence: Sequence[Mapping[str, Any]],
     *,
     embed: Embed | None,
+    selected_evidence: Mapping[int, Sequence[Mapping[str, Any]]] | None = None,
 ) -> tuple[list[AnswerFinding], list[dict[str, Any]], dict[str, Any] | None]:
     """手順の順序・分岐・依存と手順ごとの充足の finding、手順ごとの状態、embedding の計測。
 
@@ -97,7 +98,9 @@ def guide_step_findings(
     plan = guide_step_plan(content, conditions)
     if claim_checks is None or plan is None:
         return check_guide_steps(answer, content, conditions), [], None
-    result = validate_guide_steps(plan, claim_checks, evidence, embed=embed)
+    result = validate_guide_steps(
+        plan, claim_checks, evidence, embed=embed, selected_evidence=selected_evidence
+    )
     steps: list[dict[str, Any]] = result["steps"]
     located = {step["step_id"]: step["answer_quote"] for step in steps if step["answer_quote"]}
     findings = check_guide_steps(answer, content, conditions, located)

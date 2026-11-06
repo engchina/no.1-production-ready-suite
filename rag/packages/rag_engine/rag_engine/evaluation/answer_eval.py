@@ -495,9 +495,12 @@ FIGURE_EVIDENCE_TYPES = frozenset({"figure_description", "ocr"})
 
 def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
     """親子の出典を残して全文を分割する。preview は全文として代用しない。"""
+    from rag_engine.evaluation.atomic_source_groups import KEY, OMISSION, trusted
+
     for item in items:
         text = item.get("text") or ""
-        if text and text in ancestor_text:
+        atomic = trusted(item)
+        if text and text in ancestor_text and not atomic:
             yield from _evidence_fragments(item.get("children") or [], str(item.get("id") or ""), ancestor_text)
             continue
         metadata = {key: item.get(key) for key in ("id", "source", "source_run_id", "page_start", "page_end")}
@@ -507,8 +510,13 @@ def _evidence_fragments(items, parent_id: str = "", ancestor_text: str = ""):
             metadata["evidence_type"] = item["evidence_type"]
         metadata["id"] = item.get("chunk_uid") or metadata["id"]
         metadata["parent_id"] = parent_id
-        for start in range(0, max(1, len(text)), EVIDENCE_FRAGMENT_CHARS):
-            part = text[start : start + EVIDENCE_FRAGMENT_CHARS]
+        if atomic:
+            metadata[KEY] = item[KEY]
+            if item.get(OMISSION):
+                metadata[OMISSION] = item[OMISSION]
+        step = max(1, len(text)) if atomic else EVIDENCE_FRAGMENT_CHARS
+        for start in range(0, max(1, len(text)), step):
+            part = text[start : start + step]
             fragment = {**metadata, "text": part, "fragment_start": start, "fragment_end": start + len(part)}
             yield {**fragment, "evidence_id": _span_id(fragment)}
         yield from _evidence_fragments(item.get("children") or [], str(item.get("id") or ""), ancestor_text + "\n" + text)
