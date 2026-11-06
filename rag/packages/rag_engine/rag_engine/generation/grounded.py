@@ -4449,6 +4449,7 @@ def cited_quote(item: GroundedItem, spans: Sequence[dict], *, guide_ids: Sequenc
             )
     # 現在の版と一致した後は、送信時に固定した本文と引用単位から取り出す。
     extraction_view = sent if isinstance(sent, CitationView) else view
+    metadata["source_scope_sha256"] = hashlib.sha256(extraction_view.provenance_json.encode()).hexdigest()
     text, units = extraction_view.text, extraction_view.units
     if not units:
         return fail("citation_extraction_failed", "指定した根拠に抽出できる本文がありません。")
@@ -7179,6 +7180,8 @@ def run_round(
         # 使っていないので未使用に含め、gap だけの草稿でも見落とした根拠を監査に見せる (#1014)。
         used = {entry.span["evidence_id"] for entry in cited_entries(checked) if entry.span and not entry.added}
         audit_entries = [*audited, *((index, other) for index, _entry, other in also_audited)]
+        from rag_engine.generation.application_sources import application_item_citations
+
         citation_groups = {
             id(cited): [
                 {"evidence_id": member.span["evidence_id"], "quote": member.item.quote}
@@ -7188,6 +7191,7 @@ def run_round(
             for _, entry in audited
             for cited in item_citations(entry)
         }
+        citation_bindings = {id(cited): application_item_citations(entry) for _, entry in audited for cited in item_citations(entry)}
         located_citation_groups = {
             id(cited): {
                 member.span["evidence_id"]
@@ -7227,6 +7231,7 @@ def run_round(
                     "condition": e.item.condition,
                     "quote": e.item.quote,
                     "citations": citation_groups.get(id(e), []),
+                    "citation_bindings": citation_bindings.get(id(e), []),
                     "evidence_id": e.span["evidence_id"],
                     "checks": e.hints,
                     "quote_unmatched": e.unmatched,

@@ -10,6 +10,7 @@ from typing import Any
 
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 
+from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.generation.applications import (
     APPLICATION_AUDIT_SYSTEM_PROMPT,
     CheckedApplication,
@@ -109,7 +110,13 @@ def review_applications(
         "question": question,
         "documents": application_documents(evidence_spans),
         "items": [
-            {"index": position, "text": item.item.text, "quote": item.item.quote or item.item.text, "source": _source_label(item.span)}
+            {
+                "index": position,
+                "text": item.item.text,
+                "quote": item.item.quote or item.item.text,
+                "source": _source_label(item.span),
+                "citation_bindings": application_item_citations(item),
+            }
             for position, item in enumerate(items)
         ],
         "applications": audit_view(candidates, lambda item: index.get(id(item))),
