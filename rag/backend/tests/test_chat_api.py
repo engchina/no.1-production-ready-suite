@@ -1525,10 +1525,10 @@ def test_stream_message_delivers_answer_when_chat_message_save_fails(
     assert assistant.trace_id == metadata["trace_id"]
 
 
-def test_create_conversation_with_legacy_active_language_pack(
+def test_incomplete_active_language_pack_rejects_conversation_without_writes(
     fake_oracle: FakeChatOracle, monkeypatch: MonkeyPatch
 ) -> None:
-    from rag_parser_core.language import builtin_pack, current_pack
+    from rag_parser_core.language import current_pack
 
     from app.clients.language_pack_release_store import _release
     from app.rag import published_language_runtime
@@ -1558,14 +1558,11 @@ def test_create_conversation_with_legacy_active_language_pack(
     monkeypatch.setattr(fake_oracle, "create_conversation", capture_create)
     response = client.post(
         "/api/chat/conversations",
-        json={"search_answer_profile_id": "bv-1", "title": "合成の互換性確認"},
+        json={"search_answer_profile_id": "bv-1", "title": "合成の契約確認"},
     )
-    assert response.status_code == 200
-    assert response.json()["data"]["messages"] == []
-    assert seen == [
-        builtin_pack().text("answer_labels", "crag_refusal_summary"),
-        "合成の保存済み文言",
-    ]
+    assert response.status_code == 409
+    assert response.json()["data"] is None
+    assert seen == []
     effective = row["effective_json"]
     assert isinstance(effective, dict)
     assert effective["answer_labels"].get("crag_refusal_summary") is None

@@ -3992,8 +3992,10 @@ class OracleClient:
         """文書の検索対象の chunk_set の派生 layer のうち、指紋のある行を返す(一覧の判定。#550)。
 
         検索対象はレシピの active chunk_set と、レシピを持たない(legacy の plan の)配信中の
-        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピ
-        (無ければ文書)の処理設定も返す。抽出結果などの大きな JSON 列は読まない。
+        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピの
+        処理設定も返す。レシピを持たない chunk_set は、呼び出し側が文書詳細と同じく既定のレシピと
+        KB の計画で判定する(文書の行の旧列は読まない。#4185)。抽出結果などの大きな JSON 列は
+        読まない。
         """
         ids = list(dict.fromkeys(document_ids))
         if not ids:
@@ -4004,8 +4006,7 @@ class OracleClient:
                 """
                 SELECT l.document_id, l.layer_id, l.layer_kind, l.parent_chunk_set_id,
                        l.input_fingerprint, cs.recipe_id,
-                       r.processing_config AS recipe_processing_config,
-                       d.processing_config AS document_processing_config
+                       r.processing_config AS recipe_processing_config
                 FROM rag_artifact_layers l
                 JOIN rag_chunk_sets cs ON cs.chunk_set_id = l.parent_chunk_set_id
                 JOIN rag_documents d ON d.document_id = l.document_id
@@ -4024,11 +4025,7 @@ class OracleClient:
         result: list[dict[str, object]] = []
         for row in rows:
             normalized = {str(key).lower(): value for key, value in row.items()}
-            for key in (
-                "input_fingerprint",
-                "recipe_processing_config",
-                "document_processing_config",
-            ):
+            for key in ("input_fingerprint", "recipe_processing_config"):
                 normalized[key] = _json_loads(normalized.get(key))
             result.append(normalized)
         return result
@@ -6634,7 +6631,7 @@ class OracleClient:
         embeddings: list[list[float]],
         chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """構造化抽出と chunk/vector を 1 transaction で保存する。
+        """chunk/vector を 1 transaction で保存する(抽出は文書の行に書かない。#4185)。
 
         chunk_set_id を渡すと、その chunk_set の chunk だけを置換・タグ付けする(複数 chunk_set
         共存)。None は文書の全 chunk を置換し未タグ保存(現行挙動・後方互換)。
@@ -12041,8 +12038,10 @@ class OracleClient:
         embeddings: Sequence[Sequence[float] | None],
         chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """抽出 payload と chunk/vector を同一 Oracle transaction で置換する。
+        """chunk/vector を同一 Oracle transaction で置換する。
 
+        ``extraction`` は chunk の出所の照合と 1 ページ目の本文にだけ使い、文書の行には書かない
+        (抽出の正本はレシピの抽出の版。#4185)。
         chunk_set_id を渡すと chunk 置換を **その chunk_set に限定**(他 chunk_set の chunk は
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
@@ -12078,24 +12077,6 @@ class OracleClient:
             from app.rag.chunk_source_projection import _validate_chunk_source_projection
 
             _validate_chunk_source_projection(extraction, chunks)
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET extraction = :extraction
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "extraction": _json_dumps(extraction.to_document_payload()),
-                    }
-                ),
-            )
             # chunk_set_id 指定時はその chunk_set の chunk だけ置換する(複数 chunk_set 共存可)。
             chunk_set_clause = (
                 "AND chunk_set_id = :chunk_set_id" if chunk_set_id is not None else ""

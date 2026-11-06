@@ -66,7 +66,7 @@ def test_saved_wording_is_preserved_and_builtin_negation_is_unambiguous():
     )
     result = refine_image_retrieval_prompt(legacy)
     assert legacy in result
-    assert "既定値、推奨の固定値のいずれとしても扱わない。" in result
+    assert "既定値や推奨値へ広げない。" in result
     assert "not real production system values" not in DEFAULT_IMAGE_RETRIEVAL_PROMPT
 
 
@@ -227,14 +227,17 @@ def test_edited_legacy_block_is_sent_without_a_replacement_warning():
     assert managed_block_warning("管理ブロックのない旧テンプレート") == ""
 
 
-def test_rules_mark_screenshot_values_as_examples_unless_the_text_specifies_them():
-    # 画面の値は例示が原則で、実際の指定値かは周辺本文でしか判断できない (#633)。
+def test_rules_use_caller_purpose_without_widening_values_or_discarding_operations():
+    # 解析用途と後段回答policyの切替は別の小項目。ここでは既存後段policyを変えない。
     from rag_engine.generation.answer_policy import DOCUMENT_VALUE_POLICY
     from rag_engine.parsing.vision_prompt_rules import vision_extraction_rules
 
     rules = vision_extraction_rules()
-    assert "原則として文書の例示であり" in rules and "「画面例では」「入力例として」を付け" in rules
-    assert "指定・限定している場合だけ" in rules
+    assert "metadata.vision_image_purpose" in rules
+    assert "record の可視値" in rules and "対象と記録時点に限る" in rules
+    assert "example の可視値" in rules and "操作条件" in rules
+    assert "用途が未記録なら" in rules and "現在の状態、未記載の条件" in rules
+    assert "原則として文書の例示" not in rules
     assert "「画面例では〇〇」と書き" in DOCUMENT_VALUE_POLICY
 
 

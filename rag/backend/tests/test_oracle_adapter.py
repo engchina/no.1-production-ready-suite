@@ -2457,8 +2457,8 @@ async def test_oci_save_index_replaces_existing_chunks_and_binds_vectors() -> No
     assert metadata["content_kind"] == "text"
 
 
-async def test_oci_save_index_persists_extraction_and_chunks_atomically() -> None:
-    """index 保存は extraction と chunk/vector を 1 transaction で置換する。"""
+async def test_oci_save_index_replaces_chunks_atomically() -> None:
+    """index 保存は chunk/vector を 1 transaction で置換し、文書の行の抽出は書かない(#4185)。"""
     pool = FakeOraclePool(execute_results=[[_oracle_document_row()]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
@@ -2481,16 +2481,8 @@ async def test_oci_save_index_persists_extraction_and_chunks_atomically() -> Non
     assert saved[0].metadata["content_kind"] == "text"
     assert pool.connection.commits == 1
     statements = [call.statement for call in pool.connection.calls]
-    update_index = next(
-        index for index, statement in enumerate(statements) if "UPDATE rag_documents" in statement
-    )
-    delete_index = next(
-        index for index, statement in enumerate(statements) if "DELETE FROM rag_chunks" in statement
-    )
-    assert update_index < delete_index
-    update_call = pool.connection.calls[update_index]
-    extraction_payload = json.loads(str(update_call.parameters["extraction"]))
-    assert extraction_payload["raw_text"] == "新しい抽出本文"
+    assert not any("UPDATE rag_documents" in statement for statement in statements)
+    assert any("DELETE FROM rag_chunks" in statement for statement in statements)
     inserted = pool.connection.many_calls[0].rows[0]
     assert inserted["chunk_id"] == "doc-1:0"
     assert inserted["embedding"] == array("f", [0.1, 0.2, 0.3])

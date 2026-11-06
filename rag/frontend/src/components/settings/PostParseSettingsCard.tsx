@@ -8,6 +8,7 @@ import {
   FormActionBar,
   FormStatus,
   StatusBadge,
+  SelectField,
   Switch,
   TextField,
 } from "@production-ready/ui";
@@ -17,7 +18,7 @@ import { Link } from "react-router-dom";
 
 import { canOpenNavRoute } from "@/components/layout/nav-config";
 import { useAuth } from "@/components/security/AuthProvider";
-import { ApiError, type ParserAdapterSettingsData } from "@/lib/api";
+import { ApiError, type ImagePurpose, type ParserAdapterSettingsData } from "@/lib/api";
 import { t, type I18nKey } from "@/lib/i18n";
 import { useLeaveGuard } from "@/lib/leave-guard";
 import { useExtractionFieldsSettings, useUpdateParserAdapterSettings } from "@/lib/queries";
@@ -38,6 +39,7 @@ type PostParseField =
 type PostParseForm = Record<PostParseField, boolean> & {
   /** 図・表の説明（Vision）を同時に呼ぶ数の上限（入力中の文字列。#2002）。 */
   vision_concurrency: string;
+  vision_image_purpose: ImagePurpose;
 };
 
 export const VISION_CONCURRENCY_MIN = 1;
@@ -98,6 +100,7 @@ const POST_PARSE_STEPS: readonly {
 function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
   return {
     vision_enabled: settings.vision_enabled,
+    vision_image_purpose: settings.vision_image_purpose,
     heading_level_inference_enabled: settings.heading_level_inference_enabled ?? false,
     field_extraction_enabled: settings.field_extraction_enabled,
     navigation_summary_enabled: settings.navigation_summary_enabled,
@@ -108,6 +111,7 @@ function formFromSettings(settings: ParserAdapterSettingsData): PostParseForm {
 
 function sameForm(left: PostParseForm, right: PostParseForm) {
   return (
+    left.vision_image_purpose === right.vision_image_purpose &&
     POST_PARSE_STEPS.every((step) => left[step.field] === right[step.field]) &&
     left.vision_concurrency.trim() === right.vision_concurrency.trim()
   );
@@ -158,6 +162,7 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
     }
     const payload = {
       vision_enabled: form.vision_enabled,
+      vision_image_purpose: form.vision_image_purpose,
       heading_level_inference_enabled: form.heading_level_inference_enabled,
       field_extraction_enabled: form.field_extraction_enabled,
       navigation_summary_enabled: form.navigation_summary_enabled,
@@ -184,6 +189,19 @@ export function PostParseSettingsCard({ settings }: { settings: ParserAdapterSet
   const extras: Record<PostParseField, ReactNode> = {
     vision_enabled: (
       <>
+        <SelectField<ImagePurpose>
+          id="post-parse-image-purpose"
+          width="md"
+          label={t("imagePurpose.label")}
+          helper={t("imagePurpose.hint")}
+          options={[{value: "record", label: t("imagePurpose.record")}, {value: "example", label: t("imagePurpose.example")}]}
+          value={form.vision_image_purpose}
+          disabled={save.isPending}
+          onValueChange={(value) => {
+            save.reset();
+            setForm((current) => ({...current, vision_image_purpose: value}));
+          }}
+        />
         <TextField
           id={VISION_CONCURRENCY_FIELD_ID}
           type="number"

@@ -49,6 +49,7 @@ _COMMON_EXTRACTION_RECIPE_FIELDS: tuple[str, ...] = (
     "rag_parser_adapter_backend",
     # Vision は解析エンジンに関係なく図の要素の本文を変える(#497)。変えると再解析になる。
     "rag_vision_enabled",
+    "rag_vision_image_purpose",
 )
 _BACKEND_EXTRACTION_RECIPE_FIELDS: dict[str, tuple[str, ...]] = {
     "docling": ("rag_parser_docling_enabled",),

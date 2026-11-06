@@ -223,16 +223,16 @@ def test_numeric_mapping_metadata_exposes_minimum() -> None:
     assert minimums["roman_digits"] == minimums["kanji_multipliers"] == 1
 
 
-def test_old_draft_api_returns_complete_editable_copy_without_writes(
+def test_incomplete_draft_api_is_rejected_without_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from copy import deepcopy
 
-    from app.clients.language_pack_release_store import LanguagePackReleaseStore, _validated
-    from tests.test_language_pack_release_store import legacy_release_row
+    from app.clients.language_pack_release_store import LanguagePackReleaseStore
+    from tests.test_language_pack_release_store import release_row
     from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
 
-    row = legacy_release_row()
+    row = release_row()
     draft = deepcopy(row["effective_json"])
     assert isinstance(draft, dict)
     for key in (
@@ -262,11 +262,96 @@ def test_old_draft_api_returns_complete_editable_copy_without_writes(
 
     monkeypatch.setattr(language_pack, "release_store", initialized)
     response = client.get("/api/settings/language-pack/draft")
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["draft_revision"] == 7
-    assert data["draft_effective"] == _validated(draft, allow_legacy=True).to_dict()
-    assert data["current"]["effective"] == row["effective_json"]
-    assert data["current"]["hash"] == row["content_hash"]
+    assert response.status_code == 409
+    data = response.json()
+    assert data["data"] is None
+    assert data["error_messages"] == [
+        "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"
+    ]
     assert draft == before
     assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
+
+
+@pytest.mark.parametrize(
+    "filename", ["synthetic-language-pack.json", "synthetic-language-pack.history.json"]
+)
+def test_uninitialized_database_with_legacy_file_is_409_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
+    from app.clients.language_pack_release_store import LanguagePackReleaseStore
+    from app.rag import published_language
+    from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
+
+    path = tmp_path / "synthetic-language-pack.json"
+    (tmp_path / filename).write_text('{"synthetic":"独自の保存設定"}')
+    pool = FakeOraclePool(execute_results=[[], []])
+    oracle = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    monkeypatch.setattr(published_language, "resolve_language_pack_file", lambda _settings: path)
+    monkeypatch.setattr(
+        published_language,
+        "LanguagePackReleaseStore",
+        lambda _oracle: LanguagePackReleaseStore(oracle),
+    )
+
+    async def initialized() -> LanguagePackReleaseStore:
+        return await published_language.initialized_release_store(oracle)
+
+    monkeypatch.setattr(language_pack, "release_store", initialized)
+    response = client.get("/api/settings/language-pack/draft")
+    assert response.status_code == 409
+    assert response.json()["data"] is None
+    assert response.json()["error_messages"] == [
+        "保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"
+    ]
+    assert all(call.statement.lstrip().startswith("SELECT") for call in pool.connection.calls)
+
+
+def test_metadata_history_keeps_unsupported_release_read_and_restore_strict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有効な現在/草稿と同居する旧版は履歴だけ表示し、内容実行を許可しない。"""
+    from copy import deepcopy
+
+    from app.clients.language_pack_release_store import LanguagePackReleaseStore
+    from tests.test_language_pack_release_store import release_row
+    from tests.test_oracle_adapter import FakeOraclePool, _oci_settings, _run_inline
+
+    current = {**release_row(), "release_id": "synthetic-current", "version": 2}
+    old = {**release_row(), "release_id": "synthetic-old"}
+    effective = deepcopy(old["effective_json"])
+    assert isinstance(effective, dict)
+    del effective["answer_labels"]["crag_refusal_summary"]
+    old["effective_json"] = effective
+    original = deepcopy(old)
+    state = {
+        "draft_revision": 1,
+        "draft_effective_json": builtin_pack().to_dict(),
+        "current_release_id": current["release_id"],
+    }
+    pool = FakeOraclePool(
+        execute_results=[[state], [current], [{"total": 2}], [current, old], [old], [old]]
+    )
+    store = LanguagePackReleaseStore(
+        OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    )
+
+    async def initialized() -> LanguagePackReleaseStore:
+        return store
+
+    monkeypatch.setattr(language_pack, "release_store", initialized)
+    assert client.get("/api/settings/language-pack/draft").status_code == 200
+    listing = client.get("/api/settings/language-pack/releases")
+    assert listing.status_code == 200
+    summaries = listing.json()["data"]["releases"]
+    assert [item["id"] for item in summaries] == ["synthetic-current", "synthetic-old"]
+    assert all("effective" not in item and "validated" not in item for item in summaries)
+    assert client.get("/api/settings/language-pack/releases/synthetic-old").status_code == 409
+    assert (
+        client.post(
+            "/api/settings/language-pack/releases/synthetic-old/restore",
+            json={"expected_revision": 1, "expected_current_id": "synthetic-current"},
+        ).status_code
+        == 409
+    )
+    assert old == original
+    assert all(call.statement.startswith("SELECT") for call in pool.connection.calls)

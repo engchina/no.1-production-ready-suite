@@ -86,6 +86,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from rag_parser_core.image_purpose import DEFAULT_IMAGE_PURPOSE, ImagePurpose
 from rag_parser_core.sheet_records import ExcelOptions
 from rag_parser_core.structured_records import JSONL_RECORD_BOUNDARY
 from rag_pipeline_core.chunking import (
@@ -2387,6 +2388,7 @@ class Settings(
             "取込時は parser-docling マイクロサービスの常時起動が前提。"
         ),
     )
+    rag_vision_image_purpose: ImagePurpose = DEFAULT_IMAGE_PURPOSE
     rag_vision_enabled: bool = Field(
         default=True,
         description=(
