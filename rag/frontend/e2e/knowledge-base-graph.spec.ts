@@ -878,3 +878,25 @@ test("章節の位置移動で空の続きページをエラーにし、再試�
   await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();
   expect(offsets).toEqual([0, 100, 100, 200]);
 });
+
+
+for (const state of ["empty", "error"] as const) {
+  test(`旧索引の本文の空・取得失敗を原文なしと断定しない (${state})`, {tag:"@responsive"}, async ({page}) => {
+    const body=treeNode(ID("body"),"本文",null,"doc",{type:"body",virtual:true});
+    await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
+    await mockTree(page,{"root:set-doc":[body]});
+    await page.route("**/graph/documents/doc-doc/body-chunks?**",route=>state==="empty"
+      ? route.fulfill({json:ok({items:[],total:0,offset:0})})
+      : route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}}));
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page,"文書構造グラフを表示").click();
+    const graph=page.locator("#knowledge-base-graph");
+    await graph.locator('.react-flow__node[data-id="doc"]').click();
+    await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
+    const panel=page.getByTestId("graph-body");
+    if (state==="empty") await expect(panel).toContainText("文書構造索引を再構築してください");
+    else await expect(panel.getByRole("alert")).toContainText("対象が見つかりません");
+    await expect(graph).not.toContainText("この段に本文はありません");
+    await expect(panel.getByRole("button",{name:"原文を表示",exact:true})).toHaveCount(0);
+  });
+}

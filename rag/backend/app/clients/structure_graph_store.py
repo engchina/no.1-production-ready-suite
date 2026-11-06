@@ -237,7 +237,7 @@ class StructureGraphStore:
         else:
             # 末尾を越えた空ページも、同じ範囲の実件数を保持する。
             counted = await self.oracle._fetch_all(f"SELECT COUNT(*) AS total {source_sql}", scope)
-            total = int(counted[0]["total"]) if counted else 0
+            total = int(counted[0]["total"])
         return {
             "items": [
                 {

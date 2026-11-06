@@ -327,7 +327,7 @@ function StructureCanvas({ overview, knowledgeBaseId }: { overview: StructureGra
     </GraphCanvasFrame></div>
     {selectedNode?.kind === "body" && selectedNode.tree ? <GraphBodyPanel key={selectedNode.id} kbId={knowledgeBaseId} documentId={selectedNode.tree.document_id} chunkSetId={selectedNode.tree.chunk_set_id} /> : null}
     {selectedNode && !selectedNode.tree?.virtual ? <GraphReferencePanel key={`${knowledgeBaseId}:${selectedNode.id}`} kbId={knowledgeBaseId} nodeId={selectedNode.id} onLocate={locateReference} /> : null}
-    {selectedNode?.tree?.virtual ? <p className="text-sm text-fg-muted">{t("knowledgeBases.graph.virtualNode")}</p> : null}
+    {selectedNode?.tree?.virtual && selectedNode.kind !== "body" ? <p className="text-sm text-fg-muted">{t("knowledgeBases.graph.virtualNode")}</p> : null}
     {fields.length ? <GraphSelectionDetails title={t(selectedNode ? "knowledgeBases.graph.selectedNode" : "knowledgeBases.graph.selectedEdge")} closeLabel={t("knowledgeBases.graph.clearSelection")} onClose={() => setSelection(null)} fields={fields} /> : null}
   </div>;
 }

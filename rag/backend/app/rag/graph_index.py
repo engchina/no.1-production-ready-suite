@@ -179,6 +179,7 @@ def _build_graph_index_for_kb(
                         entity,
                         entity_id=graph_body_node_id(identity_scope, knowledge_base_id),
                         entity_type="body",
+                        description=name,
                     )
                 entity_by_name[key] = entity
                 relationship = _contains_relationship(
