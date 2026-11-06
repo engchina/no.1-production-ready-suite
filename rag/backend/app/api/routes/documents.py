@@ -2891,9 +2891,14 @@ async def _materialize_experiment_candidate(
     if isinstance(raw_config, Mapping):
         candidate_config = DocumentProcessingConfig.model_validate(raw_config)
     else:
-        _base_settings, candidate_config = await _resolve_ingestion_settings(
-            oracle, job.document_id, recipe_id
-        )
+        try:
+            _base_settings, candidate_config = await _resolve_ingestion_settings(
+                oracle, job.document_id, recipe_id
+            )
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            raise IngestionUserError(str(exc.detail)) from exc
     candidate_settings, effective_candidate_config = _merge_document_processing_config(
         candidate_config
     )
@@ -4502,8 +4507,8 @@ async def _resolve_ingestion_settings(
 ) -> tuple[Settings, DocumentProcessingConfig]:
     """レシピ > global 既定で有効な処理設定を解決する。KB は参照しない。
 
-    レシピは ``recipe_id``、無ければ文書の既定レシピ。処理設定はレシピに保存するので、文書行の
-    設定はレシピを読めないときだけ使う(#697)。
+    レシピは ``recipe_id``、無ければ文書の既定レシピ。参照した正式レシピが無ければ、
+    旧文書列の設定で補わず停止する。
     """
     config: DocumentProcessingConfig | None = None
     ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
@@ -4512,8 +4517,12 @@ async def _resolve_ingestion_settings(
         recipe_id = str((await ensure_recipe(document_id))["recipe_id"])
     if recipe_id is not None and callable(get_recipe):
         row = await get_recipe(document_id, recipe_id)
-        if row is not None:
-            config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
+            )
+        config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     if config is None:
         config = await oracle.get_document_processing_config(document_id)
     effective, _resolved = _merge_document_processing_config(config)

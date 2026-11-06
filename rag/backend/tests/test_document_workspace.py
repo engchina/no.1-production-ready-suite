@@ -4415,7 +4415,14 @@ def test_force_reingest_keeps_served_output_and_clears_only_recipe_checkpoints(
     fake.delete_recipe_segment_checkpoints = clear_checkpoints  # type: ignore[attr-defined]
 
     async def default_recipe(_document_id: str) -> dict[str, object]:
-        return {"recipe_id": "recipe-default", "status": FileStatus.INDEXED.value}
+        row: dict[str, object] = {
+            "recipe_id": "recipe-default",
+            "document_id": _document_id,
+            "status": FileStatus.INDEXED.value,
+            "processing_config": {},
+        }
+        fake.recipes["recipe-default"] = row
+        return row
 
     fake.ensure_default_document_recipe = default_recipe  # type: ignore[attr-defined]
 
