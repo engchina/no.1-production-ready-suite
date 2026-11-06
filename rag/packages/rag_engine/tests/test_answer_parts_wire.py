@@ -1,13 +1,15 @@
 """要点と結果のinline契約に、モデルによる重複分類・内部番号を要求しない。"""
 
 import pytest
+from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
 from pydantic import ValidationError
 from test_citation_unit_ids import snapshot
 
 from rag_engine.generation.answer_parts_wire import answer_parts_model
+from rag_engine.generation.application_reason import AuditReason
 from rag_engine.generation.citation_unit_ids import SentUnitCatalog
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import ApplicationAudit
+from rag_engine.models.llm import ApplicationVerdictAudit
 
 
 def case():
@@ -233,8 +235,8 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
 
     def generate(system, prompt, config, schema, **options):
         calls.append(schema)
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "合成の対応"}], summary_supported=True)
+        if schema in APPLICATION_SCHEMAS:
+            return audit_reply(schema, [{"index": 0, "valid": True}])
         assert schema._uses_typed_answer_parts
         assert "summary_part_indexes" in schema.model_json_schema()["properties"]
         unit_ids = re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\]", prompt)
@@ -293,7 +295,8 @@ def test_formal_pipeline_builds_sources_and_conclusion_without_extra_generation(
         response = synthesize_grounded_answer(
             "項目Aの値を教えてください。", AnswerContext(records=[record], text=source_text), config, image_prompt_mode="text_only"
         ).response
-    assert len(calls) == 2 and calls[-1] is ApplicationAudit
+    # 生成 1 回と、独立の監査の判定・理由の各 1 回。
+    assert len(calls) == 3 and calls[1:] == [ApplicationVerdictAudit, AuditReason]
     assert "合成の回答です。" in response.answer_text
     assert source_text in response.answer_text
     trace = response.generation_trace
@@ -368,8 +371,8 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
 
     def generated(system, prompt, settings, schema, **options):
         calls.append(schema.__name__)
-        if schema is ApplicationAudit:
-            return schema(application_reviews=[{"index": 0, "valid": True, "reason": "計算の合成判定"}], summary_supported=True)
+        if schema in APPLICATION_SCHEMAS:
+            return audit_reply(schema, [{"index": 0, "valid": True}])
         assert getattr(schema, "_uses_unit_ids", False)
         units = {text: uid for uid, text in re.findall(r"(?m)^\d+\| \[(U[0-9a-f]{24})\] (.*)$", prompt)}
         return schema.model_validate(
@@ -411,7 +414,7 @@ def test_one_generation_call_publishes_derived_result_and_keeps_source_facts():
     settings = replace(get_settings(), answer_audit_mode="none", answer_max_correction_rounds=0)
     with bind_dependencies(AnswerDependencies(unused, unused, generated, unused, unused)):
         result = synthesize_grounded_answer("項目Aと項目Bの合計を教えてください。", ctx, settings, image_prompt_mode="text_only").response
-    assert calls == ["GroundedDraftWire", "ApplicationAudit"]
+    assert calls == ["GroundedDraftWire", "ApplicationVerdictAudit", "AuditReason"]
     assert result.answer_text.startswith("合計は20です。")
     assert result.generation_trace["applications"][0]["published"]
     assert result.generation_trace["applications"][0]["result"] == "合計は20です。"

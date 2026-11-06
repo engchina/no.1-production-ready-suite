@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
-from concurrent.futures import CancelledError
 from time import monotonic
 from typing import Any
 
 from pr_backend_core.observability.model_purpose import call_with_model_purpose
 
+from rag_engine.generation.application_reason import explain_verdicts, propagates
 from rag_engine.generation.application_sources import application_item_citations
 from rag_engine.generation.applications import (
     APPLICATION_AUDIT_SYSTEM_PROMPT,
@@ -22,8 +22,7 @@ from rag_engine.generation.confirmed_context import confirmed_premise_records
 from rag_engine.generation.document_background import background_label
 from rag_engine.generation.document_inputs import document_groups, document_key
 from rag_engine.generation.input_budget import ensure_model_input
-from rag_engine.models.llm import ApplicationAudit, GroundedAudit
-from rag_engine.resources.deadline import DeadlineExceeded, current_deadline, deadline_cut_short
+from rag_engine.models.llm import ApplicationVerdictAudit, GroundedAudit
 from rag_engine.resources.runtime import resolve_prompt
 
 
@@ -77,7 +76,11 @@ def review_applications(
     settings: Any,
     provider_id: str | None,
 ) -> dict[str, Any]:
-    """既存監査を再利用し、監査なしの推導群にだけ1回まとめて問い合わせる。"""
+    """既存監査を再利用し、監査なしの推導群にだけ1回まとめて判定を問い合わせる。
+
+    独立の監査のモデルは判定と判定に使った evidence_id だけを返し、表示の理由は判定が確定した推導ごとに
+    別の段（application_reason）が日本語だけの入力から作る。理由の有無・成否で判定は変えない。
+    """
     if not checked:
         return {"status": "not_applicable", "calls": 0}
     if evidence_spans is None or not evidence_spans:
@@ -136,24 +139,24 @@ def review_applications(
     }
     audit = None
     try:
-        ensure_model_input(settings, system, prompt, ApplicationAudit.model_json_schema(), provider_id=provider_id)
+        ensure_model_input(settings, system, prompt, ApplicationVerdictAudit.model_json_schema(), provider_id=provider_id)
         diagnostic["calls"] = 1
-        audit = call_with_model_purpose("answer.audit", parse_text, system, prompt, settings, ApplicationAudit, provider_id=provider_id)
+        audit = call_with_model_purpose(
+            "answer.audit", parse_text, system, prompt, settings, ApplicationVerdictAudit, provider_id=provider_id
+        )
         if any(row.index not in range(len(candidates)) for row in audit.application_reviews):
             diagnostic["status"] = "invalid_contract"
             audit = None
     except Exception as exc:
-        deadline = current_deadline()
-        status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
-        if (
-            isinstance(exc, (PermissionError, CancelledError))
-            or status in {401, 403}
-            or (deadline is not None and (deadline.cancelled or (deadline.expired and not deadline_cut_short())))
-            or (isinstance(exc, DeadlineExceeded) and not deadline_cut_short())
-        ):
+        if propagates(exc):
             raise
         diagnostic.update(status="incomplete", error_type=type(exc).__name__)
-    apply_application_audit(candidates, audit, require_complete=True)
+    reasons, reason_trace = explain_verdicts(inputs, audit, parse_text=parse_text, settings=settings, provider_id=provider_id)
+    diagnostic["calls"] += reason_trace["calls"]
+    if unknown_basis := reason_trace.pop("unknown_basis_ids", None):
+        diagnostic["unknown_basis_ids"] = unknown_basis
+    diagnostic["reason_step"] = reason_trace
+    apply_application_audit(candidates, audit, require_complete=True, reasons=reasons)
     diagnostic.update(seconds=round(monotonic() - started, 3), results=[dict(entry.assessment) for entry in candidates])
     if any(entry.assessment.get("status") == "unknown" for entry in candidates) and diagnostic["status"] == "completed":
         diagnostic["status"] = "incomplete"

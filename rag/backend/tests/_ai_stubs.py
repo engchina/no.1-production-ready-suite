@@ -177,6 +177,33 @@ def _first_evidence(prompt: str) -> tuple[str, str] | None:
     return None
 
 
+def application_audit_reply(
+    text_format: type[BaseModel], prompt: str, *, valid: bool = True, summary_supported: bool = True
+) -> BaseModel | None:
+    """推導の監査（当てはめの監査、独立の監査の判定と理由）の合成応答。ほかは None。"""
+    from rag_engine.generation.application_reason import AuditReason
+    from rag_engine.models.llm import ApplicationAudit, ApplicationVerdictAudit
+
+    if text_format is AuditReason:
+        return AuditReason(reason="合成の判定の理由です。")
+    if text_format not in (ApplicationAudit, ApplicationVerdictAudit):
+        return None
+    indexes = [row["index"] for row in json.loads(prompt)["applications"]]
+    detail: dict[str, Any] = (
+        {"basis_evidence_ids": []}
+        if text_format is ApplicationVerdictAudit
+        else {"reason": "合成の原文対応"}
+    )
+    return text_format.model_validate(
+        {
+            "application_reviews": [
+                {"index": index, "valid": valid, **detail} for index in indexes
+            ],
+            "summary_supported": summary_supported,
+        }
+    )
+
+
 def deterministic_parse_text_response(
     system_prompt: str, prompt: str, settings: Any, text_format: type[BaseModel], **_: Any
 ) -> BaseModel:
@@ -184,7 +211,6 @@ def deterministic_parse_text_response(
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.audit_wire import is_audit_wire
     from rag_engine.models.llm import (
-        ApplicationAudit,
         CragRetrievalGradeOutput,
         GroundedAudit,
         GroundedDraft,
@@ -195,15 +221,8 @@ def deterministic_parse_text_response(
         TextOutput,
     )
 
-    if text_format is ApplicationAudit:
-        data = json.loads(prompt)
-        return text_format(
-            application_reviews=[
-                {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
-                for row in data["applications"]
-            ],
-            summary_supported=True,
-        )
+    if (reply := application_audit_reply(text_format, prompt)) is not None:
+        return reply
     if text_format is QueryRoutingOutput:
         return QueryRoutingOutput(strategy="simple_retrieval", reason="決定論スタブ", queries=[])
     if text_format is QueryExpansionOutput:

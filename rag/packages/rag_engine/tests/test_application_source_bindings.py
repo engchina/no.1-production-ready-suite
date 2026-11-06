@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from application_verdict_stub import audit_reply
 
 from rag_engine.config import get_settings
 from rag_engine.generation import grounded
@@ -11,7 +12,7 @@ from rag_engine.generation.application_review import review_applications
 from rag_engine.generation.applications import CheckedApplication
 from rag_engine.generation.citation_unit_ids import unit_generation_model
 from rag_engine.generation.citation_wire import canonical_generation_draft, generation_draft_wire_model
-from rag_engine.models.llm import ApplicationAudit, GroundedApplication, GroundedDraft
+from rag_engine.models.llm import ApplicationVerdictAudit, GroundedApplication, GroundedDraft
 
 TEXT = "機器Aの測定値は28です。"
 QUESTION = "機器Aの測定値を教えてください。"
@@ -94,10 +95,10 @@ def captured(entry, spans):
     inputs = []
 
     def parse(system, prompt, settings, schema, **options):
-        inputs.append(json.loads(prompt))
-        return ApplicationAudit(
-            application_reviews=[{"index": 0, "valid": True, "reason": "入力捕捉用。意味成功を表さない。"}], summary_supported=True
-        )
+        if schema is ApplicationVerdictAudit:
+            inputs.append(json.loads(prompt))
+        # 入力捕捉用。意味成功を表さない。
+        return audit_reply(schema, [{"index": 0, "valid": True}])
 
     trace = review_applications(
         QUESTION,
@@ -109,7 +110,8 @@ def captured(entry, spans):
         settings=get_settings(environ={}, dotenv_path=None),
         provider_id=None,
     )
-    assert len(inputs) == trace["calls"] == 1
+    # 判定 1 回と、判定が確定した推導の理由 1 回。
+    assert len(inputs) == 1 and trace["calls"] == 2
     return inputs[0]
 
 
