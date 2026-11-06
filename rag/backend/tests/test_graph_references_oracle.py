@@ -446,11 +446,16 @@ def _body_fixture_chunks(prefix: str, count: int = 4) -> list[Any]:
 
 
 async def _chunk_snapshot(client: OracleClient, document_id: str) -> list[dict[str, str]]:
-    """本文・metadata・embedding の保存値（補建が変えないことの比較に使う）。"""
+    """本文・metadata・embedding の保存値（補建が変えないことの比較に使う）。
+
+    複数行の一時 LOB（``... RETURNING CLOB``）は次の行の取得で失われる（ORA-24826）ので、
+    metadata は VARCHAR2、embedding は次元の数とノルムで比べる。
+    """
     rows = await client._fetch_all(
         """SELECT chunk_id,chunk_set_id,chunk_text,
-        JSON_SERIALIZE(metadata_json RETURNING CLOB) AS metadata_text,
-        VECTOR_SERIALIZE(embedding RETURNING CLOB) AS embedding_text
+        JSON_SERIALIZE(metadata_json RETURNING VARCHAR2(4000)) AS metadata_text,
+        VECTOR_DIMENSION_COUNT(embedding) AS embedding_dimensions,
+        VECTOR_NORM(embedding) AS embedding_norm
         FROM rag_chunks WHERE document_id=:id ORDER BY chunk_set_id,chunk_index""",
         {"id": document_id},
     )
