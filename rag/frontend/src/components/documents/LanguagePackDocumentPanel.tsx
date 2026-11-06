@@ -10,6 +10,7 @@ import { LanguagePackComparison } from "@/components/settings/LanguagePackHistor
 import { formatDateTime } from "@/lib/format";
 import { phaseLabelKey } from "./DocumentWorkspace.logic";
 import { languagePackPanelState, languagePackSummaryStatus, type LanguagePackBuildTarget } from "./LanguagePackDocumentPanel.logic";
+import { ALL_START_PHASES, UNREADABLE_START_PHASES, isUnreadableReleaseError, selectablePhase } from "./LanguagePackUnreadable.logic";
 
 export function LanguagePackRelationBadge({ relation }: { relation: LanguagePackRelation }) {
   return <StatusBadge variant={relation === "different" ? "warning" : relation === "unrecorded" ? "neutral" : "success"} label={t(`settings.language.release.relation.${relation}`)} icon={false} />;
@@ -48,13 +49,16 @@ function RecipeLanguagePackPanel({ documentId, fileName, use, recipe }: { docume
   const reviewed = reviewable && review === reviewKey;
   const snapshot = useQuery({ queryKey: ["language-pack-release", showSnapshot], queryFn: () => api.getLanguagePackRelease(showSnapshot!), enabled: Boolean(showSnapshot), retry: false });
   const comparison = useQuery({ queryKey: ["language-pack-comparison", pair?.beforeId, pair?.afterId], queryFn: () => api.compareLanguagePackReleases(pair!.beforeId, pair!.afterId), enabled: reviewed && pair !== null, retry: false });
+  // 比較元の版を現在の契約で読めない（409）ときは比較できないが、ファイル準備か抽出からの再処理で作り直せる。
+  const unreadable = comparison.isError && isUnreadableReleaseError(comparison.error);
+  const startPhase = selectablePhase(phase, unreadable);
   const processing = target !== null || recipe.steps.some((step) => step.status === "RUNNING" || step.status === "QUEUED");
-  const canReprocess = reviewed && ((state.kind === "built" && state.relation === "different") || (state.kind === "unrecorded" && target === null));
+  const canReprocess = reviewed && ((state.kind === "built" && (state.relation === "different" || unreadable)) || (state.kind === "unrecorded" && target === null));
   const enqueue = useMutation({ mutationFn: (start: IngestionJobPhase) => api.enqueueDocumentRecipeJob(documentId, recipe.recipe_id, start, use.current_release_id, recipe.config_revision), onSuccess: () => { void qc.invalidateQueries({ queryKey: ["documents", documentId] }); } });
   const execute = async () => {
-    if (!phase || !reviewed) return;
-    const ok = await confirm({ title: t("settings.language.release.reprocessTitle"), description: t("settings.language.release.reprocessConfirm", { fileName, recipe: t("documents.recipes.name", { slot: recipe.slot_no }), version: use.current_version, phase: t(phaseLabelKey(phase)) }), confirmLabel: t("flow.reprocess.confirm"), tone: "warning" });
-    if (ok) enqueue.mutate(phase);
+    if (!startPhase || !reviewed) return;
+    const ok = await confirm({ title: t("settings.language.release.reprocessTitle"), description: t("settings.language.release.reprocessConfirm", { fileName, recipe: t("documents.recipes.name", { slot: recipe.slot_no }), version: use.current_version, phase: t(phaseLabelKey(startPhase)) }), confirmLabel: t("flow.reprocess.confirm"), tone: "warning" });
+    if (ok) enqueue.mutate(startPhase);
   };
   const targetSnapshotButton = target ? <Button className="mt-3" variant="secondary" size="sm" onClick={() => setShowSnapshot(target.releaseId)}>{t("settings.language.release.targetSnapshot")}</Button> : null;
   return <Card data-testid="document-language-pack" data-state={state.kind}>
@@ -89,14 +93,14 @@ function RecipeLanguagePackPanel({ documentId, fileName, use, recipe }: { docume
         <p>{t("settings.language.release.unrecordedBuildingHelp")}</p>
         {targetSnapshotButton}
       </Banner> : null}
-      {showSnapshot ? snapshot.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="document-language-release"><Skeleton className="h-40 w-full" /></TimedLoadingState> : snapshot.isError ? <ApiErrorState error={snapshot.error} fallback={t("settings.language.history.loadError")} onRetry={() => void snapshot.refetch()} /> : <TextareaField id={`recipe-${recipe.recipe_id}-language-snapshot`} label={`${t("settings.language.release.snapshot")} v${snapshot.data.version}`} rows={6} width="full" readOnly value={JSON.stringify(snapshot.data.effective, null, 2)} /> : null}
+      {showSnapshot ? snapshot.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="document-language-release"><Skeleton className="h-40 w-full" /></TimedLoadingState> : snapshot.isError ? isUnreadableReleaseError(snapshot.error) ? <Banner severity="warning">{t("settings.language.release.unreadableSnapshot")}</Banner> : <ApiErrorState error={snapshot.error} fallback={t("settings.language.history.loadError")} onRetry={() => void snapshot.refetch()} /> : <TextareaField id={`recipe-${recipe.recipe_id}-language-snapshot`} label={`${t("settings.language.release.snapshot")} v${snapshot.data.version}`} rows={6} width="full" readOnly value={JSON.stringify(snapshot.data.effective, null, 2)} /> : null}
       {reviewable ? <div><Button variant="secondary" onClick={() => setReview(reviewKey)}>{t(pair ? "settings.language.release.review" : "settings.language.release.reviewReprocess")}</Button></div> : null}
       {reviewed && !pair ? <Banner severity="warning" title={t("settings.language.release.unrecordedActive")}>{t("settings.language.release.unrecordedHelp")}</Banner> : null}
-      {reviewed && pair ? comparison.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="document-language-diff"><Skeleton className="h-20 w-full" /></TimedLoadingState> : comparison.isError ? <ApiErrorState error={comparison.error} fallback={t("settings.language.history.loadError")} onRetry={() => void comparison.refetch()} /> : <LanguagePackComparison comparison={comparison.data} /> : null}
+      {reviewed && pair ? comparison.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="document-language-diff"><Skeleton className="h-20 w-full" /></TimedLoadingState> : comparison.isError ? unreadable ? <Banner severity="warning" title={t("settings.language.release.unreadableTitle")}>{t("settings.language.release.unreadableHelp")}</Banner> : <ApiErrorState error={comparison.error} fallback={t("settings.language.history.loadError")} onRetry={() => void comparison.refetch()} /> : <LanguagePackComparison comparison={comparison.data} /> : null}
       {canReprocess ? <>
-        <SelectField id={`recipe-${recipe.recipe_id}-language-phase`} label={t("settings.language.release.startPhase")} value={phase} required options={[{ value: "", label: t("settings.language.release.selectPhase") }, ...(["PREPROCESS", "EXTRACT", "CHUNK", "INDEX"] as const).map((value) => ({ value, label: t(phaseLabelKey(value)) }))]} onValueChange={(value) => setPhase(value as IngestionJobPhase)} />
+        <SelectField id={`recipe-${recipe.recipe_id}-language-phase`} label={t("settings.language.release.startPhase")} value={startPhase} required options={[{ value: "", label: t("settings.language.release.selectPhase") }, ...(unreadable ? UNREADABLE_START_PHASES : ALL_START_PHASES).map((value) => ({ value, label: t(phaseLabelKey(value)) }))]} onValueChange={(value) => setPhase(value as IngestionJobPhase)} />
         <p className="text-xs text-fg-muted">{t("settings.language.release.processingHelp")}</p>
-        <Button variant="secondary" icon={RefreshCw} disabled={!phase || processing || comparison.isError || comparison.isFetching} loading={enqueue.isPending} onClick={() => void execute()}>{t("flow.reprocess.confirm")}</Button>
+        <Button variant="secondary" icon={RefreshCw} disabled={!startPhase || processing || (comparison.isError && !unreadable) || comparison.isFetching} loading={enqueue.isPending} onClick={() => void execute()}>{t("flow.reprocess.confirm")}</Button>
       </> : null}
       {enqueue.isError ? <ApiErrorState error={enqueue.error} fallback={t("settings.language.saveError")} onRetry={() => { void qc.invalidateQueries({ queryKey: ["documents", documentId] }); setReview(null); enqueue.reset(); }} /> : null}
       {enqueue.isSuccess ? <FormStatus tone="success" message={t("settings.language.release.queued")} /> : null}
