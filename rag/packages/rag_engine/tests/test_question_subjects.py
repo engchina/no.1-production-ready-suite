@@ -296,24 +296,28 @@ def test_model_call_failure_is_returned_not_raised() -> None:
 
 
 def provider_settings(registered: str, **overrides: Any) -> Any:
-    """モデルの登録の推論の量が ``registered`` の provider 1 つだけの合成の設定（接続先は偽）。"""
+    """モデルの登録の推論の量が ``registered`` の provider と、別のモデルの provider ``other`` を持つ合成の設定（接続先は偽）。"""
     base = get_settings(environ={}, dotenv_path=None, **overrides)
-    provider = LlmProviderSettings(
-        provider_id=base.default_answer_llm,
-        label="synthetic",
-        region="",
-        project_id="",
-        api_key="synthetic",
-        model="synthetic-model",
-        endpoint="https://synthetic.invalid/v1",
-        reasoning_effort=registered,
-    )
-    return replace(base, llm_providers={base.default_answer_llm: provider})
+
+    def provider(provider_id: str, model: str) -> LlmProviderSettings:
+        return LlmProviderSettings(
+            provider_id=provider_id,
+            label="synthetic",
+            region="",
+            project_id="",
+            api_key="synthetic",
+            model=model,
+            endpoint="https://synthetic.invalid/v1",
+            reasoning_effort=registered,
+        )
+
+    providers = {base.default_answer_llm: provider(base.default_answer_llm, "synthetic-model"), "other": provider("other", "other-model")}
+    return replace(base, llm_providers=providers)
 
 
-def sent_efforts(settings: Any) -> list[tuple[str, str]]:
-    """2 段の呼び出しの schema の名前と、各呼び出しに渡した設定の推論の量（送る値）。"""
-    sent: list[tuple[str, str]] = []
+def sent_calls(settings: Any, provider_id: str | None = None) -> list[tuple[str, str, str | None]]:
+    """2 段の呼び出しの schema の名前・各呼び出しに渡した設定の推論の量（送る値）・provider ID。"""
+    sent: list[tuple[str, str, str | None]] = []
     question = "装置ラムダを導入しました。装置ラムダの保守期限は？"
     responses = {
         EXTRACT: {"mentions": [mention(question, "装置ラムダ"), mention(question, "装置ラムダ", nth=1)]},
@@ -321,22 +325,27 @@ def sent_efforts(settings: Any) -> list[tuple[str, str]]:
     }
 
     def parse(system: str, prompt: str, call_settings: Any, schema: Any, **options: Any) -> Any:
-        sent.append((schema.__name__, call_settings.llm_providers[call_settings.default_answer_llm].reasoning_effort))
+        target = options.get("provider_id") or call_settings.default_answer_llm
+        sent.append((schema.__name__, call_settings.llm_providers[target].reasoning_effort, options.get("provider_id")))
         return schema.model_validate(responses[schema.__name__])
 
-    assert extract_question_subjects(question, settings, parse_text=parse).status == STATUS_COMPLETED
+    assert extract_question_subjects(question, settings, provider_id=provider_id, parse_text=parse).status == STATUS_COMPLETED
     return sent
 
 
+def sent_efforts(settings: Any) -> list[tuple[str, str]]:
+    return [(name, effort) for name, effort, _ in sent_calls(settings)]
+
+
 def test_each_stage_call_uses_its_own_step_reasoning_effort() -> None:
-    # 既定は抽出・役割の段とも medium。渡された設定（モデルの登録値）は変えない。
+    # 既定は抽出の段だけ medium、役割の段はモデルの登録値。渡された設定（モデルの登録値）は変えない。
     settings = provider_settings("low")
-    assert settings.question_subject_extraction_reasoning_effort == settings.question_subject_role_reasoning_effort == "medium"
-    assert sent_efforts(settings) == [(EXTRACT, "medium"), (ROLE, "medium")]
+    assert (settings.question_subject_extraction_reasoning_effort, settings.question_subject_role_reasoning_effort) == ("medium", "")
+    assert sent_efforts(settings) == [(EXTRACT, "medium"), (ROLE, "low")]
     assert settings.llm_providers[settings.default_answer_llm].reasoning_effort == "low"
     # 段ごとに別に決まる（片方だけ変えても他方は変わらない）。
-    assert sent_efforts(provider_settings("low", question_subject_role_reasoning_effort="")) == [(EXTRACT, "medium"), (ROLE, "low")]
-    assert sent_efforts(provider_settings("low", question_subject_extraction_reasoning_effort="")) == [(EXTRACT, "low"), (ROLE, "medium")]
+    assert sent_efforts(provider_settings("low", question_subject_role_reasoning_effort="high")) == [(EXTRACT, "medium"), (ROLE, "high")]
+    assert sent_efforts(provider_settings("low", question_subject_extraction_reasoning_effort="")) == [(EXTRACT, "low"), (ROLE, "low")]
 
 
 @pytest.mark.parametrize(
@@ -347,6 +356,31 @@ def test_each_stage_call_uses_its_own_step_reasoning_effort() -> None:
 def test_step_reasoning_effort_is_a_setting_with_the_shared_override_rules(registered: str, step: str, expected: str) -> None:
     settings = provider_settings(registered, question_subject_extraction_reasoning_effort=step, question_subject_role_reasoning_effort=step)
     assert sent_efforts(settings) == [(EXTRACT, expected), (ROLE, expected)]
+
+
+def test_role_stage_model_is_a_step_setting_and_extraction_keeps_the_caller_provider() -> None:
+    # 既定（空）は両方の段が呼び出し側の provider。
+    settings = provider_settings("low")
+    caller = settings.default_answer_llm
+    assert [(name, provider) for name, _, provider in sent_calls(settings, caller)] == [(EXTRACT, caller), (ROLE, caller)]
+    # 段のモデルの設定は役割の段の呼び出しだけを、その provider で呼ぶ。
+    settings = provider_settings("low", question_subject_role_llm="other")
+    assert [(name, provider) for name, _, provider in sent_calls(settings, caller)] == [(EXTRACT, caller), (ROLE, "other")]
+
+
+def test_unknown_role_stage_model_fails_without_raising() -> None:
+    from rag_engine.adapters.oci import parse_text_response
+
+    settings = provider_settings("low", question_subject_role_llm="missing")
+    question = "装置ラムダの保守期限は？"
+
+    def parse(system: str, prompt: str, call_settings: Any, schema: Any, **options: Any) -> Any:
+        if schema.__name__ == EXTRACT:
+            return schema.model_validate({"mentions": [mention(question, "装置ラムダ")]})
+        return parse_text_response(system, prompt, call_settings, schema, **options)
+
+    subjects = extract_question_subjects(question, settings, parse_text=parse)
+    assert (subjects.status, subjects.calls) == (STATUS_FAILED, 2)
 
 
 # ---------- 名前の照合（モデルを呼ばない） ----------

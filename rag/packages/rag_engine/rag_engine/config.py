@@ -378,7 +378,10 @@ class Settings:
     # 質問の対象(#4351): 抽出の段(原文の写しと同じ写しの出現の順番を返す)と、役割の判定の段(文の中での
     # 問い・前提・例)。それぞれの段の呼び出しにだけ当てる。
     question_subject_extraction_reasoning_effort: str = "medium"
-    question_subject_role_reasoning_effort: str = "medium"
+    question_subject_role_reasoning_effort: str = ""
+    # 工程ごとのモデル(1 回の呼び出しの provider ID。`llm_providers` のキー)。空は呼び出し側が渡した provider
+    # (回答のモデル)のまま。質問の対象の役割の判定の段(#4351)にだけ当てる。
+    question_subject_role_llm: str = ""
     # 規則の信号が強いとき CRAG の評価(1 回目)を飛ばす(#1499。既定 off)。rerank の最上位の score が閾値以上で、
     # 質問の要求に語の一致で根拠の無いもの(missing)が無いときだけ(#1528 で曖昧な帯だけ呼ぶ形に見直した)。
     # 列挙・エラー文の問、定義本文の無い問、候補の除外が要る(旧版・重複の)根拠があるときは必ず呼ぶ。

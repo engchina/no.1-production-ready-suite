@@ -339,7 +339,8 @@ def extract_question_subjects(
 
     ``parse_text`` は構造化出力の呼び出し（既定は注入された回答フローの ``parse_text_response``）。再試行はしない。
     各段の呼び出しにだけ、その段の推論の量（``settings.question_subject_extraction_reasoning_effort``・
-    ``settings.question_subject_role_reasoning_effort``）を当てる。
+    ``settings.question_subject_role_reasoning_effort``）を当てる。役割の段は、段のモデルの設定
+    （``settings.question_subject_role_llm``。provider ID）があればその provider で呼ぶ（空は ``provider_id`` のまま）。
     """
     call: Callable[..., Any]
     if parse_text is None:
@@ -375,7 +376,7 @@ def extract_question_subjects(
             _canonical(role_input),
             role_settings(settings),
             role_schema,
-            provider_id=provider_id,
+            provider_id=role_provider(settings, provider_id),
             purpose=purpose,
         )
         roles = project_roles(role_input, role_schema.model_validate(_dump(raw_roles)).model_dump())
@@ -395,6 +396,11 @@ def extraction_settings(settings: Any) -> Any:
 def role_settings(settings: Any) -> Any:
     """役割の段の呼び出しに渡す設定。段の推論の量の設定があれば、その呼び出しの要求の値だけを差し替える。"""
     return settings_with_reasoning_effort(settings, getattr(settings, "question_subject_role_reasoning_effort", ""))
+
+
+def role_provider(settings: Any, provider_id: str | None) -> str | None:
+    """役割の段の呼び出しの provider ID。段のモデルの設定があればそれ、無ければ呼び出し側の provider。"""
+    return str(getattr(settings, "question_subject_role_llm", "") or "") or provider_id
 
 
 def _dump(raw: Any) -> Any:
