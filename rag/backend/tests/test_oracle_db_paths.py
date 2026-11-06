@@ -140,8 +140,8 @@ async def test_list_document_recipes_does_not_write_when_recipe_rows_exist() -> 
     _assert_no_json_columns(_document_selects(pool))
 
 
-async def test_list_document_recipes_returns_virtual_default_recipe_without_write() -> None:
-    """レシピ行が無い既存の文書は、書き込まずに文書の状態からレシピ 1 を仮に返す。"""
+async def test_list_document_recipes_returns_empty_without_old_document_completion() -> None:
+    """レシピ行が無い既存文書は、旧状態を仮のレシピへ補完しない。"""
     document_row: dict[str, object] = {
         "document_id": "doc-1",
         "tenant_id_hash": None,
@@ -158,18 +158,10 @@ async def test_list_document_recipes_returns_virtual_default_recipe_without_writ
 
     rows = await client.list_document_recipes("doc-1")
 
-    assert len(rows) == 1
-    assert rows[0]["recipe_id"] == _default_recipe_id()
-    assert rows[0]["slot_no"] == 1
-    assert rows[0]["status"] == "REVIEW"
-    assert rows[0]["config_revision"] == 1
-    assert rows[0]["processing_config"] == {"parser_backend": "local"}
+    assert rows == []
     assert _write_statements(pool) == []
     assert pool.connection.commits == 0
-    for statement in _document_selects(pool):
-        select_list = statement.split("FROM rag_documents", 1)[0]
-        assert "extraction" not in select_list
-        assert "classification" not in select_list
+    _assert_no_json_columns(_document_selects(pool))
 
 
 async def test_list_document_recipes_raises_key_error_for_missing_document() -> None:
@@ -196,8 +188,8 @@ async def test_list_document_recipes_does_not_resurrect_deleted_recipe_one() -> 
     assert _write_statements(pool) == []
 
 
-async def test_get_document_recipe_returns_virtual_default_recipe_without_write() -> None:
-    """レシピ行の無い文書のレシピ 1 は、読み取りでは仮の行を返す(書き込まない)。"""
+async def test_get_document_recipe_does_not_complete_missing_row_from_document() -> None:
+    """保存行が無いときは既定IDでも旧文書を読まずNoneを返す。"""
     document_row: dict[str, object] = {
         "document_id": "doc-1",
         "tenant_id_hash": None,
@@ -214,8 +206,8 @@ async def test_get_document_recipe_returns_virtual_default_recipe_without_write(
 
     row = await client.get_document_recipe("doc-1", _default_recipe_id())
 
-    assert row is not None
-    assert row["recipe_id"] == _default_recipe_id()
+    assert row is None
+    assert len(pool.connection.calls) == 1
     assert _write_statements(pool) == []
 
 

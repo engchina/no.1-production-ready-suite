@@ -2820,11 +2820,7 @@ class OracleClient:
         )
 
     async def list_document_recipes(self, document_id: str) -> list[dict[str, object]]:
-        """文書レシピを active chunk_set の件数とともに返す(読み取りだけ。書き込まない)。
-
-        レシピ行が 1 件も無い既存の文書(migration 前に登録され、ジョブも未投入)は、文書の状態から
-        レシピ1を仮の行として返す。行は、最初の書き込み(設定の保存・ジョブの投入など)で作る。
-        """
+        """保存された文書レシピだけを返す。旧文書列から仮の行を補完しない。"""
         rows = await self._fetch_all(
             """
             SELECT
@@ -2854,38 +2850,9 @@ class OracleClient:
         )
         if rows:
             return [_document_recipe_row(row) for row in rows]
-        virtual = await self._virtual_default_document_recipe(document_id)
-        if virtual is None:
+        if not await self.accessible_document_exists(document_id):
             raise KeyError(f"document_id={document_id} は存在しません。")
-        return [virtual]
-
-    async def _virtual_default_document_recipe(self, document_id: str) -> dict[str, object] | None:
-        """レシピ行が 1 件も無い文書のレシピ1を、文書の状態から組み立てる(書き込まない)。
-
-        文書が無い・見えない、またはレシピ行がある(レシピ1を削除して他のレシピだけがある)
-        ときは None。抽出結果などの大きな JSON 列は読まない。
-        """
-        row = await self._fetch_one(
-            _render_sql(
-                """
-                SELECT
-                    d.document_id, d.tenant_id_hash, d.status, d.processing_config,
-                    d.preprocess_artifact, d.error_message, d.uploaded_at, d.indexed_at,
-                    (
-                        SELECT COUNT(*) FROM rag_document_recipes r
-                        WHERE r.document_id = d.document_id
-                    ) AS recipe_count
-                FROM rag_documents d
-                WHERE d.document_id = :document_id
-                  AND {access_predicate}
-                """,
-                access_predicate=_oracle_access_predicate_sql(alias="d"),
-            ),
-            _with_tenant_bind({"document_id": document_id}),
-        )
-        if row is None or _int_value(row.get("recipe_count")) > 0:
-            return None
-        return _document_recipe_row(_default_document_recipe_values(row))
+        return []
 
     async def get_document_recipe(
         self, document_id: str, recipe_id: str
@@ -2920,10 +2887,7 @@ class OracleClient:
         )
         if row is not None:
             return _document_recipe_row(row)
-        if recipe_id != default_document_recipe_id(document_id):
-            return None
-        # レシピ行の無い既存の文書のレシピ1(読み取りでは作らない。#341)。
-        return await self._virtual_default_document_recipe(document_id)
+        return None
 
     async def get_latest_recipe_chunk_set(
         self,
