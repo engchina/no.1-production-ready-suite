@@ -41,7 +41,7 @@ def test_tree_hides_title_alias_of_a_path_tail() -> None:
 
 def test_tree_keeps_title_when_there_is_no_path() -> None:
     tree = _tree(StructureChunkRow(None, section_title="見出しだけ"), StructureChunkRow(None))
-    assert [tree.nodes[item].name for item in tree.roots] == ["見出しだけ"]
+    assert [tree.nodes[item].name for item in tree.roots] == ["見出しだけ", "本文"]
 
 
 def test_tree_skips_a_single_title_only_level() -> None:
