@@ -104,8 +104,8 @@ backend の URL 設定（`RAG_PARSER_*_SERVICE_URL` / `RAG_PREPROCESS_*_SERVICE_
    ```
 
 2. systemd が PID 1 の環境（WSL2 は `/etc/wsl.conf` の `[boot] systemd=true`）では、unit と sudoers を登録する（`rag/` で実行）。
-   venv を作り（docling・unstructured のモデルも取得してハッシュを検証する。unstructured は解析の要求の時にはモデルを取得しない。
-   [services/parsers/unstructured/README.md](../services/parsers/unstructured/README.md)）、unit を `/etc/systemd/system/` に、
+   venv を作り（docling・unstructured のモデルも取得してハッシュを検証する。どちらも解析の要求の時にはモデルを取得・修復しない。
+   [services/parsers/docling/README.md](../services/parsers/docling/README.md)・[services/parsers/unstructured/README.md](../services/parsers/unstructured/README.md)）、unit を `/etc/systemd/system/` に、
    画面から操作する unit の `systemctl` / `journalctl` だけを現在のユーザーに許可する sudoers を
    `/etc/sudoers.d/production-ready-rag-services` に置き、初めて登録した unit を起動する（既定は停止の parser-xml-tree-json は
    登録だけして起動しない。使うときはサービス管理画面で起動する。#2453）。

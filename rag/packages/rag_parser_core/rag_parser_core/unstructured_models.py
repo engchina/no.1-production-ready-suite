@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from rag_parser_core.model_integrity import ModelArtifact, verify_files
+from rag_parser_core.model_integrity import ModelArtifact, ModelsNotDeployedError, verify_files
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ def verify_spacy_model() -> None:
 
 
 def _spacy_runtime_download_forbidden() -> None:
-    raise RuntimeError(
+    raise ModelsNotDeployedError(
         f"spaCy のモデル（{SPACY_MODEL_DISTRIBUTION}）が venv に無いため解析できません。"
         "解析の要求の時にはモデルを取得しません。parser-unstructured を配備し直してください。"
     )

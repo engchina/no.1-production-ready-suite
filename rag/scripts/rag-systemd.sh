@@ -99,8 +99,8 @@ rag_uv_sync_args() {
 
 # サービスが実行時に使うモデルを、サービスの実行ユーザーの ~/.cache に取得し、配布元のハッシュで検証する
 # コマンド（サービスの実行ユーザーが、サービスのディレクトリで実行する）。実行時の DL を避けるため。
-# 失敗しても unit は起動できる（docling は初回の解析でモデルを取得する。unstructured は解析の要求の時には
-# 取得せず、/health が degraded になる）。
+# 失敗しても unit は起動できるが、解析の要求の時にはモデルを取得・修復しない（解析は配備のやり直しを案内する
+# エラーになり、/health が degraded になる。#4555・#4557）。
 rag_service_model_command() {
   case "$1" in
     parser-docling)
@@ -114,12 +114,13 @@ rag_service_model_command() {
 
 # サービスの実行時の環境変数（KEY=VALUE を 1 行ずつ）。unit（rag_write_microservice_unit）と、systemd を
 # 使わない前面の起動（rag-services.sh run）が同じ値を使う。
-# - parser-unstructured: HF のモデルは配備で取得・検証したキャッシュだけを読み、解析の要求の時には取得しない
-#   （huggingface_hub・transformers が読む標準の HF_HUB_OFFLINE。spaCy のモデルは venv の lock から入る。#4555）。
+# - parser-docling / parser-unstructured: HF のモデルは配備で取得・検証したキャッシュだけを読み、解析の要求の時には
+#   取得しない（huggingface_hub・transformers が読む標準の HF_HUB_OFFLINE。docling はモデルの場所も常に
+#   artifacts_path で渡す。spaCy のモデルは venv の lock から入る。#4555・#4557）。
 rag_service_environment() {
   case "$1" in
     parser-docling)
-      printf '%s\n' 'RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs'
+      printf '%s\n' 'RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs' 'HF_HUB_OFFLINE=1'
       ;;
     parser-unstructured)
       printf '%s\n' 'HF_HUB_OFFLINE=1'
