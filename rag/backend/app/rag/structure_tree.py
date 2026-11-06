@@ -101,23 +101,24 @@ def build_structure_tree(
 
     for row in rows:
         parts = split_section_path(row.section_path)
+        title = (row.section_title or "").strip()
         parent: str | None = None
         for index, part in enumerate(parts):
             name = SECTION_PATH_SEPARATOR.join(parts[: index + 1])
             parent = add(name, part, "section", parent)
-        if not parts and row.section_title:
-            parent = add(row.section_title, row.section_title, "section", None)
-        if not parts and not row.section_title:
+        if not parts and title:
+            parent = add(title, title, "section", None)
+        if not parts and not title:
             node_id = graph_body_node_id(chunk_set_id, knowledge_base_id)
             if node_id not in tree.nodes:
                 label = current_pack().text("search_labels", "body")
                 tree.nodes[node_id] = StructureTreeNode(node_id, label, label, "body", None)
                 tree.roots.append(node_id)
-        if row.content_kind in {"table", "figure"} and (parts or row.section_title):
-            label = row.section_title or SECTION_PATH_SEPARATOR.join(parts)
+        if row.content_kind in {"table", "figure"} and (parts or title):
+            label = title or SECTION_PATH_SEPARATOR.join(parts)
             add(
                 f"{label} ({row.content_kind})",
-                row.section_title or parts[-1],
+                title or parts[-1],
                 _entity_type_for_content_kind(row.content_kind),
                 parent,
             )

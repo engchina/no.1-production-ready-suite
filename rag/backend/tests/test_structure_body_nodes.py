@@ -297,3 +297,28 @@ async def test_body_search_is_not_a_short_alias_of_a_named_section() -> None:
 
     await StructureGraphStore(Oracle()).search("kb", "本文", offset=0, limit=25)
     assert "e.entity_type NOT IN ('document','body')" in calls[0]
+
+
+@pytest.mark.parametrize("title", [None, "", "   "])
+def test_empty_title_tree_and_saved_graph_keep_the_same_body_identity(title: str | None) -> None:
+    tree = build_structure_tree(
+        [StructureChunkRow(None, section_title=title)], chunk_set_id="set", knowledge_base_id="kb"
+    )
+    graph = build_graph_index(
+        document_id="doc",
+        knowledge_base_ids=["kb"],
+        extraction=StructuredExtraction(),
+        chunks=[
+            Chunk(
+                text="合成本文",
+                index=0,
+                start_offset=0,
+                end_offset=4,
+                metadata={"section_title": title},
+            )
+        ],
+        chunk_set_id="set",
+    )
+    body = _graph_id("body", "set", "kb")
+    assert list(tree.nodes) == [body]
+    assert [link.entity_id for link in graph.entity_chunk_links] == [body]
