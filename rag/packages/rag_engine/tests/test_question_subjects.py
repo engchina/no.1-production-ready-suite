@@ -41,12 +41,10 @@ EXTRACT = "QuestionMentionAnchors"
 ROLE = "QuestionEntityRoles"
 
 
-def mention(question: str, text: str, designation: str = "named", *, nth: int = 0) -> dict[str, str]:
-    """録画応答の 1 提及（``nth`` 番目の出現の位置 ID と、原文の写し）。"""
-    start = -1
-    for _ in range(nth + 1):
-        start = question.index(text, start + 1)
-    return {"start_id": f"C{start}", "text": text, "designation": designation}
+def mention(question: str, text: str, designation: str = "named", *, nth: int = 0) -> dict[str, Any]:
+    """録画応答の 1 提及（原文の写しと、その写しの ``nth`` 番目（0 から）の出現の順番）。"""
+    assert text in question
+    return {"text": text, "occurrence": nth + 1, "designation": designation}
 
 
 class Recorded:
@@ -83,24 +81,73 @@ def test_sentences_cover_the_question_and_keep_closers_with_the_sentence() -> No
 # ---------- 抽出の契約 ----------
 
 
-def test_extraction_schema_offers_only_this_question_position_ids() -> None:
+def test_extraction_input_is_the_question_and_the_schema_asks_for_text_occurrence_and_designation() -> None:
+    # 位置はコードが写しから決めるので、文字ごとの位置 ID は渡さない。
     prepared = prepare_extraction("装置ラムダ")
+    assert prepared == {"question": "装置ラムダ"}
     schema = extraction_model(prepared).model_json_schema()
     anchor = next(iter(schema["$defs"].values()))
-    assert anchor["properties"]["start_id"]["enum"] == ["C0", "C1", "C2", "C3", "C4"]
-    assert set(anchor["required"]) == {"start_id", "text", "designation"}
-    assert prepared["question_end_id"] == "C5"
+    assert set(anchor["properties"]) == set(anchor["required"]) == {"text", "occurrence", "designation"}
+    assert anchor["properties"]["occurrence"] == {
+        "description": anchor["properties"]["occurrence"]["description"],
+        "minimum": 1,
+        "title": "Occurrence",
+        "type": "integer",
+    }
 
 
-def test_text_not_at_start_id_is_rejected_without_snapping_to_another_occurrence() -> None:
-    question = "装置ラムダと装置ラムダの違いは？"
-    # 写しは原文の別の位置（C0）にあるが、start_id の位置（C1）には無い。最初の出現へ寄せない。
+def anchor(text: str, occurrence: int = 1) -> dict[str, Any]:
+    return {"text": text, "occurrence": occurrence, "designation": "named"}
+
+
+@pytest.mark.parametrize(
+    ("question", "text", "occurrence", "start"),
+    [
+        # 写しが 1 つだけ現れるなら、その位置（順番の値は位置を変えない）。
+        ("前提の後に装置ラムダの手順は？", "装置ラムダ", 1, 5),
+        ("前提の後に装置ラムダの手順は？", "装置ラムダ", 2, 5),
+        # 同じ写しが複数現れるなら、occurrence 番目の出現。
+        ("装置ラムダと装置ラムダの違いは？", "装置ラムダ", 1, 0),
+        ("装置ラムダと装置ラムダの違いは？", "装置ラムダ", 2, 6),
+        # 重なる出現も先頭から 1 つずつ数える。
+        ("ガガガの手順は？", "ガガ", 2, 1),
+    ],
+    ids=["unique", "unique-occurrence-ignored", "repeated-first", "repeated-second", "overlapping"],
+)
+def test_code_resolves_the_position_from_exact_occurrences_of_the_text(question: str, text: str, occurrence: int, start: int) -> None:
+    rows = project_extraction(question, {"mentions": [anchor(text, occurrence)]})
+    assert rows == [{"start": start, "end": start + len(text), "text": text, "designation": "named"}]
+    assert question[start : start + len(text)] == text
+
+
+@pytest.mark.parametrize(
+    ("question", "text", "occurrence", "code"),
+    [
+        ("装置ラムダと装置ラムダの違いは？", "装置ラムダ", 3, "occurrence_out_of_range"),
+        # 写しが一字でも違えば、近い表記・部分への寄せをせず失敗にする。
+        ("装置ラムダの手順は？", "装置ラムタ", 1, "text_not_in_question"),
+        ("装置ラムダの手順は？", "装置 ラムダ", 1, "text_not_in_question"),
+    ],
+    ids=["out-of-range", "absent", "absent-with-space"],
+)
+def test_text_absent_or_occurrence_out_of_range_fails_without_snapping(question: str, text: str, occurrence: int, code: str) -> None:
     with pytest.raises(QuestionSubjectError) as caught:
-        project_extraction(question, {"mentions": [{"start_id": "C1", "text": "装置ラムダ", "designation": "named"}]})
-    assert caught.value.code == "text_not_at_start_id"
-    subjects, parse = extract(question, {EXTRACT: {"mentions": [{"start_id": "C1", "text": "装置ラムダ", "designation": "named"}]}})
-    assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_FAILED, "text_not_at_start_id", 1)
+        project_extraction(question, {"mentions": [anchor(text, occurrence)]})
+    assert caught.value.code == code
+    subjects, parse = extract(question, {EXTRACT: {"mentions": [anchor(text, occurrence)]}})
+    assert (subjects.status, subjects.failure, subjects.calls) == (STATUS_FAILED, code, 1)
     assert [name for _, _, name in parse.calls] == [EXTRACT]
+
+
+def test_two_mentions_resolving_to_the_same_range_fail() -> None:
+    with pytest.raises(QuestionSubjectError) as caught:
+        project_extraction("装置ラムダの手順は？", {"mentions": [anchor("装置ラムダ", 1), anchor("装置ラムダ", 2)]})
+    assert caught.value.code == "exact_duplicate_range"
+
+
+def test_occurrence_below_one_is_rejected_by_the_schema() -> None:
+    subjects, _ = extract("装置ラムダの手順は？", {EXTRACT: {"mentions": [anchor("装置ラムダ", 0)]}})
+    assert (subjects.status, subjects.failure) == (STATUS_FAILED, "ValidationError")
 
 
 @pytest.mark.parametrize(
@@ -153,6 +200,20 @@ def test_trim_merges_same_range_and_rejects_conflicting_designation() -> None:
     assert caught.value.code == "conflicting_designation_after_trim"
 
 
+def test_repeated_wrapped_mention_is_resolved_by_occurrence_then_trimmed() -> None:
+    question = "『装置ラムダ』は停止中です。『装置ラムダ』の再開手順は？"
+    subjects, parse = extract(
+        question,
+        {
+            EXTRACT: {"mentions": [mention(question, "『装置ラムダ』", nth=1)]},
+            ROLE: {"entities": [{"entity_id": "N1", "roles": ["asked"]}]},
+        },
+    )
+    assert subjects.status == STATUS_COMPLETED
+    assert [(m.start, m.end, m.text, m.sentence_id) for m in subjects.mentions] == [(15, 20, "装置ラムダ", "S2")]
+    assert parse.calls[1][1]["entities"] == [{"entity_id": "N1", "start": 15, "end": 20, "text": "装置ラムダ", "sentence_id": "S2"}]
+
+
 def test_wrapped_mention_reaches_the_role_stage_without_brackets() -> None:
     question = "『手順デルタ』の実行条件は？"
     subjects, parse = extract(
@@ -184,7 +245,7 @@ def test_repeated_name_at_two_positions_keeps_distinct_spans_and_roles() -> None
     ]
     (extract_system, extract_input, _), (role_system, role_input, _) = parse.calls
     assert extract_system == SUBJECT_EXTRACTION_PROMPT and role_system == SUBJECT_ROLE_PROMPT
-    assert extract_input["characters"][13] == {"id": "C13", "char": "装"}
+    assert extract_input == {"question": question}
     # 段の間はコードが確定した位置と文の ID だけを渡す。文はコードが区切る。
     assert role_input["sentences"] == [
         {"sentence_id": "S1", "text": "装置ラムダを導入しました。"},
@@ -394,11 +455,11 @@ def test_gap_written_by_the_model_is_not_repeated() -> None:
     ("subjects", "inject", "calls"),
     [
         ({EXTRACT: {"mentions": []}}, True, [EXTRACT]),
-        ({EXTRACT: {"mentions": [{"start_id": "C0", "text": "ServiceX", "designation": "named"}]}}, True, [EXTRACT]),
+        ({EXTRACT: {"mentions": [{"text": "ServiceY", "occurrence": 1, "designation": "named"}]}}, True, [EXTRACT]),
         ({EXTRACT: SUBJECTS[EXTRACT], ROLE: {"entities": [{"entity_id": "N1", "roles": ["given"]}]}}, True, [EXTRACT, ROLE]),
         (SUBJECTS, False, []),
     ],
-    ids=["no-named-mention", "text-not-at-start-id", "given-only", "not-injected"],
+    ids=["no-named-mention", "text-not-in-question", "given-only", "not-injected"],
 )
 def test_no_check_without_a_confirmed_asked_name(subjects: dict[str, Any], inject: bool, calls: list[str]) -> None:
     result, prompts, subject_calls = answer(draft(LEAP), subjects=subjects, inject=inject)
@@ -444,6 +505,34 @@ _TUNING_DIGESTS = {
     35: {"c5a632d892cf2ba83c77dab85d76f3f0bf2d2eed2ab93f28015fffd4fc0da418"},
     42: {"72b06d0570bd67885849f907669dd054a98236f82a1226613e4cb217658d7fe1"},
 }
+# 契約の確認に使う未知の合成の質問と、その名前の sha256（調整に使わない評価の組。コード・指示・fixture へ漏らさない）。
+_UNSEEN_DIGESTS = {
+    5: {
+        "1304cd276bd8dfff82cb80f51c52d9d9371dcc38c47c19ae15a7fd6f862693a4",
+        "4facc826062ce9c5b2b867c19e23f78967cc97aedeab24a9de36a079ccbbb95a",
+        "94f662f328bdf8eeb5c3a1570a5f6ea9340469dd286c246d833792565f3c5965",
+        "bfeabd8b4d2267341f8cc2ae6185ce2d92984f07712a3857566133267d7af5a3",
+        "c4dc97c43831caecc021d54a8bc8cd9e155482c7db50b1b1d687e279aef903a1",
+        "ed9fc8cbe367a5133c1d76ebcdf05e994b5817f281a22247d518f0c7d41681ea",
+    },
+    6: {
+        "ab1a49a5eea3334ea4d8a128cb51c39c9df9b6cd0a756559ceb38e62841561d4",
+        "e9a8de2fcee9c284dd6855bf2191911e60cac0bdca3d61af8373ea87231e835f",
+        "eef5d26290862f12272246d2aff070c445f2500bcbce0b6498f83b6b96a21d88",
+    },
+    21: {"173d67c99ee9434a81128378fb24cbb65879c0f13b194b5679a738813ce1499a"},
+    22: {"2464ca0dbc33317dbf3f580ec1664c56029805353b8236b728100c0c830aaada"},
+    25: {"26f039a9c360c62697c580af4aa61ffd83fbf4573ae6211dfbd86db0214f6b99"},
+    34: {
+        "7d5e6cf705c0900fbdadd1ea9e351b57b6f40bc74ed76a5dbd8a0efaa215bcd6",
+        "d23e2fc589f69f4a90cbc9aa3dbd0797c58182b87f9566ff82c43df8cf309261",
+        "dd3b5e85b55ccaf5f2314ef11c042efd0e280101dc54ca837f8b02f9755dff11",
+    },
+    36: {"ed803dfbc5f777fdc208e503ee12d3322d5d8130ce0adbd12540294d85e7d259"},
+}
+_EXPERIMENT_DIGESTS = {
+    length: _TUNING_DIGESTS.get(length, set()) | _UNSEEN_DIGESTS.get(length, set()) for length in {*_TUNING_DIGESTS, *_UNSEEN_DIGESTS}
+}
 _ENGINE = Path(__file__).resolve().parents[1]
 _SCANNED = (
     _ENGINE / "rag_engine" / "generation" / "question_subjects.py",
@@ -459,7 +548,10 @@ _SCANNED = (
 
 
 def _tuning_strings_in(text: str) -> list[str]:
-    """``text`` の中で、調整に使った質問・名前と hash が一致する部分（いずれも ASCII を含まないので、非 ASCII の連なりだけを見る）。"""
+    """``text`` の中で、調整・未知の評価に使った質問・名前と hash が一致する部分。
+
+    いずれも ASCII を含まないので、非 ASCII の連なりだけを見る。
+    """
     found: list[str] = []
     run: list[str] = []
     for char in [*text, "\n"]:
@@ -467,7 +559,7 @@ def _tuning_strings_in(text: str) -> list[str]:
             run.append(char)
             continue
         joined = "".join(run)
-        for length, digests in _TUNING_DIGESTS.items():
+        for length, digests in _EXPERIMENT_DIGESTS.items():
             for start in range(len(joined) - length + 1):
                 window = joined[start : start + length]
                 if hashlib.sha256(window.encode("utf-8")).hexdigest() in digests:
@@ -477,7 +569,7 @@ def _tuning_strings_in(text: str) -> list[str]:
 
 
 def test_no_tuning_question_or_name_in_code_prompts_or_fixtures() -> None:
-    """契約の調整に使った質問・名前を、製品のコード・指示・テストの fixture に書かない（ハードコードしない）。"""
+    """契約の調整と未知の評価に使った質問・名前を、製品のコード・指示・テストの fixture に書かない（ハードコードしない）。"""
     texts = {str(path.relative_to(_ENGINE.parent)): path.read_text(encoding="utf-8") for path in _SCANNED}
     texts["SUBJECT_EXTRACTION_PROMPT"] = SUBJECT_EXTRACTION_PROMPT
     texts["SUBJECT_ROLE_PROMPT"] = SUBJECT_ROLE_PROMPT

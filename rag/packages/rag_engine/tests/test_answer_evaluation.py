@@ -1440,7 +1440,7 @@ def test_claim_judgement_has_no_subject_fields():
 
 
 ASKED_SUBJECTS = {
-    "QuestionMentionAnchors": {"mentions": [{"start_id": "C0", "text": "ServiceX", "designation": "named"}]},
+    "QuestionMentionAnchors": {"mentions": [{"text": "ServiceX", "occurrence": 1, "designation": "named"}]},
     "QuestionEntityRoles": {"entities": [{"entity_id": "N1", "roles": ["asked"]}]},
 }
 
@@ -1471,7 +1471,7 @@ def test_question_name_check_lowers_claim_support_through_the_evaluation():
     # 評価にも同じ 2 段の契約（抽出 → 文の区切りつきの役割）を使う。
     (extract_name, extract_input), (role_name, role_input) = subject_calls
     assert (extract_name, role_name) == ("QuestionMentionAnchors", "QuestionEntityRoles")
-    assert extract_input["characters"][0] == {"id": "C0", "char": "S"}
+    assert extract_input == {"question": SUBJECT_QUESTION}
     assert role_input["sentences"] == [{"sentence_id": "S1", "text": SUBJECT_QUESTION}]
     assert result["judge_diagnostics"]["question_subjects"] == {
         "status": "completed",
@@ -1482,7 +1482,7 @@ def test_question_name_check_lowers_claim_support_through_the_evaluation():
 
 
 def test_failed_subject_extraction_keeps_the_verdict_and_records_the_failure():
-    rejected = {"QuestionMentionAnchors": {"mentions": [{"start_id": "C1", "text": "ServiceX", "designation": "named"}]}}
+    rejected = {"QuestionMentionAnchors": {"mentions": [{"text": "ServiceY", "occurrence": 1, "designation": "named"}]}}
     result, subject_calls = _subject_evaluation(rejected)
     assert result["status"] == "completed"
     assert result["claim_checks"][0]["status"] == "supported"
@@ -1491,7 +1491,7 @@ def test_failed_subject_extraction_keeps_the_verdict_and_records_the_failure():
         "status": "failed",
         "calls": 1,
         "named_mentions": 0,
-        "failure": "text_not_at_start_id",
+        "failure": "text_not_in_question",
     }
 
 
