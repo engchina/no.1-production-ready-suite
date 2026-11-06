@@ -99,13 +99,14 @@ def test_parse_with_corrupt_models_fails_without_repairing(downloads: list[str])
 
 
 def test_health_is_degraded_until_models_are_deployed(downloads: list[str]) -> None:
-    client = TestClient(app)
-    assert client.get("/health").json()["status"] == "degraded"
+    # 起動(lifespan)の検証も取得しない。
+    with TestClient(app) as client:
+        assert client.get("/health").json()["status"] == "degraded"
 
-    models = docling_settings.cache_dir / "models"
-    weights = _hf_file(models, "model.safetensors", b"synthetic-weights")
-    assert client.get("/health").json()["status"] == "ok"
+        models = docling_settings.cache_dir / "models"
+        weights = _hf_file(models, "model.safetensors", b"synthetic-weights")
+        assert client.get("/health").json()["status"] == "ok"
 
-    weights.write_bytes(b"corrupt-weights!")
-    assert client.get("/health").json()["status"] == "degraded"
+        weights.write_bytes(b"corrupt-weights!")
+        assert client.get("/health").json()["status"] == "degraded"
     assert downloads == []

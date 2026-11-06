@@ -14,6 +14,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -30,8 +33,23 @@ _BACKEND = "docling"
 # 取込の worker が付ける進捗の id(#1999)。パスの一部に使うため形を絞る。
 _PROGRESS_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 logger = logging.getLogger(__name__)
+
+
+def _models_ready() -> bool:
+    return docling_models_ready(get_settings(dotenv_path=None))
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # モデルの検証(1 GB 余りのハッシュの計算)を起動の直後に始め、/health と最初の解析を待たせない。
+    threading.Thread(target=_models_ready, name="docling-model-check", daemon=True).start()
+    yield
+
+
 # API ドキュメント（/docs・/redoc・/openapi.json）は公開しない（#748）。
-app = FastAPI(title="parser-docling", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(
+    title="parser-docling", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan
+)
 
 
 @app.get("/health", response_model=ParseHealth)
@@ -44,10 +62,6 @@ async def health() -> ParseHealth:
         package_name="docling",
         package_version=version,
     )
-
-
-def _models_ready() -> bool:
-    return docling_models_ready(get_settings(dotenv_path=None))
 
 
 @app.get("/api/ready", response_model=ParseHealth)
