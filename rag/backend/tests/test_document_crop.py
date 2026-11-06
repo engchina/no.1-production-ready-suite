@@ -420,11 +420,9 @@ async def test_load_parsed_source_uses_recipe_prepared_artifact(
     with pytest.raises(document_crop.DocumentSourceNotFoundError, match="処理レシピ"):
         await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
     assert read == ["docs/doc-1/recipe-1/prepared.pdf"]
-    await document_crop.load_parsed_source(oracle, "doc-1")
-    assert read == [
-        "docs/doc-1/recipe-1/prepared.pdf",
-        document_artifact_path or "docs/doc-1/source.docx",
-    ]
+    with pytest.raises(document_crop.VersionSourceUnknownError):
+        await document_crop.load_parsed_source(oracle, "doc-1")
+    assert read == ["docs/doc-1/recipe-1/prepared.pdf"]
     with pytest.raises(document_crop.DocumentSourceNotFoundError):
         await document_crop.load_parsed_source(oracle, "doc-2", "recipe-1")
 
