@@ -1,33 +1,30 @@
-"""Docling のモデルを配布元のハッシュで検証し、原子的に修復する。"""
+"""Docling のモデルを配布元のハッシュで検証し、原子的に修復する。
+
+取得と修復は配備（このモジュールの main。``rag_service_model_command``）だけが行う。解析の要求の時は
+``check_docling_cache`` で検証だけを行い、取得・修復はしない（#4557）。
+"""
 
 from __future__ import annotations
 
 import argparse
-import fcntl
-import hashlib
 import logging
-import os
-import random
-import shutil
 import subprocess
 import sys
-import tempfile
-import time
-from dataclasses import dataclass
-from http.client import IncompleteRead
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import urlopen
+
+# 検証・原子的な取得の手順は parser-unstructured と共有する（rag_parser_core.model_integrity）。
+from rag_parser_core.model_integrity import ModelArtifact, ModelsNotDeployedError
+from rag_parser_core.model_integrity import verify_files as _verify_files
 
 logger = logging.getLogger(__name__)
 
+_REDEPLOY = "解析の要求の時にはモデルを取得しません。parser-docling を配備し直してください。"
 
-@dataclass(frozen=True)
-class ModelArtifact:
-    name: str
-    url: str
-    digest: str
-    hash_kind: str = "sha256"
+# 解析の要求の時の検証の結果（キャッシュの場所と OCR の有無 → ファイルの一覧・大きさ・更新時刻と、失敗の文）。
+_checked: dict[tuple[Path, bool], tuple[tuple[tuple[str, int, int], ...], str | None]] = {}
+_checked_lock = threading.Lock()
 
 
 def _registered_models() -> dict[str, list[ModelArtifact]]:
@@ -53,67 +50,6 @@ def _registered_models() -> dict[str, list[ModelArtifact]]:
 
     visit(OmegaConf.to_container(InferSession.model_info, resolve=True))
     return result
-
-
-def _digest(path: Path, hash_kind: str = "sha256") -> str:
-    try:
-        with path.open("rb") as stream:
-            if hash_kind == "git-sha1":
-                digest = hashlib.sha1(usedforsecurity=False)
-                digest.update(f"blob {path.stat().st_size}\0".encode())
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                return digest.hexdigest()
-            return hashlib.file_digest(stream, "sha256").hexdigest()
-    except FileNotFoundError:
-        return ""
-
-
-def _replace_verified(path: Path, spec: ModelArtifact) -> None:
-    for attempt in range(3):
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".part", delete=False) as output:
-                temporary = Path(output.name)
-                with urlopen(spec.url, timeout=60) as response:  # noqa: S310 - 導入済み registry の HTTPS URL のみ
-                    shutil.copyfileobj(response, output, length=1024 * 1024)
-                output.flush()
-                os.fsync(output.fileno())
-            if _digest(temporary, spec.hash_kind) != spec.digest:
-                raise ValueError("ダウンロードした モデルの SHA-256 が一致しません。")
-            os.replace(temporary, path)
-            logger.info("モデルの検証と修復が完了しました: %s", path.name)
-            return
-        except (OSError, ValueError, IncompleteRead) as exc:
-            if attempt == 2:
-                raise RuntimeError(f"モデルの修復に失敗しました: {path.name}。モデル取得先への接続と保存先を確認してください。") from exc
-            delay = 2**attempt
-            time.sleep(delay + random.uniform(0, delay))
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-
-
-def _verify_files(entries: list[tuple[Path, list[ModelArtifact]]], lock_path: Path, *, repair: bool) -> list[str]:
-    repaired: list[str] = []
-    for path, specs in entries:
-        if not specs or any(_digest(path, spec.hash_kind) == spec.digest for spec in specs):
-            continue
-        if not repair:
-            raise RuntimeError(f"モデルのハッシュが一致しません: {path.name}。モデル取得処理を再実行してください。")
-        if len(specs) != 1:
-            raise RuntimeError(f"モデルの取得先を一意に決定できません: {path.name}")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # 同時修復を直列化し、検証済みのファイルだけを公開する。
-        with lock_path.open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            if _digest(path, specs[0].hash_kind) == specs[0].digest:
-                continue
-            logger.warning("モデルの破損または欠落を検出しました: %s", path.name)
-            _replace_verified(path, specs[0])
-            repaired.append(specs[0].name)
-    logger.info("モデルのハッシュ検証が完了しました: %s files", len(entries))
-    return repaired
 
 
 def verify_rapidocr_cache(model_dir: Path, *, repair: bool = True) -> list[str]:
@@ -173,6 +109,43 @@ def verify_docling_cache(model_root: Path, *, repair: bool = True, include_ocr: 
         entries = _hf_entries(repo)
         repaired.extend(_verify_files(entries, repo / ".integrity.lock", repair=repair))
     return repaired
+
+
+def _cache_fingerprint(model_root: Path) -> tuple[tuple[str, int, int], ...]:
+    entries = []
+    for path in model_root.rglob("*"):
+        if path.is_file():
+            stat = path.stat()
+            entries.append((path.relative_to(model_root).as_posix(), stat.st_size, stat.st_mtime_ns))
+    return tuple(sorted(entries))
+
+
+def check_docling_cache(model_root: Path, *, include_ocr: bool = True) -> None:
+    """解析の要求の時の検証。取得・修復はせず、無い・壊れているなら配備のやり直しを案内して失敗する。
+
+    ハッシュの計算は重いので、ファイルの一覧・大きさ・更新時刻が前回の検証から変わっていなければ
+    前回の結果を使う（converter の作成と /health が同じ結果を共有する）。
+    """
+    try:
+        if not model_root.is_dir() or not any(model_root.iterdir()):
+            raise ModelsNotDeployedError(f"Docling のモデルがありません。{_REDEPLOY}")
+        fingerprint = _cache_fingerprint(model_root)
+    except OSError as exc:
+        raise ModelsNotDeployedError(f"Docling のモデルを読めません。{_REDEPLOY}") from exc
+    key = (model_root.resolve(), include_ocr)
+    with _checked_lock:
+        cached = _checked.get(key)
+        if cached is None or cached[0] != fingerprint:
+            try:
+                verify_docling_cache(model_root, repair=False, include_ocr=include_ocr)
+                failure = None
+            except RuntimeError as exc:
+                failure = f"Docling のモデルを検証できません（{exc}）。{_REDEPLOY}"
+            except OSError as exc:  # 文に path が入るため、利用者に見せる文には型名だけを書く。
+                failure = f"Docling のモデルを読めません（{type(exc).__name__}）。{_REDEPLOY}"
+            cached = _checked[key] = (fingerprint, failure)
+    if cached[1] is not None:
+        raise ModelsNotDeployedError(cached[1])
 
 
 def main() -> None:

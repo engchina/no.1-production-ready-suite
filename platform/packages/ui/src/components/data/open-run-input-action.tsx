@@ -15,7 +15,7 @@ import { ButtonLink, type ButtonLinkComponent } from "../ui/button-link";
 export interface OpenRunInputActionLabels {
   /** ボタンの文言（例「RAG 検索で開く」「SQL 生成で開く」）。 */
   label: string;
-  /** 読み上げ名（例「この実行の質問と条件を RAG 検索の画面に入れて開く」）。 */
+  /** 読み上げ名（例「RAG 検索で開く（この実行の質問と条件を入れる）」）。見えている文言 `label` で始める（WCAG 2.5.3。#4558）。 */
   ariaLabel: string;
 }
 

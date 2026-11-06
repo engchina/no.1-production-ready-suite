@@ -1,3 +1,5 @@
+import AxeBuilder from "@axe-core/playwright";
+
 import { expect, test, type Page } from "./fixtures/test";
 import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 import { t } from "../src/lib/i18n";
@@ -274,6 +276,39 @@ test("言語資源は使い道の組と節の 2 段のタブで開き、項目�
   await expectNoPageOverflow(page);
 });
 
+
+// #4560: 2 段のタブ（使い道の組・節）は、選んだタブの aria-controls が描いた tabpanel を指し、panel は tab を名前にする。
+test("言語資源の 2 段のタブは選んだタブが指す tabpanel を描く（#4560）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const fields = [
+    ...FIELDS,
+    { section: "search_terms", key: "stopwords", kind: "words", choices: [], ingest: false, max_chars: 40 },
+  ];
+  const builtin = { ...BUILTIN, search_terms: { stopwords: ["合成の語"] } };
+  await mockLanguagePack(page, builtin);
+  await page.route("**/api/settings/language-pack", (route) =>
+    route.fulfill({ json: envelope({ fields, builtin, overrides: {}, effective: builtin, hash: "a" }) }),
+  );
+  await page.goto("/settings/language-pack");
+  const expectPanels = async () => {
+    for (const name of ["言語資源の使い道", "言語資源"]) {
+      const selected = page.getByRole("tablist", { name, exact: true }).getByRole("tab", { selected: true });
+      const panelId = await selected.getAttribute("aria-controls");
+      const panel = page.locator(`[id="${panelId}"]`);
+      await expect(panel, `${name} の選んだタブの panel`).toHaveAttribute("role", "tabpanel");
+      await expect(panel).toHaveAttribute("aria-labelledby", (await selected.getAttribute("id"))!);
+    }
+    // 下の段（節のタブと項目）は上の段の panel の中にある。
+    await expect(page.getByRole("tabpanel", { name: /^(文書を読む|質問を読む)$/ }).getByRole("tablist", { name: "言語資源", exact: true })).toBeVisible();
+    const axe = await new AxeBuilder({ page }).withRules(["aria-valid-attr-value"]).analyze();
+    expect(axe.violations.map((violation) => violation.id)).toEqual([]);
+  };
+  await expectPanels();
+  await page.getByRole("tablist", { name: "言語資源の使い道" }).getByRole("tab", { name: "質問を読む" }).click();
+  await expectPanels();
+  await expect(page.getByLabel("止め語", { exact: true })).toHaveValue("合成の語");
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("language-pack-tab-panels.png"), fullPage: true });
+});
 
 test("言語資源のゼロ倍率は欄で拒否し、正しい倍率だけを保存する", { tag: "@responsive" }, async ({ page }) => {
   const { saved } = await mockLanguagePack(page);

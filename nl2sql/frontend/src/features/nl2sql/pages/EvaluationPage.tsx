@@ -14,6 +14,7 @@ import {
   FormGrid,
   FormStatus,
   PageBody,
+  Section,
   useConfirm,
   BulkSelectionActions,
   ProcessingIndicator,
@@ -32,11 +33,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useValuesChanged } from "@/lib/render-sync";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3,
-  CheckCircle2,
   CircleStop,
   Download,
-  FileSpreadsheet,
   Play,
   Trash2,
 } from "lucide-react";
@@ -87,6 +85,7 @@ const TERMINAL_STATUSES = new Set<QualityEvaluationStatus>([
   "cancelled",
 ]);
 const ACTIVE_STATUSES = new Set<QualityEvaluationStatus>(["pending", "running"]);
+// 節は共有の Section（見出し・説明・右の操作。見出しの横に印を置かない。#4558）を、カードの面にして並べる。
 const sectionClass = "grid min-w-0 gap-5 rounded-lg border border-border bg-surface p-4 shadow-sm lg:p-5";
 
 /** 「評価を開始」の aria-describedby が指す、Select AI の Credential の事前条件（#1688）。 */
@@ -427,13 +426,12 @@ export function EvaluationPage() {
           />
         ) : null}
 
-        <section className={sectionClass} aria-labelledby="quality-evaluation-conditions">
-          <SectionHeader
-            icon={FileSpreadsheet}
-            id="quality-evaluation-conditions"
-            title={t("qualityEvaluation.conditions.title")}
-            description={t("qualityEvaluation.conditions.description")}
-          />
+        <Section
+          className={sectionClass}
+          titleId="quality-evaluation-conditions"
+          title={t("qualityEvaluation.conditions.title")}
+          description={t("qualityEvaluation.conditions.description")}
+        >
           {pageLoading ? (
             // 読み込み中は条件のフォームの形の Skeleton で領域を予約する（messaging.md §3.6）。
             <TimedLoadingState
@@ -733,16 +731,15 @@ export function EvaluationPage() {
               </div>
             </form>
           )}
-        </section>
+        </Section>
 
         <div className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-start lg:gap-6">
-          <section className={sectionClass} aria-labelledby="quality-evaluation-progress">
-            <SectionHeader
-              icon={Play}
-              id="quality-evaluation-progress"
-              title={t("qualityEvaluation.progress.title")}
-              description={t("qualityEvaluation.progress.description")}
-            />
+          <Section
+            className={sectionClass}
+            titleId="quality-evaluation-progress"
+            title={t("qualityEvaluation.progress.title")}
+            description={t("qualityEvaluation.progress.description")}
+          >
             <div>
               {!currentJobId ? (
                 <EmptyState
@@ -775,36 +772,35 @@ export function EvaluationPage() {
                 />
               )}
             </div>
-          </section>
+          </Section>
 
-          <section className={sectionClass} aria-labelledby="quality-evaluation-summary">
-            <SectionHeader
-              icon={BarChart3}
-              id="quality-evaluation-summary"
-              title={t("qualityEvaluation.summary.title")}
-              description={t("qualityEvaluation.summary.description")}
-              action={
-                currentJob && TERMINAL_STATUSES.has(currentJob.status) ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    loading={downloading === "results"}
-                    disabled={downloading === "template"}
-                    onClick={() =>
-                      void downloadFile(
-                        `/api/nl2sql/quality-evaluations/${encodeURIComponent(
-                          currentJob.job_id
-                        )}/results.xlsx`,
-                        "nl2sql_quality_evaluation.xlsx",
-                        "results"
-                      )
-                    } icon={Download}>
-                    {t("qualityEvaluation.action.download")}
-                  </Button>
-                ) : null
-              }
-            />
+          <Section
+            className={sectionClass}
+            titleId="quality-evaluation-summary"
+            title={t("qualityEvaluation.summary.title")}
+            description={t("qualityEvaluation.summary.description")}
+            actions={
+              currentJob && TERMINAL_STATUSES.has(currentJob.status) ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  icon={Download}
+                  loading={downloading === "results"}
+                  disabled={downloading === "template"}
+                  onClick={() =>
+                    void downloadFile(
+                      `/api/nl2sql/quality-evaluations/${encodeURIComponent(currentJob.job_id)}/results.xlsx`,
+                      "nl2sql_quality_evaluation.xlsx",
+                      "results"
+                    )
+                  }
+                >
+                  {t("qualityEvaluation.action.download")}
+                </Button>
+              ) : null
+            }
+          >
             {downloading === "results" ? (
               // 結果の Excel は件数に比例して生成に数秒以上かかる。スピナーはボタンの loading が担う。
               <ProcessingIndicator
@@ -838,16 +834,15 @@ export function EvaluationPage() {
                 </div>
               )}
             </div>
-          </section>
+          </Section>
         </div>
 
-        <section className={sectionClass} aria-labelledby="quality-evaluation-details">
-          <SectionHeader
-            icon={CheckCircle2}
-            id="quality-evaluation-details"
-            title={t("qualityEvaluation.details.title")}
-            description={t("qualityEvaluation.details.description")}
-          />
+        <Section
+          className={sectionClass}
+          titleId="quality-evaluation-details"
+          title={t("qualityEvaluation.details.title")}
+          description={t("qualityEvaluation.details.description")}
+        >
           {/* グリッドの子の最小幅を 0 にし、結果表（min-w 74rem）が枠と Pagination を横へ押し出さないようにする。 */}
           <div className="min-w-0">
             {!currentJob || !TERMINAL_STATUSES.has(currentJob.status) ? (
@@ -902,15 +897,14 @@ export function EvaluationPage() {
               </div>
             )}
           </div>
-        </section>
+        </Section>
 
-        <section className={sectionClass} aria-labelledby="quality-evaluation-recent">
-          <SectionHeader
-            icon={FileSpreadsheet}
-            id="quality-evaluation-recent"
-            title={t("qualityEvaluation.recent.title")}
-            description={t("qualityEvaluation.recent.description")}
-          />
+        <Section
+          className={sectionClass}
+          titleId="quality-evaluation-recent"
+          title={t("qualityEvaluation.recent.title")}
+          description={t("qualityEvaluation.recent.description")}
+        >
           {jobActionError?.origin === "recent" ? (
             <ApiErrorBanner
               error={jobActionError.error}
@@ -1049,45 +1043,9 @@ export function EvaluationPage() {
               </div>
             )}
           </div>
-        </section>
+        </Section>
       </PageBody>
     </>
-  );
-}
-
-function SectionHeader({
-  icon: Icon,
-  id,
-  title,
-  description,
-  action,
-}: {
-  icon: typeof FileSpreadsheet;
-  id: string;
-  title: string;
-  description: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div className="flex min-w-0 items-start gap-3">
-        {/* 見出しと説明の 2 行のまとまりの横の印の箱（文字の 1 行目にそろえる規則の例外。#2371）。 */}
-        <span
-          data-surface-tint="accent"
-          data-icon-align-skip=""
-          className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-subtle text-accent-fg"
-        >
-          <Icon className="size-5" aria-hidden="true" />
-        </span>
-        <div className="min-w-0">
-          <h2 id={id} className="text-base font-semibold text-fg">
-            {title}
-          </h2>
-          <p className="mt-1 text-sm leading-6 text-fg-muted">{description}</p>
-        </div>
-      </div>
-      {action ? <div className="shrink-0">{action}</div> : null}
-    </div>
   );
 }
 

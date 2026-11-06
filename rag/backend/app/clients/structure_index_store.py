@@ -163,9 +163,11 @@ class StructureIndexStore:
         return await self.oracle._run_transaction(operation)
 
     async def builds(self, kb_id: str) -> dict[str, dict[str, Any]]:
+        """文書ごとの構築記録。構築器の版（``builder_version``）が無い旧い記録は None。"""
         rows = await self.oracle._fetch_all(
-            """SELECT document_id,source_fingerprint,quality FROM rag_structure_index_builds
-            WHERE knowledge_base_id=:id""",
+            """SELECT document_id,source_fingerprint,quality,
+            JSON_VALUE(result_json,'$.builder_version') AS builder_version
+            FROM rag_structure_index_builds WHERE knowledge_base_id=:id""",
             {"id": kb_id},
         )
         return {str(row["document_id"]): dict(row) for row in rows}

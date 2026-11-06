@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from app.clients.oracle import KnowledgeBaseConfig
 from app.rag.structure_index import (
     rebuild_document_structure_index,
     structure_index_enabled,
@@ -13,7 +14,6 @@ from app.rag.structure_index import (
 )
 from app.schemas.document import DocumentDetail, FileStatus
 from app.schemas.knowledge_base import (
-    KnowledgeBaseDetail,
     KnowledgeBaseStatus,
     KnowledgeBaseStructureIndexUpdate,
 )
@@ -60,14 +60,8 @@ class SavedOracle:
         ]
         self.saved: list[Any] = []
 
-    async def get_knowledge_base(self, kb_id: str) -> KnowledgeBaseDetail:
-        return KnowledgeBaseDetail(
-            id=kb_id,
-            name="合成KB",
-            status=KnowledgeBaseStatus.ACTIVE,
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
+    async def knowledge_base_is_visible(self, kb_id: str) -> bool:
+        return True
 
     async def get_document_summary(self, document_id: str) -> DocumentDetail:
         return DocumentDetail(
@@ -154,16 +148,11 @@ def test_api_persists_nullable_override_and_rejects_other_fields(
         def __init__(self) -> None:
             self.config: dict[str, object] = {"unrelated": "preserved"}
 
-        async def get_knowledge_base(self, kb_id: str) -> KnowledgeBaseDetail | None:
+        async def get_knowledge_base_config(self, kb_id: str) -> KnowledgeBaseConfig | None:
             if kb_id != "a":
                 return None
-            return KnowledgeBaseDetail(
-                id=kb_id,
-                name="合成KB",
-                status=KnowledgeBaseStatus.ACTIVE,
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-                retrieval_config=self.config,
+            return KnowledgeBaseConfig(
+                id=kb_id, status=KnowledgeBaseStatus.ACTIVE, retrieval_config=self.config
             )
 
         async def set_knowledge_base_structure_index(

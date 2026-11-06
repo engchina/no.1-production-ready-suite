@@ -89,7 +89,7 @@ async def test_current_snapshot_is_derived_from_live_chunk_sets_and_saved_build(
         enabled = True
         sqls: list[tuple[str, Any]] = []
 
-        async def get_knowledge_base(self, _kb: str) -> Any:
+        async def get_knowledge_base_config(self, _kb: str) -> Any:
             return SimpleNamespace(retrieval_config={"structure_index_enabled": self.enabled})
 
         async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
@@ -151,8 +151,8 @@ async def test_job_endpoint_enriches_only_currently_visible_items(
     }
 
     class Oracle:
-        async def get_knowledge_base(self, _kb: str) -> object:
-            return object()
+        async def knowledge_base_is_visible(self, _kb: str) -> bool:
+            return True
 
     class Store:
         def __init__(self, _oracle: Any) -> None:

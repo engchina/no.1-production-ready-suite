@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, type Locator, type Page, type Route, test } from "./fixtures/test";
-import { findClippedPlaceholders } from "../../../platform/packages/ui/e2e/layout-checks";
+import { findClippedPlaceholders, findToolbarMisalignment } from "../../../platform/packages/ui/e2e/layout-checks";
 import { expectNoPageOverflow, expectSearchablePanelFits, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 
 // 業務ガイド（#1237）: 検索・回答プロファイルの知識の「業務ガイド」タブ。
@@ -598,6 +598,16 @@ function publishedGuide(): Guide {
     ],
   };
 }
+
+// #4560: 一覧のツールバーの 1 行の部品（絞り込みのチップと操作のボタン）は同じ高さ（md）で縦の中心がそろう。
+test("業務ガイドの一覧のツールバーはチップとボタンが同じ高さで並ぶ（#4560）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await openSupportGuides(page);
+  const toolbar = page.getByTestId("support-guides-toolbar");
+  await expect(toolbar.getByRole("button", { name: "新しい業務ガイド" })).toBeVisible();
+  expect(await findToolbarMisalignment(page)).toEqual([]);
+  await toolbar.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("support-guides-toolbar.png") });
+});
 
 test("空の一覧から業務ガイドを作り、保存・検証（問題と注意）・公開できる", async ({ page }) => {
   const api = await openSupportGuides(page);

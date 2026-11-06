@@ -943,6 +943,11 @@ job の取得・開始・停止 API は、保存された `status` / `reason` �
 内部の作業記録は変更しない。現在状態の取得はページ内の文書 ID に限定し、本文・embedding を取得しない。
 対象確認用 plan の `status` は、作業対象を選ぶ従来の判定を維持する。
 
+fingerprint は active な Chunk 集合と構築器の版（`graph_index.STRUCTURE_INDEX_BUILDER_VERSION`）から作る。
+構築器の出力（entity・relationship・link・参照の記録）を変えたら版を上げ、出力の digest を
+`tests/test_structure_index_builder_contract.py` に版ごとに追記する（出力が変わると、このテストが版を上げるよう失敗する）。
+構築記録の `result_json` に版を残し、版が今と違う「更新が必要」の項目に理由 `builder_changed` を付ける（#4549）。
+
 fingerprint が一致しても、「本文」の節点への結び付きが本文の Chunk より少ない索引（#4507 の前の索引）は
 「更新が必要」とし、plan の項目に `body_links_missing` を付ける（#4543）。本文の判定は索引の構築・章節の木と
 同じ関数（`graph_index.is_body_chunk`）を使い、本文・embedding は読まない。job の開始は任意の `document_ids` で

@@ -196,6 +196,8 @@ export declare function PageBody(props: PageBodyProps): JSX.Element;
 
 export interface SectionProps {
   title?: string; description?: string; actions?: React.ReactNode;
+  /** 見出しの id。節の aria-labelledby の既定にもなり、節を見出しの名前の region にする（#4558）。 */
+  titleId?: string;
   children?: React.ReactNode; style?: React.CSSProperties;
 }
 
@@ -2279,7 +2281,7 @@ toast.error(apiErrorMessage(error, t("…failed")));
 />
 ```
 
-- 見た目は `ButtonLink`（secondary）+ `MessagesSquare`。既定の文言は「会話を開く」「この実行の会話をチャットで開く」。
+- 見た目は `ButtonLink`（secondary）+ `MessagesSquare`。既定の文言は「会話を開く」と読み上げ名「会話を開く（この実行のチャット）」。製品が渡す読み上げ名も見えている文言で始める（「見える文言（補足）」の形。WCAG 2.5.3 Label in Name。#4558）。
 - 出すかどうか（URL）は製品が決める: RAG `RunHistoryClient`・NL2SQL `historyConversationHref`・Agent `runConversationHref`。
 - 単体テストは `packages/ui/tests/open-conversation-action.test.tsx`。
 
@@ -2300,6 +2302,7 @@ NL2SQL の SQL 生成）を、元の画面に質問と条件を入れて開く�
 ```
 
 - 見た目は `ButtonLink`（secondary）+ `SquarePen`。`OpenConversationAction` と同じ位置・同じ寸法で、1 つの実行にはどちらか 1 つだけを出す。
+- 読み上げ名は見えている文言で始める（「RAG 検索で開く（この実行の質問と条件を入れる）」。WCAG 2.5.3。#4558）。
 - 出すかどうか（URL）は製品が決める: RAG `runSearchHref`（`run-history-view.ts`）・NL2SQL `historySqlGenerationHref`（`historyManagementState.ts`）。URL の初期値は RAG `search-prefill.ts`・NL2SQL `queryPrefillState.ts`。
 - 単体テストは `packages/ui/tests/open-run-input-action.test.tsx`。
 

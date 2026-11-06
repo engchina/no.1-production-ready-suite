@@ -311,6 +311,15 @@ class StoredKnowledgeBase:
     searchable_chunk_count: int | None = 0
 
 
+@dataclass(frozen=True)
+class KnowledgeBaseConfig:
+    """存在・状態・設定の確認に使う KB の行だけの値(文書・chunk の件数を持たない)。"""
+
+    id: str
+    status: KnowledgeBaseStatus
+    retrieval_config: dict[str, object] = field(default_factory=dict)
+
+
 @dataclass
 class StoredSearchAnswerProfile:
     """検索・回答プロファイル(Search Answer Profile)行。"""
@@ -2497,6 +2506,23 @@ class OracleClient:
             _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
         )
         return row is not None
+
+    async def get_knowledge_base_config(self, knowledge_base_id: str) -> KnowledgeBaseConfig | None:
+        """件数を集計せず、利用範囲内の KB の状態と retrieval_config だけを返す。"""
+        row = await self._fetch_one(
+            f"""SELECT kb.knowledge_base_id, kb.status, kb.retrieval_config
+            FROM rag_knowledge_bases kb
+            WHERE kb.knowledge_base_id = :knowledge_base_id
+            AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}""",
+            _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
+        )
+        if row is None:
+            return None
+        return KnowledgeBaseConfig(
+            id=str(row["knowledge_base_id"]),
+            status=_knowledge_base_status(row.get("status")),
+            retrieval_config=_json_loads(row.get("retrieval_config")),
+        )
 
     async def update_knowledge_base(
         self,
@@ -9082,6 +9108,9 @@ class OracleClient:
         knowledge_base_id: str,
     ) -> KnowledgeBaseDetail | None:
         """Oracle knowledge base table から詳細取得する。"""
+        # 検索対象の chunk 数は、所属の INDEXED 文書 → 配信中の chunk_set → chunk_set_id の索引の
+        # 順に数える。rag_chunks を OR の条件で結ぶと全件走査になる(#4553)。SQL は 1 行に詰めて
+        # 送るので、SQL の中に ``--`` のコメントを書かない。
         rows = await self._fetch_all(
             """
             SELECT
@@ -9100,23 +9129,25 @@ class OracleClient:
                     AS indexed_document_count,
                 COUNT(DISTINCT CASE WHEN d.status = 'ERROR' THEN d.document_id END)
                     AS error_document_count,
-                COUNT(c.chunk_id) AS searchable_chunk_count
+                (
+                    SELECT COUNT(*)
+                    FROM rag_document_knowledge_bases count_dkb
+                    JOIN rag_documents count_d
+                        ON count_d.document_id = count_dkb.document_id
+                       AND count_d.status = 'INDEXED'
+                       AND {count_document_access_sql}
+                    JOIN rag_chunk_sets cs
+                        ON cs.document_id = count_d.document_id
+                       AND {_SERVED_CHUNK_SET_SQL}
+                    JOIN rag_chunks c ON c.chunk_set_id = cs.chunk_set_id
+                    WHERE count_dkb.knowledge_base_id = kb.knowledge_base_id
+                ) AS searchable_chunk_count
             FROM rag_knowledge_bases kb
             LEFT JOIN rag_document_knowledge_bases dkb
                 ON dkb.knowledge_base_id = kb.knowledge_base_id
             LEFT JOIN rag_documents d
                 ON d.document_id = dkb.document_id
                AND {document_access_sql}
-            LEFT JOIN rag_chunks c
-                ON c.document_id = d.document_id
-               AND d.status = 'INDEXED'
-               AND (
-                   c.chunk_set_id IS NULL
-                   OR c.chunk_set_id IN (
-                       SELECT cs.chunk_set_id FROM rag_chunk_sets cs
-                       WHERE {_SERVED_CHUNK_SET_SQL}
-                   )
-               )
             WHERE kb.knowledge_base_id = :knowledge_base_id
               AND {knowledge_base_access_sql}
             GROUP BY
@@ -9132,6 +9163,7 @@ class OracleClient:
                 kb.archived_at
             """.format(
                 _SERVED_CHUNK_SET_SQL=_SERVED_CHUNK_SET_SQL,
+                count_document_access_sql=_oracle_access_predicate_sql(alias="count_d"),
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
             ),

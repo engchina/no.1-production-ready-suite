@@ -128,7 +128,13 @@ export function KnowledgeBaseSearchTestPanel({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-sm text-fg-muted">{t("knowledgeBases.searchTest.description")}</p>
+        {/* 使い方の案内（何を取得するか）はカードの説明に続けて入力の行の上に出し、検索の後も同じ位置に残す。
+            ボタンの下に未実行の空の状態を置くと、ページの末尾の「検索テスト」が通知（Toast）の決まった置き場所（右下）に
+            入るため置かない（#1728・#4560）。 */}
+        <p className="text-sm text-fg-muted">
+          {t("knowledgeBases.searchTest.description")}
+          {ready ? t("knowledgeBases.searchTest.initialHint") : null}
+        </p>
 
         {disabled ? (
           // アーカイブ済みは索引済みの文書があっても検索されない。索引の不足と取り違えない理由を出す。
@@ -177,9 +183,7 @@ export function KnowledgeBaseSearchTestPanel({
               />
             </FieldActionRow>
 
-            {phase === "idle" ? (
-              <EmptyState title={t("knowledgeBases.searchTest.initialHint")} />
-            ) : phase === "error" ? (
+            {phase === "idle" ? null : phase === "error" ? (
               <ApiErrorState
                 error={searchError}
                 fallback={t("knowledgeBases.searchTest.error")}
