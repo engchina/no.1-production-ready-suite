@@ -1,5 +1,6 @@
 """版付きの参照記録と双方向のページングを、合成データで実Oracle上に確認する。"""
 
+import os
 from typing import Any, cast
 from uuid import uuid4
 
@@ -364,3 +365,58 @@ async def test_refresh_resolves_references_after_target_document_is_added() -> N
     )
     # 同じ目録なら何も変わらない。
     assert (await refresh_knowledge_base_references(client, kb.id))["updated"] == 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS") != "true", reason="CI専用Oracleの匿名合成データだけで検証する"
+)
+@pytest.mark.usefixtures("oracle_db")
+async def test_body_chunks_read_actual_saved_links_in_version_scope() -> None:
+    """CI隔離schemaのfixtureが作成行を後始末する。手元/配備先へは接続しない。"""
+    from app.rag.chunking import Chunk
+    from app.rag.graph_index import graph_body_node_id
+
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-body-{uuid4().hex[:8]}")
+    chunks = [
+        Chunk(
+            text=f"合成本文{index}",
+            index=index,
+            start_offset=index * 10,
+            end_offset=index * 10 + 5,
+            metadata={
+                "page_number": index + 1,
+                **(
+                    {"section_path": "合成章 > 本文", "section_title": "本文"} if index == 1 else {}
+                ),
+            },
+        )
+        for index in range(28)
+    ]
+    document, chunk_set = await _indexed_document(
+        client, file_name="synthetic-body.pdf", chunks=chunks, knowledge_base_id=kb.id
+    )
+    store = StructureGraphStore(client)
+    tree = await store.children(kb.id, document, chunk_set, parent_id=None, offset=0, limit=25)
+    body = graph_body_node_id(chunk_set, kb.id)
+    assert any(node["id"] == body and not node["virtual"] for node in tree["items"])
+    found = await store.search(kb.id, "本文", offset=0, limit=25)
+    assert {item["id"] for item in found["items"]} == {
+        body,
+        graph_section_node_id(chunk_set, kb.id, "合成章 > 本文"),
+    }
+    first = await store.body_chunks(kb.id, document, chunk_set, offset=0, limit=25)
+    last = await store.body_chunks(kb.id, document, chunk_set, offset=25, limit=25)
+    empty = await store.body_chunks(kb.id, document, chunk_set, offset=1000001, limit=25)
+    assert first["total"] == last["total"] == empty["total"] == 27
+    assert empty["items"] == []
+    assert [row["chunk_id"] for row in first["items"] + last["items"]] == [
+        f"{document}:{chunk_set}:{index}" for index in range(28) if index != 1
+    ]
+    assert last["items"][-1]["page_number"] == 28
+    original = await client.readable_version_chunk(document, last["items"][-1]["chunk_id"])
+    assert original is not None and original.text == "合成本文27"
+    assert original.metadata["page_number"] == 28
+    other = await client.create_knowledge_base(name=f"synthetic-body-other-{uuid4().hex[:8]}")
+    with pytest.raises(KeyError):
+        await store.body_chunks(other.id, document, chunk_set, offset=0, limit=25)

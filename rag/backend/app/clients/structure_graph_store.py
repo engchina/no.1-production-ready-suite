@@ -329,7 +329,7 @@ class StructureGraphStore:
             AND {_graph_visible_document_predicate("e")}
             AND NOT EXISTS (SELECT 1 FROM rag_graph_entities p
                 WHERE p.chunk_set_id=e.chunk_set_id AND p.knowledge_base_id=e.knowledge_base_id
-                AND e.entity_type<>'document'
+                AND e.entity_type NOT IN ('document','body')
                 AND SUBSTR(p.canonical_name,-LENGTH(e.canonical_name)-3)
                     =' > '||e.canonical_name)
             ORDER BY CASE WHEN e.entity_type='document' THEN 0 ELSE 1 END,

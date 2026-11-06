@@ -229,3 +229,71 @@ async def test_body_empty_page_keeps_actual_total_with_same_scope(total: int, of
         == count[0][count[0].index("FROM rag_graph_entity_chunks") :].strip()
     )
     assert count[1] == {k: v for k, v in page[1].items() if k not in {"skip", "take"}}
+
+
+@pytest.mark.parametrize(
+    "node_type,direction,expected",
+    [("body", "incoming", 0), ("body", "outgoing", 1), ("section", "incoming", 1)],
+)
+async def test_body_reference_identity_does_not_borrow_named_section(
+    node_type: str, direction: str, expected: int
+) -> None:
+    from app.clients.graph_reference_store import GraphReferenceStore
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Oracle:
+        async def _fetch_all(self, sql: str, binds: dict[str, Any]) -> list[dict[str, Any]]:
+            calls.append((sql, binds))
+            if "SELECT e.entity_id" in sql:
+                return [
+                    {
+                        "entity_id": "body-node",
+                        "canonical_name": "本文",
+                        "entity_type": node_type,
+                        "chunk_set_id": "set",
+                        "document_id": "doc",
+                        "file_name": "synthetic.txt",
+                    }
+                ]
+            if binds.get("node_path") == "本文" or binds.get("node_id") == "body-node":
+                return [
+                    {
+                        "reference_id": "ref",
+                        "resolution_status": "resolved",
+                        "label": "合成参照",
+                        "source_document_id": "source",
+                        "source_chunk_set_id": "source-set",
+                        "source_section_path": None,
+                        "source_name": "source.txt",
+                        "target_document_id": "doc",
+                        "target_chunk_set_id": "set",
+                        "target_section_path": "本文",
+                        "target_name": "synthetic.txt",
+                        "active_target_set": "set",
+                    }
+                ]
+            return []
+
+    result = await GraphReferenceStore(Oracle()).page(
+        "kb", "body-node", direction=direction, offset=0, limit=25
+    )
+    assert len(result["items"]) == expected
+    if node_type == "body" and direction == "incoming":
+        assert len(calls) == 1
+    elif direction == "outgoing":
+        assert "nc.chunk_id=r.source_chunk_id" in calls[1][0]
+
+
+async def test_body_search_is_not_a_short_alias_of_a_named_section() -> None:
+    from app.clients.structure_graph_store import StructureGraphStore
+
+    calls: list[str] = []
+
+    class Oracle:
+        async def _fetch_all(self, sql: str, binds: dict[str, Any]) -> list[dict[str, Any]]:
+            calls.append(sql)
+            return []
+
+    await StructureGraphStore(Oracle()).search("kb", "本文", offset=0, limit=25)
+    assert "e.entity_type NOT IN ('document','body')" in calls[0]
