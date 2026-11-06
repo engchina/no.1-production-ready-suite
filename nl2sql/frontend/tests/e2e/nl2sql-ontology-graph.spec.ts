@@ -622,6 +622,7 @@ for (const theme of ["light", "dark"]) {
       await page.keyboard.press("Enter");
       await expectEntireGraphInCanvas(playground);
       await canvas.screenshot({ path: testInfo.outputPath(`fit-labels-${theme}-${width}.png`) });
+      await expect(canvas.locator(".react-flow__attribution")).toHaveCount(0);
       await filter.selectOption("object_type");
       await expect(filter).toHaveValue("object_type");
       await filter.selectOption("");
