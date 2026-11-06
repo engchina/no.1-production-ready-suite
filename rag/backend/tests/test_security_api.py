@@ -342,6 +342,15 @@ def test_manifest_key_assignments() -> None:
     # 回答の注意書き（設定は製品ごと。#2405・#2449）。
     assert _perm("GET", "/settings/answer-notice") == {"menu.settings_answer_notice"}
     assert _perm("PUT", "/settings/answer-notice") == {"menu.settings_answer_notice"}
+    # 公開時の完全な設定は言語資源の設定の権限だけ（#4566）。
+    # 比較は文書インデックスの一括再処理も使う。
+    assert _perm("GET", "/settings/language-pack/releases/{release_id}") == {
+        "menu.settings_language_pack"
+    }
+    assert _perm("GET", "/settings/language-pack/releases/compare") == {
+        "menu.settings_language_pack",
+        "menu.file_list",
+    }
 
 
 def test_capabilities_imply_their_menu() -> None:

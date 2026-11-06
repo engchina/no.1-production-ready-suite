@@ -55,16 +55,67 @@ export function languagePackPanelState(use: LanguagePackDocumentUse, recipeId: s
   return { kind: "built", active, relation: active.relation, comparison: { beforeId: active.release_id, afterId: use.current_release_id } };
 }
 
-/** 一覧の 1 つのラベル。検索に使う索引が無ければ未構築、判定できない索引があれば版未記録。 */
-export type LanguagePackSummaryStatus = LanguagePackRelation | "notBuilt";
+/**
+ * 利用者に見せる状態（バッジ 1 つ）。文書の詳細の要約の行と文書インデックスの列で同じものを使う。
+ * - current: 現在版を使用（最新） / equivalent: 版は違うが取込設定は同じ（最新・内容は同じ）
+ * - different: 取込設定に差分あり（再処理を推奨） / unrecorded: 使用版を判定できない
+ * - building: job が版を固定して待機・実行中 / notBuilt: 索引も構築中の job も無い
+ */
+export type LanguagePackStatus = LanguagePackRelation | "building" | "notBuilt";
 
-/** 有効レシピの差分・未記録を見落とさず、一覧では判定を 1 つにまとめる（差分 > 未記録 > 同値 > 現在版）。 */
-export function languagePackSummaryStatus(use: LanguagePackDocumentUse | null | undefined): LanguagePackSummaryStatus {
+export function languagePackStatus(state: LanguagePackPanelState): LanguagePackStatus {
+  switch (state.kind) {
+    case "notBuilt":
+      return "notBuilt";
+    case "firstBuild":
+    case "sameVersionBuild":
+    case "differentVersionBuild":
+      return "building";
+    case "unrecorded":
+      return state.target ? "building" : "unrecorded";
+    case "built":
+      return state.relation;
+  }
+}
+
+/** 要約の行の版。構築中は対象版、検索中の索引の版が記録済みならその版。判定できない・未構築は出さない。 */
+export function languagePackDisplayVersion(state: LanguagePackPanelState): number | null {
+  if ("target" in state && state.target) return state.target.version;
+  return state.kind === "built" ? state.active.version : null;
+}
+
+/** 利用者の対応が要る状態か（管理者には「詳細」を開いて出し、権限の無い利用者には依頼を示す）。 */
+export function languagePackNeedsAction(status: LanguagePackStatus): boolean {
+  return status === "different" || status === "unrecorded";
+}
+
+/** 構築中の案内（ページの状態メッセージの枠に 1 本だけ出す）。構築中でなければ null。 */
+export interface LanguagePackBuildNotice {
+  version: number | null;
+  /** 検索に使う索引があり、成功するまでそれを使い続けるか（初回の構築は false）。 */
+  keepsActive: boolean;
+}
+
+export function languagePackBuildNotice(use: LanguagePackDocumentUse | null | undefined, recipeId: string | null): LanguagePackBuildNotice | null {
+  if (!use || !recipeId) return null;
+  const state = languagePackPanelState(use, recipeId);
+  if (!("target" in state) || !state.target) return null;
+  return { version: state.target.version, keepsActive: state.kind !== "firstBuild" };
+}
+
+/** 一覧の 1 つのレシピの状態（構築中を先に見る。文書の詳細の判定と同じ）。 */
+function recipeStatus(recipe: LanguagePackRecipeUse): LanguagePackStatus {
+  if (recipe.target_release_id) return "building";
+  if (recipe.chunk_set_id === null) return "notBuilt";
+  return isRecordedUse(recipe) ? recipe.relation : "unrecorded";
+}
+
+/** 一覧で 1 つにまとめるときの優先順（対応が要るもの > 構築中 > 問題の無いもの）。 */
+const SUMMARY_PRIORITY: readonly LanguagePackStatus[] = ["different", "unrecorded", "building", "equivalent", "current", "notBuilt"];
+
+/** 一覧の 1 つのラベル。有効レシピの差分・未記録を見落とさず、判定を 1 つにまとめる。 */
+export function languagePackSummaryStatus(use: LanguagePackDocumentUse | null | undefined): LanguagePackStatus {
   if (!use) return "unrecorded";
-  const actives = use.recipes.filter((recipe) => recipe.chunk_set_id !== null);
-  if (actives.length === 0) return "notBuilt";
-  const relations = new Set(actives.map((recipe) => (isRecordedUse(recipe) ? recipe.relation : "unrecorded")));
-  if (relations.has("different")) return "different";
-  if (relations.has("unrecorded")) return "unrecorded";
-  return relations.has("equivalent") ? "equivalent" : "current";
+  const statuses = new Set(use.recipes.map(recipeStatus));
+  return SUMMARY_PRIORITY.find((status) => statuses.has(status)) ?? "notBuilt";
 }

@@ -703,12 +703,12 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/language-pack/preview"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("POST", "/settings/language-pack/publish"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("GET", "/settings/language-pack/releases"): _any(MENU_SETTINGS_LANGUAGE_PACK),
+    # 版の比較は、文書インデックスの一括再処理（文書インデックスの権限）も使う。
     ("GET", "/settings/language-pack/releases/compare"): _any(
         MENU_SETTINGS_LANGUAGE_PACK, MENU_FILE_LIST
     ),
-    ("GET", "/settings/language-pack/releases/{release_id}"): _any(
-        MENU_SETTINGS_LANGUAGE_PACK, MENU_FILE_LIST
-    ),
+    # 公開時の完全な設定は言語資源の設定の権限だけ（文書の詳細の「詳細」も管理者だけ。#4566）。
+    ("GET", "/settings/language-pack/releases/{release_id}"): _any(MENU_SETTINGS_LANGUAGE_PACK),
     ("POST", "/settings/language-pack/releases/{release_id}/restore"): _any(
         MENU_SETTINGS_LANGUAGE_PACK
     ),

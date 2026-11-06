@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "./fixtures/test";
-import { expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
+import { expectNoPageOverflow, mockAuthUser, mockDatabaseReady, mockLocalAuth } from "./_helpers";
 import { t } from "../src/lib/i18n";
 
 // Issue 281: 文書の詳細（DocumentWorkspace）の不具合の回帰。
@@ -193,51 +193,131 @@ test("文書詳細の見出しは PageHeader に一覧へ戻る（左上）・�
 });
 
 
-test("索引の使用版・構築中の対象版を区別し、固定した公開版で再処理を確認する", { tag: "@responsive" }, async ({ page }) => {
-  await mockWorkspace(page, "INDEXED", "言語資源の現在版が変わりました。再確認してください。");
-  const recipe = { ...recipeView("INDEXED"), active_chunk_set_id: "chunks-old", searchable: true };
-  const used = { recipe_id: "recipe-1", chunk_set_id: "chunks-old", release_id: "release-1", version: 1, ingest_hash: "hash-old", relation: "different", built_at: "2026-10-17T00:00:00Z", job_id: "job-old", target_release_id: "release-2", target_version: 2 };
+// #4566: 言語資源は処理レシピの区画の要約の行（「言語資源 v{n} [状態]」）1 つにまとめ、差分・公開時の設定・再処理は
+// 言語資源の設定の権限を持つ利用者の「詳細」にだけ置く。構築中の案内は状態メッセージの枠の 1 本だけ。
+const noIndexUse = { recipe_id: "recipe-1", chunk_set_id: null, release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null, target_version: null };
+const servingUse = (release: string, version: number, relation: string) => ({ ...noIndexUse, chunk_set_id: "chunks-a", release_id: release, version, ingest_hash: `hash-${version}`, relation, built_at: "2026-10-17T00:00:00Z", job_id: "job-a" });
+const unrecordedUse = { ...servingUse("release-1", 1, "different"), ingest_hash: null, relation: "unrecorded" };
+const releaseSnapshot = (id: string, version: number) => ({ id, version, effective: { numbers: { article_units: ["A"] } }, hash: "old", ingest_hash: "old", published_at: "2026-10-17T00:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "" });
+
+type LanguagePackStateOptions = { building?: boolean; admin?: boolean; theme?: "light" | "dark" };
+
+async function openLanguagePackState(page: Page, recipes: Record<string, unknown>[], { building = false, admin = true, theme }: LanguagePackStateOptions = {}) {
+  if (theme) {
+    await page.addInitScript(value => {
+      localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+    }, theme);
+  }
+  await mockWorkspace(page, "INDEXED", "unused");
+  // 言語資源の設定の権限を持たない利用者（文書インデックスとアップロードだけ）。
+  if (!admin) await mockAuthUser(page, { permissions: ["menu.file_list", "menu.upload"] });
+  const recipe = { ...recipeView("INDEXED"), active_chunk_set_id: recipes.some(item => item.chunk_set_id) ? "chunks-a" : null, searchable: recipes.some(item => item.chunk_set_id), steps: recipeView("INDEXED").steps.map(step => ({ ...step, status: building ? "QUEUED" : "SUCCEEDED" })) };
   await page.route(`**/api/documents/${DOC_ID}/recipes`, route => route.fulfill(ok([recipe])));
-  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes: [used] } })));
-  await page.route("**/api/settings/language-pack/releases/release-1", route => route.fulfill(ok({ id: "release-1", version: 1, effective: { numbers: { article_units: ["条"] } }, hash: "old", ingest_hash: "old", published_at: "2026-10-17T00:00:00Z", published_by: null, previous_id: null, restored_from: null, change_note: "" })));
-  await page.route("**/api/settings/language-pack/releases/compare?*", route => route.fulfill(ok({ before_id: "release-1", after_id: "release-2", differences: [{ section: "numbers", key: "article_units", before: ["条"], after: ["条", "款"], ingest: true }], ingest_changed: true, impact_requires_review: true, affected_stages: [] })));
+  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes } })));
+  const comparisons: URL[] = [];
+  const snapshots: string[] = [];
+  await page.route("**/api/settings/language-pack/releases/compare?*", route => {
+    const url = new URL(route.request().url());
+    comparisons.push(url);
+    return route.fulfill(ok({ before_id: url.searchParams.get("before_id"), after_id: url.searchParams.get("after_id"), differences: [{ section: "numbers", key: "article_units", before: ["A"], after: ["A", "B"], ingest: true }], ingest_changed: true, impact_requires_review: true, affected_stages: [] }));
+  });
+  await page.route("**/api/settings/language-pack/releases/release-*", route => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    snapshots.push(id);
+    return route.fulfill(ok(releaseSnapshot(id, Number(id.replace("release-", "")))));
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+  const panel = page.getByTestId("document-language-pack");
+  await expect(panel).toBeVisible();
+  // 別のカードを置かず、処理レシピの区画（選んだレシピ）の中に 1 行だけ置く。
+  await expect(page.locator('section[aria-label="処理レシピ"]').getByTestId("document-language-pack")).toHaveCount(1);
+  await expect(page.getByText("言語資源の使用版", { exact: true })).toHaveCount(0);
+  return { panel, details: panel.getByTestId("document-language-pack-details"), comparisons, snapshots };
+}
+
+async function expectBadge(panel: ReturnType<Page["getByTestId"]>, label: string, variant: string) {
+  const badge = panel.locator("[data-status-variant]");
+  await expect(badge).toHaveCount(1);
+  await expect(badge).toHaveText(label);
+  await expect(badge).toHaveAttribute("data-status-variant", variant);
+  // 状態は色だけで示さない（StatusBadge のアイコン）。
+  await expect(badge.locator("svg")).toHaveCount(1);
+}
+
+test("言語資源: 差分があれば「再処理を推奨」で詳細を自動で開き、固定した公開版で再処理を確認する", { tag: "@responsive" }, async ({ page }) => {
+  const { panel, details, comparisons, snapshots } = await openLanguagePackState(page, [servingUse("release-1", 1, "different")]);
+  await expect(panel).toHaveAttribute("data-status", "different");
+  await expect(panel).toContainText("言語資源 v1");
+  await expectBadge(panel, "再処理を推奨", "warning");
+  // 対応が要るので「詳細」を開いて出す。管理者には依頼の文を出さない。
+  await expect(details).toHaveAttribute("data-state", "open");
+  await expect(panel.getByTestId("document-language-pack-ask-admin")).toHaveCount(0);
+  await expect(details).toContainText("取込設定に差分あり");
+  await expect(details).toContainText("job-a");
+  await expect(details).toContainText("v2");
+  // 公開時の完全な設定は開いたときだけ読む。
+  expect(snapshots).toHaveLength(0);
+  await details.getByTestId("document-language-pack-snapshot-toggle").click();
+  await expect(details.getByRole("textbox", { name: "公開時の完全な設定 v1" })).toHaveAttribute("readonly");
+  expect(snapshots).toEqual(["release-1"]);
+
   let submitted: URL | null = null;
   await page.route(`**/api/documents/${DOC_ID}/recipes/recipe-1/ingestion-jobs?*`, async route => {
     submitted = new URL(route.request().url());
     await route.fulfill({ status: 409, json: { data: null, error_messages: ["言語資源の現在版が変わりました。再確認してください。"], warning_messages: [] } });
   });
-  await page.goto(`/documents/${DOC_ID}`);
-  const panel = page.getByTestId("document-language-pack");
-  await expect(panel).toContainText("現在の検索に使用している版 v1");
-  await expect(panel).toContainText("別の版で構築中");
-  await panel.getByRole("button", { name: "公開時の完全な設定", exact: true }).click();
-  await expect(panel.getByLabel("公開時の完全な設定 v1")).toHaveAttribute("readonly");
-  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes: [{ ...used, target_release_id: null, target_version: null }] } })));
-  await page.reload();
-  await panel.getByRole("button", { name: "差分と影響を確認する" }).click();
-  await panel.getByRole("combobox", { name: "再処理を始める工程" }).click();
+  await details.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await expect.poll(() => comparisons.map(url => `${url.searchParams.get("before_id")}>${url.searchParams.get("after_id")}`)).toEqual(["release-1>release-2"]);
+  await expect(details.getByText("取込設定に差分があります", { exact: true })).toBeVisible();
+  await details.getByRole("combobox", { name: "再処理を始める工程" }).click();
   await page.getByRole("option", { name: "Chunk 作成", exact: true }).click();
-  await panel.getByRole("button", { name: "再処理する", exact: true }).click();
+  await details.getByRole("button", { name: "再処理する", exact: true }).click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText("言語資源 v2");
   await expect(dialog).toContainText("レシピ1");
   await dialog.getByRole("button", { name: "再処理する", exact: true }).click();
   await expect.poll(() => submitted?.searchParams.get("expected_language_pack_release_id")).toBe("release-2");
+  expect(submitted!.searchParams.get("phase")).toBe("CHUNK");
   expect(submitted!.searchParams.get("expected_config_revision")).toBe("1");
-  await expect(panel.getByText("言語資源の現在版が変わりました。再確認してください。", { exact: true })).toBeVisible();
-  await expect(panel).toContainText("現在の検索に使用している版 v1");
+  await expect(details.getByText("言語資源の現在版が変わりました。再確認してください。", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
 });
 
+test("言語資源: 権限の無い利用者には要約の行だけを出し、対応が要るときは管理者への依頼を示す", { tag: "@responsive" }, async ({ page }) => {
+  const { panel, details, comparisons, snapshots } = await openLanguagePackState(page, [servingUse("release-1", 1, "different")], { admin: false });
+  await expectBadge(panel, "再処理を推奨", "warning");
+  await expect(panel.getByTestId("document-language-pack-ask-admin")).toHaveText("管理者に再処理を依頼してください");
+  // 使えない操作・導線を描かない（messaging §3.4.1）。
+  await expect(details).toHaveCount(0);
+  await expect(panel.locator("a, button, select, textarea, input, summary")).toHaveCount(0);
+  expect(comparisons).toHaveLength(0);
+  expect(snapshots).toHaveLength(0);
+  await expectNoPageOverflow(page);
+});
+
+test("言語資源: 権限の無い利用者は、対応の要らない状態では依頼の文を出さない", { tag: "@responsive" }, async ({ page }) => {
+  const { panel } = await openLanguagePackState(page, [servingUse("release-2", 2, "current")], { admin: false });
+  await expectBadge(panel, "最新", "neutral");
+  await expect(panel.getByTestId("document-language-pack-ask-admin")).toHaveCount(0);
+  await expect(panel.locator("a, button, summary")).toHaveCount(0);
+});
+
+test("言語資源: 権限の無い利用者にも、判定できない索引では依頼の文を出す", { tag: "@responsive" }, async ({ page }) => {
+  const { panel } = await openLanguagePackState(page, [unrecordedUse], { admin: false });
+  await expectBadge(panel, "判定できません", "warning");
+  await expect(panel.getByTestId("document-language-pack-ask-admin")).toBeVisible();
+  await expect(panel.locator("a, button, summary")).toHaveCount(0);
+});
 
 // #4194: 使用中の版が現在の契約で読めない（公開時の設定・比較が 409）とき、行き止まりにせず抽出から再処理できる。
 for (const theme of ["light", "dark"] as const) {
-  test(`使用中の版を現在の契約で読めないときは比較できないことを示し、ファイル準備か抽出から再処理できる（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+  test(`言語資源: 使用中の版を現在の契約で読めないときは比較できないことを示し、ファイル準備か抽出から再処理できる（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.addInitScript(value => {
       localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
     }, theme);
     await mockWorkspace(page, "INDEXED", "合成の投入エラー");
     const recipe = { ...recipeView("INDEXED"), active_chunk_set_id: "chunks-old", searchable: true };
-    const used = { recipe_id: "recipe-1", chunk_set_id: "chunks-old", release_id: "release-1", version: 1, ingest_hash: "hash-old", relation: "different", built_at: "2026-10-17T00:00:00Z", job_id: "job-old", target_release_id: null, target_version: null };
+    const used = { ...servingUse("release-1", 1, "different"), chunk_set_id: "chunks-old" };
     const unreadable = { status: 409, json: { data: null, error_messages: ["保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"], warning_messages: [] } };
     await page.route(`**/api/documents/${DOC_ID}/recipes`, route => route.fulfill(ok([recipe])));
     await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes: [used] } })));
@@ -249,123 +329,148 @@ for (const theme of ["light", "dark"] as const) {
       await route.fulfill(ok({ ...failedJob(), id: "job-new", status: "QUEUED", phase: "EXTRACT", error_message: null, attempt_count: 0, started_at: null, finished_at: null }));
     });
     await page.goto(`/documents/${DOC_ID}`);
-    const panel = page.getByTestId("document-language-pack");
-    await panel.getByRole("button", { name: "差分と影響を確認する" }).click();
-    await expect(panel.getByText(/契約/).first()).toBeVisible();
-    await panel.screenshot({ path: testInfo.outputPath(`unreadable-panel-review-${theme}.png`) });
-    await expect(panel.getByText(t("settings.language.release.unreadableTitle"), { exact: true })).toBeVisible();
-    await expect(panel.getByText(t("settings.language.release.unreadableHelp"), { exact: true })).toBeVisible();
+    const details = page.getByTestId("document-language-pack-details");
+    await expect(details).toHaveAttribute("data-state", "open");
+    await details.getByRole("button", { name: "差分と影響を確認する" }).click();
+    await expect(details.getByText(t("settings.language.release.unreadableTitle"), { exact: true })).toBeVisible();
+    await expect(details.getByText(t("settings.language.release.unreadableHelp"), { exact: true })).toBeVisible();
     // 汎用のエラー表示（再試行）にしない。
-    await expect(panel.getByRole("button", { name: "再試行" })).toHaveCount(0);
-    await panel.getByRole("button", { name: "公開時の完全な設定", exact: true }).click();
-    await expect(panel.getByText(t("settings.language.release.unreadableSnapshot"), { exact: true })).toBeVisible();
-    await panel.getByRole("combobox", { name: "再処理を始める工程" }).click();
+    await expect(details.getByRole("button", { name: "再試行" })).toHaveCount(0);
+    await details.getByTestId("document-language-pack-snapshot-toggle").click();
+    await expect(details.getByText(t("settings.language.release.unreadableSnapshot"), { exact: true })).toBeVisible();
+    await page.getByTestId("document-language-pack").screenshot({ path: testInfo.outputPath(`unreadable-panel-review-${theme}.png`) });
+    await details.getByRole("combobox", { name: "再処理を始める工程" }).click();
     await expect(page.getByRole("option", { name: "Chunk 作成", exact: true })).toHaveCount(0);
     await expect(page.getByRole("option", { name: "Embedding / 索引", exact: true })).toHaveCount(0);
     await expect(page.getByRole("option", { name: "ファイル準備", exact: true })).toBeVisible();
     await page.getByRole("option", { name: "抽出", exact: true }).click();
-    await panel.getByRole("button", { name: "再処理する", exact: true }).click();
+    await details.getByRole("button", { name: "再処理する", exact: true }).click();
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("開始工程: 抽出");
     await dialog.getByRole("button", { name: "再処理する", exact: true }).click();
     await expect.poll(() => submitted.map(url => url.searchParams.get("phase"))).toEqual(["EXTRACT"]);
     expect(submitted[0].searchParams.get("expected_language_pack_release_id")).toBe("release-2");
-    await expect(panel.getByText(t("settings.language.release.queued"), { exact: true })).toBeVisible();
+    await expect(details.getByText(t("settings.language.release.queued"), { exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
-    await panel.screenshot({ path: testInfo.outputPath(`unreadable-panel-queued-${theme}.png`) });
   });
 }
 
-// #4523: 索引の有無・使用版の記録・構築の対象版で状態を分け、存在しない索引・版差分を示さない。
-const noIndexUse = { recipe_id: "recipe-1", chunk_set_id: null, release_id: null, version: null, ingest_hash: null, relation: "unrecorded", built_at: null, job_id: null, target_release_id: null, target_version: null };
-const servingUse = (release: string, version: number, relation: string) => ({ ...noIndexUse, chunk_set_id: "chunks-a", release_id: release, version, ingest_hash: `hash-${version}`, relation, built_at: "2026-10-17T00:00:00Z", job_id: "job-a" });
-
-async function openLanguagePackState(page: Page, recipes: Record<string, unknown>[], building: boolean) {
-  await mockWorkspace(page, "INDEXED", "unused");
-  const recipe = { ...recipeView("INDEXED"), active_chunk_set_id: recipes.some(item => item.chunk_set_id) ? "chunks-a" : null, steps: recipeView("INDEXED").steps.map(step => ({ ...step, status: building ? "QUEUED" : "SUCCEEDED" })) };
-  await page.route(`**/api/documents/${DOC_ID}/recipes`, route => route.fulfill(ok([recipe])));
-  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes } })));
-  const comparisons: URL[] = [];
-  await page.route("**/api/settings/language-pack/releases/compare?*", route => {
-    const url = new URL(route.request().url());
-    comparisons.push(url);
-    return route.fulfill(ok({ before_id: url.searchParams.get("before_id"), after_id: url.searchParams.get("after_id"), differences: [{ section: "numbers", key: "article_units", before: ["A"], after: ["A", "B"], ingest: true }], ingest_changed: true, impact_requires_review: true, affected_stages: [] }));
-  });
-  await page.goto(`/documents/${DOC_ID}`);
-  const panel = page.getByTestId("document-language-pack");
-  await expect(panel).toBeVisible();
-  return { panel, comparisons };
-}
-
-test("言語資源: 索引が無く構築中の job も無ければ未構築とし、比較の操作を出さない", { tag: "@responsive" }, async ({ page }) => {
-  const { panel } = await openLanguagePackState(page, [], false);
+test("言語資源: 索引も構築中の job も無ければ「未構築」とし、版・詳細・操作を出さない", { tag: "@responsive" }, async ({ page }) => {
+  const { panel, details } = await openLanguagePackState(page, []);
   await expect(panel).toHaveAttribute("data-state", "notBuilt");
-  await expect(panel).toContainText("まだ検索に使用できる索引はありません");
-  await expect(panel).not.toContainText("版未記録");
+  await expectBadge(panel, "未構築", "neutral");
+  await expect(panel).not.toContainText("言語資源 v");
+  await expect(details).toHaveCount(0);
   await expect(panel.getByRole("button")).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
-test("言語資源: 初回構築は対象版だけを示し、別の版・既存の索引・差分を示さない", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const { panel, comparisons } = await openLanguagePackState(page, [{ ...noIndexUse, target_release_id: "release-2", target_version: 2 }], true);
+test("言語資源: 構築中は「構築中」とし、対象版の案内は状態メッセージの枠の 1 本だけに出す", { tag: "@responsive" }, async ({ page }) => {
+  // 初回の構築: 既存の索引・差分を示さない。
+  const { panel, details, comparisons } = await openLanguagePackState(page, [{ ...noIndexUse, target_release_id: "release-2", target_version: 2 }], { building: true });
   await expect(panel).toHaveAttribute("data-state", "firstBuild");
-  await expect(panel).toContainText("まだ検索に使用できる索引はありません");
-  await expect(panel).toContainText("初回構築中");
-  await expect(panel).toContainText("構築中の対象版 v2");
-  for (const text of ["別の版で構築中", "既存の索引", "版未記録"]) await expect(panel).not.toContainText(text);
-  await expect(panel.getByRole("button", { name: "差分と影響を確認する" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "構築中の対象版を確認する" })).toBeVisible();
+  await expect(panel).toContainText("言語資源 v2");
+  await expectBadge(panel, "構築中", "info");
+  const slot = page.getByTestId("document-language-pack-building");
+  await expect(slot).toHaveText("言語資源 v2 で構築しています。成功すると、この版の索引を検索に使います。");
+  await expect(page.getByTestId("document-status-actions")).toContainText("言語資源 v2 で構築しています。");
+  // 構築の案内は 1 か所だけ（要約の行・詳細に Banner を重ねない）。
+  await expect(page.getByText(/で構築しています。/)).toHaveCount(1);
+  for (const text of ["初回構築中", "同じ版で構築中", "別の版で構築中"]) await expect(page.getByText(text)).toHaveCount(0);
+  // 対応の要らない状態は「詳細」を閉じて出す。
+  await expect(details).toHaveAttribute("data-state", "closed");
+  await panel.getByTestId("document-language-pack-details-toggle").click();
+  await expect(details).toContainText("まだ検索に使用できる索引はありません");
+  await expect(details.getByTestId("document-language-pack-target-snapshot")).toBeVisible();
+  await expect(details.getByRole("button", { name: "差分と影響を確認する" })).toHaveCount(0);
+  await expect(details.getByRole("alert")).toHaveCount(0);
   expect(comparisons).toHaveLength(0);
   await expectNoPageOverflow(page);
-  await panel.screenshot({ path: testInfo.outputPath("language-pack-first-build.png") });
 });
 
-test("言語資源: 使用中と同じ版の構築は換版として扱わず、比較を出さない", { tag: "@responsive" }, async ({ page }) => {
-  const { panel, comparisons } = await openLanguagePackState(page, [{ ...servingUse("release-2", 2, "current"), target_release_id: "release-2", target_version: 2 }], true);
+test("言語資源: 使用中と同じ版の構築は比較を出さず、既存の索引を使い続けることを状態メッセージで示す", { tag: "@responsive" }, async ({ page }) => {
+  const { panel, details, comparisons } = await openLanguagePackState(page, [{ ...servingUse("release-2", 2, "current"), target_release_id: "release-2", target_version: 2 }], { building: true });
   await expect(panel).toHaveAttribute("data-state", "sameVersionBuild");
-  await expect(panel).toContainText("現在の検索に使用している版 v2");
-  await expect(panel).toContainText("同じ版で構築中");
-  await expect(panel).not.toContainText("別の版で構築中");
-  await expect(panel.getByRole("button", { name: "差分と影響を確認する" })).toHaveCount(0);
+  await expectBadge(panel, "構築中", "info");
+  await expect(page.getByTestId("document-language-pack-building")).toHaveText("言語資源 v2 で構築しています。成功するまで既存の索引を検索に使います。");
+  await panel.getByTestId("document-language-pack-details-toggle").click();
+  await expect(details.getByRole("button", { name: "差分と影響を確認する" })).toHaveCount(0);
+  // 同じ版なので、構築中の対象版の公開時の設定を別に出さない。
+  await expect(details.getByTestId("document-language-pack-target-snapshot")).toHaveCount(0);
   expect(comparisons).toHaveLength(0);
-  await expectNoPageOverflow(page);
 });
 
-test("言語資源: 別の版の構築は使用中 → 構築の対象版で差分を比べる", { tag: "@responsive" }, async ({ page }, testInfo) => {
+test("言語資源: 別の版の構築は使用中 → 構築の対象版で差分を比べ、再処理は受け付けない", { tag: "@responsive" }, async ({ page }) => {
   // 現在版（v2）とも別の対象版（v3）を構築中にし、比較先が現在版でなく構築の対象版であることを確かめる。
-  const { panel, comparisons } = await openLanguagePackState(page, [{ ...servingUse("release-1", 1, "different"), target_release_id: "release-3", target_version: 3 }], true);
+  const { panel, details, comparisons } = await openLanguagePackState(page, [{ ...servingUse("release-1", 1, "different"), target_release_id: "release-3", target_version: 3 }], { building: true });
   await expect(panel).toHaveAttribute("data-state", "differentVersionBuild");
-  await expect(panel).toContainText("別の版で構築中");
-  await expect(panel).toContainText("構築中の対象版 v3");
-  await expect(panel).toContainText("成功するまで既存の索引を使います。");
-  await panel.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await expect(panel).toContainText("言語資源 v3");
+  await expectBadge(panel, "構築中", "info");
+  await expect(page.getByTestId("document-language-pack-building")).toHaveText("言語資源 v3 で構築しています。成功するまで既存の索引を検索に使います。");
+  await panel.getByTestId("document-language-pack-details-toggle").click();
+  await details.getByRole("button", { name: "差分と影響を確認する" }).click();
   await expect.poll(() => comparisons.map(url => `${url.searchParams.get("before_id")}>${url.searchParams.get("after_id")}`)).toEqual(["release-1>release-3"]);
-  await expect(panel.getByText("取込設定に差分があります", { exact: true })).toBeVisible();
+  await expect(details.getByText("取込設定に差分があります", { exact: true })).toBeVisible();
   // 構築中は再処理を受け付けないので、工程の選択を出さない。
-  await expect(panel.getByRole("combobox", { name: "再処理を始める工程" })).toHaveCount(0);
+  await expect(details.getByRole("combobox", { name: "再処理を始める工程" })).toHaveCount(0);
   await expectNoPageOverflow(page);
-  await panel.screenshot({ path: testInfo.outputPath("language-pack-different-build.png") });
 });
 
-test("言語資源: 使用版が未記録の索引は判定不可とし、別の版として扱わない", { tag: "@responsive" }, async ({ page }, testInfo) => {
-  const unrecorded = { ...servingUse("release-1", 1, "different"), ingest_hash: null, relation: "unrecorded" };
-  const { panel, comparisons } = await openLanguagePackState(page, [{ ...unrecorded, target_release_id: "release-2", target_version: 2 }], true);
+test("言語資源: 使用版が未記録の索引は「判定できません」とし、別の版として扱わない", { tag: "@responsive" }, async ({ page }) => {
+  // 構築中なら「構築中」。判定できない索引との比較・再処理を出さない。
+  const { panel, details, comparisons } = await openLanguagePackState(page, [{ ...unrecordedUse, target_release_id: "release-2", target_version: 2 }], { building: true });
   await expect(panel).toHaveAttribute("data-state", "unrecorded");
-  await expect(panel).toContainText("現在の検索に使用している版 未記録・判定不可");
-  await expect(panel).toContainText("構築中（使用版との関係は判定不可）");
-  await expect(panel).not.toContainText("別の版で構築中");
-  await expect(panel.getByRole("button", { name: "差分と影響を確認する" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "再処理を確認する" })).toHaveCount(0);
-  await expectNoPageOverflow(page);
-  await panel.screenshot({ path: testInfo.outputPath("language-pack-unrecorded-build.png") });
+  await expectBadge(panel, "構築中", "info");
+  await panel.getByTestId("document-language-pack-details-toggle").click();
+  await expect(details).toContainText("未記録・判定不可");
+  await expect(details.getByRole("button", { name: "差分と影響を確認する" })).toHaveCount(0);
+  await expect(details.getByRole("button", { name: "再処理を確認する" })).toHaveCount(0);
 
-  // 構築中でなければ、差分を出さずに再処理の判断だけを残す（従来の未記録の再処理）。
-  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes: [unrecorded] } })));
+  // 構築中でなければ「判定できません」で詳細を自動で開き、差分を出さずに再処理の判断だけを残す。
+  await page.route(`**/api/documents/${DOC_ID}`, route => route.fulfill(ok({ ...documentDetail("INDEXED"), file_name: "sample.txt", language_pack: { current_release_id: "release-2", current_version: 2, recipes: [unrecordedUse] } })));
   await page.route(`**/api/documents/${DOC_ID}/recipes`, route => route.fulfill(ok([{ ...recipeView("INDEXED"), active_chunk_set_id: "chunks-a", steps: recipeView("INDEXED").steps.map(step => ({ ...step, status: "SUCCEEDED" })) }])));
   await page.reload();
-  await expect(panel).toHaveAttribute("data-state", "unrecorded");
-  await panel.getByRole("button", { name: "再処理を確認する" }).click();
-  await expect(panel.getByText("使用版の情報がないため、現在版との関係を判定できません。文書内容の誤りを示すものではありません。")).toBeVisible();
-  await expect(panel.getByRole("combobox", { name: "再処理を始める工程" })).toBeVisible();
+  await expect(panel).toHaveAttribute("data-status", "unrecorded");
+  await expectBadge(panel, "判定できません", "warning");
+  await expect(panel).not.toContainText("言語資源 v");
+  await expect(details).toHaveAttribute("data-state", "open");
+  await details.getByRole("button", { name: "再処理を確認する" }).click();
+  await expect(details.getByText("使用版の情報がないため、現在版との関係を判定できません。文書内容の誤りを示すものではありません。")).toBeVisible();
+  await expect(details.getByRole("combobox", { name: "再処理を始める工程" })).toBeVisible();
+  expect(comparisons).toHaveLength(0);
+  await expectNoPageOverflow(page);
+});
+
+test("言語資源: 現在版の索引は「最新」で詳細を閉じ、比較・再処理を出さない", { tag: "@responsive" }, async ({ page }) => {
+  const { panel, details, comparisons } = await openLanguagePackState(page, [servingUse("release-2", 2, "current")]);
+  await expect(panel).toContainText("言語資源 v2");
+  await expectBadge(panel, "最新", "neutral");
+  await expect(details).toHaveAttribute("data-state", "closed");
+  await panel.getByTestId("document-language-pack-details-toggle").click();
+  await expect(details).toContainText("現在版を使用");
+  await expect(details.getByRole("button")).toHaveCount(0);
+  // 状態メッセージの枠に構築の案内を出さない。
+  await expect(page.getByTestId("document-language-pack-building")).toHaveCount(0);
   expect(comparisons).toHaveLength(0);
 });
+
+test("言語資源: 取込設定が同じ版は「最新（内容は同じ）」とし、差分の確認はできるが再処理は出さない", { tag: "@responsive" }, async ({ page }) => {
+  const { panel, details, comparisons } = await openLanguagePackState(page, [servingUse("release-1", 1, "equivalent")]);
+  await expectBadge(panel, "最新（内容は同じ）", "neutral");
+  await expect(details).toHaveAttribute("data-state", "closed");
+  await panel.getByTestId("document-language-pack-details-toggle").click();
+  await details.getByRole("button", { name: "差分と影響を確認する" }).click();
+  await expect.poll(() => comparisons.length).toBe(1);
+  await expect(details.getByRole("combobox", { name: "再処理を始める工程" })).toHaveCount(0);
+});
+
+for (const theme of ["light", "dark"] as const) {
+  test(`言語資源: 要約の行と詳細はライト・ダークで読め、狭い画面で横にあふれない（${theme}）`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    const { panel, details } = await openLanguagePackState(page, [{ ...servingUse("release-1", 1, "different"), job_id: "job-0123456789abcdef0123456789abcdef" }], { theme });
+    await expect(details).toHaveAttribute("data-state", "open");
+    await details.getByRole("button", { name: "差分と影響を確認する" }).click();
+    await expect(details.getByRole("combobox", { name: "再処理を始める工程" })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await panel.screenshot({ path: testInfo.outputPath(`language-pack-summary-${theme}.png`) });
+  });
+}
