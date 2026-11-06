@@ -351,10 +351,10 @@ export function PageHeader({
           ) : null}
           {breadcrumbs ? <div className="mb-1.5">{breadcrumbs}</div> : null}
           <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-xl font-bold text-fg">{title}</h1>
+            <h1 className="min-w-0 text-xl font-bold text-fg [overflow-wrap:anywhere]">{title}</h1>
             {status}
           </div>
-          {subtitle ? <p className="mt-1 text-sm text-fg-muted">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-1 text-sm text-fg-muted [overflow-wrap:anywhere]">{subtitle}</p> : null}
           {meta ? <div className="mt-1 text-xs text-fg-muted">{meta}</div> : null}
         </div>
         {actionNodes ? (
