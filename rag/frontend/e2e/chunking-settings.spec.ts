@@ -47,8 +47,8 @@ for (const viewport of [
       await expect(radios.nth(index)).toHaveAccessibleName(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     }
     await expect(page.getByRole("radio", { name: /親子分割|AutoMerging/ })).toHaveCount(0);
-    // 各方式カードに概念図(装飾 SVG)が 1 つずつ描画される。
-    await expect(page.locator('svg[viewBox="0 0 48 36"]')).toHaveCount(7);
+    // 各方式カードに方式のアイコン（lucide。手描きの SVG ではない。#4560）が 1 つずつ描画される。
+    await expect(page.getByRole("radiogroup", { name: "分割方式" }).locator("label > span > svg.lucide")).toHaveCount(7);
     await expect(page.getByRole("heading", { name: "戦略別パラメータ" })).toBeVisible();
     await expect(page.getByRole("spinbutton", { name: "chunk サイズ(文字)", exact: true })).toHaveValue("800");
     await expect(page.getByLabel("overlap(文字)")).toHaveValue("120");
@@ -489,4 +489,29 @@ test("文脈ヘッダの切替と RAPTOR の設定は文書分割に出さない
   await expect(page.getByRole("switch", {name: "文脈ヘッダを検索対象へ追加"})).toHaveCount(0);
   await expect(page.getByText("RAPTOR の階層の要約", {exact:true})).toHaveCount(0);
   await expectNoPageOverflow(page);
+});
+
+// #4560: 方式のカードの図は手描きの SVG にせず、方式ごとに異なる lucide-react のアイコン（20px）1 つにする。
+test("文書分割の方式のカードは lucide のアイコンで、手描きの SVG を使わない（#4560）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockChunkingSettings(page);
+  await page.goto("/settings/chunking");
+  const group = page.getByRole("radiogroup", { name: "分割方式" });
+  await expect(group.getByRole("radio")).toHaveCount(7);
+  const icons = await group.locator("label").evaluateAll((labels) =>
+    labels.map((label) => {
+      const svgs = Array.from(label.querySelectorAll("svg"));
+      const first = svgs[0];
+      return {
+        handDrawn: svgs.filter((svg) => !svg.classList.contains("lucide")).length,
+        icon: first ? (Array.from(first.classList).find((name) => name.startsWith("lucide-")) ?? null) : null,
+        size: first ? Math.round(first.getBoundingClientRect().width) : 0,
+      };
+    })
+  );
+  expect(icons.map((icon) => icon.handDrawn)).toEqual(Array(7).fill(0));
+  expect(icons.every((icon) => icon.icon !== null && icon.size === 20)).toBe(true);
+  expect(new Set(icons.map((icon) => icon.icon)).size).toBe(7);
+  await expectNoPageOverflow(page);
+  await group.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("chunking-strategy-icons.png") });
 });

@@ -115,4 +115,20 @@ describe("配信の base（Issue 1316）", () => {
       "/rag/api/chat/conversations/c1/messages/m1/stream",
     ]);
   });
+
+  it("一覧の題名の href（文書の URL）は base を付け、router の path は base を付けない（Issue 4560）", async () => {
+    for (const [base, prefix] of [["/", ""], ["/rag/", "/rag"]] as const) {
+      vi.stubEnv("BASE_URL", base);
+      vi.resetModules();
+      const [editorRoute, runHistory] = await Promise.all([
+        import("./editor-route"),
+        import("@/components/history/run-history-view"),
+      ]);
+      expect(runHistory.runDetailPath("run 1")).toBe("/history/run%201");
+      expect(runHistory.runDetailHref("run 1")).toBe(`${prefix}/history/run%201`);
+      expect(editorRoute.editorItemHref("/search-answer-profiles", "tab=a", "sap-1")).toBe(
+        `${prefix}/search-answer-profiles?tab=a&id=sap-1`
+      );
+    }
+  });
 });

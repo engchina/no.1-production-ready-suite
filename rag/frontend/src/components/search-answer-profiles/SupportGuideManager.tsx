@@ -110,6 +110,7 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
     />
   ) : (
     <PagedDataTable<SupportGuideSummary>
+      // 0 件・1 ページでもページ送りを出す例外（#3719。page-archetypes.md「基準から外す例外」）。
       showSinglePagePagination
       paginationLabels={paginationLabels()}
       {...paging}
@@ -208,10 +209,10 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
           allTotal: allGuides.data?.length,
           live: true,
         })}
+        // ツールバーの部品は 1 行で同じ高さ（md）にそろえる（絞り込みのチップと同じ。#4560）。
         actions={
           <>
             <Button
-              size="sm"
               variant="secondary"
               icon={Download}
               loading={exporting}
@@ -220,7 +221,6 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
               {t("supportGuides.export")}
             </Button>
             <Button
-              size="sm"
               variant="secondary"
               icon={FileJson}
               pressed={importOpen}
@@ -228,7 +228,7 @@ export function SupportGuideManager({ searchAnswerProfileId }: { searchAnswerPro
             >
               {t("supportGuides.import")}
             </Button>
-            <Button size="sm" icon={Plus} onClick={() => void select({ mode: "new" })}>
+            <Button icon={Plus} onClick={() => void select({ mode: "new" })}>
               {t("supportGuides.new")}
             </Button>
           </>

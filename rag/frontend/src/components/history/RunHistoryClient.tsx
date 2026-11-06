@@ -78,6 +78,8 @@ import {
   RUN_STATUS_OPTIONS,
   RUN_SURFACE_FILTERS,
   runConversationOwner,
+  runDetailHref,
+  runDetailPath,
   runExecutorLabel,
   runExecutorParam,
   runListUsage,
@@ -142,17 +144,13 @@ function isRunHistoryView(value: unknown): value is RunHistoryView {
   );
 }
 
-export function runDetailPath(runId: string): string {
-  return `${APP_ROUTES.history}/${encodeURIComponent(runId)}`;
-}
-
 /** 一覧の行 → 共通の行の形。 */
 function toItem(run: RunSummary): RunHistoryItem {
   return {
     id: run.run_id,
     title: run.question || t("history.question.withheld"),
     target: runProfileLabel(run),
-    href: runDetailPath(run.run_id),
+    href: runDetailHref(run.run_id),
     status: toRunStatus(run.status),
     kind: runSurfaceLabel(run.surface),
     models: run.models ?? (run.model_id ? [run.model_id] : []),
