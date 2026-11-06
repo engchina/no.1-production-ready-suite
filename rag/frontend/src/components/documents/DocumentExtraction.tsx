@@ -258,7 +258,7 @@ export function DocumentExtraction({
                 }
                 onSelect={onElementSelect}
                 visionDetails={layoutVisionDetails(extraction, elementKey(element))}
-                cropUrl={documentId ? elementCropUrl(documentId, element) : null}
+                cropUrl={documentId && recipeId && extractionRevision ? elementCropUrl(documentId, recipeId, extractionRevision, element) : null}
                 originalSource={(element.source_parser === "xml_tree_json" || typeof element.metadata?.xml_tree_unit_kind === "string") && documentId && recipeId && extractionRevision && elementKey(element) === selectedElementId
                   ? <OriginalSourcePanel key={`${recipeId}:${extractionRevision}:${elementKey(element)}`} readingKey={`${documentId}:${recipeId}`} elementId={elementKey(element)} revision={extractionRevision} loadWindow={loadOriginal} /> : null}
               />
@@ -516,7 +516,7 @@ function ElementItem({
           </p>
         ) : null}
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          {vision?.status ? (
+          {vision && (vision.status !== null || !vision.excluded) ? (
             <InfoChip
               icon={ImageIcon}
               label={t("flow.extraction.vision.status", { status: visionStatusLabel(vision.status) })}
@@ -701,11 +701,13 @@ function VisionDetails({
   );
 }
 
-function visionStatusLabel(status: string): string {
+function visionStatusLabel(status: string | null): string {
+  if (status === null) return t("flow.extraction.vision.unrecorded");
+  if (status === "running") return t("flow.extraction.vision.running");
   if (status === "succeeded") return t("flow.extraction.vision.succeeded");
   if (status === "failed") return t("flow.extraction.vision.failed");
   if (status === "skipped") return t("flow.extraction.vision.skipped");
-  return status;
+  return t("flow.extraction.vision.unknown");
 }
 
 function elementKindLabel(kind: string): string {

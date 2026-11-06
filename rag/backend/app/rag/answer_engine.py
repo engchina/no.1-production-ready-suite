@@ -41,6 +41,7 @@ import httpx
 from fastapi import HTTPException
 from openai import APITimeoutError
 from pr_backend_core.observability.tracing import ObservedSpan, SpanDisplay, observed_span
+from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.timezones import configured_timezone_name
 from rag_engine.generation.answer_envelope import ENVELOPE_SCHEMA_VERSION
 from rag_engine.generation.answer_models import ANSWER_USES
@@ -59,6 +60,7 @@ from rag_engine.retrieval.search_stages import (
     IMAGE_EVIDENCE_STAGE,
     REFERENCE_EXPANSION_STAGE,
 )
+from rag_parser_core.vision_text import require_projected_vision_source
 
 from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import OracleClient
@@ -606,6 +608,9 @@ def build_engine_settings(
         # 常に「未実行」になる(#275)。
         "OCI_COMPARTMENT_ID": settings.oci_compartment_id,
         "RERANK_MODEL": settings.oci_genai_rerank_model,
+        "EMBEDDING_REGION": settings.oci_genai_embedding_region,
+        "EMBEDDING_ENDPOINT": genai_endpoint(settings.oci_genai_embedding_region),
+        "OCI_RERANK_ENDPOINT": genai_endpoint(settings.oci_genai_rerank_region),
         "RERANK_MIN_RELEVANCE_SCORE": str(settings.rag_rerank_min_relevance_score),
         "RUNTIME_RULES_CONFIRMATION_ENABLED": "1"
         if settings.rag_runtime_rules_confirmation_enabled
@@ -967,14 +972,9 @@ class AnswerEngine:
             requested_as_of=requested.filters.get(AS_OF_FILTER_KEY, ""),
             degraded=self._degraded if self._degraded is not None else DegradedSteps(),
         )
-        try:
-            overrides = saved_prompt_overrides()
-            if overrides is None:
-                overrides = await self._oracle.answer_prompt_overrides()
-        except Exception as exc:  # noqa: BLE001 - 編集したプロンプトは補助。既定値で回答を続ける。
-            logger.warning("answer prompt overrides load failed", exc_info=True)
-            state.record_degraded("prompt_overrides", exc)
-            overrides = {}
+        overrides = saved_prompt_overrides()
+        if overrides is None:
+            overrides = await self._oracle.answer_prompt_overrides()
         with tempfile.TemporaryDirectory(prefix="rag-engine-answer-") as work:
             work_dir = Path(work)
             state.work_dir = work_dir
@@ -3792,6 +3792,19 @@ class AnswerEngine:
         """
         if receipt is not None:
             receipt.update(chunk_id=chunk.chunk_id, metadata_applied=False)
+        chunk_set_id = chunk.metadata.get("chunk_set_id")
+        if not isinstance(chunk_set_id, str) or not chunk_set_id.strip():
+            if receipt is not None:
+                images = _engine_metadata(chunk).get("image_evidence")
+                receipt.update(
+                    status="source_unavailable",
+                    images=[
+                        {"index": index, "status": "source_unavailable"}
+                        for index, image in enumerate(images if isinstance(images, list) else [])
+                        if isinstance(image, dict)
+                    ],
+                )
+            return
         if chunk.chunk_id in state.materialized_images:
             cached = state.materialized_images[chunk.chunk_id]
             if cached is not None:
@@ -3842,7 +3855,8 @@ class AnswerEngine:
                 image_receipt.update(image_id=image_id, page=page)
             if not image_id or page < 1 or not isinstance(bbox, list) or len(bbox) != 4:
                 continue
-            name = f"{_safe_name(image_id)}.png"
+            source_key = hashlib.sha256(chunk_set_id.encode()).hexdigest()
+            name = f"{source_key}-{_safe_name(image_id)}.png"
             target = crop_dir / name
             if not target.is_file():
                 source = await self._parsed_source(chunk, state)
@@ -3884,6 +3898,9 @@ class AnswerEngine:
         """根拠の版が解析したファイル（同じ文書でもレシピごとに違う）。"""
         recipe_id = chunk.metadata.get("recipe_id")
         chunk_set_id = chunk.metadata.get("chunk_set_id")
+        if not isinstance(chunk_set_id, str) or not chunk_set_id.strip():
+            # 座標の版が未記録なら、現在のレシピや文書の原本で代用しない。
+            return None
         key = f"{chunk.document_id}:{chunk_set_id}"
         if key not in state.sources:
             try:
@@ -4143,6 +4160,14 @@ def _hit_channels(hit: RetrievedChunk, query_index: int) -> set[str]:
 
 
 def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
+    answer_projection: dict[str, Any] = {}
+    if "answer_text_projection_json" in chunk.metadata:
+        try:
+            answer_projection["answer_text_projection"] = json.loads(
+                str(chunk.metadata["answer_text_projection_json"])
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("回答本文の投影が壊れています。再分割してください。") from exc
     raw = chunk.metadata.get("engine_metadata_json")
     if isinstance(raw, str) and raw.strip():
         try:
@@ -4152,6 +4177,7 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
         if isinstance(decoded, dict):
             return {
                 **decoded,
+                **answer_projection,
                 **{
                     key: chunk.metadata[key]
                     for key in (
@@ -4166,6 +4192,7 @@ def _engine_metadata(chunk: RetrievedChunk) -> dict[str, Any]:
     # 親子階層以外の分割方式の chunk も最小の v4 metadata で扱う。
     section = str(chunk.metadata.get("section_path") or "")
     return {
+        **answer_projection,
         "schema_version": 4,
         "active": True,
         "atomic": False,
@@ -4499,6 +4526,16 @@ def _stored_child(
     from rag_engine.models.storage import StoredChunk
 
     metadata = _engine_metadata(chunk)
+    require_projected_vision_source(metadata, ())
+    require_projected_vision_source(
+        {
+            **metadata,
+            **{
+                key: chunk.metadata[key] for key in ("figure_text_source",) if key in chunk.metadata
+            },
+        },
+        (),
+    )
     if isinstance(document := metadata.get("document"), dict) and "first_page_context" in document:
         metadata["document"] = {
             key: value for key, value in document.items() if key != "first_page_context"
@@ -4747,6 +4784,20 @@ def _stored_parents(children: list[Any], state: _SearchState) -> list[Any]:
             continue
         text = parent_text
         metadata = dict(members[0].metadata)
+        proof_values = [
+            state.chunks[child.chunk_uid].metadata.get("parent_answer_text_projection_json")
+            for child in members
+            if child.chunk_uid in state.chunks
+        ]
+        if any(proof is not None for proof in proof_values):
+            if not proof_values or any(proof != proof_values[0] for proof in proof_values):
+                raise ValueError("親の回答本文の投影が一致しません。再分割してください。")
+            try:
+                metadata["answer_text_projection"] = json.loads(str(proof_values[0]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("親の回答本文の投影が壊れています。再分割してください。") from exc
+        elif "answer_text_projection" in metadata:
+            raise ValueError("親の回答本文の投影が未記録です。再分割してください。")
         _merge_member_metadata(metadata, members)
         _restore_parent_native_ranges(text, metadata, members, state)
         metadata.pop("rrf_score", None)

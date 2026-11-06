@@ -118,8 +118,8 @@ describe("書式と絞り込みの値", () => {
     expect(formatRunDateTime("not-a-date")).toBe("not-a-date");
   });
 
-  it("token は桁区切り", () => {
-    expect(formatRunTokens(12345)).toBe("12,345 token");
+  it("トークン数は桁区切り", () => {
+    expect(formatRunTokens(12345)).toBe("12,345 トークン");
     expect(formatRunTokens(null)).toBe("—");
   });
 
@@ -136,7 +136,7 @@ describe("書式と絞り込みの値", () => {
     expect(runUsageView(usage, { fallbackModel: "model-x" })).toEqual({
       model: "model-a、model-b",
       usage: { tokens: 12345, note: null },
-      modelCalls: "3 回（入力 12,000 / 出力 345 token）",
+      modelCalls: "3 回（入力 12,000 / 出力 345 トークン）",
       unmeasuredCalls: null,
     });
     const mixed = runUsageView(
@@ -144,7 +144,7 @@ describe("書式と絞り込みの値", () => {
       { sourceLabel: (source) => `出どころ ${source}` }
     );
     expect(mixed.usage).toEqual({ tokens: 12345, note: "一部計測" });
-    expect(mixed.modelCalls).toBe("3 回（うち 2 回を計測。入力 12,000 / 出力 345 token）");
+    expect(mixed.modelCalls).toBe("3 回（うち 2 回を計測。入力 12,000 / 出力 345 トークン）");
     expect(mixed.unmeasuredCalls).toBe("出どころ select_ai");
     // 計測できない呼び出しだけ: 数を作らない。
     const unmeasured = runUsageView({
@@ -496,12 +496,13 @@ describe("RunSummary", () => {
       <RunSummary status="succeeded" question="合成の質問" startedAt="2026-10-15T00:12:05.000Z" usage={usage} runId="run-1" />
     );
     render(summary({ tokens: 1200, note: "一部計測" }));
-    expect(tokens()).toBe("1,200 token（一部計測）");
+    expect(container.querySelector("[data-run-fact='tokens'] dt")?.textContent).toBe("トークン数");
+    expect(tokens()).toBe("1,200 トークン（一部計測）");
     render(summary({ tokens: null, note: "未計測" }));
     expect(tokens()).toBe("未計測");
     // LLM を呼ばなかった実行の実測の 0 は 0 と出す（注記なし）。
     render(summary({ tokens: 0 }));
-    expect(tokens()).toBe("0 token");
+    expect(tokens()).toBe("0 トークン");
     render(summary(null));
     expect(container.querySelector("[data-run-fact='tokens']")).toBeNull();
   });
@@ -564,12 +565,12 @@ describe("RunTimeline", () => {
   it("操作画面と履歴の既定は共通の小さい文字とアイコンで描く", () => {
     render(<RunTimelineSection title="処理の経過" steps={[{id: "a", label: "合成の工程", status: "done", details: {fields: [{label: "結果", value: "完了"}]}}]} />);
     const label = container.querySelector("[data-run-timeline-label]");
-    expect(label?.closest("div")?.className).toContain("text-xs");
+    expect(label?.closest<HTMLElement>("[data-run-step-name]")?.className).toContain("text-xs");
     expect(container.querySelector('[data-run-progress-summary]')?.className).toContain("text-xs");
     expect(container.querySelector('[data-run-timeline-toggle] svg')?.getAttribute("width")).toBe("12");
   });
 
-  it("時刻のある段は実際の位置、無い段は前の段の後ろに積む", () => {
+  it("時刻のある段だけを実際の位置に描き、開始不明の位置は作らない", () => {
     const steps: RunTimelineStep[] = [
       { id: "a", label: "A", status: "done", startedAt: "2026-10-15T00:00:00.000Z", finishedAt: "2026-10-15T00:00:01.000Z" },
       { id: "b", label: "B", status: "done", startedAt: "2026-10-15T00:00:01.000Z", finishedAt: "2026-10-15T00:00:04.000Z" },
@@ -584,16 +585,11 @@ describe("RunTimeline", () => {
       { id: "c", label: "C", status: "done", durationMs: 3000 },
       { id: "d", label: "D", status: "pending" },
     ];
-    expect(runTimelineBars(sequential)).toEqual([
-      { offset: 0, width: 25 },
-      { offset: 25, width: 0.5 },
-      { offset: 25, width: 75 },
-      null,
-    ]);
+    expect(runTimelineBars(sequential)).toEqual([null, null, null, null]);
     expect(runTimelineBars([{ id: "x", label: "X", status: "pending" }])).toEqual([null]);
   });
 
-  it("時刻の無い入れ子の段は、親の段の始まりから積む（#2265）", () => {
+  it("時刻の無い入れ子は数値と深さを保ち、時間条を捏造しない", () => {
     const nested: RunTimelineStep[] = [
       { id: "a", label: "A", status: "done", durationMs: 1000 },
       { id: "b", label: "B", status: "done", durationMs: 3000 },
@@ -602,18 +598,11 @@ describe("RunTimeline", () => {
       { id: "b2a", label: "B2a", status: "done", durationMs: 1000, level: 2 },
       { id: "c", label: "C", status: "done", durationMs: 0 },
     ];
-    expect(runTimelineBars(nested)).toEqual([
-      { offset: 0, width: 25 },
-      { offset: 25, width: 75 },
-      { offset: 25, width: 25 },
-      { offset: 50, width: 50 },
-      { offset: 50, width: 25 },
-      { offset: 100, width: 0.5 },
-    ]);
+    expect(runTimelineBars(nested)).toEqual([null, null, null, null, null, null]);
     render(<RunTimeline steps={nested} showSummary={false} size="sm" stepTestIdPrefix="t" testId="timeline" />);
     expect(container.textContent).not.toContain("合計");
     expect(container.querySelector("[data-testid='t-step-b2a']")?.getAttribute("data-level")).toBe("2");
-    expect(container.querySelector<HTMLElement>("[data-testid='t-step-b2a'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("2rem");
+    expect(container.querySelector<HTMLElement>("[data-testid='t-step-b2a'] [data-run-timeline-label]")?.closest<HTMLElement>("[data-run-step-name]")?.style.paddingInlineStart).toBe("2rem");
     expect(container.querySelector("[data-testid='t-step-a'] .text-xs")).not.toBeNull();
     render(<RunTimeline steps={nested} showBars={false} testId="timeline" />);
     expect(container.querySelector("[data-run-timeline-bar]")).toBeNull();
@@ -630,7 +619,7 @@ describe("RunTimeline", () => {
         testId="timeline"
       />
     );
-    expect(container.textContent).toContain("3 ステップ・合計 1.5 秒");
+    expect(container.textContent).toContain("3 ステップ・合計 —");
     const buttons = container.querySelectorAll<HTMLButtonElement>("button[aria-expanded]");
     expect(buttons).toHaveLength(2);
     expect(buttons[0].getAttribute("aria-expanded")).toBe("false");
@@ -641,8 +630,8 @@ describe("RunTimeline", () => {
     expect(container.querySelector("[data-run-timeline-step='sql']")?.textContent).toContain("失敗 · 0.3 秒");
     expect(container.querySelector("[data-run-timeline-step='plan'] [data-run-step-status-duration]")?.textContent).toContain("完了");
     // 入れ子の段は字下げする。時間の線は飾り（aria-hidden）。
-    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='tool'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("1rem");
-    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='plan'] [data-run-timeline-label]")?.closest("div")?.style.paddingInlineStart).toBe("0rem");
+    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='tool'] [data-run-timeline-label]")?.closest<HTMLElement>("[data-run-step-name]")?.style.paddingInlineStart).toBe("1rem");
+    expect(container.querySelector<HTMLElement>("[data-run-timeline-step='plan'] [data-run-timeline-label]")?.closest<HTMLElement>("[data-run-step-name]")?.style.paddingInlineStart).toBe("0rem");
     expect(container.querySelector("[data-run-timeline-bar]")?.getAttribute("aria-hidden")).toBe("true");
     act(() => buttons[0].click());
     expect(buttons[0].getAttribute("aria-expanded")).toBe("true");
@@ -716,7 +705,7 @@ describe("入れ子の深さ（#3447）", () => {
     { id: "d9", label: "深さ 9", status: "done", durationMs: 20, level: 9 },
   ];
   const nameCell = (id: string) =>
-    container.querySelector<HTMLElement>(`[data-run-timeline-step='${id}'] [data-run-timeline-label]`)!.closest("div")!;
+    container.querySelector<HTMLElement>(`[data-run-timeline-step='${id}'] [data-run-timeline-label]`)!.closest<HTMLElement>("[data-run-step-name]")!;
 
   it("深さの上限で丸めず、深い一覧だけにキーボード操作できる内部スクロールを設ける", () => {
     render(<RunTimeline steps={steps} showBars={false} testId="timeline" />);
@@ -851,7 +840,7 @@ describe("RunTimelineSection（#2473）", () => {
     expect(details?.open).toBe(true);
     expect(container.querySelectorAll("[data-run-timeline-step]")).toHaveLength(3);
     // 開いた中に要約の行を重ねて出さない。処理の詳細はタイムラインの後ろ。
-    expect(container.querySelector("[data-run-timeline] > p")?.textContent).toContain("再構成");
+    expect(container.querySelector("[data-run-timeline] > p")?.textContent).toContain("開始時刻が未記録");
     expect(container.textContent).toContain("処理の詳細の中身");
   });
 

@@ -214,6 +214,16 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4543 「本文」の節点の前の文書構造索引の補建）
+
+「本文」の節点（#4507）の前に構築した文書構造索引は、見出しの無い chunk を「文書全体」の章節に結び、本文の節点への結び付きを持たない（図の「本文」の一覧が 0 件）。補建の計画（`GET /api/knowledge-bases/{kb}/structure-index/plan`）は、構築記録の指紋が一致していても本文の結び付きが本文の chunk より少ない文書を「更新が必要」（`STALE`。項目に `body_links_missing: true`）にし、既定の補建（`missing`）が対象にする。DDL・設定の変更は無く、補建は構造索引の行（`rag_graph_*`・`rag_structure_index_builds`）だけを置き換え、chunk・embedding・モデルは使わない。
+
+1. backend を更新する。
+2. 検出（読み取りだけ）: KB ごとに計画を取得し、`body_links_missing: true` の文書を数える。
+3. 退避（読み取りだけ・実施の承認が要る）: 対象の KB の `rag_graph_entities`・`rag_graph_entity_chunks`・`rag_graph_relationships`・`rag_graph_references`・`rag_structure_index_builds` の行を export する。
+4. 試験（承認が要る）: `POST /api/knowledge-bases/{kb}/structure-index/job` に `{"mode": "missing", "document_ids": [...]}`（数件）を送り、図の「本文」の一覧の件数と原文の表示を確かめる。`document_ids` は KB に属し操作する利用者に見える文書だけで、そうでなければ 404 で作業を始めない。
+5. 展開（承認が要る）: KB ごとに `{"mode": "missing"}` で補建し、計画の `body_links_missing` が 0 件になったことを確かめる。退避は確認が終わるまで残す。
+
 ## 既存環境の更新手順（#4212 品質評価の結果をアップロードした Excel に足す）
 
 検証を通った評価リクエストの Excel をアップロードの保存先に保存し、結果のダウンロードはそのファイルのケースの行の右に結果の列を足した形にした（元のシート・セル・書式は変えない）。
@@ -1669,8 +1679,9 @@ schema の変更は無い。表示の本文・embedding は変えない。
 
 1. システムテーブルを更新する（migration `20260928_003_default_document_recipes`）。レシピ行が 1 件も無い文書にだけ、
    文書の状態からレシピ1を作る。レシピ1を削除して他のレシピだけがある文書には作らない。
-2. migration の前でも画面は動く。レシピ行の無い文書は、一覧・詳細でレシピ1を仮の行として返し、最初の書き込み
-   （設定の保存・処理の開始など）で行を作る。
+2. 現在は読取時の仮の行を返さない（#4194）。レシピ行の無い可視の文書は一覧が空、指定レシピの取得は未登録となる。
+   新規文書の登録と、設定の保存・処理の開始などの明示した書き込みで作る既存経路は維持する。
+   この読取変更では既存データの補完・migration の実行・列の削除を行わない。
 
 ## 既存環境の更新手順（#556 項目抽出の標準の項目）
 

@@ -45,7 +45,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 from uuid import uuid4
 
 from dotenv import dotenv_values
@@ -57,6 +57,7 @@ from pr_backend_core.bounded_calls import (
     network_failure_cause,
 )
 from pr_backend_core.llm_request_params import collect_dropped_parameters
+from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
 from pr_backend_core.schemas import ApiResponse
 
 # 入力 token の見積もりは backend_core の 1 つ（検索の結果の本文の予算と共有する。#3321）。
@@ -416,6 +417,8 @@ class EnterpriseAiModelSettings(BaseModel):
 class GenerativeAiModelSettings(BaseModel):
     """OCI Generative AI（embedding/rerank）モデル設定。"""
 
+    embedding_region: GenAiRegion = DEFAULT_GENAI_REGION
+    rerank_region: GenAiRegion = DEFAULT_GENAI_REGION
     embedding_model: str = Field(default="cohere.embed-v4.0", max_length=256)
     embedding_dim: int = Field(
         default=1536,
@@ -1245,6 +1248,14 @@ def model_payload(settings: Any) -> ModelSettingsPayload:
             max_retries=settings.oci_enterprise_ai_max_retries,
         ),
         generative_ai=GenerativeAiModelSettings(
+            embedding_region=cast(
+                GenAiRegion,
+                _setting_text(settings, "oci_genai_embedding_region") or DEFAULT_GENAI_REGION,
+            ),
+            rerank_region=cast(
+                GenAiRegion,
+                _setting_text(settings, "oci_genai_rerank_region") or DEFAULT_GENAI_REGION,
+            ),
             embedding_model=settings.oci_genai_embedding_model,
             embedding_dim=settings.oci_genai_embedding_dim,
             rerank_model=settings.oci_genai_rerank_model,
@@ -1275,6 +1286,8 @@ def apply_model_settings(settings: Any, payload: ModelSettingsPayload) -> None:
     settings.oci_enterprise_ai_vlm_response_path = enterprise.vision_response_path
     settings.oci_enterprise_ai_timeout_seconds = enterprise.timeout_seconds
     settings.oci_enterprise_ai_max_retries = enterprise.max_retries
+    _set_if_field(settings, "oci_genai_embedding_region", generative.embedding_region)
+    _set_if_field(settings, "oci_genai_rerank_region", generative.rerank_region)
     settings.oci_genai_embedding_model = generative.embedding_model
     settings.oci_genai_embedding_dim = generative.embedding_dim
     settings.oci_genai_rerank_model = generative.rerank_model
@@ -2030,6 +2043,21 @@ def save_model_settings(
             store.reload_if_changed(settings)
             if base_revision is not None and base_revision != model_settings_revision(settings):
                 raise HTTPException(status_code=409, detail=MODEL_SETTINGS_CONFLICT_MESSAGE)
+            # 保存済みの東京を保つ他節の保存は許可し、東京への新規変更だけを拒否する。
+            current_regions = model_payload(settings).generative_ai
+            for field in ("embedding_region", "rerank_region"):
+                selected = getattr(payload.generative_ai, field)
+                if selected not in ("ap-osaka-1", "us-chicago-1") and selected != getattr(
+                    current_regions, field
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "モデルのリージョンは ap-osaka-1 または us-chicago-1 を"
+                            "選び直してください。"
+                            "既存の接続先は変更していません。"
+                        ),
+                    )
             keys = resolve_api_keys(settings, payload)
             store.save(
                 settings,

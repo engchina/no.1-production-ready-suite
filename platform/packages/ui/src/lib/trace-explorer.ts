@@ -21,23 +21,7 @@ export function traceSearchText(step: RunTimelineStep): string {
   ].filter(Boolean).join("\n").toLocaleLowerCase();
 }
 
-export function traceMeasuredTiming(steps: readonly RunTimelineStep[]) {
-  const times = steps.map(step => {
-    const start = operationTimestampMs(step.startedAt);
-    const end = operationTimestampMs(step.finishedAt);
-    return { start, end: start != null && end != null && end >= start ? end : null };
-  });
-  const starts = times.flatMap(t => t.start == null ? [] : [t.start]);
-  const ends = times.flatMap(t => t.end == null ? [] : [t.end]);
-  const origin = starts.length ? Math.min(...starts) : null;
-  const last = starts.length ? Math.max(...ends, ...starts) : null;
-  const duration = origin != null && last != null ? Math.max(0, last - origin) : null;
-  return { duration, bars: times.map(t => {
-    if (origin == null || duration == null || t.start == null) return null;
-    return { offset: duration > 0 ? (t.start - origin) / duration * 100 : 0,
-      width: t.end == null ? null : duration > 0 ? Math.max(0, (t.end - t.start) / duration * 100) : 0 };
-  }) };
-}
+export { measuredRunTiming as traceMeasuredTiming } from "./run-step-presentation";
 
 export function traceOrderedSteps(steps: readonly RunTimelineStep[], order: TraceOrder): RunTimelineStep[] {
   const sorted = steps.map((step, index) => ({step, index})).sort((a, b) => {

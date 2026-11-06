@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
+from app.rag.language_pack_contract import LanguagePackSnapshotError
 from app.rag.language_pack_releases import (
     active_release,
     artifact_reusable_for_phase,
@@ -48,10 +49,14 @@ async def artifact_language_compatible(
     ingest_hash = provenance.get("language_pack_ingest_hash")
     if not isinstance(identity, str) or not isinstance(ingest_hash, str):
         return False
-    before = await LanguagePackReleaseStore(oracle).get(identity)
-    if before is None or before.ingest_hash != ingest_hash:
+    try:
+        before = await LanguagePackReleaseStore(oracle).get(identity)
+        if before is None or before.ingest_hash != ingest_hash:
+            return False
+        pack_from_release(before)
+    except LanguagePackSnapshotError:
+        # 現在の契約で読めない旧版の成果物は再利用できない。呼び出し側が再処理の起点を示す。
         return False
-    pack_from_release(before)
     return artifact_reusable_for_phase(before, current, phase)
 
 

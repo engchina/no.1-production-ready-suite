@@ -56,6 +56,7 @@ from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.trace_bodies import BodyPage
 from pr_backend_core.observability.trace_body_reader import CallBodySlot
+from pr_backend_core.oci_genai_regions import genai_config, genai_endpoint
 from pr_system_settings.answer_notice import build_answer_notice_router
 from pr_system_settings.auth.visibility import (
     DEFAULT_RUN_EXECUTOR_FILTER,
@@ -1155,7 +1156,9 @@ async def _run_oci_embedding_model_test(
     model_settings: GenerativeAiModelSettings,
 ) -> int:
     models = import_module("oci.generative_ai_inference.models")
-    client = cast(Any, _oci_genai_inference_client(settings))
+    client = cast(
+        Any, _oci_genai_inference_client(settings, region=model_settings.embedding_region)
+    )
     details = models.EmbedTextDetails(
         inputs=[MODEL_TEST_EMBEDDING_INPUT],
         serving_mode=models.OnDemandServingMode(model_id=model_settings.embedding_model),
@@ -1186,7 +1189,7 @@ async def _run_oci_rerank_model_test(
     model_settings: GenerativeAiModelSettings,
 ) -> tuple[int, float | None]:
     models = import_module("oci.generative_ai_inference.models")
-    client = cast(Any, _oci_genai_inference_client(settings))
+    client = cast(Any, _oci_genai_inference_client(settings, region=model_settings.rerank_region))
     details = models.RerankTextDetails(
         input=MODEL_TEST_RERANK_QUERY,
         documents=list(MODEL_TEST_RERANK_DOCUMENTS),
@@ -1208,7 +1211,7 @@ async def _run_oci_rerank_model_test(
     return len(document_ranks), top_score
 
 
-def _oci_genai_inference_client(settings: object) -> object:
+def _oci_genai_inference_client(settings: object, *, region: str) -> object:
     oci_config = import_module("oci.config")
     genai = import_module("oci.generative_ai_inference")
     config = _load_oci_config_without_prompt(
@@ -1216,7 +1219,9 @@ def _oci_genai_inference_client(settings: object) -> object:
         _settings_str_from(settings, "oci_config_file", "~/.oci/config"),
         _settings_str_from(settings, "oci_config_profile", "DEFAULT"),
     )
-    return genai.GenerativeAiInferenceClient(config)
+    return genai.GenerativeAiInferenceClient(
+        genai_config(config, region), service_endpoint=genai_endpoint(region)
+    )
 
 
 def _require_non_empty(value: str, label: str) -> str:
@@ -3445,6 +3450,7 @@ class RunTraceData(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
     # 表に書けなかった span の数（1 以上なら画面は「一部の処理だけを記録しています。」）。
     dropped_spans: int = 0
+    read_truncated: bool = False
 
 
 def _run_trace_viewer(request: Request, run: RunState) -> str | None:
@@ -3476,11 +3482,15 @@ async def get_run_trace(
     run = await run_in_threadpool(_readable_run, request, run_id)
     run, _withheld = await _evidence_checked_run(request, run)
     spans: list[Any] = []
+    read_truncated = False
     if run.trace_id is not None:
         try:
-            spans = await run_in_threadpool(
-                trace_spans.fetch, run.trace_id, viewer_user_uuid=_run_trace_viewer(request, run)
+            page = await run_in_threadpool(
+                trace_spans.fetch_page,
+                run.trace_id,
+                viewer_user_uuid=_run_trace_viewer(request, run),
             )
+            spans, read_truncated = page.spans, page.truncated
         except Exception as exc:
             logger.warning(
                 "agent_run_trace_read_failed",
@@ -3493,6 +3503,7 @@ async def get_run_trace(
             trace_id=run.trace_id,
             events=run_trace_events(run, spans),
             dropped_spans=run.trace_dropped_spans,
+            read_truncated=read_truncated,
         )
     )
 

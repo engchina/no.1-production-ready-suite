@@ -1022,8 +1022,8 @@ async def test_oracle_client_rejects_recipe_delete_before_dml_when_scope_mismatc
     assert not any("DELETE FROM" in call.statement for call in pool.connection.calls)
 
 
-async def test_oracle_client_persists_ingestion_job_without_max_attempts_column() -> None:
-    """旧 queue table では max_attempts 列を省いて取込 job を保存する。"""
+async def test_oracle_client_rejects_ingestion_insert_without_max_attempts_column() -> None:
+    """必須列の欠測時はSQLを書き換えず保存を失敗させる。"""
     pool = FakeOraclePool(
         execute_results=[[_oracle_document_row()]],
         missing_ingestion_job_max_attempts=True,
@@ -1037,15 +1037,16 @@ async def test_oracle_client_persists_ingestion_job_without_max_attempts_column(
         queued_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
 
-    created = await client.create_ingestion_job(job)
+    with pytest.raises(RuntimeError, match="ORA-00904"):
+        await client.create_ingestion_job(job)
 
-    assert created == job
     insert_calls = [
         call for call in pool.connection.calls if "INSERT INTO rag_ingestion_jobs" in call.statement
     ]
-    assert len(insert_calls) == 2
+    assert len(insert_calls) == 1
     assert "max_attempts" in insert_calls[0].statement
-    assert "max_attempts" not in insert_calls[1].statement
+    assert pool.connection.commits == 0
+    assert pool.connection.rollbacks == 1
 
 
 async def test_oracle_client_lists_and_counts_ingestion_jobs() -> None:
@@ -1419,10 +1420,10 @@ async def test_oracle_client_recovers_orphaned_ingesting_document() -> None:
     assert pool.connection.commits == 1
 
 
-async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_column(
+async def test_oracle_client_rejects_stale_recovery_without_max_attempts_column(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """旧 queue table では既定 max_attempts を補って stale job を回復する。"""
+    """必須列の欠測時は既定値を補わず、状態を書き換えない。"""
     monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
     stale_at = datetime(2026, 1, 2, 1, 0, tzinfo=UTC)
     pool = FakeOraclePool(
@@ -1443,18 +1444,28 @@ async def test_oracle_client_recovers_stale_ingestion_jobs_without_max_attempts_
     )
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
 
-    recovered = await client.recover_stale_ingestion_jobs(stale_before=stale_at, limit=10)
+    with pytest.raises(RuntimeError, match="ORA-00904"):
+        await client.recover_stale_ingestion_jobs(stale_before=stale_at, limit=10)
 
-    assert [job.id for job in recovered] == ["job-1"]
-    assert recovered[0].max_attempts == 3
     select_calls = [
         call for call in pool.connection.calls if "FROM rag_ingestion_jobs j" in call.statement
     ]
+    assert len(select_calls) == 1
     assert "j.max_attempts" in select_calls[0].statement
-    assert ":default_max_attempts AS max_attempts" in select_calls[1].statement
-    assert select_calls[1].parameters["default_max_attempts"] == 3
-    update_statements = [call.statement for call in pool.connection.calls]
-    assert any("SET status = 'QUEUED'" in statement for statement in update_statements)
+    assert not any("UPDATE " in call.statement for call in pool.connection.calls)
+    assert pool.connection.commits == 0
+    assert pool.connection.rollbacks == 1
+
+
+async def test_oracle_client_rejects_ingestion_list_without_max_attempts_column() -> None:
+    """一覧も同じ必須列を要求し、既定値で旧行を装わない。"""
+    pool = FakeOraclePool(execute_results=[], missing_ingestion_job_max_attempts=True)
+    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
+    with pytest.raises(RuntimeError, match="ORA-00904"):
+        await client.list_ingestion_jobs(limit=10, offset=0)
+    assert len(pool.connection.calls) == 1
+    assert "j.max_attempts" in pool.connection.calls[0].statement
+    assert pool.connection.commits == 0
 
 
 async def test_oracle_client_recovery_skips_job_heartbeated_after_select() -> None:
@@ -1544,7 +1555,7 @@ async def test_oracle_client_writes_job_progress_only_for_own_running_job(
     from app.schemas.document import IngestionJobProgress, IngestionParseProgress
 
     monkeypatch.setattr(FakeOracleCursor, "rowcount", 1, raising=False)
-    pool = FakeOraclePool()
+    pool = FakeOraclePool(execute_results=[[{"progress_json": None}], [{"progress_json": None}]])
     client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
     progress = IngestionJobProgress(
         stage="parse",
@@ -1559,7 +1570,10 @@ async def test_oracle_client_writes_job_progress_only_for_own_running_job(
 
     assert written is True
     assert cleared is True
-    write_call, clear_call = pool.connection.calls
+    lock_write, write_call, lock_clear, clear_call = pool.connection.calls
+    assert "FOR UPDATE" in lock_write.statement and "FOR UPDATE" in lock_clear.statement
+    assert pool.connection.commits == 2
+    assert pool.connection.rollbacks == 0
     assert "SET progress_json = :progress_json" in write_call.statement
     assert "AND status = 'RUNNING'" in write_call.statement
     assert "AND lease_owner = :lease_owner" in write_call.statement

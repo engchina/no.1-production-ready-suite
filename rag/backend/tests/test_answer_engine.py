@@ -1,5 +1,6 @@
 """回答エンジン(rag_poc 回答フロー + backend 検索)の統合テスト(外部 I/O はスタブ)。"""
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -817,6 +818,9 @@ def test_build_engine_settings_configures_rerank(tmp_path: Any) -> None:
         Settings(
             oci_compartment_id="ocid1.compartment.oc1..example",
             oci_genai_rerank_model="cohere.rerank-v4.0-fast",
+            oci_genai_embedding_region="ap-tokyo-1",
+            oci_genai_rerank_region="us-chicago-1",
+            oci_region="eu-frankfurt-1",
             rag_rerank_min_relevance_score=0.4,
         ),
         output_dir=tmp_path,
@@ -825,6 +829,15 @@ def test_build_engine_settings_configures_rerank(tmp_path: Any) -> None:
     assert engine_settings.oci_compartment_id == "ocid1.compartment.oc1..example"
     assert engine_settings.rerank_model == "cohere.rerank-v4.0-fast"
     assert engine_settings.rerank_min_relevance_score == 0.4
+    assert engine_settings.embedding_region == "ap-tokyo-1"
+    assert (
+        engine_settings.embedding_endpoint
+        == "https://inference.generativeai.ap-tokyo-1.oci.oraclecloud.com"
+    )
+    assert (
+        engine_settings.oci_rerank_endpoint
+        == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
+    )
     assert _rerank_configured(engine_settings) is True
 
 
@@ -969,6 +982,12 @@ def _pdf_with_figure() -> bytes:
 
 def _figure_oracle() -> FakeOracle:
     oracle = FakeOracle()
+    oracle.chunks = [
+        chunk.model_copy(
+            update={"metadata": {**chunk.metadata, "chunk_set_id": "figure-chunk-set"}}
+        )
+        for chunk in oracle.chunks
+    ]
     figure = oracle.chunks[0]
     metadata = json.loads(str(figure.metadata["engine_metadata_json"]))
     metadata["image_evidence"] = [
@@ -985,6 +1004,7 @@ def _figure_oracle() -> FakeOracle:
         update={
             "metadata": {
                 **figure.metadata,
+                "chunk_set_id": "figure-chunk-set",
                 "page_width": 1000,
                 "page_height": 1400,
                 "engine_metadata_json": json.dumps(metadata),
@@ -1080,7 +1100,9 @@ async def test_answer_engine_attaches_evidence_images_for_vision_answer_model(
     outcome = await engine.run(SearchRequest(query="受注登録の手順を教えてください"))
 
     assert loaded == ["doc-1"]
-    assert images_seen and images_seen[0][0].endswith("crops/docling-p1-5.png")
+    assert images_seen and images_seen[0][0].endswith(
+        f"crops/{hashlib.sha256(b'figure-chunk-set').hexdigest()}-docling-p1-5.png"
+    )
     assert "登録ボタン" in outcome.answer
     # 回答の実行の LLM の呼び出しは、すべて回答のモデル(既定の Vision モデルを呼ばない)。
     assert called and set(called) == {model}
@@ -3620,7 +3642,9 @@ async def test_evidence_images_are_cropped_once_per_chunk_in_an_answer(
 
     assert crops == [1]
     materialized = json.loads(str(state.chunks[figure.chunk_id].metadata["engine_metadata_json"]))
-    assert materialized["image_evidence"][0]["crop_path"] == "crops/docling-p1-5.png"
+    assert materialized["image_evidence"][0]["crop_path"] == (
+        f"crops/{hashlib.sha256(b'figure-chunk-set').hexdigest()}-docling-p1-5.png"
+    )
     assert state.materialized_images[plain.chunk_id] is None
     assert plain.chunk_id not in state.chunks
 

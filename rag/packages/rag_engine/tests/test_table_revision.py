@@ -5,11 +5,11 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from validation_unit_support import unit_audit_output
 
 from rag_engine.evaluation.answer_validation import (
     QUESTION_ID,
     SUPPORT_TABLE_CORRECTED,
-    ClaimAuditOutput,
     validate_answer_claims,
 )
 from rag_engine.generation import grounded
@@ -107,7 +107,9 @@ def test_final_validation_returns_the_corrected_passage() -> None:
             return TableRevision(revised_text=REVISED)
         payload = json.loads(inputs)
         evidence = next(item["evidence_id"] for item in payload["evidence_items"] if item["id"] != QUESTION_ID)
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            payload,
             {
                 "claim_checks": [
                     {
@@ -122,7 +124,7 @@ def test_final_validation_returns_the_corrected_passage() -> None:
                     }
                     for passage in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     items = [{"id": "c1", "source": "manual.pdf", "page_start": 1, "page_end": 1, "text": TABLE}]

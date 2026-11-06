@@ -51,6 +51,7 @@ import {
   useSettingsDraftGuard,
   type DraftGuardMessages,
 } from "../guards/useSettingsDraftGuard";
+import { GENERATIVE_AI_REGION_OPTIONS, isSelectableGenerativeAiRegion } from "./regions";
 import { InputActionField } from "../oci/InputActionField";
 import { useFocusAfterCommit } from "../users-roles/shared";
 import {
@@ -544,6 +545,17 @@ export function ModelSettingsPage({
     event.preventDefault();
     if (!draft || !baselineData || operationBusy) return;
     clearSaveError(section);
+    if (section === "generative_ai") {
+      const field = !isSelectableGenerativeAiRegion(draft.generative_ai.embedding_region)
+        ? "genai-embedding-region"
+        : !isSelectableGenerativeAiRegion(draft.generative_ai.rerank_region)
+          ? "genai-rerank-region" : null;
+      if (field) {
+        setSaveErrors((current) => ({ ...current, [section]: t("settings.model.genai.regionReselect") }));
+        document.getElementById(field)?.focus();
+        return;
+      }
+    }
     // 送信を止めるときは、最初の不正な欄へフォーカスする（messaging.md §3.2）。
     if (section === "enterprise_connection") {
       const first = firstConnectionError(
@@ -917,6 +929,16 @@ export function ModelSettingsPage({
               {/* 値の長さの段（モデル ID は md、次元数は xs）で FormGrid に並べる（#1891）。テストの結果は、操作した欄の
                   行のすぐ下にカードの全幅で出す（messaging.md §10。#705）。Embedding の結果を Rerank の欄の下に出さない。 */}
               <FormGrid>
+                <SelectField
+                  id="genai-embedding-region"
+                  label={t("settings.model.genai.embeddingRegion")}
+                  value={draft.generative_ai.embedding_region}
+                  error={!isSelectableGenerativeAiRegion(draft.generative_ai.embedding_region) ? t("settings.model.genai.regionReselect") : undefined}
+                  options={GENERATIVE_AI_REGION_OPTIONS}
+                  width="md"
+                  disabled={operationBusy}
+                  onValueChange={(value) => updateGenerative("embedding_region", value)}
+                />
                 <TestableTextField
                   id="genai-embedding-model"
                   label={t("settings.model.genai.embeddingModel")}
@@ -956,6 +978,16 @@ export function ModelSettingsPage({
                 }
               />
               <FormGrid>
+                <SelectField
+                  id="genai-rerank-region"
+                  label={t("settings.model.genai.rerankRegion")}
+                  value={draft.generative_ai.rerank_region}
+                  error={!isSelectableGenerativeAiRegion(draft.generative_ai.rerank_region) ? t("settings.model.genai.regionReselect") : undefined}
+                  options={GENERATIVE_AI_REGION_OPTIONS}
+                  width="md"
+                  disabled={operationBusy}
+                  onValueChange={(value) => updateGenerative("rerank_region", value)}
+                />
                 <TestableTextField
                   id="genai-rerank-model"
                   label={t("settings.model.genai.rerankModel")}

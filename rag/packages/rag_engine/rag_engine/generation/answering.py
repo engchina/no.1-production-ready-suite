@@ -3632,7 +3632,7 @@ def synthesize_grounded_answer(
                 current,
                 summary=grounded.answer_labels().neutral_summary,
                 summary_warning="",
-                summary_reason="推導の条件と結論を確認できないため摘要を保留",
+                summary_reason=grounded.APPLICATION_SUMMARY_WITHHELD,
             )
         rounds[best_number] = {**rounds[best_number], **current.trace()}
     unread_sections = best_unread_sections

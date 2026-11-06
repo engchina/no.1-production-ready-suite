@@ -41,7 +41,7 @@ from pr_backend_core.observability.model_usage import ModelUsageCollector, RunMo
 from pr_backend_core.observability.trace_store import (
     TraceSpanOwner,
     TraceSpanWriter,
-    fetch_trace_spans,
+    fetch_trace_span_page,
     trace_progress_events,
 )
 from pr_backend_core.observability.tracing import SpanListener, SpanUpdate
@@ -357,6 +357,8 @@ class TraceSnapshot(BaseModel):
     events: list[dict[str, Any]] = Field(default_factory=list)
     # 書けなかった span があった（1 以上のときだけ。画面は「一部の処理だけを記録しています。」）。
     dropped_spans: int | None = None
+    # 保存されているspanが読取上限で省略された。書込時の欠落数へ加算しない。
+    read_truncated: bool = False
 
 
 # 表の名前と列は固定の文字列（値はすべて bind。共通の `TRACE_SPANS_TABLE` と同じ表）。
@@ -404,13 +406,13 @@ def _read_snapshot(
             trace_id = _lookup_trace_id(connection, lookup_operation_id, viewer)
         if trace_id is None:
             return TraceSnapshot()
-        spans = fetch_trace_spans(connection, trace_id, viewer_user_uuid=viewer)
-    if not spans:
-        return TraceSnapshot()
+        page = fetch_trace_span_page(connection, trace_id, viewer_user_uuid=viewer)
     dropped = record.trace_dropped_spans if record is not None else 0
+    if not page.spans:
+        return TraceSnapshot(dropped_spans=dropped or None, read_truncated=page.truncated)
     return TraceSnapshot(
         events=trace_progress_events(
-            spans,
+            page.spans,
             target_id=target_id,
             terminal=terminal,
             details=withhold_call_details(record.span_details, allow_restricted=viewer is None)
@@ -418,6 +420,7 @@ def _read_snapshot(
             else None,
         ),
         dropped_spans=dropped or None,
+        read_truncated=page.truncated,
     )
 
 

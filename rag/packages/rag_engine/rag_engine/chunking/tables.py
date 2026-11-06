@@ -20,6 +20,7 @@ from rag_engine.chunking.records import (
     _filter_image_evidence,
     _join_records_text,
     _record_text,
+    _record_text_for_chunk,
     _record_visual_role,
     _table_structure,
 )
@@ -55,6 +56,16 @@ def _table_record_with_metadata(record: dict[str, Any], records: Sequence[dict[s
         record_id: _record_text(item)
         for item in records
         if (record_id := str(item.get("id") or "")) in contained_ids and _record_text(item)
+    }
+    raw["table_visual_text_projections"] = {
+        record_id: str((item.get("raw") or {}).get("vision_text_projection") or "")
+        for item in records
+        if (record_id := str(item.get("id") or "")) in contained_ids and isinstance(item.get("raw"), dict)
+    }
+    raw["table_visual_index_texts"] = {
+        record_id: _record_text_for_chunk(item, for_retrieval=True)
+        for item in records
+        if (record_id := str(item.get("id") or "")) in contained_ids
     }
     enriched["raw"] = raw
     return enriched
@@ -135,6 +146,9 @@ def _table_row_group_records(
             },
             "table_visual_evidence": group_visuals[index - 1],
             "table_visual_texts": raw.get("table_visual_texts") if isinstance(raw.get("table_visual_texts"), dict) else {},
+            "table_visual_index_texts": raw.get("table_visual_index_texts") or {},
+            "table_visual_text_projections": raw.get("table_visual_text_projections") or {},
+            **({"vision_text_projection": raw["vision_text_projection"]} if index == 1 and "vision_text_projection" in raw else {}),
             "table_chunking_strategy": "row_group",
             # 表全体の補足は先頭 group に一度だけ保持し、行との対応を捏造しません。
             "table_vision_text": str(raw.get("table_vision_text") or "") if index == 1 else "",

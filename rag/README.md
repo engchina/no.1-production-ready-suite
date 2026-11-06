@@ -117,6 +117,8 @@ Marker / Unlimited-OCR / GLM-OCR への対応は削除した(#270)。
 - `POST /api/evaluation/run`: golden set による precision@k、recall@k、MRR、回答キーワード命中率、groundedness pass rate、case 単位の失敗理由分布を算出。
 - `/metrics`: Prometheus metrics を公開。
 
+評価結果から標準回答を整理し、テンプレート互換の Excel を作る手順は [テストセットの作成](docs/evaluation-testsets.md) を参照してください。
+
 `evaluation/golden-set.example.json` は評価 API のテンプレートです。実データ投入後に `evaluation/golden-set.json` へコピーして document id と期待キーワードを調整し、CI / staging gate で使います。
 
 Backend は常に OCI Enterprise AI、OCI Generative AI、Oracle AI Database を前提に動作します。開発・staging・本番のいずれも OCI / Oracle 接続情報を共通 `.env`（リポジトリの `platform/.env`、`PLATFORM_*`）または設定画面から注入してください。RAG 固有の設定は `backend/.env`（`RAG_*`）に置きます（#211。詳細と既存環境の移行は [docs/deployment.md](docs/deployment.md)）。

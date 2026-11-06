@@ -9,11 +9,11 @@ from unittest.mock import patch
 
 import pytest
 from test_grounded_answer import FakeModel, audit, context, draft, ids, item, observed_audit, record
+from validation_unit_support import unit_audit_output
 
 from rag_engine.config import get_settings
 from rag_engine.dependencies import AnswerDependencies, bind_dependencies
 from rag_engine.evaluation.answer_validation import (
-    ClaimAuditOutput,
     PremiseConsistencyOutput,
     validate_answer_claims,
 )
@@ -51,9 +51,11 @@ def test_original_question_state_is_checked_without_a_clarification_answer(quest
                     ]
                 }
             )
-        assert schema is ClaimAuditOutput
+        assert schema.__name__ == "FinalValidationUnitAudit"
         evidence = next(e for e in payload["evidence_items"] if e["id"] == "example")
-        return schema.model_validate(
+        return unit_audit_output(
+            schema,
+            payload,
             {
                 "claim_checks": [
                     {
@@ -67,7 +69,7 @@ def test_original_question_state_is_checked_without_a_clarification_answer(quest
                         "reason": "資料に記載あり",
                     }
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):

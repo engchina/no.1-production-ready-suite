@@ -66,7 +66,7 @@ export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge 
       nodesFocusable
       edgesFocusable
       {...props}
-      proOptions={{ ...proOptions, hideAttribution: false }}
+      proOptions={{ ...proOptions, hideAttribution: true }}
       ariaLabelConfig={{ ...GRAPH_CANVAS_JA, ...ariaLabelConfig }}
       onNodeClick={(event, node) => { onSelectNode?.(node.id); props.onNodeClick?.(event, node); }}
       onEdgeClick={(event, edge) => { onSelectEdge?.(edge.id); props.onEdgeClick?.(event, edge); }}

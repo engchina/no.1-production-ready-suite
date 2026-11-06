@@ -24,8 +24,11 @@ from pr_backend_core.observability.trace_store import (
     StoredTraceSpan,
     TraceProduct,
     TraceSpanOwner,
+    TraceSpanPage,
     TraceSpanWriter,
+    fetch_trace_span_page,
     fetch_trace_spans,
+    latest_attempt_spans,
     span_row,
 )
 from pr_backend_core.observability.tracing import SpanUpdate
@@ -100,6 +103,20 @@ class MemoryTraceSpans:
             spans = [span for span in spans if span.owner_user_uuid == viewer_user_uuid]
         spans.sort(key=lambda span: (span.started_at, span.span_id))
         return spans[:FETCH_LIMIT]
+
+    def fetch_page(
+        self, trace_id: str, *, viewer_user_uuid: str | None, limit: int = FETCH_LIMIT
+    ) -> TraceSpanPage:
+        """認可済みの最新試行を選んでから、上限と読取打切りを返す。"""
+        if not 1 <= limit <= FETCH_LIMIT:
+            raise ValueError("traceの読取上限は1〜1000件で指定してください。")
+        with self._lock:
+            spans = list(self._traces.get(trace_id, {}).values())
+        if viewer_user_uuid is not None:
+            spans = [span for span in spans if span.owner_user_uuid == viewer_user_uuid]
+        spans = latest_attempt_spans(spans)
+        spans.sort(key=lambda span: (span.started_at, span.span_id))
+        return TraceSpanPage(spans=spans[:limit], truncated=len(spans) > limit)
 
     def clear(self) -> None:
         with self._lock:
@@ -176,6 +193,19 @@ class AgentTraceSpans:
         with platform_oracle_connection() as connection:
             return fetch_trace_spans(
                 connection, trace_id, viewer_user_uuid=viewer_user_uuid, limit=FETCH_LIMIT
+            )
+
+    def fetch_page(
+        self, trace_id: str, *, viewer_user_uuid: str | None, limit: int = FETCH_LIMIT
+    ) -> TraceSpanPage:
+        """書込時の欠落とは別に、読取上限による打切りを返す。"""
+        if self._writer is None:
+            return self.memory.fetch_page(trace_id, viewer_user_uuid=viewer_user_uuid, limit=limit)
+        from app.oracle_connection import platform_oracle_connection
+
+        with platform_oracle_connection() as connection:
+            return fetch_trace_span_page(
+                connection, trace_id, viewer_user_uuid=viewer_user_uuid, limit=limit
             )
 
 

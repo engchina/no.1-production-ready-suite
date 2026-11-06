@@ -40,6 +40,7 @@ from pr_backend_core.config import (
     product_settings_config,
     settings_env_name,
 )
+from pr_backend_core.oci_genai_regions import DEFAULT_GENAI_REGION, GenAiRegion
 from pr_backend_core.timezones import local_today
 from pr_system_settings.auth.domain import DEFAULT_CSRF_COOKIE_NAME, DEFAULT_SESSION_COOKIE_NAME
 from pr_system_settings.chat_attachments.limits import (
@@ -680,6 +681,8 @@ class Settings(
     )
 
     # --- OCI Generative AI（埋め込み / リランク）---
+    oci_genai_embedding_region: GenAiRegion = DEFAULT_GENAI_REGION
+    oci_genai_rerank_region: GenAiRegion = DEFAULT_GENAI_REGION
     oci_genai_embedding_model: str = Field(default="cohere.embed-v4.0")
     oci_genai_embedding_dim: int = Field(
         default=1536,

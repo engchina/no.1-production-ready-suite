@@ -1,3 +1,5 @@
+import { expectRunValueTypography } from "../../../platform/packages/ui/e2e/run-value-typography";
+import recoveryGeneratedTrace from "./fixtures/recovery-generated-trace.json";
 import searchTraceParity from "./fixtures/search-trace-parity.json";
 import generatedAnswers from "./fixtures/derived-answer-generated.json";
 import stageOutcomes from "./fixtures/stage-outcomes.json";
@@ -75,6 +77,7 @@ interface RunRow {
   /** 詳細だけの項目（失敗の種類・コードと保存できなかった記録。#2342）。 */
   error_type?: string | null;
   error_code?: string | null;
+  failure_diagnosis?: { kind: string; network_failure_cause?: string | null; stage?: string | null } | null;
   storage_failures?: { step: string; error_type: string; error_code: string | null }[];
   /** 詳細だけの項目（見えている根拠と、今の権限で見られない根拠の数。#3252）。 */
   citations?: (typeof CITATION)[];
@@ -752,7 +755,8 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     // 失敗は共通の失敗のカード: 止まった段を含む 1 文目・次の操作・開いた「詳細」（#2342）。
     const failure = summary.getByTestId("run-history-failure");
     await expect(failure.getByRole("alert")).toContainText("「文書から根拠の候補を検索する」で処理が止まりました。");
-    await expect(failure).toContainText("実行 ID を添えて管理者に連絡してください");
+    await expect(failure).toContainText("管理者への連絡には実行 ID を添えてください");
+    await expect(failure).toContainText("原因の詳細は記録されていません");
     await expect(failure).toContainText("ORA-03146");
     await expect(summary.locator('[data-run-fact="errorStage"]')).toContainText("検索");
     // 技術的な詳細（処理の経過の中の処理の詳細に畳む）にも同じ名前でエラーコードを出す。
@@ -770,6 +774,57 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
     await page.goto("/history/run-missing");
     await expect(page.getByText("実行が見つかりません。")).toBeVisible();
+  });
+
+  test.describe("詳細: 記録された失敗の原因と未記録を区別し、生の例外本文を表示しない", () => {
+    const outerStage = "文書から根拠の候補を検索する";
+    const cases = [
+      { diagnosis: { kind: "invalid_output", stage: "回答の生成" }, errorStage: "retrieval", stage: "回答の生成", expected: "必要な形式として読み取れませんでした" },
+      { diagnosis: { kind: "network", network_failure_cause: "dns", stage: null }, errorStage: "retrieval", stage: outerStage, expected: "名前を解決できませんでした" },
+      { diagnosis: { kind: "network", network_failure_cause: "refused" }, errorStage: "retrieval", stage: outerStage, expected: "接続を拒否されました" },
+      { diagnosis: { kind: "tls" }, errorStage: "retrieval", stage: outerStage, expected: "TLS 接続または証明書" },
+      { diagnosis: { kind: "unknown" }, errorStage: "retrieval", stage: outerStage, expected: "原因を特定できませんでした" },
+      { diagnosis: null, errorStage: "retrieval", stage: outerStage, expected: "原因の詳細は記録されていません" },
+      { diagnosis: null, errorStage: null, stage: null, expected: "原因の詳細は記録されていません" },
+      { diagnosis: { kind: "network", network_failure_cause: "dns", stage: null }, errorStage: null, stage: null, expected: "名前を解決できませんでした" },
+    ];
+    for (const theme of ["light", "dark"]) {
+      for (const [index, item] of cases.entries()) {
+        test(`${theme} / ケース ${index + 1}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+          await mockLocalAuth(page);
+          await mockRuns(page, cases.map((item, index) => run(index + 20, {
+            question: "合成の質問", search_answer_profile_name: "プロファイル A", citations: [], answer: null,
+            status: "error", answer_generated: false, error_type: "RuntimeError", error_stage: item.errorStage,
+            // 許可されない追加項目は表示に渡さない。
+            failure_diagnosis: item.diagnosis ? { ...item.diagnosis, ...{ message: "synthetic-private-token", url: "https://synthetic.invalid/private" } } : null,
+          })));
+          await page.goto(`/history/run-${index + 20}`);
+          await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+          const summary = page.getByTestId("run-history-summary");
+          const failure = page.getByTestId("run-history-failure");
+          await expect(failure).toContainText(item.expected);
+          await expect(failure.locator("dt").filter({ hasText: /^原因$/ }).locator("+ dd")).toContainText(item.expected);
+          await expect(failure).toContainText("実行 ID");
+          await expect(failure).not.toContainText("synthetic-private-token");
+          await expect(failure).not.toContainText("synthetic.invalid");
+          await expectNoPageOverflow(page);
+          await summary.screenshot({ path: testInfo.outputPath(`failure-diagnosis-${index}-${theme}.png`) });
+          // 原因カードと概要は同じ保存済み工程を表示し、欠測を他の工程から推測しない。
+          await expect(summary.locator('[data-run-fact="errorStage"] dd')).toHaveText(item.stage ?? "未記録");
+          const panelStage = failure.locator("dt").filter({ hasText: /^止まった段$/ });
+          if (item.stage) {
+            await expect(panelStage.locator("+ dd")).toHaveText(item.stage);
+          } else {
+            await expect(panelStage).toHaveCount(0);
+            await expect(failure).toContainText("回答を作成できませんでした");
+          }
+          const stageFact = summary.locator('[data-run-fact="errorStage"]');
+          await stageFact.scrollIntoViewIfNeeded();
+          await expect(stageFact).toBeInViewport();
+          await page.screenshot({ path: testInfo.outputPath(`failure-stage-${index}-${theme}.png`) });
+        });
+      }
+    }
   });
 
   test("詳細: 使用モデルは記録した表示名を使い同じIDを重複表示しない", { tag: "@responsive" }, async ({ page }, testInfo) => {
@@ -828,8 +883,14 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
 
     await page.goto("/history/run-1");
     await expect(fact("model")).toHaveText("model-a、model-rewrite");
-    await expect(fact("tokens")).toHaveText("13,500 token");
-    await expect(fact("modelCalls")).toHaveText("4 回（入力 12,000 / 出力 1,500 token）");
+    await expect(fact("tokens")).toHaveText("13,500 トークン");
+    await expect(summary.locator('[data-run-fact="tokens"] dt')).toHaveText("トークン数");
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+      await expect(fact("modelCalls")).toHaveText("4 回（入力 12,000 / 出力 1,500 トークン）");
+      await summary.screenshot({ path: testInfo.outputPath(`token-labels-${theme}.png`) });
+    }
+    await expect(fact("modelCalls")).toHaveText("4 回（入力 12,000 / 出力 1,500 トークン）");
     expect(await factOrder()).toEqual(
       expect.arrayContaining(["target", "model", "tokens", "modelCalls", "citations", "runId"])
     );
@@ -842,16 +903,16 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
     await page.goto("/history/run-2");
     await expect(fact("kind")).toHaveText("RAG 検索");
     await expect(fact("model")).toHaveText("model-a");
-    await expect(fact("tokens")).toHaveText("9,000 token（一部計測）");
-    await expect(fact("modelCalls")).toHaveText("3 回（うち 2 回を計測。入力 12,000 / 出力 1,500 token）");
+    await expect(fact("tokens")).toHaveText("9,000 トークン（一部計測）");
+    await expect(fact("modelCalls")).toHaveText("3 回（うち 2 回を計測。入力 12,000 / 出力 1,500 トークン）");
     await expectNoPageOverflow(page);
     await summary.screenshot({ path: testInfo.outputPath("summary-usage-search.png") });
 
     await page.goto("/history/run-4");
     await expect(fact("kind")).toHaveText("RAG 検索");
     await expect(summary.locator('[data-run-fact="model"]')).toHaveCount(0);
-    await expect(fact("tokens")).toHaveText("0 token");
-    await expect(fact("modelCalls")).toHaveText("0 回（入力 0 / 出力 0 token）");
+    await expect(fact("tokens")).toHaveText("0 トークン");
+    await expect(fact("modelCalls")).toHaveText("0 回（入力 0 / 出力 0 トークン）");
 
     await page.goto("/history/run-6");
     await expect(fact("kind")).toHaveText("RAG 検索");
@@ -1799,6 +1860,12 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
   await page.getByTestId("run-history-timeline-summary").click();
   await inspectTraceStep(page, timeline, spanStepId("full"));
   const inspector = page.locator("[data-trace-inspector]");
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expectRunValueTypography(inspector);
+    await inspector.screenshot({path: testInfo.outputPath(`run-value-typography-${theme}.png`)});
+  }
+
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();
   expect(reads).toEqual([]);
   await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();
@@ -2014,3 +2081,93 @@ for (const fusionStatus of ["done", "skipped", "failed"] as const) {
     await expectNoPageOverflow(page);
   });
 }
+
+
+test("不足から3拡張を補搜した実編排の記録が経過と軌跡で一致する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  await mockLocalAuth(page);
+  const root = recoveryGeneratedTrace.events[0];
+  const startedAt = String("started_at" in root ? root.started_at : "");
+  const finishedAt = String("finished_at" in root ? root.finished_at : "");
+  const row = run(1, {run_id: "synthetic-recovery", question: "合成対象Bの値を教えてください。", answer: "合成対象Bの値は42です。", created_at: finishedAt, elapsed_ms: Date.parse(finishedAt) - Date.parse(startedAt)});
+  await mockRuns(page, [row]);
+  await page.route("**/api/history/runs/synthetic-recovery/trace", route => route.fulfill({json: apiEnvelope(recoveryGeneratedTrace)}));
+  await page.goto(`/history/${row.run_id}`);
+  await page.getByTestId("run-history-timeline-summary").click();
+  const timeline = page.getByTestId("run-history-timeline");
+  const vector = recoveryGeneratedTrace.events.filter(event => event.type === "step" && "params" in event && event.params?.name === "ベクトル検索");
+  const recovery = recoveryGeneratedTrace.events.find(event => event.type === "step" && "params" in event && event.params?.name === "未回答の要求の探し直し");
+  expect(vector).toHaveLength(3);
+  for (const event of vector) {
+    const record = timeline.locator(`[data-run-timeline-step="${event.step_id}"]`);
+    await record.scrollIntoViewIfNeeded();
+    await expect(record).toBeInViewport();
+    await expect(record).toHaveAttribute("data-parent-id", recovery?.step_id ?? "");
+    await expect(record).toHaveAttribute("data-status", "done");
+  }
+  const fusion = recoveryGeneratedTrace.events.filter(event => event.type === "step" && "params" in event && event.params?.name === "追加の検索結果統合");
+  expect(fusion.map(event => event.status)).toEqual(["skipped", "done"]);
+  for (const event of fusion) await expect(timeline.locator(`[data-run-timeline-step="${event.step_id}"]`)).toHaveAttribute("data-status", event.status);
+  const normal = await timeline.locator("[data-run-timeline-step]").evaluateAll(rows => rows.map(row => ({
+    id: row.getAttribute("data-run-timeline-step"), label: row.querySelector("[data-run-timeline-label]")?.textContent,
+    status: row.getAttribute("data-status"), parent: row.getAttribute("data-parent-id"), level: row.getAttribute("data-level") ?? "0",
+    timing: row.querySelector("[data-run-step-status-duration]")?.textContent,
+  })));
+  await page.screenshot({path: testInfo.outputPath("actual-recovery-process.png"), fullPage: false});
+  await page.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
+  const explorer = page.locator("[data-trace-explorer]");
+  await explorer.getByRole("button", {name: "さらに表示", exact: true}).click();
+  const traced = await explorer.locator("[data-trace-record]").evaluateAll(rows => rows.map(row => ({
+    id: row.getAttribute("data-trace-record"), label: row.querySelector("[data-trace-record-label]")?.textContent,
+    status: row.getAttribute("data-status"), parent: row.getAttribute("data-parent-id"), level: row.getAttribute("data-level") ?? "0",
+    timing: row.querySelector("[data-trace-step-status-duration]")?.textContent,
+  })));
+  expect(traced).toEqual(normal);
+  await explorer.screenshot({path: testInfo.outputPath("actual-recovery-trace.png")});
+  await expectNoPageOverflow(page);
+});
+
+
+test("読取省略と保存欠落を空の記録も含めて履歴の経過と軌跡で区別する", {tag: "@responsive"}, async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  await mockLocalAuth(page);
+  const variants = [
+    {key: "reader", row: run(1), readTruncated: true, droppedSpans: 0, empty: false},
+    {key: "writer-empty", row: run(2), readTruncated: false, droppedSpans: 7, empty: true},
+    {key: "both", row: run(3), readTruncated: true, droppedSpans: 7, empty: false},
+  ];
+  await mockRuns(page, variants.map(item => item.row));
+  await mockTraceApi(page, Object.fromEntries(variants.map(item => [item.row.run_id, {
+    events: item.empty ? [] : detail(item.row).progress_events,
+    droppedSpans: item.droppedSpans,
+    readTruncated: item.readTruncated,
+  }])));
+  const readerText = "取得件数の上限に達したため、一部の処理だけを表示しています。保存済みの記録がすべて表示されているとは限りません。";
+  const writerText = "一部の処理だけを記録しています。";
+  for (const item of variants) {
+    await page.goto(`/history/${item.row.run_id}`);
+    const timeline = page.getByTestId("run-history-timeline");
+    if (!item.empty) await page.getByTestId("run-history-timeline-summary").click();
+    const notice = page.getByTestId("run-history-timeline-partial");
+    await expect(notice).toBeVisible();
+    await expect(notice.getByText(readerText, {exact: true})).toHaveCount(item.readTruncated ? 1 : 0);
+    await expect(notice.getByText(writerText, {exact: true})).toHaveCount(item.droppedSpans > 0 ? 1 : 0);
+    await expect(page.getByText("この実行は古い形式の記録のため、処理の経過を表示できません。", {exact: true})).toHaveCount(0);
+    if (item.empty) await expect(timeline.locator("[data-run-timeline-step]")).toHaveCount(0);
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(value => {document.documentElement.dataset.theme = value;}, theme);
+      await notice.scrollIntoViewIfNeeded();
+      await expectNoPageOverflow(page);
+      await timeline.screenshot({path: testInfo.outputPath(`completeness-${item.key}-process-${theme}.png`)});
+      if (!item.empty) {
+        await page.getByRole("button", {name: "軌跡を調べる", exact: true}).click();
+        await expect(page.locator("[data-trace-explorer]")).toBeVisible();
+        await expect(notice).toBeVisible();
+        await expect(notice.getByText(readerText, {exact: true})).toHaveCount(1);
+        await expect(notice.getByText(writerText, {exact: true})).toHaveCount(item.droppedSpans > 0 ? 1 : 0);
+        await expectNoPageOverflow(page);
+        await timeline.screenshot({path: testInfo.outputPath(`completeness-${item.key}-trace-${theme}.png`)});
+        await page.getByRole("button", {name: "経過に戻る", exact: true}).click();
+      }
+    }
+  }
+});

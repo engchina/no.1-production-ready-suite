@@ -27,6 +27,7 @@ from app.rag.answer_prompts import (
 )
 from app.schemas.search import SearchRequest
 from app.security.permissions import ANSWER_PROMPT_EDIT_PERMISSIONS
+from tests.prompt_support import UneditedPromptOracle
 from tests.security_support import enable_production_auth, login
 from tests.support import AsgiTestClient
 from tests.test_answer_engine import FakeGenAi, FakeOracle
@@ -194,13 +195,14 @@ class PromptFakeOracle(FakeOracle):
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        ({VLM_ANSWER_PROMPT_KEY: CUSTOM_ANSWER}, CUSTOM_ANSWER),
-        # 読み込みに失敗しても既定値で回答する。
-        (RuntimeError("db down"), default_prompt(VLM_ANSWER_PROMPT_KEY)),
+        ({VLM_ANSWER_PROMPT_KEY: CUSTOM_ANSWER}, [CUSTOM_ANSWER]),
+        ({}, [default_prompt(VLM_ANSWER_PROMPT_KEY)]),
+        # 読み込み失敗を未編集と見なして生成へ進まない。
+        (RuntimeError("db down"), []),
     ],
 )
 async def test_answer_uses_saved_answer_template(
-    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str] | Exception, expected: str
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, str] | Exception, expected: list[str]
 ) -> None:
     import rag_engine.generation.answering as answering
 
@@ -217,10 +219,12 @@ async def test_answer_uses_saved_answer_template(
         genai=FakeGenAi(),  # type: ignore[arg-type]
     )
 
-    with pytest.raises(RuntimeError, match="stop"):
-        await engine.run(SearchRequest(query="受注の登録方法は？"))
+    with pytest.raises(
+        RuntimeError, match="db down" if isinstance(overrides, Exception) else "stop"
+    ):
+        await engine.run(SearchRequest(query="操作 A の手順は？"))
 
-    assert seen == [expected]
+    assert seen == expected
     assert read_prompt(VLM_ANSWER_PROMPT_KEY) == default_prompt(VLM_ANSWER_PROMPT_KEY)
 
 
@@ -263,7 +267,8 @@ async def test_ingestion_loads_image_retrieval_prompt(monkeypatch: pytest.Monkey
     unsaved = IngestionPipeline(oracle=Oracle({}), settings=Settings())  # type: ignore[arg-type]
 
     assert await saved._image_retrieval_prompt() == "独自 {{image_metadata}}"
-    assert await failing._image_retrieval_prompt() is None
+    with pytest.raises(RuntimeError, match="down"):
+        await failing._image_retrieval_prompt()
     assert await unsaved._image_retrieval_prompt() is None
 
 
@@ -424,7 +429,7 @@ async def test_saved_summary_prompts_reach_the_model_without_cross_pipeline_leak
     assert len(summaries) > len(chunks)
     assert calls[0] == ("独自の章節指示", None)
     assert all(call == ("", "独自の共通指示\n独自の階層指示") for call in calls[1:])
-    unsaved = IngestionPipeline(oracle=cast(Any, object()), settings=Settings())
+    unsaved = IngestionPipeline(oracle=cast(Any, UneditedPromptOracle()), settings=Settings())
     assert await unsaved._stage_prompt("navigation_summary", "既定") == "既定"
 
 

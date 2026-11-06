@@ -2366,7 +2366,7 @@ test("終わったジョブの span が読んだ後に書かれても、読み�
   expect(reads).toBeGreaterThan(2);
 });
 
-test("書けなかった span がある記録は、処理の経過の中に一部だけの記録と出す (#3226)", async ({ page }) => {
+test("書けなかった span がある記録は、処理の経過の中に一部だけの記録と出す (#3226)", { tag: "@responsive" }, async ({ page }) => {
   const state = await setup(page);
   state.turns.push({ job_id: "chat-1", question: "合成データの件数", status: "done", created_at: now, steps: [],
     result: { generated_sql: "SELECT 1 FROM DUAL", original_question: "合成データの件数", explanation: "合成の応答です。", safety: { is_safe: true, safety_checked: true, referenced_tables: [], referenced_columns: [] } } });
@@ -2419,4 +2419,51 @@ test("チャットと履歴の工程の内容・階層・状態・時間が一�
   await expect(details.locator("[data-trace-id-row]")).toContainText(`Trace ID: ${jobProgressTraceId("synthetic-parity")}`);
   await expect(page.getByTestId("trace-details-toggle")).toHaveCount(0);
   await page.getByTestId("history-detail-timeline").screenshot({path: testInfo.outputPath("history-process.png")});
+});
+
+
+test("読取打切りと書込欠落がある場合は、チャットと履歴で両方の原因を表示する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const state = await setup(page);
+  const targetId = "synthetic-completeness";
+  const turn: Turn = {
+    job_id: targetId, question: "合成の質問", status: "done", created_at: now,
+    engine: "enterprise_ai_direct", steps: [],
+    result: { generated_sql: "SELECT 1 AS VALUE FROM DUAL", original_question: "合成の質問", explanation: "合成の回答", safety: { is_safe: true, safety_checked: false } },
+  };
+  state.turns.push(turn);
+  const events = turnProgressEvents(turn);
+  recordMockTrace(targetId, events, { droppedSpans: 2, readTruncated: true, pinned: true });
+  await page.goto("/chat?profile_id=sales&conversation_id=chat-1");
+  await page.getByTestId("sql-chat-progress-summary").click();
+  await expect(page.getByTestId("sql-chat-progress-partial-read-truncated")).toContainText("取得件数の上限に達したため");
+  await expect(page.getByTestId("sql-chat-progress-partial-write-dropped")).toHaveText("一部の処理だけを記録しています。");
+  await expect(page.getByTestId("sql-chat-progress-legacy")).toHaveCount(0);
+  await expectChatNoOverflow(page);
+  const notice = page.getByTestId("sql-chat-progress-partial");
+  await notice.scrollIntoViewIfNeeded();
+  for (const suffix of ["read-truncated", "write-dropped"]) {
+    const paragraph = page.getByTestId(`sql-chat-progress-partial-${suffix}`);
+    await expect(paragraph).toBeVisible();
+    expect(await paragraph.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return top === element || element.contains(top);
+    })).toBe(true);
+  }
+  await page.screenshot({ path: testInfo.outputPath("chat-read-and-write.png") });
+
+  await page.route(`**/api/nl2sql/history/${targetId}`, (route) => route.fulfill({ json: { data: withRecordedTrace(targetId, {
+    id: targetId, kind: "chat", session_id: "chat-1", question: "合成の質問", engine: "enterprise_ai_direct",
+    generated_sql: "SELECT 1 AS VALUE FROM DUAL", executable_sql: "SELECT 1 AS VALUE FROM DUAL",
+    created_at: now, elapsed_ms: 0, engine_timings: [], stage_timings: [], profile_id: "sales", profile_name: "プロファイル A",
+    rewritten_question: "合成の質問", safety_is_safe: true, result_row_count: 1, result_columns: ["VALUE"],
+    feedback_comment: "", feedback_updated_at: "", progress_events: events,
+  }) } }));
+  await page.goto(`/history?id=${targetId}`);
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+  await page.getByTestId("history-detail-timeline-summary").click();
+  await expect(page.getByTestId("history-detail-timeline-partial-read-truncated")).toContainText("保存済みの記録がすべて表示されているとは限りません");
+  await expect(page.getByTestId("history-detail-timeline-partial-write-dropped")).toHaveText("一部の処理だけを記録しています。");
+  await expectChatNoOverflow(page);
+  await page.getByTestId("history-detail-timeline").screenshot({ path: testInfo.outputPath("history-read-and-write.png") });
 });

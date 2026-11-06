@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from rag_engine.evaluation.answer_validation import ClaimAuditOutput, validate_answer_claims
+from rag_engine.evaluation.answer_validation import validate_answer_claims
 
 DOCUMENT = {
     "id": "doc-a",
@@ -32,17 +32,30 @@ def evaluate(
     captured: dict[str, Any] = {}
 
     def model(system: str, inputs: str, settings: Any, schema: Any, provider_id: Any = None) -> Any:
-        assert schema is ClaimAuditOutput
+        assert schema.__name__ == "FinalValidationUnitAudit"
+        claim_schema = schema.model_json_schema()["$defs"]["FinalValidationUnitClaim"]["properties"]
+        assert "evidence_unit_ids" in claim_schema
+        assert not {"evidence_quote", "evidence_id", "source_id"} & claim_schema.keys()
         payload = json.loads(inputs)
         captured.update(payload=payload)
         data = next(row for row in payload["evidence_items"] if row["id"] == "data:1")
         document = next(row for row in payload["evidence_items"] if row["id"] == "doc-a")
         chosen = ([data, document] if data_first else [document, data]) if joint else [data]
-        quote = "\n".join(row["text"] for row in chosen)
+        assert len(data["units"]) == 1
+        data_text = data["units"][0]["text"]
+        assert DATA[0]["sql"] in data_text and DATA[0]["result"] in data_text
+        assert [unit["text"] for unit in document["units"]] == [DOCUMENT["text"]]
+        units = [unit for row in chosen for unit in row["units"]]
+        quote = "\n".join(unit["text"] for unit in units)
+        selected_ids = [unit["unit_id"] for unit in units]
+        assert set(selected_ids) <= set(claim_schema["evidence_unit_ids"]["items"]["enum"])
         if fabricated:
-            quote = "2件のデータが見つかりました。"
-        captured.update(quote=quote, evidence_ids=[row["evidence_id"] for row in chosen])
-        return ClaimAuditOutput.model_validate(
+            # 言い換えた本文は、送達原文単位IDの代わりにはならない。
+            selected_ids = ["2件のデータが見つかりました。"]
+        captured.update(
+            quote=quote, evidence_ids=[row["evidence_id"] for row in chosen], unit_ids=selected_ids
+        )
+        return schema.model_validate(
             {
                 "claim_checks": [
                     {
@@ -51,9 +64,7 @@ def evaluate(
                         "status": "supported",
                         "applicability": "matched",
                         "reason": "合成の原文照合",
-                        "source_id": "",
-                        "evidence_id": ",".join(row["evidence_id"] for row in chosen),
-                        "evidence_quote": quote,
+                        "evidence_unit_ids": selected_ids,
                     }
                 ]
             }
@@ -76,7 +87,11 @@ def test_nonempty_data_result_quote_resolves_to_the_actual_data_source() -> None
     assert check["source_id"] == "data:1"
     assert check["evidence_id"] == captured["evidence_ids"][0]
     assert check["status"] == "supported" and check["support_check"] != "quote_unmatched"
-    assert "取得件数: 2" in check["support_quote"]
+    assert check["support_quote"] == ""
+    selected = result["_selected_evidence"][0]
+    assert [row["unit_id"] for row in selected] == captured["unit_ids"]
+    assert DATA[0]["result"] in selected[0]["text"]
+    assert check["evidence_quote"] == selected[0]["text"]
 
 
 @pytest.mark.parametrize("data_first", [False, True])
@@ -85,7 +100,10 @@ def test_document_and_data_joint_quote_keeps_both_explicit_evidence_ids(data_fir
     check = result["claim_checks"][0]
     assert check["evidence_id"].split(",") == captured["evidence_ids"]
     assert check["source_id"] == "doc-a"
-    assert check["support_quote"] == captured["quote"]
+    assert check["support_quote"] == ""
+    selected = result["_selected_evidence"][0]
+    assert [row["unit_id"] for row in selected] == captured["unit_ids"]
+    assert "\n".join(row["text"] for row in selected) == captured["quote"]
     assert check["support_check"] != "quote_unmatched"
     assert check["status"] == "supported"
 
@@ -94,5 +112,7 @@ def test_paraphrased_count_does_not_impersonate_the_data_result_original_quote()
     result, _captured = evaluate(fabricated=True)
     check = result["claim_checks"][0]
     assert check["status"] == "citation_error"
-    assert check["support_check"] == "quote_unmatched"
-    assert check["source_id"] == "data:1"
+    assert check["reference_check"] == "audit_id_invalid"
+    assert check["source_id"] == ""
+    assert check["support_quote"] == "" and check["evidence_quote"] == ""
+    assert result["_selected_evidence"][0] == []

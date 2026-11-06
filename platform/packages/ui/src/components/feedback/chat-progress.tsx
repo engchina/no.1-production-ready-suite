@@ -1,3 +1,6 @@
+import { TracePartialNotice } from "./trace-partial-notice";
+import { RunStepSummary } from "../data/run-step-summary";
+import { measuredRunTiming } from "../../lib/run-step-presentation";
 import type { CallBodyLoader } from "../../lib/call-body";
 import { CircleStop, Clock3, ListChecks, XCircle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -9,15 +12,12 @@ import { RunProcessDetails, type RunProcessDetailsProps } from "../data/run-deta
 import { useTraceDetailsLabels } from "../data/trace-labels-provider";
 import {
   RunTimeline,
-  RunTimelineProduct,
   runTimelineHasChildren,
-  runTimelineStepIndentStyle,
   type RunTimelineStep,
 } from "../data/run-detail";
 import { hasRunStepDetails, type RunStepDetails } from "../data/run-step-details";
 import { Disclosure } from "../ui/disclosure";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
-import { Spinner } from "../ui/spinner";
 import { formatChatProgressDuration } from "./chat-progress-format";
 import type { ChatProgressTerminalStatus } from "./chat-progress-events";
 import { reduceChatProgressSteps, type ChatProgressStepsState } from "./chat-progress-steps";
@@ -55,8 +55,7 @@ export interface ChatProgressStep {
   /** 呼び出し成否と独立した採用などの判定（記録された場合だけ表示）。 */
   outcome?: string;
   /**
-   * 所要時間（ミリ秒）。時刻を持たない記録（工程の秒だけを残す記録）で使う。渡すと `startedAt` / `finishedAt`
-   * より優先する。
+   * 所要時間（ミリ秒）。開始・終了が揃わない記録の数値表示に使う。実測時刻が揃う場合はその差を優先する。
    */
   durationMs?: number | null;
   /** 短い計測値（例:「LLM 1 回」）。一覧では名前の後ろの括弧に `detail` と並べて出す（#2265。実行の詳細と同じ）。 */
@@ -180,6 +179,9 @@ export interface ChatProgressProps {
    * 製品は `useTraceProgressSnapshot` の `partial` をそのまま渡す。
    */
   partial?: boolean;
+  /** 読取上限により保存済みのspanを一部省略した。 */
+  readTruncated?: boolean;
+  droppedSpans?: number;
   className?: string;
   testId?: string;
 }
@@ -223,13 +225,6 @@ export function useChatProgressSteps({ key = null, steps, active }: UseChatProgr
   return state.steps;
 }
 
-function stepDurationMs(step: ChatProgressStep): number | null {
-  if (typeof step.durationMs === "number" && Number.isFinite(step.durationMs)) return Math.max(0, step.durationMs);
-  const start = operationTimestampMs(step.startedAt);
-  const end = operationTimestampMs(step.finishedAt);
-  if (start === null || end === null) return null;
-  return Math.max(0, end - start);
-}
 
 /** 段階の最初の開始（処理全体の開始）。 */
 function firstStartedAtMs(steps: readonly ChatProgressStep[]): number | null {
@@ -238,16 +233,9 @@ function firstStartedAtMs(steps: readonly ChatProgressStep[]): number | null {
 }
 
 function totalDurationMs(steps: ChatProgressStep[]): number | null {
-  // 時刻を持たない記録（所要時間だけ）は、最上位の段階の所要時間の和。
-  if (steps.every((step) => step.startedAt === undefined && step.finishedAt === undefined)) {
-    const top = steps.filter((step) => !step.level).map(stepDurationMs).filter((v): v is number => v !== null);
-    return top.length > 0 ? top.reduce((sum, value) => sum + value, 0) : null;
-  }
-  const starts = steps.map((step) => operationTimestampMs(step.startedAt)).filter((v): v is number => v !== null);
-  const ends = steps.map((step) => operationTimestampMs(step.finishedAt)).filter((v): v is number => v !== null);
-  if (starts.length === 0 || ends.length === 0) return null;
-  return Math.max(0, Math.max(...ends) - Math.min(...starts));
+  return measuredRunTiming(steps).duration;
 }
+
 
 /**
  * 最後に始まった実行中の段（`leaf` なら子の段を持たない末端の段だけ。#3436）。子の段を持つ段（親の工程）は、子が
@@ -441,13 +429,7 @@ function CurrentStepRow({
   labels: ChatProgressLabels;
   testId?: string;
 }) {
-  const current = useOperationTiming({
-    active: true,
-    operationKey: `step:${step.id}`,
-    startedAt: step.startedAt,
-  });
-  const label = step.label;
-  const detail = step.detail;
+
   return (
     <div
       className="grid min-w-0"
@@ -457,28 +439,12 @@ function CurrentStepRow({
       data-slow={slow ? "true" : "false"}
       data-reconnecting={reconnecting ? "true" : "false"}
     >
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3"
-        data-testid={testId ? `${testId}-step-${step.id}` : undefined}
-        data-status="running" aria-current="step"
-        data-level={(step.level ?? 0) > 0 ? String(step.level) : undefined}
-        data-parent-id={step.parentId}>
-        <div className="flex min-w-0 items-start gap-2 text-xs leading-5" style={runTimelineStepIndentStyle(step.level)}>
-          <span className="pr-icon-line">
-            {activityIndicator ? <Spinner size={TEXT_ICON_SIZE.xs} className="text-accent-fg" /> : <Clock3 size={TEXT_ICON_SIZE.xs} className="text-fg-muted" aria-hidden />}
-          </span>
-          <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-            <span className="font-medium text-fg" data-run-timeline-label="">{label}</span>
-            {step.product ? <RunTimelineProduct product={step.product} /> : null}
-            {detail ? <span className="text-fg-muted">{`（${detail}）`}</span> : null}
-            <span className="sr-only">{` ${labels.status.running}`}</span>
-          </span>
-        </div>
-        <span
-          className="whitespace-nowrap text-right text-xs leading-5 text-fg-muted tabular-nums"
-          data-testid={testId ? primary ? `${testId}-current-elapsed` : `${testId}-elapsed-${step.id}` : undefined}
-        >
-          {labels.formatDuration(Math.floor(current.elapsedMs / 1000) * 1000)}
-        </span>
+      <div className="min-w-0" data-testid={testId ? `${testId}-step-${step.id}` : undefined}
+        data-status="running" aria-current="step" data-level={step.level || undefined} data-parent-id={step.parentId}>
+        <RunStepSummary step={chatProgressTimelineStep(step)} size="sm" statusLabel={labels.status.running}
+          bar={null} showBars={false} spin={activityIndicator} surface="timeline" formatDuration={labels.formatDuration}
+          durationTestId={testId ? primary ? `${testId}-current-elapsed` : `${testId}-elapsed-${step.id}` : undefined}
+          renderName={step.detail ? name => <span className="min-w-0">{name}<span className="text-fg-muted">{`（${step.detail}）`}</span></span> : undefined} />
       </div>
     </div>
   );
@@ -522,6 +488,8 @@ export function ChatProgress({
   labels: labelOverrides,
   footer: footerInput,
   partial = false,
+  readTruncated = false,
+  droppedSpans = 0,
   traceSummary,
   traceId,
   processDetailsProps,
@@ -534,11 +502,10 @@ export function ChatProgress({
   const traceLabels = useTraceDetailsLabels();
   const labels = { ...DEFAULT_CHAT_PROGRESS_LABELS, ...labelOverrides };
   const details = traceSummary != null || traceId || processDetailsProps ? <RunProcessDetails {...processDetailsProps} traceSummary={traceSummary} traceId={traceId} summaryTestId={testId ? `${testId}-details` : undefined}>{footerInput}</RunProcessDetails> : footerInput;
-  const footer = partial ? (
+  const incomplete = partial || readTruncated || droppedSpans > 0;
+  const footer = incomplete ? (
     <>
-      <p className="text-xs text-fg-muted" data-testid={testId ? `${testId}-partial` : undefined}>
-        {traceLabels.partial}
-      </p>
+      <TracePartialNotice partial={partial} readTruncated={readTruncated} droppedSpans={droppedSpans} testId={testId ? `${testId}-partial` : undefined} />
       {details}
     </>
   ) : (
@@ -593,7 +560,7 @@ export function ChatProgress({
   const slow = useLatchedSlow(currentTiming.slow, { active: slowEnabled, resetKey: progressKey });
   const announcement = currentLabel && reconnecting ? `${currentLabel} ${labels.reconnecting}` : currentLabel;
 
-  if (steps.length === 0 && !active) return null;
+  if (steps.length === 0 && !active) return incomplete ? <>{footer}</> : null;
 
   return (
     <div

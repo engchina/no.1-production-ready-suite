@@ -1,4 +1,4 @@
-import { ChatProgress, RunProcessDetails, useTraceDetailsLabels, type CallBodyLoader, type ChatProgressStep, type ChatProgressTerminalStatus } from "@production-ready/ui";
+import { TracePartialNotice, ChatProgress, RunProcessDetails, useTraceDetailsLabels, type CallBodyLoader, type ChatProgressStep, type ChatProgressTerminalStatus } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
@@ -37,6 +37,8 @@ export function AnswerProcess({
   traceId,
   legacy = false,
   partial = false,
+  readTruncated = false,
+  droppedSpans = 0,
   savedRecord,
   conversationId = null,
   messageId = null,
@@ -64,6 +66,8 @@ export function AnswerProcess({
   legacy?: boolean;
   /** 書けなかった span がある（一部の処理だけを記録している）。 */
   partial?: boolean;
+  readTruncated?: boolean;
+  droppedSpans?: number;
   /** 診断の無い保存済みの回答（会話を開き直したとき）。回答の記録を読み直して「処理の詳細」に出す。 */
   savedRecord?: { traceId: string; searchAnswerProfileId: string } | null;
   /** `ChatProgress` の testId（`-summary` / `-current` / `-step-<id>` など）。囲みは `-process`、「処理の詳細」は `-details`。 */
@@ -85,7 +89,8 @@ export function AnswerProcess({
   ) : null;
   // 古い形式の記録は工程の行を作らない（段だけのイベントから段を組み立て直さない）。
   const rows = legacy ? [] : steps;
-  if (rows.length === 0 && !details && !traceId && !legacy) return null;
+  const incomplete = partial || readTruncated || droppedSpans > 0;
+  if (rows.length === 0 && !details && !traceId && !legacy && !incomplete) return null;
   // 実行の詳細の「処理の経過」の節と同じ共有の部品・名前（`RunProcessDetails`。#2325）。
   const detailsDisclosure = details || traceId ? (
     <RunProcessDetails
@@ -115,6 +120,8 @@ export function AnswerProcess({
           progressKey={progressKey}
           // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
           partial={partial}
+          readTruncated={readTruncated}
+          droppedSpans={droppedSpans}
           footer={detailsDisclosure}
           testId={testId}
         />
@@ -125,6 +132,7 @@ export function AnswerProcess({
               {traceLabels.legacy}
             </p>
           ) : null}
+          <TracePartialNotice partial={partial} readTruncated={readTruncated} droppedSpans={droppedSpans} testId={testId ? `${testId}-partial` : undefined} />
           {detailsDisclosure}
         </>
       )}

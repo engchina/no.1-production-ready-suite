@@ -1345,6 +1345,77 @@ async def test_wrapped_answer_failure_records_safe_cause_and_keeps_wrapper_ident
     assert "秘密" not in json.dumps(record, ensure_ascii=False)
 
 
+async def test_recorder_preserves_safe_network_diagnosis_from_wrapped_cause() -> None:
+    from rag_engine.generation.execution_record import AnswerExecutionError
+
+    inner = ConnectionRefusedError(111, "synthetic-secret-value")
+    wrapped = AnswerExecutionError("synthetic-secret-value", "synthetic-question")
+    wrapped.__cause__ = inner
+    wrapped.__dict__["execution_steps"] = (
+        {"name": "根拠の選択", "status": "完了"},
+        {"name": "回答の生成", "status": "エラーで中断"},
+    )
+    store = RecordingStore()
+    await RunRecorder(surface="search", settings=Settings(), store=store).record(
+        run_id="synthetic-run",
+        question=None,
+        search_answer_profile_id=None,
+        answer_generated=False,
+        status="error",
+        elapsed_ms=1,
+        error=wrapped,
+    )
+    record = store.records[0]
+    assert record["stages"]["failure_diagnosis"] == {
+        "kind": "network",
+        "network_failure_cause": "refused",
+        "stage": "回答の生成",
+    }
+    assert "synthetic-secret-value" not in json.dumps(record)
+
+
+@pytest.mark.parametrize(
+    ("saved", "expected"),
+    [
+        (None, None),
+        (
+            {"kind": "unknown"},
+            {"kind": "unknown", "network_failure_cause": None, "stage": None},
+        ),
+        (
+            {"kind": "network", "network_failure_cause": "dns", "message": "secret"},
+            {"kind": "network", "network_failure_cause": "dns", "stage": None},
+        ),
+    ],
+)
+def test_detail_api_reads_only_recorded_diagnosis_not_exception_type(
+    monkeypatch: MonkeyPatch, saved: dict[str, str] | None, expected: dict[str, str | None] | None
+) -> None:
+    auth = enable_production_auth(monkeypatch)
+    auth.user_with_permissions("viewer", ["menu.history"])
+    headers = login(client, "viewer")
+    _capture(
+        monkeypatch,
+        [
+            [
+                _row(
+                    "synthetic-run",
+                    question=None,
+                    status="error",
+                    error_type="ConnectError",
+                    stages_json={"failure_diagnosis": saved} if saved is not None else {},
+                    citations_json=None,
+                )
+            ],
+            [],
+        ],
+    )
+    response = client.get("/api/history/runs/synthetic-run", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["failure_diagnosis"] == expected
+    assert "secret" not in response.text
+
+
 @pytest.mark.parametrize("verification", ["verified", "partial", "unverified"])
 def test_legacy_run_summary_does_not_infer_verification(verification: str) -> None:
     from app.api.routes.history import _summary_fields

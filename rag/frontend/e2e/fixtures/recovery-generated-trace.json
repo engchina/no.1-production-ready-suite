@@ -1,0 +1,2294 @@
+{
+  "events": [
+    {
+      "schema_version": 1,
+      "seq": 1,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "768e8e308de4f656",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.605070+00:00",
+      "name": "rag.answer",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.658324+00:00",
+      "root": true,
+      "attributes": {
+        "pr.operation.id": "synthetic-recovery"
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 2,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "2165d1b7af36a490",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.736443+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.737217+00:00",
+      "parent_id": "768e8e308de4f656",
+      "kind": "answer_step",
+      "display_name": "登録ルールによる確認の使用",
+      "params": {
+        "name": "登録ルールによる確認の使用"
+      },
+      "attributes": {
+        "pr.stage": "登録ルールによる確認の使用",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 3,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "1db57c03bf147eef",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.737465+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.737851+00:00",
+      "parent_id": "768e8e308de4f656",
+      "kind": "answer_step",
+      "display_name": "回答生成での登録ルールの使用",
+      "params": {
+        "name": "回答生成での登録ルールの使用"
+      },
+      "attributes": {
+        "pr.stage": "回答生成での登録ルールの使用",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 4,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "b6b8f64a57eda96e",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.738083+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.739678+00:00",
+      "parent_id": "768e8e308de4f656",
+      "kind": "answer_step",
+      "display_name": "質問の言い換え・分解",
+      "params": {
+        "name": "質問の言い換え・分解"
+      },
+      "attributes": {
+        "pr.stage": "質問の言い換え・分解",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 5,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "c2330a68ca8c8285",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.738660+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.739285+00:00",
+      "parent_id": "768e8e308de4f656",
+      "kind": "answer_step",
+      "display_name": "用語・同義語による検索文の追加",
+      "params": {
+        "name": "用語・同義語による検索文の追加"
+      },
+      "attributes": {
+        "pr.stage": "用語・同義語による検索文の追加",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 6,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "073c12d8439b7ef7",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.739913+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.923617+00:00",
+      "parent_id": "768e8e308de4f656",
+      "kind": "answer_step",
+      "display_name": "検索文をまとめ、検索語を作る",
+      "params": {
+        "name": "検索文をまとめ、検索語を作る"
+      },
+      "attributes": {
+        "pr.stage": "検索文をまとめ、検索語を作る"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 7,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "f8fe6e4372a16add",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.923850+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.403440+00:00",
+      "parent_id": "768e8e308de4f656",
+      "kind": "answer_step",
+      "display_name": "根拠を検索して回答を作る",
+      "params": {
+        "name": "回答生成フロー",
+        "llm_calls": 4
+      },
+      "attributes": {
+        "pr.stage": "回答生成フロー"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 8,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "80bf6c6250291385",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.924316+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.980286+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "検索文から根拠の候補を集める",
+      "params": {
+        "name": "文書検索"
+      },
+      "attributes": {
+        "pr.stage": "文書検索"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 9,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "85f3eb9363428eb6",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.936616+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.937268+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "原質問をベクトル検索と全文検索で探す",
+      "params": {
+        "name": "原質問をベクトル検索と全文検索で探す"
+      },
+      "attributes": {
+        "pr.stage": "原質問をベクトル検索と全文検索で探す"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 10,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "3a551e65984b105d",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.937543+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.938290+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "追加の検索結果統合",
+      "params": {
+        "name": "追加の検索結果統合"
+      },
+      "attributes": {
+        "pr.stage": "検索結果の統合（RRF）",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 11,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "7ba7a89eb0471498",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.939456+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.939655+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "文書の偏りを補う候補を加える",
+      "params": {
+        "name": "文書の多様性を補う候補の追加",
+        "depth": 600,
+        "max_extra": 100,
+        "new_document_limit": 10,
+        "present_document_limit": 5,
+        "inspected_count": 0,
+        "eligible_count": 0,
+        "added_count": 0,
+        "added_document_count": 0,
+        "new_document_count": 0,
+        "present_document_count": 0,
+        "before_count": 1,
+        "after_count": 1,
+        "limit_reached": false,
+        "reason_code": "no_match"
+      },
+      "attributes": {
+        "pr.stage": "文書の多様性を補う候補の追加"
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 12,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "f06074a4c48bc9fe",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.939779+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.960804+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "文書が参照する箇所の根拠を加える",
+      "params": {
+        "name": "参照先の根拠の追加"
+      },
+      "attributes": {
+        "pr.stage": "参照先の根拠の追加"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 13,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "cf5d0ce631c5b7c8",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.961008+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.961208+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "対象の名前と別名で関連する根拠を探す",
+      "params": {
+        "name": "実体・別名による検索拡張",
+        "result_count": 0,
+        "enabled": false,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "configuration_disabled"
+      },
+      "attributes": {
+        "pr.stage": "実体・別名による検索拡張",
+        "pr.operation.status": "skipped"
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 14,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "70bba2abd0206994",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.961324+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.961495+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "文書の章と表のつながりから根拠を加える",
+      "params": {
+        "name": "文書構造による検索拡張",
+        "result_count": 0,
+        "enabled": false,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "configuration_disabled"
+      },
+      "attributes": {
+        "pr.stage": "文書構造による検索拡張",
+        "pr.operation.status": "skipped"
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 15,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "0ee96b16d91f85d7",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.961796+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.962242+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "質問に関係する画面を目録から選ぶ",
+      "params": {
+        "name": "画面の選択",
+        "result_count": 0,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "configuration_disabled"
+      },
+      "attributes": {
+        "pr.stage": "画面の選択",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 16,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "dcc1cd99b0cc6f6b",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.962434+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.976311+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "根拠に使う条を目録から選ぶ",
+      "params": {
+        "name": "条の選択",
+        "result_count": 0,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "catalog_empty"
+      },
+      "attributes": {
+        "pr.stage": "条の選択",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 17,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "469e0c2893d15dcb",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.976487+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.976888+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "再ランキング候補の選択",
+      "params": {
+        "name": "再ランキング候補の選択"
+      },
+      "attributes": {
+        "pr.stage": "再ランキング候補の選択"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 18,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "8ba6a4825ad7ba46",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.977072+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.977466+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "質問との関連度で候補を並べ替える",
+      "params": {
+        "name": "Rerank",
+        "note": "未実行: 無効の設定"
+      },
+      "attributes": {
+        "pr.stage": "Rerank"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 19,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "144a907f81627ab7",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.977609+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.978288+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "回答の根拠を探す文書を選ぶ",
+      "params": {
+        "name": "文書の選択"
+      },
+      "attributes": {
+        "pr.stage": "文書の選択"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 20,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "1e67d25792063293",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.978450+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.978802+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "同じ文書の超過候補を後ろへ回す",
+      "params": {
+        "name": "文書ごとの起点の上限"
+      },
+      "attributes": {
+        "pr.stage": "文書ごとの起点の上限"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 21,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "29f35a1adfcf0ddb",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:32.979175+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:32.979996+00:00",
+      "parent_id": "80bf6c6250291385",
+      "kind": "answer_step",
+      "display_name": "根拠の前後の文脈を読み込む",
+      "params": {
+        "name": "前後の文脈の読み込み"
+      },
+      "attributes": {
+        "pr.stage": "前後の文脈の読み込み"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 22,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "32950f69cd76ef0c",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:32.980543+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.222427+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "検索上限の要求別補完",
+      "params": {
+        "name": "検索上限の要求別補完"
+      },
+      "attributes": {
+        "pr.stage": "検索上限の要求別補完",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 23,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "030dea151af09324",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.250037+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.251158+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "関係する章節の原文を根拠に加える",
+      "params": {
+        "name": "章節の拡張"
+      },
+      "attributes": {
+        "pr.stage": "章節の拡張"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 24,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "a248df55aa3f7867",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:33.251369+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.251765+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "関係する章節の原文を根拠に加える",
+      "params": {
+        "name": "章節の拡張"
+      },
+      "attributes": {
+        "pr.stage": "章節の拡張",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 25,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "8abee63bec03a02e",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:33.252465+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.252860+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "関係する章節の原文を根拠に加える",
+      "params": {
+        "name": "章節の拡張"
+      },
+      "attributes": {
+        "pr.stage": "章節の拡張",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 26,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "112321ed75cc22fb",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.253052+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.253425+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答モデルへ渡す根拠画像を準備する",
+      "params": {
+        "name": "回答に添付する画像"
+      },
+      "attributes": {
+        "pr.stage": "回答に添付する画像"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 27,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "ea2dcd4f557e0186",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:33.268345+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.268749+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答生成での用語・同義語の使用",
+      "params": {
+        "name": "回答生成での用語・同義語の使用"
+      },
+      "attributes": {
+        "pr.stage": "回答生成での用語・同義語の使用",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 28,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "f3366983e5aa0361",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.284010+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.286510+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "文書の先頭ページを読み込む",
+      "params": {
+        "name": "文書の先頭ページの読み込み"
+      },
+      "attributes": {
+        "pr.stage": "文書の先頭ページの読み込み"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 29,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "ecbc918b6277415b",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.289778+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.335389+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答文を作って根拠と照合する（1 回目）",
+      "params": {
+        "name": "回答文の生成と根拠確認（1回目）",
+        "accepted": true,
+        "round": 1,
+        "llm_calls": 1
+      },
+      "attributes": {
+        "pr.stage": "回答文の生成と根拠確認（1回目）"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 30,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "294e019afd2049e8",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.335694+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.349788+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "未回答の要求の根拠を探し直す",
+      "params": {
+        "name": "未回答の要求の探し直し",
+        "llm_calls": 1
+      },
+      "attributes": {
+        "pr.stage": "未回答の要求の探し直し"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 31,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "7636a619c55b81fa",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.339742+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.340265+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "質問に意味が近い文書の箇所を探す",
+      "params": {
+        "name": "ベクトル検索"
+      },
+      "attributes": {
+        "pr.stage": "ベクトル検索"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 32,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "8f5ee1d3318ea478",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.340425+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.340825+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "質問に意味が近い文書の箇所を探す",
+      "params": {
+        "name": "ベクトル検索"
+      },
+      "attributes": {
+        "pr.stage": "ベクトル検索"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 33,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "3d64ab4694749f6b",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.340979+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.341381+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "質問に意味が近い文書の箇所を探す",
+      "params": {
+        "name": "ベクトル検索"
+      },
+      "attributes": {
+        "pr.stage": "ベクトル検索"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 34,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "dbf1af3380461cf0",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.341653+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.342529+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "追加の検索結果統合",
+      "params": {
+        "name": "追加の検索結果統合"
+      },
+      "attributes": {
+        "pr.stage": "検索結果の統合（RRF）"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 35,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "5bd3c72b7bf2af31",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.342724+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.342906+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "文書の偏りを補う候補を加える",
+      "params": {
+        "name": "文書の多様性を補う候補の追加",
+        "depth": 600,
+        "max_extra": 100,
+        "new_document_limit": 10,
+        "present_document_limit": 5,
+        "inspected_count": 0,
+        "eligible_count": 0,
+        "added_count": 0,
+        "added_document_count": 0,
+        "new_document_count": 0,
+        "present_document_count": 0,
+        "before_count": 2,
+        "after_count": 2,
+        "limit_reached": false,
+        "reason_code": "no_match"
+      },
+      "attributes": {
+        "pr.stage": "文書の多様性を補う候補の追加"
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 36,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "93d9f63ef46b94d0",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.343065+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.343412+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "文書が参照する箇所の根拠を加える",
+      "params": {
+        "name": "参照先の根拠の追加"
+      },
+      "attributes": {
+        "pr.stage": "参照先の根拠の追加"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 37,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "bdd3ac39ecc50993",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:33.343552+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.343734+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "対象の名前と別名で関連する根拠を探す",
+      "params": {
+        "name": "実体・別名による検索拡張",
+        "result_count": 0,
+        "enabled": false,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "configuration_disabled"
+      },
+      "attributes": {
+        "pr.stage": "実体・別名による検索拡張",
+        "pr.operation.status": "skipped"
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 38,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "c56a0981dc2ae428",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:33.343831+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.344016+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "文書の章と表のつながりから根拠を加える",
+      "params": {
+        "name": "文書構造による検索拡張",
+        "result_count": 0,
+        "enabled": false,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "configuration_disabled"
+      },
+      "attributes": {
+        "pr.stage": "文書構造による検索拡張",
+        "pr.operation.status": "skipped"
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 39,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "56814766fc04a2f7",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:33.344320+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.344723+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "質問に関係する画面を目録から選ぶ",
+      "params": {
+        "name": "画面の選択",
+        "result_count": 0,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "configuration_disabled"
+      },
+      "attributes": {
+        "pr.stage": "画面の選択",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 40,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "065345152e0f1d66",
+      "status": "skipped",
+      "started_at": "2026-11-05T04:17:33.344889+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.345462+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "根拠に使う条を目録から選ぶ",
+      "params": {
+        "name": "条の選択",
+        "result_count": 0,
+        "reused": false,
+        "execution_kind": "decision",
+        "reason_code": "catalog_empty"
+      },
+      "attributes": {
+        "pr.stage": "条の選択",
+        "pr.operation.status": "skipped"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 41,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "73c704279c328dbe",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.345626+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.346050+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "再ランキング候補の選択",
+      "params": {
+        "name": "再ランキング候補の選択"
+      },
+      "attributes": {
+        "pr.stage": "再ランキング候補の選択"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 42,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "32badf872ac353d1",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.346192+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.346587+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "質問との関連度で候補を並べ替える",
+      "params": {
+        "name": "Rerank",
+        "note": "未実行: 無効の設定"
+      },
+      "attributes": {
+        "pr.stage": "Rerank"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 43,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "f10288ce96bfe938",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.346739+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.347136+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "同じ文書の超過候補を後ろへ回す",
+      "params": {
+        "name": "文書ごとの起点の上限"
+      },
+      "attributes": {
+        "pr.stage": "文書ごとの起点の上限"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 44,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "45b2a507320e5792",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.347512+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.348411+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "根拠の前後の文脈を読み込む",
+      "params": {
+        "name": "前後の文脈の読み込み"
+      },
+      "attributes": {
+        "pr.stage": "前後の文脈の読み込み"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 45,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "f85e759d8968d550",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.348764+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.349581+00:00",
+      "parent_id": "294e019afd2049e8",
+      "kind": "answer_step",
+      "display_name": "関係する章節の原文を根拠に加える",
+      "params": {
+        "name": "章節の拡張"
+      },
+      "attributes": {
+        "pr.stage": "章節の拡張"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 46,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "c0291d18c15e26cb",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.349977+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.350428+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答の修正が必要か確認する",
+      "params": {
+        "name": "回答の修正が必要か確認する"
+      },
+      "attributes": {
+        "pr.stage": "回答の修正が必要か確認する"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 47,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "7324b8ab4e894ab2",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.350584+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.350997+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答の修正方針を決める",
+      "params": {
+        "name": "是正"
+      },
+      "attributes": {
+        "pr.stage": "是正"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 48,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "b10e1b71cf1ef28b",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.351735+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.352511+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "文書の先頭ページを読み込む",
+      "params": {
+        "name": "文書の先頭ページの読み込み"
+      },
+      "attributes": {
+        "pr.stage": "文書の先頭ページの読み込み"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 49,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "7bf016acbb7346c3",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.353220+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.389028+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答文を作って根拠と照合する（2 回目）",
+      "params": {
+        "name": "回答文の生成と根拠確認（2回目）",
+        "accepted": true,
+        "round": 2,
+        "llm_calls": 1
+      },
+      "attributes": {
+        "pr.stage": "回答文の生成と根拠確認（2回目）"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 50,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "690e7806de4bfb63",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.389378+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.389780+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答の修正が必要か確認する",
+      "params": {
+        "name": "回答の修正が必要か確認する"
+      },
+      "attributes": {
+        "pr.stage": "回答の修正が必要か確認する"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 51,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "0fc2443b014ee816",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.397539+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.397971+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "回答の修正を終了する",
+      "params": {
+        "name": "是正の打ち切り"
+      },
+      "attributes": {
+        "pr.stage": "是正の打ち切り"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 52,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "step",
+      "step_id": "21874785d0e1738c",
+      "status": "done",
+      "started_at": "2026-11-05T04:17:33.398135+00:00",
+      "name": "rag.engine.stage",
+      "trace_id": "da015e429c0f5a3c7ac151d3e66905b4",
+      "product": "rag",
+      "finished_at": "2026-11-05T04:17:33.399261+00:00",
+      "parent_id": "f8fe6e4372a16add",
+      "kind": "answer_step",
+      "display_name": "資料をもとに導いた結論を確認する",
+      "params": {
+        "name": "資料をもとに導いた結論を確認する",
+        "llm_calls": 1
+      },
+      "attributes": {
+        "pr.stage": "資料をもとに導いた結論を確認する"
+      },
+      "details": {
+        "call": {
+          "capture_enabled": false,
+          "visibility": "owner",
+          "input": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "output": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          },
+          "schema": {
+            "status": "not_recorded",
+            "preview_only": false,
+            "text": ""
+          }
+        }
+      }
+    },
+    {
+      "schema_version": 1,
+      "seq": 53,
+      "target_id": "synthetic-recovery",
+      "attempt": 0,
+      "emitted_at": "2026-11-05T04:17:33.696075+00:00",
+      "type": "terminal",
+      "status": "done"
+    }
+  ],
+  "dropped_spans": null
+}

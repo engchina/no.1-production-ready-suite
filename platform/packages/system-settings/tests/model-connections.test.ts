@@ -228,6 +228,14 @@ describe("接続（#533 / #542）", () => {
       },
     ]);
     expect(normalized.enterprise_ai.models[0]?.connection_id).toBe("primary");
+    expect(normalized.generative_ai.embedding_region).toBe("ap-osaka-1");
+    expect(normalized.generative_ai.rerank_region).toBe("ap-osaka-1");
+    const independent = normalizeModelSettings({
+      ...legacy,
+      generative_ai: { ...legacy.generative_ai, embedding_region: "ap-tokyo-1", rerank_region: "us-chicago-1" },
+    });
+    expect(independent.generative_ai.embedding_region).toBe("ap-tokyo-1");
+    expect(independent.generative_ai.rerank_region).toBe("us-chicago-1");
     expect("endpoint" in normalized.enterprise_ai).toBe(false);
   });
 
@@ -246,5 +254,16 @@ describe("接続（#533 / #542）", () => {
     } as unknown as ModelSettingsPayload;
     const normalized = normalizeModelSettings(withNames);
     expect(normalized.enterprise_ai.connections).toEqual([primary, secondary]);
+  });
+});
+
+
+describe("モデルとOCI認証のリージョンの境界", () => {
+  it("モデルの新しい候補は大阪とシカゴだけで、認証の東京は残す", async () => {
+    const { GENERATIVE_AI_REGION_OPTIONS, isSelectableGenerativeAiRegion } = await import("../src/model/regions");
+    const { OCI_REGION_OPTIONS } = await import("../src/oci/regions");
+    expect(GENERATIVE_AI_REGION_OPTIONS.map((option) => option.value)).toEqual(["ap-osaka-1", "us-chicago-1"]);
+    expect(OCI_REGION_OPTIONS.map((option) => option.value)).toEqual(["ap-tokyo-1", "ap-osaka-1", "us-chicago-1"]);
+    expect(isSelectableGenerativeAiRegion("ap-tokyo-1")).toBe(false);
   });
 });

@@ -390,6 +390,14 @@ class DocumentPreprocessArtifact(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class DocumentPreviewSource(BaseModel):
+    """引用版の表示属性。保存先やレシピの現在値は公開しない。"""
+
+    file_name: str
+    content_type: str | None = None
+    is_pdf: bool
+
+
 class DocumentPreviewPage(BaseModel):
     """プレビューのページ画像 1 ページの表示寸法(pt。ページの /Rotate を反映した向き)。"""
 

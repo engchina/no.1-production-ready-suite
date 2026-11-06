@@ -43,7 +43,7 @@ const baseline: ModelSettingsPayload = {
     llm_max_output_tokens: 1600,
     vlm_max_output_tokens: 64000,
   },
-  generative_ai: { embedding_model: "embed", embedding_dim: 1536, rerank_model: "rerank" },
+  generative_ai: { embedding_region: "ap-osaka-1", rerank_region: "ap-osaka-1", embedding_model: "embed", embedding_dim: 1536, rerank_model: "rerank" },
 };
 
 describe("buildSectionSavePayload", () => {
@@ -68,7 +68,7 @@ describe("buildSectionSavePayload", () => {
       default_text_model_id: "",
       default_vision_model_id: "draft-llm",
     },
-    generative_ai: { ...baseline.generative_ai, rerank_model: "draft-rerank" },
+    generative_ai: { ...baseline.generative_ai, rerank_model: "draft-rerank", embedding_region: "ap-tokyo-1", rerank_region: "us-chicago-1" },
   };
 
   it("保存する節の入力だけを送り、他の節と画面にない項目は保存済みの値を保つ", () => {
@@ -88,6 +88,9 @@ describe("buildSectionSavePayload", () => {
 
     const genai = buildSectionSavePayload(baseline, draft, "generative_ai");
     expect(genai.generative_ai.rerank_model).toBe("draft-rerank");
+    expect(genai.generative_ai.embedding_region).toBe("ap-tokyo-1");
+    expect(genai.generative_ai.rerank_region).toBe("us-chicago-1");
+    expect(connection.generative_ai.embedding_region).toBe("ap-osaka-1");
     expect(genai.enterprise_ai.connections[0]?.api_key).toBe("");
   });
 });

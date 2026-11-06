@@ -1,3 +1,4 @@
+import { expectRunValueTypography } from "../../../platform/packages/ui/e2e/run-value-typography";
 import { confirmTraceExplorer } from "../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../platform/packages/ui/e2e/call-fixture";
 import {timelineSnapshot, timelineTypography} from "../../../platform/packages/ui/e2e/timeline-snapshot";
@@ -706,7 +707,7 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await page.getByTestId("run-timeline-section-summary").click();
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
-  await confirmTraceExplorer(page, testInfo, expect);
+  await confirmTraceExplorer(page, testInfo, expect, true);
 });
 
 
@@ -759,6 +760,12 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
   if (await back.isVisible()) await back.click();
   await page.locator('[data-trace-record="chat-1"] button').click();
   const inspector = page.locator("[data-trace-inspector]");
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expectRunValueTypography(inspector);
+    await inspector.screenshot({path: testInfo.outputPath(`run-value-typography-${theme}.png`)});
+  }
+
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();
   expect(reads).toEqual([]);
   await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();
@@ -781,4 +788,34 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
     await page.setViewportSize({width: 1920, height: 900});
     await page.screenshot({path: testInfo.outputPath("agent-full-trace-1920.png")});
   }
+});
+
+
+test("読取打切りと書込欠落がある場合は、チャットと履歴で両方の原因を表示する", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  const { run, progress } = seedRunningRun(mockApi);
+  progress.step("chat-1", "done", { kind: "respond" });
+  run.status = "completed";
+  run.trace_dropped_spans = 2;
+  run.trace_read_truncated = true;
+  run.artifacts = [{ id: "answer-completeness", kind: "answer", name: "回答", content: { text: "合成の回答です。" } }];
+  run.events = [{ id: "end", run_id: RUN_ID, type: "run.completed", message: "", payload: {}, created_at: iso(0) }];
+  await page.goto("/chat");
+  await openThread(page);
+  const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+  await expect(turn.getByText("合成の回答です。")).toBeVisible();
+  await turn.getByTestId("chat-progress-summary").click();
+  await expect(turn.getByTestId("chat-progress-partial-read-truncated")).toContainText("取得件数の上限に達したため");
+  await expect(turn.getByTestId("chat-progress-partial-write-dropped")).toHaveText("一部の処理だけを記録しています。");
+  await expect(turn.getByTestId("chat-progress-legacy")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await turn.getByTestId("chat-progress").screenshot({ path: testInfo.outputPath("chat-read-and-write.png") });
+
+  await page.goto(`/runs?id=${RUN_ID}`);
+  await expect(page.getByTestId("run-summary")).toBeVisible();
+  await page.getByTestId("run-timeline-section-summary").click();
+  await expect(page.getByTestId("run-timeline-section-partial-read-truncated")).toContainText("保存済みの記録がすべて表示されているとは限りません");
+  await expect(page.getByTestId("run-timeline-section-partial-write-dropped")).toHaveText("一部の処理だけを記録しています。");
+  await expect(page.getByTestId("run-timeline-legacy")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await page.getByTestId("run-timeline-section").screenshot({ path: testInfo.outputPath("history-read-and-write.png") });
 });

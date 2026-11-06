@@ -131,8 +131,9 @@ async def test_each_version_reads_the_file_it_parsed(
     read = cast(Any, oracle)
     assert await load_parsed_source(read, "d1", "r1", chunk_set_id="cs-old") == _FILE_A
     assert await load_parsed_source(read, "d1", "r1", chunk_set_id="cs-new") == _FILE_B
-    # 版を指定しない画面（レシピの確認）は、今のレシピのファイルを見る。
-    assert await load_parsed_source(read, "d1", "r1") == _FILE_B
+    # 版を指定しない読み取りは、今のレシピのファイルで代用しない。
+    with pytest.raises(VersionSourceUnknownError):
+        await load_parsed_source(read, "d1", "r1")
 
 
 async def test_preview_document_binds_to_the_evidence_version(
@@ -145,7 +146,7 @@ async def test_preview_document_binds_to_the_evidence_version(
     assert old.object_storage_path == paths["a"]
     assert old.page_map == {"1": 2}
     assert old.file_name == "synthetic__prepared.pdf"
-    _detail, current = await mcp_tools.preview_document(read, "d1", "r1")
+    _detail, current = await mcp_tools.preview_document(read, "d1", "r1", chunk_set_id="cs-new")
     assert current is not None
     assert current.object_storage_path == paths["b"]
 

@@ -390,6 +390,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/chunks"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/chunk-preview"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/content"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/preview-source"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/preview-pages"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
@@ -419,7 +420,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
-    ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/crop"): _DOCUMENT_VIEW,
     # 根拠の図の画像（RAG の根拠のカード・サイドパネルの「図を開く」。#2428）。
     ("GET", "/figures"): _DOCUMENT_VIEW,
     ("POST", f"{_D}/text-window"): _DOCUMENT_VIEW,
@@ -435,6 +436,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/overview"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/tree"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/graph/documents/{{document_id}}/entity-chunks"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/locate"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/references"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/search"): _any(MENU_KNOWLEDGE_BASES),
@@ -567,6 +569,13 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 判定の校正（#3578）。記入（自分の判定だけ）は品質評価の権限、全員の判定・一致・裁定・校正・
     # 書き出し・取り込みは判定の校正の管理。校正の進捗・取り消しは上の job の API。
     ("GET", "/evaluation/calibration/status"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/testsets"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets/sources"): _any(MENU_EVALUATION),
+    ("POST", "/evaluation/testsets/sources/items"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets/{draft_id}"): _any(MENU_EVALUATION),
+    ("PUT", "/evaluation/testsets/{draft_id}"): _any(MENU_EVALUATION),
+    ("GET", "/evaluation/testsets/{draft_id}/export.xlsx"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/calibration/label-sets"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/calibration/label-sets/{label_set_id}"): _any(MENU_EVALUATION),
     ("GET", "/evaluation/calibration/label-sets/{label_set_id}/rows"): _any(MENU_EVALUATION),
@@ -593,6 +602,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
         EVALUATION_CALIBRATION_MANAGE
     ),
     ("POST", "/evaluation/calibration/label-sets/{label_set_id}/calibrations"): _any(
+        EVALUATION_CALIBRATION_MANAGE
+    ),
+    ("GET", "/evaluation/calibration/label-sets/{label_set_id}/archive"): _any(
         EVALUATION_CALIBRATION_MANAGE
     ),
     ("GET", "/evaluation/calibration/label-sets/{label_set_id}/export"): _any(

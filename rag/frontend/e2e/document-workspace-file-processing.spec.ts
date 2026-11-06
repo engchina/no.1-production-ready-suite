@@ -3665,3 +3665,121 @@ for (const scenario of ["unlocated", "mixed", "unrecorded"] as const) {
     await expectNoPageOverflow(page);
   });
 }
+
+
+for (const initialActive of [null, "old-active"] as const) {
+  test(`分割確認は保存した候補版で一覧とフォーカスを更新する (${initialActive ?? "first"})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockDocumentWorkspace(page, { documentStatus: "CHUNKED", pendingChunkSet: true });
+    let phase = 0;
+    const reads: {phase: number; focus: string | null; source: string | null}[] = [];
+    const text = "先頭の合成本文。後半の合成本文。";
+    await page.route("**/api/documents/doc-1/recipes", route => {
+      const recipe = {recipe_id: "recipe-1", document_id: "doc-1", slot_no: 1, status: phase === 2 ? "INDEXED" : "CHUNKED", failed_phase: null,
+        processing_config: {chunking_strategy: phase === 0 ? "fixed_size" : "structure_aware", chunk_size: phase === 0 ? 500 : 300, chunk_overlap: phase === 0 ? 0 : 40},
+        effective_processing_config: {chunking_strategy: phase === 0 ? "fixed_size" : "structure_aware", chunk_size: phase === 0 ? 500 : 300, chunk_overlap: phase === 0 ? 0 : 40}, preprocess_artifact: null, active_extraction_recipe_id: "source-version",
+        active_chunk_set_id: phase === 2 ? "pending-1" : initialActive, pending_chunk_set_id: phase === 2 ? null : `pending-${phase}`,
+        chunk_count: phase === 2 ? 1 : initialActive ? 8 : 0, vector_count: phase === 2 ? 1 : initialActive ? 8 : 0,
+        config_revision: phase + 1, materialized_revision: phase === 2 ? 3 : null, searchable: phase === 2 || Boolean(initialActive), needs_reprocessing: false, error_message: null,
+        steps: phase === 2 ? [] : [{phase: "INDEX", status: "RUNNING", started_at: "2026-06-15T00:00:00Z", finished_at: null, error_message: null}],
+        created_at: "2026-06-15T00:00:00Z", updated_at: "2026-06-15T00:00:00Z", started_at: null, finished_at: null};
+      return route.fulfill({json: {data: [recipe], error_messages: [], warning_messages: []}});
+    });
+    await page.route("**/recipes/recipe-1/text-window", route => route.fulfill({json: {data: {text, offset: 0, total: text.length, limit: 8192, revision: "source-revision", previous_offset: null, next_offset: null}, error_messages: [], warning_messages: []}}));
+    await page.route("**/recipes/recipe-1/extraction-view?**", route => fulfillDocumentInspection(route, {json: {data: {payload: {raw_text: text, elements: [{element_id: "el-0000", text, order: 0, page_number: 1}], pages: []}}, error_messages: [], warning_messages: []}}));
+    await page.route("**/recipes/recipe-1/chunk-window?**", route => {
+      const q = new URL(route.request().url()).searchParams;
+      reads.push({phase, focus: q.get("chunk_id"), source: q.get("source_revision")});
+      const version = Math.min(phase, 1);
+      expect(q.get("expected_revision")).toMatch(/^pending-[01]$/);
+      if (q.get("expected_revision") !== `pending-${version}`) return route.fulfill({status: 409, json: {data: null, error_messages: ["確認版が変わりました。"], warning_messages: []}});
+      const item = {document_id: "doc-1", chunk_id: `pending-${version}:0`, chunk_index: 0, text: version === 0 ? "先頭の合成本文。" : "後半の合成本文。", page_start: 1, page_end: 1, element_ids: ["el-0000"], metadata: {chunk_strategy: version === 0 ? "fixed_size" : "structure_aware"}};
+      return route.fulfill({json: {data: {items: [item], total: 1, offset: 0, limit: 25, complete: true, document_total: 1, revision: `pending-${version}`, extraction_revision: "source-version", inspection_mode: phase === 2 ? "active" : "pending"}, error_messages: [], warning_messages: []}});
+    });
+    await page.goto("/documents/doc-1");
+    await page.getByRole("tab", {name: /Chunk \/ Citation/}).click();
+    const list = page.getByTestId("document-chunk-list");
+    await expect(list).toContainText("先頭の合成本文。");
+    await expect(page.getByRole("combobox", {name: "分割方式", exact: true})).toContainText("固定長");
+    await expect(page.getByRole("spinbutton", {name: "chunk サイズ(文字)", exact: true})).toHaveValue("500");
+    await expect(page.getByRole("status").filter({hasText: "この版はまだ検索に使われていません"})).toContainText("検索に使う前の分割結果を確認しています。");
+    await list.getByRole("button").first().click();
+    await expect.poll(() => reads.some(read => read.phase === 0 && read.focus === "pending-0:0")).toBe(true);
+    expect(reads.some(read => read.source === "source-revision")).toBe(true);
+    phase = 1;
+    await expect(list).toContainText("後半の合成本文。", { timeout: 7000 });
+    await expect(list).not.toContainText("先頭の合成本文。");
+    await expect(page.getByRole("combobox", {name: "分割方式", exact: true})).toContainText("構造認識");
+    await expect(page.getByRole("spinbutton", {name: "chunk サイズ(文字)", exact: true})).toHaveValue("300");
+    await expect(page.getByRole("spinbutton", {name: "overlap(文字)", exact: true})).toHaveValue("40");
+    await list.getByRole("button").first().click();
+    await expect.poll(() => reads.some(read => read.phase === 1 && read.focus === "pending-1:0")).toBe(true);
+    await page.getByRole("status").filter({hasText: "この版はまだ検索に使われていません"}).screenshot({path: testInfo.outputPath(`pending-not-searchable-${initialActive ?? "first"}.png`)});
+    await page.screenshot({path: testInfo.outputPath(`pending-before-index-${initialActive ?? "first"}.png`), fullPage: true});
+    phase = 2;
+    await expect(page.getByRole("status").filter({hasText: "この版はまだ検索に使われていません"})).toHaveCount(0, {timeout: 7000});
+    await expect(list).toContainText("後半の合成本文。");
+    await expect(page.getByTestId("preview-text")).toContainText(text);
+    await expectNoPageOverflow(page);
+    await page.screenshot({path: testInfo.outputPath(`pending-chunks-${initialActive ?? "first"}.png`), fullPage: true});
+  });
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`未登録の処理レシピを作成し選択して設定を保存できる (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await mockDocumentWorkspace(page, { documentStatus: "UPLOADED" });
+    let created = false;
+    let saved = false;
+    const recipe = {
+      recipe_id: "recipe-2", document_id: "doc-1", slot_no: 2, status: "UPLOADED",
+      failed_phase: null, processing_config: {}, effective_processing_config: { vision_enabled: false },
+      preprocess_artifact: null, active_extraction_recipe_id: null, active_chunk_set_id: null,
+      chunk_count: 0, vector_count: 0, config_revision: 1, materialized_revision: null,
+      searchable: false, needs_reprocessing: false, error_message: null, steps: [],
+      created_at: null, updated_at: null, started_at: null, finished_at: null,
+    };
+    await page.route("**/api/documents/doc-1/recipes", async route => {
+      if (route.request().method() === "POST") {
+        expect(route.request().postDataJSON()).toEqual({ copy_from_recipe_id: null });
+        created = true;
+        await route.fulfill({ json: { data: recipe, error_messages: [], warning_messages: [] } });
+      } else {
+        await route.fulfill({ json: { data: created ? [{ ...recipe, recipe_id: "recipe-1", slot_no: 1, processing_config: {} }, recipe] : [], error_messages: [], warning_messages: [] } });
+      }
+    });
+    await page.route("**/api/documents/doc-1/recipes/recipe-2", async route => {
+      expect(route.request().method()).toBe("PUT");
+      const config = route.request().postDataJSON();
+      expect(config.vision_enabled).toBe(true);
+      recipe.processing_config = config;
+      saved = true;
+      await route.fulfill({ json: { data: recipe, error_messages: [], warning_messages: [] } });
+    });
+    await page.goto("/documents/doc-1");
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expect(page.getByText("処理レシピがありません", { exact: true })).toBeVisible();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`empty-${theme}.png`), fullPage: true });
+    await page.getByRole("button", { name: "レシピを追加", exact: true }).click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog.getByRole("heading", { name: "処理レシピを追加" })).toBeVisible();
+    await expect(dialog.getByText("選択中のレシピを複製", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("radio", { name: "全体既定から作成" })).toBeChecked();
+    await page.screenshot({ path: testInfo.outputPath(`dialog-${theme}.png`), fullPage: true });
+    await dialog.getByRole("button", { name: "追加する", exact: true }).click();
+    await expect.poll(() => created).toBe(true);
+    await expect(page.getByText("処理レシピがありません", { exact: true })).toHaveCount(0);
+    await expect(page).toHaveURL(/recipe=recipe-2/u);
+    await page.getByRole("button", { name: "処理設定を編集", exact: true }).click();
+    const field = page.locator('[data-config-field="vision_enabled"]').last();
+    await field.getByRole("button", { name: "上書き", exact: true }).click();
+    await field.getByRole("button", { name: "有効", exact: true }).click();
+    await page.getByRole("button", { name: "構築設定を保存", exact: true }).click();
+    await expect.poll(() => saved).toBe(true);
+    await page.getByRole("button", { name: "レシピを追加", exact: true }).click();
+    await expect(dialog.getByRole("radio", { name: "選択中のレシピを複製" })).toBeChecked();
+    await expect(dialog.getByRole("radio", { name: "全体既定から作成" })).not.toBeChecked();
+    await dialog.getByRole("button", { name: "キャンセル", exact: true }).click();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`saved-${theme}.png`), fullPage: true });
+  });
+}

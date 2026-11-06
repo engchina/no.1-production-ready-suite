@@ -11,11 +11,12 @@ const SECONDARY_CONNECTION = {
   clear_api_key: false,
 };
 
-type ModelSettingsOptions = { secondary?: boolean; textModel?: string };
+type ModelSettingsOptions = { secondary?: boolean; textModel?: string; embeddingRegion?: string };
 
 function createModelSettings({
   secondary = false,
   textModel = "enterprise-llm",
+  embeddingRegion,
 }: ModelSettingsOptions = {}) {
   return {
     settings: {
@@ -61,6 +62,7 @@ function createModelSettings({
         max_retries: 3,
       },
       generative_ai: {
+        ...(embeddingRegion ? { embedding_region: embeddingRegion } : {}),
         embedding_model: "cohere.embed-v4.0",
         embedding_dim: 1536,
         rerank_model: "cohere.rerank-v4.0-fast",
@@ -921,6 +923,89 @@ for (const viewport of [
     expect(savedEnterprise[0]).not.toHaveProperty("seed");
     await expectNoPageOverflow(page);
   });
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`埋め込みとリランクのリージョンを独立に選び、テストと保存に送る (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let savedPayload: { generative_ai: { embedding_region: string; rerank_region: string } } | undefined;
+    const tested: Array<{ target_type: string; settings: { generative_ai: { embedding_region: string; rerank_region: string } } }> = [];
+    await mockModelSettings(page, (payload) => { savedPayload = payload as typeof savedPayload; });
+    await page.route("**/api/settings/model/test", async (route) => {
+      const payload = route.request().postDataJSON();
+      tested.push(payload);
+      await route.fulfill({ json: { data: { status: "success", target_type: payload.target_type, model_id: payload.model_id, message: "接続を確認しました。", troubleshooting: [], raw_error: null, error_type: null, elapsed_ms: 1, checked_at: "2026-11-05T00:00:00Z", details: {} }, error_messages: [], warning_messages: [] } });
+    });
+    await page.goto("/settings/model");
+    const embedding = page.getByRole("combobox", { name: "埋め込みモデルのリージョン", exact: true });
+    const rerank = page.getByRole("combobox", { name: "リランクモデルのリージョン", exact: true });
+    // 旧GETはregionを返さない。OCI認証設定を取得して補完せず、大阪を既定にする。
+    await expect(embedding).toContainText("ap-osaka-1");
+    await expect(rerank).toContainText("ap-osaka-1");
+    await embedding.click();
+    await expect(page.getByRole("listbox", { name: "埋め込みモデルのリージョン" }).getByRole("option")).toHaveText(["ap-osaka-1", "us-chicago-1"]);
+    await page.getByRole("option", { name: "us-chicago-1", exact: true }).click();
+    await expect(rerank).toContainText("ap-osaka-1");
+    await rerank.click();
+    await expect(page.getByRole("listbox", { name: "リランクモデルのリージョン" }).getByRole("option")).toHaveText(["ap-osaka-1", "us-chicago-1"]);
+    await page.getByRole("option", { name: "us-chicago-1", exact: true }).click();
+    await expect(embedding).toContainText("us-chicago-1");
+    await embedding.click();
+    await page.getByRole("option", { name: "ap-osaka-1", exact: true }).click();
+    await expect(rerank).toContainText("us-chicago-1");
+    await page.getByRole("button", { name: "cohere.embed-v4.0 をテスト", exact: true }).click();
+    await expect.poll(() => tested.length).toBe(1);
+    await page.getByRole("button", { name: "cohere.rerank-v4.0-fast をテスト", exact: true }).click();
+    await expect.poll(() => tested.length).toBe(2);
+    expect(tested.map((request) => request.target_type)).toEqual(["embedding", "rerank"]);
+    for (const request of tested) {
+      expect(request.settings.generative_ai).toMatchObject({ embedding_region: "ap-osaka-1", rerank_region: "us-chicago-1" });
+    }
+    await page.getByRole("button", { name: "OCI Generative AI: 保存", exact: true }).click();
+    await expect.poll(() => savedPayload?.generative_ai.embedding_region).toBe("ap-osaka-1");
+    expect(savedPayload?.generative_ai.rerank_region).toBe("us-chicago-1");
+    await page.reload();
+    await expect(embedding).toContainText("ap-osaka-1");
+    await expect(rerank).toContainText("us-chicago-1");
+    await embedding.scrollIntoViewIfNeeded();
+    const embeddingBox = await embedding.boundingBox();
+    const modelBox = await page.locator("#genai-embedding-model").boundingBox();
+    expect(embeddingBox).not.toBeNull();
+    expect(modelBox).not.toBeNull();
+    expect(embeddingBox!.y <= modelBox!.y).toBe(true);
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`genai-regions-${viewport.name}.png`), fullPage: true });
+  });
+  test(`保存済み東京は変更せず表示し、再選択まで保存しない (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const saved: Array<{ generative_ai: { embedding_region: string } }> = [];
+    await mockModelSettings(page, (payload) => { saved.push(payload as typeof saved[number]); }, { embeddingRegion: "ap-tokyo-1" });
+    await page.goto("/settings/model");
+    const embedding = page.getByRole("combobox", { name: "埋め込みモデルのリージョン", exact: true });
+    await expect(embedding).toContainText("ap-tokyo-1");
+    await expect(page.getByText("既存の接続先は変更していません。", { exact: false })).toBeVisible();
+    await embedding.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`genai-old-tokyo-${viewport.name}.png`), fullPage: true });
+    await page.locator("#genai-rerank-model").fill("draft-rerank");
+    await page.getByRole("button", { name: "OCI Generative AI: 保存", exact: true }).click();
+    await expect(embedding).toBeFocused();
+    expect(saved).toHaveLength(0);
+    await embedding.click();
+    await expect(page.getByRole("listbox", { name: "埋め込みモデルのリージョン" }).getByRole("option")).toHaveText(["ap-osaka-1", "us-chicago-1"]);
+    await page.getByRole("option", { name: "us-chicago-1", exact: true }).click();
+    await page.getByRole("button", { name: "OCI Generative AI: 保存", exact: true }).click();
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]?.generative_ai.embedding_region).toBe("us-chicago-1");
+    await page.reload();
+    await expect(embedding).toContainText("us-chicago-1");
+    await embedding.scrollIntoViewIfNeeded();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`genai-legacy-region-${viewport.name}.png`), fullPage: true });
+  });
+
 }
 
 async function mockModelSettings(

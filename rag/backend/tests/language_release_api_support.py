@@ -11,6 +11,7 @@ from app.schemas.language_pack_release import (
     LanguagePackRelease,
     LanguagePackReleaseList,
     LanguagePackReleaseState,
+    LanguagePackReleaseSummary,
 )
 
 
@@ -119,5 +120,8 @@ class FakeReleaseStore:
     async def list(self, *, limit: int = 25, offset: int = 0) -> LanguagePackReleaseList:
         return LanguagePackReleaseList(
             total=len(self.releases),
-            releases=list(reversed(self.releases))[offset : offset + limit],
+            releases=[
+                LanguagePackReleaseSummary.model_validate(item.model_dump(exclude={"effective"}))
+                for item in list(reversed(self.releases))[offset : offset + limit]
+            ],
         )

@@ -490,6 +490,7 @@ def test_trace_route_returns_the_snapshot(
     trace_table.flush()
     body = client.get(f"/api/nl2sql/jobs/{job.job_id}/trace").json()["data"]
     assert body["dropped_spans"] == 0
+    assert body["read_truncated"] is False
     assert body["events"][-1] == {**body["events"][-1], "type": "terminal", "status": "done"}
     assert {item["target_id"] for item in body["events"]} == {job.job_id}
     # system_admin 以外は、その実行の利用者の span だけを読む。
@@ -731,3 +732,32 @@ def test_failed_generation_keeps_actual_input_without_inventing_output(
     assert json.loads(call.input.text)["実際の質問"] == questions[0]
     assert call.output.status == "recorded"
     assert json.loads(call.output.text) == {"error_type": "RuntimeError"}
+
+
+@pytest.mark.parametrize("count", [999, 1000, 1001])
+def test_trace_route_reports_bounded_read(
+    jobs: Fixture,
+    trace_table: TraceTable,  # noqa: F811
+    api: tuple[TestClient, _Viewer],
+    count: int,
+) -> None:
+    service, _ = jobs
+    client, _ = api
+    job = run(service, start(service))
+    trace_table.flush()
+    template = trace_table.db.spans(trace_id=job.trace_id)[0]
+    trace_table.db.rows.clear()
+    for index in range(count):
+        row = {
+            **template,
+            "span_id": f"{index:016x}",
+            "is_root": int(index == 0),
+            "parent_span_id": None if index == 0 else "0" * 16,
+        }
+        trace_table.db.rows[(row["trace_id"], row["span_id"])] = row
+    response = client.get(f"/api/nl2sql/jobs/{job.job_id}/trace")
+    assert response.status_code == 200, response.text
+    body = response.json()["data"]
+    assert body["read_truncated"] is (count > 1000)
+    assert body["dropped_spans"] == 0
+    assert len([event for event in body["events"] if event["type"] == "step"]) == min(count, 1000)

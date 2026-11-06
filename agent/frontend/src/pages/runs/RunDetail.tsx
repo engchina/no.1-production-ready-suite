@@ -210,6 +210,7 @@ export function RunDetail({
                 ? [
                     {
                       id: "modelCalls",
+                      tabular: Number.isFinite(usage.requests),
                       label: t("run.fact.modelCalls"),
                       value: t("run.fact.modelCallsValue", {
                         requests: formatNumber(usage.requests),
@@ -344,6 +345,8 @@ export function RunDetail({
               labels={labels}
               // 共通の span の表に書けなかった span がある（#3226 の案 A）。経過の一覧が全部ではないことを示す。
               partial={progress.partial}
+              readTruncated={progress.readTruncated}
+              droppedSpans={progress.droppedSpans}
               empty={
                 legacyProgress ? (
                   // span の無い古い形式の記録（空白にしない。#3226）。
@@ -358,7 +361,7 @@ export function RunDetail({
               // 処理の詳細（識別子・イベントの記録・ストリームの接続）は、処理の経過のタイムラインの後ろに既定で閉じて置く
               // （3 製品の実行の詳細とチャットの処理の経過で同じ名前・部品・位置。#2325）。
               processDetailsProps={{ title: t("run.section.processDetails"), metadata: { conversationId: run.thread_id ?? null, messageId: run.id }, testId: "run-technical-section", summaryTestId: "run-process-details" }}
-              processDetails={<RunUsedModels models={usage?.model ? [{ label: "LLM", value: usage.model }] : []} events={progress.events} />}
+              processDetails={<RunUsedModels models={usage?.model ? [{ label: "LLM", value: usage.model, valueKind: "identifier" as const }] : []} events={progress.events} />}
             />
           </>
         }

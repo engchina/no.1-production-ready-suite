@@ -49,6 +49,8 @@ import {
   FieldActionRow,
   FormGrid,
   FormStatus,
+  INFORMATION_CARD_LIST_SCROLL_CLASS,
+  INFORMATION_TABLE_FOCUS_CLASS,
   ObjectActionBar,
   SelectField,
   Skeleton,
@@ -153,7 +155,7 @@ export function DocumentRecipeManager({
   );
 
   const openAddDialog = () => {
-    setAddMode("clone");
+    setAddMode(selected ? "clone" : "defaults");
     dialogRef.current?.showModal();
   };
 
@@ -210,6 +212,62 @@ export function DocumentRecipeManager({
     });
   };
 
+  const createDialog = (
+    <dialog
+      ref={dialogRef}
+      className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
+      onClose={() => setAddMode("clone")}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) dialogRef.current?.close();
+      }}
+    >
+      <div className="p-5">
+        <h2 className="text-base font-semibold">{t("documents.recipes.addTitle")}</h2>
+        <p className="mt-1 text-sm text-fg-muted">{t("documents.recipes.addDescription")}</p>
+        <div
+          role="radiogroup"
+          aria-label={t("documents.recipes.addTitle")}
+          className="mt-4 grid gap-2"
+        >
+          {selected ? (
+            <AddModeOption
+              value="clone"
+              selected={addMode === "clone"}
+              icon={<Copy size={16} aria-hidden />}
+              label={t("documents.recipes.clone")}
+              onSelect={() => setAddMode("clone")}
+            />
+          ) : null}
+          <AddModeOption
+            value="defaults"
+            selected={addMode === "defaults"}
+            icon={<Settings2 size={16} aria-hidden />}
+            label={t("documents.recipes.defaults")}
+            onSelect={() => setAddMode("defaults")}
+          />
+        </div>
+        {createRecipe.error ? (
+          <FormStatus
+            tone="danger"
+            message={
+              createRecipe.error instanceof ApiError
+                ? createRecipe.error.message
+                : t("flow.ingestFailed")
+            }
+          />
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={() => dialogRef.current?.close()}>
+            {t("common.cancel")}
+          </Button>
+          <Button type="button" onClick={handleCreate} loading={createRecipe.isPending} icon={Plus}>
+            {t("documents.recipes.create")}
+          </Button>
+        </div>
+      </div>
+    </dialog>
+  );
+
   if (loading) {
     return (
       <section aria-label={t("documents.recipes.title")} className="space-y-3">
@@ -243,7 +301,17 @@ export function DocumentRecipeManager({
   }
 
   if (!selected) {
-    return <FormStatus tone="info" message={t("documents.recipes.empty")} />;
+    return (
+      <section aria-label={t("documents.recipes.title")} className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <FormStatus tone="info" message={t("documents.recipes.empty")} />
+          <Button type="button" variant="secondary" size="sm" onClick={openAddDialog} icon={Plus}>
+            {t("documents.recipes.add")}
+          </Button>
+        </div>
+        {createDialog}
+      </section>
+    );
   }
 
   // 押したレシピの操作だけを回す。処理中に別のレシピを選んでも、そのレシピの操作は回さない（#819）。
@@ -420,57 +488,7 @@ export function DocumentRecipeManager({
         <RecipeComparison documentId={documentId} recipes={recipes} />
       </div>
 
-      <dialog
-        ref={dialogRef}
-        className="m-auto w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-surface-overlay p-0 text-fg shadow-[var(--shadow-dialog)] backdrop:bg-[var(--scrim)]"
-        onClose={() => setAddMode("clone")}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) dialogRef.current?.close();
-        }}
-      >
-        <div className="p-5">
-          <h2 className="text-base font-semibold">{t("documents.recipes.addTitle")}</h2>
-          <p className="mt-1 text-sm text-fg-muted">{t("documents.recipes.addDescription")}</p>
-          <div
-            role="radiogroup"
-            aria-label={t("documents.recipes.addTitle")}
-            className="mt-4 grid gap-2"
-          >
-            <AddModeOption
-              value="clone"
-              selected={addMode === "clone"}
-              icon={<Copy size={16} aria-hidden />}
-              label={t("documents.recipes.clone")}
-              onSelect={() => setAddMode("clone")}
-            />
-            <AddModeOption
-              value="defaults"
-              selected={addMode === "defaults"}
-              icon={<Settings2 size={16} aria-hidden />}
-              label={t("documents.recipes.defaults")}
-              onSelect={() => setAddMode("defaults")}
-            />
-          </div>
-          {createRecipe.error ? (
-            <FormStatus
-              tone="danger"
-              message={
-                createRecipe.error instanceof ApiError
-                  ? createRecipe.error.message
-                  : t("flow.ingestFailed")
-              }
-            />
-          ) : null}
-          <div className="mt-5 flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={() => dialogRef.current?.close()}>
-              {t("common.cancel")}
-            </Button>
-            <Button type="button" onClick={handleCreate} loading={createRecipe.isPending} icon={Plus}>
-              {t("documents.recipes.create")}
-            </Button>
-          </div>
-        </div>
-      </dialog>
+      {createDialog}
     </section>
   );
 }
@@ -955,7 +973,11 @@ function ComparisonColumn({ title, result }: { title: string; result: SearchResp
     <section className="min-w-0">
       <h4 className="mb-2 text-sm font-semibold text-fg">{title}</h4>
       {chunks.length ? (
-        <ol className="space-y-2">
+        <ol
+          aria-label={title}
+          tabIndex={0}
+          className={`space-y-2 ${INFORMATION_CARD_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+        >
           {chunks.map((chunk, index) => (
             <CitationCard
               key={`${chunk.chunk_id}-${index}`}

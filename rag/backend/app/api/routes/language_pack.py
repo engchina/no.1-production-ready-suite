@@ -4,7 +4,8 @@
 - 草稿の保存は実行設定を変えず、公開・回退だけが現在版を切り替える。
 - ``POST /api/settings/language-pack/preview``: 例の文を、保存した言語資源と編集中の上書きの
   それぞれで読む。
-- ``GET /api/settings/language-pack/releases``: 不変の完全な公開版をページングで返す。
+- ``GET /api/settings/language-pack/releases``: 公開履歴のメタデータをページングで返す。
+  内容は個別取得で検証する。
 """
 
 from __future__ import annotations
@@ -94,7 +95,7 @@ def _data(pack: LanguagePack) -> LanguagePackData:
 
 
 async def release_store() -> LanguagePackReleaseStore:
-    """初回だけ既存の有効設定を完全な公開版として取り込む。既存索引へは付けない。"""
+    """未初期化の新環境だけ組み込みの完全な公開版を作る。既存索引へは付けない。"""
     return await initialized_release_store()
 
 

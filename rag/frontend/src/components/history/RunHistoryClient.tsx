@@ -67,7 +67,7 @@ import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { isPageSize, listCountProps } from "@/lib/list-paging";
 import { paginationLabels } from "@/lib/pagination-labels";
-import { failedStageLabel, processFailureLabels, runFailure, storageFailureNotice } from "@/lib/process-failure";
+import { processFailureLabels, runFailure, storageFailureNotice } from "@/lib/process-failure";
 import { MENU_PERMISSIONS } from "@/lib/permissions";
 import { useListTotal, useRunHistory, useRunHistoryDetail } from "@/lib/queries";
 import { APP_ROUTES } from "@/lib/routes";
@@ -480,14 +480,14 @@ function RunDetailView({ run }: { run: RunDetail }) {
   // モデル・token・モデルの呼び出し（実行のときに記録した値。Agent の実行の詳細と同じ形。#3419）。
   const usageView = runUsageView(run);
   const extraFacts: RunFact[] = [
-    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls },
-    { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count) },
+    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls, tabular: Boolean(run.usage && run.usage.measurement !== "unmeasured" && Number.isFinite(run.usage.requests)) },
+    { id: "citations", label: t("history.detail.citations"), value: formatNumber(run.citation_count), tabular: Number.isFinite(run.citation_count) },
   ];
   if (run.status === "error") {
     extraFacts.push({
       id: "errorStage",
       label: t("history.detail.errorStage"),
-      value: run.error_stage ? failedStageLabel(run.error_stage) : t("history.notRecorded"),
+      value: failure?.failedStep ?? t("history.detail.errorStageNotRecorded"),
     });
   }
 
@@ -608,6 +608,8 @@ function RunDetailView({ run }: { run: RunDetail }) {
           processDetails={processDetails}
           // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
           partial={trace.partial}
+          readTruncated={trace.readTruncated}
+          droppedSpans={trace.droppedSpans}
           testId="run-history-timeline"
         />
       }

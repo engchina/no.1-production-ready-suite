@@ -1067,7 +1067,7 @@ def test_run_trace_read_failure_is_503(monkeypatch: MonkeyPatch) -> None:
     def unavailable(_trace_id: str, *, viewer_user_uuid: str | None) -> list[Any]:
         raise RuntimeError("ORA-00942")
 
-    monkeypatch.setattr(trace_spans, "fetch", unavailable)
+    monkeypatch.setattr(trace_spans, "fetch_page", unavailable)
 
     response = client.get(f"/api/runs/{run_id}/trace")
 
@@ -1189,3 +1189,33 @@ def test_body_off_keeps_the_normal_run_and_its_timing(monkeypatch: MonkeyPatch) 
     [chat] = [step for step in fold.step_list() if (step.span or {}).get("name") == CHAT]
     assert chat.started_at is not None and chat.finished_at is not None
     assert not chat.details or not chat.details.code
+
+
+@pytest.mark.parametrize("count", [999, 1000, 1001])
+def test_run_trace_api_marks_read_truncation_without_write_loss(
+    monkeypatch: MonkeyPatch, count: int
+) -> None:
+    run_id = _completed_api_run(monkeypatch)
+    run = runtime_repository.get_run(run_id)
+    assert run.trace_id is not None
+    owner = run_trace_owner(run_id, run.created_by_user_uuid)
+    assert owner is not None
+    trace_spans.memory.clear()
+    for index in range(count):
+        trace_spans.submit(
+            SpanUpdate(
+                trace_id=run.trace_id,
+                span_id=f"{index:016x}",
+                operation_name="synthetic.step",
+                root=index == 0,
+                status="done",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            owner,
+        )
+    response = client.get(f"/api/runs/{run_id}/trace")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["read_truncated"] is (count > 1000)
+    assert data["dropped_spans"] == 0
+    assert len([event for event in data["events"] if event["type"] == "step"]) == min(count, 1000)

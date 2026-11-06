@@ -17,6 +17,52 @@ const PNG_PIXEL =
 // 分割で生じた prefix 無し base64 断片の模擬。
 const BASE64_FRAGMENT = "A".repeat(300);
 
+test("画像の読み取り状態は既知・未知・未記録を日本語で区別する", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const states = [
+    ["running", "読み取り中"], ["succeeded", "説明済み"],
+    ["failed", "失敗"], ["skipped", "対象外"],
+    ["generated", "不明"], ["synthetic_future_status", "不明"],
+  ];
+  const missing = [{}, { vision_status: "" }, { vision_status: null }];
+  const imageRows = [
+    ...states.map(([status], order) => ({ kind: "figure", element_id: `status-${order}`, order,
+      text: `合成画像 状態${order}`, page_number: 1, metadata: { vision_status: status } })),
+    ...missing.map((metadata, index) => ({ kind: "figure", element_id: `missing-${index}`, order: 6 + index,
+      text: `合成画像 未記録${index}`, page_number: 1, metadata })),
+    { kind: "text", element_id: "native-text", order: 9, text: "合成の本文", page_number: 1, metadata: {} },
+    { kind: "table", element_id: "native-table", order: 10, text: "合成の表", page_number: 1, metadata: {} },
+    { kind: "figure", element_id: "decorative", order: 11, text: "合成の装飾", page_number: 1, metadata: { visual_role: "decorative" } },
+    { kind: "figure", element_id: "inline-icon", order: 12, text: "合成のアイコン", page_number: 1, metadata: { visual_role: "inline_icon" } },
+  ];
+  await mockDocumentDetail(page, { extraction: {
+    raw_text: "合成の状態一覧", pages: [], tables: [], assets: [], parser_artifacts: {}, elements: imageRows,
+  } });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
+  const pane = page.getByTestId("document-inspector-pane");
+  const card = (text: string) => pane.locator("li").filter({ has: page.getByText(text, { exact: true }) });
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    for (const [index, [raw, label]] of states.entries()) {
+      const row = card(`合成画像 状態${index}`);
+      await expect(row.getByText(`画像の読み取り: ${label}`, { exact: true })).toHaveCount(1);
+      await expect(row.getByText(`画像の読み取り: ${raw}`, { exact: true })).toHaveCount(0);
+    }
+    await card("合成画像 未記録0").scrollIntoViewIfNeeded();
+    await pane.screenshot({ path: testInfo.outputPath(`vision-status-missing-${theme}.png`) });
+    for (let index = 0; index < missing.length; index++) {
+      await expect(card(`合成画像 未記録${index}`).getByText("画像の読み取り: 未記録", { exact: true })).toHaveCount(1);
+    }
+    for (const text of ["合成の本文", "合成の表", "合成の装飾", "合成のアイコン"]) {
+      await expect(card(text)).toHaveCount(1);
+      await expect(card(text).getByText(/^画像の読み取り:/u)).toHaveCount(0);
+    }
+    await expectNoHorizontalOverflow(page);
+    await card("合成画像 状態0").scrollIntoViewIfNeeded();
+    await pane.screenshot({ path: testInfo.outputPath(`vision-status-known-${theme}.png`) });
+  }
+});
+
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
@@ -1624,4 +1670,35 @@ test("位置対応のない旧記録は推測して同期せず理由を示す",
   expect(Math.abs(gap.gap - gap.expected)).toBeLessThanOrEqual(1);
   await page.getByTestId("document-inspector-pane").screenshot({path: test.info().outputPath("inspector-unmapped-banner.png")});
   await expectNoHorizontalOverflow(page);
+});
+
+
+test("構造化要素の画像はレシピと表示抽出版のcropを開く", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  const extraction = { raw_text: "合成の図", elements: [{ kind: "figure", element_id: "synthetic-image", order: 0,
+    text: "合成の図", page_number: 1, bbox: [0, 0, 200, 100],
+    metadata: { page_width: 200, page_height: 100, vision_status: "generated" } }], pages: [], tables: [], assets: [],
+    parser_artifacts: { layout_records: { records: [{ id: "synthetic-image", raw: { vision_description: { main_topic: "合成の図" } } }] } } };
+  await mockDocumentDetail(page, { extraction });
+  const requests: URL[] = [];
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/crop?**", async route => {
+    requests.push(new URL(route.request().url()));
+    await route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAIAAABM5OhcAAABGklEQVR4nO3SwQ3AIBDAsIP9d26XIEJC9gR5ZM18A6ft2wG8yVgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXCWCSMRcJYJIxFwlgkjEXiB4itAceVcClUAAAAAElFTkSuQmCC", "base64") });
+  });
+  await page.goto("/documents/doc-1");
+  await page.getByRole("tab", { name: "構造化要素", exact: true }).click();
+  const pane = page.getByTestId("document-inspector-pane");
+  await pane.getByText("画像の読み取り内容", { exact: true }).click();
+  const image = pane.getByRole("img", { name: "解析に使ったファイルから切り出した図・表の画像" });
+  await image.scrollIntoViewIfNeeded();
+  await expect(image).toBeVisible();
+  await expect(image).toHaveJSProperty("naturalWidth", 200);
+  await expect(image).toHaveAttribute("src", /\/recipes\/recipe-1\/crop\?revision=er-recipe-1-r1&/u);
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.every(url => url.searchParams.get("revision") === "er-recipe-1-r1")).toBe(true);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => document.documentElement.classList.toggle("dark", value === "dark"), theme);
+    await image.scrollIntoViewIfNeeded();
+    await expectNoHorizontalOverflow(page);
+    await pane.screenshot({ path: testInfo.outputPath(`recipe-crop-${theme}.png`) });
+  }
 });

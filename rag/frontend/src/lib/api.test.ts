@@ -581,6 +581,8 @@ describe("api.request envelope", () => {
         max_retries: 2,
       },
       generative_ai: {
+        embedding_region: "ap-osaka-1" as const,
+        rerank_region: "ap-osaka-1" as const,
         embedding_model: "cohere.embed-v4.0",
         embedding_dim: 1536,
         rerank_model: "cohere.rerank-v4.0-fast",
@@ -640,6 +642,8 @@ describe("api.request envelope", () => {
           max_retries: 2,
         },
         generative_ai: {
+          embedding_region: "ap-osaka-1" as const,
+          rerank_region: "ap-osaka-1" as const,
           embedding_model: "cohere.embed-v4.0",
           embedding_dim: 1536,
           rerank_model: "cohere.rerank-v4.0-fast",
@@ -1594,4 +1598,18 @@ it("結果 Excel の取得は job ID と入力を POST し、ファイル名を�
   expect(fetchMock.mock.calls[0][0]).toBe("/api/evaluation/jobs/job%2F1/results.xlsx");
   expect(fetchMock.mock.calls[0][1]).toMatchObject({method:"POST",body:JSON.stringify(body),credentials:"same-origin"});
   expect(file.fileName).toBe("evaluation_results.xlsx");
+});
+
+it("構造グラフの節点のチャンクは節点・版・ページを指定して読む", async () => {
+  const page = { items: [{ chunk_id: "doc:set:3", chunk_index: 3, page_number: 2 }], total: 26, offset: 25 };
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: page, error_messages: [], warning_messages: [] }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  const result = await api.getStructureGraphEntityChunks("kb/1", "doc 1", "set", "a".repeat(64), 25, 50);
+
+  expect(result).toEqual(page);
+  const [path] = fetchMock.mock.calls[0] as [string, RequestInit];
+  const url = new URL(path, "http://localhost");
+  expect(url.pathname).toBe("/api/knowledge-bases/kb%2F1/graph/documents/doc%201/entity-chunks");
+  expect(Object.fromEntries(url.searchParams)).toEqual({ chunk_set_id: "set", node_id: "a".repeat(64), offset: "25", limit: "50" });
 });

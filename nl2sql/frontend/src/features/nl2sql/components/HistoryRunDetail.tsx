@@ -99,7 +99,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
   const usageView = historyUsageView(item);
   const extraFacts: RunFact[] = [
     // 「モデル」「token」の直後（RAG の概要と同じ並び）。
-    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls },
+    { id: "modelCalls", label: t("history.detail.modelCalls"), value: usageView.modelCalls, tabular: Boolean(item.usage && item.usage.measurement !== "unmeasured" && Number.isFinite(item.usage.requests)) },
     ...(usageView.unmeasuredCalls
       ? [{ id: "unmeasuredCalls", label: t("history.detail.unmeasuredCalls"), value: usageView.unmeasuredCalls }]
       : []),
@@ -108,6 +108,7 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
       id: "rows",
       label: t("history.detail.rows"),
       value: executed ? formatNumber(item.result_row_count) : t("history.notExecuted"),
+      tabular: executed && Number.isFinite(item.result_row_count),
     },
   ];
 
@@ -119,13 +120,14 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
     id: "rows",
     label: t("history.detail.rows"),
     value: executed ? formatNumber(item.result_row_count) : t("history.notExecuted"),
+    tabular: executed && Number.isFinite(item.result_row_count),
   });
   if (item.result_columns.length > 0) {
     resultFacts.push({ id: "columns", label: t("history.detail.columns"), value: item.result_columns.join(", "), mono: true, wide: true });
   }
 
   const hasFeedback = Boolean(item.feedback_rating || item.feedback_comment.trim());
-  const processDetails = <RunUsedModels models={(item.usage?.models ?? []).map(value => ({ label: "LLM", value }))} events={progress.events} />;
+  const processDetails = <RunUsedModels models={(item.usage?.models ?? []).map(value => ({ label: "LLM", value, valueKind: "identifier" as const }))} events={progress.events} />;
 
   return (
     <>
@@ -198,6 +200,8 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
               empty={progress.legacy && !progress.partial ? <ProgressLegacyNotice testId="history-detail-timeline-legacy" /> : undefined}
               // 表に書けなかった span がある（#3226。3 製品共通の案内を段の一覧の後ろに出す）。
               partial={progress.partial}
+              readTruncated={progress.readTruncated}
+              droppedSpans={progress.droppedSpans}
               labels={{ stepStatus: CHAT_PROGRESS_LABELS.status }}
               totalDurationMs={item.elapsed_ms ?? null}
               processDetailsProps={{ metadata: { conversationId: item.kind === "chat" ? item.session_id ?? null : null, messageId: item.id }, title: t("history.detail.technical"), testId: "history-detail-technical", summaryTestId: "history-detail-process-details" }}

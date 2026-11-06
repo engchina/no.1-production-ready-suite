@@ -1,0 +1,6 @@
+[
+  {"id":"measured","label":"合成の実測","status":"done","startedAt":"2026-01-01T00:00:00Z","finishedAt":"2026-01-01T00:00:01Z"},
+  {"id":"duration-only","label":"所要時間のみ","status":"done","durationMs":3000},
+  {"id":"zero","label":"同時刻","status":"done","startedAt":"2026-01-01T00:00:00.500Z","finishedAt":"2026-01-01T00:00:00.500Z"},
+  {"id":"inflight","label":"実行中","status":"running","startedAt":"2026-01-01T00:00:00.750Z"}
+]

@@ -1,3 +1,4 @@
+import { expectRunValueTypography } from "../../../../platform/packages/ui/e2e/run-value-typography";
 import { confirmTraceExplorer, inspectTraceStep } from "../../../../platform/packages/ui/e2e/trace-explorer";
 import { syntheticFullCallBody, syntheticCallDetails, syntheticStageDetails } from "../../../../platform/packages/ui/e2e/call-fixture";
 // 実行履歴（#1955。UX 契約 run-history.md §7）: 共通の一覧（RunHistoryToolbar → RunHistoryTable → OffsetPagination）と
@@ -792,7 +793,7 @@ test("一覧の token の列と詳細の概要は、記録した利用量・一�
     // Select AI だけの実行と、記録の無い行は数を作らず未計測（0 token と出さない）。
     for (const id of ["history-middle", "history-old"]) {
       await expect(row(page, id).locator("[data-run-usage-note]")).toHaveText("未計測");
-      await expect(row(page, id)).not.toContainText("0 token");
+      await expect(row(page, id)).not.toContainText("0 トークン");
     }
   }
 
@@ -800,8 +801,14 @@ test("一覧の token の列と詳細の概要は、記録した利用量・一�
   const summary = page.getByTestId("history-detail-summary");
   const fact = (id: string) => summary.locator(`[data-run-fact="${id}"] dd`);
   await expect(fact("model")).toHaveText("test-text-model");
-  await expect(fact("tokens")).toHaveText("12,345 token（一部計測）");
-  await expect(fact("modelCalls")).toHaveText("2 回（うち 1 回を計測。入力 12,000 / 出力 345 token）");
+  await expect(fact("tokens")).toHaveText("12,345 トークン（一部計測）");
+  await expect(summary.locator('[data-run-fact="tokens"] dt')).toHaveText("トークン数");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expect(fact("modelCalls")).toHaveText("2 回（うち 1 回を計測。入力 12,000 / 出力 345 トークン）");
+    await summary.screenshot({ path: testInfo.outputPath(`token-labels-${theme}.png`) });
+  }
+  await expect(fact("modelCalls")).toHaveText("2 回（うち 1 回を計測。入力 12,000 / 出力 345 トークン）");
   await expect(fact("unmeasuredCalls")).toHaveText("Select AI Agent（データベースの中で呼ぶモデル）");
   // 並びは RAG の概要と同じ（モデル → token → モデルの呼び出し）。
   const order = await summary.locator("[data-run-fact]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-run-fact")));
@@ -993,7 +1000,7 @@ test("全工程の詳細を五つのタブで確認できる", { tag: "@responsi
   await page.getByTestId("history-detail-timeline-summary").click();
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Span name");
   await expect(page.locator("[data-run-timeline]")).not.toContainText("Parent span ID");
-  await confirmTraceExplorer(page, testInfo, expect);
+  await confirmTraceExplorer(page, testInfo, expect, true);
 });
 
 test("保存済みの全文を分段取得して末尾まで確認する", {tag: "@responsive"}, async ({page}, testInfo) => {
@@ -1009,11 +1016,20 @@ test("保存済みの全文を分段取得して末尾まで確認する", {tag:
     const first = Number(new URL(route.request().url()).searchParams.get("first_part")); reads.push(first);
     return route.fulfill({json: {data: body.page(first)}});
   });
+  await page.context().route(`**/api/nl2sql/history/${id}/trace`, route => route.fulfill({json: {data: {events: row.progress_events, dropped_spans: 7, read_truncated: true}}}));
   await page.goto(`/history?id=${id}`);
   await page.getByTestId("history-detail-timeline-summary").click();
   const timeline = page.getByTestId("history-detail-timeline");
+  await expect(page.getByTestId("history-detail-timeline-partial-read-truncated")).toBeVisible();
+  await expect(page.getByTestId("history-detail-timeline-partial-write-dropped")).toBeVisible();
   await inspectTraceStep(page, timeline, "generate_sql");
   const inspector = page.locator("[data-trace-inspector]");
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expectRunValueTypography(inspector);
+    await inspector.screenshot({path: testInfo.outputPath(`run-value-typography-${theme}.png`)});
+  }
+
   await inspector.getByRole("tab", {name: "入力", exact: true}).click();
   expect(reads).toEqual([]);
   await inspector.getByRole("button", {name: "保存済みの全文を読む", exact: true}).click();

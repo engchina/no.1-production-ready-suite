@@ -113,9 +113,11 @@ def _visual_targets(records: Sequence[LayoutRecord]) -> list[LayoutRecord]:
             if visual_role.skip_vlm and not record.raw.get("vision_description"):
                 continue
             if visual_role.reason == "meaningful_text_in_visual" and not record.text.strip():
-                from rag_engine.parsing.picture_descriptions import vision_description_text
+                from rag_engine.parsing.picture_descriptions import vision_text_projection
 
-                record.text = vision_description_text(record.raw.get("vision_description") or {})
+                projection = vision_text_projection(record.raw.get("vision_description") or {})
+                record.text = projection.answer_description
+                record.raw["vision_text_projection"] = projection.dumps()
         targets.append(record)
     return sorted(targets, key=lambda item: (item.page, item.seq_no, item.bbox[1], item.bbox[0]))
 

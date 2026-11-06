@@ -16917,22 +16917,9 @@ class Nl2SqlService:
                 ),
             ),
             DiagnosticCheck(
-                name="PLATFORM_OCI_GENAI_ENDPOINT",
-                status=(
-                    "ok"
-                    if settings.oci_genai_endpoint.strip()
-                    or not settings.nl2sql_feedback_embedding_enabled
-                    else "warning"
-                ),
-                message=(
-                    "OCI GenAI endpoint は設定済みです。"
-                    if settings.oci_genai_endpoint.strip()
-                    else (
-                        "feedback embedding は無効なため OCI GenAI endpoint は任意です。"
-                        if not settings.nl2sql_feedback_embedding_enabled
-                        else "OCI GenAI endpoint が未設定です。"
-                    )
-                ),
+                name="PLATFORM_OCI_GENAI_EMBEDDING_REGION",
+                status="ok",
+                message=f"埋め込みのリージョンは {settings.oci_genai_embedding_region} です。",
             ),
             DiagnosticCheck(
                 name="PLATFORM_OCI_GENAI_EMBED_MODEL_ID",
@@ -17228,7 +17215,7 @@ class Nl2SqlService:
                     env_var("NL2SQL_FEEDBACK_EMBEDDING_ENABLED"),
                     env_var("PLATFORM_OCI_REGION"),
                     env_var("PLATFORM_OCI_COMPARTMENT_ID"),
-                    env_var("PLATFORM_OCI_GENAI_ENDPOINT"),
+                    env_var("PLATFORM_OCI_GENAI_EMBEDDING_REGION"),
                     env_var("PLATFORM_OCI_GENAI_EMBED_MODEL_ID"),
                 ],
                 optional_env_vars=[
@@ -17239,7 +17226,7 @@ class Nl2SqlService:
                     "NL2SQL_FEEDBACK_EMBEDDING_ENABLED=true\n"
                     "PLATFORM_OCI_REGION=<oci-region>\n"
                     "PLATFORM_OCI_COMPARTMENT_ID=<compartment-ocid>\n"
-                    "PLATFORM_OCI_GENAI_ENDPOINT=<oci-genai-endpoint>\n"
+                    "PLATFORM_OCI_GENAI_EMBEDDING_REGION=ap-osaka-1\n"
                     "PLATFORM_OCI_GENAI_EMBED_MODEL_ID=cohere.embed-v4.0\n"
                     "NL2SQL_FEEDBACK_VECTOR_TABLE=NL2SQL_FEEDBACK_VECTORS\n"
                     "NL2SQL_FEEDBACK_VECTOR_INDEX=NL2SQL_FEEDBACK_VEC_IDX"

@@ -7,6 +7,10 @@ function element(metadata: DocumentElement["metadata"]): DocumentElement {
   return { kind: "figure", text: "", order: 0, metadata } as DocumentElement;
 }
 
+const missingStatusMetadata: NonNullable<DocumentElement["metadata"]>[] = [
+  {}, { vision_status: "" }, { vision_status: null }, { vision_status: "  " },
+];
+
 describe("elementVision", () => {
   it("Vision の状態と説明を取り出す", () => {
     expect(
@@ -14,9 +18,30 @@ describe("elementVision", () => {
     ).toEqual({ status: "succeeded", retrievalText: "画面説明", excluded: false });
   });
 
+  it.each(missingStatusMetadata)(
+    "読み取り対象の図で状態が未記録なら null として保持する: %j", metadata => {
+      expect(elementVision(element(metadata))).toEqual({ status: null, retrievalText: "", excluded: false });
+    }
+  );
+
+  it.each(["running", "succeeded", "failed", "skipped", "generated", "synthetic_future_status"])(
+    "記録された状態は推測せず維持する: %s", status => {
+      expect(elementVision(element({ vision_status: status }))?.status).toBe(status);
+    }
+  );
+
+  it.each(["text", "table"])("画像情報のない %s に未記録の案内を追加しない", kind => {
+    expect(elementVision({ ...element({}), kind })).toBeNull();
+  });
+
+  it("装飾画像とアイコンは読み取り対象へ推測しない", () => {
+    expect(elementVision(element({ visual_role: "decorative" }))?.excluded).toBe(true);
+    expect(elementVision(element({ visual_role: "inline_icon" }))?.excluded).toBe(true);
+  });
+
   it("装飾画像は除外として扱い、無関係な要素は null", () => {
     expect(elementVision(element({ visual_role: "decorative" }))?.excluded).toBe(true);
-    expect(elementVision(element({ category: "Text" }))).toBeNull();
+    expect(elementVision({ ...element({ category: "Text" }), kind: "text" })).toBeNull();
   });
 });
 
@@ -65,7 +90,7 @@ describe("layoutVisionDetails", () => {
 
 describe("elementCropUrl", () => {
   it("bbox とページ寸法から crop API の URL を作る", () => {
-    const url = elementCropUrl("doc 1", {
+    const url = elementCropUrl("doc 1", "recipe 1", "extraction-old", {
       kind: "figure",
       text: "",
       order: 0,
@@ -74,13 +99,13 @@ describe("elementCropUrl", () => {
       metadata: { page_width: 1000, page_height: 1400 },
     } as DocumentElement);
     expect(url).toBe(
-      "/api/documents/doc%201/crop?page=2&x0=10&y0=20&x1=110&y1=70&page_width=1000&page_height=1400"
+      "/api/documents/doc%201/recipes/recipe%201/crop?revision=extraction-old&page=2&x0=10&y0=20&x1=110&y1=70&page_width=1000&page_height=1400"
     );
   });
 
   it("位置情報が足りなければ null", () => {
     expect(
-      elementCropUrl("doc-1", { kind: "figure", text: "", order: 0 } as DocumentElement)
+      elementCropUrl("doc-1", "recipe-1", "extraction-1", { kind: "figure", text: "", order: 0 } as DocumentElement)
     ).toBeNull();
   });
 });

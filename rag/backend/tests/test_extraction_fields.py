@@ -27,6 +27,7 @@ from app.rag.extraction_field_adapter import (
 from app.rag.field_extraction_units import FieldExtractionUnit, FieldValueCandidate
 from app.rag.ingestion import IngestionPipeline, IngestionUserError
 from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
+from tests.prompt_support import UneditedPromptOracle
 from tests.support import AsgiTestClient
 
 client = AsgiTestClient(app)
@@ -374,7 +375,7 @@ def test_parse_extraction_fields_normalizes_typed_values() -> None:
     assert parse_extraction_fields(raw, _DEFS)[0].value == "1000"
 
 
-class _FieldSetOracle:
+class _FieldSetOracle(UneditedPromptOracle):
     """文書が属する KB の項目の定義だけを返す fake。"""
 
     def __init__(self, field_sets: list[list[FieldDefinition] | None]) -> None:
