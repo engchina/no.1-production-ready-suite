@@ -663,7 +663,7 @@ install_service_venvs() {
     retry_command 3 run_as_app_user_in_dir "${dir}" "uv ${sync_args[*]}"
     model_command="$(rag_service_model_command "${service}")"
     if [ -n "${model_command}" ] && ! retry_command 3 run_as_service_user_in_dir "${dir}" "${model_command}"; then
-      log "WARNING: ${service} could not download its models now; it will download them on first use."
+      log "WARNING: ${service} could not download and verify its models now. Run the deployment again (platform/deploy/suite-update.sh)."
     fi
   done
 }

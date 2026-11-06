@@ -18,6 +18,10 @@ dependencies = [
     # 直接の依存に書く（uv の [tool.uv.sources] は直接の依存にだけ効く。index は下の [[tool.uv.index]]。#1650）。
     "torch>=2.13,<3",
     "torchvision>=0.28,<1",
+    # unstructured のテキストの分類（unstructured.nlp.tokenize）が使う spaCy のモデル。unstructured は無ければ
+    # 解析の要求の時に取得して venv に書き込むので、unstructured が固定する版の wheel を lock（SHA-256）で入れ、
+    # 配備の uv sync で取得・検証する（実行時の取得は rag_parser_core.unstructured_models が禁じる。#4555）。
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [tool.uv]
@@ -51,6 +55,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+# spaCy のモデルを URL（lock の SHA-256 で固定）で依存に書くため。
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.ruff]
 line-length = 100
