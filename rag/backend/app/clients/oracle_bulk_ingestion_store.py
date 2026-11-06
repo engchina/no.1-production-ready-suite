@@ -127,15 +127,10 @@ def _document_state_query(document_ids: Sequence[str]) -> tuple[str, dict[str, o
             d.document_id,
             d.file_name,
             d.status AS document_status,
-            d.tenant_id_hash,
             d.content_type,
             d.file_size_bytes,
             d.content_sha256,
             d.duplicate_of_document_id,
-            d.processing_config,
-            d.error_message,
-            d.uploaded_at,
-            d.indexed_at,
             CASE WHEN d.object_storage_path IS NULL THEN 0 ELSE 1 END AS has_source,
             CASE
                 WHEN d.preprocess_artifact IS NULL AND d.extraction IS NULL THEN 0
@@ -204,16 +199,6 @@ def _document_state(
         has_job_history=document_id in history,
         has_active_job=document_id in active,
         has_outputs=int(str(row.get("has_outputs") or 0)) == 1,
-        recipe_seed={
-            "document_id": document_id,
-            "tenant_id_hash": row.get("tenant_id_hash"),
-            "status": document_status.value,
-            "processing_config": row.get("processing_config"),
-            "preprocess_artifact": None,
-            "error_message": row.get("error_message"),
-            "uploaded_at": row.get("uploaded_at"),
-            "indexed_at": row.get("indexed_at"),
-        },
     )
 
 

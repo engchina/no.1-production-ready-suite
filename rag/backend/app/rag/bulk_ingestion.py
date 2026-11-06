@@ -11,7 +11,7 @@
 - 再送で重複して登録しない: 同じレシピに待機中・実行中の job があれば作らない(状態で判定し、
   新しい表・列は持たない)。job を作る transaction の中でレシピの行を lock して確かめ直す。
 - 一度も取り込んでいない文書(job の履歴・出力が無い UPLOADED)は、文書の状態の読み込み・
-  レシピの用意・job の登録をまとめて行う(1 文書ずつの往復をしない)。それ以外(失敗の後の
+  正式レシピの確認・job の登録をまとめて行う(1 文書ずつの往復をしない)。それ以外(失敗の後の
   やり直しなど)は、出力の初期化を伴う 1 件の投入と同じ処理を、並行数を絞って行う。
 - 流量制限は呼び出し側(API)が要求 1 回として数える。一括の中の各文書は単件の流量制限を通らない。
 """
@@ -124,9 +124,6 @@ class BulkIngestionDocumentState:
     has_active_job: bool = False
     # 文書の行に前回の取込の出力(ファイル準備の成果物・抽出結果)が残っている。
     has_outputs: bool = False
-    # レシピ1が無いときに作る値の元(rag_documents の行。
-    # ``_default_document_recipe_values`` の入力)。
-    recipe_seed: Mapping[str, object] = field(default_factory=dict)
 
     @property
     def fresh(self) -> bool:
@@ -146,8 +143,6 @@ class BulkJobDraft:
     document_id: str
     parser_profile: str
     quality_warnings: tuple[str, ...]
-    has_default_recipe: bool
-    recipe_seed: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +172,7 @@ class BulkIngestionStore(Protocol):
         queued_at: datetime,
         max_attempts: int,
     ) -> BulkInsertResult:
-        """1 つの transaction でレシピ1を用意し、lock して確かめ直し、QUEUED の job を登録する。"""
+        """1 つの transaction で正式レシピ1を lock して確かめ直し、QUEUED の job を登録する。"""
         ...
 
 
@@ -363,8 +358,6 @@ async def accept_bulk_ingestion(
                     document_id=document_id,
                     parser_profile=source_profile.parser_profile,
                     quality_warnings=tuple(source_profile.quality_warnings),
-                    has_default_recipe=state.has_default_recipe,
-                    recipe_seed=state.recipe_seed,
                 )
             )
         else:
