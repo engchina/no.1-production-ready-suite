@@ -116,7 +116,7 @@ async def test_load_states_reads_documents_and_jobs_in_chunks() -> None:
 
 
 async def test_insert_queued_jobs_locks_recipes_and_rechecks_active_jobs() -> None:
-    """1 つの transaction でレシピ1を用意し、lock し、待機中の job を確かめ直してから登録する。"""
+    """1 つの transaction で既存レシピ1を lock し、待機中の job を確かめ直してから登録する。"""
     pool = FakeOraclePool(
         execute_results=[
             [
@@ -151,10 +151,10 @@ async def test_insert_queued_jobs_locks_recipes_and_rechecks_active_jobs() -> No
     assert result.active == frozenset({"doc-b"})
     assert result.missing == frozenset({"doc-gone"})
     assert pool.connection.commits == 1
-    merge, insert = pool.connection.many_calls
-    assert merge.statement.startswith("MERGE INTO rag_document_recipes")
-    assert [row["document_id"] for row in merge.rows] == ["doc-a"]
-    assert merge.rows[0]["recipe_id"] == default_document_recipe_id("doc-a")
+    # snapshotで欠落していてもlock時に正式行があれば、その行を使い補建しない。
+    assert len(pool.connection.many_calls) == 1
+    insert = pool.connection.many_calls[0]
+    assert not any(call.statement.startswith("MERGE") for call in pool.connection.many_calls)
     lock, active = pool.connection.calls
     assert "FOR UPDATE OF r.recipe_id" in lock.statement
     assert "r.slot_no = 1" in lock.statement
@@ -235,7 +235,7 @@ async def test_bulk_ingestion_registers_each_document_once_in_oracle() -> None:
             content_sha256=uuid4().hex + uuid4().hex,
         )
         document_ids.append(detail.id)
-    # レシピ1の行が無い文書(migration 前の文書)は、登録の transaction で作る。
+    # 登録後に正式レシピが欠落した文書は、投入時に補建せず拒否する。
     no_recipe = document_ids[0]
     await client._run_transaction(
         lambda connection: _execute(
@@ -271,10 +271,15 @@ async def test_bulk_ingestion_registers_each_document_once_in_oracle() -> None:
     )
 
     outcomes = {item.document_id: item for item in result.items}
-    assert result.accepted_count == _REAL_COUNT - 1
+    assert result.accepted_count == _REAL_COUNT - 2
     assert outcomes[running].outcome == BulkIngestionOutcome.ALREADY_ACTIVE
     assert outcomes[f"missing-{tag}"].reason == "not_found"
-    assert outcomes[no_recipe].outcome == BulkIngestionOutcome.ACCEPTED
+    assert outcomes[no_recipe].outcome == BulkIngestionOutcome.REJECTED
+    assert outcomes[no_recipe].reason == "not_found"
+    assert outcomes[no_recipe].job_id is None
+    assert (
+        await client.get_document_recipe(no_recipe, default_document_recipe_id(no_recipe)) is None
+    )
     queued = await _queued_jobs_by_document(client, document_ids)
     accepted = [
         document_id
@@ -283,9 +288,8 @@ async def test_bulk_ingestion_registers_each_document_once_in_oracle() -> None:
     ]
     # 欠落 0・重複 0: 受付済みの文書ごとに QUEUED の job が 1 件だけ。
     assert queued == dict.fromkeys(accepted, 1)
-    jobs = await client.list_document_ingestion_jobs(no_recipe)
-    assert [job.id for job in jobs] == [outcomes[no_recipe].job_id]
-    assert jobs[0].recipe_id == default_document_recipe_id(no_recipe)
+    assert no_recipe not in queued
+    assert await client.list_document_ingestion_jobs(no_recipe) == []
 
     # 再送しても二重に登録しない。
     again = await accept_bulk_ingestion(
@@ -296,7 +300,15 @@ async def test_bulk_ingestion_registers_each_document_once_in_oracle() -> None:
         max_attempts=3,
     )
     assert again.accepted_count == 0
-    assert again.already_active_count == _REAL_COUNT
+    assert again.already_active_count == _REAL_COUNT - 1
+    again_outcomes = {item.document_id: item for item in again.items}
+    assert again_outcomes[no_recipe].outcome == BulkIngestionOutcome.REJECTED
+    assert again_outcomes[no_recipe].reason == "not_found"
+    assert again_outcomes[no_recipe].job_id is None
+    assert (
+        await client.get_document_recipe(no_recipe, default_document_recipe_id(no_recipe)) is None
+    )
+    assert await client.list_document_ingestion_jobs(no_recipe) == []
     assert await _queued_jobs_by_document(client, document_ids) == queued
 
     ids, total = await client.list_document_ids(query=f"bulk-{tag}", limit=_REAL_COUNT)
