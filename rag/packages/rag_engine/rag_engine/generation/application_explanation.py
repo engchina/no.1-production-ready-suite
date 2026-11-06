@@ -28,7 +28,7 @@ from pr_backend_core.observability.model_purpose import call_with_model_purpose
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from rag_engine.generation.answer_labels import answer_labels
-from rag_engine.generation.application_review import must_propagate
+from rag_engine.generation.application_reason import propagates
 from rag_engine.generation.applications import CheckedApplication
 from rag_engine.generation.input_budget import ensure_model_input
 from rag_engine.generation.response_language import response_language_contract
@@ -248,7 +248,7 @@ def explain_applications(
             diagnostic["calls"] += 1
             output = call_with_model_purpose("answer.generate", parse_text, system, prompt, settings, schema, provider_id=provider_id)
         except Exception as exc:
-            if must_propagate(exc):
+            if propagates(exc):
                 raise
             entry.presentation = {"status": "unrecorded", "error_type": type(exc).__name__}
             diagnostic["status"] = "incomplete"

@@ -6,7 +6,8 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from audit_fixtures import legacy_application_audit_result, synthetic_explanation
+from application_verdict_stub import audit_reply, is_application_schema
+from audit_fixtures import synthetic_explanation
 from citation_unit_support import generated_fixture
 
 from rag_engine.config import get_settings
@@ -16,7 +17,7 @@ from rag_engine.generation.answer_models import AnswerContext, AnswerRecord
 from rag_engine.generation.answering import synthesize_grounded_answer
 from rag_engine.generation.application_explanation import is_explanation_schema
 from rag_engine.generation.date_consistency import absent_years
-from rag_engine.models.llm import ApplicationAudit, GroundedApplication, GroundedCitation, GroundedItem
+from rag_engine.models.llm import GroundedApplication, GroundedCitation, GroundedItem
 
 RULE = "受付の日を含め14暦日なので4月14日まで有効で、4月15日に停止する。"
 QUESTION = "対象Xを2031年4月1日に受け付けました。いつまで有効ですか？"
@@ -94,11 +95,8 @@ def answer(*outputs: dict[str, Any]) -> tuple[Any, list[str]]:
     values = iter(outputs)
 
     def parse(system: str, prompt: str, settings: Any, schema: Any, **options: Any) -> Any:
-        if getattr(schema, "canonical_schema", None) is ApplicationAudit:
-            return legacy_application_audit_result(
-                ApplicationAudit(application_reviews=[{"index": 0, "valid": True, "reason": "合成の適用判定"}], summary_supported=True),
-                schema,
-            )
+        if is_application_schema(schema):
+            return audit_reply(schema, [{"index": 0, "valid": True}], prompt=prompt)
         if is_explanation_schema(schema):
             return synthetic_explanation(schema, prompt)
         prompts.append(prompt)

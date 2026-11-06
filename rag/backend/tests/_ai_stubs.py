@@ -178,6 +178,63 @@ def _first_evidence(prompt: str) -> tuple[str, str] | None:
     return None
 
 
+def application_audit_reply(
+    text_format: type[BaseModel], prompt: str, *, valid: bool = True, summary_supported: bool = True
+) -> BaseModel | None:
+    """推導の監査（当てはめの監査、独立の監査の判定と理由）の合成応答。ほかは None。"""
+    from rag_engine.generation.application_reason import AuditReason
+    from rag_engine.models.llm import ApplicationAudit, ApplicationVerdictAudit
+
+    if text_format is AuditReason:
+        return AuditReason(reason="合成の判定の理由です。")
+    bound = getattr(text_format, "canonical_schema", None) is ApplicationAudit
+    if not bound and text_format not in (ApplicationAudit, ApplicationVerdictAudit):
+        return None
+    data = json.loads(prompt)
+    if bound:
+        # 当てはめの段の監査は application の固定キーに束縛した wire（#4393）。
+        from tests.audit_fixtures import legacy_audit_result
+
+        return cast(
+            AuditWireResult,
+            legacy_audit_result(
+                text_format,
+                ApplicationAudit(
+                    application_reviews=[
+                        {"index": row["index"], "valid": valid, "reason": "合成の原文対応"}
+                        for row in data["applications"]
+                    ],
+                    summary_supported=summary_supported,
+                ).model_dump(),
+            ),
+        )
+
+    def detail(application: dict[str, Any]) -> dict[str, Any]:
+        if text_format is not ApplicationVerdictAudit:
+            return {"reason": "合成の原文対応"}
+        # 根拠は引用元の evidence_id（引用元を含まない valid は未確認になる。basis_not_cited）。
+        return {
+            "basis_evidence_ids": list(
+                dict.fromkeys(
+                    str(binding["evidence_id"])
+                    for position in application.get("item_indexes") or ()
+                    for binding in data["items"][position].get("citation_bindings") or ()
+                    if binding.get("evidence_id")
+                )
+            )
+        }
+
+    return text_format.model_validate(
+        {
+            "application_reviews": [
+                {"index": row["index"], "valid": valid, **detail(row)}
+                for row in data["applications"]
+            ],
+            "summary_supported": summary_supported,
+        }
+    )
+
+
 def deterministic_parse_text_response(
     system_prompt: str, prompt: str, settings: Any, text_format: type[BaseModel], **_: Any
 ) -> BaseModel | AuditWireResult:
@@ -189,7 +246,6 @@ def deterministic_parse_text_response(
     from rag_engine.generation.citation_wire import generation_draft_wire_model
     from rag_engine.models.audit_wire import is_audit_wire
     from rag_engine.models.llm import (
-        ApplicationAudit,
         CragRetrievalGradeOutput,
         GroundedAudit,
         GroundedDraft,
@@ -206,26 +262,8 @@ def deterministic_parse_text_response(
         return text_format.model_validate(
             {"explanation": "資料の原文によると、" + " ".join(sources)}
         )
-    if (
-        text_format is ApplicationAudit
-        or getattr(text_format, "canonical_schema", None) is ApplicationAudit
-    ):
-        data = json.loads(prompt)
-        from tests.audit_fixtures import legacy_audit_result
-
-        return cast(
-            AuditWireResult,
-            legacy_audit_result(
-                text_format,
-                ApplicationAudit(
-                    application_reviews=[
-                        {"index": row["index"], "valid": True, "reason": "合成の原文対応"}
-                        for row in data["applications"]
-                    ],
-                    summary_supported=True,
-                ).model_dump(),
-            ),
-        )
+    if (reply := application_audit_reply(text_format, prompt)) is not None:
+        return reply
     if text_format is QueryRoutingOutput:
         return QueryRoutingOutput(strategy="simple_retrieval", reason="決定論スタブ", queries=[])
     if text_format is QueryExpansionOutput:

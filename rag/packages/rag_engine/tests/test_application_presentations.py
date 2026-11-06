@@ -8,15 +8,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from application_verdict_stub import audit_reply
 from audit_fixtures import legacy_audit_to_wire_fixture
 
 from rag_engine.config import get_settings
 from rag_engine.generation.application_explanation import KEY_SOURCES, is_explanation_schema
+from rag_engine.generation.application_reason import AuditReason
 from rag_engine.generation.application_review import review_applications
 from rag_engine.generation.applications import APPLICATION_AUDIT_SYSTEM_PROMPT, CheckedApplication, render_lines
 from rag_engine.generation.grounded import AUDIT_SYSTEM_PROMPT, FACT_AUDIT_SYSTEM_PROMPT
 from rag_engine.models.audit_wire import audit_wire_schema, decode_audit_wire, is_audit_wire
-from rag_engine.models.llm import ApplicationAudit, GroundedApplication, GroundedAudit, GroundedFactAudit
+from rag_engine.models.llm import ApplicationAudit, ApplicationVerdictAudit, GroundedApplication, GroundedAudit, GroundedFactAudit
 
 RECORDED = {
     case["name"]: case
@@ -104,6 +106,10 @@ def test_generation_calls_the_explanation_once_after_review_and_never_falls_back
                 raise RuntimeError("synthetic transport failure")
             text = RECORDED["explicit_english-r1"]["recorded_explanation"] if state == "hidden" else EXPLANATION
             return schema.model_validate({"explanation": text})
+        if schema in (ApplicationVerdictAudit, AuditReason):
+            # 監査なしの設定の独立の監査（#4471）: 判定（A）と判定の理由（B）の 2 段。
+            calls.append("audit" if schema is ApplicationVerdictAudit else "reason")
+            return audit_reply(schema, [{"index": 0, "valid": valid}], prompt=prompt)
         if is_audit_wire(schema):
             calls.append("audit")
             if schema.canonical_schema is ApplicationAudit:
@@ -156,8 +162,10 @@ def test_generation_calls_the_explanation_once_after_review_and_never_falls_back
             QUESTION, AnswerContext(records=[row], text=SOURCE), settings, image_prompt_mode="text_only"
         ).response
     called = state in {"confirmed", "hidden", "call_error"}
-    # 生成 1 回・推導の審査 1 回（標準・詳細は通常の監査と同じ呼び出し）と、valid な推導 1 件ごとの説明の段 1 回。
-    assert calls == ["generate", "audit", *(["explanation"] if called else [])]
+    # 生成 1 回・推導の審査 1 回（標準・詳細は通常の監査と同じ呼び出し。監査なしは独立の監査の判定と、確定した判定の
+    # 理由の段 1 回）の後に、valid な推導 1 件ごとの説明の段 1 回。
+    reason = ["reason"] if audit_mode == "none" else []
+    assert calls == ["generate", "audit", *reason, *(["explanation"] if called else [])]
     trace = response.generation_trace["applications"][0]
     assert trace["reasoning"] == ORIGINAL and trace["result"] == RESULT
     assert ORIGINAL not in response.answer_text

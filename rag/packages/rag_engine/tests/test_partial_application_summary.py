@@ -4,6 +4,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
+from application_verdict_stub import APPLICATION_SCHEMAS, audit_reply
 from audit_fixtures import legacy_audit_result, synthetic_explanation
 
 from rag_engine.config import get_settings
@@ -83,8 +84,8 @@ def fixture(mode="detailed", decisions=(True, False), *, summary_supported=False
                 }
             )
         reviews = [{"index": i, "valid": valid, "reason": "固定の支持判定"} for i, valid in enumerate(decisions)]
-        if schema.__name__ == "ApplicationAudit":
-            return schema.model_validate({"application_reviews": reviews, "summary_supported": summary_supported})
+        if schema in APPLICATION_SCHEMAS:
+            return audit_reply(schema, reviews, summary_supported=summary_supported, prompt=_prompt)
         value = {
             "goal_alignment": "aligned",
             "summary_supported": summary_supported,
@@ -118,8 +119,9 @@ def test_valid_selected_application_survives_summary_with_its_citation(mode):
     summary = response.generation_trace["finalization"]["summary"]
     assert summary["citations"]["status"] == "linked"
     assert [link["application_index"] for link in summary["citations"]["links"]] == [0]
-    # 生成・監査の 2 回と、valid な推導 1 件の説明の段 1 回。
-    assert len(calls) == 3 and calls.count("ApplicationExplanation") == 1
+    # 監査なしの設定では、独立の監査の判定 1 回に、判定が確定した推導ごとの理由が付く。
+    # どちらの設定でも、valid な推導 1 件の説明の段（#4393）を 1 回呼ぶ。
+    assert len(calls) == (5 if mode == "none" else 3) and calls.count("ApplicationExplanation") == 1
 
 
 def withheld_round():

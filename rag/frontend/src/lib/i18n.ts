@@ -4356,7 +4356,7 @@ export const ja = {
   "settings.answerPrompts.stage.audit.condition": "生成後の LLM 監査を有効にしたとき（既定は無効）。業務ガイドの下書きの試答では詳細な監査を使います",
   "settings.answerPrompts.stage.application": "規則の当てはめ",
   "settings.answerPrompts.stage.application.condition":
-    "生成後の LLM 監査が有効で、結論が中立のまま、質問の事実と引用で裏付けた規則があるときに補助の当てはめと監査を行います。生成時の applications は回答生成の指示で扱います",
+    "生成後の LLM 監査が有効で、結論が中立のまま、質問の事実と引用で裏付けた規則があるときに補助の当てはめと監査を行います。生成時の applications は回答生成の指示で扱います。生成後の LLM 監査を使わない設定では、導いた結論を独立の監査で判定し、判定ごとに利用者に示す理由を別に書きます",
   "settings.answerPrompts.stage.evaluation": "回答の品質評価",
   "settings.answerPrompts.stage.evaluation.condition":
     "品質評価と保存した回答の評価。正確性・網羅性は標準回答や必須要点などの期待があるとき、忠実性は取得した根拠があるときに測ります",
@@ -4383,6 +4383,7 @@ export const ja = {
   "settings.answerPrompts.part.detailedSystem": "詳細な LLM 監査（未使用の根拠も列挙します。業務ガイドの下書きの試答で使用）",
   "settings.answerPrompts.part.factSystem": "標準の LLM 監査（主張・要求・業務ガイドの要件を判定し、未使用の根拠は列挙しません）",
   "settings.answerPrompts.part.auditSystem": "監査の システムプロンプト",
+  "settings.answerPrompts.part.reasonSystem": "監査の判定の理由を書く システムプロンプト",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
   "settings.answerPrompts.part.citationRepair":

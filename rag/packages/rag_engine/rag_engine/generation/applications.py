@@ -24,10 +24,19 @@ from rag_parser_core.language import current_pack
 from rag_parser_core.language.text import text_patterns
 
 from rag_engine.generation import passage_marks
+from rag_engine.generation.application_reason import HIDDEN_REASON
 from rag_engine.generation.date_consistency import absent_years, span_texts
 from rag_engine.generation.grounding_cues import grounding_cues
 from rag_engine.models.audit_wire import audit_wire_schema, canonical_audit_result
-from rag_engine.models.llm import ApplicationAudit, ApplicationDraft, GroundedApplication, GroundedAudit
+from rag_engine.models.llm import (
+    ApplicationAudit,
+    ApplicationDraft,
+    ApplicationVerdict,
+    ApplicationVerdictAudit,
+    GroundedApplication,
+    GroundedApplicationReview,
+    GroundedAudit,
+)
 from rag_engine.resources.runtime import resolve_prompt
 
 # 回答の本文の節の見出し。
@@ -151,17 +160,25 @@ def check_applications(
 
 
 def apply_application_audit(
-    checked: Sequence[CheckedApplication], audit: GroundedAudit | ApplicationAudit | None, *, require_complete: bool = False
+    checked: Sequence[CheckedApplication],
+    audit: GroundedAudit | ApplicationAudit | ApplicationVerdictAudit | None,
+    *,
+    require_complete: bool = False,
+    reasons: Mapping[int, str] | None = None,
 ) -> None:
-    """推導の採否を記録する。公開門では欠落・重複した判定も未確認として保留する。"""
-    rows = list(audit.application_reviews if audit else [])
+    """推導の採否を記録する。公開門では欠落・重複した判定も未確認として保留する。
+
+    ``reasons`` は判定と別の段で作った表示の理由（index ごと）。採否は判定だけで決め、理由の有無を使わない。
+    """
+    rows: list[GroundedApplicationReview | ApplicationVerdict] = list(audit.application_reviews if audit else [])
     for index, entry in enumerate(checked):
         reviews = [review for review in rows if review.index == index]
         review = reviews[0] if len(reviews) == 1 else None
+        reason = _review_reason(review, index, reasons)
         if require_complete:
             entry.assessment = {
                 "status": "unknown" if review is None else "valid" if review.valid else "invalid",
-                "reason": review.reason if review is not None else "推導の判定が未完了、欠落または重複している",
+                "reason": reason if review is not None else "推導の判定が未完了、欠落または重複している",
             }
         if review is None:
             if require_complete:
@@ -169,7 +186,16 @@ def apply_application_audit(
             else:
                 entry.warn("監査なし" if audit is None else "監査の判定なし")
         elif not review.valid:
-            entry.reject(f"監査: {review.reason}")
+            entry.reject(f"監査: {reason}")
+
+
+def _review_reason(review: GroundedApplicationReview | ApplicationVerdict | None, index: int, reasons: Mapping[int, str] | None) -> str:
+    """判定の理由。判定だけを返す型では別の段の理由を使い、無ければ定型の文にする。"""
+    if reasons is not None and index in reasons:
+        return reasons[index]
+    if isinstance(review, GroundedApplicationReview):
+        return review.reason
+    return HIDDEN_REASON
 
 
 def audit_view(checked: Sequence[CheckedApplication], index_of: Callable[[Any], int | None]) -> list[dict[str, Any]]:
