@@ -163,7 +163,7 @@ async def _read_structure_graph(
     oracle = OracleClient()
 
     async def _load() -> dict[str, Any]:
-        if await oracle.get_knowledge_base(knowledge_base_id) is None:
+        if not await oracle.knowledge_base_is_visible(knowledge_base_id):
             raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
         try:
             return await read(StructureGraphStore(oracle))

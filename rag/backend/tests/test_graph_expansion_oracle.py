@@ -32,6 +32,32 @@ _EMBEDDING = [0.1] * 1536
 
 
 @pytest.mark.usefixtures("oracle_db")
+async def test_graph_visibility_read_keeps_exact_id_scope_and_archived() -> None:
+    """図の存在確認も、詳細と同じID・利用範囲・アーカイブ状態で読む。"""
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-visibility-{uuid4().hex[:8]}")
+    assert await client.knowledge_base_is_visible(kb.id)
+    for missing in ("", "   ", f" {kb.id} ", uuid4().hex):
+        assert not await client.knowledge_base_is_visible(missing)
+    for allowed, expected in (
+        (frozenset({kb.id}), True),
+        (frozenset({uuid4().hex}), False),
+        (frozenset(), False),
+    ):
+        token = set_audit_request_context(
+            replace(current_audit_request_context(), allowed_knowledge_base_ids=allowed)
+        )
+        try:
+            assert await client.knowledge_base_is_visible(kb.id) is expected
+            assert (await client.get_knowledge_base(kb.id) is not None) is expected
+        finally:
+            reset_audit_request_context(token)
+    await client.archive_knowledge_base(kb.id)
+    assert await client.knowledge_base_is_visible(kb.id)
+    assert await client.get_knowledge_base(kb.id) is not None
+
+
+@pytest.mark.usefixtures("oracle_db")
 async def test_multibyte_structure_heading_is_saved_without_byte_truncation() -> None:
     client = OracleClient()
     kb = await client.create_knowledge_base(name=f"合成文字数KB {uuid4().hex[:8]}")
