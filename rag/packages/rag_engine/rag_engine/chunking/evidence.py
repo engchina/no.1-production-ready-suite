@@ -6,12 +6,15 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_VERSION
+
 from rag_engine.chunking.constants import FORM_VISUAL_RAW_TYPES, _bool_value, _int_value, _preview
 from rag_engine.chunking.records import (
     _bbox_contains,
     _bbox_tuple,
     _image_evidence_embedding_modality,
     _record_text_for_chunk,
+    _vision_projection_status,
 )
 from rag_engine.parsing.decorative_pictures import DECORATIVE_VISUAL_ROLE, INLINE_ICON_VISUAL_ROLE, visual_role_from_ref
 from rag_engine.parsing.picture_text import fold_picture_ocr_entries
@@ -30,6 +33,12 @@ def _source_record_ref(record: dict[str, Any]) -> dict[str, Any]:
     if text_preview:
         ref["text_preview"] = text_preview
     raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    state = _vision_projection_status(record)
+    if state is not None:
+        ref["vision_text_projection_status"] = state
+    if state == "verified":
+        ref["vision_text_projection_version"] = VISION_TEXT_PROJECTION_VERSION
+        ref["vision_text_origin"] = "image_generated_description"
     for key in (
         "crop_path",
         "context_crop_path",

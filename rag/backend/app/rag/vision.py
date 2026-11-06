@@ -64,6 +64,20 @@ from rag_engine.parsing.rendering import (
     prepare_source_for_analysis,
 )
 from rag_parser_core.oci_enterprise_ai import sdk_retries_disabled
+from rag_parser_core.vision_text import load_vision_text_projection, text_sha256
+from rag_parser_core.vision_text_map import (
+    VISION_ASSEMBLY_KEY,
+    VISION_RAW_PROJECTION_KEY,
+    VISION_TEXT_BINDING_KEY,
+    ProjectedVisionText,
+    VisionRawWriter,
+    VisionTextRange,
+    VisionTextRole,
+    VisionTextSource,
+    bind_element_vision,
+    positioned_vision_assembly,
+    projected_element_text,
+)
 from rag_pipeline_core.chunking import table_vision_supplement
 
 from app.schemas.extraction import (
@@ -698,7 +712,7 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
         element.element_id: element for element in extraction.elements if element.element_id
     }
     new_elements: list[DocumentElement] = []
-    raw_text = extraction.raw_text
+    raw_writer = _vision_raw_writer(extraction)
     section_path: list[str] = []
     for record in layout.records:
         element = elements_by_id.get(record.id)
@@ -706,8 +720,15 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
             section_path = list(element.section_path)
             if record.category in {"Picture", "Table"}:
                 element = element.model_copy(
-                    update={"metadata": {**element.metadata, **_vision_metadata_of(record)}}
+                    update={
+                        "metadata": {
+                            **element.metadata,
+                            **_vision_metadata_of(record),
+                            **_element_vision_binding(element, record, existing=True),
+                        }
+                    }
                 )
+            _write_docling_raw_image(raw_writer, element, record, existing=True)
             new_elements.append(element)
             continue
         if record.category != "Picture" or not record.text.strip():
@@ -723,7 +744,18 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
             section_path=section_path,
             metadata=_metadata_values(layout_record_element_metadata(record)),
         )
-        raw_text = _insert_raw_text(raw_text, new_elements, new_element.text)
+        new_element = new_element.model_copy(
+            update={
+                "metadata": {**new_element.metadata, **_element_vision_binding(new_element, record)}
+            }
+        )
+        _write_docling_raw_image(
+            raw_writer,
+            new_element,
+            record,
+            existing=False,
+            after_id=new_elements[-1].element_id if new_elements else None,
+        )
         new_elements.append(new_element)
     # record と対応しない要素(通常はない)は順序を保って最後に置く。
     new_elements.extend(
@@ -755,13 +787,16 @@ def _write_back_docling(extraction: StructuredExtraction, layout: _Layout) -> St
     layout_artifact = dict(_docling_layout(extraction) or {})
     layout_artifact["records"] = [_json_value(record.to_dict()) for record in layout.records]
     artifacts[LAYOUT_ARTIFACT] = layout_artifact
-    return extraction.model_copy(
-        update={
-            "elements": _renumbered(new_elements),
-            "assets": assets,
-            "raw_text": raw_text,
-            "parser_artifacts": artifacts,
-        }
+    return _with_vision_assembly(
+        extraction.model_copy(
+            update={
+                "elements": _renumbered(new_elements),
+                "assets": assets,
+                "raw_text": raw_writer.value.text,
+                "parser_artifacts": artifacts,
+            }
+        ),
+        raw_writer,
     )
 
 
@@ -1141,7 +1176,7 @@ def _write_back_adapter(extraction: StructuredExtraction, layout: _Layout) -> St
     """Vision の結果を要素の本文・metadata と asset の要約へ書き戻す。"""
     elements = list(extraction.elements)
     assets = list(extraction.assets)
-    raw_text = extraction.raw_text
+    raw_writer = _vision_raw_writer(extraction)
     inserts: dict[int | None, list[DocumentElement]] = {}
     for target in layout.targets:
         record = target.record
@@ -1155,7 +1190,6 @@ def _write_back_adapter(extraction: StructuredExtraction, layout: _Layout) -> St
                 if element.text.strip():
                     metadata["vision_source_text"] = element.text
                 text = record.text
-                raw_text = _replace_raw_text(raw_text, element.text, text, elements, target)
             elif record.category == "Table" and (
                 supplement := table_vision_supplement(
                     str(record.raw.get("table_vision_text") or "")
@@ -1164,10 +1198,30 @@ def _write_back_adapter(extraction: StructuredExtraction, layout: _Layout) -> St
                 # 分割(rag_pipeline_core.chunking)と同じ書式。分割は本文に説明文がある表へ
                 # 補足を二重に足さない(#513)。
                 text = f"{element.text}\n{supplement}"
-                raw_text = _replace_raw_text(raw_text, element.text, text, elements, target)
-            elements[target.element_index] = element.model_copy(
-                update={"text": text, "metadata": metadata}
+            updated_element = element.model_copy(update={"text": text, "metadata": metadata})
+            supplement_start = (
+                len(element.text) + 1
+                if record.category == "Table" and text != element.text
+                else None
             )
+            metadata.update(
+                _element_vision_binding(
+                    updated_element, record, table_supplement_start=supplement_start
+                )
+            )
+            updated_element = updated_element.model_copy(update={"metadata": metadata})
+            if text != element.text:
+                raw_writer.write(
+                    updated_element.element_id or record.id,
+                    element.text,
+                    projected_element_text(
+                        updated_element.element_id or record.id,
+                        updated_element.text,
+                        updated_element.metadata,
+                        occurrence=target.element_index,
+                    ),
+                )
+            elements[target.element_index] = updated_element
         if target.asset_index is not None:
             asset = assets[target.asset_index]
             summary = layout_record_vision_summary(record) or (record.text if described else "")
@@ -1186,11 +1240,26 @@ def _write_back_adapter(extraction: StructuredExtraction, layout: _Layout) -> St
         merged.append(element)
         merged.extend(inserts.get(index, []))
     for anchor, new_elements in inserts.items():
+        after_id = elements[anchor].element_id if anchor is not None else None
         for new_element in new_elements:
-            anchor_text = elements[anchor].text if anchor is not None else ""
-            raw_text = _insert_after(raw_text, anchor_text, new_element.text)
-    return extraction.model_copy(
-        update={"elements": _renumbered(merged), "assets": assets, "raw_text": raw_text}
+            raw_writer.write(
+                new_element.element_id or "",
+                "",
+                projected_element_text(
+                    new_element.element_id or "", new_element.text, new_element.metadata
+                ),
+                after_id=after_id,
+            )
+            after_id = new_element.element_id
+    return _with_vision_assembly(
+        extraction.model_copy(
+            update={
+                "elements": _renumbered(merged),
+                "assets": assets,
+                "raw_text": raw_writer.value.text,
+            }
+        ),
+        raw_writer,
     )
 
 
@@ -1217,7 +1286,7 @@ def _asset_element(
     metadata.update({"asset_id": asset.asset_id, "asset_kind": asset.kind})
     metadata.update(_vision_metadata_of(record))
     element_id = str(asset.metadata.get("element_id") or "") or f"vision-{asset.asset_id}"
-    return DocumentElement(
+    element = DocumentElement(
         kind="figure",
         text=record.text,
         element_id=element_id[:128],
@@ -1228,9 +1297,191 @@ def _asset_element(
         section_path=list(elements[anchor].section_path) if anchor is not None else [],
         metadata=metadata,
     )
+    return element.model_copy(
+        update={"metadata": {**element.metadata, **_element_vision_binding(element, record)}}
+    )
 
 
 # --- 共通 -------------------------------------------------------------------------------
+
+
+def _vision_raw_writer(extraction: StructuredExtraction) -> VisionRawWriter:
+    from rag_engine.chunking.records import _vision_projection_status
+
+    layout = extraction.parser_artifacts.get(LAYOUT_ARTIFACT)
+    records = layout.get("records", []) if isinstance(layout, dict) else []
+    for record in records if isinstance(records, list) else []:
+        if isinstance(record, dict) and _vision_projection_status(record) == "unrecorded":
+            raise ValueError("旧画像説明の本文が未分離です。再解析してください。")
+    summary = extraction.parser_artifacts.get("vision")
+    succeeded = summary.get("succeeded") if isinstance(summary, dict) else None
+    if (
+        type(succeeded) is int
+        and succeeded > 0
+        and any(
+            element.kind in {"figure", "table"}
+            and element.metadata.get("vision_status") == "succeeded"
+            and load_vision_text_projection(element.metadata.get("vision_text_projection")) is None
+            for element in extraction.elements
+        )
+    ):
+        raise ValueError("旧画像説明の本文が未分離です。再解析してください。")
+    return VisionRawWriter.create(
+        extraction.raw_text,
+        [(element.element_id or "", element.text, element.kind) for element in extraction.elements],
+        [element.metadata for element in extraction.elements],
+        extraction.parser_artifacts.get(VISION_RAW_PROJECTION_KEY),
+    )
+
+
+def _write_docling_raw_image(
+    writer: VisionRawWriter,
+    element: DocumentElement,
+    record: LayoutRecord,
+    *,
+    existing: bool,
+    after_id: str | None = None,
+) -> None:
+    projection = load_vision_text_projection(record.raw.get("vision_text_projection"))
+    if projection is None:
+        return
+    if record.category == "Table":
+        # Doclingの表補足は要素metadataに保存し、元の全文へは書き込まない。
+        return
+    elif record.category == "Picture":
+        if existing:
+            if any(
+                item.source.element_id == element.element_id
+                and item.source.role == "image_description"
+                and item.source.projection == projection
+                and item.source.element_body_sha256 == text_sha256(element.text)
+                for item in writer.value.ranges
+            ):
+                return
+            source = VisionTextSource(
+                element.element_id or record.id,
+                record.seq_no,
+                projection,
+                "image_ocr",
+                record.id,
+                text_sha256(element.text),
+            )
+            if writer.tag(element.element_id or record.id, element.text, source):
+                return
+            # 旧本文の位置を証明できない場合は、原文を消さず新しい説明の追加位置を記録する。
+            text = projection.answer_description
+            source = VisionTextSource(
+                element.element_id or record.id,
+                record.seq_no,
+                projection,
+                "image_description",
+                record.id,
+                text_sha256(element.text),
+            )
+            writer.write(
+                "description:" + record.id,
+                "",
+                ProjectedVisionText(text, (VisionTextRange(0, len(text), source),)),
+            )
+        else:
+            writer.write(
+                element.element_id or record.id,
+                "",
+                projected_element_text(
+                    element.element_id or record.id,
+                    element.text,
+                    element.metadata,
+                    occurrence=record.seq_no,
+                ),
+                after_id=after_id,
+            )
+
+
+def _with_vision_assembly(
+    extraction: StructuredExtraction, raw_writer: VisionRawWriter | None = None
+) -> StructuredExtraction:
+    if not any(VISION_TEXT_BINDING_KEY in element.metadata for element in extraction.elements):
+        return extraction
+    if raw_writer is not None:
+        elements = []
+        for element in extraction.elements:
+            metadata = dict(element.metadata)
+            if (
+                VISION_TEXT_BINDING_KEY not in metadata
+                or not projected_element_text(
+                    element.element_id or "", element.text, metadata
+                ).ranges
+            ):
+                elements.append(element)
+                continue
+            slot = raw_writer.slots.get(element.element_id or "")
+            if slot is not None and extraction.raw_text[slot[0] : slot[1]] == element.text:
+                metadata.update(
+                    {
+                        "raw_start": slot[0],
+                        "raw_end": slot[1],
+                        "raw_source_sha256": text_sha256(extraction.raw_text),
+                    }
+                )
+            else:
+                for key in ("raw_start", "raw_end", "raw_source_sha256"):
+                    metadata.pop(key, None)
+            elements.append(element.model_copy(update={"metadata": metadata}))
+        extraction = extraction.model_copy(
+            update={
+                "elements": elements,
+                "parser_artifacts": {
+                    **extraction.parser_artifacts,
+                    VISION_RAW_PROJECTION_KEY: raw_writer.saved_map(),
+                },
+            }
+        )
+    assembly = positioned_vision_assembly(
+        extraction.raw_text,
+        [(element.element_id or "", element.text, element.kind) for element in extraction.elements],
+        [element.metadata for element in extraction.elements],
+    )
+    return extraction.model_copy(
+        update={"parser_artifacts": {**extraction.parser_artifacts, VISION_ASSEMBLY_KEY: assembly}}
+    )
+
+
+def _element_vision_binding(
+    element: DocumentElement,
+    record: LayoutRecord,
+    *,
+    existing: bool = False,
+    table_supplement_start: int | None = None,
+) -> dict[str, ExtractionMetadataValue]:
+    projection = load_vision_text_projection(record.raw.get("vision_text_projection"))
+    if projection is None or not element.element_id:
+        return {}
+    role: VisionTextRole
+    if record.category == "Table":
+        role = "image_table_supplement"
+        ranges = (
+            ((table_supplement_start, len(element.text)),)
+            if table_supplement_start is not None
+            else ()
+        )
+        supplement = str(record.raw.get("table_vision_text") or "")
+    elif record.category == "Picture":
+        role = "image_ocr" if existing else "image_description"
+        ranges = ((0, len(element.text)),) if element.text else ()
+        supplement = ""
+    else:
+        return {}
+    return {
+        VISION_TEXT_BINDING_KEY: bind_element_vision(
+            element_id=element.element_id,
+            record_id=record.id,
+            body=element.text,
+            projection=projection,
+            role=role,
+            ranges=ranges,
+            supplement=supplement,
+        )
+    }
 
 
 def _vision_metadata_of(record: LayoutRecord) -> dict[str, ExtractionMetadataValue]:
@@ -1247,37 +1498,6 @@ def _metadata_values(values: Mapping[str, object]) -> dict[str, ExtractionMetada
 
 def _renumbered(elements: Sequence[DocumentElement]) -> list[DocumentElement]:
     return [element.model_copy(update={"order": order}) for order, element in enumerate(elements)]
-
-
-def _replace_raw_text(
-    raw_text: str,
-    old: str,
-    new: str,
-    elements: Sequence[DocumentElement],
-    target: _Target,
-) -> str:
-    """raw_text(固定長の分割などが使う)の元の本文を置き換える。無ければ直前の要素の後に入れる。"""
-    if old.strip() and old in raw_text:
-        return raw_text.replace(old, new, 1)
-    index = target.element_index
-    anchor = elements[index - 1].text if index is not None and index > 0 else ""
-    return _insert_after(raw_text, anchor, new)
-
-
-def _insert_raw_text(raw_text: str, preceding: Sequence[DocumentElement], text: str) -> str:
-    for element in reversed(preceding):
-        if element.text.strip() and element.text in raw_text:
-            return _insert_after(raw_text, element.text, text)
-    return _insert_after(raw_text, "", text)
-
-
-def _insert_after(raw_text: str, anchor: str, text: str) -> str:
-    if not text.strip():
-        return raw_text
-    if anchor.strip() and anchor in raw_text:
-        position = raw_text.index(anchor) + len(anchor)
-        return f"{raw_text[:position]}\n\n{text}{raw_text[position:]}"
-    return f"{raw_text}\n\n{text}".strip() if raw_text else text
 
 
 def _with_bbox_missing(extraction: StructuredExtraction, engine: str) -> StructuredExtraction:
