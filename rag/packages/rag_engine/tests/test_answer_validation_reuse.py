@@ -6,10 +6,11 @@ RAG の回答の監査を通った説明と本文・根拠が同じ段落は、�
 import json
 from unittest.mock import patch
 
+from validation_unit_support import unit_audit_output
+
 from rag_engine.evaluation.answer_eval import _evidence_fragments
 from rag_engine.evaluation.answer_validation import (
     REUSED_CLAIM_REASON,
-    ClaimAuditOutput,
     audited_answer_items,
     audited_line_key,
     validate_answer_claims,
@@ -102,7 +103,9 @@ def test_only_unmatched_passages_go_to_the_model() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
         seen.append([item["text"] for item in payload["answer_passages"]])
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            payload,
             {
                 "claim_checks": [
                     {
@@ -120,7 +123,7 @@ def test_only_unmatched_passages_go_to_the_model() -> None:
                     }
                     for item in payload["answer_passages"]
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse):
@@ -138,7 +141,9 @@ def test_reuse_needs_the_evidence_to_be_reread() -> None:
 
     def parse(system, inputs, settings, schema, provider_id=None):
         payload = json.loads(inputs)
-        return ClaimAuditOutput.model_validate(
+        return unit_audit_output(
+            schema,
+            payload,
             {
                 "claim_checks": [
                     {
@@ -151,7 +156,7 @@ def test_reuse_needs_the_evidence_to_be_reread() -> None:
                         "reason": "根拠に無い",
                     }
                 ]
-            }
+            },
         )
 
     with patch("rag_engine.evaluation.answer_eval.parse_text_response", side_effect=parse) as model:

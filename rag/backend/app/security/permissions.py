@@ -390,6 +390,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", f"{_R}/chunks"): _DOCUMENT_WORKSPACE,
     ("POST", f"{_R}/chunk-preview"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_R}/content"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/preview-source"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/preview-pages"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/preview-pages/{{page_number}}"): _DOCUMENT_VIEW,
     ("GET", f"{_R}/extraction-export"): _DOCUMENT_WORKSPACE,
@@ -419,7 +420,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # 文書の版(置き換えた新しい版。#1248)。分類と同じく文書の編集の権限。
     ("PUT", f"{_D}/superseded-by"): _DOCUMENT_WORKSPACE,
     ("GET", f"{_D}/content"): _DOCUMENT_VIEW,
-    ("GET", f"{_D}/crop"): _DOCUMENT_VIEW,
+    ("GET", f"{_R}/crop"): _DOCUMENT_VIEW,
     # 根拠の図の画像（RAG の根拠のカード・サイドパネルの「図を開く」。#2428）。
     ("GET", "/figures"): _DOCUMENT_VIEW,
     ("POST", f"{_D}/text-window"): _DOCUMENT_VIEW,
@@ -435,6 +436,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("PATCH", _KB): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/overview"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/tree"): _any(MENU_KNOWLEDGE_BASES),
+    ("GET", f"{_KB}/graph/documents/{{document_id}}/body-chunks"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/locate"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/documents/{{document_id}}/references"): _any(MENU_KNOWLEDGE_BASES),
     ("GET", f"{_KB}/graph/search"): _any(MENU_KNOWLEDGE_BASES),

@@ -1,3 +1,4 @@
+import { processFailureDetails } from "@production-ready/ui";
 import { describe, expect, it } from "vitest";
 
 import { chatAnswerFailure, failedStageLabel, runFailure, storageFailureNotice } from "./process-failure";
@@ -92,5 +93,21 @@ describe("履歴の停止工程の優先順（Issue 4436）", () => {
     const result = runFailure({ status: "error", error_stage: outer, error_type: "RuntimeError", error_code: null, failure_diagnosis: diagnosis });
     expect(result?.failedStep).toBe(expected);
     expect(result?.summary).toBe(expected ? `「${expected}」で処理が止まりました。` : "回答を作成できませんでした。");
+  });
+});
+
+
+describe("失敗の詳細にも保存済みの安全な原因を示す（Issue 4508）", () => {
+  it.each([
+    [undefined, "記録されていません"],
+    [{ kind: "unknown" as const }, "特定できませんでした"],
+    [{ kind: "network" as const, network_failure_cause: "refused" as const }, "接続を拒否"],
+  ])("原因の本文と詳細が一致する: %j", (diagnosis, expected) => {
+    const failure = runFailure({ status: "error", error_stage: null, error_type: "RuntimeError", error_code: null, failure_diagnosis: diagnosis });
+    expect(failure).not.toBeNull();
+    const details = processFailureDetails(failure!);
+    expect(details.find(entry => entry.label === "原因")?.value).toBe(failure?.cause);
+    expect(details.find(entry => entry.label === "原因")?.value).toContain(expected);
+    expect(details.find(entry => entry.label === "エラーの種類")?.value).toBe("RuntimeError");
   });
 });

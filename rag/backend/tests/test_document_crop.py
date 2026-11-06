@@ -5,11 +5,14 @@ import io
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
 
 from app.api.routes import documents as documents_route
+from app.clients.oracle import OracleClient
+from app.config import Settings
 from app.main import app
 from app.rag import document_crop
 from tests.fixtures.synthetic_pdf import SyntheticPdf, blank_pdf, encrypted_pdf, png
@@ -45,11 +48,29 @@ def _install(monkeypatch: pytest.MonkeyPatch, data: bytes) -> None:
         content_sha256=hashlib.sha256(data).hexdigest(),
         object_storage_path="docs/doc-1/source",
         preprocess_artifact=None,
+        file_name="synthetic.pdf",
+        content_type="application/octet-stream",
     )
 
     class FakeOracle:
         async def get_document(self, document_id: str) -> object | None:
             return detail if document_id == "doc-1" else None
+
+        async def get_document_recipe(
+            self, document_id: str, recipe_id: str
+        ) -> dict[str, object] | None:
+            return {} if document_id == "doc-1" and recipe_id == "recipe-a" else None
+
+        async def extraction_source_derivation(
+            self, *, document_id: str, extraction_recipe_id: str
+        ) -> dict[str, object] | None:
+            if document_id != "doc-1" or extraction_recipe_id != "revision-a":
+                return None
+            return {
+                "derivation_id": "synthetic",
+                "converted": False,
+                "source_object_path": detail.object_storage_path,
+            }
 
     class FakeStorage:
         async def get(self, path: str) -> bytes:
@@ -70,8 +91,9 @@ def test_crop_pdf_region_from_page_image_coordinates(monkeypatch: pytest.MonkeyP
 
     # 1200x1600 px のページ画像座標(2 倍)で指定した bbox は PDF の 100..300 x 100..200 pt。
     response = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-a/crop",
         params={
+            "revision": "revision-a",
             "page": 1,
             "x0": 200,
             "y0": 200,
@@ -91,8 +113,9 @@ def test_crop_pdf_region_from_page_image_coordinates(monkeypatch: pytest.MonkeyP
 def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(monkeypatch, _png_bytes())
     ok = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-a/crop",
         params={
+            "revision": "revision-a",
             "page": 1,
             "x0": 0,
             "y0": 0,
@@ -105,8 +128,9 @@ def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch)
     assert ok.status_code == 200
 
     reversed_box = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-a/crop",
         params={
+            "revision": "revision-a",
             "page": 1,
             "x0": 50,
             "y0": 0,
@@ -118,8 +142,9 @@ def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch)
     )
     assert reversed_box.status_code == 422
     beyond_page = client.get(
-        "/api/documents/doc-1/crop",
+        "/api/documents/doc-1/recipes/recipe-a/crop",
         params={
+            "revision": "revision-a",
             "page": 3,
             "x0": 0,
             "y0": 0,
@@ -131,8 +156,9 @@ def test_crop_image_source_and_invalid_requests(monkeypatch: pytest.MonkeyPatch)
     )
     assert beyond_page.status_code == 422
     missing = client.get(
-        "/api/documents/other/crop",
+        "/api/documents/other/recipes/recipe-a/crop",
         params={
+            "revision": "revision-a",
             "page": 1,
             "x0": 0,
             "y0": 0,
@@ -345,15 +371,21 @@ def test_crop_png_bounded_rejects_too_large_and_invalid_regions() -> None:
         )
 
 
-async def test_load_parsed_source_uses_recipe_prepared_artifact(
+@pytest.mark.parametrize("document_artifact_path", [None, "docs/doc-1/legacy.pdf"])
+async def test_load_parsed_source_requires_version(
     monkeypatch: pytest.MonkeyPatch,
+    document_artifact_path: str | None,
 ) -> None:
-    """図の bbox はレシピが解析したファイルの座標なので、そのレシピの artifact を読む。"""
+    """bbox は版が解析したファイルの座標なので、版の指定が無ければファイルを開かない。"""
     detail = SimpleNamespace(
         id="doc-1",
         content_sha256="synthetic-source",
         object_storage_path="docs/doc-1/source.docx",
-        preprocess_artifact=None,
+        preprocess_artifact=(
+            SimpleNamespace(object_storage_path=document_artifact_path)
+            if document_artifact_path is not None
+            else None
+        ),
     )
     read: list[str] = []
 
@@ -383,14 +415,159 @@ async def test_load_parsed_source_uses_recipe_prepared_artifact(
     monkeypatch.setattr(document_crop, "ObjectStorageClient", FakeStorage)
     oracle = cast(Any, FakeOracle())
 
-    await document_crop.load_parsed_source(oracle, "doc-1", "recipe-1")
-    # レシピが無ければ文書のファイル(ここでは原本)。
-    await document_crop.load_parsed_source(oracle, "doc-1", "unknown")
-    await document_crop.load_parsed_source(oracle, "doc-1")
-    assert read == [
-        "docs/doc-1/recipe-1/prepared.pdf",
-        "docs/doc-1/source.docx",
-        "docs/doc-1/source.docx",
-    ]
+    # 版（抽出版か chunk_set）を指定しない読み取りは、レシピの今のファイルでも原本でも代用しない。
+    for recipe_id in ("recipe-1", "unknown", None):
+        with pytest.raises(document_crop.VersionSourceUnknownError):
+            await document_crop.load_parsed_source(oracle, "doc-1", recipe_id)
+    assert read == []
     with pytest.raises(document_crop.DocumentSourceNotFoundError):
         await document_crop.load_parsed_source(oracle, "doc-2", "recipe-1")
+
+
+@pytest.mark.parametrize(
+    "recipe_id,revision,color",
+    [
+        ("recipe-a", "revision-old", (0, 0, 255)),
+        ("recipe-a", "revision-new", (0, 255, 0)),
+        ("recipe-a", "revision-missing", None),
+        ("recipe-missing", "revision-old", None),
+    ],
+)
+def test_recipe_crop_uses_file_of_requested_extraction_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    recipe_id: str,
+    revision: str,
+    color: tuple[int, int, int] | None,
+) -> None:
+    """原本・今のレシピ・旧抽出版の色を分け、指定した抽出版の画像だけを開く。"""
+    detail = SimpleNamespace(
+        id="doc-1",
+        file_name="original.png",
+        content_type="image/png",
+        object_storage_path="synthetic/original.png",
+        preprocess_artifact=None,
+    )
+    sources = {
+        "synthetic/original.png": png((100, 100), (255, 0, 0)),
+        "synthetic/old.png": png((100, 100), (0, 0, 255)),
+        "synthetic/new.png": png((100, 100), (0, 255, 0)),
+    }
+    reads: list[str] = []
+
+    class FakeOracle:
+        async def get_document(self, document_id: str) -> object | None:
+            return detail if document_id == "doc-1" else None
+
+        async def get_document_recipe(
+            self, document_id: str, recipe_id: str
+        ) -> dict[str, object] | None:
+            return (
+                {
+                    "preprocess_artifact": {
+                        "derivation_id": "new",
+                        "profile": "none",
+                        "converted": True,
+                        "object_storage_path": "synthetic/new.png",
+                    }
+                }
+                if document_id == "doc-1" and recipe_id == "recipe-a"
+                else None
+            )
+
+        async def extraction_source_derivation(
+            self, *, document_id: str, extraction_recipe_id: str
+        ) -> dict[str, object] | None:
+            if document_id != "doc-1" or extraction_recipe_id not in {
+                "revision-old",
+                "revision-new",
+            }:
+                return None
+            return {
+                "derivation_id": extraction_recipe_id,
+                "profile": "none",
+                "converted": True,
+                "derived_object_path": "synthetic/old.png"
+                if extraction_recipe_id == "revision-old"
+                else "synthetic/new.png",
+                "derived_content_type": "image/png",
+            }
+
+    class Storage:
+        async def get(self, path: str) -> bytes:
+            reads.append(path)
+            return sources[path]
+
+    monkeypatch.setattr(documents_route, "OracleClient", FakeOracle)
+    monkeypatch.setattr(document_crop, "ObjectStorageClient", Storage)
+    response = client.get(
+        f"/api/documents/doc-1/recipes/{recipe_id}/crop",
+        params={
+            "revision": revision,
+            "page": 1,
+            "x0": 0,
+            "y0": 0,
+            "x1": 50,
+            "y1": 50,
+            "page_width": 100,
+            "page_height": 100,
+            "dpi": 72,
+        },
+    )
+    if color is None:
+        assert response.status_code == 404, response.text
+        assert reads == []
+        return
+    assert response.status_code == 200, response.text
+    with Image.open(io.BytesIO(response.content)) as image:
+        pixel = image.getpixel((10, 10))
+        assert isinstance(pixel, tuple)
+        assert pixel[:3] == color
+    assert reads == ["synthetic/old.png" if revision == "revision-old" else "synthetic/new.png"]
+
+
+@pytest.mark.asyncio
+async def test_extraction_source_query_is_bound_to_document_and_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oracle = OracleClient(Settings(_env_file=None))
+    fetch = AsyncMock(return_value={"source_derivation": '{"derivation_id":"synthetic"}'})
+    monkeypatch.setattr(oracle, "_fetch_one", fetch)
+    result = await oracle.extraction_source_derivation(
+        document_id="synthetic-document", extraction_recipe_id="synthetic-revision"
+    )
+    assert result == {"derivation_id": "synthetic"}
+    assert fetch.await_args is not None
+    statement, binds = fetch.await_args.args
+    assert "JSON_QUERY(" in statement and "RETURNING CLOB" in statement
+    assert (
+        "WHERE document_id = :document_id AND extraction_recipe_id = :extraction_recipe_id"
+        in statement
+    )
+    assert binds == {
+        "document_id": "synthetic-document",
+        "extraction_recipe_id": "synthetic-revision",
+    }
+    fetch.return_value = None
+    assert (
+        await oracle.extraction_source_derivation(
+            document_id="other", extraction_recipe_id="missing"
+        )
+        is None
+    )
+
+
+def test_crop_requires_recipe_and_extraction_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(monkeypatch, _png_bytes())
+    params = {
+        "page": 1,
+        "x0": 0,
+        "y0": 0,
+        "x1": 10,
+        "y1": 10,
+        "page_width": 200,
+        "page_height": 100,
+    }
+    assert client.get("/api/documents/doc-1/crop", params=params).status_code == 404
+    assert (
+        client.get("/api/documents/doc-1/recipes/recipe-a/crop", params=params).status_code == 422
+    )

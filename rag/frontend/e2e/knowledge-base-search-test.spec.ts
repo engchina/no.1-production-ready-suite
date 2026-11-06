@@ -425,6 +425,7 @@ async function mockVersionedOfficeCitation(page: Page): Promise<void> {
     content_type: "application/pdf",
     object_storage_path: "artifacts/canonical/doc-1/trace/canonical.pdf",
   };
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/preview-source?chunk_set_id=cs-cited", route => route.fulfill({ json: ok({ file_name: "sample.pdf", content_type: "application/pdf", is_pdf: true }) }));
   await page.route("**/api/documents/doc-1", (route) =>
     route.fulfill({ json: ok({ id: "doc-1", preprocess_artifact: null }) })
   );
@@ -507,14 +508,12 @@ test("消えた版の引用プレビューは iframe や再試行に戻さず、
 
 test("Office 引用プレビューの降格表示では原本をダウンロードできる", async ({ page }) => {
   await mockKbPage(page, 1);
-  await page.route("**/api/documents/doc-1", (route) =>
-    route.fulfill({ json: ok({ preprocess_artifact: null }) })
-  );
+  await page.route("**/api/documents/doc-1/recipes/recipe-1/preview-source?chunk_set_id=cs-cited", route => route.fulfill({ json: ok({ file_name: "sample.docx", content_type: "application/octet-stream", is_pdf: false }) }));
   await page.route("**/api/search/stream", (route) =>
     route.fulfill({
       status: 200,
       contentType: "text/event-stream",
-      body: searchStreamBody("policy.docx"),
+      body: searchStreamBody("sample.docx", 1, { recipe_id: "recipe-1", chunk_set_id: "cs-cited" }),
     })
   );
 
@@ -530,7 +529,7 @@ test("Office 引用プレビューの降格表示では原本をダウンロー�
   ).toBeVisible();
   await expect(
     dialog.getByRole("link", { name: "ファイルをダウンロード", exact: true })
-  ).toHaveAttribute("href", /\/api\/documents\/doc-1\/content\?disposition=attachment$/);
+  ).toHaveAttribute("href", /\/api\/documents\/doc-1\/recipes\/recipe-1\/content\?disposition=attachment&chunk_set_id=cs-cited$/);
 });
 
 // #303: 文書の詳細はワークスペース（アップロード・文書インデックス）専用の API を使う。KB の権限だけの
@@ -652,3 +651,58 @@ test("検索テストと停止は同じボタンで、フォーカスを保っ�
   expect(aborted).toBe(1);
   await expectNoPageOverflow(page);
 });
+
+
+// 同じファイル名でも引用CSの原本と現在のレシピは異なる。
+for (const scenario of [
+  { id: "old-pdf-current-missing", citedPdf: true, current: null, filename: "sample.docx", pdf: true },
+  { id: "old-pdf-current-jsonl", citedPdf: true, current: "jsonl", filename: "sample.docx", pdf: true },
+  { id: "old-native-current-pdf", citedPdf: false, current: "pdf", filename: "sample.docx", pdf: false },
+  { id: "same-pdf", citedPdf: true, current: "pdf", filename: "sample.docx", pdf: true },
+  { id: "original-pdf", citedPdf: false, current: null, filename: "sample.pdf", pdf: true },
+]) {
+  test(`引用版で表示種類を決める ${scenario.id}`, { tag: "@responsive" }, async ({ page }) => {
+    await mockVersionedOfficeCitation(page);
+    await page.route("**/api/documents/doc-1/recipes", route => route.fulfill({ json: ok([{
+      recipe_id: "recipe-1", status: "INDEXED", steps: [],
+      preprocess_artifact: scenario.current ? { file_name: `sample.${scenario.current}`, content_type: scenario.current === "pdf" ? "application/pdf" : "application/x-ndjson", object_storage_path: `prepared/sample.${scenario.current}` } : null,
+    }]) }));
+    await page.route("**/api/search/stream", route => route.fulfill({ contentType: "text/event-stream", body: searchStreamBody(scenario.filename, 1, { recipe_id: "recipe-1", chunk_set_id: "cs-cited" }) }));
+    await page.route("**/api/documents/doc-1/recipes/recipe-1/preview-source?chunk_set_id=cs-cited", route => route.fulfill({ json: ok({ file_name: scenario.citedPdf ? "sample.pdf" : scenario.filename, content_type: scenario.citedPdf ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document", is_pdf: scenario.citedPdf }) }));
+    await page.route(/\/api\/documents\/doc-1\/recipes\/recipe-1\/preview-pages\?/, route => route.fulfill({ json: ok({ page_count: 1, pages: [{ page_number: 1, width: 612, height: 792 }] }) }));
+    await page.route(/\/api\/documents\/doc-1\/recipes\/recipe-1\/preview-pages\/1\?/, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64") }));
+    const dialog = await openCitation(page);
+    if (scenario.pdf) {
+      await expect(dialog.locator('img[src*="/preview-pages/1?"]')).toBeVisible();
+    } else {
+      await expect(dialog.getByText("このファイル形式はプレビューに対応していません。")).toBeVisible();
+      await expect(dialog.locator('img[src*="/preview-pages/1?"]')).toHaveCount(0);
+    }
+    await expectNoPageOverflow(page);
+    if (process.env.CITATION_PREVIEW_SCREENSHOTS) await page.screenshot({ path: `${process.env.CITATION_PREVIEW_SCREENSHOTS}/${scenario.id}-${test.info().project.name}.png` });
+  });
+}
+
+for (const failure of ["missing-scope", "missing-source", "stale"] as const) {
+  test(`引用版の種類が未確認なら現在版へ戻さない ${failure}`, { tag: "@responsive" }, async ({ page }) => {
+    await mockVersionedOfficeCitation(page);
+    if (failure === "missing-scope") {
+      await page.route("**/api/search/stream", route => route.fulfill({ contentType: "text/event-stream", body: searchStreamBody("sample.docx", 1, { recipe_id: "recipe-1" }) }));
+    } else {
+      await page.route("**/api/documents/doc-1/recipes/recipe-1/preview-source?chunk_set_id=cs-cited", route => route.fulfill({
+        status: failure === "stale" ? 409 : 404,
+        json: { data: null, error_messages: [failure === "stale" ? "資料の版が変わりました。" : "この版が解析したファイルの記録がありません。"], warning_messages: [], error_code: failure === "stale" ? "source_stale" : "document_file_missing" },
+      }));
+    }
+    const dialog = await openCitation(page);
+    if (failure === "stale") {
+      await expect(dialog.getByTestId("source-version-stale-notice")).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "再試行", exact: true })).toHaveCount(0);
+    } else {
+      await expect(dialog.getByText(failure === "missing-scope" ? "引用した版のファイルの記録がありません。" : "この版が解析したファイルの記録がありません。", { exact: true })).toBeVisible();
+    }
+    await expect(dialog.locator('img[src*="/preview-pages/1?"]')).toHaveCount(0);
+    await expect(dialog.locator("iframe")).toHaveCount(0);
+    await expectNoPageOverflow(page);
+  });
+}

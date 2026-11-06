@@ -311,8 +311,8 @@ export function OntologyBuildPage() {
           ) : activeProfiles.length === 0 ? (
             <EmptyState title={t("ontologyBuild.empty.title")} hint={t("ontologyBuild.empty.hint")} />
           ) : (
-            <div className="grid gap-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="grid min-w-0 gap-3">
+              <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
                 <SelectField
                   id="ontology-build-profile"
                   label={t("ontologyBuild.profile.selectLabel")}

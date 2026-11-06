@@ -37,6 +37,14 @@ from rag_parser_core.extraction import (
 from rag_parser_core.parsed_table import ParsedCell, ParsedTableGrid, grid_rows_metadata
 from rag_parser_core.sheet_records import SHEET_RECORD_CONTENT_KIND
 from rag_parser_core.structured_records import has_record_boundaries
+from rag_parser_core.vision_text import has_answer_text_projection
+from rag_parser_core.vision_text_map import (
+    ProjectedVisionText,
+    chunk_projected_text,
+    chunk_projection_metadata,
+    require_element_vision_projection,
+    updated_chunk_projection_metadata,
+)
 from rag_parser_core.xml_tree_json import is_xml_tree_json_extraction
 from rag_pipeline_core.chunking import (
     FIGURE_TEXT_SOURCE_KEY,
@@ -150,6 +158,8 @@ def build_parent_child_chunks(
     ``params`` は文書分割の設定(親子階層（small-to-big）の 5 項目)。None は rag_poc の既定値。
     入力の振り分けは ``small_to_big_parent_source``(どの解析の結果でも親子にする。#3377)。
     """
+    for element in extraction.elements:
+        require_element_vision_projection(element.metadata)
     # oracle client からも search_text 判定で import されるため、分割実装は使用時に読む。
     from rag_engine.chunking.builder import build_small_to_big_chunks
     from rag_engine.chunking.constants import CHILD_CHUNK_LEVEL
@@ -282,6 +292,12 @@ def build_structure_parent_child_chunks(
     for group in groups:
         parent_text = "\n\n".join(chunk.text for chunk in group)
         parent_id = _structure_parent_id(group, parent_text)
+        parent_projection = ProjectedVisionText.join(
+            [chunk_projected_text(child.text, child.metadata) for child in group], "\n\n"
+        )
+        parent_proof = chunk_projection_metadata(parent_projection).get(
+            "answer_text_projection_json"
+        )
         for part_index, chunk in enumerate(group, start=1):
             result.append(
                 replace(
@@ -296,6 +312,11 @@ def build_structure_parent_child_chunks(
                         "chunk_part_index": part_index,
                         "chunk_part_count": len(group),
                         "parent_text": parent_text,
+                        **(
+                            {"parent_answer_text_projection_json": parent_proof}
+                            if parent_proof is not None
+                            else {}
+                        ),
                         **_parent_page_metadata(group),
                         "engine_chunk_seq": len(result),
                     },
@@ -424,13 +445,15 @@ def _split_body(
 
 def _body_part(chunk: Chunk, start: int, end: int, element_ids: str, limit: int) -> Chunk:
     text = chunk.text[start:end].rstrip()
+    projection = chunk_projected_text(chunk.text, chunk.metadata).slice(start, start + len(text))
+    metadata = updated_chunk_projection_metadata(chunk.metadata, projection)
     return replace(
         chunk,
         text=text,
         start_offset=chunk.start_offset + start,
         end_offset=chunk.start_offset + start + len(text),
         metadata={
-            **chunk.metadata,
+            **metadata,
             "element_ids": element_ids,
             "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "text_chars": len(text),
@@ -489,6 +512,10 @@ def _grouped_headings(headings: list[Chunk], target_chars: int) -> list[Chunk]:
 
 def _with_heading_prefix(headings: list[Chunk], chunk: Chunk) -> Chunk:
     text = "\n".join([*(heading.text for heading in headings), chunk.text])
+    projection = ProjectedVisionText.join(
+        [chunk_projected_text(item.text, item.metadata) for item in [*headings, chunk]], "\n"
+    )
+    metadata = updated_chunk_projection_metadata(chunk.metadata, projection)
     element_ids = [
         element_id
         for item in (*headings, chunk)
@@ -506,7 +533,7 @@ def _with_heading_prefix(headings: list[Chunk], chunk: Chunk) -> Chunk:
         text=text,
         start_offset=headings[0].start_offset,
         metadata={
-            **chunk.metadata,
+            **metadata,
             "element_ids": ",".join(dict.fromkeys(element_ids)),
             "element_kinds": ",".join(sorted(kinds)),
             "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -877,6 +904,15 @@ def _backend_chunk(
             "chunk_group_id": group_id,
             "chunk_group_kind": "small_to_big_parent",
             "parent_text": parent.text if parent is not None else "",
+            **(
+                {
+                    "parent_answer_text_projection_json": json.dumps(
+                        parent.metadata["answer_text_projection"], separators=(",", ":")
+                    )
+                }
+                if parent is not None and has_answer_text_projection(parent.metadata, parent.text)
+                else {}
+            ),
             "parent_page_start": parent.page_start if parent is not None else None,
             "parent_page_end": parent.page_end if parent is not None else None,
             ENGINE_SEARCH_TEXT_KEY: child.retrieval_text,

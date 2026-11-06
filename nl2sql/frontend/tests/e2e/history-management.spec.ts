@@ -793,7 +793,7 @@ test("一覧の token の列と詳細の概要は、記録した利用量・一�
     // Select AI だけの実行と、記録の無い行は数を作らず未計測（0 token と出さない）。
     for (const id of ["history-middle", "history-old"]) {
       await expect(row(page, id).locator("[data-run-usage-note]")).toHaveText("未計測");
-      await expect(row(page, id)).not.toContainText("0 token");
+      await expect(row(page, id)).not.toContainText("0 トークン");
     }
   }
 
@@ -801,8 +801,14 @@ test("一覧の token の列と詳細の概要は、記録した利用量・一�
   const summary = page.getByTestId("history-detail-summary");
   const fact = (id: string) => summary.locator(`[data-run-fact="${id}"] dd`);
   await expect(fact("model")).toHaveText("test-text-model");
-  await expect(fact("tokens")).toHaveText("12,345 token（一部計測）");
-  await expect(fact("modelCalls")).toHaveText("2 回（うち 1 回を計測。入力 12,000 / 出力 345 token）");
+  await expect(fact("tokens")).toHaveText("12,345 トークン（一部計測）");
+  await expect(summary.locator('[data-run-fact="tokens"] dt')).toHaveText("トークン数");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await expect(fact("modelCalls")).toHaveText("2 回（うち 1 回を計測。入力 12,000 / 出力 345 トークン）");
+    await summary.screenshot({ path: testInfo.outputPath(`token-labels-${theme}.png`) });
+  }
+  await expect(fact("modelCalls")).toHaveText("2 回（うち 1 回を計測。入力 12,000 / 出力 345 トークン）");
   await expect(fact("unmeasuredCalls")).toHaveText("Select AI Agent（データベースの中で呼ぶモデル）");
   // 並びは RAG の概要と同じ（モデル → token → モデルの呼び出し）。
   const order = await summary.locator("[data-run-fact]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-run-fact")));

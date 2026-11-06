@@ -25,6 +25,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseStructureIndexUpdate,
     KnowledgeBaseSummary,
     KnowledgeBaseUpdateRequest,
+    StructureGraphBodyChunkPage,
     StructureGraphLocation,
     StructureGraphOverview,
     StructureGraphReferences,
@@ -163,7 +164,7 @@ async def _read_structure_graph(
     oracle = OracleClient()
 
     async def _load() -> dict[str, Any]:
-        if await oracle.get_knowledge_base(knowledge_base_id) is None:
+        if not await oracle.knowledge_base_is_visible(knowledge_base_id):
             raise HTTPException(status_code=404, detail="ナレッジベースが見つかりません。")
         try:
             return await read(StructureGraphStore(oracle))
@@ -200,7 +201,7 @@ async def get_structure_graph_tree(
     document_id: str,
     chunk_set_id: str = Query(min_length=1, max_length=64),
     parent: str | None = Query(default=None, min_length=64, max_length=64),
-    offset: int = Query(default=0, ge=0, le=100000),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> ApiResponse[StructureGraphTreePage]:
     """章節の木の 1 段を返す（文書の順）。``parent`` が無ければ文書の直下。"""
@@ -264,7 +265,7 @@ async def get_structure_graph_document_references(
 async def search_structure_graph(
     knowledge_base_id: str,
     q: str = Query(default="", max_length=200),
-    offset: int = Query(default=0, ge=0, le=100000),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ) -> ApiResponse[StructureGraphSearchPage]:
     """KB の全体から文書名と章節名を検索する。"""
@@ -284,7 +285,7 @@ async def get_knowledge_base_graph_references(
         default=None, min_length=64, max_length=64, pattern="^[a-f0-9]+$"
     ),
     direction: str = Query(default="outgoing", pattern="^(outgoing|incoming)$"),
-    offset: int = Query(default=0, ge=0, le=100000),
+    offset: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ) -> ApiResponse[dict[str, Any]]:
     """同じ版の参照先・参照元を、読み取り時点の権限で返す。"""
@@ -594,3 +595,25 @@ async def stop_structure_index_job(knowledge_base_id: str) -> ApiResponse[dict[s
         )
         or {}
     )
+
+
+@router.get(
+    "/{knowledge_base_id}/graph/documents/{document_id}/body-chunks",
+    response_model=ApiResponse[StructureGraphBodyChunkPage],
+)
+async def get_structure_graph_body_chunks(
+    knowledge_base_id: str,
+    document_id: str,
+    chunk_set_id: str = Query(..., min_length=1, max_length=64),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+) -> ApiResponse[StructureGraphBodyChunkPage]:
+    """図の本文を、同じ閲覧範囲/保存版の原文表示へ結ぶ。"""
+    data = await _read_structure_graph(
+        knowledge_base_id,
+        "structure_graph_body_chunks",
+        lambda store: store.body_chunks(
+            knowledge_base_id, document_id, chunk_set_id, offset=offset, limit=limit
+        ),
+    )
+    return ApiResponse(data=StructureGraphBodyChunkPage(**data))

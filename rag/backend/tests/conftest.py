@@ -466,3 +466,19 @@ def trace_body_enabled() -> Iterator[None]:
 
     with call_content_policy(lambda: True):
         yield
+
+
+@pytest.fixture(autouse=True)
+def published_prompt_unit_scope(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTTP 単体テストへ未編集の保存指示を明示供給し、実 DB テストは除外する。"""
+    if "oracle_db" in request.fixturenames:
+        return
+    from app.rag import prompt_runtime
+
+    class PromptOracle:
+        async def answer_prompt_overrides(self) -> dict[str, str]:
+            return {}
+
+    monkeypatch.setattr(prompt_runtime, "OracleClient", PromptOracle)

@@ -18,6 +18,9 @@ from app.schemas.search import RetrievedChunk
 
 
 class _Oracle:
+    async def answer_prompt_overrides(self) -> dict[str, str]:
+        return {}
+
     async def retrievable_chunk(self, document_id: str, chunk_id: str) -> Any:
         return RetrievedChunk(
             document_id=document_id,

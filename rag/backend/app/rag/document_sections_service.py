@@ -52,15 +52,24 @@ async def sections_source(
     """
     serving = recipe_id is None
     if recipe_id is None:
-        recipe_id = str((await oracle.ensure_default_document_recipe(document_id))["recipe_id"])
-    row = await oracle.get_document_recipe(document_id, recipe_id)
+        row = next(
+            (
+                row
+                for row in await oracle.list_document_recipes(document_id)
+                if row.get("slot_no") == 1
+            ),
+            None,
+        )
+        recipe_id = str(row["recipe_id"]) if row is not None else None
+    else:
+        row = await oracle.get_document_recipe(document_id, recipe_id)
     config = DocumentProcessingConfig.model_validate(
         (row.get("processing_config") if row is not None else None) or {}
     )
     mode = config.section_rules_mode or load_section_rules().mode
     extraction_recipe_id = row.get("active_extraction_recipe_id") if row is not None else None
     latest_chunk_set = getattr(oracle, "get_latest_recipe_chunk_set", None)
-    if serving and callable(latest_chunk_set):
+    if serving and recipe_id is not None and callable(latest_chunk_set):
         served = await latest_chunk_set(recipe_id, status="INDEXED", active=True)
         if served is not None and served.get("extraction_recipe_id"):
             extraction_recipe_id = served["extraction_recipe_id"]

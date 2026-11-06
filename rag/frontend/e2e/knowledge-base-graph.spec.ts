@@ -1,3 +1,4 @@
+import structureLevelsReader from "./fixtures/structure-levels-reader.json";
 import { expect, type Page, test } from "./fixtures/test";
 import { expectToastPlacement } from "./_toast-placement";
 import { expectedControlHeight, expectNoPageOverflow, mockDatabaseReady, mockLocalAuth } from "./_helpers";
@@ -229,13 +230,13 @@ for (const viewport of [
   });
 }
 
-// React Flow の Controls・帰属表示・辺のラベルは、テーマの面の色で描く（#1137）。
+// React Flow の操作部と辺のラベルはテーマに合わせ、帰属リンクは表示しない。
 // React Flow の既定の配色は colorMode="dark" のときだけダークになり、ダークテーマでも白い地のまま出ていた。
 // platform/packages/ui の integrations/react-flow.css が React Flow の変数をトークンに結び付ける。
 for (const theme of ["light", "dark"] as const) {
-  test(`文書構造グラフの操作・帰属表示はテーマの面の色で描く (${theme})`, async ({
+  test(`文書構造グラフの操作はテーマに合わせ帰属リンクを表示しない (${theme})`, { tag: "@responsive" }, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.addInitScript((value) => {
       window.localStorage.setItem(
         "production-ready-rag.ui",
@@ -282,8 +283,6 @@ for (const theme of ["light", "dark"] as const) {
         buttonCount: buttons.length,
         buttonBackgrounds: buttons.map((button) => getComputedStyle(button).backgroundColor),
         buttonColors: buttons.map((button) => getComputedStyle(button).color),
-        attributionBackground: style(".react-flow__attribution")?.backgroundColor,
-        attributionLink: style(".react-flow__attribution a")?.color,
         edgeLabelBackground: style(".react-flow__edge-textbg")?.fill ?? null,
       };
     });
@@ -291,9 +290,13 @@ for (const theme of ["light", "dark"] as const) {
     // 共通 ghost Button は透明な面を通して親の surface を表示する。
     expect(new Set(colors.buttonBackgrounds)).toEqual(new Set(["rgba(0, 0, 0, 0)"]));
     expect(new Set(colors.buttonColors)).toEqual(new Set([colors.tokens.fg]));
-    // 帰属表示（React Flow のリンク）は消さず、色だけ合わせる。
-    expect(colors.attributionBackground).toBe(colors.tokens.raised);
-    expect(colors.attributionLink).toBe(colors.tokens.fgMuted);
+    await region.screenshot({ path: testInfo.outputPath(`graph-attribution-${theme}.png`) });
+    await expect(region.locator(".react-flow__attribution")).toHaveCount(0);
+    const viewport = region.locator(".react-flow__viewport");
+    const beforeZoom = await viewport.getAttribute("style");
+    await region.getByRole("button", { name: "拡大", exact: true }).click();
+    await expect(viewport).not.toHaveAttribute("style", beforeZoom!);
+    await region.getByRole("button", { name: "全体表示", exact: true }).click();
     if (colors.edgeLabelBackground !== null) {
       expect(colors.edgeLabelBackground).toBe(colors.tokens.surface);
     }
@@ -431,6 +434,7 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   await page.getByRole("alertdialog").getByRole("button", { name: "残りを続ける", exact: true }).click();
   await expect(settings.getByText("処理終了。文書ごとの結果を確認してください。")).toBeVisible();
   await expect(settings.getByRole("cell", { name: "部分構築", exact: true })).toBeVisible();
+  await expect(settings.getByText("作成済みの章節情報をすべて表示します。章節情報がない箇所や、構築していない処理レシピの構造は表示されません。")).toBeVisible();
   await expectNoPageOverflow(page);
   await settings.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("structure-build-completed.png"), fullPage: false });
@@ -760,3 +764,205 @@ test("参照一覧の取得失敗を再試行でき、次のページだけを�
   await expect(panel.getByText("先頭の参照", { exact: true })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
+
+
+for (const theme of ["light", "dark"] as const) {
+  for (const mixed of [false, true]) {
+    test(`章節のない本文を選び全件の原文と保存位置を読む (${mixed ? "mixed" : "allmissing"} ${theme})`, {tag: "@responsive"}, async ({page}, testInfo) => {
+      await page.addInitScript(value => localStorage.setItem("production-ready-rag.ui",JSON.stringify({state:{theme:value,sidebarCollapsed:true},version:0})), theme);
+      const body = treeNode(ID("body"), "本文", null, "doc", {type:"body"});
+      const nodes = mixed ? [treeNode(ID("named-body"), "本文", null,"doc"),body] : [body];
+      await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
+      await mockTree(page,{"root:set-doc":nodes});
+      const ids = Array.from({length:26},(_,index)=>({chunk_id:`doc-doc:set-doc:${index}`,chunk_index:index,page_number:null}));
+      const reads: string[] = [];
+      await page.route("**/graph/documents/doc-doc/body-chunks?**", route => {
+        const params=new URL(route.request().url()).searchParams;
+        expect(params.get("chunk_set_id")).toBe("set-doc");
+        const offset=Number(params.get("offset"));
+        return route.fulfill({json:ok({items:ids.slice(offset,offset+25),total:26,offset})});
+      });
+      await page.route("**/api/documents/doc-doc/chunks/**",route=>{
+        const id=decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!);
+        reads.push(id);
+        return route.fulfill({json:ok({document_id:"doc-doc",chunk_id:id,text:"合成の保存本文26",file_name:"synthetic.txt",score:0,metadata:{chunk_set_id:"set-doc",recipe_id:"recipe-1",start_offset:258,end_offset:267}})});
+      });
+      await page.route("**/api/documents/doc-doc/reader?**",route=>{
+        const params=new URL(route.request().url()).searchParams;
+        expect(params.get("chunk_id")).toBe(ids[25]!.chunk_id);
+        return route.fulfill({json:ok({revision:"set-doc",anchor_status:"exact",section_path:[],scope:"paragraph",blocks:[{id:"anchor",text:"保存位置250：合成の保存本文26",offset:250,highlights:[[8,17]],cited:true}],previous_cursor:null,next_cursor:null,outline:[]})});
+      });
+      await page.goto("/knowledge-bases/kb-1");
+      await disclosureSummary(page,"文書構造グラフを表示").click();
+      const graph=page.locator("#knowledge-base-graph");
+      await graph.locator('.react-flow__node[data-id="doc"]').click();
+      await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
+      const panel=page.getByTestId("graph-body");
+      await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+      await panel.getByRole("button",{name:"次へ",exact:true}).click();
+      await expect(panel.getByText("本文 26",{exact:true})).toBeVisible();
+      await panel.getByRole("button",{name:"原文を表示",exact:true}).click();
+      await expect(page.getByRole("dialog", {name:"本文の原文", exact:true})).toBeVisible();
+      const reader=page.getByTestId("evidence-reader");
+      await expect(reader).toContainText("合成の保存本文26");
+      await expect(reader.locator("mark")).toBeVisible();
+      expect(reads).toEqual([ids[25]!.chunk_id]);
+      await expectNoPageOverflow(page);
+      await page.screenshot({path:testInfo.outputPath(`structure-body-${mixed ? "mixed":"allmissing"}-${theme}.png`), animations: "disabled"});
+      await expect(page.getByRole("dialog", {name:"本文の原文", exact:true}).getByTestId("citation-score-panel")).toHaveCount(0, { timeout: 500 });
+    });
+  }
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`1001番目の章節の検索位置へページを分けて移動する (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value, sidebarCollapsed: true }, version: 0 })), theme);
+    const all = Array.from({ length: 1101 }, (_, index) => treeNode(index.toString(16).padStart(64, "0"), `合成章節${index + 1}`, null, "doc"));
+    const target = all[1000]!;
+    const reads: { offset: number; limit: number }[] = [];
+    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
+    await mockTree(page, { "root:set-doc": all });
+    // 正式tree APIと同じlimit上限。既存mockの無制限sliceで不具合を隠さない。
+    await page.route(/\/graph\/documents\/[^/]+\/tree/, (route) => {
+      const url = new URL(route.request().url());
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 100);
+      reads.push({ offset, limit });
+      if (limit > 1000) return route.fulfill({ status: 422, json: { detail: "ページの表示件数が上限を超えています。" } });
+      return route.fulfill({ json: ok({ items: all.slice(offset, offset + limit), total: all.length, offset }) });
+    });
+    await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
+    await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 1000 }] }) }));
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page, "文書構造グラフを表示").click();
+    const graph = page.locator("#knowledge-base-graph");
+    await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
+    try {
+      await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label);
+      expect(reads.every((r) => r.limit <= 1000)).toBe(true);
+      expect(reads.map((r) => r.offset)).toEqual(Array.from({ length: 11 }, (_, index) => index * 100));
+      await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();
+      await expectNoPageOverflow(page);
+    } finally {
+      console.log("structure-tree-requests", JSON.stringify(reads));
+      await testInfo.attach("tree-requests", { body: JSON.stringify(reads), contentType: "application/json" });
+      await page.screenshot({ path: testInfo.outputPath(`structure-reveal-1001-${theme}.png`) });
+    }
+  });
+}
+
+
+test("章節の位置移動で空の続きページをエラーにし、再試行は既読の続きから読む", async ({ page }) => {
+  const all = Array.from({ length: 201 }, (_, index) => treeNode(index.toString(16).padStart(64, "0"), `合成章節${index + 1}`, null, "doc"));
+  const target = all[200]!;
+  let empty = true;
+  const offsets: number[] = [];
+  await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
+  await mockTree(page, { "root:set-doc": all });
+  await page.route(/\/graph\/documents\/[^/]+\/tree/, (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 100);
+    offsets.push(offset);
+    return route.fulfill({ json: ok({ items: empty && offset === 100 ? [] : all.slice(offset, offset + limit), total: all.length, offset }) });
+  });
+  await page.route("**/api/knowledge-bases/kb-1/graph/search**", (route) => route.fulfill({ json: ok({ items: [target], total: 1, offset: 0 }) }));
+  await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok({ path: [{ id: target.id, index: 200 }] }) }));
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page, "文書構造グラフを表示").click();
+  const graph = page.locator("#knowledge-base-graph");
+  await graph.getByRole("searchbox", { name: "グラフ内を検索", exact: true }).fill(target.label);
+  await expect(graph.getByRole("alert")).toBeVisible();
+  expect(offsets).toEqual([0, 100]);
+  empty = false;
+  await graph.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText(target.label);
+  await expect(graph.locator(`.react-flow__node[data-id="${target.id}"]`)).toBeInViewport();
+  expect(offsets).toEqual([0, 100, 100, 200]);
+});
+
+
+for (const state of ["empty", "error"] as const) {
+  test(`旧索引の本文の空・取得失敗を原文なしと断定しない (${state})`, {tag:"@responsive"}, async ({page}) => {
+    const body=treeNode(ID("body"),"本文",null,"doc",{type:"body",virtual:true});
+    await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
+    await mockTree(page,{"root:set-doc":[body]});
+    await page.route("**/graph/documents/doc-doc/body-chunks?**",route=>state==="empty"
+      ? route.fulfill({json:ok({items:[],total:0,offset:0})})
+      : route.fulfill({status:404,json:{data:null,error_messages:["対象が見つかりません。"],warning_messages:[]}}));
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page,"文書構造グラフを表示").click();
+    const graph=page.locator("#knowledge-base-graph");
+    await graph.locator('.react-flow__node[data-id="doc"]').click();
+    await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
+    const panel=page.getByTestId("graph-body");
+    if (state==="empty") await expect(panel).toContainText("文書構造索引を再構築してください");
+    else await expect(panel.getByRole("alert")).toContainText("対象が見つかりません");
+    await expect(graph).not.toContainText("この段に本文はありません");
+    await expect(panel.getByRole("button",{name:"原文を表示",exact:true})).toHaveCount(0);
+  });
+}
+
+
+test("本文の件数が減って末頁が空になったら有効なページへ戻る", {tag:"@responsive"}, async ({page}) => {
+  const body=treeNode(ID("body"),"本文",null,"doc",{type:"body"});
+  const all=Array.from({length:26},(_,index)=>({chunk_id:`doc-doc:set-doc:${index}`,chunk_index:index,page_number:null}));
+  const offsets:number[]=[];
+  let changed=false;
+  await mockKb(page,{status:"ok",documents:[structureDocument("doc","synthetic.txt")],edges:[]});
+  await mockTree(page,{"root:set-doc":[body]});
+  await page.route("**/graph/documents/doc-doc/body-chunks?**",route=>{
+    const offset=Number(new URL(route.request().url()).searchParams.get("offset"));
+    offsets.push(offset);
+    if (offset>0) changed=true;
+    const rows=changed ? all.slice(0,5) : all;
+    return route.fulfill({json:ok({items:rows.slice(offset,offset+25),total:rows.length,offset})});
+  });
+  await page.goto("/knowledge-bases/kb-1");
+  await disclosureSummary(page,"文書構造グラフを表示").click();
+  const graph=page.locator("#knowledge-base-graph");
+  await graph.locator('.react-flow__node[data-id="doc"]').click();
+  await graph.locator(`.react-flow__node[data-id="${body.id}"]`).click();
+  const panel=page.getByTestId("graph-body");
+  await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+  await panel.getByRole("button",{name:"次へ",exact:true}).click();
+  await expect(panel.getByText("本文 1",{exact:true})).toBeVisible();
+  await expect(panel.getByText("本文 6",{exact:true})).toHaveCount(0);
+  await expect.poll(()=>offsets).toEqual([0,25,0]);
+});
+
+for (const theme of ["light", "dark"] as const) {
+  test(`保存された共通の章と中間階層を残して実節を開く ${theme}`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.addInitScript((value) => localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: value }, version: 0 })), theme);
+    // 正式StructureGraphStore.children/locateを修前後同じ合成保存行に実行した応答。
+    const fixture = process.env.STRUCTURE_LEVEL_FIXTURE === "before" ? structureLevelsReader.before : structureLevelsReader.after;
+    await mockKb(page, { status: "ok", documents: [structureDocument("doc", "合成文書.pdf")], edges: [] });
+    await page.route("**/api/knowledge-bases/kb-1", (route) => route.fulfill({ json: ok({ ...kbDetail, name: "合成ナレッジベース", description: "構造階層の合成データ" }) }));
+    await mockTree(page, fixture.trees);
+    await page.route(/\/graph\/documents\/[^/]+\/locate/, (route) => route.fulfill({ json: ok(fixture.locate) }));
+    await page.goto("/knowledge-bases/kb-1");
+    await disclosureSummary(page, "文書構造グラフを表示").click();
+    const graph = page.locator("#knowledge-base-graph");
+    const node = (id: string) => graph.locator(`.react-flow__node[data-id="${id}"]`);
+    await node("doc").focus(); await page.keyboard.press("Enter");
+    if (process.env.STRUCTURE_LEVEL_FIXTURE === "before") await page.screenshot({ path: testInfo.outputPath(`structure-recorded-levels-before-${theme}.png`), fullPage: true });
+    await expect(node(fixture.rootID)).toBeVisible();
+    await node(fixture.rootID).focus(); await page.keyboard.press("Enter");
+    await expect(node(fixture.middleID)).toBeVisible();
+    await expect(graph.getByText("この段に本文はありません。下の段を開いてください。", { exact: true })).toBeVisible();
+    await node(fixture.middleID).focus(); await page.keyboard.press("Enter");
+    await expect(node(fixture.leafID)).toBeVisible();
+    await node(fixture.leafID).focus(); await page.keyboard.press("Enter");
+    await expect(graph.getByRole("region", { name: "選択したノード" })).toContainText("第1章 > 接続 > 形式1");
+    await expect(page.getByTestId("graph-references")).toBeVisible();
+    await expect(graph.locator(`.react-flow__edge[data-id="contains:${fixture.middleID}"]`)).toHaveCount(1);
+    await expect(graph.locator(`.react-flow__edge[data-id="contains:${fixture.leafID}"]`)).toHaveCount(1);
+    await graph.getByRole("button", { name: "全体表示", exact: true }).click();
+    await graph.scrollIntoViewIfNeeded();
+    await expect(node(fixture.rootID)).toBeInViewport();
+    await expect(node(fixture.middleID)).toBeInViewport();
+    await expect(node(fixture.leafID)).toBeInViewport();
+    await expectNoPageOverflow(page);
+    await page.screenshot({ path: testInfo.outputPath(`structure-recorded-levels-${theme}.png`), fullPage: true });
+  });
+}

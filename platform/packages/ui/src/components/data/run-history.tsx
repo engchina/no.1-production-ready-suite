@@ -50,10 +50,10 @@ export function formatRunDateTime(iso: string | null | undefined, options: { sec
   return `${day} ${time}${options.timeZone ? ` (${displayTimeZone()})` : ""}`;
 }
 
-/** token の数の表記（「1,234 token」）。 */
+/** トークン数の表記（「1,234 トークン」）。 */
 export function formatRunTokens(tokens: number | null | undefined, notRecorded = "—"): string {
   if (tokens == null || !Number.isFinite(tokens)) return notRecorded;
-  return `${formatPaginationNumber(tokens)} token`;
+  return `${formatPaginationNumber(tokens)} トークン`;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,9 +95,9 @@ export interface RunUsageLabels {
 export const DEFAULT_RUN_USAGE_LABELS: RunUsageLabels = {
   unmeasured: "未計測",
   partial: "一部計測",
-  modelCalls: ({ requests, input, output }) => `${requests} 回（入力 ${input} / 出力 ${output} token）`,
+  modelCalls: ({ requests, input, output }) => `${requests} 回（入力 ${input} / 出力 ${output} トークン）`,
   modelCallsPartial: ({ requests, measured, input, output }) =>
-    `${requests} 回（うち ${measured} 回を計測。入力 ${input} / 出力 ${output} token）`,
+    `${requests} 回（うち ${measured} 回を計測。入力 ${input} / 出力 ${output} トークン）`,
 };
 
 /** 詳細の概要の「モデル」「token」「モデルの呼び出し」と、未計測の呼び出しの出どころ。 */

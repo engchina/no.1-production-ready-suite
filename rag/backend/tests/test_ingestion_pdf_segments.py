@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
 from typing import Any, cast
 
@@ -21,7 +22,12 @@ from app.rag.pdf_segment_merge import (
     merge_segment_extractions,
     pdf_outline_entries,
 )
-from app.schemas.document import FileStatus, IngestionJobProgress, IngestionSegment
+from app.schemas.document import (
+    DocumentPreprocessArtifact,
+    FileStatus,
+    IngestionJobProgress,
+    IngestionSegment,
+)
 from app.schemas.extraction import (
     DocumentElement,
     ExtractionPage,
@@ -34,6 +40,8 @@ from tests.test_ingestion_strategy import (
     FakeEmbeddingClient,
     FakeObjectStorage,
     FakeOracle,
+    _formal_extraction_recipe,
+    _formal_extraction_recipe_id,
     _pdf_source_profile,
 )
 
@@ -196,8 +204,25 @@ def _pipeline(
     return IngestionPipeline(
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
+        recipe_id=_formal_extraction_recipe(oracle, DOCUMENT_ID),
+        recipe_revision=1,
         object_storage=cast(Any, storage),
         settings=_settings(**settings),
+    )
+
+
+def _prepared_pdf_artifact(pdf: bytes) -> DocumentPreprocessArtifact:
+    """分段/Visionの検査は同じPDF bytesの準備完了後から開始する。保存契約は別testで検査する。"""
+    digest = hashlib.sha256(pdf).hexdigest()
+    return DocumentPreprocessArtifact(
+        derivation_id="synthetic-prepared-pdf",
+        file_name="layout.pdf",
+        profile="passthrough",
+        converted=False,
+        source_content_type="application/pdf",
+        source_sha256=digest,
+        content_type="application/pdf",
+        sha256=digest,
     )
 
 
@@ -208,6 +233,7 @@ async def _ingest(pipeline: IngestionPipeline, pdf: bytes) -> object:
         "本文を抽出してください。",
         content_type="application/pdf",
         source_profile=_pdf_source_profile(file_size_bytes=len(pdf)),
+        prepared_artifact=_prepared_pdf_artifact(pdf),
     )
 
 
@@ -226,7 +252,8 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> _Runner:
 
 
 def _segment_ids() -> list[str]:
-    return [f"{DOCUMENT_ID}:p1-10", f"{DOCUMENT_ID}:p11-20", f"{DOCUMENT_ID}:p21-23"]
+    scope = f"{DOCUMENT_ID}:{_formal_extraction_recipe_id(DOCUMENT_ID)[:12]}"
+    return [f"{scope}:p1-10", f"{scope}:p11-20", f"{scope}:p21-23"]
 
 
 async def test_ingest_parses_pdf_segment_by_segment(runner: _Runner) -> None:
@@ -325,6 +352,7 @@ async def test_stale_segments_from_interrupted_job_restart_from_queued(runner: _
         segment_id: IngestionSegment(
             segment_id=segment_id,
             document_id=DOCUMENT_ID,
+            recipe_id=_formal_extraction_recipe_id(DOCUMENT_ID),
             status=status,
             parser_backend="docling",
             parser_profile="docling",

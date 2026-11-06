@@ -3,18 +3,22 @@ import { appPath } from "@/lib/base-path";
 
 /** Docling の要素の Vision 図説明の表示用情報。該当しなければ null。 */
 export type ElementVision = {
-  status: string;
+  status: string | null;
   retrievalText: string;
   excluded: boolean;
 };
 
 export function elementVision(element: DocumentElement): ElementVision | null {
   const metadata = element.metadata ?? {};
-  const status = typeof metadata.vision_status === "string" ? metadata.vision_status : "";
+  const status = typeof metadata.vision_status === "string" && metadata.vision_status.trim()
+    ? metadata.vision_status
+    : null;
   const retrievalText =
     typeof metadata.vision_retrieval_text === "string" ? metadata.vision_retrieval_text : "";
-  const excluded = metadata.rag_excluded === true || metadata.visual_role === "decorative";
-  if (!status && !retrievalText && !excluded) return null;
+  const excluded = metadata.rag_excluded === true
+    || metadata.visual_role === "decorative" || metadata.visual_role === "inline_icon";
+  const readingTarget = element.kind === "figure" && !excluded;
+  if (!status && !retrievalText && !excluded && !readingTarget) return null;
   return { status, retrievalText, excluded };
 }
 
@@ -96,7 +100,7 @@ export function layoutVisionDetails(
 }
 
 /** 図・表要素の切り出し画像 URL(crop API)。bbox / ページ寸法が無ければ null。 */
-export function elementCropUrl(documentId: string, element: DocumentElement): string | null {
+export function elementCropUrl(documentId: string, recipeId: string, revision: string, element: DocumentElement): string | null {
   const bbox = element.bbox;
   const metadata = element.metadata ?? {};
   const width = metadata.page_width;
@@ -113,6 +117,7 @@ export function elementCropUrl(documentId: string, element: DocumentElement): st
   const [x0, y0, x1, y1] = bbox;
   if (!(x1 > x0 && y1 > y0)) return null;
   const search = new URLSearchParams({
+    revision,
     page: String(element.page_number),
     x0: String(Math.max(0, x0)),
     y0: String(Math.max(0, y0)),
@@ -122,5 +127,5 @@ export function elementCropUrl(documentId: string, element: DocumentElement): st
     page_height: String(height),
   });
   // `<img src>` に入るので配信の base を付ける（#1316）。
-  return appPath(`/api/documents/${encodeURIComponent(documentId)}/crop?${search.toString()}`);
+  return appPath(`/api/documents/${encodeURIComponent(documentId)}/recipes/${encodeURIComponent(recipeId)}/crop?${search.toString()}`);
 }

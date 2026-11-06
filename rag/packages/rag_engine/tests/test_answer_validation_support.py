@@ -8,6 +8,8 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from rag_engine.evaluation.answer_validation import (
     QUESTION_ID,
     SUPPORT_QUOTE_UNMATCHED,
@@ -15,8 +17,11 @@ from rag_engine.evaluation.answer_validation import (
     SUPPORT_VALUE_UNBOUND,
     VALIDATION_SYSTEM_PROMPT,
     ClaimAuditOutput,
+    _bind_validation,
+    _enforce_support,
     validate_answer_claims,
 )
+from rag_engine.evaluation.final_validation_units import final_unit_schema, prepare_unit_request
 from rag_engine.generation.answer_policy import RELATION_SUPPORT_POLICY
 
 TABLE = "<table><tr><th>区分</th><th>選択肢の値</th></tr><tr><td>区分Ⅰ</td><td>01</td></tr><tr><td>区分Ⅱ</td><td>02</td></tr></table>"
@@ -29,26 +34,27 @@ PROCESS_B = "処理 B でエラー E10 が出た場合は、訂正画面で設�
 
 
 def _audit(verdicts: list[dict[str, Any]]) -> Callable[..., ClaimAuditOutput]:
-    """段落の順に、監査の判定（status・applicability・evidence_quote と、根拠の id）を返すスタブ。"""
+    """固定fixtureが選んだ出典の、実送達unit IDを返す（意味判定の補修はしない）。"""
 
     def parse(system: str, inputs: str, settings: Any, schema: Any, provider_id: str | None = None) -> ClaimAuditOutput:
         payload = json.loads(inputs)
-        evidence = {item["id"]: item["evidence_id"] for item in payload["evidence_items"] if item["id"] != QUESTION_ID}
+        evidence = {item["id"]: item for item in payload["evidence_items"] if item["id"] != QUESTION_ID}
         claims = []
         for passage, verdict in zip(payload["answer_passages"], verdicts, strict=True):
+            selected = verdict.get("unit_ids", [unit["unit_id"] for unit in evidence[verdict["chunk"]]["units"]])
+            if verdict.get("repeat_first_unit"):
+                selected = [selected[0], selected[0]]
             claims.append(
                 {
                     "answer_quote": "段落",
                     "answer_passage_id": passage["id"],
-                    "evidence_id": evidence[verdict["chunk"]],
-                    "evidence_quote": verdict.get("quote", ""),
+                    "evidence_unit_ids": selected,
                     "applicability": verdict.get("applicability", "matched"),
                     "status": verdict.get("status", "supported"),
-                    "source_id": "",
                     "reason": verdict.get("reason", "資料に記載されている"),
                 }
             )
-        return ClaimAuditOutput.model_validate({"claim_checks": claims})
+        return schema.model_validate({"claim_checks": claims})
 
     return parse
 
@@ -100,19 +106,50 @@ def test_values_listed_from_several_rows_stay_supported() -> None:
     assert (wrong["status"], wrong["support_check"]) == ("contradicted", SUPPORT_VALUE_UNBOUND)
 
 
-def test_quote_that_is_not_in_the_evidence_is_not_adopted() -> None:
-    """監査が写した原文が根拠に無ければ（取り違えた対応を原文として書いた）、supported にしない（#2659）。"""
+@pytest.mark.parametrize("invalid_mode", ["unsent", "duplicate"])
+def test_unconfirmed_unit_ids_are_not_adopted(invalid_mode: str) -> None:
+    """未送達・重複unit参照は本文や出典の推定でsupportedへ回復しない。"""
     answer = "区分Ⅱでは選択肢の値 02 を選びます。\n\n区分Ⅱの値は画面の一覧から選びます。"
     result = _validate(
         answer,
         {"c1": TABLE, "c2": "区分の値は画面の一覧から選びます。"},
-        [{"chunk": "c1", "quote": "区分Ⅱ 02"}, {"chunk": "c2", "quote": "区分Ⅱの値は 01 です"}],
+        [{"chunk": "c1"}, {"chunk": "c2", **({"unit_ids": ["U-not-sent"]} if invalid_mode == "unsent" else {"repeat_first_unit": True})}],
     )
     claims = _by_quote(result)
-    assert claims["区分Ⅱでは選択肢の値 02 を選びます。"]["status"] == "supported"  # 表の原文を写した裏付けは残す
-    assert claims["区分Ⅱでは選択肢の値 02 を選びます。"]["support_quote"] == "区分Ⅱ 02"
+    correct = claims["区分Ⅱでは選択肢の値 02 を選びます。"]
+    assert correct["status"] == "supported"
+    assert correct["support_quote"] == ""
     fabricated = claims["区分Ⅱの値は画面の一覧から選びます。"]
-    assert (fabricated["status"], fabricated["reference_check"], fabricated["support_check"]) == (
+    assert (fabricated["status"], fabricated["reference_check"]) == ("citation_error", "audit_id_invalid")
+    assert fabricated["support_quote"] == ""
+    assert result["_selected_evidence"][1] == []
+
+
+def test_legacy_quote_not_in_the_evidence_remains_unadopted() -> None:
+    """旧保存形式のquote照合は新wire適合とは分け、従来の拒否契約を残す。"""
+    answer = "区分Ⅱの値は画面の一覧から選びます。"
+    source = {"id": "c1", "evidence_id": "E1", "text": "区分の値は画面の一覧から選びます。"}
+    catalog = {"E1": source}
+    passages = [{"id": "p1", "text": answer}]
+    output = ClaimAuditOutput.model_validate(
+        {
+            "claim_checks": [
+                {
+                    "answer_quote": answer,
+                    "answer_passage_id": "p1",
+                    "evidence_id": "E1",
+                    "evidence_quote": "区分Ⅱの値は 01 です",
+                    "source_id": "",
+                    "applicability": "matched",
+                    "status": "supported",
+                    "reason": "合成の旧監査",
+                }
+            ]
+        }
+    )
+    bound = _bind_validation(output, catalog, passages)
+    claims = _enforce_support(bound.claim_checks, passages, catalog, {"c1": source["text"]}, [source["text"]])
+    assert (claims[0].status, claims[0].reference_check, claims[0].support_check) == (
         "citation_error",
         "quote_unmatched",
         SUPPORT_QUOTE_UNMATCHED,
@@ -196,14 +233,28 @@ def test_negative_verdicts_and_reused_claims_are_kept() -> None:
 
 def test_audit_contract_asks_for_the_evidence_and_the_target_before_the_verdict() -> None:
     """判定（status）の前に、根拠の記載と対象の一致を書かせる（strict schema の生成順）。"""
-    claim = ClaimAuditOutput.model_json_schema()["$defs"]["ValidationClaimCheck"]
+    request = prepare_unit_request({"evidence_items": [{"id": "c1", "evidence_id": "E1", "text": "合成原文"}]})
+    from rag_engine.evaluation.answer_validation import ValidationClaimCheck
+
+    wire = final_unit_schema(ValidationClaimCheck, request)
+    claim = wire.model_json_schema()["$defs"]["FinalValidationUnitClaim"]
     order = list(claim["properties"])
-    assert order.index("evidence_quote") < order.index("claim_target") < order.index("evidence_target")
+    assert order.index("evidence_unit_ids") < order.index("claim_target") < order.index("evidence_target")
     assert order.index("evidence_target") < order.index("applicability") < order.index("status")
-    assert claim["properties"]["applicability"]["enum"] == ["matched", "not_applicable", "unknown"]  # null はモデルに渡さない
-    assert not {"audit_status", "reference_check", "classification_check", "support_quote", "support_check"} & set(order)
+    assert claim["properties"]["applicability"]["enum"] == ["matched", "not_applicable", "unknown"]
+    assert not {
+        "evidence_id",
+        "evidence_quote",
+        "source_id",
+        "audit_status",
+        "reference_check",
+        "classification_check",
+        "support_quote",
+        "support_check",
+        "unit_selection",
+    } & set(order)
     assert RELATION_SUPPORT_POLICY in VALIDATION_SYSTEM_PROMPT
-    assert "evidence_quote は空文字でよい" not in VALIDATION_SYSTEM_PROMPT
+    assert "evidence_unit_ids" in VALIDATION_SYSTEM_PROMPT
 
 
 def test_value_from_another_row_record_is_not_supported() -> None:

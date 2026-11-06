@@ -106,6 +106,7 @@ from app.rag.ingestion import (
     document_artifact_prefixes,
     record_boundary_failure_message,
 )
+from app.rag.ingestion_attempt_receipts import AttemptReceipt, attempt_receipt_scope
 from app.rag.ingestion_language import artifact_language_compatible, ingestion_release_scope
 from app.rag.ingestion_progress import track_ingestion_progress
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
@@ -146,6 +147,7 @@ from app.rag.section_rules import (
     load_section_rules,
 )
 from app.rag.source_profile import build_source_profile, rejected_upload_format_message
+from app.rag.staging_recipes import StagingRuntimeOptions, apply_staging_runtime
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_extraction_recipe_id,
@@ -182,6 +184,7 @@ from app.schemas.document import (
     DocumentPreprocessArtifact,
     DocumentPreviewPage,
     DocumentPreviewPages,
+    DocumentPreviewSource,
     DocumentProcessingConfig,
     DocumentProcessingConfigInput,
     DocumentRecipeCreateRequest,
@@ -1495,6 +1498,7 @@ async def _enqueue_ingestion_job_for_recipe(
     phase: IngestionJobPhase,
     expected_language_pack_release_id: str | None = None,
     expected_config_revision: int | None = None,
+    staging_runtime: StagingRuntimeOptions | None = None,
 ) -> IngestionJob:
     """snapshot を作り、Oracle 側の行ロック検証後に recipe job を投入する。"""
     oracle = OracleClient()
@@ -1509,6 +1513,10 @@ async def _enqueue_ingestion_job_for_recipe(
         raise ValueError("レシピの改訂が変わりました。対象を確認し直してください。")
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective_settings, _ = _merge_document_processing_config(config)
+    if staging_runtime is not None:
+        effective_settings = apply_staging_runtime(
+            effective_settings, {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
+        )
     source_profile = _source_profile_for_detail(detail)
     # レシピの解析エンジン(既定は Docling)で扱えない形式は、job を作る前に止める(#286)。
     await _raise_if_parser_source_blocked(effective_settings, source_profile, phase)
@@ -1525,6 +1533,11 @@ async def _enqueue_ingestion_job_for_recipe(
             "processing_config": config.model_dump(mode="json", exclude_none=True),
             "rag_preprocess_profile": effective_settings.rag_preprocess_profile,
             "rag_parser_adapter_backend": effective_settings.rag_parser_adapter_backend,
+            **(
+                {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
+                if staging_runtime is not None
+                else {}
+            ),
         },
     )
     _dispatch_ingestion_job(job.id)
@@ -2094,6 +2107,34 @@ async def _recipe_detail_and_artifact(
         else None
     )
     return detail, artifact
+
+
+@router.get(
+    "/{document_id}/recipes/{recipe_id}/preview-source",
+    response_model=ApiResponse[DocumentPreviewSource],
+)
+async def document_recipe_preview_source(
+    document_id: str,
+    recipe_id: str,
+    chunk_set_id: Annotated[str, Query(min_length=1, max_length=64)],
+) -> ApiResponse[DocumentPreviewSource]:
+    """引用版と配信ファイルの表示属性を同じ系譜から取得する。"""
+    if not chunk_set_id.strip():
+        raise HTTPException(status_code=422, detail="資料の版を指定してください。")
+    _, artifact = await _recipe_detail_and_artifact(document_id, recipe_id, chunk_set_id)
+    if artifact is None:
+        raise DocumentFileMissingError("この版が解析したファイルの記録がありません。")
+    content_type = (artifact.content_type or "").split(";", 1)[0].strip().lower()
+    is_pdf = (
+        content_type == "application/pdf"
+        if content_type
+        else artifact.file_name.lower().endswith(".pdf")
+    )
+    return ApiResponse(
+        data=DocumentPreviewSource(
+            file_name=artifact.file_name, content_type=artifact.content_type, is_pdf=is_pdf
+        )
+    )
 
 
 @router.get(
@@ -2850,12 +2891,18 @@ async def _materialize_experiment_candidate(
     if isinstance(raw_config, Mapping):
         candidate_config = DocumentProcessingConfig.model_validate(raw_config)
     else:
-        _base_settings, candidate_config = await _resolve_ingestion_settings(
-            oracle, job.document_id, recipe_id
-        )
+        try:
+            _base_settings, candidate_config = await _resolve_ingestion_settings(
+                oracle, job.document_id, recipe_id
+            )
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            raise IngestionUserError(str(exc.detail)) from exc
     candidate_settings, effective_candidate_config = _merge_document_processing_config(
         candidate_config
     )
+    candidate_settings = apply_staging_runtime(candidate_settings, job.settings_overrides or {})
     base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
     candidate_chunk_set_id = hashlib.sha256(
         # 試行も材料にする。切替の後の再投入が active の chunk_set を置き換えないように（#4115）。
@@ -3537,29 +3584,20 @@ def _snapshot_used_removed_chunking_strategy(row: Mapping[str, object] | None) -
 async def list_document_ingestion_segments(
     document_id: str,
 ) -> ApiResponse[list[IngestionSegment]]:
-    """文書 preview workspace 用に取込 segment/checkpoint 状態を返す。"""
+    """文書 preview workspace 用に、保存済みの取込 segment/checkpoint の状態を返す。
+
+    保存済みの segment が無ければ空の一覧を返し、文書の行の抽出から組み立てない。再取込で
+    checkpoint を消した後も、文書の行には前回の job の抽出が残るため（#4185）。
+    """
     oracle = OracleClient()
-    # 取込中にポーリングされるため、保存済みの segment があれば JSON 列を読まない(#341)。
+    # 取込中にポーリングされるため、JSON 列を読まない要約で存在を確かめる(#341)。
     summary = await oracle.get_document_summary(document_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    try:
-        persisted_segments = await oracle.list_ingestion_segments(document_id)
-    except Exception:
-        persisted_segments = []
-    if persisted_segments:
-        return ApiResponse(
-            data=[
-                _segment_with_progress_defaults(segment, summary) for segment in persisted_segments
-            ]
-        )
-    # 保存済みの segment が無い旧データだけ、抽出結果のページ範囲から segment を組み立てる。
-    detail = await oracle.get_document(document_id)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    effective_settings, _owning = await _resolve_ingestion_settings(oracle, document_id)
-    jobs = await oracle.list_document_ingestion_jobs(document_id)
-    return ApiResponse(data=_document_ingestion_segments(detail, jobs, effective_settings))
+    persisted_segments = await oracle.list_ingestion_segments(document_id)
+    return ApiResponse(
+        data=[_segment_with_progress_defaults(segment, summary) for segment in persisted_segments]
+    )
 
 
 def _segment_with_progress_defaults(
@@ -4460,20 +4498,18 @@ async def _resolve_ingestion_settings(
 ) -> tuple[Settings, DocumentProcessingConfig]:
     """レシピ > global 既定で有効な処理設定を解決する。KB は参照しない。
 
-    レシピは ``recipe_id``、無ければ文書の既定レシピ。処理設定はレシピに保存するので、文書行の
-    設定はレシピを読めないときだけ使う(#697)。
+    レシピは ``recipe_id``、無ければ文書の既定レシピ。参照した正式レシピが無ければ、
+    旧文書列の設定で補わず停止する。
     """
-    config: DocumentProcessingConfig | None = None
-    ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
-    get_recipe = getattr(oracle, "get_document_recipe", None)
-    if recipe_id is None and callable(ensure_recipe):
-        recipe_id = str((await ensure_recipe(document_id))["recipe_id"])
-    if recipe_id is not None and callable(get_recipe):
-        row = await get_recipe(document_id, recipe_id)
-        if row is not None:
-            config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
-    if config is None:
-        config = await oracle.get_document_processing_config(document_id)
+    if recipe_id is None:
+        recipe_id = str((await oracle.ensure_default_document_recipe(document_id))["recipe_id"])
+    row = await oracle.get_document_recipe(document_id, recipe_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
+        )
+    config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective, _resolved = _merge_document_processing_config(config)
     return effective, config
 
@@ -4590,13 +4626,15 @@ async def _enqueue_ingestion_job_for_document(
             skip_reason="already_indexed",
             phase=phase,
         )
-    if phase == IngestionJobPhase.EXTRACT and (
-        detail.preprocess_artifact is None or not detail.preprocess_artifact.object_storage_path
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
-        )
+    if phase == IngestionJobPhase.EXTRACT:
+        recipe = await oracle.ensure_default_document_recipe(document_id)
+        raw_artifact = recipe.get("preprocess_artifact")
+        artifact = DocumentPreprocessArtifact.model_validate(raw_artifact) if raw_artifact else None
+        if artifact is None or not artifact.object_storage_path:
+            raise HTTPException(
+                status_code=409,
+                detail="処理後ファイルが見つかりません。ファイル準備から再処理してください。",
+            )
     if await _has_served_output(oracle, document_id):
         # 検索に出している版は切替まで残す。解析はやり直すので区間の checkpoint だけ消す（#4115）。
         recipe = await oracle.ensure_default_document_recipe(document_id)
@@ -4874,15 +4912,11 @@ async def _reset_document_outputs_for_extract(
     clear_preprocess_artifact: bool = False,
 ) -> None:
     """EXTRACT 再投入前に旧抽出・checkpoint・派生結果を初期化する。"""
-    reset_outputs = getattr(oracle, "reset_document_ingestion_outputs", None)
-    if callable(reset_outputs):
-        await reset_outputs(
-            document_id,
-            status=FileStatus.UPLOADED,
-            clear_preprocess_artifact=clear_preprocess_artifact,
-        )
-        return
-    await oracle.update_document_status(document_id, FileStatus.UPLOADED)
+    await oracle.reset_document_ingestion_outputs(
+        document_id,
+        status=FileStatus.UPLOADED,
+        clear_preprocess_artifact=clear_preprocess_artifact,
+    )
 
 
 def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
@@ -4898,178 +4932,6 @@ def _source_profile_for_detail(detail: DocumentDetail) -> SourceProfile:
         duplicate_of_document_id=detail.duplicate_of_document_id,
         data=None,
     )
-
-
-def _document_ingestion_segments(
-    detail: DocumentDetail,
-    jobs: list[IngestionJob],
-    effective_settings: Settings | None = None,
-) -> list[IngestionSegment]:
-    """保存済み extraction/job から segment view を推定する。"""
-    source_profile = _source_profile_for_detail(detail)
-    page_start, page_end = _document_page_range(detail.extraction)
-    latest_job = max(jobs, key=lambda job: job.queued_at, default=None)
-    attempt_count = latest_job.attempt_count if latest_job is not None else 0
-    status = _segment_status_from_detail(detail, latest_job)
-    error_message = detail.error_message or (latest_job.error_message if latest_job else None)
-    parser_backend = _parser_backend_from_extraction(detail.extraction, source_profile)
-    parser_profile = _parser_profile_from_extraction(detail.extraction, source_profile)
-    progress_unit = "page" if page_start is not None and page_end is not None else "source"
-    planned_parser = _planned_parser_backend_for_unmaterialized_extract(
-        detail,
-        latest_job,
-        effective_settings,
-    )
-    if planned_parser is not None:
-        parser_backend = planned_parser
-        parser_profile = planned_parser
-    return [
-        IngestionSegment(
-            segment_id=f"{detail.id}:source",
-            document_id=detail.id,
-            status=status,
-            parser_backend=parser_backend,
-            parser_profile=parser_profile,
-            page_start=page_start,
-            page_end=page_end,
-            progress_unit=progress_unit,
-            progress_start=page_start,
-            progress_end=page_end,
-            attempt_count=attempt_count,
-            artifact_path=(
-                _extraction_artifact_path(detail.extraction) or detail.object_storage_path
-            ),
-            error_code="ingestion_error" if error_message else None,
-            error_message=error_message,
-        )
-    ]
-
-
-def _planned_parser_backend_for_unmaterialized_extract(
-    detail: DocumentDetail,
-    latest_job: IngestionJob | None,
-    effective_settings: Settings | None,
-) -> str | None:
-    """未実体化の抽出では upload 時判定ではなく現在の明示 parser を表示に使う。"""
-    if effective_settings is None or _extraction_has_parser_context(detail.extraction):
-        return None
-    planned = _selected_parser_backend(effective_settings)
-    if planned is None:
-        return None
-    if (
-        latest_job is not None
-        and latest_job.phase in {IngestionJobPhase.PREPROCESS, IngestionJobPhase.EXTRACT}
-        and latest_job.status
-        in {
-            IngestionJobStatus.QUEUED,
-            IngestionJobStatus.RUNNING,
-            IngestionJobStatus.FAILED,
-        }
-    ):
-        return planned
-    if detail.status in {
-        FileStatus.UPLOADED,
-        FileStatus.PREPROCESSING,
-        FileStatus.INGESTING,
-        FileStatus.ERROR,
-    }:
-        return planned
-    return None
-
-
-def _selected_parser_backend(settings: Settings) -> str | None:
-    """Settings の明示 parser backend を表示用に返す。local は未選択として扱う。"""
-    selected = str(getattr(settings, "rag_parser_adapter_backend", "local")).strip()
-    if not selected or selected == "local":
-        return None
-    return selected[:80]
-
-
-def _extraction_has_parser_context(extraction: Mapping[str, object]) -> bool:
-    """保存済み extraction に実 parser 情報があるか判定する。"""
-    for container_name in ("quality_report", "parser_artifacts"):
-        container = extraction.get(container_name)
-        if not isinstance(container, Mapping):
-            continue
-        for key in ("parser_backend", "parser_profile", "source_parser", "external_adapter"):
-            value = container.get(key)
-            if isinstance(value, str) and value.strip():
-                return True
-    return False
-
-
-def _document_page_range(extraction: Mapping[str, object]) -> tuple[int | None, int | None]:
-    """extraction payload からページ範囲を推定する。"""
-    pages: set[int] = set()
-    raw_pages = extraction.get("pages")
-    if isinstance(raw_pages, list):
-        for page in raw_pages:
-            if isinstance(page, Mapping):
-                page_number = page.get("page_number")
-                if isinstance(page_number, int) and page_number >= 1:
-                    pages.add(page_number)
-    raw_elements = extraction.get("elements")
-    if isinstance(raw_elements, list):
-        for element in raw_elements:
-            if isinstance(element, Mapping):
-                page_number = element.get("page_number")
-                if isinstance(page_number, int) and page_number >= 1:
-                    pages.add(page_number)
-    raw_tables = extraction.get("tables")
-    if isinstance(raw_tables, list):
-        pages.update(_page_numbers_from_mappings(raw_tables))
-    raw_assets = extraction.get("assets")
-    if isinstance(raw_assets, list):
-        pages.update(_page_numbers_from_mappings(raw_assets))
-    if not pages:
-        return None, None
-    return min(pages), max(pages)
-
-
-def _page_numbers_from_mappings(items: list[object]) -> set[int]:
-    """tables/assets の first-class metadata からページ番号を集める。"""
-    pages: set[int] = set()
-    for item in items:
-        if not isinstance(item, Mapping):
-            continue
-        page_number = item.get("page_number")
-        if isinstance(page_number, int) and not isinstance(page_number, bool) and page_number >= 1:
-            pages.add(page_number)
-    return pages
-
-
-def _parser_backend_from_extraction(
-    extraction: Mapping[str, object],
-    source_profile: SourceProfile,
-) -> str:
-    """extraction quality/parser artifacts から parser backend を読む。"""
-    for container_name in ("quality_report", "parser_artifacts"):
-        container = extraction.get(container_name)
-        if isinstance(container, Mapping):
-            value = container.get("parser_backend")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return source_profile.parser_backend
-
-
-def _parser_profile_from_extraction(
-    extraction: Mapping[str, object],
-    source_profile: SourceProfile,
-) -> str:
-    """extraction quality/parser artifacts から parser profile を読む。"""
-    for container_name in ("quality_report", "parser_artifacts"):
-        container = extraction.get(container_name)
-        if isinstance(container, Mapping):
-            value = container.get("parser_profile")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-            source_parser = container.get("source_parser")
-            if isinstance(source_parser, str) and source_parser.strip():
-                return source_parser.strip()
-            external_adapter = container.get("external_adapter")
-            if isinstance(external_adapter, str) and external_adapter.strip():
-                return external_adapter.strip()
-    return source_profile.parser_profile
 
 
 def _extraction_artifact_path(extraction: Mapping[str, object]) -> str | None:
@@ -5520,24 +5382,6 @@ async def _document_artifact_paths(
     return deduped
 
 
-def _segment_status_from_detail(
-    detail: DocumentDetail,
-    latest_job: IngestionJob | None,
-) -> str:
-    """document/job status を segment status に寄せる。"""
-    if latest_job is not None and latest_job.status in {
-        IngestionJobStatus.QUEUED,
-        IngestionJobStatus.RUNNING,
-        IngestionJobStatus.CANCELLED,
-    }:
-        return latest_job.status.value
-    if detail.status == FileStatus.ERROR:
-        return "FAILED"
-    if detail.status == FileStatus.INDEXED:
-        return "SUCCEEDED"
-    return detail.status.value
-
-
 async def _run_ingestion_job(
     job_id: str,
     *,
@@ -5610,26 +5454,46 @@ async def _run_pinned_ingestion_job(
         # 抽出の段（解析・Vision）の進捗を job の行へ書く（#1999）。lease を失った実行は書かない。
         await oracle.update_ingestion_job_progress(job_id, progress, lease_owner=lease_owner)
 
+    async def write_attempt_receipt(payload: dict[str, Any]) -> None:
+        if job.recipe_id is None or job.recipe_revision is None:
+            raise RuntimeError("受理記録をjobの処理レシピへ束縛できません。")
+        receipt = AttemptReceipt.model_validate(
+            {
+                **payload,
+                "version": 1,
+                "job_id": job.id,
+                "attempt_count": job.attempt_count,
+                "document_id": job.document_id,
+                "recipe_id": job.recipe_id,
+                "recipe_revision": job.recipe_revision,
+            }
+        )
+        if not await oracle.save_ingestion_attempt_receipt(
+            job.id, receipt, attempt_count=job.attempt_count, lease_owner=lease_owner
+        ):
+            raise RuntimeError("取込jobの試行又はleaseが変わったため受理記録を保存できません。")
+
     # レシピ経路で「現在ジョブ完了後に自動投入すべき次フェーズ」を受け取る。投入は現在ジョブが
     # SUCCEEDED になった後(レシピ行ロックのガードを通過できる状態)に行う。
     next_recipe_phase: IngestionJobPhase | None = None
     # レシピ経路で、job を SUCCEEDED にできた後に記録する成功の監査・metric(#514)。
     recipe_success_outcome: IngestionSuccessOutcome | None = None
     try:
-        async with track_ingestion_progress(write_progress):
-            if job.recipe_id is not None:
-                await _raise_if_job_cancelled(is_cancelled)
-                await oracle.update_document_recipe_status(
-                    recipe_id=job.recipe_id,
-                    status=_PHASE_TO_RUNNING_STATUS[job.phase],
+        with attempt_receipt_scope(write_attempt_receipt):
+            async with track_ingestion_progress(write_progress):
+                if job.recipe_id is not None:
+                    await _raise_if_job_cancelled(is_cancelled)
+                    await oracle.update_document_recipe_status(
+                        recipe_id=job.recipe_id,
+                        status=_PHASE_TO_RUNNING_STATUS[job.phase],
+                    )
+                # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
+                # 止める（#486）。
+                recipe_result = await _materialize_experiment_candidate(
+                    oracle, job, cancel_checker=is_cancelled, lease_owner=lease_owner
                 )
-            # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
-            # 止める（#486）。
-            recipe_result = await _materialize_experiment_candidate(
-                oracle, job, cancel_checker=is_cancelled, lease_owner=lease_owner
-            )
-            next_recipe_phase = recipe_result.next_phase
-            recipe_success_outcome = recipe_result.success_outcome
+                next_recipe_phase = recipe_result.next_phase
+                recipe_success_outcome = recipe_result.success_outcome
     except HTTPException as exc:
         await _fail_ingestion_job(oracle, job, str(exc.detail), lease_owner=lease_owner)
         logger.info(
@@ -5724,8 +5588,13 @@ async def _run_pinned_ingestion_job(
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は
             # 握りつぶして warning に留め、人手の「承認して Chunk 作成」で続行可能にする。
             try:
+                next_options: dict[str, Any] = {}
+                if job.settings_overrides and "staging_runtime" in job.settings_overrides:
+                    next_options["staging_runtime"] = StagingRuntimeOptions.model_validate(
+                        job.settings_overrides["staging_runtime"]
+                    )
                 await _enqueue_ingestion_job_for_recipe(
-                    job.document_id, job.recipe_id, phase=next_recipe_phase
+                    job.document_id, job.recipe_id, phase=next_recipe_phase, **next_options
                 )
             except Exception:
                 logger.warning(
@@ -6072,22 +5941,31 @@ async def _finish_ingestion_job_unless_cancelled(
     return finished
 
 
+def _require_recipe_for_prepared(variant: str) -> None:
+    if variant == "prepared":
+        raise HTTPException(
+            status_code=400,
+            detail="処理後ファイルを取得するには、処理レシピを指定したURLを使用してください。",
+        )
+
+
 @router.get("/{document_id}/content")
 async def document_content(
     document_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
 ) -> Response:
-    """原本またはファイル準備後 artifact を返す（文書プレビュー/ダウンロード用）。"""
+    """文書の原本を返す。処理後ファイルはレシピ指定の入口を使う。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    _require_recipe_for_prepared(variant)
     return await document_content_response(
         detail,
         variant=variant,
         disposition=disposition,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
@@ -6096,13 +5974,12 @@ async def document_preview_pages(
     document_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
 ) -> ApiResponse[DocumentPreviewPages]:
-    """原本 / 処理後ファイルのページ一覧(PDF をページ画像で表示し、bbox の強調を重ねる。#349)。"""
+    """原本のページ一覧を返す。処理後ファイルはレシピ指定の入口を使う。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    return await _document_preview_pages_response(
-        detail, variant=variant, preprocess_artifact=detail.preprocess_artifact
-    )
+    _require_recipe_for_prepared(variant)
+    return await _document_preview_pages_response(detail, variant=variant, preprocess_artifact=None)
 
 
 @router.get("/{document_id}/preview-pages/{page_number}")
@@ -6112,16 +5989,17 @@ async def document_preview_page_image(
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     dpi: Annotated[int, Query(ge=48, le=288)] = 144,
 ) -> Response:
-    """原本 / 処理後ファイルの 1 ページを PNG で返す(ページの /Rotate を反映した向き)。"""
+    """原本の 1 ページを PNG で返す。処理後ファイルはレシピ指定の入口を使う。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    _require_recipe_for_prepared(variant)
     return await _document_preview_page_image_response(
         detail,
         page_number=page_number,
         variant=variant,
         dpi=dpi,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
@@ -6136,8 +6014,9 @@ async def document_recipe_text_window(
         found_detail = await OracleClient().get_document(document_id)
         if found_detail is None:
             raise HTTPException(status_code=404, detail="文書が見つかりません。")
+        _require_recipe_for_prepared(request.variant)
         detail = found_detail
-        artifact = detail.preprocess_artifact
+        artifact = None
     variant, offset, limit, focus = request.variant, request.offset, request.limit, request.focus
 
     payload: dict[str, Any] = {}
@@ -6268,9 +6147,11 @@ async def _document_preview_page_image_response(
     )
 
 
-@router.get("/{document_id}/crop")
+@router.get("/{document_id}/recipes/{recipe_id}/crop")
 async def document_crop(
     document_id: str,
+    recipe_id: str,
+    revision: Annotated[str, Query(min_length=1, max_length=64)],
     page: Annotated[int, Query(ge=1, le=10000)],
     x0: Annotated[float, Query(ge=0)],
     y0: Annotated[float, Query(ge=0)],
@@ -6283,12 +6164,14 @@ async def document_crop(
     """解析に使ったファイルから bbox の領域を PNG で切り出す(解析結果プレビュー用)。
 
     bbox は解析結果のページ画像 px 座標(page_width / page_height 基準)。ファイル準備後の
-    artifact があればそれ(解析対象)を、無ければ原本を開く。画像ファイルは 1 ページとして扱う。
+    指定した抽出版の系譜から読み、現在のレシピのファイルで代用しない。画像は1ページとして扱う。
     """
     if x1 <= x0 or y1 <= y0 or x1 > page_width * 1.001 or y1 > page_height * 1.001:
         raise HTTPException(status_code=422, detail="切り出し範囲が不正です。")
     try:
-        data = await load_parsed_source(OracleClient(), document_id)
+        data = await load_parsed_source(
+            OracleClient(), document_id, recipe_id, extraction_recipe_id=revision
+        )
     except DocumentSourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

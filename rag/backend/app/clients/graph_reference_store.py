@@ -231,6 +231,9 @@ class GraphReferenceStore:
         node = await self.node(kb_id, node_id, reference_id)
         if node is None:
             raise KeyError("対象が見つかりません。")
+        if node["entity_type"] == "body" and direction == "incoming":
+            # 保存参照の宛先は章節または文書全体。無章節本文の部分集合へ付け替えない。
+            return {"items": [], "offset": offset, "has_more": False, "direction": direction}
         path = None if node["entity_type"] == "document" else node["canonical_name"]
         side = "target" if direction == "incoming" else "source"
         where = f"r.{side}_document_id=:node_doc AND r.{side}_chunk_set_id=:node_set"

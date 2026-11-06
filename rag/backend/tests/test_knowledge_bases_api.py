@@ -145,6 +145,9 @@ class FakeKnowledgeBaseOracle:
             )
         )
 
+    async def knowledge_base_is_visible(self, knowledge_base_id: str) -> bool:
+        return knowledge_base_id in self.knowledge_bases
+
     async def get_knowledge_base(self, knowledge_base_id: str) -> KnowledgeBaseDetail | None:
         return self.knowledge_bases.get(knowledge_base_id)
 

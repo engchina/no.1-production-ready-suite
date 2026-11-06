@@ -15,11 +15,12 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.clients.object_storage import ObjectStorageClient
-from app.clients.oracle import OracleClient, close_oracle_pool
+from app.clients.oracle import close_oracle_pool
 from app.config import Settings, get_settings
-from app.rag.ingestion import IngestionPipeline
 from app.rag.pipeline import RagPipeline
 from app.rag.request_context import with_system_access
+from app.rag.staging_recipes import RecipeStagingIngestion as IngestionPipeline
+from app.rag.staging_recipes import StagingRecipeOracle as OracleClient
 from app.readiness import READINESS_INVALID, readiness_checks, readiness_checks_are_ok
 from app.schemas.document import FileStatus
 from app.schemas.search import SearchRequest
@@ -184,7 +185,8 @@ async def run_staging_smoke(
         indexed_status = indexed.status.value
 
         stage = "oracle_count_chunks"
-        chunk_count = await oracle.count_document_chunks(document.id)
+        version = await oracle.read_staging_recipe(document.id)
+        chunk_count = len(version.chunks)
         if chunk_count < 1:
             raise RuntimeError("staging smoke の索引済み chunk が 0 件です。")
 

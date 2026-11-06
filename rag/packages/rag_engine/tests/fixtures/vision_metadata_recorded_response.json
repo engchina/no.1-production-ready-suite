@@ -1,0 +1,47 @@
+{
+  "surrounding_context": "",
+  "correction_notes": "",
+  "main_topic": "試料Aの測定値",
+  "visual_kind": "other",
+  "diagram_title": "",
+  "diagram_nodes": [],
+  "diagram_edges": [],
+  "diagram_summary": "",
+  "chart_title": "",
+  "chart_type": "",
+  "chart_axes": [],
+  "chart_legends": [],
+  "chart_series": [],
+  "chart_summary": "",
+  "table_headers": [],
+  "table_rows": [],
+  "table_summary": "",
+  "form_fields": [],
+  "form_layout": "",
+  "menu_route": "",
+  "visible_screen_names": [],
+  "visible_buttons": [],
+  "visible_fields": [],
+  "visible_values": [
+    "試料Aの測定値=42"
+  ],
+  "codes_and_errors": [],
+  "operation_steps": [],
+  "condition_result_pairs": [],
+  "exception_or_cautions": [],
+  "answerable_questions": [
+    "試料Aの測定値はいくつですか。",
+    "試料Aの測定値は42ですか。"
+  ],
+  "query_rewrites": [
+    "試料Aの測定結果",
+    "サンプルAの測定値",
+    "試料Aは42"
+  ],
+  "search_keywords": [
+    "試料A",
+    "測定値",
+    "42"
+  ],
+  "retrieval_text": "枠内の文は「試料Aの測定値は42です。」と読める。試料Aの測定値は42である。単位、測定条件、測定方法、他の試料の値は記載されていない。"
+}

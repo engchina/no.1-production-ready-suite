@@ -32,6 +32,7 @@ from rag_engine.chunking import (
     DocumentChunk,
     load_latest_or_source_chunk_run,
 )
+from rag_engine.chunking.storage import ChunkRunSourceIdentity
 from rag_engine.config import DEFAULT_TIMEZONE, RRF_K, Settings
 from rag_engine.dependencies import report_degraded
 from rag_engine.knowledge.classification import (
@@ -2762,12 +2763,12 @@ def _chunk_uid(chunk_run_id: str, chunk_id: str) -> str:
     return f"{chunk_run_id}:{chunk_id}"
 
 
-def document_id_for_chunk_run(chunk_run: ChunkingResult) -> str:
+def document_id_for_chunk_run(chunk_run: ChunkingResult | ChunkRunSourceIdentity) -> str:
     """chunk run を保存するときに使う ADB の document_id を返します（削除対象の特定用）。"""
     return _document_id(chunk_run)
 
 
-def _document_id(chunk_run: ChunkingResult) -> str:
+def _document_id(chunk_run: ChunkingResult | ChunkRunSourceIdentity) -> str:
     """PDF hash を優先し、SDK の独立索引では明示文書 ID を安定したキーにする。"""
     if not chunk_run.source_file_sha256 and chunk_run.source_document_id:
         # seed の接頭辞は package の改名(#599)の前の名前のまま。変えると既存の document_id が変わる。

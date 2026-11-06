@@ -58,7 +58,6 @@ def _state(document_id: str, **overrides: Any) -> BulkIngestionDocumentState:
         content_type="text/plain",
         file_size_bytes=10,
         content_sha256="a" * 64,
-        recipe_seed={"document_id": document_id, "status": "UPLOADED"},
     )
     return replace(base, **overrides)
 
@@ -72,7 +71,6 @@ class FakeBulkStore:
         self.jobs: dict[str, list[IngestionJob]] = {}
         self.load_calls: list[int] = []
         self.insert_calls: list[int] = []
-        self.created_recipes: list[str] = []
         self.fail_batches: set[int] = set()
         # 登録の transaction の直前に別の要求が job を作った文書(競合の再現)。
         self.race_active: set[str] = set()
@@ -119,8 +117,6 @@ class FakeBulkStore:
             ):
                 active.add(draft.document_id)
                 continue
-            if not draft.has_default_recipe:
-                self.created_recipes.append(draft.document_id)
             job = IngestionJob(
                 id=uuid4().hex,
                 document_id=draft.document_id,
@@ -278,7 +274,7 @@ async def test_each_document_gets_an_outcome_and_reason() -> None:
         "dup": ("skipped", "duplicate_content"),
         "binary": ("skipped", "unknown_file_type"),
         "blocked": ("rejected", "parser_unsupported"),
-        "no-recipe": ("accepted", None),
+        "no-recipe": ("rejected", "not_found"),
         "unknown": ("rejected", "not_found"),
         "bad id": ("rejected", "invalid_document_id"),
     }
@@ -290,12 +286,11 @@ async def test_each_document_gets_an_outcome_and_reason() -> None:
         result.already_active_count,
         result.skipped_count,
         result.rejected_count,
-    ) == (2, 2, 4, 4)
+    ) == (1, 2, 4, 5)
     blocked = next(item for item in result.items if item.document_id == "blocked")
     assert blocked.message == "解析エンジンで扱えない形式です。"
-    assert store.created_recipes == ["no-recipe"]
     reasons = {(entry.outcome.value, entry.reason): entry.count for entry in result.reasons}
-    assert reasons[("rejected", "not_found")] == 2
+    assert reasons[("rejected", "not_found")] == 3
     assert all(entry.message for entry in result.reasons)
     _assert_persisted_matches(result, store)
 

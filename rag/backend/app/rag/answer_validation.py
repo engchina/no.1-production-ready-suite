@@ -322,11 +322,27 @@ def validation_reuse_context(
 
     段落間の依存を確定できないため、回答全体の変更は再監査する。保存するのは内容の digest だけ。
     """
+    from rag_engine.evaluation.answer_validation import (
+        VALIDATION_RUBRIC_VERSION,
+        ValidationClaimCheck,
+    )
+    from rag_engine.evaluation.final_validation_units import (
+        UNIT_CONTRACT,
+        final_unit_schema,
+        prepare_unit_request,
+    )
+    from rag_engine.generation.grounded import CITATION_UNIT_CONTRACT
+
     model_id = enterprise_ai_default_model_id(settings)
     connection = enterprise_ai_connection_for_model(settings, model_id)
     return _sha256(
         {
-            "policy": "review-contract-v1",
+            "policy": "review-contract-v2",
+            "validation_rubric": VALIDATION_RUBRIC_VERSION,
+            "unit_contract": (UNIT_CONTRACT, CITATION_UNIT_CONTRACT),
+            "unit_wire_schema": final_unit_schema(
+                ValidationClaimCheck, prepare_unit_request({})
+            ).model_json_schema(),
             "question": question,
             "answer": answer,
             "prompts": prompt_version,
@@ -627,11 +643,11 @@ async def _validate_answer(
                     "text": chunk.text,
                 }
             )
-        # 指示の版を読めなければ再利用しない。旧記録も版が無いため再監査する。
+        # 指示の読取失敗は伝播し、再利用の失効だけ通常の監査へ進める。
         overrides = saved_prompt_overrides()
+        if overrides is None:
+            overrides = await oracle.answer_prompt_overrides()
         try:
-            if overrides is None:
-                overrides = await oracle.answer_prompt_overrides()
             reuse_context = validation_reuse_context(
                 question,
                 answer,
@@ -647,7 +663,6 @@ async def _validate_answer(
                 gaps=gaps,
             )
         except Exception:  # noqa: BLE001 - 再利用できなくても通常の監査を続ける。
-            overrides = {}
             reuse_context = ""
 
         audited = (
@@ -684,7 +699,7 @@ async def _validate_answer(
         with (
             tempfile.TemporaryDirectory(prefix="rag-engine-validate-") as work,
             bind_llm_usage() as calls,
-            bind_prompt_overrides(overrides or {}),
+            bind_prompt_overrides(overrides),
         ):
             engine_settings = build_engine_settings(settings, output_dir=Path(work))
             try:
@@ -704,6 +719,7 @@ async def _validate_answer(
                 )
             finally:
                 usage.update(calls.snapshot())
+        selected_evidence = result.pop("_selected_evidence", None)
         if guide_content is not None:
             # 業務ガイドの手順ごとの充足（#2708）。主張の監査で裏付けた段落と、手順の主の操作の
             # 文を対応付ける。意味の判定の embedding は、期限の残りが短ければ呼ばない（#2700）。
@@ -716,6 +732,7 @@ async def _validate_answer(
                 conditions,
                 list(result.get("claim_checks") or []) if completed else None,
                 [{**item, "document_id": documents.get(item["id"], "")} for item in items],
+                selected_evidence=selected_evidence,
                 embed=guide_step_embed(settings, loop)
                 if completed and room and guide_content.steps
                 else None,

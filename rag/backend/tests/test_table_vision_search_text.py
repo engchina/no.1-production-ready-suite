@@ -242,6 +242,15 @@ def test_docling_keeps_table_vision_text_out_of_the_element_body(
     assert table.metadata["table_vision_text"]
     assert VISION_TEXT in str(table.metadata["vision_retrieval_text"])
     assert VISION_TEXT not in docling_result.raw_text
+    original = _docling_extraction()
+    assert docling_result.raw_text == original.raw_text
+    original_by_id = {element.element_id: element for element in original.elements}
+    for element in docling_result.elements:
+        if element.kind != "figure":
+            before = original_by_id[element.element_id]
+            assert {key: element.metadata.get(key) for key in ("raw_start", "raw_end")} == {
+                key: before.metadata.get(key) for key in ("raw_start", "raw_end")
+            }
     layout: Any = docling_result.parser_artifacts["layout_records"]
     record = layout["records"][2]
     assert record["text"] == TABLE_HTML

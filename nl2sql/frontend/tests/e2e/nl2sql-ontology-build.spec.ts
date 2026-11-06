@@ -4113,3 +4113,53 @@ test("オントロジー構築は 1280 / 1920 / 375px・ライト / ダークで
     }
   }
 });
+
+
+for (const theme of ["light", "dark"] as const) {
+  for (const width of [1280, 1920, 375]) {
+    test(`長いプロファイル名でも取得操作が画面幅に収まる: ${theme} ${width}`, { tag: "@responsive" }, async ({ page, isMobile }, testInfo) => {
+      test.skip(isMobile !== (width === 375), "対象幅のprojectで確認する");
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
+      await page.addInitScript(value => {
+        localStorage.setItem("production-ready-nl2sql.ui", JSON.stringify({ state: { theme: value }, version: 0 }));
+      }, theme);
+      const api = await mockApi(page);
+      const name = "技術検証用の長い設定名称と対象説明".repeat(5);
+      const longProfile = { ...profiles[0], name };
+      await page.route("**/api/nl2sql/profiles/search?*", route => fulfillJson(route, {
+        items: [{ ...longProfile, allowed_table_count: 2, allowed_view_count: 0, glossary_count: 0, few_shot_count: 0, version: 1, etag: "synthetic-etag" }],
+        next_cursor: null, total: 1, change_token: 1,
+      }));
+      await page.route("**/api/nl2sql/profiles/default", route => fulfillJson(route, longProfile));
+      await page.goto("/ontology-build");
+      await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
+      const select = page.getByTestId("ontology-build-profile-select");
+      const fetch = page.getByTestId("ontology-view-fetch");
+      await expect(select).toContainText(name);
+      await expect(fetch).toBeEnabled();
+      await page.evaluate(() => document.fonts.ready);
+      await page.screenshot({ path: testInfo.outputPath(`profile-width-${theme}-${width}.png`) });
+      const metrics = await page.locator("#ontology-profile-panel").evaluate(panel => {
+        const main = panel.closest("main")!;
+        const bounds = panel.getBoundingClientRect();
+        return {
+          mainClient: main.clientWidth, mainScroll: main.scrollWidth,
+          bounds: { left: bounds.left, right: bounds.right },
+          controls: Array.from(panel.querySelectorAll("button")).map(button => {
+            const rect = button.getBoundingClientRect();
+            return { left: rect.left, right: rect.right, text: button.textContent };
+          }),
+        };
+      });
+      expect(metrics.mainScroll).toBeLessThanOrEqual(metrics.mainClient + 1);
+      for (const control of metrics.controls) {
+        expect(control.left).toBeGreaterThanOrEqual(metrics.bounds.left);
+        expect(control.right).toBeLessThanOrEqual(Math.min(width, metrics.bounds.right));
+      }
+      await chooseSelectFieldOption(page.locator("#ontology-build-profile"), "default");
+      await expectSelectFieldValue(page.locator("#ontology-build-profile"), "default");
+      await fetch.click();
+      await expect.poll(() => api.ontologyViewCalls).toBe(1);
+    });
+  }
+}

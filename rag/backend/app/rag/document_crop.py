@@ -81,31 +81,33 @@ async def load_parsed_source(
     recipe_id: str | None = None,
     *,
     chunk_set_id: str | None = None,
+    extraction_recipe_id: str | None = None,
 ) -> bytes:
-    """解析に使ったファイル(ファイル準備後の artifact があればそれ、無ければ原本)を返す。
+    """版が解析したファイル(ファイル準備後の artifact があればそれ、無ければ原本)を返す。
 
-    ``chunk_set_id`` を渡すと、その版が解析したファイルを読む（#4166）。記録が無い版は
-    ``VersionSourceUnknownError`` で、ほかのファイルで代用しない。``chunk_set_id`` が無いときは
-    ``recipe_id`` の処理レシピの artifact を使う(レシピごとに解析したファイルが違うため、bbox は
-    そのファイルの座標。#1282)。レシピが無ければ文書の artifact を使う。参照パスが不正な場合は
-    ValueError(ObjectStorageClient の契約)。
+    ``extraction_recipe_id`` は表示している抽出版(``recipe_id`` のレシピの版)、``chunk_set_id`` は
+    検索根拠の版のファイルを読む（#4166）。bbox はその版が解析したファイルの座標なので、版の指定が
+    無い読み取りと、記録が無い版は ``VersionSourceUnknownError`` にし、レシピの今のファイルや
+    原本で代用しない（#4185）。``chunk_set_id`` と ``extraction_recipe_id`` の同時指定も拒否する。
+    参照パスが不正な場合は ValueError(ObjectStorageClient の契約)。
     """
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise DocumentSourceNotFoundError("ドキュメントが見つかりません。")
-    artifact = detail.preprocess_artifact
-    if chunk_set_id:
+    if chunk_set_id and not extraction_recipe_id:
         artifact = await chunk_set_prepared_artifact(oracle, detail, document_id, chunk_set_id)
-    elif recipe_id:
-        recipe = await oracle.get_document_recipe(document_id, recipe_id)
-        if recipe is not None:
-            raw = recipe.get("preprocess_artifact")
-            artifact = DocumentPreprocessArtifact.model_validate(raw) if raw else None
-    path = (
-        artifact.object_storage_path
-        if artifact is not None and artifact.object_storage_path
-        else detail.object_storage_path
-    )
+    elif extraction_recipe_id and not chunk_set_id:
+        if not recipe_id or await oracle.get_document_recipe(document_id, recipe_id) is None:
+            raise DocumentSourceNotFoundError("処理レシピが見つかりません。")
+        derivation = await oracle.extraction_source_derivation(
+            document_id=document_id, extraction_recipe_id=extraction_recipe_id
+        )
+        artifact = _artifact_from_derivation(detail, derivation)
+        if not artifact.object_storage_path:
+            raise VersionSourceUnknownError
+    else:
+        raise VersionSourceUnknownError
+    path = artifact.object_storage_path or detail.object_storage_path
     try:
         return await ObjectStorageClient().get(path)
     except FileNotFoundError as exc:

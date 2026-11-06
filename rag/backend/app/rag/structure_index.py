@@ -103,8 +103,6 @@ async def structure_index_plan(
                 item["build_chunk_sets"].append(str(row["chunk_set_id"]))
             if not row.get("chunks"):
                 item["unavailable"] = "no_chunks"
-            elif not row.get("headings"):
-                item["unavailable"] = "no_structure"
     for item in documents.values():
         if item["chunk_sets"] and not item["build_chunk_sets"]:
             item["unavailable"] = "disabled"
@@ -229,7 +227,6 @@ async def rebuild_document_structure_index(
             counts["quality"] = "PARTIAL"
             continue
         chunks = []
-        missing = 0
         for row in group:
             index = int(row["chunk_index"])
             if str(row["chunk_id"]) != f"{document_id}:{chunk_set_id}:{index}":
@@ -250,8 +247,6 @@ async def rebuild_document_structure_index(
                 stored = json.loads(str(row["stored_references"]))
                 if stored:
                     metadata["reference_targets_json"] = stored[0]
-            if not path and not row.get("section_title"):
-                missing += 1
             chunks.append(
                 Chunk(
                     text=str(row.get("reference_source_text") or ""),
@@ -261,8 +256,6 @@ async def rebuild_document_structure_index(
                     metadata=metadata,
                 )
             )
-        if missing == len(group):
-            raise ValueError("no_structure")
         graph = await asyncio.to_thread(
             build_graph_index,
             document_id=document_id,
@@ -273,8 +266,6 @@ async def rebuild_document_structure_index(
             document_name=document.file_name,
             reference_documents=reference_documents,
         )
-        if missing:
-            counts["quality"] = "PARTIAL"
         graphs[chunk_set_id] = graph
         counts["entities"] += len(graph.entities)
         counts["relationships"] += len(graph.relationships)

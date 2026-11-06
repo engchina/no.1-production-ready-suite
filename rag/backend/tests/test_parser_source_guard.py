@@ -597,9 +597,6 @@ class _RecipeOnlyOracle(_RecipeOracle):
         self.recipe_ids.append(recipe_id)
         return await super().get_document_recipe(document_id, recipe_id)
 
-    async def get_document_processing_config(self, document_id: str) -> Any:
-        raise AssertionError("レシピを読めるときは文書行の設定を読まない")
-
 
 def test_ingestion_settings_come_from_recipe() -> None:
     """取込の実行・表示の設定は、取込の開始前の検査と同じくレシピから読む(#697)。"""

@@ -12,6 +12,9 @@ from dataclasses import dataclass
 
 from rag_parser_core.language import LanguagePack, current_pack
 
+# 画像の説明本文の形式。視覚分類と検索専用3フィールドを回答本文へ含めない版（#2728）。
+VISION_TEXT_FORMAT_VERSION = 3
+
 _COLON = "[:：]"
 
 
