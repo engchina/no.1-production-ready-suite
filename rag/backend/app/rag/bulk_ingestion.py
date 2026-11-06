@@ -116,7 +116,7 @@ class BulkIngestionDocumentState:
     file_size_bytes: int | None = None
     content_sha256: str | None = None
     duplicate_of_document_id: str | None = None
-    # レシピ1の処理設定(レシピの行が無ければ文書の処理設定)。
+    # 正式なレシピ1の処理設定。欠落時の旧文書設定は使用しない。
     processing_config: Mapping[str, object] = field(default_factory=dict)
     has_default_recipe: bool = True
     has_job_history: bool = False
@@ -312,7 +312,7 @@ async def accept_bulk_ingestion(
     single_ids: list[str] = []
     for document_id in valid_ids:
         state = states.get(document_id)
-        if state is None or not state.has_source:
+        if state is None or not state.has_source or not state.has_default_recipe:
             decisions[document_id] = _decision(BulkIngestionOutcome.REJECTED, REASON_NOT_FOUND)
             continue
         if state.status in _RUNNING_STATUSES or state.document_status in _RUNNING_STATUSES:

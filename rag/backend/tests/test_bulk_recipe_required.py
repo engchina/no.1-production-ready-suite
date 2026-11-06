@@ -229,11 +229,16 @@ async def test_bulk_uses_only_formal_recipes(
         assert job["recipe_id"] == spec.recipe_id and job["recipe_revision"] == spec.revision
         assert job["status"] == "QUEUED" and job["max_attempts"] == 3
     assert connection.rollbacks == 0
-    assert connection.commits == (0 if name == "invisible" else 1)
+    # 読取時に正式行が無い対象は、登録transactionへ進まない。
+    assert connection.commits == (
+        0 if name in {"invisible", "missing-default", "visibility-lost-before-lock"} else 1
+    )
     locks = [call for call in connection.calls if "FOR UPDATE OF r.recipe_id" in call.statement]
-    if name != "invisible":
+    if name not in {"invisible", "missing-default", "visibility-lost-before-lock"}:
         assert len(locks) == 1 and "JOIN rag_documents d" in locks[0].statement
         assert "d.document_id IN" in locks[0].statement and "d.tenant_id_hash" in locks[0].statement
+    else:
+        assert locks == []
     assert all("INSERT INTO rag_documents" not in call.statement for call in connection.many_calls)
 
 

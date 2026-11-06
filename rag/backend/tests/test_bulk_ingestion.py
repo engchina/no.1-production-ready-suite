@@ -278,7 +278,7 @@ async def test_each_document_gets_an_outcome_and_reason() -> None:
         "dup": ("skipped", "duplicate_content"),
         "binary": ("skipped", "unknown_file_type"),
         "blocked": ("rejected", "parser_unsupported"),
-        "no-recipe": ("accepted", None),
+        "no-recipe": ("rejected", "not_found"),
         "unknown": ("rejected", "not_found"),
         "bad id": ("rejected", "invalid_document_id"),
     }
@@ -290,12 +290,12 @@ async def test_each_document_gets_an_outcome_and_reason() -> None:
         result.already_active_count,
         result.skipped_count,
         result.rejected_count,
-    ) == (2, 2, 4, 4)
+    ) == (1, 2, 4, 5)
     blocked = next(item for item in result.items if item.document_id == "blocked")
     assert blocked.message == "解析エンジンで扱えない形式です。"
-    assert store.created_recipes == ["no-recipe"]
+    assert store.created_recipes == []
     reasons = {(entry.outcome.value, entry.reason): entry.count for entry in result.reasons}
-    assert reasons[("rejected", "not_found")] == 2
+    assert reasons[("rejected", "not_found")] == 3
     assert all(entry.message for entry in result.reasons)
     _assert_persisted_matches(result, store)
 

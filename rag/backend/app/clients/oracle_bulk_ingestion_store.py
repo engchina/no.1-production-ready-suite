@@ -188,7 +188,7 @@ def _document_state(
     # 一覧の状態(最も小さい slot のレシピの状態。レシピの行が無ければ文書の状態。#2012)。
     list_status = row.get("list_status")
     status = _file_status(list_status) if list_status else document_status
-    raw_config = row.get("recipe_processing_config") if has_recipe else row.get("processing_config")
+    raw_config = row.get("recipe_processing_config") if has_recipe else None
     return BulkIngestionDocumentState(
         document_id=document_id,
         file_name=str(row.get("file_name") or ""),
