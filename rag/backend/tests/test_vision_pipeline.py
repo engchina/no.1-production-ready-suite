@@ -24,11 +24,13 @@ from tests.test_ingestion_pdf_segments import (
     _original_pages,
     _pdf,
     _prepared_pdf_artifact,
+    _segment_ids,
 )
 from tests.test_ingestion_strategy import (
     FakeEmbeddingClient,
     FakeObjectStorage,
     FakeOracle,
+    _formal_extraction_recipe,
     _pdf_source_profile,
 )
 
@@ -168,6 +170,8 @@ def _pipeline(reader: Reader, oracle: FakeOracle, storage: FakeObjectStorage) ->
         genai=FakeEmbeddingClient(),
         vlm=cast(Any, reader),
         oracle=cast(Any, oracle),
+        recipe_id=_formal_extraction_recipe(oracle, DOCUMENT_ID),
+        recipe_revision=1,
         object_storage=cast(Any, storage),
         settings=Settings(
             rag_parser_adapter_backend="docling",
@@ -274,7 +278,9 @@ async def test_resume_reuses_vision_of_finished_segments(monkeypatch: pytest.Mon
         await _ingest(_pipeline(first, oracle, storage), pdf)
     # 先読みの終わった段（段 1・2。10 図ずつ）の応答を段の artifact に残す。
     saved = sorted(key.rsplit("/", 1)[-1] for key, _, _ in storage.puts if "/vision/" in key)
-    assert saved and set(saved) <= {"doc-seg_p1-10.json", "doc-seg_p11-20.json"}
+    assert saved and set(saved) <= {
+        f"{segment_id.replace(':', '_')}.json" for segment_id in _segment_ids()[:2]
+    }
     assert len(first.calls) >= 10 * len(saved)
 
     _install(monkeypatch, Runner())

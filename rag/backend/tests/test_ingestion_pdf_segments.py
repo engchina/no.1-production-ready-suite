@@ -40,6 +40,8 @@ from tests.test_ingestion_strategy import (
     FakeEmbeddingClient,
     FakeObjectStorage,
     FakeOracle,
+    _formal_extraction_recipe,
+    _formal_extraction_recipe_id,
     _pdf_source_profile,
 )
 
@@ -202,6 +204,8 @@ def _pipeline(
     return IngestionPipeline(
         genai=FakeEmbeddingClient(),
         oracle=cast(Any, oracle),
+        recipe_id=_formal_extraction_recipe(oracle, DOCUMENT_ID),
+        recipe_revision=1,
         object_storage=cast(Any, storage),
         settings=_settings(**settings),
     )
@@ -248,7 +252,8 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> _Runner:
 
 
 def _segment_ids() -> list[str]:
-    return [f"{DOCUMENT_ID}:p1-10", f"{DOCUMENT_ID}:p11-20", f"{DOCUMENT_ID}:p21-23"]
+    scope = f"{DOCUMENT_ID}:{_formal_extraction_recipe_id(DOCUMENT_ID)[:12]}"
+    return [f"{scope}:p1-10", f"{scope}:p11-20", f"{scope}:p21-23"]
 
 
 async def test_ingest_parses_pdf_segment_by_segment(runner: _Runner) -> None:
@@ -347,6 +352,7 @@ async def test_stale_segments_from_interrupted_job_restart_from_queued(runner: _
         segment_id: IngestionSegment(
             segment_id=segment_id,
             document_id=DOCUMENT_ID,
+            recipe_id=_formal_extraction_recipe_id(DOCUMENT_ID),
             status=status,
             parser_backend="docling",
             parser_profile="docling",
