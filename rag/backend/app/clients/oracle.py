@@ -3048,7 +3048,6 @@ class OracleClient:
             document = _select_document_for_update(connection, document_id)
             if document is None:
                 raise KeyError("ドキュメントが見つかりません。")
-            _ensure_recipe_row_if_default(connection, document_id, recipe_id)
             if _select_document_recipe_for_update(connection, document_id, recipe_id) is None:
                 raise KeyError("レシピが見つかりません。")
             count_row = _fetch_one(
