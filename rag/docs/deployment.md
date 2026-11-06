@@ -214,6 +214,14 @@ ln -s "${NEW}" "${OLD}"
 readiness の確認は `/api/ready` を使う。`oci_common`、`enterprise_ai`、`genai`、`oracle`、`object_storage` の設定グループを確認する。
 `PLATFORM_ENVIRONMENT=production` では `audit_context_salt` も確認し、`RAG_AUDIT_CONTEXT_HASH_SALT` を必須にする。すべて `ok` のときだけ 200 になり、`missing`、`invalid`、`missing_credentials`、`wallet_not_found` が含まれる場合は 503 になる。
 
+## 既存環境の更新手順（#4549 文書構造索引の構築器の版の更新）
+
+構築器の版を版の指紋に入れた（`structure-graph-v2`。参照の辺の起点・参照先の誤りの修正 #4551 を含む）。この版の前に構築した文書構造索引は、すべて補建の計画で「更新が必要」（`STALE`。項目の `reason` が `builder_changed`）になり、既定の補建（`missing`）の対象になる。DDL・設定の変更は無く、補建は構造索引の行（`rag_graph_*`・`rag_structure_index_builds`）だけを置き換え、chunk・embedding・モデルは使わない。
+
+1. backend を更新する。
+2. 検出（読み取りだけ）: KB ごとに計画を取得し、`reason` が `builder_changed` の文書を数える。
+3. 退避・試験・展開は下の #4543 の手順 3〜5 と同じ（展開の後は計画の `builder_changed` が 0 件になったことを確かめる）。
+
 ## 既存環境の更新手順（#4543 「本文」の節点の前の文書構造索引の補建）
 
 「本文」の節点（#4507）の前に構築した文書構造索引は、見出しの無い chunk を「文書全体」の章節に結び、本文の節点への結び付きを持たない（図の「本文」の一覧が 0 件）。補建の計画（`GET /api/knowledge-bases/{kb}/structure-index/plan`）は、構築記録の指紋が一致していても本文の結び付きが本文の chunk より少ない文書を「更新が必要」（`STALE`。項目に `body_links_missing: true`）にし、既定の補建（`missing`）が対象にする。DDL・設定の変更は無く、補建は構造索引の行（`rag_graph_*`・`rag_structure_index_builds`）だけを置き換え、chunk・embedding・モデルは使わない。
