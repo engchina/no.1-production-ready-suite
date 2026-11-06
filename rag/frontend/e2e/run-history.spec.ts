@@ -803,6 +803,7 @@ test.describe("実行履歴", { tag: "@responsive" }, () => {
           const summary = page.getByTestId("run-history-summary");
           const failure = page.getByTestId("run-history-failure");
           await expect(failure).toContainText(item.expected);
+          await expect(failure.locator("dt").filter({ hasText: /^原因$/ }).locator("+ dd")).toContainText(item.expected);
           await expect(failure).toContainText("実行 ID");
           await expect(failure).not.toContainText("synthetic-private-token");
           await expect(failure).not.toContainText("synthetic.invalid");

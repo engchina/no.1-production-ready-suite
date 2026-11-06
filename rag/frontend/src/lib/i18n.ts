@@ -3888,6 +3888,7 @@ export const ja = {
   "chat.error.model": "エラーが発生しました。",
   "chat.error.retry": "もう一度送信",
   "failure.details": "詳細",
+  "failure.cause": "原因",
   "failure.failedStep": "止まった段",
   "failure.errorType": "エラーの種類",
   "failure.errorCode": "エラーコード",
