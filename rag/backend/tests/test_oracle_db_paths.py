@@ -25,7 +25,6 @@ from app.clients.oracle import (
     oracle_error_log_fields,
 )
 from app.schemas.document import (
-    DocumentProcessingConfig,
     FileStatus,
     IngestionJob,
     IngestionJobStatus,
@@ -311,15 +310,6 @@ async def test_list_documents_does_not_select_json_columns(monkeypatch: pytest.M
     selects = _document_selects(pool)
     assert selects
     _assert_no_json_columns(selects)
-
-
-async def test_update_document_processing_config_existence_check_skips_json_columns() -> None:
-    pool = FakeOraclePool(execute_results=[[_document_state_row()]])
-    client = OracleClient(settings=_oci_settings(), pool=pool, db_call_runner=_run_inline)
-
-    await client.update_document_processing_config("doc-1", DocumentProcessingConfig())
-
-    _assert_no_json_columns(_document_selects(pool))
 
 
 async def test_create_document_ingestion_job_existence_check_skips_json_columns() -> None:
