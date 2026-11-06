@@ -94,7 +94,11 @@ async def test_saved_resume_never_reconstructs_a_missing_quality_report(
     monkeypatch.setattr(module, "build_ingestion_quality_report", traced_builder)
     before = oracle.detail.model_dump(mode="json")
     kwargs = {"chunk_set_id": "synthetic-chunk-set"} if method == "index_chunked" else {}
-    if state in {"absent", "null"}:
+    if not recipe:
+        with pytest.raises(module.IngestionUserError, match="レシピ"):
+            await getattr(pipeline, method)(oracle.detail.id, **kwargs)
+        assert oracle.write_attempts == []
+    elif state in {"absent", "null"}:
         with pytest.raises(module.IngestionUserError, match="品質レポート.*再解析"):
             await getattr(pipeline, method)(oracle.detail.id, **kwargs)
         assert oracle.write_attempts == []
