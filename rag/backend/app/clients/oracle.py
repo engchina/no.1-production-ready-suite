@@ -12247,6 +12247,9 @@ class OracleClient:
             document = _select_document_state(connection, document_id)
             if document is None:
                 raise KeyError(f"document_id={document_id} は存在しません。")
+            from app.rag.chunk_source_projection import _validate_chunk_source_projection
+
+            _validate_chunk_source_projection(extraction, chunks)
             _execute(
                 connection,
                 _render_sql(
