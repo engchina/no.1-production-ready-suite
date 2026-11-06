@@ -337,6 +337,10 @@ class FakeOracleClient:
         assert kwargs["content_sha256"]
         return SimpleNamespace(id="doc-smoke")
 
+    async def read_staging_recipe(self, document_id: str) -> SimpleNamespace:
+        assert document_id == "doc-smoke"
+        return SimpleNamespace(chunks=(object(),))
+
     async def count_document_chunks(self, document_id: str) -> int:
         assert document_id == "doc-smoke"
         return 1

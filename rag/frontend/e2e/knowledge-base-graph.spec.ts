@@ -229,13 +229,13 @@ for (const viewport of [
   });
 }
 
-// React Flow の Controls・帰属表示・辺のラベルは、テーマの面の色で描く（#1137）。
+// React Flow の操作部と辺のラベルはテーマに合わせ、帰属リンクは表示しない。
 // React Flow の既定の配色は colorMode="dark" のときだけダークになり、ダークテーマでも白い地のまま出ていた。
 // platform/packages/ui の integrations/react-flow.css が React Flow の変数をトークンに結び付ける。
 for (const theme of ["light", "dark"] as const) {
-  test(`文書構造グラフの操作・帰属表示はテーマの面の色で描く (${theme})`, async ({
+  test(`文書構造グラフの操作はテーマに合わせ帰属リンクを表示しない (${theme})`, { tag: "@responsive" }, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.addInitScript((value) => {
       window.localStorage.setItem(
         "production-ready-rag.ui",
@@ -282,8 +282,6 @@ for (const theme of ["light", "dark"] as const) {
         buttonCount: buttons.length,
         buttonBackgrounds: buttons.map((button) => getComputedStyle(button).backgroundColor),
         buttonColors: buttons.map((button) => getComputedStyle(button).color),
-        attributionBackground: style(".react-flow__attribution")?.backgroundColor,
-        attributionLink: style(".react-flow__attribution a")?.color,
         edgeLabelBackground: style(".react-flow__edge-textbg")?.fill ?? null,
       };
     });
@@ -291,9 +289,13 @@ for (const theme of ["light", "dark"] as const) {
     // 共通 ghost Button は透明な面を通して親の surface を表示する。
     expect(new Set(colors.buttonBackgrounds)).toEqual(new Set(["rgba(0, 0, 0, 0)"]));
     expect(new Set(colors.buttonColors)).toEqual(new Set([colors.tokens.fg]));
-    // 帰属表示（React Flow のリンク）は消さず、色だけ合わせる。
-    expect(colors.attributionBackground).toBe(colors.tokens.raised);
-    expect(colors.attributionLink).toBe(colors.tokens.fgMuted);
+    await region.screenshot({ path: testInfo.outputPath(`graph-attribution-${theme}.png`) });
+    await expect(region.locator(".react-flow__attribution")).toHaveCount(0);
+    const viewport = region.locator(".react-flow__viewport");
+    const beforeZoom = await viewport.getAttribute("style");
+    await region.getByRole("button", { name: "拡大", exact: true }).click();
+    await expect(viewport).not.toHaveAttribute("style", beforeZoom!);
+    await region.getByRole("button", { name: "全体表示", exact: true }).click();
     if (colors.edgeLabelBackground !== null) {
       expect(colors.edgeLabelBackground).toBe(colors.tokens.surface);
     }
@@ -431,6 +433,7 @@ test("構造索引は保存と補建を分け、停止・再開の状態を保�
   await page.getByRole("alertdialog").getByRole("button", { name: "残りを続ける", exact: true }).click();
   await expect(settings.getByText("処理終了。文書ごとの結果を確認してください。")).toBeVisible();
   await expect(settings.getByRole("cell", { name: "部分構築", exact: true })).toBeVisible();
+  await expect(settings.getByText("作成済みの章節情報をすべて表示します。章節情報がない箇所や、構築していない処理レシピの構造は表示されません。")).toBeVisible();
   await expectNoPageOverflow(page);
   await settings.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("structure-build-completed.png"), fullPage: false });

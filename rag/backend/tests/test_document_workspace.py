@@ -2928,7 +2928,7 @@ def test_document_content_prefers_stored_content_type_without_extension() -> Non
     assert "filename*=UTF-8''policy" in resp.headers["content-disposition"]
 
 
-def test_document_content_returns_prepared_artifact(
+def test_document_recipe_content_returns_prepared_artifact(
     fake_document_dependencies: FakeWorkspaceOracle,
 ) -> None:
     """処理後ファイル配信は preprocess_artifact の path / filename / content-type を使う。"""
@@ -2955,8 +2955,15 @@ def test_document_content_returns_prepared_artifact(
         }
     )
 
+    recipe_id = _seed_recipe(
+        fake_document_dependencies,
+        document_id,
+        status=FileStatus.UPLOADED,
+        preprocess_artifact=fake_document_dependencies.documents[document_id].preprocess_artifact,
+    )
     resp = client.get(
-        f"/api/documents/{document_id}/content?variant=prepared&disposition=attachment"
+        f"/api/documents/{document_id}/recipes/{recipe_id}/content"
+        "?variant=prepared&disposition=attachment"
     )
 
     assert resp.status_code == 200
@@ -2968,16 +2975,43 @@ def test_document_content_returns_prepared_artifact(
     )
 
 
-def test_document_content_prepared_missing_returns_404() -> None:
+def test_document_recipe_content_prepared_missing_returns_404(
+    fake_document_dependencies: FakeWorkspaceOracle,
+) -> None:
     """処理後ファイルが無い場合、原本へ黙って戻さない。"""
     document_id = _upload("policy.txt", b"body", "text/plain")
 
-    resp = client.get(f"/api/documents/{document_id}/content?variant=prepared")
+    recipe_id = _seed_recipe(fake_document_dependencies, document_id, status=FileStatus.UPLOADED)
+    resp = client.get(f"/api/documents/{document_id}/recipes/{recipe_id}/content?variant=prepared")
 
     assert resp.status_code == 404
     assert resp.json()["error_messages"] == [
         "処理後ファイルが見つかりません。ファイル準備から再処理してください。"
     ]
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "payload"),
+    [
+        ("GET", "/content?variant=prepared", None),
+        ("GET", "/preview-pages?variant=prepared", None),
+        ("GET", "/preview-pages/1?variant=prepared", None),
+        ("POST", "/text-window", {"variant": "prepared", "offset": 0, "limit": 100}),
+    ],
+)
+@pytest.mark.parametrize("visible", [True, False])
+def test_document_prepared_requires_recipe_after_visibility(
+    method: str, suffix: str, payload: dict[str, object] | None, visible: bool
+) -> None:
+    document_id = _upload("synthetic.txt", b"original", "text/plain") if visible else "missing"
+    response = client.request(method, f"/api/documents/{document_id}{suffix}", json=payload)
+    assert response.status_code == (400 if visible else 404)
+    if visible:
+        assert response.json()["error_messages"] == [
+            "処理後ファイルを取得するには、処理レシピを指定したURLを使用してください。"
+        ]
+    else:
+        assert "処理レシピを指定" not in response.text
 
 
 def test_document_content_sets_utf8_charset_for_text() -> None:
@@ -4381,7 +4415,14 @@ def test_force_reingest_keeps_served_output_and_clears_only_recipe_checkpoints(
     fake.delete_recipe_segment_checkpoints = clear_checkpoints  # type: ignore[attr-defined]
 
     async def default_recipe(_document_id: str) -> dict[str, object]:
-        return {"recipe_id": "recipe-default", "status": FileStatus.INDEXED.value}
+        row: dict[str, object] = {
+            "recipe_id": "recipe-default",
+            "document_id": _document_id,
+            "status": FileStatus.INDEXED.value,
+            "processing_config": {},
+        }
+        fake.recipes["recipe-default"] = row
+        return row
 
     fake.ensure_default_document_recipe = default_recipe  # type: ignore[attr-defined]
 

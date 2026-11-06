@@ -5,6 +5,7 @@ import threading
 from unittest.mock import patch
 
 import pytest
+from validation_unit_support import unit_audit_output
 
 from rag_engine.evaluation.answer_eval import EvaluationContractError
 from rag_engine.evaluation.answer_validation import (
@@ -12,7 +13,6 @@ from rag_engine.evaluation.answer_validation import (
     STATUS_PARTIAL,
     STATUS_TIMED_OUT,
     TIMED_OUT_REASON,
-    ClaimAuditOutput,
     passage_batches,
     validate_answer_claims,
 )
@@ -32,8 +32,10 @@ def _request(inputs: str) -> tuple[list[str], list[str], str]:
     return [item["id"] for item in passages], [item["text"] for item in passages], evidence["evidence_id"]
 
 
-def _supported(ids: list[str], evidence_id: str) -> ClaimAuditOutput:
-    return ClaimAuditOutput.model_validate(
+def _supported(ids: list[str], evidence_id: str, schema, payload):
+    return unit_audit_output(
+        schema,
+        payload,
         {
             "claim_checks": [
                 {
@@ -47,7 +49,7 @@ def _supported(ids: list[str], evidence_id: str) -> ClaimAuditOutput:
                 }
                 for passage_id in ids
             ]
-        }
+        },
     )
 
 
@@ -65,7 +67,7 @@ def test_without_batches_the_whole_answer_is_audited_in_one_call() -> None:
     def parse(system, inputs, settings, schema, provider_id=None):
         ids, _texts, evidence_id = _request(inputs)
         calls.append(ids)
-        return _supported(ids, evidence_id)
+        return _supported(ids, evidence_id, schema, json.loads(inputs))
 
     with patch(PATCH, side_effect=parse):
         result = validate_answer_claims("有効期限は？", ANSWER, EVIDENCE, settings=None)
@@ -94,7 +96,7 @@ def test_batches_are_audited_in_parallel_up_to_the_limit_with_the_same_inputs() 
         try:
             if first_wave:
                 barrier.wait()
-            return _supported(ids, evidence_id)
+            return _supported(ids, evidence_id, schema, json.loads(inputs))
         finally:
             with lock:
                 active -= 1
@@ -121,7 +123,7 @@ def test_batches_past_the_deadline_become_unassessed_and_the_rest_is_returned() 
             # この組の呼び出しは期限まで返らない（残りの時間で出せる出力に届いて期限を切った）。
             expire_deadline()
             raise DeadlineExceeded("回答の期限までに LLM の出力が終わりません。")
-        return _supported(ids, evidence_id)
+        return _supported(ids, evidence_id, schema, json.loads(inputs))
 
     deadline = Deadline(600)
     with bind_deadline(deadline), patch(PATCH, side_effect=parse):
@@ -158,7 +160,7 @@ def test_failures_before_the_deadline_still_fail_the_validation() -> None:
         ids, texts, evidence_id = _request(inputs)
         if any("区分 5" in text for text in texts):
             raise EvaluationContractError("回答段落IDが存在しません")
-        return _supported(ids, evidence_id)
+        return _supported(ids, evidence_id, schema, json.loads(inputs))
 
     with bind_deadline(Deadline(600)), patch(PATCH, side_effect=parse), pytest.raises(EvaluationContractError):
         validate_answer_claims("有効期限は？", ANSWER, EVIDENCE, settings=None, batch_passages=2, max_concurrency=2)

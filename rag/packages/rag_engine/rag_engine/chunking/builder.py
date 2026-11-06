@@ -8,6 +8,8 @@ import time
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_VERSION
+
 from rag_engine.chunking.constants import (
     ATOMIC_CATEGORIES,
     CHILD_CHUNK_LEVEL,
@@ -704,6 +706,10 @@ def _records_by_engine(
         for raw_record in raw_records
         if isinstance(raw_record, dict) and str(raw_record.get("engine") or "") in selected
     ]
+    from rag_engine.parsing.picture_descriptions import reproject_saved_vision_record
+
+    for candidate in candidates:
+        reproject_saved_vision_record(candidate)
     # 図の中の文字（OCR）の record を持ち主の図に結び付け、分割で図と同じ group にする（#3455）。
     link_picture_ocr_records(candidates)
     records: dict[str, list[dict[str, Any]]] = {engine_id: [] for engine_id in selected_engine_ids}
@@ -882,6 +888,7 @@ def _config_hash(config: ChunkingConfig, selected_engine_ids: Sequence[str]) -> 
         "schema_version": CHUNK_SCHEMA_VERSION,
         "chunk_metadata_schema_version": CHUNK_METADATA_SCHEMA_VERSION,
         "search_text_schema_version": SEARCH_TEXT_SCHEMA_VERSION,
+        "vision_text_projection_version": VISION_TEXT_PROJECTION_VERSION,
         "strategy": CHUNK_STRATEGY,
         "selected_engine_ids": list(selected_engine_ids),
         "config": config.to_dict(),

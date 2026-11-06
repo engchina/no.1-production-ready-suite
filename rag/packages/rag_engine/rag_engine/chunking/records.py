@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import Any
 
 from rag_parser_core.language.markers import marker_patterns
+from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY, load_vision_text_projection
 
 from rag_engine.chunking.constants import (
     ANNOTATION_CATEGORIES,
@@ -322,14 +323,65 @@ def _join_records_text(records: Sequence[dict[str, Any]], *, for_retrieval: bool
     return "\n".join(pieces).strip()
 
 
+def _vision_projection_status(record: dict[str, Any]) -> str | None:
+    """原文を探し直さず、型付き画像投影の完全性だけを調べる。"""
+    if record.get("category") not in {"Picture", "Table", "Form"}:
+        return None
+    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    states: set[str] = set()
+    if VISION_TEXT_PROJECTION_KEY in raw:
+        projection = load_vision_text_projection(raw[VISION_TEXT_PROJECTION_KEY])
+        body = raw.get("table_vision_text") if record.get("category") == "Table" else record.get("text")
+        if (
+            projection is None
+            or not projection.answer_description.strip()
+            or raw.get("vision_error")
+            or body != projection.answer_description
+        ):
+            raise ValueError("画像本文の投影が不正です。再解析または再分割してください。")
+        states.add("verified")
+    elif isinstance(raw.get("vision_description"), dict) or raw.get("table_vision_text"):
+        states.add("unrecorded")
+    texts = raw.get("table_visual_texts")
+    saved = raw.get("table_visual_text_projections")
+    if isinstance(texts, dict):
+        for image_id, text in texts.items():
+            if not text:
+                continue
+            if not isinstance(saved, dict) or image_id not in saved or not saved[image_id]:
+                states.add("unrecorded")
+                continue
+            projection = load_vision_text_projection(saved[image_id])
+            if projection is None or not projection.answer_description.strip() or text != projection.answer_description:
+                raise ValueError("表内画像の本文投影が不正です。再分割してください。")
+            states.add("verified")
+    if len(states) > 1:
+        raise ValueError("画像本文の投影に未記録の範囲が混在しています。再解析してください。")
+    return next(iter(states), None)
+
+
 def _record_text_for_chunk(record: dict[str, Any], *, for_retrieval: bool = False) -> str:
     """chunk 本文に載せる record の text。`for_retrieval` は表内画像の OCR を検索文から外します (#900)。"""
     text = _record_text(record)
+    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    projection = load_vision_text_projection(raw.get(VISION_TEXT_PROJECTION_KEY))
+    if projection is not None and (
+        record.get("category") not in {"Picture", "Table", "Form"} or not projection.answer_description.strip() or raw.get("vision_error")
+    ):
+        projection = None
+    if (
+        projection is not None
+        and str(record.get("category") or "") != "Table"
+        and str(record.get("text") or "").strip() == projection.answer_description.strip()
+    ):
+        text = projection.index_text if for_retrieval else projection.answer_description
     if str(record.get("raw_type") or "") == "picture_ocr_text":
         return format_docling_picture_ocr_text(text)
     if str(record.get("category") or "") == "Table":
         raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
         supplement = str(raw.get("table_vision_text") or "").strip()
+        if projection is not None and supplement == projection.answer_description.strip():
+            supplement = projection.index_text if for_retrieval else projection.answer_description
         table_visual_text = "\n".join(
             filter(
                 None,
@@ -379,7 +431,8 @@ def _table_visual_evidence_text(record: dict[str, Any], *, for_retrieval: bool =
     raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
     visual_evidence = raw.get("table_visual_evidence")
     visuals = _filter_image_evidence(visual_evidence if isinstance(visual_evidence, list) else [])
-    full_texts = raw.get("table_visual_texts") if isinstance(raw.get("table_visual_texts"), dict) else {}
+    text_key = "table_visual_index_texts" if for_retrieval else "table_visual_texts"
+    full_texts = raw.get(text_key) if isinstance(raw.get(text_key), dict) else {}
     labels = content_labels()
     lines: list[str] = []
     for visual in visuals:

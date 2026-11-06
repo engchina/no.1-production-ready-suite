@@ -12,9 +12,11 @@ from app.schemas.document import IngestionSegment
 from app.schemas.extraction import StructuredExtraction
 
 
-def legacy_key(settings: Settings) -> str:
+def legacy_key(settings: Settings, format_version: int | None = None) -> str:
     subset = variant_keys.extraction_recipe_subset(settings)
     subset.pop("vision_text_format_version", None)
+    if settings.rag_vision_enabled and format_version is not None:
+        subset["vision_text_format_version"] = format_version
     return variant_keys._digest(
         "er",
         {
@@ -27,11 +29,14 @@ def legacy_key(settings: Settings) -> str:
     )
 
 
+@pytest.mark.parametrize("format_version", [None, 2])
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("kind", ["full", "segment"])
-async def test_real_artifact_loader_honors_format_version(enabled: bool, kind: str) -> None:
+async def test_real_artifact_loader_honors_format_version(
+    enabled: bool, kind: str, format_version: int | None
+) -> None:
     settings = Settings.model_construct(rag_vision_enabled=enabled)
-    old_key = legacy_key(settings)
+    old_key = legacy_key(settings, format_version)
     new_key = variant_keys.compute_extraction_recipe_id("a" * 64, settings)
     segment = IngestionSegment(
         segment_id="synthetic:p1",

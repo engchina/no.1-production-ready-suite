@@ -6,6 +6,8 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_VERSION
+
 from rag_engine.chunking.constants import (
     CHUNK_METADATA_SCHEMA_VERSION,
     HEADING_SOURCES,
@@ -99,6 +101,14 @@ def _chunk_metadata(
         "section_path": clean_section_path,
         "section_path_sources": clean_sources,
     }
+    projection_states = {ref.get("vision_text_projection_status") for ref in refs}
+    if "verified" in projection_states and "unrecorded" in projection_states:
+        raise ValueError("画像本文の投影に未記録の範囲が混在しています。再解析してください。")
+    if any(ref.get("vision_text_projection_version") == VISION_TEXT_PROJECTION_VERSION for ref in refs):
+        metadata["answer_text_projection"] = {
+            "version": VISION_TEXT_PROJECTION_VERSION,
+            "body_sha256": _text_sha256(text),
+        }
     layout = {
         "logical_page_labels": labels,
         "display_regions": display_regions,
@@ -177,7 +187,7 @@ _CHUNK_METADATA_REQUIRED_KEYS = frozenset(
     }
 )
 # chunk 直下の任意項目。位置系は layout に、問い合わせ profile は retrieval_profile にまとめる (#814)。
-_CHUNK_METADATA_OPTIONAL_KEYS = frozenset({"layout", "image_evidence", "table_context", "retrieval_profile"})
+_CHUNK_METADATA_OPTIONAL_KEYS = frozenset({"layout", "image_evidence", "table_context", "retrieval_profile", "answer_text_projection"})
 _CHUNK_LAYOUT_KEYS = frozenset(
     {
         "display_regions",

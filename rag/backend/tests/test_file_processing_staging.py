@@ -3189,6 +3189,7 @@ def _fake_extraction_artifact_payload(key: str) -> bytes | None:
             "extraction_artifact_document_id": document_id,
             "extraction_artifact_trace_id": "fake-staging-trace",
         }
+    parser_artifacts["extraction_artifact_parse_key"] = "fake-staging-key"
     return json.dumps(
         {
             "raw_text": "redacted",
@@ -3274,6 +3275,35 @@ class FakeStagingOracle:
         for knowledge_base_id in knowledge_base_ids or []:
             self.knowledge_base_documents.setdefault(knowledge_base_id, set()).add(document.id)
         return document
+
+    async def read_staging_recipe(self, document_id: str) -> Any:
+        from app.rag.ingestion_segment_receipts import SEGMENT_RECEIPT_KEY, accepted_segment_receipt
+        from app.rag.staging_recipes import StagingRecipeState
+
+        detail = self.documents[document_id]
+        recipe_id = f"recipe:{document_id}"
+        segments = tuple(
+            item.model_copy(update={"recipe_id": recipe_id})
+            for item in self.segments.get(document_id, [])
+        )
+        accepted = [item for item in segments if item.status == "SUCCEEDED"]
+        extraction = dict(detail.extraction)
+        artifacts = dict(cast(Any, extraction.get("parser_artifacts") or {}))
+        artifacts[SEGMENT_RECEIPT_KEY] = accepted_segment_receipt(
+            document_id,
+            recipe_id,
+            accepted,
+            {(item.page_start, item.page_end): "fake-staging-key" for item in accepted},
+        )
+        extraction["parser_artifacts"] = artifacts
+        return StagingRecipeState(
+            recipe_id=recipe_id,
+            status=detail.status,
+            chunk_set_id=f"cs:{document_id}" if detail.status == FileStatus.INDEXED else None,
+            extraction=extraction,
+            chunks=tuple(self.chunks.get(document_id, [])),
+            segments=segments,
+        )
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         return self.documents.get(document_id)

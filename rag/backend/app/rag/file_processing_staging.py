@@ -9,7 +9,6 @@ import mimetypes
 import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import perf_counter
@@ -17,7 +16,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from app.clients.object_storage import ObjectStorageClient
-from app.clients.oracle import OracleClient, close_oracle_pool
+from app.clients.oracle import close_oracle_pool
 from app.config import Settings, get_settings
 from app.rag.file_processing_evaluation import (
     REQUIRED_FILE_PROCESSING_SOURCE_KINDS,
@@ -30,10 +29,12 @@ from app.rag.file_processing_evaluation import (
     run_file_processing_contract_checks,
 )
 from app.rag.grounding_metrics import GroundednessEvaluation, evaluate_groundedness
-from app.rag.ingestion import IngestionPipeline
+from app.rag.ingestion_segment_receipts import read_segment_receipt
 from app.rag.parser_adapter_routing import normalize_source_kind
 from app.rag.pipeline import RagPipeline
 from app.rag.source_profile import build_source_profile
+from app.rag.staging_recipes import RecipeStagingIngestion as IngestionPipeline
+from app.rag.staging_recipes import StagingRecipeOracle, StagingRecipeState
 from app.schemas.document import (
     DocumentChunkView,
     DocumentDetail,
@@ -87,6 +88,9 @@ class StagingOracleProtocol(Protocol):
         knowledge_base_ids: Sequence[str] | None = None,
     ) -> DocumentDetail:
         """document row を作成する。"""
+
+    async def read_staging_recipe(self, document_id: str) -> StagingRecipeState:
+        """検証対象の正式レシピと版を読み取る。"""
 
     async def get_document(self, document_id: str) -> DocumentDetail | None:
         """document detail を返す。"""
@@ -361,7 +365,7 @@ async def run_file_processing_staging_checks_with_real_clients(
 ) -> FileProcessingStagingReport:
     """実 OCI / Oracle client を使って staging checks を実行する。"""
     resolved_settings = settings or get_settings()
-    oracle = OracleClient(settings=resolved_settings)
+    oracle = StagingRecipeOracle(settings=resolved_settings)
     storage = ObjectStorageClient(settings=resolved_settings)
     try:
         return await run_file_processing_staging_checks(
@@ -371,7 +375,6 @@ async def run_file_processing_staging_checks_with_real_clients(
             storage=storage,
             ingestion=IngestionPipeline(
                 oracle=oracle,
-                object_storage=storage,
                 settings=resolved_settings,
             ),
             search=RagPipeline(oracle=oracle, settings=resolved_settings),
@@ -763,7 +766,8 @@ async def _retry_existing_document(
         content_sha256=hashlib.sha256(data).hexdigest(),
         data=data,
     )
-    with suppress(Exception):
+    retry_error: str | None = None
+    try:
         await ingestion.ingest(
             evidence.document_id,
             data,
@@ -771,11 +775,13 @@ async def _retry_existing_document(
             content_type=content_type,
             source_profile=source_profile,
         )
+    except Exception as exc:
+        retry_error = type(exc).__name__
     retry_evidence = await _collect_staging_evidence(
         oracle,
         storage,
         evidence.document_id,
-        ingestion_error_type=evidence.ingestion_error_type,
+        ingestion_error_type=retry_error or evidence.ingestion_error_type,
     )
     return replace(
         retry_evidence,
@@ -875,11 +881,11 @@ async def _collect_staging_evidence(
     *,
     ingestion_error_type: str | None = None,
 ) -> _StagingEvidence:
-    detail = await oracle.get_document(document_id)
-    chunks = tuple(await oracle.list_document_chunks(document_id))
-    segments = tuple(await oracle.list_ingestion_segments(document_id))
-    status = detail.status.value if detail is not None else "UNKNOWN"
-    extraction = detail.extraction if detail is not None else {}
+    state = await oracle.read_staging_recipe(document_id)
+    chunks = state.chunks
+    segments = state.segments
+    status = state.status.value
+    extraction = state.extraction
     artifact_integrity = (
         await _verify_artifact_integrity(
             storage=storage,
@@ -932,19 +938,44 @@ async def _verify_artifact_integrity(
     segment_payload_bytes = 0
     segment_oci_uri_count = 0
     segment_non_oci_uri_count = 0
-    for segment in _segments_with_unique_artifact_path(segments):
+    receipt = read_segment_receipt(
+        extraction, document_id, (segments[0].recipe_id or "") if segments else ""
+    )
+    if receipt is None:
+        error_count += 1
+    refs = {item.segment.segment_id: item for item in receipt.segments} if receipt else {}
+    seen_paths: set[str] = set()
+    for segment in segments:
+        if segment.status != "SUCCEEDED":
+            continue
+        if segment.artifact_path and segment.artifact_path in seen_paths:
+            continue
         segment_expected += 1
+        if not segment.artifact_path:
+            error_count += 1
+            continue
+        seen_paths.add(segment.artifact_path)
         if _storage_uri_scheme(segment.artifact_path) == "oci":
             segment_oci_uri_count += 1
         else:
             segment_non_oci_uri_count += 1
-        payload, payload_bytes = await _read_artifact_payload(storage, segment.artifact_path or "")
+        payload, payload_bytes = await _read_artifact_payload(storage, segment.artifact_path)
         segment_payload_bytes += payload_bytes
         if payload is None:
             error_count += 1
             continue
         segment_readable += 1
-        if _segment_artifact_payload_matches(payload, segment):
+        ref = refs.get(segment.segment_id)
+        kind_matches = ref is not None and (
+            _full_artifact_payload_matches(payload, document_id)
+            if ref.artifact_kind == "full"
+            else _segment_artifact_payload_matches(payload, segment)
+        )
+        key_matches = ref is not None and (
+            _mapping(payload.get("parser_artifacts")).get("extraction_artifact_parse_key")
+            == ref.parse_key
+        )
+        if kind_matches and key_matches:
             segment_identity_verified += 1
         else:
             error_count += 1
@@ -956,6 +987,7 @@ async def _verify_artifact_integrity(
         "artifact_full_readable": full_readable,
         "artifact_full_identity_verified": full_identity_verified,
         "artifact_full_payload_bytes": full_payload_bytes,
+        "artifact_segment_scope_recorded": receipt is not None,
         "artifact_segment_expected_count": segment_expected,
         "artifact_segment_oci_uri_count": segment_oci_uri_count,
         "artifact_segment_non_oci_uri_count": segment_non_oci_uri_count,

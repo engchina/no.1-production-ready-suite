@@ -13,7 +13,7 @@ import threading
 import zipfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
@@ -125,6 +125,7 @@ from app.rag.heading_levels import (
     plan_heading_level_inference,
     with_heading_level_report,
 )
+from app.rag.ingestion_attempt_receipts import record_attempt_receipt
 from app.rag.ingestion_progress import (
     IngestionProgressReporter,
     VisionSegmentsProgress,
@@ -139,6 +140,7 @@ from app.rag.ingestion_prompts import (
     RAPTOR_SUMMARY_SYSTEM_PROMPT,
 )
 from app.rag.ingestion_quality import build_ingestion_quality_report, requires_review
+from app.rag.ingestion_segment_receipts import SEGMENT_RECEIPT_KEY, accepted_segment_receipt
 from app.rag.ingestion_slots import release_heavy_ingestion_slot
 from app.rag.ingestion_strategy import extraction_strategy_for_source
 from app.rag.layer_fingerprint import (
@@ -993,6 +995,14 @@ class IngestionPipeline:
             for segment in checkpoint_segments
             if segment.page_start is not None and segment.page_end is not None
         }
+        accepted_paths: dict[tuple[int | None, int | None], str | None] = {
+            page_range: checkpoints_by_range[page_range].artifact_path for page_range in results
+        }
+        accepted_attempts: dict[tuple[int | None, int | None], int] = {
+            page_range: checkpoints_by_range[page_range].attempt_count for page_range in results
+        }
+        terminal_states: dict[str, str] = {}
+        started_attempts: dict[str, int] = {}
         for page_range in sorted(results):
             tracker.mark(checkpoints_by_range[page_range].segment_id, "SUCCEEDED", reused=True)
             if on_segment_parsed is not None:
@@ -1015,6 +1025,7 @@ class IngestionPipeline:
         async def parse_one(segment: PdfPageSegment) -> None:
             page_range = (segment.page_start, segment.page_end)
             checkpoint = checkpoints_by_range[page_range]
+            started_attempts[checkpoint.segment_id] = checkpoint.attempt_count + 1
             await self._safe_update_ingestion_segment(
                 checkpoint.segment_id,
                 status="RUNNING",
@@ -1060,14 +1071,18 @@ class IngestionPipeline:
                 # job の task の取り消し(lease の喪失など)。行は処理中のまま残り、次の試行が
                 # 待機中から始める(``_prepare_pdf_parse_segments``)。
                 tracker.mark(checkpoint.segment_id, "CANCELLED")
+                terminal_states[checkpoint.segment_id] = "CANCELLED"
                 raise
             except Exception as exc:
                 await self._mark_segment_failed(checkpoint, error=exc)
                 tracker.mark(checkpoint.segment_id, "FAILED")
+                terminal_states[checkpoint.segment_id] = "FAILED"
                 raise
             await self._mark_segment_succeeded(checkpoint, artifact_path=artifact_path)
             tracker.mark(checkpoint.segment_id, "SUCCEEDED")
             results[page_range] = (extraction, result)
+            accepted_paths[page_range] = artifact_path
+            accepted_attempts[page_range] = checkpoint.attempt_count + 1
             if on_segment_parsed is not None:
                 # 解析の終わった段の図・表の Vision を、次の段の解析と並べて始める(#2002)。
                 on_segment_parsed(checkpoint, extraction)
@@ -1086,7 +1101,60 @@ class IngestionPipeline:
                 except Exception as exc:  # noqa: BLE001 - 解析中の段の終わりを待ってから送出する
                     errors.append(exc)
 
-        await asyncio.gather(*(worker() for _ in range(min(concurrency, len(queue)) or 1)))
+        def accepted_receipt() -> dict[str, object]:
+            return accepted_segment_receipt(
+                document_id,
+                self._recipe_id,
+                [
+                    item.model_copy(
+                        update={
+                            "artifact_path": accepted_paths[(item.page_start, item.page_end)],
+                            "attempt_count": accepted_attempts[(item.page_start, item.page_end)],
+                        }
+                    )
+                    for item in checkpoint_segments
+                    if (item.page_start, item.page_end) in accepted_paths
+                ],
+                {key: value for key, value in parse_keys.items()},
+            )
+
+        tasks = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(queue)) or 1)]
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for segment in queue:
+                checkpoint = checkpoints_by_range[(segment.page_start, segment.page_end)]
+                terminal_states[checkpoint.segment_id] = "CANCELLED"
+            await record_attempt_receipt(
+                {
+                    "accepted": accepted_receipt(),
+                    "remaining_segments": [
+                        item.model_copy(
+                            update={
+                                "status": terminal_states.get(item.segment_id, "CANCELLED"),
+                                "attempt_count": started_attempts.get(
+                                    item.segment_id, item.attempt_count
+                                ),
+                            }
+                        ).model_dump(mode="json")
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                    "remaining": [
+                        {
+                            "segment_id": item.segment_id,
+                            "status": terminal_states.get(item.segment_id, "CANCELLED"),
+                        }
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                }
+            )
+            raise
+
         if errors:
             for segment in queue:
                 checkpoint = checkpoints_by_range[(segment.page_start, segment.page_end)]
@@ -1100,6 +1168,32 @@ class IngestionPipeline:
                     ),
                 )
                 tracker.mark(checkpoint.segment_id, "CANCELLED")
+                terminal_states[checkpoint.segment_id] = "CANCELLED"
+            await record_attempt_receipt(
+                {
+                    "accepted": accepted_receipt(),
+                    "remaining_segments": [
+                        item.model_copy(
+                            update={
+                                "status": terminal_states.get(item.segment_id, "QUEUED"),
+                                "attempt_count": started_attempts.get(
+                                    item.segment_id, item.attempt_count
+                                ),
+                            }
+                        ).model_dump(mode="json")
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                    "remaining": [
+                        {
+                            "segment_id": item.segment_id,
+                            "status": terminal_states.get(item.segment_id, "QUEUED"),
+                        }
+                        for item in checkpoint_segments
+                        if (item.page_start, item.page_end) not in accepted_paths
+                    ],
+                }
+            )
             cancelled = next(
                 (error for error in errors if isinstance(error, IngestionCancelledError)), None
             )
@@ -1136,6 +1230,17 @@ class IngestionPipeline:
             warnings=tuple(_dedupe_text([w for result in fresh for w in result.warnings])),
         )
         latest = await self._segments_with_latest_status(checkpoint_segments)
+        parser_result = replace(
+            parser_result,
+            extraction=merged.model_copy(
+                update={
+                    "parser_artifacts": {
+                        **merged.parser_artifacts,
+                        SEGMENT_RECEIPT_KEY: accepted_receipt(),
+                    }
+                }
+            ),
+        )
         return parser_result, latest
 
     def _segment_extraction_from_result(self, result: ParserRegistryResult) -> StructuredExtraction:
@@ -1630,6 +1735,31 @@ class IngestionPipeline:
                 checkpoint_segments,
                 artifact_path=extraction_artifact_path,
             )
+            if not segmented_parse and checkpoint_segments:
+                extraction = extraction.model_copy(
+                    update={
+                        "parser_artifacts": {
+                            **extraction.parser_artifacts,
+                            SEGMENT_RECEIPT_KEY: accepted_segment_receipt(
+                                document_id,
+                                self._recipe_id,
+                                [
+                                    item.model_copy(
+                                        update={"artifact_path": extraction_artifact_path}
+                                    )
+                                    for item in checkpoint_segments
+                                ],
+                                {
+                                    (item.page_start, item.page_end): self._segment_parse_key(
+                                        parse_bytes
+                                    )
+                                    for item in checkpoint_segments
+                                },
+                                artifact_kind="full",
+                            ),
+                        }
+                    }
+                )
             text = _text_for_chunking(extraction)
             if not text:
                 raise IngestionUserError("抽出可能なテキストが見つかりませんでした。")
@@ -2542,43 +2672,19 @@ class IngestionPipeline:
         original_object_storage_path: str | None,
         fallback_content_type: str,
     ) -> DocumentPreprocessArtifact:
+        if self._recipe_id is None:
+            raise IngestionUserError("ファイル準備の保存には正式な文書レシピが必要です。")
         artifact = preprocess_artifact_from_derivation(
             source_derivation,
             original_file_name=original_file_name,
             original_object_storage_path=original_object_storage_path,
             fallback_content_type=fallback_content_type,
         )
-        if self._recipe_id is not None:
-            await self._oracle.update_document_recipe_status(
-                recipe_id=self._recipe_id,
-                status=FileStatus.PREPROCESSED,
-                preprocess_artifact=artifact,
-            )
-            return artifact
-        save_artifact = getattr(self._oracle, "save_preprocess_artifact", None)
-        if not callable(save_artifact):
-            return artifact
-        await save_artifact(document_id, artifact)
-        if artifact.object_storage_path:
-            # 保存検証: ファイル準備 artifact(JSON 列)の書き込みが永続化したか読み戻して確認する。
-            # 稀に commit 成功でも値が残らない事象があり、silent に path 欠落の PREPROCESSED を
-            # 作ると「処理後」も EXTRACT も壊れる。残っていなければ失敗を表面化し再処理を促す。
-            get_document = getattr(self._oracle, "get_document", None)
-            if callable(get_document):
-                saved = await get_document(document_id)
-                if (
-                    saved is None
-                    or saved.preprocess_artifact is None
-                    or not saved.preprocess_artifact.object_storage_path
-                ):
-                    logger.warning(
-                        "preprocess_artifact_not_persisted",
-                        extra={"document_id": document_id},
-                    )
-                    raise IngestionUserError(
-                        "ファイル準備の処理後ファイル情報を保存できませんでした。"
-                        "時間をおいてファイル準備から再処理してください。"
-                    )
+        await self._oracle.update_document_recipe_status(
+            recipe_id=self._recipe_id,
+            status=FileStatus.PREPROCESSED,
+            preprocess_artifact=artifact,
+        )
         return artifact
 
     async def _cache_canonical_artifact(

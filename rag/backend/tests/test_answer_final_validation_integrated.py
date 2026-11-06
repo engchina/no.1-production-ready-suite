@@ -19,7 +19,6 @@ async def test_final_validation_mode_reaches_real_claim_parser_and_keeps_its_ver
     verdict: Literal["supported", "unsupported"],
 ) -> None:
     from rag_engine.evaluation import answer_eval
-    from rag_engine.evaluation.answer_validation import ClaimAuditOutput
 
     source = "有効期限は最長 30 日です。"
     citation = RetrievedChunk(
@@ -45,11 +44,18 @@ async def test_final_validation_mode_reaches_real_claim_parser_and_keeps_its_ver
             return {}
 
     def parser(system: str, inputs: str, settings: Any, schema: Any, **options: Any) -> Any:
-        assert schema is ClaimAuditOutput
+        assert schema.__name__ == "FinalValidationUnitAudit"
+        wire = schema.model_json_schema()
+        claim_schema = wire["$defs"]["FinalValidationUnitClaim"]["properties"]
+        assert "evidence_unit_ids" in claim_schema
+        assert not {"evidence_quote", "evidence_id", "source_id"} & claim_schema.keys()
         payload = json.loads(inputs)
         assert payload["question"] == "有効期限は何日ですか。"
         evidence = next(item for item in payload["evidence_items"] if item["id"] == "chunk-a")
-        assert evidence["text"] == source
+        assert "text" not in evidence or evidence["text"] == ""
+        assert [unit["text"] for unit in evidence["units"]] == [source]
+        selected_ids = [unit["unit_id"] for unit in evidence["units"]]
+        assert set(selected_ids) <= set(claim_schema["evidence_unit_ids"]["items"]["enum"])
         passages = payload["answer_passages"]
         assert len(passages) == 1
         parsed.append({"mode": settings.answer_audit_mode, "schema": schema.__name__})
@@ -61,13 +67,11 @@ async def test_final_validation_mode_reaches_real_claim_parser_and_keeps_its_ver
                     {
                         "answer_quote": passages[0]["text"],
                         "answer_passage_id": passages[0]["id"],
-                        "evidence_id": evidence["evidence_id"],
-                        "evidence_quote": source if verdict == "supported" else "",
+                        "evidence_unit_ids": selected_ids if verdict == "supported" else [],
                         "claim_target": "有効期限",
                         "evidence_target": "有効期限",
                         "applicability": "matched",
                         "status": verdict,
-                        "source_id": "",
                         "reason": "合成の照合結果",
                     }
                 ]
@@ -94,7 +98,7 @@ async def test_final_validation_mode_reaches_real_claim_parser_and_keeps_its_ver
         assert validation == {"status": "not_run", "valid": False, "reason": "audit_disabled"}
         return
     assert loaded == [("document-a", "chunk-a")]
-    assert parsed == [{"mode": mode, "schema": "ClaimAuditOutput"}]
+    assert parsed == [{"mode": mode, "schema": "FinalValidationUnitAudit"}]
     assert validation["status"] == "completed"
     assert validation["valid"] is (verdict == "supported")
     assert validation["counts"][verdict] == 1

@@ -106,6 +106,7 @@ from app.rag.ingestion import (
     document_artifact_prefixes,
     record_boundary_failure_message,
 )
+from app.rag.ingestion_attempt_receipts import AttemptReceipt, attempt_receipt_scope
 from app.rag.ingestion_language import artifact_language_compatible, ingestion_release_scope
 from app.rag.ingestion_progress import track_ingestion_progress
 from app.rag.ingestion_worker import request_ingestion_worker_wakeup
@@ -146,6 +147,7 @@ from app.rag.section_rules import (
     load_section_rules,
 )
 from app.rag.source_profile import build_source_profile, rejected_upload_format_message
+from app.rag.staging_recipes import StagingRuntimeOptions, apply_staging_runtime
 from app.rag.variant_keys import (
     compute_chunk_set_id,
     compute_extraction_recipe_id,
@@ -1496,6 +1498,7 @@ async def _enqueue_ingestion_job_for_recipe(
     phase: IngestionJobPhase,
     expected_language_pack_release_id: str | None = None,
     expected_config_revision: int | None = None,
+    staging_runtime: StagingRuntimeOptions | None = None,
 ) -> IngestionJob:
     """snapshot を作り、Oracle 側の行ロック検証後に recipe job を投入する。"""
     oracle = OracleClient()
@@ -1510,6 +1513,10 @@ async def _enqueue_ingestion_job_for_recipe(
         raise ValueError("レシピの改訂が変わりました。対象を確認し直してください。")
     config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     effective_settings, _ = _merge_document_processing_config(config)
+    if staging_runtime is not None:
+        effective_settings = apply_staging_runtime(
+            effective_settings, {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
+        )
     source_profile = _source_profile_for_detail(detail)
     # レシピの解析エンジン(既定は Docling)で扱えない形式は、job を作る前に止める(#286)。
     await _raise_if_parser_source_blocked(effective_settings, source_profile, phase)
@@ -1526,6 +1533,11 @@ async def _enqueue_ingestion_job_for_recipe(
             "processing_config": config.model_dump(mode="json", exclude_none=True),
             "rag_preprocess_profile": effective_settings.rag_preprocess_profile,
             "rag_parser_adapter_backend": effective_settings.rag_parser_adapter_backend,
+            **(
+                {"staging_runtime": staging_runtime.model_dump(exclude_none=True)}
+                if staging_runtime is not None
+                else {}
+            ),
         },
     )
     _dispatch_ingestion_job(job.id)
@@ -2879,12 +2891,18 @@ async def _materialize_experiment_candidate(
     if isinstance(raw_config, Mapping):
         candidate_config = DocumentProcessingConfig.model_validate(raw_config)
     else:
-        _base_settings, candidate_config = await _resolve_ingestion_settings(
-            oracle, job.document_id, recipe_id
-        )
+        try:
+            _base_settings, candidate_config = await _resolve_ingestion_settings(
+                oracle, job.document_id, recipe_id
+            )
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            raise IngestionUserError(str(exc.detail)) from exc
     candidate_settings, effective_candidate_config = _merge_document_processing_config(
         candidate_config
     )
+    candidate_settings = apply_staging_runtime(candidate_settings, job.settings_overrides or {})
     base_chunk_set_id = compute_chunk_set_id(detail.content_sha256, candidate_settings)
     candidate_chunk_set_id = hashlib.sha256(
         # 試行も材料にする。切替の後の再投入が active の chunk_set を置き換えないように（#4115）。
@@ -4489,8 +4507,8 @@ async def _resolve_ingestion_settings(
 ) -> tuple[Settings, DocumentProcessingConfig]:
     """レシピ > global 既定で有効な処理設定を解決する。KB は参照しない。
 
-    レシピは ``recipe_id``、無ければ文書の既定レシピ。処理設定はレシピに保存するので、文書行の
-    設定はレシピを読めないときだけ使う(#697)。
+    レシピは ``recipe_id``、無ければ文書の既定レシピ。参照した正式レシピが無ければ、
+    旧文書列の設定で補わず停止する。
     """
     config: DocumentProcessingConfig | None = None
     ensure_recipe = getattr(oracle, "ensure_default_document_recipe", None)
@@ -4499,8 +4517,12 @@ async def _resolve_ingestion_settings(
         recipe_id = str((await ensure_recipe(document_id))["recipe_id"])
     if recipe_id is not None and callable(get_recipe):
         row = await get_recipe(document_id, recipe_id)
-        if row is not None:
-            config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail="処理レシピが見つかりません。文書の処理レシピを確認してください。",
+            )
+        config = DocumentProcessingConfig.model_validate(row.get("processing_config") or {})
     if config is None:
         config = await oracle.get_document_processing_config(document_id)
     effective, _resolved = _merge_document_processing_config(config)
@@ -5641,26 +5663,46 @@ async def _run_pinned_ingestion_job(
         # 抽出の段（解析・Vision）の進捗を job の行へ書く（#1999）。lease を失った実行は書かない。
         await oracle.update_ingestion_job_progress(job_id, progress, lease_owner=lease_owner)
 
+    async def write_attempt_receipt(payload: dict[str, Any]) -> None:
+        if job.recipe_id is None or job.recipe_revision is None:
+            raise RuntimeError("受理記録をjobの処理レシピへ束縛できません。")
+        receipt = AttemptReceipt.model_validate(
+            {
+                **payload,
+                "version": 1,
+                "job_id": job.id,
+                "attempt_count": job.attempt_count,
+                "document_id": job.document_id,
+                "recipe_id": job.recipe_id,
+                "recipe_revision": job.recipe_revision,
+            }
+        )
+        if not await oracle.save_ingestion_attempt_receipt(
+            job.id, receipt, attempt_count=job.attempt_count, lease_owner=lease_owner
+        ):
+            raise RuntimeError("取込jobの試行又はleaseが変わったため受理記録を保存できません。")
+
     # レシピ経路で「現在ジョブ完了後に自動投入すべき次フェーズ」を受け取る。投入は現在ジョブが
     # SUCCEEDED になった後(レシピ行ロックのガードを通過できる状態)に行う。
     next_recipe_phase: IngestionJobPhase | None = None
     # レシピ経路で、job を SUCCEEDED にできた後に記録する成功の監査・metric(#514)。
     recipe_success_outcome: IngestionSuccessOutcome | None = None
     try:
-        async with track_ingestion_progress(write_progress):
-            if job.recipe_id is not None:
-                await _raise_if_job_cancelled(is_cancelled)
-                await oracle.update_document_recipe_status(
-                    recipe_id=job.recipe_id,
-                    status=_PHASE_TO_RUNNING_STATUS[job.phase],
+        with attempt_receipt_scope(write_attempt_receipt):
+            async with track_ingestion_progress(write_progress):
+                if job.recipe_id is not None:
+                    await _raise_if_job_cancelled(is_cancelled)
+                    await oracle.update_document_recipe_status(
+                        recipe_id=job.recipe_id,
+                        status=_PHASE_TO_RUNNING_STATUS[job.phase],
+                    )
+                # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
+                # 止める（#486）。
+                recipe_result = await _materialize_experiment_candidate(
+                    oracle, job, cancel_checker=is_cancelled, lease_owner=lease_owner
                 )
-            # 旧 active を維持した隔離 materialize。recipe_id の無い job は利用者向けのエラーで
-            # 止める（#486）。
-            recipe_result = await _materialize_experiment_candidate(
-                oracle, job, cancel_checker=is_cancelled, lease_owner=lease_owner
-            )
-            next_recipe_phase = recipe_result.next_phase
-            recipe_success_outcome = recipe_result.success_outcome
+                next_recipe_phase = recipe_result.next_phase
+                recipe_success_outcome = recipe_result.success_outcome
     except HTTPException as exc:
         await _fail_ingestion_job(oracle, job, str(exc.detail), lease_owner=lease_owner)
         logger.info(
@@ -5755,8 +5797,13 @@ async def _run_pinned_ingestion_job(
             # (レシピ行ロックのガードを通過する)。抽出は既に成功しているため、投入失敗は
             # 握りつぶして warning に留め、人手の「承認して Chunk 作成」で続行可能にする。
             try:
+                next_options: dict[str, Any] = {}
+                if job.settings_overrides and "staging_runtime" in job.settings_overrides:
+                    next_options["staging_runtime"] = StagingRuntimeOptions.model_validate(
+                        job.settings_overrides["staging_runtime"]
+                    )
                 await _enqueue_ingestion_job_for_recipe(
-                    job.document_id, job.recipe_id, phase=next_recipe_phase
+                    job.document_id, job.recipe_id, phase=next_recipe_phase, **next_options
                 )
             except Exception:
                 logger.warning(
@@ -6103,22 +6150,31 @@ async def _finish_ingestion_job_unless_cancelled(
     return finished
 
 
+def _require_recipe_for_prepared(variant: str) -> None:
+    if variant == "prepared":
+        raise HTTPException(
+            status_code=400,
+            detail="処理後ファイルを取得するには、処理レシピを指定したURLを使用してください。",
+        )
+
+
 @router.get("/{document_id}/content")
 async def document_content(
     document_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     disposition: Annotated[Literal["inline", "attachment"], Query()] = "inline",
 ) -> Response:
-    """原本またはファイル準備後 artifact を返す（文書プレビュー/ダウンロード用）。"""
+    """文書の原本を返す。処理後ファイルはレシピ指定の入口を使う。"""
     oracle = OracleClient()
     detail = await oracle.get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    _require_recipe_for_prepared(variant)
     return await document_content_response(
         detail,
         variant=variant,
         disposition=disposition,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
@@ -6127,13 +6183,12 @@ async def document_preview_pages(
     document_id: str,
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
 ) -> ApiResponse[DocumentPreviewPages]:
-    """原本 / 処理後ファイルのページ一覧(PDF をページ画像で表示し、bbox の強調を重ねる。#349)。"""
+    """原本のページ一覧を返す。処理後ファイルはレシピ指定の入口を使う。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
-    return await _document_preview_pages_response(
-        detail, variant=variant, preprocess_artifact=detail.preprocess_artifact
-    )
+    _require_recipe_for_prepared(variant)
+    return await _document_preview_pages_response(detail, variant=variant, preprocess_artifact=None)
 
 
 @router.get("/{document_id}/preview-pages/{page_number}")
@@ -6143,16 +6198,17 @@ async def document_preview_page_image(
     variant: Annotated[Literal["original", "prepared"], Query()] = "original",
     dpi: Annotated[int, Query(ge=48, le=288)] = 144,
 ) -> Response:
-    """原本 / 処理後ファイルの 1 ページを PNG で返す(ページの /Rotate を反映した向き)。"""
+    """原本の 1 ページを PNG で返す。処理後ファイルはレシピ指定の入口を使う。"""
     detail = await OracleClient().get_document(document_id)
     if detail is None or detail.object_storage_path is None:
         raise HTTPException(status_code=404, detail="ドキュメントが見つかりません。")
+    _require_recipe_for_prepared(variant)
     return await _document_preview_page_image_response(
         detail,
         page_number=page_number,
         variant=variant,
         dpi=dpi,
-        preprocess_artifact=detail.preprocess_artifact,
+        preprocess_artifact=None,
     )
 
 
@@ -6167,8 +6223,9 @@ async def document_recipe_text_window(
         found_detail = await OracleClient().get_document(document_id)
         if found_detail is None:
             raise HTTPException(status_code=404, detail="文書が見つかりません。")
+        _require_recipe_for_prepared(request.variant)
         detail = found_detail
-        artifact = detail.preprocess_artifact
+        artifact = None
     variant, offset, limit, focus = request.variant, request.offset, request.limit, request.focus
 
     payload: dict[str, Any] = {}

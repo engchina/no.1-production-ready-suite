@@ -14,6 +14,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 
+from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_KEY, VisionTextProjection
+
 from rag_engine.adapters.oci import VISION_SYSTEM_PROMPT, _image_retrieval_template, _render_prompt, describe_picture
 from rag_engine.config import Settings, get_llm_provider, llm_output_token_limit
 from rag_engine.models.layout import LayoutRecord, PageImage
@@ -279,7 +281,7 @@ def _vision_field_lines(field: str, value: Any) -> list[str]:
     return [line for item in value if not _is_empty_vision_value(item) and (line := renderer(item))]
 
 
-def vision_description_text(payload: dict[str, Any]) -> str:
+def vision_description_text(payload: dict[str, Any], *, for_answer: bool = False) -> str:
     """対応する Vision field を text-only retrieval 向けのラベル付き text に整形します。
 
     `■ グループ` の見出しの下に `ラベル: 値` を並べ、要素が複数ある field は `ラベル:` の
@@ -293,6 +295,8 @@ def vision_description_text(payload: dict[str, Any]) -> str:
     labels = content_labels()
     lines: list[str] = []
     for group, fields in VISION_SENTENCE_GROUPS:
+        if for_answer and group == "search":
+            continue
         group_lines: list[str] = []
         for field in fields:
             label = labels.field(field)
@@ -312,6 +316,37 @@ def vision_description_text(payload: dict[str, Any]) -> str:
             lines.extend(group_lines)
     text = "\n".join(lines)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def vision_text_projection(payload: dict[str, Any]) -> VisionTextProjection:
+    """型付き検索フィールドだけを本文から分け、可視文字列は解釈しない。"""
+    return VisionTextProjection(
+        answer_description=vision_description_text(payload, for_answer=True),
+        index_text=vision_description_text(payload),
+    )
+
+
+def reproject_saved_vision_record(record: dict[str, Any]) -> None:
+    """保存rawと旧整形本文が完全一致する作業用recordだけを新投影にする。"""
+    raw = record.get("raw")
+    if not isinstance(raw, dict) or raw.get("vision_status") != "succeeded" or raw.get("vision_error"):
+        return
+    if VISION_TEXT_PROJECTION_KEY in raw:
+        return
+    description = raw.get("vision_description")
+    category = str(record.get("category") or "")
+    if not isinstance(description, dict) or category not in {"Picture", "Table", "Form"}:
+        return
+    projection = vision_text_projection(description)
+    if not projection.answer_description:
+        return
+    key = "table_vision_text" if category == "Table" else "text"
+    holder = raw if category == "Table" else record
+    current = holder.get(key)
+    if not isinstance(current, str) or current not in {projection.index_text, projection.answer_description}:
+        return
+    holder[key] = projection.answer_description
+    raw[VISION_TEXT_PROJECTION_KEY] = projection.dumps()
 
 
 def _normalized_visual_kind(value: Any) -> str:
@@ -715,7 +750,9 @@ def _describe_layout_pictures(
             return
         if post_vision_role is not None:
             mark_picture_record_role(record, post_vision_role)
-        sentence = vision_description_text(description)
+        projection = vision_text_projection(description)
+        record.raw[VISION_TEXT_PROJECTION_KEY] = projection.dumps()
+        sentence = projection.answer_description
         if not sentence:
             work.reusable = False
             raise RuntimeError("Vision 応答に利用可能な説明フィールドがありません。")
