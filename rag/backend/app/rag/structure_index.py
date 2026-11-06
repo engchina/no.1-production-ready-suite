@@ -38,12 +38,17 @@ def source_fingerprint(chunk_sets: list[str]) -> str:
 async def structure_index_plan(
     oracle: Any, knowledge_base_id: str, *, document_ids: list[str] | None = None
 ) -> list[dict[str, Any]]:
-    """本文を取らず、現在見える所属文書とactive成果・補建記録を比較する。"""
+    """本文を取らず、現在見える所属文書とactive成果・補建記録を比較する。
+
+    版の指紋が同じでも、本文の結び付きが本文の chunk より少ない索引（「本文」の節点の前の索引）は
+    ``STALE`` にし、``body_links_missing`` を付ける（#4543）。
+    """
     from app.clients.oracle import (
         _oracle_access_predicate_sql,
         _oracle_in_predicate,
         _with_tenant_bind,
     )
+    from app.clients.structure_graph_store import StructureGraphStore
     from app.clients.structure_index_store import StructureIndexStore
 
     kb = await oracle.get_knowledge_base(knowledge_base_id)
@@ -103,16 +108,31 @@ async def structure_index_plan(
                 item["build_chunk_sets"].append(str(row["chunk_set_id"]))
             if not row.get("chunks"):
                 item["unavailable"] = "no_chunks"
+    # 指紋が一致する文書だけ、補建が作る版（構築設定OFFなら既存の版）の本文の結び付きを確かめる。
+    checked: dict[str, list[str]] = {}
     for item in documents.values():
         if item["chunk_sets"] and not item["build_chunk_sets"]:
             item["unavailable"] = "disabled"
         item["fingerprint"] = source_fingerprint(item["chunk_sets"])
         built = builds.get(item["document_id"])
+        if built and item["chunk_sets"] and built["source_fingerprint"] == item["fingerprint"]:
+            checked[item["document_id"]] = item["build_chunk_sets"] or item["chunk_sets"]
+    gaps = (
+        await StructureGraphStore(oracle).body_link_gaps(
+            knowledge_base_id, sorted({cs for sets in checked.values() for cs in sets})
+        )
+        if checked
+        else set()
+    )
+    for item in documents.values():
+        built = builds.get(item["document_id"])
+        item["body_links_missing"] = any(cs in gaps for cs in checked.get(item["document_id"], []))
+        fresh = item["document_id"] in checked and not item["body_links_missing"]
         item["status"] = (
             "UNAVAILABLE"
             if not item["chunk_sets"] or item.get("unavailable")
             else "CURRENT"
-            if built and built["source_fingerprint"] == item["fingerprint"]
+            if fresh
             else "STALE"
             if built
             else "MISSING"
@@ -121,7 +141,7 @@ async def structure_index_plan(
         item["reason"] = "no_chunks" if not item["chunk_sets"] else item.pop("unavailable", None)
         # 構築設定OFFは新しい作業の可否であり、既存索引を無効にはしない。
         item["index_status"] = (
-            ("CURRENT" if built["source_fingerprint"] == item["fingerprint"] else "STALE")
+            ("CURRENT" if fresh else "STALE")
             if built and item["chunk_sets"] and item["reason"] == "disabled"
             else item["status"]
         )

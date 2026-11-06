@@ -94,6 +94,10 @@ async def test_current_snapshot_is_derived_from_live_chunk_sets_and_saved_build(
 
         async def _fetch_all(self, sql: str, binds: Any) -> list[dict[str, Any]]:
             self.sqls.append((sql, binds))
+            if "AS body_links" in sql:
+                # 本文の結び付きの検査は、指紋が一致する版だけに行う（構造索引の entity は無い）。
+                assert set(binds.values()) >= {"kb", "synthetic-set-a"}
+                return []
             if "rag_structure_index_builds" in sql:
                 return [
                     {

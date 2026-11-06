@@ -12,17 +12,32 @@ from typing import Any
 from app.clients.oracle import (
     SECTION_PATH_OVERFLOW_SQL,
     _graph_visible_document_predicate,
+    _metadata_long_text_sql,
     _oracle_access_predicate_sql,
     _oracle_in_predicate,
     _with_tenant_bind,
 )
-from app.rag.graph_index import GRAPH_NAME_ELISION
+from app.rag.graph_index import GRAPH_NAME_ELISION, graph_body_node_id, is_body_chunk
 from app.rag.structure_tree import (
     StructureChunkRow,
     StructureTree,
     build_structure_tree,
     section_chain,
 )
+
+# IN の bind の数を Oracle の上限（1000）より十分に小さく保つ。
+_IN_BATCH = 500
+# VARCHAR2(4000) に入らない section_path / section_title の行（どちらの関数も NULL を返す）。
+_LONG_STRUCTURE_VALUE_SQL = (
+    f"({SECTION_PATH_OVERFLOW_SQL} OR {_metadata_long_text_sql('section_title')})"
+)
+# 章節の木と本文の判定に要る chunk の値（本文は読まない）。
+_STRUCTURE_ROW_COLUMNS = f"""
+    JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path,
+    JSON_QUERY(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path_json,
+    JSON_VALUE(c.metadata_json,'$.section_title' RETURNING VARCHAR2(4000)) AS title,
+    JSON_VALUE(c.metadata_json,'$.content_kind' RETURNING VARCHAR2(64)) AS kind,
+    CASE WHEN {_LONG_STRUCTURE_VALUE_SQL} THEN 1 ELSE 0 END AS long_value"""
 
 
 def _reference_scope_sql() -> str:
@@ -47,6 +62,53 @@ def _section_path_text(row: dict[str, Any]) -> str | None:
         return str(row["path"])
     parts = json.loads(str(row.get("path_json") or "null"))
     return " > ".join(str(part) for part in parts) if isinstance(parts, list) else None
+
+
+async def _structure_rows(
+    oracle: Any, key_sql: str, where_sql: str, binds: dict[str, Any]
+) -> list[tuple[dict[str, Any], StructureChunkRow]]:
+    """``key_sql`` の順の chunk の行と、木・本文の判定に使う値。
+
+    VARCHAR2(4000) に入らない値の行だけを CLOB で読み直す（#4126）。
+    """
+    rows = await oracle._fetch_all(
+        f"""SELECT {key_sql},{_STRUCTURE_ROW_COLUMNS}
+        FROM rag_chunks c WHERE {where_sql} ORDER BY {key_sql}""",
+        binds,
+    )
+
+    def key(row: dict[str, Any]) -> tuple[str, int]:
+        return str(row.get("chunk_set_id") or ""), int(row["chunk_index"])
+
+    long_rows: dict[tuple[str, int], dict[str, Any]] = {}
+    if any(row.get("long_value") for row in rows):
+        long_rows = {
+            key(row): row
+            for row in await oracle._fetch_all(
+                f"""SELECT {key_sql},
+                JSON_VALUE(c.metadata_json,'$.section_path' RETURNING CLOB) AS path,
+                JSON_QUERY(c.metadata_json,'$.section_path' RETURNING CLOB) AS path_json,
+                JSON_VALUE(c.metadata_json,'$.section_title' RETURNING CLOB) AS title
+                FROM rag_chunks c WHERE {where_sql} AND {_LONG_STRUCTURE_VALUE_SQL}""",
+                binds,
+            )
+        }
+    result = []
+    for row in rows:
+        long_row = long_rows.get(key(row), {})
+        path_row = long_row if long_row.get("path") or long_row.get("path_json") else row
+        title = long_row.get("title") or row.get("title")
+        result.append(
+            (
+                row,
+                StructureChunkRow(
+                    _section_path_text(path_row),
+                    str(title) if title else None,
+                    str(row["kind"]) if row.get("kind") else None,
+                ),
+            )
+        )
+    return result
 
 
 def _like_pattern(value: str) -> str:
@@ -134,38 +196,58 @@ class StructureGraphStore:
         return dict(rows[0])
 
     async def _tree(self, kb_id: str, chunk_set_id: str) -> StructureTree:
-        rows = await self.oracle._fetch_all(
-            f"""SELECT c.chunk_index,
-            JSON_VALUE(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path,
-            JSON_QUERY(c.metadata_json,'$.section_path' RETURNING VARCHAR2(4000)) AS path_json,
-            JSON_VALUE(c.metadata_json,'$.section_title' RETURNING VARCHAR2(4000)) AS title,
-            JSON_VALUE(c.metadata_json,'$.content_kind' RETURNING VARCHAR2(64)) AS kind,
-            CASE WHEN {SECTION_PATH_OVERFLOW_SQL} THEN 1 ELSE 0 END AS path_overflow
-            FROM rag_chunks c WHERE c.chunk_set_id=:chunk_set ORDER BY c.chunk_index""",
-            {"chunk_set": chunk_set_id},
+        rows = await _structure_rows(
+            self.oracle, "c.chunk_index", "c.chunk_set_id=:chunk_set", {"chunk_set": chunk_set_id}
         )
-        overflow: dict[int, str] = {}
-        if any(row.get("path_overflow") for row in rows):
-            long_rows = await self.oracle._fetch_all(
-                f"""SELECT c.chunk_index,
-                JSON_VALUE(c.metadata_json,'$.section_path' RETURNING CLOB) AS path
-                FROM rag_chunks c WHERE c.chunk_set_id=:chunk_set
-                AND {SECTION_PATH_OVERFLOW_SQL}""",
-                {"chunk_set": chunk_set_id},
-            )
-            overflow = {int(row["chunk_index"]): str(row["path"]) for row in long_rows}
         return build_structure_tree(
-            (
-                StructureChunkRow(
-                    overflow.get(int(row["chunk_index"])) or _section_path_text(row),
-                    str(row["title"]) if row.get("title") else None,
-                    str(row["kind"]) if row.get("kind") else None,
-                )
-                for row in rows
-            ),
-            chunk_set_id=chunk_set_id,
-            knowledge_base_id=kb_id,
+            (row for _raw, row in rows), chunk_set_id=chunk_set_id, knowledge_base_id=kb_id
         )
+
+    async def body_link_gaps(self, kb_id: str, chunk_set_ids: list[str]) -> set[str]:
+        """構造索引があるのに、本文の chunk より本文の結び付きが少ない版（#4543）。
+
+        「本文」の節点（#4507）の前の索引は、版が同じでも本文の結び付きを持たない。本文の判定は
+        索引の構築・章節の木と同じ ``is_body_chunk``。呼び出し側が KB の所属・文書の権限で絞った
+        版だけを渡す。本文・embedding は読まない。
+        """
+        gaps: set[str] = set()
+        for start in range(0, len(chunk_set_ids), _IN_BATCH):
+            batch = chunk_set_ids[start : start + _IN_BATCH]
+            set_sql, set_binds = _oracle_in_predicate("e.chunk_set_id", "body_link_set", batch)
+            node_sql, node_binds = _oracle_in_predicate(
+                "l.entity_id", "body_link_node", [graph_body_node_id(cs, kb_id) for cs in batch]
+            )
+            # 本文の節点の entity_chunks と同じ結び付きの範囲（同じ版と文書の chunk）を数える。
+            links = {
+                str(row["chunk_set_id"]): int(row["body_links"])
+                for row in await self.oracle._fetch_all(
+                    f"""SELECT e.chunk_set_id,COUNT(c.chunk_id) AS body_links
+                    FROM rag_graph_entities e
+                    JOIN rag_chunk_sets cs ON cs.chunk_set_id=e.chunk_set_id
+                    LEFT JOIN rag_graph_entity_chunks l ON l.entity_id=e.entity_id
+                        AND e.entity_type='body' AND l.document_id=cs.document_id
+                        AND {node_sql}
+                    LEFT JOIN rag_chunks c ON c.chunk_id=l.chunk_id
+                        AND c.chunk_set_id=e.chunk_set_id AND c.document_id=cs.document_id
+                    WHERE e.knowledge_base_id=:kb AND {set_sql}
+                    GROUP BY e.chunk_set_id""",
+                    {"kb": kb_id, **set_binds, **node_binds},
+                )
+            }
+            if not links:
+                continue
+            row_sql, row_binds = _oracle_in_predicate(
+                "c.chunk_set_id", "structure_row_set", sorted(links)
+            )
+            bodies: dict[str, int] = {}
+            for raw, row in await _structure_rows(
+                self.oracle, "c.chunk_set_id,c.chunk_index", row_sql, row_binds
+            ):
+                if is_body_chunk(row.section_path, row.section_title):
+                    chunk_set = str(raw["chunk_set_id"])
+                    bodies[chunk_set] = bodies.get(chunk_set, 0) + 1
+            gaps.update(cs for cs, count in bodies.items() if count > links[cs])
+        return gaps
 
     async def children(
         self,
@@ -203,24 +285,41 @@ class StructureGraphStore:
             "offset": offset,
         }
 
-    async def body_chunks(
-        self, kb_id: str, document_id: str, chunk_set_id: str, *, offset: int, limit: int
+    async def entity_chunks(
+        self,
+        kb_id: str,
+        document_id: str,
+        chunk_set_id: str,
+        *,
+        node_id: str,
+        offset: int,
+        limit: int,
     ) -> dict[str, Any]:
-        """本文節点の実Chunkだけを保存順に返す。本文/原文の読取は既存根拠APIが担う。"""
-        from app.rag.graph_index import graph_body_node_id
+        """章節・本文の節点に結んだ実 chunk を保存順に返す。原文の読み取りは既存の根拠 API。
 
+        節点は同じ版・同じ KB の実体だけ（木だけにある仮想の節点・文書の節点は KeyError）。
+        下の段の節点の chunk は含めない（その節点を開いて読む）。
+        """
         await self.assert_document(kb_id, document_id, chunk_set_id)
+        entity = await self.oracle._fetch_all(
+            """SELECT e.entity_id FROM rag_graph_entities e WHERE e.entity_id=:node
+            AND e.chunk_set_id=:chunk_set AND e.knowledge_base_id=:kb
+            AND e.entity_type<>'document'""",
+            {"node": node_id, "chunk_set": chunk_set_id, "kb": kb_id},
+        )
+        if not entity:
+            raise KeyError(node_id)
         source_sql = """FROM rag_graph_entity_chunks l
             JOIN rag_graph_entities e ON e.entity_id=l.entity_id
-                AND e.chunk_set_id=:chunk_set AND e.knowledge_base_id=:kb AND e.entity_type='body'
+                AND e.chunk_set_id=:chunk_set AND e.knowledge_base_id=:kb
             JOIN rag_chunks c ON c.chunk_id=l.chunk_id AND c.chunk_set_id=e.chunk_set_id
                 AND c.document_id=:document_id
-            WHERE l.entity_id=:body AND l.document_id=:document_id"""
+            WHERE l.entity_id=:node AND l.document_id=:document_id"""
         scope = {
             "kb": kb_id,
             "document_id": document_id,
             "chunk_set": chunk_set_id,
-            "body": graph_body_node_id(chunk_set_id, kb_id),
+            "node": node_id,
         }
         rows = await self.oracle._fetch_all(
             f"""SELECT c.chunk_id,c.chunk_index,

@@ -10,15 +10,17 @@ from pr_backend_core.oracle_errors import oracle_error_codes
 from rag_parser_core.language import (
     LanguagePack,
     build_pack,
-    complete_compatible_pack,
-    stored_pack_hash,
-    stored_pack_ingest_hash,
 )
 
+from app.rag.language_pack_contract import (
+    LanguagePackNotInitializedError,
+    LanguagePackSnapshotError,
+)
 from app.schemas.language_pack_release import (
     LanguagePackRelease,
     LanguagePackReleaseList,
     LanguagePackReleaseState,
+    LanguagePackReleaseSummary,
 )
 
 if TYPE_CHECKING:
@@ -68,12 +70,30 @@ CREATE INDEX rag_lang_state_current_idx ON {STATE_TABLE} (current_release_id);
 """.strip()
 
 
-def _validated(effective: dict[str, Any], *, allow_legacy: bool = False) -> LanguagePack:
-    pack = build_pack(effective)
-    expected = complete_compatible_pack(effective) if allow_legacy else effective
-    if pack.to_dict() != expected:
-        raise ValueError("言語資源は全項目を含む完全な設定で保存してください。")
+def _validated(effective: dict[str, Any]) -> LanguagePack:
+    try:
+        pack = build_pack(effective)
+    except ValueError as exc:
+        raise LanguagePackSnapshotError("保存済み言語資源の項目が現在の契約に合いません。") from exc
+    if pack.to_dict() != effective:
+        raise LanguagePackSnapshotError("言語資源は全項目を含む完全な設定で保存してください。")
     return pack
+
+
+def _release_summary(row: dict[str, object]) -> LanguagePackReleaseSummary:
+    return LanguagePackReleaseSummary.model_validate(
+        {
+            "id": row["release_id"],
+            "version": row["version"],
+            "hash": row["content_hash"],
+            "ingest_hash": row["ingest_hash"],
+            "published_at": row["published_at"],
+            "published_by": row.get("published_by"),
+            "previous_id": row.get("previous_id"),
+            "restored_from": row.get("restored_from"),
+            "change_note": row.get("change_note") or "",
+        }
+    )
 
 
 def _release(row: dict[str, object]) -> LanguagePackRelease:
@@ -93,15 +113,15 @@ def _release(row: dict[str, object]) -> LanguagePackRelease:
             "change_note": row.get("change_note") or "",
         }
     )
-    pack = _validated(release.effective, allow_legacy=True)
+    pack = _validated(release.effective)
     if (
-        stored_pack_hash(release.effective, pack),
-        stored_pack_ingest_hash(release.effective, pack),
+        pack.hash,
+        pack.ingest_hash,
     ) != (
         release.hash,
         release.ingest_hash,
     ):
-        raise ValueError("言語資源の保存内容と公開版の照合に失敗しました。")
+        raise LanguagePackSnapshotError("言語資源の保存内容と公開版の照合に失敗しました。")
     return release
 
 
@@ -113,16 +133,30 @@ def _state(connection: OracleConnectionProtocol, *, lock: bool = False) -> Langu
         f"SELECT * FROM {STATE_TABLE} WHERE singleton_id=1" + (" FOR UPDATE" if lock else ""),
         {},
     )
-    if row is None or not row.get("current_release_id"):
-        raise LookupError("言語資源の公開版がまだありません。")
+    if row is None:
+        historical = _fetch_one(
+            connection, f"SELECT release_id FROM {RELEASE_TABLE} FETCH FIRST 1 ROWS ONLY", {}
+        )
+        if historical is None:
+            raise LanguagePackNotInitializedError("言語資源は未初期化です。")
+        # 別transactionの初期化が2つのSELECTの間に完了した場合だけ、確定した状態を読み直す。
+        row = _fetch_one(
+            connection,
+            f"SELECT * FROM {STATE_TABLE} WHERE singleton_id=1" + (" FOR UPDATE" if lock else ""),
+            {},
+        )
+        if row is None:
+            raise LanguagePackSnapshotError("公開履歴に対応する言語資源の状態行がありません。")
+    if not row.get("current_release_id"):
+        raise LanguagePackSnapshotError("言語資源の現在版ポインタがありません。")
     current = _get(connection, str(row["current_release_id"]))
     if current is None:
-        raise LookupError("言語資源の現在の公開版が見つかりません。")
+        raise LanguagePackSnapshotError("言語資源の現在の公開版が見つかりません。")
     draft = _json_loads(row["draft_effective_json"])
-    compatible_draft = _validated(draft, allow_legacy=True).to_dict()
+    validated_draft = _validated(draft).to_dict()
     return LanguagePackReleaseState(
         draft_revision=int(str(row["draft_revision"])),
-        draft_effective=compatible_draft,
+        draft_effective=validated_draft,
         current=current,
     )
 
@@ -164,6 +198,11 @@ class LanguagePackReleaseStore:
 
         def operation(connection: OracleConnectionProtocol) -> LanguagePackReleaseState:
             from app.clients.oracle import _execute, _fetch_one, _json_bind, _json_input_sizes
+
+            try:
+                return _state(connection, lock=True)
+            except LanguagePackNotInitializedError:
+                pass
 
             # 一意な行の作成とロックを同一 transaction にし、同時 bootstrap も一度だけにする。
             _execute(
@@ -226,12 +265,14 @@ class LanguagePackReleaseStore:
             row = _fetch_one(connection, f"SELECT COUNT(*) total FROM {RELEASE_TABLE}", {})
             rows = _fetch_all(
                 connection,
-                f"SELECT * FROM {RELEASE_TABLE} ORDER BY version DESC "
+                f"SELECT release_id, version, content_hash, ingest_hash, published_at, "
+                f"published_by, previous_id, restored_from, change_note FROM {RELEASE_TABLE} "
+                "ORDER BY version DESC "
                 "OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY",
                 {"offset": offset, "limit": limit},
             )
             return LanguagePackReleaseList(
-                releases=[_release(item) for item in rows],
+                releases=[_release_summary(item) for item in rows],
                 total=int(str(row["total"])) if row else 0,
             )
 
@@ -320,9 +361,7 @@ class LanguagePackReleaseStore:
             source = _get(connection, restored_from) if restored_from else None
             if restored_from and source is None:
                 raise LookupError("復元する言語資源の公開版が見つかりません。")
-            effective = complete_compatible_pack(
-                source.effective if source else state.draft_effective
-            )
+            effective = source.effective if source else state.draft_effective
             pack = _validated(effective)
             release = LanguagePackRelease(
                 id=uuid4().hex,

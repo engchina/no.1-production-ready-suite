@@ -246,6 +246,18 @@ def create_app() -> FastAPI:
             request_id=_response_request_id(request),
         )
 
+    from app.rag.language_pack_contract import LanguagePackSnapshotError
+
+    @app.exception_handler(LanguagePackSnapshotError)
+    async def language_pack_snapshot_handler(
+        request: Request, exc: LanguagePackSnapshotError
+    ) -> JSONResponse:
+        return api_error_response(
+            409,
+            ["保存済み言語資源が現在の契約を満たしません。データの準備が必要です。"],
+            request_id=_response_request_id(request),
+        )
+
     from app.rag.search_answer_profile_config import ProfileAnswerModelUnavailableError
 
     @app.exception_handler(ProfileAnswerModelUnavailableError)
