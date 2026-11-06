@@ -13,7 +13,12 @@ from uuid import uuid4
 import pytest
 
 from app.api.routes import documents as documents_route
-from app.clients.oracle import OracleClient, _execute, default_document_recipe_id
+from app.clients.oracle import (
+    OracleClient,
+    OracleConnectionProtocol,
+    _execute,
+    default_document_recipe_id,
+)
 from app.clients.oracle_bulk_ingestion_store import OracleBulkIngestionStore
 from app.config import Settings
 from app.rag.bulk_ingestion import BulkJobDraft, accept_bulk_ingestion
@@ -113,6 +118,24 @@ async def test_load_states_reads_documents_and_jobs_in_chunks() -> None:
     # 正式レシピが無ければ旧文書の処理設定を受付判定に使わない。
     assert retry.processing_config == {}
     assert states["doc-500"].fresh is True
+
+
+async def test_load_states_reads_outputs_from_the_recipe_layer() -> None:
+    """前回の取込の出力はレシピの層で判定し、文書の行の旧列を読まない(#4185)。
+
+    抽出・ファイル準備の成果物・chunk_set の正本はレシピの層にあり、文書の行の列は
+    レシピの経路では書かれない。
+    """
+    pool = FakeOraclePool(execute_results=[[_document_row("doc-a")], []])
+
+    await OracleBulkIngestionStore(_client(pool)).load_states(["doc-a"])
+
+    statement = " ".join(pool.connection.calls[0].statement.split())
+    assert "d.extraction" not in statement
+    assert "d.preprocess_artifact" not in statement
+    assert "o.preprocess_artifact IS NOT NULL" in statement
+    assert "FROM rag_document_extractions e WHERE e.document_id = d.document_id" in statement
+    assert "FROM rag_chunk_sets cs WHERE cs.document_id = d.document_id" in statement
 
 
 async def test_insert_queued_jobs_locks_recipes_and_rechecks_active_jobs() -> None:
@@ -310,3 +333,52 @@ async def test_bulk_ingestion_registers_each_document_once_in_oracle() -> None:
     ids, total = await client.list_document_ids(query=f"bulk-{tag}", limit=_REAL_COUNT)
     assert total == _REAL_COUNT
     assert set(ids) == set(document_ids)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_load_states_detects_recipe_outputs_in_oracle() -> None:
+    """レシピの成果物・chunk_set が残る文書は出力ありにし、何も無い文書だけを新しい文書にする。"""
+    client = OracleClient()
+    tag = uuid4().hex[:10]
+    document_ids: list[str] = []
+    for index in range(3):
+        file_name = f"bulk-outputs-{tag}-{index}.txt"
+        detail = await client.create_document(
+            file_name=file_name,
+            object_storage_path=f"local://uploaded/{file_name}",
+            content_type="text/plain",
+            file_size_bytes=10,
+            content_sha256=uuid4().hex + uuid4().hex,
+        )
+        document_ids.append(detail.id)
+    fresh_id, recipe_artifact_id, chunk_set_owner_id = document_ids
+
+    def seed(connection: OracleConnectionProtocol) -> None:
+        _execute(
+            connection,
+            "UPDATE rag_document_recipes SET preprocess_artifact = :artifact "
+            "WHERE document_id = :document_id AND slot_no = 1",
+            {
+                "artifact": '{"object_storage_path": "local://artifacts/synthetic.pdf"}',
+                "document_id": recipe_artifact_id,
+            },
+        )
+        _execute(
+            connection,
+            "INSERT INTO rag_chunk_sets (chunk_set_id, document_id) "
+            "VALUES (:chunk_set_id, :document_id)",
+            {"chunk_set_id": f"cs-{tag}", "document_id": chunk_set_owner_id},
+        )
+
+    await client._run_transaction(seed)
+
+    states = await OracleBulkIngestionStore(client).load_states(document_ids)
+
+    assert {document_id: states[document_id].has_outputs for document_id in document_ids} == {
+        fresh_id: False,
+        recipe_artifact_id: True,
+        chunk_set_owner_id: True,
+    }
+    assert states[fresh_id].fresh is True
+    assert states[recipe_artifact_id].fresh is False
+    assert states[chunk_set_owner_id].fresh is False

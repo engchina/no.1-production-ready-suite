@@ -106,6 +106,18 @@ def _default_recipe(document_id: str, headers: dict[str, str] | None = None) -> 
     return cast(dict[str, Any], response.json()["data"][0])
 
 
+async def _recipe_extraction(oracle: OracleClient, document_id: str) -> dict[str, Any]:
+    """既定レシピの今の抽出の版(抽出の正本。文書の行の抽出の列は書かない。#4185)。"""
+    recipe = await oracle.ensure_default_document_recipe(document_id)
+    revision = recipe.get("active_extraction_recipe_id")
+    assert revision, "取込は既定レシピに抽出の版を結び付ける"
+    artifact = await oracle.get_document_extraction_artifact(
+        document_id=document_id, extraction_recipe_id=str(revision)
+    )
+    assert artifact is not None
+    return cast(dict[str, Any], artifact["extraction_json"])
+
+
 def _create_document_with_source_metadata(
     file_name: str, object_storage_path: str, data: bytes = b"policy body"
 ) -> Any:
@@ -175,9 +187,11 @@ def test_upload_ingest_search_flow() -> None:
     assert ingest_resp.status_code == 200
     indexed = ingest_resp.json()["data"]
     assert indexed["status"] == "INDEXED"
-    assert "部門長の承認" in indexed["extraction"]["raw_text"]
-    assert indexed["extraction"]["elements"]
-    assert "fields" not in indexed["extraction"]
+    assert indexed["extraction"] == {}
+    extraction = asyncio.run(_recipe_extraction(OracleClient(), document_id))
+    assert "部門長の承認" in extraction["raw_text"]
+    assert extraction["elements"]
+    assert "fields" not in extraction
 
     search_resp = client.post(
         "/api/search",
@@ -440,9 +454,8 @@ async def test_ingestion_passes_source_parser_profile_to_extraction_strategy(
     assert detail.status == FileStatus.INDEXED
     assert captured["backend"] == "oci_document_understanding"
     assert captured["content_type"] == "application/pdf"
-    saved = await oracle.get_document(document.id)
-    assert saved is not None
-    quality_report = cast(dict[str, object], saved.extraction["quality_report"])
+    saved = await _recipe_extraction(oracle, document.id)
+    quality_report = cast(dict[str, object], saved["quality_report"])
     # 品質レポートには、strategy の profile ではなく実際に使った解析エンジンを残す。
     assert quality_report["parser_profile"] == "oci_document_understanding"
 
@@ -919,7 +932,9 @@ def test_document_navigation_tree_is_built_from_headings() -> None:
     assert detail_resp.status_code == 200
 
     # 取込時に保存した navigation を使い、未保存なら保存済み抽出から決定論的に組み立てる。
-    extraction = StructuredExtraction.model_validate(detail_resp.json()["data"]["extraction"])
+    extraction = StructuredExtraction.model_validate(
+        asyncio.run(_recipe_extraction(OracleClient(), document_id))
+    )
     nodes = extraction.navigation or build_navigation_tree(extraction)
     assert nodes, "見出しから navigation node が構築されるはず"
     titles = {node.title for node in nodes}

@@ -122,7 +122,8 @@ class BulkIngestionDocumentState:
     has_job_history: bool = False
     # レシピ1(または recipe_id の無い旧い job)の待機中・実行中の job がある。
     has_active_job: bool = False
-    # 文書の行に前回の取込の出力(ファイル準備の成果物・抽出結果)が残っている。
+    # レシピの層に前回の取込の出力(ファイル準備の成果物・抽出の版・chunk_set)が残っている。
+    # 出力の正本はレシピの層で、文書の行の旧列は見ない(#4185)。
     has_outputs: bool = False
 
     @property
