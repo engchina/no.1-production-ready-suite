@@ -27,6 +27,7 @@ const reasonLabels: Record<string, I18nKey> = {
   no_chunks: "knowledgeBases.structure.build.reason.no_chunks",
   no_structure: "knowledgeBases.structure.build.reason.no_structure",
   source_changed: "knowledgeBases.structure.build.reason.source_changed",
+  builder_changed: "knowledgeBases.structure.build.reason.builder_changed",
   disabled: "knowledgeBases.structure.build.reason.disabled",
   membership_changed: "knowledgeBases.structure.build.reason.membership_changed",
   authorization_changed: "knowledgeBases.structure.build.reason.authorization_changed",

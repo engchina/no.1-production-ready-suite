@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from rag_parser_core import model_integrity as integrity
 
 from rag_engine.resources import docling_models as models
 
@@ -22,7 +23,7 @@ def test_valid_cache_is_offline_and_unchanged(tmp_path: Path) -> None:
     path = tmp_path / spec.name
     path.write_bytes(b"synthetic-valid-model")
     before = path.stat().st_mtime_ns
-    with patch.object(models, "_registered_models", return_value={spec.name: [spec]}), patch.object(models, "urlopen") as get:
+    with patch.object(models, "_registered_models", return_value={spec.name: [spec]}), patch.object(integrity, "urlopen") as get:
         assert models.verify_rapidocr_cache(tmp_path) == []
     get.assert_not_called()
     assert path.stat().st_mtime_ns == before
@@ -39,7 +40,7 @@ def test_corrupt_cache_is_repaired_atomically(tmp_path: Path) -> None:
 
     with (
         patch.object(models, "_registered_models", return_value={spec.name: [spec]}),
-        patch.object(models, "urlopen", side_effect=download),
+        patch.object(integrity, "urlopen", side_effect=download),
     ):
         assert models.verify_rapidocr_cache(tmp_path) == [spec.name]
     assert path.read_bytes() == b"synthetic-valid-model"
@@ -59,8 +60,8 @@ def test_failed_download_keeps_original_and_cleans_temporary_files(tmp_path: Pat
 
     with (
         patch.object(models, "_registered_models", return_value={spec.name: [spec]}),
-        patch.object(models, "urlopen", side_effect=download) as get,
-        patch.object(models.time, "sleep"),
+        patch.object(integrity, "urlopen", side_effect=download) as get,
+        patch.object(integrity.time, "sleep"),
         pytest.raises(RuntimeError, match="モデル"),
     ):
         models.verify_rapidocr_cache(tmp_path)
@@ -74,7 +75,7 @@ def test_check_only_never_downloads_or_overwrites(tmp_path: Path) -> None:
     (tmp_path / spec.name).write_bytes(b"incomplete")
     with (
         patch.object(models, "_registered_models", return_value={spec.name: [spec]}),
-        patch.object(models, "urlopen") as get,
+        patch.object(integrity, "urlopen") as get,
         pytest.raises(RuntimeError, match="モデル"),
     ):
         models.verify_rapidocr_cache(tmp_path, repair=False)
@@ -84,7 +85,7 @@ def test_check_only_never_downloads_or_overwrites(tmp_path: Path) -> None:
 def test_unknown_custom_model_is_not_overwritten(tmp_path: Path) -> None:
     path = tmp_path / "custom.onnx"
     path.write_bytes(b"custom")
-    with patch.object(models, "_registered_models", return_value={}), patch.object(models, "urlopen") as get:
+    with patch.object(models, "_registered_models", return_value={}), patch.object(integrity, "urlopen") as get:
         assert models.verify_rapidocr_cache(tmp_path) == []
     assert path.read_bytes() == b"custom"
     get.assert_not_called()
@@ -102,7 +103,7 @@ def test_ambiguous_registry_does_not_choose_first_url(tmp_path: Path) -> None:
     other = models.ModelArtifact(spec.name, "https://example.invalid/other.onnx", "0" * 64)
     with (
         patch.object(models, "_registered_models", return_value={spec.name: [spec, other]}),
-        patch.object(models, "urlopen") as get,
+        patch.object(integrity, "urlopen") as get,
         pytest.raises(RuntimeError, match="一意"),
     ):
         models.verify_rapidocr_cache(tmp_path)
@@ -115,7 +116,7 @@ def test_other_registered_model_formats_are_also_repaired(tmp_path: Path, suffix
     (tmp_path / spec.name).write_bytes(b"incomplete")
     with (
         patch.object(models, "_registered_models", return_value={spec.name: [spec]}),
-        patch.object(models, "urlopen", return_value=io.BytesIO(b"synthetic-valid-model")),
+        patch.object(integrity, "urlopen", return_value=io.BytesIO(b"synthetic-valid-model")),
     ):
         assert models.verify_rapidocr_cache(tmp_path) == [spec.name]
 
@@ -139,7 +140,7 @@ def hf_cache(root: Path, filename: str, content: bytes, *, git: bool = False) ->
 def test_hf_weights_and_git_blob_config_are_verified_offline(tmp_path: Path) -> None:
     hf_cache(tmp_path, "model.safetensors", b"weights")
     hf_cache(tmp_path, "config.json", b'{"model_type":"synthetic"}', git=True)
-    with patch.object(models, "_hf_url", return_value="https://example.invalid/model"), patch.object(models, "urlopen") as get:
+    with patch.object(models, "_hf_url", return_value="https://example.invalid/model"), patch.object(integrity, "urlopen") as get:
         assert models.verify_docling_cache(tmp_path) == []
     get.assert_not_called()
 
@@ -155,7 +156,7 @@ def test_hf_corrupt_or_missing_file_is_retrieved_at_recorded_revision(tmp_path: 
         bad.write_bytes(b"incomplete")
     with (
         patch.object(models, "_hf_url", return_value="https://example.invalid/pinned") as url,
-        patch.object(models, "urlopen", return_value=io.BytesIO(b"valid")),
+        patch.object(integrity, "urlopen", return_value=io.BytesIO(b"valid")),
     ):
         assert models.verify_docling_cache(tmp_path) == ["accurate/weights.safetensors"]
     url.assert_any_call("synthetic/layout-model", "accurate/weights.safetensors", "a" * 40)

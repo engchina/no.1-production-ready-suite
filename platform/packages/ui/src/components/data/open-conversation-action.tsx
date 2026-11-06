@@ -13,13 +13,13 @@ import { ButtonLink, type ButtonLinkComponent } from "../ui/button-link";
 export interface OpenConversationActionLabels {
   /** ボタンの文言（既定「会話を開く」）。 */
   label: string;
-  /** 読み上げ名（既定「この実行の会話をチャットで開く」）。 */
+  /** 読み上げ名（既定「会話を開く（この実行のチャット）」）。見えている文言 `label` で始める（WCAG 2.5.3。#4558）。 */
   ariaLabel: string;
 }
 
 export const DEFAULT_OPEN_CONVERSATION_LABELS: OpenConversationActionLabels = {
   label: "会話を開く",
-  ariaLabel: "この実行の会話をチャットで開く",
+  ariaLabel: "会話を開く（この実行のチャット）",
 };
 
 export interface OpenConversationActionProps {

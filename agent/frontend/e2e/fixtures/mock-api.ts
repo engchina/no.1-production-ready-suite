@@ -2435,7 +2435,9 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
   if (head === "automations" && second) {
     const item = findOr404(state.automations, "id", second, "automation");
     if (method === "GET" && at("automations", "*")) {
-      return { automation: item, runs: state.automationRuns[String(item.id)] ?? [] };
+      // backend と同じく新しい順の 10 件と、全体の件数（#4558）。
+      const runs = state.automationRuns[String(item.id)] ?? [];
+      return { automation: item, runs: runs.slice(0, 10), runs_total: runs.length };
     }
     if (method === "PUT" && at("automations", "*")) {
       // 業務 Agent を変えるときと有効のまま保存するときだけ確かめる（無効にする保存は通す）。
