@@ -91,8 +91,8 @@ export interface SearchableSelectFieldProps {
    * 選択中の名前を 1 行で切り（全文は `title`）、ツールバーの行の高さを欄にそろえる。
    */
   /**
-   * compact はチャットのツールバー用。選択値だけを 1 行で表示し、ラベルは読み上げ名に残す。必須の「必須」はボタンの中
-   * （未選択のときは見える形、選んだ後は読み上げだけ）に出し、読み上げ名は「ラベル 値 必須」の順にする（見えている
+   * compact はチャットのツールバー用。選択値だけを 1 行で表示し、ラベルは読み上げ名に残す。必須の「必須」は未選択の
+   * ときボタンの中に見える形で出し（選んだ後は読み上げだけ）、読み上げ名は「ラベル 値 必須」の順にする（見えている
    * 「値 必須」を同じ並びで含める。WCAG 2.5.3 Label in Name。#4560）。
    */
   labelPlacement?: "top" | "inline" | "compact";
@@ -501,9 +501,9 @@ export function SearchableSelectField({
             {current?.label ?? (value || placeholder)}
           </span>
         </span>
-        {compactRequired ? (
-          <span id={requiredId} className={value ? "sr-only" : "shrink-0"}>
-            {value ? requiredLabel : <RequiredBadge label={requiredLabel} />}
+        {compactRequired && !value ? (
+          <span id={requiredId} className="shrink-0">
+            <RequiredBadge label={requiredLabel} />
           </span>
         ) : null}
         <ChevronDown
@@ -516,6 +516,13 @@ export function SearchableSelectField({
           )}
         />
       </button>
+      {/* 選んだ後の compact の「必須」は見せず、読み上げ名の末尾にだけ入れる（hidden の要素も aria-labelledby で読む。
+          ボタンの文字を値だけに保つ。#4560）。 */}
+      {compactRequired && value ? (
+        <span id={requiredId} hidden>
+          {requiredLabel}
+        </span>
+      ) : null}
       {popover}
       {helper ? (
         <p id={hintId} className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)}>

@@ -510,6 +510,9 @@ describe("チャットの対象のコンパクトな選択", () => {
     const ids = button.getAttribute("aria-labelledby")!.split(" ");
     // 読み上げ名は「欄名 値 必須」の順（#4560）。
     expect(ids.map(id => document.getElementById(id)?.textContent)).toEqual(["対象", OPTIONS[0].label, "必須"]);
+    // 選んだ後の「必須」は見せず（ボタンの文字は値だけ）、読み上げ名にだけ入れる。
+    expect(button.textContent).toBe(OPTIONS[0].label);
+    expect(document.getElementById(ids[2])?.hidden).toBe(true);
     expect(host.querySelector("[data-filter-select-label]")).toBeNull();
     expect(document.getElementById(ids[1])?.getAttribute("title")).toBe(OPTIONS[0].label);
     act(() => button.click());
@@ -523,7 +526,7 @@ describe("チャットの対象のコンパクトな選択", () => {
     const badge = document.getElementById(ids[2])!;
     expect(button.contains(badge)).toBe(true);
     expect(badge.closest("[aria-hidden]")).toBeNull();
-    expect(badge.classList.contains("sr-only")).toBe(false);
+    expect(badge.hidden).toBe(false);
     expect(host.querySelector("label")?.textContent).toBe("対象");
   });
 });
