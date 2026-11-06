@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_ROADMAP_LABEL, RoadmapBadge } from "../src/components/data/status-badge";
+import { SearchableSelectField } from "../src/components/ui/searchable-select-field";
 import { computeFloatingMenuLayout, floatingLayerZIndex } from "../src/components/ui/floating-menu";
 import {
   findTypeaheadIndex,
@@ -267,5 +268,22 @@ describe("準備中（ロードマップ）のバッジ", () => {
       />
     );
     expect(html).toContain(">B<");
+  });
+});
+
+describe("選択欄のボタンのフォーカスの表示（#4571）", () => {
+  it("SelectField・SearchableSelectField のボタンは outline を消さない（グローバルの :focus-visible の outline を出す）", () => {
+    const options = [{ value: "a", label: "合成の選択肢" }];
+    const markups = [
+      renderToStaticMarkup(<SelectField id="synthetic-select" label="合成の選択" value="a" options={options} onValueChange={() => {}} />),
+      renderToStaticMarkup(
+        <SearchableSelectField id="synthetic-searchable" label="合成の選択" value="a" options={options} onValueChange={() => {}} />
+      ),
+    ];
+    for (const markup of markups) {
+      const button = /<button[^>]*>/.exec(markup)?.[0] ?? "";
+      expect(button).toContain("focus-visible:outline-2");
+      expect(button).not.toMatch(/(?:^|[\s"])outline-none(?:[\s"]|$)/);
+    }
   });
 });

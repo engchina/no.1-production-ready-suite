@@ -69,7 +69,31 @@ const SCREENS: Screen[] = [
 const NON_NAV_SCREENS: Screen[] = [
   { path: "/account", setup: seedApiKeys },
   { path: "/account?tab=password" },
+  // 自動実行の詳細（一覧の行から開く。戻る操作・基本情報の「今すぐ実行」・業務 Agent と頻度の選択欄を持つ）。
+  { path: "/automations?id=auto-a11y", setup: seedAutomation },
 ];
+
+/** 前回の実行のある自動実行（詳細の基本情報に前回の状態と「今すぐ実行」が出る）。 */
+function seedAutomation(mockApi: MockApi) {
+  mockApi.state.automations.push({
+    id: "auto-a11y",
+    agent_id: "default",
+    name: "合成の自動実行",
+    goal: "合成の指示です。",
+    enabled: true,
+    schedule: { frequency: "daily", time: "09:00", weekdays: [0], minute: 0, timezone: "UTC" },
+    run_as_user_uuid: "local",
+    created_by_user_uuid: "local",
+    next_run_at: MOCK_NOW,
+    last_run_at: null,
+    last_run_id: null,
+    last_trigger: null,
+    last_result: null,
+    last_message: null,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+}
 
 /** 自分の API キー（有効なキーと期限切れのキー）。 */
 function seedApiKeys(mockApi: MockApi) {
