@@ -168,3 +168,35 @@ async def test_formal_empty_config_keeps_global_inheritance() -> None:
     )
     assert config.vision_enabled is None
     assert "legacy" not in oracle.calls
+
+
+@pytest.mark.parametrize(
+    "capabilities,recipe_id",
+    [((), None), ((), "synthetic-recipe"), (("ensure",), None), (("get",), None)],
+)
+async def test_required_recipe_reader_cannot_fall_back_to_legacy_settings(
+    capabilities: tuple[str, ...], recipe_id: str | None
+) -> None:
+    calls: list[str] = []
+
+    async def legacy(_document_id: str) -> DocumentProcessingConfig:
+        calls.append("legacy")
+        return DocumentProcessingConfig(vision_enabled=False)
+
+    async def ensure(_document_id: str) -> dict[str, str]:
+        calls.append("ensure")
+        return {"recipe_id": "synthetic-recipe"}
+
+    async def get(_document_id: str, _recipe_id: str) -> dict[str, object]:
+        calls.append("get")
+        return {"processing_config": {"vision_enabled": True}}
+
+    oracle = SimpleNamespace(get_document_processing_config=legacy)
+    if "ensure" in capabilities:
+        oracle.ensure_default_document_recipe = ensure
+    if "get" in capabilities:
+        oracle.get_document_recipe = get
+    with pytest.raises(AttributeError):
+        await documents._resolve_ingestion_settings(cast(Any, oracle), "synthetic-doc", recipe_id)
+    assert calls == (["ensure"] if capabilities == ("ensure",) else [])
+    assert "legacy" not in calls
