@@ -783,3 +783,55 @@ async def test_body_chunk_opened_after_version_switch_keeps_listed_version() -> 
         await store.entity_chunks(
             kb.id, document, set_a, node_id=graph_body_node_id(set_a, kb.id), offset=0, limit=25
         )
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_build_saved_by_an_older_builder_is_stale_until_rebuilt() -> None:
+    """#4549: 旧い構築器の構築記録（旧い契約の指紋・版の記録なし）を計画が STALE にする。"""
+    import hashlib
+    import json
+
+    from app.clients.oracle import _execute
+    from app.clients.structure_index_store import StructureIndexStore
+    from app.rag.graph_index import STRUCTURE_INDEX_BUILDER_VERSION
+    from app.rag.structure_index import structure_index_plan
+
+    client = OracleClient()
+    kb = await client.create_knowledge_base(name=f"synthetic-builder-{uuid4().hex[:8]}")
+    await client.set_knowledge_base_structure_index(kb.id, True)
+    chunks = _chunks([("合成章 > 第1条", 1), ("合成章 > 第2条", 1)])
+    chunks[0].text = "第2条を参照する。"
+    document, chunk_set = await _indexed_document(
+        client, file_name="synthetic-builder.pdf", chunks=chunks, knowledge_base_id=kb.id
+    )
+    await rebuild_document_structure_index(client, kb.id, document)
+    saved = (await StructureIndexStore(client).builds(kb.id))[document]
+    assert saved["builder_version"] == STRUCTURE_INDEX_BUILDER_VERSION
+    [current] = await structure_index_plan(client, kb.id, document_ids=[document])
+    assert (current["status"], current["reason"]) == ("CURRENT", None)
+
+    # 配備済みの旧い記録の形: #4026 の契約の指紋で、result_json に版が無い。
+    old = {"version": "explicit-references-v1", "chunk_sets": [chunk_set]}
+
+    def downgrade(connection: Any) -> None:
+        _execute(
+            connection,
+            """UPDATE rag_structure_index_builds SET source_fingerprint=:fp,result_json=:result
+            WHERE knowledge_base_id=:kb AND document_id=:doc""",
+            {
+                "fp": hashlib.sha256(json.dumps(old, sort_keys=True).encode()).hexdigest(),
+                "result": json.dumps({"quality": "COMPLETE"}),
+                "kb": kb.id,
+                "doc": document,
+            },
+        )
+
+    await client._run_transaction(downgrade)
+    assert (await StructureIndexStore(client).builds(kb.id))[document]["builder_version"] is None
+    [stale] = await structure_index_plan(client, kb.id, document_ids=[document])
+    assert stale["body_links_missing"] is False
+    assert (stale["status"], stale["reason"]) == ("STALE", "builder_changed")
+
+    await rebuild_document_structure_index(client, kb.id, document)
+    [after] = await structure_index_plan(client, kb.id, document_ids=[document])
+    assert (after["status"], after["reason"]) == ("CURRENT", None)
