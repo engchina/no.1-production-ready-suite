@@ -14,6 +14,7 @@ MODEL_CALL_PURPOSES = frozenset(
         "sql.logical_structure",
         "answer.generate",
         "answer.audit",
+        "answer.audit_reason",
         "answer.repair",
         "answer.scope",
         "answer.resolve_conflicts",

@@ -97,13 +97,33 @@ rag_uv_sync_args() {
   printf '%s\n' sync --locked --no-dev --python "${RAG_PYTHON_VERSION}"
 }
 
-# サービスが実行時に使うモデルを、サービスの実行ユーザーの ~/.cache に取得するコマンド
-# （サービスの実行ユーザーが、サービスのディレクトリで実行する）。実行時の DL を避けるため。
-# 失敗しても unit は起動できる（docling は初回の解析でモデルを取得する）。
+# サービスが実行時に使うモデルを、サービスの実行ユーザーの ~/.cache に取得し、配布元のハッシュで検証する
+# コマンド（サービスの実行ユーザーが、サービスのディレクトリで実行する）。実行時の DL を避けるため。
+# 失敗しても unit は起動できるが、解析の要求の時にはモデルを取得・修復しない（解析は配備のやり直しを案内する
+# エラーになり、/health が degraded になる。#4555・#4557）。
 rag_service_model_command() {
   case "$1" in
     parser-docling)
       printf '%s\n' '.venv/bin/python -m rag_engine.resources.docling_models'
+      ;;
+    parser-unstructured)
+      printf '%s\n' '.venv/bin/python -m rag_parser_core.unstructured_models'
+      ;;
+  esac
+}
+
+# サービスの実行時の環境変数（KEY=VALUE を 1 行ずつ）。unit（rag_write_microservice_unit）と、systemd を
+# 使わない前面の起動（rag-services.sh run）が同じ値を使う。
+# - parser-docling / parser-unstructured: HF のモデルは配備で取得・検証したキャッシュだけを読み、解析の要求の時には
+#   取得しない（huggingface_hub・transformers が読む標準の HF_HUB_OFFLINE。docling はモデルの場所も常に
+#   artifacts_path で渡す。spaCy のモデルは venv の lock から入る。#4555・#4557）。
+rag_service_environment() {
+  case "$1" in
+    parser-docling)
+      printf '%s\n' 'RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs' 'HF_HUB_OFFLINE=1'
+      ;;
+    parser-unstructured)
+      printf '%s\n' 'HF_HUB_OFFLINE=1'
       ;;
   esac
 }
@@ -122,7 +142,7 @@ rag_write_microservice_unit() {
   local runtime_env="$7"
   local platform_env="$8"
   local backend_env="$9"
-  local dir port timeout workdir env_files extra_env
+  local dir port timeout workdir env_files extra_env assignment
 
   dir="$(rag_service_dir "${id}")" || return 1
   port="$(rag_service_port "${id}")"
@@ -137,11 +157,11 @@ rag_write_microservice_unit() {
 EnvironmentFile=-${backend_env}
 "
       ;;
-    parser-docling)
-      extra_env="Environment=RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs
-"
-      ;;
   esac
+  while IFS= read -r assignment; do
+    extra_env+="Environment=${assignment}
+"
+  done < <(rag_service_environment "${id}")
 
   cat > "${unit_path}" <<EOF
 # rag/scripts/rag-systemd.sh が生成する（手で編集しない）。#286

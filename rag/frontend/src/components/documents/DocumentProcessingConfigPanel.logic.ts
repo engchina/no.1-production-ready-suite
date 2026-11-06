@@ -29,6 +29,7 @@ import { SETTINGS_ANCHORS } from "@/lib/settings-anchors";
  */
 
 type SelectConfigField =
+  | "vision_image_purpose"
   | "preprocess_profile"
   | "parser_adapter_backend"
   | "chunking_strategy"
@@ -96,6 +97,13 @@ export const RECIPE_CONFIG_ITEMS = [
     field: "vision_enabled",
     kind: "boolean",
     label: "knowledgeBases.adapter.field.vision",
+    phase: "EXTRACT",
+    globalSettings: { route: APP_ROUTES.settingsParserAdapters, anchor: SETTINGS_ANCHORS.vision },
+  },
+  {
+    field: "vision_image_purpose",
+    kind: "select",
+    label: "imagePurpose.label",
     phase: "EXTRACT",
     globalSettings: { route: APP_ROUTES.settingsParserAdapters, anchor: SETTINGS_ANCHORS.vision },
   },

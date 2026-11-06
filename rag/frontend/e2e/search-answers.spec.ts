@@ -1,7 +1,10 @@
+import AxeBuilder from "@axe-core/playwright";
+
 import { expect, type Page, test } from "./fixtures/test";
 
 import {
   enableSearchAnswer,
+  expectedControlHeight,
   expectNoPageOverflow,
   mockDatabaseReady,
   mockLocalAuth,
@@ -88,7 +91,7 @@ test("対象の検索・回答プロファイルは 1 つを選ぶ欄で、検�
   await page.goto("/search");
 
   const trigger = page.getByRole("button", { name: /検索・回答プロファイル/ });
-  await expect(trigger).toContainText("検索・回答プロファイルを検索して選択…");
+  await expect(trigger).toContainText("未選択");
   // 必須はラベルの「必須」のタグで読み上げる（ボタンは aria-required を持てない。#1595）。
   await expect(trigger).not.toHaveAttribute("aria-required");
   await expect(trigger).toHaveAccessibleName(/検索・回答プロファイル\s*必須/);
@@ -363,9 +366,10 @@ for (const viewport of [
     const measure = async () => {
       const trigger = page.getByRole("button", { name: /検索・回答プロファイル/ });
       await expect(trigger).toBeVisible();
-      await expect(trigger).toContainText("検索・回答プロファイルを検索して選択…");
+      await expect(trigger).toContainText("未選択");
       await expect(trigger).not.toHaveAttribute("aria-required");
-      await expect(trigger).toHaveAccessibleName(/検索・回答プロファイル\s*必須/);
+      // compact（チャット）は「ラベル 値 必須」、上のラベルの欄（検索）は「ラベル 必須 値」（#4560）。
+      await expect(trigger).toHaveAccessibleName(/^検索・回答プロファイル\s*(必須\s*未選択|未選択\s*必須)$/);
       await expect(page.getByText("選んだ検索・回答プロファイルが参照するナレッジベースを検索し")).toHaveCount(0);
       return trigger.evaluate((button) => {
         // 欄（ラベル・ボタン）を置いた親の、内側の幅いっぱいに置く。
@@ -391,6 +395,51 @@ for (const viewport of [
 
     await selectSearchAnswerProfile(page, "経理ビュー");
     await expect(page.getByRole("button", { name: /検索・回答プロファイル/ })).toContainText("経理ビュー");
+    await expectNoPageOverflow(page);
+  });
+}
+
+// #4560: 対象の選択欄の placeholder は欄の幅に収め（375px でも 1 行の高さ）、チャットの compact の欄は見えている文字を
+// 読み上げ名に同じ並びで含める（WCAG 2.5.3 Label in Name。axe の label-content-name-mismatch）。
+for (const viewport of [
+  { name: "1280", width: 1280, height: 800 },
+  { name: "375", width: 375, height: 812 },
+]) {
+  test(`対象の選択欄の placeholder は欄に収まり、読み上げ名は見えている文字を含む (${viewport.name})`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockAnswerHistory(page, 0);
+    await mockChat(page, "bv-1");
+    const results = [];
+    for (const [path, size] of [["/search", "md"], ["/chat", "sm"]] as const) {
+      await page.goto(path);
+      const trigger = page.getByRole("button", { name: /検索・回答プロファイル/ });
+      await expect(trigger).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`profile-select${path.replace("/", "-")}-${viewport.name}.png`) });
+      const box = await trigger.evaluate((button) => {
+        const value = button.querySelector('[id$="-value"]') as HTMLElement;
+        const lineHeight = parseFloat(getComputedStyle(value).lineHeight);
+        return {
+          height: button.getBoundingClientRect().height,
+          clipped: value.scrollWidth > value.clientWidth + 1,
+          lines: Math.round(value.getBoundingClientRect().height / lineHeight),
+        };
+      });
+      const axe = await new AxeBuilder({ page })
+        .include(`#${await trigger.getAttribute("id")}`)
+        .withRules(["label-content-name-mismatch"])
+        .analyze();
+      results.push({
+        path,
+        clipped: box.clipped,
+        lines: box.lines,
+        tooTall: box.height > (await expectedControlHeight(page, size)) + 0.5,
+        axe: axe.violations.map((violation) => violation.id),
+      });
+    }
+    expect(results).toEqual([
+      { path: "/search", clipped: false, lines: 1, tooTall: false, axe: [] },
+      { path: "/chat", clipped: false, lines: 1, tooTall: false, axe: [] },
+    ]);
     await expectNoPageOverflow(page);
   });
 }

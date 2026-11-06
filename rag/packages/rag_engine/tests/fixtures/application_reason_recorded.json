@@ -1,0 +1,681 @@
+{
+ "description": "推導の独立監査（判定と表示の理由の 2 段）の録画応答。題・原文・gold はすべて合成。#4471 の実モデルの検証（openai.gpt-oss-120b、14 slot・28 calls）の記録から写した。",
+ "reason_system": "## Step 1: 入力を読む\n「質問」は利用者の質問、「結論」は質問への回答の一部、「判定」はその結論を確かめた確定の結果、「原文」は判定に使った資料の原文です。「引用元」が「はい」の原文は、結論が引用した資料です。\n\n## Step 2: 理由を書く\n判定の理由を、利用者に示す日本語の 1〜2 文で書きます。結論が引用した資料の原文が示す対象・条件・版と、質問の対象・条件の関係を示します。判定を変えず、質問と原文に無い事実を足しません。資料名・見出し・原文の語は原文のまま書きます。\n\n## Step 3: 出力する\nreason だけを持つ JSON を返します。",
+ "cases": {
+  "same-name-other-target": {
+   "gold_valid": false,
+   "audit_user": "{\"question\": \"接続Aの送信設定を一時停止する操作を教えてください。\", \"documents\": [{\"document_scope\": [\"connection.pdf\", \"cs-target-1\", \"doc-target-1\"], \"source\": \"connection.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-target-1:cs-target-1:chunk-target-1\", \"source\": \"connection.pdf\", \"page\": 1, \"section_path\": [\"接続A\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 29, \"text\": \"接続Aの送信設定を一時停止する手順です。\\n停止を選びます。\"}]}, {\"document_scope\": [\"connection.pdf\", \"cs-target-2\", \"doc-target-2\"], \"source\": \"connection.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-target-2:cs-target-2:chunk-target-2\", \"source\": \"connection.pdf\", \"page\": 1, \"section_path\": [\"接続B\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 36, \"text\": \"接続B専用の一時停止手順です。接続Aには適用しません。\\n停止を選びます。\"}]}], \"items\": [{\"index\": 0, \"text\": \"停止を選びます。\", \"quote\": \"停止を選びます。\", \"source\": \"connection.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-target-2:cs-target-2:chunk-target-2\", \"document_scope\": [\"connection.pdf\", \"cs-target-2\", \"doc-target-2\"], \"unit_ids\": [\"U35d83ad2198bea7a72fb7b27\"], \"char_start\": 28, \"char_end\": 36, \"quote\": \"停止を選びます。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"接続Aを一時停止するために、選択した停止の操作を当てはめる。\", \"result\": \"接続Aの送信設定を一時停止するときは、停止を選びます。\"}], \"summary\": \"\"}"
+  },
+  "source-positive": {
+   "gold_valid": true,
+   "audit_user": "{\"question\": \"端末Mが点検モードのとき、履歴一覧を開く操作を教えてください。\", \"documents\": [{\"document_scope\": [\"manual.pdf\", \"cs-positive-1\", \"doc-positive-1\"], \"source\": \"manual.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-positive-1:cs-positive-1:chunk-positive-1\", \"source\": \"manual.pdf\", \"page\": 1, \"section_path\": [\"点検モード\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 31, \"text\": \"端末Mが点検モードのときに使用する手順です。\\n履歴を開きます。\"}]}, {\"document_scope\": [\"other.pdf\", \"cs-positive-2\", \"doc-positive-2\"], \"source\": \"other.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-positive-2:cs-positive-2:chunk-positive-2\", \"source\": \"other.pdf\", \"page\": 1, \"section_path\": [\"通常モード\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 46, \"text\": \"通常モードの端末Nに使用する手順です。端末Mの点検モードには適用しません。\\n履歴を開きます。\"}]}], \"items\": [{\"index\": 0, \"text\": \"履歴を開きます。\", \"quote\": \"履歴を開きます。\", \"source\": \"manual.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-positive-1:cs-positive-1:chunk-positive-1\", \"document_scope\": [\"manual.pdf\", \"cs-positive-1\", \"doc-positive-1\"], \"unit_ids\": [\"U1e86f47d4cca781931e79789\"], \"char_start\": 23, \"char_end\": 31, \"quote\": \"履歴を開きます。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"端末Mが点検モードであるという質問の条件に、選択した履歴一覧の操作を当てはめる。\", \"result\": \"端末Mが点検モードのときは、履歴を開きます。\"}], \"summary\": \"\"}"
+  },
+  "condition-not-applicable": {
+   "gold_valid": false,
+   "audit_user": "{\"question\": \"編集権限がなく閲覧権限だけの利用者が、一覧を更新する操作を教えてください。\", \"documents\": [{\"document_scope\": [\"refresh.pdf\", \"cs-permission-1\", \"doc-permission-1\"], \"source\": \"refresh.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-permission-1:cs-permission-1:chunk-permission-1\", \"source\": \"refresh.pdf\", \"page\": 1, \"section_path\": [\"編集権限\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 51, \"text\": \"編集権限がある利用者だけが使用できる更新操作です。閲覧権限だけでは実行できません。\\n再読込を押します。\"}]}, {\"document_scope\": [\"refresh.pdf\", \"cs-permission-2\", \"doc-permission-2\"], \"source\": \"refresh.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-permission-2:cs-permission-2:chunk-permission-2\", \"source\": \"refresh.pdf\", \"page\": 1, \"section_path\": [\"閲覧権限\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 33, \"text\": \"閲覧権限だけの利用者が一覧を更新する手順です。\\n再読込を押します。\"}]}], \"items\": [{\"index\": 0, \"text\": \"再読込を押します。\", \"quote\": \"再読込を押します。\", \"source\": \"refresh.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-permission-1:cs-permission-1:chunk-permission-1\", \"document_scope\": [\"refresh.pdf\", \"cs-permission-1\", \"doc-permission-1\"], \"unit_ids\": [\"U287499073b84c747cf0498f2\"], \"char_start\": 42, \"char_end\": 51, \"quote\": \"再読込を押します。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"閲覧権限だけという質問の条件に、選択した更新操作を当てはめる。\", \"result\": \"閲覧権限だけの利用者は、再読込を押して一覧を更新します。\"}], \"summary\": \"\"}"
+  },
+  "same-document-other-fragment": {
+   "gold_valid": false,
+   "audit_user": "{\"question\": \"端末Rが正常表示のとき、通知欄を確認する操作を教えてください。\", \"documents\": [{\"document_scope\": [\"status.pdf\", \"cs-fragment\", \"doc-fragment\"], \"source\": \"status.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-fragment:cs-fragment:chunk-fragment-normal\", \"source\": \"status.pdf\", \"page\": 1, \"section_path\": [\"正常表示\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 34, \"text\": \"端末Rが正常表示のときに通知を確認する手順です。\\n通知欄を開きます。\"}, {\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-fragment:cs-fragment:chunk-fragment-warning\", \"source\": \"status.pdf\", \"page\": 1, \"section_path\": [\"警告表示\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 50, \"text\": \"端末Rに警告が表示されているときだけ使用します。正常表示のときには実行しません。\\n通知欄を開きます。\"}]}], \"items\": [{\"index\": 0, \"text\": \"通知欄を開きます。\", \"quote\": \"通知欄を開きます。\", \"source\": \"status.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-fragment:cs-fragment:chunk-fragment-warning\", \"document_scope\": [\"status.pdf\", \"cs-fragment\", \"doc-fragment\"], \"unit_ids\": [\"U207e1a82179c56b51f90a3d6\"], \"char_start\": 41, \"char_end\": 50, \"quote\": \"通知欄を開きます。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"端末Rが正常表示であるという質問の条件に、選択した通知欄の操作を当てはめる。\", \"result\": \"端末Rが正常表示のときは、通知欄を開きます。\"}], \"summary\": \"\"}"
+  },
+  "version-positive": {
+   "gold_valid": true,
+   "audit_user": "{\"question\": \"処理が完了して保存済みになった結果を、版Bの画面で表示する操作を教えてください。\", \"documents\": [{\"document_scope\": [\"result.pdf\", \"cs-version-a\", \"doc-version\"], \"source\": \"result.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-version:cs-version-a:chunk-version-a\", \"source\": \"result.pdf\", \"page\": 1, \"section_path\": [\"版A\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 51, \"text\": \"版Aで処理待ちの結果を確認するための手順です。版Bの保存済み結果には適用しません。\\n結果を表示します。\"}]}, {\"document_scope\": [\"result.pdf\", \"cs-version-b\", \"doc-version\"], \"source\": \"result.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-version:cs-version-b:chunk-version-b\", \"source\": \"result.pdf\", \"page\": 1, \"section_path\": [\"版B\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 37, \"text\": \"版Bで処理が完了し、保存済みの結果を確認する手順です。\\n結果を表示します。\"}]}], \"items\": [{\"index\": 0, \"text\": \"結果を表示します。\", \"quote\": \"結果を表示します。\", \"source\": \"result.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-version:cs-version-b:chunk-version-b\", \"document_scope\": [\"result.pdf\", \"cs-version-b\", \"doc-version\"], \"unit_ids\": [\"U29589ec02b5ca260670dd207\"], \"char_start\": 28, \"char_end\": 37, \"quote\": \"結果を表示します。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"処理が完了し保存済みであるという質問の条件に、選択した版Bの表示操作を当てはめる。\", \"result\": \"版Bで処理が完了して保存済みになった結果は、結果を表示します。\"}], \"summary\": \"\"}"
+  },
+  "unseen-state-positive": {
+   "gold_valid": true,
+   "audit_user": "{\"question\": \"夜間バッチの実行中に、ジョブキューを確認する操作を教えてください。\", \"documents\": [{\"document_scope\": [\"jobs.pdf\", \"cs-batch-1\", \"doc-batch-1\"], \"source\": \"jobs.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-batch-1:cs-batch-1:chunk-batch-1\", \"source\": \"jobs.pdf\", \"page\": 1, \"section_path\": [\"夜間バッチ\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 32, \"text\": \"夜間バッチの実行中に使う確認の手順です。\\nキュー一覧を開きます。\"}]}, {\"document_scope\": [\"jobs.pdf\", \"cs-batch-2\", \"doc-batch-2\"], \"source\": \"jobs.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-batch-2:cs-batch-2:chunk-batch-2\", \"source\": \"jobs.pdf\", \"page\": 1, \"section_path\": [\"手動実行\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 46, \"text\": \"日中の手動実行だけで使う手順です。夜間バッチの実行中には使いません。\\nキュー一覧を開きます。\"}]}], \"items\": [{\"index\": 0, \"text\": \"キュー一覧を開きます。\", \"quote\": \"キュー一覧を開きます。\", \"source\": \"jobs.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-batch-1:cs-batch-1:chunk-batch-1\", \"document_scope\": [\"jobs.pdf\", \"cs-batch-1\", \"doc-batch-1\"], \"unit_ids\": [\"U55b7f8c48680d1ff78235d5f\"], \"char_start\": 21, \"char_end\": 32, \"quote\": \"キュー一覧を開きます。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"夜間バッチの実行中という質問の条件に、選択したキュー一覧の操作を当てはめる。\", \"result\": \"夜間バッチの実行中にジョブキューを確認するときは、キュー一覧を開きます。\"}], \"summary\": \"\"}"
+  },
+  "unseen-role-negative": {
+   "gold_valid": false,
+   "audit_user": "{\"question\": \"一般利用者が、自分の通知の配信先を変更する操作を教えてください。\", \"documents\": [{\"document_scope\": [\"notify.pdf\", \"cs-notify-1\", \"doc-notify-1\"], \"source\": \"notify.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-notify-1:cs-notify-1:chunk-notify-1\", \"source\": \"notify.pdf\", \"page\": 1, \"section_path\": [\"管理者\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 42, \"text\": \"管理者だけが行う変更の手順です。一般利用者は実行できません。\\n配信先を選び直します。\"}]}, {\"document_scope\": [\"notify.pdf\", \"cs-notify-2\", \"doc-notify-2\"], \"source\": \"notify.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-notify-2:cs-notify-2:chunk-notify-2\", \"source\": \"notify.pdf\", \"page\": 1, \"section_path\": [\"一般利用者\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 36, \"text\": \"一般利用者が自分の通知の配信先を変える手順です。\\n配信先を選び直します。\"}]}], \"items\": [{\"index\": 0, \"text\": \"配信先を選び直します。\", \"quote\": \"配信先を選び直します。\", \"source\": \"notify.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-notify-1:cs-notify-1:chunk-notify-1\", \"document_scope\": [\"notify.pdf\", \"cs-notify-1\", \"doc-notify-1\"], \"unit_ids\": [\"Uc99579d1aee923f9ac4166b4\"], \"char_start\": 31, \"char_end\": 42, \"quote\": \"配信先を選び直します。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"一般利用者が自分の通知を変えるという質問の条件に、選択した配信先の操作を当てはめる。\", \"result\": \"一般利用者は、配信先を選び直して通知の配信先を変更します。\"}], \"summary\": \"\"}"
+  },
+  "unseen-version-negative": {
+   "gold_valid": false,
+   "audit_user": "{\"question\": \"版2の設定画面で、表示言語を切り替える操作を教えてください。\", \"documents\": [{\"document_scope\": [\"settings.pdf\", \"cs-lang-v1\", \"doc-lang\"], \"source\": \"settings.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-lang:cs-lang-v1:chunk-lang-v1\", \"source\": \"settings.pdf\", \"page\": 1, \"section_path\": [\"版1\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 45, \"text\": \"版1の設定画面の手順です。版2では画面の構成が異なるため使いません。\\n言語の欄を選びます。\"}]}, {\"document_scope\": [\"settings.pdf\", \"cs-lang-v2\", \"doc-lang\"], \"source\": \"settings.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-lang:cs-lang-v2:chunk-lang-v2\", \"source\": \"settings.pdf\", \"page\": 1, \"section_path\": [\"版2\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 24, \"text\": \"版2の設定画面の手順です。\\n言語の欄を選びます。\"}]}], \"items\": [{\"index\": 0, \"text\": \"言語の欄を選びます。\", \"quote\": \"言語の欄を選びます。\", \"source\": \"settings.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-lang:cs-lang-v1:chunk-lang-v1\", \"document_scope\": [\"settings.pdf\", \"cs-lang-v1\", \"doc-lang\"], \"unit_ids\": [\"U0a474d54a7e7dd073236c83f\"], \"char_start\": 35, \"char_end\": 45, \"quote\": \"言語の欄を選びます。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"版2の設定画面という質問の条件に、選択した言語の欄の操作を当てはめる。\", \"result\": \"版2の設定画面で表示言語を切り替えるときは、言語の欄を選びます。\"}], \"summary\": \"\"}"
+  },
+  "unseen-general-positive": {
+   "gold_valid": true,
+   "audit_user": "{\"question\": \"端末Kが再起動した直後に、接続状態を確かめる操作を教えてください。\", \"documents\": [{\"document_scope\": [\"link.pdf\", \"cs-link-1\", \"doc-link-1\"], \"source\": \"link.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-link-1:cs-link-1:chunk-link-1\", \"source\": \"link.pdf\", \"page\": 1, \"section_path\": [\"共通\"], \"source_order\": [1, 1, 0], \"start\": 0, \"end\": 44, \"text\": \"すべての端末で、起動した直後を含めていつでも使える確認の手順です。\\n状態表示を開きます。\"}]}, {\"document_scope\": [\"link.pdf\", \"cs-link-2\", \"doc-link-2\"], \"source\": \"link.pdf\", \"evidence\": [{\"evidence_id\": \"evidence-2\", \"source_id\": \"doc-link-2:cs-link-2:chunk-link-2\", \"source\": \"link.pdf\", \"page\": 1, \"section_path\": [\"保守\"], \"source_order\": [1, 2, 0], \"start\": 0, \"end\": 31, \"text\": \"端末Lの保守作業のときだけ使う手順です。\\n状態表示を開きます。\"}]}], \"items\": [{\"index\": 0, \"text\": \"状態表示を開きます。\", \"quote\": \"状態表示を開きます。\", \"source\": \"link.pdf\", \"citation_bindings\": [{\"evidence_id\": \"evidence-1\", \"source_id\": \"doc-link-1:cs-link-1:chunk-link-1\", \"document_scope\": [\"link.pdf\", \"cs-link-1\", \"doc-link-1\"], \"unit_ids\": [\"Ubdc59b7c6babc85e58214d23\"], \"char_start\": 34, \"char_end\": 44, \"quote\": \"状態表示を開きます。\"}]}], \"applications\": [{\"index\": 0, \"request_id\": \"\", \"premises\": [], \"item_indexes\": [0], \"reasoning\": \"端末Kが再起動した直後という質問の条件に、選択した状態表示の操作を当てはめる。\", \"result\": \"端末Kが再起動した直後に接続状態を確かめるときは、状態表示を開きます。\"}], \"summary\": \"\"}"
+  }
+ },
+ "recorded": [
+  {
+   "slot": "f1-single-same-name-other-target-r1",
+   "case": "same-name-other-target",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-2"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文は接続Bの一時停止手順であり「接続Aには適用しません」と記載されているため、結論の「停止を選びます」は接続Aには当てはまりません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"接続Aの送信設定を一時停止する操作を教えてください。\",\n  \"結論\": \"接続Aの送信設定を一時停止するときは、停止を選びます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"停止を選びます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"connection.pdf\",\n      \"見出し\": \"接続B\",\n      \"本文\": \"接続B専用の一時停止手順です。接続Aには適用しません。\\n停止を選びます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-single-same-name-other-target-r2",
+   "case": "same-name-other-target",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-2"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文は接続Bの一時停止手順であり「接続Aには適用しません」と明記されているため、結論の「停止を選びます」は接続Aには当てはまりません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"接続Aの送信設定を一時停止する操作を教えてください。\",\n  \"結論\": \"接続Aの送信設定を一時停止するときは、停止を選びます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"停止を選びます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"connection.pdf\",\n      \"見出し\": \"接続B\",\n      \"本文\": \"接続B専用の一時停止手順です。接続Aには適用しません。\\n停止を選びます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-single-same-name-other-target-r3",
+   "case": "same-name-other-target",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-2"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文は接続Bの一時停止手順であり「接続Aには適用しません」と明記されているため、結論の「停止を選びます」は接続Aには当てはまりません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"接続Aの送信設定を一時停止する操作を教えてください。\",\n  \"結論\": \"接続Aの送信設定を一時停止するときは、停止を選びます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"停止を選びます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"connection.pdf\",\n      \"見出し\": \"接続B\",\n      \"本文\": \"接続B専用の一時停止手順です。接続Aには適用しません。\\n停止を選びます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-regress-source-positive",
+   "case": "source-positive",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": true,
+      "basis_evidence_ids": [
+       "evidence-1"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の「点検モード」項目で「端末Mが点検モードのときに使用する手順です。履歴を開きます。」と記載されており、質問の「履歴一覧を開く操作」と一致します。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"端末Mが点検モードのとき、履歴一覧を開く操作を教えてください。\",\n  \"結論\": \"端末Mが点検モードのときは、履歴を開きます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できる\",\n  \"引用した文\": [\n    \"履歴を開きます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"manual.pdf\",\n      \"見出し\": \"点検モード\",\n      \"本文\": \"端末Mが点検モードのときに使用する手順です。\\n履歴を開きます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-regress-condition-not-applicable",
+   "case": "condition-not-applicable",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-1"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の「編集権限」見出しでは、更新操作は編集権限がある利用者のみ可能と記載されており、閲覧権限だけの利用者には適用されません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"編集権限がなく閲覧権限だけの利用者が、一覧を更新する操作を教えてください。\",\n  \"結論\": \"閲覧権限だけの利用者は、再読込を押して一覧を更新します。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"再読込を押します。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"refresh.pdf\",\n      \"見出し\": \"編集権限\",\n      \"本文\": \"編集権限がある利用者だけが使用できる更新操作です。閲覧権限だけでは実行できません。\\n再読込を押します。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-fresh5-source-positive",
+   "case": "source-positive",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": true,
+      "basis_evidence_ids": [
+       "evidence-1"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の「点検モード」見出しの本文に「端末Mが点検モードのときに使用する手順です。履歴を開きます。」とあり、質問の「履歴一覧を開く操作」と同一内容なので結論は適用できる。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"端末Mが点検モードのとき、履歴一覧を開く操作を教えてください。\",\n  \"結論\": \"端末Mが点検モードのときは、履歴を開きます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できる\",\n  \"引用した文\": [\n    \"履歴を開きます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"manual.pdf\",\n      \"見出し\": \"点検モード\",\n      \"本文\": \"端末Mが点検モードのときに使用する手順です。\\n履歴を開きます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-fresh5-same-name-other-target",
+   "case": "same-name-other-target",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-2"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文は接続Bの一時停止手順であり「接続Aには適用しません」と明記されているため、結論の「停止を選びます」は接続Aには当てはまりません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"接続Aの送信設定を一時停止する操作を教えてください。\",\n  \"結論\": \"接続Aの送信設定を一時停止するときは、停止を選びます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"停止を選びます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"connection.pdf\",\n      \"見出し\": \"接続B\",\n      \"本文\": \"接続B専用の一時停止手順です。接続Aには適用しません。\\n停止を選びます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-fresh5-condition-not-applicable",
+   "case": "condition-not-applicable",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-1",
+       "evidence-2"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "引用元が「はい」の「編集権限」の見出しの本文では、更新操作は編集権限がある利用者のみ可能であり、閲覧権限だけの利用者が再読込で一覧を更新できるとは記載されていません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"編集権限がなく閲覧権限だけの利用者が、一覧を更新する操作を教えてください。\",\n  \"結論\": \"閲覧権限だけの利用者は、再読込を押して一覧を更新します。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"再読込を押します。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"refresh.pdf\",\n      \"見出し\": \"編集権限\",\n      \"本文\": \"編集権限がある利用者だけが使用できる更新操作です。閲覧権限だけでは実行できません。\\n再読込を押します。\",\n      \"引用元\": \"はい\"\n    },\n    {\n      \"資料\": \"refresh.pdf\",\n      \"見出し\": \"閲覧権限\",\n      \"本文\": \"閲覧権限だけの利用者が一覧を更新する手順です。\\n再読込を押します。\",\n      \"引用元\": \"いいえ\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-fresh5-same-document-other-fragment",
+   "case": "same-document-other-fragment",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-2"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の「正常表示のときには実行しません」とあるため、結論の「端末Rが正常表示のときは、通知欄を開きます」は適用できません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"端末Rが正常表示のとき、通知欄を確認する操作を教えてください。\",\n  \"結論\": \"端末Rが正常表示のときは、通知欄を開きます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"通知欄を開きます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"status.pdf\",\n      \"見出し\": \"警告表示\",\n      \"本文\": \"端末Rに警告が表示されているときだけ使用します。正常表示のときには実行しません。\\n通知欄を開きます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-fresh5-version-positive",
+   "case": "version-positive",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": true,
+      "basis_evidence_ids": [
+       "evidence-2"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の『版Bで処理が完了し、保存済みの結果を確認する手順です。結果を表示します。』の「結果を表示します。」が結論の内容と一致し、質問の条件（版Bで保存済み結果を表示）に適合しています。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"処理が完了して保存済みになった結果を、版Bの画面で表示する操作を教えてください。\",\n  \"結論\": \"版Bで処理が完了して保存済みになった結果は、結果を表示します。\",\n  \"判定\": \"結論は引用した資料に照らして適用できる\",\n  \"引用した文\": [\n    \"結果を表示します。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"result.pdf\",\n      \"見出し\": \"版B\",\n      \"本文\": \"版Bで処理が完了し、保存済みの結果を確認する手順です。\\n結果を表示します。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-unseen-unseen-state-positive",
+   "case": "unseen-state-positive",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": true,
+      "basis_evidence_ids": [
+       "evidence-1"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の『夜間バッチ』という見出しと、本文の『キュー一覧を開きます。』が、質問の『夜間バッチの実行中にジョブキューを確認する操作』と同一の対象・条件を示しているため、結論は引用元に照らして適用できる。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"夜間バッチの実行中に、ジョブキューを確認する操作を教えてください。\",\n  \"結論\": \"夜間バッチの実行中にジョブキューを確認するときは、キュー一覧を開きます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できる\",\n  \"引用した文\": [\n    \"キュー一覧を開きます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"jobs.pdf\",\n      \"見出し\": \"夜間バッチ\",\n      \"本文\": \"夜間バッチの実行中に使う確認の手順です。\\nキュー一覧を開きます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-unseen-unseen-role-negative",
+   "case": "unseen-role-negative",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-1"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の「管理者だけが行う変更の手順です。一般利用者は実行できません。」という記述に対し、結論は一般利用者が配信先を変更できると述べているため、適用できません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"一般利用者が、自分の通知の配信先を変更する操作を教えてください。\",\n  \"結論\": \"一般利用者は、配信先を選び直して通知の配信先を変更します。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"配信先を選び直します。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"notify.pdf\",\n      \"見出し\": \"管理者\",\n      \"本文\": \"管理者だけが行う変更の手順です。一般利用者は実行できません。\\n配信先を選び直します。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-unseen-unseen-version-negative",
+   "case": "unseen-version-negative",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": false,
+      "basis_evidence_ids": [
+       "evidence-1"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文は版1の設定画面について述べており、版2では画面構成が異なるため、結論の「言語の欄を選びます」は版2には適用できません。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"版2の設定画面で、表示言語を切り替える操作を教えてください。\",\n  \"結論\": \"版2の設定画面で表示言語を切り替えるときは、言語の欄を選びます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できない\",\n  \"引用した文\": [\n    \"言語の欄を選びます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"settings.pdf\",\n      \"見出し\": \"版1\",\n      \"本文\": \"版1の設定画面の手順です。版2では画面の構成が異なるため使いません。\\n言語の欄を選びます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  },
+  {
+   "slot": "f1-unseen-unseen-general-positive",
+   "case": "unseen-general-positive",
+   "stage_a": {
+    "application_reviews": [
+     {
+      "index": 0,
+      "valid": true,
+      "basis_evidence_ids": [
+       "evidence-1"
+      ]
+     }
+    ],
+    "summary_supported": true
+   },
+   "stage_b": {
+    "reason": "原文の「すべての端末で、起動した直後を含めていつでも使える確認の手順です。状態表示を開きます。」は、端末Kが再起動した直後でも状態表示を開けば接続状態を確認できることを示しているため、結論は適用できる。"
+   },
+   "stage_b_user": "{\n  \"質問\": \"端末Kが再起動した直後に、接続状態を確かめる操作を教えてください。\",\n  \"結論\": \"端末Kが再起動した直後に接続状態を確かめるときは、状態表示を開きます。\",\n  \"判定\": \"結論は引用した資料に照らして適用できる\",\n  \"引用した文\": [\n    \"状態表示を開きます。\"\n  ],\n  \"原文\": [\n    {\n      \"資料\": \"link.pdf\",\n      \"見出し\": \"共通\",\n      \"本文\": \"すべての端末で、起動した直後を含めていつでも使える確認の手順です。\\n状態表示を開きます。\",\n      \"引用元\": \"はい\"\n    }\n  ]\n}",
+   "shown": true
+  }
+ ],
+ "case_inputs": [
+  {
+   "case_id": "unseen-state-positive",
+   "question": "夜間バッチの実行中に、ジョブキューを確認する操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-batch-1",
+     "chunk_set_id": "cs-batch-1",
+     "chunk_uid": "chunk-batch-1",
+     "source": "jobs.pdf",
+     "section": "夜間バッチ",
+     "text": "夜間バッチの実行中に使う確認の手順です。\nキュー一覧を開きます。"
+    },
+    {
+     "document_id": "doc-batch-2",
+     "chunk_set_id": "cs-batch-2",
+     "chunk_uid": "chunk-batch-2",
+     "source": "jobs.pdf",
+     "section": "手動実行",
+     "text": "日中の手動実行だけで使う手順です。夜間バッチの実行中には使いません。\nキュー一覧を開きます。"
+    }
+   ],
+   "selected_quote": "キュー一覧を開きます。",
+   "application_reasoning": "夜間バッチの実行中という質問の条件に、選択したキュー一覧の操作を当てはめる。",
+   "application_result": "夜間バッチの実行中にジョブキューを確認するときは、キュー一覧を開きます。"
+  },
+  {
+   "case_id": "unseen-role-negative",
+   "question": "一般利用者が、自分の通知の配信先を変更する操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-notify-1",
+     "chunk_set_id": "cs-notify-1",
+     "chunk_uid": "chunk-notify-1",
+     "source": "notify.pdf",
+     "section": "管理者",
+     "text": "管理者だけが行う変更の手順です。一般利用者は実行できません。\n配信先を選び直します。"
+    },
+    {
+     "document_id": "doc-notify-2",
+     "chunk_set_id": "cs-notify-2",
+     "chunk_uid": "chunk-notify-2",
+     "source": "notify.pdf",
+     "section": "一般利用者",
+     "text": "一般利用者が自分の通知の配信先を変える手順です。\n配信先を選び直します。"
+    }
+   ],
+   "selected_quote": "配信先を選び直します。",
+   "application_reasoning": "一般利用者が自分の通知を変えるという質問の条件に、選択した配信先の操作を当てはめる。",
+   "application_result": "一般利用者は、配信先を選び直して通知の配信先を変更します。"
+  },
+  {
+   "case_id": "unseen-version-negative",
+   "question": "版2の設定画面で、表示言語を切り替える操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-lang",
+     "chunk_set_id": "cs-lang-v1",
+     "chunk_uid": "chunk-lang-v1",
+     "source": "settings.pdf",
+     "section": "版1",
+     "text": "版1の設定画面の手順です。版2では画面の構成が異なるため使いません。\n言語の欄を選びます。"
+    },
+    {
+     "document_id": "doc-lang",
+     "chunk_set_id": "cs-lang-v2",
+     "chunk_uid": "chunk-lang-v2",
+     "source": "settings.pdf",
+     "section": "版2",
+     "text": "版2の設定画面の手順です。\n言語の欄を選びます。"
+    }
+   ],
+   "selected_quote": "言語の欄を選びます。",
+   "application_reasoning": "版2の設定画面という質問の条件に、選択した言語の欄の操作を当てはめる。",
+   "application_result": "版2の設定画面で表示言語を切り替えるときは、言語の欄を選びます。"
+  },
+  {
+   "case_id": "unseen-general-positive",
+   "question": "端末Kが再起動した直後に、接続状態を確かめる操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-link-1",
+     "chunk_set_id": "cs-link-1",
+     "chunk_uid": "chunk-link-1",
+     "source": "link.pdf",
+     "section": "共通",
+     "text": "すべての端末で、起動した直後を含めていつでも使える確認の手順です。\n状態表示を開きます。"
+    },
+    {
+     "document_id": "doc-link-2",
+     "chunk_set_id": "cs-link-2",
+     "chunk_uid": "chunk-link-2",
+     "source": "link.pdf",
+     "section": "保守",
+     "text": "端末Lの保守作業のときだけ使う手順です。\n状態表示を開きます。"
+    }
+   ],
+   "selected_quote": "状態表示を開きます。",
+   "application_reasoning": "端末Kが再起動した直後という質問の条件に、選択した状態表示の操作を当てはめる。",
+   "application_result": "端末Kが再起動した直後に接続状態を確かめるときは、状態表示を開きます。"
+  },
+  {
+   "case_id": "unseen2-multi-condition-positive",
+   "question": "端末Gが保守モードで、かつ電源に接続されているとき、診断を開始する操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-diag-1",
+     "chunk_set_id": "cs-diag-1",
+     "chunk_uid": "chunk-diag-1",
+     "source": "diag.pdf",
+     "section": "保守モード",
+     "text": "保守モードで、電源に接続されているときに使う手順です。\n診断を開始します。"
+    },
+    {
+     "document_id": "doc-diag-2",
+     "chunk_set_id": "cs-diag-2",
+     "chunk_uid": "chunk-diag-2",
+     "source": "diag.pdf",
+     "section": "電池動作",
+     "text": "電池で動作しているときの手順です。電源に接続されているときは使いません。\n診断を開始します。"
+    }
+   ],
+   "selected_quote": "診断を開始します。",
+   "application_reasoning": "保守モードで電源に接続されているという質問の条件に、選択した診断の操作を当てはめる。",
+   "application_result": "端末Gが保守モードで電源に接続されているときは、診断を開始します。"
+  },
+  {
+   "case_id": "unseen2-hypothetical-positive",
+   "question": "同期が失敗した場合に、同期をやり直す操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-sync-1",
+     "chunk_set_id": "cs-sync-1",
+     "chunk_uid": "chunk-sync-1",
+     "source": "sync.pdf",
+     "section": "同期の失敗",
+     "text": "同期が失敗したときに使う手順です。\n再試行を選びます。"
+    },
+    {
+     "document_id": "doc-sync-2",
+     "chunk_set_id": "cs-sync-2",
+     "chunk_uid": "chunk-sync-2",
+     "source": "sync.pdf",
+     "section": "初回設定",
+     "text": "初回の設定のときだけ使う手順です。\n再試行を選びます。"
+    }
+   ],
+   "selected_quote": "再試行を選びます。",
+   "application_reasoning": "同期が失敗した場合という質問の条件に、選択した再試行の操作を当てはめる。",
+   "application_result": "同期が失敗した場合は、再試行を選びます。"
+  },
+  {
+   "case_id": "unseen2-paraphrase-positive",
+   "question": "外部ストレージが接続されていないとき、保存先を選ぶ操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-store-1",
+     "chunk_set_id": "cs-store-1",
+     "chunk_uid": "chunk-store-1",
+     "source": "storage.pdf",
+     "section": "内部保存",
+     "text": "外部ストレージが無い環境向けの手順です。\n内部の保存先を選びます。"
+    },
+    {
+     "document_id": "doc-store-2",
+     "chunk_set_id": "cs-store-2",
+     "chunk_uid": "chunk-store-2",
+     "source": "storage.pdf",
+     "section": "外部保存",
+     "text": "外部ストレージを接続した環境向けの手順です。\n外部の保存先を選びます。"
+    }
+   ],
+   "selected_quote": "内部の保存先を選びます。",
+   "application_reasoning": "外部ストレージが接続されていないという質問の条件に、選択した保存先の操作を当てはめる。",
+   "application_result": "外部ストレージが接続されていないときは、内部の保存先を選びます。"
+  },
+  {
+   "case_id": "unseen2-same-doc-positive",
+   "question": "ログの容量が上限に近いとき、古いログを消す操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-log",
+     "chunk_set_id": "cs-log",
+     "chunk_uid": "chunk-log-near",
+     "source": "log.pdf",
+     "section": "上限に近いとき",
+     "text": "ログの容量が上限に近いときに使う手順です。\n古いログを削除します。"
+    },
+    {
+     "document_id": "doc-log",
+     "chunk_set_id": "cs-log",
+     "chunk_uid": "chunk-log-routine",
+     "source": "log.pdf",
+     "section": "定期点検",
+     "text": "容量に余裕があるときの定期点検の手順です。上限に近いときには使いません。\n古いログを削除します。"
+    }
+   ],
+   "selected_quote": "古いログを削除します。",
+   "application_reasoning": "ログの容量が上限に近いという質問の条件に、選択した削除の操作を当てはめる。",
+   "application_result": "ログの容量が上限に近いときは、古いログを削除します。"
+  },
+  {
+   "case_id": "source-positive",
+   "question": "端末Mが点検モードのとき、履歴一覧を開く操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-positive-1",
+     "chunk_set_id": "cs-positive-1",
+     "chunk_uid": "chunk-positive-1",
+     "source": "manual.pdf",
+     "section": "点検モード",
+     "text": "端末Mが点検モードのときに使用する手順です。\n履歴を開きます。"
+    },
+    {
+     "document_id": "doc-positive-2",
+     "chunk_set_id": "cs-positive-2",
+     "chunk_uid": "chunk-positive-2",
+     "source": "other.pdf",
+     "section": "通常モード",
+     "text": "通常モードの端末Nに使用する手順です。端末Mの点検モードには適用しません。\n履歴を開きます。"
+    }
+   ],
+   "selected_quote": "履歴を開きます。",
+   "application_reasoning": "端末Mが点検モードであるという質問の条件に、選択した履歴一覧の操作を当てはめる。",
+   "application_result": "端末Mが点検モードのときは、履歴を開きます。"
+  },
+  {
+   "case_id": "same-name-other-target",
+   "question": "接続Aの送信設定を一時停止する操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-target-1",
+     "chunk_set_id": "cs-target-1",
+     "chunk_uid": "chunk-target-1",
+     "source": "connection.pdf",
+     "section": "接続A",
+     "text": "接続Aの送信設定を一時停止する手順です。\n停止を選びます。"
+    },
+    {
+     "document_id": "doc-target-2",
+     "chunk_set_id": "cs-target-2",
+     "chunk_uid": "chunk-target-2",
+     "source": "connection.pdf",
+     "section": "接続B",
+     "text": "接続B専用の一時停止手順です。接続Aには適用しません。\n停止を選びます。"
+    }
+   ],
+   "selected_quote": "停止を選びます。",
+   "application_reasoning": "接続Aを一時停止するために、選択した停止の操作を当てはめる。",
+   "application_result": "接続Aの送信設定を一時停止するときは、停止を選びます。"
+  },
+  {
+   "case_id": "condition-not-applicable",
+   "question": "編集権限がなく閲覧権限だけの利用者が、一覧を更新する操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-permission-1",
+     "chunk_set_id": "cs-permission-1",
+     "chunk_uid": "chunk-permission-1",
+     "source": "refresh.pdf",
+     "section": "編集権限",
+     "text": "編集権限がある利用者だけが使用できる更新操作です。閲覧権限だけでは実行できません。\n再読込を押します。"
+    },
+    {
+     "document_id": "doc-permission-2",
+     "chunk_set_id": "cs-permission-2",
+     "chunk_uid": "chunk-permission-2",
+     "source": "refresh.pdf",
+     "section": "閲覧権限",
+     "text": "閲覧権限だけの利用者が一覧を更新する手順です。\n再読込を押します。"
+    }
+   ],
+   "selected_quote": "再読込を押します。",
+   "application_reasoning": "閲覧権限だけという質問の条件に、選択した更新操作を当てはめる。",
+   "application_result": "閲覧権限だけの利用者は、再読込を押して一覧を更新します。"
+  },
+  {
+   "case_id": "same-document-other-fragment",
+   "question": "端末Rが正常表示のとき、通知欄を確認する操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-fragment",
+     "chunk_set_id": "cs-fragment",
+     "chunk_uid": "chunk-fragment-normal",
+     "source": "status.pdf",
+     "section": "正常表示",
+     "text": "端末Rが正常表示のときに通知を確認する手順です。\n通知欄を開きます。"
+    },
+    {
+     "document_id": "doc-fragment",
+     "chunk_set_id": "cs-fragment",
+     "chunk_uid": "chunk-fragment-warning",
+     "source": "status.pdf",
+     "section": "警告表示",
+     "text": "端末Rに警告が表示されているときだけ使用します。正常表示のときには実行しません。\n通知欄を開きます。"
+    }
+   ],
+   "selected_quote": "通知欄を開きます。",
+   "application_reasoning": "端末Rが正常表示であるという質問の条件に、選択した通知欄の操作を当てはめる。",
+   "application_result": "端末Rが正常表示のときは、通知欄を開きます。"
+  },
+  {
+   "case_id": "version-positive",
+   "question": "処理が完了して保存済みになった結果を、版Bの画面で表示する操作を教えてください。",
+   "documents": [
+    {
+     "document_id": "doc-version",
+     "chunk_set_id": "cs-version-a",
+     "chunk_uid": "chunk-version-a",
+     "source": "result.pdf",
+     "section": "版A",
+     "text": "版Aで処理待ちの結果を確認するための手順です。版Bの保存済み結果には適用しません。\n結果を表示します。"
+    },
+    {
+     "document_id": "doc-version",
+     "chunk_set_id": "cs-version-b",
+     "chunk_uid": "chunk-version-b",
+     "source": "result.pdf",
+     "section": "版B",
+     "text": "版Bで処理が完了し、保存済みの結果を確認する手順です。\n結果を表示します。"
+    }
+   ],
+   "selected_quote": "結果を表示します。",
+   "application_reasoning": "処理が完了し保存済みであるという質問の条件に、選択した版Bの表示操作を当てはめる。",
+   "application_result": "版Bで処理が完了して保存済みになった結果は、結果を表示します。"
+  }
+ ],
+ "gold_reasons": {
+  "unseen-state-positive": "選択したdoc-batch-1は夜間バッチの実行中に使う手順と明示し、質問の状況と一致する。別資料doc-batch-2の除外は選択資料に影響しない。",
+  "unseen-role-negative": "選択したdoc-notify-1は管理者だけの手順で一般利用者は実行できないと明示する。一般利用者向けの別資料doc-notify-2に同じ操作文があっても、この引用の適用は正当化されない。",
+  "unseen-version-negative": "選択したcs-lang-v1は版1の手順で版2では使わないと明示する。版2の別CSに同じ操作文があっても、選択した版1の引用は適用できない。",
+  "unseen-general-positive": "選択したdoc-link-1はすべての端末で起動した直後を含めていつでも使えると明示し、端末Kの再起動直後を含む。条件の語が同一でなくても適用範囲に入る。",
+  "unseen2-multi-condition-positive": "選択資料は保守モードかつ電源接続のときの手順と明示し、質問の両条件と一致する。",
+  "unseen2-hypothetical-positive": "選択資料は同期が失敗したときの手順と明示する。質問は失敗した場合を仮定して尋ね、結論もその条件付きで述べる。現実に失敗したと断定していない。",
+  "unseen2-paraphrase-positive": "選択資料は外部ストレージが無い環境向けで、接続されていないという質問の条件と同じ状況を指す。",
+  "unseen2-same-doc-positive": "同じ文書の中で、選択した断片は容量が上限に近いときの手順と明示し、質問の条件と一致する。別の断片の除外は選択した断片に影響しない。",
+  "source-positive": "選択doc-positive-1は端末Mの点検モードを明示対象とする。質問と選択資料の条件・結果が一致する。",
+  "same-name-other-target": "同名の資料でも選択doc-target-2は接続B専用で接続Aを明示除外する。doc-target-1の存在は選択doc-target-2の適用を正当化しない。",
+  "condition-not-applicable": "選択doc-permission-1は編集権限を必要とし、閲覧権限だけの場合を明示除外する。選択していない別資料で同じ操作が可能でも、この引用の条件は満たされない。",
+  "same-document-other-fragment": "同一doc/CS内でも選択chunk-fragment-warningは警告表示のときのみ有効で正常表示を除外する。正常表示の別fragmentにある同一文は、この選択fragmentの条件を変えない。",
+  "version-positive": "選択cs-version-bは版B・処理完了・保存済みを明示する。版Aの別CSにある同文と混同せず、選択版Bの適用を保持する。"
+ }
+}

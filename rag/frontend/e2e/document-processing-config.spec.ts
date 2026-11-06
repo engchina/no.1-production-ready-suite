@@ -51,6 +51,7 @@ function config(): DocumentProcessingConfig {
     graph_profile: null,
     field_extraction_enabled: null,
     vision_enabled: null,
+    vision_image_purpose: null,
     heading_level_inference_enabled: null,
     navigation_summary_enabled: null,
     auto_parse_after_preprocess_enabled: null,
@@ -71,6 +72,7 @@ const effectiveBase: DocumentProcessingConfig = {
   entity_attribute_columns: [],
   field_extraction_enabled: false,
   vision_enabled: false,
+  vision_image_purpose: "record",
   heading_level_inference_enabled: false,
   navigation_summary_enabled: false,
   section_rules_mode: "parser",
@@ -579,6 +581,7 @@ const PROCESSING_ORDER = [
   "auto_parse_after_preprocess_enabled",
   "parser_adapter_backend",
   "vision_enabled",
+  "vision_image_purpose",
   "heading_level_inference_enabled",
   "field_extraction_enabled",
   "section_rules_mode",
@@ -1485,3 +1488,27 @@ for (const theme of ["light", "dark"] as const) {
     await columns.first().locator("..").screenshot({ path: testInfo.outputPath(`comparison-scroll-${theme}.png`) });
   });
 }
+
+test("画像の用途はレシピで上書きし全体の既定へ戻せる", {tag: "@responsive"}, async ({page}, testInfo) => {
+  const state = await mockWorkspace(page);
+  await page.goto("/documents/doc-1");
+  const panel = page.getByRole("region", {name: "処理レシピ", exact: true});
+  await panel.getByRole("button", {name: "処理設定を編集", exact: true}).click();
+  const row = panel.getByTestId("document-processing-config-editor-items").locator('[data-config-field="vision_image_purpose"]');
+  await row.getByText("上書き", {exact: true}).click();
+  await row.getByRole("combobox", {name: "画像の用途", exact: true}).click();
+  await page.getByRole("option", {name: "画面例・説明用", exact: true}).click();
+  await panel.getByRole("button", {name: "構築設定を保存", exact: true}).click();
+  await expect.poll(() => state.saved()?.vision_image_purpose).toBe("example");
+  expect(state.ingestionPosts()).toBe(0);
+  for (const scheme of ["light", "dark"] as const) {
+    await page.evaluate((theme) => document.documentElement.classList.toggle("dark", theme === "dark"), scheme);
+    await row.scrollIntoViewIfNeeded();
+    await expect(row).toContainText("変更は再解析で反映されます");
+    await expectNoPageOverflow(page);
+    await row.screenshot({path: testInfo.outputPath(`recipe-image-purpose-${testInfo.project.name}-${scheme}.png`)});
+  }
+  await row.getByText("グローバルを継承", {exact: true}).click();
+  await panel.getByRole("button", {name: "構築設定を保存", exact: true}).click();
+  await expect.poll(() => state.saved()?.vision_image_purpose).toBeNull();
+});

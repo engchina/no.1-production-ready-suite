@@ -168,6 +168,7 @@ export function ApprovedFaqManager({
         />
       ) : (
       <PagedDataTable<ApprovedFaqRecordData>
+        // 0 件・1 ページでもページ送りを出す例外（#3719。page-archetypes.md「基準から外す例外」）。
         showSinglePagePagination
         paginationLabels={paginationLabels()}
         {...paging}

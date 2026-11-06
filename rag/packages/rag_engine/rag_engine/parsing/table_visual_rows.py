@@ -9,6 +9,8 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+from rag_parser_core.image_purpose import recorded_image_purpose
+
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_engine.parsing.content_labels import content_labels
 from rag_engine.parsing.table_structure import parse_html_table_structure
@@ -244,6 +246,7 @@ def _save_row_crops(record: LayoutRecord, page: PageImage, run_dir: Path, matche
                         "bbox": list(box),
                         "row_index": index,
                         "relationship": "table_row_image",
+                        "vision_image_purpose": recorded_image_purpose(record.raw),
                         "raw_type": "picture",
                         "visual_role": "content",
                         "crop_path": relative,

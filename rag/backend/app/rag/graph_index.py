@@ -30,6 +30,11 @@ from app.rag.reference_resolution import (
 )
 from app.schemas.extraction import StructuredExtraction
 
+# 構築器の版。同じ chunk から作る entity・relationship・link・参照の記録が変わったら新しい値に
+# 上げる（版の指紋に入り、旧い版の索引を補建の対象にする。#4549）。出力の digest は
+# tests/test_structure_index_builder_contract.py の BUILDER_OUTPUT_DIGESTS に版ごとに追記する。
+STRUCTURE_INDEX_BUILDER_VERSION = "structure-graph-v2"
+
 # 表示名の上限（rag_graph_entities.canonical_name の列の大きさ）。同一性には使わない。
 GRAPH_NAME_MAX_CHARS = 512
 # 長い表示名で省く位置の印。区別に要る先頭（文書・上位の見出し）と末尾（最後の見出し）を残す。
@@ -153,6 +158,8 @@ def _build_graph_index_for_kb(
     }
     relationships: dict[str, GraphRelationship] = {}
     links: dict[tuple[str, str], GraphEntityChunkLink] = {}
+    # chunk ごとの参照の起点（chunk を結んだ最初の entity）と、引用元のパス（本文は空）。
+    sources: list[tuple[GraphEntity, str]] = []
 
     for chunk in chunks:
         body = is_body_chunk(
@@ -163,7 +170,7 @@ def _build_graph_index_for_kb(
             if body
             else _entity_names_for_chunk(chunk)
         )
-        for name in names:
+        for position, name in enumerate(names):
             key: str | tuple[str] = ("body",) if body else name
             entity = entity_by_name.get(key)
             if entity is None:
@@ -193,6 +200,8 @@ def _build_graph_index_for_kb(
                 relationships[relationship.relationship_id] = relationship
             if entity is None:
                 continue
+            if position == 0:
+                sources.append((entity, "" if body else _metadata_str(chunk, "section_path") or ""))
             chunk_id = _chunk_id(document_id, chunk, chunk_set_id=chunk_set_id)
             links[(entity.entity_id, chunk_id)] = GraphEntityChunkLink(
                 entity_id=entity.entity_id,
@@ -202,7 +211,8 @@ def _build_graph_index_for_kb(
             )
 
     # 参照は包含と別に構築する。旧metadataの推測済みパスをそのまま確定辺へ転用しない。
-    section_paths = tuple(_metadata_str(chunk, "section_path") or "" for chunk in chunks)
+    # 起点は chunk を結んだ entity（本文・区切りだけのパスは「本文」）で、包含と同じ判定（#4551）。
+    section_paths = tuple(path for _entity, path in sources)
     reference_source = ReferenceDocument(
         document_id=document_id,
         chunk_set_id=chunk_set_id,
@@ -210,12 +220,13 @@ def _build_graph_index_for_kb(
         section_paths=section_paths,
         title=document_title_from_paths(section_paths),
     )
-    entity_by_path = {split_section_path(name): entity for name, entity in entity_by_name.items()}
-    for chunk in chunks:
-        source_path = _metadata_str(chunk, "section_path") or ""
-        source_entity = entity_by_path.get(split_section_path(source_path))
-        if source_entity is None:
-            continue
+    # 参照先は見出しのパスで引く。「本文」はパスを持たず、参照先にならない。
+    entity_by_path = {
+        split_section_path(name): entity
+        for name, entity in entity_by_name.items()
+        if isinstance(name, str)
+    }
+    for chunk, (source_entity, source_path) in zip(chunks, sources, strict=True):
         specs = extract_references(chunk.text) or [
             target.spec for target in reference_targets(chunk.metadata)
         ]
@@ -226,9 +237,9 @@ def _build_graph_index_for_kb(
                 citing_path=source_path,
                 documents=(),
             )
-            target_entity = entity_by_path.get(
-                split_section_path(resolution.target.section_path) if resolution.target else ()
-            )
+            if resolution.target is None:
+                continue
+            target_entity = entity_by_path.get(split_section_path(resolution.target.section_path))
             if target_entity is None:
                 continue
             relationship = GraphRelationship(

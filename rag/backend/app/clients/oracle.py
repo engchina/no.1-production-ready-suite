@@ -311,6 +311,15 @@ class StoredKnowledgeBase:
     searchable_chunk_count: int | None = 0
 
 
+@dataclass(frozen=True)
+class KnowledgeBaseConfig:
+    """存在・状態・設定の確認に使う KB の行だけの値(文書・chunk の件数を持たない)。"""
+
+    id: str
+    status: KnowledgeBaseStatus
+    retrieval_config: dict[str, object] = field(default_factory=dict)
+
+
 @dataclass
 class StoredSearchAnswerProfile:
     """検索・回答プロファイル(Search Answer Profile)行。"""
@@ -2498,6 +2507,23 @@ class OracleClient:
         )
         return row is not None
 
+    async def get_knowledge_base_config(self, knowledge_base_id: str) -> KnowledgeBaseConfig | None:
+        """件数を集計せず、利用範囲内の KB の状態と retrieval_config だけを返す。"""
+        row = await self._fetch_one(
+            f"""SELECT kb.knowledge_base_id, kb.status, kb.retrieval_config
+            FROM rag_knowledge_bases kb
+            WHERE kb.knowledge_base_id = :knowledge_base_id
+            AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}""",
+            _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
+        )
+        if row is None:
+            return None
+        return KnowledgeBaseConfig(
+            id=str(row["knowledge_base_id"]),
+            status=_knowledge_base_status(row.get("status")),
+            retrieval_config=_json_loads(row.get("retrieval_config")),
+        )
+
     async def update_knowledge_base(
         self,
         knowledge_base_id: str,
@@ -3992,8 +4018,10 @@ class OracleClient:
         """文書の検索対象の chunk_set の派生 layer のうち、指紋のある行を返す(一覧の判定。#550)。
 
         検索対象はレシピの active chunk_set と、レシピを持たない(legacy の plan の)配信中の
-        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピ
-        (無ければ文書)の処理設定も返す。抽出結果などの大きな JSON 列は読まない。
+        chunk_set。レシピの設定で層 ID を作り直して今も要求されているかを確かめるため、レシピの
+        処理設定も返す。レシピを持たない chunk_set は、呼び出し側が文書詳細と同じく既定のレシピと
+        KB の計画で判定する(文書の行の旧列は読まない。#4185)。抽出結果などの大きな JSON 列は
+        読まない。
         """
         ids = list(dict.fromkeys(document_ids))
         if not ids:
@@ -4004,8 +4032,7 @@ class OracleClient:
                 """
                 SELECT l.document_id, l.layer_id, l.layer_kind, l.parent_chunk_set_id,
                        l.input_fingerprint, cs.recipe_id,
-                       r.processing_config AS recipe_processing_config,
-                       d.processing_config AS document_processing_config
+                       r.processing_config AS recipe_processing_config
                 FROM rag_artifact_layers l
                 JOIN rag_chunk_sets cs ON cs.chunk_set_id = l.parent_chunk_set_id
                 JOIN rag_documents d ON d.document_id = l.document_id
@@ -4024,11 +4051,7 @@ class OracleClient:
         result: list[dict[str, object]] = []
         for row in rows:
             normalized = {str(key).lower(): value for key, value in row.items()}
-            for key in (
-                "input_fingerprint",
-                "recipe_processing_config",
-                "document_processing_config",
-            ):
+            for key in ("input_fingerprint", "recipe_processing_config"):
                 normalized[key] = _json_loads(normalized.get(key))
             result.append(normalized)
         return result
@@ -6634,7 +6657,7 @@ class OracleClient:
         embeddings: list[list[float]],
         chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """構造化抽出と chunk/vector を 1 transaction で保存する。
+        """chunk/vector を 1 transaction で保存する(抽出は文書の行に書かない。#4185)。
 
         chunk_set_id を渡すと、その chunk_set の chunk だけを置換・タグ付けする(複数 chunk_set
         共存)。None は文書の全 chunk を置換し未タグ保存(現行挙動・後方互換)。
@@ -9085,6 +9108,9 @@ class OracleClient:
         knowledge_base_id: str,
     ) -> KnowledgeBaseDetail | None:
         """Oracle knowledge base table から詳細取得する。"""
+        # 検索対象の chunk 数は、所属の INDEXED 文書 → 配信中の chunk_set → chunk_set_id の索引の
+        # 順に数える。rag_chunks を OR の条件で結ぶと全件走査になる(#4553)。SQL は 1 行に詰めて
+        # 送るので、SQL の中に ``--`` のコメントを書かない。
         rows = await self._fetch_all(
             """
             SELECT
@@ -9103,23 +9129,25 @@ class OracleClient:
                     AS indexed_document_count,
                 COUNT(DISTINCT CASE WHEN d.status = 'ERROR' THEN d.document_id END)
                     AS error_document_count,
-                COUNT(c.chunk_id) AS searchable_chunk_count
+                (
+                    SELECT COUNT(*)
+                    FROM rag_document_knowledge_bases count_dkb
+                    JOIN rag_documents count_d
+                        ON count_d.document_id = count_dkb.document_id
+                       AND count_d.status = 'INDEXED'
+                       AND {count_document_access_sql}
+                    JOIN rag_chunk_sets cs
+                        ON cs.document_id = count_d.document_id
+                       AND {_SERVED_CHUNK_SET_SQL}
+                    JOIN rag_chunks c ON c.chunk_set_id = cs.chunk_set_id
+                    WHERE count_dkb.knowledge_base_id = kb.knowledge_base_id
+                ) AS searchable_chunk_count
             FROM rag_knowledge_bases kb
             LEFT JOIN rag_document_knowledge_bases dkb
                 ON dkb.knowledge_base_id = kb.knowledge_base_id
             LEFT JOIN rag_documents d
                 ON d.document_id = dkb.document_id
                AND {document_access_sql}
-            LEFT JOIN rag_chunks c
-                ON c.document_id = d.document_id
-               AND d.status = 'INDEXED'
-               AND (
-                   c.chunk_set_id IS NULL
-                   OR c.chunk_set_id IN (
-                       SELECT cs.chunk_set_id FROM rag_chunk_sets cs
-                       WHERE {_SERVED_CHUNK_SET_SQL}
-                   )
-               )
             WHERE kb.knowledge_base_id = :knowledge_base_id
               AND {knowledge_base_access_sql}
             GROUP BY
@@ -9135,6 +9163,7 @@ class OracleClient:
                 kb.archived_at
             """.format(
                 _SERVED_CHUNK_SET_SQL=_SERVED_CHUNK_SET_SQL,
+                count_document_access_sql=_oracle_access_predicate_sql(alias="count_d"),
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
                 knowledge_base_access_sql=_oracle_knowledge_base_access_predicate_sql(alias="kb"),
             ),
@@ -12041,8 +12070,10 @@ class OracleClient:
         embeddings: Sequence[Sequence[float] | None],
         chunk_set_id: str | None = None,
     ) -> list[RetrievedChunk]:
-        """抽出 payload と chunk/vector を同一 Oracle transaction で置換する。
+        """chunk/vector を同一 Oracle transaction で置換する。
 
+        ``extraction`` は chunk の出所の照合と 1 ページ目の本文にだけ使い、文書の行には書かない
+        (抽出の正本はレシピの抽出の版。#4185)。
         chunk_set_id を渡すと chunk 置換を **その chunk_set に限定**(他 chunk_set の chunk は
         残す)し、挿入 chunk をその chunk_set でタグ付けする。None は文書の全 chunk を置換し
         未タグで保存する(現行挙動・後方互換)。
@@ -12078,24 +12109,6 @@ class OracleClient:
             from app.rag.chunk_source_projection import _validate_chunk_source_projection
 
             _validate_chunk_source_projection(extraction, chunks)
-            _execute(
-                connection,
-                _render_sql(
-                    """
-                UPDATE rag_documents
-                SET extraction = :extraction
-                WHERE document_id = :document_id
-                  AND {access_predicate}
-                """,
-                    access_predicate=_oracle_access_predicate_sql(),
-                ),
-                _with_tenant_bind(
-                    {
-                        "document_id": document_id,
-                        "extraction": _json_dumps(extraction.to_document_payload()),
-                    }
-                ),
-            )
             # chunk_set_id 指定時はその chunk_set の chunk だけ置換する(複数 chunk_set 共存可)。
             chunk_set_clause = (
                 "AND chunk_set_id = :chunk_set_id" if chunk_set_id is not None else ""

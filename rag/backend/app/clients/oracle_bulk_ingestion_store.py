@@ -2,7 +2,8 @@
 
 1 文書ずつの往復をせず、文書の状態は IN の条件(最大 ``_IN_CHUNK`` 件)でまとめて読み、job は
 batch ごとの 1 transaction で ``executemany`` で登録する。新しい表・列は持たない(既存の
-``rag_documents`` / ``rag_document_recipes`` / ``rag_ingestion_jobs`` だけを使う)。
+``rag_documents`` / ``rag_document_recipes`` / ``rag_ingestion_jobs`` と、前回の取込の出力の
+有無を見るレシピの層の ``rag_document_extractions`` / ``rag_chunk_sets`` だけを使う)。
 """
 
 from __future__ import annotations
@@ -133,8 +134,17 @@ def _document_state_query(document_ids: Sequence[str]) -> tuple[str, dict[str, o
             d.duplicate_of_document_id,
             CASE WHEN d.object_storage_path IS NULL THEN 0 ELSE 1 END AS has_source,
             CASE
-                WHEN d.preprocess_artifact IS NULL AND d.extraction IS NULL THEN 0
-                ELSE 1
+                WHEN EXISTS (
+                    SELECT 1 FROM rag_document_recipes o
+                    WHERE o.document_id = d.document_id AND o.preprocess_artifact IS NOT NULL
+                )
+                OR EXISTS (
+                    SELECT 1 FROM rag_document_extractions e WHERE e.document_id = d.document_id
+                )
+                OR EXISTS (
+                    SELECT 1 FROM rag_chunk_sets cs WHERE cs.document_id = d.document_id
+                ) THEN 1
+                ELSE 0
             END AS has_outputs,
             (
                 SELECT MIN(s.status) KEEP (DENSE_RANK FIRST ORDER BY s.slot_no)

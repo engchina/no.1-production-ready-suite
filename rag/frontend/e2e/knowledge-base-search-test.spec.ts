@@ -6,6 +6,7 @@ import {
   mockDatabaseReady,
   mockLocalAuth,
 } from "./_helpers";
+import { expectMainActionsClearOfToast } from "./_toast-placement";
 
 function ok(json: unknown) {
   return { data: json, error_messages: [], warning_messages: [] };
@@ -338,6 +339,17 @@ test("KB 検索テストの引用が内部スクロールしてもページ末�
     .poll(() => citationList.evaluate((element) => element.scrollHeight > element.clientHeight))
     .toBe(true);
   await expectMainScrollEndsAtContent(page);
+});
+
+// #4560: KB 詳細の末尾の「検索テスト」も、通知（Toast）の決まった置き場所と重ならない（#1728 の規則）。
+// 未実行の案内はボタンの上に出し、ボタンの下に高い空の状態を置かない。
+test("KB 詳細の主操作と末尾の検索テストは通知の置き場所と重ならない（#4560）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockKbPage(page, 1);
+  await page.goto("/knowledge-bases/kb-1");
+  await expect(page.getByRole("button", { name: "検索テスト" })).toBeVisible();
+  await expect(page.getByText("質問を入力すると、このナレッジベースから上位の根拠チャンクを取得します。")).toBeVisible();
+  await expectMainActionsClearOfToast(page);
+  await page.screenshot({ path: testInfo.outputPath("kb-detail-end.png") });
 });
 
 test("索引済み文書が無い KB は検索テストを促す空状態を出す", async ({ page }) => {

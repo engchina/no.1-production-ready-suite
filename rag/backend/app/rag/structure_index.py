@@ -6,6 +6,8 @@ import hashlib
 import json
 from typing import Any
 
+from app.rag import graph_index
+
 PREFERENCE_KEY = "structure_index_enabled"
 
 
@@ -30,8 +32,11 @@ async def structure_index_targets(
 
 
 def source_fingerprint(chunk_sets: list[str]) -> str:
-    # 同じChunk集合でも構築契約が変わった旧索引は「構築済み」にしない。
-    payload = {"version": "explicit-references-v1", "chunk_sets": sorted(chunk_sets)}
+    # 同じChunk集合でも構築器の版が変わった旧索引は「構築済み」にしない（#4549）。
+    payload = {
+        "builder_version": graph_index.STRUCTURE_INDEX_BUILDER_VERSION,
+        "chunk_sets": sorted(chunk_sets),
+    }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -41,7 +46,8 @@ async def structure_index_plan(
     """本文を取らず、現在見える所属文書とactive成果・補建記録を比較する。
 
     版の指紋が同じでも、本文の結び付きが本文の chunk より少ない索引（「本文」の節点の前の索引）は
-    ``STALE`` にし、``body_links_missing`` を付ける（#4543）。
+    ``STALE`` にし、``body_links_missing`` を付ける（#4543）。構築記録の構築器の版が今と違う
+    ``STALE`` には理由 ``builder_changed`` を付ける（#4549）。
     """
     from app.clients.oracle import (
         _oracle_access_predicate_sql,
@@ -51,7 +57,7 @@ async def structure_index_plan(
     from app.clients.structure_graph_store import StructureGraphStore
     from app.clients.structure_index_store import StructureIndexStore
 
-    kb = await oracle.get_knowledge_base(knowledge_base_id)
+    kb = await oracle.get_knowledge_base_config(knowledge_base_id)
     if kb is None:
         raise KeyError("ナレッジベースが見つかりません。")
     if document_ids == []:
@@ -139,6 +145,13 @@ async def structure_index_plan(
         )
         item["quality"] = built["quality"] if built else None
         item["reason"] = "no_chunks" if not item["chunk_sets"] else item.pop("unavailable", None)
+        if (
+            built
+            and item["status"] == "STALE"
+            and item["reason"] is None
+            and built.get("builder_version") != graph_index.STRUCTURE_INDEX_BUILDER_VERSION
+        ):
+            item["reason"] = "builder_changed"
         # 構築設定OFFは新しい作業の可否であり、既存索引を無効にはしない。
         item["index_status"] = (
             ("CURRENT" if fresh else "STALE")
@@ -164,14 +177,11 @@ async def rebuild_document_structure_index(
     from app.clients.oracle import _oracle_retrieval_where
     from app.clients.structure_index_store import StructureIndexStore
     from app.rag.chunking import Chunk
-    from app.rag.graph_index import (
-        build_graph_index,
-    )
     from app.schemas.extraction import StructuredExtraction
 
-    kb = await oracle.get_knowledge_base(knowledge_base_id)
+    kb_visible = await oracle.knowledge_base_is_visible(knowledge_base_id)
     document = await oracle.get_document_summary(document_id)
-    if kb is None or document is None:
+    if not kb_visible or document is None:
         raise KeyError("対象が見つかりません。")
     preferences = await oracle.document_structure_index_preferences(document_id) or {}
     if knowledge_base_id not in preferences:
@@ -224,6 +234,7 @@ async def rebuild_document_structure_index(
             reference_catalog_cache[catalog_key] = reference_documents
     graphs = {}
     counts: dict[str, Any] = {
+        "builder_version": graph_index.STRUCTURE_INDEX_BUILDER_VERSION,
         "chunk_sets": len(source),
         "entities": 0,
         "relationships": 0,
@@ -277,7 +288,7 @@ async def rebuild_document_structure_index(
                 )
             )
         graph = await asyncio.to_thread(
-            build_graph_index,
+            graph_index.build_graph_index,
             document_id=document_id,
             knowledge_base_ids=[knowledge_base_id],
             extraction=StructuredExtraction(),

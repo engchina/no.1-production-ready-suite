@@ -368,8 +368,11 @@ grep -Fq "run_as_app_user_in_dir ${rag_dir}/services/preprocess/office_to_pdf uv
 grep -Eq -- "--inexact|spacy download" "${venv_commands}" && fail "削除した PIIマスクの venv の例外（--inexact・spaCy のモデル）が残っている"
 grep -Fq "run_as_service_user_in_dir ${rag_dir}/services/parsers/docling .venv/bin/python -m rag_engine.resources.docling_models" "${venv_commands}" \
   || fail "docling のモデルを SERVICE_USER の ~/.cache に取得していない"
-grep -Fq "WARNING: parser-docling could not download its models now" "${TEST_TMP_DIR}/venvs/venvs.log" \
+grep -Fq "WARNING: parser-docling could not download and verify its models now" "${TEST_TMP_DIR}/venvs/venvs.log" \
   || fail "docling のモデル取得の失敗で配備が止まった、または警告を出していない"
+# Unstructured のモデル（HF の layout・表の構造）も配備で取得・検証する（解析の要求の時には取得しない）。
+grep -Fq "run_as_service_user_in_dir ${rag_dir}/services/parsers/unstructured .venv/bin/python -m rag_parser_core.unstructured_models | attempts=3" "${venv_commands}" \
+  || fail "parser-unstructured のモデルを配備で SERVICE_USER の ~/.cache に取得・検証していない"
 
 # --- backend/.env（生成する secret は1回だけ作り、再実行でも同じ値を使う） ---
 run_runtime_env_case
@@ -441,6 +444,13 @@ fi
 if grep -Eiq 'docker|compose' "${backend_unit}" "${worker_unit}" "${docling_unit}"; then
   fail "systemd の unit が docker を使っている"
 fi
+grep -Fqx 'Environment=RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs' "${docling_unit}" \
+  || fail "parser-docling の解析の出力先を unit で指定していない"
+# Docling・Unstructured は配備で取得・検証した HF のモデルだけを読み、解析の要求の時には取得しない（#4555・#4557）。
+grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${docling_unit}" \
+  || fail "parser-docling の unit が解析の要求の時の HF のモデルの取得を禁じていない（HF_HUB_OFFLINE=1）"
+grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${units}/production-ready-rag-parser-unstructured.service" \
+  || fail "parser-unstructured の unit が解析の要求の時の HF のモデルの取得を禁じていない（HF_HUB_OFFLINE=1）"
 # 初回の配備: 既定のサービスを起動し（既定は停止の parser-xml-tree-json は起動しない）、backend / worker を enable + restart する。
 grep -qx 'enable production-ready-rag-backend.service production-ready-rag-ingestion-worker.service' "${first_log}" \
   || fail "backend / ingestion-worker を enable していない"
@@ -762,11 +772,26 @@ grep -Fqx "ExecStart=${REPO_DIR}/services/parsers/docling/.venv/bin/gunicorn app
   "${dev_dir}/production-ready-rag-parser-docling.service" || fail "開発環境の unit が本番と同じ起動方法ではない"
 grep -Fqx "User=$(id -un)" "${dev_dir}/production-ready-rag-parser-docling.service" \
   || fail "開発環境の unit が現在のユーザーで動かない"
+grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${dev_dir}/production-ready-rag-parser-docling.service" \
+  || fail "開発環境の parser-docling の unit が本番と同じく HF のモデルの実行時の取得を禁じていない"
 grep -Fqx "$(id -un) ALL=(root) NOPASSWD: RAG_SERVICE_CONTROL" "${dev_dir}/production-ready-rag-services" \
   || fail "開発環境の sudoers が現在のユーザーに限定されていない"
 if command -v visudo >/dev/null 2>&1; then
   visudo -cf "${dev_dir}/production-ready-rag-services" >/dev/null || fail "開発環境の sudoers を visudo が受け付けない"
 fi
+dev_unstructured_dir="${TEST_TMP_DIR}/dev-render-unstructured"
+bash "${REPO_DIR}/scripts/rag-services.sh" render "${dev_unstructured_dir}" --unstructured > /dev/null 2>&1 \
+  || fail "scripts/rag-services.sh render --unstructured が失敗した"
+grep -Fqx 'Environment=HF_HUB_OFFLINE=1' "${dev_unstructured_dir}/production-ready-rag-parser-unstructured.service" \
+  || fail "開発環境の parser-unstructured の unit が本番と同じく HF のモデルの実行時の取得を禁じていない"
+# systemd を使わない前面の起動（rag-services.sh run）も unit と同じ実行時の環境変数を使う。
+test "$(bash -c 'source "$1/scripts/rag-systemd.sh"; rag_service_environment parser-unstructured' _ "${REPO_DIR}")" = "HF_HUB_OFFLINE=1" \
+  || fail "rag_service_environment が parser-unstructured の HF_HUB_OFFLINE=1 を返さない"
+test "$(bash -c 'source "$1/scripts/rag-systemd.sh"; rag_service_environment parser-docling' _ "${REPO_DIR}")" = "RAG_ENGINE_OUTPUT_DIR=/tmp/production-ready-rag-engine-runs
+HF_HUB_OFFLINE=1" \
+  || fail "rag_service_environment が parser-docling の出力先と HF_HUB_OFFLINE=1 を返さない"
+grep -Fq 'exec env "${environment[@]}" .venv/bin/gunicorn' "${REPO_DIR}/scripts/rag-services.sh" \
+  || fail "scripts/rag-services.sh run が unit と同じ実行時の環境変数で起動しない"
 if bash "${REPO_DIR}/scripts/rag-services.sh" render "${TEST_TMP_DIR}/dev-unknown" 'parser-docling;id' >/dev/null 2>&1; then
   fail "scripts/rag-services.sh が未知のサービス名を受け付けた"
 fi

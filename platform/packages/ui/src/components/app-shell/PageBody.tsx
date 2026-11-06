@@ -28,9 +28,11 @@ export function PageBody({ wide = false, className, children, ...props }: Compon
 
 /**
  * 見出し付きのひとまとまり。見出しは 16px / 600（ページタイトル 20px とカード見出し 14px の間の段）。
+ * `titleId` を渡すと見出しにその id を付け、節の名前（`aria-labelledby`）を見出しにする（#4558）。
  */
 export function Section({
   title,
+  titleId,
   description,
   actions,
   className,
@@ -38,15 +40,21 @@ export function Section({
   ...props
 }: Omit<ComponentProps<"section">, "title"> & {
   title?: string;
+  /** 見出しの id。節の `aria-labelledby` の既定にもなる（節を見出しの名前の region にする）。 */
+  titleId?: string;
   description?: string;
   actions?: ReactNode;
 }) {
   return (
-    <section {...props} className={cn("grid min-w-0 gap-3", className)}>
+    <section aria-labelledby={title ? titleId : undefined} {...props} className={cn("grid min-w-0 gap-3", className)}>
       {title || actions ? (
         <div className="flex min-w-0 flex-col items-start justify-between gap-4 sm:flex-row">
           <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-            {title ? <h2 className="text-base font-semibold text-fg">{title}</h2> : null}
+            {title ? (
+              <h2 id={titleId} className="text-base font-semibold text-fg">
+                {title}
+              </h2>
+            ) : null}
             {description ? <p className="mt-1 text-sm text-fg-muted">{description}</p> : null}
           </div>
           {actions ? <div className="flex min-w-0 max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}

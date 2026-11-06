@@ -309,6 +309,10 @@ export const ja = {
   "settings.parserAdapters.postParse.description":
     "文書解析の後に、次の順で処理します。ここで選ぶのは全体の既定です。文書のレシピで上書きできます。取込時の処理の変更は次の取込から、章節の抽出規則の変更は次に章節を表示するときから使います。",
   "settings.parserAdapters.postParse.step": "{index}. {name}",
+  "imagePurpose.label": "画像の用途",
+  "imagePurpose.record": "実データ・記録",
+  "imagePurpose.example": "画面例・説明用",
+  "imagePurpose.hint": "画像の値や状態を実際の記録として読み取るか、説明用の例として読み取るかを指定します。変更は再解析で反映されます。過去の解析版の用途は変わりません。読み取りの正確さや質問への適用を保証しません。",
   "settings.parserAdapters.postParse.vision.concurrency": "同時に説明する図・表の数",
   "settings.parserAdapters.postParse.vision.concurrencyHint":
     "{min}〜{max}。API の制限（429）を受けると自動で減らし、成功が続くとこの数まで戻します。同じページの図・表は順番に説明します。",
@@ -1687,7 +1691,7 @@ export const ja = {
   "settings.pipeline.flow.loading": "全体の既定を読み込んでいます",
   "settings.pipeline.flow.loadError": "全体の既定を取得できませんでした。",
   "settings.pipeline.flow.openSettings": "設定画面へ",
-  "settings.pipeline.flow.openSettingsAria": "{name} を設定する画面を開く",
+  "settings.pipeline.flow.openSettingsAria": "設定画面へ（{name}）",
   "settings.pipeline.flow.gate.auto_parse_after_preprocess_enabled":
     "オフにすると、ファイル準備の後で止まります。抽出は文書ごとに手動で始めます。",
   "settings.pipeline.flow.gate.auto_chunk_after_extract_enabled":
@@ -2514,7 +2518,7 @@ export const ja = {
   "search.prefill.profileUnavailable": "元の検索・回答プロファイルは使えません。選び直してください。",
   "searchAnswerProfiles.scope.noKnowledgeBases":
     "この検索・回答プロファイルには参照するナレッジベースがありません。検索・回答プロファイルの設定でナレッジベースを追加してください。",
-  "searchAnswerProfileSelect.placeholder": "検索・回答プロファイルを検索して選択…",
+  "searchAnswerProfileSelect.placeholder": "未選択",
   "searchAnswerProfileSelect.searchPlaceholder": "検索・回答プロファイルの名前・説明で検索…",
   "searchAnswerProfileSelect.count": "{shown} / {total} 件",
   "searchAnswerProfileSelect.knowledgeBaseCount": "参照 KB {count} 件",
@@ -2709,6 +2713,7 @@ export const ja = {
   "knowledgeBases.structure.build.reason.no_chunks": "有効なチャンクがありません。文書の処理を先に完了してください。",
   "knowledgeBases.structure.build.reason.no_structure": "章節の情報がありません。抽出・分割の設定を確認してください。",
   "knowledgeBases.structure.build.reason.source_changed": "文書の版が変わりました。現在の版で再実行してください。",
+  "knowledgeBases.structure.build.reason.builder_changed": "構築の方式が更新されました。「不足・更新分を構築」で作り直してください。",
   "knowledgeBases.structure.build.reason.authorization_changed": "利用者の権限が変更されました。現在の権限を確認してください。",
   "knowledgeBases.structure.build.reason.disabled": "構築設定がオフです。",
   "knowledgeBases.structure.build.reason.membership_changed": "文書の所属が変更されました。",
@@ -4354,7 +4359,7 @@ export const ja = {
   "settings.answerPrompts.stage.audit.condition": "生成後の LLM 監査を有効にしたとき（既定は無効）。業務ガイドの下書きの試答では詳細な監査を使います",
   "settings.answerPrompts.stage.application": "規則の当てはめ",
   "settings.answerPrompts.stage.application.condition":
-    "生成後の LLM 監査が有効で、結論が中立のまま、質問の事実と引用で裏付けた規則があるときに補助の当てはめと監査を行います。生成時の applications は回答生成の指示で扱います",
+    "生成後の LLM 監査が有効で、結論が中立のまま、質問の事実と引用で裏付けた規則があるときに補助の当てはめと監査を行います。生成時の applications は回答生成の指示で扱います。生成後の LLM 監査を使わない設定では、導いた結論を独立の監査で判定し、判定ごとに利用者に示す理由を別に書きます",
   "settings.answerPrompts.stage.evaluation": "回答の品質評価",
   "settings.answerPrompts.stage.evaluation.condition":
     "品質評価と保存した回答の評価。正確性・網羅性は標準回答や必須要点などの期待があるとき、忠実性は取得した根拠があるときに測ります",
@@ -4384,6 +4389,7 @@ export const ja = {
   "settings.answerPrompts.part.detailedSystem": "詳細な LLM 監査（未使用の根拠も列挙します。業務ガイドの下書きの試答で使用）",
   "settings.answerPrompts.part.factSystem": "標準の LLM 監査（主張・要求・業務ガイドの要件を判定し、未使用の根拠は列挙しません）",
   "settings.answerPrompts.part.auditSystem": "監査の システムプロンプト",
+  "settings.answerPrompts.part.reasonSystem": "監査の判定の理由を書く システムプロンプト",
   "settings.answerPrompts.part.answerChoice":
     "確認の自由入力の答えから選択肢を決める（選択肢そのものでない答えのときだけ）",
   "settings.answerPrompts.part.citationRepair":
@@ -5619,9 +5625,9 @@ export const ja = {
   "history.detail.errorStage": "止まった段",
   "history.detail.errorStageNotRecorded": "未記録",
   "history.detail.openChat": "会話を開く",
-  "history.detail.openChatLabel": "この実行の会話をチャットで開く",
+  "history.detail.openChatLabel": "会話を開く（この実行のチャット）",
   "history.detail.openSearch": "RAG 検索で開く",
-  "history.detail.openSearchLabel": "この実行の質問と条件を RAG 検索の画面に入れて開く",
+  "history.detail.openSearchLabel": "RAG 検索で開く（この実行の質問と条件を入れる）",
   "history.result.answer": "回答",
   "history.result.answerMissing": "回答の記録は保存期間を過ぎて削除されたか、読み込めませんでした。",
   "history.result.blocked": "質問が安全チェックで止められたため、検索・回答はしていません。",

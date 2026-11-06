@@ -848,7 +848,21 @@ async def test_ingestion_vision_disabled_keeps_extraction() -> None:
 
     result = await _attach(_pipeline(enabled=False, reader=reader), extraction, "mineru")
 
-    assert result is extraction
+    assert result is not extraction
+    assert result.raw_text == extraction.raw_text
+    assert result.elements[1].metadata["vision_image_purpose"] == "record"
+    assert [
+        {
+            **element.model_dump(),
+            "metadata": {
+                key: value
+                for key, value in element.metadata.items()
+                if key != "vision_image_purpose"
+            },
+        }
+        for element in result.elements
+    ] == [element.model_dump() for element in extraction.elements]
+    assert "vision_image_purpose" not in extraction.parser_artifacts
     assert reader.calls == []
 
 
@@ -884,7 +898,19 @@ async def test_ingestion_vision_stage_failure_keeps_extraction(
 
     result = await _attach(_pipeline(enabled=True), extraction, "mineru")
 
-    assert result.elements == extraction.elements
+    assert result.elements[1].metadata["vision_image_purpose"] == "record"
+    assert [
+        {
+            **element.model_dump(),
+            "metadata": {
+                key: value
+                for key, value in element.metadata.items()
+                if key != "vision_image_purpose"
+            },
+        }
+        for element in result.elements
+    ] == [element.model_dump() for element in extraction.elements]
+    assert "vision_image_purpose" not in extraction.parser_artifacts
     assert "vision_failed" in result.warnings
 
 

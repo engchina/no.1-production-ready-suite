@@ -8,6 +8,10 @@
  * backend へ送る request・`href` / `src` / `<iframe>` / ダウンロードの URL は、送る所・URL を作る所で
  * `appPath()` を通す（`/api/...` → `/rag/api/...`）。`withBasePath` は何度通しても 1 回だけ付き、
  * `https://`・`blob:`・`data:`・相対パスは変えない。
+ *
+ * 画面の path も同じ: `<a href>`（一覧の題名の `RowTitleButton` の `href` など、新しいタブ・URL のコピーで開く
+ * 文書の URL）は `appPath()` を通す。React Router の `Link` の `to`・`navigate()`・`useLocation()` の path は
+ * router の basename が補う / 除くので通さない（#4560）。
  */
 
 import { routerBasename, withBasePath } from "@production-ready/ui";
